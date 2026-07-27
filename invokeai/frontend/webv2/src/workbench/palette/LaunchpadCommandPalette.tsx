@@ -1,7 +1,7 @@
 import type { ComponentProps } from 'react';
 
-import { scheduleIdleTask } from '@platform/browser/idle';
 import { useMountEffect } from '@platform/react/useMountEffect';
+import { usePreloadOnHotkeyIntent } from '@platform/react/usePreloadOnIntent';
 import { createDeferredResource } from '@platform/state/deferredResource';
 import { OPEN_COMMAND_PALETTE_HOTKEY } from '@workbench/hotkeys/catalog';
 import { formatHotkeyForPlatform, toTinykeysBinding } from '@workbench/hotkeys/keys';
@@ -40,14 +40,18 @@ const LaunchpadCommandPaletteHotkeys = ({ keys }: { keys: readonly string[] }) =
   return null;
 };
 
-/** Lightweight Launchpad runtime and deferred dialog host. */
+/**
+ * Lightweight Launchpad runtime and deferred dialog host. The dialog is fetched
+ * when the hotkey modifier goes down or the top-bar button is hovered, never
+ * speculatively — see the editor host for why.
+ */
 export const LaunchpadCommandPalette = () => {
   const isOpen = useIsCommandPaletteOpen();
   const customHotkeys = useWorkbenchPreferenceSelector((preferences) => preferences.customHotkeys);
   const paletteHotkeys = applyCustomHotkeys(OPEN_COMMAND_PALETTE_HOTKEY, customHotkeys).keys;
 
   useMountEffect(() => registerCommandPaletteDialog(dialogResource));
-  useMountEffect(() => scheduleIdleTask(dialogResource.preload));
+  usePreloadOnHotkeyIntent(dialogResource.preload);
 
   return (
     <>

@@ -1,5 +1,3 @@
-import { scheduleIdleTask } from '@platform/browser/idle';
-import { useMountEffect } from '@platform/react/useMountEffect';
 import { usePreloadOnIntentProps } from '@platform/react/usePreloadOnIntent';
 import { IconButton } from '@platform/ui/Button';
 import { Tooltip } from '@platform/ui/Tooltip';
@@ -13,17 +11,20 @@ import { closeWorkbenchSettings, openWorkbenchSettings, settingsDialogStore } fr
  * The top bar's settings entry point, kept deliberately thin.
  *
  * The trigger owns nothing but the store subscription; the body arrives on
- * first open. Two things keep that from being felt: hovering or focusing the
- * button starts the fetch, and the module is warmed at idle regardless, because
- * settings is also reachable from the command palette and from every widget
- * header without this button ever being touched.
+ * first open, warmed by hovering or focusing this button.
+ *
+ * Deliberately not warmed at idle, unlike the command palette. The dialog body
+ * reaches the workbench aggregate through `clearAllWorkbenchData` and the
+ * optional workbench selectors, which drags the canvas engine and the
+ * generation, workflow, and upscale cores along with it — on the Launchpad that
+ * measured as 19 requests becoming 40 and 1.57MB becoming 1.90MB, for a route
+ * whose whole point is not to load the editor. Warming it there would trade a
+ * felt cost for a much larger unfelt one.
  */
 export const SettingsButton = () => {
   const isOpen = settingsDialogStore.useSelector((snapshot) => snapshot.isOpen);
   const intentProps = usePreloadOnIntentProps(settingsDialogResource.preload);
   const handleOpen = useCallback(() => openWorkbenchSettings(), []);
-
-  useMountEffect(() => scheduleIdleTask(settingsDialogResource.preload));
 
   return (
     <>

@@ -1,8 +1,8 @@
 import type { ComponentProps } from 'react';
 
 import { requestQueueItemReveal } from '@features/queue/reveal';
-import { scheduleIdleTask } from '@platform/browser/idle';
 import { useMountEffect } from '@platform/react/useMountEffect';
+import { usePreloadOnHotkeyIntent } from '@platform/react/usePreloadOnIntent';
 import { createDeferredResource } from '@platform/state/deferredResource';
 import { firstPartyHotkeyCatalog } from '@workbench/hotkeys/catalog';
 import { formatHotkeyForPlatform } from '@workbench/hotkeys/keys';
@@ -22,15 +22,16 @@ const dialogResource = createDeferredResource(() => import('./WorkbenchCommandPa
 /**
  * Lightweight route host; the palette implementation is loaded only while open.
  *
- * The module is also warmed at idle, because the palette's primary entry point
- * is mod+K — there is no hover to key a preload off, and nothing else would
- * fetch the chunk before the keypress that needs it.
+ * The palette's primary entry point is mod+K, which offers no hover to warm
+ * from, so the module is fetched when the modifier goes down. Warming it at idle
+ * instead would put its bytes on every route load whether or not the shortcut is
+ * ever used; the top-bar button covers the pointer path on its own.
  */
 export const WorkbenchCommandPalette = () => {
   const isOpen = useIsCommandPaletteOpen();
 
   useMountEffect(() => registerCommandPaletteDialog(dialogResource));
-  useMountEffect(() => scheduleIdleTask(dialogResource.preload));
+  usePreloadOnHotkeyIntent(dialogResource.preload);
 
   return isOpen ? <OpenWorkbenchCommandPalette /> : null;
 };
