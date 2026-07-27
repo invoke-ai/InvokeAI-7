@@ -1,15 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { getWidgetReadyMark, LAUNCHPAD_READY_MARK, markSemanticReady } from './semanticReady';
+import { getOverlayReadyMark, getWidgetReadyMark, LAUNCHPAD_READY_MARK, markSemanticReady } from './semanticReady';
 
 beforeEach(() => {
   vi.restoreAllMocks();
 });
 
 describe('semanticReady', () => {
-  it('uses stable route and widget milestone names', () => {
+  it('uses stable route, widget, and overlay milestone names', () => {
     expect(LAUNCHPAD_READY_MARK).toBe('invokeai:ready:launchpad');
     expect(getWidgetReadyMark('center', 'canvas')).toBe('invokeai:ready:widget:center:canvas');
+    expect(getOverlayReadyMark('settings')).toBe('invokeai:ready:overlay:settings');
   });
 
   it('replaces an older mark before recording the current milestone', () => {

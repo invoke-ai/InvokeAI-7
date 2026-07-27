@@ -247,6 +247,113 @@ const getMaximumResourceSummary = (samples, key) =>
     BROWSER_RESOURCE_METRIC_KEYS.map((metric) => [metric, Math.max(...samples.map((sample) => sample[key][metric]))])
   );
 
+/**
+ * Overlays whose open latency is a product-owned budget. `triggerName` is the
+ * top bar button's accessible name; `dialogName` is the dialog's, taken from
+ * its title, and is what tells us the overlay has finished closing again.
+ */
+const OVERLAY_MEASUREMENTS = [
+  {
+    dialogName: 'Command palette',
+    id: 'command-palette',
+    timingKey: 'commandPaletteOpenMs',
+    triggerName: 'Command palette',
+  },
+  { dialogName: 'Settings', id: 'settings', timingKey: 'settingsOpenMs', triggerName: 'Settings' },
+];
+
+/**
+ * Times one overlay from the pointer event that opens it to the mark the
+ * overlay itself records once its body has rendered.
+ *
+ * The clock starts in the page, on a capture-phase `pointerdown`, for the same
+ * reason the layout switch does: marking from the driver folds Playwright's
+ * actionability wait into a number that is supposed to describe the app. The
+ * overlay is closed again before returning so each sample measures a cold open
+ * of the next overlay rather than a dialog swap.
+ */
+/**
+ * Clears any open notifications before an overlay is measured.
+ *
+ * The toaster stacks up to 24 toasts upwards from the bottom-right corner with
+ * no collapsing, so a full stack is ~2200px tall in a 720px viewport and its
+ * roots sit over the top bar — `elementFromPoint` on the palette button returns
+ * a toast. Playwright then refuses the click as intercepted and the run fails
+ * for a reason that has nothing to do with overlay latency. (That overlap is a
+ * real defect in its own right; dismissing here only keeps the measurement
+ * honest, it does not excuse it.)
+ *
+ * Dismissal is iterative because closing runs an exit animation: a round of
+ * clicks removes the toasts that have finished leaving, not all of them.
+ */
+const dismissToasts = async (page) => {
+  for (let round = 0; round < 20; round += 1) {
+    const remaining = await page.evaluate(() => {
+      for (const trigger of document.querySelectorAll('[data-scope="toast"][data-part="close-trigger"]')) {
+        if (trigger instanceof HTMLElement) {
+          trigger.click();
+        }
+      }
+      return document.querySelectorAll('[data-scope="toast"][data-part="root"]').length;
+    });
+
+    if (remaining === 0) {
+      return;
+    }
+    await page.waitForTimeout(250);
+  }
+
+  throw new Error('Notifications would not dismiss, so the top bar stayed covered.');
+};
+
+const measureOverlayOpen = async (page, fixture, overlay) => {
+  const trigger = page.getByRole('button', { exact: true, name: overlay.triggerName });
+  await trigger.waitFor({ timeout: 10_000 });
+  await dismissToasts(page);
+
+  const dialog = page.getByRole('dialog', { exact: true, name: overlay.dialogName });
+  const readyMark = `invokeai:ready:overlay:${overlay.id}`;
+  const interactionMark = `invokeai:interaction:${fixture.id}:${fixture.stateProfile}:overlay:${overlay.id}`;
+
+  await page.evaluate(
+    ({ interactionMarkName, readyMarkName }) => {
+      performance.clearMarks(interactionMarkName);
+      performance.clearMarks(readyMarkName);
+      document.addEventListener(
+        'pointerdown',
+        () => {
+          performance.mark(interactionMarkName);
+        },
+        { capture: true, once: true }
+      );
+    },
+    { interactionMarkName: interactionMark, readyMarkName: readyMark }
+  );
+
+  await trigger.click();
+  await waitForSemanticMark(page, readyMark);
+  const openMs = await page.evaluate(
+    ({ interactionMarkName, readyMarkName }) => {
+      const start = performance.getEntriesByName(interactionMarkName, 'mark').at(-1);
+      const end = performance.getEntriesByName(readyMarkName, 'mark').at(-1);
+
+      // A missing start mark must not read as 0 — that silently turns the
+      // interval into "time since navigation", which looks plausible.
+      return start && end ? Math.max(0, end.startTime - start.startTime) : null;
+    },
+    { interactionMarkName: interactionMark, readyMarkName: readyMark }
+  );
+
+  if (openMs === null) {
+    throw new Error(`${fixture.id}/${fixture.stateProfile} did not record an ${overlay.id} open interaction.`);
+  }
+
+  await page.keyboard.press('Escape');
+  await dialog.waitFor({ state: 'detached', timeout: 10_000 });
+
+  return openMs;
+};
+
 const getTiming = (page) =>
   page.evaluate(() => {
     const navigation = performance.getEntriesByType('navigation')[0];
@@ -400,13 +507,24 @@ const runSample = async (browser, fixture, sample) => {
     const activatedResources = resources.filter((resource) => activatedResourcePaths.has(resource.path));
     const timing = await getTiming(page);
 
+    // Resource, ownership, and long-task snapshots are taken before the
+    // overlays are exercised, so those budgets keep describing what loading the
+    // route costs. Anything an overlay fetches on demand belongs to the overlay
+    // metric, not to the route's initial load.
+    const scriptSourceOwners = getScriptSourceOwners(scripts);
+    const overlayTimings = {};
+    for (const overlay of OVERLAY_MEASUREMENTS) {
+      overlayTimings[overlay.timingKey] = await measureOverlayOpen(page, fixture, overlay);
+    }
+
     return {
       activatedResources: summarizeBrowserResources(activatedResources),
       profileCounts: profile.counts,
       resources: summarizeBrowserResources(resources),
-      scriptSourceOwners: getScriptSourceOwners(scripts),
+      scriptSourceOwners,
       timing: {
         ...timing,
+        ...overlayTimings,
         layoutSwitchMs,
         projectSwitchMs,
         routeReadyMs,
@@ -495,12 +613,14 @@ try {
     }
 
     const timingKeys = [
+      'commandPaletteOpenMs',
       'domContentLoadedMs',
       'layoutSwitchMs',
       'loadMs',
       'longestTaskMs',
       'projectSwitchMs',
       'routeReadyMs',
+      'settingsOpenMs',
     ];
     const timingValues = (key) => scoredSamples.map((sample) => sample.timing[key]);
     routeReports.push({
@@ -508,6 +628,7 @@ try {
         scoredSamples.length > 0
           ? getMaximumResourceSummary(scoredSamples, 'activatedResources')
           : getZeroResourceSummary(),
+      commandPaletteOpenMedianMs: median(timingValues('commandPaletteOpenMs')),
       domContentLoadedMedianMs: median(timingValues('domContentLoadedMs')),
       id: fixture.id,
       layoutSwitchMedianMs: median(timingValues('layoutSwitchMs')),
@@ -523,6 +644,7 @@ try {
         scoredSamples.length > 0 ? getMaximumResourceSummary(scoredSamples, 'resources') : getZeroResourceSummary(),
       routeReadyMedianMs: median(timingValues('routeReadyMs')),
       scriptSourceOwners: stableScriptSourceOwners ?? [],
+      settingsOpenMedianMs: median(timingValues('settingsOpenMs')),
       stateProfile: fixture.stateProfile,
       traceSample,
       variance: Object.fromEntries(timingKeys.map((key) => [key, summarizeVariance(timingValues(key))])),
@@ -548,6 +670,7 @@ try {
       routes: routeReports.map((route) => ({
         activatedResourceBaseline: route.activatedResources,
         activatedResourceLimits: createResourceLimits(route.activatedResources),
+        commandPaletteOpenMedianMs: route.commandPaletteOpenMedianMs,
         domContentLoadedMedianMs: route.domContentLoadedMedianMs,
         id: route.id,
         layoutSwitchMedianMs: route.layoutSwitchMedianMs,
@@ -561,6 +684,7 @@ try {
         resourceLimits: createResourceLimits(route.resources),
         routeReadyMedianMs: route.routeReadyMedianMs,
         scriptSourceOwnerSet: sourceOwnerSets.routeSetIds.get(`${route.id}:${route.stateProfile}`),
+        settingsOpenMedianMs: route.settingsOpenMedianMs,
         stateProfile: route.stateProfile,
       })),
       sampling: sampleConfig,

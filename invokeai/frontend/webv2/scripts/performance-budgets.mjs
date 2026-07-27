@@ -176,6 +176,7 @@ const validateBrowserRoute = (route, path) => {
       'domContentLoadedMedianMs',
       'activatedResourceBaseline',
       'activatedResourceLimits',
+      'commandPaletteOpenMedianMs',
       'id',
       'layoutSwitchMedianMs',
       'loadMedianMs',
@@ -188,17 +189,20 @@ const validateBrowserRoute = (route, path) => {
       'resourceLimits',
       'routeReadyMedianMs',
       'scriptSourceOwnerSet',
+      'settingsOpenMedianMs',
       'stateProfile',
     ],
     path
   );
   for (const key of [
+    'commandPaletteOpenMedianMs',
     'domContentLoadedMedianMs',
     'layoutSwitchMedianMs',
     'loadMedianMs',
     'longestTaskMaxMs',
     'projectSwitchMedianMs',
     'routeReadyMedianMs',
+    'settingsOpenMedianMs',
   ]) {
     assertNonNegativeNumber(route[key], `${path}.${key}`);
   }
@@ -589,11 +593,13 @@ export const checkBrowserRouteBudget = (route, expected, timingPolicy, expectedS
 
   const timingLimit = (value) => value * (1 + timingPolicy.tolerancePercent);
   const timingChecks = [
+    ['commandPaletteOpenMedianMs', 'command-palette open median'],
     ['domContentLoadedMedianMs', 'DOMContentLoaded median'],
     ['layoutSwitchMedianMs', 'layout-switch median'],
     ['loadMedianMs', 'load median'],
     ['projectSwitchMedianMs', 'project-switch median'],
     ['routeReadyMedianMs', 'semantic route-ready median'],
+    ['settingsOpenMedianMs', 'settings open median'],
   ];
   for (const [key, metricLabel] of timingChecks) {
     if (expected[key] > 0 && route[key] > timingLimit(expected[key])) {

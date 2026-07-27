@@ -22,6 +22,8 @@ import {
   useSlotRecipe,
 } from '@chakra-ui/react';
 import { WORKBENCH_LANGUAGE_OPTIONS } from '@platform/i18n/languages';
+import { getOverlayReadyMark, markSemanticReady } from '@platform/performance/semanticReady';
+import { useMountEffect } from '@platform/react/useMountEffect';
 import { Button, CloseButton, ConfirmDialog, Select, Tabs } from '@platform/ui';
 import { themeCardRecipe } from '@theme/recipes';
 import { previewSwatches, THEMES, type ThemeDefinition } from '@theme/system';
@@ -75,6 +77,7 @@ const updatePreferences = (patch: Partial<WorkbenchPreferences>): void => {
   void patchWorkbenchPreferences(patch);
 };
 
+const SETTINGS_READY_MARK = getOverlayReadyMark('settings');
 const SETTINGS_TAB_LIST_WIDTH = { base: '40', md: '52' };
 const SETTINGS_CONTENT_PADDING = { base: '4', md: '5' };
 const THEME_GRID_COLUMNS = { base: 2, md: 3 };
@@ -122,6 +125,11 @@ export const SettingsDialog = ({ isOpen, onClose }: { isOpen: boolean; onClose: 
 const SettingsDialogContent = ({ onClose }: { onClose: () => void }) => {
   const { t } = useTranslation();
   const { error, scope, status } = useWorkbenchSettings();
+
+  useMountEffect(() => {
+    markSemanticReady(SETTINGS_READY_MARK);
+  });
+
   const handlePositionerClick = useCallback(
     (event: { target: EventTarget; currentTarget: EventTarget }) => {
       if (event.target === event.currentTarget) {

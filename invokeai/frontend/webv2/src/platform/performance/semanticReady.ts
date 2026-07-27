@@ -4,6 +4,17 @@ export const getWidgetReadyMark = (region: string, typeId: string): string =>
   `invokeai:ready:widget:${region}:${typeId}`;
 
 /**
+ * Milestone for an overlay becoming visible — the dialog body is mounted and
+ * has rendered, not merely requested.
+ *
+ * Opening an overlay is an interaction with a latency budget, the same as
+ * switching layout preset. Without a product-owned mark the harness can only
+ * time the driver's own actionability waits, so the interaction goes
+ * unmeasured and regressions in it are invisible.
+ */
+export const getOverlayReadyMark = (overlayId: string): string => `invokeai:ready:overlay:${overlayId}`;
+
+/**
  * Records a product-owned readiness milestone for the browser performance
  * harness. Keeping only the latest mark makes repeated layout/project
  * transitions unambiguous while preserving the mark's navigation-relative

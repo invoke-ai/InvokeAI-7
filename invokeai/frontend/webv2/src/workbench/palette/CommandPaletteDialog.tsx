@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 
 import { Dialog, HStack, Icon, Kbd, Portal, Spacer, Text, chakra } from '@chakra-ui/react';
+import { getOverlayReadyMark, markSemanticReady } from '@platform/performance/semanticReady';
 import { useMountEffect } from '@platform/react/useMountEffect';
 import { Button } from '@platform/ui/Button';
 import { EmptyState } from '@platform/ui/EmptyState';
@@ -19,6 +20,7 @@ const INPUT_PLACEHOLDER_STYLE = { color: 'fg.subtle' };
 const INPUT_FOCUS_WITHIN_STYLE = { outlineColor: 'accent.focusRing' };
 const DATE_HINT_ID = 'command-palette-date-hint';
 const NO_PROVIDERS: PaletteSearchProvider[] = [];
+const COMMAND_PALETTE_READY_MARK = getOverlayReadyMark('command-palette');
 const NAV_HINT_KEYS = ['↑', '↓'];
 const ENTER_HINT_KEYS = ['↵'];
 const ESC_HINT_KEYS = ['esc'];
@@ -102,6 +104,11 @@ const CommandPaletteContent = ({
   const { t } = useTranslation();
   const controller = useCommandPaletteController({ entries, onClose, providers });
   const rowsRef = useRef<CommandPaletteRowsHandle>(null);
+
+  useMountEffect(() => {
+    markSemanticReady(COMMAND_PALETTE_READY_MARK);
+  });
+
   const modEnterHintKeys = useMemo(() => [modifierKeyLabel, '↵'], [modifierKeyLabel]);
   const handleSearchKeyDown = controller.onSearchKeyDown;
   const onSearchKeyDown = useCallback(

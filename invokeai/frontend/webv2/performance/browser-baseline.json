@@ -58,7 +58,9 @@
       },
       "routeReadyMedianMs": 227.19999999925494,
       "scriptSourceOwnerSet": "launchpad-static",
-      "stateProfile": "empty"
+      "stateProfile": "empty",
+      "commandPaletteOpenMedianMs": 0,
+      "settingsOpenMedianMs": 0
     },
     {
       "activatedResourceBaseline": {
@@ -116,7 +118,9 @@
       },
       "routeReadyMedianMs": 278.8999999985099,
       "scriptSourceOwnerSet": "launchpad-static",
-      "stateProfile": "representative"
+      "stateProfile": "representative",
+      "commandPaletteOpenMedianMs": 0,
+      "settingsOpenMedianMs": 0
     },
     {
       "activatedResourceBaseline": {
@@ -174,7 +178,9 @@
       },
       "routeReadyMedianMs": 614.6999999992549,
       "scriptSourceOwnerSet": "editor-minimal-static",
-      "stateProfile": "empty"
+      "stateProfile": "empty",
+      "commandPaletteOpenMedianMs": 0,
+      "settingsOpenMedianMs": 0
     },
     {
       "activatedResourceBaseline": {
@@ -232,7 +238,9 @@
       },
       "routeReadyMedianMs": 663.1999999992549,
       "scriptSourceOwnerSet": "editor-minimal-static",
-      "stateProfile": "representative"
+      "stateProfile": "representative",
+      "commandPaletteOpenMedianMs": 0,
+      "settingsOpenMedianMs": 0
     },
     {
       "activatedResourceBaseline": {
@@ -290,7 +298,9 @@
       },
       "routeReadyMedianMs": 767.3000000007451,
       "scriptSourceOwnerSet": "editor-canvas-static",
-      "stateProfile": "empty"
+      "stateProfile": "empty",
+      "commandPaletteOpenMedianMs": 0,
+      "settingsOpenMedianMs": 0
     },
     {
       "activatedResourceBaseline": {
@@ -348,7 +358,9 @@
       },
       "routeReadyMedianMs": 1164.4000000003725,
       "scriptSourceOwnerSet": "editor-canvas-static",
-      "stateProfile": "representative"
+      "stateProfile": "representative",
+      "commandPaletteOpenMedianMs": 0,
+      "settingsOpenMedianMs": 0
     },
     {
       "activatedResourceBaseline": {
@@ -406,7 +418,9 @@
       },
       "routeReadyMedianMs": 750.6999999992549,
       "scriptSourceOwnerSet": "editor-minimal-static",
-      "stateProfile": "empty"
+      "stateProfile": "empty",
+      "commandPaletteOpenMedianMs": 0,
+      "settingsOpenMedianMs": 0
     },
     {
       "activatedResourceBaseline": {
@@ -464,7 +478,9 @@
       },
       "routeReadyMedianMs": 977.9000000003725,
       "scriptSourceOwnerSet": "editor-minimal-static",
-      "stateProfile": "representative"
+      "stateProfile": "representative",
+      "commandPaletteOpenMedianMs": 0,
+      "settingsOpenMedianMs": 0
     },
     {
       "activatedResourceBaseline": {
@@ -522,7 +538,9 @@
       },
       "routeReadyMedianMs": 708.5,
       "scriptSourceOwnerSet": "editor-minimal-static",
-      "stateProfile": "empty"
+      "stateProfile": "empty",
+      "commandPaletteOpenMedianMs": 0,
+      "settingsOpenMedianMs": 0
     },
     {
       "activatedResourceBaseline": {
@@ -580,7 +598,9 @@
       },
       "routeReadyMedianMs": 857,
       "scriptSourceOwnerSet": "editor-minimal-static",
-      "stateProfile": "representative"
+      "stateProfile": "representative",
+      "commandPaletteOpenMedianMs": 0,
+      "settingsOpenMedianMs": 0
     }
   ],
   "sampling": {
