@@ -385,15 +385,36 @@ export const comboboxSlotRecipe = defineSlotRecipe({
   },
 });
 
-/** Dialog chrome: panel surface with a hairline stroke. */
+/**
+ * Dialog chrome: panel surface with a hairline stroke, opening quickly.
+ *
+ * Chakra's defaults fade the backdrop over `slow` (300ms) and scale the content
+ * in over `moderate` (200ms). That is perceived open latency on every dialog,
+ * warm or cold, and it set the floor once the loading cost was gone. `fast`
+ * keeps the fade that stops an overlay snapping into place without making the
+ * user wait to read it. Exit durations are left alone — a dialog on its way out
+ * is not in anyone's way — and the duration tokens themselves are untouched,
+ * since they carry far more than dialogs.
+ */
 export const dialogSlotRecipe = defineSlotRecipe({
   ...chakraSlotRecipes.dialog,
   base: {
     ...chakraSlotRecipes.dialog.base,
+    backdrop: {
+      ...chakraSlotRecipes.dialog.base?.backdrop,
+      _open: {
+        ...chakraSlotRecipes.dialog.base?.backdrop?._open,
+        animationDuration: 'fast',
+      },
+    },
     content: {
       ...chakraSlotRecipes.dialog.base?.content,
       borderColor: 'border.subtle',
       borderWidth: '1px',
+      _open: {
+        ...chakraSlotRecipes.dialog.base?.content?._open,
+        animationDuration: 'fast',
+      },
     },
   },
 });

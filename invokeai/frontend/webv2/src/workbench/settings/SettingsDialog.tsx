@@ -238,10 +238,17 @@ const SettingsTabs = () => {
     setWorkbenchSettingsSection(event.value as SettingsSectionId);
   }, []);
 
+  // `lazyMount`, so opening on Appearance costs Appearance. Without it every
+  // panel renders hidden on every open — including the hotkeys editor, which
+  // builds rows and a conflict map over the whole catalog and instantiates a
+  // virtualizer that measures with `getBoundingClientRect`. Deliberately not
+  // `unmountOnExit`: a visited section keeps its scroll position and any
+  // in-progress hotkey capture while the user moves between tabs.
   return (
     <Tabs.Root
       display="flex"
       h="full"
+      lazyMount
       minH="0"
       orientation="vertical"
       value={activeSectionId}

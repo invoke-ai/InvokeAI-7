@@ -65,14 +65,22 @@ export const ConfirmDialog = ({
     void handleConfirm();
   }, [handleConfirm]);
 
+  // Mounted only while open. There are more than twenty of these across the
+  // app — one of them inside the settings dialog — and without a render
+  // strategy each keeps a hidden backdrop, positioner, content subtree and
+  // presence machine in the DOM for the whole session. A confirmation holds
+  // nothing worth preserving between openings, so it can go all the way to
+  // `unmountOnExit`.
   return (
     <Dialog.Root
       closeOnEscape={!isPending}
       closeOnInteractOutside={!isPending}
+      lazyMount
       open={isOpen}
       placement="center"
       role="alertdialog"
       size="sm"
+      unmountOnExit
       onOpenChange={handleOpenChange}
     >
       <Portal>
