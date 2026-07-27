@@ -1,13 +1,6 @@
 import type { RegisteredWidget } from '@workbench/widgetContracts';
 
-import { useCallback } from 'react';
+import { usePreloadOnIntentProps } from '@platform/react/usePreloadOnIntent';
 
-export const useWidgetIntentPreloadProps = (widget: RegisteredWidget, disabled = false) => {
-  const handleIntent = useCallback(() => {
-    if (!disabled && widget.status === 'enabled') {
-      widget.implementation.preload();
-    }
-  }, [disabled, widget.implementation, widget.status]);
-
-  return { onFocus: handleIntent, onPointerEnter: handleIntent };
-};
+export const useWidgetIntentPreloadProps = (widget: RegisteredWidget, disabled = false) =>
+  usePreloadOnIntentProps(!disabled && widget.status === 'enabled' ? widget.implementation : null);
