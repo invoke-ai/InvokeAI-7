@@ -1,4 +1,5 @@
 import { Icon } from '@chakra-ui/react';
+import { usePreloadOnIntentProps } from '@platform/react/usePreloadOnIntent';
 import { IconButton } from '@platform/ui/Button';
 import { Tooltip } from '@platform/ui/Tooltip';
 import { OPEN_COMMAND_PALETTE_HOTKEY } from '@workbench/hotkeys/catalog';
@@ -8,11 +9,12 @@ import { useWorkbenchPreferenceSelector } from '@workbench/settings/store';
 import { SearchIcon } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
-import { openCommandPalette } from './paletteStore';
+import { openCommandPalette, preloadCommandPaletteDialog } from './paletteStore';
 
 /** Pointer affordance for the palette; the tooltip advertises its effective binding. */
 export const PaletteButton = () => {
   const { t } = useTranslation();
+  const intentProps = usePreloadOnIntentProps(preloadCommandPaletteDialog);
   const customHotkeys = useWorkbenchPreferenceSelector((preferences) => preferences.customHotkeys);
   const firstHotkey = applyCustomHotkeys(OPEN_COMMAND_PALETTE_HOTKEY, customHotkeys).keys[0];
   const hotkeyLabel = firstHotkey ? formatHotkeyForPlatform(firstHotkey).join('+') : null;
@@ -22,7 +24,13 @@ export const PaletteButton = () => {
 
   return (
     <Tooltip content={tooltip}>
-      <IconButton aria-label={t('commandPalette.buttonLabel')} size="sm" variant="ghost" onClick={openCommandPalette}>
+      <IconButton
+        aria-label={t('commandPalette.buttonLabel')}
+        size="sm"
+        variant="ghost"
+        onClick={openCommandPalette}
+        {...intentProps}
+      >
         <Icon as={SearchIcon} />
       </IconButton>
     </Tooltip>

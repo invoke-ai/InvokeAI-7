@@ -88,8 +88,6 @@ export const CommandPaletteDialog = ({
   );
 };
 
-export default CommandPaletteDialog;
-
 const CommandPaletteContent = ({
   entries,
   modifierKeyLabel,

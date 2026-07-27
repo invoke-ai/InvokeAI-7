@@ -1,3 +1,4 @@
+import type { GraphPreviewDialog } from '@features/workflow/preview';
 import type { GraphContract } from '@workbench/graphContracts';
 import type { Project } from '@workbench/projectContracts';
 import type {
@@ -8,15 +9,18 @@ import type {
   WidgetRuntimeApi,
   WorkbenchRegion,
 } from '@workbench/widgetContracts';
+import type { ComponentProps } from 'react';
 
 import { Icon, Menu, Portal, Text } from '@chakra-ui/react';
 import { flushWorkbenchDrafts } from '@platform/react/draftRegistry';
+import { usePreloadOnIntentProps } from '@platform/react/usePreloadOnIntent';
+import { createDeferredResource } from '@platform/state/deferredResource';
 import { IconButton } from '@platform/ui';
 import { createGraphBearingSurface } from '@workbench/graphSurfaces';
 import { resolveWidgetLabel } from '@workbench/widgetLabels';
 import { shallowEqual, useActiveProjectSelector, useWorkbenchCommands } from '@workbench/WorkbenchContext';
 import { GitBranchIcon, MoreHorizontalIcon, TargetIcon } from 'lucide-react';
-import { lazy, Suspense, useCallback, useMemo, useState } from 'react';
+import { Suspense, use, useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 /**
@@ -26,9 +30,12 @@ import { useTranslation } from 'react-i18next';
  * widgets extend the frame instead of stacking their own menus and toolbars.
  */
 
-const GraphPreviewDialog = lazy(() =>
-  import('@features/workflow/preview').then((module) => ({ default: module.GraphPreviewDialog }))
-);
+/**
+ * Warmed on intent only. The preview's chunk pulls the workflow graph vendor
+ * bundle, which is far too much to fetch at idle for an action most sessions
+ * never take; hovering `View Graph` is early enough.
+ */
+const graphPreviewDialogResource = createDeferredResource(() => import('@features/workflow/preview'));
 
 const getPreviewGraph = async (
   project: Project,
@@ -60,6 +67,17 @@ const getPreviewGraph = async (
 const MENU_POSITIONING = { placement: 'bottom-end' } as const;
 const DISABLED_PROPS = { opacity: 0.4 };
 
+/**
+ * The boundary around this is a safety net, not the normal path: `handlePreview`
+ * waits for the module, and the resource hands `use()` a settled promise, so the
+ * dialog commits in the same frame as the state change.
+ */
+const GraphPreviewDialogHost = (props: ComponentProps<typeof GraphPreviewDialog>) => {
+  const { GraphPreviewDialog: Dialog } = use(graphPreviewDialogResource.load());
+
+  return <Dialog {...props} />;
+};
+
 const GraphSurfaceMenuItems = ({
   surface,
   onPreview,
@@ -72,6 +90,7 @@ const GraphSurfaceMenuItems = ({
   const { generation } = useWorkbenchCommands();
   const isActiveSource = activeSourceId === surface.sourceId;
   const handleSetSource = useCallback(() => generation.setSource(surface.sourceId), [generation, surface.sourceId]);
+  const previewIntentProps = usePreloadOnIntentProps(graphPreviewDialogResource.preload);
 
   return (
     <Menu.ItemGroup>
@@ -92,7 +111,7 @@ const GraphSurfaceMenuItems = ({
           </Text>
         ) : null}
       </Menu.Item>
-      <Menu.Item value="view-graph" disabled={!surface.canPreviewGraph} onClick={onPreview}>
+      <Menu.Item value="view-graph" disabled={!surface.canPreviewGraph} onClick={onPreview} {...previewIntentProps}>
         <Icon as={GitBranchIcon} boxSize="3.5" />
         <Menu.ItemText>{t('widgets.graph.viewGraph')}</Menu.ItemText>
       </Menu.Item>
@@ -130,7 +149,17 @@ export const WidgetActionsMenu = ({
   const handlePreview = useCallback(async () => {
     flushWorkbenchDrafts();
     if (surface) {
-      setPreviewGraph(await getPreviewGraph(activeProject, surface));
+      // The dialog module is fetched alongside the graph, before the state that
+      // reveals it changes. Revealing first would render against a pending
+      // module, suspend, and cost 300ms of fallback throttle on top of the
+      // fetch. A failed load still opens, so its boundary reports the failure
+      // rather than the menu item looking dead.
+      const [graph] = await Promise.all([
+        getPreviewGraph(activeProject, surface),
+        graphPreviewDialogResource.load().catch(() => undefined),
+      ]);
+
+      setPreviewGraph(graph);
     }
     setIsPreviewOpen(true);
   }, [activeProject, surface]);
@@ -167,7 +196,7 @@ export const WidgetActionsMenu = ({
       </Menu.Root>
       {surface && isPreviewOpen ? (
         <Suspense fallback={null}>
-          <GraphPreviewDialog
+          <GraphPreviewDialogHost
             graph={previewGraph}
             graphId={surface.graphId}
             isOpen={isPreviewOpen}

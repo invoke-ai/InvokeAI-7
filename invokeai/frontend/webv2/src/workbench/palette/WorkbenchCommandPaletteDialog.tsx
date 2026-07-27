@@ -49,7 +49,7 @@ const buildStaticAppEntries = (t: TFunction): PaletteEntry[] => [
 ];
 
 /** Editor-only palette adapter. This module is absent from the Launchpad chunk. */
-const WorkbenchCommandPaletteDialog = ({
+export const WorkbenchCommandPaletteDialog = ({
   catalog,
   formatHotkey,
   getWidgetsForRegion,
@@ -249,5 +249,3 @@ const WorkbenchCommandPaletteDialog = ({
     />
   );
 };
-
-export default WorkbenchCommandPaletteDialog;

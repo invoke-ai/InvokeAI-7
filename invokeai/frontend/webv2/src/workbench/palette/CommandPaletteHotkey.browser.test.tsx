@@ -28,7 +28,9 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 
-vi.mock('./LaunchpadCommandPaletteDialog', () => ({ default: () => <div data-testid="launchpad-palette" /> }));
+vi.mock('./LaunchpadCommandPaletteDialog', () => ({
+  LaunchpadCommandPaletteDialog: () => <div data-testid="launchpad-palette" />,
+}));
 
 import { LaunchpadCommandPalette } from './LaunchpadCommandPalette';
 import { PaletteButton } from './PaletteButton';
@@ -60,8 +62,17 @@ const press = async ({ altKey = false, code, ctrlKey = false, key }: KeyboardEve
   });
 };
 
-const expectPaletteState = (state: 'closed' | 'open'): void => {
-  expect(document.querySelector('[data-testid="palette-state"]')?.textContent).toBe(state);
+const readPaletteState = (): string | null | undefined =>
+  document.querySelector('[data-testid="palette-state"]')?.textContent;
+
+// Opening waits for the palette's dialog module, so the first open of a session
+// lands a tick or two after the keypress. Later ones do not — see the
+// synchronous case below, which is the property that keeps the fallback
+// throttle off the open path.
+const expectPaletteState = async (state: 'closed' | 'open'): Promise<void> => {
+  await vi.waitFor(() => {
+    expect(readPaletteState()).toBe(state);
+  });
 };
 
 beforeEach(() => {
@@ -89,10 +100,24 @@ describe('Launchpad command-palette hotkeys', () => {
     document.querySelector<HTMLInputElement>('[aria-label="Editable target"]')?.focus();
 
     await press({ code: 'KeyK', ctrlKey: true, key: 'k' });
-    expectPaletteState('open');
+    await expectPaletteState('open');
 
     await press({ code: 'KeyK', ctrlKey: true, key: 'k' });
-    expectPaletteState('closed');
+    await expectPaletteState('closed');
+  });
+
+  it('opens in the same tick once the dialog module is loaded', async () => {
+    await renderLaunchpad();
+
+    await press({ code: 'KeyK', ctrlKey: true, key: 'k' });
+    await expectPaletteState('open');
+    await act(() => closeCommandPalette());
+
+    // With the module in hand there is nothing left to wait for, and waiting
+    // anyway is what would put a suspension — and React's 300ms fallback
+    // throttle — back on the open path.
+    await press({ code: 'KeyK', ctrlKey: true, key: 'k' });
+    expect(readPaletteState()).toBe('open');
   });
 
   it('replaces the default binding and installs every custom binding', async () => {
@@ -100,14 +125,14 @@ describe('Launchpad command-palette hotkeys', () => {
     await renderLaunchpad();
 
     await press({ code: 'KeyK', ctrlKey: true, key: 'k' });
-    expectPaletteState('closed');
+    await expectPaletteState('closed');
 
     await press({ altKey: true, code: 'KeyP', key: 'p' });
-    expectPaletteState('open');
+    await expectPaletteState('open');
     await act(() => closeCommandPalette());
 
     await press({ altKey: true, code: 'KeyO', key: 'o' });
-    expectPaletteState('open');
+    await expectPaletteState('open');
   });
 
   it('installs no listener when the command is unbound', async () => {
@@ -115,16 +140,16 @@ describe('Launchpad command-palette hotkeys', () => {
     await renderLaunchpad();
 
     await press({ code: 'KeyK', ctrlKey: true, key: 'k' });
-    expectPaletteState('closed');
+    await expectPaletteState('closed');
   });
 
   it('subscribes to full preferences only while the palette is open', async () => {
     await renderLaunchpad();
-    expectPaletteState('closed');
+    await expectPaletteState('closed');
     expect(useWorkbenchPreferencesSpy).not.toHaveBeenCalled();
 
     await press({ code: 'KeyK', ctrlKey: true, key: 'k' });
-    expectPaletteState('open');
+    await expectPaletteState('open');
     expect(useWorkbenchPreferencesSpy).toHaveBeenCalled();
   });
 
@@ -136,10 +161,10 @@ describe('Launchpad command-palette hotkeys', () => {
     await renderLaunchpad();
 
     await press({ altKey: true, code: 'KeyP', key: 'p' });
-    expectPaletteState('closed');
+    await expectPaletteState('closed');
 
     await press({ altKey: true, code: 'KeyO', key: 'o' });
-    expectPaletteState('open');
+    await expectPaletteState('open');
   });
 });
 

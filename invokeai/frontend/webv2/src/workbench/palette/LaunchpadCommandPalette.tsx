@@ -1,15 +1,26 @@
+import type { ComponentProps } from 'react';
+
+import { scheduleIdleTask } from '@platform/browser/idle';
 import { useMountEffect } from '@platform/react/useMountEffect';
+import { createDeferredResource } from '@platform/state/deferredResource';
 import { OPEN_COMMAND_PALETTE_HOTKEY } from '@workbench/hotkeys/catalog';
 import { formatHotkeyForPlatform, toTinykeysBinding } from '@workbench/hotkeys/keys';
 import { applyCustomHotkeys } from '@workbench/hotkeys/resolve';
 import { useWorkbenchPreferences, useWorkbenchPreferenceSelector } from '@workbench/settings/store';
-import { lazy, Suspense } from 'react';
+import { Suspense, use } from 'react';
 import { tinykeys } from 'tinykeys';
 
-import { closeCommandPalette, toggleCommandPalette, useIsCommandPaletteOpen } from './paletteStore';
+import type { LaunchpadCommandPaletteDialog } from './LaunchpadCommandPaletteDialog';
+
+import {
+  closeCommandPalette,
+  registerCommandPaletteDialog,
+  toggleCommandPalette,
+  useIsCommandPaletteOpen,
+} from './paletteStore';
 import { SETTINGS_ENTRY_DEPS } from './settingsEntryDeps';
 
-const LazyLaunchpadCommandPaletteDialog = lazy(() => import('./LaunchpadCommandPaletteDialog'));
+const dialogResource = createDeferredResource(() => import('./LaunchpadCommandPaletteDialog'));
 
 const LaunchpadCommandPaletteHotkeys = ({ keys }: { keys: readonly string[] }) => {
   useMountEffect(() => {
@@ -29,11 +40,14 @@ const LaunchpadCommandPaletteHotkeys = ({ keys }: { keys: readonly string[] }) =
   return null;
 };
 
-/** Lightweight Launchpad runtime and lazy dialog host. */
+/** Lightweight Launchpad runtime and deferred dialog host. */
 export const LaunchpadCommandPalette = () => {
   const isOpen = useIsCommandPaletteOpen();
   const customHotkeys = useWorkbenchPreferenceSelector((preferences) => preferences.customHotkeys);
   const paletteHotkeys = applyCustomHotkeys(OPEN_COMMAND_PALETTE_HOTKEY, customHotkeys).keys;
+
+  useMountEffect(() => registerCommandPaletteDialog(dialogResource));
+  useMountEffect(() => scheduleIdleTask(dialogResource.preload));
 
   return (
     <>
@@ -48,7 +62,7 @@ const OpenLaunchpadCommandPalette = () => {
 
   return (
     <Suspense fallback={null}>
-      <LazyLaunchpadCommandPaletteDialog
+      <LaunchpadCommandPaletteDialogHost
         modifierKeyLabel={formatHotkeyForPlatform('mod')[0]!}
         preferences={preferences}
         settingsEntryDeps={SETTINGS_ENTRY_DEPS}
@@ -56,4 +70,10 @@ const OpenLaunchpadCommandPalette = () => {
       />
     </Suspense>
   );
+};
+
+const LaunchpadCommandPaletteDialogHost = (props: ComponentProps<typeof LaunchpadCommandPaletteDialog>) => {
+  const { LaunchpadCommandPaletteDialog: Dialog } = use(dialogResource.load());
+
+  return <Dialog {...props} />;
 };

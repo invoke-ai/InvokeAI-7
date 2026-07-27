@@ -879,6 +879,3 @@ const DEVELOPER_LOG_LEVEL_OPTIONS = DEVELOPER_LOG_LEVELS.map((value) => ({
   label: formatSettingLabel(value),
   value,
 }));
-
-/** Default export so the top bar can host this body behind `React.lazy`. */
-export default SettingsDialog;

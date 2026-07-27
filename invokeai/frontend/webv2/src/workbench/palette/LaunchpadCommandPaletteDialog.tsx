@@ -12,7 +12,7 @@ import { CommandPaletteDialog } from './CommandPaletteDialog';
 import { buildOpenSettingsEntry, buildSettingsEntries } from './entries';
 
 /** Launchpad-only palette adapter: navigation and settings, no editor providers. */
-const LaunchpadCommandPaletteDialog = ({
+export const LaunchpadCommandPaletteDialog = ({
   modifierKeyLabel,
   onClose,
   preferences,
@@ -57,5 +57,3 @@ const LaunchpadCommandPaletteDialog = ({
 
   return <CommandPaletteDialog entries={entries} isOpen modifierKeyLabel={modifierKeyLabel} onClose={onClose} />;
 };
-
-export default LaunchpadCommandPaletteDialog;
