@@ -21,6 +21,7 @@ const handleRefresh = () => {
 export const ImageMapWidgetView = (_props: WidgetViewProps) => {
   const { data, error, loadState } = imageMapStore.useSnapshot();
   const clickSelectsCluster = useWidgetValuesSelector('image-map', (values) => Boolean(values.clickSelectsCluster));
+  const showClusterLabels = useWidgetValuesSelector('image-map', (values) => values.showClusterLabels !== false);
 
   useEffect(() => {
     ensureImageMapLoaded();
@@ -29,7 +30,7 @@ export const ImageMapWidgetView = (_props: WidgetViewProps) => {
   // A working map beats a full-screen error: when a refresh fails but prior
   // points exist, keep showing them (the next successful refresh recovers).
   if (data && data.points.length > 0) {
-    return <ImageMapPlot clickSelectsCluster={clickSelectsCluster} />;
+    return <ImageMapPlot clickSelectsCluster={clickSelectsCluster} showClusterLabels={showClusterLabels} />;
   }
 
   if (loadState === 'idle' || loadState === 'loading') {
