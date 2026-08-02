@@ -1,11 +1,14 @@
+from invokeai.backend.architectures.facets.conditioning import ConditioningFacet
 from invokeai.backend.architectures.facets.latent_space import SD15_4, LatentSpaceFacet
 from invokeai.backend.architectures.facets.unet import UNetDownscaleFacet
 from invokeai.backend.architectures.facets.variant import VariantFacet
 from invokeai.backend.architectures.registry import register
 from invokeai.backend.model_manager.taxonomy import BaseModelType, ModelType, ModelVariantType
+from invokeai.backend.stable_diffusion.diffusion.conditioning_data import BasicConditioningInfo
 
 register(
     BaseModelType.StableDiffusion1,
+    ConditioningFacet(BasicConditioningInfo),
     LatentSpaceFacet(SD15_4),
     UNetDownscaleFacet(max_unet_downscale=8),
     VariantFacet({ModelType.Main: ModelVariantType}),

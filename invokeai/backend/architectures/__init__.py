@@ -32,6 +32,11 @@ from invokeai.backend.architectures.defs import (
     z_image,  # noqa: F401
 )
 from invokeai.backend.architectures.facet import Facet
+from invokeai.backend.architectures.facets.conditioning import (
+    ConditioningFacet,
+    conditioning_infos,
+    get_conditioning_info,
+)
 from invokeai.backend.architectures.facets.latent_space import (
     LatentSpace,
     LatentSpaceFacet,
@@ -57,16 +62,19 @@ from invokeai.backend.architectures.registry import (
 
 __all__ = [
     "ArchitectureError",
+    "ConditioningFacet",
     "Facet",
     "LatentSpace",
     "LatentSpaceFacet",
     "UNetDownscaleFacet",
     "VariantFacet",
+    "conditioning_infos",
     "declared_variant_enums",
     "defs_module_path",
     "facets_of",
     "generative_bases",
     "get",
+    "get_conditioning_info",
     "get_latent_space",
     "get_max_unet_downscale",
     "get_variant_enum",

@@ -34,6 +34,7 @@ ARCH_REGISTRY = f"{ARCH}.registry"
 ARCH_FACETS = f"{ARCH}.facets"
 ARCH_DEFS = f"{ARCH}.defs"
 TAXONOMY = "invokeai.backend.model_manager.taxonomy"
+CONDITIONING_DATA = "invokeai.backend.stable_diffusion.diffusion.conditioning_data"
 
 FACET_ALLOWLIST: tuple[str, ...] = ()
 """`facet.py` is the bottom of the package: it imports nothing from `invokeai` at all."""
@@ -44,13 +45,15 @@ is why `Facet` lives in its own module. Were `Facet` defined in `registry.py`, t
 `facets -> registry` and the edge `registry -> facets` would be one line apart."""
 
 FACETS_ALLOWLIST = (ARCH_FACET, ARCH_REGISTRY, TAXONOMY)
-DEFS_ALLOWLIST = (ARCH_FACET, ARCH_FACETS, ARCH_REGISTRY, TAXONOMY)
+DEFS_ALLOWLIST = (ARCH_FACET, ARCH_FACETS, ARCH_REGISTRY, TAXONOMY, CONDITIONING_DATA)
 """What a definition module may import from `invokeai.*`.
 
-Deliberately narrower than the target state described in `.ideas/Backend Modularization Plan.md`
-(which also allows `backend/<arch>/*`, `conditioning_data` and `starter_models.types`). Nothing
-needs those yet, and keeping the list minimal makes every future widening a visible, reviewable
-line in the PR that needs it rather than a blanket permission granted up front.
+Deliberately narrower than the target state described in `.ideas/Backend Modularization Plan.md`,
+so that every widening is a visible, reviewable line in the PR that needs it rather than a blanket
+permission granted up front. `conditioning_data` was added for `ConditioningFacet`; it is safe
+because it is close to a leaf -- its only `invokeai` import is `regional_prompt_data`, which imports
+nothing from `invokeai` at all, so a definition module cannot reach back into the registry through
+it.
 """
 
 EXCLUDED = (
