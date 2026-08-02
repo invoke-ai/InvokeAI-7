@@ -59,6 +59,7 @@ def run_app() -> None:
     # This import must happen after configure_torch_cuda_allocator() is called, because the module imports torch.
     from invokeai.app.invocations.baseinvocation import InvocationRegistry
     from invokeai.app.invocations.load_custom_nodes import load_custom_nodes
+    from invokeai.backend.architectures import validate as validate_architectures
     from invokeai.backend.util.devices import TorchDevice
 
     torch_device_name = TorchDevice.get_generation_devices_summary(app_config.generation_devices)
@@ -101,6 +102,12 @@ def run_app() -> None:
             logger.warning(
                 f'Invocation "{invocation_type}" has unregistered output class "{output_annotation.__name__}"'
             )
+
+    # Check that every registered architecture declares every required facet. Unlike the invocation
+    # check above this raises rather than warns: architectures are first-party and the enum is
+    # closed, so an incomplete one is a bug in this repository, not in someone's node pack. The
+    # error names the facet and the file to add it to.
+    validate_architectures()
 
     if app_config.dev_reload:
         # load_custom_nodes seems to bypass jurrigged's import sniffer, so be sure to call it *after* they're already

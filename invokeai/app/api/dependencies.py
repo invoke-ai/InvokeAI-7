@@ -62,6 +62,7 @@ from invokeai.app.services.videos.videos_default import VideoService
 from invokeai.app.services.wildcard_records.wildcard_records_sqlite import SqliteWildcardRecordsStorage
 from invokeai.app.services.workflow_records.workflow_records_sqlite import SqliteWorkflowRecordsStorage
 from invokeai.app.services.workflow_thumbnails.workflow_thumbnails_disk import WorkflowThumbnailFileStorageDisk
+from invokeai.backend.architectures import validate as validate_architectures
 from invokeai.backend.stable_diffusion.diffusion.conditioning_data import (
     AnimaConditioningInfo,
     BasicConditioningInfo,
@@ -112,6 +113,17 @@ class ApiDependencies:
         loop: asyncio.AbstractEventLoop,
         logger: Logger = logger,
     ) -> None:
+        # Fail before anything is built if an architecture is incompletely registered. This covers
+        # every embedder that never goes through run_app.py, such as the OpenAPI schema generator
+        # and the tests.
+        #
+        # The import it relies on is at module level on purpose, and must stay there: importing
+        # this module is what populates the registry. The conditioning ObjectSerializerDisk built
+        # below passes a hand-maintained `safe_globals` allowlist today, but is intended to derive
+        # it from the registry, and `add_safe_globals` mutates torch globally -- so the registry has
+        # to be complete before `initialize()` runs, not merely before it is first read.
+        validate_architectures()
+
         logger.info(f"InvokeAI version {__version__}")
         logger.info(f"Root directory = {str(config.root_path)}")
 
