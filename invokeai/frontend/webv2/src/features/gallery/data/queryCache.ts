@@ -91,8 +91,13 @@ const patchItemPage = (
     return mapPageItems(page, (item) => (itemKeys.has(toGalleryItemKey(item)) ? null : item), removedItemCount);
   }
 
+  // Ranked similarity windows are board-agnostic: moving an image to another
+  // board never changes its membership in the result set.
   const keepsMovedItems =
-    filter.boardId === ALL_READABLE_BOARDS_ID || filter.boardId === patch.boardId || isDateBoardId(filter.boardId);
+    filter.semantic !== undefined ||
+    filter.boardId === ALL_READABLE_BOARDS_ID ||
+    filter.boardId === patch.boardId ||
+    isDateBoardId(filter.boardId);
 
   return mapPageItems(
     page,
@@ -120,6 +125,7 @@ const patchItemsInfiniteData = (
   const removesItems =
     patch.kind === 'delete' ||
     (patch.kind === 'move' &&
+      filter.semantic === undefined &&
       filter.boardId !== ALL_READABLE_BOARDS_ID &&
       filter.boardId !== patch.boardId &&
       !isDateBoardId(filter.boardId));
