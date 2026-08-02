@@ -11,6 +11,7 @@ from typing import Optional
 import torch
 
 from invokeai.app.services.config import InvokeAIAppConfig
+from invokeai.backend.architectures import get_loader_flags
 from invokeai.backend.model_manager.configs.base import Diffusers_Config_Base
 from invokeai.backend.model_manager.configs.factory import AnyModelConfig
 from invokeai.backend.model_manager.load.load_base import LoadedModel, ModelLoaderBase
@@ -25,6 +26,7 @@ from invokeai.backend.model_manager.load.model_util import calc_model_size_by_fs
 from invokeai.backend.model_manager.load.optimizations import skip_torch_weight_init
 from invokeai.backend.model_manager.taxonomy import (
     AnyModel,
+    ModelType,
     SubModelType,
 )
 from invokeai.backend.util.devices import TorchDevice
@@ -234,21 +236,18 @@ class ModelLoader(ModelLoaderBase):
         if self._torch_device.type != "cuda":
             return False
 
-        # Z-Image has dtype mismatch issues with diffusers' layerwise casting
-        # (skipped modules produce bf16, hooked modules expect fp16).
-        from invokeai.backend.model_manager.taxonomy import BaseModelType, ModelType
-
-        if hasattr(config, "base") and config.base == BaseModelType.ZImage:
+        # Some architectures cannot take fp8 storage at all; they say so themselves.
+        if not get_loader_flags(config.base).supports_fp8_storage:
             return False
 
         # VAEs are excluded — fp8 storage causes noticeable quality degradation in decode.
-        if hasattr(config, "type") and config.type == ModelType.VAE:
+        if config.type == ModelType.VAE:
             return False
 
         # LoRAs (including ControlLoRA) are excluded — they are not run as a standalone forward pass,
         # they are patched into a base model, so the layerwise-casting hooks would never fire. The
         # toggle is also hidden in the UI for ControlLoRA; this guard handles legacy persisted values.
-        if hasattr(config, "type") and config.type in (ModelType.LoRA, ModelType.ControlLoRa):
+        if config.type in (ModelType.LoRA, ModelType.ControlLoRa):
             return False
 
         # Don't apply FP8 to text encoders, tokenizers, schedulers, VAEs, etc.
