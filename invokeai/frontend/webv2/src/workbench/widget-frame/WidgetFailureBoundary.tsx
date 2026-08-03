@@ -47,15 +47,7 @@ export class WidgetFailureBoundary extends Component<WidgetFailureBoundaryProps,
   }
 
   componentDidCatch(error: Error, errorInfo: ErrorInfo) {
-    // The error itself is the diagnostic payload; the component stack alone
-    // (which only names the crashed subtree) is useless for finding the
-    // cause. Show and copy both.
-    const parts = [
-      error.stack ?? `${error.name}: ${error.message}`,
-      errorInfo.componentStack ? `Component stack:${errorInfo.componentStack}` : null,
-    ];
-
-    this.setState({ details: parts.filter(Boolean).join('\n\n') });
+    this.setState({ details: errorInfo.componentStack ?? error.stack ?? error.message });
   }
 
   render() {
@@ -66,15 +58,12 @@ export class WidgetFailureBoundary extends Component<WidgetFailureBoundaryProps,
       return children;
     }
 
-    const copyableDetails = details ?? error.stack ?? error.message;
+    const copyableDetails = details ?? error.message;
 
     return (
       <Stack bg="bg.muted" borderColor="border.error" borderWidth="1px" gap="2" p="3" rounded="md">
         <Text color="fg.error" fontSize="xs" fontWeight="700">
           Widget failed: {widgetId}
-        </Text>
-        <Text color="fg.error" fontSize="xs">
-          {error.message}
         </Text>
         <ScrollArea.Root maxH="8rem" size="xs" variant="hover">
           <ScrollArea.Viewport maxH="8rem">
