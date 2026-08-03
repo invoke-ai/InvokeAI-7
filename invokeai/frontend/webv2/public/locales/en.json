@@ -168,10 +168,18 @@
     "canceled": "Canceled",
     "clear": "Clear",
     "clearSearch": "Clear search",
+    "dontShowMeThese": "Don't show me these",
+    "learnMore": "Learn more",
     "noSchedulersFound": "No schedulers found",
     "openSelector": "Open selector",
     "searchSchedulers": "Search schedulers…",
     "close": "Close",
+    "colorPicker": {
+      "format": "Color format",
+      "sampleFromCanvas": "Pick a color from the canvas",
+      "sampleFromScreen": "Pick a color from the screen",
+      "opacity": "Opacity (%)"
+    },
     "configure": "Configure",
     "copy": "Copy",
     "crop": "Crop",
@@ -181,6 +189,7 @@
     "created": "Created",
     "delete": "Delete",
     "desc": "Desc",
+    "details": "Details",
     "discard": "Discard",
     "discardAll": "Discard All",
     "done": "Done",
@@ -191,13 +200,13 @@
     "failed": "Failed",
     "generating": "Generating",
     "graph": "Graph",
-    "images": "Images",
     "import": "Import",
     "id": "ID",
     "item": "Item",
     "json": "JSON",
     "lastSaved": "Last saved",
     "loadingApplication": "Loading Application",
+    "media": "Media",
     "negative": "Negative",
     "name": "Name",
     "nothingHereYet": "Nothing here yet.",
@@ -209,6 +218,7 @@
     "previousPage": "Previous page",
     "prompt": "Prompt",
     "project": "Project",
+    "recent": "Recent",
     "rename": "Rename",
     "required": "Required",
     "refresh": "Refresh",
@@ -296,6 +306,96 @@
       "success": "Success"
     },
     "markRead": "Mark Read"
+  },
+  "topbar": {
+    "appMenu": {
+      "documentation": "Documentation",
+      "manage": "Manage",
+      "open": "Open menu"
+    },
+    "invoke": {
+      "addToQueue": "Add to queue",
+      "addingImagesTo": "Adding images to {{destination}}",
+      "expandingPrompts": "Expanding prompts…",
+      "invoke": "Invoke",
+      "noNodes": "No nodes in graph",
+      "unavailable": "Invoke unavailable: {{reason}}",
+      "unrunnable": "route is not runnable",
+      "unableToQueue": "Unable to queue"
+    },
+    "iterations": {
+      "label": "Iterations",
+      "tooltip_one": "{{count}} iteration per invoke",
+      "tooltip_other": "{{count}} iterations per invoke"
+    },
+    "presets": {
+      "builtIn": "Built-in",
+      "custom": "Custom",
+      "customLayouts": "Custom layouts",
+      "delete": "Delete preset",
+      "deleteBody": "Delete “{{name}}”? This only removes the saved preset.",
+      "deleteNamed": "Delete {{name}}",
+      "deleteQuestion": "Delete layout preset?",
+      "deleteWithEllipsis": "Delete preset…",
+      "edit": "Edit layout preset",
+      "editNamed": "Edit {{name}}",
+      "editWithEllipsis": "Edit preset…",
+      "icon": "Icon",
+      "iconPicker": "Layout preset icon",
+      "layoutPreset": "Layout preset",
+      "manage": "Manage presets",
+      "more": "More layout presets",
+      "moreAvailable": "More layout presets, {{count}} available",
+      "name": "Preset name",
+      "none": "No custom presets yet. Arrange the dock, then choose Save as new preset.",
+      "restore": "Restore the shipped arrangement",
+      "restoreNamed": "Restore {{name}} default",
+      "revert": "Revert to saved layout",
+      "save": "Save preset",
+      "saveAs": "Save as new preset",
+      "saveAsTooltip": "Save this layout as a new preset",
+      "saveChanges": "Save changes",
+      "switch": "Switch to this layout",
+      "unsaved": "Unsaved changes"
+    },
+    "projectSwitcher": {
+      "trigger": "Switch project. Current project: {{name}}"
+    },
+    "queue": {
+      "actions": "Queue actions",
+      "backendBatch": "Backend batch {{id}}",
+      "backendItem": "backend item {{id}}",
+      "batchImage": "Batch image {{current}}/{{total}}",
+      "currentImageProgress": "Current image progress",
+      "idle": "Queue idle",
+      "imageProgress": "Image {{current}} of {{total}}",
+      "imageProgressPercent": "Image {{current}} of {{total}}, {{percent}} percent",
+      "loadingImage": "Loading image {{current}}/{{total}}",
+      "loadingModels": "Loading models",
+      "loadingModelsCount_one": "Loading {{count}} model",
+      "loadingModelsCount_other": "Loading {{count}} models",
+      "more": "{{count}} more…",
+      "noActiveBatches": "No active or pending generation batches.",
+      "queuedImages_one": "{{count}} image queued.",
+      "queuedImages_other": "{{count}} images queued.",
+      "queueItem": "Queue item {{id}}",
+      "remaining_one": "{{count}} image remaining. Open queue",
+      "remaining_other": "{{count}} images remaining. Open queue",
+      "route": "{{source}} to {{destination}} · {{graph}}",
+      "waitingForProgress": "Backend accepted batch; waiting for progress event.",
+      "waitingToStart": "Waiting to start"
+    },
+    "routing": {
+      "change": "Change routing",
+      "destination": "Destination",
+      "lockDestination": "Lock output destination",
+      "lockRouting": "Lock routing",
+      "lockSource": "Lock source",
+      "source": "Source",
+      "unlockDestination": "Unlock output destination",
+      "unlockRouting": "Unlock routing",
+      "unlockSource": "Unlock source"
+    }
   },
   "projects": {
     "allSavedAlreadyOpen": "All saved projects are already open.",
@@ -413,6 +513,197 @@
     "searchPlaceholder": "Search hotkeys",
     "title": "Hotkeys"
   },
+  "hints": {
+    "aspectRatio": {
+      "heading": "Aspect Ratio",
+      "paragraphs": [
+        "The aspect ratio of the dimensions of the image generated.",
+        "An image size (in number of pixels) equivalent to 512x512 is recommended for SD1.5 models and a size equivalent to 1024x1024 is recommended for SDXL models."
+      ]
+    },
+    "batchCount": {
+      "heading": "Iterations",
+      "paragraphs": [
+        "The number of images to generate.",
+        "If Dynamic Prompts is enabled, each of the prompts will be generated this many times."
+      ]
+    },
+    "cfgRescale": {
+      "heading": "CFG Rescale Multiplier",
+      "paragraphs": [
+        "Rescale multiplier for CFG guidance, used for models trained using zero-terminal SNR (ztsnr).",
+        "Suggested value of 0.7 for these models."
+      ]
+    },
+    "cfgScale": {
+      "heading": "CFG Scale",
+      "paragraphs": [
+        "Controls how much the prompt influences the generation process.",
+        "High CFG Scale values can result in over-saturation and distorted generation results."
+      ]
+    },
+    "clipSkip": {
+      "heading": "CLIP Skip",
+      "paragraphs": [
+        "How many layers of the CLIP model to skip.",
+        "Certain models are better suited to be used with CLIP Skip."
+      ]
+    },
+    "colorCompensation": {
+      "heading": "Color Compensation",
+      "paragraphs": ["Adjust the input image to reduce color shifts during inpainting or img2img (SDXL Only)."]
+    },
+    "concepts": {
+      "heading": "LoRA",
+      "paragraphs": ["Lightweight models that are used in conjunction with base models."]
+    },
+    "creativity": {
+      "heading": "Creativity",
+      "paragraphs": [
+        "Creativity controls the amount of freedom granted to the model when adding details. Low creativity stays close to the original image, while high creativity allows for more change. When using a prompt, high creativity increases the influence of the prompt."
+      ]
+    },
+    "guidance": {
+      "heading": "Guidance",
+      "paragraphs": [
+        "Controls how much the prompt influences the generation process.",
+        "High guidance values can result in over-saturation and high or low guidance may result in distorted generation results. Guidance only applies to FLUX DEV models."
+      ]
+    },
+    "height": {
+      "heading": "Height",
+      "paragraphs": ["Height of the generated image. Must be a multiple of 8."]
+    },
+    "imageInfluence": {
+      "heading": "Denoising Strength",
+      "paragraphs": [
+        "Controls how much the generated image varies from the raster layers.",
+        "Lower strength stays closer to the combined visible raster layers. Higher strength relies more on the global prompt.",
+        "When there are no raster layers with visible content, this setting is ignored."
+      ]
+    },
+    "model": {
+      "heading": "Model",
+      "paragraphs": [
+        "Model used for generation. Different models are trained to specialize in producing different aesthetic results and content."
+      ]
+    },
+    "negativePrompt": {
+      "heading": "Negative Prompt",
+      "paragraphs": [
+        "The generation process avoids the concepts in the negative prompt. Use this to exclude qualities or objects from the output.",
+        "Supports Compel syntax and embeddings."
+      ]
+    },
+    "pidMode": {
+      "heading": "PiD Decode (Super-Resolution Decoder)",
+      "paragraphs": [
+        "PiD replaces the standard VAE decode with NVIDIA's Pixel Diffusion Decoder, a diffusion-based 4x super-resolution decoder. It requires a PiD decoder model and a Gemma-2 caption encoder.",
+        "Fit: generate at your chosen resolution, PiD decodes it 4x, then downscales back to that size - extra detail at the same output size, and it composites onto the canvas (works for Image to Image too).",
+        "Native (4x): your dimensions are the 4x target. Generation runs at a quarter of them (e.g. 512 -> 2048) and PiD's full 4x output is used directly. The PiD decoders are trained for 2K output (512px sources), with 2K-to-4K variants for 4K.",
+        "Because PiD's diffusion decode reconstructs detail, you can usually lower the generation Steps to save time. 'Scale Before Processing' must be set to None while PiD is enabled."
+      ]
+    },
+    "positivePrompt": {
+      "heading": "Positive Prompt",
+      "paragraphs": [
+        "Guides the generation process. You may use any words or phrases.",
+        "Compel and Dynamic Prompts syntaxes and embeddings."
+      ]
+    },
+    "referenceImage": {
+      "heading": "Global Reference Image",
+      "paragraphs": ["Applies a reference image to influence the entire generation."]
+    },
+    "referenceImageWeight": {
+      "heading": "Reference Image Weight",
+      "paragraphs": [
+        "How strongly this reference image steers the generation.",
+        "Lower weight treats it as a loose suggestion; higher weight holds the output closer to the reference."
+      ]
+    },
+    "scheduler": {
+      "heading": "Scheduler",
+      "paragraphs": [
+        "Scheduler used during the generation process.",
+        "Each scheduler defines how to iteratively add noise to an image or how to update a sample based on a model's output."
+      ]
+    },
+    "seamlessTiling": {
+      "heading": "Seamless Tiling",
+      "paragraphs": [
+        "Generates an image that tiles without visible seams.",
+        "Enable each axis independently to tile horizontally, vertically, or both."
+      ]
+    },
+    "seed": {
+      "heading": "Seed",
+      "paragraphs": [
+        "Controls the starting noise used for generation.",
+        "Disable the \"Random\" option to produce identical results with the same generation settings."
+      ]
+    },
+    "steps": {
+      "heading": "Steps",
+      "paragraphs": [
+        "Number of steps that will be performed in each generation.",
+        "Higher step counts will typically create better images but will require more generation time."
+      ]
+    },
+    "structure": {
+      "heading": "Structure",
+      "paragraphs": [
+        "Structure controls how closely the output image will keep to the layout of the original. Low structure allows major changes, while high structure strictly maintains the original composition and layout."
+      ]
+    },
+    "tileControlNet": {
+      "heading": "ControlNet",
+      "paragraphs": [
+        "ControlNets provide guidance to the generation process, helping create images with controlled composition, structure, or style, depending on the model selected."
+      ]
+    },
+    "tileOverlap": {
+      "heading": "Tile Overlap",
+      "paragraphs": [
+        "Controls the overlap between adjacent tiles during upscaling. Higher overlap values help reduce visible seams between tiles but use more memory.",
+        "The default value of 128 works well for most cases, but you can adjust based on your specific needs and memory constraints."
+      ]
+    },
+    "tileSize": {
+      "heading": "Tile Size",
+      "paragraphs": [
+        "Controls the size of tiles used during the upscaling process. Larger tiles use more memory but may produce better results.",
+        "SD1.5 models default to 768, while SDXL models default to 1024. Reduce tile size if you encounter memory issues."
+      ]
+    },
+    "upscaleModel": {
+      "heading": "Upscale Model",
+      "paragraphs": [
+        "The upscale model scales the image to the output size before details are added. Any supported upscale model may be used, but some are specialized for different kinds of images, like photos or line drawings."
+      ]
+    },
+    "upscaleScale": {
+      "heading": "Scale",
+      "paragraphs": [
+        "Scale controls the output image size, and is based on a multiple of the input image resolution. For example a 2x upscale on a 1024x1024 image would produce a 2048 x 2048 output."
+      ]
+    },
+    "vae": {
+      "heading": "VAE",
+      "paragraphs": ["Model used for translating AI output into the final image."]
+    },
+    "vaePrecision": {
+      "heading": "VAE Precision",
+      "paragraphs": [
+        "The precision used during VAE encoding and decoding.",
+        "Fp16/Half precision is more efficient, at the expense of minor image variations."
+      ]
+    },
+    "width": {
+      "heading": "Width",
+      "paragraphs": ["Width of the generated image. Must be a multiple of 8."]
+    }
+  },
   "models": {
     "accessToken": "Access Token",
     "accessTokenForDownload": "Access token for this download",
@@ -505,6 +796,9 @@
     "downloadProgress": "Download progress",
     "editing": "Editing",
     "emptyCache": "Empty model cache",
+    "externalProviderKeyDescription": "Stored server-side and used for every request to this provider.",
+    "externalProviderKeysUnavailable": "Could not load external provider keys",
+    "externalProvidersUnavailable": "External providers are unavailable: {{error}}",
     "failedToEmptyCache": "Failed to empty model cache",
     "failedToLinkModels": "Failed to link models.",
     "failedToLoadExternalProviders": "Failed to load external providers.",
@@ -749,6 +1043,8 @@
     "sectionsLabel": "Launchpad sections"
   },
   "settings": {
+    "informationalPopoversDisabled": "Informational popovers disabled",
+    "informationalPopoversDisabledDesc": "Re-enable them under Settings, in the Behavior section.",
     "title": "Settings",
     "descriptionGlobal": "Global preferences for this single-user install. Project settings apply only to the active project.",
     "descriptionUser": "Preferences for the signed-in user. Project settings apply only to the active project.",
@@ -779,6 +1075,18 @@
   },
   "widgets": {
     "actionsLabel": "{{label}} actions",
+    "centerRegion": "Center view",
+    "centerViewClose": "Close {{label}}",
+    "centerViewEmpty": "No view",
+    "centerViewLabel": "Center view: {{label}}",
+    "centerViews": "Center Views",
+    "centerViewsAdd": "Add To Center",
+    "failure": {
+      "compactLabel": "{{label}} failed — select to retry",
+      "copyError": "Copy Error",
+      "retry": "Retry",
+      "title": "{{label}} failed"
+    },
     "loadingLabel": "Loading {{label}}",
     "removeWidget": "Remove {{label}}",
     "panelLabel": "{{region}} widget panel",
@@ -821,6 +1129,7 @@
       "components": "Components",
       "compositing": "Compositing",
       "compositingOptions": {
+        "infillColorValue": "Infill color",
         "infillMethod": "Infill method",
         "infillMethods": {
           "patchmatch": "PatchMatch",
@@ -851,6 +1160,7 @@
       "dimensions": "Dimensions",
       "disableConcept": "Disable {{name}}",
       "disableReferenceImage": "Disable reference image",
+      "dropImageToPrompt": "Describe this image",
       "dynamicPrompts": {
         "title": "Dynamic Prompts",
         "showPrompts": "Show dynamic prompts",
@@ -925,6 +1235,7 @@
       "enableNegativePrompt": "Enable negative prompt",
       "enableReferenceImage": "Enable reference image",
       "enabled": "Enabled",
+      "enterPromptToExpand": "Enter a prompt to expand.",
       "expand": "Expand",
       "expandPrompt": "Expand prompt",
       "expandReferenceImage": "Expand reference image",
@@ -975,6 +1286,7 @@
       "noVisionModelInstalled": "No vision model installed",
       "offCount_one": "{{count}} off",
       "offCount_other": "{{count}} off",
+      "openModelManager": "Open Model Manager",
       "override": "Override",
       "positivePrompt": "Positive prompt",
       "promptHistory": "Prompt history",
@@ -1532,12 +1844,10 @@
         "gradientAngle": "Angle",
         "gradientEdit": "Edit gradient",
         "gradientEnd": "End",
-        "gradientEndOpacity": "End opacity",
         "gradientKind": "Gradient type",
         "gradientLinear": "Linear",
         "gradientRadial": "Radial",
         "gradientStart": "Start",
-        "gradientStartOpacity": "Start opacity",
         "invertSelection": "Invert",
         "lassoFreehand": "Freehand",
         "lassoHint": "Draw a shape to select. Shift adds, Alt subtracts.",
@@ -1622,7 +1932,6 @@
         "template": "Template"
       },
       "library": "Workflow library",
-      "name": "Workflow name",
       "nodeData": "Node data",
       "nodeInspector": "Node Inspector",
       "nodeNotes": "Node notes",
@@ -1631,8 +1940,10 @@
       "notes": "Notes",
       "notesNode": "Notes node",
       "noTemplateKnown": "No template is known for \"{{type}}\" on this backend.",
+      "openLibrary": "Open workflow library. Current workflow: {{name}}",
       "pack": "Pack",
       "panelContent": "Workflow panel content",
+      "panelMode": "Workflow panel mode",
       "resizeNodeInspector": "Resize node inspector",
       "runOutputsNotRecorded": "Run outputs are not recorded per node yet; results currently route to the Gallery or Canvas. This tab will show the node's outputs from its most recent run once run records land.",
       "newWorkflowWithEllipsis": "New workflow…",
@@ -2078,16 +2389,16 @@
       "assetCount_one": "{{count}} asset",
       "assetCount_other": "{{count}} assets",
       "boardActionsForBoard": "Board actions for {{name}}",
+      "boardArchived": "Archived board \"{{name}}\"",
       "boardArchivePreparing_one": "Preparing an image archive of \"{{name}}\". {{count}} video will be omitted.",
       "boardArchivePreparing_other": "Preparing an image archive of \"{{name}}\". {{count}} videos will be omitted.",
-      "boardArchived": "Archived board \"{{name}}\"",
+      "boardCountsBreakdown": "{{media}} media, {{assets}} assets",
       "boardCreated": "Created board \"{{name}}\"",
       "boardGroups": {
         "boards": "Boards",
         "byDate": "By Date"
       },
       "boardItemCounts": "{{images}} · {{videos}} · {{assets}}",
-      "boardMediaCountBreakdown": "{{images}} · {{videos}}",
       "boardName": "Board name",
       "boardRenamed": "Renamed board to \"{{name}}\"",
       "boardUnarchived": "Unarchived board \"{{name}}\"",
@@ -2101,6 +2412,7 @@
         "selectAllOnPage": "Select all gallery images on page",
         "toggleStarImage": "Toggle gallery image star"
       },
+      "createBoard": "Create board",
       "createBoardNamed": "Create board \"{{name}}\"",
       "dateFilterDay": "{{date}}",
       "dateFilterFrom": "From {{date}}",
@@ -2116,20 +2428,30 @@
       "deleteBoardPartialTitle": "Deleted board \"{{name}}\" with partial media cleanup",
       "deleteBoardQuestion": "Delete board \"{{name}}\"?",
       "deleteBoardSuccessTitle": "Deleted board \"{{name}}\"",
+      "deleteConfirmLabel": "Delete",
+      "deleteImagesConfirmBody_one": "This permanently deletes the image from every board and from disk. This cannot be undone. You can disable this confirmation in Settings.",
+      "deleteImagesConfirmBody_other": "This permanently deletes these images from every board and from disk. This cannot be undone. You can disable this confirmation in Settings.",
+      "deleteImagesConfirmTitle_one": "Delete image?",
+      "deleteImagesConfirmTitle_other": "Delete {{count}} images?",
+      "deleteItemsConfirmBody_one": "This permanently deletes the item from every board and from disk. This cannot be undone. You can disable this confirmation in Settings.",
+      "deleteItemsConfirmBody_other": "This permanently deletes these items from every board and from disk. This cannot be undone. You can disable this confirmation in Settings.",
+      "deleteItemsConfirmTitle_one": "Delete item?",
+      "deleteItemsConfirmTitle_other": "Delete {{count}} items?",
+      "deleteSelection": "Delete selection",
       "downloadBoard": "Download Board",
       "downloadBoardWithOmission_one": "Download Board ({{count}} video omitted)",
       "downloadBoardWithOmission_other": "Download Board ({{count}} videos omitted)",
       "downloadReady": "Download ready",
+      "downloadSelection": "Download selection",
       "dropMediaToUploadToBoard": "Drop images or videos to upload to {{name}}",
       "generationProgress": "Generation progress",
       "generationProgressPercent": "Generation {{percentage}}%",
       "hideArchivedBoards": "Hide archived boards",
       "hideDateBoards": "Hide date boards",
-      "imageDensity": "Image density",
       "imageCount_one": "{{count}} image",
       "imageCount_other": "{{count}} images",
+      "imageSize": "Image size",
       "imageSort": "Image Sort",
-      "itemsAriaLabel": "Gallery items",
       "infinite": "Infinite",
       "itemActions": {
         "delete": {
@@ -2165,8 +2487,10 @@
           "success_other": "Unstarred {{count}} items."
         }
       },
+      "itemsAriaLabel": "Gallery items",
       "loadingBackendGallery": "Loading backend gallery...",
       "loadingBoard": "Loading board...",
+      "moveSelectionToBoard": "Move selection to board",
       "newest": "Newest",
       "noBoardsMatchSearch": "No boards match this search.",
       "noImagesMatch": "No items match this board, tab, or search.",
@@ -2175,43 +2499,58 @@
       "preparingDownload": "Preparing download",
       "projectBoardCreated": "Created project board \"{{name}}\"",
       "renameBoard": "Rename board",
+      "resizeBoardPanel": "Resize board panel",
+      "searchHelpDate": "A single day.",
+      "searchHelpFrom": "On or after this day.",
+      "searchHelpIntro": "Combine plain text with date tokens. Values accept YYYY-MM-DD, today, yesterday, or relative values such as 7d, 2w, and 1m.",
+      "searchHelpRelative": "Relative: days (d), weeks (w), or months (m) ago.",
+      "searchHelpTitle": "Search syntax",
+      "searchHelpTo": "On or before this day.",
       "searchImagesAriaLabel": "Search gallery items",
       "searchImagesPlaceholder": "Search items",
       "searchOrCreateBoards": "Search or create boards",
-      "selectImageForPreview": "Select {{name}} for preview",
-      "selectVideoForPreview": "Select video {{name}}, duration {{duration}}, for preview",
       "selectedBoardFallback": "selected board",
+      "selectImageForPreview": "Select {{name}} for preview",
+      "selectionActions": "Selection actions",
+      "selectionCount_one": "{{count}} selected",
+      "selectionCount_other": "{{count}} selected",
+      "selectVideoForPreview": "Select video {{name}}, duration {{duration}}, for preview",
       "settings": "Gallery settings",
-      "settingsGridDensity": "Grid Density",
+      "settingsGridSize": "Grid Size",
       "settingsThumbnails": "Thumbnails",
       "showArchivedBoards": "Show archived boards",
       "showDateBoards": "Show date boards",
       "showPendingItems": "Show pending items",
       "showStarredImagesFirst": "Show starred images first",
+      "sortBoards": "Sort boards",
       "sortBoardsAscending": "Sort boards ascending",
+      "sortBoardsBy": "Sort by",
       "sortBoardsDescending": "Sort boards descending",
       "starImage": "Star {{name}}",
+      "starSelection": "Star selection",
+      "statusChip_one": "Gallery: {{count}} item",
+      "statusChip_other": "Gallery: {{count}} items",
       "thumbnailFitAspect": "Aspect",
       "thumbnailFitSquare": "Square",
+      "toggleBoardsNamed": "Toggle boards, currently {{name}}",
       "unarchiveBoard": "Unarchive Board",
       "uncategorized": "Uncategorized",
       "unknownBoard": "Unknown board",
       "unstarImage": "Unstar {{name}}",
+      "unstarSelection": "Unstar selection",
       "uploadDateBoardUnavailable": "Uploads are unavailable for date boards.",
       "uploadFailed": "No files uploaded. {{failed}} failed.",
       "uploadMediaToBoard": "Upload images or videos to {{name}}",
       "uploadPartialTitle": "Uploaded {{succeeded}} of {{total}} files",
-      "uploadSplit": "Images appear in Assets; videos appear in Images.",
+      "uploadSplit": "Images appear in Assets; videos appear in Media.",
       "uploadSuccessTitle_one": "Uploaded {{count}} file",
       "uploadSuccessTitle_other": "Uploaded {{count}} files",
       "uploadSummary": "{{images}} and {{videos}} uploaded to {{board}}. {{failed}} failed.",
-      "uploadUnsupported": "No supported media files to upload (PNG, JPEG, WebP, or MP4).",
       "uploadsUnavailableForDateBoards": "Uploads are unavailable for date boards",
+      "uploadUnsupported": "No supported media files to upload (PNG, JPEG, WebP, or MP4).",
       "videoCount_one": "{{count}} video",
       "videoCount_other": "{{count}} videos",
-      "windowLimit": "Showing the first {{count}} items. Narrow the search or switch to Pages to reach the rest.",
-      "statusChip_one": "Gallery: {{count}} item",
-      "statusChip_other": "Gallery: {{count}} items"
+      "windowLimit": "Showing the first {{count}} items. Narrow the search or switch to Pages to reach the rest."
     },
     "serverStatus": {
       "connected": "Connected to Server",
