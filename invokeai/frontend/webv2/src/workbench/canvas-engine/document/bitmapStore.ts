@@ -41,6 +41,12 @@
  *   references (the redo lands on `{ bitmap: null }`); comparing against that
  *   stale memory would suppress the re-dispatch forever. Comparing against
  *   the document itself self-heals regardless of how it drifted.
+ * - **Truthful extent**: the persisted bitmap's DIMENSIONS become the layer's
+ *   content rect, which draws the move outline, frames the transform tool and
+ *   drives fit-to-content. The cache only ever grows, so each flush first trims it
+ *   to its visible pixels ({@link BitmapStoreDeps.trimLayerPixels}); a layer left
+ *   with none is cleared to `{ bitmap: null }` rather than uploading a transparent
+ *   PNG whose dimensions would keep reporting a phantom rect.
  *
  * Every side-effecting dependency (encode, upload, hash, dispatch, timers) is
  * injectable, so this runs in node tests with fakes. Zero React.
@@ -49,6 +55,7 @@
 import type { CanvasImageRef, CanvasLayerSourceContract } from '@workbench/canvas-engine/contracts';
 import type { CanvasImageUploadResult } from '@workbench/canvas-engine/document/imageUpload';
 import type { CanvasProjectMutation } from '@workbench/canvas-engine/mutationContracts';
+import type { PaintCacheTrim } from '@workbench/canvas-engine/render/paintCacheTrim';
 import type { RasterSurface } from '@workbench/canvas-engine/render/raster';
 
 /** Default idle window before a dirty layer is flushed. */
@@ -117,6 +124,19 @@ export interface BitmapStoreDeps {
    * dispatch (used by the store's own tests, which only exercise paint layers).
    */
   dispatchBitmap?(layerId: string, bitmap: CanvasImageRef, offset: { x: number; y: number }): boolean;
+  /**
+   * Trims a layer's cache to its visible pixels (see **Truthful extent** above).
+   * Called after the source-type guard and BEFORE `getLayerSurface`, so this flush
+   * reads the trimmed surface and offset. Absent ⇒ `'kept'` ⇒ no trimming.
+   */
+  trimLayerPixels?(layerId: string): PaintCacheTrim;
+  /**
+   * Clears a layer's bitmap ref, for a layer the trim found empty. Returns whether
+   * the layer accepted it, like {@link dispatchBitmap}. Kept separate from that
+   * rather than widening it to a nullable ref: there is no offset to carry, and a
+   * mask must clear `mask.bitmap` while preserving its `fill`.
+   */
+  clearBitmap?(layerId: string): boolean;
   /** Content-hashes a blob (defaults to SHA-256 hex via `crypto.subtle`). */
   hashBlob?(blob: Blob): Promise<string>;
   /** Idle debounce window in ms (default {@link DEFAULT_DEBOUNCE_MS}). */
@@ -153,6 +173,10 @@ export interface BitmapStore {
    * applied to `layerId` — i.e. the engine is seeing its own dispatch round-trip
    * and must NOT re-rasterize/invalidate the cache (the pixels already match).
    * A different bitmap (undo/import) returns `false` and re-rasterizes as usual.
+   *
+   * A clear (`bitmap: null`) is deliberately never an echo: re-rasterizing a
+   * bitmap-less paint source collapses the cache to a zero rect, which is exactly
+   * the reconciliation a cleared layer needs.
    */
   isSelfEcho(layerId: string, source: CanvasLayerSourceContract | null): boolean;
   /**
@@ -317,6 +341,50 @@ export const createBitmapStore = (deps: BitmapStoreDeps): BitmapStore => {
     throw lastError ?? new Error('Canvas image upload failed');
   };
 
+  /**
+   * Clears a layer's bitmap ref, for a layer the trim found empty. Synchronous
+   * throughout, so no generation re-check is needed before the dispatch.
+   */
+  const clearLayerBitmap = (layerId: string, requeueFailure: (error: unknown) => void): void => {
+    // Redundant-dispatch skip against GROUND TRUTH, not `lastApplied` — see the header.
+    const sourceNow = deps.getLayerSource(layerId);
+    if (!sourceNow || sourceNow.type !== 'paint') {
+      return;
+    }
+    if (!sourceNow.bitmap) {
+      return;
+    }
+    // Drop the self-echo entry: leaving the old name would make a later undo that
+    // legitimately re-dispatches it look like our own echo, skipping the cache
+    // invalidation and leaving an empty cache pointing at a real bitmap.
+    lastApplied.delete(layerId);
+    let accepted: boolean;
+    try {
+      accepted = deps.clearBitmap
+        ? deps.clearBitmap(layerId)
+        : deps.dispatch({
+            id: layerId,
+            source: { bitmap: null, type: 'paint' },
+            type: 'updateCanvasLayerSource',
+          });
+    } catch (error) {
+      const authoritativeSource = (deps.getAuthoritativeLayerSource ?? deps.getLayerSource)(layerId);
+      // As on the upload path: a dispatch that threw after the reducer committed
+      // still landed, so it must not be requeued.
+      if (authoritativeSource?.type === 'paint' && !authoritativeSource.bitmap) {
+        return;
+      }
+      if (authoritativeSource !== null) {
+        requeueFailure(error);
+      }
+      return;
+    }
+    if (accepted !== true && deps.getLayerSource(layerId) !== null) {
+      dirty.add(layerId);
+      dirtyReason.set(layerId, 'failure');
+    }
+  };
+
   /** Encodes → hashes → dedupes/uploads → swaps the layer's ref, once. */
   const flushLayer = async (layerId: string): Promise<void> => {
     const generationAtEntry = layerGenerations.get(layerId) ?? 0;
@@ -336,6 +404,30 @@ export const createBitmapStore = (deps: BitmapStoreDeps): BitmapStore => {
         // Keep the bounded retry state intact when an observer itself fails.
       }
     };
+    // Source-type guard (see `getLayerSource` doc): the dirty mark may predate
+    // a conversion away from `paint` (rasterize → undo is the motivating case,
+    // but any convert-back qualifies). The cache surface survives a source swap,
+    // so without this check we'd encode and dispatch a `paint` source over a layer
+    // that is no longer paint at all. Drop the pending flush entirely: nothing
+    // about this dirty mark is still valid, and a future genuine paint stroke will
+    // re-mark it if the layer ever becomes a paint layer again.
+    //
+    // Also before the TRIM: shrinking a cache that now backs a parametric render
+    // would break the compositor's cache-rect-equals-content-rect invariant.
+    const sourceAtEntry = deps.getLayerSource(layerId);
+    if (!sourceAtEntry || sourceAtEntry.type !== 'paint') {
+      dirty.delete(layerId);
+      clearTimer(layerId);
+      return;
+    }
+    // Truthful extent (see the header). `getLayerSurface` below re-reads the cache,
+    // so it picks up the trimmed surface and origin with no further work.
+    if (deps.trimLayerPixels?.(layerId) === 'emptied') {
+      dirty.delete(layerId);
+      clearTimer(layerId);
+      clearLayerBitmap(layerId, requeueFailure);
+      return;
+    }
     const placed = deps.getLayerSurface(layerId);
     if (!placed) {
       // Layer or its cache is gone (or empty); nothing to persist.
@@ -348,20 +440,6 @@ export const createBitmapStore = (deps: BitmapStoreDeps): BitmapStore => {
     // growth during the async encode window re-marks the layer (its stroke marks
     // it dirty), so a follow-up flush re-converges with the current rect + offset.
     const { offset, surface } = placed;
-    // Source-type guard (see `getLayerSource` doc): the dirty mark may predate
-    // a conversion away from `paint` (rasterize → undo is the motivating case,
-    // but any convert-back qualifies). The cache surface still resolves above
-    // — a source swap doesn't clear it — so without this check we'd encode and
-    // dispatch a `paint` source over a layer that is no longer paint at all.
-    // Drop the pending flush entirely: nothing about this dirty mark is still
-    // valid, and a future genuine paint stroke will re-mark it if the layer
-    // ever becomes a paint layer again.
-    const sourceAtEntry = deps.getLayerSource(layerId);
-    if (!sourceAtEntry || sourceAtEntry.type !== 'paint') {
-      dirty.delete(layerId);
-      clearTimer(layerId);
-      return;
-    }
     // Consume the dirty flag up front; a failure re-adds it below. A stroke that
     // lands mid-flush re-marks the layer, so the finally handler re-schedules.
     dirty.delete(layerId);
