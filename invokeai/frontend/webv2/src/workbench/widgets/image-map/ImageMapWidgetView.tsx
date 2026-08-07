@@ -2,6 +2,7 @@ import type { WidgetViewProps } from '@workbench/widgetContracts';
 
 import { Button, Center, Spinner, Stack, Text } from '@chakra-ui/react';
 import { ensureImageMapLoaded, imageMapStore, refreshImageMapPoints } from '@workbench/image-map/imageMapStore';
+import { useWidgetValuesSelector } from '@workbench/WorkbenchContext';
 import { lazy, useEffect } from 'react';
 
 // Lazy so the plotly bundle (its own vite chunk) loads only when the widget
@@ -19,6 +20,7 @@ const handleRefresh = () => {
  */
 export const ImageMapWidgetView = (_props: WidgetViewProps) => {
   const { data, error, loadState } = imageMapStore.useSnapshot();
+  const clickSelectsCluster = useWidgetValuesSelector('image-map', (values) => Boolean(values.clickSelectsCluster));
 
   useEffect(() => {
     ensureImageMapLoaded();
@@ -27,7 +29,7 @@ export const ImageMapWidgetView = (_props: WidgetViewProps) => {
   // A working map beats a full-screen error: when a refresh fails but prior
   // points exist, keep showing them (the next successful refresh recovers).
   if (data && data.points.length > 0) {
-    return <ImageMapPlot />;
+    return <ImageMapPlot clickSelectsCluster={clickSelectsCluster} />;
   }
 
   if (loadState === 'idle' || loadState === 'loading') {
