@@ -43,6 +43,11 @@ from invokeai.backend.architectures.facets.latent_space import (
     get_latent_space,
     resolve_latent_space,
 )
+from invokeai.backend.architectures.facets.loader import (
+    DEFAULT_LOADER_FLAGS,
+    LoaderFlagsFacet,
+    get_loader_flags,
+)
 from invokeai.backend.architectures.facets.unet import UNetDownscaleFacet, get_max_unet_downscale
 from invokeai.backend.architectures.facets.variant import (
     VariantFacet,
@@ -61,11 +66,13 @@ from invokeai.backend.architectures.registry import (
 )
 
 __all__ = [
+    "DEFAULT_LOADER_FLAGS",
     "ArchitectureError",
     "ConditioningFacet",
     "Facet",
     "LatentSpace",
     "LatentSpaceFacet",
+    "LoaderFlagsFacet",
     "UNetDownscaleFacet",
     "VariantFacet",
     "conditioning_infos",
@@ -76,6 +83,7 @@ __all__ = [
     "get",
     "get_conditioning_info",
     "get_latent_space",
+    "get_loader_flags",
     "get_max_unet_downscale",
     "get_variant_enum",
     "register",
