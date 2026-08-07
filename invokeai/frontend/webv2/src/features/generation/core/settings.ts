@@ -17,6 +17,12 @@ import type {
 
 import { sanitizeBatchCount } from './batch';
 import { isVaeCompatibleWithGenerateModel } from './componentCompatibility';
+import {
+  DEFAULT_KREA2_REBALANCE_MULTIPLIER,
+  DEFAULT_KREA2_REBALANCE_WEIGHTS,
+  isValidKrea2RebalanceWeights,
+  KREA2_REBALANCE_WEIGHT_COUNT,
+} from './conditioningRebalance';
 import { isDynamicPromptsSeedBehaviour, sanitizeMaxPrompts, sanitizeSampleSeed } from './dynamicPrompts';
 import { clampPidSteps, DEFAULT_PID_STEPS, isPidMode } from './pid';
 import { isCanonicalPromptTemplateSnapshot, sanitizePromptTemplateSnapshot } from './promptTemplates';
@@ -68,6 +74,10 @@ export const DEFAULT_NEGATIVE_PROMPT_HEIGHT_PX = 56;
 export const MIN_POSITIVE_PROMPT_HEIGHT_PX = 96;
 export const MAX_POSITIVE_PROMPT_HEIGHT_PX = 360;
 export const DEFAULT_POSITIVE_PROMPT_HEIGHT_PX = 96;
+export const DEFAULT_HIDIFFUSION_T1_RATIO = 0.4;
+export const DEFAULT_HIDIFFUSION_T2_RATIO = 0;
+export const MIN_HIDIFFUSION_T1_RATIO = 0.1;
+export const MAX_HIDIFFUSION_RATIO = 1;
 
 export const DEFAULT_LORA_WEIGHT_CONFIG = {
   coarseStep: 0.05,
@@ -165,9 +175,6 @@ const isVaePrecision = (value: unknown): value is VaePrecision => value === 'fp1
 /** Backend defaults from `Ideogram4DenoiseInvocation` / `Krea2*Invocation`. */
 export const IDEOGRAM4_SAMPLER_PRESETS: Ideogram4SamplerPreset[] = ['V4_QUALITY_48', 'V4_DEFAULT_20', 'V4_TURBO_12'];
 export const DEFAULT_IDEOGRAM4_SAMPLER_PRESET: Ideogram4SamplerPreset = 'V4_QUALITY_48';
-export const DEFAULT_KREA2_REBALANCE_MULTIPLIER = 4;
-export const DEFAULT_KREA2_REBALANCE_WEIGHTS = '1.0,1.0,1.0,1.0,1.0,1.0,1.0,2.5,5.0,1.1,4.0,1.0';
-export const KREA2_REBALANCE_WEIGHT_COUNT = 12;
 export const DEFAULT_KREA2_SEED_VARIANCE_STRENGTH = 0.1;
 export const MAX_KREA2_SEED_VARIANCE_STRENGTH = 2;
 export const DEFAULT_KREA2_SEED_VARIANCE_RANDOMIZE_PERCENT = 50;
@@ -181,23 +188,13 @@ const getOptionalNumber = (value: unknown): number | null =>
 const getStringArray = (value: unknown): string[] =>
   Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string') : [];
 
-/**
- * Krea-2 rebalance weights are free text forwarded straight to the backend's `_parse_weights()`.
- * Validating here keeps an unparseable string (wrong count, non-numeric, NaN/Infinity) from
- * reaching a node that would fail mid-generation.
- */
-export const isValidKrea2RebalanceWeights = (value: string): boolean => {
-  const parts = value.split(',');
-
-  if (parts.length !== KREA2_REBALANCE_WEIGHT_COUNT) {
-    return false;
-  }
-
-  return parts.every((part) => {
-    const trimmed = part.trim();
-
-    return trimmed !== '' && Number.isFinite(Number(trimmed));
-  });
+// Re-exported so existing `core/settings` callers keep one import site; the rebalance
+// vector, its presets, and its geometry all live in `conditioningRebalance.ts`.
+export {
+  DEFAULT_KREA2_REBALANCE_MULTIPLIER,
+  DEFAULT_KREA2_REBALANCE_WEIGHTS,
+  isValidKrea2RebalanceWeights,
+  KREA2_REBALANCE_WEIGHT_COUNT,
 };
 
 const isGenerateLora = (value: unknown): value is GenerateLora =>
@@ -661,6 +658,25 @@ export const normalizeGenerateSettings = (values: unknown): GenerateSettings | n
     cfgScale: values.cfgScale as number,
     clipSkip: hasFiniteNumber(values, 'clipSkip') ? (values.clipSkip as number) : 0,
     colorCompensation: typeof values.colorCompensation === 'boolean' ? values.colorCompensation : false,
+    hiDiffusionEnabled: typeof values.hiDiffusionEnabled === 'boolean' ? values.hiDiffusionEnabled : false,
+    hiDiffusionRauNetEnabled:
+      typeof values.hiDiffusionRauNetEnabled === 'boolean' ? values.hiDiffusionRauNetEnabled : true,
+    hiDiffusionWindowAttentionEnabled:
+      typeof values.hiDiffusionWindowAttentionEnabled === 'boolean' ? values.hiDiffusionWindowAttentionEnabled : true,
+    hiDiffusionT1Ratio: getClampedNumber(
+      values,
+      'hiDiffusionT1Ratio',
+      MIN_HIDIFFUSION_T1_RATIO,
+      MAX_HIDIFFUSION_RATIO,
+      DEFAULT_HIDIFFUSION_T1_RATIO
+    ),
+    hiDiffusionT2Ratio: getClampedNumber(
+      values,
+      'hiDiffusionT2Ratio',
+      0,
+      MAX_HIDIFFUSION_RATIO,
+      DEFAULT_HIDIFFUSION_T2_RATIO
+    ),
     dynamicPromptsCombinatorial:
       typeof values.dynamicPromptsCombinatorial === 'boolean' ? values.dynamicPromptsCombinatorial : true,
     dynamicPromptsMaxPrompts: sanitizeMaxPrompts(values.dynamicPromptsMaxPrompts),
@@ -774,6 +790,15 @@ export const isGenerateSettings = (values: unknown): values is GenerateSettings 
     hasFiniteNumber(values, 'aspectRatioValue') &&
     hasFiniteNumber(values, 'clipSkip') &&
     typeof values.colorCompensation === 'boolean' &&
+    typeof values.hiDiffusionEnabled === 'boolean' &&
+    typeof values.hiDiffusionRauNetEnabled === 'boolean' &&
+    typeof values.hiDiffusionWindowAttentionEnabled === 'boolean' &&
+    hasFiniteNumber(values, 'hiDiffusionT1Ratio') &&
+    (values.hiDiffusionT1Ratio as number) >= MIN_HIDIFFUSION_T1_RATIO &&
+    (values.hiDiffusionT1Ratio as number) <= MAX_HIDIFFUSION_RATIO &&
+    hasFiniteNumber(values, 'hiDiffusionT2Ratio') &&
+    (values.hiDiffusionT2Ratio as number) >= 0 &&
+    (values.hiDiffusionT2Ratio as number) <= MAX_HIDIFFUSION_RATIO &&
     typeof values.negativePromptEnabled === 'boolean' &&
     hasFiniteNumber(values, 'negativePromptHeightPx') &&
     hasFiniteNumber(values, 'positivePromptHeightPx') &&
