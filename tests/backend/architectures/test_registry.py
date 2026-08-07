@@ -4,7 +4,6 @@ These run against an empty registry and purpose-built dummy facets, never agains
 architectures -- so they keep passing as architectures and facets are added.
 """
 
-from collections.abc import Iterator
 from dataclasses import dataclass
 
 import pytest
@@ -26,19 +25,19 @@ class _BetaFacet(Facet):
 
 
 @pytest.fixture
-def isolated_registry(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    """Run a test against an empty registry, and restore the facet-type table afterwards.
+def isolated_registry(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Run a test against an empty registry *and* an empty facet-type table.
 
-    Both are process-global and mutated at class-creation/import time. Defining a facet subclass
-    anywhere -- even inside a test function -- adds it to `Facet.FACET_TYPES` permanently. Without
-    the restore, a dummy facet with `REQUIRED = True` would make `validate()` fail for every real
-    architecture in every test that runs afterwards.
+    Both are process-global and both matter. Emptying only the registry would leave the real facets
+    in `Facet.FACET_TYPES`, so `validate()` would hold the dummy architectures below to required
+    facets they were never meant to declare -- exactly the coupling these tests exist to avoid.
+    Emptying only the facet table would leave the 15 real architectures registered.
+
+    Note that defining a facet subclass anywhere, including inside a test function, adds it to
+    whichever table is installed at class-creation time; monkeypatch puts the real one back.
     """
     monkeypatch.setattr(registry, "_ARCHITECTURES", {})
-    facet_types = dict(Facet.FACET_TYPES)
-    yield
-    Facet.FACET_TYPES.clear()
-    Facet.FACET_TYPES.update(facet_types)
+    monkeypatch.setattr(Facet, "FACET_TYPES", {})
 
 
 def test_register_and_get_roundtrip(isolated_registry: None) -> None:
