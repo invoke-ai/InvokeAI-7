@@ -18,6 +18,7 @@ import {
   getGalleryProjectBoardId,
   getGallerySearchTerm,
   getGallerySelectedBoardId,
+  getGallerySemanticImageQuery,
   getGalleryStateView,
   getGalleryTotalImages,
   getGalleryView,
@@ -63,6 +64,7 @@ export const GalleryWidgetView = ({ presentation, region, runtime }: GalleryWidg
     generateValues,
     liveFollowEnabled,
     liveProgressTarget,
+    notifications,
     projectId,
     projectName,
     queueItems,
@@ -75,14 +77,33 @@ export const GalleryWidgetView = ({ presentation, region, runtime }: GalleryWidg
   const knownTotalImages = getGalleryTotalImages(galleryValues);
   const settings = getGallerySettings(galleryValues);
   const queryClient = useQueryClient();
+  const semanticQuery = getGallerySemanticImageQuery(galleryValues);
   const data = useGalleryData({
     galleryView,
     page,
     recentImages,
     searchTerm,
     selectedBoardId: getGallerySelectedBoardId(galleryValues, []),
+    semanticQuery,
     settings,
   });
+
+  // A failed similarity search renders exactly like an empty one ("no images
+  // match"), so the failure must reach the user some other way. Scoped to
+  // semantic mode: the board listing kept its pre-existing quiet behavior.
+  const semanticError = semanticQuery ? data.queryError : null;
+
+  useEffect(() => {
+    if (!semanticError) {
+      return;
+    }
+
+    notifications.reportError({
+      area: 'gallery-semantic-search',
+      message: semanticError.message,
+      namespace: 'gallery',
+    });
+  }, [notifications, semanticError]);
 
   const { loadMore, total } = data;
   const selectedBoardId = getGallerySelectedBoardId(galleryValues, data.boards);
