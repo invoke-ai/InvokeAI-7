@@ -62,22 +62,9 @@ from invokeai.app.services.videos.videos_default import VideoService
 from invokeai.app.services.wildcard_records.wildcard_records_sqlite import SqliteWildcardRecordsStorage
 from invokeai.app.services.workflow_records.workflow_records_sqlite import SqliteWorkflowRecordsStorage
 from invokeai.app.services.workflow_thumbnails.workflow_thumbnails_disk import WorkflowThumbnailFileStorageDisk
+from invokeai.backend.architectures import conditioning_infos
 from invokeai.backend.architectures import validate as validate_architectures
-from invokeai.backend.stable_diffusion.diffusion.conditioning_data import (
-    AnimaConditioningInfo,
-    BasicConditioningInfo,
-    CogView4ConditioningInfo,
-    ConditioningFieldData,
-    ErnieImageConditioningInfo,
-    FLUXConditioningInfo,
-    Ideogram4ConditioningInfo,
-    Krea2ConditioningInfo,
-    QwenImageConditioningInfo,
-    SD3ConditioningInfo,
-    SDXLConditioningInfo,
-    WanConditioningInfo,
-    ZImageConditioningInfo,
-)
+from invokeai.backend.stable_diffusion.diffusion.conditioning_data import ConditioningFieldData
 from invokeai.backend.util.logging import InvokeAILogger
 from invokeai.version.invokeai_version import __version__
 
@@ -173,21 +160,10 @@ class ApiDependencies:
         conditioning = ObjectSerializerForwardCache(
             ObjectSerializerDisk[ConditioningFieldData](
                 output_folder / "conditioning",
-                safe_globals=[
-                    ConditioningFieldData,
-                    BasicConditioningInfo,
-                    SDXLConditioningInfo,
-                    FLUXConditioningInfo,
-                    SD3ConditioningInfo,
-                    CogView4ConditioningInfo,
-                    ZImageConditioningInfo,
-                    ErnieImageConditioningInfo,
-                    Ideogram4ConditioningInfo,
-                    QwenImageConditioningInfo,
-                    Krea2ConditioningInfo,
-                    AnimaConditioningInfo,
-                    WanConditioningInfo,
-                ],
+                # Derived from the architecture registry rather than hand-maintained. This list is
+                # what `torch.load` will accept when reading conditioning back; an architecture
+                # missing from it used to fail mid-graph on the first generation that needed it.
+                safe_globals=[ConditioningFieldData, *conditioning_infos()],
                 ephemeral=True,
             ),
         )
