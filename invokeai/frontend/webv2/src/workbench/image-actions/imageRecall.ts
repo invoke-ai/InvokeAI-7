@@ -14,6 +14,7 @@ import {
   getSettingsWithModelDefaults,
   isKnownScheduler,
   isVaeCompatibleWithGenerateModel,
+  isValidKrea2RebalanceWeights,
   cloneGenerateWidgetValues,
   getModelDefaultVae,
   hasModelDefaultVae,
@@ -22,6 +23,8 @@ import {
   clampDimension,
   deriveAspectRatioId,
   normalizeReferenceImages,
+  MAX_HIDIFFUSION_RATIO,
+  MIN_HIDIFFUSION_T1_RATIO,
   SEED_MAX,
 } from '@features/generation/settings';
 
@@ -55,9 +58,11 @@ type RecalledField =
   | 'cfg'
   | 'scheduler'
   | 'seamless'
+  | 'hiDiffusion'
   | 'clipSkip'
   | 'components'
-  | 'referenceImages';
+  | 'referenceImages'
+  | 'krea2Rebalance';
 
 export interface ImageRecallResult {
   fields: RecalledField[];
@@ -179,6 +184,40 @@ const getClipSkip = (metadata: unknown): number | null => {
 
 const getClipSkipMax = (model: GenerateModelConfig): number | null =>
   getGenerationUiPolicy(model, { cfgScale: 1 }).clipSkipMax;
+
+const getHiDiffusionPatch = (
+  metadata: unknown,
+  model: GenerateModelConfig
+): Partial<
+  Pick<
+    GenerateWidgetValues,
+    | 'hiDiffusionEnabled'
+    | 'hiDiffusionRauNetEnabled'
+    | 'hiDiffusionT1Ratio'
+    | 'hiDiffusionT2Ratio'
+    | 'hiDiffusionWindowAttentionEnabled'
+  >
+> => {
+  if (!getGenerationUiPolicy(model, { cfgScale: 1 }).hiDiffusionVisible) {
+    return {};
+  }
+
+  const enabled = getBoolean(metadata, 'hidiffusion');
+  const rauNetEnabled = getBoolean(metadata, 'hidiffusion_raunet');
+  const windowAttentionEnabled = getBoolean(metadata, 'hidiffusion_window_attn');
+  const t1Ratio = getNumber(metadata, 'hidiffusion_t1_ratio');
+  const t2Ratio = getNumber(metadata, 'hidiffusion_t2_ratio');
+
+  return {
+    ...(enabled !== null ? { hiDiffusionEnabled: enabled } : {}),
+    ...(rauNetEnabled !== null ? { hiDiffusionRauNetEnabled: rauNetEnabled } : {}),
+    ...(windowAttentionEnabled !== null ? { hiDiffusionWindowAttentionEnabled: windowAttentionEnabled } : {}),
+    ...(t1Ratio !== null && t1Ratio >= MIN_HIDIFFUSION_T1_RATIO && t1Ratio <= MAX_HIDIFFUSION_RATIO
+      ? { hiDiffusionT1Ratio: t1Ratio }
+      : {}),
+    ...(t2Ratio !== null && t2Ratio >= 0 && t2Ratio <= MAX_HIDIFFUSION_RATIO ? { hiDiffusionT2Ratio: t2Ratio } : {}),
+  };
+};
 
 const getImageSize = (
   image: GalleryImage,
@@ -323,6 +362,35 @@ const hasGenerationSettings = (metadata: unknown): boolean =>
   getBoolean(metadata, 'seamless_x') !== null ||
   getBoolean(metadata, 'seamless_y') !== null;
 
+/**
+ * Krea-2's conditioning rebalance, as written by `buildKrea2Graph`.
+ *
+ * Gated on the recalled model's base because the settings keys are family-specific, and
+ * validated because `krea2RebalanceWeights` is forwarded to the node verbatim — a
+ * metadata blob is not a trusted source for a string the backend will parse.
+ */
+const getMetadataKrea2Rebalance = (
+  metadata: unknown,
+  model: GenerateModelConfig | undefined
+): Partial<GenerateWidgetValues> => {
+  if (model?.base !== 'krea-2') {
+    return {};
+  }
+
+  const enabled = getBoolean(metadata, 'krea2_rebalance_enabled');
+  const multiplier = getNumber(metadata, 'krea2_rebalance_multiplier');
+  const weights = getString(metadata, 'krea2_rebalance_weights');
+
+  return {
+    ...(enabled === null ? {} : { krea2RebalanceEnabled: enabled }),
+    ...(multiplier === null ? {} : { krea2RebalanceMultiplier: multiplier }),
+    ...(weights !== null && isValidKrea2RebalanceWeights(weights) ? { krea2RebalanceWeights: weights } : {}),
+  };
+};
+
+const hasKrea2Rebalance = (metadata: unknown, model: GenerateModelConfig | undefined): boolean =>
+  Object.keys(getMetadataKrea2Rebalance(metadata, model)).length > 0;
+
 const hasComponentModels = (metadata: unknown, models: readonly ComponentModelConfig[]): boolean =>
   getMetadataMainModel(metadata, 'qwen3_source', models) !== undefined ||
   getMetadataMainModel(metadata, 'qwen_image_component_source', models) !== undefined ||
@@ -398,6 +466,7 @@ export const getImageRecallCapabilities = ({
   const clipSkipModel = supportedMetadataModel ?? currentValues.model;
   const hasVae = getMetadataVae(metadata, clipSkipModel, vaeModels) !== undefined;
   const hasClipSkip = getSupportedClipSkip(metadata, clipSkipModel) !== null;
+  const hasHiDiffusion = Object.keys(getHiDiffusionPatch(metadata, clipSkipModel)).length > 0;
   const hasSeed = getSeed(metadata) !== null;
   const hasPrompts = hasPrompt(metadata);
   const hasSize = hasMetadataSize(metadata, currentValues.model);
@@ -405,6 +474,7 @@ export const getImageRecallCapabilities = ({
   const hasComponents = hasComponentModels(metadata, models);
   const hasReferenceImages = getMetadataReferenceImages(metadata).length > 0;
   const hasModel = supportedMetadataModel !== null;
+  const hasRebalance = hasKrea2Rebalance(metadata, clipSkipModel);
   const hasAnyMetadata =
     hasModel ||
     hasVae ||
@@ -412,11 +482,22 @@ export const getImageRecallCapabilities = ({
     hasSeed ||
     hasSize ||
     hasSettings ||
+    hasHiDiffusion ||
     hasClipSkip ||
     hasComponents ||
-    hasReferenceImages;
+    hasReferenceImages ||
+    hasRebalance;
   const hasNonSeedMetadata =
-    hasModel || hasVae || hasPrompts || hasSize || hasSettings || hasClipSkip || hasComponents || hasReferenceImages;
+    hasModel ||
+    hasVae ||
+    hasPrompts ||
+    hasSize ||
+    hasSettings ||
+    hasHiDiffusion ||
+    hasClipSkip ||
+    hasComponents ||
+    hasReferenceImages ||
+    hasRebalance;
 
   return {
     all: hasAnyMetadata,
@@ -479,6 +560,13 @@ export const buildImageRecallSettings = ({
     ) {
       values = { ...values, ...componentPatch };
       fields.push('components');
+    }
+
+    const rebalancePatch = getMetadataKrea2Rebalance(metadata, values.model);
+
+    if (Object.keys(rebalancePatch).length > 0) {
+      values = { ...values, ...rebalancePatch };
+      fields.push('krea2Rebalance');
     }
 
     const vae = getMetadataVae(metadata, values.model, vaeModels);
@@ -567,6 +655,13 @@ export const buildImageRecallSettings = ({
         ...(seamlessYAxis !== null ? { seamlessYAxis } : {}),
       };
       fields.push('seamless');
+    }
+
+    const hiDiffusionPatch = getHiDiffusionPatch(metadata, values.model);
+
+    if (Object.keys(hiDiffusionPatch).length > 0) {
+      values = { ...values, ...hiDiffusionPatch };
+      fields.push('hiDiffusion');
     }
   }
 

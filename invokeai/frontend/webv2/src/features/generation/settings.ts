@@ -20,9 +20,11 @@ export {
   isMainModelConfig,
   isModelIdentifierConfig,
   isVaeModelConfig,
+  MAX_HIDIFFUSION_RATIO,
   MAX_NEGATIVE_PROMPT_HEIGHT_PX,
   MAX_POSITIVE_PROMPT_HEIGHT_PX,
   MIN_NEGATIVE_PROMPT_HEIGHT_PX,
+  MIN_HIDIFFUSION_T1_RATIO,
   MIN_POSITIVE_PROMPT_HEIGHT_PX,
   normalizeGenerateSettings,
   normalizeGenerateWidgetValues,
@@ -56,6 +58,11 @@ export {
   type ResolveGenerateWidgetValuesInput,
 } from './core/resolveGenerateWidgetValues';
 export { isVaeCompatibleWithGenerateModel } from './core/componentCompatibility';
+export {
+  isValidKrea2RebalanceWeights,
+  normalizeRebalancePresets,
+  type RebalancePreset,
+} from './core/conditioningRebalance';
 export { MIN_BATCH_COUNT, sanitizeBatchCount } from './core/batch';
 export {
   createDynamicPromptsSampleSeed,
