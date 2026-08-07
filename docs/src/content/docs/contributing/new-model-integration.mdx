@@ -12,6 +12,59 @@ This guide describes all the steps required to integrate a new model type into I
 The code examples use a hypothetical `NewModel` architecture. The implementations of FLUX.1, FLUX.2 Klein, SD3, SDXL, and Z-Image in the InvokeAI codebase serve as excellent real-world references.
 :::
 
+:::tip[Start here]
+Run the scaffolder first — it creates the files below that can be generated and prints the ones that
+cannot:
+
+```sh
+python scripts/new_architecture.py --enum-name NewModel --enum-value new-model --write
+```
+:::
+
+---
+
+## The architecture registry
+
+Most per-architecture facts live in **one file**, `invokeai/backend/architectures/defs/[newmodel].py`,
+rather than scattered across core modules:
+
+```python title="invokeai/backend/architectures/defs/newmodel.py"
+register(
+    BaseModelType.NewModel,
+    LatentSpaceFacet(FLUX_16),                       # required: preview projection + spatial scale
+    ConditioningFacet(NewModelConditioningInfo),     # required: what the text encoder produces
+    VariantFacet({ModelType.Main: NewModelVariantType}),   # optional
+    LoaderFlagsFacet(supports_fp8_storage=False),          # optional
+)
+```
+
+Add one line to `invokeai/backend/architectures/__init__.py` to import it, and the registration runs.
+
+This matters because of *when* mistakes surface. Before the registry, the facts below were spread
+over core files and none of them failed at boot — a missing entry raised `Unsupported base model` on
+the first preview, or broke conditioning deserialization mid-graph, on the first generation that
+happened to use the new architecture. Now `validate()` refuses to start the app while a required
+facet is missing, and names the file to edit.
+
+| Fact | Was | Now |
+|------|-----|-----|
+| Preview factors, spatial scale | an `elif` chain in `step_callback.py` | `LatentSpaceFacet` |
+| `safe_globals` for conditioning | a hand-kept list in `dependencies.py` | derived from `ConditioningFacet` |
+| Variant enum | four hand-widened unions | `VariantFacet`, with all four CI-checked |
+| fp8 storage exceptions | `config.base ==` inside the generic loader | `LoaderFlagsFacet` |
+
+Reusing an existing `LatentSpace` is the normal case, not a shortcut: eleven of the fifteen shipped
+architectures introduce no new preview data at all.
+
+:::tip[Checklist: Architecture Registry]{icon="approve-check"}
+- [ ] Create `invokeai/backend/architectures/defs/[newmodel].py`
+- [ ] Declare `LatentSpaceFacet` — reuse an existing `LatentSpace` unless the VAE genuinely differs
+- [ ] Declare `ConditioningFacet`
+- [ ] Declare `VariantFacet` / `LoaderFlagsFacet` / `UNetDownscaleFacet` only if they apply
+- [ ] Add the import line to `invokeai/backend/architectures/__init__.py`
+- [ ] Run `pytest tests/backend/architectures` — it names anything still missing
+:::
+
 ---
 
 ## 1. Backend: Model Manager
@@ -990,9 +1043,11 @@ const recallNewmodelEncoderModel = async (metadata: CoreMetadata) => {
 
 ## 10. Starter Models
 
-To allow users to easily download your model from the Model Manager UI, add it to the starter models list.
+To allow users to easily download your model from the Model Manager UI, add it to the starter models
+catalog. Entries live one module per architecture; only the display order and the bundles are
+central.
 
-```python title="invokeai/backend/model_manager/starter_models.py"
+```python title="invokeai/backend/model_manager/starter_models/newmodel.py"
 # Main Model
 newmodel_main = StarterModel(
     name="NewModel Main",
@@ -1030,7 +1085,21 @@ newmodel_fp8 = StarterModel(
     dependencies=[newmodel_vae, newmodel_encoder],  # Dependencies!
 )
 
-# Add to STARTER_MODELS list:
+Components shared with other architectures — text encoders, and VAEs more than one architecture
+installs — belong in `starter_models/common.py`, not in your module. Import them from there.
+`dependencies` holds object references rather than ids, so a name that does not exist is an
+`ImportError` at startup instead of a broken install later.
+
+Then wire it into the catalog:
+
+```python title="invokeai/backend/model_manager/starter_models/__init__.py"
+from invokeai.backend.model_manager.starter_models.newmodel import (
+    newmodel_encoder,
+    newmodel_fp8,
+    newmodel_main,
+    newmodel_vae,
+)
+
 STARTER_MODELS: list[StarterModel] = [
     # ... existing models
     newmodel_main,
@@ -1040,13 +1109,20 @@ STARTER_MODELS: list[StarterModel] = [
 ]
 ```
 
+:::caution[The order of `STARTER_MODELS` is what users see]
+The frontend does not sort this list. Its order is curated — it follows neither base nor model type
+— so put your entries where they should appear, not simply at the end.
+:::
+
 :::tip[Checklist: Starter Models]{icon="approve-check"}
+- [ ] Create `starter_models/[newmodel].py`
 - [ ] Define main model StarterModel
 - [ ] Define VAE StarterModel if separate
-- [ ] Define text encoder StarterModel if separate
+- [ ] Define text encoder StarterModel if separate — in `common.py` if other architectures use it too
 - [ ] Define quantized variants (FP8, GGUF, etc.)
 - [ ] Set dependencies correctly
-- [ ] Add to `STARTER_MODELS` list
+- [ ] Import the module in `starter_models/__init__.py` and place the entries in `STARTER_MODELS`
+- [ ] Add a `STARTER_BUNDLES` entry if the architecture ships a launchpad bundle
 :::
 
 ---
@@ -1185,11 +1261,16 @@ For a **minimal txt2img integration**, the following files are required:
 - invokeai
   - app/invocations
     - metadata.py
+    - fields.py
+    - primitives.py
     - `[newmodel]_model_loader.py`
     - `[newmodel]_text_encoder.py`
     - `[newmodel]_denoise.py`
     - `[newmodel]_vae_decode.py`
   - backend
+    - architectures
+      - `defs/[newmodel].py`
+      - `__init__.py`
     - model_manager
       - taxonomy.py
       - configs
@@ -1197,9 +1278,15 @@ For a **minimal txt2img integration**, the following files are required:
         - factory.py
       - load/model_loaders
         - `[newmodel].py`
+      - starter_models
+        - `[newmodel].py`
+        - `__init__.py`
+    - stable_diffusion/diffusion
+      - conditioning_data.py
     - `[newmodel]`
       - sampling_utils.py
       - denoise.py
+  - `invocation_api/__init__.py`
   - frontend/web/src/features
     - nodes/util/graph
       - generation/buildNewModelGraph.ts
@@ -1207,6 +1294,12 @@ For a **minimal txt2img integration**, the following files are required:
     - queue/hooks/useEnqueueCanvas.ts
     - controlLayers/store/paramsSlice.ts
 </FileTree>
+
+:::note[What you no longer touch]
+`app/util/step_callback.py` and `app/api/dependencies.py` used to need an edit per architecture and
+are now derived from the registry. `starter_models.py` is a package rather than one 2400-line file.
+The frontend column is unchanged — `webv2` has no OpenAPI tooling, so nothing there is generated.
+:::
 
 For **img2img / inpaint / outpaint**, additionally:
 
