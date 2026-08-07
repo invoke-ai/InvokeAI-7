@@ -82,7 +82,7 @@ describe('image map api', () => {
 describe('image map store', () => {
   beforeEach(() => {
     mocks.apiFetchJson.mockReset();
-    imageMapStore.setSnapshot({ data: null, error: null, loadState: 'idle' });
+    imageMapStore.setSnapshot({ data: null, error: null, indexCounts: null, loadState: 'idle' });
   });
 
   it('loads points into the snapshot', async () => {
