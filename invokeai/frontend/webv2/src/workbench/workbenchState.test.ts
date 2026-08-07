@@ -379,6 +379,7 @@ describe('workbench widget region defaults', () => {
 
     expect(getActiveProject(hydratedLegacyDefault).widgetRegions.right.instanceIds).toEqual([
       'gallery',
+      'image-map',
       'preview',
       'queue',
       'layers',
@@ -621,7 +622,7 @@ describe('workbench layout presets', () => {
     });
     expect(project.widgetRegions.right).toMatchObject({
       activeInstanceId: 'gallery',
-      instanceIds: ['gallery', 'preview', 'queue', 'layers', 'diagnostics', 'project'],
+      instanceIds: ['gallery', 'image-map', 'preview', 'queue', 'layers', 'diagnostics', 'project'],
       isCollapsed: false,
       sizePx: 450,
     });
