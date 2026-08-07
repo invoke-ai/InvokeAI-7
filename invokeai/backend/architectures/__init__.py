@@ -39,6 +39,11 @@ from invokeai.backend.architectures.facets.latent_space import (
     resolve_latent_space,
 )
 from invokeai.backend.architectures.facets.unet import UNetDownscaleFacet, get_max_unet_downscale
+from invokeai.backend.architectures.facets.variant import (
+    VariantFacet,
+    declared_variant_enums,
+    get_variant_enum,
+)
 from invokeai.backend.architectures.registry import (
     ArchitectureError,
     defs_module_path,
@@ -56,12 +61,15 @@ __all__ = [
     "LatentSpace",
     "LatentSpaceFacet",
     "UNetDownscaleFacet",
+    "VariantFacet",
+    "declared_variant_enums",
     "defs_module_path",
     "facets_of",
     "generative_bases",
     "get",
     "get_latent_space",
     "get_max_unet_downscale",
+    "get_variant_enum",
     "register",
     "require",
     "resolve_latent_space",
