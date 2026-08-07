@@ -35,7 +35,7 @@ describe('attachImageMapDataRuntime', () => {
     mocks.socketOn.mockReset().mockReturnValue(() => {});
     mocks.onConnectionChange.mockReset().mockReturnValue(() => {});
     mocks.refreshImageMapPoints.mockReset();
-    imageMapStore.setSnapshot({ data: null, error: null, indexCounts: null, loadState: 'idle' });
+    imageMapStore.setSnapshot({ clusterLabels: null, data: null, error: null, indexCounts: null, loadState: 'idle' });
   });
 
   it('refreshes on projection-ready only after the map has been loaded once', () => {

@@ -8,7 +8,7 @@ import { getApiErrorMessage } from '@platform/transport/http';
 
 import type { ImageMapPoints } from './api';
 
-import { fetchImageMapPoints } from './api';
+import { fetchImageMapClusterLabels, fetchImageMapPoints } from './api';
 
 /**
  * Read model for the semantic image map, shared by the widget body and any
@@ -28,9 +28,12 @@ export interface ImageMapSnapshot {
   error: string | null;
   /** Embedding-index progress; only ever pushed to admins by the backend. */
   indexCounts: ImageIndexCounts | null;
+  /** Cluster id -> automatic label; null when unavailable (e.g. no text encoder). */
+  clusterLabels: Record<string, string> | null;
 }
 
 const EMPTY_IMAGE_MAP_SNAPSHOT: ImageMapSnapshot = {
+  clusterLabels: null,
   data: null,
   error: null,
   indexCounts: null,
@@ -48,6 +51,9 @@ registerAccountOwnedResource({
   clear: () => {
     inflight = null;
     rerunRequested = false;
+    // Orphan any in-flight labels request so its completion (or failure)
+    // cannot touch the next account's labels.
+    labelsSequence += 1;
     imageMapStore.setSnapshot(EMPTY_IMAGE_MAP_SNAPSHOT);
   },
   name: 'image-map',
@@ -76,6 +82,7 @@ export const refreshImageMapPoints = (): Promise<void> => {
       }
 
       imageMapStore.patchSnapshot({ data, error: null, loadState: 'loaded' });
+      refreshClusterLabels(data);
     })
     .catch((error: unknown) => {
       if (!isAccountScopeCurrent(owner)) {
@@ -103,6 +110,67 @@ export const refreshImageMapPoints = (): Promise<void> => {
   inflight = refresh;
 
   return refresh;
+};
+
+let labelsSequence = 0;
+
+const areLabelMapsEqual = (left: Record<string, string> | null, right: Record<string, string>): boolean => {
+  if (left === null) {
+    return false;
+  }
+
+  const keys = Object.keys(right);
+
+  return keys.length === Object.keys(left).length && keys.every((key) => left[key] === right[key]);
+};
+
+/**
+ * Labels are decoration: fetched best-effort after the points land. Cluster
+ * ids are only meaningful against the projection the points came from, so a
+ * label response for a different projection — or one overtaken by a newer
+ * request — is discarded rather than mislabeling clusters.
+ */
+const refreshClusterLabels = (data: ImageMapPoints): void => {
+  if (data.state !== 'ready') {
+    // Nothing to label; a disabled index would 409 on every refresh. Bump the
+    // sequence so an in-flight labels response cannot repopulate the labels
+    // this clears.
+    labelsSequence += 1;
+    imageMapStore.patchSnapshot({ clusterLabels: null });
+
+    return;
+  }
+
+  labelsSequence += 1;
+  const sequence = labelsSequence;
+  // Pass the points' effective eps so both requests cluster with the same
+  // value — the adaptive default is derived from the visible set, which can
+  // drift between the two requests. Same eps alone does not pin cluster ids
+  // under drift; the visibleHash comparison below discards those responses.
+  void fetchImageMapClusterLabels(data.clusterEps !== null ? { eps: data.clusterEps } : undefined)
+    .then((response) => {
+      const current = imageMapStore.getSnapshot();
+
+      if (
+        sequence !== labelsSequence ||
+        response.updatedAt !== current.data?.updatedAt ||
+        response.visibleHash !== current.data?.visibleHash
+      ) {
+        return;
+      }
+
+      if (!areLabelMapsEqual(current.clusterLabels, response.labels)) {
+        imageMapStore.patchSnapshot({ clusterLabels: response.labels });
+      }
+    })
+    .catch(() => {
+      // Same staleness rule as success: only the newest request may clear the
+      // labels. A slow stale request failing after a newer one already set
+      // fresh labels must not wipe them.
+      if (sequence === labelsSequence) {
+        imageMapStore.patchSnapshot({ clusterLabels: null });
+      }
+    });
 };
 
 export const ensureImageMapLoaded = (): void => {

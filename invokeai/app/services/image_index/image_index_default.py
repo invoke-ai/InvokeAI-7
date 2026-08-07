@@ -123,6 +123,9 @@ class ImageIndexService(ImageIndexServiceBase):
         # similarity search, so repeated queries skip re-reading BLOBs.
         self._search_cache: dict[str, tuple[list[str], np.ndarray]] = {}
         self._search_cache_lock = threading.Lock()
+        # (vocabulary, embeddings) for cluster labeling; RAM + disk cached.
+        self._vocab_cache: Optional[tuple[list[str], np.ndarray]] = None
+        self._vocab_lock = threading.Lock()
 
     @property
     def model_id(self) -> str | None:
@@ -157,6 +160,10 @@ class ImageIndexService(ImageIndexServiceBase):
         return matrix[0] / norm if norm > 0 else matrix[0]
 
     def embed_text(self, text: str) -> np.ndarray:
+        return self._embed_texts([text])[0]
+
+    def _embed_texts(self, texts: list[str]) -> np.ndarray:
+        """Batched text embedding, (N, D) L2-normalized."""
         if self._model_id is None:
             raise TextSearchUnavailableError("The image index is not running")
 
@@ -164,14 +171,53 @@ class ImageIndexService(ImageIndexServiceBase):
         with torch.no_grad():
             # SigLIP was trained with pad-to-max-length; pad-to-longest degrades
             # its text embeddings. CLIP uses ordinary longest-padding.
-            inputs = tokenizer(
-                [text], padding="max_length" if is_siglip else True, return_tensors="pt", truncation=True
-            )
+            inputs = tokenizer(texts, padding="max_length" if is_siglip else True, return_tensors="pt", truncation=True)
             outputs = model(**inputs)
-            embedding = outputs.pooler_output[0] if is_siglip else outputs.text_embeds[0]
-            vector = embedding.float().cpu().numpy()
-        norm = np.linalg.norm(vector)
-        return vector / norm if norm > 0 else vector
+            embeddings = outputs.pooler_output if is_siglip else outputs.text_embeds
+            matrix = embeddings.float().cpu().numpy()
+        norms = np.linalg.norm(matrix, axis=1, keepdims=True)
+        norms[norms == 0] = 1.0
+        return matrix / norms
+
+    def get_vocab_embeddings(self) -> tuple[list[str], np.ndarray]:
+        from invokeai.app.services.image_index.cluster_labels import (
+            ensemble_phrase_embeddings,
+            load_vocabulary,
+            vocab_fingerprint,
+        )
+
+        with self._vocab_lock:
+            if self._vocab_cache is not None:
+                return self._vocab_cache
+            if self._invoker is None or self._model_id is None:
+                raise TextSearchUnavailableError("The image index is not running")
+
+            vocabulary = load_vocabulary()
+            fingerprint = vocab_fingerprint(vocabulary)
+            # The model hash contains ':' (e.g. 'blake3:...'), illegal in
+            # Windows filenames.
+            model_tag = self._model_id.replace(":", "_")[:24]
+            cache_path = self._invoker.services.configuration.db_path.parent / f"cluster_vocab_{model_tag}.npz"
+
+            if cache_path.exists():
+                try:
+                    cached = np.load(cache_path, allow_pickle=False)
+                    if str(cached["fingerprint"]) == fingerprint:
+                        self._vocab_cache = (vocabulary, cached["embeddings"].astype(EMBEDDING_DTYPE))
+                        return self._vocab_cache
+                except Exception:
+                    self._invoker.services.logger.warning("Discarding unreadable cluster vocabulary cache")
+
+            # First run for this model: embedding ~1700 phrases x 7 templates
+            # takes tens of seconds — hence the disk cache.
+            embeddings = ensemble_phrase_embeddings(self._embed_texts, vocabulary)
+            try:
+                cache_path.parent.mkdir(parents=True, exist_ok=True)
+                np.savez(cache_path, embeddings=embeddings, fingerprint=np.str_(fingerprint))
+            except Exception:
+                self._invoker.services.logger.warning(f"Could not write cluster vocabulary cache to {cache_path}")
+            self._vocab_cache = (vocabulary, embeddings)
+            return self._vocab_cache
 
     def _get_text_encoder(self) -> tuple[Any, Any, bool]:
         with self._text_encoder_lock:
