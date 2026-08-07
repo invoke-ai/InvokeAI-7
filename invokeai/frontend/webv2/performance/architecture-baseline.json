@@ -2,15 +2,15 @@
   "build": {
     "launchpad": {
       "baseline": {
-        "brotliBytes": 811509,
+        "brotliBytes": 811580,
         "cssRawBytes": 2159,
         "fontRawBytes": 219480,
-        "gzipBytes": 809751,
+        "gzipBytes": 809812,
         "imageRawBytes": 156376,
-        "initialRawBytes": 1871594,
+        "initialRawBytes": 1872342,
         "largestAssetRawBytes": 746428,
         "otherAssetRawBytes": 0,
-        "ownedRawBytes": 34456,
+        "ownedRawBytes": 34486,
         "requestCount": 32,
         "scriptRequestCount": 16,
         "sourceOwners": [
@@ -248,15 +248,15 @@
         ]
       },
       "limits": {
-        "brotliBytes": 819625,
+        "brotliBytes": 819696,
         "cssRawBytes": 2181,
         "fontRawBytes": 221675,
-        "gzipBytes": 817849,
+        "gzipBytes": 817911,
         "imageRawBytes": 157940,
-        "initialRawBytes": 1890310,
+        "initialRawBytes": 1891066,
         "largestAssetRawBytes": 753893,
         "otherAssetRawBytes": 0,
-        "ownedRawBytes": 34456,
+        "ownedRawBytes": 34486,
         "requestCount": 32,
         "scriptRequestCount": 16
       },
@@ -266,17 +266,17 @@
     },
     "editor": {
       "baseline": {
-        "brotliBytes": 1002549,
+        "brotliBytes": 1004921,
         "cssRawBytes": 2159,
         "fontRawBytes": 219480,
-        "gzipBytes": 998126,
+        "gzipBytes": 1000551,
         "imageRawBytes": 156376,
-        "initialRawBytes": 2453021,
+        "initialRawBytes": 2458459,
         "largestAssetRawBytes": 746428,
         "otherAssetRawBytes": 0,
-        "ownedRawBytes": 113668,
-        "requestCount": 75,
-        "scriptRequestCount": 59,
+        "ownedRawBytes": 114810,
+        "requestCount": 76,
+        "scriptRequestCount": 60,
         "sourceOwners": [
           "package:@ark-ui/react",
           "package:@chakra-ui/react",
@@ -639,6 +639,7 @@
           "source:src/workbench/diagnostics/logger.ts",
           "source:src/workbench/extensions/contributionSource.ts",
           "source:src/workbench/extensions/extensionRegistry.ts",
+          "source:src/workbench/floatingWindows.ts",
           "source:src/workbench/focusRegions.tsx",
           "source:src/workbench/graphPreviewInvocation.ts",
           "source:src/workbench/graphSurfaces.ts",
@@ -712,6 +713,7 @@
           "source:src/workbench/shell/topbar/useTopbarShortcut.ts",
           "source:src/workbench/useNotify.ts",
           "source:src/workbench/useOpenWorkbenchWidget.ts",
+          "source:src/workbench/widget-frame/FloatingWidgetLayer.tsx",
           "source:src/workbench/widget-frame/WidgetActionsMenu.tsx",
           "source:src/workbench/widget-frame/WidgetBar.tsx",
           "source:src/workbench/widget-frame/WidgetEnableMenu.tsx",
@@ -761,17 +763,17 @@
         ]
       },
       "limits": {
-        "brotliBytes": 1012575,
+        "brotliBytes": 1014971,
         "cssRawBytes": 2181,
         "fontRawBytes": 221675,
-        "gzipBytes": 1008108,
+        "gzipBytes": 1010557,
         "imageRawBytes": 157940,
-        "initialRawBytes": 2477552,
+        "initialRawBytes": 2483044,
         "largestAssetRawBytes": 753893,
         "otherAssetRawBytes": 0,
-        "ownedRawBytes": 113668,
-        "requestCount": 75,
-        "scriptRequestCount": 59
+        "ownedRawBytes": 114810,
+        "requestCount": 76,
+        "scriptRequestCount": 60
       },
       "owner": "workbench",
       "remediationTicket": "deepen-widget-registry-loading",

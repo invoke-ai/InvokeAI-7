@@ -1130,6 +1130,15 @@
       "retry": "Retry",
       "title": "{{label}} failed"
     },
+    "floating": {
+      "dock": "Dock to panel",
+      "floatWindow": "Float Window",
+      "maximize": "Maximize",
+      "resize": "Resize window",
+      "restore": "Restore",
+      "shade": "Shade",
+      "unshade": "Unshade"
+    },
     "loadingLabel": "Loading {{label}}",
     "removeWidget": "Remove {{label}}",
     "panelLabel": "{{region}} widget panel",
