@@ -33,9 +33,9 @@ from invokeai.app.invocations.fields import (
     WithBoard,
     WithMetadata,
 )
-from invokeai.app.invocations.flux_vae_encode import FluxVaeEncodeInvocation
 from invokeai.app.invocations.model import Gemma2EncoderField, PiDDecoderField, VAEField
 from invokeai.app.invocations.primitives import ImageOutput
+from invokeai.app.invocations.vae.flux_vae_encode import FluxVaeEncodeInvocation
 from invokeai.app.services.shared.invocation_context import InvocationContext
 from invokeai.backend.flux.modules.autoencoder import AutoEncoder
 from invokeai.backend.flux.util import get_flux_ae_params

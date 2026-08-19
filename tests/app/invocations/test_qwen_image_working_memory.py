@@ -7,8 +7,8 @@ import pytest
 import torch
 from diffusers.models.autoencoders.autoencoder_kl_qwenimage import AutoencoderKLQwenImage
 
-from invokeai.app.invocations.qwen_image_image_to_latents import QwenImageImageToLatentsInvocation
-from invokeai.app.invocations.qwen_image_latents_to_image import QwenImageLatentsToImageInvocation
+from invokeai.app.invocations.vae.qwen_image_image_to_latents import QwenImageImageToLatentsInvocation
+from invokeai.app.invocations.vae.qwen_image_latents_to_image import QwenImageLatentsToImageInvocation
 from invokeai.backend.util.vae_working_memory import estimate_vae_working_memory_qwen_image
 
 
@@ -89,8 +89,10 @@ class TestQwenImageWorkingMemory:
         mock_latents = torch.zeros(1, 16, 1, 64, 64)
         mock_context.tensors.load.return_value = mock_latents
 
-        estimation_path = "invokeai.app.invocations.qwen_image_latents_to_image.estimate_vae_working_memory_qwen_image"
-        seamless_path = "invokeai.app.invocations.qwen_image_latents_to_image.SeamlessExt.static_patch_model"
+        estimation_path = (
+            "invokeai.app.invocations.vae.qwen_image_latents_to_image.estimate_vae_working_memory_qwen_image"
+        )
+        seamless_path = "invokeai.app.invocations.vae.qwen_image_latents_to_image.SeamlessExt.static_patch_model"
 
         with (
             patch(estimation_path) as mock_estimate,
@@ -130,19 +132,19 @@ class TestQwenImageWorkingMemory:
 
         with (
             patch(
-                "invokeai.app.invocations.qwen_image_latents_to_image.estimate_vae_working_memory_qwen_image",
+                "invokeai.app.invocations.vae.qwen_image_latents_to_image.estimate_vae_working_memory_qwen_image",
                 return_value=1,
             ),
             patch(
-                "invokeai.app.invocations.qwen_image_latents_to_image.as_qwen_image_vae",
+                "invokeai.app.invocations.vae.qwen_image_latents_to_image.as_qwen_image_vae",
                 return_value=converted_vae,
             ),
             patch(
-                "invokeai.app.invocations.qwen_image_latents_to_image.SeamlessExt.static_patch_model",
+                "invokeai.app.invocations.vae.qwen_image_latents_to_image.SeamlessExt.static_patch_model",
                 return_value=nullcontext(),
             ) as patch_seamless,
             patch(
-                "invokeai.app.invocations.qwen_image_latents_to_image.TorchDevice.choose_torch_device",
+                "invokeai.app.invocations.vae.qwen_image_latents_to_image.TorchDevice.choose_torch_device",
                 return_value=torch.device("cpu"),
             ),
         ):
@@ -162,7 +164,9 @@ class TestQwenImageWorkingMemory:
 
         mock_image_tensor = torch.zeros(1, 3, 512, 512)
 
-        estimation_path = "invokeai.app.invocations.qwen_image_image_to_latents.estimate_vae_working_memory_qwen_image"
+        estimation_path = (
+            "invokeai.app.invocations.vae.qwen_image_image_to_latents.estimate_vae_working_memory_qwen_image"
+        )
 
         with patch(estimation_path) as mock_estimate:
             expected_memory = 1024 * 1024 * 5000  # 5GB

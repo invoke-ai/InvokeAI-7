@@ -28,7 +28,7 @@ from torchvision.transforms.functional import resize as tv_resize
 from torchvision.transforms.functional import to_tensor
 from tqdm import tqdm
 
-from invokeai.app.invocations.anima_lllite import AnimaLLLiteField
+from invokeai.app.invocations.anima.anima_lllite import AnimaLLLiteField
 from invokeai.app.invocations.baseinvocation import BaseInvocation, Classification, invocation
 from invokeai.app.invocations.fields import (
     AnimaConditioningField,

@@ -24,7 +24,7 @@ from invokeai.app.invocations.fields import (
 )
 from invokeai.app.invocations.model import VAEField
 from invokeai.app.invocations.primitives import VideoOutput
-from invokeai.app.invocations.wan_latents_to_video import _write_video_frames
+from invokeai.app.invocations.vae.wan_latents_to_video import _write_video_frames
 from invokeai.app.services.session_processor.session_processor_common import CanceledException
 from invokeai.app.services.shared.invocation_context import InvocationContext
 from invokeai.app.util.video_encoding import make_mp4_writer, write_stereo_wav

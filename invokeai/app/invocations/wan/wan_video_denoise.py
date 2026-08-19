@@ -27,7 +27,7 @@ from invokeai.app.invocations.fields import (
 )
 from invokeai.app.invocations.model import WanTransformerField
 from invokeai.app.invocations.primitives import LatentsOutput
-from invokeai.app.invocations.wan_denoise import (
+from invokeai.app.invocations.wan.wan_denoise import (
     WAN_MAX_RESIDENT_TRANSFORMER_BYTES,
     WanDenoiseInvocation,
     _ExpertSwapper,

@@ -26,7 +26,9 @@ _ESTIMATE = "estimate_pid_decode_working_memory"
 
 
 def _modules_constructing_a_decode_config() -> list[Path]:
-    modules = sorted(p for p in _INVOCATIONS_DIR.glob("*.py") if "PiDDecodeConfig(" in p.read_text(encoding="utf-8"))
+    # `rglob`, not `glob`: node modules live in per-architecture subpackages, and the PiD decoders
+    # are spread across `pid/` and the architectures they serve.
+    modules = sorted(p for p in _INVOCATIONS_DIR.rglob("*.py") if "PiDDecodeConfig(" in p.read_text(encoding="utf-8"))
     assert modules, "no PiD nodes found - has the invocations directory moved?"
     return modules
 

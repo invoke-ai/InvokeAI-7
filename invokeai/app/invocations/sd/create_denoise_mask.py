@@ -7,9 +7,9 @@ from torchvision.transforms.functional import resize as tv_resize
 
 from invokeai.app.invocations.baseinvocation import BaseInvocation, invocation
 from invokeai.app.invocations.fields import FieldDescriptions, ImageField, Input, InputField
-from invokeai.app.invocations.image_to_latents import ImageToLatentsInvocation
 from invokeai.app.invocations.model import VAEField
 from invokeai.app.invocations.primitives import DenoiseMaskOutput
+from invokeai.app.invocations.vae.image_to_latents import ImageToLatentsInvocation
 from invokeai.app.services.shared.invocation_context import InvocationContext
 from invokeai.backend.stable_diffusion.diffusers_pipeline import image_resized_to_grid_as_tensor
 

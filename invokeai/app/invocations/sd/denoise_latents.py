@@ -22,7 +22,6 @@ from transformers import CLIPVisionModelWithProjection
 
 from invokeai.app.invocations.baseinvocation import BaseInvocation, invocation
 from invokeai.app.invocations.constants import LATENT_SCALE_FACTOR
-from invokeai.app.invocations.controlnet import ControlField
 from invokeai.app.invocations.fields import (
     ConditioningField,
     DenoiseMaskField,
@@ -32,10 +31,11 @@ from invokeai.app.invocations.fields import (
     LatentsField,
     UIType,
 )
-from invokeai.app.invocations.ip_adapter import IPAdapterField
 from invokeai.app.invocations.model import ModelIdentifierField, UNetField
 from invokeai.app.invocations.primitives import LatentsOutput
-from invokeai.app.invocations.t2i_adapter import T2IAdapterField
+from invokeai.app.invocations.sd.controlnet import ControlField
+from invokeai.app.invocations.sd.ip_adapter import IPAdapterField
+from invokeai.app.invocations.sd.t2i_adapter import T2IAdapterField
 from invokeai.app.services.shared.invocation_context import InvocationContext
 from invokeai.app.util.controlnet_utils import prepare_control_image
 from invokeai.backend.ip_adapter.ip_adapter import IPAdapter

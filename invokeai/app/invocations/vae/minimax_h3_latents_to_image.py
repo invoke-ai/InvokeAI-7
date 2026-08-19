@@ -16,9 +16,9 @@ from invokeai.app.invocations.fields import (
     WithBoard,
     WithMetadata,
 )
-from invokeai.app.invocations.minimax_h3_latents_to_video import decode_video_latents
 from invokeai.app.invocations.model import VAEField
 from invokeai.app.invocations.primitives import ImageOutput
+from invokeai.app.invocations.vae.minimax_h3_latents_to_video import decode_video_latents
 from invokeai.app.services.shared.invocation_context import InvocationContext
 
 

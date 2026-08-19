@@ -9,8 +9,6 @@ from pydantic import field_validator
 
 from invokeai.app.invocations.baseinvocation import BaseInvocation, invocation
 from invokeai.app.invocations.constants import LATENT_SCALE_FACTOR
-from invokeai.app.invocations.controlnet import ControlField
-from invokeai.app.invocations.denoise_latents import DenoiseLatentsInvocation, get_scheduler
 from invokeai.app.invocations.fields import (
     ConditioningField,
     FieldDescriptions,
@@ -21,6 +19,8 @@ from invokeai.app.invocations.fields import (
 )
 from invokeai.app.invocations.model import UNetField
 from invokeai.app.invocations.primitives import LatentsOutput
+from invokeai.app.invocations.sd.controlnet import ControlField
+from invokeai.app.invocations.sd.denoise_latents import DenoiseLatentsInvocation, get_scheduler
 from invokeai.app.services.shared.invocation_context import InvocationContext
 from invokeai.backend.patches.layer_patcher import LayerPatcher, PatchSpec
 from invokeai.backend.patches.model_patch_raw import ModelPatchRaw

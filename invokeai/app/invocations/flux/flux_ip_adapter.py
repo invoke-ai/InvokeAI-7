@@ -6,14 +6,14 @@ from typing_extensions import Self
 
 from invokeai.app.invocations.baseinvocation import BaseInvocation, invocation
 from invokeai.app.invocations.fields import InputField
-from invokeai.app.invocations.ip_adapter import (
+from invokeai.app.invocations.model import ModelIdentifierField
+from invokeai.app.invocations.primitives import ImageField
+from invokeai.app.invocations.sd.ip_adapter import (
     CLIP_VISION_MODEL_MAP,
     IPAdapterField,
     IPAdapterInvocation,
     IPAdapterOutput,
 )
-from invokeai.app.invocations.model import ModelIdentifierField
-from invokeai.app.invocations.primitives import ImageField
 from invokeai.app.invocations.util import validate_begin_end_step, validate_weights
 from invokeai.app.services.shared.invocation_context import InvocationContext
 from invokeai.backend.model_manager.configs.ip_adapter import IPAdapter_Checkpoint_FLUX_Config

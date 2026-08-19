@@ -6,7 +6,7 @@ import pytest
 import torch
 
 from invokeai.app.invocations.fields import DenoiseMaskField, Krea2ConditioningField, LatentsField, TensorField
-from invokeai.app.invocations.krea2_denoise import KREA2_LATENT_CHANNELS, Krea2DenoiseInvocation
+from invokeai.app.invocations.krea2.krea2_denoise import KREA2_LATENT_CHANNELS, Krea2DenoiseInvocation
 from invokeai.app.invocations.model import ModelIdentifierField, TransformerField
 from invokeai.backend.model_manager.taxonomy import BaseModelType, Krea2VariantType, ModelFormat, ModelType
 from invokeai.backend.stable_diffusion.diffusion.conditioning_data import ConditioningFieldData, Krea2ConditioningInfo
@@ -406,14 +406,14 @@ def _patch_runtime(monkeypatch) -> None:
         "diffusers.schedulers.scheduling_flow_match_euler_discrete.FlowMatchEulerDiscreteScheduler", _Scheduler
     )
     monkeypatch.setattr(
-        "invokeai.app.invocations.krea2_denoise.TorchDevice.choose_torch_device", lambda: torch.device("cpu")
+        "invokeai.app.invocations.krea2.krea2_denoise.TorchDevice.choose_torch_device", lambda: torch.device("cpu")
     )
     monkeypatch.setattr(
-        "invokeai.app.invocations.krea2_denoise.TorchDevice.choose_bfloat16_safe_dtype",
+        "invokeai.app.invocations.krea2.krea2_denoise.TorchDevice.choose_bfloat16_safe_dtype",
         lambda _device: torch.float32,
     )
     monkeypatch.setattr(
-        "invokeai.app.invocations.krea2_denoise.LayerPatcher.apply_smart_model_patches",
+        "invokeai.app.invocations.krea2.krea2_denoise.LayerPatcher.apply_smart_model_patches",
         lambda **_kwargs: nullcontext(),
     )
 
@@ -524,7 +524,7 @@ def test_run_diffusion_reaches_masked_denoising_merge(monkeypatch, tmp_path) -> 
             merge_sigmas.append(sigma)
             return latents
 
-    monkeypatch.setattr("invokeai.app.invocations.krea2_denoise.RectifiedFlowInpaintExtension", _InpaintExtension)
+    monkeypatch.setattr("invokeai.app.invocations.krea2.krea2_denoise.RectifiedFlowInpaintExtension", _InpaintExtension)
 
     latents = _runtime_invocation(cfg_scale=1.0, with_mask=True)._run_diffusion(_runtime_context(tmp_path, transformer))
 

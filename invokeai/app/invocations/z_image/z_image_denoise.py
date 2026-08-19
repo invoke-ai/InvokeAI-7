@@ -24,8 +24,8 @@ from invokeai.app.invocations.fields import (
 from invokeai.app.invocations.latent_noise import validate_noise_tensor_shape
 from invokeai.app.invocations.model import TransformerField, VAEField
 from invokeai.app.invocations.primitives import LatentsOutput
-from invokeai.app.invocations.z_image_control import ZImageControlField
-from invokeai.app.invocations.z_image_image_to_latents import ZImageImageToLatentsInvocation
+from invokeai.app.invocations.vae.z_image_image_to_latents import ZImageImageToLatentsInvocation
+from invokeai.app.invocations.z_image.z_image_control import ZImageControlField
 from invokeai.app.services.shared.invocation_context import InvocationContext
 from invokeai.backend.flux.schedulers import ZIMAGE_SCHEDULER_LABELS, ZIMAGE_SCHEDULER_MAP, ZIMAGE_SCHEDULER_NAME_VALUES
 from invokeai.backend.model_manager.taxonomy import BaseModelType, ModelFormat

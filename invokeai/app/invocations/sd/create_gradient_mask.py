@@ -17,8 +17,8 @@ from invokeai.app.invocations.fields import (
     InputField,
     OutputField,
 )
-from invokeai.app.invocations.image_to_latents import ImageToLatentsInvocation
 from invokeai.app.invocations.model import UNetField, VAEField
+from invokeai.app.invocations.vae.image_to_latents import ImageToLatentsInvocation
 from invokeai.app.services.shared.invocation_context import InvocationContext
 from invokeai.backend.model_manager.taxonomy import FluxVariantType, ModelType, ModelVariantType
 from invokeai.backend.stable_diffusion.diffusers_pipeline import image_resized_to_grid_as_tensor
