@@ -5,16 +5,20 @@ Krea-2 Turbo wants CFG disabled. They are read once, when a model is identified,
 config, and used by the UI to prefill the generation sliders.
 
 They were a `match base:` block of twelve cases in `configs/main.py`, four of which sub-dispatched on
-variant, ending in `case _: return None`. That fallback is why this facet is *not* `REQUIRED`: four
-architectures deliberately have no defaults, with a standing `TODO(psyche)` asking whether they
-should. Forgetting a new architecture here therefore fails softly — no crash, just sliders the user
-has to set themselves — which is milder than the other facets and worth being honest about.
+variant, ending in `case _: return None`. Four architectures fell into that fallback and had no
+defaults at all, under a standing `TODO(psyche)` asking whether they should; all four have since
+been given the values their model cards recommend, which answers it.
+
+With no architecture left without defaults, this is `REQUIRED`. The failure it guards is milder than
+the other facets' — a forgotten declaration would leave the sliders wherever the last model put them
+rather than crash — but that is a reason to catch it at boot, not a reason to tolerate it: nothing
+about a missing prefill is visible enough to be noticed any other way.
 """
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 from invokeai.backend.architectures.facet import Facet
 from invokeai.backend.architectures.registry import get
@@ -25,6 +29,8 @@ from invokeai.backend.model_manager.taxonomy import AnyVariant, BaseModelType
 @dataclass(frozen=True)
 class DefaultSettingsFacet(Facet):
     """What the sliders should say when a model of this architecture is selected."""
+
+    REQUIRED: ClassVar[bool] = True
 
     by_variant: Mapping[Any, MainModelDefaultSettings]
     """Keyed by variant, with `None` as the fallback for every variant not named.

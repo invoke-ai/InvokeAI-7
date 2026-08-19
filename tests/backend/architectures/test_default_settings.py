@@ -17,29 +17,28 @@ from invokeai.backend.model_manager.taxonomy import (
     ZImageVariantType,
 )
 
-# SD 3.5, CogView 4 and FLUX.1 reached the old `case _:` fallback and had no defaults at all; they
-# now declare what their model cards recommend. The refiner is the one left: it is not run on its
-# own, so there is nothing for it to prefill.
-WITHOUT_DEFAULTS = {BaseModelType.StableDiffusionXLRefiner}
 
+def test_the_facet_is_required() -> None:
+    """Every architecture declares defaults, so `validate()` enforces it at boot.
 
-def test_the_facet_is_optional() -> None:
-    """Unlike latent space and conditioning, a missing declaration here is a legitimate state.
-
-    So `validate()` cannot enforce it, and forgetting a new architecture fails softly: no crash,
-    just sliders the user sets themselves.
+    It was optional while four architectures legitimately had none. They now declare what their
+    model cards recommend, and the SDXL refiner — the last holdout — declares SDXL's canvas. A
+    missing prefill is quiet rather than loud, which is exactly why it needs a boot check.
     """
-    assert DefaultSettingsFacet.REQUIRED is False
+    assert DefaultSettingsFacet.REQUIRED is True
 
 
-def test_exactly_the_expected_architectures_declare_nothing() -> None:
-    undeclared = {b for b in generative_bases() if get(b, DefaultSettingsFacet) is None}
-    assert undeclared == WITHOUT_DEFAULTS
+def test_every_architecture_declares_defaults() -> None:
+    undeclared = sorted(b.value for b in generative_bases() if get(b, DefaultSettingsFacet) is None)
+    assert undeclared == []
 
 
-def test_an_architecture_without_defaults_resolves_to_none() -> None:
-    for base in WITHOUT_DEFAULTS:
-        assert resolve_default_settings(base) is None, base.value
+def test_the_refiner_declares_a_canvas_but_no_sampler_settings() -> None:
+    """It is a second pass over an SDXL latent, driven by the UI's own refiner parameters."""
+    settings = resolve_default_settings(BaseModelType.StableDiffusionXLRefiner)
+    assert settings is not None
+    assert (settings.width, settings.height) == (1024, 1024)
+    assert (settings.steps, settings.cfg_scale) == (None, None)
 
 
 @pytest.mark.parametrize(
