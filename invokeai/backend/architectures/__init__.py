@@ -8,6 +8,10 @@ from invokeai.backend.architectures import defs as defs  # noqa: F401  (imported
 from invokeai.backend.architectures import facets as facets  # noqa: F401  (imported for side effects)
 from invokeai.backend.architectures.facet import Facet
 from invokeai.backend.architectures.facets.conditioning import ConditioningFacet, conditioning_infos
+from invokeai.backend.architectures.facets.default_settings import (
+    DefaultSettingsFacet,
+    resolve_default_settings,
+)
 from invokeai.backend.architectures.facets.latent_space import (
     LatentSpace,
     LatentSpaceFacet,
@@ -27,10 +31,12 @@ from invokeai.backend.architectures.registry import (
 __all__ = [
     "ArchitectureError",
     "ConditioningFacet",
+    "DefaultSettingsFacet",
     "Facet",
     "LatentSpace",
     "LatentSpaceFacet",
     "conditioning_infos",
+    "resolve_default_settings",
     "resolve_latent_space",
     "defs_module_path",
     "facets_of",

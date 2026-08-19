@@ -27,6 +27,10 @@ DISCOVERY = "invokeai.backend.util.module_discovery"
 # that declare them. Added deliberately rather than pre-emptively: each widening of these lists
 # is a reviewable line in the change that needs it.
 CONDITIONING = "invokeai.backend.stable_diffusion.diffusion.conditioning_data"
+# `MainModelDefaultSettings` lives in a leaf module of its own precisely so this edge is safe:
+# `configs/main.py` looks the values up through the registry, so a facet importing *that* would
+# close a cycle.
+DEFAULT_SETTINGS = "invokeai.backend.model_manager.configs.default_settings"
 
 # Vendored third-party trees, mirroring [tool.ruff] exclude, plus the frontend.
 EXCLUDED = (
@@ -54,13 +58,23 @@ def _allowed_for(path: str) -> tuple[str, frozenset[str], tuple[str, ...]] | Non
     if path.startswith(f"{ARCH_DIR}/facets/"):
         return (
             "facets-allowlist",
-            frozenset({f"{ARCH}.facet", f"{ARCH}.registry", TAXONOMY, DISCOVERY, CONDITIONING}),
+            frozenset({f"{ARCH}.facet", f"{ARCH}.registry", TAXONOMY, DISCOVERY, CONDITIONING, DEFAULT_SETTINGS}),
             (),
         )
     if path.startswith(f"{ARCH_DIR}/defs/"):
         return (
             "defs-allowlist",
-            frozenset({f"{ARCH}.facet", f"{ARCH}.facets", f"{ARCH}.registry", TAXONOMY, DISCOVERY, CONDITIONING}),
+            frozenset(
+                {
+                    f"{ARCH}.facet",
+                    f"{ARCH}.facets",
+                    f"{ARCH}.registry",
+                    TAXONOMY,
+                    DISCOVERY,
+                    CONDITIONING,
+                    DEFAULT_SETTINGS,
+                }
+            ),
             (f"{ARCH}.facets.",),
         )
     return None

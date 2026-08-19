@@ -1,9 +1,11 @@
 """What the wan architecture declares."""
 
 from invokeai.backend.architectures.facets.conditioning import ConditioningFacet
+from invokeai.backend.architectures.facets.default_settings import DefaultSettingsFacet
 from invokeai.backend.architectures.facets.latent_space import WAN21_16, WAN22_48, LatentSpaceFacet
 from invokeai.backend.architectures.registry import register
-from invokeai.backend.model_manager.taxonomy import BaseModelType
+from invokeai.backend.model_manager.configs.default_settings import MainModelDefaultSettings
+from invokeai.backend.model_manager.taxonomy import BaseModelType, WanVariantType
 from invokeai.backend.stable_diffusion.diffusion.conditioning_data import WanConditioningInfo
 
 # Two variants that model identity cannot tell apart: A14B denoises in the 16-channel Wan 2.1
@@ -13,4 +15,11 @@ register(
     BaseModelType.Wan,
     LatentSpaceFacet(WAN21_16, alternates=(WAN22_48,)),
     ConditioningFacet(WanConditioningInfo),
+    DefaultSettingsFacet(
+        {
+            WanVariantType.TI2V_5B: MainModelDefaultSettings(steps=30, cfg_scale=5.0, width=1024, height=1024),
+            # A14B, and whatever an unknown variant turns out to be.
+            None: MainModelDefaultSettings(steps=40, cfg_scale=4.0, width=1024, height=1024),
+        }
+    ),
 )

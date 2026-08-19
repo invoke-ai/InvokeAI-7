@@ -11,6 +11,7 @@ from typing_extensions import Annotated, Any
 
 from invokeai.app.services.config.config_default import get_config
 from invokeai.app.util.misc import uuid_string
+from invokeai.backend.architectures import resolve_default_settings
 from invokeai.backend.model_hash.model_hash import HASHING_ALGORITHMS
 from invokeai.backend.model_manager.configs.base import Config_Base
 from invokeai.backend.model_manager.configs.clip_embed import CLIPEmbed_Diffusers_G_Config, CLIPEmbed_Diffusers_L_Config
@@ -109,7 +110,6 @@ from invokeai.backend.model_manager.configs.main import (
     Main_SDNQ_Flux2_Config,
     Main_SDNQ_FLUX_Config,
     Main_SDNQ_ZImage_Config,
-    MainModelDefaultSettings,
 )
 from invokeai.backend.model_manager.configs.mistral_encoder import (
     MistralEncoder_Checkpoint_Config,
@@ -761,12 +761,12 @@ class ModelConfigFactory:
         # Now do any post-processing needed for specific model types/bases/etc.
         match config.type:
             case ModelType.Main:
-                # Pass variant if available (e.g., for Flux2 models). Name and path are used to
-                # detect ERNIE-Image-Turbo, which has no distinct variant on the config.
+                # Variant, name and path all narrow the result: four architectures have
+                # per-variant defaults, and ERNIE-Image-Turbo has no variant on the config at all,
+                # so its name is the only signal. What each architecture recommends lives in
+                # invokeai/backend/architectures/defs/.
                 variant = getattr(config, "variant", None)
-                config.default_settings = MainModelDefaultSettings.from_base(
-                    config.base, variant, config.name, config.path
-                )
+                config.default_settings = resolve_default_settings(config.base, variant, config.name, config.path)
             case ModelType.ControlNet | ModelType.T2IAdapter | ModelType.ControlLoRa:
                 config.default_settings = ControlAdapterDefaultSettings.from_model_name(config.name)
             case ModelType.LoRA:

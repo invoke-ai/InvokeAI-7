@@ -7,11 +7,11 @@ from typing import Any
 
 import pytest
 
+from invokeai.backend.architectures import resolve_default_settings
 from invokeai.backend.model_manager.configs.controlnet import ControlAdapterDefaultSettings
 from invokeai.backend.model_manager.configs.factory import (
     ModelConfigFactory,
 )
-from invokeai.backend.model_manager.configs.main import MainModelDefaultSettings
 from invokeai.backend.model_manager.taxonomy import (
     BaseModelType,
 )
@@ -45,7 +45,7 @@ def test_controlnet_t2i_default_settings(model_name: str, preprocessor: str | No
     ],
 )
 def test_default_settings_main(base: BaseModelType, attrs: dict[str, Any] | None):
-    settings = MainModelDefaultSettings.from_base(base)
+    settings = resolve_default_settings(base)
     if attrs is None:
         assert settings is None
     else:
