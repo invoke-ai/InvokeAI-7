@@ -64,23 +64,9 @@ from invokeai.app.services.videos.videos_default import VideoService
 from invokeai.app.services.wildcard_records.wildcard_records_sqlite import SqliteWildcardRecordsStorage
 from invokeai.app.services.workflow_records.workflow_records_sqlite import SqliteWorkflowRecordsStorage
 from invokeai.app.services.workflow_thumbnails.workflow_thumbnails_disk import WorkflowThumbnailFileStorageDisk
+from invokeai.backend.architectures import conditioning_infos
 from invokeai.backend.architectures import validate as validate_architectures
-from invokeai.backend.stable_diffusion.diffusion.conditioning_data import (
-    AnimaConditioningInfo,
-    BasicConditioningInfo,
-    CogView4ConditioningInfo,
-    ConditioningFieldData,
-    ErnieImageConditioningInfo,
-    FLUXConditioningInfo,
-    Ideogram4ConditioningInfo,
-    Krea2ConditioningInfo,
-    MiniMaxH3ConditioningInfo,
-    QwenImageConditioningInfo,
-    SD3ConditioningInfo,
-    SDXLConditioningInfo,
-    WanConditioningInfo,
-    ZImageConditioningInfo,
-)
+from invokeai.backend.stable_diffusion.diffusion.conditioning_data import ConditioningFieldData
 from invokeai.backend.util.logging import InvokeAILogger
 from invokeai.version.invokeai_version import __version__
 
@@ -171,22 +157,11 @@ class ApiDependencies:
         conditioning = ObjectSerializerForwardCache(
             ObjectSerializerDisk[ConditioningFieldData](
                 output_folder / "conditioning",
-                safe_globals=[
-                    ConditioningFieldData,
-                    BasicConditioningInfo,
-                    SDXLConditioningInfo,
-                    FLUXConditioningInfo,
-                    SD3ConditioningInfo,
-                    CogView4ConditioningInfo,
-                    ZImageConditioningInfo,
-                    ErnieImageConditioningInfo,
-                    Ideogram4ConditioningInfo,
-                    QwenImageConditioningInfo,
-                    Krea2ConditioningInfo,
-                    AnimaConditioningInfo,
-                    WanConditioningInfo,
-                    MiniMaxH3ConditioningInfo,
-                ],
+                # Every architecture's conditioning class, from what each declares under
+                # invokeai/backend/architectures/defs/. Missing one here fails nowhere near
+                # here: the encoder runs, writes its output, and the denoise node then dies
+                # unpickling it.
+                safe_globals=[ConditioningFieldData, *conditioning_infos()],
                 ephemeral=True,
             ),
         )

@@ -23,6 +23,10 @@ ARCH = "invokeai.backend.architectures"
 ARCH_DIR = "invokeai/backend/architectures"
 TAXONOMY = "invokeai.backend.model_manager.taxonomy"
 DISCOVERY = "invokeai.backend.util.module_discovery"
+# The conditioning facet names the `*ConditioningInfo` classes themselves, and so do the defs
+# that declare them. Added deliberately rather than pre-emptively: each widening of these lists
+# is a reviewable line in the change that needs it.
+CONDITIONING = "invokeai.backend.stable_diffusion.diffusion.conditioning_data"
 
 # Vendored third-party trees, mirroring [tool.ruff] exclude, plus the frontend.
 EXCLUDED = (
@@ -48,11 +52,15 @@ def _allowed_for(path: str) -> tuple[str, frozenset[str], tuple[str, ...]] | Non
     if path == f"{ARCH_DIR}/__init__.py":
         return "aggregate-is-a-facade", frozenset({ARCH}), (f"{ARCH}.",)
     if path.startswith(f"{ARCH_DIR}/facets/"):
-        return "facets-allowlist", frozenset({f"{ARCH}.facet", f"{ARCH}.registry", TAXONOMY, DISCOVERY}), ()
+        return (
+            "facets-allowlist",
+            frozenset({f"{ARCH}.facet", f"{ARCH}.registry", TAXONOMY, DISCOVERY, CONDITIONING}),
+            (),
+        )
     if path.startswith(f"{ARCH_DIR}/defs/"):
         return (
             "defs-allowlist",
-            frozenset({f"{ARCH}.facet", f"{ARCH}.facets", f"{ARCH}.registry", TAXONOMY, DISCOVERY}),
+            frozenset({f"{ARCH}.facet", f"{ARCH}.facets", f"{ARCH}.registry", TAXONOMY, DISCOVERY, CONDITIONING}),
             (f"{ARCH}.facets.",),
         )
     return None
