@@ -348,10 +348,32 @@ Loaders convert the files on disk (described by the config) into PyTorch models 
 
 Invocations expose your PyTorch functions as isolated execution nodes in InvokeAI's graph.
 
+:::note[Where node files go]
+Node modules live in `invokeai/app/invocations/[newmodel]/`, one package per architecture. Three
+kinds of node are grouped by role instead, because they are shared across architectures rather than
+owned by one:
+
+| Node | Package |
+| --- | --- |
+| VAE encode / decode, latents-to-image, latents-to-video | `invocations/vae/` |
+| Text encoders | `invocations/text_encoder/` |
+| PiD decode and upscale | `invocations/pid/` |
+
+Generic nodes — noise, primitives, image ops, metadata — stay at the top level. Keep the filename
+prefixed with the architecture (`newmodel_denoise.py`) even inside `newmodel/`: the prefix is what
+makes a file findable by name, and the cross-cutting packages mix architectures by design.
+
+The package is discovered automatically; there is no registration list to edit. But an
+`__init__.py` is required — a directory without one is not a package, and at runtime every node in
+it would simply not exist. `tests/app/invocations/test_node_discovery.py` fails loudly when the
+files on disk and the imported modules disagree, so this is caught in CI rather than by a user
+opening a workflow.
+:::
+
 <Steps>
 1. **Model Loader Invocation**
 
-   ```python title="invokeai/app/invocations/[newmodel]_model_loader.py"
+   ```python title="invokeai/app/invocations/[newmodel]/[newmodel]_model_loader.py"
    @invocation("newmodel_model_loader", title="NewModel Loader", ...)
    class NewModelModelLoaderInvocation(BaseInvocation):
        model: ModelIdentifierField = InputField(description="Main model")
@@ -375,7 +397,7 @@ Invocations expose your PyTorch functions as isolated execution nodes in InvokeA
 
 2. **Text Encoder Invocation**
 
-   ```python title="invokeai/app/invocations/[newmodel]_text_encoder.py"
+   ```python title="invokeai/app/invocations/text_encoder/[newmodel]_text_encoder.py"
    @invocation("newmodel_text_encode", title="NewModel Text Encoder", ...)
    class NewModelTextEncoderInvocation(BaseInvocation):
        prompt: str = InputField()
@@ -427,7 +449,7 @@ Invocations expose your PyTorch functions as isolated execution nodes in InvokeA
 
 3. **Denoise Invocation**
 
-   ```python title="invokeai/app/invocations/[newmodel]_denoise.py"
+   ```python title="invokeai/app/invocations/[newmodel]/[newmodel]_denoise.py"
    @invocation("newmodel_denoise", title="NewModel Denoise", ...)
    class NewModelDenoiseInvocation(BaseInvocation):
        # Standard Fields
@@ -478,7 +500,7 @@ Invocations expose your PyTorch functions as isolated execution nodes in InvokeA
 
 4. **VAE Encode Invocation**
 
-   ```python title="invokeai/app/invocations/[newmodel]_vae_encode.py"
+   ```python title="invokeai/app/invocations/vae/[newmodel]_vae_encode.py"
    @invocation("newmodel_vae_encode", title="Image to Latents - NewModel", ...)
    class NewModelVaeEncodeInvocation(BaseInvocation):
        image: ImageField = InputField()
@@ -497,7 +519,7 @@ Invocations expose your PyTorch functions as isolated execution nodes in InvokeA
 
 5. **VAE Decode Invocation**
 
-   ```python title="invokeai/app/invocations/[newmodel]_vae_decode.py"
+   ```python title="invokeai/app/invocations/vae/[newmodel]_vae_decode.py"
    @invocation("newmodel_vae_decode", title="Latents to Image - NewModel", ...)
    class NewModelVaeDecodeInvocation(BaseInvocation):
        latents: LatentsField = InputField()
@@ -1069,9 +1091,9 @@ class ControlNet_Checkpoint_NewModel_Config(ControlNet_Checkpoint_Base):
         return cls(...)
 ```
 
-**Backend Invocation** — `invokeai/app/invocations/[newmodel]_controlnet.py`:
+**Backend Invocation** — `invokeai/app/invocations/[newmodel]/[newmodel]_controlnet.py`:
 
-```python title="invokeai/app/invocations/[newmodel]_controlnet.py"
+```python title="invokeai/app/invocations/[newmodel]/[newmodel]_controlnet.py"
 @invocation("newmodel_controlnet", ...)
 class NewModelControlNetInvocation(BaseInvocation):
     image: ImageField = InputField()
@@ -1091,9 +1113,9 @@ const { controlNets } = await addControlNets({ g, manager, denoise });
 
 ### IP-Adapter / Reference Images
 
-**Backend Invocation** — `invokeai/app/invocations/[newmodel]_ip_adapter.py`:
+**Backend Invocation** — `invokeai/app/invocations/[newmodel]/[newmodel]_ip_adapter.py`:
 
-```python title="invokeai/app/invocations/[newmodel]_ip_adapter.py"
+```python title="invokeai/app/invocations/[newmodel]/[newmodel]_ip_adapter.py"
 @invocation("newmodel_ip_adapter", ...)
 class NewModelIPAdapterInvocation(BaseInvocation):
     image: ImageField = InputField()
@@ -1119,7 +1141,7 @@ class LoRA_LyCORIS_NewModel_Config(LoRA_LyCORIS_Base):
 
 **Backend Model Loader Integration:**
 
-```python title="invokeai/app/invocations/[newmodel]_model_loader.py"
+```python title="invokeai/app/invocations/[newmodel]/[newmodel]_model_loader.py"
 class NewModelModelLoaderOutput(BaseInvocationOutput):
     transformer: TransformerField  # TransformerField already contains loras: list[LoRAField]
 ```
@@ -1185,10 +1207,13 @@ For a **minimal txt2img integration**, the following files are required:
 - invokeai
   - app/invocations
     - metadata.py
-    - `[newmodel]_model_loader.py`
-    - `[newmodel]_text_encoder.py`
-    - `[newmodel]_denoise.py`
-    - `[newmodel]_vae_decode.py`
+    - `[newmodel]`
+      - `[newmodel]_model_loader.py`
+      - `[newmodel]_denoise.py`
+    - text_encoder
+      - `[newmodel]_text_encoder.py`
+    - vae
+      - `[newmodel]_vae_decode.py`
   - backend
     - model_manager
       - taxonomy.py
@@ -1213,7 +1238,8 @@ For **img2img / inpaint / outpaint**, additionally:
 <FileTree>
 - invokeai
   - app/invocations
-    - `[newmodel]_vae_encode.py`
+    - vae
+      - `[newmodel]_vae_encode.py`
   - frontend/web/src/features/nodes/util/graph/generation
     - addImageToImage.ts
     - addInpaint.ts
