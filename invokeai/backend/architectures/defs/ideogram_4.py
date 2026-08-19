@@ -3,6 +3,7 @@
 from invokeai.backend.architectures.facets.conditioning import ConditioningFacet
 from invokeai.backend.architectures.facets.default_settings import DefaultSettingsFacet
 from invokeai.backend.architectures.facets.latent_space import FLUX2_32, LatentSpaceFacet
+from invokeai.backend.architectures.facets.modality import ModalityFacet
 from invokeai.backend.architectures.registry import register
 from invokeai.backend.model_manager.configs.default_settings import MainModelDefaultSettings
 from invokeai.backend.model_manager.taxonomy import BaseModelType
@@ -17,4 +18,6 @@ register(
     # Ideogram 4 samples from presets (V4_QUALITY_48 by default) with a dual-branch guidance
     # schedule; these are sensible UI defaults rather than the sampler's own numbers.
     DefaultSettingsFacet({None: MainModelDefaultSettings(steps=48, cfg_scale=7.0, width=1024, height=1024)}),
+    # Text-to-image only.
+    ModalityFacet(frozenset({"txt2img"}), metadata_slug="ideogram4"),
 )

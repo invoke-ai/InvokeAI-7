@@ -3,6 +3,7 @@
 from invokeai.backend.architectures.facets.conditioning import ConditioningFacet
 from invokeai.backend.architectures.facets.default_settings import DefaultSettingsFacet
 from invokeai.backend.architectures.facets.latent_space import SD15_4, LatentSpaceFacet
+from invokeai.backend.architectures.facets.modality import ModalityFacet
 from invokeai.backend.architectures.registry import register
 from invokeai.backend.model_manager.configs.default_settings import MainModelDefaultSettings
 from invokeai.backend.model_manager.taxonomy import BaseModelType
@@ -17,4 +18,5 @@ register(
     # nothing here distinguishes them — SD 2.x has no variant modeled and we ship no starter
     # model for it. 768 is the deliberate choice of the two.
     DefaultSettingsFacet({None: MainModelDefaultSettings(steps=30, cfg_scale=7.0, width=768, height=768)}),
+    ModalityFacet(frozenset({"txt2img", "img2img", "inpaint", "outpaint"})),
 )

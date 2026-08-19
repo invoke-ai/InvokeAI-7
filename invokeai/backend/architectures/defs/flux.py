@@ -3,6 +3,7 @@
 from invokeai.backend.architectures.facets.conditioning import ConditioningFacet
 from invokeai.backend.architectures.facets.default_settings import DefaultSettingsFacet
 from invokeai.backend.architectures.facets.latent_space import FLUX_16, LatentSpaceFacet
+from invokeai.backend.architectures.facets.modality import ModalityFacet
 from invokeai.backend.architectures.registry import register
 from invokeai.backend.model_manager.configs.default_settings import MainModelDefaultSettings
 from invokeai.backend.model_manager.taxonomy import BaseModelType, FluxVariantType
@@ -27,4 +28,5 @@ register(
             None: MainModelDefaultSettings(steps=28, cfg_scale=1.0, guidance=3.5, width=1024, height=1024),
         }
     ),
+    ModalityFacet(frozenset({"txt2img", "img2img", "inpaint", "outpaint"}), metadata_slug="flux"),
 )

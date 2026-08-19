@@ -3,6 +3,7 @@
 from invokeai.backend.architectures.facets.conditioning import ConditioningFacet
 from invokeai.backend.architectures.facets.default_settings import DefaultSettingsFacet
 from invokeai.backend.architectures.facets.latent_space import WAN21_16, WAN22_48, LatentSpaceFacet
+from invokeai.backend.architectures.facets.modality import ModalityFacet
 from invokeai.backend.architectures.registry import register
 from invokeai.backend.model_manager.configs.default_settings import MainModelDefaultSettings
 from invokeai.backend.model_manager.taxonomy import BaseModelType, WanVariantType
@@ -22,4 +23,6 @@ register(
             None: MainModelDefaultSettings(steps=40, cfg_scale=4.0, width=1024, height=1024),
         }
     ),
+    # Plus image-to-video. Wan generates images at num_frames=1 and video above that.
+    ModalityFacet(frozenset({"txt2img", "img2img", "inpaint", "outpaint", "i2v"}), metadata_slug="wan"),
 )

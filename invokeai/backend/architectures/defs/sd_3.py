@@ -3,6 +3,7 @@
 from invokeai.backend.architectures.facets.conditioning import ConditioningFacet
 from invokeai.backend.architectures.facets.default_settings import DefaultSettingsFacet
 from invokeai.backend.architectures.facets.latent_space import SD3_16, LatentSpaceFacet
+from invokeai.backend.architectures.facets.modality import ModalityFacet
 from invokeai.backend.architectures.registry import register
 from invokeai.backend.model_manager.configs.default_settings import MainModelDefaultSettings
 from invokeai.backend.model_manager.taxonomy import BaseModelType
@@ -16,4 +17,5 @@ register(
     # (28/3.5) because there is one `sd-3` row and no variant to tell them apart, and Medium is the
     # smaller, more commonly run model.
     DefaultSettingsFacet({None: MainModelDefaultSettings(steps=40, cfg_scale=4.5, width=1024, height=1024)}),
+    ModalityFacet(frozenset({"txt2img", "img2img", "inpaint", "outpaint"}), metadata_slug="sd3"),
 )

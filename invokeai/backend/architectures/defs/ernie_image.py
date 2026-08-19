@@ -3,6 +3,7 @@
 from invokeai.backend.architectures.facets.conditioning import ConditioningFacet
 from invokeai.backend.architectures.facets.default_settings import DefaultSettingsFacet
 from invokeai.backend.architectures.facets.latent_space import FLUX2_32, LatentSpaceFacet
+from invokeai.backend.architectures.facets.modality import ModalityFacet
 from invokeai.backend.architectures.registry import register
 from invokeai.backend.model_manager.configs.default_settings import MainModelDefaultSettings
 from invokeai.backend.model_manager.taxonomy import BaseModelType
@@ -21,4 +22,6 @@ register(
         # disk to discriminate on and no variant is modeled. The name is the only signal.
         by_name_hint={"turbo": MainModelDefaultSettings(steps=8, cfg_scale=1.0, width=1024, height=1024)},
     ),
+    # Text-to-image only.
+    ModalityFacet(frozenset({"txt2img"}), metadata_slug="ernie_image"),
 )
