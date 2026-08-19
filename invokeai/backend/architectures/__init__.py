@@ -7,6 +7,11 @@ Import this package to use the registry; importing it fills the registry as a si
 from invokeai.backend.architectures import defs as defs  # noqa: F401  (imported for side effects)
 from invokeai.backend.architectures import facets as facets  # noqa: F401  (imported for side effects)
 from invokeai.backend.architectures.facet import Facet
+from invokeai.backend.architectures.facets.latent_space import (
+    LatentSpace,
+    LatentSpaceFacet,
+    resolve_latent_space,
+)
 from invokeai.backend.architectures.registry import (
     ArchitectureError,
     defs_module_path,
@@ -21,6 +26,9 @@ from invokeai.backend.architectures.registry import (
 __all__ = [
     "ArchitectureError",
     "Facet",
+    "LatentSpace",
+    "LatentSpaceFacet",
+    "resolve_latent_space",
     "defs_module_path",
     "facets_of",
     "generative_bases",
