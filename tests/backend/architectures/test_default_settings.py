@@ -17,14 +17,10 @@ from invokeai.backend.model_manager.taxonomy import (
     ZImageVariantType,
 )
 
-# The four that returned None from the old `case _:` fallback. A standing TODO in configs/main.py
-# asks whether they should have defaults; until someone answers it, "none" is the declared answer.
-WITHOUT_DEFAULTS = {
-    BaseModelType.StableDiffusion3,
-    BaseModelType.StableDiffusionXLRefiner,
-    BaseModelType.CogView4,
-    BaseModelType.Flux,
-}
+# SD 3.5, CogView 4 and FLUX.1 reached the old `case _:` fallback and had no defaults at all; they
+# now declare what their model cards recommend. The refiner is the one left: it is not run on its
+# own, so there is nothing for it to prefill.
+WITHOUT_DEFAULTS = {BaseModelType.StableDiffusionXLRefiner}
 
 
 def test_the_facet_is_optional() -> None:
@@ -77,15 +73,57 @@ def test_an_unknown_variant_falls_back() -> None:
     )
 
 
-def test_a_variant_from_another_architecture_does_not_leak_in() -> None:
+def test_a_variant_from_another_architecture_falls_back_rather_than_matching() -> None:
     """`FluxVariantType.Dev` and `Flux2VariantType.Dev` are equal and hash alike — both are "dev".
 
     A mapping is only ever consulted for the architecture that declared it, so this cannot happen in
-    practice; pinned because the equality is surprising and someone will eventually key a mapping by
-    a variant from the wrong enum.
+    practice. Pinned because the equality is surprising: a lookup keyed by the wrong enum would find
+    an entry rather than miss it, and nothing but the fallback would reveal the mistake.
+
+    Both architectures happen to declare 28 steps at guidance 3.5 for their `dev`, so the shared key
+    is not observable there — which is exactly why the check uses a value the two do not share.
     """
     assert FluxVariantType.Dev == Flux2VariantType.Dev
-    flux2_dev = resolve_default_settings(BaseModelType.Flux2, Flux2VariantType.Dev)
-    assert flux2_dev is not None and flux2_dev.guidance == 3.5
-    # FLUX.1 declares no defaults at all, so its own lookup is unaffected by the shared value.
-    assert resolve_default_settings(BaseModelType.Flux, FluxVariantType.Dev) is None
+    assert resolve_default_settings(BaseModelType.Flux2, FluxVariantType.Schnell) == resolve_default_settings(
+        BaseModelType.Flux2, None
+    )
+
+
+def test_flux1_dispatches_on_variant() -> None:
+    """Three genuinely different answers, and `guidance` is not CFG.
+
+    FLUX's `guidance` is the distilled guidance embedding, so cfg_scale stays at its floor (1.0,
+    meaning "off") for every variant. Fill's 30.0 is corroborated in-tree: `flux_denoise.py` warns
+    when guidance drops below 25.0 for a Fill model.
+    """
+    schnell = resolve_default_settings(BaseModelType.Flux, FluxVariantType.Schnell)
+    dev = resolve_default_settings(BaseModelType.Flux, FluxVariantType.Dev)
+    fill = resolve_default_settings(BaseModelType.Flux, FluxVariantType.DevFill)
+    assert schnell is not None and dev is not None and fill is not None
+
+    assert (schnell.steps, schnell.guidance) == (4, None), "schnell is distilled and ignores guidance"
+    assert (dev.steps, dev.guidance) == (28, 3.5)
+    assert (fill.steps, fill.guidance) == (50, 30.0)
+    assert {schnell.cfg_scale, dev.cfg_scale, fill.cfg_scale} == {1.0}, "FLUX never uses CFG"
+
+
+def test_the_researched_values_are_what_the_model_cards_say() -> None:
+    """Pinned against their sources, so a later edit has to argue with the citation.
+
+    cogview4: THUDM/CogView4-6B, 50 steps at guidance 3.5 (true CFG — it takes a negative prompt).
+    sd-3:     stable-diffusion-3.5-medium, 40 steps at guidance 4.5. Medium, not Large (28/3.5):
+              there is one `sd-3` row and no variant to tell them apart.
+    z-image:  Tongyi-MAI/Z-Image-Turbo, `num_inference_steps=9`, guidance 0 -> cfg_scale 1.0.
+    ideogram: not from a card but from our own PRESETS — every preset runs main guidance 7.0.
+    """
+    expected = {
+        BaseModelType.CogView4: (50, 3.5),
+        BaseModelType.StableDiffusion3: (40, 4.5),
+        BaseModelType.ZImage: (9, 1.0),
+        BaseModelType.Ideogram4: (48, 7.0),
+        BaseModelType.ErnieImage: (50, 4.0),
+    }
+    for base, (steps, cfg) in expected.items():
+        settings = resolve_default_settings(base)
+        assert settings is not None, base.value
+        assert (settings.steps, settings.cfg_scale) == (steps, cfg), base.value
