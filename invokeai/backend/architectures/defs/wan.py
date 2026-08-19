@@ -2,6 +2,7 @@
 
 from invokeai.backend.architectures.facets.conditioning import ConditioningFacet
 from invokeai.backend.architectures.facets.default_settings import DefaultSettingsFacet
+from invokeai.backend.architectures.facets.features import FeaturesFacet, NegativePrompt
 from invokeai.backend.architectures.facets.latent_space import WAN21_16, WAN22_48, LatentSpaceFacet
 from invokeai.backend.architectures.facets.modality import ModalityFacet
 from invokeai.backend.architectures.registry import register
@@ -25,4 +26,10 @@ register(
     ),
     # Plus image-to-video. Wan generates images at num_frames=1 and video above that.
     ModalityFacet(frozenset({"txt2img", "img2img", "inpaint", "outpaint", "i2v"}), metadata_slug="wan"),
+    FeaturesFacet(
+        negative_prompt=NegativePrompt(visible=True, usage="always"),
+        dimension_grid=16,
+        guidance_label="Guidance",
+        scheduler_set="flow",
+    ),
 )

@@ -2,6 +2,7 @@
 
 from invokeai.backend.architectures.facets.conditioning import ConditioningFacet
 from invokeai.backend.architectures.facets.default_settings import DefaultSettingsFacet
+from invokeai.backend.architectures.facets.features import FeaturesFacet, NegativePrompt
 from invokeai.backend.architectures.facets.latent_space import MINIMAX_H3_24, LatentSpaceFacet
 from invokeai.backend.architectures.facets.modality import ModalityFacet
 from invokeai.backend.architectures.registry import register
@@ -18,4 +19,12 @@ register(
     DefaultSettingsFacet({None: MainModelDefaultSettings(steps=50, cfg_scale=1.0, width=1344, height=768)}),
     # Video first, with a single-frame still-image path. No img2img, inpaint or outpaint.
     ModalityFacet(frozenset({"txt2img", "t2v", "i2v"}), metadata_slug="minimax_h3"),
+    # minimax_h3_denoise is explicit: 'guidance-distilled: no negative prompt, no CFG, one
+    # forward per step'. It steps video and audio down two hardcoded flow schedules, so
+    # there is no scheduler to choose either.
+    FeaturesFacet(
+        negative_prompt=NegativePrompt(visible=False, usage="never"),
+        dimension_grid=32,
+        guidance_label="Guidance",
+    ),
 )

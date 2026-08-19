@@ -2,6 +2,7 @@
 
 from invokeai.backend.architectures.facets.conditioning import ConditioningFacet
 from invokeai.backend.architectures.facets.default_settings import DefaultSettingsFacet
+from invokeai.backend.architectures.facets.features import FeaturesFacet, NegativePrompt
 from invokeai.backend.architectures.facets.latent_space import SD15_4, LatentSpaceFacet
 from invokeai.backend.architectures.facets.modality import ModalityFacet
 from invokeai.backend.architectures.registry import register
@@ -19,4 +20,16 @@ register(
     # model for it. 768 is the deliberate choice of the two.
     DefaultSettingsFacet({None: MainModelDefaultSettings(steps=30, cfg_scale=7.0, width=768, height=768)}),
     ModalityFacet(frozenset({"txt2img", "img2img", "inpaint", "outpaint"})),
+    FeaturesFacet(
+        negative_prompt=NegativePrompt(visible=True, usage="always"),
+        dimension_grid=8,
+        guidance_label="CFG",
+        scheduler_set="standard",
+        scheduler_applies_to_graph=True,
+        clip_skip_max=24,
+        supports_seamless=True,
+        supports_cfg_rescale=True,
+        sd_vae_override=True,
+        vae_precision=True,
+    ),
 )

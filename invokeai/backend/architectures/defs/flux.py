@@ -2,6 +2,7 @@
 
 from invokeai.backend.architectures.facets.conditioning import ConditioningFacet
 from invokeai.backend.architectures.facets.default_settings import DefaultSettingsFacet
+from invokeai.backend.architectures.facets.features import FeaturesFacet, NegativePrompt
 from invokeai.backend.architectures.facets.latent_space import FLUX_16, LatentSpaceFacet
 from invokeai.backend.architectures.facets.modality import ModalityFacet
 from invokeai.backend.architectures.registry import register
@@ -29,4 +30,14 @@ register(
         }
     ),
     ModalityFacet(frozenset({"txt2img", "img2img", "inpaint", "outpaint"}), metadata_slug="flux"),
+    FeaturesFacet(
+        negative_prompt=NegativePrompt(visible=False, usage="never"),
+        dimension_grid=16,
+        guidance_label="Guidance",
+        scheduler_set="flow",
+        scheduler_applies_to_graph=True,
+        control_kinds=frozenset({"controlnet", "control_lora"}),
+        max_reference_images=5,
+        supports_regional_guidance=True,
+    ),
 )

@@ -12,6 +12,11 @@ from invokeai.backend.architectures.facets.default_settings import (
     DefaultSettingsFacet,
     resolve_default_settings,
 )
+from invokeai.backend.architectures.facets.features import (
+    ControlKind,
+    FeaturesFacet,
+    NegativePrompt,
+)
 from invokeai.backend.architectures.facets.latent_space import (
     LatentSpace,
     LatentSpaceFacet,
@@ -37,7 +42,10 @@ __all__ = [
     "ArchitectureError",
     "ConditioningFacet",
     "DefaultSettingsFacet",
+    "ControlKind",
     "Facet",
+    "FeaturesFacet",
+    "NegativePrompt",
     "GenerationModeKind",
     "ModalityFacet",
     "LatentSpace",

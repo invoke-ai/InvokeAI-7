@@ -2,6 +2,7 @@
 
 from invokeai.backend.architectures.facets.conditioning import ConditioningFacet
 from invokeai.backend.architectures.facets.default_settings import DefaultSettingsFacet
+from invokeai.backend.architectures.facets.features import FeaturesFacet, NegativePrompt
 from invokeai.backend.architectures.facets.latent_space import FLUX2_32, LatentSpaceFacet
 from invokeai.backend.architectures.facets.modality import ModalityFacet
 from invokeai.backend.architectures.registry import register
@@ -24,4 +25,13 @@ register(
     ),
     # Text-to-image only.
     ModalityFacet(frozenset({"txt2img"}), metadata_slug="ernie_image"),
+    # ernie_image_denoise takes a negative_conditioning that is 'required when
+    # guidance_scale != 1.0' — cfg-gated, exactly like the other distilled models. Its
+    # scheduler set is ERNIE_IMAGE_SCHEDULER_MAP, a flow family.
+    FeaturesFacet(
+        negative_prompt=NegativePrompt(visible=True, usage="cfg-gated"),
+        dimension_grid=16,
+        guidance_label="CFG",
+        scheduler_set="flow",
+    ),
 )

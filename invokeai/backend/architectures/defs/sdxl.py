@@ -2,6 +2,7 @@
 
 from invokeai.backend.architectures.facets.conditioning import ConditioningFacet
 from invokeai.backend.architectures.facets.default_settings import DefaultSettingsFacet
+from invokeai.backend.architectures.facets.features import FeaturesFacet, NegativePrompt
 from invokeai.backend.architectures.facets.latent_space import SDXL_4, LatentSpaceFacet
 from invokeai.backend.architectures.facets.modality import ModalityFacet
 from invokeai.backend.architectures.registry import register
@@ -15,4 +16,19 @@ register(
     ConditioningFacet(SDXLConditioningInfo),
     DefaultSettingsFacet({None: MainModelDefaultSettings(steps=30, cfg_scale=7.0, width=1024, height=1024)}),
     ModalityFacet(frozenset({"txt2img", "img2img", "inpaint", "outpaint"}), metadata_slug="sdxl"),
+    FeaturesFacet(
+        negative_prompt=NegativePrompt(visible=True, usage="always"),
+        dimension_grid=8,
+        guidance_label="CFG",
+        scheduler_set="standard",
+        scheduler_applies_to_graph=True,
+        control_kinds=frozenset({"controlnet", "t2i_adapter"}),
+        max_reference_images=5,
+        supports_regional_guidance=True,
+        regional_negative=True,
+        supports_seamless=True,
+        sd_vae_override=True,
+        color_compensation=True,
+        vae_precision=True,
+    ),
 )
