@@ -13,5 +13,8 @@ register(
     BaseModelType.StableDiffusion2,
     LatentSpaceFacet(SD15_4),
     ConditioningFacet(BasicConditioningInfo),
-    DefaultSettingsFacet({None: MainModelDefaultSettings(width=768, height=768)}),
+    # 768 is right for the v-prediction checkpoints and wrong for the 512 `-base` ones, and
+    # nothing here distinguishes them — SD 2.x has no variant modeled and we ship no starter
+    # model for it. 768 is the deliberate choice of the two.
+    DefaultSettingsFacet({None: MainModelDefaultSettings(steps=30, cfg_scale=7.0, width=768, height=768)}),
 )

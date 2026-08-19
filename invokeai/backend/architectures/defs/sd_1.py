@@ -12,5 +12,5 @@ register(
     BaseModelType.StableDiffusion1,
     LatentSpaceFacet(SD15_4),
     ConditioningFacet(BasicConditioningInfo),
-    DefaultSettingsFacet({None: MainModelDefaultSettings(width=512, height=512)}),
+    DefaultSettingsFacet({None: MainModelDefaultSettings(steps=30, cfg_scale=7.0, width=512, height=512)}),
 )

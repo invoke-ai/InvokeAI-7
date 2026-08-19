@@ -122,8 +122,29 @@ def test_the_researched_values_are_what_the_model_cards_say() -> None:
         BaseModelType.ZImage: (9, 1.0),
         BaseModelType.Ideogram4: (48, 7.0),
         BaseModelType.ErnieImage: (50, 4.0),
+        # The classic Stable Diffusion defaults, which every SD generation is built around.
+        BaseModelType.StableDiffusion1: (30, 7.0),
+        BaseModelType.StableDiffusion2: (30, 7.0),
+        BaseModelType.StableDiffusionXL: (30, 7.0),
     }
     for base, (steps, cfg) in expected.items():
         settings = resolve_default_settings(base)
         assert settings is not None, base.value
         assert (settings.steps, settings.cfg_scale) == (steps, cfg), base.value
+
+
+def test_the_sd_family_keeps_its_native_sizes() -> None:
+    """Same steps and CFG, three different canvases — 2.x is the judgment call.
+
+    768 is right for the v-prediction checkpoints and wrong for the 512 `-base` ones. Nothing in the
+    config distinguishes them, so one of the two had to be picked.
+    """
+    sizes = {
+        BaseModelType.StableDiffusion1: (512, 512),
+        BaseModelType.StableDiffusion2: (768, 768),
+        BaseModelType.StableDiffusionXL: (1024, 1024),
+    }
+    for base, (width, height) in sizes.items():
+        settings = resolve_default_settings(base)
+        assert settings is not None, base.value
+        assert (settings.width, settings.height) == (width, height), base.value

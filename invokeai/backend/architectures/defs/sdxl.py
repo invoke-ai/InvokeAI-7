@@ -12,5 +12,5 @@ register(
     BaseModelType.StableDiffusionXL,
     LatentSpaceFacet(SDXL_4),
     ConditioningFacet(SDXLConditioningInfo),
-    DefaultSettingsFacet({None: MainModelDefaultSettings(width=1024, height=1024)}),
+    DefaultSettingsFacet({None: MainModelDefaultSettings(steps=30, cfg_scale=7.0, width=1024, height=1024)}),
 )
