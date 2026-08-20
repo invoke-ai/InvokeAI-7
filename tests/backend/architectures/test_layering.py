@@ -53,6 +53,14 @@ def _allowed_for(path: str) -> tuple[str, frozenset[str], tuple[str, ...]] | Non
         return "facet-is-a-leaf", frozenset(), ()
     if path == f"{ARCH_DIR}/registry.py":
         return "registry-is-a-leaf", frozenset({f"{ARCH}.facet", TAXONOMY}), ()
+    if path == f"{ARCH_DIR}/capabilities.py":
+        # The one module that reads across facets: it renders the table the API serves. It may
+        # name every facet, but still not the aggregate — it is imported by it.
+        return (
+            "capabilities-allowlist",
+            frozenset({f"{ARCH}.facet", f"{ARCH}.facets", f"{ARCH}.registry", TAXONOMY, DEFAULT_SETTINGS}),
+            (f"{ARCH}.facets.",),
+        )
     if path == f"{ARCH_DIR}/__init__.py":
         return "aggregate-is-a-facade", frozenset({ARCH}), (f"{ARCH}.",)
     if path.startswith(f"{ARCH_DIR}/facets/"):

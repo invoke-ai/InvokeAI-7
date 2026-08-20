@@ -384,6 +384,34 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v2/models/capabilities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Architecture Capabilities
+         * @description What each model architecture can generate, and which generation features it supports.
+         *
+         *     A static table, the same for every install and every user, derived from what the architectures
+         *     declare under `invokeai/backend/architectures/defs/`. Fetch it once and join it against model
+         *     records locally: look up `(base, variant)`, fall back to `(base, null)`.
+         *
+         *     Deliberately not a field on the model records themselves — it is the same for every model of an
+         *     architecture, and putting it there would add these fields to all 115 config schemas. No auth
+         *     dependency for the same reason: there is nothing user- or install-specific in it.
+         */
+        get: operations["list_architecture_capabilities"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v2/models/": {
         parameters: {
             query?: never;
@@ -4609,6 +4637,122 @@ export type components = {
              * @constant
              */
             type: "apply_mask_to_image";
+        };
+        /**
+         * ArchitectureCapabilities
+         * @description One row of the table.
+         */
+        ArchitectureCapabilities: {
+            base: components["schemas"]["BaseModelType"];
+            /**
+             * Variant
+             * @description Null for the architecture's own row. A variant row overrides it.
+             */
+            variant?: string | null;
+            modality: components["schemas"]["ArchitectureModality"];
+            features: components["schemas"]["ArchitectureFeatures"];
+            /** @description Recommended generation parameters, if the architecture has any. */
+            defaults?: components["schemas"]["MainModelDefaultSettings"] | null;
+        };
+        /**
+         * ArchitectureFeatures
+         * @description What a UI may offer for this architecture.
+         */
+        ArchitectureFeatures: {
+            negative_prompt: components["schemas"]["NegativePromptPolicy"];
+            /**
+             * Dimension Grid
+             * @description Width and height must be a multiple of this.
+             */
+            dimension_grid: number;
+            /**
+             * Spatial Compression
+             * @description How much smaller a latent is than the image, per side.
+             */
+            spatial_compression: number;
+            /**
+             * Guidance Label
+             * @description What to call the guidance slider: 'CFG' or 'Guidance'.
+             */
+            guidance_label: string;
+            /**
+             * Scheduler Set
+             * @description Which scheduler family to offer; null means no choice.
+             */
+            scheduler_set?: ("standard" | "flow" | "anima") | null;
+            /**
+             * Scheduler Applies To Graph
+             * @default false
+             */
+            scheduler_applies_to_graph?: boolean;
+            /**
+             * Control Kinds
+             * @description Sorted.
+             */
+            control_kinds?: ("controlnet" | "t2i_adapter" | "control_lora" | "z_image_control")[];
+            /**
+             * Max Reference Images
+             * @default 0
+             */
+            max_reference_images?: number;
+            /**
+             * Reference Images Require Variant
+             * @description If set, reference images are only accepted for models of this variant.
+             */
+            reference_images_require_variant?: string | null;
+            /**
+             * Supports Regional Guidance
+             * @default false
+             */
+            supports_regional_guidance?: boolean;
+            /**
+             * Regional Negative
+             * @default false
+             */
+            regional_negative?: boolean;
+            /** Clip Skip Max */
+            clip_skip_max?: number | null;
+            /**
+             * Supports Seamless
+             * @default false
+             */
+            supports_seamless?: boolean;
+            /**
+             * Supports Cfg Rescale
+             * @default false
+             */
+            supports_cfg_rescale?: boolean;
+            /**
+             * Sd Vae Override
+             * @default false
+             */
+            sd_vae_override?: boolean;
+            /**
+             * Color Compensation
+             * @default false
+             */
+            color_compensation?: boolean;
+            /**
+             * Vae Precision
+             * @default false
+             */
+            vae_precision?: boolean;
+        };
+        /**
+         * ArchitectureModality
+         * @description What this architecture can produce, and what it calls it in image metadata.
+         */
+        ArchitectureModality: {
+            /**
+             * Modes
+             * @description Sorted. Empty means it generates nothing on its own.
+             */
+            modes: ("txt2img" | "img2img" | "inpaint" | "outpaint" | "t2v" | "i2v")[];
+            /**
+             * Metadata Slug
+             * @description Prefix its mode strings carry in image metadata; null means unprefixed.
+             */
+            metadata_slug?: string | null;
         };
         /**
          * BaseMetadata
@@ -30682,6 +30826,20 @@ export type components = {
              */
             type: "mul";
         };
+        /** NegativePromptPolicy */
+        NegativePromptPolicy: {
+            /**
+             * Visible
+             * @description Whether to show a negative prompt field at all.
+             */
+            visible: boolean;
+            /**
+             * Usage
+             * @description 'always', 'cfg-gated' (only above CFG 1), or 'never'.
+             * @enum {string}
+             */
+            usage: "always" | "cfg-gated" | "never";
+        };
         /** NodeFieldValue */
         NodeFieldValue: {
             /**
@@ -44505,6 +44663,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_architecture_capabilities: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description What each model architecture supports */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArchitectureCapabilities"][];
                 };
             };
         };
