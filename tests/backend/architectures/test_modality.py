@@ -80,4 +80,6 @@ def test_the_video_architectures() -> None:
     assert wan is not None and h3 is not None
 
     assert "i2v" in wan.modes and "inpaint" in wan.modes
-    assert h3.modes == frozenset({"txt2img", "t2v", "i2v"}), "H3 has no img2img, inpaint or outpaint"
+    assert h3.modes == frozenset({"txt2img", "t2v", "i2v", "lf2v", "flf2v", "extend_video"}), (
+        "H3 has no img2img, inpaint or outpaint, but does have three keyframe-conditioned video modes"
+    )

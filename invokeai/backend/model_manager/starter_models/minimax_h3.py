@@ -54,3 +54,18 @@ minimax_h3_turbo_lora = StarterModel(
     type=ModelType.LoRA,
     format=ModelFormat.LyCORIS,
 )
+
+# Only the *_comfyui_* files in the LightX2V repo are installable: they carry the native
+# fused-key layout (diffusion_model.blocks.N.attn.qkv_proj) that the H3 LoRA probe accepts.
+# The non-comfyui files use already-diffusers keys (transformer_blocks.N.attn.to_q with
+# PEFT ".default" adapter names), which the probe rejects as a different architecture.
+minimax_h3_lightx2v_turbo_lora = StarterModel(
+    name="MiniMax H3 LightX2V Turbo LoRA",
+    base=BaseModelType.MiniMaxH3,
+    source="lightx2v/Minimax-h3-Turbo::minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors",
+    description="LightX2V step-distillation LoRA for MiniMax H3 (Apache 2.0), 8-step v1.0 (~2 GB): "
+    "renders video+audio in ~8 denoising steps instead of ~50. Apply at strength 1.0 and lower "
+    "Steps to 8. Works with the full and the pruned int8 transformers.",
+    type=ModelType.LoRA,
+    format=ModelFormat.LyCORIS,
+)

@@ -387,6 +387,9 @@ from invokeai.backend.model_manager.starter_models.minimax_h3 import (
     minimax_h3_int8_transformer as minimax_h3_int8_transformer,
 )
 from invokeai.backend.model_manager.starter_models.minimax_h3 import (
+    minimax_h3_lightx2v_turbo_lora as minimax_h3_lightx2v_turbo_lora,
+)
+from invokeai.backend.model_manager.starter_models.minimax_h3 import (
     minimax_h3_turbo_lora as minimax_h3_turbo_lora,
 )
 from invokeai.backend.model_manager.starter_models.qwen_image import (
@@ -851,6 +854,7 @@ STARTER_MODELS: list[StarterModel] = [
     minimax_h3_int8_text_encoder,
     minimax_h3_components,
     minimax_h3_turbo_lora,
+    minimax_h3_lightx2v_turbo_lora,
     gemini_flash_image,
     gemini_pro_image_preview,
     gemini_3_1_flash_image_preview,
@@ -1023,13 +1027,16 @@ ideogram_bundle: list[StarterModel] = [
     ideogram_4_nf4,
 ]
 
-# The minimal working set for MiniMax H3 video+audio generation (~59 GB): shared components from
-# the official repo plus Comfy-Org's int8 single-file transformer and text encoder. See the
-# license note in the MiniMax H3 region above.
+# The working set for MiniMax H3 video+audio generation (~62 GB): shared components from
+# the official repo plus Comfy-Org's int8 single-file transformer and text encoder, and the
+# two turbo (step-distillation) LoRAs for fast low-step rendering. See the license note in
+# the MiniMax H3 region above.
 minimax_h3_bundle: list[StarterModel] = [
     minimax_h3_components,
     minimax_h3_int8_text_encoder,
     minimax_h3_int8_transformer,
+    minimax_h3_turbo_lora,
+    minimax_h3_lightx2v_turbo_lora,
 ]
 
 STARTER_BUNDLES: dict[str, StarterModelBundle] = {
