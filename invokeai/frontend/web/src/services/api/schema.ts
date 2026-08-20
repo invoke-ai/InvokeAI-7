@@ -400,8 +400,10 @@ export type paths = {
          *     records locally: look up `(base, variant)`, fall back to `(base, null)`.
          *
          *     Deliberately not a field on the model records themselves — it is the same for every model of an
-         *     architecture, and putting it there would add these fields to all 115 config schemas. No auth
-         *     dependency for the same reason: there is nothing user- or install-specific in it.
+         *     architecture, and putting it there would add these fields to all 115 config schemas.
+         *
+         *     Authenticated like every other route here even though the response holds nothing user-specific:
+         *     the allowlist for public routes is short and deliberate, and this is not a reason to lengthen it.
          */
         get: operations["list_architecture_capabilities"];
         put?: never;

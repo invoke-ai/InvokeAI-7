@@ -608,7 +608,7 @@
       "get": {
         "tags": ["model_manager"],
         "summary": "List Architecture Capabilities",
-        "description": "What each model architecture can generate, and which generation features it supports.\n\nA static table, the same for every install and every user, derived from what the architectures\ndeclare under `invokeai/backend/architectures/defs/`. Fetch it once and join it against model\nrecords locally: look up `(base, variant)`, fall back to `(base, null)`.\n\nDeliberately not a field on the model records themselves \u2014 it is the same for every model of an\narchitecture, and putting it there would add these fields to all 115 config schemas. No auth\ndependency for the same reason: there is nothing user- or install-specific in it.",
+        "description": "What each model architecture can generate, and which generation features it supports.\n\nA static table, the same for every install and every user, derived from what the architectures\ndeclare under `invokeai/backend/architectures/defs/`. Fetch it once and join it against model\nrecords locally: look up `(base, variant)`, fall back to `(base, null)`.\n\nDeliberately not a field on the model records themselves \u2014 it is the same for every model of an\narchitecture, and putting it there would add these fields to all 115 config schemas.\n\nAuthenticated like every other route here even though the response holds nothing user-specific:\nthe allowlist for public routes is short and deliberate, and this is not a reason to lengthen it.",
         "operationId": "list_architecture_capabilities",
         "responses": {
           "200": {
@@ -625,7 +625,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
       }
     },
     "/api/v2/models/": {
