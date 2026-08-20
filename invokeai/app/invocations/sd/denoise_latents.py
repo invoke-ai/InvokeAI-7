@@ -38,6 +38,7 @@ from invokeai.app.invocations.sd.ip_adapter import IPAdapterField
 from invokeai.app.invocations.sd.t2i_adapter import T2IAdapterField
 from invokeai.app.services.shared.invocation_context import InvocationContext
 from invokeai.app.util.controlnet_utils import prepare_control_image
+from invokeai.backend.architectures import get_max_unet_downscale
 from invokeai.backend.ip_adapter.ip_adapter import IPAdapter
 from invokeai.backend.model_manager.configs.factory import AnyModelConfig
 from invokeai.backend.model_manager.taxonomy import BaseModelType, ModelVariantType
@@ -677,17 +678,13 @@ class DenoiseLatentsInvocation(BaseInvocation):
             t2i_adapter_model_config = context.models.get_config(t2i_adapter_field.t2i_adapter_model.key)
             image = context.images.get_pil(t2i_adapter_field.image.image_name, mode="RGB")
 
-            # The max_unet_downscale is the maximum amount that the UNet model downscales the latent image internally.
-            if t2i_adapter_model_config.base == BaseModelType.StableDiffusion1:
-                max_unet_downscale = 8
-            elif t2i_adapter_model_config.base == BaseModelType.StableDiffusionXL:
-                max_unet_downscale = 4
+            # Raises for a base without a UNet, before the BGR swap below -- same order as before.
+            max_unet_downscale = get_max_unet_downscale(t2i_adapter_model_config.base)
 
+            if t2i_adapter_model_config.base == BaseModelType.StableDiffusionXL:
                 # SDXL adapters are trained on cv2's BGR outputs
                 r, g, b = image.split()
                 image = Image.merge("RGB", (b, g, r))
-            else:
-                raise ValueError(f"Unexpected T2I-Adapter base model type: '{t2i_adapter_model_config.base}'.")
 
             t2i_adapter_model: T2IAdapter
             with context.models.load(t2i_adapter_field.t2i_adapter_model) as t2i_adapter_model:
@@ -988,6 +985,11 @@ class DenoiseLatentsInvocation(BaseInvocation):
             #    ext = extension_field.to_extension(exit_stack, context, ext_manager)
             #    ext_manager.add_extension(ext)
             self.parse_controlnet_field(exit_stack, context, self.control, ext_manager)
+            # NOTE: this decides the BGR swap from the *UNet's* base, while run_t2i_adapters above
+            # decides it from each *adapter's* base. The two disagree for an SD1 adapter on an SDXL
+            # UNet. Left as-is deliberately: fixing it changes behaviour, and this refactor does
+            # not. The natural fix is to fold `bgr_input` into UNetDownscaleFacet so both paths read
+            # one declaration.
             bgr_mode = self.unet.unet.base == BaseModelType.StableDiffusionXL
             self.parse_t2i_adapter_field(exit_stack, context, self.t2i_adapter, ext_manager, bgr_mode)
 

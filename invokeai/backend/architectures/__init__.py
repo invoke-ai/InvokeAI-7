@@ -34,6 +34,10 @@ from invokeai.backend.architectures.facets.modality import (
     ModalityFacet,
     generation_modes,
 )
+from invokeai.backend.architectures.facets.unet import (
+    UNetDownscaleFacet,
+    get_max_unet_downscale,
+)
 from invokeai.backend.architectures.registry import (
     ArchitectureError,
     defs_module_path,
@@ -60,10 +64,12 @@ __all__ = [
     "NegativePrompt",
     "GenerationModeKind",
     "ModalityFacet",
+    "UNetDownscaleFacet",
     "LatentSpace",
     "LatentSpaceFacet",
     "conditioning_infos",
     "generation_modes",
+    "get_max_unet_downscale",
     "resolve_default_settings",
     "resolve_latent_space",
     "defs_module_path",
