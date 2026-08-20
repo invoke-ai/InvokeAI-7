@@ -12,6 +12,24 @@ This guide describes all the steps required to integrate a new model type into I
 The code examples use a hypothetical `NewModel` architecture. The implementations of FLUX.1, FLUX.2 Klein, SD3, SDXL, and Z-Image in the InvokeAI codebase serve as excellent real-world references.
 :::
 
+:::tip[Start with the scaffolder]
+Add the `BaseModelType` member first (step 1 below), then run:
+
+```sh
+python scripts/new_architecture.py --base newmodel --name NewModel --write
+```
+
+It writes the three files that are mechanical — the architecture's declaration under
+`invokeai/backend/architectures/defs/`, its invocation package, and its starter-model module — and
+then prints everything it *cannot* write, which is most of this guide. That list is derived from the
+codebase on each run rather than kept in the script, so it does not go stale.
+
+The generated declaration deliberately does not work. It carries every required facet with an
+obviously wrong value, so the app refuses to boot until each one is filled in. A stub that booted
+would let a half-integrated architecture reach a user, which is the failure this whole structure
+exists to prevent.
+:::
+
 ---
 
 ## 1. Backend: Model Manager
