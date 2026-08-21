@@ -153,7 +153,7 @@ def test_denoise_working_memory_estimate():
     (124 frames at 768x1344 = ~38k rows): far above the small cache default, below the size of
     the weights themselves. Change the constants deliberately - this test is meant to fail on
     accidental drift."""
-    from invokeai.app.invocations.minimax_h3_denoise import MiniMaxH3DenoiseInvocation
+    from invokeai.app.invocations.minimax_h3.minimax_h3_denoise import MiniMaxH3DenoiseInvocation
 
     estimate = MiniMaxH3DenoiseInvocation._estimate_working_memory
 

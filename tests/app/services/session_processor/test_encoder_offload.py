@@ -253,9 +253,9 @@ def test_offloaded_encoder_stats_attributed_to_running_session():
 def test_real_nodes_declare_the_marker_correctly():
     """The @invocation(idle_gpu_offloadable=...) marker is wired through to the class, and is set on
     encoder nodes but not on ordinary nodes."""
-    from invokeai.app.invocations.compel import CompelInvocation
-    from invokeai.app.invocations.flux_text_encoder import FluxTextEncoderInvocation
     from invokeai.app.invocations.primitives import IntegerInvocation
+    from invokeai.app.invocations.text_encoder.compel import CompelInvocation
+    from invokeai.app.invocations.text_encoder.flux_text_encoder import FluxTextEncoderInvocation
 
     assert FluxTextEncoderInvocation.idle_gpu_offloadable is True
     assert CompelInvocation.idle_gpu_offloadable is True
@@ -275,16 +275,12 @@ def test_every_text_encoder_node_declares_the_marker():
     enough that holding the lent GPU's lock would stall a session dequeued onto it) belongs in
     `_NOT_OFFLOADABLE` with a comment saying why.
     """
-    import importlib
-
-    import invokeai.app.invocations as invocations_package
+    # Importing the package imports every node module in its tree, which is what registers them.
+    import invokeai.app.invocations  # noqa: F401
     from invokeai.app.invocations.baseinvocation import InvocationRegistry
 
     # Encoders that must NOT be offloadable. Empty today; add with a justification.
     _NOT_OFFLOADABLE: set[str] = set()
-
-    for module_name in invocations_package.__all__:
-        importlib.import_module(f"invokeai.app.invocations.{module_name}")
 
     encoders = {
         cls.get_type(): cls.idle_gpu_offloadable

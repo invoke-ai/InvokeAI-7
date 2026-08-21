@@ -604,6 +604,35 @@
         ]
       }
     },
+    "/api/v2/models/capabilities": {
+      "get": {
+        "tags": ["model_manager"],
+        "summary": "List Architecture Capabilities",
+        "description": "What each model architecture can generate, and which generation features it supports.\n\nA static table, the same for every install and every user, derived from what the architectures\ndeclare under `invokeai/backend/architectures/defs/`. Fetch it once and join it against model\nrecords locally: look up `(base, variant)`, fall back to `(base, null)`.\n\nDeliberately not a field on the model records themselves \u2014 it is the same for every model of an\narchitecture, and putting it there would add these fields to all 115 config schemas.\n\nAuthenticated like every other route here even though the response holds nothing user-specific:\nthe allowlist for public routes is short and deliberate, and this is not a reason to lengthen it.\n\nDeclared `def`, not `async def`: it awaits nothing, so FastAPI runs it in a threadpool instead of\non the event loop. See docs/contributing/blocking-work-in-api-routes.",
+        "operationId": "list_architecture_capabilities",
+        "responses": {
+          "200": {
+            "description": "What each model architecture supports",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ArchitectureCapabilities"
+                  },
+                  "type": "array",
+                  "title": "Response List Architecture Capabilities"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
     "/api/v2/models/": {
       "get": {
         "tags": ["model_manager"],
@@ -16337,6 +16366,194 @@
         "output": {
           "$ref": "#/components/schemas/ImageOutput"
         }
+      },
+      "ArchitectureCapabilities": {
+        "properties": {
+          "base": {
+            "$ref": "#/components/schemas/BaseModelType"
+          },
+          "variant": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Variant",
+            "description": "Null for the architecture's own row. A variant row overrides it."
+          },
+          "modality": {
+            "$ref": "#/components/schemas/ArchitectureModality"
+          },
+          "features": {
+            "$ref": "#/components/schemas/ArchitectureFeatures"
+          },
+          "defaults": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MainModelDefaultSettings"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Recommended generation parameters, if the architecture has any."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["base", "modality", "features"],
+        "title": "ArchitectureCapabilities",
+        "description": "One row of the table."
+      },
+      "ArchitectureFeatures": {
+        "properties": {
+          "negative_prompt": {
+            "$ref": "#/components/schemas/NegativePromptPolicy"
+          },
+          "dimension_grid": {
+            "type": "integer",
+            "title": "Dimension Grid",
+            "description": "Width and height must be a multiple of this."
+          },
+          "spatial_compression": {
+            "type": "integer",
+            "title": "Spatial Compression",
+            "description": "How much smaller a latent is than the image, per side."
+          },
+          "guidance_label": {
+            "type": "string",
+            "title": "Guidance Label",
+            "description": "What to call the guidance slider: 'CFG' or 'Guidance'."
+          },
+          "scheduler_set": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": ["standard", "flow", "anima"]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scheduler Set",
+            "description": "Which scheduler family to offer; null means no choice."
+          },
+          "scheduler_applies_to_graph": {
+            "type": "boolean",
+            "title": "Scheduler Applies To Graph",
+            "default": false
+          },
+          "control_kinds": {
+            "items": {
+              "type": "string",
+              "enum": ["controlnet", "t2i_adapter", "control_lora", "z_image_control"]
+            },
+            "type": "array",
+            "title": "Control Kinds",
+            "description": "Sorted."
+          },
+          "max_reference_images": {
+            "type": "integer",
+            "title": "Max Reference Images",
+            "default": 0
+          },
+          "reference_images_require_variant": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reference Images Require Variant",
+            "description": "If set, reference images are only accepted for models of this variant."
+          },
+          "supports_regional_guidance": {
+            "type": "boolean",
+            "title": "Supports Regional Guidance",
+            "default": false
+          },
+          "regional_negative": {
+            "type": "boolean",
+            "title": "Regional Negative",
+            "default": false
+          },
+          "clip_skip_max": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Clip Skip Max"
+          },
+          "supports_seamless": {
+            "type": "boolean",
+            "title": "Supports Seamless",
+            "default": false
+          },
+          "supports_cfg_rescale": {
+            "type": "boolean",
+            "title": "Supports Cfg Rescale",
+            "default": false
+          },
+          "sd_vae_override": {
+            "type": "boolean",
+            "title": "Sd Vae Override",
+            "default": false
+          },
+          "color_compensation": {
+            "type": "boolean",
+            "title": "Color Compensation",
+            "default": false
+          },
+          "vae_precision": {
+            "type": "boolean",
+            "title": "Vae Precision",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["negative_prompt", "dimension_grid", "spatial_compression", "guidance_label"],
+        "title": "ArchitectureFeatures",
+        "description": "What a UI may offer for this architecture."
+      },
+      "ArchitectureModality": {
+        "properties": {
+          "modes": {
+            "items": {
+              "type": "string",
+              "enum": ["txt2img", "img2img", "inpaint", "outpaint", "t2v", "i2v", "lf2v", "flf2v", "extend_video"]
+            },
+            "type": "array",
+            "title": "Modes",
+            "description": "Sorted. Empty means it generates nothing on its own."
+          },
+          "metadata_slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Metadata Slug",
+            "description": "Prefix its mode strings carry in image metadata; null means unprefixed."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["modes"],
+        "title": "ArchitectureModality",
+        "description": "What this architecture can produce, and what it calls it in image metadata."
       },
       "BaseMetadata": {
         "properties": {
@@ -74547,6 +74764,25 @@
         "output": {
           "$ref": "#/components/schemas/IntegerOutput"
         }
+      },
+      "NegativePromptPolicy": {
+        "properties": {
+          "visible": {
+            "type": "boolean",
+            "title": "Visible",
+            "description": "Whether to show a negative prompt field at all."
+          },
+          "usage": {
+            "type": "string",
+            "enum": ["always", "cfg-gated", "never"],
+            "title": "Usage",
+            "description": "'always', 'cfg-gated' (only above CFG 1), or 'never'."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["visible", "usage"],
+        "title": "NegativePromptPolicy"
       },
       "NodeFieldValue": {
         "properties": {

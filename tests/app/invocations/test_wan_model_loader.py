@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from invokeai.app.invocations.model import ModelIdentifierField
-from invokeai.app.invocations.wan_model_loader import WanModelLoaderInvocation
+from invokeai.app.invocations.wan.wan_model_loader import WanModelLoaderInvocation
 from invokeai.backend.model_manager.taxonomy import BaseModelType, ModelFormat, ModelType, WanVariantType
 
 

@@ -8,13 +8,13 @@ import pytest
 import torch
 from diffusers.models.autoencoders import AutoencoderKLWan
 
-from invokeai.app.invocations.anima_image_to_latents import AnimaImageToLatentsInvocation
-from invokeai.app.invocations.anima_latents_to_image import (
+from invokeai.app.invocations.constants import LATENT_SCALE_FACTOR
+from invokeai.app.invocations.vae.anima_image_to_latents import AnimaImageToLatentsInvocation
+from invokeai.app.invocations.vae.anima_latents_to_image import (
     ANIMA_VAE_TILE_SIZE,
     ANIMA_VAE_TILE_STRIDE,
     AnimaLatentsToImageInvocation,
 )
-from invokeai.app.invocations.constants import LATENT_SCALE_FACTOR
 from invokeai.backend.util.devices import TorchDevice
 from invokeai.backend.util.vae_working_memory import estimate_vae_working_memory_anima
 
@@ -175,7 +175,7 @@ class TestAnimaLatentsToImageOomFallback:
         decoded = torch.zeros(1, 3, 1, 64, 64)
         vae, vae_info, context = _build_decode_mocks(latents=torch.zeros(1, 16, 32, 32), decoded=decoded)
 
-        estimation_path = "invokeai.app.invocations.anima_latents_to_image.estimate_vae_working_memory_anima"
+        estimation_path = "invokeai.app.invocations.vae.anima_latents_to_image.estimate_vae_working_memory_anima"
         expected_memory = 1024 * 1024 * 500
         with (
             patch.object(TorchDevice, "choose_torch_device", return_value=torch.device("cpu")),
@@ -204,7 +204,7 @@ class TestAnimaImageToLatentsEncode:
         cm.__exit__ = MagicMock(return_value=None)
         vae_info.model_on_device.return_value = cm
 
-        estimation_path = "invokeai.app.invocations.anima_image_to_latents.estimate_vae_working_memory_anima"
+        estimation_path = "invokeai.app.invocations.vae.anima_image_to_latents.estimate_vae_working_memory_anima"
         expected_memory = 1024 * 1024 * 250
         with (
             patch.object(TorchDevice, "choose_torch_device", return_value=torch.device("cpu")),
