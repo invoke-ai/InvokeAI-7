@@ -123,6 +123,7 @@ import { createCheckerboardTile } from '@workbench/canvas-engine/render/composit
 import { createFontLoader, domFontLoadApi } from '@workbench/canvas-engine/render/fontLoader';
 import { createMaskPatternTile } from '@workbench/canvas-engine/render/maskFill';
 import { renderOverlay } from '@workbench/canvas-engine/render/overlayRenderer';
+import { trimPaintCacheToAlpha } from '@workbench/canvas-engine/render/paintCacheTrim';
 import { createDomRasterBackend, type RasterBackend, type RasterSurface } from '@workbench/canvas-engine/render/raster';
 import { rasterizeSource, type ImageResolver, type RasterizeDeps } from '@workbench/canvas-engine/render/rasterizers';
 import { getLayerThumbnailDisplayKey } from '@workbench/canvas-engine/render/thumbnail';
@@ -526,6 +527,63 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
     return false;
   };
 
+  /**
+   * Clears a layer's persisted bitmap, for a layer the paint-cache trim found empty.
+   * The counterpart to {@link dispatchLayerBitmap}, routed the same way per layer
+   * type. The resulting source is byte-identical to a brand-new layer's, so an
+   * emptied layer is indistinguishable from a fresh one downstream.
+   */
+  const clearLayerBitmap = (layerId: string): boolean => {
+    const doc = mirror.getDocument();
+    const layer = doc?.layers.find((candidate) => candidate.id === layerId);
+    if (!layer) {
+      return false;
+    }
+    if (layer.type === 'raster' || layer.type === 'control') {
+      return mutationPort.dispatch(
+        { id: layerId, source: { bitmap: null, type: 'paint' }, type: 'updateCanvasLayerSource' },
+        'system'
+      );
+    } else if (layer.type === 'inpaint_mask' || layer.type === 'regional_guidance') {
+      // `patchLayerConfig` shallow-merges, so the mask's `fill` survives.
+      return mutationPort.dispatch(
+        {
+          config: { layerType: layer.type, mask: { bitmap: null, offset: { x: 0, y: 0 } } },
+          id: layerId,
+          type: 'updateCanvasLayerConfig',
+        },
+        'system'
+      );
+    }
+    return false;
+  };
+
+  /**
+   * True while something other than persistence owns or frames a layer's pixels, so
+   * the paint-cache trim defers rather than moving the extent underneath it. ANY new
+   * session kind that reads a layer's cache rect belongs here — notably the transform
+   * session, whose frame and bake are both expressed relative to that rect.
+   */
+  const isLayerBusyForTrim = (layerId: string): boolean => {
+    if (pipeline.isGestureActive()) {
+      return true;
+    }
+    if (stores.documentEditingLocked.get() || rasterController.memory.isPinned(layerId)) {
+      return true;
+    }
+    if (stores.transformSession.get()?.layerId === layerId || stores.textEditSession.get()?.layerId === layerId) {
+      return true;
+    }
+    if (floatingSelection.get()?.layerId === layerId) {
+      return true;
+    }
+    if (controlPixelController?.isOpenFor([layerId])) {
+      return true;
+    }
+    const layer = mirror.getDocument()?.layers.find((candidate) => candidate.id === layerId);
+    return !!layer && isCurrentRasterizationJob(layer);
+  };
+
   // Paint persistence: debounced PNG encode → SHA-256 dedupe → upload → a single
   // swap-on-success `updateCanvasLayerSource` (paint) / `updateCanvasLayerConfig`
   // (mask). Wired to committed strokes below.
@@ -533,8 +591,19 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
     opts.bitmapStore ??
     createBitmapStore({
       dispatch: (action) => mutationPort.dispatch(action, 'system'),
+      clearBitmap: (layerId) => clearLayerBitmap(layerId),
       dispatchBitmap: (layerId, bitmap, offset) => dispatchLayerBitmap(layerId, bitmap, offset),
       encodeSurface: (surface) => backend.encodeSurface(surface),
+      trimLayerPixels: (layerId) => {
+        const result = trimPaintCacheToAlpha({ isLayerBusy: isLayerBusyForTrim, layers: layerCache }, layerId);
+        if (result === 'emptied' || result === 'trimmed') {
+          // Derived surfaces are keyed on the old extent; both calls are synchronous,
+          // so they land before the clear dispatch and no frame sees a mismatch.
+          deleteDerivedSurfaces(layerId);
+          notifyLayerPainted(layerId);
+        }
+        return result;
+      },
       getAuthoritativeLayerSource: getAuthoritativeLayerSourceById,
       getLayerSource: getLayerSourceById,
       getLayerSurface: (layerId) => {
