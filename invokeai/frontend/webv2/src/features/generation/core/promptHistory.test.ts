@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { MainModelConfig } from './types';
 
 import { getDefaultGenerateSettings, getPromptHistoryRecallPatch } from './baseGenerationPolicies';
+import { useArchitectureCapabilitiesFixture } from '@features/generation/core/architectureCapabilities.testing';
 
 const createModel = (base: string): MainModelConfig => ({
   base,
@@ -10,6 +11,8 @@ const createModel = (base: string): MainModelConfig => ({
   name: `${base} model`,
   type: 'main',
 });
+
+useArchitectureCapabilitiesFixture();
 
 describe('getPromptHistoryRecallPatch', () => {
   it('clears an absent negative prompt when the selected model exposes it', () => {

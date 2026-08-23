@@ -5,6 +5,24 @@ import type {
   PromptHistoryItem,
 } from '@features/generation/core/contracts';
 
+import {
+  isSupportedGenerateBase,
+  SUPPORTED_GENERATE_BASES,
+  type SupportedGenerateBase,
+} from '@features/generation/core/supportedBases';
+
+import type {
+  BaseGenerationConfig,
+  GuidanceLabel,
+  NegativePromptUsage,
+  SchedulerSetId,
+} from '@features/generation/core/generationConfig';
+
+import {
+  getArchitectureFeatures,
+  getArchitectureGenerationConfig,
+} from '@features/generation/core/architectureCapabilities';
+
 import type {
   GenerateModelConfig,
   GenerateReferenceImage,
@@ -71,38 +89,12 @@ export interface SchedulerOption {
   label: string;
 }
 
-export type SchedulerSetId = 'standard' | 'flow' | 'flow-no-lcm' | 'anima';
-
-export type NegativePromptUsage = 'always' | 'cfg-gated' | 'never';
-
-export type GuidanceLabel = 'CFG' | 'Guidance';
-
-export interface BaseGenerationConfig {
-  dimensions: {
-    grid: number;
-    optimalSide: number;
-  };
-  defaults: {
-    steps: number;
-    cfgScale: number;
-    scheduler: string;
-  };
-  schedulerSet: SchedulerSetId;
-  schedulerAppliesToGraph: boolean;
-  guidanceLabel: GuidanceLabel;
-  negativePrompt: {
-    visible: boolean;
-    usage: NegativePromptUsage;
-  };
-  ui: {
-    sdVaeOverride: boolean;
-    colorCompensation: boolean;
-    vaePrecision: boolean;
-    seamless: boolean;
-    cfgRescale: boolean;
-    clipSkipMax?: number;
-  };
-}
+export type {
+  BaseGenerationConfig,
+  GuidanceLabel,
+  NegativePromptUsage,
+  SchedulerSetId,
+} from '@features/generation/core/generationConfig';
 
 type GenerateDefaultSettings =
   | {
@@ -180,166 +172,8 @@ const ANIMA_SCHEDULERS = new Set(ANIMA_SCHEDULER_OPTIONS.map((option) => option.
 
 export const isKnownScheduler = (value: string): boolean => KNOWN_SCHEDULERS.has(value);
 
-export const BASE_GENERATION = {
-  'sd-1': {
-    dimensions: { grid: 8, optimalSide: 512 },
-    defaults: { steps: 30, cfgScale: 7, scheduler: 'euler_a' },
-    schedulerSet: 'standard',
-    schedulerAppliesToGraph: true,
-    guidanceLabel: 'CFG',
-    negativePrompt: { visible: true, usage: 'always' },
-    ui: {
-      sdVaeOverride: true,
-      colorCompensation: false,
-      vaePrecision: true,
-      seamless: true,
-      cfgRescale: true,
-      clipSkipMax: 12,
-    },
-  },
-  'sd-2': {
-    dimensions: { grid: 8, optimalSide: 512 },
-    defaults: { steps: 30, cfgScale: 7, scheduler: 'euler_a' },
-    schedulerSet: 'standard',
-    schedulerAppliesToGraph: true,
-    guidanceLabel: 'CFG',
-    negativePrompt: { visible: true, usage: 'always' },
-    ui: {
-      sdVaeOverride: true,
-      colorCompensation: false,
-      vaePrecision: true,
-      seamless: true,
-      cfgRescale: true,
-      clipSkipMax: 24,
-    },
-  },
-  sdxl: {
-    dimensions: { grid: 8, optimalSide: 1024 },
-    defaults: { steps: 30, cfgScale: 7, scheduler: 'euler_a' },
-    schedulerSet: 'standard',
-    schedulerAppliesToGraph: true,
-    guidanceLabel: 'CFG',
-    negativePrompt: { visible: true, usage: 'always' },
-    ui: { sdVaeOverride: true, colorCompensation: true, vaePrecision: true, seamless: true, cfgRescale: false },
-  },
-  'sd-3': {
-    dimensions: { grid: 16, optimalSide: 1024 },
-    defaults: { steps: 30, cfgScale: 7, scheduler: 'euler_a' },
-    schedulerSet: 'standard',
-    schedulerAppliesToGraph: false,
-    guidanceLabel: 'CFG',
-    negativePrompt: { visible: true, usage: 'always' },
-    ui: { sdVaeOverride: false, colorCompensation: false, vaePrecision: false, seamless: false, cfgRescale: false },
-  },
-  flux: {
-    dimensions: { grid: 16, optimalSide: 1024 },
-    defaults: { steps: 4, cfgScale: 4, scheduler: 'euler' },
-    schedulerSet: 'flow',
-    schedulerAppliesToGraph: true,
-    guidanceLabel: 'Guidance',
-    negativePrompt: { visible: false, usage: 'never' },
-    ui: { sdVaeOverride: false, colorCompensation: false, vaePrecision: false, seamless: false, cfgRescale: false },
-  },
-  flux2: {
-    dimensions: { grid: 16, optimalSide: 1024 },
-    defaults: { steps: 4, cfgScale: 1, scheduler: 'euler' },
-    schedulerSet: 'flow',
-    schedulerAppliesToGraph: true,
-    guidanceLabel: 'Guidance',
-    negativePrompt: { visible: false, usage: 'never' },
-    ui: { sdVaeOverride: false, colorCompensation: false, vaePrecision: false, seamless: false, cfgRescale: false },
-  },
-  cogview4: {
-    dimensions: { grid: 32, optimalSide: 1024 },
-    defaults: { steps: 30, cfgScale: 7, scheduler: 'euler_a' },
-    schedulerSet: 'standard',
-    schedulerAppliesToGraph: false,
-    guidanceLabel: 'CFG',
-    negativePrompt: { visible: true, usage: 'always' },
-    ui: { sdVaeOverride: false, colorCompensation: false, vaePrecision: false, seamless: false, cfgRescale: false },
-  },
-  'ernie-image': {
-    // ernie_image_denoise carries multiple_of=16 on width/height.
-    dimensions: { grid: 16, optimalSide: 1024 },
-    // The base model's numbers. ERNIE-Image-Turbo wants 8 steps at guidance 1.0, which arrives
-    // through the model's own default_settings rather than a second entry here: Turbo and the
-    // base model share an architecture and a config, so no variant discriminates them.
-    defaults: { steps: 50, cfgScale: 4, scheduler: 'euler' },
-    // ERNIE_IMAGE_SCHEDULER_MAP is euler/heun/lcm, and the denoise node takes the choice.
-    schedulerSet: 'flow',
-    schedulerAppliesToGraph: true,
-    guidanceLabel: 'CFG',
-    // negative_conditioning is 'required when guidance_scale != 1.0'.
-    negativePrompt: { visible: true, usage: 'cfg-gated' },
-    ui: { sdVaeOverride: false, colorCompensation: false, vaePrecision: false, seamless: false, cfgRescale: false },
-  },
-  'qwen-image': {
-    dimensions: { grid: 16, optimalSide: 1024 },
-    defaults: { steps: 40, cfgScale: 4, scheduler: 'euler_a' },
-    schedulerSet: 'standard',
-    schedulerAppliesToGraph: false,
-    guidanceLabel: 'CFG',
-    negativePrompt: { visible: true, usage: 'cfg-gated' },
-    ui: { sdVaeOverride: false, colorCompensation: false, vaePrecision: false, seamless: false, cfgRescale: false },
-  },
-  'z-image': {
-    dimensions: { grid: 16, optimalSide: 1024 },
-    defaults: { steps: 8, cfgScale: 1, scheduler: 'euler' },
-    schedulerSet: 'flow',
-    schedulerAppliesToGraph: true,
-    guidanceLabel: 'CFG',
-    negativePrompt: { visible: true, usage: 'cfg-gated' },
-    ui: { sdVaeOverride: false, colorCompensation: false, vaePrecision: false, seamless: false, cfgRescale: false },
-  },
-  'ideogram-4': {
-    // Enforced by ideogram4_denoise: width/height carry multipleOf=16.
-    dimensions: { grid: 16, optimalSide: 1024 },
-    // Steps and guidance come from the sampler preset unless explicitly overridden, so the
-    // shared step/CFG fields are inert here; the preset default is V4_QUALITY_48 (48 steps).
-    defaults: { steps: 48, cfgScale: 1, scheduler: 'euler' },
-    schedulerSet: 'flow',
-    schedulerAppliesToGraph: false,
-    guidanceLabel: 'Guidance',
-    negativePrompt: { visible: false, usage: 'never' },
-    ui: { sdVaeOverride: false, colorCompensation: false, vaePrecision: false, seamless: false, cfgRescale: false },
-  },
-  'krea-2': {
-    dimensions: { grid: 16, optimalSide: 1024 },
-    // Krea-2-Turbo's numbers. Krea-2-Raw wants ~28 steps at CFG ~4.5, which comes through the
-    // model's own default_settings rather than being hardcoded per variant here.
-    defaults: { steps: 8, cfgScale: 1, scheduler: 'euler' },
-    schedulerSet: 'flow',
-    schedulerAppliesToGraph: false,
-    guidanceLabel: 'CFG',
-    negativePrompt: { visible: true, usage: 'cfg-gated' },
-    ui: { sdVaeOverride: false, colorCompensation: false, vaePrecision: false, seamless: false, cfgRescale: false },
-  },
-  wan: {
-    // Wan's transformer patch-embeds with stride 2 and un-patches by 2; combined with the VAE's
-    // 8x spatial scale, dimensions must be multiples of 16 or the scheduler step fails on a
-    // latents-vs-noise spatial mismatch.
-    dimensions: { grid: 16, optimalSide: 1024 },
-    defaults: { steps: 40, cfgScale: 4, scheduler: 'euler' },
-    schedulerSet: 'flow',
-    schedulerAppliesToGraph: false,
-    guidanceLabel: 'Guidance',
-    negativePrompt: { visible: true, usage: 'always' },
-    ui: { sdVaeOverride: false, colorCompensation: false, vaePrecision: false, seamless: false, cfgRescale: false },
-  },
-  anima: {
-    dimensions: { grid: 8, optimalSide: 1024 },
-    defaults: { steps: 30, cfgScale: 4, scheduler: 'euler' },
-    schedulerSet: 'anima',
-    schedulerAppliesToGraph: true,
-    guidanceLabel: 'CFG',
-    negativePrompt: { visible: true, usage: 'cfg-gated' },
-    ui: { sdVaeOverride: false, colorCompensation: false, vaePrecision: false, seamless: false, cfgRescale: false },
-  },
-} as const satisfies Partial<Record<KnownModelBase, BaseGenerationConfig>>;
 
-export type SupportedGenerateBase = keyof typeof BASE_GENERATION;
-
-export const SUPPORTED_GENERATE_BASES = Object.keys(BASE_GENERATION) as SupportedGenerateBase[];
+export { isSupportedGenerateBase, SUPPORTED_GENERATE_BASES, type SupportedGenerateBase };
 
 export interface GenerationModelPolicy {
   isSupported: boolean;
@@ -391,16 +225,33 @@ const FALLBACK_GENERATION_CONFIG: BaseGenerationConfig = {
   ui: { sdVaeOverride: false, colorCompensation: false, vaePrecision: false, seamless: false, cfgRescale: false },
 };
 
-// Fallbacks keep UI selectors crash-safe; isSupportedGenerateModel() still blocks invocation.
+/**
+ * What the backend says about this model's architecture.
+ *
+ * The variant matters: FLUX Schnell wants 4 steps where dev wants 28, and the endpoint answers per
+ * variant where they differ. Falling back keeps UI selectors crash-safe for external generators and
+ * for an architecture the backend does not know; `isSupportedGenerateModel` still blocks invocation,
+ * and `resolveGenerateWidgetValues` refuses to resolve at all until the table has arrived.
+ */
 const getBaseGenerationConfig = (
-  model: Pick<GenerateModelConfig, 'base' | 'type'> | undefined
+  model: (Pick<GenerateModelConfig, 'base' | 'type'> & { variant?: unknown }) | undefined
 ): BaseGenerationConfig => {
   if (!model || model.type === 'external_image_generator') {
     return FALLBACK_GENERATION_CONFIG;
   }
 
-  return (BASE_GENERATION as Partial<Record<string, BaseGenerationConfig>>)[model.base] ?? FALLBACK_GENERATION_CONFIG;
+  return getArchitectureGenerationConfig(model.base, model.variant) ?? FALLBACK_GENERATION_CONFIG;
 };
+
+/**
+ * The pixel grid generation dimensions must land on, or `null` if the backend has no row for this
+ * architecture.
+ *
+ * `null` rather than a default so callers keep owning their own "nothing selected" behaviour --
+ * the canvas has a different sensible answer there than a generation graph does.
+ */
+export const getDimensionGridForBase = (base: string): number | null =>
+  getArchitectureFeatures(base)?.dimension_grid ?? null;
 
 const getNumber = (value: number | null | undefined, fallback: number): number =>
   Number.isFinite(value) && value !== null && value !== undefined ? value : fallback;
@@ -579,7 +430,7 @@ export const getGenerationUiPolicy = (
 export const isSupportedGenerateModel = <T extends { base: string; type: string }>(
   model: T
 ): model is T & GenerateModelConfig =>
-  (model.type === 'main' && model.base in BASE_GENERATION) ||
+  (model.type === 'main' && isSupportedGenerateBase(model.base)) ||
   (model.type === 'external_image_generator' && model.base === 'external');
 
 export const isGenerateModelSelectable = <T extends ModelConfig>(model: T): boolean => isSupportedGenerateModel(model);
@@ -1349,11 +1200,18 @@ export const isReferenceImageSupported = (model: GenerateModelConfig | undefined
     return model.capabilities?.supports_reference_images === true;
   }
 
-  if (model.base === 'qwen-image') {
-    return model.variant === 'edit';
+  const features = getArchitectureFeatures(model.base);
+
+  if (!features || features.max_reference_images <= 0) {
+    return false;
   }
 
-  return ['flux', 'flux2', 'sd-1', 'sdxl'].includes(model.base);
+  // Qwen-Image accepts reference images only as the `edit` variant -- the one feature the backend
+  // qualifies by variant, which is why it says so on the architecture row rather than inventing a
+  // variant row for it.
+  return (
+    features.reference_images_require_variant === null || model.variant === features.reference_images_require_variant
+  );
 };
 
 export const getMaxReferenceImages = (model: GenerateModelConfig | undefined): number => {
@@ -1365,7 +1223,7 @@ export const getMaxReferenceImages = (model: GenerateModelConfig | undefined): n
     return Math.max(0, model.capabilities.max_reference_images);
   }
 
-  return DEFAULT_REFERENCE_IMAGE_LIMIT;
+  return getArchitectureFeatures(model.base)?.max_reference_images ?? DEFAULT_REFERENCE_IMAGE_LIMIT;
 };
 
 export const createReferenceImageId = (): string =>

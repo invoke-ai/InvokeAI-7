@@ -13,6 +13,7 @@ import { createInitialWorkbenchState, workbenchReducer } from '@workbench/workbe
 import { describe, expect, it } from 'vitest';
 
 import { buildGraphPreviewSource } from './graphPreviewSource';
+import { useArchitectureCapabilitiesFixture } from '@features/generation/core/architectureCapabilities.testing';
 
 const t = ((key: string) => key) as TFunction;
 
@@ -55,6 +56,8 @@ const project = getActiveProject(createGenerateValues());
 const generateSurface = createGraphBearingSurface(generateWidgetManifest, 'left', 'Generate')!;
 const workflowSurface = createGraphBearingSurface(workflowWidgetManifest, 'left', 'Workflow')!;
 const canvasSurface = createGraphBearingSurface(canvasWidgetManifest, 'center', 'Canvas')!;
+
+useArchitectureCapabilitiesFixture();
 
 describe('buildGraphPreviewSource', () => {
   it('live-compiles the generate source and reports a seed notice when randomized', () => {

@@ -24,6 +24,7 @@ import {
   syncGenerateWidgetValuesWithModels,
   syncGenerateLorasWithModels,
 } from './settings';
+import { useArchitectureCapabilitiesFixture } from '@features/generation/core/architectureCapabilities.testing';
 
 /** The persisted widget-value shape from before aspect ratio / VAE / seamless / CLIP skip landed. */
 const legacyStoredValues = {
@@ -40,6 +41,8 @@ const legacyStoredValues = {
   steps: 30,
   width: 512,
 };
+
+useArchitectureCapabilitiesFixture();
 
 describe('normalizeGenerateSettings', () => {
   it('enforces template view mode only when a valid template remains', () => {

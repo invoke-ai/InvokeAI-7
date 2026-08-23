@@ -279,17 +279,31 @@ class VAELoader(GenericDiffusersLoader):
     def _load_qwen_image_vae(self, config: VAE_Checkpoint_QwenImage_Config) -> AnyModel:
         """Load a Qwen Image VAE from a single safetensors file.
 
-        The Qwen Image VAE checkpoint is expected to be in the diffusers state-dict
-        layout (i.e. the same keys as `vae/diffusion_pytorch_model.safetensors` from
-        the Qwen-Image repo). `AutoencoderKLQwenImage` does not register a single-file
-        conversion in diffusers, so we instantiate the model with default config and
-        load the state dict directly.
+        Two layouts reach this method. Files exported from the Qwen-Image repo carry the diffusers
+        state-dict keys (`decoder.conv_in.weight`, ...) and are loaded directly, because
+        `AutoencoderKLQwenImage` registers no single-file conversion in diffusers.
+
+        Community redistributions carry the original layout instead (`decoder.conv1.weight`, ...),
+        which needs converting. Those files are the 16-channel Wan-family VAE -- architecturally the
+        same autoencoder -- so `AutoencoderKLWan.from_single_file` reads them, and the identical
+        checkpoint installed under `anima` already takes that path. Loading them into
+        `AutoencoderKLQwenImage` with `strict=True` failed with 194 missing keys, which made a VAE
+        unusable purely because of the base it happened to be probed as.
         """
         import accelerate
         from diffusers.models.autoencoders.autoencoder_kl_qwenimage import AutoencoderKLQwenImage
         from safetensors.torch import load_file
 
         sd = load_file(config.path)
+
+        if "decoder.conv_in.weight" not in sd:
+            from diffusers.models.autoencoders import AutoencoderKLWan
+
+            from invokeai.backend.wan.rocm_causal_conv3d import patch_wan_causal_conv3d_for_rocm
+
+            del sd
+            patch_wan_causal_conv3d_for_rocm()
+            return AutoencoderKLWan.from_single_file(config.path, torch_dtype=self._torch_dtype)
 
         if self._torch_dtype is not None:
             for k in list(sd.keys()):

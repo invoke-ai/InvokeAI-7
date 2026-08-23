@@ -1,3 +1,5 @@
+import { getArchitectureFeatures } from '@features/generation/core/architectureCapabilities';
+
 import type { BackendGraphContract, BackendInvocationContract } from '@features/generation/core/contracts';
 
 import { addEdge, addNode } from '@features/generation/core/graphBuilder';
@@ -13,12 +15,26 @@ const NEG_COND_COLLECT_ID = 'neg_cond_collect';
 /** The base models regional guidance supports. */
 export type RegionalGuidanceBase = 'sd-1' | 'sdxl' | 'flux' | 'flux2' | 'krea-2';
 
-/** True when `base` supports regional guidance at all. */
+/**
+ * True when `base` supports regional guidance at all.
+ *
+ * The narrowing to `RegionalGuidanceBase` stays: everything below this point dispatches on the
+ * literal to pick node types and field names, and that is graph knowledge the backend has no say
+ * in. Only the *answer* comes from the capability table now.
+ */
 export const isRegionalGuidanceSupportedForBase = (base: string): base is RegionalGuidanceBase =>
-  base === 'sd-1' || base === 'sdxl' || base === 'flux' || base === 'flux2' || base === 'krea-2';
+  getArchitectureFeatures(base)?.supports_regional_guidance ?? false;
 
-/** Whether a base supports regional NEGATIVE prompts / autoNegative (SD family only). */
-const supportsRegionalNegative = (base: RegionalGuidanceBase): boolean => base === 'sd-1' || base === 'sdxl';
+/**
+ * Whether a base supports regional NEGATIVE prompts / autoNegative.
+ *
+ * Exported because the layer settings UI needs the same answer: it used to ask "is this the FLUX
+ * family?" and got krea-2 wrong, rendering a negative-prompt field the graph builder discards.
+ */
+export const isRegionalNegativeSupportedForBase = (base: string): boolean =>
+  getArchitectureFeatures(base)?.regional_negative ?? false;
+
+const supportsRegionalNegative = (base: RegionalGuidanceBase): boolean => isRegionalNegativeSupportedForBase(base);
 
 /** A resolved reference-image (component) model identifier — the backend model field shape. */
 export interface RegionalReferenceModel {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { getControlValidationReason } from './controlValidation';
+import { useArchitectureCapabilitiesFixture } from '@features/generation/core/architectureCapabilities.testing';
 
 const valid = {
   adapterModel: { base: 'sd-1', type: 'controlnet' },
@@ -11,6 +12,8 @@ const valid = {
   beginEndStepPct: [0, 1] as [number, number],
   weight: 0.75,
 };
+
+useArchitectureCapabilitiesFixture();
 
 describe('getControlValidationReason', () => {
   it('returns stable reason codes for the validation matrix', () => {

@@ -5,6 +5,7 @@ from invokeai.backend.architectures.facets.default_settings import DefaultSettin
 from invokeai.backend.architectures.facets.features import FeaturesFacet, NegativePrompt
 from invokeai.backend.architectures.facets.latent_space import WAN21_16, WAN22_48, LatentSpaceFacet
 from invokeai.backend.architectures.facets.modality import ModalityFacet
+from invokeai.backend.architectures.facets.vae import VaeCompatibility, VaeFacet
 from invokeai.backend.architectures.registry import register
 from invokeai.backend.model_manager.configs.default_settings import MainModelDefaultSettings
 from invokeai.backend.model_manager.taxonomy import BaseModelType, WanVariantType
@@ -37,5 +38,16 @@ register(
         dimension_grid=16,
         guidance_label="Guidance",
         scheduler_set="flow",
+    ),
+    VaeFacet(
+        frozenset(
+            {
+                # A14B uses the 16-channel Wan 2.1 VAE; TI2V-5B needs the 48-channel
+                # Wan2.2-VAE. Both are registered under `wan`, so the channel count is the
+                # only thing that tells them apart.
+                VaeCompatibility(BaseModelType.Wan, latent_channels=16),
+                VaeCompatibility(BaseModelType.Wan, latent_channels=48),
+            }
+        )
     ),
 )

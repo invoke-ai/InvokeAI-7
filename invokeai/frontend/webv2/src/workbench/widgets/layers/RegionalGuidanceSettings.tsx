@@ -17,6 +17,7 @@ import { galleryImages, galleryTransfers } from '@features/gallery';
 import { invalidateGallery } from '@features/gallery/queries';
 import { isGalleryImageDragData, useGalleryImageDroppable } from '@features/gallery/utility';
 import { FluxReduxControls, PROMPT_ATTENTION_TARGET_PROPS, PromptTextarea } from '@features/generation/components';
+import { isRegionalNegativeSupportedForBase } from '@features/generation/graph';
 import { useModelsSelector } from '@features/models';
 import {
   assertAccountScopeCurrent,
@@ -108,10 +109,12 @@ export const RegionalGuidanceSettings = ({ engine, layer }: RegionalGuidanceSett
   const [negativePrompt, setNegativePrompt] = useState(layer.negativePrompt ?? '');
 
   const fill = layer.mask.fill;
-  const isFlux = base === 'flux';
   const isFlux2 = base === 'flux2';
-  const isFluxFamily = isFlux || isFlux2;
-  const showNegativeControls = !isFluxFamily || Boolean(layer.negativePrompt) || layer.autoNegative;
+  // Asked as "is this the FLUX family?" before, which got krea-2 wrong: it rendered a regional
+  // negative prompt and an Auto-Negative switch that `addRegionalGuidance` then discarded. The
+  // graph builder and this control now read the same declaration.
+  const supportsRegionalNegative = isRegionalNegativeSupportedForBase(base ?? '');
+  const showNegativeControls = supportsRegionalNegative || Boolean(layer.negativePrompt) || layer.autoNegative;
   const showReferenceImages = !isFlux2 || layer.referenceImages.length > 0;
 
   const commitConfig = useCallback(

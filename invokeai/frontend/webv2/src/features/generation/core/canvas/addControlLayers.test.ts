@@ -13,6 +13,7 @@ import {
   getControlLayerRejectionReason,
   isControlKindSupportedForBase,
 } from './addControlLayers';
+import { useArchitectureCapabilitiesFixture } from '@features/generation/core/architectureCapabilities.testing';
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -68,6 +69,8 @@ const edgesTo = (graph: TestGraph, nodeId: string, field: string) =>
 // ---------------------------------------------------------------------------
 // 1. isControlKindSupportedForBase full matrix
 // ---------------------------------------------------------------------------
+
+useArchitectureCapabilitiesFixture();
 
 describe('isControlKindSupportedForBase', () => {
   it('controlnet is supported on sd-1, sdxl, flux only', () => {

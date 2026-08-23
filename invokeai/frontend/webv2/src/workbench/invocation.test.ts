@@ -30,6 +30,7 @@ import {
 import { submitResolvedInvocation } from './invocationSubmit';
 import { createInitialWorkbenchState, workbenchReducer } from './workbenchState.testing';
 import { createWorkbenchStore } from './workbenchStore';
+import { useArchitectureCapabilitiesFixture } from '@features/generation/core/architectureCapabilities.testing';
 
 const animaModel: MainModelConfig = { base: 'anima', key: 'anima-model', name: 'Anima', type: 'main' };
 const animaVae: VaeModelConfig = { base: 'qwen-image', key: 'anima-vae', name: 'Anima VAE', type: 'vae' };
@@ -111,6 +112,8 @@ const getActiveProject = (values: GenerateWidgetValues) => {
 
   return project!;
 };
+
+useArchitectureCapabilitiesFixture();
 
 describe('resolveInvocationRoute', () => {
   it('invalidates Anima generation until required components are selected', () => {

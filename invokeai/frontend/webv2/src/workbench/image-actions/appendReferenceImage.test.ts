@@ -5,6 +5,7 @@ import { getDefaultGenerateSettings, getMaxReferenceImages } from '@features/gen
 import { describe, expect, it } from 'vitest';
 
 import { appendReferenceImage, type AppendReferenceImageResult } from './appendReferenceImage';
+import { useArchitectureCapabilitiesFixture } from '@features/generation/core/architectureCapabilities.testing';
 
 const sd1Model: MainModelConfig = {
   base: 'sd-1',
@@ -24,6 +25,8 @@ const generateValuesFor = (referenceImages: unknown[] = []): Record<string, unkn
   modelKey: sd1Model.key,
   referenceImages,
 });
+
+useArchitectureCapabilitiesFixture();
 
 describe('appendReferenceImage', () => {
   it('appends a reference image built from the flat upload result', () => {

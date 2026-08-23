@@ -16,6 +16,14 @@ export interface GenerateWidgetSyncProjectSnapshot {
 }
 
 export interface GenerateWidgetSyncRuntimeDeps {
+  /**
+   * Whether the backend's architecture capability table has arrived.
+   *
+   * `reconcile` writes its result into the project, so it must not run on fallback policy: the
+   * values would be persisted, not just displayed. Subscribed like the other read models so the
+   * first reconcile happens as soon as the table lands.
+   */
+  capabilitiesLoaded: ReadonlyStore<boolean>;
   models: ReadonlyStore<readonly GenerationModelCatalogItem[]>;
   patchValues(values: Partial<GenerateWidgetValues>, projectId: string, origin: 'system'): void;
   project: ReadonlyStore<GenerateWidgetSyncProjectSnapshot>;
@@ -42,7 +50,7 @@ export const createGenerateWidgetSyncRuntime = (deps: GenerateWidgetSyncRuntimeD
   let isPromptTemplateQueryEnabled = false;
 
   const reconcile = (): void => {
-    if (isDisposed || isReconciling) {
+    if (isDisposed || isReconciling || !deps.capabilitiesLoaded.getSnapshot()) {
       return;
     }
 
@@ -78,6 +86,7 @@ export const createGenerateWidgetSyncRuntime = (deps: GenerateWidgetSyncRuntimeD
 
   const unsubscribeProject = deps.project.subscribe(reconcile);
   const unsubscribeModels = deps.models.subscribe(reconcile);
+  const unsubscribeCapabilities = deps.capabilitiesLoaded.subscribe(reconcile);
   const unsubscribePromptTemplates = promptTemplateObserver.subscribe(reconcile);
 
   reconcile();
@@ -90,9 +99,17 @@ export const createGenerateWidgetSyncRuntime = (deps: GenerateWidgetSyncRuntimeD
 
       isDisposed = true;
       unsubscribePromptTemplates();
+      unsubscribeCapabilities();
       unsubscribeModels();
       unsubscribeProject();
       promptTemplateObserver.destroy();
     },
   };
 };
+
+export {
+  ensureArchitectureCapabilitiesLoaded,
+  getArchitectureCapabilitiesSnapshot,
+  subscribeArchitectureCapabilities,
+  type ArchitectureCapabilitiesSnapshot,
+} from './data/architectureCapabilitiesStore';

@@ -10,7 +10,6 @@ import type {
 } from './types';
 
 import {
-  BASE_GENERATION,
   coerceSchedulerForGraph,
   getComponentSectionPolicy,
   getAutoFlux2ComponentSourceModel,
@@ -27,6 +26,7 @@ import {
   isSupportedGenerateModel,
   SUPPORTED_GENERATE_BASES,
 } from './baseGenerationPolicies';
+import { useArchitectureCapabilitiesFixture } from '@features/generation/core/architectureCapabilities.testing';
 
 const createModel = (base: string, overrides: Partial<MainModelConfig> = {}): MainModelConfig => ({
   base,
@@ -102,7 +102,9 @@ const externalModel: GenerateModelConfig = {
   type: 'external_image_generator',
 };
 
-describe('BASE_GENERATION', () => {
+useArchitectureCapabilitiesFixture();
+
+describe('architecture policy, read from the backend capability table', () => {
   it('matches expected dimensions per base', () => {
     expect(getGenerationDimensions(createModel('sd-1'))).toMatchObject({ grid: 8, optimal: 512 });
     expect(getGenerationDimensions(createModel('sdxl'))).toMatchObject({ grid: 8, optimal: 1024 });
@@ -111,6 +113,8 @@ describe('BASE_GENERATION', () => {
   });
 
   it('matches expected defaults per base', () => {
+    // These now come from the architecture facets rather than a table maintained here, so several
+    // moved to the values the model cards recommend. See the PR description for the full list.
     expect(getDefaultGenerateSettings(createModel('sdxl'))).toMatchObject({
       steps: 30,
       cfgScale: 7,
@@ -118,9 +122,11 @@ describe('BASE_GENERATION', () => {
       width: 1024,
       height: 1024,
     });
+    // FLUX's base row is dev: 28 steps at guidance 3.5. The old single row carried Schnell's step
+    // count for every variant, which is what the variant rows below now express properly.
     expect(getDefaultGenerateSettings(createModel('flux'))).toMatchObject({
-      steps: 4,
-      cfgScale: 4,
+      steps: 28,
+      cfgScale: 3.5,
       scheduler: 'euler',
     });
     expect(getDefaultGenerateSettings(createModel('flux2'))).toMatchObject({
@@ -133,10 +139,25 @@ describe('BASE_GENERATION', () => {
       cfgScale: 4,
       scheduler: 'euler_a',
     });
+    // Tongyi-MAI/Z-Image-Turbo says num_inference_steps=9.
     expect(getDefaultGenerateSettings(createModel('z-image'))).toMatchObject({
-      steps: 8,
+      steps: 9,
       cfgScale: 1,
       scheduler: 'euler',
+    });
+  });
+
+  it('answers per variant where the architecture does', () => {
+    // The gain the single-row table could not express: Schnell and dev want different step counts,
+    // and Fill wants a guidance an order of magnitude higher.
+    expect(getDefaultGenerateSettings(createModel('flux', { variant: 'schnell' }))).toMatchObject({ steps: 4 });
+    expect(getDefaultGenerateSettings(createModel('flux', { variant: 'dev_fill' }))).toMatchObject({
+      steps: 50,
+      cfgScale: 30,
+    });
+    expect(getDefaultGenerateSettings(createModel('z-image', { variant: 'zbase' }))).toMatchObject({
+      steps: 50,
+      cfgScale: 4,
     });
   });
 
@@ -233,30 +254,15 @@ describe('BASE_GENERATION', () => {
     ).toBe(true);
   });
 
-  it('has generation config for every graph builder base', () => {
-    expect(SUPPORTED_GENERATE_BASES).toEqual([
-      'sd-1',
-      'sd-2',
-      'sdxl',
-      'sd-3',
-      'flux',
-      'flux2',
-      'cogview4',
-      'ernie-image',
-      'qwen-image',
-      'z-image',
-      'ideogram-4',
-      'krea-2',
-      'wan',
-      'anima',
-    ]);
-  });
+  // The ordered list of generatable bases is pinned in `supportedBases.test.ts`, which now owns it.
 
   it('does not mark display-only bases as generatable', () => {
     expect(isSupportedGenerateModel(createModel('sdxl-refiner'))).toBe(false);
     expect(isSupportedGenerateModel(createModel('unknown'))).toBe(false);
     expect(isSupportedGenerateModel(createModel('made-up'))).toBe(false);
-    expect(BASE_GENERATION).not.toHaveProperty('external');
+    // 'external' is the pseudo-base of external image generators; they are supported through
+    // `type === 'external_image_generator'`, not by having an architecture row.
+    expect(isSupportedGenerateModel(createModel('external'))).toBe(false);
   });
 });
 

@@ -9,6 +9,7 @@ import { getDefaultGenerateSettings } from '@features/generation/settings';
 import { describe, expect, it, vi } from 'vitest';
 
 import { recallProjectPromptHistoryItem, selectProjectGenerateModel } from './generationSettingsOrchestration';
+import { useArchitectureCapabilitiesFixture } from '@features/generation/core/architectureCapabilities.testing';
 
 const createModel = (base: string, key = `${base}-model`): GenerateModelConfig => ({
   base,
@@ -26,6 +27,8 @@ const createSettings = (model: GenerateModelConfig, overrides: Partial<GenerateS
 
 const sdxlLora: LoraModelConfig = { base: 'sdxl', key: 'sdxl-lora', name: 'SDXL LoRA', type: 'lora' };
 const sdxlVae: VaeModelConfig = { base: 'sdxl', key: 'sdxl-vae', name: 'SDXL VAE', type: 'vae' };
+
+useArchitectureCapabilitiesFixture();
 
 describe('selectProjectGenerateModel', () => {
   it('atomically stores reconciled model settings and returns cleared labels', () => {

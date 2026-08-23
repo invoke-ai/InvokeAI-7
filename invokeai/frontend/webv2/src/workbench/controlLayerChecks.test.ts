@@ -8,6 +8,7 @@ import {
   getControlLayerAttentionReason,
   hasControlLayerContent,
 } from './controlLayerChecks';
+import { useArchitectureCapabilitiesFixture } from '@features/generation/core/architectureCapabilities.testing';
 
 const model = (key: string, base: string, type: string): ModelConfig => ({ base, key, name: key, type }) as ModelConfig;
 
@@ -42,6 +43,8 @@ const controlLayer = (
 
 const sdxl = { base: 'sdxl' };
 const models = [model('sdxl-control', 'sdxl', 'controlnet'), model('sd1-control', 'sd-1', 'controlnet')];
+
+useArchitectureCapabilitiesFixture();
 
 describe('hasControlLayerContent', () => {
   it('matches the pipeline content gate', () => {

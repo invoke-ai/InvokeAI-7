@@ -1,4 +1,12 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+
+import capabilitiesFixture from './__fixtures__/architectureCapabilities.json';
+import {
+  type ArchitectureCapabilitiesRow,
+  resetArchitectureCapabilities,
+  setArchitectureCapabilities,
+} from './architectureCapabilities';
+
 
 import type { GenerateWidgetValues, MainModelConfig } from './types';
 
@@ -25,6 +33,14 @@ const applySystemPatch = (
   storedValues: Record<string, unknown>,
   systemPatch: Partial<GenerateWidgetValues>
 ): Record<string, unknown> => ({ ...storedValues, ...systemPatch });
+
+// The resolver fails closed without the backend's architecture table, so seed the registry with the
+// same fixture the backend pins. Reset afterwards so registry state cannot leak between files.
+beforeEach(() => {
+  setArchitectureCapabilities(capabilitiesFixture as ArchitectureCapabilitiesRow[]);
+});
+
+afterEach(resetArchitectureCapabilities);
 
 describe('resolveGenerateWidgetValues', () => {
   it('returns null when the catalog has no supported generation model', () => {
@@ -186,5 +202,18 @@ describe('resolveGenerateWidgetValues', () => {
 
     expect(second?.values).toEqual(first?.values);
     expect(second?.systemPatch).toBeNull();
+  });
+});
+
+describe('without the backend capability table', () => {
+  it('resolves nothing rather than falling back to generic defaults', () => {
+    // Its `systemPatch` is persisted into the project, so a fallback grid or step count would be
+    // written to disk. Returning null is already how "no usable models" is signalled, and every
+    // caller handles it.
+    resetArchitectureCapabilities();
+
+    const model: MainModelConfig = { base: 'sdxl', key: 'model', name: 'model', type: 'main' };
+
+    expect(resolveGenerateWidgetValues({ models: [model], storedValues: {} })).toBeNull();
   });
 });

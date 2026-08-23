@@ -21,6 +21,7 @@ import { createInitialWorkbenchState, type WorkbenchAction } from '@workbench/wo
 import { describe, expect, it, vi } from 'vitest';
 
 import { importGalleryImagesToCanvas, type GalleryCanvasImportDestination } from './importGalleryImages';
+import { useArchitectureCapabilitiesFixture } from '@features/generation/core/architectureCapabilities.testing';
 
 const queriesFor = (getState: () => WorkbenchState) => ({
   getProject: (projectId: string) => getState().projects.find((project) => project.id === projectId) ?? null,
@@ -212,6 +213,8 @@ const expectedLayer = (
     }
   }
 };
+
+useArchitectureCapabilitiesFixture();
 
 describe('importGalleryImagesToCanvas', () => {
   it.each<Exclude<GalleryCanvasImportDestination, 'control-resized'>>([

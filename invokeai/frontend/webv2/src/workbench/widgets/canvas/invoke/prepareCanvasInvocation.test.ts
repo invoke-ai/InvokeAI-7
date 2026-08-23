@@ -34,6 +34,7 @@ import {
   resolveRegionalReferenceImages,
   runCanvasInvocation,
 } from './prepareCanvasInvocation';
+import { useArchitectureCapabilitiesFixture } from '@features/generation/core/architectureCapabilities.testing';
 
 const canvasBoundaryMocks = vi.hoisted(() => ({
   getCanvasEngine: vi.fn(),
@@ -319,6 +320,8 @@ const controlLayer = (
   type: 'control',
   withTransparencyEffect: true,
 });
+
+useArchitectureCapabilitiesFixture();
 
 describe('prepareCanvasInvocation generation-device boundary', () => {
   beforeEach(() => {
