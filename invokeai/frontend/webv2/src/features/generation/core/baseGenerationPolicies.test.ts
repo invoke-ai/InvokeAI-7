@@ -1191,3 +1191,33 @@ describe('Krea-2, Ideogram 4 and Wan policies', () => {
     ).toEqual([]);
   });
 });
+
+describe('the guidance slider value from a model record', () => {
+  // MainModelDefaultSettings has separate cfg_scale and guidance fields; the UI has one control.
+  // Which field feeds it depends on guidanceLabel, and getting that backwards reads a distilled
+  // model's "CFG off" marker as its guidance setting.
+  it('prefers guidance over cfg_scale for a guidance-labelled architecture', () => {
+    const model = createModel('flux', {
+      variant: 'dev',
+      default_settings: { cfg_scale: 1, guidance: 3.5, steps: 28 },
+    } as Partial<MainModelConfig>);
+
+    // Not 1 — that is the CFG-off marker, and buildFluxGraph wires this value into `guidance`.
+    expect(getDefaultGenerateSettings(model).cfgScale).toBe(3.5);
+  });
+
+  it('falls back to cfg_scale when a guidance-labelled model records no guidance', () => {
+    const model = createModel('flux', {
+      variant: 'schnell',
+      default_settings: { cfg_scale: 1, steps: 4 },
+    } as Partial<MainModelConfig>);
+
+    expect(getDefaultGenerateSettings(model).cfgScale).toBe(1);
+  });
+
+  it('prefers cfg_scale for a CFG-labelled architecture', () => {
+    const model = createModel('sdxl', { default_settings: { cfg_scale: 6.5, steps: 30 } } as Partial<MainModelConfig>);
+
+    expect(getDefaultGenerateSettings(model).cfgScale).toBe(6.5);
+  });
+});

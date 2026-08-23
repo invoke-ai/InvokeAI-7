@@ -433,13 +433,31 @@ export const getGenerationDimensions = (
   };
 };
 
+/**
+ * The value the single guidance slider takes from a model record.
+ *
+ * `MainModelDefaultSettings` carries `cfg_scale` and `guidance` as separate fields, but the UI has
+ * one control -- `guidanceLabel` is the whole difference between them. Which field feeds it depends
+ * on the label: a guidance-distilled model records `cfg_scale: 1.0` meaning "CFG off" *and* the
+ * guidance value it actually samples with, so preferring `cfg_scale` reads the off-switch as the
+ * setting. FLUX dev records `{cfg_scale: 1.0, guidance: 3.5}` and `buildFluxGraph` wires
+ * `guidance: settings.cfgScale`, so the old order generated at guidance 1.0 instead of 3.5.
+ */
+const getRecordGuidanceValue = (
+  defaults: GenerateDefaultSettings | undefined,
+  guidanceLabel: GuidanceLabel
+): number | null | undefined =>
+  guidanceLabel === 'Guidance'
+    ? defaults?.guidance ?? defaults?.cfg_scale
+    : defaults?.cfg_scale ?? defaults?.guidance;
+
 export const getGenerationDefaults = (model: GenerateModelConfig | undefined) => {
   const config = getBaseGenerationConfig(model);
   const defaults = model?.default_settings as GenerateDefaultSettings;
 
   return {
     cfgRescaleMultiplier: getNumber(defaults?.cfg_rescale_multiplier, 0),
-    cfgScale: getNumber(defaults?.cfg_scale ?? defaults?.guidance, config.defaults.cfgScale),
+    cfgScale: getNumber(getRecordGuidanceValue(defaults, config.guidanceLabel), config.defaults.cfgScale),
     scheduler: defaults?.scheduler ?? config.defaults.scheduler,
     steps: Math.max(1, Math.round(getNumber(defaults?.steps, config.defaults.steps))),
     vaePrecision: defaults?.vae_precision === 'fp16' ? ('fp16' as const) : ('fp32' as const),
