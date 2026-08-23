@@ -15,6 +15,7 @@ import type { WorkbenchState } from '@workbench/projectContracts';
 import type { WorkbenchAction } from '@workbench/workbenchState.testing';
 import type { WorkbenchCommands } from '@workbench/workbenchStore';
 
+import { seedArchitectureCapabilities } from '@features/generation/core/architectureCapabilities.testing';
 import { getDefaultGenerateSettings } from '@features/generation/settings';
 import { createTestStubRasterBackend } from '@workbench/canvas-engine/render/raster.testStub';
 import {
@@ -34,7 +35,6 @@ import {
   resolveRegionalReferenceImages,
   runCanvasInvocation,
 } from './prepareCanvasInvocation';
-import { useArchitectureCapabilitiesFixture } from '@features/generation/core/architectureCapabilities.testing';
 
 const canvasBoundaryMocks = vi.hoisted(() => ({
   getCanvasEngine: vi.fn(),
@@ -321,7 +321,7 @@ const controlLayer = (
   withTransparencyEffect: true,
 });
 
-useArchitectureCapabilitiesFixture();
+seedArchitectureCapabilities();
 
 describe('prepareCanvasInvocation generation-device boundary', () => {
   beforeEach(() => {

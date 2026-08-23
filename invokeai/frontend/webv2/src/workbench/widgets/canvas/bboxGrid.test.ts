@@ -1,10 +1,9 @@
+import { seedArchitectureCapabilities } from '@features/generation/core/architectureCapabilities.testing';
 import { describe, expect, it } from 'vitest';
-
-import { useArchitectureCapabilitiesFixture } from '@features/generation/core/architectureCapabilities.testing';
 
 import { DEFAULT_MODEL_GRID, gridSizeForModelBase } from './bboxGrid';
 
-useArchitectureCapabilitiesFixture();
+seedArchitectureCapabilities();
 
 describe('gridSizeForModelBase', () => {
   it('reads the grid the architecture declares', () => {
