@@ -18,12 +18,14 @@ from typing import ClassVar, Literal
 from invokeai.backend.architectures.facet import Facet
 from invokeai.backend.architectures.registry import generative_bases, get
 
-GenerationModeKind = Literal["txt2img", "img2img", "inpaint", "outpaint", "t2v", "i2v", "lf2v", "flf2v", "extend_video"]
+GenerationModeKind = Literal[
+    "txt2img", "img2img", "inpaint", "outpaint", "t2v", "i2v", "lf2v", "flf2v", "interpolate", "extend_video"
+]
 """The kinds of generation a mode string names.
 
-`t2v`/`i2v` produce video, as do the three MiniMax H3 conditioning variants: `lf2v` (last frame to
-video), `flf2v` (first and last frame to video) and `extend_video` (continue an existing clip). The
-rest produce images."""
+`t2v`/`i2v` produce video, as do the conditioning variants: `lf2v` (last frame to video), `flf2v`
+(first and last frame to video), `interpolate` (between two given images) and `extend_video`
+(continue an existing clip). The rest produce images."""
 
 
 @dataclass(frozen=True)

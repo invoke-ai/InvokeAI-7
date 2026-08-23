@@ -16530,7 +16530,18 @@
           "modes": {
             "items": {
               "type": "string",
-              "enum": ["txt2img", "img2img", "inpaint", "outpaint", "t2v", "i2v", "lf2v", "flf2v", "extend_video"]
+              "enum": [
+                "txt2img",
+                "img2img",
+                "inpaint",
+                "outpaint",
+                "t2v",
+                "i2v",
+                "lf2v",
+                "flf2v",
+                "interpolate",
+                "extend_video"
+              ]
             },
             "type": "array",
             "title": "Modes",

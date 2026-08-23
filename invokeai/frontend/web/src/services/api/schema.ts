@@ -4851,7 +4851,7 @@ export type components = {
              * Modes
              * @description Sorted. Empty means it generates nothing on its own.
              */
-            modes: ("txt2img" | "img2img" | "inpaint" | "outpaint" | "t2v" | "i2v" | "lf2v" | "flf2v" | "extend_video")[];
+            modes: ("txt2img" | "img2img" | "inpaint" | "outpaint" | "t2v" | "i2v" | "lf2v" | "flf2v" | "interpolate" | "extend_video")[];
             /**
              * Metadata Slug
              * @description Prefix its mode strings carry in image metadata; null means unprefixed.

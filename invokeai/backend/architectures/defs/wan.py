@@ -24,8 +24,12 @@ register(
             None: MainModelDefaultSettings(steps=40, cfg_scale=4.0, width=1024, height=1024),
         }
     ),
-    # Plus image-to-video. Wan generates images at num_frames=1 and video above that.
-    ModalityFacet(frozenset({"txt2img", "img2img", "inpaint", "outpaint", "i2v"}), metadata_slug="wan"),
+    # Wan generates images at num_frames=1 and video above that, from text or from one or two
+    # given frames -- `interpolate` fills between two, `extend_video` continues an existing clip.
+    ModalityFacet(
+        frozenset({"txt2img", "img2img", "inpaint", "outpaint", "t2v", "i2v", "interpolate", "extend_video"}),
+        metadata_slug="wan",
+    ),
     FeaturesFacet(
         negative_prompt=NegativePrompt(visible=True, usage="always"),
         dimension_grid=16,
