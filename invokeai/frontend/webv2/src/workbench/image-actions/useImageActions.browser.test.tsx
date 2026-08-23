@@ -1,5 +1,6 @@
 import type { GalleryImage, GalleryItem, GalleryItemKey, GalleryItemRef } from '@features/gallery';
 
+import { seedArchitectureCapabilities } from '@features/generation/core/architectureCapabilities.testing';
 import { accountLifecycle } from '@platform/state/accountLifecycle';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, createRef, type Ref, useImperativeHandle } from 'react';
@@ -256,6 +257,8 @@ afterEach(async () => {
   host = null;
   root = null;
 });
+
+seedArchitectureCapabilities();
 
 describe('image recall capability cancellation', () => {
   it('re-derives capabilities from the current generate model without another metadata request', async () => {
