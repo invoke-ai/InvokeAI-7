@@ -4,11 +4,15 @@ The walker itself is exercised against a synthetic tree in
 `tests/backend/util/test_module_discovery.py`. What is left to check here is that this package's
 real layout agrees with it — the realistic mistake being a new architecture folder that never got an
 `__init__.py`, which is not a package and therefore contributes no nodes at all.
+
+Calling `load_all_modules()` here rather than reading a module-level dict is the point of the
+split: the package body must stay cheap so that `import invokeai.invocation_api` -- the first
+import in the node-pack guide -- does not pull in this tree and close an import cycle.
 """
 
 from pathlib import Path
 
-from invokeai.app.invocations import _MODULES
+from invokeai.app.invocations import load_all_modules
 
 PACKAGE = "invokeai.app.invocations"
 
@@ -20,4 +24,4 @@ def test_every_node_module_on_disk_was_imported() -> None:
         for p in root.rglob("*.py")
         if not any(part.startswith("_") for part in p.relative_to(root).parts)
     }
-    assert on_disk == set(_MODULES), "walker and filesystem disagree"
+    assert on_disk == set(load_all_modules()), "walker and filesystem disagree"

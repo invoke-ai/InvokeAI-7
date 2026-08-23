@@ -1,12 +1,19 @@
-"""Core invocation modules, imported for their side effects.
+"""Core invocation modules.
 
-Every module below registers its `@invocation`-decorated classes with `InvocationRegistry` as it is
-imported, so the app is only correct once *all* of them have been imported. That import is triggered
-by `from invokeai.app.invocations import *` in `invokeai.app.services.shared.graph`.
+Every module in this package registers its `@invocation`-decorated classes with
+`InvocationRegistry` as it is imported, so the app is only correct once *all* of them have been
+imported. `load_all_modules()` does that, and `invokeai.app.services.shared.graph` calls it.
+
+Importing them here, in the package body, would be the obvious shortcut and is wrong: it makes
+`import invokeai.app.invocations.anything` -- including the `baseinvocation` import that
+`invokeai.invocation_api` starts with -- pull in the whole tree. A node module that imports
+`invocation_api` back (`composition-nodes.py` does) then closes a cycle, and
+`import invokeai.invocation_api` fails outright with a partially initialized module. That is the
+first import in the documented node-pack guide, so it has to stay cheap.
 
 Discovery walks the whole package tree rather than globbing `*.py` in this directory. Node modules
 are grouped into per-architecture subpackages (`flux/`, `wan/`, ...) and cross-cutting ones (`vae/`,
-`text_encoder/`, `pid/`), and a flat glob would skip every one of them silently — the failure would
+`text_encoder/`, `pid/`), and a flat glob would skip every one of them silently -- the failure would
 not surface at boot but later, as an "unknown node type" when a user opens a workflow that uses one.
 """
 
@@ -16,11 +23,11 @@ from types import ModuleType
 
 from invokeai.backend.util.module_discovery import discover_modules
 
-_MODULES: dict[str, ModuleType] = {
-    name: import_module(name) for name in discover_modules(Path(__file__).parent, f"{__name__}.")
-}
 
-# `import *` binds names, and a dotted name is not one. Only the top component of each module path
-# is an attribute of this package, so a node in a subpackage contributes that subpackage's name.
-# Binding is incidental here anyway — the registration this module exists for already happened above.
-__all__ = sorted({name.removeprefix(f"{__name__}.").split(".", 1)[0] for name in _MODULES})
+def load_all_modules() -> dict[str, ModuleType]:
+    """Import every node module in this package, registering the invocations it declares.
+
+    Idempotent: `import_module` returns the cached module on later calls, so callers do not have to
+    coordinate who invokes it first.
+    """
+    return {name: import_module(name) for name in discover_modules(Path(__file__).parent, f"{__name__}.")}
