@@ -19,9 +19,11 @@ register(
     ConditioningFacet(WanConditioningInfo),
     DefaultSettingsFacet(
         {
-            WanVariantType.TI2V_5B: MainModelDefaultSettings(steps=30, cfg_scale=5.0, width=1024, height=1024),
+            WanVariantType.TI2V_5B: MainModelDefaultSettings(
+                scheduler="euler", steps=30, cfg_scale=5.0, width=1024, height=1024
+            ),
             # A14B, and whatever an unknown variant turns out to be.
-            None: MainModelDefaultSettings(steps=40, cfg_scale=4.0, width=1024, height=1024),
+            None: MainModelDefaultSettings(scheduler="euler", steps=40, cfg_scale=4.0, width=1024, height=1024),
         }
     ),
     # Wan generates images at num_frames=1 and video above that, from text or from one or two

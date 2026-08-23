@@ -17,7 +17,9 @@ register(
     # stable-diffusion-3.5-medium's example: 40 steps at guidance 4.5. Medium rather than Large
     # (28/3.5) because there is one `sd-3` row and no variant to tell them apart, and Medium is the
     # smaller, more commonly run model.
-    DefaultSettingsFacet({None: MainModelDefaultSettings(steps=40, cfg_scale=4.5, width=1024, height=1024)}),
+    DefaultSettingsFacet(
+        {None: MainModelDefaultSettings(scheduler="euler_a", steps=40, cfg_scale=4.5, width=1024, height=1024)}
+    ),
     ModalityFacet(frozenset({"txt2img", "img2img", "inpaint", "outpaint"}), metadata_slug="sd3"),
     FeaturesFacet(
         negative_prompt=NegativePrompt(visible=True, usage="always"),

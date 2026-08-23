@@ -15,7 +15,9 @@ register(
     BaseModelType.QwenImage,
     LatentSpaceFacet(WAN21_16),
     ConditioningFacet(QwenImageConditioningInfo),
-    DefaultSettingsFacet({None: MainModelDefaultSettings(steps=40, cfg_scale=4.0, width=1024, height=1024)}),
+    DefaultSettingsFacet(
+        {None: MainModelDefaultSettings(scheduler="euler_a", steps=40, cfg_scale=4.0, width=1024, height=1024)}
+    ),
     ModalityFacet(frozenset({"txt2img", "img2img", "inpaint", "outpaint"}), metadata_slug="qwen_image"),
     FeaturesFacet(
         negative_prompt=NegativePrompt(visible=True, usage="cfg-gated"),

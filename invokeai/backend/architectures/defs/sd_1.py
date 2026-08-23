@@ -16,7 +16,9 @@ register(
     LatentSpaceFacet(SD15_4),
     UNetDownscaleFacet(max_unet_downscale=8),
     ConditioningFacet(BasicConditioningInfo),
-    DefaultSettingsFacet({None: MainModelDefaultSettings(steps=30, cfg_scale=7.0, width=512, height=512)}),
+    DefaultSettingsFacet(
+        {None: MainModelDefaultSettings(scheduler="euler_a", steps=30, cfg_scale=7.0, width=512, height=512)}
+    ),
     # SD 1.x and 2.x share the unprefixed mode strings: a bare `txt2img`.
     ModalityFacet(frozenset({"txt2img", "img2img", "inpaint", "outpaint"})),
     FeaturesFacet(

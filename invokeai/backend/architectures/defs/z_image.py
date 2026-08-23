@@ -18,9 +18,11 @@ register(
     DefaultSettingsFacet(
         {
             # The undistilled base needs more steps and supports CFG.
-            ZImageVariantType.ZBase: MainModelDefaultSettings(steps=50, cfg_scale=4.0, width=1024, height=1024),
+            ZImageVariantType.ZBase: MainModelDefaultSettings(
+                scheduler="euler", steps=50, cfg_scale=4.0, width=1024, height=1024
+            ),
             # Turbo (distilled): fewer steps, no CFG.
-            None: MainModelDefaultSettings(steps=9, cfg_scale=1.0, width=1024, height=1024),
+            None: MainModelDefaultSettings(scheduler="euler", steps=9, cfg_scale=1.0, width=1024, height=1024),
         }
     ),
     ModalityFacet(frozenset({"txt2img", "img2img", "inpaint", "outpaint"}), metadata_slug="z_image"),

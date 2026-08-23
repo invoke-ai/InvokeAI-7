@@ -113,13 +113,19 @@ def test_the_researched_values_are_what_the_model_cards_say() -> None:
     sd-3:     stable-diffusion-3.5-medium, 40 steps at guidance 4.5. Medium, not Large (28/3.5):
               there is one `sd-3` row and no variant to tell them apart.
     z-image:  Tongyi-MAI/Z-Image-Turbo, `num_inference_steps=9`, guidance 0 -> cfg_scale 1.0.
-    ideogram: not from a card but from our own PRESETS — every preset runs main guidance 7.0.
+    ideogram: 1.0, because the model is CFG-distilled and cannot do CFG at all -- `ideogram4_denoise`
+              has no `cfg_scale` input, only `guidance_scale`, and the FeaturesFacet says
+              `negative_prompt: never`. This field previously held 7.0, taken from the main weight in
+              our own PRESETS. That number is the sampler's internal guidance schedule, not a default
+              anyone sets: the node reads `guidance_scale=None` as "use the preset", and webv2 sends
+              nothing unless the user overrides it through Ideogram's own dedicated fields. Declaring
+              7.0 advertised a CFG default for a model that has no CFG.
     """
     expected = {
         BaseModelType.CogView4: (50, 3.5),
         BaseModelType.StableDiffusion3: (40, 4.5),
         BaseModelType.ZImage: (9, 1.0),
-        BaseModelType.Ideogram4: (48, 7.0),
+        BaseModelType.Ideogram4: (48, 1.0),
         BaseModelType.ErnieImage: (50, 4.0),
         # The classic Stable Diffusion defaults, which every SD generation is built around.
         BaseModelType.StableDiffusion1: (30, 7.0),
@@ -147,3 +153,36 @@ def test_the_sd_family_keeps_its_native_sizes() -> None:
         settings = resolve_default_settings(base)
         assert settings is not None, base.value
         assert (settings.width, settings.height) == (width, height), base.value
+
+
+def test_every_architecture_with_a_scheduler_declares_which_one() -> None:
+    """The last piece webv2 still hardcodes.
+
+    `BASE_GENERATION` in `baseGenerationPolicies.ts` carries a `defaults.scheduler` per base, and it
+    was the one field the capabilities endpoint could not supply -- so adding an architecture still
+    meant editing the frontend even when nothing about it was special. The values mirror what that
+    table ships, deliberately: which scheduler to prefer is a product decision, not a model-card
+    fact, and mirroring means nothing changes for users when webv2 switches over.
+
+    The converse matters too. An architecture with no `scheduler_set` has no scheduler to choose --
+    MiniMax H3 steps video and audio down two hardcoded flow schedules -- and declaring a default for
+    it would put a control in the UI that reaches nothing.
+    """
+    from invokeai.backend.architectures import FeaturesFacet, get
+
+    missing, spurious = [], []
+    for base in generative_bases():
+        features = get(base, FeaturesFacet)
+        settings = resolve_default_settings(base)
+        if features is None or settings is None:
+            continue
+        # The refiner declares a canvas but no generation settings; it is not run on its own.
+        if settings.steps is None:
+            continue
+        if features.scheduler_set is not None and settings.scheduler is None:
+            missing.append(base.value)
+        if features.scheduler_set is None and settings.scheduler is not None:
+            spurious.append(base.value)
+
+    assert missing == [], f"scheduler_set declared but no default scheduler: {missing}"
+    assert spurious == [], f"default scheduler but no scheduler_set: {spurious}"

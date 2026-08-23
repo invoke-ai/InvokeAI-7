@@ -16,7 +16,9 @@ register(
     LatentSpaceFacet(SDXL_4),
     UNetDownscaleFacet(max_unet_downscale=4),
     ConditioningFacet(SDXLConditioningInfo),
-    DefaultSettingsFacet({None: MainModelDefaultSettings(steps=30, cfg_scale=7.0, width=1024, height=1024)}),
+    DefaultSettingsFacet(
+        {None: MainModelDefaultSettings(scheduler="euler_a", steps=30, cfg_scale=7.0, width=1024, height=1024)}
+    ),
     ModalityFacet(frozenset({"txt2img", "img2img", "inpaint", "outpaint"}), metadata_slug="sdxl"),
     FeaturesFacet(
         negative_prompt=NegativePrompt(visible=True, usage="always"),

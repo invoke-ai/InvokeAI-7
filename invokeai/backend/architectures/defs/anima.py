@@ -15,7 +15,9 @@ register(
     BaseModelType.Anima,
     LatentSpaceFacet(WAN21_16),
     ConditioningFacet(AnimaConditioningInfo),
-    DefaultSettingsFacet({None: MainModelDefaultSettings(steps=35, cfg_scale=4.5, width=1024, height=1024)}),
+    DefaultSettingsFacet(
+        {None: MainModelDefaultSettings(scheduler="euler", steps=35, cfg_scale=4.5, width=1024, height=1024)}
+    ),
     ModalityFacet(frozenset({"txt2img", "img2img", "inpaint", "outpaint"}), metadata_slug="anima"),
     FeaturesFacet(
         negative_prompt=NegativePrompt(visible=True, usage="cfg-gated"),

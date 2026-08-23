@@ -18,10 +18,12 @@ register(
     LatentSpaceFacet(FLUX2_32),
     ConditioningFacet(ErnieImageConditioningInfo),
     DefaultSettingsFacet(
-        {None: MainModelDefaultSettings(steps=50, cfg_scale=4.0, width=1024, height=1024)},
+        {None: MainModelDefaultSettings(scheduler="euler", steps=50, cfg_scale=4.0, width=1024, height=1024)},
         # Turbo and the base model share an architecture and a config, so there is nothing on
         # disk to discriminate on and no variant is modeled. The name is the only signal.
-        by_name_hint={"turbo": MainModelDefaultSettings(steps=8, cfg_scale=1.0, width=1024, height=1024)},
+        by_name_hint={
+            "turbo": MainModelDefaultSettings(scheduler="euler", steps=8, cfg_scale=1.0, width=1024, height=1024)
+        },
     ),
     # Text-to-image only.
     ModalityFacet(frozenset({"txt2img"}), metadata_slug="ernie_image"),

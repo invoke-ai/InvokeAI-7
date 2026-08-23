@@ -19,9 +19,11 @@ register(
         {
             # Diffusers' Krea-2 guidance 4.5 uses cond + 4.5 * (cond - uncond), equivalent to
             # InvokeAI's CFG convention at 5.5.
-            Krea2VariantType.Base: MainModelDefaultSettings(steps=28, cfg_scale=5.5, width=1024, height=1024),
+            Krea2VariantType.Base: MainModelDefaultSettings(
+                scheduler="euler", steps=28, cfg_scale=5.5, width=1024, height=1024
+            ),
             # Turbo (distilled). cfg_scale has a floor of 1; 1.0 means no guidance.
-            None: MainModelDefaultSettings(steps=8, cfg_scale=1.0, width=1024, height=1024),
+            None: MainModelDefaultSettings(scheduler="euler", steps=8, cfg_scale=1.0, width=1024, height=1024),
         }
     ),
     ModalityFacet(frozenset({"txt2img", "img2img", "inpaint", "outpaint"}), metadata_slug="krea2"),

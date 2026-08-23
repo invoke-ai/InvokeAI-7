@@ -17,8 +17,15 @@ register(
     LatentSpaceFacet(FLUX2_32),
     ConditioningFacet(Ideogram4ConditioningInfo),
     # Ideogram 4 samples from presets (V4_QUALITY_48 by default) with a dual-branch guidance
-    # schedule; these are sensible UI defaults rather than the sampler's own numbers.
-    DefaultSettingsFacet({None: MainModelDefaultSettings(steps=48, cfg_scale=7.0, width=1024, height=1024)}),
+    # schedule; the step count is a sensible UI default rather than the sampler's own number.
+    #
+    # cfg_scale is 1.0 because the model is CFG-distilled: `ideogram4_denoise` has no `cfg_scale`
+    # input at all, only `guidance_scale`, and the FeaturesFacet below already says so with
+    # `negative_prompt: never` and `guidance_label: "Guidance"`. Any other value would be a number
+    # the UI shows for a control the sampler does not have.
+    DefaultSettingsFacet(
+        {None: MainModelDefaultSettings(scheduler="euler", steps=48, cfg_scale=1.0, width=1024, height=1024)}
+    ),
     # Text-to-image only.
     ModalityFacet(frozenset({"txt2img"}), metadata_slug="ideogram4"),
     FeaturesFacet(

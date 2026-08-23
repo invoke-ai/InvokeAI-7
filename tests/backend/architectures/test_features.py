@@ -143,3 +143,25 @@ def test_clip_skip_is_an_sd_1_and_2_feature_only() -> None:
         if (f := get(b, FeaturesFacet)) is not None and f.clip_skip_max is not None
     }
     assert with_clip_skip == {"sd-1": 12, "sd-2": 24}
+
+
+def test_an_architecture_that_cannot_do_cfg_declares_no_cfg() -> None:
+    """`negative_prompt: never` means CFG-distilled, and a CFG-distilled model has one honest
+    cfg_scale: 1.0, meaning "off".
+
+    The two facts live in different facets, so nothing stopped them from disagreeing -- and they
+    did. Ideogram 4 shipped `cfg_scale=7.0` while its own FeaturesFacet said `never` and its denoise
+    node had no `cfg_scale` input at all, only `guidance_scale`. The UI would have offered a slider
+    for a control the sampler does not read.
+    """
+    from invokeai.backend.architectures import resolve_default_settings
+
+    contradictory = []
+    for base in generative_bases():
+        features = get(base, FeaturesFacet)
+        settings = resolve_default_settings(base)
+        if features is None or settings is None or settings.cfg_scale is None:
+            continue
+        if features.negative_prompt.usage == "never" and settings.cfg_scale != 1.0:
+            contradictory.append(f"{base.value}: cfg_scale={settings.cfg_scale} but negative prompt is 'never'")
+    assert contradictory == []

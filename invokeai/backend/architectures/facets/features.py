@@ -49,7 +49,15 @@ class FeaturesFacet(Facet):
 
     guidance_label: Literal["CFG", "Guidance"] = "CFG"
     """What to call the slider. FLUX-family models expose a distilled guidance embedding rather than
-    classifier-free guidance, and calling it CFG has confused users into expecting CFG behaviour."""
+    classifier-free guidance, and calling it CFG has confused users into expecting CFG behaviour.
+
+    There is only ever *one* slider. No architecture offers both knobs, so the UI shows a single
+    control and this label is the whole difference between them -- see `GenerateModelFields.tsx`,
+    where the field is labelled from here and valued from `cfgScale`. `MainModelDefaultSettings` has
+    both a `cfg_scale` and a `guidance` field, so a declaration must not fill in both and expect the
+    UI to distinguish: the value the slider takes is `guidance` where it is set and `cfg_scale`
+    otherwise. Today only FLUX sets both (cfg_scale 1.0 meaning "off", guidance 3.5 meaning the
+    distilled embedding)."""
 
     scheduler_set: SchedulerSet | None = None
     scheduler_applies_to_graph: bool = False

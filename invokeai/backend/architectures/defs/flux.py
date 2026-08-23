@@ -20,13 +20,17 @@ register(
     DefaultSettingsFacet(
         {
             # schnell is timestep-distilled: 4 steps, and it ignores guidance entirely.
-            FluxVariantType.Schnell: MainModelDefaultSettings(steps=4, cfg_scale=1.0, width=1024, height=1024),
+            FluxVariantType.Schnell: MainModelDefaultSettings(
+                scheduler="euler", steps=4, cfg_scale=1.0, width=1024, height=1024
+            ),
             FluxVariantType.DevFill: MainModelDefaultSettings(
-                steps=50, cfg_scale=1.0, guidance=30.0, width=1024, height=1024
+                scheduler="euler", steps=50, cfg_scale=1.0, guidance=30.0, width=1024, height=1024
             ),
             # dev. The card's example uses 50 steps; 28 is the de-facto standard and what FLUX.2
             # [dev] already declares here, so the two stay consistent.
-            None: MainModelDefaultSettings(steps=28, cfg_scale=1.0, guidance=3.5, width=1024, height=1024),
+            None: MainModelDefaultSettings(
+                scheduler="euler", steps=28, cfg_scale=1.0, guidance=3.5, width=1024, height=1024
+            ),
         }
     ),
     ModalityFacet(frozenset({"txt2img", "img2img", "inpaint", "outpaint"}), metadata_slug="flux"),

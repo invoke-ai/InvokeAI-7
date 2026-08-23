@@ -17,7 +17,9 @@ register(
     # THUDM/CogView4-6B's own example: 50 steps at guidance 3.5, 1024x1024. This is true
     # classifier-free guidance, so it belongs in cfg_scale — and the denoise node already
     # defaults to 3.5, which nothing was propagating to the sliders.
-    DefaultSettingsFacet({None: MainModelDefaultSettings(steps=50, cfg_scale=3.5, width=1024, height=1024)}),
+    DefaultSettingsFacet(
+        {None: MainModelDefaultSettings(scheduler="euler_a", steps=50, cfg_scale=3.5, width=1024, height=1024)}
+    ),
     ModalityFacet(frozenset({"txt2img", "img2img", "inpaint", "outpaint"}), metadata_slug="cogview4"),
     FeaturesFacet(
         negative_prompt=NegativePrompt(visible=True, usage="always"),
