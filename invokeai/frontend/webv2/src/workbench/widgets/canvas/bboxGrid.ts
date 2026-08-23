@@ -11,7 +11,7 @@ export const DEFAULT_MODEL_GRID = 8;
 /**
  * The bbox grid size for a model base:
  * - `cogview4` → 32
- * - `flux` / `flux2` / `sd-3` / `qwen-image` / `z-image` → 16
+ * - `flux` / `flux2` / `sd-3` / `qwen-image` / `z-image` / `ernie-image` → 16
  * - everything else (sd-1/sd-2/sdxl/anima/unknown) → 8
  */
 export const gridSizeForModelBase = (base: string | null | undefined): number => {
@@ -23,6 +23,7 @@ export const gridSizeForModelBase = (base: string | null | undefined): number =>
     case 'sd-3':
     case 'qwen-image':
     case 'z-image':
+    case 'ernie-image':
       return 16;
     default:
       return DEFAULT_MODEL_GRID;

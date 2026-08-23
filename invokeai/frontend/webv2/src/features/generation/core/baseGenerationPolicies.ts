@@ -258,6 +258,21 @@ export const BASE_GENERATION = {
     negativePrompt: { visible: true, usage: 'always' },
     ui: { sdVaeOverride: false, colorCompensation: false, vaePrecision: false, seamless: false, cfgRescale: false },
   },
+  'ernie-image': {
+    // ernie_image_denoise carries multiple_of=16 on width/height.
+    dimensions: { grid: 16, optimalSide: 1024 },
+    // The base model's numbers. ERNIE-Image-Turbo wants 8 steps at guidance 1.0, which arrives
+    // through the model's own default_settings rather than a second entry here: Turbo and the
+    // base model share an architecture and a config, so no variant discriminates them.
+    defaults: { steps: 50, cfgScale: 4, scheduler: 'euler' },
+    // ERNIE_IMAGE_SCHEDULER_MAP is euler/heun/lcm, and the denoise node takes the choice.
+    schedulerSet: 'flow',
+    schedulerAppliesToGraph: true,
+    guidanceLabel: 'CFG',
+    // negative_conditioning is 'required when guidance_scale != 1.0'.
+    negativePrompt: { visible: true, usage: 'cfg-gated' },
+    ui: { sdVaeOverride: false, colorCompensation: false, vaePrecision: false, seamless: false, cfgRescale: false },
+  },
   'qwen-image': {
     dimensions: { grid: 16, optimalSide: 1024 },
     defaults: { steps: 40, cfgScale: 4, scheduler: 'euler_a' },
