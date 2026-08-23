@@ -1,6 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-
 import fixture from '@features/generation/core/__fixtures__/architectureCapabilities.json';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const api = vi.hoisted(() => ({ getArchitectureCapabilities: vi.fn() }));
 

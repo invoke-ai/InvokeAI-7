@@ -21,6 +21,8 @@ const parseDynamicPromptsMock = vi.hoisted(() => vi.fn());
 
 vi.mock('@features/generation/data/promptUtilities', () => ({ parseDynamicPrompts: parseDynamicPromptsMock }));
 
+import { seedArchitectureCapabilities } from '@features/generation/core/architectureCapabilities.testing';
+
 import {
   areInvocationRouteInputsEqual,
   getInvocationRouteInput,
@@ -30,7 +32,6 @@ import {
 import { submitResolvedInvocation } from './invocationSubmit';
 import { createInitialWorkbenchState, workbenchReducer } from './workbenchState.testing';
 import { createWorkbenchStore } from './workbenchStore';
-import { useArchitectureCapabilitiesFixture } from '@features/generation/core/architectureCapabilities.testing';
 
 const animaModel: MainModelConfig = { base: 'anima', key: 'anima-model', name: 'Anima', type: 'main' };
 const animaVae: VaeModelConfig = { base: 'qwen-image', key: 'anima-vae', name: 'Anima VAE', type: 'vae' };
@@ -113,7 +114,7 @@ const getActiveProject = (values: GenerateWidgetValues) => {
   return project!;
 };
 
-useArchitectureCapabilitiesFixture();
+seedArchitectureCapabilities();
 
 describe('resolveInvocationRoute', () => {
   it('invalidates Anima generation until required components are selected', () => {

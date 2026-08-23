@@ -1,27 +1,19 @@
 import type {
   GenerationModelCatalogItem as ModelConfig,
   GenerationModelTaxonomyType as ModelTaxonomyType,
-  KnownGenerationModelBase as KnownModelBase,
   PromptHistoryItem,
 } from '@features/generation/core/contracts';
-
-import {
-  isSupportedGenerateBase,
-  SUPPORTED_GENERATE_BASES,
-  type SupportedGenerateBase,
-} from '@features/generation/core/supportedBases';
-
-import type {
-  BaseGenerationConfig,
-  GuidanceLabel,
-  NegativePromptUsage,
-  SchedulerSetId,
-} from '@features/generation/core/generationConfig';
+import type { BaseGenerationConfig, GuidanceLabel } from '@features/generation/core/generationConfig';
 
 import {
   getArchitectureFeatures,
   getArchitectureGenerationConfig,
 } from '@features/generation/core/architectureCapabilities';
+import {
+  isSupportedGenerateBase,
+  SUPPORTED_GENERATE_BASES,
+  type SupportedGenerateBase,
+} from '@features/generation/core/supportedBases';
 
 import type {
   GenerateModelConfig,
@@ -89,12 +81,7 @@ export interface SchedulerOption {
   label: string;
 }
 
-export type {
-  BaseGenerationConfig,
-  GuidanceLabel,
-  NegativePromptUsage,
-  SchedulerSetId,
-} from '@features/generation/core/generationConfig';
+export type { BaseGenerationConfig, GuidanceLabel } from '@features/generation/core/generationConfig';
 
 type GenerateDefaultSettings =
   | {
@@ -171,7 +158,6 @@ const FLOW_SCHEDULERS_WITHOUT_LCM = new Set(FLOW_SCHEDULER_OPTIONS_WITHOUT_LCM.m
 const ANIMA_SCHEDULERS = new Set(ANIMA_SCHEDULER_OPTIONS.map((option) => option.value));
 
 export const isKnownScheduler = (value: string): boolean => KNOWN_SCHEDULERS.has(value);
-
 
 export { isSupportedGenerateBase, SUPPORTED_GENERATE_BASES, type SupportedGenerateBase };
 
@@ -299,8 +285,8 @@ const getRecordGuidanceValue = (
   guidanceLabel: GuidanceLabel
 ): number | null | undefined =>
   guidanceLabel === 'Guidance'
-    ? defaults?.guidance ?? defaults?.cfg_scale
-    : defaults?.cfg_scale ?? defaults?.guidance;
+    ? (defaults?.guidance ?? defaults?.cfg_scale)
+    : (defaults?.cfg_scale ?? defaults?.guidance);
 
 export const getGenerationDefaults = (model: GenerateModelConfig | undefined) => {
   const config = getBaseGenerationConfig(model);

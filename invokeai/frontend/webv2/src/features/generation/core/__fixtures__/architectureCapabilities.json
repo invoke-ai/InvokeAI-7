@@ -3,12 +3,7 @@
     "base": "anima",
     "variant": null,
     "modality": {
-      "modes": [
-        "img2img",
-        "inpaint",
-        "outpaint",
-        "txt2img"
-      ],
+      "modes": ["img2img", "inpaint", "outpaint", "txt2img"],
       "metadata_slug": "anima"
     },
     "features": {
@@ -51,12 +46,7 @@
     "base": "cogview4",
     "variant": null,
     "modality": {
-      "modes": [
-        "img2img",
-        "inpaint",
-        "outpaint",
-        "txt2img"
-      ],
+      "modes": ["img2img", "inpaint", "outpaint", "txt2img"],
       "metadata_slug": "cogview4"
     },
     "features": {
@@ -99,9 +89,7 @@
     "base": "ernie-image",
     "variant": null,
     "modality": {
-      "modes": [
-        "txt2img"
-      ],
+      "modes": ["txt2img"],
       "metadata_slug": "ernie_image"
     },
     "features": {
@@ -144,12 +132,7 @@
     "base": "flux",
     "variant": null,
     "modality": {
-      "modes": [
-        "img2img",
-        "inpaint",
-        "outpaint",
-        "txt2img"
-      ],
+      "modes": ["img2img", "inpaint", "outpaint", "txt2img"],
       "metadata_slug": "flux"
     },
     "features": {
@@ -162,10 +145,7 @@
       "guidance_label": "Guidance",
       "scheduler_set": "flow",
       "scheduler_applies_to_graph": true,
-      "control_kinds": [
-        "control_lora",
-        "controlnet"
-      ],
+      "control_kinds": ["control_lora", "controlnet"],
       "max_reference_images": 5,
       "reference_images_require_variant": null,
       "supports_regional_guidance": true,
@@ -195,12 +175,7 @@
     "base": "flux",
     "variant": "dev_fill",
     "modality": {
-      "modes": [
-        "img2img",
-        "inpaint",
-        "outpaint",
-        "txt2img"
-      ],
+      "modes": ["img2img", "inpaint", "outpaint", "txt2img"],
       "metadata_slug": "flux"
     },
     "features": {
@@ -213,10 +188,7 @@
       "guidance_label": "Guidance",
       "scheduler_set": "flow",
       "scheduler_applies_to_graph": true,
-      "control_kinds": [
-        "control_lora",
-        "controlnet"
-      ],
+      "control_kinds": ["control_lora", "controlnet"],
       "max_reference_images": 5,
       "reference_images_require_variant": null,
       "supports_regional_guidance": true,
@@ -246,12 +218,7 @@
     "base": "flux",
     "variant": "schnell",
     "modality": {
-      "modes": [
-        "img2img",
-        "inpaint",
-        "outpaint",
-        "txt2img"
-      ],
+      "modes": ["img2img", "inpaint", "outpaint", "txt2img"],
       "metadata_slug": "flux"
     },
     "features": {
@@ -264,10 +231,7 @@
       "guidance_label": "Guidance",
       "scheduler_set": "flow",
       "scheduler_applies_to_graph": true,
-      "control_kinds": [
-        "control_lora",
-        "controlnet"
-      ],
+      "control_kinds": ["control_lora", "controlnet"],
       "max_reference_images": 5,
       "reference_images_require_variant": null,
       "supports_regional_guidance": true,
@@ -297,12 +261,7 @@
     "base": "flux2",
     "variant": null,
     "modality": {
-      "modes": [
-        "img2img",
-        "inpaint",
-        "outpaint",
-        "txt2img"
-      ],
+      "modes": ["img2img", "inpaint", "outpaint", "txt2img"],
       "metadata_slug": "flux2"
     },
     "features": {
@@ -345,12 +304,7 @@
     "base": "flux2",
     "variant": "dev",
     "modality": {
-      "modes": [
-        "img2img",
-        "inpaint",
-        "outpaint",
-        "txt2img"
-      ],
+      "modes": ["img2img", "inpaint", "outpaint", "txt2img"],
       "metadata_slug": "flux2"
     },
     "features": {
@@ -393,12 +347,7 @@
     "base": "flux2",
     "variant": "klein_4b_base",
     "modality": {
-      "modes": [
-        "img2img",
-        "inpaint",
-        "outpaint",
-        "txt2img"
-      ],
+      "modes": ["img2img", "inpaint", "outpaint", "txt2img"],
       "metadata_slug": "flux2"
     },
     "features": {
@@ -441,12 +390,7 @@
     "base": "flux2",
     "variant": "klein_9b_base",
     "modality": {
-      "modes": [
-        "img2img",
-        "inpaint",
-        "outpaint",
-        "txt2img"
-      ],
+      "modes": ["img2img", "inpaint", "outpaint", "txt2img"],
       "metadata_slug": "flux2"
     },
     "features": {
@@ -489,9 +433,7 @@
     "base": "ideogram-4",
     "variant": null,
     "modality": {
-      "modes": [
-        "txt2img"
-      ],
+      "modes": ["txt2img"],
       "metadata_slug": "ideogram4"
     },
     "features": {
@@ -534,12 +476,7 @@
     "base": "krea-2",
     "variant": null,
     "modality": {
-      "modes": [
-        "img2img",
-        "inpaint",
-        "outpaint",
-        "txt2img"
-      ],
+      "modes": ["img2img", "inpaint", "outpaint", "txt2img"],
       "metadata_slug": "krea2"
     },
     "features": {
@@ -582,12 +519,7 @@
     "base": "krea-2",
     "variant": "krea2_base",
     "modality": {
-      "modes": [
-        "img2img",
-        "inpaint",
-        "outpaint",
-        "txt2img"
-      ],
+      "modes": ["img2img", "inpaint", "outpaint", "txt2img"],
       "metadata_slug": "krea2"
     },
     "features": {
@@ -630,14 +562,7 @@
     "base": "minimax-h3",
     "variant": null,
     "modality": {
-      "modes": [
-        "extend_video",
-        "flf2v",
-        "i2v",
-        "lf2v",
-        "t2v",
-        "txt2img"
-      ],
+      "modes": ["extend_video", "flf2v", "i2v", "lf2v", "t2v", "txt2img"],
       "metadata_slug": "minimax_h3"
     },
     "features": {
@@ -680,12 +605,7 @@
     "base": "qwen-image",
     "variant": null,
     "modality": {
-      "modes": [
-        "img2img",
-        "inpaint",
-        "outpaint",
-        "txt2img"
-      ],
+      "modes": ["img2img", "inpaint", "outpaint", "txt2img"],
       "metadata_slug": "qwen_image"
     },
     "features": {
@@ -728,12 +648,7 @@
     "base": "sd-1",
     "variant": null,
     "modality": {
-      "modes": [
-        "img2img",
-        "inpaint",
-        "outpaint",
-        "txt2img"
-      ],
+      "modes": ["img2img", "inpaint", "outpaint", "txt2img"],
       "metadata_slug": null
     },
     "features": {
@@ -746,10 +661,7 @@
       "guidance_label": "CFG",
       "scheduler_set": "standard",
       "scheduler_applies_to_graph": true,
-      "control_kinds": [
-        "controlnet",
-        "t2i_adapter"
-      ],
+      "control_kinds": ["controlnet", "t2i_adapter"],
       "max_reference_images": 5,
       "reference_images_require_variant": null,
       "supports_regional_guidance": true,
@@ -779,12 +691,7 @@
     "base": "sd-2",
     "variant": null,
     "modality": {
-      "modes": [
-        "img2img",
-        "inpaint",
-        "outpaint",
-        "txt2img"
-      ],
+      "modes": ["img2img", "inpaint", "outpaint", "txt2img"],
       "metadata_slug": null
     },
     "features": {
@@ -827,12 +734,7 @@
     "base": "sd-3",
     "variant": null,
     "modality": {
-      "modes": [
-        "img2img",
-        "inpaint",
-        "outpaint",
-        "txt2img"
-      ],
+      "modes": ["img2img", "inpaint", "outpaint", "txt2img"],
       "metadata_slug": "sd3"
     },
     "features": {
@@ -875,12 +777,7 @@
     "base": "sdxl",
     "variant": null,
     "modality": {
-      "modes": [
-        "img2img",
-        "inpaint",
-        "outpaint",
-        "txt2img"
-      ],
+      "modes": ["img2img", "inpaint", "outpaint", "txt2img"],
       "metadata_slug": "sdxl"
     },
     "features": {
@@ -893,10 +790,7 @@
       "guidance_label": "CFG",
       "scheduler_set": "standard",
       "scheduler_applies_to_graph": true,
-      "control_kinds": [
-        "controlnet",
-        "t2i_adapter"
-      ],
+      "control_kinds": ["controlnet", "t2i_adapter"],
       "max_reference_images": 5,
       "reference_images_require_variant": null,
       "supports_regional_guidance": true,
@@ -969,16 +863,7 @@
     "base": "wan",
     "variant": null,
     "modality": {
-      "modes": [
-        "extend_video",
-        "i2v",
-        "img2img",
-        "inpaint",
-        "interpolate",
-        "outpaint",
-        "t2v",
-        "txt2img"
-      ],
+      "modes": ["extend_video", "i2v", "img2img", "inpaint", "interpolate", "outpaint", "t2v", "txt2img"],
       "metadata_slug": "wan"
     },
     "features": {
@@ -1021,16 +906,7 @@
     "base": "wan",
     "variant": "ti2v_5b",
     "modality": {
-      "modes": [
-        "extend_video",
-        "i2v",
-        "img2img",
-        "inpaint",
-        "interpolate",
-        "outpaint",
-        "t2v",
-        "txt2img"
-      ],
+      "modes": ["extend_video", "i2v", "img2img", "inpaint", "interpolate", "outpaint", "t2v", "txt2img"],
       "metadata_slug": "wan"
     },
     "features": {
@@ -1073,12 +949,7 @@
     "base": "z-image",
     "variant": null,
     "modality": {
-      "modes": [
-        "img2img",
-        "inpaint",
-        "outpaint",
-        "txt2img"
-      ],
+      "modes": ["img2img", "inpaint", "outpaint", "txt2img"],
       "metadata_slug": "z_image"
     },
     "features": {
@@ -1091,9 +962,7 @@
       "guidance_label": "CFG",
       "scheduler_set": "flow",
       "scheduler_applies_to_graph": true,
-      "control_kinds": [
-        "z_image_control"
-      ],
+      "control_kinds": ["z_image_control"],
       "max_reference_images": 0,
       "reference_images_require_variant": null,
       "supports_regional_guidance": false,
@@ -1123,12 +992,7 @@
     "base": "z-image",
     "variant": "zbase",
     "modality": {
-      "modes": [
-        "img2img",
-        "inpaint",
-        "outpaint",
-        "txt2img"
-      ],
+      "modes": ["img2img", "inpaint", "outpaint", "txt2img"],
       "metadata_slug": "z_image"
     },
     "features": {
@@ -1141,9 +1005,7 @@
       "guidance_label": "CFG",
       "scheduler_set": "flow",
       "scheduler_applies_to_graph": true,
-      "control_kinds": [
-        "z_image_control"
-      ],
+      "control_kinds": ["z_image_control"],
       "max_reference_images": 0,
       "reference_images_require_variant": null,
       "supports_regional_guidance": false,

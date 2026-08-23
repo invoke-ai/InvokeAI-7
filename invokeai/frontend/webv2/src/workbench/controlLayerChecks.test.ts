@@ -1,6 +1,7 @@
 import type { ModelConfig } from '@features/models';
 import type { CanvasControlLayerContract } from '@workbench/canvas-engine/api';
 
+import { seedArchitectureCapabilities } from '@features/generation/core/architectureCapabilities.testing';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -8,7 +9,6 @@ import {
   getControlLayerAttentionReason,
   hasControlLayerContent,
 } from './controlLayerChecks';
-import { useArchitectureCapabilitiesFixture } from '@features/generation/core/architectureCapabilities.testing';
 
 const model = (key: string, base: string, type: string): ModelConfig => ({ base, key, name: key, type }) as ModelConfig;
 
@@ -44,7 +44,7 @@ const controlLayer = (
 const sdxl = { base: 'sdxl' };
 const models = [model('sdxl-control', 'sdxl', 'controlnet'), model('sd1-control', 'sd-1', 'controlnet')];
 
-useArchitectureCapabilitiesFixture();
+seedArchitectureCapabilities();
 
 describe('hasControlLayerContent', () => {
   it('matches the pipeline content gate', () => {

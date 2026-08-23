@@ -22,7 +22,7 @@ import {
 export const architectureCapabilitiesFixture = fixture as ArchitectureCapabilitiesRow[];
 
 /** Load the table before each test and drop it afterwards, so nothing leaks between files. */
-export const useArchitectureCapabilitiesFixture = (): void => {
+export const seedArchitectureCapabilities = (): void => {
   beforeEach(() => {
     setArchitectureCapabilities(architectureCapabilitiesFixture);
   });

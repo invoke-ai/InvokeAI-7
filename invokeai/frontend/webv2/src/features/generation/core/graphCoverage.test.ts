@@ -20,6 +20,7 @@
 
 import type { BackendGraphContract } from '@features/generation/core/contracts';
 
+import { seedArchitectureCapabilities } from '@features/generation/core/architectureCapabilities.testing';
 import { describe, expect, it } from 'vitest';
 
 import type {
@@ -37,7 +38,6 @@ import {
   SUPPORTED_GENERATE_BASES,
 } from './baseGenerationPolicies';
 import { compileGenerateGraph, GRAPH_BUILDERS } from './graph';
-import { useArchitectureCapabilitiesFixture } from '@features/generation/core/architectureCapabilities.testing';
 
 /**
  * Main-model shapes to compile per base.
@@ -205,7 +205,7 @@ const cases = SUPPORTED_GENERATE_BASES.flatMap((base) =>
   shapesForBase(base).map((shape) => ({ base, label: `${base} / ${shape.label}`, shape }))
 );
 
-useArchitectureCapabilitiesFixture();
+seedArchitectureCapabilities();
 
 describe('generate graph coverage', () => {
   it('has a builder for every supported base and no builder for anything else', () => {

@@ -1,11 +1,11 @@
 import type { MainModelConfig } from '@features/generation/contracts';
 import type { ModelConfig } from '@features/models';
 
+import { seedArchitectureCapabilities } from '@features/generation/core/architectureCapabilities.testing';
 import { getDefaultGenerateSettings, getMaxReferenceImages } from '@features/generation/settings';
 import { describe, expect, it } from 'vitest';
 
 import { appendReferenceImage, type AppendReferenceImageResult } from './appendReferenceImage';
-import { useArchitectureCapabilitiesFixture } from '@features/generation/core/architectureCapabilities.testing';
 
 const sd1Model: MainModelConfig = {
   base: 'sd-1',
@@ -26,7 +26,7 @@ const generateValuesFor = (referenceImages: unknown[] = []): Record<string, unkn
   referenceImages,
 });
 
-useArchitectureCapabilitiesFixture();
+seedArchitectureCapabilities();
 
 describe('appendReferenceImage', () => {
   it('appends a reference image built from the flat upload result', () => {

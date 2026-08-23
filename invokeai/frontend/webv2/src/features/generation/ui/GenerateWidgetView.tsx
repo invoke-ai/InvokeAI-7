@@ -3,11 +3,11 @@ import type { GenerateModelConfig, GenerateSettings, LoraModelConfig } from '@fe
 
 import { Stack, Text } from '@chakra-ui/react';
 import { getDefaultGenerateSettings, isSupportedGenerateModel } from '@features/generation/core/baseGenerationPolicies';
+import { isLoraModelConfig, normalizeGenerateSettings } from '@features/generation/core/settings';
 import {
   ensureArchitectureCapabilitiesLoaded,
   useArchitectureCapabilitiesSelector,
 } from '@features/generation/data/architectureCapabilitiesStore';
-import { isLoraModelConfig, normalizeGenerateSettings } from '@features/generation/core/settings';
 import { resolveGenerateWidgetValues } from '@features/generation/settings';
 import { Button } from '@platform/ui/Button';
 import { useCallback, useMemo } from 'react';

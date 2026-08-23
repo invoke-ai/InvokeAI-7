@@ -6,6 +6,7 @@ import type { uploadCanvasImage } from '@workbench/canvas-operations/backend/can
 import type { CanvasProjectMutation } from '@workbench/canvasProjectMutations';
 import type { Project, WorkbenchState } from '@workbench/projectContracts';
 
+import { seedArchitectureCapabilities } from '@features/generation/core/architectureCapabilities.testing';
 import { accountLifecycle } from '@platform/state/accountLifecycle';
 import {
   createControlLayer,
@@ -21,7 +22,6 @@ import { createInitialWorkbenchState, type WorkbenchAction } from '@workbench/wo
 import { describe, expect, it, vi } from 'vitest';
 
 import { importGalleryImagesToCanvas, type GalleryCanvasImportDestination } from './importGalleryImages';
-import { useArchitectureCapabilitiesFixture } from '@features/generation/core/architectureCapabilities.testing';
 
 const queriesFor = (getState: () => WorkbenchState) => ({
   getProject: (projectId: string) => getState().projects.find((project) => project.id === projectId) ?? null,
@@ -214,7 +214,7 @@ const expectedLayer = (
   }
 };
 
-useArchitectureCapabilitiesFixture();
+seedArchitectureCapabilities();
 
 describe('importGalleryImagesToCanvas', () => {
   it.each<Exclude<GalleryCanvasImportDestination, 'control-resized'>>([

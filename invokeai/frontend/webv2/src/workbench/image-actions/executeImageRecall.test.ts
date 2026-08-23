@@ -14,8 +14,9 @@ const galleryApi = vi.hoisted(() => ({
 
 vi.mock('@features/gallery', () => galleryApi);
 
+import { seedArchitectureCapabilities } from '@features/generation/core/architectureCapabilities.testing';
+
 import { executeImageRecall } from './executeImageRecall';
-import { useArchitectureCapabilitiesFixture } from '@features/generation/core/architectureCapabilities.testing';
 
 const model = {
   base: 'sdxl',
@@ -54,7 +55,7 @@ const createCommands = () => {
   return { add, commands, setSettings };
 };
 
-useArchitectureCapabilitiesFixture();
+seedArchitectureCapabilities();
 
 describe('executeImageRecall', () => {
   beforeEach(() => {

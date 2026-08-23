@@ -1,3 +1,4 @@
+import { seedArchitectureCapabilities } from '@features/generation/core/architectureCapabilities.testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type {
@@ -11,7 +12,6 @@ import type {
 
 import { getDefaultGenerateSettings, isSupportedGenerateModel } from './baseGenerationPolicies';
 import { compileGenerateGraph, generateSeedSequence, resolveGenerateSeed } from './graph';
-import { useArchitectureCapabilitiesFixture } from '@features/generation/core/architectureCapabilities.testing';
 
 const sd1Model: MainModelConfig = { base: 'sd-1', key: 'sd1-model', name: 'SD 1.5', type: 'main' };
 const sd2Model: MainModelConfig = { base: 'sd-2', key: 'sd2-model', name: 'SD 2', type: 'main' };
@@ -159,7 +159,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-useArchitectureCapabilitiesFixture();
+seedArchitectureCapabilities();
 
 describe('compileGenerateGraph', () => {
   it('recognizes the legacy-supported generate model families', () => {

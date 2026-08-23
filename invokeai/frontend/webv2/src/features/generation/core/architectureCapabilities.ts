@@ -74,7 +74,7 @@ const FALLBACK_OPTIMAL_SIDE = 1024;
  * samples with, so reading `cfg_scale` first would present the off-switch as the setting.
  */
 const guidanceValue = (defaults: NonNullable<ArchitectureCapabilitiesRow['defaults']>, label: GuidanceLabel): number =>
-  (label === 'Guidance' ? defaults.guidance ?? defaults.cfg_scale : defaults.cfg_scale ?? defaults.guidance) ??
+  (label === 'Guidance' ? (defaults.guidance ?? defaults.cfg_scale) : (defaults.cfg_scale ?? defaults.guidance)) ??
   FALLBACK_CFG_SCALE;
 
 /**

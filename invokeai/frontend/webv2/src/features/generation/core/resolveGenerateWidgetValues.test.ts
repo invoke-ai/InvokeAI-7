@@ -1,15 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import type { GenerateWidgetValues, MainModelConfig } from './types';
+
 import capabilitiesFixture from './__fixtures__/architectureCapabilities.json';
 import {
   type ArchitectureCapabilitiesRow,
   resetArchitectureCapabilities,
   setArchitectureCapabilities,
 } from './architectureCapabilities';
-
-
-import type { GenerateWidgetValues, MainModelConfig } from './types';
-
 import { getDefaultGenerateSettings } from './baseGenerationPolicies';
 import { resolveGenerateWidgetValues } from './resolveGenerateWidgetValues';
 

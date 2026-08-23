@@ -6,10 +6,10 @@ import type {
   VaeModelConfig,
 } from '@features/generation/contracts';
 
+import { seedArchitectureCapabilities } from '@features/generation/core/architectureCapabilities.testing';
 import { describe, expect, it } from 'vitest';
 
 import { buildImageRecallSettings, getImageRecallCapabilities } from './imageRecall';
-import { useArchitectureCapabilitiesFixture } from '@features/generation/core/architectureCapabilities.testing';
 
 const sdxlModel: MainModelConfig = { base: 'sdxl', key: 'sdxl-model', name: 'SDXL', type: 'main' };
 const sd1Model: MainModelConfig = { base: 'sd-1', key: 'sd1-model', name: 'SD 1.5', type: 'main' };
@@ -134,7 +134,7 @@ const metadata = {
   width: 513,
 };
 
-useArchitectureCapabilitiesFixture();
+seedArchitectureCapabilities();
 
 describe('image recall', () => {
   it.each(['all', 'remix', 'prompts'] as const)(

@@ -4,6 +4,7 @@ import type { InvocationTemplatesSnapshot } from '@features/workflow/react';
 import type { GraphContract } from '@workbench/graphContracts';
 import type { TFunction } from 'i18next';
 
+import { seedArchitectureCapabilities } from '@features/generation/core/architectureCapabilities.testing';
 import { getDefaultGenerateSettings } from '@features/generation/settings';
 import { createGraphBearingSurface } from '@workbench/graphSurfaces';
 import { canvasWidgetManifest } from '@workbench/widgets/canvas/manifest';
@@ -13,7 +14,6 @@ import { createInitialWorkbenchState, workbenchReducer } from '@workbench/workbe
 import { describe, expect, it } from 'vitest';
 
 import { buildGraphPreviewSource } from './graphPreviewSource';
-import { useArchitectureCapabilitiesFixture } from '@features/generation/core/architectureCapabilities.testing';
 
 const t = ((key: string) => key) as TFunction;
 
@@ -57,7 +57,7 @@ const generateSurface = createGraphBearingSurface(generateWidgetManifest, 'left'
 const workflowSurface = createGraphBearingSurface(workflowWidgetManifest, 'left', 'Workflow')!;
 const canvasSurface = createGraphBearingSurface(canvasWidgetManifest, 'center', 'Canvas')!;
 
-useArchitectureCapabilitiesFixture();
+seedArchitectureCapabilities();
 
 describe('buildGraphPreviewSource', () => {
   it('live-compiles the generate source and reports a seed notice when randomized', () => {

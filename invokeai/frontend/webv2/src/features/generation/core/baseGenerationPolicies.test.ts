@@ -1,3 +1,4 @@
+import { seedArchitectureCapabilities } from '@features/generation/core/architectureCapabilities.testing';
 import { describe, expect, it } from 'vitest';
 
 import type {
@@ -24,9 +25,7 @@ import {
   getSettingsWithModelDefaults,
   isReferenceImageSupported,
   isSupportedGenerateModel,
-  SUPPORTED_GENERATE_BASES,
 } from './baseGenerationPolicies';
-import { useArchitectureCapabilitiesFixture } from '@features/generation/core/architectureCapabilities.testing';
 
 const createModel = (base: string, overrides: Partial<MainModelConfig> = {}): MainModelConfig => ({
   base,
@@ -102,7 +101,7 @@ const externalModel: GenerateModelConfig = {
   type: 'external_image_generator',
 };
 
-useArchitectureCapabilitiesFixture();
+seedArchitectureCapabilities();
 
 describe('architecture policy, read from the backend capability table', () => {
   it('matches expected dimensions per base', () => {

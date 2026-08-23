@@ -1,7 +1,6 @@
-import { getArchitectureFeatures } from '@features/generation/core/architectureCapabilities';
-
 import type { BackendGraphContract, BackendInvocationContract } from '@features/generation/core/contracts';
 
+import { getArchitectureFeatures } from '@features/generation/core/architectureCapabilities';
 import { addEdge, addNode } from '@features/generation/core/graphBuilder';
 
 /** The deterministic denoise node id every canvas base graph uses. */

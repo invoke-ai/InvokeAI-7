@@ -7,6 +7,7 @@ import type {
   VaeModelConfig,
 } from '@features/generation/core/types';
 
+import { seedArchitectureCapabilities } from '@features/generation/core/architectureCapabilities.testing';
 import { getDefaultGenerateSettings } from '@features/generation/core/baseGenerationPolicies';
 import { describe, expect, it } from 'vitest';
 
@@ -16,7 +17,6 @@ import type { CanvasCompileMode, CanvasCompositingSettings, Rect } from './types
 
 import { compileCanvasGraph } from './compileCanvasGraph';
 import { DEFAULT_CANVAS_COMPOSITING } from './types';
-import { useArchitectureCapabilitiesFixture } from '@features/generation/core/architectureCapabilities.testing';
 
 const sd1Model: MainModelConfig = { base: 'sd-1', key: 'sd1-model', name: 'SD 1.5', type: 'main' };
 const sd2Model: MainModelConfig = { base: 'sd-2', key: 'sd2-model', name: 'SD 2', type: 'main' };
@@ -251,7 +251,7 @@ const BASE_CASES: BaseCase[] = [
   },
 ];
 
-useArchitectureCapabilitiesFixture();
+seedArchitectureCapabilities();
 
 describe('compileCanvasGraph', () => {
   describe('txt2img per base', () => {
