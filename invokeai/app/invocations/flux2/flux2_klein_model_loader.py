@@ -93,10 +93,13 @@ class Flux2KleinModelLoaderInvocation(BaseInvocation):
 
     vae_model: Optional[ModelIdentifierField] = InputField(
         default=None,
-        description="Standalone VAE model. Flux2 Klein uses the same VAE as FLUX (16-channel). "
+        description="Standalone VAE model (AutoencoderKLFlux2, 32-channel). "
         "If not provided, VAE will be loaded from the Qwen3 Source model.",
         input=Input.Direct,
-        ui_model_base=[BaseModelType.Flux, BaseModelType.Flux2],
+        # A FLUX VAE was offered here and does not work: it is the legacy `AutoEncoder` class with
+        # a 16-channel latent space, and decoding a FLUX.2 latent with it raises
+        # `AutoEncoder.decode() got an unexpected keyword argument 'return_dict'`.
+        ui_model_base=BaseModelType.Flux2,
         ui_model_type=ModelType.VAE,
         title="VAE",
     )

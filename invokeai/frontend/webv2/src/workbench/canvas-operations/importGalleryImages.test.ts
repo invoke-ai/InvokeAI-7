@@ -6,6 +6,7 @@ import type { uploadCanvasImage } from '@workbench/canvas-operations/backend/can
 import type { CanvasProjectMutation } from '@workbench/canvasProjectMutations';
 import type { Project, WorkbenchState } from '@workbench/projectContracts';
 
+import { seedArchitectureCapabilities } from '@features/generation/core/architectureCapabilities.testing';
 import { accountLifecycle } from '@platform/state/accountLifecycle';
 import {
   createControlLayer,
@@ -212,6 +213,8 @@ const expectedLayer = (
     }
   }
 };
+
+seedArchitectureCapabilities();
 
 describe('importGalleryImagesToCanvas', () => {
   it.each<Exclude<GalleryCanvasImportDestination, 'control-resized'>>([

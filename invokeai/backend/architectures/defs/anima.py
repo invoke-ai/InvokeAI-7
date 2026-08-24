@@ -5,6 +5,7 @@ from invokeai.backend.architectures.facets.default_settings import DefaultSettin
 from invokeai.backend.architectures.facets.features import FeaturesFacet, NegativePrompt
 from invokeai.backend.architectures.facets.latent_space import WAN21_16, LatentSpaceFacet
 from invokeai.backend.architectures.facets.modality import ModalityFacet
+from invokeai.backend.architectures.facets.vae import VaeCompatibility, VaeFacet
 from invokeai.backend.architectures.registry import register
 from invokeai.backend.model_manager.configs.default_settings import MainModelDefaultSettings
 from invokeai.backend.model_manager.taxonomy import BaseModelType
@@ -25,5 +26,18 @@ register(
         guidance_label="CFG",
         scheduler_set="anima",
         scheduler_applies_to_graph=True,
+    ),
+    VaeFacet(
+        frozenset(
+            {
+                # `anima_l2i` accepts AutoencoderKLWan or FluxAutoEncoder, each with its own
+                # decode path. The Wan-family file is registered under whichever base it was
+                # installed for -- all three point at the same 194-tensor checkpoint.
+                VaeCompatibility(BaseModelType.Anima),
+                VaeCompatibility(BaseModelType.QwenImage),
+                VaeCompatibility(BaseModelType.Wan, latent_channels=16),
+                VaeCompatibility(BaseModelType.Flux),
+            }
+        )
     ),
 )

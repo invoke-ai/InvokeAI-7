@@ -5,6 +5,7 @@ import type {
   VaeModelConfig,
 } from '@features/generation/contracts';
 
+import { seedArchitectureCapabilities } from '@features/generation/core/architectureCapabilities.testing';
 import { getDefaultGenerateSettings } from '@features/generation/settings';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -26,6 +27,8 @@ const createSettings = (model: GenerateModelConfig, overrides: Partial<GenerateS
 
 const sdxlLora: LoraModelConfig = { base: 'sdxl', key: 'sdxl-lora', name: 'SDXL LoRA', type: 'lora' };
 const sdxlVae: VaeModelConfig = { base: 'sdxl', key: 'sdxl-vae', name: 'SDXL VAE', type: 'vae' };
+
+seedArchitectureCapabilities();
 
 describe('selectProjectGenerateModel', () => {
   it('atomically stores reconciled model settings and returns cleared labels', () => {

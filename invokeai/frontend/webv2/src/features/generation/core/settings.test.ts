@@ -1,3 +1,4 @@
+import { seedArchitectureCapabilities } from '@features/generation/core/architectureCapabilities.testing';
 import { describe, expect, it } from 'vitest';
 
 import type {
@@ -40,6 +41,8 @@ const legacyStoredValues = {
   steps: 30,
   width: 512,
 };
+
+seedArchitectureCapabilities();
 
 describe('normalizeGenerateSettings', () => {
   it('enforces template view mode only when a valid template remains', () => {

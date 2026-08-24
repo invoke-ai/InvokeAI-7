@@ -6,6 +6,7 @@ import type {
   VaeModelConfig,
 } from '@features/generation/contracts';
 
+import { seedArchitectureCapabilities } from '@features/generation/core/architectureCapabilities.testing';
 import { describe, expect, it } from 'vitest';
 
 import { buildImageRecallSettings, getImageRecallCapabilities } from './imageRecall';
@@ -132,6 +133,8 @@ const metadata = {
   vae: { key: vaeModel.key },
   width: 513,
 };
+
+seedArchitectureCapabilities();
 
 describe('image recall', () => {
   it.each(['all', 'remix', 'prompts'] as const)(

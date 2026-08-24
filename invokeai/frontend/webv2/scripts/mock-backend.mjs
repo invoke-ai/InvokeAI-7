@@ -26,6 +26,16 @@ const TINY_PNG = Buffer.from(
 );
 const FIXTURE_VIDEO = readFileSync(resolve(import.meta.dirname, 'mock-assets/fixture-video.mp4'));
 const FIXTURE_VIDEO_POSTER = readFileSync(resolve(import.meta.dirname, 'mock-assets/fixture-video.webp'));
+// Served verbatim from the same file the backend pins in
+// `tests/backend/architectures/test_capabilities_fixture.py`, so the journey tests exercise the
+// payload the real route returns rather than a stand-in that can drift from it.
+const ARCHITECTURE_CAPABILITIES = JSON.parse(
+  readFileSync(
+    resolve(import.meta.dirname, '../src/features/generation/core/__fixtures__/architectureCapabilities.json'),
+    'utf8'
+  )
+);
+
 const MOCK_USER_ID = 'fixture-user';
 
 const clone = (value) => structuredClone(value);
@@ -881,6 +891,9 @@ export const startMockBackend = async (port, { profile = 'empty' } = {}) => {
       }
       if (method === 'GET' && path === '/api/v2/models/install') {
         return json(200, []);
+      }
+      if (method === 'GET' && path === '/api/v2/models/capabilities') {
+        return json(200, ARCHITECTURE_CAPABILITIES);
       }
       if (method === 'GET' && path === '/api/v2/models/starter_models') {
         return json(200, STARTER_MODELS_RESPONSE);

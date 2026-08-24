@@ -35,5 +35,10 @@ register(
         dimension_grid=16,
         guidance_label="CFG",
         scheduler_set="flow",
+        # `ernie_image_denoise` takes a `scheduler` field and builds the sampler from it
+        # (ERNIE_IMAGE_SCHEDULER_MAP), so the choice reaches the graph rather than being a
+        # UI affordance. Omitting this defaulted it to False, which would have hidden the
+        # dropdown and pinned every generation to the first entry.
+        scheduler_applies_to_graph=True,
     ),
 )

@@ -7,6 +7,7 @@ import type {
   VaeModelConfig,
 } from '@features/generation/core/types';
 
+import { seedArchitectureCapabilities } from '@features/generation/core/architectureCapabilities.testing';
 import { getDefaultGenerateSettings } from '@features/generation/core/baseGenerationPolicies';
 import { describe, expect, it } from 'vitest';
 
@@ -249,6 +250,8 @@ const BASE_CASES: BaseCase[] = [
     optimizedDenoising: false,
   },
 ];
+
+seedArchitectureCapabilities();
 
 describe('compileCanvasGraph', () => {
   describe('txt2img per base', () => {

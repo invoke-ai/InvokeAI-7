@@ -1,3 +1,4 @@
+import { seedArchitectureCapabilities } from '@features/generation/core/architectureCapabilities.testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type {
@@ -157,6 +158,8 @@ const getNodeByType = (graph: ReturnType<typeof compile>, type: string) =>
 afterEach(() => {
   vi.restoreAllMocks();
 });
+
+seedArchitectureCapabilities();
 
 describe('compileGenerateGraph', () => {
   it('recognizes the legacy-supported generate model families', () => {

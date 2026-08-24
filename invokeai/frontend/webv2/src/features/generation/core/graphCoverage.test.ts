@@ -2,7 +2,7 @@
  * Every supported base compiles a graph — the systematic counterpart to `graph.test.ts`.
  *
  * `graph.test.ts` asserts *what* individual families wire up, one hand-written case at a time. That
- * leaves a base added to `BASE_GENERATION` and `GRAPH_BUILDERS` but never given a case silently
+ * leaves a base added to `SUPPORTED_GENERATE_BASES` and `GRAPH_BUILDERS` but never given a case silently
  * untested. This file instead iterates `SUPPORTED_GENERATE_BASES`, so a new architecture is covered
  * the moment it is registered, and asserts the properties that hold for *all* of them: the
  * component policy is satisfiable, the builder runs, and the resulting graph is structurally sound.
@@ -20,6 +20,7 @@
 
 import type { BackendGraphContract } from '@features/generation/core/contracts';
 
+import { seedArchitectureCapabilities } from '@features/generation/core/architectureCapabilities.testing';
 import { describe, expect, it } from 'vitest';
 
 import type {
@@ -203,6 +204,8 @@ const compileForShape = (
 const cases = SUPPORTED_GENERATE_BASES.flatMap((base) =>
   shapesForBase(base).map((shape) => ({ base, label: `${base} / ${shape.label}`, shape }))
 );
+
+seedArchitectureCapabilities();
 
 describe('generate graph coverage', () => {
   it('has a builder for every supported base and no builder for anything else', () => {

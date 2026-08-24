@@ -1,8 +1,14 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { GenerationModelCatalogItem } from './contracts';
 import type { GenerateLora, GenerateWidgetValues, LoraModelConfig, MainModelConfig } from './types';
 
+import capabilitiesFixture from './__fixtures__/architectureCapabilities.json';
+import {
+  type ArchitectureCapabilitiesRow,
+  resetArchitectureCapabilities,
+  setArchitectureCapabilities,
+} from './architectureCapabilities';
 import { getDefaultGenerateSettings } from './baseGenerationPolicies';
 import { compileGeneratePreviewGraph, stabilizeBackendGraphIds } from './previewGraph';
 
@@ -33,6 +39,14 @@ const storedValues = createGenerateValues({
   steps: 28,
   width: 1024,
 });
+
+// The resolver fails closed without the backend's architecture table, so seed the registry with the
+// same fixture the backend pins. Reset afterwards so registry state cannot leak between files.
+beforeEach(() => {
+  setArchitectureCapabilities(capabilitiesFixture as ArchitectureCapabilitiesRow[]);
+});
+
+afterEach(resetArchitectureCapabilities);
 
 describe('compileGeneratePreviewGraph', () => {
   it('compiles a ready graph with deterministic node ids across repeated compiles', () => {

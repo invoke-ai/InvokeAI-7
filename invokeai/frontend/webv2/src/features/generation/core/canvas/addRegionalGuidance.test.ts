@@ -1,3 +1,4 @@
+import { seedArchitectureCapabilities } from '@features/generation/core/architectureCapabilities.testing';
 import { describe, expect, it } from 'vitest';
 
 import type { AddRegionalGuidanceOptions, RegionalGuidanceInput, RegionalReferenceModel } from './addRegionalGuidance';
@@ -139,6 +140,8 @@ const hasEdge = (graph: TestGraph, s: string, sf: string, d: string, df: string)
   graph.edges.some(
     (e) => e.source.node_id === s && e.source.field === sf && e.destination.node_id === d && e.destination.field === df
   );
+
+seedArchitectureCapabilities();
 
 describe('isRegionalGuidanceSupportedForBase', () => {
   it('supports sd-1 / sdxl / flux / flux2 / krea-2 and nothing else', () => {

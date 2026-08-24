@@ -57,6 +57,15 @@ class AnimaModelLoaderInvocation(BaseInvocation):
         description="Standalone VAE model. Anima uses a Wan 2.1 / QwenImage VAE (16-channel). "
         "A FLUX VAE can also be used as a compatible fallback.",
         input=Input.Direct,
+        # `anima_l2i` accepts AutoencoderKLWan or FluxAutoEncoder. The Wan-family file is the same
+        # checkpoint whichever of the three bases it was installed under; declaring nothing here
+        # offered every VAE ever installed, including ones that cannot decode an Anima latent.
+        ui_model_base=[
+            BaseModelType.Anima,
+            BaseModelType.QwenImage,
+            BaseModelType.Wan,
+            BaseModelType.Flux,
+        ],
         ui_model_type=ModelType.VAE,
         title="VAE",
     )

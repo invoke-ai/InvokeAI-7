@@ -2,9 +2,15 @@ import type { GenerationModelCatalogItem, GenerateWidgetValues, MainModelConfig 
 import type { PromptTemplateRecord } from '@features/generation/data/promptTemplates';
 import type * as GenerationQueries from '@features/generation/queries';
 
+import capabilitiesFixture from '@features/generation/core/__fixtures__/architectureCapabilities.json';
+import {
+  type ArchitectureCapabilitiesRow,
+  resetArchitectureCapabilities,
+  setArchitectureCapabilities,
+} from '@features/generation/core/architectureCapabilities';
 import { getDefaultGenerateSettings } from '@features/generation/settings';
 import { QueryClient } from '@tanstack/react-query';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const templateQuery = vi.hoisted(() => ({
   queryFn: vi.fn<() => Promise<PromptTemplateRecord[]>>(),
@@ -66,14 +72,17 @@ const createReadableStore = <Snapshot>(initialSnapshot: Snapshot) => {
 };
 
 const setup = ({
+  capabilitiesLoaded: initialCapabilitiesLoaded = true,
   models: initialModels,
   project: initialProject,
 }: {
+  capabilitiesLoaded?: boolean;
   models: readonly GenerationModelCatalogItem[];
   project: GenerateWidgetSyncProjectSnapshot;
 }) => {
   const models = createReadableStore(initialModels);
   const project = createReadableStore(initialProject);
+  const capabilitiesLoaded = createReadableStore(initialCapabilitiesLoaded);
   const patches: Array<{
     origin: 'system';
     projectId: string;
@@ -81,6 +90,7 @@ const setup = ({
   }> = [];
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const deps: GenerateWidgetSyncRuntimeDeps = {
+    capabilitiesLoaded,
     models,
     patchValues: (values, projectId, origin) => {
       patches.push({ origin, projectId, values });
@@ -95,13 +105,21 @@ const setup = ({
   };
   const runtime = createGenerateWidgetSyncRuntime(deps);
 
-  return { models, patches, project, queryClient, runtime };
+  return { capabilitiesLoaded, models, patches, project, queryClient, runtime };
 };
 
 beforeEach(() => {
   templateQuery.queryFn.mockReset();
   templateQuery.queryFn.mockResolvedValue([]);
 });
+
+// The resolver fails closed without the backend's architecture table, so seed the registry with the
+// same fixture the backend pins. Reset afterwards so registry state cannot leak between files.
+beforeEach(() => {
+  setArchitectureCapabilities(capabilitiesFixture as ArchitectureCapabilitiesRow[]);
+});
+
+afterEach(resetArchitectureCapabilities);
 
 describe('createGenerateWidgetSyncRuntime', () => {
   it('reconciles the newly active project after a project switch', () => {
@@ -237,5 +255,31 @@ describe('createGenerateWidgetSyncRuntime', () => {
     await Promise.resolve();
 
     expect(patches).toHaveLength(0);
+  });
+});
+
+describe('the architecture-capabilities gate', () => {
+  // reconcile() writes its result into the project via patchValues, so it must not run on fallback
+  // policy: the values are persisted, not merely displayed. This is why the gate lives here and
+  // not only in the widget -- the runtime reconciles at construction, before anything renders.
+  it('writes nothing until the capability table has arrived', () => {
+    const { capabilitiesLoaded, patches } = setup({
+      capabilitiesLoaded: false,
+      models: [createModel('model')],
+      project: { id: 'project-1', values: {} },
+    });
+
+    expect(patches).toEqual([]);
+
+    capabilitiesLoaded.setSnapshot(true);
+
+    expect(patches.length).toBeGreaterThan(0);
+    expect(patches[0]?.projectId).toBe('project-1');
+  });
+
+  it('reconciles at construction when the table is already there', () => {
+    const { patches } = setup({ models: [createModel('model')], project: { id: 'project-1', values: {} } });
+
+    expect(patches.length).toBeGreaterThan(0);
   });
 });

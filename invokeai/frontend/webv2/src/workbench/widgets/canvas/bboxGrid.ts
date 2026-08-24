@@ -1,31 +1,19 @@
 /**
- * Maps a model base to the bbox snapping grid size (document px), mirroring the
- * legacy `getGridSize` rule: generation dimensions must land on a base-specific
- * multiple. React reads the active generate model's base and feeds the result
- * into `engine.viewport.setBboxGrid`; the engine itself stays model-agnostic.
+ * Maps a model base to the bbox snapping grid size (document px). React reads the active generate
+ * model's base and feeds the result into `engine.viewport.setBboxGrid`; the engine itself stays
+ * model-agnostic.
+ *
+ * The rule comes from the backend now, which is where it is enforced: each denoise node carries a
+ * `multiple_of` on its width/height fields, and the architecture declares the same number. This
+ * used to be a second, hand-maintained copy of that column -- and it had drifted, offering 8px
+ * steps for krea-2, wan and ideogram-4, all of which reject anything but multiples of 16 at
+ * enqueue time.
  */
 
-/** Default grid when no model is selected (or an unknown base). */
+import { getDimensionGridForBase } from '@features/generation/settings';
+
+/** Default grid when no model is selected, or the backend has no row for its architecture. */
 export const DEFAULT_MODEL_GRID = 8;
 
-/**
- * The bbox grid size for a model base:
- * - `cogview4` → 32
- * - `flux` / `flux2` / `sd-3` / `qwen-image` / `z-image` / `ernie-image` → 16
- * - everything else (sd-1/sd-2/sdxl/anima/unknown) → 8
- */
-export const gridSizeForModelBase = (base: string | null | undefined): number => {
-  switch (base) {
-    case 'cogview4':
-      return 32;
-    case 'flux':
-    case 'flux2':
-    case 'sd-3':
-    case 'qwen-image':
-    case 'z-image':
-    case 'ernie-image':
-      return 16;
-    default:
-      return DEFAULT_MODEL_GRID;
-  }
-};
+export const gridSizeForModelBase = (base: string | null | undefined): number =>
+  (base ? getDimensionGridForBase(base) : null) ?? DEFAULT_MODEL_GRID;

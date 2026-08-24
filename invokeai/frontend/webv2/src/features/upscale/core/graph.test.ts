@@ -1,6 +1,7 @@
 import type { GenerateLora, VaeModelConfig } from '@features/generation/contracts';
 import type { ModelConfig } from '@features/models';
 
+import { seedArchitectureCapabilities } from '@features/generation/core/architectureCapabilities.testing';
 import { describe, expect, it } from 'vitest';
 
 import { compileUpscaleGraph, getUpscaleControlNetValues, getUpscaleDenoisingStart } from './graph';
@@ -53,6 +54,8 @@ const hasEdge = (
       edge.destination.node_id === destination &&
       edge.destination.field === destinationField
   );
+
+seedArchitectureCapabilities();
 
 describe('compileUpscaleGraph', () => {
   it('preserves the exact legacy creativity and structure formulas', () => {

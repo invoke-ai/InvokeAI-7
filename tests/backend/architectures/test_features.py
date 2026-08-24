@@ -165,3 +165,34 @@ def test_an_architecture_that_cannot_do_cfg_declares_no_cfg() -> None:
         if features.negative_prompt.usage == "never" and settings.cfg_scale != 1.0:
             contradictory.append(f"{base.value}: cfg_scale={settings.cfg_scale} but negative prompt is 'never'")
     assert contradictory == []
+
+
+def test_scheduler_applies_to_graph_matches_the_node() -> None:
+    """The flag must agree with whether the denoise node actually takes a `scheduler` field.
+
+    `scheduler_applies_to_graph` drives whether the UI offers a scheduler dropdown at all. Declaring
+    it False for a node that reads one hides a control the graph honours and pins every generation
+    to whatever the node defaults to; declaring it True for a node without the field offers a
+    dropdown that reaches nothing.
+
+    ERNIE-Image shipped the first of those: `ernie_image_denoise` builds its sampler from
+    `ERNIE_IMAGE_SCHEDULER_MAP[self.scheduler]`, but the facet omitted the flag and it defaulted to
+    False. Thirteen of the fourteen agreed; nothing compared them, so the one that did not was
+    invisible.
+    """
+    schedulers = {
+        cls.get_type(): "scheduler" in cls.model_json_schema()["properties"]
+        for cls in InvocationRegistry.get_invocation_classes()
+    }
+
+    disagreements = []
+    for base, node_type in sorted(DENOISE_NODE.items(), key=lambda item: item[0].value):
+        features = get(base, FeaturesFacet)
+        if features is None or node_type not in schedulers:
+            continue
+        if schedulers[node_type] != features.scheduler_applies_to_graph:
+            disagreements.append(
+                f"{base.value}: {node_type} has scheduler field = {schedulers[node_type]}, "
+                f"facet declares scheduler_applies_to_graph = {features.scheduler_applies_to_graph}"
+            )
+    assert disagreements == []

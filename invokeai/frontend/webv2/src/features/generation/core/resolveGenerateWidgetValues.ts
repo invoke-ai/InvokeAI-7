@@ -1,3 +1,4 @@
+import { hasArchitectureCapabilities } from '@features/generation/core/architectureCapabilities';
 import { areJsonValuesStructurallyEqual } from '@platform/core/json';
 
 import type { GenerationModelCatalogItem } from './contracts';
@@ -68,6 +69,13 @@ export const resolveGenerateWidgetValues = ({
   promptTemplates,
   storedValues,
 }: ResolveGenerateWidgetValuesInput): ResolvedGenerateWidgetValues | null => {
+  // Fail closed until the backend's architecture table has arrived. Resolving without it would
+  // fall back to generic defaults -- and this resolver's `systemPatch` is *persisted* into the
+  // project, so a fallback grid or step count would be written to disk rather than merely shown.
+  if (!hasArchitectureCapabilities()) {
+    return null;
+  }
+
   const supportedModels = models.filter(isSupportedGenerateModel);
 
   if (supportedModels.length === 0) {

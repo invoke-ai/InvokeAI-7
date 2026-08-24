@@ -14,6 +14,8 @@ const galleryApi = vi.hoisted(() => ({
 
 vi.mock('@features/gallery', () => galleryApi);
 
+import { seedArchitectureCapabilities } from '@features/generation/core/architectureCapabilities.testing';
+
 import { executeImageRecall } from './executeImageRecall';
 
 const model = {
@@ -52,6 +54,8 @@ const createCommands = () => {
 
   return { add, commands, setSettings };
 };
+
+seedArchitectureCapabilities();
 
 describe('executeImageRecall', () => {
   beforeEach(() => {

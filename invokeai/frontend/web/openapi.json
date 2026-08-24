@@ -15564,6 +15564,7 @@
             "input": "direct",
             "orig_required": true,
             "title": "VAE",
+            "ui_model_base": ["anima", "qwen-image", "wan", "flux"],
             "ui_model_type": ["vae"]
           },
           "qwen3_encoder_model": {
@@ -31794,13 +31795,13 @@
               }
             ],
             "default": null,
-            "description": "Standalone VAE model. Flux2 Klein uses the same VAE as FLUX (16-channel). If not provided, VAE will be loaded from the Qwen3 Source model.",
+            "description": "Standalone VAE model (AutoencoderKLFlux2, 32-channel). If not provided, VAE will be loaded from the Qwen3 Source model.",
             "field_kind": "input",
             "input": "direct",
             "orig_default": null,
             "orig_required": false,
             "title": "VAE",
-            "ui_model_base": ["flux", "flux2"],
+            "ui_model_base": ["flux2"],
             "ui_model_type": ["vae"]
           },
           "qwen3_encoder_model": {
@@ -80267,7 +80268,7 @@
             "orig_default": null,
             "orig_required": false,
             "title": "VAE",
-            "ui_model_base": ["qwen-image"],
+            "ui_model_base": ["qwen-image", "anima"],
             "ui_model_type": ["vae"]
           },
           "qwen_vl_encoder_model": {

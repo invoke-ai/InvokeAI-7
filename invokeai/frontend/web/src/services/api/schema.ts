@@ -12823,7 +12823,7 @@ export type components = {
             model: components["schemas"]["ModelIdentifierField"];
             /**
              * VAE
-             * @description Standalone VAE model. Flux2 Klein uses the same VAE as FLUX (16-channel). If not provided, VAE will be loaded from the Qwen3 Source model.
+             * @description Standalone VAE model (AutoencoderKLFlux2, 32-channel). If not provided, VAE will be loaded from the Qwen3 Source model.
              * @default null
              */
             vae_model?: components["schemas"]["ModelIdentifierField"] | null;

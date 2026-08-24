@@ -21,6 +21,8 @@ const parseDynamicPromptsMock = vi.hoisted(() => vi.fn());
 
 vi.mock('@features/generation/data/promptUtilities', () => ({ parseDynamicPrompts: parseDynamicPromptsMock }));
 
+import { seedArchitectureCapabilities } from '@features/generation/core/architectureCapabilities.testing';
+
 import {
   areInvocationRouteInputsEqual,
   getInvocationRouteInput,
@@ -111,6 +113,8 @@ const getActiveProject = (values: GenerateWidgetValues) => {
 
   return project!;
 };
+
+seedArchitectureCapabilities();
 
 describe('resolveInvocationRoute', () => {
   it('invalidates Anima generation until required components are selected', () => {

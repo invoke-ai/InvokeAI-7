@@ -1,3 +1,4 @@
+import { seedArchitectureCapabilities } from '@features/generation/core/architectureCapabilities.testing';
 import { describe, expect, it } from 'vitest';
 
 import type { MainModelConfig } from './types';
@@ -10,6 +11,8 @@ const createModel = (base: string): MainModelConfig => ({
   name: `${base} model`,
   type: 'main',
 });
+
+seedArchitectureCapabilities();
 
 describe('getPromptHistoryRecallPatch', () => {
   it('clears an absent negative prompt when the selected model exposes it', () => {
