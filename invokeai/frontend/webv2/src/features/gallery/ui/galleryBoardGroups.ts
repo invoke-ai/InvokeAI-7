@@ -66,8 +66,8 @@ export const getGalleryBoardGroups = ({
 
   const yourBoards = [
     ...(projectBoard && matchesBoardSearch(projectBoard) ? [projectBoard] : []),
-    ...regularBoards.filter((board) => !board.archived),
     ...(uncategorizedBoard && matchesBoardSearch(uncategorizedBoard) ? [uncategorizedBoard] : []),
+    ...regularBoards.filter((board) => !board.archived),
   ];
 
   const hasAnyMatch = yourBoards.length > 0 || dateBoards.length > 0 || archivedBoards.length > 0;
