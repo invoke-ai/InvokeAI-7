@@ -217,8 +217,10 @@ _MAX_SEARCH_DEPTH = 2
 # classes are resolved from the installed Diffusers/Transformers exports below.
 _PINNED_MODEL_CLASS_MARKERS = {
     "Krea2Pipeline",
-    # MiniMax H3 classes exist only in an unreleased diffusers branch (vendored under
-    # invokeai/backend/minimax_h3); the installed diffusers cannot resolve them.
+    # The H3 model classes are resolvable from the installed diffusers (0.40.0+) and are listed
+    # only so a lightweight test interpreter on an older diffusers still identifies them.
+    # ``MiniMaxH3ModularPipeline`` is neither a ModelMixin nor a DiffusionPipeline, so its marker
+    # is load-bearing on every interpreter.
     "MiniMaxH3ModularPipeline",
     "MiniMaxH3Transformer3DModel",
     "AutoencoderKLMiniMaxH3",

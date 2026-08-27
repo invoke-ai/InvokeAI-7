@@ -15,7 +15,6 @@ reproducibility order in one place (see :mod:`invokeai.backend.minimax_h3.sampli
 import numpy as np
 import torch
 from diffusers import AutoencoderKLMiniMaxH3
-from diffusers.models.autoencoders.vae import DiagonalGaussianDistribution
 from PIL import Image, ImageOps
 
 from invokeai.backend.minimax_h3.packing import (
@@ -69,12 +68,11 @@ def encode_keyframes(
     for image in images:
         pixels = torch.from_numpy(np.array(image)).to(device).permute(2, 0, 1)[None, :, None]
         pixels = (pixels.to(torch.float32).div(255.0) - pixel_mean) / pixel_std
-        # A keyframe is one frame: the (tiled) spatial encoder alone, no 17-frame temporal chunking.
-        # `_encode_clip` is diffusers-internal, but it is the only entry point that returns the raw
-        # moments: `encode()` wraps them in a distribution, and the checkpoint contract below needs
-        # to sample that posterior under a fixed generator and round to fp16 before normalizing.
-        moments = vae._encode_clip(pixels)
-        posterior = DiagonalGaussianDistribution(moments)
+        # A keyframe is one frame: `encode` routes a single frame through the (tiled) spatial encoder
+        # alone, with no 17-frame temporal chunking. The posterior is sampled here rather than taken
+        # as `.mode()` because the checkpoint contract is a seeded draw, fixed independently of the
+        # request seed.
+        posterior = vae.encode(pixels, return_dict=False)[0]
         latents = posterior.sample(generator=torch.Generator().manual_seed(MINIMAX_H3_KEYFRAME_ENCODE_SEED))
         # The fp16 rounding before normalization is a checkpoint contract (~11 bits of every
         # conditioning latent); without it the released model's conditioning is not reproduced.

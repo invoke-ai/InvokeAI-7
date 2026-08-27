@@ -13,6 +13,7 @@ from pathlib import Path
 import numpy as np
 from diffusers.pipelines.stable_diffusion.safety_checker import StableDiffusionSafetyChecker
 from huggingface_hub import snapshot_download
+from huggingface_hub.errors import IncompleteSnapshotError
 from PIL import Image, ImageFilter
 from transformers import AutoImageProcessor
 
@@ -70,7 +71,17 @@ class SafetyChecker:
                     # Download before constructing: from_pretrained(repo_id) would
                     # otherwise hold the process-wide load lock across a multi-GB
                     # network transfer, stalling every other model load.
-                    download_path = snapshot_download(repo_id)
+                    try:
+                        download_path = snapshot_download(repo_id)
+                    except IncompleteSnapshotError as e:
+                        # huggingface_hub >= 1.23 refuses to return a partially cached snapshot
+                        # when the Hub is unreachable, where earlier versions handed it back. Every
+                        # failure here is swallowed below and leaves `safety_checker` None, which
+                        # `has_nsfw_concept` reports as "not NSFW" - so a partial cache would ship
+                        # every image unblurred. Use the folder and let `from_pretrained` decide
+                        # whether what is actually on disk is loadable.
+                        logger.warning(f"NSFW checker cache is incomplete, loading it anyway: {str(e)}")
+                        download_path = e.snapshot_path
                     feature_extractor = AutoImageProcessor.from_pretrained(download_path)
                     # Torch module construction is not thread-safe process-wide (see
                     # _ModelLoadReadWriteLock); serialize with the model-load machinery.

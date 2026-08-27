@@ -71,6 +71,10 @@ def _optimized_wan_transformer_forward(
 
     rotary_emb = transformer.rope(hidden_states)  # type: ignore[attr-defined]
     hidden_states = transformer.patch_embedding(hidden_states).flatten(2).transpose(1, 2)  # type: ignore[attr-defined]
+    # flatten+transpose leaves a non-contiguous tensor; diffusers' own forward makes it contiguous
+    # before the block loop, so this replacement does too - otherwise enabling the optimization
+    # would silently change the layout the blocks see.
+    hidden_states = hidden_states.contiguous()
 
     unique_timesteps, inverse_indices = torch.unique(timestep, sorted=False, return_inverse=True)
     temb, timestep_projection, encoder_hidden_states, encoder_hidden_states_image = transformer.condition_embedder(  # type: ignore[attr-defined]

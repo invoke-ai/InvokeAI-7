@@ -47,10 +47,26 @@ def test_pinned_diffusers_exposes_minimax_h3_module_internals() -> None:
         (transformer_minimax_h3, "MINIMAX_H3_MODALITY_NUM"),
         (transformer_minimax_h3, "MiniMaxH3AdaLayerNormModulation"),
         (transformer_minimax_h3, "MiniMaxH3AdaLayerNormOut"),
+        (transformer_minimax_h3, "MiniMaxH3TransformerBlock"),
         (transformer_minimax_h3, "MiniMaxH3TransformerOutput"),
         (autoencoder_kl_minimax_h3, "MiniMaxH3VideoCausalConv3d"),
     ):
         assert getattr(module, symbol, None) is not None, f"{module.__name__} is missing {symbol}"
+
+
+def test_pinned_diffusers_keeps_the_minimax_h3_block_signature_the_pruned_forward_calls() -> None:
+    """``MiniMaxH3PrunedTransformer3DModel.forward`` drives the block stack positionally.
+
+    diffusers' own H3 forward stopped passing `attention_mask` in 0.40.0 - it no longer builds a
+    padding mask - while the block still accepts one, and the pruned forward still passes it as the
+    fifth argument. That makes the parameter load-bearing for InvokeAI and vestigial upstream,
+    which is exactly the shape of thing that gets deleted without notice.
+    """
+    from diffusers.models.transformers.transformer_minimax_h3 import MiniMaxH3TransformerBlock
+
+    parameters = list(signature(MiniMaxH3TransformerBlock.forward).parameters)
+
+    assert parameters[:6] == ["self", "hidden_states", "temb", "adaln_indices", "rotary_emb", "attention_mask"]
 
 
 def test_flow_match_scheduler_keeps_custom_sigma_and_shift_api() -> None:

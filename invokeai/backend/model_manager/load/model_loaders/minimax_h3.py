@@ -1,21 +1,21 @@
 """Loader registrations for MiniMax H3 (Hailuo 3.0) audio-video generation models.
 
 Currently covers the diffusers-format Modular Diffusers layout only (the layout at the root of
-the ``MiniMaxAI/MiniMax-H3`` HF repo). The model classes are vendored under
-``invokeai.backend.minimax_h3`` because they only exist in an unreleased diffusers branch, so this
-loader dispatches submodels explicitly instead of subclassing ``GenericDiffusersLoader`` (whose
-``get_hf_load_class`` resolves class names against the installed diffusers and would fail).
+the ``MiniMaxAI/MiniMax-H3`` HF repo). This loader dispatches submodels explicitly rather than
+subclassing ``GenericDiffusersLoader`` because the submodels need per-type handling that a
+class-name lookup cannot express: the text encoder needs its rope config normalized, the video VAE
+needs the ROCm conv3d patch, and the audio VAE is pinned to fp32.
 
 Submodel map (subfolder == ``SubModelType`` value):
-- ``transformer``  -> vendored ``MiniMaxH3Transformer3DModel`` (33B DiT, bf16)
+- ``transformer``  -> ``diffusers.MiniMaxH3Transformer3DModel`` (33B DiT, bf16)
 - ``text_encoder`` -> ``transformers.Qwen3VLForConditionalGeneration`` (Qwen3-VL-32B, bf16; H3
   conditions on layer-50 hidden states and never uses the LM head, but the checkpoint is the full
   model per the repo's modular_model_index.json)
 - ``tokenizer``    -> ``AutoTokenizer`` (Qwen2TokenizerFast)
 - ``processor``    -> ``AutoProcessor`` (Qwen3VLProcessor; needed even for text-only encoding,
   which uses its multimodal token-type ids)
-- ``vae``          -> vendored ``AutoencoderKLMiniMaxH3`` (video VAE, bf16)
-- ``audio_vae``    -> vendored ``AutoencoderKLMiniMaxH3Audio`` (kept fp32: it is ~0.6 GB and
+- ``vae``          -> ``diffusers.AutoencoderKLMiniMaxH3`` (video VAE, bf16)
+- ``audio_vae``    -> ``diffusers.AutoencoderKLMiniMaxH3Audio`` (kept fp32: it is ~0.6 GB and
   half-precision artifacts in decoded audio are audible)
 
 The two ``MiniMaxH3Scheduler`` instances (video shift 12.0, audio shift 3.0) are constructed
