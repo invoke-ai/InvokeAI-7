@@ -52,11 +52,11 @@ def test_transformer_with_weight_shards_passes_guard(
 ) -> None:
     (slim_model_dir / "transformer" / "diffusion_pytorch_model-00001-of-00002.safetensors").write_bytes(b"")
 
-    import invokeai.backend.minimax_h3 as minimax_h3_module
+    from diffusers import MiniMaxH3Transformer3DModel
 
     sentinel = object()
     monkeypatch.setattr(
-        minimax_h3_module.MiniMaxH3Transformer3DModel,
+        MiniMaxH3Transformer3DModel,
         "from_pretrained",
         classmethod(lambda _cls, *_args, **_kwargs: sentinel),
     )

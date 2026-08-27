@@ -85,7 +85,7 @@ class MiniMaxH3DiffusersModel(ModelLoader):
             case SubModelType.Transformer:
                 _raise_if_no_weight_shards(submodel_path, "transformer")
 
-                from invokeai.backend.minimax_h3 import MiniMaxH3Transformer3DModel
+                from diffusers import MiniMaxH3Transformer3DModel
 
                 return MiniMaxH3Transformer3DModel.from_pretrained(
                     submodel_path, torch_dtype=dtype, local_files_only=True
@@ -114,7 +114,8 @@ class MiniMaxH3DiffusersModel(ModelLoader):
 
                 return AutoProcessor.from_pretrained(submodel_path, local_files_only=True)
             case SubModelType.VAE:
-                from invokeai.backend.minimax_h3 import AutoencoderKLMiniMaxH3
+                from diffusers import AutoencoderKLMiniMaxH3
+
                 from invokeai.backend.minimax_h3.rocm_causal_conv3d import patch_minimax_h3_causal_conv3d_for_rocm
 
                 # The convolutional encoder hits MIOpen's Im3d2Col conv3d fallback on ROCm
@@ -123,7 +124,7 @@ class MiniMaxH3DiffusersModel(ModelLoader):
                 patch_minimax_h3_causal_conv3d_for_rocm()
                 return AutoencoderKLMiniMaxH3.from_pretrained(submodel_path, torch_dtype=dtype, local_files_only=True)
             case SubModelType.AudioVAE:
-                from invokeai.backend.minimax_h3 import AutoencoderKLMiniMaxH3Audio
+                from diffusers import AutoencoderKLMiniMaxH3Audio
 
                 return AutoencoderKLMiniMaxH3Audio.from_pretrained(
                     submodel_path, torch_dtype=torch.float32, local_files_only=True
@@ -160,9 +161,9 @@ class MiniMaxH3CheckpointModel(ModelLoader):
 
     def _load_transformer_from_singlefile(self, config: Main_Checkpoint_MiniMaxH3_Config) -> AnyModel:
         import accelerate
+        from diffusers import MiniMaxH3Transformer3DModel
         from safetensors.torch import load_file
 
-        from invokeai.backend.minimax_h3 import MiniMaxH3Transformer3DModel
         from invokeai.backend.minimax_h3.int8_convrot import Int8ConvrotLinear
         from invokeai.backend.minimax_h3.transformer_minimax_h3_pruned import (
             MiniMaxH3PrunedTransformer3DModel,

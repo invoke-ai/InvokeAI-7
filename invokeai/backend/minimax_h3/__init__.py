@@ -1,27 +1,14 @@
-"""MiniMax H3 (Hailuo 3.0) model classes, vendored from the in-progress diffusers integration.
+"""MiniMax H3 (Hailuo 3.0) support.
 
-Vendored from huggingface/diffusers PR #14355 ("Add MiniMax-H3") at commit
-abc5e9bf71fd38f53cd471bc3acaa84bc5ecbfdc (branch `minimax-h3`), which is not yet
-in any tagged diffusers release: the four model/scheduler modules plus
-``packing.py`` (the packed-sequence geometry and checkpoint constants, from
-``modular_pipelines/minimax_h3``). The only local changes are rewriting the
-package-relative imports to absolute `diffusers.*` imports (all referenced
-symbols exist in the pinned diffusers==0.39.0) and ruff import sorting. Keep
-these files otherwise
-byte-identical to upstream: when a diffusers release ships the H3 classes,
-delete this vendoring and import them from diffusers instead.
+The model, autoencoder and scheduler classes ship in diffusers as of 0.40.0 and
+are imported from there (``AutoencoderKLMiniMaxH3``,
+``AutoencoderKLMiniMaxH3Audio``, ``MiniMaxH3Scheduler``,
+``MiniMaxH3Transformer3DModel``); they were vendored from the in-progress
+integration until that release.
 
-Apache-2.0, copyright The HuggingFace Team / MiniMax (see file headers).
+What remains here is InvokeAI's own H3 machinery: the packed-sequence geometry
+(``packing.py``, still vendored — upstream keeps that code inside its modular
+pipeline blocks rather than as an importable module), the sampling and denoise
+loop, the text/keyframe conditioning encoders, the pruned transformer, the
+int8-convrot linear, the TAEH3 preview decoder and the ROCm conv3d patch.
 """
-
-from invokeai.backend.minimax_h3.autoencoder_kl_minimax_h3 import AutoencoderKLMiniMaxH3
-from invokeai.backend.minimax_h3.autoencoder_kl_minimax_h3_audio import AutoencoderKLMiniMaxH3Audio
-from invokeai.backend.minimax_h3.scheduling_minimax_h3 import MiniMaxH3Scheduler
-from invokeai.backend.minimax_h3.transformer_minimax_h3 import MiniMaxH3Transformer3DModel
-
-__all__ = [
-    "AutoencoderKLMiniMaxH3",
-    "AutoencoderKLMiniMaxH3Audio",
-    "MiniMaxH3Scheduler",
-    "MiniMaxH3Transformer3DModel",
-]

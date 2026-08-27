@@ -10,9 +10,9 @@ checkpoint is guidance-distilled: no unconditional pass, no CFG.
 from typing import Callable
 
 import torch
+from diffusers import MiniMaxH3Transformer3DModel
 
 from invokeai.backend.minimax_h3.sampling import MiniMaxH3DenoiseState
-from invokeai.backend.minimax_h3.transformer_minimax_h3 import MiniMaxH3Transformer3DModel
 
 
 def denoise(

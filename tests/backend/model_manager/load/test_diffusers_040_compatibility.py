@@ -11,13 +11,17 @@ from invokeai.backend.model_manager.load.model_loaders.generic_diffusers import 
 
 
 def test_pinned_diffusers_exposes_existing_and_krea_model_contracts() -> None:
-    assert Version(diffusers.__version__) == Version("0.39.0")
+    assert Version(diffusers.__version__) == Version("0.40.0")
 
     expected_symbols = (
         "AutoencoderKLFlux2",
+        "AutoencoderKLMiniMaxH3",
+        "AutoencoderKLMiniMaxH3Audio",
         "FluxTransformer2DModel",
         "Flux2Transformer2DModel",
         "Krea2Transformer2DModel",
+        "MiniMaxH3Scheduler",
+        "MiniMaxH3Transformer3DModel",
         "QwenImageTransformer2DModel",
         "StableDiffusionPipeline",
         "StableDiffusionXLPipeline",
@@ -25,6 +29,28 @@ def test_pinned_diffusers_exposes_existing_and_krea_model_contracts() -> None:
     )
     for symbol in expected_symbols:
         assert getattr(diffusers, symbol, None) is not None, f"diffusers is missing {symbol}"
+
+
+def test_pinned_diffusers_exposes_minimax_h3_module_internals() -> None:
+    """The H3 classes were vendored until diffusers 0.40.0 shipped them.
+
+    Two InvokeAI modules reach past the top-level exports into the H3 model modules:
+    ``transformer_minimax_h3_pruned`` subclasses the AdaLN modules and reuses the modality-tag
+    constant and the output dataclass, and ``rocm_causal_conv3d`` rebinds the causal conv's
+    ``forward``. Neither is part of the documented diffusers API, so pin the names here - a rename
+    upstream breaks the pruned transformer and the ROCm VAE path, and this is what says so.
+    """
+    from diffusers.models.autoencoders import autoencoder_kl_minimax_h3
+    from diffusers.models.transformers import transformer_minimax_h3
+
+    for module, symbol in (
+        (transformer_minimax_h3, "MINIMAX_H3_MODALITY_NUM"),
+        (transformer_minimax_h3, "MiniMaxH3AdaLayerNormModulation"),
+        (transformer_minimax_h3, "MiniMaxH3AdaLayerNormOut"),
+        (transformer_minimax_h3, "MiniMaxH3TransformerOutput"),
+        (autoencoder_kl_minimax_h3, "MiniMaxH3VideoCausalConv3d"),
+    ):
+        assert getattr(module, symbol, None) is not None, f"{module.__name__} is missing {symbol}"
 
 
 def test_flow_match_scheduler_keeps_custom_sigma_and_shift_api() -> None:
@@ -138,6 +164,60 @@ def test_invoke_generic_diffusers_loader_smoke(tmp_path) -> None:
                 axes_dims_rope=(2, 2, 4),
             ),
             id="krea-2",
+        ),
+        pytest.param(
+            lambda: diffusers.MiniMaxH3Transformer3DModel(
+                num_attention_heads=2,
+                attention_head_dim=16,
+                hidden_size=32,
+                num_layers=1,
+                num_refiner_layers=1,
+                ffn_dim=64,
+                in_channels=24,
+                audio_in_channels=32,
+                patch_size=(1, 2, 2),
+                text_dim=8,
+                freq_dim=16,
+                time_embed_hidden_dim=32,
+                time_embed_dim=16,
+                rope_freq_dim=2,
+            ),
+            id="minimax-h3-transformer",
+        ),
+        pytest.param(
+            lambda: diffusers.AutoencoderKLMiniMaxH3(
+                latent_channels=4,
+                block_out_channels=(8, 8),
+                layers_per_block=1,
+                spatial_downsample_factors=(2, 1),
+                temporal_downsample_factors=(2, 1),
+                norm_num_groups=4,
+                decoder_num_layers=1,
+                decoder_num_attention_heads=2,
+                decoder_attention_head_dim=8,
+                decoder_num_register_tokens=1,
+                decoder_ffn_mult=2,
+                clip_length=4,
+                token_drop=1,
+                latents_mean=(0.0,) * 4,
+                latents_std=(1.0,) * 4,
+            ),
+            id="minimax-h3-vae",
+        ),
+        pytest.param(
+            lambda: diffusers.AutoencoderKLMiniMaxH3Audio(
+                encoder_dim=8,
+                encoder_rates=(2, 2),
+                latent_dim=16,
+                latent_channels=4,
+                num_attention_heads=2,
+                decoder_dim=16,
+                decoder_rates=(2, 2),
+                decoder_kernel_sizes=(4, 4),
+                resblock_kernel_sizes=(3,),
+                resblock_dilation_sizes=((1, 3),),
+            ),
+            id="minimax-h3-audio-vae",
         ),
         pytest.param(
             lambda: diffusers.AutoencoderKLWan(

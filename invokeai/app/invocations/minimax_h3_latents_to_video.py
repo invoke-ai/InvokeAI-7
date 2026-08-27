@@ -12,6 +12,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+from diffusers import AutoencoderKLMiniMaxH3, AutoencoderKLMiniMaxH3Audio
 
 from invokeai.app.invocations.baseinvocation import BaseInvocation, Classification, invocation
 from invokeai.app.invocations.fields import (
@@ -28,8 +29,6 @@ from invokeai.app.invocations.wan_latents_to_video import _write_video_frames
 from invokeai.app.services.session_processor.session_processor_common import CanceledException
 from invokeai.app.services.shared.invocation_context import InvocationContext
 from invokeai.app.util.video_encoding import make_mp4_writer, write_stereo_wav
-from invokeai.backend.minimax_h3.autoencoder_kl_minimax_h3 import AutoencoderKLMiniMaxH3
-from invokeai.backend.minimax_h3.autoencoder_kl_minimax_h3_audio import AutoencoderKLMiniMaxH3Audio
 from invokeai.backend.minimax_h3.packing import (
     MINIMAX_H3_FPS,
     MINIMAX_H3_PIXEL_MEAN,

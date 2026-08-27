@@ -1,4 +1,5 @@
 import torch
+from diffusers import AutoencoderKLMiniMaxH3
 
 from invokeai.app.invocations.baseinvocation import (
     BaseInvocation,
@@ -17,7 +18,6 @@ from invokeai.app.invocations.fields import (
 )
 from invokeai.app.invocations.model import VAEField
 from invokeai.app.services.shared.invocation_context import InvocationContext
-from invokeai.backend.minimax_h3.autoencoder_kl_minimax_h3 import AutoencoderKLMiniMaxH3
 from invokeai.backend.minimax_h3.keyframe_conditioning import encode_keyframes, prepare_keyframes
 from invokeai.backend.minimax_h3.packing import MINIMAX_H3_CANVAS_MULTIPLE
 from invokeai.backend.model_manager.load.model_cache.utils import get_effective_device

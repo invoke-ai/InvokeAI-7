@@ -63,8 +63,13 @@ def _decomposed_forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
 
 
 def _patch_minimax_h3_causal_conv3d() -> None:
-    """Rebind MiniMaxH3VideoCausalConv3d.forward to the conv2d decomposition (idempotent)."""
-    from invokeai.backend.minimax_h3.autoencoder_kl_minimax_h3 import MiniMaxH3VideoCausalConv3d
+    """Rebind MiniMaxH3VideoCausalConv3d.forward to the conv2d decomposition (idempotent).
+
+    The class is diffusers', so this rebinding is process-wide rather than scoped to the models
+    InvokeAI builds. That is the intent: on ROCm every H3 video VAE wants the decomposition, and
+    the class has no other user in the process.
+    """
+    from diffusers.models.autoencoders.autoencoder_kl_minimax_h3 import MiniMaxH3VideoCausalConv3d
 
     if getattr(MiniMaxH3VideoCausalConv3d, _SENTINEL, False):
         return

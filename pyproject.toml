@@ -36,7 +36,7 @@ dependencies = [
   "accelerate",
   "bitsandbytes; sys_platform!='darwin'",
   "compel>=2.4.0,<3",
-  "diffusers[torch]==0.39.0",
+  "diffusers[torch]==0.40.0",
   "gguf",
   "mediapipe==0.10.14",                   # needed for "mediapipeface" controlnet model
   "mistral-common>=1.5.4,<2",             # canonical Tekken tokenizer for FLUX.2 [dev] Mistral encoder; the
@@ -359,30 +359,16 @@ ignore = [
 ]
 select = ["B", "C", "E", "F", "W", "I", "TID"]
 
-[tool.ruff.lint.per-file-ignores]
-# Vendored from the diffusers MiniMax-H3 branch (see invokeai/backend/minimax_h3/__init__.py);
-# kept as close to upstream as possible, so upstream's zip() style is tolerated.
-"invokeai/backend/minimax_h3/transformer_minimax_h3.py" = ["B905"]
-"invokeai/backend/minimax_h3/autoencoder_kl_minimax_h3.py" = ["B905"]
-"invokeai/backend/minimax_h3/autoencoder_kl_minimax_h3_audio.py" = ["B905"]
-"invokeai/backend/minimax_h3/scheduling_minimax_h3.py" = ["B905"]
-
 [tool.ruff.format]
-# The vendored MiniMax-H3 files are kept byte-identical to upstream diffusers (modulo the
-# absolute-import rewrite) so that re-syncing when a tagged diffusers ships them is a clean copy
-# rather than a manual re-application of formatting. Upstream wraps at a narrower line length, so
-# `ruff format` would rewrap lines for no semantic gain. `ruff check` still runs on them, so the
-# import sorting this project does enforce stays enforced.
+# `packing.py` is vendored from the diffusers MiniMax-H3 integration (see
+# invokeai/backend/minimax_h3/__init__.py) and kept byte-identical to it, so that re-syncing is a
+# clean copy rather than a manual re-application of formatting. Upstream wraps at a narrower line
+# length, so `ruff format` would rewrap lines for no semantic gain. `ruff check` still runs on it,
+# so the import sorting this project does enforce stays enforced.
 #
-# Listed file by file rather than as a directory glob: the package also holds first-party modules
+# Listed by name rather than as a directory glob: the package also holds first-party modules
 # (presets.py, sampling.py, denoise.py, int8_convrot.py, ...) which must stay formatted.
-exclude = [
-  "invokeai/backend/minimax_h3/packing.py",
-  "invokeai/backend/minimax_h3/transformer_minimax_h3.py",
-  "invokeai/backend/minimax_h3/autoencoder_kl_minimax_h3.py",
-  "invokeai/backend/minimax_h3/autoencoder_kl_minimax_h3_audio.py",
-  "invokeai/backend/minimax_h3/scheduling_minimax_h3.py",
-]
+exclude = ["invokeai/backend/minimax_h3/packing.py"]
 
 [tool.ruff.lint.flake8-tidy-imports]
 # Disallow all relative imports.

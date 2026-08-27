@@ -15,6 +15,7 @@ in row layout. A CPU-seeded generator keeps the draws identical across CUDA/ROCm
 from dataclasses import dataclass
 
 import torch
+from diffusers import MiniMaxH3Scheduler
 from diffusers.utils.torch_utils import randn_tensor
 
 from invokeai.backend.minimax_h3.packing import (
@@ -36,7 +37,6 @@ from invokeai.backend.minimax_h3.packing import (
     patchify_video_latents,
 )
 from invokeai.backend.minimax_h3.presets import MINIMAX_H3_MIN_VIDEO_FRAMES
-from invokeai.backend.minimax_h3.scheduling_minimax_h3 import MiniMaxH3Scheduler
 
 # The released FL2VA checkpoint's two sigma shifts (scheduler/ and audio_scheduler/ configs).
 MINIMAX_H3_VIDEO_FLOW_SHIFT = 12.0

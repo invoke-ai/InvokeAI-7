@@ -7,10 +7,10 @@ regression cannot hide behind a shared rename helper.
 """
 
 import torch
+from diffusers import MiniMaxH3Transformer3DModel
 
 from invokeai.backend.minimax_h3.denoise import denoise
 from invokeai.backend.minimax_h3.sampling import build_denoise_state
-from invokeai.backend.minimax_h3.transformer_minimax_h3 import MiniMaxH3Transformer3DModel
 from invokeai.backend.minimax_h3.transformer_minimax_h3_pruned import (
     MiniMaxH3AdaLayerNormModulationCurve,
     MiniMaxH3PrunedTransformer3DModel,

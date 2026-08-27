@@ -9,8 +9,8 @@ results, only speed.
 """
 
 import torch
+from diffusers.models.autoencoders.autoencoder_kl_minimax_h3 import MiniMaxH3VideoCausalConv3d
 
-from invokeai.backend.minimax_h3.autoencoder_kl_minimax_h3 import MiniMaxH3VideoCausalConv3d
 from invokeai.backend.minimax_h3.rocm_causal_conv3d import (
     _decomposed_conv3d,
     _decomposed_forward,

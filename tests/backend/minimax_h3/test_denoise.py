@@ -2,11 +2,11 @@
 
 import pytest
 import torch
+from diffusers import MiniMaxH3Transformer3DModel
 
 from invokeai.app.services.session_processor.session_processor_common import CanceledException
 from invokeai.backend.minimax_h3.denoise import denoise
 from invokeai.backend.minimax_h3.sampling import build_denoise_state
-from invokeai.backend.minimax_h3.transformer_minimax_h3 import MiniMaxH3Transformer3DModel
 
 TINY_CONFIG = {
     "num_attention_heads": 2,

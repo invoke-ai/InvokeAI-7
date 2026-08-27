@@ -10,6 +10,7 @@ from contextlib import ExitStack
 from typing import Literal, get_args
 
 import torch
+from diffusers import MiniMaxH3Transformer3DModel
 from PIL import Image
 from tqdm import tqdm
 
@@ -59,7 +60,6 @@ from invokeai.backend.minimax_h3.sampling import (
     validate_num_frames,
 )
 from invokeai.backend.minimax_h3.taehv_decoder import TAEH3_PREVIEW_MODEL_URL, TAEH3Decoder
-from invokeai.backend.minimax_h3.transformer_minimax_h3 import MiniMaxH3Transformer3DModel
 from invokeai.backend.minimax_h3.transformer_minimax_h3_pruned import MiniMaxH3PrunedTransformer3DModel
 from invokeai.backend.model_manager.load.load_base import LoadedModelWithoutConfig
 from invokeai.backend.model_manager.taxonomy import BaseModelType

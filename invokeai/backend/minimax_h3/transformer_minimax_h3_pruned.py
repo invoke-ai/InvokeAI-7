@@ -24,22 +24,21 @@ projections must NOT apply SiLU to ``temb``. The AdaLN projections run float32
 (their outputs are cast to the block stack's dtype afterwards, matching the
 reference, which casts per use).
 
-This subclass deliberately lives outside the vendored ``transformer_minimax_h3``
-module so the vendored file stays byte-identical to upstream diffusers for
-future re-vendoring.
+This subclass lives here rather than in diffusers' ``transformer_minimax_h3``:
+the pruning and the precomputed AdaLN curve are an InvokeAI-side optimization
+with no upstream counterpart.
 """
 
 import torch
 from diffusers.configuration_utils import register_to_config
-from diffusers.utils import apply_lora_scale
-
-from invokeai.backend.minimax_h3.transformer_minimax_h3 import (
+from diffusers.models.transformers.transformer_minimax_h3 import (
     MINIMAX_H3_MODALITY_NUM,
     MiniMaxH3AdaLayerNormModulation,
     MiniMaxH3AdaLayerNormOut,
     MiniMaxH3Transformer3DModel,
     MiniMaxH3TransformerOutput,
 )
+from diffusers.utils import apply_lora_scale
 
 
 class MiniMaxH3AdaLayerNormModulationCurve(MiniMaxH3AdaLayerNormModulation):
