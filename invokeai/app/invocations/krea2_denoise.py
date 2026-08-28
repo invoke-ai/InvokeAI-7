@@ -1,5 +1,7 @@
 import json
 import math
+import statistics
+import time
 from contextlib import ExitStack
 from pathlib import Path
 from typing import Callable, Iterator, Optional
@@ -25,7 +27,11 @@ from invokeai.app.invocations.fields import (
 from invokeai.app.invocations.model import TransformerField
 from invokeai.app.invocations.primitives import LatentsOutput
 from invokeai.app.services.shared.invocation_context import InvocationContext
-from invokeai.backend.krea2.attention import Krea2RegionalPromptingState, build_krea2_attention_processors
+from invokeai.backend.krea2.attention import (
+    Krea2RegionalPromptingState,
+    build_krea2_attention_processors,
+    resolve_krea2_sdpa_backends,
+)
 from invokeai.backend.krea2.regional_prompting import (
     Krea2RegionalPromptingExtension,
     Krea2TextConditioning,
@@ -50,9 +56,62 @@ from invokeai.backend.rectified_flow.rectified_flow_inpaint_extension import Rec
 from invokeai.backend.stable_diffusion.diffusers_pipeline import PipelineIntermediateState
 from invokeai.backend.stable_diffusion.diffusion.conditioning_data import Krea2ConditioningInfo
 from invokeai.backend.util.devices import TorchDevice
+from invokeai.backend.util.logging import InvokeAILogger
 
 # Krea-2 latent channels (Qwen-Image VAE z_dim). The packed transformer in_channels is 16 * patch_size**2 = 64.
 KREA2_LATENT_CHANNELS = 16
+
+
+logger = InvokeAILogger.get_logger(__name__)
+
+
+class _Krea2StepBenchmark:
+    """Per-step timing for the Krea-2 denoise loop, for A/B-ing SDPA backends.
+
+    Off unless KREA2_SDPA_BACKEND_ENV_VAR is set, and off on non-CUDA devices. That matters: the
+    `cuda.synchronize()` calls on both sides of a step serialise the loop, so the default path must
+    not reach them at all.
+    """
+
+    def __init__(self, device: torch.device, label: str) -> None:
+        self._device = device
+        self._label = label
+        self._step_ms: list[float] = []
+        self._step_started_at = 0.0
+        # Reset here, immediately before the loop, so the reported peak is the loop's and not the
+        # model load's.
+        torch.cuda.reset_peak_memory_stats(device)
+
+    @classmethod
+    def create(cls, device: torch.device) -> "_Krea2StepBenchmark | None":
+        override = resolve_krea2_sdpa_backends().override
+        if override is None or device.type != "cuda":
+            return None
+        return cls(device, override)
+
+    def start_step(self) -> None:
+        torch.cuda.synchronize(self._device)
+        self._step_started_at = time.perf_counter()
+
+    def end_step(self) -> None:
+        torch.cuda.synchronize(self._device)
+        self._step_ms.append((time.perf_counter() - self._step_started_at) * 1000)
+
+    def log_summary(self) -> None:
+        if not self._step_ms:
+            return
+        peak_gib = torch.cuda.max_memory_allocated(self._device) / 2**30
+        first_ms = self._step_ms[0]
+        # The first step absorbs kernel selection and allocator warmup -- on a cold cuDNN run it has
+        # been seen at 2606 ms against a 1451 ms steady mean -- so it is reported, not averaged in.
+        steady = self._step_ms[1:] or self._step_ms
+        logger.info(
+            f"Krea-2 SDPA benchmark [{self._label}]: {len(self._step_ms)} steps | "
+            f"first {first_ms:.0f} ms | "
+            f"steady mean {statistics.mean(steady):.0f} ms, median {statistics.median(steady):.0f} ms, "
+            f"min {min(steady):.0f} ms, max {max(steady):.0f} ms | "
+            f"peak torch.cuda.max_memory_allocated {peak_gib:.3f} GiB"
+        )
 
 
 @invocation(
@@ -459,7 +518,11 @@ class Krea2DenoiseInvocation(BaseInvocation, WithMetadata, WithBoard):
             pos_regional_attention_mask = pos_extension.get_attention_mask()
             neg_regional_attention_mask = neg_extension.get_attention_mask() if neg_extension is not None else None
 
+            benchmark = _Krea2StepBenchmark.create(device)
+
             for step_idx, t in enumerate(tqdm(timesteps_sched)):
+                if benchmark is not None:
+                    benchmark.start_step()
                 # The pipeline passes timestep / num_train_timesteps to the transformer.
                 timestep = (t / num_train_timesteps).expand(latents.shape[0]).to(inference_dtype)
 
@@ -504,6 +567,9 @@ class Krea2DenoiseInvocation(BaseInvocation, WithMetadata, WithBoard):
                     )
                     latents = pack_latents(latents_4d, 1, KREA2_LATENT_CHANNELS, latent_height, latent_width)
 
+                if benchmark is not None:
+                    benchmark.end_step()
+
                 step_callback(
                     PipelineIntermediateState(
                         step=step_idx + 1,
@@ -513,6 +579,9 @@ class Krea2DenoiseInvocation(BaseInvocation, WithMetadata, WithBoard):
                         latents=unpack_latents(latents, latent_height, latent_width),
                     ),
                 )
+
+        if benchmark is not None:
+            benchmark.log_summary()
 
         # Unpack to 4D then add a frame dim for the Qwen-Image VAE: (B, C, 1, H, W).
         latents = unpack_latents(latents, latent_height, latent_width)

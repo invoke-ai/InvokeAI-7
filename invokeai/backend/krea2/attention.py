@@ -7,12 +7,13 @@ kernels do **not** support ``enable_gqa``, so this forces the *math* backend, wh
 grows O(seq^2) — ~40 GB at 2560x1440 — so generation OOMs or the cache offloads the transformer to RAM.
 
 This processor instead expands the K/V heads to match the query heads (``repeat_interleave``) so ``enable_gqa``
-is not needed, and runs under the memory-efficient SDPA backend (which supports the additive padding mask and
-is O(seq) in memory). Measured: the same 3600-token attention drops from ~5.7 GB to ~0.19 GB.
+is not needed, and runs under a ranked list of fused SDPA backends (all of which support the additive padding
+mask and are O(seq) in memory). Measured: the same 3600-token attention drops from ~5.7 GB to ~0.19 GB.
 
 The math is otherwise identical to ``Krea2AttnProcessor`` (q/k RMSNorm, rotary embeddings, sigmoid output gate).
 """
 
+import os
 import re
 from dataclasses import dataclass
 from typing import Protocol
@@ -22,8 +23,68 @@ import torch.nn.functional as F
 from diffusers.models.embeddings import apply_rotary_emb
 from torch.nn.attention import SDPBackend, sdpa_kernel
 
-# Prefer the memory-efficient kernel; fall back to flash (if the build has it) then math so we never hard-fail.
-_KREA2_SDPA_BACKENDS = [SDPBackend.EFFICIENT_ATTENTION, SDPBackend.FLASH_ATTENTION, SDPBackend.MATH]
+from invokeai.backend.util.logging import InvokeAILogger
+
+logger = InvokeAILogger.get_logger(__name__)
+
+# Rank cuDNN first: it is ~1.6x the memory-efficient kernel on the Krea-2 attention shape at identical
+# peak memory, worth 4-8% per generation and growing with resolution. Everything below it is a
+# fallback, never an exclusive choice -- an unavailable backend is skipped by the dispatcher, so the
+# list degrades on its own: to `efficient` where cuDNN is unusable (which is today's behaviour), and
+# on ROCm, where cuDNN is absent and flash rejects the additive mask.
+#
+# FLASH stays in the list even where a probe would show it absent: a dead entry in a ranked list costs
+# nothing, while a missing one costs a platform (flash *is* the ROCm path for the unmasked blocks).
+_KREA2_SDPA_BACKENDS = [
+    SDPBackend.CUDNN_ATTENTION,
+    SDPBackend.EFFICIENT_ATTENTION,
+    SDPBackend.FLASH_ATTENTION,
+    SDPBackend.MATH,
+]
+
+# Opt-in override, for measuring one backend against another and for support questions. Unset -- the
+# only state a user ever sees by default -- is the ranked list above, unchanged.
+KREA2_SDPA_BACKEND_ENV_VAR = "INVOKE_KREA2_SDPA_BACKEND"
+_PRIORITY_CUDNN = "priority-cudnn"
+_EXCLUSIVE_BACKENDS = {
+    "cudnn": SDPBackend.CUDNN_ATTENTION,
+    "efficient": SDPBackend.EFFICIENT_ATTENTION,
+    "flash": SDPBackend.FLASH_ATTENTION,
+    "math": SDPBackend.MATH,
+}
+
+
+@dataclass(frozen=True)
+class Krea2SdpaBackends:
+    """Which SDPA backends a Krea-2 attention call may use, and in what order."""
+
+    backends: tuple[SDPBackend, ...]
+    set_priority: bool
+    override: str | None = None
+
+    def describe(self) -> str:
+        names = ", ".join(b.name for b in self.backends)
+        return f"sdpa_kernel([{names}], set_priority={self.set_priority})"
+
+
+def resolve_krea2_sdpa_backends(raw_override: str | None = None) -> Krea2SdpaBackends:
+    """Resolve the SDPA backend list, honouring KREA2_SDPA_BACKEND_ENV_VAR.
+
+    The exclusive modes are the point of the override: a run that completes proves that kernel was
+    actually used, because an unavailable backend raises visibly instead of quietly degrading to math.
+    """
+    raw = os.environ.get(KREA2_SDPA_BACKEND_ENV_VAR) if raw_override is None else raw_override
+    if raw is None or not raw.strip():
+        return Krea2SdpaBackends(backends=tuple(_KREA2_SDPA_BACKENDS), set_priority=True)
+
+    value = raw.strip().lower()
+    if value == _PRIORITY_CUDNN:
+        return Krea2SdpaBackends(backends=tuple(_KREA2_SDPA_BACKENDS), set_priority=True, override=value)
+    if value in _EXCLUSIVE_BACKENDS:
+        return Krea2SdpaBackends(backends=(_EXCLUSIVE_BACKENDS[value],), set_priority=False, override=value)
+
+    valid = ", ".join([*sorted(_EXCLUSIVE_BACKENDS), _PRIORITY_CUDNN])
+    raise ValueError(f"{KREA2_SDPA_BACKEND_ENV_VAR}={raw!r} is not a valid value. Valid values: {valid}.")
 
 
 @dataclass
@@ -39,8 +100,14 @@ class Krea2RegionalPromptingState:
 class Krea2MemoryEfficientAttnProcessor:
     """Drop-in replacement for ``Krea2AttnProcessor`` that avoids the ``enable_gqa`` math fallback."""
 
-    def __init__(self, regional_prompting_state: Krea2RegionalPromptingState | None = None) -> None:
+    def __init__(
+        self,
+        regional_prompting_state: Krea2RegionalPromptingState | None = None,
+        sdpa_backends: Krea2SdpaBackends | None = None,
+    ) -> None:
         self.regional_prompting_state = regional_prompting_state
+        # Resolved once per generation and handed down, not read per attention call.
+        self.sdpa_backends = sdpa_backends if sdpa_backends is not None else resolve_krea2_sdpa_backends()
 
     def __call__(
         self,
@@ -83,7 +150,7 @@ class Krea2MemoryEfficientAttnProcessor:
             key = key.repeat_interleave(repeats, dim=1)
             value = value.repeat_interleave(repeats, dim=1)
 
-        with sdpa_kernel(_KREA2_SDPA_BACKENDS):
+        with sdpa_kernel(list(self.sdpa_backends.backends), set_priority=self.sdpa_backends.set_priority):
             hidden_states = F.scaled_dot_product_attention(query, key, value, attn_mask=attention_mask)
 
         # [B, H, S, D] -> [B, S, H, D] -> [B, S, H*D], matching Krea2AttnProcessor's output layout.
@@ -103,10 +170,20 @@ def build_krea2_attention_processors(
 ) -> dict[str, Krea2MemoryEfficientAttnProcessor]:
     """Build processors that apply regional masks to alternating main transformer blocks only."""
 
+    sdpa_backends = resolve_krea2_sdpa_backends()
+    if sdpa_backends.override is not None:
+        # Once per generation, not once per attention call.
+        logger.info(
+            f"Krea-2 SDPA backend override active: {KREA2_SDPA_BACKEND_ENV_VAR}={sdpa_backends.override} "
+            f"-> {sdpa_backends.describe()}"
+        )
+
     processors: dict[str, Krea2MemoryEfficientAttnProcessor] = {}
     for name in transformer.attn_processors:
         match = re.fullmatch(r"transformer_blocks\.(\d+)\.attn\.processor", name)
         block_index = int(match.group(1)) if match is not None else None
         state = regional_prompting_state if block_index is not None and block_index % 2 == 0 else None
-        processors[name] = Krea2MemoryEfficientAttnProcessor(regional_prompting_state=state)
+        processors[name] = Krea2MemoryEfficientAttnProcessor(
+            regional_prompting_state=state, sdpa_backends=sdpa_backends
+        )
     return processors

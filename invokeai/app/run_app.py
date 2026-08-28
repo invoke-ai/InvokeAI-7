@@ -70,6 +70,7 @@ def run_app() -> None:
         check_cudnn,
         enable_dev_reload,
         find_open_port,
+        log_attention_backends,
         register_mime_types,
     )
 
@@ -84,6 +85,7 @@ def run_app() -> None:
     apply_monkeypatches()
     register_mime_types()
     check_cudnn(logger)
+    log_attention_backends(logger, TorchDevice.choose_torch_device())
 
     # Initialize the app and event loop.
     app, loop = get_app()
