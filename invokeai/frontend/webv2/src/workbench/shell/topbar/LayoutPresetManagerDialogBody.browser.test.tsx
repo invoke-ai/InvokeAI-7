@@ -88,7 +88,7 @@ describe('LayoutPresetManagerDialogBody', () => {
   it('renders one account-ordered list without preset descriptions', async () => {
     await renderManager();
 
-    expect(presetRowIds()).toEqual(['compose', 'custom-1', 'edit', 'automate']);
+    expect(presetRowIds()).toEqual(['compose', 'custom-1', 'edit', 'video', 'automate']);
     expect(document.body.textContent).toContain('Writing');
     expect(document.body.textContent).not.toContain('Text to image');
     expect(document.body.textContent).not.toContain('Canvas editing');
@@ -111,7 +111,7 @@ describe('LayoutPresetManagerDialogBody', () => {
     await act(() => pointer('pointermove', handle!.ownerDocument, startX, endY));
     await act(() => pointer('pointerup', handle!.ownerDocument, startX, endY));
 
-    expect(store.getSnapshot().account.layoutPresetOrder).toEqual(['custom-1', 'edit', 'compose', 'automate']);
+    expect(store.getSnapshot().account.layoutPresetOrder).toEqual(['custom-1', 'edit', 'compose', 'video', 'automate']);
   });
 
   it('reorders presets from a focused row handle with the keyboard', async () => {
@@ -137,6 +137,6 @@ describe('LayoutPresetManagerDialogBody', () => {
     );
     await act(() => userEvent.keyboard('{Enter}'));
 
-    expect(store.getSnapshot().account.layoutPresetOrder).toEqual(['compose', 'edit', 'custom-1', 'automate']);
+    expect(store.getSnapshot().account.layoutPresetOrder).toEqual(['compose', 'edit', 'custom-1', 'video', 'automate']);
   });
 });

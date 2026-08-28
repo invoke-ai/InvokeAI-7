@@ -20,8 +20,12 @@ build. It covers every ``AutoencoderKLWan`` consumer (Wan decode/encode nodes,
 ref-image encoding, Anima's VAE) regardless of which loader constructed it.
 """
 
+import os
+
 import torch
 import torch.nn.functional as F
+
+from invokeai.backend.util.logging import InvokeAILogger
 
 _SENTINEL = "_invokeai_rocm_conv2d_decomposition"
 
@@ -45,6 +49,8 @@ def _decomposed_conv3d(module: torch.nn.Conv3d, x: torch.Tensor) -> torch.Tensor
 
 
 def _decomposed_forward(self, x: torch.Tensor, cache_x: torch.Tensor | None = None) -> torch.Tensor:
+    if _MODE == "verify":
+        return _verified_forward(self, x, cache_x)
     # Causal-padding / feature-cache handling copied verbatim from
     # diffusers.models.autoencoders.autoencoder_kl_wan.WanCausalConv3d.forward.
     padding = list(self._padding)
@@ -60,22 +66,95 @@ def _decomposed_forward(self, x: torch.Tensor, cache_x: torch.Tensor | None = No
     return _decomposed_conv3d(self, x)
 
 
+# Diagnostic switch for the torch-2.13/rocm7.2 corruption investigation. Values:
+#   decomposed (default) — the normal patched path.
+#   native               — leave the stock conv3d forward in place (patch becomes a no-op).
+#   verify               — run BOTH the stock forward and the decomposition for every call,
+#                          log any call whose outputs diverge beyond bf16 accumulation noise
+#                          (with its exact shape), and return the stock result. One decode in
+#                          this mode pinpoints exactly which conv call (if any) corrupts.
+_MODE = os.environ.get("INVOKEAI_ROCM_CONV3D", "decomposed").strip().lower()
+_VERIFY_TOL = 0.1  # far above the measured bf16 accumulation noise (~0.03), far below corruption
+_STOCK_FORWARD = None
+
+
+def _verified_forward(self, x: torch.Tensor, cache_x: torch.Tensor | None) -> torch.Tensor:
+    assert _STOCK_FORWARD is not None
+    reference = _STOCK_FORWARD(self, x, cache_x)
+    # Re-run the decomposed path's body directly (not via _decomposed_forward, which would
+    # recurse back into this function while _MODE == "verify").
+    padding = list(self._padding)
+    x_d = x
+    cache_d = cache_x
+    if cache_d is not None and self._padding[4] > 0:
+        cache_d = cache_d.to(x_d.device)
+        x_d = torch.cat([cache_d, x_d], dim=2)
+        padding[4] -= cache_d.shape[2]
+    x_d = F.pad(x_d, padding)
+    if self.stride != (1, 1, 1) or self.dilation != (1, 1, 1) or self.groups != 1:
+        decomposed = F.conv3d(x_d, self.weight, self.bias, self.stride, (0, 0, 0), self.dilation, self.groups)
+    else:
+        decomposed = _decomposed_conv3d(self, x_d)
+    max_diff = (reference.float() - decomposed.float()).abs().max().item()
+    if max_diff > _VERIFY_TOL:
+        InvokeAILogger.get_logger(__name__).warning(
+            f"ROCm conv3d verify MISMATCH: max diff {max_diff:.4f} | input {tuple(x.shape)} "
+            f"cache {tuple(cache_x.shape) if cache_x is not None else None} "
+            f"weight {tuple(self.weight.shape)} dtype {x.dtype} "
+            f"stride {self.stride} padding {tuple(self._padding)}"
+        )
+    return reference
+
+
 def _patch_wan_causal_conv3d() -> None:
     """Rebind WanCausalConv3d.forward to the conv2d decomposition (idempotent)."""
+    global _STOCK_FORWARD
     from diffusers.models.autoencoders.autoencoder_kl_wan import WanCausalConv3d
 
     if getattr(WanCausalConv3d, _SENTINEL, False):
         return
+    _STOCK_FORWARD = WanCausalConv3d.forward
     WanCausalConv3d.forward = _decomposed_forward
     setattr(WanCausalConv3d, _SENTINEL, True)
 
 
+def hip_version_at_least(major: int, minor: int) -> bool:
+    """True when this is a ROCm/HIP torch build at least as new as ``major.minor``.
+
+    Parse failures return False (keep the proven old-stack behavior).
+    """
+    hip = torch.version.hip
+    if hip is None:
+        return False
+    try:
+        parts = hip.split(".")
+        return (int(parts[0]), int(parts[1])) >= (major, minor)
+    except (ValueError, IndexError):
+        return False
+
+
 def patch_wan_causal_conv3d_for_rocm() -> None:
-    """Apply the conv2d decomposition on ROCm builds; no-op elsewhere.
+    """Apply the conv2d decomposition on ROCm builds older than HIP 7.2; no-op elsewhere.
 
     Call from any loader that constructs an ``AutoencoderKLWan``. cuDNN has real
     implicit-GEMM conv3d kernels, so CUDA builds keep the stock path.
+
+    HIP >= 7.2 also keeps the stock path: its MIOpen runs these conv3ds at full speed
+    (making the decomposition unnecessary), and with the decomposition active it produces
+    allocator-state-dependent row corruption in decoded images — horizontal line/tearing
+    artifacts, observed on non-square Anima/Wan decodes on a W7900 with torch
+    2.13.0+rocm7.2. The corruption is a heisenbug: every isolated repro of the
+    decomposition's kernels is numerically clean, and instrumenting the live decode to
+    compare both implementations per call (INVOKEAI_ROCM_CONV3D=verify) finds no
+    divergence AND yields a clean image — the signature of a kernel reading memory whose
+    content depends on allocation history. Native conv3d is deterministic-clean and fast
+    there, so it wins outright. See _MODE above for the diagnostic overrides
+    (INVOKEAI_ROCM_CONV3D=native|verify; verify still patches on any HIP version).
     """
     if torch.version.hip is None:
+        return
+    if _MODE == "native":
+        return
+    if _MODE != "verify" and hip_version_at_least(7, 2):
         return
     _patch_wan_causal_conv3d()

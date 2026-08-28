@@ -10,6 +10,7 @@ import { ModelSelect } from '@features/models/react';
 import { getVideoDurationSeconds, invertVideoAspectRatioId } from '@features/video/core/dimensions';
 import { normalizeVideoWidgetValues, resolveVideoMode, VIDEO_ASPECT_RATIO_IDS } from '@features/video/core/settings';
 import {
+  getAcceleratorLoraChangeResult,
   getAcceleratorToggleResult,
   getVideoDimensions,
   getVideoModelPolicy,
@@ -112,7 +113,7 @@ export const VideoWidgetView = () => {
   const selection = useVideoUi();
   const models = useModelsSelector((snapshot) => snapshot.models);
   const modelsStatus = useModelsSelector((snapshot) => snapshot.status);
-  const { patchPromptDraft: patchDraft, patchValues, projectId, promptDraft, rawValues } = selection;
+  const { patchValues, projectId, rawValues } = selection;
   // Normalizing and reconciling against the model list is the widget's most
   // expensive derivation; it must not run on unrelated re-renders, and a fresh
   // `values` identity would re-render every section below.
@@ -246,35 +247,40 @@ export const VideoWidgetView = () => {
   );
   const setLoras = useCallback(
     (loras: VideoWidgetValues['loras']) => {
-      // Removing or disabling one of the accelerator's LoRAs breaks the fast
-      // path: turn it off explicitly, restore the model's own sampling
-      // defaults (Lightning wrote steps/CFG), keep the user's list edit, and
-      // say so — a silent 4-step run without the distillation pair would just
-      // look like a broken model.
-      const acceleratorBroken =
-        values.acceleratorEnabled &&
-        !values.acceleratorLoraKeys.every((key) => loras.some((lora) => lora.model.key === key && lora.isEnabled));
-
-      if (!acceleratorBroken) {
+      // While the fast path is on it follows the list: a different complete
+      // accelerator set in it re-anchors the toggle onto that set at its own
+      // step count, and losing the last one turns the toggle off and restores
+      // the model's own sampling defaults (the accelerator wrote steps/CFG).
+      // Either way the user's list edit stands, and either way they are told —
+      // a silent 6-step run with no distillation LoRA behind it just looks
+      // like a broken model. An off accelerator is never armed from here.
+      if (!values.model) {
         patch({ loras });
         return;
       }
 
-      patch({
-        acceleratorEnabled: false,
-        acceleratorLoraKeys: [],
-        cfgScale: policy.defaults.cfgScale,
-        cfgScaleLowNoise: policy.defaults.cfgScaleLowNoise,
-        loras,
-        steps: policy.defaults.steps,
-      });
-      toaster.create({
-        description: t('widgets.video.acceleratorBrokenDescription'),
-        title: t('widgets.video.acceleratorBroken'),
-        type: 'info',
-      });
+      const result = getAcceleratorLoraChangeResult(values, values.model, models, loras);
+
+      patch({ ...result.settings });
+
+      if (result.outcome === 'switched') {
+        toaster.create({
+          description: t('widgets.video.acceleratorSwitchedDescription', {
+            name: result.acceleratorLoras?.map((lora) => lora.name).join(', ') ?? '',
+            steps: result.settings.steps,
+          }),
+          title: t('widgets.video.acceleratorSwitched', { label: policy.ui.accelerator?.label ?? '' }),
+          type: 'info',
+        });
+      } else if (result.outcome === 'disabled') {
+        toaster.create({
+          description: t('widgets.video.acceleratorBrokenDescription'),
+          title: t('widgets.video.acceleratorBroken'),
+          type: 'info',
+        });
+      }
     },
-    [patch, policy.defaults, t, values.acceleratorEnabled, values.acceleratorLoraKeys]
+    [models, patch, policy.ui.accelerator?.label, t, values]
   );
   const clearFirstFrame = useCallback(() => patch({ firstFrameImage: null }), [patch]);
   const clearLastFrame = useCallback(() => patch({ lastFrameImage: null }), [patch]);
@@ -325,17 +331,42 @@ export const VideoWidgetView = () => {
         values={values}
       />
 
+      {/* Tier-1, like Generate's model card: which model you are running is the
+          choice every field below is conditioned on, so it sits above the
+          prompt rather than inside a collapsed section. */}
+      {/* `px` matches the inset the prompt block and every section body carry,
+          so the picker lines up with the fields below it — Generate's card can
+          skip it only because its neighbours sit flush too. */}
+      <Stack gap="1" px="2" py="1">
+        <Field
+          error={values.model ? undefined : t('widgets.video.modelRequired')}
+          hint="model"
+          label={t('widgets.video.mainModel')}
+        >
+          <ModelSelect
+            filter={isVideoModelSelectable}
+            invalid={!values.model}
+            modelTypes={MAIN_MODEL_TYPES}
+            placeholder={t('widgets.video.selectModel')}
+            size="xs"
+            value={values.model?.key ?? null}
+            onChange={selectMainModel}
+          />
+        </Field>
+      </Stack>
+
       <VideoPromptFields
         loras={values.loras}
         model={values.model}
         negativeHelpText={policy.prompt.negativeHelpText}
+        negativePrompt={values.negativePrompt}
+        negativePromptEnabled={values.negativePromptEnabled}
         negativePromptHeightPx={values.negativePromptHeightPx}
         negativeVisible={policy.prompt.negativeVisible}
+        positivePrompt={values.positivePrompt}
         positivePromptHeightPx={values.positivePromptHeightPx}
         projectId={projectId}
-        promptDraft={promptDraft}
         showSyntaxHighlighting={selection.showPromptSyntaxHighlighting}
-        onPatchPromptDraft={patchDraft}
         onPatchValues={patch}
       />
 
@@ -464,27 +495,14 @@ export const VideoWidgetView = () => {
         </Stack>
       </GenerationSettingsSection>
 
-      <GenerationSettingsSection label={t('widgets.video.model')} sectionId="video-model" defaultOpen>
+      {/* Sampling and variation — how the model renders, not which model it is. */}
+      <GenerationSettingsSection label={t('widgets.video.render')} sectionId="video-render" defaultOpen>
         <Stack gap="3" p="2">
-          <Field
-            error={values.model ? undefined : t('widgets.video.modelRequired')}
-            label={t('widgets.video.mainModel')}
-          >
-            <ModelSelect
-              filter={isVideoModelSelectable}
-              invalid={!values.model}
-              modelTypes={MAIN_MODEL_TYPES}
-              placeholder={t('widgets.video.selectModel')}
-              size="xs"
-              value={values.model?.key ?? null}
-              onChange={selectMainModel}
-            />
-          </Field>
           {policy.ui.accelerator && values.model ? (
             <Field
               helpText={t('widgets.video.acceleratorHelp', {
                 label: policy.ui.accelerator.label,
-                steps: policy.ui.accelerator.steps,
+                steps: policy.ui.acceleratorSteps ?? policy.ui.accelerator.steps,
               })}
               label={t('widgets.video.accelerator', { label: policy.ui.accelerator.label })}
             >

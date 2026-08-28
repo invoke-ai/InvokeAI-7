@@ -40,7 +40,7 @@ const INTENTS: Record<LaunchpadIntentId, LaunchpadIntent> = {
   canvas: { id: 'canvas', presetId: 'edit', sourceId: 'canvas' },
   generate: { id: 'generate', presetId: 'compose', sourceId: 'generate' },
   upscale: { id: 'upscale', presetId: 'compose', sourceId: 'upscale' },
-  video: { id: 'video', presetId: 'compose', sourceId: 'video' },
+  video: { id: 'video', presetId: 'video', sourceId: 'video' },
   workflow: { id: 'workflow', presetId: 'automate', sourceId: 'workflow' },
 };
 
@@ -52,12 +52,12 @@ export const isLaunchpadIntentId = (value: unknown): value is LaunchpadIntentId 
  * presets live in the account state that only the mounted workbench holds, and
  * the Launchpad renders outside that provider.
  */
-export const LAUNCHPAD_LAYOUT_IDS: readonly BuiltInLayoutPresetId[] = ['compose', 'edit', 'automate'];
+export const LAUNCHPAD_LAYOUT_IDS: readonly BuiltInLayoutPresetId[] = ['compose', 'edit', 'video', 'automate'];
 
 /**
  * Display names for the built-in arrangements, kept here rather than read off
  * `layoutPresets` so the Launchpad can name them without pulling that table —
- * which carries three full widget-region snapshots — onto its route chunk.
+ * which carries a full widget-region snapshot per preset — onto its route chunk.
  * `layoutPresets` builds its own labels from this map, so there is still one
  * definition.
  */
@@ -65,6 +65,7 @@ export const BUILT_IN_LAYOUT_PRESET_LABELS: Record<BuiltInLayoutPresetId, string
   automate: 'Automate',
   compose: 'Compose',
   edit: 'Edit',
+  video: 'Video',
 };
 
 export const isLaunchpadLayoutId = (value: unknown): value is BuiltInLayoutPresetId =>

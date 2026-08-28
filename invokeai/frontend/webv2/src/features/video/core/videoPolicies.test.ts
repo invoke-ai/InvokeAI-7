@@ -7,6 +7,7 @@ import type { VideoSettings } from './types';
 import {
   findMiniMaxH3TurboLora,
   findWanLightningLoraPair,
+  getAcceleratorLoraChangeResult,
   getDefaultVideoSettings,
   getAcceleratorToggleResult,
   getVideoComponentSectionPolicy,
@@ -353,6 +354,15 @@ describe('Lightning', () => {
 
 describe('MiniMax H3 Turbo', () => {
   const TURBO = { base: 'minimax-h3', key: 'turbo', name: 'MiniMax H3 Turbo LoRA', type: 'lora' as const };
+  // The second installed Turbo LoRA: same family, a different step schedule,
+  // and nothing but the org name in it to say so.
+  const LIGHTX2V = {
+    base: 'minimax-h3',
+    key: 'lightx2v',
+    name: 'MiniMax H3 LightX2V Turbo LoRA',
+    type: 'lora' as const,
+  };
+  const H3_CATALOG = [TURBO, LIGHTX2V];
 
   it('finds the installed Turbo LoRA by name, ignoring Wan Lightning models', () => {
     expect(findMiniMaxH3TurboLora([LIGHTNING_T2V_HIGH, TURBO])).toMatchObject({ key: 'turbo' });
@@ -395,6 +405,150 @@ describe('MiniMax H3 Turbo', () => {
     // Only the recorded Turbo entry is removed; "Turbo Rider" is the user's.
     expect(off.loras.map((entry) => entry.model.key)).toEqual(['rider']);
     expect(off.acceleratorLoraKeys).toEqual([]);
+  });
+
+  it('runs the LightX2V release at the 8 steps it was distilled for, not the repack default of 6', () => {
+    const model = h3Model();
+    const on = getAcceleratorToggleResult(settingsFor(model), model, [LIGHTX2V], true).settings;
+
+    expect(on).toMatchObject({ acceleratorEnabled: true, steps: 8 });
+    expect(on.acceleratorLoraKeys).toEqual([LIGHTX2V.key]);
+    // The help text quotes the running LoRA's count; `ui.accelerator` stays the
+    // family config, so callers can still resolve other counts against it.
+    expect(getVideoModelPolicy(model, on).ui).toMatchObject({ acceleratorSteps: 8 });
+    expect(getVideoModelPolicy(model, on).ui.accelerator).toMatchObject({ label: 'Turbo', steps: 6 });
+  });
+
+  it('re-anchors the fast path on the other Turbo LoRA instead of tearing it down', () => {
+    const model = h3Model();
+    // Both are installed, so the toggle picks one; the user then swaps in the
+    // other by enabling it and switching the first off.
+    const on = getAcceleratorToggleResult(settingsFor(model), model, H3_CATALOG, true).settings;
+
+    expect(on.acceleratorLoraKeys).toEqual([LIGHTX2V.key]);
+
+    const swapped = getAcceleratorLoraChangeResult(on, model, H3_CATALOG, [
+      { isEnabled: false, model: LIGHTX2V as never, weight: 1 },
+      { isEnabled: true, model: TURBO as never, weight: 1 },
+    ]);
+
+    expect(swapped.outcome).toBe('switched');
+    expect(swapped.settings).toMatchObject({ acceleratorEnabled: true, cfgScale: 1, steps: 6 });
+    expect(swapped.settings.acceleratorLoraKeys).toEqual([TURBO.key]);
+    expect(swapped.acceleratorLoras?.map((entry) => entry.key)).toEqual([TURBO.key]);
+  });
+
+  it('never arms an off fast path from a list edit, whatever lands in the list', () => {
+    const model = h3Model();
+    const turboRider = { base: 'minimax-h3', key: 'rider', name: 'Turbo Rider', type: 'lora' as const };
+    // A user's own H3 LoRA satisfies the family-name test as readily as a real
+    // repack does, and a hand-tuned step count must survive an unrelated edit.
+    const own = { base: 'minimax-h3', key: 'mine', name: 'My H3 Turbo Sharpener', type: 'lora' as const };
+    const off = settingsFor(model, { steps: 12 });
+
+    for (const candidate of [TURBO, LIGHTX2V, turboRider, own]) {
+      const result = getAcceleratorLoraChangeResult(off, model, H3_CATALOG, [
+        { isEnabled: true, model: candidate as never, weight: 1 },
+      ]);
+
+      expect(result.outcome).toBe('unchanged');
+      expect(result.settings).toMatchObject({ acceleratorEnabled: false, steps: 12 });
+    }
+  });
+
+  it('installs the catalog Turbo LoRA on toggle-on, never a user LoRA that is merely H3-named', () => {
+    const model = h3Model();
+    const own = { base: 'minimax-h3', key: 'mine', name: 'My H3 Turbo Sharpener', type: 'lora' as const };
+    const withOwn = settingsFor(model, { loras: [{ isEnabled: true, model: own as never, weight: 0.4 }] });
+    const on = getAcceleratorToggleResult(withOwn, model, [TURBO, own], true).settings;
+
+    expect(on.acceleratorLoraKeys).toEqual([TURBO.key]);
+    expect(on.steps).toBe(6);
+    // ...and the user's own entry keeps its weight rather than being co-opted.
+    expect(on.loras.find((entry) => entry.model.key === 'mine')?.weight).toBe(0.4);
+  });
+
+  it('keeps an oddly named Turbo LoRA running while it is the only one installed', () => {
+    const model = h3Model();
+    const turboRider = { base: 'minimax-h3', key: 'rider', name: 'Turbo Rider', type: 'lora' as const };
+    const on = getDefaultVideoSettings(model, [turboRider]);
+
+    expect(on.acceleratorLoraKeys).toEqual(['rider']);
+
+    // An unrelated list edit must not tear down a fast path that is still on.
+    const result = getAcceleratorLoraChangeResult(
+      on,
+      model,
+      [turboRider],
+      [...on.loras, { isEnabled: true, model: lora('Style LoRA') as never, weight: 0.5 }]
+    );
+
+    expect(result.outcome).toBe('unchanged');
+    expect(result.settings.acceleratorEnabled).toBe(true);
+  });
+
+  it('turns the fast path off with the model defaults when no Turbo LoRA is left enabled', () => {
+    const model = h3Model();
+    const on = getDefaultVideoSettings(model, [TURBO]);
+    const result = getAcceleratorLoraChangeResult(on, model, H3_CATALOG, []);
+
+    expect(result.outcome).toBe('disabled');
+    expect(result.settings).toMatchObject({ acceleratorEnabled: false, steps: 50 });
+  });
+
+  it('leaves user-tuned steps alone while its own LoRA is still enabled', () => {
+    const model = h3Model();
+    const on = { ...getDefaultVideoSettings(model, [TURBO]), steps: 9 };
+    const result = getAcceleratorLoraChangeResult(on, model, H3_CATALOG, [
+      ...on.loras,
+      { isEnabled: true, model: lora('Style LoRA') as never, weight: 0.5 },
+    ]);
+
+    expect(result.outcome).toBe('unchanged');
+    expect(result.settings).toMatchObject({ acceleratorEnabled: true, steps: 9 });
+  });
+
+  it('stays intact through a duplicated LoRA entry, so an unchanged value reconciles to itself', () => {
+    const model = h3Model();
+    const on = getDefaultVideoSettings(model, [TURBO]);
+    // A hand-edited project file (or metadata whose graph listed one twice)
+    // can hold the same key twice; the flag must not read as broken.
+    const duplicated = [...on.loras, ...on.loras];
+    const once = getAcceleratorLoraChangeResult(on, model, [TURBO], duplicated);
+    const twice = getAcceleratorLoraChangeResult(once.settings, model, [TURBO], duplicated);
+
+    expect(once.outcome).toBe('unchanged');
+    expect(twice.outcome).toBe('unchanged');
+    expect(twice.settings.acceleratorLoraKeys).toBe(on.acceleratorLoraKeys);
+  });
+
+  it('rejects a Lightning pair that does not name the family, even with no family token to check', () => {
+    // The fallback variant has no variant string, so there is no token to
+    // demand — the list-scoped lookup must fail closed rather than accept any
+    // Lightning-named pair the user happens to hold.
+    const fallbackMain = wanModel('', 'gguf_quantized', 'wan-unprobed');
+    const mine = [
+      lora('Personal Lightning High Detail', null, 'myh'),
+      lora('Personal Lightning Low Detail', null, 'myl'),
+    ];
+
+    expect(findWanLightningLoraPair(mine, fallbackMain.variant, { requireFamilyName: true })).toBeNull();
+    // Unrestricted (the catalog question) it still resolves, as before.
+    expect(findWanLightningLoraPair(mine, fallbackMain.variant)).toMatchObject({ high: { key: 'myh' } });
+  });
+
+  it('swaps a T2V Lightning pair for the I2V one when the main changes family', () => {
+    const catalog = [LIGHTNING_T2V_HIGH, LIGHTNING_T2V_LOW, LIGHTNING_I2V_HIGH, LIGHTNING_I2V_LOW];
+    const t2v = wanModel('t2v_a14b');
+    const on = getAcceleratorToggleResult(settingsFor(t2v), t2v, catalog, true).settings;
+    const result = getVideoModelSelectionResult({
+      currentSettings: on,
+      model: wanModel('i2v_a14b'),
+      models: catalog,
+    });
+
+    expect(result.settings.acceleratorLoraKeys).toEqual([LIGHTNING_I2V_HIGH.key, LIGHTNING_I2V_LOW.key]);
+    expect(result.clearedLabels).toContain('Acceleration');
   });
 
   it('carries the fast-path intent across a family switch (Lightning → Turbo)', () => {

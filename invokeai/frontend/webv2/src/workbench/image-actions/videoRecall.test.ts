@@ -124,7 +124,6 @@ describe('getVideoSizeRecall', () => {
 });
 
 describe('deriveAcceleratorRecallState', () => {
-  const catalog = [WAN_T2V, LIGHTNING_HIGH, LIGHTNING_LOW];
   const settings = createDefaultVideoWidgetValues([WAN_T2V]);
   const pairEntries = [
     { isEnabled: true, model: LIGHTNING_HIGH as never, weight: 1 },
@@ -132,18 +131,44 @@ describe('deriveAcceleratorRecallState', () => {
   ];
 
   it('re-enables the fast path when the recalled LoRAs are exactly the accelerator set at its steps', () => {
-    expect(deriveAcceleratorRecallState(WAN_T2V, catalog, pairEntries, 4, settings)).toEqual({
+    expect(deriveAcceleratorRecallState(WAN_T2V, pairEntries, 4, settings)).toEqual({
       acceleratorEnabled: true,
       acceleratorLoraKeys: [LIGHTNING_HIGH.key, LIGHTNING_LOW.key],
     });
   });
 
+  it('reads the step count off the recalled LoRAs, not off what the panel is running', () => {
+    // A panel already running an 8-step Turbo LoRA must not shift the step
+    // count a 6-step one is checked against.
+    const turbo = { base: 'minimax-h3', key: 'turbo', name: 'MiniMax H3 Turbo LoRA', type: 'lora' as const };
+    const lightx2v = {
+      base: 'minimax-h3',
+      key: 'lightx2v',
+      name: 'MiniMax H3 LightX2V Turbo LoRA',
+      type: 'lora' as const,
+    };
+    const model = h3Model();
+    const running = {
+      ...createDefaultVideoWidgetValues([model, lightx2v as never]),
+      acceleratorEnabled: true,
+      acceleratorLoraKeys: [lightx2v.key],
+      loras: [{ isEnabled: true, model: lightx2v as never, weight: 1 }],
+      steps: 8,
+    };
+    const recalled = [{ isEnabled: true, model: turbo as never, weight: 1 }];
+
+    expect(deriveAcceleratorRecallState(model, recalled, 6, running)).toEqual({
+      acceleratorEnabled: true,
+      acceleratorLoraKeys: [turbo.key],
+    });
+  });
+
   it('stays off at non-accelerator steps or with a partial pair', () => {
-    expect(deriveAcceleratorRecallState(WAN_T2V, catalog, pairEntries, 40, settings)).toEqual({
+    expect(deriveAcceleratorRecallState(WAN_T2V, pairEntries, 40, settings)).toEqual({
       acceleratorEnabled: false,
       acceleratorLoraKeys: [],
     });
-    expect(deriveAcceleratorRecallState(WAN_T2V, catalog, [pairEntries[0]!], 4, settings)).toEqual({
+    expect(deriveAcceleratorRecallState(WAN_T2V, [pairEntries[0]!], 4, settings)).toEqual({
       acceleratorEnabled: false,
       acceleratorLoraKeys: [],
     });
@@ -154,7 +179,7 @@ describe('buildVideoRecallSettings', () => {
   const catalog = [WAN_T2V, WAN_I2V, h3Model(), LIGHTNING_HIGH, LIGHTNING_LOW];
   const currentValues = { ...createDefaultVideoWidgetValues([h3Model()]) };
 
-  it('routes prompts into the shared draft patch, not the widget values', () => {
+  it('recalls prompts into the video widget values, leaving everything else alone', () => {
     const result = buildVideoRecallSettings({
       currentValues,
       kind: 'prompts',
@@ -163,12 +188,12 @@ describe('buildVideoRecallSettings', () => {
     });
 
     expect(result?.fields).toEqual(['prompts']);
-    expect(result?.promptPatch).toEqual({
+    expect(result?.values).toEqual({
+      ...currentValues,
       negativePrompt: 'blurry',
       negativePromptEnabled: true,
       positivePrompt: 'a red fox running',
     });
-    expect(result?.values).toEqual(currentValues);
   });
 
   it('recalls only the seed for the seed verb', () => {
@@ -340,7 +365,7 @@ describe('buildVideoRecallSettings', () => {
       models: catalog,
     });
 
-    expect(empty?.promptPatch).toEqual({ positivePrompt: 'a red fox running' });
+    expect(empty?.values).toEqual({ ...currentValues, positivePrompt: 'a red fox running' });
 
     const explicitNull = buildVideoRecallSettings({
       currentValues,
@@ -349,7 +374,7 @@ describe('buildVideoRecallSettings', () => {
       models: catalog,
     });
 
-    expect(explicitNull?.promptPatch).toMatchObject({ negativePrompt: '', negativePromptEnabled: false });
+    expect(explicitNull?.values).toMatchObject({ negativePrompt: '', negativePromptEnabled: false });
   });
 
   it('clears current LoRAs when the recorded ones are no longer installed', () => {

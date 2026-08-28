@@ -274,7 +274,7 @@ describe('createWorkbenchStore', () => {
 
     store.commands.layout.reorderPresets('compose', 'edit');
 
-    expect(store.getSnapshot().account.layoutPresetOrder).toEqual(['edit', 'compose', 'automate']);
+    expect(store.getSnapshot().account.layoutPresetOrder).toEqual(['edit', 'compose', 'video', 'automate']);
   });
 
   it('creates a custom preset with an explicitly selected default route in one command', () => {

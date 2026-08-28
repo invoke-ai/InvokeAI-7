@@ -253,7 +253,7 @@ type WorkbenchReducerAction =
   | {
       type: 'patchProjectPromptDraft';
       values: ProjectPromptDraftPatch;
-      sourceId: 'generate' | 'upscale' | 'video';
+      sourceId: 'generate' | 'upscale';
       projectId?: string;
       origin?: WorkbenchActionOrigin;
     }
@@ -2408,11 +2408,9 @@ const compileInvocationSnapshot = (
       return null;
     }
 
-    const syncedValues = models ? syncVideoWidgetValuesWithModels(values, models) : values;
-    const currentValues: VideoWidgetValues = {
-      ...syncedValues,
-      ...getPromptDraftFromValues(getProjectWidgetValues(project, 'generate')),
-    };
+    // Video's prompt is its own widget value, deliberately independent of the
+    // draft Generate and Upscale share: no draft is merged in here.
+    const currentValues: VideoWidgetValues = models ? syncVideoWidgetValuesWithModels(values, models) : values;
 
     if (!currentValues.model || getVideoWidgetValidationReasons(currentValues, models).length > 0) {
       return null;

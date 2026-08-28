@@ -86,7 +86,14 @@ class MiniMaxH3DiffusersModel(ModelLoader):
                 _raise_if_no_weight_shards(submodel_path, "transformer")
 
                 from invokeai.backend.minimax_h3 import MiniMaxH3Transformer3DModel
+                from invokeai.backend.minimax_h3.contiguous_attention import (
+                    patch_minimax_h3_attention_contiguous_qkv,
+                )
 
+                # The attention kernel is ~2x slower on ROCm (and ~1.3x on CUDA) at video
+                # sequence lengths when fed the processor's sequence-major Q/K/V layout; see
+                # contiguous_attention for the measurements.
+                patch_minimax_h3_attention_contiguous_qkv()
                 return MiniMaxH3Transformer3DModel.from_pretrained(
                     submodel_path, torch_dtype=dtype, local_files_only=True
                 )
@@ -163,6 +170,9 @@ class MiniMaxH3CheckpointModel(ModelLoader):
         from safetensors.torch import load_file
 
         from invokeai.backend.minimax_h3 import MiniMaxH3Transformer3DModel
+        from invokeai.backend.minimax_h3.contiguous_attention import (
+            patch_minimax_h3_attention_contiguous_qkv,
+        )
         from invokeai.backend.minimax_h3.int8_convrot import Int8ConvrotLinear
         from invokeai.backend.minimax_h3.transformer_minimax_h3_pruned import (
             MiniMaxH3PrunedTransformer3DModel,
@@ -174,6 +184,10 @@ class MiniMaxH3CheckpointModel(ModelLoader):
         )
 
         model_path = Path(config.path)
+
+        # Same attention-layout patch as the diffusers-folder path (the pruned subclass reuses
+        # the vendored attention classes); see contiguous_attention for the measurements.
+        patch_minimax_h3_attention_contiguous_qkv()
 
         # Reject unsupported quantization formats from the header alone, before committing to
         # the ~20 GiB tensor read (the fp8_scaled repacks share this key layout).

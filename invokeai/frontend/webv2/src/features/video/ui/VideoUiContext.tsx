@@ -1,4 +1,3 @@
-import type { ProjectPromptDraft, ProjectPromptDraftPatch } from '@features/generation/settings';
 import type { VideoWidgetValues } from '@features/video/core/types';
 import type { ReactNode } from 'react';
 
@@ -9,10 +8,8 @@ import { createContext, use, useMemo } from 'react';
  * may not import workbench), not a test seam; no second adapter is expected.
  */
 export interface VideoUiAdapter {
-  patchPromptDraft(values: ProjectPromptDraftPatch): void;
   patchValues(values: Partial<VideoWidgetValues>, origin?: 'user' | 'system'): void;
   projectId: string;
-  promptDraft: ProjectPromptDraft;
   rawValues: Record<string, unknown>;
   reportError(message: string): void;
   showPromptSyntaxHighlighting: boolean;
@@ -20,10 +17,7 @@ export interface VideoUiAdapter {
 }
 
 /** The adapter's callbacks, which are stable for the lifetime of a project. */
-export type VideoUiActions = Pick<
-  VideoUiAdapter,
-  'patchPromptDraft' | 'patchValues' | 'reportError' | 'touchGalleryImages'
->;
+export type VideoUiActions = Pick<VideoUiAdapter, 'patchValues' | 'reportError' | 'touchGalleryImages'>;
 
 const VideoUiContext = createContext<VideoUiAdapter | null>(null);
 /**
@@ -35,10 +29,10 @@ const VideoUiContext = createContext<VideoUiAdapter | null>(null);
 const VideoUiActionsContext = createContext<VideoUiActions | null>(null);
 
 export const VideoUiProvider = ({ adapter, children }: { adapter: VideoUiAdapter; children: ReactNode }) => {
-  const { patchPromptDraft, patchValues, reportError, touchGalleryImages } = adapter;
+  const { patchValues, reportError, touchGalleryImages } = adapter;
   const actions = useMemo<VideoUiActions>(
-    () => ({ patchPromptDraft, patchValues, reportError, touchGalleryImages }),
-    [patchPromptDraft, patchValues, reportError, touchGalleryImages]
+    () => ({ patchValues, reportError, touchGalleryImages }),
+    [patchValues, reportError, touchGalleryImages]
   );
 
   return (

@@ -82,12 +82,20 @@ export interface VideoFpsPolicy {
 /**
  * The family's distillation fast path: which LoRA(s) it runs on and the
  * sampling parameters they were trained for. Wan A14B uses the Lightning
- * high/low pair; MiniMax H3 uses the single Turbo LoRA (the bundled H3
- * templates default to it at 6 steps).
+ * high/low pair; MiniMax H3 uses a single Turbo LoRA.
+ *
+ * `steps` is the count the family's reference LoRA was distilled for (the
+ * bundled H3 templates assume the 6-step repack). Releases trained for a
+ * different schedule are resolved per-LoRA by `getAcceleratorSteps`.
  */
 export interface VideoAcceleratorConfig {
   label: 'Lightning' | 'Turbo';
   steps: number;
+  /**
+   * Step counts for releases whose names carry no "N-step" token. First match
+   * wins; consulted only when the name does not state the count itself.
+   */
+  stepOverrides?: readonly { pattern: RegExp; steps: number }[];
   cfgScale: number;
   cfgScaleLowNoise: number | null;
 }
@@ -118,11 +126,17 @@ export const WAN_LIGHTNING_ACCELERATOR: VideoAcceleratorConfig = {
   steps: 4,
 };
 
+// LightX2V's H3 release is distilled to 8 steps where the repack the templates
+// assume is 6, and only its *file* name says so — the starter installs it as
+// "MiniMax H3 LightX2V Turbo LoRA", so the org name is the signal that survives.
+const LIGHTX2V_PATTERN = /(?:^|[^a-z0-9])lightx2v(?:[^a-z0-9]|$)/i;
+
 export const MINIMAX_H3_TURBO_ACCELERATOR: VideoAcceleratorConfig = {
   cfgScale: 1,
   cfgScaleLowNoise: null,
   label: 'Turbo',
   steps: 6,
+  stepOverrides: [{ pattern: LIGHTX2V_PATTERN, steps: 8 }],
 };
 
 const WAN_TARGET_RESOLUTION_OPTIONS: readonly VideoTargetResolutionOption[] = [
@@ -407,6 +421,8 @@ export interface VideoModelPolicy {
     fpsVisible: boolean;
     /** The family's distillation fast path, or null when it has none. */
     accelerator: VideoAcceleratorConfig | null;
+    /** Steps for the fast path as currently configured, or null when it has none. */
+    acceleratorSteps: number | null;
     audioOutput: boolean;
   };
 }
@@ -427,6 +443,14 @@ export const getVideoModelPolicy = (model: MainModelConfig | undefined, settings
     targetResolutions: config.targetResolutions,
     ui: {
       accelerator: config.accelerator,
+      // The step count the help text quotes is the one the *running*
+      // accelerator LoRA was distilled for — with the 8-step LightX2V Turbo
+      // LoRA on, "6 steps" would be a lie. It is deliberately NOT folded into
+      // `accelerator`: that stays the family config, so callers can keep using
+      // it as the reference other counts are resolved against.
+      acceleratorSteps: config.accelerator
+        ? getAcceleratorSteps(config.accelerator, getRecordedAcceleratorLoras(settings))
+        : null,
       audioOutput: config.audioOutput,
       cfgLowNoiseVisible: config.cfg.lowNoiseVisible,
       cfgVisible: config.cfg.visible,
@@ -443,6 +467,17 @@ export interface WanLightningLoraPair {
   low: LoraModelConfig;
 }
 
+export interface FindAcceleratorLoraOptions {
+  /**
+   * Accept only LoRAs that also name the model family. Used when the candidate
+   * list is the user's own Concepts list rather than the installed catalog:
+   * there is no better-named release for a look-alike to lose to, so a
+   * personal "Turbo …" LoRA — or a T2V Lightning pair sitting on an I2V main —
+   * would otherwise be mistaken for a distillation fast path.
+   */
+  requireFamilyName?: boolean;
+}
+
 // "high"/"low" as standalone words. \b is useless here because release files
 // use underscores ("high_noise_model") where \w breaks no boundary, while a
 // plain word-suffix match swallows "Slow"/"Thigh" — so the token must be
@@ -454,10 +489,17 @@ const LOW_NOISE_PATTERN = /(?:^|[^a-z0-9])low(?:[^a-z0-9]|$)/i;
  * The installed Lightning LoRA pair for a Wan A14B main, if any. When pairs for
  * more than one family are installed (e.g. T2V and I2V releases), the one
  * naming the main's family wins; noise assignment comes from the model names.
+ *
+ * `requireFamilyName` drops the fallback and demands the family token, so a
+ * T2V pair is not read as a valid accelerator for an I2V main — the question
+ * asked when the candidates are LoRAs already in the panel rather than the
+ * catalog the toggle is free to pick from. With no family token to demand it
+ * matches nothing, leaving the answer to the catalog.
  */
 export const findWanLightningLoraPair = (
   models: readonly ModelConfig[],
-  mainVariant: string | null | undefined
+  mainVariant: string | null | undefined,
+  { requireFamilyName = false }: FindAcceleratorLoraOptions = {}
 ): WanLightningLoraPair | null => {
   const candidates = models.filter(
     (model): model is ModelConfig & LoraModelConfig =>
@@ -471,8 +513,14 @@ export const findWanLightningLoraPair = (
   const familyToken = typeof mainVariant === 'string' ? mainVariant.split('_')[0] : undefined;
   const familyPattern = familyToken ? new RegExp(`(?:^|[^a-z0-9])${familyToken}(?:[^a-z0-9]|$)`, 'i') : null;
   const score = (model: LoraModelConfig): number => (familyPattern?.test(model.name) ? 0 : 1);
+  // With `requireFamilyName` and no family token to check against (an unprobed
+  // Wan release on the fallback variant) there is nothing to verify, so this
+  // fails closed rather than accepting everything — the caller falls back to
+  // the catalog pick, which is a real answer.
   const pick = (pattern: RegExp): LoraModelConfig | null =>
-    candidates.filter((model) => pattern.test(model.name)).sort((a, b) => score(a) - score(b))[0] ?? null;
+    candidates
+      .filter((model) => pattern.test(model.name) && (!requireFamilyName || score(model) === 0))
+      .sort((a, b) => score(a) - score(b))[0] ?? null;
 
   const high = pick(HIGH_NOISE_PATTERN);
   const low = pick(LOW_NOISE_PATTERN);
@@ -490,36 +538,159 @@ const MINIMAX_H3_NAME_PATTERN = /(?:^|[^a-z0-9])(?:minimax|h3)(?:[^a-z0-9]|$)/i;
  * deterministic tie-break — a user's own "Turbo …" style LoRA loses to the
  * real repack whenever one is installed.
  */
-export const findMiniMaxH3TurboLora = (models: readonly ModelConfig[]): LoraModelConfig | null => {
+export const findMiniMaxH3TurboLora = (
+  models: readonly ModelConfig[],
+  { requireFamilyName = false }: FindAcceleratorLoraOptions = {}
+): LoraModelConfig | null => {
   const score = (model: LoraModelConfig): number => (MINIMAX_H3_NAME_PATTERN.test(model.name) ? 0 : 1);
 
   return (
     models
       .filter(
         (model): model is ModelConfig & LoraModelConfig =>
-          isLoraModelConfig(model) && model.base === 'minimax-h3' && TURBO_PATTERN.test(model.name)
+          isLoraModelConfig(model) &&
+          model.base === 'minimax-h3' &&
+          TURBO_PATTERN.test(model.name) &&
+          (!requireFamilyName || MINIMAX_H3_NAME_PATTERN.test(model.name))
       )
       .sort((a, b) => score(a) - score(b) || a.name.localeCompare(b.name))[0] ?? null
   );
 };
 
-/** The accelerator LoRA entries for a model, or null when they are not installed. */
-const findAcceleratorLoraEntries = (model: MainModelConfig, models: readonly ModelConfig[]): GenerateLora[] | null => {
+/**
+ * The complete accelerator LoRA set contained in `candidates`, or null when it
+ * is not all there. The candidates are the installed catalog when asking what
+ * the toggle *would* run, and the user's own Concepts list when asking what is
+ * actually running.
+ */
+export const findAcceleratorLorasIn = (
+  model: MainModelConfig,
+  candidates: readonly ModelConfig[],
+  options: FindAcceleratorLoraOptions = {}
+): LoraModelConfig[] | null => {
   if (model.base === 'minimax-h3') {
-    const turbo = findMiniMaxH3TurboLora(models);
+    const turbo = findMiniMaxH3TurboLora(candidates, options);
 
-    return turbo ? [{ isEnabled: true, model: turbo, weight: 1 }] : null;
+    return turbo ? [turbo] : null;
   }
 
-  const pair = findWanLightningLoraPair(models, model.variant);
+  const pair = findWanLightningLoraPair(candidates, model.variant, options);
 
-  return pair
-    ? [
-        { isEnabled: true, model: pair.high, weight: 1 },
-        { isEnabled: true, model: pair.low, weight: 1 },
-      ]
-    : null;
+  return pair ? [pair.high, pair.low] : null;
 };
+
+// "4-step", "8 steps", "6step" — how a distillation release states the schedule
+// it was trained for. Two digits at most, so a checkpoint tag ("step600") or a
+// rank cannot be read as a step count.
+const STEP_COUNT_PATTERN = /(?:^|[^a-z0-9])(\d{1,2})[ _-]?steps?(?:[^a-z0-9]|$)/i;
+
+/**
+ * The step count one distillation LoRA was trained for. Its name is the only
+ * record of it: an explicit "N-step" token wins, then the family's per-release
+ * overrides, and failing both the family's reference count.
+ */
+const getLoraAcceleratorSteps = (config: VideoAcceleratorConfig, lora: LoraModelConfig): number => {
+  const stated = Number(STEP_COUNT_PATTERN.exec(lora.name)?.[1] ?? 0);
+
+  if (stated > 0) {
+    return stated;
+  }
+
+  return config.stepOverrides?.find((override) => override.pattern.test(lora.name))?.steps ?? config.steps;
+};
+
+/**
+ * The step count for a whole accelerator set. Both halves of a Wan Lightning
+ * pair state the same schedule; if a mismatched pair is ever assembled, the
+ * higher count is the safe pick — under-stepping is what reads as a broken
+ * model.
+ */
+export const getAcceleratorSteps = (config: VideoAcceleratorConfig, loras: readonly LoraModelConfig[]): number =>
+  loras.reduce((steps, lora) => Math.max(steps, getLoraAcceleratorSteps(config, lora)), 0) || config.steps;
+
+/** The LoRA models the user currently has switched on in the Concepts list. */
+const getEnabledLoraModels = (settings: Pick<VideoSettings, 'loras'>): LoraModelConfig[] =>
+  settings.loras.filter((lora) => lora.isEnabled).map((lora) => lora.model);
+
+/** The LoRA models the accelerator toggle recorded, as they stand in the list. */
+const getRecordedAcceleratorLoras = (
+  settings: Pick<VideoSettings, 'acceleratorEnabled' | 'acceleratorLoraKeys' | 'loras'>
+): LoraModelConfig[] => {
+  const recorded = new Set(settings.acceleratorLoraKeys);
+
+  return settings.acceleratorEnabled
+    ? settings.loras.filter((lora) => recorded.has(lora.model.key)).map((lora) => lora.model)
+    : [];
+};
+
+/**
+ * The complete accelerator set contained in `candidates`, judged the way the
+ * panel has to judge LoRAs the user is holding: one that names the model's own
+ * family, or failing that the very set the catalog would install. The
+ * family-name requirement keeps a personal "Turbo …" LoRA — or a T2V Lightning
+ * pair left over on an I2V main — from passing as a fast path; the catalog
+ * pick is exempt from it because it is what the toggle itself installs, odd
+ * name and all.
+ */
+const findAcceleratorAmong = (
+  model: MainModelConfig,
+  candidates: readonly LoraModelConfig[],
+  models: readonly ModelConfig[]
+): LoraModelConfig[] | null => {
+  const named = findAcceleratorLorasIn(model, candidates, { requireFamilyName: true });
+
+  if (named) {
+    return named;
+  }
+
+  const catalogPick = findAcceleratorLorasIn(model, models);
+
+  return catalogPick?.every((lora) => candidates.some((candidate) => candidate.key === lora.key)) ? catalogPick : null;
+};
+
+/**
+ * Whether the settings' recorded accelerator keys still name a complete set of
+ * enabled LoRAs that is a valid fast path *for this model* — the question both
+ * the model-switch reconcile and the Concepts-list reconcile turn on. Asked of
+ * the recorded keys alone, so with two Turbo LoRAs enabled the one the user
+ * anchored on keeps the fast path instead of losing it to a tie-break.
+ */
+const isRecordedAcceleratorIntact = (
+  settings: Pick<VideoSettings, 'acceleratorLoraKeys' | 'loras'>,
+  model: MainModelConfig,
+  models: readonly ModelConfig[],
+  config: VideoVariantConfig
+): boolean => {
+  const recorded = new Set(settings.acceleratorLoraKeys);
+
+  if (!config.accelerator || recorded.size === 0) {
+    return false;
+  }
+
+  // Deduplicated by key: a list holding the same LoRA twice (a hand-edited
+  // project file, metadata whose graph listed one twice) must not make this
+  // permanently false — the identity guarantee in `syncVideoWidgetValuesWithModels`
+  // depends on an unchanged value reaching the 'unchanged' outcome.
+  const live = [
+    ...new Map(
+      getEnabledLoraModels(settings)
+        .filter((lora) => recorded.has(lora.key))
+        .map((lora) => [lora.key, lora])
+    ).values(),
+  ];
+
+  return live.length === recorded.size && findAcceleratorAmong(model, live, models)?.length === recorded.size;
+};
+
+/**
+ * The accelerator LoRA entries for a model, or null when they are not
+ * installed. Deliberately catalog-only: the family name test is all that
+ * separates a distillation LoRA from any other, and "MiniMax H3 …" is how a
+ * user names their OWN H3 LoRA too, so letting the panel's list steer this
+ * would let the toggle arm itself on a LoRA with no distillation in it.
+ */
+const findAcceleratorLoraEntries = (model: MainModelConfig, models: readonly ModelConfig[]): GenerateLora[] | null =>
+  findAcceleratorLorasIn(model, models)?.map((lora) => ({ isEnabled: true, model: lora, weight: 1 })) ?? null;
 
 export interface AcceleratorToggleResult {
   settings: VideoSettings;
@@ -583,7 +754,84 @@ export const getAcceleratorToggleResult = (
         ...withoutAccelerators.filter((lora) => !entries.some((e) => e.model.key === lora.model.key)),
         ...entries,
       ],
-      steps: config.accelerator.steps,
+      steps: getAcceleratorSteps(
+        config.accelerator,
+        entries.map((entry) => entry.model)
+      ),
+    },
+  };
+};
+
+export type AcceleratorLoraChangeOutcome = 'unchanged' | 'switched' | 'disabled';
+
+export interface AcceleratorLoraChangeResult {
+  settings: VideoSettings;
+  outcome: AcceleratorLoraChangeOutcome;
+  /** The LoRA set now driving the fast path — only set when `outcome` is 'switched'. */
+  acceleratorLoras: LoraModelConfig[] | null;
+}
+
+/**
+ * Re-reads the fast path from the Concepts list after it changes. The flag has
+ * to describe what is actually enabled, so swapping one Turbo LoRA for another
+ * keeps the fast path — re-anchored on the new LoRA, at the step count *it*
+ * was distilled for — instead of tearing it down. Only a list with no complete
+ * accelerator left in it turns the toggle off and restores the model's own
+ * sampling defaults: a silent 6-step run with no distillation LoRA behind it
+ * just reads as a broken model.
+ *
+ * Strictly a repair of a fast path that is already ON. An off accelerator is
+ * never armed by a list edit, however accelerator-shaped the LoRA that lands
+ * in it looks: the name heuristic cannot tell a distillation release from a
+ * user's own "… Turbo …" LoRA, and arming on it would silently drop a
+ * hand-tuned step count onto a LoRA that does not support it.
+ */
+export const getAcceleratorLoraChangeResult = (
+  settings: VideoSettings,
+  model: MainModelConfig,
+  models: readonly ModelConfig[],
+  loras: GenerateLora[]
+): AcceleratorLoraChangeResult => {
+  const config = getVideoConfig(model);
+  const next: VideoSettings = { ...settings, loras };
+
+  // Nothing to repair, and nothing this function is allowed to start.
+  if (!settings.acceleratorEnabled) {
+    return { acceleratorLoras: null, outcome: 'unchanged', settings: next };
+  }
+
+  // The recorded set is still running: leave everything the user tuned alone.
+  if (isRecordedAcceleratorIntact(next, model, models, config)) {
+    return { acceleratorLoras: null, outcome: 'unchanged', settings: next };
+  }
+
+  const replacement = config.accelerator ? findAcceleratorAmong(model, getEnabledLoraModels(next), models) : null;
+
+  if (replacement && config.accelerator) {
+    return {
+      acceleratorLoras: replacement,
+      outcome: 'switched',
+      settings: {
+        ...next,
+        acceleratorEnabled: true,
+        acceleratorLoraKeys: replacement.map((lora) => lora.key),
+        cfgScale: config.accelerator.cfgScale,
+        cfgScaleLowNoise: config.accelerator.cfgScaleLowNoise,
+        steps: getAcceleratorSteps(config.accelerator, replacement),
+      },
+    };
+  }
+
+  return {
+    acceleratorLoras: null,
+    outcome: 'disabled',
+    settings: {
+      ...next,
+      acceleratorEnabled: false,
+      acceleratorLoraKeys: [],
+      cfgScale: config.defaults.cfgScale,
+      cfgScaleLowNoise: config.defaults.cfgScaleLowNoise,
+      steps: config.defaults.steps,
     },
   };
 };
@@ -1062,24 +1310,16 @@ export const getVideoModelSelectionResult = ({
   }
 
   if (next.acceleratorEnabled) {
-    // Carry the "fast path" intent across model switches: when the new model
-    // resolves to the SAME accelerator LoRA set, everything the user may have
-    // tuned (steps, CFG, LoRA weights) is left alone. Only when the identity
-    // changes (Lightning ↔ Turbo) is the toggle re-applied, and when the new
-    // model has no accelerator — or its LoRAs are not installed — the fast
+    // Carry the "fast path" intent across model switches: when the LoRAs the
+    // user is actually running are still a valid accelerator for the new model,
+    // everything they may have tuned (steps, CFG, LoRA weights) is left alone.
+    // Only when that set no longer applies (Lightning ↔ Turbo, or a Wan pair
+    // aimed at the other expert family) is the toggle re-applied — and when the
+    // new model has no accelerator, or its LoRAs are not installed, the fast
     // path turns off, restoring the model's own steps/CFG.
-    const targetEntries = config.accelerator ? findAcceleratorLoraEntries(model, models) : null;
-    const targetKeys = targetEntries?.map((entry) => entry.model.key).sort() ?? null;
-    const currentKeys = [...next.acceleratorLoraKeys].sort();
-    const sameAccelerator =
-      targetKeys !== null &&
-      targetKeys.length === currentKeys.length &&
-      targetKeys.every((key, index) => key === currentKeys[index]);
-
-    if (!sameAccelerator) {
-      const result = targetEntries
-        ? getAcceleratorToggleResult(next, model, models, true)
-        : getAcceleratorToggleResult(next, model, models, false);
+    if (!isRecordedAcceleratorIntact(next, model, models, config)) {
+      const targetEntries = config.accelerator ? findAcceleratorLoraEntries(model, models) : null;
+      const result = getAcceleratorToggleResult(next, model, models, targetEntries !== null);
 
       Object.assign(next, result.settings);
       addClearedLabel(clearedLabels, 'Acceleration');

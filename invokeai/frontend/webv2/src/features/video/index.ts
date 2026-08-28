@@ -47,8 +47,11 @@ export {
   type VideoDimensions,
 } from './core/dimensions';
 export {
+  findAcceleratorLorasIn,
   findMiniMaxH3TurboLora,
   findWanLightningLoraPair,
+  getAcceleratorLoraChangeResult,
+  getAcceleratorSteps,
   getAcceleratorToggleResult,
   getDefaultVideoSettings,
   getVideoComponentSectionPolicy,
@@ -73,6 +76,8 @@ export {
   VIDEO_GENERATION,
   WAN_LIGHTNING_ACCELERATOR,
   type ResolvedVideoDimensions,
+  type AcceleratorLoraChangeOutcome,
+  type AcceleratorLoraChangeResult,
   type VideoAcceleratorConfig,
   type SupportedVideoBase,
   type VideoComponentSectionPolicy,

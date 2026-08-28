@@ -4,13 +4,12 @@ import type {
   LoraModelConfig,
   MainModelConfig,
 } from '@features/generation/contracts';
-import type { ProjectPromptDraftPatch } from '@features/generation/settings';
 import type { VideoAspectRatioId, VideoTargetResolution, VideoWidgetValues } from '@features/video';
 
 import { isLoraCompatibleWithModel, isLoraModelConfig, SEED_MAX } from '@features/generation/settings';
 import {
-  findMiniMaxH3TurboLora,
-  findWanLightningLoraPair,
+  findAcceleratorLorasIn,
+  getAcceleratorSteps,
   getVideoAspectRatioOptions,
   getVideoDimensions,
   getVideoModelPolicy,
@@ -75,8 +74,6 @@ export type VideoRecalledField =
 
 export interface VideoRecallResult {
   fields: VideoRecalledField[];
-  /** Prompt fields live in the shared project draft, not the widget values. */
-  promptPatch: ProjectPromptDraftPatch | null;
   values: VideoWidgetValues;
 }
 
@@ -268,35 +265,30 @@ export const getVideoSizeRecall = (
 };
 
 /**
- * Whether the recalled LoRA list is exactly what the accelerator toggle would
- * install for this model — if so the flag (and its recorded keys) come back
- * on, so the panel shows the same fast-path state that produced the video.
+ * Whether the recalled LoRA list is itself a complete accelerator set for this
+ * model, run at the step count that set was distilled for — if so the flag
+ * (and its recorded keys) come back on, so the panel shows the same fast-path
+ * state that produced the video. Two Turbo LoRAs are both valid fast paths at
+ * different step counts, so the set is read off the recalled list rather than
+ * off whatever the catalog would pick today.
  */
 export const deriveAcceleratorRecallState = (
   model: MainModelConfig,
-  models: readonly ModelConfig[],
   loras: readonly GenerateLora[],
   steps: number,
   settings: VideoWidgetValues
 ): Pick<VideoWidgetValues, 'acceleratorEnabled' | 'acceleratorLoraKeys'> => {
   const accelerator = getVideoModelPolicy(model, settings).ui.accelerator;
+  const recalled = accelerator
+    ? findAcceleratorLorasIn(
+        model,
+        loras.map((lora) => lora.model),
+        { requireFamilyName: true }
+      )
+    : null;
 
-  if (!accelerator || steps !== accelerator.steps) {
-    return { acceleratorEnabled: false, acceleratorLoraKeys: [] };
-  }
-
-  const expected =
-    model.base === 'minimax-h3'
-      ? [findMiniMaxH3TurboLora(models)].flatMap((lora) => (lora ? [lora.key] : []))
-      : (() => {
-          const pair = findWanLightningLoraPair(models, model.variant);
-
-          return pair ? [pair.high.key, pair.low.key] : [];
-        })();
-  const present = expected.length > 0 && expected.every((key) => loras.some((lora) => lora.model.key === key));
-
-  return present
-    ? { acceleratorEnabled: true, acceleratorLoraKeys: expected }
+  return accelerator && recalled && steps === getAcceleratorSteps(accelerator, recalled)
+    ? { acceleratorEnabled: true, acceleratorLoraKeys: recalled.map((lora) => lora.key) }
     : { acceleratorEnabled: false, acceleratorLoraKeys: [] };
 };
 
@@ -361,7 +353,10 @@ export const buildVideoRecallSettings = ({
 
   const fields: VideoRecalledField[] = [];
   let values: VideoWidgetValues = { ...currentValues };
-  let promptPatch: ProjectPromptDraftPatch | null = null;
+  // Held aside rather than folded into `values` where it is read: the model
+  // transition below rebuilds `values` from the recalled family's defaults, and
+  // recalled prompts must survive that. Merged in at each return instead.
+  let promptPatch: Partial<VideoWidgetValues> | null = null;
   const mediaNames: VideoRecallMediaNames = {
     firstFrameName: null,
     lastFrameName: null,
@@ -389,7 +384,7 @@ export const buildVideoRecallSettings = ({
   }
 
   if (kind === 'prompts') {
-    return fields.length > 0 ? { fields, mediaNames, promptPatch, values } : null;
+    return fields.length > 0 ? { fields, mediaNames, values: { ...values, ...promptPatch } } : null;
   }
 
   if (kind === 'all' || kind === 'seed') {
@@ -402,7 +397,7 @@ export const buildVideoRecallSettings = ({
   }
 
   if (kind === 'seed') {
-    return fields.length > 0 ? { fields, mediaNames, promptPatch, values } : null;
+    return fields.length > 0 ? { fields, mediaNames, values: { ...values, ...promptPatch } } : null;
   }
 
   // all / remix from here on.
@@ -424,7 +419,7 @@ export const buildVideoRecallSettings = ({
   if (!model) {
     // Without any model, nothing below can validate; prompts/seed may still
     // have been recalled.
-    return fields.length > 0 ? { fields, mediaNames, promptPatch, values } : null;
+    return fields.length > 0 ? { fields, mediaNames, values: { ...values, ...promptPatch } } : null;
   }
 
   const numFrames = getInteger(metadata, 'num_frames');
@@ -497,7 +492,7 @@ export const buildVideoRecallSettings = ({
     values = {
       ...values,
       loras: resolvedLoras,
-      ...deriveAcceleratorRecallState(model, models, resolvedLoras, values.steps, values),
+      ...deriveAcceleratorRecallState(model, resolvedLoras, values.steps, values),
     };
     fields.push('loras');
   }
@@ -551,7 +546,7 @@ export const buildVideoRecallSettings = ({
     fields.push('media');
   }
 
-  return fields.length > 0 ? { fields, mediaNames, promptPatch, values } : null;
+  return fields.length > 0 ? { fields, mediaNames, values: { ...values, ...promptPatch } } : null;
 };
 
 const VIDEO_RECALL_TITLES: Record<VideoRecallKind, string> = {

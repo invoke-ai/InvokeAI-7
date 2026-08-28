@@ -170,3 +170,18 @@ def test_denoise_working_memory_estimate():
 
     padded = estimate(_layout(38_000, 4))
     assert padded == large + 5 * 38_000**2
+
+
+def test_profiling_env_var_preserves_results_and_writes_trace(tiny_transformer, tmp_path, monkeypatch):
+    """INVOKEAI_PROFILE_H3_DENOISE must not change the denoise output, and must leave a trace."""
+    prompt_embeds = torch.randn(1, 3, TINY_CONFIG["text_dim"], generator=torch.Generator().manual_seed(1))
+
+    reference_video, reference_audio = denoise(tiny_transformer, _state(), prompt_embeds.clone())
+
+    monkeypatch.setenv("INVOKEAI_PROFILE_H3_DENOISE", str(tmp_path))
+    profiled_video, profiled_audio = denoise(tiny_transformer, _state(), prompt_embeds.clone())
+
+    assert torch.equal(reference_video, profiled_video)
+    assert torch.equal(reference_audio, profiled_audio)
+    assert (tmp_path / "h3_denoise_step_trace.json").exists()
+    assert (tmp_path / "h3_denoise_step_profile.txt").exists()
