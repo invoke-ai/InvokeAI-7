@@ -72,6 +72,24 @@ describe('syncVideoWidgetValuesWithModels', () => {
     expect(syncVideoWidgetValuesWithModels(values, catalog)).toBe(values);
   });
 
+  it('clears the accelerator flag when no video main is left installed', () => {
+    // `loras` empties out with the model, so a surviving flag would record keys
+    // that are not in the list — a record the persistence validator rejects.
+    const h3 = h3Model();
+    const turbo = { base: 'minimax-h3', key: 'turbo', name: 'MiniMax H3 Turbo LoRA', type: 'lora' as const };
+    const values = createDefaultVideoWidgetValues([h3, turbo as never]);
+
+    expect(values).toMatchObject({ acceleratorEnabled: true });
+
+    const synced = syncVideoWidgetValuesWithModels(values, [turbo as never]);
+
+    expect(synced).toMatchObject({ acceleratorEnabled: false, model: null });
+    expect(synced.acceleratorLoraKeys).toEqual([]);
+    expect(synced.loras).toEqual([]);
+    // Still stable: a second sync of the cleared value returns it untouched.
+    expect(syncVideoWidgetValuesWithModels(synced, [turbo as never])).toBe(synced);
+  });
+
   it('falls back to an installed supported main when the stored one is gone', () => {
     const replacement = wanModel('t2v_a14b');
     const values = createDefaultVideoWidgetValues([model]);

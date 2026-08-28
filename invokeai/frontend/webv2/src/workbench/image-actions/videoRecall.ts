@@ -8,8 +8,8 @@ import type { VideoAspectRatioId, VideoTargetResolution, VideoWidgetValues } fro
 
 import { isLoraCompatibleWithModel, isLoraModelConfig, SEED_MAX } from '@features/generation/settings';
 import {
-  findMiniMaxH3TurboLora,
-  findWanLightningLoraPair,
+  findAcceleratorLorasIn,
+  getAcceleratorSteps,
   getVideoAspectRatioOptions,
   getVideoDimensions,
   getVideoModelPolicy,
@@ -265,35 +265,30 @@ export const getVideoSizeRecall = (
 };
 
 /**
- * Whether the recalled LoRA list is exactly what the accelerator toggle would
- * install for this model — if so the flag (and its recorded keys) come back
- * on, so the panel shows the same fast-path state that produced the video.
+ * Whether the recalled LoRA list is itself a complete accelerator set for this
+ * model, run at the step count that set was distilled for — if so the flag
+ * (and its recorded keys) come back on, so the panel shows the same fast-path
+ * state that produced the video. Two Turbo LoRAs are both valid fast paths at
+ * different step counts, so the set is read off the recalled list rather than
+ * off whatever the catalog would pick today.
  */
 export const deriveAcceleratorRecallState = (
   model: MainModelConfig,
-  models: readonly ModelConfig[],
   loras: readonly GenerateLora[],
   steps: number,
   settings: VideoWidgetValues
 ): Pick<VideoWidgetValues, 'acceleratorEnabled' | 'acceleratorLoraKeys'> => {
   const accelerator = getVideoModelPolicy(model, settings).ui.accelerator;
+  const recalled = accelerator
+    ? findAcceleratorLorasIn(
+        model,
+        loras.map((lora) => lora.model),
+        { requireFamilyName: true }
+      )
+    : null;
 
-  if (!accelerator || steps !== accelerator.steps) {
-    return { acceleratorEnabled: false, acceleratorLoraKeys: [] };
-  }
-
-  const expected =
-    model.base === 'minimax-h3'
-      ? [findMiniMaxH3TurboLora(models)].flatMap((lora) => (lora ? [lora.key] : []))
-      : (() => {
-          const pair = findWanLightningLoraPair(models, model.variant);
-
-          return pair ? [pair.high.key, pair.low.key] : [];
-        })();
-  const present = expected.length > 0 && expected.every((key) => loras.some((lora) => lora.model.key === key));
-
-  return present
-    ? { acceleratorEnabled: true, acceleratorLoraKeys: expected }
+  return accelerator && recalled && steps === getAcceleratorSteps(accelerator, recalled)
+    ? { acceleratorEnabled: true, acceleratorLoraKeys: recalled.map((lora) => lora.key) }
     : { acceleratorEnabled: false, acceleratorLoraKeys: [] };
 };
 
@@ -497,7 +492,7 @@ export const buildVideoRecallSettings = ({
     values = {
       ...values,
       loras: resolvedLoras,
-      ...deriveAcceleratorRecallState(model, models, resolvedLoras, values.steps, values),
+      ...deriveAcceleratorRecallState(model, resolvedLoras, values.steps, values),
     };
     fields.push('loras');
   }

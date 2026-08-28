@@ -10,6 +10,7 @@ import { ModelSelect } from '@features/models/react';
 import { getVideoDurationSeconds, invertVideoAspectRatioId } from '@features/video/core/dimensions';
 import { normalizeVideoWidgetValues, resolveVideoMode, VIDEO_ASPECT_RATIO_IDS } from '@features/video/core/settings';
 import {
+  getAcceleratorLoraChangeResult,
   getAcceleratorToggleResult,
   getVideoDimensions,
   getVideoModelPolicy,
@@ -246,35 +247,40 @@ export const VideoWidgetView = () => {
   );
   const setLoras = useCallback(
     (loras: VideoWidgetValues['loras']) => {
-      // Removing or disabling one of the accelerator's LoRAs breaks the fast
-      // path: turn it off explicitly, restore the model's own sampling
-      // defaults (Lightning wrote steps/CFG), keep the user's list edit, and
-      // say so — a silent 4-step run without the distillation pair would just
-      // look like a broken model.
-      const acceleratorBroken =
-        values.acceleratorEnabled &&
-        !values.acceleratorLoraKeys.every((key) => loras.some((lora) => lora.model.key === key && lora.isEnabled));
-
-      if (!acceleratorBroken) {
+      // While the fast path is on it follows the list: a different complete
+      // accelerator set in it re-anchors the toggle onto that set at its own
+      // step count, and losing the last one turns the toggle off and restores
+      // the model's own sampling defaults (the accelerator wrote steps/CFG).
+      // Either way the user's list edit stands, and either way they are told —
+      // a silent 6-step run with no distillation LoRA behind it just looks
+      // like a broken model. An off accelerator is never armed from here.
+      if (!values.model) {
         patch({ loras });
         return;
       }
 
-      patch({
-        acceleratorEnabled: false,
-        acceleratorLoraKeys: [],
-        cfgScale: policy.defaults.cfgScale,
-        cfgScaleLowNoise: policy.defaults.cfgScaleLowNoise,
-        loras,
-        steps: policy.defaults.steps,
-      });
-      toaster.create({
-        description: t('widgets.video.acceleratorBrokenDescription'),
-        title: t('widgets.video.acceleratorBroken'),
-        type: 'info',
-      });
+      const result = getAcceleratorLoraChangeResult(values, values.model, models, loras);
+
+      patch({ ...result.settings });
+
+      if (result.outcome === 'switched') {
+        toaster.create({
+          description: t('widgets.video.acceleratorSwitchedDescription', {
+            name: result.acceleratorLoras?.map((lora) => lora.name).join(', ') ?? '',
+            steps: result.settings.steps,
+          }),
+          title: t('widgets.video.acceleratorSwitched', { label: policy.ui.accelerator?.label ?? '' }),
+          type: 'info',
+        });
+      } else if (result.outcome === 'disabled') {
+        toaster.create({
+          description: t('widgets.video.acceleratorBrokenDescription'),
+          title: t('widgets.video.acceleratorBroken'),
+          type: 'info',
+        });
+      }
     },
-    [patch, policy.defaults, t, values.acceleratorEnabled, values.acceleratorLoraKeys]
+    [models, patch, policy.ui.accelerator?.label, t, values]
   );
   const clearFirstFrame = useCallback(() => patch({ firstFrameImage: null }), [patch]);
   const clearLastFrame = useCallback(() => patch({ lastFrameImage: null }), [patch]);
@@ -496,7 +502,7 @@ export const VideoWidgetView = () => {
             <Field
               helpText={t('widgets.video.acceleratorHelp', {
                 label: policy.ui.accelerator.label,
-                steps: policy.ui.accelerator.steps,
+                steps: policy.ui.acceleratorSteps ?? policy.ui.accelerator.steps,
               })}
               label={t('widgets.video.accelerator', { label: policy.ui.accelerator.label })}
             >

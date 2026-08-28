@@ -3139,6 +3139,8 @@
       "selectComponent": "Select a component model…",
       "acceleratorBroken": "Accelerator turned off",
       "acceleratorBrokenDescription": "One of its LoRAs was removed or disabled, so steps and CFG were restored to the model's defaults.",
+      "acceleratorSwitched": "{{label}} now running on a different LoRA",
+      "acceleratorSwitchedDescription": "The fast path follows {{name}}, so steps were set to {{steps}}.",
       "resetAllToModelDefaults": "Reset all settings to the model's defaults",
       "expertWiring": {
         "highAsLow": "\"{{lowName}}\" is tagged as the high-noise expert but is wired as the low-noise one. The wiring is authoritative — swap if unintended.",
