@@ -2,9 +2,19 @@
 
 from dataclasses import dataclass
 
+import numpy as np
 import torch
 from einops import rearrange
 from torch import Tensor, nn
+
+from invokeai.backend.tiles.tiles import calc_tiles_min_overlap, merge_tiles_with_linear_blending
+from invokeai.backend.tiles.utils import TBLR, Tile
+
+# Tile geometry for tiled decode, in output-pixel units. 512px tiles with a 128px minimum overlap is
+# the geometry the diffusers VAEs and the Anima node use. Both values must be divisible by the
+# autoencoder's spatial compression factor so that a pixel-space tile maps onto an exact latent slice.
+DEFAULT_TILE_SAMPLE_MIN_SIZE = 512
+DEFAULT_TILE_OVERLAP = 128
 
 
 @dataclass
@@ -298,6 +308,55 @@ class AutoEncoder(nn.Module):
         self.scale_factor = params.scale_factor
         self.shift_factor = params.shift_factor
 
+        # Each level of `ch_mult` past the first halves the spatial resolution, so this is the ratio
+        # between output pixels and latent elements along one axis (8 for the FLUX.1 autoencoder).
+        self.spatial_compression = 2 ** (len(params.ch_mult) - 1)
+
+        self.use_tiling = False
+        self.tile_sample_min_size = DEFAULT_TILE_SAMPLE_MIN_SIZE
+        self.tile_overlap = DEFAULT_TILE_OVERLAP
+
+    def enable_tiling(
+        self,
+        tile_sample_min_size: int = DEFAULT_TILE_SAMPLE_MIN_SIZE,
+        tile_overlap: int | None = None,
+    ) -> None:
+        """Decode in overlapping tiles, bounding peak memory at the cost of some decode time.
+
+        Mirrors the `enable_tiling()` / `disable_tiling()` pair on the diffusers autoencoders so that
+        callers can set the tiling state the same way regardless of which VAE class they hold. Sizes
+        are in output pixels.
+
+        `tile_overlap` defaults to DEFAULT_TILE_OVERLAP, shrunk to half the tile if the caller asked
+        for a tile that small. The alternative -- raising -- would turn a tile size the workflow UI
+        lets a user type into a failed generation.
+
+        Note on accuracy: at the default 512/128 geometry a tiled decode reproduces the single-pass
+        one exactly (float32 epsilon, measured). It degrades as tiles get small relative to the
+        image, because more tiles mean the blend bands sit closer to the tiles' own zero-padded
+        borders. Prefer a large tile that fits over a small one that fits comfortably.
+        """
+        if tile_overlap is None:
+            tile_overlap = min(DEFAULT_TILE_OVERLAP, tile_sample_min_size // 2)
+            tile_overlap -= tile_overlap % self.spatial_compression
+        if tile_sample_min_size % self.spatial_compression != 0:
+            raise ValueError(
+                f"tile_sample_min_size must be divisible by {self.spatial_compression}, got {tile_sample_min_size}."
+            )
+        if tile_overlap % self.spatial_compression != 0:
+            raise ValueError(f"tile_overlap must be divisible by {self.spatial_compression}, got {tile_overlap}.")
+        if tile_overlap >= tile_sample_min_size:
+            raise ValueError(
+                f"tile_overlap ({tile_overlap}) must be smaller than tile_sample_min_size ({tile_sample_min_size})."
+            )
+        self.use_tiling = True
+        self.tile_sample_min_size = tile_sample_min_size
+        self.tile_overlap = tile_overlap
+
+    def disable_tiling(self) -> None:
+        """Decode in a single pass. The inverse of `enable_tiling()`."""
+        self.use_tiling = False
+
     def encode(self, x: Tensor, sample: bool = True, generator: torch.Generator | None = None) -> Tensor:
         """Run VAE encoding on input tensor x.
 
@@ -318,7 +377,86 @@ class AutoEncoder(nn.Module):
 
     def decode(self, z: Tensor) -> Tensor:
         z = z / self.scale_factor + self.shift_factor
+        if self.use_tiling:
+            return self._tiled_decode(z)
         return self.decoder(z)
+
+    def _tiled_decode(self, z: Tensor) -> Tensor:
+        """Decode `z` as overlapping tiles, blended back together linearly.
+
+        `z` is expected to already be denormalised, i.e. this consumes what `decode()` hands to
+        `self.decoder`. Peak memory is bounded by one tile plus the destination image, because each
+        finished tile is moved to the CPU before the next one is decoded.
+
+        The tile layout is computed in *latent* space and scaled up afterwards. Computing it in pixel
+        space would be wrong: `calc_tiles_min_overlap` distributes the leftover with integer
+        division, so it hands back tile edges that are not multiples of `spatial_compression` and
+        therefore cannot be sliced out of `z`. Overlaps scale with the coordinates because they are
+        nothing but coordinate differences.
+        """
+        scale = self.spatial_compression
+        latent_tile_size = self.tile_sample_min_size // scale
+        latent_overlap = self.tile_overlap // scale
+        latent_height, latent_width = z.shape[-2], z.shape[-1]
+
+        # Nothing to gain from tiling something that already fits in a single tile.
+        if latent_height <= latent_tile_size and latent_width <= latent_tile_size:
+            return self.decoder(z)
+
+        latent_tiles = calc_tiles_min_overlap(
+            image_height=latent_height,
+            image_width=latent_width,
+            tile_height=latent_tile_size,
+            tile_width=latent_tile_size,
+            min_overlap=latent_overlap,
+        )
+        pixel_tiles = [
+            Tile(
+                coords=TBLR(
+                    top=t.coords.top * scale,
+                    bottom=t.coords.bottom * scale,
+                    left=t.coords.left * scale,
+                    right=t.coords.right * scale,
+                ),
+                overlap=TBLR(
+                    top=t.overlap.top * scale,
+                    bottom=t.overlap.bottom * scale,
+                    left=t.overlap.left * scale,
+                    right=t.overlap.right * scale,
+                ),
+            )
+            for t in latent_tiles
+        ]
+
+        out_channels = self.decoder.conv_out.out_channels
+        batch_images: list[Tensor] = []
+        for batch_idx in range(z.shape[0]):
+            tile_images: list[np.ndarray] = []
+            for latent_tile in latent_tiles:
+                latent_slice = z[
+                    batch_idx : batch_idx + 1,
+                    :,
+                    latent_tile.coords.top : latent_tile.coords.bottom,
+                    latent_tile.coords.left : latent_tile.coords.right,
+                ]
+                decoded_tile = self.decoder(latent_slice)
+                # Off the GPU immediately -- holding the finished tiles on the device is the thing
+                # tiling exists to avoid.
+                tile_images.append(decoded_tile[0].permute(1, 2, 0).float().cpu().numpy())
+
+            merged = np.zeros(
+                (latent_height * scale, latent_width * scale, out_channels),
+                dtype=tile_images[0].dtype,
+            )
+            merge_tiles_with_linear_blending(
+                dst_image=merged,
+                tiles=pixel_tiles,
+                tile_images=tile_images,
+                blend_amount=self.tile_overlap,
+            )
+            batch_images.append(torch.from_numpy(merged).permute(2, 0, 1))
+
+        return torch.stack(batch_images).to(device=z.device, dtype=z.dtype)
 
     def forward(self, x: Tensor) -> Tensor:
         return self.decode(self.encode(x))

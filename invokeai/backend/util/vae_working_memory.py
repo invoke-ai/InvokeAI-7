@@ -7,7 +7,7 @@ from diffusers.models.autoencoders.autoencoder_kl_wan import AutoencoderKLWan
 from diffusers.models.autoencoders.autoencoder_tiny import AutoencoderTiny
 
 from invokeai.app.invocations.constants import LATENT_SCALE_FACTOR
-from invokeai.backend.flux.modules.autoencoder import AutoEncoder
+from invokeai.backend.flux.modules.autoencoder import DEFAULT_TILE_SAMPLE_MIN_SIZE, AutoEncoder
 
 _WAN_VAE_SINGLE_FRAME_DECODE_SCALING_CONSTANT = 2900
 _WAN_VAE_VIDEO_DECODE_SCALING_CONSTANT_A14B = 6500
@@ -71,29 +71,46 @@ def estimate_vae_working_memory_cogview4(
     scaling_constant = 2200 if operation == "decode" else 1100
     working_memory = h * w * element_size * scaling_constant
 
-    print(f"estimate_vae_working_memory_cogview4: {int(working_memory)}")
-
     return int(working_memory)
 
 
 def estimate_vae_working_memory_flux(
-    operation: Literal["encode", "decode"], image_tensor: torch.Tensor, vae: AutoEncoder
+    operation: Literal["encode", "decode"],
+    image_tensor: torch.Tensor,
+    vae: AutoEncoder,
+    tile_size: int | None = None,
 ) -> int:
-    """Estimate the working memory required by the invocation in bytes."""
+    """Estimate the working memory required by the invocation in bytes.
+
+    `tile_size` is in output pixels and defaults to None, i.e. a single-pass decode -- the six
+    existing call sites depend on that signature. When set, the estimate is bounded by one tile
+    instead of the whole image, because a tiled decode never holds more than that. `tile_size=0`
+    means "whatever the VAE's own default is"; a VAE that has no such default falls back to the
+    autoencoder's tile size.
+    """
 
     latent_scale_factor_for_operation = LATENT_SCALE_FACTOR if operation == "decode" else 1
-
-    out_h = latent_scale_factor_for_operation * image_tensor.shape[-2]
-    out_w = latent_scale_factor_for_operation * image_tensor.shape[-1]
     element_size = next(vae.parameters()).element_size()
 
     # This constant is determined experimentally and takes into consideration both allocated and reserved memory. See #8414
     # Encoding uses ~45% the working memory as decoding.
     scaling_constant = 2200 if operation == "decode" else 1100
 
-    working_memory = out_h * out_w * element_size * scaling_constant
-
-    print(f"estimate_vae_working_memory_flux: {int(working_memory)}")
+    if tile_size is not None:
+        if tile_size == 0:
+            # Not every VAE reaching this estimator is an InvokeAI AutoEncoder -- the Z-Image nodes
+            # also pass a diffusers AutoencoderKL -- so this cannot dereference the attribute the way
+            # estimate_vae_working_memory_sd15_sdxl does.
+            tile_size = getattr(vae, "tile_sample_min_size", DEFAULT_TILE_SAMPLE_MIN_SIZE)
+            assert isinstance(tile_size, int)
+        out_h = tile_size
+        out_w = tile_size
+        # A 25% margin for tile overlap and the number of tiles, mirroring the SD1/SDXL estimator.
+        working_memory = out_h * out_w * element_size * scaling_constant * 1.25
+    else:
+        out_h = latent_scale_factor_for_operation * image_tensor.shape[-2]
+        out_w = latent_scale_factor_for_operation * image_tensor.shape[-1]
+        working_memory = out_h * out_w * element_size * scaling_constant
 
     return int(working_memory)
 
@@ -351,7 +368,5 @@ def estimate_vae_working_memory_sd3(
     scaling_constant = 2200 if operation == "decode" else 1100
 
     working_memory = h * w * element_size * scaling_constant
-
-    print(f"estimate_vae_working_memory_sd3: {int(working_memory)}")
 
     return int(working_memory)
