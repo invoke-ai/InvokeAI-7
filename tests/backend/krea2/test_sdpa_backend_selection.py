@@ -9,7 +9,8 @@ resolution. These tests pin the two things that make that reachable at all -- cu
 from unittest.mock import MagicMock
 
 import pytest
-from torch.nn.attention import SDPBackend
+import torch
+from torch.nn.attention import SDPBackend, sdpa_kernel
 
 from invokeai.backend.krea2.attention import (
     KREA2_SDPA_BACKEND_ENV_VAR,
@@ -121,3 +122,41 @@ class TestProcessorsCarryTheChoice:
     def test_a_standalone_processor_resolves_for_itself(self):
         # Constructed directly in tests and by custom code; it must not depend on the builder.
         assert Krea2MemoryEfficientAttnProcessor().sdpa_backends.backends[0] is SDPBackend.CUDNN_ATTENTION
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required to exercise the SDPA dispatcher")
+class TestTheFallbackIsReal:
+    """The whole design rests on one dispatcher property: an unusable backend in a *ranked* list is
+    skipped, while an *exclusively* selected one raises.
+
+    This is what makes cuDNN-first safe on hardware where cuDNN cannot serve the call, and it is
+    worth pinning: if a future torch made a ranked list raise instead, the ranking would turn every
+    such device from "today's behaviour" into a failed generation, silently as far as our tests go.
+    """
+
+    @staticmethod
+    def _unservable_by_cudnn():
+        # fp32 is refused by the fused kernels, which is a portable way to make cuDNN unusable on a
+        # card where it otherwise works -- i.e. to stand in for the sm_86 report.
+        t = torch.randn(1, 24, 512, 128, device="cuda", dtype=torch.float32)
+        params = torch.backends.cuda.SDPAParams(t, t, t, None, 0.0, False, False)
+        if torch.backends.cuda.can_use_cudnn_attention(params):
+            pytest.skip("This build serves fp32 with cuDNN, so it cannot stand in for an unusable backend")
+        return t
+
+    def test_a_ranked_list_completes_where_cudnn_cannot_serve(self):
+        t = self._unservable_by_cudnn()
+        choice = resolve_krea2_sdpa_backends(raw_override=None)
+        with sdpa_kernel(list(choice.backends), set_priority=choice.set_priority):
+            out = torch.nn.functional.scaled_dot_product_attention(t, t, t)
+        assert torch.isfinite(out).all()
+
+    def test_the_same_call_raises_when_cudnn_is_selected_exclusively(self):
+        """The counterpart, and the likely explanation of the sm_86 report: that measurement was
+        taken with `sdpa_kernel([backend])` -- exclusive, no fallback -- which is exactly the mode
+        that raises `No available kernel` when the backend is unusable."""
+        t = self._unservable_by_cudnn()
+        choice = resolve_krea2_sdpa_backends(raw_override="cudnn")
+        with pytest.raises(RuntimeError, match="No available kernel"):
+            with sdpa_kernel(list(choice.backends), set_priority=choice.set_priority):
+                torch.nn.functional.scaled_dot_product_attention(t, t, t)
