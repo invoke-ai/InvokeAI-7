@@ -27,18 +27,33 @@ from invokeai.backend.util.logging import InvokeAILogger
 
 logger = InvokeAILogger.get_logger(__name__)
 
-# Rank cuDNN first: it is ~1.6x the memory-efficient kernel on the Krea-2 attention shape at identical
-# peak memory, worth 4-8% per generation and growing with resolution. Everything below it is a
-# fallback, never an exclusive choice -- an unavailable backend is skipped by the dispatcher, so the
-# list degrades on its own: to `efficient` where cuDNN is unusable (which is today's behaviour), and
-# on ROCm, where cuDNN is absent and flash rejects the additive mask.
+# Measured on the real Krea-2 attention shape ([1, 48, 4608, 128], bf16), per call:
 #
-# FLASH stays in the list even where a probe would show it absent: a dead entry in a ranked list costs
-# nothing, while a missing one costs a platform (flash *is* the ROCm path for the unmasked blocks).
+#                     RTX 4090 / Windows      RTX 30-series / Linux
+#   flash             not compiled in         19.74 ms
+#   cudnn              3.72 ms                21.27 ms
+#   efficient          5.92 ms                31.45 ms
+#   math              51.23 ms               168.48 ms
+#
+# Two things follow, and the order below encodes both.
+#
+# **Flash first.** Where the build has it, flash is the fastest kernel and is *already* what runs
+# today: without `set_priority` torch picks by its own order, in which flash outranks efficient. On
+# the 30-series card an unprefixed call lands at 20.15 ms, i.e. on flash, not on efficient. Ranking
+# cuDNN above it would therefore be a small regression on every flash-capable build.
+#
+# **cuDNN second, and it is not a formality.** Flash refuses the additive padding mask that the
+# regional-prompting blocks pass, so on exactly those blocks it is skipped and cuDNN takes over --
+# where it beats efficient by 1.6x-2.0x. Windows CUDA builds have no flash at all, so there cuDNN is
+# what every block gets. Both are the cases the win comes from; flash-first does not give either up.
+#
+# Everything here is a fallback, never an exclusive choice: an unavailable backend is skipped by the
+# dispatcher, so the list degrades on its own -- to efficient on ROCm, where cuDNN is absent and
+# flash rejects the mask, and to efficient anywhere neither fused kernel can serve the call.
 _KREA2_SDPA_BACKENDS = [
+    SDPBackend.FLASH_ATTENTION,
     SDPBackend.CUDNN_ATTENTION,
     SDPBackend.EFFICIENT_ATTENTION,
-    SDPBackend.FLASH_ATTENTION,
     SDPBackend.MATH,
 ]
 

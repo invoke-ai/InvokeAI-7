@@ -1,9 +1,14 @@
 """Which SDPA backends the Krea-2 attention processors run under, and the opt-in override.
 
-The ranking is a measurement, not a preference: cuDNN is ~1.6x the memory-efficient kernel on the
-Krea-2 attention shape at identical peak memory, worth 4-8% per generation and growing with
-resolution. These tests pin the two things that make that reachable at all -- cuDNN being first, and
-`set_priority=True` -- because without either the change is a silent no-op.
+The ranking is a measurement, not a preference. On the real Krea-2 attention shape, per call: on a
+Windows 4090 (no flash in the build) cuDNN runs at 3.72ms against efficient's 5.92ms; on a Linux
+30-series card flash runs at 19.74ms, cuDNN at 21.27ms, efficient at 31.45ms. So flash leads where it
+exists and cuDNN takes the blocks it cannot serve -- the masked ones, and every block on a build
+without flash.
+
+These tests pin what makes that reachable at all: the order, and `set_priority=True`. Without the
+latter the list only *permits* backends and torch picks by its own order, so the ranking would be a
+silent no-op.
 """
 
 from unittest.mock import MagicMock
@@ -22,9 +27,24 @@ from invokeai.backend.krea2.attention import (
 
 
 class TestTheDefaultRanking:
-    def test_cudnn_is_ranked_first(self):
-        choice = resolve_krea2_sdpa_backends(raw_override=None)
-        assert choice.backends[0] is SDPBackend.CUDNN_ATTENTION
+    def test_flash_leads_and_cudnn_follows(self):
+        """Flash is the fastest kernel where the build has it -- and is already what runs today,
+        because torch's own order puts it above efficient. Ranking cuDNN over it would be a small
+        regression on every flash-capable build."""
+        backends = resolve_krea2_sdpa_backends(raw_override=None).backends
+        assert backends[0] is SDPBackend.FLASH_ATTENTION
+        assert backends[1] is SDPBackend.CUDNN_ATTENTION
+
+    def test_cudnn_outranks_efficient(self):
+        """This is where the win actually comes from: flash refuses the additive mask the
+        regional-prompting blocks pass, so on those blocks it is skipped and cuDNN takes over --
+        1.6x-2.0x over efficient. On a build without flash, that is every block."""
+        backends = resolve_krea2_sdpa_backends(raw_override=None).backends
+        assert backends.index(SDPBackend.CUDNN_ATTENTION) < backends.index(SDPBackend.EFFICIENT_ATTENTION)
+
+    def test_math_is_last(self):
+        # The unfused fallback: correct everywhere, and ~35x slower at ~35x the memory.
+        assert resolve_krea2_sdpa_backends(raw_override=None).backends[-1] is SDPBackend.MATH
 
     def test_priority_is_set(self):
         """Load-bearing: without set_priority the list only *permits* backends and torch picks by
@@ -42,9 +62,11 @@ class TestTheDefaultRanking:
             SDPBackend.MATH,
         }
 
-    def test_flash_is_kept_even_though_a_probe_would_call_it_dead_on_cuda(self):
-        """Dropping FLASH statically would be actively wrong on ROCm, where flash is available and
-        cuDNN is not. A dead entry in a ranked list costs nothing; a missing one costs a platform."""
+    def test_flash_is_kept_even_where_a_probe_would_call_it_dead(self):
+        """A sibling plan proposed dropping FLASH where a probe shows it absent. That would be wrong
+        twice over: on ROCm flash is available and cuDNN is not, and on Linux CUDA it is the fastest
+        kernel of the four. A dead entry in a ranked list costs nothing; a missing one costs a
+        platform."""
         assert SDPBackend.FLASH_ATTENTION in resolve_krea2_sdpa_backends(raw_override=None).backends
 
     def test_no_override_is_recorded_by_default(self):
@@ -117,11 +139,11 @@ class TestProcessorsCarryTheChoice:
 
         choices = {id(p.sdpa_backends) for p in processors.values()}
         assert len(choices) == 1
-        assert next(iter(processors.values())).sdpa_backends.backends[0] is SDPBackend.CUDNN_ATTENTION
+        assert next(iter(processors.values())).sdpa_backends.backends[0] is SDPBackend.FLASH_ATTENTION
 
     def test_a_standalone_processor_resolves_for_itself(self):
         # Constructed directly in tests and by custom code; it must not depend on the builder.
-        assert Krea2MemoryEfficientAttnProcessor().sdpa_backends.backends[0] is SDPBackend.CUDNN_ATTENTION
+        assert Krea2MemoryEfficientAttnProcessor().sdpa_backends.backends[0] is SDPBackend.FLASH_ATTENTION
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required to exercise the SDPA dispatcher")
