@@ -126,6 +126,14 @@ def apply_monkeypatches() -> None:
 
     import invokeai.backend.util.hotfixes  # noqa: F401 (monkeypatching on import)
 
+    # Third-party libraries (diffusers calls empty_device_cache inside every from_pretrained /
+    # from_single_file) invoke torch.cuda.empty_cache directly, convoying a busy peer GPU on
+    # multi-GPU installs. Wrap the torch entry point so every Python caller inherits the
+    # skip-while-a-peer-generates policy.
+    from invokeai.backend.util.devices import install_peer_aware_empty_cache
+
+    install_peer_aware_empty_cache()
+
 
 def register_mime_types() -> None:
     """Register additional mime types for windows."""

@@ -191,3 +191,61 @@ def test_concurrent_sessions_and_borrows_never_overlap_on_a_device():
         t.join()
 
     assert not violations, f"device(s) used concurrently by a session and a borrow: {set(violations)}"
+
+
+class TestAnyOtherDeviceBusy:
+    """any_other_device_busy() gates process-global empty_cache against peer convoys."""
+
+    def test_idle_pool_reports_not_busy(self):
+        GENERATION_DEVICE_POOL.set_generation_devices([torch.device("cuda:0"), torch.device("cuda:1")])
+        try:
+            assert not GENERATION_DEVICE_POOL.any_other_device_busy(torch.device("cuda:0"))
+            assert not GENERATION_DEVICE_POOL.any_other_device_busy(None)
+        finally:
+            GENERATION_DEVICE_POOL.reset()
+
+    def test_own_session_does_not_count(self):
+        GENERATION_DEVICE_POOL.set_generation_devices([torch.device("cuda:0"), torch.device("cuda:1")])
+        try:
+            GENERATION_DEVICE_POOL.acquire_session(torch.device("cuda:0"))
+            try:
+                # cuda:0's own worker sees no OTHER busy device...
+                assert not GENERATION_DEVICE_POOL.any_other_device_busy(torch.device("cuda:0"))
+                # ...but cuda:1's worker (and an unpinned maintenance thread) must defer to it.
+                assert GENERATION_DEVICE_POOL.any_other_device_busy(torch.device("cuda:1"))
+                assert GENERATION_DEVICE_POOL.any_other_device_busy(None)
+            finally:
+                GENERATION_DEVICE_POOL.release_session(torch.device("cuda:0"))
+            assert not GENERATION_DEVICE_POOL.any_other_device_busy(torch.device("cuda:1"))
+        finally:
+            GENERATION_DEVICE_POOL.reset()
+
+    def test_borrow_counts_as_busy(self):
+        GENERATION_DEVICE_POOL.set_generation_devices([torch.device("cuda:0"), torch.device("cuda:1")])
+        try:
+            borrowed = GENERATION_DEVICE_POOL.try_borrow(exclude=torch.device("cuda:0"))
+            assert borrowed is not None
+            try:
+                assert GENERATION_DEVICE_POOL.any_other_device_busy(torch.device("cuda:0"))
+            finally:
+                GENERATION_DEVICE_POOL.release_borrow(borrowed)
+        finally:
+            GENERATION_DEVICE_POOL.reset()
+
+    def test_single_device_never_busy_for_own_worker(self):
+        """Single-GPU installs must keep pre-multi-GPU empty_cache behavior."""
+        GENERATION_DEVICE_POOL.set_generation_devices([torch.device("cuda:0")])
+        try:
+            GENERATION_DEVICE_POOL.acquire_session(torch.device("cuda:0"))
+            try:
+                assert not GENERATION_DEVICE_POOL.any_other_device_busy(torch.device("cuda:0"))
+            finally:
+                GENERATION_DEVICE_POOL.release_session(torch.device("cuda:0"))
+        finally:
+            GENERATION_DEVICE_POOL.reset()
+
+    def test_empty_registry_never_busy(self):
+        """Legacy mode registers no devices; empty_cache must run as before."""
+        GENERATION_DEVICE_POOL.reset()
+        assert not GENERATION_DEVICE_POOL.any_other_device_busy(None)
+        assert not GENERATION_DEVICE_POOL.any_other_device_busy(torch.device("cuda:0"))

@@ -104,12 +104,19 @@ def decode_video_latents(
             latents_std = torch.tensor(vae.config.latents_std).view(1, -1, 1, 1, 1).to(latents)
             latents = latents * latents_std + latents_mean
 
-            if device.type == "cuda" and torch.version.hip is None:
+            if device.type == "cuda":
                 # Upstream's verified decode recipe: float16 autocast over the fp32-pinned weights.
-                with torch.autocast(device_type="cuda", dtype=torch.float16):
+                # ROCm devices also report as "cuda" and take this path: fp32 decode there falls
+                # back to math-backend attention (AOTriton's fused SDPA kernels are fp16/bf16 only),
+                # making the ViT decoder many times slower than the same decode under autocast.
+                # cache_enabled=False: autocast's weight-cast cache would otherwise pin fp16 copies
+                # of the whole fp32 decoder (~4.5 GiB) for the full decode — a cost the working-
+                # memory estimate does not budget, which on ROCm is a hard hipBLAS failure when
+                # partial loading has packed VRAM to the reservation. Per-op recasts are transient.
+                with torch.autocast(device_type="cuda", dtype=torch.float16, cache_enabled=False):
                     decoded = vae.decode(latents, return_dict=False)[0]
             else:
-                # ROCm/MPS/CPU: fp16 autocast is unverified there; decode in the weights' dtype.
+                # MPS/CPU: fp16 autocast is unverified there; decode in the weights' dtype.
                 decoded = vae.decode(latents, return_dict=False)[0]
             del latents, latents_mean, latents_std
 

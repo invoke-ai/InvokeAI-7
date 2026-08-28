@@ -334,17 +334,42 @@ class CachedModelWithPartialLoad:
         Returns:
             The number of bytes loaded into VRAM.
         """
+        vram_bytes_loaded, _truncated = self.partial_load_to_vram_chunk(vram_bytes_to_load, max_bytes=None)
+        return vram_bytes_loaded
+
+    @torch.no_grad()
+    def partial_load_to_vram_chunk(self, vram_bytes_to_load: int, max_bytes: int | None) -> tuple[int, bool]:
+        """Load more weights into VRAM without exceeding vram_bytes_to_load, optionally stopping after max_bytes.
+
+        `vram_bytes_to_load` is the capacity budget (how much VRAM the weights may occupy);
+        `max_bytes` is a per-call pacing cap that lets a caller split one long RAM->VRAM stream
+        into bounded passes (so a lock held around each pass is released between passes).
+        Successive calls resume from the current residency, so calling until `truncated` is False
+        reaches exactly the state a single uncapped call would have reached.
+
+        Returns:
+            (vram_bytes_loaded, truncated): `truncated` is True iff the scan stopped because
+            `max_bytes` was reached while more weights would otherwise have been selected — i.e.
+            another call can make further progress toward the same `vram_bytes_to_load` budget.
+        """
         # TODO(ryand): Handle the case where an exception is thrown while loading or unloading weights. At the very
         # least, we should reset self._cur_vram_bytes to None.
 
+        if max_bytes is not None and max_bytes <= 0:
+            # A non-positive cap would return (0, truncated=True) forever and spin any caller that
+            # loops until settled.
+            raise ValueError(f"max_bytes must be positive when set; got {max_bytes}.")
+
         vram_bytes_loaded = 0
+        truncated = False
 
         cur_state_dict = self._model.state_dict()
 
         # Identify the keys that will be loaded into VRAM.
         keys_to_load: set[str] = set()
 
-        # First, process the keys that *must* be loaded into VRAM.
+        # First, process the keys that *must* be loaded into VRAM. The pacing cap does not apply to
+        # these: a pass must never end with the model in a state that cannot run.
         for key in self._keys_in_modules_that_do_not_support_autocast:
             param = cur_state_dict[key]
             if param.device.type == self._compute_device.type:
@@ -371,6 +396,13 @@ class CachedModelWithPartialLoad:
             if param.device.type == self._compute_device.type:
                 continue
 
+            if max_bytes is not None and vram_bytes_loaded >= max_bytes:
+                # The pacing cap is reached and at least one more off-device key exists. Whether
+                # that key would have fit the capacity budget is deliberately not checked here —
+                # the next pass re-derives it with a fresh budget.
+                truncated = True
+                break
+
             param_size = self._state_dict_bytes[key]
             if vram_bytes_loaded + param_size > vram_bytes_to_load:
                 # TODO(ryand): Should we just break here? If we couldn't fit this parameter into VRAM, is it really
@@ -390,16 +422,18 @@ class CachedModelWithPartialLoad:
         if self._cur_vram_bytes is not None:
             self._cur_vram_bytes += vram_bytes_loaded
 
-        if fully_loaded:
+        if fully_loaded and not truncated:
             self._set_autocast_enabled_in_all_modules(False)
         else:
+            # Not fully resident (or a truncated pass whose remaining keys are unknown): the
+            # autocast wrappers must stay enabled so the model stays runnable either way.
             self._set_autocast_enabled_in_all_modules(True)
 
         # Move all non-persistent buffers to the compute device. These are a weird edge case and do not participate in
         # the vram_bytes_loaded tracking.
         self._move_non_persistent_buffers_to_device(self._compute_device)
 
-        return vram_bytes_loaded
+        return vram_bytes_loaded, truncated
 
     @torch.no_grad()
     def partial_unload_from_vram(self, vram_bytes_to_free: int, keep_required_weights_in_vram: bool = False) -> int:

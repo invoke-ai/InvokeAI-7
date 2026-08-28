@@ -180,6 +180,15 @@ class _ModelLoadReadWriteLock:
 # Process-global lock guarding the non-thread-safe model load machinery. See _ModelLoadReadWriteLock.
 MODEL_LOAD_LOCK = _ModelLoadReadWriteLock()
 
+# Pacing cap for partial-load VRAM moves: `LoadedModelWithoutConfig` splits a long RAM->VRAM
+# stream into passes of at most this many bytes, dropping MODEL_LOAD_LOCK's read lock between
+# passes. Without this, a multi-GB stream (e.g. a partially-loaded video transformer) holds the
+# read lock for its full duration, and because the lock is write-preferring, one construction
+# queued behind it stalls every VRAM move on every GPU for that long. The cap bounds any queued
+# construction's wait to roughly one pass. 1 GiB keeps the per-pass overhead (lock churn plus a
+# re-scan of the model's state dict) negligible against the transfer itself.
+VRAM_MOVE_PASS_BYTES = 1 << 30
+
 
 # TODO(ryand): Where should this go? The ModelCache shouldn't be concerned with submodels.
 def get_model_cache_key(model_key: str, submodel_type: Optional[SubModelType] = None) -> str:
@@ -987,8 +996,21 @@ class ModelCache:
 
     @synchronized
     @record_activity
-    def lock(self, cache_entry: CacheRecord, working_mem_bytes: Optional[int]) -> None:
-        """Lock a model for use and move it into VRAM."""
+    def lock(
+        self,
+        cache_entry: CacheRecord,
+        working_mem_bytes: Optional[int],
+        max_move_bytes: Optional[int] = None,
+    ) -> bool:
+        """Lock a model for use and move it into VRAM.
+
+        `max_move_bytes` optionally paces the RAM->VRAM stream: at most that many bytes are moved
+        in this call. Returns True when the move is settled (the model is as resident as the VRAM
+        budget allows); False when the pacing cap ended the pass early — the caller must then call
+        `continue_lock()` (re-taking its outer locks in between) until it returns True. The entry
+        is pinned by this call either way; a False return leaves it runnable (autocast wrappers
+        stay enabled for the still-offloaded weights).
+        """
         if cache_entry.key not in self._cached_models:
             self._logger.info(
                 f"Locking model cache entry {cache_entry.key} "
@@ -1024,10 +1046,10 @@ class ModelCache:
                     f"Loaded model '{cache_entry.key}' ({cache_entry.cached_model.model.__class__.__name__}) onto "
                     f"cpu device; skipping VRAM load"
                 )
-            return
+            return True
 
         try:
-            self._load_locked_model(cache_entry, working_mem_bytes)
+            settled = self._load_locked_model(cache_entry, working_mem_bytes, max_move_bytes=max_move_bytes)
             self._logger.debug(
                 f"Finished locking model {cache_entry.key} (Type: {cache_entry.cached_model.model.__class__.__name__})"
             )
@@ -1040,6 +1062,55 @@ class ModelCache:
             raise
 
         self._log_cache_state()
+        return settled
+
+    @synchronized
+    @record_activity
+    def continue_lock(
+        self,
+        cache_entry: CacheRecord,
+        working_mem_bytes: Optional[int],
+        max_move_bytes: Optional[int] = None,
+        stream_started_at: Optional[float] = None,
+    ) -> bool:
+        """Continue a paced VRAM move begun by `lock(..., max_move_bytes=...)` that returned False.
+
+        Moves at most `max_move_bytes` more bytes toward the same budget and returns True once the
+        move is settled. The entry is already pinned by the initial `lock()` call, so this does NOT
+        pin it again; on failure it releases that original pin (mirroring `lock()`), so the caller
+        must treat an exception here exactly like a failed `lock()` and not unlock again.
+
+        `stream_started_at` (a `time.time()` value from before the initial `lock()`) makes the
+        final pass's "Loaded model ..." line report the whole stream's elapsed time rather than
+        the last pass's.
+        """
+        if cache_entry.key not in self._cached_models:
+            # Same diagnostic as lock()/unlock() (issue 7513): a detached record's continuation
+            # passes should not run silently.
+            self._logger.info(
+                f"Continuing paced lock of model cache entry {cache_entry.key} "
+                f"(Type: {cache_entry.cached_model.model.__class__.__name__}), but it has already been dropped from "
+                "the RAM cache. This is a sign that the model loading order is non-optimal in the invocation code "
+                "(See https://github.com/invoke-ai/InvokeAI/issues/7513)."
+            )
+        try:
+            settled = self._load_locked_model(
+                cache_entry,
+                working_mem_bytes,
+                max_move_bytes=max_move_bytes,
+                stream_started_at=stream_started_at,
+            )
+        except torch.OutOfMemoryError:
+            self._logger.warning("Insufficient GPU memory to load model. Aborting")
+            cache_entry.unlock()
+            raise
+        except Exception:
+            cache_entry.unlock()
+            raise
+
+        if settled:
+            self._log_cache_state()
+        return settled
 
     @synchronized
     @record_activity
@@ -1088,9 +1159,19 @@ class ModelCache:
         if self._ram_budget is not None and self._ram_budget.available() < 0:
             self._budget_reconcile_pending.set()
 
-    def _load_locked_model(self, cache_entry: CacheRecord, working_mem_bytes: Optional[int] = None) -> None:
-        """Helper function for self.lock(). Loads a locked model into VRAM."""
-        start_time = time.time()
+    def _load_locked_model(
+        self,
+        cache_entry: CacheRecord,
+        working_mem_bytes: Optional[int] = None,
+        max_move_bytes: Optional[int] = None,
+        stream_started_at: Optional[float] = None,
+    ) -> bool:
+        """Helper function for self.lock(). Loads a locked model into VRAM.
+
+        Returns True when the move is settled (fully resident, or as resident as the VRAM budget
+        allows); False when `max_move_bytes` truncated the pass and another pass is needed.
+        """
+        start_time = stream_started_at if stream_started_at is not None else time.time()
 
         # Calculate model_vram_needed, the amount of additional VRAM that will be used if we fully load the model into
         # VRAM.
@@ -1130,7 +1211,17 @@ class ModelCache:
         # vram_available = int(model_vram_needed * 0.1)
         # We add 1 MB to the available VRAM to account for small errors in memory tracking (e.g. off-by-one). A fully
         # loaded model is much faster than a 95% loaded model.
-        model_bytes_loaded = self._move_model_to_vram(cache_entry, vram_available + MB)
+        model_bytes_loaded, truncated = self._move_model_to_vram(cache_entry, vram_available + MB, max_move_bytes)
+
+        if truncated:
+            # A paced pass that stopped at max_move_bytes with more weights still to move. Keep the
+            # per-pass logging at DEBUG — the settled pass below emits the one INFO summary line.
+            self._logger.debug(
+                f"Paced VRAM move for {cache_entry.key}: moved {model_bytes_loaded / MB:.2f}MB this pass, "
+                f"{(cache_entry.cached_model.total_bytes() - cache_entry.cached_model.cur_vram_bytes()) / MB:.2f}MB "
+                "still to move."
+            )
+            return False
 
         model_cur_vram_bytes = cache_entry.cached_model.cur_vram_bytes()
         vram_available = self._get_vram_available(working_mem_bytes)
@@ -1161,11 +1252,17 @@ class ModelCache:
         self._logger.debug(
             f"After loading: {self._get_vram_state_str(model_cur_vram_bytes, model_total_bytes, vram_available)}"
         )
+        return True
 
-    def _move_model_to_vram(self, cache_entry: CacheRecord, vram_available: int) -> int:
+    def _move_model_to_vram(
+        self, cache_entry: CacheRecord, vram_available: int, max_move_bytes: Optional[int] = None
+    ) -> tuple[int, bool]:
+        """Move up to `vram_available` bytes of the model into VRAM (at most `max_move_bytes` of it
+        in this call, when set). Returns (bytes_moved, truncated); truncated is only ever True for
+        partial-load models — full-load models move in one indivisible pass."""
         try:
             if isinstance(cache_entry.cached_model, CachedModelWithPartialLoad):
-                return cache_entry.cached_model.partial_load_to_vram(vram_available)
+                return cache_entry.cached_model.partial_load_to_vram_chunk(vram_available, max_bytes=max_move_bytes)
             elif isinstance(cache_entry.cached_model, CachedModelOnlyFullLoad):  # type: ignore
                 # Partial load is not supported, so we have not choice but to try and fit it all into VRAM.
                 #
@@ -1195,7 +1292,7 @@ class ModelCache:
                         "so proceeding would exhaust system memory. Free up RAM, use a smaller or more "
                         "heavily quantized model, or lower `device_working_mem_gb`."
                     )
-                return cache_entry.cached_model.full_load_to_vram()
+                return cache_entry.cached_model.full_load_to_vram(), False
             else:
                 raise ValueError(f"Unsupported cached model type: {type(cache_entry.cached_model)}")
         except Exception as e:
@@ -1472,7 +1569,12 @@ class ModelCache:
                 )
             vram_bytes_freed += cache_entry_bytes_freed
 
-        TorchDevice.empty_cache()
+        # Only pay for empty_cache() when something was actually offloaded. Paced VRAM moves run
+        # this method once per pass, and on most passes there is nothing left to offload —
+        # an unconditional empty_cache() would return the allocator's blocks to the driver
+        # (and synchronize the device on ROCm) dozens of times per stream for no benefit.
+        if vram_bytes_freed > 0:
+            TorchDevice.empty_cache()
         return vram_bytes_freed
 
     def _log_cache_state(self, title: str = "Model cache state:", include_entry_details: bool = True):
@@ -1645,7 +1747,16 @@ class ModelCache:
 
         self._sync_current_stats()
 
-        TorchDevice.empty_cache()
+        # Only pay for empty_cache() when this make_room actually dropped something. It is a
+        # GLOBAL operation: it takes every device's caching-allocator mutex and hipFree/cudaFrees
+        # their cached blocks, and freeing on a device with a long kernel in flight blocks until
+        # that kernel completes — with the mutex held, so even a peer worker's ordinary tensor
+        # deallocations stall until the step boundary (observed via py-spy on a dual-GPU ROCm
+        # box: a no-op make_room during one worker's model load froze the other worker's denoise
+        # step for its full duration). make_room runs on every put(), and most of those evict
+        # nothing, so the unconditional call turned every submodel load into a cross-GPU stall.
+        if models_cleared > 0:
+            TorchDevice.empty_cache()
         self._logger.debug(f"Dropped {models_cleared} models to free {ram_bytes_freed / MB:.2f}MB of RAM.")
         self._log_cache_state(title="After dropping models:")
         return CacheClearResult(models_cleared=models_cleared, bytes_freed=ram_bytes_freed)
