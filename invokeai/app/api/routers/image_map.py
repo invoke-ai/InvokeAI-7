@@ -9,11 +9,16 @@ from fastapi import File, HTTPException, Query, UploadFile, status
 from fastapi.routing import APIRouter
 from pydantic import BaseModel, Field
 
-from invokeai.app.api.auth_dependencies import CurrentUserOrDefault
+from invokeai.app.api.auth_dependencies import AdminUserOrDefault, CurrentUserOrDefault
 from invokeai.app.api.dependencies import ApiDependencies
 from invokeai.app.api.routers._access import assert_image_read_access
 from invokeai.app.services.image_files.image_files_common import ImageFileNotFoundException
-from invokeai.app.services.image_index.image_index_base import TextSearchUnavailableError
+from invokeai.app.services.image_index.cluster_labels import (
+    MAX_CUSTOM_VOCAB_TERM_LENGTH,
+    MAX_CUSTOM_VOCAB_TERMS,
+    normalize_custom_vocab_terms,
+)
+from invokeai.app.services.image_index.image_index_base import TextSearchUnavailableError, VocabBuildState
 from invokeai.app.services.image_index.image_index_common import ImageIndexStatus
 from invokeai.app.services.image_index.projection import (
     DEFAULT_CLUSTER_MIN_SAMPLES,
@@ -774,6 +779,95 @@ async def get_image_map_cluster_labels(
     )
 
 
+class ImageMapImageLabelsResponse(BaseModel):
+    """The best vocabulary labels for one image."""
+
+    label: str = Field(description="Best-matching vocabulary phrase")
+    alternates: list[str] = Field(description="Runner-up phrases")
+    score: float = Field(description="Cosine similarity of the best phrase to the image's embedding")
+
+
+@image_map_router.get(
+    "/image_labels", operation_id="get_image_map_image_labels", response_model=ImageMapImageLabelsResponse
+)
+async def get_image_map_image_labels(
+    current_user: CurrentUserOrDefault,
+    image_name: str = Query(description="The image to label"),
+    top_k: int = Query(default=3, ge=1, le=10, description="Number of candidate labels"),
+) -> ImageMapImageLabelsResponse:
+    """Labels one image with the vocabulary phrases most similar to its stored embedding.
+
+    Serves map hover cards, so it only covers images the index has embedded;
+    an unindexed image (assets, intermediates, not-yet-indexed) is a 404
+    rather than an on-demand embed — a hover must never queue encoder work.
+    Requires the embedding model's text encoder, like /cluster_labels.
+    """
+    services = ApiDependencies.invoker.services
+    model_id = services.image_index.model_id
+    if model_id is None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="The image index is not enabled")
+
+    assert_image_read_access(image_name, current_user)
+
+    try:
+        vocabulary, vocab_embeddings = await asyncio.to_thread(services.image_index.get_vocab_embeddings)
+    except TextSearchUnavailableError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    if not vocabulary:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="The labeling vocabulary is empty")
+
+    # A BLOB read and a SQLite transaction; off the event loop like the
+    # clustering endpoints, since this one fires per hovered point.
+    #
+    # A stored row whose blob length disagrees with its `dim` column raises out
+    # of `blob_to_embedding`, and a row whose dim disagrees with the vocabulary
+    # matrix raises out of the matmul below. Both are this one image's data
+    # being unusable, so both answer 404 like the degenerate-vector case — an
+    # unhandled 500 here would refire on every hover of that point, which is
+    # once per pointer sweep rather than once per user action.
+    try:
+        found, matrix = await asyncio.to_thread(services.image_index_records.get_embeddings, [image_name], model_id)
+        if not found:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="This image has no stored embedding to label"
+            )
+
+        # float64 for the norm, and a degenerate row is refused rather than
+        # passed through — exactly as `_normalize_query_vector` does for search
+        # queries. Dividing by a zero or non-finite norm makes every score NaN,
+        # and `argpartition` then returns arbitrary rows: the card would present
+        # three unrelated vocabulary phrases as this image's tags, with a
+        # `score` that serializes as JSON null against a schema that declares it
+        # a float. The writer rejects such rows now, but ones predating that
+        # guard are still out there — the same assumption this file already
+        # makes about cached coords.
+        vector = matrix[0]
+        norm = float(np.linalg.norm(vector.astype(np.float64)))
+        if not np.isfinite(norm) or norm == 0.0:
+            raise ValueError("degenerate stored embedding")
+
+        scores = vocab_embeddings @ (vector / norm).astype(vocab_embeddings.dtype)
+    except HTTPException:
+        raise
+    except ValueError:
+        services.logger.warning(f"Image map: cannot label '{image_name}' from its stored embedding", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="This image's stored embedding cannot be labeled"
+        )
+
+    # Bounded by the score vector too, not just the phrase list: a cached vocab
+    # matrix shorter than its phrase list would otherwise put `kth` out of
+    # bounds and 500.
+    count = min(top_k, len(vocabulary), int(scores.shape[0]))
+    top = np.argpartition(-scores, count - 1)[:count]
+    top = top[np.argsort(-scores[top])]
+    return ImageMapImageLabelsResponse(
+        label=vocabulary[int(top[0])],
+        alternates=[vocabulary[int(index)] for index in top[1:]],
+        score=float(scores[int(top[0])]),
+    )
+
+
 @image_map_router.post(
     "/refresh",
     operation_id="refresh_image_map",
@@ -804,6 +898,73 @@ def refresh_image_map(current_user: CurrentUserOrDefault) -> ImageMapRefreshResp
         # polling through a restart is locked out of the first real refresh.
         _release_refresh_slot(user_id)
     return ImageMapRefreshResponse(enqueued=enqueued)
+
+
+class ImageMapVocabResponse(BaseModel):
+    """The supplementary cluster-labeling vocabulary and its embedding build state."""
+
+    terms: list[str] = Field(description="The stored supplementary terms, normalized, sorted alphabetically")
+    state: VocabBuildState = Field(
+        description="unavailable: the index is not running; idle: embeddings will build when labels are next "
+        "requested; building: an embedding (re)build is queued or running; ready: embeddings are serving; "
+        "error: the last build failed (see error)"
+    )
+    error: Optional[str] = Field(default=None, description="Why the last embedding build failed; only set on error")
+    max_terms: int = Field(description="Maximum number of supplementary terms the server accepts")
+    max_term_length: int = Field(description="Maximum length of one term, in characters")
+
+
+class ImageMapVocabUpdate(BaseModel):
+    """Replacement supplementary vocabulary."""
+
+    terms: list[str] = Field(
+        max_length=MAX_CUSTOM_VOCAB_TERMS,
+        description="The full supplementary term list; replaces what is stored. Terms are normalized "
+        "(lowercased, whitespace collapsed) and deduplicated server-side.",
+    )
+
+
+def _vocab_response(services) -> ImageMapVocabResponse:
+    terms = services.image_index_records.get_custom_vocab_terms()
+    state, error = services.image_index.get_vocab_build_state()
+    return ImageMapVocabResponse(
+        terms=terms,
+        state=state,
+        error=error,
+        max_terms=MAX_CUSTOM_VOCAB_TERMS,
+        max_term_length=MAX_CUSTOM_VOCAB_TERM_LENGTH,
+    )
+
+
+@image_map_router.get("/vocab", operation_id="get_image_map_vocab", response_model=ImageMapVocabResponse)
+def get_image_map_vocab(current_user: CurrentUserOrDefault) -> ImageMapVocabResponse:
+    """Gets the supplementary cluster-labeling vocabulary.
+
+    The list is server-wide: cluster labels are computed against one shared
+    vocabulary. Readable by any user; only admins may change it.
+    """
+    return _vocab_response(ApiDependencies.invoker.services)
+
+
+@image_map_router.put("/vocab", operation_id="update_image_map_vocab", response_model=ImageMapVocabResponse)
+def update_image_map_vocab(update: ImageMapVocabUpdate, current_user: AdminUserOrDefault) -> ImageMapVocabResponse:
+    """Replaces the supplementary cluster-labeling vocabulary. Admin-only.
+
+    The stored embeddings are invalidated and rebuilt in the background (the
+    response's `state` reflects this); labels served in the meantime still use
+    the previous vocabulary. Works while the index is disabled too — terms
+    persist and take effect when indexing next runs.
+    """
+    try:
+        terms = normalize_custom_vocab_terms(update.terms)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
+
+    services = ApiDependencies.invoker.services
+    services.image_index_records.set_custom_vocab_terms(terms)
+    # After the commit, so the rebuild can only ever read the new rows.
+    services.image_index.invalidate_vocab()
+    return _vocab_response(services)
 
 
 @image_map_router.get("/status", operation_id="get_image_map_status", response_model=ImageMapStatusResponse)

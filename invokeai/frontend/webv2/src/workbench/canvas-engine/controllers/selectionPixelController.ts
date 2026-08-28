@@ -4,7 +4,7 @@ import type { ImagePatchApply } from '@workbench/canvas-engine/history/imagePatc
 import type { LayerCacheStore } from '@workbench/canvas-engine/render/layerCache';
 import type { RasterBackend, RasterSurface } from '@workbench/canvas-engine/render/raster';
 import type { SelectionState } from '@workbench/canvas-engine/selection/selectionState';
-import type { ControlPixelEditTransaction } from '@workbench/canvas-engine/tools/tool';
+import type { PixelEditTransaction } from '@workbench/canvas-engine/tools/tool';
 import type { Rect } from '@workbench/canvas-engine/types';
 
 import { getSourceBounds } from '@workbench/canvas-engine/document/sources';
@@ -14,7 +14,7 @@ import { eraseMaskedRegion, fillMaskedRegion } from '@workbench/canvas-engine/se
 
 type PixelTarget =
   | { kind: 'raster'; layerId: string; transparencyLocked: boolean }
-  | { kind: 'control'; transaction: ControlPixelEditTransaction; transparencyLocked: false };
+  | { kind: 'control'; transaction: PixelEditTransaction; transparencyLocked: false };
 
 export interface SelectionPixelControllerOptions {
   readonly selection: SelectionState;
@@ -23,14 +23,19 @@ export interface SelectionPixelControllerOptions {
   readonly history: History;
   readonly applyImagePatch: ImagePatchApply;
   readonly getDocument: () => CanvasDocumentContractV2 | null;
-  readonly beginControlEdit: (layerId: string) => ControlPixelEditTransaction | null;
+  readonly beginPixelEdit: (layerId: string) => PixelEditTransaction | null;
   readonly canEdit: () => boolean;
   readonly isGestureActive: () => boolean;
   readonly getFillColor: () => string;
   readonly endBurst: () => void;
   readonly deleteDerived: (layerId: string) => void;
   readonly invalidateLayer: (layerId: string) => void;
+  readonly isRasterCacheReady: (
+    layer: CanvasDocumentContractV2['layers'][number],
+    document: CanvasDocumentContractV2
+  ) => boolean;
   readonly notifyPainted: (layerId: string) => void;
+  readonly requestRasterization: (layerId: string) => void;
   readonly markDirty: (layerId: string) => void;
 }
 
@@ -62,7 +67,7 @@ export class SelectionPixelController {
       return { kind: 'raster', layerId: layer.id, transparencyLocked: layer.isTransparencyLocked === true };
     }
     if (layer?.type === 'control') {
-      const transaction = this.deps.beginControlEdit(layer.id);
+      const transaction = this.deps.beginPixelEdit(layer.id);
       return transaction ? { kind: 'control', transaction, transparencyLocked: false } : null;
     }
     return null;
@@ -80,6 +85,14 @@ export class SelectionPixelController {
     }
     const selectionRect = roundOut(bounds);
     const selectedLayer = document.layers.find((candidate) => candidate.id === document.selectedLayerId);
+    if (
+      selectedLayer?.type === 'raster' &&
+      selectedLayer.source.type === 'paint' &&
+      !this.deps.isRasterCacheReady(selectedLayer, document)
+    ) {
+      this.deps.requestRasterization(selectedLayer.id);
+      return;
+    }
     if (
       kind === 'erase' &&
       selectedLayer?.type === 'control' &&

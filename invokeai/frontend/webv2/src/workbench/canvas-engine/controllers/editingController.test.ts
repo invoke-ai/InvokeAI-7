@@ -48,7 +48,7 @@ const createTransformOptions = () => ({
 const createSelectionPixelOptions = () => ({
   applyImagePatch: vi.fn(),
   backend: {} as never,
-  beginControlEdit: () => null,
+  beginPixelEdit: () => null,
   canEdit: () => true,
   deleteDerived: vi.fn(),
   endBurst: vi.fn(),
@@ -56,10 +56,12 @@ const createSelectionPixelOptions = () => ({
   getFillColor: () => '#000',
   history: {} as never,
   invalidateLayer: vi.fn(),
+  isRasterCacheReady: () => true,
   isGestureActive: () => false,
   layers: {} as never,
   markDirty: vi.fn(),
   notifyPainted: vi.fn(),
+  requestRasterization: vi.fn(),
 });
 
 const createFloatingSelectionOptions = () => ({

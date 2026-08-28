@@ -80,3 +80,25 @@ def test_class_patch_is_idempotent_and_preserves_behavior() -> None:
         MiniMaxH3VideoCausalConv3d.forward = stock_forward
         if hasattr(MiniMaxH3VideoCausalConv3d, "_invokeai_rocm_conv2d_decomposition"):
             delattr(MiniMaxH3VideoCausalConv3d, "_invokeai_rocm_conv2d_decomposition")
+
+
+def test_patch_gates_on_hip_version(monkeypatch) -> None:
+    """Mirrors the Wan decomposition's HIP gate: >= 7.2 keeps the stock conv3d forward (fast
+    native kernels; the shared decomposition code corrupted decodes there), older HIP keeps
+    the decomposition, non-HIP builds are never patched."""
+    import invokeai.backend.minimax_h3.rocm_causal_conv3d as mod
+
+    calls: list[bool] = []
+    monkeypatch.setattr(mod, "_patch_minimax_h3_causal_conv3d", lambda: calls.append(True))
+
+    monkeypatch.setattr(torch.version, "hip", "7.2.10101")
+    mod.patch_minimax_h3_causal_conv3d_for_rocm()
+    assert calls == [], "must not decompose on HIP 7.2+"
+
+    monkeypatch.setattr(torch.version, "hip", "7.1.25424")
+    mod.patch_minimax_h3_causal_conv3d_for_rocm()
+    assert calls == [True], "must decompose on HIP < 7.2"
+
+    monkeypatch.setattr(torch.version, "hip", None)
+    mod.patch_minimax_h3_causal_conv3d_for_rocm()
+    assert calls == [True], "CUDA/CPU builds are never patched"

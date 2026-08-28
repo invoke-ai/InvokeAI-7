@@ -2,12 +2,12 @@ import type { InvocationSourceId, ResultDestination } from './invocationContract
 import type { WidgetInstanceId, WidgetTypeId } from './widgetContracts';
 
 /**
- * The three shipped layout presets. A preset names an *arrangement*, never a
+ * The shipped layout presets. A preset names an *arrangement*, never a
  * widget — `edit` opens Canvas but is not "the Canvas view", and a preset may
  * have several graph widgets open at once. Source resolution is a separate
  * concern (see `graphWidgets.ts`).
  */
-export type BuiltInLayoutPresetId = 'compose' | 'edit' | 'automate';
+export type BuiltInLayoutPresetId = 'compose' | 'edit' | 'automate' | 'video';
 
 export type LayoutPresetId = BuiltInLayoutPresetId | (string & {});
 

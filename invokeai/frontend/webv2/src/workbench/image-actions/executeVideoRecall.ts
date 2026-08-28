@@ -82,7 +82,7 @@ export const executeVideoRecall = async ({
   owner: callerOwner,
   projectId,
 }: {
-  commands: Pick<WorkbenchCommands, 'generation' | 'notifications' | 'widgets'>;
+  commands: Pick<WorkbenchCommands, 'notifications' | 'widgets'>;
   getVideoValues: () => Record<string, unknown>;
   item: GalleryVideoItem;
   kind: VideoRecallKind;
@@ -233,15 +233,25 @@ export const executeVideoRecall = async ({
       return false;
     }
 
-    // Prompts live in the shared project draft; everything else is widget values.
-    if (result.promptPatch) {
-      commands.generation.patchPromptDraft(result.promptPatch, 'video', projectId);
-    }
-    // A prompts-only recall changes no widget values — skip the whole-values
-    // write (and the lost-update window it would widen). The builder always
-    // returns a fresh copy, so the fields list, not object identity, is the
-    // signal.
-    if (result.fields.some((field) => field !== 'prompts')) {
+    // Prompts are Video's own widget values now, not the draft Generate and
+    // Upscale share — but a prompts-only recall must still write ONLY the prompt
+    // keys. `result.values` is the panel re-snapshotted through
+    // `syncVideoWidgetValuesWithModels`, so writing it wholesale would push an
+    // unrelated model-family transition into the store behind a toast that says
+    // "prompts" (uninstall the recorded main, recall prompts, and the panel's
+    // frames/fps/resolution/LoRAs all reset). It would also widen the
+    // lost-update window against a concurrent recall still awaiting its media.
+    if (result.fields.every((field) => field === 'prompts')) {
+      commands.widgets.patchValues(
+        'video',
+        {
+          negativePrompt: result.values.negativePrompt,
+          negativePromptEnabled: result.values.negativePromptEnabled,
+          positivePrompt: result.values.positivePrompt,
+        },
+        projectId
+      );
+    } else {
       commands.widgets.patchValues('video', { ...result.values }, projectId);
     }
     commands.notifications.add({

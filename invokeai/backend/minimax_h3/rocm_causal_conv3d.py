@@ -73,11 +73,21 @@ def _patch_minimax_h3_causal_conv3d() -> None:
 
 
 def patch_minimax_h3_causal_conv3d_for_rocm() -> None:
-    """Apply the conv2d decomposition on ROCm builds; no-op elsewhere.
+    """Apply the conv2d decomposition on ROCm builds older than HIP 7.2; no-op elsewhere.
 
     Call from any loader that constructs an ``AutoencoderKLMiniMaxH3``. cuDNN has
     real implicit-GEMM conv3d kernels, so CUDA builds keep the stock path.
+
+    HIP >= 7.2 also keeps the stock path, mirroring the Wan decomposition (see
+    ``invokeai.backend.wan.rocm_causal_conv3d.patch_wan_causal_conv3d_for_rocm`` for the
+    full story): new MIOpen runs these conv3ds at full speed, and the identical Wan
+    decomposition exhibited allocator-state-dependent row corruption there — this encoder
+    shares the code, so it shares the retirement.
     """
+    from invokeai.backend.wan.rocm_causal_conv3d import hip_version_at_least
+
     if torch.version.hip is None:
+        return
+    if hip_version_at_least(7, 2):
         return
     _patch_minimax_h3_causal_conv3d()

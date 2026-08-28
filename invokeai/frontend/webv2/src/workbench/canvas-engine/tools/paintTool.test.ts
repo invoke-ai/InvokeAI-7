@@ -5,7 +5,7 @@ import type {
 } from '@workbench/canvas-engine/contracts';
 import type { StubRasterBackend, StubRasterSurface } from '@workbench/canvas-engine/render/raster.testStub';
 import type {
-  ControlPixelEditTransaction,
+  PixelEditTransaction,
   StrokeCommittedEvent,
   Tool,
   ToolContext,
@@ -80,11 +80,11 @@ const controlImageLayer = (id: string): CanvasControlLayerContract => ({
   source: { image: { height: 20, imageName: id, width: 20 }, type: 'image' },
 });
 
-const controlTransaction = (): ControlPixelEditTransaction => ({
+const controlTransaction = (layerId = 'control'): PixelEditTransaction => ({
   cancel: vi.fn(),
   commitPatch: vi.fn(),
   commitStroke: vi.fn(),
-  layerId: 'control',
+  layerId,
 });
 
 const makeDoc = (layers: CanvasLayerContract[], selectedLayerId: string | null): CanvasDocumentContractV2 => ({
@@ -115,19 +115,20 @@ const up = (t: Tool, ctx: ToolContext, i: PointerInput): void => t.onPointerUp?.
 const cancel = (t: Tool, ctx: ToolContext): void => t.onPointerCancel?.(ctx);
 
 interface Harness {
-  beginControlPixelEdit: ReturnType<typeof vi.fn> | null;
+  beginPixelEdit: ReturnType<typeof vi.fn> | null;
   ctx: ToolContext;
   backend: StubRasterBackend;
   layers: LayerCacheStore;
   dispatched: CanvasProjectMutation[];
   strokes: StrokeCommittedEvent[];
   painted: string[];
+  requestLayerRasterization: ReturnType<typeof vi.fn>;
   createdIds: string[];
 }
 
 const createHarness = (
   doc: CanvasDocumentContractV2,
-  transaction: ControlPixelEditTransaction | null | undefined = undefined
+  transaction: PixelEditTransaction | null | undefined = undefined
 ): Harness => {
   const backend = createTestStubRasterBackend();
   const layers = createLayerCacheStore(backend);
@@ -136,12 +137,13 @@ const createHarness = (
   const strokes: StrokeCommittedEvent[] = [];
   const painted: string[] = [];
   const createdIds: string[] = [];
-  const beginControlPixelEdit = transaction === undefined ? null : vi.fn(() => transaction);
+  const beginPixelEdit = transaction === undefined ? null : vi.fn(() => transaction);
+  const requestLayerRasterization = vi.fn();
   let idCounter = 0;
 
   const ctx: ToolContext = {
     backend,
-    ...(beginControlPixelEdit ? { beginControlPixelEdit } : {}),
+    ...(beginPixelEdit ? { beginPixelEdit } : {}),
     commitStructural: vi.fn(),
     createLayerId: () => {
       const id = `new-layer-${(idCounter += 1)}`;
@@ -161,6 +163,7 @@ const createHarness = (
     invalidate: vi.fn(),
     layers,
     notifyLayerPainted: (layerId) => painted.push(layerId),
+    requestLayerRasterization,
     setLayerTransformOverride: vi.fn(),
     setOverlayCursor: vi.fn(),
     stores,
@@ -168,7 +171,7 @@ const createHarness = (
     viewport: null as never,
   };
 
-  return { backend, beginControlPixelEdit, createdIds, ctx, dispatched, layers, painted, strokes };
+  return { backend, beginPixelEdit, createdIds, ctx, dispatched, layers, painted, requestLayerRasterization, strokes };
 };
 
 const cacheOps = (surface: StubRasterSurface): string[] => surface.callLog.map((entry) => entry.op);
@@ -229,6 +232,29 @@ describe('brush tool: stroke into an existing paint layer', () => {
     expect(ops).toContain('drawImage');
     expect(lastCompositeOp(cacheSurface(h, 'paint1'))).toBe('source-over');
   });
+
+  it('waits for a persisted paint source cache instead of painting over transparent pixels', () => {
+    const layer = paintLayer('paint1');
+    if (layer.type !== 'raster' || layer.source.type !== 'paint') {
+      throw new Error('expected a raster paint layer');
+    }
+    layer.source.bitmap = { height: 10, imageName: 'persisted-paint', width: 10 };
+    const h = createHarness(makeDoc([layer], layer.id));
+    const brush = createBrushTool();
+
+    down(brush, h.ctx, pointer(5, 5));
+    up(brush, h.ctx, pointer(5, 5, { buttons: 0 }));
+    expect(h.strokes).toHaveLength(0);
+    expect(h.layers.peek(layer.id)).toBeUndefined();
+    expect(h.requestLayerRasterization).toHaveBeenCalledWith(layer.id);
+
+    const entry = h.layers.getOrCreateRect(layer.id, { height: 10, width: 10, x: 0, y: 0 });
+    h.layers.publishPixels(layer.id);
+    expect(entry.stale).toBe(false);
+    down(brush, h.ctx, pointer(5, 5));
+    up(brush, h.ctx, pointer(5, 5, { buttons: 0 }));
+    expect(h.strokes).toHaveLength(1);
+  });
 });
 
 describe('eraser tool', () => {
@@ -244,6 +270,21 @@ describe('eraser tool', () => {
     expect(h.strokes).toHaveLength(1);
     expect(h.strokes[0]!.tool).toBe('eraser');
     expect(lastCompositeOp(cacheSurface(h, 'paint1'))).toBe('destination-out');
+  });
+
+  it('edits a selected image layer through a materializing pixel transaction', () => {
+    const transaction = controlTransaction('img1');
+    const h = createHarness(makeDoc([imageLayer('img1')], 'img1'), transaction);
+    const eraser = createEraserTool();
+
+    down(eraser, h.ctx, pointer(2, 2));
+    move(eraser, h.ctx, pointer(6, 6), [pointer(6, 6)]);
+    up(eraser, h.ctx, pointer(6, 6));
+
+    expect(h.beginPixelEdit).toHaveBeenCalledWith('img1');
+    expect(transaction.commitStroke).toHaveBeenCalledOnce();
+    expect(h.dispatched).toHaveLength(0);
+    expect(h.createdIds).toHaveLength(0);
   });
 });
 
@@ -273,7 +314,7 @@ describe('paint tool: target resolution', () => {
     move(brush, h.ctx, pointer(20, 20), [pointer(20, 20)]);
     up(brush, h.ctx, pointer(20, 20, { buttons: 0 }));
 
-    expect(h.beginControlPixelEdit).toHaveBeenCalledWith('control');
+    expect(h.beginPixelEdit).toHaveBeenCalledWith('control');
     expect(transaction.commitStroke).toHaveBeenCalledOnce();
     expect(transaction.cancel).not.toHaveBeenCalled();
     expect(h.dispatched).toHaveLength(0);
@@ -312,7 +353,7 @@ describe('paint tool: target resolution', () => {
 
     drawImage.mockRestore();
     down(brush, h.ctx, pointer(30, 30));
-    expect(h.beginControlPixelEdit).toHaveBeenCalledTimes(2);
+    expect(h.beginPixelEdit).toHaveBeenCalledTimes(2);
   });
 
   it('aborts the control transaction and releases the gesture after stroke finalization fails', () => {
@@ -334,7 +375,7 @@ describe('paint tool: target resolution', () => {
 
     getImageData.mockRestore();
     down(brush, h.ctx, pointer(30, 30));
-    expect(h.beginControlPixelEdit).toHaveBeenCalledTimes(2);
+    expect(h.beginPixelEdit).toHaveBeenCalledTimes(2);
   });
 
   it('still cancels the control transaction and releases the gesture when pixel restoration fails', () => {
@@ -356,7 +397,7 @@ describe('paint tool: target resolution', () => {
 
     putImageData.mockRestore();
     down(brush, h.ctx, pointer(30, 30));
-    expect(h.beginControlPixelEdit).toHaveBeenCalledTimes(2);
+    expect(h.beginPixelEdit).toHaveBeenCalledTimes(2);
   });
 
   it('does not roll back an accepted stroke when transaction publication throws', () => {
@@ -373,7 +414,7 @@ describe('paint tool: target resolution', () => {
     expect(transaction.commitStroke).toHaveBeenCalledOnce();
     expect(transaction.cancel).not.toHaveBeenCalled();
     down(brush, h.ctx, pointer(30, 30));
-    expect(h.beginControlPixelEdit).toHaveBeenCalledTimes(2);
+    expect(h.beginPixelEdit).toHaveBeenCalledTimes(2);
   });
 
   it('does not fall through to raster auto-create when control preparation is rejected', () => {
@@ -478,6 +519,28 @@ describe('transparency lock', () => {
 });
 
 describe('mask strokes are forced opaque', () => {
+  it('waits for a persisted mask cache instead of replacing its coverage', () => {
+    const layer = inpaintMaskLayer('mask1');
+    if (layer.type !== 'inpaint_mask') {
+      throw new Error('expected an inpaint mask');
+    }
+    layer.mask.bitmap = { height: 10, imageName: 'persisted-mask', width: 10 };
+    const h = createHarness(makeDoc([layer], layer.id));
+    const eraser = createEraserTool();
+
+    down(eraser, h.ctx, pointer(5, 5));
+    up(eraser, h.ctx, pointer(5, 5, { buttons: 0 }));
+    expect(h.strokes).toHaveLength(0);
+    expect(h.layers.peek(layer.id)).toBeUndefined();
+    expect(h.requestLayerRasterization).toHaveBeenCalledWith(layer.id);
+
+    h.layers.getOrCreateRect(layer.id, { height: 10, width: 10, x: 0, y: 0 });
+    h.layers.publishPixels(layer.id);
+    down(eraser, h.ctx, pointer(5, 5));
+    up(eraser, h.ctx, pointer(5, 5, { buttons: 0 }));
+    expect(h.strokes).toHaveLength(1);
+  });
+
   it('composites a mask stroke at globalAlpha 1 even when the brush opacity is 0.5', () => {
     const doc = makeDoc([inpaintMaskLayer('mask1')], 'mask1');
     const h = createHarness(doc);
@@ -506,5 +569,117 @@ describe('mask strokes are forced opaque', () => {
     up(brush, h.ctx, pointer(40, 40));
 
     expect(lastGlobalAlpha(cacheSurface(h, 'paint1'))).toBe(0.5);
+  });
+});
+
+describe('auto-created layer rollback (a gesture that commits nothing leaves no trace)', () => {
+  /**
+   * The auto-create dispatch happens at pointer-DOWN, outside history, so a gesture
+   * producing no dirty rect must roll the layer back itself or strand it un-undoably.
+   */
+  const clipped = (doc: CanvasDocumentContractV2) => {
+    const h = createHarness(doc);
+    // Clip-to-bbox on with the stroke outside the frame, so `commit()` returns null.
+    const ctx: ToolContext = { ...h.ctx, getStrokeClipRect: () => ({ height: 10, width: 10, x: 0, y: 0 }) };
+    return { ...h, ctx };
+  };
+
+  const kinds = (h: { dispatched: CanvasProjectMutation[] }): string[] => h.dispatched.map((action) => action.type);
+
+  it('removes the layer and restores the prior selection when the stroke is fully clipped away', () => {
+    const h = clipped(makeDoc([imageLayer('img1'), paintLayer('p1')], 'img1'));
+    const brush = createBrushTool();
+
+    down(brush, h.ctx, pointer(80, 80));
+    move(brush, h.ctx, pointer(90, 90), [pointer(90, 90)]);
+    up(brush, h.ctx, pointer(90, 90));
+
+    expect(h.strokes).toHaveLength(0);
+    expect(kinds(h)).toEqual(['addCanvasLayer', 'removeCanvasLayers', 'setCanvasSelectedLayer']);
+    const removal = h.dispatched[1]!;
+    expect(removal.type === 'removeCanvasLayers' && removal.ids).toEqual([h.createdIds[0]]);
+    // The reducer's nearest-neighbour fallback would have picked the top layer.
+    const reselect = h.dispatched[2]!;
+    expect(reselect.type === 'setCanvasSelectedLayer' && reselect.id).toBe('img1');
+  });
+
+  it('drops the provisional cache entry too', () => {
+    const h = clipped(makeDoc([imageLayer('img1')], 'img1'));
+    const brush = createBrushTool();
+
+    down(brush, h.ctx, pointer(80, 80));
+    expect(h.layers.peek(h.createdIds[0]!)).toBeDefined();
+    up(brush, h.ctx, pointer(80, 80));
+
+    expect(h.layers.peek(h.createdIds[0]!)).toBeUndefined();
+  });
+
+  it('rolls back on pointercancel mid-drag', () => {
+    const h = createHarness(makeDoc([imageLayer('img1')], 'img1'));
+    const brush = createBrushTool();
+
+    down(brush, h.ctx, pointer(20, 20));
+    move(brush, h.ctx, pointer(30, 30), [pointer(30, 30)]);
+    cancel(brush, h.ctx);
+
+    expect(h.strokes).toHaveLength(0);
+    expect(kinds(h)).toEqual(['addCanvasLayer', 'removeCanvasLayers', 'setCanvasSelectedLayer']);
+    expect(h.layers.peek(h.createdIds[0]!)).toBeUndefined();
+  });
+
+  it('rolls back when the tool is switched away mid-drag', () => {
+    const h = createHarness(makeDoc([imageLayer('img1')], 'img1'));
+    const brush = createBrushTool();
+
+    down(brush, h.ctx, pointer(20, 20));
+    brush.onDeactivate?.(h.ctx, undefined);
+
+    expect(kinds(h)).toEqual(['addCanvasLayer', 'removeCanvasLayers', 'setCanvasSelectedLayer']);
+    expect(h.layers.peek(h.createdIds[0]!)).toBeUndefined();
+  });
+
+  it('does NOT roll back for a temporary tool switch (space/alt hold keeps the gesture)', () => {
+    const h = createHarness(makeDoc([imageLayer('img1')], 'img1'));
+    const brush = createBrushTool();
+
+    down(brush, h.ctx, pointer(20, 20));
+    brush.onDeactivate?.(h.ctx, { temporary: true });
+
+    expect(kinds(h)).toEqual(['addCanvasLayer']);
+    expect(h.layers.peek(h.createdIds[0]!)).toBeDefined();
+  });
+
+  it('restores a null selection when nothing was selected to begin with', () => {
+    const h = clipped(makeDoc([paintLayer('p1')], null));
+    const brush = createBrushTool();
+
+    down(brush, h.ctx, pointer(80, 80));
+    up(brush, h.ctx, pointer(80, 80));
+
+    expect(kinds(h)).toEqual(['addCanvasLayer', 'removeCanvasLayers', 'setCanvasSelectedLayer']);
+    const reselect = h.dispatched[2]!;
+    expect(reselect.type === 'setCanvasSelectedLayer' && reselect.id).toBeNull();
+  });
+
+  it('keeps the layer when the stroke DOES commit pixels', () => {
+    const h = createHarness(makeDoc([imageLayer('img1')], 'img1'));
+    const brush = createBrushTool();
+
+    down(brush, h.ctx, pointer(20, 20));
+    up(brush, h.ctx, pointer(20, 20));
+
+    expect(h.strokes).toHaveLength(1);
+    expect(kinds(h)).toEqual(['addCanvasLayer']);
+    expect(h.layers.peek(h.createdIds[0]!)).toBeDefined();
+  });
+
+  it('never rolls back a layer it did not create (an existing paint target)', () => {
+    const h = clipped(makeDoc([paintLayer('p1')], 'p1'));
+    const brush = createBrushTool();
+
+    down(brush, h.ctx, pointer(80, 80));
+    up(brush, h.ctx, pointer(80, 80));
+
+    expect(h.dispatched).toHaveLength(0);
   });
 });

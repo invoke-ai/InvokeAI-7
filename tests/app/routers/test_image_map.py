@@ -47,6 +47,8 @@ class FakeImageIndexService(ImageIndexServiceBase):
         self.text_unavailable = False
         self.embedded_texts: list[str] = []
         self.embedded_images: list = []
+        self.vocab_invalidations = 0
+        self.vocab_state: tuple[str, str | None] = ("idle", None)
 
     @property
     def model_id(self) -> str | None:
@@ -94,6 +96,15 @@ class FakeImageIndexService(ImageIndexServiceBase):
         # phrase i points along axis i.
         vocabulary = ["alpha", "beta", "gamma", "delta"]
         return vocabulary, np.eye(DIM, dtype=np.float32)
+
+    def invalidate_vocab(self) -> None:
+        self.vocab_invalidations += 1
+        self.vocab_state = ("building", None)
+
+    def get_vocab_build_state(self) -> tuple[str, str | None]:
+        if self._model_id is None:
+            return "unavailable", None
+        return self.vocab_state
 
     def request_projection(
         self,
@@ -1104,3 +1115,239 @@ def test_cluster_labels_empty_without_projection(client: TestClient) -> None:
         "updated_at": None,
         "visible_hash": None,
     }
+
+
+# --- Supplementary vocabulary ---
+
+
+def test_vocab_get_returns_terms_and_state(
+    mock_invoker: Invoker, image_index_service: FakeImageIndexService, client: TestClient
+) -> None:
+    _records(mock_invoker).set_custom_vocab_terms(["zebra", "aardvark"])
+
+    body = client.get("/api/v1/image_map/vocab").json()
+
+    assert body["terms"] == ["aardvark", "zebra"]
+    assert body["state"] == "idle"
+    assert body["error"] is None
+    # The client sizes its input constraints from these.
+    assert body["max_terms"] > 0
+    assert body["max_term_length"] > 0
+
+
+def test_vocab_get_reports_unavailable_when_indexer_not_running(
+    image_index_service: FakeImageIndexService, client: TestClient
+) -> None:
+    image_index_service._model_id = None
+    body = client.get("/api/v1/image_map/vocab").json()
+    # Terms are still served: they persist and apply when indexing next runs.
+    assert body["state"] == "unavailable"
+
+
+def test_vocab_put_normalizes_dedupes_stores_and_invalidates(
+    mock_invoker: Invoker, image_index_service: FakeImageIndexService, client: TestClient
+) -> None:
+    response = client.put(
+        "/api/v1/image_map/vocab",
+        json={"terms": ["  Golden   Retriever ", "golden retriever", "", "Zebra"]},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["terms"] == ["golden retriever", "zebra"]
+    assert body["state"] == "building"
+    # Stored, and the embedding cache was invalidated after the commit.
+    assert _records(mock_invoker).get_custom_vocab_terms() == ["golden retriever", "zebra"]
+    assert image_index_service.vocab_invalidations == 1
+
+
+def test_vocab_put_replaces_rather_than_merges(mock_invoker: Invoker, client: TestClient) -> None:
+    client.put("/api/v1/image_map/vocab", json={"terms": ["zebra"]})
+    client.put("/api/v1/image_map/vocab", json={"terms": ["okapi"]})
+    assert _records(mock_invoker).get_custom_vocab_terms() == ["okapi"]
+
+    client.put("/api/v1/image_map/vocab", json={"terms": []})
+    assert _records(mock_invoker).get_custom_vocab_terms() == []
+
+
+def test_vocab_put_rejects_an_overlong_term_and_stores_nothing(
+    mock_invoker: Invoker, image_index_service: FakeImageIndexService, client: TestClient
+) -> None:
+    _records(mock_invoker).set_custom_vocab_terms(["zebra"])
+
+    response = client.put("/api/v1/image_map/vocab", json={"terms": ["ok", "x" * 65]})
+
+    assert response.status_code == 422
+    assert "64" in response.json()["detail"]
+    # The stored list is untouched and nothing was invalidated.
+    assert _records(mock_invoker).get_custom_vocab_terms() == ["zebra"]
+    assert image_index_service.vocab_invalidations == 0
+
+
+def test_vocab_put_rejects_too_many_terms(mock_invoker: Invoker, client: TestClient) -> None:
+    response = client.put("/api/v1/image_map/vocab", json={"terms": [f"term {i}" for i in range(501)]})
+    assert response.status_code == 422
+    assert _records(mock_invoker).get_custom_vocab_terms() == []
+
+
+def test_vocab_writes_are_admin_only(multiuser, mock_invoker: Invoker, client: TestClient) -> None:
+    _create_user(mock_invoker, "admin@test.com", is_admin=True)
+    _create_user(mock_invoker, "user1@test.com")
+    admin_headers = _login(client, "admin@test.com")
+    user_headers = _login(client, "user1@test.com")
+
+    denied = client.put("/api/v1/image_map/vocab", json={"terms": ["zebra"]}, headers=user_headers)
+    assert denied.status_code == 403
+    assert _records(mock_invoker).get_custom_vocab_terms() == []
+
+    allowed = client.put("/api/v1/image_map/vocab", json={"terms": ["zebra"]}, headers=admin_headers)
+    assert allowed.status_code == 200
+
+    # The list itself is readable by any user.
+    read = client.get("/api/v1/image_map/vocab", headers=user_headers)
+    assert read.status_code == 200
+    assert read.json()["terms"] == ["zebra"]
+
+
+# --- Per-image labels ---
+
+
+def test_image_labels_rank_the_vocabulary_for_one_image(mock_invoker: Invoker, client: TestClient) -> None:
+    # Mostly axis 1, leaning to axis 0, with the rest strictly ordered below
+    # them: "beta" wins and "alpha" is the first alternate. Every component is
+    # distinct so the ranking never depends on how argpartition/argsort — both
+    # unstable — happen to break a tie.
+    vector = np.array([0.6, 0.8, 0.3, 0.1], dtype=np.float32)
+    _save_unembedded_image(mock_invoker, "leaning.png")
+    _records(mock_invoker).upsert_embedding("leaning.png", MODEL_ID, vector / np.linalg.norm(vector))
+
+    body = client.get("/api/v1/image_map/image_labels", params={"image_name": "leaning.png"}).json()
+
+    assert body["label"] == "beta"
+    assert body["alternates"] == ["alpha", "gamma"]
+    assert body["score"] == pytest.approx(0.8 / float(np.linalg.norm(vector)))
+
+    # top_k bounds the total label count (best + alternates).
+    body = client.get("/api/v1/image_map/image_labels", params={"image_name": "leaning.png", "top_k": 1}).json()
+    assert body["alternates"] == []
+
+
+def test_image_labels_unindexed_image_is_404(mock_invoker: Invoker, client: TestClient) -> None:
+    _save_unembedded_image(mock_invoker, "no-embedding.png")
+
+    response = client.get("/api/v1/image_map/image_labels", params={"image_name": "no-embedding.png"})
+
+    assert response.status_code == 404
+
+
+def test_image_labels_disabled_index_conflicts(image_index_service: FakeImageIndexService, client: TestClient) -> None:
+    image_index_service._model_id = None
+
+    assert client.get("/api/v1/image_map/image_labels", params={"image_name": "a.png"}).status_code == 409
+
+
+def test_image_labels_unavailable_text_encoder_conflicts(
+    mock_invoker: Invoker, image_index_service: FakeImageIndexService, client: TestClient
+) -> None:
+    _seed_embedded_image(mock_invoker, "a.png")
+    image_index_service.text_unavailable = True
+
+    assert client.get("/api/v1/image_map/image_labels", params={"image_name": "a.png"}).status_code == 409
+
+
+def test_multiuser_image_labels_enforce_read_access(multiuser, mock_invoker: Invoker, client: TestClient) -> None:
+    _create_user(mock_invoker, "admin@test.com", is_admin=True)
+    user1_id = _create_user(mock_invoker, "user1@test.com")
+    _create_user(mock_invoker, "user2@test.com")
+    user2_headers = _login(client, "user2@test.com")
+
+    # user1's private image: user2 must not learn its labels (or that it has any).
+    _seed_embedded_image(mock_invoker, "private1.png", user_id=user1_id)
+    response = client.get(
+        "/api/v1/image_map/image_labels", params={"image_name": "private1.png"}, headers=user2_headers
+    )
+
+    assert response.status_code == 403
+
+
+def _seed_degenerate_embedding(mock_invoker: Invoker, image_name: str, vector: np.ndarray) -> None:
+    """Write an embedding blob straight to the table, bypassing the writer's guards.
+
+    `embedding_to_blob` refuses non-finite and all-zero vectors, but rows
+    predating that guard are still in existing databases, and the read path
+    validates only the blob's length.
+    """
+    _save_unembedded_image(mock_invoker, image_name)
+    records = _records(mock_invoker)
+    blob = np.ascontiguousarray(vector, dtype=np.float32).tobytes()
+    with records._db.transaction() as cursor:
+        cursor.execute(
+            "INSERT INTO image_embeddings (image_name, model_id, dim, embedding) VALUES (?, ?, ?, ?);",
+            (image_name, MODEL_ID, vector.shape[0], blob),
+        )
+
+
+@pytest.mark.parametrize(
+    "vector",
+    [
+        pytest.param(np.full(DIM, np.nan, dtype=np.float32), id="non-finite"),
+        pytest.param(np.zeros(DIM, dtype=np.float32), id="all-zero"),
+    ],
+)
+def test_image_labels_refuse_a_degenerate_stored_embedding(
+    mock_invoker: Invoker, client: TestClient, vector: np.ndarray
+) -> None:
+    """A degenerate row must not yield confident nonsense.
+
+    Normalizing by a zero or non-finite norm makes every score NaN, and
+    argpartition then returns arbitrary rows — three unrelated vocabulary
+    phrases presented as this image's tags, with a `score` that serializes as
+    JSON null against a schema declaring it a float.
+    """
+    _seed_degenerate_embedding(mock_invoker, "degenerate.png", vector)
+
+    response = client.get("/api/v1/image_map/image_labels", params={"image_name": "degenerate.png"})
+
+    assert response.status_code == 404
+    assert "label" not in response.json(), "a refusal must not carry an arbitrary vocabulary phrase"
+    # The row IS present: this must be the degenerate-vector refusal, not the
+    # not-indexed 404, or the test would pass without exercising the guard.
+    assert response.json()["detail"] == "This image's stored embedding cannot be labeled"
+
+
+def test_image_labels_corrupt_blob_is_404_not_500(mock_invoker: Invoker, client: TestClient) -> None:
+    """A row whose blob length disagrees with its `dim` column.
+
+    `blob_to_embedding` raises on it. Unhandled that is a 500, and because
+    this endpoint is driven by pointer movement it would refire several times
+    a second for as long as the point is hovered.
+    """
+    _save_unembedded_image(mock_invoker, "corrupt.png")
+    records = _records(mock_invoker)
+    with records._db.transaction() as cursor:
+        cursor.execute(
+            "INSERT INTO image_embeddings (image_name, model_id, dim, embedding) VALUES (?, ?, ?, ?);",
+            ("corrupt.png", MODEL_ID, DIM, np.zeros(DIM - 1, dtype=np.float32).tobytes()),
+        )
+
+    response = client.get("/api/v1/image_map/image_labels", params={"image_name": "corrupt.png"})
+
+    assert response.status_code == 404
+
+
+def test_image_labels_dim_mismatch_with_the_vocabulary_is_404_not_500(
+    mock_invoker: Invoker, client: TestClient
+) -> None:
+    """A stored embedding from a different-width model than the vocab matrix."""
+    _save_unembedded_image(mock_invoker, "wide.png")
+    records = _records(mock_invoker)
+    wide = np.ones(DIM + 3, dtype=np.float32)
+    with records._db.transaction() as cursor:
+        cursor.execute(
+            "INSERT INTO image_embeddings (image_name, model_id, dim, embedding) VALUES (?, ?, ?, ?);",
+            ("wide.png", MODEL_ID, wide.shape[0], wide.tobytes()),
+        )
+
+    response = client.get("/api/v1/image_map/image_labels", params={"image_name": "wide.png"})
+
+    assert response.status_code == 404

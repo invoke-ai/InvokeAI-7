@@ -32,6 +32,14 @@ describe('built-in layout preset descriptors', () => {
       },
       {
         defaultKeys: ['alt+3'],
+        defaultRoute: { destination: 'gallery', sourceId: 'video' },
+        hotkeyId: 'selectVideoPreset',
+        iconId: 'clapperboard',
+        label: 'Video',
+        presetId: 'video',
+      },
+      {
+        defaultKeys: ['alt+4'],
         defaultRoute: { destination: 'gallery', sourceId: 'workflow' },
         hotkeyId: 'selectAutomatePreset',
         iconId: 'workflow',
@@ -90,6 +98,16 @@ describe('built-in layout preset descriptors', () => {
         left: ['generate', 'upscale', 'video'],
         panels: { isBottomOpen: false, isLeftOpen: true, isRightOpen: true },
         right: ['layers', 'preview', 'gallery', 'image-map', 'queue'],
+      },
+      video: {
+        active: { bottom: 'gallery:bottom', center: 'preview', left: 'video', right: 'gallery' },
+        bottom: ['server-status', 'queue-status', 'gallery:bottom', 'notifications', 'autosave-status'],
+        center: ['preview'],
+        // Video leads the rail; Generate and Upscale stay behind it so a still
+        // can be set up without leaving the arrangement.
+        left: ['video', 'generate', 'upscale'],
+        panels: { isBottomOpen: false, isLeftOpen: true, isRightOpen: true },
+        right: ['gallery', 'image-map', 'queue'],
       },
     });
   });

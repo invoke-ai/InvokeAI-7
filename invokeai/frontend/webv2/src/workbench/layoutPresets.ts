@@ -140,9 +140,9 @@ const createPresetDescriptor = ({
 });
 
 /**
- * The three shipped presets. Each combines an arrangement with an editable
- * default route. The route is explicit preset data rather than something
- * inferred from whichever graph widgets happen to be placed in the layout.
+ * The shipped presets. Each combines an arrangement with an editable default
+ * route. The route is explicit preset data rather than something inferred from
+ * whichever graph widgets happen to be placed in the layout.
  */
 export const builtInLayoutPresetDescriptors: BuiltInLayoutPresetDescriptor[] = [
   createPresetDescriptor({
@@ -218,8 +218,43 @@ export const builtInLayoutPresetDescriptors: BuiltInLayoutPresetDescriptor[] = [
     },
   }),
   createPresetDescriptor({
-    centerViewId: 'workflow',
+    centerViewId: 'preview',
     defaultKeys: ['alt+3'],
+    defaultRoute: { destination: 'gallery', sourceId: 'video' },
+    hotkeyId: 'selectVideoPreset',
+    id: 'video',
+    iconId: 'clapperboard',
+    label: BUILT_IN_LAYOUT_PRESET_LABELS.video,
+    panels: { isBottomOpen: false, isLeftOpen: true, isRightOpen: true },
+    widgetRegions: {
+      bottom: createRegion({
+        activeInstanceId: 'gallery:bottom',
+        instanceIds: defaultBottomInstanceIds,
+        isCollapsed: true,
+        sizePx: 180,
+      }),
+      center: createRegion({
+        activeInstanceId: 'preview',
+        instanceIds: ['preview'],
+        sizePx: 0,
+      }),
+      // Video leads the rail, with the other two graph widgets behind it so a
+      // still can be set up without leaving the arrangement.
+      left: createRegion({
+        activeInstanceId: 'video',
+        instanceIds: ['video', 'generate', 'upscale'],
+        sizePx: 450,
+      }),
+      right: createRegion({
+        activeInstanceId: 'gallery',
+        instanceIds: ['gallery', 'image-map', 'queue'],
+        sizePx: 450,
+      }),
+    },
+  }),
+  createPresetDescriptor({
+    centerViewId: 'workflow',
+    defaultKeys: ['alt+4'],
     defaultRoute: { destination: 'gallery', sourceId: 'workflow' },
     hotkeyId: 'selectAutomatePreset',
     id: 'automate',

@@ -120,6 +120,14 @@ describe('createHistory: byte-budget eviction', () => {
   it('exports the 256 MB default byte budget', () => {
     expect(HISTORY_BYTE_BUDGET).toBe(256 * 1024 * 1024);
   });
+
+  it('reports whether one entry can remain undoable after eviction', () => {
+    const history = createHistory({ byteBudget: 25 });
+
+    expect(history.canRetain(25)).toBe(true);
+    expect(history.canRetain(26)).toBe(false);
+    expect(history.canRetain(Number.POSITIVE_INFINITY)).toBe(false);
+  });
 });
 
 describe('createHistory: change listener', () => {
@@ -498,5 +506,25 @@ describe('createHistory: failure-atomic replay', () => {
     history.undo();
     history.undo();
     expect(log).toEqual(['undo:newest', 'undo:middle']);
+  });
+
+  it('disposes entries whenever stack ownership permanently ends', () => {
+    const disposed: string[] = [];
+    const entry = (label: string) => ({
+      ...makeEntry(label, []),
+      dispose: () => disposed.push(label),
+    });
+    const history = createHistory({ maxEntries: 1 });
+
+    history.push(entry('evicted'));
+    history.push(entry('redo-cleared'));
+    expect(disposed).toEqual(['evicted']);
+    history.undo();
+    history.push(entry('amended'));
+    expect(disposed).toEqual(['evicted', 'redo-cleared']);
+    history.amendLast(entry('cleared'));
+    expect(disposed).toEqual(['evicted', 'redo-cleared', 'amended']);
+    history.clear();
+    expect(disposed).toEqual(['evicted', 'redo-cleared', 'amended', 'cleared']);
   });
 });

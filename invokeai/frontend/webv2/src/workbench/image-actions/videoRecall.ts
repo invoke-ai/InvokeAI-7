@@ -4,7 +4,6 @@ import type {
   LoraModelConfig,
   MainModelConfig,
 } from '@features/generation/contracts';
-import type { ProjectPromptDraftPatch } from '@features/generation/settings';
 import type { VideoAspectRatioId, VideoTargetResolution, VideoWidgetValues } from '@features/video';
 
 import { isLoraCompatibleWithModel, isLoraModelConfig, SEED_MAX } from '@features/generation/settings';
@@ -75,8 +74,6 @@ export type VideoRecalledField =
 
 export interface VideoRecallResult {
   fields: VideoRecalledField[];
-  /** Prompt fields live in the shared project draft, not the widget values. */
-  promptPatch: ProjectPromptDraftPatch | null;
   values: VideoWidgetValues;
 }
 
@@ -361,7 +358,10 @@ export const buildVideoRecallSettings = ({
 
   const fields: VideoRecalledField[] = [];
   let values: VideoWidgetValues = { ...currentValues };
-  let promptPatch: ProjectPromptDraftPatch | null = null;
+  // Held aside rather than folded into `values` where it is read: the model
+  // transition below rebuilds `values` from the recalled family's defaults, and
+  // recalled prompts must survive that. Merged in at each return instead.
+  let promptPatch: Partial<VideoWidgetValues> | null = null;
   const mediaNames: VideoRecallMediaNames = {
     firstFrameName: null,
     lastFrameName: null,
@@ -389,7 +389,7 @@ export const buildVideoRecallSettings = ({
   }
 
   if (kind === 'prompts') {
-    return fields.length > 0 ? { fields, mediaNames, promptPatch, values } : null;
+    return fields.length > 0 ? { fields, mediaNames, values: { ...values, ...promptPatch } } : null;
   }
 
   if (kind === 'all' || kind === 'seed') {
@@ -402,7 +402,7 @@ export const buildVideoRecallSettings = ({
   }
 
   if (kind === 'seed') {
-    return fields.length > 0 ? { fields, mediaNames, promptPatch, values } : null;
+    return fields.length > 0 ? { fields, mediaNames, values: { ...values, ...promptPatch } } : null;
   }
 
   // all / remix from here on.
@@ -424,7 +424,7 @@ export const buildVideoRecallSettings = ({
   if (!model) {
     // Without any model, nothing below can validate; prompts/seed may still
     // have been recalled.
-    return fields.length > 0 ? { fields, mediaNames, promptPatch, values } : null;
+    return fields.length > 0 ? { fields, mediaNames, values: { ...values, ...promptPatch } } : null;
   }
 
   const numFrames = getInteger(metadata, 'num_frames');
@@ -551,7 +551,7 @@ export const buildVideoRecallSettings = ({
     fields.push('media');
   }
 
-  return fields.length > 0 ? { fields, mediaNames, promptPatch, values } : null;
+  return fields.length > 0 ? { fields, mediaNames, values: { ...values, ...promptPatch } } : null;
 };
 
 const VIDEO_RECALL_TITLES: Record<VideoRecallKind, string> = {

@@ -154,7 +154,7 @@ describe('buildVideoRecallSettings', () => {
   const catalog = [WAN_T2V, WAN_I2V, h3Model(), LIGHTNING_HIGH, LIGHTNING_LOW];
   const currentValues = { ...createDefaultVideoWidgetValues([h3Model()]) };
 
-  it('routes prompts into the shared draft patch, not the widget values', () => {
+  it('recalls prompts into the video widget values, leaving everything else alone', () => {
     const result = buildVideoRecallSettings({
       currentValues,
       kind: 'prompts',
@@ -163,12 +163,12 @@ describe('buildVideoRecallSettings', () => {
     });
 
     expect(result?.fields).toEqual(['prompts']);
-    expect(result?.promptPatch).toEqual({
+    expect(result?.values).toEqual({
+      ...currentValues,
       negativePrompt: 'blurry',
       negativePromptEnabled: true,
       positivePrompt: 'a red fox running',
     });
-    expect(result?.values).toEqual(currentValues);
   });
 
   it('recalls only the seed for the seed verb', () => {
@@ -340,7 +340,7 @@ describe('buildVideoRecallSettings', () => {
       models: catalog,
     });
 
-    expect(empty?.promptPatch).toEqual({ positivePrompt: 'a red fox running' });
+    expect(empty?.values).toEqual({ ...currentValues, positivePrompt: 'a red fox running' });
 
     const explicitNull = buildVideoRecallSettings({
       currentValues,
@@ -349,7 +349,7 @@ describe('buildVideoRecallSettings', () => {
       models: catalog,
     });
 
-    expect(explicitNull?.promptPatch).toMatchObject({ negativePrompt: '', negativePromptEnabled: false });
+    expect(explicitNull?.values).toMatchObject({ negativePrompt: '', negativePromptEnabled: false });
   });
 
   it('clears current LoRAs when the recorded ones are no longer installed', () => {

@@ -112,7 +112,7 @@ export const VideoWidgetView = () => {
   const selection = useVideoUi();
   const models = useModelsSelector((snapshot) => snapshot.models);
   const modelsStatus = useModelsSelector((snapshot) => snapshot.status);
-  const { patchPromptDraft: patchDraft, patchValues, projectId, promptDraft, rawValues } = selection;
+  const { patchValues, projectId, rawValues } = selection;
   // Normalizing and reconciling against the model list is the widget's most
   // expensive derivation; it must not run on unrelated re-renders, and a fresh
   // `values` identity would re-render every section below.
@@ -325,17 +325,42 @@ export const VideoWidgetView = () => {
         values={values}
       />
 
+      {/* Tier-1, like Generate's model card: which model you are running is the
+          choice every field below is conditioned on, so it sits above the
+          prompt rather than inside a collapsed section. */}
+      {/* `px` matches the inset the prompt block and every section body carry,
+          so the picker lines up with the fields below it — Generate's card can
+          skip it only because its neighbours sit flush too. */}
+      <Stack gap="1" px="2" py="1">
+        <Field
+          error={values.model ? undefined : t('widgets.video.modelRequired')}
+          hint="model"
+          label={t('widgets.video.mainModel')}
+        >
+          <ModelSelect
+            filter={isVideoModelSelectable}
+            invalid={!values.model}
+            modelTypes={MAIN_MODEL_TYPES}
+            placeholder={t('widgets.video.selectModel')}
+            size="xs"
+            value={values.model?.key ?? null}
+            onChange={selectMainModel}
+          />
+        </Field>
+      </Stack>
+
       <VideoPromptFields
         loras={values.loras}
         model={values.model}
         negativeHelpText={policy.prompt.negativeHelpText}
+        negativePrompt={values.negativePrompt}
+        negativePromptEnabled={values.negativePromptEnabled}
         negativePromptHeightPx={values.negativePromptHeightPx}
         negativeVisible={policy.prompt.negativeVisible}
+        positivePrompt={values.positivePrompt}
         positivePromptHeightPx={values.positivePromptHeightPx}
         projectId={projectId}
-        promptDraft={promptDraft}
         showSyntaxHighlighting={selection.showPromptSyntaxHighlighting}
-        onPatchPromptDraft={patchDraft}
         onPatchValues={patch}
       />
 
@@ -464,22 +489,9 @@ export const VideoWidgetView = () => {
         </Stack>
       </GenerationSettingsSection>
 
-      <GenerationSettingsSection label={t('widgets.video.model')} sectionId="video-model" defaultOpen>
+      {/* Sampling and variation — how the model renders, not which model it is. */}
+      <GenerationSettingsSection label={t('widgets.video.render')} sectionId="video-render" defaultOpen>
         <Stack gap="3" p="2">
-          <Field
-            error={values.model ? undefined : t('widgets.video.modelRequired')}
-            label={t('widgets.video.mainModel')}
-          >
-            <ModelSelect
-              filter={isVideoModelSelectable}
-              invalid={!values.model}
-              modelTypes={MAIN_MODEL_TYPES}
-              placeholder={t('widgets.video.selectModel')}
-              size="xs"
-              value={values.model?.key ?? null}
-              onChange={selectMainModel}
-            />
-          </Field>
           {policy.ui.accelerator && values.model ? (
             <Field
               helpText={t('widgets.video.acceleratorHelp', {

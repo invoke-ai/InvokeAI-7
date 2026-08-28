@@ -5088,6 +5088,7 @@
             "required": false,
             "schema": {
               "type": "integer",
+              "minimum": 0,
               "description": "The page offset",
               "default": 0,
               "title": "Offset"
@@ -5100,6 +5101,8 @@
             "required": false,
             "schema": {
               "type": "integer",
+              "maximum": 1000,
+              "minimum": 0,
               "description": "The number of images per page",
               "default": 10,
               "title": "Limit"
@@ -6605,6 +6608,68 @@
         }
       }
     },
+    "/api/v1/image_map/image_labels": {
+      "get": {
+        "tags": ["image_map"],
+        "summary": "Get Image Map Image Labels",
+        "description": "Labels one image with the vocabulary phrases most similar to its stored embedding.\n\nServes map hover cards, so it only covers images the index has embedded;\nan unindexed image (assets, intermediates, not-yet-indexed) is a 404\nrather than an on-demand embed \u2014 a hover must never queue encoder work.\nRequires the embedding model's text encoder, like /cluster_labels.",
+        "operationId": "get_image_map_image_labels",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "image_name",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "The image to label",
+              "title": "Image Name"
+            },
+            "description": "The image to label"
+          },
+          {
+            "name": "top_k",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 10,
+              "minimum": 1,
+              "description": "Number of candidate labels",
+              "default": 3,
+              "title": "Top K"
+            },
+            "description": "Number of candidate labels"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImageMapImageLabelsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/image_map/refresh": {
       "post": {
         "tags": ["image_map"],
@@ -6618,6 +6683,74 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ImageMapRefreshResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/image_map/vocab": {
+      "get": {
+        "tags": ["image_map"],
+        "summary": "Get Image Map Vocab",
+        "description": "Gets the supplementary cluster-labeling vocabulary.\n\nThe list is server-wide: cluster labels are computed against one shared\nvocabulary. Readable by any user; only admins may change it.",
+        "operationId": "get_image_map_vocab",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImageMapVocabResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      },
+      "put": {
+        "tags": ["image_map"],
+        "summary": "Update Image Map Vocab",
+        "description": "Replaces the supplementary cluster-labeling vocabulary. Admin-only.\n\nThe stored embeddings are invalidated and rebuilt in the background (the\nresponse's `state` reflects this); labels served in the meantime still use\nthe previous vocabulary. Works while the index is disabled too \u2014 terms\npersist and take effect when indexing next runs.",
+        "operationId": "update_image_map_vocab",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImageMapVocabUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImageMapVocabResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -13991,10 +14124,18 @@
             "type": "array",
             "title": "Added Images",
             "description": "The image names that were added to the board"
+          },
+          "failed_images": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Failed Images",
+            "description": "The names of authorized images that could not be added"
           }
         },
         "type": "object",
-        "required": ["affected_boards", "added_images"],
+        "required": ["affected_boards", "added_images", "failed_images"],
         "title": "AddImagesToBoardResult"
       },
       "AddInvocation": {
@@ -14822,6 +14963,343 @@
         "version": "1.8.0",
         "output": {
           "$ref": "#/components/schemas/LatentsOutput"
+        }
+      },
+      "AnimaDenoiseMetaInvocation": {
+        "category": "metadata",
+        "class": "invocation",
+        "classification": "prototype",
+        "description": "Run denoising process with an Anima transformer model + metadata.",
+        "node_pack": "invokeai",
+        "properties": {
+          "metadata": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MetadataField"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Optional metadata to be saved with the image",
+            "field_kind": "internal",
+            "input": "connection",
+            "orig_required": false,
+            "ui_hidden": false
+          },
+          "id": {
+            "description": "The id of this instance of an invocation. Must be unique among all instances of invocations.",
+            "field_kind": "node_attribute",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_intermediate": {
+            "default": false,
+            "description": "Whether or not this is an intermediate invocation.",
+            "field_kind": "node_attribute",
+            "input": "direct",
+            "orig_required": true,
+            "title": "Is Intermediate",
+            "type": "boolean",
+            "ui_hidden": false,
+            "ui_type": "IsIntermediate"
+          },
+          "use_cache": {
+            "default": true,
+            "description": "Whether or not to use the cache",
+            "field_kind": "node_attribute",
+            "title": "Use Cache",
+            "type": "boolean"
+          },
+          "latents": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LatentsField"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Latents tensor",
+            "field_kind": "input",
+            "input": "connection",
+            "orig_default": null,
+            "orig_required": false
+          },
+          "noise": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LatentsField"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Noise tensor",
+            "field_kind": "input",
+            "input": "connection",
+            "orig_default": null,
+            "orig_required": false
+          },
+          "denoise_mask": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DenoiseMaskField"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "A mask of the region to apply the denoising process to. Values of 0.0 represent the regions to be fully denoised, and 1.0 represent the regions to be preserved.",
+            "field_kind": "input",
+            "input": "connection",
+            "orig_default": null,
+            "orig_required": false
+          },
+          "denoising_start": {
+            "default": 0.0,
+            "description": "When to start denoising, expressed a percentage of total steps",
+            "field_kind": "input",
+            "input": "any",
+            "maximum": 1,
+            "minimum": 0,
+            "orig_default": 0.0,
+            "orig_required": false,
+            "title": "Denoising Start",
+            "type": "number"
+          },
+          "denoising_end": {
+            "default": 1.0,
+            "description": "When to stop denoising, expressed a percentage of total steps",
+            "field_kind": "input",
+            "input": "any",
+            "maximum": 1,
+            "minimum": 0,
+            "orig_default": 1.0,
+            "orig_required": false,
+            "title": "Denoising End",
+            "type": "number"
+          },
+          "add_noise": {
+            "default": true,
+            "description": "Add noise based on denoising start.",
+            "field_kind": "input",
+            "input": "any",
+            "orig_default": true,
+            "orig_required": false,
+            "title": "Add Noise",
+            "type": "boolean"
+          },
+          "transformer": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TransformerField"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Anima transformer model.",
+            "field_kind": "input",
+            "input": "connection",
+            "orig_required": true,
+            "title": "Transformer"
+          },
+          "positive_conditioning": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AnimaConditioningField"
+              },
+              {
+                "items": {
+                  "$ref": "#/components/schemas/AnimaConditioningField"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Positive conditioning tensor",
+            "field_kind": "input",
+            "input": "connection",
+            "orig_required": true,
+            "title": "Positive Conditioning"
+          },
+          "negative_conditioning": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AnimaConditioningField"
+              },
+              {
+                "items": {
+                  "$ref": "#/components/schemas/AnimaConditioningField"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Negative conditioning tensor",
+            "field_kind": "input",
+            "input": "connection",
+            "orig_default": null,
+            "orig_required": false,
+            "title": "Negative Conditioning"
+          },
+          "guidance_scale": {
+            "default": 4.5,
+            "description": "Guidance scale for classifier-free guidance. Recommended: 4.0-5.0 for Anima.",
+            "field_kind": "input",
+            "input": "any",
+            "minimum": 1.0,
+            "orig_default": 4.5,
+            "orig_required": false,
+            "title": "Guidance Scale",
+            "type": "number"
+          },
+          "width": {
+            "default": 1024,
+            "description": "Width of the generated image.",
+            "field_kind": "input",
+            "input": "any",
+            "multipleOf": 8,
+            "orig_default": 1024,
+            "orig_required": false,
+            "title": "Width",
+            "type": "integer"
+          },
+          "height": {
+            "default": 1024,
+            "description": "Height of the generated image.",
+            "field_kind": "input",
+            "input": "any",
+            "multipleOf": 8,
+            "orig_default": 1024,
+            "orig_required": false,
+            "title": "Height",
+            "type": "integer"
+          },
+          "steps": {
+            "default": 30,
+            "description": "Number of denoising steps. 30 recommended for Anima.",
+            "exclusiveMinimum": 0,
+            "field_kind": "input",
+            "input": "any",
+            "orig_default": 30,
+            "orig_required": false,
+            "title": "Steps",
+            "type": "integer"
+          },
+          "seed": {
+            "default": 0,
+            "description": "Randomness seed for reproducibility.",
+            "field_kind": "input",
+            "input": "any",
+            "orig_default": 0,
+            "orig_required": false,
+            "title": "Seed",
+            "type": "integer"
+          },
+          "control_lllite": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AnimaLLLiteField"
+              },
+              {
+                "items": {
+                  "$ref": "#/components/schemas/AnimaLLLiteField"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Anima ControlNet-LLLite conditioning (e.g. inpaint adapter, control layers). Adapters are applied in a deterministic order (sorted by model key); each model may be used at most once.",
+            "field_kind": "input",
+            "input": "connection",
+            "orig_default": null,
+            "orig_required": false,
+            "title": "Control Lllite"
+          },
+          "scheduler": {
+            "default": "euler",
+            "description": "Scheduler (sampler) for the denoising process.",
+            "enum": ["euler", "heun", "dpmpp_2m", "dpmpp_2m_sde", "er_sde", "lcm"],
+            "field_kind": "input",
+            "input": "any",
+            "orig_default": "euler",
+            "orig_required": false,
+            "title": "Scheduler",
+            "type": "string",
+            "ui_choice_labels": {
+              "dpmpp_2m": "DPM++ 2M",
+              "dpmpp_2m_sde": "DPM++ 2M SDE",
+              "er_sde": "ER-SDE",
+              "euler": "Euler",
+              "heun": "Heun (2nd order)",
+              "lcm": "LCM"
+            }
+          },
+          "type": {
+            "const": "anima_denoise_meta",
+            "default": "anima_denoise_meta",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          },
+          "vae": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/VAEField"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Optional. The Anima VAE, recorded to metadata so recall can restore the VAE selection.",
+            "field_kind": "input",
+            "input": "connection",
+            "orig_default": null,
+            "orig_required": false,
+            "title": "VAE"
+          },
+          "qwen3_encoder": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Qwen3EncoderField"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Optional. The Anima Qwen3 encoder, recorded to metadata so recall can restore the encoder selection.",
+            "field_kind": "input",
+            "input": "connection",
+            "orig_default": null,
+            "orig_required": false,
+            "title": "Qwen3 Encoder"
+          }
+        },
+        "required": ["type", "id"],
+        "tags": ["anima", "latents", "denoise", "txt2img", "t2i", "t2l", "img2img", "i2i", "l2l"],
+        "title": "Denoise - Anima + Metadata",
+        "type": "object",
+        "version": "1.0.0",
+        "output": {
+          "$ref": "#/components/schemas/LatentsMetaOutput"
         }
       },
       "AnimaImageToLatentsInvocation": {
@@ -17385,9 +17863,11 @@
           },
           "image_names": {
             "items": {
-              "type": "string"
+              "type": "string",
+              "maxLength": 255
             },
             "type": "array",
+            "maxItems": 1000,
             "title": "Image Names",
             "description": "The names of the images to add"
           }
@@ -17415,7 +17895,8 @@
         "properties": {
           "image_names": {
             "items": {
-              "type": "string"
+              "type": "string",
+              "maxLength": 255
             },
             "type": "array",
             "maxItems": 1000,
@@ -17536,9 +18017,11 @@
         "properties": {
           "image_names": {
             "items": {
-              "type": "string"
+              "type": "string",
+              "maxLength": 255
             },
             "type": "array",
+            "maxItems": 1000,
             "title": "Image Names",
             "description": "The list of names of images to delete"
           }
@@ -17565,9 +18048,11 @@
             "anyOf": [
               {
                 "items": {
-                  "type": "string"
+                  "type": "string",
+                  "maxLength": 255
                 },
-                "type": "array"
+                "type": "array",
+                "maxItems": 1000
               },
               {
                 "type": "null"
@@ -17613,9 +18098,11 @@
         "properties": {
           "image_names": {
             "items": {
-              "type": "string"
+              "type": "string",
+              "maxLength": 255
             },
             "type": "array",
+            "maxItems": 1000,
             "title": "Image Names",
             "description": "Object containing list of image names to fetch DTOs for"
           }
@@ -17723,9 +18210,11 @@
         "properties": {
           "image_names": {
             "items": {
-              "type": "string"
+              "type": "string",
+              "maxLength": 255
             },
             "type": "array",
+            "maxItems": 1000,
             "title": "Image Names",
             "description": "The names of the images to remove"
           }
@@ -17782,9 +18271,11 @@
         "properties": {
           "image_names": {
             "items": {
-              "type": "string"
+              "type": "string",
+              "maxLength": 255
             },
             "type": "array",
+            "maxItems": 1000,
             "title": "Image Names",
             "description": "The list of names of images to star"
           }
@@ -17797,9 +18288,11 @@
         "properties": {
           "image_names": {
             "items": {
-              "type": "string"
+              "type": "string",
+              "maxLength": 255
             },
             "type": "array",
+            "maxItems": 1000,
             "title": "Image Names",
             "description": "The list of names of images to unstar"
           }
@@ -25721,7 +26214,7 @@
           }
         },
         "type": "object",
-        "required": ["affected_boards", "deleted_images"],
+        "required": ["affected_boards", "deleted_images", "failed_images"],
         "title": "DeleteImagesResult"
       },
       "DeleteOrphanedModelsRequest": {
@@ -36527,6 +37020,9 @@
                   "$ref": "#/components/schemas/AnimaDenoiseInvocation"
                 },
                 {
+                  "$ref": "#/components/schemas/AnimaDenoiseMetaInvocation"
+                },
+                {
                   "$ref": "#/components/schemas/AnimaImageToLatentsInvocation"
                 },
                 {
@@ -42430,6 +42926,32 @@
         "title": "ImageMapClusterLabelsResponse",
         "description": "Automatic labels for the current user's visible clusters, keyed by cluster id."
       },
+      "ImageMapImageLabelsResponse": {
+        "properties": {
+          "label": {
+            "type": "string",
+            "title": "Label",
+            "description": "Best-matching vocabulary phrase"
+          },
+          "alternates": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Alternates",
+            "description": "Runner-up phrases"
+          },
+          "score": {
+            "type": "number",
+            "title": "Score",
+            "description": "Cosine similarity of the best phrase to the image's embedding"
+          }
+        },
+        "type": "object",
+        "required": ["label", "alternates", "score"],
+        "title": "ImageMapImageLabelsResponse",
+        "description": "The best vocabulary labels for one image."
+      },
       "ImageMapPoint": {
         "properties": {
           "x": {
@@ -42683,6 +43205,67 @@
         "required": ["enabled", "projection"],
         "title": "ImageMapStatusResponse",
         "description": "Combined index + projection status for the current user."
+      },
+      "ImageMapVocabResponse": {
+        "properties": {
+          "terms": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Terms",
+            "description": "The stored supplementary terms, normalized, sorted alphabetically"
+          },
+          "state": {
+            "type": "string",
+            "enum": ["unavailable", "idle", "building", "ready", "error"],
+            "title": "State",
+            "description": "unavailable: the index is not running; idle: embeddings will build when labels are next requested; building: an embedding (re)build is queued or running; ready: embeddings are serving; error: the last build failed (see error)"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error",
+            "description": "Why the last embedding build failed; only set on error"
+          },
+          "max_terms": {
+            "type": "integer",
+            "title": "Max Terms",
+            "description": "Maximum number of supplementary terms the server accepts"
+          },
+          "max_term_length": {
+            "type": "integer",
+            "title": "Max Term Length",
+            "description": "Maximum length of one term, in characters"
+          }
+        },
+        "type": "object",
+        "required": ["terms", "state", "max_terms", "max_term_length"],
+        "title": "ImageMapVocabResponse",
+        "description": "The supplementary cluster-labeling vocabulary and its embedding build state."
+      },
+      "ImageMapVocabUpdate": {
+        "properties": {
+          "terms": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 500,
+            "title": "Terms",
+            "description": "The full supplementary term list; replaces what is stored. Terms are normalized (lowercased, whitespace collapsed) and deduplicated server-side."
+          }
+        },
+        "type": "object",
+        "required": ["terms"],
+        "title": "ImageMapVocabUpdate",
+        "description": "Replacement supplementary vocabulary."
       },
       "ImageMaskToTensorInvocation": {
         "category": "mask",
@@ -45503,6 +46086,9 @@
                 "$ref": "#/components/schemas/AnimaDenoiseInvocation"
               },
               {
+                "$ref": "#/components/schemas/AnimaDenoiseMetaInvocation"
+              },
+              {
                 "$ref": "#/components/schemas/AnimaImageToLatentsInvocation"
               },
               {
@@ -46896,6 +47482,9 @@
                 "$ref": "#/components/schemas/AnimaDenoiseInvocation"
               },
               {
+                "$ref": "#/components/schemas/AnimaDenoiseMetaInvocation"
+              },
+              {
                 "$ref": "#/components/schemas/AnimaImageToLatentsInvocation"
               },
               {
@@ -47888,6 +48477,9 @@
           "anima_denoise": {
             "$ref": "#/components/schemas/LatentsOutput"
           },
+          "anima_denoise_meta": {
+            "$ref": "#/components/schemas/LatentsMetaOutput"
+          },
           "anima_i2l": {
             "$ref": "#/components/schemas/LatentsOutput"
           },
@@ -48830,6 +49422,7 @@
           "alibabacloud_image_generation",
           "alpha_mask_to_tensor",
           "anima_denoise",
+          "anima_denoise_meta",
           "anima_i2l",
           "anima_l2i",
           "anima_lllite",
@@ -49218,6 +49811,9 @@
               },
               {
                 "$ref": "#/components/schemas/AnimaDenoiseInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/AnimaDenoiseMetaInvocation"
               },
               {
                 "$ref": "#/components/schemas/AnimaImageToLatentsInvocation"
@@ -50302,6 +50898,9 @@
               },
               {
                 "$ref": "#/components/schemas/AnimaDenoiseInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/AnimaDenoiseMetaInvocation"
               },
               {
                 "$ref": "#/components/schemas/AnimaImageToLatentsInvocation"
@@ -51884,7 +52483,7 @@
             "type": "string",
             "title": "Image Index Model",
             "description": "Name of the installed CLIP Vision or SigLIP model used to embed gallery images. Changing the model discards embeddings computed by the previous model.",
-            "default": "clip-vit-large-patch14"
+            "default": "DFN2B-CLIP-ViT-L-14-39B"
           },
           "image_index_device": {
             "anyOf": [
@@ -81931,10 +82530,18 @@
             "type": "array",
             "title": "Removed Images",
             "description": "The image names that were removed from their board"
+          },
+          "failed_images": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Failed Images",
+            "description": "The names of authorized images that could not be removed"
           }
         },
         "type": "object",
-        "required": ["affected_boards", "removed_images"],
+        "required": ["affected_boards", "removed_images", "failed_images"],
         "title": "RemoveImagesFromBoardResult"
       },
       "RemoveVideosFromBoardResult": {
@@ -86667,10 +87274,18 @@
             "type": "array",
             "title": "Starred Images",
             "description": "The names of the images that were starred"
+          },
+          "failed_images": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Failed Images",
+            "description": "The names of images that were not starred"
           }
         },
         "type": "object",
-        "required": ["affected_boards", "starred_images"],
+        "required": ["affected_boards", "starred_images", "failed_images"],
         "title": "StarredImagesResult"
       },
       "StarredVideosResult": {
@@ -91433,10 +92048,18 @@
             "type": "array",
             "title": "Unstarred Images",
             "description": "The names of the images that were unstarred"
+          },
+          "failed_images": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Failed Images",
+            "description": "The names of images that were not unstarred"
           }
         },
         "type": "object",
-        "required": ["affected_boards", "unstarred_images"],
+        "required": ["affected_boards", "unstarred_images", "failed_images"],
         "title": "UnstarredImagesResult"
       },
       "UnstarredVideosResult": {

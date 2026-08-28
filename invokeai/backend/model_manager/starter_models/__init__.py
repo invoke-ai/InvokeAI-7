@@ -48,6 +48,9 @@ from invokeai.backend.model_manager.starter_models.common import (
     clip_vit_l_image_encoder as clip_vit_l_image_encoder,
 )
 from invokeai.backend.model_manager.starter_models.common import (
+    dfn2b_clip_vit_l_image_encoder as dfn2b_clip_vit_l_image_encoder,
+)
+from invokeai.backend.model_manager.starter_models.common import (
     esrgan_srx4 as esrgan_srx4,
 )
 from invokeai.backend.model_manager.starter_models.common import (
@@ -759,7 +762,7 @@ STARTER_MODELS: list[StarterModel] = [
     t5_gguf_q3_k_s_encoder,
     t5_gguf_q6_k_encoder,
     clip_l_encoder,
-    clip_vit_l_image_encoder,
+    dfn2b_clip_vit_l_image_encoder,
     siglip,
     flux_redux,
     llava_onevision,

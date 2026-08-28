@@ -43,6 +43,8 @@ export interface HistoryEntry {
    * stack, preventing a retry from applying the same mutation twice.
    */
   readonly replayFailureAtomic?: boolean;
+  /** Releases resources retained only by this entry when it is permanently dropped. */
+  readonly dispose?: () => void;
   /** Reverts the change. Must not push new history entries. */
   undo(): void;
   /** Re-applies the change. Must not push new history entries. */
@@ -82,6 +84,8 @@ export interface History {
   clear(): void;
   /** Current retained bytes across undo and redo stacks. */
   byteSize(): number;
+  /** Whether one entry can remain undoable after normal oldest-entry eviction. */
+  canRetain(bytes: number): boolean;
   /** Evicts oldest entries until retained bytes are at or below `budgetBytes`. */
   trimToBytes(budgetBytes: number): void;
   /** Subscribes to any change in `canUndo`/`canRedo`. Returns an unsubscribe function. */
@@ -96,6 +100,15 @@ export const createHistory = (opts: CreateHistoryOptions = {}): History => {
   const undoStack: HistoryEntry[] = [];
   const redoStack: HistoryEntry[] = [];
   const listeners = new Set<() => void>();
+
+  const disposeEntry = (entry: HistoryEntry): void => {
+    try {
+      entry.dispose?.();
+    } catch {
+      // Stack ownership has already ended. Resource cleanup cannot restore the
+      // entry and must not prevent the remaining history from being released.
+    }
+  };
 
   // Running byte totals, kept in sync with the stacks so eviction is O(1) per drop.
   let undoBytes = 0;
@@ -118,7 +131,8 @@ export const createHistory = (opts: CreateHistoryOptions = {}): History => {
     if (redoStack.length === 0) {
       return;
     }
-    redoStack.length = 0;
+    const discarded = redoStack.splice(0);
+    discarded.forEach(disposeEntry);
     redoBytes = 0;
   };
 
@@ -128,12 +142,14 @@ export const createHistory = (opts: CreateHistoryOptions = {}): History => {
       const evicted = undoStack.shift();
       if (evicted) {
         undoBytes -= evicted.bytes;
+        disposeEntry(evicted);
       }
     }
     while (undoBytes + redoBytes > byteBudget && undoStack.length > 0) {
       const evicted = undoStack.shift();
       if (evicted) {
         undoBytes -= evicted.bytes;
+        disposeEntry(evicted);
       }
     }
   };
@@ -141,6 +157,7 @@ export const createHistory = (opts: CreateHistoryOptions = {}): History => {
   const push = (entry: HistoryEntry): void => {
     // Replaying an entry must never record a new one; drop it defensively.
     if (applying) {
+      disposeEntry(entry);
       return;
     }
     clearRedo();
@@ -154,6 +171,7 @@ export const createHistory = (opts: CreateHistoryOptions = {}): History => {
 
   const amendLast = (entry: HistoryEntry): void => {
     if (applying) {
+      disposeEntry(entry);
       return;
     }
     if (undoStack.length === 0) {
@@ -164,6 +182,7 @@ export const createHistory = (opts: CreateHistoryOptions = {}): History => {
     const replaced = undoStack.pop();
     if (replaced) {
       undoBytes -= replaced.bytes;
+      disposeEntry(replaced);
     }
     undoStack.push(entry);
     undoBytes += entry.bytes;
@@ -284,8 +303,10 @@ export const createHistory = (opts: CreateHistoryOptions = {}): History => {
     if (undoStack.length === 0 && redoStack.length === 0) {
       return;
     }
+    const discarded = [...undoStack, ...redoStack];
     undoStack.length = 0;
     redoStack.length = 0;
+    discarded.forEach(disposeEntry);
     undoBytes = 0;
     redoBytes = 0;
     notify();
@@ -298,6 +319,7 @@ export const createHistory = (opts: CreateHistoryOptions = {}): History => {
       const evicted = undoStack.shift();
       if (evicted) {
         undoBytes -= evicted.bytes;
+        disposeEntry(evicted);
         changed = true;
       }
     }
@@ -305,6 +327,7 @@ export const createHistory = (opts: CreateHistoryOptions = {}): History => {
       const evicted = redoStack.shift();
       if (evicted) {
         redoBytes -= evicted.bytes;
+        disposeEntry(evicted);
         changed = true;
       }
     }
@@ -316,6 +339,7 @@ export const createHistory = (opts: CreateHistoryOptions = {}): History => {
   return {
     amendLast,
     byteSize: () => undoBytes + redoBytes,
+    canRetain: (bytes) => Number.isFinite(bytes) && Math.max(0, Math.ceil(bytes)) <= byteBudget,
     canRedo: () => redoStack.length > 0,
     canUndo: () => undoStack.length > 0,
     clear,
