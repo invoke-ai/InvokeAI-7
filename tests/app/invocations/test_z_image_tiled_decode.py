@@ -7,7 +7,7 @@ import torch
 from diffusers.models.autoencoders.autoencoder_kl import AutoencoderKL
 
 from invokeai.app.invocations.z_image_latents_to_image import ZImageLatentsToImageInvocation
-from invokeai.backend.flux.modules.autoencoder import DEFAULT_TILE_SAMPLE_MIN_SIZE
+from invokeai.backend.flux.modules.autoencoder import DEFAULT_TILE_SAMPLE_MIN_SIZE, MIN_TILE_SAMPLE_SIZE
 from invokeai.backend.flux.modules.autoencoder import AutoEncoder as FluxAutoEncoder
 from invokeai.backend.util.vae_working_memory import estimate_vae_working_memory_flux
 
@@ -47,24 +47,33 @@ class TestFluxWorkingMemoryEstimate:
         )
         assert tiled < untiled
 
-    def test_tile_size_zero_resolves_against_the_vae(self):
+    def test_the_sentinel_does_not_read_the_size_off_the_vae(self):
+        """Upstream #9427 found this exact shape of bug in the Qwen estimator: reading
+        `vae.tile_sample_min_size` returns whatever the *previous* invocation left on the cached
+        module, not the default this node is asking for."""
         vae = _mock_flux_vae()
-        vae.tile_sample_min_size = 384
+        vae.tile_sample_min_size = 384  # as if a previous run had set it
         estimate = estimate_vae_working_memory_flux(
             operation="decode", image_tensor=torch.zeros(1, 16, 192, 192), vae=vae, tile_size=0
         )
-        assert estimate == int(384 * 384 * 2 * 2200 * 1.25)
+        assert estimate == int(DEFAULT_TILE_SAMPLE_MIN_SIZE**2 * 2 * 2200 * 1.25)
 
-    def test_tile_size_zero_on_a_vae_without_a_default_does_not_raise(self):
+    def test_the_sentinel_works_on_a_vae_without_that_attribute_at_all(self):
         # The Z-Image nodes also hand a diffusers AutoencoderKL to this estimator; the SD1/SDXL
         # sibling dereferences `vae.tile_sample_min_size` directly and would raise here.
         vae = MagicMock(spec=AutoencoderKL)
-        vae.parameters.return_value = iter([torch.zeros(1, dtype=torch.float16)])
+        vae.parameters.side_effect = lambda: iter([torch.zeros(1, dtype=torch.float16)])
         del vae.tile_sample_min_size
         estimate = estimate_vae_working_memory_flux(
             operation="decode", image_tensor=torch.zeros(1, 16, 192, 192), vae=vae, tile_size=0
         )
         assert estimate == int(DEFAULT_TILE_SAMPLE_MIN_SIZE**2 * 2 * 2200 * 1.25)
+
+    def test_a_tile_below_the_cost_floor_is_estimated_at_the_floor(self):
+        estimate = estimate_vae_working_memory_flux(
+            operation="decode", image_tensor=torch.zeros(1, 16, 192, 192), vae=_mock_flux_vae(), tile_size=8
+        )
+        assert estimate == int(MIN_TILE_SAMPLE_SIZE**2 * 2 * 2200 * 1.25)
 
 
 def _build_decode_mocks(latents: torch.Tensor, decoded: torch.Tensor, force_tiled_decode: bool = False):
@@ -109,10 +118,20 @@ class TestTilingIsWired:
         vae.disable_tiling.assert_called_once()
         vae.enable_tiling.assert_not_called()
 
+    def test_the_tiling_state_is_restored_after_the_invocation(self):
+        """The VAE belongs to the model cache and is shared with nodes that never touch the flag --
+        FLUX.1 encode, PiD, Anima's FLUX branch. A tiled run must not leave them tiled."""
+        vae, _, context = _build_decode_mocks(torch.zeros(1, 16, 64, 64), torch.zeros(1, 3, 512, 512))
+        vae.use_tiling = False
+        vae.tile_sample_min_size = DEFAULT_TILE_SAMPLE_MIN_SIZE
+        _build_invocation(tiled=True, tile_size=256).invoke(context)
+        assert vae.use_tiling is False
+        assert vae.tile_sample_min_size == DEFAULT_TILE_SAMPLE_MIN_SIZE
+
     def test_the_node_field_reaches_the_tiled_path(self):
         vae, _, context = _build_decode_mocks(torch.zeros(1, 16, 64, 64), torch.zeros(1, 3, 512, 512))
         _build_invocation(tiled=True).invoke(context)
-        vae.enable_tiling.assert_called_once_with()
+        vae.enable_tiling.assert_called_once_with(tile_sample_min_size=DEFAULT_TILE_SAMPLE_MIN_SIZE)
         vae.disable_tiling.assert_not_called()
 
     def test_force_tiled_decode_reaches_the_tiled_path(self):
@@ -121,7 +140,7 @@ class TestTilingIsWired:
             torch.zeros(1, 16, 64, 64), torch.zeros(1, 3, 512, 512), force_tiled_decode=True
         )
         _build_invocation().invoke(context)
-        vae.enable_tiling.assert_called_once_with()
+        vae.enable_tiling.assert_called_once_with(tile_sample_min_size=DEFAULT_TILE_SAMPLE_MIN_SIZE)
 
     def test_a_requested_tile_size_is_passed_through(self):
         vae, _, context = _build_decode_mocks(torch.zeros(1, 16, 64, 64), torch.zeros(1, 3, 512, 512))
@@ -155,7 +174,7 @@ class TestOomFallback:
         result = _build_invocation().invoke(context)
 
         assert vae.decode.call_count == 2
-        vae.enable_tiling.assert_called_once_with()
+        vae.enable_tiling.assert_called_once_with(tile_sample_min_size=DEFAULT_TILE_SAMPLE_MIN_SIZE)
         assert result.width == 512
 
     def test_a_non_oom_error_propagates_without_a_retry(self):

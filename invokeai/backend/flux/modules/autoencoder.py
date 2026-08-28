@@ -16,6 +16,27 @@ from invokeai.backend.tiles.utils import TBLR, Tile
 DEFAULT_TILE_SAMPLE_MIN_SIZE = 512
 DEFAULT_TILE_OVERLAP = 128
 
+# A cost floor, not a correctness one: the geometry stays valid all the way down, but the tile count
+# grows with the inverse square of the tile size. At 2048x2048 a 128px tile already emits 289 tiles;
+# a 16px tile would emit ~16k, and the per-tile kernel-launch overhead dominates long before that.
+# Small tiles are also measurably less accurate (see `enable_tiling`), so the low end of the node
+# field is clamped rather than honoured literally.
+MIN_TILE_SAMPLE_SIZE = 128
+
+
+def resolve_tile_size(tile_size: int) -> int:
+    """Resolve a node's ``tile_size`` field to the size the autoencoder will actually use.
+
+    ``tile_size <= 0`` is the nodes' "use the default" sentinel -- the workflow UI cannot represent
+    ``None`` in a number input and sends 0, and a negative value is not worth failing a generation
+    over. It resolves to the module-level default rather than to whatever is currently set on the
+    VAE: the instance belongs to the model cache, so reading it back would return whatever the
+    previous invocation left there.
+    """
+    if tile_size <= 0:
+        return DEFAULT_TILE_SAMPLE_MIN_SIZE
+    return max(tile_size, MIN_TILE_SAMPLE_SIZE)
+
 
 @dataclass
 class AutoEncoderParams:

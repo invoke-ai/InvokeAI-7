@@ -22,6 +22,7 @@ from invokeai.backend.flux.modules.autoencoder import AutoEncoder as FluxAutoEnc
 from invokeai.backend.stable_diffusion.extensions.seamless import SeamlessExt
 from invokeai.backend.util.devices import TorchDevice
 from invokeai.backend.util.oom import is_oom_error
+from invokeai.backend.util.vae_tiling_scope import scoped_vae_tiling
 from invokeai.backend.util.vae_working_memory import estimate_vae_working_memory_flux
 
 # Z-Image can use either the Diffusers AutoencoderKL or the FLUX AutoEncoder
@@ -88,10 +89,6 @@ class ZImageLatentsToImageInvocation(BaseInvocation, WithMetadata, WithBoard):
             # wrongly place the latents (and thus the whole decode) on the CPU (see #9373).
             latents = latents.to(device=vae_info.compute_device, dtype=vae_dtype)
 
-            # The VAE instance is cached and shared across invocations, so the tiling state is always
-            # set explicitly -- otherwise one tiled run would leave every later run tiled.
-            self._set_tiling(vae, enabled=use_tiling)
-
             # Clear memory as VAE decode can request a lot
             TorchDevice.empty_cache()
 
@@ -111,9 +108,13 @@ class ZImageLatentsToImageInvocation(BaseInvocation, WithMetadata, WithBoard):
                     return vae.decode(latents)
                 return vae.decode(latents, return_dict=False)[0]
 
+            # The VAE belongs to the model cache and is shared with every other node that reaches
+            # this class -- FLUX.1 decode and encode, Anima, PiD. Tiling is a property of this one
+            # decode, not of the model, so the state is scoped and restored rather than left behind.
             with torch.inference_mode():
                 try:
-                    img = decode()
+                    with scoped_vae_tiling(vae, self.tile_size if use_tiling else None):
+                        img = decode()
                 except RuntimeError as e:
                     if use_tiling or not is_oom_error(e):
                         raise
@@ -121,8 +122,8 @@ class ZImageLatentsToImageInvocation(BaseInvocation, WithMetadata, WithBoard):
                     # tiling, which caps the peak allocation regardless of resolution.
                     context.util.signal_progress("VAE decode ran out of memory, retrying tiled")
                     TorchDevice.empty_cache()
-                    self._set_tiling(vae, enabled=True)
-                    img = decode()
+                    with scoped_vae_tiling(vae, self.tile_size):
+                        img = decode()
 
             img = img.clamp(-1, 1)
             img = rearrange(img[0], "c h w -> h w c")
@@ -133,12 +134,3 @@ class ZImageLatentsToImageInvocation(BaseInvocation, WithMetadata, WithBoard):
         image_dto = context.images.save(image=img_pil)
 
         return ImageOutput.build(image_dto)
-
-    def _set_tiling(self, vae: ZImageVAE, enabled: bool) -> None:
-        """Set the VAE's tiling state explicitly, in whichever class's spelling applies."""
-        if not enabled:
-            vae.disable_tiling()
-        elif isinstance(vae, FluxAutoEncoder) and self.tile_size:
-            vae.enable_tiling(tile_sample_min_size=self.tile_size)
-        else:
-            vae.enable_tiling()

@@ -7,7 +7,7 @@ from diffusers.models.autoencoders.autoencoder_kl_wan import AutoencoderKLWan
 from diffusers.models.autoencoders.autoencoder_tiny import AutoencoderTiny
 
 from invokeai.app.invocations.constants import LATENT_SCALE_FACTOR
-from invokeai.backend.flux.modules.autoencoder import DEFAULT_TILE_SAMPLE_MIN_SIZE, AutoEncoder
+from invokeai.backend.flux.modules.autoencoder import AutoEncoder, resolve_tile_size
 
 _WAN_VAE_SINGLE_FRAME_DECODE_SCALING_CONSTANT = 2900
 _WAN_VAE_VIDEO_DECODE_SCALING_CONSTANT_A14B = 6500
@@ -84,9 +84,8 @@ def estimate_vae_working_memory_flux(
 
     `tile_size` is in output pixels and defaults to None, i.e. a single-pass decode -- the six
     existing call sites depend on that signature. When set, the estimate is bounded by one tile
-    instead of the whole image, because a tiled decode never holds more than that. `tile_size=0`
-    means "whatever the VAE's own default is"; a VAE that has no such default falls back to the
-    autoencoder's tile size.
+    instead of the whole image, because a tiled decode never holds more than that. `tile_size <= 0`
+    is the nodes' "use the default" sentinel; see `resolve_tile_size`.
     """
 
     latent_scale_factor_for_operation = LATENT_SCALE_FACTOR if operation == "decode" else 1
@@ -97,14 +96,10 @@ def estimate_vae_working_memory_flux(
     scaling_constant = 2200 if operation == "decode" else 1100
 
     if tile_size is not None:
-        if tile_size == 0:
-            # Not every VAE reaching this estimator is an InvokeAI AutoEncoder -- the Z-Image nodes
-            # also pass a diffusers AutoencoderKL -- so this cannot dereference the attribute the way
-            # estimate_vae_working_memory_sd15_sdxl does.
-            tile_size = getattr(vae, "tile_sample_min_size", DEFAULT_TILE_SAMPLE_MIN_SIZE)
-            assert isinstance(tile_size, int)
-        out_h = tile_size
-        out_w = tile_size
+        # Resolved against a module-level constant, never by reading `vae.tile_sample_min_size`: the
+        # VAE belongs to the model cache, so that attribute reflects whatever the previous
+        # invocation set rather than the default this node is asking for.
+        out_h = out_w = resolve_tile_size(tile_size)
         # A 25% margin for tile overlap and the number of tiles, mirroring the SD1/SDXL estimator.
         working_memory = out_h * out_w * element_size * scaling_constant * 1.25
     else:

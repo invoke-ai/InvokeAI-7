@@ -19,6 +19,7 @@ from invokeai.backend.flux.modules.autoencoder import AutoEncoder
 from invokeai.backend.model_manager.load.load_base import LoadedModel
 from invokeai.backend.util.devices import TorchDevice
 from invokeai.backend.util.oom import is_oom_error
+from invokeai.backend.util.vae_tiling_scope import scoped_vae_tiling
 from invokeai.backend.util.vae_working_memory import estimate_vae_working_memory_flux
 
 
@@ -79,19 +80,20 @@ class FluxVaeDecodeInvocation(BaseInvocation, WithMetadata, WithBoard):
                     return vae.decode(latents)
                 return vae.decode(latents, return_dict=False)[0]
 
-            # This node has no tiling controls, so the tiling state of the shared, cached VAE
-            # instance is set explicitly rather than inherited from whoever decoded last.
-            vae.disable_tiling()
+            # This node has no tiling controls, so it decodes untiled -- but says so explicitly
+            # rather than inheriting whatever the last node to touch this shared, cached VAE left
+            # behind, and restores that state afterwards.
             try:
-                img = decode()
+                with scoped_vae_tiling(vae, None):
+                    img = decode()
             except RuntimeError as e:
                 if not is_oom_error(e):
                     raise
                 # The working-memory estimate was insufficient on this system. Retry once with
                 # tiling, which caps the peak allocation regardless of resolution.
                 TorchDevice.empty_cache()
-                vae.enable_tiling()
-                img = decode()
+                with scoped_vae_tiling(vae, 0):
+                    img = decode()
 
         img = img.clamp(-1, 1)
         img = rearrange(img[0], "c h w -> h w c")  # noqa: F821
