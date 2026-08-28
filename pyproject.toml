@@ -408,8 +408,8 @@ exclude = ["tests/*"]
 follow_imports = "skip" # skips type checking of the modules listed below
 module = [
   "invokeai.app.api.routers.models",
-  "invokeai.app.invocations.compel",
-  "invokeai.app.invocations.denoise_latents",
+  "invokeai.app.invocations.text_encoder.compel",
+  "invokeai.app.invocations.sd.denoise_latents",
   "invokeai.app.services.invocation_stats.invocation_stats_default",
   "invokeai.app.services.model_manager.model_manager_base",
   "invokeai.app.services.model_manager.model_manager_default",

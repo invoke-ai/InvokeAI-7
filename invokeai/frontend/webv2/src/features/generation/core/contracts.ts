@@ -61,6 +61,7 @@ export type KnownGenerationModelBase =
   | 'flux'
   | 'flux2'
   | 'cogview4'
+  | 'ernie-image'
   | 'qwen-image'
   | 'z-image'
   | 'ideogram-4'

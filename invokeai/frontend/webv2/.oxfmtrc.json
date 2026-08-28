@@ -4,7 +4,12 @@
   "bracketSameLine": false,
   "bracketSpacing": true,
   "endOfLine": "lf",
-  "ignorePatterns": ["dist/**", "node_modules/**", "stats.html"],
+  "ignorePatterns": [
+    "dist/**",
+    "node_modules/**",
+    "stats.html",
+    "src/features/generation/core/__snapshots__/generateGraphNodeTypes.json"
+  ],
   "printWidth": 120,
   "semi": true,
   "singleQuote": true,

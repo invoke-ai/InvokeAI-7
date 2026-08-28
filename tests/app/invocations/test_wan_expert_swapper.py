@@ -21,7 +21,7 @@ import pytest
 import torch
 import torch.nn as nn
 
-from invokeai.app.invocations.wan_denoise import _ExpertSwapper
+from invokeai.app.invocations.wan.wan_denoise import _ExpertSwapper
 from invokeai.backend.patches.model_patch_raw import ModelPatchRaw
 
 
@@ -170,7 +170,7 @@ def test_lifecycle_high_only():
 
     stub, calls = _stub_lora_context_manager(log)
     with patch(
-        "invokeai.app.invocations.wan_denoise.LayerPatcher.apply_smart_model_patches",
+        "invokeai.app.invocations.wan.wan_denoise.LayerPatcher.apply_smart_model_patches",
         side_effect=stub,
     ):
         swapper = _ExpertSwapper(
@@ -210,7 +210,7 @@ def test_lifecycle_dual_expert_swap():
 
     stub, calls = _stub_lora_context_manager(log)
     with patch(
-        "invokeai.app.invocations.wan_denoise.LayerPatcher.apply_smart_model_patches",
+        "invokeai.app.invocations.wan.wan_denoise.LayerPatcher.apply_smart_model_patches",
         side_effect=stub,
     ):
         swapper = _ExpertSwapper(
@@ -264,7 +264,7 @@ def test_quantized_flag_forwards_to_sidecar():
 
     stub, calls = _stub_lora_context_manager(log)
     with patch(
-        "invokeai.app.invocations.wan_denoise.LayerPatcher.apply_smart_model_patches",
+        "invokeai.app.invocations.wan.wan_denoise.LayerPatcher.apply_smart_model_patches",
         side_effect=stub,
     ):
         swapper = _ExpertSwapper(
@@ -289,7 +289,7 @@ def test_no_lora_factory_skips_lora_context():
 
     stub, calls = _stub_lora_context_manager(log)
     with patch(
-        "invokeai.app.invocations.wan_denoise.LayerPatcher.apply_smart_model_patches",
+        "invokeai.app.invocations.wan.wan_denoise.LayerPatcher.apply_smart_model_patches",
         side_effect=stub,
     ):
         swapper = _ExpertSwapper(
@@ -321,7 +321,7 @@ def test_repeat_get_same_label_is_a_no_op():
 
     stub, calls = _stub_lora_context_manager(log)
     with patch(
-        "invokeai.app.invocations.wan_denoise.LayerPatcher.apply_smart_model_patches",
+        "invokeai.app.invocations.wan.wan_denoise.LayerPatcher.apply_smart_model_patches",
         side_effect=stub,
     ):
         swapper = _ExpertSwapper(
@@ -362,7 +362,7 @@ def test_lazy_load_per_swap_not_upfront():
 
     stub, _ = _stub_lora_context_manager(log)
     with patch(
-        "invokeai.app.invocations.wan_denoise.LayerPatcher.apply_smart_model_patches",
+        "invokeai.app.invocations.wan.wan_denoise.LayerPatcher.apply_smart_model_patches",
         side_effect=stub,
     ):
         # Construction alone must not trigger any models.load call.
@@ -415,10 +415,10 @@ def test_empty_cache_called_on_swap():
     stub, _ = _stub_lora_context_manager(log)
     with (
         patch(
-            "invokeai.app.invocations.wan_denoise.LayerPatcher.apply_smart_model_patches",
+            "invokeai.app.invocations.wan.wan_denoise.LayerPatcher.apply_smart_model_patches",
             side_effect=stub,
         ),
-        patch("invokeai.app.invocations.wan_denoise.TorchDevice.empty_cache") as empty_cache_mock,
+        patch("invokeai.app.invocations.wan.wan_denoise.TorchDevice.empty_cache") as empty_cache_mock,
     ):
         swapper = _ExpertSwapper(
             context=ctx,
@@ -463,7 +463,7 @@ def test_outgoing_expert_force_unloaded_from_vram():
 
     stub, _ = _stub_lora_context_manager(log)
     with patch(
-        "invokeai.app.invocations.wan_denoise.LayerPatcher.apply_smart_model_patches",
+        "invokeai.app.invocations.wan.wan_denoise.LayerPatcher.apply_smart_model_patches",
         side_effect=stub,
     ):
         swapper = _ExpertSwapper(
@@ -515,7 +515,7 @@ def test_device_context_released_when_lora_enter_raises():
             return False
 
     with patch(
-        "invokeai.app.invocations.wan_denoise.LayerPatcher.apply_smart_model_patches",
+        "invokeai.app.invocations.wan.wan_denoise.LayerPatcher.apply_smart_model_patches",
         side_effect=lambda **_kwargs: _RaisingLoraStub(),
     ):
         swapper = _ExpertSwapper(
@@ -553,7 +553,7 @@ def test_device_context_released_when_lora_exit_raises():
             raise RuntimeError("LoRA weight restore blew up")
 
     with patch(
-        "invokeai.app.invocations.wan_denoise.LayerPatcher.apply_smart_model_patches",
+        "invokeai.app.invocations.wan.wan_denoise.LayerPatcher.apply_smart_model_patches",
         side_effect=lambda **_kwargs: _ExitRaisingLoraStub(),
     ):
         swapper = _ExpertSwapper(
@@ -593,7 +593,7 @@ def test_force_unload_failure_does_not_break_swap():
 
     stub, _ = _stub_lora_context_manager(log)
     with patch(
-        "invokeai.app.invocations.wan_denoise.LayerPatcher.apply_smart_model_patches",
+        "invokeai.app.invocations.wan.wan_denoise.LayerPatcher.apply_smart_model_patches",
         side_effect=stub,
     ):
         swapper = _ExpertSwapper(
@@ -631,7 +631,7 @@ def test_slots_cleared_when_device_exit_raises():
     ctx = _FakeContext({"high": _ExitRaisingInfo("HIGH", high_nn, log)}, log)
     stub, _calls = _stub_lora_context_manager(log)
     with patch(
-        "invokeai.app.invocations.wan_denoise.LayerPatcher.apply_smart_model_patches",
+        "invokeai.app.invocations.wan.wan_denoise.LayerPatcher.apply_smart_model_patches",
         side_effect=stub,
     ):
         swapper = _ExpertSwapper(

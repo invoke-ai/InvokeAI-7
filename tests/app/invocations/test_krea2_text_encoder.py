@@ -5,8 +5,8 @@ import pytest
 import torch
 
 from invokeai.app.invocations.fields import TensorField
-from invokeai.app.invocations.krea2_text_encoder import Krea2TextEncoderInvocation
 from invokeai.app.invocations.model import LoRAField, ModelIdentifierField, Qwen3VLEncoderField
+from invokeai.app.invocations.text_encoder.krea2_text_encoder import Krea2TextEncoderInvocation
 from invokeai.backend.model_manager.taxonomy import BaseModelType, ModelType, SubModelType
 from invokeai.backend.patches.lora_conversions.krea2_lora_constants import KREA2_LORA_QWEN3VL_PREFIX
 from invokeai.backend.patches.model_patch_raw import ModelPatchRaw
@@ -105,10 +105,10 @@ def test_encode_applies_qwen3_vl_lora_and_returns_selected_hidden_layers(monkeyp
         return nullcontext()
 
     monkeypatch.setattr(
-        "invokeai.app.invocations.krea2_text_encoder.LayerPatcher.apply_smart_model_patches", apply_patches
+        "invokeai.app.invocations.text_encoder.krea2_text_encoder.LayerPatcher.apply_smart_model_patches", apply_patches
     )
     monkeypatch.setattr(
-        "invokeai.app.invocations.krea2_text_encoder.TorchDevice.choose_bfloat16_safe_dtype",
+        "invokeai.app.invocations.text_encoder.krea2_text_encoder.TorchDevice.choose_bfloat16_safe_dtype",
         lambda _device: torch.float32,
     )
 
@@ -136,7 +136,7 @@ def test_encode_rejects_a_loaded_non_patch_lora(monkeypatch) -> None:
         return nullcontext()
 
     monkeypatch.setattr(
-        "invokeai.app.invocations.krea2_text_encoder.LayerPatcher.apply_smart_model_patches", apply_patches
+        "invokeai.app.invocations.text_encoder.krea2_text_encoder.LayerPatcher.apply_smart_model_patches", apply_patches
     )
 
     with pytest.raises(TypeError, match="Expected ModelPatchRaw"):
@@ -147,7 +147,7 @@ def test_encode_preserves_suffix_for_a_prompt_that_overflows_truncation(monkeypa
     # Regression: a prompt longer than the tokenizer budget must NOT lose the assistant-turn suffix. The
     # encoder tokenizes (prefix + prompt) with truncation and appends the suffix AFTER, so the final tokens
     # always end with the suffix template (building one string and truncating it would cut the suffix off).
-    from invokeai.app.invocations.krea2_text_encoder import _KREA2_SUFFIX
+    from invokeai.app.invocations.text_encoder.krea2_text_encoder import _KREA2_SUFFIX
 
     suffix_ids = [901, 902, 903, 904, 905]
 
@@ -213,11 +213,11 @@ def test_encode_preserves_suffix_for_a_prompt_that_overflows_truncation(monkeypa
     )
 
     monkeypatch.setattr(
-        "invokeai.app.invocations.krea2_text_encoder.LayerPatcher.apply_smart_model_patches",
+        "invokeai.app.invocations.text_encoder.krea2_text_encoder.LayerPatcher.apply_smart_model_patches",
         lambda **_kwargs: nullcontext(),
     )
     monkeypatch.setattr(
-        "invokeai.app.invocations.krea2_text_encoder.TorchDevice.choose_bfloat16_safe_dtype",
+        "invokeai.app.invocations.text_encoder.krea2_text_encoder.TorchDevice.choose_bfloat16_safe_dtype",
         lambda _device: torch.float32,
     )
 
@@ -240,7 +240,7 @@ def test_encode_preserves_suffix_for_a_prompt_that_overflows_truncation(monkeypa
 
 
 def test_encode_uses_reference_fixed_length_layout_and_position_ids(monkeypatch) -> None:
-    from invokeai.app.invocations.krea2_text_encoder import _KREA2_SUFFIX
+    from invokeai.app.invocations.text_encoder.krea2_text_encoder import _KREA2_SUFFIX
 
     captured: dict = {}
 
@@ -312,11 +312,11 @@ def test_encode_uses_reference_fixed_length_layout_and_position_ids(monkeypatch)
     )
 
     monkeypatch.setattr(
-        "invokeai.app.invocations.krea2_text_encoder.LayerPatcher.apply_smart_model_patches",
+        "invokeai.app.invocations.text_encoder.krea2_text_encoder.LayerPatcher.apply_smart_model_patches",
         lambda **_kwargs: nullcontext(),
     )
     monkeypatch.setattr(
-        "invokeai.app.invocations.krea2_text_encoder.TorchDevice.choose_bfloat16_safe_dtype",
+        "invokeai.app.invocations.text_encoder.krea2_text_encoder.TorchDevice.choose_bfloat16_safe_dtype",
         lambda _device: torch.float32,
     )
 

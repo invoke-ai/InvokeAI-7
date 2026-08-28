@@ -2,11 +2,15 @@ import math
 from typing import Tuple
 
 from invokeai.app.invocations.baseinvocation import BaseInvocation, BaseInvocationOutput, invocation, invocation_output
-from invokeai.app.invocations.constants import LATENT_SCALE_FACTOR
 from invokeai.app.invocations.fields import FieldDescriptions, InputField, OutputField
 from invokeai.app.invocations.model import UNetField
 from invokeai.app.services.shared.invocation_context import InvocationContext
-from invokeai.backend.model_manager.taxonomy import BaseModelType
+from invokeai.backend.architectures import (
+    ArchitectureError,
+    FeaturesFacet,
+    require,
+    resolve_default_settings,
+)
 
 
 @invocation_output("ideal_size_output")
@@ -36,28 +40,25 @@ class IdealSizeInvocation(BaseInvocation):
         "initial generation artifacts if too large)",
     )
 
-    def trim_to_multiple_of(self, *args: int, multiple_of: int = LATENT_SCALE_FACTOR) -> Tuple[int, ...]:
+    def trim_to_multiple_of(self, *args: int, multiple_of: int) -> Tuple[int, ...]:
         return tuple((x - x % multiple_of) for x in args)
 
     def invoke(self, context: InvocationContext) -> IdealSizeOutput:
         unet_config = context.models.get_config(self.unet.unet.key)
         aspect = self.width / self.height
 
-        if unet_config.base == BaseModelType.StableDiffusion1:
-            dimension = 512
-        elif unet_config.base == BaseModelType.StableDiffusion2:
-            dimension = 768
-        elif unet_config.base in (
-            BaseModelType.StableDiffusionXL,
-            BaseModelType.Flux,
-            BaseModelType.Flux2,
-            BaseModelType.StableDiffusion3,
-        ):
-            dimension = 1024
-        else:
-            raise ValueError(f"Unsupported model type: {unet_config.base}")
-
-        dimension = dimension * self.multiplier
+        # Both numbers come from what the architecture declares. This was an if/elif over six bases
+        # ending in `raise ValueError(f"Unsupported model type: ...")`, which fired here — at
+        # generation time — for the nine architectures nobody had added to it. The grid was
+        # hardcoded to 8 besides, so a FLUX or CogView 4 size could come back off-grid.
+        settings = resolve_default_settings(unet_config.base)
+        if settings is None or settings.width is None:
+            raise ArchitectureError(
+                f"Architecture '{unet_config.base.value}' declares no default dimensions, so there is no "
+                "ideal size to compute from."
+            )
+        dimension = settings.width * self.multiplier
+        grid = require(unet_config.base, FeaturesFacet).dimension_grid
         min_dimension = math.floor(dimension * 0.5)
         model_area = dimension * dimension  # hardcoded for now since all models are trained on square images
 
@@ -71,6 +72,7 @@ class IdealSizeInvocation(BaseInvocation):
         scaled_width, scaled_height = self.trim_to_multiple_of(
             math.floor(init_width),
             math.floor(init_height),
+            multiple_of=grid,
         )
 
         return IdealSizeOutput(width=scaled_width, height=scaled_height)

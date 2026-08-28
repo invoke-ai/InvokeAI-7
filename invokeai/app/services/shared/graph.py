@@ -36,8 +36,7 @@ from pydantic.fields import Field
 from pydantic.json_schema import JsonSchemaValue
 from pydantic_core import core_schema
 
-# Importing * is bad karma but needed here for node detection
-from invokeai.app.invocations import *  # noqa: F401 F403
+from invokeai.app.invocations import load_all_modules
 from invokeai.app.invocations.baseinvocation import (
     BaseInvocation,
     BaseInvocationOutput,
@@ -53,6 +52,11 @@ from invokeai.app.invocations.fields import Input, InputField, OutputField, UITy
 from invokeai.app.invocations.logic import IfInvocation
 from invokeai.app.services.shared.invocation_context import InvocationContext
 from invokeai.app.util.misc import uuid_string
+
+# Node detection: every core invocation must be registered before the unions below are built from
+# `InvocationRegistry`. This is a call rather than a star-import so that importing a single node
+# module -- or `invokeai.invocation_api`, which imports one -- does not drag in the whole tree.
+load_all_modules()
 
 if TYPE_CHECKING:
     import networkx as nx

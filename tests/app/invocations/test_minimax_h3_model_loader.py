@@ -11,7 +11,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from invokeai.app.invocations.minimax_h3_model_loader import MiniMaxH3ModelLoaderInvocation
+from invokeai.app.invocations.minimax_h3.minimax_h3_model_loader import MiniMaxH3ModelLoaderInvocation
 from invokeai.app.invocations.model import ModelIdentifierField
 from invokeai.backend.model_manager.taxonomy import BaseModelType, ModelFormat, ModelType
 

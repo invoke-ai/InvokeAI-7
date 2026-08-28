@@ -8,7 +8,7 @@ at invoke time.
 import pytest
 from pydantic import ValidationError
 
-from invokeai.app.invocations.minimax_h3_denoise import (
+from invokeai.app.invocations.minimax_h3.minimax_h3_denoise import (
     MINIMAX_H3_NUM_FRAMES_LABELS,
     MiniMaxH3DenoiseInvocation,
 )
