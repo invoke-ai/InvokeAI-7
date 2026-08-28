@@ -5,6 +5,7 @@ from contextlib import contextmanager
 from logging import Logger
 from pathlib import Path
 
+from invokeai.app.services.config.config_default import DB_SYNCHRONOUS
 from invokeai.app.services.shared.sqlite.sqlite_common import sqlite_memory
 
 
@@ -15,6 +16,7 @@ class SqliteDatabase:
     :param db_path: Path to the database file. If None, an in-memory database is used.
     :param logger: Logger to use for logging.
     :param verbose: Whether to log SQL statements. Provides `logger.debug` as the SQLite trace callback.
+    :param synchronous: SQLite `synchronous` setting. Defaults to `full`, SQLite's own default.
 
     This is a light wrapper around the `sqlite3` module, providing a few conveniences:
     - The database file is written to disk if it does not exist.
@@ -27,11 +29,18 @@ class SqliteDatabase:
     - `clean()`: Runs the SQL `VACUUM;` command and reports on the freed space.
     """
 
-    def __init__(self, db_path: Path | None, logger: Logger, verbose: bool = False) -> None:
+    def __init__(
+        self,
+        db_path: Path | None,
+        logger: Logger,
+        verbose: bool = False,
+        synchronous: DB_SYNCHRONOUS = "full",
+    ) -> None:
         """Initializes the database. This is used internally by the class constructor."""
         self._logger = logger
         self._db_path = db_path
         self._verbose = verbose
+        self._synchronous = synchronous
         self._lock = threading.RLock()
 
         if not self._db_path:
@@ -54,6 +63,15 @@ class SqliteDatabase:
 
         # Set a busy timeout to prevent database lockups during writes
         self._conn.execute("PRAGMA busy_timeout = 5000;")  # 5 seconds
+
+        # Durability. SQLite's own default is `full`, which fsyncs on every commit; `normal` under WAL
+        # trades the last transactions on a power loss or OS crash for roughly 6x shorter commits. It
+        # cannot corrupt the database -- that is WAL's guarantee either way. Shorter commits matter
+        # twice here, because every write holds the lock that serialises all database work.
+        #
+        # The value is interpolated rather than parameterised: PRAGMA does not take bind parameters,
+        # and the type is a closed Literal, so no user input reaches this string.
+        self._conn.execute(f"PRAGMA synchronous = {self._synchronous.upper()};")
 
     def clean(self) -> None:
         """
