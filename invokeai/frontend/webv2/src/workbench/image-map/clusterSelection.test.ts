@@ -131,6 +131,100 @@ describe('declutterAnnotations', () => {
     expect(kept.map((annotation) => annotation.text)).toEqual(['landscapes', 'portraits']);
   });
 
+  it('drops labels covering the current-image marker, which draws beneath them', () => {
+    // Zoomed in, both labels normally survive (see the first case). Putting the
+    // marker on the 'portraits' anchor at (10, 0) evicts that label instead:
+    // the gold target is on the WebGL canvas under plotly's annotation layer,
+    // so it cannot be stacked over a pill it overlaps.
+    const ranges = { x: [-0.5, 10.5] as [number, number], y: [-4, 4] as [number, number] };
+    const kept = declutterAnnotations(annotations, ranges, view.widthPx, view.heightPx, { x: 10, y: 0 });
+    expect(kept.map((annotation) => annotation.text)).toEqual(['landscapes']);
+  });
+
+  it('ignores a marker that is nowhere near a label', () => {
+    const ranges = { x: [-0.5, 10.5] as [number, number], y: [-4, 4] as [number, number] };
+    const kept = declutterAnnotations(annotations, ranges, view.widthPx, view.heightPx, { x: 5, y: -3.5 });
+    expect(kept.map((annotation) => annotation.text)).toEqual(['landscapes', 'portraits']);
+    // A null marker (nothing selected, or the selection is off the map) is the
+    // same as passing none at all.
+    expect(declutterAnnotations(annotations, ranges, view.widthPx, view.heightPx, null)).toEqual(
+      declutterAnnotations(annotations, ranges, view.widthPx, view.heightPx)
+    );
+  });
+
+  it('does not hand the space it clears to a lower-priority label', () => {
+    // 'portraits' (1 point) anchors ~55px from 'landscapes' (3 points): inside
+    // the bigger label's footprint, outside the marker's clearance. Without the
+    // marker, 'landscapes' wins the spot and 'portraits' is dropped. Parking
+    // the marker on 'landscapes' must not promote 'portraits' into the very
+    // patch of map the marker was supposed to clear.
+    const crowded = [
+      point('a.png', 0, 0, 0),
+      point('b.png', 1, 0, 0),
+      point('c.png', 0.5, 0, 0),
+      point('solo.png', 1.256, 0, 1),
+    ];
+    const crowdedAnnotations = buildClusterAnnotations(crowded, { '0': 'landscapes', '1': 'portraits' });
+    const ranges = { x: [-0.5, 10.5] as [number, number], y: [-4, 4] as [number, number] };
+
+    expect(
+      declutterAnnotations(crowdedAnnotations, ranges, view.widthPx, view.heightPx).map((annotation) => annotation.text)
+    ).toEqual(['landscapes']);
+    expect(
+      declutterAnnotations(crowdedAnnotations, ranges, view.widthPx, view.heightPx, { x: 0.5, y: 0 }).map(
+        (annotation) => annotation.text
+      )
+    ).toEqual([]);
+  });
+
+  it('leaves labels the marker does not cover exactly as they were', () => {
+    // Three labels 50px apart: 'bbb' loses its spot to 'aaa' and is invisible
+    // with or without a marker, while 'ccc' clears 'aaa' and survives. Parking
+    // the marker on 'bbb' — whose 11px rect reaches neither neighbour — must
+    // change nothing: a label that never won a spot cannot reserve one, or
+    // selecting an image under an already-suppressed label would silently take
+    // out the cluster next door.
+    const row = [
+      point('a1.png', 0, 0, 0),
+      point('a2.png', 0, 0, 0),
+      point('a3.png', 0, 0, 0),
+      point('b1.png', 0.6875, 0, 1),
+      point('b2.png', 0.6875, 0, 1),
+      point('c1.png', 1.375, 0, 2),
+    ];
+    const rowAnnotations = buildClusterAnnotations(row, { '0': 'aaaaaaaaaa', '1': 'bbbbbbbbbb', '2': 'cccccccccc' });
+    const ranges = { x: [-0.5, 10.5] as [number, number], y: [-4, 4] as [number, number] };
+    const withoutMarker = declutterAnnotations(rowAnnotations, ranges, view.widthPx, view.heightPx);
+
+    expect(withoutMarker.map((annotation) => annotation.text)).toEqual(['aaaaaaaaaa', 'cccccccccc']);
+    expect(declutterAnnotations(rowAnnotations, ranges, view.widthPx, view.heightPx, { x: 0.6875, y: 0 })).toEqual(
+      withoutMarker
+    );
+  });
+
+  it('ignores a marker panned out of view', () => {
+    // Nothing off screen can be covered, so an off-view marker must not evict
+    // an off-view label — that would churn the applied set on every pan.
+    const offscreen = [point('a.png', -900, 0, 0), point('b.png', -900.1, 0, 0)];
+    const offscreenAnnotations = buildClusterAnnotations(offscreen, { '0': 'landscapes' });
+    const ranges = { x: [100, 200] as [number, number], y: [-50, 50] as [number, number] };
+
+    expect(
+      declutterAnnotations(offscreenAnnotations, ranges, view.widthPx, view.heightPx, { x: -900, y: 0 }).map(
+        (annotation) => annotation.text
+      )
+    ).toEqual(['landscapes']);
+  });
+
+  it('treats a marker with non-finite coordinates as absent', () => {
+    const ranges = { x: [-0.5, 10.5] as [number, number], y: [-4, 4] as [number, number] };
+    expect(
+      declutterAnnotations(annotations, ranges, view.widthPx, view.heightPx, { x: Number.NaN, y: 0 }).map(
+        (annotation) => annotation.text
+      )
+    ).toEqual(['landscapes', 'portraits']);
+  });
+
   it('returns the full set unfiltered when the viewport is degenerate', () => {
     const ranges = { x: [0, 0] as [number, number], y: [-375, 375] as [number, number] };
     expect(declutterAnnotations(annotations, ranges, view.widthPx, view.heightPx)).toEqual(annotations);

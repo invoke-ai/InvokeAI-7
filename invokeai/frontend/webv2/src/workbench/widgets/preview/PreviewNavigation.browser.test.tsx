@@ -320,6 +320,8 @@ beforeEach(() => {
   delete (mocks.project.widgetInstances.gallery.state.values as Record<string, unknown>).galleryPage;
   delete (mocks.project.widgetInstances.gallery.state.values as Record<string, unknown>).imageOrderDir;
   delete (mocks.project.widgetInstances.gallery.state.values as Record<string, unknown>).paginationMode;
+  delete (mocks.project.widgetInstances.gallery.state.values as Record<string, unknown>).semanticImageQuery;
+  delete (mocks.project.widgetInstances.gallery.state.values as Record<string, unknown>).selectedImageQuery;
   mocks.project.widgetInstances.gallery.state.values.recentImages = mocks.recentImages;
   mocks.project.widgetInstances.gallery.state.values.selectedImage = {
     ...mocks.recentImages[0],
@@ -577,6 +579,146 @@ describe('preview keyboard navigation boundary', () => {
       expect.objectContaining({ kind: 'image', name: neighbor.imageName }),
       undefined,
       1,
+      true
+    );
+  });
+
+  it('does not carry the page the preview opened on onto a ranked pick', async () => {
+    const selected = {
+      ...mocks.recentImages[0],
+      boardId: 'none',
+      imageCategory: 'general' as const,
+      imageName: 'ranked-selected',
+      starred: false,
+    };
+    const neighbor = {
+      ...mocks.recentImages[1],
+      boardId: 'none',
+      imageCategory: 'general' as const,
+      imageName: 'ranked-neighbor',
+      starred: false,
+    };
+    const galleryValues = mocks.project.widgetInstances.gallery.state.values as Record<string, unknown>;
+
+    // A deep reveal from the image map stamped board page 30 onto the
+    // selection; starting the similarity search reset the grid to page 0.
+    // Carrying that stale page onto a ranked pick strands it: the item picked
+    // out of a ranking is nowhere near board page 30, so clearing the chip
+    // would anchor navigation ~1800 rows from both the selection and the grid.
+    galleryValues.galleryPage = 0;
+    galleryValues.paginationMode = 'infinite';
+    galleryValues.recentImages = [];
+    galleryValues.semanticImageQuery = { kind: 'text', query: 'sunset' };
+    galleryValues.selectedImage = selected;
+    galleryValues.selectedImageName = selected.imageName;
+    galleryValues.selectedImageQuery = {
+      boardId: 'none',
+      galleryView: 'images',
+      imageOrderDir: 'DESC',
+      page: 30,
+      paginationMode: 'infinite',
+      searchTerm: '',
+    };
+    mocks.galleryItemPages = [
+      {
+        items: [selected, neighbor].map((image) => ({
+          boardId: image.boardId,
+          category: image.imageCategory,
+          createdAt: image.queuedAt,
+          fullUrl: image.imageUrl,
+          height: image.height,
+          isIntermediate: false,
+          kind: 'image' as const,
+          name: image.imageName,
+          sourceQueueItemId: image.sourceQueueItemId,
+          starred: image.starred,
+          thumbnailUrl: image.thumbnailUrl,
+          width: image.width,
+        })),
+        total: 2,
+      },
+    ];
+
+    await render();
+    await pressArrow('ArrowRight');
+
+    expect(mocks.commands.gallery.selectItem).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'image', name: neighbor.imageName }),
+      undefined,
+      0,
+      true
+    );
+  });
+
+  it('stamps the top of the board listing for a ranked pick even when the footer paginates the ranking', async () => {
+    const filler = {
+      ...mocks.recentImages[0],
+      boardId: 'none',
+      imageCategory: 'general' as const,
+      imageName: 'ranked-page-zero',
+      starred: false,
+    };
+    const selected = {
+      ...mocks.recentImages[0],
+      boardId: 'none',
+      imageCategory: 'general' as const,
+      imageName: 'ranked-page-one-selected',
+      starred: false,
+    };
+    const neighbor = {
+      ...mocks.recentImages[1],
+      boardId: 'none',
+      imageCategory: 'general' as const,
+      imageName: 'ranked-page-one-neighbor',
+      starred: false,
+    };
+    const galleryValues = mocks.project.widgetInstances.gallery.state.values as Record<string, unknown>;
+    const toItem = (image: typeof filler) => ({
+      boardId: image.boardId,
+      category: image.imageCategory,
+      createdAt: image.queuedAt,
+      fullUrl: image.imageUrl,
+      height: image.height,
+      isIntermediate: false,
+      kind: 'image' as const,
+      name: image.imageName,
+      sourceQueueItemId: image.sourceQueueItemId,
+      starred: image.starred,
+      thumbnailUrl: image.thumbnailUrl,
+      width: image.width,
+    });
+
+    // In paginated mode the footer paginates the RANKING, so the grid's page
+    // is a rank page, not a board page — stamping it would send navigation to
+    // an unrelated board slice once the chip is cleared. Clearing resets the
+    // grid to board page 0, so that is what a ranked pick hands back: neither
+    // the grid's 1 nor the stale 30.
+    galleryValues.galleryPage = 1;
+    galleryValues.paginationMode = 'paginated';
+    galleryValues.recentImages = [];
+    galleryValues.semanticImageQuery = { kind: 'text', query: 'sunset' };
+    galleryValues.selectedImage = selected;
+    galleryValues.selectedImageName = selected.imageName;
+    galleryValues.selectedImageQuery = {
+      boardId: 'none',
+      galleryView: 'images',
+      imageOrderDir: 'DESC',
+      page: 30,
+      paginationMode: 'paginated',
+      searchTerm: '',
+    };
+    mocks.galleryItemPages = [
+      { items: [filler].map(toItem), total: 3 },
+      { items: [selected, neighbor].map(toItem), total: 3 },
+    ];
+
+    await render();
+    await pressArrow('ArrowRight');
+
+    expect(mocks.commands.gallery.selectItem).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'image', name: neighbor.imageName }),
+      undefined,
+      0,
       true
     );
   });

@@ -21,8 +21,8 @@ import { FileTextIcon, WandSparklesIcon } from 'lucide-react';
 import { useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { buildQueueRecallValues, getQueueRecallCapabilities } from './queueRecall';
-import { useLocalGenerateValues } from './useLocalGenerateValues';
+import { getQueueRecallCapabilities, planQueueRecall } from './queueRecall';
+import { useLocalGenerateValues, useLocalQueueItemSource } from './useLocalGenerateValues';
 
 const selectGenerateRecallValues = createGenerateFormValuesSelector();
 
@@ -35,10 +35,13 @@ const selectGenerateRecallValues = createGenerateFormValuesSelector();
  */
 export const QueueItemActions = ({ item }: { item: QueueItemReadModel }) => {
   const { t } = useTranslation();
-  const { generation } = useWorkbenchCommands();
+  const { generation, widgets } = useWorkbenchCommands();
   const openWidget = useOpenWorkbenchWidget();
   const notify = useNotify();
   const localGenerateValues = useLocalGenerateValues(item.origin);
+  // A video item's prompt belongs to the Video panel, which owns its own prompt
+  // values. Only knowable for items this client submitted; see the hook's note.
+  const isVideoItem = useLocalQueueItemSource(item.origin) === 'video';
   const [jsonOpen, setJsonOpen] = useState(false);
   const generateValues = useWidgetValuesSelector('generate', selectGenerateRecallValues);
   const models = useModelsSelector((snapshot) => snapshot.models);
@@ -56,18 +59,45 @@ export const QueueItemActions = ({ item }: { item: QueueItemReadModel }) => {
   const onRecall = useCallback(
     (kind: ImageRecallKind) => {
       const current = getCurrentGenerateValues({ generateValues, supportedModels });
-      const values = buildQueueRecallValues(kind, { current, meta, snapshot: localGenerateValues });
+      const plan = planQueueRecall(kind, { current, isVideoItem, meta, snapshot: localGenerateValues });
 
-      if (!values) {
-        notify.info(getImageRecallTitle(kind), t('widgets.queue.recallUnavailable'));
+      if (!plan) {
+        notify.info(
+          getImageRecallTitle(kind),
+          // The Generate copy names a missing Generate model, which is not why
+          // a video recall would come back empty.
+          t(isVideoItem ? 'widgets.queue.recallUnavailableForItem' : 'widgets.queue.recallUnavailable')
+        );
         return;
       }
 
-      generation.setSettings(values);
+      // Both branches write to the ACTIVE project, not the project that owns the
+      // item: with the default `all` queue scope Recent lists other projects'
+      // items too, and "recall" means "load this into the panel I am looking at".
+      // `openWidget` follows the same rule, so the write and the reveal agree.
+      if (plan.target === 'video') {
+        widgets.patchValues('video', plan.patch);
+        openWidget('video', { preferredRegions: ['left'] });
+        notify.success(getImageRecallTitle(kind), t('widgets.queue.settingsRecalledIntoVideoDescription'));
+        return;
+      }
+
+      generation.setSettings(plan.values);
       openWidget('generate', { preferredRegions: ['left'] });
       notify.success(getImageRecallTitle(kind), t('widgets.queue.settingsRecalledDescription'));
     },
-    [generateValues, generation, localGenerateValues, meta, notify, openWidget, supportedModels, t]
+    [
+      generateValues,
+      generation,
+      isVideoItem,
+      localGenerateValues,
+      meta,
+      notify,
+      openWidget,
+      supportedModels,
+      t,
+      widgets,
+    ]
   );
 
   const onSendToCanvas = useCallback(

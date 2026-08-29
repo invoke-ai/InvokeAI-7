@@ -1,5 +1,6 @@
 import threading
 from collections import Counter, defaultdict
+from functools import wraps
 from typing import Dict, Literal, Optional, Union
 
 import torch
@@ -327,13 +328,44 @@ class TorchDevice:
 
     @classmethod
     def empty_cache(cls) -> None:
-        """Clear the GPU device cache."""
+        """Clear the GPU device cache — unless another generation device is mid-session.
+
+        ``torch.cuda.empty_cache()`` is process-global: it takes EVERY device's
+        caching-allocator mutex and cudaFree/hipFrees their cached blocks, and a free on a
+        device with a long kernel in flight blocks until that kernel completes with the mutex
+        held. On a multi-GPU box this freezes the busy worker — it cannot allocate or even
+        deallocate a tensor — for the remainder of its current step (observed via py-spy on a
+        dual-GPU ROCm rig: one worker spinning in HIP ``release_block`` inside ``emptyCache``,
+        the other parked on the allocator mutex; a video step is 40-100 s).
+
+        empty_cache is advisory — torch reuses its own cached blocks whether or not they are
+        returned to the driver — so when any OTHER registered generation device is running a
+        session, skip it rather than convoy. Cost of skipping: driver-level free-memory
+        queries (``mem_get_info``) count the still-cached blocks as used, so the model cache's
+        VRAM accounting turns conservative until a quiet-moment call runs. On single-GPU
+        installs there is never another busy device, so behavior is unchanged.
+        """
+        if cls._another_generation_device_busy():
+            InvokeAILogger.get_logger(cls.__name__).debug(
+                "Skipping empty_cache: another generation device is mid-session."
+            )
+            return
         if torch.backends.mps.is_available():
             torch.mps.empty_cache()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
         if _xpu_is_available():
             torch.xpu.empty_cache()
+
+    @classmethod
+    def _another_generation_device_busy(cls) -> bool:
+        """True when a generation device OTHER than this thread's session device is running.
+
+        Imported lazily: the device pool module imports this one at top level.
+        """
+        from invokeai.backend.util.device_pool import GENERATION_DEVICE_POOL
+
+        return GENERATION_DEVICE_POOL.any_other_device_busy(cls.get_session_device())
 
     @classmethod
     def xpu_mem_get_info(cls, device: torch.device) -> tuple[int, int]:
@@ -431,3 +463,38 @@ class TorchDevice:
         if config.precision == "auto":
             return cls.choose_bfloat16_safe_dtype(device)
         return NAME_TO_PRECISION[config.precision]
+
+
+_PEER_AWARE_SENTINEL = "_invokeai_peer_aware"
+
+
+def install_peer_aware_empty_cache() -> None:
+    """Rebind ``torch.cuda.empty_cache`` itself with the peer-aware guard (idempotent).
+
+    ``TorchDevice.empty_cache`` already skips while another generation device is mid-session,
+    but third-party libraries call ``torch.cuda.empty_cache`` directly and convoy the peer all
+    the same — py-spy caught diffusers doing it from inside every model materialization
+    (``from_pretrained`` -> ``_load_pretrained_model`` -> ``empty_device_cache``,
+    ``modeling_utils.py``; likewise ``from_single_file``), freezing the other GPU's in-flight
+    denoise for the remainder of its step. Wrapping the torch entry point makes every Python
+    caller inherit the policy. (Torch-internal C++ callers — e.g. MIOpen's chooseAlgorithm
+    workspace-OOM fallback — bypass Python entirely and remain out of reach.)
+
+    Installed once at startup via ``apply_monkeypatches``. Single-GPU installs never have an
+    "other" busy device, so the wrapper is a pass-through there.
+    """
+    if getattr(torch.cuda.empty_cache, _PEER_AWARE_SENTINEL, False):
+        return
+    original_empty_cache = torch.cuda.empty_cache
+
+    @wraps(original_empty_cache)
+    def peer_aware_empty_cache() -> None:
+        if TorchDevice._another_generation_device_busy():
+            InvokeAILogger.get_logger("TorchDevice").debug(
+                "Skipping torch.cuda.empty_cache: another generation device is mid-session."
+            )
+            return
+        original_empty_cache()
+
+    setattr(peer_aware_empty_cache, _PEER_AWARE_SENTINEL, True)
+    torch.cuda.empty_cache = peer_aware_empty_cache

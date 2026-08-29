@@ -420,7 +420,7 @@ const BehaviorSection = () => {
     <SettingsSection description="Safety checks, prompt editing, and user-assistance behavior." title="Behavior">
       <SettingToggle
         checked={autoSwitchInvocationRoute}
-        description="Switch the Invoke source and destination to match the surface you are editing. Locked sources and destinations are never changed."
+        description="Switch the Invoke source and destination to match the surface you are editing or bring to the front. Locked sources and destinations are never changed."
         label="Auto-switch Invoke route"
         onChange={updateAutoSwitchInvocationRoute}
       />

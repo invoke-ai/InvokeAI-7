@@ -337,6 +337,13 @@ const ImageMapPlot = ({
   const [plotRevision, setPlotRevision] = useState(0);
   const lastPinchAtRef = useRef(0);
   const lastMapSelectionRef = useRef<{ name: string; at: number } | null>(null);
+  // The selection the marker effect last decluttered for. Seeded with the
+  // mounting selection so the initial scene, whose labels the effect below
+  // applies from scratch, does not also get a redundant pass here.
+  const lastDeclutteredSelectionRef = useRef(selectedImageName);
+  // The points array `fullAnnotationsRef` was built from, so the marker effect
+  // can tell whether those annotations describe the embedding now on screen.
+  const annotationsPointsRef = useRef<ImageMapPoint[] | null>(null);
   // The initial whole-map fit must happen exactly once per mount, at the
   // first render where the container has real dimensions; these refs let the
   // scene effect and the resize observer coordinate without re-running.
@@ -365,11 +372,25 @@ const ImageMapPlot = ({
   // case (a pan/zoom that changes no label's visibility) a no-op — it also
   // keeps this from feeding back into itself through the plotly_relayout
   // event its own relayout fires.
+  //
+  // The gold target is passed in so it outranks the labels: it draws on the
+  // WebGL canvas *below* plotly's annotation layer, so a label overlapping it
+  // wins on z-order no matter how the traces are ordered. Dropping that label
+  // is what keeps the current position findable in a dense field.
   const applyDeclutteredAnnotations = useCallback((container: PlotElement) => {
     const ranges = readRanges(container);
+    const selectedName = selectedImageNameRef.current;
+    const markerPoint =
+      (selectedName ? pointsRef.current?.find((candidate) => candidate.imageName === selectedName) : null) ?? null;
     const annotations =
       ranges && container.offsetWidth > 0 && container.offsetHeight > 0
-        ? declutterAnnotations(fullAnnotationsRef.current, ranges, container.offsetWidth, container.offsetHeight)
+        ? declutterAnnotations(
+            fullAnnotationsRef.current,
+            ranges,
+            container.offsetWidth,
+            container.offsetHeight,
+            markerPoint
+          )
         : fullAnnotationsRef.current;
     const key = annotations.map((annotation) => `${annotation.text}@${annotation.x},${annotation.y}`).join('\n');
 
@@ -605,6 +626,18 @@ const ImageMapPlot = ({
       return;
     }
 
+    // Moving the marker changes which labels have room for it, but only this
+    // effect knows the marker moved for a SELECTION change. Anything driven by
+    // `points` is left to the label effect below, which re-declutters anyway —
+    // and does it with annotations rebuilt for the new embedding, where this
+    // effect would still be holding the previous one's. The provenance check
+    // covers the case where React batches a refresh and a selection change
+    // into one commit (a finished generation does exactly that): the selection
+    // did change, but these annotations are not for these points yet.
+    const selectionChanged =
+      lastDeclutteredSelectionRef.current !== selectedImageName && annotationsPointsRef.current === points;
+    lastDeclutteredSelectionRef.current = selectedImageName;
+
     const point = selectedImageName ? points.find((candidate) => candidate.imageName === selectedImageName) : undefined;
     const suppression = lastMapSelectionRef.current;
     const isSuppressionFresh = suppression !== null && Date.now() - suppression.at < MAP_CLICK_SUPPRESS_MS;
@@ -624,10 +657,23 @@ const ImageMapPlot = ({
     if (!point) {
       swallow(Plotly.restyle(container, { x: [[]], y: [[]] }, [markerIndex]));
 
+      if (selectionChanged) {
+        // Labels dropped to clear the old marker position get their spot back.
+        applyDeclutteredAnnotations(container);
+      }
+
       return;
     }
 
     swallow(Plotly.restyle(container, { x: [[point.x]], y: [[point.y]] }, [markerIndex]));
+
+    if (selectionChanged) {
+      // The marker outranks labels in the declutter pass, so moving it both
+      // hides a label it now covers and restores the one it just left. A
+      // recenter below re-runs this through plotly_relayout, but most
+      // selection changes do not move the view at all.
+      applyDeclutteredAnnotations(container);
+    }
 
     if (cameFromMapClick) {
       return;
@@ -639,7 +685,7 @@ const ImageMapPlot = ({
     if (recentered) {
       swallow(Plotly.relayout(container, { 'xaxis.range': recentered.x, 'yaxis.range': recentered.y }));
     }
-  }, [plotRevision, points, selectedImageName]);
+  }, [applyDeclutteredAnnotations, plotRevision, points, selectedImageName]);
 
   // Labels arrive about a second after the points they annotate. Applying them
   // with `relayout` rather than through the scene effect keeps that from
@@ -664,6 +710,7 @@ const ImageMapPlot = ({
     }
 
     fullAnnotationsRef.current = buildClusterAnnotations(points, showClusterLabels ? annotationLabels : null);
+    annotationsPointsRef.current = points;
     applyDeclutteredAnnotations(container);
   }, [annotationLabels, applyDeclutteredAnnotations, plotRevision, points, showClusterLabels]);
 

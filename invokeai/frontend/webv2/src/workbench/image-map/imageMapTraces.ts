@@ -220,6 +220,12 @@ const LABEL_CHAR_WIDTH_PX = 6;
 const LABEL_HEIGHT_PX = 18;
 /** Two labels closer than this (edge to edge) count as colliding. */
 const LABEL_GAP_PX = 4;
+/**
+ * Half-extent of the gold current-image target: marker size 18 plus its 2px
+ * outline, so the pixel it occupies reaches ~10px from the anchor. Rounded up
+ * by one so a label never kisses the outline.
+ */
+const MARKER_RADIUS_PX = 11;
 
 interface LabelRect {
   left: number;
@@ -235,18 +241,58 @@ const rectsCollide = (a: LabelRect, b: LabelRect): boolean =>
   a.bottom > b.top - LABEL_GAP_PX;
 
 /**
+ * The gold target's footprint in screen pixels, or null when it is not on
+ * screen. An off-view marker cannot be covered by anything, and reserving
+ * space for it would evict labels that are off-view in the same direction —
+ * invisible either way, but it would churn the applied annotation set on every
+ * pan. The bounds test also rejects NaN coordinates by construction.
+ */
+const markerRectFor = (
+  markerPoint: { x: number; y: number },
+  ranges: AxisRanges,
+  spanX: number,
+  spanY: number,
+  widthPx: number,
+  heightPx: number
+): LabelRect | null => {
+  const centerX = ((markerPoint.x - ranges.x[0]) / spanX) * widthPx;
+  const centerY = ((ranges.y[1] - markerPoint.y) / spanY) * heightPx;
+  const onScreen =
+    centerX >= -MARKER_RADIUS_PX &&
+    centerX <= widthPx + MARKER_RADIUS_PX &&
+    centerY >= -MARKER_RADIUS_PX &&
+    centerY <= heightPx + MARKER_RADIUS_PX;
+
+  return onScreen
+    ? {
+        bottom: centerY + MARKER_RADIUS_PX,
+        left: centerX - MARKER_RADIUS_PX,
+        right: centerX + MARKER_RADIUS_PX,
+        top: centerY - MARKER_RADIUS_PX,
+      }
+    : null;
+};
+
+/**
  * Zoomed far out, every cluster label converges on the same few pixels and
  * the map disappears under a pile of pills. Greedily keep labels in array
  * order (buildClusterAnnotations puts larger clusters first), dropping any
  * whose estimated pixel footprint collides with one already kept — fully
  * deterministic for a given annotation set and view. Zooming back in spreads
  * the anchors apart and the dropped labels reappear.
+ *
+ * `markerPoint` — the current gallery image, when it is on the map — outranks
+ * every label. Plotly draws annotations in an SVG layer above the WebGL canvas
+ * holding the scatter traces, so the gold target can never be stacked over a
+ * pill it overlaps; dropping the pill instead is the only way to keep the
+ * target visible where labels are dense.
  */
 export const declutterAnnotations = (
   annotations: ClusterAnnotation[],
   ranges: AxisRanges,
   widthPx: number,
-  heightPx: number
+  heightPx: number,
+  markerPoint?: { x: number; y: number } | null
 ): ClusterAnnotation[] => {
   const spanX = ranges.x[1] - ranges.x[0];
   const spanY = ranges.y[1] - ranges.y[0];
@@ -256,7 +302,10 @@ export const declutterAnnotations = (
   }
 
   const kept: ClusterAnnotation[] = [];
-  const keptRects: LabelRect[] = [];
+  // Footprints later labels must avoid: every label that won its spot,
+  // including the ones the marker then hid (see below).
+  const blockingRects: LabelRect[] = [];
+  const markerRect = markerPoint ? markerRectFor(markerPoint, ranges, spanX, spanY, widthPx, heightPx) : null;
 
   for (const annotation of annotations) {
     const centerX = ((annotation.x - ranges.x[0]) / spanX) * widthPx;
@@ -271,10 +320,25 @@ export const declutterAnnotations = (
       top: bottom - LABEL_HEIGHT_PX,
     };
 
-    if (!keptRects.some((other) => rectsCollide(rect, other))) {
-      kept.push(annotation);
-      keptRects.push(rect);
+    if (blockingRects.some((other) => rectsCollide(rect, other))) {
+      continue;
     }
+
+    // This label owns the spot from here on, whether or not it gets drawn —
+    // deciding that BEFORE consulting the marker is what keeps the marker's
+    // effect local. Reserving first and testing second means a label the
+    // marker hides still holds its ground, so the next label in priority
+    // order cannot put a smaller cluster's name on the patch of map the
+    // marker was supposed to clear; and a label that lost its spot to a
+    // higher-priority label never reserves anything, so it cannot evict a
+    // third label the marker is nowhere near.
+    blockingRects.push(rect);
+
+    if (markerRect !== null && rectsCollide(rect, markerRect)) {
+      continue;
+    }
+
+    kept.push(annotation);
   }
 
   return kept;

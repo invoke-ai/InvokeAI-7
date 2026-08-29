@@ -16,7 +16,9 @@ import {
   getGalleryCompareImage,
   getGalleryGenerationSequence,
   getGalleryLiveSlots,
+  getGalleryPage,
   getGallerySelectedImageQuery,
+  getGallerySemanticImageQuery,
   getGallerySettings,
   getSelectedGalleryItemFromValues,
   getBoundedRecentImages,
@@ -205,6 +207,15 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
   const hasSelectedItem = selectedItem !== null;
   const { imageOrderDir } = getGallerySettings(galleryValues);
   const selectedImageQuery = getGallerySelectedImageQuery(galleryValues);
+  // The gallery's live similarity search: when one is active the grid shows a
+  // ranked result set, and navigation has to walk that same list. Memoized on
+  // the raw value because parsing mints a fresh object each call, which would
+  // otherwise re-derive the whole navigation list on every unrelated gallery
+  // change (every recentImages tick during a generation, for one).
+  const gallerySemanticQuery = useMemo(
+    () => getGallerySemanticImageQuery({ semanticImageQuery: galleryValues.semanticImageQuery }),
+    [galleryValues.semanticImageQuery]
+  );
   const selectedItemKey = selectedItem ? toGalleryItemKey(selectedItem) : null;
   const isComparing =
     selectedItem?.kind === 'image' &&
@@ -222,7 +233,12 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
     [activeProgressTargets, generationSequence.chronologicalSlots]
   );
   const matchingProgressImage = getMatchingProgressImage(progressImage, activeGalleryPlaceholder);
-  const shouldFollowLive = showProgressImagesInViewer && activeGalleryPlaceholder !== null && !isComparing;
+  // Not while a similarity search is active: the grid hides pending items
+  // there entirely, so following the generation would put Preview on a tile
+  // the grid is not showing and, worse, hand the arrows the board listing
+  // while the grid shows a ranking.
+  const shouldFollowLive =
+    showProgressImagesInViewer && activeGalleryPlaceholder !== null && !isComparing && gallerySemanticQuery === null;
   const { t } = useTranslation();
   const loupeControlsRef = useRef<PreviewLoupeControls | null>(null);
   const videoControllerRef = useRef<PreviewVideoFrameController | null>(null);
@@ -267,7 +283,10 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
     selectGalleryItem: selectGalleryItemAtPage,
     selectedImageQuery,
     selectedItem,
+    galleryPage: getGalleryPage(galleryValues),
+    galleryPaginationMode: getGallerySettings(galleryValues).paginationMode,
     selectedItemKey,
+    semanticQuery: gallerySemanticQuery,
     shouldFollowLive,
   });
 
