@@ -1206,6 +1206,24 @@ class ModelCache:
                 f"Unloaded {vram_bytes_freed_from_own_model / MB:.2f}MB from the model being locked ({cache_entry.key})."
             )
 
+        if vram_available < 0 and stream_started_at is None:
+            # The budget is still short after offloading everything offloadable: the model will run
+            # with its minimum weight set streamed from RAM. Name what is occupying the device —
+            # in particular anything still LOCKED, which the offload pass cannot touch — so a
+            # too-small budget is diagnosable from the default log. First pass only (paced
+            # continuations would repeat it).
+            resident = [
+                f"{entry.key.split(':')[-1]}={entry.cached_model.cur_vram_bytes() / MB:.0f}MB"
+                + (" [locked]" if entry.is_locked else "")
+                for entry in self._cached_models.values()
+                if entry.cached_model.cur_vram_bytes() > 0 and entry.key != cache_entry.key
+            ]
+            self._logger.warning(
+                f"VRAM budget for '{cache_entry.key}' is short by {-vram_available / MB:.0f}MB even after "
+                f"offloading (working memory reservation: {(working_mem_bytes or 0) / MB:.0f}MB); the model will "
+                f"run with minimum weights resident. Other models still in VRAM: {', '.join(resident) or 'none'}."
+            )
+
         # Move as much of the model as possible into VRAM.
         # For testing, only allow 10% of the model to be loaded into VRAM.
         # vram_available = int(model_vram_needed * 0.1)
@@ -1360,17 +1378,23 @@ class ModelCache:
             return vram_total_available_to_cache - self._get_vram_in_use()
 
         if self._execution_device.type == "cuda":
-            # TODO(ryand): It is debatable whether we should use memory_reserved() or memory_allocated() here.
-            # memory_reserved() includes memory reserved by the torch CUDA memory allocator that may or may not be
-            # re-used for future allocations. For now, we use memory_allocated() to be conservative.
-            # vram_reserved = torch.cuda.memory_reserved(self._execution_device)
             vram_allocated = torch.cuda.memory_allocated(self._execution_device)
             vram_free, _vram_total = torch.cuda.mem_get_info(self._execution_device)
-            vram_available_to_process = vram_free + vram_allocated
+            # Blocks the caching allocator holds but is not using are just as available to this
+            # process as driver-free memory: the allocator reuses them directly, and empty_cache()
+            # returns whole unoccupied segments to the driver. mem_get_info() alone counts them as
+            # consumed — so whenever weights or a previous stage's activations were freed without
+            # an empty_cache() (which several paths deliberately skip), the budget under-reported
+            # by that whole amount and a model that would have fit was partial-loaded down to its
+            # minimum weight set (observed: a fully-evictable multi-GB reserve left a 20 GB
+            # transformer at 0% residency while the allocator happily reused the "missing" memory
+            # for activations). Credit the reclaimable reserve, excluding intra-segment
+            # fragmentation slack that a large contiguous allocation could not use.
+            vram_available_to_process = vram_free + vram_allocated + self._get_reclaimable_allocator_bytes()
         elif self._execution_device.type == "xpu" and _has_dedicated_vram(self._execution_device):
             vram_allocated = torch.xpu.memory_allocated(self._execution_device)
             vram_free, _vram_total = TorchDevice.xpu_mem_get_info(self._execution_device)
-            vram_available_to_process = vram_free + vram_allocated
+            vram_available_to_process = vram_free + vram_allocated + self._get_reclaimable_allocator_bytes()
         elif self._execution_device.type in ("mps", "xpu"):
             # Shared-memory devices: MPS, and Intel integrated GPUs, whose reported "VRAM" is
             # system RAM. Budget against actual free system memory instead of device totals.
@@ -1388,6 +1412,29 @@ class ModelCache:
         vram_total_available_to_cache = vram_available_to_process - working_mem_bytes
         vram_cur_available_to_cache = vram_total_available_to_cache - self._get_vram_in_use()
         return vram_cur_available_to_cache
+
+    def _get_reclaimable_allocator_bytes(self) -> int:
+        """Bytes the torch caching allocator holds for this device but is not using, excluding
+        inactive-split slack (free space inside partially-occupied segments, which cannot serve a
+        large contiguous allocation and which empty_cache() cannot return to the driver).
+
+        Best-effort: 0 when the backend does not expose allocator stats.
+        """
+        try:
+            if self._execution_device.type == "cuda":
+                reserved = torch.cuda.memory_reserved(self._execution_device)
+                allocated = torch.cuda.memory_allocated(self._execution_device)
+                stats = torch.cuda.memory_stats(self._execution_device)
+            elif self._execution_device.type == "xpu":
+                reserved = torch.xpu.memory_reserved(self._execution_device)
+                allocated = torch.xpu.memory_allocated(self._execution_device)
+                stats = torch.xpu.memory_stats(self._execution_device)
+            else:
+                return 0
+            inactive_split = int(stats.get("inactive_split_bytes.all.current", 0))
+            return max(0, int(reserved) - int(allocated) - inactive_split)
+        except Exception:
+            return 0
 
     def _get_vram_in_use(self) -> int:
         """Get the amount of VRAM currently in use by the cache."""
