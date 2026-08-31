@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { panBy, wheelZoomAtPoint, zoomAtPoint } from './panZoom';
+import { panBy, pinchZoomAtPoints, wheelZoomAtPoint, zoomAtPoint } from './panZoom';
 
 const clamp = (min: number, max: number) => (zoom: number) => Math.max(min, Math.min(max, zoom));
 
@@ -48,5 +48,48 @@ describe('panZoom', () => {
       pan: { x: 15, y: 1 },
       zoom: 2,
     });
+  });
+
+  it('scales a pinch by how far the fingers spread and follows their midpoint', () => {
+    const start = { pan: { x: 0, y: 0 }, zoom: 1 };
+
+    const next = pinchZoomAtPoints(
+      start,
+      { center: { x: 140, y: 60 }, distance: 200, startCenter: { x: 100, y: 50 }, startDistance: 100 },
+      clamp(1, 8)
+    );
+
+    expect(next.zoom).toBe(2);
+    // The content point under the starting midpoint — (100, 50) at zoom 1 —
+    // ends up under the midpoint's new position.
+    expect(next.zoom * 100 + next.pan.x).toBeCloseTo(140, 6);
+    expect(next.zoom * 50 + next.pan.y).toBeCloseTo(60, 6);
+  });
+
+  it('keeps panning with the fingers after the pinch is clamped at its zoom limit', () => {
+    const start = { pan: { x: -100, y: -50 }, zoom: 4 };
+    const gesture = { center: { x: 180, y: 90 }, startCenter: { x: 100, y: 50 }, startDistance: 100 };
+
+    const atLimit = pinchZoomAtPoints(start, { ...gesture, distance: 200 }, clamp(1, 8));
+    const pastLimit = pinchZoomAtPoints(start, { ...gesture, distance: 400 }, clamp(1, 8));
+
+    expect(atLimit.zoom).toBe(8);
+    expect(pastLimit.zoom).toBe(8);
+    // Spreading further cannot zoom past the limit, but the gesture is still a
+    // move: both agree on where the anchored content point was dragged to.
+    expect(pastLimit.pan).toEqual(atLimit.pan);
+    expect(pastLimit.zoom * 50 + pastLimit.pan.x).toBeCloseTo(180, 6);
+  });
+
+  it('leaves the transform untouched when the pinch has no measurable start', () => {
+    const start = { pan: { x: 3, y: 7 }, zoom: 2 };
+
+    expect(
+      pinchZoomAtPoints(
+        start,
+        { center: { x: 10, y: 10 }, distance: 50, startCenter: { x: 0, y: 0 }, startDistance: 0 },
+        clamp(1, 8)
+      )
+    ).toBe(start);
   });
 });

@@ -267,6 +267,8 @@ def test_points_disabled_when_indexer_not_running(
     monkeypatch, mock_invoker: Invoker, image_index_service: FakeImageIndexService, client: TestClient
 ) -> None:
     image_index_service._model_id = None
+    # Indexing is on by default, so "disabled" has to be asked for explicitly.
+    mock_invoker.services.configuration.image_index_enabled = False
     response = client.get("/api/v1/image_map/points")
     assert response.status_code == 200
     body = response.json()
@@ -385,8 +387,59 @@ def test_status_model_missing_when_enabled_without_model(
     assert body["projection"]["state"] == "model_missing"
 
 
-def test_status_disabled(image_index_service: FakeImageIndexService, client: TestClient) -> None:
+@pytest.mark.parametrize(
+    "call_endpoint",
+    [
+        pytest.param(lambda client: client.get("/api/v1/image_map/points"), id="points"),
+        pytest.param(lambda client: client.get("/api/v1/image_map/status"), id="status"),
+        pytest.param(lambda client: client.post("/api/v1/image_map/refresh"), id="refresh"),
+    ],
+)
+def test_endpoints_activate_a_model_installed_since_startup(
+    call_endpoint, mock_invoker: Invoker, image_index_service: FakeImageIndexService, client: TestClient
+) -> None:
+    # The map's own message links the encoder install, so the next request has
+    # to pick the model up rather than repeating "not installed" until a restart.
+    # Asserted per endpoint: each one has to make the attempt on its own, and a
+    # request that found the model already active proves nothing.
     image_index_service._model_id = None
+    mock_invoker.services.configuration.image_index_enabled = True
+    activations = 0
+
+    def activate() -> bool:
+        nonlocal activations
+        activations += 1
+        image_index_service._model_id = MODEL_ID
+        return True
+
+    image_index_service.try_activate = activate  # type: ignore[method-assign]
+
+    response = call_endpoint(client)
+
+    assert response.status_code in (200, 202)
+    assert activations == 1
+    assert image_index_service.model_id == MODEL_ID
+
+
+def test_points_serve_the_index_once_it_is_activated(
+    mock_invoker: Invoker, image_index_service: FakeImageIndexService, client: TestClient
+) -> None:
+    image_index_service._model_id = None
+    mock_invoker.services.configuration.image_index_enabled = True
+
+    def activate() -> bool:
+        image_index_service._model_id = MODEL_ID
+        return True
+
+    image_index_service.try_activate = activate  # type: ignore[method-assign]
+
+    assert client.get("/api/v1/image_map/points").json()["state"] == "empty"
+    assert client.get("/api/v1/image_map/status").json()["enabled"] is True
+
+
+def test_status_disabled(mock_invoker: Invoker, image_index_service: FakeImageIndexService, client: TestClient) -> None:
+    image_index_service._model_id = None
+    mock_invoker.services.configuration.image_index_enabled = False
     body = client.get("/api/v1/image_map/status").json()
     assert body["enabled"] is False
     assert body["model_name"] is None

@@ -1,8 +1,10 @@
 import type { WidgetViewProps } from '@workbench/widgetContracts';
 
-import { Box, HStack } from '@chakra-ui/react';
+import { Box, HStack, Icon } from '@chakra-ui/react';
 import { useProgressImage } from '@features/queue/react';
-import { ToggleIconButton } from '@platform/ui';
+import { IconButton, ToggleIconButton, Tooltip } from '@platform/ui';
+import { InvokeMarkIcon } from '@platform/ui/InvokeMark';
+import { useInvocationState } from '@workbench/shell/topbar/useInvocationState';
 import { getProjectWidgetValues } from '@workbench/widgetState';
 import { useActiveProjectSelector, useWorkbenchCommands } from '@workbench/WorkbenchContext';
 import { GalleryThumbnailsIcon, HourglassIcon } from 'lucide-react';
@@ -18,8 +20,14 @@ import { getPreviewFilmstripVisible } from './previewSettings';
  * selection (published by the view via `previewHeaderStore`) plus the
  * in-progress diffusion toggle. Actions live here — in the frame's standard
  * header slot — like every other widget, not in the widget body.
+ *
+ * Floated, the widget also carries an Invoke control: a floating preview is
+ * typically parked over a maximized work surface, or on a second display, with
+ * the topbar's Invoke button out of easy reach — so the window that shows the
+ * result offers the one action that produces the next one. Docked, the topbar
+ * is right there and a second Invoke button would only compete with it.
  */
-export const PreviewHeaderActions = ({ region }: WidgetViewProps) => {
+export const PreviewHeaderActions = ({ region, runtime }: WidgetViewProps) => {
   const { t } = useTranslation();
   const showProgressImagesInViewer = useActiveProjectSelector((project) => project.settings.showProgressImagesInViewer);
   const hasProgressImage = useProgressImage() !== null;
@@ -61,6 +69,7 @@ export const PreviewHeaderActions = ({ region }: WidgetViewProps) => {
       {/* Both toggles go through `ToggleIconButton` so they read as one control
           type: the filled variant carries "on", `aria-pressed` carries it for
           assistive tech, and the label doubles as the tooltip. */}
+      {region === 'floating' ? <FloatingInvokeButton runtime={runtime} /> : null}
       <ToggleIconButton
         checked={isFilmstripVisible}
         icon={GalleryThumbnailsIcon}
@@ -77,5 +86,45 @@ export const PreviewHeaderActions = ({ region }: WidgetViewProps) => {
         onCheckedChange={toggleProgressImages}
       />
     </HStack>
+  );
+};
+
+/**
+ * The floating window's Invoke control. It reads the same invocation state as
+ * the topbar button, so it dims and names the blocking reason under exactly
+ * the conditions the topbar does, instead of silently doing nothing when the
+ * route is invalid or the backend is disconnected. Submission goes through the
+ * registered `app.invoke` command — the topbar button's and the hotkey's path
+ * — so the validation and disconnect guards are not duplicated here.
+ *
+ * Split out so the hook's subscriptions (models, dynamic prompt expansion)
+ * only run while the widget floats.
+ */
+const FloatingInvokeButton = ({ runtime }: Pick<WidgetViewProps, 'runtime'>) => {
+  const { t } = useTranslation();
+  const { blockingReasons, isPreparing, isValid } = useInvocationState();
+  const canInvoke = isValid && !isPreparing;
+  const label = canInvoke
+    ? t('widgets.preview.invoke')
+    : isPreparing
+      ? t('topbar.invoke.preparing')
+      : t('topbar.invoke.unavailable', { reason: blockingReasons[0] ?? t('topbar.invoke.unrunnable') });
+  const invoke = useCallback(() => void runtime.commands.execute('app.invoke'), [runtime]);
+
+  return (
+    <Tooltip content={label}>
+      <IconButton
+        aria-disabled={!canInvoke}
+        aria-label={label}
+        color="brand.fg"
+        cursor={canInvoke ? undefined : 'not-allowed'}
+        opacity={canInvoke ? undefined : 0.55}
+        size="2xs"
+        variant="ghost"
+        onClick={canInvoke ? invoke : undefined}
+      >
+        <Icon as={InvokeMarkIcon} boxSize="3.5" />
+      </IconButton>
+    </Tooltip>
   );
 };

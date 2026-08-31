@@ -134,6 +134,51 @@ describe('mergeGalleryItemWindow', () => {
     ).toEqual(['oldest.png', 'newest.png', 'middle.png']);
   });
 
+  it('places an overlaid recent by its instant, not by timestamp shape, against backend items', () => {
+    // Backend rows carry SQLite `created_at` ("2026-08-29 13:01:20.649"); the
+    // overlay carries the queue's ISO `submittedAt`. The overlaid recent is
+    // older than every loaded backend row and absent from the window: with
+    // Newest first it must sort below them, not above them.
+    const createBackendItem = (name: string, createdAt: string): GalleryItem => ({
+      boardId: 'none',
+      category: 'general',
+      createdAt,
+      fullUrl: `/images/${name}`,
+      height: 512,
+      isIntermediate: false,
+      kind: 'image',
+      name,
+      starred: false,
+      thumbnailUrl: `/thumbnails/${name}`,
+      width: 512,
+    });
+    const backendItems = [
+      createBackendItem('newer.png', '2026-08-29 13:01:20.649'),
+      createBackendItem('middle.png', '2026-08-29 12:00:00.000'),
+    ];
+    const recentImages = [
+      asGenerated(
+        createImage(1, {
+          imageName: 'older.png',
+          queuedAt: '2026-08-29T02:28:40.566Z',
+        })
+      ),
+    ];
+
+    expect(
+      mergeGalleryItemWindow({ backendItems, filter, maxRows: 60, recentImages }).map((item) => item.name)
+    ).toEqual(['newer.png', 'middle.png', 'older.png']);
+
+    expect(
+      mergeGalleryItemWindow({
+        backendItems,
+        filter: { ...filter, orderDir: 'ASC' },
+        maxRows: 60,
+        recentImages,
+      }).map((item) => item.name)
+    ).toEqual(['older.png', 'middle.png', 'newer.png']);
+  });
+
   it('uses SQLite binary ordering for mixed-case and punctuation name ties in both directions', () => {
     const createTiedItem = (name: string): GalleryItem => ({
       boardId: 'none',

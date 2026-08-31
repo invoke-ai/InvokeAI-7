@@ -18,9 +18,32 @@ const THUMBNAIL_HOVER_CSS = {
   '&:hover .gallery-thumb-overlay, &:focus-within .gallery-thumb-overlay': { opacity: 1 },
 } as const;
 
+/**
+ * The tile while its image is being dragged: desaturated, the visible half of
+ * the touch drag cue. The other half is the portalled drag preview, which
+ * carries the same desaturation so the change is visible under a finger that
+ * has not moved yet — the moment the drag hold completes.
+ */
+const THUMBNAIL_DRAG_CSS = {
+  ...THUMBNAIL_HOVER_CSS,
+  filter: 'saturate(0)',
+} as const;
+
+/**
+ * The tile while a touch hold has armed the drag gate (before movement starts
+ * the drag): the same desaturation, easing in as the hold completes so the
+ * user can see the gesture flip from scroll to drag. Set as
+ * `data-drag-armed` by the hold-to-drag sensor.
+ */
+const THUMBNAIL_ARMED_CSS = {
+  ...THUMBNAIL_HOVER_CSS,
+  '&[data-drag-armed=true]': { filter: 'saturate(0)' },
+} as const;
+
 const PREVIEW_IMAGE_STYLE = {
   borderRadius: '0.375rem',
   boxShadow: '0 8px 24px rgb(0 0 0 / 45%)',
+  filter: 'saturate(0)',
   height: '100%',
   objectFit: 'cover',
   width: '100%',
@@ -130,9 +153,16 @@ const GalleryThumbnail = ({
   const handleContextMenu = useCallback(
     (event: MouseEvent) => {
       event.preventDefault();
-      onContextMenu(item, event.clientX, event.clientY);
+
+      // A long-press that armed or started a touch drag is drag intent, not
+      // menu intent: the native menu is already suppressed by the sensor, and
+      // the app menu must not open under a gesture that is about to move the
+      // image.
+      if (!isDragging) {
+        onContextMenu(item, event.clientX, event.clientY);
+      }
     },
-    [item, onContextMenu]
+    [isDragging, item, onContextMenu]
   );
 
   const handleClick = useCallback((event: MouseEvent) => onClick(item, event), [item, onClick]);
@@ -161,14 +191,19 @@ const GalleryThumbnail = ({
       borderColor={isSelected || isCompared ? 'accent.solid' : 'border.subtle'}
       borderWidth="2px"
       boxShadow={isCompared ? 'inset 0 0 0 1px {colors.accent.solid}' : undefined}
-      css={THUMBNAIL_HOVER_CSS}
+      css={isDragging ? THUMBNAIL_DRAG_CSS : THUMBNAIL_ARMED_CSS}
       minW="0"
       opacity={isDragging ? 0.4 : undefined}
       overflow="hidden"
       position="relative"
       role="listitem"
       rounded="md"
-      touchAction="none"
+      // Pan, don't drag: `none` would hand every touch-drag to the drag
+      // sensor before the browser could scroll the grid. Allowing the pan
+      // lets a moving finger scroll (the hold-to-drag sensor releases the
+      // gesture when the browser claims it); dragging still works after a
+      // sustained hold.
+      touchAction="pan-y"
       w="full"
       onContextMenu={handleContextMenu}
     >

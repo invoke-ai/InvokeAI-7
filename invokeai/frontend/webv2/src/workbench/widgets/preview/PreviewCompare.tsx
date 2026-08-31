@@ -403,6 +403,12 @@ const CompareSidePane = ({
       overflow="hidden"
       position="relative"
       rounded="lg"
+      // Keeps the browser's own pan and pinch off the pane, so a two-finger
+      // gesture reaches the shared loupe instead of zooming the page — but only
+      // where there is a loupe: mismatched dimensions leave the panes without
+      // one, and suppressing the browser's gestures there would replace them
+      // with nothing.
+      touchAction={pane ? 'none' : undefined}
       {...pane?.frameProps}
     >
       <img

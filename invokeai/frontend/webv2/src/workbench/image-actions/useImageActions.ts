@@ -420,11 +420,23 @@ export const useImageActions = ({
             const retainedFailedKeys = items
               .filter((item) => failedKeys.has(toGalleryItemKey(item)))
               .map(toGalleryItemKey);
+            // The successor was chosen from the host's own list, so it is
+            // stamped the way the host would stamp it — in the window it
+            // came from, not the grid's.
+            const selectionPage = deletionContext?.getItemSelectionPage?.(successor);
 
             if (retainedFailedKeys.length > 0) {
-              gallery.setItemMultiSelection([...retainedFailedKeys, toGalleryItemKey(successor)], successor, projectId);
-            } else {
+              const itemKeys = [...retainedFailedKeys, toGalleryItemKey(successor)];
+
+              if (selectionPage === undefined) {
+                gallery.setItemMultiSelection(itemKeys, successor, projectId);
+              } else {
+                gallery.setItemMultiSelection(itemKeys, successor, projectId, selectionPage);
+              }
+            } else if (selectionPage === undefined) {
               gallery.selectItem(successor, projectId);
+            } else {
+              gallery.selectItem(successor, projectId, selectionPage, true);
             }
           }
           onImagesDeleted?.(result.succeeded.filter((item) => item.kind === 'image').map((item) => item.name));
@@ -766,7 +778,13 @@ export const useImageActions = ({
         window.open(item.fullUrl, '_blank', 'noopener');
       },
       openItemInPreview: (item) => {
-        gallery.selectItem(item, projectId);
+        const selectionPage = getItemActionContext?.()?.getItemSelectionPage?.(item);
+
+        if (selectionPage === undefined) {
+          gallery.selectItem(item, projectId);
+        } else {
+          gallery.selectItem(item, projectId, selectionPage, true);
+        }
         openWorkbenchWidget('preview', { preferredRegions: ['center'], requireCenterView: true });
       },
       setItemsStarred,

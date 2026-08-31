@@ -54,6 +54,8 @@ import {
   getBoundedRecentImages,
   getGalleryPage,
   getPersistedSelectedGalleryItemKeys,
+  stripInfiniteWindowAnchor,
+  stripUnresolvableGallerySearch,
   getGallerySettings,
   getSelectedGalleryItemFromValues,
   legacyGeneratedImageToGalleryItem,
@@ -146,6 +148,7 @@ import {
   type CanvasStagingSlot,
 } from './canvasStagingView';
 import { cascadeDefaultGeometry, clampSizeToMinimum, nextStackOrder } from './floatingWindows';
+import { getSourceIdForWidgetTypeId } from './graphWidgets';
 import {
   defaultInvocationRoute,
   isInvocationRouteValid,
@@ -332,7 +335,14 @@ type WorkbenchReducerAction =
       nextPrimaryItem: GalleryItem | null;
       projectId?: string;
     }
-  | { type: 'setGalleryMultiSelection'; itemKeys: GalleryItemKey[]; primaryItem: GalleryItem; projectId?: string }
+  | {
+      type: 'setGalleryMultiSelection';
+      itemKeys: GalleryItemKey[];
+      primaryItem: GalleryItem;
+      projectId?: string;
+      /** Stamps this page, in the navigation query already on the selection, instead of the grid's. */
+      selectionPage?: number;
+    }
   | { type: 'setGalleryCompareImage'; image: GalleryImageItem | null; projectId?: string }
   | { type: 'selectGalleryBoard'; boardId: string; projectId?: string }
   | { type: 'setGalleryView'; galleryView: 'images' | 'assets'; projectId?: string }
@@ -451,7 +461,20 @@ export const getPanelCollapseThreshold = (region: WidgetRegion): number =>
  * has hysteresis instead of flapping a whole panel on one pixel.
  */
 export const shouldSnapPanelShut = (region: WidgetRegion, rawSizePx: number, isSnapped: boolean): boolean =>
-  rawSizePx <= getPanelCollapseThreshold(region) + (isSnapped ? PANEL_COLLAPSE_OVERSHOOT_PX / 2 : 0);
+  shouldSnapPanelShutAt(getPanelCollapseThreshold(region), rawSizePx, isSnapped);
+
+/**
+ * `shouldSnapPanelShut` against an explicit threshold, for a panel the
+ * viewport has squeezed below its floor: the overshoot is then measured from
+ * the width actually on screen, so a drag on a 213px panel collapses it after
+ * 80px instead of demanding the pointer travel to where the floor would be.
+ */
+export const shouldSnapPanelShutAt = (thresholdPx: number, rawSizePx: number, isSnapped: boolean): boolean =>
+  rawSizePx <= thresholdPx + (isSnapped ? PANEL_COLLAPSE_OVERSHOOT_PX / 2 : 0);
+
+/** The collapse threshold for a panel currently rendered at `visibleSizePx`. */
+export const getVisiblePanelCollapseThreshold = (region: WidgetRegion, visibleSizePx: number): number =>
+  Math.min(getPanelCollapseThreshold(region), visibleSizePx - PANEL_COLLAPSE_OVERSHOOT_PX);
 
 const now = (): string => new Date().toISOString();
 
@@ -1687,7 +1710,20 @@ const normalizePromptHistory = (value: unknown): PromptHistoryItem[] => {
   }, []);
 };
 
-export const normalizeWorkbenchProject = (project: Project): Project => {
+export const normalizeWorkbenchProject = (
+  project: Project,
+  options: {
+    /**
+     * Whether the document is arriving from another realm (a server record,
+     * an import) rather than being kept by this one (the conflict fork that
+     * rescues the live copy). An infinite window's mid-board anchor is a
+     * "you are here" for the session that revealed it: it is dropped from a
+     * document that arrives, and kept for one that stays.
+     */
+    isArriving?: boolean;
+  } = {}
+): Project => {
+  const { isArriving = true } = options;
   const legacyWidgetRegions = project.widgetRegions as
     | Partial<Record<WidgetRegion | 'left-panel' | 'right-panel' | 'status-bar', WidgetRegionState>>
     | undefined;
@@ -1733,18 +1769,41 @@ export const normalizeWorkbenchProject = (project: Project): Project => {
   }
 
   for (const [instanceId, instance] of Object.entries(widgetInstances)) {
-    if (instance.typeId !== 'gallery' || !('recentImages' in instance.state.values)) {
+    if (instance.typeId !== 'gallery') {
       continue;
     }
+
+    // A project can arrive here from a realm that never ran the session its
+    // values describe — the Open dialog, a deep link — where a search only
+    // that session could resolve, and the rank pages set against it, would be
+    // read as board positions. But this also runs on projects that never
+    // left: closing and reopening one, and the conflict fork that deliberately
+    // rescues the LIVE copy. So the test is whether the reference resolves
+    // here, not what kind it is; the latter would delete the ranking the user
+    // is looking at.
+    // An infinite window's mid-board anchor goes the same way, for the same
+    // reason the save path drops it: it is a "you are here" for the session
+    // that revealed it. Adoption and the boot snapshot have to agree on this,
+    // because the sync baseline is taken from the adopted document while the
+    // store is hydrated from the snapshot — a project that has only been
+    // opened must serialize to its baseline, or the next autosave pushes it.
+    const strippedSearchValues = stripUnresolvableGallerySearch(instance.state.values);
+    const strippedValues = isArriving
+      ? (stripInfiniteWindowAnchor(strippedSearchValues ?? instance.state.values) ?? strippedSearchValues)
+      : strippedSearchValues;
+    const hasRecentImages = 'recentImages' in instance.state.values;
+
+    if (strippedValues === null && !hasRecentImages) {
+      continue;
+    }
+
+    const values = strippedValues ?? instance.state.values;
 
     widgetInstances[instanceId] = {
       ...instance,
       state: {
         ...instance.state,
-        values: {
-          ...instance.state.values,
-          recentImages: getBoundedRecentImages(instance.state.values.recentImages),
-        },
+        values: hasRecentImages ? { ...values, recentImages: getBoundedRecentImages(values.recentImages) } : values,
       },
     };
   }
@@ -1817,17 +1876,20 @@ const recoverProjectUnderNewIdentity = (
   snapshotProject: Project,
   identity: ProjectRecoveredIdentity
 ): Project =>
-  normalizeWorkbenchProject(
-    localProject
-      ? {
+  // The fork rescues the LIVE copy, edits and position included; only a
+  // fallback to the snapshot is a document arriving from elsewhere.
+  localProject
+    ? normalizeWorkbenchProject(
+        {
           ...localProject,
           id: identity.id,
           name: identity.name,
           recoveredAt: identity.recoveredAt,
           recoveryOf: identity.recoveryOf,
-        }
-      : snapshotProject
-  );
+        },
+        { isArriving: false }
+      )
+    : normalizeWorkbenchProject(snapshotProject);
 
 export const clampPanelSize = (region: WidgetRegion, sizePx: number): number => {
   const { max, min } = getPanelSizeBounds(region);
@@ -2190,7 +2252,7 @@ const normalizeWorkbenchState = (state: WorkbenchState): WorkbenchState => ({
   // (they live in the settings store now) and must not resurface here.
   account: normalizeWorkbenchAccount(state.account),
   notifications: [],
-  projects: state.projects.map(normalizeWorkbenchProject),
+  projects: state.projects.map((project) => normalizeWorkbenchProject(project)),
 });
 
 const updateActiveLayout = (
@@ -2351,6 +2413,70 @@ const applyAutoRouteForEdit = (
  */
 const applyAutoRouteForGenerateEdit = (project: Project, context: WorkbenchReducerContext): Project =>
   project.invocation.sourceId === 'canvas' ? project : applyAutoRouteForEdit(project, 'generate', context);
+
+/**
+ * Bringing a graph-bearing widget to the front is as strong a statement of
+ * intent as editing one: someone who clicks the Video tab and presses Invoke
+ * means the video parameters, not whichever surface they last touched. Reveal
+ * therefore feeds the same policy as an edit, through the same preference and
+ * lock gates, so the surface in front of you is the surface that runs.
+ *
+ * Non-graph widgets (gallery, layers, ...) resolve to no source and leave the
+ * route alone, and generate keeps its canvas exception for the reason given
+ * above -- the canvas parameter panel *is* the generate widget, so revealing it
+ * must not steal the route from an active canvas source.
+ */
+const applyAutoRouteForWidgetReveal = (
+  project: Project,
+  typeId: WidgetTypeId | undefined,
+  context: WorkbenchReducerContext
+): Project => {
+  const sourceId = typeId ? getSourceIdForWidgetTypeId(typeId) : null;
+
+  if (!sourceId) {
+    return project;
+  }
+
+  return sourceId === 'generate'
+    ? applyAutoRouteForGenerateEdit(project, context)
+    : applyAutoRouteForEdit(project, sourceId, context);
+};
+
+/** `applyAutoRouteForWidgetReveal` for the instance-addressed reveal actions. */
+const applyAutoRouteForRevealedInstance = (
+  project: Project,
+  instanceId: WidgetInstanceId,
+  context: WorkbenchReducerContext
+): Project => applyAutoRouteForWidgetReveal(project, project.widgetInstances[instanceId]?.typeId, context);
+
+/**
+ * Reveal for the paths where the front widget changes as a *consequence* of
+ * something else — closing a tab, dragging one out of a rail, reordering — as
+ * opposed to the paths where the gesture names the widget outright.
+ *
+ * Only an actual change of the visible front widget counts. Closing a
+ * background tab leaves the same panel in front and must not re-target Invoke,
+ * and a region that ends collapsed (or whose `activeInstanceId` is left
+ * dangling by the last removal) has revealed nothing at all.
+ */
+const applyAutoRouteForRegionFront = (
+  project: Project,
+  previousRegion: WidgetRegionState,
+  region: WidgetRegion,
+  context: WorkbenchReducerContext
+): Project => {
+  const nextRegion = project.widgetRegions[region];
+
+  if (
+    nextRegion.isCollapsed ||
+    nextRegion.activeInstanceId === previousRegion.activeInstanceId ||
+    !nextRegion.instanceIds.includes(nextRegion.activeInstanceId)
+  ) {
+    return project;
+  }
+
+  return applyAutoRouteForRevealedInstance(project, nextRegion.activeInstanceId, context);
+};
 
 const compileInvocationSnapshot = (
   project: Project,
@@ -3547,21 +3673,25 @@ export const __workbenchReducerInternal = (
         // must never render in a panel and a floating window at once.
         const { [instanceId]: _floated, ...floatingWidgets } = project.floatingWidgets ?? {};
 
-        return {
-          ...project,
-          floatingWidgets,
-          layout: openPanelForRegion(project.layout, action.region),
-          widgetInstances,
-          widgetRegions: {
-            ...project.widgetRegions,
-            [action.region]: {
-              ...region,
-              activeInstanceId: instanceId,
-              instanceIds,
-              isCollapsed: false,
+        return applyAutoRouteForWidgetReveal(
+          {
+            ...project,
+            floatingWidgets,
+            layout: openPanelForRegion(project.layout, action.region),
+            widgetInstances,
+            widgetRegions: {
+              ...project.widgetRegions,
+              [action.region]: {
+                ...region,
+                activeInstanceId: instanceId,
+                instanceIds,
+                isCollapsed: false,
+              },
             },
           },
-        };
+          action.widgetId,
+          context
+        );
       });
     }
     case 'selectRegionWidget': {
@@ -3569,30 +3699,56 @@ export const __workbenchReducerInternal = (
         const region = project.widgetRegions[action.region];
 
         if (action.region === 'center') {
-          return {
-            ...project,
-            widgetRegions: {
-              ...project.widgetRegions,
-              center: { ...region, activeInstanceId: action.widgetId, isCollapsed: false },
+          return applyAutoRouteForRevealedInstance(
+            {
+              ...project,
+              widgetRegions: {
+                ...project.widgetRegions,
+                center: { ...region, activeInstanceId: action.widgetId, isCollapsed: false },
+              },
             },
-          };
+            action.widgetId,
+            context
+          );
         }
 
-        const widgetRegion =
-          region.activeInstanceId === action.widgetId
-            ? { ...region, isCollapsed: !region.isCollapsed }
-            : { ...region, activeInstanceId: action.widgetId, isCollapsed: false };
+        // Clicking the already-active tab toggles the rail's disclosure rather
+        // than switching tabs. Expanding it puts that panel back on screen and
+        // is a reveal like any other; collapsing it puts nothing in front, so
+        // the route stays exactly where it is.
+        if (region.activeInstanceId === action.widgetId) {
+          const disclosed = {
+            ...project,
+            layout: openPanelForRegion(project.layout, action.region),
+            widgetRegions: {
+              ...project.widgetRegions,
+              [action.region]: { ...region, isCollapsed: !region.isCollapsed },
+            },
+          };
 
-        return {
-          ...project,
-          layout: openPanelForRegion(project.layout, action.region),
-          widgetRegions: { ...project.widgetRegions, [action.region]: widgetRegion },
-        };
+          return region.isCollapsed
+            ? applyAutoRouteForRevealedInstance(disclosed, action.widgetId, context)
+            : disclosed;
+        }
+
+        return applyAutoRouteForRevealedInstance(
+          {
+            ...project,
+            layout: openPanelForRegion(project.layout, action.region),
+            widgetRegions: {
+              ...project.widgetRegions,
+              [action.region]: { ...region, activeInstanceId: action.widgetId, isCollapsed: false },
+            },
+          },
+          action.widgetId,
+          context
+        );
       });
     }
     case 'toggleRegionWidget': {
-      return updateProjectById(state, action.projectId ?? state.activeProjectId, (project) =>
-        updateProjectWidgetRegion(project, action.region, (region) => {
+      return updateProjectById(state, action.projectId ?? state.activeProjectId, (project) => {
+        const previousRegion = project.widgetRegions[action.region];
+        const nextProject = updateProjectWidgetRegion(project, action.region, (region) => {
           const isEnabled = region.instanceIds.includes(action.widgetId);
 
           if (action.region === 'center' && isEnabled && region.instanceIds.length === 1) {
@@ -3610,8 +3766,20 @@ export const __workbenchReducerInternal = (
             instanceIds,
             isCollapsed: action.region === 'center' ? false : instanceIds.length === 0 ? true : region.isCollapsed,
           };
-        })
-      );
+        });
+
+        // A refused toggle (the work surface keeping its last view) must stay a
+        // no-op down to object identity: the persistence layer treats any new
+        // `projects` reference as a change worth autosaving.
+        if (nextProject === project) {
+          return project;
+        }
+
+        // Closing the front tab promotes a new one, which is a reveal; closing
+        // a background tab changes nothing on screen and must leave the route
+        // alone. `applyAutoRouteForRegionFront` draws exactly that line.
+        return applyAutoRouteForRegionFront(nextProject, previousRegion, action.region, context);
+      });
     }
     case 'floatWidget': {
       return updateActiveProject(state, (project) => {
@@ -3646,25 +3814,31 @@ export const __workbenchReducerInternal = (
           stackOrder: nextStackOrder(project.floatingWidgets),
         };
 
-        return {
-          ...project,
-          floatingWidgets: { ...project.floatingWidgets, [action.instanceId]: floating },
-          widgetRegions: {
-            ...project.widgetRegions,
-            [hostRegionId]: {
-              ...hostRegion,
-              activeInstanceId:
-                hostRegion.activeInstanceId === action.instanceId && fallbackInstanceId
-                  ? fallbackInstanceId
-                  : hostRegion.activeInstanceId,
-              instanceIds,
-              // Floating the last widget out of a rail leaves nothing to show,
-              // so the rail collapses rather than standing open and empty —
-              // the same repair `toggleRegionWidget` makes.
-              isCollapsed: instanceIds.length === 0 ? true : hostRegion.isCollapsed,
+        return applyAutoRouteForRevealedInstance(
+          {
+            ...project,
+            floatingWidgets: { ...project.floatingWidgets, [action.instanceId]: floating },
+            widgetRegions: {
+              ...project.widgetRegions,
+              [hostRegionId]: {
+                ...hostRegion,
+                activeInstanceId:
+                  hostRegion.activeInstanceId === action.instanceId && fallbackInstanceId
+                    ? fallbackInstanceId
+                    : hostRegion.activeInstanceId,
+                instanceIds,
+                // Floating the last widget out of a rail leaves nothing to show,
+                // so the rail collapses rather than standing open and empty —
+                // the same repair `toggleRegionWidget` makes.
+                isCollapsed: instanceIds.length === 0 ? true : hostRegion.isCollapsed,
+              },
             },
           },
-        };
+          // The window lands on top of everything, so it is the revealed
+          // surface — not the tab the rail promotes behind it.
+          action.instanceId,
+          context
+        );
       });
     }
     case 'dockFloatingWidget': {
@@ -3681,20 +3855,24 @@ export const __workbenchReducerInternal = (
           ? region.instanceIds
           : insertAtReturnIndex(region.instanceIds, action.instanceId, floating.returnIndex);
 
-        return {
-          ...project,
-          floatingWidgets: remaining,
-          layout: openPanelForRegion(project.layout, floating.returnRegion),
-          widgetRegions: {
-            ...project.widgetRegions,
-            [floating.returnRegion]: {
-              ...region,
-              activeInstanceId: action.instanceId,
-              instanceIds,
-              isCollapsed: false,
+        return applyAutoRouteForRevealedInstance(
+          {
+            ...project,
+            floatingWidgets: remaining,
+            layout: openPanelForRegion(project.layout, floating.returnRegion),
+            widgetRegions: {
+              ...project.widgetRegions,
+              [floating.returnRegion]: {
+                ...region,
+                activeInstanceId: action.instanceId,
+                instanceIds,
+                isCollapsed: false,
+              },
             },
           },
-        };
+          action.instanceId,
+          context
+        );
       });
     }
     case 'setFloatingWidgetGeometry': {
@@ -3749,6 +3927,12 @@ export const __workbenchReducerInternal = (
         const floating = project.floatingWidgets?.[action.instanceId];
         const topOrder = nextStackOrder(project.floatingWidgets) - 1;
 
+        // `focusFloatingWidget` is bound to `onPointerDownCapture` on the window
+        // root, so it fires on every scroll, drag, and button press inside the
+        // window — not just on a raise. Routing therefore stays behind this
+        // shortcut: raising a window reveals it, but touching the window that
+        // is already on top reveals nothing and must not re-target Invoke or
+        // dirty the project.
         if (!floating || floating.stackOrder === topOrder) {
           return project;
         }
@@ -3768,7 +3952,7 @@ export const __workbenchReducerInternal = (
 
         floatingWidgets[action.instanceId] = { ...floating, stackOrder: below.length + 1 };
 
-        return { ...project, floatingWidgets };
+        return applyAutoRouteForRevealedInstance({ ...project, floatingWidgets }, action.instanceId, context);
       });
     }
     case 'moveWidgetInstance': {
@@ -3778,37 +3962,50 @@ export const __workbenchReducerInternal = (
         const nextFromInstanceIds = fromRegion.instanceIds.filter((instanceId) => instanceId !== action.instanceId);
         const nextToInstanceIds = insertAt(toRegion.instanceIds, action.instanceId, action.toIndex);
 
-        return {
-          ...project,
-          layout: openPanelForRegion(project.layout, action.toRegion),
-          widgetRegions: {
-            ...project.widgetRegions,
-            [action.fromRegion]: {
-              ...fromRegion,
-              activeInstanceId:
-                fromRegion.activeInstanceId === action.instanceId
-                  ? (nextFromInstanceIds[0] ?? fromRegion.activeInstanceId)
-                  : fromRegion.activeInstanceId,
-              instanceIds: nextFromInstanceIds,
-              isCollapsed:
-                action.fromRegion === 'center' ? false : nextFromInstanceIds.length === 0 || fromRegion.isCollapsed,
-            },
-            [action.toRegion]: {
-              ...toRegion,
-              activeInstanceId: action.instanceId,
-              instanceIds: nextToInstanceIds,
-              isCollapsed: false,
+        return applyAutoRouteForRevealedInstance(
+          {
+            ...project,
+            layout: openPanelForRegion(project.layout, action.toRegion),
+            widgetRegions: {
+              ...project.widgetRegions,
+              [action.fromRegion]: {
+                ...fromRegion,
+                activeInstanceId:
+                  fromRegion.activeInstanceId === action.instanceId
+                    ? (nextFromInstanceIds[0] ?? fromRegion.activeInstanceId)
+                    : fromRegion.activeInstanceId,
+                instanceIds: nextFromInstanceIds,
+                isCollapsed:
+                  action.fromRegion === 'center' ? false : nextFromInstanceIds.length === 0 || fromRegion.isCollapsed,
+              },
+              [action.toRegion]: {
+                ...toRegion,
+                activeInstanceId: action.instanceId,
+                instanceIds: nextToInstanceIds,
+                isCollapsed: false,
+              },
             },
           },
-        };
+          // The dragged widget lands expanded and selected in the target
+          // region; the tab the source region promotes behind it did not move.
+          action.instanceId,
+          context
+        );
       });
     }
     case 'reorderWidgetInstances': {
-      return updateActiveWidgetRegion(state, action.region, (region) => ({
-        ...region,
-        activeInstanceId: action.activeInstanceId ?? region.activeInstanceId,
-        instanceIds: action.instanceIds,
-      }));
+      return updateActiveProject(state, (project) => {
+        const previousRegion = project.widgetRegions[action.region];
+        const nextProject = updateProjectWidgetRegion(project, action.region, (region) => ({
+          ...region,
+          activeInstanceId: action.activeInstanceId ?? region.activeInstanceId,
+          instanceIds: action.instanceIds,
+        }));
+
+        // A reorder that also changes which tab is selected reveals that tab;
+        // a pure reorder leaves the same panel in front and must not re-route.
+        return applyAutoRouteForRegionFront(nextProject, previousRegion, action.region, context);
+      });
     }
     case 'setRegionWidgetCollapsed': {
       if (action.region === 'center') {
@@ -4298,10 +4495,16 @@ export const __workbenchReducerInternal = (
         state,
         (values) => {
           const settings = getGallerySettings(values);
-          const selectedImagePage =
-            typeof values.galleryPage === 'number' && Number.isFinite(values.galleryPage)
+          const hasSelectionPage = typeof action.selectionPage === 'number' && Number.isFinite(action.selectionPage);
+          const selectedImagePage = hasSelectionPage
+            ? Math.max(0, Math.floor(action.selectionPage as number))
+            : typeof values.galleryPage === 'number' && Number.isFinite(values.galleryPage)
               ? Math.max(0, Math.floor(values.galleryPage))
               : 0;
+          const existingNavigationQuery =
+            values.selectedImageQuery && typeof values.selectedImageQuery === 'object'
+              ? (values.selectedImageQuery as Record<string, unknown>)
+              : null;
 
           return {
             ...values,
@@ -4310,14 +4513,20 @@ export const __workbenchReducerInternal = (
             selectedImageName: toGalleryItemKey(action.primaryItem),
             selectedImageNames: action.itemKeys,
             selectedImagePage,
-            selectedImageQuery: {
-              boardId: typeof values.selectedBoardId === 'string' ? values.selectedBoardId : 'none',
-              galleryView: values.galleryView === 'assets' ? 'assets' : 'images',
-              imageOrderDir: settings.imageOrderDir,
-              page: selectedImagePage,
-              paginationMode: settings.paginationMode,
-              searchTerm: typeof values.searchTerm === 'string' ? values.searchTerm : '',
-            },
+            // An explicit page comes from a host navigating its own window, and
+            // names a page of the query already on the selection — the same
+            // contract as `selectGalleryItem` with `preserveNavigationQuery`.
+            selectedImageQuery:
+              hasSelectionPage && existingNavigationQuery
+                ? { ...existingNavigationQuery, page: selectedImagePage }
+                : {
+                    boardId: typeof values.selectedBoardId === 'string' ? values.selectedBoardId : 'none',
+                    galleryView: values.galleryView === 'assets' ? 'assets' : 'images',
+                    imageOrderDir: settings.imageOrderDir,
+                    page: selectedImagePage,
+                    paginationMode: settings.paginationMode,
+                    searchTerm: typeof values.searchTerm === 'string' ? values.searchTerm : '',
+                  },
           };
         },
         action.projectId

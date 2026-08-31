@@ -20,11 +20,17 @@ import { resolveWidgetInstanceLabel } from '@workbench/widgetLabels';
 import { getEnabledCenterViewCount } from '@workbench/widgetPlacementCommands';
 import { areWidgetPlacementProjectsEqual, getWidgetPlacementProject } from '@workbench/widgetPlacementMeta';
 import { useActiveProjectSelector, useWorkbenchCommands } from '@workbench/WorkbenchContext';
-import { clampPanelSize, getPanelSizeBounds, shouldSnapPanelShut } from '@workbench/workbenchState';
+import {
+  clampPanelSize,
+  getPanelSizeBounds,
+  getVisiblePanelCollapseThreshold,
+  shouldSnapPanelShutAt,
+} from '@workbench/workbenchState';
 import { useWorkbenchWidgetRegistry } from '@workbench/WorkbenchWidgetRegistryContext';
 import { PictureInPicture2Icon, SettingsIcon } from 'lucide-react';
 import {
   useCallback,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -78,6 +84,28 @@ export const WidgetPanelFrame = ({
   // the store's collapse is only committed on release.
   const isSnappedShut = drag?.isSnappedShut ?? false;
   const renderSizePx = isSnappedShut ? 0 : displaySizePx;
+  // Side panels yield to a viewport that cannot hold them (see
+  // `panelSizeProps`), so the width on screen can sit below the stored one.
+  // The gesture, the keyboard floor and the separator's announced value all
+  // work from what is on screen; the store keeps the preferred size.
+  const frameRef = useRef<HTMLDivElement | null>(null);
+  const [measuredSizePx, setMeasuredSizePx] = useState<number | null>(null);
+
+  useEffect(() => {
+    const frame = frameRef.current;
+
+    if (isBottom || !frame || typeof ResizeObserver === 'undefined') {
+      return;
+    }
+
+    const observer = new ResizeObserver(() => setMeasuredSizePx(Math.round(frame.getBoundingClientRect().width)));
+
+    observer.observe(frame);
+
+    return () => observer.disconnect();
+  }, [isBottom]);
+  const visibleSizePx =
+    isSnappedShut || measuredSizePx === null ? displaySizePx : Math.min(measuredSizePx, displaySizePx);
   const { max: maxPanelSizePx, min: minPanelSizePx } = getPanelSizeBounds(region);
   const focusRegionProps = useFocusRegionProps(region);
 
@@ -99,6 +127,9 @@ export const WidgetPanelFrame = ({
       const startX = event.clientX;
       const startY = event.clientY;
       const startSizePx = regionState.sizePx;
+      // How far the viewport has squeezed the panel below its stored size.
+      const squeezePx = clampPanelSize(region, startSizePx) - visibleSizePx;
+      const collapseThresholdPx = getVisiblePanelCollapseThreshold(region, visibleSizePx);
       const direction = isLeft ? 1 : -1;
       const pointerSession = new AbortController();
 
@@ -120,7 +151,7 @@ export const WidgetPanelFrame = ({
         const rawSizePx = startSizePx + deltaPx;
 
         nextDrag = {
-          isSnappedShut: shouldSnapPanelShut(region, rawSizePx, nextDrag.isSnappedShut),
+          isSnappedShut: shouldSnapPanelShutAt(collapseThresholdPx, rawSizePx - squeezePx, nextDrag.isSnappedShut),
           sizePx: clampPanelSize(region, rawSizePx),
         };
         setDrag(nextDrag);
@@ -152,7 +183,7 @@ export const WidgetPanelFrame = ({
       window.addEventListener('pointerup', handlePointerUp, { signal: pointerSession.signal });
       window.addEventListener('pointercancel', handlePointerCancel, { signal: pointerSession.signal });
     },
-    [commitSize, isBottom, isLeft, layout, region, regionState.sizePx]
+    [commitSize, isBottom, isLeft, layout, region, regionState.sizePx, visibleSizePx]
   );
 
   const handleKeyDown = useCallback(
@@ -180,8 +211,9 @@ export const WidgetPanelFrame = ({
       event.preventDefault();
 
       // Keyboard parity with the drag: a further collapse-ward step at the
-      // floor collapses, instead of silently clamping forever.
-      if (sizeChange < 0 && displaySizePx <= minPanelSizePx) {
+      // floor collapses, instead of silently clamping forever. A squeezed
+      // panel is already below the floor on screen, so it collapses too.
+      if (sizeChange < 0 && visibleSizePx <= minPanelSizePx) {
         layout.setRegionCollapsed(region, true);
 
         return;
@@ -189,10 +221,18 @@ export const WidgetPanelFrame = ({
 
       commitSize(displaySizePx + sizeChange);
     },
-    [commitSize, displaySizePx, isBottom, isLeft, layout, maxPanelSizePx, minPanelSizePx, region]
+    [commitSize, displaySizePx, isBottom, isLeft, layout, maxPanelSizePx, minPanelSizePx, region, visibleSizePx]
   );
+  // The stored size is a preference, not a guarantee: side panels yield
+  // (`flexShrink`) when the viewport cannot hold both of them plus the
+  // center's minimum — a portrait tablet — so the center never collapses and
+  // the opposite rail never gets pushed offscreen. The bottom panel keeps a
+  // hard height because the column has no minimum-width peer to protect.
   const panelSizeProps = useMemo(
-    () => (isBottom ? { h: `${renderSizePx}px`, w: 'full' } : { h: 'full', w: `${renderSizePx}px` }),
+    () =>
+      isBottom
+        ? { flexShrink: 0, h: `${renderSizePx}px`, w: 'full' }
+        : { flexShrink: 1, h: 'full', w: `${renderSizePx}px` },
     [renderSizePx, isBottom]
   );
   // Inside the panel's box, never straddling its edge: the frame clips its
@@ -217,9 +257,9 @@ export const WidgetPanelFrame = ({
       borderLeftWidth={!isLeft && !isBottom && !isSnappedShut ? '1px' : '0'}
       borderTopWidth={isBottom && !isSnappedShut ? '1px' : '0'}
       direction="column"
-      flexShrink={0}
       overflow="hidden"
       minW="0"
+      ref={frameRef}
       data-hotkey-widget-instance-id={instanceId}
       data-hotkey-widget-region={region}
       data-hotkey-widget-type-id={typeId}
@@ -231,8 +271,8 @@ export const WidgetPanelFrame = ({
         aria-label={`Resize ${region} widget panel`}
         aria-orientation={isBottom ? 'horizontal' : 'vertical'}
         aria-valuemax={maxPanelSizePx}
-        aria-valuemin={minPanelSizePx}
-        aria-valuenow={displaySizePx}
+        aria-valuemin={Math.min(minPanelSizePx, visibleSizePx)}
+        aria-valuenow={visibleSizePx}
         as="div"
         cursor={isBottom ? 'ns-resize' : 'ew-resize'}
         position="absolute"

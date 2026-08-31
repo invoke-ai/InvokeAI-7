@@ -61,6 +61,45 @@ describe('mergePreviewBoardItems', () => {
     expect(mergePreviewBoardItems([oldest, newest], [middle, oldest], 'ASC')).toEqual([oldest, middle, newest]);
   });
 
+  it('preserves relevance order for a ranked list', () => {
+    // A similarity result set is ordered by relevance, not by date. Re-sorting
+    // it here would make the arrows walk a different order from the one on
+    // screen. (Local generations never reach this call in ranked mode — the
+    // caller passes only the selection; see the anchor test below.)
+    const first = item('image', 'first', '2026-07-21T00:00:01.000Z');
+    const second = item('image', 'second', '2026-07-21T00:00:03.000Z', true);
+    const third = item('image', 'third', '2026-07-21T00:00:02.000Z');
+    const optimistic = item('image', 'optimistic', '2026-07-21T00:00:09.000Z');
+
+    expect(mergePreviewBoardItems([first, second, third], [], 'DESC', { isRanked: true })).toEqual([
+      first,
+      second,
+      third,
+    ]);
+    // Without the flag the same input is re-sorted (starred first, then
+    // newest) and the optimistic item is spliced in, so the ranked path really
+    // is what preserves the list.
+    expect(mergePreviewBoardItems([first, second, third], [optimistic], 'DESC')).toEqual([
+      second,
+      optimistic,
+      third,
+      first,
+    ]);
+  });
+
+  it('anchors a selection that the ranking does not contain, rather than losing the cursor', () => {
+    // A selection can be made outside the result set — an upload, an image-map
+    // click, or stepping off the live tile. Dropping it would leave the cursor
+    // pointing at nothing, which reads as both arrows going dead; keeping it
+    // at the head lets one press move into the ranked list.
+    const ranked = item('image', 'ranked', '2026-07-21T00:00:01.000Z');
+    const outsider = item('image', 'outsider', '2026-07-21T00:00:09.000Z');
+
+    expect(mergePreviewBoardItems([ranked], [outsider], 'DESC', { isRanked: true })).toEqual([outsider, ranked]);
+    // Already a member: kept once, in its ranked position.
+    expect(mergePreviewBoardItems([ranked], [ranked], 'DESC', { isRanked: true })).toEqual([ranked]);
+  });
+
   it('keeps starred backend items ahead of optimistic unstarred items', () => {
     const starred = item('video', 'starred', '2026-07-21T00:00:01.000Z', true);
     const optimistic = item('image', 'optimistic', '2026-07-21T00:00:03.000Z');

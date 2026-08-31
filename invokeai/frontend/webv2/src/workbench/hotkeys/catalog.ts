@@ -79,9 +79,10 @@ const implemented = new Set([
 /**
  * Hotkeys that must fire with the caret inside a text field or numeric input.
  *
- * There is no second Invoke button anywhere in the application, so `app.invoke`
- * and its variants are load-bearing: a prompt textarea that swallows ⌘↵ leaves
- * the user with no way to submit at all.
+ * The topbar's Invoke button is the only one that is always on screen (the
+ * floating preview window carries a second one, but only while it floats), so
+ * `app.invoke` and its variants are load-bearing: a prompt textarea that
+ * swallows ⌘↵ leaves the user with no way to submit at all.
  */
 const editableAppHotkeys = new Set([
   'app.focusPrompt',

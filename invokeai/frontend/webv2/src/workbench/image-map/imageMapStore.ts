@@ -4,7 +4,7 @@ import {
   registerAccountOwnedResource,
 } from '@platform/state/accountLifecycle';
 import { createExternalStore } from '@platform/state/externalStore';
-import { getApiErrorMessage } from '@platform/transport/http';
+import { ApiError, getApiErrorMessage } from '@platform/transport/http';
 
 import type { ImageMapClusterLabelInfo, ImageMapPoints } from './api';
 import type { ImageIndexCounts } from './indexProgress';
@@ -210,23 +210,39 @@ export const setClusterLabelsEnabled = (enabled: boolean): void => {
   }
 };
 
-const refreshClusterLabels = (data: ImageMapPoints): void => {
-  if (!clusterLabelsEnabled) {
-    return;
+/**
+ * Backoff for a labels request the server could not answer yet. The 409 the
+ * vocabulary build window answers with literally says "try again shortly":
+ * the build is already queued server-side the moment that response is sent,
+ * and the index worker lands it within seconds (a 1s poll, plus a disk-cached
+ * phrase matrix). The schedule's tail covers a cold build — minutes on a
+ * fresh install — while staying bounded; after it exhausts, the state is the
+ * old one: no labels until the next points refresh or the label toggle.
+ */
+const LABELS_RETRY_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 15_000, 30_000, 60_000, 60_000, 60_000];
+
+/**
+ * Failures worth retrying: the 409s (`TextSearchUnavailableError` — the
+ * vocabulary still building, or the text tower absent), 5xx, and the network
+ * refusal of a restarting backend (`fetch` rejects with TypeError). Auth and
+ * contract failures (401, 403, 422) are permanent from this client's side and
+ * settle on the first response.
+ */
+const isRetryableLabelsFailure = (error: unknown): boolean => {
+  if (error instanceof ApiError) {
+    return error.status === 409 || error.status >= 500;
   }
 
-  if (data.state !== 'ready') {
-    // Nothing to label; a disabled index would 409 on every refresh. Bump the
-    // sequence so an in-flight labels response cannot repopulate the labels
-    // this clears.
-    labelsSequence += 1;
-    imageMapStore.patchSnapshot({ clusterLabels: null, clusterLabelsHash: null });
+  return error instanceof TypeError;
+};
 
-    return;
-  }
-
-  labelsSequence += 1;
-  const sequence = labelsSequence;
+/**
+ * One attempt of the labels fetch, retrying retryable failures on the
+ * schedule above. The `sequence` is the guard every deferred step re-checks:
+ * a newer labels request, the label toggle, or an account switch bumps it and
+ * retires this attempt's callbacks outright.
+ */
+const attemptClusterLabels = (sequence: number, data: ImageMapPoints, attempt: number): void => {
   // Pass the points' effective eps so both requests cluster with the same
   // value — the adaptive default is derived from the visible set, which can
   // drift between the two requests. Same eps alone does not pin cluster ids
@@ -247,14 +263,52 @@ const refreshClusterLabels = (data: ImageMapPoints): void => {
         imageMapStore.patchSnapshot({ clusterLabels: response.labels, clusterLabelsHash: response.visibleHash });
       }
     })
-    .catch(() => {
+    .catch((error: unknown) => {
       // Same staleness rule as success: only the newest request may clear the
       // labels. A slow stale request failing after a newer one already set
       // fresh labels must not wipe them.
-      if (sequence === labelsSequence) {
-        imageMapStore.patchSnapshot({ clusterLabels: null, clusterLabelsHash: null });
+      if (sequence !== labelsSequence) {
+        return;
       }
+
+      imageMapStore.patchSnapshot({ clusterLabels: null, clusterLabelsHash: null });
+
+      if (attempt >= LABELS_RETRY_DELAYS_MS.length || !isRetryableLabelsFailure(error)) {
+        return;
+      }
+
+      // Nothing else re-requests labels on its own: a plain widget activation
+      // fetches no points (the store is already loaded), and the next socket
+      // event can be minutes away. Without this retry, one 409 in the
+      // vocabulary-build window after a backend restart leaves the map
+      // label-less until the user toggles labels off and back on.
+      const delay = LABELS_RETRY_DELAYS_MS[attempt];
+      setTimeout(() => {
+        if (sequence === labelsSequence) {
+          attemptClusterLabels(sequence, data, attempt + 1);
+        }
+      }, delay);
     });
+};
+
+const refreshClusterLabels = (data: ImageMapPoints): void => {
+  if (!clusterLabelsEnabled) {
+    return;
+  }
+
+  if (data.state !== 'ready') {
+    // Nothing to label; a disabled index would 409 on every refresh. Bump the
+    // sequence so an in-flight labels response cannot repopulate the labels
+    // this clears.
+    labelsSequence += 1;
+    imageMapStore.patchSnapshot({ clusterLabels: null, clusterLabelsHash: null });
+
+    return;
+  }
+
+  labelsSequence += 1;
+  const sequence = labelsSequence;
+  attemptClusterLabels(sequence, data, 0);
 };
 
 /**

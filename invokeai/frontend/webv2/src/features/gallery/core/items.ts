@@ -1,3 +1,5 @@
+import { normalizeServerTimestamp } from '@platform/time/serverTimestamp';
+
 import type { GalleryImage, GalleryOrderDir, GeneratedImageContract } from './types';
 
 export type GalleryItemKind = 'image' | 'video';
@@ -82,6 +84,17 @@ export const assertNeverGalleryItem = (item: never): never => {
 
 const compareSqliteBinaryText = (a: string, b: string): number => (a === b ? 0 : a < b ? -1 : 1);
 
+/**
+ * Chronological comparison across the two timestamp shapes the gallery mixes:
+ * backend rows carry SQLite's `created_at` ("2026-08-29 13:01:20.649") while
+ * overlaid recents carry the queue's `submittedAt` (ISO, "2026-08-29T02:28:40.566Z").
+ * Comparing the raw strings reads the 'T' separator as later than every
+ * space-separated time on the same day, so an older overlaid recent would sort
+ * above every newer backend image (and below them, with ascending order).
+ */
+const compareCreatedAt = (a: string, b: string): number =>
+  compareSqliteBinaryText(normalizeServerTimestamp(a), normalizeServerTimestamp(b));
+
 /** Mirrors the backend's starred/time/kind/name order for mixed gallery items. */
 export const compareGalleryItems = (
   a: GalleryItem,
@@ -93,7 +106,7 @@ export const compareGalleryItems = (
   }
 
   const direction = orderDir === 'ASC' ? 1 : -1;
-  const chronologicalOrder = compareSqliteBinaryText(a.createdAt, b.createdAt);
+  const chronologicalOrder = compareCreatedAt(a.createdAt, b.createdAt);
 
   if (chronologicalOrder !== 0) {
     return direction * chronologicalOrder;

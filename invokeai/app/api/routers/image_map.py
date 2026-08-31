@@ -194,6 +194,22 @@ def _cluster_cache_put(user_id: str, key: _ClusterCacheKey, labels: np.ndarray, 
             _cluster_cache.popitem(last=False)
 
 
+def _active_model_id(services) -> Optional[str]:
+    """The running indexer's model id, activating it if the encoder was installed since startup.
+
+    The encoder is often installed *after* the server came up — the image map's
+    own message links the starter install — and `start()` resolved the model
+    only once. Retrying here (throttled by the service) means opening or
+    refreshing the map picks the model up, rather than reporting
+    `model_missing` until the next restart.
+    """
+    model_id = services.image_index.model_id
+    if model_id is None and services.configuration.image_index_enabled:
+        services.image_index.try_activate()
+        model_id = services.image_index.model_id
+    return model_id
+
+
 @image_map_router.get("/points", operation_id="get_image_map_points", response_model=ImageMapPointsResponse)
 async def get_image_map_points(
     current_user: CurrentUserOrDefault,
@@ -207,7 +223,8 @@ async def get_image_map_points(
     or stale, a recompute is enqueued and reflected in `state`/`stale`.
     """
     services = ApiDependencies.invoker.services
-    model_id = services.image_index.model_id
+    # Off the loop: the retry queries the model store.
+    model_id = await asyncio.to_thread(_active_model_id, services)
     if model_id is None:
         # The service is also inert when indexing is enabled but the
         # configured model is not installed; tell the client which case
@@ -876,6 +893,9 @@ async def get_image_map_image_labels(
 )
 def refresh_image_map(current_user: CurrentUserOrDefault) -> ImageMapRefreshResponse:
     """Requests a recompute of the current user's image map projection."""
+    # The Retry the map offers alongside its "model not installed" message
+    # lands here, so give the install a chance to have landed too.
+    _active_model_id(ApiDependencies.invoker.services)
     user_id, is_admin = _scope(current_user)
     if not _claim_refresh_slot(user_id):
         # Throttled, not failed: `enqueued` already means "was this accepted",
@@ -971,7 +991,7 @@ def update_image_map_vocab(update: ImageMapVocabUpdate, current_user: AdminUserO
 def get_image_map_status(current_user: CurrentUserOrDefault) -> ImageMapStatusResponse:
     """Gets embedding index progress and the user's projection cache status."""
     services = ApiDependencies.invoker.services
-    model_id = services.image_index.model_id
+    model_id = _active_model_id(services)
     if model_id is None:
         model_missing = services.configuration.image_index_enabled
         return ImageMapStatusResponse(

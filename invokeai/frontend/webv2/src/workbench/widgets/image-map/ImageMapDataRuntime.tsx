@@ -46,7 +46,10 @@ export const attachImageMapDataRuntime = (): (() => void) => {
 
     // Only once the widget has actually loaded the map. `loading` used to pass
     // this guard, so an event landing during the first fetch queued a rerun
-    // and forced a second full point set the moment it settled.
+    // and forced a second full point set the moment it settled. It still must
+    // not pass here — but `image_map_projection_ready` below is the exception:
+    // that one event can announce a projection newer than the in-flight
+    // response, where dropping it strands a stale map.
     if (loadState !== 'loaded' && loadState !== 'error') {
       return;
     }
@@ -62,12 +65,30 @@ export const attachImageMapDataRuntime = (): (() => void) => {
     void refreshImageMapPoints();
   };
 
+  // A finished projection recompute can overtake the fetch that triggered it:
+  // the request was served the projection the recompute then replaced, so its
+  // points are stale and the labels request that follows it answers over the
+  // new record — discarded on the hash mismatch, with no labels to show for
+  // it. Dropping the event strands that map until some later one happens to
+  // fire; admitting `loading` costs one extra point set at most, because the
+  // store's dedup queues a single rerun when a refresh lands mid-flight (the
+  // `rerunRequested` comment describes exactly this arrival).
+  const refreshProjectionReady = () => {
+    const { loadState, renderError } = imageMapStore.getSnapshot();
+
+    if (renderError || (loadState !== 'loaded' && loadState !== 'error' && loadState !== 'loading')) {
+      return;
+    }
+
+    void refreshImageMapPoints();
+  };
+
   const detachers = [
     // The backend routes this to the requesting user's room plus admins, so
     // receipt alone does not mean "my map changed".
     socketHub.on('image_map_projection_ready', (payload: never) => {
       if (!isForAnotherUser((payload as unknown as ImageMapProjectionReadyEvent | undefined)?.user_id)) {
-        refreshIfLoaded();
+        refreshProjectionReady();
       }
     }),
     // Counts-free per-user poke: the owner's images just reached the index.

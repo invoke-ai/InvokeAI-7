@@ -1,5 +1,6 @@
 import type { WorkbenchState } from '@workbench/projectContracts';
 
+import { registerImageCluster } from '@features/gallery/contracts';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -70,6 +71,201 @@ describe('workbench persistence migration', () => {
 
     expect(persisted).toEqual({ savedAt: '2026-06-09T00:00:00.000Z', state, version: 1 });
     expect(hydratePersistedWorkbenchSnapshot(persisted)?.state).toEqual(state);
+  });
+
+  it('does not persist a search only this session can resolve, nor the page it left behind', async () => {
+    // The footer paginates the RANKING while a similarity search is on
+    // screen, so this page is a rank page. Cluster members live in an
+    // in-memory registry the next session cannot read, so the ranking is gone
+    // over there — and a rank page read as a board page lands the grid on an
+    // unrelated slice.
+    const state = createInitialWorkbenchState();
+    const project = state.projects[0];
+    const galleryEntry = Object.entries(project?.widgetInstances ?? {}).find(
+      ([, instance]) => instance.typeId === 'gallery'
+    );
+
+    expect(galleryEntry).toBeDefined();
+
+    const [galleryInstanceId, galleryInstance] = galleryEntry!;
+    const values = {
+      ...galleryInstance.state.values,
+      galleryPage: 3,
+      paginationMode: 'paginated',
+      selectedImagePage: 3,
+      selectedImageQuery: {
+        boardId: 'none',
+        galleryView: 'images',
+        imageOrderDir: 'DESC',
+        page: 3,
+        paginationMode: 'paginated',
+        searchTerm: '',
+      },
+      semanticImageQuery: { clusterId: 'cluster-1', kind: 'cluster', label: 'beaches' },
+    };
+    const snapshot = await localStorageWorkbenchPersistence.saveWorkbench({
+      ...state,
+      projects: [
+        {
+          ...project!,
+          widgetInstances: {
+            ...project!.widgetInstances,
+            [galleryInstanceId]: { ...galleryInstance, state: { ...galleryInstance.state, values } },
+          },
+        },
+      ],
+    });
+    const persistedValues = snapshot.state.projects[0]?.widgetInstances[galleryInstanceId]?.state.values;
+
+    expect(persistedValues?.semanticImageQuery).toBeNull();
+    expect(persistedValues?.galleryPage).toBe(0);
+    // The selection's page is stamped from the gallery's, so under a ranking
+    // it is a rank page too — dropping only the grid's would leave Preview
+    // anchored 180 rows from what the grid shows.
+    expect(persistedValues?.selectedImagePage).toBe(0);
+    expect((persistedValues?.selectedImageQuery as { page: number } | undefined)?.page).toBe(0);
+  });
+
+  it('drops a stored search that no longer parses, and the page it left', async () => {
+    // A value that cannot be read back is a search that is gone, whatever
+    // kind it claims: the page indexing its results is as stranded as one
+    // left by a reference this realm cannot resolve.
+    const state = createInitialWorkbenchState();
+    const project = state.projects[0];
+    const galleryEntry = Object.entries(project?.widgetInstances ?? {}).find(
+      ([, instance]) => instance.typeId === 'gallery'
+    );
+    const [galleryInstanceId, galleryInstance] = galleryEntry!;
+    const snapshot = await localStorageWorkbenchPersistence.saveWorkbench({
+      ...state,
+      projects: [
+        {
+          ...project!,
+          widgetInstances: {
+            ...project!.widgetInstances,
+            [galleryInstanceId]: {
+              ...galleryInstance,
+              state: {
+                ...galleryInstance.state,
+                values: {
+                  ...galleryInstance.state.values,
+                  galleryPage: 3,
+                  paginationMode: 'paginated',
+                  semanticImageQuery: { kind: 'text', query: '' },
+                },
+              },
+            },
+          },
+        },
+      ],
+    });
+    const persistedValues = snapshot.state.projects[0]?.widgetInstances[galleryInstanceId]?.state.values;
+
+    expect(persistedValues?.semanticImageQuery).toBeNull();
+    expect(persistedValues?.galleryPage).toBe(0);
+  });
+
+  it('drops a session-scoped search on save even while this session can still resolve it', async () => {
+    // In the owning session the registry entry is live, so a test of whether
+    // the reference resolves would strip nothing — and the realm reading this
+    // back cannot resolve it. The save path has to ask what the value IS.
+    const clusterId = registerImageCluster(['a.png', 'b.png'], 'beaches');
+    const state = createInitialWorkbenchState();
+    const project = state.projects[0];
+    const galleryEntry = Object.entries(project?.widgetInstances ?? {}).find(
+      ([, instance]) => instance.typeId === 'gallery'
+    );
+    const [galleryInstanceId, galleryInstance] = galleryEntry!;
+    const snapshot = await localStorageWorkbenchPersistence.saveWorkbench({
+      ...state,
+      projects: [
+        {
+          ...project!,
+          widgetInstances: {
+            ...project!.widgetInstances,
+            [galleryInstanceId]: {
+              ...galleryInstance,
+              state: {
+                ...galleryInstance.state,
+                values: {
+                  ...galleryInstance.state.values,
+                  galleryPage: 3,
+                  paginationMode: 'paginated',
+                  semanticImageQuery: { clusterId, kind: 'cluster', label: 'beaches' },
+                },
+              },
+            },
+          },
+        },
+      ],
+    });
+    const persistedValues = snapshot.state.projects[0]?.widgetInstances[galleryInstanceId]?.state.values;
+
+    expect(persistedValues?.semanticImageQuery).toBeNull();
+    expect(persistedValues?.galleryPage).toBe(0);
+  });
+
+  it('drops an infinite window anchor from the local cache on its own', async () => {
+    // The cache is what an offline boot restores from. It has not been
+    // through adoption, so the strip here is the only thing between a
+    // persisted anchor and a gallery reopened stranded mid-board.
+    const state = createInitialWorkbenchState();
+    const project = state.projects[0];
+    const galleryEntry = Object.entries(project?.widgetInstances ?? {}).find(
+      ([, instance]) => instance.typeId === 'gallery'
+    );
+    const [galleryInstanceId, galleryInstance] = galleryEntry!;
+    const snapshot = await localStorageWorkbenchPersistence.saveWorkbench({
+      ...state,
+      projects: [
+        {
+          ...project!,
+          widgetInstances: {
+            ...project!.widgetInstances,
+            [galleryInstanceId]: {
+              ...galleryInstance,
+              state: { ...galleryInstance.state, values: { ...galleryInstance.state.values, galleryPage: 5 } },
+            },
+          },
+        },
+      ],
+    });
+    const persistedValues = snapshot.state.projects[0]?.widgetInstances[galleryInstanceId]?.state.values;
+
+    expect(persistedValues?.galleryPage).toBe(0);
+  });
+
+  it('keeps a paginated page whose search survives the reload', async () => {
+    // A text search is rebuilt from the persisted value, so the page the user
+    // was reading is still a page of the same list.
+    const state = createInitialWorkbenchState();
+    const project = state.projects[0];
+    const galleryEntry = Object.entries(project?.widgetInstances ?? {}).find(
+      ([, instance]) => instance.typeId === 'gallery'
+    );
+    const [galleryInstanceId, galleryInstance] = galleryEntry!;
+    const values = {
+      ...galleryInstance.state.values,
+      galleryPage: 3,
+      paginationMode: 'paginated',
+      semanticImageQuery: { kind: 'text', query: 'sunset' },
+    };
+    const snapshot = await localStorageWorkbenchPersistence.saveWorkbench({
+      ...state,
+      projects: [
+        {
+          ...project!,
+          widgetInstances: {
+            ...project!.widgetInstances,
+            [galleryInstanceId]: { ...galleryInstance, state: { ...galleryInstance.state, values } },
+          },
+        },
+      ],
+    });
+    const persistedValues = snapshot.state.projects[0]?.widgetInstances[galleryInstanceId]?.state.values;
+
+    expect(persistedValues?.semanticImageQuery).toEqual({ kind: 'text', query: 'sunset' });
+    expect(persistedValues?.galleryPage).toBe(3);
   });
 
   it('drops corrupt localStorage snapshots instead of throwing', async () => {

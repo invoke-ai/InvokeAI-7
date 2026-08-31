@@ -20527,7 +20527,7 @@ export type components = {
             /**
              * Image Index Enabled
              * @description Maintain a semantic embedding index of gallery images, used by the image map and semantic search features.
-             * @default false
+             * @default true
              */
             image_index_enabled?: boolean;
             /**

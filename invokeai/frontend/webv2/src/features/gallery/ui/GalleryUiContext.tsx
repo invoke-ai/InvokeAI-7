@@ -19,6 +19,15 @@ export interface GalleryItemActions {
 
 export interface GalleryItemActionContext {
   filterIdentity: string;
+  /**
+   * The page a selection of `item` should be stamped with, when the host
+   * navigates from a window of its own. A selection made without one is
+   * stamped with the gallery grid's page, which names the grid's window; a
+   * host walking a different window — Preview anchored deep in a board the
+   * grid shows from the top — would have its selection filed outside the
+   * window it came from, with nowhere for the arrow keys to go.
+   */
+  getItemSelectionPage?(item: GalleryItem): number;
   items: GalleryItem[];
   loadOrderedRefs(signal: AbortSignal): Promise<GalleryItemRef[]>;
   selectedItemKey: GalleryItemKey | null;

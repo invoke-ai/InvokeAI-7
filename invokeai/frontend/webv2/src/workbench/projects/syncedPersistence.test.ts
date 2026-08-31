@@ -801,6 +801,140 @@ describe('authoritative project boards', () => {
     expect(galleryBoardIds(hydrated!).projectBoardId).toBe(`board-for-${draft.id}`);
   });
 
+  it('does not push a project it only opened, even when hydrating it changed the document', async () => {
+    // Another tab's search ranks a dropped file — a reference only that
+    // session can resolve — and its footer sits on a rank page. Hydrating
+    // that document here drops both. If the baseline were the wire bytes,
+    // the next autosave would read the drop as a local edit and push it,
+    // bumping the revision under the tab that still holds the live search
+    // and forking its next save as "changed elsewhere".
+    const draft = { ...createDraftProject([]), name: 'Ranked elsewhere' };
+    const document = persistence.serializeProjectDocument(draft);
+    const widgetInstances = document.widgetInstances as Record<string, { state: { values: Record<string, unknown> } }>;
+
+    widgetInstances.gallery!.state.values = {
+      ...widgetInstances.gallery!.state.values,
+      galleryPage: 3,
+      paginationMode: 'paginated',
+      semanticImageQuery: { fileId: 'external-1-other-realm', kind: 'file', label: 'dropped.png' },
+    };
+    api.__seed(document);
+    seedSessionBlob({ openProjectIds: [draft.id] });
+
+    const loaded = await service.loadWorkbench();
+    const opened = loaded!.state.projects.find((project) => project.id === draft.id)!;
+    const openedValues = opened.widgetInstances.gallery!.state.values;
+
+    expect(openedValues.semanticImageQuery).toBeNull();
+    expect(openedValues.galleryPage).toBe(0);
+
+    await service.saveWorkbench(stateWithProjects([opened]));
+
+    expect(api.updateProject).not.toHaveBeenCalled();
+    expect(api.__records.get(draft.id)?.revision).toBe(1);
+  });
+
+  it('does not push a project it only opened when the other session left a window anchor', async () => {
+    // The sync baseline is taken from the adopted document; the store is
+    // hydrated from the boot snapshot. Both drop an infinite window's
+    // mid-board anchor, so a project that has only been opened serializes to
+    // its baseline — dropped by one and not the other, the first autosave
+    // would push it unprompted and fork the tab that set it.
+    const draft = { ...createDraftProject([]), name: 'Revealed elsewhere' };
+    const document = persistence.serializeProjectDocument(draft);
+    const widgetInstances = document.widgetInstances as Record<string, { state: { values: Record<string, unknown> } }>;
+
+    widgetInstances.gallery!.state.values = {
+      ...widgetInstances.gallery!.state.values,
+      galleryPage: 5,
+      paginationMode: 'infinite',
+    };
+    api.__seed(document);
+    seedSessionBlob({ openProjectIds: [draft.id] });
+
+    const loaded = await service.loadWorkbench();
+    const opened = loaded!.state.projects.find((project) => project.id === draft.id)!;
+
+    expect(opened.widgetInstances.gallery!.state.values.galleryPage).toBe(0);
+
+    await service.saveWorkbench(stateWithProjects([opened]));
+
+    expect(api.updateProject).not.toHaveBeenCalled();
+    expect(api.__records.get(draft.id)?.revision).toBe(1);
+  });
+
+  it("retries rather than forks when only the other session's ranking moved", async () => {
+    // The other tab paged its ranking: the revision moved and the data changed
+    // only in the positions set against a search this realm cannot resolve.
+    // Compared as this realm holds it, the server's copy is the baseline this
+    // edit started from — a rename here is not in conflict with that.
+    const draft = { ...createDraftProject([]), name: 'Ranked elsewhere' };
+    const document = persistence.serializeProjectDocument(draft);
+    const widgetInstances = document.widgetInstances as Record<string, { state: { values: Record<string, unknown> } }>;
+    const rankedValues = (galleryPage: number) => ({
+      ...widgetInstances.gallery!.state.values,
+      galleryPage,
+      paginationMode: 'paginated',
+      semanticImageQuery: { fileId: 'external-1-other-realm', kind: 'file', label: 'dropped.png' },
+    });
+
+    widgetInstances.gallery!.state.values = rankedValues(3);
+    api.__seed(document);
+    seedSessionBlob({ openProjectIds: [draft.id] });
+
+    const loaded = await service.loadWorkbench();
+    const opened = loaded!.state.projects.find((project) => project.id === draft.id)!;
+    const record = api.__records.get(draft.id)!;
+    const pagedElsewhere = structuredClone(record.data) as typeof document;
+
+    (pagedElsewhere.widgetInstances as typeof widgetInstances).gallery!.state.values = rankedValues(4);
+    api.__records.set(draft.id, { ...record, data: pagedElsewhere, revision: record.revision + 1 });
+
+    const result = await service.saveWorkbench(stateWithProjects([{ ...opened, name: 'Edited here' }]));
+
+    expect(result.conflicts).toHaveLength(0);
+    expect(api.createProject).not.toHaveBeenCalled();
+    expect(api.__records.get(draft.id)?.name).toBe('Edited here');
+    expect(api.__records.get(draft.id)?.revision).toBe(3);
+  });
+
+  it('gives a fork a baseline it will serialize to, so it is not pushed unprompted', async () => {
+    // The fork's store copy is hydrated from the recovered document, which
+    // drops an infinite window anchor. A baseline taken from the wire bytes
+    // would still carry it, and the fork's first autosave would read the drop
+    // as an edit.
+    const project = seedServerProject('Deleted elsewhere');
+    const opened = await service.hydrateProjectFromServer(project.id);
+    const galleryEntry = Object.entries(opened!.widgetInstances).find(([, instance]) => instance.typeId === 'gallery')!;
+    const [galleryInstanceId, galleryInstance] = galleryEntry;
+    const edited = {
+      ...opened!,
+      name: 'Edited locally',
+      widgetInstances: {
+        ...opened!.widgetInstances,
+        [galleryInstanceId]: {
+          ...galleryInstance,
+          state: {
+            ...galleryInstance.state,
+            values: { ...galleryInstance.state.values, galleryPage: 7, paginationMode: 'infinite' },
+          },
+        },
+      },
+    };
+
+    api.__records.delete(project.id);
+
+    const result = await service.saveWorkbench(stateWithProjects([edited]));
+    const [fork] = result.deletedProjectForks;
+
+    expect(fork!.recoveredProject.widgetInstances[galleryInstanceId]?.state.values.galleryPage).toBe(0);
+    api.updateProject.mockClear();
+
+    await service.saveWorkbench(stateWithProjects([fork!.recoveredProject]));
+
+    expect(api.updateProject).not.toHaveBeenCalled();
+  });
+
   it('forks rather than resurrects a project deleted on another device', async () => {
     const project = seedServerProject('Deleted elsewhere');
     const opened = await service.hydrateProjectFromServer(project.id);
@@ -850,8 +984,8 @@ describe('authoritative project boards', () => {
   describe('what a flush reports', () => {
     /**
      * `arrange` runs after the project is open and before the flush, so each row states exactly
-     * what makes its outcome different. The un-renamed row still pushes: hydration normalizes the
-     * document, so its serialized form differs from what the server holds.
+     * what makes its outcome different. The un-renamed row does not push: the baseline is the
+     * hydrated document, so a project that has only been opened has nothing to send.
      */
     it.each([
       ['acknowledged', 'a push the server took', 'Edited', () => undefined],

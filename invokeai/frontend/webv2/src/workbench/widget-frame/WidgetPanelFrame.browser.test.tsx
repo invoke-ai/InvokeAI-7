@@ -254,3 +254,74 @@ describe('WidgetPanelFrame resize', () => {
     expect(frameMocks.setRegionSize).toHaveBeenCalledExactlyOnceWith('bottom', 96);
   });
 });
+
+// A viewport too narrow for the stored size (a portrait tablet) squeezes the
+// side panel below its floor on screen. The gesture, the keyboard floor and
+// the announced value then work from the width that is actually there.
+describe('WidgetPanelFrame squeezed by the viewport', () => {
+  const renderSqueezed = async () => {
+    host!.style.cssText = 'display:flex;height:600px;width:400px;';
+    await interact(() =>
+      root?.render(
+        <I18nextProvider i18n={i18n}>
+          <ChakraProvider value={system}>
+            <FocusRegionProvider>
+              <WidgetPanelFrame instanceId="test-instance" region="left" typeId="gallery">
+                <div />
+              </WidgetPanelFrame>
+              <div style={{ flex: 1, minWidth: '200px' }} />
+            </FocusRegionProvider>
+          </ChakraProvider>
+        </I18nextProvider>
+      )
+    );
+    // The frame learns its on-screen width from a ResizeObserver, which
+    // reports after layout.
+    await interact(() => {});
+    await act(
+      () =>
+        new Promise<void>((resolve) => {
+          requestAnimationFrame(() => resolve());
+        })
+    );
+
+    const separator = host?.querySelector('[role="separator"]');
+
+    if (!separator) {
+      throw new Error('panel frame did not render a resize handle');
+    }
+
+    return separator;
+  };
+
+  it('yields to a rigid sibling instead of pushing it out of the row', async () => {
+    const separator = await renderSqueezed();
+
+    expect(separator.parentElement!.getBoundingClientRect().width).toBe(200);
+    expect(separator.getAttribute('aria-valuenow')).toBe('200');
+    expect(separator.getAttribute('aria-valuemin')).toBe('200');
+  });
+
+  it('snaps shut after the overshoot from the width on screen, not from the floor', async () => {
+    const separator = await renderSqueezed();
+
+    await interact(() => separator.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, clientX: 0 })));
+    await interact(() => window.dispatchEvent(new PointerEvent('pointermove', { clientX: -79 })));
+    expect(separator.hasAttribute('data-collapse-armed')).toBe(false);
+
+    await interact(() => window.dispatchEvent(new PointerEvent('pointermove', { clientX: -80 })));
+    expect(separator.hasAttribute('data-collapse-armed')).toBe(true);
+
+    await interact(() => window.dispatchEvent(new PointerEvent('pointerup', { clientX: -80 })));
+    expect(frameMocks.setRegionCollapsed).toHaveBeenCalledExactlyOnceWith('left', true);
+    expect(frameMocks.setRegionSize).not.toHaveBeenCalled();
+  });
+
+  it('collapses on a collapse-ward key press, being already below the floor', async () => {
+    const separator = await renderSqueezed();
+
+    await interact(() => separator.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'ArrowLeft' })));
+
+    expect(frameMocks.setRegionCollapsed).toHaveBeenCalledExactlyOnceWith('left', true);
+  });
+});
