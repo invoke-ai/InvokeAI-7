@@ -134,3 +134,23 @@ def test_negative_budget_warns_and_names_locked_residents():
         cache.unlock(rec_victim)
         cache.unlock(rec_stuck)
         torch.cuda.empty_cache()
+
+
+@requires_cuda
+def test_reclaimable_credit_withheld_under_expandable_segments(monkeypatch: pytest.MonkeyPatch):
+    """Under expandable-segments mode the (reserved - allocated) figure counts intra-segment
+    holes that empty_cache cannot reclaim and a large allocation cannot use — the credit must be
+    withheld entirely (the env parse is authoritative: the mode is fixed before torch import)."""
+    cache = _make_cache()
+
+    monkeypatch.setenv("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+    assert cache._get_reclaimable_allocator_bytes() == 0
+
+    monkeypatch.setenv("PYTORCH_CUDA_ALLOC_CONF", "max_split_size_mb:512")
+    monkeypatch.setenv("PYTORCH_HIP_ALLOC_CONF", "expandable_segments: true")
+    assert cache._get_reclaimable_allocator_bytes() == 0
+
+    monkeypatch.delenv("PYTORCH_HIP_ALLOC_CONF")
+    monkeypatch.delenv("PYTORCH_CUDA_ALLOC_CONF")
+    # With no allocator config the credit path is active again (>= 0 by construction).
+    assert cache._get_reclaimable_allocator_bytes() >= 0

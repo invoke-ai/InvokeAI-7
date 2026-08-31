@@ -1,5 +1,6 @@
 import gc
 import logging
+import os
 import queue
 import threading
 import time
@@ -36,6 +37,20 @@ from invokeai.backend.util.devices import TorchDevice
 from invokeai.backend.util.level_zero import xpu_device_is_integrated
 from invokeai.backend.util.logging import InvokeAILogger
 from invokeai.backend.util.prefix_logger_adapter import PrefixedLoggerAdapter
+
+
+def _expandable_segments_enabled() -> bool:
+    """Whether the torch caching allocator runs in expandable-segments mode.
+
+    The mode is configured through the allocator env vars before torch import (InvokeAI's own
+    `pytorch_cuda_alloc_conf` setting is plumbed into PYTORCH_CUDA_ALLOC_CONF the same way), so
+    parsing them is authoritative for the life of the process.
+    """
+    for var in ("PYTORCH_ALLOC_CONF", "PYTORCH_CUDA_ALLOC_CONF", "PYTORCH_HIP_ALLOC_CONF"):
+        if "expandable_segments:true" in os.environ.get(var, "").replace(" ", "").lower():
+            return True
+    return False
+
 
 # Size of a GB in bytes.
 GB = 2**30
@@ -1213,14 +1228,19 @@ class ModelCache:
             # too-small budget is diagnosable from the default log. First pass only (paced
             # continuations would repeat it).
             resident = [
-                f"{entry.key.split(':')[-1]}={entry.cached_model.cur_vram_bytes() / MB:.0f}MB"
+                f"{entry.key}={entry.cached_model.cur_vram_bytes() / MB:.0f}MB"
                 + (" [locked]" if entry.is_locked else "")
                 for entry in self._cached_models.values()
                 if entry.cached_model.cur_vram_bytes() > 0 and entry.key != cache_entry.key
             ]
+            # The reservation _get_vram_available actually applied: callers passing None (the
+            # majority) get the configured default, and smaller values are clamped up to it —
+            # printing the raw argument would report 0MB for the very number being diagnosed.
+            working_mem_bytes_default = int(self._execution_device_working_mem_gb * GB)
+            effective_working_mem = max(working_mem_bytes or working_mem_bytes_default, working_mem_bytes_default)
             self._logger.warning(
                 f"VRAM budget for '{cache_entry.key}' is short by {-vram_available / MB:.0f}MB even after "
-                f"offloading (working memory reservation: {(working_mem_bytes or 0) / MB:.0f}MB); the model will "
+                f"offloading (working memory reservation: {effective_working_mem / MB:.0f}MB); the model will "
                 f"run with minimum weights resident. Other models still in VRAM: {', '.join(resident) or 'none'}."
             )
 
@@ -1418,8 +1438,14 @@ class ModelCache:
         inactive-split slack (free space inside partially-occupied segments, which cannot serve a
         large contiguous allocation and which empty_cache() cannot return to the driver).
 
-        Best-effort: 0 when the backend does not expose allocator stats.
+        Best-effort: 0 when the backend does not expose allocator stats, and 0 under
+        expandable-segments mode — there, freed blocks inside a segment are NOT counted as
+        inactive splits, empty_cache() reclaims nothing, and a large allocation cannot use the
+        holes, so the whole (reserved - allocated) figure is untrustworthy (a measured hard OOM
+        on an allocation the credited budget claimed would fit).
         """
+        if _expandable_segments_enabled():
+            return 0
         try:
             if self._execution_device.type == "cuda":
                 reserved = torch.cuda.memory_reserved(self._execution_device)
