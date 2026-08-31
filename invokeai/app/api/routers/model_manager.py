@@ -1524,7 +1524,9 @@ def empty_model_cache(current_admin: AdminUserOrDefault) -> EmptyModelCacheRespo
         if id(cache) in seen_cache_ids:
             continue
         seen_cache_ids.add(id(cache))
-        result = cache.make_room(1000 * 2**30)
+        # spare_awaiting_first_use=False: the user asked for a full clear, which outranks the
+        # admission grace (an in-flight loader survives via the tolerated issue-7513 path).
+        result = cache.make_room(1000 * 2**30, spare_awaiting_first_use=False)
         models_cleared += result.models_cleared
         bytes_freed += result.bytes_freed
     return EmptyModelCacheResponse(models_cleared=models_cleared, bytes_freed=bytes_freed)

@@ -1,3 +1,4 @@
+import weakref
 from dataclasses import dataclass
 
 from invokeai.backend.model_manager.load.model_cache.cached_model.cached_model_only_full_load import (
@@ -24,19 +25,31 @@ class CacheRecord:
     is_stale: bool = False
     # Post-admission grace: set by ModelCache.put() (unless the admission is a prefetch of a
     # model nothing will come back for) and cleared on the entry's first lock(). A freshly
-    # admitted model is about to be used — its loader calls get() as soon as put() returns, then
-    # locks it for inference — so the asynchronous eviction paths (shared-budget reconcile,
-    # peer-requested eviction) must not treat it as idle: they would evict the record out from
-    # under the in-flight load, breaking the loader's get() or detaching a live model from the
-    # cache's RAM accounting. The grace deliberately survives get(): get() is synchronized, and
-    # its own lock-release hook may run a pending reconcile before the caller can lock the record
-    # it was just handed. The flag cannot shield a record forever: the cache's local make_room
-    # path ignores it (cold loads are serialized under MODEL_LOAD_LOCK, so make_room can never
-    # see another loader's entry inside the put()->lock() window), and the next admission on the
-    # same cache clears any flag still standing (see the sweep in ModelCache.put()), so a load
-    # that errors out — or a LoadedModel dropped without ever locking — cannot dodge budget
-    # reconciles indefinitely.
+    # admitted model is about to be used — its loader calls get() as soon as put() returns,
+    # constructs a LoadedModel handle, and locks it for inference — so no eviction path
+    # (make_room, shared-budget reconcile, peer-requested eviction) may treat it as idle:
+    # evicting it frees nothing (the handle keeps the model alive) while detaching the record
+    # from the cache's RAM accounting. The window is NOT confined to a single load: multi-model
+    # invocations load their whole set (e.g. text encoder, then tokenizer, then processor)
+    # before locking any of it, so a sibling's cold load legitimately runs make_room — and
+    # put() — while earlier entries sit graced with live handles. The grace deliberately
+    # survives get(): get() is synchronized, and its own lock-release hook may run a pending
+    # reconcile before the caller can lock the record it was just handed.
+    #
+    # The flag cannot shield a record forever. Its owner is the LoadedModel handle
+    # (`grace_holder` below): a dropped handle releases the grace through its finalizer, and
+    # ModelCache.put()'s sweep clears any grace that is provably orphaned — no handle was ever
+    # registered (the load raised between put() and LoadedModel construction), or the handle
+    # died without its finalizer running (deferred worker lost) — so an orphaned record cannot
+    # dodge budget reconciles indefinitely. The keep-alive timeout clear also ignores the grace:
+    # after an idle period it is abandoned by definition.
     awaiting_first_use: bool = False
+
+    # Weak reference to the LoadedModel handle that owns `awaiting_first_use`, registered at
+    # handle construction (see LoadedModelWithoutConfig.__init__). None until then — which is
+    # exactly what put()'s sweep uses to tell an in-flight sibling (live holder: keep the grace)
+    # from an orphaned admission (no holder, or a dead one: clear it).
+    grace_holder: "weakref.ref[object] | None" = None
 
     def lock(self) -> None:
         """Lock this record."""
