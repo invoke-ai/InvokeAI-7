@@ -11,7 +11,11 @@ import type {
 import type { GraphContract } from '@workbench/graphContracts';
 import type { Project, WorkbenchState } from '@workbench/projectContracts';
 
-import { GALLERY_RECENT_IMAGE_LIMIT, legacyGeneratedImageToGalleryItem } from '@features/gallery/contracts';
+import {
+  GALLERY_RECENT_IMAGE_LIMIT,
+  legacyGeneratedImageToGalleryItem,
+  registerImageCluster,
+} from '@features/gallery/contracts';
 import { MAX_PROMPT_HISTORY } from '@features/generation/settings';
 import { createDefaultUpscaleWidgetValues } from '@features/upscale';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -31,6 +35,7 @@ import {
   normalizeGraphHistory,
   shouldSnapPanelShut,
   normalizeWorkbenchAccount,
+  normalizeWorkbenchProject,
 } from './workbenchState';
 import {
   createInitialWorkbenchState,
@@ -791,6 +796,152 @@ describe('workbench widget region opening', () => {
     expect(getActiveProject(state).widgetRegions.bottom.activeInstanceId).toBe('queue');
     expect(getActiveProject(state).widgetRegions.bottom.instanceIds).toEqual(['diagnostics', 'queue']);
     expect(getActiveProject(state).widgetRegions.bottom.isCollapsed).toBe(false);
+  });
+});
+
+describe('adopting a project from another realm', () => {
+  const galleryProject = (values: Record<string, unknown>) => {
+    const project = createInitialWorkbenchState().projects[0]!;
+    const galleryInstance = Object.values(project.widgetInstances).find((instance) => instance.typeId === 'gallery')!;
+    const galleryInstanceId = Object.keys(project.widgetInstances).find(
+      (instanceId) => project.widgetInstances[instanceId]?.typeId === 'gallery'
+    )!;
+
+    return normalizeWorkbenchProject({
+      ...project,
+      widgetInstances: {
+        ...project.widgetInstances,
+        [galleryInstanceId]: {
+          ...galleryInstance,
+          state: { ...galleryInstance.state, values: { ...galleryInstance.state.values, ...values } },
+        },
+      },
+    });
+  };
+  const galleryValuesOf = (project: Project) =>
+    Object.values(project.widgetInstances).find((instance) => instance.typeId === 'gallery')!.state.values;
+
+  it('drops a session-scoped search and the rank pages set against it', () => {
+    // A project opened from the server — the Open dialog, a deep link, or a
+    // conflict fork — arrives in a realm that never ran the session its values
+    // describe, and never passes the save path where this rule also runs. The
+    // ranking cannot be rebuilt here, so the pages indexing it would be read
+    // as board positions.
+    const values = galleryValuesOf(
+      galleryProject({
+        galleryPage: 3,
+        selectedImagePage: 3,
+        selectedImageQuery: {
+          boardId: 'none',
+          galleryView: 'images',
+          imageOrderDir: 'DESC',
+          page: 3,
+          paginationMode: 'paginated',
+          searchTerm: '',
+        },
+        semanticImageQuery: { fileId: 'file-1', kind: 'file', label: 'dropped.png' },
+      })
+    );
+
+    expect(values.semanticImageQuery).toBeNull();
+    expect(values.galleryPage).toBe(0);
+    expect(values.selectedImagePage).toBe(0);
+    expect((values.selectedImageQuery as { page: number }).page).toBe(0);
+  });
+
+  it('keeps a session-scoped search this realm can still resolve', () => {
+    // Adoption is not only a foreign document arriving: closing and reopening
+    // a project runs it, and so does the conflict fork that rescues the LIVE
+    // copy. The registry entry is still here, the ranking is still on screen,
+    // and deleting it would take the user's search with it.
+    const clusterId = registerImageCluster(['a.png', 'b.png'], 'beaches');
+    const values = galleryValuesOf(
+      galleryProject({
+        galleryPage: 3,
+        paginationMode: 'paginated',
+        semanticImageQuery: { clusterId, kind: 'cluster', label: 'beaches' },
+      })
+    );
+
+    expect(values.semanticImageQuery).toEqual({ clusterId, kind: 'cluster', label: 'beaches' });
+    expect(values.galleryPage).toBe(3);
+  });
+
+  it('drops an infinite window anchor on adoption, and keeps a paginated page', () => {
+    // A reveal anchors the infinite window mid-board for the session that
+    // made it; adopted anywhere else it strands the gallery there. A
+    // paginated page is the page the user was reading and survives. A
+    // gallery that never touched the setting has no paginationMode at all,
+    // and the default is infinite — that is the common shape.
+    expect(galleryValuesOf(galleryProject({ galleryPage: 5, paginationMode: 'infinite' })).galleryPage).toBe(0);
+    expect(galleryValuesOf(galleryProject({ galleryPage: 5 })).galleryPage).toBe(0);
+    expect(galleryValuesOf(galleryProject({ galleryPage: 5, paginationMode: 'paginated' })).galleryPage).toBe(5);
+  });
+
+  it('drops the anchor and an unresolvable search together on adoption', () => {
+    const values = galleryValuesOf(
+      galleryProject({
+        galleryPage: 5,
+        paginationMode: 'infinite',
+        semanticImageQuery: { clusterId: 'evicted', kind: 'cluster', label: 'beaches' },
+      })
+    );
+
+    expect(values.semanticImageQuery).toBeNull();
+    expect(values.galleryPage).toBe(0);
+  });
+
+  it('keeps the window anchor when a conflict fork rescues the live copy', () => {
+    // The fork keeps the user's edits AND their position: they were deep in
+    // a board when the conflict hit, and the recovered project is the one
+    // they keep working in.
+    const clusterId = registerImageCluster(['a.png', 'b.png'], 'beaches');
+    let state = createInitialWorkbenchState();
+    const project = getActiveProject(state);
+    const serverCopy = { ...project, name: 'Renamed elsewhere' };
+
+    state = workbenchReducer(state, {
+      projectId: project.id,
+      type: 'patchWidgetValues',
+      values: {
+        galleryPage: 7,
+        paginationMode: 'infinite',
+        semanticImageQuery: { clusterId, kind: 'cluster', label: 'beaches' },
+      },
+      widgetId: 'gallery',
+    });
+    state = workbenchReducer(state, {
+      projectId: project.id,
+      recoveredIdentity: {
+        id: `${project.id}-recovered-1`,
+        name: `${project.name} (recovered)`,
+        recoveredAt: '2026-08-29T00:00:00.000Z',
+        recoveryOf: project.id,
+      },
+      recoveredProject: serverCopy,
+      serverProject: serverCopy,
+      type: 'reconcileProjectConflict',
+    });
+
+    const fork = getActiveProject(state);
+    const values = getProjectWidgetValues(fork, 'gallery');
+
+    expect(fork.id).toBe(`${project.id}-recovered-1`);
+    expect(values.galleryPage).toBe(7);
+    expect(values.semanticImageQuery).toEqual({ clusterId, kind: 'cluster', label: 'beaches' });
+  });
+
+  it('keeps a search the new realm can rebuild, and the page it was read on', () => {
+    const values = galleryValuesOf(
+      galleryProject({
+        galleryPage: 3,
+        paginationMode: 'paginated',
+        semanticImageQuery: { kind: 'text', query: 'sunset' },
+      })
+    );
+
+    expect(values.semanticImageQuery).toEqual({ kind: 'text', query: 'sunset' });
+    expect(values.galleryPage).toBe(3);
   });
 });
 
@@ -3505,6 +3656,40 @@ describe('workbenchReducer Phase 5 generation flow', () => {
     });
 
     expect(getProjectWidgetValues(getActiveProject(state), 'gallery').selectedImageName).toBe('image:selected.png');
+  });
+
+  it('stamps an explicit page into the navigation query already on a multi-selection', () => {
+    // A host navigating its own window passes the page that keeps the primary
+    // item in that window — the same contract as selectGalleryItem with
+    // preserveNavigationQuery — rather than the grid's page. The query it goes
+    // into is the one already on the selection: the grid may have moved to
+    // another board and search since, and the host's list is not that.
+    let state = createInitialWorkbenchState();
+
+    state = workbenchReducer(state, { boardId: 'board-deep', type: 'selectGalleryBoard' });
+    state = workbenchReducer(state, {
+      item: createGalleryImageItem('deep.png'),
+      preserveNavigationQuery: false,
+      selectionPage: 30,
+      type: 'selectGalleryItem',
+    });
+    state = workbenchReducer(state, { boardId: 'board-elsewhere', type: 'selectGalleryBoard' });
+    state = workbenchReducer(state, { searchTerm: 'sunset', type: 'setGallerySearchTerm' });
+    state = workbenchReducer(state, {
+      itemKeys: ['image:failed.png', 'image:successor.png'],
+      primaryItem: createGalleryImageItem('successor.png'),
+      selectionPage: 30,
+      type: 'setGalleryMultiSelection',
+    });
+
+    const values = getProjectWidgetValues(getActiveProject(state), 'gallery');
+    const query = values.selectedImageQuery as { boardId: string; page: number; searchTerm: string };
+
+    expect(values.selectedImagePage).toBe(30);
+    expect(query.page).toBe(30);
+    expect(query.boardId).toBe('board-deep');
+    expect(query.searchTerm).toBe('');
+    expect(values.galleryPage).toBe(0);
   });
 
   it('pauses live-follow for saved Gallery multi-selection and comparison intents', () => {

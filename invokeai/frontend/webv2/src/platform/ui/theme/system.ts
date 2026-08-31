@@ -238,8 +238,6 @@ const config = defineConfig({
       color: 'fg',
       fontFamily: 'body',
       margin: 0,
-      minHeight: '720px',
-      minWidth: '960px',
       overflow: 'hidden',
     },
     // While a gallery-item drag is in flight (body flag set by

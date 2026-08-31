@@ -1,3 +1,4 @@
+import type { SystemStyleObject } from '@chakra-ui/react';
 import type { QueueItem } from '@features/queue/contracts';
 import type { WidgetViewProps } from '@workbench/widgetContracts';
 
@@ -55,6 +56,7 @@ import {
   type ImageActions,
   type ImageContextMenuTarget,
 } from '@workbench/image-actions';
+import { QueueProgressRail } from '@workbench/queue-integration/QueueProgressRail';
 import { getProjectWidgetValues } from '@workbench/widgetState';
 import {
   useActiveProjectId,
@@ -184,6 +186,18 @@ const PREVIEW_OVERLAY_RESERVE = '5.5rem';
 const PREVIEW_TILE_OVERLAY_RESERVE = '3.25rem';
 const PREVIEW_TILE_STAGE_PADDING = '3';
 
+/** Pinned to the floating window body's top edge, under the title bar's divider. */
+const FLOATING_RAIL_SX: SystemStyleObject = {
+  display: 'flex',
+  gap: '1px',
+  height: '3px',
+  insetInline: 0,
+  pointerEvents: 'none',
+  position: 'absolute',
+  top: 0,
+  zIndex: 3,
+};
+
 export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
   const galleryValues = useActiveProjectSelector((project) => getProjectWidgetValues(project, 'gallery'));
   const queueItems = useActiveProjectSelector((project) => project.queue.items);
@@ -266,6 +280,7 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
   );
   const {
     boardItems,
+    getSelectionPage,
     handleNavigationKeyDown,
     isLoadingBoard,
     navigate,
@@ -294,6 +309,7 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
   const getItemActionContext = useCallback(
     () => ({
       filterIdentity: navigationQueryKey,
+      getItemSelectionPage: getSelectionPage,
       items: boardItems,
       loadOrderedRefs: (signal: AbortSignal) => {
         signal.throwIfAborted();
@@ -301,7 +317,7 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
       },
       selectedItemKey,
     }),
-    [boardItems, navigationQueryKey, selectedItemKey]
+    [boardItems, getSelectionPage, navigationQueryKey, selectedItemKey]
   );
   const projectId = useActiveProjectId();
   const { dialog: deletionConfirmationDialog, requestDeletionConfirmation } = useDeletionConfirmation();
@@ -325,12 +341,51 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
     [contextMenuItem]
   );
   const exitCompare = useCallback(() => gallery.setCompareItem(null), [gallery]);
+  // The page the item now in the compare slot was selected at, when Preview
+  // put it there by swapping. The window may not hold that item any more —
+  // swapping a top-of-board image in moves the window to the top — so a swap
+  // back could only guess at its page. This is not a guess: it is the window
+  // the item was navigated in, and restoring it puts the arrows back where
+  // they were before the first swap. A page names a window of ONE query,
+  // though: restored into a different board, view, order, mode or search it
+  // would anchor that listing 1800 rows down around an image from another,
+  // so the memo is only honoured in the query it was recorded in — and only
+  // while the item is still in that query's board. Moving the compare image
+  // to another board re-boards it in place without touching the selection's
+  // query, so the key alone would still match.
+  const swappedOutRef = useRef<{ boardId: string; key: GalleryItemKey; page: number; queryKey: string } | null>(null);
   const swapCompareImages = useCallback(() => {
     if (selectedItem?.kind === 'image' && compareImage) {
-      selectPreviewItem(legacyGeneratedImageToGalleryItem(compareImage));
+      const compareItem = legacyGeneratedImageToGalleryItem(compareImage);
+      const swappedOut = swappedOutRef.current;
+
+      swappedOutRef.current = {
+        boardId: selectedItem.boardId,
+        key: toGalleryItemKey(selectedItem),
+        page: selectedImageQuery.page,
+        queryKey: navigationQueryKey,
+      };
+      if (
+        swappedOut &&
+        swappedOut.key === toGalleryItemKey(compareItem) &&
+        swappedOut.queryKey === navigationQueryKey &&
+        swappedOut.boardId === compareItem.boardId
+      ) {
+        selectGalleryItemAtPage(compareItem, swappedOut.page);
+      } else {
+        selectPreviewItem(compareItem);
+      }
       gallery.setCompareItem(selectedItem);
     }
-  }, [compareImage, gallery, selectPreviewItem, selectedItem]);
+  }, [
+    compareImage,
+    gallery,
+    navigationQueryKey,
+    selectGalleryItemAtPage,
+    selectPreviewItem,
+    selectedImageQuery.page,
+    selectedItem,
+  ]);
   const isItemCurrent = useCallback(
     (itemKey: GalleryItemKey) => {
       const currentValues = getProjectWidgetValues(queries.getSnapshot().activeProject, 'gallery');
@@ -491,8 +546,7 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
     }
 
     if (commandId === 'viewer.swapImages' && selectedItem?.kind === 'image' && compareImage) {
-      selectPreviewItem(legacyGeneratedImageToGalleryItem(compareImage));
-      gallery.setCompareItem(selectedItem);
+      swapCompareImages();
       return;
     }
 
@@ -544,6 +598,13 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
     // and runs to every edge. `containerType` anchors the details panel's
     // `cqh` cap to the widget rather than the viewport.
     <Box ref={rootRef} containerType="size" h="full" position="relative" w="full">
+      {/* Floated, the window is usually parked over a maximized work surface
+          or on another display, where the top bar's rail is out of view — so
+          the window that shows the result also shows that it is coming. It
+          overlays the body's top edge, directly under the title bar's divider,
+          so appearing costs no reflow. Docked, the top bar's rail is in view
+          and a second one would only be noise. */}
+      {region === 'floating' ? <QueueProgressRail css={FLOATING_RAIL_SX} /> : null}
       {/* Single always-mounted keyboard boundary: DOM focus survives swaps
           between the live, selected, and compare branches, so arrow
           navigation keeps working across them. */}

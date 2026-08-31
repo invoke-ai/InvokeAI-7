@@ -128,6 +128,8 @@ export interface PreviewNavigationState {
   /** Identity of the backing query — the action context's filter identity. */
   navigationQueryKey: string;
   navigationSequence: PreviewNavigationItem<GalleryItem>[];
+  /** The page a selection of `item` is stamped with — see the action context's `getItemSelectionPage`. */
+  getSelectionPage: (item: GalleryItem) => number;
   selectPreviewItem: (item: GalleryItem) => void;
 }
 
@@ -217,7 +219,38 @@ export const usePreviewNavigation = ({
     setNavigationAnchor({ page: selectedImageQuery.page, queryKey: navigationQueryKey });
   }
 
-  const navigationAnchorPage = hasStaleNavigationAnchor ? selectedImageQuery.page : navigationAnchor.page;
+  // Stickiness is a PAGINATED concern: stepping across pages stamps each
+  // item's own page, and the window must not move out from under the cursor
+  // when it does. An infinite anchor is read live. Preview's own steps never
+  // rewrite it — they stamp the window's anchor, see selectPreviewItem — so
+  // the only thing that changes it is a selection made elsewhere: a grid
+  // click, a reveal, a result arriving under live-follow. Each of those names
+  // the window that holds the new selection, and Preview has to move to it.
+  // Held sticky, the anchor outlived every one of them: a click on the newest
+  // image at the top of the board left Preview walking rows 1800+ for a
+  // selection at row 0.
+  const navigationAnchorPage =
+    selectedImageQuery.paginationMode === 'paginated'
+      ? hasStaleNavigationAnchor
+        ? selectedImageQuery.page
+        : navigationAnchor.page
+      : selectedImageQuery.page;
+  const isPaginatedWindow = !shouldFollowLive && selectedImageQuery.paginationMode === 'paginated';
+  // A selection deeper than the base window's reach (a deep reveal from the
+  // image map) anchors navigation at its own page — walking from offset 0
+  // could never arrive at the cursor. Such a window is a slice from the
+  // middle of the board, and it is one-way by design: it cannot grow upward
+  // past its anchor, because the grid shares the cache entry and rows spliced
+  // in above its viewport would shift the content under the user. So the
+  // anchor must stay where the selection was made, and the exclusions below
+  // that hinge on "is this window mid-board?" are all derived from it.
+  const deepAnchorOffset =
+    !shouldFollowLive &&
+    !isPaginatedWindow &&
+    navigationSemanticQuery === null &&
+    navigationAnchorPage * GALLERY_PAGE_SIZE >= GALLERY_MAX_ROWS
+      ? navigationAnchorPage * GALLERY_PAGE_SIZE
+      : 0;
 
   // A ranked list mirrors the GRID's paging instead of the stamped context.
   // The stamped page indexes the board listing, and a board page applied to a
@@ -235,16 +268,7 @@ export const usePreviewNavigation = ({
           ({ kind: 'infinite', offset: galleryPage * GALLERY_PAGE_SIZE } as const)
       : selectedImageQuery.paginationMode === 'paginated'
         ? ({ kind: 'anchor', offset: navigationAnchorPage * GALLERY_PAGE_SIZE } as const)
-        : ({
-            kind: 'infinite',
-            // A selection deeper than the base window's reach (a deep reveal
-            // from the image map) anchors navigation at its own page —
-            // walking from offset 0 could never arrive at the cursor.
-            offset:
-              navigationAnchorPage * GALLERY_PAGE_SIZE >= GALLERY_MAX_ROWS
-                ? navigationAnchorPage * GALLERY_PAGE_SIZE
-                : 0,
-          } as const);
+        : ({ kind: 'infinite', offset: deepAnchorOffset } as const);
 
   const {
     data: boardItemsData,
@@ -273,13 +297,13 @@ export const usePreviewNavigation = ({
     enabled: hasNavigationContext,
   });
 
-  const selectPreviewItem = useCallback(
-    (item: GalleryItem) => {
+  const getSelectionPageIn = useCallback(
+    (item: GalleryItem, data: typeof boardItemsData): number => {
       const itemKey = toGalleryItemKey(item);
-      const pageIndex = boardItemsData?.pages.findIndex((page) =>
+      const pageIndex = data?.pages.findIndex((page) =>
         page.items.some((candidate) => toGalleryItemKey(candidate) === itemKey)
       );
-      const pageParam = pageIndex === undefined || pageIndex < 0 ? undefined : boardItemsData?.pageParams[pageIndex];
+      const pageParam = pageIndex === undefined || pageIndex < 0 ? undefined : data?.pageParams[pageIndex];
       // `page` is stamped as a BOARD page and read as one everywhere else, so
       // a ranked window's page params — offsets into the ranking — must not be
       // written into it. Neither may the grid's own page: in paginated mode
@@ -290,16 +314,40 @@ export const usePreviewNavigation = ({
       // holds in both modes is the top of the listing: setting a search and
       // clearing it both reset the grid to page 0, so that is the board
       // context a ranked session hands back.
-      const selectionPage =
-        navigationSemanticQuery !== null
-          ? 0
-          : typeof pageParam === 'number'
+      //
+      // In an INFINITE window the page is the anchor of the window that holds
+      // the item, which is what a grid click stamps too (the grid's own page,
+      // whatever row was clicked). Stamping the item's row instead rolls the
+      // window forward with the cursor: the anchor is read live, so each step
+      // past a page boundary re-keys the query at the new row, the old entry
+      // is discarded, and — a deep window being one-way — everything the user
+      // just walked through is unreachable. An item the window does not hold
+      // at all (a recent the listing has not caught up with, the compare
+      // slot's image) is stamped at the top: that is where a recent lives,
+      // and the base window's reach is the best guess for anything else.
+      return navigationSemanticQuery !== null
+        ? 0
+        : selectedImageQuery.paginationMode === 'paginated'
+          ? typeof pageParam === 'number'
             ? Math.floor(pageParam / GALLERY_PAGE_SIZE)
-            : selectedImageQuery.page;
-
-      selectGalleryItem(item, selectionPage);
+            : selectedImageQuery.page
+          : typeof pageParam === 'number'
+            ? deepAnchorOffset / GALLERY_PAGE_SIZE
+            : 0;
     },
-    [boardItemsData, navigationSemanticQuery, selectGalleryItem, selectedImageQuery.page]
+    [deepAnchorOffset, navigationSemanticQuery, selectedImageQuery.page, selectedImageQuery.paginationMode]
+  );
+  const stampSelection = useCallback(
+    (item: GalleryItem, data: typeof boardItemsData) => selectGalleryItem(item, getSelectionPageIn(item, data)),
+    [getSelectionPageIn, selectGalleryItem]
+  );
+  const getSelectionPage = useCallback(
+    (item: GalleryItem) => getSelectionPageIn(item, boardItemsData),
+    [boardItemsData, getSelectionPageIn]
+  );
+  const selectPreviewItem = useCallback(
+    (item: GalleryItem) => stampSelection(item, boardItemsData),
+    [boardItemsData, stampSelection]
   );
 
   const optimisticQueueItemIds = useMemo(
@@ -314,15 +362,16 @@ export const usePreviewNavigation = ({
     // row"; dropping a completed batch during that window made arrow keys skip
     // the images just generated. So local items stay unconditionally, except
     // where the backend window is a *subset* of the board and dedupe cannot
-    // help: an active search (backend-filtered, local items are not) and
-    // paginated mode (the window anchors mid-board, so settled recents would
-    // splice in permanently). There, only in-flight work and the selection
-    // merge.
+    // help: an active search (backend-filtered, local items are not), and any
+    // window anchored mid-board — paginated, or the infinite window a deep
+    // reveal anchors — where settled recents would splice in permanently.
+    // Recents belong at the TOP of the listing, so a window nowhere near the
+    // top is not theirs to join; the grid draws the same line for its own
+    // window. There, only in-flight work and the selection merge.
     const hasActiveSearch =
       !shouldFollowLive && (selectedImageSearch.text.trim() !== '' || selectedImageSearch.range !== undefined);
-    const isPaginatedWindow = !shouldFollowLive && selectedImageQuery.paginationMode === 'paginated';
 
-    if (!hasActiveSearch && !isPaginatedWindow) {
+    if (!hasActiveSearch && !isPaginatedWindow && deepAnchorOffset === 0) {
       return localItems;
     }
 
@@ -337,10 +386,11 @@ export const usePreviewNavigation = ({
         item.sourceQueueItemId === refreshingSelectedSourceId
     );
   }, [
+    deepAnchorOffset,
     isFetchingBoardItems,
+    isPaginatedWindow,
     localItems,
     optimisticQueueItemIds,
-    selectedImageQuery.paginationMode,
     selectedImageSearch,
     selectedItem,
     shouldFollowLive,
@@ -474,7 +524,10 @@ export const usePreviewNavigation = ({
         const nextTarget = getPreviewNavigationTarget(nextNavigationSequence, nextNavigationCursor, offset);
 
         if (nextTarget?.kind === 'item') {
-          selectPreviewItem(nextTarget.item);
+          // Against the data just fetched: the item is not in the pages this
+          // render closed over, and a lookup there would read it as an item
+          // the window does not hold.
+          stampSelection(nextTarget.item, result.data);
         } else if (nextTarget?.kind === 'placeholder') {
           enableLiveFollow();
         }
@@ -502,6 +555,7 @@ export const usePreviewNavigation = ({
       selectedItemKey,
       selectPreviewItem,
       shouldFollowLive,
+      stampSelection,
     ]
   );
 
@@ -553,6 +607,7 @@ export const usePreviewNavigation = ({
     navigationCursor,
     navigationQueryKey,
     navigationSequence,
+    getSelectionPage,
     selectPreviewItem,
   };
 };

@@ -54,6 +54,8 @@ import {
   getBoundedRecentImages,
   getGalleryPage,
   getPersistedSelectedGalleryItemKeys,
+  stripInfiniteWindowAnchor,
+  stripUnresolvableGallerySearch,
   getGallerySettings,
   getSelectedGalleryItemFromValues,
   legacyGeneratedImageToGalleryItem,
@@ -333,7 +335,14 @@ type WorkbenchReducerAction =
       nextPrimaryItem: GalleryItem | null;
       projectId?: string;
     }
-  | { type: 'setGalleryMultiSelection'; itemKeys: GalleryItemKey[]; primaryItem: GalleryItem; projectId?: string }
+  | {
+      type: 'setGalleryMultiSelection';
+      itemKeys: GalleryItemKey[];
+      primaryItem: GalleryItem;
+      projectId?: string;
+      /** Stamps this page, in the navigation query already on the selection, instead of the grid's. */
+      selectionPage?: number;
+    }
   | { type: 'setGalleryCompareImage'; image: GalleryImageItem | null; projectId?: string }
   | { type: 'selectGalleryBoard'; boardId: string; projectId?: string }
   | { type: 'setGalleryView'; galleryView: 'images' | 'assets'; projectId?: string }
@@ -452,7 +461,20 @@ export const getPanelCollapseThreshold = (region: WidgetRegion): number =>
  * has hysteresis instead of flapping a whole panel on one pixel.
  */
 export const shouldSnapPanelShut = (region: WidgetRegion, rawSizePx: number, isSnapped: boolean): boolean =>
-  rawSizePx <= getPanelCollapseThreshold(region) + (isSnapped ? PANEL_COLLAPSE_OVERSHOOT_PX / 2 : 0);
+  shouldSnapPanelShutAt(getPanelCollapseThreshold(region), rawSizePx, isSnapped);
+
+/**
+ * `shouldSnapPanelShut` against an explicit threshold, for a panel the
+ * viewport has squeezed below its floor: the overshoot is then measured from
+ * the width actually on screen, so a drag on a 213px panel collapses it after
+ * 80px instead of demanding the pointer travel to where the floor would be.
+ */
+export const shouldSnapPanelShutAt = (thresholdPx: number, rawSizePx: number, isSnapped: boolean): boolean =>
+  rawSizePx <= thresholdPx + (isSnapped ? PANEL_COLLAPSE_OVERSHOOT_PX / 2 : 0);
+
+/** The collapse threshold for a panel currently rendered at `visibleSizePx`. */
+export const getVisiblePanelCollapseThreshold = (region: WidgetRegion, visibleSizePx: number): number =>
+  Math.min(getPanelCollapseThreshold(region), visibleSizePx - PANEL_COLLAPSE_OVERSHOOT_PX);
 
 const now = (): string => new Date().toISOString();
 
@@ -1688,7 +1710,20 @@ const normalizePromptHistory = (value: unknown): PromptHistoryItem[] => {
   }, []);
 };
 
-export const normalizeWorkbenchProject = (project: Project): Project => {
+export const normalizeWorkbenchProject = (
+  project: Project,
+  options: {
+    /**
+     * Whether the document is arriving from another realm (a server record,
+     * an import) rather than being kept by this one (the conflict fork that
+     * rescues the live copy). An infinite window's mid-board anchor is a
+     * "you are here" for the session that revealed it: it is dropped from a
+     * document that arrives, and kept for one that stays.
+     */
+    isArriving?: boolean;
+  } = {}
+): Project => {
+  const { isArriving = true } = options;
   const legacyWidgetRegions = project.widgetRegions as
     | Partial<Record<WidgetRegion | 'left-panel' | 'right-panel' | 'status-bar', WidgetRegionState>>
     | undefined;
@@ -1734,18 +1769,41 @@ export const normalizeWorkbenchProject = (project: Project): Project => {
   }
 
   for (const [instanceId, instance] of Object.entries(widgetInstances)) {
-    if (instance.typeId !== 'gallery' || !('recentImages' in instance.state.values)) {
+    if (instance.typeId !== 'gallery') {
       continue;
     }
+
+    // A project can arrive here from a realm that never ran the session its
+    // values describe — the Open dialog, a deep link — where a search only
+    // that session could resolve, and the rank pages set against it, would be
+    // read as board positions. But this also runs on projects that never
+    // left: closing and reopening one, and the conflict fork that deliberately
+    // rescues the LIVE copy. So the test is whether the reference resolves
+    // here, not what kind it is; the latter would delete the ranking the user
+    // is looking at.
+    // An infinite window's mid-board anchor goes the same way, for the same
+    // reason the save path drops it: it is a "you are here" for the session
+    // that revealed it. Adoption and the boot snapshot have to agree on this,
+    // because the sync baseline is taken from the adopted document while the
+    // store is hydrated from the snapshot — a project that has only been
+    // opened must serialize to its baseline, or the next autosave pushes it.
+    const strippedSearchValues = stripUnresolvableGallerySearch(instance.state.values);
+    const strippedValues = isArriving
+      ? (stripInfiniteWindowAnchor(strippedSearchValues ?? instance.state.values) ?? strippedSearchValues)
+      : strippedSearchValues;
+    const hasRecentImages = 'recentImages' in instance.state.values;
+
+    if (strippedValues === null && !hasRecentImages) {
+      continue;
+    }
+
+    const values = strippedValues ?? instance.state.values;
 
     widgetInstances[instanceId] = {
       ...instance,
       state: {
         ...instance.state,
-        values: {
-          ...instance.state.values,
-          recentImages: getBoundedRecentImages(instance.state.values.recentImages),
-        },
+        values: hasRecentImages ? { ...values, recentImages: getBoundedRecentImages(values.recentImages) } : values,
       },
     };
   }
@@ -1818,17 +1876,20 @@ const recoverProjectUnderNewIdentity = (
   snapshotProject: Project,
   identity: ProjectRecoveredIdentity
 ): Project =>
-  normalizeWorkbenchProject(
-    localProject
-      ? {
+  // The fork rescues the LIVE copy, edits and position included; only a
+  // fallback to the snapshot is a document arriving from elsewhere.
+  localProject
+    ? normalizeWorkbenchProject(
+        {
           ...localProject,
           id: identity.id,
           name: identity.name,
           recoveredAt: identity.recoveredAt,
           recoveryOf: identity.recoveryOf,
-        }
-      : snapshotProject
-  );
+        },
+        { isArriving: false }
+      )
+    : normalizeWorkbenchProject(snapshotProject);
 
 export const clampPanelSize = (region: WidgetRegion, sizePx: number): number => {
   const { max, min } = getPanelSizeBounds(region);
@@ -2191,7 +2252,7 @@ const normalizeWorkbenchState = (state: WorkbenchState): WorkbenchState => ({
   // (they live in the settings store now) and must not resurface here.
   account: normalizeWorkbenchAccount(state.account),
   notifications: [],
-  projects: state.projects.map(normalizeWorkbenchProject),
+  projects: state.projects.map((project) => normalizeWorkbenchProject(project)),
 });
 
 const updateActiveLayout = (
@@ -4434,10 +4495,16 @@ export const __workbenchReducerInternal = (
         state,
         (values) => {
           const settings = getGallerySettings(values);
-          const selectedImagePage =
-            typeof values.galleryPage === 'number' && Number.isFinite(values.galleryPage)
+          const hasSelectionPage = typeof action.selectionPage === 'number' && Number.isFinite(action.selectionPage);
+          const selectedImagePage = hasSelectionPage
+            ? Math.max(0, Math.floor(action.selectionPage as number))
+            : typeof values.galleryPage === 'number' && Number.isFinite(values.galleryPage)
               ? Math.max(0, Math.floor(values.galleryPage))
               : 0;
+          const existingNavigationQuery =
+            values.selectedImageQuery && typeof values.selectedImageQuery === 'object'
+              ? (values.selectedImageQuery as Record<string, unknown>)
+              : null;
 
           return {
             ...values,
@@ -4446,14 +4513,20 @@ export const __workbenchReducerInternal = (
             selectedImageName: toGalleryItemKey(action.primaryItem),
             selectedImageNames: action.itemKeys,
             selectedImagePage,
-            selectedImageQuery: {
-              boardId: typeof values.selectedBoardId === 'string' ? values.selectedBoardId : 'none',
-              galleryView: values.galleryView === 'assets' ? 'assets' : 'images',
-              imageOrderDir: settings.imageOrderDir,
-              page: selectedImagePage,
-              paginationMode: settings.paginationMode,
-              searchTerm: typeof values.searchTerm === 'string' ? values.searchTerm : '',
-            },
+            // An explicit page comes from a host navigating its own window, and
+            // names a page of the query already on the selection — the same
+            // contract as `selectGalleryItem` with `preserveNavigationQuery`.
+            selectedImageQuery:
+              hasSelectionPage && existingNavigationQuery
+                ? { ...existingNavigationQuery, page: selectedImagePage }
+                : {
+                    boardId: typeof values.selectedBoardId === 'string' ? values.selectedBoardId : 'none',
+                    galleryView: values.galleryView === 'assets' ? 'assets' : 'images',
+                    imageOrderDir: settings.imageOrderDir,
+                    page: selectedImagePage,
+                    paginationMode: settings.paginationMode,
+                    searchTerm: typeof values.searchTerm === 'string' ? values.searchTerm : '',
+                  },
           };
         },
         action.projectId

@@ -38,6 +38,9 @@ export {
   gallerySemanticReferenceKey,
   getImageCluster,
   parseGallerySemanticReference,
+  stripInfiniteWindowAnchor,
+  stripSessionScopedGallerySearch,
+  stripUnresolvableGallerySearch,
   registerImageCluster,
   type GallerySemanticReference,
 } from './core/semanticImageQuery';

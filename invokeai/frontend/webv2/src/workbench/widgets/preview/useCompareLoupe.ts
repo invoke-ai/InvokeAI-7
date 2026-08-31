@@ -1,6 +1,16 @@
-import { panBy, WHEEL_ZOOM_STEP, zoomAtPoint as calculateZoomAtPoint } from '@workbench/panZoom';
+import {
+  distanceBetween,
+  midpointOf,
+  panBy,
+  pinchZoomAtPoints,
+  WHEEL_ZOOM_STEP,
+  zoomAtPoint as calculateZoomAtPoint,
+  type PanZoomPoint,
+} from '@workbench/panZoom';
 /* eslint-disable react/react-compiler */
-import { useCallback, useRef, useState, type MouseEvent, type PointerEvent } from 'react';
+import { useCallback, useRef, useState, type MouseEvent, type PointerEvent as ReactPointerEvent } from 'react';
+
+import { capturePointer, releasePointer, trackPointerDown } from './loupeGestures';
 
 /**
  * Shared zoom/pan for the side-by-side comparison panes: one transform, kept
@@ -8,6 +18,9 @@ import { useCallback, useRef, useState, type MouseEvent, type PointerEvent } fro
  * pane's rendered size), applied imperatively to every registered pane. Zoom
  * into the left eye and the right pane's left eye follows. Gated by the caller
  * to matching-dimension pairs, where fraction space is exact.
+ *
+ * On a touch screen two fingers pinch — zooming and panning in one gesture,
+ * against the pane they landed on — and one finger pans an already-zoomed pair.
  */
 
 const MAX_ACTUAL_ZOOM = 8;
@@ -24,14 +37,26 @@ interface PaneElements {
   image: HTMLImageElement | null;
 }
 
+/**
+ * A live two-finger pinch. Like the transform it drives, the gesture is
+ * measured in the fraction space of the pane it started on, all of it captured
+ * up front so each move resolves to one transition from where it began.
+ */
+interface PinchGesture {
+  paneIndex: 0 | 1;
+  pointerIds: [number, number];
+  /** The starting pane's client rect, frozen for the gesture. */
+  rect: { height: number; left: number; top: number; width: number };
+  startCenter: PanZoomPoint;
+  startDistance: number;
+  startTransform: FractionTransform;
+}
+
 export interface CompareLoupePane {
   frameProps: {
     onDoubleClick: (event: MouseEvent<HTMLDivElement>) => void;
-    onLostPointerCapture: (event: PointerEvent<HTMLDivElement>) => void;
-    onPointerCancel: (event: PointerEvent<HTMLDivElement>) => void;
-    onPointerDown: (event: PointerEvent<HTMLDivElement>) => void;
-    onPointerMove: (event: PointerEvent<HTMLDivElement>) => void;
-    onPointerUp: (event: PointerEvent<HTMLDivElement>) => void;
+    onPointerDown: (event: ReactPointerEvent<HTMLDivElement>) => void;
+    onPointerMove: (event: ReactPointerEvent<HTMLDivElement>) => void;
   };
   frameRefCallback: (node: HTMLDivElement | null) => void;
   imageRefCallback: (node: HTMLImageElement | null) => void;
@@ -54,6 +79,9 @@ export const useCompareLoupe = ({
   ]);
   const rafRef = useRef<number | null>(null);
   const panRef = useRef<{ pointerId: number; startX: number; startY: number; fx: number; fy: number } | null>(null);
+  /** Every pointer currently down on either pane, in client space, in arrival order. */
+  const pointersRef = useRef(new Map<number, PanZoomPoint>());
+  const pinchRef = useRef<PinchGesture | null>(null);
   const naturalWidthRef = useRef(naturalWidth);
   naturalWidthRef.current = naturalWidth;
   const [isZoomed, setIsZoomed] = useState(false);
@@ -102,15 +130,24 @@ export const useCompareLoupe = ({
     [apply]
   );
 
+  /** Never below fit, never past `MAX_ACTUAL_ZOOM` of the images' own pixels. */
+  const constrainScale = useCallback((scale: number): number => {
+    const firstFrame = panesRef.current.find((pane) => pane.frame)?.frame ?? null;
+    const maxScale = firstFrame
+      ? Math.max(1, (MAX_ACTUAL_ZOOM * naturalWidthRef.current) / Math.max(1, firstFrame.clientWidth))
+      : MAX_ACTUAL_ZOOM;
+
+    return Math.max(1, Math.min(scale, maxScale));
+  }, []);
+
   const zoomAroundFraction = useCallback(
     (pfx: number, pfy: number, nextScale: number) => {
       const { fx, fy, scale } = transformRef.current;
-      const firstFrame = panesRef.current.find((pane) => pane.frame)?.frame ?? null;
-      const maxScale = firstFrame
-        ? Math.max(1, (MAX_ACTUAL_ZOOM * naturalWidthRef.current) / Math.max(1, firstFrame.clientWidth))
-        : MAX_ACTUAL_ZOOM;
-      const next = calculateZoomAtPoint({ pan: { x: fx, y: fy }, zoom: scale }, nextScale, { x: pfx, y: pfy }, (zoom) =>
-        Math.max(1, Math.min(zoom, maxScale))
+      const next = calculateZoomAtPoint(
+        { pan: { x: fx, y: fy }, zoom: scale },
+        nextScale,
+        { x: pfx, y: pfy },
+        constrainScale
       );
 
       setTransform({
@@ -119,7 +156,7 @@ export const useCompareLoupe = ({
         scale: next.zoom,
       });
     },
-    [setTransform]
+    [constrainScale, setTransform]
   );
 
   const handleWheel = useCallback(
@@ -144,6 +181,25 @@ export const useCompareLoupe = ({
 
   // One stable set of callbacks per pane index; wheel listeners need manual
   // attachment (`passive: false`) so ref callbacks with cleanup own them.
+  /**
+   * The pane a two-finger gesture belongs to: the one containing its midpoint,
+   * so a pinch spanning both panes is measured in the pane it is centred on
+   * rather than in whichever pane the second finger happened to land on (which
+   * would anchor the zoom on that pane's edge, and differently depending on the
+   * order the fingers touched down).
+   */
+  const getGesturePane = useCallback((center: PanZoomPoint, fallback: 0 | 1): 0 | 1 => {
+    for (const index of [0, 1] as const) {
+      const rect = panesRef.current[index].frame?.getBoundingClientRect();
+
+      if (rect && center.x >= rect.left && center.x <= rect.right && center.y >= rect.top && center.y <= rect.bottom) {
+        return index;
+      }
+    }
+
+    return fallback;
+  }, []);
+
   const [panes] = useState<[CompareLoupePane, CompareLoupePane]>(() => {
     const createPane = (index: 0 | 1): CompareLoupePane => ({
       frameProps: {
@@ -167,24 +223,46 @@ export const useCompareLoupe = ({
             Math.max(1, naturalWidthRef.current / frame.clientWidth)
           );
         },
-        onLostPointerCapture: (event) => endPan(event),
-        onPointerCancel: (event) => endPan(event),
         onPointerDown: (event) => {
-          if (event.button !== 0 || transformRef.current.scale === 1) {
+          if (event.button !== 0) {
+            return;
+          }
+
+          if (event.isPrimary) {
+            pinchRef.current = null;
+          }
+
+          const pointers = pointersRef.current;
+          const pair = trackPointerDown(pointers, event);
+
+          if (pair && !pinchRef.current) {
+            event.preventDefault();
+            // Two fingers are never a pan, whether or not the pinch can be armed.
+            panRef.current = null;
+            beginPinch(index, pair);
+
+            return;
+          }
+
+          if (pointers.size !== 1 || transformRef.current.scale === 1) {
             return;
           }
 
           event.preventDefault();
-          event.currentTarget.setPointerCapture(event.pointerId);
-          panRef.current = {
-            fx: transformRef.current.fx,
-            fy: transformRef.current.fy,
-            pointerId: event.pointerId,
-            startX: event.clientX,
-            startY: event.clientY,
-          };
+          capturePointer(event.currentTarget, event.pointerId);
+          beginPan(event.pointerId, { x: event.clientX, y: event.clientY });
         },
         onPointerMove: (event) => {
+          const pointers = pointersRef.current;
+
+          if (pointers.has(event.pointerId)) {
+            pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+          }
+
+          if (applyPinch(event)) {
+            return;
+          }
+
           const pan = panRef.current;
           const frame = panesRef.current[index].frame;
 
@@ -202,7 +280,6 @@ export const useCompareLoupe = ({
           );
           setTransform({ fx: next.pan.x, fy: next.pan.y, scale: next.zoom });
         },
-        onPointerUp: (event) => endPan(event),
       },
       frameRefCallback: (node) => {
         panesRef.current[index].frame = node;
@@ -212,12 +289,31 @@ export const useCompareLoupe = ({
         }
 
         const onWheel = (event: WheelEvent): void => handleWheel(node, event);
+        // A finger only reports to the pane while it is over it (or captured by
+        // it), so the document is what keeps the tracked set honest: it sees a
+        // finger that crosses to the other pane or lifts off both, either of
+        // which would otherwise leave a phantom entry to pinch against.
+        const handleDocumentPointerMove = (event: PointerEvent): void => {
+          const pointers = pointersRef.current;
+
+          if (pointers.has(event.pointerId)) {
+            pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+          }
+        };
+        const handleDocumentPointerEnd = (event: PointerEvent): void => endPointer(event.pointerId);
+        const ownerDocument = node.ownerDocument;
 
         node.addEventListener('wheel', onWheel, { passive: false });
+        ownerDocument.addEventListener('pointermove', handleDocumentPointerMove, { passive: true });
+        ownerDocument.addEventListener('pointerup', handleDocumentPointerEnd);
+        ownerDocument.addEventListener('pointercancel', handleDocumentPointerEnd);
         apply();
 
         return () => {
           node.removeEventListener('wheel', onWheel);
+          ownerDocument.removeEventListener('pointermove', handleDocumentPointerMove);
+          ownerDocument.removeEventListener('pointerup', handleDocumentPointerEnd);
+          ownerDocument.removeEventListener('pointercancel', handleDocumentPointerEnd);
         };
       },
       imageRefCallback: (node) => {
@@ -228,13 +324,138 @@ export const useCompareLoupe = ({
         }
       },
     });
-    const endPan = (event: PointerEvent<HTMLDivElement>): void => {
-      if (panRef.current?.pointerId !== event.pointerId) {
+    /** Starts a pan from the given pointer's position, at the current transform. */
+    const beginPan = (pointerId: number, from: PanZoomPoint): void => {
+      panRef.current = {
+        fx: transformRef.current.fx,
+        fy: transformRef.current.fy,
+        pointerId,
+        startX: from.x,
+        startY: from.y,
+      };
+    };
+
+    /**
+     * Arms a pinch on two down pointers, measured in the fraction space of the
+     * pane the gesture is centred on (`fallbackPane` decides only when the
+     * midpoint is over neither). Returns null — leaving no gesture — if that
+     * pane cannot be measured or the fingers landed on the same spot. Both
+     * fingers are captured for the whole gesture, so one that strays off the
+     * pane keeps driving it instead of silently sticking.
+     */
+    const beginPinch = (fallbackPane: 0 | 1, pointerIds: [number, number]): PinchGesture | null => {
+      const first = pointersRef.current.get(pointerIds[0]);
+      const second = pointersRef.current.get(pointerIds[1]);
+
+      if (!first || !second) {
+        return null;
+      }
+
+      const center = midpointOf(first, second);
+      const paneIndex = getGesturePane(center, fallbackPane);
+      const frame = panesRef.current[paneIndex].frame;
+
+      if (!frame) {
+        return null;
+      }
+
+      const rect = frame.getBoundingClientRect();
+      const distance = distanceBetween(first, second);
+
+      if (rect.width === 0 || rect.height === 0 || distance === 0) {
+        return null;
+      }
+
+      panRef.current = null;
+      pinchRef.current = {
+        paneIndex,
+        pointerIds,
+        rect: { height: rect.height, left: rect.left, top: rect.top, width: rect.width },
+        startCenter: { x: (center.x - rect.left) / rect.width, y: (center.y - rect.top) / rect.height },
+        startDistance: distance,
+        startTransform: transformRef.current,
+      };
+
+      for (const pointerId of pointerIds) {
+        capturePointer(frame, pointerId);
+      }
+
+      return pinchRef.current;
+    };
+
+    /** Applies a move to the live pinch; reports whether the pinch owns it. */
+    const applyPinch = (event: ReactPointerEvent<HTMLDivElement>): boolean => {
+      const pinch = pinchRef.current;
+
+      if (!pinch) {
+        return false;
+      }
+
+      const first = pointersRef.current.get(pinch.pointerIds[0]);
+      const second = pointersRef.current.get(pinch.pointerIds[1]);
+
+      if (!pinch.pointerIds.includes(event.pointerId) || !first || !second) {
+        return true;
+      }
+
+      event.preventDefault();
+      const center = midpointOf(first, second);
+      const next = pinchZoomAtPoints(
+        { pan: { x: pinch.startTransform.fx, y: pinch.startTransform.fy }, zoom: pinch.startTransform.scale },
+        {
+          center: {
+            x: (center.x - pinch.rect.left) / pinch.rect.width,
+            y: (center.y - pinch.rect.top) / pinch.rect.height,
+          },
+          distance: distanceBetween(first, second),
+          startCenter: pinch.startCenter,
+          startDistance: pinch.startDistance,
+        },
+        constrainScale
+      );
+
+      setTransform({ fx: next.pan.x, fy: next.pan.y, scale: next.zoom });
+
+      return true;
+    };
+
+    const endPointer = (pointerId: number): void => {
+      const pointers = pointersRef.current;
+
+      if (pointers.delete(pointerId)) {
+        for (const pane of panesRef.current) {
+          if (pane.frame) {
+            releasePointer(pane.frame, pointerId);
+          }
+        }
+      }
+
+      const pinch = pinchRef.current;
+
+      if (pinch?.pointerIds.includes(pointerId)) {
+        pinchRef.current = null;
+        const remaining = [...pointers.keys()];
+
+        // Lifting one finger of a three-finger gesture re-pinches on what is
+        // left; lifting to a single finger hands the gesture over to a pan, so
+        // the images keep following that finger without a release and retouch.
+        if (remaining.length >= 2) {
+          beginPinch(pinch.paneIndex, [remaining[0]!, remaining[1]!]);
+          return;
+        }
+
+        const last = remaining[0];
+        const lastPoint = last === undefined ? undefined : pointers.get(last);
+
+        if (last !== undefined && lastPoint && transformRef.current.scale !== 1) {
+          beginPan(last, lastPoint);
+        }
+
         return;
       }
 
-      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-        event.currentTarget.releasePointerCapture(event.pointerId);
+      if (panRef.current?.pointerId !== pointerId) {
+        return;
       }
 
       panRef.current = null;

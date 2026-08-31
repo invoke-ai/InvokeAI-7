@@ -148,6 +148,13 @@ If, after restarting the app, this doesn't improve your performance, either rest
   While the application does run on AMD GPUs, there are occasional bumps related to spotty torch support.
 :::
 
+:::note[MIOpen kernel search]
+  Invoke starts with `MIOPEN_FIND_MODE=FAST` so that MIOpen (ROCm's convolution library) does not
+  spend minutes benchmarking kernels the first time each convolution shape runs - most noticeable on
+  the video VAEs, which run many distinct shapes. Export `MIOPEN_FIND_MODE` yourself to override it
+  (for example `MIOPEN_FIND_MODE=NORMAL` to let MIOpen re-tune its kernel database).
+:::
+
 Run `rocm-smi` on your system's command line verify that drivers and ROCm are installed. If this command fails, or doesn't report versions, you will need to install them.
 
 Go to the [ROCm Documentation] and carefully follow the instructions for your system to get everything installed.

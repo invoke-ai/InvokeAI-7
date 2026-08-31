@@ -18,6 +18,7 @@ from invokeai.app.services.events.events_common import ImageIndexStatusEvent, Im
 from invokeai.app.services.image_index import image_index_default
 from invokeai.app.services.image_index.image_index_common import EMBEDDING_DTYPE
 from invokeai.app.services.image_index.image_index_default import (
+    _ACTIVATION_RETRY_INTERVAL_S,
     _MAX_ATTEMPTS,
     _MAX_BACKOFF_SECONDS,
     _POLL_SECONDS,
@@ -314,6 +315,131 @@ def test_model_not_installed_message_flags_same_name_wrong_type() -> None:
     service._invoker.services.model_manager.store.search_by_attr = lambda model_name=None: []
     message = service._model_not_installed_message("clip-vit-large-patch14")
     assert "is not installed" in message
+
+
+def test_try_activate_picks_up_a_model_installed_after_startup(
+    images_service: ImageService,
+    index_records: ImageIndexRecordsSqlite,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The encoder is usually installed from the image map itself, long after
+    # the server came up; that must not need a restart.
+    from invokeai.backend.model_manager.taxonomy import ModelType
+
+    installed: list[object] = []
+    resolutions = 0
+
+    def resolve(self, model_name: str):
+        nonlocal resolutions
+        resolutions += 1
+        return installed[0] if installed else None
+
+    monkeypatch.setattr(ImageIndexService, "_resolve_model_config", resolve)
+    store = SimpleNamespace(search_by_attr=lambda **kwargs: [])
+    invoker = _make_invoker(images_service, index_records, model_manager=SimpleNamespace(store=store))
+    service = ImageIndexService()
+    try:
+        service.start(invoker)
+        assert service.model_id is None
+
+        # Throttled: start() has just resolved, so a poll cannot re-query the
+        # model store on its heels.
+        assert service.try_activate() is False
+        assert resolutions == 1
+
+        service._last_activation_attempt = time.monotonic() - _ACTIVATION_RETRY_INTERVAL_S - 1
+        assert service.try_activate() is False
+        assert resolutions == 2
+
+        installed.append(SimpleNamespace(hash=MODEL_ID, type=ModelType.CLIPVision, path="/models/encoder"))
+        service._last_activation_attempt = time.monotonic() - _ACTIVATION_RETRY_INTERVAL_S - 1
+
+        assert service.try_activate() is True
+        assert service.model_id == MODEL_ID
+        _wait_until(lambda: service._worker is not None and service._worker.is_alive())
+        # The fast path: no further model-store queries once it is running.
+        assert service.try_activate() is True
+        assert resolutions == 3
+    finally:
+        service.stop()
+
+    # A request racing shutdown must not start a worker the invoker will never join.
+    service._worker = None
+    service._model_id = None
+    service._last_activation_attempt = time.monotonic() - _ACTIVATION_RETRY_INTERVAL_S - 1
+    assert service.try_activate() is False
+
+
+def test_failed_late_activation_rolls_back_rather_than_wedging_the_service(
+    images_service: ImageService,
+    index_records: ImageIndexRecordsSqlite,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Publishing the model before the worker exists would leave the service
+    # claiming to run with nothing consuming the queue — and try_activate's
+    # fast path would answer True forever, so no later request would retry.
+    from invokeai.backend.model_manager.taxonomy import ModelType
+
+    resolved = SimpleNamespace(hash=MODEL_ID, type=ModelType.CLIPVision, path="/models/encoder")
+    monkeypatch.setattr(ImageIndexService, "_resolve_model_config", lambda self, model_name: resolved)
+    launches = 0
+
+    def launch(self, invoker):
+        nonlocal launches
+        launches += 1
+        if launches == 1:
+            raise RuntimeError("sqlite write failed")
+        return original_launch(self, invoker)
+
+    original_launch = ImageIndexService._launch_worker
+    store = SimpleNamespace(search_by_attr=lambda **kwargs: [])
+    invoker = _make_invoker(images_service, index_records, model_manager=SimpleNamespace(store=store))
+    service = ImageIndexService()
+    try:
+        # Inert at start: the encoder was not installed yet.
+        monkeypatch.setattr(ImageIndexService, "_resolve_model_config", lambda self, model_name: None)
+        service.start(invoker)
+        assert service.model_id is None
+
+        monkeypatch.setattr(ImageIndexService, "_resolve_model_config", lambda self, model_name: resolved)
+        monkeypatch.setattr(ImageIndexService, "_launch_worker", launch)
+        service._last_activation_attempt = time.monotonic() - _ACTIVATION_RETRY_INTERVAL_S - 1
+
+        assert service.try_activate() is False
+        # Rolled back, so the state a request reads still says "not running".
+        assert service.model_id is None
+        assert service._encode_fn is None
+        assert service.get_status() is None
+
+        service._last_activation_attempt = time.monotonic() - _ACTIVATION_RETRY_INTERVAL_S - 1
+
+        assert service.try_activate() is True
+        assert service.model_id == MODEL_ID
+        _wait_until(lambda: service._worker is not None and service._worker.is_alive())
+    finally:
+        service.stop()
+
+
+def test_late_activation_survives_a_model_store_failure(
+    images_service: ImageService,
+    index_records: ImageIndexRecordsSqlite,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # These endpoints reported `model_missing` before they resolved anything;
+    # a model-store failure must not turn them into 500s.
+    def explode(self, model_name):
+        raise RuntimeError("model store unavailable")
+
+    store = SimpleNamespace(search_by_attr=lambda **kwargs: [])
+    invoker = _make_invoker(images_service, index_records, model_manager=SimpleNamespace(store=store))
+    service = ImageIndexService()
+    monkeypatch.setattr(ImageIndexService, "_resolve_model_config", lambda self, model_name: None)
+    service.start(invoker)
+    monkeypatch.setattr(ImageIndexService, "_resolve_model_config", explode)
+    service._last_activation_attempt = time.monotonic() - _ACTIVATION_RETRY_INTERVAL_S - 1
+
+    assert service.try_activate() is False
+    assert service.model_id is None
 
 
 def test_broken_encoder_leaves_images_pending_rather_than_quarantined(
@@ -1931,12 +2057,96 @@ def test_a_failed_vocabulary_build_is_not_retried_on_every_request(service: Imag
     from invokeai.app.services.image_index.image_index_base import TextSearchUnavailableError
 
     service._vocab_failure = TextSearchUnavailableError("no text encoder")  # type: ignore[assignment]
+    # As the worker's except branch always does — a fresh failure, inside the
+    # retry window.
+    service._vocab_failed_at = time.monotonic()
 
     with pytest.raises(TextSearchUnavailableError, match="no text encoder"):
         service.get_vocab_embeddings()
 
     # Not even queued: there is nothing for the worker to retry.
     assert not service._vocab_build_requested.is_set()
+
+
+def test_an_aged_vocabulary_failure_requeues_the_build(service: ImageIndexService) -> None:
+    # The memo protects a vision-only install from per-refresh text-tower
+    # retries, but the failure itself can be transient — an OOM while the GPU
+    # was busy generating, a load that lost a race. Answering from memory
+    # forever pins one bad minute as a permanent labels outage; after the
+    # retry window, the next request must drop the memo and ask the worker
+    # to build again.
+    from invokeai.app.services.image_index.image_index_base import TextSearchUnavailableError
+
+    service._invoker = SimpleNamespace()  # type: ignore[assignment]
+    service._model_id = MODEL_ID
+    service._vocab_failure = TextSearchUnavailableError("encoder OOM")  # type: ignore[assignment]
+    service._vocab_failed_at = time.monotonic() - image_index_default._VOCAB_FAILURE_RETRY_SECONDS - 1
+
+    with pytest.raises(TextSearchUnavailableError, match="still being prepared"):
+        service.get_vocab_embeddings()
+
+    assert service._vocab_build_requested.is_set()
+    assert service._vocab_failure is None
+    assert service._vocab_failed_at is None
+
+
+def test_a_failed_build_records_when_it_failed(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The retry window is measured from the build's failure, so the stamp must
+    # land with the memo.
+    from invokeai.app.services.image_index import cluster_labels
+
+    def _oom(embed_fn, vocabulary):
+        raise RuntimeError("encoder OOM")
+
+    matrix = np.arange(3 * DIM, dtype=EMBEDDING_DTYPE).reshape(3, DIM)
+    service = _vocab_build_service(tmp_path, monkeypatch, matrix)
+    monkeypatch.setattr(cluster_labels, "ensemble_phrase_embeddings", _oom)
+
+    service._build_vocab_embeddings()
+
+    assert service._vocab_failure is not None
+    assert service._vocab_failed_at is not None
+    # Two-sided: a stamp written with the wrong clock (time.time against a
+    # monotonic read) is a huge negative difference that a one-sided bound
+    # passes vacuously — and the memo would then never age out.
+    assert abs(time.monotonic() - service._vocab_failed_at) < 5
+
+
+def test_an_aged_vocabulary_failure_does_not_requeue_against_a_stopped_worker(
+    service: ImageIndexService,
+) -> None:
+    # The decay assumes the index worker will consume the build request. After
+    # stop() nothing will, so a request arriving in the shutdown window must
+    # answer with the memoized failure — the real cause — rather than queue a
+    # rebuild that 409s "still being prepared" for the rest of the process's
+    # life.
+    from invokeai.app.services.image_index.image_index_base import TextSearchUnavailableError
+
+    service._vocab_failure = TextSearchUnavailableError("encoder OOM")  # type: ignore[assignment]
+    service._vocab_failed_at = time.monotonic() - image_index_default._VOCAB_FAILURE_RETRY_SECONDS - 1
+    service._stop_event.set()
+
+    with pytest.raises(TextSearchUnavailableError, match="encoder OOM"):
+        service.get_vocab_embeddings()
+
+    assert not service._vocab_build_requested.is_set()
+    assert service._vocab_failure is not None
+
+
+def test_the_worker_clears_the_failure_stamp_with_the_memo(service: ImageIndexService) -> None:
+    """Pin the CALL SITE, not just the fields.
+
+    The worker's invalidation block drops the memo and its stamp together; the
+    stamp is only ever read under `if self._vocab_failure is not None`, so
+    leaving it behind is invisible today — but any future read outside that
+    guard turns the stale value live. Like the backoff call-site test above,
+    this is the plausible hand-resolved-rebase loss the suite must see.
+    """
+    source = inspect.getsource(ImageIndexService._worker_loop)
+    invalidate_block = source.split("_vocab_invalidate_requested.clear()")[1].split("try:")[0]
+
+    assert "self._vocab_failure = None" in invalidate_block
+    assert "self._vocab_failed_at = None" in invalidate_block
 
 
 def _vocab_build_service(tmp_path, monkeypatch: pytest.MonkeyPatch, matrix: np.ndarray) -> ImageIndexService:

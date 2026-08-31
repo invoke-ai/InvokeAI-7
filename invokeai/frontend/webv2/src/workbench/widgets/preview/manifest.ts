@@ -3,6 +3,7 @@ import type { WidgetManifest } from '@workbench/widgetContracts';
 import { EyeIcon } from 'lucide-react';
 
 export const previewWidgetManifest: WidgetManifest = {
+  allowFloating: true,
   allowMultiple: false,
   allowedRegions: ['center', 'right'],
   failurePolicy: { isolateRenderFailure: true, onRegistrationFailure: 'disable' },

@@ -2015,6 +2015,7 @@
       "hideInProgressDiffusion": "Hide in-progress diffusion",
       "imageCount_one": "{{count}} image",
       "imageCount_other": "{{count}} images",
+      "invoke": "Invoke",
       "itemCount_one": "{{count}} item",
       "itemCount_other": "{{count}} items",
       "loadingBoard": "Loading board",

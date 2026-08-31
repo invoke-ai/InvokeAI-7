@@ -58,6 +58,7 @@ vi.mock('@features/queue/react', () => ({
   useQueueItemProgressImage: () => mocks.progressImage,
   useActiveProgressTargets: () => [],
   useActiveProgressTarget: () => null,
+  useActiveProgressItemIds: () => [],
   useProgressImage: () => null,
 }));
 

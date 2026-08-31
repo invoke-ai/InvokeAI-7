@@ -4,6 +4,7 @@ import type { GalleryImage, GeneratedImageContract } from './types';
 
 import {
   assertNeverGalleryItem,
+  compareGalleryItems,
   formatGalleryVideoDuration,
   galleryImageItemToGalleryImage,
   isGalleryImageItem,
@@ -184,5 +185,56 @@ describe('gallery video duration formatting', () => {
     [3_601, '1:00:01'],
   ])('formats %s seconds as %s', (duration, expected) => {
     expect(formatGalleryVideoDuration(duration)).toBe(expected);
+  });
+});
+
+describe('gallery item ordering', () => {
+  // The two timestamp shapes the grid mixes: backend rows carry SQLite's
+  // `created_at`; overlaid recents carry the queue's ISO `submittedAt`.
+  const sqliteItem = galleryItem('backend.png', false);
+  const overlayItem = legacyGeneratedImageToGalleryItem(generatedImage);
+
+  it('sorts a newer backend item before an older overlaid recent in DESC order', () => {
+    const olderOverlay = { ...overlayItem, createdAt: '2026-08-29T02:28:40.566Z' };
+    const newerBackend = { ...sqliteItem, createdAt: '2026-08-29 13:01:20.649' };
+
+    const sorted = [olderOverlay, newerBackend].sort((a, b) => compareGalleryItems(a, b, { orderDir: 'DESC' }));
+
+    expect(sorted.map((item) => item.name)).toEqual(['backend.png', 'legacy.png']);
+  });
+
+  it('sorts an older overlaid recent before a newer backend item in ASC order', () => {
+    const olderOverlay = { ...overlayItem, createdAt: '2026-08-29T02:28:40.566Z' };
+    const newerBackend = { ...sqliteItem, createdAt: '2026-08-29 13:01:20.649' };
+
+    const sorted = [newerBackend, olderOverlay].sort((a, b) => compareGalleryItems(a, b, { orderDir: 'ASC' }));
+
+    expect(sorted.map((item) => item.name)).toEqual(['legacy.png', 'backend.png']);
+  });
+
+  it('keeps starred items first regardless of timestamp shape', () => {
+    const starredOlderBackend = { ...sqliteItem, createdAt: '2026-08-29 02:28:40.566', starred: true };
+    const unstarredNewerOverlay = { ...overlayItem, createdAt: '2026-08-29T13:01:20.649Z' };
+
+    const sorted = [unstarredNewerOverlay, starredOlderBackend].sort((a, b) =>
+      compareGalleryItems(a, b, { orderDir: 'DESC', starredFirst: true })
+    );
+
+    expect(sorted.map((item) => item.name)).toEqual(['backend.png', 'legacy.png']);
+  });
+
+  it('falls through to the kind tie-breaker when the two shapes name the same instant', () => {
+    const image = { ...sqliteItem, createdAt: '2026-08-29 13:01:20.649' };
+    const video = { ...image, durationSeconds: 2, kind: 'video' as const, name: 'backend.png' };
+
+    // The same instant written in both shapes is a chronological tie. (DESC
+    // ties come back as -0 — direction * 0 — so compare with `===`.)
+    expect(
+      compareGalleryItems({ ...image, createdAt: '2026-08-29T13:01:20.649Z' }, image, { orderDir: 'DESC' }) === 0
+    ).toBe(true);
+
+    const sorted = [image, video].sort((a, b) => compareGalleryItems(a, b, { orderDir: 'DESC' }));
+
+    expect(sorted.map((item) => item.kind)).toEqual(['video', 'image']);
   });
 });

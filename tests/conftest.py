@@ -43,7 +43,10 @@ from tests.test_nodes import TestEventService
 
 @pytest.fixture
 def mock_services() -> InvocationServices:
-    configuration = InvokeAIAppConfig(use_memory_db=True, node_cache_size=0)
+    # Image indexing is on by default, but `model_manager` below is None: starting
+    # the indexer against these stub services would fail while resolving the
+    # embedding model. Tests that exercise the index enable it themselves.
+    configuration = InvokeAIAppConfig(use_memory_db=True, node_cache_size=0, image_index_enabled=False)
     logger = InvokeAILogger.get_logger()
     db = create_mock_sqlite_database(configuration, logger)
 

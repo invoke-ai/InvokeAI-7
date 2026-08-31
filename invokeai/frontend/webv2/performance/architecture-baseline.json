@@ -2,15 +2,15 @@
   "build": {
     "launchpad": {
       "baseline": {
-        "brotliBytes": 837433,
+        "brotliBytes": 837711,
         "cssRawBytes": 2159,
         "fontRawBytes": 219480,
-        "gzipBytes": 836417,
+        "gzipBytes": 836619,
         "imageRawBytes": 156376,
-        "initialRawBytes": 1947147,
+        "initialRawBytes": 1948152,
         "largestAssetRawBytes": 746355,
         "otherAssetRawBytes": 0,
-        "ownedRawBytes": 69121,
+        "ownedRawBytes": 69169,
         "requestCount": 41,
         "scriptRequestCount": 25,
         "sourceOwners": [
@@ -287,15 +287,15 @@
         ]
       },
       "limits": {
-        "brotliBytes": 845808,
+        "brotliBytes": 846089,
         "cssRawBytes": 2181,
         "fontRawBytes": 221675,
-        "gzipBytes": 844782,
+        "gzipBytes": 844986,
         "imageRawBytes": 157940,
-        "initialRawBytes": 1966619,
+        "initialRawBytes": 1967634,
         "largestAssetRawBytes": 753819,
         "otherAssetRawBytes": 0,
-        "ownedRawBytes": 69121,
+        "ownedRawBytes": 69169,
         "requestCount": 41,
         "scriptRequestCount": 25
       },
@@ -305,17 +305,17 @@
     },
     "editor": {
       "baseline": {
-        "brotliBytes": 1050651,
+        "brotliBytes": 1056818,
         "cssRawBytes": 2159,
         "fontRawBytes": 219480,
-        "gzipBytes": 1046347,
+        "gzipBytes": 1052118,
         "imageRawBytes": 156376,
-        "initialRawBytes": 2586287,
+        "initialRawBytes": 2599248,
         "largestAssetRawBytes": 746355,
         "otherAssetRawBytes": 0,
-        "ownedRawBytes": 115755,
-        "requestCount": 95,
-        "scriptRequestCount": 79,
+        "ownedRawBytes": 113925,
+        "requestCount": 96,
+        "scriptRequestCount": 80,
         "sourceOwners": [
           "package:@ark-ui/react",
           "package:@chakra-ui/react",
@@ -768,6 +768,7 @@
           "source:src/workbench/projects/syncedPersistence.ts",
           "source:src/workbench/projects/useProjectActions.ts",
           "source:src/workbench/projects/useProjectFileActions.ts",
+          "source:src/workbench/queue-integration/QueueProgressRail.tsx",
           "source:src/workbench/queue-integration/useActiveQueueProgress.ts",
           "source:src/workbench/queueHistoryNormalization.ts",
           "source:src/workbench/settings/SettingsDialogHost.tsx",
@@ -780,6 +781,7 @@
           "source:src/workbench/shell/StatusBar.tsx",
           "source:src/workbench/shell/WorkbenchShell.tsx",
           "source:src/workbench/shell/documentTitle.ts",
+          "source:src/workbench/shell/holdToDragSensor.ts",
           "source:src/workbench/shell/index.ts",
           "source:src/workbench/shell/notifications/WorkbenchNotificationToaster.tsx",
           "source:src/workbench/shell/notifications/index.ts",
@@ -864,24 +866,24 @@
         ]
       },
       "limits": {
-        "brotliBytes": 1061158,
+        "brotliBytes": 1067387,
         "cssRawBytes": 2181,
         "fontRawBytes": 221675,
-        "gzipBytes": 1056811,
+        "gzipBytes": 1062640,
         "imageRawBytes": 157940,
-        "initialRawBytes": 2612150,
+        "initialRawBytes": 2625241,
         "largestAssetRawBytes": 753819,
         "otherAssetRawBytes": 0,
-        "ownedRawBytes": 115755,
-        "requestCount": 95,
-        "scriptRequestCount": 79
+        "ownedRawBytes": 113925,
+        "requestCount": 96,
+        "scriptRequestCount": 80
       },
       "owner": "workbench",
       "remediationTicket": "deepen-widget-registry-loading",
       "source": "src/app/WorkbenchApp.tsx"
     }
   },
-  "capturedAt": "2026-08-24",
+  "capturedAt": "2026-08-29",
   "developmentInvalidation": {
     "platformUiBarrel": {
       "specifier": "@platform/ui",

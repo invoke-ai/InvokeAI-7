@@ -17,6 +17,21 @@ from typing import Any
 # keeps their value.
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
+# ROCm: run MIOpen's convolution-kernel search in FAST mode. The default mode benchmarks
+# every candidate kernel the first time a convolution shape is seen, which on a VAE-shaped
+# workload (many layers x spatial tiles x temporal chunks, separately per dtype) costs minutes
+# of "warm-up" per new shape set, and torch's MIOpen ``chooseAlgorithm`` falls back to a
+# *global* ``emptyCache`` whenever a candidate's workspace allocation fails - on multi-GPU
+# installs that convoys the peer device mid-step (see ``install_peer_aware_empty_cache``).
+# FAST looks the shape up in MIOpen's find-db and takes the first viable kernel otherwise;
+# with a warmed find-db the difference in kernel quality is negligible. MIOpen reads the
+# variable when it is first used, so, like the tokenizer flag, it is set at module level -
+# before torch is even imported - rather than inside ``run_app()``, so no early import can run
+# a convolution ahead of it. On
+# CUDA/CPU/MPS builds MIOpen is absent and the variable is inert. ``setdefault`` keeps an
+# explicitly exported value (e.g. ``MIOPEN_FIND_MODE=NORMAL`` to re-tune the find-db).
+os.environ.setdefault("MIOPEN_FIND_MODE", "FAST")
+
 
 def get_app():
     """Import the app and event loop. We wrap this in a function to more explicitly control when it happens, because

@@ -194,6 +194,34 @@ const getSerializedProjectDocument = (
  * `projectBoardId` is a stale-able cache, so overwriting it here means every path that reads from
  * the server agrees on one answer. The saved destination is left alone — it is a deliberate choice.
  */
+/**
+ * The baseline a server record establishes for the push comparison.
+ *
+ * It is the serialization of what this realm holds after hydrating the
+ * record, not the raw wire bytes. Hydration can legitimately change a
+ * document — a search only the writing session could resolve is dropped,
+ * along with the pages set against it — and a baseline taken from the bytes
+ * would read that as a local edit: the next autosave would push the hydrated
+ * copy unprompted, bump the revision under the tab that still holds the live
+ * search, and fork that tab's next save as "changed elsewhere" with nobody
+ * having edited anything. Taking the baseline after hydration means a project
+ * that has only been opened is never pushed, and a real edit here conflicts
+ * with a real edit there exactly as before.
+ */
+const adoptRecordBaseline = (record: ProjectRecordDTO): { project: Project | null; pushedDoc: string } => {
+  const project = deserializeProjectRecord(record);
+
+  // Serialized directly, not through `getSerializedProjectDocument`: that
+  // records the document's cover as a side effect, and a baseline is taken for
+  // documents this realm may never adopt — the server's copy during conflict
+  // recovery, which on a retry would leave the cover index naming the version
+  // the retry then overwrites.
+  return {
+    project,
+    pushedDoc: project === null ? JSON.stringify(record.data) : JSON.stringify(serializeProjectDocument(project)),
+  };
+};
+
 const deserializeProjectRecord = (record: ProjectRecordDTO): Project | null => {
   const project = deserializeProjectDocument(
     applyAuthoritativeProjectBoard(record.data, record.board_id, { selectBoard: false })
@@ -291,7 +319,7 @@ const pushNewProject = async (syncState: SyncedPersistenceState, project: Projec
 
         assertOwner(syncState);
         syncState.syncEntries.set(project.id, {
-          pushedDoc: JSON.stringify(existing.data),
+          pushedDoc: adoptRecordBaseline(existing).pushedDoc,
           revision: existing.revision,
         });
         syncState.pendingBoardAssignments.push({ boardId: existing.board_id, projectId: project.id });
@@ -362,7 +390,11 @@ const recoverConflictingProject = async (
     const server = await apiGetProject(project.id, syncState.owner.signal);
 
     assertOwner(syncState);
-    const serverDocJson = JSON.stringify(server.data);
+    // Compared as this realm would hold it, the same way the baseline was
+    // taken: the wire bytes of an unchanged document differ from the baseline
+    // whenever hydration changes it, and that would read a revision that
+    // merely drifted as a divergence.
+    const { project: serverProject, pushedDoc: serverDocJson } = adoptRecordBaseline(server);
 
     syncState.syncEntries.set(project.id, { pushedDoc: serverDocJson, revision: server.revision });
 
@@ -373,8 +405,6 @@ const recoverConflictingProject = async (
     if (basePushedDoc !== null && serverDocJson === basePushedDoc) {
       return { kind: 'retry' };
     }
-
-    const serverProject = deserializeProjectRecord(server);
 
     if (!serverProject) {
       return { kind: 'failed' };
@@ -394,7 +424,10 @@ const recoverConflictingProject = async (
 
     assertOwner(syncState);
     syncState.syncEntries.set(recoveredIdentity.id, {
-      pushedDoc: JSON.stringify(recoveredDocument),
+      // As this realm holds it, not the wire bytes: the fork's store copy is
+      // hydrated from this document, and a fork whose tab is already closed
+      // is a document arriving like any other.
+      pushedDoc: JSON.stringify(serializeProjectDocument(recoveredProject)),
       revision: created.revision,
     });
     // Recorded for the same reason the deletion fork records it: the fork is a project the server
@@ -465,7 +498,10 @@ const forkDeletedProject = async (
     }
 
     syncState.syncEntries.set(recoveredIdentity.id, {
-      pushedDoc: JSON.stringify(recoveredDocument),
+      // As this realm holds it, not the wire bytes: the fork's store copy is
+      // hydrated from this document, and a fork whose tab is already closed
+      // is a document arriving like any other.
+      pushedDoc: JSON.stringify(serializeProjectDocument(recoveredProject)),
       revision: created.revision,
     });
     syncState.pendingBoardAssignments.push({ boardId: created.board_id, projectId: recoveredIdentity.id });
@@ -711,14 +747,11 @@ const loadFromBackend = async (
       continue;
     }
 
-    const project = deserializeProjectRecord(record);
+    const { project, pushedDoc } = adoptRecordBaseline(record);
 
     if (project) {
       serverProjects.push(project);
-      syncState.syncEntries.set(record.project_id, {
-        pushedDoc: JSON.stringify(record.data),
-        revision: record.revision,
-      });
+      syncState.syncEntries.set(record.project_id, { pushedDoc, revision: record.revision });
     }
   }
 
@@ -914,16 +947,13 @@ export const createSyncedWorkbenchPersistence = (
 
   const adoptProjectRecord = (record: ProjectRecordDTO): Project | null => {
     assertOwner(syncState);
-    const project = deserializeProjectRecord(record);
+    const { project, pushedDoc } = adoptRecordBaseline(record);
 
     if (!project) {
       return null;
     }
 
-    syncState.syncEntries.set(record.project_id, {
-      pushedDoc: JSON.stringify(record.data),
-      revision: record.revision,
-    });
+    syncState.syncEntries.set(record.project_id, { pushedDoc, revision: record.revision });
     persistSyncMap(syncState);
 
     return project;
