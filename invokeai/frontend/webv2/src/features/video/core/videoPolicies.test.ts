@@ -391,6 +391,22 @@ describe('MiniMax H3 Turbo', () => {
     expect(findMiniMaxH3TurboLora([TURBO, turboRider])).toMatchObject({ key: 'turbo' });
   });
 
+  it('never auto-picks a Ref2VA-trained turbo LoRA for FL2VA generation', () => {
+    // The Ref2V Turbo repack is trained against the Ref2VA transformer only; despite sorting
+    // before "MiniMax H3 Turbo LoRA" and matching the family+turbo patterns, it must lose.
+    const ref2vTurbo = { base: 'minimax-h3', key: 'ref2v', name: 'MiniMax H3 Ref2V Turbo LoRA', type: 'lora' as const };
+    const ref2vFile = {
+      base: 'minimax-h3',
+      key: 'ref2v-file',
+      name: 'minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16',
+      type: 'lora' as const,
+    };
+
+    expect(findMiniMaxH3TurboLora([ref2vTurbo, TURBO])).toMatchObject({ key: 'turbo' });
+    expect(findMiniMaxH3TurboLora([ref2vTurbo])).toBeNull();
+    expect(findMiniMaxH3TurboLora([ref2vFile])).toBeNull();
+  });
+
   it('never strips a user LoRA that merely shares an accelerator-style name', () => {
     const turboRider = { base: 'minimax-h3', key: 'rider', name: 'Turbo Rider', type: 'lora' as const };
     const model = h3Model();
@@ -741,6 +757,16 @@ describe('component section policy', () => {
 
     expect(transformerSlot?.filter?.(h3Model('checkpoint'), ctx)).toBe(true);
     expect(transformerSlot?.filter?.(h3Model('diffusers'), ctx)).toBe(false);
+  });
+
+  it('excludes Ref2VA transformers from the H3 transformer picker until the reference mode lands', () => {
+    // TODO(ref2va): invert this expectation when reference-conditioned generation ships.
+    const model = h3Model();
+    const policy = getVideoComponentSectionPolicy(model, settingsFor(model));
+    const transformerSlot = policy.slots[0];
+    const ctx = { model, selectedComponents: settingsFor(model), settings: settingsFor(model) };
+
+    expect(transformerSlot?.filter?.({ ...h3Model('checkpoint'), variant: 'ref2va' }, ctx)).toBe(false);
   });
 });
 

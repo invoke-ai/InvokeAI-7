@@ -15,7 +15,13 @@ from invokeai.app.invocations.model import (
     VAEField,
 )
 from invokeai.app.services.shared.invocation_context import InvocationContext
-from invokeai.backend.model_manager.taxonomy import BaseModelType, ModelFormat, ModelType, SubModelType
+from invokeai.backend.model_manager.taxonomy import (
+    BaseModelType,
+    MiniMaxH3VariantType,
+    ModelFormat,
+    ModelType,
+    SubModelType,
+)
 
 
 @invocation_output("minimax_h3_model_loader_output")
@@ -23,7 +29,7 @@ class MiniMaxH3ModelLoaderOutput(BaseInvocationOutput):
     """MiniMax H3 model loader output."""
 
     transformer: MiniMaxH3TransformerField = OutputField(
-        description="MiniMax H3 FL2VA transformer", title="Transformer"
+        description="MiniMax H3 task transformer (FL2VA or Ref2VA)", title="Transformer"
     )
     text_encoder: MiniMaxH3TextEncoderField = OutputField(
         description=FieldDescriptions.minimax_h3_text_encoder, title="Qwen3-VL Encoder"
@@ -51,17 +57,22 @@ class MiniMaxH3ModelLoaderOutput(BaseInvocationOutput):
     title="Main Model - MiniMax H3",
     tags=["model", "minimax", "video"],
     category="model",
-    version="1.3.0",
+    version="1.4.0",
     classification=Classification.Prototype,
 )
 class MiniMaxH3ModelLoaderInvocation(BaseInvocation):
-    """Loads a MiniMax H3 (FL2VA) model, outputting its submodels.
+    """Loads a MiniMax H3 model, outputting its submodels.
 
     All six submodels (transformer, text encoder, tokenizer, processor, video VAE, audio VAE)
     come from the one diffusers-layout install. Optionally, a single-file transformer checkpoint
     (e.g. the pruned int8 repack) replaces the folder's transformer, and/or a single-file
     truncated Qwen3-VL encoder (e.g. the int8 repack) replaces the folder's text encoder, while
     everything else keeps coming from the folder install.
+
+    A Ref2VA diffusers folder's ``transformer_ref/`` weights are NOT folder-loadable (the
+    submodel map has no entry for that folder), so Ref2VA generation always selects a
+    single-file Ref2VA transformer here; identification marks such folders components-only so
+    the UI requires it up front.
     """
 
     model: ModelIdentifierField = InputField(
@@ -121,9 +132,16 @@ class MiniMaxH3ModelLoaderInvocation(BaseInvocation):
         if self.transformer_model is not None:
             if not context.models.exists(self.transformer_model.key):
                 raise ValueError(f"Unknown transformer model: {self.transformer_model.key}")
+            transformer_config = context.models.get_config(self.transformer_model.key)
             transformer = self.transformer_model.model_copy(update={"submodel_type": SubModelType.Transformer})
         else:
+            transformer_config = main_config
             transformer = self.model.model_copy(update={"submodel_type": SubModelType.Transformer})
+        # Stamp the transformer's task variant onto the field: the denoise node uses it to
+        # reject a task/conditioning mismatch (references on FL2VA weights, or Ref2VA weights
+        # without references) instead of silently producing degraded output.
+        variant = getattr(transformer_config, "variant", None)
+        transformer_variant = variant.value if isinstance(variant, MiniMaxH3VariantType) else None
         tokenizer = self.model.model_copy(update={"submodel_type": SubModelType.Tokenizer})
         processor = self.model.model_copy(update={"submodel_type": SubModelType.Processor})
         if self.text_encoder_model is not None:
@@ -136,7 +154,7 @@ class MiniMaxH3ModelLoaderInvocation(BaseInvocation):
         audio_vae = self.model.model_copy(update={"submodel_type": SubModelType.AudioVAE})
 
         return MiniMaxH3ModelLoaderOutput(
-            transformer=MiniMaxH3TransformerField(transformer=transformer),
+            transformer=MiniMaxH3TransformerField(transformer=transformer, variant=transformer_variant),
             text_encoder=MiniMaxH3TextEncoderField(tokenizer=tokenizer, processor=processor, text_encoder=text_encoder),
             vae=VAEField(vae=vae),
             audio_vae=VAEField(vae=audio_vae),

@@ -30,10 +30,13 @@ from invokeai.backend.minimax_h3.packing import (
     MINIMAX_H3_MIN_ASPECT_RATIO,
     MINIMAX_H3_SHORT_EDGE,
     MiniMaxH3PackedSequence,
+    MiniMaxH3ReferenceLayoutEntry,
     build_packed_sequence,
+    build_ref2va_packed_sequence,
     build_row_timesteps,
     keyframe_condition_noise,
     patchify_video_latents,
+    validate_reference_kinds,
 )
 from invokeai.backend.minimax_h3.presets import MINIMAX_H3_MIN_VIDEO_FRAMES
 from invokeai.backend.minimax_h3.scheduling_minimax_h3 import MiniMaxH3Scheduler
@@ -225,6 +228,168 @@ def build_denoise_state(
 
     if condition_rows is not None:
         video_rows = torch.cat([condition_rows, video_rows])
+
+    scheduler, audio_scheduler = build_schedulers(num_inference_steps, device)
+
+    row_timestep_plan = [
+        tuple(
+            tensor.to(device)
+            for tensor in build_row_timesteps(
+                layout,
+                float(timestep),
+                float(audio_timestep),
+                max(float(timestep), MINIMAX_H3_KEYFRAME_NOISE_AUG),
+                1.0,
+            )
+        )
+        for timestep, audio_timestep in zip(scheduler.timesteps, audio_scheduler.timesteps, strict=True)
+    ]
+
+    return MiniMaxH3DenoiseState(
+        layout=layout,
+        video_rows=video_rows,
+        audio_rows=audio_rows,
+        position_ids=layout.position_ids.to(device),
+        token_tags=layout.token_tags.to(device),
+        video_indices=layout.video_indices.to(device),
+        audio_indices=layout.audio_indices.to(device),
+        text_indices=layout.text_indices.to(device),
+        timesteps=scheduler.timesteps,
+        audio_timesteps=audio_scheduler.timesteps,
+        row_timestep_plan=row_timestep_plan,
+        scheduler=scheduler,
+        audio_scheduler=audio_scheduler,
+    )
+
+
+@dataclass
+class MiniMaxH3EncodedReference:
+    """One VAE-encoded `ref2va` reference, in packed order.
+
+    ``video_rows``/``audio_rows`` are CLEAN: the visual rows are noise-augmented to ``t = 0.999``
+    by :func:`build_ref2va_denoise_state` with the request seed's leading draws, and the audio
+    rows are never noised (a reference soundtrack conditions clean, pinned at timestep ``1.0``).
+    """
+
+    kind: str
+    """`"image"`, `"video"` or `"audio"`."""
+    video_rows: torch.Tensor | None = None
+    """Clean packed rows of an image or video reference, shape (N, 96), float32. None for `"audio"`."""
+    latent_shape: tuple[int, int, int] | None = None
+    """The `(num_latent_frames, latent_height, latent_width)` the visual rows were packed from. None for `"audio"`."""
+    audio_rows: torch.Tensor | None = None
+    """Clean normalized soundtrack rows, shape (A, 32), float32. None when the reference carries no audio."""
+
+    @property
+    def has_audio(self) -> bool:
+        return self.audio_rows is not None
+
+
+def build_ref2va_denoise_state(
+    text_token_tags: torch.Tensor,
+    references: list[MiniMaxH3EncodedReference],
+    num_latent_frames: int,
+    latent_height: int,
+    latent_width: int,
+    num_audio_latents: int,
+    num_inference_steps: int,
+    seed: int,
+    device: torch.device,
+) -> MiniMaxH3DenoiseState:
+    """Build the packed layout, the noise, and the schedules of one Ref2VA request.
+
+    Mirrors upstream's block order exactly, because the request's single generator reproduces the
+    draw sequence: one visual-condition noise draw per image/video reference in packed order, then
+    the video noise as a 5D latent tensor, then the audio noise in row layout. Reference soundtrack
+    rows are concatenated clean — never noised.
+    """
+    validate_reference_kinds([reference.kind for reference in references])
+    for index, reference in enumerate(references):
+        if reference.kind == "audio":
+            if reference.video_rows is not None or reference.latent_shape is not None:
+                raise ValueError(f"Reference {index + 1} is audio-only but carries video rows.")
+            if reference.audio_rows is None:
+                raise ValueError(f"Reference {index + 1} is audio-only but carries no audio rows.")
+        else:
+            if reference.video_rows is None or reference.latent_shape is None:
+                raise ValueError(f"Reference {index + 1} is a {reference.kind} but carries no video rows.")
+            if reference.kind == "image" and reference.audio_rows is not None:
+                raise ValueError(f"Reference {index + 1} is an image but carries audio rows.")
+            frames, height, width = reference.latent_shape
+            expected_rows = frames * (height // MINIMAX_H3_PATCH_SIZE[1]) * (width // MINIMAX_H3_PATCH_SIZE[2])
+            if reference.video_rows.shape[0] != expected_rows:
+                raise ValueError(
+                    f"Reference {index + 1} carries {reference.video_rows.shape[0]} video rows but its latent "
+                    f"shape {reference.latent_shape} packs into {expected_rows}. The reference conditioning is "
+                    "inconsistent - re-run the Reference Conditioning node."
+                )
+        if reference.audio_rows is not None and reference.audio_rows.shape[0] % MINIMAX_H3_AUDIO_CHANNELS != 0:
+            raise ValueError(
+                f"Reference {index + 1} carries {reference.audio_rows.shape[0]} audio rows, which is not "
+                f"channel-major stereo (a multiple of {MINIMAX_H3_AUDIO_CHANNELS})."
+            )
+
+    visual_references = [r for r in references if r.kind != "audio"]
+    audio_bearing = [r for r in references if r.has_audio]
+    condition_latent_shapes = tuple(r.latent_shape for r in visual_references if r.latent_shape is not None)
+    audio_condition_row_counts = tuple(r.audio_rows.shape[0] for r in audio_bearing if r.audio_rows is not None)
+
+    layout = build_ref2va_packed_sequence(
+        text_token_tags,
+        [MiniMaxH3ReferenceLayoutEntry(kind=r.kind, has_audio=r.has_audio) for r in references],
+        condition_latent_shapes,
+        audio_condition_row_counts,
+        num_latent_frames,
+        latent_height,
+        latent_width,
+        num_audio_latents,
+        MINIMAX_H3_PATCH_SIZE,
+    )
+
+    generator = torch.Generator(device="cpu").manual_seed(seed)
+
+    # Draw 1: visual-condition noise, one draw per image/video reference, in packed order — drawn
+    # before the generated rows' noise, exactly as upstream's condition-latents block runs first.
+    condition_rows: torch.Tensor | None = None
+    if visual_references:
+        noise = keyframe_condition_noise(
+            condition_latent_shapes,
+            MINIMAX_H3_PATCH_SIZE,
+            MINIMAX_H3_VAE_LATENT_CHANNELS,
+            generator=generator,
+            device=device,
+        )
+        clean_rows = torch.cat([r.video_rows for r in visual_references if r.video_rows is not None])
+        scale_noise_scheduler = MiniMaxH3Scheduler(shift=MINIMAX_H3_VIDEO_FLOW_SHIFT)
+        condition_rows = scale_noise_scheduler.scale_noise(
+            clean_rows.to(device=device, dtype=torch.float32), MINIMAX_H3_KEYFRAME_NOISE_AUG, noise
+        )
+
+    # Draw 2: video noise, as a 5D latent tensor, patchified afterwards (upstream order).
+    video_noise = randn_tensor(
+        (1, MINIMAX_H3_VAE_LATENT_CHANNELS, num_latent_frames, latent_height, latent_width),
+        generator=generator,
+        device=device,
+        dtype=torch.float32,
+    )
+    video_rows = patchify_video_latents(video_noise, MINIMAX_H3_PATCH_SIZE).to(device)
+
+    # Draw 3: audio noise, directly in row layout.
+    audio_rows = randn_tensor(
+        (num_audio_latents * MINIMAX_H3_AUDIO_CHANNELS, MINIMAX_H3_AUDIO_LATENT_CHANNELS),
+        generator=generator,
+        device=device,
+        dtype=torch.float32,
+    ).to(device)
+
+    if condition_rows is not None:
+        video_rows = torch.cat([condition_rows, video_rows])
+    if audio_bearing:
+        # Reference soundtracks ride in front of the generated audio rows, clean.
+        audio_rows = torch.cat(
+            [r.audio_rows.to(device=device, dtype=torch.float32) for r in audio_bearing if r.audio_rows is not None]
+            + [audio_rows]
+        )
 
     scheduler, audio_scheduler = build_schedulers(num_inference_steps, device)
 
