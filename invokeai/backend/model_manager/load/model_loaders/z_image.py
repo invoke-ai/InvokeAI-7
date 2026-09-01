@@ -35,10 +35,38 @@ from invokeai.backend.model_manager.taxonomy import (
     SubModelType,
 )
 from invokeai.backend.quantization.gguf.loaders import gguf_sd_loader
+from invokeai.backend.quantization.int8_convrot import (
+    cast_unquantized,
+    drop_unconsumed_quantization_sidecars,
+    extract_int8_convrot_markers,
+    swap_in_int8_linears,
+)
 from invokeai.backend.quantization.sdnq.detection import is_sdnq_folder
 from invokeai.backend.quantization.sdnq.loaders import raise_on_incomplete_sdnq_load, sdnq_sd_loader
 from invokeai.backend.qwen3.qwen3_tokenizer import load_bundled_qwen3_tokenizer
 from invokeai.backend.util.devices import TorchDevice
+
+# Side-channel suffixes whose value is per output channel, and therefore splits with the weight.
+# Everything else describes the layer as a whole -- a `comfy_quant` JSON blob most of all, whose
+# byte length says nothing about how many outputs it covers.
+_PER_ROW_SIDECHANNEL_SUFFIXES = ("weight_scale", "scale_weight")
+
+
+def _split_qkv_sidechannel(value: Any, suffix: str, target: str) -> Any:
+    """One third of a fused-QKV side-channel tensor, or the whole thing when it is not per-row.
+
+    A per-output-channel scale is ``[3 * dim, 1]`` and splits exactly like the weight it belongs
+    to. A per-tensor scale, and any marker, is copied to all three unchanged. The decision is made
+    from the suffix rather than the shape: a 72-byte JSON marker is also divisible by three.
+    """
+    if suffix not in _PER_ROW_SIDECHANNEL_SUFFIXES:
+        return value
+    shape = getattr(value, "shape", None)
+    if shape is None or len(shape) == 0 or shape[0] <= 3 or shape[0] % 3 != 0:
+        return value
+    index = ("to_q", "to_k", "to_v").index(target)
+    dim = shape[0] // 3
+    return value[index * dim : (index + 1) * dim]
 
 
 def _convert_z_image_gguf_to_diffusers(sd: dict[str, Any]) -> dict[str, Any]:
@@ -97,10 +125,12 @@ def _convert_z_image_gguf_to_diffusers(sd: dict[str, Any]) -> dict[str, Any]:
             prefix = key.rsplit(".attention.qkv.", 1)[0]
             suffix = key.rsplit(".attention.qkv.", 1)[1]  # "weight" or "bias"
 
-            # Skip non-weight/bias tensors (e.g., FP8 scale_weight tensors)
-            # These are quantization metadata and should not be split
+            # Quantization side-channels have to follow their weight through the split, or they
+            # are left behind under a module name that no longer exists -- and a loader then sees
+            # a quantized weight with no scale, or a scale it cannot pair with anything.
             if suffix not in ("weight", "bias"):
-                new_sd[key] = value
+                for target in ("to_q", "to_k", "to_v"):
+                    new_sd[f"{prefix}.attention.{target}.{suffix}"] = _split_qkv_sidechannel(value, suffix, target)
                 continue
 
             # Split the fused QKV tensor into Q, K, V
@@ -473,13 +503,25 @@ class ZImageCheckpointModel(ModelLoader):
         for k in keys_to_remove:
             del sd[k]
 
-        # Handle memory management and dtype conversion
-        new_sd_size = sum([ten.nelement() * model_dtype.itemsize for ten in sd.values()])
+        # ComfyUI 'int8_tensorwise' checkpoints. The markers are read *after* the key conversion
+        # above, which carries them (and their scales) through the fused-QKV split onto the module
+        # names the model actually has -- so no re-keying is needed here.
+        int8_markers = extract_int8_convrot_markers(sd)
+        sd = drop_unconsumed_quantization_sidecars(sd)
+        orphans = sorted(k for k, v in sd.items() if v.dtype is torch.int8 and k[: -len(".weight")] not in int8_markers)
+        if orphans:
+            raise ValueError(
+                f"Z-Image checkpoint has {len(orphans)} int8 weight(s) with no `comfy_quant` marker, "
+                f"e.g. {orphans[:3]}. Loading them would produce a model that runs and generates noise."
+            )
+
+        # int8 payloads are one byte, not two: reserving the compute dtype's width for them would
+        # ask the cache to free memory this load never uses.
+        new_sd_size = sum(ten.nelement() * max(ten.element_size(), model_dtype.itemsize) for ten in sd.values())
         self._ram_cache.make_room(new_sd_size)
 
-        # Convert to target dtype
-        for k in sd.keys():
-            sd[k] = sd[k].to(model_dtype)
+        cast_unquantized(sd, model_dtype, int8_markers)
+        swap_in_int8_linears(model, sd, int8_markers)
 
         model.load_state_dict(sd, assign=True)
 

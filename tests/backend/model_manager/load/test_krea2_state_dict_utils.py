@@ -19,18 +19,18 @@ from invokeai.backend.model_manager.load.model_loaders.krea2 import (
     _convert_krea2_native_to_diffusers,
     _dequantize_scaled_fp8,
     _drop_discarded_native_final_layers,
-    _drop_unconsumed_quantization_sidecars,
     _is_native_krea2_format,
     _normalize_qwen3vl_rope_config,
     _reject_incomplete_load,
     _remap_qwen3vl_singlefile_keys,
-    _resolve_quantized_module_paths,
     _strip_comfyui_prefix,
 )
 from invokeai.backend.quantization.int8_convrot import (
     CONVROT_GROUP_SIZE,
     build_regular_hadamard,
+    drop_unconsumed_quantization_sidecars,
     extract_int8_convrot_markers,
+    resolve_quantized_module_paths,
 )
 
 
@@ -454,14 +454,14 @@ class TestInt8LayersSurviveTheLoaderPipeline:
         key_map: dict[str, str] = {}
         _convert_krea2_native_to_diffusers(sd, key_map=key_map)
 
-        assert _resolve_quantized_module_paths(markers, key_map) == {
+        assert resolve_quantized_module_paths(markers, key_map) == {
             "transformer_blocks.0.attn.to_q": markers["blocks.0.attn.wq"]
         }
 
     def test_a_diffusers_named_checkpoint_needs_no_re_keying(self) -> None:
         """No conversion runs, so the empty map has to resolve to the paths as they are."""
         markers = {"transformer_blocks.0.attn.to_q": {"format": "int8_tensorwise"}}
-        assert _resolve_quantized_module_paths(markers, {}) == markers
+        assert resolve_quantized_module_paths(markers, {}) == markers
 
 
 class TestUnconsumedQuantizationSidecars:
@@ -475,11 +475,11 @@ class TestUnconsumedQuantizationSidecars:
             "layer.input_scale": torch.ones(1),
             "other.scale_input": torch.ones(1),
         }
-        assert set(_drop_unconsumed_quantization_sidecars(sd)) == {"layer.weight"}
+        assert set(drop_unconsumed_quantization_sidecars(sd)) == {"layer.weight"}
 
     def test_a_clean_state_dict_is_unchanged(self) -> None:
         sd = {"layer.weight": torch.ones(2, 2), "layer.bias": torch.zeros(2)}
-        assert set(_drop_unconsumed_quantization_sidecars(sd)) == set(sd)
+        assert set(drop_unconsumed_quantization_sidecars(sd)) == set(sd)
 
 
 class TestDiscardedFinalProjections:

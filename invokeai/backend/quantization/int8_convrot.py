@@ -191,3 +191,83 @@ def check_int8_scale_layout(path: str, weight: torch.Tensor, scale: torch.Tensor
         f"'{path}' has a {tuple(scale.shape)} scale for a {tuple(weight.shape)} weight, which is "
         "neither per-output-channel nor per-tensor. Blockwise scale grids are not implemented."
     )
+
+
+def drop_unconsumed_quantization_sidecars(sd: dict[str, Any]) -> dict[str, Any]:
+    """Remove quantization metadata no loader here consumes.
+
+    - ``.comfy_quant`` markers whose format was handled elsewhere, or not at all.
+    - ``.input_scale`` / ``.scale_input``: activation scales for W8A8 inference. This code
+      dequantizes the weight and computes in bf16, so there is nothing to apply them to. (Both
+      spellings appear in the wild; one Qwen3-VL repack ships 337 of the former.)
+
+    `load_state_dict(strict=False)` would ignore them, but they are still cast and still counted
+    against the RAM reservation - and a loader that later switches to strict would fail on them.
+    """
+    return {
+        k: v
+        for k, v in sd.items()
+        if not (isinstance(k, str) and (k.endswith(".comfy_quant") or "input_scale" in k or "scale_input" in k))
+    }
+
+
+def resolve_quantized_module_paths(
+    markers: dict[str, dict[str, Any]], key_map: dict[str, str]
+) -> dict[str, dict[str, Any]]:
+    """Re-key markers from the checkpoint's names to the built model's names.
+
+    The markers are read in the checkpoint's key space, because that is the only place where a
+    marker and its weight are reliably paired: the key conversions rename `.weight` (and, by
+    substring, `.weight_scale`) but leave `.comfy_quant` behind on the old name. Following the
+    weight's own rename is therefore the only mapping that cannot drift from the conversion.
+    """
+    resolved: dict[str, dict[str, Any]] = {}
+    for path, marker in markers.items():
+        weight_key = key_map.get(f"{path}.weight", f"{path}.weight")
+        resolved[weight_key[: -len(".weight")]] = marker
+    return resolved
+
+
+def swap_in_int8_linears(model: torch.nn.Module, sd: dict[str, Any], quantized: dict[str, dict[str, Any]]) -> None:
+    """Replace each quantized ``nn.Linear`` with an ``Int8ConvrotLinear`` sized from the state dict.
+
+    The weights stay int8 and rotated as stored; the layer dequantizes and derotates per forward.
+    That keeps a 12 GB checkpoint at 12 GB resident instead of the ~24 GB a dense decode would
+    produce, on every platform and without the fp8-storage opt-in (which is off by default and
+    unavailable outside CUDA/XPU).
+
+    Its persistent buffers are named ``weight``/``weight_scale`` -- the checkpoint's own spelling --
+    so the ``load_state_dict`` that follows assigns the quantized tensors straight into them.
+    """
+    for path, marker in quantized.items():
+        weight, scale = sd.get(f"{path}.weight"), sd.get(f"{path}.weight_scale")
+        if weight is None or scale is None:
+            raise ValueError(
+                f"'{path}' is marked int8_tensorwise but is missing its "
+                f"{'weight' if weight is None else 'weight_scale'}."
+            )
+        check_int8_scale_layout(path, weight, scale)
+        parent_path, _, attribute = path.rpartition(".")
+        setattr(
+            model.get_submodule(parent_path) if parent_path else model,
+            attribute,
+            Int8ConvrotLinear(
+                weight=weight,
+                weight_scale=scale,
+                convrot=bool(marker.get("convrot", False)),
+                bias=sd.get(f"{path}.bias"),
+                group_size=int(marker.get("convrot_groupsize", CONVROT_GROUP_SIZE)),
+            ),
+        )
+
+
+def cast_unquantized(sd: dict[str, Any], dtype: torch.dtype, quantized: dict[str, dict[str, Any]]) -> None:
+    """Cast the dense tensors to the compute dtype, leaving the quantized payloads alone.
+
+    An int8 weight cast to bf16 is no longer int8, and its float32 scale is what
+    ``Int8ConvrotLinear`` multiplies by -- both have to reach ``load_state_dict`` as stored.
+    """
+    pinned = {key for path in quantized for key in (f"{path}.weight", f"{path}.weight_scale")}
+    for key in sd:
+        if key not in pinned:
+            sd[key] = sd[key].to(dtype)
