@@ -83,15 +83,18 @@ def test_krea2_gguf_dependency_models_are_registered_in_starter_models() -> None
 def test_minimax_h3_bundle_contains_working_set_and_turbo_loras() -> None:
     bundle = STARTER_BUNDLES[BaseModelType.MiniMaxH3]
     by_source = {model.source: model for model in bundle.models}
-    # The minimal working set: shared components, text encoder, transformer.
+    # The minimal working set: shared components, text encoder, and both task transformers.
     assert any(s.startswith("MiniMaxAI/MiniMax-H3::") for s in by_source)
     assert any(m.type is ModelType.Qwen3VLEncoder for m in by_source.values())
     assert any(m.type is ModelType.Main and m.format is ModelFormat.Checkpoint for m in by_source.values())
-    # Both turbo (step-distillation) LoRAs.
+    assert "Comfy-Org/MiniMax-H3::diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors" in by_source
+    assert "Comfy-Org/MiniMax-H3::diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors" in by_source
+    # All three turbo (step-distillation) LoRAs.
     loras = [m for m in bundle.models if m.type is ModelType.LoRA]
     lora_sources = {m.source for m in loras}
     assert "larryvrh/MiniMax-H3-Turbo-Lora::minimax_h3_turbo_v4_step600_ema.safetensors" in lora_sources
     assert "lightx2v/Minimax-h3-Turbo::minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors" in lora_sources
+    assert "Comfy-Org/MiniMax-H3::loras/minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors" in lora_sources
 
 
 def test_minimax_h3_bundle_models_are_registered_in_starter_models() -> None:

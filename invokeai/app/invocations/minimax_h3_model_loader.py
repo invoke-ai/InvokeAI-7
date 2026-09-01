@@ -15,7 +15,13 @@ from invokeai.app.invocations.model import (
     VAEField,
 )
 from invokeai.app.services.shared.invocation_context import InvocationContext
-from invokeai.backend.model_manager.taxonomy import BaseModelType, ModelFormat, ModelType, SubModelType
+from invokeai.backend.model_manager.taxonomy import (
+    BaseModelType,
+    MiniMaxH3VariantType,
+    ModelFormat,
+    ModelType,
+    SubModelType,
+)
 
 
 @invocation_output("minimax_h3_model_loader_output")
@@ -121,9 +127,21 @@ class MiniMaxH3ModelLoaderInvocation(BaseInvocation):
         if self.transformer_model is not None:
             if not context.models.exists(self.transformer_model.key):
                 raise ValueError(f"Unknown transformer model: {self.transformer_model.key}")
+            transformer_config = context.models.get_config(self.transformer_model.key)
             transformer = self.transformer_model.model_copy(update={"submodel_type": SubModelType.Transformer})
         else:
+            transformer_config = main_config
             transformer = self.model.model_copy(update={"submodel_type": SubModelType.Transformer})
+        # TODO(ref2va): replace this rejection with variant stamping when reference-conditioned
+        # generation lands. Until then a Ref2VA transformer (whose weights expect reference
+        # conditioning rows nothing here packs) must fail fast rather than silently produce
+        # degraded output - the webv2 picker filters it out, but hand-authored workflows and
+        # API clients do not go through that filter.
+        if getattr(transformer_config, "variant", None) is MiniMaxH3VariantType.REF2VA:
+            raise ValueError(
+                f"'{transformer_config.name}' is a Ref2VA (reference-to-video) transformer, which this "
+                "version cannot generate with yet. Select an FL2VA transformer instead."
+            )
         tokenizer = self.model.model_copy(update={"submodel_type": SubModelType.Tokenizer})
         processor = self.model.model_copy(update={"submodel_type": SubModelType.Processor})
         if self.text_encoder_model is not None:

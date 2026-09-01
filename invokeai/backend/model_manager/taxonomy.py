@@ -264,6 +264,11 @@ class MiniMaxH3VariantType(str, Enum):
     """First/last-frame + text to audio-video: text-to-video and first/last-frame image-to-video
     (HF repo subfolder ``transformer``)."""
 
+    REF2VA = "ref2va"
+    """Multi-reference to audio-video: up to 3 video + 9 image references condition generation
+    (HF repo subfolder ``transformer_ref``). Same architecture and config as FL2VA, different
+    weights; supports only the reference task."""
+
 
 class MistralVariantType(str, Enum):
     """Mistral text encoder variants used by FLUX.2 [dev]."""

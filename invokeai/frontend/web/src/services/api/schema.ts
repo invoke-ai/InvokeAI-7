@@ -24843,9 +24843,12 @@ export type components = {
          *     file holds ONLY the transformer - the text encoder, VAEs, tokenizer and processor must come
          *     from an installed H3 diffusers-layout folder.
          *
-         *     A Ref2VA transformer single file is key-for-key indistinguishable from FL2VA, so Ref2VA is
-         *     excluded only by filename; a renamed Ref2VA file would load and run but produce degraded
-         *     output (it expects reference conditioning rows this integration never packs).
+         *     The FL2VA and Ref2VA task transformers are key-for-key (and, except the non-pruned
+         *     int8_convrot repacks, byte-size) indistinguishable, so the FILENAME is the variant
+         *     classifier and ``variant`` is the user-correctable override for renamed files (e.g.
+         *     re-uploads). A misclassified variant loads and runs but produces degraded output - FL2VA
+         *     expects no reference conditioning rows, Ref2VA expects them - which is why the override
+         *     exists rather than any attempt at content sniffing.
          */
         Main_Checkpoint_MiniMaxH3_Config: {
             /**
@@ -30428,7 +30431,7 @@ export type components = {
          * @description MiniMax H3 model variants (task-specific transformer checkpoints sharing every other component).
          * @enum {string}
          */
-        MiniMaxH3VariantType: "fl2va";
+        MiniMaxH3VariantType: "fl2va" | "ref2va";
         /**
          * Mistral3EncoderField
          * @description Field for Mistral3 text encoder used by ERNIE-Image models.

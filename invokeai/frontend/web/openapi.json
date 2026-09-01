@@ -60677,7 +60677,7 @@
           "pruned"
         ],
         "title": "Main_Checkpoint_MiniMaxH3_Config",
-        "description": "Model config for MiniMax H3 single-file transformer checkpoints (safetensors).\n\nCovers MiniMax's single-file FL2VA transformer repacks (Comfy-Org and mirrors): bf16 or\nComfy ``int8_tensorwise``(+convrot) quantized, full or AdaLN-pruned (\"adaln curves\"). The\nfile holds ONLY the transformer - the text encoder, VAEs, tokenizer and processor must come\nfrom an installed H3 diffusers-layout folder.\n\nA Ref2VA transformer single file is key-for-key indistinguishable from FL2VA, so Ref2VA is\nexcluded only by filename; a renamed Ref2VA file would load and run but produce degraded\noutput (it expects reference conditioning rows this integration never packs)."
+        "description": "Model config for MiniMax H3 single-file transformer checkpoints (safetensors).\n\nCovers MiniMax's single-file FL2VA transformer repacks (Comfy-Org and mirrors): bf16 or\nComfy ``int8_tensorwise``(+convrot) quantized, full or AdaLN-pruned (\"adaln curves\"). The\nfile holds ONLY the transformer - the text encoder, VAEs, tokenizer and processor must come\nfrom an installed H3 diffusers-layout folder.\n\nThe FL2VA and Ref2VA task transformers are key-for-key (and, except the non-pruned\nint8_convrot repacks, byte-size) indistinguishable, so the FILENAME is the variant\nclassifier and ``variant`` is the user-correctable override for renamed files (e.g.\nre-uploads). A misclassified variant loads and runs but produces degraded output - FL2VA\nexpects no reference conditioning rows, Ref2VA expects them - which is why the override\nexists rather than any attempt at content sniffing."
       },
       "Main_Checkpoint_QwenImage_Config": {
         "properties": {
@@ -71365,7 +71365,7 @@
       },
       "MiniMaxH3VariantType": {
         "type": "string",
-        "enum": ["fl2va"],
+        "enum": ["fl2va", "ref2va"],
         "title": "MiniMaxH3VariantType",
         "description": "MiniMax H3 model variants (task-specific transformer checkpoints sharing every other component)."
       },

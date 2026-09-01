@@ -1595,7 +1595,8 @@ class Main_Diffusers_MiniMaxH3_Config(Diffusers_Config_Base, Main_Config_Base, C
             {"AutoencoderKLMiniMaxH3Audio"},
         )
 
-        variant = override_fields.pop("variant", None) or cls._get_variant(mod)
+        # An override may arrive as the raw string; normalize so the folder lookup below compares enums.
+        variant = MiniMaxH3VariantType(override_fields.pop("variant", None) or cls._get_variant(mod))
 
         repo_variant = override_fields.pop("repo_variant", None) or cls._get_repo_variant_or_raise(mod)
 
@@ -1605,10 +1606,19 @@ class Main_Diffusers_MiniMaxH3_Config(Diffusers_Config_Base, Main_Config_Base, C
         # can require those selections up front rather than failing mid-generation.
         components_only = override_fields.pop("components_only", None)
         if components_only is None:
-            transformer_dir = mod.path / "transformer"
-            components_only = not any(
-                any(transformer_dir.glob(pattern)) for pattern in ("*.safetensors", "*.bin", "*.pth", "*.pt", "*.ckpt")
-            )
+            if variant is MiniMaxH3VariantType.REF2VA:
+                # Ref2VA folder weights are not folder-loadable in this version (`SubModelType`
+                # has no `transformer_ref` member), so a Ref2VA install always needs the
+                # single-file overrides - weight shards present or not. Marking it
+                # components-only makes the UI require them up front instead of failing
+                # minutes into a run.
+                components_only = True
+            else:
+                transformer_dir = mod.path / "transformer"
+                components_only = not any(
+                    any(transformer_dir.glob(pattern))
+                    for pattern in ("*.safetensors", "*.bin", "*.pth", "*.pt", "*.ckpt")
+                )
 
         return cls(
             **override_fields,
@@ -1623,16 +1633,21 @@ class Main_Diffusers_MiniMaxH3_Config(Diffusers_Config_Base, Main_Config_Base, C
 
         H3's task checkpoints share every component except the transformer folder: ``transformer``
         (FL2VA: text / first/last-frame to audio-video) vs ``transformer_ref`` (Ref2VA: multi-
-        reference). Only FL2VA is supported so far. A Ref2VA-only download is a real H3 model this
-        version cannot run, so identification fails rather than mislabeling it as FL2VA.
+        reference). A folder holding both (the full official repo) identifies as FL2VA - that is
+        the folder-loadable variant. A ``transformer_ref``-only folder identifies as REF2VA, but
+        note its weights are NOT folder-loadable in this version (``SubModelType`` has no
+        ``transformer_ref`` member); the supported Ref2VA generation path is a components install
+        plus a single-file transformer override selected in the model loader.
         """
         transformer_config = mod.path / "transformer" / "config.json"
-        if not transformer_config.exists():
-            raise NotAMatchError(
-                "no FL2VA transformer folder (`transformer/`); Ref2VA-only installs are not supported yet"
-            )
-        raise_for_class_name(transformer_config, {"MiniMaxH3Transformer3DModel"})
-        return MiniMaxH3VariantType.FL2VA
+        if transformer_config.exists():
+            raise_for_class_name(transformer_config, {"MiniMaxH3Transformer3DModel"})
+            return MiniMaxH3VariantType.FL2VA
+        ref_transformer_config = mod.path / "transformer_ref" / "config.json"
+        if ref_transformer_config.exists():
+            raise_for_class_name(ref_transformer_config, {"MiniMaxH3Transformer3DModel"})
+            return MiniMaxH3VariantType.REF2VA
+        raise NotAMatchError("no transformer folder (`transformer/` or `transformer_ref/`)")
 
 
 def _has_minimax_h3_keys(state_dict: dict[str | int, Any]) -> bool:
@@ -1656,9 +1671,12 @@ class Main_Checkpoint_MiniMaxH3_Config(Checkpoint_Config_Base, Main_Config_Base,
     file holds ONLY the transformer - the text encoder, VAEs, tokenizer and processor must come
     from an installed H3 diffusers-layout folder.
 
-    A Ref2VA transformer single file is key-for-key indistinguishable from FL2VA, so Ref2VA is
-    excluded only by filename; a renamed Ref2VA file would load and run but produce degraded
-    output (it expects reference conditioning rows this integration never packs).
+    The FL2VA and Ref2VA task transformers are key-for-key (and, except the non-pruned
+    int8_convrot repacks, byte-size) indistinguishable, so the FILENAME is the variant
+    classifier and ``variant`` is the user-correctable override for renamed files (e.g.
+    re-uploads). A misclassified variant loads and runs but produces degraded output - FL2VA
+    expects no reference conditioning rows, Ref2VA expects them - which is why the override
+    exists rather than any attempt at content sniffing.
     """
 
     base: Literal[BaseModelType.MiniMaxH3] = Field(default=BaseModelType.MiniMaxH3)
@@ -1672,9 +1690,6 @@ class Main_Checkpoint_MiniMaxH3_Config(Checkpoint_Config_Base, Main_Config_Base,
 
         raise_for_override_fields(cls, override_fields)
 
-        if "ref2va" in mod.path.name.lower():
-            raise NotAMatchError("Ref2VA single-file transformers are not supported yet")
-
         state_dict = mod.load_state_dict()
         if not _has_minimax_h3_keys(state_dict):
             raise NotAMatchError("state dict does not look like a MiniMax H3 transformer")
@@ -1682,7 +1697,9 @@ class Main_Checkpoint_MiniMaxH3_Config(Checkpoint_Config_Base, Main_Config_Base,
         if _has_ggml_tensors(state_dict):
             raise NotAMatchError("GGUF-quantized MiniMax H3 checkpoints are not supported yet")
 
-        variant = override_fields.pop("variant", None) or MiniMaxH3VariantType.FL2VA
+        variant = override_fields.pop("variant", None) or (
+            MiniMaxH3VariantType.REF2VA if "ref2va" in mod.path.name.lower() else MiniMaxH3VariantType.FL2VA
+        )
         pruned = "adaln_t_table" in state_dict
 
         return cls(**override_fields, variant=variant, pruned=pruned)
