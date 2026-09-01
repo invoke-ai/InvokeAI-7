@@ -27,6 +27,7 @@ from invokeai.app.invocations.fields import (
     LatentsField,
     MiniMaxH3ConditioningField,
     MiniMaxH3FrameConditioningField,
+    MiniMaxH3ReferenceConditioningField,
     OutputField,
 )
 from invokeai.app.invocations.model import MiniMaxH3TransformerField
@@ -53,7 +54,9 @@ from invokeai.backend.minimax_h3.sampling import (
     MINIMAX_H3_SPATIAL_COMPRESSION,
     MINIMAX_H3_STILL_NUM_FRAMES,
     MINIMAX_H3_VAE_LATENT_CHANNELS,
+    MiniMaxH3EncodedReference,
     build_denoise_state,
+    build_ref2va_denoise_state,
     validate_canvas,
     validate_num_frames,
 )
@@ -129,7 +132,7 @@ class MiniMaxH3DenoiseOutput(BaseInvocationOutput):
     title="Denoise - MiniMax H3",
     tags=["latents", "video", "audio", "minimax"],
     category="latents",
-    version="1.3.0",
+    version="1.4.0",
     classification=Classification.Prototype,
 )
 class MiniMaxH3DenoiseInvocation(BaseInvocation):
@@ -146,6 +149,12 @@ class MiniMaxH3DenoiseInvocation(BaseInvocation):
         description=FieldDescriptions.minimax_h3_frame_conditioning,
         input=Input.Connection,
         title="Frame Conditioning",
+    )
+    reference_conditioning: MiniMaxH3ReferenceConditioningField | None = InputField(
+        default=None,
+        description=FieldDescriptions.minimax_h3_reference_conditioning,
+        input=Input.Connection,
+        title="Reference Conditioning",
     )
     width: int = InputField(
         default=1344,
@@ -223,6 +232,87 @@ class MiniMaxH3DenoiseInvocation(BaseInvocation):
             )
             return None
 
+    def _build_reference_state(
+        self,
+        context: InvocationContext,
+        cond_info: MiniMaxH3ConditioningInfo,
+        num_frames: int,
+        num_latent_frames: int,
+        latent_height: int,
+        latent_width: int,
+        num_audio_latents: int,
+        device: torch.device,
+    ):
+        """Load the encoded references and build the Ref2VA denoise state.
+
+        The reference list must agree with the prompt's vision context - same references,
+        same order, same options, same generated duration - so the signature both nodes
+        derived from their inputs is compared entry for entry, exactly as FL2VA cross-checks
+        its keyframe anchors.
+        """
+        assert self.reference_conditioning is not None
+        field = self.reference_conditioning
+        if num_frames == MINIMAX_H3_STILL_NUM_FRAMES:
+            raise ValueError("Reference-to-video cannot generate the 5-frame still-image clip.")
+        if not cond_info.reference_signature:
+            # Checked before any num_frames comparison so the remedy named is the right one:
+            # a prompt with no references at all needs them WIRED, not a frame count changed.
+            raise ValueError(
+                "The prompt was encoded without references, but reference conditioning is wired. Connect "
+                "the same ordered references to Prompt - MiniMax H3 as well."
+            )
+        if (field.width, field.height) != (self.width, self.height):
+            raise ValueError(
+                f"The references were prepared for a {field.width}x{field.height} canvas but this denoise "
+                f"runs at {self.width}x{self.height}. Re-run Reference Conditioning - MiniMax H3 with "
+                "matching width/height."
+            )
+        if field.num_frames != num_frames:
+            raise ValueError(
+                f"The references were prepared for {field.num_frames} frames but this denoise runs "
+                f"{num_frames}. Re-run Reference Conditioning - MiniMax H3 with a matching Number of Frames."
+            )
+        if cond_info.reference_num_frames != num_frames:
+            raise ValueError(
+                f"The prompt's references were prepared for {cond_info.reference_num_frames} frames but this "
+                f"denoise runs {num_frames}. Re-run Prompt - MiniMax H3 with a matching Number of Frames."
+            )
+        if tuple(field.signature) != tuple(cond_info.reference_signature):
+            raise ValueError(
+                "Reference mismatch: the prompt was encoded with different references (a different order, "
+                "trim, or conditioning choice - or, for a 'match'-detail image, different width/height on "
+                "the two nodes) than Reference Conditioning provides. Wire the SAME ordered references to "
+                "both Prompt - MiniMax H3 and Reference Conditioning - MiniMax H3, with the same settings."
+            )
+
+        references: list[MiniMaxH3EncodedReference] = []
+        for encoded in field.references:
+            video_rows = context.tensors.load(encoded.video_rows_name) if encoded.video_rows_name else None
+            audio_rows = context.tensors.load(encoded.audio_rows_name) if encoded.audio_rows_name else None
+            latent_shape = None
+            if (
+                encoded.latent_frames is not None
+                and encoded.latent_height is not None
+                and encoded.latent_width is not None
+            ):
+                latent_shape = (encoded.latent_frames, encoded.latent_height, encoded.latent_width)
+            references.append(
+                MiniMaxH3EncodedReference(
+                    kind=encoded.kind, video_rows=video_rows, latent_shape=latent_shape, audio_rows=audio_rows
+                )
+            )
+        return build_ref2va_denoise_state(
+            text_token_tags=cond_info.text_token_tags,
+            references=references,
+            num_latent_frames=num_latent_frames,
+            latent_height=latent_height,
+            latent_width=latent_width,
+            num_audio_latents=num_audio_latents,
+            num_inference_steps=self.steps,
+            seed=self.seed,
+            device=device,
+        )
+
     @torch.no_grad()
     def invoke(self, context: InvocationContext) -> MiniMaxH3DenoiseOutput:
         # The field is a choice list of grid-aligned strings; validate anyway so a hand-authored graph that
@@ -242,6 +332,23 @@ class MiniMaxH3DenoiseInvocation(BaseInvocation):
         latent_width = self.width // MINIMAX_H3_SPATIAL_COMPRESSION
         num_latent_frames = video_latent_num_frames(num_frames)
         num_audio_latents = audio_latent_num_frames(num_frames)
+
+        if self.frame_conditioning is not None and self.reference_conditioning is not None:
+            raise ValueError(
+                "Frame Conditioning (first/last keyframes, FL2VA) and Reference Conditioning (Ref2VA) are "
+                "mutually exclusive - wire one or the other."
+            )
+        transformer_variant = self.transformer.variant
+        if self.reference_conditioning is not None and transformer_variant == "fl2va":
+            raise ValueError(
+                "This transformer is the FL2VA task checkpoint, which cannot consume references. Select the "
+                "Ref2VA transformer in the model loader, or remove the reference conditioning."
+            )
+        if self.reference_conditioning is None and transformer_variant == "ref2va":
+            raise ValueError(
+                "This transformer is the Ref2VA task checkpoint, which requires reference conditioning. Wire "
+                "Reference Conditioning - MiniMax H3, or select the FL2VA transformer in the model loader."
+            )
 
         keyframe_anchors: tuple[str, ...] = ()
         clean_condition_rows: torch.Tensor | None = None
@@ -271,18 +378,41 @@ class MiniMaxH3DenoiseInvocation(BaseInvocation):
                 "width/height."
             )
 
-        state = build_denoise_state(
-            text_token_tags=cond_info.text_token_tags,
-            num_latent_frames=num_latent_frames,
-            latent_height=latent_height,
-            latent_width=latent_width,
-            num_audio_latents=num_audio_latents,
-            num_inference_steps=self.steps,
-            seed=self.seed,
-            device=device,
-            keyframe_anchors=keyframe_anchors,
-            clean_condition_rows=clean_condition_rows,
-        )
+        if self.reference_conditioning is not None:
+            state = self._build_reference_state(
+                context,
+                cond_info,
+                num_frames,
+                num_latent_frames,
+                latent_height,
+                latent_width,
+                num_audio_latents,
+                device,
+            )
+        else:
+            if cond_info.reference_signature:
+                raise ValueError(
+                    "The prompt was encoded with Ref2VA references but no reference conditioning is wired. "
+                    "Connect the same references to Reference Conditioning - MiniMax H3 and to this node."
+                )
+            state = build_denoise_state(
+                text_token_tags=cond_info.text_token_tags,
+                num_latent_frames=num_latent_frames,
+                latent_height=latent_height,
+                latent_width=latent_width,
+                num_audio_latents=num_audio_latents,
+                num_inference_steps=self.steps,
+                seed=self.seed,
+                device=device,
+                keyframe_anchors=keyframe_anchors,
+                clean_condition_rows=clean_condition_rows,
+            )
+
+        if state.layout.sequence_length > 100_000:
+            context.logger.info(
+                f"MiniMax H3 packed sequence is {state.layout.sequence_length} rows (references included); "
+                "expect a long render."
+            )
 
         num_condition_video_rows = state.layout.num_condition_video_rows
 

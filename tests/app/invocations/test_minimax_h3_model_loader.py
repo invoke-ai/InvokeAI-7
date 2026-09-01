@@ -59,10 +59,6 @@ def test_accepts_diffusers_folder_main():
     assert output.vae.vae.key == "h3-main"
 
 
-# TODO(ref2va): these rejections flip to acceptance (with variant stamping) when
-# reference-conditioned generation lands.
-
-
 def _context_with_override(main_config: MagicMock, override_config: MagicMock) -> MagicMock:
     context = MagicMock()
     context.models.exists.return_value = True
@@ -70,26 +66,38 @@ def _context_with_override(main_config: MagicMock, override_config: MagicMock) -
     return context
 
 
-def test_rejects_ref2va_transformer_override():
+def test_stamps_ref2va_variant_from_transformer_override():
+    # The denoise node keys its task/conditioning guard off this stamp - references on FL2VA
+    # weights (or Ref2VA weights without references) must fail fast there.
     ref2va = _config(format_=ModelFormat.Checkpoint)
     ref2va.variant = MiniMaxH3VariantType.REF2VA
     ref2va.name = "MiniMax H3 Ref2VA Transformer (int8, pruned)"
     node = MiniMaxH3ModelLoaderInvocation(id="loader", model=_identifier(), transformer_model=_identifier("h3-ckpt"))
-    with pytest.raises(ValueError, match="Ref2VA.*cannot generate with yet"):
-        node.invoke(_context_with_override(_config(), ref2va))
+    output = node.invoke(_context_with_override(_config(), ref2va))
+    assert output.transformer.transformer.key == "h3-ckpt"
+    assert output.transformer.variant == "ref2va"
 
 
-def test_rejects_ref2va_diffusers_main_without_override():
-    main = _config()
-    main.variant = MiniMaxH3VariantType.REF2VA
-    node = MiniMaxH3ModelLoaderInvocation(id="loader", model=_identifier())
-    with pytest.raises(ValueError, match="Ref2VA.*cannot generate with yet"):
-        node.invoke(_context(main))
-
-
-def test_accepts_fl2va_transformer_override():
+def test_stamps_fl2va_variant_from_transformer_override():
     fl2va = _config(format_=ModelFormat.Checkpoint)
     fl2va.variant = MiniMaxH3VariantType.FL2VA
     node = MiniMaxH3ModelLoaderInvocation(id="loader", model=_identifier(), transformer_model=_identifier("h3-ckpt"))
     output = node.invoke(_context_with_override(_config(), fl2va))
     assert output.transformer.transformer.key == "h3-ckpt"
+    assert output.transformer.variant == "fl2va"
+
+
+def test_stamps_variant_from_diffusers_main_without_override():
+    main = _config()
+    main.variant = MiniMaxH3VariantType.REF2VA
+    node = MiniMaxH3ModelLoaderInvocation(id="loader", model=_identifier())
+    output = node.invoke(_context(main))
+    assert output.transformer.variant == "ref2va"
+
+
+def test_variant_stamp_is_none_for_untyped_configs():
+    # A MagicMock config's `variant` attribute is not a MiniMaxH3VariantType, standing in for
+    # any config without one - the stamp must degrade to None, not an arbitrary object.
+    node = MiniMaxH3ModelLoaderInvocation(id="loader", model=_identifier())
+    output = node.invoke(_context(_config()))
+    assert output.transformer.variant is None

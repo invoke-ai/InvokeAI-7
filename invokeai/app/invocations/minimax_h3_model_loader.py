@@ -29,7 +29,7 @@ class MiniMaxH3ModelLoaderOutput(BaseInvocationOutput):
     """MiniMax H3 model loader output."""
 
     transformer: MiniMaxH3TransformerField = OutputField(
-        description="MiniMax H3 FL2VA transformer", title="Transformer"
+        description="MiniMax H3 task transformer (FL2VA or Ref2VA)", title="Transformer"
     )
     text_encoder: MiniMaxH3TextEncoderField = OutputField(
         description=FieldDescriptions.minimax_h3_text_encoder, title="Qwen3-VL Encoder"
@@ -57,17 +57,22 @@ class MiniMaxH3ModelLoaderOutput(BaseInvocationOutput):
     title="Main Model - MiniMax H3",
     tags=["model", "minimax", "video"],
     category="model",
-    version="1.3.0",
+    version="1.4.0",
     classification=Classification.Prototype,
 )
 class MiniMaxH3ModelLoaderInvocation(BaseInvocation):
-    """Loads a MiniMax H3 (FL2VA) model, outputting its submodels.
+    """Loads a MiniMax H3 model, outputting its submodels.
 
     All six submodels (transformer, text encoder, tokenizer, processor, video VAE, audio VAE)
     come from the one diffusers-layout install. Optionally, a single-file transformer checkpoint
     (e.g. the pruned int8 repack) replaces the folder's transformer, and/or a single-file
     truncated Qwen3-VL encoder (e.g. the int8 repack) replaces the folder's text encoder, while
     everything else keeps coming from the folder install.
+
+    A Ref2VA diffusers folder's ``transformer_ref/`` weights are NOT folder-loadable (the
+    submodel map has no entry for that folder), so Ref2VA generation always selects a
+    single-file Ref2VA transformer here; identification marks such folders components-only so
+    the UI requires it up front.
     """
 
     model: ModelIdentifierField = InputField(
@@ -132,16 +137,11 @@ class MiniMaxH3ModelLoaderInvocation(BaseInvocation):
         else:
             transformer_config = main_config
             transformer = self.model.model_copy(update={"submodel_type": SubModelType.Transformer})
-        # TODO(ref2va): replace this rejection with variant stamping when reference-conditioned
-        # generation lands. Until then a Ref2VA transformer (whose weights expect reference
-        # conditioning rows nothing here packs) must fail fast rather than silently produce
-        # degraded output - the webv2 picker filters it out, but hand-authored workflows and
-        # API clients do not go through that filter.
-        if getattr(transformer_config, "variant", None) is MiniMaxH3VariantType.REF2VA:
-            raise ValueError(
-                f"'{transformer_config.name}' is a Ref2VA (reference-to-video) transformer, which this "
-                "version cannot generate with yet. Select an FL2VA transformer instead."
-            )
+        # Stamp the transformer's task variant onto the field: the denoise node uses it to
+        # reject a task/conditioning mismatch (references on FL2VA weights, or Ref2VA weights
+        # without references) instead of silently producing degraded output.
+        variant = getattr(transformer_config, "variant", None)
+        transformer_variant = variant.value if isinstance(variant, MiniMaxH3VariantType) else None
         tokenizer = self.model.model_copy(update={"submodel_type": SubModelType.Tokenizer})
         processor = self.model.model_copy(update={"submodel_type": SubModelType.Processor})
         if self.text_encoder_model is not None:
@@ -154,7 +154,7 @@ class MiniMaxH3ModelLoaderInvocation(BaseInvocation):
         audio_vae = self.model.model_copy(update={"submodel_type": SubModelType.AudioVAE})
 
         return MiniMaxH3ModelLoaderOutput(
-            transformer=MiniMaxH3TransformerField(transformer=transformer),
+            transformer=MiniMaxH3TransformerField(transformer=transformer, variant=transformer_variant),
             text_encoder=MiniMaxH3TextEncoderField(tokenizer=tokenizer, processor=processor, text_encoder=text_encoder),
             vae=VAEField(vae=vae),
             audio_vae=VAEField(vae=audio_vae),

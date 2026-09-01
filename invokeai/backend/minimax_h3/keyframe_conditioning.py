@@ -12,6 +12,8 @@ The rows returned here are CLEAN (not yet noise-augmented): the denoise state no
 reproducibility order in one place (see :mod:`invokeai.backend.minimax_h3.sampling`).
 """
 
+import contextlib
+
 import numpy as np
 import torch
 from diffusers.models.autoencoders.vae import DiagonalGaussianDistribution
@@ -53,6 +55,26 @@ def prepare_keyframes(
     return keyframes, tuple(anchors)
 
 
+def vae_encode_autocast(device: torch.device) -> contextlib.AbstractContextManager[None]:
+    """The precision context every H3 video-VAE *encode* runs under.
+
+    The encoder is a 180M-parameter 3D-conv ResNet whose weights are pinned float32. On CUDA-type
+    devices (NVIDIA and ROCm both report ``"cuda"``) the convolutions run under float16 autocast
+    over those float32 weights — the same recipe the decode path uses. Measured on a 5060 Ti for one
+    17-frame 768x448 chunk: 4.6 s -> 3.2 s with TF32 convs, 9.2 s -> 3.2 s without (ROCm has no
+    TF32 path), and ~0.5 GiB less peak VRAM. ``cache_enabled=False`` keeps autocast from pinning
+    float16 copies of the whole encoder for the duration of a long reference encode.
+
+    Numerics: the autocast encode drifts ~1.5e-3 RMS (relative) from the float32 one. Visual
+    conditioning rows are noise-augmented to ``t = 0.999`` before the transformer sees them, so
+    the clean encode contributes 0.1% of each row and the drift lands at ~1e-6 of the row
+    magnitude. MPS/CPU encode in the weights' dtype.
+    """
+    if device.type == "cuda":
+        return torch.autocast(device_type="cuda", dtype=torch.float16, cache_enabled=False)
+    return contextlib.nullcontext()
+
+
 @torch.no_grad()
 def encode_keyframes(
     vae: AutoencoderKLMiniMaxH3,
@@ -70,7 +92,9 @@ def encode_keyframes(
         pixels = torch.from_numpy(np.array(image)).to(device).permute(2, 0, 1)[None, :, None]
         pixels = (pixels.to(torch.float32).div(255.0) - pixel_mean) / pixel_std
         # A keyframe is one frame: the (tiled) spatial encoder alone, no 17-frame temporal chunking.
-        moments = vae._encode_clip(pixels)
+        with vae_encode_autocast(device):
+            moments = vae._encode_clip(pixels)
+        moments = moments.float()
         posterior = DiagonalGaussianDistribution(moments)
         latents = posterior.sample(generator=torch.Generator().manual_seed(MINIMAX_H3_KEYFRAME_ENCODE_SEED))
         # The fp16 rounding before normalization is a checkpoint contract (~11 bits of every

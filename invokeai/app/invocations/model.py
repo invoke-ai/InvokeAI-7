@@ -184,10 +184,15 @@ class MiniMaxH3TextEncoderField(BaseModel):
 
 
 class MiniMaxH3TransformerField(BaseModel):
-    """Transformer field for MiniMax H3 models (FL2VA)."""
+    """Transformer field for MiniMax H3 models (FL2VA or Ref2VA)."""
 
     transformer: ModelIdentifierField = Field(description="Info to load Transformer submodel")
     loras: List[LoRAField] = Field(default_factory=list, description="LoRAs to apply on model loading")
+    variant: Optional[str] = Field(
+        default=None,
+        description="The task variant of the loaded transformer ('fl2va' / 'ref2va'), stamped by the model "
+        "loader so the denoise node can reject a task/conditioning mismatch.",
+    )
 
 
 class VAEField(BaseModel):
