@@ -1,7 +1,12 @@
 """Runtime support for Comfy "int8_tensorwise + convrot" quantized linears.
 
-The Comfy-Org single-file H3 transformers store their four big per-block linears
-(qkv/out/fc1/fc2) as symmetric per-output-channel int8:
+``int8_tensorwise`` is a ComfyUI-wide scheme, not one architecture's format: the same
+spelling appears on MiniMax H3 (the first consumer here), Krea-2, and whatever Comfy-Org
+publishes next. It therefore lives beside the other schemes in ``backend/quantization``
+rather than in an architecture package, so a second architecture costs a call site and not
+a second copy of the mathematics.
+
+A quantized linear stores its weight as symmetric per-output-channel int8:
 
 - ``<layer>.weight``: int8 ``[out, in]``
 - ``<layer>.weight_scale``: float32 ``[out, 1]``
@@ -23,11 +28,12 @@ We target bf16 compute with int8 *storage*: ``Int8ConvrotLinear`` keeps the int8
 weight and scale resident (4.6x smaller than bf16) and materializes the
 dequantized, derotated bf16 weight per forward call. The derotation is a
 ``[out, in/256, 256] @ [256, 256]`` matmul — a rounding error next to the
-transformer forward itself — and the transient bf16 weight (<= ~310 MB for the
-largest layer) lives inside the denoise node's working-memory reservation.
+transformer forward itself — and the transient bf16 weight (<= ~310 MB for H3's
+largest layer) has to fit inside the calling node's working-memory reservation.
 """
 
 import json
+from typing import Any
 
 import torch
 import torch.nn.functional as F
@@ -35,6 +41,8 @@ import torch.nn.functional as F
 CONVROT_GROUP_SIZE = 256
 
 _HADAMARD_SEED = ((1, 1, 1, -1), (1, 1, -1, 1), (1, -1, 1, 1), (-1, 1, 1, 1))
+
+INT8_TENSORWISE_FORMAT = "int8_tensorwise"
 
 
 def build_regular_hadamard(size: int, dtype: torch.dtype = torch.float32) -> torch.Tensor:
@@ -83,9 +91,9 @@ class Int8ConvrotLinear(torch.nn.Module):
     ``AUTOCAST_MODULE_TYPE_MAPPING``), which enables sidecar LoRA patches and lets a partial
     load leave some int8 buffers on the CPU — ``forward``'s per-call ``.to(device)`` then
     streams them (at half the bf16 byte count) instead of failing outright. Fully-resident
-    operation (~20 GiB free VRAM for the pruned transformer) remains the intended regime;
-    streamed layers pay a per-forward PCIe cost, and the diffusers-folder bf16 model is still
-    the better citizen on small cards.
+    operation remains the intended regime (~20 GiB free VRAM for H3's pruned transformer);
+    streamed layers pay a per-forward PCIe cost, and an unquantized model is still the better
+    citizen on small cards.
     """
 
     def __init__(
@@ -142,3 +150,44 @@ class Int8ConvrotLinear(torch.nn.Module):
 
     def extra_repr(self) -> str:
         return f"in_features={self.in_features}, out_features={self.out_features}, convrot={self.convrot}"
+
+
+def extract_int8_convrot_markers(sd: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Pop every ``int8_tensorwise`` marker out of ``sd``, keyed by the layer path it names.
+
+    Markers for other formats are left in place, together with their weights and scales: ComfyUI's
+    fp8_scaled repacks share this key layout and belong to the fp8 path. Deciding per marker rather
+    than per file is also what keeps mixed-precision checkpoints correct -- one Krea-2 build leaves
+    40 weights in bf16 with no marker at all, and both Qwen3-VL encoders leave over 200.
+
+    Use this when the loader intends to keep the weights int8 and swap in
+    :class:`Int8ConvrotLinear`, which is what every loader here does.
+    """
+    markers = {}
+    for key in [k for k in sd if isinstance(k, str) and k.endswith(".comfy_quant")]:
+        marker = parse_comfy_quant_marker(sd[key])
+        if marker.get("format") != INT8_TENSORWISE_FORMAT:
+            continue
+        markers[key[: -len(".comfy_quant")]] = marker
+        del sd[key]
+    return markers
+
+
+def check_int8_scale_layout(path: str, weight: torch.Tensor, scale: torch.Tensor) -> None:
+    """Refuse a scale granularity this decode does not implement.
+
+    Two layouts are supported, because they are the two this dequantization is correct for:
+    per-output-channel (``[out, 1]`` or ``[out]``) and per-tensor (a scalar). Some repacks emit a
+    blockwise grid instead - a 6144x6144 weight with a ``[48, 48]`` scale is a 128x128 block grid -
+    which needs a different multiply. Left to broadcasting that either raises somewhere less
+    informative or, for an unlucky shape, silently scales the wrong axis.
+    """
+    rows = weight.shape[0] if weight.dim() else 1
+    if scale.dim() == 0 or tuple(scale.shape) in {(1,), (1, 1)}:
+        return
+    if tuple(scale.shape) in {(rows,), (rows, 1)}:
+        return
+    raise ValueError(
+        f"'{path}' has a {tuple(scale.shape)} scale for a {tuple(weight.shape)} weight, which is "
+        "neither per-output-channel nor per-tensor. Blockwise scale grids are not implemented."
+    )

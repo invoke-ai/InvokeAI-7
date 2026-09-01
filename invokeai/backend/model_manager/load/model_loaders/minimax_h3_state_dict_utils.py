@@ -34,7 +34,7 @@ from typing import Any
 
 import torch
 
-from invokeai.backend.minimax_h3.int8_convrot import parse_comfy_quant_marker
+from invokeai.backend.quantization.int8_convrot import parse_comfy_quant_marker
 
 
 def read_comfy_quant_markers(path: Path) -> dict[str, dict[str, Any]]:

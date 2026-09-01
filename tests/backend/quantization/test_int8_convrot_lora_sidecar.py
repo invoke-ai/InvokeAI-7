@@ -8,11 +8,6 @@ patching the dequantized weights directly.
 
 import torch
 
-from invokeai.backend.minimax_h3.int8_convrot import (
-    Int8ConvrotLinear,
-    build_regular_hadamard,
-    dequantize_convrot_weight,
-)
 from invokeai.backend.model_manager.load.model_cache.torch_module_autocast.torch_module_autocast import (
     AUTOCAST_MODULE_TYPE_MAPPING,
     apply_custom_layers_to_model,
@@ -20,6 +15,11 @@ from invokeai.backend.model_manager.load.model_cache.torch_module_autocast.torch
 from invokeai.backend.patches.layer_patcher import LayerPatcher
 from invokeai.backend.patches.layers.lora_layer import LoRALayer
 from invokeai.backend.patches.model_patch_raw import ModelPatchRaw
+from invokeai.backend.quantization.int8_convrot import (
+    Int8ConvrotLinear,
+    build_regular_hadamard,
+    dequantize_convrot_weight,
+)
 
 IN_FEATURES = 16
 OUT_FEATURES = 12
