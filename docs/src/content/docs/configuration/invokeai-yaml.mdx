@@ -221,6 +221,34 @@ Level 9 spends 5.5× the event-loop time to save 0.4 percentage points of bandwi
 If you serve InvokeAI through nginx, Caddy, or similar, set `http_compression_level: 0` and let the proxy compress instead. The proxy does that work in its own process rather than on InvokeAI's event loop, and it avoids compressing the same bytes twice.
 :::
 
+#### Database Durability
+
+Every write to InvokeAI's SQLite database is committed to disk before the request returns. How hard that commit is pushed to the physical disk is controlled by `db_synchronous`:
+
+```yaml
+db_synchronous: full # default value
+```
+
+| Value    | Behavior                                                                                                    |
+| -------- | ----------------------------------------------------------------------------------------------------------- |
+| `full`   | Every commit is flushed to disk before it is acknowledged. SQLite's own default, and InvokeAI's.              |
+| `normal` | Commits are acknowledged without waiting for the flush. Much faster; a power loss may lose the last few.       |
+
+The setting can also be given as the `INVOKEAI_DB_SYNCHRONOUS` environment variable.
+
+**`normal` cannot corrupt the database.** InvokeAI runs SQLite in WAL mode, and WAL guarantees a consistent database either way. What `normal` gives up is the *most recent transactions* if the machine loses power or the OS crashes mid-write — a just-written image record or a queue status. The image file itself is already on disk and can be recovered by the orphan scan; the row pointing at it is what would be missing.
+
+Measured on a copy of a real library, 300 single-row inserts each committed on its own:
+
+| Setting  | Median commit | p95 commit |
+| -------- | ------------: | ---------: |
+| `full`   |      0.427 ms |   0.811 ms |
+| `normal` |      0.035 ms |   0.121 ms |
+
+That is 12x shorter at the median. It matters more than the raw numbers suggest, because all database work is serialised through a single lock: a shorter write is also a shorter time during which every read is blocked.
+
+The default stays at `full` so that upgrading never silently changes anyone's durability. If you generate in large batches on a machine with reliable power, `normal` is the cheaper setting.
+
 #### Logging
 
 Several different log handler destinations are available, and multiple destinations are supported by providing a list:
