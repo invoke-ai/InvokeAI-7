@@ -18,6 +18,8 @@ from invokeai.app.services.shared.invocation_context import InvocationContext
 from invokeai.backend.flux.modules.autoencoder import AutoEncoder
 from invokeai.backend.model_manager.load.load_base import LoadedModel
 from invokeai.backend.util.devices import TorchDevice
+from invokeai.backend.util.oom import is_oom_error
+from invokeai.backend.util.vae_tiling_scope import scoped_vae_tiling
 from invokeai.backend.util.vae_working_memory import estimate_vae_working_memory_flux
 
 
@@ -59,10 +61,7 @@ class FluxVaeDecodeInvocation(BaseInvocation, WithMetadata, WithBoard):
             # wrongly place the latents (and thus the whole decode) on the CPU (see #9373).
             latents = latents.to(device=vae_info.compute_device, dtype=vae_dtype)
 
-            if isinstance(vae, AutoEncoder):
-                # BFL AutoEncoder returns tensor directly
-                img = vae.decode(latents)
-            else:
+            if not isinstance(vae, AutoEncoder):
                 # Diffusers AutoencoderKL returns DecoderOutput with .sample attribute
                 # Scale latents for diffusers VAE (FLUX uses shift_factor and scale_factor).
                 # `shift_factor` is optional on AutoencoderKL: the FLUX VAE sets one, but a plain
@@ -75,7 +74,26 @@ class FluxVaeDecodeInvocation(BaseInvocation, WithMetadata, WithBoard):
                 if shift_factor is not None:
                     latents = latents + shift_factor
 
-                img = vae.decode(latents, return_dict=False)[0]
+            def decode() -> torch.Tensor:
+                if isinstance(vae, AutoEncoder):
+                    # BFL AutoEncoder returns tensor directly
+                    return vae.decode(latents)
+                return vae.decode(latents, return_dict=False)[0]
+
+            # This node has no tiling controls, so it decodes untiled -- but says so explicitly
+            # rather than inheriting whatever the last node to touch this shared, cached VAE left
+            # behind, and restores that state afterwards.
+            try:
+                with scoped_vae_tiling(vae, None):
+                    img = decode()
+            except RuntimeError as e:
+                if not is_oom_error(e):
+                    raise
+                # The working-memory estimate was insufficient on this system. Retry once with
+                # tiling, which caps the peak allocation regardless of resolution.
+                TorchDevice.empty_cache()
+                with scoped_vae_tiling(vae, 0):
+                    img = decode()
 
         img = img.clamp(-1, 1)
         img = rearrange(img[0], "c h w -> h w c")  # noqa: F821

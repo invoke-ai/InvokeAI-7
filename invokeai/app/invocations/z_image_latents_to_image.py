@@ -21,6 +21,8 @@ from invokeai.app.services.shared.invocation_context import InvocationContext
 from invokeai.backend.flux.modules.autoencoder import AutoEncoder as FluxAutoEncoder
 from invokeai.backend.stable_diffusion.extensions.seamless import SeamlessExt
 from invokeai.backend.util.devices import TorchDevice
+from invokeai.backend.util.oom import is_oom_error
+from invokeai.backend.util.vae_tiling_scope import scoped_vae_tiling
 from invokeai.backend.util.vae_working_memory import estimate_vae_working_memory_flux
 
 # Z-Image can use either the Diffusers AutoencoderKL or the FLUX AutoEncoder
@@ -32,7 +34,7 @@ ZImageVAE = Union[AutoencoderKL, FluxAutoEncoder]
     title="Latents to Image - Z-Image",
     tags=["latents", "image", "vae", "l2i", "z-image"],
     category="latents",
-    version="1.1.0",
+    version="1.2.0",
     classification=Classification.Prototype,
 )
 class ZImageLatentsToImageInvocation(BaseInvocation, WithMetadata, WithBoard):
@@ -40,6 +42,11 @@ class ZImageLatentsToImageInvocation(BaseInvocation, WithMetadata, WithBoard):
 
     latents: LatentsField = InputField(description=FieldDescriptions.latents, input=Input.Connection)
     vae: VAEField = InputField(description=FieldDescriptions.vae, input=Input.Connection)
+    tiled: bool = InputField(default=False, description=FieldDescriptions.tiled)
+    # NOTE: tile_size = 0 is a special value. We use this rather than `int | None`, because the workflow UI does not
+    # offer a way to directly set None values. The size applies to InvokeAI's FLUX AutoEncoder; a diffusers
+    # AutoencoderKL tiles with its own geometry, which it does not expose as a single settable size.
+    tile_size: int = InputField(default=0, multiple_of=8, description=FieldDescriptions.vae_tile_size)
 
     @torch.no_grad()
     def invoke(self, context: InvocationContext) -> ImageOutput:
@@ -53,12 +60,14 @@ class ZImageLatentsToImageInvocation(BaseInvocation, WithMetadata, WithBoard):
             )
 
         is_flux_vae = isinstance(vae_info.model, FluxAutoEncoder)
+        use_tiling = self.tiled or context.config.get().force_tiled_decode
 
         # Estimate working memory needed for VAE decode
         estimated_working_memory = estimate_vae_working_memory_flux(
             operation="decode",
             image_tensor=latents,
             vae=vae_info.model,
+            tile_size=self.tile_size if use_tiling else None,
         )
 
         # FLUX VAE doesn't support seamless, so only apply for AutoencoderKL
@@ -80,28 +89,41 @@ class ZImageLatentsToImageInvocation(BaseInvocation, WithMetadata, WithBoard):
             # wrongly place the latents (and thus the whole decode) on the CPU (see #9373).
             latents = latents.to(device=vae_info.compute_device, dtype=vae_dtype)
 
-            # Disable tiling for AutoencoderKL
-            if isinstance(vae, AutoencoderKL):
-                vae.disable_tiling()
-
             # Clear memory as VAE decode can request a lot
             TorchDevice.empty_cache()
 
-            with torch.inference_mode():
+            if not isinstance(vae, FluxAutoEncoder):
+                # AutoencoderKL - Apply scaling_factor and shift_factor from VAE config
+                # Z-Image uses: latents = latents / scaling_factor + shift_factor
+                # (the FLUX VAE handles scaling internally)
+                scaling_factor = vae.config.scaling_factor
+                shift_factor = getattr(vae.config, "shift_factor", None)
+
+                latents = latents / scaling_factor
+                if shift_factor is not None:
+                    latents = latents + shift_factor
+
+            def decode() -> torch.Tensor:
                 if isinstance(vae, FluxAutoEncoder):
-                    # FLUX VAE handles scaling internally
-                    img = vae.decode(latents)
-                else:
-                    # AutoencoderKL - Apply scaling_factor and shift_factor from VAE config
-                    # Z-Image uses: latents = latents / scaling_factor + shift_factor
-                    scaling_factor = vae.config.scaling_factor
-                    shift_factor = getattr(vae.config, "shift_factor", None)
+                    return vae.decode(latents)
+                return vae.decode(latents, return_dict=False)[0]
 
-                    latents = latents / scaling_factor
-                    if shift_factor is not None:
-                        latents = latents + shift_factor
-
-                    img = vae.decode(latents, return_dict=False)[0]
+            # The VAE belongs to the model cache and is shared with every other node that reaches
+            # this class -- FLUX.1 decode and encode, Anima, PiD. Tiling is a property of this one
+            # decode, not of the model, so the state is scoped and restored rather than left behind.
+            with torch.inference_mode():
+                try:
+                    with scoped_vae_tiling(vae, self.tile_size if use_tiling else None):
+                        img = decode()
+                except RuntimeError as e:
+                    if use_tiling or not is_oom_error(e):
+                        raise
+                    # The working-memory estimate was insufficient on this system. Retry once with
+                    # tiling, which caps the peak allocation regardless of resolution.
+                    context.util.signal_progress("VAE decode ran out of memory, retrying tiled")
+                    TorchDevice.empty_cache()
+                    with scoped_vae_tiling(vae, self.tile_size):
+                        img = decode()
 
             img = img.clamp(-1, 1)
             img = rearrange(img[0], "c h w -> h w c")
