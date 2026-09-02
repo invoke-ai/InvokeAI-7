@@ -182,14 +182,15 @@ def _is_mp4_file(path: Path) -> bool:
 
 
 def _probe_decodable_video(path: Path) -> tuple[tuple[int, int, float, Optional[float]], Optional[PILImage.Image]]:
-    """Probes metadata and proves the video has a decodable first frame.
+    """Probes metadata and proves the video has a decodable frame.
 
     Returns the metadata plus the decoded frame so the save path can reuse it as the
     thumbnail source instead of spawning another decode worker. The frame is taken ~1s into
     the clip (see representative_thumbnail_frame_index) rather than at index 0 — first
     frames are routinely unrepresentative (fade-ins, the synthesized waveform track's empty
-    first window) — with a frame-0 fallback inside the helper, so acceptance semantics are
-    unchanged. A decode timeout is contention on a loaded server, not evidence the video is
+    first window) — with a frame-0 fallback inside the helper. Acceptance is thereby
+    slightly WIDER than before: a file whose frame 0 is corrupt but whose ~1s frame decodes
+    is now accepted rather than 415'd. A decode timeout is contention on a loaded server, not evidence the video is
     bad — probe_video already succeeded — so it yields (metadata, None) and the upload
     proceeds, with save-time thumbnail extraction as the backstop.
     """

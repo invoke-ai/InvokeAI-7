@@ -781,3 +781,39 @@ class TestRepresentativeThumbnailFrame:
                 tmp_path / "v.mp4", duration=10.0, fps=24.0, raise_on_timeout=True
             )
         assert calls == [24]
+
+    def test_timeout_in_non_raise_mode_returns_none_without_retry(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """The no-retry-on-timeout rule must hold in non-raise mode too (the disk store's
+        mode): a timeout there must not trigger a second full-budget frame-0 decode."""
+        calls: list[int] = []
+
+        def fake_extract(path, frame_index=0, timeout=0.0, raise_on_timeout=False):
+            calls.append(frame_index)
+            raise video_thumbnails.VideoDecodeTimeoutError("busy")
+
+        monkeypatch.setattr(video_thumbnails, "extract_video_frame", fake_extract)
+        result = video_thumbnails.extract_representative_video_frame(
+            tmp_path / "v.mp4", duration=10.0, fps=24.0, raise_on_timeout=False
+        )
+        assert result is None
+        assert calls == [24]
+
+    def test_timeout_during_fallback_is_not_swallowed_in_raise_mode(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        calls: list[int] = []
+
+        def fake_extract(path, frame_index=0, timeout=0.0, raise_on_timeout=False):
+            calls.append(frame_index)
+            if frame_index > 0:
+                return None
+            raise video_thumbnails.VideoDecodeTimeoutError("busy")
+
+        monkeypatch.setattr(video_thumbnails, "extract_video_frame", fake_extract)
+        with pytest.raises(video_thumbnails.VideoDecodeTimeoutError):
+            video_thumbnails.extract_representative_video_frame(
+                tmp_path / "v.mp4", duration=10.0, fps=24.0, raise_on_timeout=True
+            )
+        assert calls == [24, 0]

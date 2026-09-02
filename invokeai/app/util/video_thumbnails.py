@@ -436,17 +436,26 @@ def extract_representative_video_frame(
 ) -> Optional[Image.Image]:
     """Extracts the representative thumbnail frame, falling back to frame 0.
 
-    The fallback covers containers whose duration metadata overstates the decodable range
-    (the computed index then has no frame): such files still get a thumbnail rather than a
-    gallery placeholder. A timeout is NOT retried at frame 0 — it is contention or an
-    adversarial file, not evidence about the index, and a second decode would double the
-    time an adversarial upload can hold a request worker; with ``raise_on_timeout`` it
-    propagates as VideoDecodeTimeoutError, otherwise it returns None as today.
+    The fallback covers containers whose metadata overstates the decodable range (the
+    computed index then has no frame): such files still get a thumbnail rather than a
+    gallery placeholder. In the worst case — a slow decode *failure* at the representative
+    index — the fallback costs a second decode budget, bounding one call at two timeouts.
+
+    A timeout is never retried, in either mode: it is contention or an adversarial file,
+    not evidence about the index, and a retry would hold a request worker for another full
+    budget. Timeouts are detected by always raising internally; with ``raise_on_timeout``
+    the VideoDecodeTimeoutError propagates, otherwise the call returns None as
+    ``extract_video_frame`` would.
     """
     frame_index = representative_thumbnail_frame_index(duration, fps)
-    frame = extract_video_frame(video_path, frame_index=frame_index, timeout=timeout, raise_on_timeout=raise_on_timeout)
-    if frame is None and frame_index > 0:
-        frame = extract_video_frame(video_path, frame_index=0, timeout=timeout, raise_on_timeout=raise_on_timeout)
+    try:
+        frame = extract_video_frame(video_path, frame_index=frame_index, timeout=timeout, raise_on_timeout=True)
+        if frame is None and frame_index > 0:
+            frame = extract_video_frame(video_path, frame_index=0, timeout=timeout, raise_on_timeout=True)
+    except VideoDecodeTimeoutError:
+        if raise_on_timeout:
+            raise
+        return None
     return frame
 
 
