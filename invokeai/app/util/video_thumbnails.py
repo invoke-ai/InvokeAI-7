@@ -401,6 +401,55 @@ def extract_video_frame(
         Path(tmp_name).unlink(missing_ok=True)
 
 
+# Where in a clip the gallery thumbnail is taken from. Frame 0 is a poor representative:
+# generated videos commonly fade in from black or start on a conditioning frame, and an
+# audio-only upload wrapped in a synthesized waveform track (see video_ingest.py) renders its
+# first frame from a near-empty audio window — an all-black tile. About a second in, capped at
+# the clip's midpoint so short clips still resolve to a real frame, is far more representative.
+THUMBNAIL_FRAME_TARGET_SECONDS = 1.0
+# Used when the container reports no usable fps; matches the video models' native rate and the
+# synthesized waveform track's rate.
+THUMBNAIL_FRAME_FALLBACK_FPS = 24.0
+
+
+def representative_thumbnail_frame_index(duration: Optional[float], fps: Optional[float]) -> int:
+    """The frame index a gallery thumbnail should be taken from.
+
+    Roughly THUMBNAIL_FRAME_TARGET_SECONDS into the clip, capped at its midpoint. Returns 0
+    when the duration is unknown or degenerate — callers without metadata keep today's
+    first-frame behavior. Both inputs are untrusted container metadata, so a non-finite value
+    degrades to the safe answer rather than raising.
+    """
+    if duration is None or not math.isfinite(duration) or duration <= 0:
+        return 0
+    effective_fps = fps if fps is not None and math.isfinite(fps) and fps > 0 else THUMBNAIL_FRAME_FALLBACK_FPS
+    target_seconds = min(THUMBNAIL_FRAME_TARGET_SECONDS, duration / 2)
+    return max(0, int(target_seconds * effective_fps))
+
+
+def extract_representative_video_frame(
+    video_path: Path,
+    duration: Optional[float] = None,
+    fps: Optional[float] = None,
+    timeout: float = VIDEO_DECODE_TIMEOUT_SECONDS,
+    raise_on_timeout: bool = False,
+) -> Optional[Image.Image]:
+    """Extracts the representative thumbnail frame, falling back to frame 0.
+
+    The fallback covers containers whose duration metadata overstates the decodable range
+    (the computed index then has no frame): such files still get a thumbnail rather than a
+    gallery placeholder. A timeout is NOT retried at frame 0 — it is contention or an
+    adversarial file, not evidence about the index, and a second decode would double the
+    time an adversarial upload can hold a request worker; with ``raise_on_timeout`` it
+    propagates as VideoDecodeTimeoutError, otherwise it returns None as today.
+    """
+    frame_index = representative_thumbnail_frame_index(duration, fps)
+    frame = extract_video_frame(video_path, frame_index=frame_index, timeout=timeout, raise_on_timeout=raise_on_timeout)
+    if frame is None and frame_index > 0:
+        frame = extract_video_frame(video_path, frame_index=0, timeout=timeout, raise_on_timeout=raise_on_timeout)
+    return frame
+
+
 def probe_video_with_codec(
     video_path: Path, timeout: float = VIDEO_DECODE_TIMEOUT_SECONDS
 ) -> tuple[int, int, float, Optional[float], Optional[str]]:

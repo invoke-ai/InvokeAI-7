@@ -696,3 +696,88 @@ class TestDecodedFrameValidation:
     def test_rejects_non_rgb_frames(self, frame: np.ndarray) -> None:
         with pytest.raises(ValueError, match="RGB"):
             video_decode_worker._validate_decoded_frame(frame)
+
+
+class TestRepresentativeThumbnailFrame:
+    """The gallery thumbnail is taken ~1s in (capped at the clip midpoint), not at frame 0 —
+    first frames are routinely black (fade-ins, the waveform wrap's empty first window)."""
+
+    @pytest.mark.parametrize(
+        ("duration", "fps", "expected"),
+        [
+            (None, 24.0, 0),  # unknown duration -> keep first-frame behavior
+            (0.0, 24.0, 0),
+            (-1.0, 24.0, 0),
+            (float("inf"), 24.0, 0),  # untrusted metadata degrades safely
+            (float("nan"), 24.0, 0),
+            (10.0, 24.0, 24),  # long clip: 1s in
+            (10.0, 8.0, 8),
+            (1.0, 24.0, 12),  # short clip: capped at the midpoint
+            (10.0, None, 24),  # unknown fps -> 24 fps assumption
+            (10.0, 0.0, 24),
+            (10.0, float("inf"), 24),
+            (0.01, 24.0, 0),  # sub-frame midpoint resolves to frame 0
+        ],
+    )
+    def test_index_selection(self, duration, fps, expected) -> None:
+        assert video_thumbnails.representative_thumbnail_frame_index(duration, fps) == expected
+
+    def test_extracts_the_later_frame_through_the_worker(self, synthetic_mp4: Path) -> None:
+        """The synthetic clip brightens by 16 per frame, so the pixel value identifies the
+        frame: the representative extraction must not return frame 0."""
+        duration = FRAMES / FPS
+        expected_index = video_thumbnails.representative_thumbnail_frame_index(duration, FPS)
+        assert expected_index > 0
+        frame = video_thumbnails.extract_representative_video_frame(synthetic_mp4, duration, FPS)
+        assert frame is not None
+        value = np.asarray(frame)[0, 0, 0].astype(int)
+        assert abs(value - (32 + expected_index * 16)) <= 8
+        assert abs(value - 32) > 8  # decisively not frame 0
+
+    def test_falls_back_to_frame_zero_when_metadata_overstates(self, synthetic_mp4: Path) -> None:
+        """Container metadata is untrusted: fps/duration claiming frames that don't exist
+        (index 100 of a 12-frame clip) must still produce a thumbnail (frame 0), not a
+        gallery placeholder."""
+        frame = video_thumbnails.extract_representative_video_frame(synthetic_mp4, duration=10.0, fps=100.0)
+        assert frame is not None
+        value = np.asarray(frame)[0, 0, 0].astype(int)
+        assert abs(value - 32) <= 8  # frame 0
+
+    def test_fallback_calls_and_order(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        calls: list[int] = []
+
+        def fake_extract(path, frame_index=0, timeout=0.0, raise_on_timeout=False):
+            calls.append(frame_index)
+            return None if frame_index > 0 else MagicMock()
+
+        monkeypatch.setattr(video_thumbnails, "extract_video_frame", fake_extract)
+        frame = video_thumbnails.extract_representative_video_frame(tmp_path / "v.mp4", duration=10.0, fps=24.0)
+        assert frame is not None
+        assert calls == [24, 0]
+
+    def test_no_fallback_when_index_is_zero(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        calls: list[int] = []
+
+        def fake_extract(path, frame_index=0, timeout=0.0, raise_on_timeout=False):
+            calls.append(frame_index)
+            return None
+
+        monkeypatch.setattr(video_thumbnails, "extract_video_frame", fake_extract)
+        assert video_thumbnails.extract_representative_video_frame(tmp_path / "v.mp4", duration=None, fps=None) is None
+        assert calls == [0]
+
+    def test_timeout_propagates_without_a_second_decode(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        """A timeout is contention, not evidence about the frame index — retrying at frame 0
+        would double the time an adversarial upload holds a request worker."""
+        calls: list[int] = []
+
+        def fake_extract(path, frame_index=0, timeout=0.0, raise_on_timeout=False):
+            calls.append(frame_index)
+            raise video_thumbnails.VideoDecodeTimeoutError("busy")
+
+        monkeypatch.setattr(video_thumbnails, "extract_video_frame", fake_extract)
+        with pytest.raises(video_thumbnails.VideoDecodeTimeoutError):
+            video_thumbnails.extract_representative_video_frame(
+                tmp_path / "v.mp4", duration=10.0, fps=24.0, raise_on_timeout=True
+            )
+        assert calls == [24]

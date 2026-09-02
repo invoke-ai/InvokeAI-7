@@ -87,7 +87,7 @@ def test_save_failure_in_thumbnail_write_removes_moved_video(
     # Frame extraction itself is best-effort, but a failure while *writing* the extracted
     # thumbnail propagates. Simulate that: extraction succeeds, the write blows up.
     monkeypatch.setattr(
-        "invokeai.app.services.video_files.video_files_disk.extract_video_frame",
+        "invokeai.app.services.video_files.video_files_disk.extract_representative_video_frame",
         lambda *args, **kwargs: MagicMock(),
     )
     broken_thumbnail = MagicMock()
