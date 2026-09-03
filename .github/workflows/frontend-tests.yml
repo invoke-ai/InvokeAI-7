@@ -65,7 +65,11 @@ jobs:
 
   frontend-webv2-tests:
     runs-on: ubuntu-latest
-    timeout-minutes: 10 # expected run time: <2 min
+    # `check:architecture` is lint + the full unit/browser/fixture suites + a
+    # production build + the performance and project-file gates: ~9-10 min on a
+    # standard runner, so the old 10-minute cap cancelled healthy runs whenever
+    # the runner was a little slow.
+    timeout-minutes: 20 # expected run time: ~10 min
     defaults:
       run:
         working-directory: invokeai/frontend/webv2
