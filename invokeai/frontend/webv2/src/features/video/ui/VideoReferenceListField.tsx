@@ -8,9 +8,9 @@ import type { ChangeEvent } from 'react';
 
 import { Badge, Box, createListCollection, HStack, Image, Input, Spinner, Stack, Text } from '@chakra-ui/react';
 import { useDndContext, useDndMonitor, useDroppable } from '@dnd-kit/core';
-import { galleryImages, galleryItems, galleryTransfers } from '@features/gallery';
+import { galleryImages, galleryItems, galleryTransfers, galleryVideos } from '@features/gallery';
 import { galleryImageUrls, galleryVideoUrls, isGalleryItemDragData } from '@features/gallery/utility';
-import { createVideoSourceClip } from '@features/video/core/settings';
+import { createVideoSourceClip, getDefaultReferenceConditioning } from '@features/video/core/settings';
 import {
   assertAccountScopeCurrent,
   captureAccountScope,
@@ -365,7 +365,14 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
       setIsLoading(true);
 
       try {
-        const item = await galleryItems.resolve({ kind: 'video', name: videoName });
+        // Fetched alongside the resolve, not after it: the metadata only picks the
+        // card's starting conditioning, and it must not add a round trip to the add.
+        // A missing or unreadable record is not a failure -- it just means the
+        // ordinary video default.
+        const [item, metadata] = await Promise.all([
+          galleryItems.resolve({ kind: 'video', name: videoName }),
+          galleryVideos.metadata(videoName).catch(() => null),
+        ]);
 
         if (item?.kind === 'video') {
           const clip = createVideoSourceClip({
@@ -393,7 +400,7 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
                 // References are truncated to the generated duration, not joined: default to
                 // the whole clip rather than the extend-mode 2-frame-tail trim.
                 clip: { ...clip, endFrame: Math.max(0, clip.numFrames - 1), startFrame: 0 },
-                conditioning: 'video_audio',
+                conditioning: getDefaultReferenceConditioning(metadata),
                 kind: 'video',
               },
             ];

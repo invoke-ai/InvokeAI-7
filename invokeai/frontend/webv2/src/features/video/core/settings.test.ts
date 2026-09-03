@@ -12,6 +12,7 @@ import {
   cloneVideoWidgetValues,
   createVideoSourceClip,
   deriveReferenceExtendClip,
+  getDefaultReferenceConditioning,
   isVideoSettings,
   isVideoSourceClip,
   normalizeVideoSettings,
@@ -257,6 +258,23 @@ describe('createVideoSourceClip', () => {
     expect(clip.numFrames).toBeGreaterThanOrEqual(1);
     expect(clip.endFrame).toBeGreaterThanOrEqual(0);
     expect(clip.startFrame).toBe(0);
+  });
+});
+
+describe('getDefaultReferenceConditioning', () => {
+  it('starts a wrapped audio upload on its soundtrack alone', () => {
+    expect(getDefaultReferenceConditioning({ media_origin: 'audio_upload' })).toBe('audio');
+  });
+
+  it('keeps video + audio for ordinary videos', () => {
+    expect(getDefaultReferenceConditioning({ generation_mode: 'minimax_h3_ref2v' })).toBe('video_audio');
+    expect(getDefaultReferenceConditioning({ media_origin: 'something_else' })).toBe('video_audio');
+  });
+
+  it('keeps video + audio when there is no metadata to read', () => {
+    expect(getDefaultReferenceConditioning(null)).toBe('video_audio');
+    expect(getDefaultReferenceConditioning(undefined)).toBe('video_audio');
+    expect(getDefaultReferenceConditioning({})).toBe('video_audio');
   });
 });
 
