@@ -24,7 +24,7 @@ import {
 import { Button, IconButton } from '@platform/ui/Button';
 import { DropTargetOverlay } from '@platform/ui/DropTargetOverlay';
 import { DropZone } from '@platform/ui/DropZone';
-import { Field } from '@platform/ui/Field';
+import { Field, FieldLabel } from '@platform/ui/Field';
 import { MiddleTruncate } from '@platform/ui/MiddleTruncate';
 import { Select } from '@platform/ui/Select';
 import { SliderNumberField } from '@platform/ui/SliderNumberField';
@@ -138,6 +138,14 @@ const ReferenceCard = memo(function ReferenceCard({
     },
     [index, onUpdate, reference]
   );
+  // The window's length, and the seconds it represents — the label carries the seconds
+  // because the control is how a user hits a target sample duration (reference frames cost
+  // denoise VRAM every step), while its unit has to stay frames to match the trim contract.
+  const sampleFrames = reference.kind === 'video' ? reference.clip.endFrame - reference.clip.startFrame + 1 : 0;
+  const sampleSeconds =
+    reference.kind === 'video' && Number.isFinite(reference.clip.fps) && reference.clip.fps > 0
+      ? (sampleFrames / reference.clip.fps).toFixed(1)
+      : null;
   const handleMoveUp = useCallback(() => onMove(index, -1), [index, onMove]);
   const handleMoveDown = useCallback(() => onMove(index, 1), [index, onMove]);
   const handleRemove = useCallback(() => onRemove(index), [index, onRemove]);
@@ -185,7 +193,8 @@ const ReferenceCard = memo(function ReferenceCard({
                   label={t('widgets.video.trimStartShort')}
                   src={galleryVideoUrls.full(name)}
                 />
-                <Box flex="1" minW="0">
+                <Stack flex="1" gap="0.5" minW="0">
+                  <FieldLabel>{t('widgets.video.trimStart')}</FieldLabel>
                   <SliderNumberField
                     ariaLabel={t('widgets.video.trimStart')}
                     disabled={disabled}
@@ -196,7 +205,7 @@ const ReferenceCard = memo(function ReferenceCard({
                     value={reference.clip.startFrame}
                     onChange={handleStartFrame}
                   />
-                </Box>
+                </Stack>
               </HStack>
               <HStack gap="2">
                 <TrimBoundThumb
@@ -205,7 +214,12 @@ const ReferenceCard = memo(function ReferenceCard({
                   label={`${t('widgets.video.trimEndShort')} · ${reference.clip.endFrame}`}
                   src={galleryVideoUrls.full(name)}
                 />
-                <Box flex="1" minW="0">
+                <Stack flex="1" gap="0.5" minW="0">
+                  <FieldLabel>
+                    {sampleSeconds === null
+                      ? t('widgets.video.sampleLength')
+                      : t('widgets.video.sampleLengthWithSeconds', { seconds: sampleSeconds })}
+                  </FieldLabel>
                   <SliderNumberField
                     ariaLabel={t('widgets.video.sampleLength')}
                     disabled={disabled}
@@ -219,10 +233,10 @@ const ReferenceCard = memo(function ReferenceCard({
                     min={1}
                     showStepper
                     step={1}
-                    value={reference.clip.endFrame - reference.clip.startFrame + 1}
+                    value={sampleFrames}
                     onChange={handleSampleFrames}
                   />
-                </Box>
+                </Stack>
               </HStack>
             </Stack>
           ) : null}
