@@ -10,7 +10,12 @@ import { Badge, Box, createListCollection, HStack, Image, Input, Spinner, Stack,
 import { useDndContext, useDndMonitor, useDroppable } from '@dnd-kit/core';
 import { galleryImages, galleryItems, galleryTransfers } from '@features/gallery';
 import { galleryImageUrls, galleryVideoUrls, isGalleryItemDragData } from '@features/gallery/utility';
-import { createVideoSourceClip } from '@features/video/core/settings';
+import {
+  createVideoSourceClip,
+  DEFAULT_REFERENCE_SAMPLE_FRAMES,
+  resizeReferenceSampleWindow,
+  slideReferenceSampleWindow,
+} from '@features/video/core/settings';
 import {
   assertAccountScopeCurrent,
   captureAccountScope,
@@ -19,7 +24,7 @@ import {
 import { Button, IconButton } from '@platform/ui/Button';
 import { DropTargetOverlay } from '@platform/ui/DropTargetOverlay';
 import { DropZone } from '@platform/ui/DropZone';
-import { Field } from '@platform/ui/Field';
+import { Field, FieldLabel } from '@platform/ui/Field';
 import { MiddleTruncate } from '@platform/ui/MiddleTruncate';
 import { Select } from '@platform/ui/Select';
 import { SliderNumberField } from '@platform/ui/SliderNumberField';
@@ -106,28 +111,41 @@ const ReferenceCard = memo(function ReferenceCard({
     },
     [index, onUpdate, reference]
   );
+  // The trim is presented as a sliding sample window — start frame plus length — because
+  // what the user is choosing is "how much" (every reference frame costs denoise VRAM) and
+  // "from where". Storage stays startFrame/endFrame (the request contract); the window
+  // math (constant-length slide that stops at the clip's end, and the extend anchor's
+  // pinned-to-the-cutpoint end) lives in core/settings.
   const handleStartFrame = useCallback(
-    (startFrame: number) => {
+    (rawStart: number) => {
       if (reference.kind === 'video') {
         onUpdate(index, {
           ...reference,
-          clip: { ...reference.clip, endFrame: Math.max(startFrame, reference.clip.endFrame), startFrame },
+          clip: slideReferenceSampleWindow(reference.clip, rawStart, reference.fromSourceVideo === true),
         });
       }
     },
     [index, onUpdate, reference]
   );
-  const handleEndFrame = useCallback(
-    (endFrame: number) => {
+  const handleSampleFrames = useCallback(
+    (rawSampleFrames: number) => {
       if (reference.kind === 'video') {
         onUpdate(index, {
           ...reference,
-          clip: { ...reference.clip, endFrame, startFrame: Math.min(reference.clip.startFrame, endFrame) },
+          clip: resizeReferenceSampleWindow(reference.clip, rawSampleFrames, reference.fromSourceVideo === true),
         });
       }
     },
     [index, onUpdate, reference]
   );
+  // The window's length, and the seconds it represents — the label carries the seconds
+  // because the control is how a user hits a target sample duration (reference frames cost
+  // denoise VRAM every step), while its unit has to stay frames to match the trim contract.
+  const sampleFrames = reference.kind === 'video' ? reference.clip.endFrame - reference.clip.startFrame + 1 : 0;
+  const sampleSeconds =
+    reference.kind === 'video' && Number.isFinite(reference.clip.fps) && reference.clip.fps > 0
+      ? (sampleFrames / reference.clip.fps).toFixed(1)
+      : null;
   const handleMoveUp = useCallback(() => onMove(index, -1), [index, onMove]);
   const handleMoveDown = useCallback(() => onMove(index, 1), [index, onMove]);
   const handleRemove = useCallback(() => onRemove(index), [index, onRemove]);
@@ -160,9 +178,12 @@ const ReferenceCard = memo(function ReferenceCard({
             value={selectValue}
             onValueChange={handleSelect}
           />
-          {/* One row per trim bound: the bound's live frame at left, its slider at
-              right. The seeking thumbs replace the static gallery poster for video
-              references — the start-frame thumb is the card's visual identity. */}
+          {/* One row per window edge: the live frame at left, its control at right. The
+              seeking thumbs replace the static gallery poster for video references — the
+              start-frame thumb is the card's visual identity. The second row's SLIDER is
+              the sample length (the quantity that costs VRAM); its THUMB still shows the
+              resulting end frame, badged with that frame number since the number field
+              beside it shows the length, not the frame. */}
           {reference.kind === 'video' ? (
             <Stack gap="1">
               <HStack gap="2">
@@ -172,36 +193,50 @@ const ReferenceCard = memo(function ReferenceCard({
                   label={t('widgets.video.trimStartShort')}
                   src={galleryVideoUrls.full(name)}
                 />
-                <Box flex="1" minW="0">
+                <Stack flex="1" gap="0.5" minW="0">
+                  <FieldLabel>{t('widgets.video.trimStart')}</FieldLabel>
                   <SliderNumberField
                     ariaLabel={t('widgets.video.trimStart')}
                     disabled={disabled}
                     max={Math.max(0, reference.clip.numFrames - 1)}
                     min={0}
+                    showStepper
                     step={1}
                     value={reference.clip.startFrame}
                     onChange={handleStartFrame}
                   />
-                </Box>
+                </Stack>
               </HStack>
               <HStack gap="2">
                 <TrimBoundThumb
                   fps={reference.clip.fps}
                   frame={reference.clip.endFrame}
-                  label={t('widgets.video.trimEndShort')}
+                  label={`${t('widgets.video.trimEndShort')} · ${reference.clip.endFrame}`}
                   src={galleryVideoUrls.full(name)}
                 />
-                <Box flex="1" minW="0">
+                <Stack flex="1" gap="0.5" minW="0">
+                  <FieldLabel>
+                    {sampleSeconds === null
+                      ? t('widgets.video.sampleLength')
+                      : t('widgets.video.sampleLengthWithSeconds', { seconds: sampleSeconds })}
+                  </FieldLabel>
                   <SliderNumberField
-                    ariaLabel={t('widgets.video.trimEnd')}
+                    ariaLabel={t('widgets.video.sampleLength')}
                     disabled={disabled}
-                    max={Math.max(0, reference.clip.numFrames - 1)}
-                    min={0}
+                    // The anchor grows backward from its pinned end, so its ceiling is the
+                    // available lead-in; ordinary windows grow forward from their start.
+                    max={
+                      reference.fromSourceVideo === true
+                        ? Math.max(1, reference.clip.endFrame + 1)
+                        : Math.max(1, reference.clip.numFrames - reference.clip.startFrame)
+                    }
+                    min={1}
+                    showStepper
                     step={1}
-                    value={reference.clip.endFrame}
-                    onChange={handleEndFrame}
+                    value={sampleFrames}
+                    onChange={handleSampleFrames}
                   />
-                </Box>
+                </Stack>
               </HStack>
             </Stack>
           ) : null}
@@ -390,9 +425,15 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
             return [
               ...current,
               {
-                // References are truncated to the generated duration, not joined: default to
-                // the whole clip rather than the extend-mode 2-frame-tail trim.
-                clip: { ...clip, endFrame: Math.max(0, clip.numFrames - 1), startFrame: 0 },
+                // Default to a short sample window from the clip's start, not the whole
+                // clip: reference frames cost denoise VRAM every step, and a few seconds
+                // captures the wanted features. (Not the extend-mode 2-frame-tail trim
+                // either — references are truncated to the generated duration, not joined.)
+                clip: {
+                  ...clip,
+                  endFrame: Math.max(0, Math.min(DEFAULT_REFERENCE_SAMPLE_FRAMES, clip.numFrames) - 1),
+                  startFrame: 0,
+                },
                 conditioning: 'video_audio',
                 kind: 'video',
               },
