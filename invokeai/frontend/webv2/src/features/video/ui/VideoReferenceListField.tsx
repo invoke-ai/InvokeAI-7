@@ -10,7 +10,12 @@ import { Badge, Box, createListCollection, HStack, Image, Input, Spinner, Stack,
 import { useDndContext, useDndMonitor, useDroppable } from '@dnd-kit/core';
 import { galleryImages, galleryItems, galleryTransfers } from '@features/gallery';
 import { galleryImageUrls, galleryVideoUrls, isGalleryItemDragData } from '@features/gallery/utility';
-import { createVideoSourceClip, DEFAULT_REFERENCE_SAMPLE_FRAMES } from '@features/video/core/settings';
+import {
+  createVideoSourceClip,
+  DEFAULT_REFERENCE_SAMPLE_FRAMES,
+  resizeReferenceSampleWindow,
+  slideReferenceSampleWindow,
+} from '@features/video/core/settings';
 import {
   assertAccountScopeCurrent,
   captureAccountScope,
@@ -108,19 +113,15 @@ const ReferenceCard = memo(function ReferenceCard({
   );
   // The trim is presented as a sliding sample window — start frame plus length — because
   // what the user is choosing is "how much" (every reference frame costs denoise VRAM) and
-  // "from where". Storage stays startFrame/endFrame (the request contract): length is
-  // derived as end - start + 1, and moving the start slides the window at constant length
-  // until it hits the clip's end, where it shrinks.
+  // "from where". Storage stays startFrame/endFrame (the request contract); the window
+  // math (constant-length slide that stops at the clip's end, and the extend anchor's
+  // pinned-to-the-cutpoint end) lives in core/settings.
   const handleStartFrame = useCallback(
     (rawStart: number) => {
       if (reference.kind === 'video') {
-        const maxFrame = Math.max(0, reference.clip.numFrames - 1);
-        const sampleFrames = reference.clip.endFrame - reference.clip.startFrame + 1;
-        const startFrame = Math.min(Math.max(0, rawStart), maxFrame);
-
         onUpdate(index, {
           ...reference,
-          clip: { ...reference.clip, endFrame: Math.min(startFrame + sampleFrames - 1, maxFrame), startFrame },
+          clip: slideReferenceSampleWindow(reference.clip, rawStart, reference.fromSourceVideo === true),
         });
       }
     },
@@ -129,10 +130,10 @@ const ReferenceCard = memo(function ReferenceCard({
   const handleSampleFrames = useCallback(
     (rawSampleFrames: number) => {
       if (reference.kind === 'video') {
-        const maxFrame = Math.max(0, reference.clip.numFrames - 1);
-        const endFrame = Math.min(reference.clip.startFrame + Math.max(1, rawSampleFrames) - 1, maxFrame);
-
-        onUpdate(index, { ...reference, clip: { ...reference.clip, endFrame } });
+        onUpdate(index, {
+          ...reference,
+          clip: resizeReferenceSampleWindow(reference.clip, rawSampleFrames, reference.fromSourceVideo === true),
+        });
       }
     },
     [index, onUpdate, reference]
@@ -208,7 +209,13 @@ const ReferenceCard = memo(function ReferenceCard({
                   <SliderNumberField
                     ariaLabel={t('widgets.video.sampleLength')}
                     disabled={disabled}
-                    max={Math.max(1, reference.clip.numFrames - reference.clip.startFrame)}
+                    // The anchor grows backward from its pinned end, so its ceiling is the
+                    // available lead-in; ordinary windows grow forward from their start.
+                    max={
+                      reference.fromSourceVideo === true
+                        ? Math.max(1, reference.clip.endFrame + 1)
+                        : Math.max(1, reference.clip.numFrames - reference.clip.startFrame)
+                    }
                     min={1}
                     showStepper
                     step={1}

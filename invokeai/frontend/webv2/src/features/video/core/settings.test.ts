@@ -4,6 +4,8 @@ import type { VideoReferenceItem, VideoSettings } from './types';
 
 import { MINIMAX_H3_NUM_FRAMES_CHOICES } from './dimensions';
 import {
+  resizeReferenceSampleWindow,
+  slideReferenceSampleWindow,
   applyReferenceExtendSourceVideo,
   applyReferenceExtendNumFrames,
   canPlaceReferenceExtendAnchor,
@@ -867,5 +869,87 @@ describe('reference-extend linkage', () => {
     const unlinked = [VIDEO_REFERENCE, IMAGE_REFERENCE];
 
     expect(applyReferenceExtendNumFrames(unlinked, 90)).toBe(unlinked);
+  });
+});
+
+describe('reference sample window', () => {
+  const clip = (startFrame: number, endFrame: number, numFrames = 300) => ({
+    endFrame,
+    fps: 24,
+    height: 480,
+    numFrames,
+    startFrame,
+    video_name: 'clip.mp4',
+    width: 640,
+  });
+
+  describe('slideReferenceSampleWindow', () => {
+    it('slides an ordinary window at constant length', () => {
+      const next = slideReferenceSampleWindow(clip(0, 199), 50, false);
+      expect([next.startFrame, next.endFrame]).toEqual([50, 249]);
+    });
+
+    it('stops at the clip end instead of shrinking (no overshoot ratchet)', () => {
+      // Drag far past the wall, then back to 0: the length must survive the round trip.
+      const overshot = slideReferenceSampleWindow(clip(0, 199), 299, false);
+      expect([overshot.startFrame, overshot.endFrame]).toEqual([100, 299]);
+      const back = slideReferenceSampleWindow(overshot, 0, false);
+      expect([back.startFrame, back.endFrame]).toEqual([0, 199]);
+    });
+
+    it('keeps the extend anchor end pinned to the cutpoint', () => {
+      // The anchor's seam continuity depends on frames adjacent to its end frame.
+      const next = slideReferenceSampleWindow(clip(180, 298), 200, true);
+      expect([next.startFrame, next.endFrame]).toEqual([200, 298]);
+      const backAndForth = slideReferenceSampleWindow(slideReferenceSampleWindow(next, 250, true), 200, true);
+      expect([backAndForth.startFrame, backAndForth.endFrame]).toEqual([200, 298]);
+    });
+
+    it('clamps the anchor start to its pinned end', () => {
+      const next = slideReferenceSampleWindow(clip(180, 298), 500, true);
+      expect([next.startFrame, next.endFrame]).toEqual([298, 298]);
+    });
+
+    it('self-heals a corrupt persisted trim into bounds', () => {
+      // end < start and end beyond the clip must both come back as a valid window.
+      const inverted = slideReferenceSampleWindow(clip(10, 5, 20), 0, false);
+      expect(inverted.startFrame).toBeGreaterThanOrEqual(0);
+      expect(inverted.endFrame).toBeGreaterThanOrEqual(inverted.startFrame);
+      expect(inverted.endFrame).toBeLessThanOrEqual(19);
+      const oversized = slideReferenceSampleWindow(clip(0, 999, 20), 5, false);
+      expect([oversized.startFrame, oversized.endFrame]).toEqual([0, 19]);
+    });
+
+    it('handles a single-frame clip', () => {
+      const next = slideReferenceSampleWindow(clip(0, 0, 1), 5, false);
+      expect([next.startFrame, next.endFrame]).toEqual([0, 0]);
+    });
+  });
+
+  describe('resizeReferenceSampleWindow', () => {
+    it('grows an ordinary window forward from its start', () => {
+      const next = resizeReferenceSampleWindow(clip(50, 60), 100, false);
+      expect([next.startFrame, next.endFrame]).toEqual([50, 149]);
+    });
+
+    it('clamps the length to the clip end', () => {
+      const next = resizeReferenceSampleWindow(clip(250, 260), 100, false);
+      expect([next.startFrame, next.endFrame]).toEqual([250, 299]);
+    });
+
+    it('grows the extend anchor backward from its pinned end', () => {
+      const next = resizeReferenceSampleWindow(clip(280, 298), 100, true);
+      expect([next.startFrame, next.endFrame]).toEqual([199, 298]);
+    });
+
+    it('clamps the anchor lead-in at the clip start', () => {
+      const next = resizeReferenceSampleWindow(clip(280, 298), 1000, true);
+      expect([next.startFrame, next.endFrame]).toEqual([0, 298]);
+    });
+
+    it('never produces a window shorter than one frame', () => {
+      const next = resizeReferenceSampleWindow(clip(50, 199), -5, false);
+      expect([next.startFrame, next.endFrame]).toEqual([50, 50]);
+    });
   });
 });
