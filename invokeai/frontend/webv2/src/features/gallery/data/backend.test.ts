@@ -782,6 +782,8 @@ describe('classifyGalleryUpload', () => {
     ['application/octet-stream', 'photo.jpeg', 'image'],
     ['application/octet-stream', 'song.mp3', 'video'],
     ['binary/octet-stream', 'clip.MP4', 'video'],
+    ['application/octet-stream', 'clip.wmv', 'video'],
+    ['application/octet-stream', 'song.WMA', 'video'],
     ['application/pdf', 'photo.png', 'image'],
   ] as const)('classifies MIME %s and name %s as %s', (type, name, kind) => {
     expect(classifyGalleryUpload(new File(['media'], name, { type }))).toEqual({ kind });

@@ -39,6 +39,37 @@ import { useVideoUiActions } from './VideoUiContext';
 
 const DROP_ID = 'video-reference-list';
 const IMAGE_UPLOAD_ACCEPT = 'image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp';
+// One picker for both media kinds: an uploaded audio file becomes a waveform video, so it
+// occupies a VIDEO reference slot and shares that cap -- a separate audio button would
+// carry the same counter and grey out with it. The wildcards cover the ordinary case; the
+// explicit extensions (mirroring the upload route's accepted lists) are what match a file
+// whose type the OS could not map, which the browser then offers as octet-stream.
+const MEDIA_UPLOAD_ACCEPT = [
+  'video/*',
+  'audio/*',
+  '.mp4',
+  '.mov',
+  '.m4v',
+  '.webm',
+  '.mkv',
+  '.avi',
+  '.mpg',
+  '.mpeg',
+  '.3gp',
+  '.wmv',
+  '.asf',
+  '.mp3',
+  '.m4a',
+  '.aac',
+  '.wav',
+  '.flac',
+  '.ogg',
+  '.oga',
+  '.opus',
+  '.aiff',
+  '.aif',
+  '.wma',
+].join(',');
 const DROP_ZONE_FOCUS_PROPS = {
   outlineColor: 'accent.focusRing',
   outlineOffset: '2px',
@@ -577,7 +608,7 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
       <Input accept={IMAGE_UPLOAD_ACCEPT} hidden ref={imageInputRef} type="file" onChange={handleImageFileChange} />
       {/* Audio files upload too: the server wraps them into waveform videos, which is
           how audio-only reference clips enter the pipeline. */}
-      <Input accept="video/*,audio/*" hidden ref={videoInputRef} type="file" onChange={handleVideoFileChange} />
+      <Input accept={MEDIA_UPLOAD_ACCEPT} hidden ref={videoInputRef} type="file" onChange={handleVideoFileChange} />
     </Stack>
   );
 });

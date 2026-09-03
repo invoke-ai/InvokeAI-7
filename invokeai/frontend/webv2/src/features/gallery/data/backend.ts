@@ -102,6 +102,8 @@ const GALLERY_UPLOAD_KIND_BY_EXTENSION = new Map<string, GalleryUploadKind>([
   ['.mpg', 'video'],
   ['.mpeg', 'video'],
   ['.3gp', 'video'],
+  ['.wmv', 'video'],
+  ['.asf', 'video'],
   ['.mp3', 'video'],
   ['.m4a', 'video'],
   ['.aac', 'video'],
@@ -112,6 +114,7 @@ const GALLERY_UPLOAD_KIND_BY_EXTENSION = new Map<string, GalleryUploadKind>([
   ['.opus', 'video'],
   ['.aiff', 'video'],
   ['.aif', 'video'],
+  ['.wma', 'video'],
 ]);
 
 export const classifyGalleryUpload = (file: Pick<File, 'name' | 'type'>): { kind: GalleryUploadKind } | null => {
