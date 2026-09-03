@@ -2348,15 +2348,36 @@ export const normalizeWorkbenchAccount = (value: unknown): WorkbenchState['accou
   };
 };
 
-const normalizeWorkbenchState = (state: WorkbenchState): WorkbenchState => ({
-  ...state,
-  backendConnection: { status: 'connecting' },
+const normalizeWorkbenchState = (state: WorkbenchState): WorkbenchState => {
   // Built explicitly: legacy snapshots carried preferences inside the account
   // (they live in the settings store now) and must not resurface here.
-  account: normalizeWorkbenchAccount(state.account),
-  notifications: [],
-  projects: state.projects.map((project) => normalizeWorkbenchProject(project)),
-});
+  const account = normalizeWorkbenchAccount(state.account);
+  const restored = state.projects.map((project) => normalizeWorkbenchProject(project));
+  // An editor always holds a project: `closeProject` refuses the last tab, and a
+  // session with none is the Home screen, whose cache the load paths are meant to
+  // replace with a fresh draft before handing the state over. One path does not --
+  // when a project the canvas gate refused cannot be retained, the cached snapshot
+  // is returned verbatim, and that cache is projectless whenever the last tab was
+  // closed before the reload. Hydrating it leaves the store's active project
+  // undefined, and the first consumer to read it dereferences undefined rather than
+  // finding an empty editor: the boot widget hint, whose first access happens to be
+  // `widgetRegions`, before the shell renders anything. Seed the draft here, at the
+  // one point every load path passes through, so no snapshot can hydrate without a
+  // project regardless of which path produced it.
+  const projects = restored.length > 0 ? restored : [createDraftProject([], account)];
+  const activeProjectId = projects.some((project) => project.id === state.activeProjectId)
+    ? state.activeProjectId
+    : projects[0]!.id;
+
+  return {
+    ...state,
+    account,
+    activeProjectId,
+    backendConnection: { status: 'connecting' },
+    notifications: [],
+    projects,
+  };
+};
 
 const updateActiveLayout = (
   state: WorkbenchState,
