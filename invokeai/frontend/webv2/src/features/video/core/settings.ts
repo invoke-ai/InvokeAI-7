@@ -79,6 +79,14 @@ export const isVideoSourceClip = (value: unknown): value is VideoSourceClip =>
 export const VIDEO_REFERENCE_MAX_VIDEOS = 3;
 export const VIDEO_REFERENCE_MAX_IMAGES = 9;
 
+/**
+ * Default sample length (in frames) for a newly added video reference. Reference rows cost
+ * VRAM in every denoise step — the packed sequence grows with reference length — so the
+ * useful sample is a short window that captures the wanted visual/audio features, not the
+ * whole clip. 200 frames ≈ 8s at the models' native 24 fps.
+ */
+export const DEFAULT_REFERENCE_SAMPLE_FRAMES = 200;
+
 const VIDEO_REFERENCE_CONDITIONINGS = ['video_audio', 'video', 'audio'] as const;
 const VIDEO_REFERENCE_IMAGE_DETAILS = ['max', 'match'] as const;
 

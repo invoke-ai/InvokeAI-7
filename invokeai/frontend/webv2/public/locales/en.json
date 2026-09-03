@@ -3405,6 +3405,7 @@
       "removeFrame": "Remove",
       "replaceClip": "Replace the initial video",
       "replaceFrame": "Replace the frame image",
+      "sampleLength": "Sample Length (Frames)",
       "trim": "Trim",
       "trimEnd": "End Frame",
       "trimEndShort": "End",
