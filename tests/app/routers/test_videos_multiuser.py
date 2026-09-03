@@ -939,7 +939,9 @@ def test_uploaded_video_codec_must_be_browser_compatible(
         lambda _path: (64, 64, 1.0, 8.0, codec),
         raising=False,
     )
-    monkeypatch.setattr(videos_router_module, "extract_video_frame", lambda *_args, **_kwargs: MagicMock())
+    monkeypatch.setattr(
+        videos_router_module, "extract_representative_video_frame", lambda *_args, **_kwargs: MagicMock()
+    )
 
     if is_supported:
         metadata, _frame = videos_router_module._probe_decodable_video(path)

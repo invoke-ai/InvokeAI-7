@@ -50,7 +50,11 @@ from invokeai.app.services.videos.videos_common import (
     VideoUrlsDTO,
 )
 from invokeai.app.util.video_ingest import VideoIngestError, ingest_media_to_mp4, probe_media_streams
-from invokeai.app.util.video_thumbnails import VideoDecodeTimeoutError, extract_video_frame, probe_video_with_codec
+from invokeai.app.util.video_thumbnails import (
+    VideoDecodeTimeoutError,
+    extract_representative_video_frame,
+    probe_video_with_codec,
+)
 
 videos_router = APIRouter(prefix="/v1/videos", tags=["videos"])
 
@@ -178,20 +182,24 @@ def _is_mp4_file(path: Path) -> bool:
 
 
 def _probe_decodable_video(path: Path) -> tuple[tuple[int, int, float, Optional[float]], Optional[PILImage.Image]]:
-    """Probes metadata and proves the video has a decodable first frame.
+    """Probes metadata and proves the video has a decodable frame.
 
     Returns the metadata plus the decoded frame so the save path can reuse it as the
-    thumbnail source instead of spawning another decode worker. A decode timeout is
-    contention on a loaded server, not evidence the video is bad — probe_video already
-    succeeded — so it yields (metadata, None) and the upload proceeds, with save-time
-    thumbnail extraction as the backstop.
+    thumbnail source instead of spawning another decode worker. The frame is taken ~1s into
+    the clip (see representative_thumbnail_frame_index) rather than at index 0 — first
+    frames are routinely unrepresentative (fade-ins, the synthesized waveform track's empty
+    first window) — with a frame-0 fallback inside the helper. Acceptance is thereby
+    slightly WIDER than before: a file whose frame 0 is corrupt but whose ~1s frame decodes
+    is now accepted rather than 415'd. A decode timeout is contention on a loaded server, not evidence the video is
+    bad — probe_video already succeeded — so it yields (metadata, None) and the upload
+    proceeds, with save-time thumbnail extraction as the backstop.
     """
     width, height, duration, fps, codec = probe_video_with_codec(path)
     if codec is None or codec.lower() not in {"h264", "avc", "avc1", "libx264"}:
         raise ValueError("Video must use a browser-compatible H.264/AVC codec")
     metadata = (width, height, duration, fps)
     try:
-        first_frame = extract_video_frame(path, frame_index=0, raise_on_timeout=True)
+        first_frame = extract_representative_video_frame(path, duration, fps, raise_on_timeout=True)
     except VideoDecodeTimeoutError:
         return metadata, None
     if first_frame is None:

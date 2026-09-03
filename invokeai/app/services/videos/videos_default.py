@@ -115,6 +115,8 @@ class VideoService(VideoServiceABC):
                 graph=graph,
                 first_frame=first_frame,
                 move_source=move_source,
+                duration=duration,
+                fps=fps,
             )
 
             video_dto = self.get_dto(video_name)
@@ -177,7 +179,7 @@ class VideoService(VideoServiceABC):
                 with Image.open(thumbnail_path) as thumbnail:
                     first_frame = thumbnail.copy()
         except Exception:
-            # A thumbnail is an optimization only. ``create`` extracts frame zero when absent.
+            # A thumbnail is an optimization only. ``create`` extracts a representative frame when absent.
             first_frame = None
 
         created = self.create(

@@ -43,7 +43,9 @@ def test_configured_upload_slots_bound_peak_double_spool_usage() -> None:
 
 def test_upload_probe_requires_a_decodable_frame(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(videos, "probe_video_with_codec", lambda path: (48, 32, 1.0, 8.0, "h264"))
-    monkeypatch.setattr(videos, "extract_video_frame", lambda path, frame_index=0, raise_on_timeout=False: None)
+    monkeypatch.setattr(
+        videos, "extract_representative_video_frame", lambda path, duration=None, fps=None, raise_on_timeout=False: None
+    )
 
     with pytest.raises(ValueError, match="decodable frame"):
         videos._probe_decodable_video(Path("metadata-only.mp4"))
@@ -52,7 +54,11 @@ def test_upload_probe_requires_a_decodable_frame(monkeypatch: pytest.MonkeyPatch
 def test_upload_probe_accepts_valid_metadata_and_frame(monkeypatch: pytest.MonkeyPatch):
     frame = MagicMock()
     monkeypatch.setattr(videos, "probe_video_with_codec", lambda path: (48, 32, 1.0, 8.0, "h264"))
-    monkeypatch.setattr(videos, "extract_video_frame", lambda path, frame_index=0, raise_on_timeout=False: frame)
+    monkeypatch.setattr(
+        videos,
+        "extract_representative_video_frame",
+        lambda path, duration=None, fps=None, raise_on_timeout=False: frame,
+    )
 
     assert videos._probe_decodable_video(Path("valid.mp4")) == ((48, 32, 1.0, 8.0), frame)
 
@@ -61,11 +67,11 @@ def test_upload_probe_timeout_is_inconclusive_not_a_rejection(monkeypatch: pytes
     """A decode-worker timeout is server contention, not evidence the video is bad — the
     upload must proceed (without a pre-extracted frame) rather than 415."""
 
-    def _timeout(path, frame_index=0, raise_on_timeout=False):
+    def _timeout(path, duration=None, fps=None, raise_on_timeout=False):
         raise VideoDecodeTimeoutError("decode worker timed out")
 
     monkeypatch.setattr(videos, "probe_video_with_codec", lambda path: (48, 32, 1.0, 8.0, "h264"))
-    monkeypatch.setattr(videos, "extract_video_frame", _timeout)
+    monkeypatch.setattr(videos, "extract_representative_video_frame", _timeout)
 
     assert videos._probe_decodable_video(Path("busy-server.mp4")) == ((48, 32, 1.0, 8.0), None)
 
