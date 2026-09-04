@@ -3458,10 +3458,11 @@
       "referenceExtendCapFullDescription": "All 3 video reference slots are in use, so there is no room for the continuity reference this clip needs. Remove a video reference, then drop the clip again.",
       "referenceExtendHelp": "The generated video is appended to this clip at its End Frame. A linked video reference samples up to the last ~5 seconds before that cutpoint for continuity — never more than the generated clip's own length, since the model discards the overrun at the seam. Its trim re-derives whenever the cutpoints or the frame count change.",
       "referenceImageCapRace": "All {{max}} image reference slots filled while this one was loading, so it was not added.",
+      "referenceImageCost": "{{width}}×{{height}} · {{rows}} rows per step",
       "referenceVideoCapRace": "All {{max}} video reference slots filled while this one was loading, so it was not added.",
       "referenceFromInitialVideo": "Initial video",
       "references": "References",
-      "referencesHelp": "Up to 3 videos and 9 images condition the generation, in order — reordering references changes the result. A video reference can contribute its image track, its soundtrack, or both.",
+      "referencesHelp": "Up to 3 videos and 9 images condition the generation, in order — reordering references changes the result. A video reference can contribute its image track, its soundtrack, or both. Every reference adds rows to each denoising step, so the first image reference starts at maximum detail and later ones match the generation size.",
       "removeReference": "Remove reference",
       "staleReferences": "References are set but the selected model cannot use them."
     }

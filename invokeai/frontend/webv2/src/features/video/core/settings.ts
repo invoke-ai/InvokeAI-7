@@ -18,6 +18,7 @@ import type {
   MiniMaxH3TargetResolution,
   VideoAspectRatioId,
   VideoGenerationMode,
+  VideoReferenceImageDetail,
   VideoReferenceItem,
   VideoSettings,
   VideoSourceClip,
@@ -469,6 +470,22 @@ export const createVideoSourceClip = (item: {
     width: item.width,
   };
 };
+
+/**
+ * The detail a newly added image reference starts on.
+ *
+ * The FIRST image reference keeps upstream's rule, a 2048px short edge: it is usually the
+ * subject the generation is about, and that is where the extra detail earns its cost.
+ * Later ones match the generation size instead. Reference rows are re-attended at every
+ * denoising step and attention is quadratic in the sequence, so a second and third 2048px
+ * reference are what turn a modest surcharge into a doubling — while the marginal value of
+ * conditioning a supporting reference at seven times the output's pixel density is small.
+ *
+ * Only the starting value: every card's selector still offers both, and the card shows the
+ * size and row count each choice produces.
+ */
+export const getDefaultReferenceImageDetail = (references: VideoReferenceItem[]): VideoReferenceImageDetail =>
+  references.some((entry) => entry.kind === 'image') ? 'match' : 'max';
 
 /** The minimum frames a trim must keep — video_concat's crossfade consumes a 2-frame tail. */
 export const MIN_VIDEO_TRIM_FRAMES = 2;
