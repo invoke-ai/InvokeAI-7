@@ -1456,15 +1456,16 @@ const ensureRightRegion = (rightRegion: WidgetRegionState | undefined): WidgetRe
 };
 
 /**
- * Every Edit rail this app shipped as a default while the canvas editors were
- * separate widgets: the tabbed rail, and one unreleased build's variant
- * without Image Map. Those editors are panes of the Layers panel now, so an
- * untouched rail of either shape adopts the shipped Layers-only rail; a
+ * Every Edit rail this app shipped as a default: the tabbed rail from while
+ * the canvas editors were separate widgets, one unreleased build's variant
+ * without Image Map, and the brief Layers-only rail that dropped the preview.
+ * An untouched rail of any of those shapes adopts the shipped rail; a
  * customized rail stays the user's.
  */
 const LEGACY_EDIT_RIGHT_REGION_WIDGET_IDS: ReadonlyArray<readonly WidgetInstanceId[]> = [
   ['layers', 'preview', 'gallery', 'image-map', 'queue'],
   ['layers', 'preview', 'gallery', 'queue'],
+  ['layers'],
 ];
 
 const sameInstanceIds = (region: WidgetRegionState, ids: readonly WidgetInstanceId[]): boolean =>

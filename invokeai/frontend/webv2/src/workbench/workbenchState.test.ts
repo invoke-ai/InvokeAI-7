@@ -561,7 +561,7 @@ describe('workbench widget region defaults', () => {
     }
   });
 
-  it('adopts the Layers-only Edit rail for untouched legacy rails and leaves customized rails alone', () => {
+  it('adopts the shipped Edit rail for untouched legacy rails and leaves customized rails alone', () => {
     const initial = createInitialWorkbenchState();
     const withRight = (instanceIds: Project['widgetRegions']['right']['instanceIds']): WorkbenchState => ({
       ...initial,
@@ -574,6 +574,7 @@ describe('workbench widget region defaults', () => {
       })),
     });
     const legacyEditRail = withRight(['layers', 'preview', 'gallery', 'image-map', 'queue']);
+    const layersOnlyRail = withRight(['layers']);
     const custom = withRight(['image-map', 'layers']);
 
     const hydratedLegacy = getActiveProject(
@@ -581,7 +582,17 @@ describe('workbench widget region defaults', () => {
     );
     expect(hydratedLegacy.widgetRegions.right).toMatchObject({
       activeInstanceId: 'layers',
-      instanceIds: ['layers'],
+      instanceIds: ['layers', 'preview'],
+    });
+
+    // The brief Layers-only rail (which dropped the preview) is a shipped
+    // shape too, so it adopts the current rail and gets the preview back.
+    const hydratedLayersOnly = getActiveProject(
+      workbenchReducer(initial, { state: layersOnlyRail, type: 'hydrateWorkbench' })
+    );
+    expect(hydratedLayersOnly.widgetRegions.right).toMatchObject({
+      activeInstanceId: 'layers',
+      instanceIds: ['layers', 'preview'],
     });
 
     const hydratedCustom = getActiveProject(workbenchReducer(initial, { state: custom, type: 'hydrateWorkbench' }));
