@@ -122,8 +122,9 @@ describe('built-in layout preset descriptors', () => {
         center: ['canvas', 'preview'],
         left: ['generate', 'upscale', 'video'],
         panels: { isBottomOpen: false, isLeftOpen: true, isRightOpen: true },
-        // The Edit rail is the Layers panel alone; its editors are panes inside it.
-        right: ['layers'],
+        // The editors are panes inside the Layers panel; the preview docks
+        // behind Layers so its float/dock surface stays reachable by default.
+        right: ['layers', 'preview'],
       },
       video: {
         active: { bottom: 'gallery:bottom', center: 'preview', left: 'video', right: 'gallery' },

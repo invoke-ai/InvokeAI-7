@@ -212,7 +212,10 @@ export const builtInLayoutPresetDescriptors: BuiltInLayoutPresetDescriptor[] = [
       }),
       right: createRegion({
         activeInstanceId: 'layers',
-        instanceIds: ['layers'],
+        // Preview docks behind Layers: the editors are Layers panes, but the
+        // preview is a floatable widget, and its float/dock pair and floated
+        // Invoke control are only reachable where it is actually placed.
+        instanceIds: ['layers', 'preview'],
         sizePx: 450,
       }),
     },

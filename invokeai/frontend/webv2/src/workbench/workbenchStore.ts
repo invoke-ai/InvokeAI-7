@@ -389,7 +389,9 @@ const createCommands = (
     },
     widgets: {
       dockFloating: command('dockFloatingWidget', (instanceId: string) => ({ instanceId })),
-      float: command('floatWidget', (instanceId: string) => ({ instanceId })),
+      float: command('floatWidget', (instanceId: string, region?: ActionPayload<'floatWidget'>['region']) =>
+        region ? { instanceId, region } : { instanceId }
+      ),
       focusFloating: command('focusFloatingWidget', (instanceId: string) => ({ instanceId })),
       move: command('moveWidgetInstance'),
       open: command('openRegionWidget'),
