@@ -284,6 +284,19 @@ describe('interaction with region placement', () => {
     expect(project.floatingWidgets?.gallery).toBeUndefined();
     expect(project.widgetRegions.right.instanceIds).toContain('gallery');
   });
+
+  it('selectRegionWidget docks a floating instance instead of double-rendering it', () => {
+    // The preview is still a member of the right rail while it floats in a
+    // window docked back to the center; selecting its rail slot would
+    // otherwise make the rail show it alongside the window.
+    let state = workbenchReducer(createInitialWorkbenchState(), { presetId: 'edit', type: 'applyPreset' });
+    state = workbenchReducer(state, { instanceId: 'preview', region: 'center', type: 'floatWidget' });
+    state = workbenchReducer(state, { region: 'right', type: 'selectRegionWidget', widgetId: 'preview' });
+    const project = getActiveProject(state);
+
+    expect(project.floatingWidgets?.preview).toBeUndefined();
+    expect(project.widgetRegions.right.activeInstanceId).toBe('preview');
+  });
 });
 
 describe('pure helpers', () => {
@@ -384,32 +397,30 @@ describe('normalization of persisted floating windows', () => {
 
   it('lets a sole center view keep floating across a reload', () => {
     // Floating the last center view empties the work surface into its fallback
-    // view, and the window's dock control is one click from restoring it — so
-    // normalization honours the float instead of re-docking it, exactly as it
-    // does for a floated rail widget.
-    const project = getActiveProject(createInitialWorkbenchState());
-    const [onlyCenterInstanceId] = project.widgetRegions.center.instanceIds;
-    const normalized = normalizeWorkbenchProject({
-      ...project,
-      floatingWidgets: {
-        [onlyCenterInstanceId]: {
-          heightPx: 300,
-          mode: 'windowed',
-          returnRegion: 'center',
-          stackOrder: 1,
-          widthPx: 400,
-          x: 10,
-          y: 10,
-        },
-      },
-      widgetRegions: {
-        ...project.widgetRegions,
-        center: { ...project.widgetRegions.center, instanceIds: [onlyCenterInstanceId] },
-      },
-    });
+    // view, and the window's dock control is one click from restoring it. The
+    // persisted shape is an EMPTY center whose active pointer names the floated
+    // instance — normalization must honour it, not read it as missing center
+    // data and refill the default arrangement (which would inject views the
+    // project never placed).
+    let state = workbenchReducer(createInitialWorkbenchState(), { presetId: 'video', type: 'applyPreset' });
+    state = workbenchReducer(state, { instanceId: 'preview', region: 'center', type: 'floatWidget' });
+    const project = getActiveProject(state);
+    expect(project.widgetRegions.center.instanceIds).toEqual([]);
 
-    expect(normalized.floatingWidgets?.[onlyCenterInstanceId]).toMatchObject({ returnRegion: 'center' });
+    // The reducer output is exactly what autosave persists.
+    const normalized = normalizeWorkbenchProject(JSON.parse(JSON.stringify(project)));
+
+    expect(normalized.floatingWidgets?.preview).toMatchObject({ returnRegion: 'center' });
     expect(normalized.widgetRegions.center.instanceIds).toEqual([]);
+    expect(normalized.widgetRegions.center.activeInstanceId).toBe('preview');
+
+    // Docking after the reload restores the view.
+    const docked = workbenchReducer(
+      { ...state, projects: state.projects.map((p) => (p.id === normalized.id ? normalized : p)) },
+      { instanceId: 'preview', type: 'dockFloatingWidget' }
+    );
+
+    expect(getActiveProject(docked).widgetRegions.center.instanceIds).toEqual(['preview']);
   });
 });
 
@@ -440,6 +451,22 @@ describe('interaction with presets and undo', () => {
 
     expect(project.floatingWidgets?.gallery).toBeDefined();
     expect(getRegionsHolding(project, 'gallery')).toEqual([]);
+  });
+
+  it('a preset saved with the sole center view floating restores the emptied surface, not a phantom view', () => {
+    // Normalizing before the snapshot must not refill the emptied center with
+    // the default arrangement — the saved preset would otherwise carry center
+    // views the project never placed.
+    let state = workbenchReducer(createInitialWorkbenchState(), { presetId: 'video', type: 'applyPreset' });
+    state = workbenchReducer(state, { instanceId: 'preview', region: 'center', type: 'floatWidget' });
+    state = workbenchReducer(state, { presetId: 'video', type: 'saveLayoutPreset' });
+    // Dock it, then revert to the preset that was saved with it floating.
+    state = workbenchReducer(state, { instanceId: 'preview', type: 'dockFloatingWidget' });
+    state = workbenchReducer(state, { presetId: 'video', type: 'applyPreset' });
+    const project = getActiveProject(state);
+
+    expect(project.floatingWidgets?.preview).toBeDefined();
+    expect(project.widgetRegions.center.instanceIds).toEqual([]);
   });
 
   it('carries a saved preset’s floating window through account rehydration', () => {

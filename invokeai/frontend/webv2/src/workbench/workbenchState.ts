@@ -1562,9 +1562,18 @@ const ensureCenterRegion = (
   fallbackCenterViewId: CenterViewId
 ): WidgetRegionState => {
   const defaultCenterRegion = createWidgetRegions().center;
+  // A center with no region data at all adopts the default arrangement, but an
+  // explicitly emptied one is authoritative: the last view may be floating in a
+  // window (the surface falls back until its dock control returns it), and
+  // refilling it would inject views the project never placed.
+  const instanceIds = centerRegion ? centerRegion.instanceIds : defaultCenterRegion.instanceIds;
   const activeInstanceId = centerRegion?.activeInstanceId ?? getCenterWidgetIdFromViewId(fallbackCenterViewId);
-  const instanceIds = centerRegion?.instanceIds.length ? centerRegion.instanceIds : defaultCenterRegion.instanceIds;
-  const normalizedActiveInstanceId = instanceIds.includes(activeInstanceId) ? activeInstanceId : instanceIds[0];
+  // A pointer that names none of the members is clamped — but an emptied
+  // center keeps its pointer, which names the instance now floating in a
+  // window; the boot preload reads it to have that window's chunk ready.
+  const normalizedActiveInstanceId = instanceIds.includes(activeInstanceId)
+    ? activeInstanceId
+    : (instanceIds[0] ?? activeInstanceId);
 
   return {
     ...defaultCenterRegion,
@@ -3801,10 +3810,16 @@ export const __workbenchReducerInternal = (
       return updateProjectById(state, action.projectId ?? state.activeProjectId, (project) => {
         const region = project.widgetRegions[action.region];
 
+        // Selecting a slot names the instance as the region's shown surface, so
+        // it docks: an instance must never render in a panel and a floating
+        // window at once — the same rule `openRegionWidget` enforces.
+        const { [action.widgetId]: _floated, ...floatingWidgets } = project.floatingWidgets ?? {};
+
         if (action.region === 'center') {
           return applyAutoRouteForRevealedInstance(
             {
               ...project,
+              floatingWidgets,
               widgetRegions: {
                 ...project.widgetRegions,
                 center: { ...region, activeInstanceId: action.widgetId, isCollapsed: false },
@@ -3822,6 +3837,7 @@ export const __workbenchReducerInternal = (
         if (region.activeInstanceId === action.widgetId) {
           const disclosed = {
             ...project,
+            floatingWidgets,
             layout: openPanelForRegion(project.layout, action.region),
             widgetRegions: {
               ...project.widgetRegions,
@@ -3837,6 +3853,7 @@ export const __workbenchReducerInternal = (
         return applyAutoRouteForRevealedInstance(
           {
             ...project,
+            floatingWidgets,
             layout: openPanelForRegion(project.layout, action.region),
             widgetRegions: {
               ...project.widgetRegions,
