@@ -12,20 +12,23 @@ filter is covered separately in tests/app/services/video_records.
 """
 
 import inspect
+import io
 import json
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
-from fastapi import status
+from fastapi import UploadFile, status
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
+from starlette.datastructures import Headers
 
 from invokeai.app.api.dependencies import ApiDependencies
 from invokeai.app.api.routers import videos as videos_router_module
 from invokeai.app.api.routers.videos import (
     VideoNamesBatch,
+    _classify_upload,
     _is_mp4_file,
     delete_uncategorized_videos,
     delete_video,
@@ -786,6 +789,29 @@ def test_upload_rejects_unrecognized_file_kind(client: TestClient, mock_invoker:
     )
 
     assert response.status_code == status.HTTP_415_UNSUPPORTED_MEDIA_TYPE
+
+
+@pytest.mark.parametrize(
+    ("filename", "expected"),
+    [
+        ("clip.wmv", "video"),
+        ("clip.asf", "video"),
+        ("song.wma", "audio"),
+        ("clip.MOV", "video"),
+        ("voice.M4A", "audio"),
+        ("notes.txt", None),
+    ],
+)
+def test_classify_upload_falls_back_to_the_extension(filename: str, expected: str | None) -> None:
+    """A file whose type the browser could not map arrives as octet-stream, leaving the
+    extension as the only signal. The picker offers these, so the route must accept them."""
+    upload = UploadFile(
+        file=io.BytesIO(b""),
+        filename=filename,
+        headers=Headers({"content-type": "application/octet-stream"}),
+    )
+
+    assert _classify_upload(upload) == expected
 
 
 def test_mp4_validation_allows_boxes_before_file_type(tmp_path: Path) -> None:

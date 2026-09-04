@@ -66,9 +66,37 @@ VIDEO_MAX_AGE = 31536000
 # are wrapped into waveform videos so audio clips flow through the video pipeline
 # (gallery, trim, audio-only reference conditioning) without a first-class audio type.
 ACCEPTED_VIDEO_MIME_PREFIXES = ("video/",)
-ACCEPTED_VIDEO_EXTENSIONS = (".mp4", ".mov", ".m4v", ".webm", ".mkv", ".avi", ".mpg", ".mpeg", ".3gp")
+# The extension lists are the fallback for uploads whose type the browser could not
+# determine (they arrive as application/octet-stream); the MIME prefixes above accept the
+# ordinary case. Everything here is demuxable and decodable by the bundled ffmpeg — ASF
+# (Windows Media) included — and lands as H.264/AAC MP4 through the ingest converter.
+ACCEPTED_VIDEO_EXTENSIONS = (
+    ".mp4",
+    ".mov",
+    ".m4v",
+    ".webm",
+    ".mkv",
+    ".avi",
+    ".mpg",
+    ".mpeg",
+    ".3gp",
+    ".wmv",
+    ".asf",
+)
 ACCEPTED_AUDIO_MIME_PREFIXES = ("audio/",)
-ACCEPTED_AUDIO_EXTENSIONS = (".mp3", ".m4a", ".aac", ".wav", ".flac", ".ogg", ".oga", ".opus", ".aiff", ".aif")
+ACCEPTED_AUDIO_EXTENSIONS = (
+    ".mp3",
+    ".m4a",
+    ".aac",
+    ".wav",
+    ".flac",
+    ".ogg",
+    ".oga",
+    ".opus",
+    ".aiff",
+    ".aif",
+    ".wma",
+)
 
 # Per-chunk size for HTTP Range responses (1 MB)
 RANGE_CHUNK_SIZE = 1024 * 1024
