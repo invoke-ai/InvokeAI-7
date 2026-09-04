@@ -714,3 +714,27 @@ def test_install_peer_aware_empty_cache_wraps_torch_entry_point(monkeypatch):
         # monkeypatch restores the attribute we set; make sure the true original is back for
         # other tests regardless of ordering.
         torch_mod.cuda.empty_cache = original
+
+
+def test_disable_conv_benchmark_empty_cache_flips_torch_flag():
+    """The multi-GPU startup path must clear torch's post-conv-find emptyCache flag (and no-op
+    gracefully on builds that lack it)."""
+    from invokeai.backend.util.devices import disable_conv_benchmark_empty_cache
+
+    getter = getattr(torch._C, "_cuda_get_conv_benchmark_empty_cache", None)
+    setter = getattr(torch._C, "_cudnn_set_conv_benchmark_empty_cache", None)
+    if getter is None or setter is None:
+        # CPU-only torch builds lack the flag; the function must still be a safe no-op.
+        disable_conv_benchmark_empty_cache()
+        return
+
+    original = getter()
+    try:
+        setter(True)
+        disable_conv_benchmark_empty_cache()
+        assert getter() is False
+        # Idempotent: a second call keeps it disabled without raising.
+        disable_conv_benchmark_empty_cache()
+        assert getter() is False
+    finally:
+        setter(original)

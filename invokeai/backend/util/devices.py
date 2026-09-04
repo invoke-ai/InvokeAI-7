@@ -498,3 +498,34 @@ def install_peer_aware_empty_cache() -> None:
 
     setattr(peer_aware_empty_cache, _PEER_AWARE_SENTINEL, True)
     torch.cuda.empty_cache = peer_aware_empty_cache
+
+
+def disable_conv_benchmark_empty_cache() -> None:
+    """Stop torch's conv algorithm search from calling global emptyCache() after each find.
+
+    When torch searches for a convolution algorithm (cuDNN benchmark mode; MIOpen on ROCm on
+    every algo-cache miss, benchmark flag or not), ``findAlgorithm`` ends the search with a
+    process-global ``CUDACachingAllocator::emptyCache()`` to release benchmarking workspace
+    (``aten/src/ATen/native/miopen/Conv_miopen.cpp``, likewise the cuDNN path). That call takes
+    every CUDA/HIP device's allocator mutex and frees their cached blocks — freezing a peer
+    GPU's worker mid-step exactly like the Python-level ``torch.cuda.empty_cache`` calls
+    handled by ``install_peer_aware_empty_cache``, but from C++, out of reach of that wrapper
+    (observed via py-spy on a dual-GPU ROCm rig: one worker inside
+    ``chooseAlgorithm -> emptyCache -> hipFree`` waiting out the other worker's 40-100 s
+    denoise step; each new conv shape in the process re-triggers it).
+
+    The call is gated on ``_cudnn_get_conv_benchmark_empty_cache()``, which torch exposes a
+    setter for. Disabling it leaves the benchmarking workspace blocks cached in the allocator
+    for reuse instead of returning them to the driver — the same trade the peer-aware skips
+    already make everywhere else. Called only on multi-GPU installs (see
+    ``DefaultSessionProcessor.start``); single-GPU installs keep torch's default behavior.
+
+    No-op on torch builds that lack the flag (e.g. CPU-only builds).
+    """
+    setter = getattr(torch._C, "_cudnn_set_conv_benchmark_empty_cache", None)
+    if setter is None:
+        return
+    setter(False)
+    InvokeAILogger.get_logger("TorchDevice").debug(
+        "Disabled torch's post-conv-algorithm-search global emptyCache (multi-GPU install)."
+    )
