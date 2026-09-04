@@ -1,4 +1,9 @@
-import type { MiniMaxH3TargetResolution, VideoAspectRatioId, WanTargetResolution } from './types';
+import type {
+  MiniMaxH3TargetResolution,
+  VideoAspectRatioId,
+  VideoReferenceImageDetail,
+  WanTargetResolution,
+} from './types';
 
 /**
  * Client-side ports of the backend's video canvas math, so the panel can show
@@ -8,6 +13,8 @@ import type { MiniMaxH3TargetResolution, VideoAspectRatioId, WanTargetResolution
  *   ("nearest" rounding — the node default; the other modes are workflow-only).
  * - MiniMax H3: `resolve_canvas_size` in `invokeai/backend/minimax_h3/packing.py`
  *   and `resolve_lowres_canvas_size` in `invokeai/backend/minimax_h3/presets.py`.
+ * - Ref2VA image references: `resolve_reference_image_short_edge` and
+ *   `normalize_reference_image` in `invokeai/backend/minimax_h3/reference_conditioning.py`.
  *
  * Where the backend raises, these return null: the panel falls back to defaults
  * and reports the problem through `getVideoValidationReasons` instead of throwing.
@@ -145,6 +152,63 @@ export const resolveMiniMaxH3Canvas = (
     height: snapToMultiple(rawHeight, MINIMAX_H3_CANVAS_MULTIPLE),
     width: snapToMultiple(rawWidth, MINIMAX_H3_CANVAS_MULTIPLE),
   };
+};
+
+/** Upstream's reference-image rule: a constant short edge, whatever the generation size is. */
+export const MINIMAX_H3_REFERENCE_IMAGE_SHORT_EDGE = 2048;
+
+/**
+ * Pixels per packed row: H3 encodes at a 16x spatial compression and the transformer packs
+ * 2x2 latent patches, so a 32x32 pixel block is one row.
+ */
+export const MINIMAX_H3_ROW_PIXELS = 32 * 32;
+
+/**
+ * A reference image's normalized size and the rows it contributes.
+ *
+ * Those rows join the packed sequence and are re-attended at EVERY denoising step, with
+ * attention quadratic in the sequence length — which is the whole difference between the
+ * two detail settings. `'max'` pins the short edge to 2048 no matter how small the
+ * generation is; `'match'` scales the reference to the generation's pixel area (never
+ * above the 2048 rule), typically an order of magnitude fewer rows.
+ *
+ * Null when the inputs are degenerate, or when `'match'` has no target area to match —
+ * the panel then shows nothing rather than a wrong number.
+ */
+export const resolveMiniMaxH3ReferenceImage = (
+  width: number,
+  height: number,
+  detail: VideoReferenceImageDetail,
+  targetArea: number | null
+): { dimensions: VideoDimensions; rows: number } | null => {
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+    return null;
+  }
+
+  let shortEdge = MINIMAX_H3_REFERENCE_IMAGE_SHORT_EDGE;
+
+  if (detail === 'match') {
+    if (targetArea === null || !Number.isFinite(targetArea) || targetArea <= 0) {
+      return null;
+    }
+    // The backend rounds with Python's banker's rounding here, so `roundHalfToEven` is
+    // what keeps this estimate equal to the size the graph actually encodes.
+    const matched = Math.max(
+      MINIMAX_H3_CANVAS_MULTIPLE,
+      roundHalfToEven(Math.min(width, height) * Math.sqrt(targetArea / (width * height)))
+    );
+
+    shortEdge = Math.min(MINIMAX_H3_REFERENCE_IMAGE_SHORT_EDGE, matched);
+  }
+
+  const scale = shortEdge / Math.min(width, height);
+  const dimensions = {
+    height: snapToMultiple(height * scale, MINIMAX_H3_CANVAS_MULTIPLE),
+    width: snapToMultiple(width * scale, MINIMAX_H3_CANVAS_MULTIPLE),
+  };
+
+  // Both axes are multiples of 32, so this is exact.
+  return { dimensions, rows: (dimensions.width * dimensions.height) / MINIMAX_H3_ROW_PIXELS };
 };
 
 /** The width/height parts of a preset ratio, for feeding the canvas resolvers. */

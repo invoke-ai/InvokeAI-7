@@ -585,6 +585,7 @@ export const VideoWidgetView = () => {
               maxImages={policy.references?.maxImages ?? 9}
               maxVideos={policy.references?.maxVideos ?? 3}
               references={values.references}
+              targetArea={dimensions ? dimensions.width * dimensions.height : null}
               onChange={setReferences}
             />
           </Stack>

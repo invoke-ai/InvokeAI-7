@@ -12,6 +12,7 @@ import {
   cloneVideoWidgetValues,
   createVideoSourceClip,
   deriveReferenceExtendClip,
+  getDefaultReferenceImageDetail,
   isVideoSettings,
   isVideoSourceClip,
   normalizeVideoSettings,
@@ -257,6 +258,29 @@ describe('createVideoSourceClip', () => {
     expect(clip.numFrames).toBeGreaterThanOrEqual(1);
     expect(clip.endFrame).toBeGreaterThanOrEqual(0);
     expect(clip.startFrame).toBe(0);
+  });
+});
+
+describe('getDefaultReferenceImageDetail', () => {
+  const imageReference = {
+    detail: 'max',
+    image: { height: 1080, image_name: 'ref.png', width: 1920 },
+    kind: 'image',
+  } as const;
+  const videoReference = {
+    clip: SOURCE_VIDEO,
+    conditioning: 'video_audio',
+    kind: 'video',
+  } as const;
+
+  it('starts the first image reference at maximum detail', () => {
+    expect(getDefaultReferenceImageDetail([])).toBe('max');
+    expect(getDefaultReferenceImageDetail([videoReference])).toBe('max');
+  });
+
+  it('matches the generation size once an image reference is placed', () => {
+    expect(getDefaultReferenceImageDetail([imageReference])).toBe('match');
+    expect(getDefaultReferenceImageDetail([videoReference, imageReference])).toBe('match');
   });
 });
 
