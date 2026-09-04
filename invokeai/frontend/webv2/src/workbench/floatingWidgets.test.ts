@@ -64,7 +64,7 @@ describe('floatWidget', () => {
     expect(floating?.queue.x).toBeGreaterThan(floating?.gallery.x ?? 0);
   });
 
-  it('refuses to float the last center view, which would blank the work surface', () => {
+  it('floats the last center view, leaving the surface to its fallback view', () => {
     let state = createInitialWorkbenchState();
     const centerInstanceIds = getActiveProject(state).widgetRegions.center.instanceIds;
 
@@ -74,7 +74,52 @@ describe('floatWidget', () => {
 
     const lastCenterInstanceId = centerInstanceIds[0];
     expect(getActiveProject(state).widgetRegions.center.instanceIds).toEqual([lastCenterInstanceId]);
-    expect(workbenchReducer(state, { instanceId: lastCenterInstanceId, type: 'floatWidget' })).toBe(state);
+
+    state = workbenchReducer(state, { instanceId: lastCenterInstanceId, type: 'floatWidget' });
+    const center = getActiveProject(state).widgetRegions.center;
+
+    // The surface may go empty — the fallback view carries it — and the
+    // window remembers the center as its dock-back target. The active pointer
+    // holds the floated instance so docking restores it as the active view,
+    // and the center takes no collapsed state.
+    expect(center.instanceIds).toEqual([]);
+    expect(center.activeInstanceId).toBe(lastCenterInstanceId);
+    expect(center.isCollapsed).toBe(false);
+    expect(getActiveProject(state).floatingWidgets?.[lastCenterInstanceId]).toMatchObject({
+      returnRegion: 'center',
+    });
+  });
+
+  it('docks back into the region the float was asked from, not the first member region', () => {
+    // The Edit preset places the preview in the center AND the right rail, and
+    // `right` precedes `center` in the region map — without the origin hint,
+    // floating it from the center chrome would detach the rail's membership
+    // and dock it back there.
+    let state = workbenchReducer(createInitialWorkbenchState(), { presetId: 'edit', type: 'applyPreset' });
+    state = workbenchReducer(state, { instanceId: 'preview', region: 'center', type: 'floatWidget' });
+    const project = getActiveProject(state);
+
+    expect(project.widgetRegions.center.instanceIds).not.toContain('preview');
+    expect(project.widgetRegions.right.instanceIds).toContain('preview');
+    expect(project.floatingWidgets?.preview).toMatchObject({ returnRegion: 'center' });
+
+    const docked = workbenchReducer(state, { instanceId: 'preview', type: 'dockFloatingWidget' });
+
+    expect(getActiveProject(docked).widgetRegions.center.instanceIds).toContain('preview');
+    expect(getActiveProject(docked).widgetRegions.center.activeInstanceId).toBe('preview');
+  });
+
+  it('falls back to a member region when the float carries no region hint', () => {
+    let state = workbenchReducer(createInitialWorkbenchState(), { presetId: 'edit', type: 'applyPreset' });
+    state = workbenchReducer(state, { instanceId: 'preview', type: 'floatWidget' });
+    const project = getActiveProject(state);
+    const floating = project.floatingWidgets?.preview;
+
+    // The hint is what makes dock-back deterministic; without it some member
+    // region still hosts the float — which one is region map order, not a
+    // contract.
+    expect(floating).toBeDefined();
+    expect(['center', 'right']).toContain(floating!.returnRegion);
   });
 
   it('collapses a rail it empties instead of leaving it open and blank', () => {
@@ -337,7 +382,11 @@ describe('normalization of persisted floating windows', () => {
     });
   });
 
-  it('docks rather than empties the center region', () => {
+  it('lets a sole center view keep floating across a reload', () => {
+    // Floating the last center view empties the work surface into its fallback
+    // view, and the window's dock control is one click from restoring it — so
+    // normalization honours the float instead of re-docking it, exactly as it
+    // does for a floated rail widget.
     const project = getActiveProject(createInitialWorkbenchState());
     const [onlyCenterInstanceId] = project.widgetRegions.center.instanceIds;
     const normalized = normalizeWorkbenchProject({
@@ -359,8 +408,8 @@ describe('normalization of persisted floating windows', () => {
       },
     });
 
-    expect(normalized.floatingWidgets).toBeUndefined();
-    expect(normalized.widgetRegions.center.instanceIds).toEqual([onlyCenterInstanceId]);
+    expect(normalized.floatingWidgets?.[onlyCenterInstanceId]).toMatchObject({ returnRegion: 'center' });
+    expect(normalized.widgetRegions.center.instanceIds).toEqual([]);
   });
 });
 

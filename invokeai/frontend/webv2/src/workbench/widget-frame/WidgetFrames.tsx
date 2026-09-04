@@ -16,10 +16,9 @@ import { useMountEffect } from '@platform/react/useMountEffect';
 import { IconButton } from '@platform/ui/Button';
 import { Tooltip } from '@platform/ui/Tooltip';
 import { useFocusRegionProps } from '@workbench/focusRegions';
+import { isWidgetRegion } from '@workbench/layoutContracts';
 import { openWorkbenchSettings } from '@workbench/settings/settingsDialogStore';
 import { resolveWidgetInstanceLabel } from '@workbench/widgetLabels';
-import { getEnabledCenterViewCount } from '@workbench/widgetPlacementCommands';
-import { areWidgetPlacementProjectsEqual, getWidgetPlacementProject } from '@workbench/widgetPlacementMeta';
 import { useActiveProjectSelector, useWorkbenchCommands } from '@workbench/WorkbenchContext';
 import {
   clampPanelSize,
@@ -27,7 +26,6 @@ import {
   getVisiblePanelCollapseThreshold,
   shouldSnapPanelShutAt,
 } from '@workbench/workbenchState';
-import { useWorkbenchWidgetRegistry } from '@workbench/WorkbenchWidgetRegistryContext';
 import { PictureInPicture2Icon, SettingsIcon } from 'lucide-react';
 import {
   useCallback,
@@ -310,23 +308,29 @@ export const WidgetFloatButton = ({
   region: WorkbenchRegion;
 }) => {
   const { t } = useTranslation();
-  const placementProject = useActiveProjectSelector(getWidgetPlacementProject, areWidgetPlacementProjectsEqual);
-  const { getWidgetById } = useWorkbenchWidgetRegistry();
   const { widgets } = useWorkbenchCommands();
+  // A dialog or popover's chrome never floats; anything else is a dockable
+  // layout region, which is also the dock-back target.
+  const dockableRegion = isWidgetRegion(region) ? region : undefined;
   // Floating unmounts the docked subtree; the draft registry's cleanup only
-  // deregisters the flusher, so an uncommitted edit is lost without this.
+  // deregisters the flusher, so an uncommitted edit is lost without this. The
+  // region rides along: one instance may be placed in several regions (the
+  // preview lives in the center and a rail), and the window docks back into
+  // the one whose button was clicked.
   const handleFloat = useCallback(() => {
+    if (!dockableRegion) {
+      return;
+    }
+
     flushWorkbenchDrafts();
-    widgets.float(instanceId);
-  }, [instanceId, widgets]);
+    widgets.float(instanceId, dockableRegion);
+  }, [dockableRegion, instanceId, widgets]);
   // Floating is offered only from dockable regions; the floating window's own
-  // chrome carries the dock control. The last center *view* is not offered it
-  // either — floating it out would leave the work surface with nothing to
-  // show, which is why `closeWidgetPlacement` refuses the same removal.
-  const canFloat =
-    Boolean(manifest.allowFloating) &&
-    region !== 'floating' &&
-    !(region === 'center' && getEnabledCenterViewCount(placementProject, getWidgetById) === 1);
+  // chrome carries the dock control. Even the last center *view* may float:
+  // the emptied surface falls back to the center's fallback view, and the
+  // window's dock control restores it — only the destructive placements
+  // (`closeWidgetPlacement`, `toggleRegionWidget`) still refuse that.
+  const canFloat = Boolean(manifest.allowFloating) && dockableRegion !== undefined;
 
   if (!canFloat) {
     return null;

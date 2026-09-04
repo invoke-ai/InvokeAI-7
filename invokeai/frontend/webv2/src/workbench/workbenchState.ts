@@ -237,7 +237,12 @@ type WorkbenchReducerAction =
     }
   | { type: 'setRegionWidgetCollapsed'; region: WidgetRegion; isCollapsed: boolean }
   | { type: 'setRegionWidgetSize'; region: WidgetRegion; sizePx: number }
-  | { type: 'floatWidget'; instanceId: WidgetInstanceId }
+  | {
+      type: 'floatWidget';
+      instanceId: WidgetInstanceId;
+      /** The chrome the float was asked from; docking returns the window there. */
+      region?: WidgetRegion;
+    }
   | { type: 'dockFloatingWidget'; instanceId: WidgetInstanceId }
   | {
       type: 'setFloatingWidgetGeometry';
@@ -1669,9 +1674,10 @@ const normalizeFloatingWidgets = (
  * reload they hand back a widget the person had floated. Floating wins: it is
  * the deliberate act, while the region entry is the migration's guess.
  *
- * The center region is the exception, because it must always hold a view. If
- * honouring the floating entries would empty it, they lose and the widget
- * stays docked.
+ * That holds for the center too, even when its last view is the one floating:
+ * the surface falls back to the center's fallback view, and the window's dock
+ * control is one click from restoring it. Only the destructive placements
+ * (`toggleRegionWidget`, `closeWidgetPlacement`) still refuse to empty it.
  */
 const reconcileFloatingWidgets = (
   widgetRegions: Record<WidgetRegion, WidgetRegionState>,
@@ -1692,13 +1698,6 @@ const reconcileFloatingWidgets = (
     const instanceIds = region.instanceIds.filter((instanceId) => !remainingFloating[instanceId]);
 
     if (instanceIds.length === region.instanceIds.length) {
-      continue;
-    }
-
-    if (regionId === 'center' && instanceIds.length === 0) {
-      remainingFloating = Object.fromEntries(
-        Object.entries(remainingFloating).filter(([instanceId]) => !region.instanceIds.includes(instanceId))
-      );
       continue;
     }
 
@@ -3893,23 +3892,32 @@ export const __workbenchReducerInternal = (
           return project;
         }
 
-        const hostEntry = (Object.entries(project.widgetRegions) as [WidgetRegion, WidgetRegionState][]).find(
-          ([, region]) => region.instanceIds.includes(action.instanceId)
-        );
+        // One instance may be a member of several regions (the preview is
+        // placed in the center and a rail by default), so the region the float
+        // was asked from — the chrome whose button was clicked — decides where
+        // the window docks back to. The unhinted fallback takes the first
+        // member region in the region map's order, which persisted projects
+        // do not agree on.
+        const findHost = (match: (regionId: WidgetRegion, region: WidgetRegionState) => boolean) =>
+          (Object.entries(project.widgetRegions) as [WidgetRegion, WidgetRegionState][]).find(([regionId, region]) =>
+            match(regionId, region)
+          );
+        const hostEntry = action.region
+          ? findHost((regionId, region) => regionId === action.region && region.instanceIds.includes(action.instanceId))
+          : undefined;
+        const resolvedHostEntry = hostEntry ?? findHost((_, region) => region.instanceIds.includes(action.instanceId));
 
-        if (!hostEntry || !project.widgetInstances[action.instanceId]) {
+        if (!resolvedHostEntry || !project.widgetInstances[action.instanceId]) {
           return project;
         }
 
-        const [hostRegionId, hostRegion] = hostEntry;
+        const [hostRegionId, hostRegion] = resolvedHostEntry;
 
-        // The work surface must keep a view. `toggleRegionWidget` and
-        // `closeWidgetPlacement` refuse the same removal; floating it out is
-        // the same removal with a window attached.
-        if (hostRegionId === 'center' && hostRegion.instanceIds.length === 1) {
-          return project;
-        }
-
+        // Floating may empty the center, unlike `toggleRegionWidget` and
+        // `closeWidgetPlacement`, which still refuse the same removal: those
+        // discard the view outright, while a float keeps it one dock click
+        // away, and the emptied surface falls back to the center's fallback
+        // view rather than standing blank.
         const instanceIds = hostRegion.instanceIds.filter((instanceId) => instanceId !== action.instanceId);
         const fallbackInstanceId = getNextInstanceId(hostRegion, action.instanceId);
         const floating: FloatingWidgetState = {
@@ -3935,8 +3943,9 @@ export const __workbenchReducerInternal = (
                 instanceIds,
                 // Floating the last widget out of a rail leaves nothing to show,
                 // so the rail collapses rather than standing open and empty —
-                // the same repair `toggleRegionWidget` makes.
-                isCollapsed: instanceIds.length === 0 ? true : hostRegion.isCollapsed,
+                // the same repair `toggleRegionWidget` makes. The center has no
+                // collapsed state; its fallback view carries the empty surface.
+                isCollapsed: instanceIds.length === 0 && hostRegionId !== 'center' ? true : hostRegion.isCollapsed,
               },
             },
           },

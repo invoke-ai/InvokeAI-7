@@ -12,9 +12,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
  * The float control replaced a menu item, so the conditions that used to hide
- * that item now decide whether a button renders at all: a widget that may not
- * float, and the last center view — floating it out would leave the work
- * surface empty. Docking is covered by the floating window's own chrome.
+ * that item now decide whether a button renders at all: only a widget whose
+ * manifest forbids floating, and the floating region itself. Even the last
+ * center view may float — the emptied surface falls back to the center's
+ * fallback view until the window docks back. Docking is covered by the
+ * floating window's own chrome.
  */
 
 const floatMocks = vi.hoisted(() => ({
@@ -119,7 +121,7 @@ describe('WidgetFloatButton', () => {
     });
 
     expect(floatMocks.flushWorkbenchDrafts).toHaveBeenCalled();
-    expect(floatMocks.float).toHaveBeenCalledWith('image-map-instance');
+    expect(floatMocks.float).toHaveBeenCalledWith('image-map-instance', 'right');
     expect(floatMocks.flushWorkbenchDrafts.mock.invocationCallOrder[0]).toBeLessThan(
       floatMocks.float.mock.invocationCallOrder[0]
     );
@@ -129,8 +131,8 @@ describe('WidgetFloatButton', () => {
     expect(await renderButton('right', false)).toBeNull();
   });
 
-  it('renders nothing for the last enabled center view', async () => {
-    expect(await renderButton('center')).toBeNull();
+  it('renders for the last enabled center view — the emptied surface falls back until it docks back', async () => {
+    expect(await renderButton('center')).not.toBeNull();
   });
 
   it('renders for a center view that is not the last one', async () => {
