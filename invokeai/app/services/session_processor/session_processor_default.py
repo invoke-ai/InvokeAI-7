@@ -42,7 +42,7 @@ from invokeai.app.services.shared.graph import CollectInvocation, IterateInvocat
 from invokeai.app.services.shared.invocation_context import InvocationContextData, build_invocation_context
 from invokeai.app.util.profiler import Profiler
 from invokeai.backend.util.device_pool import GENERATION_DEVICE_POOL
-from invokeai.backend.util.devices import TorchDevice
+from invokeai.backend.util.devices import TorchDevice, disable_conv_benchmark_empty_cache
 
 # A failed owner lookup is retried before the item is refused, so that a transient error
 # — a busy-timeout on the shared SQLite connection under multi-GPU write contention, say —
@@ -617,6 +617,12 @@ class DefaultSessionProcessor(SessionProcessorBase):
         # Register the generation devices so the model loader can discover idle GPUs to host text
         # encoders on (see offload_text_encoders_to_idle_gpus). None means legacy single-device mode.
         GENERATION_DEVICE_POOL.set_generation_devices([d for d in devices if d is not None])
+
+        # With more than one CUDA/HIP generation device, torch's post-conv-algorithm-search global
+        # emptyCache() convoys the peer GPU's in-flight step from C++, where the peer-aware
+        # empty_cache wrapper cannot intercept it. Trade it for cached workspace blocks instead.
+        if sum(1 for d in devices if d is not None and d.type == "cuda") > 1:
+            disable_conv_benchmark_empty_cache()
 
         # If profiling is enabled, create a profiler. The same profiler will be used for all sessions. Internally,
         # the profiler will create a new profile for each session. Profiling uses a process-global cProfile, which
