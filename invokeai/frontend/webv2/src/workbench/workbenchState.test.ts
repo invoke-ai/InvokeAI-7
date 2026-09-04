@@ -471,6 +471,68 @@ describe('generation-device orchestration metadata', () => {
   });
 });
 
+describe('workbench hydration invariants', () => {
+  it('seeds a draft when a projectless session hydrates', () => {
+    const initial = createInitialWorkbenchState();
+    // What `persistEmptySession` caches after the last tab is closed. A load path
+    // that hands this over verbatim used to leave the store with no active project,
+    // which the first consumer to read one dereferences.
+    const emptySession: WorkbenchState = { ...initial, activeProjectId: '', projects: [] };
+
+    const hydrated = workbenchReducer(initial, { state: emptySession, type: 'hydrateWorkbench' });
+
+    expect(hydrated.projects).toHaveLength(1);
+    expect(hydrated.activeProjectId).toBe(hydrated.projects[0]?.id);
+    expect(getActiveProject(hydrated).widgetRegions.left.instanceIds.length).toBeGreaterThan(0);
+  });
+
+  it('builds that draft from the cached account, not the shipped defaults', () => {
+    const initial = createInitialWorkbenchState();
+    const project = getActiveProject(initial);
+    // The account's saved override of the default preset is what an empty cache
+    // still owns; the seeded draft has to inherit it the way the offline load path's
+    // replacement draft does.
+    const customizedDefault = {
+      ...resolveSavedLayoutPreset(initial.account, initial.account.activeLayoutPresetId).snapshot,
+      widgetRegions: {
+        ...project.widgetRegions,
+        left: { ...project.widgetRegions.left, instanceIds: ['generate'] },
+      },
+    };
+    const emptySession: WorkbenchState = {
+      ...initial,
+      account: {
+        ...initial.account,
+        layoutPresetOverrides: { [initial.account.activeLayoutPresetId]: customizedDefault },
+      },
+      activeProjectId: '',
+      projects: [],
+    };
+
+    const hydrated = workbenchReducer(initial, { state: emptySession, type: 'hydrateWorkbench' });
+
+    expect(getActiveProject(hydrated).widgetRegions.left.instanceIds).toEqual(['generate']);
+  });
+
+  it('repairs an active project id that names no hydrated project', () => {
+    const initial = createInitialWorkbenchState();
+    const danglingActiveId: WorkbenchState = { ...initial, activeProjectId: 'project-that-was-refused' };
+
+    const hydrated = workbenchReducer(initial, { state: danglingActiveId, type: 'hydrateWorkbench' });
+
+    expect(hydrated.activeProjectId).toBe(hydrated.projects[0]?.id);
+  });
+
+  it('leaves a populated session alone', () => {
+    const initial = createInitialWorkbenchState();
+
+    const hydrated = workbenchReducer(initial, { state: initial, type: 'hydrateWorkbench' });
+
+    expect(hydrated.projects.map((project) => project.id)).toEqual(initial.projects.map((project) => project.id));
+    expect(hydrated.activeProjectId).toBe(initial.activeProjectId);
+  });
+});
+
 describe('workbench widget region defaults', () => {
   it('starts new projects from the curated Compose widget defaults', () => {
     const state = createInitialWorkbenchState();
