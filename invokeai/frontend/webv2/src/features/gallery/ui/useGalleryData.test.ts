@@ -30,6 +30,20 @@ const filter = {
   starredFirst: false,
 };
 
+const createBackendItem = (name: string, createdAt: string): GalleryItem => ({
+  boardId: 'none',
+  category: 'general',
+  createdAt,
+  fullUrl: `/images/${name}`,
+  height: 512,
+  isIntermediate: false,
+  kind: 'image',
+  name,
+  starred: false,
+  thumbnailUrl: `/thumbnails/${name}`,
+  width: 512,
+});
+
 describe('mergeGalleryItemWindow', () => {
   it('deduplicates by qualified key and mirrors server starred/time/kind/name ordering', () => {
     const image = {
@@ -79,20 +93,9 @@ describe('mergeGalleryItemWindow', () => {
   });
 
   it('bounds the optimistic image overlay and the mixed rendered window', () => {
-    const createItem = (index: number): GalleryItem => ({
-      boardId: 'none',
-      category: 'general',
-      createdAt: new Date(Date.UTC(2026, 0, 1, 0, 0, index)).toISOString(),
-      fullUrl: `/images/${index}`,
-      height: 512,
-      isIntermediate: false,
-      kind: 'image',
-      name: `image-${index}.png`,
-      starred: false,
-      thumbnailUrl: `/thumbnails/${index}`,
-      width: 512,
-    });
-    const backendItems = Array.from({ length: 600 }, (_, index) => createItem(index));
+    const backendItems = Array.from({ length: 600 }, (_, index) =>
+      createBackendItem(`image-${index}.png`, new Date(Date.UTC(2026, 0, 1, 0, 0, index)).toISOString())
+    );
     const recentImages = getBoundedRecentImages(
       Array.from({ length: 1_000 }, (_, index) => asGenerated(createImage(1_000 + index)))
     );
@@ -104,24 +107,11 @@ describe('mergeGalleryItemWindow', () => {
   });
 
   it('preserves backend relevance order and skips the recent overlay while a semantic query is active', () => {
-    const createRankedItem = (name: string, createdAt: string): GalleryItem => ({
-      boardId: 'none',
-      category: 'general',
-      createdAt,
-      fullUrl: `/images/${name}`,
-      height: 64,
-      isIntermediate: false,
-      kind: 'image',
-      name,
-      starred: false,
-      thumbnailUrl: `/thumbnails/${name}`,
-      width: 64,
-    });
     // Deliberately out of chronological order: relevance is the order.
     const rankedItems = [
-      createRankedItem('oldest.png', '2026-01-01T00:00:00.000Z'),
-      createRankedItem('newest.png', '2026-07-01T00:00:00.000Z'),
-      createRankedItem('middle.png', '2026-03-01T00:00:00.000Z'),
+      createBackendItem('oldest.png', '2026-01-01T00:00:00.000Z'),
+      createBackendItem('newest.png', '2026-07-01T00:00:00.000Z'),
+      createBackendItem('middle.png', '2026-03-01T00:00:00.000Z'),
     ];
 
     expect(
@@ -139,19 +129,6 @@ describe('mergeGalleryItemWindow', () => {
     // overlay carries the queue's ISO `submittedAt`. The overlaid recent is
     // older than every loaded backend row and absent from the window: with
     // Newest first it must sort below them, not above them.
-    const createBackendItem = (name: string, createdAt: string): GalleryItem => ({
-      boardId: 'none',
-      category: 'general',
-      createdAt,
-      fullUrl: `/images/${name}`,
-      height: 512,
-      isIntermediate: false,
-      kind: 'image',
-      name,
-      starred: false,
-      thumbnailUrl: `/thumbnails/${name}`,
-      width: 512,
-    });
     const backendItems = [
       createBackendItem('newer.png', '2026-08-29 13:01:20.649'),
       createBackendItem('middle.png', '2026-08-29 12:00:00.000'),
@@ -179,21 +156,32 @@ describe('mergeGalleryItemWindow', () => {
     ).toEqual(['older.png', 'middle.png', 'newer.png']);
   });
 
+  it('places a completed batch image by its creation time, not the batch submission time', () => {
+    // Overlaid recents must sort by creation time, or each fresh completion
+    // lands below its already-listed siblings until the refetch catches up.
+    const backendItems = [
+      createBackendItem('batch-2.png', '2026-08-29 13:05:00.000'),
+      createBackendItem('batch-1.png', '2026-08-29 13:04:00.000'),
+    ];
+    const recentImages = [
+      asGenerated(
+        createImage(3, {
+          createdAt: '2026-08-29T13:06:00.000Z',
+          imageName: 'batch-3.png',
+          queuedAt: '2026-08-29T13:00:00.000Z',
+        })
+      ),
+    ];
+
+    expect(
+      mergeGalleryItemWindow({ backendItems, filter, maxRows: 60, recentImages }).map((item) => item.name)
+    ).toEqual(['batch-3.png', 'batch-2.png', 'batch-1.png']);
+  });
+
   it('uses SQLite binary ordering for mixed-case and punctuation name ties in both directions', () => {
-    const createTiedItem = (name: string): GalleryItem => ({
-      boardId: 'none',
-      category: 'general',
-      createdAt: '2026-07-30T12:00:00.000Z',
-      fullUrl: `/images/${name}`,
-      height: 64,
-      isIntermediate: false,
-      kind: 'image',
-      name,
-      starred: false,
-      thumbnailUrl: `/thumbnails/${name}`,
-      width: 64,
-    });
-    const items = ['a.png', 'Z.png', '_draft.png', 'A.png', '!bang.png'].map(createTiedItem);
+    const items = ['a.png', 'Z.png', '_draft.png', 'A.png', '!bang.png'].map((name) =>
+      createBackendItem(name, '2026-07-30T12:00:00.000Z')
+    );
 
     expect(
       mergeGalleryItemWindow({

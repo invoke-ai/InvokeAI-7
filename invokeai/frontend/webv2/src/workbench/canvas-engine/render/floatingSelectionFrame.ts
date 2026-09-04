@@ -1,9 +1,9 @@
-import type { CanvasDocumentContractV2 } from '@workbench/canvas-engine/contracts';
+import type { CanvasDocumentContractV3 } from '@workbench/canvas-engine/contracts';
 import type { FloatingSelection } from '@workbench/canvas-engine/selection/floatingSelection';
 import type { Mat2d } from '@workbench/canvas-engine/types';
 
+import { lookupDocumentLeaf } from '@workbench/canvas-engine/document-model/documentModel';
 import { floatDocumentMatrix } from '@workbench/canvas-engine/selection/floatingSelection';
-import { layerMatrix } from '@workbench/canvas-engine/tools/moveHitTest';
 import { bakeMatrix } from '@workbench/canvas-engine/transform/transformMath';
 
 import type { CompositeOptions } from './compositor';
@@ -27,14 +27,14 @@ export interface FloatingSelectionFrame {
  */
 export const floatingSelectionFrame = (
   float: FloatingSelection | null,
-  doc: CanvasDocumentContractV2 | null
+  doc: CanvasDocumentContractV3 | null
 ): FloatingSelectionFrame | null => {
-  const layer = float && doc ? doc.layers.find((candidate) => candidate.id === float.layerId) : undefined;
-  if (!float || !layer) {
+  const leaf = float && doc ? lookupDocumentLeaf(doc, float.layerId) : null;
+  if (!float || !leaf) {
     return null;
   }
   const matrix = bakeMatrix(float.transform);
-  const ants = floatDocumentMatrix(layerMatrix(layer.transform), matrix);
+  const ants = floatDocumentMatrix(leaf.worldTransform, matrix);
   if (!ants) {
     return null;
   }

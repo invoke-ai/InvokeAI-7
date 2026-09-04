@@ -18,11 +18,15 @@ import { parseDateTokens } from '@platform/search/dateTokens';
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { useCallback, useMemo } from 'react';
 
+import { resolveGallerySelectedBoardId } from './galleryStateView';
+
 export interface GalleryData {
   boards: GalleryBoard[];
   filter: GalleryItemsFilter;
   hasMore: boolean;
   isLoadingItems: boolean;
+  /** The resolved board the items were fetched for. */
+  selectedBoardId: string;
   /**
    * True when the infinite window is full *and* the board holds more images
    * than it can reach. `hasMore` is false in that case exactly as it is at the
@@ -38,6 +42,8 @@ export interface GalleryData {
   total: number | null;
 }
 
+const EMPTY_BOARDS: GalleryBoard[] = [];
+
 const useGalleryBoards = ({ settings }: { settings: GallerySettings }) => {
   const query = useQuery(
     galleryBoardsOptions({
@@ -48,7 +54,7 @@ const useGalleryBoards = ({ settings }: { settings: GallerySettings }) => {
     })
   );
 
-  return { boards: query.data ?? [] };
+  return { boards: query.data ?? EMPTY_BOARDS };
 };
 
 const isRecentItemVisible = (item: GalleryItem, filter: GalleryItemsFilter): boolean => {
@@ -136,6 +142,7 @@ export const isGalleryWindowTruncated = ({
 export const useGalleryData = ({
   galleryView,
   page,
+  projectBoardId,
   recentImages,
   searchTerm,
   selectedBoardId,
@@ -144,16 +151,16 @@ export const useGalleryData = ({
 }: {
   galleryView: GalleryView;
   page: number;
+  projectBoardId: string | null;
   recentImages: readonly GeneratedImageContract[];
   searchTerm: string;
-  selectedBoardId: string;
+  selectedBoardId: string | null;
   /** When set, items come from semantic search (similarity order) instead of the board listing. */
   semanticQuery?: GallerySemanticReference | null;
   settings: GallerySettings;
 }): GalleryData => {
   const { boards } = useGalleryBoards({ settings });
-  const boardId =
-    boards.length === 0 || boards.some((board) => board.id === selectedBoardId) ? selectedBoardId : 'none';
+  const boardId = resolveGallerySelectedBoardId({ projectBoardId, selectedBoardId }, boards);
   const isPaginated = settings.paginationMode === 'paginated';
   const dateParse = useMemo(() => parseDateTokens(searchTerm), [searchTerm]);
   const filter = useMemo<GalleryItemsFilter>(
@@ -241,5 +248,16 @@ export const useGalleryData = ({
     void fetchNextPage();
   }, [fetchNextPage, hasMore, isFetchingNextPage]);
 
-  return { boards, filter, hasMore, isLoadingItems: isFetching, isWindowTruncated, items, loadMore, queryError, total };
+  return {
+    boards,
+    filter,
+    hasMore,
+    isLoadingItems: isFetching,
+    isWindowTruncated,
+    items,
+    loadMore,
+    queryError,
+    selectedBoardId: boardId,
+    total,
+  };
 };

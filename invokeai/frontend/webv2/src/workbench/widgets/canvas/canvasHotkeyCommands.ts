@@ -1,11 +1,27 @@
-import type { CanvasDocumentContractV2, CanvasEngine } from '@workbench/canvas-engine/api';
-import type { LayerReorderKind, StructuralActions } from '@workbench/canvasLayerOps';
+import type {
+  CanvasDocumentContractV3,
+  CanvasEngine,
+  LayerStackMoveKind,
+  StructuralCommitResult,
+} from '@workbench/canvas-engine/api';
 import type { CanvasProjectMutationDispatch } from '@workbench/useCanvasProjectMutationDispatch';
 
-import { isHideableLayer, isLayerHidden } from '@workbench/canvas-engine/api';
-import { deleteLayerActions, reorderLayerActions, reorderSelectionWithinGroupsByKind } from '@workbench/canvasLayerOps';
+import {
+  compileDocumentLeaves,
+  getDocumentIndex,
+  isGroupNode,
+  isNodeHidden,
+  isOverlayStack,
+} from '@workbench/canvas-engine/api';
+import { publishLayerPanelSelection } from '@workbench/layerPanelState';
+import { commitPreparedEdit, type PreparedCommitOutcome } from '@workbench/widgets/canvas/useStructuralCommit';
+import {
+  canGroupSelection,
+  canUngroupSelection,
+  groupLayers,
+  ungroupLayers,
+} from '@workbench/widgets/layers/layerGroupCommands';
 import { canMergeLayerDown } from '@workbench/widgets/layers/layerOps';
-import { publishLayerPanelSelection } from '@workbench/workbenchStore';
 
 /** Command id → document-space nudge delta (shift variants are ×10). */
 const NUDGE_DELTAS: Record<string, { dx: number; dy: number }> = {
@@ -20,36 +36,11 @@ const NUDGE_DELTAS: Record<string, { dx: number; dy: number }> = {
 };
 
 /** Command id → z-reorder direction (index 0 = top-most; "forward" moves toward 0). */
-const REORDER_KINDS: Record<string, LayerReorderKind> = {
+const REORDER_KINDS: Record<string, LayerStackMoveKind> = {
   'canvas.layerBackward': 'backward',
   'canvas.layerForward': 'forward',
   'canvas.layerToBack': 'back',
   'canvas.layerToFront': 'front',
-};
-
-const deleteSelectedLayerActions = (
-  layers: CanvasDocumentContractV2['layers'],
-  selectedIds: readonly string[],
-  selectedLayerId: string
-): StructuralActions | null => {
-  const selected = new Set(selectedIds);
-  const removed = layers.filter((layer) => selected.has(layer.id));
-  if (removed.length === 0 || removed.some((layer) => layer.isLocked)) {
-    return null;
-  }
-  if (removed.length === 1) {
-    return deleteLayerActions(removed[0]!, layers.indexOf(removed[0]!));
-  }
-  return {
-    forward: { ids: removed.map((layer) => layer.id), type: 'removeCanvasLayers' },
-    inverse: {
-      add: { index: 0, layers: removed },
-      enabledUpdates: [],
-      orderedIds: layers.map((layer) => layer.id),
-      selectedLayerId,
-      type: 'applyCanvasLayerStackMutation',
-    },
-  };
 };
 
 /**
@@ -58,7 +49,7 @@ const deleteSelectedLayerActions = (
  * makes the ~35-command dispatch table testable without mounting React.
  */
 export interface CanvasHotkeyContext {
-  readonly document: CanvasDocumentContractV2;
+  readonly document: CanvasDocumentContractV3;
   readonly engine: CanvasEngine | null;
   /** Any staging slot exists, so left/right cycle candidates instead of nudging. */
   readonly hasStagingSlots: boolean;
@@ -68,8 +59,14 @@ export interface CanvasHotkeyContext {
   readonly selectedLayerIds: readonly string[];
   readonly dispatch: CanvasProjectMutationDispatch;
   readonly copySelection: (cut: boolean) => void;
+  /** Swaps the project foreground/background pair — a preference, never a document edit. */
+  readonly swapActiveColors: () => void;
+  /** Resets the pair to the black-on-white default. */
+  readonly resetActiveColors: () => void;
   readonly pasteFromClipboard: () => void;
   readonly notifyLayerDuplicateFailed: () => void;
+  readonly reportStructuralCommit: (result: StructuralCommitResult) => void;
+  readonly reportPreparedCommit: (outcome: PreparedCommitOutcome) => void;
   readonly t: (key: string) => string;
 }
 
@@ -83,9 +80,11 @@ export interface CanvasHotkeyContext {
  */
 export const executeCanvasHotkeyCommand = (commandId: string, ctx: CanvasHotkeyContext): void => {
   const { dispatch, document, engine, t } = ctx;
-  const { layers, selectedLayerId } = document;
-  const selectedIndex = selectedLayerId ? layers.findIndex((layer) => layer.id === selectedLayerId) : -1;
-  const selectedLayer = selectedIndex >= 0 ? layers[selectedIndex] : undefined;
+  const { selectedLayerId } = document;
+  const index = getDocumentIndex(document);
+  const selected = selectedLayerId ? index.byId.get(selectedLayerId) : undefined;
+  const selectedLayer = selected && !isGroupNode(selected.node) ? selected.node : undefined;
+  const selectedFrozen = !!selected && (selected.ancestorsLocked || selected.node.isLocked);
 
   if ((commandId === 'canvas.prevEntity' || commandId === 'canvas.nudgeLeft') && ctx.hasStagingSlots) {
     dispatch({ direction: -1, type: 'cycleStagedImage' });
@@ -102,6 +101,18 @@ export const executeCanvasHotkeyCommand = (commandId: string, ctx: CanvasHotkeyC
     return;
   }
 
+  // The color pair is a preference, not a document edit, so X/D stay live even
+  // while the surface is interaction-locked.
+  if (commandId === 'canvas.toggleFillColor') {
+    ctx.swapActiveColors();
+    return;
+  }
+
+  if (commandId === 'canvas.setFillColorsToDefault') {
+    ctx.resetActiveColors();
+    return;
+  }
+
   if (ctx.isInteractionLocked) {
     if (commandId === 'canvas.tool.view') {
       engine?.tools.setTool('view');
@@ -112,23 +123,25 @@ export const executeCanvasHotkeyCommand = (commandId: string, ctx: CanvasHotkeyC
   // Arrow-key nudge: engine owns the bounds/lock logic (no-op with no/locked selection).
   const nudge = NUDGE_DELTAS[commandId];
   if (nudge) {
-    engine?.layers.nudgeSelectedLayer(nudge.dx, nudge.dy);
+    const nudged = engine?.layers.nudgeSelectedLayer(nudge.dx, nudge.dy);
+    // A nudge with nothing eligible selected is an expected no-op; only a broken commit is news.
+    if (nudged?.status === 'postcondition-failed') {
+      ctx.reportStructuralCommit(nudged);
+    }
     return;
   }
 
-  // Layer z-reorder: same forward/inverse construction as the layers panel.
+  // Layer z-reorder: the same prepared move the layers panel commits.
   const reorderKind = REORDER_KINDS[commandId];
   if (reorderKind) {
-    if (!engine || selectedIndex < 0) {
+    if (!engine || !selected) {
       return;
     }
-    const currentIds = layers.map((layer) => layer.id);
-    const nextIds = reorderSelectionWithinGroupsByKind(layers, ctx.selectedLayerIds, reorderKind);
-    if (!nextIds) {
-      return;
-    }
-    const { forward, inverse } = reorderLayerActions(currentIds, nextIds);
-    engine.layers.commitStructural(t('widgets.canvas.commands.reorderLayer'), forward, inverse);
+    ctx.reportPreparedCommit(
+      commitPreparedEdit(engine, t('widgets.canvas.commands.reorderLayer'), (model) =>
+        model.prepare({ ids: ctx.selectedLayerIds, kind: reorderKind, type: 'move' })
+      )
+    );
     return;
   }
 
@@ -137,32 +150,35 @@ export const executeCanvasHotkeyCommand = (commandId: string, ctx: CanvasHotkeyC
     // Photoshop meaning. Only with no selection does it delete the layer.
     if (engine?.interaction.get('hasSelection')) {
       engine.selection.eraseSelection();
-    } else if (engine && selectedLayer && selectedIndex >= 0 && !selectedLayer.isLocked) {
-      const actions = deleteSelectedLayerActions(layers, ctx.selectedLayerIds, selectedLayer.id);
-      if (actions) {
-        engine.layers.commitStructural(t('widgets.canvas.commands.deleteLayer'), actions.forward, actions.inverse);
-      }
+    } else if (engine && selected && !selectedFrozen) {
+      ctx.reportPreparedCommit(
+        commitPreparedEdit(engine, t('widgets.canvas.commands.deleteLayer'), (model) =>
+          model.prepare({ ids: ctx.selectedLayerIds, type: 'remove' })
+        )
+      );
     }
   } else if (commandId === 'canvas.copySelection' || commandId === 'canvas.cutSelection') {
     ctx.copySelection(commandId === 'canvas.cutSelection');
   } else if (commandId === 'canvas.pasteImage') {
     ctx.pasteFromClipboard();
   } else if (commandId === 'canvas.toggleNonRasterLayers') {
-    // Hide, never disable: this is the "get the overlays out of my way"
-    // shortcut, and it must leave the generated image untouched.
-    const hideable = layers.filter(isHideableLayer);
-    if (engine && hideable.length > 0) {
-      const nextHidden = hideable.every((layer) => !isLayerHidden(layer));
-      engine.layers.commitStructural(
-        t('widgets.canvas.commands.toggleNonRasterLayers'),
-        {
-          type: 'setCanvasLayersHidden',
-          updates: hideable.map((layer) => ({ id: layer.id, isHidden: nextHidden })),
-        },
-        {
-          type: 'setCanvasLayersHidden',
-          updates: hideable.map((layer) => ({ id: layer.id, isHidden: isLayerHidden(layer) })),
-        }
+    // Hide, never disable: this is the "get the overlays out of my way" shortcut, and it must
+    // leave the generated image untouched. Hiding turns off the overlay roots; showing turns on
+    // every node hidden in its own right, so nothing stays gated behind a hidden group.
+    const overlays = index.nodes.filter((entry) => isOverlayStack(entry.stack));
+    const leaves = compileDocumentLeaves(document).filter((leaf) => isOverlayStack(leaf.stack));
+    if (engine && leaves.length > 0) {
+      const nextHidden = leaves.every((leaf) => !leaf.documentHidden);
+      const targets = nextHidden
+        ? overlays.filter((entry) => entry.parentId === null)
+        : overlays.filter((entry) => isNodeHidden(entry.node));
+      ctx.reportPreparedCommit(
+        commitPreparedEdit(engine, t('widgets.canvas.commands.toggleNonRasterLayers'), (model) =>
+          model.prepare({
+            type: 'set-hidden',
+            updates: targets.map((entry) => ({ id: entry.node.id, isHidden: nextHidden })),
+          })
+        )
       );
     }
   } else if (commandId === 'canvas.resetSelected') {
@@ -219,7 +235,17 @@ export const executeCanvasHotkeyCommand = (commandId: string, ctx: CanvasHotkeyC
       }
     }
   } else if (commandId === 'canvas.tool.shape') {
-    engine?.tools.setTool('shape');
+    if (engine) {
+      if (engine.interaction.get('activeTool') === 'shape') {
+        // Repeat presses cycle the kind, like the marquee hotkey.
+        const shape = engine.interaction.get('shapeOptions');
+        const order = ['rect', 'ellipse', 'triangle', 'star'] as const;
+        const next = order[(order.indexOf(shape.kind) + 1) % order.length]!;
+        engine.interaction.set('shapeOptions', { ...shape, kind: next });
+      } else {
+        engine.tools.setTool('shape');
+      }
+    }
   } else if (commandId === 'canvas.tool.text') {
     engine?.tools.setTool('text');
   } else if (commandId === 'canvas.tool.gradient') {
@@ -239,7 +265,7 @@ export const executeCanvasHotkeyCommand = (commandId: string, ctx: CanvasHotkeyC
     // the selected pixels. With none, it duplicates the whole layer.
     if (engine?.interaction.get('hasSelection')) {
       engine.selection.liftSelectionToLayer();
-    } else if (engine && selectedLayer) {
+    } else if (engine && selected) {
       void engine.layers
         .duplicateLayers(ctx.selectedLayerIds)
         .then((result) => {
@@ -262,6 +288,16 @@ export const executeCanvasHotkeyCommand = (commandId: string, ctx: CanvasHotkeyC
           ctx.notifyLayerDuplicateFailed();
         });
     }
+  } else if (commandId === 'canvas.groupLayers') {
+    if (engine && selected && canGroupSelection(engine.document.model(), ctx.selectedLayerIds)) {
+      ctx.reportPreparedCommit(
+        groupLayers(engine, engine.projectId, ctx.selectedLayerIds, t('widgets.canvas.commands.groupLayers'))
+      );
+    }
+  } else if (commandId === 'canvas.ungroupLayers') {
+    if (engine && selected && canUngroupSelection(engine.document.model(), ctx.selectedLayerIds)) {
+      ctx.reportPreparedCommit(ungroupLayers(engine, ctx.selectedLayerIds, t('widgets.canvas.commands.ungroupLayers')));
+    }
   } else if (commandId === 'canvas.mergeDown') {
     // Gate on the SAME predicate the layers panel's context menu uses to
     // enable/disable its "Merge Down" item (`canMergeLayerDown`), so the hotkey
@@ -269,7 +305,7 @@ export const executeCanvasHotkeyCommand = (commandId: string, ctx: CanvasHotkeyC
     // or a mask directly below the selection. `engine.layers.mergeLayerDown` also
     // guards this itself (defense in depth for callers other than this hotkey),
     // but checking here keeps the two surfaces visibly in lockstep.
-    if (engine && selectedLayer && canMergeLayerDown(layers, selectedIndex, true)) {
+    if (engine && selectedLayer && canMergeLayerDown(document, selectedLayer.id, true)) {
       engine.layers.mergeLayerDown(selectedLayer.id);
     }
   }

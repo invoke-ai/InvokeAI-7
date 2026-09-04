@@ -1,7 +1,8 @@
 import type { LayerExportGuard } from '@workbench/canvas-engine/capabilities';
-import type { CanvasDocumentContractV2 } from '@workbench/canvas-engine/contracts';
+import type { CanvasDocumentContractV3, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
 import type { RasterSurface } from '@workbench/canvas-engine/render/raster';
 
+import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
 import { LayerFilterOutputDimensionError } from '@workbench/canvas-engine/filterError';
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 
@@ -13,8 +14,10 @@ const surface = (): RasterSurface => ({}) as RasterSurface;
 const guardFor = (layerId: string): LayerExportGuard =>
   ({ cacheVersion: 1, documentGeneration: 1, layerId, projectId: 'p' }) as LayerExportGuard;
 
-const documentWith = (...layerIds: string[]): CanvasDocumentContractV2 =>
-  ({ layers: layerIds.map((id) => ({ id })) }) as CanvasDocumentContractV2;
+const documentWith = (...layerIds: string[]): CanvasDocumentContractV3 =>
+  ({
+    stacks: stacksFrom(layerIds.map((id) => ({ id, type: 'raster' }) as CanvasLayerContract)),
+  }) as CanvasDocumentContractV3;
 
 /** The real state controller — it has no collaborators, so faking it would only weaken the assertions. */
 let previews: PreviewStateController;
@@ -22,7 +25,7 @@ let invalidateAll: Mock<() => void>;
 let invalidateLayer: Mock<(layerId: string) => void>;
 let decodeBlob: Mock<CreatePreviewPublisherDeps['decodeBlob']>;
 let resolveImage: Mock<(imageName: string) => Promise<Blob>>;
-let getDocument: () => CanvasDocumentContractV2 | null;
+let getDocument: () => CanvasDocumentContractV3 | null;
 let isGuardCurrent: Mock<(guard: LayerExportGuard) => boolean>;
 
 const build = (overrides: Partial<CreatePreviewPublisherDeps> = {}): PreviewPublisher =>

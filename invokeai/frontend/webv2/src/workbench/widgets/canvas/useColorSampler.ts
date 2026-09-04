@@ -8,7 +8,8 @@
  * alongside a canvas hands this to `ColorPicker`'s `onSampleColor` instead.
  *
  * The returned callback is stable, which the `react-perf/jsx-no-new-*-as-prop`
- * rules require of anything passed straight into JSX.
+ * rules require of anything passed straight into JSX. Without an engine it
+ * returns `undefined`, so the picker keeps its screen-eyedropper fallback.
  */
 
 import type { CanvasEngineToolCapability } from '@workbench/canvas-engine/api';
@@ -20,5 +21,7 @@ export interface ColorSamplerEngine {
   readonly tools: Pick<CanvasEngineToolCapability, 'requestColorSample'>;
 }
 
-export const useColorSampler = (engine: ColorSamplerEngine): (() => Promise<string | null>) =>
-  useCallback(() => engine.tools.requestColorSample(), [engine]);
+export const useColorSampler = (engine: ColorSamplerEngine | null): (() => Promise<string | null>) | undefined => {
+  const sample = useCallback(() => engine?.tools.requestColorSample() ?? Promise.resolve(null), [engine]);
+  return engine ? sample : undefined;
+};

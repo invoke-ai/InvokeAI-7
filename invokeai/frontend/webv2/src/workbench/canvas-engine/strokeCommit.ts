@@ -1,4 +1,5 @@
 import type { CanvasLayerContract } from '@workbench/canvas-engine/contracts';
+import type { CanvasNodeInsertionAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
 import type { History, HistoryEntry } from '@workbench/canvas-engine/history/history';
 import type { ImagePatchApply } from '@workbench/canvas-engine/history/imagePatch';
 import type { CanvasProjectMutation } from '@workbench/canvas-engine/mutationContracts';
@@ -37,7 +38,7 @@ export const createStrokeCommit = (deps: CreateStrokeCommitDeps): StrokeCommit =
   const { applyImagePatch, dispatchCanvasMutation, history, layerCache } = deps;
 
   const createComposedPaintEntry = (
-    created: { layer: CanvasLayerContract; index: number },
+    created: { layer: CanvasLayerContract; anchor: CanvasNodeInsertionAnchor },
     event: StrokeCommittedEvent,
     label: string
   ): HistoryEntry => {
@@ -48,7 +49,7 @@ export const createStrokeCommit = (deps: CreateStrokeCommitDeps): StrokeCommit =
       bytes,
       label,
       redo: () => {
-        dispatchCanvasMutation({ index: created.index, layer: created.layer, type: 'addCanvasLayer' });
+        dispatchCanvasMutation({ anchor: created.anchor, layer: created.layer, type: 'addCanvasLayer' });
         // Re-create an EMPTY cache marked fresh so the async rasterize pass can't
         // clobber the restored stroke; `applyImagePatch` grows it to the stroke's
         // content bounds and writes the `after` pixels.

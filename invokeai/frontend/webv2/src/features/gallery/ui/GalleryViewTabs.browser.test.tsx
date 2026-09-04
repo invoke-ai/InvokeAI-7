@@ -34,7 +34,7 @@ const renderViewTabs = async (): Promise<{
   const value = {
     actions: { setView: vi.fn() },
     gallery: {
-      boards: [{ assetCount: 7, id: 'board-1', imageCount: 148, videoCount: 0 }],
+      boards: [{ assetCount: 7, assetVideoCount: 0, id: 'board-1', imageCount: 148, videoCount: 0 }],
       galleryView: 'images',
       selectedBoardId: 'board-1',
     },

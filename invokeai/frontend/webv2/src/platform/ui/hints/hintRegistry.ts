@@ -44,6 +44,10 @@ export const FEATURE_HINTS = {
   imageInfluence: {
     href: 'https://support.invoke.ai/support/solutions/articles/151000094998-image-to-image',
   },
+  layerStackControl: {},
+  layerStackInpaintMask: {},
+  layerStackRaster: {},
+  layerStackRegionalGuidance: {},
   model: {
     href: 'https://support.invoke.ai/support/solutions/articles/151000096601-what-is-a-model-which-should-i-use-',
   },

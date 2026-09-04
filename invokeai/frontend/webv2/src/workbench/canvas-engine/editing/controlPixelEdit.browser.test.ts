@@ -1,9 +1,10 @@
-import type { CanvasDocumentContractV2, CanvasRasterLayerContractV2 } from '@workbench/canvas-engine/contracts';
+import type { CanvasDocumentContractV3, CanvasRasterLayerContractV2 } from '@workbench/canvas-engine/contracts';
 import type { BitmapStore } from '@workbench/canvas-engine/document/bitmapStore';
 import type { LayerCacheStore } from '@workbench/canvas-engine/render/layerCache';
 import type { RasterBackend, RasterSurface } from '@workbench/canvas-engine/render/raster';
 
 import { PixelEditController } from '@workbench/canvas-engine/controllers/controlPixelController';
+import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
 import { createBitmapStore } from '@workbench/canvas-engine/document/bitmapStore';
 import { createHistory } from '@workbench/canvas-engine/history/history';
 import { createAdjustedSurfaceCache } from '@workbench/canvas-engine/render/adjustedSurfaceCache';
@@ -18,7 +19,7 @@ import { bakePixelEditSurface } from './controlPixelEdit';
 const IDENTITY = { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 } as const;
 
 const imageLayer = (overrides: Partial<CanvasRasterLayerContractV2> = {}): CanvasRasterLayerContractV2 => ({
-  adjustments: { brightness: 0.5, contrast: 0, saturation: 0 },
+  adjustments: [{ brightness: 0.5, contrast: 0, id: 'adj-bc', isEnabled: true, type: 'brightness-contrast' as const }],
   blendMode: 'normal',
   id: 'image',
   isEnabled: true,
@@ -63,13 +64,13 @@ const setup = (
   entry.surface.ctx.putImageData(new ImageData(new Uint8ClampedArray([0, 0, 0, 255, 255, 255, 255, 255]), 2, 1), 0, 0);
   layers.publishPixels(initialLayer.id);
   let layer = initialLayer;
-  const document: CanvasDocumentContractV2 = {
+  let document: CanvasDocumentContractV3 = {
     background: 'transparent',
     bbox: { height: 4, width: 8, x: 0, y: 0 },
     height: 4,
-    layers: [layer],
+    stacks: stacksFrom([layer]),
     selectedLayerId: layer.id,
-    version: 2,
+    version: 3,
     width: 8,
   };
   const history = createHistory();
@@ -84,7 +85,7 @@ const setup = (
         throw new Error('expected raster replacement');
       }
       layer = replacement;
-      document.layers = [replacement];
+      document = { ...document, stacks: stacksFrom([replacement]) };
       resources.onReplacement?.(replacement);
     },
     endBurst: vi.fn(),

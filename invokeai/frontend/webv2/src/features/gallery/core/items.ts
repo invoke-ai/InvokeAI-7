@@ -126,7 +126,7 @@ type LegacyGalleryImage = GeneratedImageContract & Partial<Pick<GalleryImage, 'b
 export const legacyGeneratedImageToGalleryItem = (image: LegacyGalleryImage): GalleryImageItem => ({
   boardId: image.boardId ?? 'none',
   category: image.imageCategory ?? 'general',
-  createdAt: image.queuedAt,
+  createdAt: image.createdAt ?? image.queuedAt,
   fullUrl: image.imageUrl,
   height: image.height,
   isIntermediate: false,
@@ -140,6 +140,7 @@ export const legacyGeneratedImageToGalleryItem = (image: LegacyGalleryImage): Ga
 
 export const galleryImageItemToGalleryImage = (item: GalleryImageItem): GalleryImage => ({
   boardId: item.boardId,
+  createdAt: item.createdAt,
   height: item.height,
   imageCategory: item.category,
   imageName: item.name,

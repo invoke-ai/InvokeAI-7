@@ -1,13 +1,11 @@
 /** Policy and pure transforms shared by control and raster-image pixel editing. */
 
-import type {
-  CanvasControlLayerContract,
-  CanvasLayerContract,
-  CanvasRasterLayerContractV2,
-} from '@workbench/canvas-engine/contracts';
+import type { CanvasControlLayerContract, CanvasRasterLayerContractV2 } from '@workbench/canvas-engine/contracts';
+import type { SemanticLeaf } from '@workbench/canvas-engine/document-model/semanticLeaf';
 import type { RasterBackend, RasterSurface } from '@workbench/canvas-engine/render/raster';
 import type { Rect } from '@workbench/canvas-engine/types';
 
+import { isLeafEditable } from '@workbench/canvas-engine/document/layerEligibility';
 import { roundOut, transformBounds } from '@workbench/canvas-engine/math/rect';
 import { bakeMatrix, IDENTITY_TRANSFORM, type LayerTransform } from '@workbench/canvas-engine/transform/transformMath';
 
@@ -23,6 +21,9 @@ export interface DecidePixelEditInput {
   layer: PixelEditableLayer;
   hasSourceContent: boolean;
   isCacheReady: boolean;
+  /** Ancestor-effective state; the leaf's own flags are always applied. */
+  contributionEnabled?: boolean;
+  effectiveLocked?: boolean;
 }
 
 const isIdentity = (transform: LayerTransform): boolean =>
@@ -37,17 +38,23 @@ const isRasterizable = (layer: PixelEditableLayer): boolean =>
     ? layer.source.type === 'image' || layer.source.type === 'paint'
     : layer.source.type !== 'shape' || layer.source.kind !== 'polygon';
 
-export const isLayerPixelEditEligible = (layer: CanvasLayerContract | undefined): boolean =>
-  !!layer &&
-  !layer.isLocked &&
-  layer.isEnabled &&
-  ((layer.type === 'raster' && layer.source.type === 'paint') || (layer.type === 'control' && isRasterizable(layer)));
+/** Whether the leaf, with its ancestors applied, can take a direct pixel edit. */
+export const isLeafPixelEditEligible = (leaf: SemanticLeaf | null | undefined): boolean =>
+  isLeafEditable(leaf) &&
+  ((leaf.layer.type === 'raster' && leaf.layer.source.type === 'paint') ||
+    (leaf.layer.type === 'control' && isRasterizable(leaf.layer)));
 
-export const decidePixelEdit = ({ hasSourceContent, isCacheReady, layer }: DecidePixelEditInput): PixelEditDecision => {
-  if (layer.isLocked) {
+export const decidePixelEdit = ({
+  contributionEnabled = true,
+  effectiveLocked = false,
+  hasSourceContent,
+  isCacheReady,
+  layer,
+}: DecidePixelEditInput): PixelEditDecision => {
+  if (layer.isLocked || effectiveLocked) {
     return { reason: 'locked', status: 'rejected' };
   }
-  if (!layer.isEnabled) {
+  if (!layer.isEnabled || !contributionEnabled) {
     return { reason: 'disabled', status: 'rejected' };
   }
   if (!isRasterizable(layer)) {

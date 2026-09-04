@@ -108,6 +108,8 @@ export interface AntsAnimatorDeps {
   cancelFrame(handle: number): void;
   /** Monotonic clock (ms) used to throttle steps to {@link AntsAnimatorDeps.intervalMs}. */
   now(): number;
+  /** Every rAF, before the step check; a smooth-animation consumer invalidates from here. */
+  onFrame?(): void;
   /** Called on each throttled step (the engine advances the phase + invalidates the overlay). */
   onStep(): void;
   /** Step interval in ms; defaults to {@link ANTS_INTERVAL_MS}. */
@@ -131,6 +133,7 @@ export const createAntsAnimator = (deps: AntsAnimatorDeps): AntsAnimator => {
       return;
     }
     const t = deps.now();
+    deps.onFrame?.();
     if (t - lastStep >= intervalMs) {
       lastStep = t;
       deps.onStep();

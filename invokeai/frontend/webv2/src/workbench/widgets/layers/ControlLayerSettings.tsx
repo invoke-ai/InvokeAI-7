@@ -7,6 +7,7 @@ import type {
   CanvasControlAdapterContract,
   CanvasControlLayerContract,
   CanvasDocumentCapability,
+  CanvasLayerContract,
 } from '@workbench/canvas-engine/api';
 import type { LayerFilterOperationEngine } from '@workbench/widgets/layers/LayerFilterOperationButton';
 import type { CanvasStructuralEngine } from '@workbench/widgets/layers/layerOps';
@@ -19,18 +20,19 @@ import {
 } from '@features/generation/graph';
 import { useModelsSelector } from '@features/models';
 import { Field, Select, Slider } from '@platform/ui';
+import { lookupDocumentLeaf } from '@workbench/canvas-engine/api';
 import { getCanvasOperations, resolveDefaultFilterForModel } from '@workbench/canvas-operations/api';
-import { useCanvasProjectMutationDispatch } from '@workbench/useCanvasProjectMutationDispatch';
+import { usePreparedCommit } from '@workbench/widgets/canvas/useStructuralCommit';
 import { useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { getCompatibleControlModels } from './controlModelOptions';
 import { LayerFilterOperationButton } from './LayerFilterOperationButton';
-import { applyStructural, applyStructuralPreview, CONTROL_ADAPTER_DEFAULTS, CONTROL_WEIGHT_BOUNDS } from './layerOps';
+import { applyStructuralPreview, CONTROL_ADAPTER_DEFAULTS, CONTROL_WEIGHT_BOUNDS } from './layerOps';
 import { runLayerFilterOperation } from './layerPropertiesOperation';
 import { useSelectedMainModel } from './useSelectedMainModel';
 
-const SELECT_POSITIONING = { placement: 'bottom-end', sameWidth: false } as const;
+const SELECT_POSITIONING = { placement: 'bottom-end', sameWidth: true } as const;
 
 const CONTROL_ADAPTER_KINDS: readonly ControlAdapterKind[] = [
   'controlnet',
@@ -67,9 +69,24 @@ interface ControlLayerSettingsProps {
  * undo stack (`updateCanvasLayerConfig`); the filter preview runs on the utility
  * queue and never mutates the document until "Apply".
  */
+/** Contributing control leaves of one adapter kind with content, in generation order. */
+const contributingControlLayers = (
+  engine: CanvasStructuralEngine & LayerFilterOperationEngine & { readonly document: CanvasDocumentCapability },
+  kind: CanvasControlAdapterContract['kind']
+): CanvasLayerContract[] =>
+  (engine.document.model()?.compileLeaves() ?? [])
+    .filter(
+      (leaf) =>
+        leaf.contributionEnabled &&
+        leaf.layer.type === 'control' &&
+        leaf.layer.adapter.kind === kind &&
+        engine.exports.hasExportableLayerContent(leaf.id)
+    )
+    .map((leaf) => leaf.layer);
+
 export const ControlLayerSettings = ({ engine, layer, onOperationStarted }: ControlLayerSettingsProps) => {
   const { t } = useTranslation();
-  const dispatch = useCanvasProjectMutationDispatch();
+  const commitPrepared = usePreparedCommit(engine);
   const models = useModelsSelector((snapshot) => snapshot.models);
   const mainModel = useSelectedMainModel();
   const base = mainModel?.base ?? null;
@@ -78,15 +95,16 @@ export const ControlLayerSettings = ({ engine, layer, onOperationStarted }: Cont
 
   const commitAdapter = useCallback(
     (next: Partial<CanvasControlAdapterContract>, before: Partial<CanvasControlAdapterContract>, label: string) => {
-      applyStructural(
-        engine,
-        dispatch,
-        label,
-        { config: { adapter: next, layerType: 'control' }, id: layer.id, type: 'updateCanvasLayerConfig' },
-        { config: { adapter: before, layerType: 'control' }, id: layer.id, type: 'updateCanvasLayerConfig' }
+      commitPrepared(label, (model) =>
+        model.prepare({
+          before: { adapter: before, layerType: 'control' },
+          config: { adapter: next, layerType: 'control' },
+          id: layer.id,
+          type: 'patch-config',
+        })
       );
     },
-    [dispatch, engine, layer.id]
+    [commitPrepared, layer.id]
   );
 
   // Adapter kinds supported by the selected base. Z-Image Control is only shown
@@ -170,7 +188,7 @@ export const ControlLayerSettings = ({ engine, layer, onOperationStarted }: Cont
         return;
       }
       if (
-        !applyStructuralPreview(engine, dispatch, {
+        !applyStructuralPreview(engine, {
           config: { adapter: { weight: next }, layerType: 'control' },
           id: layer.id,
           type: 'updateCanvasLayerConfig',
@@ -182,7 +200,7 @@ export const ControlLayerSettings = ({ engine, layer, onOperationStarted }: Cont
         weightBeforeRef.current = adapter.weight;
       }
     },
-    [adapter.weight, dispatch, engine, layer.id]
+    [adapter.weight, engine, layer.id]
   );
   const handleWeightChangeEnd = useCallback(
     ({ value }: SliderValueChangeDetails) => {
@@ -217,7 +235,7 @@ export const ControlLayerSettings = ({ engine, layer, onOperationStarted }: Cont
         return;
       }
       if (
-        !applyStructuralPreview(engine, dispatch, {
+        !applyStructuralPreview(engine, {
           config: { adapter: { beginEndStepPct: [value[0]!, value[1]!] }, layerType: 'control' },
           id: layer.id,
           type: 'updateCanvasLayerConfig',
@@ -229,7 +247,7 @@ export const ControlLayerSettings = ({ engine, layer, onOperationStarted }: Cont
         rangeBeforeRef.current = adapter.beginEndStepPct;
       }
     },
-    [adapter.beginEndStepPct, dispatch, engine, layer.id]
+    [adapter.beginEndStepPct, engine, layer.id]
   );
   const handleRangeChangeEnd = useCallback(
     ({ value }: SliderValueChangeDetails) => {
@@ -249,23 +267,16 @@ export const ControlLayerSettings = ({ engine, layer, onOperationStarted }: Cont
 
   const handleTransparencyToggle = useCallback(
     ({ checked }: { checked: boolean }) => {
-      applyStructural(
-        engine,
-        dispatch,
-        t('widgets.layers.control.transparencyEffect'),
-        {
+      commitPrepared(t('widgets.layers.control.transparencyEffect'), (model) =>
+        model.prepare({
+          before: { layerType: 'control', withTransparencyEffect: layer.withTransparencyEffect },
           config: { layerType: 'control', withTransparencyEffect: checked },
           id: layer.id,
-          type: 'updateCanvasLayerConfig',
-        },
-        {
-          config: { layerType: 'control', withTransparencyEffect: !checked },
-          id: layer.id,
-          type: 'updateCanvasLayerConfig',
-        }
+          type: 'patch-config',
+        })
       );
     },
-    [dispatch, engine, layer.id, t]
+    [commitPrepared, layer.id, layer.withTransparencyEffect, t]
   );
 
   const controlModeCollection = useMemo(
@@ -293,32 +304,17 @@ export const ControlLayerSettings = ({ engine, layer, onOperationStarted }: Cont
   const hasContent = engine?.exports.hasExportableLayerContent(layer.id) ?? false;
   const controlLoraIndex =
     adapter.kind === 'control_lora' && engine
-      ? (engine.document
-          .getDocument()
-          ?.layers.filter(
-            (candidate) =>
-              candidate.isEnabled &&
-              candidate.type === 'control' &&
-              candidate.adapter.kind === 'control_lora' &&
-              engine.exports.hasExportableLayerContent(candidate.id)
-          )
-          .findIndex((candidate) => candidate.id === layer.id) ?? 0)
+      ? contributingControlLayers(engine, 'control_lora').findIndex((candidate) => candidate.id === layer.id)
       : 0;
   const zImageControlIndex =
     adapter.kind === 'z_image_control' && engine
-      ? (engine.document
-          .getDocument()
-          ?.layers.filter(
-            (candidate) =>
-              candidate.isEnabled &&
-              candidate.type === 'control' &&
-              candidate.adapter.kind === 'z_image_control' &&
-              engine.exports.hasExportableLayerContent(candidate.id)
-          )
-          .findIndex((candidate) => candidate.id === layer.id) ?? 0)
+      ? contributingControlLayers(engine, 'z_image_control').findIndex((candidate) => candidate.id === layer.id)
       : 0;
+  const contributing = engine
+    ? (lookupDocumentLeaf(engine.document.model()?.document, layer.id)?.contributionEnabled ?? false)
+    : layer.isEnabled;
   const validationReason =
-    layer.isEnabled && mainModel
+    contributing && mainModel
       ? getControlValidationReason({
           adapterModel: adapterModel ? { base: adapterModel.base, type: adapterModel.type } : null,
           beginEndStepPct: adapter.beginEndStepPct,

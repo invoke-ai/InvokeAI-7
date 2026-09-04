@@ -8,15 +8,17 @@ import {
   captureAccountScope,
   isAccountScopeCurrent,
 } from '@platform/state/accountLifecycle';
+import { getProjectCanvasSchemaRequirement, MAX_SUPPORTED_CANVAS_SCHEMA_VERSION } from '@workbench/canvasSchemaVersion';
 
 import type { ProjectTransferIssues } from './invk/transfer';
 
 import { createProjectSettled, getProjectBoardSnapshot, type ProjectRecordDTO } from './api';
 import { recordProjectCover } from './covers';
 import { createProjectId } from './ids';
-import { INVK_EXTENSION, InvkFormatError } from './invk/format';
+import { INVK_EXTENSION, InvkFormatError, toInvkFormatReason } from './invk/format';
 import { readAcknowledgedProject, upsertProjectSummary } from './library';
 import { remapAssetRefs, stripInstallationState } from './projectAssets';
+import { getOpenProject } from './syncStore';
 
 export const LEGACY_PROJECT_FILE_EXTENSION = '.invokeproject.json';
 
@@ -118,6 +120,7 @@ const exportProjectDocument = async (
   name: string,
   projectId: string,
   projectDocument: Record<string, unknown>,
+  minimumCanvasSchemaVersion: number,
   options: Required<Pick<ProjectFileOptions, 'owner'>> & ProjectFileOptions
 ): Promise<ProjectExportOutcome> => {
   const { executeInvkExport, planInvkExport } = await import('./invk/exportProject');
@@ -135,6 +138,7 @@ const exportProjectDocument = async (
     appVersion: APP_VERSION,
     boardItems: snapshot.items,
     createdAt: new Date().toISOString(),
+    minimumCanvasSchemaVersion,
     name,
     projectDocument,
   });
@@ -164,7 +168,10 @@ export const exportLibraryProject = async (
 
   assertAccountScopeCurrent(owner);
 
-  return exportProjectDocument(record.name, record.project_id, record.data, { ...options, owner });
+  return exportProjectDocument(record.name, record.project_id, record.data, record.minimum_canvas_schema_version, {
+    ...options,
+    owner,
+  });
 };
 
 /** Export an open project from its live in-memory document. */
@@ -174,13 +181,21 @@ export const exportOpenProject = async (
 ): Promise<ProjectExportOutcome> => {
   const owner = options.owner ?? captureAccountScope();
   const { serializeProjectDocument } = await import('./projectDocument');
+  const document = serializeProjectDocument(project);
 
   assertAccountScopeCurrent(owner);
 
-  return exportProjectDocument(project.name, project.id, serializeProjectDocument(project), {
-    ...options,
-    owner,
-  });
+  // A source project can retain a higher compatibility floor than its current live canvas (for
+  // example because queue history still carries newer data). When an editor owns the project,
+  // flush and read that authoritative floor; direct/offline exports fall back to what their bytes
+  // demonstrably require.
+  const record = getOpenProject(project.id) ? await readAcknowledgedProject(project.id, owner) : null;
+  const minimumCanvasSchemaVersion = Math.max(
+    getProjectCanvasSchemaRequirement(document),
+    record?.minimum_canvas_schema_version ?? 1
+  );
+
+  return exportProjectDocument(project.name, project.id, document, minimumCanvasSchemaVersion, { ...options, owner });
 };
 
 /**
@@ -198,6 +213,16 @@ export const importProjectFile = async (
   const owner = options.owner ?? captureAccountScope();
   const source = await readProjectDocument(file);
   const projectDocument = source.format === 'invk' ? source.contents.projectDocument : source.projectDocument;
+
+  if (
+    source.format === 'invk' &&
+    (source.contents.manifest.minimumCanvasSchemaVersion ?? 1) > MAX_SUPPORTED_CANVAS_SCHEMA_VERSION
+  ) {
+    throw new InvkFormatError(
+      'unsupported-version',
+      `Project requires canvas schema ${source.contents.manifest.minimumCanvasSchemaVersion}.`
+    );
+  }
 
   assertAccountScopeCurrent(owner);
 
@@ -218,11 +243,17 @@ export const importProjectFile = async (
 
   assertAccountScopeCurrent(owner);
 
-  const project = deserializeProjectDocument(candidate);
+  const loaded = deserializeProjectDocument(candidate);
 
-  if (!project) {
+  if (loaded.status === 'refused') {
+    throw new InvkFormatError(toInvkFormatReason(loaded.refused), 'The project document was refused.');
+  }
+
+  if (loaded.status !== 'loaded') {
     throw new InvkFormatError('damaged', 'The project document will not rehydrate.');
   }
+
+  const project = loaded.project;
 
   const { applyAuthoritativeProjectBoard, serializeProjectDocument } = await import('./projectDocument');
   const canonicalDocument = serializeProjectDocument(project);
@@ -272,9 +303,14 @@ export const importProjectFile = async (
     assertAccountScopeCurrent(owner);
 
     const document = restored === null ? canonicalDocument : remapAssetRefs(canonicalDocument, restored.mappings);
+    const minimumCanvasSchemaVersion = Math.max(
+      getProjectCanvasSchemaRequirement(document),
+      archive?.manifest.minimumCanvasSchemaVersion ?? 1
+    );
     const record = await createProjectSettled(
       {
         data: document,
+        minimum_canvas_schema_version: minimumCanvasSchemaVersion,
         name,
         project_id: id,
         ...(stagingBoardId === null ? {} : { board_id: stagingBoardId }),
@@ -284,7 +320,15 @@ export const importProjectFile = async (
 
     didCreateProject = true;
     assertAccountScopeCurrent(owner);
-    upsertProjectSummary({ id: record.project_id, name: record.name, revision: record.revision }, owner);
+    upsertProjectSummary(
+      {
+        id: record.project_id,
+        minimumCanvasSchemaVersion: record.minimum_canvas_schema_version,
+        name: record.name,
+        revision: record.revision,
+      },
+      owner
+    );
 
     if (restored?.coverImageName) {
       recordProjectCover(record.project_id, restored.coverImageName, owner);

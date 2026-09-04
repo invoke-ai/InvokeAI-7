@@ -1,15 +1,20 @@
-import type { CanvasDocumentContractV2, Rect } from '@workbench/canvas-engine/api';
-import type { CanvasProjectMutationDispatch } from '@workbench/useCanvasProjectMutationDispatch';
+import type {
+  CanvasDocumentCapability,
+  CanvasDocumentContractV3,
+  Rect,
+  StructuralCommitResult,
+} from '@workbench/canvas-engine/api';
 
-import { createNewCanvasStateV2 } from '@workbench/canvasMigration';
+import { createNewCanvasState } from '@workbench/canvasMigration';
 
 /**
  * The slice of the engine the header's actions drive. Structural rather than the
  * full handle, so this module stays React-free and testable with a plain double.
  */
 export interface CanvasHeaderCommandEngine {
+  readonly document: Pick<CanvasDocumentCapability, 'replaceDocument'>;
   readonly layers: {
-    commitStructural(label: string, forward: unknown, inverse: unknown): boolean;
+    commitStructural(label: string, forward: unknown, inverse: unknown): StructuralCommitResult;
   };
   readonly viewport: {
     fitToView(): void;
@@ -22,19 +27,20 @@ export interface CanvasHeaderCommandEngine {
 
 /** The minimum the destructive replace needs — kept narrow so its memo deps stay tight. */
 export interface NewCanvasContext {
-  readonly document: Pick<CanvasDocumentContractV2, 'width' | 'height'>;
+  readonly document: Pick<CanvasDocumentContractV3, 'width' | 'height'>;
   /** An in-flight operation owns the document; every mutating header action is inert. */
   readonly editingLocked: boolean;
-  readonly dispatch: CanvasProjectMutationDispatch;
+  readonly engine: Pick<CanvasHeaderCommandEngine, 'document'>;
 }
 
 export interface CanvasHeaderCommandContext extends NewCanvasContext {
   readonly engine: CanvasHeaderCommandEngine;
-  readonly document: CanvasDocumentContractV2;
+  readonly document: CanvasDocumentContractV3;
   readonly fitLayersRect: Rect | null;
   readonly fitMasksRect: Rect | null;
   /** Opens the confirm dialog. The destructive replace only runs from its confirm. */
   readonly openNewCanvas: () => void;
+  readonly reportStructuralCommit: (result: StructuralCommitResult) => void;
   readonly t: (key: string) => string;
 }
 
@@ -55,12 +61,13 @@ export const applyFitBbox = (ctx: CanvasHeaderCommandContext, rect: Rect | null,
   if (ctx.editingLocked || !rect) {
     return;
   }
-  ctx.engine.layers.commitStructural(
+  const result = ctx.engine.layers.commitStructural(
     ctx.t('widgets.canvas.commands.fitBbox'),
     { bbox: rect, type: 'setCanvasBbox' },
     { bbox: ctx.document.bbox, type: 'setCanvasBbox' }
   );
-  if (refit) {
+  ctx.reportStructuralCommit(result);
+  if (refit && result.status === 'committed') {
     ctx.engine.viewport.fitToView();
   }
 };
@@ -75,10 +82,7 @@ export const confirmNewCanvas = (ctx: NewCanvasContext): void => {
   if (ctx.editingLocked) {
     return;
   }
-  ctx.dispatch({
-    document: createNewCanvasStateV2(ctx.document.width, ctx.document.height).document,
-    type: 'replaceCanvasDocument',
-  });
+  ctx.engine.document.replaceDocument(createNewCanvasState(ctx.document.width, ctx.document.height).document);
 };
 
 /**

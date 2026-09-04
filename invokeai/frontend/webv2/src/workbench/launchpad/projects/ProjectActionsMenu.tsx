@@ -21,6 +21,7 @@ const MENU_ITEM_DELETE_HOVER = { bg: 'bg.error', color: 'fg.error' } as const;
 
 export interface ProjectActionsMenuProps {
   actions: ProjectCardActions;
+  isCompatible: boolean;
   isPinned: boolean;
   /** Anchor point for a right-click; `null` anchors to the trigger instead. */
   contextMenuTarget: { x: number; y: number } | null;
@@ -39,6 +40,7 @@ export const ProjectActionsMenu = ({
   children,
   contextMenuTarget,
   isOpen,
+  isCompatible,
   isPinned,
   onOpenChange,
   onTogglePin,
@@ -75,6 +77,7 @@ export const ProjectActionsMenu = ({
           <Menu.Positioner>
             <MenuBody
               isPinned={isPinned}
+              isCompatible={isCompatible}
               projectSearch={projectSearch}
               onDelete={openDeleteDialog}
               onDuplicate={handleDuplicate}
@@ -112,6 +115,7 @@ export const ProjectActionsMenu = ({
 };
 
 const MenuBody = ({
+  isCompatible,
   isPinned,
   onDelete,
   onDuplicate,
@@ -120,6 +124,7 @@ const MenuBody = ({
   onTogglePin,
   projectSearch,
 }: {
+  isCompatible: boolean;
   isPinned: boolean;
   projectSearch: { project: string };
   onDelete: () => void;
@@ -132,26 +137,33 @@ const MenuBody = ({
 
   return (
     <MenuContent minW="44">
-      <Menu.Item asChild value="open">
-        <Link search={projectSearch} to="/app">
+      {isCompatible ? (
+        <Menu.Item asChild value="open">
+          <Link search={projectSearch} to="/app">
+            <Icon as={ArrowRightIcon} boxSize="3.5" />
+            {t('common.open')}
+          </Link>
+        </Menu.Item>
+      ) : (
+        <Menu.Item aria-label={t('projects.file.updateClient')} disabled value="open">
           <Icon as={ArrowRightIcon} boxSize="3.5" />
           {t('common.open')}
-        </Link>
-      </Menu.Item>
+        </Menu.Item>
+      )}
       <Menu.Item value="pin" onClick={onTogglePin}>
         <Icon as={isPinned ? PinOffIcon : PinIcon} boxSize="3.5" />
         {isPinned ? t('projects.unpin') : t('projects.pin')}
       </Menu.Item>
       <Menu.Separator />
-      <Menu.Item value="rename" onClick={onRename}>
+      <Menu.Item disabled={!isCompatible} value="rename" onClick={onRename}>
         <Icon as={PencilIcon} boxSize="3.5" />
         {t('projects.renameWithEllipsis')}
       </Menu.Item>
-      <Menu.Item value="duplicate" onClick={onDuplicate}>
+      <Menu.Item disabled={!isCompatible} value="duplicate" onClick={onDuplicate}>
         <Icon as={CopyIcon} boxSize="3.5" />
         {t('common.duplicate')}
       </Menu.Item>
-      <Menu.Item value="export" onClick={onExport}>
+      <Menu.Item disabled={!isCompatible} value="export" onClick={onExport}>
         <Icon as={FileDownIcon} boxSize="3.5" />
         {t('common.export')}
       </Menu.Item>

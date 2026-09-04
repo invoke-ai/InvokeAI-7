@@ -5,7 +5,7 @@ import type {
   LayerExportGuard,
 } from '@workbench/canvas-engine/capabilities';
 import type {
-  CanvasDocumentContractV2,
+  CanvasDocumentContractV3,
   CanvasLayerContract,
   CanvasLayerSourceContract,
 } from '@workbench/canvas-engine/contracts';
@@ -13,10 +13,11 @@ import type { LayerCacheEntry, LayerCacheStore } from '@workbench/canvas-engine/
 import type { RasterBackend } from '@workbench/canvas-engine/render/raster';
 import type { Rect } from '@workbench/canvas-engine/types';
 
+import { lookupDocumentLayer, lookupDocumentLeaf } from '@workbench/canvas-engine/document-model/documentModel';
 import { getSourceContentRect, renderableSourceOf } from '@workbench/canvas-engine/document/sources';
 import { fromTRS } from '@workbench/canvas-engine/math/mat2d';
 import { isEmpty, roundOut, transformBounds } from '@workbench/canvas-engine/math/rect';
-import { applyAdjustments } from '@workbench/canvas-engine/render/adjustments';
+import { applyAdjustments, isIdentityAdjustments } from '@workbench/canvas-engine/render/adjustments';
 
 export type ExportLayerPixelsResult =
   | {
@@ -31,10 +32,10 @@ export type ExportLayerPixelsResult =
 export interface RasterExportControllerOptions {
   readonly backend: RasterBackend;
   readonly captureGuard: (layer: CanvasLayerContract, entry: LayerCacheEntry) => LayerExportGuard;
-  readonly getDocument: () => CanvasDocumentContractV2 | null;
+  readonly getDocument: () => CanvasDocumentContractV3 | null;
   readonly getOrStartRasterization: (
     layer: CanvasLayerContract,
-    document: CanvasDocumentContractV2,
+    document: CanvasDocumentContractV3,
     signal?: AbortSignal
   ) => Promise<'published' | 'stale' | 'error' | 'aborted'>;
   readonly isGuardCurrent: (guard: LayerExportGuard) => boolean;
@@ -68,7 +69,8 @@ export class RasterExportController {
     shouldApply: boolean
   ): ExportLayerPixelsResult {
     const layer = result.guard.layer;
-    if (!shouldApply || layer.type !== 'raster' || !layer.adjustments) {
+    // Identity-aware: an emptied or all-disabled stack must not reserve or copy.
+    if (!shouldApply || layer.type !== 'raster' || isIdentityAdjustments(layer.adjustments)) {
       return result;
     }
     const reservation = this.options.reserve?.(result.rect.width * result.rect.height * 8);
@@ -110,12 +112,12 @@ export class RasterExportController {
     if (!document) {
       return { status: 'missing' };
     }
-    const layer = document.layers.find((candidate) => candidate.id === layerId);
+    const layer = lookupDocumentLayer(document, layerId);
     const source = layer ? renderableSourceOf(layer) : null;
     if (!layer || !source) {
       return { status: 'missing' };
     }
-    if (!options.includeDisabled && !layer.isEnabled) {
+    if (!options.includeDisabled && !lookupDocumentLeaf(document, layerId)?.contributionEnabled) {
       return { status: 'disabled' };
     }
     if (!this.options.isSupportedSource(source)) {
@@ -155,7 +157,7 @@ export class RasterExportController {
       }
     }
     const currentDocument = this.options.getDocument();
-    const currentLayer = currentDocument?.layers.find((candidate) => candidate.id === layerId);
+    const currentLayer = currentDocument ? lookupDocumentLayer(currentDocument, layerId) : null;
     const entry = this.options.layers.get(layerId);
     if (!currentLayer || !entry || entry.stale) {
       return { status: 'not-ready' };
@@ -164,7 +166,7 @@ export class RasterExportController {
     if (!currentSource) {
       return { status: 'missing' };
     }
-    if (!options.includeDisabled && !currentLayer.isEnabled) {
+    if (!options.includeDisabled && !lookupDocumentLeaf(currentDocument!, layerId)?.contributionEnabled) {
       return { status: 'disabled' };
     }
     if (!this.options.isSupportedSource(currentSource)) {
@@ -205,7 +207,8 @@ export class RasterExportController {
       raw.release();
       return noReservedPixels({ status: 'empty' });
     }
-    const appliesAdjustments = options.applyAdjustments !== false && layer.type === 'raster' && !!layer.adjustments;
+    const appliesAdjustments =
+      options.applyAdjustments !== false && layer.type === 'raster' && !isIdentityAdjustments(layer.adjustments);
     const reservation = this.options.reserve?.(rect.width * rect.height * (appliesAdjustments ? 8 : 4));
     if (reservation?.status === 'over-budget') {
       raw.release();

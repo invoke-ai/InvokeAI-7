@@ -1,7 +1,8 @@
 import type { ProjectGraphState } from '@features/workflow/contracts';
 import type { BackendConnectionStatus } from '@platform/transport/types';
 
-import type { CanvasStateContractV2 } from './canvas-engine/api';
+import type { CanvasStateContractV3 } from './canvas-engine/api';
+import type { CanvasLoadRefusal } from './canvasLoadContracts';
 import type { GraphContract } from './graphContracts';
 import type { InvocationControllerState } from './invocationContracts';
 import type {
@@ -47,13 +48,29 @@ export interface Project {
    */
   floatingWidgets?: Record<WidgetInstanceId, FloatingWidgetState>;
   widgetGraphs: Partial<Record<WidgetTypeId, GraphContract>>;
-  canvas: CanvasStateContractV2;
+  canvas: CanvasStateContractV3;
   graphHistory: GraphHistorySnapshot[];
   promptHistory: PromptHistoryItem[];
   undoRedo: UndoRedoHistory;
   queue: WorkbenchQueueState;
   events: ProjectEvent[];
 }
+
+/** A persisted project the canvas version gate refused. `raw` is the untouched document, kept for recovery. */
+export interface RefusedWorkbenchProject {
+  projectId: string;
+  projectName: string;
+  raw: unknown;
+  /** Which embedded canvas was refused: the live one, or a queue-history item's snapshot. */
+  source: 'canvas' | 'queue-item';
+  queueItem?: { index: number; itemId: string | null };
+  refusal: CanvasLoadRefusal;
+}
+
+export type ProjectLoadResult =
+  | { status: 'loaded'; project: Project }
+  | { status: 'refused'; refused: RefusedWorkbenchProject }
+  | { status: 'unavailable' };
 
 export interface WorkbenchState {
   projects: Project[];

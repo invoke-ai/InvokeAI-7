@@ -528,3 +528,29 @@ describe('createHistory: failure-atomic replay', () => {
     expect(disposed).toEqual(['evicted', 'redo-cleared', 'amended', 'cleared']);
   });
 });
+
+describe('createHistory: entries enumeration', () => {
+  it('lists past oldest-first and future next-redo-first, tracking every mutation', () => {
+    const log: string[] = [];
+    const history = createHistory();
+    expect(history.entries()).toEqual({ future: [], past: [] });
+
+    history.push(makeEntry('a', log));
+    history.push(makeEntry('b', log));
+    history.push(makeEntry('c', log));
+    expect(history.entries()).toEqual({ future: [], past: ['a', 'b', 'c'] });
+
+    history.undo();
+    history.undo();
+    expect(history.entries()).toEqual({ future: ['b', 'c'], past: ['a'] });
+
+    history.redo();
+    expect(history.entries()).toEqual({ future: ['c'], past: ['a', 'b'] });
+
+    history.push(makeEntry('d', log));
+    expect(history.entries()).toEqual({ future: [], past: ['a', 'b', 'd'] });
+
+    history.clear();
+    expect(history.entries()).toEqual({ future: [], past: [] });
+  });
+});

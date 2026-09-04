@@ -47,6 +47,7 @@ export {
 export {
   DEFAULT_GALLERY_SETTINGS,
   getGallerySettings,
+  isGalleryStarredFirst,
   type GalleryPaginationMode,
   type GallerySettings,
   type GalleryThumbnailFit,
@@ -68,6 +69,7 @@ export {
   type GallerySelectedImageQuery,
 } from './ui/galleryStateView';
 export {
+  getGalleryDeletionSuccessor,
   getPersistedSelectedGalleryItemKeys,
   getSelectedGalleryImageFromValues,
   getSelectedGalleryItemFromValues,

@@ -3,7 +3,8 @@ import type { WidgetInstanceId } from '@workbench/widgetContracts';
 
 import { Box, Flex, HStack, Icon, Text } from '@chakra-ui/react';
 import { flushWorkbenchDrafts } from '@platform/react/draftRegistry';
-import { IconButton, Tooltip } from '@platform/ui';
+import { IconButton } from '@platform/ui/Button';
+import { Tooltip } from '@platform/ui/Tooltip';
 import {
   clampWindowToViewport,
   FLOATING_MIN_HEIGHT_PX,

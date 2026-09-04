@@ -553,6 +553,58 @@ const createProjectFileWorkflowNodes = () => {
   ];
 };
 
+/**
+ * The canvas leaves of a v3 document, stacks in composition order, each forest in preorder. The
+ * order mirrors `LAYER_STACK_ORDER` in `src/workbench/canvas-engine/contracts.ts`, which a plain
+ * module cannot import; keep the two in step.
+ */
+export const collectCanvasLeaves = (document) => {
+  const leaves = [];
+  const visit = (nodes) => {
+    for (const node of nodes ?? []) {
+      if (node.type === 'group') {
+        visit(node.children);
+      } else {
+        leaves.push(node);
+      }
+    }
+  };
+  for (const stack of ['raster', 'control', 'regional_guidance', 'inpaint_mask']) {
+    visit(document?.stacks?.[stack]);
+  }
+  return leaves;
+};
+
+/**
+ * The representative raster forest: 64 leaves, of which 24 sit in three groups (one nested two
+ * deep), so the tree exercises indentation, ancestor-effective state and folder export.
+ */
+const createRasterForest = (layers) => {
+  if (layers.length < 32) {
+    return layers;
+  }
+  const group = (id, name, children, overrides = {}) => ({
+    children,
+    id,
+    isEnabled: true,
+    isLocked: false,
+    name,
+    type: 'group',
+    ...overrides,
+  });
+  return [
+    ...layers.slice(0, 8),
+    group('fixture-group-001', 'Fixture Group 001', [
+      ...layers.slice(8, 12),
+      group('fixture-group-002', 'Fixture Group 002', layers.slice(12, 16), { isEnabled: false }),
+      ...layers.slice(16, 20),
+    ]),
+    ...layers.slice(20, 28),
+    group('fixture-group-003', 'Fixture Group 003', layers.slice(28, 32), { isLocked: true }),
+    ...layers.slice(32),
+  ];
+};
+
 const createProjectDocument = ({ index, layers = [], workflowNodes = [] }) => {
   const id = `fixture-project-${ordinal(index, 3)}`;
   const graphId = `${id}-graph`;
@@ -564,9 +616,9 @@ const createProjectDocument = ({ index, layers = [], workflowNodes = [] }) => {
         background: 'transparent',
         bbox: { height: 1024, width: 1024, x: 0, y: 0 },
         height: 1024,
-        layers,
         selectedLayerId: layers[0]?.id ?? null,
-        version: 2,
+        stacks: { control: [], inpaint_mask: [], raster: createRasterForest(layers), regional_guidance: [] },
+        version: 3,
         width: 1024,
       },
       documentRevision: 0,
@@ -579,7 +631,7 @@ const createProjectDocument = ({ index, layers = [], workflowNodes = [] }) => {
         pendingImages: [],
         selectedImageIndex: 0,
       },
-      version: 2,
+      version: 3,
     },
     events: [],
     graphHistory: [],
@@ -642,6 +694,7 @@ const createProjects = (count, workflowNodeCount, layerCount) =>
       board_id: projectBoardId(index),
       created_at: timestamp,
       data,
+      minimum_canvas_schema_version: 3,
       name: data.name,
       project_id: data.id,
       revision: 1,
@@ -728,7 +781,7 @@ const countInvocationSchemas = (fixture) =>
 
 export const getMockBackendFixtureCounts = (fixture) => ({
   images: fixture.images.length,
-  layers: fixture.projects[0]?.data?.canvas?.document?.layers?.length ?? 0,
+  layers: collectCanvasLeaves(fixture.projects[0]?.data?.canvas?.document).length,
   models: fixture.models.length,
   nodes: countInvocationSchemas(fixture),
   projects: fixture.projects.length,

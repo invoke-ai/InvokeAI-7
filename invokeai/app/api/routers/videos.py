@@ -1,3 +1,4 @@
+import json
 import os
 import re
 import tempfile
@@ -48,6 +49,7 @@ from invokeai.app.services.videos.videos_common import (
     VideoDTO,
     VideoUrlsDTO,
 )
+from invokeai.app.util.video_ingest import VideoIngestError, ingest_media_to_mp4, probe_media_streams
 from invokeai.app.util.video_thumbnails import VideoDecodeTimeoutError, extract_video_frame, probe_video_with_codec
 
 videos_router = APIRouter(prefix="/v1/videos", tags=["videos"])
@@ -55,12 +57,18 @@ videos_router = APIRouter(prefix="/v1/videos", tags=["videos"])
 # Videos are immutable; set a high max-age (1 year)
 VIDEO_MAX_AGE = 31536000
 
-# MP4 only — the names service emits `{uuid}.mp4` unconditionally and we don't transcode on
-# upload. Accepting .mov/.webm/.mkv here previously caused those containers to be stored
-# under a .mp4 name and served with the .mp4 MIME type, which silently broke playback in
-# browsers when the container did not match.
-ACCEPTED_VIDEO_MIME_PREFIXES = ("video/mp4",)
-ACCEPTED_VIDEO_EXTENSIONS = (".mp4",)
+# The names service emits `{uuid}.mp4` unconditionally and files are served as video/mp4,
+# so everything *stored* must genuinely be H.264 MP4 — storing foreign containers under a
+# .mp4 name silently broke browser playback, which is why uploads were historically
+# restricted to already-compliant files. Uploads are now normalized at ingest instead
+# (see invokeai.app.util.video_ingest): H.264 in a foreign container is losslessly
+# remuxed, other codecs (iPhone HEVC, ProRes, VP9) are transcoded, and audio-only files
+# are wrapped into waveform videos so audio clips flow through the video pipeline
+# (gallery, trim, audio-only reference conditioning) without a first-class audio type.
+ACCEPTED_VIDEO_MIME_PREFIXES = ("video/",)
+ACCEPTED_VIDEO_EXTENSIONS = (".mp4", ".mov", ".m4v", ".webm", ".mkv", ".avi", ".mpg", ".mpeg", ".3gp")
+ACCEPTED_AUDIO_MIME_PREFIXES = ("audio/",)
+ACCEPTED_AUDIO_EXTENSIONS = (".mp3", ".m4a", ".aac", ".wav", ".flac", ".ogg", ".oga", ".opus", ".aiff", ".aif")
 
 # Per-chunk size for HTTP Range responses (1 MB)
 RANGE_CHUNK_SIZE = 1024 * 1024
@@ -113,12 +121,32 @@ def _assert_video_direct_owner(video_name: str, current_user: CurrentUserOrDefau
     raise HTTPException(status_code=403, detail="Not authorized to move this video")
 
 
-def _is_accepted_video_upload(file: UploadFile) -> bool:
-    if file.content_type and file.content_type.startswith(ACCEPTED_VIDEO_MIME_PREFIXES):
-        return True
+def _classify_upload(file: UploadFile) -> Optional[str]:
+    """Returns 'video' or 'audio' for an accepted upload, None for a rejected one.
+
+    The classification is advisory (it picks the 415 message and nothing else): the
+    ingest path probes actual stream content, so a mislabeled file still converts
+    correctly or fails with a clear error.
+    """
+    if file.content_type:
+        if file.content_type.startswith(ACCEPTED_VIDEO_MIME_PREFIXES):
+            return "video"
+        if file.content_type.startswith(ACCEPTED_AUDIO_MIME_PREFIXES):
+            return "audio"
     if file.filename:
-        return file.filename.lower().endswith(ACCEPTED_VIDEO_EXTENSIONS)
-    return False
+        name = file.filename.lower()
+        if name.endswith(ACCEPTED_VIDEO_EXTENSIONS):
+            return "video"
+        if name.endswith(ACCEPTED_AUDIO_EXTENSIONS):
+            return "audio"
+    return None
+
+
+def _with_media_origin(metadata: Optional[str], origin: str) -> str:
+    """Merges a `media_origin` marker into the upload's (already-validated) metadata JSON."""
+    parsed = json.loads(metadata) if metadata else {}
+    parsed.setdefault("media_origin", origin)
+    return json.dumps(parsed)
 
 
 def _is_mp4_file(path: Path) -> bool:
@@ -206,8 +234,9 @@ async def upload_video(
     # Check board access for uploads to a specific board.
     await run_in_threadpool(_assert_board_write_access, board_id, current_user)
 
-    if not _is_accepted_video_upload(file):
-        raise HTTPException(status_code=415, detail="Not a supported video file")
+    upload_kind = _classify_upload(file)
+    if upload_kind is None:
+        raise HTTPException(status_code=415, detail="Not a supported video or audio file")
 
     # Stream the upload to a tmp file so we can probe and then hand its path to the service.
     # Reading the full body into memory first risked exhausting RAM on multi-GB uploads;
@@ -236,8 +265,41 @@ async def upload_video(
         # window to the copy loop itself.
         await file.close()
 
-        if not await run_in_threadpool(_is_mp4_file, tmp_path):
-            raise HTTPException(status_code=415, detail="Not an MP4 video file")
+        # Already-compliant H.264 MP4s pass through byte-identical (the historical path);
+        # everything else — foreign containers, foreign codecs, audio-only files — is
+        # normalized by the ingest converter. The conversion runs inside this upload's
+        # concurrency slot: a long HEVC transcode holds one of MAX_CONCURRENT_VIDEO_UPLOADS
+        # slots for its duration, which is the intended backpressure.
+        needs_ingest = True
+        if upload_kind == "video" and await run_in_threadpool(_is_mp4_file, tmp_path):
+            try:
+                container_probe = await run_in_threadpool(probe_media_streams, tmp_path)
+            except VideoIngestError as e:
+                raise HTTPException(status_code=415, detail=str(e))
+            # Both codecs must already be browser-safe to skip ingest: an mp4-family
+            # container can legally carry h264 video with AMR/opus/mp3/ac3 audio (e.g.
+            # older Android .3gp camera files), which browsers render as silent video.
+            # The remux branch stream-copies the h264 and normalizes only the audio.
+            needs_ingest = container_probe.video_codec != "h264" or container_probe.audio_codec not in (None, "aac")
+
+        if needs_ingest:
+            converted = tempfile.NamedTemporaryFile(prefix="invokeai_ingest_", suffix=".mp4", delete=False)
+            converted_path = Path(converted.name)
+            converted.close()
+            try:
+                ingest_action = await run_in_threadpool(
+                    ingest_media_to_mp4, tmp_path, converted_path, max_output_bytes=MAX_UPLOAD_SIZE
+                )
+                await run_in_threadpool(os.replace, converted_path, tmp_path)
+            except VideoIngestError as e:
+                ApiDependencies.invoker.services.logger.info(f"Video upload ingest failed: {e}")
+                raise HTTPException(status_code=415, detail=str(e))
+            finally:
+                converted_path.unlink(missing_ok=True)
+            if ingest_action == "audio_wrap":
+                # Mark wrapped audio uploads so clients can treat them as audio clips
+                # (e.g. defaulting an audio-only reference conditioning mode).
+                metadata = _with_media_origin(metadata, "audio_upload")
 
         try:
             (width, height, duration, fps), first_frame = await run_in_threadpool(_probe_decodable_video, tmp_path)

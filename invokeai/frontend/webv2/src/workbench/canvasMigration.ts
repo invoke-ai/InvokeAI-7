@@ -1,15 +1,24 @@
 import type {
-  CanvasDocumentContractV2,
-  CanvasImageRef,
+  CanvasDocumentContractV3,
+  CanvasGroupContract,
   CanvasInpaintMaskLayerContract,
   CanvasLayerBaseContract,
-  CanvasRasterLayerContractV2,
+  CanvasLayerContract,
+  CanvasNodeContract,
+  CanvasSnapshotContract,
+  CanvasStackForests,
   CanvasStagingAreaContractV2,
-  CanvasStateContractV2,
+  CanvasStateContractV3,
+  LayerStackKind,
 } from '@workbench/canvas-engine/api';
 
+import { CANVAS_MAX_NODE_COUNT, CANVAS_MAX_NODE_DEPTH, LAYER_STACK_ORDER } from '@workbench/canvas-engine/api';
+import { repairSelectedLayerId } from '@workbench/canvas-engine/document/selectionRepair';
 import { z } from 'zod';
 
+import type { CanvasLoadDiagnostic, CanvasLoadResult, CanvasVersionScope } from './canvasLoadContracts';
+
+import { MAX_SUPPORTED_CANVAS_SCHEMA_VERSION } from './canvasSchemaVersion';
 import { normalizeControlAdapter } from './controlAdapters';
 
 export const DEFAULT_CANVAS_DOCUMENT_WIDTH = 1024;
@@ -18,7 +27,8 @@ export const DEFAULT_CANVAS_DOCUMENT_HEIGHT = 1024;
 const createMigrationId = (prefix: string): string =>
   `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 
-const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null;
+export const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
 
 const zFiniteNumber = z.number().finite();
 const zCoordinate = z.object({ x: zFiniteNumber, y: zFiniteNumber });
@@ -49,7 +59,7 @@ const zLayerSource = z.discriminatedUnion('type', [
   z.object({
     fill: z.string().nullable(),
     height: zFiniteNumber,
-    kind: z.enum(['rect', 'ellipse', 'polygon']),
+    kind: z.enum(['rect', 'ellipse', 'triangle', 'star', 'polygon']),
     points: z.array(zCoordinate).optional(),
     stroke: z.string().nullable(),
     strokeWidth: zFiniteNumber,
@@ -74,12 +84,37 @@ const zTransform = z.object({
 });
 const zFilter = z.object({ settings: z.record(z.string(), z.unknown()), type: z.string() });
 const zCurve = z.array(z.tuple([zFiniteNumber, zFiniteNumber]));
-const zAdjustments = z.object({
-  brightness: zFiniteNumber,
-  contrast: zFiniteNumber,
-  curves: z.object({ b: zCurve, g: zCurve, r: zCurve }).optional(),
-  saturation: zFiniteNumber,
-});
+const zAdjustmentBase = { id: z.string(), isEnabled: z.boolean(), name: z.string().optional() };
+const zAdjustmentEntry = z.discriminatedUnion('type', [
+  z.object({
+    ...zAdjustmentBase,
+    brightness: zFiniteNumber,
+    contrast: zFiniteNumber,
+    type: z.literal('brightness-contrast'),
+  }),
+  z.object({ ...zAdjustmentBase, stops: zFiniteNumber, type: z.literal('exposure') }),
+  z.object({ ...zAdjustmentBase, saturation: zFiniteNumber, type: z.literal('hsl') }),
+  z.object({
+    ...zAdjustmentBase,
+    curves: z.object({ b: zCurve.optional(), g: zCurve.optional(), r: zCurve.optional() }),
+    type: z.literal('curves'),
+  }),
+  z
+    .object({
+      ...zAdjustmentBase,
+      channel: z.enum(['rgb', 'r', 'g', 'b']).optional(),
+      gamma: zFiniteNumber,
+      inBlack: zFiniteNumber,
+      inWhite: zFiniteNumber,
+      outBlack: zFiniteNumber,
+      outWhite: zFiniteNumber,
+      type: z.literal('levels'),
+    })
+    .refine((entry) => entry.inBlack < entry.inWhite && entry.gamma > 0),
+  z.object({ ...zAdjustmentBase, rotation: zFiniteNumber, type: z.literal('hue') }),
+  z.object({ ...zAdjustmentBase, type: z.literal('invert') }),
+]);
+const zAdjustments = z.array(zAdjustmentEntry);
 const zControlAdapter = z
   .object({
     beginEndStepPct: z.tuple([zFiniteNumber, zFiniteNumber]),
@@ -93,12 +128,13 @@ const zControlAdapter = z
     return begin >= 0 && end <= 1 && begin < end;
   })
   .refine(({ kind, weight }) => weight >= (kind === 'z_image_control' ? 0 : -1) && weight <= 2);
+const zMaskFill = z.object({
+  color: z.string(),
+  style: z.enum(['solid', 'grid', 'crosshatch', 'diagonal', 'horizontal', 'vertical']),
+});
 const zMask = z.object({
   bitmap: zImageRef.nullable(),
-  fill: z.object({
-    color: z.string(),
-    style: z.enum(['solid', 'grid', 'crosshatch', 'diagonal', 'horizontal', 'vertical']),
-  }),
+  fill: zMaskFill,
   offset: zCoordinate.optional(),
 });
 const zGeneratedImage = z.object({
@@ -110,7 +146,9 @@ const zGeneratedImage = z.object({
   thumbnailUrl: z.string(),
   width: zFiniteNumber.nonnegative(),
 });
-const zModelIdentifier = z.object({ base: z.string(), key: z.string(), name: z.string(), type: z.string() });
+const zModelIdentifier = z
+  .object({ base: z.string(), key: z.string(), name: z.string(), type: z.string() })
+  .passthrough();
 const zReferenceImage = z.object({
   config: z.discriminatedUnion('type', [
     z.object({
@@ -140,25 +178,28 @@ const zReferenceImage = z.object({
   id: z.string(),
   isEnabled: z.boolean(),
 });
+const zBlendMode = z.enum([
+  'normal',
+  'multiply',
+  'screen',
+  'overlay',
+  'darken',
+  'lighten',
+  'color-dodge',
+  'color-burn',
+  'hard-light',
+  'soft-light',
+  'difference',
+  'exclusion',
+  'hue',
+  'saturation',
+  'color',
+  'luminosity',
+]);
+const zColorLabel = z.enum(['red', 'orange', 'yellow', 'green', 'blue', 'violet', 'gray']);
 const zLayerBase = z.object({
-  blendMode: z.enum([
-    'normal',
-    'multiply',
-    'screen',
-    'overlay',
-    'darken',
-    'lighten',
-    'color-dodge',
-    'color-burn',
-    'hard-light',
-    'soft-light',
-    'difference',
-    'exclusion',
-    'hue',
-    'saturation',
-    'color',
-    'luminosity',
-  ]),
+  blendMode: zBlendMode,
+  colorLabel: zColorLabel.optional().catch(undefined),
   id: z.string(),
   isEnabled: z.boolean(),
   isLocked: z.boolean(),
@@ -168,7 +209,12 @@ const zLayerBase = z.object({
 });
 const zCanvasLayer = z.discriminatedUnion('type', [
   zLayerBase.extend({
-    adjustments: zAdjustments.optional(),
+    // A pre-stack adjustments OBJECT is dropped rather than failing the document.
+    adjustments: zAdjustments.optional().catch(undefined),
+    inpaint: z
+      .object({ fill: zMaskFill, isEnabled: z.boolean(), name: z.string().optional() })
+      .optional()
+      .catch(undefined),
     filter: zFilter.optional(),
     isTransparencyLocked: z.boolean().optional(),
     source: zLayerSource,
@@ -194,17 +240,15 @@ const zCanvasLayer = z.discriminatedUnion('type', [
     type: z.literal('regional_guidance'),
   }),
   zLayerBase.extend({
-    denoiseLimit: zFiniteNumber.optional(),
+    denoise: z.object({ isEnabled: z.boolean(), limit: zFiniteNumber }).optional(),
     isHidden: z.boolean().optional(),
     mask: zMask,
-    noiseLevel: zFiniteNumber.optional(),
+    noise: z.object({ isEnabled: z.boolean(), level: zFiniteNumber }).optional(),
     type: z.literal('inpaint_mask'),
   }),
 ]);
 
 const asNumber = (value: unknown, fallback: number): number => (typeof value === 'number' ? value : fallback);
-
-const asString = (value: unknown, fallback: string): string => (typeof value === 'string' ? value : fallback);
 
 const asPositiveNumber = (value: unknown, fallback: number): number => {
   const numeric = asNumber(value, fallback);
@@ -212,7 +256,7 @@ const asPositiveNumber = (value: unknown, fallback: number): number => {
   return numeric > 0 ? numeric : fallback;
 };
 
-/** A positive whole-pixel dimension, shared by creation and every migration path. */
+/** A positive whole-pixel dimension, shared by creation and every load path. */
 const asPositiveInteger = (value: unknown, fallback: number): number =>
   Math.max(1, Math.round(asPositiveNumber(value, fallback)));
 
@@ -233,38 +277,39 @@ const normalizeCanvasDocumentGeometry = (rawWidth: unknown, rawHeight: unknown, 
   };
 };
 
-export const createEmptyCanvasStateV2 = (
-  width = DEFAULT_CANVAS_DOCUMENT_WIDTH,
-  height = DEFAULT_CANVAS_DOCUMENT_HEIGHT
-): CanvasStateContractV2 => ({
-  document: createEmptyCanvasDocumentV2(width, height),
-  documentRevision: 0,
-  snapshots: [],
-  stagingArea: createDefaultStagingAreaV2(),
-  version: 2,
+const createEmptyStacks = (): CanvasStackForests => ({
+  control: [],
+  inpaint_mask: [],
+  raster: [],
+  regional_guidance: [],
 });
 
-export const createEmptyCanvasDocumentV2 = (
+export const createEmptyCanvasState = (
   width = DEFAULT_CANVAS_DOCUMENT_WIDTH,
   height = DEFAULT_CANVAS_DOCUMENT_HEIGHT
-): CanvasDocumentContractV2 => {
-  const geometry = normalizeCanvasDocumentGeometry(width, height);
-  return {
-    background: 'transparent',
-    ...geometry,
-    layers: [],
-    selectedLayerId: null,
-    version: 2,
-  };
-};
+): CanvasStateContractV3 => ({
+  document: createEmptyCanvasDocument(width, height),
+  documentRevision: 0,
+  snapshots: [],
+  stagingArea: createDefaultStagingArea(),
+  version: 3,
+});
+
+export const createEmptyCanvasDocument = (
+  width = DEFAULT_CANVAS_DOCUMENT_WIDTH,
+  height = DEFAULT_CANVAS_DOCUMENT_HEIGHT
+): CanvasDocumentContractV3 => ({
+  background: 'transparent',
+  ...normalizeCanvasDocumentGeometry(width, height),
+  selectedLayerId: null,
+  stacks: createEmptyStacks(),
+  version: 3,
+});
 
 /**
- * A brand-new project's default inpaint mask: one empty mask (no bitmap/strokes)
- * with the legacy-default diagonal-hatch fill in the first cycled mask colour
- * (legacy `rgb(224,117,117)`). Mirrors `createInpaintMaskLayer` /
- * `DEFAULT_INPAINT_MASK_FILL` in `widgets/layers/layerOps` — duplicated here so
- * the pure reducer/migration module doesn't pull in the layers-panel/engine
- * module graph; `canvasMigration.test.ts` locks the shape against that factory.
+ * A brand-new project's default inpaint mask: one empty mask with the default diagonal-hatch fill
+ * in the first cycled mask colour. Mirrors `createInpaintMaskLayer` in `widgets/layers/layerOps`,
+ * duplicated so this pure module does not pull in the panel module graph.
  */
 const createInitialInpaintMaskLayer = (): CanvasInpaintMaskLayerContract => ({
   blendMode: 'normal',
@@ -278,30 +323,20 @@ const createInitialInpaintMaskLayer = (): CanvasInpaintMaskLayerContract => ({
   type: 'inpaint_mask',
 });
 
-/**
- * A fresh canvas state for a newly created project: an empty document that
- * already carries one empty inpaint mask (selected), matching legacy, which seeds
- * a canvas session with an inpaint mask present. The mask has no content, so it
- * does NOT flip generation-mode detection to inpaint (see `detectCanvasMode`).
- *
- * This is the NEW-canvas path only. The migration / garbage-fallback path
- * (`migrateCanvasStateToV2`) and `createEmptyCanvasStateV2` stay empty, so
- * existing and migrated documents are left untouched.
- */
-export const createNewCanvasStateV2 = (
+/** A fresh canvas state for a newly created project: an empty document with one selected empty inpaint mask. */
+export const createNewCanvasState = (
   width = DEFAULT_CANVAS_DOCUMENT_WIDTH,
   height = DEFAULT_CANVAS_DOCUMENT_HEIGHT
-): CanvasStateContractV2 => {
-  const base = createEmptyCanvasStateV2(width, height);
+): CanvasStateContractV3 => {
+  const base = createEmptyCanvasState(width, height);
   const mask = createInitialInpaintMaskLayer();
-
   return {
     ...base,
-    document: { ...base.document, layers: [mask], selectedLayerId: mask.id },
+    document: { ...base.document, selectedLayerId: mask.id, stacks: { ...base.document.stacks, inpaint_mask: [mask] } },
   };
 };
 
-const createDefaultStagingAreaV2 = (): CanvasStagingAreaContractV2 => ({
+const createDefaultStagingArea = (): CanvasStagingAreaContractV2 => ({
   areThumbnailsVisible: true,
   autoSwitchMode: 'off',
   isVisible: false,
@@ -311,9 +346,8 @@ const createDefaultStagingAreaV2 = (): CanvasStagingAreaContractV2 => ({
 });
 
 /**
- * Converts a v1 `{x,y,width,height}` placement rect, plus the native size of the image it
- * places, into a v2 `transform`. Shared by the migration path and the live "accept staged
- * image into a raster layer" reducer, which still works from a v1-shaped placement.
+ * Converts a `{x,y,width,height}` placement rect, plus the native size of the image it places,
+ * into a layer `transform`. Used by the "accept staged image into a raster layer" reducer path.
  */
 export const placementToTransform = (
   placement: { x: number; y: number; width: number; height: number },
@@ -327,65 +361,6 @@ export const placementToTransform = (
   y: placement.y,
 });
 
-/** Migrates a single v1 `CanvasRasterLayerContract` (or bare imageName string) into a v2 raster layer. */
-const migrateLayerToV2 = (rawLayer: unknown, index: number): CanvasRasterLayerContractV2 => {
-  if (typeof rawLayer === 'string') {
-    return {
-      blendMode: 'normal',
-      id: rawLayer || createMigrationId('layer'),
-      isEnabled: true,
-      isLocked: false,
-      name: rawLayer || `Layer ${index + 1}`,
-      opacity: 1,
-      source: { image: { height: 0, imageName: rawLayer, width: 0 }, type: 'image' },
-      transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 },
-      type: 'raster',
-    };
-  }
-
-  const layer = isRecord(rawLayer) ? rawLayer : {};
-  const image: CanvasImageRef = {
-    height: asNumber(layer.height, 0),
-    imageName: asString(layer.imageName, ''),
-    width: asNumber(layer.width, 0),
-  };
-  const placement = isRecord(layer.placement) ? layer.placement : {};
-  const placementX = asNumber(placement.x, 0);
-  const placementY = asNumber(placement.y, 0);
-  const placementWidth = asNumber(placement.width, image.width);
-  const placementHeight = asNumber(placement.height, image.height);
-  const placementOpacity = typeof placement.opacity === 'number' ? placement.opacity : 1;
-
-  return {
-    blendMode: 'normal',
-    id: asString(layer.id, createMigrationId('layer')),
-    isEnabled: true,
-    isLocked: false,
-    name: asString(layer.label, `Layer ${index + 1}`),
-    opacity: placementOpacity,
-    source: { image, type: 'image' },
-    transform: placementToTransform(
-      { height: placementHeight, width: placementWidth, x: placementX, y: placementY },
-      image.width,
-      image.height
-    ),
-    type: 'raster',
-  };
-};
-
-const migrateDocumentToV2 = (rawCanvas: Record<string, unknown>): CanvasDocumentContractV2 => {
-  const rawDocument = isRecord(rawCanvas.document) ? rawCanvas.document : rawCanvas;
-  const rawLayers = Array.isArray(rawDocument.layers) ? rawDocument.layers : [];
-
-  return {
-    background: 'transparent',
-    ...normalizeCanvasDocumentGeometry(rawDocument.width, rawDocument.height),
-    layers: rawLayers.map((rawLayer, index) => migrateLayerToV2(rawLayer, index)),
-    selectedLayerId: null,
-    version: 2,
-  };
-};
-
 const AUTO_SWITCH_MODES: CanvasStagingAreaContractV2['autoSwitchMode'][] = ['off', 'latest', 'progress'];
 
 const asAutoSwitchMode = (value: unknown): CanvasStagingAreaContractV2['autoSwitchMode'] =>
@@ -393,13 +368,10 @@ const asAutoSwitchMode = (value: unknown): CanvasStagingAreaContractV2['autoSwit
     ? (value as CanvasStagingAreaContractV2['autoSwitchMode'])
     : 'off';
 
-/**
- * Normalizes a v1 or v2 staging area. v1 never had `autoSwitchMode`, so it's absent from raw
- * input and defaults to `'off'`; already-v2 input keeps its existing value.
- */
-const migrateStagingAreaToV2 = (rawCanvas: Record<string, unknown>): CanvasStagingAreaContractV2 => {
+/** Fills the known optional defaults of a staging area. */
+const normalizeStagingArea = (rawCanvas: Record<string, unknown>): CanvasStagingAreaContractV2 => {
   const rawStagingArea = isRecord(rawCanvas.stagingArea) ? rawCanvas.stagingArea : {};
-  const defaults = createDefaultStagingAreaV2();
+  const defaults = createDefaultStagingArea();
 
   return {
     areThumbnailsVisible:
@@ -422,13 +394,83 @@ const migrateStagingAreaToV2 = (rawCanvas: Record<string, unknown>): CanvasStagi
   };
 };
 
-const isCanvasStateV2 = (canvas: unknown): canvas is Record<string, unknown> & { version: 2 } =>
-  isRecord(canvas) && canvas.version === 2;
+type Refusal =
+  | { status: 'unsupported-version'; scope: CanvasVersionScope; version: number }
+  | { status: 'invalid'; scope: CanvasVersionScope; diagnostics: readonly CanvasLoadDiagnostic[] };
 
-const normalizeCanvasLayer = (value: unknown): CanvasDocumentContractV2['layers'][number] | null => {
-  if (!isRecord(value)) {
-    return null;
+type LoadStep<T> = Extract<CanvasLoadResult<T>, { status: 'loaded' }> | Refusal;
+
+type DeclaredVersion = { kind: 'current' } | { kind: 'other'; version: number } | { kind: 'malformed' };
+
+const classifyVersion = (value: unknown): DeclaredVersion => {
+  if (value === MAX_SUPPORTED_CANVAS_SCHEMA_VERSION) {
+    return { kind: 'current' };
   }
+  if (typeof value === 'number' && Number.isInteger(value) && value >= 1) {
+    return { kind: 'other', version: value };
+  }
+  return { kind: 'malformed' };
+};
+
+const describeVersion = (value: unknown): string => (typeof value === 'string' ? JSON.stringify(value) : String(value));
+
+const invalid = (scope: CanvasVersionScope, diagnostics: readonly CanvasLoadDiagnostic[]): Refusal => ({
+  diagnostics,
+  scope,
+  status: 'invalid',
+});
+
+const unsupported = (scope: CanvasVersionScope, version: number): Refusal => ({
+  scope,
+  status: 'unsupported-version',
+  version,
+});
+
+/** Refuses any declared version other than the current one before anything is defaulted or parsed. */
+const checkVersion = (value: Record<string, unknown>, scope: CanvasVersionScope, path: string): Refusal | null => {
+  const version = classifyVersion(value.version);
+  switch (version.kind) {
+    case 'current':
+      return null;
+    case 'other':
+      return unsupported(scope, version.version);
+    case 'malformed':
+      return invalid(scope, [
+        { message: `canvas version ${describeVersion(value.version)} is not recognized`, path: `${path}version` },
+      ]);
+  }
+};
+
+const describeIssue = (value: Record<string, unknown>, path: string, issues: readonly z.core.$ZodIssue[]) => {
+  const issue = issues[0];
+  const detail = issue ? `${issue.path.length > 0 ? `${issue.path.join('.')}: ` : ''}${issue.message}` : 'invalid node';
+  const type = typeof value.type === 'string' ? value.type : undefined;
+  return { message: type ? `${type} node is invalid (${detail})` : `node is invalid (${detail})`, path };
+};
+
+const zGroupShell = z.object({
+  // Like the raster arm: a malformed stack drops without failing the document.
+  adjustments: zAdjustments.optional().catch(undefined),
+  blendMode: zBlendMode.optional().catch(undefined),
+  colorLabel: zColorLabel.optional().catch(undefined),
+  id: z.string(),
+  isEnabled: z.boolean(),
+  isHidden: z.boolean().optional(),
+  isLocked: z.boolean(),
+  name: z.string(),
+  opacity: z.number().min(0).max(1).optional().catch(undefined),
+  type: z.literal('group'),
+});
+
+interface ParseContext {
+  stack: CanvasLayerContract['type'];
+  readonly ids: Set<string>;
+  readonly diagnostics: CanvasLoadDiagnostic[];
+  count: number;
+}
+
+/** Fills the known optional defaults on a leaf, then validates it strictly. */
+const parseLeaf = (value: Record<string, unknown>, path: string, context: ParseContext): CanvasLayerContract | null => {
   let candidate: Record<string, unknown> = value;
   if (value.type === 'control') {
     candidate = {
@@ -446,87 +488,229 @@ const normalizeCanvasLayer = (value: unknown): CanvasDocumentContractV2['layers'
     };
   }
   const parsed = zCanvasLayer.safeParse(candidate);
-  return parsed.success ? (candidate as unknown as CanvasDocumentContractV2['layers'][number]) : null;
-};
-
-export const normalizeCanvasDocumentContract = (document: CanvasDocumentContractV2): CanvasDocumentContractV2 => ({
-  ...document,
-  ...normalizeCanvasDocumentGeometry(document.width, document.height, document.bbox),
-  layers: document.layers.flatMap((layer) => {
-    const normalized = normalizeCanvasLayer(layer);
-    return normalized ? [normalized] : [];
-  }),
-});
-
-const normalizeCanvasDocumentV2 = (value: unknown, requireValidLayers: boolean): CanvasDocumentContractV2 | null => {
-  const rawDocument = isRecord(value) ? value : {};
-  const rawLayers = Array.isArray(rawDocument.layers) ? rawDocument.layers : [];
-  const layers = rawLayers.flatMap((layer) => {
-    const normalized = normalizeCanvasLayer(layer);
-    return normalized ? [normalized] : [];
-  });
-  if (requireValidLayers && (!Array.isArray(rawDocument.layers) || layers.length !== rawLayers.length)) {
+  if (!parsed.success) {
+    context.diagnostics.push(describeIssue(value, path, parsed.error.issues));
     return null;
   }
+  const layer = parsed.data as CanvasLayerContract;
+  if (layer.type !== context.stack) {
+    context.diagnostics.push({ message: `${layer.type} layer does not belong to the ${context.stack} stack`, path });
+    return null;
+  }
+  return layer;
+};
+
+const parseNode = (value: unknown, path: string, depth: number, context: ParseContext): CanvasNodeContract | null => {
+  if (!isRecord(value)) {
+    context.diagnostics.push({ message: 'node is not an object', path });
+    return null;
+  }
+  context.count += 1;
+  if (context.count > CANVAS_MAX_NODE_COUNT) {
+    context.diagnostics.push({ message: `document exceeds ${CANVAS_MAX_NODE_COUNT} nodes`, path });
+    return null;
+  }
+  if (typeof value.id === 'string') {
+    if (context.ids.has(value.id)) {
+      context.diagnostics.push({ message: `node id ${JSON.stringify(value.id)} is not unique`, path: `${path}.id` });
+      return null;
+    }
+    context.ids.add(value.id);
+  }
+  if (value.type !== 'group') {
+    return parseLeaf(value, path, context);
+  }
+  const shell = zGroupShell.safeParse(value);
+  if (!shell.success) {
+    context.diagnostics.push(describeIssue(value, path, shell.error.issues));
+    return null;
+  }
+  if (context.stack === 'raster' && shell.data.isHidden === true) {
+    context.diagnostics.push({ message: 'a raster group has no display-only hidden state', path: `${path}.isHidden` });
+    return null;
+  }
+  if (context.stack === 'raster' || shell.data.isHidden === false) {
+    delete shell.data.isHidden;
+  }
+  // Adjustments, opacity and blend are the raster-stack mirror of the isHidden
+  // rule: overlay groups composite coverage, not color, so all three are
+  // meaningless there. Stripped SILENTLY, unlike isHidden: diagnostics are
+  // fatal to the whole parse, and rejecting a document over a meaningless
+  // property is worse than dropping it.
+  if (context.stack !== 'raster') {
+    delete shell.data.adjustments;
+    delete shell.data.blendMode;
+    delete shell.data.opacity;
+  }
+  if (depth >= CANVAS_MAX_NODE_DEPTH) {
+    context.diagnostics.push({ message: `group nests deeper than ${CANVAS_MAX_NODE_DEPTH} levels`, path });
+    return null;
+  }
+  if (!Array.isArray(value.children)) {
+    context.diagnostics.push({ message: 'group children is not an array', path: `${path}.children` });
+    return null;
+  }
+  const children = value.children.map((child, index) =>
+    parseNode(child, `${path}.children[${index}]`, depth + 1, context)
+  );
+  if (children.some((child) => child === null)) {
+    return null;
+  }
+  const group: CanvasGroupContract = { ...shell.data, children: children as CanvasNodeContract[] };
+  return group;
+};
+
+type ParsedStacks = { stacks: CanvasStackForests } | { diagnostics: CanvasLoadDiagnostic[] };
+
+const parseStacks = (value: unknown, path: string): ParsedStacks => {
+  if (!isRecord(value)) {
+    return { diagnostics: [{ message: 'stacks is not an object', path }] };
+  }
+  const stacks = createEmptyStacks();
+  const context: ParseContext = { count: 0, diagnostics: [], ids: new Set(), stack: 'raster' };
+  for (const key of Object.keys(value)) {
+    if (!LAYER_STACK_ORDER.includes(key as LayerStackKind)) {
+      context.diagnostics.push({ message: `unknown stack ${JSON.stringify(key)}`, path: `${path}.${key}` });
+    }
+  }
+  for (const stack of LAYER_STACK_ORDER) {
+    const roots = value[stack] === undefined ? [] : value[stack];
+    if (!Array.isArray(roots)) {
+      context.diagnostics.push({ message: `${stack} stack is not an array`, path: `${path}.${stack}` });
+      continue;
+    }
+    context.stack = stack;
+    const parsed = roots.map((root, index) => parseNode(root, `${path}.${stack}[${index}]`, 0, context));
+    stacks[stack] = parsed.filter((node): node is CanvasNodeContract => node !== null);
+  }
+  return context.diagnostics.length > 0 ? { diagnostics: context.diagnostics } : { stacks };
+};
+
+/** Re-validates an in-memory document, filling known optional defaults; `null` when any node is invalid. */
+export const normalizeCanvasDocumentContract = (
+  document: CanvasDocumentContractV3
+): CanvasDocumentContractV3 | null => {
+  const parsed = parseStacks(document.stacks, 'stacks');
+  return 'stacks' in parsed
+    ? {
+        ...document,
+        ...normalizeCanvasDocumentGeometry(document.width, document.height, document.bbox),
+        stacks: parsed.stacks,
+      }
+    : null;
+};
+
+const loadCanvasDocument = (
+  value: unknown,
+  scope: CanvasVersionScope,
+  path: string
+): LoadStep<CanvasDocumentContractV3> => {
+  if (!isRecord(value)) {
+    return invalid(scope, [{ message: 'document is not an object', path }]);
+  }
+  const refusal = value.version === undefined ? null : checkVersion(value, scope, `${path}.`);
+  if (refusal) {
+    return refusal;
+  }
+  const stacks = parseStacks(value.stacks, `${path}.stacks`);
+  if ('diagnostics' in stacks) {
+    return invalid(scope, stacks.diagnostics);
+  }
+  const declaredSelection = typeof value.selectedLayerId === 'string' ? value.selectedLayerId : null;
+  const selectedLayerId = repairSelectedLayerId(stacks.stacks, declaredSelection);
   return {
-    background:
-      rawDocument.background === 'transparent' || isRecord(rawDocument.background)
-        ? (rawDocument.background as CanvasDocumentContractV2['background'])
-        : 'transparent',
-    ...normalizeCanvasDocumentGeometry(rawDocument.width, rawDocument.height, rawDocument.bbox),
-    layers,
-    selectedLayerId: typeof rawDocument.selectedLayerId === 'string' ? rawDocument.selectedLayerId : null,
-    version: 2,
+    diagnostics:
+      declaredSelection !== null && selectedLayerId !== declaredSelection
+        ? [
+            {
+              message: `selected layer ${JSON.stringify(declaredSelection)} is not in the document`,
+              path: `${path}.selectedLayerId`,
+            },
+          ]
+        : [],
+    status: 'loaded',
+    value: {
+      background:
+        value.background === 'transparent' || isRecord(value.background)
+          ? (value.background as CanvasDocumentContractV3['background'])
+          : 'transparent',
+      ...normalizeCanvasDocumentGeometry(value.width, value.height, value.bbox),
+      selectedLayerId,
+      stacks: stacks.stacks,
+      version: 3,
+    },
   };
 };
 
-const normalizeCanvasSnapshot = (value: unknown): CanvasStateContractV2['snapshots'][number] | null => {
-  if (
-    !isRecord(value) ||
-    typeof value.id !== 'string' ||
-    typeof value.name !== 'string' ||
-    typeof value.createdAt !== 'string'
-  ) {
-    return null;
+const loadCanvasSnapshot = (value: unknown, path: string): LoadStep<CanvasSnapshotContract> => {
+  if (!isRecord(value)) {
+    return invalid('snapshot', [{ message: 'snapshot is not an object', path }]);
   }
-  const document = normalizeCanvasDocumentV2(value.document, true);
-  return document ? ({ ...value, document } as CanvasStateContractV2['snapshots'][number]) : null;
+  const missing = (['id', 'name', 'createdAt'] as const).filter((key) => typeof value[key] !== 'string');
+  if (missing.length > 0) {
+    return invalid(
+      'snapshot',
+      missing.map((key) => ({ message: `snapshot ${key} is missing`, path: `${path}.${key}` }))
+    );
+  }
+  const document = loadCanvasDocument(value.document, 'snapshot', `${path}.document`);
+  return document.status === 'loaded'
+    ? {
+        diagnostics: document.diagnostics,
+        status: 'loaded',
+        value: { ...value, document: document.value } as CanvasSnapshotContract,
+      }
+    : document;
 };
 
-/** Defensively re-normalizes an already-v2 canvas state (fills in anything missing without re-deriving layers). */
-const normalizeCanvasStateV2 = (canvas: Record<string, unknown>): CanvasStateContractV2 => {
-  const document = normalizeCanvasDocumentV2(canvas.document, false) ?? createEmptyCanvasDocumentV2();
-
+const loadCanvasStateStep = (canvas: unknown): LoadStep<CanvasStateContractV3> => {
+  if (canvas === undefined || canvas === null) {
+    return { diagnostics: [], status: 'loaded', value: createEmptyCanvasState() };
+  }
+  if (!isRecord(canvas) || Array.isArray(canvas)) {
+    return invalid('state', [{ message: 'canvas state is not an object', path: '' }]);
+  }
+  const refusal = checkVersion(canvas, 'state', '');
+  if (refusal) {
+    return refusal;
+  }
+  const document = loadCanvasDocument(canvas.document === undefined ? {} : canvas.document, 'document', 'document');
+  if (document.status !== 'loaded') {
+    return document;
+  }
+  const rawSnapshots = canvas.snapshots === undefined ? [] : canvas.snapshots;
+  if (!Array.isArray(rawSnapshots)) {
+    return invalid('state', [{ message: 'snapshots is not an array', path: 'snapshots' }]);
+  }
+  const snapshots: CanvasSnapshotContract[] = [];
+  const diagnostics = [...document.diagnostics];
+  for (const [index, rawSnapshot] of rawSnapshots.entries()) {
+    const snapshot = loadCanvasSnapshot(rawSnapshot, `snapshots[${index}]`);
+    if (snapshot.status !== 'loaded') {
+      return snapshot;
+    }
+    snapshots.push(snapshot.value);
+    diagnostics.push(...snapshot.diagnostics);
+  }
   return {
-    document,
-    documentRevision: asNumber(canvas.documentRevision, 0),
-    snapshots: Array.isArray(canvas.snapshots)
-      ? canvas.snapshots.flatMap((snapshot) => {
-          const normalized = normalizeCanvasSnapshot(snapshot);
-          return normalized ? [normalized] : [];
-        })
-      : [],
-    stagingArea: migrateStagingAreaToV2(canvas),
-    version: 2,
+    diagnostics,
+    status: 'loaded',
+    value: {
+      document: document.value,
+      documentRevision: asNumber(canvas.documentRevision, 0),
+      snapshots,
+      stagingArea: normalizeStagingArea(canvas),
+      version: 3,
+    },
   };
 };
 
 /**
- * Converts unknown persisted canvas state (v1, v2, or garbage) into `CanvasStateContractV2`.
- * Already-v2 input is normalized (defaults filled in) but not re-derived from placements.
+ * Version-checks persisted canvas state before anything is defaulted or parsed: an absent state is
+ * a fresh empty canvas, the current version is validated strictly, every other declared version is
+ * refused so its raw payload stays available for recovery.
  */
-export const migrateCanvasStateToV2 = (canvas: unknown): CanvasStateContractV2 => {
-  if (isCanvasStateV2(canvas)) {
-    return normalizeCanvasStateV2(canvas);
-  }
-
-  const rawCanvas = isRecord(canvas) ? canvas : {};
-
-  return {
-    document: migrateDocumentToV2(rawCanvas),
-    documentRevision: 0,
-    snapshots: [],
-    stagingArea: migrateStagingAreaToV2(rawCanvas),
-    version: 2,
-  };
+export const loadCanvasState = (canvas: unknown): CanvasLoadResult<CanvasStateContractV3> => {
+  const step = loadCanvasStateStep(canvas);
+  return step.status === 'loaded' ? step : { ...step, raw: canvas };
 };

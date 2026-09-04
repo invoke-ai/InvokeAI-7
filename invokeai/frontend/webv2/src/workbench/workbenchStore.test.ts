@@ -1,3 +1,4 @@
+import { stackTopAnchor } from '@workbench/canvas-engine/document/insertionAnchors.testStub';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { CanvasLayerContract } from './canvas-engine/contracts';
@@ -5,10 +6,11 @@ import type { LayoutPreset, LayoutPresetRoute } from './layoutContracts';
 import type { WorkbenchInternalStore, WorkbenchSnapshot } from './workbenchStore';
 
 import { clearProjectDiagnostics, configureDiagnostics, getProjectDiagnostics } from './diagnostics/logger';
+import { publishLayerPanelSelection, readLayerPanelState, toggleLayerStackCollapsed } from './layerPanelState';
 import { areWidgetPlacementProjectsEqual, getWidgetPlacementProject } from './widgetPlacementMeta';
 import { getProjectWidgetValues } from './widgetState';
 import { createInitialWorkbenchState } from './workbenchState';
-import { createWorkbenchStore, publishLayerPanelSelection, readLayerPanelSelection } from './workbenchStore';
+import { createWorkbenchStore } from './workbenchStore';
 
 const paintLayer = (id: string): CanvasLayerContract => ({
   blendMode: 'normal',
@@ -70,36 +72,70 @@ describe('createWorkbenchStore', () => {
     expect(snapshot.projects).toHaveLength(1);
   });
 
-  it('resets transient layer multi-selection across project switches even without a Layers panel', () => {
+  it("keeps each project's transient layer multi-selection across project switches", () => {
     const store = createWorkbenchStore();
     const firstProjectId = store.getSnapshot().activeProject.id;
-    store.commands.canvas.apply(firstProjectId, { layer: paintLayer('a'), type: 'addCanvasLayer' });
-    store.commands.canvas.apply(firstProjectId, { layer: paintLayer('b'), type: 'addCanvasLayer' });
+    store.commands.canvas.apply(firstProjectId, {
+      anchor: stackTopAnchor(firstProjectId),
+      layer: paintLayer('a'),
+      type: 'addCanvasLayer',
+    });
+    store.commands.canvas.apply(firstProjectId, {
+      anchor: stackTopAnchor(firstProjectId),
+      layer: paintLayer('b'),
+      type: 'addCanvasLayer',
+    });
     publishLayerPanelSelection({ primaryId: 'b', projectId: firstProjectId, selectedIds: ['a', 'b'] });
 
     const secondProject = store.commands.projects.create();
     store.commands.projects.switchTo(firstProjectId);
 
-    expect(readLayerPanelSelection(firstProjectId, 'b').selectedIds).toEqual(['b']);
-    expect(readLayerPanelSelection(secondProject.id, null).selectedIds).toEqual([]);
+    expect(readLayerPanelState(firstProjectId, 'b').selectedIds).toEqual(['a', 'b']);
+    expect(readLayerPanelState(secondProject.id, null).selectedIds).toEqual([]);
+  });
+
+  it("clears every project's panel state on hydration", () => {
+    const store = createWorkbenchStore();
+    const projectId = store.getSnapshot().activeProject.id;
+    store.commands.canvas.apply(projectId, {
+      anchor: stackTopAnchor(projectId),
+      layer: paintLayer('a'),
+      type: 'addCanvasLayer',
+    });
+    store.commands.canvas.apply(projectId, {
+      anchor: stackTopAnchor(projectId),
+      layer: paintLayer('b'),
+      type: 'addCanvasLayer',
+    });
+    publishLayerPanelSelection({ primaryId: 'b', projectId, selectedIds: ['a', 'b'] });
+    toggleLayerStackCollapsed(projectId, 'b', 'raster');
+    expect(readLayerPanelState(projectId, 'b')).toMatchObject({ collapsedStacks: ['raster'], selectedIds: ['a', 'b'] });
+
+    store.internal.persistence.hydrate(createInitialWorkbenchState());
+
+    expect(readLayerPanelState(projectId, 'b')).toMatchObject({ collapsedStacks: [], selectedIds: ['b'] });
   });
 
   it('does not resurrect stale secondaries after external primary changes in the same project', () => {
     const store = createWorkbenchStore();
     const projectId = store.getSnapshot().activeProject.id;
     for (const id of ['a', 'b', 'c']) {
-      store.commands.canvas.apply(projectId, { layer: paintLayer(id), type: 'addCanvasLayer' });
+      store.commands.canvas.apply(projectId, {
+        anchor: stackTopAnchor(projectId),
+        layer: paintLayer(id),
+        type: 'addCanvasLayer',
+      });
     }
     // Model a panel-originated multi-selection: it publishes before dispatching
     // its new primary, so the store preserves the selected set.
     publishLayerPanelSelection({ primaryId: 'c', projectId, selectedIds: ['a', 'c'] });
     store.commands.canvas.apply(projectId, { id: 'c', type: 'setCanvasSelectedLayer' });
-    expect(readLayerPanelSelection(projectId, 'c').selectedIds).toEqual(['a', 'c']);
+    expect(readLayerPanelState(projectId, 'c').selectedIds).toEqual(['a', 'c']);
 
     store.commands.canvas.apply(projectId, { id: 'b', type: 'setCanvasSelectedLayer' });
     store.commands.canvas.apply(projectId, { id: 'c', type: 'setCanvasSelectedLayer' });
 
-    expect(readLayerPanelSelection(projectId, 'c').selectedIds).toEqual(['c']);
+    expect(readLayerPanelState(projectId, 'c').selectedIds).toEqual(['c']);
   });
 
   it('coordinates layout preset activation across every command caller', async () => {

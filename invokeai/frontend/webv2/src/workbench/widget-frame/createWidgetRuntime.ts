@@ -16,13 +16,12 @@ import type { WidgetPlacementProject } from '@workbench/widgetPlacementCommands'
 import type { WorkbenchWidgetCommands } from '@workbench/workbenchStore';
 
 import { createProjectLogger } from '@workbench/diagnostics/logger';
+import { isWidgetRegion as isKnownWidgetRegion } from '@workbench/layoutContracts';
 import { closeWidgetPlacement, openWidgetPlacement, revealWidgetPlacement } from '@workbench/widgetPlacementCommands';
 import { useWorkbenchExtensions, useWorkbenchInternalStore } from '@workbench/WorkbenchContext';
 import { useMemo } from 'react';
 
-const WIDGET_REGIONS = new Set<WidgetRegion>(['bottom', 'center', 'left', 'right']);
-
-const isWidgetRegion = (region: WorkbenchRegion): region is WidgetRegion => WIDGET_REGIONS.has(region as WidgetRegion);
+const isWidgetRegion = (region: WorkbenchRegion): region is WidgetRegion => isKnownWidgetRegion(region);
 
 const cloneWidgetRuntimeValue = (value: unknown): unknown => {
   if (Array.isArray(value)) {

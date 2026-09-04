@@ -1,7 +1,8 @@
-import type { CanvasDocumentContractV2, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
+import type { CanvasDocumentContractV3, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
 import type { SelectionState } from '@workbench/canvas-engine/selection/selectionState';
 import type { PlacedSurface, Rect } from '@workbench/canvas-engine/types';
 
+import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
 import { createHistory } from '@workbench/canvas-engine/history/history';
 import { createLayerCacheStore } from '@workbench/canvas-engine/render/layerCache';
 import { createTestStubRasterBackend } from '@workbench/canvas-engine/render/raster.testStub';
@@ -21,13 +22,13 @@ const paintLayer = (id: string, transform: Partial<CanvasLayerContract['transfor
   type: 'raster',
 });
 
-const makeDoc = (layers: CanvasLayerContract[]): CanvasDocumentContractV2 => ({
+const makeDoc = (layers: CanvasLayerContract[]): CanvasDocumentContractV3 => ({
   background: 'transparent',
   bbox: { height: 100, width: 100, x: 0, y: 0 },
   height: 100,
-  layers,
+  stacks: stacksFrom(layers),
   selectedLayerId: layers[0]?.id ?? null,
-  version: 2,
+  version: 3,
   width: 100,
 });
 
@@ -36,7 +37,7 @@ const createHarness = (options: { layer?: CanvasLayerContract; maskRect?: Rect; 
   const layers = createLayerCacheStore(backend);
   const history = createHistory();
   const layer = options.layer ?? paintLayer('a');
-  let document: CanvasDocumentContractV2 | null = makeDoc([layer]);
+  let document: CanvasDocumentContractV3 | null = makeDoc([layer]);
 
   const maskRect = options.maskRect ?? { height: 30, width: 30, x: 20, y: 20 };
   const maskSurface: PlacedSurface = {

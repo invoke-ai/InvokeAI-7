@@ -5,6 +5,7 @@ import type { WidgetViewProps } from '@workbench/widgetContracts';
 
 import { ChakraProvider } from '@chakra-ui/react';
 import { DndContext } from '@dnd-kit/core';
+import { requestGalleryItemReveal } from '@features/gallery/contracts';
 import { QueryClient, QueryClientProvider, type InfiniteData } from '@tanstack/react-query';
 import { system } from '@theme/system';
 import i18next from 'i18next';
@@ -181,6 +182,11 @@ vi.mock('@features/gallery/queries', () => ({
       staleTime: Infinity,
     };
   },
+}));
+
+vi.mock('@features/gallery/contracts', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  requestGalleryItemReveal: vi.fn(),
 }));
 
 vi.mock('@workbench/image-actions', () => ({
@@ -487,6 +493,13 @@ describe('preview keyboard navigation boundary', () => {
     } finally {
       document.removeEventListener('keydown', documentKeydown);
     }
+  });
+
+  it('reveals each navigated item so the gallery grid can follow', async () => {
+    await render();
+    await pressArrow('ArrowRight');
+
+    expect(vi.mocked(requestGalleryItemReveal)).toHaveBeenCalledWith('image:oldest');
   });
 
   it('keeps a just-completed batch navigable before the backend refetch lands', async () => {
@@ -1113,6 +1126,45 @@ describe('preview keyboard navigation boundary', () => {
       expect.objectContaining({ kind: 'image', name: neighbor.imageName }),
       undefined,
       1,
+      true
+    );
+  });
+
+  it('walks the flat chronological order on paginated pages instead of lifting starred items', async () => {
+    const galleryValues = mocks.project.widgetInstances.gallery.state.values as Record<string, unknown>;
+    const selected = {
+      ...mocks.recentImages[0],
+      boardId: 'none',
+      imageCategory: 'general' as const,
+      imageName: 'freshly-selected',
+      queuedAt: '2026-07-21T12:02:30.000Z',
+      starred: false,
+    };
+
+    galleryValues.galleryPage = 0;
+    galleryValues.paginationMode = 'paginated';
+    galleryValues.recentImages = [];
+    galleryValues.selectedImage = selected;
+    galleryValues.selectedImageName = selected.imageName;
+    mocks.galleryItemPages = [
+      {
+        items: [
+          createImageItem('newest', '2026-07-21T12:03:00.000Z'),
+          { ...createImageItem('starred-mid', '2026-07-21T12:02:00.000Z'), starred: true },
+          createImageItem('oldest', '2026-07-21T12:01:00.000Z'),
+        ],
+        total: 3,
+      },
+    ];
+
+    await render();
+    await pressArrow('ArrowRight');
+
+    // Under starred-first the step would land on oldest; flat pages win.
+    expect(mocks.commands.gallery.selectItem).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'image', name: 'starred-mid' }),
+      undefined,
+      0,
       true
     );
   });

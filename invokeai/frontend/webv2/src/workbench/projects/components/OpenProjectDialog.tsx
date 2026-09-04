@@ -9,10 +9,19 @@ import {
   isAccountScopeCurrent,
 } from '@platform/state/accountLifecycle';
 import { areArraysEqual } from '@platform/state/selectors';
+import { getApiErrorMessage } from '@platform/transport/http';
 import { Button, CloseButton, Row, Scrollable } from '@platform/ui';
 import { MiddleTruncate } from '@platform/ui/MiddleTruncate';
+import { MIN_SUPPORTED_CANVAS_SCHEMA_VERSION } from '@workbench/canvasSchemaVersion';
 import { formatRelativeTime } from '@workbench/launchpad/formatRelativeTime';
-import { refreshProjectLibrary, useProjectLibrarySelector, type ProjectSummary } from '@workbench/projects/library';
+import { ProjectCompatibilityBadge } from '@workbench/launchpad/projects/ProjectCompatibilityBadge';
+import {
+  isProjectSummaryCompatible,
+  refreshProjectLibrary,
+  useProjectLibrarySelector,
+  type ProjectSummary,
+} from '@workbench/projects/library';
+import { describeRefusedProject } from '@workbench/projects/projectLoadRefusal';
 import { useImportProjectFile } from '@workbench/projects/useProjectFileActions';
 import { useNotify } from '@workbench/useNotify';
 import {
@@ -58,13 +67,33 @@ export const OpenProjectDialog = ({ isOpen, onClose }: { isOpen: boolean; onClos
     async (summary: ProjectSummary) => {
       const owner = captureAccountScope();
 
+      if (!isProjectSummaryCompatible(summary)) {
+        notify.error(
+          t('projects.couldNotOpen'),
+          t(
+            summary.minimumCanvasSchemaVersion < MIN_SUPPORTED_CANVAS_SCHEMA_VERSION
+              ? 'projects.file.legacyCanvasProject'
+              : 'projects.file.updateClient'
+          )
+        );
+
+        return;
+      }
+
       setBusyProjectId(summary.id);
 
       try {
-        const project = await persistence.hydrateProjectFromServer(summary.id);
+        const result = await persistence.hydrateProjectFromServer(summary.id, summary.name);
 
         assertAccountScopeCurrent(owner);
-        if (!project) {
+        if (result.status === 'refused') {
+          const notice = describeRefusedProject(result.refused, t);
+
+          notify.error(notice.title, notice.message);
+
+          return;
+        }
+        if (result.status !== 'loaded') {
           notify.error(t('projects.couldNotOpen'), t('projects.couldNotOpenDescription', { name: summary.name }));
           void refreshProjectLibrary();
 
@@ -72,7 +101,7 @@ export const OpenProjectDialog = ({ isOpen, onClose }: { isOpen: boolean; onClos
         }
 
         flushGenerateDrafts();
-        projects.open(project);
+        projects.open(result.project);
         onClose();
       } catch (error) {
         if (!isAccountScopeCurrent(owner)) {
@@ -81,7 +110,7 @@ export const OpenProjectDialog = ({ isOpen, onClose }: { isOpen: boolean; onClos
 
         notify.error(
           t('projects.couldNotOpen'),
-          error instanceof Error ? error.message : t('projects.couldNotOpenDescription', { name: summary.name })
+          getApiErrorMessage(error, t('projects.couldNotOpenDescription', { name: summary.name }))
         );
       } finally {
         if (isAccountScopeCurrent(owner)) {
@@ -94,15 +123,19 @@ export const OpenProjectDialog = ({ isOpen, onClose }: { isOpen: boolean; onClos
 
   const openImportedProject = useCallback(
     (record: ProjectRecordDTO) => {
-      const project = persistence.adoptProjectRecord(record);
+      const result = persistence.adoptProjectRecord(record);
 
-      if (project) {
+      if (result.status === 'loaded') {
         flushGenerateDrafts();
-        projects.open(project);
+        projects.open(result.project);
         onClose();
+      } else if (result.status === 'refused') {
+        const notice = describeRefusedProject(result.refused, t);
+
+        notify.error(notice.title, notice.message);
       }
     },
-    [onClose, persistence, projects]
+    [notify, onClose, persistence, projects, t]
   );
   const handleImport = useImportProjectFile(openImportedProject);
 
@@ -134,7 +167,7 @@ export const OpenProjectDialog = ({ isOpen, onClose }: { isOpen: boolean; onClos
                     <OpenProjectRow
                       key={summary.id}
                       isBusy={busyProjectId === summary.id}
-                      isDisabled={busyProjectId !== null}
+                      isDisabled={busyProjectId !== null || !isProjectSummaryCompatible(summary)}
                       summary={summary}
                       onOpen={openProject}
                     />
@@ -188,6 +221,7 @@ const OpenProjectRow = ({
           <Text color="fg.muted" fontSize="2xs">
             {t('projects.editedRelative', { time: formatRelativeTime(summary.updatedAt) })}
           </Text>
+          <ProjectCompatibilityBadge summary={summary} />
         </Stack>
         {isBusy ? <Spinner color="fg.muted" size="xs" /> : <Icon as={ArrowRightIcon} boxSize="3.5" color="fg.muted" />}
       </button>

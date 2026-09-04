@@ -204,6 +204,7 @@ const Probe = ({ modelKey = 'sd-1-model', ref }: { modelKey?: string; ref: Ref<I
       {
         archived: false,
         assetCount: 0,
+        assetVideoCount: 0,
         id: 'none',
         imageCount: 0,
         kind: 'uncategorized',
@@ -888,7 +889,9 @@ const galleryItem = (kind: GalleryItem['kind'], name: string): GalleryItem => {
 };
 
 describe('primary successor after confirmed deletion', () => {
-  it('selects the nearest surviving predecessor from ordered names before a successor', async () => {
+  it('selects the next surviving item in display order — the one that takes the deleted slot', async () => {
+    // Also what keeps deletion out of the leading starred block. Pinned at the
+    // unit level in core/selection.test.ts.
     const before = galleryItem('video', 'before.mp4');
     const primary = galleryItem('image', 'primary.png');
     const after = galleryItem('image', 'after.png');
@@ -909,21 +912,21 @@ describe('primary successor after confirmed deletion', () => {
       await getItemActions().deleteItems([{ kind: 'image', name: 'primary.png' }]);
     });
 
-    expect(mocks.gallerySelectItem).toHaveBeenCalledWith(before, 'project-1');
+    expect(mocks.gallerySelectItem).toHaveBeenCalledWith(after, 'project-1');
   });
 
-  it('resolves an unloaded predecessor by qualified ref', async () => {
+  it('resolves an unloaded successor by qualified ref', async () => {
     const primary = galleryItem('image', 'primary.png');
-    const after = galleryItem('image', 'after.png');
+    const before = galleryItem('image', 'before.png');
     const unloaded = galleryItem('video', 'unloaded.mp4');
     currentItemActionContext = {
       filterIdentity: 'filter-a',
-      items: [primary, after],
+      items: [before, primary],
       loadOrderedRefs: () =>
         Promise.resolve([
+          { kind: 'image' as const, name: before.name },
           { kind: 'video' as const, name: unloaded.name },
           { kind: 'image' as const, name: primary.name },
-          { kind: 'image' as const, name: after.name },
         ]),
       selectedItemKey: 'image:primary.png',
     };
@@ -1040,7 +1043,7 @@ describe('primary successor after confirmed deletion', () => {
       await getItemActions().deleteItems([{ kind: 'image', name: 'primary.png' }]);
     });
 
-    expect(mocks.gallerySelectItem).toHaveBeenCalledWith(before, 'project-1', 30, true);
+    expect(mocks.gallerySelectItem).toHaveBeenCalledWith(after, 'project-1', 30, true);
   });
 
   it('opens an item in Preview at the page the host navigates from', () => {

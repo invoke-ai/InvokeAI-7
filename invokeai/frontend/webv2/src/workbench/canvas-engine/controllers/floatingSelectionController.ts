@@ -1,4 +1,4 @@
-import type { CanvasDocumentContractV2, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
+import type { CanvasDocumentContractV3, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
 import type { History } from '@workbench/canvas-engine/history/history';
 import type { ImagePatchApply } from '@workbench/canvas-engine/history/imagePatch';
 import type { LayerCacheStore } from '@workbench/canvas-engine/render/layerCache';
@@ -8,7 +8,9 @@ import type { SelectionState } from '@workbench/canvas-engine/selection/selectio
 import type { LayerTransform } from '@workbench/canvas-engine/transform/transformMath';
 import type { Rect } from '@workbench/canvas-engine/types';
 
-import { isLayerPixelEditEligible } from '@workbench/canvas-engine/editing/controlPixelEdit';
+import { lookupDocumentLeaf } from '@workbench/canvas-engine/document-model/documentModel';
+import { getDocumentLayer } from '@workbench/canvas-engine/document/documentIndex';
+import { isLeafPixelEditEligible } from '@workbench/canvas-engine/editing/controlPixelEdit';
 import { createImagePatchEntry } from '@workbench/canvas-engine/history/imagePatch';
 import { isEmpty, roundOut, transformBounds, union } from '@workbench/canvas-engine/math/rect';
 import { renderLayerDisplayEffect } from '@workbench/canvas-engine/render/layerDisplayEffect';
@@ -27,7 +29,7 @@ export interface FloatingSelectionControllerOptions {
   readonly selection: SelectionState;
   readonly history: History;
   readonly applyImagePatch: ImagePatchApply;
-  readonly getDocument: () => CanvasDocumentContractV2 | null;
+  readonly getDocument: () => CanvasDocumentContractV3 | null;
   readonly canEdit: () => boolean;
   readonly endBurst: () => void;
   readonly notifyPainted: (layerId: string) => void;
@@ -78,7 +80,7 @@ export class FloatingSelectionController {
   /** The float's layer, or `null` — resolved fresh so a deleted layer reads as absent. */
   private layerOf(float: FloatingSelection): CanvasLayerContract | null {
     const document = this.deps.getDocument();
-    return document?.layers.find((layer) => layer.id === float.layerId) ?? null;
+    return getDocumentLayer(document, float.layerId) ?? null;
   }
 
   /**
@@ -91,8 +93,9 @@ export class FloatingSelectionController {
       return false;
     }
     const document = this.deps.getDocument();
-    const layer = document?.layers.find((candidate) => candidate.id === layerId);
-    if (!document || !layer || !isLayerPixelEditEligible(layer)) {
+    const leaf = lookupDocumentLeaf(document, layerId);
+    const layer = leaf?.layer;
+    if (!document || !layer || !isLeafPixelEditEligible(leaf)) {
       return false;
     }
     const mask = this.deps.selection.mask();

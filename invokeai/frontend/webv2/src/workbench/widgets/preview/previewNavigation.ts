@@ -33,6 +33,7 @@ export const getPreviewNavigationSequence = <TItem extends NavigableItem>({
   boardImages,
   galleryView,
   imageOrderDir,
+  starredFirst,
 }: {
   /** The live slot from getGalleryGenerationSequence, or null. */
   activePlaceholder: GalleryQueuePlaceholder | null;
@@ -42,6 +43,8 @@ export const getPreviewNavigationSequence = <TItem extends NavigableItem>({
   boardImages: TItem[];
   galleryView: GalleryView;
   imageOrderDir: GalleryOrderDir;
+  /** Whether `boardImages` leads with the starred block — see isGalleryStarredFirst. */
+  starredFirst: boolean;
 }): PreviewNavigationItem<TItem>[] => {
   const items: PreviewNavigationItem<TItem>[] = boardImages.map((item) => ({ item, kind: 'item' }));
   const includePlaceholder =
@@ -51,7 +54,7 @@ export const getPreviewNavigationSequence = <TItem extends NavigableItem>({
     return items;
   }
 
-  items.splice(getGalleryPlaceholderInsertionIndex(boardImages, imageOrderDir), 0, {
+  items.splice(getGalleryPlaceholderInsertionIndex(boardImages, imageOrderDir, starredFirst), 0, {
     kind: 'placeholder',
     placeholder: activePlaceholder,
   });

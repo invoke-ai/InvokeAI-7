@@ -185,6 +185,9 @@ const getLegacyChunkName = (id: string): string | null => {
 };
 
 export default defineConfig({
+  define: {
+    __CANVAS_GOLDEN_UPDATE__: 'false',
+  },
   base: './',
   build: {
     manifest: true,

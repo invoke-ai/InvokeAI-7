@@ -32,6 +32,96 @@ def test_creating_a_project_creates_and_returns_its_board(client: TestClient, us
     assert board.json()["board_visibility"] == "private"
 
 
+def test_project_canvas_schema_negotiation_defaults_legacy_clients_to_v2(client: TestClient, user1_token: str):
+    created = _create_project(client, user1_token)
+
+    assert created.status_code == status.HTTP_201_CREATED
+    assert created.json()["minimum_canvas_schema_version"] == 2
+
+    fetched = client.get(f"/api/v1/projects/{created.json()['project_id']}", headers=_auth(user1_token))
+    assert fetched.status_code == status.HTTP_200_OK
+
+
+def test_project_document_reads_require_a_capable_canvas_client(client: TestClient, user1_token: str):
+    created = _create_project(
+        client,
+        user1_token,
+        data={"canvas": {"version": 3}},
+        minimum_canvas_schema_version=3,
+        max_canvas_schema_version=3,
+    ).json()
+
+    refused = client.get(f"/api/v1/projects/{created['project_id']}", headers=_auth(user1_token))
+    assert refused.status_code == status.HTTP_412_PRECONDITION_FAILED
+    assert refused.json()["detail"] == {
+        "code": "canvas_schema_unsupported",
+        "message": (
+            f"Project {created['project_id']} requires canvas schema 3, but this client supports up to schema 2."
+            " Update the client before opening or editing this project."
+        ),
+        "minimum_canvas_schema_version": 3,
+        "max_canvas_schema_version": 2,
+    }
+
+    supported = client.get(
+        f"/api/v1/projects/{created['project_id']}?max_canvas_schema_version=3", headers=_auth(user1_token)
+    )
+    assert supported.status_code == status.HTTP_200_OK
+    assert supported.json()["data"] == {"canvas": {"version": 3}}
+
+
+def test_a_save_atomically_raises_the_project_canvas_schema_floor(client: TestClient, user1_token: str):
+    created = _create_project(client, user1_token, data={"canvas": {"version": 2}}).json()
+
+    upgraded = client.put(
+        f"/api/v1/projects/{created['project_id']}",
+        json={
+            "name": "Upgraded",
+            "data": {"canvas": {"version": 3}},
+            "expected_revision": 1,
+            "minimum_canvas_schema_version": 3,
+            "max_canvas_schema_version": 3,
+        },
+        headers=_auth(user1_token),
+    )
+
+    assert upgraded.status_code == status.HTTP_200_OK
+    assert upgraded.json()["minimum_canvas_schema_version"] == 3
+    assert upgraded.json()["data"] == {"canvas": {"version": 3}}
+    refused = client.get(f"/api/v1/projects/{created['project_id']}", headers=_auth(user1_token))
+    assert refused.status_code == status.HTTP_412_PRECONDITION_FAILED
+
+
+def test_a_save_cannot_lower_the_project_canvas_schema_floor(client: TestClient, user1_token: str):
+    created = _create_project(
+        client,
+        user1_token,
+        data={"canvas": {"version": 3}},
+        minimum_canvas_schema_version=3,
+        max_canvas_schema_version=3,
+    ).json()
+
+    refused = client.put(
+        f"/api/v1/projects/{created['project_id']}",
+        json={
+            "name": "Downgraded",
+            "data": {"canvas": {"version": 2}},
+            "expected_revision": 1,
+            "minimum_canvas_schema_version": 2,
+            "max_canvas_schema_version": 3,
+        },
+        headers=_auth(user1_token),
+    )
+
+    assert refused.status_code == status.HTTP_400_BAD_REQUEST
+    assert refused.json()["detail"]["code"] == "canvas_schema_downgrade"
+    preserved = client.get(
+        f"/api/v1/projects/{created['project_id']}?max_canvas_schema_version=3", headers=_auth(user1_token)
+    )
+    assert preserved.json()["data"] == {"canvas": {"version": 3}}
+    assert preserved.json()["revision"] == 1
+
+
 def test_listing_projects_carries_the_board(client: TestClient, user1_token: str):
     created = _create_project(client, user1_token).json()
 

@@ -1,6 +1,6 @@
 import type { GalleryImage } from '@features/gallery';
 import type { ModelConfig } from '@features/models';
-import type { CanvasLayerCapability } from '@workbench/canvas-engine/api';
+import type { CanvasDocumentCapability, CanvasLayerCapability, LayerStackKind } from '@workbench/canvas-engine/api';
 import type { CanvasImageRef, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
 import type { CanvasProjectMutation } from '@workbench/canvasProjectMutations';
 import type { Project } from '@workbench/projectContracts';
@@ -17,6 +17,7 @@ import {
   captureAccountScope,
   registerAccountOwnedResource,
 } from '@platform/state/accountLifecycle';
+import { captureInsertionAnchor, getDocumentLeaves } from '@workbench/canvas-engine/api';
 import { resolveDefaultControlModelForBase } from '@workbench/widgets/layers/controlModelOptions';
 import {
   createControlLayer,
@@ -159,7 +160,7 @@ const buildLayers = (
       buildLayer(image, destination, {
         bbox: project.canvas.document.bbox,
         defaultControlModel,
-        existingLayers: [...project.canvas.document.layers, ...layers],
+        existingLayers: [...getDocumentLeaves(project.canvas.document), ...layers],
         modelBase,
       })
     );
@@ -224,7 +225,11 @@ const resizeImages = async (
   };
 };
 
-type GalleryImportEngine = { readonly projectId: string; readonly layers: CanvasLayerCapability };
+type GalleryImportEngine = {
+  readonly projectId: string;
+  readonly document: Pick<CanvasDocumentCapability, 'captureInsertionAnchor'>;
+  readonly layers: CanvasLayerCapability;
+};
 
 export const importGalleryImagesToCanvas = async (options: {
   applyCanvasMutation: (projectId: string, mutation: CanvasProjectMutation) => boolean | void;
@@ -281,8 +286,20 @@ export const importGalleryImagesToCanvas = async (options: {
 
     const layers = buildLayers(layerImages, destination, project, models);
     const previousSelectedLayerId = capturedDocument.selectedLayerId;
+    const anchorFor = (stack: LayerStackKind) =>
+      matchingProjectEngine
+        ? matchingProjectEngine.document.captureInsertionAnchor(stack, null)
+        : captureInsertionAnchor(capturedDocument.stacks, {
+            aboveId: null,
+            editRevision: project.canvas.documentRevision,
+            projectId: project.id,
+            stack,
+          });
     const forward: CanvasProjectMutation = {
-      add: { index: 0, layers },
+      add: [...new Set(layers.map((layer) => layer.type))].map((stack) => ({
+        anchor: anchorFor(stack),
+        nodes: layers.filter((layer) => layer.type === stack),
+      })),
       enabledUpdates: [],
       selectedLayerId: layers.at(-1)?.id ?? previousSelectedLayerId,
       type: 'applyCanvasLayerStackMutation',
@@ -304,11 +321,13 @@ export const importGalleryImagesToCanvas = async (options: {
       return { status: 'stale-document' };
     }
 
-    if (matchingProjectEngine && isActiveProject(project.id)) {
-      if (!matchingProjectEngine.layers.commitStructural('Import gallery images', forward, inverse)) {
+    if (isActiveProject(project.id)) {
+      const committed = matchingProjectEngine?.layers.commitStructural('Import gallery images', forward, inverse);
+      if (committed?.status !== 'committed') {
         return { status: 'blocked' };
       }
     } else {
+      // A background project has no live editing session; the import lands as ingestion.
       applyCanvasMutation(project.id, forward);
     }
     return { failedImageNames, layerIds: layers.map((layer) => layer.id), status: 'imported' };

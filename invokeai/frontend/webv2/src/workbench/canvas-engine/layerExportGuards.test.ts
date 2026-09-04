@@ -1,11 +1,12 @@
 import type {
-  CanvasDocumentContractV2,
+  CanvasDocumentContractV3,
   CanvasLayerContract,
   CanvasLayerSourceContract,
 } from '@workbench/canvas-engine/contracts';
 import type { RasterizationJob } from '@workbench/canvas-engine/controllers/rasterController';
 import type { LayerCacheEntry, LayerCacheStore } from '@workbench/canvas-engine/render/layerCache';
 
+import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import {
@@ -46,7 +47,7 @@ let canvasState: boolean;
 
 const build = (overrides: Partial<CreateLayerExportGuardsDeps> = {}): LayerExportGuards =>
   createLayerExportGuards({
-    getDocument: () => ({ height: 64, layers: [layer], width: 64 }) as CanvasDocumentContractV2,
+    getDocument: () => ({ height: 64, stacks: stacksFrom([layer]), width: 64 }) as CanvasDocumentContractV3,
     getDocumentGeneration: () => generation,
     getRasterizationJob: () => job,
     hasCanvasState: () => canvasState,

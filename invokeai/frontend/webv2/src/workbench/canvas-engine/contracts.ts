@@ -52,21 +52,7 @@ export interface CanvasStagingCandidateContract extends GeneratedImageContract {
   sourceBackendItemId?: number;
 }
 
-export interface CanvasRasterLayerContract extends GeneratedImageContract {
-  id: string;
-  acceptedAt: string;
-  label: string;
-  placement: CanvasPlacementContract;
-}
-
-export interface CanvasDocumentContract {
-  version: 1;
-  width: number;
-  height: number;
-  layers: CanvasRasterLayerContract[];
-}
-
-/** @deprecated legacy v1 shape, superseded by {@link CanvasStagingAreaContractV2}. Extracted so v1 and v2 canvas state can share its structure. */
+/** The legacy-shaped staging area; v3 state extends it with `autoSwitchMode`. */
 export interface CanvasStagingAreaContract {
   sourceQueueItemId?: string;
   selectedLayerId?: string;
@@ -77,25 +63,15 @@ export interface CanvasStagingAreaContract {
   areThumbnailsVisible: boolean;
 }
 
-/** @deprecated legacy v1 shape, superseded by {@link CanvasStateContractV2}. Kept for migration input typing and the still-v1-shaped staging area. */
-export interface CanvasStateContract {
-  version: 1;
-  document: CanvasDocumentContract;
-  stagingArea: CanvasStagingAreaContract;
-}
-
 // ---------------------------------------------------------------------------
-// Canvas v2 document contracts
+// Canvas v3 document contracts
 //
-// The canvas document is being rebuilt as a full photo editor: a layer stack
-// supporting raster, control, regional-guidance, and inpaint-mask layers, each
-// with its own transform/opacity/blend-mode. `CanvasStateContract` (v1) only
-// ever produced single-image raster layers positioned by `placement`; v2
-// layers are positioned by `transform` and reference bitmaps by `imageName`
-// (via `CanvasImageRef`) rather than by resolved URLs, since URLs are
-// ephemeral/backend-derived while the document is persisted. The staging
-// area (pending queue results awaiting placement onto the canvas) keeps its
-// v1 shape unchanged — only the accepted document evolves.
+// A document holds four stack forests (raster, control, regional guidance and
+// inpaint mask). Each forest is a top-first tree of leaves and pass-through
+// groups. Leaves are positioned by `transform` and reference bitmaps by
+// `imageName` (via `CanvasImageRef`) rather than by resolved URLs, since URLs
+// are ephemeral. Groups organise leaves and gate their effective enabled,
+// locked and hidden state; they carry no opacity, blend mode or transform.
 // ---------------------------------------------------------------------------
 
 export type CanvasBlendMode =
@@ -124,6 +100,9 @@ export interface CanvasImageRef {
   contentHash?: string;
 }
 
+/** The drag-drawable shape kinds; `polygon` (point lists) stays a non-tool source. */
+export type ParametricShapeKind = 'rect' | 'ellipse' | 'triangle' | 'star';
+
 export type CanvasLayerSourceContract =
   | {
       type: 'paint';
@@ -151,7 +130,7 @@ export type CanvasLayerSourceContract =
     }
   | {
       type: 'shape';
-      kind: 'rect' | 'ellipse' | 'polygon';
+      kind: ParametricShapeKind | 'polygon';
       points?: { x: number; y: number }[];
       width: number;
       height: number;
@@ -175,6 +154,10 @@ export type CanvasLayerSourceContract =
       height?: number;
     };
 
+/** Photoshop's layer-color palette; also the PSD `layerColor` vocabulary. */
+export const CANVAS_COLOR_LABELS = ['red', 'orange', 'yellow', 'green', 'blue', 'violet', 'gray'] as const;
+export type CanvasColorLabel = (typeof CANVAS_COLOR_LABELS)[number];
+
 export interface CanvasLayerBaseContract {
   id: string;
   name: string;
@@ -182,15 +165,58 @@ export interface CanvasLayerBaseContract {
   isLocked: boolean;
   opacity: number;
   blendMode: CanvasBlendMode;
+  /** Organizational color label; display-only, absent means none. */
+  colorLabel?: CanvasColorLabel;
   transform: { x: number; y: number; scaleX: number; scaleY: number; rotation: number };
 }
 
-export interface CanvasAdjustmentsContract {
-  brightness: number;
-  contrast: number;
-  saturation: number;
-  curves?: { r: [number, number][]; g: [number, number][]; b: [number, number][] };
+export interface CanvasAdjustmentCurves {
+  r?: [number, number][];
+  g?: [number, number][];
+  b?: [number, number][];
 }
+
+interface CanvasAdjustmentEntryBase {
+  id: string;
+  isEnabled: boolean;
+  /** A user-given name; absent entries display their type's name. */
+  name?: string;
+}
+
+/**
+ * One non-destructive adjustment in a raster layer's ordered stack. List order
+ * is application order; disabling keeps the tuned values out of every render
+ * without losing them. The Layers tree projects each entry as a child row.
+ */
+export type CanvasAdjustmentEntry =
+  | (CanvasAdjustmentEntryBase & { type: 'brightness-contrast'; brightness: number; contrast: number })
+  | (CanvasAdjustmentEntryBase & {
+      type: 'exposure';
+      /** Photographic stops, −5 to +5, applied in linear light (2^stops). */
+      stops: number;
+    })
+  | (CanvasAdjustmentEntryBase & {
+      type: 'levels';
+      /** Input remap: 0–255 with `inBlack < inWhite`; `gamma` is the midtone exponent base (1 = linear). */
+      inBlack: number;
+      inWhite: number;
+      gamma: number;
+      outBlack: number;
+      outWhite: number;
+      /** Which channels the remap drives; absent ⇒ all three. */
+      channel?: 'rgb' | 'r' | 'g' | 'b';
+    })
+  | (CanvasAdjustmentEntryBase & { type: 'curves'; curves: CanvasAdjustmentCurves })
+  | (CanvasAdjustmentEntryBase & { type: 'hsl'; saturation: number })
+  | (CanvasAdjustmentEntryBase & {
+      type: 'hue';
+      /** Rotation around the color wheel in degrees, -180 to 180. */
+      rotation: number;
+    })
+  | (CanvasAdjustmentEntryBase & { type: 'invert' });
+
+/** A raster layer's ordered adjustment stack, applied top to bottom. */
+export type CanvasAdjustmentsContract = readonly CanvasAdjustmentEntry[];
 
 export interface CanvasControlAdapterContract {
   kind: 'controlnet' | 't2i_adapter' | 'control_lora' | 'z_image_control';
@@ -219,10 +245,25 @@ export interface CanvasMaskContract {
   offset?: { x: number; y: number };
 }
 
+/**
+ * A raster layer's attached regenerate region: the layer's OWN content alpha
+ * presented as a live inpaint mask ("copy to inpaint mask", non-destructively).
+ * Every stroke, erase, and transform of the layer updates the coverage, which
+ * unions into generation's inpaint mask while the layer contributes. Singleton,
+ * like a mask's noise modifier; absent ⇒ never added. Carries no pixels of its
+ * own — only the overlay fill.
+ */
+export interface CanvasLayerRegionContract {
+  isEnabled: boolean;
+  name?: string;
+  fill: CanvasMaskFillContract;
+}
+
 export interface CanvasRasterLayerContractV2 extends CanvasLayerBaseContract {
   type: 'raster';
   source: CanvasLayerSourceContract;
   adjustments?: CanvasAdjustmentsContract;
+  inpaint?: CanvasLayerRegionContract;
   isTransparencyLocked?: boolean;
   filter?: { type: string; settings: Record<string, unknown> };
 }
@@ -268,11 +309,24 @@ export interface CanvasRegionalGuidanceLayerContract extends CanvasLayerBaseCont
   isHidden?: boolean;
 }
 
+/** A mask's noise modifier; disabling keeps the tuned level out of generation without losing it. */
+export interface CanvasMaskNoiseContract {
+  level: number;
+  isEnabled: boolean;
+}
+
+/** A mask's denoise-limit modifier; disabled or absent, generation uses the default limit. */
+export interface CanvasMaskDenoiseContract {
+  limit: number;
+  isEnabled: boolean;
+}
+
 export interface CanvasInpaintMaskLayerContract extends CanvasLayerBaseContract {
   type: 'inpaint_mask';
   mask: CanvasMaskContract;
-  noiseLevel?: number;
-  denoiseLimit?: number;
+  /** Absent ⇒ the modifier was never added; the Layers tree projects it as a child row. */
+  noise?: CanvasMaskNoiseContract;
+  denoise?: CanvasMaskDenoiseContract;
   /**
    * Whether this layer's on-canvas preview is suppressed. DISPLAY ONLY — a
    * hidden layer still affects generation exactly as it would if visible, which
@@ -293,14 +347,62 @@ export type CanvasLayerContract =
   | CanvasRegionalGuidanceLayerContract
   | CanvasInpaintMaskLayerContract;
 
-export interface CanvasDocumentContractV2 {
-  version: 2;
+export type CanvasLayerStackKind = CanvasLayerContract['type'];
+
+/**
+ * A group. It belongs to exactly one stack forest and may contain only that
+ * stack's leaves and groups. `isHidden` is display-only and valid only in overlay stacks, with the
+ * meaning the overlay leaves already give it; a raster group has no display-only hidden state.
+ *
+ * A group composites pass-through unless it carries a non-identity `adjustments` stack, which is
+ * valid only on RASTER-stack groups (overlay groups composite coverage, not color) and applies to
+ * the group's composited children before the result reaches its parent.
+ */
+export interface CanvasGroupContract {
+  id: string;
+  type: 'group';
+  name: string;
+  isEnabled: boolean;
+  isLocked: boolean;
+  isHidden?: boolean;
+  /** Raster-stack groups only; absent means 1. Applies to the group's isolated composite. */
+  opacity?: number;
+  /** Raster-stack groups only; absent means 'normal'. Applies to the group's isolated composite. */
+  blendMode?: CanvasBlendMode;
+  /** Organizational color label; display-only, absent means none. */
+  colorLabel?: CanvasColorLabel;
+  adjustments?: CanvasAdjustmentsContract;
+  /** Index 0 is the top-most child. */
+  children: CanvasNodeContract[];
+}
+
+export type CanvasNodeContract = CanvasLayerContract | CanvasGroupContract;
+
+/** One top-first forest per stack; a node's stack is the forest it lives in. */
+export type CanvasStackForests = Record<CanvasLayerStackKind, CanvasNodeContract[]>;
+
+/** The composition order, bottom stack first; the one table every consumer reads. */
+export const LAYER_STACK_ORDER: readonly CanvasLayerStackKind[] = [
+  'raster',
+  'control',
+  'regional_guidance',
+  'inpaint_mask',
+];
+
+/** The same stacks as the panel lists them, top first. */
+export const LAYER_STACKS_TOP_FIRST: readonly CanvasLayerStackKind[] = [...LAYER_STACK_ORDER].reverse();
+
+export const CANVAS_MAX_NODE_DEPTH = 10;
+export const CANVAS_MAX_NODE_COUNT = 10_000;
+
+export interface CanvasDocumentContractV3 {
+  version: 3;
   width: number;
   height: number;
   background: 'transparent' | { color: string };
-  /** Index 0 is the top-most layer. */
-  layers: CanvasLayerContract[];
+  stacks: CanvasStackForests;
   bbox: { x: number; y: number; width: number; height: number };
+  /** A leaf or a group; leaf-only tools refuse a group rather than guessing a descendant. */
   selectedLayerId: string | null;
 }
 
@@ -308,16 +410,16 @@ export interface CanvasSnapshotContract {
   id: string;
   name: string;
   createdAt: string;
-  document: CanvasDocumentContractV2;
+  document: CanvasDocumentContractV3;
 }
 
 export interface CanvasStagingAreaContractV2 extends CanvasStagingAreaContract {
   autoSwitchMode: 'off' | 'latest' | 'progress';
 }
 
-export interface CanvasStateContractV2 {
-  version: 2;
-  document: CanvasDocumentContractV2;
+export interface CanvasStateContractV3 {
+  version: 3;
+  document: CanvasDocumentContractV3;
   /**
    * Monotonic counter bumped whenever the document is swapped wholesale
    * (snapshot restore, `replaceCanvasDocument`) rather than incrementally

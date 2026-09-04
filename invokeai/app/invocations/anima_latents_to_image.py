@@ -29,6 +29,12 @@ from invokeai.app.invocations.primitives import ImageOutput
 from invokeai.app.services.shared.invocation_context import InvocationContext
 from invokeai.backend.flux.modules.autoencoder import AutoEncoder as FluxAutoEncoder
 from invokeai.backend.util.devices import TorchDevice
+from invokeai.backend.util.vae_decode_diagnostics import (
+    allocator_state_summary,
+    force_real_empty_cache,
+    nonfinite_fraction,
+    scan_module_for_nonfinite_weights,
+)
 from invokeai.backend.util.vae_working_memory import (
     estimate_vae_working_memory_anima,
     estimate_vae_working_memory_flux,
@@ -177,6 +183,9 @@ class AnimaLatentsToImageInvocation(BaseInvocation, WithMetadata, WithBoard):
                     latents_mean = torch.tensor(vae.config.latents_mean).view(1, -1, 1, 1, 1).to(latents)
                     latents_std = torch.tensor(vae.config.latents_std).view(1, -1, 1, 1, 1).to(latents)
                     latents = latents * latents_std + latents_mean
+                    # Cheap (latents are small); the black-image triage below needs it to tell
+                    # upstream corruption from decode-side corruption.
+                    latents_finite = bool(torch.isfinite(latents).all())
 
                     try:
                         decoded = vae.decode(latents, return_dict=False)[0]
@@ -194,6 +203,11 @@ class AnimaLatentsToImageInvocation(BaseInvocation, WithMetadata, WithBoard):
                         )
                         decoded = vae.decode(latents, return_dict=False)[0]
 
+                    if not bool(torch.isfinite(decoded).all()):
+                        # NaN survives clamp(-1, 1) and quantizes to 0: without this, the
+                        # failure renders as a silent black image. Diagnose and try to recover.
+                        decoded = self._recover_nonfinite_decode(context, vae, latents, decoded, latents_finite)
+
                     # Output is 5D [B, C, T, H, W] — squeeze temporal dim
                     if decoded.ndim == 5:
                         decoded = decoded.squeeze(2)
@@ -207,3 +221,101 @@ class AnimaLatentsToImageInvocation(BaseInvocation, WithMetadata, WithBoard):
 
         image_dto = context.images.save(image=img_pil)
         return ImageOutput.build(image_dto)
+
+    def _recover_nonfinite_decode(
+        self,
+        context: InvocationContext,
+        vae: AutoencoderKLWan,
+        latents: torch.Tensor,
+        decoded: torch.Tensor,
+        latents_finite: bool,
+    ) -> torch.Tensor:
+        """Diagnose and, when possible, recover a decode that produced NaN/Inf (a black image).
+
+        Seen intermittently on a dual-GPU ROCm rig while a long video generation runs on the
+        other GPU. Logs a fingerprint that discriminates the candidate mechanisms — non-finite
+        latents from upstream, corrupt cached VAE weights, or clean-inputs/clean-weights decode
+        compute failure (the allocator-state-dependent kernel class) — then makes two bounded
+        recovery attempts whose outcomes sharpen the diagnosis. Returns the best decode
+        achieved; never raises, since a black image plus a diagnostic log beats a failed
+        generation.
+        """
+        try:
+            return self._recover_nonfinite_decode_impl(context, vae, latents, decoded, latents_finite)
+        except Exception:
+            # The triage itself must never convert a black image into a failed generation.
+            context.logger.exception("VAE decode non-finite triage failed; returning the corrupt decode.")
+            return decoded
+
+    def _recover_nonfinite_decode_impl(
+        self,
+        context: InvocationContext,
+        vae: AutoencoderKLWan,
+        latents: torch.Tensor,
+        decoded: torch.Tensor,
+        latents_finite: bool,
+    ) -> torch.Tensor:
+        device = latents.device
+        scan = scan_module_for_nonfinite_weights(vae, device.type)
+
+        if not latents_finite:
+            assessment = (
+                "the latents entering the decode already contain NaN/Inf — corruption happened "
+                "UPSTREAM of the VAE (denoise output or tensor transfer); retrying the decode cannot help"
+            )
+        elif not scan.clean:
+            assessment = (
+                "NaN/Inf (or unreadable tensors) found among the cached VAE WEIGHTS — if genuinely "
+                "corrupt, every decode will fail until the model is reloaded (clearing the model "
+                "cache should recover it)"
+            )
+        else:
+            assessment = (
+                "latents and weights are finite but the decode COMPUTED NaN/Inf — consistent with an "
+                "allocator-state-dependent kernel failure on this device"
+            )
+        context.logger.error(
+            "VAE decode produced non-finite output (this renders as a black image).\n"
+            f"  non-finite fraction of decode output: {nonfinite_fraction(decoded):.4f}\n"
+            f"  latents finite: {latents_finite}\n"
+            f"  weights: {scan.describe()}\n"
+            f"  allocator: {allocator_state_summary(device)}\n"
+            f"  assessment: {assessment}"
+        )
+
+        if not latents_finite or not scan.clean:
+            return decoded
+
+        try:
+            # Attempt 1: plain retry, to rule out a transient.
+            retry = vae.decode(latents, return_dict=False)[0]
+            if bool(torch.isfinite(retry).all()):
+                context.logger.warning("VAE decode recovered on a plain retry (transient non-finite decode).")
+                return retry
+
+            # Attempt 2: force a REAL global empty_cache — bypassing the peer-aware skip — and
+            # retry. This stalls BOTH workers once: the peer's in-flight step, and this thread,
+            # which waits inside hipFree until that step's kernel completes (up to ~a minute on
+            # a long video step). Still a better trade than a black image; if it heals the
+            # decode, the allocator-state mechanism is confirmed.
+            context.logger.warning(
+                "VAE decode still non-finite after a plain retry; forcing a global empty_cache "
+                "(a peer GPU's in-flight step may stall once) and retrying."
+            )
+            force_real_empty_cache()
+            retry = vae.decode(latents, return_dict=False)[0]
+            if bool(torch.isfinite(retry).all()):
+                context.logger.warning(
+                    "VAE decode recovered after a forced global empty_cache — allocator-state-dependent "
+                    "decode corruption on this device is CONFIRMED."
+                )
+                return retry
+        except RuntimeError as e:
+            context.logger.error(f"VAE decode recovery attempt raised {type(e).__name__}: {e}")
+            return decoded
+
+        context.logger.error(
+            "VAE decode remained non-finite after both recovery attempts; returning the corrupt "
+            "decode (the image will be black)."
+        )
+        return retry

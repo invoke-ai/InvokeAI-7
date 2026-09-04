@@ -6,8 +6,11 @@ import type { CanvasEngineHandle } from '@workbench/widgets/canvas/useCanvasEngi
 
 import { Box, HStack, Icon, Menu, Portal, Text } from '@chakra-ui/react';
 import { useModifierHeld } from '@platform/react/useModifierHeld';
-import { ConfirmDialog, IconButton, MenuContent, Tooltip } from '@platform/ui';
-import { useCanvasProjectMutationDispatch } from '@workbench/useCanvasProjectMutationDispatch';
+import { IconButton } from '@platform/ui/Button';
+import { ConfirmDialog } from '@platform/ui/ConfirmDialog';
+import { MenuContent } from '@platform/ui/Menu';
+import { Tooltip } from '@platform/ui/Tooltip';
+import { useNotify } from '@workbench/useNotify';
 import { getProjectWidgetValues } from '@workbench/widgetState';
 import { useActiveProjectSelector, useWorkbenchCommands } from '@workbench/WorkbenchContext';
 import {
@@ -47,9 +50,13 @@ import {
 import { useCanvasCanRedo, useCanvasCanUndo, useCanvasDocumentEditingLocked, useCanvasZoom } from './engineStoreHooks';
 import { computeFitBboxToLayers, computeFitBboxToMasks } from './fitBbox';
 import { useCanvasEngine } from './useCanvasEngine';
+import { reportStructuralCommit } from './useStructuralCommit';
 import { formatZoomPercent, zoomMenuOptions } from './zoomOptions';
 
-type CanvasHeaderEngine = Pick<CanvasEngineHandle, 'diagnostics' | 'history' | 'interaction' | 'layers' | 'viewport'>;
+type CanvasHeaderEngine = Pick<
+  CanvasEngineHandle,
+  'diagnostics' | 'document' | 'history' | 'interaction' | 'layers' | 'viewport'
+>;
 
 const ZOOM_OPTIONS = zoomMenuOptions();
 const MENU_POSITIONING = { placement: 'bottom-end' } as const;
@@ -87,7 +94,7 @@ const CanvasHeaderActionsInner = ({
   runtime: WidgetViewProps['runtime'];
 }) => {
   const { t } = useTranslation();
-  const dispatch = useCanvasProjectMutationDispatch();
+  const notify = useNotify();
   const zoom = useCanvasZoom(engine);
   const canUndo = useCanvasCanUndo(engine);
   const canRedo = useCanvasCanRedo(engine);
@@ -112,21 +119,21 @@ const CanvasHeaderActionsInner = ({
   const fitMasksRect = useMemo(() => computeFitBboxToMasks(document, gridSize), [document, gridSize]);
 
   const commandContext = (): CanvasHeaderCommandContext => ({
-    dispatch,
     document,
     editingLocked,
     engine,
     fitLayersRect,
     fitMasksRect,
     openNewCanvas,
+    reportStructuralCommit: (result) => reportStructuralCommit(result, notify.error, t),
     t,
   });
 
   const applyFit = (rect: Rect | null, refit: boolean) => applyFitBbox(commandContext(), rect, refit);
 
   const confirmNewCanvas = useCallback(
-    () => confirmNewCanvasDocument({ dispatch, document, editingLocked }),
-    [dispatch, document, editingLocked]
+    () => confirmNewCanvasDocument({ document, editingLocked, engine }),
+    [document, editingLocked, engine]
   );
 
   // Commands (hotkey-assignable; catalog ids `canvas.fitBboxToLayers` /

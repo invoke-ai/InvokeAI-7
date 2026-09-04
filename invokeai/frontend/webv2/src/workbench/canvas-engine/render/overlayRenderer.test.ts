@@ -147,7 +147,13 @@ describe('renderOverlay', () => {
           excludePoints: [{ x: 50, y: 60 }],
           includePoints: [{ x: 30, y: 40 }],
         },
-        samPreview: { opacity: 0.45, rect: { height: 10, width: 20, x: 20, y: 30 }, surface: mask },
+        samPreview: {
+          outline: null,
+          phase: 0,
+          opacity: 0.45,
+          rect: { height: 10, width: 20, x: 20, y: 30 },
+          surface: mask,
+        },
         showBbox: false,
       })
     );

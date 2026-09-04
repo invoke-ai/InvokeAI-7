@@ -30,9 +30,9 @@ import { lazy, useMemo } from 'react';
 export const getGenerationSelectedGalleryImage = getSelectedGalleryImageFromValues;
 
 const ModelSelect = lazy(() => import('@features/models/react').then((module) => ({ default: module.ModelSelect })));
-const GenerateCanvasCompositingSection = lazy(() =>
-  import('@workbench/widgets/canvas/GenerateCanvasCompositingSection').then((module) => ({
-    default: module.GenerateCanvasCompositingSection,
+const GenerateCanvasSections = lazy(() =>
+  import('@workbench/widgets/canvas/GenerateCanvasSections').then((module) => ({
+    default: module.GenerateCanvasSections,
   }))
 );
 
@@ -111,7 +111,7 @@ const useGenerationQueueInsights = (projectId: string): GenerationUiAdapter['que
 export const GenerationUiAdapterProvider = ({ children }: { children: ReactNode }) => {
   // The generate widget needs its model picker as soon as it renders. Left to
   // Suspense, `ModelSelect` was fetched in a second wave after the boot
-  // widget wave had already finished. `GenerateCanvasCompositingSection` is
+  // widget wave had already finished. `GenerateCanvasSections` is
   // canvas-only and stays lazy — warming it would add bytes to every boot.
   useMountEffect(() => {
     void import('@features/models/react');
@@ -274,7 +274,7 @@ export const GenerationUiAdapterProvider = ({ children }: { children: ReactNode 
 
   const adapter = useMemo<GenerationUiAdapter>(
     () => ({
-      CanvasCompositingSection: GenerateCanvasCompositingSection,
+      CanvasGenerationSections: GenerateCanvasSections,
       account: accountGroup,
       capabilities: capabilitiesGroup,
       gallery: galleryGroup,

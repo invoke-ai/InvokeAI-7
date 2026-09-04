@@ -1,4 +1,7 @@
 export interface GeneratedImageContract {
+  /** Backend creation timestamp, when known; `queuedAt` is the (earlier)
+   * submission instant, so ordering must prefer this field. */
+  createdAt?: string;
   height: number;
   imageName: string;
   imageUrl: string;
@@ -24,6 +27,8 @@ export interface GalleryBoard {
   assetCount: number;
   /** Videos on the board, counted separately from `imageCount` by the backend. */
   videoCount: number;
+  /** Asset-category (non-'general') videos on the board; uploaded videos are assets. */
+  assetVideoCount: number;
   archived: boolean;
   coverImageName?: string | null;
   /** Set instead of `coverImageName` when the board's most recent item is a video. */

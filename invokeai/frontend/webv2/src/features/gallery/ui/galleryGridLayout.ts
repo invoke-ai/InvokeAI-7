@@ -95,9 +95,9 @@ const chunkGalleryCellsIntoRows = (
 };
 
 /**
- * The grid's whole row model in one pure pass: starred items become a
- * disclosure section above the regular items, and pending queue placeholders
- * slot into the regular section at the position their images will land.
+ * The grid's row model in one pure pass: a starred-first listing gets a
+ * disclosure section, a flat one chunks in order, and placeholders slot in
+ * where their images will land.
  */
 export const buildGalleryGridRows = ({
   columnCount,
@@ -105,12 +105,14 @@ export const buildGalleryGridRows = ({
   isStarredOpen,
   items,
   pendingPlaceholders,
+  starredFirst,
 }: {
   columnCount: number;
   imageOrderDir: GalleryOrderDir;
   isStarredOpen: boolean;
   items: GalleryItem[];
   pendingPlaceholders: GalleryQueuePlaceholder[];
+  starredFirst: boolean;
 }): GalleryGridRow[] => {
   const regularItemCells: GalleryGridCell[] = [];
   const regularItems: GalleryItem[] = [];
@@ -119,7 +121,7 @@ export const buildGalleryGridRows = ({
   items.forEach((item, itemIndex) => {
     const cell: GalleryGridCell = { item, itemIndex, kind: 'item' };
 
-    if (item.starred) {
+    if (starredFirst && item.starred) {
       starredItemCells.push(cell);
     } else {
       regularItemCells.push(cell);
@@ -131,7 +133,7 @@ export const buildGalleryGridRows = ({
     kind: 'placeholder',
     placeholder,
   }));
-  const placeholderInsertionIndex = getGalleryPlaceholderInsertionIndex(regularItems, imageOrderDir);
+  const placeholderInsertionIndex = getGalleryPlaceholderInsertionIndex(regularItems, imageOrderDir, starredFirst);
   const regularCells = [
     ...regularItemCells.slice(0, placeholderInsertionIndex),
     ...placeholderCells,

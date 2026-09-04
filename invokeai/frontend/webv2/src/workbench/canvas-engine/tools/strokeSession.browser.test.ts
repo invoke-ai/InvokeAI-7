@@ -23,11 +23,19 @@ const pointer = (x: number, y: number, pressure = 0.5): PointerInput => ({
 const paint = (
   path: PointerInput[],
   batchSize: number,
-  opts: { opacity: number; size: number; thinning: number }
+  opts: { opacity: number; size: number; thinning: number; hardness?: number; clipMaskRect?: Rect }
 ): { pixels: Uint8ClampedArray; rect: Rect } => {
   const backend = createDomRasterBackend();
   const layers = createLayerCacheStore(backend);
   layers.getOrCreate('L', 0, 0);
+  const clipMask = opts.clipMaskRect
+    ? (() => {
+        const surface = backend.createSurface(opts.clipMaskRect.width, opts.clipMaskRect.height);
+        surface.ctx.fillStyle = '#fff';
+        surface.ctx.fillRect(0, 0, opts.clipMaskRect.width, opts.clipMaskRect.height);
+        return { rect: opts.clipMaskRect, surface };
+      })()
+    : null;
   const ctx = {
     backend,
     createPath2D: (d?: string) => new Path2D(d),
@@ -37,8 +45,10 @@ const paint = (
     notifyLayerPainted: vi.fn(),
   } as unknown as ToolContext;
   const session = createStrokeSession({
+    clipMask,
     color: '#3b82f6',
     composite: 'source-over',
+    hardness: opts.hardness ?? 1,
     ctx,
     layerId: 'L',
     opacity: opts.opacity,
@@ -63,7 +73,7 @@ const ROUNDING_TOLERANCE = 6;
 
 const tapCoverage = (
   composite: 'source-over' | 'destination-out',
-  options: { pressure?: number; pressureOpacity?: boolean; size?: number } = {}
+  options: { hardness?: number; pressure?: number; pressureOpacity?: boolean; size?: number } = {}
 ): { max: number; sum: number } => {
   const backend = createDomRasterBackend();
   const layers = createLayerCacheStore(backend);
@@ -85,6 +95,7 @@ const tapCoverage = (
     color: '#3b82f6',
     composite,
     ctx,
+    hardness: options.hardness ?? 1,
     layerId: 'L',
     opacity: 1,
     pressureOpacity: options.pressureOpacity ?? false,
@@ -119,6 +130,55 @@ describe('sub-pixel taps', () => {
 
     expect(light.sum).toBeGreaterThan(0);
     expect(heavy.sum).toBeGreaterThan(light.sum * 8);
+  });
+});
+
+describe('hardness', () => {
+  it('a feathered stroke clipped to a selection never bleeds past the mask and keeps its soft edge inside', () => {
+    const result = paint([pointer(40, 64), pointer(40.01, 64)], 2, {
+      clipMaskRect: { height: 128, width: 64, x: 0, y: 0 },
+      hardness: 0.2,
+      opacity: 1,
+      size: 48,
+      thinning: 0,
+    });
+    const alphaAt = (x: number, y: number): number => {
+      if (x < result.rect.x || x >= result.rect.x + result.rect.width) {
+        return 0;
+      }
+      return result.pixels[((y - result.rect.y) * result.rect.width + (x - result.rect.x)) * 4 + 3]!;
+    };
+    expect(alphaAt(40, 64)).toBeGreaterThan(200);
+    // Soft edge survives the mask inside it.
+    expect(alphaAt(20, 64)).toBeGreaterThan(8);
+    expect(alphaAt(20, 64)).toBeLessThan(250);
+    // The blur's bleed is cut hard at the mask boundary.
+    for (const x of [64, 66, 72, 80]) {
+      expect(alphaAt(x, 64)).toBe(0);
+    }
+  });
+
+  const alphaAt = (result: { pixels: Uint8ClampedArray; rect: Rect }, x: number, y: number): number =>
+    result.pixels[((y - result.rect.y) * result.rect.width + (x - result.rect.x)) * 4 + 3]!;
+  const dab = (hardness: number) =>
+    paint([pointer(64, 64), pointer(64.01, 64)], 2, { hardness, opacity: 1, size: 48, thinning: 0 });
+
+  it('feathers the edge without touching the core, and hardness 1 stays crisp', () => {
+    const hard = dab(1);
+    const softDab = dab(0.2);
+    expect(alphaAt(softDab, 64, 64)).toBeGreaterThan(235);
+    expect(alphaAt(hard, 64, 64)).toBeGreaterThan(250);
+
+    // Just inside the 24px radius: crisp is near-opaque, feathered is midway.
+    const edgeHard = alphaAt(hard, 64 + 22, 64);
+    const edgeSoft = alphaAt(softDab, 64 + 22, 64);
+    expect(edgeHard).toBeGreaterThan(200);
+    expect(edgeSoft).toBeGreaterThan(8);
+    expect(edgeSoft).toBeLessThan(edgeHard - 60);
+
+    // Just outside: the feather carries alpha past the crisp silhouette.
+    expect(alphaAt(hard, 64 + 27, 64)).toBe(0);
+    expect(alphaAt(softDab, 64 + 27, 64)).toBeGreaterThan(4);
   });
 });
 

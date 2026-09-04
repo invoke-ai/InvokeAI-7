@@ -1,7 +1,7 @@
 import { registerAccountOwnedResource } from '@platform/state/accountLifecycle';
 import { createExternalStore } from '@platform/state/externalStore';
 
-import type { ProjectPushOutcome } from './projectFlush';
+import type { ProjectPushOutcome, ProjectSchemaRefusal } from './projectFlush';
 
 /**
  * The bridge between the project sync layer and everything outside the editor.
@@ -22,6 +22,8 @@ export interface ProjectSyncInfo {
   revision: number | null;
   /** True when the local document differs from what the server acknowledged. */
   isPendingPush: boolean;
+  /** Present when the server requires a newer canvas schema than this client supports. */
+  schemaRefusal?: ProjectSchemaRefusal;
 }
 
 export interface ProjectSyncSnapshot {

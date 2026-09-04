@@ -8,6 +8,12 @@ import { createContext, use, useMemo } from 'react';
  * may not import workbench), not a test seam; no second adapter is expected.
  */
 export interface VideoUiAdapter {
+  /**
+   * The board a file upload from the video panel should land on — the gallery's
+   * currently selected board. A callback rather than a value so upload handlers
+   * read it at upload time without subscribing to board-selection changes.
+   */
+  getUploadBoardId(): string;
   patchValues(values: Partial<VideoWidgetValues>, origin?: 'user' | 'system'): void;
   projectId: string;
   rawValues: Record<string, unknown>;
@@ -17,7 +23,10 @@ export interface VideoUiAdapter {
 }
 
 /** The adapter's callbacks, which are stable for the lifetime of a project. */
-export type VideoUiActions = Pick<VideoUiAdapter, 'patchValues' | 'reportError' | 'touchGalleryImages'>;
+export type VideoUiActions = Pick<
+  VideoUiAdapter,
+  'getUploadBoardId' | 'patchValues' | 'reportError' | 'touchGalleryImages'
+>;
 
 const VideoUiContext = createContext<VideoUiAdapter | null>(null);
 /**
@@ -29,10 +38,10 @@ const VideoUiContext = createContext<VideoUiAdapter | null>(null);
 const VideoUiActionsContext = createContext<VideoUiActions | null>(null);
 
 export const VideoUiProvider = ({ adapter, children }: { adapter: VideoUiAdapter; children: ReactNode }) => {
-  const { patchValues, reportError, touchGalleryImages } = adapter;
+  const { getUploadBoardId, patchValues, reportError, touchGalleryImages } = adapter;
   const actions = useMemo<VideoUiActions>(
-    () => ({ patchValues, reportError, touchGalleryImages }),
-    [patchValues, reportError, touchGalleryImages]
+    () => ({ getUploadBoardId, patchValues, reportError, touchGalleryImages }),
+    [getUploadBoardId, patchValues, reportError, touchGalleryImages]
   );
 
   return (

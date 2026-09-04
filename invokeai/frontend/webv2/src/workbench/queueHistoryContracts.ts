@@ -1,12 +1,12 @@
 import type { GenerateWidgetValues } from '@features/generation/contracts';
 import type { QueueItem, QueueState, QueueSubmissionSnapshot } from '@features/queue/contracts';
 
-import type { CanvasStateContractV2 } from './canvas-engine/api';
+import type { CanvasStateContractV3 } from './canvas-engine/api';
 import type { WidgetInstanceContract, WidgetInstanceId, WidgetStateMap } from './widgetContracts';
 
 /** Workbench-owned persistence context that Queue stores but never interprets. */
 export interface WorkbenchQueueSubmissionContext {
-  canvas: CanvasStateContractV2;
+  canvas: CanvasStateContractV3;
   generate?: {
     negativePromptNodeId: string;
     positivePromptNodeId: string;

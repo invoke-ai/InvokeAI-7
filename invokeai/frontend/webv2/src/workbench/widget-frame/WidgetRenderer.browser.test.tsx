@@ -115,7 +115,7 @@ const createDeferredWidget = () => {
   );
   const manifest: NormalizedWidgetManifest = {
     allowMultiple: false,
-    allowedRegions: ['bottom', 'center', 'right'],
+    allowedRegions: ['bottom', 'center', 'left', 'right'],
     apiVersion: 1,
     failurePolicy: { isolateRenderFailure: true, onRegistrationFailure: 'disable' },
     icon: TestIcon,
@@ -205,11 +205,12 @@ afterEach(async () => {
 });
 
 describe('WidgetRenderer loading identity transitions', () => {
-  // The center region has no header row of its own — `CenterArea` floats that
-  // chrome above the work surface — so the identity slot lives in panel frames.
+  // The center region and the right-rail docks have no header row of their own
+  // (`CenterArea` and the dock tab strips carry it), so the identity slot lives
+  // in the left and bottom panel frames.
   it('swaps spinner for icon without moving a renamed standard header', async () => {
     const { resolve, widget } = createDeferredWidget();
-    await render(<WidgetRenderer instance={createInstance('Renamed widget')} region="right" widget={widget} />);
+    await render(<WidgetRenderer instance={createInstance('Renamed widget')} region="left" widget={widget} />);
 
     const loadingGeometry = getIdentityGeometry();
     expect(host?.textContent).toContain('Renamed widget');
@@ -225,7 +226,7 @@ describe('WidgetRenderer loading identity transitions', () => {
 
   it('keeps the identity slot aligned when a custom header label loads', async () => {
     const { resolve, widget } = createDeferredWidget();
-    await render(<WidgetRenderer instance={createInstance()} region="right" widget={widget} />);
+    await render(<WidgetRenderer instance={createInstance()} region="left" widget={widget} />);
 
     const loadingGeometry = getIdentityGeometry();
     await resolve({ headerLabel: CustomHeaderLabel, view: TestView });
@@ -292,7 +293,7 @@ describe('WidgetRenderer failure containment', () => {
 
   it('keeps a crashed panel widget framed and resizable', async () => {
     const { resolve, widget } = createDeferredWidget();
-    await render(<WidgetRenderer instance={createInstance()} region="right" widget={widget} />);
+    await render(<WidgetRenderer instance={createInstance()} region="left" widget={widget} />);
 
     await resolve({ view: ThrowingView });
     await expect.poll(() => host?.querySelector('[data-testid="widget-failure"]')).not.toBeNull();

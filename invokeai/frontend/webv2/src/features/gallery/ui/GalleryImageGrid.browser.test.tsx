@@ -15,7 +15,7 @@ import {
 } from '@dnd-kit/core';
 import { sortableKeyboardCoordinates } from '@dnd-kit/sortable';
 import { requestGalleryItemReveal } from '@features/gallery/core/selection';
-import { DEFAULT_GALLERY_SETTINGS } from '@features/gallery/core/settings';
+import { getGallerySettings } from '@features/gallery/core/settings';
 import { GalleryUiProvider, type GalleryUiAdapter } from '@features/gallery/react';
 import { isGalleryImageDragData } from '@features/gallery/utility';
 import { parseDateTokens } from '@platform/search/dateTokens';
@@ -42,6 +42,7 @@ const mocks = vi.hoisted(() => ({
   fetchNames: vi.fn(),
   measure: vi.fn(),
   scrollToIndex: vi.fn(),
+  setPage: vi.fn(),
   virtualizerOptions: [] as Array<{
     count: number;
     estimateSize: (index: number) => number;
@@ -177,6 +178,7 @@ const previewSource: StreamingImageSource = {
 const board = {
   archived: false,
   assetCount: 0,
+  assetVideoCount: 0,
   id: 'board-a',
   imageCount: 3,
   kind: 'board',
@@ -200,6 +202,9 @@ const createFilter = (gallery: GalleryStateView): GalleryItemsFilter => {
   };
 };
 
+/** Infinite-mode settings — the only mode where the starred section renders. */
+const SECTIONED_SETTINGS = { ...getGallerySettings({}), imageDensityPercent: 0 };
+
 const createGallery = (overrides: Partial<GalleryStateView> = {}): GalleryStateView => {
   const items = overrides.items ?? [
     createItem('image', 'first.png'),
@@ -213,16 +218,19 @@ const createGallery = (overrides: Partial<GalleryStateView> = {}): GalleryStateV
     compareImageKey: null,
     currentItem: { itemKey: 'image:first.png', kind: 'item' },
     galleryView: 'images',
+    isComparisonActive: false,
     isLoading: false,
     items,
+    page: 0,
     pendingPlaceholders: [],
+    revealTargetPage: null,
     projectBoardId: null,
     searchTerm: '',
     selectedBoardId: board.id,
     selectedItemKey: 'image:first.png',
     selectedItemKeys: ['image:first.png'],
     semanticImageQuery: null,
-    settings: { ...DEFAULT_GALLERY_SETTINGS, imageDensityPercent: 0, paginationMode: 'paginated' },
+    settings: { ...getGallerySettings({ paginationMode: 'paginated' }), imageDensityPercent: 0 },
     ...overrides,
   };
 };
@@ -309,6 +317,7 @@ const createAdapter = (): GalleryUiAdapter =>
     account: { enableLiveFollow: noop },
     antialiasProgressImages: false,
     gallery: {
+      clearSelection: noop,
       reconcileDeletedBoardOutcome: noop,
       selectBoard: noop,
       selectImage: noop,
@@ -316,7 +325,7 @@ const createAdapter = (): GalleryUiAdapter =>
       setCompareImage: noop,
       setCompareItem: noop,
       setItemMultiSelection: noop,
-      setPage: noop,
+      setPage: mocks.setPage,
       setPageInfo: noop,
       setSearchTerm: noop,
       setView: noop,
@@ -482,6 +491,7 @@ describe('GalleryImageGrid mixed item cells', () => {
     await renderGallery(
       createGallery({
         items: [createItem('image', 'starred.png', { starred: true }), createItem('image', 'regular.png')],
+        settings: SECTIONED_SETTINGS,
       })
     );
 
@@ -505,6 +515,7 @@ describe('GalleryImageGrid mixed item cells', () => {
     await renderGallery(
       createGallery({
         items: [createItem('image', 'starred.png', { starred: true }), createItem('image', 'regular.png')],
+        settings: SECTIONED_SETTINGS,
       }),
       false,
       background
@@ -532,6 +543,7 @@ describe('GalleryImageGrid mixed item cells', () => {
     await renderGallery(
       createGallery({
         items: [createItem('image', 'starred.png', { starred: true }), createItem('image', 'regular.png')],
+        settings: SECTIONED_SETTINGS,
       })
     );
 
@@ -551,6 +563,7 @@ describe('GalleryImageGrid mixed item cells', () => {
     await renderGallery(
       createGallery({
         items: [createItem('image', 'starred.png', { starred: true }), createItem('image', 'regular.png')],
+        settings: SECTIONED_SETTINGS,
       })
     );
 
@@ -578,6 +591,7 @@ describe('GalleryImageGrid mixed item cells', () => {
     await renderGallery(
       createGallery({
         items: [createItem('image', 'starred.png', { starred: true }), createItem('image', 'regular.png')],
+        settings: SECTIONED_SETTINGS,
       })
     );
 
@@ -587,10 +601,28 @@ describe('GalleryImageGrid mixed item cells', () => {
     expect(host?.querySelector('button[aria-label="Select starred.png for preview"]')).toBeNull();
     expect(host?.querySelector('button[aria-label="Select regular.png for preview"]')).not.toBeNull();
 
-    await renderGallery(createGallery({ items: [createItem('image', 'regular.png')] }));
+    await renderGallery(createGallery({ items: [createItem('image', 'regular.png')], settings: SECTIONED_SETTINGS }));
 
     expect(host?.querySelector('button[aria-label="Expand starred items"]')).toBeNull();
     expect(host?.querySelector('button[aria-label="Collapse starred items"]')).toBeNull();
+  });
+
+  it('renders starred items inline with no section on flat paginated pages', async () => {
+    await renderGallery(
+      createGallery({
+        items: [createItem('image', 'starred.png', { starred: true }), createItem('image', 'regular.png')],
+      })
+    );
+
+    expect(host?.querySelector('button[aria-label="Collapse starred items"]')).toBeNull();
+    expect(
+      Array.from(host?.querySelectorAll('[data-gallery-section]') ?? []).map((row) =>
+        row.getAttribute('data-gallery-section')
+      )
+    ).toEqual(['regular']);
+    expect(
+      host?.querySelector('[data-gallery-section="regular"] button[aria-label="Select starred.png for preview"]')
+    ).not.toBeNull();
   });
 
   it('renders same-name media independently and gives a video a static accessible poster', async () => {
@@ -722,6 +754,7 @@ describe('GalleryImageGrid mixed item cells', () => {
     await renderGallery(
       createGallery({
         compareImageKey: 'image:compare.png',
+        isComparisonActive: true,
         items: [image, video],
         selectedItemKey: 'image:first.png',
         selectedItemKeys: ['image:first.png'],
@@ -1055,6 +1088,7 @@ describe('GalleryImageGrid reveal requests', () => {
       items: [starred, createItem('image', 'regular.png')],
       selectedItemKey: 'image:starred.png',
       selectedItemKeys: ['image:starred.png'],
+      settings: SECTIONED_SETTINGS,
     });
 
     await renderGallery(gallery);
@@ -1064,6 +1098,81 @@ describe('GalleryImageGrid reveal requests', () => {
 
     await click(getButton('Expand starred items'));
     expect(mocks.scrollToIndex).toHaveBeenCalledTimes(1);
+  });
+
+  /** A persisted off-page selection of deep.png with page-zero content loaded. */
+  const createOffPageGallery = (revealTargetPage: number | null) =>
+    createGallery({
+      items: [createItem('image', 'page-zero.png')],
+      revealTargetPage,
+      selectedItemKey: null,
+      selectedItemKeys: ['image:deep.png'],
+    });
+
+  it('follows the selection onto its paginated page when the revealed item is not loaded', async () => {
+    const gallery = createOffPageGallery(2);
+
+    await renderGallery(gallery);
+    await interact(() => requestGalleryItemReveal('image:deep.png'));
+
+    expect(mocks.setPage).toHaveBeenCalledWith(2);
+    expect(mocks.scrollToIndex).not.toHaveBeenCalled();
+
+    // The page arrives; the still-pending reveal settles by scrolling.
+    await renderGallery({
+      ...gallery,
+      items: [createItem('image', 'deep.png')],
+      page: 2,
+      selectedItemKey: 'image:deep.png',
+    });
+
+    expect(mocks.scrollToIndex).toHaveBeenCalledTimes(1);
+  });
+
+  it('follows a reveal onto its page at most once, so a missing item cannot pull the user back', async () => {
+    const gallery = createOffPageGallery(2);
+
+    await renderGallery(gallery);
+    await interact(() => requestGalleryItemReveal('image:deep.png'));
+    expect(mocks.setPage).toHaveBeenCalledTimes(1);
+
+    // The stamped page arrives without the item, then the user pages away.
+    await renderGallery({ ...gallery, items: [createItem('image', 'page-two.png')], page: 2 });
+    await renderGallery({ ...gallery, items: [createItem('image', 'page-four.png')], page: 4 });
+
+    expect(mocks.setPage).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not page-follow a selection stamped for a different listing', async () => {
+    const gallery = createOffPageGallery(null);
+
+    await renderGallery(gallery);
+    await interact(() => requestGalleryItemReveal('image:deep.png'));
+
+    expect(mocks.setPage).not.toHaveBeenCalled();
+  });
+
+  it('retires a pending reveal once the persisted selection moves to another off-page item', async () => {
+    const gallery = createOffPageGallery(null);
+
+    await renderGallery(gallery);
+    await interact(() => requestGalleryItemReveal('image:deep.png'));
+
+    // An off-page auto-select replaces the persisted selection.
+    await renderGallery({
+      ...gallery,
+      items: [createItem('image', 'page-zero.png')],
+      selectedItemKeys: ['image:fresh.png'],
+    });
+
+    // The revealed item arriving later must not scroll a retired reveal.
+    await renderGallery({
+      ...gallery,
+      items: [createItem('image', 'deep.png')],
+      selectedItemKeys: ['image:fresh.png'],
+    });
+
+    expect(mocks.scrollToIndex).not.toHaveBeenCalled();
   });
 
   it('retires a pending reveal once a different selection lands', async () => {
@@ -1103,6 +1212,7 @@ describe('GalleryImageGrid virtualization', () => {
   it('re-measures when the row model changes without a resize, and only then', async () => {
     const gallery = createGallery({
       items: [createItem('image', 'starred.png', { starred: true }), createItem('image', 'regular.png')],
+      settings: SECTIONED_SETTINGS,
     });
 
     await renderGallery(gallery);
@@ -1132,7 +1242,7 @@ describe('GalleryImageGrid virtualization', () => {
     await renderGallery(
       createGallery({
         items,
-        settings: { ...DEFAULT_GALLERY_SETTINGS, imageDensityPercent: 0, paginationMode: 'infinite' },
+        settings: SECTIONED_SETTINGS,
       })
     );
     await vi.waitFor(() => expect(actionMocks.loadMore).toHaveBeenCalled());

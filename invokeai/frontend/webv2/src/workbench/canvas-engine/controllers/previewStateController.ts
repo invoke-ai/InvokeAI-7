@@ -20,6 +20,8 @@ export interface SamPreviewState {
   rect: Rect;
   guard: LayerExportGuard;
   isolated: boolean;
+  /** The mask's true-edge outline in document space, traced once at publish. */
+  outline?: Path2D | null;
 }
 
 /** Owns render-preview surfaces and monotonic async publication guards. */

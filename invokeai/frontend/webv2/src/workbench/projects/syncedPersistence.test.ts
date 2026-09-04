@@ -2,7 +2,12 @@ import type * as accountLifecycleModule from '@platform/state/accountLifecycle';
 import type { Project, WorkbenchState } from '@workbench/projectContracts';
 
 import { createWorkbenchPersistenceRuntime, type PersistenceClock } from '@workbench/persistenceRuntime';
-import { createDraftProject, createInitialWorkbenchState, normalizeWorkbenchAccount } from '@workbench/workbenchState';
+import {
+  createDraftProject,
+  createInitialWorkbenchState,
+  normalizeWorkbenchAccount,
+  withAuthoritativeProjectBoard,
+} from '@workbench/workbenchState';
 import { createWorkbenchStore } from '@workbench/workbenchStore';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -22,6 +27,7 @@ const api = vi.hoisted(() => {
     board_id: string;
     name: string;
     revision: number;
+    minimum_canvas_schema_version: number;
     created_at: string;
     updated_at: string;
     data: Record<string, unknown>;
@@ -32,10 +38,13 @@ const api = vi.hoisted(() => {
 
   const conflictError = (): Error => Object.assign(new Error('conflict'), { __status: 409 });
   const notFoundError = (): Error => Object.assign(new Error('not found'), { __status: 404 });
+  const schemaError = (minimum: number, maximum: number): Error =>
+    Object.assign(new Error('unsupported schema'), { __maximum: maximum, __minimum: minimum });
   const toSummary = (record: MockRecord) => ({
     board_id: record.board_id,
     created_at: record.created_at,
     name: record.name,
+    minimum_canvas_schema_version: record.minimum_canvas_schema_version,
     project_id: record.project_id,
     revision: record.revision,
     updated_at: record.updated_at,
@@ -45,6 +54,7 @@ const api = vi.hoisted(() => {
   const mock = {
     __clientState: clientState,
     __records: records,
+    __schemaError: schemaError,
     __seed: (data: Record<string, unknown>): void => {
       const id = data.id as string;
 
@@ -53,13 +63,20 @@ const api = vi.hoisted(() => {
         created_at: '2026-06-10 08:00:00.000',
         data: structuredClone(data),
         name: data.name as string,
+        minimum_canvas_schema_version: 3,
         project_id: id,
         revision: 1,
         updated_at: '2026-06-10 08:00:00.000',
       });
     },
     createProject: vi.fn(
-      (request: { project_id?: string; board_id?: string; name: string; data: Record<string, unknown> }) => {
+      (request: {
+        project_id?: string;
+        board_id?: string;
+        name: string;
+        data: Record<string, unknown>;
+        minimum_canvas_schema_version?: number;
+      }) => {
         const id = request.project_id ?? `generated-${records.size}`;
 
         if (records.has(id)) {
@@ -71,6 +88,7 @@ const api = vi.hoisted(() => {
           created_at: '2026-06-10 09:00:00.000',
           data: structuredClone(request.data),
           name: request.name,
+          minimum_canvas_schema_version: request.minimum_canvas_schema_version ?? 2,
           project_id: id,
           revision: 1,
           updated_at: '2026-06-10 09:00:00.000',
@@ -92,6 +110,16 @@ const api = vi.hoisted(() => {
       return Promise.resolve();
     }),
     getClientStateValue: vi.fn((key: string) => Promise.resolve(clientState.get(key) ?? null)),
+    getProjectCanvasSchemaCompatibilityRefusal: (error: unknown) => {
+      const refusal = error as { __maximum?: number; __minimum?: number };
+
+      return refusal.__minimum === undefined || refusal.__maximum === undefined
+        ? null
+        : {
+            maxCanvasSchemaVersion: refusal.__maximum,
+            minimumCanvasSchemaVersion: refusal.__minimum,
+          };
+    },
     getProject: vi.fn((projectId: string) => {
       const record = records.get(projectId);
 
@@ -106,7 +134,15 @@ const api = vi.hoisted(() => {
       return Promise.resolve();
     }),
     updateProject: vi.fn(
-      (projectId: string, request: { name: string; data: Record<string, unknown>; expected_revision: number }) => {
+      (
+        projectId: string,
+        request: {
+          name: string;
+          data: Record<string, unknown>;
+          expected_revision: number;
+          minimum_canvas_schema_version?: number;
+        }
+      ) => {
         const record = records.get(projectId);
 
         if (!record) {
@@ -120,6 +156,10 @@ const api = vi.hoisted(() => {
         const updated: MockRecord = {
           ...record,
           data: structuredClone(request.data),
+          minimum_canvas_schema_version: Math.max(
+            record.minimum_canvas_schema_version,
+            request.minimum_canvas_schema_version ?? record.minimum_canvas_schema_version
+          ),
           name: request.name,
           revision: record.revision + 1,
           updated_at: '2026-06-10 10:00:00.000',
@@ -183,11 +223,36 @@ const seedServerProject = (name: string): Project => {
   return draft;
 };
 
+const openServerProject = async (projectId: string): Promise<Project> => {
+  const result = await service.hydrateProjectFromServer(projectId);
+
+  if (result.status !== 'loaded') {
+    throw new Error(`Expected "${projectId}" to load, got ${result.status}.`);
+  }
+
+  return result.project;
+};
+
 const stateWithProjects = (projects: Project[], activeProjectId = projects[0]?.id ?? ''): WorkbenchState => ({
   ...createInitialWorkbenchState(),
   activeProjectId,
   projects,
 });
+
+const setPersistedCanvasSchemaFloor = (projectId: string, floor: number): void => {
+  const key = 'invokeai:v7:webv2:workbench-sync';
+  const persisted = JSON.parse(storage.get(key) ?? '{}') as {
+    minimumCanvasSchemaVersions?: Record<string, number>;
+  };
+
+  storage.set(
+    key,
+    JSON.stringify({
+      ...persisted,
+      minimumCanvasSchemaVersions: { ...persisted.minimumCanvasSchemaVersions, [projectId]: floor },
+    })
+  );
+};
 
 beforeEach(async () => {
   vi.resetModules();
@@ -235,6 +300,67 @@ describe('loadWorkbench session hydration', () => {
     expect(api.listProjects).toHaveBeenCalledTimes(1);
     expect(api.createProject).toHaveBeenCalledTimes(state.projects.length);
     expect(api.getProject).not.toHaveBeenCalled();
+  });
+
+  it('preserves both projects when a first-contact create collides with different server data', async () => {
+    const state = createInitialWorkbenchState();
+    const local = { ...state.projects[0]!, name: 'Local edit' };
+
+    storage.set(
+      'invokeai:v7:webv2:workbench',
+      JSON.stringify({ savedAt: '2026-07-19T00:00:00.000Z', state: stateWithProjects([local]), version: 1 })
+    );
+    api.createProject.mockImplementationOnce(() => {
+      const server = { ...local, name: 'Racing server edit' };
+
+      api.__seed(persistence.serializeProjectDocument(server));
+
+      return Promise.reject(Object.assign(new Error('conflict'), { __status: 409 }));
+    });
+
+    const snapshot = await service.loadWorkbench();
+    const recoveredRecord = [...api.__records.values()].find((record) => record.project_id !== local.id);
+
+    expect(api.updateProject).not.toHaveBeenCalled();
+    expect(api.__records.get(local.id)).toMatchObject({ name: 'Racing server edit', revision: 1 });
+    expect(recoveredRecord?.data).toMatchObject({ name: 'Local edit (recovered)', recoveryOf: local.id });
+    expect(snapshot?.state.projects).toMatchObject([
+      { id: local.id, name: 'Racing server edit' },
+      { name: 'Local edit (recovered)', recoveryOf: local.id },
+    ]);
+  });
+
+  it('retains local bytes when a first-contact create collision reveals a newer schema floor', async () => {
+    const state = createInitialWorkbenchState();
+    const local = { ...state.projects[0]!, name: 'Local work that must survive' };
+
+    storage.set(
+      'invokeai:v7:webv2:workbench',
+      JSON.stringify({ savedAt: '2026-07-19T00:00:00.000Z', state: stateWithProjects([local]), version: 1 })
+    );
+    api.createProject.mockImplementationOnce(() => {
+      api.__seed(persistence.serializeProjectDocument({ ...local, name: 'Newer server project' }));
+      api.__records.get(local.id)!.minimum_canvas_schema_version = 4;
+
+      return Promise.reject(Object.assign(new Error('conflict'), { __status: 409 }));
+    });
+    api.getProject.mockRejectedValueOnce(api.__schemaError(4, 3));
+
+    const snapshot = await service.loadWorkbench();
+    const recoveredRecord = [...api.__records.values()].find((record) => record.project_id !== local.id);
+
+    expect(api.updateProject).not.toHaveBeenCalled();
+    expect(api.__records.get(local.id)).toMatchObject({
+      minimum_canvas_schema_version: 4,
+      name: 'Newer server project',
+    });
+    expect(recoveredRecord?.data).toMatchObject({
+      name: 'Local work that must survive (recovered)',
+      recoveryOf: local.id,
+    });
+    expect(snapshot?.state.projects).toMatchObject([
+      { name: 'Local work that must survive (recovered)', recoveryOf: local.id },
+    ]);
   });
 
   it('honors a new-project request while importing legacy local projects', async () => {
@@ -295,6 +421,86 @@ describe('loadWorkbench session hydration', () => {
 
     expect(libraryIds).toHaveLength(3);
     expect(libraryIds).toEqual(expect.arrayContaining([first.id, second.id, third.id]));
+  });
+
+  it('keeps the cached project when listing succeeds but its document GET is temporarily unavailable', async () => {
+    const project = seedServerProject('Cached project');
+
+    seedSessionBlob({
+      account: createInitialWorkbenchState().account,
+      activeProjectId: project.id,
+      openProjectIds: [project.id],
+    });
+    await service.loadWorkbench();
+
+    const reloaded = persistence.createSyncedWorkbenchPersistence(account.captureAccountScope());
+
+    api.getProject.mockRejectedValueOnce(new Error('temporary read failure'));
+
+    const snapshot = await reloaded.loadWorkbench();
+
+    expect(snapshot?.state.projects).toMatchObject([{ id: project.id, name: 'Cached project' }]);
+    expect(reloaded.hasPendingChanges()).toBe(true);
+  });
+
+  it('accepts a list/GET deletion race when the cached project has no pending edits', async () => {
+    const project = seedServerProject('Deleted during load');
+
+    seedSessionBlob({
+      account: createInitialWorkbenchState().account,
+      activeProjectId: project.id,
+      openProjectIds: [project.id],
+    });
+    await service.loadWorkbench();
+
+    const reloaded = persistence.createSyncedWorkbenchPersistence(account.captureAccountScope());
+
+    api.getProject.mockImplementationOnce(() => {
+      api.__records.delete(project.id);
+
+      return Promise.reject(Object.assign(new Error('not found'), { __status: 404 }));
+    });
+    const snapshot = await reloaded.loadWorkbench();
+
+    expect(snapshot?.state.projects.some((candidate) => candidate.id === project.id)).toBe(false);
+    expect(api.createProject).not.toHaveBeenCalled();
+    expect(library.getProjectLibrary().summaries.some((summary) => summary.id === project.id)).toBe(false);
+  });
+
+  it('does not replace the cache when server revision metadata cannot be persisted', async () => {
+    const project = seedServerProject('Cached revision');
+
+    seedSessionBlob({
+      account: createInitialWorkbenchState().account,
+      activeProjectId: project.id,
+      openProjectIds: [project.id],
+    });
+    await service.loadWorkbench();
+    api.__records.set(project.id, {
+      ...api.__records.get(project.id)!,
+      data: persistence.serializeProjectDocument({ ...project, name: 'New server revision' }),
+      name: 'New server revision',
+      revision: 2,
+    });
+    const primaryBefore = storage.get('invokeai:v7:webv2:workbench');
+    const reloaded = persistence.createSyncedWorkbenchPersistence(account.captureAccountScope());
+    const setItem = vi.spyOn(window.localStorage, 'setItem').mockImplementation((key, value) => {
+      if (key.includes('workbench-sync')) {
+        throw new DOMException('quota', 'QuotaExceededError');
+      }
+      storage.set(key, value);
+    });
+
+    let snapshot;
+
+    try {
+      snapshot = await reloaded.loadWorkbench();
+    } finally {
+      setItem.mockRestore();
+    }
+
+    expect(storage.get('invokeai:v7:webv2:workbench')).toBe(primaryBefore);
+    expect(snapshot?.state.projects).toMatchObject([{ id: project.id, name: 'Cached revision' }]);
   });
 
   it('opens every project for sessions from before the split (no open set in the blob)', async () => {
@@ -458,6 +664,293 @@ describe('loadWorkbench session hydration', () => {
 });
 
 describe('saveWorkbench', () => {
+  it('replays a cached offline edit after a full reload when the server revision is unchanged', async () => {
+    const project = seedServerProject('Original');
+
+    seedSessionBlob({
+      account: createInitialWorkbenchState().account,
+      activeProjectId: project.id,
+      openProjectIds: [project.id],
+    });
+
+    const loaded = await service.loadWorkbench();
+    const edited = { ...loaded!.state.projects[0]!, name: 'Edited offline' };
+
+    api.updateProject.mockRejectedValueOnce(new Error('offline'));
+    await service.saveWorkbench(stateWithProjects([edited]));
+
+    const reconnected = persistence.createSyncedWorkbenchPersistence(account.captureAccountScope());
+    const replay = await reconnected.loadWorkbench();
+
+    expect(replay?.state.projects).toMatchObject([{ id: project.id, name: 'Edited offline' }]);
+    expect(reconnected.hasPendingChanges()).toBe(true);
+
+    await reconnected.saveWorkbench(replay!.state);
+
+    expect(api.__records.get(project.id)).toMatchObject({ name: 'Edited offline', revision: 2 });
+  });
+
+  it('reconciles a pending cached project omitted by the stale server open set', async () => {
+    const first = seedServerProject('First');
+    const second = seedServerProject('Second');
+
+    seedSessionBlob({
+      account: createInitialWorkbenchState().account,
+      activeProjectId: first.id,
+      openProjectIds: [first.id],
+    });
+    const loaded = await service.loadWorkbench();
+    const secondLoad = await service.hydrateProjectFromServer(second.id, second.name);
+
+    expect(secondLoad.status).toBe('loaded');
+    if (secondLoad.status !== 'loaded') {
+      throw new Error('Expected the second project to load.');
+    }
+
+    const editedSecond = { ...secondLoad.project, name: 'Second edited offline' };
+    api.setClientStateValue.mockRejectedValueOnce(new Error('session offline'));
+    api.updateProject.mockImplementation((projectId, request) =>
+      projectId === second.id ? Promise.reject(new Error('project offline')) : defaultUpdateProject(projectId, request)
+    );
+    await service.saveWorkbench(stateWithProjects([loaded!.state.projects[0]!, editedSecond]));
+
+    const restarted = persistence.createSyncedWorkbenchPersistence(account.captureAccountScope());
+    const replay = await restarted.loadWorkbench();
+
+    expect(replay?.state.projects).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: first.id, name: 'First' }),
+        expect.objectContaining({ id: second.id, name: 'Second edited offline' }),
+      ])
+    );
+    expect(restarted.hasPendingChanges()).toBe(true);
+  });
+
+  it('forks a cached offline edit after a full reload when the server revision also advanced', async () => {
+    const project = seedServerProject('Original');
+
+    seedSessionBlob({
+      account: createInitialWorkbenchState().account,
+      activeProjectId: project.id,
+      openProjectIds: [project.id],
+    });
+
+    const loaded = await service.loadWorkbench();
+    const edited = { ...loaded!.state.projects[0]!, name: 'Edited offline' };
+
+    api.updateProject.mockRejectedValueOnce(new Error('offline'));
+    await service.saveWorkbench(stateWithProjects([edited]));
+    setPersistedCanvasSchemaFloor(project.id, 4);
+
+    const server = api.__records.get(project.id)!;
+
+    api.__records.set(project.id, {
+      ...server,
+      data: persistence.serializeProjectDocument({ ...project, name: 'Edited remotely' }),
+      name: 'Edited remotely',
+      revision: server.revision + 1,
+    });
+
+    const reconnected = persistence.createSyncedWorkbenchPersistence(account.captureAccountScope());
+    const replay = await reconnected.loadWorkbench();
+
+    expect(replay?.state.projects).toHaveLength(2);
+    expect(replay?.state.projects).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: project.id, name: 'Edited remotely' }),
+        expect.objectContaining({ name: 'Edited offline (recovered)', recoveryOf: project.id }),
+      ])
+    );
+
+    await reconnected.saveWorkbench(replay!.state);
+
+    expect(api.createProject).toHaveBeenLastCalledWith(
+      expect.objectContaining({ minimum_canvas_schema_version: 4 }),
+      expect.any(AbortSignal)
+    );
+    expect([...api.__records.values()]).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ project_id: project.id, name: 'Edited remotely' }),
+        expect.objectContaining({ data: expect.objectContaining({ recoveryOf: project.id }) }),
+      ])
+    );
+  });
+
+  it('inherits a winning server floor raised between boot list and hydration', async () => {
+    const project = seedServerProject('Original');
+
+    seedSessionBlob({
+      account: createInitialWorkbenchState().account,
+      activeProjectId: project.id,
+      openProjectIds: [project.id],
+    });
+
+    const loaded = await service.loadWorkbench();
+    const edited = { ...loaded!.state.projects[0]!, name: 'Edited offline' };
+
+    api.updateProject.mockRejectedValueOnce(new Error('offline'));
+    await service.saveWorkbench(stateWithProjects([edited]));
+
+    const serverRecord = api.__records.get(project.id)!;
+    api.__records.set(project.id, {
+      ...serverRecord,
+      data: persistence.serializeProjectDocument({ ...project, name: 'Edited remotely' }),
+      name: 'Edited remotely',
+      revision: serverRecord.revision + 1,
+    });
+    const listProjects = api.listProjects.getMockImplementation()!;
+    api.listProjects.mockImplementationOnce(async () => {
+      const summaries = await listProjects();
+
+      api.__records.get(project.id)!.minimum_canvas_schema_version = 4;
+
+      return summaries;
+    });
+
+    const reconnected = persistence.createSyncedWorkbenchPersistence(account.captureAccountScope());
+    const replay = await reconnected.loadWorkbench();
+
+    await reconnected.saveWorkbench(replay!.state);
+
+    expect(api.createProject).toHaveBeenLastCalledWith(
+      expect.objectContaining({ minimum_canvas_schema_version: 4 }),
+      expect.any(AbortSignal)
+    );
+  });
+
+  it('retains an offline edit if reconnect crashes between recovery metadata and cache writes', async () => {
+    const project = seedServerProject('Original');
+
+    seedSessionBlob({
+      account: createInitialWorkbenchState().account,
+      activeProjectId: project.id,
+      openProjectIds: [project.id],
+    });
+    const loaded = await service.loadWorkbench();
+    const edited = { ...loaded!.state.projects[0]!, name: 'Edited offline' };
+
+    api.updateProject.mockRejectedValueOnce(new Error('offline'));
+    await service.saveWorkbench(stateWithProjects([edited]));
+    const server = api.__records.get(project.id)!;
+    api.__records.set(project.id, {
+      ...server,
+      data: persistence.serializeProjectDocument({ ...project, name: 'Edited remotely' }),
+      name: 'Edited remotely',
+      revision: server.revision + 1,
+    });
+
+    const primaryKey = 'invokeai:v7:webv2:workbench';
+    const setItem = vi.spyOn(window.localStorage, 'setItem').mockImplementation((key, value) => {
+      if (key === primaryKey) {
+        throw new DOMException('crash before cache commit', 'QuotaExceededError');
+      }
+      storage.set(key, value);
+    });
+
+    try {
+      const interrupted = persistence.createSyncedWorkbenchPersistence(account.captureAccountScope());
+      await interrupted.loadWorkbench();
+    } finally {
+      setItem.mockRestore();
+    }
+
+    const restarted = persistence.createSyncedWorkbenchPersistence(account.captureAccountScope());
+    const replay = await restarted.loadWorkbench();
+
+    expect(replay?.state.projects).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: project.id, name: 'Edited remotely' }),
+        expect.objectContaining({ name: 'Edited offline (recovered)', recoveryOf: project.id }),
+      ])
+    );
+  });
+
+  it('keeps the retained floor when an offline edit is recovered after remote deletion', async () => {
+    const project = seedServerProject('Original');
+
+    seedSessionBlob({
+      account: createInitialWorkbenchState().account,
+      activeProjectId: project.id,
+      openProjectIds: [project.id],
+    });
+
+    const loaded = await service.loadWorkbench();
+    const edited = { ...loaded!.state.projects[0]!, name: 'Edited offline' };
+
+    api.updateProject.mockRejectedValueOnce(new Error('offline'));
+    await service.saveWorkbench(stateWithProjects([edited]));
+    setPersistedCanvasSchemaFloor(project.id, 4);
+    api.__records.delete(project.id);
+
+    const reconnected = persistence.createSyncedWorkbenchPersistence(account.captureAccountScope());
+    const syncKey = 'invokeai:v7:webv2:workbench-sync';
+    const primaryKey = 'invokeai:v7:webv2:workbench';
+    let recoveryCacheCommitted = false;
+    let finalSyncWriteFailed = false;
+    const setItem = vi.spyOn(window.localStorage, 'setItem').mockImplementation((key, value) => {
+      if (key === syncKey && recoveryCacheCommitted && !finalSyncWriteFailed) {
+        finalSyncWriteFailed = true;
+        throw new DOMException('crash after cache commit', 'QuotaExceededError');
+      }
+      storage.set(key, value);
+      if (key === primaryKey) {
+        recoveryCacheCommitted = true;
+      }
+    });
+    let replay;
+
+    try {
+      replay = await reconnected.loadWorkbench();
+    } finally {
+      setItem.mockRestore();
+    }
+
+    expect(replay?.state.projects).toMatchObject([{ name: 'Edited offline (recovered)', recoveryOf: project.id }]);
+    expect(finalSyncWriteFailed).toBe(true);
+
+    // Crash/reload once more before the first recovery uploads. Its inherited floor lives only in
+    // the pending-floor map and must survive another fresh-id recovery.
+    const restartedAgain = persistence.createSyncedWorkbenchPersistence(account.captureAccountScope());
+    const replayAgain = await restartedAgain.loadWorkbench();
+
+    await restartedAgain.saveWorkbench(replayAgain!.state);
+
+    expect(api.createProject).toHaveBeenLastCalledWith(
+      expect.objectContaining({ minimum_canvas_schema_version: 4 }),
+      expect.any(AbortSignal)
+    );
+    expect(api.__records.has(project.id)).toBe(false);
+  });
+
+  it('retains a generic offline edit when reconnect reveals a newer schema floor', async () => {
+    const project = seedServerProject('Original');
+
+    seedSessionBlob({
+      account: createInitialWorkbenchState().account,
+      activeProjectId: project.id,
+      openProjectIds: [project.id],
+    });
+
+    const loaded = await service.loadWorkbench();
+    const edited = { ...loaded!.state.projects[0]!, name: 'Edited offline' };
+
+    api.updateProject.mockRejectedValueOnce(new Error('offline'));
+    await service.saveWorkbench(stateWithProjects([edited]));
+
+    api.__records.get(project.id)!.minimum_canvas_schema_version = 4;
+
+    const reconnected = persistence.createSyncedWorkbenchPersistence(account.captureAccountScope());
+    const replay = await reconnected.loadWorkbench();
+    const retained = JSON.parse(storage.get('invokeai:v7:webv2:workbench:refused-projects')!) as Record<
+      string,
+      Record<string, unknown>
+    >;
+
+    expect(api.getProject).toHaveBeenCalledTimes(1);
+    expect(replay?.state.projects.some((candidate) => candidate.id === project.id)).toBe(false);
+    expect(retained[project.id]).toMatchObject({ id: project.id, name: 'Edited offline' });
+  });
+
   it('cancels an account-A save queued behind the mutation microtask before it can touch account B', async () => {
     const ownerA = account.accountLifecycle.activate('user-a', ':user:a');
     const accountAService = persistence.createSyncedWorkbenchPersistence(ownerA);
@@ -574,6 +1067,7 @@ describe('saveWorkbench', () => {
         getPersistedRevision: store.getPersistedRevision,
         notifyProjectNotFound: vi.fn(),
         reportLoadError: vi.fn(),
+        reportRefusedProjects: vi.fn(),
         setHasHydrated: store.setHasHydrated,
         subscribe: store.subscribe,
       },
@@ -698,6 +1192,267 @@ describe('saveWorkbench', () => {
     expect(api.updateProject).not.toHaveBeenCalled();
     expect(api.__records.has(project.id)).toBe(false);
   });
+
+  it('does not cache new edits when their durable pending marker cannot be written', async () => {
+    const project = seedServerProject('Durable server project');
+
+    seedSessionBlob({
+      account: createInitialWorkbenchState().account,
+      activeProjectId: project.id,
+      openProjectIds: [project.id],
+    });
+    const loaded = await service.loadWorkbench();
+    const opened = loaded!.state.projects[0]!;
+    const cachedBefore = storage.get('invokeai:v7:webv2:workbench');
+    const setItem = vi.spyOn(window.localStorage, 'setItem').mockImplementation((key, value) => {
+      if (key.includes('workbench-sync')) {
+        throw new DOMException('quota', 'QuotaExceededError');
+      }
+      storage.set(key, value);
+    });
+
+    try {
+      await expect(service.saveWorkbench(stateWithProjects([{ ...opened, name: 'Not yet durable' }]))).rejects.toThrow(
+        'durably record pending project edits'
+      );
+    } finally {
+      setItem.mockRestore();
+    }
+
+    expect(storage.get('invokeai:v7:webv2:workbench')).toBe(cachedBefore);
+    expect(api.__records.get(project.id)?.name).toBe('Durable server project');
+  });
+
+  it('keeps a closed project revision until the cache durably omits it', async () => {
+    const project = seedServerProject('Synced before close');
+
+    seedSessionBlob({
+      account: createInitialWorkbenchState().account,
+      activeProjectId: project.id,
+      openProjectIds: [project.id],
+    });
+    await service.loadWorkbench();
+    service.releaseProjectSync(project.id);
+
+    const persistedBeforeCrash = JSON.parse(storage.get('invokeai:v7:webv2:workbench-sync') ?? '{}') as {
+      revisions?: Record<string, number>;
+    };
+    expect(persistedBeforeCrash.revisions?.[project.id]).toBe(1);
+
+    api.__records.delete(project.id);
+    service = persistence.createSyncedWorkbenchPersistence(account.captureAccountScope());
+    const reloaded = await service.loadWorkbench();
+
+    expect(api.createProject).not.toHaveBeenCalled();
+    expect(reloaded?.state.projects.some((candidate) => candidate.id === project.id)).toBe(false);
+  });
+
+  it('recovers an indeterminate first create under a fresh id after revision persistence fails', async () => {
+    const project = createDraftProject([]);
+    const syncKey = 'invokeai:v7:webv2:workbench-sync';
+    let syncWrites = 0;
+    const setItem = vi.spyOn(window.localStorage, 'setItem').mockImplementation((key, value) => {
+      if (key === syncKey && ++syncWrites === 2) {
+        throw new DOMException('quota', 'QuotaExceededError');
+      }
+      storage.set(key, value);
+    });
+
+    try {
+      const result = await service.saveWorkbench(stateWithProjects([project]));
+
+      expect(result.hasPendingChanges).toBe(true);
+      expect(api.__records.has(project.id)).toBe(true);
+    } finally {
+      setItem.mockRestore();
+    }
+
+    api.__records.delete(project.id);
+    service = persistence.createSyncedWorkbenchPersistence(account.captureAccountScope());
+    const reloaded = await service.loadWorkbench();
+    const recovered = reloaded?.state.projects[0];
+
+    expect(recovered).toBeDefined();
+    expect(recovered?.id).not.toBe(project.id);
+    expect(recovered?.name).toContain(project.name);
+    expect(api.__records.has(project.id)).toBe(false);
+
+    await service.saveWorkbench(reloaded!.state);
+    expect(api.__records.has(project.id)).toBe(false);
+    expect(api.__records.has(recovered!.id)).toBe(true);
+  });
+
+  it('does not recreate a pending revisionless id after an offline reload', async () => {
+    const project = { ...createDraftProject([]), name: 'Response-lost create' };
+
+    api.createProject.mockImplementationOnce((request) => {
+      api.__seed(request.data);
+
+      return Promise.reject(new Error('response lost'));
+    });
+    await service.saveWorkbench(stateWithProjects([project]));
+    api.__records.delete(project.id);
+
+    api.listProjects.mockRejectedValueOnce(new Error('offline during restart'));
+    const restarted = persistence.createSyncedWorkbenchPersistence(account.captureAccountScope());
+    const offline = await restarted.loadWorkbench();
+    const result = await restarted.saveWorkbench(offline!.state);
+    const attemptedIds = api.createProject.mock.calls.map(([request]) => request.project_id);
+
+    expect(attemptedIds[0]).toBe(project.id);
+    expect(attemptedIds.slice(1)).not.toContain(project.id);
+    expect(api.__records.has(project.id)).toBe(false);
+    expect(result.deletedProjectForks).toHaveLength(1);
+  });
+
+  it('does not compact hidden local edits after deletion rollback persistence fails', async () => {
+    const project = seedServerProject('Deletion fails');
+
+    seedSessionBlob({
+      account: createInitialWorkbenchState().account,
+      activeProjectId: project.id,
+      openProjectIds: [project.id],
+    });
+    const loaded = await service.loadWorkbench();
+    const edited = { ...loaded!.state.projects[0]!, name: 'Unsynced edit must survive' };
+    api.updateProject.mockRejectedValueOnce(new Error('offline edit'));
+    await service.saveWorkbench(stateWithProjects([edited]));
+
+    const syncKey = 'invokeai:v7:webv2:workbench-sync';
+    let failRollbackWrites = false;
+    const setItem = vi.spyOn(window.localStorage, 'setItem').mockImplementation((key, value) => {
+      if (key === syncKey && failRollbackWrites) {
+        throw new DOMException('rollback quota', 'QuotaExceededError');
+      }
+      storage.set(key, value);
+    });
+    api.deleteProject.mockImplementationOnce(() => {
+      failRollbackWrites = true;
+
+      return Promise.reject(new Error('delete offline'));
+    });
+
+    try {
+      await expect(service.deleteProjectOnServer(project.id)).rejects.toThrow('delete offline');
+      // The UI retries the idempotent rollback after the service rejects.
+      service.unmarkProjectDeleted(project.id);
+    } finally {
+      setItem.mockRestore();
+    }
+
+    const primaryBeforeRestart = storage.get('invokeai:v7:webv2:workbench');
+    await expect(service.flushProjectToServer(edited)).resolves.toMatchObject({ kind: 'unsynced' });
+    api.getProject.mockRejectedValueOnce(new Error('still offline'));
+    await expect(service.saveWorkbench(stateWithProjects([createDraftProject([])]))).rejects.toThrow(
+      'Could not verify pending project deletions while offline.'
+    );
+    expect(storage.get('invokeai:v7:webv2:workbench')).toBe(primaryBeforeRestart);
+
+    api.listProjects.mockRejectedValueOnce(new Error('offline during restart'));
+    const restarted = persistence.createSyncedWorkbenchPersistence(account.captureAccountScope());
+    const offline = await restarted.loadWorkbench();
+
+    api.getProject.mockRejectedValueOnce(new Error('still offline after restart'));
+    await expect(restarted.saveWorkbench(offline!.state)).rejects.toThrow(
+      'Could not verify pending project deletions while offline.'
+    );
+    expect(storage.get('invokeai:v7:webv2:workbench')).toBe(primaryBeforeRestart);
+    expect((JSON.parse(primaryBeforeRestart!) as { state: WorkbenchState }).state.projects[0]?.name).toBe(
+      'Unsynced edit must survive'
+    );
+
+    const reconnected = await restarted.saveWorkbench(offline!.state);
+    const recoveredRecord = [...api.__records.values()].find((record) => record.project_id !== project.id);
+
+    expect(reconnected.conflicts).toHaveLength(1);
+    expect(recoveredRecord?.data).toMatchObject({ name: 'Unsynced edit must survive (recovered)' });
+  });
+
+  it('blocks close and reconciles the newest live edit after failed deletion rollback', async () => {
+    const project = seedServerProject('Deletion fails before close');
+
+    seedSessionBlob({
+      account: createInitialWorkbenchState().account,
+      activeProjectId: project.id,
+      openProjectIds: [project.id],
+    });
+    const loaded = await service.loadWorkbench();
+    const cachedEdit = { ...loaded!.state.projects[0]!, name: 'Cached edit' };
+    api.updateProject.mockRejectedValueOnce(new Error('offline edit'));
+    await service.saveWorkbench(stateWithProjects([cachedEdit]));
+
+    const syncKey = 'invokeai:v7:webv2:workbench-sync';
+    let failRollbackWrites = false;
+    const setItem = vi.spyOn(window.localStorage, 'setItem').mockImplementation((key, value) => {
+      if (key === syncKey && failRollbackWrites) {
+        throw new DOMException('rollback quota', 'QuotaExceededError');
+      }
+      storage.set(key, value);
+    });
+    api.deleteProject.mockImplementationOnce(() => {
+      failRollbackWrites = true;
+
+      return Promise.reject(new Error('delete offline'));
+    });
+
+    try {
+      await expect(service.deleteProjectOnServer(project.id)).rejects.toThrow('delete offline');
+      service.unmarkProjectDeleted(project.id);
+    } finally {
+      setItem.mockRestore();
+    }
+
+    const newestLiveEdit = { ...cachedEdit, name: 'Post-cache edit must survive' };
+
+    await expect(service.flushProjectToServer(newestLiveEdit)).resolves.toMatchObject({ kind: 'unsynced' });
+    const result = await service.saveWorkbench(stateWithProjects([newestLiveEdit]));
+    const recoveredRecord = [...api.__records.values()].find((record) => record.project_id !== project.id);
+
+    expect(result.conflicts).toHaveLength(1);
+    expect(recoveredRecord?.data).toMatchObject({ name: 'Post-cache edit must survive (recovered)' });
+  });
+
+  it('recovers live edits when a committed deletion loses its response', async () => {
+    const project = seedServerProject('Delete response is lost');
+
+    seedSessionBlob({
+      account: createInitialWorkbenchState().account,
+      activeProjectId: project.id,
+      openProjectIds: [project.id],
+    });
+    const loaded = await service.loadWorkbench();
+    const syncKey = 'invokeai:v7:webv2:workbench-sync';
+    let failRollbackWrites = false;
+    const setItem = vi.spyOn(window.localStorage, 'setItem').mockImplementation((key, value) => {
+      if (key === syncKey && failRollbackWrites) {
+        throw new DOMException('rollback quota', 'QuotaExceededError');
+      }
+      storage.set(key, value);
+    });
+    api.deleteProject.mockImplementationOnce((projectId) => {
+      api.__records.delete(projectId);
+      failRollbackWrites = true;
+
+      return Promise.reject(new Error('delete response lost'));
+    });
+
+    try {
+      await expect(service.deleteProjectOnServer(project.id)).rejects.toThrow('delete response lost');
+      service.unmarkProjectDeleted(project.id);
+    } finally {
+      setItem.mockRestore();
+    }
+
+    const newestLiveEdit = { ...loaded!.state.projects[0]!, name: 'Edited after delete error' };
+
+    await expect(service.flushProjectToServer(newestLiveEdit)).resolves.toMatchObject({ kind: 'unsynced' });
+    const result = await service.saveWorkbench(stateWithProjects([newestLiveEdit]));
+    const recoveredRecord = [...api.__records.values()][0];
+
+    expect(api.__records.has(project.id)).toBe(false);
+    expect(result.deletedProjectForks).toHaveLength(1);
+    expect(recoveredRecord?.data).toMatchObject({ name: 'Edited after delete error (recovered)' });
+  });
 });
 
 describe('persistEmptySession', () => {
@@ -717,18 +1472,75 @@ describe('persistEmptySession', () => {
     expect(api.__records.has(first.id)).toBe(true);
     expect(api.deleteProject).not.toHaveBeenCalled();
   });
+
+  it('keeps a deletion tombstone across a crash until the cache omission is durable', async () => {
+    const project = seedServerProject('Delete me');
+
+    seedSessionBlob({
+      account: createInitialWorkbenchState().account,
+      activeProjectId: project.id,
+      openProjectIds: [project.id],
+    });
+    await service.loadWorkbench();
+    await service.deleteProjectOnServer(project.id);
+
+    // Simulate a crash before the aggregate can save a state without the deleted tab.
+    service = persistence.createSyncedWorkbenchPersistence(account.captureAccountScope());
+    const reloaded = await service.loadWorkbench();
+    const persistedSync = JSON.parse(storage.get('invokeai:v7:webv2:workbench-sync') ?? '{}') as {
+      deletedProjectIds?: string[];
+    };
+
+    expect(api.__records.has(project.id)).toBe(false);
+    expect(api.createProject).not.toHaveBeenCalled();
+    expect(reloaded?.state.projects.some((candidate) => candidate.id === project.id)).toBe(false);
+    expect(persistedSync.deletedProjectIds).toEqual([]);
+  });
+
+  it('does not settle a deletion tombstone when the cache omission fails', async () => {
+    const project = seedServerProject('Delete me after quota clears');
+
+    seedSessionBlob({
+      account: createInitialWorkbenchState().account,
+      activeProjectId: project.id,
+      openProjectIds: [project.id],
+    });
+    await service.loadWorkbench();
+    await service.deleteProjectOnServer(project.id);
+
+    const replacement = createDraftProject([]);
+    const storageKey = 'invokeai:v7:webv2:workbench';
+    const setItem = vi.spyOn(window.localStorage, 'setItem').mockImplementation((key, value) => {
+      if (key === storageKey) {
+        throw new DOMException('quota', 'QuotaExceededError');
+      }
+      storage.set(key, value);
+    });
+
+    try {
+      await expect(service.saveWorkbench(stateWithProjects([replacement]))).rejects.toThrow('quota');
+    } finally {
+      setItem.mockRestore();
+    }
+
+    const persistedSync = JSON.parse(storage.get('invokeai:v7:webv2:workbench-sync') ?? '{}') as {
+      deletedProjectIds?: string[];
+    };
+
+    expect(persistedSync.deletedProjectIds).toContain(project.id);
+  });
 });
 
 describe('hydrateProjectFromServer', () => {
   it('returns an openable project and registers its revision for future saves', async () => {
     const project = seedServerProject('Closed project');
-    const hydrated = await service.hydrateProjectFromServer(project.id);
+    const hydrated = await openServerProject(project.id);
 
-    expect(hydrated?.id).toBe(project.id);
-    expect(hydrated?.undoRedo).toEqual({ future: [], past: [] });
+    expect(hydrated.id).toBe(project.id);
+    expect(hydrated.undoRedo).toEqual({ future: [], past: [] });
 
     // A subsequent save updates in place rather than re-creating.
-    const renamed = { ...hydrated!, name: 'Renamed after reopen' };
+    const renamed = { ...hydrated, name: 'Renamed after reopen' };
 
     await service.saveWorkbench(stateWithProjects([renamed]));
 
@@ -736,8 +1548,23 @@ describe('hydrateProjectFromServer', () => {
     expect(api.__records.get(project.id)?.name).toBe('Renamed after reopen');
   });
 
-  it('returns null for unknown projects', async () => {
-    expect(await service.hydrateProjectFromServer('nope')).toBeNull();
+  it('reports unknown projects as unavailable', async () => {
+    expect(await service.hydrateProjectFromServer('nope')).toEqual({ status: 'unavailable' });
+  });
+
+  it('reports a server schema precondition as an unsupported project instead of as missing', async () => {
+    api.getProject.mockRejectedValueOnce(api.__schemaError(4, 3));
+
+    expect(await service.hydrateProjectFromServer('future', 'Future project')).toEqual({
+      refused: {
+        projectId: 'future',
+        projectName: 'Future project',
+        raw: null,
+        refusal: { raw: null, scope: 'document', status: 'unsupported-version', version: 4 },
+        source: 'canvas',
+      },
+      status: 'refused',
+    });
   });
 });
 
@@ -775,11 +1602,11 @@ describe('authoritative project boards', () => {
     instances[galleryId]!.state.values.selectedBoardId = 'deliberate-destination';
     api.__seed(document);
 
-    const hydrated = await service.hydrateProjectFromServer(draft.id);
+    const hydrated = await openServerProject(draft.id);
 
-    expect(galleryBoardIds(hydrated!).projectBoardId).toBe(`board-for-${draft.id}`);
+    expect(galleryBoardIds(hydrated).projectBoardId).toBe(`board-for-${draft.id}`);
     // The chosen destination is the user's, not ours; resolving it is the gallery's job.
-    expect(galleryBoardIds(hydrated!).selectedBoardId).toBe('deliberate-destination');
+    expect(galleryBoardIds(hydrated).selectedBoardId).toBe('deliberate-destination');
   });
 
   /**
@@ -796,9 +1623,9 @@ describe('authoritative project boards', () => {
     delete document.widgetStates;
     api.__seed(document);
 
-    const hydrated = await service.hydrateProjectFromServer(draft.id);
+    const hydrated = await openServerProject(draft.id);
 
-    expect(galleryBoardIds(hydrated!).projectBoardId).toBe(`board-for-${draft.id}`);
+    expect(galleryBoardIds(hydrated).projectBoardId).toBe(`board-for-${draft.id}`);
   });
 
   it('does not push a project it only opened, even when hydrating it changed the document', async () => {
@@ -904,14 +1731,14 @@ describe('authoritative project boards', () => {
     // would still carry it, and the fork's first autosave would read the drop
     // as an edit.
     const project = seedServerProject('Deleted elsewhere');
-    const opened = await service.hydrateProjectFromServer(project.id);
-    const galleryEntry = Object.entries(opened!.widgetInstances).find(([, instance]) => instance.typeId === 'gallery')!;
+    const opened = await openServerProject(project.id);
+    const galleryEntry = Object.entries(opened.widgetInstances).find(([, instance]) => instance.typeId === 'gallery')!;
     const [galleryInstanceId, galleryInstance] = galleryEntry;
     const edited = {
-      ...opened!,
+      ...opened,
       name: 'Edited locally',
       widgetInstances: {
-        ...opened!.widgetInstances,
+        ...opened.widgetInstances,
         [galleryInstanceId]: {
           ...galleryInstance,
           state: {
@@ -937,8 +1764,8 @@ describe('authoritative project boards', () => {
 
   it('forks rather than resurrects a project deleted on another device', async () => {
     const project = seedServerProject('Deleted elsewhere');
-    const opened = await service.hydrateProjectFromServer(project.id);
-    const edited = { ...opened!, name: 'Edited locally' };
+    const opened = await openServerProject(project.id);
+    const edited = { ...opened, name: 'Edited locally' };
 
     // Deleted on the other device, after this one had already synced.
     api.__records.delete(project.id);
@@ -963,8 +1790,8 @@ describe('authoritative project boards', () => {
     // A flush has no caller to return outcomes to — rename, export and duplicate all go through
     // one. If the fork it produced were dropped, the aggregate would never hear about it.
     const project = seedServerProject('Deleted elsewhere');
-    const opened = await service.hydrateProjectFromServer(project.id);
-    const edited = { ...opened!, name: 'Edited locally' };
+    const opened = await openServerProject(project.id);
+    const edited = { ...opened, name: 'Edited locally' };
 
     api.__records.delete(project.id);
     await service.flushProjectToServer(edited);
@@ -1023,17 +1850,422 @@ describe('authoritative project boards', () => {
       ],
     ])('reports %s for %s', async (kind, _label, rename, arrange) => {
       const project = seedServerProject('Synced');
-      const opened = await service.hydrateProjectFromServer(project.id);
+      const opened = await openServerProject(project.id);
 
       arrange(project.id, project);
 
-      const flushed = rename === undefined ? opened! : { ...opened!, name: rename };
+      const flushed = rename === undefined ? opened : { ...opened, name: rename };
 
       await expect(service.flushProjectToServer(flushed)).resolves.toMatchObject({ kind });
 
       if (kind === 'unsynced') {
         expect(service.hasPendingChanges()).toBe(true);
       }
+    });
+
+    it('does not overwrite the winning server document before a queued conflict resolution is applied', async () => {
+      const project = seedServerProject('Original');
+      const opened = await openServerProject(project.id);
+      const staleLocal = { ...opened, name: 'My divergent edit' };
+      const winningServer = { ...project, name: 'Their winning edit' };
+
+      api.__records.set(project.id, {
+        ...api.__records.get(project.id)!,
+        data: persistence.serializeProjectDocument(winningServer),
+        name: winningServer.name,
+        revision: 2,
+      });
+
+      await expect(service.flushProjectToServer(staleLocal)).resolves.toMatchObject({ kind: 'superseded' });
+      const updatesAfterFork = api.updateProject.mock.calls.length;
+      const result = await service.saveWorkbench(stateWithProjects([staleLocal]));
+
+      expect(api.updateProject).toHaveBeenCalledTimes(updatesAfterFork);
+      expect(api.__records.get(project.id)?.name).toBe('Their winning edit');
+      expect(result.conflicts).toHaveLength(1);
+
+      const [resolution] = result.conflicts;
+
+      service.acknowledgeConflictResolution(project.id);
+      await service.saveWorkbench(
+        stateWithProjects([{ ...resolution!.serverProject, name: 'Edited after reconciliation' }])
+      );
+      expect(api.__records.get(project.id)?.name).toBe('Edited after reconciliation');
+    });
+
+    it('retries a failed conflict fork without adopting the winning revision', async () => {
+      const project = seedServerProject('Original');
+      const opened = await openServerProject(project.id);
+      const staleLocal = { ...opened, name: 'My divergent edit' };
+      const winningServer = { ...project, name: 'Their winning edit' };
+
+      api.__records.set(project.id, {
+        ...api.__records.get(project.id)!,
+        data: persistence.serializeProjectDocument(winningServer),
+        name: winningServer.name,
+        revision: 2,
+      });
+      api.createProject.mockRejectedValueOnce(new Error('recovery storage unavailable'));
+
+      await expect(service.flushProjectToServer(staleLocal)).resolves.toMatchObject({ kind: 'unsynced' });
+      const retried = await service.saveWorkbench(stateWithProjects([staleLocal]));
+
+      expect(api.__records.get(project.id)?.name).toBe('Their winning edit');
+      expect(retried.conflicts).toHaveLength(1);
+    });
+
+    it('adopts a committed conflict recovery after its response is lost across a restart', async () => {
+      const project = seedServerProject('Original');
+      const opened = await openServerProject(project.id);
+      const staleLocal = { ...opened, name: 'My divergent edit' };
+      const winningServer = { ...project, name: 'Their winning edit' };
+
+      api.__records.set(project.id, {
+        ...api.__records.get(project.id)!,
+        data: persistence.serializeProjectDocument(winningServer),
+        name: winningServer.name,
+        revision: 2,
+      });
+      api.createProject.mockImplementationOnce((request) => {
+        api.__seed(request.data);
+
+        return Promise.reject(new Error('recovery response lost'));
+      });
+
+      const failedSave = await service.saveWorkbench(stateWithProjects([staleLocal]));
+      const recoveryId = [...api.__records.keys()].find((id) => id !== project.id)!;
+      const createsAfterLostResponse = api.createProject.mock.calls.length;
+
+      expect(failedSave.hasPendingChanges).toBe(true);
+
+      service = persistence.createSyncedWorkbenchPersistence(account.captureAccountScope());
+      const reloaded = await service.loadWorkbench();
+
+      expect(api.createProject).toHaveBeenCalledTimes(createsAfterLostResponse);
+      expect([...api.__records.keys()]).toEqual(expect.arrayContaining([project.id, recoveryId]));
+      expect(api.__records.size).toBe(2);
+      expect(reloaded?.state.projects).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: project.id, name: winningServer.name }),
+          expect.objectContaining({ id: recoveryId, name: 'My divergent edit (recovered)' }),
+        ])
+      );
+    });
+
+    it('rotates an exact response-lost recovery when the winning source floor rises', async () => {
+      const project = seedServerProject('Original');
+      const opened = await openServerProject(project.id);
+      const staleLocal = { ...opened, name: 'My divergent edit' };
+      const winningServer = { ...project, name: 'Their winning edit' };
+
+      api.__records.set(project.id, {
+        ...api.__records.get(project.id)!,
+        data: persistence.serializeProjectDocument(winningServer),
+        name: winningServer.name,
+        revision: 2,
+      });
+      api.createProject.mockImplementationOnce((request) => {
+        api.__seed(request.data);
+
+        return Promise.reject(new Error('recovery response lost'));
+      });
+
+      await service.saveWorkbench(stateWithProjects([staleLocal]));
+      const lowerFloorRecoveryId = [...api.__records.keys()].find((id) => id !== project.id)!;
+
+      api.__records.get(project.id)!.minimum_canvas_schema_version = 4;
+      const retried = await service.saveWorkbench(stateWithProjects([staleLocal]));
+      const raisedFloorRecoveryId = retried.conflicts[0]!.recoveredIdentity.id;
+
+      expect(raisedFloorRecoveryId).not.toBe(lowerFloorRecoveryId);
+      expect(api.__records.get(lowerFloorRecoveryId)?.minimum_canvas_schema_version).toBe(3);
+      expect(api.__records.get(raisedFloorRecoveryId)?.minimum_canvas_schema_version).toBe(4);
+    });
+
+    it('uses a distinct recovery identity for a later conflict after reconciliation is durable', async () => {
+      const project = seedServerProject('Original');
+      const opened = await openServerProject(project.id);
+      const firstLocal = { ...opened, name: 'First local edit' };
+      const firstServer = { ...project, name: 'First remote edit' };
+
+      api.__records.set(project.id, {
+        ...api.__records.get(project.id)!,
+        data: persistence.serializeProjectDocument(firstServer),
+        name: firstServer.name,
+        revision: 2,
+      });
+
+      const firstSave = await service.saveWorkbench(stateWithProjects([firstLocal]));
+      const firstResolution = firstSave.conflicts[0]!;
+      const firstRecoveryBoard = firstSave.projectBoardAssignments.find(
+        (assignment) => assignment.projectId === firstResolution.recoveredIdentity.id
+      )!;
+      const durableFirstRecovery = withAuthoritativeProjectBoard(
+        firstResolution.recoveredProject,
+        firstRecoveryBoard.boardId
+      );
+
+      service.acknowledgeConflictResolution(project.id);
+      await service.saveWorkbench(stateWithProjects([firstResolution.serverProject, durableFirstRecovery], project.id));
+      const settledSyncMap = JSON.parse(storage.get('invokeai:v7:webv2:workbench-sync')!) as {
+        pendingRecoveryIdentities?: Record<string, unknown>;
+      };
+
+      expect(settledSyncMap.pendingRecoveryIdentities?.[project.id]).toBeUndefined();
+
+      const secondLocal = { ...firstResolution.serverProject, name: 'Second local edit' };
+      const secondServer = { ...firstResolution.serverProject, name: 'Second remote edit' };
+      const serverRecord = api.__records.get(project.id)!;
+
+      api.__records.set(project.id, {
+        ...serverRecord,
+        data: persistence.serializeProjectDocument(secondServer),
+        name: secondServer.name,
+        revision: serverRecord.revision + 1,
+      });
+
+      const secondSave = await service.saveWorkbench(
+        stateWithProjects([secondLocal, durableFirstRecovery], project.id)
+      );
+      const secondResolution = secondSave.conflicts[0]!;
+
+      expect(secondResolution.recoveredIdentity.id).not.toBe(firstResolution.recoveredIdentity.id);
+      expect(api.__records.has(firstResolution.recoveredIdentity.id)).toBe(true);
+      expect(api.__records.has(secondResolution.recoveredIdentity.id)).toBe(true);
+    });
+
+    it('retires a reservation when its recovered project is durably closed', async () => {
+      const project = seedServerProject('Original');
+      const opened = await openServerProject(project.id);
+      const local = { ...opened, name: 'Local edit' };
+      const remote = { ...project, name: 'Remote edit' };
+
+      api.__records.set(project.id, {
+        ...api.__records.get(project.id)!,
+        data: persistence.serializeProjectDocument(remote),
+        name: remote.name,
+        revision: 2,
+      });
+
+      const conflicted = await service.saveWorkbench(stateWithProjects([local]));
+      const resolution = conflicted.conflicts[0]!;
+
+      service.acknowledgeConflictResolution(project.id);
+      service.releaseProjectSync(resolution.recoveredIdentity.id);
+      await service.saveWorkbench(stateWithProjects([resolution.serverProject]));
+
+      const settledSyncMap = JSON.parse(storage.get('invokeai:v7:webv2:workbench-sync')!) as {
+        pendingRecoveryIdentities?: Record<string, unknown>;
+      };
+
+      expect(settledSyncMap.pendingRecoveryIdentities?.[project.id]).toBeUndefined();
+
+      service = persistence.createSyncedWorkbenchPersistence(account.captureAccountScope());
+      const reloaded = await service.loadWorkbench();
+
+      expect(reloaded?.state.projects.map((candidate) => candidate.id)).toEqual([project.id]);
+    });
+
+    it('re-keys a create collision without overwriting the colliding project', async () => {
+      const local = { ...createDraftProject([]), name: 'Never-synced local' };
+
+      api.createProject
+        .mockImplementationOnce(() => {
+          api.__seed(persistence.serializeProjectDocument({ ...local, name: 'Unrelated server project' }));
+
+          return Promise.reject(Object.assign(new Error('conflict'), { __status: 409 }));
+        })
+        .mockRejectedValueOnce(new Error('recovery storage unavailable'));
+
+      await expect(service.flushProjectToServer(local)).resolves.toMatchObject({ kind: 'superseded' });
+      const retried = await service.saveWorkbench(stateWithProjects([local]));
+
+      expect(api.__records.get(local.id)?.name).toBe('Unrelated server project');
+      expect(retried.deletedProjectForks).toHaveLength(1);
+
+      const reopened = service.adoptProjectRecord(structuredClone(api.__records.get(local.id)!));
+      expect(reopened.status).toBe('loaded');
+      if (reopened.status !== 'loaded') {
+        throw new Error('Expected the colliding server project to reopen.');
+      }
+
+      const createsBeforeEdit = api.createProject.mock.calls.length;
+      await service.saveWorkbench(
+        stateWithProjects([{ ...reopened.project, name: 'Authoritative project edited normally' }])
+      );
+
+      expect(api.createProject).toHaveBeenCalledTimes(createsBeforeEdit);
+      expect(api.__records.get(local.id)?.name).toBe('Authoritative project edited normally');
+    });
+
+    it('never reuses an id after create collision is followed by a missing GET', async () => {
+      const local = { ...createDraftProject([]), name: 'Possibly committed local' };
+
+      api.createProject
+        .mockRejectedValueOnce(Object.assign(new Error('conflict'), { __status: 409 }))
+        .mockRejectedValueOnce(new Error('recovery storage unavailable'));
+      api.getProject.mockRejectedValueOnce(Object.assign(new Error('not found'), { __status: 404 }));
+
+      await expect(service.flushProjectToServer(local)).resolves.toMatchObject({ kind: 'unsynced' });
+      const result = await service.saveWorkbench(stateWithProjects([local]));
+      const attemptedIds = api.createProject.mock.calls.map(([request]) => request.project_id);
+
+      expect(attemptedIds[0]).toBe(local.id);
+      expect(attemptedIds.slice(1)).not.toContain(local.id);
+      expect(api.__records.has(local.id)).toBe(false);
+      expect(result.deletedProjectForks).toHaveLength(1);
+    });
+
+    it('turns a write-time schema refusal into a terminal actionable outcome without retrying it', async () => {
+      const project = seedServerProject('Raised elsewhere');
+      const opened = await openServerProject(project.id);
+      const edited = { ...opened, name: 'Local work' };
+
+      api.updateProject.mockRejectedValueOnce(api.__schemaError(4, 3));
+
+      await expect(service.flushProjectToServer(edited)).resolves.toEqual({
+        documentJson: JSON.stringify(persistence.serializeProjectDocument(edited)),
+        kind: 'schema-refused',
+        refusal: { maxCanvasSchemaVersion: 3, minimumCanvasSchemaVersion: 4 },
+      });
+
+      const callsAfterRefusal = api.updateProject.mock.calls.length;
+      const save = await service.saveWorkbench(stateWithProjects([edited]));
+      const cached = JSON.parse(storage.get('invokeai:v7:webv2:workbench')!) as { state: WorkbenchState };
+
+      expect(api.updateProject).toHaveBeenCalledTimes(callsAfterRefusal);
+      expect(save.hasPendingChanges).toBe(false);
+      expect(cached.state.projects[0]?.name).toBe('Local work');
+      expect(
+        JSON.parse(storage.get('invokeai:v7:webv2:workbench:refused-projects')!) as Record<string, unknown>
+      ).toMatchObject({ [project.id]: { id: project.id, name: 'Local work' } });
+    });
+
+    it('does not overwrite the only cached copy after write-time refusal retention fails', async () => {
+      const project = seedServerProject('Raised elsewhere');
+      const opened = await openServerProject(project.id);
+      const edited = { ...opened, name: 'Local work that must survive' };
+      const replacement = createDraftProject([]);
+      const refusedKey = 'invokeai:v7:webv2:workbench:refused-projects';
+      const setItem = vi.spyOn(window.localStorage, 'setItem').mockImplementation((key, value) => {
+        if (key === refusedKey) {
+          throw new DOMException('quota', 'QuotaExceededError');
+        }
+        storage.set(key, value);
+      });
+
+      try {
+        api.updateProject.mockRejectedValueOnce(api.__schemaError(4, 3));
+        await service.saveWorkbench(stateWithProjects([edited]));
+        const cachedBeforeOmission = storage.get('invokeai:v7:webv2:workbench');
+
+        await expect(service.saveWorkbench(stateWithProjects([replacement]))).rejects.toThrow(
+          'Could not preserve projects that require a newer client.'
+        );
+
+        expect(storage.get('invokeai:v7:webv2:workbench')).toBe(cachedBeforeOmission);
+        expect((JSON.parse(cachedBeforeOmission!) as { state: WorkbenchState }).state.projects[0]?.name).toBe(
+          'Local work that must survive'
+        );
+      } finally {
+        setItem.mockRestore();
+      }
+    });
+
+    it('moves divergent cached work into the raw recovery bucket when the newer floor is seen on reload', async () => {
+      const project = seedServerProject('Raised elsewhere');
+      const opened = await openServerProject(project.id);
+      const edited = { ...opened, name: 'Local work that must survive' };
+
+      api.updateProject.mockRejectedValueOnce(api.__schemaError(4, 3));
+      await service.saveWorkbench(stateWithProjects([edited]));
+      storage.set(
+        'invokeai:v7:webv2:workbench:refused-projects',
+        JSON.stringify({
+          [project.id]: persistence.serializeProjectDocument({ ...edited, name: 'Older retained edit' }),
+        })
+      );
+      api.__records.get(project.id)!.minimum_canvas_schema_version = 4;
+
+      const reloaded = persistence.createSyncedWorkbenchPersistence(account.captureAccountScope());
+
+      const snapshot = await reloaded.loadWorkbench();
+      const retained = JSON.parse(storage.get('invokeai:v7:webv2:workbench:refused-projects')!) as Record<
+        string,
+        Record<string, unknown>
+      >;
+
+      expect(snapshot?.state.projects.some((candidate) => candidate.id === project.id)).toBe(false);
+      expect(snapshot?.refusedProjects).toMatchObject([
+        {
+          projectId: project.id,
+          projectName: 'Local work that must survive',
+          raw: { id: project.id, name: 'Local work that must survive' },
+        },
+      ]);
+      expect(retained[project.id]).toMatchObject({ id: project.id, name: 'Local work that must survive' });
+    });
+
+    it('keeps the raw local recovery after an upgraded client can read the server project', async () => {
+      const project = seedServerProject('Raised elsewhere');
+      const opened = await openServerProject(project.id);
+      const edited = { ...opened, name: 'Divergent local work' };
+
+      api.updateProject.mockRejectedValueOnce(api.__schemaError(4, 3));
+      await service.saveWorkbench(stateWithProjects([edited]));
+
+      const reloaded = persistence.createSyncedWorkbenchPersistence(account.captureAccountScope());
+      const snapshot = await reloaded.loadWorkbench();
+      const retained = JSON.parse(storage.get('invokeai:v7:webv2:workbench:refused-projects')!) as Record<
+        string,
+        Record<string, unknown>
+      >;
+
+      expect(snapshot?.state.projects.find((candidate) => candidate.id === project.id)?.name).toBe(
+        'Divergent local work'
+      );
+      expect(reloaded.hasPendingChanges()).toBe(true);
+      expect(retained[project.id]).toMatchObject({ id: project.id, name: 'Divergent local work' });
+    });
+
+    it('preserves a schema refusal discovered while reading after a revision conflict', async () => {
+      const project = seedServerProject('Raised during conflict');
+      const opened = await openServerProject(project.id);
+
+      api.updateProject.mockRejectedValueOnce(Object.assign(new Error('conflict'), { __status: 409 }));
+      api.getProject.mockRejectedValueOnce(api.__schemaError(4, 3));
+
+      await expect(service.flushProjectToServer({ ...opened, name: 'Local work' })).resolves.toMatchObject({
+        kind: 'schema-refused',
+        refusal: { maxCanvasSchemaVersion: 3, minimumCanvasSchemaVersion: 4 },
+      });
+    });
+
+    it('reconciles a concurrent floor raise without resending or lowering the stale floor', async () => {
+      const project = seedServerProject('Concurrent floor');
+      const opened = await openServerProject(project.id);
+      const server = api.__records.get(project.id)!;
+
+      api.__records.set(project.id, {
+        ...server,
+        minimum_canvas_schema_version: 4,
+        revision: server.revision + 1,
+      });
+
+      await expect(service.flushProjectToServer({ ...opened, name: 'Local edit' })).resolves.toMatchObject({
+        kind: 'acknowledged',
+      });
+
+      const updateRequests = api.updateProject.mock.calls.map((call) => call[1]);
+
+      expect(updateRequests).toHaveLength(2);
+      expect(updateRequests[0]).not.toHaveProperty('minimum_canvas_schema_version');
+      expect(updateRequests[1]).not.toHaveProperty('minimum_canvas_schema_version');
+      expect(api.__records.get(project.id)).toMatchObject({
+        minimum_canvas_schema_version: 4,
+        name: 'Local edit',
+        revision: 3,
+      });
     });
   });
 
@@ -1044,8 +2276,8 @@ describe('authoritative project boards', () => {
    */
   it('does not fork a project this browser is deleting', async () => {
     const project = seedServerProject('Doomed');
-    const opened = await service.hydrateProjectFromServer(project.id);
-    const edited = { ...opened!, name: 'Edited just before deleting' };
+    const opened = await openServerProject(project.id);
+    const edited = { ...opened, name: 'Edited just before deleting' };
 
     let releaseUpdate: () => void = () => undefined;
     const updateReached = new Promise<void>((resolve) => {
@@ -1089,7 +2321,7 @@ describe('authoritative project boards', () => {
    */
   it('re-reads the deletion set when a push it started comes back 404', async () => {
     const project = seedServerProject('Doomed');
-    const opened = await service.hydrateProjectFromServer(project.id);
+    const opened = await openServerProject(project.id);
     const realUpdate = api.updateProject.getMockImplementation()!;
 
     api.updateProject.mockImplementationOnce((...args: Parameters<typeof realUpdate>) => {
@@ -1101,14 +2333,14 @@ describe('authoritative project boards', () => {
       return realUpdate(...args);
     });
 
-    await expect(service.flushProjectToServer({ ...opened!, name: 'Edited locally' })).resolves.toMatchObject({
+    await expect(service.flushProjectToServer({ ...opened, name: 'Edited locally' })).resolves.toMatchObject({
       kind: 'superseded',
     });
 
     // No "(recovered)" project was left behind on the server.
     expect([...api.__records.keys()]).toEqual([]);
 
-    const result = await service.saveWorkbench(stateWithProjects([{ ...opened!, name: 'Edited locally' }]));
+    const result = await service.saveWorkbench(stateWithProjects([{ ...opened, name: 'Edited locally' }]));
 
     expect(result.deletedProjectForks).toEqual([]);
     expect(api.__records.size).toBe(0);
@@ -1116,7 +2348,7 @@ describe('authoritative project boards', () => {
 
   it('lets a project save again when its deletion fails', async () => {
     const project = seedServerProject('Survives');
-    const opened = await service.hydrateProjectFromServer(project.id);
+    const opened = await openServerProject(project.id);
 
     api.deleteProject.mockRejectedValueOnce(new Error('offline'));
 
@@ -1124,7 +2356,7 @@ describe('authoritative project boards', () => {
 
     // Its place in the revision chain comes back with it, so the next push is a PUT rather than a
     // create that has to recover through a 409.
-    const result = await service.saveWorkbench(stateWithProjects([{ ...opened!, name: 'Edited after' }]));
+    const result = await service.saveWorkbench(stateWithProjects([{ ...opened, name: 'Edited after' }]));
 
     expect(result.deletedProjectForks).toEqual([]);
     expect(api.createProject).not.toHaveBeenCalled();
@@ -1136,8 +2368,8 @@ describe('authoritative project boards', () => {
     // window would POST the old id back and undo the deletion on every device — the exact outcome
     // forking exists to avoid.
     const project = seedServerProject('Deleted elsewhere');
-    const opened = await service.hydrateProjectFromServer(project.id);
-    const edited = { ...opened!, name: 'Edited locally' };
+    const opened = await openServerProject(project.id);
+    const edited = { ...opened, name: 'Edited locally' };
 
     api.__records.delete(project.id);
     await service.flushProjectToServer(edited);
@@ -1149,5 +2381,378 @@ describe('authoritative project boards', () => {
     expect(api.__records.has(project.id)).toBe(false);
     // And the fork is reported exactly once, not once per push.
     expect(result.deletedProjectForks).toHaveLength(1);
+  });
+
+  it('retries a failed deletion fork without resurrecting the deleted id', async () => {
+    const project = seedServerProject('Deleted elsewhere');
+    const opened = await openServerProject(project.id);
+    const edited = { ...opened, name: 'Edited locally' };
+
+    api.__records.delete(project.id);
+    api.createProject.mockRejectedValueOnce(new Error('recovery storage unavailable'));
+
+    await expect(service.flushProjectToServer(edited)).resolves.toMatchObject({ kind: 'unsynced' });
+    const retried = await service.saveWorkbench(stateWithProjects([edited]));
+
+    expect(api.__records.has(project.id)).toBe(false);
+    expect(retried.deletedProjectForks).toHaveLength(1);
+  });
+
+  it('adopts a recovery create whose successful response was lost across a restart', async () => {
+    const project = seedServerProject('Deleted elsewhere');
+    const opened = await openServerProject(project.id);
+    const edited = { ...opened, name: 'Edited locally' };
+
+    api.__records.delete(project.id);
+    api.createProject.mockImplementationOnce((request) => {
+      api.__seed(request.data);
+
+      return Promise.reject(new Error('recovery response lost'));
+    });
+
+    const failedSave = await service.saveWorkbench(stateWithProjects([edited]));
+    const recoveryId = [...api.__records.keys()][0]!;
+    const createsAfterLostResponse = api.createProject.mock.calls.length;
+
+    expect(failedSave.hasPendingChanges).toBe(true);
+
+    service = persistence.createSyncedWorkbenchPersistence(account.captureAccountScope());
+    const reloaded = await service.loadWorkbench();
+
+    expect(api.createProject).toHaveBeenCalledTimes(createsAfterLostResponse);
+    expect([...api.__records.keys()]).toEqual([recoveryId]);
+    expect(reloaded?.state.projects.map((candidate) => candidate.id)).toEqual([recoveryId]);
+  });
+
+  it('rotates a response-lost recovery identity when the cached source advances', async () => {
+    const project = seedServerProject('Deleted elsewhere');
+    const opened = await openServerProject(project.id);
+    const firstEdit = { ...opened, name: 'First local edit' };
+
+    api.__records.delete(project.id);
+    api.createProject.mockImplementationOnce((request) => {
+      api.__seed(request.data);
+
+      return Promise.reject(new Error('recovery response lost'));
+    });
+
+    await service.saveWorkbench(stateWithProjects([firstEdit]));
+    const firstRecoveryId = [...api.__records.keys()][0]!;
+    const secondEdit = { ...firstEdit, name: 'Newer local edit' };
+    const secondSave = await service.saveWorkbench(stateWithProjects([secondEdit]));
+    const secondRecoveryId = secondSave.deletedProjectForks[0]!.recoveredIdentity.id;
+
+    expect(secondRecoveryId).not.toBe(firstRecoveryId);
+    expect(api.__records.get(firstRecoveryId)?.name).toBe('First local edit (recovered)');
+    expect(api.__records.get(secondRecoveryId)?.name).toBe('Newer local edit (recovered)');
+
+    service = persistence.createSyncedWorkbenchPersistence(account.captureAccountScope());
+    const reloaded = await service.loadWorkbench();
+
+    expect(reloaded?.state.projects).toMatchObject([{ id: secondRecoveryId, name: 'Newer local edit (recovered)' }]);
+  });
+
+  it('does not resurrect a response-lost recovery that another client deleted', async () => {
+    const project = seedServerProject('Deleted elsewhere');
+    const opened = await openServerProject(project.id);
+    const edited = { ...opened, name: 'Edited locally' };
+
+    api.__records.delete(project.id);
+    api.createProject.mockImplementationOnce((request) => {
+      api.__seed(request.data);
+
+      return Promise.reject(new Error('recovery response lost'));
+    });
+
+    await service.saveWorkbench(stateWithProjects([edited]));
+    const deletedRecoveryId = [...api.__records.keys()][0]!;
+
+    api.__records.delete(deletedRecoveryId);
+    const retried = await service.saveWorkbench(stateWithProjects([edited]));
+    const freshRecoveryId = retried.deletedProjectForks[0]!.recoveredIdentity.id;
+    const attemptedIds = api.createProject.mock.calls.map(([request]) => request.project_id);
+
+    expect(freshRecoveryId).not.toBe(deletedRecoveryId);
+    expect(attemptedIds).toEqual([deletedRecoveryId, freshRecoveryId]);
+    expect(api.__records.has(deletedRecoveryId)).toBe(false);
+    expect(api.__records.has(freshRecoveryId)).toBe(true);
+  });
+
+  it('keeps a successful deletion fork crash-durable before aggregate reconciliation', async () => {
+    const project = seedServerProject('Deleted elsewhere');
+
+    seedSessionBlob({
+      account: createInitialWorkbenchState().account,
+      activeProjectId: project.id,
+      openProjectIds: [project.id],
+    });
+    const loaded = await service.loadWorkbench();
+    const edited = { ...loaded!.state.projects[0]!, name: 'Edited locally' };
+
+    api.__records.delete(project.id);
+    const result = await service.saveWorkbench(stateWithProjects([edited]));
+    const recoveredId = result.deletedProjectForks[0]!.recoveredIdentity.id;
+    const createsAfterFork = api.createProject.mock.calls.length;
+
+    // Crash before `result` can be applied to the aggregate: the primary cache still has the
+    // original id, while the sync map must prove that id was deleted/forked.
+    service = persistence.createSyncedWorkbenchPersistence(account.captureAccountScope());
+    const reloaded = await service.loadWorkbench();
+
+    expect(api.__records.has(project.id)).toBe(false);
+    expect(api.__records.has(recoveredId)).toBe(true);
+    expect(api.createProject).toHaveBeenCalledTimes(createsAfterFork);
+    expect(reloaded?.state.projects.some((candidate) => candidate.id === project.id)).toBe(false);
+  });
+});
+
+describe('canvas version gate', () => {
+  const futureProject = (name: string): Project => {
+    const draft = { ...createDraftProject([]), name };
+
+    return { ...draft, canvas: { ...draft.canvas, version: 4 } as unknown as Project['canvas'] };
+  };
+
+  const cacheKey = 'invokeai:v7:webv2:workbench';
+
+  const seedCache = (projects: Project[]): WorkbenchState => {
+    const state = stateWithProjects(projects);
+
+    storage.set(cacheKey, JSON.stringify({ savedAt: '2026-07-19T00:00:00.000Z', state, version: 1 }));
+
+    return state;
+  };
+
+  it('publishes a never-synced document with the floor its canonical canvas requires', async () => {
+    const future = futureProject('Future offline project');
+
+    await service.flushProjectToServer(future);
+
+    expect(api.createProject).toHaveBeenCalledWith(
+      expect.objectContaining({ minimum_canvas_schema_version: 4, project_id: future.id }),
+      expect.any(AbortSignal)
+    );
+  });
+
+  it('retains a server floor when deletion recovery forks a document with a lower live version', async () => {
+    const project = seedServerProject('Future floor');
+    api.__records.get(project.id)!.minimum_canvas_schema_version = 4;
+    const opened = await openServerProject(project.id);
+
+    api.__records.delete(project.id);
+    await service.flushProjectToServer({ ...opened, name: 'Recovered locally' });
+
+    expect(api.createProject).toHaveBeenLastCalledWith(
+      expect.objectContaining({ minimum_canvas_schema_version: 4 }),
+      expect.any(AbortSignal)
+    );
+  });
+
+  it('retains the winning server floor when revision-conflict recovery forks local bytes', async () => {
+    const project = seedServerProject('Future floor conflict');
+    const opened = await openServerProject(project.id);
+    const serverRecord = api.__records.get(project.id)!;
+    const winningServer = { ...project, name: 'Winning remote edit' };
+
+    api.__records.set(project.id, {
+      ...serverRecord,
+      data: persistence.serializeProjectDocument(winningServer),
+      minimum_canvas_schema_version: 4,
+      name: winningServer.name,
+      revision: serverRecord.revision + 1,
+    });
+
+    await service.flushProjectToServer({ ...opened, name: 'Divergent local edit' });
+
+    expect(api.createProject).toHaveBeenLastCalledWith(
+      expect.objectContaining({ minimum_canvas_schema_version: 4 }),
+      expect.any(AbortSignal)
+    );
+  });
+
+  it('retains a server schema refusal during boot instead of treating the project as missing', async () => {
+    const future = seedServerProject('Future server project');
+    api.__records.get(future.id)!.minimum_canvas_schema_version = 4;
+    seedSessionBlob({
+      account: createInitialWorkbenchState().account,
+      activeProjectId: future.id,
+      openProjectIds: [future.id],
+    });
+    const snapshot = await service.loadWorkbench();
+
+    expect(snapshot?.refusedProjects).toEqual([
+      {
+        projectId: future.id,
+        projectName: 'Future server project',
+        raw: null,
+        refusal: { raw: null, scope: 'document', status: 'unsupported-version', version: 4 },
+        source: 'canvas',
+      },
+    ]);
+    expect(api.getProject).not.toHaveBeenCalled();
+    expect(snapshot?.state.projects.some((project) => project.id === future.id)).toBe(false);
+  });
+
+  it('keeps the primary cached project when the raw refusal bucket is full', async () => {
+    const future = seedServerProject('Future server project');
+    const cached = { ...future, name: 'Local work that must remain cached' };
+
+    api.__records.get(future.id)!.minimum_canvas_schema_version = 4;
+    seedCache([cached]);
+    seedSessionBlob({
+      account: createInitialWorkbenchState().account,
+      activeProjectId: future.id,
+      openProjectIds: [future.id],
+    });
+    const setItem = vi.spyOn(window.localStorage, 'setItem').mockImplementation((key, value) => {
+      if (key.endsWith(':refused-projects')) {
+        throw new DOMException('quota', 'QuotaExceededError');
+      }
+      storage.set(key, value);
+    });
+
+    let snapshot;
+
+    try {
+      snapshot = await service.loadWorkbench();
+    } finally {
+      setItem.mockRestore();
+    }
+
+    const primary = JSON.parse(storage.get(cacheKey)!) as { state: WorkbenchState };
+
+    expect(primary.state.projects).toMatchObject([{ id: future.id, name: cached.name }]);
+    expect(snapshot?.state.projects).toMatchObject([{ id: future.id, name: cached.name }]);
+    expect(storage.has(`${cacheKey}:refused-projects`)).toBe(false);
+  });
+
+  it('blocks cache replacement until a locally future document reaches the recovery bucket', async () => {
+    const supported = { ...createDraftProject([]), name: 'Supported' };
+    const future = futureProject('Only raw future copy');
+
+    seedCache([supported, future]);
+    api.listProjects.mockRejectedValueOnce(new Error('offline'));
+    const primaryBefore = storage.get(cacheKey);
+    const setItem = vi.spyOn(window.localStorage, 'setItem').mockImplementation((key, value) => {
+      if (key.endsWith(':refused-projects')) {
+        throw new DOMException('quota', 'QuotaExceededError');
+      }
+      storage.set(key, value);
+    });
+
+    try {
+      const snapshot = await service.loadWorkbench();
+
+      expect(snapshot?.state.projects.map((project) => project.id)).toEqual([supported.id]);
+      expect(snapshot?.hasUnretainedRefusedProjects).toBe(true);
+      await expect(service.saveWorkbench(snapshot!.state)).rejects.toThrow('newer client');
+    } finally {
+      setItem.mockRestore();
+    }
+
+    expect(storage.get(cacheKey)).toBe(primaryBefore);
+    expect(storage.has(`${cacheKey}:refused-projects`)).toBe(false);
+  });
+
+  it('keeps a refused cached project out of the session and moves it verbatim to the refused bucket', async () => {
+    const supported = { ...createDraftProject([]), name: 'Supported' };
+    const future = futureProject('From the future');
+
+    seedCache([supported, future]);
+    api.listProjects.mockRejectedValueOnce(new Error('offline'));
+
+    const snapshot = await service.loadWorkbench();
+
+    expect(snapshot?.state.projects.map((project) => project.id)).toEqual([supported.id]);
+    expect(snapshot?.refusedProjects).toMatchObject([
+      {
+        projectId: future.id,
+        projectName: 'From the future',
+        refusal: { scope: 'state', status: 'unsupported-version', version: 4 },
+        source: 'canvas',
+      },
+    ]);
+
+    await service.saveWorkbench({ ...snapshot!.state, projects: [{ ...supported, name: 'Edited' }] });
+
+    const cached = JSON.parse(storage.get(cacheKey)!) as { state: WorkbenchState };
+    const refused = JSON.parse(storage.get(`${cacheKey}:refused-projects`)!) as Record<string, unknown>;
+
+    expect(cached.state.projects.map((project) => project.name)).toEqual(['Edited']);
+    expect(refused[future.id]).toEqual(JSON.parse(JSON.stringify(future)));
+  });
+
+  it('forgets a refused cached project once it is deleted from the library', async () => {
+    const supported = { ...createDraftProject([]), name: 'Supported' };
+    const future = futureProject('From the future');
+
+    seedCache([supported, future]);
+    api.listProjects.mockRejectedValueOnce(new Error('offline'));
+    await service.loadWorkbench();
+
+    expect(JSON.parse(storage.get(`${cacheKey}:refused-projects`)!)).toHaveProperty(future.id);
+
+    await library.deleteLibraryProject(future.id);
+
+    expect(storage.get(`${cacheKey}:refused-projects`)).toBeUndefined();
+  });
+
+  it('reports a project refused from both the cache and the server once', async () => {
+    const future = futureProject('From the future');
+
+    seedCache([future]);
+    api.__seed(persistence.serializeProjectDocument(future));
+    seedSessionBlob({ account, activeProjectId: future.id, openProjectIds: [future.id] });
+
+    const snapshot = await service.loadWorkbench();
+
+    expect(snapshot?.refusedProjects.map((refused) => refused.projectId)).toEqual([future.id]);
+  });
+
+  it('never pushes a refused cached project to a first-contact backend', async () => {
+    const supported = { ...createDraftProject([]), name: 'Supported' };
+    const future = futureProject('From the future');
+
+    seedCache([supported, future]);
+
+    const snapshot = await service.loadWorkbench();
+
+    expect(api.createProject).toHaveBeenCalledTimes(1);
+    expect([...api.__records.keys()]).toEqual([supported.id]);
+    expect(snapshot?.refusedProjects?.map((refused) => refused.projectId)).toEqual([future.id]);
+  });
+
+  it('reports a refused server record without adopting or rewriting it', async () => {
+    const supported = seedServerProject('Supported');
+    const future = futureProject('From the future');
+
+    api.__seed(persistence.serializeProjectDocument(future));
+    seedSessionBlob({ account, activeProjectId: future.id, openProjectIds: [supported.id, future.id] });
+
+    const snapshot = await service.loadWorkbench();
+
+    expect(snapshot?.state.projects.map((project) => project.id)).toEqual([supported.id]);
+    expect(snapshot?.refusedProjects?.map((refused) => refused.projectId)).toEqual([future.id]);
+
+    await service.saveWorkbench({
+      ...snapshot!.state,
+      projects: [{ ...snapshot!.state.projects[0]!, name: 'Edited' }],
+    });
+
+    expect(api.__records.get(future.id)?.data.canvas).toMatchObject({ version: 4 });
+    expect(api.__records.get(future.id)?.revision).toBe(1);
+  });
+
+  it('refuses to hydrate a server record written by a newer client', async () => {
+    const future = futureProject('From the future');
+
+    api.__seed(persistence.serializeProjectDocument(future));
+
+    const result = await service.hydrateProjectFromServer(future.id);
+
+    expect(result).toMatchObject({
+      refused: { projectId: future.id, refusal: { status: 'unsupported-version', version: 4 }, source: 'canvas' },
+      status: 'refused',
+    });
   });
 });

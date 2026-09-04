@@ -24,7 +24,7 @@ const THUMBNAIL_MAX_PX = 96;
 const CANVAS_STYLE: CSSProperties = { height: '100%', objectFit: 'contain', width: '100%' };
 const IMG_STYLE: CSSProperties = { height: '100%', objectFit: 'cover', width: '100%' };
 
-type LayerThumbnailEngine = CanvasCoreStoreCapability & {
+export type LayerThumbnailEngine = CanvasCoreStoreCapability & {
   readonly previews: CanvasPreviewCapability;
   readonly projectId: string;
 };
@@ -96,11 +96,11 @@ const LayerThumbnailContent = ({
       borderColor="border.subtle"
       borderWidth="1px"
       flexShrink={0}
-      h="9"
+      h="full"
       overflow="hidden"
       position="relative"
       rounded="sm"
-      w="9"
+      w="full"
     >
       <canvas ref={bindCanvas} style={drawn ? CANVAS_STYLE : { display: 'none' }} />
       {showFallback &&

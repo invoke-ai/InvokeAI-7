@@ -1,5 +1,5 @@
 import type { CommitGeneratedImageOptions, CommitGeneratedImageResult } from '@workbench/canvas-engine/capabilities';
-import type { CanvasDocumentContractV2, CanvasImageRef, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
+import type { CanvasDocumentContractV3, CanvasImageRef, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
 import type { CapturedLayerCache } from '@workbench/canvas-engine/controllers/layerMutationController';
 import type { DecodeImageResult } from '@workbench/canvas-engine/controllers/rasterController';
 import type { PreparedLayerCacheReplacement } from '@workbench/canvas-engine/render/layerCache';
@@ -7,12 +7,13 @@ import type { RasterSurface } from '@workbench/canvas-engine/render/raster';
 import type { LayerTransform } from '@workbench/canvas-engine/transform/transformMath';
 import type { Rect } from '@workbench/canvas-engine/types';
 
+import { getDocumentLayer, getDocumentLeaves, isNodeAbsent } from '@workbench/canvas-engine/document/documentIndex';
 import { createControlLayer, nextControlLayerName } from '@workbench/canvas-engine/document/layerFactories';
 
 import type { CanvasMutationContext } from './mutationContext';
 
 export interface GeneratedResultControllerOptions {
-  readonly captureCache: (layer: CanvasLayerContract, document: CanvasDocumentContractV2) => CapturedLayerCache;
+  readonly captureCache: (layer: CanvasLayerContract, document: CanvasDocumentContractV3) => CapturedLayerCache;
   readonly clearPreview: (layerId: string) => void;
   readonly ctx: CanvasMutationContext;
   readonly decodeImage: (
@@ -39,7 +40,7 @@ export class GeneratedResultController {
       return { status: 'aborted' };
     }
     const validate = ():
-      | { document: CanvasDocumentContractV2; liveLayer: Extract<CanvasLayerContract, { type: 'raster' | 'control' }> }
+      | { document: CanvasDocumentContractV3; liveLayer: Extract<CanvasLayerContract, { type: 'raster' | 'control' }> }
       | { result: CommitGeneratedImageResult } => {
       if (!o.ctx.isPermitCurrent(permit)) {
         return { result: { status: 'busy' } };
@@ -48,7 +49,7 @@ export class GeneratedResultController {
       if (!document) {
         return { result: { status: 'missing' } };
       }
-      const liveLayer = document.layers.find((layer) => layer.id === options.guard.layerId);
+      const liveLayer = getDocumentLayer(document, options.guard.layerId);
       if (!liveLayer) {
         return { result: { status: 'missing' } };
       }
@@ -91,8 +92,8 @@ export class GeneratedResultController {
       ): void => {
         o.ctx.dispatchPrepared(
           { layer: contract, layerId: liveLayer.id, type: 'replaceCanvasLayer' },
-          () => o.ctx.getReducerDocument()?.layers.find((candidate) => candidate.id === liveLayer.id) === contract,
-          () => o.ctx.getDocument()?.layers.find((candidate) => candidate.id === liveLayer.id) === contract
+          () => getDocumentLayer(o.ctx.getReducerDocument(), liveLayer.id) === contract,
+          () => getDocumentLayer(o.ctx.getDocument(), liveLayer.id) === contract
         );
         if (publishOptions.discardPersistence) {
           try {
@@ -154,17 +155,13 @@ export class GeneratedResultController {
         });
         return { layerId: liveLayer.id, status: 'committed' };
       }
-      const sourceIndex = document.layers.findIndex((candidate) => candidate.id === liveLayer.id);
-      if (sourceIndex < 0) {
-        return { status: 'missing' };
-      }
       const layerId = o.ctx.createLayerId();
       const selectedLayerId = document.selectedLayerId;
       const buildControlCopy = (): CanvasLayerContract => {
         const mainBase = o.getMainModelBase();
         return {
           ...createControlLayer(
-            options.copyLayerName ?? nextControlLayerName(document.layers.map((layer) => layer.name)),
+            options.copyLayerName ?? nextControlLayerName(getDocumentLeaves(document).map((layer) => layer.name)),
             layerId,
             mainBase,
             o.getDefaultControlModel(mainBase)
@@ -187,11 +184,12 @@ export class GeneratedResultController {
               transform: identityTransform,
               type: 'raster',
             };
+      const anchor = o.ctx.captureInsertionAnchor(copy.type, liveLayer.id);
       const publishCopy = (prepared: PreparedLayerCacheReplacement): void => {
         o.ctx.dispatchPrepared(
-          { index: sourceIndex, layer: copy, type: 'addCanvasLayer' },
-          () => o.ctx.getReducerDocument()?.layers.some((candidate) => candidate === copy) === true,
-          () => o.ctx.getDocument()?.layers.some((candidate) => candidate === copy) === true
+          { anchor, layer: copy, type: 'addCanvasLayer' },
+          () => getDocumentLayer(o.ctx.getReducerDocument(), copy.id) === copy,
+          () => getDocumentLayer(o.ctx.getDocument(), copy.id) === copy
         );
         o.ctx.installPrepared(prepared, false);
       };
@@ -222,8 +220,8 @@ export class GeneratedResultController {
           );
           o.ctx.dispatchPrepared(
             { ids: [layerId], type: 'removeCanvasLayers' },
-            () => o.ctx.getReducerDocument()?.layers.some((candidate) => candidate.id === layerId) === false,
-            () => o.ctx.getDocument()?.layers.some((candidate) => candidate.id === layerId) === false
+            () => isNodeAbsent(o.ctx.getReducerDocument(), layerId),
+            () => isNodeAbsent(o.ctx.getDocument(), layerId)
           );
         },
       });

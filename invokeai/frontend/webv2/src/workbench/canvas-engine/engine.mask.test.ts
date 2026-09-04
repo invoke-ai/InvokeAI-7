@@ -7,7 +7,11 @@
  * engine test suite.
  */
 
-import type { CanvasDocumentContractV2, CanvasStateContractV2 } from '@workbench/canvas-engine/contracts';
+import type {
+  CanvasDocumentContractV3,
+  CanvasLayerContract,
+  CanvasStateContractV3,
+} from '@workbench/canvas-engine/contracts';
 import type { StubRasterSurface } from '@workbench/canvas-engine/render/raster.testStub';
 import type { CanvasProjectMutationPort } from '@workbench/canvasProjectMutationPort';
 import type { Project, WorkbenchState } from '@workbench/projectContracts';
@@ -21,6 +25,8 @@ import {
 
 type EngineTestAction = WorkbenchAction | CanvasProjectMutation;
 
+import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
+import { getDocumentLeaves } from '@workbench/canvas-engine/document/documentIndex';
 import { createTestStubRasterBackend } from '@workbench/canvas-engine/render/raster.testStub';
 import {
   createCanvasEngine as createApplicationCanvasEngine,
@@ -68,7 +74,7 @@ vi.mock('@workbench/canvas-operations/backend/canvasImages', () => ({
   uploadCanvasImage: vi.fn(() => Promise.resolve({ height: 64, imageName: 'mask-img', width: 64 })),
 }));
 
-const makeCanvas = (document: CanvasDocumentContractV2, documentRevision = 0): CanvasStateContractV2 =>
+const makeCanvas = (document: CanvasDocumentContractV3, documentRevision = 0): CanvasStateContractV3 =>
   ({
     document,
     documentRevision,
@@ -81,14 +87,14 @@ const makeCanvas = (document: CanvasDocumentContractV2, documentRevision = 0): C
       pendingImages: [],
       selectedImageIndex: 0,
     },
-    version: 2,
-  }) as CanvasStateContractV2;
+    version: 3,
+  }) as CanvasStateContractV3;
 
-const maskDoc = (): CanvasDocumentContractV2 => ({
+const maskDoc = (): CanvasDocumentContractV3 => ({
   background: 'transparent',
   bbox: { height: 100, width: 100, x: 0, y: 0 },
   height: 100,
-  layers: [
+  stacks: stacksFrom([
     {
       blendMode: 'normal',
       id: 'mask1',
@@ -100,13 +106,13 @@ const maskDoc = (): CanvasDocumentContractV2 => ({
       transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 },
       type: 'inpaint_mask',
     },
-  ],
+  ]),
   selectedLayerId: 'mask1',
-  version: 2,
+  version: 3,
   width: 100,
 });
 
-const createReactiveStore = (document: CanvasDocumentContractV2) => {
+const createReactiveStore = (document: CanvasDocumentContractV3) => {
   let state = {
     activeProjectId: 'p1',
     projects: [{ canvas: makeCanvas(document), id: 'p1' }],
@@ -126,7 +132,7 @@ const createReactiveStore = (document: CanvasDocumentContractV2) => {
   });
   return {
     dispatch,
-    setDocument: (next: CanvasDocumentContractV2, revision = 0) => {
+    setDocument: (next: CanvasDocumentContractV3, revision = 0) => {
       state = {
         activeProjectId: 'p1',
         projects: [{ canvas: makeCanvas(next, revision), id: 'p1' }],
@@ -146,7 +152,7 @@ const createReactiveStore = (document: CanvasDocumentContractV2) => {
   };
 };
 
-const createReducerBackedStore = (document: CanvasDocumentContractV2) => {
+const createReducerBackedStore = (document: CanvasDocumentContractV3) => {
   let state = createInitialWorkbenchState();
   const projectId = state.activeProjectId;
   state = workbenchReducer(state, {
@@ -244,7 +250,7 @@ const pointerAt = (x: number, y: number, buttons = 1): Partial<PointerEvent> =>
  * `readbackAlpha` overrides the stub's opaque readback when a test needs to model
  * transparent pixels explicitly. See `StubRasterBackendOptions`.
  */
-const setupEngine = (doc: CanvasDocumentContractV2, options: { readbackAlpha?: number } = {}) => {
+const setupEngine = (doc: CanvasDocumentContractV3, options: { readbackAlpha?: number } = {}) => {
   const raf = createControllableRaf();
   vi.stubGlobal('requestAnimationFrame', raf.requestFrame);
   vi.stubGlobal('cancelAnimationFrame', raf.cancelFrame);
@@ -318,7 +324,7 @@ describe('inpaint mask painting', () => {
 
   it('does not paint into a locked mask', () => {
     const doc = maskDoc();
-    doc.layers[0]!.isLocked = true;
+    getDocumentLeaves(doc)[0]!.isLocked = true;
     const { dispatch, engine, overlay, strokes } = setupEngine(doc);
     engine.tools.setTool('brush');
     overlay.fire('pointerdown', pointerAt(20, 20));
@@ -378,7 +384,7 @@ describe('mask invert', () => {
 
   it('returns false for a missing layer, a non-mask layer, or a locked mask', () => {
     const lockedDoc = maskDoc();
-    lockedDoc.layers[0]!.isLocked = true;
+    getDocumentLeaves(lockedDoc)[0]!.isLocked = true;
     const { engine } = setupEngine(lockedDoc);
     expect(engine.layers.invertMask('nope')).toBe(false);
     expect(engine.layers.invertMask('mask1')).toBe(false); // locked
@@ -476,7 +482,7 @@ describe('mask invert', () => {
       }
     );
     const doc = maskDoc();
-    doc.layers.push({
+    doc.stacks.raster.push({
       blendMode: 'normal',
       id: 'raster1',
       isEnabled: true,
@@ -536,7 +542,7 @@ describe('mask clear', () => {
 
   it('clears a regional-guidance mask', () => {
     const doc = maskDoc();
-    doc.layers[0] = {
+    doc.stacks.inpaint_mask[0] = {
       autoNegative: false,
       blendMode: 'normal',
       id: 'mask1',
@@ -563,7 +569,7 @@ describe('mask clear', () => {
 
   it('clears a cold hidden persisted mask and restores its bitmap reference on undo', () => {
     const doc = maskDoc();
-    const mask = doc.layers[0]!;
+    const mask = getDocumentLeaves(doc)[0]!;
     if (mask.type !== 'inpaint_mask') {
       throw new Error('Expected inpaint mask fixture');
     }
@@ -595,7 +601,7 @@ describe('mask clear', () => {
 
   it('refuses missing, non-mask, locked, and empty layers', () => {
     const locked = maskDoc();
-    locked.layers[0]!.isLocked = true;
+    (locked.stacks.inpaint_mask[0] as CanvasLayerContract).isLocked = true;
     const { engine } = setupEngine(locked);
 
     expect(engine.layers.clearMask('missing')).toBe(false);
@@ -603,7 +609,8 @@ describe('mask clear', () => {
     engine.lifecycle.dispose();
 
     const raster = maskDoc();
-    raster.layers[0] = {
+    raster.stacks.inpaint_mask.length = 0;
+    raster.stacks.raster[0] = {
       blendMode: 'normal',
       id: 'mask1',
       isEnabled: true,

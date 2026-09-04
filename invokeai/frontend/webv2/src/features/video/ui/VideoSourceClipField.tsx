@@ -2,7 +2,7 @@ import type { DragEndEvent } from '@dnd-kit/core';
 import type { VideoSourceClip } from '@features/video/core/types';
 import type { ChangeEvent } from 'react';
 
-import { Badge, Box, HStack, Input, Spinner, Stack, Text } from '@chakra-ui/react';
+import { Box, HStack, Input, Spinner, Stack, Text } from '@chakra-ui/react';
 import { useDndContext, useDndMonitor, useDroppable } from '@dnd-kit/core';
 import { galleryItems, galleryTransfers } from '@features/gallery';
 import { galleryVideoUrls, isGalleryItemDragData } from '@features/gallery/utility';
@@ -19,17 +19,17 @@ import { DropZone } from '@platform/ui/DropZone';
 import { MiddleTruncate } from '@platform/ui/MiddleTruncate';
 import { SliderNumberField } from '@platform/ui/SliderNumberField';
 import { FilmIcon, XIcon } from 'lucide-react';
-import { memo, useCallback, useEffect, useRef, useState } from 'react';
+import { memo, useCallback, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { TrimBoundThumb } from './TrimBoundThumb';
 import { useVideoUiActions } from './VideoUiContext';
 
 /**
- * The clip to extend: gallery drop target, file upload, a live frame preview,
- * and the trim bounds. The preview is a muted `<video>` element seeked to the
- * most recently adjusted trim bound (`frame / fps`) — browsers display the
- * frame natively without a canvas roundtrip, same trick as the workflow
- * editor's frame scrubber.
+ * The clip to extend: gallery drop target, file upload, and the trim bounds —
+ * one compact row per bound, the bound's live frame at left and its slider at
+ * right (see TrimBoundThumb for the seek technique). The rows are the only
+ * preview; the drop zone itself is a slim header with the clip's identity.
  */
 
 const DROP_ID = 'video-source-clip';
@@ -42,73 +42,6 @@ const DROP_ZONE_FOCUS_PROPS = {
 const DROP_ZONE_DISABLED_PROPS = { cursor: 'not-allowed', opacity: 0.6 };
 const DROP_ZONE_BUSY_PROPS = { disabled: true };
 const DROP_ZONE_HOVER_PROPS = { bg: 'bg.muted', color: 'fg' };
-const PREVIEW_VIDEO_STYLE = {
-  display: 'block',
-  height: '100%',
-  objectFit: 'contain',
-  width: '100%',
-} as const;
-
-/**
- * Small always-visible preview of one trim bound, so both ends of the kept
- * range stay in view while either slider moves (the large preview only follows
- * the last-touched bound). Same seek technique as the workflow editor's frame
- * scrubber: one long-lived muted element, half-frame nudge so rounding cannot
- * show the neighbouring frame.
- */
-const TrimBoundThumb = memo(function TrimBoundThumb({
-  fps,
-  frame,
-  label,
-  src,
-}: {
-  fps: number;
-  frame: number;
-  label: string;
-  src: string;
-}) {
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-
-  useEffect(() => {
-    const element = videoRef.current;
-    const time = Math.max(0, (frame + 0.5) / fps);
-
-    if (!element || !Number.isFinite(time)) {
-      return;
-    }
-
-    const seek = () => {
-      element.currentTime = time;
-    };
-
-    // Seeking before metadata arrives is ignored by some browsers; wait for it
-    // once, then seek directly on every later bound change.
-    if (element.readyState >= 1) {
-      seek();
-    } else {
-      element.addEventListener('loadedmetadata', seek, { once: true });
-
-      return () => element.removeEventListener('loadedmetadata', seek);
-    }
-  }, [fps, frame, src]);
-
-  return (
-    <Box bg="blackAlpha.300" flex="1" h="16" minW="0" overflow="hidden" position="relative" rounded="sm">
-      <video key={src} ref={videoRef} muted preload="metadata" src={src} style={PREVIEW_VIDEO_STYLE} />
-      <Badge
-        bottom="1"
-        fontVariantNumeric="tabular-nums"
-        insetInlineStart="1"
-        pointerEvents="none"
-        position="absolute"
-        size="xs"
-        variant="solid"
-      >
-        {`${label} · ${frame}`}
-      </Badge>
-    </Box>
-  );
-});
 
 const getSingleVideoDragName = (data: unknown): string | null => {
   if (!isGalleryItemDragData(data) || data.items.length !== 1) {
@@ -143,12 +76,10 @@ export const VideoSourceClipField = memo(
     sourceVideo: VideoSourceClip | null;
   }) {
     const { t } = useTranslation();
-    const { reportError, touchGalleryImages } = useVideoUiActions();
+    const { getUploadBoardId, reportError, touchGalleryImages } = useVideoUiActions();
     const fileInputRef = useRef<HTMLInputElement | null>(null);
     const [isLoading, setIsLoading] = useState(false);
     const [errorMessage, setErrorMessage] = useState<string | null>(null);
-    // Which trim bound the preview follows; the last one the user moved.
-    const [previewBound, setPreviewBound] = useState<'start' | 'end'>('end');
     const isInert = disabled || isLoading;
 
     const { active } = useDndContext();
@@ -213,7 +144,7 @@ export const VideoSourceClipField = memo(
         setIsLoading(true);
 
         try {
-          const uploaded = await galleryTransfers.uploadVideo(file, 'none', { signal: owner.signal });
+          const uploaded = await galleryTransfers.uploadVideo(file, getUploadBoardId(), { signal: owner.signal });
 
           assertAccountScopeCurrent(owner);
           onChange(
@@ -238,7 +169,7 @@ export const VideoSourceClipField = memo(
           setIsLoading(false);
         }
       },
-      [onChange, reportError, t, touchGalleryImages]
+      [getUploadBoardId, onChange, reportError, t, touchGalleryImages]
     );
 
     const handleFileChange = useCallback(
@@ -270,7 +201,6 @@ export const VideoSourceClipField = memo(
 
         const startFrame = Math.min(Math.max(0, rawStart), Math.max(0, maxFrameIndex - 1));
 
-        setPreviewBound('start');
         onChange({ ...sourceVideo, endFrame: Math.max(startFrame + 1, sourceVideo.endFrame), startFrame });
       },
       [maxFrameIndex, onChange, sourceVideo]
@@ -283,28 +213,12 @@ export const VideoSourceClipField = memo(
 
         const endFrame = Math.max(1, Math.min(rawEnd, maxFrameIndex));
 
-        setPreviewBound('end');
         onChange({ ...sourceVideo, endFrame, startFrame: Math.min(sourceVideo.startFrame, endFrame - 1) });
       },
       [maxFrameIndex, onChange, sourceVideo]
     );
 
-    const previewFrame = sourceVideo ? (previewBound === 'start' ? sourceVideo.startFrame : sourceVideo.endFrame) : 0;
-    // Seek to the middle of the frame's display interval so rounding cannot
-    // show the neighbouring frame. Seeking sets currentTime on one long-lived
-    // element (the frame-scrubber trick) — remounting per drag tick would spawn
-    // a range fetch per movement on multi-MB clips.
-    const previewTime = sourceVideo ? Math.max(0, (previewFrame + 0.5) / sourceVideo.fps) : 0;
-    const previewVideoRef = useRef<HTMLVideoElement | null>(null);
     const previewSrc = sourceVideo ? galleryVideoUrls.full(sourceVideo.video_name) : null;
-
-    useEffect(() => {
-      const element = previewVideoRef.current;
-
-      if (element && Number.isFinite(previewTime)) {
-        element.currentTime = previewTime;
-      }
-    }, [previewSrc, previewTime]);
 
     return (
       <Stack gap="2">
@@ -327,24 +241,13 @@ export const VideoSourceClipField = memo(
           onClick={handlePickFile}
         >
           {sourceVideo && previewSrc ? (
-            <Stack gap="1" p="2">
-              <Box bg="blackAlpha.300" h="28" overflow="hidden" rounded="sm" w="full">
-                <video
-                  key={previewSrc}
-                  ref={previewVideoRef}
-                  muted
-                  preload="metadata"
-                  src={previewSrc}
-                  style={PREVIEW_VIDEO_STYLE}
-                />
-              </Box>
-              <HStack justify="space-between" minW="0">
-                <MiddleTruncate color="fg" flex="1" fontSize="xs" fontWeight="semibold" text={sourceVideo.video_name} />
-                <Text color="fg.muted" flexShrink="0" fontSize="2xs" fontVariantNumeric="tabular-nums">
-                  {sourceVideo.width} × {sourceVideo.height} · {sourceVideo.fps} fps
-                </Text>
-              </HStack>
-            </Stack>
+            <HStack gap="2" minW="0" p="2">
+              <FilmIcon aria-hidden="true" size={14} />
+              <MiddleTruncate color="fg" flex="1" fontSize="xs" fontWeight="semibold" text={sourceVideo.video_name} />
+              <Text color="fg.muted" flexShrink="0" fontSize="2xs" fontVariantNumeric="tabular-nums">
+                {sourceVideo.width} × {sourceVideo.height} · {sourceVideo.fps} fps
+              </Text>
+            </HStack>
           ) : (
             <Stack align="center" color="fg.muted" gap="1.5" justify="center" minH="24" px="4">
               {isLoading ? <Spinner size="sm" /> : <FilmIcon aria-hidden="true" size="18" />}
@@ -360,22 +263,6 @@ export const VideoSourceClipField = memo(
           <DropTargetOverlay isActive={acceptsActiveDrag} isOver={isOver} label={t('widgets.video.dropInitialVideo')} />
         </DropZone>
         {sourceVideo && previewSrc ? (
-          <HStack gap="2">
-            <TrimBoundThumb
-              fps={sourceVideo.fps}
-              frame={sourceVideo.startFrame}
-              label={t('widgets.video.trimStart')}
-              src={previewSrc}
-            />
-            <TrimBoundThumb
-              fps={sourceVideo.fps}
-              frame={sourceVideo.endFrame}
-              label={t('widgets.video.trimEnd')}
-              src={previewSrc}
-            />
-          </HStack>
-        ) : null}
-        {sourceVideo ? (
           <Stack gap="2">
             {/* The empty-state slot shows the reason when no clip is set; with
                 one set, the frozen trim sliders were the only symptom. */}
@@ -384,27 +271,47 @@ export const VideoSourceClipField = memo(
                 {disabledReason}
               </Text>
             ) : null}
-            <Field helpText={t('widgets.video.trimHelp')} label={t('widgets.video.trimStart')}>
-              <SliderNumberField
-                ariaLabel={t('widgets.video.trimStart')}
-                disabled={disabled}
-                max={maxFrameIndex}
-                min={0}
-                step={1}
-                value={sourceVideo.startFrame}
-                onChange={setStartFrame}
-              />
-            </Field>
-            <Field label={t('widgets.video.trimEnd')}>
-              <SliderNumberField
-                ariaLabel={t('widgets.video.trimEnd')}
-                disabled={disabled}
-                max={maxFrameIndex}
-                min={0}
-                step={1}
-                value={sourceVideo.endFrame}
-                onChange={setEndFrame}
-              />
+            <Field helpText={t('widgets.video.trimHelp')} label={t('widgets.video.trim')}>
+              <Stack gap="1" w="full">
+                <HStack gap="2">
+                  <TrimBoundThumb
+                    fps={sourceVideo.fps}
+                    frame={sourceVideo.startFrame}
+                    label={t('widgets.video.trimStartShort')}
+                    src={previewSrc}
+                  />
+                  <Box flex="1" minW="0">
+                    <SliderNumberField
+                      ariaLabel={t('widgets.video.trimStart')}
+                      disabled={disabled}
+                      max={maxFrameIndex}
+                      min={0}
+                      step={1}
+                      value={sourceVideo.startFrame}
+                      onChange={setStartFrame}
+                    />
+                  </Box>
+                </HStack>
+                <HStack gap="2">
+                  <TrimBoundThumb
+                    fps={sourceVideo.fps}
+                    frame={sourceVideo.endFrame}
+                    label={t('widgets.video.trimEndShort')}
+                    src={previewSrc}
+                  />
+                  <Box flex="1" minW="0">
+                    <SliderNumberField
+                      ariaLabel={t('widgets.video.trimEnd')}
+                      disabled={disabled}
+                      max={maxFrameIndex}
+                      min={0}
+                      step={1}
+                      value={sourceVideo.endFrame}
+                      onChange={setEndFrame}
+                    />
+                  </Box>
+                </HStack>
+              </Stack>
             </Field>
             <HStack justify="end">
               <Button disabled={isLoading} size="xs" variant="ghost" onClick={handleClear}>

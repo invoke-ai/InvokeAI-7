@@ -1,6 +1,7 @@
-import type { CanvasDocumentContractV2, CanvasImageRef } from '@workbench/canvas-engine/contracts';
+import type { CanvasDocumentContractV3, CanvasImageRef, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
 import type { Rect } from '@workbench/canvas-engine/types';
 
+import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
 import { describe, expect, it, vi } from 'vitest';
 
 import { createSelectObjectBridge, type CreateSelectObjectBridgeDeps } from './selectObjectBridge';
@@ -16,7 +17,8 @@ const layer = (overrides: Record<string, unknown> = {}) =>
     ...overrides,
   }) as never;
 
-const documentOf = (layers: unknown[]): CanvasDocumentContractV2 => ({ layers }) as CanvasDocumentContractV2;
+const documentOf = (layers: unknown[]): CanvasDocumentContractV3 =>
+  ({ stacks: stacksFrom(layers as CanvasLayerContract[]) }) as CanvasDocumentContractV3;
 
 const surface = () => {
   const ctx = { fillRect: vi.fn(), fillStyle: '', globalCompositeOperation: '' };

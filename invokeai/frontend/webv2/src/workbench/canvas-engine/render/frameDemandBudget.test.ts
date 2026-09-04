@@ -1,5 +1,6 @@
-import type { CanvasDocumentContractV2, CanvasRasterLayerContractV2 } from '@workbench/canvas-engine/contracts';
+import type { CanvasDocumentContractV3, CanvasRasterLayerContractV2 } from '@workbench/canvas-engine/contracts';
 
+import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
 import { describe, expect, it, vi } from 'vitest';
 
 import { calculateActiveFrameLayerIds } from './frameDemand';
@@ -23,13 +24,13 @@ describe('frame demand cache allocation', () => {
     const stub = createTestStubRasterBackend();
     const createSurface = vi.fn(stub.createSurface);
     const caches = createLayerCacheStore({ ...stub, createSurface });
-    const document: CanvasDocumentContractV2 = {
+    const document: CanvasDocumentContractV3 = {
       background: 'transparent',
       bbox: { height: 100, width: 100, x: 0, y: 0 },
       height: 1_000,
-      layers: [layer('left', 0), layer('right', 500)],
+      stacks: stacksFrom([layer('left', 0), layer('right', 500)]),
       selectedLayerId: null,
-      version: 2,
+      version: 3,
       width: 1_000,
     };
     const allocateDemand = (x: number): Set<string> => {

@@ -212,7 +212,7 @@ export const builtInLayoutPresetDescriptors: BuiltInLayoutPresetDescriptor[] = [
       }),
       right: createRegion({
         activeInstanceId: 'layers',
-        instanceIds: ['layers', 'preview', 'gallery', 'image-map', 'queue'],
+        instanceIds: ['layers'],
         sizePx: 450,
       }),
     },

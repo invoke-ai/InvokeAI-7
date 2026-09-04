@@ -67,7 +67,7 @@ export const VideoFrameImageField = memo(
     onChange: (image: ImageWithDims | null) => void;
   }) {
     const { t } = useTranslation();
-    const { reportError, touchGalleryImages } = useVideoUiActions();
+    const { getUploadBoardId, reportError, touchGalleryImages } = useVideoUiActions();
     const fileInputRef = useRef<HTMLInputElement | null>(null);
     const [isLoading, setIsLoading] = useState(false);
     const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -134,7 +134,7 @@ export const VideoFrameImageField = memo(
         setIsLoading(true);
 
         try {
-          const uploaded = await galleryTransfers.upload(file, 'none', { signal: owner.signal });
+          const uploaded = await galleryTransfers.upload(file, getUploadBoardId(), { signal: owner.signal });
 
           assertAccountScopeCurrent(owner);
           onChange({ height: uploaded.height, image_name: uploaded.imageName, width: uploaded.width });
@@ -151,7 +151,7 @@ export const VideoFrameImageField = memo(
           setIsLoading(false);
         }
       },
-      [onChange, reportError, t, touchGalleryImages]
+      [getUploadBoardId, onChange, reportError, t, touchGalleryImages]
     );
 
     const handleFileChange = useCallback(

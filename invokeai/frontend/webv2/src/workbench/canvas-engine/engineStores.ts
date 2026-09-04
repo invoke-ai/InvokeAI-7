@@ -11,7 +11,7 @@
  * Zero React, zero import-time side effects.
  */
 
-import type { CanvasLayerSourceContract } from '@workbench/canvas-engine/contracts';
+import type { CanvasLayerSourceContract, ParametricShapeKind } from '@workbench/canvas-engine/contracts';
 import type { SamInteractionState } from '@workbench/canvas-engine/samInteraction';
 import type { LayerTransform } from '@workbench/canvas-engine/transform/transformMath';
 import type { Rect, SelectionOp, ToolId, Vec2 } from '@workbench/canvas-engine/types';
@@ -31,6 +31,8 @@ export interface BrushOptions {
   color: string;
   /** Per-stroke opacity in [0, 1]. */
   opacity: number;
+  /** Edge hardness in [0, 1]: 1 is a crisp edge, lower feathers the silhouette. */
+  hardness: number;
   /** Whether pen pressure modulates the stroke width. */
   pressureAffectsWidth: boolean;
   /**
@@ -48,6 +50,8 @@ export interface EraserOptions {
   size: number;
   /** Per-stroke erase strength in [0, 1]. */
   opacity: number;
+  /** Edge hardness in [0, 1]: 1 is a crisp edge, lower feathers the silhouette. */
+  hardness: number;
 }
 
 /** Lasso (selection) tool options: how the path is drawn, and the op it applies. */
@@ -88,22 +92,23 @@ export interface GradientStop {
 }
 
 /**
- * Shape tool options: the kind drawn on the next drag, and the fill/stroke
- * style applied to it (and, when a shape layer is selected, edited live on it).
- * `fill`/`stroke` are `null` for "none".
+ * Shape tool options: the kind drawn on the next drag, plus whether the new
+ * shape gets a fill and a stroke. The colors themselves come from the active
+ * foreground/background pair at gesture start — there is no second global
+ * shape color; a selected shape's explicit fill/stroke is document state.
  */
 export interface ShapeToolOptions {
-  kind: 'rect' | 'ellipse';
-  fill: string | null;
-  stroke: string | null;
+  kind: ParametricShapeKind;
+  fillEnabled: boolean;
+  strokeEnabled: boolean;
   strokeWidth: number;
 }
 
-/** Sensible starting shape options: a filled black rect, no stroke. */
+/** Sensible starting shape options: a filled rect, no stroke. */
 export const DEFAULT_SHAPE_OPTIONS: ShapeToolOptions = {
-  fill: '#000000',
+  fillEnabled: true,
   kind: 'rect',
-  stroke: null,
+  strokeEnabled: false,
   strokeWidth: 8,
 };
 
@@ -111,27 +116,36 @@ export const DEFAULT_SHAPE_OPTIONS: ShapeToolOptions = {
 export const MAX_SHAPE_STROKE_WIDTH = 2000;
 
 /**
- * Gradient tool options: the kind, the linear angle (degrees), and the stops.
- * The minimal two-stop editor edits `stops[0]` (start) and the last stop (end);
+ * Gradient tool options: the kind, the linear angle (degrees), the preset, and
+ * the explicit custom stops. The `pair` preset resolves the foreground →
+ * background pair at gesture start; `custom` uses `stops` verbatim. The
+ * minimal two-stop editor edits `stops[0]` (start) and the last stop (end);
  * a full multi-stop editor is a follow-up.
  */
 export interface GradientToolOptions {
   kind: 'linear' | 'radial';
   angle: number;
+  /** `pair` = the built-in FG→BG preset, resolved when the drag starts. */
+  preset: 'pair' | 'custom';
   stops: GradientStop[];
 }
 
-/** Sensible starting gradient options: black→transparent, horizontal linear. */
+/** Sensible starting gradient options: the FG→BG preset, horizontal linear. */
 export const DEFAULT_GRADIENT_OPTIONS: GradientToolOptions = {
   angle: 0,
   kind: 'linear',
+  preset: 'pair',
   stops: [
     { color: '#000000ff', offset: 0 },
     { color: '#00000000', offset: 1 },
   ],
 };
 
-/** The text style the text tool applies to a newly created layer (and edits live). */
+/**
+ * The text style the text tool applies to a newly created layer (and edits
+ * live). A new session's color comes from the active foreground at open; the
+ * session's and a selected layer's color are document/session state.
+ */
 export interface TextToolOptions {
   fontFamily: string;
   fontSize: number;
@@ -140,7 +154,6 @@ export interface TextToolOptions {
   /** Unitless line-height multiplier over `fontSize`. */
   lineHeight: number;
   align: 'left' | 'center' | 'right';
-  color: string;
 }
 
 /**
@@ -162,10 +175,12 @@ export const TEXT_FONT_WEIGHTS: readonly number[] = [400, 500, 600, 700];
 export const MIN_TEXT_FONT_SIZE = 1;
 export const MAX_TEXT_FONT_SIZE = 2000;
 
-/** Sensible starting text options: black left-aligned Inter at 48px. */
+/** What a live text session (or a selected text layer) can restyle: the options plus its explicit color. */
+export type TextStylePatch = Partial<TextToolOptions> & { color?: string };
+
+/** Sensible starting text options: left-aligned Inter at 48px. */
 export const DEFAULT_TEXT_OPTIONS: TextToolOptions = {
   align: 'left',
-  color: '#000000',
   fontFamily: TEXT_FONT_FAMILIES[0]!.value,
   fontSize: 48,
   fontWeight: 400,
@@ -193,9 +208,19 @@ export const DEFAULT_BBOX_OPTIONS: BboxToolOptions = {
 export const MIN_BRUSH_SIZE = 0.1;
 export const MAX_BRUSH_SIZE = 2000;
 
+/** The mirrored foreground/background pair the object tools read at gesture start. */
+export interface ActiveColorPairState {
+  foreground: string;
+  background: string;
+}
+
+/** Matches the workbench pair's default: black on white. */
+export const DEFAULT_COLOR_PAIR_STATE: ActiveColorPairState = { background: '#ffffff', foreground: '#000000' };
+
 /** Sensible starting brush options. */
 export const DEFAULT_BRUSH_OPTIONS: BrushOptions = {
   color: '#000000',
+  hardness: 1,
   opacity: 1,
   pressureAffectsOpacity: false,
   pressureAffectsWidth: true,
@@ -204,6 +229,7 @@ export const DEFAULT_BRUSH_OPTIONS: BrushOptions = {
 
 /** Sensible starting eraser options. */
 export const DEFAULT_ERASER_OPTIONS: EraserOptions = {
+  hardness: 1,
   opacity: 1,
   size: 50,
 };
@@ -410,23 +436,31 @@ export interface EngineStores {
   rasterContentEpoch: ScalarStore<number>;
   /** Brush tool options (size / color / opacity / pressure). */
   brushOptions: ScalarStore<BrushOptions>;
+  /**
+   * The workbench's foreground/background pair, mirrored in for gesture-start
+   * reads (new shapes, text sessions, the gradient pair preset). One-way: the
+   * engine never writes it.
+   */
+  colorPair: ScalarStore<ActiveColorPairState>;
   /** Eraser tool options (size / opacity). */
   eraserOptions: ScalarStore<EraserOptions>;
   /** Whether the engine-owned canvas history has an entry to undo. */
   canUndo: ScalarStore<boolean>;
   /** Whether the engine-owned canvas history has an entry to redo. */
   canRedo: ScalarStore<boolean>;
+  /** Bumped on every history-stack mutation, so a history list can re-read the entries. */
+  historyEpoch: ScalarStore<number>;
   /** Bbox tool options (aspect lock / ratio). */
   bboxOptions: ScalarStore<BboxToolOptions>;
   /** Lasso tool options (the committed boolean op mode). */
   lassoOptions: ScalarStore<LassoToolOptions>;
   /** Marquee tool options (shape kind / the committed boolean op mode). */
   marqueeOptions: ScalarStore<MarqueeToolOptions>;
-  /** Shape tool options (kind / fill / stroke / stroke width). */
+  /** Shape tool options (kind / fill and stroke enablement / stroke width). */
   shapeOptions: ScalarStore<ShapeToolOptions>;
-  /** Gradient tool options (kind / angle / stops). */
+  /** Gradient tool options (kind / angle / preset / stops). */
   gradientOptions: ScalarStore<GradientToolOptions>;
-  /** Text tool options (font family / size / weight / line-height / align / color). */
+  /** Text tool options (font family / size / weight / line-height / align). */
   textOptions: ScalarStore<TextToolOptions>;
   /**
    * The active text-editing session, or `null`. React reads it to render the
@@ -440,7 +474,7 @@ export interface EngineStores {
    * when idle. The overlay renders the shape outline in place of a committed
    * layer so the drag tracks without dispatching; cleared on commit/cancel.
    */
-  shapePreview: ScalarStore<{ rect: Rect; kind: 'rect' | 'ellipse' } | null>;
+  shapePreview: ScalarStore<{ rect: Rect; kind: ParametricShapeKind } | null>;
   /**
    * The live gradient-tool drag preview: the drag vector's start/end points in
    * document space, drawn on the overlay as a direction indicator (a gradient
@@ -559,11 +593,12 @@ const brushOptionsEqual = (a: BrushOptions, b: BrushOptions): boolean =>
   a.size === b.size &&
   a.color === b.color &&
   a.opacity === b.opacity &&
+  a.hardness === b.hardness &&
   a.pressureAffectsWidth === b.pressureAffectsWidth &&
   a.pressureAffectsOpacity === b.pressureAffectsOpacity;
 
 const eraserOptionsEqual = (a: EraserOptions, b: EraserOptions): boolean =>
-  a.size === b.size && a.opacity === b.opacity;
+  a.size === b.size && a.opacity === b.opacity && a.hardness === b.hardness;
 
 const checkerColorsEqual = (a: CheckerColors, b: CheckerColors): boolean => a.a === b.a && a.b === b.b;
 
@@ -577,18 +612,24 @@ const marqueeOptionsEqual = (a: MarqueeToolOptions, b: MarqueeToolOptions): bool
   a.kind === b.kind && a.mode === b.mode;
 
 const shapeOptionsEqual = (a: ShapeToolOptions, b: ShapeToolOptions): boolean =>
-  a.kind === b.kind && a.fill === b.fill && a.stroke === b.stroke && a.strokeWidth === b.strokeWidth;
+  a.kind === b.kind &&
+  a.fillEnabled === b.fillEnabled &&
+  a.strokeEnabled === b.strokeEnabled &&
+  a.strokeWidth === b.strokeWidth;
+
+const colorPairEqual = (a: ActiveColorPairState, b: ActiveColorPairState): boolean =>
+  a.foreground === b.foreground && a.background === b.background;
 
 const stopsEqual = (a: readonly GradientStop[], b: readonly GradientStop[]): boolean =>
   a.length === b.length && a.every((stop, i) => stop.offset === b[i]?.offset && stop.color === b[i]?.color);
 
 const gradientOptionsEqual = (a: GradientToolOptions, b: GradientToolOptions): boolean =>
-  a.kind === b.kind && a.angle === b.angle && stopsEqual(a.stops, b.stops);
+  a.kind === b.kind && a.angle === b.angle && a.preset === b.preset && stopsEqual(a.stops, b.stops);
 
 /** Shared by the shape and marquee previews — both are a rect plus a shape kind. */
 const rectShapePreviewEqual = (
-  a: { rect: Rect; kind: 'rect' | 'ellipse' } | null,
-  b: { rect: Rect; kind: 'rect' | 'ellipse' } | null
+  a: { rect: Rect; kind: ParametricShapeKind } | null,
+  b: { rect: Rect; kind: ParametricShapeKind } | null
 ): boolean => {
   if (a === null || b === null) {
     return a === b;
@@ -635,8 +676,7 @@ const textOptionsEqual = (a: TextToolOptions, b: TextToolOptions): boolean =>
   a.fontSize === b.fontSize &&
   a.fontWeight === b.fontWeight &&
   a.lineHeight === b.lineHeight &&
-  a.align === b.align &&
-  a.color === b.color;
+  a.align === b.align;
 
 const textSourceEqual = (a: TextSource, b: TextSource): boolean =>
   a.content === b.content &&
@@ -668,8 +708,10 @@ export const createEngineStores = (initialTool: ToolId = 'view'): EngineStores =
   bboxPreview: createScalarStore<Rect | null>(null, bboxPreviewEqual),
   bboxOverlay: createScalarStore<boolean>(false),
   brushOptions: createScalarStore<BrushOptions>({ ...DEFAULT_BRUSH_OPTIONS }, brushOptionsEqual),
+  colorPair: createScalarStore<ActiveColorPairState>({ ...DEFAULT_COLOR_PAIR_STATE }, colorPairEqual),
   canRedo: createScalarStore<boolean>(false),
   canUndo: createScalarStore<boolean>(false),
+  historyEpoch: createScalarStore<number>(0),
   checkerboard: createScalarStore<boolean>(true),
   clipToBbox: createScalarStore<boolean>(false),
   checkerColors: createScalarStore<CheckerColors>({ ...DEFAULT_CHECKER_COLORS }, checkerColorsEqual),
@@ -693,7 +735,7 @@ export const createEngineStores = (initialTool: ToolId = 'view'): EngineStores =
   ruleOfThirds: createScalarStore<boolean>(false),
   samInteraction: createScalarStore(null),
   shapeOptions: createScalarStore<ShapeToolOptions>({ ...DEFAULT_SHAPE_OPTIONS }, shapeOptionsEqual),
-  shapePreview: createScalarStore<{ rect: Rect; kind: 'rect' | 'ellipse' } | null>(null, rectShapePreviewEqual),
+  shapePreview: createScalarStore<{ rect: Rect; kind: ParametricShapeKind } | null>(null, rectShapePreviewEqual),
   showBbox: createScalarStore<boolean>(true),
   showGrid: createScalarStore<boolean>(false),
   snapToGrid: createScalarStore<boolean>(true),

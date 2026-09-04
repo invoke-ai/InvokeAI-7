@@ -1,4 +1,4 @@
-import type { CanvasStateContractV2 } from './contracts';
+import type { CanvasStateContractV3 } from './contracts';
 import type { RasterSurface } from './render/raster';
 import type { Rect } from './types';
 
@@ -8,7 +8,7 @@ export interface CanvasDetachedLayerSurface {
 }
 
 export interface CanvasRasterSnapshot {
-  readonly canvas: CanvasStateContractV2;
+  readonly canvas: CanvasStateContractV3;
   readonly documentGeneration: number;
   readonly emptyLayerIds: ReadonlySet<string>;
   readonly layerSurfaces: ReadonlyMap<string, CanvasDetachedLayerSurface>;

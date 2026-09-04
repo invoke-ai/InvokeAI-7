@@ -12,10 +12,12 @@
  * side effects.
  */
 
+import type { ParametricShapeKind } from '@workbench/canvas-engine/contracts';
 import type { Mat2d, Rect, Vec2 } from '@workbench/canvas-engine/types';
 
 import { applyToPoint, getScale, invert } from '@workbench/canvas-engine/math/mat2d';
 import { transformBounds } from '@workbench/canvas-engine/math/rect';
+import { buildParametricShapePath } from '@workbench/canvas-engine/render/rasterizers/shapeRasterizer';
 import { drawMarchingAnts, type MarchingAntsRender } from '@workbench/canvas-engine/selection/marchingAnts';
 import { BBOX_HANDLES, bboxHandlePoint } from '@workbench/canvas-engine/tools/bboxHitTest';
 import { TRANSFORM_ROTATE_NUB_PX } from '@workbench/canvas-engine/transform/transformMath';
@@ -53,10 +55,10 @@ export interface OverlayCursor {
   radiusDoc: number;
 }
 
-/** A live rect-or-ellipse drag outline in document space (shape and marquee tools). */
+/** A live parametric-shape drag outline in document space (shape and marquee tools). */
 export interface RectShapePreview {
   rect: Rect;
-  kind: 'rect' | 'ellipse';
+  kind: ParametricShapeKind;
 }
 
 /** Everything the overlay needs to draw a frame. */
@@ -119,7 +121,14 @@ export interface OverlayState {
    */
   gradientPreview?: { start: Vec2; end: Vec2 } | null;
   /** Dedicated Select Object mask preview, already colorized by the engine. */
-  samPreview?: { surface: RasterSurface; rect: Rect; opacity: number } | null;
+  samPreview?: {
+    surface: RasterSurface;
+    rect: Rect;
+    opacity: number;
+    /** True-edge outline for marching ants, document space; `null` skips the ants. */
+    outline: Path2D | null;
+    phase: number;
+  } | null;
   /** Select Object visual prompt geometry in document space. */
   samInput?: { includePoints: readonly Vec2[]; excludePoints: readonly Vec2[]; bbox: Rect | null } | null;
 }
@@ -350,20 +359,8 @@ const drawRectShapePreview = (ctx: Ctx, state: OverlayState, preview: RectShapeP
   ctx.strokeStyle = LAYER_OUTLINE_COLOR;
   ctx.lineWidth = 1;
   ctx.setLineDash([...BBOX_DASH]);
-  ctx.beginPath();
-  if (preview.kind === 'ellipse') {
-    ctx.ellipse(
-      screen.x + screen.width / 2,
-      screen.y + screen.height / 2,
-      Math.abs(screen.width) / 2,
-      Math.abs(screen.height) / 2,
-      0,
-      0,
-      Math.PI * 2
-    );
-  } else {
-    ctx.rect(screen.x, screen.y, screen.width, screen.height);
-  }
+  // The same path the rasterizer commits, so the outline is the shape it makes.
+  buildParametricShapePath(ctx, preview.kind, screen.x, screen.y, Math.abs(screen.width), Math.abs(screen.height), 0);
   ctx.stroke();
   ctx.setLineDash([]);
   ctx.restore();
@@ -411,6 +408,9 @@ const drawSamPreview = (ctx: Ctx, state: OverlayState): void => {
   ctx.globalAlpha = preview.opacity;
   ctx.drawImage(preview.surface.canvas, preview.rect.x, preview.rect.y, preview.rect.width, preview.rect.height);
   ctx.restore();
+  if (preview.outline) {
+    drawMarchingAnts(ctx, state.view, { matrix: null, paths: [preview.outline], phase: preview.phase });
+  }
 };
 
 const drawSamGeometry = (ctx: Ctx, state: OverlayState): void => {

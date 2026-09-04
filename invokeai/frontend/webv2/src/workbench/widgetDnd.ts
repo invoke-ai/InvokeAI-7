@@ -10,6 +10,7 @@ import {
   type ClientRect,
 } from '@dnd-kit/core';
 import { arrayMove } from '@dnd-kit/sortable';
+import { isWidgetRegion as isKnownWidgetRegion } from '@workbench/layoutContracts';
 
 const clipsOverflow = (value: string): boolean => value !== 'visible';
 
@@ -357,5 +358,4 @@ const getCollisionData = (args: Parameters<CollisionDetection>[0], id: unknown):
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null;
 
-const isWidgetRegion = (value: unknown): value is WidgetRegion =>
-  value === 'left' || value === 'right' || value === 'center' || value === 'bottom';
+const isWidgetRegion = (value: unknown): value is WidgetRegion => isKnownWidgetRegion(value);

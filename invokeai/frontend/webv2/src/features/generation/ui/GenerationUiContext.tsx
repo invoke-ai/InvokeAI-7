@@ -46,7 +46,7 @@ export interface GeneratePresetRecord {
  * test seam; no second adapter is expected.
  */
 export interface GenerationUiAdapter {
-  CanvasCompositingSection: ComponentType;
+  CanvasGenerationSections: ComponentType;
   account: {
     currentUserId: string | null;
     multiuserEnabled: boolean;

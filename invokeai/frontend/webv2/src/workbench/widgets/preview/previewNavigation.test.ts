@@ -37,6 +37,7 @@ const buildSequence = (overrides: Partial<Parameters<typeof getPreviewNavigation
     boardImages: [item('image', 'newest'), item('video', 'middle'), item('image', 'oldest')],
     galleryView: 'images',
     imageOrderDir: 'DESC',
+    starredFirst: true,
     ...overrides,
   });
 
@@ -67,6 +68,17 @@ describe('getPreviewNavigationSequence', () => {
         })
       )
     ).toEqual(['video:starred-a', 'image:starred-b', 'placeholder', 'image:newest', 'video:oldest']);
+  });
+
+  it('places the placeholder first in a flat descending listing even when starred items lead it', () => {
+    expect(
+      keys(
+        buildSequence({
+          boardImages: [item('image', 'starred-newest', true), item('image', 'older')],
+          starredFirst: false,
+        })
+      )
+    ).toEqual(['placeholder', 'image:starred-newest', 'image:older']);
   });
 
   it('places the placeholder last when every item is starred', () => {

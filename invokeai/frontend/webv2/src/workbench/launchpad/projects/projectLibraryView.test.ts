@@ -21,6 +21,7 @@ const at = (isoOffsetDays: number, hour = 12): string =>
 
 const summary = (overrides: Partial<ProjectSummary> & { id: string }): ProjectSummary => ({
   createdAt: at(0),
+  minimumCanvasSchemaVersion: 2,
   name: overrides.id,
   revision: 1,
   updatedAt: at(0),

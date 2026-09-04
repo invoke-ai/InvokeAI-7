@@ -1,4 +1,4 @@
-import type { CanvasDocumentContractV2, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
+import type { CanvasDocumentContractV3, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
 import type { SamPreviewState } from '@workbench/canvas-engine/controllers/previewStateController';
 import type { LayerCacheEntry } from '@workbench/canvas-engine/render/layerCache';
 import type { RasterSurface } from '@workbench/canvas-engine/render/raster';
@@ -6,6 +6,8 @@ import type { Mat2d } from '@workbench/canvas-engine/types';
 
 import { PreviewStateController } from '@workbench/canvas-engine/controllers/previewStateController';
 import { RasterMemoryBudgetController } from '@workbench/canvas-engine/controllers/rasterMemoryBudgetController';
+import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
+import { getDocumentLeaves } from '@workbench/canvas-engine/document/documentIndex';
 import { createEngineStores } from '@workbench/canvas-engine/engineStores';
 import * as compositor from '@workbench/canvas-engine/render/compositor';
 import * as surfaceBudget from '@workbench/canvas-engine/render/surfaceBudget';
@@ -36,13 +38,13 @@ const layer = (id: string, overrides: Record<string, unknown> = {}): CanvasLayer
     ...overrides,
   }) as unknown as CanvasLayerContract;
 
-const documentOf = (layers: CanvasLayerContract[]): CanvasDocumentContractV2 =>
+const documentOf = (layers: CanvasLayerContract[]): CanvasDocumentContractV3 =>
   ({
     bbox: { height: 32, width: 32, x: 4, y: 6 },
     height: 64,
-    layers,
+    stacks: stacksFrom(layers),
     width: 64,
-  }) as unknown as CanvasDocumentContractV2;
+  }) as unknown as CanvasDocumentContractV3;
 
 interface Harness {
   deps: CreateCompositeFrameDeps;
@@ -76,6 +78,7 @@ const makeHarness = (): Harness => {
       derivedSurfaceCache: { byteSize: () => 0 } as CreateCompositeFrameDeps['derivedSurfaceCache'],
       diagnostics: {} as CreateCompositeFrameDeps['diagnostics'],
       getAdjustedSurface: () => null,
+      getGroupSurface: () => null,
       getCheckerboardTile: () => surface(8, 8),
       getMaskPatternTile: () => null,
       layerCache: {
@@ -150,10 +153,11 @@ describe('SAM isolation', () => {
       rect: { height: 8, width: 8, x: 0, y: 0 },
     }) as unknown as SamPreviewState;
 
-  it('composites only the isolated layer', () => {
+  it('isolates the layer through the composition plan', () => {
     draw(documentOf([layer('a'), layer('b')]), null, isolated());
-    const doc = composite.mock.calls.at(-1)?.[1] as CanvasDocumentContractV2;
-    expect(doc.layers.map((entry) => entry.id)).toEqual(['a']);
+    const doc = composite.mock.calls.at(-1)?.[1] as CanvasDocumentContractV3;
+    expect(getDocumentLeaves(doc).map((entry) => entry.id)).toEqual(['a', 'b']);
+    expect(lastCompositeOptions().isolationLayerId).toBe('a');
   });
 
   it('clips to the preview rect', () => {
@@ -184,8 +188,8 @@ describe('SAM isolation', () => {
   it('draws the whole document when the SAM preview is not isolated', () => {
     const sam = { ...isolated(), isolated: false } as SamPreviewState;
     draw(documentOf([layer('a'), layer('b')]), null, sam);
-    const doc = composite.mock.calls.at(-1)?.[1] as CanvasDocumentContractV2;
-    expect(doc.layers.map((entry) => entry.id)).toEqual(['a', 'b']);
+    const doc = composite.mock.calls.at(-1)?.[1] as CanvasDocumentContractV3;
+    expect(getDocumentLeaves(doc).map((entry) => entry.id)).toEqual(['a', 'b']);
     expect(lastCompositeOptions().clipRect).toBeNull();
   });
 });

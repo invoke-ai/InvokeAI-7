@@ -35,6 +35,7 @@ vi.mock('react-i18next', () => ({
 const board: GalleryBoard = {
   archived: false,
   assetCount: 3,
+  assetVideoCount: 0,
   id: 'dogs',
   imageCount: 50,
   kind: 'board',

@@ -1,10 +1,10 @@
 import type { GenerateModelConfig, MainModelConfig } from '@features/generation/contracts';
 import type {
-  CanvasDocumentContractV2,
+  CanvasDocumentContractV3,
   CanvasControlLayerContract,
   CanvasLayerContract,
   CanvasRasterLayerContractV2,
-  CanvasStateContractV2,
+  CanvasStateContractV3,
   RegionalGuidanceReferenceImage,
   RegionalGuidanceReferenceImageAsset,
 } from '@workbench/canvas-engine/contracts';
@@ -16,6 +16,8 @@ import type { WorkbenchAction } from '@workbench/workbenchState.testing';
 import type { WorkbenchCommands } from '@workbench/workbenchStore';
 
 import { getDefaultGenerateSettings } from '@features/generation/settings';
+import { getDocumentLeaves } from '@workbench/canvas-engine/api';
+import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
 import { createTestStubRasterBackend } from '@workbench/canvas-engine/render/raster.testStub';
 import {
   composeForGeneration,
@@ -97,13 +99,13 @@ const rasterLayer = (id: string, size = 64): CanvasRasterLayerContractV2 => ({
   type: 'raster',
 });
 
-const makeDoc = (layers: CanvasRasterLayerContractV2[], size = 64): CanvasDocumentContractV2 => ({
+const makeDoc = (layers: CanvasRasterLayerContractV2[], size = 64): CanvasDocumentContractV3 => ({
   background: 'transparent',
   bbox: { height: size, width: size, x: 0, y: 0 },
   height: size,
-  layers,
+  stacks: stacksFrom(layers),
   selectedLayerId: null,
-  version: 2,
+  version: 3,
   width: size,
 });
 
@@ -133,7 +135,7 @@ interface Harness {
 }
 
 interface HarnessOptions {
-  document?: CanvasDocumentContractV2;
+  document?: CanvasDocumentContractV3;
   destination?: 'canvas' | 'gallery';
   model?: GenerateModelConfig;
   strength?: number;
@@ -201,7 +203,7 @@ const makeHarness = (options: HarnessOptions = {}): Harness => {
   const releaseRasterSnapshot = vi.fn();
   const dedupe = createCompositeDedupeCache();
 
-  const makeCanvas = (document: CanvasDocumentContractV2): CanvasStateContractV2 => ({
+  const makeCanvas = (document: CanvasDocumentContractV3): CanvasStateContractV3 => ({
     document: structuredClone(document),
     documentRevision: 0,
     snapshots: [],
@@ -213,7 +215,7 @@ const makeHarness = (options: HarnessOptions = {}): Harness => {
       pendingImages: [],
       selectedImageIndex: 0,
     },
-    version: 2,
+    version: 3,
   });
 
   const executorDeps: GenerationCompositeExecutorDeps = {
@@ -522,7 +524,7 @@ describe('runCanvasInvocation', () => {
           pendingImages: [],
           selectedImageIndex: 0,
         },
-        version: 2,
+        version: 3,
       },
       documentGeneration: 0,
     });
@@ -634,7 +636,7 @@ describe('runCanvasInvocation', () => {
           pendingImages: [],
           selectedImageIndex: 0,
         },
-        version: 2,
+        version: 3,
       },
       documentGeneration: 9,
     });
@@ -646,7 +648,7 @@ describe('runCanvasInvocation', () => {
       liveDocument = {
         ...liveDocument,
         bbox: { height: 64, width: 64, x: 101, y: 202 },
-        layers: [rasterLayer('replacement-layer')],
+        stacks: stacksFrom([rasterLayer('replacement-layer')]),
       };
       return result;
     };
@@ -657,7 +659,7 @@ describe('runCanvasInvocation', () => {
     expect(harness.notices()).toEqual([]);
     expect(harness.submittedGraphs()).toHaveLength(1);
     expect(harness.submittedGraphs()[0]?.canvas.document.bbox).toEqual({ height: 64, width: 64, x: 7, y: 11 });
-    expect(harness.submittedGraphs()[0]?.canvas.document.layers[0]?.id).toBe('frozen-layer');
+    expect(getDocumentLeaves(harness.submittedGraphs()[0]?.canvas.document)[0]?.id).toBe('frozen-layer');
     expect(harness.releaseRasterSnapshot).toHaveBeenCalledTimes(1);
     expect(harness.dedupe.byKey.size).toBeGreaterThan(0);
   });
@@ -680,7 +682,7 @@ describe('runCanvasInvocation', () => {
             pendingImages: [],
             selectedImageIndex: 0,
           },
-          version: 2,
+          version: 3,
         },
         documentGeneration: 3,
       });
@@ -1022,13 +1024,13 @@ const inpaintMaskLayer = (id: string): CanvasLayerContract => ({
   type: 'inpaint_mask',
 });
 
-const docWithLayers = (layers: CanvasLayerContract[], size = 64): CanvasDocumentContractV2 => ({
+const docWithLayers = (layers: CanvasLayerContract[], size = 64): CanvasDocumentContractV3 => ({
   background: 'transparent',
   bbox: { height: size, width: size, x: 0, y: 0 },
   height: size,
-  layers,
+  stacks: stacksFrom(layers),
   selectedLayerId: null,
-  version: 2,
+  version: 3,
   width: size,
 });
 

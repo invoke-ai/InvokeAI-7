@@ -27,6 +27,10 @@ import type { CanvasLayerSourceContract, CanvasRasterLayerContractV2 } from '@wo
 import type { CanvasProjectMutation } from '@workbench/canvas-engine/mutationContracts';
 import type { Vec2 } from '@workbench/canvas-engine/types';
 
+import { lookupDocumentLeaf } from '@workbench/canvas-engine/document-model/documentModel';
+import { getDocumentLeaves } from '@workbench/canvas-engine/document/documentIndex';
+import { isLeafEditable } from '@workbench/canvas-engine/document/layerEligibility';
+
 import type { Tool, ToolContext } from './tool';
 
 /** Bit for the primary (usually left) mouse button in `PointerEvent.buttons`. */
@@ -113,11 +117,12 @@ export const createGradientTool = (): Tool => {
         return;
       }
       const angle = angleFromDrag(current.startDoc, input.documentPoint);
-      const selected = doc.selectedLayerId ? doc.layers.find((layer) => layer.id === doc.selectedLayerId) : undefined;
+      const leaf = doc.selectedLayerId ? lookupDocumentLeaf(doc, doc.selectedLayerId) : null;
+      const selected = leaf?.layer;
 
-      if (selected && selected.type === 'raster' && selected.source.type === 'gradient') {
-        // Edit the selected gradient layer — unless it's locked/hidden (no-op).
-        if (selected.isLocked || !selected.isEnabled) {
+      if (leaf && selected && selected.type === 'raster' && selected.source.type === 'gradient') {
+        // Edit the selected gradient layer — unless it's locked/disabled (no-op).
+        if (!isLeafEditable(leaf)) {
           clearPreview(ctx);
           return;
         }
@@ -145,12 +150,22 @@ export const createGradientTool = (): Tool => {
       // positioned at the bbox origin via the layer transform. Angle-drag edits on
       // an existing gradient preserve its extent (the `...old` spread above).
       const options = ctx.stores.gradientOptions.get();
+      // The built-in FG→BG preset resolves the pair now; custom stops are
+      // explicit and independent of later pair edits.
+      const pair = ctx.stores.colorPair.get();
+      const stops =
+        options.preset === 'pair'
+          ? [
+              { color: `${pair.foreground}ff`, offset: 0 },
+              { color: `${pair.background}ff`, offset: 1 },
+            ]
+          : options.stops.map((stop) => ({ ...stop }));
       const layerId = ctx.createLayerId();
       const source: CanvasLayerSourceContract = {
         angle,
         height: doc.bbox.height,
         kind: options.kind,
-        stops: options.stops.map((stop) => ({ ...stop })),
+        stops,
         type: 'gradient',
         width: doc.bbox.width,
       };
@@ -159,13 +174,17 @@ export const createGradientTool = (): Tool => {
         id: layerId,
         isEnabled: true,
         isLocked: false,
-        name: `Gradient ${doc.layers.length + 1}`,
+        name: `Gradient ${getDocumentLeaves(doc).length + 1}`,
         opacity: 1,
         source,
         transform: { rotation: 0, scaleX: 1, scaleY: 1, x: doc.bbox.x, y: doc.bbox.y },
         type: 'raster',
       };
-      const forward: CanvasProjectMutation = { index: 0, layer, type: 'addCanvasLayer' };
+      const forward: CanvasProjectMutation = {
+        anchor: ctx.captureInsertionAnchor('raster', doc.selectedLayerId),
+        layer,
+        type: 'addCanvasLayer',
+      };
       const inverse: CanvasProjectMutation = { ids: [layerId], type: 'removeCanvasLayers' };
       ctx.commitStructural('Add gradient', forward, inverse);
       clearPreview(ctx);

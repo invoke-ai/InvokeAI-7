@@ -46,7 +46,7 @@ describe('detectCanvasMode', () => {
 
     it('stays txt2img for a new canvas seeded with only an empty inpaint mask', () => {
       // A brand-new canvas carries one empty inpaint mask (see
-      // `createNewCanvasStateV2`). An empty mask contributes no raster content
+      // `createNewCanvasState`). An empty mask contributes no raster content
       // (`contentBounds` stays null) and has no content (`hasActiveInpaintMask`
       // is false), so mode detection must NOT flip to inpaint.
       expect(detectCanvasMode(input({ contentBounds: null, hasActiveInpaintMask: false }))).toBe('txt2img');

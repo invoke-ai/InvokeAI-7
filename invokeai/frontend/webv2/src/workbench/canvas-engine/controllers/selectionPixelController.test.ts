@@ -1,6 +1,7 @@
-import type { CanvasDocumentContractV2 } from '@workbench/canvas-engine/contracts';
+import type { CanvasDocumentContractV3, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
 import type { SelectionState } from '@workbench/canvas-engine/selection/selectionState';
 
+import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
 import { createHistory } from '@workbench/canvas-engine/history/history';
 import { createLayerCacheStore } from '@workbench/canvas-engine/render/layerCache';
 import { createTestStubRasterBackend } from '@workbench/canvas-engine/render/raster.testStub';
@@ -21,17 +22,18 @@ describe('SelectionPixelController', () => {
       mask: () => ({ rect: { height: 2, width: 2, x: 0, y: 0 }, surface: mask }),
     } as unknown as SelectionState;
     const document = {
-      layers: [
+      stacks: stacksFrom([
         {
           id: 'paint',
           isEnabled: true,
           isLocked: false,
+          transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 },
           source: { type: 'paint' },
           type: 'raster',
-        },
-      ],
+        } as unknown as CanvasLayerContract,
+      ]),
       selectedLayerId: 'paint',
-    } as CanvasDocumentContractV2;
+    } as CanvasDocumentContractV3;
     const history = createHistory();
     const markDirty = vi.fn();
     const notifyPainted = vi.fn();
@@ -71,17 +73,18 @@ describe('SelectionPixelController', () => {
       mask: () => ({ rect: { height: 2, width: 2, x: 0, y: 0 }, surface: mask }),
     } as unknown as SelectionState;
     const document = {
-      layers: [
+      stacks: stacksFrom([
         {
           id: 'paint',
           isEnabled: true,
           isLocked: false,
+          transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 },
           source: { bitmap: { height: 2, imageName: 'durable', width: 2 }, type: 'paint' },
           type: 'raster',
-        },
-      ],
+        } as unknown as CanvasLayerContract,
+      ]),
       selectedLayerId: 'paint',
-    } as CanvasDocumentContractV2;
+    } as CanvasDocumentContractV3;
     const markDirty = vi.fn();
     const requestRasterization = vi.fn();
     const history = createHistory();

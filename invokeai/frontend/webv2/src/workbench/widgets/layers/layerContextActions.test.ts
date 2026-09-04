@@ -1,9 +1,10 @@
 import type {
-  CanvasDocumentContractV2,
+  CanvasDocumentContractV3,
   CanvasLayerContract,
   CanvasRasterLayerContractV2,
 } from '@workbench/canvas-engine/contracts';
 
+import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
@@ -54,13 +55,13 @@ const makeLayer = (type: CanvasLayerContract['type']): CanvasLayerContract => {
   }
 };
 
-const makeDocument = (layers: CanvasLayerContract[]): CanvasDocumentContractV2 => ({
+const makeDocument = (layers: CanvasLayerContract[]): CanvasDocumentContractV3 => ({
   background: 'transparent',
   bbox: { height: 512, width: 512, x: 0, y: 0 },
   height: 512,
-  layers,
+  stacks: stacksFrom(layers),
   selectedLayerId: layers[0]?.id ?? null,
-  version: 2,
+  version: 3,
   width: 512,
 });
 
@@ -73,17 +74,27 @@ const makeState = (
     canRunWorkflow: true,
     document,
     hasEngine: true,
+    hiddenByAncestor: false,
     hasSupportedContent: true,
     hasWorkflowBindings: true,
-    index: document.layers.findIndex((entry) => entry.id === layer.id),
     interactionLocked: false,
+    canGroupSelection: true,
+    canDeleteSelection: true,
+    canMergeSelection: true,
     layer,
+    modelBase: null,
+    selectedIds: [layer.id],
     ...overrides,
   };
 };
 
 const makeEffects = (): LayerContextActionEffects => ({
+  addAdjustment: vi.fn(),
+  addLayerRegion: vi.fn(),
+  addMaskModifier: vi.fn(),
+  addReferenceImage: vi.fn(),
   booleanMerge: vi.fn(() => Promise.resolve()),
+  toggleHidden: vi.fn(),
   copyTo: vi.fn(),
   copyToClipboard: vi.fn(() => Promise.resolve()),
   cropToBbox: vi.fn(() => Promise.resolve()),
@@ -91,7 +102,9 @@ const makeEffects = (): LayerContextActionEffects => ({
   duplicate: vi.fn(),
   extractMaskedArea: vi.fn(() => Promise.resolve()),
   fitToBbox: vi.fn(),
+  group: vi.fn(),
   mergeDown: vi.fn(),
+  mergeSelected: vi.fn(),
   openProperties: vi.fn(),
   openRename: vi.fn(),
   openRunWorkflow: vi.fn(),
@@ -100,6 +113,7 @@ const makeEffects = (): LayerContextActionEffects => ({
   patchConfig: vi.fn(),
   rasterize: vi.fn(),
   reorder: vi.fn(),
+  setColorLabel: vi.fn(),
   saveToAssets: vi.fn(() => Promise.resolve()),
   toggleLock: vi.fn(),
   toggleVisibility: vi.fn(),
@@ -288,7 +302,7 @@ describe('layer context action registry', () => {
     const context = makeRuntimeContext(rasterLayer, { effects });
 
     getLayerContextActionDefinition('move-to-front').handler(context);
-    getLayerContextActionDefinition('adjustments').handler(context);
+    getLayerContextActionDefinition('add-curves').handler(context);
     getLayerContextActionDefinition('filter').handler(context);
     getLayerContextActionDefinition('intersect').handler(context);
     getLayerContextActionDefinition('copy-to-control').handler(context);
@@ -296,7 +310,7 @@ describe('layer context action registry', () => {
     getLayerContextActionDefinition('regional-auto-negative').handler(context);
 
     expect(effects.reorder).toHaveBeenCalledWith('front', 'move-to-front');
-    expect(effects.openProperties).toHaveBeenCalledWith('adjustments');
+    expect(effects.addAdjustment).toHaveBeenCalledWith('curves');
     expect(effects.startFilter).toHaveBeenCalledWith(rasterLayer.id);
     expect(effects.booleanMerge).toHaveBeenCalledWith('intersect');
     expect(effects.copyTo).toHaveBeenCalledWith('control');
@@ -307,8 +321,8 @@ describe('layer context action registry', () => {
 
 describe('getLayerContextActions', () => {
   it.each([
-    ['raster', 'adjustments', true],
-    ['control', 'adjustments', false],
+    ['raster', 'add-curves', true],
+    ['control', 'add-curves', false],
     ['inpaint_mask', 'extract-masked-area', true],
     ['control', 'extract-masked-area', false],
   ] as const)('resolves %s visibility for %s', (type, actionId, expected) => {
@@ -420,6 +434,12 @@ describe('getLayerContextActions', () => {
     const regional = createRegionalGuidanceLayer('Interaction region', 0, 'interaction-region');
     const contexts = [
       makeState(raster, { document: rasterDocument, interactionLocked: true }),
+      // A multi-selection context so the selection-only verbs are visible.
+      makeState(raster, {
+        document: rasterDocument,
+        interactionLocked: true,
+        selectedIds: [raster.id, 'interaction-raster-b'],
+      }),
       makeState(nonEmptyControlLayer, { interactionLocked: true }),
       makeState(inpaint, { interactionLocked: true }),
       makeState(regional, { interactionLocked: true }),
@@ -433,10 +453,18 @@ describe('getLayerContextActions', () => {
       'move-backward',
       'move-to-back',
       'duplicate',
+      'group',
       'rename',
       'transform',
       'fit-to-bbox',
-      'adjustments',
+      'add-brightness-contrast',
+      'add-exposure',
+      'add-levels',
+      'add-curves',
+      'add-hsl',
+      'add-hue',
+      'add-invert',
+      'add-regenerate-region',
       'save-to-assets',
       'copy-to-clipboard',
       'crop-to-bbox',
@@ -458,21 +486,72 @@ describe('getLayerContextActions', () => {
       'convert-to-inpaint-mask',
       'convert-to-regional-guidance',
       'control-transparency-effect',
-      'regional-positive-prompt',
-      'regional-negative-prompt',
-      'regional-reference-image',
       'regional-auto-negative',
-      'inpaint-noise',
-      'inpaint-denoise-limit',
+      'add-reference-image',
+      'add-noise',
+      'add-denoise-limit',
       'merge-down',
+      'merge-selected',
       'toggle-visibility',
+      'toggle-hidden',
       'toggle-lock',
+      'color-label-red',
+      'color-label-orange',
+      'color-label-yellow',
+      'color-label-green',
+      'color-label-blue',
+      'color-label-violet',
+      'color-label-gray',
+      'color-label-none',
       'delete',
     ];
 
     expect(actionIds).toHaveLength(LAYER_CONTEXT_ACTION_DEFINITIONS.length);
     expect(actionIds.filter((id) => !actionsById.has(id))).toEqual([]);
     expect([...new Set(actions.filter((action) => !action.isDisabled).map((action) => action.id))]).toEqual([]);
+  });
+
+  it('offers color labels on every layer type, locked layers included, and routes to the effect', () => {
+    const locked = { ...makeLayer('raster'), isLocked: true };
+    const actions = getLayerContextActions(makeState(locked));
+    const red = byId(actions, 'color-label-red');
+    expect(red.isDisabled).toBe(false);
+    expect(red.submenu).toBe('color-label');
+    expect(red.iconColor).toBeDefined();
+    // None only clears an existing label.
+    expect(byId(actions, 'color-label-none').isDisabled).toBe(true);
+    const labelled = getLayerContextActions(makeState({ ...makeLayer('raster'), colorLabel: 'red' }));
+    expect(byId(labelled, 'color-label-none').isDisabled).toBe(false);
+
+    const effects = makeEffects();
+    red.handler({ ...makeState(locked), effects });
+    expect(effects.setColorLabel).toHaveBeenCalledWith('red');
+    byId(labelled, 'color-label-none').handler({ ...makeState(locked), effects });
+    expect(effects.setColorLabel).toHaveBeenLastCalledWith(null);
+  });
+
+  it('offers add-reference-image on regional layers unless the model base is flux2', () => {
+    const regional = makeLayer('regional_guidance');
+    expect(byId(getLayerContextActions(makeState(regional)), 'add-reference-image').isDisabled).toBe(false);
+    const flux2Actions = getLayerContextActions(makeState(regional, { modelBase: 'flux2' }));
+    expect(flux2Actions.some((action) => action.id === 'add-reference-image')).toBe(false);
+    const rasterActions = getLayerContextActions(makeState(makeLayer('raster')));
+    expect(rasterActions.some((action) => action.id === 'add-reference-image')).toBe(false);
+  });
+
+  it('offers add-noise and add-denoise-limit only while the mask lacks that modifier', () => {
+    const bare = getLayerContextActions(makeState(makeLayer('inpaint_mask')));
+    expect(byId(bare, 'add-noise').isDisabled).toBe(false);
+    expect(byId(bare, 'add-denoise-limit').isDisabled).toBe(false);
+    const configured = getLayerContextActions(
+      makeState({
+        ...makeLayer('inpaint_mask'),
+        denoise: { isEnabled: false, limit: 0.8 },
+        noise: { isEnabled: true, level: 0.25 },
+      } as CanvasLayerContract)
+    );
+    expect(configured.some((action) => action.id === 'add-noise')).toBe(false);
+    expect(configured.some((action) => action.id === 'add-denoise-limit')).toBe(false);
   });
 
   it('still allows non-destructive copy and export from a locked layer when interaction is free', () => {
@@ -484,11 +563,21 @@ describe('getLayerContextActions', () => {
   it('disables locked-layer mutations but keeps toggle lock enabled', () => {
     const lockedRaster = { ...rasterLayer, isLocked: true };
     const below = paintLayer('below-locked-raster');
-    const actions = getLayerContextActions(makeState(lockedRaster, { document: makeDocument([lockedRaster, below]) }));
+    // The menu's model probe refuses removing a locked selection.
+    const actions = getLayerContextActions(
+      makeState(lockedRaster, { canDeleteSelection: false, document: makeDocument([lockedRaster, below]) })
+    );
 
     for (const id of [
       'fit-to-bbox',
-      'adjustments',
+      'add-brightness-contrast',
+      'add-exposure',
+      'add-levels',
+      'add-curves',
+      'add-hsl',
+      'add-hue',
+      'add-invert',
+      'add-regenerate-region',
       'filter',
       'select-object',
       'run-workflow',
@@ -562,7 +651,13 @@ describe('getLayerContextActions', () => {
         'rename',
         'transform',
         'fit-to-bbox',
-        'adjustments',
+        'add-brightness-contrast',
+        'add-levels',
+        'add-curves',
+        'add-hsl',
+        'add-hue',
+        'add-invert',
+        'add-regenerate-region',
         'save-to-assets',
         'copy-to-clipboard',
         'crop-to-bbox',
@@ -728,22 +823,15 @@ describe('getLayerContextActions', () => {
     expect(idsFor(rasterLayer)).not.toContain('copy-to-raster');
   });
 
-  it('exposes regional guidance add actions only for missing prompts', () => {
-    const layer = { ...createRegionalGuidanceLayer('Region', 0, 'region-prompts'), positivePrompt: 'already' };
+  it('keeps the surviving regional and inpaint verbs without the retired add actions', () => {
+    const region = createRegionalGuidanceLayer('Region', 0, 'region-prompts');
+    expect(idsFor(region)).toContain('regional-auto-negative');
+    expect(idsFor(region)).not.toContain('regional-positive-prompt' as never);
 
-    expect(idsFor(layer)).toContain('regional-negative-prompt');
-    expect(idsFor(layer)).toContain('regional-reference-image');
-    expect(idsFor(layer)).toContain('regional-auto-negative');
-    expect(idsFor(layer)).not.toContain('regional-positive-prompt');
-  });
-
-  it('exposes inpaint modifier add actions only for missing modifiers', () => {
-    const layer = { ...createInpaintMaskLayer('Mask', 'mask-modifiers'), noiseLevel: 0.25 };
-
-    expect(idsFor(layer)).toContain('inpaint-denoise-limit');
-    expect(idsFor(layer)).toContain('copy-to-regional-guidance');
-    expect(idsFor(layer)).toContain('extract-masked-area');
-    expect(idsFor(layer)).not.toContain('inpaint-noise');
+    const mask = createInpaintMaskLayer('Mask', 'mask-modifiers');
+    expect(idsFor(mask)).toContain('copy-to-regional-guidance');
+    expect(idsFor(mask)).toContain('extract-masked-area');
+    expect(idsFor(mask)).not.toContain('inpaint-noise' as never);
   });
 
   it('copies regional guidance to an inpaint mask without unsupported conversions', () => {
@@ -764,5 +852,22 @@ describe('getLayerContextActions', () => {
     expect(idsFor(upper, [upper, createInpaintMaskLayer('Mask', 'mask-below')])).toEqual(
       expect.not.arrayContaining(operations)
     );
+  });
+});
+
+describe('toggle-hidden', () => {
+  it('offers hide-on-canvas to overlay layers only and yields to a hiding ancestor', () => {
+    expect(idsFor(rasterLayer)).not.toContain('toggle-hidden');
+    const control = getLayerContextActions(makeState(nonEmptyControlLayer));
+    expect(byId(control, 'toggle-hidden').isDisabled).toBe(false);
+    expect(byId(control, 'toggle-hidden').labelKey).toBe('widgets.layers.actions.hideLayer');
+    expect(getEnglishTranslation('widgets.layers.actions.hideLayer')).toBe('Hide layer');
+    const hidden = getLayerContextActions(makeState({ ...nonEmptyControlLayer, isHidden: true }));
+    expect(byId(hidden, 'toggle-hidden').labelKey).toBe('widgets.layers.actions.showLayer');
+    const gated = getLayerContextActions(makeState(nonEmptyControlLayer, { hiddenByAncestor: true }));
+    expect(byId(gated, 'toggle-hidden').isDisabled).toBe(true);
+    const runtime = makeRuntimeContext(nonEmptyControlLayer);
+    void LAYER_CONTEXT_ACTION_DEFINITIONS.find((definition) => definition.id === 'toggle-hidden')!.handler(runtime);
+    expect(runtime.effects.toggleHidden).toHaveBeenCalledTimes(1);
   });
 });

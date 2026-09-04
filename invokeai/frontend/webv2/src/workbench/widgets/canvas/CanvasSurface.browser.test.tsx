@@ -1,4 +1,4 @@
-import type { CanvasStateContractV2 } from '@workbench/canvas-engine/contracts';
+import type { CanvasStateContractV3 } from '@workbench/canvas-engine/contracts';
 import type { CanvasEngine } from '@workbench/canvas-operations/createCanvasEngine';
 import type { EngineDeps, EngineRegistry } from '@workbench/canvas-operations/engineRegistry';
 import type { CanvasProjectMutationPort } from '@workbench/canvasProjectMutationPort';
@@ -6,7 +6,7 @@ import type { CanvasProjectMutationPort } from '@workbench/canvasProjectMutation
 import { ChakraProvider } from '@chakra-ui/react';
 import { system } from '@theme/system';
 import { createEngineRegistry } from '@workbench/canvas-operations/engineRegistry';
-import { createEmptyCanvasStateV2 } from '@workbench/canvasMigration';
+import { createEmptyCanvasState } from '@workbench/canvasMigration';
 import { act, StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -73,7 +73,7 @@ const createTrackedRoot = (host: HTMLDivElement) => {
   return { root, unmount };
 };
 
-const createEngineDeps = (state: CanvasStateContractV2): EngineDeps => {
+const createEngineDeps = (state: CanvasStateContractV3): EngineDeps => {
   const listeners = new Set<() => void>();
   const mutationPort: CanvasProjectMutationPort = {
     commitEdit: () => undefined,
@@ -127,7 +127,7 @@ describe('CanvasSurface browser lifecycle', () => {
   it('is StrictMode-safe across resize, registry reacquisition, detachment, and project switching', async () => {
     const gracePeriodMs = 80;
     const registry = createTrackedRegistry(gracePeriodMs);
-    const projectADeps = createEngineDeps(createEmptyCanvasStateV2(64, 64));
+    const projectADeps = createEngineDeps(createEmptyCanvasState(64, 64));
     const firstProjectA = acquireTrackedEngine(registry, 'project-a', projectADeps);
     const disposeA = vi.spyOn(firstProjectA.engine.lifecycle, 'dispose');
     const beginCooldownA = vi.spyOn(firstProjectA.engine.lifecycle, 'beginCooldown');
@@ -152,7 +152,7 @@ describe('CanvasSurface browser lifecycle', () => {
     const projectBReference = acquireTrackedEngine(
       registry,
       'project-b',
-      createEngineDeps(createEmptyCanvasStateV2(32, 48))
+      createEngineDeps(createEmptyCanvasState(32, 48))
     );
     const projectB = projectBReference.engine;
     const attachA = vi.spyOn(projectA.surface, 'attach');

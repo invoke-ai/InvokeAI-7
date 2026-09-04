@@ -1,6 +1,6 @@
 import type { LayerExportGuard } from '@workbench/canvas-engine/capabilities';
 import type {
-  CanvasDocumentContractV2,
+  CanvasDocumentContractV3,
   CanvasLayerContract,
   CanvasLayerSourceContract,
 } from '@workbench/canvas-engine/contracts';
@@ -8,6 +8,7 @@ import type { RasterizationJob } from '@workbench/canvas-engine/controllers/rast
 import type { LayerCacheEntry, LayerCacheStore } from '@workbench/canvas-engine/render/layerCache';
 
 import { areJsonValuesStructurallyEqual } from '@platform/core/json';
+import { getDocumentLayer } from '@workbench/canvas-engine/document/documentIndex';
 import { getSourceContentRect, renderableSourceOf } from '@workbench/canvas-engine/document/sources';
 import { isEmpty } from '@workbench/canvas-engine/math/rect';
 
@@ -19,13 +20,17 @@ export const isSupportedExportSource = (source: CanvasLayerSourceContract): bool
   return true;
 };
 
+/** A raster layer a PSD or raster export can contain; an empty layer is still counted and handled at export time. */
+export const isExportableRasterLayer = (layer: CanvasLayerContract): boolean =>
+  layer.type === 'raster' && isSupportedExportSource(layer.source);
+
 export interface CreateLayerExportGuardsDeps {
   readonly projectId: string;
   readonly layerCache: LayerCacheStore;
   readonly isDisposed: () => boolean;
   readonly hasCanvasState: () => boolean;
   readonly getDocumentGeneration: () => number;
-  readonly getDocument: () => CanvasDocumentContractV2 | null;
+  readonly getDocument: () => CanvasDocumentContractV3 | null;
   readonly getRasterizationJob: (layerId: string) => RasterizationJob | undefined;
 }
 
@@ -86,7 +91,7 @@ export const createLayerExportGuards = (deps: CreateLayerExportGuardsDeps): Laye
       return false;
     }
     const document = deps.getDocument();
-    const liveLayer = document?.layers.find((candidate) => candidate.id === guard.layerId);
+    const liveLayer = getDocumentLayer(document, guard.layerId);
     const entry = layerCache.get(guard.layerId);
     return !!entry && liveLayer === guard.layer && entry.version === guard.cacheVersion;
   };
@@ -94,7 +99,7 @@ export const createLayerExportGuards = (deps: CreateLayerExportGuardsDeps): Laye
   return {
     captureCurrentLayerExportGuard: (layerId) => {
       const document = deps.getDocument();
-      const layer = document?.layers.find((candidate) => candidate.id === layerId);
+      const layer = getDocumentLayer(document, layerId);
       const source = layer ? renderableSourceOf(layer) : null;
       const entry = layerCache.get(layerId);
       if (
@@ -116,7 +121,7 @@ export const createLayerExportGuards = (deps: CreateLayerExportGuardsDeps): Laye
 
     hasExportableLayerContent: (layerId) => {
       const doc = deps.getDocument();
-      const layer = doc?.layers.find((candidate) => candidate.id === layerId);
+      const layer = getDocumentLayer(doc, layerId);
       if (!doc || !layer) {
         return false;
       }

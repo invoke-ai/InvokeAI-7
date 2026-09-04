@@ -16,23 +16,30 @@ const imageRef = (imageName: string) => ({ height: 64, imageName, width: 64 });
 const projectDocument = (): Record<string, unknown> => ({
   canvas: {
     document: {
-      layers: [
-        { id: 'l1', source: { image: imageRef('live-a.png'), type: 'image' } },
-        { id: 'l2', source: { bitmap: imageRef('live-b.png'), type: 'paint' } },
-      ],
+      stacks: {
+        raster: [
+          { id: 'l1', source: { image: imageRef('live-a.png'), type: 'image' } },
+          { id: 'l2', source: { bitmap: imageRef('live-b.png'), type: 'paint' } },
+        ],
+      },
     },
-    snapshots: [{ document: { layers: [{ id: 'old', source: { image: imageRef('history.png'), type: 'image' } }] } }],
+    snapshots: [
+      { document: { stacks: { raster: [{ id: 'old', source: { image: imageRef('history.png'), type: 'image' } }] } } },
+    ],
   },
   id: 'project-1',
   layout: {},
   name: 'My project',
-  queue: { items: [{ snapshot: { canvas: { document: { layers: [{ source: { image: imageRef('q.png') } }] } } } }] },
+  queue: {
+    items: [{ snapshot: { canvas: { document: { stacks: { raster: [{ source: { image: imageRef('q.png') } }] } } } } }],
+  },
 });
 
 const planInput = {
   appVersion: '7.0',
   boardItems: [],
   createdAt: '2026-08-04T00:00:00.000Z',
+  minimumCanvasSchemaVersion: 3,
   name: 'My project',
   projectDocument: projectDocument(),
 };
@@ -49,6 +56,7 @@ describe('planInvkExport', () => {
     const plan = planInvkExport(planInput);
 
     expect(plan.fileName).toBe('My project.invk');
+    expect(plan.manifestInput.minimumCanvasSchemaVersion).toBe(3);
     expect(plan.manifestInput.sourceProjectId).toBe('project-1');
   });
 
@@ -131,6 +139,7 @@ describe('executeInvkExport', () => {
       contents: 'workbench-project',
       cover: 'cover.webp',
       name: 'My project',
+      minimumCanvasSchemaVersion: 3,
       sourceProjectId: 'project-1',
       version: 2,
     });

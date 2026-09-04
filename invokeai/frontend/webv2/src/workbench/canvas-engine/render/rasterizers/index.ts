@@ -4,7 +4,7 @@
  * Given a layer `source`, produces a {@link RasterSurface} holding its
  * rasterized pixels. `image`, `paint`, `shape`, `gradient`, and `text` are
  * implemented. A `polygon` shape (no points-editing UX yet) throws — the
- * dispatch only routes rect/ellipse.
+ * dispatch only routes parametric (non-polygon).
  *
  * Zero React, zero import-time side effects.
  */

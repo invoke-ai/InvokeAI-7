@@ -27,6 +27,7 @@ import { ArrowDownIcon, ArrowUpIcon, FilmIcon, ImagePlusIcon, XIcon } from 'luci
 import { memo, useCallback, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { TrimBoundThumb } from './TrimBoundThumb';
 import { useVideoUiActions } from './VideoUiContext';
 
 /**
@@ -137,15 +138,11 @@ const ReferenceCard = memo(function ReferenceCard({
         <Badge fontVariantNumeric="tabular-nums" size="xs" variant="solid">
           {index + 1}
         </Badge>
-        <Box bg="blackAlpha.300" flexShrink={0} h="12" overflow="hidden" rounded="sm" w="16">
-          <Image
-            alt=""
-            fit="cover"
-            h="100%"
-            src={reference.kind === 'video' ? galleryVideoUrls.thumbnail(name) : galleryImageUrls.thumbnail(name)}
-            w="100%"
-          />
-        </Box>
+        {reference.kind === 'image' ? (
+          <Box bg="blackAlpha.300" flexShrink={0} h="12" overflow="hidden" rounded="sm" w="16">
+            <Image alt="" fit="cover" h="100%" src={galleryImageUrls.thumbnail(name)} w="100%" />
+          </Box>
+        ) : null}
         <Stack flex="1" gap="1" minW="0">
           <HStack gap="1">
             {reference.kind === 'video' ? <FilmIcon size={12} /> : <ImagePlusIcon size={12} />}
@@ -163,27 +160,50 @@ const ReferenceCard = memo(function ReferenceCard({
             value={selectValue}
             onValueChange={handleSelect}
           />
+          {/* One row per trim bound: the bound's live frame at left, its slider at
+              right. The seeking thumbs replace the static gallery poster for video
+              references — the start-frame thumb is the card's visual identity. */}
           {reference.kind === 'video' ? (
-            <HStack gap="2">
-              <SliderNumberField
-                ariaLabel={t('widgets.video.trimStart')}
-                disabled={disabled}
-                max={Math.max(0, reference.clip.numFrames - 1)}
-                min={0}
-                step={1}
-                value={reference.clip.startFrame}
-                onChange={handleStartFrame}
-              />
-              <SliderNumberField
-                ariaLabel={t('widgets.video.trimEnd')}
-                disabled={disabled}
-                max={Math.max(0, reference.clip.numFrames - 1)}
-                min={0}
-                step={1}
-                value={reference.clip.endFrame}
-                onChange={handleEndFrame}
-              />
-            </HStack>
+            <Stack gap="1">
+              <HStack gap="2">
+                <TrimBoundThumb
+                  fps={reference.clip.fps}
+                  frame={reference.clip.startFrame}
+                  label={t('widgets.video.trimStartShort')}
+                  src={galleryVideoUrls.full(name)}
+                />
+                <Box flex="1" minW="0">
+                  <SliderNumberField
+                    ariaLabel={t('widgets.video.trimStart')}
+                    disabled={disabled}
+                    max={Math.max(0, reference.clip.numFrames - 1)}
+                    min={0}
+                    step={1}
+                    value={reference.clip.startFrame}
+                    onChange={handleStartFrame}
+                  />
+                </Box>
+              </HStack>
+              <HStack gap="2">
+                <TrimBoundThumb
+                  fps={reference.clip.fps}
+                  frame={reference.clip.endFrame}
+                  label={t('widgets.video.trimEndShort')}
+                  src={galleryVideoUrls.full(name)}
+                />
+                <Box flex="1" minW="0">
+                  <SliderNumberField
+                    ariaLabel={t('widgets.video.trimEnd')}
+                    disabled={disabled}
+                    max={Math.max(0, reference.clip.numFrames - 1)}
+                    min={0}
+                    step={1}
+                    value={reference.clip.endFrame}
+                    onChange={handleEndFrame}
+                  />
+                </Box>
+              </HStack>
+            </Stack>
           ) : null}
         </Stack>
         <Stack gap="0">
@@ -240,7 +260,7 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
   references: VideoReferenceItem[];
 }) {
   const { t } = useTranslation();
-  const { reportError, touchGalleryImages } = useVideoUiActions();
+  const { getUploadBoardId, reportError, touchGalleryImages } = useVideoUiActions();
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const videoInputRef = useRef<HTMLInputElement | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -419,12 +439,12 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
 
       try {
         if (kind === 'video') {
-          const uploaded = await galleryTransfers.uploadVideo(file, 'none', { signal: owner.signal });
+          const uploaded = await galleryTransfers.uploadVideo(file, getUploadBoardId(), { signal: owner.signal });
 
           assertAccountScopeCurrent(owner);
           await addVideoReference(uploaded.name);
         } else {
-          const uploaded = await galleryTransfers.upload(file, 'none', { signal: owner.signal });
+          const uploaded = await galleryTransfers.upload(file, getUploadBoardId(), { signal: owner.signal });
 
           assertAccountScopeCurrent(owner);
           await addImageReference(uploaded.imageName);
@@ -442,7 +462,7 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
         setIsLoading(false);
       }
     },
-    [addImageReference, addVideoReference, reportError, touchGalleryImages]
+    [addImageReference, addVideoReference, getUploadBoardId, reportError, touchGalleryImages]
   );
 
   const handleImageFileChange = useCallback(
@@ -548,7 +568,9 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
         </Text>
       ) : null}
       <Input accept={IMAGE_UPLOAD_ACCEPT} hidden ref={imageInputRef} type="file" onChange={handleImageFileChange} />
-      <Input accept="video/*" hidden ref={videoInputRef} type="file" onChange={handleVideoFileChange} />
+      {/* Audio files upload too: the server wraps them into waveform videos, which is
+          how audio-only reference clips enter the pipeline. */}
+      <Input accept="video/*,audio/*" hidden ref={videoInputRef} type="file" onChange={handleVideoFileChange} />
     </Stack>
   );
 });

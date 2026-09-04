@@ -36,6 +36,14 @@ describe('firstPartyHotkeyCatalog', () => {
     expect(openSettings).toMatchObject({ allowInEditable: true, defaultKeys: ['mod+,'], implemented: true });
   });
 
+  it('marks the color pair swap and reset as implemented on their classic keys', () => {
+    const swap = firstPartyHotkeyCatalog.find((hotkey) => hotkey.id === 'canvas.toggleFillColor');
+    const reset = firstPartyHotkeyCatalog.find((hotkey) => hotkey.id === 'canvas.setFillColorsToDefault');
+
+    expect(swap).toMatchObject({ defaultKeys: ['x'], implemented: true });
+    expect(reset).toMatchObject({ defaultKeys: ['d'], implemented: true });
+  });
+
   it('keeps layout saving explicit and out of editable controls', () => {
     const saveLayout = firstPartyHotkeyCatalog.find((hotkey) => hotkey.id === 'app.saveLayoutPreset');
 

@@ -5,7 +5,9 @@ import { Button } from '@platform/ui/Button';
 import { MiddleTruncate } from '@platform/ui/MiddleTruncate';
 import { Link } from '@tanstack/react-router';
 import { formatRelativeTime } from '@workbench/launchpad/formatRelativeTime';
+import { ProjectCompatibilityBadge } from '@workbench/launchpad/projects/ProjectCompatibilityBadge';
 import { ProjectCover } from '@workbench/launchpad/projects/ProjectCover';
+import { isProjectSummaryCompatible } from '@workbench/projects/library';
 import { ArrowRightIcon } from 'lucide-react';
 import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -27,6 +29,7 @@ const COVER_WIDTH = { base: '32', sm: '40' } as const;
 export const ResumeCard = ({ summary }: { summary: ProjectSummary }) => {
   const { t } = useTranslation();
   const search = useMemo(() => ({ project: summary.id }), [summary.id]);
+  const isCompatible = isProjectSummaryCompatible(summary);
 
   return (
     <Flex
@@ -40,12 +43,23 @@ export const ResumeCard = ({ summary }: { summary: ProjectSummary }) => {
       transition={CARD_TRANSITION}
       _hover={CARD_HOVER}
     >
-      <Link
-        aria-label={t('projects.openProjectLabel', { name: summary.name })}
-        search={search}
-        style={LINK_STYLE}
-        to="/app"
-      />
+      {isCompatible ? (
+        <Link
+          aria-label={t('projects.openProjectLabel', { name: summary.name })}
+          search={search}
+          style={LINK_STYLE}
+          to="/app"
+        />
+      ) : (
+        <Box
+          aria-disabled="true"
+          aria-label={`${t('projects.openProjectLabel', { name: summary.name })}. ${t('projects.file.updateClient')}`}
+          role="link"
+          style={LINK_STYLE}
+          tabIndex={0}
+          title={t('projects.file.updateClient')}
+        />
+      )}
       <Box flexShrink={0} pointerEvents="none" w={COVER_WIDTH}>
         <ProjectCover coverUrl={summary.coverUrl} />
       </Box>
@@ -58,14 +72,22 @@ export const ResumeCard = ({ summary }: { summary: ProjectSummary }) => {
           <Text color="fg.muted" fontSize="2xs">
             {t('projects.editedRelative', { time: formatRelativeTime(summary.updatedAt) })}
           </Text>
+          <ProjectCompatibilityBadge summary={summary} />
         </Stack>
         <Box pointerEvents="auto">
-          <Button asChild size="xs" variant="solid">
-            <Link search={search} to="/app">
+          {isCompatible ? (
+            <Button asChild size="xs" variant="solid">
+              <Link search={search} to="/app">
+                {t('launchpad.home.resumeAction')}
+                <ArrowRightIcon />
+              </Link>
+            </Button>
+          ) : (
+            <Button disabled size="xs" title={t('projects.file.updateClient')} variant="solid">
               {t('launchpad.home.resumeAction')}
               <ArrowRightIcon />
-            </Link>
-          </Button>
+            </Button>
+          )}
         </Box>
       </Flex>
     </Flex>

@@ -6,11 +6,13 @@ import { IconButton } from '@platform/ui/Button';
 import { MiddleTruncate } from '@platform/ui/MiddleTruncate';
 import { Link } from '@tanstack/react-router';
 import { formatRelativeTime } from '@workbench/launchpad/formatRelativeTime';
+import { isProjectSummaryCompatible } from '@workbench/projects/library';
 import { EllipsisVerticalIcon, PinIcon } from 'lucide-react';
 import { useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { ProjectActionsMenu } from './ProjectActionsMenu';
+import { ProjectCompatibilityBadge } from './ProjectCompatibilityBadge';
 import { ProjectCover } from './ProjectCover';
 import { useProjectCardActions } from './useProjectCardActions';
 
@@ -39,6 +41,7 @@ export const ProjectCard = ({
   const actions = useProjectCardActions(summary);
   const [isActionsOpen, setIsActionsOpen] = useState(false);
   const [contextMenuTarget, setContextMenuTarget] = useState<{ x: number; y: number } | null>(null);
+  const isCompatible = isProjectSummaryCompatible(summary);
 
   const projectSearch = useMemo(() => ({ project: summary.id }), [summary.id]);
   const handleContextMenu = useCallback((event: MouseEvent<HTMLDivElement>) => {
@@ -69,12 +72,23 @@ export const ProjectCard = ({
       _hover={CARD_HOVER}
       onContextMenu={handleContextMenu}
     >
-      <Link
-        aria-label={t('projects.openProjectLabel', { name: summary.name })}
-        search={projectSearch}
-        style={LINK_STYLE}
-        to="/app"
-      />
+      {isCompatible ? (
+        <Link
+          aria-label={t('projects.openProjectLabel', { name: summary.name })}
+          search={projectSearch}
+          style={LINK_STYLE}
+          to="/app"
+        />
+      ) : (
+        <Box
+          aria-disabled="true"
+          aria-label={`${t('projects.openProjectLabel', { name: summary.name })}. ${t('projects.file.updateClient')}`}
+          role="link"
+          style={LINK_STYLE}
+          tabIndex={0}
+          title={t('projects.file.updateClient')}
+        />
+      )}
       <Box pointerEvents="none">
         <ProjectCover coverUrl={summary.coverUrl} />
       </Box>
@@ -84,6 +98,7 @@ export const ProjectCard = ({
           <Text color="fg.muted" fontSize="2xs">
             {t('projects.editedRelative', { time: formatRelativeTime(summary.updatedAt) })}
           </Text>
+          <ProjectCompatibilityBadge summary={summary} />
         </Stack>
       </Flex>
 
@@ -109,6 +124,7 @@ export const ProjectCard = ({
           actions={actions}
           contextMenuTarget={contextMenuTarget}
           isOpen={isActionsOpen}
+          isCompatible={isCompatible}
           isPinned={isPinned}
           projectId={summary.id}
           projectName={summary.name}

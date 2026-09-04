@@ -34,7 +34,7 @@ export interface GalleryActions {
   setSemanticImageQuery: (reference: GallerySemanticReference | null) => void;
   setView: (galleryView: GalleryView) => void;
   toggleItemInSelection: (item: GalleryItem, nextPrimaryItem: GalleryItem | null) => void;
-  updateSettings: (settings: Partial<GallerySettings>) => void;
+  updateSettings: (settings: Partial<Omit<GallerySettings, 'starredFirst'>>) => void;
   uploadFiles: (files: File[]) => Promise<void>;
 }
 

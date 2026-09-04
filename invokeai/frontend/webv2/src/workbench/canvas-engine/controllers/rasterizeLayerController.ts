@@ -1,10 +1,11 @@
-import type { CanvasDocumentContractV2, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
+import type { CanvasDocumentContractV3, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
 import type { History } from '@workbench/canvas-engine/history/history';
 import type { CanvasProjectMutation } from '@workbench/canvas-engine/mutationContracts';
 import type { LayerCacheStore } from '@workbench/canvas-engine/render/layerCache';
 import type { RasterBackend } from '@workbench/canvas-engine/render/raster';
 import type { RasterizeDeps } from '@workbench/canvas-engine/render/rasterizers';
 
+import { getDocumentLayer } from '@workbench/canvas-engine/document/documentIndex';
 import { getSourceContentRect } from '@workbench/canvas-engine/document/sources';
 import { roundOut, transformBounds } from '@workbench/canvas-engine/math/rect';
 import { rasterizeSource } from '@workbench/canvas-engine/render/rasterizers';
@@ -14,8 +15,8 @@ export interface RasterizeLayerControllerOptions {
   readonly backend: RasterBackend;
   readonly layers: LayerCacheStore;
   readonly history: History;
-  readonly getDocument: () => CanvasDocumentContractV2 | null;
-  readonly rasterizeDeps: (document: CanvasDocumentContractV2) => RasterizeDeps;
+  readonly getDocument: () => CanvasDocumentContractV3 | null;
+  readonly rasterizeDeps: (document: CanvasDocumentContractV3) => RasterizeDeps;
   readonly dispatch: (action: CanvasProjectMutation) => void;
   readonly canEdit: () => boolean;
   readonly isGestureActive: () => boolean;
@@ -36,7 +37,7 @@ export class RasterizeLayerController {
     }
     this.deps.endBurst();
     const document = this.deps.getDocument();
-    const layer = document?.layers.find((candidate) => candidate.id === layerId);
+    const layer = getDocumentLayer(document, layerId);
     if (!document || !layer || layer.type !== 'raster' || layer.isLocked) {
       return false;
     }
@@ -50,7 +51,7 @@ export class RasterizeLayerController {
     const parametricLayer: CanvasLayerContract = structuredClone(layer);
     const apply = (): void => {
       const liveDocument = this.deps.getDocument();
-      const liveLayer = liveDocument?.layers.find((candidate) => candidate.id === layerId);
+      const liveLayer = getDocumentLayer(liveDocument, layerId);
       if (!liveDocument || !liveLayer || liveLayer.type !== 'raster') {
         return;
       }

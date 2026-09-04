@@ -15,7 +15,7 @@ describe('account-owned workbench UI stores', () => {
     commandPaletteStore.setSnapshot({ isOpen: true });
     settingsDialogStore.setSnapshot({ isOpen: true, sectionId: 'developer' });
     const unregisterModal = registerHotkeyModalLayer('settings');
-    requestLayerProperties('user-a-layer', 'filter');
+    requestLayerProperties('user-a-layer');
     // Partial stand-in: the snapshot only needs to be observably non-empty.
     imageMapStore.patchSnapshot({
       clusterLabels: { '0': { alternates: [], label: 'cats' } },

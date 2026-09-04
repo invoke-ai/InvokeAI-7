@@ -1,6 +1,6 @@
 /**
  * The display-only effects a layer's pixels pass through on the way to screen:
- * raster **adjustments** (brightness / contrast / saturation / curves) and the
+ * the raster **adjustment stack** and the
  * control-layer **transparency effect** (lightness→alpha, so a dark control map
  * drops its background out).
  *

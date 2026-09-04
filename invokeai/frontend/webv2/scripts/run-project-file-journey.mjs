@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 
 import {
+  collectCanvasLeaves,
   MOCK_BACKEND_PROFILE_COUNTS,
   MOCK_BACKEND_REPRESENTATIVE_VIDEO_NAME,
   PROJECT_FILE_BOARD,
@@ -199,7 +200,7 @@ const writeArchiveWithout = async (entries, omitted, targetPath) => {
 const getBoardSnapshot = (projectId) => fetchJson(`/api/v1/projects/${encodeURIComponent(projectId)}/board-snapshot`);
 
 const getLayerImageNames = (project) =>
-  project.data.canvas.document.layers.map((layer) => layer.source.image.imageName);
+  collectCanvasLeaves(project.data.canvas.document).map((layer) => layer.source.image.imageName);
 
 const getDocumentVideoName = (project) => project.data.projectGraph.nodes[0]?.data.inputs.video?.value?.video_name;
 

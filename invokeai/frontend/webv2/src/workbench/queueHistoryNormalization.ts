@@ -5,7 +5,7 @@ import type {
   QueueSourceId,
   QueueSubmissionPresentation,
 } from '@features/queue/contracts';
-import type { CanvasStateContractV2 } from '@workbench/canvas-engine/api';
+import type { CanvasStateContractV3 } from '@workbench/canvas-engine/api';
 import type { GraphContract } from '@workbench/graphContracts';
 import type { WidgetInstanceContract, WidgetInstanceId, WidgetStateMap } from '@workbench/widgetContracts';
 
@@ -15,17 +15,15 @@ import { normalizeVideoWidgetValues } from '@features/video';
 
 import type { WorkbenchQueueItem, WorkbenchQueueState } from './queueHistoryContracts';
 
-import { migrateCanvasStateToV2 } from './canvasMigration';
+import { isRecord, loadCanvasState } from './canvasMigration';
 
 type UnknownRecord = Record<string, unknown>;
 type PresentationSource = { batchCount: number; height?: number; positivePrompt?: string; width?: number } | null;
 
 export interface QueueHistoryNormalizationContext {
-  canvas: CanvasStateContractV2;
+  canvas: CanvasStateContractV3;
   widgetInstances: Record<WidgetInstanceId, WidgetInstanceContract>;
 }
-
-const isRecord = (value: unknown): value is UnknownRecord => value !== null && typeof value === 'object';
 
 const stripGalleryRecentImagesFromState = (value: unknown): unknown => {
   if (!isRecord(value) || !isRecord(value.values) || !Object.hasOwn(value.values, 'recentImages')) {
@@ -254,6 +252,7 @@ const getBackendSubmission = (
 const normalizeLegacyQueueItem = (
   value: unknown,
   index: number,
+  canvas: CanvasStateContractV3,
   context: QueueHistoryNormalizationContext
 ): WorkbenchQueueItem => {
   const item = isRecord(value) ? value : {};
@@ -263,7 +262,6 @@ const normalizeLegacyQueueItem = (
   const { presentationSource, submission } = getBackendSubmission(sourceId, snapshot, widgetStates);
   const upscaleValues =
     sourceId === 'upscale' ? normalizeUpscaleWidgetValues(getWidgetValues(widgetStates, 'upscale')) : null;
-  const canvas = migrateCanvasStateToV2(snapshot.canvas ?? context.canvas);
   const canvasDocument = canvas.document;
   const dimensions =
     upscaleValues?.inputImage && Number.isFinite(upscaleValues.scale)
@@ -329,7 +327,22 @@ const normalizeLegacyQueueItem = (
   } as WorkbenchQueueItem;
 };
 
-/** Upgrades legacy nested snapshots at Workbench's project-ingestion boundary. */
+/**
+ * Stands in for a queue canvas that could not be read. Its revision matches no document, so the
+ * item's results can never be placed onto, or lock, a canvas they were not generated against.
+ */
+const unplaceableCanvas = (canvas: CanvasStateContractV3): CanvasStateContractV3 => ({
+  ...canvas,
+  documentRevision: -1,
+});
+
+/**
+ * Upgrades legacy nested snapshots at Workbench's project-ingestion boundary. Every item's
+ * `snapshot.canvas` is validated whether or not the rest of the snapshot is already current-shaped.
+ * Invalid and future-version canvas records are refused upstream by `gateProjectCanvases`. The
+ * defensive invalid branch below protects trusted in-memory callers that bypass project ingestion;
+ * it must never be the persistence path for raw project data.
+ */
 export const normalizeWorkbenchQueueHistory = (
   value: unknown,
   context: QueueHistoryNormalizationContext
@@ -339,10 +352,33 @@ export const normalizeWorkbenchQueueHistory = (
   }
 
   let didChange = false;
-  const items = value.items.map((item, index) => {
+  const items = value.items.map((item, index): WorkbenchQueueItem => {
     const snapshot = isRecord(item) && isRecord(item.snapshot) ? item.snapshot : null;
-    if (snapshot && isCurrentSnapshot(snapshot)) {
-      const strippedSnapshot = stripGalleryRecentImagesFromSnapshot(snapshot);
+    const loaded = snapshot && isRecord(snapshot.canvas) ? loadCanvasState(snapshot.canvas) : null;
+    const isCurrent = snapshot !== null && isCurrentSnapshot(snapshot);
+    if (loaded && loaded.status !== 'loaded') {
+      didChange = true;
+      const base = isCurrent
+        ? (item as unknown as WorkbenchQueueItem)
+        : normalizeLegacyQueueItem(item, index, unplaceableCanvas(context.canvas), context);
+      return {
+        ...base,
+        snapshot: {
+          ...base.snapshot,
+          backendSubmission: createInvalidSubmission('Queue item canvas snapshot is invalid.'),
+          canvas: unplaceableCanvas(context.canvas),
+        },
+      };
+    }
+    if (snapshot && isCurrent) {
+      const canvas = !loaded
+        ? unplaceableCanvas(context.canvas)
+        : loaded.diagnostics.length > 0
+          ? loaded.value
+          : snapshot.canvas;
+      const strippedSnapshot = stripGalleryRecentImagesFromSnapshot(
+        canvas === snapshot.canvas ? snapshot : { ...snapshot, canvas }
+      );
 
       if (strippedSnapshot === snapshot) {
         return item as unknown as WorkbenchQueueItem;
@@ -352,7 +388,7 @@ export const normalizeWorkbenchQueueHistory = (
       return { ...item, snapshot: strippedSnapshot } as unknown as WorkbenchQueueItem;
     }
     didChange = true;
-    return normalizeLegacyQueueItem(item, index, context);
+    return normalizeLegacyQueueItem(item, index, loaded?.value ?? context.canvas, context);
   });
 
   return didChange ? ({ ...value, items } as WorkbenchQueueState) : (value as unknown as WorkbenchQueueState);

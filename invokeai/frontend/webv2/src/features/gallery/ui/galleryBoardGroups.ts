@@ -10,7 +10,7 @@ export interface GalleryBoardGroups {
   dateBoards: GalleryBoard[];
   /** Any row at all survived the search — drives the "no matches" copy. */
   hasAnyMatch: boolean;
-  /** Project board (if any), then other boards, then Uncategorized last. */
+  /** Uncategorized first, then the project board (if any), then other boards. */
   yourBoards: GalleryBoard[];
 }
 
@@ -64,10 +64,12 @@ export const getGalleryBoardGroups = ({
   const dateBoards = showDates ? boards.filter((board) => board.kind === 'date' && matchesBoardSearch(board)) : [];
   const archivedBoards = showArchived ? regularBoards.filter((board) => board.archived) : [];
 
+  // The one fixed system row keeps a fixed seat at the top (legacy-gallery
+  // parity) instead of drifting down as boards accumulate.
   const yourBoards = [
+    ...(uncategorizedBoard && matchesBoardSearch(uncategorizedBoard) ? [uncategorizedBoard] : []),
     ...(projectBoard && matchesBoardSearch(projectBoard) ? [projectBoard] : []),
     ...regularBoards.filter((board) => !board.archived),
-    ...(uncategorizedBoard && matchesBoardSearch(uncategorizedBoard) ? [uncategorizedBoard] : []),
   ];
 
   const hasAnyMatch = yourBoards.length > 0 || dateBoards.length > 0 || archivedBoards.length > 0;

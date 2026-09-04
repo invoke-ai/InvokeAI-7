@@ -48,13 +48,16 @@ export {
 export { createCompositeDedupeCache, type CompositeDedupeCache } from './compositeForGeneration';
 export {
   CONTROL_FILTERS,
+  FILTER_CATEGORY_ORDER,
   buildFilterGraph,
   buildFilterDefaults,
   getFilterDefinition,
   getFilterNumberBounds,
   isFilterConfigValid,
   isSpandrelModelIdentifier,
+  type FilterCategory,
   type FilterParamSpec,
 } from './filterGraphs';
+export { readLastUsedFilterType, recordLastUsedFilterType } from './filterPreferences';
 export { resolveDefaultFilterForModel } from './controlRecommendations';
 export { buildSamGraph, documentToExportLocalSamInput, isSamDocumentInputValid, isSamInputValid } from './samGraph';

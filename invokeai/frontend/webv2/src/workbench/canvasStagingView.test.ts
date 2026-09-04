@@ -5,7 +5,7 @@ import type { WorkbenchQueueItem as QueueItem } from '@workbench/queueHistoryCon
 
 import { describe, expect, it } from 'vitest';
 
-import { createEmptyCanvasStateV2 } from './canvasMigration';
+import { createEmptyCanvasState } from './canvasMigration';
 import {
   getCancelableCanvasStagingQueueItemId,
   getCanvasQueuePlaceholderSlots,
@@ -46,7 +46,7 @@ const createCanvas = ({
   revision?: number;
   stagedImages?: CanvasStagingCandidateContract[];
 } = {}) => {
-  const canvas = createEmptyCanvasStateV2(1024, 1024);
+  const canvas = createEmptyCanvasState(1024, 1024);
 
   return {
     ...canvas,

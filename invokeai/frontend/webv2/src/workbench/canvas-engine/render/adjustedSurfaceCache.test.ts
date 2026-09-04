@@ -8,8 +8,12 @@ import type { StubRasterSurface } from './raster.testStub';
 import { createAdjustedSurfaceCache } from './adjustedSurfaceCache';
 import { createTestStubRasterBackend } from './raster.testStub';
 
-const BRIGHTEN: CanvasAdjustmentsContract = { brightness: 0.5, contrast: 0, saturation: 0 };
-const CONTRAST: CanvasAdjustmentsContract = { brightness: 0, contrast: 0.5, saturation: 0 };
+const BRIGHTEN: CanvasAdjustmentsContract = [
+  { brightness: 0.5, contrast: 0, id: 'b', isEnabled: true, type: 'brightness-contrast' },
+];
+const CONTRAST: CanvasAdjustmentsContract = [
+  { brightness: 0, contrast: 0.5, id: 'c', isEnabled: true, type: 'brightness-contrast' },
+];
 
 const makeEntry = (layerId: string, surface: StubRasterSurface, version = 0): LayerCacheEntry => ({
   hasPublishedPixels: true,
@@ -30,7 +34,9 @@ describe('createAdjustedSurfaceCache', () => {
     const cache = createAdjustedSurfaceCache(backend);
     const entry = makeEntry('a', backend.createSurface(10, 10));
     expect(cache.get('a', entry, undefined)).toBeNull();
-    expect(cache.get('a', entry, { brightness: 0, contrast: 0, saturation: 0 })).toBeNull();
+    expect(
+      cache.get('a', entry, [{ brightness: 0, contrast: 0, id: 'i', isEnabled: true, type: 'brightness-contrast' }])
+    ).toBeNull();
     expect(cache.size()).toBe(0);
   });
 

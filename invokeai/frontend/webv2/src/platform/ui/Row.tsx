@@ -9,8 +9,8 @@ export type RowProps = BoxProps & RecipeVariantProps<typeof rowRecipe>;
  * come from the recipe, and the previously ad-hoc `isSelected ? … : …`
  * ternaries collapse into the `active` variant.
  *
- * - `active`: `none` (default) | `muted` (selected) | `brand` (identity) |
- *   `accent` (active item / selection highlight)
+ * - `active`: `none` (default) | `muted` (context) | `selected` (co-selected) |
+ *   `emphasized` (the active item) | `brand` (identity) | `accent` (highlight)
  *
  * Render as a real `<button>` (`as="button"`) when the row is clickable.
  */

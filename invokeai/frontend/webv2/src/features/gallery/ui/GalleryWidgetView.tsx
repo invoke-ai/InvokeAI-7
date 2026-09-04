@@ -15,8 +15,9 @@ import { GalleryBoardDragMonitor } from './GalleryBoardDragMonitor';
 import { GalleryLayout } from './GalleryLayout';
 import {
   getGalleryPage,
+  getGalleryProjectBoardId,
+  getGalleryRawSelectedBoardId,
   getGallerySearchTerm,
-  getGallerySelectedBoardId,
   getGallerySemanticImageQuery,
   getGalleryStateView,
   getGalleryTotalImages,
@@ -84,9 +85,10 @@ export const GalleryWidgetView = ({ presentation, region, runtime }: GalleryWidg
   const data = useGalleryData({
     galleryView,
     page,
+    projectBoardId: getGalleryProjectBoardId(galleryValues),
     recentImages,
     searchTerm,
-    selectedBoardId: getGallerySelectedBoardId(galleryValues, []),
+    selectedBoardId: getGalleryRawSelectedBoardId(galleryValues),
     semanticQuery,
     settings,
   });
@@ -108,16 +110,19 @@ export const GalleryWidgetView = ({ presentation, region, runtime }: GalleryWidg
     });
   }, [notifications, semanticError]);
 
-  const { loadMore, total } = data;
-  const selectedBoardId = getGallerySelectedBoardId(galleryValues, data.boards);
-  const gallery = getGalleryStateView(
-    galleryValues,
-    data.boards,
-    data.items,
-    data.isLoadingItems,
-    queueItems,
-    liveFollowEnabled,
-    liveProgressTarget
+  const { loadMore, selectedBoardId, total } = data;
+  const gallery = useMemo(
+    () =>
+      getGalleryStateView(
+        galleryValues,
+        data.boards,
+        data.items,
+        data.isLoadingItems,
+        queueItems,
+        liveFollowEnabled,
+        liveProgressTarget
+      ),
+    [data.boards, data.isLoadingItems, data.items, galleryValues, liveFollowEnabled, liveProgressTarget, queueItems]
   );
   const lastPublishedTotalRef = useRef<number | null>(null);
   const itemActionFilterIdentity = useMemo(() => JSON.stringify(data.filter), [data.filter]);

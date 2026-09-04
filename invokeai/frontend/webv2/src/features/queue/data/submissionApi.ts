@@ -9,6 +9,7 @@ import type {
 
 import { buildGeneratePromptBatchPlan, sanitizeBatchCount } from '@features/queue/core/promptBatch';
 import { assertAccountScopeCurrent, captureAccountScope } from '@platform/state/accountLifecycle';
+import { normalizeServerTimestamp } from '@platform/time/serverTimestamp';
 import { absolutizeApiUrl, ApiError, apiFetchJson } from '@platform/transport/http';
 
 import type { QueueImageDTO, QueueServerItemDTO } from './serverTypes';
@@ -141,6 +142,7 @@ const getResultImage = async (
     const image = await apiFetchJson<QueueImageDTO>(`/api/v1/images/i/${encodeURIComponent(imageName)}`, { signal });
 
     return {
+      createdAt: normalizeServerTimestamp(image.created_at),
       height: image.height,
       imageName: image.image_name,
       imageUrl: absolutizeApiUrl(image.image_url),

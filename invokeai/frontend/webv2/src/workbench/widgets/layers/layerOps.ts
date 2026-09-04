@@ -1,33 +1,31 @@
 /**
  * Shared helpers for the layers panel: id minting, the paint-layer factory, the
- * blend-mode list, merge-down eligibility, and the single seam that routes a
- * structural edit either through the engine's canvas history (when an engine is
- * attached) or as a plain reducer dispatch (when it is not).
+ * blend-mode list, merge-down eligibility, and guarded live previews.
  */
 
 import type {
+  CanvasAdjustmentEntry,
   CanvasBlendMode,
   CanvasControlLayerContract,
-  CanvasDocumentContractV2,
+  CanvasDocumentContractV3,
   CanvasImageRef,
   CanvasInpaintMaskLayerContract,
   CanvasLayerBaseContract,
-  CanvasLayerCapability,
   CanvasLayerContract,
   CanvasLayerSourceContract,
   CanvasMaskContract,
   CanvasMaskFillContract,
   CanvasRasterLayerContractV2,
   CanvasRegionalGuidanceLayerContract,
+  CanvasLayerPreviewMutation,
+  CanvasStructuralEngine,
   RegionalGuidanceReferenceImage,
   Rect,
 } from '@workbench/canvas-engine/api';
-import type { CanvasProjectMutation } from '@workbench/canvasProjectMutations';
-import type { Dispatch } from 'react';
 
-export type CanvasStructuralEngine = { readonly layers: CanvasLayerCapability };
+export type { CanvasStructuralEngine } from '@workbench/canvas-engine/api';
 
-import { getSourceContentRect, isMergeableRasterLayer } from '@workbench/canvas-engine/api';
+import { getSourceContentRect, isMergeableRasterLayer, mergeDownEligibility } from '@workbench/canvas-engine/api';
 import { CONTROL_ADAPTER_DEFAULTS } from '@workbench/controlAdapters';
 
 type LayerTransform = CanvasLayerBaseContract['transform'];
@@ -40,9 +38,6 @@ type RegionalGuidanceConfigPatch = {
   autoNegative?: boolean;
   referenceImages?: CanvasRegionalGuidanceLayerContract['referenceImages'];
 };
-type InpaintMaskConfigPatch = { layerType: 'inpaint_mask'; noiseLevel?: number; denoiseLimit?: number };
-type PatchPair<T> = { forward: T; inverse: T };
-
 /**
  * Re-exported so existing imports of `isMergeableRasterLayer` from this module
  * keep working; the canonical definition lives in the engine's `document/sources`
@@ -112,6 +107,25 @@ export const nextInpaintMaskName = (existingNames: readonly string[]): string =>
     n += 1;
   }
   return `Inpaint Mask ${n}`;
+};
+
+/** The next free "Group N" name given the existing node names (N ≥ 1, first gap). */
+export const nextGroupName = (existingNames: readonly string[]): string => {
+  const used = new Set<number>();
+  for (const name of existingNames) {
+    const match = /^Group (\d+)$/.exec(name.trim());
+    if (match) {
+      const n = Number(match[1]);
+      if (Number.isInteger(n) && n > 0) {
+        used.add(n);
+      }
+    }
+  }
+  let n = 1;
+  while (used.has(n)) {
+    n += 1;
+  }
+  return `Group ${n}`;
 };
 
 /** Builds an empty inpaint mask layer with the legacy-default fill (no bitmap yet). */
@@ -235,14 +249,39 @@ export const createRegionalGuidanceFromImage = (
 export const createReferenceImageId = (): string =>
   `rgref-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 
+/** Mints a fresh raster adjustment-entry id. */
+export const createAdjustmentId = (): string =>
+  `adj-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+
+/** A fresh adjustment entry of `type` at its identity values (invert has none). */
+export const createIdentityAdjustment = (type: CanvasAdjustmentEntry['type']): CanvasAdjustmentEntry => {
+  const id = createAdjustmentId();
+  switch (type) {
+    case 'brightness-contrast':
+      return { brightness: 0, contrast: 0, id, isEnabled: true, type };
+    case 'exposure':
+      return { id, isEnabled: true, stops: 0, type };
+    case 'levels':
+      return { gamma: 1, id, inBlack: 0, inWhite: 255, isEnabled: true, outBlack: 0, outWhite: 255, type };
+    case 'curves':
+      return { curves: {}, id, isEnabled: true, type };
+    case 'hsl':
+      return { id, isEnabled: true, saturation: 0, type };
+    case 'hue':
+      return { id, isEnabled: true, rotation: 0, type };
+    case 'invert':
+      return { id, isEnabled: true, type };
+  }
+};
+
 /**
  * A fresh regional reference image, minting the config kind the region's base can
  * actually consume: FLUX regions use FLUX Redux (the only kind resolved for FLUX
  * in `resolveRegionalReferenceImages`), everything else uses an IP-Adapter (legacy
  * `initialRegionalGuidanceIPAdapter`). The model is chosen by the user; the image
- * is assigned via drop/upload. Shared by `RegionalGuidanceSettings` (the in-popover
- * "add reference image" button) and the header add-layer menu's "Regional Reference
- * Image" item, so both mint the same shape.
+ * is assigned via drop/upload. Shared by the layer context menu's "Add reference
+ * image" action and the header add-layer menu's "Regional Reference Image" item,
+ * so both mint the same shape.
  */
 export const createRegionalReferenceImage = (
   base: string | null,
@@ -357,7 +396,7 @@ export const fitLayerTransformToBbox = (
   bbox: Rect,
   documentRect: Rect = bbox
 ): LayerTransform | null => {
-  const doc = { height: documentRect.height, width: documentRect.width } as CanvasDocumentContractV2;
+  const doc = { height: documentRect.height, width: documentRect.width } as CanvasDocumentContractV3;
   const contentRect = getSourceContentRect(layer, doc);
   if (contentRect.width <= 0 || contentRect.height <= 0) {
     return null;
@@ -372,56 +411,14 @@ export const fitLayerTransformToBbox = (
   };
 };
 
-export const getControlTransparencyEffectPatch = (
-  layer: CanvasControlLayerContract
-): PatchPair<ControlConfigPatch> => ({
-  forward: { layerType: 'control', withTransparencyEffect: !layer.withTransparencyEffect },
-  inverse: { layerType: 'control', withTransparencyEffect: layer.withTransparencyEffect },
-});
-
-export const getRegionalGuidancePositivePromptPatch = (
-  layer: CanvasRegionalGuidanceLayerContract
-): PatchPair<RegionalGuidanceConfigPatch> => ({
-  forward: { layerType: 'regional_guidance', positivePrompt: layer.positivePrompt ?? '' },
-  inverse: { layerType: 'regional_guidance', positivePrompt: layer.positivePrompt },
-});
-
-export const getRegionalGuidanceNegativePromptPatch = (
-  layer: CanvasRegionalGuidanceLayerContract
-): PatchPair<RegionalGuidanceConfigPatch> => ({
-  forward: { layerType: 'regional_guidance', negativePrompt: layer.negativePrompt ?? '' },
-  inverse: { layerType: 'regional_guidance', negativePrompt: layer.negativePrompt },
+export const getControlTransparencyEffectPatch = (layer: CanvasControlLayerContract): ControlConfigPatch => ({
+  layerType: 'control',
+  withTransparencyEffect: !layer.withTransparencyEffect,
 });
 
 export const getRegionalGuidanceAutoNegativePatch = (
   layer: CanvasRegionalGuidanceLayerContract
-): PatchPair<RegionalGuidanceConfigPatch> => ({
-  forward: { autoNegative: !layer.autoNegative, layerType: 'regional_guidance' },
-  inverse: { autoNegative: layer.autoNegative, layerType: 'regional_guidance' },
-});
-
-export const getRegionalGuidanceReferenceImagePatch = (
-  layer: CanvasRegionalGuidanceLayerContract,
-  base: string | null
-): PatchPair<RegionalGuidanceConfigPatch> => ({
-  forward: {
-    layerType: 'regional_guidance',
-    referenceImages: [...layer.referenceImages, createRegionalReferenceImage(base)],
-  },
-  inverse: { layerType: 'regional_guidance', referenceImages: layer.referenceImages },
-});
-
-export const getInpaintNoisePatch = (layer: CanvasInpaintMaskLayerContract): PatchPair<InpaintMaskConfigPatch> => ({
-  forward: { layerType: 'inpaint_mask', noiseLevel: layer.noiseLevel === undefined ? 0.25 : undefined },
-  inverse: { layerType: 'inpaint_mask', noiseLevel: layer.noiseLevel },
-});
-
-export const getInpaintDenoiseLimitPatch = (
-  layer: CanvasInpaintMaskLayerContract
-): PatchPair<InpaintMaskConfigPatch> => ({
-  forward: { denoiseLimit: layer.denoiseLimit === undefined ? 0.8 : undefined, layerType: 'inpaint_mask' },
-  inverse: { denoiseLimit: layer.denoiseLimit, layerType: 'inpaint_mask' },
-});
+): RegionalGuidanceConfigPatch => ({ autoNegative: !layer.autoNegative, layerType: 'regional_guidance' });
 
 /**
  * True when `layer` can be converted to a control layer (and vice-versa): only a
@@ -478,6 +475,7 @@ const cloneMask = (mask: CanvasMaskContract): CanvasMaskContract => ({
 
 const destinationBase = (layer: CanvasLayerContract, id: string, isCopy: boolean): CanvasLayerBaseContract => ({
   blendMode: layer.blendMode,
+  ...(layer.colorLabel ? { colorLabel: layer.colorLabel } : {}),
   id,
   isEnabled: layer.isEnabled,
   isLocked: layer.isLocked,
@@ -630,52 +628,12 @@ export const convertRasterControlLayer = (
   return null;
 };
 
-/**
- * Whether the layer at `index` can be merged down: an engine must be attached
- * (merge is pixel work), a layer must exist directly below it, and both that
- * layer and the one below must be mergeable raster layers.
- */
-export const canMergeLayerDown = (
-  layers: readonly CanvasLayerContract[],
-  index: number,
-  hasEngine: boolean
-): boolean => {
-  if (!hasEngine) {
-    return false;
-  }
-  const layer = layers[index];
-  const below = layers[index + 1];
-  return !!layer && !!below && isMergeableRasterLayer(layer) && isMergeableRasterLayer(below);
-};
-
-/**
- * Applies a structural document edit. With an engine attached it goes through
- * `commitStructural`, joining the canvas undo stack; without one it is a plain
- * dispatch (no undo entry — acceptable when the canvas is not mounted).
- */
-export const applyStructural = (
-  engine: CanvasStructuralEngine | null,
-  dispatch: Dispatch<CanvasProjectMutation>,
-  label: string,
-  forward: CanvasProjectMutation,
-  inverse: CanvasProjectMutation
-): void => {
-  if (engine) {
-    engine.layers.commitStructural(label, forward, inverse);
-  } else {
-    dispatch(forward);
-  }
-};
+/** Whether the layers panel may offer merge-down for `layerId`; merging is pixel work, so it needs an engine. */
+export const canMergeLayerDown = (document: CanvasDocumentContractV3, layerId: string, hasEngine: boolean): boolean =>
+  hasEngine && mergeDownEligibility(document, layerId).status === 'eligible';
 
 /** Applies a guarded live edit without recording history until the interaction ends. */
 export const applyStructuralPreview = (
   engine: CanvasStructuralEngine | null,
-  dispatch: Dispatch<CanvasProjectMutation>,
-  action: CanvasProjectMutation
-): boolean => {
-  if (engine) {
-    return engine.layers.applyStructuralPreview(action);
-  }
-  dispatch(action);
-  return true;
-};
+  action: CanvasLayerPreviewMutation
+): boolean => engine?.layers.applyStructuralPreview(action) ?? false;

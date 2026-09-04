@@ -5,7 +5,7 @@ import type { Project } from '@workbench/projectContracts';
  * migrations that heal older ones. It deliberately knows nothing about the
  * Workbench reducer.
  *
- * Rehydrating a document into a live `Project` needs `normalizeWorkbenchProject`
+ * Rehydrating a document into a live `Project` needs `loadWorkbenchProject`
  * from the aggregate state module, which transitively owns generation graphs,
  * widget state, and every policy the editor runs on. Keeping that step out of
  * this module is what lets the Launchpad read, write, and shape-check project

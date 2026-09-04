@@ -1,8 +1,9 @@
-import type { CanvasDocumentContractV2 } from '@workbench/canvas-engine/contracts';
+import type { CanvasDocumentContractV3, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
 import type { SamPreviewState } from '@workbench/canvas-engine/controllers/previewStateController';
 import type { FloatingSelection } from '@workbench/canvas-engine/selection/floatingSelection';
 import type { Mat2d, ToolId } from '@workbench/canvas-engine/types';
 
+import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
 import { createEngineStores } from '@workbench/canvas-engine/engineStores';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -26,17 +27,22 @@ const documentOf = (layerIds: readonly string[] = ['a'], overrides: Record<strin
   ({
     bbox: { height: 32, width: 32, x: 0, y: 0 },
     height: 64,
-    layers: layerIds.map((id) => layer(id)),
+    stacks: stacksFrom(layerIds.map((id) => layer(id) as unknown as CanvasLayerContract)),
     selectedLayerId: layerIds[0] ?? null,
     width: 64,
     ...overrides,
-  }) as unknown as CanvasDocumentContractV2;
+  }) as unknown as CanvasDocumentContractV3;
 
 interface Harness {
   deps: CreateOverlayFrameDeps;
   stores: ReturnType<typeof createEngineStores>;
   overrides: Map<string, { x: number; y: number; scaleX?: number; scaleY?: number; rotation?: number }>;
-  state: { tool: ToolId; cursor: { point: { x: number; y: number }; radiusDoc: number } | null; phase: number };
+  state: {
+    tool: ToolId;
+    cursor: { point: { x: number; y: number }; radiusDoc: number } | null;
+    phase: number;
+    pulseTime: number | null;
+  };
   float: { value: FloatingSelection | null };
   selection: { hasSelection: ReturnType<typeof vi.fn>; antsPaths: ReturnType<typeof vi.fn> };
 }
@@ -46,13 +52,14 @@ let harness: Harness;
 const makeHarness = (): Harness => {
   const stores = createEngineStores();
   const overrides = new Map<string, { x: number; y: number; scaleX?: number; scaleY?: number; rotation?: number }>();
-  const state: Harness['state'] = { cursor: null, phase: 0, tool: 'view' };
+  const state: Harness['state'] = { cursor: null, phase: 0, pulseTime: null, tool: 'view' };
   const float: Harness['float'] = { value: null };
   const selection = { antsPaths: vi.fn(() => []), hasSelection: vi.fn(() => false) };
   return {
     deps: {
       getActiveToolId: () => state.tool,
       getAntsPhase: () => state.phase,
+      getSamPulseTime: () => state.pulseTime,
       getFloatingSelection: () => float.value,
       getOverlayCursor: () => state.cursor,
       selection: selection as unknown as CreateOverlayFrameDeps['selection'],
@@ -67,8 +74,11 @@ const makeHarness = (): Harness => {
   };
 };
 
-const describeOverlay = (doc = documentOf(), floatFrame: FloatingSelectionFrame | null = null, sam = null) =>
-  createOverlayFrame(harness.deps).describe(doc, VIEW, floatFrame, sam);
+const describeOverlay = (
+  doc = documentOf(),
+  floatFrame: FloatingSelectionFrame | null = null,
+  sam: Parameters<ReturnType<typeof createOverlayFrame>['describe']>[3] = null
+) => createOverlayFrame(harness.deps).describe(doc, VIEW, floatFrame, sam);
 
 beforeEach(() => {
   harness = makeHarness();
@@ -223,6 +233,8 @@ describe('SAM', () => {
     } as unknown as SamPreviewState;
     expect(createOverlayFrame(harness.deps).describe(documentOf(), VIEW, null, sam).samPreview).toEqual({
       opacity: 0.45,
+      outline: null,
+      phase: 0,
       rect: { height: 4, width: 4, x: 1, y: 1 },
       surface: sam.data,
     });
@@ -265,5 +277,32 @@ describe('settings pass-through', () => {
     const overlay = describeOverlay();
     expect(overlay.cursor).toEqual({ point: { x: 3, y: 4 }, radiusDoc: 5 });
     expect(overlay.view).toBe(VIEW);
+  });
+});
+
+describe('the SAM preview', () => {
+  const preview = () =>
+    ({
+      data: { canvas: {}, ctx: {}, height: 4, width: 4 },
+      guard: {},
+      isolated: false,
+      outline: 'outline-path' as unknown as Path2D,
+      rect: { height: 4, width: 4, x: 1, y: 2 },
+    }) as unknown as NonNullable<Parameters<ReturnType<typeof createOverlayFrame>['describe']>[3]>;
+
+  it('holds the resting opacity without a pulse clock and carries the outline and phase', () => {
+    harness.state.phase = 7;
+    const state = describeOverlay(documentOf(), null, preview());
+    expect(state.samPreview).toMatchObject({ opacity: 0.45, phase: 7 });
+    expect(state.samPreview?.outline).toBe(preview().outline);
+  });
+
+  it('pulses the opacity from the clock on a 2s cycle', () => {
+    harness.state.pulseTime = 500;
+    expect(describeOverlay(documentOf(), null, preview()).samPreview?.opacity).toBeCloseTo(0.6, 5);
+    harness.state.pulseTime = 1500;
+    expect(describeOverlay(documentOf(), null, preview()).samPreview?.opacity).toBeCloseTo(0.3, 5);
+    harness.state.pulseTime = 1000;
+    expect(describeOverlay(documentOf(), null, preview()).samPreview?.opacity).toBeCloseTo(0.45, 5);
   });
 });

@@ -57,8 +57,16 @@ describe('mergePreviewBoardItems', () => {
     const middle = item('image', 'middle', '2026-07-21T00:00:02.000Z');
     const newest = item('image', 'newest', '2026-07-21T00:00:03.000Z');
 
-    expect(mergePreviewBoardItems([newest, oldest], [middle, newest], 'DESC')).toEqual([newest, middle, oldest]);
-    expect(mergePreviewBoardItems([oldest, newest], [middle, oldest], 'ASC')).toEqual([oldest, middle, newest]);
+    expect(mergePreviewBoardItems([newest, oldest], [middle, newest], 'DESC', { starredFirst: true })).toEqual([
+      newest,
+      middle,
+      oldest,
+    ]);
+    expect(mergePreviewBoardItems([oldest, newest], [middle, oldest], 'ASC', { starredFirst: true })).toEqual([
+      oldest,
+      middle,
+      newest,
+    ]);
   });
 
   it('preserves relevance order for a ranked list', () => {
@@ -71,7 +79,7 @@ describe('mergePreviewBoardItems', () => {
     const third = item('image', 'third', '2026-07-21T00:00:02.000Z');
     const optimistic = item('image', 'optimistic', '2026-07-21T00:00:09.000Z');
 
-    expect(mergePreviewBoardItems([first, second, third], [], 'DESC', { isRanked: true })).toEqual([
+    expect(mergePreviewBoardItems([first, second, third], [], 'DESC', { isRanked: true, starredFirst: true })).toEqual([
       first,
       second,
       third,
@@ -79,7 +87,7 @@ describe('mergePreviewBoardItems', () => {
     // Without the flag the same input is re-sorted (starred first, then
     // newest) and the optimistic item is spliced in, so the ranked path really
     // is what preserves the list.
-    expect(mergePreviewBoardItems([first, second, third], [optimistic], 'DESC')).toEqual([
+    expect(mergePreviewBoardItems([first, second, third], [optimistic], 'DESC', { starredFirst: true })).toEqual([
       second,
       optimistic,
       third,
@@ -95,9 +103,14 @@ describe('mergePreviewBoardItems', () => {
     const ranked = item('image', 'ranked', '2026-07-21T00:00:01.000Z');
     const outsider = item('image', 'outsider', '2026-07-21T00:00:09.000Z');
 
-    expect(mergePreviewBoardItems([ranked], [outsider], 'DESC', { isRanked: true })).toEqual([outsider, ranked]);
+    expect(mergePreviewBoardItems([ranked], [outsider], 'DESC', { isRanked: true, starredFirst: true })).toEqual([
+      outsider,
+      ranked,
+    ]);
     // Already a member: kept once, in its ranked position.
-    expect(mergePreviewBoardItems([ranked], [ranked], 'DESC', { isRanked: true })).toEqual([ranked]);
+    expect(mergePreviewBoardItems([ranked], [ranked], 'DESC', { isRanked: true, starredFirst: true })).toEqual([
+      ranked,
+    ]);
   });
 
   it('keeps starred backend items ahead of optimistic unstarred items', () => {
@@ -105,7 +118,25 @@ describe('mergePreviewBoardItems', () => {
     const optimistic = item('image', 'optimistic', '2026-07-21T00:00:03.000Z');
     const existing = item('video', 'existing', '2026-07-21T00:00:02.000Z');
 
-    expect(mergePreviewBoardItems([starred, existing], [optimistic], 'DESC')).toEqual([starred, optimistic, existing]);
+    expect(mergePreviewBoardItems([starred, existing], [optimistic], 'DESC', { starredFirst: true })).toEqual([
+      starred,
+      optimistic,
+      existing,
+    ]);
+  });
+
+  it('merges chronologically past starred items in a flat listing', () => {
+    // Paginated pages are flat: navigation must walk the same order the grid
+    // shows, not lift starred items to the front.
+    const starred = item('video', 'starred', '2026-07-21T00:00:01.000Z', true);
+    const optimistic = item('image', 'optimistic', '2026-07-21T00:00:03.000Z');
+    const existing = item('video', 'existing', '2026-07-21T00:00:02.000Z');
+
+    expect(mergePreviewBoardItems([starred, existing], [optimistic], 'DESC', { starredFirst: false })).toEqual([
+      optimistic,
+      existing,
+      starred,
+    ]);
   });
 
   it('uses the server kind/name tie-breakers for equal timestamps in both directions', () => {
@@ -115,8 +146,13 @@ describe('mergePreviewBoardItems', () => {
     const videoA = item('video', 'a', createdAt);
     const videoZ = item('video', 'z', createdAt);
 
-    expect(mergePreviewBoardItems([videoA, imageZ], [videoZ, imageA], 'ASC')).toEqual([imageA, imageZ, videoA, videoZ]);
-    expect(mergePreviewBoardItems([imageA, videoZ], [imageZ, videoA], 'DESC')).toEqual([
+    expect(mergePreviewBoardItems([videoA, imageZ], [videoZ, imageA], 'ASC', { starredFirst: true })).toEqual([
+      imageA,
+      imageZ,
+      videoA,
+      videoZ,
+    ]);
+    expect(mergePreviewBoardItems([imageA, videoZ], [imageZ, videoA], 'DESC', { starredFirst: true })).toEqual([
       videoZ,
       videoA,
       imageZ,
@@ -134,7 +170,7 @@ describe('mergePreviewBoardItems', () => {
     backend[GALLERY_MAX_ROWS - 1] = item('image', 'shared', new Date((GALLERY_MAX_ROWS - 1) * 1_000).toISOString());
     optimistic[0] = item('video', 'shared', new Date((GALLERY_MAX_ROWS + 1) * 1_000).toISOString());
 
-    const merged = mergePreviewBoardItems(backend, optimistic, 'DESC');
+    const merged = mergePreviewBoardItems(backend, optimistic, 'DESC', { starredFirst: true });
 
     expect(merged).toHaveLength(GALLERY_MAX_ROWS);
     expect(merged[0]?.name).toBe('optimistic-59');

@@ -1,12 +1,12 @@
 import type {
   CanvasControlLayerContract,
-  CanvasDocumentContractV2,
+  CanvasDocumentContractV3,
   CanvasInpaintMaskLayerContract,
   CanvasLayerContract,
   CanvasLayerSourceContract,
   CanvasRasterLayerContractV2,
   CanvasStagingCandidateContract,
-  CanvasStateContractV2,
+  CanvasStateContractV3,
 } from '@workbench/canvas-engine/contracts';
 import type * as ImagePatchModule from '@workbench/canvas-engine/history/imagePatch';
 import type * as LayerSnapshotModule from '@workbench/canvas-engine/history/layerSnapshot';
@@ -30,6 +30,10 @@ import {
 
 type EngineTestAction = WorkbenchAction | CanvasProjectMutation;
 
+import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
+import { getDocumentLeaves } from '@workbench/canvas-engine/document/documentIndex';
+import { stackTopAnchor } from '@workbench/canvas-engine/document/insertionAnchors.testStub';
+import { haveSameStructure } from '@workbench/canvas-engine/document/layerStacks';
 import { DEFAULT_CHECKER_COLORS } from '@workbench/canvas-engine/render/compositor';
 import { createTestStubRasterBackend } from '@workbench/canvas-engine/render/raster.testStub';
 import { canvasApplicationPort } from '@workbench/canvas-operations/applicationPort';
@@ -212,17 +216,17 @@ const rasterLayer = (id: string, opts: { imageName?: string; opacity?: number } 
   type: 'raster',
 });
 
-const makeDoc = (): CanvasDocumentContractV2 => ({
+const makeDoc = (): CanvasDocumentContractV3 => ({
   background: 'transparent',
   bbox: { height: 100, width: 100, x: 0, y: 0 },
   height: 100,
-  layers: [rasterLayer('a')],
+  stacks: stacksFrom([rasterLayer('a')]),
   selectedLayerId: null,
-  version: 2,
+  version: 3,
   width: 100,
 });
 
-const makeCanvas = (document: CanvasDocumentContractV2, documentRevision = 0): CanvasStateContractV2 => ({
+const makeCanvas = (document: CanvasDocumentContractV3, documentRevision = 0): CanvasStateContractV3 => ({
   document,
   documentRevision,
   snapshots: [],
@@ -234,11 +238,11 @@ const makeCanvas = (document: CanvasDocumentContractV2, documentRevision = 0): C
     pendingImages: [],
     selectedImageIndex: 0,
   },
-  version: 2,
+  version: 3,
 });
 
 const createFakeStore = (
-  document: CanvasDocumentContractV2
+  document: CanvasDocumentContractV3
 ): { store: EngineStore; unsubscribe: ReturnType<typeof vi.fn> } => {
   const state = {
     activeProjectId: 'p1',
@@ -278,11 +282,11 @@ const createEngine = () => {
 
 /** A reactive fake store: `setDocument` notifies subscribers, unlike `createFakeStore` above. */
 const createReactiveStore = (
-  document: CanvasDocumentContractV2
+  document: CanvasDocumentContractV3
 ): {
   listenerCount: () => number;
   setActiveProjectId: (projectId: string) => void;
-  setDocument: (next: CanvasDocumentContractV2, documentRevision?: number) => void;
+  setDocument: (next: CanvasDocumentContractV3, documentRevision?: number) => void;
   store: EngineStore;
 } => {
   let revision = 0;
@@ -625,6 +629,25 @@ describe('createCanvasEngine', () => {
     engine.lifecycle.dispose();
   });
 
+  it('replaces the whole document through its own mutation port', () => {
+    const document = makeDoc();
+    const { store } = createFakeStore(document);
+    const engine = createCanvasEngine({
+      backend: createTestStubRasterBackend(),
+      imageResolver: () => Promise.resolve(new Blob()),
+      projectId: 'p1',
+      store,
+    });
+    const replacement = { ...makeDoc(), height: 32, width: 32 };
+
+    engine.document.replaceDocument(replacement);
+
+    expect(store.dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ document: replacement, type: 'replaceCanvasDocument' })
+    );
+    engine.lifecycle.dispose();
+  });
+
   it('returns stale and releases a partial raster snapshot when the document changes during detachment', async () => {
     const pending = createDeferred<Blob>();
     const document = makeDoc();
@@ -641,7 +664,7 @@ describe('createCanvasEngine', () => {
     const capture = engine.exports.captureRasterSnapshot(documentSnapshot!, ['a']);
     setDocument({
       ...document,
-      layers: [{ ...document.layers[0]!, opacity: 0.5 }],
+      stacks: stacksFrom([{ ...getDocumentLeaves(document)[0]!, opacity: 0.5 }]),
     });
     pending.resolve(new Blob(['pixels']));
 
@@ -666,7 +689,7 @@ describe('createCanvasEngine', () => {
       ...rasterLayer('a'),
       source: { bitmap: { height: 20, imageName: 'paint-pixels', width: 20 }, type: 'paint' as const },
     };
-    const document = { ...makeDoc(), layers: [layer], selectedLayerId: layer.id };
+    const document = { ...makeDoc(), stacks: stacksFrom([layer]), selectedLayerId: layer.id };
     const { projectId, store } = createReducerBackedStore(document);
     const engine = createCanvasEngine({
       backend: createTestStubRasterBackend(),
@@ -698,6 +721,89 @@ describe('createCanvasEngine', () => {
 
     expect(engine.exports.isLayerExportGuardCurrent(initialGuard)).toBe(false);
     await expect(capture).resolves.toEqual({ status: 'stale' });
+    engine.lifecycle.dispose();
+  });
+
+  it('settles a claimed color sample on release, after the sampling gesture ends', async () => {
+    const raf = createControllableRaf();
+    vi.stubGlobal('requestAnimationFrame', raf.requestFrame);
+    vi.stubGlobal('cancelAnimationFrame', raf.cancelFrame);
+    const layer = {
+      ...rasterLayer('a'),
+      source: { bitmap: { height: 20, imageName: 'paint-pixels', width: 20 }, type: 'paint' as const },
+    };
+    const document = { ...makeDoc(), stacks: stacksFrom([layer]), selectedLayerId: layer.id };
+    const { projectId, store } = createReducerBackedStore(document);
+    const engine = createCanvasEngine({
+      backend: createTestStubRasterBackend(),
+      bitmapStore: createSpyBitmapStore(),
+      imageResolver: () => Promise.resolve(new Blob()),
+      projectId,
+      store,
+    });
+    const overlay = createInputCanvas();
+    const screen = createInputCanvas();
+    engine.surface.attach(screen.element, overlay.element);
+    raf.flush();
+    await flushMicrotasks();
+    raf.flush();
+
+    let settled: string | null | undefined;
+    void engine.tools.requestColorSample().then((hex) => {
+      settled = hex;
+    });
+    overlay.fire('pointerdown', pointerAt(5, 5));
+    await flushMicrotasks();
+    // The press stashes the sample; settling waits for the gesture to end so a
+    // structural commit in the caller's continuation is not gesture-refused.
+    expect(settled).toBeUndefined();
+
+    overlay.fire('pointerup', pointerAt(5, 5, { buttons: 0 }));
+    await flushMicrotasks();
+    expect(settled).toBe('#000000');
+    engine.lifecycle.dispose();
+  });
+
+  it('keeps a cancelled gesture’s claim pending and settles it from the retry gesture', async () => {
+    const raf = createControllableRaf();
+    vi.stubGlobal('requestAnimationFrame', raf.requestFrame);
+    vi.stubGlobal('cancelAnimationFrame', raf.cancelFrame);
+    const layer = {
+      ...rasterLayer('a'),
+      source: { bitmap: { height: 20, imageName: 'paint-pixels', width: 20 }, type: 'paint' as const },
+    };
+    const document = { ...makeDoc(), stacks: stacksFrom([layer]), selectedLayerId: layer.id };
+    const { projectId, store } = createReducerBackedStore(document);
+    const engine = createCanvasEngine({
+      backend: createTestStubRasterBackend(),
+      bitmapStore: createSpyBitmapStore(),
+      imageResolver: () => Promise.resolve(new Blob()),
+      projectId,
+      store,
+    });
+    const overlay = createInputCanvas();
+    const screen = createInputCanvas();
+    engine.surface.attach(screen.element, overlay.element);
+    raf.flush();
+    await flushMicrotasks();
+    raf.flush();
+
+    let settled: string | null | undefined;
+    void engine.tools.requestColorSample().then((hex) => {
+      settled = hex;
+    });
+    // A press stashes a color; the cancel discards that stash (so a dead
+    // gesture's color can never ride a later release — see the tool tests)
+    // without settling the claim, leaving the eyedropper armed for a retry.
+    overlay.fire('pointerdown', pointerAt(5, 5));
+    overlay.fire('pointercancel', pointerAt(5, 5, { buttons: 0 }));
+    await flushMicrotasks();
+    expect(settled).toBeUndefined();
+
+    overlay.fire('pointerdown', pointerAt(5, 5));
+    overlay.fire('pointerup', pointerAt(5, 5, { buttons: 0 }));
+    await flushMicrotasks();
+    expect(settled).toBe('#000000');
     engine.lifecycle.dispose();
   });
 
@@ -761,10 +867,10 @@ describe('createCanvasEngine', () => {
       transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 },
       type: 'raster',
     };
-    const document: CanvasDocumentContractV2 = {
+    const document: CanvasDocumentContractV3 = {
       ...makeDoc(),
       height: imageSize,
-      layers: [largeLayer],
+      stacks: stacksFrom([largeLayer]),
       width: imageSize,
     };
     const { requests, resolver } = createAbortableImageResolver();
@@ -836,7 +942,7 @@ describe('createCanvasEngine', () => {
 
   it('captures valid pixels while identifying a genuinely empty paint layer for callers to skip', async () => {
     const blank = { ...rasterLayer('blank'), source: { bitmap: null, type: 'paint' } as const };
-    const { store } = createFakeStore({ ...makeDoc(), layers: [rasterLayer('valid'), blank] });
+    const { store } = createFakeStore({ ...makeDoc(), stacks: stacksFrom([rasterLayer('valid'), blank]) });
     const engine = createCanvasEngine({
       backend: createTestStubRasterBackend(),
       imageResolver: () => Promise.resolve(new Blob(['valid'])),
@@ -859,7 +965,7 @@ describe('createCanvasEngine', () => {
 
   it('returns a successful empty raster snapshot for a blank-only document', async () => {
     const blank = { ...rasterLayer('blank'), source: { bitmap: null, type: 'paint' } as const };
-    const { store } = createFakeStore({ ...makeDoc(), layers: [blank] });
+    const { store } = createFakeStore({ ...makeDoc(), stacks: stacksFrom([blank]) });
     const engine = createCanvasEngine({
       backend: createTestStubRasterBackend(),
       imageResolver: () => Promise.resolve(new Blob()),
@@ -1160,7 +1266,7 @@ describe('createCanvasEngine', () => {
 
   it('exportLayerPixels refuses hidden layers unless includeDisabled is set', async () => {
     const hidden = { ...rasterLayer('hidden'), isEnabled: false };
-    const { store } = createFakeStore({ ...makeDoc(), layers: [hidden] });
+    const { store } = createFakeStore({ ...makeDoc(), stacks: stacksFrom([hidden]) });
     const engine = createCanvasEngine({
       backend: createTestStubRasterBackend(),
       imageResolver: () => Promise.resolve(new Blob()),
@@ -1176,7 +1282,9 @@ describe('createCanvasEngine', () => {
   it('exportLayerPixels can bake raster adjustments in layer-local space without baking presentation props', async () => {
     const layer: CanvasRasterLayerContractV2 = {
       ...(rasterLayer('a') as CanvasRasterLayerContractV2),
-      adjustments: { brightness: 0.25, contrast: 0, saturation: 0 },
+      adjustments: [
+        { brightness: 0.25, contrast: 0, id: 'adj-bc', isEnabled: true, type: 'brightness-contrast' as const },
+      ],
       blendMode: 'multiply',
       opacity: 0.4,
       source: {
@@ -1186,7 +1294,7 @@ describe('createCanvasEngine', () => {
       },
       transform: { rotation: 0, scaleX: 2, scaleY: 3, x: 5, y: 6 },
     };
-    const { store } = createFakeStore({ ...makeDoc(), layers: [layer] });
+    const { store } = createFakeStore({ ...makeDoc(), stacks: stacksFrom([layer]) });
     const engine = createCanvasEngine({
       backend: createTestStubRasterBackend(),
       imageResolver: () => Promise.resolve(new Blob()),
@@ -1259,12 +1367,12 @@ describe('createCanvasEngine', () => {
     const backend = createRecordingRasterBackend();
     backend.createImageBitmap = vi.fn((blob) => Promise.resolve(blob === blobA ? bitmapA : bitmapB));
     const imageResolver = vi.fn((imageName: string) => (imageName === 'A' ? first.promise : second.promise));
-    const document = { ...makeDoc(), layers: [rasterLayer('L', { imageName: 'A' })] };
+    const document = { ...makeDoc(), stacks: stacksFrom([rasterLayer('L', { imageName: 'A' })]) };
     const { setDocument, store } = createReactiveStore(document);
     const engine = createCanvasEngine({ backend, imageResolver, projectId: 'p1', store });
 
     const exportA = engine.exports.exportLayerPixels('L');
-    setDocument({ ...document, layers: [rasterLayer('L', { imageName: 'B' })] });
+    setDocument({ ...document, stacks: stacksFrom([rasterLayer('L', { imageName: 'B' })]) });
     const exportB = engine.exports.exportLayerPixels('L');
 
     second.resolve(blobB);
@@ -1291,12 +1399,12 @@ describe('createCanvasEngine', () => {
       Promise.resolve(blob === blobA ? recordingBitmap('document-A') : recordingBitmap('document-B'))
     );
     const imageResolver = vi.fn((imageName: string) => (imageName === 'A' ? first.promise : second.promise));
-    const document = { ...makeDoc(), layers: [rasterLayer('L', { imageName: 'A' })] };
+    const document = { ...makeDoc(), stacks: stacksFrom([rasterLayer('L', { imageName: 'A' })]) };
     const { setDocument, store } = createReactiveStore(document);
     const engine = createCanvasEngine({ backend, imageResolver, projectId: 'p1', store });
 
     const oldExport = engine.exports.exportLayerPixels('L');
-    setDocument({ ...document, layers: [rasterLayer('L', { imageName: 'B' })] }, 1);
+    setDocument({ ...document, stacks: stacksFrom([rasterLayer('L', { imageName: 'B' })]) }, 1);
     const newExport = engine.exports.exportLayerPixels('L');
 
     second.resolve(blobB);
@@ -1316,7 +1424,7 @@ describe('createCanvasEngine', () => {
   it('shares one rasterization between concurrent exports of the same version', async () => {
     const blob = new Blob(['shared']);
     const imageResolver = vi.fn(() => Promise.resolve(blob));
-    const { store } = createFakeStore({ ...makeDoc(), layers: [rasterLayer('L')] });
+    const { store } = createFakeStore({ ...makeDoc(), stacks: stacksFrom([rasterLayer('L')]) });
     const engine = createCanvasEngine({
       backend: createRecordingRasterBackend(),
       imageResolver,
@@ -1335,7 +1443,7 @@ describe('createCanvasEngine', () => {
   it('does not return a default export when the layer becomes disabled during rasterization', async () => {
     const pending = createDeferred<Blob>();
     const layer = rasterLayer('L');
-    const document = { ...makeDoc(), layers: [layer] };
+    const document = { ...makeDoc(), stacks: stacksFrom([layer]) };
     const { setDocument, store } = createReactiveStore(document);
     const engine = createCanvasEngine({
       backend: createTestStubRasterBackend(),
@@ -1345,7 +1453,7 @@ describe('createCanvasEngine', () => {
     });
 
     const exported = engine.exports.exportLayerPixels('L');
-    setDocument({ ...document, layers: [{ ...layer, isEnabled: false }] });
+    setDocument({ ...document, stacks: stacksFrom([{ ...layer, isEnabled: false }]) });
     pending.resolve(new Blob());
 
     expect(await exported).toEqual({ status: 'disabled' });
@@ -1357,7 +1465,7 @@ describe('createCanvasEngine', () => {
     vi.stubGlobal('requestAnimationFrame', raf.requestFrame);
     vi.stubGlobal('cancelAnimationFrame', raf.cancelFrame);
     const empty = { ...rasterLayer('empty'), source: { bitmap: null, type: 'paint' } as const };
-    const { store } = createReactiveStore({ ...makeDoc(), layers: [empty] });
+    const { store } = createReactiveStore({ ...makeDoc(), stacks: stacksFrom([empty]) });
     const base = createTestStubRasterBackend();
     const surfaces: StubRasterSurface[] = [];
     const engine = createCanvasEngine({
@@ -1405,7 +1513,7 @@ describe('createCanvasEngine', () => {
       width: 10,
     };
     const layer = { ...rasterLayer('shape'), source: shape };
-    const { store } = createFakeStore({ ...makeDoc(), layers: [layer] });
+    const { store } = createFakeStore({ ...makeDoc(), stacks: stacksFrom([layer]) });
     const base = createTestStubRasterBackend();
     let shouldThrow = true;
     const engine = createCanvasEngine({
@@ -1446,7 +1554,7 @@ describe('createCanvasEngine', () => {
       ...rasterLayer('a'),
       transform: { rotation: 0, scaleX: 2, scaleY: 3, x: 5, y: 6 },
     };
-    const { store } = createFakeStore({ ...makeDoc(), layers: [layer] });
+    const { store } = createFakeStore({ ...makeDoc(), stacks: stacksFrom([layer]) });
     const engine = createCanvasEngine({
       backend: createTestStubRasterBackend(),
       imageResolver: () => Promise.resolve(new Blob()),
@@ -1475,9 +1583,11 @@ describe('createCanvasEngine', () => {
   it('exportBakedLayerPixels bakes raster adjustments into the exported surface only', async () => {
     const layer = {
       ...rasterLayer('a'),
-      adjustments: { brightness: 0.25, contrast: 0, saturation: 0 },
+      adjustments: [
+        { brightness: 0.25, contrast: 0, id: 'adj-bc', isEnabled: true, type: 'brightness-contrast' as const },
+      ],
     };
-    const { store } = createFakeStore({ ...makeDoc(), layers: [layer] });
+    const { store } = createFakeStore({ ...makeDoc(), stacks: stacksFrom([layer]) });
     const engine = createCanvasEngine({
       backend: createTestStubRasterBackend(),
       imageResolver: () => Promise.resolve(new Blob()),
@@ -1506,9 +1616,11 @@ describe('createCanvasEngine', () => {
   it('exportBakedLayerPixels applies adjustments exactly once when explicitly requested', async () => {
     const layer = {
       ...rasterLayer('a'),
-      adjustments: { brightness: 0.25, contrast: 0, saturation: 0 },
+      adjustments: [
+        { brightness: 0.25, contrast: 0, id: 'adj-bc', isEnabled: true, type: 'brightness-contrast' as const },
+      ],
     };
-    const { store } = createFakeStore({ ...makeDoc(), layers: [layer] });
+    const { store } = createFakeStore({ ...makeDoc(), stacks: stacksFrom([layer]) });
     const base = createTestStubRasterBackend();
     const surfaces: StubRasterSurface[] = [];
     const engine = createCanvasEngine({
@@ -1561,7 +1673,7 @@ describe('createCanvasEngine', () => {
       throw new Error('expected successful exports');
     }
     for (const result of [local, baked, blob]) {
-      expect(result.guard).toMatchObject({ layer: doc.layers[0], layerId: 'a', projectId: 'p1' });
+      expect(result.guard).toMatchObject({ layer: getDocumentLeaves(doc)[0], layerId: 'a', projectId: 'p1' });
       expect(engine.exports.isLayerExportGuardCurrent(result.guard)).toBe(true);
     }
     engine.lifecycle.dispose();
@@ -1601,7 +1713,7 @@ describe('createCanvasEngine', () => {
       identity: { kind: 'filter', layerId: 'a', projectId: 'p1' },
     });
 
-    setDocument({ ...document, layers: [{ ...document.layers[0]!, opacity: 0.5 }] });
+    setDocument({ ...document, stacks: stacksFrom([{ ...getDocumentLeaves(document)[0]!, opacity: 0.5 }]) });
 
     expect(engine.exports.isLayerExportGuardCurrent(exported.guard)).toBe(false);
     expect(cleanupPreview).toHaveBeenCalledOnce();
@@ -1613,7 +1725,7 @@ describe('createCanvasEngine', () => {
     for (const nextLayers of [
       [
         {
-          ...makeDoc().layers[0]!,
+          ...getDocumentLeaves(makeDoc())[0]!,
           source: { image: { height: 10, imageName: 'replacement', width: 10 }, type: 'image' as const },
         },
       ],
@@ -1638,7 +1750,7 @@ describe('createCanvasEngine', () => {
         identity: { kind: 'filter', layerId: 'a', projectId: 'p1' },
       });
 
-      setDocument({ ...document, layers: nextLayers });
+      setDocument({ ...document, stacks: stacksFrom(nextLayers) });
 
       expect(cleanupPreview).toHaveBeenCalledOnce();
       expect(getCanvasOperations(engine).controller.getSnapshot()).toEqual({ status: 'idle' });
@@ -1667,7 +1779,7 @@ describe('createCanvasEngine', () => {
       identity: { kind: 'filter', layerId: 'a', projectId: 'p1' },
     });
 
-    setDocument({ ...document, layers: document.layers }, 1);
+    setDocument({ ...document, stacks: stacksFrom(getDocumentLeaves(document)) }, 1);
 
     expect(engine.exports.isLayerExportGuardCurrent(exported.guard)).toBe(false);
     expect(cleanupPreview).toHaveBeenCalledOnce();
@@ -1745,7 +1857,7 @@ describe('createCanvasEngine', () => {
 
     const pending = engine.exports.exportBakedLayerBlob('a');
     await vi.waitFor(() => expect(encodeSurface).toHaveBeenCalledOnce());
-    setDocument({ ...document, layers: [{ ...document.layers[0]!, opacity: 0.5 }] });
+    setDocument({ ...document, stacks: stacksFrom([{ ...getDocumentLeaves(document)[0]!, opacity: 0.5 }]) });
     encoded.resolve(new Blob(['stale'], { type: 'image/png' }));
 
     expect(await pending).toEqual({ status: 'not-ready' });
@@ -1766,18 +1878,18 @@ describe('createCanvasEngine', () => {
       }
     );
     const document = paintDoc();
-    const layer = document.layers[0];
+    const layer = getDocumentLeaves(document)[0];
     if (!layer || layer.type !== 'raster') {
       throw new Error('expected paint layer');
     }
-    const persisted: CanvasDocumentContractV2 = {
+    const persisted: CanvasDocumentContractV3 = {
       ...document,
-      layers: [
+      stacks: stacksFrom([
         {
           ...layer,
-          source: { bitmap: { height: 20, imageName: 'paint-pixels', width: 20 }, type: 'paint' },
+          source: { bitmap: { height: 20, imageName: 'paint-pixels', width: 20 }, type: 'paint' as const },
         },
-      ],
+      ]),
     };
     const { projectId, store } = createReducerBackedStore(persisted);
     const engine = createCanvasEngine({
@@ -1811,10 +1923,13 @@ describe('createCanvasEngine', () => {
   it('cropLayerToBbox crops only the bbox overlap and restores exact contracts/cache snapshots on undo/redo', async () => {
     const layer = {
       ...rasterLayer('a'),
-      adjustments: { brightness: 0.2, contrast: -0.1, saturation: 0.3 },
+      adjustments: [
+        { brightness: 0.2, contrast: -0.1, id: 'adj-bc', isEnabled: true, type: 'brightness-contrast' as const },
+        { id: 'adj-hsl', isEnabled: true, saturation: 0.3, type: 'hsl' as const },
+      ],
       transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 5, y: 5 },
     };
-    const document = { ...makeDoc(), bbox: { height: 8, width: 10, x: 8, y: 2 }, layers: [layer] };
+    const document = { ...makeDoc(), bbox: { height: 8, width: 10, x: 8, y: 2 }, stacks: stacksFrom([layer]) };
     const { projectId, store } = createReducerBackedStore(document);
     const backend = createRecordingRasterBackend();
     const bitmapStore = createSpyBitmapStore();
@@ -1825,7 +1940,7 @@ describe('createCanvasEngine', () => {
       projectId,
       store,
     });
-    const beforeContract = structuredClone(engine.document.getDocument()!.layers[0]!);
+    const beforeContract = structuredClone(getDocumentLeaves(engine.document.getDocument()!)[0]!);
     const beforeExport = await engine.exports.exportLayerPixels('a');
     expect(beforeExport.status).toBe('ok');
     if (beforeExport.status !== 'ok') {
@@ -1837,7 +1952,7 @@ describe('createCanvasEngine', () => {
 
     expect(await engine.layers.cropLayerToBbox('a')).toEqual({ status: 'cropped' });
 
-    const afterContract = engine.document.getDocument()!.layers[0]!;
+    const afterContract = getDocumentLeaves(engine.document.getDocument()!)[0]!;
     expect(afterContract).toEqual({
       blendMode: 'normal',
       id: 'a',
@@ -1861,7 +1976,7 @@ describe('createCanvasEngine', () => {
     const forwardSources = backend.drawSourcesFor(forwardExport.surface as StubRasterSurface);
 
     engine.history.undo();
-    expect(engine.document.getDocument()!.layers[0]).toEqual(beforeContract);
+    expect(getDocumentLeaves(engine.document.getDocument()!)[0]).toEqual(beforeContract);
     expect(bitmapStore.markLayerDirty).toHaveBeenCalledTimes(2);
     expect(thumbnailListener).toHaveBeenCalledTimes(2);
     const undoExport = await engine.exports.exportLayerPixels('a');
@@ -1877,7 +1992,7 @@ describe('createCanvasEngine', () => {
     );
 
     engine.history.redo();
-    expect(engine.document.getDocument()!.layers[0]).toEqual(afterContract);
+    expect(getDocumentLeaves(engine.document.getDocument()!)[0]).toEqual(afterContract);
     expect(bitmapStore.markLayerDirty).toHaveBeenCalledTimes(3);
     expect(thumbnailListener).toHaveBeenCalledTimes(3);
     const redoExport = await engine.exports.exportLayerPixels('a');
@@ -1910,7 +2025,7 @@ describe('createCanvasEngine', () => {
       type: 'control',
       withTransparencyEffect: true,
     };
-    const document = { ...makeDoc(), bbox: { height: 7, width: 6, x: 2, y: 3 }, layers: [control] };
+    const document = { ...makeDoc(), bbox: { height: 7, width: 6, x: 2, y: 3 }, stacks: stacksFrom([control]) };
     const { projectId, store } = createReducerBackedStore(document);
     const engine = createCanvasEngine({
       backend: createTestStubRasterBackend(),
@@ -1921,7 +2036,7 @@ describe('createCanvasEngine', () => {
     });
 
     expect(await engine.layers.cropLayerToBbox('control')).toEqual({ status: 'cropped' });
-    const cropped = engine.document.getDocument()!.layers[0];
+    const cropped = getDocumentLeaves(engine.document.getDocument()!)[0];
     expect(cropped).toMatchObject({
       adapter: control.adapter,
       source: { bitmap: null, offset: { x: 2, y: 3 }, type: 'paint' },
@@ -1935,15 +2050,15 @@ describe('createCanvasEngine', () => {
   it('cropLayerToBbox preserves mask fill/noise/denoise configuration while replacing pixels and offset', async () => {
     const layer: CanvasInpaintMaskLayerContract = {
       ...maskLayer('mask'),
-      denoiseLimit: 0.45,
+      denoise: { isEnabled: true, limit: 0.45 },
       mask: {
         bitmap: { height: 10, imageName: 'mask-img', width: 10 },
         fill: { color: '#123456', style: 'crosshatch' },
         offset: { x: 0, y: 0 },
       },
-      noiseLevel: 0.25,
+      noise: { isEnabled: true, level: 0.25 },
     };
-    const document = { ...makeDoc(), bbox: { height: 7, width: 6, x: 2, y: 3 }, layers: [layer] };
+    const document = { ...makeDoc(), bbox: { height: 7, width: 6, x: 2, y: 3 }, stacks: stacksFrom([layer]) };
     const { projectId, store } = createReducerBackedStore(document);
     const engine = createCanvasEngine({
       backend: createTestStubRasterBackend(),
@@ -1954,10 +2069,10 @@ describe('createCanvasEngine', () => {
     });
 
     expect(await engine.layers.cropLayerToBbox('mask')).toEqual({ status: 'cropped' });
-    expect(engine.document.getDocument()!.layers[0]).toMatchObject({
-      denoiseLimit: 0.45,
+    expect(getDocumentLeaves(engine.document.getDocument()!)[0]).toMatchObject({
+      denoise: { isEnabled: true, limit: 0.45 },
       mask: { bitmap: null, fill: layer.mask.fill, offset: { x: 2, y: 3 } },
-      noiseLevel: 0.25,
+      noise: { isEnabled: true, level: 0.25 },
       transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 },
       type: 'inpaint_mask',
     });
@@ -1989,7 +2104,7 @@ describe('createCanvasEngine', () => {
       transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 },
       type: 'regional_guidance',
     };
-    const document = { ...makeDoc(), bbox: { height: 7, width: 6, x: 2, y: 3 }, layers: [layer] };
+    const document = { ...makeDoc(), bbox: { height: 7, width: 6, x: 2, y: 3 }, stacks: stacksFrom([layer]) };
     const { projectId, store } = createReducerBackedStore(document);
     const engine = createCanvasEngine({
       backend: createTestStubRasterBackend(),
@@ -2000,7 +2115,7 @@ describe('createCanvasEngine', () => {
     });
 
     expect(await engine.layers.cropLayerToBbox('region')).toEqual({ status: 'cropped' });
-    expect(engine.document.getDocument()!.layers[0]).toMatchObject({
+    expect(getDocumentLeaves(engine.document.getDocument()!)[0]).toMatchObject({
       autoNegative: false,
       mask: { bitmap: null, fill: layer.mask.fill, offset: { x: 2, y: 3 } },
       negativePrompt: 'negative',
@@ -2051,7 +2166,7 @@ describe('createCanvasEngine', () => {
       { ...rasterLayer('polygon'), source: polygon },
       rasterLayer('pending'),
     ];
-    const document = { ...makeDoc(), layers };
+    const document = { ...makeDoc(), stacks: stacksFrom(layers) };
     const { projectId, store } = createReducerBackedStore(document);
     const engine = createCanvasEngine({
       backend: createTestStubRasterBackend(),
@@ -2069,7 +2184,7 @@ describe('createCanvasEngine', () => {
 
   it('cropLayerToBbox returns not-ready without mutation when the source changes during rasterization', async () => {
     const pending = createDeferred<Blob>();
-    const document = { ...makeDoc(), layers: [rasterLayer('a', { imageName: 'A' })] };
+    const document = { ...makeDoc(), stacks: stacksFrom([rasterLayer('a', { imageName: 'A' })]) };
     const { setDocument, store } = createReactiveStore(document);
     const bitmapStore = createSpyBitmapStore();
     const engine = createCanvasEngine({
@@ -2081,7 +2196,7 @@ describe('createCanvasEngine', () => {
     });
 
     const crop = engine.layers.cropLayerToBbox('a');
-    setDocument({ ...document, layers: [rasterLayer('a', { imageName: 'B' })] });
+    setDocument({ ...document, stacks: stacksFrom([rasterLayer('a', { imageName: 'B' })]) });
     pending.resolve(new Blob());
 
     expect(await crop).toEqual({ status: 'not-ready' });
@@ -2092,7 +2207,7 @@ describe('createCanvasEngine', () => {
 
   it('cropLayerToBbox aborts when an operation starts during its deferred export', async () => {
     const pending = createDeferred<Blob>();
-    const document = { ...makeDoc(), layers: [rasterLayer('operation'), rasterLayer('a')] };
+    const document = { ...makeDoc(), stacks: stacksFrom([rasterLayer('operation'), rasterLayer('a')]) };
     const { projectId, store } = createReducerBackedStore(document);
     const bitmapStore = createSpyBitmapStore();
     const resolver = vi.fn((imageName: string) => (imageName === 'a' ? pending.promise : Promise.resolve(new Blob())));
@@ -2150,7 +2265,11 @@ describe('createCanvasEngine', () => {
       ...rasterLayer('paint'),
       source: { bitmap: { height: 10, imageName: 'paint', width: 10 }, type: 'paint' as const },
     };
-    const busyHarness = createReducerBackedStore({ ...makeDoc(), layers: [paint], selectedLayerId: 'paint' });
+    const busyHarness = createReducerBackedStore({
+      ...makeDoc(),
+      stacks: stacksFrom([paint]),
+      selectedLayerId: 'paint',
+    });
     const busyEngine = createCanvasEngine({
       backend: createTestStubRasterBackend(),
       bitmapStore: createSpyBitmapStore(),
@@ -2219,7 +2338,7 @@ describe('createCanvasEngine', () => {
   });
 
   it('copyLayerToRaster adds a baked paint copy directly above the source layer', async () => {
-    const doc = { ...makeDoc(), layers: [rasterLayer('top'), rasterLayer('a')] };
+    const doc = { ...makeDoc(), stacks: stacksFrom([rasterLayer('top'), rasterLayer('a')]) };
     const { projectId, store } = createReducerBackedStore(doc);
     const dispatch = store.dispatch as Mock;
     const base = createTestStubRasterBackend();
@@ -2245,10 +2364,10 @@ describe('createCanvasEngine', () => {
       .map((call) => call[0] as EngineTestAction)
       .find((action) => action.type === 'applyCanvasLayerStackMutation');
     expect(mutation).toBeDefined();
-    const added = mutation?.type === 'applyCanvasLayerStackMutation' ? mutation.add : undefined;
-    const addedLayer = added?.layers[0];
+    const added = mutation?.type === 'applyCanvasLayerStackMutation' ? mutation.add?.[0] : undefined;
+    const addedLayer = added?.nodes[0];
     if (added && addedLayer?.type === 'raster') {
-      expect(added.index).toBe(1);
+      expect(added.anchor).toMatchObject({ beforeId: 'a', projectId, stack: 'raster' });
       expect(addedLayer.id).toBe(newId);
       expect(addedLayer.name).toBe('a copy');
       expect(addedLayer.source).toEqual({ bitmap: null, offset: { x: 0, y: 0 }, type: 'paint' });
@@ -2267,7 +2386,7 @@ describe('createCanvasEngine', () => {
 
   it('copyLayerToRaster returns null for empty layers', async () => {
     const empty = { ...rasterLayer('empty'), source: { bitmap: null, type: 'paint' } as const };
-    const { store } = createFakeStore({ ...makeDoc(), layers: [empty] });
+    const { store } = createFakeStore({ ...makeDoc(), stacks: stacksFrom([empty]) });
     const dispatch = store.dispatch as Mock;
     const engine = createCanvasEngine({
       backend: createTestStubRasterBackend(),
@@ -2289,7 +2408,7 @@ describe('createCanvasEngine', () => {
         fill: { color: '#e07575', style: 'diagonal' },
       },
     };
-    const { projectId, store } = createReducerBackedStore({ ...makeDoc(), layers: [mask] });
+    const { projectId, store } = createReducerBackedStore({ ...makeDoc(), stacks: stacksFrom([mask]) });
     const engine = createCanvasEngine({
       backend: createTestStubRasterBackend(),
       imageResolver: () => Promise.resolve(new Blob()),
@@ -2298,12 +2417,12 @@ describe('createCanvasEngine', () => {
     });
 
     const newId = await engine.layers.copyLayerToRaster('mask');
-    expect(engine.document.getDocument()!.layers.some((layer) => layer.id === newId)).toBe(true);
+    expect(getDocumentLeaves(engine.document.getDocument()!).some((layer) => layer.id === newId)).toBe(true);
 
     engine.history.undo();
-    expect(engine.document.getDocument()!.layers.some((layer) => layer.id === newId)).toBe(false);
+    expect(getDocumentLeaves(engine.document.getDocument()!).some((layer) => layer.id === newId)).toBe(false);
     engine.history.redo();
-    expect(engine.document.getDocument()!.layers.some((layer) => layer.id === newId)).toBe(true);
+    expect(getDocumentLeaves(engine.document.getDocument()!).some((layer) => layer.id === newId)).toBe(true);
     engine.lifecycle.dispose();
   });
 
@@ -2330,22 +2449,22 @@ describe('createCanvasEngine', () => {
     const newId = await engine.layers.copyLayerToRaster('a');
     expect(newId).not.toBeNull();
     engine.history.undo();
-    expect(engine.document.getDocument()!.layers.filter((layer) => layer.id === newId)).toHaveLength(0);
+    expect(getDocumentLeaves(engine.document.getDocument()!).filter((layer) => layer.id === newId)).toHaveLength(0);
 
     failNextAllocation = true;
     expect(() => engine.history.redo()).toThrow('copy replay allocation failed');
 
-    expect(engine.document.getDocument()!.layers.filter((layer) => layer.id === newId)).toHaveLength(0);
+    expect(getDocumentLeaves(engine.document.getDocument()!).filter((layer) => layer.id === newId)).toHaveLength(0);
     expect(engine.stores.canUndo.get()).toBe(false);
     expect(engine.stores.canRedo.get()).toBe(true);
 
     engine.history.redo();
-    expect(engine.document.getDocument()!.layers.filter((layer) => layer.id === newId)).toHaveLength(1);
+    expect(getDocumentLeaves(engine.document.getDocument()!).filter((layer) => layer.id === newId)).toHaveLength(1);
     expect(engine.stores.canUndo.get()).toBe(true);
     expect(engine.stores.canRedo.get()).toBe(false);
 
     engine.history.undo();
-    expect(engine.document.getDocument()!.layers.filter((layer) => layer.id === newId)).toHaveLength(0);
+    expect(getDocumentLeaves(engine.document.getDocument()!).filter((layer) => layer.id === newId)).toHaveLength(0);
     engine.lifecycle.dispose();
   });
 
@@ -2436,13 +2555,13 @@ describe('document mirror wiring: layer reorder', () => {
 
     const a = rasterLayer('a', { opacity: 0.25 });
     const b = rasterLayer('b', { opacity: 0.75 });
-    const doc: CanvasDocumentContractV2 = {
+    const doc: CanvasDocumentContractV3 = {
       background: 'transparent',
       bbox: { height: 100, width: 100, x: 0, y: 0 },
       height: 100,
-      layers: [a, b],
+      stacks: stacksFrom([a, b]),
       selectedLayerId: null,
-      version: 2,
+      version: 3,
       width: 100,
     };
     const { setDocument, store } = createReactiveStore(doc);
@@ -2469,7 +2588,7 @@ describe('document mirror wiring: layer reorder', () => {
     screen.surface.callLog.length = 0;
 
     // Pure reorder: new array reference, same layer object references, swapped order.
-    setDocument({ ...doc, layers: [b, a] });
+    setDocument({ ...doc, stacks: stacksFrom([b, a]) });
     raf.flush();
 
     // No layer content changed, so nothing should be re-rasterized.
@@ -2494,13 +2613,13 @@ describe('layer removal: adjusted-surface cache cleanup', () => {
 
     adjustedSurfaceCacheDeletes.length = 0;
 
-    const doc: CanvasDocumentContractV2 = {
+    const doc: CanvasDocumentContractV3 = {
       background: 'transparent',
       bbox: { height: 100, width: 100, x: 0, y: 0 },
       height: 100,
-      layers: [rasterLayer('a'), rasterLayer('b')],
+      stacks: stacksFrom([rasterLayer('a'), rasterLayer('b')]),
       selectedLayerId: null,
-      version: 2,
+      version: 3,
       width: 100,
     };
     const { setDocument, store } = createReactiveStore(doc);
@@ -2519,7 +2638,7 @@ describe('layer removal: adjusted-surface cache cleanup', () => {
     expect(adjustedSurfaceCacheDeletes).not.toContain('a');
 
     // Remove layer 'a' via an ordinary layer-array edit (onLayersChanged → dropLayer).
-    setDocument({ ...doc, layers: [rasterLayer('b')] });
+    setDocument({ ...doc, stacks: stacksFrom([rasterLayer('b')]) });
     raf.flush();
 
     // The removed layer's adjusted-surface slot is dropped alongside its layer cache.
@@ -2679,7 +2798,7 @@ describe('ensureLayerCaches: edit-during-rasterize race', () => {
     expect(resolver).toHaveBeenNthCalledWith(1, 'a', expect.any(AbortSignal));
 
     // An edit lands mid-flight: same layer id, new object reference, new source.
-    setDocument({ ...doc, layers: [rasterLayer('a', { imageName: 'a-v2' })] });
+    setDocument({ ...doc, stacks: stacksFrom([rasterLayer('a', { imageName: 'a-v2' })]) });
 
     // A frame runs while the first rasterize is still in flight. The source no
     // longer matches that job, so a fresh isolated job starts immediately.
@@ -2719,11 +2838,11 @@ describe('ensureLayerCaches: edit-during-rasterize race', () => {
 // cache surface AND re-mark the layer dirty for persistence, and the canUndo /
 // canRedo stores track the stacks.
 
-const paintDoc = (): CanvasDocumentContractV2 => ({
+const paintDoc = (): CanvasDocumentContractV3 => ({
   background: 'transparent',
   bbox: { height: 100, width: 100, x: 0, y: 0 },
   height: 100,
-  layers: [
+  stacks: stacksFrom([
     {
       blendMode: 'normal',
       id: 'paint1',
@@ -2735,9 +2854,9 @@ const paintDoc = (): CanvasDocumentContractV2 => ({
       transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 },
       type: 'raster',
     },
-  ],
+  ]),
   selectedLayerId: 'paint1',
-  version: 2,
+  version: 3,
   width: 100,
 });
 
@@ -2771,13 +2890,13 @@ const createPixelEditHarness = (
     }
   );
 
-  const document: CanvasDocumentContractV2 = {
+  const document: CanvasDocumentContractV3 = {
     background: 'transparent',
     bbox: { height: 100, width: 100, x: 0, y: 0 },
     height: 100,
-    layers: [layer],
+    stacks: stacksFrom([layer]),
     selectedLayerId: layer.id,
-    version: 2,
+    version: 3,
     width: 100,
   };
   const { projectId, store } = createReducerBackedStore(document);
@@ -2876,7 +2995,10 @@ const createRasterImageEraserHarness = (
   options: ControlPaintHarnessOptions = {}
 ) => {
   const layer: CanvasRasterLayerContractV2 = {
-    adjustments: { brightness: 0.1, contrast: 0.2, saturation: -0.1 },
+    adjustments: [
+      { brightness: 0.1, contrast: 0.2, id: 'adj-bc', isEnabled: true, type: 'brightness-contrast' as const },
+      { id: 'adj-hsl', isEnabled: true, saturation: -0.1, type: 'hsl' as const },
+    ],
     blendMode: 'screen',
     id: 'image',
     isEnabled: true,
@@ -2937,10 +3059,9 @@ const createRealControlPersistenceHarness = async (
           dispatch: createTestMutationPort(store, projectId).dispatch,
           encodeSurface,
           getLayerSource: (layerId) => {
-            const layer = store
-              .getState()
-              .projects.find((project) => project.id === projectId)
-              ?.canvas.document.layers.find((candidate) => candidate.id === layerId);
+            const layer = getDocumentLeaves(
+              store.getState().projects.find((project) => project.id === projectId)?.canvas.document
+            ).find((candidate) => candidate.id === layerId);
             return layer?.type === 'control' ? layer.source : null;
           },
           getLayerSurface: () => placed,
@@ -3038,15 +3159,15 @@ describe('engine-owned pixel editing', () => {
   it('materializes an image layer plus eraser stroke as one reversible edit', async () => {
     const h = createRasterImageEraserHarness();
     await h.publishInitialCache();
-    const before = structuredClone(h.engine.document.getDocument()!.layers[0]);
+    const before = structuredClone(getDocumentLeaves(h.engine.document.getDocument()!)[0]);
 
     h.engine.tools.setTool('eraser');
     h.overlay.fire('pointerdown', pointerAt(20, 20));
     h.overlay.fire('pointermove', pointerAt(25, 25));
     h.overlay.fire('pointerup', pointerAt(25, 25, { buttons: 0 }));
 
-    const after = structuredClone(h.engine.document.getDocument()!.layers[0]);
-    expect(h.engine.document.getDocument()!.layers).toHaveLength(1);
+    const after = structuredClone(getDocumentLeaves(h.engine.document.getDocument()!)[0]);
+    expect(getDocumentLeaves(h.engine.document.getDocument()!)).toHaveLength(1);
     expect(after).toMatchObject({
       id: 'image',
       source: { type: 'paint' },
@@ -3061,11 +3182,11 @@ describe('engine-owned pixel editing', () => {
     expect(h.engine.stores.canUndo.get()).toBe(true);
 
     h.engine.history.undo();
-    expect(h.engine.document.getDocument()!.layers[0]).toEqual(before);
+    expect(getDocumentLeaves(h.engine.document.getDocument()!)[0]).toEqual(before);
     expect(h.engine.stores.canRedo.get()).toBe(true);
 
     h.engine.history.redo();
-    expect(h.engine.document.getDocument()!.layers[0]).toEqual(after);
+    expect(getDocumentLeaves(h.engine.document.getDocument()!)[0]).toEqual(after);
     h.engine.lifecycle.dispose();
   });
 
@@ -3081,7 +3202,10 @@ describe('engine-owned pixel editing', () => {
     h.overlay.fire('pointermove', pointerAt(25, 25));
 
     expect(() => h.overlay.fire('pointerup', pointerAt(25, 25, { buttons: 0 }))).not.toThrow();
-    expect(h.engine.document.getDocument()!.layers[0]).toMatchObject({ source: { type: 'paint' }, type: 'raster' });
+    expect(getDocumentLeaves(h.engine.document.getDocument()!)[0]).toMatchObject({
+      source: { type: 'paint' },
+      type: 'raster',
+    });
     expect(h.bitmapStore.markLayerDirty).toHaveBeenCalledWith('image');
     expect(h.bitmapStore.markLayerDirty.mock.invocationCallOrder[0]).toBeLessThan(
       h.bitmapStore.releaseSuspendedLayer.mock.invocationCallOrder[0]!
@@ -3155,7 +3279,7 @@ describe('engine-owned pixel editing', () => {
     h.overlay.fire('pointerup', pointerAt(20, 20, { buttons: 0 }));
 
     expect(h.engine.document.getDocument()).toEqual(before);
-    expect(h.engine.document.getDocument()!.layers).toHaveLength(1);
+    expect(getDocumentLeaves(h.engine.document.getDocument()!)).toHaveLength(1);
     expect(h.strokes).toHaveLength(0);
     expect(h.bitmapStore.suspendLayer).not.toHaveBeenCalled();
     expect(h.engine.stores.canUndo.get()).toBe(false);
@@ -3189,8 +3313,8 @@ describe('engine-owned pixel editing', () => {
     h.overlay.fire('pointermove', pointerAt(40, 40));
     h.overlay.fire('pointerup', pointerAt(40, 40, { buttons: 0 }));
 
-    expect(h.engine.document.getDocument()!.layers).toHaveLength(1);
-    expect(h.engine.document.getDocument()!.layers[0]).toMatchObject({ id: 'control', type: 'control' });
+    expect(getDocumentLeaves(h.engine.document.getDocument()!)).toHaveLength(1);
+    expect(getDocumentLeaves(h.engine.document.getDocument()!)[0]).toMatchObject({ id: 'control', type: 'control' });
     expect(h.strokes).toHaveLength(1);
     expect(h.strokes[0]!.layerId).toBe('control');
     expect(h.bitmapStore.markLayerDirty).toHaveBeenCalledWith('control');
@@ -3432,14 +3556,14 @@ describe('engine-owned pixel editing', () => {
       transform: { rotation: 0, scaleX: 2, scaleY: 3, x: 7, y: 11 },
     });
     await h.publishInitialCache();
-    const before = structuredClone(h.engine.document.getDocument()!.layers[0]);
+    const before = structuredClone(getDocumentLeaves(h.engine.document.getDocument()!)[0]);
 
     h.engine.tools.setTool('brush');
     h.overlay.fire('pointerdown', pointerAt(20, 20));
     h.overlay.fire('pointermove', pointerAt(25, 25));
     h.overlay.fire('pointerup', pointerAt(25, 25, { buttons: 0 }));
 
-    const after = structuredClone(h.engine.document.getDocument()!.layers[0]);
+    const after = structuredClone(getDocumentLeaves(h.engine.document.getDocument()!)[0]);
     expect(after).toMatchObject({
       adapter: before && 'adapter' in before ? before.adapter : undefined,
       filter: before && 'filter' in before ? before.filter : undefined,
@@ -3457,12 +3581,12 @@ describe('engine-owned pixel editing', () => {
     );
 
     h.engine.history.undo();
-    expect(h.engine.document.getDocument()!.layers[0]).toEqual(before);
+    expect(getDocumentLeaves(h.engine.document.getDocument()!)[0]).toEqual(before);
     expect(h.engine.stores.canUndo.get()).toBe(false);
     expect(h.engine.stores.canRedo.get()).toBe(true);
 
     h.engine.history.redo();
-    expect(h.engine.document.getDocument()!.layers[0]).toEqual(after);
+    expect(getDocumentLeaves(h.engine.document.getDocument()!)[0]).toEqual(after);
     h.engine.lifecycle.dispose();
   });
 
@@ -3572,14 +3696,14 @@ describe('engine-owned pixel editing', () => {
     h.engine.tools.setTool('brush');
     h.overlay.fire('pointerdown', pointerAt(35, 45));
     h.overlay.fire('pointerup', pointerAt(35, 45, { buttons: 0 }));
-    expect(h.engine.document.getDocument()!.layers[0]).toMatchObject({
+    expect(getDocumentLeaves(h.engine.document.getDocument()!)[0]).toMatchObject({
       id: 'control',
       source: { type: 'paint' },
       transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 },
       type: 'control',
     });
     h.engine.history.undo();
-    expect(h.engine.document.getDocument()!.layers[0]).toMatchObject({
+    expect(getDocumentLeaves(h.engine.document.getDocument()!)[0]).toMatchObject({
       transform: { rotation: 0, scaleX: 2, scaleY: 2, x: 30, y: 40 },
     });
     h.engine.lifecycle.dispose();
@@ -3597,7 +3721,7 @@ describe('engine-owned pixel editing', () => {
     h.overlay.fire('pointerup', pointerAt(5, 5, { buttons: 0 }));
 
     expect(h.engine.document.getDocument()).toEqual(before);
-    expect(h.engine.document.getDocument()!.layers).toHaveLength(1);
+    expect(getDocumentLeaves(h.engine.document.getDocument()!)).toHaveLength(1);
     expect(h.strokes).toHaveLength(0);
     expect(h.bitmapStore.markLayerDirty).not.toHaveBeenCalled();
     expect(h.bitmapStore.discardLayer).not.toHaveBeenCalled();
@@ -3645,7 +3769,7 @@ describe('engine-owned pixel editing', () => {
       'adjusted surface cache delete failed'
     );
 
-    expect(h.engine.document.getDocument()!.layers).toHaveLength(0);
+    expect(getDocumentLeaves(h.engine.document.getDocument()!)).toHaveLength(0);
     expect(h.bitmapStore.releaseSuspendedLayer).toHaveBeenCalledOnce();
     expect(h.bitmapStore.discardLayer).toHaveBeenCalledWith('control');
     expect(h.bitmapStore.markLayerDirty).not.toHaveBeenCalled();
@@ -3973,13 +4097,13 @@ describe('engine-owned history: stroke → undo → redo', () => {
     vi.stubGlobal('requestAnimationFrame', raf.requestFrame);
     vi.stubGlobal('cancelAnimationFrame', raf.cancelFrame);
 
-    const docV1: CanvasDocumentContractV2 = {
+    const docV1: CanvasDocumentContractV3 = {
       background: 'transparent',
       bbox: { height: 100, width: 100, x: 0, y: 0 },
       height: 100,
-      layers: [rasterLayer('a', { imageName: 'src-v1' })],
+      stacks: stacksFrom([rasterLayer('a', { imageName: 'src-v1' })]),
       selectedLayerId: 'a',
-      version: 2,
+      version: 3,
       width: 100,
     };
     const { setDocument, store } = createReactiveStore(docV1);
@@ -4009,7 +4133,7 @@ describe('engine-owned history: stroke → undo → redo', () => {
     // reference diff alone could not tell from an ordinary edit. The engine must
     // invalidate the surviving cache entry so it re-rasterizes the new source
     // (a stale cache entry would keep rendering the v1 pixels).
-    setDocument({ ...docV1, layers: [rasterLayer('a', { imageName: 'src-v2' })] }, 1);
+    setDocument({ ...docV1, stacks: stacksFrom([rasterLayer('a', { imageName: 'src-v2' })]) }, 1);
 
     // Persistence bookkeeping for the outgoing document was dropped so a reused
     // layer id can't have its next legit persistence dispatch suppressed.
@@ -4118,7 +4242,7 @@ describe('commitStructural', () => {
     });
 
     expect(engine.layers.canCommitStructural()).toBe(true);
-    expect(engine.layers.commitStructural('Select layer', forward, inverse)).toBe(true);
+    expect(engine.layers.commitStructural('Select layer', forward, inverse)).toEqual({ status: 'committed' });
     // Forward dispatched once; the edit is now undoable but not redoable.
     expect(dispatch).toHaveBeenCalledTimes(1);
     expect(dispatch).toHaveBeenNthCalledWith(1, forward);
@@ -4139,7 +4263,90 @@ describe('commitStructural', () => {
 
     engine.lifecycle.dispose();
     expect(engine.layers.canCommitStructural()).toBe(false);
-    expect(engine.layers.commitStructural('Select layer', forward, inverse)).toBe(false);
+    expect(engine.layers.commitStructural('Select layer', forward, inverse)).toEqual({ status: 'not-ready' });
+  });
+
+  it('reports a reducer refusal as dispatch-rejected with no history entry', () => {
+    const layer = rasterLayer('L');
+    const { projectId, store } = createReducerBackedStore({
+      ...makeDoc(),
+      stacks: stacksFrom([layer]),
+      selectedLayerId: 'L',
+    });
+    const engine = createCanvasEngine({
+      backend: createTestStubRasterBackend(),
+      imageResolver: () => Promise.resolve(new Blob()),
+      projectId,
+      store,
+    });
+
+    expect(
+      engine.layers.commitStructural('Select', { id: 'missing', type: 'setCanvasSelectedLayer' }, inverse)
+    ).toEqual({ status: 'dispatch-rejected' });
+    expect(engine.stores.canUndo.get()).toBe(false);
+    engine.lifecycle.dispose();
+  });
+
+  it('reverts an accepted edit that fails its postcondition and records nothing', () => {
+    const layer = rasterLayer('L');
+    const { projectId, store } = createReducerBackedStore({
+      ...makeDoc(),
+      stacks: stacksFrom([layer]),
+      selectedLayerId: 'L',
+    });
+    const engine = createCanvasEngine({
+      backend: createTestStubRasterBackend(),
+      imageResolver: () => Promise.resolve(new Blob()),
+      projectId,
+      store,
+    });
+
+    expect(
+      engine.layers.commitStructural(
+        'Rename',
+        { id: 'L', patch: { name: 'Renamed' }, type: 'updateCanvasLayer' },
+        { id: 'L', patch: { name: 'L' }, type: 'updateCanvasLayer' },
+        { verify: () => false }
+      )
+    ).toEqual({ recovered: 'reverted', status: 'postcondition-failed' });
+    expect(getDocumentLeaves(engine.document.getDocument())[0]?.name).toBe('L');
+    expect(engine.stores.canUndo.get()).toBe(false);
+    engine.lifecycle.dispose();
+  });
+
+  it('moves a refused undo as a no-op instead of throwing out of history', () => {
+    const layer = rasterLayer('L');
+    const { dispatch, projectId, store } = createReducerBackedStore({
+      ...makeDoc(),
+      stacks: stacksFrom([layer]),
+      selectedLayerId: 'L',
+    });
+    const reportError = vi.fn();
+    const engine = createCanvasEngine({
+      backend: createTestStubRasterBackend(),
+      imageResolver: () => Promise.resolve(new Blob()),
+      projectId,
+      reportError,
+      store,
+    });
+    const added = rasterLayer('added');
+
+    expect(
+      engine.layers.commitStructural(
+        'Add',
+        { anchor: stackTopAnchor(projectId), layer: added, type: 'addCanvasLayer' },
+        { ids: ['added'], type: 'removeCanvasLayers' }
+      )
+    ).toEqual({ status: 'committed' });
+    dispatch({ ids: ['added'], type: 'removeCanvasLayers' });
+
+    expect(() => engine.history.undo()).not.toThrow();
+    expect(engine.stores.canUndo.get()).toBe(false);
+    expect(engine.stores.canRedo.get()).toBe(true);
+    expect(reportError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: 'Structural history replay was refused' })
+    );
+    engine.lifecycle.dispose();
   });
 });
 
@@ -4193,7 +4400,10 @@ const largeThumbnailLayer = (
   if (kind === 'raster') {
     return {
       ...rasterLayer('a'),
-      adjustments: { brightness: 0.25, contrast: -0.1, saturation: 0.3 },
+      adjustments: [
+        { brightness: 0.25, contrast: -0.1, id: 'adj-bc', isEnabled: true, type: 'brightness-contrast' as const },
+        { id: 'adj-hsl', isEnabled: true, saturation: 0.3, type: 'hsl' as const },
+      ],
       source: { bitmap: image, offset: { x: -300, y: 250 }, type: 'paint' },
     } as CanvasRasterLayerContractV2;
   }
@@ -4307,12 +4517,15 @@ describe('drawLayerThumbnail', () => {
   it('draws adjusted raster pixels over the checkerboard', async () => {
     const layer = {
       ...rasterLayer('a'),
-      adjustments: { brightness: 0.2, contrast: -0.1, saturation: 0.3 },
+      adjustments: [
+        { brightness: 0.2, contrast: -0.1, id: 'adj-bc', isEnabled: true, type: 'brightness-contrast' as const },
+        { id: 'adj-hsl', isEnabled: true, saturation: 0.3, type: 'hsl' as const },
+      ],
       opacity: 0.4,
     } as CanvasRasterLayerContractV2;
     const backend = createSeededThumbnailBackend([10, 20, 30, 255]);
     const createSurface = vi.spyOn(backend, 'createSurface');
-    const { store } = createReactiveStore({ ...makeDoc(), layers: [layer] });
+    const { store } = createReactiveStore({ ...makeDoc(), stacks: stacksFrom([layer]) });
     const engine = createCanvasEngine({
       backend,
       imageResolver: () => Promise.resolve(new Blob()),
@@ -4351,7 +4564,7 @@ describe('drawLayerThumbnail', () => {
         ? createSeededThumbnailBackend([100, 50, 200, 255])
         : createTestStubRasterBackend();
     const createSurface = vi.spyOn(backend, 'createSurface');
-    const { store } = createReactiveStore({ ...makeDoc(), layers: [layer as CanvasLayerContract] });
+    const { store } = createReactiveStore({ ...makeDoc(), stacks: stacksFrom([layer as CanvasLayerContract]) });
     const engine = createCanvasEngine({
       backend,
       imageResolver: () => Promise.resolve(new Blob()),
@@ -4402,7 +4615,7 @@ describe('drawLayerThumbnail', () => {
       const layer = largeThumbnailLayer(kind);
       const backend = createTestStubRasterBackend();
       const createSurface = vi.spyOn(backend, 'createSurface');
-      const { store } = createReactiveStore({ ...makeDoc(), layers: [layer] });
+      const { store } = createReactiveStore({ ...makeDoc(), stacks: stacksFrom([layer]) });
       const engine = createCanvasEngine({
         backend,
         imageResolver: () => Promise.resolve(new Blob()),
@@ -4442,7 +4655,9 @@ describe('drawLayerThumbnail', () => {
       rasterLayer('a'),
       (layer: CanvasLayerContract) => ({
         ...layer,
-        adjustments: { brightness: 0.25, contrast: 0, saturation: 0 },
+        adjustments: [
+          { brightness: 0.25, contrast: 0, id: 'adj-bc', isEnabled: true, type: 'brightness-contrast' as const },
+        ],
       }),
     ],
     [
@@ -4470,7 +4685,7 @@ describe('drawLayerThumbnail', () => {
   ])(
     'invalidates the keyed thumbnail version when %s changes without changing the source',
     async (_name, layer, edit) => {
-      const doc = { ...makeDoc(), layers: [layer as CanvasLayerContract] };
+      const doc = { ...makeDoc(), stacks: stacksFrom([layer as CanvasLayerContract]) };
       const { setDocument, store } = createReactiveStore(doc);
       const engine = createCanvasEngine({
         backend: createTestStubRasterBackend(),
@@ -4482,7 +4697,7 @@ describe('drawLayerThumbnail', () => {
       const listener = vi.fn();
       const unsubscribe = engine.stores.thumbnailVersion.subscribeKey('a', listener);
 
-      setDocument({ ...doc, layers: [edit(layer as CanvasLayerContract) as CanvasLayerContract] });
+      setDocument({ ...doc, stacks: stacksFrom([edit(layer as CanvasLayerContract) as CanvasLayerContract]) });
 
       expect(listener).toHaveBeenCalledTimes(1);
       unsubscribe();
@@ -4492,7 +4707,7 @@ describe('drawLayerThumbnail', () => {
 
   it('does not let display invalidation suppress the next cache-version publication', async () => {
     const layer = rasterLayer('a');
-    const doc = { ...makeDoc(), layers: [layer] };
+    const doc = { ...makeDoc(), stacks: stacksFrom([layer]) };
     const { setDocument, store } = createReactiveStore(doc);
     const engine = createCanvasEngine({
       backend: createTestStubRasterBackend(),
@@ -4506,10 +4721,12 @@ describe('drawLayerThumbnail', () => {
 
     const adjusted = {
       ...layer,
-      adjustments: { brightness: 0.25, contrast: 0, saturation: 0 },
+      adjustments: [
+        { brightness: 0.25, contrast: 0, id: 'adj-bc', isEnabled: true, type: 'brightness-contrast' as const },
+      ],
     } as CanvasLayerContract;
-    setDocument({ ...doc, layers: [adjusted] });
-    setDocument({ ...doc, layers: [rasterLayer('a', { imageName: 'a-v2' })] });
+    setDocument({ ...doc, stacks: stacksFrom([adjusted]) });
+    setDocument({ ...doc, stacks: stacksFrom([rasterLayer('a', { imageName: 'a-v2' })]) });
     await engine.previews.requestLayerThumbnail('a');
 
     expect(listener).toHaveBeenCalledTimes(2);
@@ -4573,9 +4790,9 @@ describe('requestLayerThumbnail', () => {
   });
 
   it('rasterizes disabled layers on explicit request', async () => {
-    const layer = { ...makeDoc().layers[0]!, isEnabled: false };
+    const layer = { ...getDocumentLeaves(makeDoc())[0]!, isEnabled: false };
     const resolver = vi.fn(() => Promise.resolve(new Blob()));
-    const { store } = createReactiveStore({ ...makeDoc(), layers: [layer] });
+    const { store } = createReactiveStore({ ...makeDoc(), stacks: stacksFrom([layer]) });
     const engine = createCanvasEngine({
       backend: createTestStubRasterBackend(),
       imageResolver: resolver,
@@ -4592,7 +4809,7 @@ describe('requestLayerThumbnail', () => {
     const bitmap = recordingBitmap('detached-replaced');
     const backend = createTestStubRasterBackend();
     backend.createImageBitmap = vi.fn(() => Promise.resolve(bitmap));
-    const doc = { ...makeDoc(), layers: [rasterLayer('a', { imageName: 'old' })] };
+    const doc = { ...makeDoc(), stacks: stacksFrom([rasterLayer('a', { imageName: 'old' })]) };
     const { setDocument, store } = createReactiveStore(doc);
     const engine = createCanvasEngine({
       backend,
@@ -4602,7 +4819,7 @@ describe('requestLayerThumbnail', () => {
     });
 
     expect(await engine.previews.requestLayerThumbnail('a')).toBe('ready');
-    setDocument({ ...doc, layers: [rasterLayer('a', { imageName: 'new' })] });
+    setDocument({ ...doc, stacks: stacksFrom([rasterLayer('a', { imageName: 'new' })]) });
 
     expect(bitmap.close).toHaveBeenCalledTimes(1);
     engine.lifecycle.dispose();
@@ -4612,7 +4829,7 @@ describe('requestLayerThumbnail', () => {
     const bitmap = recordingBitmap('detached-deleted');
     const backend = createTestStubRasterBackend();
     backend.createImageBitmap = vi.fn(() => Promise.resolve(bitmap));
-    const doc = { ...makeDoc(), layers: [rasterLayer('a', { imageName: 'old' })] };
+    const doc = { ...makeDoc(), stacks: stacksFrom([rasterLayer('a', { imageName: 'old' })]) };
     const { setDocument, store } = createReactiveStore(doc);
     const engine = createCanvasEngine({
       backend,
@@ -4622,7 +4839,7 @@ describe('requestLayerThumbnail', () => {
     });
 
     expect(await engine.previews.requestLayerThumbnail('a')).toBe('ready');
-    setDocument({ ...doc, layers: [] });
+    setDocument({ ...doc, stacks: stacksFrom([]) });
 
     expect(bitmap.close).toHaveBeenCalledTimes(1);
     engine.lifecycle.dispose();
@@ -4634,7 +4851,7 @@ describe('requestLayerThumbnail', () => {
     backend.createImageBitmap = vi.fn(() => Promise.resolve(bitmap));
     const first = rasterLayer('a', { imageName: 'shared' });
     const second = rasterLayer('b', { imageName: 'shared' });
-    const doc = { ...makeDoc(), layers: [first, second] };
+    const doc = { ...makeDoc(), stacks: stacksFrom([first, second]) };
     const { setDocument, store } = createReactiveStore(doc);
     const engine = createCanvasEngine({
       backend,
@@ -4646,8 +4863,8 @@ describe('requestLayerThumbnail', () => {
     expect(await engine.previews.requestLayerThumbnail('b')).toBe('ready');
     expect(bitmap.close).toHaveBeenCalledTimes(2);
 
-    setDocument({ ...doc, layers: [second] });
-    setDocument({ ...doc, layers: [] });
+    setDocument({ ...doc, stacks: stacksFrom([second]) });
+    setDocument({ ...doc, stacks: stacksFrom([]) });
 
     expect(bitmap.close).toHaveBeenCalledTimes(2);
     engine.lifecycle.dispose();
@@ -4659,7 +4876,7 @@ describe('requestLayerThumbnail', () => {
     backend.createImageBitmap = vi.fn(() => Promise.resolve(bitmap));
     const first = rasterLayer('a', { imageName: 'shared' });
     const second = rasterLayer('b', { imageName: 'shared' });
-    const doc = { ...makeDoc(), layers: [first, second] };
+    const doc = { ...makeDoc(), stacks: stacksFrom([first, second]) };
     const { setDocument, store } = createReactiveStore(doc);
     const engine = createCanvasEngine({
       backend,
@@ -4672,8 +4889,8 @@ describe('requestLayerThumbnail', () => {
     expect(bitmap.close).toHaveBeenCalledTimes(2);
 
     const firstChanged = rasterLayer('a', { imageName: 'first-new' });
-    setDocument({ ...doc, layers: [firstChanged, second] });
-    setDocument({ ...doc, layers: [firstChanged, rasterLayer('b', { imageName: 'second-new' })] });
+    setDocument({ ...doc, stacks: stacksFrom([firstChanged, second]) });
+    setDocument({ ...doc, stacks: stacksFrom([firstChanged, rasterLayer('b', { imageName: 'second-new' })]) });
 
     expect(bitmap.close).toHaveBeenCalledTimes(2);
     engine.lifecycle.dispose();
@@ -4682,10 +4899,10 @@ describe('requestLayerThumbnail', () => {
   it('releases a decoded bitmap when invalidation lands after cache insertion but before publication', async () => {
     const bitmap = recordingBitmap('stale-before-publication');
     const original = rasterLayer('a', { imageName: 'old' });
-    const doc = { ...makeDoc(), layers: [original] };
+    const doc = { ...makeDoc(), stacks: stacksFrom([original]) };
     const { setDocument, store } = createReactiveStore(doc);
     const backend = createInvalidateDuringBitmapDrawBackend(bitmap, () => {
-      setDocument({ ...doc, layers: [rasterLayer('a', { imageName: 'new' })] });
+      setDocument({ ...doc, stacks: stacksFrom([rasterLayer('a', { imageName: 'new' })]) });
     });
     const engine = createCanvasEngine({
       backend,
@@ -4703,10 +4920,10 @@ describe('requestLayerThumbnail', () => {
     const bitmap = recordingBitmap('stale-shared-before-publication');
     const first = rasterLayer('a', { imageName: 'shared' });
     const second = rasterLayer('b', { imageName: 'shared' });
-    const doc = { ...makeDoc(), layers: [first, second] };
+    const doc = { ...makeDoc(), stacks: stacksFrom([first, second]) };
     const { setDocument, store } = createReactiveStore(doc);
     const backend = createInvalidateDuringBitmapDrawBackend(bitmap, () => {
-      setDocument({ ...doc, layers: [rasterLayer('a', { imageName: 'new' }), second] });
+      setDocument({ ...doc, stacks: stacksFrom([rasterLayer('a', { imageName: 'new' }), second]) });
     });
     const engine = createCanvasEngine({
       backend,
@@ -4717,7 +4934,7 @@ describe('requestLayerThumbnail', () => {
 
     expect(await engine.previews.requestLayerThumbnail('a')).toBe('stale');
     expect(bitmap.close).toHaveBeenCalledTimes(1);
-    setDocument({ ...doc, layers: [rasterLayer('a', { imageName: 'new' })] });
+    setDocument({ ...doc, stacks: stacksFrom([rasterLayer('a', { imageName: 'new' })]) });
     expect(bitmap.close).toHaveBeenCalledTimes(1);
     engine.lifecycle.dispose();
   });
@@ -4729,10 +4946,10 @@ describe('requestLayerThumbnail', () => {
       ...(rasterLayer('b') as CanvasRasterLayerContractV2),
       source: { bitmap: { height: 10, imageName: 'shared', width: 10 }, type: 'paint' },
     };
-    const doc = { ...makeDoc(), layers: [first, second] };
+    const doc = { ...makeDoc(), stacks: stacksFrom([first, second]) };
     const { setDocument, store } = createReactiveStore(doc);
     const backend = createInvalidateDuringBitmapDrawBackend(bitmap, () => {
-      setDocument({ ...doc, layers: [second] });
+      setDocument({ ...doc, stacks: stacksFrom([second]) });
     });
     const engine = createCanvasEngine({
       backend,
@@ -4745,7 +4962,9 @@ describe('requestLayerThumbnail', () => {
     expect(bitmap.close).toHaveBeenCalledTimes(1);
     setDocument({
       ...doc,
-      layers: [{ ...second, source: { bitmap: { height: 10, imageName: 'new', width: 10 }, type: 'paint' } }],
+      stacks: stacksFrom([
+        { ...second, source: { bitmap: { height: 10, imageName: 'new', width: 10 }, type: 'paint' as const } },
+      ]),
     });
     expect(bitmap.close).toHaveBeenCalledTimes(1);
     engine.lifecycle.dispose();
@@ -4761,10 +4980,10 @@ describe('requestLayerThumbnail', () => {
         bitmap: { height: 10, imageName: 'shared', width: 10 },
       },
     };
-    const doc = { ...makeDoc(), layers: [first, second] };
+    const doc = { ...makeDoc(), stacks: stacksFrom([first, second]) };
     const { setDocument, store } = createReactiveStore(doc);
     const backend = createInvalidateDuringBitmapDrawBackend(bitmap, () => {
-      setDocument({ ...doc, layers: [second] });
+      setDocument({ ...doc, stacks: stacksFrom([second]) });
     });
     const engine = createCanvasEngine({
       backend,
@@ -4777,12 +4996,12 @@ describe('requestLayerThumbnail', () => {
     expect(bitmap.close).toHaveBeenCalledTimes(1);
     setDocument({
       ...doc,
-      layers: [
+      stacks: stacksFrom([
         {
           ...second,
           mask: { ...second.mask, bitmap: { height: 10, imageName: 'new', width: 10 } },
         },
-      ],
+      ]),
     });
     expect(bitmap.close).toHaveBeenCalledTimes(1);
     engine.lifecycle.dispose();
@@ -4798,12 +5017,15 @@ describe('requestLayerThumbnail', () => {
     });
     const first = rasterLayer('a', { imageName: 'shared' });
     const second = rasterLayer('b', { imageName: 'shared' });
-    const doc = { ...makeDoc(), layers: [first, second] };
+    const doc = { ...makeDoc(), stacks: stacksFrom([first, second]) };
     const { setDocument, store } = createReactiveStore(doc);
     const backend = createInvalidateDuringBitmapDrawBackend(bitmap, () => {
       setDocument({
         ...doc,
-        layers: [rasterLayer('a', { imageName: 'first-new' }), rasterLayer('b', { imageName: 'second-new' })],
+        stacks: stacksFrom([
+          rasterLayer('a', { imageName: 'first-new' }),
+          rasterLayer('b', { imageName: 'second-new' }),
+        ]),
       });
     });
     const engine = createCanvasEngine({ backend, imageResolver: resolver, projectId: 'p1', store });
@@ -4851,7 +5073,7 @@ describe('requestLayerThumbnail', () => {
     });
 
     const oldRequest = engine.previews.requestLayerThumbnail('a');
-    setDocument({ ...doc, layers: [rasterLayer('a', { imageName: 'a-v2' })] });
+    setDocument({ ...doc, stacks: stacksFrom([rasterLayer('a', { imageName: 'a-v2' })]) });
     expect(requests.get('a')?.signal?.aborted).toBe(true);
     const newRequest = engine.previews.requestLayerThumbnail('a');
 
@@ -4908,7 +5130,7 @@ describe('requestLayerThumbnail', () => {
 
     const request = engine.previews.requestLayerThumbnail('a');
     expect(engine.stores.thumbnailStatus.get('a')).toBe('loading');
-    setDocument({ ...doc, layers: [] });
+    setDocument({ ...doc, stacks: stacksFrom([]) });
     expect(requests.get('a')?.signal?.aborted).toBe(true);
     expect(engine.stores.thumbnailStatus.get('a')).toBeUndefined();
 
@@ -4987,11 +5209,11 @@ describe('requestLayerThumbnail', () => {
 
 // ---- mergeLayerDown: composites the upper cache into the below local space ----
 
-const twoPaintDoc = (): CanvasDocumentContractV2 => ({
+const twoPaintDoc = (): CanvasDocumentContractV3 => ({
   background: 'transparent',
   bbox: { height: 100, width: 100, x: 0, y: 0 },
   height: 100,
-  layers: [
+  stacks: stacksFrom([
     {
       blendMode: 'multiply',
       id: 'upper',
@@ -5018,9 +5240,9 @@ const twoPaintDoc = (): CanvasDocumentContractV2 => ({
       transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 10, y: 20 },
       type: 'raster',
     },
-  ],
+  ]),
   selectedLayerId: 'upper',
-  version: 2,
+  version: 3,
   width: 100,
 });
 
@@ -5170,7 +5392,9 @@ describe('mergeLayerDown', () => {
       const doc = twoPaintDoc();
       const locked = {
         ...doc,
-        layers: doc.layers.map((layer) => (layer.id === lockedId ? { ...layer, isLocked: true } : layer)),
+        stacks: stacksFrom(
+          getDocumentLeaves(doc).map((layer) => (layer.id === lockedId ? { ...layer, isLocked: true } : layer))
+        ),
       };
       const { store } = createReactiveStore(locked);
       const dispatch = store.dispatch as Mock;
@@ -5198,12 +5422,16 @@ describe('mergeLayerDown', () => {
   // cache surface). Merging must NOT `drawImage` the zero-dimension operand (which
   // throws in browsers) but must still dispatch the collapse and composite the
   // non-empty operand.
-  const oneEmptyPaintDoc = (emptyId: 'upper' | 'below'): CanvasDocumentContractV2 => {
+  const oneEmptyPaintDoc = (emptyId: 'upper' | 'below'): CanvasDocumentContractV3 => {
     const doc = twoPaintDoc();
     return {
       ...doc,
-      layers: doc.layers.map((layer) =>
-        layer.id === emptyId ? { ...layer, source: { bitmap: null, offset: { x: 0, y: 0 }, type: 'paint' } } : layer
+      stacks: stacksFrom(
+        getDocumentLeaves(doc).map((layer) =>
+          layer.id === emptyId
+            ? { ...layer, source: { bitmap: null, offset: { x: 0, y: 0 }, type: 'paint' as const } }
+            : layer
+        )
       ),
     };
   };
@@ -5277,12 +5505,14 @@ describe('mergeLayerDown', () => {
     vi.stubGlobal('cancelAnimationFrame', raf.cancelFrame);
 
     const base = twoPaintDoc();
-    const doc: CanvasDocumentContractV2 = {
+    const doc: CanvasDocumentContractV3 = {
       ...base,
-      layers: base.layers.map((layer) => ({
-        ...layer,
-        source: { bitmap: null, offset: { x: 0, y: 0 }, type: 'paint' as const },
-      })),
+      stacks: stacksFrom(
+        getDocumentLeaves(base).map((layer) => ({
+          ...layer,
+          source: { bitmap: null, offset: { x: 0, y: 0 }, type: 'paint' as const },
+        }))
+      ),
     };
     const { store } = createReactiveStore(doc);
     const dispatch = store.dispatch as Mock;
@@ -5339,9 +5569,9 @@ describe('mergeLayerDown', () => {
     vi.stubGlobal('cancelAnimationFrame', raf.cancelFrame);
 
     const base = twoPaintDoc();
-    const doc: CanvasDocumentContractV2 = {
+    const doc: CanvasDocumentContractV3 = {
       ...base,
-      layers: base.layers.map((layer) => (layer.id === maskId ? maskLayer(maskId) : layer)),
+      stacks: stacksFrom(getDocumentLeaves(base).map((layer) => (layer.id === maskId ? maskLayer(maskId) : layer))),
     };
     const { store } = createReactiveStore(doc);
     const dispatch = store.dispatch as Mock;
@@ -5362,7 +5592,9 @@ describe('mergeLayerDown', () => {
     );
     // Document unchanged: still two layers, each with its original type — no
     // mask was blitted into, and no mask was clobbered into a raster layer.
-    expect(engine.document.getDocument()!.layers.map((l) => l.type)).toEqual(doc.layers.map((l) => l.type));
+    expect(getDocumentLeaves(engine.document.getDocument()!).map((l) => l.type)).toEqual(
+      getDocumentLeaves(doc).map((l) => l.type)
+    );
 
     engine.lifecycle.dispose();
   });
@@ -5373,9 +5605,9 @@ describe('mergeLayerDown', () => {
     vi.stubGlobal('cancelAnimationFrame', raf.cancelFrame);
 
     const base = twoPaintDoc();
-    const doc: CanvasDocumentContractV2 = {
+    const doc: CanvasDocumentContractV3 = {
       ...base,
-      layers: [maskLayer('upper'), maskLayer('below')],
+      stacks: stacksFrom([maskLayer('upper'), maskLayer('below')]),
     };
     const { store } = createReactiveStore(doc);
     const dispatch = store.dispatch as Mock;
@@ -5394,7 +5626,10 @@ describe('mergeLayerDown', () => {
     expect(dispatch.mock.calls.some((call) => (call[0] as EngineTestAction).type === 'mergeCanvasLayersDown')).toBe(
       false
     );
-    expect(engine.document.getDocument()!.layers.map((l) => l.type)).toEqual(['inpaint_mask', 'inpaint_mask']);
+    expect(getDocumentLeaves(engine.document.getDocument()!).map((l) => l.type)).toEqual([
+      'inpaint_mask',
+      'inpaint_mask',
+    ]);
 
     engine.lifecycle.dispose();
   });
@@ -5450,24 +5685,24 @@ describe('boolean raster operations', () => {
     expect(resultSurface!.callLog.filter((entry) => entry.op === 'drawImage')).toHaveLength(2);
 
     const merged = engine.document.getDocument()!;
-    const result = merged.layers.find((layer) => layer.id !== 'upper' && layer.id !== 'below');
+    const result = getDocumentLeaves(merged).find((layer) => layer.id !== 'upper' && layer.id !== 'below');
     expect(result).toMatchObject({
       isEnabled: true,
       source: { bitmap: null, offset: { x: 10, y: 20 }, type: 'paint' },
       transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 },
       type: 'raster',
     });
-    expect(merged.layers.find((layer) => layer.id === 'upper')?.isEnabled).toBe(false);
-    expect(merged.layers.find((layer) => layer.id === 'below')?.isEnabled).toBe(false);
+    expect(getDocumentLeaves(merged).find((layer) => layer.id === 'upper')?.isEnabled).toBe(false);
+    expect(getDocumentLeaves(merged).find((layer) => layer.id === 'below')?.isEnabled).toBe(false);
 
     engine.history.undo();
-    expect(engine.document.getDocument()!.layers.map((layer) => [layer.id, layer.isEnabled])).toEqual([
+    expect(getDocumentLeaves(engine.document.getDocument()!).map((layer) => [layer.id, layer.isEnabled])).toEqual([
       ['upper', true],
       ['below', true],
     ]);
 
     engine.history.redo();
-    expect(engine.document.getDocument()!.layers.map((layer) => [layer.id, layer.isEnabled])).toEqual([
+    expect(getDocumentLeaves(engine.document.getDocument()!).map((layer) => [layer.id, layer.isEnabled])).toEqual([
       [result!.id, true],
       ['upper', false],
       ['below', false],
@@ -5507,13 +5742,12 @@ describe('boolean raster operations', () => {
     raf.flush();
 
     expect(await engine.layers.booleanMergeRasterLayers('upper', 'intersect')).toBe('not-ready');
-    expect(engine.document.getDocument()!.layers.map((layer) => layer.id)).toEqual(['upper', 'below']);
+    expect(getDocumentLeaves(engine.document.getDocument()!).map((layer) => layer.id)).toEqual(['upper', 'below']);
     engine.lifecycle.dispose();
   });
 
   it('rejects unsupported and missing layer pairs without modifying the document', async () => {
-    const doc = twoPaintDoc();
-    doc.layers[1] = maskLayer('below');
+    const doc = { ...twoPaintDoc(), stacks: stacksFrom([twoPaintDoc().stacks.raster[0]!, maskLayer('below')]) };
     const { projectId, store } = createReducerBackedStore(doc);
     const engine = createCanvasEngine({
       backend: createTestStubRasterBackend(),
@@ -5522,9 +5756,9 @@ describe('boolean raster operations', () => {
       store,
     });
 
-    expect(await engine.layers.booleanMergeRasterLayers('upper', 'exclude')).toBe('unsupported');
+    expect(await engine.layers.booleanMergeRasterLayers('upper', 'exclude')).toBe('missing');
     expect(await engine.layers.booleanMergeRasterLayers('missing', 'exclude')).toBe('missing');
-    expect(engine.document.getDocument()!.layers).toEqual(doc.layers);
+    expect(getDocumentLeaves(engine.document.getDocument()!)).toEqual(getDocumentLeaves(doc));
     engine.lifecycle.dispose();
   });
 
@@ -5554,7 +5788,7 @@ describe('boolean raster operations', () => {
     });
     const upper = emptyPaint('upper');
     const below = emptyPaint('below');
-    const doc = { ...makeDoc(), layers: [upper, below], selectedLayerId: 'upper' };
+    const doc = { ...makeDoc(), stacks: stacksFrom([upper, below]), selectedLayerId: 'upper' };
     const { projectId, store } = createReducerBackedStore(doc);
     const engine = createCanvasEngine({
       backend: createTestStubRasterBackend(),
@@ -5585,21 +5819,21 @@ describe('boolean raster operations', () => {
 });
 
 describe('extract masked canvas area', () => {
-  const maskedDoc = (): CanvasDocumentContractV2 => {
+  const maskedDoc = (): CanvasDocumentContractV3 => {
     const doc = twoPaintDoc();
     return {
       ...doc,
-      layers: [
+      stacks: stacksFrom([
         {
           ...maskLayer('mask'),
           mask: {
             bitmap: { height: 20, imageName: 'mask-bitmap', width: 20 },
-            fill: { color: '#e07575', style: 'diagonal' },
+            fill: { color: '#e07575', style: 'diagonal' as const },
             offset: { x: 15, y: 25 },
           },
         },
-        ...doc.layers,
-      ],
+        ...getDocumentLeaves(doc),
+      ]),
       selectedLayerId: 'mask',
     };
   };
@@ -5652,21 +5886,27 @@ describe('extract masked canvas area', () => {
     expect(extractedPixels).toMatchObject({ height: 20, width: 20 });
     expect(extractedPixels!.callLog.filter((entry) => entry.op === 'drawImage').length).toBeGreaterThanOrEqual(3);
 
-    const extracted = engine.document.getDocument()!.layers.find((layer) => layer.id === result.layerId);
+    const extracted = getDocumentLeaves(engine.document.getDocument()!).find((layer) => layer.id === result.layerId);
     expect(extracted).toMatchObject({
       isEnabled: true,
       source: { bitmap: null, offset: { x: 15, y: 25 }, type: 'paint' },
       transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 },
       type: 'raster',
     });
-    expect(engine.document.getDocument()!.layers.find((layer) => layer.id === 'mask')).toEqual(maskedDoc().layers[0]);
-    expect(engine.document.getDocument()!.layers.find((layer) => layer.id === 'upper')?.isEnabled).toBe(true);
-    expect(engine.document.getDocument()!.layers.find((layer) => layer.id === 'below')?.isEnabled).toBe(true);
+    expect(getDocumentLeaves(engine.document.getDocument()!).find((layer) => layer.id === 'mask')).toEqual(
+      getDocumentLeaves(maskedDoc())[0]
+    );
+    expect(getDocumentLeaves(engine.document.getDocument()!).find((layer) => layer.id === 'upper')?.isEnabled).toBe(
+      true
+    );
+    expect(getDocumentLeaves(engine.document.getDocument()!).find((layer) => layer.id === 'below')?.isEnabled).toBe(
+      true
+    );
 
     engine.history.undo();
-    expect(engine.document.getDocument()!.layers.some((layer) => layer.id === result.layerId)).toBe(false);
+    expect(getDocumentLeaves(engine.document.getDocument()!).some((layer) => layer.id === result.layerId)).toBe(false);
     engine.history.redo();
-    expect(engine.document.getDocument()!.layers.some((layer) => layer.id === result.layerId)).toBe(true);
+    expect(getDocumentLeaves(engine.document.getDocument()!).some((layer) => layer.id === result.layerId)).toBe(true);
     engine.lifecycle.dispose();
   });
 
@@ -5695,7 +5935,7 @@ describe('extract masked canvas area', () => {
         bitmap: { height: 10, imageName: 'mask', width: 10 },
       },
     };
-    const document = { ...makeDoc(), layers: [mask, raster, control], selectedLayerId: 'mask' };
+    const document = { ...makeDoc(), stacks: stacksFrom([mask, raster, control]), selectedLayerId: 'mask' };
     const { projectId, store } = createReducerBackedStore(document);
     const base = createTestStubRasterBackend();
     const surfaces: StubRasterSurface[] = [];
@@ -5758,7 +5998,7 @@ describe('extract masked canvas area', () => {
       transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 },
       type: 'raster',
     };
-    document.layers.splice(2, 0, blank);
+    document.stacks.raster.splice(2, 0, blank);
     const { projectId, store } = createReducerBackedStore(document);
     const engine = createCanvasEngine({
       backend: createTestStubRasterBackend(),
@@ -5800,17 +6040,19 @@ describe('extract masked canvas area', () => {
     const extraction = engine.exports.extractMaskedArea('mask');
     setDocument({
       ...document,
-      layers: document.layers.map((layer) =>
-        layer.id === 'upper' && layer.type === 'raster'
-          ? {
-              ...layer,
-              source: {
-                bitmap: { height: 40, imageName: 'upper-v2', width: 40 },
-                offset: { x: 0, y: 0 },
-                type: 'paint',
-              },
-            }
-          : layer
+      stacks: stacksFrom(
+        getDocumentLeaves(document).map((layer) =>
+          layer.id === 'upper' && layer.type === 'raster'
+            ? {
+                ...layer,
+                source: {
+                  bitmap: { height: 40, imageName: 'upper-v2', width: 40 },
+                  offset: { x: 0, y: 0 },
+                  type: 'paint' as const,
+                },
+              }
+            : layer
+        )
       ),
     });
 
@@ -5821,7 +6063,7 @@ describe('extract masked canvas area', () => {
 
   it('refuses extraction from a locked mask', async () => {
     const document = maskedDoc();
-    document.layers[0] = { ...document.layers[0]!, isLocked: true };
+    document.stacks.inpaint_mask[0] = { ...(document.stacks.inpaint_mask[0] as CanvasLayerContract), isLocked: true };
     const { projectId, store } = createReducerBackedStore(document);
     const engine = createCanvasEngine({
       backend: createTestStubRasterBackend(),
@@ -5839,7 +6081,11 @@ describe('extract masked canvas area', () => {
     raf.flush();
 
     expect(await engine.exports.extractMaskedArea('mask')).toEqual({ status: 'not-ready' });
-    expect(engine.document.getDocument()!.layers.map((layer) => layer.id)).toEqual(['mask', 'upper', 'below']);
+    expect(getDocumentLeaves(engine.document.getDocument()!).map((layer) => layer.id)).toEqual([
+      'mask',
+      'upper',
+      'below',
+    ]);
     engine.lifecycle.dispose();
   });
 
@@ -5856,11 +6102,11 @@ describe('extract masked canvas area', () => {
     expect(await engine.exports.extractMaskedArea('missing')).toEqual({ status: 'missing' });
     expect(await engine.exports.extractMaskedArea('upper')).toEqual({ status: 'unsupported' });
     expect(await engine.exports.extractMaskedArea('mask')).toEqual({ status: 'not-ready' });
-    expect(engine.document.getDocument()!.layers).toEqual(doc.layers);
+    expect(getDocumentLeaves(engine.document.getDocument()!)).toEqual(getDocumentLeaves(doc));
     engine.lifecycle.dispose();
 
     const emptyDoc = maskedDoc();
-    emptyDoc.layers[0] = maskLayer('mask');
+    emptyDoc.stacks.inpaint_mask[0] = maskLayer('mask');
     const emptyHarness = createReducerBackedStore(emptyDoc);
     const emptyEngine = createCanvasEngine({
       backend: createTestStubRasterBackend(),
@@ -5881,7 +6127,7 @@ describe('extract masked canvas area', () => {
  * no-op mock store cannot exercise that transaction.
  */
 const createReducerBackedStore = (
-  document: CanvasDocumentContractV2,
+  document: CanvasDocumentContractV3,
   mainBase?: string
 ): { dispatch: Mock<(action: EngineTestAction) => void>; projectId: string; store: EngineStore } => {
   let state = createInitialWorkbenchState();
@@ -5963,7 +6209,7 @@ describe('staged result acceptance', () => {
       throw new Error('expected commit');
     }
     const projectAfterCommit = reducer.store.getState().projects[0]!;
-    const acceptedLayer = projectAfterCommit.canvas.document.layers[0]!;
+    const acceptedLayer = getDocumentLeaves(projectAfterCommit.canvas.document)[0]!;
     const acceptedEvent = projectAfterCommit.events[0]!;
     expect(acceptedLayer).toMatchObject({
       id: result.layerId,
@@ -5976,13 +6222,15 @@ describe('staged result acceptance', () => {
 
     engine.history.undo();
     const projectAfterUndo = reducer.store.getState().projects[0]!;
-    expect(projectAfterUndo.canvas.document.layers).not.toContainEqual(expect.objectContaining({ id: result.layerId }));
+    expect(getDocumentLeaves(projectAfterUndo.canvas.document)).not.toContainEqual(
+      expect.objectContaining({ id: result.layerId })
+    );
     expect(projectAfterUndo.canvas.document.selectedLayerId).toBe('a');
     expect(projectAfterUndo.canvas.stagingArea.pendingImages).toEqual([]);
 
     engine.history.redo();
     const projectAfterRedo = reducer.store.getState().projects[0]!;
-    expect(projectAfterRedo.canvas.document.layers[0]).toBe(acceptedLayer);
+    expect(getDocumentLeaves(projectAfterRedo.canvas.document)[0]).toBe(acceptedLayer);
     expect(projectAfterRedo.canvas.stagingArea.pendingImages).toEqual([]);
     expect(projectAfterRedo.events).toContain(acceptedEvent);
     expect(projectAfterRedo.events.filter((event) => event.id === acceptedEvent.id)).toHaveLength(1);
@@ -6135,7 +6383,11 @@ describe('staged result acceptance', () => {
         }
         reducerCanvas = {
           ...canvas,
-          document: { ...document, layers: [mutation.layer, ...document.layers], selectedLayerId: mutation.layer.id },
+          document: {
+            ...document,
+            stacks: stacksFrom([mutation.layer, ...getDocumentLeaves(document)]),
+            selectedLayerId: mutation.layer.id,
+          },
           stagingArea: { ...canvas.stagingArea, pendingImageIds: [], pendingImages: [] },
         };
         committed = true;
@@ -6211,7 +6463,7 @@ describe('structural raster publication failure atomicity', () => {
     isEnabled: false,
   });
 
-  const createFaultHarness = (document: CanvasDocumentContractV2) => {
+  const createFaultHarness = (document: CanvasDocumentContractV3) => {
     const faults = createStructuralFaultBackend();
     const bitmapStore = createSpyBitmapStore();
     const reducer = createReducerBackedStore(document);
@@ -6242,7 +6494,7 @@ describe('structural raster publication failure atomicity', () => {
 
   const expectInitialFailureExact = (
     harness: ReturnType<typeof createFaultHarness>,
-    expectedDocument: CanvasDocumentContractV2
+    expectedDocument: CanvasDocumentContractV3
   ): void => {
     expect(harness.engine.document.getDocument()).toBe(expectedDocument);
     expect(harness.engine.document.getDocument()).toEqual(expectedDocument);
@@ -6258,10 +6510,10 @@ describe('structural raster publication failure atomicity', () => {
     'crop keeps document, cache, selection, and history exact when final cache %s fails',
     async (failure) => {
       const source = rasterLayer('crop-source');
-      const document: CanvasDocumentContractV2 = {
+      const document: CanvasDocumentContractV3 = {
         ...makeDoc(),
         bbox: { height: 7, width: 6, x: 2, y: 3 },
-        layers: [source, sentinelLayer()],
+        stacks: stacksFrom([source, sentinelLayer()]),
         selectedLayerId: 'selection-sentinel',
       };
       const harness = createFaultHarness(document);
@@ -6286,7 +6538,11 @@ describe('structural raster publication failure atomicity', () => {
     'commitLayerCopy keeps document, cache, selection, and history exact when final cache %s fails',
     async (failure) => {
       const source = rasterLayer('copy-source');
-      const document = { ...makeDoc(), layers: [source, sentinelLayer()], selectedLayerId: 'selection-sentinel' };
+      const document = {
+        ...makeDoc(),
+        stacks: stacksFrom([source, sentinelLayer()]),
+        selectedLayerId: 'selection-sentinel',
+      };
       const harness = createFaultHarness(document);
       const sourceCache = await snapshotLayerCache(harness.engine, source.id);
       const expectedDocument = harness.engine.document.getDocument()!;
@@ -6295,12 +6551,19 @@ describe('structural raster publication failure atomicity', () => {
       harness.bitmapStore.markLayerDirty.mockClear();
       armStructuralFault(harness.faults, failure, { allocation: 1, draw: 1 });
 
-      expect(() => harness.engine.layers.commitLayerCopy('Copy layer', source.id, copy, 0)).toThrow(
-        structuralFaultMessage(failure)
-      );
+      expect(() =>
+        harness.engine.layers.commitLayerCopy(
+          'Copy layer',
+          source.id,
+          copy,
+          harness.engine.document.captureInsertionAnchor(copy.type, source.id)
+        )
+      ).toThrow(structuralFaultMessage(failure));
 
       expectInitialFailureExact(harness, expectedDocument);
-      expect(harness.engine.document.getDocument()!.layers.some((layer) => layer.id === copy.id)).toBe(false);
+      expect(getDocumentLeaves(harness.engine.document.getDocument()!).some((layer) => layer.id === copy.id)).toBe(
+        false
+      );
       await expectLayerCacheExact(harness.engine, source.id, sourceCache);
       harness.engine.lifecycle.dispose();
     }
@@ -6310,11 +6573,15 @@ describe('structural raster publication failure atomicity', () => {
     'commitLayerConversion keeps document, cache, selection, and history exact when final cache %s fails',
     async (failure) => {
       const source = rasterLayer('conversion-source');
-      const document = { ...makeDoc(), layers: [source, sentinelLayer()], selectedLayerId: 'selection-sentinel' };
+      const document = {
+        ...makeDoc(),
+        stacks: stacksFrom([source, sentinelLayer()]),
+        selectedLayerId: 'selection-sentinel',
+      };
       const harness = createFaultHarness(document);
       const sourceCache = await snapshotLayerCache(harness.engine, source.id);
       const expectedDocument = harness.engine.document.getDocument()!;
-      const live = harness.engine.document.getDocument()!.layers.find((layer) => layer.id === source.id)!;
+      const live = getDocumentLeaves(harness.engine.document.getDocument()!).find((layer) => layer.id === source.id)!;
       if (live.type !== 'raster') {
         throw new Error('expected a raster conversion source');
       }
@@ -6342,7 +6609,11 @@ describe('structural raster publication failure atomicity', () => {
     'copyLayerToRaster keeps document, cache, selection, and history exact when final cache %s fails',
     async (failure) => {
       const source = rasterLayer('raster-copy-source');
-      const document = { ...makeDoc(), layers: [source, sentinelLayer()], selectedLayerId: 'selection-sentinel' };
+      const document = {
+        ...makeDoc(),
+        stacks: stacksFrom([source, sentinelLayer()]),
+        selectedLayerId: 'selection-sentinel',
+      };
       const harness = createFaultHarness(document);
       const sourceCache = await snapshotLayerCache(harness.engine, source.id);
       const expectedDocument = harness.engine.document.getDocument()!;
@@ -6364,7 +6635,7 @@ describe('structural raster publication failure atomicity', () => {
       const pair = twoPaintDoc();
       const document = {
         ...pair,
-        layers: [...pair.layers, sentinelLayer()],
+        stacks: stacksFrom([...getDocumentLeaves(pair), sentinelLayer()]),
         selectedLayerId: 'selection-sentinel',
       };
       const harness = createFaultHarness(document);
@@ -6400,7 +6671,7 @@ describe('structural raster publication failure atomicity', () => {
       };
       const document = {
         ...pair,
-        layers: [mask, ...pair.layers, sentinelLayer()],
+        stacks: stacksFrom([mask, ...getDocumentLeaves(pair), sentinelLayer()]),
         selectedLayerId: 'selection-sentinel',
       };
       const harness = createFaultHarness(document);
@@ -6424,10 +6695,10 @@ describe('structural raster publication failure atomicity', () => {
 
   const createCropReplayHarness = async () => {
     const source = rasterLayer('crop-replay-source');
-    const document: CanvasDocumentContractV2 = {
+    const document: CanvasDocumentContractV3 = {
       ...makeDoc(),
       bbox: { height: 7, width: 6, x: 2, y: 3 },
-      layers: [source, sentinelLayer()],
+      stacks: stacksFrom([source, sentinelLayer()]),
       selectedLayerId: 'selection-sentinel',
     };
     const harness = createFaultHarness(document);
@@ -6483,11 +6754,22 @@ describe('structural raster publication failure atomicity', () => {
   it('commitLayerCopy redo cache-draw failure leaves the restored state exact and retryable', async () => {
     const source = rasterLayer('copy-replay-source');
     const copy = { ...structuredClone(source), id: 'copy-replay-result', name: 'Copy replay result' };
-    const document = { ...makeDoc(), layers: [source, sentinelLayer()], selectedLayerId: 'selection-sentinel' };
+    const document = {
+      ...makeDoc(),
+      stacks: stacksFrom([source, sentinelLayer()]),
+      selectedLayerId: 'selection-sentinel',
+    };
     const harness = createFaultHarness(document);
     const originalCache = await snapshotLayerCache(harness.engine, source.id);
     const originalDocument = harness.engine.document.getDocument()!;
-    expect(harness.engine.layers.commitLayerCopy('Copy layer', source.id, copy, 0)).toBe(true);
+    expect(
+      harness.engine.layers.commitLayerCopy(
+        'Copy layer',
+        source.id,
+        copy,
+        harness.engine.document.captureInsertionAnchor(copy.type, source.id)
+      )
+    ).toBe(true);
     const committedDocument = structuredClone(harness.engine.document.getDocument()!);
     harness.engine.history.undo();
     const restoredDocument = harness.engine.document.getDocument()!;
@@ -6497,23 +6779,29 @@ describe('structural raster publication failure atomicity', () => {
 
     expect(harness.engine.document.getDocument()).toBe(restoredDocument);
     expect(harness.engine.document.getDocument()).toEqual(originalDocument);
-    expect(harness.engine.document.getDocument()!.layers.some((layer) => layer.id === copy.id)).toBe(false);
+    expect(getDocumentLeaves(harness.engine.document.getDocument()!).some((layer) => layer.id === copy.id)).toBe(false);
     expect(harness.engine.stores.canUndo.get()).toBe(false);
     expect(harness.engine.stores.canRedo.get()).toBe(true);
     await expectLayerCacheExact(harness.engine, source.id, originalCache);
     harness.engine.history.redo();
     expect(harness.engine.document.getDocument()).toEqual(committedDocument);
-    expect(harness.engine.document.getDocument()!.layers.filter((layer) => layer.id === copy.id)).toHaveLength(1);
+    expect(
+      getDocumentLeaves(harness.engine.document.getDocument()!).filter((layer) => layer.id === copy.id)
+    ).toHaveLength(1);
     harness.engine.lifecycle.dispose();
   });
 
   it('commitLayerConversion keeps failed undo and redo cache preparation exact and retryable', async () => {
     const source = rasterLayer('conversion-replay-source');
-    const document = { ...makeDoc(), layers: [source, sentinelLayer()], selectedLayerId: 'selection-sentinel' };
+    const document = {
+      ...makeDoc(),
+      stacks: stacksFrom([source, sentinelLayer()]),
+      selectedLayerId: 'selection-sentinel',
+    };
     const harness = createFaultHarness(document);
     await snapshotLayerCache(harness.engine, source.id);
     const originalDocument = harness.engine.document.getDocument()!;
-    const live = originalDocument.layers.find((layer) => layer.id === source.id)!;
+    const live = getDocumentLeaves(originalDocument).find((layer) => layer.id === source.id)!;
     if (live.type !== 'raster') {
       throw new Error('expected a raster conversion source');
     }
@@ -6556,7 +6844,7 @@ describe('structural raster publication failure atomicity', () => {
     const pair = twoPaintDoc();
     const document = {
       ...pair,
-      layers: [...pair.layers, sentinelLayer()],
+      stacks: stacksFrom([...getDocumentLeaves(pair), sentinelLayer()]),
       selectedLayerId: 'selection-sentinel',
     };
     const harness = createFaultHarness(document);
@@ -6574,7 +6862,9 @@ describe('structural raster publication failure atomicity', () => {
 
     expect(harness.engine.document.getDocument()).toBe(restoredDocument);
     expect(harness.engine.document.getDocument()).toEqual(originalDocument);
-    expect(harness.engine.document.getDocument()!.layers.some((layer) => layer.id === resultId)).toBe(false);
+    expect(getDocumentLeaves(harness.engine.document.getDocument()!).some((layer) => layer.id === resultId)).toBe(
+      false
+    );
     expect(harness.engine.stores.canUndo.get()).toBe(false);
     expect(harness.engine.stores.canRedo.get()).toBe(true);
     await expectLayerCacheExact(harness.engine, 'upper', upperCache);
@@ -6596,7 +6886,7 @@ describe('structural raster publication failure atomicity', () => {
     };
     const document = {
       ...pair,
-      layers: [mask, ...pair.layers, sentinelLayer()],
+      stacks: stacksFrom([mask, ...getDocumentLeaves(pair), sentinelLayer()]),
       selectedLayerId: 'selection-sentinel',
     };
     const harness = createFaultHarness(document);
@@ -6618,7 +6908,9 @@ describe('structural raster publication failure atomicity', () => {
 
     expect(harness.engine.document.getDocument()).toBe(restoredDocument);
     expect(harness.engine.document.getDocument()).toEqual(originalDocument);
-    expect(harness.engine.document.getDocument()!.layers.some((layer) => layer.id === extracted.layerId)).toBe(false);
+    expect(
+      getDocumentLeaves(harness.engine.document.getDocument()!).some((layer) => layer.id === extracted.layerId)
+    ).toBe(false);
     expect(harness.engine.stores.canUndo.get()).toBe(false);
     expect(harness.engine.stores.canRedo.get()).toBe(true);
     await expectLayerCacheExact(harness.engine, mask.id, maskCache);
@@ -6631,7 +6923,11 @@ describe('structural raster publication failure atomicity', () => {
 
   it('copyLayerToRaster undo restores the exact prior selection', async () => {
     const source = rasterLayer('selection-copy-source');
-    const document = { ...makeDoc(), layers: [source, sentinelLayer()], selectedLayerId: 'selection-sentinel' };
+    const document = {
+      ...makeDoc(),
+      stacks: stacksFrom([source, sentinelLayer()]),
+      selectedLayerId: 'selection-sentinel',
+    };
     const harness = createFaultHarness(document);
     const originalDocument = harness.engine.document.getDocument()!;
     const copiedId = await harness.engine.layers.copyLayerToRaster(source.id);
@@ -6649,22 +6945,28 @@ describe('structural raster publication failure atomicity', () => {
   it('keeps a reducer-rejected copy undo retryable until its prior selection exists again', async () => {
     const source = rasterLayer('rejected-undo-source');
     const sentinel = sentinelLayer();
-    const document = { ...makeDoc(), layers: [source, sentinel], selectedLayerId: sentinel.id };
+    const document = { ...makeDoc(), stacks: stacksFrom([source, sentinel]), selectedLayerId: sentinel.id };
     const harness = createFaultHarness(document);
     const copiedId = await harness.engine.layers.copyLayerToRaster(source.id);
     expect(copiedId).not.toBeNull();
 
     harness.store.dispatch({ ids: [sentinel.id], type: 'removeCanvasLayers' });
-    expect(harness.engine.document.getDocument()!.layers.some((layer) => layer.id === copiedId)).toBe(true);
+    expect(getDocumentLeaves(harness.engine.document.getDocument()!).some((layer) => layer.id === copiedId)).toBe(true);
 
     expect(() => harness.engine.history.undo()).toThrow('Canvas document mutation was rejected');
-    expect(harness.engine.document.getDocument()!.layers.some((layer) => layer.id === copiedId)).toBe(true);
+    expect(getDocumentLeaves(harness.engine.document.getDocument()!).some((layer) => layer.id === copiedId)).toBe(true);
     expect(harness.engine.stores.canUndo.get()).toBe(true);
     expect(harness.engine.stores.canRedo.get()).toBe(false);
 
-    harness.store.dispatch({ layer: sentinel, type: 'addCanvasLayer' });
+    harness.store.dispatch({
+      anchor: stackTopAnchor(harness.engine.projectId),
+      layer: sentinel,
+      type: 'addCanvasLayer',
+    });
     expect(() => harness.engine.history.undo()).not.toThrow();
-    expect(harness.engine.document.getDocument()!.layers.some((layer) => layer.id === copiedId)).toBe(false);
+    expect(getDocumentLeaves(harness.engine.document.getDocument()!).some((layer) => layer.id === copiedId)).toBe(
+      false
+    );
     expect(harness.engine.document.getDocument()!.selectedLayerId).toBe(sentinel.id);
     expect(harness.engine.stores.canUndo.get()).toBe(false);
     expect(harness.engine.stores.canRedo.get()).toBe(true);
@@ -6673,9 +6975,9 @@ describe('structural raster publication failure atomicity', () => {
 
   it('publishes a prepared structural mutation to its bound project while another project is active', () => {
     const source = rasterLayer('inactive-source');
-    const document = { ...makeDoc(), layers: [source], selectedLayerId: source.id };
+    const document = { ...makeDoc(), stacks: stacksFrom([source]), selectedLayerId: source.id };
     const harness = createFaultHarness(document);
-    const liveSource = harness.engine.document.getDocument()!.layers[0]!;
+    const liveSource = getDocumentLeaves(harness.engine.document.getDocument()!)[0]!;
     const copy = { ...structuredClone(source), id: 'inactive-copy' };
     harness.store.dispatch({ type: 'createProject' });
     const otherProjectId = harness.store.getState().activeProjectId;
@@ -6684,7 +6986,14 @@ describe('structural raster publication failure atomicity', () => {
     );
     (harness.store.dispatch as Mock).mockClear();
 
-    expect(harness.engine.layers.commitLayerCopy('Copy layer', liveSource.id, copy, 0)).toBe(true);
+    expect(
+      harness.engine.layers.commitLayerCopy(
+        'Copy layer',
+        liveSource.id,
+        copy,
+        harness.engine.document.captureInsertionAnchor(copy.type, liveSource.id)
+      )
+    ).toBe(true);
 
     expect(harness.store.dispatch).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'applyCanvasLayerStackMutation' })
@@ -6692,7 +7001,7 @@ describe('structural raster publication failure atomicity', () => {
     expect(harness.store.getState().projects.find((project) => project.id === otherProjectId)!.canvas.document).toEqual(
       otherBefore
     );
-    expect(harness.engine.document.getDocument()?.layers[0]?.id).toBe(copy.id);
+    expect(getDocumentLeaves(harness.engine.document.getDocument())[0]?.id).toBe(copy.id);
     expect(harness.engine.stores.canUndo.get()).toBe(true);
     harness.engine.lifecycle.dispose();
   });
@@ -6706,10 +7015,10 @@ describe('structural raster publication failure atomicity', () => {
         type: 'paint',
       },
     };
-    const document: CanvasDocumentContractV2 = {
+    const document: CanvasDocumentContractV3 = {
       ...makeDoc(),
       bbox: { height: 7, width: 6, x: 2, y: 3 },
-      layers: [source, sentinelLayer()],
+      stacks: stacksFrom([source, sentinelLayer()]),
       selectedLayerId: 'selection-sentinel',
     };
     const reducer = createReducerBackedStore(document);
@@ -6728,10 +7037,9 @@ describe('structural raster publication failure atomicity', () => {
       encodeSurface: (surface) =>
         Promise.resolve(new Blob([`${surface.width}x${surface.height}`], { type: 'image/png' })),
       getLayerSource: (layerId) => {
-        const layer = reducer.store
-          .getState()
-          .projects.find((project) => project.id === reducer.projectId)
-          ?.canvas.document.layers.find((candidate) => candidate.id === layerId);
+        const layer = getDocumentLeaves(
+          reducer.store.getState().projects.find((project) => project.id === reducer.projectId)?.canvas.document
+        ).find((candidate) => candidate.id === layerId);
         return layer?.type === 'raster' || layer?.type === 'control' ? layer.source : null;
       },
       getLayerSurface: () => placed,
@@ -6785,7 +7093,7 @@ describe('structural raster publication failure atomicity', () => {
       },
     });
     expect(engine.document.getDocument()!.selectedLayerId).toBe('selection-sentinel');
-    expect(engine.document.getDocument()!.layers.find((layer) => layer.id === source.id)).toMatchObject({
+    expect(getDocumentLeaves(engine.document.getDocument()!).find((layer) => layer.id === source.id)).toMatchObject({
       source: {
         bitmap: { height: 7, imageName: 'cropped-paint', width: 6 },
         offset: { x: 2, y: 3 },
@@ -6799,23 +7107,27 @@ describe('structural raster publication failure atomicity', () => {
 });
 
 describe('mergeVisibleRasterLayers', () => {
-  /** [upper raster, mask, lower raster] — the interleaved case round 1 no-oped. */
-  const interleavedDoc = (): CanvasDocumentContractV2 => {
+  /** Two adjacent rasters with a mask in another stack. */
+  const interleavedDoc = (): CanvasDocumentContractV3 => {
     const base = twoPaintDoc();
-    const [upper, below] = base.layers as [CanvasLayerContract, CanvasLayerContract];
-    return { ...base, layers: [upper, maskLayer('mid-mask'), below] };
+    const [upper, below] = getDocumentLeaves(base) as [CanvasLayerContract, CanvasLayerContract];
+    return { ...base, stacks: stacksFrom([upper, maskLayer('mid-mask'), below]) };
   };
 
-  const selectedMergeDoc = (): CanvasDocumentContractV2 => {
+  const selectedMergeDoc = (): CanvasDocumentContractV3 => {
     const doc = interleavedDoc();
     return {
       ...doc,
-      layers: doc.layers.map((layer) => (layer.id === 'upper' ? { ...layer, blendMode: 'normal' as const } : layer)),
+      stacks: stacksFrom(
+        getDocumentLeaves(doc).map((layer) =>
+          layer.id === 'upper' ? { ...layer, blendMode: 'normal' as const } : layer
+        )
+      ),
     };
   };
 
   const setup = (
-    doc: CanvasDocumentContractV2,
+    doc: CanvasDocumentContractV3,
     pendingClearIds: ReadonlySet<string> = new Set(),
     pendingWorkIds: ReadonlySet<string> = new Set()
   ) => {
@@ -6890,10 +7202,10 @@ describe('mergeVisibleRasterLayers', () => {
       throw new Error(`unexpected duplicate result: ${result.status}`);
     }
     const [upperCopyId, belowCopyId] = result.duplicateIds;
-    expect(engine.document.getDocument()!.layers.map((layer) => layer.id)).toEqual([
+    expect(getDocumentLeaves(engine.document.getDocument()!).map((layer) => layer.id)).toEqual([
+      'mid-mask',
       upperCopyId,
       'upper',
-      'mid-mask',
       belowCopyId,
       'below',
     ]);
@@ -6903,15 +7215,19 @@ describe('mergeVisibleRasterLayers', () => {
     expect(engine.exports.hasExportableLayerContent(belowCopyId!)).toBe(true);
 
     engine.history.undo();
-    expect(engine.document.getDocument()!.layers.map((layer) => layer.id)).toEqual(['upper', 'mid-mask', 'below']);
+    expect(getDocumentLeaves(engine.document.getDocument()!).map((layer) => layer.id)).toEqual([
+      'mid-mask',
+      'upper',
+      'below',
+    ]);
     expect(engine.document.getDocument()!.selectedLayerId).toBe('upper');
     expect(getPanelSelectedIds()).toEqual(['upper', 'below']);
 
     engine.history.redo();
-    expect(engine.document.getDocument()!.layers.map((layer) => layer.id)).toEqual([
+    expect(getDocumentLeaves(engine.document.getDocument()!).map((layer) => layer.id)).toEqual([
+      'mid-mask',
       upperCopyId,
       'upper',
-      'mid-mask',
       belowCopyId,
       'below',
     ]);
@@ -7015,7 +7331,9 @@ describe('mergeVisibleRasterLayers', () => {
     if (result.status !== 'duplicated') {
       throw new Error(`unexpected duplicate result: ${result.status}`);
     }
-    const duplicate = engine.document.getDocument()!.layers.find((layer) => layer.id === result.duplicateIds[0]);
+    const duplicate = getDocumentLeaves(engine.document.getDocument()!).find(
+      (layer) => layer.id === result.duplicateIds[0]
+    );
     expect(duplicate).toMatchObject({ source: { bitmap: null, type: 'paint' }, type: 'raster' });
     engine.lifecycle.dispose();
   });
@@ -7027,7 +7345,7 @@ describe('mergeVisibleRasterLayers', () => {
       bitmap: { height: 20, imageName: 'stale-mask', width: 20 },
       offset: { x: 4, y: 5 },
     };
-    const doc = { ...twoPaintDoc(), layers: [mask], selectedLayerId: mask.id };
+    const doc = { ...twoPaintDoc(), stacks: stacksFrom([mask]), selectedLayerId: mask.id };
     const { engine } = setup(doc, new Set([mask.id]));
 
     const result = await engine.layers.duplicateLayers([mask.id]);
@@ -7036,7 +7354,9 @@ describe('mergeVisibleRasterLayers', () => {
     if (result.status !== 'duplicated') {
       throw new Error(`unexpected duplicate result: ${result.status}`);
     }
-    const duplicate = engine.document.getDocument()!.layers.find((layer) => layer.id === result.duplicateIds[0]);
+    const duplicate = getDocumentLeaves(engine.document.getDocument()!).find(
+      (layer) => layer.id === result.duplicateIds[0]
+    );
     expect(duplicate).toMatchObject({
       mask: { bitmap: null, fill: mask.mask.fill, offset: { x: 0, y: 0 } },
       type: 'inpaint_mask',
@@ -7045,8 +7365,13 @@ describe('mergeVisibleRasterLayers', () => {
   });
 
   it('duplicates a disabled persisted layer without waiting for a cache it cannot receive', async () => {
-    const doc = twoPaintDoc();
-    doc.layers = doc.layers.map((layer) => (layer.id === 'upper' ? { ...layer, isEnabled: false } : layer));
+    const base = twoPaintDoc();
+    const doc = {
+      ...base,
+      stacks: stacksFrom(
+        getDocumentLeaves(base).map((layer) => (layer.id === 'upper' ? { ...layer, isEnabled: false } : layer))
+      ),
+    };
     const { engine, surfaces } = setup(doc);
 
     const result = await engine.layers.duplicateLayers(['upper']);
@@ -7056,16 +7381,18 @@ describe('mergeVisibleRasterLayers', () => {
       throw new Error(`unexpected duplicate result: ${result.status}`);
     }
     expect(surfaces).toHaveLength(0);
-    const original = doc.layers.find((layer) => layer.id === 'upper');
+    const original = getDocumentLeaves(doc).find((layer) => layer.id === 'upper');
     if (original?.type !== 'raster') {
       throw new Error('expected a raster source');
     }
-    const duplicate = engine.document.getDocument()!.layers.find((layer) => layer.id === result.duplicateIds[0]);
+    const duplicate = getDocumentLeaves(engine.document.getDocument()!).find(
+      (layer) => layer.id === result.duplicateIds[0]
+    );
     expect(duplicate).toMatchObject({ isEnabled: false, source: original.source, type: 'raster' });
     engine.lifecycle.dispose();
   });
 
-  it('merges rasters separated only by another layer group and restores them on undo', async () => {
+  it('merges the selected adjacent rasters, leaves other stacks alone, and restores them on undo', async () => {
     const { engine, getPanelSelectedIds, raf, setPanelSelectedIds } = setup(selectedMergeDoc());
     raf.flush();
     await flushMicrotasks();
@@ -7074,21 +7401,27 @@ describe('mergeVisibleRasterLayers', () => {
     const before = engine.document.getDocument()!;
 
     expect(await engine.layers.mergeSelectedRasterLayers(['upper', 'below'])).toBe('merged');
-    const merged = engine.document.getDocument()!.layers[0]!;
-    expect(engine.document.getDocument()!.layers.map((layer) => layer.id)).toEqual([merged.id, 'mid-mask']);
+    const merged = engine.document.getDocument()!.stacks.raster[0]!;
+    expect(getDocumentLeaves(engine.document.getDocument()!).map((layer) => layer.id)).toEqual(['mid-mask', merged.id]);
     expect(merged).toMatchObject({ name: 'upper merged', type: 'raster' });
     expect(engine.document.getDocument()!.selectedLayerId).toBe(merged.id);
     expect(getPanelSelectedIds()).toEqual([merged.id]);
 
     engine.history.undo();
-    expect(engine.document.getDocument()!.layers).toEqual(before.layers);
-    expect(engine.document.getDocument()!.selectedLayerId).toBe(before.selectedLayerId);
+    const restored = engine.document.getDocument()!;
+    expect(haveSameStructure(restored.stacks, before.stacks)).toBe(true);
+    expect(
+      getDocumentLeaves(restored).map((layer) =>
+        getDocumentLeaves(before).find((candidate) => candidate.id === layer.id)
+      )
+    ).toEqual(getDocumentLeaves(restored));
+    expect(restored.selectedLayerId).toBe(before.selectedLayerId);
     expect(engine.exports.hasExportableLayerContent('upper')).toBe(true);
     expect(engine.exports.hasExportableLayerContent('below')).toBe(true);
     expect(getPanelSelectedIds()).toEqual(['upper', 'below']);
 
     engine.history.redo();
-    expect(engine.document.getDocument()!.layers.map((layer) => layer.id)).toEqual([merged.id, 'mid-mask']);
+    expect(getDocumentLeaves(engine.document.getDocument()!).map((layer) => layer.id)).toEqual(['mid-mask', merged.id]);
     expect(engine.exports.hasExportableLayerContent(merged.id)).toBe(true);
     expect(getPanelSelectedIds()).toEqual([merged.id]);
     engine.lifecycle.dispose();
@@ -7137,21 +7470,21 @@ describe('mergeVisibleRasterLayers', () => {
   it('refuses to merge across an unselected raster because that would reorder the composite', async () => {
     const doc = selectedMergeDoc();
     const middle: CanvasRasterLayerContractV2 = {
-      ...(doc.layers.find((layer) => layer.id === 'below') as CanvasRasterLayerContractV2),
+      ...(getDocumentLeaves(doc).find((layer) => layer.id === 'below') as CanvasRasterLayerContractV2),
       id: 'middle-raster',
       name: 'middle-raster',
       source: { bitmap: { height: 50, imageName: 'middle-bmp', width: 50 }, type: 'paint' },
     };
-    const upper = doc.layers.find((layer) => layer.id === 'upper')!;
-    const below = doc.layers.find((layer) => layer.id === 'below')!;
-    const withRasterGap = { ...doc, layers: [upper, middle, below] };
+    const upper = getDocumentLeaves(doc).find((layer) => layer.id === 'upper')!;
+    const below = getDocumentLeaves(doc).find((layer) => layer.id === 'below')!;
+    const withRasterGap = { ...doc, stacks: stacksFrom([upper, middle, below]) };
     const { engine, raf } = setup(withRasterGap);
     raf.flush();
     await flushMicrotasks();
     raf.flush();
 
     expect(await engine.layers.mergeSelectedRasterLayers(['upper', 'below'])).toBe('nothing');
-    expect(engine.document.getDocument()!.layers).toEqual(withRasterGap.layers);
+    expect(getDocumentLeaves(engine.document.getDocument()!)).toEqual(getDocumentLeaves(withRasterGap));
     expect(engine.stores.canUndo.get()).toBe(false);
     engine.lifecycle.dispose();
   });
@@ -7164,7 +7497,7 @@ describe('mergeVisibleRasterLayers', () => {
     raf.flush();
 
     expect(await engine.layers.mergeSelectedRasterLayers(['upper', 'below'])).toBe('nothing');
-    expect(engine.document.getDocument()!.layers).toEqual(doc.layers);
+    expect(getDocumentLeaves(engine.document.getDocument()!)).toEqual(getDocumentLeaves(doc));
     expect(engine.stores.canUndo.get()).toBe(false);
     engine.lifecycle.dispose();
   });
@@ -7182,10 +7515,10 @@ describe('mergeVisibleRasterLayers', () => {
       transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 },
       type: 'raster',
     }));
-    const doc: CanvasDocumentContractV2 = {
+    const doc: CanvasDocumentContractV3 = {
       ...twoPaintDoc(),
       height: size,
-      layers,
+      stacks: stacksFrom(layers),
       selectedLayerId: 'top',
       width: size,
     };
@@ -7199,7 +7532,7 @@ describe('mergeVisibleRasterLayers', () => {
     // Each first-use source allocates one cache and one rasterization scratch;
     // the transaction then allocates exactly one immediately-live copy.
     expect(surfaces).toHaveLength(layers.length * 3);
-    expect(engine.document.getDocument()!.layers.map((layer) => layer.id)).toEqual(
+    expect(getDocumentLeaves(engine.document.getDocument()!).map((layer) => layer.id)).toEqual(
       layers.flatMap((layer, index) => [result.duplicateIds[index], layer.id])
     );
     const afterDuplicate = surfaces.length;
@@ -7239,10 +7572,10 @@ describe('mergeVisibleRasterLayers', () => {
       transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 10_000, y: 10_000 },
       type: 'raster',
     }));
-    const doc: CanvasDocumentContractV2 = {
+    const doc: CanvasDocumentContractV3 = {
       ...twoPaintDoc(),
       height: size,
-      layers,
+      stacks: stacksFrom(layers),
       selectedLayerId: 'top',
       width: size,
     };
@@ -7260,7 +7593,7 @@ describe('mergeVisibleRasterLayers', () => {
     engine.history.redo();
     await flushMicrotasks();
 
-    expect(engine.document.getDocument()!.layers.map((layer) => layer.id)).toEqual(
+    expect(getDocumentLeaves(engine.document.getDocument()!).map((layer) => layer.id)).toEqual(
       layers.flatMap((layer, index) => [result.duplicateIds[index], layer.id])
     );
     // Redo warms each offscreen reference sequentially: one cache plus one
@@ -7305,10 +7638,10 @@ describe('mergeVisibleRasterLayers', () => {
       transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 },
       type: 'raster',
     }));
-    const doc: CanvasDocumentContractV2 = {
+    const doc: CanvasDocumentContractV3 = {
       ...twoPaintDoc(),
       height: size,
-      layers,
+      stacks: stacksFrom(layers),
       selectedLayerId: 'top',
       width: size,
     };
@@ -7321,7 +7654,7 @@ describe('mergeVisibleRasterLayers', () => {
     expect(await engine.layers.duplicateLayers(layers.map((layer) => layer.id))).toEqual({ status: 'over-budget' });
     expect(surfaces).toHaveLength(afterRasterization);
     expect(await engine.layers.mergeSelectedRasterLayers(layers.map((layer) => layer.id))).toBe('over-budget');
-    expect(engine.document.getDocument()!.layers).toEqual(layers);
+    expect(getDocumentLeaves(engine.document.getDocument()!)).toEqual(layers);
     expect(engine.stores.canUndo.get()).toBe(false);
     engine.lifecycle.dispose();
   });
@@ -7329,18 +7662,23 @@ describe('mergeVisibleRasterLayers', () => {
   it('waits for contributor rasterization before applying one atomic insertion', async () => {
     const { engine, raf } = setup(interleavedDoc());
     const pending = engine.layers.mergeVisibleRasterLayers();
-    expect(engine.document.getDocument()!.layers.map((layer) => layer.id)).toEqual(['upper', 'mid-mask', 'below']);
+    expect(getDocumentLeaves(engine.document.getDocument()!).map((layer) => layer.id)).toEqual([
+      'mid-mask',
+      'upper',
+      'below',
+    ]);
 
     raf.flush();
     await flushMicrotasks();
     raf.flush();
     expect(await pending).toBe('merged');
-    expect(
-      engine.document
-        .getDocument()!
-        .layers.slice(1)
-        .map((layer) => layer.id)
-    ).toEqual(['upper', 'mid-mask', 'below']);
+    const mergedId = engine.document.getDocument()!.stacks.raster[0]!.id;
+    expect(getDocumentLeaves(engine.document.getDocument()!).map((layer) => layer.id)).toEqual([
+      'mid-mask',
+      mergedId,
+      'upper',
+      'below',
+    ]);
 
     engine.lifecycle.dispose();
   });
@@ -7353,9 +7691,10 @@ describe('mergeVisibleRasterLayers', () => {
 
     expect(await engine.layers.mergeVisibleRasterLayers()).toBe('merged');
 
-    const layers = engine.document.getDocument()!.layers;
+    const layers = getDocumentLeaves(engine.document.getDocument()!);
+    const merged = engine.document.getDocument()!.stacks.raster[0]!;
     expect(layers).toHaveLength(4);
-    expect(layers[0]).toMatchObject({
+    expect(merged).toMatchObject({
       blendMode: 'normal',
       isEnabled: true,
       isLocked: false,
@@ -7364,8 +7703,12 @@ describe('mergeVisibleRasterLayers', () => {
       transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 },
       type: 'raster',
     });
-    expect(layers.slice(1).map((layer) => layer.id)).toEqual(['upper', 'mid-mask', 'below']);
-    expect(engine.document.getDocument()!.selectedLayerId).toBe(layers[0]!.id);
+    expect(layers.filter((layer) => layer.id !== merged.id).map((layer) => layer.id)).toEqual([
+      'mid-mask',
+      'upper',
+      'below',
+    ]);
+    expect(engine.document.getDocument()!.selectedLayerId).toBe(merged.id);
 
     engine.lifecycle.dispose();
   });
@@ -7373,11 +7716,11 @@ describe('mergeVisibleRasterLayers', () => {
   it('includes locked parametric rasters, excludes hidden rasters, and composites bottom-to-top', async () => {
     const doc = twoPaintDoc();
     const upper: CanvasRasterLayerContractV2 = {
-      ...(doc.layers[0] as CanvasRasterLayerContractV2),
+      ...(getDocumentLeaves(doc)[0] as CanvasRasterLayerContractV2),
       isLocked: true,
     };
     const below: CanvasRasterLayerContractV2 = {
-      ...(doc.layers[1] as CanvasRasterLayerContractV2),
+      ...(getDocumentLeaves(doc)[1] as CanvasRasterLayerContractV2),
       source: {
         angle: 0,
         height: 60,
@@ -7391,7 +7734,7 @@ describe('mergeVisibleRasterLayers', () => {
       },
     };
     const hidden: CanvasRasterLayerContractV2 = {
-      ...(doc.layers[1] as CanvasRasterLayerContractV2),
+      ...(getDocumentLeaves(doc)[1] as CanvasRasterLayerContractV2),
       id: 'hidden',
       isEnabled: false,
       name: 'hidden',
@@ -7399,15 +7742,18 @@ describe('mergeVisibleRasterLayers', () => {
       transform: { rotation: 0, scaleX: 1, scaleY: 1, x: -1000, y: -1000 },
     };
     const sourceLayers = [upper, maskLayer('mid-mask'), hidden, below];
-    const { engine, raf, surfaces } = setup({ ...doc, layers: sourceLayers });
+    const sourceDoc = { ...doc, stacks: stacksFrom(sourceLayers) };
+    const { engine, raf, surfaces } = setup(sourceDoc);
     raf.flush();
     await flushMicrotasks();
     raf.flush();
 
     expect(await engine.layers.mergeVisibleRasterLayers()).toBe('merged');
-    const merged = engine.document.getDocument()!.layers[0]!;
+    const merged = engine.document.getDocument()!.stacks.raster[0]!;
     expect(merged).toMatchObject({ source: { offset: { x: 10, y: 20 }, type: 'paint' }, type: 'raster' });
-    expect(engine.document.getDocument()!.layers.slice(1)).toEqual(sourceLayers);
+    expect(getDocumentLeaves(engine.document.getDocument()!).filter((layer) => layer.id !== merged.id)).toEqual(
+      getDocumentLeaves(sourceDoc)
+    );
 
     const composite = surfaces.find(
       (surface) =>
@@ -7439,13 +7785,13 @@ describe('mergeVisibleRasterLayers', () => {
     raf.flush();
 
     expect(await engine.layers.mergeVisibleRasterLayers()).toBe('merged');
-    const firstId = engine.document.getDocument()!.layers[0]!.id;
+    const firstId = engine.document.getDocument()!.stacks.raster[0]!.id;
     expect(await engine.layers.mergeVisibleRasterLayers()).toBe('merged');
-    const layers = engine.document.getDocument()!.layers;
-    expect(layers).toHaveLength(5);
-    expect(layers[0]!.id).not.toBe(firstId);
-    expect(layers[1]!.id).toBe(firstId);
-    expect(layers.slice(2).map((layer) => layer.id)).toEqual(['upper', 'mid-mask', 'below']);
+    const rasters = engine.document.getDocument()!.stacks.raster;
+    expect(getDocumentLeaves(engine.document.getDocument()!)).toHaveLength(5);
+    expect(rasters[0]!.id).not.toBe(firstId);
+    expect(rasters[1]!.id).toBe(firstId);
+    expect(rasters.slice(2).map((layer) => layer.id)).toEqual(['upper', 'below']);
 
     engine.lifecycle.dispose();
   });
@@ -7458,15 +7804,17 @@ describe('mergeVisibleRasterLayers', () => {
     const before = engine.document.getDocument()!;
 
     expect(await engine.layers.mergeVisibleRasterLayers()).toBe('merged');
-    const merged = engine.document.getDocument()!.layers[0]!;
+    const merged = engine.document.getDocument()!.stacks.raster[0]!;
 
     engine.history.undo();
-    expect(engine.document.getDocument()!.layers).toEqual(before.layers);
+    expect(getDocumentLeaves(engine.document.getDocument()!)).toEqual(getDocumentLeaves(before));
     expect(engine.document.getDocument()!.selectedLayerId).toBe(before.selectedLayerId);
 
     engine.history.redo();
-    expect(engine.document.getDocument()!.layers[0]).toEqual(merged);
-    expect(engine.document.getDocument()!.layers.slice(1)).toEqual(before.layers);
+    expect(engine.document.getDocument()!.stacks.raster[0]).toEqual(merged);
+    expect(getDocumentLeaves(engine.document.getDocument()!).filter((layer) => layer.id !== merged.id)).toEqual(
+      getDocumentLeaves(before)
+    );
     expect(engine.document.getDocument()!.selectedLayerId).toBe(merged.id);
 
     engine.lifecycle.dispose();
@@ -7488,7 +7836,11 @@ describe('mergeVisibleRasterLayers', () => {
     });
 
     expect(await engine.layers.mergeVisibleRasterLayers()).toBe('busy');
-    expect(engine.document.getDocument()!.layers.map((layer) => layer.id)).toEqual(['upper', 'mid-mask', 'below']);
+    expect(getDocumentLeaves(engine.document.getDocument()!).map((layer) => layer.id)).toEqual([
+      'mid-mask',
+      'upper',
+      'below',
+    ]);
     expect(getCanvasOperations(engine).controller.getSnapshot()).toMatchObject({
       identity: { kind: 'filter' },
       status: 'active',
@@ -7501,21 +7853,23 @@ describe('mergeVisibleRasterLayers', () => {
 
   it('returns nothing for empty raster layers and preserves them', async () => {
     const base = twoPaintDoc();
-    const doc: CanvasDocumentContractV2 = {
+    const doc: CanvasDocumentContractV3 = {
       ...base,
-      layers: base.layers.map((layer) => ({
-        ...layer,
-        source: { bitmap: null, offset: { x: 0, y: 0 }, type: 'paint' as const },
-      })),
+      stacks: stacksFrom(
+        getDocumentLeaves(base).map((layer) => ({
+          ...layer,
+          source: { bitmap: null, offset: { x: 0, y: 0 }, type: 'paint' as const },
+        }))
+      ),
     };
     const { engine, raf } = setup(doc);
     raf.flush();
     await flushMicrotasks();
     raf.flush();
 
-    expect(engine.document.getDocument()!.layers.map((layer) => layer.id)).toEqual(['upper', 'below']);
+    expect(getDocumentLeaves(engine.document.getDocument()!).map((layer) => layer.id)).toEqual(['upper', 'below']);
     expect(await engine.layers.mergeVisibleRasterLayers()).toBe('nothing');
-    expect(engine.document.getDocument()!.layers.map((layer) => layer.id)).toEqual(['upper', 'below']);
+    expect(getDocumentLeaves(engine.document.getDocument()!).map((layer) => layer.id)).toEqual(['upper', 'below']);
 
     engine.lifecycle.dispose();
   });
@@ -7523,11 +7877,11 @@ describe('mergeVisibleRasterLayers', () => {
 
 // ---- rasterizeLayer: parametric → paint, undoable via param re-convert ----
 
-const shapeLayerDoc = (over: { isLocked?: boolean } = {}): CanvasDocumentContractV2 => ({
+const shapeLayerDoc = (over: { isLocked?: boolean } = {}): CanvasDocumentContractV3 => ({
   background: 'transparent',
   bbox: { height: 100, width: 100, x: 0, y: 0 },
   height: 100,
-  layers: [
+  stacks: stacksFrom([
     {
       blendMode: 'normal',
       id: 'shape1',
@@ -7539,14 +7893,14 @@ const shapeLayerDoc = (over: { isLocked?: boolean } = {}): CanvasDocumentContrac
       transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 10, y: 20 },
       type: 'raster',
     },
-  ],
+  ]),
   selectedLayerId: 'shape1',
-  version: 2,
+  version: 3,
   width: 100,
 });
 
 describe('rasterizeLayer (parametric → paint)', () => {
-  const setup = (doc: CanvasDocumentContractV2) => {
+  const setup = (doc: CanvasDocumentContractV3) => {
     const raf = createControllableRaf();
     vi.stubGlobal('requestAnimationFrame', raf.requestFrame);
     vi.stubGlobal('cancelAnimationFrame', raf.cancelFrame);
@@ -7671,8 +8025,8 @@ describe('rasterizeLayer (parametric → paint)', () => {
 
   it('rasterizes a gradient layer', () => {
     const doc = shapeLayerDoc();
-    doc.layers[0] = {
-      ...doc.layers[0],
+    doc.stacks.raster[0] = {
+      ...(doc.stacks.raster[0] as CanvasLayerContract),
       source: { angle: 45, kind: 'linear', stops: [{ color: '#000', offset: 0 }], type: 'gradient' },
     } as CanvasLayerContract;
     const { dispatch, engine } = setup(doc);
@@ -7689,7 +8043,10 @@ describe('rasterizeLayer (parametric → paint)', () => {
     engine.lifecycle.dispose();
 
     const paintDoc = shapeLayerDoc();
-    paintDoc.layers[0] = { ...paintDoc.layers[0], source: { bitmap: null, type: 'paint' } } as CanvasLayerContract;
+    paintDoc.stacks.raster[0] = {
+      ...paintDoc.stacks.raster[0],
+      source: { bitmap: null, type: 'paint' },
+    } as CanvasLayerContract;
     const paint = setup(paintDoc);
     expect(paint.engine.layers.rasterizeLayer('shape1')).toBe(false);
     paint.engine.lifecycle.dispose();
@@ -7717,7 +8074,7 @@ describe('rasterizeLayer (parametric → paint)', () => {
       vi.useRealTimers();
     });
 
-    const setupWithRealBitmapStore = (doc: CanvasDocumentContractV2) => {
+    const setupWithRealBitmapStore = (doc: CanvasDocumentContractV3) => {
       const raf = createControllableRaf();
       vi.stubGlobal('requestAnimationFrame', raf.requestFrame);
       vi.stubGlobal('cancelAnimationFrame', raf.cancelFrame);
@@ -7738,7 +8095,7 @@ describe('rasterizeLayer (parametric → paint)', () => {
         dispatch: createTestMutationPort(store, 'p1').dispatch,
         encodeSurface,
         getLayerSource: (layerId) => {
-          const layer = engine.document.getDocument()?.layers.find((candidate) => candidate.id === layerId);
+          const layer = getDocumentLeaves(engine.document.getDocument()).find((candidate) => candidate.id === layerId);
           return layer && (layer.type === 'raster' || layer.type === 'control') ? layer.source : null;
         },
         getLayerSurface: () => ({ offset: { x: 0, y: 0 }, surface: fakeSurface }),
@@ -7768,13 +8125,16 @@ describe('rasterizeLayer (parametric → paint)', () => {
      * `doc`, simulating what the real reducer would do — `createReactiveStore`'s
      * `dispatch` is a bare spy and does not mutate state on its own.
      */
-    const applyLastConvert = (doc: CanvasDocumentContractV2, dispatch: Mock): CanvasDocumentContractV2 => {
+    const applyLastConvert = (doc: CanvasDocumentContractV3, dispatch: Mock): CanvasDocumentContractV3 => {
       const converts = convertCalls(dispatch);
       const last = converts.at(-1);
       if (last?.type !== 'convertCanvasLayer') {
         throw new Error('expected a convertCanvasLayer dispatch');
       }
-      return { ...doc, layers: doc.layers.map((layer) => (layer.id === last.id ? last.layer : layer)) };
+      return {
+        ...doc,
+        stacks: stacksFrom(getDocumentLeaves(doc).map((layer) => (layer.id === last.id ? last.layer : layer))),
+      };
     };
 
     /**
@@ -7820,7 +8180,7 @@ describe('rasterizeLayer (parametric → paint)', () => {
       // The guard drops the flush before it ever encodes/uploads.
       expect(uploadImage).not.toHaveBeenCalled();
       expect(paintSourceDispatches(dispatch)).toHaveLength(0);
-      const layer = engine.document.getDocument()!.layers[0] as CanvasRasterLayerContractV2;
+      const layer = getDocumentLeaves(engine.document.getDocument()!)[0] as CanvasRasterLayerContractV2;
       expect(layer.source.type).toBe('shape');
 
       engine.lifecycle.dispose();
@@ -7833,7 +8193,7 @@ describe('rasterizeLayer (parametric → paint)', () => {
 
       expect(uploadImage).not.toHaveBeenCalled();
       expect(paintSourceDispatches(dispatch)).toHaveLength(0);
-      const layer = engine.document.getDocument()!.layers[0] as CanvasRasterLayerContractV2;
+      const layer = getDocumentLeaves(engine.document.getDocument()!)[0] as CanvasRasterLayerContractV2;
       expect(layer.source.type).toBe('shape');
 
       engine.lifecycle.dispose();
@@ -7870,8 +8230,10 @@ describe('rasterizeLayer (parametric → paint)', () => {
       // would — the document now genuinely points at img-x, not `bitmap: null`.
       doc = {
         ...doc,
-        layers: doc.layers.map((layer) =>
-          layer.id === firstPersist?.id ? { ...layer, source: firstPersist.source } : layer
+        stacks: stacksFrom(
+          getDocumentLeaves(doc).map((layer) =>
+            layer.id === firstPersist?.id ? { ...layer, source: firstPersist.source } : layer
+          )
         ),
       };
       setDocument(doc);
@@ -7889,7 +8251,7 @@ describe('rasterizeLayer (parametric → paint)', () => {
       doc = applyLastConvert(doc, dispatch);
       setDocument(doc);
       raf.flush();
-      const layerAfterRedo = engine.document.getDocument()!.layers[0] as CanvasRasterLayerContractV2;
+      const layerAfterRedo = getDocumentLeaves(engine.document.getDocument()!)[0] as CanvasRasterLayerContractV2;
       expect(layerAfterRedo.source).toEqual({ bitmap: null, offset: { x: 10, y: 20 }, type: 'paint' });
 
       // Flush again: the re-baked pixels are identical, so the content hash
@@ -7909,12 +8271,14 @@ describe('rasterizeLayer (parametric → paint)', () => {
       // Applying it restores the document's bitmap ref — no longer null.
       doc = {
         ...doc,
-        layers: doc.layers.map((layer) =>
-          layer.id === secondPersist?.id ? { ...layer, source: secondPersist.source } : layer
+        stacks: stacksFrom(
+          getDocumentLeaves(doc).map((layer) =>
+            layer.id === secondPersist?.id ? { ...layer, source: secondPersist.source } : layer
+          )
         ),
       };
       setDocument(doc);
-      const layerFinal = engine.document.getDocument()!.layers[0] as CanvasRasterLayerContractV2;
+      const layerFinal = getDocumentLeaves(engine.document.getDocument()!)[0] as CanvasRasterLayerContractV2;
       expect(layerFinal.source.type).toBe('paint');
       if (layerFinal.source.type === 'paint') {
         expect(layerFinal.source.bitmap).not.toBeNull();
@@ -7950,18 +8314,18 @@ describe('rasterizeLayer (parametric → paint)', () => {
 const selectedImageDoc = (
   overrides: { isLocked?: boolean; isEnabled?: boolean } = {},
   selectedLayerId: string | null = 'a'
-): CanvasDocumentContractV2 => ({
+): CanvasDocumentContractV3 => ({
   background: 'transparent',
   bbox: { height: 100, width: 100, x: 0, y: 0 },
   height: 100,
-  layers: [{ ...rasterLayer('a'), ...overrides }],
+  stacks: stacksFrom([{ ...rasterLayer('a'), ...overrides }]),
   selectedLayerId,
-  version: 2,
+  version: 3,
   width: 100,
 });
 
 describe('nudgeSelectedLayer', () => {
-  const setup = (doc: CanvasDocumentContractV2, selectedLayerIds?: readonly string[]) => {
+  const setup = (doc: CanvasDocumentContractV3, selectedLayerIds?: readonly string[]) => {
     const { store } = createFakeStore(doc);
     const dispatch = store.dispatch as Mock;
     const engine = createCanvasEngine({
@@ -8002,18 +8366,16 @@ describe('nudgeSelectedLayer', () => {
     engine.layers.nudgeSelectedLayer(3, -2);
     expect(dispatch).toHaveBeenCalledTimes(1);
     expect(dispatch).toHaveBeenNthCalledWith(1, {
-      id: 'a',
-      patch: { transform: { x: 3, y: -2 } },
-      type: 'updateCanvasLayer',
+      type: 'setCanvasLayerPositions',
+      updates: [{ id: 'a', x: 3, y: -2 }],
     });
     expect(engine.stores.canUndo.get()).toBe(true);
 
     // Undo dispatches the inverse (back to the original position).
     engine.history.undo();
     expect(dispatch).toHaveBeenNthCalledWith(2, {
-      id: 'a',
-      patch: { transform: { x: 0, y: 0 } },
-      type: 'updateCanvasLayer',
+      type: 'setCanvasLayerPositions',
+      updates: [{ id: 'a', x: 0, y: 0 }],
     });
     engine.lifecycle.dispose();
   });
@@ -8021,7 +8383,10 @@ describe('nudgeSelectedLayer', () => {
   it('nudges every selected layer together and undoes the batch atomically', () => {
     const doc = selectedImageDoc();
     const second = { ...rasterLayer('b'), transform: { ...rasterLayer('b').transform, x: 10, y: 20 } };
-    const { dispatch, engine } = setup({ ...doc, layers: [doc.layers[0]!, second] }, ['a', 'b']);
+    const { dispatch, engine } = setup({ ...doc, stacks: stacksFrom([getDocumentLeaves(doc)[0]!, second]) }, [
+      'a',
+      'b',
+    ]);
 
     engine.layers.nudgeSelectedLayer(3, -2);
     expect(dispatch).toHaveBeenNthCalledWith(1, {
@@ -8144,15 +8509,15 @@ describe('move tool: drag through the pipeline', () => {
 
 // ---- ride-along: composed auto-create + stroke history entry ------------
 
-const imageSelectedDoc = (): CanvasDocumentContractV2 => ({
+const imageSelectedDoc = (): CanvasDocumentContractV3 => ({
   background: 'transparent',
   bbox: { height: 100, width: 100, x: 0, y: 0 },
   height: 100,
   // Selected layer is an image (not paintable) → a brush stroke auto-creates a
   // fresh paint layer for the gesture.
-  layers: [rasterLayer('img')],
+  stacks: stacksFrom([rasterLayer('img')]),
   selectedLayerId: 'img',
-  version: 2,
+  version: 3,
   width: 100,
 });
 
@@ -8245,13 +8610,13 @@ describe('engine-owned history: composed auto-create + stroke entry', () => {
 });
 
 describe('setStagedPreview', () => {
-  const emptyDoc = (bbox = { height: 100, width: 100, x: 0, y: 0 }): CanvasDocumentContractV2 => ({
+  const emptyDoc = (bbox = { height: 100, width: 100, x: 0, y: 0 }): CanvasDocumentContractV3 => ({
     background: 'transparent',
     bbox,
     height: 100,
-    layers: [],
+    stacks: stacksFrom([]),
     selectedLayerId: null,
-    version: 2,
+    version: 3,
     width: 100,
   });
 
@@ -8499,7 +8864,10 @@ describe('commitRasterFilterResult', () => {
   };
 
   const filterLayer = (id = 'L'): CanvasRasterLayerContractV2 => ({
-    adjustments: { brightness: 0.2, contrast: -0.1, saturation: 0.3 },
+    adjustments: [
+      { brightness: 0.2, contrast: -0.1, id: 'adj-bc', isEnabled: true, type: 'brightness-contrast' as const },
+      { id: 'adj-hsl', isEnabled: true, saturation: 0.3, type: 'hsl' as const },
+    ],
     blendMode: 'multiply',
     id,
     isEnabled: true,
@@ -8511,13 +8879,13 @@ describe('commitRasterFilterResult', () => {
     type: 'raster',
   });
 
-  const filterDoc = (layers: CanvasLayerContract[] = [filterLayer()]): CanvasDocumentContractV2 => ({
+  const filterDoc = (layers: CanvasLayerContract[] = [filterLayer()]): CanvasDocumentContractV3 => ({
     background: 'transparent',
     bbox: { height: 100, width: 100, x: 0, y: 0 },
     height: 100,
-    layers,
+    stacks: stacksFrom(layers),
     selectedLayerId: layers[0]?.id ?? null,
-    version: 2,
+    version: 3,
     width: 100,
   });
 
@@ -8533,7 +8901,7 @@ describe('commitRasterFilterResult', () => {
       projectId,
       store,
     });
-    const before = structuredClone(engine.document.getDocument()!.layers[0]!);
+    const before = structuredClone(getDocumentLeaves(engine.document.getDocument()!)[0]!);
     const exported = await engine.exports.exportLayerPixels(layer.id);
     if (exported.status !== 'ok') {
       throw new Error('expected a filterable export');
@@ -8547,7 +8915,7 @@ describe('commitRasterFilterResult', () => {
 
     expect(result).toEqual({ layerId: layer.id, status: 'committed' });
     expect(getCanvasOperations(engine).controller.getSnapshot()).toEqual({ status: 'idle' });
-    const after = engine.document.getDocument()!.layers[0]!;
+    const after = getDocumentLeaves(engine.document.getDocument()!)[0]!;
     const { adjustments: _adjustments, ...beforeWithoutAdjustments } = before as CanvasRasterLayerContractV2;
     expect(after).toEqual({
       ...beforeWithoutAdjustments,
@@ -8564,7 +8932,7 @@ describe('commitRasterFilterResult', () => {
     const forwardSources = backend.drawSourcesFor(forwardExport.surface as StubRasterSurface);
 
     engine.history.undo();
-    expect(engine.document.getDocument()!.layers[0]).toEqual(before);
+    expect(getDocumentLeaves(engine.document.getDocument()!)[0]).toEqual(before);
     expect(engine.stores.canUndo.get()).toBe(false);
     const undoExport = await engine.exports.exportLayerPixels(layer.id);
     expect(undoExport.status).toBe('ok');
@@ -8578,7 +8946,7 @@ describe('commitRasterFilterResult', () => {
     }
 
     engine.history.redo();
-    expect(engine.document.getDocument()!.layers[0]).toEqual(after);
+    expect(getDocumentLeaves(engine.document.getDocument()!)[0]).toEqual(after);
     expect(engine.stores.canRedo.get()).toBe(false);
     const redoExport = await engine.exports.exportLayerPixels(layer.id);
     expect(redoExport.status).toBe('ok');
@@ -8619,13 +8987,15 @@ describe('commitRasterFilterResult', () => {
     if (result.status !== 'committed') {
       throw new Error('expected a committed copy');
     }
-    expect(engine.document.getDocument()!.layers.map((candidate) => candidate.id)).toEqual([
+    expect(getDocumentLeaves(engine.document.getDocument()!).map((candidate) => candidate.id)).toEqual([
       result.layerId,
       'source',
       'below',
     ]);
-    expect(engine.document.getDocument()!.layers.find((candidate) => candidate.id === 'source')).toEqual(sourceBefore);
-    const copy = engine.document.getDocument()!.layers[0]!;
+    expect(getDocumentLeaves(engine.document.getDocument()!).find((candidate) => candidate.id === 'source')).toEqual(
+      sourceBefore
+    );
+    const copy = getDocumentLeaves(engine.document.getDocument()!)[0]!;
     expect(copy).toMatchObject({
       blendMode: source.blendMode,
       isEnabled: source.isEnabled,
@@ -8639,17 +9009,20 @@ describe('commitRasterFilterResult', () => {
     expect((await engine.exports.exportLayerPixels(result.layerId)).status).toBe('ok');
 
     engine.history.undo();
-    expect(engine.document.getDocument()!.layers.map((candidate) => candidate.id)).toEqual(['source', 'below']);
+    expect(getDocumentLeaves(engine.document.getDocument()!).map((candidate) => candidate.id)).toEqual([
+      'source',
+      'below',
+    ]);
     expect(engine.document.getDocument()!.selectedLayerId).toBe(below.id);
     expect(engine.stores.canUndo.get()).toBe(false);
     engine.history.redo();
-    expect(engine.document.getDocument()!.layers.map((candidate) => candidate.id)).toEqual([
+    expect(getDocumentLeaves(engine.document.getDocument()!).map((candidate) => candidate.id)).toEqual([
       result.layerId,
       'source',
       'below',
     ]);
     expect(engine.document.getDocument()!.selectedLayerId).toBe(result.layerId);
-    expect(engine.document.getDocument()!.layers[0]).toEqual(copy);
+    expect(getDocumentLeaves(engine.document.getDocument()!)[0]).toEqual(copy);
     expect(engine.stores.canRedo.get()).toBe(false);
     engine.lifecycle.dispose();
   });
@@ -8693,7 +9066,7 @@ describe('commitRasterFilterResult', () => {
     });
 
     expect(result).toEqual({ layerId: source.id, status: 'committed' });
-    const after = engine.document.getDocument()!.layers[0]!;
+    const after = getDocumentLeaves(engine.document.getDocument()!)[0]!;
     expect(after).toMatchObject({
       filter: { settings: { radius: 8 }, type: 'content_shuffle' },
       source: { bitmap: durableImage, offset: { x: 7, y: -3 }, type: 'paint' },
@@ -8701,9 +9074,9 @@ describe('commitRasterFilterResult', () => {
       type: 'control',
     });
     engine.history.undo();
-    expect(engine.document.getDocument()!.layers[0]).toEqual(before);
+    expect(getDocumentLeaves(engine.document.getDocument()!)[0]).toEqual(before);
     engine.history.redo();
-    expect(engine.document.getDocument()!.layers[0]).toEqual(after);
+    expect(getDocumentLeaves(engine.document.getDocument()!)[0]).toEqual(after);
     engine.lifecycle.dispose();
   });
 
@@ -8746,8 +9119,11 @@ describe('commitRasterFilterResult', () => {
       });
 
       expect(result.status).toBe('committed');
-      expect(engine.document.getDocument()!.layers.map((layer) => layer.type)).toEqual([target, 'control']);
-      expect(engine.document.getDocument()!.layers[0]).toMatchObject({
+      const saved = engine.document.getDocument()!.stacks[target][0]!;
+      expect(getDocumentLeaves(engine.document.getDocument()!).map((layer) => layer.id)).toEqual(
+        target === 'control' ? [saved.id, 'control'] : ['control', saved.id]
+      );
+      expect(saved).toMatchObject({
         filter: { settings: {}, type: 'canny_edge_detection' },
         source: { offset: { x: 7, y: -3 }, type: 'paint' },
         transform: source.transform,
@@ -8781,7 +9157,7 @@ describe('commitRasterFilterResult', () => {
     });
 
     expect(result.status).toBe('committed');
-    expect(engine.document.getDocument()!.layers[0]).toMatchObject({
+    expect(getDocumentLeaves(engine.document.getDocument()!)[0]).toMatchObject({
       source: { offset: { x: -4, y: 7 }, type: 'paint' },
       transform: source.transform,
       type: 'control',
@@ -8819,7 +9195,7 @@ describe('commitRasterFilterResult', () => {
       });
 
       expect(result.status).toBe('committed');
-      const created = engine.document.getDocument()!.layers[0];
+      const created = getDocumentLeaves(engine.document.getDocument()!)[0];
       expect(created?.type === 'control' ? created.adapter.kind : null).toBe(expectedKind);
       engine.lifecycle.dispose();
     }
@@ -8882,7 +9258,7 @@ describe('commitRasterFilterResult', () => {
       }
 
       engine.history.undo();
-      expect(engine.document.getDocument()!.layers[0]).toEqual(source);
+      expect(getDocumentLeaves(engine.document.getDocument()!)[0]).toEqual(source);
       expect(engine.stores.canUndo.get()).toBe(false);
       expect(engine.stores.canRedo.get()).toBe(true);
       unsubscribeThumbnail();
@@ -8989,7 +9365,7 @@ describe('commitRasterFilterResult', () => {
 
     expect(bitmapStore.discardLayer).toHaveBeenCalledTimes(2);
     expect(bitmapStore.markLayerDirty).not.toHaveBeenCalled();
-    const redone = engine.document.getDocument()!.layers[0];
+    const redone = getDocumentLeaves(engine.document.getDocument()!)[0];
     expect(redone).toMatchObject({ source: { bitmap: durableImage, type: 'paint' } });
     if (redone?.type === 'raster' && redone.source.type === 'paint') {
       expect(redone.source.bitmap).toEqual(durableImage);
@@ -9043,10 +9419,9 @@ describe('commitRasterFilterResult', () => {
         dispatch: createTestMutationPort(store, projectId).dispatch,
         encodeSurface: () => Promise.resolve(new Blob(['unpersisted-paint'], { type: 'image/png' })),
         getLayerSource: (layerId) => {
-          const layer = store
-            .getState()
-            .projects.find((project) => project.id === projectId)
-            ?.canvas.document.layers.find((candidate) => candidate.id === layerId);
+          const layer = getDocumentLeaves(
+            store.getState().projects.find((project) => project.id === projectId)?.canvas.document
+          ).find((candidate) => candidate.id === layerId);
           return layer?.type === 'raster' || layer?.type === 'control' ? layer.source : null;
         },
         getLayerSurface: () => placed,
@@ -9112,7 +9487,7 @@ describe('commitRasterFilterResult', () => {
       expect(uploadImage).not.toHaveBeenCalled();
       expect(bitmapUpdateActions(harness.store)).toHaveLength(0);
       expect(harness.engine.document.getDocument()).toEqual(committed);
-      expect(harness.engine.document.getDocument()!.layers[0]).toMatchObject({
+      expect(getDocumentLeaves(harness.engine.document.getDocument()!)[0]).toMatchObject({
         source: { bitmap: durableImage, type: 'paint' },
       });
       const cache = await harness.engine.exports.exportLayerPixels(harness.source.id);
@@ -9206,7 +9581,7 @@ describe('commitRasterFilterResult', () => {
       expect(harness.engine.document.getDocument()).toEqual(committed);
       expect(harness.engine.stores.canUndo.get()).toBe(true);
       expect(harness.engine.stores.canRedo.get()).toBe(false);
-      const redone = harness.engine.document.getDocument()!.layers[0];
+      const redone = getDocumentLeaves(harness.engine.document.getDocument()!)[0];
       expect(redone).toMatchObject({ source: { bitmap: durableImage, type: 'paint' } });
       harness.engine.lifecycle.dispose();
     });
@@ -9229,7 +9604,7 @@ describe('commitRasterFilterResult', () => {
         throw new Error('expected a committed filtered copy');
       }
       const durableCopy = structuredClone(
-        harness.engine.document.getDocument()!.layers.find((layer) => layer.id === copied.layerId)!
+        getDocumentLeaves(harness.engine.document.getDocument()!).find((layer) => layer.id === copied.layerId)!
       );
 
       harness.engine.selection.selectAll();
@@ -9246,9 +9621,9 @@ describe('commitRasterFilterResult', () => {
       harness.engine.history.undo();
       expect((await harness.engine.exports.exportLayerPixels(copied.layerId)).status).toBe('missing');
       harness.engine.history.redo();
-      expect(harness.engine.document.getDocument()!.layers.find((layer) => layer.id === copied.layerId)).toEqual(
-        durableCopy
-      );
+      expect(
+        getDocumentLeaves(harness.engine.document.getDocument()!).find((layer) => layer.id === copied.layerId)
+      ).toEqual(durableCopy);
 
       uploaded.resolve({ height: 10, imageName: 'stale-copy-paint', width: 10 });
       await barrier;
@@ -9259,9 +9634,9 @@ describe('commitRasterFilterResult', () => {
         .filter((action) => action.type === 'updateCanvasLayerSource' && action.id === copied.layerId);
       expect(staleUpdates).toHaveLength(0);
       expect(harness.discardLayer).toHaveBeenCalledWith(copied.layerId);
-      expect(harness.engine.document.getDocument()!.layers.find((layer) => layer.id === copied.layerId)).toEqual(
-        durableCopy
-      );
+      expect(
+        getDocumentLeaves(harness.engine.document.getDocument()!).find((layer) => layer.id === copied.layerId)
+      ).toEqual(durableCopy);
       expect(harness.engine.stores.canUndo.get()).toBe(true);
       const cache = await harness.engine.exports.exportLayerPixels(copied.layerId);
       expect(cache.status).toBe('ok');
@@ -9303,7 +9678,7 @@ describe('commitRasterFilterResult', () => {
       if (result.status !== 'committed') {
         throw new Error('expected a committed copy');
       }
-      const copy = structuredClone(engine.document.getDocument()!.layers[0]!);
+      const copy = structuredClone(getDocumentLeaves(engine.document.getDocument()!)[0]!);
       engine.history.undo();
       expect(engine.document.getDocument()).toEqual(beforeDocument);
       const adjustedDeletesBefore = adjustedSurfaceCacheDeletes.length;
@@ -9326,7 +9701,7 @@ describe('commitRasterFilterResult', () => {
       expect(adjustedSurfaceCacheDeletes).toHaveLength(adjustedDeletesBefore);
 
       engine.history.redo();
-      expect(engine.document.getDocument()!.layers[0]).toEqual(copy);
+      expect(getDocumentLeaves(engine.document.getDocument()!)[0]).toEqual(copy);
       expect(engine.document.getDocument()!.selectedLayerId).toBe(result.layerId);
       expect((await engine.exports.exportLayerPixels(result.layerId)).status).toBe('ok');
       expect(engine.stores.canUndo.get()).toBe(true);
@@ -9474,7 +9849,7 @@ describe('commitRasterFilterResult', () => {
 
   it('returns missing without mutation when the source is deleted', async () => {
     const harness = await createPendingGuardHarness();
-    harness.setDocument({ ...harness.document, layers: [] });
+    harness.setDocument({ ...harness.document, stacks: stacksFrom([]) });
     harness.decoded.resolve(new Blob());
 
     await expect(harness.pending).resolves.toEqual({ status: 'missing' });
@@ -9485,7 +9860,7 @@ describe('commitRasterFilterResult', () => {
 
   it('returns stale without mutation when the source contract changes', async () => {
     const harness = await createPendingGuardHarness();
-    harness.setDocument({ ...harness.document, layers: [{ ...harness.layer, opacity: 0.2 }] });
+    harness.setDocument({ ...harness.document, stacks: stacksFrom([{ ...harness.layer, opacity: 0.2 }]) });
     harness.decoded.resolve(new Blob());
 
     await expect(harness.pending).resolves.toEqual({ status: 'stale' });
@@ -9496,7 +9871,7 @@ describe('commitRasterFilterResult', () => {
 
   it('returns locked without mutation when the source becomes locked', async () => {
     const harness = await createPendingGuardHarness();
-    harness.setDocument({ ...harness.document, layers: [{ ...harness.layer, isLocked: true }] });
+    harness.setDocument({ ...harness.document, stacks: stacksFrom([{ ...harness.layer, isLocked: true }]) });
     harness.decoded.resolve(new Blob());
 
     await expect(harness.pending).resolves.toEqual({ status: 'locked' });
@@ -9514,7 +9889,7 @@ describe('commitRasterFilterResult', () => {
       type: 'control',
       withTransparencyEffect: false,
     };
-    harness.setDocument({ ...harness.document, layers: [control] });
+    harness.setDocument({ ...harness.document, stacks: stacksFrom([control]) });
     harness.decoded.resolve(new Blob());
 
     await expect(harness.pending).resolves.toEqual({ status: 'stale' });
@@ -9901,7 +10276,7 @@ describe('commitRasterFilterResult', () => {
 
     expect(result).toEqual({ layerId: source.id, status: 'committed' });
     const reducerDocument = store.getState().projects.find((project) => project.id === projectId)!.canvas.document;
-    expect(reducerDocument.layers[0]).toMatchObject({
+    expect(getDocumentLeaves(reducerDocument)[0]).toMatchObject({
       source: { bitmap: durableImage, type: 'paint' },
     });
     expect(engine.document.getDocument()).toBe(reducerDocument);
@@ -9946,7 +10321,7 @@ describe('commitRasterFilterResult', () => {
     if (result.status !== 'committed') {
       throw new Error('expected a committed copy');
     }
-    const copy = structuredClone(engine.document.getDocument()!.layers[0]!);
+    const copy = structuredClone(getDocumentLeaves(engine.document.getDocument()!)[0]!);
     const unsubscribeFault = store.subscribe(() => {
       throw new Error('copy undo observer failed');
     });
@@ -9961,7 +10336,7 @@ describe('commitRasterFilterResult', () => {
     unsubscribeFault();
 
     engine.history.redo();
-    expect(engine.document.getDocument()!.layers[0]).toEqual(copy);
+    expect(getDocumentLeaves(engine.document.getDocument()!)[0]).toEqual(copy);
     expect(engine.document.getDocument()!.selectedLayerId).toBe(result.layerId);
     expect(engine.stores.canUndo.get()).toBe(true);
     expect(engine.stores.canRedo.get()).toBe(false);
@@ -10008,7 +10383,7 @@ describe('commitRasterFilterResult', () => {
 
     expect(() => engine.history.undo()).toThrow('copy removal failed');
 
-    expect(engine.document.getDocument()!.layers.some((layer) => layer.id === result.layerId)).toBe(true);
+    expect(getDocumentLeaves(engine.document.getDocument()!).some((layer) => layer.id === result.layerId)).toBe(true);
     expect(engine.document.getDocument()!.selectedLayerId).toBe(selected.id);
     expect(engine.stores.canUndo.get()).toBe(true);
     expect(engine.stores.canRedo.get()).toBe(false);
@@ -10060,7 +10435,10 @@ describe('commitGeneratedImageResult', () => {
   const generatedOrigin = { x: -9, y: 14 };
 
   const workflowRaster = (id = 'source'): CanvasRasterLayerContractV2 => ({
-    adjustments: { brightness: 0.2, contrast: -0.1, saturation: 0.3 },
+    adjustments: [
+      { brightness: 0.2, contrast: -0.1, id: 'adj-bc', isEnabled: true, type: 'brightness-contrast' as const },
+      { id: 'adj-hsl', isEnabled: true, saturation: 0.3, type: 'hsl' as const },
+    ],
     blendMode: 'multiply',
     id,
     isEnabled: true,
@@ -10093,13 +10471,13 @@ describe('commitGeneratedImageResult', () => {
     withTransparencyEffect: true,
   });
 
-  const workflowDocument = (layers: CanvasLayerContract[] = [workflowRaster()]): CanvasDocumentContractV2 => ({
+  const workflowDocument = (layers: CanvasLayerContract[] = [workflowRaster()]): CanvasDocumentContractV3 => ({
     background: 'transparent',
     bbox: { height: 100, width: 100, x: 0, y: 0 },
     height: 100,
-    layers,
+    stacks: stacksFrom(layers),
     selectedLayerId: layers.at(-1)?.id ?? null,
-    version: 2,
+    version: 3,
     width: 100,
   });
 
@@ -10196,7 +10574,7 @@ describe('commitGeneratedImageResult', () => {
       if (result.status !== 'committed') {
         throw new Error('expected a committed control copy');
       }
-      const created = engine.document.getDocument()!.layers.find((layer) => layer.id === result.layerId);
+      const created = getDocumentLeaves(engine.document.getDocument()!).find((layer) => layer.id === result.layerId);
       expect(created?.type === 'control' ? created.adapter.kind : null).toBe(expectedKind);
       // Without a getDefaultControlModel option the layer starts model-less.
       expect(created?.type === 'control' ? created.adapter.model : 'wrong-type').toBeNull();
@@ -10233,7 +10611,7 @@ describe('commitGeneratedImageResult', () => {
       throw new Error('expected a committed control copy');
     }
     expect(getDefaultControlModel).toHaveBeenCalledWith('sd-1');
-    const created = engine.document.getDocument()!.layers.find((layer) => layer.id === result.layerId);
+    const created = getDocumentLeaves(engine.document.getDocument()!).find((layer) => layer.id === result.layerId);
     expect(created?.type === 'control' ? created.adapter.model : null).toBe('sd1-union');
     engine.lifecycle.dispose();
   });
@@ -10265,7 +10643,7 @@ describe('commitGeneratedImageResult', () => {
     });
 
     expect(result).toEqual({ layerId: source.id, status: 'committed' });
-    const after = engine.document.getDocument()!.layers[0]!;
+    const after = getDocumentLeaves(engine.document.getDocument()!)[0]!;
     expect(after).toEqual({
       blendMode: source.blendMode,
       id: source.id,
@@ -10289,12 +10667,12 @@ describe('commitGeneratedImageResult', () => {
     expect(engine.stores.canUndo.get()).toBe(true);
 
     engine.history.undo();
-    expect(engine.document.getDocument()!.layers[0]).toEqual(before);
+    expect(getDocumentLeaves(engine.document.getDocument()!)[0]).toEqual(before);
     expect(engine.stores.canUndo.get()).toBe(false);
     expect(engine.stores.canRedo.get()).toBe(true);
 
     engine.history.redo();
-    expect(engine.document.getDocument()!.layers[0]).toEqual(after);
+    expect(getDocumentLeaves(engine.document.getDocument()!)[0]).toEqual(after);
     expect(engine.stores.canUndo.get()).toBe(true);
     expect(engine.stores.canRedo.get()).toBe(false);
     expect(bitmapStore.discardLayer).toHaveBeenCalledTimes(2);
@@ -10325,15 +10703,15 @@ describe('commitGeneratedImageResult', () => {
       })
     ).resolves.toEqual({ layerId: source.id, status: 'committed' });
 
-    expect(engine.document.getDocument()!.layers[0]).toEqual({
+    expect(getDocumentLeaves(engine.document.getDocument()!)[0]).toEqual({
       ...source,
       source: { bitmap: generatedImage, offset: generatedOrigin, type: 'paint' },
       transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 },
     });
     engine.history.undo();
-    expect(engine.document.getDocument()!.layers[0]).toEqual(source);
+    expect(getDocumentLeaves(engine.document.getDocument()!)[0]).toEqual(source);
     engine.history.redo();
-    expect(engine.document.getDocument()!.layers[0]).toMatchObject({
+    expect(getDocumentLeaves(engine.document.getDocument()!)[0]).toMatchObject({
       adapter: source.type === 'control' ? source.adapter : undefined,
       filter: source.type === 'control' ? source.filter : undefined,
       withTransparencyEffect: true,
@@ -10341,7 +10719,7 @@ describe('commitGeneratedImageResult', () => {
     engine.lifecycle.dispose();
   });
 
-  it('copies a generated result to an unlocked raster immediately above its source and restores selection on undo', async () => {
+  it('copies a generated result to a raster at the top of the raster stack and restores selection on undo', async () => {
     const above = workflowRaster('above');
     const source = workflowControl('source');
     const selected = workflowRaster('selected');
@@ -10369,14 +10747,14 @@ describe('commitGeneratedImageResult', () => {
       throw new Error(`expected a committed copy, received ${JSON.stringify(result)}`);
     }
 
-    expect(engine.document.getDocument()!.layers.map((layer) => layer.id)).toEqual([
-      above.id,
-      result.layerId,
+    expect(getDocumentLeaves(engine.document.getDocument()!).map((layer) => layer.id)).toEqual([
       source.id,
+      result.layerId,
+      above.id,
       selected.id,
     ]);
-    expect(engine.document.getDocument()!.layers[2]).toEqual(source);
-    expect(engine.document.getDocument()!.layers[1]).toMatchObject({
+    expect(getDocumentLeaves(engine.document.getDocument()!)[0]).toEqual(source);
+    expect(engine.document.getDocument()!.stacks.raster[0]).toMatchObject({
       id: result.layerId,
       isEnabled: true,
       isLocked: false,
@@ -10391,7 +10769,7 @@ describe('commitGeneratedImageResult', () => {
     expect(engine.document.getDocument()).toEqual(document);
     expect(engine.stores.canUndo.get()).toBe(false);
     engine.history.redo();
-    expect(engine.document.getDocument()!.layers[1]?.id).toBe(result.layerId);
+    expect(engine.document.getDocument()!.stacks.raster[0]?.id).toBe(result.layerId);
     expect(engine.document.getDocument()!.selectedLayerId).toBe(result.layerId);
     expect(engine.stores.canRedo.get()).toBe(false);
     engine.lifecycle.dispose();
@@ -10460,7 +10838,7 @@ describe('commitGeneratedImageResult', () => {
 
   it('returns missing after decode when the source was deleted', async () => {
     const harness = await createPendingGuardHarness();
-    harness.setDocument({ ...harness.document, layers: [] });
+    harness.setDocument({ ...harness.document, stacks: stacksFrom([]) });
     harness.decoded.resolve(new Blob());
     await expect(harness.pending).resolves.toEqual({ status: 'missing' });
     expect(harness.store.dispatch).not.toHaveBeenCalled();
@@ -10469,7 +10847,7 @@ describe('commitGeneratedImageResult', () => {
 
   it('returns locked after decode when the source became locked', async () => {
     const harness = await createPendingGuardHarness();
-    harness.setDocument({ ...harness.document, layers: [{ ...harness.source, isLocked: true }] });
+    harness.setDocument({ ...harness.document, stacks: stacksFrom([{ ...harness.source, isLocked: true }]) });
     harness.decoded.resolve(new Blob());
     await expect(harness.pending).resolves.toEqual({ status: 'locked' });
     expect(harness.store.dispatch).not.toHaveBeenCalled();
@@ -10478,7 +10856,7 @@ describe('commitGeneratedImageResult', () => {
 
   it('returns unsupported after decode when the source became a mask', async () => {
     const harness = await createPendingGuardHarness();
-    harness.setDocument({ ...harness.document, layers: [maskLayer(harness.source.id)] });
+    harness.setDocument({ ...harness.document, stacks: stacksFrom([maskLayer(harness.source.id)]) });
     harness.decoded.resolve(new Blob());
     await expect(harness.pending).resolves.toEqual({ status: 'unsupported' });
     expect(harness.store.dispatch).not.toHaveBeenCalled();
@@ -10487,7 +10865,7 @@ describe('commitGeneratedImageResult', () => {
 
   it('returns stale after decode when the immutable source contract changed', async () => {
     const harness = await createPendingGuardHarness();
-    harness.setDocument({ ...harness.document, layers: [{ ...harness.source, opacity: 0.1 }] });
+    harness.setDocument({ ...harness.document, stacks: stacksFrom([{ ...harness.source, opacity: 0.1 }]) });
     harness.decoded.resolve(new Blob());
     await expect(harness.pending).resolves.toEqual({ status: 'stale' });
     expect(harness.store.dispatch).not.toHaveBeenCalled();
@@ -10686,7 +11064,9 @@ describe('commitGeneratedImageResult', () => {
 
     await expect(pending).resolves.toEqual({ status: 'stale' });
     expect(engine.document.getDocument()).toEqual(afterPaintEdit);
-    expect(engine.document.getDocument()!.layers[0]).not.toMatchObject({ source: { bitmap: generatedImage } });
+    expect(getDocumentLeaves(engine.document.getDocument()!)[0]).not.toMatchObject({
+      source: { bitmap: generatedImage },
+    });
     expect(engine.stores.canUndo.get()).toBe(true);
     engine.lifecycle.dispose();
   });
@@ -10861,7 +11241,7 @@ describe('commitGeneratedImageResult', () => {
     }
     (reactive.store.dispatch as Mock).mockClear();
     faults.armCreateHook(successfulCreates, () => {
-      reactive.setDocument({ ...document, layers: [{ ...source, opacity: 0.2 }] });
+      reactive.setDocument({ ...document, stacks: stacksFrom([{ ...source, opacity: 0.2 }]) });
     });
 
     await expect(
@@ -10961,7 +11341,7 @@ describe('commitGeneratedImageResult', () => {
     expect(() => engine.history.redo()).toThrow('generated cache allocation failed');
     expect(engine.document.getDocument()).toEqual(document);
     expect(engine.document.getDocument()!.selectedLayerId).toBe(selected.id);
-    expect(engine.document.getDocument()!.layers.some((layer) => layer.id === result.layerId)).toBe(false);
+    expect(getDocumentLeaves(engine.document.getDocument()!).some((layer) => layer.id === result.layerId)).toBe(false);
     expect(engine.stores.canUndo.get()).toBe(false);
     expect(engine.stores.canRedo.get()).toBe(true);
 
@@ -11029,13 +11409,13 @@ describe('replaceSelectionFromImage', () => {
     type: 'raster',
   });
 
-  const sourceDocument = (layer: CanvasLayerContract = sourceLayer()): CanvasDocumentContractV2 => ({
+  const sourceDocument = (layer: CanvasLayerContract = sourceLayer()): CanvasDocumentContractV3 => ({
     background: 'transparent',
     bbox: { height: 100, width: 100, x: 0, y: 0 },
     height: 100,
-    layers: [layer],
+    stacks: stacksFrom([layer]),
     selectedLayerId: layer.id,
-    version: 2,
+    version: 3,
     width: 100,
   });
 
@@ -11273,19 +11653,19 @@ describe('replaceSelectionFromImage', () => {
       expected: 'missing',
       label: 'source deletion',
       mutate: (harness: Awaited<ReturnType<typeof createHarness>>) =>
-        harness.setDocument({ ...harness.document, layers: [] }),
+        harness.setDocument({ ...harness.document, stacks: stacksFrom([]) }),
     },
     {
       expected: 'stale',
       label: 'source contract edit',
       mutate: (harness: Awaited<ReturnType<typeof createHarness>>) =>
-        harness.setDocument({ ...harness.document, layers: [{ ...harness.layer, opacity: 0.5 }] }),
+        harness.setDocument({ ...harness.document, stacks: stacksFrom([{ ...harness.layer, opacity: 0.5 }]) }),
     },
     {
       expected: 'locked',
       label: 'source lock',
       mutate: (harness: Awaited<ReturnType<typeof createHarness>>) =>
-        harness.setDocument({ ...harness.document, layers: [{ ...harness.layer, isLocked: true }] }),
+        harness.setDocument({ ...harness.document, stacks: stacksFrom([{ ...harness.layer, isLocked: true }]) }),
     },
     {
       expected: 'unsupported',
@@ -11297,7 +11677,7 @@ describe('replaceSelectionFromImage', () => {
           mask: { bitmap: null, fill: { color: '#fff', style: 'solid' } },
           type: 'inpaint_mask',
         };
-        harness.setDocument({ ...harness.document, layers: [mask] });
+        harness.setDocument({ ...harness.document, stacks: stacksFrom([mask]) });
       },
     },
     {
@@ -11430,16 +11810,16 @@ describe('commitMaskImageResult', () => {
     type: 'regional_guidance',
   });
 
-  const docFor = (target: 'inpaint_mask' | 'regional_guidance'): CanvasDocumentContractV2 => {
+  const docFor = (target: 'inpaint_mask' | 'regional_guidance'): CanvasDocumentContractV3 => {
     const layer = source();
     const below = { ...source(), id: 'below', name: 'Below' };
     return {
       background: 'transparent',
       bbox: { height: 100, width: 100, x: 0, y: 0 },
       height: 100,
-      layers: [target === 'inpaint_mask' ? existingInpaint() : existingRegional(), layer, below],
+      stacks: stacksFrom([target === 'inpaint_mask' ? existingInpaint() : existingRegional(), layer, below]),
       selectedLayerId: below.id,
-      version: 2,
+      version: 3,
       width: 100,
     };
   };
@@ -11484,7 +11864,7 @@ describe('commitMaskImageResult', () => {
       target: 'regional_guidance',
     },
   ] as const)(
-    'adds a complete $target directly above the source with one exact history entry',
+    'adds a complete $target at the top of its stack with one exact history entry',
     async ({ expected, target }) => {
       const document = docFor(target);
       const { projectId, store } = createReducerBackedStore(document);
@@ -11513,11 +11893,11 @@ describe('commitMaskImageResult', () => {
       if (result.status !== 'committed') {
         throw new Error('expected a committed mask');
       }
-      const created = engine.document.getDocument()!.layers.find((layer) => layer.id === result.layerId)!;
+      const created = getDocumentLeaves(engine.document.getDocument()!).find((layer) => layer.id === result.layerId)!;
       expect(created).toEqual({ ...expected, id: result.layerId });
-      expect(engine.document.getDocument()!.layers.map((layer) => layer.id)).toEqual([
-        document.layers[0]!.id,
+      expect(getDocumentLeaves(engine.document.getDocument()!).map((layer) => layer.id)).toEqual([
         result.layerId,
+        getDocumentLeaves(document)[0]!.id,
         'source',
         'below',
       ]);
@@ -11533,7 +11913,9 @@ describe('commitMaskImageResult', () => {
       expect(engine.stores.canRedo.get()).toBe(true);
 
       engine.history.redo();
-      expect(engine.document.getDocument()!.layers.find((layer) => layer.id === result.layerId)).toEqual(created);
+      expect(getDocumentLeaves(engine.document.getDocument()!).find((layer) => layer.id === result.layerId)).toEqual(
+        created
+      );
       expect(engine.document.getDocument()!.selectedLayerId).toBe(result.layerId);
       expect(engine.stores.canUndo.get()).toBe(true);
       expect(engine.stores.canRedo.get()).toBe(false);
@@ -11574,7 +11956,7 @@ describe('commitMaskImageResult', () => {
     expect(engine.document.getDocument()).toBe(
       store.getState().projects.find((project) => project.id === projectId)!.canvas.document
     );
-    expect(engine.document.getDocument()!.layers.some((layer) => layer.id === result.layerId)).toBe(true);
+    expect(getDocumentLeaves(engine.document.getDocument()!).some((layer) => layer.id === result.layerId)).toBe(true);
     expect(engine.stores.canUndo.get()).toBe(true);
 
     engine.history.undo();
@@ -11707,7 +12089,7 @@ describe('commitMaskImageResult', () => {
 
     expect(() => engine.history.undo()).toThrow('mask removal failed');
 
-    expect(engine.document.getDocument()!.layers.some((layer) => layer.id === result.layerId)).toBe(true);
+    expect(getDocumentLeaves(engine.document.getDocument()!).some((layer) => layer.id === result.layerId)).toBe(true);
     expect(engine.document.getDocument()!.selectedLayerId).toBe('below');
     expect(engine.stores.canUndo.get()).toBe(true);
     expect(engine.stores.canRedo.get()).toBe(false);
@@ -11721,7 +12103,7 @@ describe('commitMaskImageResult', () => {
 
   const guardHarness = async () => {
     const layer = source();
-    const document: CanvasDocumentContractV2 = { ...docFor('inpaint_mask'), layers: [layer] };
+    const document: CanvasDocumentContractV3 = { ...docFor('inpaint_mask'), stacks: stacksFrom([layer]) };
     const reactive = createReactiveStore(document);
     const engine = createCanvasEngine({
       backend: createTestStubRasterBackend(),
@@ -11762,19 +12144,19 @@ describe('commitMaskImageResult', () => {
       expected: 'missing',
       label: 'source deletion',
       mutate: (harness: Awaited<ReturnType<typeof guardHarness>>) =>
-        harness.setDocument({ ...harness.document, layers: [] }),
+        harness.setDocument({ ...harness.document, stacks: stacksFrom([]) }),
     },
     {
       expected: 'stale',
       label: 'source contract edit',
       mutate: (harness: Awaited<ReturnType<typeof guardHarness>>) =>
-        harness.setDocument({ ...harness.document, layers: [{ ...harness.layer, opacity: 0.4 }] }),
+        harness.setDocument({ ...harness.document, stacks: stacksFrom([{ ...harness.layer, opacity: 0.4 }]) }),
     },
     {
       expected: 'locked',
       label: 'source lock',
       mutate: (harness: Awaited<ReturnType<typeof guardHarness>>) =>
-        harness.setDocument({ ...harness.document, layers: [{ ...harness.layer, isLocked: true }] }),
+        harness.setDocument({ ...harness.document, stacks: stacksFrom([{ ...harness.layer, isLocked: true }]) }),
     },
     {
       expected: 'unsupported',
@@ -11786,7 +12168,7 @@ describe('commitMaskImageResult', () => {
           mask: { bitmap: null, fill: { color: '#fff', style: 'solid' } },
           type: 'inpaint_mask',
         };
-        harness.setDocument({ ...harness.document, layers: [mask] });
+        harness.setDocument({ ...harness.document, stacks: stacksFrom([mask]) });
       },
     },
     {
@@ -11849,13 +12231,13 @@ describe('guarded filter previews', () => {
     name: 'Upscaler',
     type: 'spandrel_image_to_image',
   };
-  const emptyDoc = (): CanvasDocumentContractV2 => ({
+  const emptyDoc = (): CanvasDocumentContractV3 => ({
     background: 'transparent',
     bbox: { height: 100, width: 100, x: 0, y: 0 },
     height: 100,
-    layers: [],
+    stacks: stacksFrom([]),
     selectedLayerId: null,
-    version: 2,
+    version: 3,
     width: 100,
   });
 
@@ -11890,7 +12272,7 @@ describe('guarded filter previews', () => {
 
   it('auto-processes a debounced preview after a filter draft update', async () => {
     const layer = guardableLayer('auto-filter');
-    const { store } = createReactiveStore({ ...emptyDoc(), layers: [layer] });
+    const { store } = createReactiveStore({ ...emptyDoc(), stacks: stacksFrom([layer]) });
     const runGraph = vi.fn(() =>
       Promise.resolve({ height: 10, imageName: 'auto.png', origin: 'test', output: {}, width: 10 })
     );
@@ -11927,7 +12309,7 @@ describe('guarded filter previews', () => {
 
   it('setFilterOperationAutoProcess toggles the session and stops auto-runs', async () => {
     const layer = guardableLayer('auto-filter-toggle');
-    const { store } = createReactiveStore({ ...emptyDoc(), layers: [layer] });
+    const { store } = createReactiveStore({ ...emptyDoc(), stacks: stacksFrom([layer]) });
     const runGraph = vi.fn(() =>
       Promise.resolve({ height: 10, imageName: 'auto.png', origin: 'test', output: {}, width: 10 })
     );
@@ -11962,7 +12344,7 @@ describe('guarded filter previews', () => {
 
   it('clears the session and ends the operation after a committed filter commit', async () => {
     const source = guardableLayer('commit-clear');
-    const document = { ...emptyDoc(), layers: [source], selectedLayerId: source.id };
+    const document = { ...emptyDoc(), stacks: stacksFrom([source]), selectedLayerId: source.id };
     const { projectId, store } = createReducerBackedStore(document);
     const engine = createCanvasEngine({
       backend: filterBitmapBackend(),
@@ -11993,7 +12375,7 @@ describe('guarded filter previews', () => {
     'rejects a decoded dimension mismatch for canny %s without scaling, then retries successfully',
     async (target) => {
       const source = guardableLayer('dimension-source');
-      const document = { ...emptyDoc(), layers: [source], selectedLayerId: source.id };
+      const document = { ...emptyDoc(), stacks: stacksFrom([source]), selectedLayerId: source.id };
       const { projectId, store } = createReducerBackedStore(document);
       const base = createTestStubRasterBackend();
       const decodedDimensions = [
@@ -12066,14 +12448,14 @@ describe('guarded filter previews', () => {
       );
       expect(bitmapDraws.length).toBeGreaterThan(0);
       expect(bitmapDraws.every((entry) => entry.args.length === 3)).toBe(true);
-      expect(engine.document.getDocument()?.layers).toHaveLength(target === 'apply' ? 1 : 2);
+      expect(getDocumentLeaves(engine.document.getDocument())).toHaveLength(target === 'apply' ? 1 : 2);
       engine.lifecycle.dispose();
     }
   );
 
   it('interaction lock blocks Filter and Select Object launches without creating sessions', async () => {
     const layer = guardableLayer('locked-launch');
-    const { store } = createReactiveStore({ ...emptyDoc(), layers: [layer] });
+    const { store } = createReactiveStore({ ...emptyDoc(), stacks: stacksFrom([layer]) });
     const engine = createCanvasEngine({
       backend: filterBitmapBackend(),
       imageResolver: () => Promise.resolve(new Blob()),
@@ -12094,7 +12476,7 @@ describe('guarded filter previews', () => {
 
   it('keeps an active Select Object operation available to cancel while interaction is locked', async () => {
     const layer = guardableLayer('active-before-lock');
-    const { store } = createReactiveStore({ ...emptyDoc(), layers: [layer] });
+    const { store } = createReactiveStore({ ...emptyDoc(), stacks: stacksFrom([layer]) });
     const engine = createCanvasEngine({
       backend: filterBitmapBackend(),
       imageResolver: () => Promise.resolve(new Blob()),
@@ -12143,7 +12525,7 @@ describe('guarded filter previews', () => {
 
   it('publishes a guarded filter preview while the exported layer snapshot remains current', async () => {
     const bitmaps = createDeferredBitmapBackend();
-    const document = { ...emptyDoc(), layers: [guardableLayer('L')] };
+    const document = { ...emptyDoc(), stacks: stacksFrom([guardableLayer('L')]) };
     const { store } = createReactiveStore(document);
     const engine = createCanvasEngine({
       backend: bitmaps.backend,
@@ -12170,7 +12552,7 @@ describe('guarded filter previews', () => {
 
   it('owns a guarded filter session independently of the launching view', async () => {
     const layer = { ...guardableLayer('L'), filter: { settings: { radius: 2 }, type: 'content_shuffle' } };
-    const document = { ...emptyDoc(), layers: [layer] };
+    const document = { ...emptyDoc(), stacks: stacksFrom([layer]) };
     const { store } = createReactiveStore(document);
     const engine = createCanvasEngine({
       backend: filterBitmapBackend(),
@@ -12214,7 +12596,7 @@ describe('guarded filter previews', () => {
       ...guardableLayer('manual'),
       filter: { settings: { coarse: true }, type: 'lineart_edge_detection' },
     };
-    const document = { ...emptyDoc(), layers: [unfiltered, manual] };
+    const document = { ...emptyDoc(), stacks: stacksFrom([unfiltered, manual]) };
     const { store } = createReactiveStore(document);
     const engine = createCanvasEngine({
       backend: createTestStubRasterBackend(),
@@ -12241,7 +12623,7 @@ describe('guarded filter previews', () => {
   it('does not replace another layer filter session with a recommendation', async () => {
     const first = guardableLayer('first');
     const second = guardableLayer('second');
-    const document = { ...emptyDoc(), layers: [first, second] };
+    const document = { ...emptyDoc(), stacks: stacksFrom([first, second]) };
     const { store } = createReactiveStore(document);
     const engine = createCanvasEngine({
       backend: createTestStubRasterBackend(),
@@ -12262,7 +12644,7 @@ describe('guarded filter previews', () => {
 
   it('does not overwrite a same-layer draft or preview on rapid recommendations', async () => {
     const layer = guardableLayer('recommended');
-    const document = { ...emptyDoc(), layers: [layer] };
+    const document = { ...emptyDoc(), stacks: stacksFrom([layer]) };
     const { store } = createReactiveStore(document);
     const engine = createCanvasEngine({
       backend: createTestStubRasterBackend(),
@@ -12290,7 +12672,7 @@ describe('guarded filter previews', () => {
   it('does not replace a different active canvas operation with a recommendation', async () => {
     const first = guardableLayer('first');
     const second = guardableLayer('second');
-    const document = { ...emptyDoc(), layers: [first, second] };
+    const document = { ...emptyDoc(), stacks: stacksFrom([first, second]) };
     const { store } = createReactiveStore(document);
     const engine = createCanvasEngine({
       backend: createTestStubRasterBackend(),
@@ -12344,7 +12726,7 @@ describe('guarded filter previews', () => {
 
   const createFilterFlowHarness = async (sourceType: 'raster' | 'control') => {
     const source = filterFlowLayer(sourceType);
-    const document = { ...emptyDoc(), layers: [source], selectedLayerId: source.id };
+    const document = { ...emptyDoc(), stacks: stacksFrom([source]), selectedLayerId: source.id };
     const { projectId, store } = createReducerBackedStore(document);
     const engine = createCanvasEngine({
       backend: filterBitmapBackend(),
@@ -12419,7 +12801,7 @@ describe('guarded filter previews', () => {
     const source = filterFlowLayer('raster');
     const { projectId, store } = createReducerBackedStore({
       ...emptyDoc(),
-      layers: [source],
+      stacks: stacksFrom([source]),
       selectedLayerId: source.id,
     });
     const graph = createDeferred<{ height: number; imageName: string; origin: string; output: {}; width: number }>();
@@ -12483,7 +12865,7 @@ describe('guarded filter previews', () => {
     'preserves $type/$target output geometry through preview, commit, and one-entry undo/redo',
     async ({ expectedRect, output, settings, target, type }) => {
       const source = filterFlowLayer('raster');
-      const document = { ...emptyDoc(), layers: [source], selectedLayerId: source.id };
+      const document = { ...emptyDoc(), stacks: stacksFrom([source]), selectedLayerId: source.id };
       const { projectId, store } = createReducerBackedStore(document);
       const engine = createCanvasEngine({
         backend: filterBitmapBackend(output.width, output.height),
@@ -12506,8 +12888,8 @@ describe('guarded filter previews', () => {
       expect(getCanvasOperations(engine).stores.filterSession.get()?.preview?.rect).toEqual(expectedRect);
       await getCanvasOperations(engine).commitFilterOperation(target, () => Promise.resolve());
 
-      const committedId = target === 'apply' ? source.id : engine.document.getDocument()!.layers[0]!.id;
-      const committed = engine.document.getDocument()!.layers.find((layer) => layer.id === committedId)!;
+      const committedId = target === 'apply' ? source.id : getDocumentLeaves(engine.document.getDocument()!)[0]!.id;
+      const committed = getDocumentLeaves(engine.document.getDocument()!).find((layer) => layer.id === committedId)!;
       expect(committed.transform).toEqual(source.transform);
       if (!('source' in committed)) {
         throw new Error('expected a raster or control filter result');
@@ -12525,7 +12907,7 @@ describe('guarded filter previews', () => {
       expect(engine.document.getDocument()).toEqual(document);
       expect(engine.stores.canUndo.get()).toBe(false);
       engine.history.redo();
-      const redone = engine.document.getDocument()!.layers.find((layer) => layer.id === committedId)!;
+      const redone = getDocumentLeaves(engine.document.getDocument()!).find((layer) => layer.id === committedId)!;
       expect(redone).toEqual(committed);
       expect(engine.stores.canRedo.get()).toBe(false);
       engine.lifecycle.dispose();
@@ -12556,7 +12938,7 @@ describe('guarded filter previews', () => {
       expect(makeDurable).toHaveBeenCalledTimes(2);
       expect(getCanvasOperations(engine).stores.filterSession.get()).toBeNull();
       expect(getCanvasOperations(engine).controller.getSnapshot()).toEqual({ status: 'idle' });
-      expect(engine.document.getDocument()!.layers[0]).toMatchObject({
+      expect(getDocumentLeaves(engine.document.getDocument()!)[0]).toMatchObject({
         filter: source.filter,
         opacity: source.opacity,
         blendMode: source.blendMode,
@@ -12580,8 +12962,11 @@ describe('guarded filter previews', () => {
       await getCanvasOperations(engine).commitFilterOperation(target, () => Promise.resolve());
 
       expect(getCanvasOperations(engine).stores.filterSession.get()).toBeNull();
-      expect(engine.document.getDocument()!.layers.map((layer) => layer.type)).toEqual([target, 'control']);
-      expect(engine.document.getDocument()!.layers[0]).toMatchObject({
+      const saved = engine.document.getDocument()!.stacks[target][0]!;
+      expect(getDocumentLeaves(engine.document.getDocument()!).map((layer) => layer.id)).toEqual(
+        target === 'control' ? [saved.id, source.id] : [source.id, saved.id]
+      );
+      expect(saved).toMatchObject({
         blendMode: source.blendMode,
         opacity: source.opacity,
         source: { offset: { x: 7, y: -3 }, type: 'paint' },
@@ -12589,7 +12974,7 @@ describe('guarded filter previews', () => {
       });
       expect(engine.stores.canUndo.get()).toBe(true);
       engine.history.undo();
-      expect(engine.document.getDocument()!.layers).toEqual([source]);
+      expect(getDocumentLeaves(engine.document.getDocument()!)).toEqual([source]);
       expect(engine.stores.canUndo.get()).toBe(false);
       engine.lifecycle.dispose();
     }
@@ -12608,7 +12993,7 @@ describe('guarded filter previews', () => {
     resolvePromotion();
     await pending;
 
-    expect(engine.document.getDocument()!.layers[0]).toEqual(source);
+    expect(getDocumentLeaves(engine.document.getDocument()!)[0]).toEqual(source);
     expect(getCanvasOperations(engine).stores.filterSession.get()).toBeNull();
     expect(getCanvasOperations(engine).controller.getSnapshot()).toMatchObject({
       identity: { kind: 'select-object' },
@@ -12620,7 +13005,7 @@ describe('guarded filter previews', () => {
 
   it('aborts an in-flight upload when a newer Process request wins', async () => {
     const source = filterFlowLayer('raster');
-    const document = { ...emptyDoc(), layers: [source], selectedLayerId: source.id };
+    const document = { ...emptyDoc(), stacks: stacksFrom([source]), selectedLayerId: source.id };
     const { projectId, store } = createReducerBackedStore(document);
     const uploadSignals: AbortSignal[] = [];
     let uploadCount = 0;
@@ -12668,7 +13053,7 @@ describe('guarded filter previews', () => {
   });
 
   it('makes filter and Select Object operations mutually exclusive', async () => {
-    const document = { ...emptyDoc(), layers: [guardableLayer('L')] };
+    const document = { ...emptyDoc(), stacks: stacksFrom([guardableLayer('L')]) };
     const { store } = createReactiveStore(document);
     const engine = createCanvasEngine({
       backend: createTestStubRasterBackend(),
@@ -12691,7 +13076,7 @@ describe('guarded filter previews', () => {
   });
 
   it('refuses ordinary structural editing while a filter operation is active', async () => {
-    const document = { ...emptyDoc(), layers: [guardableLayer('L')] };
+    const document = { ...emptyDoc(), stacks: stacksFrom([guardableLayer('L')]) };
     const { store } = createReactiveStore(document);
     const engine = createCanvasEngine({
       backend: createTestStubRasterBackend(),
@@ -12720,7 +13105,7 @@ describe('guarded filter previews', () => {
     'centrally blocks edits and undo during %s, then restores them after cancel',
     async (kind) => {
       const layer = guardableLayer('L');
-      const document = { ...emptyDoc(), layers: [layer], selectedLayerId: layer.id };
+      const document = { ...emptyDoc(), stacks: stacksFrom([layer]), selectedLayerId: layer.id };
       const { projectId, store } = createReducerBackedStore(document);
       const engine = createCanvasEngine({
         backend: createTestStubRasterBackend(),
@@ -12771,7 +13156,10 @@ describe('guarded filter previews', () => {
         })
       ).resolves.toEqual({ status: 'busy' });
 
-      expect(engine.document.getDocument()!.layers[0]).toMatchObject({ name: 'Renamed', transform: { x: 0 } });
+      expect(getDocumentLeaves(engine.document.getDocument()!)[0]).toMatchObject({
+        name: 'Renamed',
+        transform: { x: 0 },
+      });
       expect(getCanvasOperations(engine).controller.getSnapshot()).toMatchObject({
         identity: { kind },
         status: 'active',
@@ -12785,14 +13173,14 @@ describe('guarded filter previews', () => {
       expect(engine.stores.documentEditingLocked.get()).toBe(false);
       expect(engine.stores.documentEditingLayerId.get()).toBeNull();
       engine.history.undo();
-      expect(engine.document.getDocument()!.layers[0]?.name).toBe('L');
+      expect(getDocumentLeaves(engine.document.getDocument()!)[0]?.name).toBe('L');
       engine.lifecycle.dispose();
     }
   );
 
   it('does not clear history while document editing is locked', async () => {
     const layer = guardableLayer('L');
-    const document = { ...emptyDoc(), layers: [layer] };
+    const document = { ...emptyDoc(), stacks: stacksFrom([layer]) };
     const { projectId, store } = createReducerBackedStore(document);
     const engine = createCanvasEngine({
       backend: createTestStubRasterBackend(),
@@ -12831,7 +13219,7 @@ describe('guarded filter previews', () => {
 
   it('invalidates the owned filter session when its guarded source changes', async () => {
     const layer = guardableLayer('L');
-    const document = { ...emptyDoc(), layers: [layer] };
+    const document = { ...emptyDoc(), stacks: stacksFrom([layer]) };
     const { setDocument, store } = createReactiveStore(document);
     const engine = createCanvasEngine({
       backend: createTestStubRasterBackend(),
@@ -12846,7 +13234,7 @@ describe('guarded filter previews', () => {
       initialFilter: null,
     });
 
-    setDocument({ ...document, layers: [{ ...layer, opacity: 0.5 }] });
+    setDocument({ ...document, stacks: stacksFrom([{ ...layer, opacity: 0.5 }]) });
 
     expect(getCanvasOperations(engine).controller.getSnapshot()).toEqual({ status: 'idle' });
     expect(getCanvasOperations(engine).stores.filterSession.get()).toBeNull();
@@ -12856,7 +13244,7 @@ describe('guarded filter previews', () => {
   it('rejects a guarded filter preview when its source changes during decode', async () => {
     const bitmaps = createDeferredBitmapBackend();
     const layer = guardableLayer('L');
-    const document = { ...emptyDoc(), layers: [layer] };
+    const document = { ...emptyDoc(), stacks: stacksFrom([layer]) };
     const { setDocument, store } = createReactiveStore(document);
     const engine = createCanvasEngine({
       backend: bitmaps.backend,
@@ -12877,7 +13265,7 @@ describe('guarded filter previews', () => {
     await flushMicrotasks();
     setDocument({
       ...document,
-      layers: [{ ...layer, source: { ...layer.source, fill: '#000' } } as CanvasLayerContract],
+      stacks: stacksFrom([{ ...layer, source: { ...layer.source, fill: '#000' } } as CanvasLayerContract]),
     });
     bitmaps.resolveBitmap(0);
 
@@ -12888,7 +13276,7 @@ describe('guarded filter previews', () => {
   it('rejects a guarded filter preview when raster adjustments change during decode', async () => {
     const bitmaps = createDeferredBitmapBackend();
     const layer = guardableLayer('L');
-    const document = { ...emptyDoc(), layers: [layer] };
+    const document = { ...emptyDoc(), stacks: stacksFrom([layer]) };
     const { setDocument, store } = createReactiveStore(document);
     const engine = createCanvasEngine({
       backend: bitmaps.backend,
@@ -12909,7 +13297,14 @@ describe('guarded filter previews', () => {
     await flushMicrotasks();
     setDocument({
       ...document,
-      layers: [{ ...layer, adjustments: { brightness: 0.2, contrast: 0, saturation: 0 } }],
+      stacks: stacksFrom([
+        {
+          ...layer,
+          adjustments: [
+            { brightness: 0.2, contrast: 0, id: 'adj-bc', isEnabled: true, type: 'brightness-contrast' as const },
+          ],
+        },
+      ]),
     });
     bitmaps.resolveBitmap(0);
 
@@ -12919,7 +13314,7 @@ describe('guarded filter previews', () => {
 
   it('rejects a guarded filter preview when the paint cache version changes during decode', async () => {
     const bitmaps = createDeferredBitmapBackend();
-    const document = { ...emptyDoc(), layers: [guardableLayer('L')] };
+    const document = { ...emptyDoc(), stacks: stacksFrom([guardableLayer('L')]) };
     const { store } = createReactiveStore(document);
     const engine = createCanvasEngine({
       backend: bitmaps.backend,
@@ -12948,7 +13343,7 @@ describe('guarded filter previews', () => {
 
   it('returns missing when the guarded preview layer is deleted during decode', async () => {
     const bitmaps = createDeferredBitmapBackend();
-    const document = { ...emptyDoc(), layers: [guardableLayer('L')] };
+    const document = { ...emptyDoc(), stacks: stacksFrom([guardableLayer('L')]) };
     const { setDocument, store } = createReactiveStore(document);
     const engine = createCanvasEngine({
       backend: bitmaps.backend,
@@ -12967,7 +13362,7 @@ describe('guarded filter previews', () => {
       exported.guard
     );
     await flushMicrotasks();
-    setDocument({ ...document, layers: [] });
+    setDocument({ ...document, stacks: stacksFrom([]) });
     bitmaps.resolveBitmap(0);
 
     await expect(pending).resolves.toBe('missing');
@@ -12976,7 +13371,7 @@ describe('guarded filter previews', () => {
 
   it('rejects a guarded filter preview after document replacement reuses the layer id', async () => {
     const bitmaps = createDeferredBitmapBackend();
-    const document = { ...emptyDoc(), layers: [guardableLayer('L')] };
+    const document = { ...emptyDoc(), stacks: stacksFrom([guardableLayer('L')]) };
     const { setDocument, store } = createReactiveStore(document);
     const engine = createCanvasEngine({
       backend: bitmaps.backend,
@@ -13004,7 +13399,7 @@ describe('guarded filter previews', () => {
 
   it('lets only the newest guarded filter preview publish', async () => {
     const bitmaps = createDeferredBitmapBackend();
-    const document = { ...emptyDoc(), layers: [guardableLayer('L')] };
+    const document = { ...emptyDoc(), stacks: stacksFrom([guardableLayer('L')]) };
     const { store } = createReactiveStore(document);
     const engine = createCanvasEngine({
       backend: bitmaps.backend,
@@ -13057,7 +13452,7 @@ describe('guarded filter previews', () => {
     backend.createImageBitmap = vi.fn(() =>
       Promise.resolve(recordingBitmap(sourceNeedsBitmap && bitmapCall++ === 0 ? 'layer-source' : 'guarded-preview'))
     );
-    const document = { ...emptyDoc(), layers: [layer], selectedLayerId: layer.id };
+    const document = { ...emptyDoc(), stacks: stacksFrom([layer]), selectedLayerId: layer.id };
     const reactive = createReactiveStore(document);
     const engine = createCanvasEngine({
       backend,
@@ -13101,7 +13496,7 @@ describe('guarded filter previews', () => {
 
   it('publishes an in-flight guarded preview across an active-project away/back transition', async () => {
     const bitmaps = createDeferredBitmapBackend();
-    const document = { ...emptyDoc(), layers: [guardableLayer('L')] };
+    const document = { ...emptyDoc(), stacks: stacksFrom([guardableLayer('L')]) };
     const reactive = createReactiveStore(document);
     const engine = createCanvasEngine({
       backend: bitmaps.backend,
@@ -13146,7 +13541,9 @@ describe('guarded filter previews', () => {
     const harness = await createPublishedGuardedPreview();
     harness.setDocument({
       ...harness.document,
-      layers: [{ ...harness.layer, source: { ...harness.layer.source, fill: '#000' } } as CanvasLayerContract],
+      stacks: stacksFrom([
+        { ...harness.layer, source: { ...harness.layer.source, fill: '#000' } } as CanvasLayerContract,
+      ]),
     });
     harness.raf.flush();
 
@@ -13158,7 +13555,14 @@ describe('guarded filter previews', () => {
     const harness = await createPublishedGuardedPreview();
     harness.setDocument({
       ...harness.document,
-      layers: [{ ...harness.layer, adjustments: { brightness: 0.3, contrast: 0, saturation: 0 } }],
+      stacks: stacksFrom([
+        {
+          ...harness.layer,
+          adjustments: [
+            { brightness: 0.3, contrast: 0, id: 'adj-bc', isEnabled: true, type: 'brightness-contrast' as const },
+          ],
+        },
+      ]),
     });
     harness.raf.flush();
 
@@ -13364,10 +13768,9 @@ describe('document mirror wiring: prop vs source change (paint-pixel survival)',
     await expect(engine.lifecycle.flushPendingUploads()).resolves.toBeUndefined();
     await expect(engine.lifecycle.flushPendingUploads()).resolves.toBeUndefined();
 
-    const authoritativeLayer = reducer.store
-      .getState()
-      .projects.find((project) => project.id === reducer.projectId)
-      ?.canvas.document.layers.find((layer) => layer.id === 'paint1');
+    const authoritativeLayer = getDocumentLeaves(
+      reducer.store.getState().projects.find((project) => project.id === reducer.projectId)?.canvas.document
+    ).find((layer) => layer.id === 'paint1');
     expect(uploadImage).toHaveBeenCalledOnce();
     const bitmapUpdates = reducer.dispatch.mock.calls
       .map(([action]) => action)
@@ -13499,10 +13902,10 @@ describe('document mirror wiring: prop vs source change (paint-pixel survival)',
     // A prop-only edit that PRESERVES the source reference (exactly as the reducer
     // does — it spreads `...layer`): opacity + a transform nudge.
     const doc = engine.document.getDocument()!;
-    const layer = doc.layers[0]!;
+    const layer = getDocumentLeaves(doc)[0]!;
     setDocument({
       ...doc,
-      layers: [{ ...layer, opacity: 0.5, transform: { ...layer.transform, x: 12, y: -4 } }],
+      stacks: stacksFrom([{ ...layer, opacity: 0.5, transform: { ...layer.transform, x: 12, y: -4 } }]),
     });
     raf.flush();
     await flushMicrotasks();
@@ -13513,7 +13916,7 @@ describe('document mirror wiring: prop vs source change (paint-pixel survival)',
     expect(fullClearCount(paintCache)).toBe(clearsBefore);
     // No resolve/rasterize was even attempted for the paint layer.
     expect(resolver).not.toHaveBeenCalled();
-    expect(engine.document.getDocument()!.layers[0]!.opacity).toBe(0.5);
+    expect(getDocumentLeaves(engine.document.getDocument()!)[0]!.opacity).toBe(0.5);
 
     engine.lifecycle.dispose();
   });
@@ -13534,7 +13937,7 @@ describe('document mirror wiring: prop vs source change (paint-pixel survival)',
 
   it('preserves live pixels through contract copy and conversion history', async () => {
     const engine = await paintOneStrokeWithReducer();
-    const raster = engine.document.getDocument()!.layers[0]!;
+    const raster = getDocumentLeaves(engine.document.getDocument()!)[0]!;
     if (raster.type !== 'raster') {
       throw new Error('expected raster source');
     }
@@ -13552,18 +13955,29 @@ describe('document mirror wiring: prop vs source change (paint-pixel survival)',
     };
     const copy = { ...control, id: 'control-copy', name: 'Control copy' };
 
-    expect(engine.layers.commitLayerCopy('Copy layer', raster.id, copy, 0)).toBe(true);
+    expect(
+      engine.layers.commitLayerCopy(
+        'Copy layer',
+        raster.id,
+        copy,
+        engine.document.captureInsertionAnchor(copy.type, raster.id)
+      )
+    ).toBe(true);
     expect((await engine.exports.exportLayerPixels(copy.id)).status).toBe('ok');
     engine.history.undo();
-    expect(engine.document.getDocument()!.layers.some((layer) => layer.id === copy.id)).toBe(false);
+    expect(getDocumentLeaves(engine.document.getDocument()!).some((layer) => layer.id === copy.id)).toBe(false);
     engine.history.redo();
     expect((await engine.exports.exportLayerPixels(copy.id)).status).toBe('ok');
 
     expect(engine.layers.commitLayerConversion('Convert layer', raster, control)).toBe(true);
-    expect(engine.document.getDocument()!.layers.find((layer) => layer.id === raster.id)?.type).toBe('control');
+    expect(getDocumentLeaves(engine.document.getDocument()!).find((layer) => layer.id === raster.id)?.type).toBe(
+      'control'
+    );
     expect((await engine.exports.exportLayerPixels(raster.id)).status).toBe('ok');
     engine.history.undo();
-    expect(engine.document.getDocument()!.layers.find((layer) => layer.id === raster.id)?.type).toBe('raster');
+    expect(getDocumentLeaves(engine.document.getDocument()!).find((layer) => layer.id === raster.id)?.type).toBe(
+      'raster'
+    );
     expect((await engine.exports.exportLayerPixels(raster.id)).status).toBe('ok');
     engine.lifecycle.dispose();
   });
@@ -13577,7 +13991,7 @@ describe('document mirror wiring: prop vs source change (paint-pixel survival)',
       store,
     });
     expect((await engine.exports.exportLayerPixels('a')).status).toBe('ok');
-    const live = engine.document.getDocument()!.layers[0]!;
+    const live = getDocumentLeaves(engine.document.getDocument()!)[0]!;
     if (live.type !== 'raster') {
       throw new Error('expected raster layer');
     }
@@ -13591,7 +14005,7 @@ describe('document mirror wiring: prop vs source change (paint-pixel survival)',
 
     expect(engine.layers.commitLayerConversion('Convert', structuredClone(live), converted)).toBe(false);
     expect(dispatch).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'convertCanvasLayer' }));
-    expect(engine.document.getDocument()!.layers[0]!.type).toBe('raster');
+    expect(getDocumentLeaves(engine.document.getDocument()!)[0]!.type).toBe('raster');
     engine.lifecycle.dispose();
   });
 
@@ -13604,7 +14018,7 @@ describe('document mirror wiring: prop vs source change (paint-pixel survival)',
       store,
     });
     expect((await engine.exports.exportLayerPixels('a')).status).toBe('ok');
-    const expectedUnlocked = engine.document.getDocument()!.layers[0]!;
+    const expectedUnlocked = getDocumentLeaves(engine.document.getDocument()!)[0]!;
     if (expectedUnlocked.type !== 'raster') {
       throw new Error('expected raster layer');
     }
@@ -13619,7 +14033,7 @@ describe('document mirror wiring: prop vs source change (paint-pixel survival)',
 
     expect(engine.layers.commitLayerConversion('Convert', expectedUnlocked, converted)).toBe(false);
     expect(dispatch).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'convertCanvasLayer' }));
-    expect(engine.document.getDocument()!.layers[0]).toMatchObject({ isLocked: true, type: 'raster' });
+    expect(getDocumentLeaves(engine.document.getDocument()!)[0]).toMatchObject({ isLocked: true, type: 'raster' });
     engine.lifecycle.dispose();
   });
 
@@ -13628,8 +14042,8 @@ describe('document mirror wiring: prop vs source change (paint-pixel survival)',
     const clearsBefore = fullClearCount(paintCache);
 
     const doc = engine.document.getDocument()!;
-    const layer = doc.layers[0]!;
-    setDocument({ ...doc, layers: [{ ...layer, opacity: 0.25 }] });
+    const layer = getDocumentLeaves(doc)[0]!;
+    setDocument({ ...doc, stacks: stacksFrom([{ ...layer, opacity: 0.25 }]) });
     raf.flush();
     await flushMicrotasks();
     raf.flush();
@@ -13654,15 +14068,18 @@ describe('document mirror wiring: prop vs source change (paint-pixel survival)',
     // persisted bitmap). isSelfEcho is false in the spy store, so this must
     // invalidate and re-rasterize — which decodes the persisted image.
     const doc = engine.document.getDocument()!;
-    const layer = doc.layers[0] as CanvasRasterLayerContractV2;
+    const layer = getDocumentLeaves(doc)[0] as CanvasRasterLayerContractV2;
     setDocument({
       ...doc,
-      layers: [
+      stacks: stacksFrom([
         {
           ...layer,
-          source: { bitmap: { contentHash: 'h', height: 100, imageName: 'persisted', width: 100 }, type: 'paint' },
+          source: {
+            bitmap: { contentHash: 'h', height: 100, imageName: 'persisted', width: 100 },
+            type: 'paint' as const,
+          },
         },
-      ],
+      ]),
     });
     raf.flush();
     await flushMicrotasks();
@@ -13698,7 +14115,7 @@ describe('document mirror wiring: prop vs source change (paint-pixel survival)',
 
     // Prop-only edit (opacity), source reference preserved: no re-rasterize.
     const doc = engine.document.getDocument()!;
-    setDocument({ ...doc, layers: [{ ...doc.layers[0]!, opacity: 0.3 }] });
+    setDocument({ ...doc, stacks: stacksFrom([{ ...getDocumentLeaves(doc)[0]!, opacity: 0.3 }]) });
     raf.flush();
     await flushMicrotasks();
     raf.flush();
@@ -13706,10 +14123,12 @@ describe('document mirror wiring: prop vs source change (paint-pixel survival)',
 
     // Source swap (new image name → new source object): re-rasterizes the new source.
     const doc2 = engine.document.getDocument()!;
-    const imgLayer = doc2.layers[0] as CanvasRasterLayerContractV2;
+    const imgLayer = getDocumentLeaves(doc2)[0] as CanvasRasterLayerContractV2;
     setDocument({
       ...doc2,
-      layers: [{ ...imgLayer, source: { image: { height: 10, imageName: 'a-v2', width: 10 }, type: 'image' } }],
+      stacks: stacksFrom([
+        { ...imgLayer, source: { image: { height: 10, imageName: 'a-v2', width: 10 }, type: 'image' as const } },
+      ]),
     });
     raf.flush();
     await flushMicrotasks();
@@ -13735,7 +14154,7 @@ describe('hasExportableLayerContent', () => {
   });
 
   const createContentEngine = (layers: CanvasLayerContract[]) => {
-    const { store } = createFakeStore({ ...makeDoc(), layers });
+    const { store } = createFakeStore({ ...makeDoc(), stacks: stacksFrom(layers) });
     return createCanvasEngine({
       backend: createTestStubRasterBackend(),
       imageResolver: () => Promise.resolve(new Blob()),
@@ -13760,7 +14179,7 @@ describe('hasExportableLayerContent', () => {
 
     const { setDocument, store } = createReactiveStore({
       ...makeDoc(),
-      layers: [layer],
+      stacks: stacksFrom([layer]),
       selectedLayerId: layer.id,
     });
     const engine = createCanvasEngine({
@@ -13927,7 +14346,7 @@ describe('hasExportableLayerContent', () => {
     expect(engine.exports.hasExportableLayerContent('stale-paint')).toBe(true);
 
     const doc = engine.document.getDocument()!;
-    const layer = doc.layers[0];
+    const layer = getDocumentLeaves(doc)[0];
     if (!layer || layer.type !== 'raster') {
       throw new Error('expected raster paint layer');
     }
@@ -13935,7 +14354,7 @@ describe('hasExportableLayerContent', () => {
     // cache synchronously. Do not run the scheduled frame that would rebuild it.
     setDocument({
       ...doc,
-      layers: [{ ...layer, source: { bitmap: null, type: 'paint' } }],
+      stacks: stacksFrom([{ ...layer, source: { bitmap: null, type: 'paint' as const } }]),
     });
     const { target } = createThumbnailTarget();
     expect(engine.previews.drawLayerThumbnail('stale-paint', target, 96)).toBe(true);
@@ -13993,32 +14412,32 @@ describe('gesture guard: nudge / commitStructural mid-stroke', () => {
 
     engine.layers.nudgeSelectedLayer(1, 0);
     // No structural transform dispatch, no history entry.
-    expect(dispatch.mock.calls.filter((call) => call[0].type === 'updateCanvasLayer')).toHaveLength(0);
+    expect(dispatch.mock.calls.filter((call) => call[0].type === 'setCanvasLayerPositions')).toHaveLength(0);
     expect(engine.stores.canUndo.get()).toBe(false);
 
     // After the gesture ends, the nudge lands.
     overlay.fire('pointerup', pointerAt(30, 30, { buttons: 0 }));
     engine.layers.nudgeSelectedLayer(1, 0);
     expect(dispatch.mock.calls.length).toBeGreaterThan(before);
-    expect(dispatch.mock.calls.some((call) => call[0].type === 'updateCanvasLayer')).toBe(true);
+    expect(dispatch.mock.calls.some((call) => call[0].type === 'setCanvasLayerPositions')).toBe(true);
 
     engine.lifecycle.dispose();
   });
 
-  it('no-ops commitStructural while a stroke gesture is open, then commits after it ends', () => {
+  it('refuses commitStructural as gesture-active while a stroke gesture is open, then commits after it ends', () => {
     const { dispatch, engine, overlay } = startOpenStroke();
-    const forward: EngineTestAction = { id: 'x', type: 'setCanvasSelectedLayer' };
-    const inverse: EngineTestAction = { id: null, type: 'setCanvasSelectedLayer' };
+    const forward: EngineTestAction = { id: null, type: 'setCanvasSelectedLayer' };
+    const inverse: EngineTestAction = { id: 'paint1', type: 'setCanvasSelectedLayer' };
 
     expect(engine.layers.canCommitStructural()).toBe(false);
-    expect(engine.layers.commitStructural('Select', forward, inverse)).toBe(false);
+    expect(engine.layers.commitStructural('Select', forward, inverse)).toEqual({ status: 'gesture-active' });
     // Nothing dispatched, nothing recorded on history mid-gesture.
     expect(dispatch.mock.calls.some((call) => call[0] === forward)).toBe(false);
     expect(engine.stores.canUndo.get()).toBe(false);
 
     overlay.fire('pointerup', pointerAt(30, 30, { buttons: 0 }));
     expect(engine.layers.canCommitStructural()).toBe(true);
-    expect(engine.layers.commitStructural('Select', forward, inverse)).toBe(true);
+    expect(engine.layers.commitStructural('Select', forward, inverse)).toEqual({ status: 'committed' });
     expect(dispatch.mock.calls.some((call) => call[0] === forward)).toBe(true);
     expect(engine.stores.canUndo.get()).toBe(true);
 
@@ -14521,13 +14940,13 @@ describe('checker colors: fed-token tile rebuild', () => {
 
 // ---- fitToView: content ∪ bbox (document rect retired as world bounds) ------
 
-const noLayerDoc = (overrides: Partial<CanvasDocumentContractV2> = {}): CanvasDocumentContractV2 => ({
+const noLayerDoc = (overrides: Partial<CanvasDocumentContractV3> = {}): CanvasDocumentContractV3 => ({
   background: 'transparent',
   bbox: { height: 100, width: 100, x: 0, y: 0 },
   height: 1000,
-  layers: [],
+  stacks: stacksFrom([]),
   selectedLayerId: null,
-  version: 2,
+  version: 3,
   width: 1000,
   ...overrides,
 });
@@ -14566,7 +14985,7 @@ describe('fitToView: content ∪ bbox', () => {
       transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 900, y: 900 },
       type: 'raster',
     };
-    const { store } = createReactiveStore(noLayerDoc({ layers: [layer] }));
+    const { store } = createReactiveStore(noLayerDoc({ stacks: stacksFrom([layer]) }));
     const engine = createCanvasEngine({
       backend: createTestStubRasterBackend(),
       bitmapStore: createSpyBitmapStore(),
@@ -14666,11 +15085,11 @@ describe('transform session', () => {
     // Regression: parametric layers (shape/gradient/text) could not be transformed
     // — `applyTransform` only handled image sources. Phase 5 "param for parametric":
     // the transform commits as a param edit and the source stays editable-forever.
-    const textLayerDoc: CanvasDocumentContractV2 = {
+    const textLayerDoc: CanvasDocumentContractV3 = {
       background: 'transparent',
       bbox: { height: 100, width: 100, x: 0, y: 0 },
       height: 100,
-      layers: [
+      stacks: stacksFrom([
         {
           blendMode: 'normal',
           id: 't',
@@ -14691,9 +15110,9 @@ describe('transform session', () => {
           transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 },
           type: 'raster',
         },
-      ],
+      ]),
       selectedLayerId: 't',
-      version: 2,
+      version: 3,
       width: 100,
     };
     const { store } = createReactiveStore(textLayerDoc);
@@ -14813,7 +15232,7 @@ describe('transform session', () => {
     // persisted bitmap so its cache is non-empty (an empty paint layer is not
     // transformable).
     const movedPaint = paintDoc();
-    const movedLayer = movedPaint.layers[0] as CanvasRasterLayerContractV2;
+    const movedLayer = getDocumentLeaves(movedPaint)[0] as CanvasRasterLayerContractV2;
     movedLayer.source = {
       bitmap: { height: 50, imageName: 'paint1-bmp', width: 50 },
       offset: { x: 0, y: 0 },
@@ -14965,7 +15384,7 @@ describe('transform session', () => {
     // Delete the session's layer via an ordinary layer-array edit (same dims,
     // same revision) — NOT a wholesale replace, so this exercises the
     // `onLayersChanged` teardown rather than `onDocumentReplaced`'s.
-    setDocument({ ...doc, layers: [] });
+    setDocument({ ...doc, stacks: stacksFrom([]) });
 
     expect(engine.stores.transformSession.get()).toBeNull();
 
@@ -15078,7 +15497,7 @@ describe('transform session', () => {
       // The session's layer is deleted while temp-switched away (e.g. via the
       // layers panel) — the layer-change teardown cancels the session
       // immediately, regardless of which tool is active.
-      setDocument({ ...doc, layers: [] });
+      setDocument({ ...doc, stacks: stacksFrom([]) });
       expect(engine.stores.transformSession.get()).toBeNull();
 
       setTool('transform', { temporary: true }); // space up: resume
@@ -15093,11 +15512,11 @@ describe('transform session', () => {
 
 // ---- Selection subsystem ------------------------------------------------
 
-const lockedPaintDoc = (): CanvasDocumentContractV2 => ({
+const lockedPaintDoc = (): CanvasDocumentContractV3 => ({
   background: 'transparent',
   bbox: { height: 100, width: 100, x: 0, y: 0 },
   height: 100,
-  layers: [
+  stacks: stacksFrom([
     {
       blendMode: 'normal',
       id: 'paint1',
@@ -15109,9 +15528,9 @@ const lockedPaintDoc = (): CanvasDocumentContractV2 => ({
       transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 },
       type: 'raster',
     },
-  ],
+  ]),
   selectedLayerId: 'paint1',
-  version: 2,
+  version: 3,
   width: 100,
 });
 
@@ -15167,7 +15586,7 @@ describe('engine selection: select all / deselect / invert + hasSelection store'
 });
 
 describe('engine selection: fill / erase', () => {
-  const makeEngine = (doc: CanvasDocumentContractV2) => {
+  const makeEngine = (doc: CanvasDocumentContractV3) => {
     vi.stubGlobal(
       'Path2D',
       class FakePath2D {
@@ -15193,8 +15612,8 @@ describe('engine selection: fill / erase', () => {
     const h = createControlSelectionHarness({ source: { bitmap: null, type: 'paint' } });
     h.engine.selection.selectAll();
     h.engine.selection.fillSelection();
-    expect(h.engine.document.getDocument()!.layers).toHaveLength(1);
-    expect(h.engine.document.getDocument()!.layers[0]).toMatchObject({ id: 'control', type: 'control' });
+    expect(getDocumentLeaves(h.engine.document.getDocument()!)).toHaveLength(1);
+    expect(getDocumentLeaves(h.engine.document.getDocument()!)[0]).toMatchObject({ id: 'control', type: 'control' });
     expect(h.engine.stores.canUndo.get()).toBe(true);
     h.engine.lifecycle.dispose();
   });
@@ -15206,8 +15625,8 @@ describe('engine selection: fill / erase', () => {
     await h.publishInitialCache();
     h.engine.selection.selectAll();
     h.engine.selection.eraseSelection();
-    expect(h.engine.document.getDocument()!.layers).toHaveLength(1);
-    expect(h.engine.document.getDocument()!.layers[0]).toMatchObject({ id: 'control', type: 'control' });
+    expect(getDocumentLeaves(h.engine.document.getDocument()!)).toHaveLength(1);
+    expect(getDocumentLeaves(h.engine.document.getDocument()!)[0]).toMatchObject({ id: 'control', type: 'control' });
     expect(h.engine.stores.canUndo.get()).toBe(true);
     h.engine.lifecycle.dispose();
   });
@@ -15218,19 +15637,19 @@ describe('engine selection: fill / erase', () => {
       transform: { rotation: 0, scaleX: 2, scaleY: 2, x: 5, y: 6 },
     });
     await h.publishInitialCache();
-    const before = structuredClone(h.engine.document.getDocument()!.layers[0]);
+    const before = structuredClone(getDocumentLeaves(h.engine.document.getDocument()!)[0]);
     h.engine.selection.selectAll();
     if (kind === 'fill') {
       h.engine.selection.fillSelection();
     } else {
       h.engine.selection.eraseSelection();
     }
-    const after = structuredClone(h.engine.document.getDocument()!.layers[0]);
+    const after = structuredClone(getDocumentLeaves(h.engine.document.getDocument()!)[0]);
     expect(after).toMatchObject({ id: 'control', source: { type: 'paint' }, type: 'control' });
     h.engine.history.undo();
-    expect(h.engine.document.getDocument()!.layers[0]).toEqual(before);
+    expect(getDocumentLeaves(h.engine.document.getDocument()!)[0]).toEqual(before);
     h.engine.history.redo();
-    expect(h.engine.document.getDocument()!.layers[0]).toEqual(after);
+    expect(getDocumentLeaves(h.engine.document.getDocument()!)[0]).toEqual(after);
     h.engine.lifecycle.dispose();
   });
 
@@ -15669,7 +16088,7 @@ describe('engine selection: fill / erase', () => {
 
   it('fillSelection is a no-op on a transparency-locked EMPTY layer (source-atop clamps to existing pixels)', () => {
     const doc = paintDoc();
-    const target = doc.layers[0];
+    const target = getDocumentLeaves(doc)[0];
     if (target?.type === 'raster') {
       target.isTransparencyLocked = true;
     }
@@ -15696,6 +16115,68 @@ describe('engine selection: fill / erase', () => {
     // upload before it drops the layer caches — otherwise an unflushed stroke is lost.
     await engine.diagnostics.clearCaches();
     expect(bitmapStore.flushPendingUploads).toHaveBeenCalledTimes(1);
+    engine.lifecycle.dispose();
+  });
+});
+
+describe('SAM preview animation', () => {
+  it('a published preview runs the animator and pulses the overlay; clearing stops both', async () => {
+    const raf = createControllableRaf();
+    vi.stubGlobal('requestAnimationFrame', raf.requestFrame);
+    vi.stubGlobal('cancelAnimationFrame', raf.cancelFrame);
+    // No reduce preference: the pulse path must actually run.
+    vi.stubGlobal('matchMedia', () => ({ matches: false }));
+    vi.stubGlobal(
+      'Path2D',
+      class FakePath2D {
+        closePath() {}
+        lineTo() {}
+        moveTo() {}
+        quadraticCurveTo() {}
+      }
+    );
+    const { store } = createReactiveStore(paintDoc());
+    const backend = createTestStubRasterBackend();
+    const { applicationHost, engine } = createCoreCanvasEngine({
+      backend,
+      imageResolver: () => Promise.resolve(new Blob()),
+      mutationPort: createTestMutationPort(store, 'p1'),
+      projectId: 'p1',
+      reportError: () => undefined,
+      uploadImage: () => Promise.resolve({ height: 1, imageName: 'durable', width: 1 }),
+      uploadIntermediateImage: () => Promise.resolve({ height: 1, imageName: 'transient', width: 1 }),
+    });
+    const screen = createFakeCanvas();
+    const overlay = createFakeCanvas();
+    engine.surface.attach(screen.element, overlay.element);
+    raf.flush();
+    await flushMicrotasks();
+    raf.flush();
+    raf.flush();
+    // Idle without a selection or preview: nothing schedules frames.
+    expect(raf.pendingCount()).toBe(0);
+
+    const surface = backend.createSurface(4, 4);
+    applicationHost.publishSamPreview({
+      data: surface,
+      guard: { layer: null } as never,
+      isolated: false,
+      rect: { height: 4, width: 4, x: 0, y: 0 },
+    });
+    // Drain the publish's own invalidate so it cannot masquerade as animation.
+    raf.flush();
+    raf.flush();
+    expect(raf.pendingCount()).toBeGreaterThan(0);
+    overlay.surface.callLog.length = 0;
+    raf.flush();
+    raf.flush();
+    // Each animator frame pulses an overlay redraw.
+    expect(overlay.surface.callLog.length).toBeGreaterThan(0);
+
+    applicationHost.clearSamPreview();
+    raf.flush();
+    raf.flush();
+    expect(raf.pendingCount()).toBe(0);
     engine.lifecycle.dispose();
   });
 });
@@ -15882,11 +16363,11 @@ describe('text edit session', () => {
     ...over,
   });
 
-  const textDoc = (over: Partial<CanvasDocumentContractV2> = {}): CanvasDocumentContractV2 => ({
+  const textDoc = (over: Partial<CanvasDocumentContractV3> = {}): CanvasDocumentContractV3 => ({
     background: 'transparent',
     bbox: { height: 100, width: 100, x: 0, y: 0 },
     height: 100,
-    layers: [
+    stacks: stacksFrom([
       {
         blendMode: 'normal',
         id: 'txt1',
@@ -15898,14 +16379,14 @@ describe('text edit session', () => {
         transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 5, y: 6 },
         type: 'raster',
       },
-    ],
+    ]),
     selectedLayerId: 'txt1',
-    version: 2,
+    version: 3,
     width: 100,
     ...over,
   });
 
-  const makeEngine = (doc: CanvasDocumentContractV2) => {
+  const makeEngine = (doc: CanvasDocumentContractV3) => {
     const { setDocument, store } = createReactiveStore(doc);
     const dispatch = store.dispatch as Mock;
     const engine = createCanvasEngine({
@@ -16034,7 +16515,7 @@ describe('text edit session', () => {
   it('does not open an edit session on a locked text layer', () => {
     const { engine } = makeEngine(
       textDoc({
-        layers: [
+        stacks: stacksFrom([
           {
             blendMode: 'normal',
             id: 'txt1',
@@ -16046,7 +16527,7 @@ describe('text edit session', () => {
             transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 },
             type: 'raster',
           },
-        ],
+        ]),
       })
     );
     engine.tools.setTool('text');
@@ -16186,17 +16667,17 @@ describe('text edit session', () => {
 describe('canTargetLayerFromContextMenu (canvas right-click target)', () => {
   // The menu acts on the document's SELECTED layer — the canvas never hit-tests
   // to pick one, so this only reports whether an in-progress edit suppresses it.
-  const doc = (): CanvasDocumentContractV2 => ({
+  const doc = (): CanvasDocumentContractV3 => ({
     background: 'transparent',
     bbox: { height: 100, width: 100, x: 0, y: 0 },
     height: 100,
-    layers: [rasterLayer('raster')],
+    stacks: stacksFrom([rasterLayer('raster')]),
     selectedLayerId: 'raster',
-    version: 2,
+    version: 3,
     width: 100,
   });
 
-  const makeEngine = (document: CanvasDocumentContractV2) => {
+  const makeEngine = (document: CanvasDocumentContractV3) => {
     const { store } = createFakeStore(document);
     return createCanvasEngine({
       backend: createTestStubRasterBackend(),
@@ -16244,7 +16725,7 @@ describe('Select Object canvas engine integration', () => {
   });
 
   /** A raster layer whose baked world rect exactly covers `rect`. */
-  const samRectLayer = (id: string, rect: CanvasDocumentContractV2['bbox']): CanvasRasterLayerContractV2 => ({
+  const samRectLayer = (id: string, rect: CanvasDocumentContractV3['bbox']): CanvasRasterLayerContractV2 => ({
     ...samLayer(id),
     source: {
       fill: '#fff',
@@ -16258,13 +16739,13 @@ describe('Select Object canvas engine integration', () => {
     transform: { rotation: 0, scaleX: 1, scaleY: 1, x: rect.x, y: rect.y },
   });
 
-  const samDocument = (layers: CanvasLayerContract[] = [samLayer('source')]): CanvasDocumentContractV2 => ({
+  const samDocument = (layers: CanvasLayerContract[] = [samLayer('source')]): CanvasDocumentContractV3 => ({
     background: 'transparent',
     bbox: { height: 100, width: 100, x: 0, y: 0 },
     height: 100,
-    layers,
+    stacks: stacksFrom(layers),
     selectedLayerId: layers[0]?.id ?? null,
-    version: 2,
+    version: 3,
     width: 100,
   });
 
@@ -16318,7 +16799,7 @@ describe('Select Object canvas engine integration', () => {
   const createSamHarness = async (
     options: {
       backend?: StubRasterBackend;
-      bbox?: CanvasDocumentContractV2['bbox'];
+      bbox?: CanvasDocumentContractV3['bbox'];
       imageResolver?: (imageName: string, signal?: AbortSignal) => Promise<Blob>;
       layers?: CanvasLayerContract[];
       runGraph?: NonNullable<CanvasEngineOptions['selectObjectDeps']>['runGraph'];
@@ -16453,7 +16934,7 @@ describe('Select Object canvas engine integration', () => {
   const createCommittingSamHarness = async (
     imageResolver: (imageName: string, signal?: AbortSignal) => Promise<Blob> = () => Promise.resolve(new Blob()),
     backend: StubRasterBackend = createTestStubRasterBackend(),
-    bbox: CanvasDocumentContractV2['bbox'] = { height: 100, width: 100, x: 0, y: 0 }
+    bbox: CanvasDocumentContractV3['bbox'] = { height: 100, width: 100, x: 0, y: 0 }
   ) => {
     const document = { ...samDocument([samRectLayer('source', bbox)]), bbox };
     const reactive = createReducerBackedStore(document);
@@ -16829,7 +17310,7 @@ describe('Select Object canvas engine integration', () => {
 
     expect(makeDurable).toHaveBeenCalledOnce();
     expect(makeDurable).toHaveBeenCalledWith('sam-mask.png');
-    const replaced = h.engine.document.getDocument()!.layers.find((layer) => layer.id === 'source')!;
+    const replaced = getDocumentLeaves(h.engine.document.getDocument()!).find((layer) => layer.id === 'source')!;
     expect(replaced).toMatchObject({
       source: {
         bitmap: { height: 100, imageName: 'sam-mask.png', width: 100 },
@@ -16839,7 +17320,7 @@ describe('Select Object canvas engine integration', () => {
       transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 },
       type: 'raster',
     });
-    expect(h.engine.document.getDocument()!.layers).toHaveLength(1);
+    expect(getDocumentLeaves(h.engine.document.getDocument()!)).toHaveLength(1);
     expect(getCanvasOperations(h.engine).stores.samSession.get()).toBeNull();
     expect(getCanvasOperations(h.engine).controller.getSnapshot()).toEqual({ status: 'idle' });
     expect(h.engine.stores.activeTool.get()).toBe('view');
@@ -16849,7 +17330,9 @@ describe('Select Object canvas engine integration', () => {
     expect(h.engine.document.getDocument()).toEqual(h.document);
     expect(h.engine.stores.canUndo.get()).toBe(false);
     h.engine.history.redo();
-    expect(h.engine.document.getDocument()!.layers.find((layer) => layer.id === 'source')).toEqual(replaced);
+    expect(getDocumentLeaves(h.engine.document.getDocument()!).find((layer) => layer.id === 'source')).toEqual(
+      replaced
+    );
     h.engine.lifecycle.dispose();
   });
 
@@ -16978,7 +17461,7 @@ describe('Select Object canvas engine integration', () => {
     durable.resolve();
 
     await expect(pending).resolves.toMatchObject({ status: 'committed' });
-    expect(h.engine.document.getDocument()?.layers[0]?.type).toBe('inpaint_mask');
+    expect(getDocumentLeaves(h.engine.document.getDocument())[0]?.type).toBe('inpaint_mask');
     h.engine.lifecycle.dispose();
   });
 
@@ -17017,9 +17500,9 @@ describe('Select Object canvas engine integration', () => {
 
       expect(result.status).toBe('committed');
       expect(calls[0]).toBe('durable');
-      expect(h.engine.document.getDocument()?.layers[0]?.type).toBe(target);
-      expect(h.engine.document.getDocument()?.layers[1]?.id).toBe('source');
-      const created = h.engine.document.getDocument()?.layers[0];
+      expect(getDocumentLeaves(h.engine.document.getDocument())[0]?.type).toBe(target);
+      expect(getDocumentLeaves(h.engine.document.getDocument())[1]?.id).toBe('source');
+      const created = getDocumentLeaves(h.engine.document.getDocument())[0];
       if (!created) {
         throw new Error('expected a saved object layer');
       }
@@ -17042,9 +17525,9 @@ describe('Select Object canvas engine integration', () => {
 
       expect(h.engine.stores.canUndo.get()).toBe(true);
       h.engine.history.undo();
-      expect(h.engine.document.getDocument()?.layers.map((layer) => layer.id)).toEqual(['source']);
+      expect(getDocumentLeaves(h.engine.document.getDocument()).map((layer) => layer.id)).toEqual(['source']);
       h.engine.history.redo();
-      expect(h.engine.document.getDocument()?.layers[0]?.type).toBe(target);
+      expect(getDocumentLeaves(h.engine.document.getDocument())[0]?.type).toBe(target);
       h.engine.lifecycle.dispose();
     }
   );
@@ -17065,12 +17548,12 @@ describe('Select Object canvas engine integration', () => {
       status: 'committed',
     });
 
-    expect(h.engine.document.getDocument()?.layers.map((layer) => layer.name)).toEqual([
+    expect(getDocumentLeaves(h.engine.document.getDocument()).map((layer) => layer.name)).toEqual([
       'Segmented Object',
       'Segmented Object',
       'source',
     ]);
-    expect(h.engine.document.getDocument()?.layers[2]).toEqual(h.document.layers[0]);
+    expect(getDocumentLeaves(h.engine.document.getDocument())[2]).toEqual(getDocumentLeaves(h.document)[0]);
     expect(getCanvasOperations(h.engine).stores.samSession.get()).toMatchObject({ hasPreview: true, status: 'ready' });
     expect(h.engine.stores.activeTool.get()).toBe('sam');
     h.engine.lifecycle.dispose();
@@ -17083,7 +17566,7 @@ describe('Select Object canvas engine integration', () => {
     const result = await getCanvasOperations(h.engine).saveSelectObjectSession('raster', () => Promise.resolve());
 
     expect(result.status).toBe('committed');
-    const created = h.engine.document.getDocument()?.layers[0];
+    const created = getDocumentLeaves(h.engine.document.getDocument())[0];
     expect(created?.type).toBe('raster');
     if (created?.type === 'raster') {
       expect(created.source).toMatchObject({
@@ -17337,7 +17820,7 @@ describe('Select Object canvas engine integration', () => {
     durable.resolve();
 
     await expect(pending).resolves.toEqual({ status: 'stale' });
-    expect(h.engine.document.getDocument()?.layers).toHaveLength(1);
+    expect(getDocumentLeaves(h.engine.document.getDocument())).toHaveLength(1);
     expect(h.engine.stores.canUndo.get()).toBe(false);
     h.engine.lifecycle.dispose();
   });
@@ -17350,7 +17833,7 @@ describe('Select Object canvas engine integration', () => {
     let sessionDuringReentry: ReturnType<ReturnType<typeof getCanvasOperations>['stores']['samSession']['get']> = null;
     reducer.store.subscribe(() => {
       const current = reducer.store.getState().projects[0]?.canvas.document;
-      if (!reentered && current?.layers.length === 2) {
+      if (!reentered && getDocumentLeaves(current).length === 2) {
         reentered = true;
         reducer.store.dispatch({ id: 'source', patch: { opacity: 0.5 }, type: 'updateCanvasLayer' });
         sessionDuringReentry = getCanvasOperations(engine).stores.samSession.get();
@@ -17383,7 +17866,7 @@ describe('Select Object canvas engine integration', () => {
     expect(reentered).toBe(true);
     expect(sessionDuringReentry).toBeNull();
     expect(getCanvasOperations(engine).controller.getSnapshot()).toEqual({ status: 'idle' });
-    expect(engine.document.getDocument()?.layers.find((layer) => layer.id === 'source')?.opacity).toBe(0.5);
+    expect(getDocumentLeaves(engine.document.getDocument()).find((layer) => layer.id === 'source')?.opacity).toBe(0.5);
     engine.lifecycle.dispose();
   });
 
@@ -17399,7 +17882,7 @@ describe('Select Object canvas engine integration', () => {
     const document = h.engine.document.getDocument()!;
 
     if (kind === 'source') {
-      h.setDocument({ ...document, layers: [{ ...document.layers[0]!, opacity: 0.5 }] });
+      h.setDocument({ ...document, stacks: stacksFrom([{ ...getDocumentLeaves(document)[0]!, opacity: 0.5 }]) });
     } else if (kind === 'project') {
       h.setActiveProjectId('p2');
     } else {
@@ -17511,13 +17994,15 @@ describe('Select Object canvas engine integration', () => {
     expect(getCanvasOperations(h.engine).stores.samSession.get()).not.toBeNull();
 
     const reordered = h.engine.document.getDocument()!;
-    h.setDocument({ ...reordered, layers: [...reordered.layers].reverse() });
+    h.setDocument({ ...reordered, stacks: stacksFrom([...getDocumentLeaves(reordered)].reverse()) });
     expect(getCanvasOperations(h.engine).stores.samSession.get()).not.toBeNull();
 
     const withOtherEdited = h.engine.document.getDocument()!;
     h.setDocument({
       ...withOtherEdited,
-      layers: withOtherEdited.layers.map((layer) => (layer.id === 'other' ? { ...layer, opacity: 0.5 } : layer)),
+      stacks: stacksFrom(
+        getDocumentLeaves(withOtherEdited).map((layer) => (layer.id === 'other' ? { ...layer, opacity: 0.5 } : layer))
+      ),
     });
     expect(getCanvasOperations(h.engine).stores.samSession.get()).not.toBeNull();
     expect(getCanvasOperations(h.engine).controller.getSnapshot()).toMatchObject({
@@ -17528,7 +18013,11 @@ describe('Select Object canvas engine integration', () => {
     const withSourceEdited = h.engine.document.getDocument()!;
     h.setDocument({
       ...withSourceEdited,
-      layers: withSourceEdited.layers.map((layer) => (layer.id === 'source' ? { ...layer, opacity: 0.25 } : layer)),
+      stacks: stacksFrom(
+        getDocumentLeaves(withSourceEdited).map((layer) =>
+          layer.id === 'source' ? { ...layer, opacity: 0.25 } : layer
+        )
+      ),
     });
     expect(getCanvasOperations(h.engine).stores.samSession.get()).toBeNull();
     expect(getCanvasOperations(h.engine).controller.getSnapshot()).toEqual({ status: 'idle' });
@@ -17555,12 +18044,12 @@ describe('Select Object canvas engine integration', () => {
     const document = h.engine.document.getDocument()!;
     h.setDocument({
       ...document,
-      layers: [
+      stacks: stacksFrom([
         {
           ...outside,
-          source: { image: { height: 10, imageName: 'inside.png', width: 10 }, type: 'image' },
+          source: { image: { height: 10, imageName: 'inside.png', width: 10 }, type: 'image' as const },
         },
-      ],
+      ]),
     });
 
     expect(getCanvasOperations(h.engine).startSelectObject('moving-source')).toBe('not-ready');
@@ -17686,7 +18175,7 @@ describe('Select Object canvas engine integration', () => {
         { args: [], op: 'clip' },
       ])
     );
-    expect(h.engine.document.getDocument()!.layers.every((layer) => layer.isEnabled)).toBe(true);
+    expect(getDocumentLeaves(h.engine.document.getDocument()!).every((layer) => layer.isEnabled)).toBe(true);
     h.engine.lifecycle.dispose();
   });
 
@@ -17697,7 +18186,10 @@ describe('Select Object canvas engine integration', () => {
     // baked world rect {4, 17, 20, 15}.
     const raster: CanvasLayerContract = {
       ...samLayer('adjusted-raster'),
-      adjustments: { brightness: 0.2, contrast: -0.1, saturation: 0.3 },
+      adjustments: [
+        { brightness: 0.2, contrast: -0.1, id: 'adj-bc', isEnabled: true, type: 'brightness-contrast' as const },
+        { id: 'adj-hsl', isEnabled: true, saturation: 0.3, type: 'hsl' as const },
+      ],
       blendMode: 'multiply',
       opacity: 0.4,
       source: {
@@ -17845,7 +18337,7 @@ describe('Select Object canvas engine integration', () => {
 
     h.setDocument({
       ...h.engine.document.getDocument()!,
-      layers: [{ ...h.engine.document.getDocument()!.layers[0]!, opacity: 0.5 }],
+      stacks: stacksFrom([{ ...getDocumentLeaves(h.engine.document.getDocument()!)[0]!, opacity: 0.5 }]),
     });
 
     expect(getCanvasOperations(h.engine).stores.samSession.get()).toBeNull();
@@ -17927,12 +18419,65 @@ describe('Select Object canvas engine integration', () => {
 
     h.setDocument({
       ...h.engine.document.getDocument()!,
-      layers: [{ ...h.engine.document.getDocument()!.layers[0]!, opacity: 0.5 }],
+      stacks: stacksFrom([{ ...getDocumentLeaves(h.engine.document.getDocument()!)[0]!, opacity: 0.5 }]),
     });
     h.fireKey('keyup', 'Space', ' ');
 
     expect(getCanvasOperations(h.engine).stores.samSession.get()).toBeNull();
     expect(h.engine.stores.activeTool.get()).toBe('view');
     h.engine.lifecycle.dispose();
+  });
+});
+
+describe('history entries and stepBy', () => {
+  it('enumerates the stroke entry and replays it with clamped stepBy', async () => {
+    const raf = createControllableRaf();
+    vi.stubGlobal('requestAnimationFrame', raf.requestFrame);
+    vi.stubGlobal('cancelAnimationFrame', raf.cancelFrame);
+    vi.stubGlobal(
+      'Path2D',
+      class FakePath2D {
+        closePath() {}
+        lineTo() {}
+        moveTo() {}
+        quadraticCurveTo() {}
+      }
+    );
+    const layer = { ...rasterLayer('a'), source: { bitmap: null, type: 'paint' as const } };
+    const document = { ...makeDoc(), stacks: stacksFrom([layer]), selectedLayerId: layer.id };
+    const { projectId, store } = createReducerBackedStore(document);
+    const engine = createCanvasEngine({
+      backend: createTestStubRasterBackend(),
+      bitmapStore: createSpyBitmapStore(),
+      imageResolver: () => Promise.resolve(new Blob()),
+      projectId,
+      store,
+    });
+    const overlay = createInputCanvas();
+    const screen = createInputCanvas();
+    engine.surface.attach(screen.element, overlay.element);
+    raf.flush();
+    await flushMicrotasks();
+    raf.flush();
+
+    expect(engine.history.getEntries()).toEqual({ future: [], past: [] });
+
+    engine.tools.setTool('brush');
+    overlay.fire('pointerdown', pointerAt(5, 5));
+    overlay.fire('pointermove', pointerAt(12, 12));
+    overlay.fire('pointerup', pointerAt(12, 12, { buttons: 0 }));
+
+    const afterStroke = engine.history.getEntries();
+    expect(afterStroke.past).toHaveLength(1);
+    expect(afterStroke.future).toHaveLength(0);
+
+    engine.history.stepBy(-1);
+    expect(engine.history.getEntries()).toEqual({ future: afterStroke.past, past: [] });
+
+    // Clamped: asking for more redos than exist replays what is there and stops.
+    engine.history.stepBy(5);
+    expect(engine.history.getEntries()).toEqual({ future: [], past: afterStroke.past });
+
+    engine.lifecycle.dispose();
   });
 });

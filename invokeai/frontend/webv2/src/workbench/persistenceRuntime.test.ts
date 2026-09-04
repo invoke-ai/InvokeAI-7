@@ -30,6 +30,8 @@ const deferred = <T>() => {
 };
 
 const snapshot = (state: WorkbenchState, savedAt = '2026-07-17T00:00:00.000Z'): HydratedWorkbenchSnapshot => ({
+  hasUnretainedRefusedProjects: false,
+  refusedProjects: [],
   savedAt,
   state,
   version: 1,
@@ -123,6 +125,7 @@ const createAggregate = (initialState = createInitialWorkbenchState()) => {
       emit();
     },
     notifyProjectNotFound: () => events.push('not-found'),
+    reportRefusedProjects: (refused) => events.push(`refused-projects:${refused.map((r) => r.projectId).join(',')}`),
     reconcileConflict: (conflict) => {
       state = {
         ...state,
@@ -194,6 +197,7 @@ const createAggregate = (initialState = createInitialWorkbenchState()) => {
 const createPersistence = (load: WorkbenchPersistencePort['loadWorkbench']) => {
   let pending = false;
   const persistence: WorkbenchPersistencePort = {
+    acknowledgeConflictResolution: vi.fn(),
     hasPendingChanges: () => pending,
     loadWorkbench: vi.fn(load),
     saveWorkbench: vi.fn((state) => Promise.resolve(saveResult(state))),
@@ -244,6 +248,34 @@ describe('Workbench persistence runtime', () => {
     expect(aggregate.events).toContain('load-error:server unavailable');
     expect(aggregate.hasHydrated).toBe(true);
     expect(runtime.getSnapshot()).toEqual({ error: null, phase: 'idle' });
+  });
+
+  it('reports refused projects, leaving a deep-linked refusal to the session controller', async () => {
+    const aggregate = createAggregate();
+    const loaded = createInitialWorkbenchState();
+    const refuse = (projectId: string) => ({
+      projectId,
+      projectName: projectId,
+      raw: {},
+      refusal: { raw: {}, scope: 'state' as const, status: 'unsupported-version' as const, version: 3 },
+      source: 'canvas' as const,
+    });
+    const { persistence } = createPersistence(() =>
+      Promise.resolve({ ...snapshot(loaded), refusedProjects: [refuse('future'), refuse('other')] })
+    );
+    const runtime = createWorkbenchPersistenceRuntime({
+      aggregate: aggregate.port,
+      clock: new FakeClock(),
+      loadOptions: { openProjectId: 'future' },
+      persistence,
+    });
+
+    runtime.start();
+    await flushPromises();
+
+    expect(aggregate.events).toContain('refused-projects:other');
+    expect(aggregate.events).not.toContain('not-found');
+    expect(aggregate.state.projects.map((project) => project.id)).toEqual(loaded.projects.map((project) => project.id));
   });
 
   it('preserves an edit made during load and saves it only after load settles', async () => {
@@ -518,6 +550,7 @@ describe('Workbench persistence runtime', () => {
 
     expect(aggregate.events).toContain('conflict');
     expect(aggregate.state.projects.map((project) => project.name)).toEqual(['Server', 'Recovered']);
+    expect(persistence.acknowledgeConflictResolution).toHaveBeenCalledWith(original.id);
     clock.runAll();
     expect(persistence.saveWorkbench).toHaveBeenCalledTimes(2);
   });

@@ -284,6 +284,40 @@ describe('getResultImages', () => {
     expect(images.map((image) => image.imageName)).toEqual(['external-a.png', 'external-b.png']);
   });
 
+  it('carries the backend creation timestamp, normalized to ISO, alongside the submission instant', async () => {
+    mocks.apiFetchJson.mockImplementation((url: string) => {
+      if (url === '/api/v1/queue/default/i/1') {
+        return Promise.resolve({
+          item_id: 1,
+          session: {
+            results: {
+              output: { image: { image_name: 'result.png' }, type: 'image_output' },
+            },
+          },
+          status: 'completed',
+        });
+      }
+
+      const imageName = decodeURIComponent(url.replace('/api/v1/images/i/', ''));
+      return Promise.resolve({
+        created_at: '2026-06-15 00:12:34.000',
+        height: 768,
+        image_name: imageName,
+        image_url: `/images/${imageName}`,
+        is_intermediate: false,
+        thumbnail_url: `/thumbs/${imageName}`,
+        width: 1024,
+      });
+    });
+
+    const { getResultImages } = await import('./submissionApi');
+
+    const [image] = await getResultImages(1, 'source-1', '2026-06-15T00:00:00.000Z');
+
+    expect(image?.createdAt).toBe('2026-06-15T00:12:34.000Z');
+    expect(image?.queuedAt).toBe('2026-06-15T00:00:00.000Z');
+  });
+
   it('does not issue image requests from queue data resolved after an account switch', async () => {
     accountLifecycle.activate('user-a');
     let resolveItem: ((item: unknown) => void) | undefined;

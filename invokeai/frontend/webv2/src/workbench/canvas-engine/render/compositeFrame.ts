@@ -1,4 +1,4 @@
-import type { CanvasDocumentContractV2, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
+import type { CanvasDocumentContractV3, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
 import type {
   PreviewStateController,
   SamPreviewState,
@@ -12,8 +12,14 @@ import type { RasterBackend, RasterSurface } from '@workbench/canvas-engine/rend
 import type { LayerDamage, Mat2d, Rect } from '@workbench/canvas-engine/types';
 import type { Viewport } from '@workbench/canvas-engine/viewport';
 
+import { getDocumentLeaves } from '@workbench/canvas-engine/document/documentIndex';
+import { isLayerContributing } from '@workbench/canvas-engine/document/layerEligibility';
 import { getSourceContentRect, isRenderableLayer, renderableSourceOf } from '@workbench/canvas-engine/document/sources';
-import { compositeDocument, shouldSmoothAtZoom } from '@workbench/canvas-engine/render/compositor';
+import {
+  compositeDocument,
+  shouldSmoothAtZoom,
+  type CompositeOptions,
+} from '@workbench/canvas-engine/render/compositor';
 import { calculateActiveFrameLayerIds } from '@workbench/canvas-engine/render/frameDemand';
 import { enforceSurfaceBudget } from '@workbench/canvas-engine/render/surfaceBudget';
 
@@ -31,10 +37,11 @@ export interface CreateCompositeFrameDeps {
   readonly viewport: Viewport;
   readonly transformOverrides: LayerTransformOverrides;
   readonly getAdjustedSurface: (layer: CanvasLayerContract, entry: LayerCacheEntry) => RasterSurface | null;
+  readonly getGroupSurface: NonNullable<CompositeOptions['groupSurface']>;
   readonly getMaskPatternTile: (style: string, color: string) => RasterSurface | null;
   readonly getCheckerboardTile: () => RasterSurface;
   /** Starts (or joins) the rasterization of a layer whose cache is stale. */
-  readonly rasterizeLayer: (layer: CanvasLayerContract, doc: CanvasDocumentContractV2) => void;
+  readonly rasterizeLayer: (layer: CanvasLayerContract, doc: CanvasDocumentContractV3) => void;
   readonly syncMemoryBaselines: () => void;
   readonly deleteDerivedSurfaces: (layerId: string) => void;
 }
@@ -43,7 +50,7 @@ export interface CompositeFrame {
   /** Composites the document onto the screen surface and enforces the surface budget. */
   draw(
     screen: RasterSurface,
-    doc: CanvasDocumentContractV2,
+    doc: CanvasDocumentContractV3,
     view: Mat2d,
     floatFrame: FloatingSelectionFrame | null,
     samPreview: SamPreviewState | null,
@@ -69,8 +76,8 @@ export interface CompositeFrame {
  * the one evicted.
  *
  * SAM isolation makes this frame describe one layer instead of the document:
- * the composite is filtered down to the isolated layer and clipped to the
- * preview rect, and every other in-flight embellishment — filter previews, the
+ * the composite is narrowed to the isolated layer through `isolationLayerId`
+ * and clipped to the preview rect, and every other in-flight embellishment — filter previews, the
  * staged candidate, the floating selection, transform overrides — is suppressed,
  * because none of them describe what the user is being asked to judge.
  */
@@ -86,11 +93,11 @@ export const createCompositeFrame = (deps: CreateCompositeFrameDeps): CompositeF
    * shrinking it back to the contract size here would destroy those pixels. The
    * rasterizer owns sizing the surface and placing its content rect.
    */
-  const ensureLayerCaches = (doc: CanvasDocumentContractV2, activeFrameLayerIds: ReadonlySet<string>): void => {
-    for (const layer of doc.layers) {
+  const ensureLayerCaches = (doc: CanvasDocumentContractV3, activeFrameLayerIds: ReadonlySet<string>): void => {
+    for (const layer of getDocumentLeaves(doc)) {
       // The layer's rasterizable source: a raster/control `source`, or a mask
       // layer's alpha bitmap viewed as a paint source (colorized at composite).
-      if (!layer.isEnabled || !renderableSourceOf(layer) || !activeFrameLayerIds.has(layer.id)) {
+      if (!isLayerContributing(layer) || !renderableSourceOf(layer) || !activeFrameLayerIds.has(layer.id)) {
         continue;
       }
       if (!isRenderableLayer(layer)) {
@@ -158,7 +165,7 @@ export const createCompositeFrame = (deps: CreateCompositeFrameDeps): CompositeF
       const isolatedIds = isolatedGuard ? new Set([isolatedGuard.layerId]) : null;
 
       const liveCacheRects = new Map<string, Rect>();
-      for (const layer of doc.layers) {
+      for (const layer of getDocumentLeaves(doc)) {
         const rect = layerCache.peek(layer.id)?.rect;
         if (rect) {
           liveCacheRects.set(layer.id, rect);
@@ -173,10 +180,7 @@ export const createCompositeFrame = (deps: CreateCompositeFrameDeps): CompositeF
       });
       ensureLayerCaches(doc, activeFrameLayerIds);
 
-      const compositeDoc = isolatedIds
-        ? { ...doc, layers: doc.layers.filter((layer) => isolatedIds.has(layer.id)) }
-        : doc;
-      compositeDocument(screen, compositeDoc, layerCache, view, {
+      compositeDocument(screen, doc, layerCache, view, {
         // Confines the clear, the checkerboard and every layer blit to the pixels
         // that actually changed; `null` repaints the whole viewport.
         damage: isolatedGuard ? null : damage,
@@ -187,6 +191,7 @@ export const createCompositeFrame = (deps: CreateCompositeFrameDeps): CompositeF
         // refreshes only the band the stroke reported writing, rather than
         // re-deriving from the whole layer (see adjustedSurfaceCache).
         adjustedSurface: deps.getAdjustedSurface,
+        groupSurface: deps.getGroupSurface,
         // The raster backend + mask fill tile resolver drive the mask colorize
         // path (alpha stencil → source-in fill colour/pattern, above all layers).
         backend: deps.backend,
@@ -201,12 +206,15 @@ export const createCompositeFrame = (deps: CreateCompositeFrameDeps): CompositeF
         // Crisp + cheap when zoomed in (nearest-neighbor up-scale), smooth when
         // shrinking (bilinear down-scale). See `shouldSmoothAtZoom`.
         imageSmoothing: shouldSmoothAtZoom(viewport.getZoom()),
+        isolationLayerId: isolatedGuard?.layerId ?? null,
         // Non-destructive control-filter previews, drawn in place of the layer's
         // committed pixels. Snapshotted only when one is actually active — this
         // runs every composite frame, so an unconditional copy would allocate a
         // map per frame for the overwhelmingly common case of none.
         layerPreviews: !isolatedGuard && previews.filterCount() > 0 ? previews.filterSnapshot() : null,
         maskPatternTile: deps.getMaskPatternTile,
+        // Screen frames are display-time: the region tint may draw.
+        regionOverlays: true,
         // Candidate-specific placement wins for final images. Progress frames
         // and legacy image inputs continue to follow the CURRENT bbox origin.
         stagedPreview:

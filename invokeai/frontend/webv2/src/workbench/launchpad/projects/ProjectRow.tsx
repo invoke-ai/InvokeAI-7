@@ -7,11 +7,13 @@ import { MiddleTruncate } from '@platform/ui/MiddleTruncate';
 import { Row } from '@platform/ui/Row';
 import { Link } from '@tanstack/react-router';
 import { formatRelativeTime } from '@workbench/launchpad/formatRelativeTime';
+import { isProjectSummaryCompatible } from '@workbench/projects/library';
 import { EllipsisVerticalIcon, PinIcon } from 'lucide-react';
 import { useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { ProjectActionsMenu } from './ProjectActionsMenu';
+import { ProjectCompatibilityBadge } from './ProjectCompatibilityBadge';
 import { ProjectCover } from './ProjectCover';
 import { useProjectCardActions } from './useProjectCardActions';
 
@@ -38,6 +40,7 @@ export const ProjectRow = ({
   const actions = useProjectCardActions(summary);
   const [isActionsOpen, setIsActionsOpen] = useState(false);
   const [contextMenuTarget, setContextMenuTarget] = useState<{ x: number; y: number } | null>(null);
+  const isCompatible = isProjectSummaryCompatible(summary);
 
   const projectSearch = useMemo(() => ({ project: summary.id }), [summary.id]);
   const handleContextMenu = useCallback((event: MouseEvent<HTMLDivElement>) => {
@@ -57,17 +60,29 @@ export const ProjectRow = ({
 
   return (
     <Row className="group" gap="3" h="full" position="relative" px="2.5" rounded="md" onContextMenu={handleContextMenu}>
-      <Link
-        aria-label={t('projects.openProjectLabel', { name: summary.name })}
-        search={projectSearch}
-        style={LINK_STYLE}
-        to="/app"
-      />
+      {isCompatible ? (
+        <Link
+          aria-label={t('projects.openProjectLabel', { name: summary.name })}
+          search={projectSearch}
+          style={LINK_STYLE}
+          to="/app"
+        />
+      ) : (
+        <Box
+          aria-disabled="true"
+          aria-label={`${t('projects.openProjectLabel', { name: summary.name })}. ${t('projects.file.updateClient')}`}
+          role="link"
+          style={LINK_STYLE}
+          tabIndex={0}
+          title={t('projects.file.updateClient')}
+        />
+      )}
       <Box flexShrink={0} overflow="hidden" pointerEvents="none" rounded="sm" w={THUMBNAIL_WIDTH}>
         <ProjectCover coverUrl={summary.coverUrl} />
       </Box>
       <Flex flex="1" gap="3" minW="0" pointerEvents="none">
         <MiddleTruncate flex="1" fontSize="xs" fontWeight="600" minW="0" text={summary.name} />
+        <ProjectCompatibilityBadge summary={summary} />
         <Text color="fg.muted" flexShrink={0} fontSize="2xs">
           {t('projects.editedRelative', { time: formatRelativeTime(summary.updatedAt) })}
         </Text>
@@ -91,6 +106,7 @@ export const ProjectRow = ({
           actions={actions}
           contextMenuTarget={contextMenuTarget}
           isOpen={isActionsOpen}
+          isCompatible={isCompatible}
           isPinned={isPinned}
           projectId={summary.id}
           projectName={summary.name}

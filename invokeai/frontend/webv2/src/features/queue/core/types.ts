@@ -109,6 +109,8 @@ export interface QueueBackendItem {
 }
 
 export interface QueueResultImage {
+  /** Backend creation timestamp; `queuedAt` is the submission instant. */
+  createdAt?: string;
   height: number;
   imageName: string;
   imageUrl: string;

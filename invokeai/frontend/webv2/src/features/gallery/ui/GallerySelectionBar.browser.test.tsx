@@ -44,6 +44,7 @@ const itemActions = {
 const createBoard = (overrides: Partial<GalleryBoard> & Pick<GalleryBoard, 'id' | 'name'>): GalleryBoard => ({
   archived: false,
   assetCount: 0,
+  assetVideoCount: 0,
   imageCount: 0,
   kind: 'board',
   projectId: null,

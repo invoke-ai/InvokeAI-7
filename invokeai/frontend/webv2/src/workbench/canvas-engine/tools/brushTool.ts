@@ -19,6 +19,7 @@ export const createBrushTool = (): Tool =>
   createPaintTool({
     color: (ctx) => ctx.stores.brushOptions.get().color,
     composite: 'source-over',
+    hardness: (ctx) => ctx.stores.brushOptions.get().hardness,
     id: 'brush',
     opacity: (ctx) => ctx.stores.brushOptions.get().opacity,
     size: (ctx) => ctx.stores.brushOptions.get().size,

@@ -1,9 +1,11 @@
 import type {
   CanvasControlLayerContract,
-  CanvasDocumentContractV2,
+  CanvasDocumentContractV3,
   CanvasRasterLayerContractV2,
 } from '@workbench/canvas-engine/contracts';
 
+import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
+import { getDocumentLeaves } from '@workbench/canvas-engine/document/documentIndex';
 import { createHistory } from '@workbench/canvas-engine/history/history';
 import { createLayerCacheStore } from '@workbench/canvas-engine/render/layerCache';
 import { createTestStubRasterBackend } from '@workbench/canvas-engine/render/raster.testStub';
@@ -64,13 +66,13 @@ describe('PixelEditController', () => {
       type: 'control',
       withTransparencyEffect: false,
     };
-    const document: CanvasDocumentContractV2 = {
+    const document: CanvasDocumentContractV3 = {
       background: 'transparent',
       bbox: { height: 8, width: 8, x: 0, y: 0 },
       height: 8,
-      layers: [layer],
+      stacks: stacksFrom([layer]),
       selectedLayerId: layer.id,
-      version: 2,
+      version: 3,
       width: 8,
     };
     const history = createHistory();
@@ -132,13 +134,13 @@ describe('PixelEditController', () => {
       transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 },
       type: 'raster',
     };
-    const document: CanvasDocumentContractV2 = {
+    let document: CanvasDocumentContractV3 = {
       background: 'transparent',
       bbox: { height: 8, width: 8, x: 0, y: 0 },
       height: 8,
-      layers: [layer],
+      stacks: stacksFrom([layer]),
       selectedLayerId: layer.id,
-      version: 2,
+      version: 3,
       width: 8,
     };
     const entry = layers.getOrCreate(layer.id, 1, 1);
@@ -152,7 +154,7 @@ describe('PixelEditController', () => {
       canEdit: () => true,
       deleteDerived: vi.fn(),
       dispatchReplacement: (replacement) => {
-        document.layers = [replacement];
+        document = { ...document, stacks: stacksFrom([replacement]) };
       },
       endBurst: vi.fn(),
       getActiveProjectId: () => 'project-1',
@@ -184,7 +186,7 @@ describe('PixelEditController', () => {
         rect: { height: 1, width: 1, x: 0, y: 0 },
       })
     ).toThrow('transform cleanup failed');
-    expect(document.layers[0]).toMatchObject({ source: { type: 'paint' }, type: 'raster' });
+    expect(getDocumentLeaves(document)[0]).toMatchObject({ source: { type: 'paint' }, type: 'raster' });
     expect(history.canUndo()).toBe(true);
     expect(markLayerDirty).toHaveBeenCalledWith(layer.id);
     expect(release).toHaveBeenCalledOnce();

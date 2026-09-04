@@ -27,10 +27,23 @@ describe('parseInvkManifest', () => {
   });
 
   it('keeps the optional cover and source project id', () => {
-    expect(parseInvkManifest({ ...v2, cover: 'cover.webp', sourceProjectId: 'project-1' })).toMatchObject({
+    expect(
+      parseInvkManifest({
+        ...v2,
+        cover: 'cover.webp',
+        minimumCanvasSchemaVersion: 3,
+        sourceProjectId: 'project-1',
+      })
+    ).toMatchObject({
       cover: 'cover.webp',
+      minimumCanvasSchemaVersion: 3,
       sourceProjectId: 'project-1',
     });
+  });
+
+  it('rejects a malformed canvas schema floor as archive damage', () => {
+    expectReason({ ...v2, minimumCanvasSchemaVersion: 0 }, 'damaged');
+    expectReason({ ...v2, minimumCanvasSchemaVersion: 2.5 }, 'damaged');
   });
 
   /** The whole reason the schema is a union: naming what a v1 archive is. */
@@ -74,6 +87,7 @@ describe('buildInvkManifest', () => {
       appVersion: '7.0',
       cover: 'cover.webp',
       createdAt: v2.createdAt,
+      minimumCanvasSchemaVersion: 3,
       name: 'My project',
       sourceProjectId: 'project-1',
     });

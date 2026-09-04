@@ -7,6 +7,7 @@ import { getGalleryCountForView } from './galleryBoardLabels';
 const createBoard = (overrides: Partial<GalleryBoard> = {}): GalleryBoard => ({
   archived: false,
   assetCount: 3,
+  assetVideoCount: 0,
   id: 'dogs',
   imageCount: 50,
   kind: 'board',
@@ -23,5 +24,14 @@ describe('getGalleryCountForView', () => {
 
   it('counts assets alone for the assets view', () => {
     expect(getGalleryCountForView(createBoard(), 'assets')).toBe(3);
+  });
+
+  it('splits asset-category videos out of media and into assets', () => {
+    // 4 videos total, 1 uploaded (asset): media shows 50 images + 3 media videos,
+    // assets shows 3 asset images + 1 asset video.
+    const board = createBoard({ assetVideoCount: 1 });
+
+    expect(getGalleryCountForView(board, 'images')).toBe(53);
+    expect(getGalleryCountForView(board, 'assets')).toBe(4);
   });
 });

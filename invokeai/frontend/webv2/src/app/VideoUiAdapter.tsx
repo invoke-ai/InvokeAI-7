@@ -5,8 +5,9 @@ import { invalidateGallery } from '@features/gallery/queries';
 import { VideoUiProvider } from '@features/video';
 import { useQueryClient } from '@tanstack/react-query';
 import { useWorkbenchPreferenceSelector } from '@workbench/settings/store';
+import { getProjectWidgetValues } from '@workbench/widgetState';
 import { useActiveProjectSelector, useWorkbenchCommands } from '@workbench/WorkbenchContext';
-import { useCallback, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 
 /**
  * Production binding of Video's UI port: maps the video widget instance out of
@@ -31,6 +32,21 @@ export const VideoUiAdapterProvider = ({ children }: { children: ReactNode }) =>
   const showPromptSyntaxHighlighting = useWorkbenchPreferenceSelector(
     (preferences) => preferences.showPromptSyntaxHighlighting
   );
+  // Uploads from the video panel land on the gallery's currently selected board. This
+  // deliberately reads the RAW selectedBoardId — the same value the queue snapshots as
+  // galleryBoardId for generation results — so uploads and generations land on the same
+  // board, rather than replicating the gallery view's display-side fallbacks.
+  const uploadBoardId = useActiveProjectSelector((activeProject) => {
+    const selectedBoardId = getProjectWidgetValues(activeProject, 'gallery').selectedBoardId;
+
+    return typeof selectedBoardId === 'string' ? selectedBoardId : 'none';
+  });
+  // Ref-backed so the port's actions keep their stable-for-the-project identity: a
+  // board click must not re-render every useVideoUiActions consumer in the panel.
+  const uploadBoardIdRef = useRef(uploadBoardId);
+  useEffect(() => {
+    uploadBoardIdRef.current = uploadBoardId;
+  }, [uploadBoardId]);
   const commands = useWorkbenchCommands();
   const queryClient = useQueryClient();
   // The port's callbacks are keyed to the project, not to its contents: rebuilding
@@ -46,15 +62,17 @@ export const VideoUiAdapterProvider = ({ children }: { children: ReactNode }) =>
     [commands]
   );
   const touchGalleryImages = useCallback(() => void invalidateGallery(queryClient), [queryClient]);
+  const getUploadBoardId = useCallback(() => uploadBoardIdRef.current, []);
   const adapter = useMemo<VideoUiAdapter>(
     () => ({
       ...project,
+      getUploadBoardId,
       patchValues,
       reportError,
       showPromptSyntaxHighlighting,
       touchGalleryImages,
     }),
-    [patchValues, project, reportError, showPromptSyntaxHighlighting, touchGalleryImages]
+    [getUploadBoardId, patchValues, project, reportError, showPromptSyntaxHighlighting, touchGalleryImages]
   );
 
   return <VideoUiProvider adapter={adapter}>{children}</VideoUiProvider>;

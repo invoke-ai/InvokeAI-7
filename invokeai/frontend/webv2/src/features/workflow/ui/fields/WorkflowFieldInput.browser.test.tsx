@@ -248,7 +248,7 @@ describe('WorkflowFieldInput media inputs', () => {
     expect(host.textContent).toContain('Drop a video here');
     expect(findButton('Use gallery selection').disabled).toBe(true);
     expect(findButton('Upload').disabled).toBe(false);
-    expect(host.querySelector<HTMLInputElement>('input[type="file"]')?.accept).toBe('video/*');
+    expect(host.querySelector<HTMLInputElement>('input[type="file"]')?.accept).toBe('video/*,audio/*');
   });
 
   it('adopts a selected gallery video and clears it', async () => {

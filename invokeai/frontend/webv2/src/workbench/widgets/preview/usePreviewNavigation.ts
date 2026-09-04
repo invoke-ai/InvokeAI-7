@@ -9,7 +9,12 @@ import type { QueueItem } from '@features/queue/contracts';
 import type { InfiniteData } from '@tanstack/react-query';
 import type { KeyboardEvent } from 'react';
 
-import { compareGalleryItems, gallerySemanticReferenceKey, toGalleryItemKey } from '@features/gallery/contracts';
+import {
+  compareGalleryItems,
+  gallerySemanticReferenceKey,
+  isGalleryStarredFirst,
+  toGalleryItemKey,
+} from '@features/gallery/contracts';
 import {
   flattenGalleryItemsData,
   GALLERY_MAX_ROWS,
@@ -46,13 +51,13 @@ const flattenPreviewItems = (data: InfiniteData<GalleryItemsPage, number> | unde
 const getOrderedPreviewItems = (
   items: GalleryItem[],
   imageOrderDir: 'ASC' | 'DESC',
+  starredFirst: boolean,
   inputOrder: 'display' | 'newest-first'
 ): GalleryItem[] =>
   items
     .map((item, index) => ({ index, item }))
     .sort((a, b) => {
-      // Starred-first is pinned in gallery/core/settings.ts.
-      const canonicalOrder = compareGalleryItems(a.item, b.item, { orderDir: imageOrderDir, starredFirst: true });
+      const canonicalOrder = compareGalleryItems(a.item, b.item, { orderDir: imageOrderDir, starredFirst });
 
       if (canonicalOrder !== 0) {
         return canonicalOrder;
@@ -74,15 +79,18 @@ const getOrderedLocalItems = ({
   galleryView,
   items,
   imageOrderDir,
+  starredFirst,
 }: {
   boardId: string;
   galleryView: GalleryView;
   items: GalleryItem[];
   imageOrderDir: 'ASC' | 'DESC';
+  starredFirst: boolean;
 }): GalleryItem[] =>
   getOrderedPreviewItems(
     items.filter((item) => item.boardId === boardId && getItemGalleryView(item) === galleryView),
     imageOrderDir,
+    starredFirst,
     'newest-first'
   );
 
@@ -90,7 +98,7 @@ export const mergePreviewBoardItems = (
   backendItems: GalleryItem[],
   localItems: GalleryItem[],
   imageOrderDir: 'ASC' | 'DESC',
-  { isRanked = false }: { isRanked?: boolean } = {}
+  { isRanked = false, starredFirst }: { isRanked?: boolean; starredFirst: boolean }
 ): GalleryItem[] => {
   const backendKeys = new Set(backendItems.map(toGalleryItemKey));
 
@@ -113,7 +121,7 @@ export const mergePreviewBoardItems = (
     return backendItems.slice(0, GALLERY_MAX_ROWS);
   }
 
-  return getOrderedPreviewItems([...backendItems, ...missingLocalItems], imageOrderDir, 'display').slice(
+  return getOrderedPreviewItems([...backendItems, ...missingLocalItems], imageOrderDir, starredFirst, 'display').slice(
     0,
     GALLERY_MAX_ROWS
   );
@@ -180,6 +188,10 @@ export const usePreviewNavigation = ({
     shouldFollowLive && activePlaceholder ? activePlaceholder.boardId : selectedImageQuery.boardId;
   const navigationGalleryView = shouldFollowLive ? 'images' : selectedImageQuery.galleryView;
   const navigationOrderDir = shouldFollowLive ? imageOrderDir : selectedImageQuery.imageOrderDir;
+  // Live-follow watches the gallery's own listing, so its mode decides.
+  const navigationStarredFirst = isGalleryStarredFirst(
+    shouldFollowLive ? galleryPaginationMode : selectedImageQuery.paginationMode
+  );
   // Read from the gallery's CURRENT search, not from a copy stamped onto the
   // selection: the chip is a view mode, and Preview has to follow it the
   // moment it is set or cleared or it walks a list that is no longer on
@@ -289,8 +301,7 @@ export const usePreviewNavigation = ({
         orderDir: navigationOrderDir,
         searchTerm: shouldFollowLive ? '' : selectedImageSearch.text,
         ...(navigationSemanticQuery ? { semanticQuery: navigationSemanticQuery } : {}),
-        // Starred-first is pinned in gallery/core/settings.ts.
-        starredFirst: true,
+        starredFirst: navigationStarredFirst,
       },
       navigationWindow
     ),
@@ -402,8 +413,9 @@ export const usePreviewNavigation = ({
         galleryView: navigationGalleryView,
         items: navigationLocalItems,
         imageOrderDir: navigationOrderDir,
+        starredFirst: navigationStarredFirst,
       }),
-    [navigationBoardId, navigationGalleryView, navigationLocalItems, navigationOrderDir]
+    [navigationBoardId, navigationGalleryView, navigationLocalItems, navigationOrderDir, navigationStarredFirst]
   );
   const previewLocalBoardItems = useMemo(() => {
     if (
@@ -430,8 +442,16 @@ export const usePreviewNavigation = ({
         ? EMPTY_PREVIEW_ITEMS
         : mergePreviewBoardItems(backendBoardItems, previewMergeItems, navigationOrderDir, {
             isRanked: navigationSemanticQuery !== null,
+            starredFirst: navigationStarredFirst,
           }),
-    [backendBoardItems, hasNavigationContext, navigationOrderDir, navigationSemanticQuery, previewMergeItems]
+    [
+      backendBoardItems,
+      hasNavigationContext,
+      navigationOrderDir,
+      navigationSemanticQuery,
+      navigationStarredFirst,
+      previewMergeItems,
+    ]
   );
   const isLoadingBoard = hasNavigationContext && isFetchingBoardItems;
   const navigationSequence = useMemo(
@@ -445,6 +465,7 @@ export const usePreviewNavigation = ({
         boardImages: boardItems,
         galleryView: navigationGalleryView,
         imageOrderDir: navigationOrderDir,
+        starredFirst: navigationStarredFirst,
       }),
     [
       activePlaceholder,
@@ -453,6 +474,7 @@ export const usePreviewNavigation = ({
       navigationGalleryView,
       navigationOrderDir,
       navigationSemanticQuery,
+      navigationStarredFirst,
     ]
   );
   const navigationCursor = getPreviewNavigationCursor(navigationSequence, {
@@ -506,6 +528,7 @@ export const usePreviewNavigation = ({
         const nextBackendBoardItems = flattenPreviewItems(result.data);
         const nextBoardItems = mergePreviewBoardItems(nextBackendBoardItems, previewMergeItems, navigationOrderDir, {
           isRanked: navigationSemanticQuery !== null,
+          starredFirst: navigationStarredFirst,
         });
         const nextNavigationSequence = getPreviewNavigationSequence({
           // Same exclusion as the render path: a ranked list has no
@@ -516,6 +539,7 @@ export const usePreviewNavigation = ({
           boardImages: nextBoardItems,
           galleryView: navigationGalleryView,
           imageOrderDir: navigationOrderDir,
+          starredFirst: navigationStarredFirst,
         });
         const nextNavigationCursor = getPreviewNavigationCursor(nextNavigationSequence, {
           isFollowingLive: shouldFollowLive,
@@ -551,6 +575,7 @@ export const usePreviewNavigation = ({
       navigationOrderDir,
       navigationSemanticQuery,
       navigationSequence,
+      navigationStarredFirst,
       previewMergeItems,
       selectedItemKey,
       selectPreviewItem,

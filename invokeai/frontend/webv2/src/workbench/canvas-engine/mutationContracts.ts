@@ -1,44 +1,66 @@
 /**
- * The canvas document mutation vocabulary.
- *
- * These types live inside `canvas-engine` because the engine and its controllers
- * are their heaviest consumers — 21 engine files import `CanvasProjectMutation`,
- * and every one of them wants only the type, never the reducer. Keeping the
- * declaration in `workbench/canvasProjectMutations.ts` made the engine's own
- * public surface (`capabilities.ts`) import upward from the workbench root,
- * which is the edge that closed the 16-module import cycle.
- *
- * The reducer that interprets these mutations stays in
- * `workbench/canvasProjectMutations.ts` and re-exports these types, so callers
- * outside canvas are unaffected.
+ * The canvas document mutation vocabulary. Declared inside `canvas-engine` because the engine and
+ * its controllers are its heaviest consumers; the reducer that interprets it lives in
+ * `workbench/canvasProjectMutations.ts` and re-exports these types.
  */
 
 import type { ProjectEvent } from '@workbench/projectEventContracts';
 
 import type {
+  CanvasLayerRegionContract,
   CanvasAdjustmentsContract,
   CanvasControlAdapterContract,
   CanvasControlLayerContract,
-  CanvasDocumentContractV2,
+  CanvasDocumentContractV3,
   CanvasLayerBaseContract,
   CanvasLayerContract,
   CanvasLayerSourceContract,
   CanvasMaskContract,
+  CanvasMaskDenoiseContract,
+  CanvasMaskNoiseContract,
   CanvasRasterLayerContractV2,
   CanvasRegionalGuidanceLayerContract,
   CanvasStagingAreaContractV2,
 } from './contracts';
+import type { CanvasNodeInsertion, CanvasNodeInsertionAnchor, CanvasNodeMove } from './document/insertionAnchors';
+import type { ReorderSiblingsCommand } from './document/layerStacks';
 
+/** Base fields a node accepts; a group takes everything but `transform`. */
 export type CanvasLayerBasePatch = Partial<
-  Pick<CanvasLayerBaseContract, 'name' | 'isEnabled' | 'isLocked' | 'opacity' | 'blendMode'>
+  Pick<CanvasLayerBaseContract, 'name' | 'isEnabled' | 'isLocked' | 'opacity' | 'blendMode' | 'colorLabel'>
 > & { transform?: Partial<CanvasLayerBaseContract['transform']> };
+
+/** The base fields a group carries; anything else in a patch does not apply to it. */
+export const GROUP_PATCH_KEYS: readonly (keyof CanvasLayerBasePatch)[] = [
+  'name',
+  'isEnabled',
+  'isLocked',
+  'opacity',
+  'blendMode',
+  'colorLabel',
+];
+
+/** Patch keys allowed on a locked node (organizational edits never need the lock lifted first). */
+export const LOCK_EXEMPT_PATCH_KEYS: readonly (keyof CanvasLayerBasePatch)[] = [
+  'name',
+  'isEnabled',
+  'isLocked',
+  'colorLabel',
+];
 
 export type CanvasLayerConfigPatch =
   | {
       layerType: 'raster';
       adjustments?: CanvasAdjustmentsContract;
+      /** `null` removes the region; absent leaves it untouched. */
+      inpaint?: CanvasLayerRegionContract | null;
       isTransparencyLocked?: boolean;
       filter?: CanvasRasterLayerContractV2['filter'];
+    }
+  | {
+      /** Raster-stack groups only; the model refuses the patch elsewhere. */
+      layerType: 'group';
+      adjustments?: CanvasAdjustmentsContract;
     }
   | {
       layerType: 'control';
@@ -54,11 +76,18 @@ export type CanvasLayerConfigPatch =
       autoNegative?: boolean;
       referenceImages?: CanvasRegionalGuidanceLayerContract['referenceImages'];
     }
-  | { layerType: 'inpaint_mask'; mask?: Partial<CanvasMaskContract>; noiseLevel?: number; denoiseLimit?: number };
+  | {
+      layerType: 'inpaint_mask';
+      mask?: Partial<CanvasMaskContract>;
+      /** `null` removes the modifier; absent leaves it untouched. */
+      noise?: CanvasMaskNoiseContract | null;
+      denoise?: CanvasMaskDenoiseContract | null;
+    };
 
 export type CanvasProjectMutation =
   | {
       type: 'commitStagedImage';
+      anchor: CanvasNodeInsertionAnchor;
       candidateFingerprint: string;
       continueStaging: boolean;
       event: ProjectEvent;
@@ -80,20 +109,25 @@ export type CanvasProjectMutation =
   | { type: 'toggleCanvasStagingVisibility' }
   | { type: 'toggleCanvasStagingThumbnailsVisibility' }
   | { type: 'clearCanvasStaging' }
-  | { type: 'addCanvasLayer'; layer: CanvasLayerContract; index?: number }
+  | { type: 'addCanvasLayer'; layer: CanvasLayerContract; anchor: CanvasNodeInsertionAnchor }
   | {
+      /**
+       * One atomic restructuring, applied as `add`, then `move`, then `removeIds`, then the flag
+       * and selection updates, so an anchor may name a node a later step moves or removes. The
+       * whole mutation is refused when any step is invalid or the result exceeds the depth or
+       * node limits.
+       */
       type: 'applyCanvasLayerStackMutation';
-      add?: { index: number; layers: readonly CanvasLayerContract[] };
+      add?: readonly CanvasNodeInsertion[];
+      move?: readonly CanvasNodeMove[];
       removeIds?: readonly string[];
       enabledUpdates: readonly { id: string; isEnabled: boolean }[];
       lockedUpdates?: readonly { id: string; isLocked: boolean }[];
-      orderedIds?: readonly string[];
-      /** Omit to preserve the current selection, repairing it if that layer is removed. */
+      /** Omit to preserve the current selection, repairing it if that node is removed. */
       selectedLayerId?: string | null;
     }
   | { type: 'removeCanvasLayers'; ids: string[] }
-  | { type: 'duplicateCanvasLayer'; sourceId: string; newId: string }
-  | { type: 'reorderCanvasLayers'; orderedIds: string[] }
+  | { type: 'reorderCanvasSiblings'; orders: readonly ReorderSiblingsCommand[] }
   | { type: 'updateCanvasLayer'; id: string; patch: CanvasLayerBasePatch }
   | { type: 'replaceCanvasLayer'; layerId: string; layer: CanvasLayerContract }
   | { type: 'setCanvasLayersEnabled'; updates: readonly { id: string; isEnabled: boolean }[] }
@@ -101,17 +135,35 @@ export type CanvasProjectMutation =
   | { type: 'setCanvasLayersHidden'; updates: readonly { id: string; isHidden: boolean }[] }
   | { type: 'updateCanvasLayerSource'; id: string; source: CanvasLayerSourceContract }
   | { type: 'updateCanvasLayerConfig'; id: string; config: CanvasLayerConfigPatch }
-  | { type: 'convertCanvasLayer'; id: string; targetType: CanvasLayerContract['type']; layer: CanvasLayerContract }
+  | {
+      /** One atomic config patch across several layers, e.g. moving a modifier between two of them. */
+      type: 'updateCanvasLayerConfigs';
+      updates: readonly { id: string; config: CanvasLayerConfigPatch }[];
+    }
+  | {
+      type: 'convertCanvasLayer';
+      id: string;
+      targetType: CanvasLayerContract['type'];
+      layer: CanvasLayerContract;
+      /** Where a leaf changing stacks lands; the top of its new stack when absent. */
+      anchor?: CanvasNodeInsertionAnchor;
+    }
   | {
       type: 'mergeCanvasLayersDown';
       upperLayerId: string;
       source: Extract<CanvasLayerSourceContract, { type: 'paint' }>;
     }
-  | { type: 'setCanvasBbox'; bbox: CanvasDocumentContractV2['bbox'] }
+  | { type: 'setCanvasBbox'; bbox: CanvasDocumentContractV3['bbox'] }
   | { type: 'setCanvasSelectedLayer'; id: string | null }
   | { type: 'resizeCanvasDocument'; width: number; height: number; offsetX?: number; offsetY?: number }
-  | { type: 'replaceCanvasDocument'; document: CanvasDocumentContractV2 }
+  | { type: 'replaceCanvasDocument'; document: CanvasDocumentContractV3 }
   | { type: 'saveCanvasSnapshot'; id: string; name: string; createdAt: string }
   | { type: 'restoreCanvasSnapshot'; snapshotId: string }
   | { type: 'deleteCanvasSnapshot'; snapshotId: string }
   | { type: 'setCanvasStagingAutoSwitch'; mode: CanvasStagingAreaContractV2['autoSwitchMode'] };
+
+/** Why a canvas mutation is dispatched; system work never triggers user-routing policy. */
+export type CanvasMutationOrigin = 'user' | 'system';
+
+/** A completed canvas edit that may update aggregate invocation routing. */
+export type CanvasEditIntent = { kind: 'paint' } | { kind: 'mutation'; mutation: CanvasProjectMutation };

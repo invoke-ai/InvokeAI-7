@@ -23,11 +23,16 @@ from invokeai.backend.util.devices import TorchDevice
 @pytest.fixture(autouse=True)
 def reset_state() -> Iterator[None]:
     GENERATION_DEVICE_POOL.reset()
-    try:
-        yield
-    finally:
-        TorchDevice.clear_session_device()
-        GENERATION_DEVICE_POOL.reset()
+    # These tests intentionally model a two-GPU pool on machines with any
+    # hardware topology. Keep the real pool/session-pin behavior under test,
+    # but do not let the runner switch torch to the fictional second device.
+    target = "invokeai.app.services.session_processor.session_processor_default._set_torch_current_device"
+    with patch(target):
+        try:
+            yield
+        finally:
+            TorchDevice.clear_session_device()
+            GENERATION_DEVICE_POOL.reset()
 
 
 class _FakeInvocation:

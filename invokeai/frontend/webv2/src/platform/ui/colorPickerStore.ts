@@ -4,8 +4,12 @@ export type ColorPickerFormat = 'hex' | 'rgb' | 'hsl' | 'hsb';
 
 export const COLOR_PICKER_FORMATS: readonly ColorPickerFormat[] = ['hex', 'rgb', 'hsl', 'hsb'];
 
+/** How the color pane's picking surface renders: the HSV wheel+triangle or the box with a hue strip. */
+export type ColorPickerMode = 'wheel' | 'box';
+
 const RECENTS_STORAGE_KEY = 'invokeai:v7:webv2:color-recents';
 const FORMAT_STORAGE_KEY = 'invokeai:v7:webv2:color-format';
+const MODE_STORAGE_KEY = 'invokeai:v7:webv2:color-picker-mode';
 const MAX_RECENTS = 12;
 
 /**
@@ -32,6 +36,8 @@ export const DEFAULT_COLOR_SWATCHES: readonly string[] = [
 
 const isColorPickerFormat = (value: unknown): value is ColorPickerFormat =>
   typeof value === 'string' && (COLOR_PICKER_FORMATS as readonly string[]).includes(value);
+
+const isColorPickerMode = (value: unknown): value is ColorPickerMode => value === 'wheel' || value === 'box';
 
 /**
  * Reads a persisted string. Touching `localStorage` at all can throw
@@ -82,6 +88,7 @@ const parseRecents = (raw: string | null): string[] => {
 
 interface ColorPickerSnapshot {
   format: ColorPickerFormat;
+  mode: ColorPickerMode;
   recents: string[];
 }
 
@@ -91,8 +98,15 @@ const readStoredFormat = (): ColorPickerFormat => {
   return isColorPickerFormat(stored) ? stored : 'hex';
 };
 
+const readStoredMode = (): ColorPickerMode => {
+  const stored = readStored(MODE_STORAGE_KEY);
+
+  return isColorPickerMode(stored) ? stored : 'wheel';
+};
+
 const store = createExternalStore<ColorPickerSnapshot>({
   format: readStoredFormat(),
+  mode: readStoredMode(),
   recents: parseRecents(readStored(RECENTS_STORAGE_KEY)),
 });
 
@@ -114,6 +128,13 @@ export const setColorPickerFormat = (format: ColorPickerFormat): void => {
   store.patchSnapshot({ format });
   writeStored(FORMAT_STORAGE_KEY, format);
 };
+
+export const setColorPickerMode = (mode: ColorPickerMode): void => {
+  store.patchSnapshot({ mode });
+  writeStored(MODE_STORAGE_KEY, mode);
+};
+
+export const useColorPickerMode = (): ColorPickerMode => store.useSelector((snapshot) => snapshot.mode, Object.is);
 
 export const useRecentColors = (): string[] => store.useSelector((snapshot) => snapshot.recents);
 

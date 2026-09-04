@@ -6,7 +6,7 @@ import type {
 } from '@workbench/widgetContracts';
 
 import { Box, Code, Flex, HStack, ScrollArea, Stack, Text, useRecipe } from '@chakra-ui/react';
-import { Button } from '@platform/ui';
+import { Button } from '@platform/ui/Button';
 import { chipRecipe } from '@theme/recipes';
 import { resolveWidgetInstanceLabel } from '@workbench/widgetLabels';
 import { TriangleAlertIcon } from 'lucide-react';

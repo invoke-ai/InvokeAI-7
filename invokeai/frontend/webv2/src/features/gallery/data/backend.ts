@@ -45,6 +45,8 @@ interface BackendBoardDTO {
   asset_count: number;
   /** Videos on the board. Counted separately from `image_count` by the backend. */
   video_count?: number;
+  /** Asset-category (non-'general') videos on the board; uploaded videos are assets. */
+  asset_video_count?: number;
   archived: boolean;
   cover_image_name?: string | null;
   /** Set instead of `cover_image_name` when the board's most recent item is a video. */
@@ -81,22 +83,47 @@ const GALLERY_UPLOAD_KIND_BY_MIME = new Map<string, GalleryUploadKind>([
   ['image/jpg', 'image'],
   ['image/png', 'image'],
   ['image/webp', 'image'],
-  ['video/mp4', 'video'],
 ]);
 
+// The server normalizes every accepted upload to H.264 MP4 at ingest — foreign
+// containers/codecs (.mov, HEVC, …) are remuxed or transcoded, and audio files are
+// wrapped into waveform videos — so both video/* and audio/* upload as 'video'.
 const GALLERY_UPLOAD_KIND_BY_EXTENSION = new Map<string, GalleryUploadKind>([
   ['.jpeg', 'image'],
   ['.jpg', 'image'],
   ['.png', 'image'],
   ['.webp', 'image'],
   ['.mp4', 'video'],
+  ['.mov', 'video'],
+  ['.m4v', 'video'],
+  ['.webm', 'video'],
+  ['.mkv', 'video'],
+  ['.avi', 'video'],
+  ['.mpg', 'video'],
+  ['.mpeg', 'video'],
+  ['.3gp', 'video'],
+  ['.mp3', 'video'],
+  ['.m4a', 'video'],
+  ['.aac', 'video'],
+  ['.wav', 'video'],
+  ['.flac', 'video'],
+  ['.ogg', 'video'],
+  ['.oga', 'video'],
+  ['.opus', 'video'],
+  ['.aiff', 'video'],
+  ['.aif', 'video'],
 ]);
 
 export const classifyGalleryUpload = (file: Pick<File, 'name' | 'type'>): { kind: GalleryUploadKind } | null => {
-  const mimeKind = GALLERY_UPLOAD_KIND_BY_MIME.get(file.type.toLowerCase());
+  const mimeType = file.type.toLowerCase();
+  const mimeKind = GALLERY_UPLOAD_KIND_BY_MIME.get(mimeType);
 
   if (mimeKind) {
     return { kind: mimeKind };
+  }
+
+  if (mimeType.startsWith('video/') || mimeType.startsWith('audio/')) {
+    return { kind: 'video' };
   }
 
   const lowerName = file.name.toLowerCase();
@@ -209,6 +236,7 @@ const getBoardCoverThumbnailUrl = (
 const mapBoard = (board: BackendBoardDTO): GalleryBoard => ({
   archived: board.archived,
   assetCount: board.asset_count,
+  assetVideoCount: board.asset_video_count ?? 0,
   coverImageName: board.cover_image_name,
   coverThumbnailUrl: getBoardCoverThumbnailUrl(board),
   coverVideoName: board.cover_video_name,
@@ -244,17 +272,20 @@ const getGalleryTotal = async ({
 };
 
 /**
- * Videos carry no category split — the gallery's Images/Assets views are an image-only
- * distinction — so this counts every non-intermediate video on the board.
+ * Counts non-intermediate videos on a board, optionally restricted to a category set —
+ * the same general/asset split the images use (uploaded videos are 'user', generated
+ * are 'general').
  */
 const getGalleryVideoTotal = async ({
   boardId,
+  categories,
   signal,
 }: {
   boardId: string;
+  categories?: string[];
   signal?: AbortSignal;
 }): Promise<number> => {
-  const query = toSearchParams({ board_id: boardId, is_intermediate: false, limit: 0, offset: 0 });
+  const query = toSearchParams({ board_id: boardId, categories, is_intermediate: false, limit: 0, offset: 0 });
   const body = await apiFetchJson<{ total: number }>(`/api/v1/videos/?${query}`, { signal });
 
   return body.total;
@@ -262,6 +293,7 @@ const getGalleryVideoTotal = async ({
 
 const mapImage = (image: BackendImageDTO): GalleryImage => ({
   boardId: image.board_id ?? 'none',
+  createdAt: image.created_at,
   height: image.height,
   imageCategory: image.image_category,
   imageName: image.image_name,
@@ -369,13 +401,20 @@ export const listGalleryBoards = async ({
     { signal }
   );
 
-  const [body, uncategorizedImageCount, uncategorizedAssetCount, uncategorizedVideoCount] = await Promise.all([
+  const [
+    body,
+    uncategorizedImageCount,
+    uncategorizedAssetCount,
+    uncategorizedVideoCount,
+    uncategorizedAssetVideoCount,
+  ] = await Promise.all([
     boardsBodyPromise,
     getGalleryTotal({ boardId: 'none', categories: imageCategories, signal }),
     getGalleryTotal({ boardId: 'none', categories: assetCategories, signal }),
     // Real boards carry `video_count` in their DTO, but the uncategorized pseudo-board is
-    // assembled here, so its video total needs its own request.
+    // assembled here, so its video totals need their own requests.
     getGalleryVideoTotal({ boardId: 'none', signal }),
+    getGalleryVideoTotal({ boardId: 'none', categories: assetCategories, signal }),
   ]);
   const boards = Array.isArray(body) ? body : (body.items ?? []);
 
@@ -383,6 +422,7 @@ export const listGalleryBoards = async ({
     {
       archived: false,
       assetCount: uncategorizedAssetCount,
+      assetVideoCount: uncategorizedAssetVideoCount,
       id: 'none',
       imageCount: uncategorizedImageCount,
       kind: 'uncategorized',
@@ -408,6 +448,7 @@ interface VirtualDateBoardDTO {
   image_count: number;
   asset_count: number;
   video_count?: number;
+  asset_video_count?: number;
   cover_image_name?: string | null;
   cover_video_name?: string | null;
 }
@@ -418,6 +459,7 @@ export const listGalleryDateBoards = async (signal?: AbortSignal): Promise<Galle
   return body.map((board) => ({
     archived: false,
     assetCount: board.asset_count,
+    assetVideoCount: board.asset_video_count ?? 0,
     coverImageName: board.cover_image_name,
     coverThumbnailUrl: getBoardCoverThumbnailUrl(board),
     coverVideoName: board.cover_video_name,
@@ -1494,7 +1536,9 @@ export const uploadGalleryVideo = async (
   const query = toSearchParams({
     board_id: getUploadBoardId(boardId),
     is_intermediate: false,
-    video_category: 'general',
+    // Uploads are user assets (the Assets view), mirroring `image_category: 'user'` on
+    // image uploads; generated videos save as 'general' (the Media view).
+    video_category: 'user',
   });
   const body = new FormData();
   body.append('file', file);

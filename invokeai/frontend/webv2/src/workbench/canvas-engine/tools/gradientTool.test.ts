@@ -1,9 +1,11 @@
-import type { CanvasDocumentContractV2, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
+import type { CanvasDocumentContractV3, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
 import type { Tool, ToolContext } from '@workbench/canvas-engine/tools/tool';
 import type { PointerInput, Vec2 } from '@workbench/canvas-engine/types';
 import type { Viewport } from '@workbench/canvas-engine/viewport';
 import type { CanvasProjectMutation } from '@workbench/canvasProjectMutations';
 
+import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
+import { createTestInsertionAnchorCapture } from '@workbench/canvas-engine/document/insertionAnchors.testStub';
 import { createEngineStores } from '@workbench/canvas-engine/engineStores';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -31,13 +33,13 @@ const gradientLayer = (over: Partial<CanvasLayerContract> = {}): CanvasLayerCont
     ...over,
   }) as CanvasLayerContract;
 
-const makeDoc = (over: Partial<CanvasDocumentContractV2> = {}): CanvasDocumentContractV2 => ({
+const makeDoc = (over: Partial<CanvasDocumentContractV3> = {}): CanvasDocumentContractV3 => ({
   background: 'transparent',
   bbox: { height: 96, width: 96, x: 0, y: 0 },
   height: 512,
-  layers: [],
+  stacks: stacksFrom([]),
   selectedLayerId: null,
-  version: 2,
+  version: 3,
   width: 512,
   ...over,
 });
@@ -62,14 +64,18 @@ interface StructuralCommit {
   inverse: CanvasProjectMutation;
 }
 
-const createHarness = (doc: CanvasDocumentContractV2) => {
+const createHarness = (doc: CanvasDocumentContractV3) => {
   const dispatched: CanvasProjectMutation[] = [];
   const commits: StructuralCommit[] = [];
   const stores = createEngineStores();
   let idCounter = 0;
   const ctx: ToolContext = {
     backend: null as never,
-    commitStructural: (label, forward, inverse) => commits.push({ forward, inverse, label }),
+    commitStructural: (label, forward, inverse) => {
+      commits.push({ forward, inverse, label });
+      return { status: 'committed' as const };
+    },
+    captureInsertionAnchor: createTestInsertionAnchorCapture('p'),
     createLayerId: () => `grad-${++idCounter}`,
     createPath2D: (d) => ({ d }) as unknown as Path2D,
     dispatch: (action) => dispatched.push(action),
@@ -127,12 +133,69 @@ describe('gradient tool: create when no gradient selected', () => {
     expect(h.commits[0]?.inverse).toEqual({ ids: ['grad-1'], type: 'removeCanvasLayers' });
     expect(h.previewOf()).toBeNull();
   });
+
+  it('resolves the FG→BG pair preset at gesture start', () => {
+    const h = createHarness(makeDoc());
+    h.stores.colorPair.set({ background: '#0000ff', foreground: '#ff0000' });
+    const tool = createGradientTool();
+
+    down(tool, h.ctx, pointer(0, 0));
+    move(tool, h.ctx, pointer(100, 0));
+    up(tool, h.ctx, pointer(100, 0));
+
+    const forward = h.commits[0]?.forward;
+    if (
+      forward?.type === 'addCanvasLayer' &&
+      forward.layer.type === 'raster' &&
+      forward.layer.source.type === 'gradient'
+    ) {
+      expect(forward.layer.source.stops).toEqual([
+        { color: '#ff0000ff', offset: 0 },
+        { color: '#0000ffff', offset: 1 },
+      ]);
+    } else {
+      throw new Error('expected a gradient layer');
+    }
+  });
+
+  it('uses the explicit custom stops verbatim, independent of the pair', () => {
+    const h = createHarness(makeDoc());
+    h.stores.colorPair.set({ background: '#0000ff', foreground: '#ff0000' });
+    h.stores.gradientOptions.set({
+      angle: 0,
+      kind: 'linear',
+      preset: 'custom',
+      stops: [
+        { color: '#11223344', offset: 0 },
+        { color: '#55667788', offset: 1 },
+      ],
+    });
+    const tool = createGradientTool();
+
+    down(tool, h.ctx, pointer(0, 0));
+    move(tool, h.ctx, pointer(100, 0));
+    up(tool, h.ctx, pointer(100, 0));
+
+    const forward = h.commits[0]?.forward;
+    if (
+      forward?.type === 'addCanvasLayer' &&
+      forward.layer.type === 'raster' &&
+      forward.layer.source.type === 'gradient'
+    ) {
+      expect(forward.layer.source.stops).toEqual([
+        { color: '#11223344', offset: 0 },
+        { color: '#55667788', offset: 1 },
+      ]);
+    } else {
+      throw new Error('expected a gradient layer');
+    }
+  });
 });
 
 describe('gradient tool: edit selected gradient layer', () => {
   it('commits ONE updateCanvasLayerSource with the new angle (kind/stops preserved)', () => {
     const layer = gradientLayer();
-    const doc = makeDoc({ layers: [layer], selectedLayerId: 'grad-existing' });
+    const doc = makeDoc({ stacks: stacksFrom([layer]), selectedLayerId: 'grad-existing' });
     const h = createHarness(doc);
     const tool = createGradientTool();
 
@@ -162,7 +225,7 @@ describe('gradient tool: edit selected gradient layer', () => {
 
   it('is a no-op when the selected gradient layer is locked', () => {
     const layer = gradientLayer({ isLocked: true });
-    const doc = makeDoc({ layers: [layer], selectedLayerId: 'grad-existing' });
+    const doc = makeDoc({ stacks: stacksFrom([layer]), selectedLayerId: 'grad-existing' });
     const h = createHarness(doc);
     const tool = createGradientTool();
 
@@ -187,7 +250,7 @@ describe('gradient tool: edit selected gradient layer', () => {
         type: 'gradient',
       },
     } as Partial<CanvasLayerContract>);
-    const doc = makeDoc({ layers: [layer], selectedLayerId: 'grad-existing' });
+    const doc = makeDoc({ stacks: stacksFrom([layer]), selectedLayerId: 'grad-existing' });
     const h = createHarness(doc);
     const tool = createGradientTool();
 
@@ -208,7 +271,7 @@ describe('gradient tool: edit selected gradient layer', () => {
       id: 'paint-1',
       source: { bitmap: null, type: 'paint' },
     } as Partial<CanvasLayerContract>);
-    const doc = makeDoc({ layers: [paint], selectedLayerId: 'paint-1' });
+    const doc = makeDoc({ stacks: stacksFrom([paint]), selectedLayerId: 'paint-1' });
     const h = createHarness(doc);
     const tool = createGradientTool();
 

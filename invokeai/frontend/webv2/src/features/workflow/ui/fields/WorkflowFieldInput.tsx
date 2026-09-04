@@ -437,7 +437,7 @@ const MEDIA_FIELD_CONFIG = {
     noun: 'image',
   },
   video: {
-    fileAccept: 'video/*',
+    fileAccept: 'video/*,audio/*',
     getThumbnailUrl: (name: string) => galleryVideoUrls.thumbnail(name),
     nameKey: 'video_name',
     noun: 'video',

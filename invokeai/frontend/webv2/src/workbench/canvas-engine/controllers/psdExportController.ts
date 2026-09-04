@@ -1,18 +1,23 @@
 import type { CanvasDocumentSnapshot, PsdExportResult } from '@workbench/canvas-engine/capabilities';
-import type { CanvasLayerContract } from '@workbench/canvas-engine/contracts';
+import type { CanvasAdjustmentsContract, CanvasNodeContract } from '@workbench/canvas-engine/contracts';
 import type {
   CanvasDetachedLayerSurface,
   CaptureRasterSnapshotResult,
 } from '@workbench/canvas-engine/rasterTransactions';
 import type { RasterBackend } from '@workbench/canvas-engine/render/raster';
 
+import { compileDocumentLeaves } from '@workbench/canvas-engine/document-model/documentModel';
+import { isGroupNode } from '@workbench/canvas-engine/document/documentTree';
 import {
   executePsdExport,
   planPsdExport,
   type ExecutePsdExportDeps,
-  type PsdExportLayerInput,
+  type PsdExportNodeInput,
   type PsdExportPlan,
+  type PsdPlanNode,
 } from '@workbench/canvas-engine/export/psdExport';
+import { isExportableRasterLayer } from '@workbench/canvas-engine/layerExportGuards';
+import { isIdentityAdjustments } from '@workbench/canvas-engine/render/adjustments';
 
 type RasterMemoryReservationResult =
   | { status: 'ok'; lease: { release(): void } }
@@ -32,30 +37,24 @@ export interface PsdExportControllerOptions {
   readonly reserve: (bytes: number) => RasterMemoryReservationResult;
 }
 
-const isExportable = (layer: CanvasLayerContract): boolean => {
-  if (layer.type !== 'raster') {
-    return false;
-  }
-  switch (layer.source.type) {
-    case 'paint':
-    case 'image':
-    case 'gradient':
-    case 'text':
-      return true;
-    case 'shape':
-      return layer.source.kind !== 'polygon';
-    default:
-      return false;
-  }
-};
-
 export const PSD_ALLOCATION_BYTES_PER_PIXEL = 8;
 
 export const derivePsdPixelAreaLimit = (availableBytes: number): number =>
   Math.max(0, Math.floor(availableBytes / PSD_ALLOCATION_BYTES_PER_PIXEL));
 
+const countIsolatedFolders = (nodes: readonly PsdPlanNode[]): number =>
+  nodes.reduce(
+    (total, node) =>
+      node.kind === 'folder'
+        ? total +
+          countIsolatedFolders(node.children) +
+          (node.opacity !== 1 || node.compositeBlend !== 'source-over' ? 1 : 0)
+        : total,
+    0
+  );
+
 const getRequiredAllocationPixelArea = (plan: Extract<PsdExportPlan, { status: 'ok' }>): number =>
-  plan.width * plan.height +
+  plan.width * plan.height * (1 + countIsolatedFolders(plan.tree)) +
   plan.layers.reduce((total, layer) => total + layer.worldRect.width * layer.worldRect.height, 0);
 
 /** Owns immutable PSD snapshot capture, budget reservation, execution, and cancellation. */
@@ -82,7 +81,8 @@ export class PsdExportController {
         return 'stale';
       }
       const document = documentSnapshot.canvas.document;
-      const layers = document.layers.filter(isExportable);
+      const leaves = compileDocumentLeaves(document).filter((leaf) => isExportableRasterLayer(leaf.layer));
+      const layers = leaves.map((leaf) => leaf.layer);
       if (layers.length === 0) {
         return 'nothing';
       }
@@ -102,25 +102,66 @@ export class PsdExportController {
         if (!this.deps.isDocumentSnapshotCurrent(documentSnapshot)) {
           return 'stale';
         }
-        const inputs: PsdExportLayerInput[] = [];
-        for (const layer of layers) {
-          const detached = rasterSnapshot.layerSurfaces.get(layer.id);
-          if (!detached) {
-            if (rasterSnapshot.emptyLayerIds.has(layer.id)) {
-              continue;
+        // The raster tree as it stands, minus leaves with nothing captured; the planner derives
+        // effective visibility from the own flags, the same way Photoshop will.
+        let missing: string | null = null;
+        // PSD cannot represent a group stack: bake enclosing stacks into each
+        // leaf (own first, then innermost outward). Approximate under member
+        // opacity/blending; the merged preview flattens the same baked pixels.
+        const toInputs = (
+          nodes: readonly CanvasNodeContract[],
+          ancestorStacks: readonly CanvasAdjustmentsContract[] = []
+        ): PsdExportNodeInput[] =>
+          nodes.flatMap((node): PsdExportNodeInput[] => {
+            if (isGroupNode(node)) {
+              const stacks = isIdentityAdjustments(node.adjustments)
+                ? ancestorStacks
+                : [...ancestorStacks, node.adjustments!];
+              return [
+                {
+                  blendMode: node.blendMode,
+                  children: toInputs(node.children, stacks),
+                  colorLabel: node.colorLabel,
+                  id: node.id,
+                  isEnabled: node.isEnabled,
+                  name: node.name,
+                  opacity: node.opacity,
+                  type: 'group',
+                },
+              ];
             }
-            return 'not-ready';
-          }
-          inputs.push({
-            adjustments: layer.type === 'raster' ? layer.adjustments : undefined,
-            blendMode: layer.blendMode,
-            contentRect: detached.rect,
-            id: layer.id,
-            isEnabled: layer.isEnabled,
-            name: layer.name,
-            opacity: layer.opacity,
-            transform: layer.transform,
+            if (!isExportableRasterLayer(node)) {
+              return [];
+            }
+            const detached = rasterSnapshot.layerSurfaces.get(node.id);
+            if (!detached) {
+              if (!rasterSnapshot.emptyLayerIds.has(node.id)) {
+                missing ??= node.id;
+              }
+              return [];
+            }
+            const combined = [
+              ...(node.type === 'raster' ? (node.adjustments ?? []) : []),
+              ...[...ancestorStacks].reverse().flat(),
+            ];
+            return [
+              {
+                // Identity-aware: an emptied stack must not trigger the executor's bake writeback.
+                adjustments: isIdentityAdjustments(combined) ? undefined : combined,
+                blendMode: node.blendMode,
+                colorLabel: node.colorLabel,
+                contentRect: detached.rect,
+                id: node.id,
+                isEnabled: node.isEnabled,
+                name: node.name,
+                opacity: node.opacity,
+                transform: node.transform,
+              },
+            ];
           });
+        const inputs = toInputs(document.stacks.raster);
+        if (missing !== null) {
+          return 'not-ready';
         }
         const plan = planPsdExport(inputs);
         if (plan.status === 'empty') {

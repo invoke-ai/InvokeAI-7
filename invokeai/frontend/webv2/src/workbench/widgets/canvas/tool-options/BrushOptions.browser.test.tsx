@@ -5,7 +5,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { page, userEvent } from 'vitest/browser';
 
-import { PaintSizeOpacityControls } from './BrushOptions';
+import { PaintSizeControl } from './BrushOptions';
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -27,13 +27,7 @@ describe('paint size control', () => {
     await act(() => {
       root?.render(
         <ChakraProvider value={system}>
-          <PaintSizeOpacityControls
-            opacity={1}
-            setOpacity={vi.fn()}
-            setSize={vi.fn()}
-            size={0.1}
-            sizeLabel="Brush size"
-          />
+          <PaintSizeControl label="Brush size" setSize={vi.fn()} size={0.1} />
         </ChakraProvider>
       );
     });
@@ -48,13 +42,7 @@ describe('paint size control', () => {
     await act(() => {
       root?.render(
         <ChakraProvider value={system}>
-          <PaintSizeOpacityControls
-            opacity={1}
-            setOpacity={vi.fn()}
-            setSize={vi.fn()}
-            size={0.25}
-            sizeLabel="Brush size"
-          />
+          <PaintSizeControl label="Brush size" setSize={vi.fn()} size={0.25} />
         </ChakraProvider>
       );
     });
@@ -65,15 +53,7 @@ describe('paint size control', () => {
   it('advances from the minimum with the keyboard', async () => {
     const Harness = () => {
       const [size, setSize] = useState(0.1);
-      return (
-        <PaintSizeOpacityControls
-          opacity={1}
-          setOpacity={vi.fn()}
-          setSize={setSize}
-          size={size}
-          sizeLabel="Brush size"
-        />
-      );
+      return <PaintSizeControl label="Brush size" setSize={setSize} size={size} />;
     };
     container = document.createElement('div');
     document.body.appendChild(container);
@@ -103,15 +83,7 @@ describe('paint size control', () => {
         setSize(next);
         setHarnessSize(next);
       }, []);
-      return (
-        <PaintSizeOpacityControls
-          opacity={1}
-          setOpacity={vi.fn()}
-          setSize={handleSize}
-          size={size}
-          sizeLabel="Brush size"
-        />
-      );
+      return <PaintSizeControl label="Brush size" setSize={handleSize} size={size} />;
     };
     container = document.createElement('div');
     document.body.appendChild(container);
@@ -143,13 +115,7 @@ describe('paint size control', () => {
     await act(() => {
       root?.render(
         <ChakraProvider value={system}>
-          <PaintSizeOpacityControls
-            opacity={1}
-            setOpacity={vi.fn()}
-            setSize={setSize}
-            size={0.25}
-            sizeLabel="Brush size"
-          />
+          <PaintSizeControl label="Brush size" setSize={setSize} size={0.25} />
         </ChakraProvider>
       );
     });
@@ -172,13 +138,7 @@ describe('paint size control', () => {
     await act(() => {
       root?.render(
         <ChakraProvider value={system}>
-          <PaintSizeOpacityControls
-            opacity={1}
-            setOpacity={vi.fn()}
-            setSize={vi.fn()}
-            size={5}
-            sizeLabel="Brush size"
-          />
+          <PaintSizeControl label="Brush size" setSize={vi.fn()} size={5} />
         </ChakraProvider>
       );
     });
@@ -195,15 +155,7 @@ describe('paint size control', () => {
   it('reaches the exact slider maximum with the End key', async () => {
     const Harness = () => {
       const [size, setSize] = useState(50);
-      return (
-        <PaintSizeOpacityControls
-          opacity={1}
-          setOpacity={vi.fn()}
-          setSize={setSize}
-          size={size}
-          sizeLabel="Brush size"
-        />
-      );
+      return <PaintSizeControl label="Brush size" setSize={setSize} size={size} />;
     };
     container = document.createElement('div');
     document.body.appendChild(container);
@@ -235,15 +187,7 @@ describe('paint size control', () => {
   it('supports PageUp and PageDown in logical brush units', async () => {
     const Harness = () => {
       const [size, setSize] = useState(0.1);
-      return (
-        <PaintSizeOpacityControls
-          opacity={1}
-          setOpacity={vi.fn()}
-          setSize={setSize}
-          size={size}
-          sizeLabel="Brush size"
-        />
-      );
+      return <PaintSizeControl label="Brush size" setSize={setSize} size={size} />;
     };
     container = document.createElement('div');
     document.body.appendChild(container);
@@ -272,15 +216,7 @@ describe('paint size control', () => {
   it('does not turn an increase key into a decrease above the slider range', async () => {
     const Harness = () => {
       const [size, setSize] = useState(1000);
-      return (
-        <PaintSizeOpacityControls
-          opacity={1}
-          setOpacity={vi.fn()}
-          setSize={setSize}
-          size={size}
-          sizeLabel="Brush size"
-        />
-      );
+      return <PaintSizeControl label="Brush size" setSize={setSize} size={size} />;
     };
     container = document.createElement('div');
     document.body.appendChild(container);

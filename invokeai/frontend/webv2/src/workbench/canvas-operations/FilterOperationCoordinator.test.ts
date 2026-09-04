@@ -1,11 +1,14 @@
+import type { CanvasLayerContract } from '@workbench/canvas-engine/api';
 import type { FilterOperationSession } from '@workbench/canvas-operations/contracts';
 
+import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
 import { describe, expect, it, vi } from 'vitest';
 
 import { createFilterOperationCoordinator } from './FilterOperationCoordinator';
 import { createCanvasOperationStores } from './operationStores';
 
 const layer = {
+  transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 },
   filter: null,
   id: 'layer-1',
   isEnabled: true,
@@ -40,7 +43,10 @@ const createHarness = () => {
       subscribe: vi.fn(() => () => undefined),
     },
     createSession: vi.fn(() => session),
-    getDocument: vi.fn<() => any>(() => ({ layers: [layer], selectedLayerId: null })),
+    getDocument: vi.fn<() => any>(() => ({
+      stacks: stacksFrom([layer as unknown as CanvasLayerContract]),
+      selectedLayerId: null,
+    })),
     getInitialDraft: vi.fn(() => ({ settings: {}, type: 'canny' })),
     getSessionDeps: vi.fn(() => ({})),
     isInteractionLocked: vi.fn(() => false),
@@ -85,11 +91,20 @@ describe('FilterOperationCoordinator', () => {
     const { coordinator, deps } = createHarness();
     deps.getDocument.mockReturnValueOnce(null);
     expect(coordinator.start(layer.id)).toBe('missing');
-    deps.getDocument.mockReturnValueOnce({ layers: [{ ...layer, type: 'inpaint_mask' }], selectedLayerId: null });
+    deps.getDocument.mockReturnValueOnce({
+      stacks: stacksFrom([{ ...layer, type: 'inpaint_mask' } as unknown as CanvasLayerContract]),
+      selectedLayerId: null,
+    });
     expect(coordinator.start(layer.id)).toBe('unsupported');
-    deps.getDocument.mockReturnValueOnce({ layers: [{ ...layer, isEnabled: false }], selectedLayerId: null });
+    deps.getDocument.mockReturnValueOnce({
+      stacks: stacksFrom([{ ...layer, isEnabled: false } as unknown as CanvasLayerContract]),
+      selectedLayerId: null,
+    });
     expect(coordinator.start(layer.id)).toBe('disabled');
-    deps.getDocument.mockReturnValueOnce({ layers: [{ ...layer, isLocked: true }], selectedLayerId: null });
+    deps.getDocument.mockReturnValueOnce({
+      stacks: stacksFrom([{ ...layer, isLocked: true } as unknown as CanvasLayerContract]),
+      selectedLayerId: null,
+    });
     expect(coordinator.start(layer.id)).toBe('locked');
     deps.isInteractionLocked.mockReturnValueOnce(true);
     expect(coordinator.start(layer.id)).toBe('locked');

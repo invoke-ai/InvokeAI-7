@@ -1,14 +1,16 @@
 import type {
   CanvasControlLayerContract,
-  CanvasDocumentContractV2,
+  CanvasDocumentContractV3,
   CanvasLayerContract,
   CanvasRasterLayerContractV2,
-  CanvasStateContractV2,
+  CanvasStateContractV3,
 } from '@workbench/canvas-engine/contracts';
 import type { CanvasImageUploadResult } from '@workbench/canvas-engine/document/imageUpload';
 import type { RasterSurface } from '@workbench/canvas-engine/render/raster';
 import type { Rect } from '@workbench/canvas-engine/types';
 
+import { getDocumentLeaves } from '@workbench/canvas-engine/api';
+import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
 import { createTestStubRasterBackend } from '@workbench/canvas-engine/render/raster.testStub';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -66,23 +68,23 @@ const inpaintMaskLayer = (id: string, noiseLevel?: number): CanvasLayerContract 
   isLocked: false,
   mask: { bitmap: { height: 64, imageName: `${id}-bmp`, width: 64 }, fill: { color: '#ff0000', style: 'solid' } },
   name: id,
-  ...(noiseLevel !== undefined ? { noiseLevel } : {}),
+  ...(noiseLevel !== undefined ? { noise: { isEnabled: true, level: noiseLevel } } : {}),
   opacity: 1,
   transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 },
   type: 'inpaint_mask',
 });
 
-const makeDoc = (layers: CanvasLayerContract[], size = 64): CanvasDocumentContractV2 => ({
+const makeDoc = (layers: CanvasLayerContract[], size = 64): CanvasDocumentContractV3 => ({
   background: 'transparent',
   bbox: { height: size, width: size, x: 0, y: 0 },
   height: size,
-  layers,
+  stacks: stacksFrom(layers),
   selectedLayerId: null,
-  version: 2,
+  version: 3,
   width: size,
 });
 
-const makeCanvas = (document: CanvasDocumentContractV2): CanvasStateContractV2 => ({
+const makeCanvas = (document: CanvasDocumentContractV3): CanvasStateContractV3 => ({
   document: structuredClone(document),
   documentRevision: 0,
   snapshots: [],
@@ -94,7 +96,7 @@ const makeCanvas = (document: CanvasDocumentContractV2): CanvasStateContractV2 =
     pendingImages: [],
     selectedImageIndex: 0,
   },
-  version: 2,
+  version: 3,
 });
 
 /** Uniform-alpha ImageData (255 = fully opaque → bboxFullyCovered true). */
@@ -127,7 +129,7 @@ interface HostOptions {
  * release, and a per-call-unique hash so every distinct composite entry uploads
  * (plan-key dedupe still reuses across calls).
  */
-const makeHost = (document: CanvasDocumentContractV2, options: HostOptions = {}): HostHarness => {
+const makeHost = (document: CanvasDocumentContractV3, options: HostOptions = {}): HostHarness => {
   const stub = createTestStubRasterBackend();
   const events: string[] = [];
   const surfaceIds: string[] = [];
@@ -316,7 +318,7 @@ describe('composeForGeneration', () => {
     }
     expect(result.composites.mode).toBe('img2img');
     expect(result.composites.baseImageName).toBe('composite-1.png');
-    expect(result.composites.canvas.document.layers[0]?.id).toBe('base');
+    expect(getDocumentLeaves(result.composites.canvas.document)[0]?.id).toBe('base');
     expect(result.composites.bbox).toEqual({ height: 64, width: 64, x: 0, y: 0 });
   });
 
@@ -339,6 +341,31 @@ describe('composeForGeneration', () => {
     }
     expect(result.composites.mode).toBe('inpaint');
     expect(result.composites.maskImageName).toBe('composite-2.png');
+  });
+
+  it("composites a regenerate-region raster's own surface into the inpaint mask", async () => {
+    const base = rasterLayer('base');
+    const regionLayer: CanvasRasterLayerContractV2 = {
+      ...base,
+      inpaint: { fill: { color: '#e07575', style: 'diagonal' }, isEnabled: true },
+    };
+    const harness = makeHost(makeDoc([regionLayer]));
+    const detectMode = vi.fn((facts: GenerationModeFacts) =>
+      facts.hasActiveInpaintMask ? ('inpaint' as const) : ('img2img' as const)
+    );
+
+    const result = await compose(harness.host, { detectMode });
+
+    expect(result.status).toBe('ok');
+    if (result.status !== 'ok') {
+      return;
+    }
+    // Base upload + the region-driven inpaint-mask upload; the mask composite
+    // read the raster layer's own surface — the mask IS the layer content.
+    expect(result.composites.mode).toBe('inpaint');
+    expect(result.composites.maskImageName).toBe('composite-2.png');
+    expect(harness.surfaceIds).toContain('base');
+    expect(detectMode).toHaveBeenCalledWith(expect.objectContaining({ hasActiveInpaintMask: true }));
   });
 
   it.each([

@@ -1,5 +1,6 @@
-import type { CanvasDocumentContractV2, CanvasRasterLayerContractV2 } from '@workbench/canvas-engine/contracts';
+import type { CanvasDocumentContractV3, CanvasRasterLayerContractV2 } from '@workbench/canvas-engine/contracts';
 
+import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
 import { createDomRasterBackend } from '@workbench/canvas-engine/render/raster';
 import { describe, expect, it } from 'vitest';
 
@@ -23,13 +24,13 @@ const layer = (x: number): CanvasRasterLayerContractV2 => ({
   type: 'raster',
 });
 
-const documentWith = (rasterLayer: CanvasRasterLayerContractV2, width = 8): CanvasDocumentContractV2 => ({
+const documentWith = (rasterLayer: CanvasRasterLayerContractV2, width = 8): CanvasDocumentContractV3 => ({
   background: 'transparent',
   bbox: { height: 8, width, x: 0, y: 0 },
   height: 8,
-  layers: [rasterLayer],
+  stacks: stacksFrom([rasterLayer]),
   selectedLayerId: rasterLayer.id,
-  version: 2,
+  version: 3,
   width,
 });
 

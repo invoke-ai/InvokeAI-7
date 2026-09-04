@@ -14,6 +14,11 @@ export interface ProjectPushOutcomeBase {
   documentJson: string;
 }
 
+export interface ProjectSchemaRefusal {
+  maxCanvasSchemaVersion: number;
+  minimumCanvasSchemaVersion: number;
+}
+
 export type ProjectPushOutcome =
   /** The server holds exactly this document. */
   | ({ kind: 'acknowledged' } & ProjectPushOutcomeBase)
@@ -22,18 +27,22 @@ export type ProjectPushOutcome =
    * local edits continue under a different id. Reading the id back would read a stranger's version.
    */
   | ({ kind: 'superseded' } & ProjectPushOutcomeBase)
+  /** A newer client raised the project's compatibility floor. Local bytes remain cached. */
+  | ({ kind: 'schema-refused'; refusal: ProjectSchemaRefusal } & ProjectPushOutcomeBase)
   /** The push did not land. The server still holds whatever it last acknowledged. */
   | ({ kind: 'unsynced' } & ProjectPushOutcomeBase);
 
 /** Raised where an unacknowledged push must not be treated as a successful one. */
 export class ProjectFlushError extends Error {
-  readonly reason: 'superseded' | 'unsynced';
+  readonly reason: Exclude<ProjectPushOutcome['kind'], 'acknowledged'>;
 
-  constructor(reason: 'superseded' | 'unsynced') {
+  constructor(reason: Exclude<ProjectPushOutcome['kind'], 'acknowledged'>) {
     super(
-      reason === 'unsynced'
-        ? 'The project has changes that have not reached the server.'
-        : 'The project was replaced on the server; the local edits continue under another id.'
+      reason === 'schema-refused'
+        ? 'This project now requires a newer version of Invoke. Local changes remain in this browser.'
+        : reason === 'unsynced'
+          ? 'The project has changes that have not reached the server.'
+          : 'The project was replaced on the server; the local edits continue under another id.'
     );
     this.name = 'ProjectFlushError';
     this.reason = reason;

@@ -2,6 +2,10 @@ import type { AccountScope } from '@platform/state/accountLifecycle';
 
 import { assertAccountScopeCurrent } from '@platform/state/accountLifecycle';
 import { ApiError, apiFetch, apiFetchJson } from '@platform/transport/http';
+import {
+  DEFAULT_PROJECT_CANVAS_SCHEMA_VERSION,
+  MAX_SUPPORTED_CANVAS_SCHEMA_VERSION,
+} from '@workbench/canvasSchemaVersion';
 
 /**
  * REST surface for server-side project persistence (`/api/v1/projects`) and
@@ -23,6 +27,7 @@ export interface ProjectSummaryDTO {
   board_id: string;
   name: string;
   revision: number;
+  minimum_canvas_schema_version: number;
   created_at: string;
   updated_at: string;
 }
@@ -40,6 +45,8 @@ export interface ProjectCreateRequest {
   board_id?: string;
   name: string;
   data: Record<string, unknown>;
+  /** Raise the server's compatibility floor atomically with this document. */
+  minimum_canvas_schema_version?: number;
 }
 
 export type ProjectBoardItemKind = 'image' | 'video';
@@ -60,16 +67,29 @@ export interface ProjectUpdateRequest {
   name: string;
   data: Record<string, unknown>;
   expected_revision: number;
+  /** Raise the compatibility floor atomically with this save; omission preserves the stored floor. */
+  minimum_canvas_schema_version?: number;
 }
 
 export const listProjects = (signal?: AbortSignal): Promise<ProjectSummaryDTO[]> =>
   apiFetchJson<ProjectSummaryDTO[]>(`${PROJECTS_BASE}/`, { signal });
 
 export const getProject = (projectId: string, signal?: AbortSignal): Promise<ProjectRecordDTO> =>
-  apiFetchJson<ProjectRecordDTO>(`${PROJECTS_BASE}/${encodeURIComponent(projectId)}`, { signal });
+  apiFetchJson<ProjectRecordDTO>(
+    `${PROJECTS_BASE}/${encodeURIComponent(projectId)}?max_canvas_schema_version=${MAX_SUPPORTED_CANVAS_SCHEMA_VERSION}`,
+    { signal }
+  );
 
 export const createProject = (request: ProjectCreateRequest, signal?: AbortSignal): Promise<ProjectRecordDTO> =>
-  apiFetchJson<ProjectRecordDTO>(`${PROJECTS_BASE}/`, { body: JSON.stringify(request), method: 'POST', signal });
+  apiFetchJson<ProjectRecordDTO>(`${PROJECTS_BASE}/`, {
+    body: JSON.stringify({
+      ...request,
+      max_canvas_schema_version: MAX_SUPPORTED_CANVAS_SCHEMA_VERSION,
+      minimum_canvas_schema_version: request.minimum_canvas_schema_version ?? DEFAULT_PROJECT_CANVAS_SCHEMA_VERSION,
+    }),
+    method: 'POST',
+    signal,
+  });
 
 export const updateProject = (
   projectId: string,
@@ -77,7 +97,7 @@ export const updateProject = (
   signal?: AbortSignal
 ): Promise<ProjectRecordDTO> =>
   apiFetchJson<ProjectRecordDTO>(`${PROJECTS_BASE}/${encodeURIComponent(projectId)}`, {
-    body: JSON.stringify(request),
+    body: JSON.stringify({ ...request, max_canvas_schema_version: MAX_SUPPORTED_CANVAS_SCHEMA_VERSION }),
     method: 'PUT',
     signal,
   });
@@ -101,6 +121,50 @@ export const getProjectBoardSnapshot = (projectId: string, signal?: AbortSignal)
 export const isProjectConflictError = (error: unknown): boolean => error instanceof ApiError && error.status === 409;
 
 export const isProjectNotFoundError = (error: unknown): boolean => error instanceof ApiError && error.status === 404;
+
+export interface ProjectCanvasSchemaCompatibilityRefusal {
+  minimumCanvasSchemaVersion: number;
+  maxCanvasSchemaVersion: number;
+}
+
+/** Parse the stable compatibility detail returned with a schema precondition failure. */
+export const getProjectCanvasSchemaCompatibilityRefusal = (
+  error: unknown
+): ProjectCanvasSchemaCompatibilityRefusal | null => {
+  if (!(error instanceof ApiError) || error.status !== 412) {
+    return null;
+  }
+
+  try {
+    const body = JSON.parse(error.message) as {
+      detail?: {
+        code?: unknown;
+        max_canvas_schema_version?: unknown;
+        minimum_canvas_schema_version?: unknown;
+      };
+    };
+    const code = body.detail?.code;
+    const minimum = body.detail?.minimum_canvas_schema_version;
+    const maximum = body.detail?.max_canvas_schema_version;
+
+    return code === 'canvas_schema_unsupported' &&
+      typeof minimum === 'number' &&
+      Number.isInteger(minimum) &&
+      minimum >= 1 &&
+      typeof maximum === 'number' &&
+      Number.isInteger(maximum) &&
+      maximum >= 1 &&
+      minimum > maximum
+      ? { maxCanvasSchemaVersion: maximum, minimumCanvasSchemaVersion: minimum }
+      : null;
+  } catch {
+    return null;
+  }
+};
+
+/** The server refused to expose or replace a project written with a newer canvas schema. */
+export const isProjectCanvasSchemaUnsupportedError = (error: unknown): boolean =>
+  getProjectCanvasSchemaCompatibilityRefusal(error) !== null;
 
 /**
  * A create that never reached the server, and is therefore safe to compensate for.

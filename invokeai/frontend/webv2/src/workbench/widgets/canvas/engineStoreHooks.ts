@@ -131,6 +131,10 @@ export const useCanvasCanUndo = (engine: CanvasCoreStoreCapability): boolean =>
 export const useCanvasCanRedo = (engine: CanvasCoreStoreCapability): boolean =>
   useCanvasInteractionState(engine, 'canRedo');
 
+/** Bumped on every history-stack mutation; a history list re-reads the entries on change. */
+export const useCanvasHistoryEpoch = (engine: CanvasCoreStoreCapability): number =>
+  useCanvasInteractionState(engine, 'historyEpoch');
+
 /** Whether a SAM/filter operation currently excludes ordinary canvas document edits. */
 export const useCanvasDocumentEditingLocked = (engine: CanvasCoreStoreCapability | null): boolean => {
   const subscribe = useCallback(

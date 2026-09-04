@@ -1,8 +1,9 @@
-import type { CanvasDocumentContractV2, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
+import type { CanvasDocumentContractV3, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
 import type { RasterizationJob } from '@workbench/canvas-engine/controllers/rasterController';
 import type { LayerCacheEntry } from '@workbench/canvas-engine/render/layerCache';
 import type { RasterSurface } from '@workbench/canvas-engine/render/raster';
 
+import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createLayerRasterizer, type CreateLayerRasterizerDeps } from './layerRasterizer';
@@ -42,15 +43,15 @@ const textLayer = (): CanvasLayerContract =>
     },
   });
 
-const documentOf = (layers: CanvasLayerContract[]): CanvasDocumentContractV2 =>
-  ({ height: 64, layers, width: 64 }) as unknown as CanvasDocumentContractV2;
+const documentOf = (layers: CanvasLayerContract[]): CanvasDocumentContractV3 =>
+  ({ height: 64, stacks: stacksFrom(layers), width: 64 }) as unknown as CanvasDocumentContractV3;
 
 interface Harness {
   deps: CreateLayerRasterizerDeps;
   entry: LayerCacheEntry;
   installed: Map<string, RasterizationJob>;
   documentGeneration: { value: number };
-  document: { value: CanvasDocumentContractV2 };
+  document: { value: CanvasDocumentContractV3 };
   state: { disposed: boolean; hasCanvas: boolean };
   rasterize: ReturnType<typeof vi.fn>;
   fontReady: (() => void) | null;

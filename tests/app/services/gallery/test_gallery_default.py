@@ -358,9 +358,13 @@ class TestGetBoardMediaSummaries:
         _save_image(services["images"], "cover.png", user_id="alice")
         _save_video(services["videos"], "cover.mp4", user_id="alice")
         _save_video(services["videos"], "intermediate.mp4", user_id="alice")
+        # An uploaded (user-category) video is an asset: counted in video_count AND
+        # asset_video_count, so clients can split the Media/Assets views.
+        _save_video(services["videos"], "uploaded.mp4", user_id="alice", category=ImageCategory.USER)
         services["board_images"].add_image_to_board(populated.board_id, "cover.png")
         services["board_videos"].add_video_to_board(populated.board_id, "cover.mp4")
         services["board_videos"].add_video_to_board(populated.board_id, "intermediate.mp4")
+        services["board_videos"].add_video_to_board(populated.board_id, "uploaded.mp4")
         with services["images"]._db.transaction() as cursor:
             cursor.execute(
                 "UPDATE images SET starred = 1, created_at = ? WHERE image_name = ?",
@@ -382,12 +386,14 @@ class TestGetBoardMediaSummaries:
         )
 
         assert summaries[populated.board_id].image_count == 1
-        assert summaries[populated.board_id].video_count == 1
+        assert summaries[populated.board_id].video_count == 2
         assert summaries[populated.board_id].asset_count == 0
+        assert summaries[populated.board_id].asset_video_count == 1
         assert summaries[populated.board_id].cover_image_name is None
         assert summaries[populated.board_id].cover_video_name == "cover.mp4"
         assert summaries[empty.board_id].image_count == 0
         assert summaries[empty.board_id].video_count == 0
+        assert summaries[empty.board_id].asset_video_count == 0
         assert summaries[empty.board_id].cover_image_name is None
         assert summaries[empty.board_id].cover_video_name is None
         assert next(i for i, detail in enumerate(details) if "board_images" in detail) < next(

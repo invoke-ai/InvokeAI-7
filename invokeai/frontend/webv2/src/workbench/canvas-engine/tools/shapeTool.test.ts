@@ -1,21 +1,23 @@
-import type { CanvasDocumentContractV2 } from '@workbench/canvas-engine/contracts';
+import type { CanvasDocumentContractV3 } from '@workbench/canvas-engine/contracts';
 import type { Tool, ToolContext } from '@workbench/canvas-engine/tools/tool';
 import type { PointerInput, Vec2 } from '@workbench/canvas-engine/types';
 import type { Viewport } from '@workbench/canvas-engine/viewport';
 import type { CanvasProjectMutation } from '@workbench/canvasProjectMutations';
 
+import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
+import { createTestInsertionAnchorCapture } from '@workbench/canvas-engine/document/insertionAnchors.testStub';
 import { createEngineStores } from '@workbench/canvas-engine/engineStores';
 import { describe, expect, it, vi } from 'vitest';
 
 import { createShapeTool, rectFromDrag } from './shapeTool';
 
-const makeDoc = (): CanvasDocumentContractV2 => ({
+const makeDoc = (): CanvasDocumentContractV3 => ({
   background: 'transparent',
   bbox: { height: 96, width: 96, x: 0, y: 0 },
   height: 512,
-  layers: [],
+  stacks: stacksFrom([]),
   selectedLayerId: null,
-  version: 2,
+  version: 3,
   width: 512,
 });
 
@@ -39,14 +41,18 @@ interface StructuralCommit {
   inverse: CanvasProjectMutation;
 }
 
-const createHarness = (doc: CanvasDocumentContractV2) => {
+const createHarness = (doc: CanvasDocumentContractV3) => {
   const dispatched: CanvasProjectMutation[] = [];
   const commits: StructuralCommit[] = [];
   const stores = createEngineStores();
   let idCounter = 0;
   const ctx: ToolContext = {
     backend: null as never,
-    commitStructural: (label, forward, inverse) => commits.push({ forward, inverse, label }),
+    commitStructural: (label, forward, inverse) => {
+      commits.push({ forward, inverse, label });
+      return { status: 'committed' as const };
+    },
+    captureInsertionAnchor: createTestInsertionAnchorCapture('p'),
     createLayerId: () => `shape-${++idCounter}`,
     createPath2D: (d) => ({ d }) as unknown as Path2D,
     dispatch: (action) => dispatched.push(action),
@@ -123,9 +129,10 @@ describe('shape tool: creation', () => {
     expect(h.previewOf()).toBeNull();
   });
 
-  it('uses the shape options kind/fill/stroke for the created layer', () => {
+  it('resolves the pair at gesture start for the enabled fill and stroke', () => {
     const h = createHarness(makeDoc());
-    h.stores.shapeOptions.set({ fill: '#ff0000', kind: 'ellipse', stroke: '#0000ff', strokeWidth: 4 });
+    h.stores.shapeOptions.set({ fillEnabled: true, kind: 'ellipse', strokeEnabled: true, strokeWidth: 4 });
+    h.stores.colorPair.set({ background: '#0000ff', foreground: '#ff0000' });
     const tool = createShapeTool();
 
     down(tool, h.ctx, pointer(0, 0));

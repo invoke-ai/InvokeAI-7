@@ -1,13 +1,19 @@
 /**
  * Pure data for the layers-panel add-layer surfaces (kept free of React so the
  * grouping is unit-testable). The header menu renders {@link ADD_LAYER_MENU}; each
- * group header's "New" button uses {@link groupAddItemId} to add its own type.
+ * stack header's "New" button uses {@link stackAddItemId} to add its own type.
  */
 
-import type { LayerGroupKey } from './layerGroups';
+import type { LayerStackKind } from '@workbench/canvas-engine/api';
 
 /** The distinct "add a layer" actions offered across the panel's add surfaces. */
-export type AddLayerItemId = 'inpaint_mask' | 'regional_guidance' | 'regional_reference_image' | 'control' | 'raster';
+export type AddLayerItemId =
+  | 'inpaint_mask'
+  | 'regional_guidance'
+  | 'regional_reference_image'
+  | 'control'
+  | 'raster'
+  | 'group';
 
 /** A single add-layer menu entry (label is an i18n key; the icon lives in the view). */
 export interface AddLayerMenuItem {
@@ -39,6 +45,7 @@ export const ADD_LAYER_MENU: readonly AddLayerMenuGroup[] = [
     items: [
       { id: 'control', labelKey: 'widgets.layers.actions.addControlLayer' },
       { id: 'raster', labelKey: 'widgets.layers.actions.addRasterLayer' },
+      { id: 'group', labelKey: 'widgets.layers.actions.newGroup' },
     ],
     titleKey: 'widgets.layers.menuGroups.layers',
   },
@@ -48,5 +55,5 @@ export const ADD_LAYER_MENU: readonly AddLayerMenuGroup[] = [
 export const isAddLayerItemAvailable = (id: AddLayerItemId, base: string | null): boolean =>
   id !== 'regional_reference_image' || base !== 'flux2';
 
-/** The add-layer action a group-header "New" button triggers for its type. */
-export const groupAddItemId = (groupKey: LayerGroupKey): AddLayerItemId => groupKey;
+/** The add-layer action a stack-header "New" button triggers for its type. */
+export const stackAddItemId = (stack: LayerStackKind): AddLayerItemId => stack;

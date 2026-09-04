@@ -10,6 +10,7 @@ const isGeneratedImageContract = (value: unknown): value is GeneratedImageContra
   const image = value as Partial<GeneratedImageContract>;
 
   return (
+    (image.createdAt === undefined || typeof image.createdAt === 'string') &&
     typeof image.height === 'number' &&
     Number.isFinite(image.height) &&
     typeof image.imageName === 'string' &&

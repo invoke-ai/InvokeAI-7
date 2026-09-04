@@ -179,6 +179,9 @@ const surfaces = [
     ready: async (page) => {
       await waitForWorkbench(page);
       await selectLayoutPreset(page, 'Edit', 'Canvas');
+      // The Layers panel's Properties pane is the canvas's settings surface; the journey must scan it, not a fallback.
+      await page.getByRole('tab', { exact: true, name: 'Properties', selected: true }).waitFor();
+      await page.getByRole('tabpanel').getByText('Tool', { exact: true }).waitFor();
     },
   },
   {
@@ -813,6 +816,71 @@ const runKeepAliveStateJourney = async (browser) => {
   }
 };
 
+/**
+ * The layers panel's fixed panes: every pane block switches by pointer and by
+ * keyboard (arrows rove, Enter selects — SegmentTabs is manual-activation),
+ * tool switches reshape the Properties pane without losing it, and axe passes
+ * with the non-default panes (Swatches/History/Overview) active — states the
+ * static canvas surface never reaches.
+ */
+const LAYERS_PANEL_SCOPE = { include: ['[data-hotkey-widget-type-id="layers"]'] };
+
+const runLayersPanesJourney = async (browser) => {
+  const { context, page, pageErrors } = await openRepresentativePage(browser, representativeProjectPath);
+
+  try {
+    await waitForWorkbench(page);
+    await selectLayoutPreset(page, 'Edit', 'Canvas');
+    const propertiesTab = page.getByRole('tab', { exact: true, name: 'Properties' });
+    await propertiesTab.waitFor();
+
+    // Tool switching swaps the Tool section's rows in place.
+    const tools = page.getByRole('toolbar', { exact: true, name: 'Tools' });
+    await tools.getByRole('button', { exact: true, name: 'Brush' }).click();
+    await page.getByRole('tabpanel', { exact: true, name: 'Properties' }).getByText('Size', { exact: true }).waitFor();
+    await tools.getByRole('button', { exact: true, name: 'View' }).click();
+    await page.getByRole('tabpanel', { exact: true, name: 'Properties' }).waitFor();
+
+    // Pointer: activate every non-default pane across the three blocks.
+    await page.getByRole('tab', { exact: true, name: 'Overview' }).click();
+    await page.getByRole('button', { exact: true, name: 'Pan the canvas view' }).waitFor();
+    await page.getByRole('tab', { exact: true, name: 'History' }).click();
+    await page.getByRole('tabpanel', { exact: true, name: 'History' }).waitFor();
+    await page.getByRole('tab', { exact: true, name: 'Swatches' }).click();
+    await page.getByRole('tabpanel', { exact: true, name: 'Swatches' }).waitFor();
+
+    await waitForSettledDocument(page);
+    // Scoped to the layers widget: this journey certifies the panel's states;
+    // the page-wide sweep belongs to the canvas surface scan, and the left
+    // rail's lazily mounted generation sections would otherwise leak into the
+    // result nondeterministically depending on load timing.
+    await assertNoAxeViolations(page, 'workbench-layers-panes', LAYERS_PANEL_SCOPE);
+
+    // Keyboard: arrows rove within the block's tablist, Enter activates.
+    const overviewTab = page.getByRole('tab', { exact: true, name: 'Overview' });
+    await overviewTab.focus();
+    await overviewTab.press('ArrowLeft');
+    const transformTab = page.getByRole('tab', { exact: true, name: 'Transform' });
+    await expectFocused(transformTab, 'ArrowLeft should move focus from Overview to Transform.');
+    await transformTab.press('Enter');
+    await page.getByRole('tabpanel', { exact: true, name: 'Transform' }).waitFor();
+    assert.equal(await transformTab.getAttribute('aria-selected'), 'true');
+
+    // Second scan: the Transform pane's states are distinct from the first
+    // scan's Swatches/History/Overview set and must pass on their own.
+    await waitForSettledDocument(page);
+    await assertNoAxeViolations(page, 'workbench-layers-panes:transform', LAYERS_PANEL_SCOPE);
+
+    if (pageErrors.length > 0) {
+      throw new AggregateError(pageErrors, 'workbench-layers-panes raised uncaught browser errors.');
+    }
+
+    return { id: 'workbench-layers-panes', status: 'passed' };
+  } finally {
+    await context.close();
+  }
+};
+
 const mockBackend = await startMockBackend(backendPort, { profile: 'representative' });
 const preview = spawn(
   'pnpm',
@@ -854,6 +922,9 @@ try {
   }
   if (!requestedJourney || requestedJourney === 'workbench-keep-alive-state') {
     reports.push(await runKeepAliveStateJourney(browser));
+  }
+  if (!requestedJourney || requestedJourney === 'workbench-layers-panes') {
+    reports.push(await runLayersPanesJourney(browser));
   }
   if (reports.length === 0) {
     throw new Error(`Unknown accessibility journey ${JSON.stringify(requestedJourney)}.`);

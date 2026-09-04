@@ -13,10 +13,14 @@
  * Zero React, zero import-time side effects.
  */
 
-import type { CanvasDocumentContractV2, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
+import type { StructuralCommitResult } from '@workbench/canvas-engine/capabilities';
+import type { CanvasDocumentContractV3, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
+import type { CanvasNodeInsertionAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
+import type { LayerStackKind } from '@workbench/canvas-engine/document/layerStacks';
 import type { EngineStores } from '@workbench/canvas-engine/engineStores';
 import type { CreatePath2D } from '@workbench/canvas-engine/freehand';
 import type { CanvasProjectMutation } from '@workbench/canvas-engine/mutationContracts';
+import type { CompositeOptions } from '@workbench/canvas-engine/render/compositor';
 import type { LayerCacheStore } from '@workbench/canvas-engine/render/layerCache';
 import type { OverlayCursor } from '@workbench/canvas-engine/render/overlayRenderer';
 import type { RasterBackend } from '@workbench/canvas-engine/render/raster';
@@ -37,7 +41,7 @@ import type { Viewport } from '@workbench/canvas-engine/viewport';
 export interface StrokeCommittedEvent {
   /** The layer that received the stroke. */
   layerId: string;
-  /** The painted region in document space (integer bounds, clamped to the document). */
+  /** The painted region in LAYER-LOCAL space (integer bounds, clamped to the paintable region). */
   dirtyRect: Rect;
   /** Cache pixels within `dirtyRect` before the stroke. */
   beforeImageData: ImageData;
@@ -52,7 +56,7 @@ export interface StrokeCommittedEvent {
    * now-empty auto-created layer (and a redo re-adds the layer + stroke).
    * Absent for strokes painted into a pre-existing layer.
    */
-  createdLayer?: { layer: CanvasLayerContract; index: number };
+  createdLayer?: { layer: CanvasLayerContract; anchor: CanvasNodeInsertionAnchor };
 }
 
 export interface PixelEditPatch {
@@ -87,19 +91,25 @@ export interface ToolContext {
   /** The pan/zoom viewport. */
   viewport: Viewport;
   /** The current mirrored document, or `null` when none is available. */
-  getDocument(): CanvasDocumentContractV2 | null;
+  getDocument(): CanvasDocumentContractV3 | null;
   /** Selected layer ids from the Layers panel, including the document's primary layer. */
   getSelectedLayerIds?(): readonly string[];
   /** Requests a re-render for the given flags. */
   invalidate(payload: InvalidatePayload): void;
   /** Reducer bridge. Painting tools use it for the single gesture-start `addCanvasLayer`. */
   dispatch(action: CanvasProjectMutation): void;
+  /** Where a layer the tool creates lands: above `aboveId` when it belongs to `stack`, else the stack top. */
+  captureInsertionAnchor(stack: LayerStackKind, aboveId: string | null): CanvasNodeInsertionAnchor;
   /**
    * Records a structural document edit on the engine-owned canvas history:
    * dispatches `forward` now, and an undo dispatches `inverse` / a redo
    * re-dispatches `forward`. The move tool commits a layer nudge through this.
    */
-  commitStructural(label: string, forward: CanvasProjectMutation, inverse: CanvasProjectMutation): void;
+  commitStructural(
+    label: string,
+    forward: CanvasProjectMutation,
+    inverse: CanvasProjectMutation
+  ): StructuralCommitResult;
   /**
    * Sets (or clears with `null`) a transient per-layer transform override the
    * compositor and overlay read at render time — a live drag preview that never
@@ -155,13 +165,24 @@ export interface ToolContext {
   /** Sets (or clears) the brush cursor ring drawn on the overlay. */
   setOverlayCursor(cursor: OverlayCursor | null): void;
   /**
-   * Hands a sampled color to a one-shot request made from outside the canvas
-   * (a color picker's eyedropper button), returning whether one was pending.
-   * The color-picker tool calls this before falling through to its default
-   * behavior of writing the brush color, so the alt-hold flow is unaffected.
-   * Absent in minimal test harnesses.
+   * Hands a sampled color to whoever claims it: a one-shot request made from
+   * outside the canvas (a color picker's eyedropper button) wins first, then
+   * the workbench's persistent router (which writes the active
+   * foreground/background target). Returns whether anyone took it; only then
+   * does the color-picker tool fall back to writing the brush color — the
+   * engine-standalone behavior. Absent in minimal test harnesses.
    */
   resolveColorSample?(hex: string): boolean;
+  /** Compositor providers that make sampling WYSIWYG; absent ⇒ raw cached pixels. */
+  sampleProviders?: Pick<CompositeOptions, 'adjustedSurface' | 'derivedSurfaces' | 'groupSurface'>;
+  /**
+   * Settles a pending one-shot sample with the gesture's stashed color. Called
+   * on pointer up only, so a structural commit in the requester's continuation
+   * is not refused as `gesture-active`.
+   */
+  commitColorSample?(): void;
+  /** Drops the stashed sample (gesture cancel, fresh press) without settling the request. */
+  discardColorSample?(): void;
   /**
    * Re-evaluates the active tool's CSS cursor and applies it to the input
    * element. A tool calls this when its `cursor(ctx)` result changes off a plain

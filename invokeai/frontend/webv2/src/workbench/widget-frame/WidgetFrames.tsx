@@ -13,7 +13,8 @@ import type {
 import { Box, Flex, HStack, Icon, Stack, Text } from '@chakra-ui/react';
 import { flushWorkbenchDrafts } from '@platform/react/draftRegistry';
 import { useMountEffect } from '@platform/react/useMountEffect';
-import { IconButton, Tooltip } from '@platform/ui';
+import { IconButton } from '@platform/ui/Button';
+import { Tooltip } from '@platform/ui/Tooltip';
 import { useFocusRegionProps } from '@workbench/focusRegions';
 import { openWorkbenchSettings } from '@workbench/settings/settingsDialogStore';
 import { resolveWidgetInstanceLabel } from '@workbench/widgetLabels';
@@ -119,7 +120,6 @@ export const WidgetPanelFrame = ({
     },
     [layout, region, regionState.sizePx]
   );
-
   const handlePointerDown = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
       event.preventDefault();

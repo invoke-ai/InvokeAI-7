@@ -1,12 +1,18 @@
+import type { CanvasStateContractV3 } from '@workbench/canvas-engine/api';
+
+import { groupContract, stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
 import { describe, expect, it } from 'vitest';
 
+import type { CanvasLoadResult } from './canvasLoadContracts';
+
 import {
-  createEmptyCanvasDocumentV2,
-  createEmptyCanvasStateV2,
-  createNewCanvasStateV2,
+  createEmptyCanvasDocument,
+  createEmptyCanvasState,
+  createNewCanvasState,
   DEFAULT_CANVAS_DOCUMENT_HEIGHT,
   DEFAULT_CANVAS_DOCUMENT_WIDTH,
-  migrateCanvasStateToV2,
+  loadCanvasState,
+  normalizeCanvasDocumentContract,
   placementToTransform,
 } from './canvasMigration';
 import {
@@ -16,6 +22,27 @@ import {
   createRegionalGuidanceLayer,
   nextInpaintMaskName,
 } from './widgets/layers/layerOps';
+
+const load = (raw: unknown): CanvasStateContractV3 => {
+  const result = loadCanvasState(raw);
+  if (result.status !== 'loaded') {
+    throw new Error(`Expected canvas state to load, got ${JSON.stringify(result)}.`);
+  }
+  return result.value;
+};
+
+const refusal = (raw: unknown): Exclude<CanvasLoadResult<CanvasStateContractV3>, { status: 'loaded' }> => {
+  const result = loadCanvasState(raw);
+  if (result.status === 'loaded') {
+    throw new Error('Expected canvas state to be refused.');
+  }
+  return result;
+};
+
+const withNodes = (nodes: unknown[], stack: 'raster' | 'control' | 'regional_guidance' | 'inpaint_mask' = 'raster') => {
+  const state = createEmptyCanvasState();
+  return { ...state, document: { ...state.document, stacks: { ...state.document.stacks, [stack]: nodes } } };
+};
 
 describe('placementToTransform', () => {
   it('maps a placement rect to a scale-based transform relative to the source image size', () => {
@@ -39,7 +66,7 @@ describe('placementToTransform', () => {
   });
 });
 
-describe('migrateCanvasStateToV2', () => {
+describe('loadCanvasState', () => {
   it('round-trips z-image controls without rewriting persisted adapter kinds', () => {
     const adapters = [
       { beginEndStepPct: [0, 0.75], controlMode: 'balanced', kind: 'controlnet', model: 'sd-control', weight: 0.75 },
@@ -48,56 +75,26 @@ describe('migrateCanvasStateToV2', () => {
       { beginEndStepPct: [0.2, 0.9], controlMode: null, kind: 'z_image_control', model: 'z-control', weight: 0.7 },
     ] as const;
     const layers = adapters.map((adapter, index) => ({
+      ...createControlLayer(`Control ${index}`, `control-${index}`),
       adapter,
-      blendMode: 'normal',
-      id: `control-${index}`,
-      isEnabled: true,
-      isLocked: false,
-      name: `Control ${index}`,
-      opacity: 1,
-      source: { bitmap: null, type: 'paint' },
-      transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 },
-      type: 'control',
-      withTransparencyEffect: true,
     }));
-    const state = {
-      ...createEmptyCanvasStateV2(),
-      document: { ...createEmptyCanvasStateV2().document, layers },
-    };
 
-    const migrated = migrateCanvasStateToV2(state);
+    const loaded = load(withNodes(layers, 'control'));
 
-    expect(migrated.document.layers.map((layer) => (layer.type === 'control' ? layer.adapter : null))).toEqual(
+    expect(loaded.document.stacks.control.map((layer) => (layer.type === 'control' ? layer.adapter : null))).toEqual(
       adapters
     );
   });
 
   it('normalizes an incomplete persisted Z-Image control with backend defaults', () => {
-    const state = createEmptyCanvasStateV2();
-    const migrated = migrateCanvasStateToV2({
-      ...state,
-      document: {
-        ...state.document,
-        layers: [
-          {
-            adapter: { kind: 'z_image_control', model: 'z-control' },
-            blendMode: 'normal',
-            id: 'z-control',
-            isEnabled: true,
-            isLocked: false,
-            name: 'Z Control',
-            opacity: 1,
-            source: { bitmap: null, type: 'paint' },
-            transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 },
-            type: 'control',
-            withTransparencyEffect: true,
-          },
-        ],
-      },
-    });
-    const layer = migrated.document.layers[0];
+    const loaded = load(
+      withNodes(
+        [{ ...createControlLayer('Z Control', 'z-control'), adapter: { kind: 'z_image_control', model: 'z-control' } }],
+        'control'
+      )
+    );
+    const layer = loaded.document.stacks.control[0];
 
-    expect(layer?.type).toBe('control');
     expect(layer?.type === 'control' ? layer.adapter : null).toEqual({
       beginEndStepPct: [0, 1],
       controlMode: null,
@@ -107,516 +104,488 @@ describe('migrateCanvasStateToV2', () => {
     });
   });
 
-  it('normalizes control adapters in both the live document and saved snapshots', () => {
-    const state = createEmptyCanvasStateV2();
-    const invalidLayer = {
-      adapter: { beginEndStepPct: [0.8, 0.2], controlMode: null, kind: 'z_image_control', model: null, weight: -1 },
-      blendMode: 'normal',
-      id: 'z-control',
+  it('round-trips a layer regenerate region and drops a malformed one without failing the layer', () => {
+    const inpaint = {
+      fill: { color: '#e07575', style: 'diagonal' },
       isEnabled: true,
-      isLocked: false,
-      name: 'Z Control',
-      opacity: 1,
-      source: { bitmap: null, type: 'paint' },
-      transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 },
-      type: 'control',
-      withTransparencyEffect: true,
+      name: 'Face',
     };
-    const document = { ...state.document, layers: [invalidLayer] };
-    const migrated = migrateCanvasStateToV2({
-      ...state,
-      document,
-      snapshots: [{ createdAt: 'now', document, id: 'snapshot', name: 'Snapshot' }],
-    });
+    const loaded = load(withNodes([{ ...createEmptyPaintLayer('Region', 'region'), inpaint }]));
+    const layer = loaded.document.stacks.raster[0];
+    expect(layer?.type === 'raster' ? layer.inpaint : null).toEqual(inpaint);
 
-    const getAdapter = (doc: (typeof migrated)['document']) => {
-      const layer = doc.layers[0];
-      return layer?.type === 'control' ? layer.adapter : null;
-    };
-    expect(getAdapter(migrated.document)).toMatchObject({ beginEndStepPct: [0, 1], weight: 0.75 });
-    expect(getAdapter(migrated.snapshots[0]!.document)).toMatchObject({ beginEndStepPct: [0, 1], weight: 0.75 });
+    const malformed = load(withNodes([{ ...createEmptyPaintLayer('Bad', 'bad'), inpaint: { isEnabled: 'yes' } }]));
+    const badLayer = malformed.document.stacks.raster[0];
+    expect(badLayer?.type === 'raster' ? badLayer.inpaint : null).toBeUndefined();
   });
 
-  it('keeps valid snapshots and discards malformed snapshot entries without blocking the live canvas', () => {
-    const state = createEmptyCanvasStateV2();
-    const liveLayer = {
-      blendMode: 'normal',
-      id: 'live',
+  it('round-trips triangle and star shape sources', () => {
+    const shape = (kind: string) => ({
+      ...createEmptyPaintLayer(kind, kind),
+      source: { fill: '#ff0000', height: 10, kind, stroke: null, strokeWidth: 0, type: 'shape', width: 10 },
+    });
+    const loaded = load(withNodes([shape('triangle'), shape('star')]));
+    const kinds = loaded.document.stacks.raster.map((layer) =>
+      layer.type === 'raster' && layer.source.type === 'shape' ? layer.source.kind : null
+    );
+    expect(kinds).toEqual(['triangle', 'star']);
+  });
+
+  it('round-trips group adjustments in the raster stack, strips them from overlay groups, and drops a malformed group stack', () => {
+    const stack = [{ brightness: 0.1, contrast: 0, id: 'ga1', isEnabled: true, type: 'brightness-contrast' }];
+    const rasterGroup = {
+      adjustments: stack,
+      children: [createEmptyPaintLayer('Inside', 'inside')],
+      id: 'rg',
       isEnabled: true,
       isLocked: false,
-      name: 'Live',
-      opacity: 1,
-      source: { bitmap: null, type: 'paint' },
-      transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 },
-      type: 'raster',
+      name: 'Adjusted',
+      type: 'group',
     };
-    const snapshotLayer = {
-      adapter: { kind: 'z_image_control', model: 'z-control' },
-      ...liveLayer,
-      id: 'snapshot-control',
-      name: 'Snapshot Control',
-      type: 'control',
-      withTransparencyEffect: true,
-    };
-    const validDocument = { ...state.document, layers: [snapshotLayer] };
+    const rasterLoaded = load(withNodes([rasterGroup]));
+    const loadedGroup = rasterLoaded.document.stacks.raster[0];
+    expect(loadedGroup?.type === 'group' ? loadedGroup.adjustments : null).toEqual(stack);
 
-    const migrated = migrateCanvasStateToV2({
-      ...state,
-      document: { ...state.document, layers: [liveLayer] },
-      snapshots: [
-        { createdAt: 'now', document: validDocument, id: 'valid', name: 'Valid' },
-        null,
-        'malformed',
-        {},
-        { createdAt: 'now', id: 'missing-document', name: 'Missing document' },
-        { createdAt: 'now', document: null, id: 'null-document', name: 'Null document' },
-        {
-          createdAt: 'now',
-          document: { ...state.document, layers: { bad: true } },
-          id: 'malformed-layers',
-          name: 'Malformed layers',
+    const overlayGroup = { ...rasterGroup, children: [], id: 'og' };
+    const overlayLoaded = load(withNodes([overlayGroup], 'control'));
+    const loadedOverlay = overlayLoaded.document.stacks.control[0];
+    expect(loadedOverlay?.type === 'group' ? Object.hasOwn(loadedOverlay, 'adjustments') : null).toBe(false);
+
+    const malformed = { ...rasterGroup, adjustments: [{ id: 'bad', type: 'nope' }], id: 'mg' };
+    const malformedLoaded = load(withNodes([malformed]));
+    const loadedMalformed = malformedLoaded.document.stacks.raster[0];
+    expect(loadedMalformed?.type === 'group' ? loadedMalformed.adjustments : null).toBeUndefined();
+    expect(loadedMalformed?.type === 'group' ? loadedMalformed.children.length : 0).toBe(1);
+  });
+
+  it('round-trips color labels on leaves and groups in any stack, and drops malformed values', () => {
+    const labelled = load(withNodes([{ ...createEmptyPaintLayer('Tagged', 'tagged'), colorLabel: 'violet' }]));
+    const leaf = labelled.document.stacks.raster[0];
+    expect(leaf && 'colorLabel' in leaf ? leaf.colorLabel : null).toBe('violet');
+
+    const overlayGroup = {
+      children: [],
+      colorLabel: 'green',
+      id: 'og',
+      isEnabled: true,
+      isLocked: false,
+      name: 'Overlay',
+      type: 'group',
+    };
+    const overlayLoaded = load(withNodes([overlayGroup], 'control'));
+    const loadedOverlay = overlayLoaded.document.stacks.control[0];
+    expect(loadedOverlay?.type === 'group' ? loadedOverlay.colorLabel : null).toBe('green');
+
+    const malformed = load(withNodes([{ ...createEmptyPaintLayer('Bad', 'bad'), colorLabel: 'magenta' }]));
+    const badLeaf = malformed.document.stacks.raster[0];
+    expect(badLeaf && 'colorLabel' in badLeaf ? badLeaf.colorLabel : null).toBeUndefined();
+  });
+
+  it('round-trips group opacity and blend in the raster stack, strips them from overlay groups, and drops malformed values', () => {
+    const rasterGroup = {
+      blendMode: 'multiply',
+      children: [createEmptyPaintLayer('Inside', 'inside')],
+      id: 'rg',
+      isEnabled: true,
+      isLocked: false,
+      name: 'Faded',
+      opacity: 0.5,
+      type: 'group',
+    };
+    const rasterLoaded = load(withNodes([rasterGroup]));
+    const loadedGroup = rasterLoaded.document.stacks.raster[0];
+    expect(loadedGroup?.type === 'group' ? loadedGroup.opacity : null).toBe(0.5);
+    expect(loadedGroup?.type === 'group' ? loadedGroup.blendMode : null).toBe('multiply');
+
+    const overlayGroup = { ...rasterGroup, children: [], id: 'og' };
+    const overlayLoaded = load(withNodes([overlayGroup], 'control'));
+    const loadedOverlay = overlayLoaded.document.stacks.control[0];
+    expect(loadedOverlay?.type === 'group' ? Object.hasOwn(loadedOverlay, 'opacity') : null).toBe(false);
+    expect(loadedOverlay?.type === 'group' ? Object.hasOwn(loadedOverlay, 'blendMode') : null).toBe(false);
+
+    const malformed = { ...rasterGroup, blendMode: 'plasma', id: 'mg', opacity: 7 };
+    const malformedLoaded = load(withNodes([malformed]));
+    const loadedMalformed = malformedLoaded.document.stacks.raster[0];
+    expect(loadedMalformed?.type === 'group' ? loadedMalformed.opacity : null).toBeUndefined();
+    expect(loadedMalformed?.type === 'group' ? loadedMalformed.blendMode : null).toBeUndefined();
+    expect(loadedMalformed?.type === 'group' ? loadedMalformed.children.length : 0).toBe(1);
+  });
+
+  it('round-trips a valid adjustment stack, drops the pre-stack object shape, and drops a stack with one malformed entry', () => {
+    const stack = [
+      { brightness: 0.2, contrast: -0.1, id: 'a1', isEnabled: true, type: 'brightness-contrast' },
+      { id: 'a2', isEnabled: false, saturation: 0.4, type: 'hsl' },
+      {
+        curves: {
+          r: [
+            [0, 10],
+            [255, 255],
+          ],
         },
-      ],
+        id: 'a3',
+        isEnabled: true,
+        type: 'curves',
+      },
+      { gamma: 1.4, id: 'a4', inBlack: 12, inWhite: 240, isEnabled: true, outBlack: 5, outWhite: 250, type: 'levels' },
+      { id: 'a5', isEnabled: true, rotation: -45, type: 'hue' },
+      { id: 'a6', isEnabled: false, type: 'invert' },
+      { id: 'a7', isEnabled: true, stops: -1.5, type: 'exposure' },
+      {
+        channel: 'g',
+        gamma: 1,
+        id: 'a8',
+        inBlack: 0,
+        inWhite: 255,
+        isEnabled: true,
+        outBlack: 0,
+        outWhite: 128,
+        type: 'levels',
+      },
+    ];
+    const adjustmentsOf = (loaded: CanvasStateContractV3) => {
+      const layer = loaded.document.stacks.raster[0];
+      return layer?.type === 'raster' ? layer.adjustments : null;
+    };
+
+    const valid = load(withNodes([{ ...createEmptyPaintLayer('Adjusted', 'adjusted'), adjustments: stack }]));
+    expect(adjustmentsOf(valid)).toEqual(stack);
+
+    const legacy = load(
+      withNodes([
+        {
+          ...createEmptyPaintLayer('Legacy', 'legacy'),
+          adjustments: { brightness: 0.2, contrast: 0, saturation: 0 },
+        },
+      ])
+    );
+    expect(adjustmentsOf(legacy)).toBeUndefined();
+
+    // One typo'd entry drops the WHOLE stack rather than failing the document — the accepted blast radius.
+    const malformed = load(
+      withNodes([
+        {
+          ...createEmptyPaintLayer('Broken', 'broken'),
+          adjustments: [stack[0], { id: 'bad', isEnabled: true, saturation: 'high', type: 'hsl' }],
+        },
+      ])
+    );
+    expect(adjustmentsOf(malformed)).toBeUndefined();
+    expect(malformed.document.stacks.raster).toHaveLength(1);
+
+    // Levels cross-field invariants are enforced: an inverted input range or non-positive gamma is malformed.
+    const invalidLevels = load(
+      withNodes([
+        {
+          ...createEmptyPaintLayer('Inverted', 'inverted'),
+          adjustments: [
+            {
+              gamma: 1,
+              id: 'l1',
+              inBlack: 200,
+              inWhite: 100,
+              isEnabled: true,
+              outBlack: 0,
+              outWhite: 255,
+              type: 'levels',
+            },
+          ],
+        },
+      ])
+    );
+    expect(adjustmentsOf(invalidLevels)).toBeUndefined();
+  });
+
+  it('normalizes control adapters in both the live document and saved snapshots', () => {
+    const invalidLayer = {
+      ...createControlLayer('Z Control', 'z-control'),
+      adapter: { beginEndStepPct: [0.8, 0.2], controlMode: null, kind: 'z_image_control', model: null, weight: -1 },
+    };
+    const state = withNodes([invalidLayer], 'control');
+    const loaded = load({
+      ...state,
+      snapshots: [{ createdAt: 'now', document: state.document, id: 'snapshot', name: 'Snapshot' }],
     });
 
-    expect(migrated.document.layers.map((layer) => layer.id)).toEqual(['live']);
-    expect(migrated.snapshots).toHaveLength(1);
-    expect(migrated.snapshots[0]).toMatchObject({ createdAt: 'now', id: 'valid', name: 'Valid' });
-    const validLayer = migrated.snapshots[0]!.document.layers[0];
-    expect(validLayer?.type === 'control' ? validLayer.adapter : null).toEqual({
-      beginEndStepPct: [0, 1],
-      controlMode: null,
-      kind: 'z_image_control',
-      model: 'z-control',
-      weight: 0.75,
-    });
+    const getAdapter = (doc: (typeof loaded)['document']) => {
+      const layer = doc.stacks.control[0];
+      return layer?.type === 'control' ? layer.adapter : null;
+    };
+    expect(getAdapter(loaded.document)).toMatchObject({ beginEndStepPct: [0, 1], weight: 0.75 });
+    expect(getAdapter(loaded.snapshots[0]!.document)).toMatchObject({ beginEndStepPct: [0, 1], weight: 0.75 });
+  });
+
+  it('refuses a state whose snapshot entries are malformed instead of discarding them', () => {
+    const state = createEmptyCanvasState();
+    const validDocument = {
+      ...state.document,
+      stacks: stacksFrom([createControlLayer('Snapshot Control', 'snapshot-control')]),
+    };
+    const valid = { createdAt: 'now', document: validDocument, id: 'valid', name: 'Valid' };
+    const base = withNodes([createEmptyPaintLayer('Live', 'live')]);
+
+    expect(load({ ...base, snapshots: [valid] }).snapshots).toEqual([valid]);
+
+    for (const malformed of [
+      null,
+      'malformed',
+      {},
+      { createdAt: 'now', id: 'missing-document', name: 'Missing document' },
+      { createdAt: 'now', document: null, id: 'null-document', name: 'Null document' },
+      {
+        createdAt: 'now',
+        document: { ...state.document, stacks: { raster: { bad: true } } },
+        id: 'bad-layers',
+        name: 'Bad',
+      },
+    ]) {
+      const raw = { ...base, snapshots: [valid, malformed] };
+      expect(refusal(raw)).toMatchObject({ raw, scope: 'snapshot', status: 'invalid' });
+    }
   });
 
   it.each([
     ['missing discriminant and base fields', { id: 'broken' }],
+    ['unknown layer type', { ...createEmptyPaintLayer('Mystery', 'mystery'), type: 'mystery' }],
     ['raster with invalid source', { ...createEmptyPaintLayer('Raster', 'raster'), source: null }],
-    ['control with invalid adapter', { ...createControlLayer('Control', 'control'), adapter: null }],
-    [
-      'regional guidance with invalid mask',
-      { ...createRegionalGuidanceLayer('Region', 0, 'region'), mask: { bitmap: null, fill: null } },
-    ],
-    ['inpaint mask with invalid mask', { ...createInpaintMaskLayer('Mask', 'mask'), mask: null }],
-  ])('discards a snapshot containing a malformed layer: %s', (_label, malformedLayer) => {
-    const state = createEmptyCanvasStateV2();
-    const migrated = migrateCanvasStateToV2({
+    ['a leaf of another stack', createControlLayer('Control', 'control')],
+    ['a group without children', { ...groupContract('g'), children: null }],
+    ['a group with a malformed child', groupContract('g', [{ ...createEmptyPaintLayer('Bad', 'bad'), opacity: 4 }])],
+  ])('refuses a snapshot containing a malformed node: %s', (_label, malformedNode) => {
+    const state = createEmptyCanvasState();
+    const raw = {
       ...state,
       snapshots: [
         {
           createdAt: 'now',
-          document: { ...state.document, layers: [malformedLayer] },
+          document: { ...state.document, stacks: { raster: [createEmptyPaintLayer('Fine', 'fine'), malformedNode] } },
           id: 'malformed',
           name: 'Malformed',
         },
       ],
-    });
+    };
 
-    expect(migrated.snapshots).toEqual([]);
-    expect(migrated.document.layers).toEqual([]);
+    expect(refusal(raw)).toMatchObject({
+      diagnostics: [{ path: expect.stringContaining('snapshots[0].document.stacks.raster[1]') }],
+      raw,
+      scope: 'snapshot',
+      status: 'invalid',
+    });
   });
 
-  it('round-trips valid snapshots containing every layer type', () => {
-    const state = createEmptyCanvasStateV2();
-    const layers = [
-      createEmptyPaintLayer('Raster', 'raster'),
-      createControlLayer('Control', 'control'),
-      createRegionalGuidanceLayer('Region', 0, 'region'),
-      createInpaintMaskLayer('Mask', 'mask'),
-    ];
+  it('round-trips valid snapshots containing every layer type and nested groups', () => {
+    const state = createEmptyCanvasState();
+    const stacks = {
+      control: [groupContract('cg', [createControlLayer('Control', 'control')], { isHidden: true })],
+      inpaint_mask: [createInpaintMaskLayer('Mask', 'mask')],
+      raster: [groupContract('rg', [createEmptyPaintLayer('Raster', 'raster'), groupContract('inner', [])])],
+      regional_guidance: [createRegionalGuidanceLayer('Region', 0, 'region')],
+    };
     const snapshot = {
       createdAt: 'now',
-      document: { ...state.document, layers, selectedLayerId: 'control' },
-      id: 'valid-layers',
-      name: 'Valid layers',
+      document: { ...state.document, selectedLayerId: 'rg', stacks },
+      id: 'valid',
+      name: 'Valid',
     };
 
-    const migrated = migrateCanvasStateToV2({ ...state, snapshots: [snapshot] });
+    const loaded = load({ ...state, document: snapshot.document, snapshots: [snapshot] });
 
-    expect(migrated.snapshots).toEqual([snapshot]);
+    expect(loaded.document).toEqual(snapshot.document);
+    expect(loaded.snapshots).toEqual([snapshot]);
   });
 
-  it('filters malformed live layers without discarding valid live layers', () => {
-    const state = createEmptyCanvasStateV2();
+  it('refuses a live document containing an unknown node type instead of dropping it', () => {
     const valid = createEmptyPaintLayer('Valid', 'valid');
-    const migrated = migrateCanvasStateToV2({
-      ...state,
-      document: { ...state.document, layers: [{ id: 'broken' }, valid] },
-    });
+    const raw = withNodes([valid, { ...valid, id: 'mystery', type: 'mystery' }]);
 
-    expect(migrated.document.layers).toEqual([valid]);
-  });
-
-  it('maps a v1 raster layer to a v2 raster layer positioned by transform', () => {
-    const v1Canvas = {
-      document: {
-        height: 768,
-        layers: [
-          {
-            acceptedAt: '2026-06-09T00:00:00.000Z',
-            height: 512,
-            id: 'layer-1',
-            imageName: 'candidate.png',
-            imageUrl: '/api/v1/images/i/candidate.png/full',
-            label: 'Layer 1',
-            placement: { height: 300, opacity: 0.8, width: 600, x: 12, y: 24 },
-            queuedAt: '2026-06-09T00:00:00.000Z',
-            sourceQueueItemId: 'queue-1',
-            thumbnailUrl: '/api/v1/images/i/candidate.png/thumbnail',
-            width: 1024,
-          },
-        ],
-        version: 1,
-        width: 1024,
-      },
-      stagingArea: {
-        areThumbnailsVisible: true,
-        isVisible: false,
-        pendingImageIds: [],
-        pendingImages: [],
-        selectedImageIndex: 0,
-      },
-      version: 1,
-    };
-
-    const migrated = migrateCanvasStateToV2(v1Canvas);
-
-    expect(migrated.version).toBe(2);
-    expect(migrated.document.layers).toHaveLength(1);
-
-    const layer = migrated.document.layers[0];
-
-    expect(layer).toEqual({
-      blendMode: 'normal',
-      id: 'layer-1',
-      isEnabled: true,
-      isLocked: false,
-      name: 'Layer 1',
-      opacity: 0.8,
-      source: { image: { height: 512, imageName: 'candidate.png', width: 1024 }, type: 'image' },
-      transform: { rotation: 0, scaleX: 600 / 1024, scaleY: 300 / 512, x: 12, y: 24 },
-      type: 'raster',
+    expect(refusal(raw)).toMatchObject({
+      diagnostics: [{ message: expect.stringContaining('mystery node is invalid'), path: 'document.stacks.raster[1]' }],
+      raw,
+      scope: 'document',
+      status: 'invalid',
     });
   });
 
-  it('generates an id and positional name for a layer missing them, and defaults a missing placement', () => {
-    const migrated = migrateCanvasStateToV2({
-      document: {
-        height: 512,
-        layers: [{ height: 256, imageName: 'no-id.png', width: 256 }],
-        width: 512,
-      },
-      version: 1,
+  it('refuses a live document containing a malformed leaf with a diagnostic naming the field', () => {
+    expect(refusal(withNodes([{ ...createEmptyPaintLayer('Bad', 'bad'), opacity: 4 }]))).toMatchObject({
+      diagnostics: [{ message: expect.stringContaining('opacity'), path: 'document.stacks.raster[0]' }],
+      status: 'invalid',
     });
-
-    const layer = migrated.document.layers[0];
-
-    expect(layer?.id).toBeTruthy();
-    expect(layer?.name).toBe('Layer 1');
-    expect(layer?.type).toBe('raster');
-
-    if (layer?.type === 'raster' && layer.source.type === 'image') {
-      expect(layer.source.image).toEqual({ height: 256, imageName: 'no-id.png', width: 256 });
-      expect(layer.transform).toEqual({ rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 });
-      expect(layer.opacity).toBe(1);
-    }
   });
 
-  it('migrates a bare imageName-string legacy layer', () => {
-    const migrated = migrateCanvasStateToV2({
-      document: { height: 512, layers: ['legacy-image.png'], width: 512 },
-      version: 1,
-    });
-
-    const layer = migrated.document.layers[0];
-
-    expect(layer?.name).toBe('legacy-image.png');
-
-    if (layer?.type === 'raster' && layer.source.type === 'image') {
-      expect(layer.source.image.imageName).toBe('legacy-image.png');
-    }
-  });
-
-  it('supports the pre-`document` legacy shape with layers directly on the canvas', () => {
-    const migrated = migrateCanvasStateToV2({
-      layers: ['ancient.png'],
-      version: 1,
-    });
-
-    expect(migrated.document.width).toBe(DEFAULT_CANVAS_DOCUMENT_WIDTH);
-    expect(migrated.document.height).toBe(DEFAULT_CANVAS_DOCUMENT_HEIGHT);
-    expect(migrated.document.layers).toHaveLength(1);
-  });
-
-  it('defaults bbox to the full document rect', () => {
-    const migrated = migrateCanvasStateToV2({ document: { height: 600, layers: [], width: 800 }, version: 1 });
-
-    expect(migrated.document.bbox).toEqual({ height: 600, width: 800, x: 0, y: 0 });
-  });
-
-  it('defaults selectedLayerId to null (v1 had no selection concept)', () => {
-    const migrated = migrateCanvasStateToV2({ document: { height: 512, layers: [], width: 512 }, version: 1 });
-
-    expect(migrated.document.selectedLayerId).toBeNull();
-  });
-
-  it('carries the staging area through unchanged and defaults autoSwitchMode to off', () => {
-    const pendingImages = [
+  it.each([
+    [
+      'a duplicated id across stacks',
+      { control: [createControlLayer('C', 'dup')], raster: [createEmptyPaintLayer('R', 'dup')] },
+      'document.stacks.control[0].id',
+    ],
+    [
+      'a duplicated id inside a group',
+      { raster: [groupContract('g', [createEmptyPaintLayer('A', 'a'), createEmptyPaintLayer('B', 'a')])] },
+      'document.stacks.raster[0].children[1].id',
+    ],
+    [
+      'a display-hidden raster group',
+      { raster: [groupContract('g', [], { isHidden: true })] },
+      'document.stacks.raster[0].isHidden',
+    ],
+    ['a leaf in the wrong stack', { raster: [createControlLayer('C', 'c')] }, 'document.stacks.raster[0]'],
+    [
+      'a group nested past the depth limit',
       {
-        height: 512,
-        imageName: 'staged.png',
-        imageUrl: '/api/v1/images/i/staged.png/full',
-        placement: { height: 512, opacity: 1, width: 512, x: 0, y: 0 },
-        queuedAt: '2026-06-09T00:00:00.000Z',
-        sourceQueueItemId: 'queue-1',
-        thumbnailUrl: '/api/v1/images/i/staged.png/thumbnail',
-        width: 512,
-      },
-    ];
-
-    const migrated = migrateCanvasStateToV2({
-      document: { height: 512, layers: [], width: 512 },
-      stagingArea: {
-        areThumbnailsVisible: false,
-        isVisible: true,
-        pendingImageIds: ['staged.png'],
-        pendingImages,
-        selectedImageIndex: 0,
-        selectedLayerId: 'layer-x',
-        sourceQueueItemId: 'queue-1',
-      },
-      version: 1,
-    });
-
-    expect(migrated.stagingArea).toEqual({
-      areThumbnailsVisible: false,
-      autoSwitchMode: 'off',
-      isVisible: true,
-      pendingImageIds: ['staged.png'],
-      pendingImages,
-      selectedImageIndex: 0,
-      selectedLayerId: 'layer-x',
-      sourceQueueItemId: 'queue-1',
-    });
-    // The candidate objects themselves are carried through by reference, not reshaped.
-    expect(migrated.stagingArea.pendingImages[0]).toBe(pendingImages[0]);
-  });
-
-  it('starts with no snapshots', () => {
-    const migrated = migrateCanvasStateToV2({ document: { height: 512, layers: [], width: 512 }, version: 1 });
-
-    expect(migrated.snapshots).toEqual([]);
-  });
-
-  it('passes already-v2 input through normalized rather than re-migrating it', () => {
-    const v2Canvas = {
-      document: {
-        background: 'transparent',
-        bbox: { height: 512, width: 512, x: 0, y: 0 },
-        height: 512,
-        layers: [
-          {
-            blendMode: 'multiply',
-            id: 'layer-1',
-            isEnabled: true,
-            isLocked: false,
-            name: 'Layer 1',
-            opacity: 0.5,
-            source: { image: { height: 100, imageName: 'v2.png', width: 100 }, type: 'image' },
-            transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 },
-            type: 'raster',
-          },
+        raster: [
+          Array.from({ length: 11 }).reduce<unknown>(
+            (child, _, index) => groupContract(`g${index}`, child ? [child as never] : []),
+            null
+          ),
         ],
-        selectedLayerId: 'layer-1',
-        version: 2,
-        width: 512,
       },
-      documentRevision: 0,
-      snapshots: [],
-      stagingArea: {
-        areThumbnailsVisible: true,
-        autoSwitchMode: 'latest',
-        isVisible: false,
-        pendingImageIds: [],
-        pendingImages: [],
-        selectedImageIndex: 0,
-      },
-      version: 2,
-    };
-
-    const migrated = migrateCanvasStateToV2(v2Canvas);
-
-    expect(migrated).toEqual(v2Canvas);
-    // Not double-migrated: blendMode/opacity/selectedLayerId survive untouched, which a v1->v2
-    // re-derivation from a (nonexistent) placement would not preserve.
-    expect(migrated.document.layers[0]).toEqual(v2Canvas.document.layers[0]);
-    expect(migrated.stagingArea.autoSwitchMode).toBe('latest');
+      'document.stacks.raster[0]',
+    ],
+  ])('refuses %s', (_label, stacks, path) => {
+    const state = createEmptyCanvasState();
+    const raw = { ...state, document: { ...state.document, stacks } };
+    expect(refusal(raw)).toMatchObject({
+      diagnostics: [{ path: expect.stringContaining(path) }],
+      scope: 'document',
+      status: 'invalid',
+    });
   });
 
-  it('normalizes persisted bbox geometry to whole pixels in documents and snapshots', () => {
-    const state = createEmptyCanvasStateV2();
+  it('accepts a group nested exactly at the depth limit', () => {
+    const nested = Array.from({ length: 10 }).reduce<unknown>(
+      (child, _, index) => groupContract(`g${index}`, child ? [child as never] : []),
+      null
+    );
+    expect(load(withNodes([nested])).document.stacks.raster[0]).toEqual(nested);
+  });
+
+  it.each([
+    ['a future outer version', { ...createEmptyCanvasState(), version: 4 }, 'state', 4],
+    ['an older outer version', { ...createEmptyCanvasState(), version: 2 }, 'state', 2],
+    ['a legacy version', { ...createEmptyCanvasState(), version: 1 }, 'state', 1],
+    [
+      'a nested document of another version',
+      { ...createEmptyCanvasState(), document: { ...createEmptyCanvasDocument(), version: 2 } },
+      'document',
+      2,
+    ],
+    [
+      'a snapshot of another version',
+      {
+        ...createEmptyCanvasState(),
+        snapshots: [{ createdAt: 'now', document: { ...createEmptyCanvasDocument(), version: 4 }, id: 'f', name: 'F' }],
+      },
+      'snapshot',
+      4,
+    ],
+  ])('refuses %s before parsing anything', (_label, raw, scope, version) => {
+    expect(refusal(raw)).toEqual({ raw, scope, status: 'unsupported-version', version });
+  });
+
+  it.each([
+    ['a string', '3'],
+    ['a fraction', 2.5],
+    ['zero', 0],
+    ['a negative number', -1],
+    ['null', null],
+    ['absent', undefined],
+  ])('treats a malformed declared version as invalid rather than guessing: %s', (_label, version) => {
+    const raw = { ...createEmptyCanvasState(), version };
+    expect(refusal(raw)).toMatchObject({ diagnostics: [{ path: 'version' }], raw, scope: 'state', status: 'invalid' });
+  });
+
+  it('treats absent state as empty, fills missing snapshots, and refuses a document without its stacks', () => {
+    const empty = createEmptyCanvasState();
+
+    expect(load(undefined)).toEqual(empty);
+    expect(load(null)).toEqual(empty);
+    expect(refusal({ version: 3 })).toMatchObject({ scope: 'document', status: 'invalid' });
+    // A v2-shaped body under a v3 envelope must not load as an empty canvas and then be saved over.
+    expect(
+      refusal({
+        document: { height: 1024, layers: [createEmptyPaintLayer('Raster', 'r')], version: 3, width: 1024 },
+        version: 3,
+      })
+    ).toMatchObject({ diagnostics: [{ path: 'document.stacks' }], scope: 'document', status: 'invalid' });
+    expect(load({ ...empty, snapshots: undefined }).snapshots).toEqual([]);
+    expect(refusal({ ...empty, snapshots: null })).toMatchObject({ scope: 'state', status: 'invalid' });
+    expect(refusal({ ...empty, document: null })).toMatchObject({ scope: 'document', status: 'invalid' });
+    expect(refusal({ ...empty, document: { ...empty.document, stacks: [] } })).toMatchObject({
+      scope: 'document',
+      status: 'invalid',
+    });
+  });
+
+  it('passes a valid state through normalized, keeping every persisted field', () => {
+    const canvas = {
+      ...withNodes([
+        {
+          ...createEmptyPaintLayer('Layer 1', 'layer-1'),
+          blendMode: 'multiply',
+          opacity: 0.5,
+          source: { image: { height: 100, imageName: 'v3.png', width: 100 }, type: 'image' },
+        },
+      ]),
+      documentRevision: 4,
+      stagingArea: { ...createEmptyCanvasState().stagingArea, autoSwitchMode: 'latest' },
+    };
+    canvas.document.selectedLayerId = 'layer-1';
+
+    expect(load(canvas)).toEqual(canvas);
+  });
+
+  it('normalizes persisted geometry to whole pixels in documents and snapshots', () => {
+    const state = createEmptyCanvasState();
     const document = {
       ...state.document,
       bbox: { height: 12.6, width: 12.4, x: -3.4, y: -3.6 },
       height: 511.6,
       width: 512.4,
     };
-
-    const migrated = migrateCanvasStateToV2({
-      ...state,
-      document,
-      snapshots: [{ createdAt: 'now', document, id: 'fractional-bbox', name: 'Fractional bbox' }],
-    });
-
-    expect(migrated.document.bbox).toEqual({ height: 13, width: 12, x: -3, y: -4 });
-    expect({ height: migrated.document.height, width: migrated.document.width }).toEqual({ height: 512, width: 512 });
-    expect(migrated.snapshots[0]?.document.bbox).toEqual({ height: 13, width: 12, x: -3, y: -4 });
+    const loaded = load({ ...state, document, snapshots: [{ createdAt: 'now', document, id: 's', name: 'S' }] });
+    const expected = { bbox: { height: 13, width: 12, x: -3, y: -4 }, height: 512, width: 512 };
+    expect(loaded.document).toMatchObject(expected);
+    expect(loaded.snapshots[0]!.document).toMatchObject(expected);
   });
 
-  it('creates and migrates whole-pixel document dimensions', () => {
-    const created = createEmptyCanvasDocumentV2(512.4, 511.6);
-    const migrated = migrateCanvasStateToV2({ height: 511.6, layers: [], width: 512.4 });
-
-    expect(created).toMatchObject({ bbox: { height: 512, width: 512, x: 0, y: 0 }, height: 512, width: 512 });
-    expect(migrated.document).toMatchObject({
-      bbox: { height: 512, width: 512, x: 0, y: 0 },
-      height: 512,
-      width: 512,
-    });
+  it('normalizes the removed oldest staging auto-switch mode to off and keeps progress', () => {
+    const state = createEmptyCanvasState();
+    expect(
+      load({ ...state, stagingArea: { ...state.stagingArea, autoSwitchMode: 'oldest' } }).stagingArea.autoSwitchMode
+    ).toBe('off');
+    expect(
+      load({ ...state, stagingArea: { ...state.stagingArea, autoSwitchMode: 'progress' } }).stagingArea.autoSwitchMode
+    ).toBe('progress');
   });
 
-  it('preserves the progress canvas staging auto-switch mode', () => {
-    const migrated = migrateCanvasStateToV2({
-      document: { height: 512, layers: [], width: 512 },
-      stagingArea: { autoSwitchMode: 'progress' },
-      version: 2,
-    });
-
-    expect(migrated.stagingArea.autoSwitchMode).toBe('progress');
-  });
-
-  it('normalizes the removed oldest canvas staging auto-switch mode to off', () => {
-    const migrated = migrateCanvasStateToV2({
-      document: { height: 512, layers: [], width: 512 },
-      stagingArea: { autoSwitchMode: 'oldest' },
-      version: 2,
-    });
-
-    expect(migrated.stagingArea.autoSwitchMode).toBe('off');
-  });
-
-  it('round-trips content-sized fields (paint offset, gradient width/height) on an already-v2 doc unchanged', () => {
-    const paintOffset = { x: -30, y: 45 };
-    const gradientExtent = { height: 220, width: 180 };
-    const v2Canvas = {
-      document: {
-        background: 'transparent',
-        bbox: { height: 512, width: 512, x: 0, y: 0 },
-        height: 512,
-        layers: [
-          {
-            blendMode: 'normal',
-            id: 'paint-1',
-            isEnabled: true,
-            isLocked: false,
-            name: 'Paint 1',
-            opacity: 1,
-            // Content-sized paint bitmap placed off-origin.
-            source: { bitmap: { height: 40, imageName: 'paint.png', width: 40 }, offset: paintOffset, type: 'paint' },
-            transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 },
-            type: 'raster',
-          },
-          {
-            blendMode: 'normal',
-            id: 'gradient-1',
-            isEnabled: true,
-            isLocked: false,
-            name: 'Gradient 1',
-            opacity: 1,
-            // Gradient carrying an explicit content extent (not document-sized).
-            source: {
-              angle: 45,
-              height: gradientExtent.height,
-              kind: 'linear',
-              stops: [
-                { color: '#000000', offset: 0 },
-                { color: '#ffffff', offset: 1 },
-              ],
-              type: 'gradient',
-              width: gradientExtent.width,
-            },
-            transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 },
-            type: 'raster',
-          },
-        ],
-        selectedLayerId: 'paint-1',
-        version: 2,
-        width: 512,
-      },
-      documentRevision: 3,
-      snapshots: [],
-      stagingArea: {
-        areThumbnailsVisible: true,
-        autoSwitchMode: 'off',
-        isVisible: false,
-        pendingImageIds: [],
-        pendingImages: [],
-        selectedImageIndex: 0,
-      },
-      version: 2,
-    };
-
-    const migrated = migrateCanvasStateToV2(v2Canvas);
-
-    // Whole-state round-trip: normalization must not drop or rewrite the
-    // content-sizing fields the current schema carries.
-    expect(migrated).toEqual(v2Canvas);
-    const paintLayer = migrated.document.layers[0];
-    const gradientLayer = migrated.document.layers[1];
-    if (paintLayer?.type !== 'raster' || gradientLayer?.type !== 'raster') {
-      throw new Error('expected two raster layers to survive normalization');
+  it('refuses garbage input as invalid state and preserves the raw payload', () => {
+    for (const garbage of [[], 'canvas', 42]) {
+      expect(refusal(garbage)).toMatchObject({ raw: garbage, scope: 'state', status: 'invalid' });
     }
-    expect(paintLayer.source).toEqual({
-      bitmap: { height: 40, imageName: 'paint.png', width: 40 },
-      offset: paintOffset,
-      type: 'paint',
-    });
-    expect(gradientLayer.source).toMatchObject({
-      height: gradientExtent.height,
-      type: 'gradient',
-      width: gradientExtent.width,
-    });
   });
-
-  it.each([undefined, null, 'garbage', 42, [], {}])(
-    'falls back to a fresh empty v2 state for garbage input (%j)',
-    (garbage) => {
-      const migrated = migrateCanvasStateToV2(garbage);
-
-      expect(migrated).toEqual(createEmptyCanvasStateV2());
-      expect(migrated.document.width).toBe(DEFAULT_CANVAS_DOCUMENT_WIDTH);
-      expect(migrated.document.height).toBe(DEFAULT_CANVAS_DOCUMENT_HEIGHT);
-      expect(migrated.document.layers).toEqual([]);
-      expect(migrated.stagingArea.autoSwitchMode).toBe('off');
-    }
-  );
 });
 
-describe('createEmptyCanvasStateV2', () => {
-  it('creates a well-formed empty v2 canvas at the default document size', () => {
-    const state = createEmptyCanvasStateV2();
+describe('normalizeCanvasDocumentContract', () => {
+  it('re-validates an in-memory document and refuses one holding an invalid node', () => {
+    const state = createEmptyCanvasState();
+    const document = { ...state.document, stacks: stacksFrom([createEmptyPaintLayer('A', 'a')]) };
+    expect(normalizeCanvasDocumentContract(document)).toEqual(document);
+    expect(
+      normalizeCanvasDocumentContract({ ...document, stacks: { ...document.stacks, raster: [{ id: 'x' } as never] } })
+    ).toBeNull();
+  });
+});
 
-    expect(state).toEqual({
+describe('createEmptyCanvasState', () => {
+  it('creates a well-formed empty canvas at the default document size', () => {
+    expect(createEmptyCanvasState()).toEqual({
       document: {
         background: 'transparent',
         bbox: { height: DEFAULT_CANVAS_DOCUMENT_HEIGHT, width: DEFAULT_CANVAS_DOCUMENT_WIDTH, x: 0, y: 0 },
         height: DEFAULT_CANVAS_DOCUMENT_HEIGHT,
-        layers: [],
         selectedLayerId: null,
-        version: 2,
+        stacks: { control: [], inpaint_mask: [], raster: [], regional_guidance: [] },
+        version: 3,
         width: DEFAULT_CANVAS_DOCUMENT_WIDTH,
       },
       documentRevision: 0,
@@ -629,66 +598,85 @@ describe('createEmptyCanvasStateV2', () => {
         pendingImages: [],
         selectedImageIndex: 0,
       },
-      version: 2,
+      version: 3,
     });
   });
 
   it('honors a custom document size', () => {
-    const state = createEmptyCanvasStateV2(800, 600);
-
-    expect(state.document.width).toBe(800);
-    expect(state.document.height).toBe(600);
-    expect(state.document.bbox).toEqual({ height: 600, width: 800, x: 0, y: 0 });
+    const state = createEmptyCanvasState(800, 600);
+    expect(state.document).toMatchObject({ bbox: { height: 600, width: 800, x: 0, y: 0 }, height: 600, width: 800 });
   });
 });
 
-describe('createNewCanvasStateV2', () => {
-  it('seeds exactly one empty inpaint mask, selected, with legacy-default fill', () => {
-    const state = createNewCanvasStateV2();
-    const { layers, selectedLayerId } = state.document;
+describe('createNewCanvasState', () => {
+  it('seeds exactly one empty inpaint mask, selected, matching the layers-panel factory', () => {
+    const state = createNewCanvasState();
+    const mask = state.document.stacks.inpaint_mask[0];
 
-    expect(layers).toHaveLength(1);
-    const mask = layers[0];
-    expect(mask?.type).toBe('inpaint_mask');
-    expect(mask?.name).toBe('Inpaint Mask 1');
-    expect(mask?.isEnabled).toBe(true);
-    expect(mask?.isLocked).toBe(false);
-    expect(mask?.opacity).toBe(1);
-    // Empty = no bitmap (no strokes); the diagonal-hatch fill is the legacy default.
-    expect(mask && 'mask' in mask ? mask.mask : null).toEqual({
-      bitmap: null,
-      fill: { color: '#e07575', style: 'diagonal' },
-    });
-    // The seeded mask is the initially selected layer.
-    expect(selectedLayerId).toBe(mask?.id);
-  });
-
-  it('matches the layers-panel inpaint-mask factory shape (kept in lockstep)', () => {
-    const state = createNewCanvasStateV2();
-    const mask = state.document.layers[0];
-    // Rebuild the expected layer via the canonical factory, pinning the minted id
-    // and name so only the contract shape is compared.
-    const expected = createInpaintMaskLayer(nextInpaintMaskName([]), mask?.id ?? '');
-
-    expect(mask).toEqual(expected);
+    expect(state.document.stacks.inpaint_mask).toHaveLength(1);
+    expect(state.document.stacks.raster).toEqual([]);
+    expect(mask).toEqual(createInpaintMaskLayer(nextInpaintMaskName([]), mask?.id ?? ''));
+    expect(state.document.selectedLayerId).toBe(mask?.id);
   });
 
   it('honors a custom document size while staying otherwise identical to an empty canvas', () => {
-    const state = createNewCanvasStateV2(800, 600);
+    const state = createNewCanvasState(800, 600);
+    expect({
+      ...state,
+      document: { ...state.document, selectedLayerId: null, stacks: createEmptyCanvasState().document.stacks },
+    }).toEqual(createEmptyCanvasState(800, 600));
+  });
+});
 
-    expect(state.document.width).toBe(800);
-    expect(state.document.height).toBe(600);
-    expect(state.document.bbox).toEqual({ height: 600, width: 800, x: 0, y: 0 });
-    // Only the document's layers/selection differ from the empty canvas.
-    expect({ ...state, document: { ...state.document, layers: [], selectedLayerId: null } }).toEqual(
-      createEmptyCanvasStateV2(800, 600)
-    );
+describe('loadCanvasState ingress repair', () => {
+  const stateWith = (stacks: CanvasStateContractV3['document']['stacks'], selectedLayerId: string | null = null) => {
+    const state = createEmptyCanvasState();
+    return { ...state, document: { ...state.document, selectedLayerId, stacks } };
+  };
+
+  it('repairs a dangling selection to a real node and reports it', () => {
+    const result = loadCanvasState(stateWith(stacksFrom([createEmptyPaintLayer('A', 'a')]), 'ghost'));
+    expect(result.status).toBe('loaded');
+    if (result.status !== 'loaded') {
+      return;
+    }
+    expect(result.value.document.selectedLayerId).toBe('a');
+    expect(result.diagnostics).toMatchObject([{ path: 'document.selectedLayerId' }]);
+    const clean = loadCanvasState(stateWith(stacksFrom([createEmptyPaintLayer('A', 'a')]), 'a'));
+    expect(clean.status === 'loaded' && clean.diagnostics).toEqual([]);
   });
 
-  it('does not disturb the migration/empty path (garbage still migrates to an empty, mask-free canvas)', () => {
-    // The new-canvas seed is scoped to fresh projects only; migrating unknown
-    // input keeps producing an empty, mask-free document.
-    expect(migrateCanvasStateToV2('garbage').document.layers).toEqual([]);
-    expect(createEmptyCanvasStateV2().document.layers).toEqual([]);
+  it('refuses a stack it does not know', () => {
+    const state = stateWith({ ...stacksFrom([]), extra: [] } as CanvasStateContractV3['document']['stacks']);
+    expect(refusal(state)).toMatchObject({
+      diagnostics: [{ path: 'document.stacks.extra' }],
+      scope: 'document',
+      status: 'invalid',
+    });
+  });
+
+  it('drops display flags the raster stack cannot hold instead of persisting them', () => {
+    const leaf = { ...createEmptyPaintLayer('A', 'a'), isHidden: true, children: [] };
+    const group = groupContract('g', [], { isHidden: false });
+    const loaded = load(stateWith({ ...stacksFrom([]), raster: [leaf, group] }));
+    expect(loaded.document.stacks.raster[0]).toEqual(createEmptyPaintLayer('A', 'a'));
+    expect(loaded.document.stacks.raster[1]).toEqual(groupContract('g'));
+  });
+
+  it('caps the node count', () => {
+    const leaves = Array.from({ length: 10_001 }, (_, index) => createEmptyPaintLayer(`L${index}`, `l${index}`));
+    expect(refusal(stateWith(stacksFrom(leaves)))).toMatchObject({
+      diagnostics: [{ message: 'document exceeds 10000 nodes' }],
+      status: 'invalid',
+    });
+  });
+
+  it('fills the staging area from its defaults, keeping only well-typed fields', () => {
+    const state = createEmptyCanvasState();
+    const loaded = load({
+      ...state,
+      stagingArea: { autoSwitchMode: 'bogus', isVisible: false, pendingImages: 'nope' },
+    });
+    expect(loaded.stagingArea).toEqual({ ...state.stagingArea, isVisible: false });
   });
 });

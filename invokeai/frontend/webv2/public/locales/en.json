@@ -179,7 +179,10 @@
       "format": "Color format",
       "sampleFromCanvas": "Pick a color from the canvas",
       "sampleFromScreen": "Pick a color from the screen",
-      "opacity": "Opacity (%)"
+      "opacity": "Opacity (%)",
+      "hue": "Hue",
+      "saturationValue": "Saturation and value",
+      "saturationValueText": "Saturation {{saturation}}%, value {{value}}%"
     },
     "configure": "Configure",
     "copy": "Copy",
@@ -411,6 +414,7 @@
   "projects": {
     "allSavedAlreadyOpen": "All saved projects are already open.",
     "closeProjectLabel": "Close {{name}}",
+    "closeBlocked": "Project not closed",
     "couldNotOpen": "Could not open project",
     "couldNotOpenDescription": "\"{{name}}\" could not be loaded from the server.",
     "createNewProject": "Create new project",
@@ -428,6 +432,8 @@
     "exported": "Exported \"{{name}}\"",
     "exporting": "Exporting \"{{name}}\"…",
     "failedToLoad": "Failed to load your projects.",
+    "requiresNewerInvoke": "Requires a newer Invoke",
+    "legacyFormat": "Older project format",
     "file": {
       "bundlingProgress": "Bundling {{completed}} of {{total}} assets…",
       "damaged": "This project file is damaged and cannot be opened.",
@@ -439,6 +445,7 @@
       "missingReferences_other": "{{count}} project references could not be included.",
       "notAProject": "This file is not an Invoke project.",
       "notSynced": "This project has changes that have not reached the server yet. Try again once it reconnects.",
+      "updateClient": "This project now requires a newer version of Invoke. Your local changes remain saved in this browser.",
       "supersededElsewhere": "This project was changed on another device. Your local edits continue in the recovered copy — use that one instead.",
       "packing": "Packing the archive…",
       "restoringProgress": "Restoring {{completed}} of {{total}} assets…",
@@ -464,6 +471,12 @@
     "importWithEllipsis": "Import…",
     "libraryDescription": "Every project saved to your account.",
     "listView": "List view",
+    "load": {
+      "invalid": "\"{{name}}\" contains canvas data this version of Invoke cannot read, and it was not opened.",
+      "multiple": "{{count}} saved projects were not opened because this version of Invoke cannot read them: {{names}}.",
+      "legacyVersion": "\"{{name}}\" was saved by an older version of Invoke and cannot be opened here.",
+      "unsupportedVersion": "\"{{name}}\" was saved by a newer version of Invoke and cannot be opened here."
+    },
     "newProject": "New project",
     "newProjectWithLayout": "Start with a layout",
     "noSavedProjects": "No saved projects yet.",
@@ -752,6 +765,34 @@
       "paragraphs": [
         "Enables windowed attention used by HiDiffusion.",
         "Can boost local detail, but may affect global coherence."
+      ]
+    },
+    "layerStackControl": {
+      "heading": "Control Layers",
+      "paragraphs": [
+        "Layers that guide generation with structural hints such as edges, depth, or pose maps.",
+        "Each control layer pairs its image with a control model and a weight that sets how strongly it steers the result."
+      ]
+    },
+    "layerStackInpaintMask": {
+      "heading": "Inpaint Masks",
+      "paragraphs": [
+        "Masks that mark regions of the image for regeneration.",
+        "Painted areas are regenerated on the next invoke; noise and denoise-limit modifiers tune how strongly the area may change."
+      ]
+    },
+    "layerStackRaster": {
+      "heading": "Raster Layers",
+      "paragraphs": [
+        "The pixel layers that compose your image and feed generation.",
+        "Layers apply top to bottom, and each can carry a stack of non-destructive adjustments such as levels, curves, or hue."
+      ]
+    },
+    "layerStackRegionalGuidance": {
+      "heading": "Regional Guidance",
+      "paragraphs": [
+        "Regions that apply prompts and reference images to part of the image.",
+        "Painted regions scope their prompts and reference images to just that area of the canvas."
       ]
     },
     "model": {
@@ -1481,6 +1522,87 @@
       "createWidgets": "Create widgets",
       "inspectWidgets": "Inspect widgets"
     },
+    "properties": {
+      "noCanvas": "Open a canvas to edit its properties.",
+      "groups": {
+        "settings": "Settings",
+        "gestures": "Gestures",
+        "input": "Input",
+        "stroke": "Stroke",
+        "dynamics": "Dynamics",
+        "shape": "Shape",
+        "gradient": "Gradient",
+        "stops": "Stops",
+        "font": "Font",
+        "paragraph": "Paragraph",
+        "frame": "Frame",
+        "selection": "Selection"
+      },
+      "foreground": "Foreground",
+      "gestures": {
+        "click": "Click",
+        "drag": "Drag",
+        "scroll": "Scroll",
+        "shiftClick": "Shift+Click",
+        "clickPoint": "Click a point",
+        "holdAlt": "Hold Alt",
+        "holdSpace": "Hold Space"
+      },
+      "hints": {
+        "view": {
+          "drag": "Pan the canvas.",
+          "scroll": "Zoom in and out.",
+          "hold": "Pan from any tool; release to return."
+        },
+        "colorPicker": {
+          "click": "Sample the color under the cursor into the active color target.",
+          "hold": "Sample from any tool; release to keep painting with the picked color."
+        },
+        "sam": {
+          "click": "Place a point with the current label.",
+          "shiftClick": "Place a point with the opposite label.",
+          "clickPoint": "Remove that point.",
+          "drag": "Draw or adjust the search box."
+        }
+      },
+      "target": {
+        "defaults": "Defaults",
+        "editing": "Editing: {{name}}",
+        "newText": "New text"
+      },
+      "rows": {
+        "color": "Color",
+        "kind": "Kind",
+        "width": "Width",
+        "angle": "Angle",
+        "stop": "Stop",
+        "offset": "Offset",
+        "family": "Family",
+        "size": "Size",
+        "weight": "Weight",
+        "lineHeight": "Leading",
+        "align": "Align",
+        "aspect": "Aspect",
+        "shape": "Shape",
+        "mode": "Mode"
+      },
+      "sections": {
+        "operation": "Operation",
+        "tool": "Tool",
+        "layer": "Layer"
+      }
+    },
+    "transform": {
+      "edit": "Transform layer",
+      "groupSelected": "Select a layer inside this group to transform.",
+      "hint": "Each field commits one undoable change to the selected layer.",
+      "noSelection": "No layer selected",
+      "position": "Position",
+      "rotation": "Rotation",
+      "scale": "Scale",
+      "session": "Transform in progress",
+      "title": "Transform"
+    },
     "labels": {
       "autosaveStatus": "Autosave",
       "canvas": "Canvas",
@@ -1489,6 +1611,8 @@
       "generate": "Generate",
       "imageMap": "Image Map",
       "layers": "Layers",
+      "properties": "Properties",
+      "transform": "Transform",
       "notifications": "Notifications",
       "preview": "Preview",
       "project": "Project",
@@ -1498,7 +1622,11 @@
       "upscale": "Upscale",
       "versionStatus": "Version",
       "workflow": "Workflow",
-      "video": "Video"
+      "video": "Video",
+      "color": "Color",
+      "swatches": "Swatches",
+      "history": "History",
+      "overview": "Overview"
     },
     "generate": {
       "activeCount_one": "{{count}} active",
@@ -1550,7 +1678,6 @@
       "deletePresetNamed": "Delete preset {{name}}",
       "deletePromptHistoryItem": "Delete prompt history item",
       "denoisingStrength": "Denoising strength",
-      "denoisingStrengthHelp": "How much the generation reworks the existing canvas content. Only applies to image-to-image (when content fills the generation frame).",
       "disableConcept": "Disable {{name}}",
       "disableReferenceImage": "Disable reference image",
       "dropImageToPrompt": "Describe this image",
@@ -1981,6 +2108,7 @@
       "sync": "Sync",
       "syncOffline": "Offline — saved in this browser",
       "syncSynced": "Synced (revision {{revision}})",
+      "syncUpdateClient": "Update Invoke to sync — saved in this browser",
       "syncWaiting": "Waiting to sync"
     },
     "preview": {
@@ -2189,7 +2317,11 @@
         "selectTransformTool": "Select transform tool",
         "selectViewTool": "Select view tool",
         "toggleNonRasterLayers": "Hide control, guidance and mask layers",
-        "undo": "Undo canvas edit"
+        "undo": "Undo canvas edit",
+        "groupLayers": "Group selected layers",
+        "ungroupLayers": "Ungroup selected layers",
+        "swapColors": "Swap foreground and background colors",
+        "resetColors": "Reset colors to black and white"
       },
       "contextMenu": {
         "createError": "Couldn't create from BBox",
@@ -2216,7 +2348,6 @@
         "fitBboxToLayers": "Fit frame to layers",
         "fitBboxToMasks": "Fit frame to masks",
         "fitToView": "Fit to view",
-        "frameSize": "Generation frame size",
         "newCanvas": "New canvas",
         "newCanvasConfirm": "Clear all layers and start a fresh canvas? This cannot be undone.",
         "newSession": "New session",
@@ -2287,13 +2418,31 @@
         "saved": "Saved to gallery",
         "savedDescription": "{{name}} added to your gallery."
       },
+      "structural": {
+        "failed": "Canvas edit failed",
+        "gestureActive": "Finish the current canvas gesture, then try again.",
+        "notReady": "The canvas is not ready to record this edit.",
+        "refusedInvalidTarget": "That layer cannot be the target of this edit.",
+        "refusedLocked": "A locked layer is in the way. Unlock it first.",
+        "refusedMissing": "A layer this edit needs is no longer in the canvas.",
+        "refusedUnsupported": "This edit is not available here.",
+        "refusedWrongType": "This edit does not apply to this kind of layer.",
+        "rejected": "The canvas did not accept this edit. Nothing changed.",
+        "reverted": "The edit could not be verified and was reverted.",
+        "stale": "The canvas changed before this edit landed. Try again.",
+        "unmirrored": "The edit was reverted, but the canvas view may be out of date.",
+        "unverified": "The edit could not be verified or reverted. Check the canvas before continuing.",
+        "refusedNotSiblings": "Only items that share the same group can be grouped together.",
+        "refusedDepth": "Groups can nest at most 10 levels deep.",
+        "refusedCycle": "A group can't be moved into itself.",
+        "refusedNodeLimit": "The canvas can't hold more than 10,000 layers and groups."
+      },
       "surface": "Canvas surface",
       "toolOptions": {
-        "applyTransform": "Apply",
-        "aspectRatio": "Aspect ratio",
         "brushColor": "Brush color",
         "brushSize": "Brush size",
-        "cancelTransform": "Cancel",
+        "hardness": "Hardness",
+        "strokePreview": "Stroke preview",
         "deselect": "Deselect",
         "eraseSelection": "Erase",
         "eraserSize": "Eraser size",
@@ -2302,11 +2451,13 @@
         "frameWidth": "W",
         "gradientAngle": "Angle",
         "gradientEdit": "Edit gradient",
-        "gradientEnd": "End",
-        "gradientKind": "Gradient type",
         "gradientLinear": "Linear",
         "gradientRadial": "Radial",
-        "gradientStart": "Start",
+        "gradientAddStop": "Add stop",
+        "gradientRemoveStop": "Remove stop",
+        "gradientStopAt": "Gradient stop at {{percent}}%",
+        "gradientStopColor": "Stop color",
+        "gradientStops": "Stops",
         "invertSelection": "Invert",
         "lassoFreehand": "Freehand",
         "lassoHint": "Draw a shape to select. Shift adds, Alt subtracts.",
@@ -2314,7 +2465,6 @@
         "lassoPolygonHint": "Click to place points. Double-click, Enter, or click the first point to close.",
         "lassoShape": "Lasso mode",
         "liftSelectionToLayer": "New layer",
-        "lockAspect": "Lock aspect ratio",
         "marqueeHint": "Drag to select a region. Shift constrains, Alt draws from centre.",
         "marqueeKind": "Marquee shape",
         "movePosition": "Move layer",
@@ -2326,6 +2476,7 @@
         "rotation": "Rotation",
         "scaleHeight": "H %",
         "scaleWidth": "W %",
+        "selectionActions": "Actions",
         "selectionAdd": "Add",
         "selectionIntersect": "Intersect",
         "selectionMode": "Selection mode",
@@ -2336,8 +2487,9 @@
         "shapeEllipse": "Ellipse",
         "shapeFill": "Fill",
         "shapeHint": "Drag to draw a shape.",
-        "shapeKind": "Shape type",
         "shapeRect": "Rectangle",
+        "shapeStar": "Star",
+        "shapeTriangle": "Triangle",
         "shapeStroke": "Stroke",
         "shapeStrokeWidth": "Stroke width",
         "size": "Size",
@@ -2349,17 +2501,20 @@
         "textFont": "Font",
         "textLineHeight": "Line height",
         "textSize": "Font size",
-        "textWeight": "Weight"
+        "textWeight": "Weight",
+        "gradientPairPreset": "Foreground to background preset"
       },
       "tools": {
         "bbox": "Generation frame",
         "brush": "Brush",
+        "colorPicker": "Color picker",
         "eraser": "Eraser",
         "gradient": "Gradient",
         "label": "Tools",
         "lasso": "Lasso select",
         "marquee": "Marquee select",
         "move": "Move",
+        "sam": "Select object",
         "shape": "Shape",
         "text": "Text",
         "transform": "Transform",
@@ -2426,17 +2581,11 @@
     "layers": {
       "actions": {
         "addControlLayer": "Control layer",
-        "addDenoiseLimit": "Add denoise limit",
-        "addImageNoise": "Add image noise",
         "addInpaintMask": "Inpaint mask",
-        "addNegativePrompt": "Add negative prompt",
-        "addPositivePrompt": "Add positive prompt",
         "addRasterLayer": "Raster layer",
-        "addReferenceImage": "Add reference image",
         "addRegionalGuidance": "Regional guidance",
         "addRegionalReferenceImage": "Regional reference image",
         "actionFailed": "Layer action failed",
-        "adjustments": "Adjustments",
         "blendMode": "Blend mode",
         "busy": "The canvas is busy. Try again when the current action finishes.",
         "copyFailed": "The layer could not be copied.",
@@ -2461,30 +2610,33 @@
         "disableAutoNegative": "Disable auto-negative",
         "disableTransparencyEffect": "Disable transparent preview",
         "disabled": "Enable the layer before using this action.",
-        "disableSelected": "Disable selected layers",
         "duplicate": "Duplicate layer",
         "duplicateSelected": "Duplicate selected layers",
         "empty": "This layer has no content.",
         "enableAutoNegative": "Enable auto-negative",
-        "enableSelected": "Enable selected layers",
         "enableTransparencyEffect": "Enable transparent preview",
         "exclude": "Exclude layer below",
         "extractMaskedArea": "Extract masked area",
         "fitToBbox": "Fit to bbox",
-        "hide": "Hide layer",
+        "disableLayer": "Disable layer",
+        "enableLayer": "Enable layer",
+        "disableSelected": "Disable selected",
+        "enableSelected": "Enable selected",
+        "disableGroup": "Disable group",
+        "enableGroup": "Enable group",
+        "hideLayer": "Hide layer",
+        "showLayer": "Show layer",
+        "hideSelectedLayers": "Hide selected",
+        "showSelectedLayers": "Show selected",
         "intersect": "Intersect with layer below",
         "mergeSelected": "Merge selected layers",
         "lock": "Lock layer",
-        "lockSelected": "Lock selected layers",
+        "lockSelected": "Lock selected",
         "locked": "Unlock the layer before using this action.",
         "mergeDown": "Merge down",
         "missing": "The layer no longer exists.",
         "moveBackward": "Move backward",
         "moveForward": "Move forward",
-        "moveSelectedBackward": "Move selected layers backward",
-        "moveSelectedForward": "Move selected layers forward",
-        "moveSelectedToBack": "Move selected layers to back",
-        "moveSelectedToFront": "Move selected layers to front",
         "moveToBack": "Move to back",
         "moveToFront": "Move to front",
         "notReady": "The layer content is still loading. Try again shortly.",
@@ -2495,19 +2647,39 @@
         "runWorkflow": "Run workflow",
         "saveLayerToAssets": "Save layer to assets",
         "select": "Select {{name}}",
-        "selectedCount_one": "{{count}} layer selected",
-        "selectedCount_other": "{{count}} layers selected",
         "selectObject": "Select object",
-        "show": "Show layer",
         "toggleAutoNegative": "Toggle auto-negative",
-        "toggleHidden": "Show/hide on canvas",
+        "toggleHidden": "Show/hide layer",
         "toggleLock": "Toggle lock",
         "toggleTransparencyEffect": "Toggle transparent preview",
-        "toggleVisibility": "Toggle visibility",
+        "toggleVisibility": "Enable/disable",
         "transform": "Transform",
         "unsupported": "This action is not supported for this layer.",
         "unlock": "Unlock layer",
-        "unlockSelected": "Unlock selected layers"
+        "unlockSelected": "Unlock selected",
+        "group": "Group layers",
+        "groupSelected": "Group selected layers",
+        "ungroup": "Ungroup",
+        "newGroup": "New group",
+        "expandGroup": "Expand group",
+        "collapseGroup": "Collapse group",
+        "indent": "Move into the group above",
+        "outdent": "Move out of the group",
+        "groupLocked": "Locked by a group",
+        "groupDisabled": "Disabled by a group",
+        "groupHidden": "Hidden by a group",
+        "duplicateCount_one": "Duplicate layer",
+        "duplicateCount_other": "Duplicate {{count}} layers",
+        "groupCount_one": "Group layer",
+        "groupCount_other": "Group {{count}} layers",
+        "deleteCount_one": "Delete layer",
+        "deleteCount_other": "Delete {{count}} layers",
+        "toggleActive": "Enable/disable layer",
+        "hideModifiers": "Hide modifiers",
+        "showModifiers": "Show modifiers",
+        "addDenoiseLimit": "Add denoise limit",
+        "addNoise": "Add noise",
+        "addRegenerateRegion": "Add regenerate region"
       },
       "control": {
         "apply": "Apply",
@@ -2633,8 +2805,16 @@
         "weight": "Weight"
       },
       "rasterFilter": {
-        "autoProcess": "Auto",
-        "autoProcessDescription": "Process automatically when settings change",
+        "applyAs": "Apply as",
+        "autoProcess": "Process automatically",
+        "categories": {
+          "edge": "Edge detection",
+          "depth": "Depth & normal",
+          "pose": "Pose & face",
+          "color": "Color & tone",
+          "noise": "Blur & noise",
+          "upscale": "Upscale"
+        },
         "busy": "Finish the current canvas interaction, then try again.",
         "cancel": "Cancel",
         "commitFailure": "The filtered pixels could not be committed: {{message}}",
@@ -2741,16 +2921,27 @@
         "brightness": "Brightness",
         "channel": "Channel",
         "channels": {
-          "b": "Blue",
+          "rgb": "RGB",
+          "r": "Red",
           "g": "Green",
-          "r": "Red"
+          "b": "Blue"
         },
         "contrast": "Contrast",
         "curves": "Curves",
+        "exposure": "Exposure",
         "curvesHint": "Drag points to bend the curve. Double-click empty space to add a point; double-click a point to remove it.",
-        "reset": "Reset adjustments",
+        "levels": "Levels",
+        "inputLevels": "Input levels",
+        "inputBlack": "Input black point",
+        "inputWhite": "Input white point",
+        "gamma": "Gamma",
+        "outputLevels": "Output levels",
+        "outputBlack": "Output black point",
+        "outputWhite": "Output white point",
+        "hue": "Hue",
+        "invert": "Invert",
+        "invertHint": "Inverts the layer’s colors. This adjustment has no options.",
         "saturation": "Saturation",
-        "title": "Adjustments",
         "transparencyLock": "Lock transparency"
       },
       "blendModes": {
@@ -2771,8 +2962,6 @@
         "screen": "Screen",
         "soft-light": "Soft light"
       },
-      "denoisingStrength": "Denoising strength",
-      "denoisingStrengthHelp": "How much the canvas image is changed. Lower keeps more of the original; higher allows bigger changes.",
       "empty": "No layers yet. Add a layer or paint on the canvas to get started.",
       "groupActions": {
         "collapse": "Collapse group",
@@ -2791,8 +2980,8 @@
         "mergeVisible": "Merge visible",
         "new": "New layer",
         "showAll": "Show all",
-        "toggleVisibility": "Toggle group visibility",
-        "toggleHidden": "Show/hide all on canvas"
+        "toggleVisibility": "Enable/disable group",
+        "toggleHidden": "Show/hide group"
       },
       "groups": {
         "control": "Control Layers",
@@ -2814,22 +3003,32 @@
           "horizontal": "Horizontal",
           "solid": "Solid",
           "vertical": "Vertical"
-        }
+        },
+        "editInColorPane": "Edit tint in the Color pane"
       },
       "menuGroups": {
         "layers": "Layers",
         "regional": "Regional"
       },
       "menu": {
-        "add": "Add",
-        "addModifiers": "Add modifiers",
         "arrange": "Arrange",
         "booleanOperations": "Boolean operations",
         "convertTo": "Convert to",
-        "copyTo": "Copy to"
+        "copyTo": "Copy to",
+        "addAdjustment": "Add adjustment",
+        "colorLabel": "Color label"
+      },
+      "labels": {
+        "none": "None",
+        "red": "Red",
+        "orange": "Orange",
+        "yellow": "Yellow",
+        "green": "Green",
+        "blue": "Blue",
+        "violet": "Violet",
+        "gray": "Gray"
       },
       "options": "Layer options",
-      "properties": "Layer properties",
       "regionalGuidance": {
         "addReferenceImage": "Add reference image",
         "autoNegative": "Auto-Negative",
@@ -2863,7 +3062,95 @@
         "image": "Image",
         "inpaint_mask": "Inpaint",
         "paint": "Paint",
-        "regional_guidance": "Region"
+        "gradient": "Gradient",
+        "shape": "Shape",
+        "text": "Text",
+        "regional_guidance": "Region",
+        "group": "Group"
+      },
+      "groupSummary_one": "{{count}} layer",
+      "groupSummary_other": "{{count}} layers",
+      "groupEmpty": "Empty group",
+      "groupSelectedHint": "Select a layer inside this group to paint.",
+      "tree": "Layer tree",
+      "summary": {
+        "referenceImages_one": "{{count}} reference image",
+        "referenceImages_other": "{{count}} reference images",
+        "denoiseLimit": "Denoise ≤ {{value}}%",
+        "noise": "Noise {{value}}%"
+      },
+      "footer": {
+        "filter": "Filter layers",
+        "degraded": "Large document: thumbnails and drag reordering are off."
+      },
+      "dropRefused": "Can't drop here: {{reason}}",
+      "panes": {
+        "collapse": "Collapse editor panes",
+        "expand": "Expand editor panes",
+        "resize": "Resize editor panes",
+        "tabs": "Layer editor panes"
+      },
+      "colorPane": {
+        "addToPalette": "Add current color to palette",
+        "background": "Background color",
+        "channels": {
+          "blue": "Blue",
+          "brightness": "Brightness",
+          "green": "Green",
+          "hex": "Hex color",
+          "hue": "Hue",
+          "lightness": "Lightness",
+          "red": "Red",
+          "saturation": "Saturation"
+        },
+        "collapse": "Collapse color pane",
+        "expand": "Expand color pane",
+        "foreground": "Foreground color",
+        "format": "Color value format",
+        "palette": "Project palette",
+        "pickerModeBox": "Switch to box picker",
+        "pickerModeWheel": "Switch to wheel picker",
+        "recents": "Recent colors",
+        "removeSwatchHint": "{{color}} — right-click or press Delete to remove",
+        "resize": "Resize color pane",
+        "swatches": "Swatches",
+        "tabs": "Color panes",
+        "maskTint": "Mask tint"
+      },
+      "historyPane": {
+        "count_one": "{{count}} step",
+        "count_other": "{{count}} steps",
+        "empty": "No edits yet.",
+        "steps": "Edit history"
+      },
+      "overviewPane": {
+        "pan": "Pan the canvas view"
+      },
+      "treeTabs": "Layer panel views",
+      "modifiers": {
+        "disable": "Disable",
+        "enable": "Enable",
+        "parentDisabled": "Layer is disabled",
+        "toggleActive": "Enable/disable",
+        "denoise": "Denoise limit",
+        "denoiseHelp": "Caps how strongly generation may repaint the masked area.",
+        "noise": "Noise",
+        "regenerateRegion": "Regenerate region",
+        "removeRegion": "Remove regenerate region",
+        "regionHint": "Shows this layer's content as a live inpaint mask: everything on the layer, now and as you keep editing it, marks its area to regenerate while enabled.",
+        "noiseHelp": "Adds noise inside the masked area before generation.",
+        "removeDenoise": "Remove denoise limit",
+        "removeNoise": "Remove noise",
+        "brightnessContrast": "Brightness/Contrast",
+        "duplicateAdjustment": "Duplicate adjustment",
+        "renameAdjustment": "Rename adjustment",
+        "renameRegion": "Rename region",
+        "moveDown": "Move down",
+        "moveUp": "Move up",
+        "removeAdjustment": "Remove adjustment",
+        "reorderAdjustment": "Reorder adjustment",
+        "moveReferenceImage": "Move reference image",
+        "moveToLayer": "Move to “{{name}}”"
       }
     },
     "gallery": {
@@ -3041,7 +3328,7 @@
       "uploadSuccessTitle_other": "Uploaded {{count}} files",
       "uploadSummary": "{{images}} and {{videos}} uploaded to {{board}}. {{failed}} failed.",
       "uploadsUnavailableForDateBoards": "Uploads are unavailable for date boards",
-      "uploadUnsupported": "No supported media files to upload (PNG, JPEG, WebP, or MP4).",
+      "uploadUnsupported": "No supported media files to upload (PNG, JPEG, or WebP images; video files; or audio files).",
       "videoCount_one": "{{count}} video",
       "videoCount_other": "{{count}} videos",
       "windowAnchored": "Showing this board from item {{index}}.",
@@ -3118,9 +3405,12 @@
       "removeFrame": "Remove",
       "replaceClip": "Replace the initial video",
       "replaceFrame": "Replace the frame image",
+      "trim": "Trim",
       "trimEnd": "End Frame",
+      "trimEndShort": "End",
       "trimHelp": "The kept range of the source clip. The extension continues from the end frame.",
       "trimStart": "Start Frame",
+      "trimStartShort": "Start",
       "unsupportedImageFile": "Please choose a PNG, JPEG, or WebP image.",
       "unsupportedVideoFile": "Please choose a video file.",
       "uploadClip": "Upload a video",

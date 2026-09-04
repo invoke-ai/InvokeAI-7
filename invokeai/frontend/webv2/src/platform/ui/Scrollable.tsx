@@ -6,6 +6,7 @@ import { useRef } from 'react';
 
 type ScrollAreaRootProps = ComponentProps<typeof ScrollArea.Root>;
 type ScrollAreaContentProps = ComponentProps<typeof ScrollArea.Content>;
+type ScrollAreaViewportProps = ComponentProps<typeof ScrollArea.Viewport>;
 
 /**
  * zag pins `min-width: fit-content` *inline* on every scroll-area content box,
@@ -29,6 +30,7 @@ export const Scrollable = ({
   contentProps,
   label,
   orientation = 'vertical',
+  viewportProps,
   viewportRef,
   ...rootProps
 }: ScrollAreaRootProps & {
@@ -39,6 +41,8 @@ export const Scrollable = ({
   label?: string;
   /** Scroll axis; the scrollbar and content sizing follow it. Defaults to vertical. */
   orientation?: 'horizontal' | 'vertical';
+  /** Extra props for the scrolling viewport itself, e.g. scroll/focus handlers. */
+  viewportProps?: ScrollAreaViewportProps;
   /** The scrolling element itself — what a virtualizer needs to observe. */
   viewportRef?: RefObject<HTMLDivElement | null>;
 }) => {
@@ -56,9 +60,10 @@ export const Scrollable = ({
       <ScrollArea.Viewport
         aria-label={label}
         h="full"
-        ref={resolvedViewportRef}
         role={label ? 'region' : undefined}
         w="full"
+        {...viewportProps}
+        ref={resolvedViewportRef}
       >
         <ScrollArea.Content
           style={orientation === 'horizontal' ? undefined : VERTICAL_CONTENT_STYLE}

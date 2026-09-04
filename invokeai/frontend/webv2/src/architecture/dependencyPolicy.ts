@@ -154,6 +154,48 @@ const isFeatureCoreForbiddenDependency = (specifier: string, target: string | nu
       /\/(?:data|ui)(?:\/|$)/.test(target))
   );
 
+/** The reducer shares the document seam's stack, anchor and repair helpers instead of the public API. */
+const CANVAS_REDUCER = 'workbench/canvasProjectMutations.ts';
+const REDUCER_DOCUMENT_MODULES = [
+  'workbench/canvas-engine/document/documentIndex',
+  'workbench/canvas-engine/document/documentTree',
+  'workbench/canvas-engine/document/insertionAnchors',
+  'workbench/canvas-engine/document/layerStacks',
+  'workbench/canvas-engine/document/selectionRepair',
+];
+/** The loader repairs a persisted selection at ingress with the seam's own repair. */
+const CANVAS_LOADER = 'workbench/canvasMigration.ts';
+const LOADER_DOCUMENT_MODULES = ['workbench/canvas-engine/document/selectionRepair'];
+
+const isSeamAllowance = (sourcePath: string, target: string): boolean =>
+  (sourcePath === CANVAS_REDUCER && REDUCER_DOCUMENT_MODULES.includes(target)) ||
+  (sourcePath === CANVAS_LOADER && LOADER_DOCUMENT_MODULES.includes(target));
+
+const DOCUMENT_MODEL_ROOT = 'workbench/canvas-engine/document-model/';
+const DOCUMENT_MODEL_DEPENDENCY_ROOTS = [DOCUMENT_MODEL_ROOT, 'workbench/canvas-engine/math/'];
+const DOCUMENT_MODEL_DEPENDENCY_MODULES = [
+  'workbench/canvas-engine/contracts',
+  'workbench/canvas-engine/types',
+  'workbench/canvas-engine/mutationContracts',
+  'workbench/canvas-engine/document/commandRefusal',
+  'workbench/canvas-engine/document/documentIndex',
+  'workbench/canvas-engine/document/documentTree',
+  'workbench/canvas-engine/document/insertionAnchors',
+  'workbench/canvas-engine/document/layerEligibility',
+  'workbench/canvas-engine/document/layerStacks',
+  'workbench/canvas-engine/document/selectionRepair',
+];
+
+/** Production sources: everything the architecture rules scan; tests, type tests and stories are not. */
+export const isProductionSourcePath = (path: string): boolean =>
+  !/\.(?:test|browser\.test|type-test|stories)\.[^.]+$/.test(path);
+
+/** The pure document model may only reach pure document facts, math, and contracts. */
+const isDocumentModelDependency = (target: string | null): boolean =>
+  target !== null &&
+  (DOCUMENT_MODEL_DEPENDENCY_ROOTS.some((root) => target.startsWith(root)) ||
+    DOCUMENT_MODEL_DEPENDENCY_MODULES.includes(target));
+
 export const checkDependency = (source: string, specifier: string): DependencyViolation[] => {
   const sourcePath = normalizePath(source).replace(/^src\//, '');
   const target = resolveImportPath(source, specifier);
@@ -168,6 +210,14 @@ export const checkDependency = (source: string, specifier: string): DependencyVi
     isFeatureCoreForbiddenDependency(specifier, target)
   ) {
     add('feature-core-purity');
+  }
+
+  if (
+    sourcePath.startsWith(DOCUMENT_MODEL_ROOT) &&
+    isProductionSourcePath(sourcePath) &&
+    !isDocumentModelDependency(target)
+  ) {
+    add('document-model-purity');
   }
 
   if (!target) {
@@ -199,7 +249,7 @@ export const checkDependency = (source: string, specifier: string): DependencyVi
     add('feature-private-interface');
   }
 
-  if (!isCanvasOwnedPath(sourcePath) && isCanvasPrivatePath(target)) {
+  if (!isCanvasOwnedPath(sourcePath) && isCanvasPrivatePath(target) && !isSeamAllowance(sourcePath, target)) {
     add('canvas-private-interface');
   }
 

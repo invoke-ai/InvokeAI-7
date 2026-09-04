@@ -24,6 +24,8 @@ import type { CanvasRasterLayerContractV2 } from '@workbench/canvas-engine/contr
 import type { CanvasProjectMutation } from '@workbench/canvas-engine/mutationContracts';
 import type { Rect, Vec2 } from '@workbench/canvas-engine/types';
 
+import { getDocumentLeaves } from '@workbench/canvas-engine/document/documentIndex';
+
 import type { Tool, ToolContext } from './tool';
 
 /** Bit for the primary (usually left) mouse button in `PointerEvent.buttons`. */
@@ -129,19 +131,22 @@ export const createShapeTool = (): Tool => {
       }
 
       const options = ctx.stores.shapeOptions.get();
+      // The active pair, resolved now: the new shape gets explicit document
+      // colors; later pair edits never rewrite them.
+      const pair = ctx.stores.colorPair.get();
       const layerId = ctx.createLayerId();
       const layer: CanvasRasterLayerContractV2 = {
         blendMode: 'normal',
         id: layerId,
         isEnabled: true,
         isLocked: false,
-        name: `Shape ${doc.layers.length + 1}`,
+        name: `Shape ${getDocumentLeaves(doc).length + 1}`,
         opacity: 1,
         source: {
-          fill: options.fill,
+          fill: options.fillEnabled ? pair.foreground : null,
           height: rect.height,
           kind: options.kind,
-          stroke: options.stroke,
+          stroke: options.strokeEnabled ? pair.background : null,
           strokeWidth: options.strokeWidth,
           type: 'shape',
           width: rect.width,
@@ -150,7 +155,11 @@ export const createShapeTool = (): Tool => {
         type: 'raster',
       };
 
-      const forward: CanvasProjectMutation = { index: 0, layer, type: 'addCanvasLayer' };
+      const forward: CanvasProjectMutation = {
+        anchor: ctx.captureInsertionAnchor('raster', doc.selectedLayerId),
+        layer,
+        type: 'addCanvasLayer',
+      };
       const inverse: CanvasProjectMutation = { ids: [layerId], type: 'removeCanvasLayers' };
       ctx.commitStructural('Add shape', forward, inverse);
       clearPreview(ctx);

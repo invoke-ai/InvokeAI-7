@@ -15,7 +15,14 @@ vi.mock('@platform/transport/http', async (importOriginal) => ({
   apiFetchJson: transport.apiFetchJson,
 }));
 
-import { createProjectSettled, ProjectCreateAbsentError } from './api';
+import {
+  createProject,
+  createProjectSettled,
+  getProject,
+  isProjectCanvasSchemaUnsupportedError,
+  ProjectCreateAbsentError,
+  updateProject,
+} from './api';
 
 beforeEach(() => {
   transport.apiFetch.mockReset();
@@ -31,7 +38,11 @@ beforeEach(() => {
  */
 describe('createProjectSettled', () => {
   const request = { data: {}, name: 'Imported', project_id: 'project-1' };
-  const post = () => ({ body: JSON.stringify(request), method: 'POST', signal: expect.anything() });
+  const post = () => ({
+    body: JSON.stringify({ ...request, max_canvas_schema_version: 3, minimum_canvas_schema_version: 3 }),
+    method: 'POST',
+    signal: expect.anything(),
+  });
 
   it('returns the record a create succeeded with', async () => {
     transport.apiFetchJson.mockResolvedValueOnce({ project_id: 'project-1' });
@@ -58,7 +69,11 @@ describe('createProjectSettled', () => {
     });
     expect(transport.apiFetchJson).toHaveBeenNthCalledWith(1, '/api/v1/projects/', post());
     expect(transport.apiFetchJson).toHaveBeenNthCalledWith(2, '/api/v1/projects/', post());
-    expect(transport.apiFetchJson).toHaveBeenNthCalledWith(3, '/api/v1/projects/project-1', expect.anything());
+    expect(transport.apiFetchJson).toHaveBeenNthCalledWith(
+      3,
+      '/api/v1/projects/project-1?max_canvas_schema_version=3',
+      expect.anything()
+    );
   });
 
   it('creates the project when the first attempt never landed', async () => {
@@ -118,5 +133,97 @@ describe('createProjectSettled', () => {
     });
 
     await expect(createProjectSettled(request, owner)).rejects.not.toBeInstanceOf(ProjectCreateAbsentError);
+  });
+});
+
+describe('canvas schema compatibility declarations', () => {
+  it('declares the supported schema on every document read', async () => {
+    transport.apiFetchJson.mockResolvedValueOnce({ project_id: 'project/one' });
+
+    await getProject('project/one');
+
+    expect(transport.apiFetchJson).toHaveBeenCalledWith('/api/v1/projects/project%2Fone?max_canvas_schema_version=3', {
+      signal: undefined,
+    });
+  });
+
+  it('declares both the written floor and supported maximum when creating', async () => {
+    transport.apiFetchJson.mockResolvedValueOnce({ project_id: 'project-1' });
+
+    await createProject({ data: {}, name: 'Project' });
+
+    expect(transport.apiFetchJson).toHaveBeenCalledWith('/api/v1/projects/', {
+      body: JSON.stringify({
+        data: {},
+        name: 'Project',
+        max_canvas_schema_version: 3,
+        minimum_canvas_schema_version: 3,
+      }),
+      method: 'POST',
+      signal: undefined,
+    });
+  });
+
+  it('sends a requested floor in the same update as the document', async () => {
+    transport.apiFetchJson.mockResolvedValueOnce({ project_id: 'project-1' });
+
+    await updateProject('project-1', {
+      data: { canvas: { version: 3 } },
+      expected_revision: 4,
+      minimum_canvas_schema_version: 3,
+      name: 'Project',
+    });
+
+    expect(transport.apiFetchJson).toHaveBeenCalledWith('/api/v1/projects/project-1', {
+      body: JSON.stringify({
+        data: { canvas: { version: 3 } },
+        expected_revision: 4,
+        minimum_canvas_schema_version: 3,
+        name: 'Project',
+        max_canvas_schema_version: 3,
+      }),
+      method: 'PUT',
+      signal: undefined,
+    });
+  });
+
+  it('recognizes server-side schema refusals without conflating them with revision conflicts', () => {
+    const refusal = new ApiError(
+      JSON.stringify({
+        detail: {
+          code: 'canvas_schema_unsupported',
+          max_canvas_schema_version: 3,
+          minimum_canvas_schema_version: 4,
+        },
+      }),
+      412
+    );
+
+    expect(isProjectCanvasSchemaUnsupportedError(refusal)).toBe(true);
+    expect(isProjectCanvasSchemaUnsupportedError(new ApiError('conflict', 409))).toBe(false);
+    expect(
+      isProjectCanvasSchemaUnsupportedError(
+        new ApiError(
+          JSON.stringify({
+            detail: { code: 'different_precondition', max_canvas_schema_version: 3, minimum_canvas_schema_version: 4 },
+          }),
+          412
+        )
+      )
+    ).toBe(false);
+    expect(
+      isProjectCanvasSchemaUnsupportedError(
+        new ApiError(
+          JSON.stringify({
+            detail: {
+              code: 'canvas_schema_unsupported',
+              max_canvas_schema_version: 3,
+              minimum_canvas_schema_version: 3.5,
+            },
+          }),
+          412
+        )
+      )
+    ).toBe(false);
   });
 });

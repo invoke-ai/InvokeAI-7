@@ -1,199 +1,258 @@
-import type { NumberInput as ChakraNumberInput, SelectValueChangeDetails } from '@chakra-ui/react';
 import type { CanvasLayerSourceContract, ShapeToolOptions } from '@workbench/canvas-engine/api';
+import type { ToolFormProps, ToolPropertyForm } from '@workbench/widgets/canvas/tool-presentation/toolFormContracts';
 
-import { createListCollection, HStack, NumberInput, Text } from '@chakra-ui/react';
-import { ColorPicker, Select, ToggleIconButton } from '@platform/ui';
-import { MAX_SHAPE_STROKE_WIDTH } from '@workbench/canvas-engine/api';
+import { Text } from '@chakra-ui/react';
+import { ToggleIconButton } from '@platform/ui/Button';
+import { ColorPicker } from '@platform/ui/ColorPicker';
+import { MAX_SHAPE_STROKE_WIDTH, getDocumentLayer } from '@workbench/canvas-engine/api';
+import { useActiveColorCommands, useActiveColorPair } from '@workbench/widgets/canvas/color-system/useActiveColors';
 import { useShapeOptions } from '@workbench/widgets/canvas/engineStoreHooks';
+import {
+  FormNumberField,
+  FormSlider,
+  useNumberCommit,
+  useSliderGesture,
+} from '@workbench/widgets/canvas/tool-presentation/FormControls';
+import {
+  EditTargetChip,
+  PropertyControlRow,
+  PropertySegmentedRow,
+} from '@workbench/widgets/canvas/tool-presentation/PropertyPrimitives';
 import { useColorSampler } from '@workbench/widgets/canvas/useColorSampler';
+import { usePreparedCommit } from '@workbench/widgets/canvas/useStructuralCommit';
 import { useActiveProjectSelector } from '@workbench/WorkbenchContext';
 import { PaintBucketIcon, SquareIcon } from 'lucide-react';
 import { useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-
-import type { ToolOptionsComponentProps } from './ToolOptionsBar';
 
 type ShapeSource = Extract<CanvasLayerSourceContract, { type: 'shape' }>;
 type ShapeKind = ShapeToolOptions['kind'];
 
 interface SelectedShape {
   id: string;
+  name: string;
   source: ShapeSource;
 }
 
-/** Fallback color used when re-enabling a `none` fill/stroke. */
 const FALLBACK_COLOR = '#000000';
 
-const SELECT_POSITIONING = { placement: 'top-start', sameWidth: false } as const;
-const SELECT_TRIGGER_PROPS = { minW: '6rem' } as const;
-
 /**
- * Shape tool options: kind (rect/ellipse), fill color (+ none), stroke color
- * (+ none) and stroke width. Edits set the defaults for the next created shape
- * AND, when a shape layer is selected, apply to it — colors commit ONE history
- * entry on interaction end (the ColorPicker popover shows the live color while
- * dragging; the canvas updates on release), discrete edits commit immediately.
+ * Displayed values follow the selected shape layer, else the creation defaults
+ * — kind/width/enablement from the tool options and colors from the active
+ * pair (fill = foreground, stroke = background). A selected shape's edits
+ * commit to the document (colors record one history entry on release); with
+ * nothing selected the color chips edit the pair itself, so there is no second
+ * global shape color.
  */
-export const ShapeOptions = ({ engine }: ToolOptionsComponentProps) => {
+const useShapeEditor = (engine: ToolFormProps['engine']) => {
   const { t } = useTranslation();
+  const commitPrepared = usePreparedCommit(engine);
   const options = useShapeOptions(engine);
-  const sampleColor = useColorSampler(engine);
-
+  const pair = useActiveColorPair();
+  const colorCommands = useActiveColorCommands();
   const selected = useActiveProjectSelector(
     (project): SelectedShape | null => {
       const { document } = project.canvas;
-      const layer = document.selectedLayerId
-        ? document.layers.find((entry) => entry.id === document.selectedLayerId)
-        : undefined;
-      if (layer && layer.type === 'raster' && layer.source.type === 'shape') {
-        return { id: layer.id, source: layer.source };
-      }
-      return null;
+      const layer = document.selectedLayerId ? getDocumentLayer(document, document.selectedLayerId) : undefined;
+      return layer && layer.type === 'raster' && layer.source.type === 'shape'
+        ? { id: layer.id, name: layer.name, source: layer.source }
+        : null;
     },
-    // Re-render on a selection change or a source-reference change (the reducer
-    // replaces the source object on every edit).
-    (a, b) => a?.id === b?.id && a?.source === b?.source
+    (a, b) => a?.id === b?.id && a?.name === b?.name && a?.source === b?.source
   );
-
-  // Displayed values track the selected shape layer, or the tool defaults.
-  const kind: ShapeKind = selected ? (selected.source.kind === 'ellipse' ? 'ellipse' : 'rect') : options.kind;
-  const fill = selected ? selected.source.fill : options.fill;
-  const stroke = selected ? selected.source.stroke : options.stroke;
+  // Polygon shapes (no tool kind) display as rect; every parametric kind passes through.
+  const kind: ShapeKind = selected
+    ? selected.source.kind === 'polygon'
+      ? 'rect'
+      : selected.source.kind
+    : options.kind;
+  const fill = selected ? selected.source.fill : options.fillEnabled ? pair.foreground : null;
+  const stroke = selected ? selected.source.stroke : options.strokeEnabled ? pair.background : null;
   const strokeWidth = selected ? selected.source.strokeWidth : options.strokeWidth;
 
-  const kindCollection = useMemo(
-    () =>
-      createListCollection<{ label: string; value: ShapeKind }>({
-        items: [
-          { label: t('widgets.canvas.toolOptions.shapeRect'), value: 'rect' },
-          { label: t('widgets.canvas.toolOptions.shapeEllipse'), value: 'ellipse' },
-        ],
-      }),
+  const commitSource = useCallback(
+    (patch: Partial<ShapeSource>) => {
+      if (!selected) {
+        return;
+      }
+      const after: ShapeSource = { ...selected.source, ...patch };
+      commitPrepared(t('widgets.canvas.toolOptions.shapeEdit'), (model) =>
+        model.prepare({ id: selected.id, source: after, type: 'patch-source' })
+      );
+    },
+    [commitPrepared, selected, t]
+  );
+  const setOptions = useCallback(
+    (patch: Partial<ShapeToolOptions>) => {
+      engine.interaction.set('shapeOptions', { ...options, ...patch });
+    },
+    [engine, options]
+  );
+  const setKind = useCallback(
+    (next: ShapeKind) => {
+      setOptions({ kind: next });
+      commitSource({ kind: next });
+    },
+    [commitSource, setOptions]
+  );
+  const previewStrokeWidth = useCallback((value: number) => setOptions({ strokeWidth: value }), [setOptions]);
+  const setStrokeWidth = useCallback(
+    (value: number) => {
+      setOptions({ strokeWidth: value });
+      commitSource({ strokeWidth: value });
+    },
+    [commitSource, setOptions]
+  );
+  const setFillEnabled = useCallback(
+    (checked: boolean) => {
+      setOptions({ fillEnabled: checked });
+      commitSource({ fill: checked ? (selected?.source.fill ?? pair.foreground) : null });
+    },
+    [commitSource, pair.foreground, selected, setOptions]
+  );
+  const setStrokeEnabled = useCallback(
+    (checked: boolean) => {
+      setOptions({ strokeEnabled: checked });
+      commitSource({ stroke: checked ? (selected?.source.stroke ?? pair.background) : null });
+    },
+    [commitSource, pair.background, selected, setOptions]
+  );
+  const setFillColor = useCallback(
+    (hex: string, commit: boolean) => {
+      if (selected) {
+        if (commit) {
+          commitSource({ fill: hex });
+        }
+        return;
+      }
+      colorCommands.setPairColor('foreground', hex);
+    },
+    [colorCommands, commitSource, selected]
+  );
+  const setStrokeColor = useCallback(
+    (hex: string, commit: boolean) => {
+      if (selected) {
+        if (commit) {
+          commitSource({ stroke: hex });
+        }
+        return;
+      }
+      colorCommands.setPairColor('background', hex);
+    },
+    [colorCommands, commitSource, selected]
+  );
+  return {
+    fill,
+    kind,
+    selectedName: selected?.name ?? null,
+    setFillColor,
+    setFillEnabled,
+    setKind,
+    previewStrokeWidth,
+    setStrokeColor,
+    setStrokeEnabled,
+    setStrokeWidth,
+    stroke,
+    strokeWidth,
+  };
+};
+
+const ShapeSettings = ({ engine }: ToolFormProps) => {
+  const { t } = useTranslation();
+  const editor = useShapeEditor(engine);
+  const sampleColor = useColorSampler(engine);
+  const kindOptions = useMemo(
+    () => [
+      { label: t('widgets.canvas.toolOptions.shapeRect'), value: 'rect' as const },
+      { label: t('widgets.canvas.toolOptions.shapeEllipse'), value: 'ellipse' as const },
+      { label: t('widgets.canvas.toolOptions.shapeTriangle'), value: 'triangle' as const },
+      { label: t('widgets.canvas.toolOptions.shapeStar'), value: 'star' as const },
+    ],
     [t]
   );
-  const kindValue = useMemo(() => [kind], [kind]);
-
-  /**
-   * Applies an options patch: always updates the defaults store; when a shape
-   * layer is selected and `commit` is set, records one history entry on it.
-   */
-  const applyEdit = useCallback(
-    (patch: Partial<ShapeToolOptions>, commit: boolean) => {
-      engine.interaction.set('shapeOptions', { fill, kind, stroke, strokeWidth, ...patch });
-      if (selected && commit) {
-        const before = selected.source;
-        const after: ShapeSource = { ...before, ...patch };
-        engine.layers.commitStructural(
-          t('widgets.canvas.toolOptions.shapeEdit'),
-          { id: selected.id, source: after, type: 'updateCanvasLayerSource' },
-          { id: selected.id, source: before, type: 'updateCanvasLayerSource' }
-        );
-      }
-    },
-    [engine, fill, kind, stroke, strokeWidth, selected, t]
+  const onFillChange = useCallback((hex: string) => editor.setFillColor(hex, false), [editor]);
+  const onFillChangeEnd = useCallback((hex: string) => editor.setFillColor(hex, true), [editor]);
+  const onStrokeChange = useCallback((hex: string) => editor.setStrokeColor(hex, false), [editor]);
+  const onStrokeChangeEnd = useCallback((hex: string) => editor.setStrokeColor(hex, true), [editor]);
+  // Slider ticks preview through the options store; ONE document commit lands on release.
+  const previewWidth = useCallback(
+    (value: number) => editor.previewStrokeWidth(Math.max(0, Math.round(value))),
+    [editor]
   );
-
-  const onKindChange = useCallback(
-    ({ value }: SelectValueChangeDetails<{ label: string; value: ShapeKind }>) => {
-      const next = value[0] as ShapeKind | undefined;
-      if (next && next !== kind) {
-        applyEdit({ kind: next }, true);
-      }
-    },
-    [applyEdit, kind]
-  );
-
-  // Fill: a toggle for none, plus a color picker (live store on drag, one commit on end).
-  const onFillToggle = useCallback(
-    (checked: boolean) => applyEdit({ fill: checked ? (fill ?? FALLBACK_COLOR) : null }, true),
-    [applyEdit, fill]
-  );
-  const onFillChange = useCallback((hex: string) => applyEdit({ fill: hex }, false), [applyEdit]);
-  const onFillChangeEnd = useCallback((hex: string) => applyEdit({ fill: hex }, true), [applyEdit]);
-
-  const onStrokeToggle = useCallback(
-    (checked: boolean) => applyEdit({ stroke: checked ? (stroke ?? FALLBACK_COLOR) : null }, true),
-    [applyEdit, stroke]
-  );
-  const onStrokeChange = useCallback((hex: string) => applyEdit({ stroke: hex }, false), [applyEdit]);
-  const onStrokeChangeEnd = useCallback((hex: string) => applyEdit({ stroke: hex }, true), [applyEdit]);
-
-  const onStrokeWidthChange = useCallback(
-    ({ valueAsNumber }: ChakraNumberInput.ValueChangeDetails) => {
-      if (Number.isFinite(valueAsNumber)) {
-        applyEdit({ strokeWidth: Math.max(0, Math.round(valueAsNumber)) }, true);
-      }
-    },
-    [applyEdit]
-  );
-
+  const setWidth = useCallback((value: number) => editor.setStrokeWidth(Math.max(0, Math.round(value))), [editor]);
+  const widthGesture = useSliderGesture(Math.round(editor.strokeWidth), setWidth, previewWidth);
+  const onWidthCommit = useNumberCommit(setWidth);
   return (
-    <HStack align="center" gap="3">
-      <Select
-        aria-label={t('widgets.canvas.toolOptions.shapeKind')}
-        collection={kindCollection}
-        positioning={SELECT_POSITIONING}
-        size="xs"
-        triggerProps={SELECT_TRIGGER_PROPS}
-        value={kindValue}
-        valueText={t(
-          kind === 'ellipse' ? 'widgets.canvas.toolOptions.shapeEllipse' : 'widgets.canvas.toolOptions.shapeRect'
-        )}
-        onValueChange={onKindChange}
+    <>
+      <EditTargetChip layerName={editor.selectedName} />
+      <PropertySegmentedRow
+        label={t('widgets.properties.rows.kind')}
+        options={kindOptions}
+        value={editor.kind}
+        onValueChange={editor.setKind}
       />
-
-      <HStack align="center" gap="1.5">
+      {/* The chip stays enabled-looking but inert when the slot is off; the toggle owns enablement. */}
+      <PropertyControlRow label={t('widgets.canvas.toolOptions.shapeFill')}>
+        <ColorPicker
+          aria-label={t('widgets.canvas.toolOptions.shapeFill')}
+          disabled={editor.fill === null}
+          value={editor.fill ?? FALLBACK_COLOR}
+          onSampleColor={sampleColor}
+          onValueChange={onFillChange}
+          onValueChangeEnd={onFillChangeEnd}
+        />
         <ToggleIconButton
-          checked={fill !== null}
+          checked={editor.fill !== null}
           icon={PaintBucketIcon}
           label={t('widgets.canvas.toolOptions.shapeFill')}
-          onCheckedChange={onFillToggle}
+          onCheckedChange={editor.setFillEnabled}
         />
-        {fill !== null ? (
-          <ColorPicker
-            aria-label={t('widgets.canvas.toolOptions.shapeFill')}
-            value={fill}
-            onSampleColor={sampleColor}
-            onValueChange={onFillChange}
-            onValueChangeEnd={onFillChangeEnd}
-          />
-        ) : null}
-      </HStack>
-
-      <HStack align="center" gap="1.5">
+      </PropertyControlRow>
+      <PropertyControlRow label={t('widgets.canvas.toolOptions.shapeStroke')}>
+        <ColorPicker
+          aria-label={t('widgets.canvas.toolOptions.shapeStroke')}
+          disabled={editor.stroke === null}
+          value={editor.stroke ?? FALLBACK_COLOR}
+          onSampleColor={sampleColor}
+          onValueChange={onStrokeChange}
+          onValueChangeEnd={onStrokeChangeEnd}
+        />
         <ToggleIconButton
-          checked={stroke !== null}
+          checked={editor.stroke !== null}
           icon={SquareIcon}
           label={t('widgets.canvas.toolOptions.shapeStroke')}
-          onCheckedChange={onStrokeToggle}
+          onCheckedChange={editor.setStrokeEnabled}
         />
-        {stroke !== null ? (
-          <>
-            <ColorPicker
-              aria-label={t('widgets.canvas.toolOptions.shapeStroke')}
-              value={stroke}
-              onSampleColor={sampleColor}
-              onValueChange={onStrokeChange}
-              onValueChangeEnd={onStrokeChangeEnd}
-            />
-            <NumberInput.Root
-              max={MAX_SHAPE_STROKE_WIDTH}
-              min={0}
-              size="xs"
-              value={String(Math.round(strokeWidth))}
-              w="4.5rem"
-              onValueChange={onStrokeWidthChange}
-            >
-              <NumberInput.Control />
-              <NumberInput.Input aria-label={t('widgets.canvas.toolOptions.shapeStrokeWidth')} fontSize="xs" />
-            </NumberInput.Root>
-          </>
-        ) : null}
-      </HStack>
-
-      <Text color="fg.muted" flexShrink="0" fontSize="2xs">
+      </PropertyControlRow>
+      <PropertyControlRow label={t('widgets.properties.rows.width')}>
+        <FormSlider
+          aria-label={t('widgets.canvas.toolOptions.shapeStrokeWidth')}
+          disabled={editor.stroke === null}
+          max={MAX_SHAPE_STROKE_WIDTH}
+          min={0}
+          value={widthGesture.value}
+          onValueChange={widthGesture.onChange}
+          onValueChangeEnd={widthGesture.onChangeEnd}
+        />
+        <FormNumberField
+          aria-label={t('widgets.canvas.toolOptions.shapeStrokeWidth')}
+          disabled={editor.stroke === null}
+          max={MAX_SHAPE_STROKE_WIDTH}
+          min={0}
+          suffix="px"
+          value={String(Math.round(editor.strokeWidth))}
+          onValueCommit={onWidthCommit}
+        />
+      </PropertyControlRow>
+      <Text color="fg.muted" fontSize="2xs">
         {t('widgets.canvas.toolOptions.shapeHint')}
       </Text>
-    </HStack>
+    </>
   );
+};
+
+export const shapeForm: ToolPropertyForm = {
+  groups: [{ body: ShapeSettings, id: 'shape', labelKey: 'widgets.properties.groups.shape' }],
+  id: 'shape',
+  paintsLeaf: true,
 };

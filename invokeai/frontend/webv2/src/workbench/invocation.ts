@@ -22,6 +22,7 @@ import { getVideoWidgetValidationReasons, normalizeVideoWidgetValues } from '@fe
 import { getProjectGraphReadiness } from '@features/workflow/graph';
 import { getInvocationTemplatesSnapshot } from '@features/workflow/react';
 import { areArraysEqual, createStableSelector } from '@platform/state/selectors';
+import { compileContributingLayers } from '@workbench/canvas-engine/api';
 
 import { getBlockingControlLayerIssues } from './controlLayerChecks';
 import { getProjectWidgetValues } from './widgetState';
@@ -133,7 +134,7 @@ export const getInvocationRouteInput = (project: Project): InvocationRouteInput 
     height: project.canvas.document.bbox.height,
     width: project.canvas.document.bbox.width,
   },
-  canvasLayers: project.canvas.document.layers,
+  canvasLayers: compileContributingLayers(project.canvas.document),
   generateValues: getProjectWidgetValues(project, 'generate'),
   upscaleValues: getProjectWidgetValues(project, 'upscale'),
   videoValues: getProjectWidgetValues(project, 'video'),

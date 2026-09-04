@@ -325,7 +325,7 @@ export const createImagesProvider = ({
       // Images carry no prompt, so the creation date+time is the title; the time
       // keeps same-day results (the common case for 20 recents) distinguishable.
       return page.images.map<PaletteEntry>((image) => {
-        const createdAt = new Date(normalizeServerTimestamp(image.queuedAt));
+        const createdAt = new Date(normalizeServerTimestamp(image.createdAt ?? image.queuedAt));
 
         return {
           group: 'Images',

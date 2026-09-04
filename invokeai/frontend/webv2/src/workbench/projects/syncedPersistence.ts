@@ -1,27 +1,30 @@
 import type { HydratedWorkbenchSnapshot } from '@workbench/persistenceContracts';
-import type { Project, WorkbenchState } from '@workbench/projectContracts';
+import type { Project, ProjectLoadResult, RefusedWorkbenchProject, WorkbenchState } from '@workbench/projectContracts';
 
 import { assertAccountScopeCurrent, captureAccountScope, type AccountScope } from '@platform/state/accountLifecycle';
-import { timeWorkbenchPerf } from '@workbench/performanceMarks';
 import {
-  createLocalStorageWorkbenchPersistence,
-  stripTransientWorkbenchState,
-  type WorkbenchPersistenceService,
-} from '@workbench/persistence';
+  DEFAULT_PROJECT_CANVAS_SCHEMA_VERSION,
+  getProjectCanvasSchemaRequirement,
+  isCanvasSchemaVersionSupported,
+  MAX_SUPPORTED_CANVAS_SCHEMA_VERSION,
+} from '@workbench/canvasSchemaVersion';
+import { timeWorkbenchPerf } from '@workbench/performanceMarks';
+import { createLocalStorageWorkbenchPersistence, type WorkbenchPersistenceService } from '@workbench/persistence';
 import {
   createDraftProject,
   createInitialWorkbenchState,
+  loadWorkbenchProject,
   normalizeWorkbenchAccount,
-  normalizeWorkbenchProject,
   withAuthoritativeProjectBoard,
 } from '@workbench/workbenchState';
 
-import type { ProjectPushOutcome, ProjectRecoveredIdentity } from './projectFlush';
+import type { ProjectPushOutcome, ProjectRecoveredIdentity, ProjectSchemaRefusal } from './projectFlush';
 
 import {
   createProject as apiCreateProject,
   deleteClientStateValue,
   deleteProject as apiDeleteProject,
+  getProjectCanvasSchemaCompatibilityRefusal,
   getProject as apiGetProject,
   isProjectConflictError,
   isProjectNotFoundError,
@@ -31,6 +34,7 @@ import {
   type ProjectRecordDTO,
 } from './api';
 import { recordProjectCover } from './covers';
+import { createProjectId } from './ids';
 import { seedProjectLibrary, upsertProjectSummary } from './library';
 import { selectCoverImageName } from './projectAssets';
 import {
@@ -65,6 +69,13 @@ interface SyncEntry {
   revision: number;
   /** Serialized form of the last document the server acknowledged. */
   pushedDoc: string | null;
+  /** Monotonic server floor retained across offline recovery and conflict forks. */
+  minimumCanvasSchemaVersion: number;
+}
+
+interface PendingRecoveryReservation {
+  identity: ProjectRecoveredIdentity;
+  sourceDocumentFingerprint: string;
 }
 
 export interface ProjectConflictResolution {
@@ -116,7 +127,14 @@ export interface WorkbenchLoadOptions {
 }
 
 interface SyncedPersistenceState {
-  /** Ids deleted in this runtime lifetime, guarding against racing saves. */
+  /** Last successfully cached project bytes, including projects hidden by uncertain tombstones. */
+  cachedProjectsById: Map<string, Project>;
+  /** IDs proven occupied by a 409; they may only recover under a fresh identity, never POST again. */
+  collisionProjectIds: Set<string>;
+  /**
+   * Deletion tombstones guard racing saves and survive reloads until a cache snapshot without the
+   * project is durable. A crash can therefore replay or cancel a deletion, but cannot resurrect it.
+   */
   deletedProjectIds: Set<string>;
   /**
    * Ids already forked because the server no longer had them. The original stays in the aggregate
@@ -137,12 +155,28 @@ interface SyncedPersistenceState {
   pendingBoardAssignments: ProjectBoardAssignment[];
   pendingConflicts: ProjectConflictResolution[];
   pendingDeletedForks: ProjectDeletionFork[];
+  /** Projects whose cached document was durably written before its server acknowledgement. */
+  pendingProjectIds: Set<string>;
+  /** Monotonic source floors for never-synced recovery projects; not fake acknowledgements. */
+  pendingProjectMinimumCanvasSchemaVersions: Map<string, number>;
+  /** Durable source-to-recovery identities make recovery POST retries idempotent. */
+  pendingRecoveryIdentities: Map<string, PendingRecoveryReservation>;
   projectDocumentJsonCache: WeakMap<Project, { document: Record<string, unknown>; json: string }>;
+  /** Closed projects whose revision metadata may be pruned after the cache confirms their absence. */
+  releasedProjectIds: Set<string>;
+  /** Terminal for this client lifetime: retries cannot succeed until the app is upgraded. */
+  schemaRefusals: Map<string, ProjectSchemaRefusal>;
   /** Server-known projects, keyed by project id. */
   syncEntries: Map<string, SyncEntry>;
+  /** Tombstones hiding cached bytes whose server outcome cannot yet be reconciled. */
+  unconfirmedDeletionProjectIds: Set<string>;
+  /** Raw refused documents that must reach the recovery bucket before the primary cache may change. */
+  unretainedRefusedProjects: RefusedWorkbenchProject[];
 }
 
 const createSyncedPersistenceState = (owner: AccountScope): SyncedPersistenceState => ({
+  cachedProjectsById: new Map(),
+  collisionProjectIds: new Set(),
   deletedProjectIds: new Set(),
   forkedProjectIds: new Set(),
   hasPending: false,
@@ -152,8 +186,15 @@ const createSyncedPersistenceState = (owner: AccountScope): SyncedPersistenceSta
   pendingBoardAssignments: [],
   pendingConflicts: [],
   pendingDeletedForks: [],
+  pendingProjectIds: new Set(),
+  pendingProjectMinimumCanvasSchemaVersions: new Map(),
+  pendingRecoveryIdentities: new Map(),
   projectDocumentJsonCache: new WeakMap(),
+  releasedProjectIds: new Set(),
+  schemaRefusals: new Map(),
   syncEntries: new Map(),
+  unconfirmedDeletionProjectIds: new Set(),
+  unretainedRefusedProjects: [],
 });
 
 const assertOwner = (syncState: SyncedPersistenceState): void => {
@@ -194,6 +235,23 @@ const getSerializedProjectDocument = (
  * `projectBoardId` is a stale-able cache, so overwriting it here means every path that reads from
  * the server agrees on one answer. The saved destination is left alone — it is a deliberate choice.
  */
+const deserializeProjectRecord = (record: ProjectRecordDTO): ProjectLoadResult => {
+  const result = deserializeProjectDocument(
+    applyAuthoritativeProjectBoard(record.data, record.board_id, { selectBoard: false })
+  );
+
+  // Again after rehydration, because the document may have had no gallery values for the first
+  // patch to land in — see `withAuthoritativeProjectBoard`.
+  switch (result.status) {
+    case 'loaded':
+      return { project: withAuthoritativeProjectBoard(result.project, record.board_id), status: 'loaded' };
+    case 'refused':
+      return { refused: { ...result.refused, raw: record.data }, status: 'refused' };
+    default:
+      return result;
+  }
+};
+
 /**
  * The baseline a server record establishes for the push comparison.
  *
@@ -201,35 +259,126 @@ const getSerializedProjectDocument = (
  * record, not the raw wire bytes. Hydration can legitimately change a
  * document — a search only the writing session could resolve is dropped,
  * along with the pages set against it — and a baseline taken from the bytes
- * would read that as a local edit: the next autosave would push the hydrated
- * copy unprompted, bump the revision under the tab that still holds the live
- * search, and fork that tab's next save as "changed elsewhere" with nobody
- * having edited anything. Taking the baseline after hydration means a project
- * that has only been opened is never pushed, and a real edit here conflicts
- * with a real edit there exactly as before.
+ * would read that as a local edit.
  */
-const adoptRecordBaseline = (record: ProjectRecordDTO): { project: Project | null; pushedDoc: string } => {
-  const project = deserializeProjectRecord(record);
+const adoptRecordBaseline = (record: ProjectRecordDTO): { pushedDoc: string; result: ProjectLoadResult } => {
+  const result = deserializeProjectRecord(record);
 
-  // Serialized directly, not through `getSerializedProjectDocument`: that
-  // records the document's cover as a side effect, and a baseline is taken for
-  // documents this realm may never adopt — the server's copy during conflict
-  // recovery, which on a retry would leave the cover index naming the version
-  // the retry then overwrites.
+  // Do not use `getSerializedProjectDocument` here: taking a comparison
+  // baseline must not record the cover of a document this realm may never
+  // adopt (for example, the server side of conflict recovery).
   return {
-    project,
-    pushedDoc: project === null ? JSON.stringify(record.data) : JSON.stringify(serializeProjectDocument(project)),
+    pushedDoc:
+      result.status === 'loaded'
+        ? JSON.stringify(serializeProjectDocument(result.project))
+        : JSON.stringify(record.data),
+    result,
   };
 };
 
-const deserializeProjectRecord = (record: ProjectRecordDTO): Project | null => {
-  const project = deserializeProjectDocument(
-    applyAuthoritativeProjectBoard(record.data, record.board_id, { selectBoard: false })
-  );
+const toServerSchemaRefusal = (
+  error: unknown,
+  projectId: string,
+  projectName: string
+): RefusedWorkbenchProject | null => {
+  const compatibility = getProjectCanvasSchemaCompatibilityRefusal(error);
 
-  // Again after rehydration, because the document may have had no gallery values for the first
-  // patch to land in — see `withAuthoritativeProjectBoard`.
-  return project === null ? null : withAuthoritativeProjectBoard(project, record.board_id);
+  if (!compatibility) {
+    return null;
+  }
+
+  return {
+    projectId,
+    projectName,
+    raw: null,
+    refusal: {
+      raw: null,
+      scope: 'document',
+      status: 'unsupported-version',
+      version: compatibility.minimumCanvasSchemaVersion,
+    },
+    source: 'canvas',
+  };
+};
+
+const toDeclaredSchemaRefusal = (
+  projectId: string,
+  projectName: string,
+  minimumCanvasSchemaVersion: number
+): RefusedWorkbenchProject => ({
+  projectId,
+  projectName,
+  raw: null,
+  refusal: {
+    raw: null,
+    scope: 'document',
+    status: 'unsupported-version',
+    version: minimumCanvasSchemaVersion,
+  },
+  source: 'canvas',
+});
+
+const rememberServerSchemaRefusal = (
+  syncState: SyncedPersistenceState,
+  projectId: string,
+  error: unknown
+): ProjectSchemaRefusal | null => {
+  const refusal = getProjectCanvasSchemaCompatibilityRefusal(error);
+
+  if (refusal) {
+    syncState.schemaRefusals.set(projectId, refusal);
+  }
+
+  return refusal;
+};
+
+const retainSchemaRefusedProject = async (
+  syncState: SyncedPersistenceState,
+  project: Project,
+  refusal: ProjectSchemaRefusal
+): Promise<boolean> => {
+  const raw = serializeProjectDocument(project);
+  const refusedProject: RefusedWorkbenchProject = {
+    projectId: project.id,
+    projectName: project.name,
+    raw,
+    refusal: {
+      raw,
+      scope: 'document',
+      status: 'unsupported-version',
+      version: refusal.minimumCanvasSchemaVersion,
+    },
+    source: 'canvas',
+  };
+  const retained = await syncState.localPersistence.retainRefusedProjects([refusedProject]);
+  assertOwner(syncState);
+
+  // A schema refusal is terminal for this sync lifetime, but its raw document is not safe to omit
+  // from the primary cache until the recovery bucket confirms the write. Keep the latest raw copy
+  // in memory so every later save retries retention before it can replace that cache.
+  syncState.unretainedRefusedProjects = retained
+    ? syncState.unretainedRefusedProjects.filter((candidate) => candidate.projectId !== project.id)
+    : [
+        ...syncState.unretainedRefusedProjects.filter((candidate) => candidate.projectId !== project.id),
+        refusedProject,
+      ];
+
+  return retained;
+};
+
+const ensureRefusedProjectsRetained = async (syncState: SyncedPersistenceState): Promise<boolean> => {
+  if (syncState.unretainedRefusedProjects.length === 0) {
+    return true;
+  }
+
+  const retained = await syncState.localPersistence.retainRefusedProjects(syncState.unretainedRefusedProjects);
+
+  assertOwner(syncState);
+  if (retained) {
+    syncState.unretainedRefusedProjects = [];
+  }
+
+  return retained;
 };
 
 /**
@@ -237,17 +386,16 @@ const deserializeProjectRecord = (record: ProjectRecordDTO): Project | null => {
  * needs the aggregate reducer, so it stays here rather than in
  * `./projectDocument`; Launchpad callers reach it through a dynamic import.
  */
-export const deserializeProjectDocument = (data: Record<string, unknown>): Project | null => {
+export const deserializeProjectDocument = (data: Record<string, unknown>): ProjectLoadResult => {
   const normalizedData = normalizeLegacyProjectDocument(data);
 
   if (!isProjectDocumentShape(normalizedData)) {
-    return null;
+    return { status: 'unavailable' };
   }
 
-  return normalizeWorkbenchProject({
-    ...normalizedData,
-    undoRedo: { future: [], past: [] },
-  } as unknown as Project);
+  const result = loadWorkbenchProject({ ...normalizedData, undoRedo: { future: [], past: [] } } as unknown as Project);
+
+  return result.status === 'refused' ? { refused: { ...result.refused, raw: data }, status: 'refused' } : result;
 };
 
 const getSyncMapStorageKey = (syncState: SyncedPersistenceState): string =>
@@ -255,89 +403,328 @@ const getSyncMapStorageKey = (syncState: SyncedPersistenceState): string =>
 
 /**
  * The revision map survives reloads so an offline runtime can tell "synced before, now gone from
- * the server — drop it" apart from "created offline — push it".
+ * the server — recover it" apart from "created offline — push it". Pending markers and deletion
+ * tombstones are written before the document cache/network transition they witness.
  */
-const persistSyncMap = (syncState: SyncedPersistenceState): void => {
+const persistSyncMap = (syncState: SyncedPersistenceState): boolean => {
   assertOwner(syncState);
 
   try {
     const revisions: Record<string, number> = {};
+    const minimumCanvasSchemaVersions: Record<string, number> = {};
+    const pendingProjectMinimumCanvasSchemaVersions = Object.fromEntries(
+      syncState.pendingProjectMinimumCanvasSchemaVersions
+    );
 
     for (const [projectId, entry] of syncState.syncEntries) {
       revisions[projectId] = entry.revision;
+      minimumCanvasSchemaVersions[projectId] = entry.minimumCanvasSchemaVersion;
     }
 
-    window.localStorage.setItem(getSyncMapStorageKey(syncState), JSON.stringify({ revisions }));
+    window.localStorage.setItem(
+      getSyncMapStorageKey(syncState),
+      JSON.stringify({
+        collisionProjectIds: [...syncState.collisionProjectIds],
+        deletedProjectIds: [...syncState.deletedProjectIds],
+        minimumCanvasSchemaVersions,
+        pendingProjectIds: [...syncState.pendingProjectIds],
+        pendingProjectMinimumCanvasSchemaVersions,
+        pendingRecoveryIdentities: Object.fromEntries(syncState.pendingRecoveryIdentities),
+        revisions,
+      })
+    );
+    return true;
   } catch {
-    // Cache only; sync still works for this session.
+    return false;
   }
 };
 
-const loadPersistedRevisions = (syncState: SyncedPersistenceState): Record<string, number> => {
+interface PersistedSyncMap {
+  collisionProjectIds: string[];
+  deletedProjectIds: string[];
+  minimumCanvasSchemaVersions: Record<string, number>;
+  pendingProjectIds: string[];
+  pendingProjectMinimumCanvasSchemaVersions: Record<string, number>;
+  pendingRecoveryIdentities: Record<string, PendingRecoveryReservation>;
+  revisions: Record<string, number>;
+}
+
+const loadPersistedSyncMap = (syncState: SyncedPersistenceState): PersistedSyncMap => {
   assertOwner(syncState);
 
   try {
     const raw = window.localStorage.getItem(getSyncMapStorageKey(syncState));
-    const parsed = raw ? (JSON.parse(raw) as { revisions?: Record<string, number> }) : null;
+    const parsed = raw
+      ? (JSON.parse(raw) as {
+          collisionProjectIds?: unknown;
+          deletedProjectIds?: unknown;
+          minimumCanvasSchemaVersions?: Record<string, number>;
+          pendingProjectIds?: unknown;
+          pendingProjectMinimumCanvasSchemaVersions?: Record<string, unknown>;
+          pendingRecoveryIdentities?: Record<string, unknown>;
+          revisions?: Record<string, number>;
+        })
+      : null;
 
-    return parsed?.revisions ?? {};
+    return {
+      collisionProjectIds: Array.isArray(parsed?.collisionProjectIds)
+        ? parsed.collisionProjectIds.filter((id): id is string => typeof id === 'string')
+        : [],
+      deletedProjectIds: Array.isArray(parsed?.deletedProjectIds)
+        ? parsed.deletedProjectIds.filter((id): id is string => typeof id === 'string')
+        : [],
+      minimumCanvasSchemaVersions: parsed?.minimumCanvasSchemaVersions ?? {},
+      pendingProjectIds: Array.isArray(parsed?.pendingProjectIds)
+        ? parsed.pendingProjectIds.filter((id): id is string => typeof id === 'string')
+        : [],
+      pendingProjectMinimumCanvasSchemaVersions: Object.fromEntries(
+        Object.entries(parsed?.pendingProjectMinimumCanvasSchemaVersions ?? {}).filter(
+          (entry): entry is [string, number] =>
+            typeof entry[1] === 'number' && Number.isInteger(entry[1]) && entry[1] >= 1
+        )
+      ),
+      pendingRecoveryIdentities: Object.fromEntries(
+        Object.entries(parsed?.pendingRecoveryIdentities ?? {}).filter(
+          (entry): entry is [string, PendingRecoveryReservation] => {
+            if (typeof entry[1] !== 'object' || entry[1] === null) {
+              return false;
+            }
+
+            const reservation = entry[1] as Partial<PendingRecoveryReservation>;
+            const identity = reservation.identity as Partial<ProjectRecoveredIdentity> | undefined;
+
+            return (
+              typeof reservation.sourceDocumentFingerprint === 'string' &&
+              typeof identity === 'object' &&
+              identity !== null &&
+              typeof identity.id === 'string' &&
+              typeof identity.name === 'string' &&
+              typeof identity.recoveredAt === 'string' &&
+              typeof identity.recoveryOf === 'string'
+            );
+          }
+        )
+      ),
+      revisions: parsed?.revisions ?? {},
+    };
   } catch {
-    return {};
+    return {
+      collisionProjectIds: [],
+      deletedProjectIds: [],
+      minimumCanvasSchemaVersions: {},
+      pendingProjectIds: [],
+      pendingProjectMinimumCanvasSchemaVersions: {},
+      pendingRecoveryIdentities: {},
+      revisions: {},
+    };
   }
 };
 
-const createSnapshot = (state: WorkbenchState): HydratedWorkbenchSnapshot => ({
-  savedAt: new Date().toISOString(),
-  state: stripTransientWorkbenchState(state),
-  version: 1,
-});
+type PushNewProjectOutcome =
+  | { kind: 'acknowledged' }
+  | { kind: 'collision' }
+  | { kind: 'failed' }
+  | { kind: 'forked'; resolution: ProjectConflictResolution }
+  | { kind: 'schema-refused'; refusal: ProjectSchemaRefusal };
 
-/** Import a never-synced project to the server; returns false when it could not reach it. */
-const pushNewProject = async (syncState: SyncedPersistenceState, project: Project): Promise<boolean> => {
+const getRaisedCanvasSchemaFloor = (
+  document: Record<string, unknown>,
+  retainedMinimumCanvasSchemaVersion: number
+): number | undefined => {
+  const required = getProjectCanvasSchemaRequirement(document);
+
+  return required > retainedMinimumCanvasSchemaVersion ? required : undefined;
+};
+
+/** Durably mark cached bytes as unacknowledged before any network request can race a reload. */
+const markProjectPending = (syncState: SyncedPersistenceState, project: Project): void => {
+  const { json } = getSerializedProjectDocument(syncState, project);
+
+  if (syncState.syncEntries.get(project.id)?.pushedDoc !== json) {
+    syncState.pendingProjectIds.add(project.id);
+  }
+};
+
+const settleProjectPendingMarker = (
+  syncState: SyncedPersistenceState,
+  projectId: string,
+  outcome: ProjectPushOutcome
+): void => {
+  if (outcome.kind === 'acknowledged' || outcome.kind === 'superseded') {
+    syncState.pendingProjectIds.delete(projectId);
+    syncState.pendingProjectMinimumCanvasSchemaVersions.delete(projectId);
+  } else {
+    syncState.pendingProjectIds.add(projectId);
+  }
+};
+
+/** Project identity evidence is removable only after the durable cache no longer contains it. */
+const settleProjectAbsenceAfterCacheWrite = (
+  syncState: SyncedPersistenceState,
+  persistedState: WorkbenchState
+): void => {
+  const persistedIds = new Set(persistedState.projects.map((project) => project.id));
+
+  for (const projectId of new Set([...syncState.deletedProjectIds, ...syncState.releasedProjectIds])) {
+    if (persistedIds.has(projectId)) {
+      continue;
+    }
+
+    syncState.deletedProjectIds.delete(projectId);
+    syncState.collisionProjectIds.delete(projectId);
+    syncState.releasedProjectIds.delete(projectId);
+    syncState.syncEntries.delete(projectId);
+    syncState.schemaRefusals.delete(projectId);
+    syncState.pendingProjectIds.delete(projectId);
+    syncState.pendingProjectMinimumCanvasSchemaVersions.delete(projectId);
+    syncState.pendingRecoveryIdentities.delete(projectId);
+    for (const [sourceProjectId, reservation] of syncState.pendingRecoveryIdentities) {
+      if (reservation.identity.id === projectId) {
+        syncState.pendingRecoveryIdentities.delete(sourceProjectId);
+      }
+    }
+  }
+};
+
+/** Retire a recovery reservation only after both acknowledged documents share one durable cache snapshot. */
+const settleRecoveryReservationsAfterCacheWrite = (
+  syncState: SyncedPersistenceState,
+  persistedState: WorkbenchState
+): void => {
+  const persistedById = new Map(persistedState.projects.map((project) => [project.id, project]));
+
+  for (const [sourceProjectId, reservation] of syncState.pendingRecoveryIdentities) {
+    const sourceProject = persistedById.get(sourceProjectId);
+    const recoveredProject = persistedById.get(reservation.identity.id);
+
+    if (!sourceProject || !recoveredProject) {
+      continue;
+    }
+
+    const sourceEntry = syncState.syncEntries.get(sourceProjectId);
+    const recoveredEntry = syncState.syncEntries.get(reservation.identity.id);
+
+    if (
+      sourceEntry?.pushedDoc === getSerializedProjectDocument(syncState, sourceProject).json &&
+      recoveredEntry?.pushedDoc === getSerializedProjectDocument(syncState, recoveredProject).json
+    ) {
+      syncState.pendingRecoveryIdentities.delete(sourceProjectId);
+    }
+  }
+};
+
+/** Import a never-synced project to the server, preserving terminal schema refusals. */
+const pushNewProject = async (syncState: SyncedPersistenceState, project: Project): Promise<PushNewProjectOutcome> => {
   assertOwner(syncState);
   const document = serializeProjectDocument(project);
 
   try {
     const created = await apiCreateProject(
-      { data: document, name: project.name, project_id: project.id },
+      {
+        data: document,
+        minimum_canvas_schema_version: Math.max(
+          getProjectCanvasSchemaRequirement(document),
+          syncState.pendingProjectMinimumCanvasSchemaVersions.get(project.id) ?? 1
+        ),
+        name: project.name,
+        project_id: project.id,
+      },
       syncState.owner.signal
     );
 
     assertOwner(syncState);
-    syncState.syncEntries.set(project.id, { pushedDoc: JSON.stringify(document), revision: created.revision });
+    syncState.syncEntries.set(project.id, {
+      minimumCanvasSchemaVersion: created.minimum_canvas_schema_version,
+      pushedDoc: JSON.stringify(document),
+      revision: created.revision,
+    });
     syncState.pendingBoardAssignments.push({ boardId: created.board_id, projectId: project.id });
 
-    return true;
+    return { kind: 'acknowledged' };
   } catch (error) {
     assertOwner(syncState);
 
     if (isProjectConflictError(error)) {
-      // The id already exists server-side (e.g. a previous import raced a
-      // reload). Adopt the server revision; the regular save path will PUT.
+      // A 409 permanently proves this id was occupied. Record that fact before the follow-up GET:
+      // its response can be lost or the remote project can disappear, but neither makes the id
+      // safe to POST again.
+      syncState.collisionProjectIds.add(project.id);
+      if (!persistSyncMap(syncState)) {
+        syncState.hasPending = true;
+      }
+
+      // A create has no common revision base. If the bytes differ, preserving both documents is
+      // the only safe resolution; adopting the revision and issuing a PUT would overwrite an
+      // unrelated server project that merely collided on id.
       try {
         const existing = await apiGetProject(project.id, syncState.owner.signal);
 
         assertOwner(syncState);
-        syncState.syncEntries.set(project.id, {
-          pushedDoc: adoptRecordBaseline(existing).pushedDoc,
+        const { pushedDoc } = adoptRecordBaseline(existing);
+        const existingEntry: SyncEntry = {
+          minimumCanvasSchemaVersion: existing.minimum_canvas_schema_version,
+          pushedDoc,
           revision: existing.revision,
-        });
-        syncState.pendingBoardAssignments.push({ boardId: existing.board_id, projectId: project.id });
+        };
 
-        return true;
+        if (JSON.stringify(existing.data) === JSON.stringify(document)) {
+          syncState.collisionProjectIds.delete(project.id);
+          syncState.syncEntries.set(project.id, existingEntry);
+          syncState.pendingBoardAssignments.push({ boardId: existing.board_id, projectId: project.id });
+
+          return { kind: 'acknowledged' };
+        }
+
+        const outcome = await forkProjectAgainstServer(
+          syncState,
+          project,
+          document,
+          existing,
+          Math.max(
+            existing.minimum_canvas_schema_version,
+            syncState.pendingProjectMinimumCanvasSchemaVersions.get(project.id) ?? 1
+          )
+        );
+
+        if (outcome.kind === 'forked') {
+          syncState.collisionProjectIds.delete(project.id);
+          syncState.syncEntries.set(project.id, existingEntry);
+          syncState.pendingBoardAssignments.push({ boardId: existing.board_id, projectId: project.id });
+        }
+
+        return outcome;
       } catch {
         assertOwner(syncState);
-
-        return false;
+        return { kind: 'collision' };
       }
     }
 
-    return false;
+    const refusal = rememberServerSchemaRefusal(syncState, project.id, error);
+
+    return refusal ? { kind: 'schema-refused', refusal } : { kind: 'failed' };
   }
 };
 
 /** Strip any number of stacked "(recovered)" suffixes left by older recoveries. */
 const getRecoveryBaseName = (name: string): string => name.replace(/(\s*\((?:r|R)ecovered\))+$/u, '').trim() || name;
+
+const applyRecoveredIdentity = (
+  document: Record<string, unknown>,
+  recoveredIdentity: ProjectRecoveredIdentity
+): Record<string, unknown> => ({
+  ...document,
+  id: recoveredIdentity.id,
+  name: recoveredIdentity.name,
+  recoveredAt: recoveredIdentity.recoveredAt,
+  recoveryOf: recoveredIdentity.recoveryOf,
+});
+
+const fingerprintProjectDocument = async (document: Record<string, unknown>): Promise<string> => {
+  const bytes = new TextEncoder().encode(JSON.stringify(document));
+  const digest = await globalThis.crypto.subtle.digest('SHA-256', bytes);
+
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
+};
 
 /** Lineage points at the root original, so a recovery of a recovery still keys to the first. */
 export const createRecoveredDocument = (
@@ -346,29 +733,226 @@ export const createRecoveredDocument = (
 ): { recoveredIdentity: ProjectRecoveredIdentity; recoveredDocument: Record<string, unknown> } => {
   const recoveryOf = project.recoveryOf ?? project.id;
   const recoveredIdentity: ProjectRecoveredIdentity = {
-    id: `${recoveryOf}-recovered-${Date.now().toString(36)}`,
+    id: createProjectId(),
     name: `${getRecoveryBaseName(project.name)} (recovered)`,
     recoveredAt: new Date().toISOString(),
     recoveryOf,
   };
 
   return {
-    recoveredDocument: {
-      ...document,
-      id: recoveredIdentity.id,
-      name: recoveredIdentity.name,
-      recoveredAt: recoveredIdentity.recoveredAt,
-      recoveryOf: recoveredIdentity.recoveryOf,
-    },
+    recoveredDocument: applyRecoveredIdentity(document, recoveredIdentity),
     recoveredIdentity,
   };
+};
+
+interface PreparedRecoveryDocument {
+  isFresh: boolean;
+  recoveredDocument: Record<string, unknown>;
+  recoveredIdentity: ProjectRecoveredIdentity;
+}
+
+const reserveFreshRecoveryDocument = async (
+  syncState: SyncedPersistenceState,
+  project: Project,
+  document: Record<string, unknown>
+): Promise<PreparedRecoveryDocument | null> => {
+  const prepared = createRecoveredDocument(project, document);
+  syncState.pendingRecoveryIdentities.set(project.id, {
+    identity: prepared.recoveredIdentity,
+    sourceDocumentFingerprint: await fingerprintProjectDocument(document),
+  });
+
+  if (!persistSyncMap(syncState)) {
+    syncState.pendingRecoveryIdentities.delete(project.id);
+    syncState.hasPending = true;
+
+    return null;
+  }
+
+  return { ...prepared, isFresh: true };
+};
+
+const prepareRecoveredDocument = async (
+  syncState: SyncedPersistenceState,
+  project: Project,
+  document: Record<string, unknown>
+): Promise<PreparedRecoveryDocument | null> => {
+  const existingReservation = syncState.pendingRecoveryIdentities.get(project.id);
+  const sourceDocumentFingerprint = await fingerprintProjectDocument(document);
+
+  if (existingReservation?.sourceDocumentFingerprint === sourceDocumentFingerprint) {
+    return {
+      isFresh: false,
+      recoveredDocument: applyRecoveredIdentity(document, existingReservation.identity),
+      recoveredIdentity: existingReservation.identity,
+    };
+  }
+
+  return reserveFreshRecoveryDocument(syncState, project, document);
+};
+
+interface CreatedRecoveryProject {
+  created: ProjectRecordDTO;
+  recoveredDocument: Record<string, unknown>;
+  recoveredIdentity: ProjectRecoveredIdentity;
+}
+
+const createOrAdoptRecoveryProject = async (
+  syncState: SyncedPersistenceState,
+  sourceProject: Project,
+  sourceDocument: Record<string, unknown>,
+  prepared: PreparedRecoveryDocument,
+  minimumCanvasSchemaVersion: number
+): Promise<CreatedRecoveryProject> => {
+  let recovery = prepared;
+
+  if (!recovery.isFresh) {
+    try {
+      const existing = await apiGetProject(recovery.recoveredIdentity.id, syncState.owner.signal);
+      assertOwner(syncState);
+
+      if (
+        JSON.stringify(existing.data) === JSON.stringify(recovery.recoveredDocument) &&
+        existing.minimum_canvas_schema_version >= minimumCanvasSchemaVersion
+      ) {
+        return {
+          created: existing,
+          recoveredDocument: recovery.recoveredDocument,
+          recoveredIdentity: recovery.recoveredIdentity,
+        };
+      }
+    } catch (error) {
+      assertOwner(syncState);
+
+      if (!isProjectNotFoundError(error)) {
+        throw error;
+      }
+    }
+
+    // A persisted reservation that is absent was either deleted after an indeterminate create or
+    // never committed. Those cases are indistinguishable, so never POST the old id and resurrect it.
+    const rotated = await reserveFreshRecoveryDocument(syncState, sourceProject, sourceDocument);
+
+    if (!rotated) {
+      throw new Error('Could not durably rotate the recovery project identity.');
+    }
+    recovery = rotated;
+  }
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const { recoveredDocument, recoveredIdentity } = recovery;
+
+    try {
+      const created = await apiCreateProject(
+        {
+          data: recoveredDocument,
+          minimum_canvas_schema_version: Math.max(
+            getProjectCanvasSchemaRequirement(recoveredDocument),
+            minimumCanvasSchemaVersion
+          ),
+          name: recoveredIdentity.name,
+          project_id: recoveredIdentity.id,
+        },
+        syncState.owner.signal
+      );
+
+      return { created, recoveredDocument, recoveredIdentity };
+    } catch (error) {
+      assertOwner(syncState);
+
+      if (!isProjectConflictError(error)) {
+        throw error;
+      }
+
+      const existing = await apiGetProject(recoveredIdentity.id, syncState.owner.signal);
+      assertOwner(syncState);
+
+      if (
+        JSON.stringify(existing.data) === JSON.stringify(recoveredDocument) &&
+        existing.minimum_canvas_schema_version >= minimumCanvasSchemaVersion
+      ) {
+        return { created: existing, recoveredDocument, recoveredIdentity };
+      }
+
+      if (attempt > 0) {
+        throw error;
+      }
+
+      // The reservation is occupied by different bytes: rotate it durably before another POST.
+      // This covers a genuine UUID collision and a source edited after a response-lost recovery.
+      const rotated = await reserveFreshRecoveryDocument(syncState, sourceProject, sourceDocument);
+
+      if (!rotated) {
+        throw new Error('Could not durably rotate the recovery project identity.', { cause: error });
+      }
+      recovery = rotated;
+    }
+  }
+
+  throw new Error('Could not create a recovery project.');
 };
 
 type ConflictOutcome =
   | { kind: 'adopted' }
   | { kind: 'retry' }
   | { kind: 'forked'; resolution: ProjectConflictResolution }
+  | { kind: 'schema-refused'; refusal: ProjectSchemaRefusal }
   | { kind: 'failed' };
+
+/** Preserve a divergent local document beside the authoritative server document. */
+const forkProjectAgainstServer = async (
+  syncState: SyncedPersistenceState,
+  project: Project,
+  document: Record<string, unknown>,
+  server: ProjectRecordDTO,
+  retainedMinimumCanvasSchemaVersion: number
+): Promise<Extract<ConflictOutcome, { kind: 'failed' | 'forked' }>> => {
+  const serverResult = deserializeProjectRecord(server);
+
+  if (serverResult.status !== 'loaded') {
+    return { kind: 'failed' };
+  }
+
+  const prepared = await prepareRecoveredDocument(syncState, project, document);
+
+  if (!prepared) {
+    return { kind: 'failed' };
+  }
+
+  const recovery = await createOrAdoptRecoveryProject(
+    syncState,
+    project,
+    document,
+    prepared,
+    retainedMinimumCanvasSchemaVersion
+  );
+  const recoveredResult = deserializeProjectDocument(recovery.recoveredDocument);
+
+  if (recoveredResult.status !== 'loaded') {
+    return { kind: 'failed' };
+  }
+
+  assertOwner(syncState);
+  syncState.syncEntries.set(recovery.recoveredIdentity.id, {
+    minimumCanvasSchemaVersion: recovery.created.minimum_canvas_schema_version,
+    pushedDoc: JSON.stringify(serializeProjectDocument(recoveredResult.project)),
+    revision: recovery.created.revision,
+  });
+  syncState.pendingBoardAssignments.push({
+    boardId: recovery.created.board_id,
+    projectId: recovery.recoveredIdentity.id,
+  });
+
+  return {
+    kind: 'forked',
+    resolution: {
+      projectId: project.id,
+      recoveredIdentity: recovery.recoveredIdentity,
+      recoveredProject: recoveredResult.project,
+      serverProject: serverResult.project,
+    },
+  };
+};
 
 /**
  * A save lost the revision race. Forking is the last resort — only when content actually diverged:
@@ -382,7 +966,8 @@ const recoverConflictingProject = async (
   project: Project,
   document: Record<string, unknown>,
   documentJson: string,
-  basePushedDoc: string | null
+  basePushedDoc: string | null,
+  retainedMinimumCanvasSchemaVersion: number
 ): Promise<ConflictOutcome> => {
   assertOwner(syncState);
 
@@ -390,59 +975,48 @@ const recoverConflictingProject = async (
     const server = await apiGetProject(project.id, syncState.owner.signal);
 
     assertOwner(syncState);
-    // Compared as this realm would hold it, the same way the baseline was
-    // taken: the wire bytes of an unchanged document differ from the baseline
-    // whenever hydration changes it, and that would read a revision that
-    // merely drifted as a divergence.
-    const { project: serverProject, pushedDoc: serverDocJson } = adoptRecordBaseline(server);
-
-    syncState.syncEntries.set(project.id, { pushedDoc: serverDocJson, revision: server.revision });
+    const { pushedDoc: serverDocJson, result: serverResult } = adoptRecordBaseline(server);
+    const serverEntry: SyncEntry = {
+      minimumCanvasSchemaVersion: server.minimum_canvas_schema_version,
+      pushedDoc: serverDocJson,
+      revision: server.revision,
+    };
 
     if (serverDocJson === documentJson) {
+      syncState.syncEntries.set(project.id, serverEntry);
+
       return { kind: 'adopted' };
     }
 
     if (basePushedDoc !== null && serverDocJson === basePushedDoc) {
+      syncState.syncEntries.set(project.id, serverEntry);
+
       return { kind: 'retry' };
     }
 
-    if (!serverProject) {
+    if (serverResult.status !== 'loaded') {
       return { kind: 'failed' };
     }
 
-    const { recoveredDocument, recoveredIdentity } = createRecoveredDocument(project, document);
-    const recoveredProject = deserializeProjectDocument(recoveredDocument);
-
-    if (!recoveredProject) {
-      return { kind: 'failed' };
-    }
-
-    const created = await apiCreateProject(
-      { data: recoveredDocument, name: recoveredIdentity.name, project_id: recoveredIdentity.id },
-      syncState.owner.signal
+    const outcome = await forkProjectAgainstServer(
+      syncState,
+      project,
+      document,
+      server,
+      Math.max(retainedMinimumCanvasSchemaVersion, server.minimum_canvas_schema_version)
     );
 
-    assertOwner(syncState);
-    syncState.syncEntries.set(recoveredIdentity.id, {
-      // As this realm holds it, not the wire bytes: the fork's store copy is
-      // hydrated from this document, and a fork whose tab is already closed
-      // is a document arriving like any other.
-      pushedDoc: JSON.stringify(serializeProjectDocument(recoveredProject)),
-      revision: created.revision,
-    });
-    // Recorded for the same reason the deletion fork records it: the fork is a project the server
-    // created, so its board id exists nowhere else. Without this the fork opens with a gallery bound
-    // to the original's board — which the conflict left in the server version's hands.
-    syncState.pendingBoardAssignments.push({ boardId: created.board_id, projectId: recoveredIdentity.id });
+    if (outcome.kind === 'forked') {
+      syncState.syncEntries.set(project.id, serverEntry);
+    }
 
-    return {
-      kind: 'forked',
-      resolution: { projectId: project.id, recoveredIdentity, recoveredProject, serverProject },
-    };
-  } catch {
+    return outcome;
+  } catch (error) {
     assertOwner(syncState);
 
-    return { kind: 'failed' };
+    const refusal = rememberServerSchemaRefusal(syncState, project.id, error);
+
+    return refusal ? { kind: 'schema-refused', refusal } : { kind: 'failed' };
   }
 };
 
@@ -460,22 +1034,31 @@ type DeletionForkOutcome =
 const forkDeletedProject = async (
   syncState: SyncedPersistenceState,
   project: Project,
-  document: Record<string, unknown>
+  document: Record<string, unknown>,
+  retainedMinimumCanvasSchemaVersion: number,
+  options?: { allowMarkedSource?: boolean }
 ): Promise<DeletionForkOutcome> => {
   assertOwner(syncState);
 
-  const { recoveredDocument, recoveredIdentity } = createRecoveredDocument(project, document);
-  const recoveredProject = deserializeProjectDocument(recoveredDocument);
+  const prepared = await prepareRecoveredDocument(syncState, project, document);
 
-  if (!recoveredProject) {
+  if (!prepared) {
     return { kind: 'failed' };
   }
 
   try {
-    const created = await apiCreateProject(
-      { data: recoveredDocument, name: recoveredIdentity.name, project_id: recoveredIdentity.id },
-      syncState.owner.signal
+    const recovery = await createOrAdoptRecoveryProject(
+      syncState,
+      project,
+      document,
+      prepared,
+      retainedMinimumCanvasSchemaVersion
     );
+    const recoveredResult = deserializeProjectDocument(recovery.recoveredDocument);
+
+    if (recoveredResult.status !== 'loaded') {
+      return { kind: 'failed' };
+    }
 
     assertOwner(syncState);
 
@@ -483,30 +1066,38 @@ const forkDeletedProject = async (
     // issuing its DELETE, but a PUT already on the wire is past that check — the 404 that brought us
     // here can be this browser's own deletion arriving first. Forking on it would resurrect the
     // project the person just deleted, as a copy pointing at media the deletion already removed.
-    if (syncState.deletedProjectIds.has(project.id)) {
+    if (!options?.allowMarkedSource && syncState.deletedProjectIds.has(project.id)) {
       try {
-        await apiDeleteProject(recoveredIdentity.id, syncState.owner.signal);
+        await apiDeleteProject(recovery.recoveredIdentity.id, syncState.owner.signal);
       } catch {
         // The fork is an empty private project either way; failing to remove it is clutter, not a
         // broken state, and it must not replace the deletion's own outcome.
       }
 
       assertOwner(syncState);
-      syncState.syncEntries.delete(recoveredIdentity.id);
+      syncState.syncEntries.delete(recovery.recoveredIdentity.id);
 
       return { kind: 'abandoned' };
     }
 
-    syncState.syncEntries.set(recoveredIdentity.id, {
-      // As this realm holds it, not the wire bytes: the fork's store copy is
-      // hydrated from this document, and a fork whose tab is already closed
-      // is a document arriving like any other.
-      pushedDoc: JSON.stringify(serializeProjectDocument(recoveredProject)),
-      revision: created.revision,
+    syncState.syncEntries.set(recovery.recoveredIdentity.id, {
+      minimumCanvasSchemaVersion: recovery.created.minimum_canvas_schema_version,
+      pushedDoc: JSON.stringify(serializeProjectDocument(recoveredResult.project)),
+      revision: recovery.created.revision,
     });
-    syncState.pendingBoardAssignments.push({ boardId: created.board_id, projectId: recoveredIdentity.id });
+    syncState.pendingBoardAssignments.push({
+      boardId: recovery.created.board_id,
+      projectId: recovery.recoveredIdentity.id,
+    });
 
-    return { fork: { projectId: project.id, recoveredIdentity, recoveredProject }, kind: 'forked' };
+    return {
+      fork: {
+        projectId: project.id,
+        recoveredIdentity: recovery.recoveredIdentity,
+        recoveredProject: recoveredResult.project,
+      },
+      kind: 'forked',
+    };
   } catch {
     assertOwner(syncState);
 
@@ -514,15 +1105,185 @@ const forkDeletedProject = async (
   }
 };
 
+/** Re-key a document whose original id is known unsafe to create, preserving it under a fresh id. */
+const recoverReservedProjectId = async (
+  syncState: SyncedPersistenceState,
+  project: Project,
+  document: Record<string, unknown>,
+  documentJson: string,
+  retainedMinimumCanvasSchemaVersion: number
+): Promise<ProjectPushOutcome> => {
+  const outcome = await forkDeletedProject(syncState, project, document, retainedMinimumCanvasSchemaVersion);
+
+  assertOwner(syncState);
+  if (outcome.kind === 'failed') {
+    syncState.hasPending = true;
+
+    return { documentJson, kind: 'unsynced' };
+  }
+
+  if (outcome.kind === 'forked') {
+    // The recovered server record makes the local bytes crash-durable. Keep the original guarded
+    // until aggregate reconciliation and a cache write replace it with the recovered identity.
+    syncState.forkedProjectIds.add(project.id);
+    syncState.deletedProjectIds.add(project.id);
+    syncState.pendingDeletedForks.push(outcome.fork);
+  }
+
+  return { documentJson, kind: 'superseded' };
+};
+
+/** Resolve tombstones whose DELETE/rollback outcome was lost before replacing any cached bytes. */
+const reconcileUnconfirmedDeletions = async (
+  syncState: SyncedPersistenceState,
+  liveProjects: readonly Project[]
+): Promise<boolean> => {
+  const liveProjectsById = new Map(liveProjects.map((project) => [project.id, project]));
+
+  for (const projectId of syncState.unconfirmedDeletionProjectIds) {
+    const hiddenProject = liveProjectsById.get(projectId) ?? syncState.cachedProjectsById.get(projectId);
+
+    if (!hiddenProject) {
+      return false;
+    }
+
+    const { document, json: documentJson } = getSerializedProjectDocument(syncState, hiddenProject);
+    let record: ProjectRecordDTO;
+
+    try {
+      record = await apiGetProject(projectId, syncState.owner.signal);
+    } catch (error) {
+      assertOwner(syncState);
+
+      if (isProjectNotFoundError(error)) {
+        if (liveProjectsById.has(projectId)) {
+          const recovery = await forkDeletedProject(
+            syncState,
+            hiddenProject,
+            document,
+            syncState.pendingProjectMinimumCanvasSchemaVersions.get(projectId) ?? DEFAULT_PROJECT_CANVAS_SCHEMA_VERSION,
+            { allowMarkedSource: true }
+          );
+
+          assertOwner(syncState);
+          if (recovery.kind !== 'forked') {
+            return false;
+          }
+
+          syncState.pendingDeletedForks.push(recovery.fork);
+          syncState.forkedProjectIds.add(projectId);
+        }
+
+        // DELETE committed. The tombstone remains until the next cache snapshot omits the project.
+        syncState.unconfirmedDeletionProjectIds.delete(projectId);
+        continue;
+      }
+
+      return false;
+    }
+
+    assertOwner(syncState);
+    const serverDocumentJson = JSON.stringify(record.data);
+    const serverEntry: SyncEntry = {
+      minimumCanvasSchemaVersion: record.minimum_canvas_schema_version,
+      pushedDoc: serverDocumentJson,
+      revision: record.revision,
+    };
+    const serverResult = deserializeProjectRecord(record);
+
+    if (serverResult.status !== 'loaded') {
+      const recovery = await forkDeletedProject(
+        syncState,
+        hiddenProject,
+        document,
+        syncState.pendingProjectMinimumCanvasSchemaVersions.get(projectId) ?? DEFAULT_PROJECT_CANVAS_SCHEMA_VERSION,
+        { allowMarkedSource: true }
+      );
+
+      assertOwner(syncState);
+      if (recovery.kind !== 'forked') {
+        return false;
+      }
+
+      syncState.syncEntries.set(projectId, serverEntry);
+      syncState.pendingDeletedForks.push(recovery.fork);
+      syncState.forkedProjectIds.add(projectId);
+      syncState.deletedProjectIds.delete(projectId);
+      syncState.unconfirmedDeletionProjectIds.delete(projectId);
+      continue;
+    }
+
+    if (serverDocumentJson === documentJson) {
+      // DELETE did not commit, but the server already has every cached byte.
+      syncState.syncEntries.set(projectId, serverEntry);
+      syncState.deletedProjectIds.delete(projectId);
+      syncState.unconfirmedDeletionProjectIds.delete(projectId);
+      continue;
+    }
+
+    const outcome = await forkProjectAgainstServer(
+      syncState,
+      hiddenProject,
+      document,
+      record,
+      Math.max(
+        record.minimum_canvas_schema_version,
+        syncState.pendingProjectMinimumCanvasSchemaVersions.get(projectId) ?? DEFAULT_PROJECT_CANVAS_SCHEMA_VERSION
+      )
+    );
+
+    assertOwner(syncState);
+    if (outcome.kind !== 'forked') {
+      return false;
+    }
+
+    // The server keeps its authoritative project; the hidden cached edit is now a durable recovery.
+    syncState.syncEntries.set(projectId, serverEntry);
+    syncState.pendingConflicts.push(outcome.resolution);
+    syncState.forkedProjectIds.add(projectId);
+    syncState.deletedProjectIds.delete(projectId);
+    syncState.unconfirmedDeletionProjectIds.delete(projectId);
+  }
+
+  persistSyncMap(syncState);
+  return true;
+};
+
 const pushProject = async (syncState: SyncedPersistenceState, project: Project): Promise<ProjectPushOutcome> => {
   assertOwner(syncState);
   const { document, json: documentJson } = getSerializedProjectDocument(syncState, project);
   const entry = syncState.syncEntries.get(project.id);
+  const rememberedSchemaRefusal = syncState.schemaRefusals.get(project.id);
 
-  // A deleted or already-forked id holds someone else's answer — the deletion, or the server
-  // version that won the race. Nothing is pushed, and nothing read back under this id would be ours.
-  if (syncState.deletedProjectIds.has(project.id) || syncState.forkedProjectIds.has(project.id)) {
+  if (rememberedSchemaRefusal) {
+    return { documentJson, kind: 'schema-refused', refusal: rememberedSchemaRefusal };
+  }
+
+  if (syncState.deletedProjectIds.has(project.id)) {
+    if (syncState.unconfirmedDeletionProjectIds.has(project.id)) {
+      syncState.hasPending = true;
+
+      return { documentJson, kind: 'unsynced' };
+    }
+
     return { documentJson, kind: 'superseded' };
+  }
+
+  // Until the aggregate explicitly acknowledges applying the resolution, this id still contains
+  // the divergent local document. Serialized equality is not a valid acknowledgement: hydration
+  // injects the authoritative board and reconciliation deliberately advances documentRevision.
+  if (syncState.forkedProjectIds.has(project.id)) {
+    return { documentJson, kind: 'superseded' };
+  }
+
+  if (!entry && syncState.collisionProjectIds.has(project.id)) {
+    return recoverReservedProjectId(
+      syncState,
+      project,
+      document,
+      documentJson,
+      syncState.pendingProjectMinimumCanvasSchemaVersions.get(project.id) ?? DEFAULT_PROJECT_CANVAS_SCHEMA_VERSION
+    );
   }
 
   if (entry?.pushedDoc === documentJson) {
@@ -530,11 +1291,34 @@ const pushProject = async (syncState: SyncedPersistenceState, project: Project):
   }
 
   if (!entry) {
-    if (!(await pushNewProject(syncState, project))) {
+    const outcome = await pushNewProject(syncState, project);
+
+    if (outcome.kind === 'schema-refused') {
+      return { documentJson, kind: 'schema-refused', refusal: outcome.refusal };
+    }
+
+    if (outcome.kind === 'failed') {
       assertOwner(syncState);
       syncState.hasPending = true;
 
       return { documentJson, kind: 'unsynced' };
+    }
+
+    if (outcome.kind === 'collision') {
+      return recoverReservedProjectId(
+        syncState,
+        project,
+        document,
+        documentJson,
+        syncState.pendingProjectMinimumCanvasSchemaVersions.get(project.id) ?? DEFAULT_PROJECT_CANVAS_SCHEMA_VERSION
+      );
+    }
+
+    if (outcome.kind === 'forked') {
+      syncState.pendingConflicts.push(outcome.resolution);
+      syncState.forkedProjectIds.add(project.id);
+
+      return { documentJson, kind: 'superseded' };
     }
 
     assertOwner(syncState);
@@ -542,42 +1326,67 @@ const pushProject = async (syncState: SyncedPersistenceState, project: Project):
   }
 
   try {
+    const raisedFloor = getRaisedCanvasSchemaFloor(document, entry.minimumCanvasSchemaVersion);
     const updated = await apiUpdateProject(
       project.id,
       {
         data: document,
         expected_revision: entry.revision,
         name: project.name,
+        ...(raisedFloor === undefined ? {} : { minimum_canvas_schema_version: raisedFloor }),
       },
       syncState.owner.signal
     );
 
     assertOwner(syncState);
-    syncState.syncEntries.set(project.id, { pushedDoc: documentJson, revision: updated.revision });
+    syncState.syncEntries.set(project.id, {
+      minimumCanvasSchemaVersion: updated.minimum_canvas_schema_version,
+      pushedDoc: documentJson,
+      revision: updated.revision,
+    });
   } catch (error) {
     assertOwner(syncState);
 
     if (isProjectConflictError(error)) {
-      const outcome = await recoverConflictingProject(syncState, project, document, documentJson, entry.pushedDoc);
+      const outcome = await recoverConflictingProject(
+        syncState,
+        project,
+        document,
+        documentJson,
+        entry.pushedDoc,
+        entry.minimumCanvasSchemaVersion
+      );
 
       assertOwner(syncState);
       if (outcome.kind === 'retry') {
         try {
-          const baseRevision = syncState.syncEntries.get(project.id)?.revision ?? entry.revision;
+          const adoptedEntry = syncState.syncEntries.get(project.id) ?? entry;
+          const raisedFloor = getRaisedCanvasSchemaFloor(document, adoptedEntry.minimumCanvasSchemaVersion);
           const retried = await apiUpdateProject(
             project.id,
             {
               data: document,
-              expected_revision: baseRevision,
+              expected_revision: adoptedEntry.revision,
               name: project.name,
+              ...(raisedFloor === undefined ? {} : { minimum_canvas_schema_version: raisedFloor }),
             },
             syncState.owner.signal
           );
 
           assertOwner(syncState);
-          syncState.syncEntries.set(project.id, { pushedDoc: documentJson, revision: retried.revision });
-        } catch {
+          syncState.syncEntries.set(project.id, {
+            minimumCanvasSchemaVersion: retried.minimum_canvas_schema_version,
+            pushedDoc: documentJson,
+            revision: retried.revision,
+          });
+        } catch (retryError) {
           assertOwner(syncState);
+          const refusal = rememberServerSchemaRefusal(syncState, project.id, retryError);
+
+          if (refusal) {
+            return { documentJson, kind: 'schema-refused', refusal };
+          }
+
           // A genuinely concurrent writer; the next save re-evaluates.
           syncState.hasPending = true;
 
@@ -585,9 +1394,12 @@ const pushProject = async (syncState: SyncedPersistenceState, project: Project):
         }
       } else if (outcome.kind === 'forked') {
         syncState.pendingConflicts.push(outcome.resolution);
+        syncState.forkedProjectIds.add(project.id);
 
         // This id now holds the server's version, not ours.
         return { documentJson, kind: 'superseded' };
+      } else if (outcome.kind === 'schema-refused') {
+        return { documentJson, kind: 'schema-refused', refusal: outcome.refusal };
       } else if (outcome.kind === 'failed') {
         syncState.hasPending = true;
 
@@ -599,8 +1411,6 @@ const pushProject = async (syncState: SyncedPersistenceState, project: Project):
       // undo that deletion — the project would reappear on every device, and on this one it would
       // be a project whose board the deletion already took. Fork instead: the deletion stands, and
       // the local work survives as a recovered project with its own id and its own board.
-      syncState.syncEntries.delete(project.id);
-
       // Unless the deletion was ours. `markDeleted` runs before the DELETE, but a PUT already on the
       // wire is past the check at the top of this function, so a fast DELETE can turn our own push
       // into a 404 — and forking on that resurrects, server-side, exactly what the person deleted.
@@ -608,24 +1418,14 @@ const pushProject = async (syncState: SyncedPersistenceState, project: Project):
         return { documentJson, kind: 'superseded' };
       }
 
-      const outcome = await forkDeletedProject(syncState, project, document);
-
-      assertOwner(syncState);
-      if (outcome.kind === 'failed') {
-        syncState.hasPending = true;
-
-        return { documentJson, kind: 'unsynced' };
-      }
-
-      if (outcome.kind === 'forked') {
-        // Recorded before the aggregate hears about it, so nothing re-creates the original id in
-        // the meantime — see `forkedProjectIds`.
-        syncState.forkedProjectIds.add(project.id);
-        syncState.pendingDeletedForks.push(outcome.fork);
-      }
-
-      return { documentJson, kind: 'superseded' };
+      return recoverReservedProjectId(syncState, project, document, documentJson, entry.minimumCanvasSchemaVersion);
     } else {
+      const refusal = rememberServerSchemaRefusal(syncState, project.id, error);
+
+      if (refusal) {
+        return { documentJson, kind: 'schema-refused', refusal };
+      }
+
       syncState.hasPending = true;
 
       return { documentJson, kind: 'unsynced' };
@@ -667,33 +1467,161 @@ const loadFromBackend = async (
   ]);
 
   assertOwner(syncState);
-  const persistedRevisions = loadPersistedRevisions(syncState);
+  syncState.unconfirmedDeletionProjectIds.clear();
+  const persistedSyncMap = loadPersistedSyncMap(syncState);
+
+  syncState.deletedProjectIds = new Set(persistedSyncMap.deletedProjectIds);
+  syncState.collisionProjectIds = new Set(persistedSyncMap.collisionProjectIds);
+  syncState.pendingProjectIds = new Set(persistedSyncMap.pendingProjectIds);
+  syncState.pendingProjectMinimumCanvasSchemaVersions = new Map(
+    Object.entries(persistedSyncMap.pendingProjectMinimumCanvasSchemaVersions)
+  );
+  syncState.pendingRecoveryIdentities = new Map(Object.entries(persistedSyncMap.pendingRecoveryIdentities));
 
   seedProjectLibrary(summaries, syncState.owner);
 
+  // If the project is still listed, the previous DELETE did not commit. Cancel that tombstone and
+  // accept the server record. Unlisted tombstones remain until the ordinary cache omits the project.
+  for (const summary of summaries) {
+    syncState.deletedProjectIds.delete(summary.project_id);
+  }
+
   // First contact: a backend with no projects adopts the browser's existing
   // workbench (one-time import of the pre-backend localStorage data).
-  if (summaries.length === 0 && local && local.state.projects.length > 0) {
-    const importedState: WorkbenchState = {
+  const hasPreviouslySyncedLocalProject = (local?.state.projects ?? []).some(
+    (project) =>
+      persistedSyncMap.revisions[project.id] !== undefined ||
+      persistedSyncMap.deletedProjectIds.includes(project.id) ||
+      persistedSyncMap.pendingProjectIds.includes(project.id)
+  );
+
+  if (summaries.length === 0 && local && local.state.projects.length > 0 && !hasPreviouslySyncedLocalProject) {
+    let importedState: WorkbenchState = {
       ...local.state,
       account: normalizeWorkbenchAccount(sessionBlob?.account ?? local.state.account),
     };
 
     for (const project of local.state.projects) {
-      if (!(await pushNewProject(syncState, project))) {
-        assertOwner(syncState);
-        syncState.hasPending = true;
+      markProjectPending(syncState, project);
+    }
+    if (!persistSyncMap(syncState)) {
+      syncState.hasPending = true;
+
+      if (!options?.createNew) {
+        return local;
+      }
+
+      const draft = createDraftProject(local.state.projects, local.state.account);
+
+      return {
+        ...local,
+        state: {
+          ...local.state,
+          activeProjectId: draft.id,
+          projects: [...local.state.projects, draft],
+        },
+      };
+    }
+
+    for (const project of local.state.projects) {
+      const outcome = await pushProject(syncState, project);
+
+      settleProjectPendingMarker(syncState, project.id, outcome);
+
+      if (outcome.kind === 'schema-refused') {
+        await retainSchemaRefusedProject(syncState, project, outcome.refusal);
       }
 
       assertOwner(syncState);
       const entry = syncState.syncEntries.get(project.id);
 
-      upsertProjectSummary({ id: project.id, name: project.name, revision: entry?.revision ?? null }, syncState.owner);
+      upsertProjectSummary(
+        {
+          id: project.id,
+          ...(entry ? { minimumCanvasSchemaVersion: entry.minimumCanvasSchemaVersion } : {}),
+          name: project.name,
+          revision: entry?.revision ?? null,
+        },
+        syncState.owner
+      );
+    }
+
+    // A first-contact POST may race another client creating the same id. `pushProject` queues the
+    // same lossless resolution used by ordinary autosave; apply it here because load has no save
+    // result through which the persistence runtime could reconcile it.
+    for (const resolution of syncState.pendingConflicts.splice(0)) {
+      importedState = {
+        ...importedState,
+        activeProjectId:
+          importedState.activeProjectId === resolution.projectId
+            ? resolution.recoveredProject.id
+            : importedState.activeProjectId,
+        projects: importedState.projects.flatMap((project) =>
+          project.id === resolution.projectId ? [resolution.serverProject, resolution.recoveredProject] : [project]
+        ),
+      };
+
+      for (const project of [resolution.serverProject, resolution.recoveredProject]) {
+        const entry = syncState.syncEntries.get(project.id);
+
+        upsertProjectSummary(
+          {
+            id: project.id,
+            ...(entry ? { minimumCanvasSchemaVersion: entry.minimumCanvasSchemaVersion } : {}),
+            name: project.name,
+            revision: entry?.revision ?? null,
+          },
+          syncState.owner
+        );
+      }
+      syncState.forkedProjectIds.delete(resolution.projectId);
+    }
+
+    for (const fork of syncState.pendingDeletedForks.splice(0)) {
+      importedState = {
+        ...importedState,
+        activeProjectId:
+          importedState.activeProjectId === fork.projectId ? fork.recoveredProject.id : importedState.activeProjectId,
+        projects: importedState.projects.map((project) =>
+          project.id === fork.projectId ? fork.recoveredProject : project
+        ),
+      };
+
+      const entry = syncState.syncEntries.get(fork.recoveredProject.id);
+
+      upsertProjectSummary(
+        {
+          id: fork.recoveredProject.id,
+          ...(entry ? { minimumCanvasSchemaVersion: entry.minimumCanvasSchemaVersion } : {}),
+          name: fork.recoveredProject.name,
+          revision: entry?.revision ?? null,
+        },
+        syncState.owner
+      );
     }
 
     await pushSessionState(syncState, importedState);
     assertOwner(syncState);
     persistSyncMap(syncState);
+    reportProjectSync({
+      hasPendingChanges: syncState.hasPending,
+      projects: Object.fromEntries(
+        importedState.projects.map((project) => {
+          const entry = syncState.syncEntries.get(project.id);
+          const schemaRefusal = syncState.schemaRefusals.get(project.id);
+
+          return [
+            project.id,
+            {
+              isPendingPush:
+                entry === undefined || syncState.pendingProjectIds.has(project.id) || schemaRefusal !== undefined,
+              revision: entry?.revision ?? null,
+              ...(schemaRefusal ? { schemaRefusal } : {}),
+            },
+          ];
+        })
+      ),
+    });
 
     if (!options?.createNew) {
       return { ...local, state: importedState };
@@ -718,9 +1646,23 @@ const loadFromBackend = async (
   // joins the set.
   const summaryIds = new Set(summaries.map((summary) => summary.project_id));
   const requestedIds = sessionBlob?.openProjectIds ?? summaries.map((summary) => summary.project_id);
+  const pendingCachedIds = (local?.state.projects ?? [])
+    .filter((project) => syncState.pendingProjectIds.has(project.id) && !syncState.deletedProjectIds.has(project.id))
+    .map((project) => project.id);
+  const pendingRecoveryIds = [...syncState.pendingRecoveryIdentities.values()].map(
+    (reservation) => reservation.identity.id
+  );
   const openIds: string[] = [];
 
-  for (const id of [...requestedIds, ...(options?.openProjectId ? [options.openProjectId] : [])]) {
+  // The server session may lag a failed local tab/session save. Every durably pending cached
+  // project must still be hydrated and reconciled before this load is allowed to replace the
+  // primary cache, even when the stale server open-set does not mention it.
+  for (const id of [
+    ...requestedIds,
+    ...pendingCachedIds,
+    ...pendingRecoveryIds,
+    ...(options?.openProjectId ? [options.openProjectId] : []),
+  ]) {
     if (summaryIds.has(id) && !openIds.includes(id)) {
       openIds.push(id);
     }
@@ -729,45 +1671,297 @@ const loadFromBackend = async (
   // Only the open set is hydrated into full documents; everything else stays
   // a summary in the library. A project deleted between list and get is
   // simply dropped from the session.
-  const records = await Promise.all(
-    openIds.map((id) =>
-      apiGetProject(id, syncState.owner.signal).catch(() => {
-        assertOwner(syncState);
+  const summaryById = new Map(summaries.map((summary) => [summary.project_id, summary]));
+  const recordLoads = await Promise.all(
+    openIds.map(async (id) => {
+      const summary = summaryById.get(id);
 
-        return null;
-      })
-    )
+      if (summary && !isCanvasSchemaVersionSupported(summary.minimum_canvas_schema_version)) {
+        return {
+          refused: toDeclaredSchemaRefusal(id, summary.name, summary.minimum_canvas_schema_version),
+          status: 'refused' as const,
+        };
+      }
+
+      try {
+        return { record: await apiGetProject(id, syncState.owner.signal), status: 'loaded' as const };
+      } catch (error) {
+        assertOwner(syncState);
+        const refused = toServerSchemaRefusal(error, id, summaryById.get(id)?.name ?? id);
+
+        if (refused) {
+          return { refused, status: 'refused' as const };
+        }
+
+        return isProjectNotFoundError(error)
+          ? { projectId: id, status: 'deleted' as const }
+          : { projectId: id, status: 'unavailable' as const };
+      }
+    })
   );
 
   assertOwner(syncState);
+  const loadedRecordById = new Map(
+    recordLoads.flatMap((load) => (load.status === 'loaded' ? [[load.record.project_id, load.record] as const] : []))
+  );
   const serverProjects: Project[] = [];
+  const recoveredLocalProjects: Project[] = [];
+  const recoveredProjectTransitions: Array<{
+    minimumCanvasSchemaVersion: number;
+    recoveredIsAcknowledged: boolean;
+    recoveredProjectId: string;
+    sourceEntry: SyncEntry | null;
+    sourceProjectId: string;
+  }> = [];
+  const unavailableProjectIds = new Set<string>();
+  const deletedAfterListProjectIds = new Set<string>();
+  const refusedById = new Map((local?.refusedProjects ?? []).map((refused) => [refused.projectId, refused]));
+  const localProjectById = new Map((local?.state.projects ?? []).map((project) => [project.id, project]));
 
-  for (const record of records) {
-    if (!record) {
+  for (const load of recordLoads) {
+    if (load.status === 'refused') {
+      if (load.refused.refusal.status === 'unsupported-version') {
+        syncState.schemaRefusals.set(load.refused.projectId, {
+          maxCanvasSchemaVersion: MAX_SUPPORTED_CANVAS_SCHEMA_VERSION,
+          minimumCanvasSchemaVersion: load.refused.refusal.version,
+        });
+      }
+      const localProject = localProjectById.get(load.refused.projectId);
+      const refused = localProject
+        ? (() => {
+            const raw = serializeProjectDocument(localProject);
+
+            return {
+              ...load.refused,
+              projectName: localProject.name,
+              raw,
+              refusal: { ...load.refused.refusal, raw },
+            };
+          })()
+        : load.refused;
+
+      // The current cache is the newest local edit and wins over an older retained artifact. A
+      // metadata-only server refusal may only fill an otherwise empty recovery slot.
+      if (localProject || !refusedById.has(refused.projectId)) {
+        refusedById.set(refused.projectId, refused);
+      }
       continue;
     }
 
-    const { project, pushedDoc } = adoptRecordBaseline(record);
+    if (load.status === 'unavailable') {
+      unavailableProjectIds.add(load.projectId);
+      continue;
+    }
 
-    if (project) {
-      serverProjects.push(project);
-      syncState.syncEntries.set(record.project_id, { pushedDoc, revision: record.revision });
+    if (load.status === 'deleted') {
+      deletedAfterListProjectIds.add(load.projectId);
+      summaryIds.delete(load.projectId);
+      continue;
+    }
+
+    const { record } = load;
+    const { pushedDoc: serverDocJson, result } = adoptRecordBaseline(record);
+
+    if (result.status === 'loaded') {
+      const localProject = localProjectById.get(record.project_id);
+      const hasPendingLocalEdit = localProject && syncState.pendingProjectIds.has(record.project_id);
+      const serverEntry: SyncEntry = {
+        minimumCanvasSchemaVersion: record.minimum_canvas_schema_version,
+        pushedDoc: serverDocJson,
+        revision: record.revision,
+      };
+
+      if (hasPendingLocalEdit) {
+        const localDocument = serializeProjectDocument(localProject);
+        const localDocJson = JSON.stringify(localDocument);
+
+        if (localDocJson === serverDocJson) {
+          // The acknowledgement landed before the previous runtime could clear its durable
+          // pending marker. The server already has the cached bytes.
+          syncState.pendingProjectIds.delete(record.project_id);
+          syncState.pendingProjectMinimumCanvasSchemaVersions.delete(record.project_id);
+          syncState.collisionProjectIds.delete(record.project_id);
+          syncState.syncEntries.set(record.project_id, serverEntry);
+          serverProjects.push(result.project);
+        } else if (persistedSyncMap.revisions[record.project_id] === record.revision) {
+          // The server is still at the revision this browser last acknowledged. Keep the cached
+          // edit under its original id; the next save can update that revision without clobbering
+          // another writer.
+          syncState.collisionProjectIds.delete(record.project_id);
+          syncState.syncEntries.set(record.project_id, serverEntry);
+          serverProjects.push(withAuthoritativeProjectBoard(localProject, record.board_id));
+          syncState.hasPending = true;
+        } else {
+          // Both sides advanced while this browser was offline. The server keeps the id and the
+          // cached edit becomes a never-synced recovery project, exactly like a live conflict.
+          const pendingRecoveryReservation = syncState.pendingRecoveryIdentities.get(localProject.id);
+          const pendingRecoveryIdentity = pendingRecoveryReservation?.identity;
+          const localDocumentFingerprint = await fingerprintProjectDocument(localDocument);
+          const pendingRecoveryDocument =
+            pendingRecoveryReservation?.sourceDocumentFingerprint === localDocumentFingerprint &&
+            pendingRecoveryIdentity
+              ? applyRecoveredIdentity(localDocument, pendingRecoveryIdentity)
+              : null;
+          const acknowledgedRecoveryRecord = pendingRecoveryIdentity
+            ? loadedRecordById.get(pendingRecoveryIdentity.id)
+            : null;
+          const minimumCanvasSchemaVersion = Math.max(
+            serverEntry.minimumCanvasSchemaVersion,
+            persistedSyncMap.minimumCanvasSchemaVersions[record.project_id] ?? DEFAULT_PROJECT_CANVAS_SCHEMA_VERSION
+          );
+          const recoveredIsAcknowledged = Boolean(
+            acknowledgedRecoveryRecord &&
+            pendingRecoveryDocument &&
+            acknowledgedRecoveryRecord.minimum_canvas_schema_version >= minimumCanvasSchemaVersion &&
+            JSON.stringify(acknowledgedRecoveryRecord.data) === JSON.stringify(pendingRecoveryDocument)
+          );
+          const recoveredDocument = recoveredIsAcknowledged
+            ? pendingRecoveryDocument!
+            : createRecoveredDocument(localProject, localDocument).recoveredDocument;
+          const recovered = deserializeProjectDocument(recoveredDocument);
+
+          serverProjects.push(result.project);
+
+          if (recovered.status === 'loaded') {
+            if (!recoveredIsAcknowledged) {
+              recoveredLocalProjects.push(recovered.project);
+            }
+            recoveredProjectTransitions.push({
+              minimumCanvasSchemaVersion,
+              recoveredIsAcknowledged,
+              recoveredProjectId: recovered.project.id,
+              sourceEntry: serverEntry,
+              sourceProjectId: record.project_id,
+            });
+            syncState.hasPending = true;
+          }
+        }
+      } else {
+        syncState.pendingProjectIds.delete(record.project_id);
+        syncState.pendingProjectMinimumCanvasSchemaVersions.delete(record.project_id);
+        syncState.collisionProjectIds.delete(record.project_id);
+        syncState.syncEntries.set(record.project_id, serverEntry);
+        serverProjects.push(result.project);
+      }
+    } else if (result.status === 'refused') {
+      refusedById.set(result.refused.projectId, result.refused);
     }
   }
 
-  // Local projects the server does not have: keep the ones never synced
-  // (created offline; the next save pushes them) and drop the ones with a
-  // recorded revision (synced before, so they were deleted elsewhere).
-  const serverIds = new Set(serverProjects.map((project) => project.id));
+  if (deletedAfterListProjectIds.size > 0) {
+    seedProjectLibrary(
+      summaries.filter((summary) => !deletedAfterListProjectIds.has(summary.project_id)),
+      syncState.owner
+    );
+  }
+
+  // Local projects the server does not have: keep never-synced drafts, recover pending edits under
+  // a fresh id, and drop only previously-synced documents with no unacknowledged local work.
   const offlineCreated = (local?.state.projects ?? []).filter(
-    (project) => !serverIds.has(project.id) && persistedRevisions[project.id] === undefined
+    (project) =>
+      !summaryIds.has(project.id) &&
+      persistedSyncMap.revisions[project.id] === undefined &&
+      !syncState.pendingProjectIds.has(project.id) &&
+      !syncState.deletedProjectIds.has(project.id)
+  );
+  const unavailableCachedProjects = (local?.state.projects ?? []).filter(
+    (project) => unavailableProjectIds.has(project.id) && !syncState.deletedProjectIds.has(project.id)
   );
 
-  if (offlineCreated.length > 0) {
+  for (const project of unavailableCachedProjects) {
+    const revision = persistedSyncMap.revisions[project.id];
+
+    if (revision !== undefined) {
+      syncState.syncEntries.set(project.id, {
+        minimumCanvasSchemaVersion:
+          persistedSyncMap.minimumCanvasSchemaVersions[project.id] ?? DEFAULT_PROJECT_CANVAS_SCHEMA_VERSION,
+        pushedDoc: null,
+        revision,
+      });
+    }
+    syncState.pendingProjectIds.add(project.id);
+  }
+  const recoveredDeletedProjects: Project[] = [];
+
+  for (const project of local?.state.projects ?? []) {
+    if (
+      summaryIds.has(project.id) ||
+      syncState.deletedProjectIds.has(project.id) ||
+      !syncState.pendingProjectIds.has(project.id)
+    ) {
+      continue;
+    }
+
+    const pendingRecoveryReservation = syncState.pendingRecoveryIdentities.get(project.id);
+    const pendingRecoveryIdentity = pendingRecoveryReservation?.identity;
+    const sourceDocument = serializeProjectDocument(project);
+    const sourceDocumentFingerprint = await fingerprintProjectDocument(sourceDocument);
+    const pendingRecoveryDocument =
+      pendingRecoveryReservation?.sourceDocumentFingerprint === sourceDocumentFingerprint && pendingRecoveryIdentity
+        ? applyRecoveredIdentity(sourceDocument, pendingRecoveryIdentity)
+        : null;
+    const acknowledgedRecoveryRecord = pendingRecoveryIdentity
+      ? loadedRecordById.get(pendingRecoveryIdentity.id)
+      : undefined;
+    const minimumCanvasSchemaVersion =
+      persistedSyncMap.pendingProjectMinimumCanvasSchemaVersions[project.id] ??
+      persistedSyncMap.minimumCanvasSchemaVersions[project.id] ??
+      DEFAULT_PROJECT_CANVAS_SCHEMA_VERSION;
+    const recoveredIsAcknowledged = Boolean(
+      acknowledgedRecoveryRecord &&
+      pendingRecoveryDocument &&
+      acknowledgedRecoveryRecord.minimum_canvas_schema_version >= minimumCanvasSchemaVersion &&
+      JSON.stringify(acknowledgedRecoveryRecord.data) === JSON.stringify(pendingRecoveryDocument)
+    );
+
+    if (recoveredIsAcknowledged && pendingRecoveryIdentity) {
+      // A previous POST committed but its response was lost. The durable recovery identity made
+      // that record part of hydration even when the saved open-tab set did not mention it.
+      recoveredProjectTransitions.push({
+        minimumCanvasSchemaVersion,
+        recoveredIsAcknowledged: true,
+        recoveredProjectId: pendingRecoveryIdentity.id,
+        sourceEntry: null,
+        sourceProjectId: project.id,
+      });
+
+      continue;
+    }
+
+    // A missing or different persisted reservation may have been deleted or reused elsewhere.
+    // Rotate locally instead of ever POSTing that ambiguous id again.
+    const recoveredDocument = createRecoveredDocument(project, sourceDocument).recoveredDocument;
+    const recovered = deserializeProjectDocument(recoveredDocument);
+
+    if (recovered.status !== 'loaded') {
+      continue;
+    }
+
+    // Delay the identity transition until the recovered document is in the primary cache. Before
+    // that write, the old pending/revision evidence is what makes the old cache safe; afterwards,
+    // the recovered id itself is durable and can become the pending upload.
+    recoveredProjectTransitions.push({
+      minimumCanvasSchemaVersion,
+      recoveredIsAcknowledged: false,
+      recoveredProjectId: recovered.project.id,
+      sourceEntry: null,
+      sourceProjectId: project.id,
+    });
+
+    recoveredDeletedProjects.push(recovered.project);
+  }
+
+  if (offlineCreated.length > 0 || recoveredDeletedProjects.length > 0 || unavailableCachedProjects.length > 0) {
     syncState.hasPending = true;
   }
 
-  let projects = [...serverProjects, ...offlineCreated];
+  let projects = [
+    ...serverProjects,
+    ...recoveredLocalProjects,
+    ...unavailableCachedProjects,
+    ...offlineCreated,
+    ...recoveredDeletedProjects,
+  ];
 
   if (sessionBlob) {
     syncState.lastPushedAccount = JSON.stringify(sessionBlob);
@@ -813,30 +2007,124 @@ const loadFromBackend = async (
     projects: Object.fromEntries(
       projects.map((project) => {
         const entry = syncState.syncEntries.get(project.id);
+        const schemaRefusal = syncState.schemaRefusals.get(project.id);
 
-        return [project.id, { isPendingPush: entry === undefined, revision: entry?.revision ?? null }];
+        return [
+          project.id,
+          {
+            isPendingPush:
+              entry === undefined || syncState.pendingProjectIds.has(project.id) || schemaRefusal !== undefined,
+            revision: entry?.revision ?? null,
+            ...(schemaRefusal ? { schemaRefusal } : {}),
+          },
+        ];
       })
     ),
   });
 
-  persistSyncMap(syncState);
+  if (!persistSyncMap(syncState)) {
+    throw new Error('Could not durably record server project revisions.');
+  }
 
-  const snapshot = createSnapshot(state);
-
-  // Refresh the offline cache with what the server gave us.
-  await syncState.localPersistence.saveWorkbench(state);
+  const refusedProjects = [...refusedById.values()];
+  const retainedRefusals = await syncState.localPersistence.retainRefusedProjects(refusedProjects);
   assertOwner(syncState);
 
-  return snapshot;
+  if (!retainedRefusals && local) {
+    syncState.unretainedRefusedProjects = refusedProjects.filter(
+      (project) => project.raw !== null && project.raw !== undefined
+    );
+    // Do not replace the primary cache unless every project omitted for compatibility has a durable
+    // raw recovery copy. The prior snapshot remains the fallback and all refused ids are terminal
+    // in this sync lifetime, so a subsequent autosave cannot publish them through this client.
+    syncState.hasPending = true;
+    reportProjectSync({
+      hasPendingChanges: true,
+      projects: Object.fromEntries(
+        local.state.projects.map((project) => {
+          const entry = syncState.syncEntries.get(project.id);
+          const schemaRefusal = syncState.schemaRefusals.get(project.id);
+
+          return [
+            project.id,
+            {
+              isPendingPush: true,
+              revision: entry?.revision ?? null,
+              ...(schemaRefusal ? { schemaRefusal } : {}),
+            },
+          ];
+        })
+      ),
+    });
+
+    return { ...local, refusedProjects };
+  }
+
+  syncState.unretainedRefusedProjects = [];
+
+  // A fresh recovery id and its inherited floor must be durable before the primary cache can swap
+  // away the source id. Keep the source evidence too; the transition below retires it only after
+  // the cache write succeeds. A crash between these writes may cause a harmless extra re-key, but
+  // can never publish the recovered bytes below their source's schema floor.
+  const unacknowledgedRecoveryTransitions = recoveredProjectTransitions.filter(
+    (transition) => !transition.recoveredIsAcknowledged
+  );
+  for (const transition of unacknowledgedRecoveryTransitions) {
+    syncState.pendingProjectIds.add(transition.recoveredProjectId);
+    syncState.pendingProjectMinimumCanvasSchemaVersions.set(
+      transition.recoveredProjectId,
+      transition.minimumCanvasSchemaVersion
+    );
+  }
+  if (unacknowledgedRecoveryTransitions.length > 0 && !persistSyncMap(syncState)) {
+    for (const transition of unacknowledgedRecoveryTransitions) {
+      syncState.pendingProjectIds.delete(transition.recoveredProjectId);
+      syncState.pendingProjectMinimumCanvasSchemaVersions.delete(transition.recoveredProjectId);
+    }
+    syncState.hasPending = true;
+    throw new Error('Could not durably prepare recovered projects for the local cache.');
+  }
+
+  // Refresh the offline cache with what the server gave us.
+  const snapshot = await syncState.localPersistence.saveWorkbench(state);
+  assertOwner(syncState);
+  syncState.cachedProjectsById = new Map(state.projects.map((project) => [project.id, project]));
+  for (const transition of recoveredProjectTransitions) {
+    syncState.collisionProjectIds.delete(transition.sourceProjectId);
+    if (transition.sourceEntry) {
+      syncState.syncEntries.set(transition.sourceProjectId, transition.sourceEntry);
+    } else {
+      syncState.syncEntries.delete(transition.sourceProjectId);
+    }
+    syncState.schemaRefusals.delete(transition.sourceProjectId);
+    syncState.pendingProjectIds.delete(transition.sourceProjectId);
+    syncState.pendingProjectMinimumCanvasSchemaVersions.delete(transition.sourceProjectId);
+    syncState.pendingRecoveryIdentities.delete(transition.sourceProjectId);
+    if (!transition.recoveredIsAcknowledged) {
+      syncState.pendingProjectIds.add(transition.recoveredProjectId);
+      syncState.pendingProjectMinimumCanvasSchemaVersions.set(
+        transition.recoveredProjectId,
+        transition.minimumCanvasSchemaVersion
+      );
+    }
+  }
+  settleRecoveryReservationsAfterCacheWrite(syncState, state);
+  settleProjectAbsenceAfterCacheWrite(syncState, state);
+  if (!persistSyncMap(syncState)) {
+    syncState.hasPending = true;
+  }
+
+  return { ...snapshot, refusedProjects };
 };
 
 export interface SyncedWorkbenchPersistence {
-  adoptProjectRecord(record: ProjectRecordDTO): Project | null;
+  acknowledgeConflictResolution(projectId: string): void;
+  adoptProjectRecord(record: ProjectRecordDTO): ProjectLoadResult;
   clearWorkbench(): Promise<void>;
   deleteProjectOnServer(projectId: string): Promise<void>;
   flushProjectToServer(project: Project): Promise<ProjectPushOutcome>;
   hasPendingChanges(): boolean;
-  hydrateProjectFromServer(projectId: string): Promise<Project | null>;
+  hydrateProjectFromServer(projectId: string, projectName?: string): Promise<ProjectLoadResult>;
   loadWorkbench(options?: WorkbenchLoadOptions): Promise<HydratedWorkbenchSnapshot | null>;
   markProjectDeleted(projectId: string): void;
   persistEmptySession(state: WorkbenchState): Promise<void>;
@@ -910,56 +2198,61 @@ export const createSyncedWorkbenchPersistence = (
     return result;
   };
 
-  /**
-   * Sync entries dropped by {@link markDeleted}, kept so a deletion that fails can be undone whole.
-   *
-   * Without this, unmarking restores the project's right to save but not its place in the revision
-   * chain: the next push finds no entry, takes the create path, and has to recover through a 409.
-   */
-  const entriesHeldForDeletion = new Map<string, SyncEntry>();
-
-  const markDeleted = (projectId: string): void => {
+  const markDeleted = (projectId: string): boolean => {
     assertOwner(syncState);
     syncState.deletedProjectIds.add(projectId);
 
-    const entry = syncState.syncEntries.get(projectId);
-
-    if (entry) {
-      entriesHeldForDeletion.set(projectId, entry);
-    }
-
-    syncState.syncEntries.delete(projectId);
-    persistSyncMap(syncState);
+    // Keep the revision, floor, and pending metadata beside the tombstone. They are either restored
+    // intact if DELETE fails or removed together after a cache snapshot omits the project.
+    return persistSyncMap(syncState);
   };
 
   const unmarkDeleted = (projectId: string): void => {
     assertOwner(syncState);
     syncState.deletedProjectIds.delete(projectId);
-
-    const entry = entriesHeldForDeletion.get(projectId);
-
-    if (entry) {
-      syncState.syncEntries.set(projectId, entry);
-      entriesHeldForDeletion.delete(projectId);
-      persistSyncMap(syncState);
+    if (!persistSyncMap(syncState)) {
+      // The durable tombstone still exists. Restore the in-memory view so this lifetime cannot
+      // claim the deletion was cancelled and later compact away the cached source document.
+      syncState.deletedProjectIds.add(projectId);
+      syncState.unconfirmedDeletionProjectIds.add(projectId);
+      syncState.hasPending = true;
+    } else {
+      syncState.unconfirmedDeletionProjectIds.delete(projectId);
     }
   };
 
-  const adoptProjectRecord = (record: ProjectRecordDTO): Project | null => {
+  const adoptProjectRecord = (record: ProjectRecordDTO): ProjectLoadResult => {
     assertOwner(syncState);
-    const { project, pushedDoc } = adoptRecordBaseline(record);
+    const { pushedDoc, result } = adoptRecordBaseline(record);
 
-    if (!project) {
-      return null;
+    if (result.status !== 'loaded') {
+      return result;
     }
 
-    syncState.syncEntries.set(record.project_id, { pushedDoc, revision: record.revision });
+    syncState.syncEntries.set(record.project_id, {
+      minimumCanvasSchemaVersion: record.minimum_canvas_schema_version,
+      pushedDoc,
+      revision: record.revision,
+    });
+    syncState.deletedProjectIds.delete(record.project_id);
+    syncState.forkedProjectIds.delete(record.project_id);
+    syncState.schemaRefusals.delete(record.project_id);
+    syncState.collisionProjectIds.delete(record.project_id);
+    syncState.pendingProjectIds.delete(record.project_id);
+    syncState.pendingProjectMinimumCanvasSchemaVersions.delete(record.project_id);
+    syncState.pendingRecoveryIdentities.delete(record.project_id);
+    syncState.releasedProjectIds.delete(record.project_id);
+    syncState.unconfirmedDeletionProjectIds.delete(record.project_id);
     persistSyncMap(syncState);
 
-    return project;
+    return result;
   };
 
   return {
+    acknowledgeConflictResolution(projectId): void {
+      assertOwner(syncState);
+      syncState.forkedProjectIds.delete(projectId);
+    },
     adoptProjectRecord,
     /** Clear everywhere: server projects + session blob, local cache, sync map, and this lifetime's sync state. */
     clearWorkbench(): Promise<void> {
@@ -967,17 +2260,28 @@ export const createSyncedWorkbenchPersistence = (
         await clearAllWorkbenchData(syncState.owner);
 
         assertOwner(syncState);
+        syncState.cachedProjectsById.clear();
         syncState.syncEntries.clear();
+        syncState.collisionProjectIds.clear();
+        syncState.schemaRefusals.clear();
         syncState.deletedProjectIds.clear();
-        entriesHeldForDeletion.clear();
+        syncState.pendingProjectIds.clear();
+        syncState.pendingProjectMinimumCanvasSchemaVersions.clear();
+        syncState.pendingRecoveryIdentities.clear();
+        syncState.releasedProjectIds.clear();
+        syncState.unretainedRefusedProjects = [];
         syncState.lastPushedAccount = null;
         syncState.hasPending = false;
+        syncState.unconfirmedDeletionProjectIds.clear();
       });
     },
     /** Queued, not issued directly — see {@link OpenProjectHandle.deleteOnServer}. */
     deleteProjectOnServer(projectId): Promise<void> {
       return enqueueMutation(async () => {
-        markDeleted(projectId);
+        if (!markDeleted(projectId)) {
+          unmarkDeleted(projectId);
+          throw new Error('Could not durably record the pending project deletion.');
+        }
 
         try {
           await apiDeleteProject(projectId, syncState.owner.signal);
@@ -988,6 +2292,7 @@ export const createSyncedWorkbenchPersistence = (
         }
 
         assertOwner(syncState);
+        syncState.unconfirmedDeletionProjectIds.delete(projectId);
       });
     },
     flushProjectToServer(project): Promise<ProjectPushOutcome> {
@@ -1000,10 +2305,25 @@ export const createSyncedWorkbenchPersistence = (
         // failure on its hands, so this still does not reject; but "recoverable" and "done" are
         // different answers, and a caller about to read the project back from the server needs the
         // second one. `assertProjectFlushed` in `./projectFlush` is where that is spent.
+        markProjectPending(syncState, project);
+        if (!persistSyncMap(syncState)) {
+          syncState.hasPending = true;
+
+          return { documentJson: getSerializedProjectDocument(syncState, project).json, kind: 'unsynced' };
+        }
+
         const outcome = await pushProject(syncState, project);
 
+        settleProjectPendingMarker(syncState, project.id, outcome);
+
+        if (outcome.kind === 'schema-refused') {
+          await retainSchemaRefusedProject(syncState, project, outcome.refusal);
+        }
+
         assertOwner(syncState);
-        persistSyncMap(syncState);
+        if (!persistSyncMap(syncState)) {
+          syncState.hasPending = true;
+        }
 
         return outcome;
       });
@@ -1012,7 +2332,7 @@ export const createSyncedWorkbenchPersistence = (
       assertOwner(syncState);
       return syncState.hasPending;
     },
-    async hydrateProjectFromServer(projectId): Promise<Project | null> {
+    async hydrateProjectFromServer(projectId, projectName = projectId): Promise<ProjectLoadResult> {
       assertOwner(syncState);
 
       try {
@@ -1020,10 +2340,16 @@ export const createSyncedWorkbenchPersistence = (
 
         assertOwner(syncState);
         return adoptProjectRecord(record);
-      } catch {
+      } catch (error) {
         assertOwner(syncState);
 
-        return null;
+        const refused = toServerSchemaRefusal(error, projectId, projectName);
+
+        if (refused) {
+          return { refused, status: 'refused' };
+        }
+
+        return { status: 'unavailable' };
       }
     },
     /**
@@ -1046,6 +2372,14 @@ export const createSyncedWorkbenchPersistence = (
         try {
           local = await syncState.localPersistence.loadWorkbench();
           assertOwner(syncState);
+
+          syncState.cachedProjectsById = new Map((local?.state.projects ?? []).map((project) => [project.id, project]));
+
+          if (local?.hasUnretainedRefusedProjects) {
+            syncState.unretainedRefusedProjects = local.refusedProjects.filter(
+              (project) => project.raw !== null && project.raw !== undefined
+            );
+          }
         } catch {
           assertOwner(syncState);
           local = null;
@@ -1059,19 +2393,46 @@ export const createSyncedWorkbenchPersistence = (
           // replay on reconnect.
           syncState.hasPending = true;
 
-          const persistedRevisions = loadPersistedRevisions(syncState);
+          const persistedSyncMap = loadPersistedSyncMap(syncState);
 
-          for (const [projectId, revision] of Object.entries(persistedRevisions)) {
-            syncState.syncEntries.set(projectId, { pushedDoc: null, revision });
+          syncState.deletedProjectIds = new Set(persistedSyncMap.deletedProjectIds);
+          syncState.collisionProjectIds = new Set(persistedSyncMap.collisionProjectIds);
+          syncState.pendingProjectIds = new Set(persistedSyncMap.pendingProjectIds);
+          syncState.pendingProjectMinimumCanvasSchemaVersions = new Map(
+            Object.entries(persistedSyncMap.pendingProjectMinimumCanvasSchemaVersions)
+          );
+          syncState.pendingRecoveryIdentities = new Map(Object.entries(persistedSyncMap.pendingRecoveryIdentities));
+          syncState.unconfirmedDeletionProjectIds = new Set(
+            (local?.state.projects ?? [])
+              .filter((project) => syncState.deletedProjectIds.has(project.id))
+              .map((project) => project.id)
+          );
+
+          for (const projectId of persistedSyncMap.pendingProjectIds) {
+            if (persistedSyncMap.revisions[projectId] === undefined) {
+              syncState.collisionProjectIds.add(projectId);
+            }
+          }
+          persistSyncMap(syncState);
+
+          for (const [projectId, revision] of Object.entries(persistedSyncMap.revisions)) {
+            syncState.syncEntries.set(projectId, {
+              minimumCanvasSchemaVersion:
+                persistedSyncMap.minimumCanvasSchemaVersions[projectId] ?? DEFAULT_PROJECT_CANVAS_SCHEMA_VERSION,
+              pushedDoc: null,
+              revision,
+            });
           }
 
           reportProjectSync({
             hasPendingChanges: true,
             projects: Object.fromEntries(
-              (local?.state.projects ?? []).map((project) => [
-                project.id,
-                { isPendingPush: true, revision: persistedRevisions[project.id] ?? null },
-              ])
+              (local?.state.projects ?? [])
+                .filter((project) => !syncState.deletedProjectIds.has(project.id))
+                .map((project) => [
+                  project.id,
+                  { isPendingPush: true, revision: persistedSyncMap.revisions[project.id] ?? null },
+                ])
             ),
           });
 
@@ -1079,16 +2440,17 @@ export const createSyncedWorkbenchPersistence = (
             return null;
           }
 
+          const visibleProjects = local.state.projects.filter(
+            (project) => !syncState.deletedProjectIds.has(project.id)
+          );
+
           // A cache holding an empty session (last tab closed offline) still
           // owns the account's preset defaults, so build the replacement draft
           // here instead of falling back to the store's shipped defaults.
-          if (local.state.projects.length === 0) {
+          if (visibleProjects.length === 0) {
             const draft = createDraftProject([], local.state.account);
 
-            return {
-              ...local,
-              state: { ...local.state, activeProjectId: draft.id, projects: [draft] },
-            };
+            return { ...local, state: { ...local.state, activeProjectId: draft.id, projects: [draft] } };
           }
 
           // `?new=true` means a fresh draft whether or not the backend answered.
@@ -1097,19 +2459,24 @@ export const createSyncedWorkbenchPersistence = (
           // reopened — and then let the Launchpad's intent rearrange — existing
           // work.
           if (options?.createNew) {
-            const draft = createDraftProject(local.state.projects, local.state.account);
+            const draft = createDraftProject(visibleProjects, local.state.account);
 
             return {
               ...local,
-              state: {
-                ...local.state,
-                activeProjectId: draft.id,
-                projects: [...local.state.projects, draft],
-              },
+              state: { ...local.state, activeProjectId: draft.id, projects: [...visibleProjects, draft] },
             };
           }
 
-          return local;
+          return {
+            ...local,
+            state: {
+              ...local.state,
+              activeProjectId: visibleProjects.some((project) => project.id === local.state.activeProjectId)
+                ? local.state.activeProjectId
+                : visibleProjects[0]!.id,
+              projects: visibleProjects,
+            },
+          };
         }
       })();
 
@@ -1128,10 +2495,24 @@ export const createSyncedWorkbenchPersistence = (
     },
     persistEmptySession(state): Promise<void> {
       return enqueueMutation(async () => {
+        if (
+          syncState.unconfirmedDeletionProjectIds.size > 0 &&
+          !(await reconcileUnconfirmedDeletions(syncState, state.projects))
+        ) {
+          throw new Error('Could not verify pending project deletions while offline.');
+        }
+
+        if (!(await ensureRefusedProjectsRetained(syncState))) {
+          throw new Error('Could not preserve projects that require a newer client.');
+        }
+
         const emptied: WorkbenchState = { ...state, activeProjectId: '', projects: [] };
 
         await syncState.localPersistence.saveWorkbench(emptied);
         assertOwner(syncState);
+        syncState.cachedProjectsById.clear();
+        settleProjectAbsenceAfterCacheWrite(syncState, emptied);
+        persistSyncMap(syncState);
 
         try {
           const blob = serializeSessionBlob(emptied);
@@ -1147,16 +2528,41 @@ export const createSyncedWorkbenchPersistence = (
     },
     releaseProjectSync(projectId): void {
       assertOwner(syncState);
-      syncState.syncEntries.delete(projectId);
-      persistSyncMap(syncState);
+      // Closing is a two-step transition: the UI removes the project, then autosave replaces the
+      // cache. Keep its revision until that cache write succeeds so a crash cannot make a formerly
+      // synced project look like a never-synced draft and recreate a remotely deleted id.
+      syncState.releasedProjectIds.add(projectId);
     },
     saveWorkbench(state: WorkbenchState): Promise<WorkbenchSaveResult> {
       return enqueueMutation(async () => {
-        const snapshot = createSnapshot(state);
+        if (
+          syncState.unconfirmedDeletionProjectIds.size > 0 &&
+          !(await reconcileUnconfirmedDeletions(syncState, state.projects))
+        ) {
+          throw new Error('Could not verify pending project deletions while offline.');
+        }
 
-        await syncState.localPersistence.saveWorkbench(state);
+        if (!(await ensureRefusedProjectsRetained(syncState))) {
+          throw new Error('Could not preserve projects that require a newer client.');
+        }
+
+        for (const project of state.projects) {
+          markProjectPending(syncState, project);
+        }
+        // The two localStorage keys cannot commit atomically, so write the marker first. A crash may
+        // then leave a harmless stale marker beside old bytes (cleared by equality on reload), but
+        // can never leave new cached bytes falsely described as acknowledged.
+        if (!persistSyncMap(syncState)) {
+          syncState.hasPending = true;
+          throw new Error('Could not durably record pending project edits.');
+        }
+
+        const snapshot = await syncState.localPersistence.saveWorkbench(state);
 
         assertOwner(syncState);
+        syncState.cachedProjectsById = new Map(state.projects.map((project) => [project.id, project]));
+        settleRecoveryReservationsAfterCacheWrite(syncState, state);
+        settleProjectAbsenceAfterCacheWrite(syncState, state);
         syncState.hasPending = false;
 
         const projectSyncInfos: Record<string, ProjectSyncInfo> = {};
@@ -1167,24 +2573,46 @@ export const createSyncedWorkbenchPersistence = (
         for (const project of state.projects) {
           assertOwner(syncState);
           const lastAckedDoc = syncState.syncEntries.get(project.id)?.pushedDoc ?? null;
-          const { documentJson } = await pushProject(syncState, project);
+          const outcome = await pushProject(syncState, project);
+          const { documentJson } = outcome;
+
+          settleProjectPendingMarker(syncState, project.id, outcome);
+
+          if (outcome.kind === 'schema-refused') {
+            await retainSchemaRefusedProject(syncState, project, outcome.refusal);
+          }
 
           assertOwner(syncState);
           const entry = syncState.syncEntries.get(project.id);
 
           projectSyncInfos[project.id] = {
-            isPendingPush: entry?.pushedDoc !== documentJson,
+            isPendingPush: syncState.pendingProjectIds.has(project.id),
             revision: entry?.revision ?? null,
+            ...(outcome.kind === 'schema-refused' ? { schemaRefusal: outcome.refusal } : {}),
           };
 
           // The server acknowledged new content for this project — keep the
           // library summary current without a refetch.
           if (entry && entry.pushedDoc === documentJson && lastAckedDoc !== documentJson) {
-            upsertProjectSummary({ id: project.id, name: project.name, revision: entry.revision }, syncState.owner);
+            upsertProjectSummary(
+              {
+                id: project.id,
+                minimumCanvasSchemaVersion: entry.minimumCanvasSchemaVersion,
+                name: project.name,
+                revision: entry.revision,
+              },
+              syncState.owner
+            );
           }
         }
 
-        persistSyncMap(syncState);
+        // A reconciliation save may need to push the server-assigned recovery board before its
+        // cached document matches the acknowledgement. Recheck after all project pushes so the
+        // source reservation does not survive into an unrelated later conflict.
+        settleRecoveryReservationsAfterCacheWrite(syncState, state);
+        if (!persistSyncMap(syncState)) {
+          syncState.hasPending = true;
+        }
         reportProjectSync({ hasPendingChanges: syncState.hasPending, projects: projectSyncInfos });
 
         // Drained rather than read: each outcome is applied to the store exactly once. The runtime

@@ -3,10 +3,14 @@ import type {
   CommitMaskImageResultOptions,
   LayerExportGuard,
 } from '@workbench/canvas-engine/capabilities';
-import type { CanvasDocumentContractV2 } from '@workbench/canvas-engine/contracts';
+import type { CanvasDocumentContractV3 } from '@workbench/canvas-engine/contracts';
+import type { CanvasNodeInsertionAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
+import type { LayerStackKind } from '@workbench/canvas-engine/document/layerStacks';
+import type { CanvasEditConcurrency } from '@workbench/canvas-engine/editConcurrency';
 import type { History } from '@workbench/canvas-engine/history/history';
 import type { CanvasProjectMutation } from '@workbench/canvas-engine/mutationContracts';
 
+import { getDocumentLayer, getDocumentLeaves, isNodeAbsent } from '@workbench/canvas-engine/document/documentIndex';
 import {
   createInpaintMaskFromImage,
   createRegionalGuidanceFromImage,
@@ -22,8 +26,9 @@ export type {
   MaskImageResultTarget,
 } from '@workbench/canvas-engine/capabilities';
 
-export interface MaskResultControllerOptions<Owner = symbol> {
-  readonly canEdit: (owner?: Owner) => boolean;
+export interface MaskResultControllerOptions {
+  readonly captureInsertionAnchor: (stack: LayerStackKind, aboveId: string | null) => CanvasNodeInsertionAnchor;
+  readonly concurrency: CanvasEditConcurrency;
   readonly createLayerId: () => string;
   readonly dispatchPrepared: (
     action: CanvasProjectMutation,
@@ -31,20 +36,19 @@ export interface MaskResultControllerOptions<Owner = symbol> {
     mirrorAccepted: () => boolean
   ) => void;
   readonly endBurst: () => void;
-  readonly getDocument: () => CanvasDocumentContractV2 | null;
-  readonly getReducerDocument: () => CanvasDocumentContractV2 | null;
+  readonly getDocument: () => CanvasDocumentContractV3 | null;
+  readonly getReducerDocument: () => CanvasDocumentContractV3 | null;
   readonly history: History;
-  readonly isGestureActive: () => boolean;
   readonly isGuardCurrent: (guard: LayerExportGuard) => boolean;
 }
 
 /** Converts a guarded object-selection result into a structural mask layer. */
-export class MaskResultController<Owner = symbol> {
-  constructor(private readonly options: MaskResultControllerOptions<Owner>) {}
+export class MaskResultController {
+  constructor(private readonly options: MaskResultControllerOptions) {}
 
-  commit(options: CommitMaskImageResultOptions, owner?: Owner): Promise<CommitMaskImageResult> {
+  commit(options: CommitMaskImageResultOptions, owner?: symbol): Promise<CommitMaskImageResult> {
     const o = this.options;
-    if (!o.canEdit(owner)) {
+    if (!o.concurrency.canEdit(owner)) {
       return Promise.resolve({ status: 'busy' });
     }
     if (options.signal?.aborted) {
@@ -54,7 +58,7 @@ export class MaskResultController<Owner = symbol> {
     if (!document) {
       return Promise.resolve({ status: 'missing' });
     }
-    const liveLayer = document.layers.find((candidate) => candidate.id === options.guard.layerId);
+    const liveLayer = getDocumentLayer(document, options.guard.layerId);
     if (!liveLayer) {
       return Promise.resolve({ status: 'missing' });
     }
@@ -64,8 +68,7 @@ export class MaskResultController<Owner = symbol> {
     if (liveLayer.type !== 'raster' && liveLayer.type !== 'control') {
       return Promise.resolve({ status: 'unsupported' });
     }
-    const sourceIndex = document.layers.findIndex((candidate) => candidate.id === liveLayer.id);
-    if (o.isGestureActive()) {
+    if (o.concurrency.isGestureActive()) {
       return Promise.resolve({ status: 'busy' });
     }
     if (!o.isGuardCurrent(options.guard)) {
@@ -74,10 +77,7 @@ export class MaskResultController<Owner = symbol> {
     if (options.signal?.aborted) {
       return Promise.resolve({ status: 'aborted' });
     }
-    if (sourceIndex < 0) {
-      return Promise.resolve({ status: 'missing' });
-    }
-    const names = document.layers.map((layer) => layer.name);
+    const names = getDocumentLeaves(document).map((layer) => layer.name);
     const layerId = o.createLayerId();
     const layer =
       options.target === 'inpaint_mask'
@@ -91,7 +91,7 @@ export class MaskResultController<Owner = symbol> {
         : createRegionalGuidanceFromImage({
             fill: {
               color: nextRegionalGuidanceFillColor(
-                document.layers.filter((candidate) => candidate.type === 'regional_guidance').length
+                getDocumentLeaves(document).filter((candidate) => candidate.type === 'regional_guidance').length
               ),
               style: 'solid',
             },
@@ -101,11 +101,12 @@ export class MaskResultController<Owner = symbol> {
             rect: options.rect,
           });
     const selectedLayerId = document.selectedLayerId;
+    const anchor = o.captureInsertionAnchor(layer.type, liveLayer.id);
     const apply = (): void =>
       o.dispatchPrepared(
-        { index: sourceIndex, layer, type: 'addCanvasLayer' },
-        () => o.getReducerDocument()?.layers.some((candidate) => candidate === layer) === true,
-        () => o.getDocument()?.layers.some((candidate) => candidate === layer) === true
+        { anchor, layer, type: 'addCanvasLayer' },
+        () => getDocumentLayer(o.getReducerDocument(), layer.id) === layer,
+        () => getDocumentLayer(o.getDocument(), layer.id) === layer
       );
     o.endBurst();
     apply();
@@ -122,8 +123,8 @@ export class MaskResultController<Owner = symbol> {
         );
         o.dispatchPrepared(
           { ids: [layerId], type: 'removeCanvasLayers' },
-          () => o.getReducerDocument()?.layers.some((candidate) => candidate.id === layerId) === false,
-          () => o.getDocument()?.layers.some((candidate) => candidate.id === layerId) === false
+          () => isNodeAbsent(o.getReducerDocument(), layerId),
+          () => isNodeAbsent(o.getDocument(), layerId)
         );
       },
     });

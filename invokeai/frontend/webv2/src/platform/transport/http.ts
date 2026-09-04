@@ -217,6 +217,14 @@ export const getApiErrorMessage = (error: unknown, fallback: string): string => 
         return parsed.detail;
       }
 
+      if (parsed.detail && typeof parsed.detail === 'object') {
+        const message = (parsed.detail as { message?: unknown }).message;
+
+        if (typeof message === 'string' && message) {
+          return message;
+        }
+      }
+
       // Validation errors come as a list of issues; surface the first one.
       if (Array.isArray(parsed.detail)) {
         const message = getValidationIssueMessage(parsed.detail[0]);

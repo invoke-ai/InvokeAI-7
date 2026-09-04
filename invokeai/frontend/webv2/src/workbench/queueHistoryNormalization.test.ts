@@ -74,6 +74,21 @@ const createLegacyItem = (
   status: options.status ?? 'pending',
 });
 
+const createCurrentItem = () => {
+  const legacy = createLegacyItem('workflow');
+
+  return {
+    ...legacy,
+    snapshot: {
+      ...legacy.snapshot,
+      backendSubmission: { batchCount: 1, graph: backendGraph, kind: 'workflow' },
+      filterIntermediateResults: true,
+      galleryBoardId: null,
+      presentation: { batchCount: 1, height: 512, width: 512 },
+    },
+  };
+};
+
 const state = (id: string, values: unknown) => ({ id, label: id, values, version: 1 });
 
 describe('normalizeWorkbenchQueueHistory', () => {
@@ -91,6 +106,55 @@ describe('normalizeWorkbenchQueueHistory', () => {
     const queue = { items: [current] };
 
     expect(normalizeWorkbenchQueueHistory(queue, createContext())).toBe(queue);
+  });
+
+  it.each([
+    ['legacy', () => createLegacyItem('workflow')],
+    ['current-shaped', createCurrentItem],
+  ])(
+    'keeps a %s item whose canvas snapshot is invalid but makes it unsubmittable and unplaceable',
+    (_label, create) => {
+      const context = createContext();
+      const item = create();
+      const canvas = context.canvas;
+      const queue = {
+        items: [
+          {
+            ...item,
+            snapshot: {
+              ...item.snapshot,
+              canvas: {
+                ...canvas,
+                document: { ...canvas.document, stacks: { raster: [{ id: 'broken', type: 'mystery' }] } },
+              },
+            },
+          },
+        ],
+      };
+
+      const [normalized] = normalizeWorkbenchQueueHistory(queue, context).items;
+
+      expect(normalized?.id).toBe(item.id);
+      expect(normalized?.snapshot.canvas).toEqual({ ...context.canvas, documentRevision: -1 });
+      expect(normalized?.snapshot.backendSubmission).toEqual({
+        error: 'Queue item canvas snapshot is invalid.',
+        kind: 'invalid',
+      });
+      expect(normalized?.snapshot.presentation).toEqual(
+        'presentation' in item.snapshot ? item.snapshot.presentation : { batchCount: 1, height: 1024, width: 1024 }
+      );
+    }
+  );
+
+  it('gives a current-shaped snapshot that lacks a canvas record an unplaceable stand-in', () => {
+    const context = createContext();
+    const current = createCurrentItem();
+    const queue = { items: [{ ...current, snapshot: { ...current.snapshot, canvas: undefined } }] };
+
+    const [normalized] = normalizeWorkbenchQueueHistory(queue, context).items;
+
+    expect(normalized?.snapshot.canvas).toEqual({ ...context.canvas, documentRevision: -1 });
+    expect(normalized?.snapshot.backendSubmission).toEqual(current.snapshot.backendSubmission);
   });
 
   it('strips transient recent images from both current queue snapshot representations', () => {

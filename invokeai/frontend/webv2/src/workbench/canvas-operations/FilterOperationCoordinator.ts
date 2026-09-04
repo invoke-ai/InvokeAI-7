@@ -1,5 +1,5 @@
 import type { LayerExportGuard } from '@workbench/canvas-engine/api';
-import type { CanvasDocumentContractV2 } from '@workbench/canvas-engine/contracts';
+import type { CanvasDocumentContractV3 } from '@workbench/canvas-engine/contracts';
 import type { RasterSurface } from '@workbench/canvas-engine/render/raster';
 import type {
   CanvasOperationActionResult,
@@ -17,12 +17,14 @@ import type {
 import type { FilterCommitTarget, LayerFilterSettings } from '@workbench/canvas-operations/operationTypes';
 import type { BackendGraphContract } from '@workbench/graphContracts';
 
+import { lookupDocumentLeaf } from '@workbench/canvas-engine/api';
 import {
   buildFilterDefaults,
   DEFAULT_CONTROL_FILTER_TYPE,
   getFilterDefinition,
   isFilterConfigValid,
 } from '@workbench/canvas-operations/filterGraphs';
+import { readLastUsedFilterType } from '@workbench/canvas-operations/filterPreferences';
 
 import { createFilterOperationSession } from './filterOperationSession';
 import { runLayerFilter } from './layerFilterRunner';
@@ -31,7 +33,7 @@ export interface FilterOperationCoordinatorDeps {
   readonly stores: CanvasApplicationOperationStores;
   readonly controller: CanvasOperationController;
   isInteractionLocked(): boolean;
-  getDocument(): CanvasDocumentContractV2 | null;
+  getDocument(): CanvasDocumentContractV3 | null;
   captureGuard(layerId: string): LayerExportGuard | null;
   selectLayer(layerId: string): void;
   clearOtherOperation(): void;
@@ -96,8 +98,9 @@ export const createFilterOperationCoordinator = (deps: FilterOperationCoordinato
       return 'not-ready';
     }
     const document = deps.getDocument();
-    const layer = document?.layers.find((candidate) => candidate.id === layerId);
-    if (!document || !layer) {
+    const leaf = lookupDocumentLeaf(document, layerId);
+    const layer = leaf?.layer;
+    if (!document || !leaf || !layer) {
       return 'missing';
     }
     if (layer.type !== 'raster' && layer.type !== 'control') {
@@ -106,17 +109,18 @@ export const createFilterOperationCoordinator = (deps: FilterOperationCoordinato
     if (recommendedFilterType && layer.filter) {
       return 'not-ready';
     }
-    if (!layer.isEnabled) {
+    if (!leaf.contributionEnabled) {
       return 'disabled';
     }
-    if (layer.isLocked) {
+    if (leaf.effectiveLocked) {
       return 'locked';
     }
     const guard = deps.captureGuard(layer.id);
     if (!guard) {
       return 'not-ready';
     }
-    const initialType = layer.filter?.type ?? recommendedFilterType ?? DEFAULT_CONTROL_FILTER_TYPE;
+    const initialType =
+      layer.filter?.type ?? recommendedFilterType ?? readLastUsedFilterType() ?? DEFAULT_CONTROL_FILTER_TYPE;
     const initialFilter = layer.filter ? structuredClone(layer.filter) : null;
     const definition = getFilterDefinition(initialType);
     const draft = initialFilter ?? {

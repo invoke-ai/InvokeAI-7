@@ -1,3 +1,4 @@
+import type { CanvasDocumentContractV3 } from '@workbench/canvas-engine/contracts';
 import type { PreparedLayerCacheReplacement } from '@workbench/canvas-engine/render/layerCache';
 import type { CanvasProjectMutation } from '@workbench/canvasProjectMutations';
 
@@ -45,6 +46,7 @@ const createHarness = (overrides: Partial<CanvasMutationContextDeps> = {}) => {
     createLayerId: () => 'layer-new',
     dispatch: vi.fn(() => true),
     editOwner,
+    projectId: 'p1',
     editingLocked: lock,
     endBurst: () => undefined,
     getDocument: () => null,
@@ -55,6 +57,7 @@ const createHarness = (overrides: Partial<CanvasMutationContextDeps> = {}) => {
     isGuardCurrent: () => true,
     preparePixels: (layerId, rect) => ({ layerId, rect, surface: {} }) as PreparedLayerCacheReplacement,
     refreshMirror: vi.fn(),
+    subscribeReducer: () => () => undefined,
     ...overrides,
   };
   const context = createCanvasMutationContext(deps);
@@ -63,6 +66,13 @@ const createHarness = (overrides: Partial<CanvasMutationContextDeps> = {}) => {
 
 describe('createCanvasMutationContext', () => {
   describe('document edit permits', () => {
+    it('exposes the engine project id on the concurrency surface', () => {
+      const { context } = createHarness();
+
+      expect(context.projectId).toBe('p1');
+      expect(context.getEditRevision()).toBe(0);
+    });
+
     it('captures a permit while unlocked and keeps it current until the lock transitions', () => {
       const { context } = createHarness();
       const permit = context.capturePermit();
@@ -326,5 +336,30 @@ describe('createCanvasMutationContext', () => {
       lock.setLocked(false);
       expect(context.isPermitCurrent(permit)).toBe(true);
     });
+  });
+});
+
+describe('edit revision', () => {
+  it('advances once per reducer document identity and never on notification alone', () => {
+    let document = { layers: [] } as unknown as CanvasDocumentContractV3;
+    const listeners: (() => void)[] = [];
+    const { context } = createHarness({
+      getReducerDocument: () => document,
+      subscribeReducer: (listener) => {
+        listeners.push(listener);
+        return () => undefined;
+      },
+    });
+
+    expect(context.getEditRevision()).toBe(0);
+    listeners.forEach((listener) => listener());
+    expect(context.getEditRevision()).toBe(0);
+
+    document = { ...document };
+    listeners.forEach((listener) => listener());
+    expect(context.getEditRevision()).toBe(1);
+
+    document = { ...document };
+    expect(context.getEditRevision()).toBe(2);
   });
 });

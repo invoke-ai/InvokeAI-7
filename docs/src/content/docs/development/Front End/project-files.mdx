@@ -17,6 +17,48 @@ The backend gives each project exactly one private board (`projects.board_id` is
 - **The media survives.** Deleting a project removes the board and its memberships; the images and videos themselves return to Uncategorized, exactly as they would if the board were deleted without `include_images`.
 - **The document's `projectBoardId` is a cache, never the truth.** Hydration overwrites it from the project record, and export strips it — along with `selectedBoardId` — because a board id means nothing on the install a project arrives at. Board ids elsewhere in a document, such as a workflow node's board input, are deliberately left alone.
 
+## Synced canvas schema compatibility
+
+The backend keeps project documents opaque, but it owns one piece of compatibility metadata:
+`minimum_canvas_schema_version`. Every document read declares `max_canvas_schema_version` as a
+query parameter; creates and saves declare it in their request body. A client whose maximum is
+below the project's minimum receives `412 Precondition Failed` before the document is returned or
+replaced. Project listings remain readable because they contain metadata, not an editable
+document, and expose the minimum so clients can identify projects they cannot open.
+
+The floor is monotonic. A save may raise it, but cannot lower it, and SQLite commits the new
+document, revision, project name, board name, and floor as one transaction. The hierarchical
+canvas v3 document rides this seam: every save sends the document together with the
+`minimum_canvas_schema_version` it requires (3 for any v3 canvas), so a client that still declares
+a maximum of v2 is refused before it can overwrite that document.
+
+The frontend derives the requested floor from the highest declared version among the live canvas
+and every queued canvas snapshot. It also retains the server's monotonic floor in the offline sync
+map, so importing, duplicating, conflict recovery, and deletion recovery cannot accidentally create
+a copy with weaker compatibility metadata than the document or its source project requires.
+
+If another client raises the floor while a project is already open, the next save becomes a
+terminal per-project schema refusal instead of a generic network failure. The local document still
+writes through to the browser cache, repeated server retries stop, and the project Sync status asks
+the user to update Invoke. On reload, divergent cached bytes move into the raw refused-project
+recovery bucket before the ordinary cache is refreshed, so the server refusal cannot erase them.
+Project listings use the same metadata to label incompatible projects without issuing a document
+GET that is already known to fail.
+
+Ordinary offline edits have the same no-loss guarantee. Before writing the local snapshot or
+starting a push, the sync map durably marks that project pending beside its last acknowledged
+revision. The marker is written first because the two localStorage keys cannot commit atomically: a
+crash can leave a harmless stale marker, but never new cached bytes falsely marked acknowledged.
+On reconnect, an unchanged server revision safely replays the cached edit; an advanced
+revision keeps the server project under its id and turns the cached edit into a recovered project.
+If a response landed just before a crash, identical server and cache bytes simply clear the stale
+pending marker.
+
+Requests that omit negotiation fields default to v2 on the server. That keeps an undeclared older
+client from opening a v3 project: it is treated as v2, not as unrestricted. The frontend's maximum lives in `canvasSchemaVersion.ts`; the canvas loader's
+forward-version gate and the project API adapter consume the same constant so advertised support
+cannot drift from actual parsing support.
+
 ## File format
 
 `.invk` files are ZIP archives. The current manifest version is `2`.
@@ -134,9 +176,11 @@ On import the cover prefers an image the restore already put on this server — 
 
 Adding `board.json` did **not** bump the manifest version. A version tells a reader what it may assume about a file *somebody else wrote*, and webv2 has not shipped — no archive exists anywhere that predates the entry except the ones dev builds produced, and those are read exactly as what they are: an archive that names no board, whose import restores document references and lets the server create the new project an empty board. Inventing an empty board for such a file would claim knowledge it does not contain, which is why "absent" and "empty" stay distinguishable in the reader.
 
+The v2 manifest may carry `minimumCanvasSchemaVersion`. This is the source project's monotonic compatibility floor, not merely the version of its live canvas; queue snapshots or retained history can require a newer reader than the visible document does. Export copies the acknowledged server floor, and import creates the new project with the greater of that floor and the requirement derived from the canonical imported document. An archive above this client's maximum is refused before a staging board or any media upload exists. Older v2 archives omit the field and continue to derive their requirement from their document.
+
 A malformed `board.json` is a different matter and is refused as `damaged`: half an enumeration is not a board. The entry carries its own `version: 1`, which is the *file's* version and not the API's — the snapshot endpoint returns `{items}` and nothing else, so neither format is pinned to the other.
 
-Manifests parse through a zod discriminated union on `version`, so a version 1 archive is recognized and refused _as what it is_ — `InvkFormatError` carries a `reason` (`legacy-canvas-project`, `unsupported-version`, `not-a-project`, `damaged`, `too-large`) that `describeProjectFileError()` maps to a translated string. There is no translation layer from legacy canvas state to `CanvasStateContractV2`.
+Manifests parse through a zod discriminated union on `version`, so a version 1 archive is recognized and refused _as what it is_ — `InvkFormatError` carries a `reason` (`legacy-canvas-project`, `unsupported-version`, `not-a-project`, `damaged`, `too-large`) that `describeProjectFileError()` maps to a translated string. There is no translation layer from legacy canvas state to `CanvasStateContractV3`.
 
 The legacy reader is the mirror image: it pins `version: 1` and refuses everything this app writes.
 

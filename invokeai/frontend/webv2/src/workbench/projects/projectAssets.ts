@@ -270,17 +270,22 @@ const readGalleryRecentImageName = (projectDocument: Record<string, unknown>): s
   return null;
 };
 
+/** Leaves of a raw forest in preorder, tolerating malformed nodes. */
+const rawLeaves = (nodes: unknown): Record<string, unknown>[] =>
+  Array.isArray(nodes)
+    ? nodes.flatMap((node) => (!isRecord(node) ? [] : node.type === 'group' ? rawLeaves(node.children) : [node]))
+    : [];
+
 const readTopmostCanvasImageName = (projectDocument: Record<string, unknown>): string | null => {
   const canvas = projectDocument.canvas;
 
-  if (!isRecord(canvas) || !isRecord(canvas.document) || !Array.isArray(canvas.document.layers)) {
+  if (!isRecord(canvas) || !isRecord(canvas.document) || !isRecord(canvas.document.stacks)) {
     return null;
   }
 
-  // Layer index 0 is the top-most layer, which is the one a person would call
-  // "what this project looks like".
-  for (const layer of canvas.document.layers) {
-    if (!isRecord(layer) || !isRecord(layer.source)) {
+  // The top-most raster leaf is the one a person would call "what this project looks like".
+  for (const layer of rawLeaves(canvas.document.stacks.raster)) {
+    if (!isRecord(layer.source)) {
       continue;
     }
 

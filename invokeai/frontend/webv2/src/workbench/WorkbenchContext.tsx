@@ -7,25 +7,23 @@ import { useMountEffect } from '@platform/react/useMountEffect';
 import { captureAccountScope } from '@platform/state/accountLifecycle';
 import { shallowEqual as selectorShallowEqual, useExternalStoreSelector } from '@platform/state/selectors';
 import { createContext, use, useEffect, useSyncExternalStore, useState, type ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 
 import type { ProjectPushOutcome } from './projects/projectFlush';
 
 import { WorkbenchSplashScreen } from './components/WorkbenchSplashScreen';
 import { createExtensionRegistry, type ExtensionRegistry } from './extensions/extensionRegistry';
+import { clearLayerPanelStates } from './layerPanelState';
 import { createWorkbenchPersistenceRuntime } from './persistenceRuntime';
 import { createOpenProjectBroker } from './projects/openProjectBroker';
+import { describeRefusedProjects } from './projects/projectLoadRefusal';
 import {
   createSyncedWorkbenchPersistence,
   type SyncedWorkbenchPersistence,
   type WorkbenchLoadOptions,
 } from './projects/syncedPersistence';
 import { getProjectWidgetValues } from './widgetState';
-import {
-  createWorkbenchStore,
-  resetLayerPanelSelection,
-  type WorkbenchSnapshot,
-  type WorkbenchInternalStore,
-} from './workbenchStore';
+import { createWorkbenchStore, type WorkbenchSnapshot, type WorkbenchInternalStore } from './workbenchStore';
 
 interface WorkbenchContextValue {
   activeProject: Project;
@@ -58,6 +56,7 @@ export const WorkbenchProvider = ({
 }) => {
   const [store] = useState(() => createWorkbenchStore());
   const [owner] = useState(captureAccountScope);
+  const { t } = useTranslation();
   const [persistence] = useState(() => createSyncedWorkbenchPersistence(owner));
   const [extensions] = useState(createExtensionRegistry);
   const hasHydrated = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot).hasHydrated;
@@ -65,8 +64,6 @@ export const WorkbenchProvider = ({
   // The runtime is created inside the effect: disposal is terminal, so each
   // mount (including a StrictMode remount) must get its own instance.
   useMountEffect(() => {
-    const activeProject = store.getSnapshot().activeProject;
-    resetLayerPanelSelection(activeProject.id, activeProject.canvas.document.selectedLayerId);
     const persistenceRuntime = createWorkbenchPersistenceRuntime({
       aggregate: {
         ...store.internal.persistence,
@@ -79,6 +76,13 @@ export const WorkbenchProvider = ({
           }),
         reportLoadError: (message) =>
           store.commands.notifications.reportError({ area: 'persistence-load', message, namespace: 'system' }),
+        reportRefusedProjects: (refused) => {
+          const notice = describeRefusedProjects(refused, t);
+
+          if (notice) {
+            store.commands.notifications.add({ kind: 'info', ...notice });
+          }
+        },
         setHasHydrated: store.setHasHydrated,
         subscribe: store.subscribe,
       },
@@ -124,7 +128,7 @@ export const WorkbenchProvider = ({
     persistenceRuntime.start();
 
     return () => {
-      resetLayerPanelSelection('', null);
+      clearLayerPanelStates();
       openProjectBroker.dispose();
       persistenceRuntime.dispose();
     };

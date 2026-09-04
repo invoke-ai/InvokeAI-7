@@ -229,9 +229,11 @@ const DetailsSection = ({ project }: { project: ProjectPanelViewModel }) => {
   const syncLabel =
     backendConnectionStatus !== 'connected'
       ? t('widgets.project.syncOffline')
-      : projectSync === undefined || projectSync.isPendingPush
-        ? t('widgets.project.syncWaiting')
-        : t('widgets.project.syncSynced', { revision: projectSync.revision ?? '—' });
+      : projectSync?.schemaRefusal
+        ? t('widgets.project.syncUpdateClient')
+        : projectSync === undefined || projectSync.isPendingPush
+          ? t('widgets.project.syncWaiting')
+          : t('widgets.project.syncSynced', { revision: projectSync.revision ?? '—' });
 
   const copyId = useCallback(async () => {
     try {

@@ -39,6 +39,9 @@ import type { CanvasLayerContract } from '@workbench/canvas-engine/contracts';
 import type { LayerTransform, TransformRect, TransformTarget } from '@workbench/canvas-engine/transform/transformMath';
 import type { PointerInput, Vec2 } from '@workbench/canvas-engine/types';
 
+import { lookupDocumentLeaf } from '@workbench/canvas-engine/document-model/documentModel';
+import { getDocumentLayer } from '@workbench/canvas-engine/document/documentIndex';
+import { isLeafEditable } from '@workbench/canvas-engine/document/layerEligibility';
 import { applyToPoint, invert } from '@workbench/canvas-engine/math/mat2d';
 import {
   applyMove,
@@ -118,8 +121,7 @@ export const createTransformTool = (): Tool => {
     // Masks are MOVE-able (legacy parity) but not transform-able in this phase:
     // `applyTransform` has no mask bake path, so a transform session on a mask
     // would preview then no-op on Apply. Exclude them until that lands (Phase 7+).
-    layer.isEnabled &&
-    !layer.isLocked &&
+    isLeafEditable(lookupDocumentLeaf(doc, layer.id)) &&
     layer.type !== 'inpaint_mask' &&
     layer.type !== 'regional_guidance' &&
     hittableLayerRect(layer, doc) !== null;
@@ -136,7 +138,7 @@ export const createTransformTool = (): Tool => {
     }
     const float = ctx.getFloatingSelection?.() ?? null;
     if (float) {
-      const layer = doc.layers.find((candidate) => candidate.id === float.layerId);
+      const layer = getDocumentLayer(doc, float.layerId);
       if (!layer) {
         return null;
       }
@@ -155,7 +157,7 @@ export const createTransformTool = (): Tool => {
       };
     }
     const session = ctx.stores.transformSession.get();
-    const layer = session ? doc.layers.find((candidate) => candidate.id === session.layerId) : undefined;
+    const layer = session ? getDocumentLayer(doc, session.layerId) : undefined;
     const rect = session && layer ? hittableLayerRect(layer, doc) : null;
     if (!session || !rect) {
       return null;
@@ -260,7 +262,7 @@ export const createTransformTool = (): Tool => {
       // Entering the tool on an eligible selected layer opens a session on it.
       const doc = ctx.getDocument();
       const selectedId = doc?.selectedLayerId;
-      const selected = selectedId ? doc?.layers.find((layer) => layer.id === selectedId) : undefined;
+      const selected = selectedId ? getDocumentLayer(doc, selectedId) : undefined;
       if (doc && selected && isEligible(selected, doc)) {
         ctx.beginTransformSession?.(selected.id);
       }
@@ -358,7 +360,7 @@ export const createTransformTool = (): Tool => {
       //    panel is the sole authority on which layer is active — a press never
       //    re-targets it) and start a move gesture.
       const selectedId = doc.selectedLayerId;
-      const selected = selectedId ? doc.layers.find((layer) => layer.id === selectedId) : undefined;
+      const selected = selectedId ? getDocumentLayer(doc, selectedId) : undefined;
       if (!selected || !isEligible(selected, doc)) {
         return;
       }

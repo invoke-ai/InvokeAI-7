@@ -180,16 +180,20 @@ export const ColorPicker = ({
 
   const isSwatchCommitArmed = useRef(false);
   const [isOpen, setIsOpen] = useState(false);
+  const [isAwaitingEcho, setIsAwaitingEcho] = useState(false);
   const [previousExternalValue, setPreviousExternalValue] = useState(value);
   const [color, setColor] = useState<Color>(() => parseColor(value));
   const [lastEmittedValue, setLastEmittedValue] = useState(() => toEmitted(color));
 
   // Sync external -> internal only when the prop genuinely changed to
-  // something other than what we last emitted (see `shouldSyncExternalColor`).
+  // something other than our own emit's round trip (see `shouldSyncExternalColor`).
   if (value !== previousExternalValue) {
     setPreviousExternalValue(value);
-    if (shouldSyncExternalColor(value, previousExternalValue, lastEmittedValue)) {
+    if (shouldSyncExternalColor(value, previousExternalValue, lastEmittedValue, isAwaitingEcho)) {
       setColor(parseColor(value));
+    }
+    if (isAwaitingEcho) {
+      setIsAwaitingEcho(false);
     }
   }
 
@@ -198,6 +202,7 @@ export const ColorPicker = ({
       setColor(next);
       const emitted = toEmitted(next);
       setLastEmittedValue(emitted);
+      setIsAwaitingEcho(true);
       onValueChange(emitted);
       if (isEnd) {
         recordRecentColor(emitted);
@@ -227,6 +232,7 @@ export const ColorPicker = ({
     (details: ColorPickerValueChangeDetails) => {
       const emitted = toEmitted(details.value);
       setLastEmittedValue(emitted);
+      setIsAwaitingEcho(true);
       recordRecentColor(emitted);
       onValueChangeEnd?.(emitted);
     },

@@ -177,6 +177,11 @@ export const segmentGroupSlotRecipe = defineSlotRecipe({
     item: {
       ...chakraSlotRecipes.segmentGroup.base?.item,
       color: 'fg.muted',
+      // Items above the indicator by positive z-order rather than the base
+      // recipe's negative indicator: browsers paint both the same, but axe sorts
+      // a negative z-index beneath the page and measures the checked label's
+      // contrast against the panel instead of the indicator.
+      zIndex: 1,
       fontWeight: '500',
       transitionDuration: 'faster',
       transitionProperty: 'background, color',
@@ -193,6 +198,7 @@ export const segmentGroupSlotRecipe = defineSlotRecipe({
     indicator: {
       ...chakraSlotRecipes.segmentGroup.base?.indicator,
       shadow: 'none',
+      zIndex: 0,
     },
   },
   variants: {
@@ -696,6 +702,8 @@ export const rowRecipe = defineRecipe({
     active: {
       none: {},
       muted: { bg: 'bg.muted' },
+      selected: { bg: 'bg.emphasized/60', _hover: { bg: 'bg.emphasized/60' } },
+      emphasized: { bg: 'bg.emphasized', _hover: { bg: 'bg.emphasized' } },
       brand: {
         bg: 'brand.subtle',
         color: 'brand.fg',

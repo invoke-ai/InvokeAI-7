@@ -2,6 +2,7 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 from invokeai.app.services.project_records.project_records_common import (
+    DEFAULT_PROJECT_CANVAS_SCHEMA_VERSION,
     ProjectBoardSnapshotDTO,
     ProjectRecordDTO,
     ProjectSummaryDTO,
@@ -28,6 +29,8 @@ class ProjectRecordsStorageBase(ABC):
         data: dict[str, Any],
         project_id: str | None = None,
         board_id: str | None = None,
+        minimum_canvas_schema_version: int = DEFAULT_PROJECT_CANVAS_SCHEMA_VERSION,
+        max_canvas_schema_version: int = DEFAULT_PROJECT_CANVAS_SCHEMA_VERSION,
     ) -> ProjectRecordDTO:
         """Create a project for the user, with a board.
 
@@ -39,6 +42,8 @@ class ProjectRecordsStorageBase(ABC):
             board_id: An existing unclaimed private board to adopt, renamed to `name`. Omit to
                 create one. Restoration uses this to upload media before the project exists, so
                 that creating the project is the single commit point for an import.
+            minimum_canvas_schema_version: Compatibility floor stored with the project.
+            max_canvas_schema_version: Newest canvas schema understood by the caller.
 
         Returns:
             The created project record.
@@ -47,15 +52,22 @@ class ProjectRecordsStorageBase(ABC):
             ProjectRecordExistsError: The user already has a project with this id.
             ProjectBoardNotFoundError: `board_id` is missing or belongs to another user.
             ProjectBoardUnavailableError: The board is public, shared, or already claimed.
+            ProjectCanvasSchemaUnsupportedError: The caller cannot safely edit the requested schema.
         """
         pass
 
     @abstractmethod
-    def get(self, user_id: str, project_id: str) -> ProjectRecordDTO:
+    def get(
+        self,
+        user_id: str,
+        project_id: str,
+        max_canvas_schema_version: int = DEFAULT_PROJECT_CANVAS_SCHEMA_VERSION,
+    ) -> ProjectRecordDTO:
         """Get one of the user's projects, including its document.
 
         Raises:
             ProjectRecordNotFoundError: No such project for this user.
+            ProjectCanvasSchemaUnsupportedError: The caller cannot safely edit the stored schema.
         """
         pass
 
@@ -66,7 +78,14 @@ class ProjectRecordsStorageBase(ABC):
 
     @abstractmethod
     def update(
-        self, user_id: str, project_id: str, expected_revision: int, name: str, data: dict[str, Any]
+        self,
+        user_id: str,
+        project_id: str,
+        expected_revision: int,
+        name: str,
+        data: dict[str, Any],
+        minimum_canvas_schema_version: int | None = None,
+        max_canvas_schema_version: int = DEFAULT_PROJECT_CANVAS_SCHEMA_VERSION,
     ) -> ProjectRecordDTO:
         """Save a project if the caller's revision is current, renaming its board to match.
 
@@ -75,6 +94,8 @@ class ProjectRecordsStorageBase(ABC):
         Raises:
             ProjectRecordNotFoundError: No such project for this user.
             ProjectRecordConflictError: The stored revision differs from expected_revision.
+            ProjectCanvasSchemaUnsupportedError: The caller cannot safely edit the stored or requested schema.
+            ProjectCanvasSchemaDowngradeError: The save tries to lower the stored compatibility floor.
         """
         pass
 

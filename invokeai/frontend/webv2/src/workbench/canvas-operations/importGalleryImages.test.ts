@@ -7,6 +7,8 @@ import type { CanvasProjectMutation } from '@workbench/canvasProjectMutations';
 import type { Project, WorkbenchState } from '@workbench/projectContracts';
 
 import { accountLifecycle } from '@platform/state/accountLifecycle';
+import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
+import { createTestInsertionAnchorCapture } from '@workbench/canvas-engine/document/insertionAnchors.testStub';
 import {
   createControlLayer,
   createEmptyPaintLayer,
@@ -46,7 +48,7 @@ const withProject = (mutate?: (project: Project) => Project): { project: Project
   const document = {
     ...current.canvas.document,
     bbox: { height: 512, width: 768, x: 31, y: 47 },
-    layers: [createEmptyPaintLayer('Existing', 'previous')],
+    stacks: stacksFrom([createEmptyPaintLayer('Existing', 'previous')]),
     selectedLayerId: 'previous',
   };
   const base = { ...current, canvas: { ...current.canvas, document } };
@@ -144,15 +146,20 @@ const setModel = (project: Project, base: GenerateWidgetValues['model']['base'])
 const engine = (
   projectId: string,
   canCommitStructural: CanvasEngine['layers']['canCommitStructural'] = vi.fn(() => true),
-  commitStructural: CanvasEngine['layers']['commitStructural'] = vi.fn(() => true)
-): CanvasEngine => ({ layers: { canCommitStructural, commitStructural }, projectId }) as unknown as CanvasEngine;
+  commitStructural: CanvasEngine['layers']['commitStructural'] = vi.fn(() => ({ status: 'committed' as const }))
+): CanvasEngine =>
+  ({
+    document: { captureInsertionAnchor: createTestInsertionAnchorCapture(projectId) },
+    layers: { canCommitStructural, commitStructural },
+    projectId,
+  }) as unknown as CanvasEngine;
 
 const getForwardLayers = (action: WorkbenchAction | CanvasProjectMutation): readonly CanvasLayerContract[] => {
   const mutation = action.type === 'applyCanvasProjectMutation' ? action.mutation : action;
   if (mutation.type !== 'applyCanvasLayerStackMutation' || !mutation.add) {
     throw new Error('Expected add stack mutation');
   }
-  return mutation.add.layers;
+  return mutation.add.flatMap((insertion) => insertion.nodes as CanvasLayerContract[]);
 };
 
 const expectedLayer = (
@@ -250,7 +257,7 @@ describe('importGalleryImagesToCanvas', () => {
     );
     expect(result.layerIds).toEqual(layers.map((layer) => layer.id));
     expect(forward).toMatchObject({
-      add: { index: 0 },
+      add: [{ anchor: { afterId: null, beforeId: null, projectId: project.id, stack: layers[0]!.type } }],
       enabledUpdates: [],
       selectedLayerId: layers[1]!.id,
       type: 'applyCanvasLayerStackMutation',
@@ -299,11 +306,12 @@ describe('importGalleryImagesToCanvas', () => {
       })
     );
 
+    const canvasEngine = engine(project.id);
     const result = await importGalleryImagesToCanvas({
       destination: 'control-resized',
       applyCanvasMutation: (projectId, mutation) =>
         dispatch({ mutation, projectId, type: 'applyCanvasProjectMutation' }),
-      engine: null,
+      engine: canvasEngine,
       fetchImage,
       ...queriesFor(() => state),
       images: [image('wide.png', 1600, 900), image('square.png', 400, 400)],
@@ -331,8 +339,8 @@ describe('importGalleryImagesToCanvas', () => {
         resizeTo: { height: 1024, width: 1024 },
       }),
     ]);
-    expect(dispatch).toHaveBeenCalledOnce();
-    const forward = dispatch.mock.calls[0]![0];
+    expect(canvasEngine.layers.commitStructural).toHaveBeenCalledOnce();
+    const [, forward] = vi.mocked(canvasEngine.layers.commitStructural).mock.calls[0]!;
     const layers = getForwardLayers(forward);
     expect(layers).toEqual([
       {
@@ -354,14 +362,8 @@ describe('importGalleryImagesToCanvas', () => {
       { height: 768, imageName: 'resized-wide.png', width: 1360 },
       { height: 1024, imageName: 'resized-square.png', width: 1024 },
     ]);
-    expect(forward).toMatchObject({
-      mutation: {
-        selectedLayerId: layers[1]!.id,
-        type: 'applyCanvasLayerStackMutation',
-      },
-      projectId: project.id,
-      type: 'applyCanvasProjectMutation',
-    });
+    expect(forward).toMatchObject({ selectedLayerId: layers[1]!.id, type: 'applyCanvasLayerStackMutation' });
+    expect(dispatch).not.toHaveBeenCalled();
   });
 
   it('returns empty without committing', async () => {
@@ -408,9 +410,7 @@ describe('importGalleryImagesToCanvas', () => {
     const uploadImage = vi.fn<typeof uploadCanvasImage>(() =>
       Promise.resolve({ height: 512, imageName: 'resized', width: 512 })
     );
-    const commitStructural = vi.fn<
-      (_label: string, _forward: CanvasProjectMutation, _inverse: CanvasProjectMutation) => boolean
-    >(() => false);
+    const commitStructural = vi.fn<CanvasEngine['layers']['commitStructural']>(() => ({ status: 'busy' as const }));
     const result = await importGalleryImagesToCanvas({
       destination: 'control-resized',
       applyCanvasMutation: () => undefined,
@@ -492,7 +492,7 @@ describe('importGalleryImagesToCanvas', () => {
     const other = { ...project, id: 'other-project' };
     let current = { ...state, activeProjectId: other.id, projects: [project, other] };
     const dispatch = vi.fn<(action: WorkbenchAction) => void>();
-    const commitStructural = vi.fn(() => false);
+    const commitStructural = vi.fn(() => ({ status: 'busy' as const }));
     const matchingEngine = engine(
       project.id,
       vi.fn(() => true),
@@ -568,7 +568,7 @@ describe('importGalleryImagesToCanvas', () => {
     const firstImport = importGalleryImagesToCanvas({
       destination: 'control-resized',
       applyCanvasMutation: () => undefined,
-      engine: null,
+      engine: engine(first.project.id),
       fetchImage,
       ...queriesFor(() => first.state),
       images: [image('a.png')],
@@ -578,7 +578,7 @@ describe('importGalleryImagesToCanvas', () => {
     const overlap = await importGalleryImagesToCanvas({
       destination: 'raster',
       applyCanvasMutation: () => undefined,
-      engine: null,
+      engine: engine(first.project.id),
       ...queriesFor(() => first.state),
       images: [image('b.png')],
       project: first.project,
@@ -586,7 +586,7 @@ describe('importGalleryImagesToCanvas', () => {
     const independent = await importGalleryImagesToCanvas({
       destination: 'raster',
       applyCanvasMutation: () => undefined,
-      engine: null,
+      engine: engine(secondProject.id),
       ...queriesFor(() => secondState),
       images: [image('c.png')],
       project: secondProject,
@@ -655,11 +655,12 @@ describe('importGalleryImagesToCanvas', () => {
       return Promise.resolve({ height: 512, imageName: `ok-${options!.fileName}`, width: 512 });
     });
     const dispatch = vi.fn<(action: WorkbenchAction) => void>();
+    const canvasEngine = engine(project.id);
     const importing = importGalleryImagesToCanvas({
       destination: 'control-resized',
       applyCanvasMutation: (projectId, mutation) =>
         dispatch({ mutation, projectId, type: 'applyCanvasProjectMutation' }),
-      engine: null,
+      engine: canvasEngine,
       fetchImage,
       ...queriesFor(() => state),
       images: Array.from({ length: 7 }, (_, index) => image(`${index}.png`)),
@@ -677,9 +678,9 @@ describe('importGalleryImagesToCanvas', () => {
       return;
     }
     expect(result.failedImageNames).toEqual(['2.png', '5.png']);
-    expect(dispatch).toHaveBeenCalledOnce();
+    expect(canvasEngine.layers.commitStructural).toHaveBeenCalledOnce();
     expect(
-      getForwardLayers(dispatch.mock.calls[0]![0]).map((layer) =>
+      getForwardLayers(vi.mocked(canvasEngine.layers.commitStructural).mock.calls[0]![1]).map((layer) =>
         layer.type === 'control' && layer.source.type === 'image' ? layer.source.image.imageName : null
       )
     ).toEqual(['ok-0.png', 'ok-1.png', 'ok-3.png', 'ok-4.png', 'ok-6.png']);
@@ -690,7 +691,7 @@ describe('importGalleryImagesToCanvas', () => {
     const options = {
       destination: 'control-resized' as const,
       applyCanvasMutation: () => undefined,
-      engine: null,
+      engine: engine(project.id),
       fetchImage: () => Promise.resolve(new Response(new Blob(['pixels']), { status: 200 })),
       ...queriesFor(() => state),
       images: [image('a.png'), image('b.png')],

@@ -270,10 +270,12 @@ const executeRasterEntry = async (
     };
   }
 
+  const countGroupScopes = (scopes: typeof entry.groupScopes): number =>
+    (scopes ?? []).reduce((total, scope) => total + 1 + countGroupScopes(scope.children), 0);
   const reservation = reserveComposite(
     entry,
     deps,
-    entry.layers.filter((layer) => layer.adjustments !== undefined).length
+    entry.layers.filter((layer) => layer.adjustments !== undefined).length + countGroupScopes(entry.groupScopes)
   );
   try {
     const surface = await renderRasterComposite(entry, deps);

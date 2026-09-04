@@ -45,6 +45,7 @@ const buildRows = (overrides: Partial<Parameters<typeof buildGalleryGridRows>[0]
     isStarredOpen: true,
     items: [],
     pendingPlaceholders: [],
+    starredFirst: true,
     ...overrides,
   });
 
@@ -164,6 +165,20 @@ describe('buildGalleryGridRows', () => {
 
     const oldestFirst = buildRows({ imageOrderDir: 'ASC', items, pendingPlaceholders });
     expect(oldestFirst[0]?.kind === 'cells' && oldestFirst[0].cells[0]?.kind).toBe('item');
+  });
+
+  it('keeps starred items inline with no section chrome in a flat listing', () => {
+    const rows = buildRows({
+      items: [createImageItem('starred-1', true), createImageItem('regular-1'), createImageItem('regular-2')],
+      pendingPlaceholders: [createPlaceholder('slot-1')],
+      starredFirst: false,
+    });
+
+    expect(rows.map((row) => row.kind)).toEqual(['cells', 'cells']);
+    expect(rows[0]?.kind === 'cells' && rows[0].cells[0]?.kind).toBe('placeholder');
+    expect(rows[0]?.kind === 'cells' && rows[0].cells[1]?.kind === 'item' && rows[0].cells[1].item.name).toBe(
+      'starred-1'
+    );
   });
 
   it('never mixes starred and regular cells in one row', () => {

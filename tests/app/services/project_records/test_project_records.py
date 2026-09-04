@@ -6,6 +6,8 @@ from invokeai.app.services.config.config_default import InvokeAIAppConfig
 from invokeai.app.services.project_records.project_records_common import (
     ProjectBoardNotFoundError,
     ProjectBoardUnavailableError,
+    ProjectCanvasSchemaDowngradeError,
+    ProjectCanvasSchemaUnsupportedError,
     ProjectRecordConflictError,
     ProjectRecordExistsError,
     ProjectRecordNotFoundError,
@@ -92,6 +94,184 @@ def test_update_increments_revision(project_records: ProjectRecordsSqlite) -> No
     assert updated.revision == 2
     assert updated.name == "Renamed"
     assert updated.data == {"v": 2}
+
+
+def test_writes_return_their_row_without_a_post_commit_read(
+    project_records: ProjectRecordsSqlite, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def reject_post_commit_get(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("writes must not open a second transaction to build their response")
+
+    monkeypatch.setattr(project_records, "get", reject_post_commit_get)
+
+    created = project_records.create(SYSTEM_USER_ID, "Created", {"v": 1})
+    updated = project_records.update(
+        SYSTEM_USER_ID,
+        created.project_id,
+        expected_revision=created.revision,
+        name="Updated",
+        data={"v": 2},
+    )
+
+    assert created.revision == 1
+    assert created.data == {"v": 1}
+    assert updated.revision == 2
+    assert updated.data == {"v": 2}
+
+
+def test_projects_default_to_canvas_schema_v2(project_records: ProjectRecordsSqlite) -> None:
+    created = project_records.create(SYSTEM_USER_ID, "Project", {})
+
+    assert created.minimum_canvas_schema_version == 2
+    (summary,) = [s for s in project_records.list(SYSTEM_USER_ID) if s.project_id == created.project_id]
+    assert summary.minimum_canvas_schema_version == 2
+
+
+def test_create_refuses_a_schema_the_client_cannot_edit_without_creating_a_board(
+    project_records: ProjectRecordsSqlite, db: SqliteDatabase
+) -> None:
+    with db.transaction() as cursor:
+        cursor.execute("SELECT COUNT(*) FROM boards;")
+        before = cursor.fetchone()[0]
+
+    with pytest.raises(ProjectCanvasSchemaUnsupportedError):
+        project_records.create(
+            SYSTEM_USER_ID,
+            "Future",
+            {"canvas": {"version": 3}},
+            minimum_canvas_schema_version=3,
+            max_canvas_schema_version=2,
+        )
+
+    with db.transaction() as cursor:
+        cursor.execute("SELECT COUNT(*) FROM boards;")
+        assert cursor.fetchone()[0] == before
+
+
+def test_an_incapable_client_cannot_read_or_write_a_newer_project(project_records: ProjectRecordsSqlite) -> None:
+    created = project_records.create(
+        SYSTEM_USER_ID,
+        "Future",
+        {"canvas": {"version": 3}},
+        minimum_canvas_schema_version=3,
+        max_canvas_schema_version=3,
+    )
+
+    with pytest.raises(ProjectCanvasSchemaUnsupportedError):
+        project_records.get(SYSTEM_USER_ID, created.project_id)
+    with pytest.raises(ProjectCanvasSchemaUnsupportedError):
+        project_records.update(
+            SYSTEM_USER_ID,
+            created.project_id,
+            expected_revision=1,
+            name="Overwritten",
+            data={"canvas": {"version": 2}},
+        )
+
+    preserved = project_records.get(SYSTEM_USER_ID, created.project_id, max_canvas_schema_version=3)
+    assert preserved.name == "Future"
+    assert preserved.revision == 1
+    assert preserved.data == {"canvas": {"version": 3}}
+
+
+def test_update_atomically_raises_the_canvas_schema_floor_with_the_document(
+    project_records: ProjectRecordsSqlite,
+) -> None:
+    created = project_records.create(SYSTEM_USER_ID, "Project", {"canvas": {"version": 2}})
+
+    updated = project_records.update(
+        SYSTEM_USER_ID,
+        created.project_id,
+        expected_revision=1,
+        name="Project v3",
+        data={"canvas": {"version": 3}},
+        minimum_canvas_schema_version=3,
+        max_canvas_schema_version=3,
+    )
+
+    assert updated.minimum_canvas_schema_version == 3
+    assert updated.revision == 2
+    assert updated.data == {"canvas": {"version": 3}}
+    with pytest.raises(ProjectCanvasSchemaUnsupportedError):
+        project_records.get(SYSTEM_USER_ID, created.project_id)
+
+
+def test_a_stale_save_cannot_raise_the_canvas_schema_floor(project_records: ProjectRecordsSqlite) -> None:
+    created = project_records.create(SYSTEM_USER_ID, "Project", {"canvas": {"version": 2}})
+    project_records.update(SYSTEM_USER_ID, created.project_id, 1, "Project", {"canvas": {"version": 2}})
+
+    with pytest.raises(ProjectRecordConflictError):
+        project_records.update(
+            SYSTEM_USER_ID,
+            created.project_id,
+            expected_revision=1,
+            name="Stale v3",
+            data={"canvas": {"version": 3}},
+            minimum_canvas_schema_version=3,
+            max_canvas_schema_version=3,
+        )
+
+    preserved = project_records.get(SYSTEM_USER_ID, created.project_id)
+    assert preserved.minimum_canvas_schema_version == 2
+    assert preserved.revision == 2
+    assert preserved.data == {"canvas": {"version": 2}}
+
+
+def test_a_capable_stale_client_gets_a_revision_conflict_before_floor_downgrade_validation(
+    project_records: ProjectRecordsSqlite,
+) -> None:
+    created = project_records.create(SYSTEM_USER_ID, "Project", {"canvas": {"version": 2}})
+    project_records.update(
+        SYSTEM_USER_ID,
+        created.project_id,
+        expected_revision=1,
+        name="Raised elsewhere",
+        data={"canvas": {"version": 3}},
+        minimum_canvas_schema_version=3,
+        max_canvas_schema_version=3,
+    )
+
+    with pytest.raises(ProjectRecordConflictError) as exc_info:
+        project_records.update(
+            SYSTEM_USER_ID,
+            created.project_id,
+            expected_revision=1,
+            name="Stale local edit",
+            data={"canvas": {"version": 2}},
+            minimum_canvas_schema_version=2,
+            max_canvas_schema_version=3,
+        )
+
+    assert exc_info.value.current_revision == 2
+    preserved = project_records.get(SYSTEM_USER_ID, created.project_id, max_canvas_schema_version=3)
+    assert preserved.minimum_canvas_schema_version == 3
+    assert preserved.data == {"canvas": {"version": 3}}
+
+
+def test_the_canvas_schema_floor_cannot_be_lowered(project_records: ProjectRecordsSqlite) -> None:
+    created = project_records.create(
+        SYSTEM_USER_ID,
+        "Future",
+        {"canvas": {"version": 3}},
+        minimum_canvas_schema_version=3,
+        max_canvas_schema_version=3,
+    )
+
+    with pytest.raises(ProjectCanvasSchemaDowngradeError):
+        project_records.update(
+            SYSTEM_USER_ID,
+            created.project_id,
+            expected_revision=1,
+            name="Downgraded",
+            data={"canvas": {"version": 2}},
+            minimum_canvas_schema_version=2,
+            max_canvas_schema_version=3,
+        )
+
+    preserved = project_records.get(SYSTEM_USER_ID, created.project_id, max_canvas_schema_version=3)
+    assert preserved.minimum_canvas_schema_version == 3
+    assert preserved.revision == 1
+    assert preserved.data == {"canvas": {"version": 3}}
 
 
 def test_update_with_stale_revision_raises_conflict(project_records: ProjectRecordsSqlite) -> None:

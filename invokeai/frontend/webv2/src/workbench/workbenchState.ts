@@ -3,9 +3,9 @@ import type { ModelConfig } from '@features/models';
 import type { QueueCompiledSubmission, QueueHistoryItemStatus } from '@features/queue/contracts';
 import type { ProjectGraphState } from '@features/workflow/contracts';
 import type {
-  CanvasDocumentContractV2,
+  CanvasDocumentContractV3,
   CanvasPlacementContract,
-  CanvasStateContractV2,
+  CanvasStateContractV3,
   CanvasStagingCandidateContract,
 } from '@workbench/canvas-engine/api';
 import type { DeveloperLogNamespace } from '@workbench/diagnostics/contracts';
@@ -35,6 +35,7 @@ import type {
   PromptHistoryItem,
   WorkbenchNotification,
   WorkbenchNotificationCategory,
+  ProjectLoadResult,
   WorkbenchNotificationKind,
   WorkbenchState,
 } from '@workbench/projectContracts';
@@ -70,6 +71,7 @@ import {
   type GallerySettings,
   type GeneratedImageContract,
 } from '@features/gallery/contracts';
+import { WIDGET_REGIONS } from '@workbench/layoutContracts';
 
 import type { WorkbenchQueueItem as QueueItem } from './queueHistoryContracts';
 
@@ -85,8 +87,9 @@ import {
   type CanvasEditIntent,
   type WorkbenchActionOrigin,
 } from './autoRoutePolicy';
-import { createNewCanvasStateV2, migrateCanvasStateToV2 } from './canvasMigration';
+import { createNewCanvasState, loadCanvasState } from './canvasMigration';
 import { applyCanvasProjectMutation, type CanvasProjectMutation } from './canvasProjectMutations';
+import { gateProjectCanvases } from './projectCanvasGate';
 import { getProjectWidgetValues } from './widgetState';
 export { nextLayerName } from './canvasProjectMutations';
 import { compileGenerateGraph, resolveGenerateSeed } from '@features/generation/graph';
@@ -345,9 +348,10 @@ type WorkbenchReducerAction =
     }
   | { type: 'setGalleryCompareImage'; image: GalleryImageItem | null; projectId?: string }
   | { type: 'selectGalleryBoard'; boardId: string; projectId?: string }
+  | { type: 'clearGallerySelection'; projectId?: string }
   | { type: 'setGalleryView'; galleryView: 'images' | 'assets'; projectId?: string }
   | { type: 'setGallerySearchTerm'; searchTerm: string; projectId?: string }
-  | { type: 'updateGallerySettings'; settings: Partial<GallerySettings>; projectId?: string }
+  | { type: 'updateGallerySettings'; settings: Partial<Omit<GallerySettings, 'starredFirst'>>; projectId?: string }
   | { type: 'setGalleryPage'; page: number; projectId?: string }
   | { type: 'setGalleryPageInfo'; totalImages: number; projectId?: string }
   | {
@@ -371,7 +375,7 @@ type WorkbenchReducerAction =
   | {
       type: 'submitCanvasInvocationSnapshot';
       backendSupportsCancellation: boolean;
-      canvas: CanvasStateContractV2;
+      canvas: CanvasStateContractV3;
       destination: ResultDestination;
       generate: QueueGenerateSnapshot;
       graph: GraphContract;
@@ -654,7 +658,7 @@ const clonePlacement = (placement: CanvasPlacementContract): CanvasPlacementCont
 
 const createCenteredPlacement = (
   image: Pick<GeneratedImageContract, 'height' | 'width'>,
-  document: Pick<CanvasDocumentContractV2, 'height' | 'width'>
+  document: Pick<CanvasDocumentContractV3, 'height' | 'width'>
 ): CanvasPlacementContract => {
   const imageWidth = image.width > 0 ? image.width : document.width;
   const imageHeight = image.height > 0 ? image.height : document.height;
@@ -673,7 +677,7 @@ const createCenteredPlacement = (
 
 const normalizeStagingCandidate = (
   image: CanvasStagingCandidateContract | GeneratedImageContract,
-  document: Pick<CanvasDocumentContractV2, 'height' | 'width'>,
+  document: Pick<CanvasDocumentContractV3, 'height' | 'width'>,
   sourceBackendItemId?: number
 ): CanvasStagingCandidateContract => ({
   ...image,
@@ -710,9 +714,9 @@ const getCanvasStagingSlotCountWithPendingImages = (
   );
 
 const getCanvasWithPendingImages = (
-  canvas: CanvasStateContractV2,
+  canvas: CanvasStateContractV3,
   pendingImages: CanvasStagingCandidateContract[]
-): CanvasStateContractV2 => ({
+): CanvasStateContractV3 => ({
   ...canvas,
   stagingArea: {
     ...canvas.stagingArea,
@@ -971,13 +975,13 @@ const getGalleryItemFromPersistedValue = (values: Record<string, unknown>, value
 /**
  * Deep-clones an already-v2 canvas state and normalizes staging candidate placements. Not a
  * migration boundary: callers with genuinely unknown/legacy input must run
- * `migrateCanvasStateToV2` first (see `normalizeWorkbenchProject`).
+ * `loadCanvasState` first (see `normalizeWorkbenchProject`).
  */
-const cloneCanvas = (canvas: CanvasStateContractV2): CanvasStateContractV2 => {
+const cloneCanvas = (canvas: CanvasStateContractV3): CanvasStateContractV3 => {
   const document = structuredClone(canvas.document);
 
   return {
-    version: 2,
+    version: 3,
     document,
     documentRevision: canvas.documentRevision,
     snapshots: canvas.snapshots.map((snapshot) => ({ ...snapshot, document: structuredClone(snapshot.document) })),
@@ -1127,26 +1131,7 @@ const updateProjectWidgetInstanceValues = (
   };
 };
 
-const cloneWidgetRegions = (
-  widgetRegions: Record<WidgetRegion, WidgetRegionState>
-): Record<WidgetRegion, WidgetRegionState> => ({
-  center: {
-    ...widgetRegions.center,
-    instanceIds: [...widgetRegions.center.instanceIds],
-  },
-  left: {
-    ...widgetRegions.left,
-    instanceIds: [...widgetRegions.left.instanceIds],
-  },
-  right: {
-    ...widgetRegions.right,
-    instanceIds: [...widgetRegions.right.instanceIds],
-  },
-  bottom: {
-    ...widgetRegions.bottom,
-    instanceIds: [...widgetRegions.bottom.instanceIds],
-  },
-});
+const cloneWidgetRegions = cloneLayoutPresetWidgetRegions;
 
 const cloneWidgetGraphs = (widgetGraphs: Project['widgetGraphs']): Project['widgetGraphs'] =>
   Object.fromEntries(Object.entries(widgetGraphs).map(([key, graph]) => [key, graph ? cloneGraph(graph) : graph]));
@@ -1470,6 +1455,47 @@ const ensureRightRegion = (rightRegion: WidgetRegionState | undefined): WidgetRe
   return rightRegion;
 };
 
+/**
+ * Every Edit rail this app shipped as a default while the canvas editors were
+ * separate widgets: the tabbed rail, and one unreleased build's variant
+ * without Image Map. Those editors are panes of the Layers panel now, so an
+ * untouched rail of either shape adopts the shipped Layers-only rail; a
+ * customized rail stays the user's.
+ */
+const LEGACY_EDIT_RIGHT_REGION_WIDGET_IDS: ReadonlyArray<readonly WidgetInstanceId[]> = [
+  ['layers', 'preview', 'gallery', 'image-map', 'queue'],
+  ['layers', 'preview', 'gallery', 'queue'],
+];
+
+const sameInstanceIds = (region: WidgetRegionState, ids: readonly WidgetInstanceId[]): boolean =>
+  region.instanceIds.length === ids.length && region.instanceIds.every((id, index) => id === ids[index]);
+
+const ensureEditRightRegion = (right: WidgetRegionState): WidgetRegionState => {
+  if (!LEGACY_EDIT_RIGHT_REGION_WIDGET_IDS.some((ids) => sameInstanceIds(right, ids))) {
+    return right;
+  }
+  const edit = getLayoutPreset('edit').snapshot.widgetRegions.right;
+  return { ...right, activeInstanceId: edit.activeInstanceId, instanceIds: [...edit.instanceIds] };
+};
+
+/** The canvas editors that folded into the Layers panel; anything persisted about them drops on load. */
+const RETIRED_WIDGET_TYPE_IDS: ReadonlySet<string> = new Set(['properties', 'transform']);
+
+const withoutRetiredInstances = (
+  region: WidgetRegionState,
+  retired: ReadonlySet<WidgetInstanceId>
+): WidgetRegionState => {
+  if (!region.instanceIds.some((instanceId) => retired.has(instanceId))) {
+    return region;
+  }
+  const instanceIds = region.instanceIds.filter((instanceId) => !retired.has(instanceId));
+  return {
+    ...region,
+    activeInstanceId: retired.has(region.activeInstanceId) ? (instanceIds[0] ?? '') : region.activeInstanceId,
+    instanceIds,
+  };
+};
+
 // The shipped bottom-region default before 'queue-status' was added — a
 // persisted project whose bottom rail matches this exactly is still running
 // the pre-branch defaults, so it should pick up the new widget the same way
@@ -1543,7 +1569,7 @@ const ensureCenterRegion = (
   };
 };
 
-const WIDGET_REGION_IDS: WidgetRegion[] = ['left', 'right', 'bottom', 'center'];
+const WIDGET_REGION_IDS: WidgetRegion[] = [...WIDGET_REGIONS];
 const FLOATING_WIDGET_MODES: FloatingWidgetMode[] = ['windowed', 'maximized', 'shaded'];
 
 const isFiniteNumber = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
@@ -1600,6 +1626,10 @@ const normalizeFloatingWidgets = (
     }
 
     const state = entry as Partial<FloatingWidgetState>;
+    // The right rail's docks folded back into one region; a window floated out of one returns to the rail.
+    const rawReturnRegion: unknown = state.returnRegion;
+    const returnRegion =
+      rawReturnRegion === 'rightTop' || rawReturnRegion === 'rightBottom' ? 'right' : state.returnRegion;
 
     if (
       !isFiniteNumber(state.x) ||
@@ -1608,7 +1638,7 @@ const normalizeFloatingWidgets = (
       !isFiniteNumber(state.heightPx) ||
       !isFiniteNumber(state.stackOrder) ||
       !isFloatingWidgetMode(state.mode) ||
-      !isWidgetRegionId(state.returnRegion)
+      !isWidgetRegionId(returnRegion)
     ) {
       continue;
     }
@@ -1622,7 +1652,7 @@ const normalizeFloatingWidgets = (
       ...(isFiniteNumber(state.returnIndex) && state.returnIndex >= 0
         ? { returnIndex: Math.floor(state.returnIndex) }
         : {}),
-      returnRegion: state.returnRegion,
+      returnRegion,
       stackOrder: state.stackOrder,
     };
   }
@@ -1675,7 +1705,7 @@ const reconcileFloatingWidgets = (
       ...region,
       activeInstanceId: instanceIds.includes(region.activeInstanceId)
         ? region.activeInstanceId
-        : (instanceIds[0] ?? region.activeInstanceId),
+        : (instanceIds[0] ?? emptiedActiveInstanceId(regionId, region)),
       instanceIds,
       isCollapsed: instanceIds.length === 0 ? regionId !== 'center' : region.isCollapsed,
     };
@@ -1710,6 +1740,14 @@ const normalizePromptHistory = (value: unknown): PromptHistoryItem[] => {
   }, []);
 };
 
+/** The project-ingestion path: gate every embedded canvas, then normalize. */
+export const loadWorkbenchProject = (raw: Project): ProjectLoadResult => {
+  const refused = gateProjectCanvases(raw);
+
+  return refused ? { refused, status: 'refused' } : { project: normalizeWorkbenchProject(raw), status: 'loaded' };
+};
+
+/** Normalizes an admitted project; a canvas that somehow fails to reload is kept as-is, never rewritten. */
 export const normalizeWorkbenchProject = (
   project: Project,
   options: {
@@ -1720,6 +1758,22 @@ export const normalizeWorkbenchProject = (
      * "you are here" for the session that revealed it: it is dropped from a
      * document that arrives, and kept for one that stays.
      */
+    isArriving?: boolean;
+  } = {}
+): Project => {
+  const canvas = loadCanvasState(project.canvas);
+
+  return assembleWorkbenchProject(
+    project,
+    cloneCanvas(canvas.status === 'loaded' ? canvas.value : project.canvas),
+    options
+  );
+};
+
+const assembleWorkbenchProject = (
+  project: Project,
+  canvas: CanvasStateContractV3,
+  options: {
     isArriving?: boolean;
   } = {}
 ): Project => {
@@ -1808,11 +1862,26 @@ export const normalizeWorkbenchProject = (
     };
   }
 
-  const canvas = cloneCanvas(migrateCanvasStateToV2(project.canvas));
+  // The canvas editors folded into the Layers panel; an instance of the retired widgets has nothing to render.
+  const retiredInstanceIds = new Set(
+    Object.values(widgetInstances)
+      .filter((instance) => RETIRED_WIDGET_TYPE_IDS.has(instance.typeId))
+      .map((instance) => instance.id)
+  );
+  for (const instanceId of retiredInstanceIds) {
+    delete widgetInstances[instanceId];
+  }
+  const rightRegion = ensureEditRightRegion(
+    withoutRetiredInstances(
+      ensureRightRegion(legacyWidgetRegions?.right ?? legacyWidgetRegions?.['right-panel']),
+      retiredInstanceIds
+    )
+  );
+
   const placement = reconcileFloatingWidgets(
     {
       left: leftRegion,
-      right: ensureRightRegion(legacyWidgetRegions?.right ?? legacyWidgetRegions?.['right-panel']),
+      right: rightRegion,
       bottom: bottomRegion,
       center: ensureCenterRegion(legacyWidgetRegions?.center, project.layout.centerViewId),
     },
@@ -1821,8 +1890,6 @@ export const normalizeWorkbenchProject = (
 
   return {
     ...project,
-    // `project` may come straight from persisted storage (an unsafe cast boundary), so its
-    // canvas can still be v1-shaped, malformed, or missing — migrate before cloning.
     canvas,
     floatingWidgets: placement.floatingWidgets,
     graphHistory: normalizeGraphHistory((project as Partial<Project>).graphHistory),
@@ -1897,7 +1964,7 @@ export const clampPanelSize = (region: WidgetRegion, sizePx: number): number => 
   return Math.min(max, Math.max(min, sizePx));
 };
 
-const createCanvasState = (): CanvasStateContractV2 => createNewCanvasStateV2();
+const createCanvasState = (): CanvasStateContractV3 => createNewCanvasState();
 
 const createProject = (index: number, id: string, preset: LayoutPreset): Project =>
   applyLayoutPresetToProject(
@@ -1965,6 +2032,23 @@ const updateActiveProject = (state: WorkbenchState, getProject: (project: Projec
   return didChange ? { ...state, projects } : state;
 };
 
+/**
+ * Which of `regions` a panel toggle should collapse or expand: empty ones are
+ * left alone, so toggling never opens a panel with nothing in it (and never
+ * writes drift into a preset that ships a region collapsed).
+ */
+export const resolvePanelToggle = (
+  widgetRegions: Record<WidgetRegion, Pick<WidgetRegionState, 'instanceIds' | 'isCollapsed'>>,
+  regions: readonly WidgetRegion[]
+): { regions: WidgetRegion[]; shouldCollapse: boolean } => {
+  const occupied = regions.filter((region) => widgetRegions[region].instanceIds.length > 0);
+  return { regions: occupied, shouldCollapse: occupied.some((region) => !widgetRegions[region].isCollapsed) };
+};
+
+/** A region with nothing left names no active instance; the center keeps its id because it never empties. */
+const emptiedActiveInstanceId = (regionId: WidgetRegion, region: WidgetRegionState): WidgetInstanceId =>
+  regionId === 'center' ? region.activeInstanceId : '';
+
 const getNextInstanceId = (region: WidgetRegionState, instanceId: WidgetInstanceId): WidgetInstanceId | null => {
   if (region.activeInstanceId !== instanceId) {
     return region.activeInstanceId;
@@ -2017,16 +2101,31 @@ const openPanelForRegion = (layout: ProjectLayoutState, region: WidgetRegion): P
   },
 });
 
-const cloneLayoutPresetSnapshot = (snapshot: LayoutPresetSnapshot): LayoutPresetSnapshot => ({
+const cloneLayoutPresetSnapshot = (snapshot: LayoutPresetSnapshot): LayoutPresetSnapshot => {
   // Every account preset is rebuilt through here on load, so a field missing
   // from this clone is a field the preset silently loses on the next reload.
-  ...(snapshot.floatingWidgets ? { floatingWidgets: cloneFloatingWidgets(snapshot.floatingWidgets) } : {}),
-  layout: { ...snapshot.layout, panels: { ...snapshot.layout.panels } },
-  widgetInstances: Object.fromEntries(
-    Object.entries(snapshot.widgetInstances).map(([instanceId, instance]) => [instanceId, { ...instance }])
-  ),
-  widgetRegions: cloneLayoutPresetWidgetRegions(snapshot.widgetRegions),
-});
+  // A preset saved while the retired canvas editors were widgets still carries
+  // their instances; shedding them here keeps an applied preset drift-free.
+  const retired = new Set(
+    Object.values(snapshot.widgetInstances)
+      .filter((instance) => RETIRED_WIDGET_TYPE_IDS.has(instance.typeId))
+      .map((instance) => instance.id)
+  );
+  const widgetRegions = cloneLayoutPresetWidgetRegions(snapshot.widgetRegions);
+  for (const region of Object.keys(widgetRegions) as WidgetRegion[]) {
+    widgetRegions[region] = withoutRetiredInstances(widgetRegions[region], retired);
+  }
+  return {
+    ...(snapshot.floatingWidgets ? { floatingWidgets: cloneFloatingWidgets(snapshot.floatingWidgets) } : {}),
+    layout: { ...snapshot.layout, panels: { ...snapshot.layout.panels } },
+    widgetInstances: Object.fromEntries(
+      Object.entries(snapshot.widgetInstances)
+        .filter(([, instance]) => !retired.has(instance.id))
+        .map(([instanceId, instance]) => [instanceId, { ...instance }])
+    ),
+    widgetRegions,
+  };
+};
 
 const centerViewIds = new Set<CenterViewId>(['canvas', 'gallery', 'preview', 'workflow']);
 
@@ -2057,14 +2156,18 @@ const isWidgetRegionState = (
   const record = value as Partial<WidgetRegionState>;
   const instanceIds = record.instanceIds;
 
+  // An empty region (a dock nothing was placed in) names no active instance.
+  const isEmpty = Array.isArray(instanceIds) && instanceIds.length === 0 && record.activeInstanceId === '';
+
   return (
     typeof record.activeInstanceId === 'string' &&
-    record.activeInstanceId.length > 0 &&
     Array.isArray(instanceIds) &&
     instanceIds.every((instanceId) => typeof instanceId === 'string' && instanceId in widgetInstances) &&
     new Set(instanceIds).size === instanceIds.length &&
-    record.activeInstanceId in widgetInstances &&
-    (instanceIds.length === 0 || instanceIds.includes(record.activeInstanceId)) &&
+    (isEmpty ||
+      (record.activeInstanceId.length > 0 &&
+        record.activeInstanceId in widgetInstances &&
+        (instanceIds.length === 0 || instanceIds.includes(record.activeInstanceId)))) &&
     typeof record.isCollapsed === 'boolean' &&
     typeof record.sizePx === 'number' &&
     Number.isFinite(record.sizePx) &&
@@ -2695,7 +2798,7 @@ const patchGalleryItemsAcrossProjects = (
             ...(values.selectedImageQuery as Record<string, unknown>),
             boardId: changes.boardId,
             page: 0,
-            paginationMode: 'infinite',
+            paginationMode: getGallerySettings(values).paginationMode,
             searchTerm: '',
           }
         : values.selectedImageQuery;
@@ -3005,7 +3108,7 @@ const updateGalleryWithResultImages = (project: Project, images: GeneratedImageC
             galleryView: nextSelectedImage.imageCategory === 'general' ? 'images' : 'assets',
             imageOrderDir: gallerySettings.imageOrderDir,
             page: 0,
-            paginationMode: 'infinite',
+            paginationMode: gallerySettings.paginationMode,
             searchTerm: '',
           },
         }
@@ -3103,7 +3206,7 @@ const enqueueCompiledSnapshot = (
     widgetStates: WidgetStateMap;
   },
   backendSupportsCancellation: boolean,
-  canvasSnapshot?: CanvasStateContractV2
+  canvasSnapshot?: CanvasStateContractV3
 ): Project => {
   const submittedAt = now();
   const queueItemId = createId('queue-item');
@@ -3762,7 +3865,9 @@ export const __workbenchReducerInternal = (
 
           return {
             ...region,
-            activeInstanceId: isEnabled && fallbackInstanceId ? fallbackInstanceId : action.widgetId,
+            activeInstanceId: isEnabled
+              ? (fallbackInstanceId ?? emptiedActiveInstanceId(action.region, region))
+              : action.widgetId,
             instanceIds,
             isCollapsed: action.region === 'center' ? false : instanceIds.length === 0 ? true : region.isCollapsed,
           };
@@ -3823,8 +3928,8 @@ export const __workbenchReducerInternal = (
               [hostRegionId]: {
                 ...hostRegion,
                 activeInstanceId:
-                  hostRegion.activeInstanceId === action.instanceId && fallbackInstanceId
-                    ? fallbackInstanceId
+                  hostRegion.activeInstanceId === action.instanceId
+                    ? (fallbackInstanceId ?? emptiedActiveInstanceId(hostRegionId, hostRegion))
                     : hostRegion.activeInstanceId,
                 instanceIds,
                 // Floating the last widget out of a rail leaves nothing to show,
@@ -3972,7 +4077,7 @@ export const __workbenchReducerInternal = (
                 ...fromRegion,
                 activeInstanceId:
                   fromRegion.activeInstanceId === action.instanceId
-                    ? (nextFromInstanceIds[0] ?? fromRegion.activeInstanceId)
+                    ? (nextFromInstanceIds[0] ?? emptiedActiveInstanceId(action.fromRegion, fromRegion))
                     : fromRegion.activeInstanceId,
                 instanceIds: nextFromInstanceIds,
                 isCollapsed:
@@ -4551,6 +4656,13 @@ export const __workbenchReducerInternal = (
         action.projectId
       );
     }
+    case 'clearGallerySelection': {
+      return updateGalleryValues(
+        state,
+        (values) => ({ ...values, selectedImage: null, selectedImageName: null, selectedImageNames: [] }),
+        action.projectId
+      );
+    }
     case 'setGalleryView': {
       return updateGalleryValues(
         state,
@@ -4588,11 +4700,9 @@ export const __workbenchReducerInternal = (
       );
     }
     case 'setGalleryPage': {
-      return updateGalleryValues(
-        state,
-        (values) => ({ ...values, galleryPage: Math.max(0, action.page) }),
-        action.projectId
-      );
+      const galleryPage = Number.isFinite(action.page) ? Math.max(0, Math.floor(action.page)) : 0;
+
+      return updateGalleryValues(state, (values) => ({ ...values, galleryPage }), action.projectId);
     }
     case 'setGalleryPageInfo': {
       if (!Number.isFinite(action.totalImages)) {

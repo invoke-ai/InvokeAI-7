@@ -1,10 +1,12 @@
-import type { CanvasDocumentContractV2, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
+import type { CanvasDocumentContractV3, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
 import type { FloatingSelection } from '@workbench/canvas-engine/selection/floatingSelection';
 import type { Tool, ToolContext } from '@workbench/canvas-engine/tools/tool';
 import type { LayerTransform } from '@workbench/canvas-engine/transform/transformMath';
 import type { PointerInput } from '@workbench/canvas-engine/types';
 import type { CanvasProjectMutation } from '@workbench/canvasProjectMutations';
 
+import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
+import { createTestInsertionAnchorCapture } from '@workbench/canvas-engine/document/insertionAnchors.testStub';
 import { createEngineStores } from '@workbench/canvas-engine/engineStores';
 import { createLayerCacheStore } from '@workbench/canvas-engine/render/layerCache';
 import { createTestStubRasterBackend } from '@workbench/canvas-engine/render/raster.testStub';
@@ -50,13 +52,13 @@ const shapeLayer = (
   type: 'raster',
 });
 
-const makeDoc = (layers: CanvasLayerContract[], selectedLayerId: string | null): CanvasDocumentContractV2 => ({
+const makeDoc = (layers: CanvasLayerContract[], selectedLayerId: string | null): CanvasDocumentContractV3 => ({
   background: 'transparent',
   bbox: { height: 100, width: 100, x: 0, y: 0 },
   height: 100,
-  layers,
+  stacks: stacksFrom(layers),
   selectedLayerId,
-  version: 2,
+  version: 3,
   width: 100,
 });
 
@@ -117,7 +119,7 @@ const IDENTITY: LayerTransform = { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0
 const fakeFloat = (layerId: string): FloatingSelection =>
   ({ layerId, transform: { ...IDENTITY } }) as FloatingSelection;
 
-const createHarness = (doc: CanvasDocumentContractV2, options: HarnessOptions = {}): Harness => {
+const createHarness = (doc: CanvasDocumentContractV3, options: HarnessOptions = {}): Harness => {
   const dispatched: CanvasProjectMutation[] = [];
   const commits: StructuralCommit[] = [];
   const overrides: { layerId: string; override: { x: number; y: number } | null }[] = [];
@@ -135,7 +137,11 @@ const createHarness = (doc: CanvasDocumentContractV2, options: HarnessOptions = 
   const ctx: ToolContext = {
     backend: null as never,
     commitFloatingSelection: commitFloat,
-    commitStructural: (label, forward, inverse) => commits.push({ forward, inverse, label }),
+    commitStructural: (label, forward, inverse) => {
+      commits.push({ forward, inverse, label });
+      return { status: 'committed' as const };
+    },
+    captureInsertionAnchor: createTestInsertionAnchorCapture('p'),
     createLayerId: () => 'x',
     createPath2D: (d) => ({ d }) as unknown as Path2D,
     dispatch: (action) => dispatched.push(action),

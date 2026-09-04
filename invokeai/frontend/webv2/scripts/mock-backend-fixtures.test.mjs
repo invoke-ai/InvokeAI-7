@@ -4,6 +4,7 @@ import test from 'node:test';
 
 import {
   assertMockBackendFixture,
+  collectCanvasLeaves,
   createMockBackendFixture,
   getMockBackendFixtureCounts,
   MOCK_BACKEND_PROFILE_COUNTS,
@@ -76,8 +77,19 @@ test('representative fixtures keep node discovery and heavy project data coheren
     project.data.projectGraph.nodes.map((node) => node.data.type),
     invocationTypes
   );
-  assert.equal(project.data.canvas.document.layers.length, MOCK_BACKEND_PROFILE_COUNTS.representative.layers);
-  assert.equal(new Set(project.data.canvas.document.layers.map((layer) => layer.id)).size, 64);
+  const leaves = collectCanvasLeaves(project.data.canvas.document);
+  assert.equal(leaves.length, MOCK_BACKEND_PROFILE_COUNTS.representative.layers);
+  assert.equal(new Set(leaves.map((layer) => layer.id)).size, 64);
+  assert.equal(project.data.canvas.document.version, 3);
+  assert.equal(project.data.canvas.version, 3);
+  assert.equal(project.minimum_canvas_schema_version, 3);
+  // The raster forest nests: three groups, one two levels deep, one disabled, one locked.
+  const roots = project.data.canvas.document.stacks.raster;
+  const groups = roots.filter((node) => node.type === 'group');
+  assert.equal(groups.length, 2);
+  assert.equal(groups[0].children.filter((node) => node.type === 'group').length, 1);
+  assert.equal(groups[0].children.find((node) => node.type === 'group').isEnabled, false);
+  assert.equal(groups[1].isLocked, true);
 });
 
 test('Fixture Project 002 carries the image and video references used by the project-file journey', () => {
@@ -86,11 +98,11 @@ test('Fixture Project 002 carries the image and video references used by the pro
 
   assert.equal(project.project_id, 'fixture-project-002');
   assert.deepEqual(
-    project.data.canvas.document.layers.map((layer) => layer.source.image.imageName),
+    collectCanvasLeaves(project.data.canvas.document).map((layer) => layer.source.image.imageName),
     ['fixture-image-0001.png', 'fixture-image-0002.png', 'fixture-image-0003.png', 'fixture-image-0004.png']
   );
   assert.equal(
-    project.data.canvas.document.layers.every((layer) => layer.type === 'raster'),
+    collectCanvasLeaves(project.data.canvas.document).every((layer) => layer.type === 'raster'),
     true
   );
   assert.deepEqual(project.data.projectGraph.nodes[0]?.data.inputs.video?.value, {
@@ -124,7 +136,7 @@ test('Fixture Project 002 owns a board carrying every case the project-file jour
 
   // The canvas draws with these, and no project owns them: on import they deduplicate against the
   // destination, and on duplication they are not copied at all.
-  const layerNames = project.data.canvas.document.layers.map((layer) => layer.source.image.imageName);
+  const layerNames = collectCanvasLeaves(project.data.canvas.document).map((layer) => layer.source.image.imageName);
 
   for (const name of PROJECT_FILE_BOARD.externalImages) {
     assert.ok(layerNames.includes(name), `${name} must stay a canvas reference`);

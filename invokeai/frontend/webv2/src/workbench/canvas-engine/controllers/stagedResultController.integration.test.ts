@@ -2,6 +2,7 @@ import type { CanvasStagingCandidateContract } from '@workbench/canvas-engine/co
 import type { CanvasProjectMutationPort } from '@workbench/canvasProjectMutationPort';
 import type { CanvasProjectMutation } from '@workbench/canvasProjectMutations';
 
+import { getDocumentLeaves } from '@workbench/canvas-engine/document/documentIndex';
 import { createTestStubRasterBackend } from '@workbench/canvas-engine/render/raster.testStub';
 import { createCanvasEngine } from '@workbench/canvas-operations/createCanvasEngine';
 import { createCanvasProjectMutationPort } from '@workbench/canvasProjectMutationPort';
@@ -74,7 +75,8 @@ describe('staged result project-port integration', () => {
     const result = engine.layers.commitStagedImage({ candidate: selected, selectedImageIndex: 1 });
 
     expect(result.status).toBe('committed');
-    expect(store.getState().projects[0]?.canvas.document.layers[0]?.transform.x).toBe(90);
+    const accepted = store.getState().projects[0]?.canvas.document.stacks.raster[0];
+    expect(accepted?.type === 'raster' ? accepted.transform.x : null).toBe(90);
     engine.lifecycle.dispose();
   });
 
@@ -99,7 +101,7 @@ describe('staged result project-port integration', () => {
       throw new Error('expected commit');
     }
     const projectAfterSave = store.getState().projects[0]!;
-    const savedLayer = projectAfterSave.canvas.document.layers[0]!;
+    const savedLayer = projectAfterSave.canvas.document.stacks.raster[0]!;
     expect(savedLayer).toMatchObject({ id: result.layerId, isEnabled: false, type: 'raster' });
     expect(projectAfterSave.canvas.document.selectedLayerId).toBe(currentLayerId);
     expect(projectAfterSave.canvas.stagingArea).toBe(stagedBefore);
@@ -107,11 +109,11 @@ describe('staged result project-port integration', () => {
     expect(projectAfterSave.canvas.stagingArea.isVisible).toBe(true);
 
     engine.history.undo();
-    expect(store.getState().projects[0]!.canvas.document.layers).not.toContain(savedLayer);
+    expect(getDocumentLeaves(store.getState().projects[0]!.canvas.document)).not.toContain(savedLayer);
     expect(store.getState().projects[0]!.canvas.stagingArea).toBe(stagedBefore);
 
     engine.history.redo();
-    expect(store.getState().projects[0]!.canvas.document.layers[0]).toBe(savedLayer);
+    expect(store.getState().projects[0]!.canvas.document.stacks.raster[0]).toBe(savedLayer);
     expect(store.getState().projects[0]!.canvas.document.selectedLayerId).toBe(currentLayerId);
     expect(store.getState().projects[0]!.canvas.stagingArea).toBe(stagedBefore);
     engine.lifecycle.dispose();

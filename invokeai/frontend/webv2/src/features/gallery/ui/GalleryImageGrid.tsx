@@ -50,6 +50,9 @@ import { useGalleryUploadInput } from './useGalleryUploadInput';
 const viewportWidthCache = new Map<string, number>();
 const STARRED_TRIGGER_HOVER_STYLES = { color: 'fg' } as const;
 
+// Module-scoped so a grid remount cannot replay an already-followed reveal.
+let lastPageFollowedRevealToken = 0;
+
 const dragEventContainsFiles = (event: DragEvent): boolean => Array.from(event.dataTransfer.types).includes('Files');
 
 /** The disclosure row above the starred items, styled to match board rows. */
@@ -135,7 +138,8 @@ export const GalleryImageGrid = () => {
   const [viewportWidth, setViewportWidth] = useState(() => viewportWidthCache.get(region) ?? 0);
   const dragDepthRef = useRef(0);
   const viewportRef = useRef<HTMLDivElement | null>(null);
-  const { imageDensityPercent, imageOrderDir, paginationMode, showImageDimensions, thumbnailFit } = gallery.settings;
+  const { imageDensityPercent, imageOrderDir, paginationMode, showImageDimensions, starredFirst, thumbnailFit } =
+    gallery.settings;
 
   const {
     actionSelectionRefs,
@@ -150,11 +154,7 @@ export const GalleryImageGrid = () => {
 
   const columnCount = getGalleryColumnCount({ imageDensityPercent, widthPx: viewportWidth });
   const isFollowingLive = gallery.currentItem?.kind === 'placeholder';
-  const isComparisonActive =
-    gallery.selectedItemKey?.startsWith('image:') === true &&
-    gallery.compareImageKey !== null &&
-    gallery.selectedItemKey !== null &&
-    gallery.compareImageKey !== gallery.selectedItemKey;
+  const isComparisonActive = gallery.isComparisonActive;
   const selectedBoard = gallery.boards.find((board) => board.id === gallery.selectedBoardId);
   const selectedBoardName = selectedBoard
     ? getGalleryBoardLabel(selectedBoard, t)
@@ -171,8 +171,9 @@ export const GalleryImageGrid = () => {
         isStarredOpen,
         items: gallery.items,
         pendingPlaceholders: gallery.pendingPlaceholders,
+        starredFirst,
       }),
-    [columnCount, gallery.items, gallery.pendingPlaceholders, imageOrderDir, isStarredOpen]
+    [columnCount, gallery.items, gallery.pendingPlaceholders, imageOrderDir, isStarredOpen, starredFirst]
   );
 
   const rowCount = rows.length;
@@ -243,10 +244,12 @@ export const GalleryImageGrid = () => {
       return;
     }
 
-    // A different selection landing after the reveal (the user clicked
-    // something else) retires it — a late page load must not scroll away
-    // from what they chose.
-    if (gallery.selectedItemKey !== null && gallery.selectedItemKey !== pending.itemKey) {
+    // Another selection retires the reveal; the persisted set catches
+    // off-page selections whose visible key is null.
+    if (
+      (gallery.selectedItemKey !== null && gallery.selectedItemKey !== pending.itemKey) ||
+      (gallery.selectedItemKeys.length > 0 && !gallery.selectedItemKeys.includes(pending.itemKey))
+    ) {
       pendingRevealRef.current = null;
 
       return;
@@ -260,6 +263,20 @@ export const GalleryImageGrid = () => {
     // instead of honoring it when the section is expanded again.
     if (itemIndex >= 0 && scrollToItemIndex(itemIndex)) {
       pendingRevealRef.current = null;
+
+      return;
+    }
+
+    // The item may live on another paginated page: follow once per reveal, so
+    // a reveal whose item never materializes cannot keep pulling the user back.
+    if (
+      itemIndex < 0 &&
+      gallery.revealTargetPage !== null &&
+      gallery.revealTargetPage !== gallery.page &&
+      lastPageFollowedRevealToken !== pending.token
+    ) {
+      lastPageFollowedRevealToken = pending.token;
+      galleryCommands.setPage(gallery.revealTargetPage);
     }
   });
 

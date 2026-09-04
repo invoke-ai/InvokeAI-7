@@ -8,12 +8,15 @@ from invokeai.app.services.image_records.image_records_common import ASSETS_CATE
 from invokeai.app.services.invoker import Invoker
 from invokeai.app.services.project_records.project_records_base import ProjectRecordsStorageBase
 from invokeai.app.services.project_records.project_records_common import (
+    DEFAULT_PROJECT_CANVAS_SCHEMA_VERSION,
     PROJECT_BOARD_SNAPSHOT_MAX_ITEMS,
     ProjectBoardItemDTO,
     ProjectBoardNotFoundError,
     ProjectBoardSnapshotDTO,
     ProjectBoardTooLargeError,
     ProjectBoardUnavailableError,
+    ProjectCanvasSchemaDowngradeError,
+    ProjectCanvasSchemaUnsupportedError,
     ProjectRecordConflictError,
     ProjectRecordDTO,
     ProjectRecordExistsError,
@@ -57,8 +60,15 @@ class ProjectRecordsSqlite(ProjectRecordsStorageBase):
         data: dict[str, Any],
         project_id: str | None = None,
         board_id: str | None = None,
+        minimum_canvas_schema_version: int = DEFAULT_PROJECT_CANVAS_SCHEMA_VERSION,
+        max_canvas_schema_version: int = DEFAULT_PROJECT_CANVAS_SCHEMA_VERSION,
     ) -> ProjectRecordDTO:
         project_id = project_id or uuid.uuid4().hex
+        self._require_supported_schema(
+            project_id=project_id,
+            minimum_version=minimum_canvas_schema_version,
+            client_maximum_version=max_canvas_schema_version,
+        )
 
         try:
             with self._db.transaction() as cursor:
@@ -70,11 +80,21 @@ class ProjectRecordsSqlite(ProjectRecordsStorageBase):
 
                 cursor.execute(
                     """--sql
-                    INSERT INTO projects (project_id, user_id, name, data, board_id)
-                    VALUES (?, ?, ?, ?, ?);
+                    INSERT INTO projects (
+                        project_id, user_id, name, data, board_id, minimum_canvas_schema_version
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?);
                     """,
-                    (project_id, user_id, name, json.dumps(data), resolved_board_id),
+                    (
+                        project_id,
+                        user_id,
+                        name,
+                        json.dumps(data),
+                        resolved_board_id,
+                        minimum_canvas_schema_version,
+                    ),
                 )
+                record = self._fetch_record(cursor, user_id=user_id, project_id=project_id)
         except sqlite3.IntegrityError as e:
             # The board insert/rename rolls back with the project insert, so a rejected create never
             # leaves an orphan board behind.
@@ -84,38 +104,37 @@ class ProjectRecordsSqlite(ProjectRecordsStorageBase):
                 raise
             raise classified from e
 
-        return self.get(user_id, project_id)
-
-    def get(self, user_id: str, project_id: str) -> ProjectRecordDTO:
-        with self._db.transaction() as cursor:
-            cursor.execute(
-                """--sql
-                SELECT project_id, board_id, name, data, revision, created_at, updated_at
-                FROM projects
-                WHERE user_id = ? AND project_id = ?;
-                """,
-                (user_id, project_id),
-            )
-            row = cursor.fetchone()
-
-        if row is None:
+        if record is None:
             raise ProjectRecordNotFoundError(project_id)
 
-        return ProjectRecordDTO(
-            project_id=row[0],
-            board_id=row[1],
-            name=row[2],
-            data=json.loads(row[3]),
-            revision=row[4],
-            created_at=row[5],
-            updated_at=row[6],
+        return record
+
+    def get(
+        self,
+        user_id: str,
+        project_id: str,
+        max_canvas_schema_version: int = DEFAULT_PROJECT_CANVAS_SCHEMA_VERSION,
+    ) -> ProjectRecordDTO:
+        with self._db.transaction() as cursor:
+            record = self._fetch_record(cursor, user_id=user_id, project_id=project_id)
+
+        if record is None:
+            raise ProjectRecordNotFoundError(project_id)
+
+        self._require_supported_schema(
+            project_id=project_id,
+            minimum_version=record.minimum_canvas_schema_version,
+            client_maximum_version=max_canvas_schema_version,
         )
+
+        return record
 
     def list(self, user_id: str) -> list[ProjectSummaryDTO]:
         with self._db.transaction() as cursor:
             cursor.execute(
                 """--sql
-                SELECT project_id, board_id, name, revision, created_at, updated_at
+                SELECT project_id, board_id, name, revision, minimum_canvas_schema_version,
+                       created_at, updated_at
                 FROM projects
                 WHERE user_id = ?
                 -- rowid breaks ties between rows created in the same millisecond,
@@ -132,27 +151,84 @@ class ProjectRecordsSqlite(ProjectRecordsStorageBase):
                 board_id=row[1],
                 name=row[2],
                 revision=row[3],
-                created_at=row[4],
-                updated_at=row[5],
+                minimum_canvas_schema_version=row[4],
+                created_at=row[5],
+                updated_at=row[6],
             )
             for row in rows
         ]
 
     def update(
-        self, user_id: str, project_id: str, expected_revision: int, name: str, data: dict[str, Any]
+        self,
+        user_id: str,
+        project_id: str,
+        expected_revision: int,
+        name: str,
+        data: dict[str, Any],
+        minimum_canvas_schema_version: int | None = None,
+        max_canvas_schema_version: int = DEFAULT_PROJECT_CANVAS_SCHEMA_VERSION,
     ) -> ProjectRecordDTO:
         with self._db.transaction() as cursor:
             cursor.execute(
                 """--sql
+                SELECT revision, minimum_canvas_schema_version
+                FROM projects
+                WHERE user_id = ? AND project_id = ?;
+                """,
+                (user_id, project_id),
+            )
+            row = cursor.fetchone()
+
+            if row is None:
+                raise ProjectRecordNotFoundError(project_id)
+
+            current_revision, current_minimum_version = row
+            self._require_supported_schema(
+                project_id=project_id,
+                minimum_version=current_minimum_version,
+                client_maximum_version=max_canvas_schema_version,
+            )
+
+            if current_revision != expected_revision:
+                raise ProjectRecordConflictError(project_id, expected_revision, current_revision)
+
+            next_minimum_version = (
+                current_minimum_version if minimum_canvas_schema_version is None else minimum_canvas_schema_version
+            )
+
+            if next_minimum_version < current_minimum_version:
+                raise ProjectCanvasSchemaDowngradeError(
+                    project_id=project_id,
+                    current_version=current_minimum_version,
+                    requested_version=next_minimum_version,
+                )
+
+            self._require_supported_schema(
+                project_id=project_id,
+                minimum_version=next_minimum_version,
+                client_maximum_version=max_canvas_schema_version,
+            )
+
+            cursor.execute(
+                """--sql
                 UPDATE projects
-                SET name = ?, data = ?, revision = revision + 1
+                SET name = ?, data = ?, minimum_canvas_schema_version = ?, revision = revision + 1
                 WHERE user_id = ? AND project_id = ? AND revision = ?;
                 """,
-                (name, json.dumps(data), user_id, project_id, expected_revision),
+                (
+                    name,
+                    json.dumps(data),
+                    next_minimum_version,
+                    user_id,
+                    project_id,
+                    expected_revision,
+                ),
             )
 
             if cursor.rowcount == 0:
-                # Distinguish "gone" from "someone else saved first".
+                # Another SQLite connection can win after the read above but before this
+                # compare-and-swap. Re-read inside the transaction so the refusal reports the
+                # actual winning revision and never renames the board.
                 cursor.execute(
                     """--sql
                     SELECT revision FROM projects
@@ -160,13 +236,12 @@ class ProjectRecordsSqlite(ProjectRecordsStorageBase):
                     """,
                     (user_id, project_id),
                 )
-                row = cursor.fetchone()
+                raced_row = cursor.fetchone()
 
-                if row is None:
+                if raced_row is None:
                     raise ProjectRecordNotFoundError(project_id)
 
-                # Raised before the rename, so a save that lost the race renames nothing.
-                raise ProjectRecordConflictError(project_id, expected_revision, row[0])
+                raise ProjectRecordConflictError(project_id, expected_revision, raced_row[0])
 
             cursor.execute(
                 """--sql
@@ -176,8 +251,49 @@ class ProjectRecordsSqlite(ProjectRecordsStorageBase):
                 """,
                 (name[:BOARD_NAME_MAX_LENGTH], user_id, project_id),
             )
+            record = self._fetch_record(cursor, user_id=user_id, project_id=project_id)
 
-        return self.get(user_id, project_id)
+        if record is None:
+            raise ProjectRecordNotFoundError(project_id)
+
+        return record
+
+    @staticmethod
+    def _fetch_record(cursor: sqlite3.Cursor, *, user_id: str, project_id: str) -> ProjectRecordDTO | None:
+        """Read a project through the caller's transaction so a write returns exactly its own row."""
+        cursor.execute(
+            """--sql
+            SELECT project_id, board_id, name, data, revision, minimum_canvas_schema_version,
+                   created_at, updated_at
+            FROM projects
+            WHERE user_id = ? AND project_id = ?;
+            """,
+            (user_id, project_id),
+        )
+        row = cursor.fetchone()
+
+        if row is None:
+            return None
+
+        return ProjectRecordDTO(
+            project_id=row[0],
+            board_id=row[1],
+            name=row[2],
+            data=json.loads(row[3]),
+            revision=row[4],
+            minimum_canvas_schema_version=row[5],
+            created_at=row[6],
+            updated_at=row[7],
+        )
+
+    @staticmethod
+    def _require_supported_schema(*, project_id: str, minimum_version: int, client_maximum_version: int) -> None:
+        if client_maximum_version < minimum_version:
+            raise ProjectCanvasSchemaUnsupportedError(
+                project_id=project_id,
+                minimum_version=minimum_version,
+                client_maximum_version=client_maximum_version,
+            )
 
     def delete(self, user_id: str, project_id: str) -> None:
         with self._db.transaction() as cursor:

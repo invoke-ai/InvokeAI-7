@@ -1,9 +1,12 @@
-import type { CanvasDocumentContractV2, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
+import type { CanvasDocumentContractV3, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
 import type { FloatingSelection } from '@workbench/canvas-engine/selection/floatingSelection';
 import type { Tool, ToolContext } from '@workbench/canvas-engine/tools/tool';
 import type { LayerTransform } from '@workbench/canvas-engine/transform/transformMath';
 import type { PointerInput, Vec2 } from '@workbench/canvas-engine/types';
 
+import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
+import { getDocumentLeaves } from '@workbench/canvas-engine/document/documentIndex';
+import { createTestInsertionAnchorCapture } from '@workbench/canvas-engine/document/insertionAnchors.testStub';
 import { createEngineStores } from '@workbench/canvas-engine/engineStores';
 import { applyToPoint } from '@workbench/canvas-engine/math/mat2d';
 import {
@@ -30,13 +33,13 @@ const imageLayer = (
   type: 'raster',
 });
 
-const makeDoc = (layers: CanvasLayerContract[], selectedLayerId: string | null): CanvasDocumentContractV2 => ({
+const makeDoc = (layers: CanvasLayerContract[], selectedLayerId: string | null): CanvasDocumentContractV3 => ({
   background: 'transparent',
   bbox: { height: 200, width: 200, x: 0, y: 0 },
   height: 200,
-  layers,
+  stacks: stacksFrom(layers),
   selectedLayerId,
-  version: 2,
+  version: 3,
   width: 200,
 });
 
@@ -109,7 +112,7 @@ interface Harness {
  * Grid snapping starts OFF so the gesture-math tests assert raw pointer deltas;
  * the snapping tests re-enable it on `h.ctx.stores`. (The product default is on.)
  */
-const createHarness = (doc: CanvasDocumentContractV2, zoom = 1, float?: FloatingSelection | null): Harness => {
+const createHarness = (doc: CanvasDocumentContractV3, zoom = 1, float?: FloatingSelection | null): Harness => {
   const stores = createEngineStores();
   stores.snapToGrid.set(false);
   const overrides: { layerId: string; override: unknown }[] = [];
@@ -118,7 +121,7 @@ const createHarness = (doc: CanvasDocumentContractV2, zoom = 1, float?: Floating
   const floatTransforms: LayerTransform[] = [];
 
   const beginTransformSession = (layerId: string): void => {
-    const layer = doc.layers.find((entry) => entry.id === layerId);
+    const layer = getDocumentLeaves(doc).find((entry) => entry.id === layerId);
     if (!layer) {
       return;
     }
@@ -158,6 +161,7 @@ const createHarness = (doc: CanvasDocumentContractV2, zoom = 1, float?: Floating
       floatRef.current = null;
     },
     commitStructural: vi.fn(),
+    captureInsertionAnchor: createTestInsertionAnchorCapture('p'),
     createLayerId: () => 'x',
     createPath2D: (d) => ({ d }) as unknown as Path2D,
     dispatch: vi.fn(),
@@ -622,8 +626,9 @@ describe('transform tool: floating selections', () => {
   it('maps the pointer through the layer matrix, so a scaled layer drags true', () => {
     // On a 2× layer, dragging 40 document px must move the float 20 layer-local px.
     const h = createHarness(doc({ height: 100, width: 100 }), 1, makeFloat('a'));
-    (h.ctx.getDocument() as CanvasDocumentContractV2).layers[0]!.transform.scaleX = 2;
-    (h.ctx.getDocument() as CanvasDocumentContractV2).layers[0]!.transform.scaleY = 2;
+    const scaled = getDocumentLeaves(h.ctx.getDocument())[0]!;
+    scaled.transform.scaleX = 2;
+    scaled.transform.scaleY = 2;
     const tool = createTransformTool();
 
     down(tool, h.ctx, pointer(50, 50));

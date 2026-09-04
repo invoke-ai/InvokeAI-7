@@ -34,7 +34,9 @@ let syncStore: typeof syncStoreModule;
 let account: typeof accountLifecycleModule;
 
 const summaryDto = (id: string, name: string, updatedAt: string) => ({
+  board_id: `board-for-${id}`,
   created_at: '2026-06-01 08:00:00.000',
+  minimum_canvas_schema_version: 3,
   name,
   project_id: id,
   revision: 1,
@@ -109,6 +111,18 @@ describe('refreshProjectLibrary', () => {
     expect(status).toBe('ready');
     expect(summaries.map((summary) => summary.id)).toEqual(['newer', 'older']);
     expect(summaries[0].updatedAt).toBe('2026-06-10T10:00:00.000Z');
+    expect(summaries[0].minimumCanvasSchemaVersion).toBe(3);
+  });
+
+  it('identifies summaries that require a newer canvas reader without fetching the document', async () => {
+    api.listProjects.mockResolvedValue([
+      { ...summaryDto('future', 'Future', '2026-06-10 10:00:00.000'), minimum_canvas_schema_version: 4 },
+    ]);
+
+    await library.refreshProjectLibrary();
+
+    expect(library.isProjectSummaryCompatible(library.getProjectLibrary().summaries[0]!)).toBe(false);
+    expect(api.getProject).not.toHaveBeenCalled();
   });
 
   it('keeps the previous summaries and reports the failure on error', async () => {

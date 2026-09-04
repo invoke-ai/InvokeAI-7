@@ -39,6 +39,8 @@ const zManifestV2 = z.object({
   /** Entry path of the preview image, when the archive carries one. */
   cover: z.string().optional(),
   createdAt: z.string(),
+  /** Highest canvas schema version required by the source project and its retained history. */
+  minimumCanvasSchemaVersion: z.number().int().min(1).optional(),
   name: z.string(),
   /** The project this was exported from. Informational — import always mints a fresh id. */
   sourceProjectId: z.string().optional(),
@@ -84,6 +86,7 @@ export const buildInvkManifest = (input: {
   appVersion: string;
   cover?: string;
   createdAt: string;
+  minimumCanvasSchemaVersion?: number;
   name: string;
   sourceProjectId?: string;
 }): InvkManifest => ({
@@ -93,6 +96,9 @@ export const buildInvkManifest = (input: {
   name: input.name,
   version: INVK_VERSION,
   ...(input.cover === undefined ? {} : { cover: input.cover }),
+  ...(input.minimumCanvasSchemaVersion === undefined
+    ? {}
+    : { minimumCanvasSchemaVersion: input.minimumCanvasSchemaVersion }),
   ...(input.sourceProjectId === undefined ? {} : { sourceProjectId: input.sourceProjectId }),
 });
 

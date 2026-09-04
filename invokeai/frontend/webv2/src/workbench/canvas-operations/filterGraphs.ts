@@ -27,10 +27,17 @@ export type FilterParamSpec =
   | { kind: 'string'; key: string; default: string }
   | { kind: 'model'; key: string; default: null; modelType: 'spandrel_image_to_image' };
 
+export type FilterCategory = 'edge' | 'depth' | 'pose' | 'color' | 'noise' | 'upscale';
+
+/** Display order of the filter-picker groups. */
+export const FILTER_CATEGORY_ORDER: readonly FilterCategory[] = ['edge', 'depth', 'pose', 'color', 'noise', 'upscale'];
+
 /** One filter's identity, defaults, and node-arg projection. */
 export interface FilterDefinition {
   /** The persisted/UI filter id. */
   type: string;
+  /** The picker group the filter belongs to. */
+  category: FilterCategory;
   /** Backend node type when this definition is a named preset. */
   nodeType?: string;
   /** Ordered parameter specs (also the default-settings source). */
@@ -58,6 +65,7 @@ export const CONTROL_FILTERS: readonly FilterDefinition[] = [
       { default: 100, integer: true, key: 'low_threshold', kind: 'number', max: 255, min: 0, step: 1 },
       { default: 200, integer: true, key: 'high_threshold', kind: 'number', max: 255, min: 0, step: 1 },
     ],
+    category: 'edge',
     type: 'canny_edge_detection',
   },
   {
@@ -74,6 +82,7 @@ export const CONTROL_FILTERS: readonly FilterDefinition[] = [
         ],
       },
     ],
+    category: 'depth',
     type: 'depth_anything_depth_estimation',
   },
   {
@@ -82,14 +91,17 @@ export const CONTROL_FILTERS: readonly FilterDefinition[] = [
       { default: true, key: 'draw_face', kind: 'boolean' },
       { default: true, key: 'draw_hands', kind: 'boolean' },
     ],
+    category: 'pose',
     type: 'dw_openpose_detection',
   },
   {
     params: [{ default: false, key: 'coarse', kind: 'boolean' }],
+    category: 'edge',
     type: 'lineart_edge_detection',
   },
   {
     params: [{ default: false, key: 'scribble', kind: 'boolean' }],
+    category: 'edge',
     type: 'hed_edge_detection',
   },
   {
@@ -97,6 +109,7 @@ export const CONTROL_FILTERS: readonly FilterDefinition[] = [
       { default: 0.1, key: 'score_threshold', kind: 'number', max: 1, min: 0, step: 0.01 },
       { default: 20, key: 'distance_threshold', kind: 'number', max: 1000, min: 0, sliderMax: 100, step: 1 },
     ],
+    category: 'edge',
     type: 'mlsd_detection',
   },
   {
@@ -104,15 +117,18 @@ export const CONTROL_FILTERS: readonly FilterDefinition[] = [
       { default: false, key: 'quantize_edges', kind: 'boolean' },
       { default: false, key: 'scribble', kind: 'boolean' },
     ],
+    category: 'edge',
     type: 'pidi_edge_detection',
   },
   {
     nodeType: 'hed_edge_detection',
     params: [],
+    category: 'edge',
     type: 'scribble_edge_detection',
   },
   {
     params: [{ default: 256, integer: true, key: 'scale_factor', kind: 'number', max: 4096, min: 0, step: 1 }],
+    category: 'noise',
     type: 'content_shuffle',
   },
   {
@@ -120,12 +136,14 @@ export const CONTROL_FILTERS: readonly FilterDefinition[] = [
       { default: 1, integer: true, key: 'max_faces', kind: 'number', max: 20, min: 1, step: 1 },
       { default: 0.5, key: 'min_confidence', kind: 'number', max: 1, min: 0, step: 0.01 },
     ],
+    category: 'pose',
     type: 'mediapipe_face_detection',
   },
   {
     params: [
       { default: 64, integer: true, key: 'tile_size', kind: 'number', max: 4096, min: 1, sliderMax: 256, step: 1 },
     ],
+    category: 'color',
     type: 'color_map',
   },
   {
@@ -157,16 +175,18 @@ export const CONTROL_FILTERS: readonly FilterDefinition[] = [
       { default: 1, key: 'value', kind: 'number', max: 255, min: 0, sliderMax: 2, step: 0.0025 },
       { default: false, key: 'scale_values', kind: 'boolean' },
     ],
+    category: 'color',
     type: 'adjust_image',
   },
-  { params: [], type: 'lineart_anime_edge_detection' },
-  { params: [], type: 'normal_map' },
+  { category: 'edge', params: [], type: 'lineart_anime_edge_detection' },
+  { category: 'depth', params: [], type: 'normal_map' },
   {
     params: [
       { default: null, key: 'model', kind: 'model', modelType: 'spandrel_image_to_image' },
       { default: true, key: 'autoScale', kind: 'boolean' },
       { default: 1, key: 'scale', kind: 'number', max: 16, min: 1, step: 1 },
     ],
+    category: 'upscale',
     type: 'spandrel_filter',
   },
   {
@@ -182,6 +202,7 @@ export const CONTROL_FILTERS: readonly FilterDefinition[] = [
       },
       { coerceMin: 0, default: 8, key: 'radius', kind: 'number', max: 4096, min: 1, sliderMax: 64, step: 0.1 },
     ],
+    category: 'noise',
     type: 'img_blur',
   },
   {
@@ -202,6 +223,7 @@ export const CONTROL_FILTERS: readonly FilterDefinition[] = [
       { default: true, key: 'noise_color', kind: 'boolean' },
       { default: 1, integer: true, key: 'size', kind: 'number', max: 256, min: 1, sliderMax: 16, step: 1 },
     ],
+    category: 'noise',
     type: 'img_noise',
   },
 ];

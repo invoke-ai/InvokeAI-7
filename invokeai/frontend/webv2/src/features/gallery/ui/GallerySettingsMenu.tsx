@@ -25,7 +25,7 @@ export const GallerySettingsMenu = ({
   onUpdateSettings,
 }: {
   settings: GallerySettings;
-  onUpdateSettings: (settings: Partial<GallerySettings>) => void;
+  onUpdateSettings: (settings: Partial<Omit<GallerySettings, 'starredFirst'>>) => void;
 }) => {
   const { t } = useTranslation();
   const { imageDensityPercent, paginationMode, showImageDimensions, showPendingItems, thumbnailFit } = settings;

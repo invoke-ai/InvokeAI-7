@@ -99,6 +99,31 @@ describe('rasterizeShapeSource — ellipse', () => {
   });
 });
 
+describe('rasterizeShapeSource — triangle and star', () => {
+  it('draws a closed three-vertex path for the triangle kind', async () => {
+    const deps = makeDeps();
+    const surface = (await rasterizeShapeSource(rect({ fill: '#abcdef', kind: 'triangle' }), deps))
+      .surface as StubRasterSurface;
+    const log = ops(surface);
+    expect(log).toContain('moveTo');
+    expect(log.filter((op) => op === 'lineTo')).toHaveLength(2);
+    expect(log).toContain('closePath');
+    expect(log).toContain('fill');
+  });
+
+  it('draws a closed ten-vertex path for the star kind and strokes with round joins', async () => {
+    const deps = makeDeps();
+    const surface = (
+      await rasterizeShapeSource(rect({ fill: null, kind: 'star', stroke: '#123456', strokeWidth: 4 }), deps)
+    ).surface as StubRasterSurface;
+    const log = ops(surface);
+    expect(log.filter((op) => op === 'lineTo')).toHaveLength(9);
+    expect(log).toContain('closePath');
+    expect(log).toContain('stroke');
+    expect((surface.ctx as unknown as { lineJoin: string }).lineJoin).toBe('round');
+  });
+});
+
 describe('rasterizeShapeSource — target reuse', () => {
   it('resizes and reuses a provided target surface', async () => {
     const deps = makeDeps();

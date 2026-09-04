@@ -1,12 +1,16 @@
 import type { LayerExportGuard } from '@workbench/canvas-engine/capabilities';
-import type { CanvasDocumentContractV2, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
+import type { CanvasDocumentContractV3, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
+import type { CanvasNodeInsertionAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
+import type { LayerStackKind } from '@workbench/canvas-engine/document/layerStacks';
+import type { CanvasEditConcurrency } from '@workbench/canvas-engine/editConcurrency';
 import type { History } from '@workbench/canvas-engine/history/history';
 import type { CanvasProjectMutation } from '@workbench/canvas-engine/mutationContracts';
 import type { PreparedLayerCacheReplacement } from '@workbench/canvas-engine/render/layerCache';
 import type { RasterBackend, RasterSurface } from '@workbench/canvas-engine/render/raster';
 import type { Rect } from '@workbench/canvas-engine/types';
 
-import { isMergeableRasterLayer } from '@workbench/canvas-engine/document/sources';
+import { lookupLayerBelow, mergeDownEligibility } from '@workbench/canvas-engine/document-model/documentModel';
+import { getDocumentLayer } from '@workbench/canvas-engine/document/documentIndex';
 import { isEmpty, roundOut, union } from '@workbench/canvas-engine/math/rect';
 
 export type BooleanRasterOperation = 'intersect' | 'cutout' | 'cutaway' | 'exclude';
@@ -16,19 +20,18 @@ type ExportResult =
   | { status: 'ok'; surface: RasterSurface; rect: Rect; guard: LayerExportGuard; release(): void }
   | { status: 'missing' | 'disabled' | 'unsupported' | 'empty' | 'not-ready' | 'over-budget' };
 
-export interface BooleanMergeControllerOptions<Permit> {
+export interface BooleanMergeControllerOptions {
+  readonly concurrency: CanvasEditConcurrency;
   readonly backend: RasterBackend;
   readonly history: History;
-  readonly getDocument: () => CanvasDocumentContractV2 | null;
-  readonly getReducerDocument: () => CanvasDocumentContractV2 | null;
-  readonly capturePermit: () => Permit | null;
-  readonly isPermitCurrent: (permit: Permit) => boolean;
-  readonly isGestureActive: () => boolean;
+  readonly getDocument: () => CanvasDocumentContractV3 | null;
+  readonly getReducerDocument: () => CanvasDocumentContractV3 | null;
   readonly endBurst: () => void;
-  readonly isCacheReady: (layer: CanvasLayerContract, document: CanvasDocumentContractV2) => boolean;
+  readonly isCacheReady: (layer: CanvasLayerContract, document: CanvasDocumentContractV3) => boolean;
   readonly exportBaked: (layerId: string) => Promise<ExportResult>;
   readonly isGuardCurrent: (guard: LayerExportGuard) => boolean;
   readonly createLayerId: () => string;
+  readonly captureInsertionAnchor: (stack: LayerStackKind, aboveId: string | null) => CanvasNodeInsertionAnchor;
   readonly dispatchPrepared: (
     action: CanvasProjectMutation,
     expectedReducer: () => boolean,
@@ -46,14 +49,14 @@ const modes: Record<BooleanRasterOperation, GlobalCompositeOperation> = {
 };
 
 /** Owns guarded two-layer boolean compositing and atomic stack history. */
-export class BooleanMergeController<Permit> {
+export class BooleanMergeController {
   private disposed = false;
 
-  constructor(private readonly deps: BooleanMergeControllerOptions<Permit>) {}
+  constructor(private readonly deps: BooleanMergeControllerOptions) {}
 
   async merge(upperLayerId: string, operation: BooleanRasterOperation): Promise<BooleanRasterResult> {
-    const permit = this.deps.capturePermit();
-    if (this.disposed || !permit || this.deps.isGestureActive()) {
+    const permit = this.deps.concurrency.capturePermit();
+    if (this.disposed || !permit || this.deps.concurrency.isGestureActive()) {
       return 'busy';
     }
     this.deps.endBurst();
@@ -61,15 +64,15 @@ export class BooleanMergeController<Permit> {
     if (!document) {
       return 'missing';
     }
-    const upperIndex = document.layers.findIndex((layer) => layer.id === upperLayerId);
-    const upper = document.layers[upperIndex];
-    const below = document.layers[upperIndex + 1];
-    if (upperIndex < 0 || !upper || !below) {
-      return 'missing';
+    const eligibility = mergeDownEligibility(document, upperLayerId);
+    if (eligibility.status !== 'eligible') {
+      return eligibility.status === 'missing' ||
+        (eligibility.status === 'invalid-target' && eligibility.reason === 'no-layer-below')
+        ? 'missing'
+        : 'unsupported';
     }
-    if (!isMergeableRasterLayer(upper) || !isMergeableRasterLayer(below)) {
-      return 'unsupported';
-    }
+    const upper = getDocumentLayer(document, eligibility.upperId)!;
+    const below = getDocumentLayer(document, eligibility.lowerId)!;
     if (!this.deps.isCacheReady(upper, document) || !this.deps.isCacheReady(below, document)) {
       return 'not-ready';
     }
@@ -90,7 +93,7 @@ export class BooleanMergeController<Permit> {
       const [upperPixels, belowPixels] = settled.map(
         (result) => (result as PromiseFulfilledResult<ExportResult>).value
       );
-      if (!this.deps.isPermitCurrent(permit)) {
+      if (!this.deps.concurrency.isPermitCurrent(permit)) {
         return 'busy';
       }
       if (upperPixels.status !== 'ok' || belowPixels.status !== 'ok') {
@@ -108,18 +111,21 @@ export class BooleanMergeController<Permit> {
         return 'empty';
       }
       if (
-        !this.deps.isPermitCurrent(permit) ||
-        this.deps.isGestureActive() ||
+        !this.deps.concurrency.isPermitCurrent(permit) ||
+        this.deps.concurrency.isGestureActive() ||
         upperPixels.guard.layer !== upper ||
         belowPixels.guard.layer !== below ||
         !this.deps.isGuardCurrent(upperPixels.guard) ||
         !this.deps.isGuardCurrent(belowPixels.guard)
       ) {
-        return this.deps.isPermitCurrent(permit) ? 'not-ready' : 'busy';
+        return this.deps.concurrency.isPermitCurrent(permit) ? 'not-ready' : 'busy';
       }
       const liveDocument = this.deps.getDocument();
-      const liveIndex = liveDocument?.layers.findIndex((layer) => layer.id === upperLayerId) ?? -1;
-      if (!liveDocument || liveDocument.layers[liveIndex] !== upper || liveDocument.layers[liveIndex + 1] !== below) {
+      if (
+        !liveDocument ||
+        getDocumentLayer(liveDocument, upperLayerId) !== upper ||
+        lookupLayerBelow(liveDocument, upperLayerId) !== below
+      ) {
         return 'not-ready';
       }
       const resultRect = roundOut(union(upperPixels.rect, belowPixels.rect));
@@ -161,13 +167,14 @@ export class BooleanMergeController<Permit> {
       ];
       const disabled = original.map(({ id }) => ({ id, isEnabled: false }));
       const selectedLayerId = liveDocument.selectedLayerId;
-      const hasState = (doc: CanvasDocumentContractV2 | null, updates: typeof original): boolean =>
-        updates.every((update) => doc?.layers.find((layer) => layer.id === update.id)?.isEnabled === update.isEnabled);
+      const anchor = this.deps.captureInsertionAnchor('raster', upper.id);
+      const hasState = (doc: CanvasDocumentContractV3 | null, updates: typeof original): boolean =>
+        updates.every((update) => getDocumentLayer(doc, update.id)?.isEnabled === update.isEnabled);
       const apply = (): void => {
         const prepared = this.deps.preparePixels(resultId, resultRect, pixels);
         this.deps.dispatchPrepared(
           {
-            add: { index: liveIndex, layers: [resultLayer] },
+            add: [{ anchor, nodes: [resultLayer] }],
             enabledUpdates: disabled,
             selectedLayerId: resultId,
             type: 'applyCanvasLayerStackMutation',
@@ -179,7 +186,7 @@ export class BooleanMergeController<Permit> {
         );
         this.deps.installPrepared(prepared);
       };
-      if (!this.deps.isPermitCurrent(permit)) {
+      if (!this.deps.concurrency.isPermitCurrent(permit)) {
         return 'busy';
       }
       apply();

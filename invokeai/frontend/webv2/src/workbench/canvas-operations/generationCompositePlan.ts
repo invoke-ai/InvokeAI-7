@@ -1,9 +1,10 @@
 import type {
   CanvasControlLayerContract,
-  CanvasDocumentContractV2,
+  CanvasDocumentContractV3,
   CanvasInpaintMaskLayerContract,
   CanvasLayerContract,
   CanvasLayerSourceContract,
+  CanvasRasterLayerContractV2,
   CanvasRegionalGuidanceLayerContract,
 } from '@workbench/canvas-engine/api';
 
@@ -13,7 +14,8 @@ import {
   getCompositeLayerBounds,
   planBaseRasterComposite,
 } from '@workbench/canvas-engine/api';
-import { isCompositableControlLayer, isCompositableRegionalGuidanceLayer } from '@workbench/canvasLayerContent';
+import { compileDocumentLeaves } from '@workbench/canvas-engine/document-model/documentModel';
+import { hasControlLayerContent, hasRegionalGuidanceMaskContent } from '@workbench/canvasLayerContent';
 
 import type {
   CompositeEntry,
@@ -62,9 +64,99 @@ const layerKey = (ref: CompositeLayerRef): string => {
 
 export { getBaseRasterContentBounds, getCompositeLayerBounds, planBaseRasterComposite };
 
-/** True when a layer is an enabled inpaint mask with persisted (non-empty) alpha. */
-const isActiveInpaintMaskLayer = (layer: CanvasLayerContract): layer is CanvasInpaintMaskLayerContract =>
-  layer.isEnabled && layer.type === 'inpaint_mask' && layer.mask.bitmap !== null;
+/** The contributing layers, in flat order, narrowed to the ones that satisfy `hasContent`. */
+const contributingLayers = <T extends CanvasLayerContract>(
+  document: CanvasDocumentContractV3,
+  hasContent: (layer: CanvasLayerContract) => layer is T
+): T[] =>
+  compileDocumentLeaves(document)
+    .filter((leaf) => leaf.contributionEnabled)
+    .map((leaf) => leaf.layer)
+    .filter(hasContent);
+
+const isInpaintMaskWithContent = (layer: CanvasLayerContract): layer is CanvasInpaintMaskLayerContract =>
+  layer.type === 'inpaint_mask' && layer.mask.bitmap !== null;
+
+/**
+ * A raster layer whose regenerate region is enabled and whose source can both
+ * hold pixels and rasterize: the layer's OWN content alpha joins the inpaint
+ * mask. Invoke flushes paint uploads before planning, so a stroked layer always
+ * carries its bitmap; polygon shapes have no rasterizer and would fail the
+ * snapshot capture, so they never enter the plan.
+ */
+const isRegionRasterWithContent = (layer: CanvasLayerContract): layer is CanvasRasterLayerContractV2 =>
+  layer.type === 'raster' &&
+  layer.inpaint?.isEnabled === true &&
+  !(layer.source.type === 'shape' && layer.source.kind === 'polygon') &&
+  (layer.source.type !== 'paint' || layer.source.bitmap !== null);
+
+/** JSON with recursively sorted object keys, so equal sources always serialize identically. */
+const stableSourceKey = (value: unknown): string =>
+  JSON.stringify(value, (_key, entry: unknown) =>
+    entry && typeof entry === 'object' && !Array.isArray(entry)
+      ? Object.fromEntries(Object.entries(entry).sort(([a], [b]) => (a < b ? -1 : 1)))
+      : entry
+  );
+
+/**
+ * A region ref's pixel-identity fragment. Unlike the base plan — where
+ * parametric sources never reach a dedupe key — a region can sit on a text,
+ * shape, or gradient layer, so their pixel-determining fields must be part of
+ * the key or an edited layer would reuse the previous mask upload.
+ */
+const regionSourceRef = (source: CanvasLayerSourceContract): string => {
+  switch (source.type) {
+    case 'image':
+    case 'paint':
+      return `region:${sourceRefOf(source)}`;
+    default:
+      return `region:${stableSourceKey(source)}`;
+  }
+};
+
+/** The native content rect of a region raster's source (layer-local), mirroring the base composite. */
+const regionContentRect = (
+  layer: CanvasRasterLayerContractV2,
+  document: CanvasDocumentContractV3
+): { width: number; height: number; x: number; y: number } => {
+  const { source } = layer;
+  if (source.type === 'image') {
+    return { height: source.image.height, width: source.image.width, x: 0, y: 0 };
+  }
+  if (source.type === 'paint' && source.bitmap) {
+    const offset = source.offset ?? { x: 0, y: 0 };
+    return { height: source.bitmap.height, width: source.bitmap.width, x: offset.x, y: offset.y };
+  }
+  return { height: document.height, width: document.width, x: 0, y: 0 };
+};
+
+/** Projects a region-bearing raster layer into an inpaint-mask contribution (its alpha, full denoise). */
+const toRegionMaskRef = (
+  layer: CanvasRasterLayerContractV2,
+  document: CanvasDocumentContractV3
+): CompositeMaskLayerRef => {
+  const rect = regionContentRect(layer, document);
+  return {
+    attributeValue: DEFAULT_MASK_DENOISE_LIMIT,
+    contentOffset: { x: rect.x, y: rect.y },
+    contentSize: { height: rect.height, width: rect.width },
+    id: layer.id,
+    sourceRef: regionSourceRef(layer.source),
+    transform: {
+      rotation: layer.transform.rotation,
+      scaleX: layer.transform.scaleX,
+      scaleY: layer.transform.scaleY,
+      x: layer.transform.x,
+      y: layer.transform.y,
+    },
+  };
+};
+
+const isControlLayerWithContent = (layer: CanvasLayerContract): layer is CanvasControlLayerContract =>
+  layer.type === 'control' && hasControlLayerContent(layer);
+
+const isRegionalGuidanceWithMask = (layer: CanvasLayerContract): layer is CanvasRegionalGuidanceLayerContract =>
+  layer.type === 'regional_guidance' && hasRegionalGuidanceMaskContent(layer);
 
 /** The native content rect of a mask layer's persisted bitmap (layer-local, at its offset). */
 const maskContentRect = (
@@ -112,21 +204,29 @@ const deriveMaskKey = (kind: string, bbox: Rect, layers: CompositeMaskLayerRef[]
  * Plans the composites required to invoke `document` over `bbox`:
  * - one `base-raster` entry (the initial image);
  * - one `inpaint-mask` entry (grayscale denoise-limit mask) when enabled inpaint
- *   masks with content exist — an undefined `denoiseLimit` resolves to the legacy
- *   default (1.0, full denoise);
- * - one `noise-mask` entry when at least one such mask defines a `noiseLevel`
- *   (masks with an undefined `noiseLevel` are excluded, mirroring legacy — they
- *   must NOT be treated as noise 0).
+ *   masks with content exist — an absent OR DISABLED `denoise` modifier resolves
+ *   to the legacy default (1.0, full denoise) — or when a contributing raster
+ *   layer carries an enabled regenerate region (its own content alpha joins the
+ *   mask at full denoise);
+ * - one `noise-mask` entry when at least one such mask carries an ENABLED
+ *   `noise` modifier (absent and disabled are equivalent, mirroring legacy —
+ *   they must NOT be treated as noise 0). Regions never add noise.
  */
-export const planComposites = (document: CanvasDocumentContractV2, bbox: Rect): CompositePlan => {
+export const planComposites = (document: CanvasDocumentContractV3, bbox: Rect): CompositePlan => {
   const entries: CompositeEntry[] = [planBaseRasterComposite(document, bbox)];
 
-  const maskLayers = document.layers.filter(isActiveInpaintMaskLayer);
+  const maskLayers = contributingLayers(document, isInpaintMaskWithContent);
+  const regionRefs = contributingLayers(document, isRegionRasterWithContent).map((layer) =>
+    toRegionMaskRef(layer, document)
+  );
 
-  if (maskLayers.length > 0) {
-    const denoiseRefs = maskLayers.map((layer) =>
-      toMaskLayerRef(layer, layer.denoiseLimit ?? DEFAULT_MASK_DENOISE_LIMIT)
-    );
+  if (maskLayers.length > 0 || regionRefs.length > 0) {
+    const denoiseRefs = [
+      ...maskLayers.map((layer) =>
+        toMaskLayerRef(layer, layer.denoise?.isEnabled ? layer.denoise.limit : DEFAULT_MASK_DENOISE_LIMIT)
+      ),
+      ...regionRefs,
+    ];
     entries.push({
       bbox,
       key: deriveMaskKey('inpaint-mask', bbox, denoiseRefs),
@@ -136,8 +236,8 @@ export const planComposites = (document: CanvasDocumentContractV2, bbox: Rect): 
     });
 
     const noiseRefs = maskLayers
-      .filter((layer) => layer.noiseLevel !== undefined)
-      .map((layer) => toMaskLayerRef(layer, layer.noiseLevel as number));
+      .filter((layer) => layer.noise?.isEnabled)
+      .map((layer) => toMaskLayerRef(layer, layer.noise!.level));
 
     if (noiseRefs.length > 0) {
       entries.push({
@@ -156,7 +256,7 @@ export const planComposites = (document: CanvasDocumentContractV2, bbox: Rect): 
 /** The native (unscaled) content rect of a control layer's source (layer-local). */
 const controlContentRect = (
   layer: CanvasControlLayerContract,
-  doc: CanvasDocumentContractV2
+  doc: CanvasDocumentContractV3
 ): { width: number; height: number; x: number; y: number } => {
   const { source } = layer;
   if (source.type === 'image') {
@@ -176,7 +276,7 @@ const controlContentRect = (
  * rasterizes control at opacity 1, no filters), so display tweaks don't churn the
  * entry key.
  */
-const toControlLayerRef = (layer: CanvasControlLayerContract, doc: CanvasDocumentContractV2): CompositeLayerRef => {
+const toControlLayerRef = (layer: CanvasControlLayerContract, doc: CanvasDocumentContractV3): CompositeLayerRef => {
   const rect = controlContentRect(layer, doc);
   return {
     blendMode: 'normal',
@@ -209,8 +309,8 @@ export interface ControlCompositeEntry {
  * Control layers never contribute to the `base-raster` composite, so they never
  * paint into the img2img/inpaint source.
  */
-export const planControlComposites = (document: CanvasDocumentContractV2, bbox: Rect): ControlCompositeEntry[] =>
-  document.layers.filter(isCompositableControlLayer).map((layer) => {
+export const planControlComposites = (document: CanvasDocumentContractV3, bbox: Rect): ControlCompositeEntry[] =>
+  contributingLayers(document, isControlLayerWithContent).map((layer) => {
     const ref = toControlLayerRef(layer, document);
     return {
       entry: {
@@ -276,10 +376,10 @@ export interface RegionalMaskCompositeEntry {
  * "no region" reason). Regional layers never contribute to `base-raster`.
  */
 export const planRegionalMaskComposites = (
-  document: CanvasDocumentContractV2,
+  document: CanvasDocumentContractV3,
   bbox: Rect
 ): RegionalMaskCompositeEntry[] =>
-  document.layers.filter(isCompositableRegionalGuidanceLayer).map((layer) => {
+  contributingLayers(document, isRegionalGuidanceWithMask).map((layer) => {
     const ref = toRegionalMaskRef(layer);
     return {
       entry: {

@@ -1,16 +1,25 @@
 import type {
-  CanvasDocumentContractV2,
+  CanvasDocumentContractV3,
   CanvasImageRef,
   CanvasLayerContract,
   CanvasStagingCandidateContract,
-  CanvasStateContractV2,
+  CanvasStateContractV3,
 } from '@workbench/canvas-engine/contracts';
+import type { CanvasMutationOrigin } from '@workbench/canvas-engine/mutationContracts';
 import type { StrokeCommittedEvent } from '@workbench/canvas-engine/tools/tool';
 import type { LayerTransform } from '@workbench/canvas-engine/transform/transformMath';
 
 import type { NewRasterLayerResult } from './controllers/newRasterLayerController';
+import type { PreparedDocumentEdit } from './document-model/documentCommands';
+import type { CanvasDocumentModel } from './document-model/documentModel';
+import type { CanvasCommandRefusal } from './document/commandRefusal';
+import type { CanvasNodeInsertionAnchor } from './document/insertionAnchors';
+import type { LayerStackKind } from './document/layerStacks';
+import type { CanvasTransactionOutcome, SubsetOf } from './editConcurrency';
 import type { CanvasEditGate } from './editGate';
 import type {
+  TextStylePatch,
+  ActiveColorPairState,
   BboxToolOptions,
   BrushOptions,
   CheckerColors,
@@ -39,16 +48,16 @@ export interface LayerExportGuard {
 }
 
 /**
- * Why a guarded layer mutation declined to touch the document. Every commit
- * that captures a permit, does async work, then re-checks before publishing
- * reports refusal with exactly these reasons — one shared vocabulary so callers
- * can handle them uniformly and new commits can't invent near-miss variants.
- *
- * `busy` — another edit owns the document, or a gesture started mid-flight.
- * `stale` — the guarded pixels no longer match the live layer.
- * `aborted` — the caller's signal fired.
+ * Why a guarded layer mutation declined to touch the document: the transaction
+ * outcomes a permit-guarded commit can hit (`busy` — another edit owns the
+ * document or a gesture started mid-flight; `stale` — the guarded pixels no
+ * longer match the live layer; `aborted` — the caller's signal fired) plus the
+ * command refusals its target can raise. Structural commits use the
+ * transaction-only {@link StructuralCommitResult}.
  */
-export type GuardedMutationRefusal = 'aborted' | 'busy' | 'locked' | 'missing' | 'stale' | 'unsupported';
+export type GuardedMutationRefusal =
+  | SubsetOf<CanvasTransactionOutcome, 'aborted' | 'busy' | 'stale'>
+  | SubsetOf<CanvasCommandRefusal, 'locked' | 'missing' | 'unsupported'>;
 
 export type CommitRasterFilterResult =
   | { status: 'committed'; layerId: string }
@@ -90,11 +99,15 @@ export interface CanvasInteractionState {
   checkerboard: boolean;
   checkerColors: CheckerColors;
   clipToBbox: boolean;
+  /** The mirrored workbench pair; the engine reads it at gesture start, never writes it. */
+  colorPair: ActiveColorPairState;
   documentEditingLocked: boolean;
   eraserOptions: EraserOptions;
   gradientOptions: GradientToolOptions;
   hasFloatingSelection: boolean;
   hasSelection: boolean;
+  /** Monotonic signal for engine history-stack mutations (see the History pane). */
+  historyEpoch: number;
   invertBrushSizeScroll: boolean;
   lassoOptions: LassoToolOptions;
   marqueeOptions: MarqueeToolOptions;
@@ -134,16 +147,36 @@ export interface CanvasSurfaceCapability {
 
 export interface CanvasDocumentCapability {
   captureSnapshot(): CanvasDocumentSnapshot | null;
-  getDocument(): CanvasDocumentContractV2 | null;
+  getDocument(): CanvasDocumentContractV3 | null;
+  /**
+   * Counts every reducer document identity change, whatever its origin (user edits, previews,
+   * selection, system syncs). Unlike `documentGeneration` (raster invalidation) and the persisted
+   * `documentRevision` (wholesale swaps), it moves on each edit, so an edit prepared against a
+   * captured value can be refused as stale once anything else lands.
+   */
+  getEditRevision(): number;
+  /** Where a new `stack` layer lands: above `aboveId` when it belongs to the stack, else the stack top. */
+  captureInsertionAnchor(stack: LayerStackKind, aboveId: string | null): CanvasNodeInsertionAnchor;
+  /** The anchor that restores `nodeId` between its current siblings; null when absent. */
+  captureRestoreAnchor(nodeId: string): CanvasNodeInsertionAnchor | null;
+  /** Swaps in a whole new document; the mirror treats it as a document swap and history clears. */
+  replaceDocument(document: CanvasDocumentContractV3): boolean;
+  /** The pure model over the current document; the same instance until the document changes. */
+  model(): CanvasDocumentModel | null;
 }
 
 /** Immutable reducer canvas state captured at one engine document generation. */
 export interface CanvasDocumentSnapshot {
-  readonly canvas: CanvasStateContractV2;
+  readonly canvas: CanvasStateContractV3;
   readonly documentGeneration: number;
 }
 
-export type PsdExportResult = 'exported' | 'nothing' | 'too-large' | 'not-ready' | 'over-budget' | 'stale' | 'aborted';
+export type PsdExportResult =
+  | 'exported'
+  | 'nothing'
+  | 'too-large'
+  | 'over-budget'
+  | SubsetOf<CanvasTransactionOutcome, 'not-ready' | 'stale' | 'aborted'>;
 
 export interface CanvasPsdExportCapability {
   exportRasterLayersToPsd(fileName: string): Promise<PsdExportResult>;
@@ -166,13 +199,29 @@ export interface CanvasToolCapability {
   stepBrushSize(direction: 1 | -1): void;
 }
 
+/** Labels of the retained undo/redo steps, for the History pane. */
+export interface CanvasHistoryEntries {
+  /** Applied steps, oldest first; the last is what `undo()` reverts. */
+  past: readonly string[];
+  /** Undone steps, next-redo first. */
+  future: readonly string[];
+}
+
 export interface CanvasHistoryCapability {
   undo(): void;
   redo(): void;
   clearHistory(): void;
+  getEntries(): CanvasHistoryEntries;
+  /** Replays `offset` steps — negative undoes, positive redoes — clamped to the stacks. */
+  stepBy(offset: number): void;
 }
 
-export type LayerThumbnailRequestResult = 'ready' | 'stale' | 'error' | 'missing' | 'unsupported' | 'over-budget';
+export type LayerThumbnailRequestResult =
+  | 'ready'
+  | 'error'
+  | 'over-budget'
+  | SubsetOf<CanvasTransactionOutcome, 'stale'>
+  | SubsetOf<CanvasCommandRefusal, 'missing' | 'unsupported'>;
 
 export interface CanvasPreviewCapability {
   drawLayerThumbnail(layerId: string, target: HTMLCanvasElement, maxSize: number): boolean;
@@ -194,7 +243,14 @@ export type { RasterCompositeExportRequest, RasterCompositeExportResult } from '
  * `mutationContracts.ts`) and surfaced here so workbench callers reach it
  * through the public API instead of the engine importing upward for it.
  */
-export type { CanvasLayerBasePatch, CanvasLayerConfigPatch, CanvasProjectMutation } from './mutationContracts';
+export type {
+  CanvasEditIntent,
+  CanvasLayerBasePatch,
+  CanvasLayerConfigPatch,
+  CanvasMutationOrigin,
+  CanvasProjectMutation,
+} from './mutationContracts';
+export { GROUP_PATCH_KEYS } from './mutationContracts';
 
 export interface ExportLayerPixelsOptions {
   includeDisabled?: boolean;
@@ -208,7 +264,14 @@ export type ExportBakedLayerPixelsOptions = Omit<ExportLayerPixelsOptions, 'appl
 
 export type ExportBakedLayerBlobResult =
   | { status: 'ok'; blob: Blob; rect: Rect; guard: LayerExportGuard }
-  | { status: 'missing' | 'disabled' | 'unsupported' | 'empty' | 'not-ready' | 'over-budget' | 'aborted' };
+  | {
+      status:
+        | SubsetOf<CanvasCommandRefusal, 'missing' | 'unsupported'>
+        | SubsetOf<CanvasTransactionOutcome, 'not-ready' | 'aborted'>
+        | 'disabled'
+        | 'empty'
+        | 'over-budget';
+    };
 
 export interface CanvasSelectionCapability {
   deselect(): void;
@@ -244,13 +307,56 @@ export type ReplaceSelectionFromImageResult =
   | { status: GuardedMutationRefusal }
   | { status: 'failed'; message: string };
 
+/**
+ * The runtime outcome of a structural document commit. `busy`, `gesture-active`, `not-ready`, and
+ * `stale` refuse before dispatch. `dispatch-rejected` means the reducer left the document unchanged,
+ * which includes a forward that would not change anything. `postcondition-failed` means the reducer
+ * accepted but the result could not be verified; `recovered` says how far the inverse got, and any
+ * outcome short of `reverted` was reported. Exactly one history entry is recorded, and only for
+ * `committed`.
+ */
+export type StructuralCommitResult =
+  | { status: 'committed' }
+  | { status: SubsetOf<CanvasTransactionOutcome, 'busy' | 'gesture-active' | 'not-ready'> | 'dispatch-rejected' }
+  | { status: SubsetOf<CanvasTransactionOutcome, 'stale'>; expectedRevision: number; actualRevision: number }
+  | { status: 'postcondition-failed'; recovered: 'reverted' | 'reverted-unmirrored' | 'unreverted' };
+
+export interface StructuralCommitOptions {
+  /** The edit revision the edit was prepared against; a mismatch refuses as `stale`. */
+  expectedRevision?: number;
+  /** An extra reducer postcondition beyond "the document changed". */
+  verify?: (document: CanvasDocumentContractV3) => boolean;
+}
+
+/** The narrowest engine surface a structural edit needs. */
+/** The only mutations a widget may preview live; every other structural edit is prepared and committed. */
+export type CanvasLayerPreviewMutation = Extract<
+  CanvasProjectMutation,
+  { type: 'updateCanvasLayer' | 'updateCanvasLayerConfig' }
+>;
+
+export interface CanvasStructuralEngine {
+  readonly layers: CanvasLayerCapability;
+}
+
 export interface CanvasLayerCapability {
-  applyStructuralPreview(action: CanvasProjectMutation): boolean;
+  applyStructuralPreview(action: CanvasLayerPreviewMutation): boolean;
   canCommitStructural(): boolean;
   commitGeneratedImageResult(options: CommitGeneratedImageOptions): Promise<CommitGeneratedImageResult>;
   commitStagedImage(options: CommitStagedImageOptions): CommitStagedImageResult;
-  commitStructural(label: string, forward: CanvasProjectMutation, inverse: CanvasProjectMutation): boolean;
+  commitStructural(
+    label: string,
+    forward: CanvasProjectMutation,
+    inverse: CanvasProjectMutation,
+    options?: StructuralCommitOptions
+  ): StructuralCommitResult;
+  /** Runs a prepared flat edit through the transaction: refusals, dispatch, verification and history. */
+  commitPrepared(label: string, edit: PreparedDocumentEdit, options?: PreparedCommitOptions): StructuralCommitResult;
   invertMask(layerId: string): boolean;
+}
+
+export interface PreparedCommitOptions {
+  readonly origin?: CanvasMutationOrigin;
 }
 
 export interface CommitStagedImageOptions {
@@ -262,7 +368,7 @@ export interface CommitStagedImageOptions {
 
 export type CommitStagedImageResult =
   | { status: 'committed'; layerId: string }
-  | { status: 'busy' | 'stale' | 'missing' };
+  | { status: SubsetOf<CanvasTransactionOutcome, 'busy' | 'stale'> | SubsetOf<CanvasCommandRefusal, 'missing'> };
 
 export type GeneratedImageTarget = 'replace' | 'copy-raster' | 'copy-control';
 
@@ -311,17 +417,36 @@ export interface FilterPreviewInput {
  * refused, `'busy'` when another edit owns the document, and `'nothing'` when
  * fewer than two eligible rasters have content.
  */
-export type MergeVisibleResult = 'merged' | 'not-ready' | 'over-budget' | 'busy' | 'nothing';
+export type MergeVisibleResult =
+  | 'merged'
+  | SubsetOf<CanvasTransactionOutcome, 'not-ready' | 'busy'>
+  | 'over-budget'
+  | 'nothing';
 export type DuplicateLayersResult =
   | { readonly status: 'duplicated'; readonly duplicateIds: readonly string[]; readonly selectedLayerId: string }
-  | { readonly status: 'busy' | 'nothing' | 'not-ready' | 'over-budget' | 'stale' };
-export type BooleanRasterResult = 'merged' | 'missing' | 'unsupported' | 'not-ready' | 'busy' | 'empty';
+  | { readonly status: SubsetOf<CanvasTransactionOutcome, 'busy' | 'not-ready' | 'stale'> | 'nothing' | 'over-budget' };
+export type BooleanRasterResult =
+  | 'merged'
+  | SubsetOf<CanvasCommandRefusal, 'missing' | 'unsupported'>
+  | SubsetOf<CanvasTransactionOutcome, 'not-ready' | 'busy'>
+  | 'empty';
 export type ExtractMaskedAreaResult =
   | { status: 'extracted'; layerId: string }
-  | { status: 'missing' | 'unsupported' | 'not-ready' | 'busy' | 'empty' };
+  | {
+      status:
+        | SubsetOf<CanvasCommandRefusal, 'missing' | 'unsupported'>
+        | SubsetOf<CanvasTransactionOutcome, 'not-ready' | 'busy'>
+        | 'empty';
+    };
 export type CropLayerResult =
   | { status: 'cropped' }
-  | { status: 'missing' | 'locked' | 'unsupported' | 'empty' | 'not-ready' | 'over-budget' | 'busy' }
+  | {
+      status:
+        | SubsetOf<CanvasCommandRefusal, 'missing' | 'locked' | 'unsupported'>
+        | SubsetOf<CanvasTransactionOutcome, 'not-ready' | 'busy'>
+        | 'empty'
+        | 'over-budget';
+    }
   | { status: 'failed'; message: string };
 export interface CanvasDiagnosticsCapability {
   clearCaches(): Promise<void>;
@@ -363,6 +488,14 @@ export interface CanvasEngineToolCapability extends CanvasToolCapability {
    * tool either way. Backs the color picker's eyedropper button.
    */
   requestColorSample(): Promise<string | null>;
+  /**
+   * Installs the sink for eyedropper samples no one-shot request claims: the
+   * workbench routes them to the active foreground/background target. Without
+   * a router (or when it declines with false) the sample lands in the brush
+   * color option — the engine-standalone behavior. Returns a dispose that
+   * uninstalls only this router, so a stale cleanup cannot evict a newer one.
+   */
+  setColorSampleRouter(router: (hex: string) => boolean): () => void;
   setInteractionLocked(locked: boolean): void;
 }
 
@@ -373,23 +506,30 @@ export interface CanvasEngineLayerCapability extends CanvasLayerCapability {
   cancelTransform(): void;
   clearMask(layerId: string): boolean;
   commitLayerConversion(label: string, expectedLiveLayer: CanvasLayerContract, after: CanvasLayerContract): boolean;
-  commitLayerCopy(label: string, sourceLayerId: string, layer: CanvasLayerContract, index: number): boolean;
+  commitLayerCopy(
+    label: string,
+    sourceLayerId: string,
+    layer: CanvasLayerContract,
+    anchor: CanvasNodeInsertionAnchor
+  ): boolean;
   commitMaskImageResult(options: CommitMaskImageResultOptions): Promise<CommitMaskImageResult>;
   commitOpenTextSession(): boolean;
   commitRasterFilterResult(options: CommitRasterFilterOptions): Promise<CommitRasterFilterResult>;
-  commitTextEdit(content: string, styleChanges?: Partial<TextToolOptions>): void;
+  /** `null` when there was nothing to commit: an empty creation or an unchanged edit. */
+  commitTextEdit(content: string, styleChanges?: Partial<TextToolOptions>): StructuralCommitResult | null;
   copyLayerToRaster(layerId: string): Promise<string | null>;
   cropLayerToBbox(layerId: string): Promise<CropLayerResult>;
   duplicateLayers(layerIds: readonly string[]): Promise<DuplicateLayersResult>;
   mergeLayerDown(upperLayerId: string): boolean;
   mergeSelectedRasterLayers(layerIds: readonly string[]): Promise<MergeVisibleResult>;
   mergeVisibleRasterLayers(): Promise<MergeVisibleResult>;
-  nudgeSelectedLayer(dx: number, dy: number): void;
+  /** `dispatch-rejected` also covers a selection with nothing eligible to move. */
+  nudgeSelectedLayer(dx: number, dy: number): StructuralCommitResult;
   openTextCreate(docPoint: Vec2): void;
   openTextEdit(layerId: string): void;
   rasterizeLayer(layerId: string): boolean;
   setTextEditContentReader(reader: (() => string) | null): void;
-  updateTextEditStyle(patch: Partial<TextToolOptions>): void;
+  updateTextEditStyle(patch: TextStylePatch): void;
   updateTransformSession(transform: LayerTransform): void;
 }
 
@@ -399,12 +539,18 @@ export interface CanvasEngineExportCapability extends CanvasExportCapability {
 }
 
 export interface CanvasEnginePreviewCapability extends CanvasPreviewCapability {
+  /**
+   * Draws a fit-to-`maxSizePx` composite of the whole document into `target`
+   * (sizing its backing store), for the Overview pane. Returns the drawn
+   * document rect, or null when no document is attached.
+   */
+  drawDocumentOverview(target: HTMLCanvasElement, maxSizePx: number): Rect | null;
   preloadStagedPreview(imageName: string): void;
   setGuardedFilterPreview(
     layerId: string,
     input: FilterPreviewInput,
     guard: LayerExportGuard
-  ): Promise<'shown' | 'missing' | 'stale'>;
+  ): Promise<'shown' | SubsetOf<CanvasCommandRefusal, 'missing'> | SubsetOf<CanvasTransactionOutcome, 'stale'>>;
   setStagedPreview(input: StagedPreviewInput | null): void;
 }
 
@@ -429,6 +575,7 @@ export interface CanvasEngine {
 // Public Canvas-owned value contracts. These remain serializable and contain
 // no engine implementation, mutable store, controller, or construction type.
 export type * from './contracts';
+export { CANVAS_COLOR_LABELS, CANVAS_MAX_NODE_COUNT, CANVAS_MAX_NODE_DEPTH } from './contracts';
 export type BooleanRasterOperation = 'intersect' | 'cutout' | 'cutaway' | 'exclude';
 export interface StagedPreviewPlacement extends Rect {
   opacity: number;
@@ -463,7 +610,7 @@ export {
 export type { LayerTransform } from './transform/transformMath';
 export type { ImageResolver } from './render/rasterizers';
 export type { Rect, SelectionOp, ToolId, Vec2 } from './types';
-export { adjustmentsKey, buildCurveLut, DEFAULT_ADJUSTMENTS } from './render/adjustments';
+export { adjustmentsKey, buildCurveLut } from './render/adjustments';
 export { DEFAULT_CHECKER_COLORS } from './render/compositor';
 export {
   getBaseRasterContentBounds,
@@ -472,13 +619,7 @@ export {
   type CompositeEntry,
   type CompositeLayerRef,
 } from './render/rasterComposite';
-export {
-  getSourceBounds,
-  getSourceContentRect,
-  isMergeableRasterLayer,
-  isRenderableLayer,
-  renderableSourceOf,
-} from './document/sources';
+export { getSourceBounds, getSourceContentRect, isRenderableLayer, renderableSourceOf } from './document/sources';
 export {
   areSelectedRasterLayersContiguous,
   canMergeSelectedRasters,
@@ -488,8 +629,91 @@ export { documentToExportLocalSamPoint } from './samCoordinates';
 export { bboxEquals, constrainBboxToRatio, roundBbox } from './tools/bboxHitTest';
 export { isEmpty, union } from './math/rect';
 export { ZOOM_PRESETS } from './math/snapping';
-export { isLayerPixelEditEligible } from './editing/controlPixelEdit';
-export { type HideableLayer, isHideableLayer, isLayerHidden } from './document/sources';
+export { isLeafPixelEditEligible } from './editing/controlPixelEdit';
+export {
+  getSiblingOrder,
+  haveSameStructure,
+  isOverlayStack,
+  LAYER_STACK_ORDER,
+  LAYER_STACKS_TOP_FIRST,
+  layerStackOf,
+  type LayerStackKind,
+  type LayerStackMoveKind,
+  type OverlayStackKind,
+  type ReorderSiblingsCommand,
+} from './document/layerStacks';
+export {
+  childrenOf,
+  collectSubtree,
+  collectSubtreeLeaves,
+  createEmptyStacks,
+  isGroupNode,
+  isLeafNode,
+  subtreeDepth,
+} from './document/documentTree';
+export {
+  getDocumentIndex,
+  getDocumentLayer,
+  getDocumentLeaves,
+  getDocumentNode,
+  hasDocumentNode,
+  isSelfOrAncestor,
+  outermostNodes,
+  type CanvasDocumentIndex,
+  type CanvasNodeEntry,
+} from './document/documentIndex';
+export {
+  type HideableLayer,
+  isHideableLayer,
+  isLayerContributing,
+  isLayerEditable,
+  isLayerHidden,
+  isLayerPaintable,
+  isMergeableRasterLayer,
+  isLayerTransparencyLocked,
+  isNodeHidden,
+  isPixelBackedLayer,
+} from './document/layerEligibility';
+export {
+  type DocumentCommand,
+  type DocumentRefusal,
+  type InvalidTargetReason,
+  type MergeDownEligibility,
+  type PreparedDocumentEdit,
+  type PrepareEditResult,
+} from './document-model/documentCommands';
+export {
+  compileContributingLayers,
+  compileDocumentNodes,
+  lookupDocumentNodeState,
+  compileDocumentLeaves,
+  createDocumentModel,
+  type CanvasDocumentModel,
+  lookupDocumentLayer,
+  lookupDocumentLeaf,
+  lookupDocumentNode,
+  lookupLayerBelow,
+  mergeDownEligibility,
+} from './document-model/documentModel';
+export { checkEditPostconditions, type EditPostcondition } from './document-model/postconditions';
+export {
+  isLeafIsolated,
+  planScreenComposition,
+  type CanvasScreenViewState,
+  type ScreenCompositionPlan,
+} from './document-model/screenComposition';
+export { type SemanticLeaf } from './document-model/semanticLeaf';
+export { type SemanticNode } from './document-model/semanticNode';
+export {
+  captureInsertionAnchor,
+  captureRestoreAnchor,
+  resolveInsertionTarget,
+  type CanvasNodeInsertion,
+  type CanvasNodeInsertionAnchor,
+  type CanvasNodeMove,
+  type InsertionAnchorCapture,
+} from './document/insertionAnchors';
+export { isExportableRasterLayer } from './layerExportGuards';
 export {
   getLayerThumbnailFallbackRenderState,
   nextLayerThumbnailFallbackStage,

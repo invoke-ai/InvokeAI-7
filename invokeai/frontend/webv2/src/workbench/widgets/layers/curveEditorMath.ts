@@ -1,5 +1,3 @@
-import type { CanvasAdjustmentsContract } from '@workbench/canvas-engine/api';
-
 export const CURVE_SIZE = 180;
 export const CURVE_PADDING = 6;
 
@@ -9,21 +7,21 @@ const clamp255 = (value: number): number => Math.max(0, Math.min(255, value));
 export const getCurveGridCoordinates = (): number[] =>
   Array.from({ length: 5 }, (_, index) => CURVE_PADDING + (index / 4) * CURVE_DRAW_SIZE);
 
-interface FinishCurveDragResultArgs {
+interface FinishCurveDragResultArgs<T> {
   cancelled: boolean;
-  before: CanvasAdjustmentsContract;
-  current: CanvasAdjustmentsContract;
-  onPreview: (adjustments: CanvasAdjustmentsContract) => void;
-  onCommit: (adjustments: CanvasAdjustmentsContract) => void;
+  before: T;
+  current: T;
+  onPreview: (value: T) => void;
+  onCommit: (value: T) => void;
 }
 
-export const finishCurveDragResult = ({
+export const finishCurveDragResult = <T>({
   before,
   cancelled,
   current,
   onCommit,
   onPreview,
-}: FinishCurveDragResultArgs): void => {
+}: FinishCurveDragResultArgs<T>): void => {
   if (cancelled) {
     onPreview(before);
     return;

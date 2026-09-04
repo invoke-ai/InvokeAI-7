@@ -2,7 +2,7 @@ import type { CanvasDiagnostics } from '@workbench/canvas-engine/diagnostics';
 
 import type { RasterSurface } from './raster';
 
-export type DerivedSurfaceKind = 'adjustments' | 'mask-fill' | 'control-transparency';
+export type DerivedSurfaceKind = 'adjustments' | 'mask-fill' | 'region-fill' | 'control-transparency';
 
 export interface DerivedSurfaceRequest {
   layerId: string;

@@ -2,7 +2,7 @@ import type { QueueHistoryItemStatus } from '@features/queue/contracts';
 import type { CanvasStagingCandidateContract } from '@workbench/canvas-engine/contracts';
 import type { WorkbenchQueueItem as QueueItem } from '@workbench/queueHistoryContracts';
 
-import { createEmptyCanvasStateV2 } from '@workbench/canvasMigration';
+import { createEmptyCanvasState } from '@workbench/canvasMigration';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -24,7 +24,7 @@ const createStagedCandidate = (): CanvasStagingCandidateContract => ({
 });
 
 const createCanvas = ({ revision = 1, staged = false }: { revision?: number; staged?: boolean } = {}) => {
-  const canvas = createEmptyCanvasStateV2(512, 512);
+  const canvas = createEmptyCanvasState(512, 512);
   const pendingImages = staged ? [createStagedCandidate()] : [];
 
   return {
@@ -59,8 +59,6 @@ describe('canvas interaction lock', () => {
         areOperationActionsEnabled: false,
         canAcceptStagedImage: false,
         isDocumentEditingLocked: false,
-        isOperationChromeVisible: false,
-        isRegularToolOptionsVisible: true,
         isSurfaceInteractionLocked: false,
       },
       generation: false,
@@ -72,8 +70,6 @@ describe('canvas interaction lock', () => {
         areOperationActionsEnabled: true,
         canAcceptStagedImage: false,
         isDocumentEditingLocked: true,
-        isOperationChromeVisible: true,
-        isRegularToolOptionsVisible: false,
         isSurfaceInteractionLocked: false,
       },
       generation: false,
@@ -85,8 +81,6 @@ describe('canvas interaction lock', () => {
         areOperationActionsEnabled: true,
         canAcceptStagedImage: false,
         isDocumentEditingLocked: true,
-        isOperationChromeVisible: true,
-        isRegularToolOptionsVisible: false,
         isSurfaceInteractionLocked: false,
       },
       generation: false,
@@ -98,8 +92,6 @@ describe('canvas interaction lock', () => {
         areOperationActionsEnabled: false,
         canAcceptStagedImage: true,
         isDocumentEditingLocked: false,
-        isOperationChromeVisible: false,
-        isRegularToolOptionsVisible: false,
         isSurfaceInteractionLocked: true,
       },
       generation: false,
@@ -111,8 +103,6 @@ describe('canvas interaction lock', () => {
         areOperationActionsEnabled: false,
         canAcceptStagedImage: false,
         isDocumentEditingLocked: false,
-        isOperationChromeVisible: false,
-        isRegularToolOptionsVisible: false,
         isSurfaceInteractionLocked: true,
       },
       generation: true,
@@ -124,8 +114,6 @@ describe('canvas interaction lock', () => {
         areOperationActionsEnabled: false,
         canAcceptStagedImage: false,
         isDocumentEditingLocked: true,
-        isOperationChromeVisible: true,
-        isRegularToolOptionsVisible: false,
         isSurfaceInteractionLocked: true,
       },
       generation: false,
@@ -137,8 +125,6 @@ describe('canvas interaction lock', () => {
         areOperationActionsEnabled: false,
         canAcceptStagedImage: false,
         isDocumentEditingLocked: true,
-        isOperationChromeVisible: true,
-        isRegularToolOptionsVisible: false,
         isSurfaceInteractionLocked: true,
       },
       generation: true,

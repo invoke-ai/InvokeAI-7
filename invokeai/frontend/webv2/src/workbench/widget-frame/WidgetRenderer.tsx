@@ -1,3 +1,4 @@
+import type { WidgetRegion } from '@workbench/layoutContracts';
 import type {
   RegisteredWidget,
   WidgetImplementation,
@@ -11,7 +12,7 @@ import type {
 import { Box, Flex, Text } from '@chakra-ui/react';
 import { getWidgetReadyMark, markSemanticReady } from '@platform/performance/semanticReady';
 import { useMountEffect } from '@platform/react/useMountEffect';
-import { Scrollable } from '@platform/ui';
+import { Scrollable } from '@platform/ui/Scrollable';
 import { areWidgetPlacementProjectsEqual, getWidgetPlacementProject } from '@workbench/widgetPlacementMeta';
 import { useActiveProjectSelector } from '@workbench/WorkbenchContext';
 import { useWorkbenchWidgetRegistry } from '@workbench/WorkbenchWidgetRegistryContext';
@@ -445,13 +446,15 @@ const FooterSlot = memo(function FooterSlot({
   );
 }, areSlotPropsEqual);
 
-export const MissingWidgetFrame = ({ label, region }: { label: string; region: 'bottom' | 'left' | 'right' }) => (
+export const MissingWidgetFrame = ({ label, region }: { label: string; region: Exclude<WidgetRegion, 'center'> }) => (
   <WidgetPanelFrame region={region}>
-    <Text fontSize="xs" fontWeight="700">
-      {label}
-    </Text>
-    <Text color="fg.subtle" fontSize="2xs">
-      Widget view unavailable.
-    </Text>
+    <Box p="3">
+      <Text fontSize="xs" fontWeight="700">
+        {label}
+      </Text>
+      <Text color="fg.subtle" fontSize="2xs">
+        Widget view unavailable.
+      </Text>
+    </Box>
   </WidgetPanelFrame>
 );

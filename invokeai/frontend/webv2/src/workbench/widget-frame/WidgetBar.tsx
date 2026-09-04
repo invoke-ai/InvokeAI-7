@@ -3,9 +3,10 @@ import type { WidgetInstanceId } from '@workbench/widgetContracts';
 import type { WidgetRegionDropState } from '@workbench/widgetDnd';
 import type { WidgetPlacementInstanceMeta, WidgetRegionItem } from '@workbench/widgetRegionViewModel';
 
-import { Box, type SystemStyleObject } from '@chakra-ui/react';
+import { Box, Flex, type SystemStyleObject } from '@chakra-ui/react';
 import { verticalListSortingStrategy } from '@dnd-kit/sortable';
-import { Row, Tooltip } from '@platform/ui';
+import { Row } from '@platform/ui/Row';
+import { Tooltip } from '@platform/ui/Tooltip';
 import { WidgetIcon } from '@workbench/iconResolver';
 import { type MouseEvent, useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -20,28 +21,25 @@ export type WidgetBarItem = WidgetRegionItem<WidgetPlacementInstanceMeta>;
 
 const WIDGET_SLOT_DISABLED_PROPS = { opacity: 0.4 };
 
-interface WidgetBarProps {
-  side: 'left' | 'right';
-  region: Exclude<WidgetRegion, 'bottom' | 'center'>;
+/** One tab group the rail lists: the whole left region, or one dock of the right rail. */
+export interface WidgetBarGroup {
   activeId: WidgetInstanceId | null;
   dropState: WidgetRegionDropState;
   railItems: WidgetBarItem[];
+  region: Exclude<WidgetRegion, 'bottom' | 'center'>;
+}
+
+interface WidgetBarProps {
+  side: 'left' | 'right';
+  groups: WidgetBarGroup[];
   menuItems: WidgetBarItem[];
-  onSelect: (instanceId: WidgetInstanceId) => void;
+  onSelect: (region: WidgetBarGroup['region'], instanceId: WidgetInstanceId) => void;
   onToggle: (item: WidgetBarItem) => void;
 }
 
-export const WidgetBar = ({
-  activeId,
-  dropState,
-  menuItems,
-  onSelect,
-  onToggle,
-  railItems,
-  region,
-  side,
-}: WidgetBarProps) => {
+export const WidgetBar = ({ groups, menuItems, onSelect, onToggle, side }: WidgetBarProps) => {
   const { t } = useTranslation();
+  const region = side;
   const [enableMenuTarget, setEnableMenuTarget] = useState<{
     x: number;
     y: number;
@@ -59,8 +57,6 @@ export const WidgetBar = ({
     setInstanceMenuTarget({ item, x: event.clientX, y: event.clientY });
   }, []);
 
-  const sortableInstanceIds = useMemo(() => railItems.map((item) => item.id), [railItems]);
-
   const positioning = useMemo(
     () =>
       ({
@@ -75,8 +71,7 @@ export const WidgetBar = ({
   const handleInstanceClose = useCallback(() => setInstanceMenuTarget(null), []);
 
   return (
-    <WidgetStrip
-      align="center"
+    <Flex
       aria-label={t('widgets.visibilityLabel', {
         region: side === 'left' ? t('widgets.rail.create') : t('widgets.rail.inspect'),
       })}
@@ -86,22 +81,19 @@ export const WidgetBar = ({
       borderRightWidth={side === 'left' ? '1px' : '0'}
       borderLeftWidth={side === 'right' ? '1px' : '0'}
       direction="column"
-      dropState={dropState}
       flexShrink={0}
       pt="1"
-      region={region}
-      sortableInstanceIds={sortableInstanceIds}
-      strategy={verticalListSortingStrategy}
       w="11"
       onContextMenu={openEnableMenu}
     >
-      {railItems.map((item) => (
-        <WidgetSlot
-          key={item.id}
-          item={item}
-          isActive={item.id === activeId}
-          region={region}
-          tooltipPlacement={side === 'left' ? 'right' : 'left'}
+      {groups.map((group, index) => (
+        <RailGroup
+          key={group.region}
+          group={group}
+          separated={
+            index > 0 && group.railItems.length > 0 && groups.slice(0, index).some((g) => g.railItems.length > 0)
+          }
+          side={side}
           onContextMenu={openInstanceMenu}
           onSelect={onSelect}
         />
@@ -123,6 +115,56 @@ export const WidgetBar = ({
         onClose={handleInstanceClose}
         onRemove={handleMenuToggle}
       />
+    </Flex>
+  );
+};
+
+/** One dock's slots in the rail: its own sortable strip and drop target. */
+const RailGroup = ({
+  group,
+  onContextMenu,
+  onSelect,
+  separated,
+  side,
+}: {
+  group: WidgetBarGroup;
+  onContextMenu: (item: WidgetBarItem, event: MouseEvent) => void;
+  onSelect: (region: WidgetBarGroup['region'], instanceId: WidgetInstanceId) => void;
+  separated: boolean;
+  side: 'left' | 'right';
+}) => {
+  const sortableInstanceIds = useMemo(() => group.railItems.map((item) => item.id), [group.railItems]);
+  const select = useCallback(
+    (instanceId: WidgetInstanceId) => onSelect(group.region, instanceId),
+    [group.region, onSelect]
+  );
+
+  return (
+    <WidgetStrip
+      align="center"
+      borderColor="border.subtle"
+      borderTopWidth={separated ? '1px' : '0'}
+      data-rail-group={group.region}
+      direction="column"
+      dropState={group.dropState}
+      display={group.railItems.length === 0 && !group.dropState.isActive ? 'none' : undefined}
+      minH={group.railItems.length === 0 ? '10' : undefined}
+      pt={separated ? '1' : undefined}
+      region={group.region}
+      sortableInstanceIds={sortableInstanceIds}
+      strategy={verticalListSortingStrategy}
+    >
+      {group.railItems.map((item) => (
+        <WidgetSlot
+          key={item.id}
+          item={item}
+          isActive={item.id === group.activeId}
+          region={group.region}
+          tooltipPlacement={side === 'left' ? 'right' : 'left'}
+          onContextMenu={onContextMenu}
+          onSelect={select}
+        />
+      ))}
     </WidgetStrip>
   );
 };

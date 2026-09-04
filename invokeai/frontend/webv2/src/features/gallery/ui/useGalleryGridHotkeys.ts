@@ -42,7 +42,7 @@ export const useGalleryGridHotkeys = ({
 }) => {
   const { t } = useTranslation();
   const { actions, gallery, itemActions, runtime } = useGalleryWidget();
-  const { widgets } = useGalleryUi();
+  const { gallery: galleryCommands } = useGalleryUi();
 
   const navigate = useEffectEvent((direction: GalleryNavDirection) => {
     const itemCount = gallery.items.length;
@@ -75,11 +75,7 @@ export const useGalleryGridHotkeys = ({
     }
 
     if (commandId === 'gallery.clearSelection') {
-      widgets.patchGalleryValues({
-        selectedImage: null,
-        selectedImageName: null,
-        selectedImageNames: [],
-      });
+      galleryCommands.clearSelection();
       return;
     }
 

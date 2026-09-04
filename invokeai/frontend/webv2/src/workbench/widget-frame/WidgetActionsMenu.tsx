@@ -9,7 +9,7 @@ import type {
 
 import { Icon, Menu, Portal, Text } from '@chakra-ui/react';
 import { flushWorkbenchDrafts } from '@platform/react/draftRegistry';
-import { IconButton } from '@platform/ui';
+import { IconButton } from '@platform/ui/Button';
 import { createGraphBearingSurface } from '@workbench/graphSurfaces';
 import { resolveWidgetLabel } from '@workbench/widgetLabels';
 import { useActiveProjectSelector, useWorkbenchCommands } from '@workbench/WorkbenchContext';

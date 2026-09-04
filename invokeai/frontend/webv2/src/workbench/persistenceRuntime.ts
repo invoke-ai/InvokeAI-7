@@ -1,5 +1,5 @@
 import type { HydratedWorkbenchSnapshot } from '@workbench/persistenceContracts';
-import type { WorkbenchState } from '@workbench/projectContracts';
+import type { RefusedWorkbenchProject, WorkbenchState } from '@workbench/projectContracts';
 
 import type { WorkbenchLoadOptions, WorkbenchSaveResult } from './projects/syncedPersistence';
 
@@ -14,6 +14,8 @@ export interface PersistenceAggregatePort {
   /** Replace a project deleted elsewhere with the fork carrying its unsaved edits. */
   reconcileDeletedProject(fork: WorkbenchSaveResult['deletedProjectForks'][number]): void;
   reportLoadError(error: string): void;
+  /** Persisted projects the canvas version gate refused; they are absent from the hydrated state. */
+  reportRefusedProjects(refused: readonly RefusedWorkbenchProject[]): void;
   saveFailed(error: string): void;
   saveStarted(): void;
   saveSucceeded(savedAt: string): void;
@@ -22,6 +24,8 @@ export interface PersistenceAggregatePort {
 }
 
 export interface WorkbenchPersistencePort {
+  /** Confirms the aggregate replaced a divergent project with the server/recovery pair. */
+  acknowledgeConflictResolution(projectId: string): void;
   hasPendingChanges(): boolean;
   loadWorkbench(options?: WorkbenchLoadOptions): Promise<HydratedWorkbenchSnapshot | null>;
   saveWorkbench(state: WorkbenchState): Promise<WorkbenchSaveResult>;
@@ -102,6 +106,7 @@ export const createWorkbenchPersistenceRuntime = ({
   const applySaveResult = (result: WorkbenchSaveResult): void => {
     for (const conflict of result.conflicts) {
       aggregate.reconcileConflict(conflict);
+      persistence.acknowledgeConflictResolution(conflict.projectId);
     }
 
     for (const fork of result.deletedProjectForks) {
@@ -263,8 +268,19 @@ export const createWorkbenchPersistenceRuntime = ({
       }
 
       const requestedId = loadOptions?.openProjectId;
+      const refusedProjects = loadedSnapshot?.refusedProjects ?? [];
+      // A deep-linked refusal is reported by the session controller when it retries the open.
+      const unrequestedRefusals = refusedProjects.filter((refused) => refused.projectId !== requestedId);
+      if (unrequestedRefusals.length > 0) {
+        aggregate.reportRefusedProjects(unrequestedRefusals);
+      }
+
       const projects = loadedSnapshot?.state.projects ?? aggregate.getState().projects;
-      if (requestedId && !projects.some((project) => project.id === requestedId)) {
+      if (
+        requestedId &&
+        !projects.some((project) => project.id === requestedId) &&
+        !refusedProjects.some((refused) => refused.projectId === requestedId)
+      ) {
         aggregate.notifyProjectNotFound();
       }
     } catch (error) {

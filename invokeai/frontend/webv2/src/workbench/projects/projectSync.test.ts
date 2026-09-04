@@ -2,7 +2,7 @@ import type { Project } from '@workbench/projectContracts';
 
 import { getProjectWidgetValues } from '@workbench/widgetState';
 import { createInitialWorkbenchState, workbenchReducer } from '@workbench/workbenchState.testing';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { ProjectRecoveredIdentity } from './projectFlush';
 
@@ -13,6 +13,16 @@ const getProject = (overrides: Partial<Project> = {}): Project => {
   const state = createInitialWorkbenchState();
 
   return { ...state.projects[0], ...overrides };
+};
+
+const loadDocument = (document: Record<string, unknown>): Project => {
+  const result = deserializeProjectDocument(document);
+
+  if (result.status !== 'loaded') {
+    throw new Error(`Expected the document to load, got ${result.status}.`);
+  }
+
+  return result.project;
 };
 
 describe('project document serialization', () => {
@@ -37,18 +47,35 @@ describe('project document serialization', () => {
 
     expect('undoRedo' in document).toBe(false);
 
-    const roundTripped = deserializeProjectDocument(document);
+    const roundTripped = loadDocument(document);
 
-    expect(roundTripped).not.toBeNull();
-    expect(roundTripped?.undoRedo).toEqual({ future: [], past: [] });
-    expect(roundTripped?.id).toBe(project.id);
-    expect(roundTripped?.widgetInstances).toEqual(project.widgetInstances);
+    expect(roundTripped.undoRedo).toEqual({ future: [], past: [] });
+    expect(roundTripped.id).toBe(project.id);
+    expect(roundTripped.widgetInstances).toEqual(project.widgetInstances);
   });
 
   it('rejects documents that do not look like projects', () => {
-    expect(deserializeProjectDocument({})).toBeNull();
-    expect(deserializeProjectDocument({ id: 'x' })).toBeNull();
-    expect(deserializeProjectDocument({ id: 'x', layout: null, name: 'y' })).toBeNull();
+    expect(deserializeProjectDocument({})).toEqual({ status: 'unavailable' });
+    expect(deserializeProjectDocument({ id: 'x' })).toEqual({ status: 'unavailable' });
+    expect(deserializeProjectDocument({ id: 'x', layout: null, name: 'y' })).toEqual({ status: 'unavailable' });
+  });
+
+  it('refuses a document whose canvas was written by a newer client, keeping the raw document', () => {
+    const project = getProject();
+    const document = serializeProjectDocument(project);
+    const future = { ...document, canvas: { ...(document.canvas as object), version: 4 } };
+
+    const result = deserializeProjectDocument(future);
+
+    expect(result).toMatchObject({
+      refused: {
+        projectId: project.id,
+        raw: future,
+        refusal: { scope: 'state', status: 'unsupported-version', version: 4 },
+        source: 'canvas',
+      },
+      status: 'refused',
+    });
   });
 
   it('normalizes legacy project-graph invocation sources to workflow', () => {
@@ -95,14 +122,18 @@ describe('project document serialization', () => {
       ],
     };
 
-    const deserialized = deserializeProjectDocument(document);
+    const deserialized = loadDocument(document);
 
-    expect(deserialized?.invocation.sourceId).toBe('workflow');
-    expect(deserialized?.queue.items[0]?.snapshot.sourceId).toBe('workflow');
+    expect(deserialized.invocation.sourceId).toBe('workflow');
+    expect(deserialized.queue.items[0]?.snapshot.sourceId).toBe('workflow');
   });
 });
 
 describe('createRecoveredDocument', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('keys the fork to the original and stamps the recovery time', () => {
     const project = getProject({ name: 'My Project' });
     const { recoveredDocument, recoveredIdentity } = createRecoveredDocument(
@@ -111,7 +142,7 @@ describe('createRecoveredDocument', () => {
     );
 
     expect(recoveredDocument.recoveryOf).toBe(project.id);
-    expect(recoveredIdentity.id.startsWith(`${project.id}-recovered-`)).toBe(true);
+    expect(recoveredIdentity.id.startsWith('project-')).toBe(true);
     expect(recoveredIdentity.name).toBe('My Project (recovered)');
     expect(typeof recoveredDocument.recoveredAt).toBe('string');
     // The identity is what the reducer re-labels the live project with, so it has to agree with the
@@ -120,6 +151,19 @@ describe('createRecoveredDocument', () => {
     expect(recoveredDocument.name).toBe(recoveredIdentity.name);
     expect(recoveredDocument.recoveredAt).toBe(recoveredIdentity.recoveredAt);
     expect(recoveredDocument.recoveryOf).toBe(recoveredIdentity.recoveryOf);
+  });
+
+  it('gives simultaneous recoveries distinct project ids', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-27T12:00:00.000Z'));
+    const project = getProject({ name: 'Concurrent recovery' });
+    const document = serializeProjectDocument(project);
+
+    const first = createRecoveredDocument(project, document);
+    const second = createRecoveredDocument(project, document);
+
+    expect(first.recoveredIdentity.id).not.toBe(second.recoveredIdentity.id);
+    expect(first.recoveredIdentity.recoveryOf).toBe(second.recoveredIdentity.recoveryOf);
   });
 
   it('collapses recovery chains to the root and never stacks name suffixes', () => {

@@ -45,7 +45,13 @@ export interface InvkExportPlan {
   documentJson: string;
   /** Download file name, including the extension. */
   fileName: string;
-  manifestInput: { appVersion: string; createdAt: string; name: string; sourceProjectId?: string };
+  manifestInput: {
+    appVersion: string;
+    createdAt: string;
+    minimumCanvasSchemaVersion: number;
+    name: string;
+    sourceProjectId?: string;
+  };
   /** Board membership and document references merged, each item exactly once. */
   transferItems: InvkTransferItem[];
 }
@@ -60,6 +66,7 @@ export const planInvkExport = (input: {
   appVersion: string;
   boardItems: readonly InvkBoardItem[];
   createdAt: string;
+  minimumCanvasSchemaVersion: number;
   name: string;
   projectDocument: Record<string, unknown>;
 }): InvkExportPlan => {
@@ -90,6 +97,7 @@ export const planInvkExport = (input: {
     manifestInput: {
       appVersion: input.appVersion,
       createdAt: input.createdAt,
+      minimumCanvasSchemaVersion: input.minimumCanvasSchemaVersion,
       name: input.name,
       ...(sourceProjectId === undefined ? {} : { sourceProjectId }),
     },

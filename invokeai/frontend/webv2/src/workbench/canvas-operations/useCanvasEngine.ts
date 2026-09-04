@@ -3,10 +3,10 @@ import type { CanvasEngine, ImageResolver } from '@workbench/canvas-engine/api';
 import { galleryImageUrls } from '@features/gallery/utility';
 import { getModelsSnapshot } from '@features/models';
 import { createCanvasProjectMutationPort } from '@workbench/canvasProjectMutationPort';
+import { publishLayerPanelSelection, readLayerPanelState } from '@workbench/layerPanelState';
 import { resolveDefaultControlModelForBase } from '@workbench/widgets/layers/controlModelOptions';
 import { getSelectedModelBase } from '@workbench/widgets/layers/selectedModel';
 import { useActiveProjectId, useWorkbenchCommands, useWorkbenchInternalStore } from '@workbench/WorkbenchContext';
-import { publishLayerPanelSelection, readLayerPanelSelection } from '@workbench/workbenchStore';
 import { useMemo, useSyncExternalStore } from 'react';
 
 import type { EngineDeps } from './engineRegistry';
@@ -72,7 +72,7 @@ export const useCanvasEngine = (): CanvasEngineHandle | null => {
         },
         getSelectedLayerIds: () => {
           const project = store.getState().projects.find((candidate) => candidate.id === projectId);
-          return project ? readLayerPanelSelection(projectId, project.canvas.document.selectedLayerId).selectedIds : [];
+          return project ? readLayerPanelState(projectId, project.canvas.document.selectedLayerId).selectedIds : [];
         },
         setSelectedLayerIds: (primaryId, selectedIds) =>
           publishLayerPanelSelection({ primaryId, projectId, selectedIds }),

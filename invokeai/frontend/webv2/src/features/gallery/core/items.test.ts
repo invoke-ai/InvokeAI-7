@@ -128,6 +128,16 @@ describe('gallery item compatibility', () => {
     });
   });
 
+  it('prefers the backend creation timestamp over the submission instant when both are present', () => {
+    const item = legacyGeneratedImageToGalleryItem({
+      ...generatedImage,
+      createdAt: '2026-07-30T12:45:00.000Z',
+      queuedAt: '2026-07-30T12:00:00.000Z',
+    });
+
+    expect(item.createdAt).toBe('2026-07-30T12:45:00.000Z');
+  });
+
   it('round-trips an image item into the legacy gallery contract with a backend source fallback', () => {
     const item: GalleryImageItem = {
       boardId: 'board-1',
@@ -145,6 +155,7 @@ describe('gallery item compatibility', () => {
 
     const expected: GalleryImage = {
       boardId: 'board-1',
+      createdAt: '2026-07-30T12:00:00.000Z',
       height: 512,
       imageCategory: 'user',
       imageName: 'upload.png',
@@ -157,6 +168,10 @@ describe('gallery item compatibility', () => {
     };
 
     expect(galleryImageItemToGalleryImage(item)).toEqual(expected);
+    expect(legacyGeneratedImageToGalleryItem(galleryImageItemToGalleryImage(item))).toEqual({
+      ...item,
+      sourceQueueItemId: 'backend-gallery',
+    });
   });
 });
 

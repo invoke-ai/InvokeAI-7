@@ -20,7 +20,13 @@ export const describeProjectFileError = (
   direction: ProjectFileDirection = 'read'
 ): string | undefined => {
   if (error instanceof ProjectFlushError) {
-    return t(error.reason === 'unsynced' ? 'projects.file.notSynced' : 'projects.file.supersededElsewhere');
+    return t(
+      error.reason === 'schema-refused'
+        ? 'projects.file.updateClient'
+        : error.reason === 'unsynced'
+          ? 'projects.file.notSynced'
+          : 'projects.file.supersededElsewhere'
+    );
   }
 
   if (!(error instanceof InvkFormatError)) {

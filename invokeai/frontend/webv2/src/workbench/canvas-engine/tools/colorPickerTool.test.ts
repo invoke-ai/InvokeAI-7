@@ -1,9 +1,11 @@
-import type { CanvasDocumentContractV2, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
+import type { CanvasDocumentContractV3, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
 import type { RasterBackend, RasterSurface } from '@workbench/canvas-engine/render/raster';
 import type { Tool, ToolContext } from '@workbench/canvas-engine/tools/tool';
 import type { PointerInput } from '@workbench/canvas-engine/types';
 import type { CanvasProjectMutation } from '@workbench/canvasProjectMutations';
 
+import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
+import { createTestInsertionAnchorCapture } from '@workbench/canvas-engine/document/insertionAnchors.testStub';
 import { createEngineStores } from '@workbench/canvas-engine/engineStores';
 import { createLayerCacheStore, type LayerCacheStore } from '@workbench/canvas-engine/render/layerCache';
 import { describe, expect, it, vi } from 'vitest';
@@ -53,13 +55,13 @@ const paintLayer = (id: string, x = 0): CanvasLayerContract => ({
   type: 'raster',
 });
 
-const makeDoc = (layerX = 0): CanvasDocumentContractV2 => ({
+const makeDoc = (layerX = 0): CanvasDocumentContractV3 => ({
   background: 'transparent',
   bbox: { height: 100, width: 100, x: 0, y: 0 },
   height: 100,
-  layers: [paintLayer('paint1', layerX)],
+  stacks: stacksFrom([paintLayer('paint1', layerX)]),
   selectedLayerId: 'paint1',
-  version: 2,
+  version: 3,
   width: 100,
 });
 
@@ -82,7 +84,7 @@ interface Harness {
   overlayCursors: unknown[];
 }
 
-const createHarness = (doc: CanvasDocumentContractV2 | null): Harness => {
+const createHarness = (doc: CanvasDocumentContractV3 | null): Harness => {
   const pixel: MutablePixel = { current: [10, 20, 30, 255] };
   const backend = createFixedPixelBackend(pixel);
   const layers = createLayerCacheStore(backend);
@@ -97,6 +99,7 @@ const createHarness = (doc: CanvasDocumentContractV2 | null): Harness => {
   const ctx: ToolContext = {
     backend,
     commitStructural: vi.fn(),
+    captureInsertionAnchor: createTestInsertionAnchorCapture('p'),
     createLayerId: () => 'unused',
     createPath2D: (d) => ({ d }) as unknown as Path2D,
     dispatch: (action) => dispatched.push(action),
@@ -178,6 +181,40 @@ describe('color picker tool', () => {
     down(tool, h.ctx, pointer(10, 10));
 
     expect(h.ctx.stores.brushOptions.get().color).toBe(defaultColor);
+  });
+
+  it('stashes claimed samples without writing brushOptions and commits on release', () => {
+    const h = createHarness(makeDoc());
+    const tool = createColorPickerTool();
+    const defaultColor = h.ctx.stores.brushOptions.get().color;
+    const claimed: string[] = [];
+    h.ctx.resolveColorSample = (hex) => {
+      claimed.push(hex);
+      return true;
+    };
+    const commit = vi.fn();
+    h.ctx.commitColorSample = commit;
+
+    down(tool, h.ctx, pointer(10, 10));
+    expect(claimed).toEqual(['#0a141e']);
+    expect(commit).not.toHaveBeenCalled();
+    expect(h.ctx.stores.brushOptions.get().color).toBe(defaultColor);
+
+    up(tool, h.ctx, pointer(10, 10, { buttons: 0 }));
+    expect(commit).toHaveBeenCalledTimes(1);
+  });
+
+  it('discards the stashed sample on gesture cancel and at each fresh press', () => {
+    const h = createHarness(makeDoc());
+    const tool = createColorPickerTool();
+    const discard = vi.fn();
+    h.ctx.discardColorSample = discard;
+
+    down(tool, h.ctx, pointer(10, 10));
+    expect(discard).toHaveBeenCalledTimes(1);
+
+    tool.onPointerCancel?.(h.ctx);
+    expect(discard).toHaveBeenCalledTimes(2);
   });
 
   it('never dispatches and never emits a committed stroke', () => {

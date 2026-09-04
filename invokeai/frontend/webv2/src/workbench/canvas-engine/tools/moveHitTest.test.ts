@@ -1,5 +1,6 @@
-import type { CanvasDocumentContractV2, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
+import type { CanvasDocumentContractV3, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
 
+import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
 import { estimateTextExtent } from '@workbench/canvas-engine/render/rasterizers/textRasterizer';
 import { describe, expect, it } from 'vitest';
 
@@ -121,13 +122,13 @@ const maskLayer = (
   type: 'inpaint_mask',
 });
 
-const doc = (layers: CanvasLayerContract[]): CanvasDocumentContractV2 => ({
+const doc = (layers: CanvasLayerContract[]): CanvasDocumentContractV3 => ({
   background: 'transparent',
   bbox: { height: 100, width: 100, x: 0, y: 0 },
   height: 100,
-  layers,
+  stacks: stacksFrom(layers),
   selectedLayerId: null,
-  version: 2,
+  version: 3,
   width: 100,
 });
 

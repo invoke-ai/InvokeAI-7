@@ -17,10 +17,12 @@ describe('RasterController', () => {
     });
     const entry = controller.layers.getOrCreate('a', 10, 10);
     const layer = {
-      adjustments: { brightness: 0.5, contrast: 0, saturation: 0 },
+      adjustments: [
+        { brightness: 0.5, contrast: 0, id: 'adj-bc', isEnabled: true, type: 'brightness-contrast' as const },
+      ],
       id: 'a',
       type: 'raster',
-    } as CanvasRasterLayerContractV2;
+    } as unknown as CanvasRasterLayerContractV2;
     expect(controller.getAdjustedSurface(layer, entry)).not.toBeNull();
     expect(controller.derived.byteSize()).toBe(400);
 

@@ -1,3 +1,4 @@
+import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
 import { createDraftProject } from '@workbench/workbenchState';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -124,7 +125,7 @@ const projectWithRestorableAssets = (includeVideo = true) => {
       ...project.canvas,
       document: {
         ...project.canvas.document,
-        layers: [rasterImageLayer('restored-image', 'archive-image.png')],
+        stacks: stacksFrom([rasterImageLayer('restored-image', 'archive-image.png')]),
       },
     },
     ...(includeVideo ? { futureVideoInput: { video_name: 'archive-video.mp4' } } : {}),
@@ -140,11 +141,18 @@ const capturedArchive = (): File => {
 /** The server answers with the board it claimed, or with the one it created for a boardless create. */
 const acceptCreate = (): void => {
   api.createProjectSettled.mockImplementation(
-    (request: { board_id?: string; data?: Record<string, unknown>; name: string; project_id?: string }) =>
+    (request: {
+      board_id?: string;
+      data?: Record<string, unknown>;
+      minimum_canvas_schema_version?: number;
+      name: string;
+      project_id?: string;
+    }) =>
       Promise.resolve({
         board_id: request.board_id ?? 'server-created-board',
         created_at: '2026-06-10 10:00:00.000',
         data: request.data ?? {},
+        minimum_canvas_schema_version: request.minimum_canvas_schema_version ?? 2,
         name: request.name,
         project_id: request.project_id ?? '',
         revision: 1,
@@ -180,7 +188,11 @@ describe('exportOpenProject', () => {
   it('reaches the server through the mocked transport', async () => {
     api.getProject.mockResolvedValue({
       data: {
-        canvas: { document: { layers: [{ id: 'l', source: { image: { imageName: 'pinned.png' }, type: 'image' } }] } },
+        canvas: {
+          document: {
+            stacks: { raster: [{ id: 'l', source: { image: { imageName: 'pinned.png' }, type: 'image' } }] },
+          },
+        },
         id: 'p1',
         layout: {},
         name: 'Pinned',
@@ -206,6 +218,27 @@ describe('exportLibraryProject', () => {
 
     expect(api.getProject).toHaveBeenCalledWith('p1', expect.anything());
     expect(downloads.downloadBlob.mock.calls[0]![1]).toBe('Closed.invk');
+  });
+
+  it('records the source project compatibility floor in the archive', async () => {
+    const document = persistence.serializeProjectDocument({ ...createDraftProject([]), name: 'Future history' });
+
+    api.getProject.mockResolvedValue({
+      data: document,
+      minimum_canvas_schema_version: 4,
+      name: 'Future history',
+      project_id: 'p1',
+      revision: 3,
+    });
+
+    await projectFile.exportLibraryProject('p1');
+
+    const { readArchive, readEntryText } = await import('./invk/archive');
+    const [blob] = downloads.downloadBlob.mock.calls.at(-1)! as [Blob];
+    const entries = await readArchive(new Uint8Array(await blob.arrayBuffer()));
+    const manifest = JSON.parse(readEntryText(entries.get('manifest.json')!)) as Record<string, unknown>;
+
+    expect(manifest.minimumCanvasSchemaVersion).toBe(4);
   });
 
   /**
@@ -309,7 +342,7 @@ describe('what a transfer reports', () => {
         ...project.canvas,
         document: {
           ...project.canvas.document,
-          layers: [rasterImageLayer('l1', 'a.png'), rasterImageLayer('l2', 'b.png')],
+          stacks: stacksFrom([rasterImageLayer('l1', 'a.png'), rasterImageLayer('l2', 'b.png')]),
         },
       },
       name: 'Two layers',
@@ -393,7 +426,7 @@ describe('importing a project board', () => {
       ...project,
       canvas: {
         ...project.canvas,
-        document: { ...project.canvas.document, layers: [rasterImageLayer('l1', 'shared.png')] },
+        document: { ...project.canvas.document, stacks: stacksFrom([rasterImageLayer('l1', 'shared.png')]) },
       },
       name: 'Board project',
     };
@@ -449,10 +482,10 @@ describe('importing a project board', () => {
     await projectFile.importProjectFile(await exportedBoardArchive());
 
     const { data } = api.createProjectSettled.mock.calls[0]![0] as {
-      data: { canvas: { document: { layers: Array<{ source: { image: { imageName: string } } }> } } };
+      data: { canvas: { document: { stacks: { raster: Array<{ source: { image: { imageName: string } } }> } } } };
     };
 
-    expect(data.canvas.document.layers[0]?.source.image.imageName).toBe('board-shared.png');
+    expect(data.canvas.document.stacks.raster[0]?.source.image.imageName).toBe('board-shared.png');
   });
 
   /** The dedup that document references get is deliberately not applied to board membership. */
@@ -482,9 +515,9 @@ describe('importing a project board', () => {
 
     const outcome = await projectFile.importProjectFile(await exportedBoardArchive());
     const { data } = api.createProjectSettled.mock.calls[0]![0] as {
-      data: { canvas: { document: { layers: Array<{ source: { image: { imageName: string } } }> } } };
+      data: { canvas: { document: { stacks: { raster: Array<{ source: { image: { imageName: string } } }> } } } };
     };
-    const restoredName = data.canvas.document.layers[0]!.source.image.imageName;
+    const restoredName = data.canvas.document.stacks.raster[0]!.source.image.imageName;
 
     expect(restoredName).not.toBe('shared.png');
     expect(restoredName).toContain('-missing-image-');
@@ -510,7 +543,30 @@ describe('importing a project board', () => {
     await projectFile.importProjectFile(capturedArchive());
 
     expect(transport.createStagingBoard).not.toHaveBeenCalled();
+    expect(api.createProjectSettled.mock.calls[0]![0]).toMatchObject({ minimum_canvas_schema_version: 3 });
     expect(api.createProjectSettled.mock.calls[0]![0]).not.toHaveProperty('board_id');
+  });
+
+  it('refuses an incompatible archive before staging or restoring any media', async () => {
+    const { binaryEntry, readArchive, readEntryText, textEntry, writeArchive } = await import('./invk/archive');
+
+    await projectFile.exportOpenProject(boardProject());
+
+    const original = capturedArchive();
+    const entries = await readArchive(new Uint8Array(await original.arrayBuffer()));
+    const manifest = JSON.parse(readEntryText(entries.get('manifest.json')!)) as Record<string, unknown>;
+
+    const rewrittenEntries = new Map([...entries].map(([path, bytes]) => [path, binaryEntry(bytes)]));
+
+    rewrittenEntries.set('manifest.json', textEntry(JSON.stringify({ ...manifest, minimumCanvasSchemaVersion: 4 })));
+    const archive = new File([await writeArchive(rewrittenEntries)], original.name);
+
+    await expect(projectFile.importProjectFile(archive)).rejects.toMatchObject({ reason: 'unsupported-version' });
+
+    expect(transport.createStagingBoard).not.toHaveBeenCalled();
+    expect(transport.uploadBoardImage).not.toHaveBeenCalled();
+    expect(transport.uploadBoardVideo).not.toHaveBeenCalled();
+    expect(api.createProjectSettled).not.toHaveBeenCalled();
   });
 
   it('deletes the media it created and then the staging board when the create fails', async () => {
@@ -675,7 +731,7 @@ describe('importProjectFile', () => {
         ...project.canvas,
         document: {
           ...project.canvas.document,
-          layers: [rasterImageLayer('image-layer', 'legacy.png')],
+          stacks: stacksFrom([rasterImageLayer('image-layer', 'legacy.png')]),
         },
       },
       futureDocumentKey: { survives: true },
@@ -708,12 +764,12 @@ describe('importProjectFile', () => {
     const createRequest = api.createProjectSettled.mock.calls[0]![0] as { data: Record<string, unknown> };
     const invocation = createRequest.data.invocation as { sourceId: string };
     const canvas = createRequest.data.canvas as {
-      document: { layers: Array<{ source: { image: { imageName: string } } }> };
+      document: { stacks: { raster: Array<{ source: { image: { imageName: string } } }> } };
     };
 
     expect(invocation.sourceId).toBe('workflow');
     expect(createRequest.data.futureDocumentKey).toEqual({ survives: true });
-    expect(canvas.document.layers[0]?.source.image.imageName).toBe('server-legacy.png');
+    expect(canvas.document.stacks.raster[0]?.source.image.imageName).toBe('server-legacy.png');
   });
 
   it('imports the shipped legacy JSON envelope under a fresh canonical identity without restoring assets', async () => {
@@ -765,7 +821,7 @@ describe('importProjectFile', () => {
       JSON.stringify({
         document: {},
         kind: 'invokeai-project',
-        version: 2,
+        version: 4,
       }),
     ],
     ['a missing document', JSON.stringify({ kind: 'invokeai-project', version: 1 })],

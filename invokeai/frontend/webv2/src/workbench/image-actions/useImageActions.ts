@@ -18,7 +18,7 @@ import {
   galleryVideos,
   type GalleryVideoItem,
 } from '@features/gallery';
-import { getGalleryBoardLabel } from '@features/gallery/contracts';
+import { getGalleryBoardLabel, getGalleryDeletionSuccessor } from '@features/gallery/contracts';
 import {
   getGalleryItemBoardIdsFromCaches,
   getGalleryItemStarredFromCaches,
@@ -363,34 +363,8 @@ export const useImageActions = ({
 
           if (deletionContext && primaryKey && succeededKeys.has(primaryKey) && isDeletionContextCurrent()) {
             const refs = orderedRefs ?? deletionContext.items.map(toGalleryItemRef);
-            const primaryIndex = refs.findIndex((ref) => toGalleryItemKey(ref) === primaryKey);
-            const ineligibleKeys = new Set([
-              ...result.succeeded.map(toGalleryItemKey),
-              ...result.failed.map(toGalleryItemKey),
-            ]);
-            let successorRef: GalleryItemRef | null = null;
-
-            if (primaryIndex >= 0) {
-              for (let index = primaryIndex - 1; index >= 0; index -= 1) {
-                const candidate = refs[index];
-
-                if (candidate && !ineligibleKeys.has(toGalleryItemKey(candidate))) {
-                  successorRef = candidate;
-                  break;
-                }
-              }
-
-              if (!successorRef) {
-                for (let index = primaryIndex + 1; index < refs.length; index += 1) {
-                  const candidate = refs[index];
-
-                  if (candidate && !ineligibleKeys.has(toGalleryItemKey(candidate))) {
-                    successorRef = candidate;
-                    break;
-                  }
-                }
-              }
-            }
+            const ineligibleKeys = new Set([...succeededKeys, ...result.failed.map(toGalleryItemKey)]);
+            const successorRef = getGalleryDeletionSuccessor(refs, primaryKey, ineligibleKeys);
 
             if (successorRef) {
               successor =
