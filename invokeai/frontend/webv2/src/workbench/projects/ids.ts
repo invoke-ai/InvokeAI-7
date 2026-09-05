@@ -1,9 +1,10 @@
 import { createUuid } from '@platform/browser/randomUuid';
+import { sha256 } from '@platform/browser/sha256';
 
 export const createProjectId = (): string => `project-${createUuid()}`;
 
 export const createDeterministicProjectId = async (scope: string): Promise<string> => {
-  const digest = new Uint8Array(await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(scope)));
+  const digest = await sha256(new TextEncoder().encode(scope));
   const bytes = digest.slice(0, 16);
   bytes[6] = (bytes[6]! & 0x0f) | 0x80;
   bytes[8] = (bytes[8]! & 0x3f) | 0x80;

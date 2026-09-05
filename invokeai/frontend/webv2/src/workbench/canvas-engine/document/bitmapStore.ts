@@ -39,6 +39,8 @@ import type { CanvasProjectMutation } from '@workbench/canvas-engine/mutationCon
 import type { PaintCacheTrim } from '@workbench/canvas-engine/render/paintCacheTrim';
 import type { RasterSurface } from '@workbench/canvas-engine/render/raster';
 
+import { sha256Hex } from '@platform/browser/sha256';
+
 /** Default idle window before a dirty layer is flushed. */
 export const DEFAULT_DEBOUNCE_MS = 1500;
 /** Default upload attempts per flush (initial try + retries). */
@@ -126,7 +128,7 @@ export interface BitmapStoreDeps {
    * mask must clear `mask.bitmap` while preserving its `fill`.
    */
   clearBitmap?(layerId: string): boolean;
-  /** Content-hashes a blob (defaults to SHA-256 hex via `crypto.subtle`). */
+  /** Content-hashes a blob (defaults to SHA-256 hex via `@platform/browser/sha256`). */
   hashBlob?(blob: Blob): Promise<string>;
   /** Idle debounce window in ms (default {@link DEFAULT_DEBOUNCE_MS}). */
   debounceMs?: number;
@@ -200,17 +202,8 @@ const defaultTimers: BitmapStoreTimers = {
   setTimeout: (handler, ms) => globalThis.setTimeout(handler, ms),
 };
 
-/** SHA-256 hex of a blob's bytes, via the Web Crypto API (Node ≥ 20 exposes `crypto.subtle`). */
-const defaultHashBlob = async (blob: Blob): Promise<string> => {
-  const buffer = await blob.arrayBuffer();
-  const digest = await crypto.subtle.digest('SHA-256', buffer);
-  const bytes = new Uint8Array(digest);
-  let hex = '';
-  for (const byte of bytes) {
-    hex += byte.toString(16).padStart(2, '0');
-  }
-  return hex;
-};
+/** SHA-256 hex of a blob's bytes, via `@platform/browser/sha256`. */
+const defaultHashBlob = async (blob: Blob): Promise<string> => sha256Hex(await blob.arrayBuffer());
 
 /** Creates a bitmap store wired to the given seams. */
 export const createBitmapStore = (deps: BitmapStoreDeps): BitmapStore => {
