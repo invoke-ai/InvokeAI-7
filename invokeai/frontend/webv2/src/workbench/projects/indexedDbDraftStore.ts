@@ -1,5 +1,7 @@
 import type { AccountScope } from '@platform/state/accountLifecycle';
 
+import { createUuid } from '@platform/browser/randomUuid';
+
 import { acquireAccountOwnedWorkbenchDatabase } from './accountOwnedWorkbenchDatabase';
 import {
   clampProjectDraftLimit,
@@ -538,9 +540,7 @@ export const createIndexedDbProjectDraftStore = (
             state: 'fenced',
             updatedAt: Date.now(),
             writerToken:
-              typeof storedWriterToken === 'string' && storedWriterToken.length > 0
-                ? storedWriterToken
-                : crypto.randomUUID(),
+              typeof storedWriterToken === 'string' && storedWriterToken.length > 0 ? storedWriterToken : createUuid(),
           });
           await transaction.done;
           return { kind: 'deleted' };

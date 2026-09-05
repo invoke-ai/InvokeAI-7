@@ -15,6 +15,7 @@ import {
   extractGenerationMeta,
   getResultImageName,
 } from '@features/queue/contracts';
+import { createUuid } from '@platform/browser/randomUuid';
 import { useMountEffect } from '@platform/react/useMountEffect';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -233,7 +234,7 @@ export const GenerationUiAdapterProvider = ({ children }: { children: ReactNode 
         });
       },
       save: (label, weights, multiplier) => {
-        const preset = { id: crypto.randomUUID(), label, multiplier, weights };
+        const preset = { id: createUuid(), label, multiplier, weights };
 
         void patchWorkbenchPreferences({
           krea2RebalancePresets: [...getWorkbenchPreferences().krea2RebalancePresets, preset],
@@ -263,7 +264,7 @@ export const GenerationUiAdapterProvider = ({ children }: { children: ReactNode 
         });
       },
       save: (label, values) => {
-        const preset = { id: crypto.randomUUID(), label, values };
+        const preset = { id: createUuid(), label, values };
 
         void patchWorkbenchPreferences({
           generatePresets: [...getWorkbenchPreferences().generatePresets, preset],
