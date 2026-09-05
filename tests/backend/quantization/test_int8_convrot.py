@@ -11,7 +11,7 @@ import sys
 import pytest
 import torch
 
-from invokeai.backend.minimax_h3.int8_convrot import (
+from invokeai.backend.quantization.int8_convrot import (
     CONVROT_GROUP_SIZE,
     Int8ConvrotLinear,
     build_regular_hadamard,

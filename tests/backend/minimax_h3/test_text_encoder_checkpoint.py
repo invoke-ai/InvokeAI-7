@@ -202,8 +202,8 @@ def test_te_converted_keys_match_real_model_exactly() -> None:
     from transformers import Qwen3VLForConditionalGeneration
     from transformers.models.qwen3_vl.configuration_qwen3_vl import Qwen3VLConfig
 
-    from invokeai.backend.minimax_h3.int8_convrot import Int8ConvrotLinear
     from invokeai.backend.model_manager.util.qwen3_vl import normalize_qwen3vl_rope_config
+    from invokeai.backend.quantization.int8_convrot import Int8ConvrotLinear
     from tests.model_identification.stripped_model_on_disk import StrippedModelOnDisk
 
     fixture_dir = (

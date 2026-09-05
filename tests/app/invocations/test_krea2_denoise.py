@@ -6,9 +6,14 @@ import pytest
 import torch
 
 from invokeai.app.invocations.fields import DenoiseMaskField, Krea2ConditioningField, LatentsField, TensorField
-from invokeai.app.invocations.krea2_denoise import KREA2_LATENT_CHANNELS, Krea2DenoiseInvocation
+from invokeai.app.invocations.krea2_denoise import (
+    KREA2_LATENT_CHANNELS,
+    Krea2DenoiseInvocation,
+    requires_sidecar_patching,
+)
 from invokeai.app.invocations.model import ModelIdentifierField, TransformerField
 from invokeai.backend.model_manager.taxonomy import BaseModelType, Krea2VariantType, ModelFormat, ModelType
+from invokeai.backend.quantization.int8_convrot import Int8ConvrotLinear
 from invokeai.backend.stable_diffusion.diffusion.conditioning_data import ConditioningFieldData, Krea2ConditioningInfo
 
 
@@ -320,6 +325,12 @@ class _Transformer:
         # The real Krea2Transformer2DModel exposes this; denoise swaps in a memory-efficient attention processor.
         self.installed_processors = processor
 
+    def modules(self):
+        # Denoise walks the module tree to decide whether LoRA has to be applied as a sidecar: an
+        # int8_tensorwise build's Linears hold their weights as buffers, which a direct patch
+        # cannot write into. This double stands in for an unquantized model.
+        return iter(())
+
     def __call__(self, *, hidden_states, encoder_hidden_states, **_kwargs):
         self.conditioning_values.append(float(encoder_hidden_states.mean()))
         # The real transformer concatenates [text, image] before attention, so this is the sequence length a
@@ -548,6 +559,9 @@ def test_run_diffusion_uses_per_prompt_position_ids_when_lengths_differ(monkeypa
         def set_attn_processor(self, processor) -> None:
             pass
 
+        def modules(self):
+            return iter(())
+
         def __call__(self, *, hidden_states, encoder_hidden_states, position_ids, **_kwargs):
             text_len = encoder_hidden_states.shape[1]
             pos_len = position_ids.shape[0]
@@ -757,3 +771,28 @@ def test_regional_attention_memory_includes_masks_build_scratch_and_dtype_sized_
     assert Krea2DenoiseInvocation._regional_attention_mask_bytes(positive, negative, torch.bfloat16) == 500
     assert Krea2DenoiseInvocation._regional_attention_mask_bytes(positive, negative, torch.float32) == 740
     assert Krea2DenoiseInvocation._regional_attention_mask_bytes(positive, None, torch.bfloat16) == 400
+
+
+class TestRequiresSidecarPatching:
+    """LoRA cannot be written into an int8 buffer, and the config format does not say when one
+    is present: an `int8_tensorwise` Krea-2 is a plain `checkpoint` as far as the config knows."""
+
+    class _Tree:
+        def __init__(self, *modules) -> None:
+            self._modules = modules
+
+        def modules(self):
+            return iter(self._modules)
+
+    def test_an_unquantized_checkpoint_is_patched_directly(self) -> None:
+        assert not requires_sidecar_patching(self._Tree(torch.nn.Linear(2, 2)), ModelFormat.Checkpoint)
+
+    def test_a_gguf_model_is_still_recognised_by_its_format(self) -> None:
+        assert requires_sidecar_patching(self._Tree(), ModelFormat.GGUFQuantized)
+
+    def test_an_int8_convrot_checkpoint_is_recognised_by_its_modules(self) -> None:
+        int8_linear = Int8ConvrotLinear(
+            weight=torch.zeros(4, 4, dtype=torch.int8), weight_scale=torch.ones(4, 1), convrot=False
+        )
+        tree = self._Tree(torch.nn.Linear(2, 2), int8_linear)
+        assert requires_sidecar_patching(tree, ModelFormat.Checkpoint)

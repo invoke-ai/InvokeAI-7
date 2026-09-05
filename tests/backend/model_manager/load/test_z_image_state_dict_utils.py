@@ -1,8 +1,15 @@
 """Unit tests for the Z-Image GGUF/ComfyUI -> diffusers state-dict converter."""
 
+import json
+
+import pytest
 import torch
 
-from invokeai.backend.model_manager.load.model_loaders.z_image import _convert_z_image_gguf_to_diffusers
+from invokeai.backend.model_manager.load.model_loaders.z_image import (
+    _convert_z_image_gguf_to_diffusers,
+    _split_qkv_sidechannel,
+)
+from invokeai.backend.quantization.int8_convrot import extract_int8_convrot_markers
 from tests.backend.model_manager.load.state_dicts.utils import keys_to_mock_state_dict
 from tests.backend.model_manager.load.state_dicts.z_image_transformer_comfyui_keys import (
     state_dict_keys as z_image_keys,
@@ -64,3 +71,72 @@ class TestConvertZImageGgufToDiffusers:
         assert torch.allclose(out["blk.attention.to_q.weight"], qkv[0:2])
         assert torch.allclose(out["blk.attention.to_k.weight"], qkv[2:4])
         assert torch.allclose(out["blk.attention.to_v.weight"], qkv[4:6])
+
+
+def _marker_blob(marker: dict) -> torch.Tensor:
+    return torch.frombuffer(bytearray(json.dumps(marker).encode("utf-8")), dtype=torch.uint8)
+
+
+MARKER = {"format": "int8_tensorwise", "convrot": True, "convrot_groupsize": 256}
+
+
+class TestTheFusedQkvSplitCarriesQuantizationMetadata:
+    """A quantized fused QKV travels as three keys, and all three have to reach the same three
+    modules. The weight already split; the scale and the marker did not, and were left behind
+    under a module name the model does not have."""
+
+    def test_a_per_output_channel_scale_splits_with_its_weight(self) -> None:
+        scale = torch.arange(3 * 4, dtype=torch.float32).reshape(3 * 4, 1)
+        pieces = [_split_qkv_sidechannel(scale, "weight_scale", t) for t in ("to_q", "to_k", "to_v")]
+        assert [tuple(p.shape) for p in pieces] == [(4, 1)] * 3
+        assert torch.equal(torch.cat(pieces), scale)
+
+    def test_a_marker_is_copied_whole_to_all_three(self) -> None:
+        """The regression that motivated the suffix check: a 72-byte JSON blob is divisible by
+        three, so a rule based on the tensor's shape cuts it into three fragments of broken JSON."""
+        blob = _marker_blob(MARKER)
+        assert len(blob) % 3 == 0, "the fixture has to reproduce the divisible-by-three trap"
+        for target in ("to_q", "to_k", "to_v"):
+            piece = _split_qkv_sidechannel(blob, "comfy_quant", target)
+            assert torch.equal(piece, blob)
+            assert json.loads(bytes(piece.numpy().tobytes()).decode()) == MARKER
+
+    def test_a_per_tensor_scale_is_copied_rather_than_split(self) -> None:
+        for scale in (torch.tensor(0.5), torch.tensor([0.5])):
+            assert torch.equal(_split_qkv_sidechannel(scale, "weight_scale", "to_k"), scale)
+
+    def test_weight_scale_and_marker_land_on_the_same_three_modules(self) -> None:
+        prefix = "layers.0.attention"
+        sd = {
+            f"{prefix}.qkv.weight": torch.arange(3 * 4 * 8, dtype=torch.int8).reshape(3 * 4, 8),
+            f"{prefix}.qkv.weight_scale": torch.arange(3 * 4, dtype=torch.float32).reshape(3 * 4, 1),
+            f"{prefix}.qkv.comfy_quant": _marker_blob(MARKER),
+            # `x_embedder.` is what makes the loader run this conversion at all.
+            "x_embedder.weight": torch.zeros(2, 2),
+        }
+        out = _convert_z_image_gguf_to_diffusers(sd)
+
+        for target in ("to_q", "to_k", "to_v"):
+            assert f"{prefix}.{target}.weight" in out
+            assert f"{prefix}.{target}.weight_scale" in out
+            assert f"{prefix}.{target}.comfy_quant" in out
+        assert not any(".qkv." in k for k in out), "the fused keys must not survive"
+
+    def test_the_markers_are_readable_after_the_conversion(self) -> None:
+        """Why Z-Image reads them after converting rather than before: unlike Krea-2's converter,
+        this one carries `.comfy_quant` onto the final module names, so no re-keying is needed."""
+        prefix = "layers.0.attention"
+        sd = {
+            f"{prefix}.qkv.weight": torch.zeros(3 * 4, 256, dtype=torch.int8),
+            f"{prefix}.qkv.weight_scale": torch.ones(3 * 4, 1),
+            f"{prefix}.qkv.comfy_quant": _marker_blob(MARKER),
+            "x_embedder.weight": torch.zeros(2, 2),
+        }
+        markers = extract_int8_convrot_markers(_convert_z_image_gguf_to_diffusers(sd))
+        assert set(markers) == {f"{prefix}.to_q", f"{prefix}.to_k", f"{prefix}.to_v"}
+        assert all(m == MARKER for m in markers.values())
+
+    def test_a_qkv_weight_that_does_not_divide_by_three_is_refused(self) -> None:
+        sd = {"layers.0.attention.qkv.weight": torch.zeros(7, 8), "x_embedder.weight": torch.zeros(2, 2)}
+        with pytest.raises(ValueError, match="not divisible by 3"):
+            _convert_z_image_gguf_to_diffusers(sd)

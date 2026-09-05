@@ -2,7 +2,7 @@ import json
 import math
 from contextlib import ExitStack
 from pathlib import Path
-from typing import Callable, Iterator, Optional
+from typing import Any, Callable, Iterator, Optional
 
 import torch
 import torchvision.transforms as tv_transforms
@@ -46,6 +46,7 @@ from invokeai.backend.model_manager.taxonomy import BaseModelType, ModelFormat
 from invokeai.backend.patches.layer_patcher import LayerPatcher, PatchSpec
 from invokeai.backend.patches.lora_conversions.krea2_lora_constants import KREA2_LORA_TRANSFORMER_PREFIX
 from invokeai.backend.patches.model_patch_raw import ModelPatchRaw
+from invokeai.backend.quantization.int8_convrot import Int8ConvrotLinear
 from invokeai.backend.rectified_flow.rectified_flow_inpaint_extension import RectifiedFlowInpaintExtension
 from invokeai.backend.stable_diffusion.diffusers_pipeline import PipelineIntermediateState
 from invokeai.backend.stable_diffusion.diffusion.conditioning_data import Krea2ConditioningInfo
@@ -53,6 +54,20 @@ from invokeai.backend.util.devices import TorchDevice
 
 # Krea-2 latent channels (Qwen-Image VAE z_dim). The packed transformer in_channels is 16 * patch_size**2 = 64.
 KREA2_LATENT_CHANNELS = 16
+
+
+def requires_sidecar_patching(transformer: Any, model_format: ModelFormat) -> bool:
+    """Whether LoRA has to be applied as a sidecar rather than written into the weights.
+
+    The format alone does not answer this. A plain ``checkpoint`` Krea-2 may still be an
+    ``int8_tensorwise`` build, whose Linears the loader replaced with ``Int8ConvrotLinear`` --
+    those hold their weights as int8 buffers, which a direct patch cannot write into (and which
+    could not represent the patched values anyway, the rotation having mixed 256 of them). So the
+    loaded module tree is consulted, not just the config.
+    """
+    if model_format in (ModelFormat.GGUFQuantized,):
+        return True
+    return any(isinstance(module, Int8ConvrotLinear) for module in transformer.modules())
 
 
 @invocation(
@@ -409,6 +424,7 @@ class Krea2DenoiseInvocation(BaseInvocation, WithMetadata, WithBoard):
         )
 
         transformer_config = context.models.get_config(self.transformer.transformer)
+        # Refined against the loaded module tree below, once the transformer is in hand.
         model_is_quantized = transformer_config.format in (ModelFormat.GGUFQuantized,)
         num_train_timesteps = scheduler.config.num_train_timesteps
 
@@ -439,6 +455,8 @@ class Krea2DenoiseInvocation(BaseInvocation, WithMetadata, WithBoard):
             # SDPA for enable_gqa=True, which PyTorch only supports on the math backend — that materializes the
             # full O(seq^2) score matrix (~5.7 GB per attention at 1280x720, ~40 GB at 2560x1440) and OOMs. Swap
             # in a memory-efficient processor that expands the KV heads and uses the O(seq) SDPA kernel instead.
+            model_is_quantized = requires_sidecar_patching(transformer, transformer_config.format)
+
             regional_prompting_state = Krea2RegionalPromptingState()
             transformer.set_attn_processor(build_krea2_attention_processors(transformer, regional_prompting_state))
             # The processors remain installed on the cached transformer after this invocation. Do not let them

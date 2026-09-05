@@ -173,7 +173,6 @@ class MiniMaxH3CheckpointModel(ModelLoader):
         from invokeai.backend.minimax_h3.contiguous_attention import (
             patch_minimax_h3_attention_contiguous_qkv,
         )
-        from invokeai.backend.minimax_h3.int8_convrot import Int8ConvrotLinear
         from invokeai.backend.minimax_h3.transformer_minimax_h3_pruned import (
             MiniMaxH3PrunedTransformer3DModel,
             set_curve_modulation_dtype,
@@ -182,6 +181,7 @@ class MiniMaxH3CheckpointModel(ModelLoader):
             convert_minimax_h3_checkpoint_to_diffusers,
             read_comfy_quant_markers,
         )
+        from invokeai.backend.quantization.int8_convrot import Int8ConvrotLinear
 
         model_path = Path(config.path)
 
@@ -317,12 +317,12 @@ class MiniMaxH3TextEncoderCheckpointModel(ModelLoader):
         from safetensors.torch import load_file
         from transformers import Qwen3VLConfig, Qwen3VLForConditionalGeneration
 
-        from invokeai.backend.minimax_h3.int8_convrot import Int8ConvrotLinear
         from invokeai.backend.minimax_h3.text_conditioning import MINIMAX_H3_TEXT_ENCODER_LAYER
         from invokeai.backend.model_manager.load.model_loaders.minimax_h3_state_dict_utils import (
             convert_minimax_h3_text_encoder_checkpoint,
             read_comfy_quant_markers,
         )
+        from invokeai.backend.quantization.int8_convrot import Int8ConvrotLinear
 
         model_path = Path(config.path)
 

@@ -34,7 +34,6 @@ from invokeai.app.invocations.model import MiniMaxH3TransformerField
 from invokeai.app.services.session_processor.session_processor_common import CanceledException
 from invokeai.app.services.shared.invocation_context import InvocationContext
 from invokeai.backend.minimax_h3.denoise import denoise
-from invokeai.backend.minimax_h3.int8_convrot import Int8ConvrotLinear
 from invokeai.backend.minimax_h3.packing import (
     MINIMAX_H3_CANVAS_MULTIPLE,
     MINIMAX_H3_FPS,
@@ -75,6 +74,7 @@ from invokeai.backend.patches.lora_conversions.minimax_h3_lora_conversion_utils 
     is_minimax_h3_adaln_layer_path,
 )
 from invokeai.backend.patches.model_patch_raw import ModelPatchRaw
+from invokeai.backend.quantization.int8_convrot import Int8ConvrotLinear
 from invokeai.backend.stable_diffusion.diffusers_pipeline import PipelineIntermediateState
 from invokeai.backend.stable_diffusion.diffusion.conditioning_data import MiniMaxH3ConditioningInfo
 from invokeai.backend.util.devices import TorchDevice
