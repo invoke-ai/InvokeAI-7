@@ -20,6 +20,7 @@ import {
   createWorkflowId,
   getWorkflowSourceFieldType,
   getWorkflowTargetFieldType,
+  LOOP_LINKAGE_FIELD,
   validateConnection,
 } from '@features/workflow/utility';
 import { useModifierHeld } from '@platform/react/useModifierHeld';
@@ -72,6 +73,7 @@ import {
   type WorkflowFlowInstance,
 } from './flowInstanceStore';
 import { InvocationFlowNode } from './InvocationFlowNode';
+import LoopBodyBoundaryOverlay from './LoopBodyBoundaryOverlay';
 import { NodeContextMenu, type WorkflowContextMenuState } from './NodeContextMenu';
 import { NotesFlowNode } from './NotesFlowNode';
 import {
@@ -95,6 +97,7 @@ const nodeTypes: NodeTypes = {
 
 const edgeTypes: EdgeTypes = {
   default: WorkflowEdge,
+  loop_linkage: WorkflowEdge,
   step: WorkflowEdge,
 };
 
@@ -735,7 +738,10 @@ const WorkflowFlow = ({ runtime }: { runtime: WorkflowRuntimeApi }) => {
           sourceHandle: connection.sourceHandle,
           target: connection.target,
           targetHandle: connection.targetHandle,
-          type: 'default',
+          type:
+            connection.sourceHandle === LOOP_LINKAGE_FIELD && connection.targetHandle === LOOP_LINKAGE_FIELD
+              ? 'loop_linkage'
+              : 'default',
         },
         type: 'addEdge',
       });
@@ -1073,6 +1079,7 @@ const WorkflowFlow = ({ runtime }: { runtime: WorkflowRuntimeApi }) => {
           size={1.5}
           variant={BackgroundVariant.Dots}
         />
+        <LoopBodyBoundaryOverlay edges={projectGraph.edges} nodes={projectGraph.nodes} />
         <EditorToolbar
           nodeOpacity={nodeOpacity}
           tool={tool}

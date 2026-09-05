@@ -1,5 +1,6 @@
 import type { ModelConfig } from '@features/models';
 import type { ProjectGraphState } from '@features/workflow/contracts';
+import type { ForLoopValidationReason } from '@features/workflow/utility';
 import type { CanvasLayerContract } from '@workbench/canvas-engine/api';
 import type {
   InvocationMode,
@@ -202,7 +203,7 @@ export const resolveInvocationRouteInput = (
   // templates store so the result stays live.
   const projectGraphReadiness =
     sourceId === 'workflow' ? getProjectGraphReadiness(input.projectGraph, getInvocationTemplatesSnapshot()) : null;
-  const validationReasons: string[] = [];
+  const validationReasons: Array<string | ForLoopValidationReason> = [];
 
   if (!isInvocationSourceAvailable(sourceId)) {
     validationReasons.push(`${getSourceLabel(sourceId)} is not an available invocation source.`);

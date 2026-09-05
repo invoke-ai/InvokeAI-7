@@ -55,6 +55,8 @@ export interface FieldOutputTemplate {
   title: string;
   description: string;
   type: FieldType;
+  outputScope?: 'iteration' | 'final';
+  uiHidden?: boolean;
 }
 
 export interface InvocationTemplate {
@@ -144,7 +146,7 @@ export type WorkflowNode =
 
 export interface WorkflowEdge {
   id: string;
-  type: 'default';
+  type: 'default' | 'loop_linkage';
   source: string;
   target: string;
   sourceHandle: string;

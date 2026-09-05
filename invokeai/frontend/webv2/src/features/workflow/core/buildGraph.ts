@@ -7,10 +7,15 @@ import type {
   WorkflowInvocationNode,
 } from './types';
 
-import { getResolvedWorkflowEdgesIndexed } from './connectors';
 import { createWorkflowId } from './document';
 import { getWorkflowFieldInvalidReason } from './fields';
-import { createWorkflowGraphIndex } from './graphIndex';
+import {
+  createForLoopValidationReason,
+  ForLoopGraphValidationError,
+  getCanonicalWorkflowEdges,
+  validateForLoopGraph,
+  type ForLoopValidationReason,
+} from './forLoops';
 import { isInvocationNode } from './types';
 import { hasAnyCycle } from './validation';
 
@@ -58,7 +63,7 @@ const toBoardGraphValue = (value: unknown): unknown => {
 
 export interface ProjectGraphReadiness {
   canInvoke: boolean;
-  reasons: string[];
+  reasons: Array<string | ForLoopValidationReason>;
 }
 
 export interface ProjectGraphReadinessOptions {
@@ -81,17 +86,17 @@ export const getProjectGraphReadiness = (
 
   const templates = templatesSnapshot.templates;
   const executableNodes = getExecutableNodes(document);
-  const index = createWorkflowGraphIndex(document.nodes, document.edges);
+  const canonicalEdges = getCanonicalWorkflowEdges(document);
 
   if (executableNodes.length === 0) {
     return { canInvoke: false, reasons: ['The project graph has no nodes. Add nodes in the Workflow view.'] };
   }
 
-  const reasons: string[] = [];
+  const reasons: Array<string | ForLoopValidationReason> = [];
   const connectedInputs = new Set(
-    getResolvedWorkflowEdgesIndexed(document.edges, index, templates)
-      .filter((edge) => executableNodes.some((node) => node.id === edge.target))
-      .map((edge) => `${edge.target}:${edge.targetHandle}`)
+    canonicalEdges
+      .filter((edge) => executableNodes.some((node) => node.id === edge.destination.node_id))
+      .map((edge) => `${edge.destination.node_id}:${edge.destination.field}`)
   );
 
   for (const node of executableNodes) {
@@ -135,8 +140,26 @@ export const getProjectGraphReadiness = (
     }
   }
 
-  if (hasAnyCycle(document.nodes, document.edges)) {
+  if (
+    hasAnyCycle(
+      document.nodes,
+      canonicalEdges.map((edge) => ({
+        id: edge.id,
+        source: edge.source.node_id,
+        sourceHandle: edge.source.field,
+        target: edge.destination.node_id,
+        targetHandle: edge.destination.field,
+        type: edge.type,
+      }))
+    )
+  ) {
     reasons.push('The project graph contains a cycle.');
+  }
+
+  const forLoopError = validateForLoopGraph(document);
+
+  if (forLoopError) {
+    reasons.push(createForLoopValidationReason(forLoopError));
   }
 
   return { canInvoke: reasons.length === 0, reasons };
@@ -155,11 +178,16 @@ export const compileProjectGraph = (
   document: ProjectGraphState,
   templates: InvocationTemplates
 ): CompiledWorkflowGraph => {
+  const forLoopError = validateForLoopGraph(document);
+
+  if (forLoopError) {
+    throw new ForLoopGraphValidationError(forLoopError);
+  }
+
   const executableNodes = getExecutableNodes(document).filter((node) => templates[node.data.type] !== undefined);
   const executableNodeIds = new Set(executableNodes.map((node) => node.id));
   const backendGraph: WorkflowBackendGraph = { edges: [], id: createWorkflowId('workflow-graph'), nodes: {} };
-  const index = createWorkflowGraphIndex(document.nodes, document.edges);
-  const resolvedEdges = getResolvedWorkflowEdgesIndexed(document.edges, index, templates);
+  const resolvedEdges = getCanonicalWorkflowEdges(document);
 
   for (const node of executableNodes) {
     const template = templates[node.data.type] as NonNullable<(typeof templates)[string]>;
@@ -190,11 +218,11 @@ export const compileProjectGraph = (
   const seenEdgeKeys = new Set<string>();
 
   for (const edge of resolvedEdges) {
-    if (!executableNodeIds.has(edge.source) || !executableNodeIds.has(edge.target)) {
+    if (!executableNodeIds.has(edge.source.node_id) || !executableNodeIds.has(edge.destination.node_id)) {
       continue;
     }
 
-    const key = `${edge.source}:${edge.sourceHandle}->${edge.target}:${edge.targetHandle}`;
+    const key = `${edge.type}:${edge.source.node_id}:${edge.source.field}->${edge.destination.node_id}:${edge.destination.field}`;
 
     if (seenEdgeKeys.has(key)) {
       continue;
@@ -202,29 +230,31 @@ export const compileProjectGraph = (
 
     seenEdgeKeys.add(key);
     backendGraph.edges.push({
-      destination: { field: edge.targetHandle, node_id: edge.target },
-      source: { field: edge.sourceHandle, node_id: edge.source },
+      destination: edge.destination,
+      source: edge.source,
+      type: edge.type,
     });
 
     // A connected input always wins over a stale direct value; sending both
     // would let pydantic reject the node on the ignored direct value.
-    const targetNode = backendGraph.nodes[edge.target];
+    const targetNode = backendGraph.nodes[edge.destination.node_id];
 
     if (targetNode) {
-      delete targetNode[edge.targetHandle];
+      delete targetNode[edge.destination.field];
     }
   }
 
   return {
     backendGraph,
     edges: resolvedEdges
-      .filter((edge) => executableNodeIds.has(edge.source) && executableNodeIds.has(edge.target))
+      .filter((edge) => executableNodeIds.has(edge.source.node_id) && executableNodeIds.has(edge.destination.node_id))
       .map((edge) => ({
         id: edge.id,
-        sourceField: edge.sourceHandle,
-        sourceNodeId: edge.source,
-        targetField: edge.targetHandle,
-        targetNodeId: edge.target,
+        sourceField: edge.source.field,
+        sourceNodeId: edge.source.node_id,
+        targetField: edge.destination.field,
+        targetNodeId: edge.destination.node_id,
+        type: edge.type,
       })),
     id: backendGraph.id,
     label: document.name || 'Workflow',

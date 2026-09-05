@@ -76,13 +76,13 @@ const zConnectorNode = z.object({
 
 const zAnyNode = z.union([zInvocationNode, zNotesNode, zCurrentImageNode, zConnectorNode]);
 
-const zDefaultEdge = z.object({
+const zWorkflowEdge = z.object({
   id: z.string().catch(''),
   source: z.string().min(1),
   sourceHandle: z.string().min(1),
   target: z.string().min(1),
   targetHandle: z.string().min(1),
-  type: z.literal('default').catch('default'),
+  type: z.enum(['default', 'loop_linkage']).catch('default'),
 });
 
 const zFieldIdentifier = z.object({ fieldName: z.string(), nodeId: z.string() });
@@ -304,7 +304,7 @@ export const parseWorkflowJson = (raw: unknown): ParsedWorkflow => {
   }
 
   const rawEdges = parsed.data.edges.flatMap((rawEdge) => {
-    const edgeResult = zDefaultEdge.safeParse(rawEdge);
+    const edgeResult = zWorkflowEdge.safeParse(rawEdge);
 
     return edgeResult.success ? [edgeResult.data] : [];
   });
@@ -324,7 +324,7 @@ export const parseWorkflowJson = (raw: unknown): ParsedWorkflow => {
       sourceHandle: edge.sourceHandle,
       target: edge.target,
       targetHandle: edge.targetHandle,
-      type: 'default',
+      type: edge.type,
     });
   }
 

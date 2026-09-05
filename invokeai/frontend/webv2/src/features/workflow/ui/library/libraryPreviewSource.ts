@@ -1,5 +1,6 @@
 import type { GraphPreviewSourceState, InvocationTemplates, ProjectGraphState } from '@features/workflow/contracts';
 
+import { ForLoopGraphValidationError } from '@features/workflow/core/forLoops';
 import { compileProjectGraph } from '@features/workflow/graph';
 
 /**
@@ -36,7 +37,13 @@ export const buildLibraryGraphPreviewSource = (
     return {
       destinationLabel: null,
       graph: null,
-      invalidReasons: [error instanceof Error ? error.message : String(error)],
+      invalidReasons: [
+        error instanceof ForLoopGraphValidationError
+          ? error.reason
+          : error instanceof Error
+            ? error.message
+            : String(error),
+      ],
       isLive: false,
       notices: [],
       summaryRows: [],

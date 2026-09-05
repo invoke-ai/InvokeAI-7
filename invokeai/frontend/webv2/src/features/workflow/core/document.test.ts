@@ -129,6 +129,20 @@ describe('projectGraphReducer', () => {
     expect(next.edges).toEqual([createEdge(nodeAId, insertedNode.id)]);
   });
 
+  it('adds a new node and multiple edges in one action', () => {
+    const { doc, nodeAId, nodeBId } = createDocWithNodes();
+    const insertedNode = buildInvocationNode(template, { x: 200, y: 0 });
+    const firstEdge = createEdge(nodeAId, insertedNode.id);
+    const secondEdge = { ...createEdge(nodeBId, insertedNode.id), targetHandle: 'b' };
+    const next = projectGraphReducer(doc, {
+      edge: [firstEdge, secondEdge],
+      node: insertedNode,
+      type: 'addNodeAndEdge',
+    });
+
+    expect(next.edges).toEqual([firstEdge, secondEdge]);
+  });
+
   it('addGraphElements drops colliding node ids and their edges', () => {
     const { doc, nodeAId, nodeBId } = createDocWithNodes();
     const existingNode = doc.nodes[0];

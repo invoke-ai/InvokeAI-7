@@ -280,12 +280,21 @@ class DefaultSessionRunner(SessionRunnerBase):
                 if self._on_after_run_node_callbacks and isinstance(invocation, (IterateInvocation, CollectInvocation)):
                     control_collection = invocation.collection
                 # Save output and history
-                queue_item.session.complete(invocation.id, output)
+                finalized_outputs = queue_item.session.complete(invocation.id, output)
 
                 if control_collection is not None:
                     invocation.collection = control_collection
                 try:
                     self._on_after_run_node(invocation, queue_item, output)
+                    for finalized_invocation, finalized_output in finalized_outputs:
+                        # For output collections are finalized when their matching ForReturn completes. Emit a
+                        # follow-up event so listeners receive the materialized final collection, not the placeholder
+                        # produced when the For iteration started.
+                        self._services.events.emit_invocation_complete(
+                            invocation=finalized_invocation,
+                            queue_item=queue_item,
+                            output=finalized_output,
+                        )
                 finally:
                     if control_collection is not None:
                         invocation.collection = []

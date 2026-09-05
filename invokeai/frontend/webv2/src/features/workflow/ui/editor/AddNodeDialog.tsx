@@ -1,10 +1,16 @@
-import type { InvocationTemplate } from '@features/workflow/contracts';
+import type { InvocationTemplate, InvocationTemplates } from '@features/workflow/contracts';
+import type { WorkflowEdge, WorkflowNode } from '@features/workflow/core/types';
 import type { AddNodeConnectionFilter } from '@features/workflow/ui/workflowUiStore';
 
 import { Badge, Box, Dialog, HStack, Icon, Input, Portal, ScrollArea, Stack, Text } from '@chakra-ui/react';
 import { useInvocationTemplatesSelector } from '@features/workflow/react';
 import { useWorkflowUi } from '@features/workflow/ui/WorkflowUiContext';
-import { getCompatibleInputTemplate, getCompatibleOutputTemplate } from '@features/workflow/utility';
+import {
+  getCompatibleInputTemplate,
+  getCompatibleOutputTemplate,
+  LOOP_LINKAGE_FIELD,
+  resolveConnectorSource,
+} from '@features/workflow/utility';
 import { useMountEffect } from '@platform/react/useMountEffect';
 import { IconButton, Tooltip } from '@platform/ui';
 import { MiddleTruncate } from '@platform/ui/MiddleTruncate';
@@ -56,10 +62,48 @@ const isCompatibleConnectionTemplate = (
   }
 
   if (connectionFilter.kind === 'source') {
+    if (connectionFilter.sourceHandle === LOOP_LINKAGE_FIELD) {
+      return template.type === 'for_return' && template.inputs[LOOP_LINKAGE_FIELD] !== undefined;
+    }
+
     return getCompatibleInputTemplate(template, connectionFilter.sourceType) !== null;
   }
 
+  if (connectionFilter.targetHandle === LOOP_LINKAGE_FIELD) {
+    return template.type === 'for' && template.outputs[LOOP_LINKAGE_FIELD] !== undefined;
+  }
+
   return getCompatibleOutputTemplate(template, connectionFilter.targetType) !== null;
+};
+
+const isForIterationOutputConnection = (
+  connectionFilter: AddNodeConnectionFilter | null,
+  nodes: WorkflowNode[],
+  edges: WorkflowEdge[],
+  templates: InvocationTemplates
+): boolean => {
+  if (!connectionFilter || connectionFilter.kind !== 'source') {
+    return false;
+  }
+
+  const sourceNode = nodes.find((node) => node.id === connectionFilter.sourceNodeId);
+  const resolvedSource =
+    sourceNode?.type === 'connector'
+      ? resolveConnectorSource(sourceNode.id, nodes, edges, templates)
+      : sourceNode?.type === 'invocation'
+        ? { fieldName: connectionFilter.sourceHandle, nodeId: sourceNode.id }
+        : null;
+
+  if (!resolvedSource) {
+    return false;
+  }
+
+  const resolvedSourceNode = nodes.find((node) => node.id === resolvedSource.nodeId);
+  return (
+    resolvedSourceNode?.type === 'invocation' &&
+    resolvedSourceNode.data.type === 'for' &&
+    templates[resolvedSourceNode.data.type]?.outputs[resolvedSource.fieldName]?.outputScope === 'iteration'
+  );
 };
 
 const getConnectionFilterName = (connectionFilter: AddNodeConnectionFilter): string => {
@@ -263,7 +307,7 @@ const AddNodeDialogContent = ({
   onAddNote: () => void;
   onOpenChange: (isOpen: boolean) => void;
 }) => {
-  const { registerModalHotkeyLayer } = useWorkflowUi();
+  const { getProjectGraph, registerModalHotkeyLayer } = useWorkflowUi();
   const error = useInvocationTemplatesSelector((snapshot) => snapshot.error);
   const status = useInvocationTemplatesSelector((snapshot) => snapshot.status);
   const templates = useInvocationTemplatesSelector((snapshot) => snapshot.templates);
@@ -290,6 +334,13 @@ const AddNodeDialogContent = ({
 
   const groups = useMemo<CategoryGroup[]>(() => {
     const terms = searchTerm.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    const projectGraph = getProjectGraph();
+    const shouldPromoteForReturn = isForIterationOutputConnection(
+      connectionFilter,
+      projectGraph.nodes,
+      projectGraph.edges,
+      templates
+    );
     const utilityRows: NodeRow[] = [
       {
         description: 'Route a connection through a compact pass-through handle.',
@@ -360,14 +411,48 @@ const AddNodeDialogContent = ({
     const categoryGroups = [...byCategory.entries()]
       .map(([label, rows]) => ({
         label,
-        rows: rows.sort((a, b) => a.title.localeCompare(b.title, undefined, { sensitivity: 'base' })),
+        rows: rows.sort((a, b) => {
+          if (shouldPromoteForReturn) {
+            if (a.key === 'template:for_return' && b.key !== 'template:for_return') {
+              return -1;
+            }
+            if (a.key !== 'template:for_return' && b.key === 'template:for_return') {
+              return 1;
+            }
+          }
+
+          return a.title.localeCompare(b.title, undefined, { sensitivity: 'base' });
+        }),
       }))
-      .sort((a, b) => a.label.localeCompare(b.label));
+      .sort((a, b) => {
+        if (shouldPromoteForReturn) {
+          const aHasForReturn = a.rows.some((row) => row.key === 'template:for_return');
+          const bHasForReturn = b.rows.some((row) => row.key === 'template:for_return');
+          if (aHasForReturn && !bHasForReturn) {
+            return -1;
+          }
+          if (!aHasForReturn && bHasForReturn) {
+            return 1;
+          }
+        }
+
+        return a.label.localeCompare(b.label);
+      });
 
     return utilityRows.length > 0
       ? [{ label: UTILITY_CATEGORY, rows: utilityRows }, ...categoryGroups]
       : categoryGroups;
-  }, [close, connectionFilter, onAddConnector, onAddCurrentImage, onAddNode, onAddNote, searchTerm, templates]);
+  }, [
+    close,
+    connectionFilter,
+    getProjectGraph,
+    onAddConnector,
+    onAddCurrentImage,
+    onAddNode,
+    onAddNote,
+    searchTerm,
+    templates,
+  ]);
 
   const totalCount = groups.reduce((sum, group) => sum + group.rows.length, 0);
   const isAllExpanded = groups.length > 0 && groups.every((group) => expandedCategories.has(group.label));

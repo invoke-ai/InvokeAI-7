@@ -14,6 +14,9 @@ import {
   createWorkflowId,
   getCompatibleInputTemplate,
   getCompatibleOutputTemplate,
+  LOOP_LINKAGE_FIELD,
+  resolveConnectorSource,
+  shouldAddForReturnLoopLinkage,
   parseWorkflowJson,
   serializeWorkflowJson,
 } from '@features/workflow/utility';
@@ -350,29 +353,66 @@ export const WorkflowDialogHost = () => {
       }
 
       if (addNodeConnection.kind === 'source') {
-        const targetInput = getCompatibleInputTemplate(template, addNodeConnection.sourceType);
+        const targetInput =
+          addNodeConnection.sourceHandle === LOOP_LINKAGE_FIELD && template.type === 'for_return'
+            ? template.inputs[LOOP_LINKAGE_FIELD]
+            : template.type === 'for_return'
+              ? template.inputs.output
+              : getCompatibleInputTemplate(template, addNodeConnection.sourceType);
 
         if (!targetInput) {
           editGraph({ node, type: 'addNode' });
           return;
         }
 
-        editGraph({
-          edge: {
+        const edge = {
+          id: createWorkflowId('edge'),
+          source: addNodeConnection.sourceNodeId,
+          sourceHandle: addNodeConnection.sourceHandle,
+          target: node.id,
+          targetHandle: targetInput.name,
+          type:
+            addNodeConnection.sourceHandle === LOOP_LINKAGE_FIELD && template.type === 'for_return'
+              ? ('loop_linkage' as const)
+              : ('default' as const),
+        };
+
+        const currentGraph = projectStore.getSnapshot().projectGraph;
+        const sourceNode = currentGraph.nodes.find((candidate) => candidate.id === addNodeConnection.sourceNodeId);
+        const resolvedSource =
+          sourceNode?.type === 'connector'
+            ? resolveConnectorSource(sourceNode.id, currentGraph.nodes, currentGraph.edges)
+            : sourceNode?.type === 'invocation'
+              ? { fieldName: addNodeConnection.sourceHandle, nodeId: sourceNode.id, type: null }
+              : null;
+        const resolvedSourceNode = currentGraph.nodes.find((candidate) => candidate.id === resolvedSource?.nodeId);
+        const shouldAddLoopLinkage = shouldAddForReturnLoopLinkage(
+          template.type,
+          resolvedSource,
+          resolvedSourceNode,
+          currentGraph.edges
+        );
+
+        const edges = [edge];
+        if (shouldAddLoopLinkage && resolvedSourceNode?.type === 'invocation') {
+          edges.push({
             id: createWorkflowId('edge'),
-            source: addNodeConnection.sourceNodeId,
-            sourceHandle: addNodeConnection.sourceHandle,
+            source: resolvedSourceNode.id,
+            sourceHandle: LOOP_LINKAGE_FIELD,
             target: node.id,
-            targetHandle: targetInput.name,
-            type: 'default',
-          },
-          node,
-          type: 'addNodeAndEdge',
-        });
+            targetHandle: LOOP_LINKAGE_FIELD,
+            type: 'loop_linkage',
+          });
+        }
+
+        editGraph({ edge: edges, node, type: 'addNodeAndEdge' });
         return;
       }
 
-      const sourceOutput = getCompatibleOutputTemplate(template, addNodeConnection.targetType);
+      const sourceOutput =
+        addNodeConnection.targetHandle === LOOP_LINKAGE_FIELD && template.type === 'for'
+          ? template.outputs[LOOP_LINKAGE_FIELD]
+          : getCompatibleOutputTemplate(template, addNodeConnection.targetType);
 
       if (!sourceOutput) {
         editGraph({ node, type: 'addNode' });
@@ -386,13 +426,16 @@ export const WorkflowDialogHost = () => {
           sourceHandle: sourceOutput.name,
           target: addNodeConnection.targetNodeId,
           targetHandle: addNodeConnection.targetHandle,
-          type: 'default',
+          type:
+            addNodeConnection.targetHandle === LOOP_LINKAGE_FIELD && template.type === 'for'
+              ? 'loop_linkage'
+              : 'default',
         },
         node,
         type: 'addNodeAndEdge',
       });
     },
-    [addNodeConnection, editGraph, getInsertPosition]
+    [addNodeConnection, editGraph, getInsertPosition, projectStore]
   );
 
   const addNote = useCallback(() => {

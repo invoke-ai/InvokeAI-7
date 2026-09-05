@@ -341,8 +341,13 @@ const parseInvocationSchema = (schema: JsonObject, schemas: JsonObject): Invocat
     outputs[name] = {
       description: typeof rawProperty.description === 'string' ? rawProperty.description : '',
       name,
+      outputScope:
+        rawProperty.output_scope === 'iteration' || rawProperty.output_scope === 'final'
+          ? rawProperty.output_scope
+          : undefined,
       title: typeof rawProperty.title === 'string' ? rawProperty.title : startCase(name),
       type: fieldType,
+      uiHidden: rawProperty.ui_hidden === true,
     };
   }
 

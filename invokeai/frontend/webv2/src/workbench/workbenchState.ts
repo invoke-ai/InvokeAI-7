@@ -628,6 +628,7 @@ const cloneGraph = (graph: GraphContract): GraphContract => ({
         edges: graph.backendGraph.edges.map((edge) => ({
           destination: { ...edge.destination },
           source: { ...edge.source },
+          ...(edge.type ? { type: edge.type } : {}),
         })),
         nodes: Object.fromEntries(Object.entries(graph.backendGraph.nodes).map(([id, node]) => [id, { ...node }])),
       }

@@ -13,6 +13,7 @@ import type { TFunction } from 'i18next';
 
 import { compileGeneratePreviewGraph, getGenerateNodeProvenance } from '@features/generation/preview';
 import { compileProjectGraph } from '@features/workflow/graph';
+import { ForLoopGraphValidationError } from '@features/workflow/utility';
 import { getDestinationLabel } from '@workbench/invocation';
 import { getProjectWidgetValues } from '@workbench/widgetState';
 
@@ -72,8 +73,20 @@ const buildWorkflowSource = (
     const graph = compileProjectGraph(project.projectGraph, templates.templates);
 
     return { ...EMPTY_SOURCE_BASE, graph, isLive: true, positionHints };
-  } catch {
-    return { ...EMPTY_SOURCE_BASE, graph: null, isLive: true, positionHints };
+  } catch (error) {
+    return {
+      ...EMPTY_SOURCE_BASE,
+      graph: null,
+      invalidReasons: [
+        error instanceof ForLoopGraphValidationError
+          ? error.reason
+          : error instanceof Error
+            ? error.message
+            : String(error),
+      ],
+      isLive: true,
+      positionHints,
+    };
   }
 };
 

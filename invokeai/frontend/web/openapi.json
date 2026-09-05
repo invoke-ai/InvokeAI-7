@@ -21467,6 +21467,294 @@
         "title": "CollectInvocationOutput",
         "type": "object"
       },
+      "CollectionCartesianInvocation": {
+        "category": "batch",
+        "class": "invocation",
+        "classification": "stable",
+        "description": "Emits every pair formed by one item from each collection, up to 100,000 pairs.",
+        "node_pack": "invokeai",
+        "properties": {
+          "id": {
+            "description": "The id of this instance of an invocation. Must be unique among all instances of invocations.",
+            "field_kind": "node_attribute",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_intermediate": {
+            "default": false,
+            "description": "Whether or not this is an intermediate invocation.",
+            "field_kind": "node_attribute",
+            "input": "direct",
+            "orig_required": true,
+            "title": "Is Intermediate",
+            "type": "boolean",
+            "ui_hidden": false,
+            "ui_type": "IsIntermediate"
+          },
+          "use_cache": {
+            "default": true,
+            "description": "Whether or not to use the cache",
+            "field_kind": "node_attribute",
+            "title": "Use Cache",
+            "type": "boolean"
+          },
+          "first": {
+            "default": [],
+            "description": "The first collection",
+            "field_kind": "input",
+            "input": "any",
+            "items": {},
+            "orig_default": [],
+            "orig_required": false,
+            "title": "First",
+            "type": "array",
+            "ui_type": "CollectionField"
+          },
+          "second": {
+            "default": [],
+            "description": "The second collection",
+            "field_kind": "input",
+            "input": "any",
+            "items": {},
+            "orig_default": [],
+            "orig_required": false,
+            "title": "Second",
+            "type": "array",
+            "ui_type": "CollectionField"
+          },
+          "type": {
+            "const": "collection_cartesian",
+            "default": "collection_cartesian",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": ["type", "id"],
+        "tags": ["collection", "cartesian", "product"],
+        "title": "Cartesian Product of Collections",
+        "type": "object",
+        "version": "1.0.0",
+        "output": {
+          "$ref": "#/components/schemas/CollectionCartesianInvocationOutput"
+        }
+      },
+      "CollectionCartesianInvocationOutput": {
+        "class": "output",
+        "properties": {
+          "collection": {
+            "description": "The Cartesian product pairs",
+            "field_kind": "output",
+            "items": {},
+            "title": "Collection",
+            "type": "array",
+            "ui_hidden": false,
+            "ui_type": "CollectionField"
+          },
+          "type": {
+            "const": "collection_cartesian_output",
+            "default": "collection_cartesian_output",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": ["output_meta", "collection", "type", "type"],
+        "title": "CollectionCartesianInvocationOutput",
+        "type": "object"
+      },
+      "CollectionConcatInvocation": {
+        "category": "batch",
+        "class": "invocation",
+        "classification": "stable",
+        "description": "Concatenates two collections in left-to-right order.",
+        "node_pack": "invokeai",
+        "properties": {
+          "id": {
+            "description": "The id of this instance of an invocation. Must be unique among all instances of invocations.",
+            "field_kind": "node_attribute",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_intermediate": {
+            "default": false,
+            "description": "Whether or not this is an intermediate invocation.",
+            "field_kind": "node_attribute",
+            "input": "direct",
+            "orig_required": true,
+            "title": "Is Intermediate",
+            "type": "boolean",
+            "ui_hidden": false,
+            "ui_type": "IsIntermediate"
+          },
+          "use_cache": {
+            "default": true,
+            "description": "Whether or not to use the cache",
+            "field_kind": "node_attribute",
+            "title": "Use Cache",
+            "type": "boolean"
+          },
+          "first": {
+            "default": [],
+            "description": "The first collection",
+            "field_kind": "input",
+            "input": "any",
+            "items": {},
+            "orig_default": [],
+            "orig_required": false,
+            "title": "First",
+            "type": "array",
+            "ui_type": "CollectionField"
+          },
+          "second": {
+            "default": [],
+            "description": "The second collection",
+            "field_kind": "input",
+            "input": "any",
+            "items": {},
+            "orig_default": [],
+            "orig_required": false,
+            "title": "Second",
+            "type": "array",
+            "ui_type": "CollectionField"
+          },
+          "type": {
+            "const": "collection_concat",
+            "default": "collection_concat",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": ["type", "id"],
+        "tags": ["collection", "concat", "sequential"],
+        "title": "Concatenate Collections",
+        "type": "object",
+        "version": "1.0.0",
+        "output": {
+          "$ref": "#/components/schemas/CollectionConcatInvocationOutput"
+        }
+      },
+      "CollectionConcatInvocationOutput": {
+        "class": "output",
+        "properties": {
+          "collection": {
+            "description": "The concatenated collection",
+            "field_kind": "output",
+            "items": {},
+            "title": "Collection",
+            "type": "array",
+            "ui_hidden": false,
+            "ui_type": "CollectionField"
+          },
+          "type": {
+            "const": "collection_concat_output",
+            "default": "collection_concat_output",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": ["output_meta", "collection", "type", "type"],
+        "title": "CollectionConcatInvocationOutput",
+        "type": "object"
+      },
+      "CollectionZipInvocation": {
+        "category": "batch",
+        "class": "invocation",
+        "classification": "stable",
+        "description": "Pairs items at matching positions from two equally sized collections.",
+        "node_pack": "invokeai",
+        "properties": {
+          "id": {
+            "description": "The id of this instance of an invocation. Must be unique among all instances of invocations.",
+            "field_kind": "node_attribute",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_intermediate": {
+            "default": false,
+            "description": "Whether or not this is an intermediate invocation.",
+            "field_kind": "node_attribute",
+            "input": "direct",
+            "orig_required": true,
+            "title": "Is Intermediate",
+            "type": "boolean",
+            "ui_hidden": false,
+            "ui_type": "IsIntermediate"
+          },
+          "use_cache": {
+            "default": true,
+            "description": "Whether or not to use the cache",
+            "field_kind": "node_attribute",
+            "title": "Use Cache",
+            "type": "boolean"
+          },
+          "first": {
+            "default": [],
+            "description": "The first collection",
+            "field_kind": "input",
+            "input": "any",
+            "items": {},
+            "orig_default": [],
+            "orig_required": false,
+            "title": "First",
+            "type": "array",
+            "ui_type": "CollectionField"
+          },
+          "second": {
+            "default": [],
+            "description": "The second collection",
+            "field_kind": "input",
+            "input": "any",
+            "items": {},
+            "orig_default": [],
+            "orig_required": false,
+            "title": "Second",
+            "type": "array",
+            "ui_type": "CollectionField"
+          },
+          "type": {
+            "const": "collection_zip",
+            "default": "collection_zip",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": ["type", "id"],
+        "tags": ["collection", "zip", "pair"],
+        "title": "Zip Collections",
+        "type": "object",
+        "version": "1.0.0",
+        "output": {
+          "$ref": "#/components/schemas/CollectionZipInvocationOutput"
+        }
+      },
+      "CollectionZipInvocationOutput": {
+        "class": "output",
+        "properties": {
+          "collection": {
+            "description": "The positional pairs",
+            "field_kind": "output",
+            "items": {},
+            "title": "Collection",
+            "type": "array",
+            "ui_hidden": false,
+            "ui_type": "CollectionField"
+          },
+          "type": {
+            "const": "collection_zip_output",
+            "default": "collection_zip_output",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": ["output_meta", "collection", "type", "type"],
+        "title": "CollectionZipInvocationOutput",
+        "type": "object"
+      },
       "ColorCollectionOutput": {
         "class": "output",
         "description": "Base class for nodes that output a collection of colors",
@@ -27898,6 +28186,13 @@
       },
       "Edge": {
         "properties": {
+          "type": {
+            "type": "string",
+            "enum": ["default", "loop_linkage"],
+            "title": "Type",
+            "description": "The kind of relationship represented by this edge",
+            "default": "default"
+          },
           "source": {
             "$ref": "#/components/schemas/EdgeConnection",
             "description": "The connection for the edge's from node and field"
@@ -35825,6 +36120,334 @@
         "title": "FluxVariantType",
         "description": "FLUX.1 model variants."
       },
+      "ForInvocation": {
+        "class": "invocation",
+        "classification": "stable",
+        "node_pack": "invokeai",
+        "properties": {
+          "id": {
+            "description": "The id of this instance of an invocation. Must be unique among all instances of invocations.",
+            "field_kind": "node_attribute",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_intermediate": {
+            "default": false,
+            "description": "Whether or not this is an intermediate invocation.",
+            "field_kind": "node_attribute",
+            "input": "direct",
+            "orig_required": true,
+            "title": "Is Intermediate",
+            "type": "boolean",
+            "ui_hidden": false,
+            "ui_type": "IsIntermediate"
+          },
+          "use_cache": {
+            "default": true,
+            "description": "Whether or not to use the cache",
+            "field_kind": "node_attribute",
+            "title": "Use Cache",
+            "type": "boolean"
+          },
+          "collection": {
+            "default": [],
+            "description": "The list of items to iterate over",
+            "field_kind": "input",
+            "input": "any",
+            "items": {},
+            "orig_default": [],
+            "orig_required": false,
+            "title": "Collection",
+            "type": "array",
+            "ui_type": "CollectionField"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LoopState"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Optional initial loop state",
+            "field_kind": "input",
+            "input": "any",
+            "orig_default": null,
+            "orig_required": false
+          },
+          "index": {
+            "default": -1,
+            "description": "The internal iteration index for a prepared For execution node",
+            "field_kind": "input",
+            "input": "direct",
+            "orig_default": -1,
+            "orig_required": false,
+            "title": "Index",
+            "type": "integer",
+            "ui_hidden": true
+          },
+          "type": {
+            "const": "for",
+            "default": "for",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": ["type", "id"],
+        "title": "ForInvocation",
+        "type": "object",
+        "version": "1.3.1",
+        "output": {
+          "$ref": "#/components/schemas/ForInvocationOutput"
+        }
+      },
+      "ForInvocationOutput": {
+        "class": "output",
+        "properties": {
+          "loop_linkage": {
+            "description": "The loop linkage to the matching ForReturn",
+            "field_kind": "output",
+            "title": "Loop Linkage",
+            "ui_hidden": false,
+            "ui_type": "AnyField"
+          },
+          "item": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The item for the current loop iteration, or None when the collection is empty",
+            "field_kind": "output",
+            "output_scope": "iteration",
+            "title": "Collection Item",
+            "ui_hidden": false,
+            "ui_type": "CollectionItemField"
+          },
+          "index": {
+            "description": "The index for the current loop iteration",
+            "field_kind": "output",
+            "output_scope": "iteration",
+            "title": "Index",
+            "type": "integer",
+            "ui_hidden": false
+          },
+          "total": {
+            "description": "The total number of items in the loop collection",
+            "field_kind": "output",
+            "output_scope": "iteration",
+            "title": "Total",
+            "type": "integer",
+            "ui_hidden": false
+          },
+          "state": {
+            "$ref": "#/components/schemas/LoopState",
+            "description": "The state for the current loop iteration",
+            "field_kind": "output",
+            "output_scope": "iteration",
+            "title": "State",
+            "ui_hidden": false
+          },
+          "output_collection": {
+            "description": "The collected loop body outputs",
+            "field_kind": "output",
+            "items": {},
+            "output_scope": "final",
+            "title": "Output Collection",
+            "type": "array",
+            "ui_hidden": false,
+            "ui_type": "CollectionField"
+          },
+          "final_state": {
+            "$ref": "#/components/schemas/LoopState",
+            "description": "The final loop state",
+            "field_kind": "output",
+            "output_scope": "final",
+            "title": "Final State",
+            "ui_hidden": false
+          },
+          "type": {
+            "const": "for_output",
+            "default": "for_output",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "output_meta",
+          "loop_linkage",
+          "item",
+          "index",
+          "total",
+          "state",
+          "output_collection",
+          "final_state",
+          "type",
+          "type"
+        ],
+        "title": "ForInvocationOutput",
+        "type": "object"
+      },
+      "ForReturnInvocation": {
+        "class": "invocation",
+        "classification": "stable",
+        "node_pack": "invokeai",
+        "properties": {
+          "id": {
+            "description": "The id of this instance of an invocation. Must be unique among all instances of invocations.",
+            "field_kind": "node_attribute",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_intermediate": {
+            "default": false,
+            "description": "Whether or not this is an intermediate invocation.",
+            "field_kind": "node_attribute",
+            "input": "direct",
+            "orig_required": true,
+            "title": "Is Intermediate",
+            "type": "boolean",
+            "ui_hidden": false,
+            "ui_type": "IsIntermediate"
+          },
+          "use_cache": {
+            "default": true,
+            "description": "Whether or not to use the cache",
+            "field_kind": "node_attribute",
+            "title": "Use Cache",
+            "type": "boolean"
+          },
+          "loop_linkage": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The loop linkage from the matching For",
+            "field_kind": "input",
+            "input": "connection",
+            "orig_default": null,
+            "orig_required": false,
+            "title": "Loop Linkage",
+            "ui_type": "AnyField"
+          },
+          "output": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The output item to append to the loop output collection",
+            "field_kind": "input",
+            "input": "any",
+            "orig_default": null,
+            "orig_required": false,
+            "title": "Output",
+            "ui_type": "CollectionItemField"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LoopState"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The state to pass to the next loop iteration",
+            "field_kind": "input",
+            "input": "any",
+            "orig_default": null,
+            "orig_required": false
+          },
+          "continue_condition": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": true,
+            "description": "Whether to schedule the next loop iteration; false finalizes the loop",
+            "field_kind": "input",
+            "input": "any",
+            "orig_default": true,
+            "orig_required": false,
+            "title": "Continue Condition"
+          },
+          "type": {
+            "const": "for_return",
+            "default": "for_return",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": ["type", "id"],
+        "title": "ForReturnInvocation",
+        "type": "object",
+        "version": "1.3.2",
+        "output": {
+          "$ref": "#/components/schemas/ForReturnInvocationOutput"
+        }
+      },
+      "ForReturnInvocationOutput": {
+        "class": "output",
+        "properties": {
+          "output": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The output item to append to the loop output collection",
+            "field_kind": "output",
+            "title": "Output",
+            "ui_hidden": true,
+            "ui_type": "CollectionItemField"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LoopState"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The state to pass to the next loop iteration",
+            "field_kind": "output",
+            "title": "State",
+            "ui_hidden": true
+          },
+          "type": {
+            "const": "for_return_output",
+            "default": "for_return_output",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": ["output_meta", "output", "state", "type", "type"],
+        "title": "ForReturnInvocationOutput",
+        "type": "object"
+      },
       "FoundModel": {
         "properties": {
           "path": {
@@ -37114,6 +37737,15 @@
                   "$ref": "#/components/schemas/CollectInvocation"
                 },
                 {
+                  "$ref": "#/components/schemas/CollectionCartesianInvocation"
+                },
+                {
+                  "$ref": "#/components/schemas/CollectionConcatInvocation"
+                },
+                {
+                  "$ref": "#/components/schemas/CollectionZipInvocation"
+                },
+                {
                   "$ref": "#/components/schemas/ColorCorrectInvocation"
                 },
                 {
@@ -37313,6 +37945,12 @@
                 },
                 {
                   "$ref": "#/components/schemas/FluxVaeEncodeInvocation"
+                },
+                {
+                  "$ref": "#/components/schemas/ForInvocation"
+                },
+                {
+                  "$ref": "#/components/schemas/ForReturnInvocation"
                 },
                 {
                   "$ref": "#/components/schemas/FreeUInvocation"
@@ -37828,6 +38466,18 @@
                   "$ref": "#/components/schemas/SpandrelImageToImageInvocation"
                 },
                 {
+                  "$ref": "#/components/schemas/StateEmptyInvocation"
+                },
+                {
+                  "$ref": "#/components/schemas/StateGetInvocation"
+                },
+                {
+                  "$ref": "#/components/schemas/StateMergeInvocation"
+                },
+                {
+                  "$ref": "#/components/schemas/StateSetInvocation"
+                },
+                {
                   "$ref": "#/components/schemas/StringBatchInvocation"
                 },
                 {
@@ -38062,6 +38712,15 @@
                   "$ref": "#/components/schemas/CollectInvocationOutput"
                 },
                 {
+                  "$ref": "#/components/schemas/CollectionCartesianInvocationOutput"
+                },
+                {
+                  "$ref": "#/components/schemas/CollectionConcatInvocationOutput"
+                },
+                {
+                  "$ref": "#/components/schemas/CollectionZipInvocationOutput"
+                },
+                {
                   "$ref": "#/components/schemas/ColorCollectionOutput"
                 },
                 {
@@ -38143,6 +38802,12 @@
                   "$ref": "#/components/schemas/FluxReduxOutput"
                 },
                 {
+                  "$ref": "#/components/schemas/ForInvocationOutput"
+                },
+                {
+                  "$ref": "#/components/schemas/ForReturnInvocationOutput"
+                },
+                {
                   "$ref": "#/components/schemas/Gemma2EncoderOutput"
                 },
                 {
@@ -38210,6 +38875,12 @@
                 },
                 {
                   "$ref": "#/components/schemas/LoRASelectorOutput"
+                },
+                {
+                  "$ref": "#/components/schemas/LoopStateOutput"
+                },
+                {
+                  "$ref": "#/components/schemas/LoopStateValueOutput"
                 },
                 {
                   "$ref": "#/components/schemas/MDControlListOutput"
@@ -38476,6 +39147,28 @@
             "type": "object",
             "title": "Source Prepared Mapping",
             "description": "The map of original graph nodes to prepared nodes"
+          },
+          "finalized_loop_contexts": {
+            "items": {
+              "prefixItems": [
+                {
+                  "type": "string"
+                },
+                {
+                  "items": {
+                    "type": "integer"
+                  },
+                  "type": "array"
+                }
+              ],
+              "type": "array",
+              "maxItems": 2,
+              "minItems": 2
+            },
+            "type": "array",
+            "uniqueItems": true,
+            "title": "Finalized Loop Contexts",
+            "description": "The finalized loop source and parent iteration contexts"
           },
           "prepared_iteration_paths": {
             "additionalProperties": {
@@ -46195,6 +46888,15 @@
                 "$ref": "#/components/schemas/CollectInvocation"
               },
               {
+                "$ref": "#/components/schemas/CollectionCartesianInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/CollectionConcatInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/CollectionZipInvocation"
+              },
+              {
                 "$ref": "#/components/schemas/ColorCorrectInvocation"
               },
               {
@@ -46394,6 +47096,12 @@
               },
               {
                 "$ref": "#/components/schemas/FluxVaeEncodeInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/ForInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/ForReturnInvocation"
               },
               {
                 "$ref": "#/components/schemas/FreeUInvocation"
@@ -46909,6 +47617,18 @@
                 "$ref": "#/components/schemas/SpandrelImageToImageInvocation"
               },
               {
+                "$ref": "#/components/schemas/StateEmptyInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/StateGetInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/StateMergeInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/StateSetInvocation"
+              },
+              {
                 "$ref": "#/components/schemas/StringBatchInvocation"
               },
               {
@@ -47100,6 +47820,15 @@
                 "$ref": "#/components/schemas/CollectInvocationOutput"
               },
               {
+                "$ref": "#/components/schemas/CollectionCartesianInvocationOutput"
+              },
+              {
+                "$ref": "#/components/schemas/CollectionConcatInvocationOutput"
+              },
+              {
+                "$ref": "#/components/schemas/CollectionZipInvocationOutput"
+              },
+              {
                 "$ref": "#/components/schemas/ColorCollectionOutput"
               },
               {
@@ -47181,6 +47910,12 @@
                 "$ref": "#/components/schemas/FluxReduxOutput"
               },
               {
+                "$ref": "#/components/schemas/ForInvocationOutput"
+              },
+              {
+                "$ref": "#/components/schemas/ForReturnInvocationOutput"
+              },
+              {
                 "$ref": "#/components/schemas/Gemma2EncoderOutput"
               },
               {
@@ -47248,6 +47983,12 @@
               },
               {
                 "$ref": "#/components/schemas/LoRASelectorOutput"
+              },
+              {
+                "$ref": "#/components/schemas/LoopStateOutput"
+              },
+              {
+                "$ref": "#/components/schemas/LoopStateValueOutput"
               },
               {
                 "$ref": "#/components/schemas/MDControlListOutput"
@@ -47606,6 +48347,15 @@
                 "$ref": "#/components/schemas/CollectInvocation"
               },
               {
+                "$ref": "#/components/schemas/CollectionCartesianInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/CollectionConcatInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/CollectionZipInvocation"
+              },
+              {
                 "$ref": "#/components/schemas/ColorCorrectInvocation"
               },
               {
@@ -47805,6 +48555,12 @@
               },
               {
                 "$ref": "#/components/schemas/FluxVaeEncodeInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/ForInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/ForReturnInvocation"
               },
               {
                 "$ref": "#/components/schemas/FreeUInvocation"
@@ -48320,6 +49076,18 @@
                 "$ref": "#/components/schemas/SpandrelImageToImageInvocation"
               },
               {
+                "$ref": "#/components/schemas/StateEmptyInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/StateGetInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/StateMergeInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/StateSetInvocation"
+              },
+              {
                 "$ref": "#/components/schemas/StringBatchInvocation"
               },
               {
@@ -48601,6 +49369,15 @@
           "collect": {
             "$ref": "#/components/schemas/CollectInvocationOutput"
           },
+          "collection_cartesian": {
+            "$ref": "#/components/schemas/CollectionCartesianInvocationOutput"
+          },
+          "collection_concat": {
+            "$ref": "#/components/schemas/CollectionConcatInvocationOutput"
+          },
+          "collection_zip": {
+            "$ref": "#/components/schemas/CollectionZipInvocationOutput"
+          },
           "color": {
             "$ref": "#/components/schemas/ColorOutput"
           },
@@ -48801,6 +49578,12 @@
           },
           "flux_vae_encode": {
             "$ref": "#/components/schemas/LatentsOutput"
+          },
+          "for": {
+            "$ref": "#/components/schemas/ForInvocationOutput"
+          },
+          "for_return": {
+            "$ref": "#/components/schemas/ForReturnInvocationOutput"
           },
           "freeu": {
             "$ref": "#/components/schemas/UNetOutput"
@@ -49315,6 +50098,18 @@
           "spandrel_image_to_image_autoscale": {
             "$ref": "#/components/schemas/ImageOutput"
           },
+          "state_empty": {
+            "$ref": "#/components/schemas/LoopStateOutput"
+          },
+          "state_get": {
+            "$ref": "#/components/schemas/LoopStateValueOutput"
+          },
+          "state_merge": {
+            "$ref": "#/components/schemas/LoopStateOutput"
+          },
+          "state_set": {
+            "$ref": "#/components/schemas/LoopStateOutput"
+          },
           "string": {
             "$ref": "#/components/schemas/StringOutput"
           },
@@ -49497,6 +50292,9 @@
           "cogview4_model_loader",
           "cogview4_text_encoder",
           "collect",
+          "collection_cartesian",
+          "collection_concat",
+          "collection_zip",
           "color",
           "color_correct",
           "color_map",
@@ -49564,6 +50362,8 @@
           "flux_text_encoder",
           "flux_vae_decode",
           "flux_vae_encode",
+          "for",
+          "for_return",
           "freeu",
           "gemini_image_generation",
           "gemma2_encoder_loader",
@@ -49735,6 +50535,10 @@
           "show_image",
           "spandrel_image_to_image",
           "spandrel_image_to_image_autoscale",
+          "state_empty",
+          "state_get",
+          "state_merge",
+          "state_set",
           "string",
           "string_batch",
           "string_collection",
@@ -49958,6 +50762,15 @@
                 "$ref": "#/components/schemas/CollectInvocation"
               },
               {
+                "$ref": "#/components/schemas/CollectionCartesianInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/CollectionConcatInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/CollectionZipInvocation"
+              },
+              {
                 "$ref": "#/components/schemas/ColorCorrectInvocation"
               },
               {
@@ -50157,6 +50970,12 @@
               },
               {
                 "$ref": "#/components/schemas/FluxVaeEncodeInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/ForInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/ForReturnInvocation"
               },
               {
                 "$ref": "#/components/schemas/FreeUInvocation"
@@ -50670,6 +51489,18 @@
               },
               {
                 "$ref": "#/components/schemas/SpandrelImageToImageInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/StateEmptyInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/StateGetInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/StateMergeInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/StateSetInvocation"
               },
               {
                 "$ref": "#/components/schemas/StringBatchInvocation"
@@ -51054,6 +51885,15 @@
                 "$ref": "#/components/schemas/CollectInvocation"
               },
               {
+                "$ref": "#/components/schemas/CollectionCartesianInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/CollectionConcatInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/CollectionZipInvocation"
+              },
+              {
                 "$ref": "#/components/schemas/ColorCorrectInvocation"
               },
               {
@@ -51253,6 +52093,12 @@
               },
               {
                 "$ref": "#/components/schemas/FluxVaeEncodeInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/ForInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/ForReturnInvocation"
               },
               {
                 "$ref": "#/components/schemas/FreeUInvocation"
@@ -51766,6 +52612,18 @@
               },
               {
                 "$ref": "#/components/schemas/SpandrelImageToImageInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/StateEmptyInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/StateGetInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/StateMergeInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/StateSetInvocation"
               },
               {
                 "$ref": "#/components/schemas/StringBatchInvocation"
@@ -59445,6 +60303,67 @@
         "required": ["success"],
         "title": "LogoutResponse",
         "description": "Response from logout."
+      },
+      "LoopState": {
+        "properties": {
+          "values": {
+            "additionalProperties": true,
+            "title": "Values",
+            "type": "object"
+          }
+        },
+        "title": "LoopState",
+        "type": "object"
+      },
+      "LoopStateOutput": {
+        "class": "output",
+        "properties": {
+          "state": {
+            "$ref": "#/components/schemas/LoopState",
+            "description": "The loop state",
+            "field_kind": "output",
+            "ui_hidden": false
+          },
+          "type": {
+            "const": "loop_state_output",
+            "default": "loop_state_output",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": ["output_meta", "state", "type", "type"],
+        "title": "LoopStateOutput",
+        "type": "object"
+      },
+      "LoopStateValueOutput": {
+        "class": "output",
+        "properties": {
+          "value": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The value read from the loop state, or the configured default when the key is missing",
+            "field_kind": "output",
+            "title": "Value",
+            "ui_hidden": false,
+            "ui_type": "AnyField"
+          },
+          "type": {
+            "const": "loop_state_value_output",
+            "default": "loop_state_value_output",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": ["output_meta", "value", "type", "type"],
+        "title": "LoopStateValueOutput",
+        "type": "object"
       },
       "LoraModelDefaultSettings": {
         "properties": {
@@ -77180,11 +78099,28 @@
               }
             ],
             "default": null
+          },
+          "output_scope": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OutputScope"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           }
         },
-        "required": ["field_kind", "ui_hidden", "ui_order", "ui_type"],
+        "required": ["field_kind", "ui_hidden", "ui_order", "ui_type", "output_scope"],
         "title": "OutputFieldJSONSchemaExtra",
         "type": "object"
+      },
+      "OutputScope": {
+        "description": "The execution scope for an output field.\n- `Iteration`: The field emits values for a loop body's current iteration.\n- `Final`: The field emits values after a loop boundary completes.",
+        "enum": ["iteration", "final"],
+        "title": "OutputScope",
+        "type": "string"
       },
       "PBRMapsInvocation": {
         "category": "controlnet_preprocessors",
@@ -88433,6 +89369,309 @@
         "required": ["description", "source", "name", "base", "type"],
         "title": "StarterModelWithoutDependencies"
       },
+      "StateEmptyInvocation": {
+        "category": "workflow",
+        "class": "invocation",
+        "classification": "stable",
+        "description": "Creates an empty loop state.",
+        "node_pack": "invokeai",
+        "properties": {
+          "id": {
+            "description": "The id of this instance of an invocation. Must be unique among all instances of invocations.",
+            "field_kind": "node_attribute",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_intermediate": {
+            "default": false,
+            "description": "Whether or not this is an intermediate invocation.",
+            "field_kind": "node_attribute",
+            "input": "direct",
+            "orig_required": true,
+            "title": "Is Intermediate",
+            "type": "boolean",
+            "ui_hidden": false,
+            "ui_type": "IsIntermediate"
+          },
+          "use_cache": {
+            "default": true,
+            "description": "Whether or not to use the cache",
+            "field_kind": "node_attribute",
+            "title": "Use Cache",
+            "type": "boolean"
+          },
+          "type": {
+            "const": "state_empty",
+            "default": "state_empty",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": ["type", "id"],
+        "tags": ["loop", "state"],
+        "title": "Empty Loop State",
+        "type": "object",
+        "version": "1.0.0",
+        "output": {
+          "$ref": "#/components/schemas/LoopStateOutput"
+        }
+      },
+      "StateGetInvocation": {
+        "category": "workflow",
+        "class": "invocation",
+        "classification": "stable",
+        "description": "Reads a value from loop state.",
+        "node_pack": "invokeai",
+        "properties": {
+          "id": {
+            "description": "The id of this instance of an invocation. Must be unique among all instances of invocations.",
+            "field_kind": "node_attribute",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_intermediate": {
+            "default": false,
+            "description": "Whether or not this is an intermediate invocation.",
+            "field_kind": "node_attribute",
+            "input": "direct",
+            "orig_required": true,
+            "title": "Is Intermediate",
+            "type": "boolean",
+            "ui_hidden": false,
+            "ui_type": "IsIntermediate"
+          },
+          "use_cache": {
+            "default": true,
+            "description": "Whether or not to use the cache",
+            "field_kind": "node_attribute",
+            "title": "Use Cache",
+            "type": "boolean"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LoopState"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The loop state to read",
+            "field_kind": "input",
+            "input": "any",
+            "orig_required": true
+          },
+          "key": {
+            "default": "",
+            "description": "The state key to read",
+            "field_kind": "input",
+            "input": "any",
+            "orig_default": "",
+            "orig_required": false,
+            "title": "Key",
+            "type": "string"
+          },
+          "default": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The value to return when the key is missing",
+            "input": "any",
+            "field_kind": "input",
+            "orig_required": false,
+            "orig_default": null,
+            "ui_type": "AnyField",
+            "title": "Default"
+          },
+          "type": {
+            "const": "state_get",
+            "default": "state_get",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": ["type", "id"],
+        "tags": ["loop", "state"],
+        "title": "Get Loop State Value",
+        "type": "object",
+        "version": "1.0.3",
+        "output": {
+          "$ref": "#/components/schemas/LoopStateValueOutput"
+        }
+      },
+      "StateMergeInvocation": {
+        "category": "workflow",
+        "class": "invocation",
+        "classification": "stable",
+        "description": "Returns loop state with multiple values merged.",
+        "node_pack": "invokeai",
+        "properties": {
+          "id": {
+            "description": "The id of this instance of an invocation. Must be unique among all instances of invocations.",
+            "field_kind": "node_attribute",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_intermediate": {
+            "default": false,
+            "description": "Whether or not this is an intermediate invocation.",
+            "field_kind": "node_attribute",
+            "input": "direct",
+            "orig_required": true,
+            "title": "Is Intermediate",
+            "type": "boolean",
+            "ui_hidden": false,
+            "ui_type": "IsIntermediate"
+          },
+          "use_cache": {
+            "default": true,
+            "description": "Whether or not to use the cache",
+            "field_kind": "node_attribute",
+            "title": "Use Cache",
+            "type": "boolean"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LoopState"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The loop state to update",
+            "field_kind": "input",
+            "input": "any",
+            "orig_default": null,
+            "orig_required": false
+          },
+          "values": {
+            "additionalProperties": true,
+            "default": {},
+            "description": "The values to merge into the loop state. Connect an output to this input.",
+            "field_kind": "input",
+            "input": "any",
+            "orig_default": {},
+            "orig_required": false,
+            "title": "Values",
+            "type": "object",
+            "ui_type": "AnyField"
+          },
+          "type": {
+            "const": "state_merge",
+            "default": "state_merge",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": ["type", "id"],
+        "tags": ["loop", "state"],
+        "title": "Merge Loop State Values",
+        "type": "object",
+        "version": "1.0.1",
+        "output": {
+          "$ref": "#/components/schemas/LoopStateOutput"
+        }
+      },
+      "StateSetInvocation": {
+        "category": "workflow",
+        "class": "invocation",
+        "classification": "stable",
+        "description": "Returns loop state with one value set.",
+        "node_pack": "invokeai",
+        "properties": {
+          "id": {
+            "description": "The id of this instance of an invocation. Must be unique among all instances of invocations.",
+            "field_kind": "node_attribute",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_intermediate": {
+            "default": false,
+            "description": "Whether or not this is an intermediate invocation.",
+            "field_kind": "node_attribute",
+            "input": "direct",
+            "orig_required": true,
+            "title": "Is Intermediate",
+            "type": "boolean",
+            "ui_hidden": false,
+            "ui_type": "IsIntermediate"
+          },
+          "use_cache": {
+            "default": true,
+            "description": "Whether or not to use the cache",
+            "field_kind": "node_attribute",
+            "title": "Use Cache",
+            "type": "boolean"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LoopState"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The loop state to update",
+            "field_kind": "input",
+            "input": "any",
+            "orig_default": null,
+            "orig_required": false
+          },
+          "key": {
+            "default": "",
+            "description": "The state key to set",
+            "field_kind": "input",
+            "input": "any",
+            "orig_default": "",
+            "orig_required": false,
+            "title": "Key",
+            "type": "string"
+          },
+          "value": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The value to set. Connect an output to this input.",
+            "field_kind": "input",
+            "input": "any",
+            "orig_default": null,
+            "orig_required": false,
+            "title": "Value",
+            "ui_type": "AnyField"
+          },
+          "type": {
+            "const": "state_set",
+            "default": "state_set",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": ["type", "id"],
+        "tags": ["loop", "state"],
+        "title": "Set Loop State Value",
+        "type": "object",
+        "version": "1.0.1",
+        "output": {
+          "$ref": "#/components/schemas/LoopStateOutput"
+        }
+      },
       "String2Output": {
         "class": "output",
         "description": "Base class for invocations that output two strings",
@@ -92385,7 +93624,7 @@
         "type": "object"
       },
       "UIType": {
-        "description": "Type hints for the UI for situations in which the field type is not enough to infer the correct UI type.\n\n- Model Fields\nThe most common node-author-facing use will be for model fields. Internally, there is no difference\nbetween SD-1, SD-2 and SDXL model fields - they all use the class `MainModelField`. To ensure the\nbase-model-specific UI is rendered, use e.g. `ui_type=UIType.SDXLMainModelField` to indicate that\nthe field is an SDXL main model field.\n\n- Any Field\nWe cannot infer the usage of `typing.Any` via schema parsing, so you *must* use `ui_type=UIType.Any` to\nindicate that the field accepts any type. Use with caution. This cannot be used on outputs.\n\n- Scheduler Field\nSpecial handling in the UI is needed for this field, which otherwise would be parsed as a plain enum field.\n\n- Internal Fields\nSimilar to the Any Field, the `collect` and `iterate` nodes make use of `typing.Any`. To facilitate\nhandling these types in the client, we use `UIType._Collection` and `UIType._CollectionItem`. These\nshould not be used by node authors.\n\n- DEPRECATED Fields\nThese types are deprecated and should not be used by node authors. A warning will be logged if one is\nused, and the type will be ignored. They are included here for backwards compatibility.",
+        "description": "Type hints for the UI for situations in which the field type is not enough to infer the correct UI type.\n\n- Model Fields\nThe most common node-author-facing use will be for model fields. Internally, there is no difference\nbetween SD-1, SD-2 and SDXL model fields - they all use the class `MainModelField`. To ensure the\nbase-model-specific UI is rendered, use e.g. `ui_type=UIType.SDXLMainModelField` to indicate that\nthe field is an SDXL main model field.\n\n- Any Field\nWe cannot infer the usage of `typing.Any` via schema parsing, so you *must* use `ui_type=UIType.Any` to\nindicate that the field accepts any type. Use with caution. On inputs, this renders as a connection-only field.\n\n- Scheduler Field\nSpecial handling in the UI is needed for this field, which otherwise would be parsed as a plain enum field.\n\n- Internal Fields\nSimilar to the Any Field, the `collect` and `iterate` nodes make use of `typing.Any`. To facilitate\nhandling these types in the client, we use `UIType._Collection` and `UIType._CollectionItem`. These\nshould not be used by node authors.\n\n- DEPRECATED Fields\nThese types are deprecated and should not be used by node authors. A warning will be logged if one is\nused, and the type will be ignored. They are included here for backwards compatibility.",
         "enum": [
           "SchedulerField",
           "AnyField",

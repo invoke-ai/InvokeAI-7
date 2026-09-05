@@ -132,6 +132,14 @@ def create_edge(from_id: str, from_field: str, to_id: str, to_field: str) -> Edg
     )
 
 
+def create_loop_linkage(from_id: str, to_id: str) -> Edge:
+    return Edge(
+        type="loop_linkage",
+        source=EdgeConnection(node_id=from_id, field="loop_linkage"),
+        destination=EdgeConnection(node_id=to_id, field="loop_linkage"),
+    )
+
+
 class TestEvent(EventBase):
     __test__ = False  # not a pytest test case
 

@@ -15,12 +15,14 @@ import type { Edge as FlowEdge, Node as FlowNode } from '@xyflow/react';
 import type { CSSProperties } from 'react';
 
 import { isExecutableInvocationType } from '@features/workflow/graph';
+import { LOOP_LINKAGE_STROKE } from '@features/workflow/ui/loopLinkage';
 import {
   CONNECTOR_INPUT_HANDLE,
   CONNECTOR_OUTPUT_HANDLE,
   createWorkflowGraphIndex,
   getFieldTypeColor,
   getFieldTypeLabel,
+  getEdgesWithLoopLinkageAliases,
   getResolvedWorkflowEdgesIndexed,
   getWorkflowSourceFieldType,
   getWorkflowTargetFieldType,
@@ -300,17 +302,19 @@ export const withNodeSelection = (nodes: WorkflowFlowNode[], selectedIds: Set<st
 
 /** xyflow edge component per the user's connection-style preference. */
 export type FlowEdgeType = 'default' | 'step';
+export type WorkflowFlowEdgeType = FlowEdgeType | 'loop_linkage';
 
 export interface WorkflowEdgeData extends Record<string, unknown> {
   fieldTypeLabel: string;
   pathType: FlowEdgeType;
+  isLoopLinkage?: boolean;
   stroke: string;
   strokeDasharray?: string;
   strokeWidth: number;
   tooltip: string;
 }
 
-export type WorkflowFlowEdge = FlowEdge<WorkflowEdgeData, FlowEdgeType>;
+export type WorkflowFlowEdge = FlowEdge<WorkflowEdgeData, WorkflowFlowEdgeType>;
 
 const UNKNOWN_EDGE_DATA = (pathType: FlowEdgeType): WorkflowEdgeData => ({
   fieldTypeLabel: 'Unknown',
@@ -344,6 +348,18 @@ export const getWorkflowEdgeData = (
   templates?: InvocationTemplates,
   index: WorkflowGraphIndex = createWorkflowGraphIndex(document.nodes, document.edges)
 ): WorkflowEdgeData => {
+  if (edge.type === 'loop_linkage') {
+    return {
+      fieldTypeLabel: 'Loop linkage',
+      isLoopLinkage: true,
+      pathType,
+      stroke: LOOP_LINKAGE_STROKE,
+      strokeDasharray: '6 4',
+      strokeWidth: 2,
+      tooltip: 'Loop linkage',
+    };
+  }
+
   const fieldType = getWorkflowEdgeFieldType(document, templates, edge, index);
 
   if (!fieldType) {
@@ -371,6 +387,7 @@ export const getWorkflowEdgeData = (
 
 const isSameEdgeData = (a: WorkflowEdgeData | undefined, b: WorkflowEdgeData): boolean =>
   a?.fieldTypeLabel === b.fieldTypeLabel &&
+  a.isLoopLinkage === b.isLoopLinkage &&
   a.pathType === b.pathType &&
   a.stroke === b.stroke &&
   a.strokeDasharray === b.strokeDasharray &&
@@ -388,9 +405,10 @@ export const toFlowEdges = (
 ): WorkflowFlowEdge[] => {
   const previousById = new Map(previousEdges.map((edge) => [edge.id, edge]));
 
-  return document.edges.map((edge) => {
+  return getEdgesWithLoopLinkageAliases(document.nodes, document.edges).map((edge) => {
     const previous = previousById.get(edge.id);
     const data = getWorkflowEdgeData(document, edge, edgeType, templates, index);
+    const flowType: WorkflowFlowEdgeType = edge.type === 'loop_linkage' ? 'loop_linkage' : edgeType;
     const isConnectedToSelectedNode = selectedNodeIds.has(edge.source) || selectedNodeIds.has(edge.target);
     const animated = isConnectedToSelectedNode && !reduceMotion ? true : undefined;
     const className = isConnectedToSelectedNode ? SELECTED_NODE_EDGE_CLASS : undefined;
@@ -399,7 +417,7 @@ export const toFlowEdges = (
 
     if (
       previous &&
-      previous.type === edgeType &&
+      previous.type === flowType &&
       previous.source === edge.source &&
       previous.sourceHandle === edge.sourceHandle &&
       previous.target === edge.target &&
@@ -424,7 +442,7 @@ export const toFlowEdges = (
       style,
       target: edge.target,
       targetHandle: edge.targetHandle,
-      type: edgeType,
+      type: flowType,
       zIndex,
     };
   });

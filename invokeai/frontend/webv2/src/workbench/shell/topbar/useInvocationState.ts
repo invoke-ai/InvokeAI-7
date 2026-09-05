@@ -12,6 +12,7 @@ import {
 } from '@features/generation/settings';
 import { ensureModelsLoaded, useModelsSelector } from '@features/models';
 import { useInvocationTemplatesSelector } from '@features/workflow/react';
+import { localizeForLoopValidationReason } from '@features/workflow/utility';
 import { useMountEffect } from '@platform/react/useMountEffect';
 import { submitActiveInvocation } from '@workbench/activeInvocationSubmission';
 import { useIsCanvasInvocationPreparing } from '@workbench/canvasInvocationPreparation';
@@ -111,9 +112,9 @@ export const useInvocationState = (): InvocationState => {
     () => [
       ...(isConnected ? [] : ['The backend is disconnected.']),
       ...(expansionReason === null ? [] : [expansionReason]),
-      ...resolvedRoute.validationReasons,
+      ...resolvedRoute.validationReasons.map((reason) => localizeForLoopValidationReason(reason, t)),
     ],
-    [expansionReason, isConnected, resolvedRoute.validationReasons]
+    [expansionReason, isConnected, resolvedRoute.validationReasons, t]
   );
   const isValid = isInvocationRouteValid(resolvedRoute) && isConnected && expansionReason === null;
 

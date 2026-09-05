@@ -346,6 +346,7 @@ describe('buildLayerWorkflowGraph', () => {
     expect(built.graph.edges).toContainEqual({
       destination: { field: 'image', node_id: built.outputNodeId },
       source: { field: 'result', node_id: 'processor' },
+      type: 'default',
     });
     expect(Object.values(built.graph.nodes).every((graphNode) => graphNode.is_intermediate === true)).toBe(true);
   });
@@ -374,10 +375,12 @@ describe('buildLayerWorkflowGraph', () => {
     expect(built.graph.edges).toContainEqual({
       destination: { field: 'image', node_id: 'layer-workflow-source' },
       source: { field: 'image', node_id: 'layer-workflow-source-1' },
+      type: 'default',
     });
     expect(built.graph.edges).toContainEqual({
       destination: { field: 'image', node_id: 'layer-workflow-output-1' },
       source: { field: 'image', node_id: 'layer-workflow-output' },
+      type: 'default',
     });
   });
 

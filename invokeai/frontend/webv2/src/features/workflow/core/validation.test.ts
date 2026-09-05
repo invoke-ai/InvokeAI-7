@@ -189,6 +189,36 @@ const templates: InvocationTemplates = {
   },
 };
 
+const loopTemplates: InvocationTemplates = {
+  ...templates,
+  for: {
+    ...templates.number,
+    outputs: {
+      loop_linkage: {
+        ...templates.number.outputs.value,
+        name: 'loop_linkage',
+        title: 'Loop linkage',
+        type: single('AnyField'),
+      },
+    },
+    type: 'for',
+  },
+  for_return: {
+    ...templates.number,
+    inputs: {
+      loop_linkage: {
+        ...templates.number.inputs.value,
+        input: 'connection',
+        name: 'loop_linkage',
+        title: 'Loop linkage',
+        type: single('AnyField'),
+      },
+    },
+    outputs: {},
+    type: 'for_return',
+  },
+};
+
 describe('getCompatibleInputTemplate', () => {
   it('returns the first visible connectable input by UI order', () => {
     const baseInput = templates.number.inputs.value;
@@ -526,6 +556,150 @@ describe('validateConnection', () => {
         templates
       )
     ).toMatch(/already has an input/);
+  });
+
+  it('rejects a For connection that would give one For two loop owners', () => {
+    const document = {
+      ...baseDocument,
+      nodes: [makeNode('for', 'for'), makeNode('return-1', 'for_return'), makeNode('return-2', 'for_return')],
+      edges: [
+        {
+          id: 'existing-linkage',
+          source: 'for',
+          sourceHandle: 'loop_linkage',
+          target: 'return-1',
+          targetHandle: 'loop_linkage',
+          type: 'loop_linkage' as const,
+        },
+      ],
+    };
+
+    expect(
+      validateConnection(
+        {
+          sourceHandle: 'loop_linkage',
+          sourceNodeId: 'for',
+          targetHandle: 'loop_linkage',
+          targetNodeId: 'return-2',
+        },
+        document,
+        loopTemplates
+      )
+    ).toMatch(/For loop linkage/);
+  });
+
+  it('rejects a direct linkage connection that would give one ForReturn two loop owners', () => {
+    const document = {
+      ...baseDocument,
+      nodes: [makeNode('for-1', 'for'), makeNode('for-2', 'for'), makeNode('return', 'for_return')],
+      edges: [
+        {
+          id: 'existing-linkage',
+          source: 'for-1',
+          sourceHandle: 'loop_linkage',
+          target: 'return',
+          targetHandle: 'loop_linkage',
+          type: 'loop_linkage' as const,
+        },
+      ],
+    };
+
+    expect(
+      validateConnection(
+        {
+          sourceHandle: 'loop_linkage',
+          sourceNodeId: 'for-2',
+          targetHandle: 'loop_linkage',
+          targetNodeId: 'return',
+        },
+        document,
+        loopTemplates
+      )
+    ).toMatch(/For loop linkage/);
+  });
+
+  it('rejects a For connection that would duplicate a connector loop alias', () => {
+    const document = {
+      ...baseDocument,
+      nodes: [
+        makeNode('for', 'for'),
+        makeNode('return', 'for_return'),
+        makeConnector('connector-1'),
+        makeConnector('connector-2'),
+      ],
+      edges: [
+        {
+          id: 'for-to-connector-1',
+          source: 'for',
+          sourceHandle: 'loop_linkage',
+          target: 'connector-1',
+          targetHandle: 'in',
+          type: 'default' as const,
+        },
+        {
+          id: 'connector-1-to-return',
+          source: 'connector-1',
+          sourceHandle: 'out',
+          target: 'return',
+          targetHandle: 'loop_linkage',
+          type: 'default' as const,
+        },
+      ],
+    };
+
+    expect(
+      validateConnection(
+        {
+          sourceHandle: 'loop_linkage',
+          sourceNodeId: 'for',
+          targetHandle: 'in',
+          targetNodeId: 'connector-2',
+        },
+        document,
+        loopTemplates
+      )
+    ).toMatch(/For loop linkage/);
+  });
+
+  it('rejects a loop-linked connector when it is reused for ordinary data', () => {
+    const document = {
+      ...baseDocument,
+      nodes: [makeNode('for', 'for'), makeConnector('connector'), makeNode('target', 'number')],
+      edges: [
+        {
+          id: 'for-to-connector',
+          source: 'for',
+          sourceHandle: 'loop_linkage',
+          target: 'connector',
+          targetHandle: 'in',
+          type: 'default' as const,
+        },
+      ],
+    };
+
+    expect(
+      validateConnection(
+        { sourceHandle: 'out', sourceNodeId: 'connector', targetHandle: 'value', targetNodeId: 'target' },
+        document,
+        loopTemplates
+      )
+    ).toMatch(/For loop linkage/);
+  });
+
+  it('allows wiring a connector to a ForReturn before its upstream For is attached', () => {
+    const document = {
+      ...baseDocument,
+      nodes: [makeConnector('connector'), makeNode('return', 'for_return')],
+      edges: [],
+    };
+
+    expect(
+      validateConnection(
+        { sourceHandle: 'out', sourceNodeId: 'connector', targetHandle: 'loop_linkage', targetNodeId: 'return' },
+        document,
+        loopTemplates
+      )
+    ).toBeNull();
   });
 
   it('rejects connector input sources incompatible with an existing downstream target', () => {

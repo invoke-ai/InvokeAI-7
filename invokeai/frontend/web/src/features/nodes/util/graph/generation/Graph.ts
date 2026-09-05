@@ -125,7 +125,9 @@ export class Graph {
       });
     }
 
-    Object.assign(node, changes);
+    // Keep the runtime mutation generic without asking TypeScript to expand the full
+    // generated invocation union for Object.assign's inferred intersection type.
+    Object.assign(node as object, changes as object);
 
     return node;
   }

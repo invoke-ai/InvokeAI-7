@@ -3,6 +3,7 @@ import type { ReactFlowInstance } from '@xyflow/react';
 import type { ReactNode } from 'react';
 
 import { Box, Dialog, Icon, Portal, Stack, Text } from '@chakra-ui/react';
+import { localizeForLoopValidationReason } from '@features/workflow/core/forLoops';
 import { useWorkflowGraphPreview } from '@features/workflow/ui/WorkflowUiContext';
 import { Button, JsonPreview, SegmentTabs, segmentTabsPanelId, segmentTabsTabId, toaster } from '@platform/ui';
 import { CheckIcon, ChevronUpIcon, CopyIcon, TriangleAlertIcon } from 'lucide-react';
@@ -89,6 +90,9 @@ export const GraphPreviewDialog = ({
   const flowInstanceRef = useRef<ReactFlowInstance | null>(null);
   const dialogRoute = graphPreview.getRoute(sourceId);
   const canInvoke = dialogRoute?.canInvoke === true;
+  const validationMessage = dialogRoute?.validationMessage
+    ? localizeForLoopValidationReason(dialogRoute.validationMessage, t)
+    : undefined;
   const hasInvalidReasons = source.invalidReasons.length > 0;
 
   const graph = source.graph;
@@ -232,7 +236,7 @@ export const GraphPreviewDialog = ({
               {hasInvalidReasons ? (
                 <InvalidBanner>
                   <Text>
-                    {t('graphPreview.invalidTitle')} {source.invalidReasons[0]}
+                    {t('graphPreview.invalidTitle')} {localizeForLoopValidationReason(source.invalidReasons[0], t)}
                   </Text>
                 </InvalidBanner>
               ) : null}
@@ -300,7 +304,7 @@ export const GraphPreviewDialog = ({
                     cursor={canInvoke ? undefined : 'not-allowed'}
                     opacity={canInvoke ? undefined : 0.6}
                     size="xs"
-                    title={dialogRoute.validationMessage}
+                    title={validationMessage}
                     onClick={invokeRoute}
                   >
                     {t('graphPreview.invokeRoute', { route: dialogRoute.label })}

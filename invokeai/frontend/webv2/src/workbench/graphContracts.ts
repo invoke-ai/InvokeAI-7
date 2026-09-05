@@ -12,6 +12,8 @@ export interface GraphEdgeContract {
   sourceField: string;
   targetNodeId: string;
   targetField: string;
+  /** Direct loop-control edges retain their semantic type through queue snapshots. */
+  type?: 'default' | 'loop_linkage';
 }
 
 export interface GraphContract {
@@ -31,6 +33,8 @@ export interface BackendInvocationContract {
 }
 
 export interface BackendGraphEdgeContract {
+  /** Direct loop-control edges are distinct from ordinary data-flow edges. */
+  type?: 'default' | 'loop_linkage';
   source: {
     node_id: string;
     field: string;
