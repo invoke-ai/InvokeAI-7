@@ -25,6 +25,7 @@ import {
 } from '@features/generation/ui/promptFields/promptTriggerOptions';
 import { SystemPromptsField } from '@features/generation/ui/promptFields/SystemPromptsField';
 import { useSystemPrompts } from '@features/generation/ui/promptFields/useSystemPrompts';
+import { createUuid } from '@platform/browser/randomUuid';
 import { useMountEffect } from '@platform/react/useMountEffect';
 import { getApiErrorMessage } from '@platform/transport/http';
 import { Button, IconButton, PopoverContent, Scrollable, Tooltip } from '@platform/ui';
@@ -435,7 +436,7 @@ const ExpandPromptButton = ({
       return;
     }
 
-    const nextTaskId = crypto.randomUUID();
+    const nextTaskId = createUuid();
     setTaskId(nextTaskId);
     setIsLoading(true);
 
@@ -608,7 +609,7 @@ const ImageToPromptButton = ({
       return;
     }
 
-    const nextTaskId = crypto.randomUUID();
+    const nextTaskId = createUuid();
     setTaskId(nextTaskId);
     setIsLoading(true);
 

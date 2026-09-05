@@ -32,6 +32,7 @@ import type { SocketHub } from '@platform/transport/socketHub';
 import { buildUtilityQueueItemOrigin } from '@features/queue/data/events';
 import { cancelQueueItems, getQueueItem } from '@features/queue/data/serverApi';
 import { enqueueUtility } from '@features/queue/data/submissionApi';
+import { createUuid } from '@platform/browser/randomUuid';
 import { ApiError } from '@platform/transport/http';
 
 /** The default time a utility graph may run before it is abandoned. */
@@ -133,7 +134,7 @@ export interface RunUtilityGraphOptions {
   timeoutMs?: number;
   /** Cancels the await and best-effort cancels accepted backend items. */
   signal?: AbortSignal;
-  /** Injectable id source (defaults to `crypto.randomUUID`). */
+  /** Injectable id source (defaults to `createUuid`). */
   createId?: () => string;
   /** Injectable completed-item reconciliation seam. */
   reconcileCompletedOutput?: UtilityCompletedOutputReconciler;
@@ -232,7 +233,7 @@ export const runUtilityGraph = (options: RunUtilityGraphOptions): Promise<Utilit
     : DEFAULT_UTILITY_RECONCILE_RETRY_POLICY.delayMs;
   let origin: string;
   try {
-    const utilityId = (options.createId ?? (() => crypto.randomUUID()))();
+    const utilityId = (options.createId ?? createUuid)();
     origin = buildUtilityQueueItemOrigin(utilityId);
   } catch (cause) {
     const detail = cause instanceof Error ? cause.message : String(cause);

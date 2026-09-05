@@ -1,3 +1,4 @@
+import { createUuid } from '@platform/browser/randomUuid';
 import { acquireExclusiveLock, type ExclusiveLockResult } from '@platform/browser/webLocks';
 
 export const EDITOR_SESSION_STORAGE_KEY = 'invokeai:v7:webv2:editor-session';
@@ -18,7 +19,7 @@ type AcquireLock = (name: string) => Promise<ExclusiveLockResult>;
 export const createEditorSessionProvider = (
   storage: SessionStoragePort,
   acquireLock: AcquireLock = acquireExclusiveLock,
-  createId: () => string = () => crypto.randomUUID()
+  createId: () => string = createUuid
 ): (() => Promise<EditorSession>) => {
   let sessionPromise: Promise<EditorSession> | null = null;
   let currentSession: EditorSession | null = null;

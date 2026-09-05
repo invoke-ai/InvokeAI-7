@@ -1,6 +1,7 @@
 import type { HydratedWorkbenchSnapshot } from '@workbench/persistenceContracts';
 import type { Project, ProjectLoadResult, RefusedWorkbenchProject, WorkbenchState } from '@workbench/projectContracts';
 
+import { createUuid } from '@platform/browser/randomUuid';
 import { assertAccountScopeCurrent, type AccountScope } from '@platform/state/accountLifecycle';
 import {
   getProjectCanvasSchemaRequirement,
@@ -459,7 +460,7 @@ export const createDurableSyncedWorkbenchPersistence = (
       journal.close();
     }
   };
-  const writerToken = dependencies.writerToken ?? crypto.randomUUID();
+  const writerToken = dependencies.writerToken ?? createUuid();
   const saveAsNew = dependencies.saveDraftAsNew ?? saveDraftAsNew;
   const deleteDatabase = dependencies.deleteDatabase ?? deleteWorkbenchDatabase;
   const databaseDeleteTimeoutMs = dependencies.databaseDeleteTimeoutMs ?? 5_000;
@@ -644,8 +645,7 @@ export const createDurableSyncedWorkbenchPersistence = (
 
   const isolateUnopenableDraft = (projectId: string, editorSessionId: string): string => {
     const preferred = `${editorSessionId}:writer:${writerToken}`;
-    const isolated =
-      draftEditorSessionIds.get(projectId) === preferred ? `${preferred}:${crypto.randomUUID()}` : preferred;
+    const isolated = draftEditorSessionIds.get(projectId) === preferred ? `${preferred}:${createUuid()}` : preferred;
     draftEditorSessionIds.set(projectId, isolated);
     return isolated;
   };

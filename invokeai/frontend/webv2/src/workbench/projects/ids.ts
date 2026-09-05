@@ -1,4 +1,6 @@
-export const createProjectId = (): string => `project-${globalThis.crypto.randomUUID()}`;
+import { createUuid } from '@platform/browser/randomUuid';
+
+export const createProjectId = (): string => `project-${createUuid()}`;
 
 export const createDeterministicProjectId = async (scope: string): Promise<string> => {
   const digest = new Uint8Array(await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(scope)));
