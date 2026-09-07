@@ -1292,7 +1292,13 @@ def test_graph_for_rematerialized_body_carries_returned_state():
     assert for_1.state == LoopState(values={"count": 1})
 
 
-def test_graph_for_iteration_does_not_deep_copy_collection_twice():
+def test_graph_for_iteration_does_not_copy_collection_per_iteration():
+    """Scheduling an iteration hands the collection to the next For node instead of copying it.
+
+    Copying it per iteration made loop scheduling quadratic in the item count, so the only per-iteration deep copy
+    left is the single item handed to the loop body.
+    """
+
     class DeepCopyCounter:
         copies = 0
 
@@ -1300,25 +1306,68 @@ def test_graph_for_iteration_does_not_deep_copy_collection_twice():
             type(self).copies += 1
             return self
 
-    item = DeepCopyCounter()
+    items = [DeepCopyCounter() for _ in range(4)]
     graph = Graph()
-    graph.add_node(ForInvocation(id="for", collection=[item, "last"]))
+    graph.add_node(ForInvocation(id="for", collection=list(items)))
     graph.add_node(ForReturnInvocation(id="return"))
     graph.add_edge(create_edge("for", "item", "return", "output"))
 
     state = GraphExecutionState(graph=add_test_loop_linkages(graph))
-    for_0 = state.next()
-    assert isinstance(for_0, ForInvocation)
+    node = state.next()
+    assert isinstance(node, ForInvocation)
     DeepCopyCounter.copies = 0
-    state.complete(for_0.id, for_0.invoke(Mock(InvocationContext)))
-    return_0 = state.next()
-    assert isinstance(return_0, ForReturnInvocation)
-    state.complete(return_0.id, ForReturnInvocationOutput(output="first", state=LoopState()))
 
-    for_1 = state.next()
-    assert isinstance(for_1, ForInvocation)
-    assert for_1.collection[0] is item
-    assert DeepCopyCounter.copies == 2
+    scheduled_collections: list[list[Any]] = []
+    while node is not None:
+        if isinstance(node, ForInvocation):
+            scheduled_collections.append(list(node.collection))
+            state.complete(node.id, node.invoke(Mock(InvocationContext)))
+        elif isinstance(node, ForReturnInvocation):
+            state.complete(node.id, ForReturnInvocationOutput(output=node.output, state=LoopState()))
+        else:
+            state.complete(node.id, node.invoke(Mock(InvocationContext)))
+        node = state.next()
+
+    assert state.is_complete()
+    # Every iteration sees the same collection entries, without copying them.
+    assert len(scheduled_collections) == len(items)
+    assert all(collection == items for collection in scheduled_collections)
+    # One copy per iteration for the item handed to the body, not one per collection entry per iteration.
+    assert DeepCopyCounter.copies == len(items)
+
+
+def test_graph_for_scheduling_keeps_prepared_completion_counts_consistent():
+    """The incremental pending-prepared counts must agree with a full rescan at every scheduling step.
+
+    Source-node completion reads these counts instead of rescanning every prepared node the source has produced,
+    so a count that drifts would either strand a finished source or complete it early.
+    """
+    graph = Graph()
+    graph.add_node(ForInvocation(id="for", collection=["alpha", "beta", "charlie"]))
+    graph.add_node(AnyTypeTestInvocation(id="body"))
+    graph.add_node(ForReturnInvocation(id="return"))
+    graph.add_edge(create_edge("for", "item", "body", "value"))
+    graph.add_edge(create_edge("body", "value", "return", "output"))
+
+    state = GraphExecutionState(graph=add_test_loop_linkages(graph))
+
+    def assert_counts_match_rescan() -> None:
+        for source_node_id, prepared_ids in state.source_prepared_mapping.items():
+            expected = sum(1 for exec_node_id in prepared_ids if exec_node_id not in state.executed)
+            assert state._count_unexecuted_prepared(source_node_id) == expected, source_node_id
+
+    node = state.next()
+    while node is not None:
+        assert_counts_match_rescan()
+        if isinstance(node, ForReturnInvocation):
+            state.complete(node.id, ForReturnInvocationOutput(output=node.output, state=LoopState()))
+        else:
+            state.complete(node.id, node.invoke(Mock(InvocationContext)))
+        assert_counts_match_rescan()
+        node = state.next()
+
+    assert state.is_complete()
+    assert_counts_match_rescan()
 
 
 def test_graph_for_body_state_helper_updates_state_for_next_iteration_and_final_output():

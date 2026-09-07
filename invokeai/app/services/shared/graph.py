@@ -386,12 +386,10 @@ class _IfBranchScheduler:
 
         self._state._remove_from_ready_queues(exec_node_id)
         self._state._set_prepared_exec_state(exec_node_id, "skipped")
-        self._state.executed.add(exec_node_id)
+        self._state._mark_exec_node_executed(exec_node_id)
 
-        registry = self._state._prepared_registry()
-        source_node_id = registry.get_source_node_id(exec_node_id)
-        prepared_nodes = registry.get_prepared_ids(source_node_id)
-        if all(n in self._state.executed for n in prepared_nodes):
+        source_node_id = self._state._prepared_registry().get_source_node_id(exec_node_id)
+        if self._state._count_unexecuted_prepared(source_node_id) == 0:
             if source_node_id not in self._state.executed:
                 self._state._mark_source_executed(source_node_id)
 
@@ -597,7 +595,7 @@ class _ExecutionMaterializer:
             output_collection=[],
             final_state=initial_state,
         )
-        self._state.executed.add(new_node.id)
+        self._state._mark_exec_node_executed(new_node.id)
         self._state._set_prepared_exec_state(new_node.id, "executed")
 
         return new_node.id
@@ -623,13 +621,24 @@ class _ExecutionMaterializer:
         state: "LoopState",
         iteration_path: tuple[int, ...],
     ) -> str:
+        """Prepares the next For execution node.
+
+        Takes ownership of `collection`: the caller must not keep using the list it passes in. Only one prepared For
+        node holds the collection at a time, so the list moves from iteration to iteration instead of being copied.
+        Deep-copying it per iteration is what made scheduling a loop quadratic in its item count.
+
+        Every iteration therefore observes the same element objects, where each used to get its own deep copy.
+        Nothing may mutate a collection entry in place: loop bodies read the item through the edge machinery, which
+        hands out a `copydeep`, so they never see the live entry.
+        """
         node = self._state.graph.get_node(source_for_id)
         if not isinstance(node, ForInvocation):
             raise TypeError(f"Expected source ForInvocation, got {type(node).__name__}")
 
         new_node = self._create_execution_node_copy(node, source_for_id, iteration_index, deep_copy=False)
         assert isinstance(new_node, ForInvocation)
-        new_node.collection = copydeep(collection)
+        # Assigning through pydantic would re-validate the field and rebuild the list, making the move O(n) again.
+        object.__setattr__(new_node, COLLECTION_FIELD, collection)
         new_node.state = copydeep(state)
         self._state._prepared_registry().set_iteration_path(new_node.id, iteration_path)
         self._initialize_execution_node(new_node.id)
@@ -1376,6 +1385,7 @@ class _ExecutionMaterializer:
 
     def _mark_source_node_empty(self, source_node_id: str) -> None:
         self._state.source_prepared_mapping[source_node_id] = set()
+        self._state._reset_unexecuted_prepared(source_node_id)
         self._state._mark_source_executed(source_node_id)
 
     def _index_prepared_nodes_by_iteration_path(
@@ -1733,20 +1743,15 @@ class _ExecutionScheduler:
 
     def _record_completed_node(self, exec_node_id: str, output: BaseInvocationOutput) -> None:
         self._state._set_prepared_exec_state(exec_node_id, "executed")
-        self._state.executed.add(exec_node_id)
+        self._state._mark_exec_node_executed(exec_node_id)
         self._state.results[exec_node_id] = output
         node = self._state.execution_graph.nodes[exec_node_id]
         if isinstance(node, (IterateInvocation, CollectInvocation)):
             node.collection = []
 
     def _mark_source_node_complete(self, exec_node_id: str) -> None:
-        registry = self._state._prepared_registry()
-        source_node_id = registry.get_source_node_id(exec_node_id)
-        prepared_nodes = registry.get_prepared_ids(source_node_id)
-        if (
-            all(node_id in self._state.executed for node_id in prepared_nodes)
-            and source_node_id not in self._state.executed
-        ):
+        source_node_id = self._state._prepared_registry().get_source_node_id(exec_node_id)
+        if self._state._count_unexecuted_prepared(source_node_id) == 0 and source_node_id not in self._state.executed:
             self._state._mark_source_executed(source_node_id)
 
     def _get_for_parent(self, exec_node_id: str) -> Optional[str]:
@@ -1856,16 +1861,20 @@ class _ExecutionScheduler:
         next_state = self._get_loop_state_for_next_iteration(for_exec_node_id, output)
         parent_iteration_path = self._state._get_for_parent_iteration_path(for_exec_node_id)
 
+        # The completed iteration is done with the collection; hand the list itself to the next iteration rather
+        # than copying it, and drop this node's reference first so the two never alias.
+        collection = for_node.collection
+        for_node.collection = []
+
         next_for_id = self._state._materializer().create_for_iteration(
             source_for_id=source_for_id,
             iteration_index=next_index,
-            collection=for_node.collection,
+            collection=collection,
             state=next_state,
             iteration_path=(*parent_iteration_path, next_index),
         )
         self._state._discard_source_executed(source_for_id)
         self._state._materializer().create_for_body_iteration(source_for_id=source_for_id, prepared_for_id=next_for_id)
-        for_node.collection = []
         return None
 
     def _try_materialize_deferred_nested_for_body(self, exec_node_id: str) -> None:
@@ -3963,6 +3972,7 @@ class GraphExecutionState(BaseModel):
     _source_graph_flat: Any | None = PrivateAttr(default=None)
     _execution_graph_flat: Any | None = PrivateAttr(default=None)
     _completed_source_ids_cache: Optional[set[str]] = PrivateAttr(default=None)
+    _unexecuted_prepared_counts: Optional[dict[str, int]] = PrivateAttr(default=None)
     _for_source_by_return_id: Optional[dict[str, str]] = PrivateAttr(default=None)
 
     def _type_key(self, node_obj: BaseInvocation) -> str:
@@ -4012,6 +4022,40 @@ class GraphExecutionState(BaseModel):
         self._get_completed_source_ids_cache().add(source_node_id)
         if source_node_id not in self.executed_history:
             self.executed_history.append(source_node_id)
+
+    def _mark_exec_node_executed(self, exec_node_id: str) -> None:
+        """Marks a prepared execution node executed, keeping the per-source pending count in step.
+
+        Every write of a prepared node id into `executed` must go through here; the count is what lets source-node
+        completion be an O(1) lookup instead of a rescan of every prepared node the source has ever produced.
+        """
+        if exec_node_id in self.executed:
+            return
+        self.executed.add(exec_node_id)
+        counts = self._unexecuted_prepared_counts
+        if counts is None:
+            return
+        source_node_id = self.prepared_source_mapping.get(exec_node_id)
+        if source_node_id is None:
+            return
+        # A source whose prepared executions were dropped (an empty loop context) keeps its stale exec ids in the
+        # reverse mapping; those no longer belong to the source's pending set, so they must not decrement it.
+        if exec_node_id in self.source_prepared_mapping.get(source_node_id, ()):
+            counts[source_node_id] = max(counts.get(source_node_id, 1) - 1, 0)
+
+    def _reset_unexecuted_prepared(self, source_node_id: str) -> None:
+        """Clears the pending count for a source whose prepared executions were dropped."""
+        if self._unexecuted_prepared_counts is not None:
+            self._unexecuted_prepared_counts[source_node_id] = 0
+
+    def _count_unexecuted_prepared(self, source_node_id: str) -> int:
+        """Returns how many of `source_node_id`'s prepared execution nodes have not been executed or skipped."""
+        if self._unexecuted_prepared_counts is None:
+            self._unexecuted_prepared_counts = {
+                mapped_source_id: sum(1 for exec_node_id in prepared_ids if exec_node_id not in self.executed)
+                for mapped_source_id, prepared_ids in self.source_prepared_mapping.items()
+            }
+        return self._unexecuted_prepared_counts.get(source_node_id, 0)
 
     def _discard_source_executed(self, source_node_id: str) -> None:
         self.executed.discard(source_node_id)
@@ -4063,7 +4107,12 @@ class GraphExecutionState(BaseModel):
         return self._execution_runtime
 
     def _register_prepared_exec_node(self, exec_node_id: str, source_node_id: str) -> None:
+        is_new = exec_node_id not in self.source_prepared_mapping.get(source_node_id, ())
         self._prepared_registry().register(exec_node_id, source_node_id)
+        if is_new and self._unexecuted_prepared_counts is not None and exec_node_id not in self.executed:
+            self._unexecuted_prepared_counts[source_node_id] = (
+                self._unexecuted_prepared_counts.get(source_node_id, 0) + 1
+            )
         self.executed.discard(source_node_id)
         if self._completed_source_ids_cache is not None:
             self._completed_source_ids_cache.discard(source_node_id)
@@ -4269,6 +4318,7 @@ class GraphExecutionState(BaseModel):
         self._source_graph_flat = None
         self._execution_graph_flat = None
         self._completed_source_ids_cache = None
+        self._unexecuted_prepared_counts = None
         self._for_parent_iteration_paths_cache = {}
         self._all_for_contexts_finalized_cache = {}
         self._prepared_for_index = None
