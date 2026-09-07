@@ -1,13 +1,15 @@
 import type { CanvasControlLayerContract, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
 
+import { documentFrom, groupContract } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
+import { compileDocumentLeaves } from '@workbench/canvas-engine/document-model/documentModel';
 import { createTestStubRasterBackend, type StubRasterSurface } from '@workbench/canvas-engine/render/raster.testStub';
 import { describe, expect, it } from 'vitest';
 
 import {
-  bakeControlPixelEditSurface,
-  buildMaterializedControlLayer,
-  decideControlPixelEdit,
-  isLayerPixelEditEligible,
+  bakePixelEditSurface,
+  buildMaterializedPixelLayer,
+  decidePixelEdit,
+  isLeafPixelEditEligible,
 } from './controlPixelEdit';
 
 const control = (overrides: Partial<CanvasControlLayerContract> = {}): CanvasControlLayerContract => ({
@@ -26,7 +28,7 @@ const control = (overrides: Partial<CanvasControlLayerContract> = {}): CanvasCon
   ...overrides,
 });
 
-describe('decideControlPixelEdit', () => {
+describe('decidePixelEdit', () => {
   it.each([
     ['locked', control({ isLocked: true }), true, true, 'locked'],
     ['disabled', control({ isEnabled: false }), true, true, 'disabled'],
@@ -56,11 +58,11 @@ describe('decideControlPixelEdit', () => {
       'not-ready',
     ],
   ] as const)('rejects a %s control', (_scenario, layer, hasSourceContent, isCacheReady, reason) => {
-    expect(decideControlPixelEdit({ hasSourceContent, isCacheReady, layer })).toEqual({ reason, status: 'rejected' });
+    expect(decidePixelEdit({ hasSourceContent, isCacheReady, layer })).toEqual({ reason, status: 'rejected' });
   });
 
   it('edits an empty identity paint control directly', () => {
-    expect(decideControlPixelEdit({ hasSourceContent: false, isCacheReady: true, layer: control() })).toEqual({
+    expect(decidePixelEdit({ hasSourceContent: false, isCacheReady: true, layer: control() })).toEqual({
       status: 'direct',
     });
   });
@@ -69,13 +71,34 @@ describe('decideControlPixelEdit', () => {
     control({ source: { image: { height: 10, imageName: 'image', width: 10 }, type: 'image' } }),
     control({ transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 12, y: 8 } }),
   ])('materializes a ready non-direct control', (layer) => {
-    expect(decideControlPixelEdit({ hasSourceContent: true, isCacheReady: true, layer })).toEqual({
+    expect(decidePixelEdit({ hasSourceContent: true, isCacheReady: true, layer })).toEqual({
       status: 'materialize',
+    });
+  });
+
+  it('materializes a ready raster image and rejects a stale one', () => {
+    const layer: CanvasLayerContract = {
+      blendMode: 'normal',
+      id: 'image',
+      isEnabled: true,
+      isLocked: false,
+      name: 'Image',
+      opacity: 1,
+      source: { image: { height: 10, imageName: 'image', width: 10 }, type: 'image' },
+      transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 },
+      type: 'raster',
+    };
+    expect(decidePixelEdit({ hasSourceContent: true, isCacheReady: true, layer })).toEqual({
+      status: 'materialize',
+    });
+    expect(decidePixelEdit({ hasSourceContent: true, isCacheReady: false, layer })).toEqual({
+      reason: 'not-ready',
+      status: 'rejected',
     });
   });
 });
 
-describe('isLayerPixelEditEligible', () => {
+describe('isLeafPixelEditEligible', () => {
   const rasterPaint: CanvasLayerContract = {
     blendMode: 'normal',
     id: 'raster',
@@ -128,17 +151,24 @@ describe('isLayerPixelEditEligible', () => {
     ['disabled control', control({ isEnabled: false }), false],
     ['missing layer', undefined, false],
   ] as const)('returns %s eligibility for %s', (_scenario, layer, expected) => {
-    expect(isLayerPixelEditEligible(layer)).toBe(expected);
+    expect(isLeafPixelEditEligible(layer ? compileDocumentLeaves(documentFrom([layer]))[0] : null)).toBe(expected);
+  });
+
+  it('refuses a leaf whose ancestor is disabled or locked', () => {
+    const gated = compileDocumentLeaves(documentFrom([groupContract('g', [control()], { isEnabled: false })]));
+    expect(isLeafPixelEditEligible(gated[0])).toBe(false);
+    const locked = compileDocumentLeaves(documentFrom([groupContract('g', [control()], { isLocked: true })]));
+    expect(isLeafPixelEditEligible(locked[0])).toBe(false);
   });
 });
 
-describe('buildMaterializedControlLayer', () => {
-  it('changes only source and transform', () => {
+describe('buildMaterializedPixelLayer', () => {
+  it('changes only source and transform for a control layer', () => {
     const before = control({
       source: { image: { height: 10, imageName: 'image', width: 10 }, type: 'image' },
       transform: { rotation: Math.PI / 2, scaleX: 2, scaleY: 1, x: 30, y: 40 },
     });
-    const after = buildMaterializedControlLayer(before, { height: 20, width: 10, x: 20, y: 40 });
+    const after = buildMaterializedPixelLayer(before, { height: 20, width: 10, x: 20, y: 40 });
 
     expect(after).toEqual({
       ...before,
@@ -147,14 +177,47 @@ describe('buildMaterializedControlLayer', () => {
     });
     expect(before.source.type).toBe('image');
   });
+
+  it('clears raster adjustments after baking them into a paint source', () => {
+    const before: CanvasLayerContract = {
+      adjustments: [
+        { brightness: 0.2, contrast: -0.1, id: 'adj-bc', isEnabled: true, type: 'brightness-contrast' as const },
+        { id: 'adj-hsl', isEnabled: true, saturation: 0.3, type: 'hsl' as const },
+      ],
+      blendMode: 'normal',
+      id: 'image',
+      isEnabled: true,
+      isLocked: false,
+      name: 'Image',
+      opacity: 1,
+      source: { image: { height: 10, imageName: 'image', width: 10 }, type: 'image' },
+      transform: { rotation: 0, scaleX: 1.5, scaleY: 1, x: 3, y: 4 },
+      type: 'raster',
+    };
+
+    const after = buildMaterializedPixelLayer(before, { height: 10, width: 15, x: 3, y: 4 });
+
+    expect(after).toEqual({
+      blendMode: 'normal',
+      id: 'image',
+      isEnabled: true,
+      isLocked: false,
+      name: 'Image',
+      opacity: 1,
+      source: { bitmap: null, offset: { x: 3, y: 4 }, type: 'paint' },
+      transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 },
+      type: 'raster',
+    });
+    expect(before).toHaveProperty('adjustments');
+  });
 });
 
-describe('bakeControlPixelEditSurface', () => {
+describe('bakePixelEditSurface', () => {
   it('bakes offset source pixels through the complete translated, rotated, and scaled transform', () => {
     const backend = createTestStubRasterBackend();
     const source = backend.createSurface(10, 5);
     const sourceRect = { height: 5, width: 10, x: 5, y: -4 };
-    const baked = bakeControlPixelEditSurface({
+    const baked = bakePixelEditSurface({
       backend,
       source,
       sourceRect,
@@ -167,7 +230,7 @@ describe('bakeControlPixelEditSurface', () => {
     expect((baked.surface as StubRasterSurface).callLog).toEqual([
       { args: [1, 0, 0, 1, 0, 0], op: 'setTransform' },
       { args: [0, 0, 15, 20], op: 'clearRect' },
-      { args: ['imageSmoothingEnabled', true], op: 'set' },
+      { args: ['imageSmoothingEnabled', false], op: 'set' },
       {
         args: [2 * Math.cos(Math.PI / 2), 2, -3, 3 * Math.cos(Math.PI / 2), 3, -10],
         op: 'setTransform',

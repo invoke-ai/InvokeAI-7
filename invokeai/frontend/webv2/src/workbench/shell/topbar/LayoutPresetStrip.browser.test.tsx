@@ -143,7 +143,7 @@ describe('LayoutPresetStrip', () => {
   it('renders the account order without preset descriptions and still activates a clicked tab', async () => {
     await renderStrip();
 
-    expect(presetTabIds()).toEqual(['compose', 'custom-1', 'edit', 'automate']);
+    expect(presetTabIds()).toEqual(['compose', 'custom-1', 'edit', 'video', 'automate']);
     expect(presetTab('compose')).toHaveAttribute('aria-label', 'Writing');
     expect(document.body.textContent).not.toContain('Text to image');
 
@@ -179,7 +179,7 @@ describe('LayoutPresetStrip', () => {
     await act(() => mouse('mouseup', source!.ownerDocument, endX, startY));
     await act(() => nextFrame());
 
-    expect(store.getSnapshot().account.layoutPresetOrder).toEqual(['custom-1', 'edit', 'automate', 'compose']);
+    expect(store.getSnapshot().account.layoutPresetOrder).toEqual(['custom-1', 'edit', 'video', 'automate', 'compose']);
     expect(store.getSnapshot().activeProject.layout.presetId).toBe('compose');
   });
 
@@ -204,7 +204,7 @@ describe('LayoutPresetStrip', () => {
     await act(() => userEvent.keyboard('{ArrowRight}'));
     await act(() => userEvent.keyboard('{Space}'));
 
-    expect(store.getSnapshot().account.layoutPresetOrder).toEqual(['custom-1', 'compose', 'edit', 'automate']);
+    expect(store.getSnapshot().account.layoutPresetOrder).toEqual(['custom-1', 'compose', 'edit', 'video', 'automate']);
     expect(store.getSnapshot().activeProject.layout.presetId).toBe('compose');
     expect(store.getSnapshot().account.activeLayoutPresetId).toBe('compose');
 
@@ -322,7 +322,7 @@ describe('LayoutPresetStrip', () => {
     await act(() => touch('touchend', source!, source!, endX, startY));
 
     expect(source!.style.opacity).not.toBe('0.5');
-    expect(store.getSnapshot().account.layoutPresetOrder).toEqual(['custom-1', 'edit', 'automate', 'compose']);
+    expect(store.getSnapshot().account.layoutPresetOrder).toEqual(['custom-1', 'edit', 'video', 'automate', 'compose']);
   });
 
   it('leaves a short horizontal touch gesture to an overflowing scroll strip', async () => {

@@ -1,6 +1,7 @@
 /**
- * Generation's graph-compilation surface: generate/canvas graph compilers and
- * the graph-builder primitives shared with other invocation sources.
+ * Generation's eagerly shared graph surface: the generate compiler, Canvas
+ * validation policies, and graph-builder primitives used by other invocation
+ * sources. Canvas compilation lives in the lazy `canvasGraph` interface.
  * Curated, caller-driven export list — add a symbol only when a consumer needs it.
  */
 export {
@@ -17,7 +18,6 @@ export {
   toGraphContract,
   toModelIdentifier,
 } from './core/graphBuilder';
-export { compileCanvasGraph } from './core/canvas/compileCanvasGraph';
 export { detectCanvasMode } from './core/canvas/canvasMode';
 export {
   type ControlAdapterKind,
@@ -28,10 +28,9 @@ export {
 export { getControlLayerRejectionReason, getControlValidationReasonMessage } from './core/canvas/addControlLayers';
 export {
   getRegionalGuidanceRejectionReason,
+  getRegionalGuidanceSupport,
   isRegionalGuidanceSupportedForBase,
-  isRegionalNegativeSupportedForBase,
   type RegionalGuidanceInput,
   type RegionalReferenceImageInput,
 } from './core/canvas/addRegionalGuidance';
 export type { ControlLayerGraphInput } from './core/canvas/addControlLayers';
-export type { CanvasCompileMode } from './core/canvas/types';

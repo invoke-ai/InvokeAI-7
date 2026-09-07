@@ -151,12 +151,14 @@ export const getModelPickerGroups = (models: ModelConfig[], options: ModelPicker
   // Chips are derived from candidates — before the base filter — so the chip
   // row stays stable while the user toggles chips.
   const availableBases = collectBasesForDisplay(candidates);
-  const { baseFilter } = options;
+  // A remembered base that this picker does not offer (uninstalled, or a
+  // sibling picker's choice) must not filter everything out behind a hidden chip.
+  const baseFilter = new Set(availableBases.filter((base) => options.baseFilter?.has(base)));
   const { relatedKeys } = options;
   // Bases order the groups; within a group, related models lead, then category
   // rank keeps main models above LoRAs in a cross-type picker, then name.
   const visibleModels = candidates
-    .filter((model) => !baseFilter || baseFilter.size === 0 || baseFilter.has(String(model.base)))
+    .filter((model) => baseFilter.size === 0 || baseFilter.has(String(model.base)))
     .sort(
       (a, b) =>
         getBaseDisplayRank(String(a.base)) - getBaseDisplayRank(String(b.base)) ||

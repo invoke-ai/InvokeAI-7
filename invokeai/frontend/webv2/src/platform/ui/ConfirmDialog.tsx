@@ -70,7 +70,6 @@ export const ConfirmDialog = ({
       closeOnEscape={!isPending}
       closeOnInteractOutside={!isPending}
       open={isOpen}
-      placement="center"
       role="alertdialog"
       size="sm"
       onOpenChange={handleOpenChange}
@@ -78,14 +77,14 @@ export const ConfirmDialog = ({
       <Portal>
         <Dialog.Backdrop />
         <Dialog.Positioner>
-          <Dialog.Content bg="bg.subtle" borderColor="border.subtle" borderWidth="1px" color="fg">
+          <Dialog.Content>
             <Dialog.Header>
               <Dialog.Title>{title}</Dialog.Title>
             </Dialog.Header>
             <Dialog.Body>
               <Stack gap="2">{typeof body === 'string' ? <Text fontSize="xs">{body}</Text> : body}</Stack>
             </Dialog.Body>
-            <Dialog.Footer gap="2">
+            <Dialog.Footer>
               <Button disabled={isPending} size="xs" variant="ghost" onClick={handleClose}>
                 Cancel
               </Button>
@@ -101,7 +100,7 @@ export const ConfirmDialog = ({
               </Button>
             </Dialog.Footer>
             <Dialog.CloseTrigger asChild>
-              <CloseButton color="fg.muted" disabled={isPending} size="sm" />
+              <CloseButton disabled={isPending} />
             </Dialog.CloseTrigger>
           </Dialog.Content>
         </Dialog.Positioner>

@@ -95,6 +95,12 @@ export interface InvocationProgressEvent extends InvocationEventBase {
   /** Intermittent denoising preview, when the invocation produces one. */
   image?: { width: number; height: number; dataURL: string } | null;
   /**
+   * Monotonic per queue item, when the backend sends it: a frame at or below a
+   * revision already shown is stale and dropped. Absent from today's socket
+   * events, which arrive in order; the reconnect snapshot carries it.
+   */
+  revision?: number | null;
+  /**
    * The accelerator running this session, e.g. `cuda:1` or `xpu:1` — null on CPU/MPS and in
    * single-device mode. With `generation_devices` set (default `auto`) several
    * sessions run at once, one per accelerator, so progress must be attributable.

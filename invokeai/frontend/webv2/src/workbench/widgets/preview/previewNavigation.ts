@@ -20,7 +20,6 @@ import { getGalleryPlaceholderInsertionIndex, toGalleryItemKey } from '@features
 interface NavigableItem {
   kind: GalleryItemKind;
   name: string;
-  starred?: boolean;
 }
 
 export type PreviewNavigationItem<TItem extends NavigableItem> =
@@ -51,7 +50,7 @@ export const getPreviewNavigationSequence = <TItem extends NavigableItem>({
     return items;
   }
 
-  items.splice(getGalleryPlaceholderInsertionIndex(boardImages, imageOrderDir), 0, {
+  items.splice(getGalleryPlaceholderInsertionIndex(boardImages.length, imageOrderDir), 0, {
     kind: 'placeholder',
     placeholder: activePlaceholder,
   });

@@ -44,6 +44,20 @@ minimax_h3_int8_transformer = StarterModel(
     dependencies=[minimax_h3_components, minimax_h3_int8_text_encoder],
 )
 
+minimax_h3_ref2va_int8_transformer = StarterModel(
+    name="MiniMax H3 Ref2VA Transformer (int8, pruned)",
+    base=BaseModelType.MiniMaxH3,
+    source="Comfy-Org/MiniMax-H3::diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+    description="MiniMax H3 reference-conditioned video+audio generation: up to 3 video and 9 image "
+    "references. AdaLN-pruned int8 single-file transformer (~21 GB); select it in the MiniMax H3 "
+    "Model Loader's transformer field. Total size with dependencies: ~59 GB. NOTE: This model is "
+    "distributed under a restrictive license that forbids its use in certain territories. Please "
+    "see https://huggingface.co/MiniMaxAI/MiniMax-H3 for details.",
+    type=ModelType.Main,
+    format=ModelFormat.Checkpoint,
+    dependencies=[minimax_h3_components, minimax_h3_int8_text_encoder],
+)
+
 minimax_h3_turbo_lora = StarterModel(
     name="MiniMax H3 Turbo LoRA",
     base=BaseModelType.MiniMaxH3,
@@ -66,6 +80,17 @@ minimax_h3_lightx2v_turbo_lora = StarterModel(
     description="LightX2V step-distillation LoRA for MiniMax H3 (Apache 2.0), 8-step v1.0 (~2 GB): "
     "renders video+audio in ~8 denoising steps instead of ~50. Apply at strength 1.0 and lower "
     "Steps to 8. Works with the full and the pruned int8 transformers.",
+    type=ModelType.LoRA,
+    format=ModelFormat.LyCORIS,
+)
+
+minimax_h3_ref2v_turbo_lora = StarterModel(
+    name="MiniMax H3 Ref2V Turbo LoRA",
+    base=BaseModelType.MiniMaxH3,
+    source="Comfy-Org/MiniMax-H3::loras/minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors",
+    description="Step-distillation LoRA for the MiniMax H3 Ref2VA transformer (~2 GB): renders "
+    "reference-conditioned video+audio in ~4 denoising steps instead of ~50. Apply at strength 1.0 "
+    "and lower Steps to 4. Trained against the Ref2VA transformer; not intended for FL2VA.",
     type=ModelType.LoRA,
     format=ModelFormat.LyCORIS,
 )

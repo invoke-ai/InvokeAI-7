@@ -102,7 +102,15 @@ export const HomePage = () => {
       {canManageModels ? <LivePanel panel="models" /> : null}
       <LivePanel panel="queue" />
 
-      {isFirstLoad ? <Skeleton minH="24" rounded="lg" /> : mostRecent ? <ResumeCard summary={mostRecent} /> : null}
+      {isFirstLoad ? (
+        <Skeleton minH="24" rounded="lg" />
+      ) : mostRecent ? (
+        <ResumeCard
+          isPinned={pinnedIds.includes(mostRecent.id)}
+          summary={mostRecent}
+          onTogglePin={toggleProjectPinPreference}
+        />
+      ) : null}
 
       <Stack gap="3">
         <Text fontSize="xs" fontWeight="700">

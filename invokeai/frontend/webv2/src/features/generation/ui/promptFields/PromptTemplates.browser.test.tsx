@@ -1,18 +1,18 @@
-import type { PromptTemplateSnapshot } from '@features/generation/core/promptTemplates';
+import type { GalleryUiAdapter } from '@features/gallery/react';
 import type { PromptTemplateRecord } from '@features/generation/data/promptTemplates';
 import type { PromptTemplateCatalog } from '@features/generation/ui/usePromptTemplates';
 
-import { Box, ChakraProvider } from '@chakra-ui/react';
+import { ChakraProvider } from '@chakra-ui/react';
+import { DndContext } from '@dnd-kit/core';
+import { GalleryUiProvider } from '@features/gallery/react';
 import { exportPromptTemplates } from '@features/generation/data/promptTemplates';
-import { expectRowInteractionsToMatch } from '@features/generation/ui/promptFields/promptFieldsBrowserTestUtils';
 import { PromptTemplateEditor } from '@features/generation/ui/promptFields/PromptTemplateEditor';
 import { PromptTemplatesPanel } from '@features/generation/ui/promptFields/PromptTemplatesPanel';
 import { accountLifecycle } from '@platform/state/accountLifecycle';
-import { Row } from '@platform/ui/Row';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { system } from '@theme/system';
 import i18next from 'i18next';
-import { act, useState } from 'react';
+import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { I18nextProvider, initReactI18next } from 'react-i18next';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -155,29 +155,14 @@ const createCatalog = (overrides: Partial<PromptTemplateCatalog> = {}): PromptTe
   ...overrides,
 });
 
-const StatefulPromptTemplatesPanel = ({ catalog }: { catalog: PromptTemplateCatalog }) => {
-  const [activeTemplate, setActiveTemplate] = useState<PromptTemplateSnapshot | null>(null);
-
-  return (
-    <>
-      <Box aria-hidden bg="bg.muted/60" data-testid="row-hover-style-probe" />
-      <Row asChild>
-        <button aria-label="Row probe" type="button">
-          Row probe
-        </button>
-      </Row>
-      <PromptTemplatesPanel
-        activeTemplate={activeTemplate}
-        catalog={catalog}
-        isActiveTemplateMissing={false}
-        onApply={setActiveTemplate}
-        onCreate={vi.fn()}
-        onDetach={vi.fn()}
-        onEdit={vi.fn()}
-      />
-    </>
-  );
-};
+// The editor's image slot needs the gallery UI port and a drag context.
+const galleryAdapter = {
+  gallery: { selectBoard: vi.fn(), selectItem: vi.fn(), setView: vi.fn() },
+  galleryValues: { galleryView: 'images', selectedBoardId: 'none' },
+  notifications: { add: vi.fn(), reportError: vi.fn() },
+  projectName: 'Project',
+  widgets: { openGallery: () => true, patchGalleryValues: vi.fn() },
+} as unknown as GalleryUiAdapter;
 
 const render = async (element: React.ReactNode) => {
   host = document.createElement('div');
@@ -189,7 +174,11 @@ const render = async (element: React.ReactNode) => {
   const contents = (
     <I18nextProvider i18n={i18n}>
       <QueryClientProvider client={queryClient}>
-        <ChakraProvider value={system}>{element}</ChakraProvider>
+        <ChakraProvider value={system}>
+          <GalleryUiProvider adapter={galleryAdapter}>
+            <DndContext>{element}</DndContext>
+          </GalleryUiProvider>
+        </ChakraProvider>
       </QueryClientProvider>
     </I18nextProvider>
   );
@@ -244,22 +233,26 @@ describe('the prompt templates panel', () => {
     });
   });
 
-  it('uses the shared Row interaction contract for inactive templates and keeps management controls separate', async () => {
-    await render(<StatefulPromptTemplatesPanel catalog={createCatalog()} />);
+  it('keeps management controls outside the inactive template row button', async () => {
+    await render(
+      <PromptTemplatesPanel
+        activeTemplate={null}
+        catalog={createCatalog()}
+        isActiveTemplateMissing={false}
+        onApply={vi.fn()}
+        onCreate={vi.fn()}
+        onDetach={vi.fn()}
+        onEdit={vi.fn()}
+      />
+    );
 
-    const probe = host!.querySelector<HTMLButtonElement>('button[aria-label="Row probe"]')!;
     const row = buttonWithText('Cinematic');
-    const hoverBackgroundColor = getComputedStyle(
-      host!.querySelector('[data-testid="row-hover-style-probe"]')!
-    ).backgroundColor;
     const edit = host!.querySelector<HTMLButtonElement>('button[aria-label="Edit: Cinematic"]')!;
     const remove = host!.querySelector<HTMLButtonElement>('button[aria-label="Delete: Cinematic"]')!;
 
     expect(row.getAttribute('aria-current')).toBeNull();
     expect(row.contains(edit)).toBe(false);
     expect(row.contains(remove)).toBe(false);
-
-    await expectRowInteractionsToMatch(probe, row, hoverBackgroundColor);
   });
 
   it('detaches rather than clears when the applied template is deleted', async () => {

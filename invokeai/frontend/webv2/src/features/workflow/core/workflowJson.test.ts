@@ -175,6 +175,43 @@ describe('parseWorkflowJson tolerance', () => {
     ]);
   });
 
+  it('round-trips a direct loop_linkage edge without inferring it from handles', () => {
+    const { document, warnings } = parseWorkflowJson({
+      edges: [
+        {
+          id: 'link',
+          source: 'for',
+          sourceHandle: 'loop_linkage',
+          target: 'return',
+          targetHandle: 'loop_linkage',
+          type: 'loop_linkage',
+        },
+      ],
+      nodes: [
+        { data: { id: 'for', inputs: {}, type: 'for' }, id: 'for', position: { x: 0, y: 0 }, type: 'invocation' },
+        {
+          data: { id: 'return', inputs: {}, type: 'for_return' },
+          id: 'return',
+          position: { x: 0, y: 0 },
+          type: 'invocation',
+        },
+      ],
+    });
+
+    expect(warnings).toEqual([]);
+    expect(document.edges[0]?.type).toBe('loop_linkage');
+    expect(serializeWorkflowJson(document).edges).toEqual([
+      {
+        id: 'link',
+        source: 'for',
+        sourceHandle: 'loop_linkage',
+        target: 'return',
+        targetHandle: 'loop_linkage',
+        type: 'loop_linkage',
+      },
+    ]);
+  });
+
   it('drops dangling edges and unknown form elements with warnings', () => {
     const { document, warnings } = parseWorkflowJson({
       edges: [{ id: 'e1', source: 'missing', sourceHandle: 'out', target: 'n1', targetHandle: 'in', type: 'default' }],

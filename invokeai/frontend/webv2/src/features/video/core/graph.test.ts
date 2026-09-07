@@ -363,7 +363,9 @@ describe('compileVideoGraph — MiniMax H3', () => {
     const denoise = nodeOfType(backendGraph, 'minimax_h3_denoise');
 
     // The H3 canvas policy: 16:9 caps at 1344×768; frame counts are string literals.
-    expect(denoise).toMatchObject({ height: 768, num_frames: '124', steps: settings.steps, width: 1344 });
+    // The H3 denoise node counts sigma grid points, so the graph passes
+    // panel steps (model evaluations) + 1.
+    expect(denoise).toMatchObject({ height: 768, num_frames: '124', steps: settings.steps + 1, width: 1344 });
 
     const output = nodeOfType(backendGraph, 'minimax_h3_latents_to_video');
 
@@ -431,23 +433,232 @@ describe('compileVideoGraph — MiniMax H3', () => {
     expect(nodeOfType(backendGraph, 'core_metadata').generation_mode).toBe('minimax_h3_extend_video');
   });
 
-  it('passes the single-file overrides to the loader and the metadata', () => {
-    const transformer = { ...h3Model('h3-int8'), format: 'checkpoint' };
+  it('maps a single-file main onto the loader: component source as model, checkpoint as override', () => {
+    const checkpoint = { ...h3Model('h3-int8'), format: 'checkpoint' };
     const encoder = { base: 'minimax-h3', key: 'h3-te', name: 'H3 TE int8', type: 'qwen3_vl_encoder' as const };
-    const settings = settingsFor(model, { h3TextEncoderModel: encoder, h3TransformerModel: transformer });
-    const { backendGraph } = compileVideoGraph(settings, model);
+    const settings = settingsFor(checkpoint, { componentSourceModel: model, h3TextEncoderModel: encoder });
+    const { backendGraph } = compileVideoGraph(settings, checkpoint);
 
     expect(nodeOfType(backendGraph, 'minimax_h3_model_loader')).toMatchObject({
+      model: { key: model.key },
       text_encoder_model: { key: 'h3-te' },
       transformer_model: { key: 'h3-int8' },
     });
     expect(nodeOfType(backendGraph, 'core_metadata')).toMatchObject({
+      minimax_h3_component_source: { key: model.key },
       minimax_h3_text_encoder_model: { key: 'h3-te' },
-      minimax_h3_transformer_model: { key: 'h3-int8' },
+      model: { key: 'h3-int8' },
     });
+  });
+
+  it('a full Diffusers main is the loader model directly, with no overrides recorded', () => {
+    const { backendGraph } = compileVideoGraph(settingsFor(model), model);
+    const loader = nodeOfType(backendGraph, 'minimax_h3_model_loader');
+    const metadata = nodeOfType(backendGraph, 'core_metadata');
+
+    expect(loader).toMatchObject({ model: { key: model.key } });
+    expect(loader.transformer_model).toBeUndefined();
+    expect(metadata.minimax_h3_component_source).toBeUndefined();
   });
 
   it('refuses to compile fractional or off-grid frame counts', () => {
     expect(() => compileVideoGraph(settingsFor(model, { numFrames: 100 }), model)).toThrow(/17·n \+ 5/);
+  });
+});
+
+describe('compileVideoGraph — MiniMax H3 Ref2VA', () => {
+  const componentSource = h3Model();
+  const model: MainModelConfig = {
+    base: 'minimax-h3',
+    format: 'checkpoint',
+    key: 'h3-ref2va-ckpt',
+    name: 'MiniMax H3 Ref2VA Transformer (int8, pruned)',
+    type: 'main',
+    variant: 'ref2va',
+  };
+  const referenceSettings = settingsFor(model, {
+    componentSourceModel: componentSource,
+    references: [
+      {
+        clip: { endFrame: 47, fps: 24, height: 480, numFrames: 48, startFrame: 2, video_name: 'ref.mp4', width: 832 },
+        conditioning: 'video_audio',
+        kind: 'video',
+      },
+      { detail: 'match', image: { height: 512, image_name: 'ref.png', width: 512 }, kind: 'image' },
+    ],
+  });
+
+  it('builds the reference graph: ordered chained collect into conditioning AND prompt, no frame conditioning', () => {
+    const { backendGraph } = compileVideoGraph(referenceSettings, model);
+
+    const video = nodeOfType(backendGraph, 'minimax_h3_video_reference');
+    const image = nodeOfType(backendGraph, 'minimax_h3_image_reference');
+
+    expect(video.id).toBe('reference_1');
+    expect(video.conditioning).toBe('video_audio');
+    expect(video.start_frame).toBe(2);
+    // The end bound sits in the estimate's tail window, so it compiles as a negative
+    // index the backend resolves against the clip's REAL frame count (the panel's count
+    // is an estimate that can overshoot on VFR uploads) - same rule as the extend path.
+    expect(video.end_frame).toBe(-1);
+    expect(image.id).toBe('reference_2');
+    expect(image.detail).toBe('match');
+
+    // Order is contractual: chained collectors, each appending its item after the
+    // inherited collection.
+    expect(hasEdge(backendGraph, 'reference_1', 'reference', 'reference_collect_1', 'item')).toBe(true);
+    expect(hasEdge(backendGraph, 'reference_collect_1', 'collection', 'reference_collect_2', 'collection')).toBe(true);
+    expect(hasEdge(backendGraph, 'reference_2', 'reference', 'reference_collect_2', 'item')).toBe(true);
+
+    // The final collection fans out to BOTH consumers.
+    expect(hasEdge(backendGraph, 'reference_collect_2', 'collection', 'reference_conditioning', 'references')).toBe(
+      true
+    );
+    expect(hasEdge(backendGraph, 'reference_collect_2', 'collection', 'pos_cond', 'references')).toBe(true);
+    expect(
+      hasEdge(
+        backendGraph,
+        'reference_conditioning',
+        'reference_conditioning',
+        'denoise_latents',
+        'reference_conditioning'
+      )
+    ).toBe(true);
+    expect(hasEdge(backendGraph, 'model_loader', 'vae', 'reference_conditioning', 'vae')).toBe(true);
+    expect(hasEdge(backendGraph, 'model_loader', 'audio_vae', 'reference_conditioning', 'audio_vae')).toBe(true);
+
+    // num_frames rides on prompt + reference conditioning; frame conditioning is absent.
+    const posCond = nodeOfType(backendGraph, 'minimax_h3_text_encoder');
+    const referenceConditioning = nodeOfType(backendGraph, 'minimax_h3_reference_conditioning');
+
+    expect(posCond.num_frames).toBe(referenceSettings.numFrames);
+    expect(referenceConditioning.num_frames).toBe(referenceSettings.numFrames);
+    expect(nodesOfType(backendGraph, 'minimax_h3_frame_conditioning')).toHaveLength(0);
+
+    // Metadata records the mode and the ordered reference payload for recall.
+    const metadata = nodeOfType(backendGraph, 'core_metadata');
+
+    expect(metadata.generation_mode).toBe('minimax_h3_ref2v');
+    expect(metadata.minimax_h3_references).toEqual([
+      { conditioning: 'video_audio', end_frame: 47, kind: 'video', start_frame: 2, video_name: 'ref.mp4' },
+      { detail: 'match', image_name: 'ref.png', kind: 'image' },
+    ]);
+  });
+
+  it('refuses to compile references on an fl2va model', () => {
+    expect(() => compileVideoGraph({ ...referenceSettings, componentSourceModel: null }, componentSource)).toThrow(
+      /reference-conditioned/
+    );
+  });
+
+  it('refuses to compile a single-file main with no component source', () => {
+    expect(() => compileVideoGraph({ ...referenceSettings, componentSourceModel: null }, model)).toThrow(
+      /Model Components/
+    );
+  });
+
+  it('reference-extend: only the linked tail window is anchored to the clip end', () => {
+    const linked = (clip: Record<string, unknown>, flag = true) => ({
+      clip: { fps: 24, height: 480, numFrames: 402, video_name: 'long.mp4', width: 832, ...clip },
+      conditioning: 'video_audio' as const,
+      ...(flag ? { fromSourceVideo: true } : {}),
+      kind: 'video' as const,
+    });
+    const startOf = (reference: unknown) =>
+      nodeOfType(
+        compileVideoGraph({ ...referenceSettings, references: [reference] } as never, model).backendGraph,
+        'minimax_h3_video_reference'
+      ).start_frame;
+
+    // A user's own reference keeps an absolute start: their trim is a position,
+    // not a length, and re-anchoring it would drift with the estimate.
+    expect(startOf(linked({ endFrame: 400, startFrame: 260 }, false))).toBe(260);
+    // A start at or inside the estimate's slop stays ABSOLUTE: the relative
+    // form resolves to `startFrame + (real - estimate)`, and the backend
+    // rejects a negative index rather than clamping, so an estimate that
+    // overshoots by more than `startFrame` would fail the whole generation.
+    expect(startOf(linked({ endFrame: 400, startFrame: 0 }))).toBe(0);
+    expect(startOf(linked({ endFrame: 400, startFrame: 1 }))).toBe(1);
+    expect(startOf(linked({ endFrame: 400, startFrame: 3 }))).toBe(3);
+    // Clear of the slop, the window rides the negative anchor again.
+    expect(startOf(linked({ endFrame: 400, startFrame: 4 }))).toBe(-398);
+    // A cutpoint far enough from the end that BOTH bounds keep the estimate.
+    expect(startOf(linked({ endFrame: 300, startFrame: 160 }))).toBe(160);
+    // The tail case: end went negative, so the start follows it.
+    expect(startOf(linked({ endFrame: 400, startFrame: 260 }))).toBe(-142);
+  });
+
+  it('fl2va graphs are unchanged by the ref2va machinery', () => {
+    const { backendGraph } = compileVideoGraph(settingsFor(componentSource), componentSource);
+
+    expect(nodesOfType(backendGraph, 'minimax_h3_reference_conditioning')).toHaveLength(0);
+    expect(nodesOfType(backendGraph, 'collect')).toHaveLength(0);
+  });
+
+  it('reference-extend: appends the new clip to the initial video without frame conditioning', () => {
+    const initialVideo = {
+      endFrame: 400,
+      fps: 24,
+      height: 480,
+      numFrames: 402,
+      startFrame: 10,
+      video_name: 'long.mp4',
+      width: 832,
+    };
+    const settings = {
+      ...referenceSettings,
+      references: [
+        // The linked tail reference (as the setter derives it) plus a user reference.
+        {
+          clip: { ...initialVideo, endFrame: 400, startFrame: 260 },
+          conditioning: 'video_audio' as const,
+          fromSourceVideo: true,
+          kind: 'video' as const,
+        },
+        ...referenceSettings.references,
+      ],
+      sourceVideo: initialVideo,
+    };
+    const { backendGraph } = compileVideoGraph(settings, model);
+
+    // The new clip is intermediate; the crossfade concat is the output, fed
+    // [trimmed source, new clip]; the source is retimed to H3's fixed 24 fps.
+    expect(nodeOfType(backendGraph, 'minimax_h3_latents_to_video')).toMatchObject({
+      id: 'extension_clip',
+      is_intermediate: true,
+    });
+    expect(nodeOfType(backendGraph, 'video_concat')).toMatchObject({ id: 'video_output', transition: 'crossfade' });
+    expect(nodeOfType(backendGraph, 'extract_video_range')).toMatchObject({ end_frame: -2, fps: 24, start_frame: 10 });
+    expect(hasEdge(backendGraph, 'source_video', 'video', 'source_clip_collect', 'item')).toBe(true);
+    expect(hasEdge(backendGraph, 'extension_clip', 'video', 'clips_to_join', 'item')).toBe(true);
+
+    // Continuity comes from the references — no frame conditioning, no last-frame extraction.
+    expect(nodesOfType(backendGraph, 'minimax_h3_frame_conditioning')).toHaveLength(0);
+    expect(nodesOfType(backendGraph, 'video_frame_extract')).toHaveLength(0);
+
+    // The linked reference is an ordinary first reference; the flag never reaches metadata.
+    const videoReferences = nodesOfType(backendGraph, 'minimax_h3_video_reference');
+
+    // Both bounds ride the SAME negative anchor, so the extracted window keeps
+    // its exact length whatever the clip's real frame count turns out to be.
+    // A positive start would have made it `tail + (real - estimate)` frames,
+    // and the overrun is discarded at the seam.
+    expect(videoReferences[0]).toMatchObject({ end_frame: -2, id: 'reference_1', start_frame: -142 });
+    expect((videoReferences[0].end_frame as number) - (videoReferences[0].start_frame as number)).toBe(140);
+    const metadata = nodeOfType(backendGraph, 'core_metadata');
+
+    expect(metadata.generation_mode).toBe('minimax_h3_ref2v');
+    expect(metadata).toMatchObject({
+      source_video: { video_name: 'long.mp4' },
+      source_video_end_frame: 400,
+      source_video_start_frame: 10,
+    });
+    expect((metadata.minimax_h3_references as Record<string, unknown>[])[0]).toEqual({
+      conditioning: 'video_audio',
+      end_frame: 260 + 140,
+      kind: 'video',
+      start_frame: 260,
+      video_name: 'long.mp4',
+    });
   });
 });

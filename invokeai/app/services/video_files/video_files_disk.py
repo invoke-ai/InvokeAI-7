@@ -16,7 +16,7 @@ from invokeai.app.services.video_files.video_files_common import (
     VideoFileSaveException,
 )
 from invokeai.app.util.thumbnails import make_thumbnail
-from invokeai.app.util.video_thumbnails import extract_video_frame, get_video_thumbnail_name
+from invokeai.app.util.video_thumbnails import extract_representative_video_frame, get_video_thumbnail_name
 from invokeai.backend.util.logging import InvokeAILogger
 
 
@@ -52,6 +52,8 @@ class DiskVideoFileStorage(VideoFileStorageBase):
         graph: Optional[str] = None,
         first_frame: Optional[Image.Image] = None,
         move_source: bool = True,
+        duration: Optional[float] = None,
+        fps: Optional[float] = None,
     ) -> None:
         logger = InvokeAILogger.get_logger()
         try:
@@ -80,12 +82,13 @@ class DiskVideoFileStorage(VideoFileStorageBase):
             # Thumbnail extraction is best-effort — if both imageio and cv2 fail, we still want
             # the video record + file in place and the invocation to complete. A missing
             # thumbnail leaves the gallery with a broken-image placeholder for that item, which
-            # is annoying but not fatal. The upload path already decoded frame 0 to prove
-            # decodability and passes it in, saving a decode-worker subprocess per upload.
+            # is annoying but not fatal. The upload path already decoded a representative frame
+            # to prove decodability and passes it in, saving a decode-worker subprocess per
+            # upload; this fallback picks the same ~1s-in frame for generated/derived videos.
             frame = first_frame
             if frame is None:
                 try:
-                    frame = extract_video_frame(video_path, frame_index=0)
+                    frame = extract_representative_video_frame(video_path, duration, fps)
                 except Exception as e:
                     logger.warning(f"Thumbnail extraction raised for {video_name}: {e}")
                     frame = None

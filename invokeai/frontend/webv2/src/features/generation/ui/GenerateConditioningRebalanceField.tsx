@@ -272,7 +272,7 @@ export const GenerateConditioningRebalanceField = ({
                       </Menu.Item>
                       <Menu.Separator />
                       <Menu.Item
-                        color="fg.error"
+                        data-danger=""
                         disabled={!isCustomPreset}
                         value="delete"
                         onClick={() => activePreset && setPresetPendingDelete(activePreset)}

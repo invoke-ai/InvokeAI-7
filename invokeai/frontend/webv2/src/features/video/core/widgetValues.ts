@@ -9,13 +9,15 @@ import { isLoraCompatibleWithModel, isLoraModelConfig, SEED_MAX } from '@feature
 import type { VideoWidgetValues } from './types';
 
 import {
+  getAcceleratorLoraChangeResult,
   getDefaultVideoSettings,
   getVideoComponentSectionPolicy,
   getVideoModelAvailabilityReasons,
-  getVideoModelPolicy,
   getVideoModelSelectionResult,
+  getVideoModes,
   getVideoValidationReasons,
   isSupportedVideoModel,
+  isVideoModelSelectable,
   type VideoComponentPolicyContext,
   type VideoComponentValueKey,
 } from './videoPolicies';
@@ -27,8 +29,11 @@ import {
  * validation the invoke route consumes, and seed resolution at submit.
  */
 
+// Shared empty array, so clearing already-clear keys keeps its identity.
+const EMPTY_ACCELERATOR_LORA_KEYS: string[] = [];
+
 export const createDefaultVideoWidgetValues = (models: readonly ModelConfig[] = []): VideoWidgetValues => {
-  const model = (models.find((candidate) => isSupportedVideoModel(candidate)) as MainModelConfig | undefined) ?? null;
+  const model = (models.find((candidate) => isVideoModelSelectable(candidate)) as MainModelConfig | undefined) ?? null;
 
   return { ...getDefaultVideoSettings(model ?? undefined, models), model };
 };
@@ -42,12 +47,47 @@ export const syncVideoWidgetValuesWithModels = (
   values: VideoWidgetValues,
   models: readonly ModelConfig[]
 ): VideoWidgetValues => {
+  // Legacy stored shape (pre model-positions): an H3 Diffusers install at top
+  // with the single-file transformer in the override slot. The transformer is
+  // the model identity now — promote it to the top slot and keep the install
+  // as its component source. Runs before anything reads `values.model`, so
+  // the whole sync (and its write-back) sees the new shape.
+  //
+  // Only a transformer that resolves in the live catalog as an H3 checkpoint
+  // main is promoted: an uninstalled (or corrupt) override must not evict the
+  // still-installed Diffusers main from the top slot — leaving it in place
+  // keeps a runnable H3 panel, and the component pass below drops the dead
+  // override (no slot offers it any more).
+  if (values.model?.base === 'minimax-h3' && values.model.format === 'diffusers' && values.h3TransformerModel) {
+    const installedTransformer = models.find((candidate) => candidate.key === values.h3TransformerModel?.key);
+
+    if (
+      installedTransformer &&
+      installedTransformer.type === 'main' &&
+      installedTransformer.base === 'minimax-h3' &&
+      installedTransformer.format === 'checkpoint'
+    ) {
+      values = {
+        ...values,
+        componentSourceModel: values.model,
+        h3TransformerModel: null,
+        model: installedTransformer as MainModelConfig,
+        modelKey: installedTransformer.key,
+      };
+    }
+  }
+
   const modelsByKey = new Map(models.map((model) => [model.key, model]));
   const storedMain = values.model ? modelsByKey.get(values.model.key) : undefined;
+  // The stored main survives on the looser `isSupportedVideoModel` check: a
+  // legacy non-selectable shape (components-only install at top with no
+  // transformer to promote) keeps its slot and shows validation guidance
+  // instead of being silently swapped for another model. Auto-picks use the
+  // stricter selectable filter.
   const model: MainModelConfig | null =
     storedMain && isSupportedVideoModel(storedMain)
       ? storedMain
-      : ((models.find((candidate) => isSupportedVideoModel(candidate)) as MainModelConfig | undefined) ?? null);
+      : ((models.find((candidate) => isVideoModelSelectable(candidate)) as MainModelConfig | undefined) ?? null);
 
   // The main changed identity under us (nothing stored, or the stored model was
   // uninstalled and another family got auto-picked): run the canonical
@@ -92,33 +132,52 @@ export const syncVideoWidgetValuesWithModels = (
           : [];
       })
     : [];
-  // The accelerator flag cannot outlive its recorded LoRAs.
-  const acceleratorAlive =
-    base.acceleratorEnabled &&
-    base.acceleratorLoraKeys.length > 0 &&
-    base.acceleratorLoraKeys.every((key) => loras.some((lora) => lora.model.key === key && lora.isEnabled));
-  // Reuse the stored array whenever the content is unchanged — the identity
-  // guarantee below depends on it.
-  const acceleratorLoraKeys = acceleratorAlive || base.acceleratorLoraKeys.length === 0 ? base.acceleratorLoraKeys : [];
-  // Losing a pair member through the catalog (uninstalled, dropped as
-  // incompatible) tears the fast path down the same way the Concepts setter
-  // does: flag off AND the model's own sampling defaults restored. Clearing
-  // only the flag would leave steps 4 / CFG 1 with no distillation pair — a
-  // silent run that reads as a broken model.
-  const samplingDefaults =
-    base.acceleratorEnabled && !acceleratorAlive && model ? getVideoModelPolicy(model, base).defaults : null;
+  // Losing an accelerator LoRA through the catalog (uninstalled, dropped as
+  // incompatible) goes through the same reconcile the Concepts setter uses:
+  // another complete accelerator set still enabled in the list takes over,
+  // otherwise the flag goes off AND the model's own sampling defaults come
+  // back. Clearing only the flag would leave steps 4 / CFG 1 with no
+  // distillation LoRA — a silent run that reads as a broken model.
+  //
+  // The reconcile only ever repairs a fast path that is already on, so a sync
+  // running on every render cannot arm one behind the user's back.
+  //
+  // Reuse the stored values whenever nothing changed — the identity guarantee
+  // below depends on `acceleratorLoraKeys` keeping its array.
+  const unchangedAccelerator = {
+    acceleratorEnabled: base.acceleratorEnabled,
+    acceleratorLoraKeys: base.acceleratorLoraKeys,
+    cfgScale: base.cfgScale,
+    cfgScaleLowNoise: base.cfgScaleLowNoise,
+    steps: base.steps,
+  };
+  const acceleratorSync = model ? getAcceleratorLoraChangeResult(base, model, models, loras) : null;
+  let accelerator = unchangedAccelerator;
+
+  if (!model) {
+    // No video main at all: `loras` above is empty, so a surviving flag would
+    // name keys that are not in the list — a record `isVideoSettings` rejects
+    // on reload. There is no model to take sampling defaults from.
+    if (base.acceleratorEnabled || base.acceleratorLoraKeys.length > 0) {
+      accelerator = {
+        ...unchangedAccelerator,
+        acceleratorEnabled: false,
+        acceleratorLoraKeys: EMPTY_ACCELERATOR_LORA_KEYS,
+      };
+    }
+  } else if (acceleratorSync && acceleratorSync.outcome !== 'unchanged') {
+    accelerator = {
+      acceleratorEnabled: acceleratorSync.settings.acceleratorEnabled,
+      acceleratorLoraKeys: acceleratorSync.settings.acceleratorLoraKeys,
+      cfgScale: acceleratorSync.settings.cfgScale,
+      cfgScaleLowNoise: acceleratorSync.settings.cfgScaleLowNoise,
+      steps: acceleratorSync.settings.steps,
+    };
+  }
 
   const next: VideoWidgetValues = {
     ...base,
-    ...(samplingDefaults
-      ? {
-          cfgScale: samplingDefaults.cfgScale,
-          cfgScaleLowNoise: samplingDefaults.cfgScaleLowNoise,
-          steps: samplingDefaults.steps,
-        }
-      : {}),
-    acceleratorEnabled: acceleratorAlive,
-    acceleratorLoraKeys,
+    ...accelerator,
     componentSourceModel: syncComponent('componentSourceModel', base.componentSourceModel),
     h3TextEncoderModel: syncComponent('h3TextEncoderModel', base.h3TextEncoderModel),
     h3TransformerModel: syncComponent('h3TransformerModel', base.h3TransformerModel),
@@ -129,6 +188,13 @@ export const syncVideoWidgetValuesWithModels = (
     wanLowNoiseModel: syncComponent('wanLowNoiseModel', base.wanLowNoiseModel),
     wanT5EncoderModel: syncComponent('wanT5EncoderModel', base.wanT5EncoderModel),
   };
+
+  // The model decides the task: if the Ref2VA transformer was uninstalled and
+  // another model got auto-picked, the stored references are orphaned — the
+  // policy no longer has a reference mode — so drop them, identity-preserving.
+  if (next.references.length > 0 && model && !getVideoModes(model).includes('reference')) {
+    next.references = [];
+  }
 
   const isUnchanged =
     base === values &&
@@ -142,6 +208,7 @@ export const syncVideoWidgetValuesWithModels = (
     next.componentSourceModel === values.componentSourceModel &&
     next.h3TransformerModel === values.h3TransformerModel &&
     next.h3TextEncoderModel === values.h3TextEncoderModel &&
+    next.references === values.references &&
     next.loras.length === values.loras.length &&
     next.loras.every((lora, index) => lora.model === values.loras[index]?.model);
 

@@ -340,6 +340,38 @@ export const cloneReferenceImages = (
     config: cloneReferenceImageConfig(referenceImage.config),
   }));
 
+/**
+ * Moves one reference image a single step through the stack. Array order IS
+ * conditioning order — the graph builders chain `reference_images` in it — so
+ * this is the whole of what reordering means. Returns the same array identity
+ * when the move is a no-op (unknown id, or already at the end it is moving
+ * toward), so an updater built on it leaves the settings untouched and the
+ * committed patch comes out empty.
+ */
+export const moveReferenceImage = (
+  referenceImages: readonly GenerateReferenceImage[],
+  id: string,
+  direction: -1 | 1
+): readonly GenerateReferenceImage[] => {
+  const index = referenceImages.findIndex((referenceImage) => referenceImage.id === id);
+  const target = index + direction;
+
+  if (index === -1 || target < 0 || target >= referenceImages.length) {
+    return referenceImages;
+  }
+
+  const next = [...referenceImages];
+  const [entry] = next.splice(index, 1);
+
+  if (!entry) {
+    return referenceImages;
+  }
+
+  next.splice(target, 0, entry);
+
+  return next;
+};
+
 export const getDefaultLoraWeight = (model: LoraModelConfig): number => {
   const weight = model.default_settings?.weight;
 

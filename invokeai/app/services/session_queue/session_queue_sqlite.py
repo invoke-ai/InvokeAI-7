@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 import sqlite3
 import threading
@@ -21,7 +22,11 @@ from invokeai.app.services.session_queue.session_queue_common import (
     ClearResult,
     DeleteAllExceptCurrentResult,
     DeleteByDestinationResult,
+    EnqueueBatchReceipt,
     EnqueueBatchResult,
+    EnqueueIdempotencyConflictError,
+    EnqueueProjectNotFoundError,
+    EnqueueReceiptLimitError,
     IsEmptyResult,
     IsFullResult,
     ItemIdsResult,
@@ -37,6 +42,7 @@ from invokeai.app.services.session_queue.session_queue_common import (
     ValueToInsertTuple,
     calc_session_count,
     prepare_values_to_insert,
+    uuid_string,
 )
 from invokeai.app.services.shared.graph import GraphExecutionState
 from invokeai.app.services.shared.pagination import CursorPaginatedResults
@@ -47,6 +53,11 @@ from invokeai.app.services.shared.sqlite.sqlite_database import SqliteDatabase
 # 999 on builds older than 3.32 and 32766 on newer ones; staying under the lower figure (leaving
 # room for the other bind params in the statement) keeps the queries portable across both.
 SQLITE_MAX_BIND_PARAMS_PER_CHUNK = 900
+MAX_UNACKNOWLEDGED_ENQUEUE_RECEIPTS_PER_OWNER = 10_000
+MAX_UNACKNOWLEDGED_ENQUEUE_RECEIPT_BYTES_PER_OWNER = 64 * 1024 * 1024
+MAX_ENQUEUE_RECEIPTS_PER_OWNER = 100_000
+MAX_ENQUEUE_RECEIPT_BYTES_PER_OWNER = 128 * 1024 * 1024
+ACKNOWLEDGED_ENQUEUE_RECEIPT_RETENTION_DAYS = 7
 
 # Round-robin dequeue (multiuser fairness): pick the next pending item from the user who was
 # least-recently served.
@@ -275,48 +286,268 @@ class SqliteSessionQueue(SessionQueueBase):
         # event loop.
         return await asyncio.to_thread(self._enqueue_batch, queue_id, batch, prepend, user_id)
 
-    def _enqueue_batch(self, queue_id: str, batch: Batch, prepend: bool, user_id: str) -> EnqueueBatchResult:
-        current_queue_size = self._get_current_queue_size(queue_id)
-        max_queue_size = self.__invoker.services.configuration.max_queue_size
-        max_new_queue_items = max_queue_size - current_queue_size
+    def acknowledge_enqueue(self, queue_id: str, idempotency_key: str, user_id: str = "system") -> None:
+        with self._db.transaction() as cursor:
+            cursor.execute(
+                """--sql
+                UPDATE session_queue_enqueue_receipts
+                SET acknowledged_at = STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW')
+                WHERE queue_id = ? AND user_id = ? AND idempotency_key = ?
+                """,
+                (queue_id, user_id, idempotency_key),
+            )
 
-        priority = 0
-        if prepend:
-            priority = self._get_highest_priority(queue_id) + 1
+    def get_enqueue_receipt(
+        self, queue_id: str, idempotency_key: str, user_id: str = "system"
+    ) -> EnqueueBatchReceipt | None:
+        with self._db.transaction() as cursor:
+            cursor.execute(
+                """--sql
+                SELECT batch_id, requested, enqueued, item_ids
+                FROM session_queue_enqueue_receipts
+                WHERE queue_id = ? AND user_id = ? AND idempotency_key = ?
+                """,
+                (queue_id, user_id, idempotency_key),
+            )
+            receipt = cursor.fetchone()
+        return self._decode_enqueue_receipt(receipt) if receipt is not None else None
 
-        requested_count = calc_session_count(batch=batch)
-        values_to_insert = prepare_values_to_insert(
-            queue_id=queue_id,
-            batch=batch,
-            priority=priority,
-            max_new_queue_items=max_new_queue_items,
-            user_id=user_id,
+    @staticmethod
+    def _decode_enqueue_receipt(receipt: sqlite3.Row) -> EnqueueBatchReceipt:
+        item_ids = json.loads(receipt["item_ids"])
+        if not isinstance(item_ids, list) or not all(isinstance(item_id, int) for item_id in item_ids):
+            raise RuntimeError("Stored queue enqueue receipt contains invalid item ids")
+        return EnqueueBatchReceipt(
+            batch_id=receipt["batch_id"],
+            requested=receipt["requested"],
+            enqueued=receipt["enqueued"],
+            item_ids=item_ids,
         )
-        enqueued_count = len(values_to_insert)
+
+    def _enqueue_batch(self, queue_id: str, batch: Batch, prepend: bool, user_id: str) -> EnqueueBatchResult:
+        requested_count = calc_session_count(batch=batch)
+        payload_hash = (
+            hashlib.sha256(
+                json.dumps(
+                    {
+                        "batch": batch.model_dump(mode="json", exclude={"batch_id", "idempotency_key"}),
+                        "prepend": prepend,
+                    },
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ).encode("utf-8")
+            ).hexdigest()
+            if batch.idempotency_key is not None
+            else None
+        )
+
+        def get_receipt(cursor: sqlite3.Cursor) -> sqlite3.Row | None:
+            if batch.idempotency_key is None:
+                return None
+            cursor.execute(
+                """--sql
+                SELECT payload_hash, batch_id, requested, enqueued, priority, item_ids
+                FROM session_queue_enqueue_receipts
+                WHERE queue_id = ? AND user_id = ? AND idempotency_key = ?
+                """,
+                (queue_id, user_id, batch.idempotency_key),
+            )
+            return cast(sqlite3.Row | None, cursor.fetchone())
+
+        def settle_receipt(receipt: sqlite3.Row) -> EnqueueBatchResult:
+            if receipt["payload_hash"] != payload_hash:
+                raise EnqueueIdempotencyConflictError(
+                    f"Idempotency key {batch.idempotency_key} is already used by another submission"
+                )
+            result = self._decode_enqueue_receipt(receipt)
+            return EnqueueBatchResult(
+                queue_id=queue_id,
+                requested=result.requested,
+                enqueued=result.enqueued,
+                batch=batch.model_copy(update={"batch_id": result.batch_id}),
+                priority=receipt["priority"],
+                item_ids=result.item_ids,
+            )
+
+        def require_project(cursor: sqlite3.Cursor) -> None:
+            if batch.project_id is None:
+                return
+            cursor.execute(
+                "SELECT 1 FROM projects WHERE user_id = ? AND project_id = ?;",
+                (user_id, batch.project_id),
+            )
+            if cursor.fetchone() is None:
+                raise EnqueueProjectNotFoundError(batch.project_id)
 
         with self._db.transaction() as cursor:
+            if batch.idempotency_key is not None:
+                receipt = get_receipt(cursor)
+                if receipt is not None:
+                    return settle_receipt(receipt)
+            require_project(cursor)
+            cursor.execute(
+                "SELECT count(*) FROM session_queue WHERE queue_id = ? AND status = 'pending';",
+                (queue_id,),
+            )
+            preliminary_queue_size = cast(int, cursor.fetchone()[0])
+
+        max_queue_size = self.__invoker.services.configuration.max_queue_size
+        preliminary_capacity = max(0, max_queue_size - preliminary_queue_size)
+        prepared_values = prepare_values_to_insert(
+            queue_id=queue_id,
+            batch=batch,
+            priority=0,
+            max_new_queue_items=preliminary_capacity,
+            user_id=user_id,
+        )
+
+        with self._db.transaction() as cursor:
+            if batch.idempotency_key is not None:
+                cursor.execute(
+                    """--sql
+                    DELETE FROM session_queue_enqueue_receipts
+                    WHERE user_id = ?
+                      AND acknowledged_at IS NOT NULL
+                      AND acknowledged_at <= STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW', ?)
+                    """,
+                    (user_id, f"-{ACKNOWLEDGED_ENQUEUE_RECEIPT_RETENTION_DAYS} days"),
+                )
+                receipt = get_receipt(cursor)
+                if receipt is not None:
+                    return settle_receipt(receipt)
+
+            require_project(cursor)
+
+            cursor.execute(
+                """--sql
+                SELECT count(*) FROM session_queue WHERE queue_id = ? AND status = 'pending';
+                """,
+                (queue_id,),
+            )
+            current_queue_size = cast(int, cursor.fetchone()[0])
+            max_new_queue_items = max(0, max_queue_size - current_queue_size)
+            priority = 0
+            if prepend:
+                cursor.execute(
+                    "SELECT MAX(priority) FROM session_queue WHERE queue_id = ? AND status = 'pending';",
+                    (queue_id,),
+                )
+                priority = (cast(int | None, cursor.fetchone()[0]) or 0) + 1
+            values_to_insert = prepared_values[:max_new_queue_items]
+            if priority != 0:
+                values_to_insert = [(*value[:5], priority, *value[6:]) for value in values_to_insert]
+            enqueued_count = len(values_to_insert)
+            accepted_batch = batch
+            if enqueued_count > 0:
+                accepted_batch_id = batch.batch_id
+                while True:
+                    cursor.execute(
+                        """--sql
+                        SELECT 1 FROM session_queue
+                        WHERE queue_id = ? AND user_id = ? AND batch_id = ?
+                        LIMIT 1;
+                        """,
+                        (queue_id, user_id, accepted_batch_id),
+                    )
+                    if cursor.fetchone() is None:
+                        break
+                    accepted_batch_id = uuid_string()
+                if accepted_batch_id != batch.batch_id:
+                    accepted_batch = batch.model_copy(update={"batch_id": accepted_batch_id})
+                    values_to_insert = [(*value[:3], accepted_batch_id, *value[4:]) for value in values_to_insert]
+            receipt_bytes = 0
+            unacknowledged_bytes = 0
+            if batch.idempotency_key is not None and enqueued_count > 0:
+                cursor.execute(
+                    """--sql
+                    SELECT
+                        COUNT(*),
+                        COALESCE(SUM(byte_size), 0),
+                        COALESCE(SUM(CASE WHEN acknowledged_at IS NULL THEN 1 ELSE 0 END), 0),
+                        COALESCE(SUM(CASE WHEN acknowledged_at IS NULL THEN byte_size ELSE 0 END), 0)
+                    FROM session_queue_enqueue_receipts
+                    WHERE user_id = ?
+                    """,
+                    (user_id,),
+                )
+                receipt_count, receipt_bytes, unacknowledged_count, unacknowledged_bytes = cursor.fetchone()
+                if cast(int, receipt_count) >= MAX_ENQUEUE_RECEIPTS_PER_OWNER:
+                    raise EnqueueReceiptLimitError("Enqueue receipts exceed the count limit")
+                if cast(int, unacknowledged_count) >= MAX_UNACKNOWLEDGED_ENQUEUE_RECEIPTS_PER_OWNER:
+                    raise EnqueueReceiptLimitError("Too many unacknowledged enqueue requests")
+                if cast(int, receipt_bytes) >= MAX_ENQUEUE_RECEIPT_BYTES_PER_OWNER:
+                    raise EnqueueReceiptLimitError("Enqueue receipts exceed the storage limit")
+                if cast(int, unacknowledged_bytes) >= MAX_UNACKNOWLEDGED_ENQUEUE_RECEIPT_BYTES_PER_OWNER:
+                    raise EnqueueReceiptLimitError("Unacknowledged enqueue receipts exceed the storage limit")
             cursor.executemany(
                 """--sql
-                    INSERT INTO session_queue (queue_id, session, session_id, batch_id, field_values, priority, workflow, origin, destination, retried_from_item_id, user_id)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
+                INSERT INTO session_queue (queue_id, session, session_id, batch_id, field_values, priority, workflow, origin, destination, retried_from_item_id, user_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
                 values_to_insert,
             )
             cursor.execute(
                 """--sql
-                    SELECT item_id
-                    FROM session_queue
-                    WHERE batch_id = ?
-                    ORDER BY item_id ASC;
-                    """,
-                (batch.batch_id,),
+                SELECT item_id
+                FROM session_queue
+                WHERE queue_id = ? AND user_id = ? AND batch_id = ?
+                ORDER BY item_id ASC;
+                """,
+                (queue_id, user_id, accepted_batch.batch_id),
             )
             item_ids = [row[0] for row in cursor.fetchall()]
+            if batch.idempotency_key is not None and enqueued_count > 0:
+                item_ids_json = json.dumps(item_ids, separators=(",", ":"))
+                receipt_byte_size = len(
+                    json.dumps(
+                        [
+                            queue_id,
+                            user_id,
+                            batch.idempotency_key,
+                            payload_hash,
+                            accepted_batch.batch_id,
+                            requested_count,
+                            enqueued_count,
+                            priority,
+                            item_ids,
+                        ],
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ).encode("utf-8")
+                )
+                if (
+                    cast(int, unacknowledged_bytes) + receipt_byte_size
+                    > MAX_UNACKNOWLEDGED_ENQUEUE_RECEIPT_BYTES_PER_OWNER
+                ):
+                    raise EnqueueReceiptLimitError("Unacknowledged enqueue receipts exceed the storage limit")
+                if cast(int, receipt_bytes) + receipt_byte_size > MAX_ENQUEUE_RECEIPT_BYTES_PER_OWNER:
+                    raise EnqueueReceiptLimitError("Enqueue receipts exceed the storage limit")
+                cursor.execute(
+                    """--sql
+                    INSERT INTO session_queue_enqueue_receipts (
+                        queue_id, user_id, idempotency_key, payload_hash, batch_id,
+                        requested, enqueued, priority, item_ids, byte_size
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                    """,
+                    (
+                        queue_id,
+                        user_id,
+                        batch.idempotency_key,
+                        payload_hash,
+                        accepted_batch.batch_id,
+                        requested_count,
+                        enqueued_count,
+                        priority,
+                        item_ids_json,
+                        receipt_byte_size,
+                    ),
+                )
         enqueue_result = EnqueueBatchResult(
             queue_id=queue_id,
             requested=requested_count,
             enqueued=enqueued_count,
-            batch=batch,
+            batch=accepted_batch,
             priority=priority,
             item_ids=item_ids,
         )
@@ -1086,9 +1317,17 @@ class SqliteSessionQueue(SessionQueueBase):
         self._emit_queue_items_canceled(queue_id, deleted_item_ids_by_user)
         return DeleteAllExceptCurrentResult(deleted=count)
 
-    def cancel_by_queue_id(self, queue_id: str) -> CancelByQueueIDResult:
-        match_filter = "queue_id == ?"
+    def cancel_by_queue_id(
+        self, queue_id: str, user_id: Optional[str] = None, origin_prefix: Optional[str] = None
+    ) -> CancelByQueueIDResult:
+        user_filter = "AND user_id = ?" if user_id is not None else ""
+        origin_filter = "AND origin LIKE ?" if origin_prefix is not None else ""
+        match_filter = f"queue_id == ? {user_filter} {origin_filter}"
         params: list[Any] = [queue_id]
+        if user_id is not None:
+            params.append(user_id)
+        if origin_prefix is not None:
+            params.append(f"{origin_prefix}%")
 
         with self._db.transaction() as cursor:
             where = f"""--sql
@@ -1118,11 +1357,14 @@ class SqliteSessionQueue(SessionQueueBase):
         self._emit_queue_items_canceled(queue_id, canceled_item_ids_by_user)
         return CancelByQueueIDResult(canceled=count)
 
-    def cancel_all_except_current(self, queue_id: str, user_id: Optional[str] = None) -> CancelAllExceptCurrentResult:
+    def cancel_all_except_current(
+        self, queue_id: str, user_id: Optional[str] = None, origin_prefix: Optional[str] = None
+    ) -> CancelAllExceptCurrentResult:
         current_chain_item_ids = self._get_current_workflow_call_chain_item_ids(queue_id)
         with self._db.transaction() as cursor:
-            # Build WHERE clause with optional user_id filter
+            # Build WHERE clause with optional user_id and origin_prefix filters
             user_filter = "AND user_id = ?" if user_id is not None else ""
+            origin_filter = "AND origin LIKE ?" if origin_prefix is not None else ""
             current_chain_filter = ""
             if current_chain_item_ids:
                 placeholders = ", ".join(["?" for _ in current_chain_item_ids])
@@ -1132,11 +1374,14 @@ class SqliteSessionQueue(SessionQueueBase):
                   queue_id == ?
                   AND status IN ('pending', 'waiting')
                   {user_filter}
+                  {origin_filter}
                   {current_chain_filter}
                 """
-            params = [queue_id]
+            params: list[Any] = [queue_id]
             if user_id is not None:
                 params.append(user_id)
+            if origin_prefix is not None:
+                params.append(f"{origin_prefix}%")
             params.extend(current_chain_item_ids)
 
             canceled_item_ids_by_user = self._collect_item_ids_by_user(cursor, where, params)

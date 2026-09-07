@@ -1,3 +1,4 @@
+import type { SystemStyleObject } from '@chakra-ui/react';
 import type { QueueItem } from '@features/queue/contracts';
 import type { WidgetViewProps } from '@workbench/widgetContracts';
 
@@ -16,7 +17,9 @@ import {
   getGalleryCompareImage,
   getGalleryGenerationSequence,
   getGalleryLiveSlots,
+  getGalleryPage,
   getGallerySelectedImageQuery,
+  getGallerySemanticImageQuery,
   getGallerySettings,
   getSelectedGalleryItemFromValues,
   getBoundedRecentImages,
@@ -24,6 +27,7 @@ import {
   isGalleryImageItem,
   legacyGeneratedImageToGalleryItem,
   normalizeGalleryImage,
+  requestGalleryItemReveal,
   toGalleryItemKey,
   toGalleryItemRef,
   type GalleryQueuePlaceholder,
@@ -33,16 +37,18 @@ import { createGenerateFormValuesSelector } from '@features/generation/react';
 import { getDeterminateProgressPercent } from '@features/queue/contracts';
 import { useDeviceLabel } from '@features/queue/devices';
 import {
-  useActiveProgressTarget,
+  consumeQueueItemSwapProgressImage,
   useActiveProgressTargets,
+  useFollowedProgressTargets,
   useItemProgress,
-  useProgressImage,
+  useQueueItemBridgeProgressImage,
   useQueueItemProgressImage,
-  type LatestProgressImageSnapshot,
+  useQueueItemSwapProgressImage,
 } from '@features/queue/react';
 import {
   imageUrlToStreamingSource,
   progressImageToStreamingSource,
+  type StreamingImageSource,
 } from '@platform/ui/streaming-image/streamingImageSource';
 import { useStreamingImageSource } from '@platform/ui/streaming-image/useStreamingImageSource';
 import { useQuery } from '@tanstack/react-query';
@@ -53,6 +59,7 @@ import {
   type ImageActions,
   type ImageContextMenuTarget,
 } from '@workbench/image-actions';
+import { QueueProgressRail } from '@workbench/queue-integration/QueueProgressRail';
 import { getProjectWidgetValues } from '@workbench/widgetState';
 import {
   useActiveProjectId,
@@ -110,6 +117,7 @@ const fallbackBoards: GalleryBoard[] = [
   {
     archived: false,
     assetCount: 0,
+    assetVideoCount: 0,
     id: 'none',
     imageCount: 0,
     kind: 'uncategorized',
@@ -146,22 +154,6 @@ const getBoardName = (
 ): string =>
   boardId === 'none' ? uncategorizedLabel : (boards.find((board) => board.id === boardId)?.name ?? unknownBoardLabel);
 
-export const getMatchingProgressImage = (
-  progressImage: LatestProgressImageSnapshot | null,
-  placeholder: GalleryQueuePlaceholder | null
-): LatestProgressImageSnapshot | null => {
-  if (
-    !progressImage?.target ||
-    !placeholder ||
-    progressImage.target.queueItemId !== placeholder.queueItemId ||
-    progressImage.target.itemIndex !== placeholder.itemIndex
-  ) {
-    return null;
-  }
-
-  return progressImage;
-};
-
 const selectGenerateRecallValues = createGenerateFormValuesSelector();
 
 /**
@@ -182,6 +174,18 @@ const PREVIEW_OVERLAY_RESERVE = '5.5rem';
 const PREVIEW_TILE_OVERLAY_RESERVE = '3.25rem';
 const PREVIEW_TILE_STAGE_PADDING = '3';
 
+/** Pinned to the floating window body's top edge, under the title bar's divider. */
+const FLOATING_RAIL_SX: SystemStyleObject = {
+  display: 'flex',
+  gap: '1px',
+  height: '3px',
+  insetInline: 0,
+  pointerEvents: 'none',
+  position: 'absolute',
+  top: 0,
+  zIndex: 3,
+};
+
 export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
   const galleryValues = useActiveProjectSelector((project) => getProjectWidgetValues(project, 'gallery'));
   const queueItems = useActiveProjectSelector((project) => project.queue.items);
@@ -190,9 +194,8 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
   const { antialiasProgressImages, showProgressImagesInViewer } = useActiveProjectSelector(
     (project) => project.settings
   );
-  const progressImage = useProgressImage();
-  const activeProgressTarget = useActiveProgressTarget();
-  const activeProgressTargets = useActiveProgressTargets();
+  const runningProgressTargets = useActiveProgressTargets();
+  const followedProgressTargets = useFollowedProgressTargets();
   const { account, gallery, notifications, widgets } = useWorkbenchCommands();
   const queries = useWorkbenchQueries();
   const { density, rootRef } = usePreviewDensity(region);
@@ -205,24 +208,50 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
   const hasSelectedItem = selectedItem !== null;
   const { imageOrderDir } = getGallerySettings(galleryValues);
   const selectedImageQuery = getGallerySelectedImageQuery(galleryValues);
+  // The gallery's live similarity search: when one is active the grid shows a
+  // ranked result set, and navigation has to walk that same list. Memoized on
+  // the raw value because parsing mints a fresh object each call, which would
+  // otherwise re-derive the whole navigation list on every unrelated gallery
+  // change (every recentImages tick during a generation, for one).
+  const gallerySemanticQuery = useMemo(
+    () => getGallerySemanticImageQuery({ semanticImageQuery: galleryValues.semanticImageQuery }),
+    [galleryValues.semanticImageQuery]
+  );
   const selectedItemKey = selectedItem ? toGalleryItemKey(selectedItem) : null;
   const isComparing =
     selectedItem?.kind === 'image' &&
     compareImage !== null &&
     toGalleryItemKey({ kind: 'image', name: compareImage.imageName }) !== selectedItemKey;
-  const generationSequence = useMemo(
-    () => getGalleryGenerationSequence(queueItems, activeProgressTarget),
-    [activeProgressTarget, queueItems]
-  );
-  const activeGalleryPlaceholder = generationSequence.liveSlot;
+  const generationSequence = useMemo(() => getGalleryGenerationSequence(queueItems, null), [queueItems]);
   // Multi-GPU runs one session per GPU, so several slots can be live at once. One
   // live slot keeps the existing single-frame preview; two or more are tiled.
+  // Running slots only: a slot settling after completion must not turn a
+  // single-GPU batch into a two-tile grid at every item boundary.
   const liveGalleryPlaceholders = useMemo(
-    () => getGalleryLiveSlots(generationSequence.chronologicalSlots, activeProgressTargets),
-    [activeProgressTargets, generationSequence.chronologicalSlots]
+    () => getGalleryLiveSlots(generationSequence.chronologicalSlots, runningProgressTargets),
+    [generationSequence.chronologicalSlots, runningProgressTargets]
   );
-  const matchingProgressImage = getMatchingProgressImage(progressImage, activeGalleryPlaceholder);
-  const shouldFollowLive = showProgressImagesInViewer && activeGalleryPlaceholder !== null && !isComparing;
+  // The slot to follow: the oldest running one, else the oldest settling one. A
+  // completed slot stays followed until its result routing lands, and routing
+  // removes its placeholder first — so the followed set is filtered against the
+  // placeholders that exist rather than trusting a single target that may have
+  // just vanished. That routing window is where Preview used to fall back onto
+  // the previous selection before the finished image was selected. A running
+  // slot wins over a settling one so a concurrent session's live stream is
+  // never hidden behind a static frame.
+  const activeGalleryPlaceholder = useMemo(
+    () =>
+      liveGalleryPlaceholders[0] ??
+      getGalleryLiveSlots(generationSequence.chronologicalSlots, followedProgressTargets)[0] ??
+      null,
+    [followedProgressTargets, generationSequence.chronologicalSlots, liveGalleryPlaceholders]
+  );
+  // Not while a similarity search is active: the grid hides pending items
+  // there entirely, so following the generation would put Preview on a tile
+  // the grid is not showing and, worse, hand the arrows the board listing
+  // while the grid shows a ranking.
+  const shouldFollowLive =
+    showProgressImagesInViewer && activeGalleryPlaceholder !== null && !isComparing && gallerySemanticQuery === null;
   const { t } = useTranslation();
   const loupeControlsRef = useRef<PreviewLoupeControls | null>(null);
   const videoControllerRef = useRef<PreviewVideoFrameController | null>(null);
@@ -245,11 +274,16 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
     [account]
   );
   const selectGalleryItemAtPage = useCallback(
-    (item: GalleryItem, selectionPage: number) => gallery.selectItem(item, undefined, selectionPage, true),
+    (item: GalleryItem, selectionPage: number) => {
+      gallery.selectItem(item, undefined, selectionPage, true);
+      // Deliberate navigation: the grid follows it, unlike auto-selection.
+      requestGalleryItemReveal(toGalleryItemKey(item));
+    },
     [gallery]
   );
   const {
     boardItems,
+    getSelectionPage,
     handleNavigationKeyDown,
     isLoadingBoard,
     navigate,
@@ -267,7 +301,10 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
     selectGalleryItem: selectGalleryItemAtPage,
     selectedImageQuery,
     selectedItem,
+    galleryPage: getGalleryPage(galleryValues),
+    galleryPaginationMode: getGallerySettings(galleryValues).paginationMode,
     selectedItemKey,
+    semanticQuery: gallerySemanticQuery,
     shouldFollowLive,
   });
 
@@ -275,6 +312,7 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
   const getItemActionContext = useCallback(
     () => ({
       filterIdentity: navigationQueryKey,
+      getItemSelectionPage: getSelectionPage,
       items: boardItems,
       loadOrderedRefs: (signal: AbortSignal) => {
         signal.throwIfAborted();
@@ -282,7 +320,7 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
       },
       selectedItemKey,
     }),
-    [boardItems, navigationQueryKey, selectedItemKey]
+    [boardItems, getSelectionPage, navigationQueryKey, selectedItemKey]
   );
   const projectId = useActiveProjectId();
   const { dialog: deletionConfirmationDialog, requestDeletionConfirmation } = useDeletionConfirmation();
@@ -306,12 +344,51 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
     [contextMenuItem]
   );
   const exitCompare = useCallback(() => gallery.setCompareItem(null), [gallery]);
+  // The page the item now in the compare slot was selected at, when Preview
+  // put it there by swapping. The window may not hold that item any more —
+  // swapping a top-of-board image in moves the window to the top — so a swap
+  // back could only guess at its page. This is not a guess: it is the window
+  // the item was navigated in, and restoring it puts the arrows back where
+  // they were before the first swap. A page names a window of ONE query,
+  // though: restored into a different board, view, order, mode or search it
+  // would anchor that listing 1800 rows down around an image from another,
+  // so the memo is only honoured in the query it was recorded in — and only
+  // while the item is still in that query's board. Moving the compare image
+  // to another board re-boards it in place without touching the selection's
+  // query, so the key alone would still match.
+  const swappedOutRef = useRef<{ boardId: string; key: GalleryItemKey; page: number; queryKey: string } | null>(null);
   const swapCompareImages = useCallback(() => {
     if (selectedItem?.kind === 'image' && compareImage) {
-      selectPreviewItem(legacyGeneratedImageToGalleryItem(compareImage));
+      const compareItem = legacyGeneratedImageToGalleryItem(compareImage);
+      const swappedOut = swappedOutRef.current;
+
+      swappedOutRef.current = {
+        boardId: selectedItem.boardId,
+        key: toGalleryItemKey(selectedItem),
+        page: selectedImageQuery.page,
+        queryKey: navigationQueryKey,
+      };
+      if (
+        swappedOut &&
+        swappedOut.key === toGalleryItemKey(compareItem) &&
+        swappedOut.queryKey === navigationQueryKey &&
+        swappedOut.boardId === compareItem.boardId
+      ) {
+        selectGalleryItemAtPage(compareItem, swappedOut.page);
+      } else {
+        selectPreviewItem(compareItem);
+      }
       gallery.setCompareItem(selectedItem);
     }
-  }, [compareImage, gallery, selectPreviewItem, selectedItem]);
+  }, [
+    compareImage,
+    gallery,
+    navigationQueryKey,
+    selectGalleryItemAtPage,
+    selectPreviewItem,
+    selectedImageQuery.page,
+    selectedItem,
+  ]);
   const isItemCurrent = useCallback(
     (itemKey: GalleryItemKey) => {
       const currentValues = getProjectWidgetValues(queries.getSnapshot().activeProject, 'gallery');
@@ -472,8 +549,7 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
     }
 
     if (commandId === 'viewer.swapImages' && selectedItem?.kind === 'image' && compareImage) {
-      selectPreviewItem(legacyGeneratedImageToGalleryItem(compareImage));
-      gallery.setCompareItem(selectedItem);
+      swapCompareImages();
       return;
     }
 
@@ -525,6 +601,13 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
     // and runs to every edge. `containerType` anchors the details panel's
     // `cqh` cap to the widget rather than the viewport.
     <Box ref={rootRef} containerType="size" h="full" position="relative" w="full">
+      {/* Floated, the window is usually parked over a maximized work surface
+          or on another display, where the top bar's rail is out of view — so
+          the window that shows the result also shows that it is coming. It
+          overlays the body's top edge, directly under the title bar's divider,
+          so appearing costs no reflow. Docked, the top bar's rail is in view
+          and a second one would only be noise. */}
+      {region === 'floating' ? <QueueProgressRail css={FLOATING_RAIL_SX} /> : null}
       {/* Single always-mounted keyboard boundary: DOM focus survives swaps
           between the live, selected, and compare branches, so arrow
           navigation keeps working across them. */}
@@ -551,7 +634,6 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
             filmstripItems={isFilmstripVisible && density !== 'minimal' ? boardItems : null}
             isLoadingBoard={isLoadingBoard}
             placeholder={activeGalleryPlaceholder}
-            progressImage={matchingProgressImage}
             selectedIndex={navigationCursor}
             shouldAntialiasProgressImage={antialiasProgressImages}
             onNext={selectNextItem}
@@ -583,6 +665,7 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
                 item={selectedItem}
                 loupeControlsRef={loupeControlsRef}
                 selectedIndex={navigationCursor}
+                shouldAntialiasProgressImage={antialiasProgressImages}
                 onContextMenu={openItemContextMenu}
                 onNext={selectNextItem}
                 onPrevious={selectPreviousItem}
@@ -627,7 +710,11 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
   );
 };
 
-const SelectedImagePreview = ({ item, ...props }: SelectedMediaPreviewProps & { item: GalleryImageItem }) => {
+const SelectedImagePreview = ({
+  item,
+  shouldAntialiasProgressImage,
+  ...props
+}: SelectedMediaPreviewProps & { item: GalleryImageItem; shouldAntialiasProgressImage: boolean }) => {
   const previewImage = useStreamingImageSource({
     fallbackImage: imageUrlToStreamingSource({
       alt: item.name,
@@ -641,6 +728,20 @@ const SelectedImagePreview = ({ item, ...props }: SelectedMediaPreviewProps & { 
     () => (previewImage ? { itemKey: toGalleryItemKey(item), kind: 'image', source: previewImage } : null),
     [item, previewImage]
   );
+  // The last denoise frame of the run that produced this image, when it finished
+  // moments ago: painted over the finished image until that has decoded, so the
+  // denoise→done boundary changes only the pixels inside the frame.
+  const swapProgressImage = useQueueItemSwapProgressImage(item.sourceQueueItemId, item.name);
+  const holdSource = useMemo(
+    () => progressImageToStreamingSource(swapProgressImage, item.name),
+    [item.name, swapProgressImage]
+  );
+  const sourceQueueItemId = item.sourceQueueItemId;
+  const handleSourceLoaded = useCallback(() => {
+    if (sourceQueueItemId) {
+      consumeQueueItemSwapProgressImage(sourceQueueItemId);
+    }
+  }, [sourceQueueItemId]);
 
   return (
     <SelectedMediaPreview
@@ -648,8 +749,11 @@ const SelectedImagePreview = ({ item, ...props }: SelectedMediaPreviewProps & { 
       dragItem={toGalleryItemRef(item)}
       frameHeight={previewImage?.height ?? item.height}
       frameWidth={previewImage?.width ?? item.width}
+      holdSource={holdSource}
       item={item}
+      shouldAntialiasHoldImage={shouldAntialiasProgressImage}
       source={source}
+      onSourceLoaded={handleSourceLoaded}
     />
   );
 };
@@ -737,13 +841,16 @@ const SelectedMediaPreview = ({
   filmstripItems,
   frameHeight,
   frameWidth,
+  holdSource,
   isItemCurrent,
   isLoadingBoard,
   isMetadataOpen,
   item,
   loupeControlsRef,
   onCopyAvailabilityChange,
+  onSourceLoaded,
   selectedIndex,
+  shouldAntialiasHoldImage,
   source,
   onContextMenu,
   onNext,
@@ -755,6 +862,9 @@ const SelectedMediaPreview = ({
   dragItem?: GalleryItemRef;
   frameHeight: number;
   frameWidth: number;
+  holdSource?: StreamingImageSource | null;
+  onSourceLoaded?: (src: string) => void;
+  shouldAntialiasHoldImage?: boolean;
   source: Parameters<typeof PreviewFrame>[0]['source'];
 }) => {
   const media = useMemo<PreviewFooterMedia>(
@@ -768,13 +878,15 @@ const SelectedMediaPreview = ({
         dragItem={dragItem}
         frameHeight={frameHeight}
         frameWidth={frameWidth}
+        holdSource={holdSource}
         isItemCurrent={isItemCurrent}
         isLive={false}
         loupeControlsRef={loupeControlsRef}
+        onSourceLoaded={onSourceLoaded}
         onVideoCopyAvailabilityChange={onCopyAvailabilityChange}
         padding={getMediaStagePadding(density)}
         paddingBottom={PREVIEW_OVERLAY_RESERVE}
-        shouldAntialiasLiveImage
+        shouldAntialiasLiveImage={shouldAntialiasHoldImage ?? true}
         source={source}
         variant="framed"
         videoControllerRef={videoControllerRef}
@@ -817,7 +929,6 @@ const LivePreview = ({
   filmstripItems,
   isLoadingBoard,
   placeholder,
-  progressImage,
   selectedIndex,
   shouldAntialiasProgressImage,
   onNext,
@@ -829,14 +940,22 @@ const LivePreview = ({
   filmstripItems: GalleryItem[] | null;
   isLoadingBoard: boolean;
   placeholder: GalleryQueuePlaceholder;
-  progressImage: LatestProgressImageSnapshot | null;
   selectedIndex: number;
   shouldAntialiasProgressImage: boolean;
   onNext: () => void;
   onPrevious: () => void;
   onSelectItem: (item: GalleryItem) => void;
 }) => {
+  // The followed slot's own frame, not the store-wide latest: with two slots
+  // live (a long video next to a quick image batch) the latest belongs to
+  // whichever stepped last, and releasing that slot must not blank this one.
+  const progressImage = useQueueItemProgressImage(placeholder.queueItemId, placeholder.itemIndex);
+  // The previous slot's last frame stands in until this slot produces one of
+  // its own (model load, text encoding) — otherwise a sequential batch drops
+  // to an empty card between items.
+  const bridgeProgressImage = useQueueItemBridgeProgressImage(placeholder.queueItemId);
   const previewImage = useStreamingImageSource({
+    heldLiveImage: progressImageToStreamingSource(bridgeProgressImage),
     liveImage: progressImageToStreamingSource(progressImage),
   });
   const source = useMemo<PreviewMediaSource | null>(

@@ -1,6 +1,7 @@
-import type { CanvasDocumentContractV2 } from '@workbench/canvas-engine/contracts';
+import type { CanvasDocumentContractV3, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
 import type { SelectionState } from '@workbench/canvas-engine/selection/selectionState';
 
+import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
 import { createHistory } from '@workbench/canvas-engine/history/history';
 import { createLayerCacheStore } from '@workbench/canvas-engine/render/layerCache';
 import { createTestStubRasterBackend } from '@workbench/canvas-engine/render/raster.testStub';
@@ -21,24 +22,25 @@ describe('SelectionPixelController', () => {
       mask: () => ({ rect: { height: 2, width: 2, x: 0, y: 0 }, surface: mask }),
     } as unknown as SelectionState;
     const document = {
-      layers: [
+      stacks: stacksFrom([
         {
           id: 'paint',
           isEnabled: true,
           isLocked: false,
+          transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 },
           source: { type: 'paint' },
           type: 'raster',
-        },
-      ],
+        } as unknown as CanvasLayerContract,
+      ]),
       selectedLayerId: 'paint',
-    } as CanvasDocumentContractV2;
+    } as CanvasDocumentContractV3;
     const history = createHistory();
     const markDirty = vi.fn();
     const notifyPainted = vi.fn();
     const controller = new SelectionPixelController({
       applyImagePatch: vi.fn(),
       backend,
-      beginControlEdit: () => null,
+      beginPixelEdit: () => null,
       canEdit: () => true,
       deleteDerived: vi.fn(),
       endBurst: vi.fn(),
@@ -46,10 +48,12 @@ describe('SelectionPixelController', () => {
       getFillColor: () => '#f00',
       history,
       invalidateLayer: vi.fn(),
+      isRasterCacheReady: () => true,
       isGestureActive: () => false,
       layers,
       markDirty,
       notifyPainted,
+      requestRasterization: vi.fn(),
       selection,
     });
 
@@ -58,5 +62,57 @@ describe('SelectionPixelController', () => {
     expect(markDirty).toHaveBeenCalledWith('paint');
     expect(notifyPainted).toHaveBeenCalledWith('paint');
     expect(history.canUndo()).toBe(true);
+  });
+
+  it('requests durable paint pixels instead of growing a transparent fill cache', () => {
+    const backend = createTestStubRasterBackend();
+    const layers = createLayerCacheStore(backend);
+    const mask = backend.createSurface(2, 2);
+    const selection = {
+      bounds: () => ({ height: 2, width: 2, x: 0, y: 0 }),
+      mask: () => ({ rect: { height: 2, width: 2, x: 0, y: 0 }, surface: mask }),
+    } as unknown as SelectionState;
+    const document = {
+      stacks: stacksFrom([
+        {
+          id: 'paint',
+          isEnabled: true,
+          isLocked: false,
+          transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 },
+          source: { bitmap: { height: 2, imageName: 'durable', width: 2 }, type: 'paint' },
+          type: 'raster',
+        } as unknown as CanvasLayerContract,
+      ]),
+      selectedLayerId: 'paint',
+    } as CanvasDocumentContractV3;
+    const markDirty = vi.fn();
+    const requestRasterization = vi.fn();
+    const history = createHistory();
+    const controller = new SelectionPixelController({
+      applyImagePatch: vi.fn(),
+      backend,
+      beginPixelEdit: () => null,
+      canEdit: () => true,
+      deleteDerived: vi.fn(),
+      endBurst: vi.fn(),
+      getDocument: () => document,
+      getFillColor: () => '#f00',
+      history,
+      invalidateLayer: vi.fn(),
+      isGestureActive: () => false,
+      isRasterCacheReady: () => false,
+      layers,
+      markDirty,
+      notifyPainted: vi.fn(),
+      requestRasterization,
+      selection,
+    });
+
+    controller.run('fill');
+
+    expect(requestRasterization).toHaveBeenCalledWith('paint');
+    expect(layers.peek('paint')).toBeUndefined();
+    expect(markDirty).not.toHaveBeenCalled();
+    expect(history.canUndo()).toBe(false);
   });
 });

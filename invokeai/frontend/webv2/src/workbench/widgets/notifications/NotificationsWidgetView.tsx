@@ -2,10 +2,13 @@ import type { WorkbenchNotificationKind } from '@workbench/projectContracts';
 import type { WidgetViewProps } from '@workbench/widgetContracts';
 
 import { Badge, HStack, Icon, Stack, Text } from '@chakra-ui/react';
+import { Scrollable } from '@platform/ui/Scrollable';
 import { StatusWidgetChip } from '@workbench/widget-frame';
 import { useWorkbenchSelector } from '@workbench/WorkbenchContext';
 import { BellIcon, CircleCheckIcon, CircleXIcon, InfoIcon, TriangleAlertIcon, type LucideIcon } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+
+import { NotificationsHeaderActions } from './NotificationsHeaderActions';
 
 const kindColorPalette: Record<WorkbenchNotificationKind, string> = {
   error: 'red',
@@ -34,6 +37,24 @@ export const NotificationsWidgetView = ({ presentation, region }: WidgetViewProp
 
   if (region === 'bottom' && presentation !== 'expanded') {
     return <StatusWidgetChip icon={icon}>{t('notifications.labelWithCount', { label })}</StatusWidgetChip>;
+  }
+
+  // The popover renders the view bare (no widget-frame header), so the header
+  // actions that frame would have mounted live here instead.
+  if (region === 'popover') {
+    return (
+      <Stack flex="1" gap="0" minH="0">
+        <HStack borderBottomWidth="1px" borderColor="border.subtle" justify="space-between" px="2" py="1.5">
+          <Text color="fg.subtle" fontSize="2xs" fontWeight="700" textTransform="uppercase">
+            {t('widgets.labels.notifications')}
+          </Text>
+          <NotificationsHeaderActions />
+        </HStack>
+        <Scrollable minH="0">
+          <NotificationsPanel />
+        </Scrollable>
+      </Stack>
+    );
   }
 
   return <NotificationsPanel />;

@@ -87,15 +87,23 @@ beforeEach(async () => {
 });
 
 describe('loadWorkbenchSettings', () => {
-  it('adopts backend preferences without writing them back', async () => {
+  it('migrates a preference stored under a renamed theme id', async () => {
     seedBackendPreferences({ themeId: 'forest' });
 
     const preferences = await store.loadWorkbenchSettings();
 
-    expect(preferences.themeId).toBe('forest');
+    expect(preferences.themeId).toBe('osakaJade');
+  });
+
+  it('adopts backend preferences without writing them back', async () => {
+    seedBackendPreferences({ themeId: 'osakaJade' });
+
+    const preferences = await store.loadWorkbenchSettings();
+
+    expect(preferences.themeId).toBe('osakaJade');
     expect(api.setClientStateValue).not.toHaveBeenCalled();
     expect(store.useWorkbenchSettings).toBeDefined();
-    expect(store.getWorkbenchPreferences().themeId).toBe('forest');
+    expect(store.getWorkbenchPreferences().themeId).toBe('osakaJade');
   });
 
   it('migrates legacy session-blob preferences once when the settings key is missing', async () => {
@@ -115,7 +123,7 @@ describe('loadWorkbenchSettings', () => {
   });
 
   it('resolves once per scope and reloads when the scope changes', async () => {
-    seedBackendPreferences({ themeId: 'forest' });
+    seedBackendPreferences({ themeId: 'osakaJade' });
     await store.loadWorkbenchSettings();
     await store.loadWorkbenchSettings();
 
@@ -139,7 +147,7 @@ describe('loadWorkbenchSettings', () => {
   });
 
   it('serves the local copy when the backend is unreachable and retries next time', async () => {
-    seedBackendPreferences({ themeId: 'forest' });
+    seedBackendPreferences({ themeId: 'osakaJade' });
     await store.loadWorkbenchSettings();
 
     vi.resetModules();
@@ -148,12 +156,12 @@ describe('loadWorkbenchSettings', () => {
 
     const offline = await store.loadWorkbenchSettings();
 
-    expect(offline.themeId).toBe('forest');
+    expect(offline.themeId).toBe('osakaJade');
     expect(store.useWorkbenchSettings).toBeDefined();
 
     const recovered = await store.loadWorkbenchSettings();
 
-    expect(recovered.themeId).toBe('forest');
+    expect(recovered.themeId).toBe('osakaJade');
   });
 
   it('reports an error with defaults when nothing is available anywhere', async () => {
@@ -181,7 +189,7 @@ describe('loadWorkbenchSettings', () => {
     account.accountLifecycle.activate('user-a', ':user:a');
     await expect(store.loadWorkbenchSettings()).resolves.toMatchObject({ themeId: 'light' });
 
-    resolveOld?.(JSON.stringify({ themeId: 'forest' }));
+    resolveOld?.(JSON.stringify({ themeId: 'osakaJade' }));
     await expect(oldLoad).rejects.toThrow('no longer active');
     expect(store.getWorkbenchPreferences().themeId).toBe('light');
   });
@@ -189,19 +197,19 @@ describe('loadWorkbenchSettings', () => {
 
 describe('patchWorkbenchPreferences', () => {
   it('persists to the backend and localStorage', async () => {
-    seedBackendPreferences({ themeId: 'forest' });
+    seedBackendPreferences({ themeId: 'osakaJade' });
     await store.loadWorkbenchSettings();
 
     await store.patchWorkbenchPreferences({ reduceMotion: true });
 
     expect(readBackendPreferences().reduceMotion).toBe(true);
-    expect(readBackendPreferences().themeId).toBe('forest');
+    expect(readBackendPreferences().themeId).toBe('osakaJade');
     expect(store.getWorkbenchPreferences().reduceMotion).toBe(true);
     expect(store.getWorkbenchReduceMotion()).toBe(true);
   });
 
   it('persists account-bound custom hotkeys', async () => {
-    seedBackendPreferences({ themeId: 'forest' });
+    seedBackendPreferences({ themeId: 'osakaJade' });
     await store.loadWorkbenchSettings();
 
     await store.patchWorkbenchPreferences({ customHotkeys: { 'app.invoke': ['mod+shift+enter'] } });
@@ -220,13 +228,13 @@ describe('patchWorkbenchPreferences', () => {
   });
 
   it('replays an offline edit on the next load instead of reverting to the server copy', async () => {
-    seedBackendPreferences({ themeId: 'forest' });
+    seedBackendPreferences({ themeId: 'osakaJade' });
     await store.loadWorkbenchSettings();
 
     api.setClientStateValue.mockRejectedValueOnce(new Error('offline'));
     await store.patchWorkbenchPreferences({ themeId: 'light' });
 
-    expect(readBackendPreferences().themeId).toBe('forest');
+    expect(readBackendPreferences().themeId).toBe('osakaJade');
 
     vi.resetModules();
     store = await import('./store');
@@ -251,7 +259,7 @@ describe('patchWorkbenchPreferences', () => {
         })
     );
 
-    const first = store.patchWorkbenchPreferences({ themeId: 'forest' });
+    const first = store.patchWorkbenchPreferences({ themeId: 'osakaJade' });
     const second = store.patchWorkbenchPreferences({ themeId: 'light' });
 
     await vi.waitFor(() => {
@@ -279,7 +287,7 @@ describe('patchWorkbenchPreferences', () => {
         })
     );
 
-    const write = store.patchWorkbenchPreferences({ themeId: 'forest' });
+    const write = store.patchWorkbenchPreferences({ themeId: 'osakaJade' });
     account.accountLifecycle.invalidate();
     account.accountLifecycle.activate('user-b', ':user:b');
     resolveWrite?.();
@@ -291,7 +299,7 @@ describe('patchWorkbenchPreferences', () => {
 
 describe('clearWorkbenchSettings', () => {
   it('resets to defaults locally and deletes the backend key', async () => {
-    seedBackendPreferences({ themeId: 'forest' });
+    seedBackendPreferences({ themeId: 'osakaJade' });
     await store.loadWorkbenchSettings();
 
     await store.clearWorkbenchSettings();
@@ -315,7 +323,7 @@ describe('clearWorkbenchSettings', () => {
         })
     );
 
-    const patch = store.patchWorkbenchPreferences({ themeId: 'forest' });
+    const patch = store.patchWorkbenchPreferences({ themeId: 'osakaJade' });
     const clear = store.clearWorkbenchSettings();
 
     await vi.waitFor(() => {
@@ -357,19 +365,37 @@ describe('normalizeProjectSettings', () => {
 });
 
 describe('normalizeWorkbenchPreferences prompt editing', () => {
-  it('defaults prompt syntax highlighting and numeric attention style off', () => {
-    expect(store.normalizeWorkbenchPreferences({}).showPromptSyntaxHighlighting).toBe(false);
+  it('defaults prompt syntax highlighting on and numeric attention style off', () => {
+    expect(store.normalizeWorkbenchPreferences({}).showPromptSyntaxHighlighting).toBe(true);
     expect(store.normalizeWorkbenchPreferences({}).preferNumericAttentionStyle).toBe(false);
   });
 
-  it('round-trips both prompt preferences', () => {
+  it('round-trips both prompt preferences past their defaults', () => {
     const normalized = store.normalizeWorkbenchPreferences({
       preferNumericAttentionStyle: true,
-      showPromptSyntaxHighlighting: true,
+      showPromptSyntaxHighlighting: false,
     });
 
-    expect(normalized.showPromptSyntaxHighlighting).toBe(true);
+    expect(normalized.showPromptSyntaxHighlighting).toBe(false);
     expect(normalized.preferNumericAttentionStyle).toBe(true);
+  });
+});
+
+describe('normalizeWorkbenchPreferences appearance', () => {
+  it('keeps high contrast off unless explicitly enabled', () => {
+    expect(store.normalizeWorkbenchPreferences({}).highContrast).toBe(false);
+    expect(store.normalizeWorkbenchPreferences({ highContrast: 1 as never }).highContrast).toBe(false);
+    expect(store.normalizeWorkbenchPreferences({ highContrast: true }).highContrast).toBe(true);
+  });
+});
+
+describe('normalizeWorkbenchPreferences workflow editor', () => {
+  it('keeps connections above nodes unless the preference is explicitly on', () => {
+    expect(store.normalizeWorkbenchPreferences({}).workflowEdgesBehindNodes).toBe(false);
+    expect(
+      store.normalizeWorkbenchPreferences({ workflowEdgesBehindNodes: 'yes' as never }).workflowEdgesBehindNodes
+    ).toBe(false);
+    expect(store.normalizeWorkbenchPreferences({ workflowEdgesBehindNodes: true }).workflowEdgesBehindNodes).toBe(true);
   });
 });
 

@@ -3,36 +3,8 @@ import type { GalleryItem } from '@features/gallery';
 import { GALLERY_MAX_ROWS } from '@features/gallery/queries';
 import { describe, expect, it } from 'vitest';
 
-import { getMatchingProgressImage, getVideoFrameCopyNotice } from './PreviewWidgetView';
+import { getVideoFrameCopyNotice } from './PreviewWidgetView';
 import { mergePreviewBoardItems } from './usePreviewNavigation';
-
-describe('getMatchingProgressImage', () => {
-  const placeholder = {
-    backendItemId: null,
-    boardId: 'none',
-    height: 768,
-    id: 'queue-1:1',
-    itemIndex: 2,
-    queueItemId: 'queue-1',
-    width: 512,
-  };
-  const progressImage = {
-    dataUrl: 'data:image/png;base64,abc',
-    height: 768,
-    target: { itemIndex: 2, queueItemId: 'queue-1' },
-    width: 512,
-  };
-
-  it('returns progress only when it belongs to the current placeholder', () => {
-    expect(getMatchingProgressImage(progressImage, placeholder)).toBe(progressImage);
-    expect(
-      getMatchingProgressImage({ ...progressImage, target: { itemIndex: 1, queueItemId: 'queue-1' } }, placeholder)
-    ).toBeNull();
-    expect(
-      getMatchingProgressImage({ ...progressImage, target: { itemIndex: 2, queueItemId: 'queue-2' } }, placeholder)
-    ).toBeNull();
-  });
-});
 
 describe('mergePreviewBoardItems', () => {
   const item = (kind: GalleryItem['kind'], name: string, createdAt: string, starred = false): GalleryItem => {
@@ -61,12 +33,53 @@ describe('mergePreviewBoardItems', () => {
     expect(mergePreviewBoardItems([oldest, newest], [middle, oldest], 'ASC')).toEqual([oldest, middle, newest]);
   });
 
-  it('keeps starred backend items ahead of optimistic unstarred items', () => {
+  it('preserves relevance order for a ranked list', () => {
+    // A similarity result set is ordered by relevance, not by date. Re-sorting
+    // it here would make the arrows walk a different order from the one on
+    // screen. (Local generations never reach this call in ranked mode — the
+    // caller passes only the selection; see the anchor test below.)
+    const first = item('image', 'first', '2026-07-21T00:00:01.000Z');
+    const second = item('image', 'second', '2026-07-21T00:00:03.000Z', true);
+    const third = item('image', 'third', '2026-07-21T00:00:02.000Z');
+    const optimistic = item('image', 'optimistic', '2026-07-21T00:00:09.000Z');
+
+    expect(mergePreviewBoardItems([first, second, third], [], 'DESC', { isRanked: true })).toEqual([
+      first,
+      second,
+      third,
+    ]);
+    // Without the flag the same input is re-sorted newest-first and the
+    // optimistic item is spliced in, so the ranked path really is what
+    // preserves the list.
+    expect(mergePreviewBoardItems([first, second, third], [optimistic], 'DESC')).toEqual([
+      optimistic,
+      second,
+      third,
+      first,
+    ]);
+  });
+
+  it('anchors a selection that the ranking does not contain, rather than losing the cursor', () => {
+    // A selection can be made outside the result set — an upload, an image-map
+    // click, or stepping off the live tile. Dropping it would leave the cursor
+    // pointing at nothing, which reads as both arrows going dead; keeping it
+    // at the head lets one press move into the ranked list.
+    const ranked = item('image', 'ranked', '2026-07-21T00:00:01.000Z');
+    const outsider = item('image', 'outsider', '2026-07-21T00:00:09.000Z');
+
+    expect(mergePreviewBoardItems([ranked], [outsider], 'DESC', { isRanked: true })).toEqual([outsider, ranked]);
+    // Already a member: kept once, in its ranked position.
+    expect(mergePreviewBoardItems([ranked], [ranked], 'DESC', { isRanked: true })).toEqual([ranked]);
+  });
+
+  it('merges chronologically past starred items', () => {
+    // The listing is flat: navigation must walk the same order the grid
+    // shows, not lift starred items to the front.
     const starred = item('video', 'starred', '2026-07-21T00:00:01.000Z', true);
     const optimistic = item('image', 'optimistic', '2026-07-21T00:00:03.000Z');
     const existing = item('video', 'existing', '2026-07-21T00:00:02.000Z');
 
-    expect(mergePreviewBoardItems([starred, existing], [optimistic], 'DESC')).toEqual([starred, optimistic, existing]);
+    expect(mergePreviewBoardItems([starred, existing], [optimistic], 'DESC')).toEqual([optimistic, existing, starred]);
   });
 
   it('uses the server kind/name tie-breakers for equal timestamps in both directions', () => {

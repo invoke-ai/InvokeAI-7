@@ -3,7 +3,7 @@ import type {
   LayerExportGuard,
   ReplaceSelectionFromImageResult,
 } from '@workbench/canvas-engine/api';
-import type { CanvasDocumentContractV2, CanvasImageRef } from '@workbench/canvas-engine/contracts';
+import type { CanvasDocumentContractV3, CanvasImageRef } from '@workbench/canvas-engine/contracts';
 import type { CommitRasterFilterResult } from '@workbench/canvas-engine/controllers/filterResultController';
 import type {
   CommitMaskImageResult,
@@ -142,7 +142,7 @@ export interface CanvasFilterCoordinatorDeps {
   readonly stores: CanvasApplicationOperationStores;
   readonly controller: CanvasOperationController;
   isInteractionLocked(): boolean;
-  getDocument(): CanvasDocumentContractV2 | null;
+  getDocument(): CanvasDocumentContractV3 | null;
   captureGuard(layerId: string): LayerExportGuard | null;
   selectLayer(layerId: string): void;
   clearOtherOperation(): void;

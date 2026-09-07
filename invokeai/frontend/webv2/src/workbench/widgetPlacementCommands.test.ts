@@ -63,6 +63,7 @@ const createWidgetCommands = (dispatch: (action: WorkbenchAction) => void): Work
   float: (instanceId) => dispatch({ instanceId, type: 'floatWidget' }),
   focusFloating: (instanceId) => dispatch({ instanceId, type: 'focusFloatingWidget' }),
   move: (options) => dispatch({ ...options, type: 'moveWidgetInstance' }),
+  setAlignment: (options) => dispatch({ ...options, type: 'setWidgetInstanceAlignment' }),
   open: (options) => dispatch({ ...options, type: 'openRegionWidget' }),
   patchInstanceValues: (instanceId, values, projectId) =>
     dispatch({ instanceId, projectId, type: 'patchWidgetInstanceValues', values }),

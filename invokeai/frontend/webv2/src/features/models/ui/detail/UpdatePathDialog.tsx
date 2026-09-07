@@ -55,7 +55,6 @@ export const UpdatePathDialog = ({
   return (
     <Dialog.Root
       open
-      placement="center"
       size="md"
       onOpenChange={(event) => {
         if (!event.open) {
@@ -70,13 +69,11 @@ export const UpdatePathDialog = ({
             <Dialog.Header borderBottomWidth="1px" borderColor="border.subtle">
               <Stack gap="0.5">
                 <Dialog.Title>{t('models.updatePath')}</Dialog.Title>
-                <Text color="fg.subtle" fontSize="2xs">
-                  {t('models.updatePathDescription')}
-                </Text>
+                <Dialog.Description>{t('models.updatePathDescription')}</Dialog.Description>
               </Stack>
             </Dialog.Header>
             <Dialog.Body>
-              <Stack gap="3" py="2">
+              <Stack gap="3">
                 <Field label={t('models.currentPath')}>
                   <Text color="fg.muted" fontSize="2xs" overflowWrap="anywhere">
                     {model.path}
@@ -96,7 +93,7 @@ export const UpdatePathDialog = ({
                 </Field>
               </Stack>
             </Dialog.Body>
-            <Dialog.Footer gap="2">
+            <Dialog.Footer>
               <Button disabled={isBusy} size="xs" variant="ghost" onClick={onClose}>
                 {t('common.cancel')}
               </Button>
@@ -111,7 +108,7 @@ export const UpdatePathDialog = ({
               </Button>
             </Dialog.Footer>
             <Dialog.CloseTrigger asChild>
-              <CloseButton color="fg.muted" size="sm" />
+              <CloseButton />
             </Dialog.CloseTrigger>
           </Dialog.Content>
         </Dialog.Positioner>

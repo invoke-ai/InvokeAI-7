@@ -32,7 +32,6 @@ const baseFilter: GalleryItemsFilter = {
   galleryView: 'images',
   orderDir: 'DESC',
   searchTerm: ' portrait ',
-  starredFirst: true,
 };
 
 const createItem = (kind: 'image' | 'video', name: string): GalleryItem =>
@@ -70,7 +69,7 @@ describe('Mixed gallery queries', () => {
     accountLifecycle.activate('task-4-query-test');
     vi.clearAllMocks();
     backend.listGalleryItems.mockResolvedValue({ items: [], total: 0 });
-    backend.listGalleryItemNames.mockResolvedValue({ items: [], starredCount: 0, total: 0 });
+    backend.listGalleryItemNames.mockResolvedValue({ items: [], total: 0 });
   });
 
   afterEach(() => {

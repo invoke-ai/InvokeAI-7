@@ -2,7 +2,8 @@ import type { WidgetRegion } from '@workbench/layoutContracts';
 import type { RegisteredWidget, WidgetIconComponent, WidgetInstanceId, WidgetTypeId } from '@workbench/widgetContracts';
 
 import { Flex, Icon, Menu, Portal, Text } from '@chakra-ui/react';
-import { IconButton } from '@platform/ui';
+import { IconButton } from '@platform/ui/Button';
+import { MenuContent } from '@platform/ui/Menu';
 import { WidgetIcon } from '@workbench/iconResolver';
 import { CheckIcon, MoreHorizontalIcon } from 'lucide-react';
 import { useCallback, useMemo } from 'react';
@@ -57,6 +58,9 @@ const getWidgetEnableMenuTriggerButton = (label: string, trigger: WidgetEnableMe
   return (
     <Flex
       align="center"
+      // The rail's strips stretch to stay full-width drop targets; the trigger
+      // is a lone fixed-size child and must center itself to line up with them.
+      alignSelf={isBottom ? undefined : 'center'}
       aria-label={label}
       as="button"
       color="fg"
@@ -86,7 +90,7 @@ export const WidgetEnableMenu = ({
 }: WidgetEnableMenuProps) => {
   const { t } = useTranslation();
   const content = (
-    <Menu.Content minW="12rem">
+    <MenuContent minW="12rem">
       <Menu.ItemGroup>
         <Menu.ItemGroupLabel color="fg.subtle" fontSize="2xs" textTransform="uppercase">
           {groupLabel}
@@ -98,7 +102,7 @@ export const WidgetEnableMenu = ({
           return <WidgetEnableMenuRow key={item.id} disabled={disabled} item={item} meta={meta} onToggle={onToggle} />;
         })}
       </Menu.ItemGroup>
-    </Menu.Content>
+    </MenuContent>
   );
 
   const contextPositioning = useMemo(

@@ -3,6 +3,8 @@
 Base class for model loading in InvokeAI.
 """
 
+import time
+import weakref
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
 from logging import Logger
@@ -18,7 +20,11 @@ from invokeai.backend.model_manager.load.model_cache.cache_record import CacheRe
 from invokeai.backend.model_manager.load.model_cache.cached_model.cached_model_with_partial_load import (
     CachedModelWithPartialLoad,
 )
-from invokeai.backend.model_manager.load.model_cache.model_cache import MODEL_LOAD_LOCK, ModelCache
+from invokeai.backend.model_manager.load.model_cache.model_cache import (
+    MODEL_LOAD_LOCK,
+    VRAM_MOVE_PASS_BYTES,
+    ModelCache,
+)
 from invokeai.backend.model_manager.taxonomy import AnyModel, SubModelType
 
 
@@ -57,21 +63,61 @@ class LoadedModelWithoutConfig:
         self._cache_record = cache_record
         self._cache = cache
         release_first_use_grace = getattr(cache, "release_first_use_grace", None)
-        self._first_use_finalizer = (
-            finalize(self, release_first_use_grace, cache_record)
-            if cache_record.awaiting_first_use and release_first_use_grace is not None
-            else None
-        )
-        if self._first_use_finalizer is not None:
+        if cache_record.awaiting_first_use and release_first_use_grace is not None:
+            # This handle owns the grace: put()'s sweep keeps a grace whose holder is alive
+            # (an in-flight multi-model load) and clears one whose holder is gone. The finalizer
+            # carries its own ref so the release can tell whether the grace has since been
+            # re-registered to a newer, still-live handle.
+            holder_ref = weakref.ref(self)
+            cache_record.grace_holder = holder_ref
+            self._first_use_finalizer = finalize(self, release_first_use_grace, cache_record, holder_ref)
             self._first_use_finalizer.atexit = False
+        else:
+            self._first_use_finalizer = None
+
+    def _lock_paced(self, working_mem_bytes: Optional[int]) -> None:
+        """Move the model into VRAM in bounded passes, yielding the global load lock between them.
+
+        Each pass holds the MODEL_LOAD_LOCK read lock across its slice of the VRAM load (the move
+        runs load_state_dict(assign=True), which calls register_parameter, so it must not overlap
+        a concurrent model construction that has the global register_parameter -> meta patch
+        active), acquired before the cache's own lock to keep the documented lock order. Nothing
+        is held between passes, so a construction (write lock) queued on any worker runs in the
+        gap instead of waiting out the entire multi-GB stream — the write-preferring lock
+        guarantees the queued construction wins that gap. A failed pass behaves exactly like a
+        failed lock(): the cache has already unpinned the entry, so no unlock is owed here.
+
+        Known trade-off of yielding mid-stream: another load on the SAME device cache can slip
+        into a gap and pin VRAM this stream's budget had counted on. The stream then settles at
+        correspondingly lower residency (after trimming its own bytes if needed to preserve the
+        working-memory reservation) — exactly what a fresh lock() would compute at that instant.
+        Pre-pacing behavior made the interleaver wait instead. Residency recovers at the next
+        invocation's re-lock, once the interleaver unlocks.
+        """
+        stream_started_at = time.time()
+        with MODEL_LOAD_LOCK.read_lock():
+            settled = self._cache.lock(self._cache_record, working_mem_bytes, max_move_bytes=VRAM_MOVE_PASS_BYTES)
+        # Termination backstop: pathological interleavings (another thread's budget disagreeing
+        # with ours can unload what a pass just loaded) could in principle re-truncate forever.
+        # After comfortably more passes than the model's size can honestly require, run one final
+        # uncapped pass — with no cap, a pass can never report itself truncated, so it settles.
+        remaining_capped_passes = self._cache_record.cached_model.total_bytes() // VRAM_MOVE_PASS_BYTES + 8
+        while not settled:
+            remaining_capped_passes -= 1
+            with MODEL_LOAD_LOCK.read_lock():
+                settled = self._cache.continue_lock(
+                    self._cache_record,
+                    working_mem_bytes,
+                    max_move_bytes=VRAM_MOVE_PASS_BYTES if remaining_capped_passes > 0 else None,
+                    stream_started_at=stream_started_at,
+                )
+            if remaining_capped_passes <= 0:
+                # The uncapped pass settles by construction; guard against a regression in that
+                # invariant turning this loop into a spin.
+                assert settled, "uncapped continue_lock pass did not settle"
 
     def __enter__(self) -> AnyModel:
-        # Hold the MODEL_LOAD_LOCK read lock across the VRAM load (lock() runs
-        # load_state_dict(assign=True), which calls register_parameter) so it can't overlap a
-        # concurrent model construction that has the global register_parameter -> meta patch active.
-        # Acquired before the cache's own lock to keep a consistent lock order (see MODEL_LOAD_LOCK).
-        with MODEL_LOAD_LOCK.read_lock():
-            self._cache.lock(self._cache_record, None)
+        self._lock_paced(None)
         if self._first_use_finalizer is not None:
             self._first_use_finalizer.detach()
         try:
@@ -93,9 +139,7 @@ class LoadedModelWithoutConfig:
         :param working_mem_bytes: The amount of working memory to keep available on the compute device when loading the
             model.
         """
-        # See __enter__ for why the VRAM load is wrapped in the read lock.
-        with MODEL_LOAD_LOCK.read_lock():
-            self._cache.lock(self._cache_record, working_mem_bytes)
+        self._lock_paced(working_mem_bytes)
         if self._first_use_finalizer is not None:
             self._first_use_finalizer.detach()
         try:

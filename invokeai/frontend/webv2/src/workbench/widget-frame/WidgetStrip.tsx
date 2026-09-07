@@ -13,6 +13,8 @@ import { WidgetRegionDropOverlay } from './WidgetRegionDropOverlay';
 interface WidgetStripProps extends FlexProps {
   children: ReactNode;
   dropState: WidgetRegionDropState;
+  /** 'none' for strips that draw their own per-cluster drop chrome (the status bar). */
+  overlay?: 'region' | 'none';
   region: WidgetRegion;
   sortableInstanceIds: WidgetInstanceId[];
   strategy: SortingStrategy;
@@ -21,6 +23,7 @@ interface WidgetStripProps extends FlexProps {
 export const WidgetStrip = ({
   children,
   dropState,
+  overlay = 'region',
   region,
   sortableInstanceIds,
   strategy,
@@ -41,7 +44,9 @@ export const WidgetStrip = ({
       <SortableContext items={sortableItems} strategy={strategy}>
         {children}
       </SortableContext>
-      {dropState.isActive ? <WidgetRegionDropOverlay dropState={dropState} isOver={isOver} /> : null}
+      {overlay === 'region' && dropState.isActive ? (
+        <WidgetRegionDropOverlay dropState={dropState} isOver={isOver} />
+      ) : null}
     </Flex>
   );
 };

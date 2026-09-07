@@ -97,13 +97,17 @@ def test_reference_images_and_the_one_variant_condition() -> None:
 
 
 def test_regional_guidance_and_its_negative_subset() -> None:
-    """Regional negative prompts are a strict subset — only the SD family has them."""
+    """Regional negative prompts are a strict subset — only the SD family has them.
+
+    Z-Image and Anima mask positive conditioning only: their denoisers accept a negative list but
+    discard its masks, so a "regional" negative there would act globally.
+    """
     regional = {
         b.value for b in generative_bases() if (f := get(b, FeaturesFacet)) is not None and f.supports_regional_guidance
     }
     negative = {b.value for b in generative_bases() if (f := get(b, FeaturesFacet)) is not None and f.regional_negative}
-    assert regional == {"sd-1", "sdxl", "flux", "flux2", "krea-2"}
-    assert negative == {"sd-1", "sdxl"}
+    assert regional == {"sd-1", "sd-2", "sdxl", "flux", "flux2", "krea-2", "z-image", "anima"}
+    assert negative == {"sd-1", "sd-2", "sdxl"}
     assert negative < regional, "a regional negative prompt without regional guidance is meaningless"
 
 

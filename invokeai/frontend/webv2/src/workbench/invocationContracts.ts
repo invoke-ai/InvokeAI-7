@@ -1,3 +1,5 @@
+import type { ForLoopValidationReason } from '@features/workflow/utility';
+
 export type InvocationSourceId = 'generate' | 'workflow' | 'upscale' | 'video' | 'canvas';
 
 export type InvocationMode = 'global' | 'dialog';
@@ -16,9 +18,9 @@ export interface ResolvedInvocationRoute extends InvocationRoute {
   sourceValid: boolean;
   destinationValid: boolean;
   /** The top validation issue, shown on the fixed Invoke control's secondary line. */
-  validationMessage?: string;
+  validationMessage?: string | ForLoopValidationReason;
   /** Every reason the route cannot run right now (legacy `reasonsWhyCannotEnqueue` equivalent). */
-  validationReasons: string[];
+  validationReasons: Array<string | ForLoopValidationReason>;
 }
 
 export interface InvocationControllerState extends InvocationRoute {

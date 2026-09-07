@@ -16,7 +16,7 @@ import {
 } from '@features/generation/graph';
 import { getCompatibleDiffusersComponentSource } from '@features/generation/settings';
 
-import type { VideoGenerationMode, VideoSettings } from './types';
+import type { VideoGenerationMode, VideoReferenceItem, VideoSettings } from './types';
 
 import { resolveVideoMode } from './settings';
 import { getVideoDimensions, getVideoModelPolicy, getVideoValidationReasons } from './videoPolicies';
@@ -49,7 +49,110 @@ const MINIMAX_H3_GENERATION_MODES: Record<VideoGenerationMode, string> = {
   'first-frame': 'minimax_h3_i2v',
   'first-last': 'minimax_h3_flf2v',
   'last-frame': 'minimax_h3_lf2v',
+  reference: 'minimax_h3_ref2v',
   txt2vid: 'minimax_h3_t2v',
+};
+
+/**
+ * Adds the per-reference descriptor nodes and the ordered collection feeding both the
+ * Reference Conditioning node and the Prompt node (the same references must reach both —
+ * the denoise node cross-checks them). Collect order matters: reference order is part of
+ * the request contract, so the collectors are CHAINED (each appends its item after the
+ * inherited collection), the same trick the extend scaffolding uses for its join order.
+ */
+const addReferenceNodes = (
+  graph: BackendGraphContract,
+  references: readonly VideoReferenceItem[]
+): BackendInvocationContract => {
+  let chain: BackendInvocationContract | null = null;
+  references.forEach((reference, index) => {
+    const node = addReferenceNode(graph, reference, index);
+    const collect = addNode(graph, { id: `reference_collect_${index + 1}`, type: 'collect' });
+
+    if (chain) {
+      addEdge(graph, chain, 'collection', collect, 'collection');
+    }
+    addEdge(graph, node, 'reference', collect, 'item');
+    chain = collect;
+  });
+
+  if (!chain) {
+    throw new Error('Reference mode requires at least one reference.');
+  }
+
+  return chain;
+};
+
+const addReferenceNode = (
+  graph: BackendGraphContract,
+  reference: VideoReferenceItem,
+  index: number
+): BackendInvocationContract => {
+  if (reference.kind === 'image') {
+    return addNode(graph, {
+      detail: reference.detail,
+      id: `reference_${index + 1}`,
+      image: toImageField(reference.image),
+      type: 'minimax_h3_image_reference',
+    });
+  }
+  // Same estimate-overshoot protection as the extend path: tail-window bounds
+  // compile as negative indices the backend resolves against the REAL count.
+  const endFrame = toTailAwareIndex(reference.clip.endFrame, reference.clip.numFrames);
+
+  return addNode(graph, {
+    conditioning: reference.conditioning,
+    end_frame: endFrame,
+    id: `reference_${index + 1}`,
+    start_frame: toReferenceStartIndex(reference, endFrame),
+    type: 'minimax_h3_video_reference',
+    video: { video_name: reference.clip.video_name },
+  });
+};
+
+/**
+ * A video reference's start bound, measured from the same end as its other bound.
+ *
+ * `toTailAwareIndex` sends a near-the-end bound out NEGATIVE, resolved against
+ * the clip's REAL frame count, and leaves anything further back POSITIVE, taken
+ * from the panel's ESTIMATE. That split is right for a hand-picked trim, whose
+ * start is an absolute position the estimate must not drift — but the linked
+ * tail window straddles it: the cutpoint end goes negative while the start,
+ * ~124 frames back, stays positive, so what the backend extracts is
+ * `tail + (real - estimate)` frames rather than `tail`. That length is a budget
+ * the backend enforces by discarding the overrun at the SEAM (see
+ * `deriveReferenceExtendClip`), so it has to survive an inexact estimate.
+ *
+ * The linked entry's start is not an absolute pick — it is defined as
+ * `tail - 1` frames before the cutpoint — so it rides the same negative anchor
+ * and the window keeps its length whatever the real count turns out to be.
+ *
+ * Two cases stay absolute. A cutpoint far enough from the end leaves both
+ * bounds on the estimate already. And a start within `TAIL_INDEX_SLOP` of the
+ * clip's own beginning stays absolute because the relative form resolves to
+ * `startFrame + (real - estimate)`, which goes NEGATIVE once the estimate
+ * overshoots by more than `startFrame` — and `_ResolvedVideoRange.resolve`
+ * rejects an out-of-range index outright rather than clamping, failing the
+ * whole generation. That can only arise when the window fills nearly the entire
+ * clip, where its length cannot be honoured anyway; below the slop the absolute
+ * form is always in range, and the drift it costs is the estimate error itself,
+ * a frame or two.
+ *
+ * DECIDED: the slop is not widened beyond 3. An estimate error past the slop
+ * can still fail the relative form, but only on a clip barely longer than the
+ * window (it needs `error > startFrame`), and `TAIL_INDEX_SLOP` is this file's
+ * declared bound on how wrong the estimate gets. A wider guard would not
+ * remove the cliff — it would move it, and pay for the move with silent length
+ * drift on every clip inside the wider margin.
+ */
+const toReferenceStartIndex = (reference: Extract<VideoReferenceItem, { kind: 'video' }>, endIndex: number): number => {
+  const { clip } = reference;
+
+  if (reference.fromSourceVideo !== true || endIndex >= 0 || clip.startFrame <= TAIL_INDEX_SLOP) {
+    return toTailAwareIndex(clip.startFrame, clip.numFrames);
+  }
+
+  return endIndex - (clip.endFrame - clip.startFrame);
 };
 
 const addPromptAndSeedNodes = (graph: BackendGraphContract) => ({
@@ -67,43 +170,49 @@ const toImageField = (image: { image_name: string }) => ({ image_name: image.ima
  * source with the freshly generated clip (2-frame crossfade over the seam).
  * Both intermediate video artifacts stay out of the gallery.
  */
-const addExtendScaffolding = (
+// The panel's frame count is an estimate (duration × fps; the records store
+// no exact count, and VFR uploads can overshoot by a frame or two). A trim
+// bound near the estimated ceiling therefore compiles as a NEGATIVE index —
+// resolved by the backend against the clip's REAL count — so "keep to the
+// end" can never land past it. Both bounds get the same treatment: a start
+// in the tail window would otherwise stay a positive estimate-based index
+// and land out of range exactly when the end's conversion saves it (the
+// start is always below the end, so the pair keeps its order when both go
+// negative). Mid-clip picks stay positive: a negative offset computed from
+// an overshooting estimate would drift them instead.
+/**
+ * How wrong the panel's `duration x fps` frame-count estimate is allowed to be.
+ * VFR containers overshoot it by a frame or two, so bounds within this many
+ * frames of the estimated end are emitted relative to the REAL end instead.
+ */
+const TAIL_INDEX_SLOP = 3;
+
+const toTailAwareIndex = (frame: number, estimatedNumFrames: number): number => {
+  const tailOffset = estimatedNumFrames - 1 - frame;
+
+  return tailOffset <= TAIL_INDEX_SLOP ? -(tailOffset + 1) : frame;
+};
+
+/**
+ * Trimmed source extraction + [source, new clip] crossfade join — the shared
+ * core of FL2VA/Wan extend and Ref2VA reference-extend. video_concat rebuilds
+ * the soundtrack from every input, so both clips' audio survives the join.
+ */
+const addSourceJoin = (
   graph: BackendGraphContract,
   sourceVideo: NonNullable<VideoSettings['sourceVideo']>,
   newClip: BackendInvocationContract,
   options: { extractFps?: number } = {}
 ) => {
-  // The panel's frame count is an estimate (duration × fps; the records store
-  // no exact count, and VFR uploads can overshoot by a frame or two). A trim
-  // bound near the estimated ceiling therefore compiles as a NEGATIVE index —
-  // resolved by the backend against the clip's REAL count — so "keep to the
-  // end" can never land past it. Both bounds get the same treatment: a start
-  // in the tail window would otherwise stay a positive estimate-based index
-  // and land out of range exactly when the end's conversion saves it (the
-  // start is always below the end, so the pair keeps its order when both go
-  // negative). Mid-clip picks stay positive: a negative offset computed from
-  // an overshooting estimate would drift them instead.
-  const toTailAwareIndex = (frame: number): number => {
-    const tailOffset = sourceVideo.numFrames - 1 - frame;
-
-    return tailOffset <= 3 ? -(tailOffset + 1) : frame;
-  };
   const extract = addNode(graph, {
-    end_frame: toTailAwareIndex(sourceVideo.endFrame),
+    end_frame: toTailAwareIndex(sourceVideo.endFrame, sourceVideo.numFrames),
     id: 'source_video',
     is_intermediate: true,
-    start_frame: toTailAwareIndex(sourceVideo.startFrame),
+    start_frame: toTailAwareIndex(sourceVideo.startFrame, sourceVideo.numFrames),
     type: 'extract_video_range',
     use_cache: false,
     video: { video_name: sourceVideo.video_name },
     ...(options.extractFps === undefined ? {} : { fps: options.extractFps }),
-  });
-  const lastFrame = addNode(graph, {
-    frame_index: -1,
-    id: 'source_last_frame',
-    is_intermediate: true,
-    type: 'video_frame_extract',
-    use_cache: false,
   });
   const sourceCollect = addNode(graph, { id: 'source_clip_collect', type: 'collect' });
   const clipsCollect = addNode(graph, { id: 'clips_to_join', type: 'collect' });
@@ -117,12 +226,31 @@ const addExtendScaffolding = (
     use_cache: false,
   });
 
-  addEdge(graph, extract, 'video', lastFrame, 'video');
   // Chained collectors keep the join order deterministic: [trimmed source, new clip].
   addEdge(graph, extract, 'video', sourceCollect, 'item');
   addEdge(graph, sourceCollect, 'collection', clipsCollect, 'collection');
   addEdge(graph, newClip, 'video', clipsCollect, 'item');
   addEdge(graph, clipsCollect, 'collection', concat, 'videos');
+
+  return { concat, extract };
+};
+
+const addExtendScaffolding = (
+  graph: BackendGraphContract,
+  sourceVideo: NonNullable<VideoSettings['sourceVideo']>,
+  newClip: BackendInvocationContract,
+  options: { extractFps?: number } = {}
+) => {
+  const { concat, extract } = addSourceJoin(graph, sourceVideo, newClip, options);
+  const lastFrame = addNode(graph, {
+    frame_index: -1,
+    id: 'source_last_frame',
+    is_intermediate: true,
+    type: 'video_frame_extract',
+    use_cache: false,
+  });
+
+  addEdge(graph, extract, 'video', lastFrame, 'video');
 
   return { concat, extract, lastFrame };
 };
@@ -365,13 +493,25 @@ const buildMiniMaxH3VideoGraph = (settings: VideoSettings, model: MainModelConfi
     throw new Error('Video dimensions could not be derived from the current settings.');
   }
 
+  // A single-file H3 checkpoint carries only the transformer: the loader's
+  // main model is the Diffusers install from the Model Components slot, with
+  // the checkpoint riding the transformer-override input. A Diffusers main at
+  // top is the loader's main directly. Validation requires the slot for
+  // checkpoint mains, so the throw is a backstop for direct callers.
+  const isSingleFileMain = model.format !== 'diffusers';
+  const componentSource = isSingleFileMain ? settings.componentSourceModel : null;
+
+  if (isSingleFileMain && !componentSource) {
+    throw new Error('A single-file MiniMax H3 transformer needs a Diffusers install selected under Model Components.');
+  }
+
   const graph: BackendGraphContract = { edges: [], id: createId('minimax_h3_video_graph'), nodes: {} };
   const { positivePrompt, seed } = addPromptAndSeedNodes(graph);
   const modelLoader = addNode(graph, {
     id: 'model_loader',
-    model,
+    model: componentSource ?? model,
     text_encoder_model: settings.h3TextEncoderModel ?? undefined,
-    transformer_model: settings.h3TransformerModel ?? undefined,
+    transformer_model: isSingleFileMain ? model : undefined,
     type: 'minimax_h3_model_loader',
   });
   const activeLoras = getActiveCompatibleLoras(settings, model);
@@ -394,13 +534,18 @@ const buildMiniMaxH3VideoGraph = (settings: VideoSettings, model: MainModelConfi
     type: 'minimax_h3_text_encoder',
     width: dimensions.width,
     ...keyframeLiterals,
+    ...(mode === 'reference' ? { num_frames: settings.numFrames } : {}),
   });
   const denoise = addNode(graph, {
     height: dimensions.height,
     id: 'denoise_latents',
     // The node's frame counts are a string Literal choice list.
     num_frames: String(settings.numFrames),
-    steps: settings.steps,
+    // The H3 node counts sigma grid points (terminal zero included), so node
+    // steps = model evaluations + 1. The panel's steps setting means model
+    // evaluations — the count a distilled turbo LoRA is trained for — so add
+    // the terminal point here. Metadata records the panel value.
+    steps: settings.steps + 1,
     type: 'minimax_h3_denoise',
     width: dimensions.width,
   });
@@ -411,7 +556,24 @@ const buildMiniMaxH3VideoGraph = (settings: VideoSettings, model: MainModelConfi
   addEdge(graph, posCond, 'conditioning', denoise, 'positive_conditioning');
   addEdge(graph, seed, 'value', denoise, 'seed');
 
-  const needsFrameConditioning = mode !== 'txt2vid';
+  if (mode === 'reference') {
+    const referenceChain = addReferenceNodes(graph, settings.references);
+    const referenceConditioning = addNode(graph, {
+      height: dimensions.height,
+      id: 'reference_conditioning',
+      num_frames: settings.numFrames,
+      type: 'minimax_h3_reference_conditioning',
+      width: dimensions.width,
+    });
+
+    addEdge(graph, referenceChain, 'collection', referenceConditioning, 'references');
+    addEdge(graph, referenceChain, 'collection', posCond, 'references');
+    addEdge(graph, modelLoader, 'vae', referenceConditioning, 'vae');
+    addEdge(graph, modelLoader, 'audio_vae', referenceConditioning, 'audio_vae');
+    addEdge(graph, referenceConditioning, 'reference_conditioning', denoise, 'reference_conditioning');
+  }
+
+  const needsFrameConditioning = mode !== 'txt2vid' && mode !== 'reference';
   let frameConditioning: BackendInvocationContract | null = null;
 
   if (needsFrameConditioning) {
@@ -444,6 +606,7 @@ const buildMiniMaxH3VideoGraph = (settings: VideoSettings, model: MainModelConfi
 
   let output: BackendInvocationContract;
   let extendParts: { lastFrame: BackendInvocationContract; newClip: BackendInvocationContract } | null = null;
+  let referenceExtendClip: BackendInvocationContract | null = null;
 
   if (mode === 'extend' && settings.sourceVideo && frameConditioning) {
     const newClip = addLatentsToVideo('extension_clip', true);
@@ -455,21 +618,49 @@ const buildMiniMaxH3VideoGraph = (settings: VideoSettings, model: MainModelConfi
     addEdge(graph, lastFrame, 'image', frameConditioning, 'first_image');
     output = concat;
     extendParts = { lastFrame, newClip };
+  } else if (mode === 'reference' && settings.sourceVideo) {
+    // Reference-extend: the new clip is appended to the trimmed Initial
+    // Video. Continuity comes from the references (typically the linked tail
+    // reference), not from frame conditioning, so no last frame is extracted.
+    const newClip = addLatentsToVideo('extension_clip', true);
+    const { concat } = addSourceJoin(graph, settings.sourceVideo, newClip, { extractFps: 24 });
+
+    output = concat;
+    referenceExtendClip = newClip;
   } else {
     output = addLatentsToVideo('video_output', false);
   }
 
   const metadata = addVideoMetadata({
     extras: {
-      ...(settings.h3TransformerModel ? { minimax_h3_transformer_model: settings.h3TransformerModel } : {}),
+      ...(componentSource ? { minimax_h3_component_source: componentSource } : {}),
       ...(settings.h3TextEncoderModel ? { minimax_h3_text_encoder_model: settings.h3TextEncoderModel } : {}),
+      ...(mode === 'reference'
+        ? {
+            minimax_h3_references: settings.references.map((reference) =>
+              reference.kind === 'image'
+                ? { detail: reference.detail, image_name: reference.image.image_name, kind: 'image' }
+                : {
+                    conditioning: reference.conditioning,
+                    end_frame: reference.clip.endFrame,
+                    kind: 'video',
+                    start_frame: reference.clip.startFrame,
+                    video_name: reference.clip.video_name,
+                  }
+            ),
+          }
+        : {}),
     },
     generationMode: MINIMAX_H3_GENERATION_MODES[mode],
     graph,
     height: dimensions.height,
     model,
     negativeWired: false,
-    outputs: extendParts ? [output, extendParts.newClip] : [output],
+    outputs: extendParts
+      ? [output, extendParts.newClip]
+      : referenceExtendClip
+        ? [output, referenceExtendClip]
+        : [output],
     settings,
     width: dimensions.width,
   });

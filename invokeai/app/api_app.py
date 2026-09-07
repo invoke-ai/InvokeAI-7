@@ -49,6 +49,7 @@ from invokeai.app.api.sockets import SocketIO
 from invokeai.app.services.config.config_default import get_config
 from invokeai.app.util.custom_openapi import get_openapi_func
 from invokeai.backend.util.logging import InvokeAILogger
+from invokeai.frontend.cli.arg_parser import InvokeAIArgs
 
 app_config = get_config()
 logger = InvokeAILogger.get_logger(config=app_config)
@@ -342,35 +343,34 @@ async def _identify_video_upload_user_async(scope: Scope) -> tuple[bool, str | N
     return await run_in_threadpool(_identify_video_upload_user, scope)
 
 
-class VideoUploadLimitASGIMiddleware:
-    """Bound video-upload ingress *before* FastAPI's multipart parser runs.
-
-    The upload route's own MAX_UPLOAD_SIZE check only fires after the multipart body has
-    been fully parsed (and spooled to temp storage), so oversized, chunked, or many
-    concurrent uploads could exhaust temp space before ever being rejected. This
-    middleware rejects oversized requests from the Content-Length header, aborts
-    chunked bodies that exceed the cap mid-stream, and bounds concurrent uploads
-    both globally and per user (so one tenant's slow uploads cannot starve the
-    others into 429s).
-    """
+class RequestBodyLimitASGIMiddleware:
+    """Bound selected request bodies before framework parsing and buffering."""
 
     def __init__(
         self,
         app: ASGIApp,
+        matches_request: Callable[[str, str], bool],
+        too_large_detail: Callable[[int, int], str | dict[str, object]],
+        capacity_refusal_detail: Callable[[bool], str | dict[str, object]],
         max_body_bytes: int,
         max_concurrent: int,
         max_concurrent_per_user: int | None = None,
         identify_user: Callable[[Scope], tuple[bool, str | None] | Awaitable[tuple[bool, str | None]]] | None = None,
         idle_timeout_seconds: float = 120.0,
         max_upload_duration_seconds: float = 30 * 60,
+        retry_after_seconds: int = 5,
     ) -> None:
         self.app = app
+        self.matches_request = matches_request
+        self.too_large_detail = too_large_detail
+        self.capacity_refusal_detail = capacity_refusal_detail
         self.max_body_bytes = max_body_bytes
         self.max_concurrent = max_concurrent
         self.max_concurrent_per_user = max_concurrent_per_user
         self.identify_user = identify_user
         self.idle_timeout_seconds = idle_timeout_seconds
         self.max_upload_duration_seconds = max_upload_duration_seconds
+        self.retry_after_seconds = retry_after_seconds
         self._active = 0
         self._active_by_user: dict[str, int] = {}
 
@@ -379,7 +379,7 @@ class VideoUploadLimitASGIMiddleware:
             return await self.app(scope, receive, send)
         # Behind a sub-path proxy the public path carries the prefix (see SubPathASGIMiddleware).
         route_path: str = scope.get("path", "").removeprefix(scope.get("root_path", ""))
-        if not (scope.get("method") == "POST" and route_path == "/api/v1/videos/upload"):
+        if not self.matches_request(scope.get("method", ""), route_path):
             return await self.app(scope, receive, send)
 
         per_user_key: str | None = None
@@ -397,36 +397,38 @@ class VideoUploadLimitASGIMiddleware:
                 return await response(scope, receive, send)
 
         content_length = Headers(scope=scope).get("content-length")
-        if content_length is not None and content_length.isdigit() and int(content_length) > self.max_body_bytes:
+        content_length_bytes = int(content_length) if content_length is not None and content_length.isdigit() else None
+        if content_length_bytes is not None and content_length_bytes > self.max_body_bytes:
             response = JSONResponse(
-                {"detail": f"Video upload exceeds maximum request size ({self.max_body_bytes} bytes)"},
+                {"detail": self.too_large_detail(content_length_bytes, self.max_body_bytes)},
                 status_code=413,
             )
             return await response(scope, receive, send)
 
+        def has_capacity() -> bool:
+            return self._active < self.max_concurrent and (
+                per_user_key is None
+                or self.max_concurrent_per_user is None
+                or self._active_by_user.get(per_user_key, 0) < self.max_concurrent_per_user
+            )
+
         if self._active >= self.max_concurrent:
             response = JSONResponse(
-                {"detail": "Too many concurrent video uploads; try again shortly"},
+                {"detail": self.capacity_refusal_detail(False)},
                 status_code=429,
-                headers={"Retry-After": "5"},
+                headers={"Retry-After": str(self.retry_after_seconds)},
             )
             return await response(scope, receive, send)
 
-        if (
-            per_user_key is not None
-            and self.max_concurrent_per_user is not None
-            and self._active_by_user.get(per_user_key, 0) >= self.max_concurrent_per_user
-        ):
+        if not has_capacity():
             response = JSONResponse(
-                {"detail": "Too many concurrent video uploads for this user; try again shortly"},
+                {"detail": self.capacity_refusal_detail(True)},
                 status_code=429,
-                headers={"Retry-After": "5"},
+                headers={"Retry-After": str(self.retry_after_seconds)},
             )
             return await response(scope, receive, send)
 
-        self._active += 1
-        if per_user_key is not None:
-            self._active_by_user[per_user_key] = self._active_by_user.get(per_user_key, 0) + 1
+        self._claim_capacity(per_user_key)
         received = 0
         upload_started_at = asyncio.get_running_loop().time()
 
@@ -454,13 +456,97 @@ class VideoUploadLimitASGIMiddleware:
         try:
             await self.app(scope, limited_receive, send)
         finally:
-            self._active -= 1
-            if per_user_key is not None:
-                remaining = self._active_by_user.get(per_user_key, 0) - 1
-                if remaining > 0:
-                    self._active_by_user[per_user_key] = remaining
-                else:
-                    self._active_by_user.pop(per_user_key, None)
+            self._release_capacity(per_user_key)
+
+    def _claim_capacity(self, per_user_key: str | None) -> None:
+        self._active += 1
+        if per_user_key is not None:
+            self._active_by_user[per_user_key] = self._active_by_user.get(per_user_key, 0) + 1
+
+    def _release_capacity(self, per_user_key: str | None) -> None:
+        self._active -= 1
+        if per_user_key is None:
+            return
+        remaining = self._active_by_user.get(per_user_key, 0) - 1
+        if remaining > 0:
+            self._active_by_user[per_user_key] = remaining
+        else:
+            self._active_by_user.pop(per_user_key, None)
+
+
+class VideoUploadLimitASGIMiddleware(RequestBodyLimitASGIMiddleware):
+    """Bound video-upload ingress before FastAPI's multipart parser runs."""
+
+    def __init__(
+        self,
+        app: ASGIApp,
+        max_body_bytes: int,
+        max_concurrent: int,
+        max_concurrent_per_user: int | None = None,
+        identify_user: Callable[[Scope], tuple[bool, str | None] | Awaitable[tuple[bool, str | None]]] | None = None,
+        idle_timeout_seconds: float = 120.0,
+        max_upload_duration_seconds: float = 30 * 60,
+    ) -> None:
+        super().__init__(
+            app=app,
+            matches_request=lambda method, path: method == "POST" and path == "/api/v1/videos/upload",
+            too_large_detail=lambda _actual, limit: f"Video upload exceeds maximum request size ({limit} bytes)",
+            capacity_refusal_detail=lambda per_user: (
+                "Too many concurrent video uploads for this user; try again shortly"
+                if per_user
+                else "Too many concurrent video uploads; try again shortly"
+            ),
+            max_body_bytes=max_body_bytes,
+            max_concurrent=max_concurrent,
+            max_concurrent_per_user=max_concurrent_per_user,
+            identify_user=identify_user,
+            idle_timeout_seconds=idle_timeout_seconds,
+            max_upload_duration_seconds=max_upload_duration_seconds,
+        )
+
+
+def _is_project_write(method: str, path: str) -> bool:
+    if method == "POST":
+        return path == "/api/v1/projects/"
+    if method != "PUT" or not path.startswith("/api/v1/projects/"):
+        return False
+    project_id = path.removeprefix("/api/v1/projects/")
+    return bool(project_id) and "/" not in project_id
+
+
+class ProjectWriteLimitASGIMiddleware(RequestBodyLimitASGIMiddleware):
+    """Bound project writes before FastAPI parses their JSON documents."""
+
+    def __init__(
+        self,
+        app: ASGIApp,
+        max_body_bytes: int,
+        max_concurrent: int,
+        max_concurrent_per_user: int | None = None,
+        identify_user: Callable[[Scope], tuple[bool, str | None] | Awaitable[tuple[bool, str | None]]] | None = None,
+        idle_timeout_seconds: float = 30.0,
+        max_upload_duration_seconds: float = 120.0,
+    ) -> None:
+        super().__init__(
+            app=app,
+            matches_request=_is_project_write,
+            too_large_detail=lambda actual, limit: {
+                "actual_bytes": actual,
+                "code": "project_request_too_large",
+                "max_bytes": limit,
+            },
+            capacity_refusal_detail=lambda _per_user: {
+                "code": "project_write_busy",
+                "message": "Too many project saves are in progress; retry shortly",
+            },
+            max_body_bytes=max_body_bytes,
+            max_concurrent=max_concurrent,
+            max_concurrent_per_user=max_concurrent_per_user,
+            identify_user=identify_user,
+            idle_timeout_seconds=idle_timeout_seconds,
+            max_upload_duration_seconds=max_upload_duration_seconds,
+            retry_after_seconds=1,
+        )
 
 
 class SubPathASGIMiddleware:
@@ -512,6 +598,15 @@ app.add_middleware(
     max_concurrent=videos.MAX_CONCURRENT_VIDEO_UPLOADS,
     max_concurrent_per_user=videos.MAX_CONCURRENT_VIDEO_UPLOADS_PER_USER,
     identify_user=_identify_video_upload_user_async,
+)
+app.add_middleware(
+    ProjectWriteLimitASGIMiddleware,
+    max_body_bytes=projects.PROJECT_WRITE_REQUEST_MAX_BYTES,
+    max_concurrent=projects.MAX_CONCURRENT_PROJECT_WRITES,
+    max_concurrent_per_user=projects.MAX_CONCURRENT_PROJECT_WRITES_PER_USER,
+    identify_user=_identify_video_upload_user_async,
+    idle_timeout_seconds=projects.PROJECT_WRITE_IDLE_TIMEOUT_SECONDS,
+    max_upload_duration_seconds=projects.PROJECT_WRITE_MAX_DURATION_SECONDS,
 )
 
 
@@ -588,6 +683,9 @@ def overridden_redoc(request: Request) -> HTMLResponse:
 
 
 web_root_path = Path(list(web_dir.__path__)[0])
+ui_root_path = web_root_path
+if InvokeAIArgs.did_parse and getattr(InvokeAIArgs.args, "webv2", False):
+    ui_root_path = web_root_path.parent / "webv2"
 
 if app_config.unsafe_disable_picklescan:
     logger.warning(
@@ -596,9 +694,9 @@ if app_config.unsafe_disable_picklescan:
     )
 
 try:
-    app.mount("/", NoCacheStaticFiles(directory=Path(web_root_path, "dist"), html=True), name="ui")
+    app.mount("/", NoCacheStaticFiles(directory=Path(ui_root_path, "dist"), html=True), name="ui")
 except RuntimeError:
-    logger.warning(f"No UI found at {web_root_path}/dist, skipping UI mount")
+    logger.warning(f"No UI found at {ui_root_path}/dist, skipping UI mount")
 app.mount(
     "/static", NoCacheStaticFiles(directory=Path(web_root_path, "static/")), name="static"
 )  # docs favicon is in here

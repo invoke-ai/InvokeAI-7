@@ -48,6 +48,9 @@ from invokeai.backend.model_manager.starter_models.common import (
     clip_vit_l_image_encoder as clip_vit_l_image_encoder,
 )
 from invokeai.backend.model_manager.starter_models.common import (
+    dfn2b_clip_vit_l_image_encoder as dfn2b_clip_vit_l_image_encoder,
+)
+from invokeai.backend.model_manager.starter_models.common import (
     esrgan_srx4 as esrgan_srx4,
 )
 from invokeai.backend.model_manager.starter_models.common import (
@@ -388,6 +391,12 @@ from invokeai.backend.model_manager.starter_models.minimax_h3 import (
 )
 from invokeai.backend.model_manager.starter_models.minimax_h3 import (
     minimax_h3_lightx2v_turbo_lora as minimax_h3_lightx2v_turbo_lora,
+)
+from invokeai.backend.model_manager.starter_models.minimax_h3 import (
+    minimax_h3_ref2v_turbo_lora as minimax_h3_ref2v_turbo_lora,
+)
+from invokeai.backend.model_manager.starter_models.minimax_h3 import (
+    minimax_h3_ref2va_int8_transformer as minimax_h3_ref2va_int8_transformer,
 )
 from invokeai.backend.model_manager.starter_models.minimax_h3 import (
     minimax_h3_turbo_lora as minimax_h3_turbo_lora,
@@ -759,7 +768,7 @@ STARTER_MODELS: list[StarterModel] = [
     t5_gguf_q3_k_s_encoder,
     t5_gguf_q6_k_encoder,
     clip_l_encoder,
-    clip_vit_l_image_encoder,
+    dfn2b_clip_vit_l_image_encoder,
     siglip,
     flux_redux,
     llava_onevision,
@@ -851,10 +860,12 @@ STARTER_MODELS: list[StarterModel] = [
     wan_22_ti2v_5b_gguf_q4_k_m,
     wan_22_ti2v_5b_gguf_q8_0,
     minimax_h3_int8_transformer,
+    minimax_h3_ref2va_int8_transformer,
     minimax_h3_int8_text_encoder,
     minimax_h3_components,
     minimax_h3_turbo_lora,
     minimax_h3_lightx2v_turbo_lora,
+    minimax_h3_ref2v_turbo_lora,
     gemini_flash_image,
     gemini_pro_image_preview,
     gemini_3_1_flash_image_preview,
@@ -1027,16 +1038,18 @@ ideogram_bundle: list[StarterModel] = [
     ideogram_4_nf4,
 ]
 
-# The working set for MiniMax H3 video+audio generation (~62 GB): shared components from
-# the official repo plus Comfy-Org's int8 single-file transformer and text encoder, and the
-# two turbo (step-distillation) LoRAs for fast low-step rendering. See the license note in
-# the MiniMax H3 region above.
+# The working set for MiniMax H3 video+audio generation (~85 GB): shared components from
+# the official repo plus Comfy-Org's int8 single-file FL2VA and Ref2VA transformers and the
+# text encoder, and the three turbo (step-distillation) LoRAs for fast low-step rendering.
+# See the license note in the MiniMax H3 region above.
 minimax_h3_bundle: list[StarterModel] = [
     minimax_h3_components,
     minimax_h3_int8_text_encoder,
     minimax_h3_int8_transformer,
+    minimax_h3_ref2va_int8_transformer,
     minimax_h3_turbo_lora,
     minimax_h3_lightx2v_turbo_lora,
+    minimax_h3_ref2v_turbo_lora,
 ]
 
 STARTER_BUNDLES: dict[str, StarterModelBundle] = {

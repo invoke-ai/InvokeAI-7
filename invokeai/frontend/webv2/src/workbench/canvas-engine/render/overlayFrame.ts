@@ -1,4 +1,4 @@
-import type { CanvasDocumentContractV2 } from '@workbench/canvas-engine/contracts';
+import type { CanvasDocumentContractV3 } from '@workbench/canvas-engine/contracts';
 import type { SamPreviewState } from '@workbench/canvas-engine/controllers/previewStateController';
 import type { EngineStores } from '@workbench/canvas-engine/engineStores';
 import type {
@@ -10,14 +10,27 @@ import type { FloatingSelection } from '@workbench/canvas-engine/selection/float
 import type { SelectionState } from '@workbench/canvas-engine/selection/selectionState';
 import type { Mat2d, ToolId, Vec2 } from '@workbench/canvas-engine/types';
 
+import {
+  compileDocumentLeaves,
+  lookupDocumentLayer,
+  lookupDocumentLeaf,
+} from '@workbench/canvas-engine/document-model/documentModel';
 import { applyToPoint } from '@workbench/canvas-engine/math/mat2d';
-import { hittableLayerRect, layerMatrix, layerOutlineCorners } from '@workbench/canvas-engine/tools/moveHitTest';
+import { hittableLayerRect, layerOutlineCorners } from '@workbench/canvas-engine/tools/moveHitTest';
 import { transformOverlayGeometry } from '@workbench/canvas-engine/transform/transformMath';
 
 import type { FloatingSelectionFrame } from './floatingSelectionFrame';
 
-/** The SAM preview's fixed overlay opacity — it sits over the layer it describes. */
+/** The SAM preview's resting overlay opacity — it sits over the layer it describes. */
 const SAM_PREVIEW_OPACITY = 0.45;
+/** Pulse amplitude and full-cycle period, matching legacy's 1s yoyo tween. */
+const SAM_PREVIEW_PULSE = 0.15;
+const SAM_PULSE_PERIOD_MS = 2000;
+
+const samPreviewOpacity = (pulseTime: number | null): number =>
+  pulseTime === null
+    ? SAM_PREVIEW_OPACITY
+    : SAM_PREVIEW_OPACITY + SAM_PREVIEW_PULSE * Math.sin((pulseTime / SAM_PULSE_PERIOD_MS) * 2 * Math.PI);
 
 export type LayerTransformOverrides = ReadonlyMap<
   string,
@@ -32,12 +45,14 @@ export interface CreateOverlayFrameDeps {
   readonly getFloatingSelection: () => FloatingSelection | null;
   readonly getOverlayCursor: () => OverlayCursor | null;
   readonly getAntsPhase: () => number;
+  /** The clock while the SAM pulse animates, `null` for the static opacity (reduced motion, no preview). */
+  readonly getSamPulseTime: () => number | null;
 }
 
 export interface OverlayFrame {
   /** Everything the overlay renderer draws this frame, gathered from live state. */
   describe(
-    doc: CanvasDocumentContractV2,
+    doc: CanvasDocumentContractV3,
     view: Mat2d,
     floatFrame: FloatingSelectionFrame | null,
     samPreview: SamPreviewState | null
@@ -62,12 +77,12 @@ export const createOverlayFrame = (deps: CreateOverlayFrameDeps): OverlayFrame =
    * (carrying a live override) wins over the committed selection so the marquee
    * tracks the preview rather than lagging a frame behind it.
    */
-  const moveOutlineCorners = (doc: CanvasDocumentContractV2): readonly Vec2[] | null => {
+  const moveOutlineCorners = (doc: CanvasDocumentContractV3): readonly Vec2[] | null => {
     if (getActiveToolId() !== 'move') {
       return null;
     }
-    const overridden = doc.layers.find((layer) => transformOverrides.has(layer.id));
-    const target = overridden ?? doc.layers.find((layer) => layer.id === doc.selectedLayerId);
+    const overridden = compileDocumentLeaves(doc).find((leaf) => transformOverrides.has(leaf.id))?.layer;
+    const target = overridden ?? (doc.selectedLayerId ? lookupDocumentLayer(doc, doc.selectedLayerId) : null);
     if (!target) {
       return null;
     }
@@ -75,7 +90,7 @@ export const createOverlayFrame = (deps: CreateOverlayFrameDeps): OverlayFrame =
   };
 
   /** The transform-tool frame (rotated bounds + handles + rotation nub), or `null`. */
-  const transformFrame = (doc: CanvasDocumentContractV2): TransformFrameOverlay | null => {
+  const transformFrame = (doc: CanvasDocumentContractV3): TransformFrameOverlay | null => {
     if (getActiveToolId() !== 'transform') {
       return null;
     }
@@ -84,11 +99,11 @@ export const createOverlayFrame = (deps: CreateOverlayFrameDeps): OverlayFrame =
       // The float frames its own pixels. Its rect and transform are LAYER-LOCAL,
       // so the resulting geometry is projected out through the layer's matrix to
       // reach the document space the overlay draws in.
-      const floatLayer = doc.layers.find((candidate) => candidate.id === float.layerId);
-      if (!floatLayer) {
+      const floatLeaf = lookupDocumentLeaf(doc, float.layerId);
+      if (!floatLeaf) {
         return null;
       }
-      const toDocument = layerMatrix(floatLayer.transform);
+      const toDocument = floatLeaf.worldTransform;
       const geometry = transformOverlayGeometry(float.transform, float.pixels.rect);
       return {
         center: applyToPoint(toDocument, geometry.center),
@@ -101,7 +116,7 @@ export const createOverlayFrame = (deps: CreateOverlayFrameDeps): OverlayFrame =
     if (!session) {
       return null;
     }
-    const layer = doc.layers.find((candidate) => candidate.id === session.layerId);
+    const layer = lookupDocumentLayer(doc, session.layerId);
     // The layer's LOCAL content rect (off-origin aware): the frame must wrap the
     // pixels where the compositor draws them, not an assumed origin-anchored box.
     const rect = layer ? hittableLayerRect(layer, doc) : null;
@@ -138,7 +153,13 @@ export const createOverlayFrame = (deps: CreateOverlayFrameDeps): OverlayFrame =
         ruleOfThirds: stores.ruleOfThirds.get(),
         samInput: samSession?.input.type === 'visual' ? samSession.input : null,
         samPreview: samPreview
-          ? { opacity: SAM_PREVIEW_OPACITY, rect: samPreview.rect, surface: samPreview.data }
+          ? {
+              opacity: samPreviewOpacity(deps.getSamPulseTime()),
+              outline: samPreview.outline ?? null,
+              phase: deps.getAntsPhase(),
+              rect: samPreview.rect,
+              surface: samPreview.data,
+            }
           : null,
         shapePreview: stores.shapePreview.get(),
         // The passive bbox frame follows the setting, but always renders while

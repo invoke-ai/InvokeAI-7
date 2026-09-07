@@ -886,13 +886,33 @@ class UtilInterface(InvocationContextInterface):
                 original size.
         """
 
-        self._services.events.emit_invocation_progress(
-            queue_item=self._data.queue_item,
+        queue_item = self._data.queue_item
+
+        if image is None:
+            self._services.events.emit_invocation_progress(
+                queue_item=queue_item,
+                invocation=self._data.invocation,
+                message=message,
+                percentage=percentage,
+            )
+            return
+
+        # Image-bearing frames are revisioned and throttled by the preview store, and the emitted
+        # event is retained there so a reconnecting client can be given the latest frame instead
+        # of waiting for the next step. Throttled frames are dropped before the JPEG encode.
+        previews = self._services.progress_previews
+        revision = previews.reserve_revision(queue_item.item_id, queue_item.session_id, percentage)
+        if revision is None:
+            return
+        event = self._services.events.emit_invocation_progress(
+            queue_item=queue_item,
             invocation=self._data.invocation,
             message=message,
             percentage=percentage,
-            image=ProgressImage.build(image, image_size) if image else None,
+            image=ProgressImage.build(image, image_size),
+            revision=revision,
         )
+        previews.record(event)
 
 
 class WildcardsInterface(InvocationContextInterface):

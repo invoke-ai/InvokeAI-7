@@ -13,6 +13,7 @@
  */
 
 const SEED_MAX = 4_294_967_295;
+export const MAX_QUEUE_BATCH_ITEMS = 10_000;
 
 export type QueuePromptSeedBehaviour = 'per-iteration' | 'per-image';
 
@@ -20,7 +21,9 @@ export const isQueuePromptSeedBehaviour = (value: unknown): value is QueuePrompt
   value === 'per-iteration' || value === 'per-image';
 
 export const sanitizeBatchCount = (value: unknown): number =>
-  typeof value === 'number' && Number.isFinite(value) ? Math.max(1, Math.round(value)) : 1;
+  typeof value === 'number' && Number.isFinite(value)
+    ? Math.min(MAX_QUEUE_BATCH_ITEMS, Math.max(1, Math.round(value)))
+    : 1;
 
 export const generateSeedSequence = (start: number, count: number): number[] =>
   Array.from({ length: sanitizeBatchCount(count) }, (_, index) => (start + index) % SEED_MAX);

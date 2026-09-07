@@ -1,5 +1,6 @@
 import type { GalleryVideoItem } from '@features/gallery';
 import type { ModelConfig } from '@features/models';
+import type { VideoReferenceItem } from '@features/video';
 import type { AccountScope } from '@platform/state/accountLifecycle';
 import type { WorkbenchCommands } from '@workbench/workbenchStore';
 
@@ -82,7 +83,7 @@ export const executeVideoRecall = async ({
   owner: callerOwner,
   projectId,
 }: {
-  commands: Pick<WorkbenchCommands, 'generation' | 'notifications' | 'widgets'>;
+  commands: Pick<WorkbenchCommands, 'notifications' | 'widgets'>;
   getVideoValues: () => Record<string, unknown>;
   item: GalleryVideoItem;
   kind: VideoRecallKind;
@@ -183,6 +184,78 @@ export const executeVideoRecall = async ({
         }
       }
 
+      if (result.mediaNames.references.length > 0) {
+        // Ordered re-hydration: resolve every recorded reference against the gallery,
+        // dropping deleted media while PRESERVING the survivors' order (order is part of
+        // the request contract).
+        const imageNames = result.mediaNames.references
+          .filter((reference): reference is typeof reference & { kind: 'image' } => reference.kind === 'image')
+          .map((reference) => reference.name);
+        const resolvedImages =
+          imageNames.length > 0 ? await galleryImages.resolveMany([...new Set(imageNames)], owner.signal) : [];
+
+        assertAccountScopeCurrent(owner);
+        const imagesByName = new Map(resolvedImages.map((image) => [image.imageName, image]));
+        const references: VideoReferenceItem[] = [];
+
+        for (const recorded of result.mediaNames.references) {
+          if (recorded.kind === 'image') {
+            const image = imagesByName.get(recorded.name);
+
+            if (image) {
+              references.push({
+                detail: recorded.detail === 'match' ? 'match' : 'max',
+                image: { height: image.height, image_name: image.imageName, width: image.width },
+                kind: 'image',
+              });
+            }
+            continue;
+          }
+          try {
+            const item = await galleryItems.resolve({ kind: 'video', name: recorded.name }, owner.signal);
+
+            assertAccountScopeCurrent(owner);
+            if (item?.kind !== 'video') {
+              continue;
+            }
+            const clip = createVideoSourceClip({
+              durationSeconds: item.durationSeconds,
+              fps: item.fps,
+              height: item.height,
+              name: item.name,
+              width: item.width,
+            });
+            // Restore the recorded trim, clamped to the fresh frame-count estimate.
+            const startFrame = recorded.trim ? Math.min(Math.max(recorded.trim.startFrame, 0), clip.numFrames - 1) : 0;
+            const endFrame = recorded.trim
+              ? Math.min(Math.max(recorded.trim.endFrame, startFrame), clip.numFrames - 1)
+              : clip.numFrames - 1;
+            const conditioning =
+              recorded.conditioning === 'video' || recorded.conditioning === 'audio'
+                ? recorded.conditioning
+                : 'video_audio';
+
+            references.push({ clip: { ...clip, endFrame, startFrame }, conditioning, kind: 'video' });
+          } catch {
+            assertAccountScopeCurrent(owner);
+            // The reference video is gone; the rest of the recall still applies.
+          }
+        }
+
+        if (references.length > 0) {
+          result.values = {
+            ...result.values,
+            firstFrameImage: null,
+            lastFrameImage: null,
+            references,
+            // A source video recorded alongside references is reference-extend
+            // state (hydrated above) — keep it; clear only a leftover.
+            sourceVideo: result.mediaNames.sourceVideoName ? result.values.sourceVideo : null,
+          };
+          recalledMedia = true;
+        }
+      }
+
       if (!recalledMedia) {
         result.fields = result.fields.filter((field) => field !== 'media');
       }
@@ -196,10 +269,27 @@ export const executeVideoRecall = async ({
       const effectiveModel = result.values.model;
 
       if (effectiveModel) {
-        const modes = getVideoModelPolicy(effectiveModel, result.values).modes;
+        const policy = getVideoModelPolicy(effectiveModel, result.values);
+        const modes = policy.modes;
+        const referenceExtend = Boolean(policy.references?.extend);
         let { firstFrameImage, lastFrameImage, sourceVideo } = result.values;
+        let references = result.values.references;
 
-        if (sourceVideo && !modes.includes('extend')) {
+        if (references.length > 0 && !modes.includes('reference')) {
+          // The recalled transformer (or the panel's surviving one) has no reference mode.
+          references = [];
+        }
+        if (references.length > 0) {
+          // References replace the frame slots; the source video survives only
+          // on a reference-extend panel (the new clip is appended to it).
+          firstFrameImage = null;
+          lastFrameImage = null;
+          if (!referenceExtend) {
+            sourceVideo = null;
+          }
+        }
+
+        if (sourceVideo && !modes.includes('extend') && !(references.length > 0 && referenceExtend)) {
           sourceVideo = null;
         }
         if (firstFrameImage && !modes.includes('first-frame') && !modes.includes('first-last')) {
@@ -217,9 +307,10 @@ export const executeVideoRecall = async ({
         if (
           firstFrameImage !== result.values.firstFrameImage ||
           lastFrameImage !== result.values.lastFrameImage ||
-          sourceVideo !== result.values.sourceVideo
+          sourceVideo !== result.values.sourceVideo ||
+          references !== result.values.references
         ) {
-          result.values = { ...result.values, firstFrameImage, lastFrameImage, sourceVideo };
+          result.values = { ...result.values, firstFrameImage, lastFrameImage, references, sourceVideo };
         }
       }
     }
@@ -233,15 +324,25 @@ export const executeVideoRecall = async ({
       return false;
     }
 
-    // Prompts live in the shared project draft; everything else is widget values.
-    if (result.promptPatch) {
-      commands.generation.patchPromptDraft(result.promptPatch, 'video', projectId);
-    }
-    // A prompts-only recall changes no widget values — skip the whole-values
-    // write (and the lost-update window it would widen). The builder always
-    // returns a fresh copy, so the fields list, not object identity, is the
-    // signal.
-    if (result.fields.some((field) => field !== 'prompts')) {
+    // Prompts are Video's own widget values now, not the draft Generate and
+    // Upscale share — but a prompts-only recall must still write ONLY the prompt
+    // keys. `result.values` is the panel re-snapshotted through
+    // `syncVideoWidgetValuesWithModels`, so writing it wholesale would push an
+    // unrelated model-family transition into the store behind a toast that says
+    // "prompts" (uninstall the recorded main, recall prompts, and the panel's
+    // frames/fps/resolution/LoRAs all reset). It would also widen the
+    // lost-update window against a concurrent recall still awaiting its media.
+    if (result.fields.every((field) => field === 'prompts')) {
+      commands.widgets.patchValues(
+        'video',
+        {
+          negativePrompt: result.values.negativePrompt,
+          negativePromptEnabled: result.values.negativePromptEnabled,
+          positivePrompt: result.values.positivePrompt,
+        },
+        projectId
+      );
+    } else {
       commands.widgets.patchValues('video', { ...result.values }, projectId);
     }
     commands.notifications.add({

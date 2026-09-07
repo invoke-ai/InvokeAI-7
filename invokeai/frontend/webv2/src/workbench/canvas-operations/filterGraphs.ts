@@ -27,10 +27,19 @@ export type FilterParamSpec =
   | { kind: 'string'; key: string; default: string }
   | { kind: 'model'; key: string; default: null; modelType: 'spandrel_image_to_image' };
 
+export type FilterCategory = 'edge' | 'depth' | 'pose' | 'color' | 'noise' | 'upscale';
+
+/** Display order of the filter-picker groups. */
+export const FILTER_CATEGORY_ORDER: readonly FilterCategory[] = ['edge', 'depth', 'pose', 'color', 'noise', 'upscale'];
+
 /** One filter's identity, defaults, and node-arg projection. */
 export interface FilterDefinition {
-  /** The filter id (equals the backend node `type`). */
+  /** The persisted/UI filter id. */
   type: string;
+  /** The picker group the filter belongs to. */
+  category: FilterCategory;
+  /** Backend node type when this definition is a named preset. */
+  nodeType?: string;
   /** Ordered parameter specs (also the default-settings source). */
   params: readonly FilterParamSpec[];
 }
@@ -46,8 +55,9 @@ export const buildFilterDefaults = (definition: FilterDefinition): Record<string
 
 /**
  * The supported filters, in the legacy display order of the required set
- * (`features/controlLayers/store/filters.ts`). Each id equals its backend node
- * `type`; params carry legacy defaults + ranges.
+ * (`features/controlLayers/store/filters.ts`), plus named presets that improve
+ * discoverability. Params carry legacy defaults + ranges; a preset may project
+ * its UI id to a different backend node type.
  */
 export const CONTROL_FILTERS: readonly FilterDefinition[] = [
   {
@@ -55,6 +65,7 @@ export const CONTROL_FILTERS: readonly FilterDefinition[] = [
       { default: 100, integer: true, key: 'low_threshold', kind: 'number', max: 255, min: 0, step: 1 },
       { default: 200, integer: true, key: 'high_threshold', kind: 'number', max: 255, min: 0, step: 1 },
     ],
+    category: 'edge',
     type: 'canny_edge_detection',
   },
   {
@@ -71,6 +82,7 @@ export const CONTROL_FILTERS: readonly FilterDefinition[] = [
         ],
       },
     ],
+    category: 'depth',
     type: 'depth_anything_depth_estimation',
   },
   {
@@ -79,14 +91,17 @@ export const CONTROL_FILTERS: readonly FilterDefinition[] = [
       { default: true, key: 'draw_face', kind: 'boolean' },
       { default: true, key: 'draw_hands', kind: 'boolean' },
     ],
+    category: 'pose',
     type: 'dw_openpose_detection',
   },
   {
     params: [{ default: false, key: 'coarse', kind: 'boolean' }],
+    category: 'edge',
     type: 'lineart_edge_detection',
   },
   {
     params: [{ default: false, key: 'scribble', kind: 'boolean' }],
+    category: 'edge',
     type: 'hed_edge_detection',
   },
   {
@@ -94,6 +109,7 @@ export const CONTROL_FILTERS: readonly FilterDefinition[] = [
       { default: 0.1, key: 'score_threshold', kind: 'number', max: 1, min: 0, step: 0.01 },
       { default: 20, key: 'distance_threshold', kind: 'number', max: 1000, min: 0, sliderMax: 100, step: 1 },
     ],
+    category: 'edge',
     type: 'mlsd_detection',
   },
   {
@@ -101,10 +117,18 @@ export const CONTROL_FILTERS: readonly FilterDefinition[] = [
       { default: false, key: 'quantize_edges', kind: 'boolean' },
       { default: false, key: 'scribble', kind: 'boolean' },
     ],
+    category: 'edge',
     type: 'pidi_edge_detection',
   },
   {
+    nodeType: 'hed_edge_detection',
+    params: [],
+    category: 'edge',
+    type: 'scribble_edge_detection',
+  },
+  {
     params: [{ default: 256, integer: true, key: 'scale_factor', kind: 'number', max: 4096, min: 0, step: 1 }],
+    category: 'noise',
     type: 'content_shuffle',
   },
   {
@@ -112,12 +136,14 @@ export const CONTROL_FILTERS: readonly FilterDefinition[] = [
       { default: 1, integer: true, key: 'max_faces', kind: 'number', max: 20, min: 1, step: 1 },
       { default: 0.5, key: 'min_confidence', kind: 'number', max: 1, min: 0, step: 0.01 },
     ],
+    category: 'pose',
     type: 'mediapipe_face_detection',
   },
   {
     params: [
       { default: 64, integer: true, key: 'tile_size', kind: 'number', max: 4096, min: 1, sliderMax: 256, step: 1 },
     ],
+    category: 'color',
     type: 'color_map',
   },
   {
@@ -149,16 +175,18 @@ export const CONTROL_FILTERS: readonly FilterDefinition[] = [
       { default: 1, key: 'value', kind: 'number', max: 255, min: 0, sliderMax: 2, step: 0.0025 },
       { default: false, key: 'scale_values', kind: 'boolean' },
     ],
+    category: 'color',
     type: 'adjust_image',
   },
-  { params: [], type: 'lineart_anime_edge_detection' },
-  { params: [], type: 'normal_map' },
+  { category: 'edge', params: [], type: 'lineart_anime_edge_detection' },
+  { category: 'depth', params: [], type: 'normal_map' },
   {
     params: [
       { default: null, key: 'model', kind: 'model', modelType: 'spandrel_image_to_image' },
       { default: true, key: 'autoScale', kind: 'boolean' },
       { default: 1, key: 'scale', kind: 'number', max: 16, min: 1, step: 1 },
     ],
+    category: 'upscale',
     type: 'spandrel_filter',
   },
   {
@@ -174,6 +202,7 @@ export const CONTROL_FILTERS: readonly FilterDefinition[] = [
       },
       { coerceMin: 0, default: 8, key: 'radius', kind: 'number', max: 4096, min: 1, sliderMax: 64, step: 0.1 },
     ],
+    category: 'noise',
     type: 'img_blur',
   },
   {
@@ -194,6 +223,7 @@ export const CONTROL_FILTERS: readonly FilterDefinition[] = [
       { default: true, key: 'noise_color', kind: 'boolean' },
       { default: 1, integer: true, key: 'size', kind: 'number', max: 256, min: 1, sliderMax: 16, step: 1 },
     ],
+    category: 'noise',
     type: 'img_noise',
   },
 ];
@@ -306,7 +336,8 @@ export interface FilterGraphResult {
 export const buildFilterGraph = (
   filterType: string,
   imageName: string,
-  settings?: Record<string, unknown>
+  settings?: Record<string, unknown>,
+  input?: { height: number; preserveTransparency?: boolean; width: number }
 ): FilterGraphResult => {
   const definition = FILTERS_BY_TYPE.get(filterType);
   if (!definition) {
@@ -318,7 +349,7 @@ export const buildFilterGraph = (
     id: FILTER_NODE_ID,
     image: { image_name: imageName },
     is_intermediate: true,
-    type: definition.type,
+    type: definition.nodeType ?? definition.type,
     use_cache: true,
     ...resolved,
   };
@@ -335,7 +366,9 @@ export const buildFilterGraph = (
     });
   };
 
-  if (filterType === 'adjust_image') {
+  if (filterType === 'scribble_edge_detection') {
+    graph.nodes[FILTER_NODE_ID] = { ...node, scribble: true };
+  } else if (filterType === 'adjust_image') {
     const { channel, scale_values: scaleValues, value } = resolved;
     graph.nodes[FILTER_NODE_ID] = scaleValues
       ? {
@@ -412,6 +445,59 @@ export const buildFilterGraph = (
       use_cache: false,
     };
     edge('control_filter_seed', 'value', FILTER_NODE_ID, 'seed');
+  }
+
+  const canRestoreSourceAlpha =
+    input?.preserveTransparency === true &&
+    filterType !== 'adjust_image' &&
+    filterType !== 'img_blur' &&
+    filterType !== 'spandrel_filter';
+  if (canRestoreSourceAlpha) {
+    // Most control preprocessors convert RGBA to RGB. Transparent erased pixels
+    // then become black, producing an opaque black region (and false boundary
+    // edges). Composite over white before processing, then restore the source
+    // alpha so the processed control retains the user's erased holes.
+    delete graph.nodes[FILTER_NODE_ID]!.image;
+    graph.nodes.control_filter_background = {
+      color: { a: 255, b: 255, g: 255, r: 255 },
+      height: input.height,
+      id: 'control_filter_background',
+      is_intermediate: true,
+      mode: 'RGBA',
+      type: 'blank_image',
+      use_cache: true,
+      width: input.width,
+    };
+    graph.nodes.control_filter_flatten = {
+      crop: true,
+      id: 'control_filter_flatten',
+      image: { image_name: imageName },
+      is_intermediate: true,
+      type: 'img_paste',
+      use_cache: true,
+      x: 0,
+      y: 0,
+    };
+    graph.nodes.control_filter_source_alpha = {
+      id: 'control_filter_source_alpha',
+      image: { image_name: imageName },
+      invert: false,
+      is_intermediate: true,
+      type: 'tomask',
+      use_cache: true,
+    };
+    graph.nodes.control_filter_restore_alpha = {
+      id: 'control_filter_restore_alpha',
+      invert_mask: false,
+      is_intermediate: true,
+      type: 'apply_mask_to_image',
+      use_cache: true,
+    };
+    edge('control_filter_background', 'image', 'control_filter_flatten', 'base_image');
+    edge('control_filter_flatten', 'image', FILTER_NODE_ID, 'image');
+    edge(FILTER_NODE_ID, 'image', 'control_filter_restore_alpha', 'image');
+    edge('control_filter_source_alpha', 'image', 'control_filter_restore_alpha', 'mask');
+    return { graph, outputNodeId: 'control_filter_restore_alpha' };
   }
 
   return {

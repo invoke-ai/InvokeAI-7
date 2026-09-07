@@ -5,15 +5,16 @@
  *
  * Each setting is a boolean persisted in the canvas widget's own state values
  * (`widgetInstances['canvas'].state.values[key]`) — the same plumbing as the
- * denoising strength (`invoke/canvasStrength.ts`), so it survives reloads and
- * rides along in queue snapshots. Persistence is per-user (per-project), NEVER in
+ * denoising strength (`invoke/canvasStrength.ts`), so it survives reloads and is
+ * read when a queue submission is compiled. Persistence is per-user (per-project), NEVER in
  * the canvas undo history.
  *
  * A setting either drives an engine boolean store (`store` set — React resolves
  * the persisted value and feeds it down; see the settings-feed effect in
  * `CanvasWidgetView`, the engine reads only its stores and never React) OR is
- * consumed directly React-side (`store` absent — e.g. `showProgressOnCanvas`,
- * which gates the progress-preview feed in the widget shell). The feed is strictly
+ * consumed elsewhere in the frontend (`store` absent — e.g. `showProgressOnCanvas`
+ * in the widget shell or `outputOnlyMaskedRegions` during invocation submission).
+ * The feed is strictly
  * one-directional: settings → engine, never the reverse.
  *
  * The list is data-driven: adding a boolean setting is one entry here plus its
@@ -21,7 +22,9 @@
  * no React, no engine imports — unit-testable in node.
  */
 
-/** Which engine boolean store a setting feeds (settings whose `store` is absent are React-consumed). */
+import { CANVAS_COMPOSITING_KEYS, DEFAULT_CANVAS_COMPOSITING } from './invoke/canvasCompositing';
+
+/** Which engine boolean store a setting feeds (settings without one are consumed elsewhere in the frontend). */
 export type CanvasSettingStore =
   | 'checkerboard'
   | 'showGrid'
@@ -45,12 +48,22 @@ export const CANVAS_RULE_OF_THIRDS_KEY = 'ruleOfThirds';
 export const CANVAS_SNAP_TO_GRID_KEY = 'snapToGrid';
 export const CANVAS_CLIP_TO_BBOX_KEY = 'clipToBbox';
 export const CANVAS_SHOW_PROGRESS_KEY = 'showProgressOnCanvas';
+export const CANVAS_OUTPUT_ONLY_MASKED_REGIONS_KEY = CANVAS_COMPOSITING_KEYS.outputOnlyMaskedRegions;
+
+const OUTPUT_ONLY_MASKED_REGIONS_SETTING: CanvasBooleanSetting = {
+  // Legacy parity: generation results keep alpha outside the expanded mask
+  // unless the user explicitly asks to composite them over the source image.
+  defaultValue: DEFAULT_CANVAS_COMPOSITING.outputOnlyMaskedRegions,
+  key: CANVAS_OUTPUT_ONLY_MASKED_REGIONS_KEY,
+  labelKey: 'widgets.canvas.settings.outputOnlyMaskedRegions',
+  section: 'behavior',
+};
 
 /** A single boolean canvas setting: its persisted key, default, label, section, and (optional) engine store. */
 export interface CanvasBooleanSetting {
   /** The persisted key inside the canvas widget's `state.values`. */
   key: string;
-  /** The engine store this value drives; absent when the setting is consumed React-side. */
+  /** The engine store this value drives; absent when another frontend path consumes the setting. */
   store?: CanvasSettingStore;
   /** Default value applied when the key is unset. */
   defaultValue: boolean;
@@ -84,6 +97,7 @@ export const CANVAS_SETTINGS: readonly CanvasBooleanSetting[] = [
     section: 'behavior',
     store: 'clipToBbox',
   },
+  OUTPUT_ONLY_MASKED_REGIONS_SETTING,
   // ── Display ───────────────────────────────────────────────────────────────
   {
     defaultValue: true,
@@ -138,9 +152,6 @@ export const CANVAS_SETTINGS: readonly CanvasBooleanSetting[] = [
     store: 'ruleOfThirds',
   },
 ];
-
-/** The sections, in popover render order. */
-export const CANVAS_SETTING_SECTIONS: readonly CanvasSettingSection[] = ['behavior', 'display', 'grid'];
 
 /** Resolved settings, keyed by persisted setting key (default-applied). */
 export type ResolvedCanvasSettings = Record<string, boolean>;

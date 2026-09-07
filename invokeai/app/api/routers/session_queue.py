@@ -10,6 +10,7 @@ from invokeai.app.api.auth_dependencies import AdminUserOrDefault, CurrentUserOr
 from invokeai.app.api.dependencies import ApiDependencies
 from invokeai.app.api.routers.image_move_maintenance import assert_image_move_maintenance_inactive
 from invokeai.app.invocations.fields import ImageField, VideoField
+from invokeai.app.services.progress_previews.progress_previews_common import ProgressPreviewDTO
 from invokeai.app.services.session_processor.session_processor_common import SessionProcessorStatus
 from invokeai.app.services.session_queue.session_queue_common import (
     Batch,
@@ -17,10 +18,15 @@ from invokeai.app.services.session_queue.session_queue_common import (
     CancelAllExceptCurrentResult,
     CancelByBatchIDsResult,
     CancelByDestinationResult,
+    CancelByQueueIDResult,
     ClearResult,
     DeleteAllExceptCurrentResult,
     DeleteByDestinationResult,
+    EnqueueBatchReceipt,
     EnqueueBatchResult,
+    EnqueueIdempotencyConflictError,
+    EnqueueProjectNotFoundError,
+    EnqueueReceiptLimitError,
     ItemIdsResult,
     PruneResult,
     RetryItemsResult,
@@ -230,8 +236,53 @@ async def enqueue_batch(
         return await ApiDependencies.invoker.services.session_queue.enqueue_batch(
             queue_id=queue_id, batch=batch, prepend=prepend, user_id=current_user.user_id
         )
+    except EnqueueIdempotencyConflictError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except EnqueueProjectNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except EnqueueReceiptLimitError as e:
+        raise HTTPException(status_code=429, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Unexpected error while enqueuing batch: {e}")
+
+
+@session_queue_router.post(
+    "/{queue_id}/enqueue_batch/acknowledge",
+    operation_id="acknowledge_enqueue_batch",
+    status_code=204,
+)
+def acknowledge_enqueue_batch(
+    current_user: CurrentUserOrDefault,
+    queue_id: str = Path(description="The queue id that accepted the batch"),
+    idempotency_key: str = Body(
+        description="The acknowledged enqueue retry key", embed=True, min_length=1, max_length=255
+    ),
+) -> None:
+    ApiDependencies.invoker.services.session_queue.acknowledge_enqueue(
+        queue_id=queue_id,
+        idempotency_key=idempotency_key,
+        user_id=current_user.user_id,
+    )
+
+
+@session_queue_router.get(
+    "/{queue_id}/enqueue_batch/receipt",
+    operation_id="get_enqueue_batch_receipt",
+    response_model=EnqueueBatchReceipt,
+)
+def get_enqueue_batch_receipt(
+    current_user: CurrentUserOrDefault,
+    queue_id: str = Path(description="The queue id that accepted the batch"),
+    idempotency_key: str = Query(description="The enqueue retry key", min_length=1, max_length=255),
+) -> EnqueueBatchReceipt:
+    receipt = ApiDependencies.invoker.services.session_queue.get_enqueue_receipt(
+        queue_id=queue_id,
+        idempotency_key=idempotency_key,
+        user_id=current_user.user_id,
+    )
+    if receipt is None:
+        raise HTTPException(status_code=404, detail="Enqueue receipt not found")
+    return receipt
 
 
 @session_queue_router.get(
@@ -397,16 +448,42 @@ def pause(
 def cancel_all_except_current(
     current_user: CurrentUserOrDefault,
     queue_id: str = Path(description="The queue id to perform this operation on"),
+    origin_prefix: Optional[str] = Query(
+        default=None, description="Only cancel queue items whose origin starts with this prefix"
+    ),
 ) -> CancelAllExceptCurrentResult:
     """Immediately cancels all queue items except in-processing items. Non-admin users can only cancel their own items."""
     try:
         # Admin users can cancel all items, non-admin users can only cancel their own
         user_id = None if current_user.is_admin else current_user.user_id
         return ApiDependencies.invoker.services.session_queue.cancel_all_except_current(
-            queue_id=queue_id, user_id=user_id
+            queue_id=queue_id, user_id=user_id, origin_prefix=origin_prefix
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Unexpected error while canceling all except current: {e}")
+
+
+@session_queue_router.put(
+    "/{queue_id}/cancel_all",
+    operation_id="cancel_all",
+    responses={200: {"model": CancelByQueueIDResult}},
+)
+def cancel_all(
+    current_user: CurrentUserOrDefault,
+    queue_id: str = Path(description="The queue id to perform this operation on"),
+    origin_prefix: Optional[str] = Query(
+        default=None, description="Only cancel queue items whose origin starts with this prefix"
+    ),
+) -> CancelByQueueIDResult:
+    """Immediately cancels all queue items, in-progress items included. Non-admin users can only cancel their own items."""
+    try:
+        # Admin users can cancel all items, non-admin users can only cancel their own
+        user_id = None if current_user.is_admin else current_user.user_id
+        return ApiDependencies.invoker.services.session_queue.cancel_by_queue_id(
+            queue_id=queue_id, user_id=user_id, origin_prefix=origin_prefix
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Unexpected error while canceling all: {e}")
 
 
 @session_queue_router.put(
@@ -584,6 +661,28 @@ def get_current_queue_item(
         return item
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Unexpected error while getting current queue item: {e}")
+
+
+@session_queue_router.get(
+    "/{queue_id}/previews",
+    operation_id="get_progress_previews",
+    responses={
+        200: {"model": list[ProgressPreviewDTO]},
+    },
+)
+def get_progress_previews(
+    current_user: CurrentUserOrDefault,
+    queue_id: str = Path(description="The queue id to perform this operation on"),
+) -> list[ProgressPreviewDTO]:
+    """The latest denoising preview frame of each of the caller's running queue items: the same
+    payloads as the `invocation_progress` socket events, with their revisions. A client whose socket
+    was dropped, or whose tab was hidden, reconciles from this instead of waiting for the next step.
+    Owner-scoped: progress is personal UI, so even admins see only their own."""
+    try:
+        previews = ApiDependencies.invoker.services.progress_previews.list_for_user(current_user.user_id, queue_id)
+        return [ProgressPreviewDTO.from_event(event) for event in previews]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Unexpected error while getting progress previews: {e}")
 
 
 @session_queue_router.get(

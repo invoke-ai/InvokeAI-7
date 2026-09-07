@@ -86,7 +86,14 @@ class MiniMaxH3DiffusersModel(ModelLoader):
                 _raise_if_no_weight_shards(submodel_path, "transformer")
 
                 from invokeai.backend.minimax_h3 import MiniMaxH3Transformer3DModel
+                from invokeai.backend.minimax_h3.contiguous_attention import (
+                    patch_minimax_h3_attention_contiguous_qkv,
+                )
 
+                # The attention kernel is ~2x slower on ROCm (and ~1.3x on CUDA) at video
+                # sequence lengths when fed the processor's sequence-major Q/K/V layout; see
+                # contiguous_attention for the measurements.
+                patch_minimax_h3_attention_contiguous_qkv()
                 return MiniMaxH3Transformer3DModel.from_pretrained(
                     submodel_path, torch_dtype=dtype, local_files_only=True
                 )
@@ -94,6 +101,14 @@ class MiniMaxH3DiffusersModel(ModelLoader):
                 _raise_if_no_weight_shards(submodel_path, "text encoder")
 
                 from transformers import AutoConfig, Qwen3VLForConditionalGeneration
+
+                from invokeai.backend.minimax_h3.qwen3vl_vision_device_patch import (
+                    apply_qwen3vl_vision_pos_embed_device_patch,
+                )
+
+                # Keep the vision tower's pos-embed interpolation on the compute device when the
+                # partial loader leaves pos_embed.weight on the CPU; see the patch module.
+                apply_qwen3vl_vision_pos_embed_device_patch()
 
                 te_config = normalize_qwen3vl_rope_config(
                     AutoConfig.from_pretrained(submodel_path, local_files_only=True)
@@ -163,6 +178,9 @@ class MiniMaxH3CheckpointModel(ModelLoader):
         from safetensors.torch import load_file
 
         from invokeai.backend.minimax_h3 import MiniMaxH3Transformer3DModel
+        from invokeai.backend.minimax_h3.contiguous_attention import (
+            patch_minimax_h3_attention_contiguous_qkv,
+        )
         from invokeai.backend.minimax_h3.int8_convrot import Int8ConvrotLinear
         from invokeai.backend.minimax_h3.transformer_minimax_h3_pruned import (
             MiniMaxH3PrunedTransformer3DModel,
@@ -174,6 +192,10 @@ class MiniMaxH3CheckpointModel(ModelLoader):
         )
 
         model_path = Path(config.path)
+
+        # Same attention-layout patch as the diffusers-folder path (the pruned subclass reuses
+        # the vendored attention classes); see contiguous_attention for the measurements.
+        patch_minimax_h3_attention_contiguous_qkv()
 
         # Reject unsupported quantization formats from the header alone, before committing to
         # the ~20 GiB tensor read (the fp8_scaled repacks share this key layout).
@@ -304,6 +326,9 @@ class MiniMaxH3TextEncoderCheckpointModel(ModelLoader):
         from transformers import Qwen3VLConfig, Qwen3VLForConditionalGeneration
 
         from invokeai.backend.minimax_h3.int8_convrot import Int8ConvrotLinear
+        from invokeai.backend.minimax_h3.qwen3vl_vision_device_patch import (
+            apply_qwen3vl_vision_pos_embed_device_patch,
+        )
         from invokeai.backend.minimax_h3.text_conditioning import MINIMAX_H3_TEXT_ENCODER_LAYER
         from invokeai.backend.model_manager.load.model_loaders.minimax_h3_state_dict_utils import (
             convert_minimax_h3_text_encoder_checkpoint,
@@ -352,6 +377,10 @@ class MiniMaxH3TextEncoderCheckpointModel(ModelLoader):
         config_dict["text_config"]["num_hidden_layers"] = num_layers
         config_dict["tie_word_embeddings"] = True
         te_config = normalize_qwen3vl_rope_config(Qwen3VLConfig.from_dict(config_dict))
+
+        # Keep the vision tower's pos-embed interpolation on the compute device when the partial
+        # loader leaves pos_embed.weight on the CPU; see the patch module.
+        apply_qwen3vl_vision_pos_embed_device_patch()
 
         with accelerate.init_empty_weights():
             model = Qwen3VLForConditionalGeneration._from_config(te_config)

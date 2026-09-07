@@ -194,8 +194,23 @@ GENERATION_MODES = Literal[
     "minimax_h3_lf2v",
     "minimax_h3_flf2v",
     "minimax_h3_extend_video",
+    "minimax_h3_ref2v",
     "minimax_h3_txt2img",
 ]
+
+
+class MiniMaxH3ReferenceMetadataField(BaseModel):
+    """One recorded Ref2VA reference: names and options only, in conditioning order."""
+
+    kind: Literal["image", "video"] = Field(description="Whether the reference was an image or a video.")
+    image_name: Optional[str] = Field(default=None, description="The reference image's name.")
+    video_name: Optional[str] = Field(default=None, description="The reference video's name.")
+    conditioning: Optional[str] = Field(
+        default=None, description="A video reference's conditioning choice (video_audio / video / audio)."
+    )
+    detail: Optional[str] = Field(default=None, description="An image reference's sizing choice (max / match).")
+    start_frame: Optional[int] = Field(default=None, description="A video reference's trim start (inclusive).")
+    end_frame: Optional[int] = Field(default=None, description="A video reference's trim end (inclusive).")
 
 
 @invocation(
@@ -203,7 +218,7 @@ GENERATION_MODES = Literal[
     title="Core Metadata",
     tags=["metadata"],
     category="metadata",
-    version="2.4.0",
+    version="2.5.0",
     classification=Classification.Internal,
 )
 class CoreMetadataInvocation(BaseInvocation):
@@ -298,6 +313,11 @@ class CoreMetadataInvocation(BaseInvocation):
     minimax_h3_text_encoder_model: Optional[ModelIdentifierField] = InputField(
         default=None,
         description="The single-file MiniMax H3 Qwen3-VL text encoder used in place of the main model's",
+    )
+    minimax_h3_references: Optional[list[MiniMaxH3ReferenceMetadataField]] = InputField(
+        default=None,
+        description="The ordered Ref2VA references this generation was conditioned on (names and options only; "
+        "the media is re-resolved from the gallery at recall time)",
     )
 
     # High resolution fix metadata.

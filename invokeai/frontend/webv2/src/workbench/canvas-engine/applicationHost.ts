@@ -6,7 +6,7 @@ import type {
   LayerExportGuard,
   ReplaceSelectionFromImageResult,
 } from '@workbench/canvas-engine/capabilities';
-import type { CanvasDocumentContractV2, CanvasImageRef } from '@workbench/canvas-engine/contracts';
+import type { CanvasDocumentContractV3, CanvasImageRef } from '@workbench/canvas-engine/contracts';
 import type {
   CommitRasterFilterOptions,
   CommitRasterFilterResult,
@@ -50,7 +50,7 @@ export interface CanvasApplicationHost {
     | { status: 'missing' | 'disabled' | 'unsupported' | 'empty' | 'not-ready' | 'over-budget' }
   >;
   getCompositeExecutorDeps(): CanvasCompositeExecutorDeps;
-  getDocument(): CanvasDocumentContractV2 | null;
+  getDocument(): CanvasDocumentContractV3 | null;
   isGuardCurrent(guard: LayerExportGuard): boolean;
   isInteractionLocked(): boolean;
   isSamToolActive(): boolean;

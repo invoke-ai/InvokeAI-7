@@ -11,7 +11,14 @@ import { getLayeredPositions } from './graphLayout';
 export interface PreviewGraphLike {
   label?: string;
   nodes: Array<{ id: string; type: string; inputs: Record<string, unknown> }>;
-  edges: Array<{ id: string; sourceField: string; sourceNodeId: string; targetField: string; targetNodeId: string }>;
+  edges: Array<{
+    id: string;
+    sourceField: string;
+    sourceNodeId: string;
+    targetField: string;
+    targetNodeId: string;
+    type?: 'default' | 'loop_linkage';
+  }>;
 }
 
 export interface PreviewGraphDocumentResult {
@@ -101,7 +108,7 @@ export const previewGraphToDocument = (
       sourceHandle: graphEdge.sourceField,
       target: graphEdge.targetNodeId,
       targetHandle: graphEdge.targetField,
-      type: 'default',
+      type: graphEdge.type ?? 'default',
     });
   }
 

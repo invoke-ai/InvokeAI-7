@@ -74,11 +74,11 @@ export const RenameDialog = ({
   );
 
   return (
-    <Dialog.Root lazyMount open={isOpen} placement="center" size="xs" unmountOnExit onOpenChange={handleOpenChange}>
+    <Dialog.Root lazyMount open={isOpen} size="xs" unmountOnExit onOpenChange={handleOpenChange}>
       <Portal>
         <Dialog.Backdrop />
         <Dialog.Positioner>
-          <Dialog.Content bg="bg.subtle" borderColor="border.subtle" borderWidth="1px" color="fg">
+          <Dialog.Content>
             <chakra.form onSubmit={handleSubmit}>
               <Dialog.Header>
                 <Dialog.Title>{title}</Dialog.Title>
@@ -90,7 +90,7 @@ export const RenameDialog = ({
                   </Field>
                 </Stack>
               </Dialog.Body>
-              <Dialog.Footer gap="2">
+              <Dialog.Footer>
                 <Button disabled={isPending} size="xs" type="button" variant="ghost" onClick={onClose}>
                   Cancel
                 </Button>
@@ -100,7 +100,7 @@ export const RenameDialog = ({
               </Dialog.Footer>
             </chakra.form>
             <Dialog.CloseTrigger asChild>
-              <CloseButton color="fg.muted" size="sm" />
+              <CloseButton />
             </Dialog.CloseTrigger>
           </Dialog.Content>
         </Dialog.Positioner>

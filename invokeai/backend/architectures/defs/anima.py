@@ -26,6 +26,8 @@ register(
         guidance_label="CFG",
         scheduler_set="anima",
         scheduler_applies_to_graph=True,
+        # Same shape as Z-Image: masked positive conditioning only.
+        supports_regional_guidance=True,
     ),
     VaeFacet(
         frozenset(

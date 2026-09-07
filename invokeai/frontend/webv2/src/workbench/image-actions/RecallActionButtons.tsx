@@ -35,6 +35,9 @@ const RECALL_ACTION_ITEMS: {
   { capability: 'clipSkip', icon: ScissorsIcon, kind: 'clipSkip', label: 'Use CLIP Skip' },
 ];
 
+/** The recall verbs in their canonical order, for hosts that lay them out themselves. */
+export const IMAGE_RECALL_KINDS: readonly ImageRecallKind[] = RECALL_ACTION_ITEMS.map((item) => item.kind);
+
 /**
  * The verb's icon and label for hosts that surface a recall affordance
  * outside this row (per-row buttons in the metadata panel), so every recall

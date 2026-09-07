@@ -92,7 +92,10 @@ describe('PromptTriggerPopover', () => {
     const messageBounds = message.getBoundingClientRect();
     const actionBounds = action.getBoundingClientRect();
 
+    // The hover pill's edge is what reads as the button's edge, so the box —
+    // not the padded text — lines up with the copy.
     expect(Math.abs(messageBounds.left - actionBounds.left)).toBeLessThanOrEqual(1);
-    expect(actionBounds.top - messageBounds.bottom).toBeLessThanOrEqual(8);
+    // One `2.5` stack step, the same rhythm as the image-to-prompt popover.
+    expect(actionBounds.top - messageBounds.bottom).toBeLessThanOrEqual(12);
   });
 });

@@ -80,6 +80,7 @@ const adapter: GalleryUiAdapter = {
   antialiasProgressImages: false,
   exportProject: vi.fn(),
   gallery: {
+    clearSelection: noop,
     reconcileDeletedBoardOutcome: noop,
     selectBoard: noop,
     selectImage: noop,
@@ -90,6 +91,7 @@ const adapter: GalleryUiAdapter = {
     setPage: noop,
     setPageInfo: noop,
     setSearchTerm: noop,
+    setStarredOnly: noop,
     setView: noop,
     toggleItemSelection: noop,
     updateSettings: noop,
@@ -105,7 +107,7 @@ const adapter: GalleryUiAdapter = {
   projectId: 'project-1',
   projectName: 'Project',
   queueItems: [],
-  widgets: { patchGalleryValues: noop },
+  widgets: { openGallery: () => true, patchGalleryValues: noop },
 };
 
 const Probe = ({
@@ -127,6 +129,7 @@ const Probe = ({
       {
         archived: false,
         assetCount: 0,
+        assetVideoCount: 0,
         id: 'board-1',
         imageCount: 2,
         kind: 'board',
@@ -137,6 +140,7 @@ const Probe = ({
       {
         archived: false,
         assetCount: 0,
+        assetVideoCount: 0,
         id: 'none',
         imageCount: 0,
         kind: 'uncategorized',
@@ -220,7 +224,9 @@ describe('focused gallery upload action', () => {
     await renderProbe();
 
     await act(async () => {
-      await uploadFilesRef.current?.([new File(['image'], 'photo.png', { type: 'image/png' })]);
+      await expect(
+        uploadFilesRef.current?.([new File(['image'], 'photo.png', { type: 'image/png' })])
+      ).resolves.toEqual([]);
     });
 
     expect(mocks.uploadGalleryImage).not.toHaveBeenCalled();
@@ -251,7 +257,7 @@ describe('focused gallery upload action', () => {
       .mockRejectedValueOnce(new Error('bad second video'))
       .mockResolvedValueOnce(videoUpload('third.mp4', '2026-07-30T12:00:05.000Z'));
 
-    let upload: Promise<void> | undefined;
+    let upload: Promise<unknown> | undefined;
     act(() => {
       upload = uploadFilesRef.current?.([
         new File(['image'], 'one.png', { type: 'image/png' }),
@@ -286,6 +292,12 @@ describe('focused gallery upload action', () => {
       title: 'Uploaded 4 of 5 files',
     });
     expect(selectItem).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ kind: 'video', name: 'third.mp4' }));
+    await expect(upload).resolves.toEqual([
+      expect.objectContaining({ kind: 'image', name: 'one.png' }),
+      expect.objectContaining({ kind: 'image', name: 'two.webp' }),
+      expect.objectContaining({ kind: 'video', name: 'one.mp4' }),
+      expect.objectContaining({ kind: 'video', name: 'third.mp4' }),
+    ]);
   });
 
   it('does not select an upload from the launch board after the active board changes in flight', async () => {
@@ -296,7 +308,7 @@ describe('focused gallery upload action', () => {
       })
     );
 
-    let upload: Promise<void> | undefined;
+    let upload: Promise<unknown> | undefined;
     act(() => {
       upload = uploadFilesRef.current?.([new File(['image'], 'photo.png', { type: 'image/png' })]);
     });
@@ -312,6 +324,7 @@ describe('focused gallery upload action', () => {
 
     expect(selectItem).not.toHaveBeenCalled();
     expect(mocks.invalidateGallery).toHaveBeenCalledOnce();
+    await expect(upload).resolves.toEqual([expect.objectContaining({ kind: 'image', name: 'photo.png' })]);
   });
 
   it('does not schedule another expensive video after the account lifetime aborts', async () => {
@@ -322,7 +335,7 @@ describe('focused gallery upload action', () => {
       })
     );
 
-    let upload: Promise<void> | undefined;
+    let upload: Promise<unknown> | undefined;
     act(() => {
       upload = uploadFilesRef.current?.([
         new File(['video'], 'one.mp4', { type: 'video/mp4' }),
@@ -340,6 +353,7 @@ describe('focused gallery upload action', () => {
     expect(mocks.uploadGalleryVideo).toHaveBeenCalledOnce();
     expect(mocks.notificationsAdd).not.toHaveBeenCalled();
     expect(mocks.notificationsReportError).not.toHaveBeenCalled();
+    await expect(upload).resolves.toEqual([]);
   });
 
   it('uses the localized Uncategorized label in a successful upload notification', async () => {
@@ -360,7 +374,9 @@ describe('focused gallery upload action', () => {
     mocks.uploadGalleryImage.mockRejectedValue(new ApiError('{"detail":"Image storage maintenance is active"}', 409));
 
     await act(async () => {
-      await uploadFilesRef.current?.([new File(['image'], 'photo.png', { type: 'image/png' })]);
+      await expect(
+        uploadFilesRef.current?.([new File(['image'], 'photo.png', { type: 'image/png' })])
+      ).resolves.toEqual([]);
     });
 
     expect(mocks.notificationsReportError).toHaveBeenCalledWith({
@@ -369,5 +385,33 @@ describe('focused gallery upload action', () => {
       namespace: 'gallery',
     });
     expect(mocks.notificationsAdd).not.toHaveBeenCalled();
+  });
+
+  it('trusts a board id the loaded list does not name', async () => {
+    mocks.uploadGalleryImage.mockResolvedValue(imageUpload('photo.png', '2026-07-30T12:00:04.000Z', 'board-9'));
+
+    selectedBoardId = 'board-9';
+    await renderProbe();
+    await act(async () => {
+      await uploadFilesRef.current?.([new File(['image'], 'photo.png', { type: 'image/png' })]);
+    });
+
+    expect(mocks.uploadGalleryImage).toHaveBeenCalledExactlyOnceWith(expect.any(File), 'board-9', expect.anything());
+  });
+
+  it('rejects unsupported files without a request and resolves empty', async () => {
+    await act(async () => {
+      await expect(
+        uploadFilesRef.current?.([new File(['notes'], 'notes.txt', { type: 'text/plain' })])
+      ).resolves.toEqual([]);
+    });
+
+    expect(mocks.uploadGalleryImage).not.toHaveBeenCalled();
+    expect(mocks.uploadGalleryVideo).not.toHaveBeenCalled();
+    expect(mocks.notificationsReportError).toHaveBeenCalledWith({
+      area: 'gallery-upload',
+      message: 'No supported media files to upload (PNG, JPEG, WebP, or MP4).',
+      namespace: 'gallery',
+    });
   });
 });

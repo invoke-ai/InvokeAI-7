@@ -21,13 +21,14 @@
  */
 
 import {
+  compileDocumentLeaves,
   getSourceBounds,
   isEmpty,
   isRenderableLayer,
-  union,
-  type CanvasDocumentContractV2,
+  type CanvasDocumentContractV3,
   type CanvasLayerContract,
   type Rect,
+  union,
 } from '@workbench/canvas-engine/api';
 
 /** Fixed outward padding (document px) applied to the mask union before grid-fitting. */
@@ -56,12 +57,13 @@ export const fitRectToGrid = (rect: Rect, gridSize: number): Rect => {
  * gate.
  */
 export const unionRenderableBounds = (
-  doc: CanvasDocumentContractV2,
+  doc: CanvasDocumentContractV3,
   predicate: (layer: CanvasLayerContract) => boolean
 ): Rect | null => {
   let bounds: Rect | null = null;
-  for (const layer of doc.layers) {
-    if (!isRenderableLayer(layer) || !predicate(layer)) {
+  for (const leaf of compileDocumentLeaves(doc)) {
+    const layer = leaf.layer;
+    if (!leaf.contributionEnabled || !isRenderableLayer(layer) || !predicate(layer)) {
       continue;
     }
     const layerBounds = getSourceBounds(layer, doc);
@@ -74,7 +76,7 @@ export const unionRenderableBounds = (
 };
 
 /** The grid-snapped bbox that tightly fits all visible content, or `null` when there is none. */
-export const computeFitBboxToLayers = (doc: CanvasDocumentContractV2, gridSize: number): Rect | null => {
+export const computeFitBboxToLayers = (doc: CanvasDocumentContractV3, gridSize: number): Rect | null => {
   const bounds = unionRenderableBounds(doc, () => true);
   if (!bounds) {
     return null;
@@ -85,7 +87,7 @@ export const computeFitBboxToLayers = (doc: CanvasDocumentContractV2, gridSize: 
 
 /** The padded, grid-snapped bbox that fits the visible INPAINT masks (legacy parity), or `null` when there are none. */
 export const computeFitBboxToMasks = (
-  doc: CanvasDocumentContractV2,
+  doc: CanvasDocumentContractV3,
   gridSize: number,
   padding: number = MASK_FIT_PADDING
 ): Rect | null => {

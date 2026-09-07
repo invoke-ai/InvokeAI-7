@@ -16,10 +16,7 @@ export const GALLERY_MIN_GRID_HEIGHT_PX = 128;
 export const GALLERY_BOARD_PANEL_MIN_WIDTH_PX = 180;
 export const GALLERY_BOARD_PANEL_MAX_WIDTH_PX = 420;
 
-/**
- * User-tunable gallery settings. Persisted as plain entries in the gallery
- * widget's `values` record so they survive workbench autosave/hydration.
- */
+/** User-tunable gallery settings, persisted in the widget's `values` record. */
 export interface GallerySettings {
   boardOrderBy: GalleryBoardOrderBy;
   boardOrderDir: GalleryOrderDir;
@@ -41,7 +38,8 @@ export interface GallerySettings {
    */
   showOtherProjectBoards: boolean;
   showPendingItems: boolean;
-  starredFirst: boolean;
+  /** Disclosure of the starred strip at the top of the grid. */
+  starredSectionCollapsed: boolean;
   thumbnailFit: GalleryThumbnailFit;
 }
 
@@ -58,9 +56,9 @@ export const DEFAULT_GALLERY_SETTINGS: GallerySettings = {
   showArchivedBoards: false,
   showDateBoards: false,
   showImageDimensions: false,
-  showOtherProjectBoards: true,
+  showOtherProjectBoards: false,
   showPendingItems: true,
-  starredFirst: true,
+  starredSectionCollapsed: false,
   thumbnailFit: 'square',
 };
 
@@ -86,48 +84,56 @@ const getCollapsedBoardSections = (value: unknown): GalleryBoardSectionId[] =>
       )
     : DEFAULT_GALLERY_SETTINGS.collapsedBoardSections;
 
-export const getGallerySettings = (values: Record<string, unknown>): GallerySettings => ({
-  boardOrderBy: isBoardOrderBy(values.boardOrderBy) ? values.boardOrderBy : DEFAULT_GALLERY_SETTINGS.boardOrderBy,
-  boardOrderDir: isOrderDir(values.boardOrderDir) ? values.boardOrderDir : DEFAULT_GALLERY_SETTINGS.boardOrderDir,
-  boardPanelCollapsed:
-    typeof values.boardPanelCollapsed === 'boolean'
-      ? values.boardPanelCollapsed
-      : DEFAULT_GALLERY_SETTINGS.boardPanelCollapsed,
-  boardPanelHeightPx: getBoundedSize(values.boardPanelHeightPx, {
-    fallback: DEFAULT_GALLERY_SETTINGS.boardPanelHeightPx,
-    max: GALLERY_BOARD_PANEL_MAX_HEIGHT_PX,
-    min: GALLERY_BOARD_PANEL_MIN_HEIGHT_PX,
-  }),
-  boardPanelWidthPx: getBoundedSize(values.boardPanelWidthPx, {
-    fallback: DEFAULT_GALLERY_SETTINGS.boardPanelWidthPx,
-    max: GALLERY_BOARD_PANEL_MAX_WIDTH_PX,
-    min: GALLERY_BOARD_PANEL_MIN_WIDTH_PX,
-  }),
-  collapsedBoardSections: getCollapsedBoardSections(values.collapsedBoardSections),
-  imageDensityPercent:
-    typeof values.imageDensityPercent === 'number' && Number.isFinite(values.imageDensityPercent)
-      ? Math.min(100, Math.max(0, values.imageDensityPercent))
-      : DEFAULT_GALLERY_SETTINGS.imageDensityPercent,
-  imageOrderDir: isOrderDir(values.imageOrderDir) ? values.imageOrderDir : DEFAULT_GALLERY_SETTINGS.imageOrderDir,
-  paginationMode: values.paginationMode === 'paginated' ? 'paginated' : DEFAULT_GALLERY_SETTINGS.paginationMode,
-  showArchivedBoards:
-    typeof values.showArchivedBoards === 'boolean'
-      ? values.showArchivedBoards
-      : DEFAULT_GALLERY_SETTINGS.showArchivedBoards,
-  showDateBoards:
-    typeof values.showDateBoards === 'boolean' ? values.showDateBoards : DEFAULT_GALLERY_SETTINGS.showDateBoards,
-  showImageDimensions:
-    typeof values.showImageDimensions === 'boolean'
-      ? values.showImageDimensions
-      : DEFAULT_GALLERY_SETTINGS.showImageDimensions,
-  showOtherProjectBoards:
-    typeof values.showOtherProjectBoards === 'boolean'
-      ? values.showOtherProjectBoards
-      : DEFAULT_GALLERY_SETTINGS.showOtherProjectBoards,
-  showPendingItems:
-    typeof values.showPendingItems === 'boolean' ? values.showPendingItems : DEFAULT_GALLERY_SETTINGS.showPendingItems,
-  // Starred items have a dedicated section, so the backing window must always
-  // fetch them first to keep that section complete under infinite pagination.
-  starredFirst: true,
-  thumbnailFit: values.thumbnailFit === 'aspect' ? 'aspect' : DEFAULT_GALLERY_SETTINGS.thumbnailFit,
-});
+export const getGallerySettings = (values: Record<string, unknown>): GallerySettings => {
+  const paginationMode: GalleryPaginationMode =
+    values.paginationMode === 'paginated' ? 'paginated' : DEFAULT_GALLERY_SETTINGS.paginationMode;
+
+  return {
+    boardOrderBy: isBoardOrderBy(values.boardOrderBy) ? values.boardOrderBy : DEFAULT_GALLERY_SETTINGS.boardOrderBy,
+    boardOrderDir: isOrderDir(values.boardOrderDir) ? values.boardOrderDir : DEFAULT_GALLERY_SETTINGS.boardOrderDir,
+    boardPanelCollapsed:
+      typeof values.boardPanelCollapsed === 'boolean'
+        ? values.boardPanelCollapsed
+        : DEFAULT_GALLERY_SETTINGS.boardPanelCollapsed,
+    boardPanelHeightPx: getBoundedSize(values.boardPanelHeightPx, {
+      fallback: DEFAULT_GALLERY_SETTINGS.boardPanelHeightPx,
+      max: GALLERY_BOARD_PANEL_MAX_HEIGHT_PX,
+      min: GALLERY_BOARD_PANEL_MIN_HEIGHT_PX,
+    }),
+    boardPanelWidthPx: getBoundedSize(values.boardPanelWidthPx, {
+      fallback: DEFAULT_GALLERY_SETTINGS.boardPanelWidthPx,
+      max: GALLERY_BOARD_PANEL_MAX_WIDTH_PX,
+      min: GALLERY_BOARD_PANEL_MIN_WIDTH_PX,
+    }),
+    collapsedBoardSections: getCollapsedBoardSections(values.collapsedBoardSections),
+    imageDensityPercent:
+      typeof values.imageDensityPercent === 'number' && Number.isFinite(values.imageDensityPercent)
+        ? Math.min(100, Math.max(0, values.imageDensityPercent))
+        : DEFAULT_GALLERY_SETTINGS.imageDensityPercent,
+    imageOrderDir: isOrderDir(values.imageOrderDir) ? values.imageOrderDir : DEFAULT_GALLERY_SETTINGS.imageOrderDir,
+    paginationMode,
+    showArchivedBoards:
+      typeof values.showArchivedBoards === 'boolean'
+        ? values.showArchivedBoards
+        : DEFAULT_GALLERY_SETTINGS.showArchivedBoards,
+    showDateBoards:
+      typeof values.showDateBoards === 'boolean' ? values.showDateBoards : DEFAULT_GALLERY_SETTINGS.showDateBoards,
+    showImageDimensions:
+      typeof values.showImageDimensions === 'boolean'
+        ? values.showImageDimensions
+        : DEFAULT_GALLERY_SETTINGS.showImageDimensions,
+    showOtherProjectBoards:
+      typeof values.showOtherProjectBoards === 'boolean'
+        ? values.showOtherProjectBoards
+        : DEFAULT_GALLERY_SETTINGS.showOtherProjectBoards,
+    showPendingItems:
+      typeof values.showPendingItems === 'boolean'
+        ? values.showPendingItems
+        : DEFAULT_GALLERY_SETTINGS.showPendingItems,
+    starredSectionCollapsed:
+      typeof values.starredSectionCollapsed === 'boolean'
+        ? values.starredSectionCollapsed
+        : DEFAULT_GALLERY_SETTINGS.starredSectionCollapsed,
+    thumbnailFit: values.thumbnailFit === 'aspect' ? 'aspect' : DEFAULT_GALLERY_SETTINGS.thumbnailFit,
+  };
+};

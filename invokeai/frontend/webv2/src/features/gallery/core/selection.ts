@@ -8,6 +8,7 @@ import {
   toGalleryItemKey,
   type GalleryItem,
   type GalleryItemKey,
+  type GalleryItemRef,
 } from './items';
 
 const isRecord = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === 'object';
@@ -93,4 +94,83 @@ export const getPersistedSelectedGalleryItemKeys = (galleryValues: Record<string
   const selectedItem = getSelectedGalleryItemFromValues(galleryValues);
 
   return selectedItem ? [toGalleryItemKey(selectedItem)] : [];
+};
+
+/**
+ * Successor after deleting `primaryKey`: the next eligible entry in display
+ * order, else the nearest earlier one — later-first stays out of the starred block.
+ */
+export const getGalleryDeletionSuccessor = (
+  orderedRefs: readonly GalleryItemRef[],
+  primaryKey: GalleryItemKey,
+  ineligibleKeys: ReadonlySet<GalleryItemKey>
+): GalleryItemRef | null => {
+  const primaryIndex = orderedRefs.findIndex((ref) => toGalleryItemKey(ref) === primaryKey);
+
+  if (primaryIndex < 0) {
+    return null;
+  }
+
+  for (let index = primaryIndex + 1; index < orderedRefs.length; index += 1) {
+    const candidate = orderedRefs[index];
+
+    if (candidate && !ineligibleKeys.has(toGalleryItemKey(candidate))) {
+      return candidate;
+    }
+  }
+
+  for (let index = primaryIndex - 1; index >= 0; index -= 1) {
+    const candidate = orderedRefs[index];
+
+    if (candidate && !ineligibleKeys.has(toGalleryItemKey(candidate))) {
+      return candidate;
+    }
+  }
+
+  return null;
+};
+
+/*
+ * Reveal requests: an explicit "scroll this item into view" signal from
+ * surfaces outside the grid (the image map's reveal). Deliberately NOT derived
+ * from the selection, which also changes when a finished generation
+ * auto-selects its image — scrolling on that yanked the grid out from under a
+ * browsing user. A reveal is a deliberate gesture, so it gets its own channel,
+ * and a token, so repeating the same gesture (re-clicking the same map point
+ * after scrolling away) reveals again even though the selection is unchanged.
+ *
+ * Module-scoped rather than persisted: a reveal is an ephemeral intent for the
+ * currently mounted grid, and persisting it would replay a stale scroll in the
+ * next session. It lives here, beside the selection helpers it travels with,
+ * rather than in a module of its own — a separate one becomes a separate chunk
+ * and an extra request in the gallery widget's load, which the performance
+ * budgets police.
+ */
+
+export interface GalleryRevealRequest {
+  itemKey: GalleryItemKey;
+  token: number;
+}
+
+let currentRequest: GalleryRevealRequest | null = null;
+let nextToken = 0;
+
+const listeners = new Set<() => void>();
+
+export const requestGalleryItemReveal = (itemKey: GalleryItemKey): void => {
+  nextToken += 1;
+  currentRequest = { itemKey, token: nextToken };
+  for (const listener of listeners) {
+    listener();
+  }
+};
+
+export const getGalleryRevealRequest = (): GalleryRevealRequest | null => currentRequest;
+
+export const subscribeGalleryRevealRequests = (listener: () => void): (() => void) => {
+  listeners.add(listener);
+
+  return () => {
+    listeners.delete(listener);
+  };
 };

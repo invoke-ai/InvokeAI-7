@@ -3,6 +3,7 @@ import type { ComponentProps } from 'react';
 
 import { ChakraProvider } from '@chakra-ui/react';
 import { system } from '@theme/system';
+import { attachCanvasOperations } from '@workbench/canvas-operations/operationAccess';
 import { createInstance } from 'i18next';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -16,9 +17,9 @@ import {
   getSamErrorTranslationKey,
   getSamStatusTranslationKey,
   keepSamImageIntermediate,
+  selectObjectOperationForm,
   SamPromptBody,
   SamModeToggle,
-  SamOptionsBar,
   SamStatusSlot,
   SamVisualInput,
 } from './SamOptions';
@@ -405,9 +406,8 @@ describe('single-row SAM inputs', () => {
     expect(markup).not.toContain('title=');
     expect(markup).toContain('aria-describedby="sam-visual-guidance"');
     expect(markup).toContain('id="sam-visual-guidance"');
-    expect(markup).toContain('Include 1');
-    expect(markup).toContain('Exclude 1');
-    expect(markup).toContain('Bounding box active');
+    expect(markup).toContain('aria-label="Include 1"');
+    expect(markup).toContain('aria-label="Exclude 1"');
     expect(markup).not.toContain('>widgets.layers.selectObject.pointType<');
   });
 });
@@ -456,52 +456,60 @@ describe('getSamActionHandlers', () => {
   });
 });
 
-describe('SamOptionsBar', () => {
-  it('server-renders one row of controls in stable order without panel slots', () => {
-    const engine = {
-      operations: {
-        applySelectObjectSession: vi.fn(),
-        cancelSelectObjectSession: vi.fn(),
-        processSelectObjectSession: vi.fn(),
-        resetSelectObjectSession: vi.fn(),
-        saveSelectObjectSession: vi.fn(),
-        updateSelectObjectSession: vi.fn(),
-      },
+describe('select object regions', () => {
+  it('splits mode, points and invert into the bar, settings and secondary commands into More, and keeps Apply / Cancel in status', () => {
+    const session = snapshot({
+      hasPreview: true,
+      input: { bbox: null, excludePoints: [], includePoints: [{ x: 4, y: 5 }], type: 'visual' },
+      sourceRect: { height: 768, width: 1024, x: 0, y: 0 },
+    });
+    const operations = {
+      applySelectObjectSession: vi.fn(),
+      cancelSelectObjectSession: vi.fn(),
+      getSamSessionState: () => session,
+      processSelectObjectSession: vi.fn(),
+      resetSelectObjectSession: vi.fn(),
+      saveSelectObjectSession: vi.fn(),
+      subscribeSamSession: () => () => undefined,
+      updateSelectObjectSession: vi.fn(),
     };
-    const markup = renderToStaticMarkup(
-      createElement(
-        ChakraProvider,
-        { value: system } as ComponentProps<typeof ChakraProvider>,
+    const engine = {};
+    attachCanvasOperations(engine, operations as never);
+    const render = (element: React.ReactElement) =>
+      renderToStaticMarkup(
         createElement(
-          I18nextProvider,
-          { i18n: testI18n },
-          createElement(SamOptionsBar, {
-            engine: engine as never,
-            operations: engine.operations as never,
-            session: snapshot({
-              hasPreview: true,
-              input: { bbox: null, excludePoints: [], includePoints: [{ x: 4, y: 5 }], type: 'visual' },
-              sourceRect: { height: 768, width: 1024, x: 0, y: 0 },
-            }),
-          })
+          ChakraProvider,
+          { value: system } as ComponentProps<typeof ChakraProvider>,
+          createElement(I18nextProvider, { i18n: testI18n }, element)
         )
-      )
+      );
+    const [inputGroup, settingsGroup] = selectObjectOperationForm.groups;
+    const input = render(
+      createElement(inputGroup!.body, { engine: engine as never, isSurfaceInteractionLocked: false })
+    );
+    const settings = render(
+      createElement(settingsGroup!.body, { engine: engine as never, isSurfaceInteractionLocked: false })
+    );
+    const footer = render(
+      createElement(selectObjectOperationForm.footer, { engine: engine as never, isExternalInteractionLocked: false })
     );
 
-    expect(markup).not.toContain('data-slot="header"');
-    expect(markup).not.toContain('data-slot="body"');
-    expect(markup).not.toContain('data-slot="footer"');
-    expect(markup).not.toContain('data-operation=');
-    expect(markup).toContain('Layer 1 · Raster layer · 1024 × 768');
-    expect(markup).toContain('aria-label="Select Object settings"');
-    expect(markup).toContain('aria-label="Save As"');
-    expect(markup.indexOf('>Visual<')).toBeLessThan(markup.indexOf('Include 1'));
-    expect(markup.indexOf('Include 1')).toBeLessThan(markup.indexOf('>Invert<'));
-    expect(markup.indexOf('>Invert<')).toBeLessThan(markup.indexOf('aria-label="Select Object settings"'));
-    expect(markup.indexOf('aria-label="Select Object settings"')).toBeLessThan(markup.indexOf('>Process<'));
-    expect(markup.indexOf('>Process<')).toBeLessThan(markup.indexOf('>Reset<'));
-    expect(markup.indexOf('>Reset<')).toBeLessThan(markup.indexOf('>Apply<'));
-    expect(markup.indexOf('>Apply<')).toBeLessThan(markup.indexOf('aria-label="Save As"'));
-    expect(markup.indexOf('aria-label="Save As"')).toBeLessThan(markup.indexOf('>Cancel<'));
+    // Input group: mode, points, bbox indicator, invert switch — no verbs.
+    expect(input.indexOf('>Visual<')).toBeLessThan(input.indexOf('aria-label="Include 1"'));
+    expect(input.indexOf('aria-label="Include 1"')).toBeLessThan(input.indexOf('No bounding box'));
+    expect(input).toContain('>Invert<');
+    expect(input).not.toContain('>Process<');
+
+    // Settings group: the set-once session dials.
+    expect(settings).toContain('aria-label="Select Object settings"');
+    expect(settings).not.toContain('>Process<');
+
+    // Footer: chip, then Reset, Process, Apply (with the save-as menu trigger), Cancel.
+    expect(footer).toContain('Layer 1 · Raster layer · 1024 × 768');
+    expect(footer.indexOf('>Select Object<')).toBeLessThan(footer.indexOf('>Reset<'));
+    expect(footer.indexOf('>Reset<')).toBeLessThan(footer.indexOf('>Process<'));
+    expect(footer.indexOf('>Process<')).toBeLessThan(footer.indexOf('>Apply<'));
+    expect(footer.indexOf('>Apply<')).toBeLessThan(footer.indexOf('>Cancel<'));
+    expect(footer).toContain('aria-label="Save As"');
   });
 });

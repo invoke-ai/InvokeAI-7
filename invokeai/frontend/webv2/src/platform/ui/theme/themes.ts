@@ -1,4 +1,4 @@
-export type WorkbenchThemeId = 'classic' | 'light' | 'forest' | 'mono' | 'ultradark';
+export type WorkbenchThemeId = 'classic' | 'light' | 'osakaJade' | 'mono' | 'ultradark';
 
 /**
  * Steps of the neutral ramp. `50` is the lightest, `950` the darkest — the same
@@ -57,32 +57,35 @@ export interface ThemeDefinition {
   colors: ThemeColors;
 }
 
+// The slate tint is deliberately even: chroma tracks the ramp smoothly
+// (0.014 → 0.026 → 0.014) instead of the old spike-at-400 curve, and the dark
+// end sits ~2.5% L lower so the chrome reads as slate, not washed graphite.
 const classic: ThemeColors = {
   neutral: {
-    50: 'oklch(96.017% 0.0029 264.54)',
-    100: 'oklch(91.561% 0.0064 264.52)',
-    200: 'oklch(82.648% 0.0133 264.48)',
-    300: 'oklch(73.736% 0.0202 264.44)',
-    400: 'oklch(57.965% 0.0337 264.27)',
-    500: 'oklch(45.106% 0.0251 264.28)',
-    600: 'oklch(40.619% 0.0221 264.29)',
-    700: 'oklch(36.004% 0.019 264.3)',
-    800: 'oklch(31.237% 0.0157 264.32)',
-    900: 'oklch(26.279% 0.0123 264.34)',
-    950: 'oklch(21.074% 0.0087 264.37)',
+    50: 'oklch(96% 0.006 264.5)',
+    100: 'oklch(91.5% 0.009 264.5)',
+    200: 'oklch(82.5% 0.014 264.5)',
+    300: 'oklch(73.5% 0.019 264.4)',
+    400: 'oklch(57.5% 0.026 264.3)',
+    500: 'oklch(44% 0.024 264.3)',
+    600: 'oklch(39% 0.022 264.3)',
+    700: 'oklch(34% 0.02 264.3)',
+    800: 'oklch(28.8% 0.018 264.3)',
+    900: 'oklch(23.8% 0.016 264.35)',
+    950: 'oklch(18.8% 0.014 264.4)',
   },
-  brand: { solid: 'oklch(92.041% 0.2103 116.59)', contrast: 'oklch(21.074% 0.0087 264.37)' },
-  accent: { solid: 'oklch(77.738% 0.1 231.76)', contrast: 'oklch(21.074% 0.0087 264.37)' },
+  brand: { solid: 'oklch(92.041% 0.2103 116.59)', contrast: 'oklch(18.8% 0.014 264.4)' },
+  accent: { solid: 'oklch(77.738% 0.1 231.76)', contrast: 'oklch(18.8% 0.014 264.4)' },
   danger: 'oklch(70.61% 0.0841 19.38)',
   success: 'oklch(79.8% 0.1132 141.63)',
   warning: 'oklch(76.62% 0.0612 62.9)',
-  inset: 'oklch(21.074% 0.0087 264.37)',
+  inset: 'oklch(18.8% 0.014 264.4)',
   // Sits ~7% L above the neutral.800 surface like every other dark theme's
-  // fill; it previously matched neutral.800 exactly, making ghost hovers
-  // invisible on muted surfaces.
-  fill: 'oklch(38.5% 0.0203 264.29)',
-  grid: 'oklch(40.619% 0.0221 264.29)',
-  control: 'oklch(36.004% 0.019 264.3)',
+  // fill; matching neutral.800 exactly made ghost hovers invisible on muted
+  // surfaces.
+  fill: 'oklch(36% 0.021 264.3)',
+  grid: 'oklch(38.5% 0.022 264.3)',
+  control: 'oklch(34% 0.02 264.3)',
 };
 
 // Cool blue-gray neutrals (hue 264, harmonizing with the blue accent): near-white
@@ -112,29 +115,31 @@ const light: ThemeColors = {
   control: 'oklch(93.5% 0.005 264)',
 };
 
-const forest: ThemeColors = {
+// Jade rather than leaf: the ramp lives on the blue-green side (hue ~180)
+// like stone, with the leafier greens reserved for brand and success.
+const osakaJade: ThemeColors = {
   neutral: {
-    50: 'oklch(90.57% 0.0511 134.45)',
-    100: 'oklch(86.78% 0.0524 134.61)',
-    200: 'oklch(79.199% 0.0549 134.93)',
-    300: 'oklch(71.619% 0.0575 135.25)',
-    400: 'oklch(53.577% 0.0538 136.73)',
-    500: 'oklch(36.133% 0.0575 141.06)',
-    600: 'oklch(27.425% 0.0354 143.04)',
-    700: 'oklch(25.62% 0.03 144.64)',
-    800: 'oklch(20.99% 0.0219 144.74)',
-    900: 'oklch(19.03% 0.0175 144.85)',
-    950: 'oklch(17.349% 0.0154 144.88)',
+    50: 'oklch(92% 0.028 178)',
+    100: 'oklch(87.5% 0.03 178)',
+    200: 'oklch(79% 0.033 179)',
+    300: 'oklch(70.5% 0.036 180)',
+    400: 'oklch(53% 0.037 181)',
+    500: 'oklch(36.5% 0.038 182)',
+    600: 'oklch(28.5% 0.03 183)',
+    700: 'oklch(25.5% 0.026 183)',
+    800: 'oklch(21% 0.021 184)',
+    900: 'oklch(18.5% 0.017 184)',
+    950: 'oklch(16.5% 0.015 184)',
   },
-  brand: { solid: 'oklch(79.714% 0.1784 136.37)', contrast: 'oklch(18.298% 0.0314 147.69)' },
-  accent: { solid: 'oklch(70.437% 0.1101 178.23)', contrast: 'oklch(17.44% 0.0258 171.89)' },
-  danger: 'oklch(69.305% 0.1467 35.44)',
-  success: 'oklch(78% 0.16 148)',
-  warning: 'oklch(80% 0.12 76)',
-  inset: 'oklch(17.349% 0.0154 144.88)',
-  fill: 'oklch(28.489% 0.0483 141.22)',
-  grid: 'oklch(34.825% 0.0526 141.63)',
-  control: 'oklch(25.62% 0.03 144.64)',
+  brand: { solid: 'oklch(81% 0.145 165)', contrast: 'oklch(17% 0.028 175)' },
+  accent: { solid: 'oklch(72% 0.105 195)', contrast: 'oklch(16.5% 0.024 195)' },
+  danger: 'oklch(69.5% 0.147 33)',
+  success: 'oklch(78% 0.15 155)',
+  warning: 'oklch(80% 0.12 78)',
+  inset: 'oklch(16.5% 0.015 184)',
+  fill: 'oklch(28.5% 0.032 182)',
+  grid: 'oklch(34.5% 0.035 182)',
+  control: 'oklch(25.5% 0.026 183)',
 };
 
 const mono: ThemeColors = {
@@ -162,29 +167,32 @@ const mono: ThemeColors = {
   control: 'oklch(27.274% 0 0)',
 };
 
+// True-black floor with faintly cool text: the old light steps carried a
+// green-lime cast that clashed with everything but the brand mark; the ramp
+// now cools toward slate and lets brand lime and sky accent be the color.
 const ultradark: ThemeColors = {
   neutral: {
-    50: 'oklch(88.901% 0.0317 120.83)',
-    100: 'oklch(84.397% 0.0292 123.06)',
-    200: 'oklch(75.39% 0.0242 127.51)',
-    300: 'oklch(66.382% 0.0192 131.96)',
-    400: 'oklch(47.041% 0.0184 127.12)',
-    500: 'oklch(26.862% 0 0)',
-    600: 'oklch(20.904% 0 0)',
-    700: 'oklch(19.125% 0 0)',
-    800: 'oklch(14.479% 0 0)',
-    900: 'oklch(11.492% 0 0)',
+    50: 'oklch(89% 0.008 250)',
+    100: 'oklch(84.5% 0.008 250)',
+    200: 'oklch(75.5% 0.007 250)',
+    300: 'oklch(66.5% 0.007 250)',
+    400: 'oklch(47% 0.006 250)',
+    500: 'oklch(27% 0.005 250)',
+    600: 'oklch(21% 0.004 250)',
+    700: 'oklch(19% 0.004 250)',
+    800: 'oklch(14.5% 0.003 250)',
+    900: 'oklch(11.5% 0.003 250)',
     950: 'oklch(0% 0 0)',
   },
-  brand: { solid: 'oklch(93.444% 0.19 125.56)', contrast: 'oklch(15.913% 0.0233 128.66)' },
+  brand: { solid: 'oklch(93.444% 0.19 125.56)', contrast: 'oklch(15% 0.004 250)' },
   accent: { solid: 'oklch(80.623% 0.1248 228.24)', contrast: 'oklch(17.416% 0.0256 235.84)' },
   danger: 'oklch(71.161% 0.1812 22.84)',
   success: 'oklch(76.5% 0.16 150.5)',
   warning: 'oklch(79.5% 0.13 80)',
   inset: 'oklch(0% 0 0)',
-  fill: 'oklch(21.779% 0 0)',
-  grid: 'oklch(23.929% 0 0)',
-  control: 'oklch(19.125% 0 0)',
+  fill: 'oklch(21.8% 0.004 250)',
+  grid: 'oklch(24% 0.004 250)',
+  control: 'oklch(19% 0.004 250)',
 };
 
 /**
@@ -208,11 +216,11 @@ export const THEMES: ThemeDefinition[] = [
     colors: light,
   },
   {
-    id: 'forest',
-    label: 'Forest',
-    description: 'Deep greens with a leafy accent.',
+    id: 'osakaJade',
+    label: 'Osaka Jade',
+    description: 'Deep jade stone with a cool green accent.',
     colorScheme: 'dark',
-    colors: forest,
+    colors: osakaJade,
   },
   {
     id: 'mono',
@@ -251,6 +259,20 @@ export const THEMES_BY_ID: Record<WorkbenchThemeId, ThemeDefinition> = THEMES.re
 
 export const isWorkbenchThemeId = (value: unknown): value is WorkbenchThemeId =>
   typeof value === 'string' && Object.prototype.hasOwnProperty.call(THEMES_BY_ID, value);
+
+/** Renamed themes keep working for preferences persisted under the old id. */
+const LEGACY_THEME_IDS: Record<string, WorkbenchThemeId> = {
+  forest: 'osakaJade',
+};
+
+/** A stored theme preference → a current theme id, or `null` for junk. */
+export const resolveWorkbenchThemeId = (value: unknown): WorkbenchThemeId | null => {
+  if (isWorkbenchThemeId(value)) {
+    return value;
+  }
+
+  return typeof value === 'string' ? (LEGACY_THEME_IDS[value] ?? null) : null;
+};
 
 /** The default panel surface of a theme (lightest end in light mode, near-darkest in dark). */
 const surfaceOf = (theme: ThemeDefinition): string =>

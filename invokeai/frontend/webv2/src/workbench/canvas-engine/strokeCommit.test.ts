@@ -1,5 +1,6 @@
 import type { StrokeCommittedEvent } from '@workbench/canvas-engine/tools/tool';
 
+import { stackTopAnchor } from '@workbench/canvas-engine/document/insertionAnchors.testStub';
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 
 import { createStrokeCommit, type CreateStrokeCommitDeps } from './strokeCommit';
@@ -79,7 +80,7 @@ describe('commitOrdinaryStroke', () => {
 });
 
 describe('a stroke that auto-created its layer', () => {
-  const created = { index: 2, layer: { id: 'layer-1' } as never };
+  const created = { anchor: stackTopAnchor('p'), layer: { id: 'layer-1' } as never };
 
   it('undoes by removing the layer, not just the pixels', () => {
     createStrokeCommit(deps).commitOrdinaryStroke(strokeEvent({ createdLayer: created } as never));
@@ -88,12 +89,12 @@ describe('a stroke that auto-created its layer', () => {
     expect(deps.dispatchCanvasMutation).toHaveBeenCalledWith({ ids: ['layer-1'], type: 'removeCanvasLayers' });
   });
 
-  it('redoes by re-adding the layer at its index, then writing the pixels back', () => {
+  it('redoes by re-adding the layer at its anchor, then writing the pixels back', () => {
     createStrokeCommit(deps).commitOrdinaryStroke(strokeEvent({ createdLayer: created } as never));
     const entry = deps.history.push.mock.calls[0]?.[0] as { redo(): void };
     entry.redo();
     expect(deps.dispatchCanvasMutation).toHaveBeenCalledWith({
-      index: 2,
+      anchor: created.anchor,
       layer: created.layer,
       type: 'addCanvasLayer',
     });

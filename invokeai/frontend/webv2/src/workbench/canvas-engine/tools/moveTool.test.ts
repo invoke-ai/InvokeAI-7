@@ -1,10 +1,12 @@
-import type { CanvasDocumentContractV2, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
+import type { CanvasDocumentContractV3, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
 import type { FloatingSelection } from '@workbench/canvas-engine/selection/floatingSelection';
 import type { Tool, ToolContext } from '@workbench/canvas-engine/tools/tool';
 import type { LayerTransform } from '@workbench/canvas-engine/transform/transformMath';
 import type { PointerInput } from '@workbench/canvas-engine/types';
 import type { CanvasProjectMutation } from '@workbench/canvasProjectMutations';
 
+import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
+import { createTestInsertionAnchorCapture } from '@workbench/canvas-engine/document/insertionAnchors.testStub';
 import { createEngineStores } from '@workbench/canvas-engine/engineStores';
 import { createLayerCacheStore } from '@workbench/canvas-engine/render/layerCache';
 import { createTestStubRasterBackend } from '@workbench/canvas-engine/render/raster.testStub';
@@ -50,13 +52,13 @@ const shapeLayer = (
   type: 'raster',
 });
 
-const makeDoc = (layers: CanvasLayerContract[], selectedLayerId: string | null): CanvasDocumentContractV2 => ({
+const makeDoc = (layers: CanvasLayerContract[], selectedLayerId: string | null): CanvasDocumentContractV3 => ({
   background: 'transparent',
   bbox: { height: 100, width: 100, x: 0, y: 0 },
   height: 100,
-  layers,
+  stacks: stacksFrom(layers),
   selectedLayerId,
-  version: 2,
+  version: 3,
   width: 100,
 });
 
@@ -93,6 +95,8 @@ interface Harness {
 }
 
 interface HarnessOptions {
+  /** Transient multi-selection supplied by the Layers panel. */
+  selectedLayerIds?: readonly string[];
   /** Whether a live selection contains every point (the ants are "under" the cursor). */
   selectionContainsPoint?: boolean;
   /** Whether a lift succeeds when the tool asks for one. */
@@ -115,7 +119,7 @@ const IDENTITY: LayerTransform = { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0
 const fakeFloat = (layerId: string): FloatingSelection =>
   ({ layerId, transform: { ...IDENTITY } }) as FloatingSelection;
 
-const createHarness = (doc: CanvasDocumentContractV2, options: HarnessOptions = {}): Harness => {
+const createHarness = (doc: CanvasDocumentContractV3, options: HarnessOptions = {}): Harness => {
   const dispatched: CanvasProjectMutation[] = [];
   const commits: StructuralCommit[] = [];
   const overrides: { layerId: string; override: { x: number; y: number } | null }[] = [];
@@ -133,12 +137,17 @@ const createHarness = (doc: CanvasDocumentContractV2, options: HarnessOptions = 
   const ctx: ToolContext = {
     backend: null as never,
     commitFloatingSelection: commitFloat,
-    commitStructural: (label, forward, inverse) => commits.push({ forward, inverse, label }),
+    commitStructural: (label, forward, inverse) => {
+      commits.push({ forward, inverse, label });
+      return { status: 'committed' as const };
+    },
+    captureInsertionAnchor: createTestInsertionAnchorCapture('p'),
     createLayerId: () => 'x',
     createPath2D: (d) => ({ d }) as unknown as Path2D,
     dispatch: (action) => dispatched.push(action),
     emitStrokeCommitted: vi.fn(),
     getDocument: () => doc,
+    getSelectedLayerIds: () => options.selectedLayerIds ?? (doc.selectedLayerId ? [doc.selectedLayerId] : []),
     getFloatingSelection: () => float.current,
     invalidate: vi.fn(),
     isPointInSelection: () => options.selectionContainsPoint === true,
@@ -229,6 +238,58 @@ describe('move tool: the layers panel owns selection', () => {
 });
 
 describe('move tool: drag', () => {
+  it('previews and commits every selected layer with one shared snapped delta', () => {
+    const doc = makeDoc(
+      [imageLayer('a', { x: 0, y: 0 }), imageLayer('middle', { x: 50, y: 50 }), imageLayer('b', { x: 7, y: 11 })],
+      'a'
+    );
+    const h = createHarness(doc, { bboxGrid: 8, selectedLayerIds: ['a', 'b'], snapToGrid: true });
+    const tool = createMoveTool();
+
+    down(tool, h.ctx, pointer(10, 10));
+    move(tool, h.ctx, pointer(25, 25));
+    up(tool, h.ctx, pointer(25, 25));
+
+    expect(h.overrides).toEqual([
+      { layerId: 'a', override: { x: 16, y: 16 } },
+      { layerId: 'b', override: { x: 23, y: 27 } },
+      { layerId: 'a', override: null },
+      { layerId: 'b', override: null },
+    ]);
+    expect(h.commits).toEqual([
+      {
+        forward: {
+          type: 'setCanvasLayerPositions',
+          updates: [
+            { id: 'a', x: 16, y: 16 },
+            { id: 'b', x: 23, y: 27 },
+          ],
+        },
+        inverse: {
+          type: 'setCanvasLayerPositions',
+          updates: [
+            { id: 'a', x: 0, y: 0 },
+            { id: 'b', x: 7, y: 11 },
+          ],
+        },
+        label: 'Move layers',
+      },
+    ]);
+  });
+
+  it('moves none of a selected group when any selected layer is locked', () => {
+    const doc = makeDoc([imageLayer('a'), imageLayer('b', { isLocked: true })], 'a');
+    const h = createHarness(doc, { selectedLayerIds: ['a', 'b'] });
+    const tool = createMoveTool();
+
+    down(tool, h.ctx, pointer(10, 10));
+    move(tool, h.ctx, pointer(30, 30));
+    up(tool, h.ctx, pointer(30, 30));
+
+    expect(h.overrides).toEqual([]);
+    expect(h.commits).toEqual([]);
+  });
+
   it('previews via override on move then commits one structural transform on up', () => {
     const doc = makeDoc([imageLayer('a', { x: 0, y: 0, width: 50, height: 50 })], 'a');
     const h = createHarness(doc);

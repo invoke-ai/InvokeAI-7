@@ -11,7 +11,7 @@ export type PromptToken =
   | { type: 'punct'; value: string; range: PromptRange }
   | { type: 'lparen'; range: PromptRange }
   | { type: 'rparen'; range: PromptRange }
-  | { type: 'weight'; value: PromptAttention; range: PromptRange }
+  | { type: 'weight'; value: PromptAttention; range: PromptRange; source?: string }
   | { type: 'lembed'; range: PromptRange }
   | { type: 'rembed'; range: PromptRange }
   | { type: 'escaped_paren'; value: '(' | ')'; range: PromptRange };
@@ -39,10 +39,10 @@ export type PromptAstNode =
       isSelection?: boolean;
     };
 
-const WORD_CHAR = /[A-Za-z0-9_]/;
+const WORD_CHAR = /[\p{L}\p{N}\p{M}_]/u;
 const WHITESPACE = /\s/;
 const NUMERIC_WEIGHT = /^[+-]?\d+(?:\.\d+)?/;
-const SYMBOLIC_WEIGHT = /^[+-]+/;
+const SYMBOLIC_WEIGHT = /^(?:\++|-+)/;
 const PUNCTUATION = new Set([
   '.',
   ',',
@@ -110,7 +110,7 @@ const readSymbolicAttention = (prompt: string, start: number): { value: string; 
 
   const end = start + match.length;
 
-  if (isWordChar(prompt[end])) {
+  if (isWordChar(prompt[end]) || prompt[end] === '+' || prompt[end] === '-') {
     return null;
   }
 
@@ -134,10 +134,15 @@ const readNumericAttention = (prompt: string, start: number): { value: number; e
 };
 
 const readWord = (prompt: string, start: number): { token: PromptToken; extraToken?: PromptToken; end: number } => {
-  let end = start + 1;
+  const first = String.fromCodePoint(prompt.codePointAt(start) ?? 0);
+  let end = start + first.length;
 
-  while (end < prompt.length && isWordChar(prompt[end])) {
-    end++;
+  while (isWordChar(first) && end < prompt.length) {
+    const next = String.fromCodePoint(prompt.codePointAt(end) ?? 0);
+    if (!isWordChar(next)) {
+      break;
+    }
+    end += next.length;
   }
 
   const token: PromptToken = { type: 'word', value: prompt.slice(start, end), range: range(start, end) };
@@ -188,7 +193,12 @@ export const tokenizePrompt = (prompt: string): PromptToken[] => {
       const weight = numeric ?? symbolic;
 
       if (weight) {
-        tokens.push({ type: 'weight', value: weight.value, range: range(index + 1, weight.end) });
+        tokens.push({
+          type: 'weight',
+          value: weight.value,
+          range: range(index + 1, weight.end),
+          source: prompt.slice(index + 1, weight.end),
+        });
         index = weight.end;
       } else {
         index++;
@@ -208,7 +218,7 @@ export const tokenizePrompt = (prompt: string): PromptToken[] => {
       continue;
     }
 
-    if (isWordChar(char)) {
+    if (!PUNCTUATION.has(char)) {
       const result = readWord(prompt, index);
       tokens.push(result.token);
 
@@ -220,13 +230,7 @@ export const tokenizePrompt = (prompt: string): PromptToken[] => {
       continue;
     }
 
-    if (PUNCTUATION.has(char)) {
-      tokens.push({ type: 'punct', value: char, range: range(index, index + 1) });
-      index++;
-      continue;
-    }
-
-    tokens.push({ type: 'word', value: char, range: range(index, index + 1) });
+    tokens.push({ type: 'punct', value: char, range: range(index, index + 1) });
     index++;
   }
 
@@ -254,7 +258,7 @@ const tokenSource = (token: PromptToken): string => {
     case 'escaped_paren':
       return `\\${token.value}`;
     case 'weight':
-      return String(token.value);
+      return token.source ?? String(token.value);
     default:
       return token.value;
   }
@@ -262,8 +266,25 @@ const tokenSource = (token: PromptToken): string => {
 
 class PromptParser {
   private index = 0;
+  private lastEmbeddingEnd = -1;
+  private readonly groupEnds = new Map<number, number>();
 
-  constructor(private readonly tokens: PromptToken[]) {}
+  constructor(private readonly tokens: PromptToken[]) {
+    const openings: number[] = [];
+    for (let index = 0; index < tokens.length; index++) {
+      const type = tokens[index]?.type;
+      if (type === 'rembed') {
+        this.lastEmbeddingEnd = index;
+      } else if (type === 'lparen') {
+        openings.push(index);
+      } else if (type === 'rparen') {
+        const opening = openings.pop();
+        if (opening !== undefined) {
+          this.groupEnds.set(opening, index);
+        }
+      }
+    }
+  }
 
   parse(): PromptAstNode[] {
     return this.parseNodes();
@@ -301,6 +322,21 @@ class PromptParser {
   }
 
   private unquotedPromptFunctionAhead(): boolean {
+    const closing = this.groupEnds.get(this.index - 1);
+    if (closing === undefined) {
+      return false;
+    }
+    let tailOffset = closing - this.index + 1;
+    while (this.peek(tailOffset)?.type === 'whitespace') {
+      tailOffset++;
+    }
+    if (
+      !this.isPunct(tailOffset, '.') ||
+      this.peek(tailOffset + 1)?.type !== 'word' ||
+      this.peek(tailOffset + 2)?.type !== 'lparen'
+    ) {
+      return false;
+    }
     let offset = 0;
     let depth = 0;
     let hasComma = false;
@@ -312,21 +348,7 @@ class PromptParser {
         depth++;
       } else if (token?.type === 'rparen') {
         if (depth === 0) {
-          if (!hasComma) {
-            return false;
-          }
-
-          let tailOffset = offset + 1;
-
-          while (this.peek(tailOffset)?.type === 'whitespace') {
-            tailOffset++;
-          }
-
-          return (
-            this.isPunct(tailOffset, '.') &&
-            this.peek(tailOffset + 1)?.type === 'word' &&
-            this.peek(tailOffset + 2)?.type === 'lparen'
-          );
+          return hasComma;
         }
 
         depth--;
@@ -581,10 +603,13 @@ class PromptParser {
     return tokens;
   }
 
-  private parseNodes(): PromptAstNode[] {
+  private parseNodes(inGroup = false): PromptAstNode[] {
     const nodes: PromptAstNode[] = [];
 
-    while (this.peek() && this.peek()?.type !== 'rparen') {
+    while (this.peek()) {
+      if (inGroup && this.peek()?.type === 'rparen') {
+        break;
+      }
       const token = this.consume();
 
       switch (token.type) {
@@ -601,7 +626,7 @@ class PromptParser {
             break;
           }
 
-          const children = this.parseNodes();
+          const children = this.parseNodes(true);
           let nodeEnd = lparen.range.end;
           let attention: PromptAttention | undefined;
 
@@ -614,14 +639,19 @@ class PromptParser {
               attention = weight.value;
               nodeEnd = weight.range.end;
             }
-          } else if (children.length > 0) {
-            nodeEnd = children.at(-1)?.range.end ?? nodeEnd;
+          } else {
+            nodes.push({ type: 'punct', value: '(', range: lparen.range }, ...children);
+            break;
           }
 
           nodes.push({ type: 'group', attention, children, range: range(lparen.range.start, nodeEnd) });
           break;
         }
         case 'lembed': {
+          if (this.lastEmbeddingEnd < this.index) {
+            nodes.push({ type: 'punct', value: '<', range: token.range });
+            break;
+          }
           let value = '';
           let nodeEnd = token.range.end;
 
@@ -635,7 +665,7 @@ class PromptParser {
             nodeEnd = this.consume().range.end;
           }
 
-          nodes.push({ type: 'embedding', value: value.trim(), range: range(token.range.start, nodeEnd) });
+          nodes.push({ type: 'embedding', value, range: range(token.range.start, nodeEnd) });
           break;
         }
         case 'word': {
@@ -658,6 +688,7 @@ class PromptParser {
           nodes.push({ type: 'escaped_paren', value: token.value, range: token.range });
           break;
         default:
+          nodes.push({ type: 'punct', value: tokenSource(token), range: token.range });
           break;
       }
     }
@@ -713,12 +744,48 @@ interface SerializeVisitor {
   onNode?: (node: PromptAstNode, start: number, end: number) => void;
 }
 
-const appendAttention = (attention: PromptAttention | undefined): string =>
-  attention === undefined ? '' : String(attention);
+const appendAttention = (attention: PromptAttention | undefined): string => {
+  const value = attention === undefined ? '' : String(attention);
+  if (typeof attention !== 'number' || !value.includes('e')) {
+    return value;
+  }
+  // Compel's numeric syntax does not accept exponent notation.
+  const [coefficient = '', exponent = '0'] = value.split('e');
+  const sign = coefficient.startsWith('-') ? '-' : '';
+  const [whole = '', fraction = ''] = coefficient.replace('-', '').split('.');
+  const digits = whole + fraction;
+  const point = whole.length + Number(exponent);
+  if (point <= 0) {
+    return `${sign}0.${'0'.repeat(-point)}${digits}`;
+  }
+  return point >= digits.length
+    ? `${sign}${digits}${'0'.repeat(point - digits.length)}`
+    : `${sign}${digits.slice(0, point)}.${digits.slice(point)}`;
+};
 
-const serializeInto = (nodes: PromptAstNode[], output: { value: string }, visitor?: SerializeVisitor): void => {
-  for (const node of nodes) {
+const needsAttentionBoundary = (node: PromptAstNode, next: PromptAstNode | undefined): boolean => {
+  if ((node.type !== 'word' && node.type !== 'group') || node.attention === undefined || !next) {
+    return false;
+  }
+  const nextText = next.type === 'word' ? next.text : next.type === 'punct' ? next.value : '';
+  return (
+    isWordChar(nextText[0]) || (typeof node.attention === 'number' ? nextText.startsWith('.') : /^[+-]/.test(nextText))
+  );
+};
+
+const serializeInto = (
+  nodes: PromptAstNode[],
+  output: { value: string },
+  visitor?: SerializeVisitor,
+  source?: string
+): void => {
+  for (let index = 0; index < nodes.length; index++) {
+    const node = nodes[index]!;
     const start = output.value.length;
+    const needsBoundary = needsAttentionBoundary(node, nodes[index + 1]);
+    if (needsBoundary) {
+      output.value += '(';
+    }
 
     switch (node.type) {
       case 'punct':
@@ -733,13 +800,23 @@ const serializeInto = (nodes: PromptAstNode[], output: { value: string }, visito
         break;
       case 'group':
         output.value += '(';
-        serializeInto(node.children, output, visitor);
+        serializeInto(node.children, output, visitor, source);
         output.value += `)${appendAttention(node.attention)}`;
         break;
       case 'embedding':
         output.value += `<${node.value}>`;
         break;
       case 'prompt_function':
+        if (source !== undefined) {
+          let cursor = node.range.start;
+          for (const arg of node.promptArgs) {
+            output.value += source.slice(cursor, arg.contentRange.start);
+            serializeInto(arg.nodes, output, visitor, source);
+            cursor = arg.contentRange.end;
+          }
+          output.value += source.slice(cursor, node.range.end);
+          break;
+        }
         output.value += '(';
         node.promptArgs.forEach((arg, index) => {
           if (index > 0) {
@@ -747,13 +824,16 @@ const serializeInto = (nodes: PromptAstNode[], output: { value: string }, visito
           }
 
           output.value += arg.quote;
-          serializeInto(arg.nodes, output, visitor);
+          serializeInto(arg.nodes, output, visitor, source);
           output.value += CLOSE_QUOTE_BY_OPEN[arg.quote] ?? arg.quote;
         });
         output.value += `).${node.name}(${node.functionParams})`;
         break;
     }
 
+    if (needsBoundary) {
+      output.value += ')';
+    }
     visitor?.onNode?.(node, start, output.value.length);
   }
 };
@@ -767,22 +847,28 @@ export const serializePrompt = (nodes: PromptAstNode[]): string => {
 };
 
 export const serializePromptWithSelection = (
-  nodes: PromptAstNode[]
+  nodes: PromptAstNode[],
+  source?: string
 ): { prompt: string; selectionStart: number; selectionEnd: number } => {
   const output = { value: '' };
   let selectionStart = Infinity;
   let selectionEnd = -1;
 
-  serializeInto(nodes, output, {
-    onNode: (node, start, end) => {
-      if (!node.isSelection) {
-        return;
-      }
+  serializeInto(
+    nodes,
+    output,
+    {
+      onNode: (node, start, end) => {
+        if (!node.isSelection) {
+          return;
+        }
 
-      selectionStart = Math.min(selectionStart, start);
-      selectionEnd = Math.max(selectionEnd, end);
+        selectionStart = Math.min(selectionStart, start);
+        selectionEnd = Math.max(selectionEnd, end);
+      },
     },
-  });
+    source
+  );
 
   if (selectionStart === Infinity) {
     return { prompt: output.value, selectionStart: 0, selectionEnd: output.value.length };

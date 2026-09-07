@@ -61,6 +61,7 @@ export const stabilizeBackendGraphIds = (graph: BackendGraphContract): BackendGr
         node_id: rename.get(edge.destination.node_id) ?? edge.destination.node_id,
       },
       source: { field: edge.source.field, node_id: rename.get(edge.source.node_id) ?? edge.source.node_id },
+      ...(edge.type ? { type: edge.type } : {}),
     })),
     id: 'generate-preview',
     nodes: Object.fromEntries(
@@ -81,6 +82,7 @@ const toPreviewContract = (backendGraph: BackendGraphContract, label: string): G
     sourceNodeId: edge.source.node_id,
     targetField: edge.destination.field,
     targetNodeId: edge.destination.node_id,
+    ...(edge.type ? { type: edge.type } : {}),
   })),
   id: backendGraph.id,
   label,

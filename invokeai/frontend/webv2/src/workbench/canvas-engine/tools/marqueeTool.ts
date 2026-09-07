@@ -44,6 +44,13 @@ interface GestureState {
   startDoc: Vec2;
   startScreen: Vec2;
   moved: boolean;
+  /**
+   * Shift/alt held at the press pick the boolean op (add/subtract); the same
+   * keys pressed mid-drag shape the rect instead (square / from centre).
+   */
+  opModifiers: { shift: boolean; alt: boolean };
+  /** Op keys let go during the drag: pressing one again shapes like any mid-drag press. */
+  released: { shift: boolean; alt: boolean };
 }
 
 /** How the drag modifiers shape the rect. */
@@ -84,11 +91,19 @@ export const marqueeRect = (start: Vec2, end: Vec2, constraints: MarqueeConstrai
   };
 };
 
-/** Reads the shaping constraints out of a pointer sample's modifiers. */
-const constraintsFor = (modifiers: { shift: boolean; alt: boolean }): MarqueeConstraints => ({
-  fromCenter: modifiers.alt,
-  square: modifiers.shift,
-});
+/** The shaping constraints: a key still held since it chose the op at the press does not also shape. */
+const constraintsFor = (modifiers: { shift: boolean; alt: boolean }, state: GestureState): MarqueeConstraints => {
+  if (state.opModifiers.shift && !modifiers.shift) {
+    state.released.shift = true;
+  }
+  if (state.opModifiers.alt && !modifiers.alt) {
+    state.released.alt = true;
+  }
+  return {
+    fromCenter: modifiers.alt && (!state.opModifiers.alt || state.released.alt),
+    square: modifiers.shift && (!state.opModifiers.shift || state.released.shift),
+  };
+};
 
 /** Creates a fresh marquee tool with its own gesture state. */
 export const createMarqueeTool = (): Tool => {
@@ -106,6 +121,7 @@ export const createMarqueeTool = (): Tool => {
   return {
     cursor: () => 'crosshair',
     id: 'marquee',
+    usesAltKey: true,
     onDeactivate: (ctx) => {
       end();
       clearPreview(ctx);
@@ -124,7 +140,13 @@ export const createMarqueeTool = (): Tool => {
       if (state || (input.buttons & PRIMARY_BUTTON) === 0 || !ctx.getDocument()) {
         return;
       }
-      state = { moved: false, startDoc: input.documentPoint, startScreen: input.screenPoint };
+      state = {
+        moved: false,
+        opModifiers: { alt: input.modifiers.alt, shift: input.modifiers.shift },
+        released: { alt: false, shift: false },
+        startDoc: input.documentPoint,
+        startScreen: input.screenPoint,
+      };
     },
     onPointerMove: (ctx, input) => {
       if (!state) {
@@ -138,7 +160,7 @@ export const createMarqueeTool = (): Tool => {
         }
         state.moved = true;
       }
-      const rect = marqueeRect(state.startDoc, input.documentPoint, constraintsFor(input.modifiers));
+      const rect = marqueeRect(state.startDoc, input.documentPoint, constraintsFor(input.modifiers, state));
       ctx.stores.marqueePreview.set({ kind: ctx.stores.marqueeOptions.get().kind, rect });
       ctx.invalidate({ overlay: true });
     },
@@ -153,14 +175,14 @@ export const createMarqueeTool = (): Tool => {
       if (!current.moved || !ctx.commitSelection) {
         return;
       }
-      const rect = marqueeRect(current.startDoc, input.documentPoint, constraintsFor(input.modifiers));
+      const rect = marqueeRect(current.startDoc, input.documentPoint, constraintsFor(input.modifiers, current));
       if (rect.width < 1 || rect.height < 1) {
         // Degenerate drag: selecting nothing would silently wipe the selection
         // under `replace`, so treat it as a no-op instead.
         return;
       }
       const { kind } = ctx.stores.marqueeOptions.get();
-      const op = selectionOpFor(input.modifiers, ctx.stores.marqueeOptions.get().mode);
+      const op = selectionOpFor(current.opModifiers, ctx.stores.marqueeOptions.get().mode);
       ctx.commitSelection({
         bounds: rect,
         op,

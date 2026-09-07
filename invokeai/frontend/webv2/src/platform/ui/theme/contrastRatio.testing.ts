@@ -49,3 +49,21 @@ export const getContrastRatio = (foreground: string, background: string, alpha: 
 
   return (lighter! + 0.05) / (darker! + 0.05);
 };
+
+/**
+ * The colour a translucent fill actually produces over an opaque surface.
+ * Painted rather than parsed: `toRgb` reads raw channels and would report a
+ * semi-transparent background as if it were opaque.
+ */
+export const compositeColors = (top: string, bottom: string): string => {
+  const context = document.createElement('canvas').getContext('2d')!;
+
+  context.fillStyle = bottom;
+  context.fillRect(0, 0, 1, 1);
+  context.fillStyle = top;
+  context.fillRect(0, 0, 1, 1);
+
+  const [red, green, blue] = context.getImageData(0, 0, 1, 1).data;
+
+  return `rgb(${String(red)}, ${String(green)}, ${String(blue)})`;
+};

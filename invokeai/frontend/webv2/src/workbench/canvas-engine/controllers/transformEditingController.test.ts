@@ -1,6 +1,7 @@
-import type { CanvasDocumentContractV2 } from '@workbench/canvas-engine/contracts';
+import type { CanvasDocumentContractV3 } from '@workbench/canvas-engine/contracts';
 import type { TransformSession } from '@workbench/canvas-engine/engineStores';
 
+import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
 import { createTestStubRasterBackend } from '@workbench/canvas-engine/render/raster.testStub';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -9,7 +10,7 @@ import { TransformEditingController } from './transformEditingController';
 const document = {
   bbox: { height: 100, width: 100, x: 0, y: 0 },
   height: 100,
-  layers: [
+  stacks: stacksFrom([
     {
       blendMode: 'normal',
       id: 'shape',
@@ -21,9 +22,9 @@ const document = {
       transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 },
       type: 'raster',
     },
-  ],
+  ]),
   width: 100,
-} as CanvasDocumentContractV2;
+} as CanvasDocumentContractV3;
 
 describe('TransformEditingController', () => {
   it('owns preview state and commits parametric transforms through declared ports', () => {

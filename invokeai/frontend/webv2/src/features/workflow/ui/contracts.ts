@@ -1,4 +1,5 @@
 import type { ProjectGraphAction } from '@features/workflow/core/document';
+import type { ForLoopValidationReason } from '@features/workflow/core/forLoops';
 import type { ProjectGraphState, XYPosition } from '@features/workflow/core/types';
 
 export type WorkflowRegion = 'left' | 'right' | 'bottom' | 'center' | 'dialog' | 'popover' | 'floating';
@@ -43,21 +44,11 @@ export interface WorkflowWidgetLabelProps {
   presentation?: 'compact' | 'expanded' | 'tooltip';
 }
 
-export interface WorkflowGraphHistoryEntry {
-  id: string;
-  createdAt: string;
-  label: string;
-  retainedBytes?: number;
-  document?: ProjectGraphState;
-}
-
 export interface WorkflowCommands {
   bindLibraryWorkflow(libraryWorkflowId: string): void;
   editGraph(action: ProjectGraphAction): void;
   replace(document: ProjectGraphState, label: string): void;
   redo(): void;
-  restoreSnapshot(snapshotId: string): void;
-  saveSnapshot(): void;
   undo(): void;
 }
 
@@ -86,6 +77,7 @@ export interface WorkflowPreviewGraph {
     sourceField: string;
     targetNodeId: string;
     targetField: string;
+    type?: 'default' | 'loop_linkage';
   }>;
   backendGraph?: unknown;
 }
@@ -118,7 +110,7 @@ export interface GraphPreviewSourceState {
   graph: WorkflowPreviewGraph | null;
   /** Human-readable result destination (e.g. "Gallery"), set for every source by the builder. */
   destinationLabel: string | null;
-  invalidReasons: string[];
+  invalidReasons: Array<string | ForLoopValidationReason>;
   isLive: boolean;
   notices: GraphPreviewNotice[];
   positionHints?: Record<string, XYPosition>;

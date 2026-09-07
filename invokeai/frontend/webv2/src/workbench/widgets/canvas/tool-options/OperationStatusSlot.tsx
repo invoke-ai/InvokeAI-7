@@ -1,7 +1,7 @@
 import type { CSSProperties } from 'react';
 
-import { Flex, IconButton, Spinner } from '@chakra-ui/react';
-import { Tooltip } from '@platform/ui';
+import { Flex, HStack, IconButton, Spinner, Text, VisuallyHidden } from '@chakra-ui/react';
+import { Tooltip } from '@platform/ui/Tooltip';
 import { InfoIcon } from 'lucide-react';
 
 const ERROR_CLAMP_STYLE: CSSProperties = {
@@ -69,3 +69,42 @@ export const OperationStatusSlot = ({
     </Flex>
   );
 };
+
+interface OperationStatusChipProps {
+  errorDetail: string | null;
+  errorText: string | null;
+  isBusy: boolean;
+  /** The source layer, named for assistive tech and the tooltip. */
+  sourceLabel: string;
+  statusText: string;
+  technicalDetailsLabel: string;
+  title: string;
+}
+
+/** The status of a running operation: its title, then the live status slot. */
+export const OperationStatusChip = ({
+  errorDetail,
+  errorText,
+  isBusy,
+  sourceLabel,
+  statusText,
+  technicalDetailsLabel,
+  title,
+}: OperationStatusChipProps) => (
+  <HStack gap="1" minW="0">
+    <Tooltip content={sourceLabel}>
+      <Text flexShrink={0} fontSize="xs" fontWeight="semibold" minW="0" truncate>
+        {title}
+        <VisuallyHidden>{sourceLabel}</VisuallyHidden>
+      </Text>
+    </Tooltip>
+    <OperationStatusSlot
+      errorDetail={errorDetail}
+      errorText={errorText}
+      isBusy={isBusy}
+      minW="0"
+      statusText={statusText}
+      technicalDetailsLabel={technicalDetailsLabel}
+    />
+  </HStack>
+);

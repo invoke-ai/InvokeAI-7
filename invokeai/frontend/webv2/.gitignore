@@ -9,3 +9,6 @@ __screenshots__/
 
 # planning scratch, never committed
 docs/superpowers/
+*.tsbuildinfo
+vite.config.mjs
+vite.config.d.mts

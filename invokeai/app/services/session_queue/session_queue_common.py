@@ -38,6 +38,21 @@ class BatchDuplicateNodeFieldError(ValueError):
     """Raise when a batch has duplicate node_path and field_name."""
 
 
+class EnqueueIdempotencyConflictError(ValueError):
+    """Raise when a caller reuses an enqueue idempotency key for a different submission."""
+
+
+class EnqueueReceiptLimitError(RuntimeError):
+    """Raise when a caller has too many unacknowledged enqueue requests."""
+
+
+class EnqueueProjectNotFoundError(ValueError):
+    """Raise when a project-scoped enqueue names no project owned by the caller."""
+
+    def __init__(self, project_id: str) -> None:
+        super().__init__(f"Project {project_id} not found")
+
+
 class TooManySessionsError(ValueError):
     """Raise when too many sessions are requested."""
 
@@ -74,6 +89,18 @@ BatchDataCollection: TypeAlias = list[list[BatchDatum]]
 
 class Batch(BaseModel):
     batch_id: str = Field(default_factory=uuid_string, description="The ID of the batch")
+    idempotency_key: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=255,
+        description="A caller-owned retry key. Reusing it with a different payload is rejected.",
+    )
+    project_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=255,
+        description="The authoritative project that owns this submission, when applicable.",
+    )
     origin: str | None = Field(
         default=None,
         description="The origin of this queue item. This data is used by the frontend to determine how to handle results.",
@@ -402,6 +429,25 @@ class EnqueueBatchResult(BaseModel):
     batch: Batch = Field(description="The batch that was enqueued")
     priority: int = Field(description="The priority of the enqueued batch")
     item_ids: list[int] = Field(description="The IDs of the queue items that were enqueued")
+
+
+class EnqueueBatchReceipt(BaseModel):
+    batch_id: str = Field(min_length=1, description="The ID assigned to the accepted batch")
+    enqueued: int = Field(ge=1, description="The total number of queue items enqueued")
+    requested: int = Field(ge=1, description="The total number of queue items requested")
+    item_ids: list[int] = Field(min_length=1, description="The IDs of the accepted queue items")
+
+    @model_validator(mode="after")
+    def validate_result(self) -> "EnqueueBatchReceipt":
+        if self.enqueued > self.requested:
+            raise ValueError("Enqueued count cannot exceed requested count")
+        if (
+            len(self.item_ids) != self.enqueued
+            or len(set(self.item_ids)) != len(self.item_ids)
+            or any(item_id <= 0 for item_id in self.item_ids)
+        ):
+            raise ValueError("Item ids must contain one positive id per enqueued item")
+        return self
 
 
 class RetryItemsResult(BaseModel):

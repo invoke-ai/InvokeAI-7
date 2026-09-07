@@ -1,34 +1,39 @@
-import type { CanvasCoreStoreCapability, CanvasToolCapability, ToolId } from '@workbench/canvas-engine/api';
+import type {
+  CanvasCoreStoreCapability,
+  CanvasToolCapability,
+  ShapeToolKind,
+  ToolId,
+} from '@workbench/canvas-engine/api';
 
 import { Box } from '@chakra-ui/react';
-import { Toolbar, ToolbarButton } from '@platform/ui';
+import { Toolbar, ToolbarButton } from '@platform/ui/Toolbar';
 import {
+  BlendIcon,
   BrushIcon,
+  CircleIcon,
   EraserIcon,
   FrameIcon,
   HandIcon,
   LassoIcon,
   MoveIcon,
-  PaintBucketIcon,
+  PenLineIcon,
+  PentagonIcon,
   Rotate3dIcon,
-  ShapesIcon,
   SquareDashedIcon,
+  SquareIcon,
+  StarIcon,
+  TriangleIcon,
   TypeIcon,
 } from 'lucide-react';
-import { useCallback } from 'react';
+import { useCallback, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { isCanvasToolEnabled } from './canvasInteractionLock';
-import { useCanvasActiveTool } from './engineStoreHooks';
+import { useCanvasActiveTool, useShapeOptions } from './engineStoreHooks';
+import { recordSelectFamilyTool, useSelectFamilyTool, type SelectFamilyTool } from './toolFamilyStore';
+import { ToolFamilyButton, type ToolFlyoutItem } from './ToolStripFlyout';
 
 type ToolStripEngine = CanvasCoreStoreCapability & { readonly tools: CanvasToolCapability };
-
-/**
- * Clears the center region's floating chrome, whose inset already includes the
- * gap below the islands. Outside the center the variable is undefined and the
- * strip falls back to its own top margin.
- */
-const TOOL_STRIP_TOP = 'var(--wb-center-chrome-inset, var(--chakra-spacing-2))';
 
 interface ToolStripButtonProps {
   engine: ToolStripEngine;
@@ -48,6 +53,120 @@ const ToolStripButton = ({ engine, icon, isInteractionLocked, label, toolId }: T
     <ToolbarButton disabled={isDisabled} icon={icon} isActive={activeTool === toolId} label={label} onClick={onClick} />
   );
 };
+
+const SHAPE_KIND_ICONS: Record<ShapeToolKind, React.ElementType> = {
+  ellipse: CircleIcon,
+  freehand: PenLineIcon,
+  polygon: PentagonIcon,
+  rect: SquareIcon,
+  star: StarIcon,
+  triangle: TriangleIcon,
+};
+const SHAPE_KIND_ORDER: readonly ShapeToolKind[] = ['rect', 'ellipse', 'triangle', 'star', 'polygon', 'freehand'];
+const SHAPE_KIND_LABEL_KEYS: Record<ShapeToolKind, string> = {
+  ellipse: 'widgets.canvas.toolOptions.shapeEllipse',
+  freehand: 'widgets.canvas.toolOptions.shapeFreehand',
+  polygon: 'widgets.canvas.toolOptions.shapePolygon',
+  rect: 'widgets.canvas.toolOptions.shapeRect',
+  star: 'widgets.canvas.toolOptions.shapeStar',
+  triangle: 'widgets.canvas.toolOptions.shapeTriangle',
+};
+
+/** The Shape slot: one tool id, the flyout switching which kind the next drag draws. */
+const ShapeFamilyButton = ({
+  engine,
+  isInteractionLocked,
+}: {
+  engine: ToolStripEngine;
+  isInteractionLocked: boolean;
+}) => {
+  const { t } = useTranslation();
+  const activeTool = useCanvasActiveTool(engine);
+  const options = useShapeOptions(engine);
+  const items: ToolFlyoutItem[] = useMemo(
+    () =>
+      SHAPE_KIND_ORDER.map((kind) => ({
+        icon: SHAPE_KIND_ICONS[kind],
+        id: kind,
+        label: t(SHAPE_KIND_LABEL_KEYS[kind]),
+      })),
+    [t]
+  );
+  const onActivate = useCallback(() => engine.tools.setTool('shape'), [engine]);
+  const onSelectSubtool = useCallback(
+    (id: string) => {
+      engine.interaction.set('shapeOptions', { ...options, kind: id as ShapeToolKind });
+      engine.tools.setTool('shape');
+    },
+    [engine, options]
+  );
+  return (
+    <ToolFamilyButton
+      currentId={options.kind}
+      disabled={!isCanvasToolEnabled('shape', isInteractionLocked)}
+      icon={SHAPE_KIND_ICONS[options.kind]}
+      isActive={activeTool === 'shape'}
+      items={items}
+      label={t('widgets.canvas.tools.shape')}
+      onActivate={onActivate}
+      onSelectSubtool={onSelectSubtool}
+    />
+  );
+};
+
+/** The Select slot: marquee and lasso as one family; the slot stands for the last one used. */
+const SelectFamilyButton = ({
+  engine,
+  isInteractionLocked,
+}: {
+  engine: ToolStripEngine;
+  isInteractionLocked: boolean;
+}) => {
+  const { t } = useTranslation();
+  const activeTool = useCanvasActiveTool(engine);
+  const stored = useSelectFamilyTool();
+  // A hotkey or programmatic switch into the family also becomes its memory.
+  useEffect(() => {
+    if (activeTool === 'marquee' || activeTool === 'lasso') {
+      recordSelectFamilyTool(activeTool);
+    }
+  }, [activeTool]);
+  const current: SelectFamilyTool = activeTool === 'marquee' || activeTool === 'lasso' ? activeTool : stored;
+  const items: ToolFlyoutItem[] = useMemo(
+    () => [
+      { icon: SquareDashedIcon, id: 'marquee', label: t('widgets.canvas.tools.marquee') },
+      { icon: LassoIcon, id: 'lasso', label: t('widgets.canvas.tools.lasso') },
+    ],
+    [t]
+  );
+  const onActivate = useCallback(() => engine.tools.setTool(current), [current, engine]);
+  const onSelectSubtool = useCallback(
+    (id: string) => {
+      recordSelectFamilyTool(id as SelectFamilyTool);
+      engine.tools.setTool(id as ToolId);
+    },
+    [engine]
+  );
+  return (
+    <ToolFamilyButton
+      currentId={current}
+      disabled={!isCanvasToolEnabled(current, isInteractionLocked)}
+      icon={current === 'lasso' ? LassoIcon : SquareDashedIcon}
+      isActive={activeTool === 'marquee' || activeTool === 'lasso'}
+      items={items}
+      label={t(current === 'lasso' ? 'widgets.canvas.tools.lasso' : 'widgets.canvas.tools.marquee')}
+      onActivate={onActivate}
+      onSelectSubtool={onSelectSubtool}
+    />
+  );
+};
+
+/**
+ * Clears the center region's floating chrome, whose inset already includes the
+ * gap below the islands. Outside the center the variable is undefined and the
+ * strip falls back to its own top margin.
+ */
+const TOOL_STRIP_TOP = 'var(--wb-center-chrome-inset, var(--chakra-spacing-2))';
 
 /**
  * The canvas's left-docked, vertical tool strip, topped out directly beneath
@@ -109,16 +228,10 @@ const ToolStripRoot = ({
           label={t('widgets.canvas.tools.eraser')}
           toolId="eraser"
         />
+        <ShapeFamilyButton engine={engine} isInteractionLocked={isInteractionLocked} />
         <ToolStripButton
           engine={engine}
-          icon={ShapesIcon}
-          isInteractionLocked={isInteractionLocked}
-          label={t('widgets.canvas.tools.shape')}
-          toolId="shape"
-        />
-        <ToolStripButton
-          engine={engine}
-          icon={PaintBucketIcon}
+          icon={BlendIcon}
           isInteractionLocked={isInteractionLocked}
           label={t('widgets.canvas.tools.gradient')}
           toolId="gradient"
@@ -130,20 +243,7 @@ const ToolStripRoot = ({
           label={t('widgets.canvas.tools.text')}
           toolId="text"
         />
-        <ToolStripButton
-          engine={engine}
-          icon={SquareDashedIcon}
-          isInteractionLocked={isInteractionLocked}
-          label={t('widgets.canvas.tools.marquee')}
-          toolId="marquee"
-        />
-        <ToolStripButton
-          engine={engine}
-          icon={LassoIcon}
-          isInteractionLocked={isInteractionLocked}
-          label={t('widgets.canvas.tools.lasso')}
-          toolId="lasso"
-        />
+        <SelectFamilyButton engine={engine} isInteractionLocked={isInteractionLocked} />
       </Toolbar>
     </Box>
   );

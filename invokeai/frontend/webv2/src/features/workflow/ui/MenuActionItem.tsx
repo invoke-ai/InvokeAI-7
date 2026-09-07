@@ -37,7 +37,7 @@ export const MenuActionItem = ({ hint, icon, isDisabled, label, tone, value, onS
   <Menu.Item
     {...(hint ? TWO_LINE_LAYOUT : SINGLE_LINE_LAYOUT)}
     _disabled={DISABLED_ITEM}
-    color={tone === 'danger' ? 'fg.error' : undefined}
+    data-danger={tone === 'danger' ? '' : undefined}
     data-menu-item={value}
     disabled={isDisabled}
     value={value}

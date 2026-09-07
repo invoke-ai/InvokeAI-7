@@ -101,16 +101,18 @@ export const PreviewActionStrip = ({
           destination, so it simply is not offered for them — the same guard
           the context menu's image-only branch uses. */}
       {image ? (
-        <Button
-          aria-label={t('widgets.preview.editOnCanvas')}
-          color="fg.muted"
-          size="2xs"
-          variant="ghost"
-          onClick={editOnCanvas}
-        >
-          <Icon as={PencilIcon} boxSize="3.5" />
-          {t('common.edit')}
-        </Button>
+        <Tooltip content={t('widgets.preview.editOnCanvas')}>
+          <Button
+            aria-label={t('widgets.preview.editOnCanvas')}
+            color="fg.muted"
+            size="2xs"
+            variant="ghost"
+            onClick={editOnCanvas}
+          >
+            <Icon as={PencilIcon} boxSize="3.5" />
+            {t('common.edit')}
+          </Button>
+        </Tooltip>
       ) : null}
       {starButton}
       {image ? <StripIconButton icon={ImagesIcon} label="Select for Compare" onClick={selectForCompare} /> : null}

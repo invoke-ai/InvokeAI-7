@@ -25,9 +25,10 @@ import {
 } from '@features/generation/ui/promptFields/promptTriggerOptions';
 import { SystemPromptsField } from '@features/generation/ui/promptFields/SystemPromptsField';
 import { useSystemPrompts } from '@features/generation/ui/promptFields/useSystemPrompts';
+import { createUuid } from '@platform/browser/randomUuid';
 import { useMountEffect } from '@platform/react/useMountEffect';
 import { getApiErrorMessage } from '@platform/transport/http';
-import { Button, IconButton, Scrollable, Tooltip } from '@platform/ui';
+import { Button, IconButton, PopoverContent, Scrollable, Tooltip } from '@platform/ui';
 import { MiddleTruncate } from '@platform/ui/MiddleTruncate';
 import {
   EyeIcon,
@@ -50,12 +51,16 @@ const LLAVA_MODEL_TYPES = ['llava_onevision'];
  * explained inside the popover rather than by disabling the trigger, so the
  * dead end always has a door.
  */
-const OpenModelManagerButton = () => {
+const OpenModelManagerButton = ({ modelType }: { modelType?: string }) => {
   const { t } = useTranslation();
   const { openManager } = useGenerationUi().models;
+  const handleClick = useCallback(
+    () => openManager(modelType === undefined ? undefined : { modelType }),
+    [modelType, openManager]
+  );
 
   return (
-    <Button alignSelf="start" px="0" size="xs" variant="plain" onClick={openManager}>
+    <Button alignSelf="start" px="1.5" size="xs" variant="plain" onClick={handleClick}>
       {t('widgets.generate.openModelManager')}
     </Button>
   );
@@ -218,16 +223,23 @@ export const AddPromptTriggerButton = ({
   onOpenPromptTriggerPicker: (anchorElement: HTMLElement) => void;
 }) => {
   const { t } = useTranslation();
+  // Not disabled while open like it used to be: the greyed button read as
+  // broken next to the other action popovers' expanded tint. The guard keeps
+  // the dismiss-then-click sequence from immediately reopening.
   const handleClick = useCallback(
-    (event: MouseEvent<HTMLButtonElement>) => onOpenPromptTriggerPicker(event.currentTarget),
-    [onOpenPromptTriggerPicker]
+    (event: MouseEvent<HTMLButtonElement>) => {
+      if (!isOpen) {
+        onOpenPromptTriggerPicker(event.currentTarget);
+      }
+    },
+    [isOpen, onOpenPromptTriggerPicker]
   );
 
   return (
     <Tooltip content={t('widgets.generate.addPromptTrigger')}>
       <IconButton
+        aria-expanded={isOpen}
         aria-label={t('widgets.generate.addPromptTrigger')}
-        disabled={isOpen}
         size="2xs"
         variant="ghost"
         onClick={handleClick}
@@ -286,7 +298,7 @@ export const PromptTriggerPopover = ({
     <Popover.Root lazyMount open={open} positioning={popoverPositioning} unmountOnExit onOpenChange={handleOpenChange}>
       <Portal>
         <Popover.Positioner>
-          <Popover.Content bg="bg.muted" borderColor="border.emphasized" borderWidth="1px" w="22rem">
+          <PopoverContent w="22rem">
             <Popover.Body p="2.5">
               {/* With nothing to search or scroll, the popover hugs its empty
                   state instead of holding the full list height open. */}
@@ -327,7 +339,7 @@ export const PromptTriggerPopover = ({
                 </Stack>
               )}
             </Popover.Body>
-          </Popover.Content>
+          </PopoverContent>
         </Popover.Positioner>
       </Portal>
     </Popover.Root>
@@ -337,8 +349,13 @@ export const PromptTriggerPopover = ({
 const PromptTriggerEmptyState = () => {
   const { t } = useTranslation();
 
+  // The same anatomy as the image-to-prompt popover's no-model branch:
+  // uppercase title, one subtle line, the model-manager button.
   return (
-    <Stack align="start" gap="1" px="1">
+    <Stack align="start" gap="2.5">
+      <Text color="fg.subtle" fontSize="2xs" fontWeight="700" textTransform="uppercase">
+        {t('widgets.generate.addPromptTrigger')}
+      </Text>
       <Text color="fg.subtle" fontSize="xs">
         {t('widgets.generate.noPromptTriggersAvailable')}
       </Text>
@@ -419,7 +436,7 @@ const ExpandPromptButton = ({
       return;
     }
 
-    const nextTaskId = crypto.randomUUID();
+    const nextTaskId = createUuid();
     setTaskId(nextTaskId);
     setIsLoading(true);
 
@@ -463,12 +480,8 @@ const ExpandPromptButton = ({
       positioning={POPOVER_POSITIONING_BOTTOM_END}
       onOpenChange={handleOpenChange}
     >
-      <Tooltip
-        content={
-          textLlmModels.length === 0 ? t('widgets.generate.noTextLlmInstalled') : t('widgets.generate.expandPrompt')
-        }
-        ids={popoverIds}
-      >
+      {/* Always the feature name: the popover explains a missing model and offers the way out. */}
+      <Tooltip content={t('widgets.generate.expandPrompt')} ids={popoverIds}>
         <Popover.Trigger asChild>
           <IconButton
             aria-label={t('widgets.generate.expandPrompt')}
@@ -482,7 +495,7 @@ const ExpandPromptButton = ({
       </Tooltip>
       <Portal>
         <Popover.Positioner>
-          <Popover.Content bg="bg.muted" borderColor="border.emphasized" borderWidth="1px" w="22rem">
+          <PopoverContent w="22rem">
             <Popover.Body p="2.5">
               <Stack gap="2.5">
                 <Text color="fg.subtle" fontSize="2xs" fontWeight="700" textTransform="uppercase">
@@ -493,7 +506,7 @@ const ExpandPromptButton = ({
                     <Text color="fg.subtle" fontSize="xs">
                       {t('widgets.generate.installTextLlmToExpandPrompts')}
                     </Text>
-                    <OpenModelManagerButton />
+                    <OpenModelManagerButton modelType="text_llm" />
                   </>
                 ) : (
                   <>
@@ -528,7 +541,7 @@ const ExpandPromptButton = ({
                 )}
               </Stack>
             </Popover.Body>
-          </Popover.Content>
+          </PopoverContent>
         </Popover.Positioner>
       </Portal>
     </Popover.Root>
@@ -596,7 +609,7 @@ const ImageToPromptButton = ({
       return;
     }
 
-    const nextTaskId = crypto.randomUUID();
+    const nextTaskId = createUuid();
     setTaskId(nextTaskId);
     setIsLoading(true);
 
@@ -639,12 +652,7 @@ const ImageToPromptButton = ({
       positioning={POPOVER_POSITIONING_BOTTOM_END}
       onOpenChange={handleOpenChange}
     >
-      <Tooltip
-        content={
-          llavaModels.length === 0 ? t('widgets.generate.noVisionModelInstalled') : t('widgets.generate.imageToPrompt')
-        }
-        ids={popoverIds}
-      >
+      <Tooltip content={t('widgets.generate.imageToPrompt')} ids={popoverIds}>
         <Popover.Trigger asChild>
           <IconButton
             aria-label={t('widgets.generate.imageToPrompt')}
@@ -658,7 +666,7 @@ const ImageToPromptButton = ({
       </Tooltip>
       <Portal>
         <Popover.Positioner>
-          <Popover.Content bg="bg.muted" borderColor="border.emphasized" borderWidth="1px" w="22rem">
+          <PopoverContent w="22rem">
             <Popover.Body p="2.5">
               <Stack gap="2.5">
                 <Text color="fg.subtle" fontSize="2xs" fontWeight="700" textTransform="uppercase">
@@ -669,7 +677,7 @@ const ImageToPromptButton = ({
                     <Text color="fg.subtle" fontSize="xs">
                       {t('widgets.generate.installVisionModelToGeneratePrompts')}
                     </Text>
-                    <OpenModelManagerButton />
+                    <OpenModelManagerButton modelType="llava_onevision" />
                   </>
                 ) : (
                   <>
@@ -711,7 +719,7 @@ const ImageToPromptButton = ({
                 )}
               </Stack>
             </Popover.Body>
-          </Popover.Content>
+          </PopoverContent>
         </Popover.Positioner>
       </Portal>
     </Popover.Root>
@@ -757,7 +765,7 @@ const PositivePromptHistoryButton = ({ onUsePrompt }: Pick<PositivePromptActions
       </Tooltip>
       <Portal>
         <Popover.Positioner>
-          <Popover.Content bg="bg.muted" borderColor="border.emphasized" borderWidth="1px" w="24rem">
+          <PopoverContent w="24rem">
             <Popover.Body p="2.5">
               <Stack gap="2" maxH="18rem">
                 <HStack justify="space-between">
@@ -797,7 +805,7 @@ const PositivePromptHistoryButton = ({ onUsePrompt }: Pick<PositivePromptActions
                 </Text>
               </Stack>
             </Popover.Body>
-          </Popover.Content>
+          </PopoverContent>
         </Popover.Positioner>
       </Portal>
     </Popover.Root>

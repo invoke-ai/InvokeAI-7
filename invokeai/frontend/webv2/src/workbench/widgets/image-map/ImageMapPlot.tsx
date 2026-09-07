@@ -1,15 +1,20 @@
-import type { ImageMapPoint } from '@workbench/image-map/api';
+import type { ImageMapClusterLabelInfo, ImageMapImageLabels, ImageMapPoint } from '@workbench/image-map/api';
+import type { ClusterAnnotation } from '@workbench/image-map/imageMapTraces';
 import type { AxisRanges } from '@workbench/image-map/imageMapViewport';
 import type { PlotlyHTMLElement } from 'plotly.js';
 
-import { Box } from '@chakra-ui/react';
+import { Box, chakra, HStack, Stack, Text } from '@chakra-ui/react';
 import {
+  getImageCluster,
   getPersistedSelectedGalleryItemKeys,
   getSelectedGalleryImageFromValues,
   parseGalleryItemKey,
+  parseGallerySemanticReference,
 } from '@features/gallery/contracts';
 import { attachWheelZoom } from '@workbench/image-map/attachWheelZoom';
+import { getClusterColor } from '@workbench/image-map/clusterPalette';
 import { collectClusterSelection } from '@workbench/image-map/clusterSelection';
+import { getImageLabels } from '@workbench/image-map/imageLabelCache';
 import { imageMapStore } from '@workbench/image-map/imageMapStore';
 import {
   buildAllPointsTrace,
@@ -18,6 +23,7 @@ import {
   buildHighlightedPointsTrace,
   buildMapLayout,
   CURRENT_IMAGE_TRACE,
+  declutterAnnotations,
   HIGHLIGHTED_POINTS_TRACE,
 } from '@workbench/image-map/imageMapTraces';
 import {
@@ -29,7 +35,7 @@ import {
 import { getThumbnailUrl } from '@workbench/image-map/thumbnailCache';
 import { shallowEqual, useWidgetValuesSelector } from '@workbench/WorkbenchContext';
 import Plotly from 'plotly.js-gl2d-dist-min';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import { useMapSelection } from './useSelectMapImage';
 
@@ -48,9 +54,11 @@ const swallow = (promise: Promise<unknown>): void => {
   promise.catch(() => {});
 };
 
-/** Matches the preview's `maxW`/`maxH` (Chakra 40 = 10rem); used to keep it on-screen. */
+/** Bounds the hover card's thumbnail. */
 const HOVER_PREVIEW_MAX_PX = 160;
 const HOVER_PREVIEW_OFFSET_PX = 14;
+/** Keep the hover card at least this clear of the viewport edges. */
+const HOVER_PREVIEW_EDGE_PAD_PX = 10;
 
 interface HoverPreview {
   imageName: string;
@@ -58,6 +66,148 @@ interface HoverPreview {
   clientX: number;
   clientY: number;
 }
+
+/**
+ * Cluster identity for the hovered image, resolved from the CURRENT points.
+ * Deliberately not captured at hover time: a hover survives a live refresh
+ * (see `hoverPreview` below), and a refresh re-runs DBSCAN, which can renumber
+ * every cluster. A frozen id would then be paired with the new clustering's
+ * labels and color — a card describing a cluster the image is not in.
+ */
+interface HoverCluster {
+  /** DBSCAN cluster of the hovered point; -1 means unclustered noise. */
+  cluster: number;
+  /** Points currently on the map in that cluster. */
+  clusterSize: number;
+}
+
+/** "Label: a, b, c" with the first (primary) tag emphasized. */
+const HoverTagsRow = ({ prefix, tags }: { prefix: string; tags: string[] }) => (
+  <Text color="fg.muted" fontSize="xs">
+    <chakra.span color="fg.subtle">{prefix}</chakra.span>
+    {tags.map((tag, index) => (
+      <chakra.span key={tag} fontWeight={index === 0 ? '600' : undefined}>
+        {index > 0 ? ', ' : ''}
+        {tag}
+      </chakra.span>
+    ))}
+  </Text>
+);
+
+/**
+ * The hover card: thumbnail, filename, cluster identity/size, and the top
+ * cluster and image tags — PhotoMapAI's popup on the app's dropdown chrome,
+ * with the cluster's palette color confined to a swatch dot. Its size depends
+ * on async content (the thumbnail and the lazily fetched image tags), so it
+ * renders invisibly, is measured, and is then placed beside the cursor —
+ * flipped to the other side when it would leave the viewport. Parents key
+ * this by image name so a new hover starts clean.
+ */
+const MapHoverCard = ({
+  preview,
+  hoverCluster,
+  clusterLabel,
+}: {
+  preview: HoverPreview;
+  hoverCluster: HoverCluster;
+  clusterLabel: ImageMapClusterLabelInfo | null;
+}) => {
+  const cardRef = useRef<HTMLDivElement | null>(null);
+  const [imageLabels, setImageLabels] = useState<ImageMapImageLabels | null>(null);
+  const [imageLoaded, setImageLoaded] = useState(false);
+  const [position, setPosition] = useState<{ left: number; top: number } | null>(null);
+
+  // Image tags are computed on demand (network round-trip on first hover of
+  // an image; session-cached after). The card renders without the row until
+  // they arrive.
+  useEffect(() => {
+    let cancelled = false;
+
+    void getImageLabels(preview.imageName).then((labels) => {
+      if (!cancelled) {
+        setImageLabels(labels);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [preview.imageName]);
+
+  // Re-measure whenever content that changes the card's size lands.
+  useLayoutEffect(() => {
+    const card = cardRef.current;
+
+    if (!card) {
+      return;
+    }
+
+    const rect = card.getBoundingClientRect();
+    let left = preview.clientX + HOVER_PREVIEW_OFFSET_PX;
+    let top = preview.clientY + HOVER_PREVIEW_OFFSET_PX;
+
+    if (left + rect.width > window.innerWidth - HOVER_PREVIEW_EDGE_PAD_PX) {
+      left = Math.max(0, preview.clientX - rect.width - HOVER_PREVIEW_OFFSET_PX);
+    }
+
+    if (top + rect.height > window.innerHeight - HOVER_PREVIEW_EDGE_PAD_PX) {
+      top = Math.max(0, preview.clientY - rect.height - HOVER_PREVIEW_OFFSET_PX);
+    }
+
+    setPosition({ left, top });
+  }, [preview.clientX, preview.clientY, imageLabels, imageLoaded, clusterLabel, hoverCluster]);
+
+  const handleImageSettled = useCallback(() => setImageLoaded(true), []);
+  const clusterColor = getClusterColor(hoverCluster.cluster);
+  const clusterTags = clusterLabel ? [clusterLabel.label, ...clusterLabel.alternates].slice(0, 3) : null;
+  const imageTags = imageLabels ? [imageLabels.label, ...imageLabels.alternates].slice(0, 3) : null;
+
+  return (
+    <Stack
+      bg="bg.muted"
+      borderColor="border.emphasized"
+      borderWidth="1px"
+      color="fg"
+      gap="1"
+      left={`${position?.left ?? 0}px`}
+      maxW="60"
+      p="2"
+      pointerEvents="none"
+      position="fixed"
+      ref={cardRef}
+      rounded="md"
+      shadow="lg"
+      top={`${position?.top ?? 0}px`}
+      visibility={position ? 'visible' : 'hidden'}
+      zIndex="tooltip"
+    >
+      <chakra.img
+        alt={preview.imageName}
+        display="block"
+        maxH={`${HOVER_PREVIEW_MAX_PX}px`}
+        maxW={`${HOVER_PREVIEW_MAX_PX}px`}
+        mx="auto"
+        onError={handleImageSettled}
+        onLoad={handleImageSettled}
+        rounded="l2"
+        src={preview.url}
+      />
+      <HStack gap="1.5">
+        <Box bg={clusterColor} boxSize="2" flexShrink={0} rounded="full" />
+        <Text fontSize="xs" fontWeight="600">
+          {hoverCluster.cluster < 0
+            ? 'Unclustered'
+            : `Cluster ${hoverCluster.cluster} · ${hoverCluster.clusterSize} images`}
+        </Text>
+      </HStack>
+      <Text color="fg.muted" fontSize="xs" wordBreak="break-all">
+        {preview.imageName}
+      </Text>
+      {clusterTags ? <HoverTagsRow prefix="Cluster tags: " tags={clusterTags} /> : null}
+      {imageTags ? <HoverTagsRow prefix="Image tags: " tags={imageTags} /> : null}
+    </Stack>
+  );
+};
 
 interface PlotElement extends PlotlyHTMLElement {
   _fullLayout?: {
@@ -128,6 +278,14 @@ const ImageMapPlot = ({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const points = imageMapStore.useSelector((snapshot) => snapshot.data?.points ?? null);
   const clusterLabels = imageMapStore.useSelector((snapshot) => snapshot.clusterLabels);
+  // Whether those labels were computed over the clustering now drawn. The
+  // annotations accept a stale set for the ~1s until fresh ones land (see the
+  // relayout effect below), but the hover card names one specific cluster by
+  // id, and a refresh can renumber every id — so it shows no tags rather than
+  // another cluster's.
+  const clusterLabelsMatchPoints = imageMapStore.useSelector(
+    (snapshot) => snapshot.clusterLabelsHash !== null && snapshot.clusterLabelsHash === snapshot.data?.visibleHash
+  );
   const selectedImageName = useWidgetValuesSelector(
     'gallery',
     (values) => getSelectedGalleryImageFromValues(values)?.imageName ?? null
@@ -143,13 +301,34 @@ const ImageMapPlot = ({
         .map((ref) => ref.name),
     shallowEqual
   );
-  const selectedNames = useMemo(() => new Set(selectedImageNames), [selectedImageNames]);
+  // With a cluster filter active in the gallery, the whole cluster stays
+  // highlighted on the map — the gallery is showing exactly these images.
+  const clusterQueryImageNames = useWidgetValuesSelector(
+    'gallery',
+    (values) => {
+      const reference = parseGallerySemanticReference(values.semanticImageQuery);
+
+      return reference?.kind === 'cluster' ? (getImageCluster(reference.clusterId)?.imageNames ?? null) : null;
+    },
+    shallowEqual
+  );
+  const selectedNames = useMemo(
+    () => new Set([...selectedImageNames, ...(clusterQueryImageNames ?? [])]),
+    [clusterQueryImageNames, selectedImageNames]
+  );
   const { selectCluster, selectImage } = useMapSelection();
   // Bumped after every scene rebuild so the overlay effects (marker,
   // highlight) re-apply onto the fresh, empty overlay traces.
   const [plotRevision, setPlotRevision] = useState(0);
   const lastPinchAtRef = useRef(0);
   const lastMapSelectionRef = useRef<{ name: string; at: number } | null>(null);
+  // The selection the marker effect last decluttered for. Seeded with the
+  // mounting selection so the initial scene, whose labels the effect below
+  // applies from scratch, does not also get a redundant pass here.
+  const lastDeclutteredSelectionRef = useRef(selectedImageName);
+  // The points array `fullAnnotationsRef` was built from, so the marker effect
+  // can tell whether those annotations describe the embedding now on screen.
+  const annotationsPointsRef = useRef<ImageMapPoint[] | null>(null);
   // The initial whole-map fit must happen exactly once per mount, at the
   // first render where the container has real dimensions; these refs let the
   // scene effect and the resize observer coordinate without re-running.
@@ -157,13 +336,56 @@ const ImageMapPlot = ({
   const pointsRef = useRef(points);
   const selectedImageNameRef = useRef(selectedImageName);
   const clusterModeRef = useRef(clickSelectsCluster);
+  const clusterLabelsRef = useRef(clusterLabels);
 
   // Declared before the effects below so the refs are fresh when they run.
   useEffect(() => {
     pointsRef.current = points;
     selectedImageNameRef.current = selectedImageName;
     clusterModeRef.current = clickSelectsCluster;
-  }, [clickSelectsCluster, points, selectedImageName]);
+    clusterLabelsRef.current = clusterLabels;
+  }, [clickSelectsCluster, clusterLabels, points, selectedImageName]);
+  // The full annotation set for the current data; which of them actually show
+  // is view-dependent (see applyDeclutteredAnnotations), so the source list
+  // lives in a ref the relayout listener can re-filter without re-rendering.
+  const fullAnnotationsRef = useRef<ClusterAnnotation[]>([]);
+  const appliedAnnotationsKeyRef = useRef<string | null>(null);
+
+  // Zoomed far out, cluster labels pile onto the same few pixels; declutter
+  // against the CURRENT view so only labels with room to breathe render, and
+  // zooming back in restores the rest. The applied-key check makes the common
+  // case (a pan/zoom that changes no label's visibility) a no-op — it also
+  // keeps this from feeding back into itself through the plotly_relayout
+  // event its own relayout fires.
+  //
+  // The gold target is passed in so it outranks the labels: it draws on the
+  // WebGL canvas *below* plotly's annotation layer, so a label overlapping it
+  // wins on z-order no matter how the traces are ordered. Dropping that label
+  // is what keeps the current position findable in a dense field.
+  const applyDeclutteredAnnotations = useCallback((container: PlotElement) => {
+    const ranges = readRanges(container);
+    const selectedName = selectedImageNameRef.current;
+    const markerPoint =
+      (selectedName ? pointsRef.current?.find((candidate) => candidate.imageName === selectedName) : null) ?? null;
+    const annotations =
+      ranges && container.offsetWidth > 0 && container.offsetHeight > 0
+        ? declutterAnnotations(
+            fullAnnotationsRef.current,
+            ranges,
+            container.offsetWidth,
+            container.offsetHeight,
+            markerPoint
+          )
+        : fullAnnotationsRef.current;
+    const key = annotations.map((annotation) => `${annotation.text}@${annotation.x},${annotation.y}`).join('\n');
+
+    if (key === appliedAnnotationsKeyRef.current) {
+      return;
+    }
+
+    appliedAnnotationsKeyRef.current = key;
+    swallow(Plotly.relayout(container, { annotations }));
+  }, []);
   const [pendingHoverPreview, setHoverPreview] = useState<HoverPreview | null>(null);
   const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Monotonic hover session: a resolution from a previous hover (even of the
@@ -219,6 +441,9 @@ const ImageMapPlot = ({
     // Annotations are deliberately absent here: they are a layout concern, and
     // rebuilding the scene for them is what made labels arriving a second after
     // the points re-materialize every trace. See the relayout effect below.
+    // Since the rebuilt layout carries no annotations, the applied-key must be
+    // forgotten or the label effect would skip re-adding an identical set.
+    appliedAnnotationsKeyRef.current = null;
     const layout = buildMapLayout(initialRanges);
 
     void Plotly.react(container, traces as Plotly.Data[], layout, {
@@ -253,7 +478,17 @@ const ImageMapPlot = ({
           const clusterNames = clusterModeRef.current ? collectClusterSelection(points, imageName) : null;
 
           if (clusterNames) {
-            selectCluster(imageName, clusterNames);
+            const clicked = points.find((point) => point.imageName === imageName);
+            // The backend's cluster label names the filter chip when one has
+            // arrived; the member count is the fallback (labels can be off,
+            // still loading, or missing for this cluster). Only the primary
+            // phrase is used — the alternates belong to the hover card, which
+            // has room to show them.
+            const label =
+              (clicked ? clusterLabelsRef.current?.[String(clicked.cluster)]?.label : undefined) ??
+              `${clusterNames.length} images`;
+
+            selectCluster(imageName, clusterNames, label);
           } else {
             // Also the cluster-mode fallback for noise points (cluster -1).
             selectImage(imageName);
@@ -288,6 +523,19 @@ const ImageMapPlot = ({
         plot.on('plotly_unhover', () => {
           clearHover();
         });
+        plot.removeAllListeners?.('plotly_relayout');
+        plot.on('plotly_relayout', (event) => {
+          // Every zoom, pan, and resize changes which labels have room; the
+          // annotation-only relayouts this triggers carry no axis keys, so
+          // they fall through without recursing.
+          const viewChanged = Object.keys(event ?? {}).some(
+            (key) => key.startsWith('xaxis.') || key.startsWith('yaxis.') || key === 'autosize'
+          );
+
+          if (viewChanged) {
+            applyDeclutteredAnnotations(container as unknown as PlotElement);
+          }
+        });
         setPlotRevision((revision) => revision + 1);
       })
       .catch(() => {
@@ -309,7 +557,7 @@ const ImageMapPlot = ({
     return () => {
       disposed = true;
     };
-  }, [points, selectCluster, selectImage]);
+  }, [applyDeclutteredAnnotations, points, selectCluster, selectImage]);
 
   // Highlight overlay: the gallery's multi-selection, restyled in place.
   useEffect(() => {
@@ -363,6 +611,18 @@ const ImageMapPlot = ({
       return;
     }
 
+    // Moving the marker changes which labels have room for it, but only this
+    // effect knows the marker moved for a SELECTION change. Anything driven by
+    // `points` is left to the label effect below, which re-declutters anyway —
+    // and does it with annotations rebuilt for the new embedding, where this
+    // effect would still be holding the previous one's. The provenance check
+    // covers the case where React batches a refresh and a selection change
+    // into one commit (a finished generation does exactly that): the selection
+    // did change, but these annotations are not for these points yet.
+    const selectionChanged =
+      lastDeclutteredSelectionRef.current !== selectedImageName && annotationsPointsRef.current === points;
+    lastDeclutteredSelectionRef.current = selectedImageName;
+
     const point = selectedImageName ? points.find((candidate) => candidate.imageName === selectedImageName) : undefined;
     const suppression = lastMapSelectionRef.current;
     const isSuppressionFresh = suppression !== null && Date.now() - suppression.at < MAP_CLICK_SUPPRESS_MS;
@@ -382,10 +642,23 @@ const ImageMapPlot = ({
     if (!point) {
       swallow(Plotly.restyle(container, { x: [[]], y: [[]] }, [markerIndex]));
 
+      if (selectionChanged) {
+        // Labels dropped to clear the old marker position get their spot back.
+        applyDeclutteredAnnotations(container);
+      }
+
       return;
     }
 
     swallow(Plotly.restyle(container, { x: [[point.x]], y: [[point.y]] }, [markerIndex]));
+
+    if (selectionChanged) {
+      // The marker outranks labels in the declutter pass, so moving it both
+      // hides a label it now covers and restores the one it just left. A
+      // recenter below re-runs this through plotly_relayout, but most
+      // selection changes do not move the view at all.
+      applyDeclutteredAnnotations(container);
+    }
 
     if (cameFromMapClick) {
       return;
@@ -397,13 +670,23 @@ const ImageMapPlot = ({
     if (recentered) {
       swallow(Plotly.relayout(container, { 'xaxis.range': recentered.x, 'yaxis.range': recentered.y }));
     }
-  }, [plotRevision, points, selectedImageName]);
+  }, [applyDeclutteredAnnotations, plotRevision, points, selectedImageName]);
 
   // Labels arrive about a second after the points they annotate. Applying them
   // with `relayout` rather than through the scene effect keeps that from
   // re-materializing every coordinate array — and, more visibly, from resetting
   // the highlight and current-image traces to empty, which made the gold marker
   // and the multi-select highlight blink off and back on with every refresh.
+  // The annotation builder wants the display strings only; the full label
+  // info (alternates included) feeds the hover card below.
+  const annotationLabels = useMemo(
+    () =>
+      clusterLabels === null
+        ? null
+        : Object.fromEntries(Object.entries(clusterLabels).map(([clusterId, info]) => [clusterId, info.label])),
+    [clusterLabels]
+  );
+
   useEffect(() => {
     const container = containerRef.current as PlotElement | null;
 
@@ -411,12 +694,10 @@ const ImageMapPlot = ({
       return;
     }
 
-    swallow(
-      Plotly.relayout(container, {
-        annotations: buildClusterAnnotations(points, showClusterLabels ? clusterLabels : null),
-      })
-    );
-  }, [clusterLabels, plotRevision, points, showClusterLabels]);
+    fullAnnotationsRef.current = buildClusterAnnotations(points, showClusterLabels ? annotationLabels : null);
+    annotationsPointsRef.current = points;
+    applyDeclutteredAnnotations(container);
+  }, [annotationLabels, applyDeclutteredAnnotations, plotRevision, points, showClusterLabels]);
 
   // Custom zoom handlers + container size tracking, attached once for the
   // plot's lifetime; plotly does not observe its container.
@@ -492,52 +773,42 @@ const ImageMapPlot = ({
   // clearing on it would silently cancel live hovers — they would not come
   // back either, since `Plotly.react` resets hover state and no new
   // `plotly_hover` fires until the pointer moves.
+  // Requires a live point set, not just one that does not contradict the
+  // hover: `points` goes null when the account is invalidated, and the card
+  // must go with it rather than keep the previous account's thumbnail on
+  // screen — with a cluster identity that resolves to the noise sentinel.
   const hoverPreview =
-    pendingHoverPreview && points && !points.some((point) => point.imageName === pendingHoverPreview.imageName)
-      ? null
-      : pendingHoverPreview;
+    pendingHoverPreview && points?.some((point) => point.imageName === pendingHoverPreview.imageName)
+      ? pendingHoverPreview
+      : null;
 
-  // The widget is usually docked in a side rail, so a point near the right or
-  // bottom edge would otherwise put a fixed-position preview off-screen, where
-  // nothing can scroll it into view. Flip to the other side of the cursor when
-  // it does not fit.
-  const previewPosition = hoverPreview
-    ? {
-        left:
-          hoverPreview.clientX + HOVER_PREVIEW_OFFSET_PX + HOVER_PREVIEW_MAX_PX > window.innerWidth
-            ? Math.max(0, hoverPreview.clientX - HOVER_PREVIEW_OFFSET_PX - HOVER_PREVIEW_MAX_PX)
-            : hoverPreview.clientX + HOVER_PREVIEW_OFFSET_PX,
-        top:
-          hoverPreview.clientY + HOVER_PREVIEW_OFFSET_PX + HOVER_PREVIEW_MAX_PX > window.innerHeight
-            ? Math.max(0, hoverPreview.clientY - HOVER_PREVIEW_OFFSET_PX - HOVER_PREVIEW_MAX_PX)
-            : hoverPreview.clientY + HOVER_PREVIEW_OFFSET_PX,
-      }
-    : { left: 0, top: 0 };
+  // Resolved from the live points, so the id, the size and the tint describe
+  // the clustering currently drawn even after a refresh has renumbered it
+  // under a stationary pointer. `hoverPreview` non-null already implies the
+  // image is in `points`, so there is no missing-point fallback to take.
+  const hoverCluster = useMemo((): HoverCluster => {
+    if (!hoverPreview || !points) {
+      return { cluster: -1, clusterSize: 0 };
+    }
+
+    const cluster = points.find((point) => point.imageName === hoverPreview.imageName)?.cluster ?? -1;
+
+    return {
+      cluster,
+      clusterSize: points.reduce((count, point) => (point.cluster === cluster ? count + 1 : count), 0),
+    };
+  }, [hoverPreview, points]);
 
   return (
     <Box h="full" minH="0" position="relative" w="full">
       <Box ref={containerRef} h="full" w="full" />
       {hoverPreview ? (
-        <Box
-          borderColor="border.emphasized"
-          borderWidth="1px"
-          left={`${previewPosition.left}px`}
-          maxH="40"
-          maxW="40"
-          overflow="hidden"
-          pointerEvents="none"
-          position="fixed"
-          rounded="md"
-          shadow="lg"
-          top={`${previewPosition.top}px`}
-          zIndex="tooltip"
-        >
-          <img
-            alt={hoverPreview.imageName}
-            src={hoverPreview.url}
-            style={{ display: 'block', maxHeight: `${HOVER_PREVIEW_MAX_PX}px`, maxWidth: `${HOVER_PREVIEW_MAX_PX}px` }}
-          />
-        </Box>
+        <MapHoverCard
+          clusterLabel={(clusterLabelsMatchPoints ? clusterLabels?.[String(hoverCluster.cluster)] : null) ?? null}
+          hoverCluster={hoverCluster}
+          key={hoverPreview.imageName}
+          preview={hoverPreview}
+        />
       ) : null}
     </Box>
   );

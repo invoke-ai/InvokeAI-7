@@ -15,6 +15,7 @@ import {
   Stack,
   Switch,
   Text,
+  chakra,
 } from '@chakra-ui/react';
 import { useDndContext, useDndMonitor, useDroppable, type DragEndEvent } from '@dnd-kit/core';
 import {
@@ -25,7 +26,8 @@ import {
   type GalleryBoard,
   type GalleryItem,
 } from '@features/gallery';
-import { getSelectedGalleryImageFromValues, getSelectedGalleryItemFromValues } from '@features/gallery/contracts';
+import { getSelectedGalleryImageFromValues } from '@features/gallery/contracts';
+import { GalleryPickerPopover } from '@features/gallery/picker';
 import { invalidateGallery } from '@features/gallery/queries';
 import { galleryImageUrls, galleryVideoUrls } from '@features/gallery/utility';
 import { DEFAULT_LORA_WEIGHT_CONFIG, SCHEDULER_OPTIONS } from '@features/generation/settings';
@@ -66,6 +68,7 @@ import { MiddleTruncate } from '@platform/ui/MiddleTruncate';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { FilmIcon, ImageIcon, Trash2Icon } from 'lucide-react';
 import { lazy, Suspense, useCallback, useEffect, useId, useMemo, useRef, useState, type ChangeEvent } from 'react';
+import { useTranslation } from 'react-i18next';
 
 const ModelSelect = lazy(() => import('@features/models/react').then((module) => ({ default: module.ModelSelect })));
 const MODEL_SELECT_FALLBACK = (
@@ -75,7 +78,6 @@ const MODEL_SELECT_FALLBACK = (
 );
 
 export const getWorkflowSelectedGalleryImage = getSelectedGalleryImageFromValues;
-export const getWorkflowSelectedGalleryItem = getSelectedGalleryItemFromValues;
 
 /**
  * Direct-input controls for workflow fields, shared between the node editor
@@ -94,6 +96,9 @@ export interface WorkflowFieldInputProps {
 }
 
 const invalidProps = (invalid: boolean | undefined) => (invalid ? { 'aria-invalid': true } : {});
+
+// The media well's hover, matching DropZone's pointer-hover accent preview.
+const MEDIA_INPUT_HOVER_PROPS = { borderColor: 'accent.solid' };
 
 const toFiniteNumber = (raw: string): number | null => {
   if (raw.trim() === '') {
@@ -437,7 +442,7 @@ const MEDIA_FIELD_CONFIG = {
     noun: 'image',
   },
   video: {
-    fileAccept: 'video/*',
+    fileAccept: 'video/*,audio/*',
     getThumbnailUrl: (name: string) => galleryVideoUrls.thumbnail(name),
     nameKey: 'video_name',
     noun: 'video',
@@ -448,18 +453,18 @@ const MEDIA_FIELD_CONFIG = {
 >;
 
 const HIDDEN_FILE_INPUT_STYLE = { display: 'none' } as const;
+const IMAGE_ONLY = ['image'] as const;
+const VIDEO_ONLY = ['video'] as const;
+const MEDIA_INPUT_FOCUS_PROPS = { outline: '2px solid {colors.accent.focusRing}', outlineOffset: '2px' } as const;
 
 /**
  * Direct input for `ImageField` / `VideoField`: shows the current item with a
- * thumbnail, adopts the gallery selection, accepts a single-item gallery drag
+ * thumbnail, opens the gallery picker, accepts a single-item gallery drag
  * onto the row, and uploads a local file to the gallery's selected board.
  */
 const MediaInput = ({ id, invalid, kind, onChange, value }: WorkflowFieldInputProps & { kind: WorkflowMediaKind }) => {
+  const { t } = useTranslation();
   const config = MEDIA_FIELD_CONFIG[kind];
-  const selectedGalleryItem = useWorkflowProjectSelector((project) =>
-    getWorkflowSelectedGalleryItem(project.galleryValues)
-  );
-  const gallerySelection = selectedGalleryItem?.kind === kind ? selectedGalleryItem : null;
   const uploadBoardId = useWorkflowProjectSelector((project) =>
     typeof project.galleryValues.selectedBoardId === 'string' ? project.galleryValues.selectedBoardId : 'none'
   );
@@ -570,11 +575,10 @@ const MediaInput = ({ id, invalid, kind, onChange, value }: WorkflowFieldInputPr
     [config.nameKey, config.noun, kind, onChange, project, queryClient, uploadBoardId]
   );
 
-  const onUseGallerySelectionClick = useCallback(() => {
-    if (gallerySelection) {
-      onChange({ [config.nameKey]: gallerySelection.name });
-    }
-  }, [config.nameKey, gallerySelection, onChange]);
+  const onPick = useCallback(
+    (item: GalleryItem) => onChange({ [config.nameKey]: item.name }),
+    [config.nameKey, onChange]
+  );
   const onClearClick = useCallback(() => onChange(undefined), [onChange]);
 
   // A stale value (media deleted since the workflow was saved) 404s the
@@ -601,6 +605,8 @@ const MediaInput = ({ id, invalid, kind, onChange, value }: WorkflowFieldInputPr
       : null;
 
   const FallbackIcon = kind === 'video' ? FilmIcon : ImageIcon;
+  const pickerAccept = kind === 'video' ? VIDEO_ONLY : IMAGE_ONLY;
+  const pickerLabel = t(kind === 'video' ? 'widgets.gallery.picker.chooseVideo' : 'widgets.gallery.picker.chooseImage');
 
   return (
     <Box position="relative" w="full" {...invalidAriaProps}>
@@ -614,75 +620,84 @@ const MediaInput = ({ id, invalid, kind, onChange, value }: WorkflowFieldInputPr
         rounded="sm"
         w="full"
       >
-        {mediaName ? (
-          <>
-            <Flex
-              alignItems="center"
-              borderWidth="1px"
-              h="full"
-              justifyContent="center"
-              overflow="hidden"
-              rounded="sm"
-              w="full"
-            >
-              {failedThumbnail !== mediaName ? (
-                <Image
-                  alt=""
-                  maxH="full"
-                  maxW="full"
-                  objectFit="contain"
-                  src={config.getThumbnailUrl(mediaName)}
-                  title={mediaName}
-                  onError={onThumbnailError}
-                />
-              ) : (
-                <Box title={mediaName}>
-                  <Icon as={FallbackIcon} boxSize="10" color="fg.subtle" />
-                </Box>
-              )}
-            </Flex>
-            {badge !== null ? (
-              <Badge
-                bottom="1"
-                fontVariantNumeric="tabular-nums"
-                insetInlineEnd="1"
-                pointerEvents="none"
-                position="absolute"
-                size="xs"
-                variant="solid"
-              >
-                {badge}
-              </Badge>
-            ) : null}
-          </>
-        ) : (
-          <Flex
-            alignItems="center"
-            borderStyle="dashed"
-            borderWidth="1px"
+        <GalleryPickerPopover accept={pickerAccept} label={pickerLabel} onPick={onPick}>
+          <chakra.button
+            aria-label={pickerLabel}
+            className="nodrag"
+            display="block"
             h="full"
-            justifyContent="center"
-            rounded="sm"
+            type="button"
             w="full"
+            _focusVisible={MEDIA_INPUT_FOCUS_PROPS}
           >
-            <Text color="fg.subtle" fontSize="xs">
-              {`Drop a ${config.noun} here`}
-            </Text>
-          </Flex>
-        )}
+            {mediaName ? (
+              <Flex
+                alignItems="center"
+                borderWidth="1px"
+                h="full"
+                justifyContent="center"
+                overflow="hidden"
+                rounded="sm"
+                transition="border-color var(--wb-motion-duration-fast) ease"
+                w="full"
+                _hover={MEDIA_INPUT_HOVER_PROPS}
+              >
+                {failedThumbnail !== mediaName ? (
+                  <Image
+                    alt=""
+                    maxH="full"
+                    maxW="full"
+                    objectFit="contain"
+                    src={config.getThumbnailUrl(mediaName)}
+                    title={mediaName}
+                    onError={onThumbnailError}
+                  />
+                ) : (
+                  <Box title={mediaName}>
+                    <Icon as={FallbackIcon} boxSize="10" color="fg.subtle" />
+                  </Box>
+                )}
+              </Flex>
+            ) : (
+              <Flex
+                alignItems="center"
+                borderStyle="dashed"
+                borderWidth="1px"
+                direction="column"
+                gap="1"
+                h="full"
+                justifyContent="center"
+                rounded="sm"
+                transition="border-color var(--wb-motion-duration-fast) ease"
+                w="full"
+                _hover={MEDIA_INPUT_HOVER_PROPS}
+              >
+                <Text as="span" color="fg" fontSize="xs" fontWeight="600">
+                  {pickerLabel}
+                </Text>
+                <Text as="span" color="fg.subtle" fontSize="2xs">
+                  {t('widgets.gallery.picker.dropHint')}
+                </Text>
+              </Flex>
+            )}
+          </chakra.button>
+        </GalleryPickerPopover>
+        {mediaName && badge !== null ? (
+          <Badge
+            bottom="1"
+            fontVariantNumeric="tabular-nums"
+            insetInlineEnd="1"
+            pointerEvents="none"
+            position="absolute"
+            size="xs"
+            variant="solid"
+          >
+            {badge}
+          </Badge>
+        ) : null}
         <DropTargetOverlay isActive={acceptsActiveDrag} isOver={isOver} label={`Drop ${config.noun}`} />
       </Box>
       <HStack gap="1.5" mt="1" w="full">
-        <Button
-          className="nodrag"
-          disabled={!gallerySelection}
-          size="2xs"
-          title={gallerySelection ? `Use ${gallerySelection.name}` : `Select a ${config.noun} in the Gallery first.`}
-          variant="outline"
-          onClick={onUseGallerySelectionClick}
-        >
-          Use gallery selection
-        </Button>
         <Button
           className="nodrag"
           disabled={isUploading}

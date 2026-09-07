@@ -1,6 +1,6 @@
 /* eslint-disable react-perf/jsx-no-jsx-as-prop, react-perf/jsx-no-new-array-as-prop, react-perf/jsx-no-new-function-as-prop, react-perf/jsx-no-new-object-as-prop */
 import { Icon, Input, Popover, Portal, Stack, Text } from '@chakra-ui/react';
-import { Button, IconButton } from '@platform/ui';
+import { Button, IconButton, PopoverContent } from '@platform/ui';
 import { ArrowRightIcon, KeyRoundIcon } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -30,7 +30,7 @@ export const AccessTokenPopover = ({
       </Popover.Trigger>
       <Portal>
         <Popover.Positioner>
-          <Popover.Content bg="bg.muted" borderColor="border.emphasized" borderWidth="1px" w="20rem">
+          <PopoverContent w="20rem">
             <Popover.Body p="2.5">
               <Stack gap="2">
                 <Text color="fg.subtle" fontSize="2xs" fontWeight="700" textTransform="uppercase">
@@ -53,7 +53,7 @@ export const AccessTokenPopover = ({
                 </Button>
               </Stack>
             </Popover.Body>
-          </Popover.Content>
+          </PopoverContent>
         </Popover.Positioner>
       </Portal>
     </Popover.Root>

@@ -34,23 +34,15 @@ import type {
   CompositePlan,
 } from '@workbench/canvas-operations/generationContracts';
 
+import { sha256Hex } from '@platform/browser/sha256';
 import { fromTRS, multiply } from '@workbench/canvas-engine/math/mat2d';
 import { renderRasterComposite } from '@workbench/canvas-engine/render/rasterComposite';
 import { getCompositeLayerBounds } from '@workbench/canvas-operations/generationCompositePlan';
 
 type Ctx = RasterSurface['ctx'];
 
-/** SHA-256 hex of a blob's bytes, via the Web Crypto API (matches `bitmapStore`). */
-const defaultHashBlob = async (blob: Blob): Promise<string> => {
-  const buffer = await blob.arrayBuffer();
-  const digest = await crypto.subtle.digest('SHA-256', buffer);
-  const bytes = new Uint8Array(digest);
-  let hex = '';
-  for (const byte of bytes) {
-    hex += byte.toString(16).padStart(2, '0');
-  }
-  return hex;
-};
+/** SHA-256 hex of a blob's bytes, via `@platform/browser/sha256` (matches `bitmapStore`). */
+const defaultHashBlob = async (blob: Blob): Promise<string> => sha256Hex(await blob.arrayBuffer());
 
 /** Reads a surface's pixels via its 2D context (real DOM path; injectable for tests). */
 const defaultReadImageData = (surface: RasterSurface, rect: Rect): ImageData =>
@@ -129,7 +121,7 @@ export interface ExecuteCompositePlanDeps {
   uploadImage(blob: Blob): Promise<CanvasImageUploadResult>;
   /** Persistent dedupe state (see {@link CompositeDedupeCache}). */
   dedupe: CompositeDedupeCache;
-  /** Content-hashes a blob (default SHA-256 hex via `crypto.subtle`). */
+  /** Content-hashes a blob (default SHA-256 hex via `@platform/browser/sha256`). */
   hashBlob?(blob: Blob): Promise<string>;
   /** Reads a surface region's pixels for the coverage scan (default `getImageData`). */
   readImageData?(surface: RasterSurface, rect: Rect): ImageData;
@@ -156,9 +148,11 @@ const reserveComposite = (
   layerCount: number
 ): { release(): void } => {
   const pixels = Math.max(0, entry.bbox.width) * Math.max(0, entry.bbox.height);
-  // Final/accumulator surface + final scan ImageData, plus one temporary
-  // surface and one ImageData buffer for every adjusted/mask layer.
-  const reservation = deps.reserve?.(pixels * 4 * (2 + layerCount * 2));
+  // Final/accumulator surface plus a final scan ImageData (except for control
+  // layers, which are made opaque by construction), plus one temporary surface
+  // and one ImageData buffer for every adjusted/mask layer.
+  const finalBuffers = entry.kind === 'control-layer' ? 1 : 2;
+  const reservation = deps.reserve?.(pixels * 4 * (finalBuffers + layerCount * 2));
   if (reservation?.status === 'over-budget') {
     throw new CompositeOverBudgetError();
   }
@@ -222,6 +216,25 @@ const isFullyOpaque = (imageData: ImageData): boolean => {
 };
 
 /**
+ * Flattens an RGBA control composite over black. Control adapters consume RGB
+ * rather than alpha; leaving transparent pixels in the uploaded PNG lets the
+ * backend's shared channel normalizer matte them over white, which turns an
+ * erased area into strong control signal. Legacy generation rasterized control
+ * layers with `bg: 'black'`, so preserve that model-facing contract here while
+ * editable layer surfaces remain transparent.
+ */
+const flattenControlSurfaceOverBlack = (surface: RasterSurface): void => {
+  const { ctx } = surface;
+  ctx.save();
+  setTransform(ctx, { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 });
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = 'destination-over';
+  ctx.fillStyle = 'black';
+  ctx.fillRect(0, 0, surface.width, surface.height);
+  ctx.restore();
+};
+
+/**
  * Composites, scans coverage, encodes, hashes, dedupes, and (when needed)
  * uploads a single raster-style entry (`base-raster` or `control-layer`).
  * Shared by {@link executeCompositePlan} and {@link executeControlComposite} so
@@ -249,16 +262,23 @@ const executeRasterEntry = async (
     };
   }
 
+  const countGroupScopes = (scopes: typeof entry.groupScopes): number =>
+    (scopes ?? []).reduce((total, scope) => total + 1 + countGroupScopes(scope.children), 0);
   const reservation = reserveComposite(
     entry,
     deps,
-    entry.layers.filter((layer) => layer.adjustments !== undefined).length
+    entry.layers.filter((layer) => layer.adjustments !== undefined).length + countGroupScopes(entry.groupScopes)
   );
   try {
     const surface = await renderRasterComposite(entry, deps);
-    const bboxFullyCovered = isFullyOpaque(
-      readImageData(surface, { height: surface.height, width: surface.width, x: 0, y: 0 })
-    );
+    let bboxFullyCovered: boolean;
+    if (entry.kind === 'control-layer') {
+      flattenControlSurfaceOverBlack(surface);
+      bboxFullyCovered = surface.width > 0 && surface.height > 0;
+    } else {
+      const fullRect: Rect = { height: surface.height, width: surface.width, x: 0, y: 0 };
+      bboxFullyCovered = isFullyOpaque(readImageData(surface, fullRect));
+    }
 
     const blob = await deps.backend.encodeSurface(surface);
     const pixelHash = await hashBlob(blob);

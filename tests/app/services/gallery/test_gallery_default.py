@@ -157,6 +157,12 @@ def _backdate(services, table: str, name_col: str, name: str, created_at: str) -
         cursor.execute(f"UPDATE {table} SET created_at = ? WHERE {name_col} = ?", (created_at, name))
 
 
+def _star(services, table: str, name_col: str, name: str) -> None:
+    db = services["images"]._db
+    with db.transaction() as cursor:
+        cursor.execute(f"UPDATE {table} SET starred = 1 WHERE {name_col} = ?", (name,))
+
+
 def _start_gallery_for_item_results(services) -> None:
     """Provide the URL service dependency required when gallery rows become item DTOs."""
     urls = SimpleNamespace(
@@ -184,6 +190,126 @@ def _seed_created_range(services) -> None:
         ("videos", "video_name", "bob-range.mp4", "2026-03-11 12:00:00.000"),
     ]:
         _backdate(services, table, name_col, name, created_at)
+
+
+def _seed_starred(services) -> None:
+    """Alice owns a starred and a plain item of each kind; Bob owns one starred image."""
+    for name in ("starred.png", "plain.png"):
+        _save_image(services["images"], name, user_id="alice")
+    for name in ("starred.mp4", "plain.mp4"):
+        _save_video(services["videos"], name, user_id="alice")
+    _save_image(services["images"], "bob-starred.png", user_id="bob")
+
+    for table, name_col, name, created_at in [
+        ("images", "image_name", "starred.png", "2026-04-01 10:00:00"),
+        ("videos", "video_name", "starred.mp4", "2026-04-01 11:00:00"),
+        ("images", "image_name", "plain.png", "2026-04-02 10:00:00"),
+        ("videos", "video_name", "plain.mp4", "2026-04-02 11:00:00"),
+        ("images", "image_name", "bob-starred.png", "2026-04-02 12:00:00"),
+    ]:
+        _backdate(services, table, name_col, name, created_at)
+    for table, name_col, name in [
+        ("images", "image_name", "starred.png"),
+        ("videos", "video_name", "starred.mp4"),
+        ("images", "image_name", "bob-starred.png"),
+    ]:
+        _star(services, table, name_col, name)
+
+
+class TestStarredFiltering:
+    def test_list_items_starred_true_returns_only_starred_of_both_kinds_with_total(self, services) -> None:
+        _seed_starred(services)
+        _start_gallery_for_item_results(services)
+
+        result = services["gallery"].list_items(limit=10, user_id="alice", is_admin=False, starred=True)
+
+        assert [(item.kind, item.name) for item in result.items] == [
+            (GalleryItemKind.VIDEO, "starred.mp4"),
+            (GalleryItemKind.IMAGE, "starred.png"),
+        ]
+        assert result.total == 2
+
+    def test_list_items_starred_false_returns_only_unstarred(self, services) -> None:
+        _seed_starred(services)
+        _start_gallery_for_item_results(services)
+
+        result = services["gallery"].list_items(limit=10, user_id="alice", is_admin=False, starred=False)
+
+        assert {(item.kind, item.name) for item in result.items} == {
+            (GalleryItemKind.VIDEO, "plain.mp4"),
+            (GalleryItemKind.IMAGE, "plain.png"),
+        }
+        assert result.total == 2
+
+    def test_list_items_without_starred_is_unfiltered(self, services) -> None:
+        _seed_starred(services)
+        _start_gallery_for_item_results(services)
+
+        result = services["gallery"].list_items(limit=10, user_id="alice", is_admin=False)
+
+        assert result.total == 4
+
+    def test_starred_filter_respects_non_admin_isolation(self, services) -> None:
+        _seed_starred(services)
+        gallery = services["gallery"]
+
+        as_admin = gallery.list_item_names(user_id="alice", is_admin=True, starred=True)
+        as_user = gallery.list_item_names(user_id="alice", is_admin=False, starred=True)
+
+        assert {item.name for item in as_admin.items} == {"starred.png", "starred.mp4", "bob-starred.png"}
+        assert {item.name for item in as_user.items} == {"starred.png", "starred.mp4"}
+
+    def test_starred_filter_composes_with_board_scope(self, services) -> None:
+        _seed_starred(services)
+        board = services["boards"].save("Board", "alice")
+        services["board_images"].add_image_to_board(board.board_id, "starred.png")
+        services["board_images"].add_image_to_board(board.board_id, "plain.png")
+        gallery = services["gallery"]
+
+        on_board = gallery.list_item_names(board_id=board.board_id, user_id="alice", is_admin=False, starred=True)
+        off_board = gallery.list_item_names(board_id="none", user_id="alice", is_admin=False, starred=True)
+
+        assert [item.name for item in on_board.items] == ["starred.png"]
+        assert [item.name for item in off_board.items] == ["starred.mp4"]
+
+    def test_starred_filter_composes_with_date_filters_and_search(self, services) -> None:
+        _seed_starred(services)
+        gallery = services["gallery"]
+
+        by_date = gallery.list_item_names(user_id="alice", is_admin=False, created_date="2026-04-01", starred=True)
+        by_range = gallery.get_item_names(
+            user_id="alice",
+            is_admin=False,
+            created_from="2026-04-02",
+            created_to="2026-04-02",
+            starred=False,
+        )
+        by_search = gallery.get_item_names(user_id="alice", is_admin=False, search_term="2026-04-01 11", starred=True)
+
+        assert {item.name for item in by_date.items} == {"starred.png", "starred.mp4"}
+        assert set(by_range.item_names) == {"plain.png", "plain.mp4"}
+        assert by_search.item_names == ["starred.mp4"]
+
+    def test_name_lists_keep_starred_count_semantics_under_filter(self, services) -> None:
+        _seed_starred(services)
+        gallery = services["gallery"]
+
+        starred = gallery.list_item_names(user_id="alice", is_admin=False, starred=True)
+        unstarred = gallery.list_item_names(user_id="alice", is_admin=False, starred=False)
+        unsorted = gallery.list_item_names(user_id="alice", is_admin=False, starred=True, starred_first=False)
+        flat = gallery.get_item_names(user_id="alice", is_admin=False, starred=True)
+
+        assert starred.starred_count == starred.total_count == 2
+        assert unstarred.starred_count == 0
+        assert unsorted.starred_count == 0
+        assert flat.item_names == [item.name for item in starred.items]
+
+    def test_starred_first_ordering_is_unchanged_when_unfiltered(self, services) -> None:
+        _seed_starred(services)
+
+        names = [item.name for item in services["gallery"].list_item_names(user_id="alice", is_admin=False).items]
+
+        assert names == ["starred.mp4", "starred.png", "plain.mp4", "plain.png"]
 
 
 class TestGetDatesPolymorphic:
@@ -358,9 +484,13 @@ class TestGetBoardMediaSummaries:
         _save_image(services["images"], "cover.png", user_id="alice")
         _save_video(services["videos"], "cover.mp4", user_id="alice")
         _save_video(services["videos"], "intermediate.mp4", user_id="alice")
+        # An uploaded (user-category) video is an asset: counted in video_count AND
+        # asset_video_count, so clients can split the Media/Assets views.
+        _save_video(services["videos"], "uploaded.mp4", user_id="alice", category=ImageCategory.USER)
         services["board_images"].add_image_to_board(populated.board_id, "cover.png")
         services["board_videos"].add_video_to_board(populated.board_id, "cover.mp4")
         services["board_videos"].add_video_to_board(populated.board_id, "intermediate.mp4")
+        services["board_videos"].add_video_to_board(populated.board_id, "uploaded.mp4")
         with services["images"]._db.transaction() as cursor:
             cursor.execute(
                 "UPDATE images SET starred = 1, created_at = ? WHERE image_name = ?",
@@ -382,12 +512,14 @@ class TestGetBoardMediaSummaries:
         )
 
         assert summaries[populated.board_id].image_count == 1
-        assert summaries[populated.board_id].video_count == 1
+        assert summaries[populated.board_id].video_count == 2
         assert summaries[populated.board_id].asset_count == 0
+        assert summaries[populated.board_id].asset_video_count == 1
         assert summaries[populated.board_id].cover_image_name is None
         assert summaries[populated.board_id].cover_video_name == "cover.mp4"
         assert summaries[empty.board_id].image_count == 0
         assert summaries[empty.board_id].video_count == 0
+        assert summaries[empty.board_id].asset_video_count == 0
         assert summaries[empty.board_id].cover_image_name is None
         assert summaries[empty.board_id].cover_video_name is None
         assert next(i for i, detail in enumerate(details) if "board_images" in detail) < next(
@@ -430,6 +562,7 @@ class TestGalleryQueryPlans:
             {"user_id": "alice", "is_admin": False},
             {"user_id": "alice", "is_admin": False, "order_dir": SQLiteDirection.Ascending},
             {"user_id": "alice", "is_admin": False, "starred_first": False},
+            {"user_id": "alice", "is_admin": False, "starred": True},
         ],
     )
     def test_name_shapes_do_not_force_indexes(self, services, kwargs) -> None:
@@ -447,6 +580,30 @@ class TestGalleryQueryPlans:
 
         assert "INDEXED BY" not in statement
         assert "NOT INDEXED" not in statement
+
+    def test_starred_filter_searches_the_starred_index(self, services) -> None:
+        # The bounded starred strip asks for `starred = 1` on every board visit, so the
+        # filter must be served by idx_*_starred rather than a table scan per half.
+        _save_image(services["images"], "starred.png", user_id="alice")
+        _save_image(services["images"], "plain.png", user_id="alice")
+        _save_video(services["videos"], "starred.mp4", user_id="alice")
+        _save_video(services["videos"], "plain.mp4", user_id="alice")
+        _star(services, "images", "image_name", "starred.png")
+        _star(services, "videos", "video_name", "starred.mp4")
+
+        result, _, details = _capture_plan(
+            services,
+            lambda: services["gallery"].list_item_names(
+                categories=[ImageCategory.GENERAL],
+                is_intermediate=False,
+                is_admin=True,
+                starred=True,
+            ),
+            "UNION ALL",
+        )
+
+        assert result.total_count == 2
+        assert not any(detail.startswith(("SCAN images", "SCAN videos")) for detail in details)
 
     def test_explicit_board_starts_from_mixed_membership(self, services) -> None:
         board = services["boards"].save("Small", "alice")

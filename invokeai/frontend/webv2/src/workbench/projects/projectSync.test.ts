@@ -1,13 +1,14 @@
 import type { Project } from '@workbench/projectContracts';
 
-import { getProjectWidgetValues } from '@workbench/widgetState';
 import { createInitialWorkbenchState, workbenchReducer } from '@workbench/workbenchState.testing';
 import { describe, expect, it } from 'vitest';
 
-import type { ProjectRecoveredIdentity } from './projectFlush';
-
-import { applyAuthoritativeProjectBoard } from './projectDocument';
-import { createRecoveredDocument, deserializeProjectDocument, serializeProjectDocument } from './syncedPersistence';
+import {
+  applyAuthoritativeProjectBoard,
+  serializeProjectDocumentV2,
+  serializeProjectDocumentV2Json,
+} from './projectDocument';
+import { deserializeProjectDocument, deserializeProjectRecord, serializeProjectDocument } from './syncedPersistence';
 
 const getProject = (overrides: Partial<Project> = {}): Project => {
   const state = createInitialWorkbenchState();
@@ -15,8 +16,18 @@ const getProject = (overrides: Partial<Project> = {}): Project => {
   return { ...state.projects[0], ...overrides };
 };
 
+const loadDocument = (document: Record<string, unknown>): Project => {
+  const result = deserializeProjectDocument(document);
+
+  if (result.status !== 'loaded') {
+    throw new Error(`Expected the document to load, got ${result.status}.`);
+  }
+
+  return result.project;
+};
+
 describe('project document serialization', () => {
-  it('strips undo/redo history and restores it empty on deserialize', () => {
+  it('serializes only the V2 durable allowlist and restores session state empty', () => {
     const project = getProject();
 
     project.undoRedo.past.push({
@@ -32,51 +43,158 @@ describe('project document serialization', () => {
         widgetRegions: project.widgetRegions,
       },
     });
+    project.queue.items.push({} as never);
+    project.events.push({} as never);
+    Object.assign(project, {
+      futureField: 'must-not-leak',
+      recoveredAt: '2026-01-01T00:00:00.000Z',
+      recoveryOf: 'old-project',
+    });
+
+    const document = serializeProjectDocumentV2(project);
+
+    expect(Object.keys(document).sort()).toEqual(
+      [
+        'canvas',
+        'documentSchemaVersion',
+        'id',
+        'invocation',
+        'layout',
+        'name',
+        'projectGraph',
+        'promptHistory',
+        'settings',
+        'widgetGraphs',
+        'widgetInstances',
+        'widgetRegions',
+      ].sort()
+    );
+    expect(document.documentSchemaVersion).toBe(2);
+
+    const roundTripped = loadDocument(document);
+
+    expect(roundTripped.undoRedo).toEqual({ future: [], past: [] });
+    expect(roundTripped.queue).toEqual({ items: [] });
+    expect(roundTripped.events).toEqual([]);
+    expect(roundTripped.id).toBe(project.id);
+    expect(roundTripped.widgetInstances).toEqual(project.widgetInstances);
+  });
+
+  it('measures the exact UTF-8 wire bytes once', () => {
+    const project = getProject({ name: '文書' });
+    const encoded = serializeProjectDocumentV2Json(project);
+
+    expect(encoded.document).toEqual(serializeProjectDocumentV2(project));
+    expect(encoded.documentJson).toBe(JSON.stringify(encoded.document));
+    expect(encoded.byteSize).toBe(new TextEncoder().encode(encoded.documentJson).byteLength);
+  });
+
+  it('keeps project document bytes constant as session queue history grows', () => {
+    const project = getProject();
+    const baseline = serializeProjectDocumentV2Json(project);
+    project.queue.items = Array.from({ length: 2_000 }, (_, index) => ({
+      id: `queue-${index}`,
+      snapshot: { oversizedContext: 'x'.repeat(100) },
+    })) as never;
+
+    const withQueueHistory = serializeProjectDocumentV2Json(project);
+
+    expect(withQueueHistory.byteSize).toBe(baseline.byteSize);
+    expect(withQueueHistory.documentJson).toBe(baseline.documentJson);
+  });
+
+  it('excludes session state and legacy history from project files', () => {
+    const project = getProject();
+    Object.assign(project, { graphHistory: [{ id: 'legacy-snapshot' }] });
 
     const document = serializeProjectDocument(project);
 
-    expect('undoRedo' in document).toBe(false);
-
-    const roundTripped = deserializeProjectDocument(document);
-
-    expect(roundTripped).not.toBeNull();
-    expect(roundTripped?.undoRedo).toEqual({ future: [], past: [] });
-    expect(roundTripped?.id).toBe(project.id);
-    expect(roundTripped?.widgetInstances).toEqual(project.widgetInstances);
+    expect(document).not.toHaveProperty('events');
+    expect(document).not.toHaveProperty('graphHistory');
+    expect(document).not.toHaveProperty('queue');
   });
 
   it('rejects documents that do not look like projects', () => {
-    expect(deserializeProjectDocument({})).toBeNull();
-    expect(deserializeProjectDocument({ id: 'x' })).toBeNull();
-    expect(deserializeProjectDocument({ id: 'x', layout: null, name: 'y' })).toBeNull();
+    expect(deserializeProjectDocument({})).toEqual({ status: 'unavailable' });
+    expect(deserializeProjectDocument({ id: 'x' })).toEqual({ status: 'unavailable' });
+    expect(deserializeProjectDocument({ id: 'x', layout: null, name: 'y' })).toEqual({ status: 'unavailable' });
+  });
+
+  it('refuses a document whose canvas was written by a newer client, keeping the raw document', () => {
+    const project = getProject();
+    const document = serializeProjectDocument(project);
+    const future = { ...document, canvas: { ...(document.canvas as object), version: 4 } };
+
+    const result = deserializeProjectDocument(future);
+
+    expect(result).toMatchObject({
+      refused: {
+        projectId: project.id,
+        raw: future,
+        refusal: { scope: 'state', status: 'unsupported-version', version: 4 },
+        source: 'canvas',
+      },
+      status: 'refused',
+    });
+  });
+
+  it('refuses a newer project document schema while preserving its raw bytes for export', () => {
+    const project = getProject();
+    const future = { ...serializeProjectDocumentV2(project), documentSchemaVersion: 3 };
+
+    expect(deserializeProjectDocument(future)).toEqual({
+      refused: {
+        projectId: project.id,
+        projectName: project.name,
+        raw: future,
+        refusal: {
+          raw: future,
+          scope: 'project-document',
+          status: 'unsupported-version',
+          version: 3,
+        },
+        source: 'project-document',
+      },
+      status: 'refused',
+    });
+  });
+
+  it('uses authoritative server identity and untouched bytes for a future document refusal', () => {
+    const raw = {
+      documentSchemaVersion: 3,
+      id: 'untrusted-id',
+      name: 'Untrusted name',
+      widgetInstances: {
+        gallery: { state: { values: { boardId: 'stale-board' } }, typeId: 'gallery' },
+      },
+    };
+
+    expect(
+      deserializeProjectRecord({
+        board_id: 'authoritative-board',
+        created_at: '2026-09-03T00:00:00.000Z',
+        data: raw,
+        minimum_canvas_schema_version: 3,
+        name: 'Authoritative name',
+        project_id: 'authoritative-id',
+        revision: 4,
+        updated_at: '2026-09-03T00:00:00.000Z',
+      })
+    ).toEqual({
+      refused: {
+        projectId: 'authoritative-id',
+        projectName: 'Authoritative name',
+        raw,
+        refusal: { raw, scope: 'project-document', status: 'unsupported-version', version: 3 },
+        source: 'project-document',
+      },
+      status: 'refused',
+    });
   });
 
   it('normalizes legacy project-graph invocation sources to workflow', () => {
-    const base = getProject();
     const project = getProject({
       invocation: { destination: 'gallery', destinationLocked: false, sourceId: 'workflow', sourceLocked: false },
-      queue: {
-        items: [
-          {
-            cancellable: true,
-            id: 'legacy-queue-item',
-            snapshot: {
-              backendSubmission: { batchCount: 1, graph: { edges: [], id: 'graph', nodes: {} }, kind: 'workflow' },
-              canvas: base.canvas,
-              destination: 'gallery',
-              filterIntermediateResults: true,
-              galleryBoardId: null,
-              graph: { edges: [], id: 'graph', label: 'Graph', nodes: [], updatedAt: 'now', version: 1 },
-              presentation: { batchCount: 1, height: 1024, width: 1024 },
-              sourceId: 'workflow',
-              submittedAt: 'now',
-              widgetInstances: {},
-              widgetStates: {},
-            },
-            status: 'pending',
-          },
-        ],
-      },
     });
     const document = serializeProjectDocument(project);
 
@@ -86,64 +204,11 @@ describe('project document serialization', () => {
       sourceId: 'project-graph',
       sourceLocked: false,
     };
-    document.queue = {
-      items: [
-        {
-          ...(project.queue.items[0] as object),
-          snapshot: { ...project.queue.items[0]?.snapshot, sourceId: 'project-graph' },
-        },
-      ],
-    };
 
-    const deserialized = deserializeProjectDocument(document);
+    const deserialized = loadDocument(document);
 
-    expect(deserialized?.invocation.sourceId).toBe('workflow');
-    expect(deserialized?.queue.items[0]?.snapshot.sourceId).toBe('workflow');
-  });
-});
-
-describe('createRecoveredDocument', () => {
-  it('keys the fork to the original and stamps the recovery time', () => {
-    const project = getProject({ name: 'My Project' });
-    const { recoveredDocument, recoveredIdentity } = createRecoveredDocument(
-      project,
-      serializeProjectDocument(project)
-    );
-
-    expect(recoveredDocument.recoveryOf).toBe(project.id);
-    expect(recoveredIdentity.id.startsWith(`${project.id}-recovered-`)).toBe(true);
-    expect(recoveredIdentity.name).toBe('My Project (recovered)');
-    expect(typeof recoveredDocument.recoveredAt).toBe('string');
-    // The identity is what the reducer re-labels the live project with, so it has to agree with the
-    // document the server was handed, field for field.
-    expect(recoveredDocument.id).toBe(recoveredIdentity.id);
-    expect(recoveredDocument.name).toBe(recoveredIdentity.name);
-    expect(recoveredDocument.recoveredAt).toBe(recoveredIdentity.recoveredAt);
-    expect(recoveredDocument.recoveryOf).toBe(recoveredIdentity.recoveryOf);
-  });
-
-  it('collapses recovery chains to the root and never stacks name suffixes', () => {
-    const root = getProject({ name: 'My Project' });
-    const recovery = getProject({
-      id: `${root.id}-recovered-abc`,
-      name: 'My Project (recovered)',
-      recoveryOf: root.id,
-    });
-
-    const { recoveredDocument, recoveredIdentity } = createRecoveredDocument(
-      recovery,
-      serializeProjectDocument(recovery)
-    );
-
-    expect(recoveredDocument.recoveryOf).toBe(root.id);
-    expect(recoveredIdentity.name).toBe('My Project (recovered)');
-  });
-
-  it('cleans up legacy stacked suffixes', () => {
-    const project = getProject({ name: 'Project Name #1 (Recovered) (Recovered)' });
-    const { recoveredIdentity } = createRecoveredDocument(project, serializeProjectDocument(project));
-
-    expect(recoveredIdentity.name).toBe('Project Name #1 (recovered)');
+    expect(deserialized.invocation.sourceId).toBe('workflow');
+    expect(deserialized.queue.items).toEqual([]);
   });
 });
 
@@ -183,139 +248,6 @@ describe('renameProject', () => {
     const blank = workbenchReducer(renamed, { name: '   ', projectId: target.id, type: 'renameProject' });
 
     expect(blank.projects[0].name).toBe('New Name');
-  });
-});
-
-const recoveredIdentityFor = (projectId: string, name = 'Recovered'): ProjectRecoveredIdentity => ({
-  id: `${projectId}-recovered-abc`,
-  name,
-  recoveredAt: '2026-08-07T00:00:00.000Z',
-  recoveryOf: projectId,
-});
-
-describe('reconcileProjectConflict', () => {
-  it('adopts the server version and continues local work in the recovered fork', () => {
-    const state = createInitialWorkbenchState();
-    const original = state.projects[0];
-    const serverProject = getProject({ id: original.id, name: 'Server version' });
-    const recoveredIdentity = recoveredIdentityFor(original.id, 'Server version (recovered)');
-    const recoveredProject = getProject({ id: recoveredIdentity.id, name: recoveredIdentity.name });
-    const withActiveOriginal = { ...state, activeProjectId: original.id };
-
-    const next = workbenchReducer(withActiveOriginal, {
-      projectId: original.id,
-      recoveredIdentity,
-      recoveredProject,
-      serverProject,
-      type: 'reconcileProjectConflict',
-    });
-
-    const ids = next.projects.map((project) => project.id);
-
-    expect(ids).toContain(original.id);
-    expect(ids).toContain(recoveredIdentity.id);
-    expect(next.projects.find((project) => project.id === original.id)?.name).toBe('Server version');
-    // The user keeps looking at their own latest edits.
-    expect(next.activeProjectId).toBe(recoveredIdentity.id);
-    expect(next.notifications[0]?.title).toBe('Project recovered');
-  });
-
-  it('carries the edits made while the save was in flight, not the snapshot it was built from', () => {
-    // The fork's document is serialized when the push starts. Anything edited after that is newer,
-    // and is what the person is looking at — so adopting the snapshot would delete precisely the
-    // work the fork exists to rescue. Staleness is not an edge case here: a save is stale exactly
-    // when something landed mid-flight, which is when this reducer runs.
-    const state = createInitialWorkbenchState();
-    const original = state.projects[0];
-    const live = workbenchReducer(
-      { ...state, activeProjectId: original.id },
-      { boardId: 'edited-after-the-push-started', projectId: original.id, type: 'setGalleryProjectBoardId' }
-    );
-    const recoveredIdentity = recoveredIdentityFor(original.id, 'Snapshot (recovered)');
-
-    const next = workbenchReducer(live, {
-      projectId: original.id,
-      recoveredIdentity,
-      // What the push was carrying: the document as it was before that edit landed.
-      recoveredProject: getProject({ id: recoveredIdentity.id, name: 'Snapshot (recovered)' }),
-      serverProject: getProject({ id: original.id, name: 'Server version' }),
-      type: 'reconcileProjectConflict',
-    });
-
-    const fork = next.projects.find((project) => project.id === recoveredIdentity.id);
-
-    expect(fork).toBeDefined();
-    // The identity is the server's...
-    expect(fork?.name).toBe(recoveredIdentity.name);
-    expect(fork?.recoveryOf).toBe(original.id);
-    expect(fork?.recoveredAt).toBe(recoveredIdentity.recoveredAt);
-    // ...and the content is the live one's.
-    expect(getProjectWidgetValues(fork!, 'gallery').projectBoardId).toBe('edited-after-the-push-started');
-  });
-
-  it('falls back to the pushed snapshot when no live project is left to re-label', () => {
-    // A tab closed while the save was in flight. The snapshot is then the only local copy of the
-    // work, so it is the right answer rather than a stale one.
-    const state = createInitialWorkbenchState();
-    const closedId = 'project-already-closed';
-    const recoveredIdentity = recoveredIdentityFor(closedId, 'Closed (recovered)');
-
-    const next = workbenchReducer(state, {
-      projectId: closedId,
-      recoveredIdentity,
-      recoveredProject: getProject({ id: recoveredIdentity.id, name: 'Closed (recovered)' }),
-      serverProject: getProject({ id: closedId, name: 'Server version' }),
-      type: 'reconcileProjectConflict',
-    });
-
-    expect(next.projects.map((project) => project.id)).toContain(recoveredIdentity.id);
-    expect(next.projects.find((project) => project.id === recoveredIdentity.id)?.name).toBe('Closed (recovered)');
-  });
-
-  it('leaves the active project alone when the conflicted project is in the background', () => {
-    const state = createInitialWorkbenchState();
-    const first = state.projects[0];
-    const second = getProject({ id: 'project-background-test' });
-    const withActiveSecond = { ...state, activeProjectId: second.id, projects: [...state.projects, second] };
-
-    const next = workbenchReducer(withActiveSecond, {
-      projectId: first.id,
-      recoveredIdentity: recoveredIdentityFor(first.id),
-      recoveredProject: getProject({ id: `${first.id}-recovered-abc`, name: 'Recovered' }),
-      serverProject: getProject({ id: first.id, name: 'Server version' }),
-      type: 'reconcileProjectConflict',
-    });
-
-    expect(next.activeProjectId).toBe(second.id);
-  });
-});
-
-describe('reconcileDeletedProject', () => {
-  it('keeps the live content under the fork identity', () => {
-    const state = createInitialWorkbenchState();
-    const original = state.projects[0];
-    const live = workbenchReducer(
-      { ...state, activeProjectId: original.id },
-      { boardId: 'edited-after-the-push-started', projectId: original.id, type: 'setGalleryProjectBoardId' }
-    );
-    const recoveredIdentity = recoveredIdentityFor(original.id, 'Snapshot (recovered)');
-
-    const next = workbenchReducer(live, {
-      projectId: original.id,
-      recoveredIdentity,
-      recoveredProject: getProject({ id: recoveredIdentity.id, name: 'Snapshot (recovered)' }),
-      type: 'reconcileDeletedProject',
-    });
-
-    // The deletion stands: the original id is gone, replaced in place by the fork.
-    expect(next.projects.map((project) => project.id)).not.toContain(original.id);
-
-    const fork = next.projects.find((project) => project.id === recoveredIdentity.id);
-
-    expect(fork?.name).toBe(recoveredIdentity.name);
-    expect(fork?.recoveryOf).toBe(original.id);
-    expect(getProjectWidgetValues(fork!, 'gallery').projectBoardId).toBe('edited-after-the-push-started');
-    expect(next.activeProjectId).toBe(recoveredIdentity.id);
   });
 });
 

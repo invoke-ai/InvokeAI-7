@@ -5,7 +5,7 @@ import { BellIcon } from 'lucide-react';
 export const notificationsWidgetManifest: WidgetManifest = {
   allowMultiple: false,
   allowedRegions: ['bottom'],
-  bottomPanel: 'expandable',
+  bottomPanel: 'popover',
   failurePolicy: { isolateRenderFailure: true, onRegistrationFailure: 'disable' },
   icon: BellIcon,
   id: 'notifications',

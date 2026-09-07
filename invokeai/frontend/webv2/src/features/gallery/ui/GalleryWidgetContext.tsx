@@ -30,12 +30,22 @@ export interface GalleryActions {
   selectItemRange: (items: GalleryItemRef[], primaryItem: GalleryItem) => void;
   setCompareItem: (image: GalleryImageItem | null) => void;
   setSearchTerm: (searchTerm: string) => void;
+  /** Restricts (or releases) the listing to starred items; resets the page like a search. */
+  setStarredOnly: (starredOnly: boolean) => void;
   /** Sets (or clears) the image-similarity query shown as a chip in the search field. */
   setSemanticImageQuery: (reference: GallerySemanticReference | null) => void;
   setView: (galleryView: GalleryView) => void;
   toggleItemInSelection: (item: GalleryItem, nextPrimaryItem: GalleryItem | null) => void;
   updateSettings: (settings: Partial<GallerySettings>) => void;
-  uploadFiles: (files: File[]) => Promise<void>;
+  /** Resolves with the confirmed uploads; empty when nothing landed. */
+  uploadFiles: (files: File[]) => Promise<GalleryItem[]>;
+}
+
+/** The bounded starred strip above the listing; empty whenever it does not apply. */
+export interface GalleryStarredStrip {
+  items: GalleryItem[];
+  /** Starred items under the same filter, per the backend; 0 until known. */
+  total: number;
 }
 
 export interface GalleryWidgetContextValue {
@@ -50,6 +60,9 @@ export interface GalleryWidgetContextValue {
   itemActions: GalleryItemActions;
   /** The infinite window is full and the board holds images it cannot reach. */
   isWindowTruncated: boolean;
+  /** Everything on hand — strip first, then the listing, without repeats — for lookups by key. */
+  loadedItems: GalleryItem[];
+  starredStrip: GalleryStarredStrip;
   projectName: string;
   /** Placement, used only to scope cached viewport measurements. */
   region: GalleryWidgetProps['region'];

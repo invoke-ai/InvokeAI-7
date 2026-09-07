@@ -3,6 +3,7 @@ import type { TFunction } from 'i18next';
 import { firstPartyHotkeyCatalog } from '@workbench/hotkeys/catalog';
 import { formatHotkeyForPlatform } from '@workbench/hotkeys/keys';
 import { getLayoutPresetCommandTitleOverrides } from '@workbench/layoutPresetSnapshots';
+import { settingsCatalog } from '@workbench/settings/catalog';
 import { DEFAULT_PREFERENCES } from '@workbench/settings/store';
 import { createInitialWorkbenchState } from '@workbench/workbenchState';
 import { describe, expect, it, vi } from 'vitest';
@@ -185,10 +186,56 @@ describe('buildSettingsEntries', () => {
     expect(theme?.subtitle).toBe('Classic');
 
     theme?.run();
-    expect(openSettingsSection).toHaveBeenCalledWith('appearance');
+    expect(openSettingsSection).toHaveBeenCalledWith({ entryId: 'themeId', sectionId: 'appearance' });
 
     workflowSection?.run();
     expect(openSettingsSection).toHaveBeenCalledWith('workflow');
+  });
+
+  it('links deletion confirmation to Gallery while keeping its direct toggle', () => {
+    const openSettingsSection = vi.fn();
+    const patchPreferences = vi.fn();
+    const entries = buildSettingsEntries(
+      { ...DEFAULT_PREFERENCES, confirmImageDeletion: true },
+      { ...settingsEntryDeps, openSettingsSection, patchPreferences },
+      t
+    );
+    const confirmation = entries.find((entry) => entry.id === 'setting.confirmImageDeletion');
+
+    confirmation?.run();
+    expect(patchPreferences).toHaveBeenCalledWith({ confirmImageDeletion: false });
+    confirmation?.secondary?.run();
+    expect(openSettingsSection).toHaveBeenCalledWith({ entryId: 'confirmImageDeletion', sectionId: 'gallery' });
+  });
+
+  it('finds widget fields by catalog aliases and navigates to the exact entry', () => {
+    const openSettingsSection = vi.fn();
+    const entries = buildSettingsEntries(DEFAULT_PREFERENCES, { ...settingsEntryDeps, openSettingsSection }, t);
+    const rows = searchPaletteRows(entries, 'density', []);
+    const imageSize = rows.find((row) => row.kind === 'entry' && row.entry.id === 'setting.gallery.imageSize');
+
+    expect(imageSize?.kind).toBe('entry');
+    if (imageSize?.kind === 'entry') {
+      imageSize.entry.run();
+    }
+    expect(openSettingsSection).toHaveBeenCalledWith({ entryId: 'imageSize', sectionId: 'gallery' });
+    expect(entries.some((entry) => entry.id === 'settings.section.canvas')).toBe(true);
+  });
+
+  it('uses catalog translations for preference labels without loading editor resources', () => {
+    const resources = [
+      ...new Set(settingsCatalog.flatMap((section) => section.entries.map((entry) => entry.resource))),
+    ];
+    const loadSpies = resources.map((resource) => vi.spyOn(resource, 'load'));
+    const localized = ((key: string, options?: Record<string, unknown>) =>
+      key === 'settings.catalog.reduceMotion.label' ? 'Minimize animation' : t(key, options)) as TFunction;
+    const entries = buildSettingsEntries(DEFAULT_PREFERENCES, settingsEntryDeps, localized);
+
+    expect(entries.find((entry) => entry.id === 'setting.reduceMotion')?.title).toBe('Minimize animation');
+    for (const spy of loadSpies) {
+      expect(spy).not.toHaveBeenCalled();
+      spy.mockRestore();
+    }
   });
 
   it('carries a value-picker stage on enum preferences that applies and marks the current value', () => {

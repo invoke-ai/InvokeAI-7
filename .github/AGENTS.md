@@ -1,38 +1,11 @@
-# Agent Instructions
+# CI and contributions
 
-## Package Management
-
-This repository has two independently managed TypeScript/React frontends, both using **pnpm** exclusively:
-
-- `invokeai/frontend/web/`
-- `invokeai/frontend/webv2/`
-
-- ✅ Use `pnpm` commands for both frontends.
-- ✅ Run commands against the intended frontend with `pnpm -C <directory> ...`.
-- ❌ Never use `npm` or `yarn`.
-- ❌ Never create or use `package-lock.json` or `yarn.lock`.
-- ✅ Each frontend owns its own `pnpm-lock.yaml`.
-
-Typical commands for the established frontend:
-
-- `pnpm -C invokeai/frontend/web install`
-- `pnpm -C invokeai/frontend/web build`
-- `pnpm -C invokeai/frontend/web lint:tsc`
-- `pnpm -C invokeai/frontend/web lint:dpdm`
-- `pnpm -C invokeai/frontend/web lint:eslint`
-- `pnpm -C invokeai/frontend/web lint:prettier`
-
-Typical commands for the Workbench frontend:
-
-- `pnpm -C invokeai/frontend/webv2 install`
-- `pnpm -C invokeai/frontend/webv2 build`
-- `pnpm -C invokeai/frontend/webv2 format:check`
-- `pnpm -C invokeai/frontend/webv2 lint:oxc`
-- `pnpm -C invokeai/frontend/webv2 lint:tsc`
-- `pnpm -C invokeai/frontend/webv2 test:all`
-
-## Project Structure
-
-- Backend: Python in `invokeai/`
-- Established frontend: TypeScript/React in `invokeai/frontend/web/`
-- Workbench frontend: TypeScript/React in `invokeai/frontend/webv2/`
+- Shared engineering and package rules live in the root `AGENTS.md`. Read the affected package's guidance before changing checks.
+- Preserve supported events: pull requests, main pushes, merge groups, manual dispatch, and reusable workflow calls. Never assume `github.base_ref` is populated outside a PR event.
+- Include the workflow itself and relevant shared actions/configuration in change detection. Test-only and tooling-only changes must reach their owning checks; skipped work must not hide required validation.
+- Use existing Node/Python/pnpm/uv versions and lockfiles. Keep dependency installs reproducible and respect hardware/platform matrices. Preserve pinned action revisions where used.
+- Prefer package completion commands over reproducing their internals in YAML. Webv2's `pnpm check:release` includes architecture, tests, performance/build, project files, and accessibility; install Chromium and required Linux dependencies first.
+- Preserve diagnostic artifacts on failure with `always()` where appropriate. Keep generated review/performance artifacts out of Git. Distinguish real checks from skipped or unavailable checks.
+- Keep hooks aligned with CI's Ruff version/configuration. Do not add formatter rewrites to validation or silently relax failures/budgets to make a new gate green.
+- PR descriptions lead with the problem and resulting behavior. Include actual checks, material review findings resolved, and relevant UI evidence, compatibility details, or performance measurements. Keep summaries short; do not attach planning logs.
+- Workflow files add checks but do not configure hosted branch protection or install local hooks. Do not claim either happened without verification.

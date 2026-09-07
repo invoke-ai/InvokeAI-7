@@ -14,6 +14,19 @@ export interface ProjectPushOutcomeBase {
   documentJson: string;
 }
 
+export type ProjectSchemaRefusal =
+  | {
+      kind: 'canvas';
+      maxCanvasSchemaVersion: number;
+      minimumCanvasSchemaVersion: number;
+    }
+  | {
+      documentSchemaVersion: number;
+      kind: 'document';
+      maxDocumentSchemaVersion: number;
+    }
+  | { kind: 'invalid-server-document' };
+
 export type ProjectPushOutcome =
   /** The server holds exactly this document. */
   | ({ kind: 'acknowledged' } & ProjectPushOutcomeBase)
@@ -22,18 +35,26 @@ export type ProjectPushOutcome =
    * local edits continue under a different id. Reading the id back would read a stranger's version.
    */
   | ({ kind: 'superseded' } & ProjectPushOutcomeBase)
+  /** A newer client raised the project's compatibility floor. Local bytes remain cached. */
+  | ({ kind: 'schema-refused'; refusal: ProjectSchemaRefusal } & ProjectPushOutcomeBase)
+  /** Divergent server and local revisions await an explicit user decision. */
+  | ({ kind: 'conflicted' } & ProjectPushOutcomeBase)
   /** The push did not land. The server still holds whatever it last acknowledged. */
   | ({ kind: 'unsynced' } & ProjectPushOutcomeBase);
 
 /** Raised where an unacknowledged push must not be treated as a successful one. */
 export class ProjectFlushError extends Error {
-  readonly reason: 'superseded' | 'unsynced';
+  readonly reason: Exclude<ProjectPushOutcome['kind'], 'acknowledged'>;
 
-  constructor(reason: 'superseded' | 'unsynced') {
+  constructor(reason: Exclude<ProjectPushOutcome['kind'], 'acknowledged'>) {
     super(
-      reason === 'unsynced'
-        ? 'The project has changes that have not reached the server.'
-        : 'The project was replaced on the server; the local edits continue under another id.'
+      reason === 'schema-refused'
+        ? 'This project now requires a newer version of Invoke. Local changes remain in this browser.'
+        : reason === 'conflicted'
+          ? 'This project has conflicting local and server changes. Choose which version to keep.'
+          : reason === 'unsynced'
+            ? 'The project has changes that have not reached the server.'
+            : 'The project was replaced on the server; the local edits continue under another id.'
     );
     this.name = 'ProjectFlushError';
     this.reason = reason;
@@ -46,16 +67,3 @@ export const assertProjectFlushed = (outcome: ProjectPushOutcome): void => {
     throw new ProjectFlushError(outcome.kind);
   }
 };
-
-/**
- * Who a recovery fork *is*, separately from what it holds. `recoveredProject` is built from the
- * document as it was when the push started, so applying it wholesale overwrites anything edited
- * since; a project still open adopts these four fields instead and keeps its live content. The
- * snapshot stays for the case with no live project left to re-identify — a tab closed mid-flight.
- */
-export interface ProjectRecoveredIdentity {
-  id: string;
-  name: string;
-  recoveredAt: string;
-  recoveryOf: string;
-}

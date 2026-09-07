@@ -6,11 +6,12 @@ import type {
 } from '@workbench/widgetContracts';
 
 import { Box, Code, Flex, HStack, ScrollArea, Stack, Text, useRecipe } from '@chakra-ui/react';
-import { Button } from '@platform/ui';
+import { Button } from '@platform/ui/Button';
+import { useScrollAreaPhantomHeal } from '@platform/ui/useScrollAreaPhantomHeal';
 import { chipRecipe } from '@theme/recipes';
 import { resolveWidgetInstanceLabel } from '@workbench/widgetLabels';
 import { TriangleAlertIcon } from 'lucide-react';
-import { Component, type ErrorInfo, type ReactNode } from 'react';
+import { Component, type ErrorInfo, type ReactNode, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { WidgetPanelFrame, WidgetTooltipFrame } from './WidgetFrames';
@@ -56,6 +57,9 @@ const WidgetFailureCard = ({
   onRetry: () => void;
 }) => {
   const { t } = useTranslation();
+  const viewportRef = useRef<HTMLDivElement | null>(null);
+
+  useScrollAreaPhantomHeal(viewportRef);
 
   return (
     <Stack bg="bg.muted" borderColor="border.error" borderWidth="1px" gap="2" p="3" rounded="md">
@@ -63,7 +67,7 @@ const WidgetFailureCard = ({
         {t('widgets.failure.title', { label })}
       </Text>
       <ScrollArea.Root maxH="8rem" size="xs" variant="hover">
-        <ScrollArea.Viewport maxH="8rem">
+        <ScrollArea.Viewport ref={viewportRef} maxH="8rem">
           <ScrollArea.Content>
             <Code display="block" p="2" whiteSpace="pre-wrap">
               {details}

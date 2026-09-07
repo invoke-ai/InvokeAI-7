@@ -37,7 +37,6 @@ export const GalleryQueuePlaceholderCell = ({
         bg="bg"
         borderColor={isSelected ? 'accent.solid' : 'border.subtle'}
         borderWidth={isSelected ? '2px' : '1px'}
-        cursor="pointer"
         h="full"
         overflow="hidden"
         position="relative"

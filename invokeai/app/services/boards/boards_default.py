@@ -39,12 +39,13 @@ class BoardService(BoardServiceABC):
             return None, cover_video.video_name
         return cover_image.image_name, None
 
-    def _get_counts(self, board_id: str) -> tuple[int, int, int]:
-        """Return ``(image_count, video_count, asset_count)`` for a board."""
+    def _get_counts(self, board_id: str) -> tuple[int, int, int, int]:
+        """Return ``(image_count, video_count, asset_count, asset_video_count)`` for a board."""
         image_count = self.__invoker.services.board_image_records.get_image_count_for_board(board_id)
         asset_count = self.__invoker.services.board_image_records.get_asset_count_for_board(board_id)
         video_count = self.__invoker.services.board_video_records.get_video_count_for_board(board_id)
-        return image_count, video_count, asset_count
+        asset_video_count = self.__invoker.services.board_video_records.get_asset_video_count_for_board(board_id)
+        return image_count, video_count, asset_count, asset_video_count
 
     def create(
         self,
@@ -60,7 +61,7 @@ class BoardService(BoardServiceABC):
         # takes — on the most-travelled read in the API.
         board_record, project_id = self.__invoker.services.board_records.get_with_project_id(board_id)
         cover_image_name, cover_video_name = self._resolve_cover(board_record.board_id)
-        image_count, video_count, asset_count = self._get_counts(board_id)
+        image_count, video_count, asset_count, asset_video_count = self._get_counts(board_id)
         return board_record_to_dto(
             board_record,
             cover_image_name,
@@ -68,6 +69,7 @@ class BoardService(BoardServiceABC):
             asset_count,
             cover_video_name=cover_video_name,
             video_count=video_count,
+            asset_video_count=asset_video_count,
             project_id=project_id,
         )
 
@@ -150,6 +152,7 @@ class BoardService(BoardServiceABC):
                     owner_username,
                     cover_video_name=summary.cover_video_name,
                     video_count=summary.video_count,
+                    asset_video_count=summary.asset_video_count,
                     project_id=project_ids.get(r.board_id),
                 )
             )

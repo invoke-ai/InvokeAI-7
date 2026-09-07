@@ -5,6 +5,7 @@ import type { WidgetViewProps } from '@workbench/widgetContracts';
 
 import { ChakraProvider } from '@chakra-ui/react';
 import { DndContext } from '@dnd-kit/core';
+import { requestGalleryItemReveal } from '@features/gallery/contracts';
 import { QueryClient, QueryClientProvider, type InfiniteData } from '@tanstack/react-query';
 import { system } from '@theme/system';
 import i18next from 'i18next';
@@ -106,10 +107,13 @@ const mocks = vi.hoisted(() => {
         preview: { state: { values: {} }, typeId: 'preview' },
       },
     },
+    galleryItemFilters: [] as Array<{ boardId: string; starred?: boolean }>,
     galleryItemPageOffsets: [] as number[],
+    galleryItemWindowOffsets: [] as number[],
     galleryItemPages: [] as GalleryItemsPage[],
     imageActionOptions: null as null | {
       getItemActionContext?: () => {
+        getItemSelectionPage?: (item: GalleryImageItem | GalleryVideoItem) => number;
         items: Array<GalleryImageItem | GalleryVideoItem>;
         loadOrderedRefs: (signal: AbortSignal) => Promise<Array<{ kind: 'image' | 'video'; name: string }>>;
         selectedItemKey: string | null;
@@ -117,6 +121,9 @@ const mocks = vi.hoisted(() => {
       onImagesDeleted?: (imageNames: string[]) => void;
     },
     recentImages,
+    bridgeProgressImage: null as unknown,
+    runningProgressTargets: undefined as unknown[] | undefined,
+    slotProgressImage: undefined as unknown,
     useActiveProgressTarget: vi.fn(() => null as unknown),
     useProgressImage: vi.fn(() => null as unknown),
   };
@@ -128,12 +135,33 @@ vi.mock('@workbench/WorkbenchContext', () => ({
   useWidgetValuesSelector: () => ({}),
   useWorkbenchCommands: () => mocks.commands,
   useWorkbenchQueries: () => ({ getSnapshot: () => ({ activeProject: mocks.project }) }),
+  useWorkbenchSelector: (selector: (snapshot: unknown) => unknown) =>
+    selector({ backendConnection: { status: 'connected' } }),
 }));
+
+const mockProgressTargets = () => {
+  const target = mocks.useActiveProgressTarget();
+
+  return target ? [target] : [];
+};
 
 vi.mock('@features/queue/react', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   useActiveProgressTarget: () => mocks.useActiveProgressTarget(),
+  useActiveProgressTargets: () => mocks.runningProgressTargets ?? mockProgressTargets(),
+  useFollowedProgressTargets: () => mockProgressTargets(),
   useProgressImage: () => mocks.useProgressImage(),
+  useQueueItemBridgeProgressImage: () => mocks.bridgeProgressImage,
+  // The slot's own frame: derived from the "latest" mock by target unless a test overrides it.
+  useQueueItemProgressImage: (queueItemId: string, itemIndex: number) => {
+    if (mocks.slotProgressImage !== undefined) {
+      return mocks.slotProgressImage;
+    }
+
+    const latest = mocks.useProgressImage() as { target?: { itemIndex: number; queueItemId: string } } | null;
+
+    return latest?.target?.queueItemId === queueItemId && latest.target.itemIndex === itemIndex ? latest : null;
+  },
 }));
 
 vi.mock('@features/gallery/queries', () => ({
@@ -143,9 +171,10 @@ vi.mock('@features/gallery/queries', () => ({
     data?.pages.flatMap((page) => page.items) ?? [],
   galleryBoardsOptions: () => ({ queryFn: () => [], queryKey: ['test-boards'], staleTime: Infinity }),
   galleryItemsInfiniteOptions: (
-    query: { boardId: string; orderDir?: 'ASC' | 'DESC' },
+    query: { boardId: string; orderDir?: 'ASC' | 'DESC'; starred?: boolean },
     window: { kind: 'anchor' | 'infinite' | 'page'; offset?: number } = { kind: 'infinite' }
   ) => {
+    mocks.galleryItemFilters.push(query);
     const pages = mocks.galleryItemPages.map((page) => {
       const items = page.items.filter((item) => item.boardId === query.boardId);
 
@@ -154,14 +183,19 @@ vi.mock('@features/gallery/queries', () => ({
         items: query.orderDir === 'ASC' ? items.reverse() : items,
       };
     });
-    const initialOffset = window.kind === 'infinite' ? 0 : (window.offset ?? 0);
+    const initialOffset = window.offset ?? 0;
     const initialPage = pages[initialOffset / 60] ?? { items: [], total: 0 };
+
+    mocks.galleryItemWindowOffsets.push(initialOffset);
 
     return {
       getNextPageParam: (_lastPage: GalleryItemsPage, _allPages: GalleryItemsPage[], lastPageParam: number) =>
         pages[lastPageParam / 60 + 1] ? lastPageParam + 60 : undefined,
       getPreviousPageParam: (_firstPage: GalleryItemsPage, _allPages: GalleryItemsPage[], firstPageParam: number) =>
-        firstPageParam >= 60 ? firstPageParam - 60 : undefined,
+        // An anchored infinite window cannot grow upward past its anchor.
+        firstPageParam >= 60 && (window.kind !== 'infinite' || firstPageParam - 60 >= initialOffset)
+          ? firstPageParam - 60
+          : undefined,
       initialData: { pageParams: [initialOffset], pages: [initialPage] },
       initialPageParam: initialOffset,
       queryFn: ({ pageParam }: { pageParam: number }) => {
@@ -172,6 +206,11 @@ vi.mock('@features/gallery/queries', () => ({
       staleTime: Infinity,
     };
   },
+}));
+
+vi.mock('@features/gallery/contracts', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  requestGalleryItemReveal: vi.fn(),
 }));
 
 vi.mock('@workbench/image-actions', () => ({
@@ -267,19 +306,15 @@ const instance = { id: 'preview-instance', typeId: 'preview' } as unknown as Wid
 
 let host: HTMLDivElement | null = null;
 let root: Root | null = null;
+let queryClient: QueryClient | null = null;
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const render = async () => {
-  host = document.createElement('div');
-  host.style.cssText = 'height:320px;width:480px;';
-  document.body.append(host);
-  root = createRoot(host);
-
+const renderTree = async (client: QueryClient) => {
   await act(async () => {
     root?.render(
       <I18nextProvider i18n={i18n}>
         <ChakraProvider value={system}>
-          <QueryClientProvider client={new QueryClient()}>
+          <QueryClientProvider client={client}>
             <DndContext>
               <PreviewWidgetView instance={instance} manifest={manifest} region="center" runtime={runtime} />
             </DndContext>
@@ -290,6 +325,104 @@ const render = async () => {
     await Promise.resolve();
   });
 };
+
+const render = async () => {
+  host = document.createElement('div');
+  host.style.cssText = 'height:320px;width:480px;';
+  document.body.append(host);
+  root = createRoot(host);
+
+  const client = new QueryClient();
+
+  queryClient = client;
+  await renderTree(client);
+};
+
+// Re-renders the mounted tree against the SAME query client, so cached pages
+// survive exactly as they do in production and a window change has to earn
+// its data. Widget values are read by identity, so callers hand the view a
+// fresh values object rather than mutating in place.
+const rerender = async () => {
+  if (!queryClient) {
+    throw new Error('Expected render() to have created a query client.');
+  }
+
+  await renderTree(queryClient);
+};
+
+const setGalleryValues = (patch: Record<string, unknown>) => {
+  const state = mocks.project.widgetInstances.gallery.state as { values: Record<string, unknown> };
+
+  state.values = { ...state.values, ...patch };
+};
+
+// Applies Preview's most recent selection to the gallery values the way the
+// real reducer would — item, key, and the stamped page — and re-renders. The
+// selection command is a mock, so without this a second arrow press would
+// still start from the item the first one left.
+const commitLastSelection = async () => {
+  const lastCall = mocks.commands.gallery.selectItem.mock.lastCall as
+    | [GalleryImageItem, unknown, number | undefined, boolean | undefined]
+    | undefined;
+
+  if (!lastCall) {
+    throw new Error('Expected a selection to commit.');
+  }
+
+  const [item, , selectionPage] = lastCall;
+  const state = mocks.project.widgetInstances.gallery.state as { values: Record<string, unknown> };
+  const selectedImageQuery = (state.values.selectedImageQuery ?? {}) as Record<string, unknown>;
+
+  setGalleryValues({
+    selectedImage: {
+      boardId: item.boardId,
+      height: item.height,
+      imageName: item.name,
+      imageUrl: item.fullUrl,
+      queuedAt: item.createdAt,
+      sourceQueueItemId: item.sourceQueueItemId,
+      thumbnailUrl: item.thumbnailUrl,
+      width: item.width,
+    },
+    selectedImageName: item.name,
+    selectedImageQuery: { ...selectedImageQuery, page: selectionPage ?? selectedImageQuery.page },
+  });
+  await rerender();
+};
+
+const deepQuery = {
+  boardId: 'none',
+  galleryView: 'images',
+  imageOrderDir: 'DESC',
+  page: 30,
+  paginationMode: 'infinite',
+  searchTerm: '',
+};
+
+const legacyImage = (name: string, queuedAt: string, sourceQueueItemId = `queue-${name}`) => ({
+  boardId: 'none',
+  height: 64,
+  imageName: name,
+  imageUrl: `/images/${name}/full`,
+  queuedAt,
+  sourceQueueItemId,
+  thumbnailUrl: `/images/${name}/thumbnail`,
+  width: 64,
+});
+
+// A board whose page 30 holds `deep` (newest first) and whose page 31 holds
+// `next`; every other page is empty. Enough to anchor a window at row 1800
+// and to have a boundary to cross.
+const deepBoardPages = (deep: GalleryImageItem[], next: GalleryImageItem[] = []) =>
+  Array.from({ length: 32 }, (_unused, index) => {
+    if (index === 30) {
+      return { items: deep, total: deep.length + next.length };
+    }
+
+    return index === 31
+      ? { items: next, total: deep.length + next.length }
+      : { items: [], total: deep.length + next.length };
+  });
 
 const getBoundary = (): HTMLElement => {
   const boundary = host?.querySelector<HTMLElement>('[tabindex="0"]');
@@ -320,13 +453,17 @@ beforeEach(() => {
   delete (mocks.project.widgetInstances.gallery.state.values as Record<string, unknown>).galleryPage;
   delete (mocks.project.widgetInstances.gallery.state.values as Record<string, unknown>).imageOrderDir;
   delete (mocks.project.widgetInstances.gallery.state.values as Record<string, unknown>).paginationMode;
+  delete (mocks.project.widgetInstances.gallery.state.values as Record<string, unknown>).semanticImageQuery;
+  delete (mocks.project.widgetInstances.gallery.state.values as Record<string, unknown>).selectedImageQuery;
   mocks.project.widgetInstances.gallery.state.values.recentImages = mocks.recentImages;
   mocks.project.widgetInstances.gallery.state.values.selectedImage = {
     ...mocks.recentImages[0],
     boardId: 'none',
   };
   mocks.project.widgetInstances.gallery.state.values.selectedImageName = 'newest';
+  mocks.galleryItemFilters.length = 0;
   mocks.galleryItemPageOffsets.length = 0;
+  mocks.galleryItemWindowOffsets.length = 0;
   mocks.imageActionOptions = null;
   mocks.galleryItemPages = [
     {
@@ -349,6 +486,9 @@ beforeEach(() => {
   ];
   mocks.useActiveProgressTarget.mockReturnValue(null);
   mocks.useProgressImage.mockReturnValue(null);
+  mocks.bridgeProgressImage = null;
+  mocks.runningProgressTargets = undefined;
+  mocks.slotProgressImage = undefined;
 });
 
 afterEach(async () => {
@@ -362,6 +502,56 @@ afterEach(async () => {
 });
 
 describe('preview keyboard navigation boundary', () => {
+  it('walks the unstarred listing the grid shows by default, and the starred one for a starred selection', async () => {
+    await render();
+
+    expect(mocks.galleryItemFilters.length).toBeGreaterThan(0);
+    expect(mocks.galleryItemFilters.every((query) => query.starred === false)).toBe(true);
+
+    // A starred item lives in the grid's strip, so its neighbors are the
+    // other starred items, whatever listing the grid was showing.
+    mocks.galleryItemFilters.length = 0;
+    setGalleryValues({
+      recentImages: mocks.recentImages.map((image) =>
+        image.imageName === 'newest' ? { ...image, starred: true } : image
+      ),
+      selectedImage: { ...legacyImage('newest', '2026-07-23T00:00:00.000Z'), starred: true },
+      selectedImageName: 'newest',
+    });
+    await render();
+
+    expect(mocks.galleryItemFilters.length).toBeGreaterThan(0);
+    expect(mocks.galleryItemFilters.every((query) => query.starred === true)).toBe(true);
+  });
+
+  it('anchors a strip selection at the top of the starred listing, not at the grid page it was stamped with', async () => {
+    // Paginated mode, grid on page 2: the stamp says page 2 of the unstarred
+    // listing, but the clicked strip item sits at the top of the starred one.
+    const starredItem = { ...createImageItem('starred-top', '2026-07-23T00:00:00.000Z'), starred: true };
+    const starredNext = { ...createImageItem('starred-next', '2026-07-22T00:00:00.000Z'), starred: true };
+
+    setGalleryValues({
+      galleryPage: 2,
+      paginationMode: 'paginated',
+      recentImages: [],
+      selectedImage: { ...legacyImage('starred-top', '2026-07-23T00:00:00.000Z'), starred: true },
+      selectedImageName: 'starred-top',
+      selectedImageQuery: { ...deepQuery, page: 2, paginationMode: 'paginated' },
+    });
+    mocks.galleryItemPages = [{ items: [starredItem, starredNext], total: 2 }];
+
+    await render();
+    await pressArrow('ArrowRight');
+
+    expect(mocks.galleryItemWindowOffsets.every((offset) => offset === 0)).toBe(true);
+    expect(mocks.commands.gallery.selectItem).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'starred-next' }),
+      undefined,
+      expect.any(Number),
+      true
+    );
+  });
+
   it('handles one arrow press as exactly one selection and stops propagation', async () => {
     const documentKeydown = vi.fn();
     document.addEventListener('keydown', documentKeydown);
@@ -381,6 +571,13 @@ describe('preview keyboard navigation boundary', () => {
     } finally {
       document.removeEventListener('keydown', documentKeydown);
     }
+  });
+
+  it('reveals each navigated item so the gallery grid can follow', async () => {
+    await render();
+    await pressArrow('ArrowRight');
+
+    expect(vi.mocked(requestGalleryItemReveal)).toHaveBeenCalledWith('image:oldest');
   });
 
   it('keeps a just-completed batch navigable before the backend refetch lands', async () => {
@@ -430,6 +627,469 @@ describe('preview keyboard navigation boundary', () => {
       expect.objectContaining({ kind: 'image', name: 'batch-1' }),
       undefined,
       expect.any(Number),
+      true
+    );
+  });
+
+  it('walks the starred-only listing the selection was made in, and keeps recents out of it', async () => {
+    // The grid under the starred filter shows starred items only; Preview's
+    // arrows must step through that same list, and a fresh (unstarred)
+    // generation has no place in it.
+    const starredNewer = { ...createImageItem('starred-newer', '2026-07-20T00:00:02.000Z'), starred: true };
+    const starredOlder = { ...createImageItem('starred-older', '2026-07-20T00:00:01.000Z'), starred: true };
+
+    setGalleryValues({
+      recentImages: [legacyImage('fresh-generation', '2026-07-23T00:00:00.000Z', 'queue-item-done')],
+      selectedImage: legacyImage('starred-newer', '2026-07-20T00:00:02.000Z'),
+      selectedImageName: 'starred-newer',
+      selectedImageQuery: { ...deepQuery, page: 0, starredOnly: true },
+      starredOnly: true,
+    });
+    mocks.galleryItemPages = [{ items: [starredNewer, starredOlder], total: 2 }];
+
+    await render();
+
+    expect(mocks.galleryItemFilters.at(-1)).toMatchObject({ boardId: 'none', starred: true });
+    expect(mocks.galleryItemFilters.every((query) => query.starred === true)).toBe(true);
+
+    await pressArrow('ArrowRight');
+    await pressArrow('ArrowLeft');
+
+    expect(mocks.commands.gallery.selectItem).toHaveBeenCalledTimes(1);
+    expect(mocks.commands.gallery.selectItem).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'starred-older' }),
+      undefined,
+      expect.any(Number),
+      true
+    );
+  });
+
+  it('keeps settled recents out of an infinite window anchored at a deep reveal', async () => {
+    // A deep reveal anchors Preview's window ~1800 rows down the board. Recents
+    // belong at the TOP of the listing: date-sorting them into a slice from
+    // the middle puts images in Preview that the grid is not showing, and
+    // stepping onto one files it under a board page it is nowhere near.
+    const deepNewer = createImageItem('deep-newer', '2026-07-20T00:00:02.000Z');
+    const deepOlder = createImageItem('deep-older', '2026-07-20T00:00:01.000Z');
+
+    setGalleryValues({
+      galleryPage: 0,
+      recentImages: [legacyImage('fresh-generation', '2026-07-23T00:00:00.000Z', 'queue-item-done')],
+      selectedImage: legacyImage('deep-newer', '2026-07-20T00:00:02.000Z'),
+      selectedImageName: 'deep-newer',
+      selectedImageQuery: deepQuery,
+    });
+    mocks.galleryItemPages = deepBoardPages([deepNewer, deepOlder]);
+
+    await render();
+    // Descending: Right steps deeper into the anchored slice...
+    await pressArrow('ArrowRight');
+    // ...and Left, off the top of it, must not find the recent above it.
+    await pressArrow('ArrowLeft');
+
+    expect(mocks.commands.gallery.selectItem).toHaveBeenCalledTimes(1);
+    expect(mocks.commands.gallery.selectItem).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'image', name: 'deep-older' }),
+      undefined,
+      30,
+      true
+    );
+  });
+
+  it('keeps recents out of a deep window whose stamp outlives a switch to paginated mode', async () => {
+    // The live setting says paginated while the stamp still describes the deep
+    // infinite window Preview is querying. The window is what the list is made
+    // of, so it is what the exclusion follows.
+    const deepNewer = createImageItem('deep-newer', '2026-07-20T00:00:02.000Z');
+    const deepOlder = createImageItem('deep-older', '2026-07-20T00:00:01.000Z');
+
+    setGalleryValues({
+      galleryPage: 0,
+      paginationMode: 'paginated',
+      recentImages: [legacyImage('fresh-generation', '2026-07-23T00:00:00.000Z', 'queue-item-done')],
+      selectedImage: legacyImage('deep-newer', '2026-07-20T00:00:02.000Z'),
+      selectedImageName: 'deep-newer',
+      selectedImageQuery: deepQuery,
+    });
+    mocks.galleryItemPages = deepBoardPages([deepNewer, deepOlder]);
+
+    await render();
+    await pressArrow('ArrowRight');
+    await pressArrow('ArrowLeft');
+
+    expect(mocks.commands.gallery.selectItem).toHaveBeenCalledTimes(1);
+    expect(mocks.commands.gallery.selectItem).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'image', name: 'deep-older' }),
+      undefined,
+      30,
+      true
+    );
+  });
+
+  it('stamps the top of the listing on an in-flight image a deep window does not hold', async () => {
+    // In-flight work still merges into a deep window, and the window has no
+    // page for it. The page the preview opened on is 30 board pages from
+    // where the image will land, so it must not be what gets stamped.
+    mocks.project.queue.items = [queueItem];
+    setGalleryValues({
+      galleryPage: 0,
+      recentImages: [legacyImage('in-flight', '2026-07-23T00:00:00.000Z', 'queue-item-live')],
+      selectedImage: legacyImage('deep-newer', '2026-07-20T00:00:02.000Z'),
+      selectedImageName: 'deep-newer',
+      selectedImageQuery: deepQuery,
+    });
+    mocks.galleryItemPages = deepBoardPages([createImageItem('deep-newer', '2026-07-20T00:00:02.000Z')]);
+
+    await render();
+    await pressArrow('ArrowLeft');
+
+    expect(mocks.commands.gallery.selectItem).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'image', name: 'in-flight' }),
+      undefined,
+      0,
+      true
+    );
+  });
+
+  it('stamps the top of the listing when the compare image is swapped in', async () => {
+    // The compare slot holds an arbitrary image the window may not contain.
+    // Reusing the deep page filed a top-of-board image under row 1800, and
+    // Preview then queried a slice its own selection was not in.
+    setGalleryValues({
+      compareImage: legacyImage('compare-top', '2026-07-24T00:00:00.000Z'),
+      galleryPage: 0,
+      recentImages: [],
+      selectedImage: legacyImage('deep-newer', '2026-07-20T00:00:02.000Z'),
+      selectedImageName: 'deep-newer',
+      selectedImageQuery: deepQuery,
+    });
+    mocks.galleryItemPages = deepBoardPages([createImageItem('deep-newer', '2026-07-20T00:00:02.000Z')]);
+
+    await render();
+
+    const swap = registeredCommands.get('viewer.swapImages');
+
+    expect(swap).toBeDefined();
+    await act(async () => {
+      swap?.();
+      await Promise.resolve();
+    });
+
+    expect(mocks.commands.gallery.selectItem).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'image', name: 'compare-top' }),
+      undefined,
+      0,
+      true
+    );
+  });
+
+  it('holds a deep window still while the cursor walks across a page boundary and back', async () => {
+    // An anchored infinite window is one-way: it cannot grow upward past its
+    // anchor. So the anchor must stay where the selection was made, and every
+    // step — including one that lands on a page the boundary fetch has just
+    // added — stamps THAT anchor, not the row it landed on. Stamping the row
+    // re-keys the window at each boundary, discards the old entry, and makes
+    // everything the user just walked through unreachable.
+    const deepA = createImageItem('deep-a', '2026-07-20T00:00:04.000Z');
+    const deepB = createImageItem('deep-b', '2026-07-20T00:00:03.000Z');
+    const deepC = createImageItem('deep-c', '2026-07-20T00:00:02.000Z');
+    const deepD = createImageItem('deep-d', '2026-07-20T00:00:01.000Z');
+
+    setGalleryValues({
+      galleryPage: 0,
+      recentImages: [],
+      selectedImage: legacyImage('deep-b', '2026-07-20T00:00:03.000Z'),
+      selectedImageName: 'deep-b',
+      selectedImageQuery: deepQuery,
+    });
+    mocks.galleryItemPages = deepBoardPages([deepA, deepB], [deepC, deepD]);
+
+    await render();
+    // Across the boundary: the fetch adds page 31, and the item selected out
+    // of it is still stamped with the window's anchor.
+    await pressArrow('ArrowRight');
+    await commitLastSelection();
+    // One more step inside the new page.
+    await pressArrow('ArrowRight');
+    await commitLastSelection();
+    // And back, twice: the second press crosses the boundary in the direction
+    // the window cannot grow, and must find page 30 still loaded.
+    await pressArrow('ArrowLeft');
+    await commitLastSelection();
+    await pressArrow('ArrowLeft');
+
+    const selected = mocks.commands.gallery.selectItem.mock.calls.map(([item, , page]) => [
+      (item as { name: string }).name,
+      page,
+    ]);
+
+    expect(selected).toEqual([
+      ['deep-c', 30],
+      ['deep-d', 30],
+      ['deep-c', 30],
+      ['deep-b', 30],
+    ]);
+    expect(mocks.galleryItemWindowOffsets).not.toContain(1860);
+    expect(mocks.galleryItemWindowOffsets).not.toContain(0);
+  });
+
+  it('moves to the top of the listing when a selection is made there from outside Preview', async () => {
+    // Board, view, order, mode and search are unchanged, so the query identity
+    // is the same. A grid click on the newest image stamps the grid's page, 0,
+    // and Preview must follow it — held sticky, the anchor kept querying rows
+    // 1800+ for a selection at row 0.
+    const topNewer = createImageItem('top-newer', '2026-07-22T00:00:02.000Z');
+    const topOlder = createImageItem('top-older', '2026-07-22T00:00:01.000Z');
+
+    setGalleryValues({
+      galleryPage: 0,
+      recentImages: [],
+      selectedImage: legacyImage('deep-newer', '2026-07-20T00:00:02.000Z'),
+      selectedImageName: 'deep-newer',
+      selectedImageQuery: deepQuery,
+    });
+    mocks.galleryItemPages = deepBoardPages([createImageItem('deep-newer', '2026-07-20T00:00:02.000Z')]);
+    mocks.galleryItemPages[0] = { items: [topNewer, topOlder], total: 3 };
+
+    await render();
+
+    expect(mocks.galleryItemWindowOffsets).toContain(1800);
+
+    mocks.galleryItemWindowOffsets.length = 0;
+    setGalleryValues({
+      selectedImage: legacyImage('top-newer', '2026-07-22T00:00:02.000Z'),
+      selectedImageName: 'top-newer',
+      selectedImageQuery: { ...deepQuery, page: 0 },
+    });
+    await rerender();
+    await pressArrow('ArrowRight');
+
+    expect(mocks.galleryItemWindowOffsets).not.toContain(1800);
+    expect(mocks.commands.gallery.selectItem).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'image', name: 'top-older' }),
+      undefined,
+      0,
+      true
+    );
+  });
+
+  it('hands image actions a page that keeps a deletion successor in the deep window', async () => {
+    // A successor is chosen from Preview's own list. Selected without a page
+    // it is stamped with the GRID's page — 0 once a result has landed on the
+    // board or the project was reloaded — and lands outside the window it
+    // came from: forward arrow dead, back arrow a 1800-row teleport.
+    const deepNewer = createImageItem('deep-newer', '2026-07-20T00:00:02.000Z');
+    const deepOlder = createImageItem('deep-older', '2026-07-20T00:00:01.000Z');
+
+    setGalleryValues({
+      galleryPage: 0,
+      recentImages: [legacyImage('fresh-generation', '2026-07-23T00:00:00.000Z', 'queue-item-done')],
+      selectedImage: legacyImage('deep-newer', '2026-07-20T00:00:02.000Z'),
+      selectedImageName: 'deep-newer',
+      selectedImageQuery: deepQuery,
+    });
+    mocks.galleryItemPages = deepBoardPages([deepNewer, deepOlder]);
+
+    await render();
+
+    const context = mocks.imageActionOptions?.getItemActionContext?.();
+
+    expect(context?.getItemSelectionPage?.(deepOlder)).toBe(30);
+    // A recent is not in the window; it lives at the top of the listing.
+    expect(context?.getItemSelectionPage?.(createImageItem('fresh-generation', '2026-07-23T00:00:00.000Z'))).toBe(0);
+  });
+
+  it('swaps the compare image in and back out without losing the deep window', async () => {
+    // Swapping a top-of-board image in moves the window to the top, and the
+    // deep image goes into the compare slot. Swapping back must return to the
+    // window that image was navigated in, not guess at one.
+    setGalleryValues({
+      compareImage: legacyImage('compare-top', '2026-07-24T00:00:00.000Z'),
+      galleryPage: 0,
+      recentImages: [],
+      selectedImage: legacyImage('deep-newer', '2026-07-20T00:00:02.000Z'),
+      selectedImageName: 'deep-newer',
+      selectedImageQuery: deepQuery,
+    });
+    mocks.galleryItemPages = deepBoardPages([createImageItem('deep-newer', '2026-07-20T00:00:02.000Z')]);
+    mocks.galleryItemPages[0] = { items: [createImageItem('compare-top', '2026-07-24T00:00:00.000Z')], total: 2 };
+
+    await render();
+
+    const swap = () =>
+      act(async () => {
+        registeredCommands.get('viewer.swapImages')?.();
+        await Promise.resolve();
+      });
+
+    await swap();
+
+    expect(mocks.commands.gallery.selectItem).toHaveBeenLastCalledWith(
+      expect.objectContaining({ kind: 'image', name: 'compare-top' }),
+      undefined,
+      0,
+      true
+    );
+
+    // Commit the swap as the reducer would: the top image is selected at page
+    // 0, and the deep image is now in the compare slot.
+    await commitLastSelection();
+    setGalleryValues({ compareImage: legacyImage('deep-newer', '2026-07-20T00:00:02.000Z') });
+    await rerender();
+    await swap();
+
+    expect(mocks.commands.gallery.selectItem).toHaveBeenLastCalledWith(
+      expect.objectContaining({ kind: 'image', name: 'deep-newer' }),
+      undefined,
+      30,
+      true
+    );
+  });
+
+  it('does not restore a remembered page into a different listing', async () => {
+    // Between the swap and the swap back the user moved to another board.
+    // The remembered page named a window of the first board's listing;
+    // stamped into the second board's query it would anchor that listing
+    // 1800 rows down around an image that is not in it.
+    setGalleryValues({
+      compareImage: legacyImage('compare-top', '2026-07-24T00:00:00.000Z'),
+      galleryPage: 0,
+      recentImages: [],
+      selectedImage: legacyImage('deep-newer', '2026-07-20T00:00:02.000Z'),
+      selectedImageName: 'deep-newer',
+      selectedImageQuery: deepQuery,
+    });
+    mocks.galleryItemPages = deepBoardPages([createImageItem('deep-newer', '2026-07-20T00:00:02.000Z')]);
+    mocks.galleryItemPages[0] = { items: [createImageItem('compare-top', '2026-07-24T00:00:00.000Z')], total: 2 };
+
+    await render();
+
+    const swap = () =>
+      act(async () => {
+        registeredCommands.get('viewer.swapImages')?.();
+        await Promise.resolve();
+      });
+
+    await swap();
+    await commitLastSelection();
+    // The grid: another board, a click on one of its images. The compare slot
+    // survives that, still holding the deep image from the first board.
+    setGalleryValues({
+      compareImage: legacyImage('deep-newer', '2026-07-20T00:00:02.000Z'),
+      selectedImage: { ...legacyImage('other-board-image', '2026-07-25T00:00:00.000Z'), boardId: 'board-b' },
+      selectedImageName: 'other-board-image',
+      selectedImageQuery: { ...deepQuery, boardId: 'board-b', page: 0 },
+    });
+    await rerender();
+    await swap();
+
+    expect(mocks.commands.gallery.selectItem).toHaveBeenLastCalledWith(
+      expect.objectContaining({ kind: 'image', name: 'deep-newer' }),
+      undefined,
+      0,
+      true
+    );
+  });
+
+  it('only restores a remembered page for the item it was remembered for', async () => {
+    setGalleryValues({
+      compareImage: legacyImage('compare-top', '2026-07-24T00:00:00.000Z'),
+      galleryPage: 0,
+      recentImages: [],
+      selectedImage: legacyImage('deep-newer', '2026-07-20T00:00:02.000Z'),
+      selectedImageName: 'deep-newer',
+      selectedImageQuery: deepQuery,
+    });
+    mocks.galleryItemPages = deepBoardPages([createImageItem('deep-newer', '2026-07-20T00:00:02.000Z')]);
+    mocks.galleryItemPages[0] = { items: [createImageItem('compare-top', '2026-07-24T00:00:00.000Z')], total: 2 };
+
+    await render();
+
+    const swap = () =>
+      act(async () => {
+        registeredCommands.get('viewer.swapImages')?.();
+        await Promise.resolve();
+      });
+
+    await swap();
+    await commitLastSelection();
+    // A different image lands in the compare slot before the swap back.
+    setGalleryValues({ compareImage: legacyImage('another-top', '2026-07-24T00:00:01.000Z') });
+    await rerender();
+    await swap();
+
+    expect(mocks.commands.gallery.selectItem).toHaveBeenLastCalledWith(
+      expect.objectContaining({ kind: 'image', name: 'another-top' }),
+      undefined,
+      0,
+      true
+    );
+  });
+
+  it('hands image actions the window anchor for an item on a later page of the window', async () => {
+    // The stamp is the anchor of the window holding the item, not the page
+    // the item happens to sit on: a successor from page 31 of a window
+    // anchored at page 30 is stamped 30.
+    const deepA = createImageItem('deep-a', '2026-07-20T00:00:04.000Z');
+    const deepB = createImageItem('deep-b', '2026-07-20T00:00:03.000Z');
+    const deepC = createImageItem('deep-c', '2026-07-20T00:00:02.000Z');
+
+    setGalleryValues({
+      galleryPage: 0,
+      recentImages: [],
+      selectedImage: legacyImage('deep-b', '2026-07-20T00:00:03.000Z'),
+      selectedImageName: 'deep-b',
+      selectedImageQuery: deepQuery,
+    });
+    mocks.galleryItemPages = deepBoardPages([deepA, deepB], [deepC]);
+
+    await render();
+    // Cross the boundary so page 31 is part of the window.
+    await pressArrow('ArrowRight');
+    await commitLastSelection();
+
+    const context = mocks.imageActionOptions?.getItemActionContext?.();
+
+    expect(context?.items.map((item) => item.name)).toContain('deep-c');
+    expect(context?.getItemSelectionPage?.(deepC)).toBe(30);
+  });
+
+  it('does not restore a remembered page for an item since moved to another board', async () => {
+    // Moving the compare image re-boards it in place and leaves the selection's
+    // query alone, so the memo's key still matches. The page it remembers is a
+    // window of the OLD board's listing, which the item is no longer in.
+    setGalleryValues({
+      compareImage: legacyImage('compare-top', '2026-07-24T00:00:00.000Z'),
+      galleryPage: 0,
+      recentImages: [],
+      selectedImage: legacyImage('deep-newer', '2026-07-20T00:00:02.000Z'),
+      selectedImageName: 'deep-newer',
+      selectedImageQuery: deepQuery,
+    });
+    mocks.galleryItemPages = deepBoardPages([createImageItem('deep-newer', '2026-07-20T00:00:02.000Z')]);
+    mocks.galleryItemPages[0] = { items: [createImageItem('compare-top', '2026-07-24T00:00:00.000Z')], total: 2 };
+
+    await render();
+
+    const swap = () =>
+      act(async () => {
+        registeredCommands.get('viewer.swapImages')?.();
+        await Promise.resolve();
+      });
+
+    await swap();
+    await commitLastSelection();
+    // The deep image, now in the compare slot, is moved to another board.
+    setGalleryValues({
+      compareImage: { ...legacyImage('deep-newer', '2026-07-20T00:00:02.000Z'), boardId: 'board-b' },
+    });
+    await rerender();
+    await swap();
+
+    expect(mocks.commands.gallery.selectItem).toHaveBeenLastCalledWith(
+      expect.objectContaining({ kind: 'image', name: 'deep-newer', boardId: 'board-b' }),
+      undefined,
+      0,
       true
     );
   });
@@ -581,6 +1241,185 @@ describe('preview keyboard navigation boundary', () => {
     );
   });
 
+  it('walks the flat chronological order on paginated pages instead of lifting starred items', async () => {
+    const galleryValues = mocks.project.widgetInstances.gallery.state.values as Record<string, unknown>;
+    const selected = {
+      ...mocks.recentImages[0],
+      boardId: 'none',
+      imageCategory: 'general' as const,
+      imageName: 'freshly-selected',
+      queuedAt: '2026-07-21T12:02:30.000Z',
+      starred: false,
+    };
+
+    galleryValues.galleryPage = 0;
+    galleryValues.paginationMode = 'paginated';
+    galleryValues.recentImages = [];
+    galleryValues.selectedImage = selected;
+    galleryValues.selectedImageName = selected.imageName;
+    mocks.galleryItemPages = [
+      {
+        items: [
+          createImageItem('newest', '2026-07-21T12:03:00.000Z'),
+          { ...createImageItem('starred-mid', '2026-07-21T12:02:00.000Z'), starred: true },
+          createImageItem('oldest', '2026-07-21T12:01:00.000Z'),
+        ],
+        total: 3,
+      },
+    ];
+
+    await render();
+    await pressArrow('ArrowRight');
+
+    // Under starred-first the step would land on oldest; flat pages win.
+    expect(mocks.commands.gallery.selectItem).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'image', name: 'starred-mid' }),
+      undefined,
+      0,
+      true
+    );
+  });
+
+  it('does not carry the page the preview opened on onto a ranked pick', async () => {
+    const selected = {
+      ...mocks.recentImages[0],
+      boardId: 'none',
+      imageCategory: 'general' as const,
+      imageName: 'ranked-selected',
+      starred: false,
+    };
+    const neighbor = {
+      ...mocks.recentImages[1],
+      boardId: 'none',
+      imageCategory: 'general' as const,
+      imageName: 'ranked-neighbor',
+      starred: false,
+    };
+    const galleryValues = mocks.project.widgetInstances.gallery.state.values as Record<string, unknown>;
+
+    // A deep reveal from the image map stamped board page 30 onto the
+    // selection; starting the similarity search reset the grid to page 0.
+    // Carrying that stale page onto a ranked pick strands it: the item picked
+    // out of a ranking is nowhere near board page 30, so clearing the chip
+    // would anchor navigation ~1800 rows from both the selection and the grid.
+    galleryValues.galleryPage = 0;
+    galleryValues.paginationMode = 'infinite';
+    galleryValues.recentImages = [];
+    galleryValues.semanticImageQuery = { kind: 'text', query: 'sunset' };
+    galleryValues.selectedImage = selected;
+    galleryValues.selectedImageName = selected.imageName;
+    galleryValues.selectedImageQuery = {
+      boardId: 'none',
+      galleryView: 'images',
+      imageOrderDir: 'DESC',
+      page: 30,
+      paginationMode: 'infinite',
+      searchTerm: '',
+    };
+    mocks.galleryItemPages = [
+      {
+        items: [selected, neighbor].map((image) => ({
+          boardId: image.boardId,
+          category: image.imageCategory,
+          createdAt: image.queuedAt,
+          fullUrl: image.imageUrl,
+          height: image.height,
+          isIntermediate: false,
+          kind: 'image' as const,
+          name: image.imageName,
+          sourceQueueItemId: image.sourceQueueItemId,
+          starred: image.starred,
+          thumbnailUrl: image.thumbnailUrl,
+          width: image.width,
+        })),
+        total: 2,
+      },
+    ];
+
+    await render();
+    await pressArrow('ArrowRight');
+
+    expect(mocks.commands.gallery.selectItem).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'image', name: neighbor.imageName }),
+      undefined,
+      0,
+      true
+    );
+  });
+
+  it('stamps the top of the board listing for a ranked pick even when the footer paginates the ranking', async () => {
+    const filler = {
+      ...mocks.recentImages[0],
+      boardId: 'none',
+      imageCategory: 'general' as const,
+      imageName: 'ranked-page-zero',
+      starred: false,
+    };
+    const selected = {
+      ...mocks.recentImages[0],
+      boardId: 'none',
+      imageCategory: 'general' as const,
+      imageName: 'ranked-page-one-selected',
+      starred: false,
+    };
+    const neighbor = {
+      ...mocks.recentImages[1],
+      boardId: 'none',
+      imageCategory: 'general' as const,
+      imageName: 'ranked-page-one-neighbor',
+      starred: false,
+    };
+    const galleryValues = mocks.project.widgetInstances.gallery.state.values as Record<string, unknown>;
+    const toItem = (image: typeof filler) => ({
+      boardId: image.boardId,
+      category: image.imageCategory,
+      createdAt: image.queuedAt,
+      fullUrl: image.imageUrl,
+      height: image.height,
+      isIntermediate: false,
+      kind: 'image' as const,
+      name: image.imageName,
+      sourceQueueItemId: image.sourceQueueItemId,
+      starred: image.starred,
+      thumbnailUrl: image.thumbnailUrl,
+      width: image.width,
+    });
+
+    // In paginated mode the footer paginates the RANKING, so the grid's page
+    // is a rank page, not a board page — stamping it would send navigation to
+    // an unrelated board slice once the chip is cleared. Clearing resets the
+    // grid to board page 0, so that is what a ranked pick hands back: neither
+    // the grid's 1 nor the stale 30.
+    galleryValues.galleryPage = 1;
+    galleryValues.paginationMode = 'paginated';
+    galleryValues.recentImages = [];
+    galleryValues.semanticImageQuery = { kind: 'text', query: 'sunset' };
+    galleryValues.selectedImage = selected;
+    galleryValues.selectedImageName = selected.imageName;
+    galleryValues.selectedImageQuery = {
+      boardId: 'none',
+      galleryView: 'images',
+      imageOrderDir: 'DESC',
+      page: 30,
+      paginationMode: 'paginated',
+      searchTerm: '',
+    };
+    mocks.galleryItemPages = [
+      { items: [filler].map(toItem), total: 3 },
+      { items: [selected, neighbor].map(toItem), total: 3 },
+    ];
+
+    await render();
+    await pressArrow('ArrowRight');
+
+    expect(mocks.commands.gallery.selectItem).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'image', name: neighbor.imageName }),
+      undefined,
+      0,
+      true
+    );
+  });
+
   it('enables live-follow when stepping onto the active placeholder', async () => {
     mocks.project.queue.items = [queueItem];
     mocks.useActiveProgressTarget.mockReturnValue({ itemIndex: 1, queueItemId: 'queue-item-live' });
@@ -679,6 +1518,85 @@ describe('preview keyboard navigation boundary', () => {
       expect.any(Number),
       true
     );
+  });
+
+  it('keeps following a completed slot while its result is still routing', async () => {
+    // Completed on the backend, image not in the gallery yet: the slot is
+    // followed (settling) but no longer running. Preview must keep the live
+    // frame up in the single-frame branch rather than fall back onto the
+    // previous selection — and must not tile it.
+    mocks.project.queue.items = [queueItem];
+    mocks.project.settings.showProgressImagesInViewer = true;
+    mocks.useActiveProgressTarget.mockReturnValue({ itemIndex: 1, queueItemId: 'queue-item-live' });
+    mocks.runningProgressTargets = [];
+    mocks.useProgressImage.mockReturnValue({
+      dataUrl: 'data:image/png;base64,',
+      height: 64,
+      target: { itemIndex: 1, queueItemId: 'queue-item-live' },
+      width: 64,
+    });
+
+    await render();
+
+    expect(host?.querySelectorAll<HTMLImageElement>('img[src^="data:image/png"]')).toHaveLength(1);
+    expect(host?.textContent).toContain('64 × 64');
+  });
+
+  it("shows the followed slot's own frame even when the store-wide latest frame is gone", async () => {
+    // A quick image batch finished next to a long video render while the tab was
+    // hidden: releasing the batch's slot cleared the latest frame. The video slot
+    // still has its frame and must not render an empty card until its next step.
+    mocks.project.queue.items = [queueItem];
+    mocks.project.settings.showProgressImagesInViewer = true;
+    mocks.useActiveProgressTarget.mockReturnValue({ itemIndex: 1, queueItemId: 'queue-item-live' });
+    mocks.useProgressImage.mockReturnValue(null);
+    mocks.slotProgressImage = { dataUrl: 'data:image/png;base64,video-step', height: 64, width: 64 };
+
+    await render();
+
+    expect(host?.querySelector<HTMLImageElement>('img[src="data:image/png;base64,video-step"]')).not.toBeNull();
+  });
+
+  it('follows a running slot over a settling one so a concurrent session is never hidden', async () => {
+    // Multi-GPU: slot 1 completed and is settling, slot 2 is still streaming.
+    // The single-frame preview must show slot 2 live, not slot 1's static frame.
+    mocks.project.queue.items = [{ ...queueItem, backendItemIds: [1, 2] }];
+    mocks.project.settings.showProgressImagesInViewer = true;
+    mocks.useActiveProgressTarget.mockReturnValue({ itemIndex: 1, queueItemId: 'queue-item-live' });
+    mocks.runningProgressTargets = [{ itemIndex: 2, queueItemId: 'queue-item-live' }];
+    mocks.useProgressImage.mockReturnValue({
+      dataUrl: 'data:image/png;base64,slot-two',
+      height: 64,
+      target: { itemIndex: 2, queueItemId: 'queue-item-live' },
+      width: 64,
+    });
+    mocks.bridgeProgressImage = { dataUrl: 'data:image/png;base64,slot-one', height: 64, width: 64 };
+
+    await render();
+
+    expect(host?.querySelector<HTMLImageElement>('img[src="data:image/png;base64,slot-two"]')).not.toBeNull();
+    expect(host?.querySelector<HTMLImageElement>('img[src="data:image/png;base64,slot-one"]')).toBeNull();
+  });
+
+  it("bridges to the next slot of a batch with the previous slot's last frame", async () => {
+    // Slot 2 is live but has produced no frame yet (model load, text encoding);
+    // the latest frame still belongs to slot 1. Without the bridge this was an
+    // empty card between every two items of a batch.
+    mocks.project.queue.items = [{ ...queueItem, backendItemIds: [1, 2], completedBackendItemIds: [1] }];
+    mocks.project.settings.showProgressImagesInViewer = true;
+    mocks.useActiveProgressTarget.mockReturnValue({ itemIndex: 2, queueItemId: 'queue-item-live' });
+    mocks.useProgressImage.mockReturnValue({
+      dataUrl: 'data:image/png;base64,slot-one',
+      height: 64,
+      target: { itemIndex: 1, queueItemId: 'queue-item-live' },
+      width: 64,
+    });
+    mocks.bridgeProgressImage = { dataUrl: 'data:image/png;base64,bridge', height: 64, width: 64 };
+
+    await render();
+
+    expect(host?.querySelector<HTMLImageElement>('img[src="data:image/png;base64,bridge"]')).not.toBeNull();
+    expect(host?.querySelector<HTMLImageElement>('img[src="data:image/png;base64,slot-one"]')).toBeNull();
   });
 
   it('orders local images oldest-first when the gallery is ascending', async () => {

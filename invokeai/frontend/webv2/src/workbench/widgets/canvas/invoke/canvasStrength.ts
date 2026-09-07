@@ -3,8 +3,8 @@
  *
  * The value is persisted in the canvas widget's own state values
  * (`widgetInstances['canvas'].state.values.denoisingStrength`) so it survives
- * reloads and rides along in queue snapshots, and is read back — with the
- * default applied — by the invoke orchestrator. Only consulted for img2img
+ * reloads, and is read — with the default applied — by the invoke orchestrator
+ * when compiling a submission. Only consulted for img2img
  * (txt2img ignores it), matching the graph compiler.
  *
  * Pure data + a reader; no React, no engine. Shared by the tool-options UI and

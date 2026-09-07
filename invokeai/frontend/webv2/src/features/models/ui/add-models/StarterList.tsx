@@ -1,11 +1,13 @@
-import type { StarterModel } from '@features/models/core/types';
+import type { ModelConfig, StarterModel } from '@features/models/core/types';
 /* eslint-disable react-perf/jsx-no-jsx-as-prop, react-perf/jsx-no-new-array-as-prop, react-perf/jsx-no-new-function-as-prop, react-perf/jsx-no-new-object-as-prop */
 import type { StartersSnapshot } from '@features/models/data/startersStore';
 
 import { Badge, Flex, Icon, Spinner, Stack, Text } from '@chakra-ui/react';
 import { getModelBaseColorPalette, getModelBaseLabel } from '@features/models/core/baseIdentity';
 import { getModelTypeLabel } from '@features/models/core/taxonomy';
+import { useModelsSelector } from '@features/models/data/modelsStore';
 import { InstallSourceButton, SourceListItem } from '@features/models/ui/shared/SourceListItem';
+import { findInstalledStarterModelKey, useInstalledSourceKeys } from '@features/models/ui/shared/useInstalledSources';
 import { Button } from '@platform/ui';
 import { KeyRoundIcon } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -17,6 +19,8 @@ const getExternalProviderId = (source: string): string | null => {
 
   return source.slice('external://'.length).split('/', 1)[0] || null;
 };
+
+const selectModels = (snapshot: { models: readonly ModelConfig[] }): readonly ModelConfig[] => snapshot.models;
 
 export const StarterList = ({
   configuredExternalProviders,
@@ -42,6 +46,8 @@ export const StarterList = ({
   status: StartersSnapshot['status'];
 }) => {
   const { t } = useTranslation();
+  const installedSourceKeys = useInstalledSourceKeys();
+  const installedModels = useModelsSelector(selectModels);
 
   if (status === 'error' && loadError) {
     return (
@@ -100,6 +106,7 @@ export const StarterList = ({
           )
         ) : (
           <InstallSourceButton
+            installedModelKey={findInstalledStarterModelKey(model, installedSourceKeys, installedModels)}
             isInstalled={model.is_installed}
             isPending={pendingSources.has(model.source)}
             source={model.source}

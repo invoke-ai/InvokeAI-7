@@ -23,6 +23,9 @@ import { useTranslation } from 'react-i18next';
 import { resolveLayoutPresetIcon } from './layoutPresetIcons';
 import { closeLayoutPresetManager, openLayoutPresetDelete, openLayoutPresetEdit } from './layoutPresetManagerStore';
 
+const ROW_FILL_TRANSITION =
+  'background var(--chakra-durations-faster) ease, border-color var(--chakra-durations-faster) ease, color var(--chakra-durations-faster) ease';
+
 const DND_MODIFIERS = [restrictToVerticalAxis, restrictToParentElement];
 const POINTER_SENSOR_OPTIONS = { activationConstraint: { distance: 6 } } as const;
 const KEYBOARD_SENSOR_OPTIONS = {
@@ -75,7 +78,7 @@ export const LayoutPresetManagerDialogBody = () => {
             <Dialog.Header>
               <Dialog.Title>{t('topbar.presets.manage')}</Dialog.Title>
               <Dialog.CloseTrigger asChild>
-                <CloseButton size="sm" />
+                <CloseButton />
               </Dialog.CloseTrigger>
             </Dialog.Header>
             <Dialog.Body>
@@ -99,7 +102,7 @@ export const LayoutPresetManagerDialogBody = () => {
               </DndContext>
             </Dialog.Body>
             <Dialog.Footer>
-              <Button size="xs" variant="outline" onClick={closeLayoutPresetManager}>
+              <Button size="xs" variant="ghost" onClick={closeLayoutPresetManager}>
                 {t('common.done')}
               </Button>
             </Dialog.Footer>
@@ -122,7 +125,9 @@ const PresetRow = ({ isOverridden, preset }: { isOverridden: boolean; preset: La
       opacity: isDragging ? 0.5 : undefined,
       position: 'relative' as const,
       transform: CSS.Translate.toString(transform),
-      transition,
+      // Compose the hover-fill fade back in: dnd-kit's inline transform
+      // transition otherwise replaces the CSS transition (see LayoutPresetStrip).
+      transition: [transition, ROW_FILL_TRANSITION].filter(Boolean).join(', '),
       zIndex: isDragging ? 1 : undefined,
     }),
     [isDragging, transform, transition]

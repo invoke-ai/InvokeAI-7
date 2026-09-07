@@ -160,7 +160,7 @@ describe('ResizableTextarea', () => {
 
   it('participates in the shared Ctrl+Up/Down prompt-attention system', async () => {
     const PromptHarness = () => {
-      const [value, setValue] = useState('hello world');
+      const [value, setValue] = useState('(hello world+)++');
       const handleChange = useCallback((event: ChangeEvent<HTMLTextAreaElement>) => {
         setValue(event.currentTarget.value);
       }, []);
@@ -194,13 +194,26 @@ describe('ResizableTextarea', () => {
     const textarea = host.querySelector<HTMLTextAreaElement>('textarea')!;
 
     textarea.focus();
-    textarea.setSelectionRange(0, 5);
+    textarea.setSelectionRange(1, 6, 'backward');
 
     await act(() => {
       expect(adjustFocusedPromptAttention('increment', false)).toBe(true);
     });
 
-    await expect.poll(() => textarea.value).toBe('hello+ world');
+    await expect.poll(() => textarea.value).toBe('(hello world)+++');
+    expect(textarea.value.slice(textarea.selectionStart, textarea.selectionEnd)).toBe('hello');
+    expect(textarea.selectionDirection).toBe('backward');
+
+    await act(() => {
+      expect(adjustFocusedPromptAttention('decrement', false)).toBe(true);
+    });
+    await expect.poll(() => textarea.value).toBe('(hello world+)++');
+    expect(textarea.value.slice(textarea.selectionStart, textarea.selectionEnd)).toBe('hello');
+
+    await act(async () => {
+      await userEvent.keyboard('{Control>}z{/Control}');
+    });
+    await expect.poll(() => textarea.value).toBe('(hello world)+++');
   });
 
   // Regression: the write goes through the native value setter and a synthetic

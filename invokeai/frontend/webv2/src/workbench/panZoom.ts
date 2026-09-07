@@ -23,6 +23,15 @@ export interface PanZoomTransform {
 
 export type ConstrainZoom = (zoom: number) => number;
 
+/** Separation of two pointers, for measuring a pinch. */
+export const distanceBetween = (a: PanZoomPoint, b: PanZoomPoint): number => Math.hypot(a.x - b.x, a.y - b.y);
+
+/** Point halfway between two pointers — what a pinch zooms and pans around. */
+export const midpointOf = (a: PanZoomPoint, b: PanZoomPoint): PanZoomPoint => ({
+  x: (a.x + b.x) / 2,
+  y: (a.y + b.y) / 2,
+});
+
 /** Sets zoom while keeping the content point under `screenAnchor` fixed. */
 export const zoomAtPoint = (
   transform: PanZoomTransform,
@@ -67,3 +76,38 @@ export const panBy = (transform: PanZoomTransform, screenDelta: PanZoomPoint): P
   pan: { x: transform.pan.x + screenDelta.x, y: transform.pan.y + screenDelta.y },
   zoom: transform.zoom,
 });
+
+/**
+ * Applies a two-pointer pinch: zoom scales by how far the pointers have spread
+ * since the gesture began, and the content point under the gesture's starting
+ * midpoint is carried to the midpoint's current position — so the image tracks
+ * the fingers rather than just growing around a fixed anchor.
+ *
+ * Every argument is measured against the transform the gesture *started* from,
+ * so each move is one transition from that origin instead of a step on top of
+ * the last one: clamping at a zoom limit never accumulates into drift, and
+ * spreading past the limit still pans with the fingers.
+ */
+export const pinchZoomAtPoints = (
+  start: PanZoomTransform,
+  gesture: { center: PanZoomPoint; distance: number; startCenter: PanZoomPoint; startDistance: number },
+  constrainZoom: ConstrainZoom
+): PanZoomTransform => {
+  if (gesture.startDistance <= 0) {
+    return start;
+  }
+
+  const zoom = constrainZoom(start.zoom * (gesture.distance / gesture.startDistance));
+  const contentAnchor = {
+    x: (gesture.startCenter.x - start.pan.x) / start.zoom,
+    y: (gesture.startCenter.y - start.pan.y) / start.zoom,
+  };
+
+  return {
+    pan: {
+      x: gesture.center.x - zoom * contentAnchor.x,
+      y: gesture.center.y - zoom * contentAnchor.y,
+    },
+    zoom,
+  };
+};

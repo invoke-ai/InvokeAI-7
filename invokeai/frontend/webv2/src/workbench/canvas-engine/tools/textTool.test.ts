@@ -1,7 +1,8 @@
-import type { CanvasDocumentContractV2, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
+import type { CanvasDocumentContractV3, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
 import type { Tool, ToolContext } from '@workbench/canvas-engine/tools/tool';
 import type { PointerInput, Vec2 } from '@workbench/canvas-engine/types';
 
+import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
 import { createEngineStores } from '@workbench/canvas-engine/engineStores';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -30,13 +31,13 @@ const textLayer = (over: Partial<CanvasLayerContract> = {}): CanvasLayerContract
     ...over,
   }) as CanvasLayerContract;
 
-const makeDoc = (over: Partial<CanvasDocumentContractV2> = {}): CanvasDocumentContractV2 => ({
+const makeDoc = (over: Partial<CanvasDocumentContractV3> = {}): CanvasDocumentContractV3 => ({
   background: 'transparent',
   bbox: { height: 96, width: 96, x: 0, y: 0 },
   height: 512,
-  layers: [],
+  stacks: stacksFrom([]),
   selectedLayerId: null,
-  version: 2,
+  version: 3,
   width: 512,
   ...over,
 });
@@ -51,7 +52,7 @@ const pointer = (x: number, y: number, buttons = 1): PointerInput => ({
   timeStamp: 0,
 });
 
-const createHarness = (doc: CanvasDocumentContractV2) => {
+const createHarness = (doc: CanvasDocumentContractV3) => {
   const stores = createEngineStores();
   const openTextCreate = vi.fn<(point: Vec2) => void>();
   const openTextEdit = vi.fn<(layerId: string) => void>();
@@ -84,7 +85,7 @@ describe('text tool: click behaviour', () => {
   });
 
   it('opens an edit-mode session when the click hits an existing text layer', () => {
-    const doc = makeDoc({ layers: [textLayer()] });
+    const doc = makeDoc({ stacks: stacksFrom([textLayer()]) });
     const h = createHarness(doc);
     const tool = createTextTool();
 
@@ -97,7 +98,7 @@ describe('text tool: click behaviour', () => {
   });
 
   it('creates rather than edits when the click misses the text block', () => {
-    const doc = makeDoc({ layers: [textLayer()] });
+    const doc = makeDoc({ stacks: stacksFrom([textLayer()]) });
     const h = createHarness(doc);
     const tool = createTextTool();
 
@@ -108,7 +109,7 @@ describe('text tool: click behaviour', () => {
   });
 
   it('does not edit a locked text layer (falls through to create)', () => {
-    const doc = makeDoc({ layers: [textLayer({ isLocked: true })] });
+    const doc = makeDoc({ stacks: stacksFrom([textLayer({ isLocked: true })]) });
     const h = createHarness(doc);
     const tool = createTextTool();
 
@@ -119,7 +120,7 @@ describe('text tool: click behaviour', () => {
   });
 
   it('does not edit a hidden (disabled) text layer', () => {
-    const doc = makeDoc({ layers: [textLayer({ isEnabled: false })] });
+    const doc = makeDoc({ stacks: stacksFrom([textLayer({ isEnabled: false })]) });
     const h = createHarness(doc);
     const tool = createTextTool();
 

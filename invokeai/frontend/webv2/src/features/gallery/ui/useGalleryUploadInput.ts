@@ -1,10 +1,24 @@
+import type { GalleryItemKind } from '@features/gallery/core/items';
+
 import { useCallback, useRef, type ChangeEvent } from 'react';
 
-export const ACCEPTED_UPLOAD_EXTENSIONS = 'image/png,image/jpeg,image/webp,video/mp4,.png,.jpg,.jpeg,.webp,.mp4';
+const UPLOAD_ACCEPT_BY_KIND: Record<GalleryItemKind, string> = {
+  image: 'image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp',
+  video: 'video/mp4,.mp4',
+};
+
+/** The file input `accept` list for the given kinds. */
+export const getGalleryUploadAccept = (kinds: readonly GalleryItemKind[]): string =>
+  kinds.map((kind) => UPLOAD_ACCEPT_BY_KIND[kind]).join(',');
+
+export const ACCEPTED_UPLOAD_EXTENSIONS = getGalleryUploadAccept(['image', 'video']);
 export const UPLOAD_INPUT_STYLE = { display: 'none' } as const;
 
 /** The hidden-input picker every gallery upload trigger shares: change extracts files, resets the input (so re-picking the same file fires), and forwards. */
-export const useGalleryUploadInput = (onUploadFiles: (files: File[]) => Promise<void> | void) => {
+export const useGalleryUploadInput = (
+  onUploadFiles: (files: File[]) => Promise<unknown> | void,
+  { accept = ACCEPTED_UPLOAD_EXTENSIONS, multiple = true }: { accept?: string; multiple?: boolean } = {}
+) => {
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   const onChange = useCallback(
@@ -24,8 +38,8 @@ export const useGalleryUploadInput = (onUploadFiles: (files: File[]) => Promise<
 
   return {
     inputProps: {
-      accept: ACCEPTED_UPLOAD_EXTENSIONS,
-      multiple: true as const,
+      accept,
+      multiple,
       onChange,
       ref: inputRef,
       style: UPLOAD_INPUT_STYLE,

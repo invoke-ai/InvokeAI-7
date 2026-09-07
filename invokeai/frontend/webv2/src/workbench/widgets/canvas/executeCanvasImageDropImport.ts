@@ -11,7 +11,7 @@ import {
 
 import { orderCanvasImageDropImages } from './canvasImageDnd';
 
-type CanvasImageDropEngine = Pick<CanvasEngineHandle, 'layers' | 'projectId'>;
+type CanvasImageDropEngine = Pick<CanvasEngineHandle, 'document' | 'layers' | 'projectId'>;
 
 export const executeCanvasImageDropImport = async ({
   destination,

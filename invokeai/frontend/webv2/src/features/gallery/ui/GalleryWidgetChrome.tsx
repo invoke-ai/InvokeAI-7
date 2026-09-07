@@ -5,13 +5,13 @@ import { galleryBoardsOptions } from '@features/gallery/data/queries';
 import { Button } from '@platform/ui/Button';
 import { MiddleTruncate } from '@platform/ui/MiddleTruncate';
 import { useQuery } from '@tanstack/react-query';
-import { ChevronsDownUpIcon, ChevronsUpDownIcon } from 'lucide-react';
+import { ChevronsDownUpIcon, ChevronsUpDownIcon, ImageIcon } from 'lucide-react';
 import { useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import type { GalleryWidgetProps } from './GalleryUiContext';
 
-import { GallerySettingsMenu } from './GallerySettingsMenu';
+import { BoardCover, BoardCoverIcon } from './GalleryBoardCover';
 import { getGallerySelectedBoardId } from './galleryStateView';
 import { useGalleryUi } from './GalleryUiContext';
 
@@ -72,23 +72,16 @@ export const GalleryWidgetLabel = ({ region }: GalleryChromeProps) => {
         aria-label={t('widgets.gallery.toggleBoardsNamed', { name: boardName })}
         maxW="14rem"
         minW="0"
+        // The cover keeps the same 2px inset on every side of the 24px button.
+        ps="0.5"
         size="2xs"
         variant="ghost"
         onClick={toggleBoards}
       >
+        {selectedBoard ? <BoardCover board={selectedBoard} /> : <BoardCoverIcon icon={ImageIcon} />}
         <MiddleTruncate fontWeight="600" minW="0" text={boardName} />
         <Icon as={isCollapsed ? ChevronsUpDownIcon : ChevronsDownUpIcon} boxSize="3" color="fg.subtle" flexShrink={0} />
       </Button>
-    </HStack>
-  );
-};
-
-export const GalleryWidgetHeaderActions = (_props: GalleryChromeProps) => {
-  const { gallery, settings } = useGalleryChromeBoards();
-
-  return (
-    <HStack gap="0.5">
-      <GallerySettingsMenu settings={settings} onUpdateSettings={gallery.updateSettings} />
     </HStack>
   );
 };

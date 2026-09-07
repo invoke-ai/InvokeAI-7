@@ -57,11 +57,19 @@ describe('hasLayerDisplayEffect', () => {
   });
 
   it('is true for a raster layer with non-identity adjustments', () => {
-    expect(hasLayerDisplayEffect(rasterLayer({ brightness: 0.4, contrast: 0, saturation: 0 }))).toBe(true);
+    expect(
+      hasLayerDisplayEffect(
+        rasterLayer([{ brightness: 0.4, contrast: 0, id: 'b', isEnabled: true, type: 'brightness-contrast' }])
+      )
+    ).toBe(true);
   });
 
   it('is false for a raster layer with identity or absent adjustments', () => {
-    expect(hasLayerDisplayEffect(rasterLayer({ brightness: 0, contrast: 0, saturation: 0 }))).toBe(false);
+    expect(
+      hasLayerDisplayEffect(
+        rasterLayer([{ brightness: 0, contrast: 0, id: 'i', isEnabled: true, type: 'brightness-contrast' }])
+      )
+    ).toBe(false);
     expect(hasLayerDisplayEffect(rasterLayer(undefined))).toBe(false);
   });
 
@@ -102,7 +110,7 @@ describe('renderLayerDisplayEffect', () => {
   it('returns a copy for a raster layer with adjustments', () => {
     const out = renderLayerDisplayEffect(
       backend,
-      rasterLayer({ brightness: 0.4, contrast: 0, saturation: 0 }),
+      rasterLayer([{ brightness: 0.4, contrast: 0, id: 'b', isEnabled: true, type: 'brightness-contrast' }]),
       backend.createSurface(4, 4)
     );
     expect(out).not.toBeNull();

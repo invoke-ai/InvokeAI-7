@@ -214,7 +214,7 @@ export const WorkflowLibraryDialog = ({
 
   return (
     <>
-      <Dialog.Root open={isOpen} placement="center" size="xl" onOpenChange={handleDialogOpenChange}>
+      <Dialog.Root open={isOpen} size="xl" onOpenChange={handleDialogOpenChange}>
         <Portal>
           <Dialog.Backdrop />
           <Dialog.Positioner>
@@ -271,12 +271,10 @@ export const WorkflowLibraryDialog = ({
                         across both bands instead of reading as part of either. */}
                     <Dialog.CloseTrigger asChild>
                       <CloseButton
-                        color="fg.muted"
                         disabled={isLoadPending}
                         flexShrink={0}
                         insetEnd="auto"
                         position="static"
-                        size="sm"
                         top="auto"
                       />
                     </Dialog.CloseTrigger>

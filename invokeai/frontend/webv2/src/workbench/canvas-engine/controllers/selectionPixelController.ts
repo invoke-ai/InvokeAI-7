@@ -1,12 +1,15 @@
-import type { CanvasDocumentContractV2 } from '@workbench/canvas-engine/contracts';
+import type { CanvasDocumentContractV3, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
 import type { History } from '@workbench/canvas-engine/history/history';
 import type { ImagePatchApply } from '@workbench/canvas-engine/history/imagePatch';
 import type { LayerCacheStore } from '@workbench/canvas-engine/render/layerCache';
 import type { RasterBackend, RasterSurface } from '@workbench/canvas-engine/render/raster';
 import type { SelectionState } from '@workbench/canvas-engine/selection/selectionState';
-import type { ControlPixelEditTransaction } from '@workbench/canvas-engine/tools/tool';
+import type { PixelEditTransaction } from '@workbench/canvas-engine/tools/tool';
 import type { Rect } from '@workbench/canvas-engine/types';
 
+import { lookupDocumentLeaf } from '@workbench/canvas-engine/document-model/documentModel';
+import { getDocumentLayer } from '@workbench/canvas-engine/document/documentIndex';
+import { isLeafEditable } from '@workbench/canvas-engine/document/layerEligibility';
 import { getSourceBounds } from '@workbench/canvas-engine/document/sources';
 import { createImagePatchEntry } from '@workbench/canvas-engine/history/imagePatch';
 import { intersect, isEmpty, roundOut } from '@workbench/canvas-engine/math/rect';
@@ -14,7 +17,7 @@ import { eraseMaskedRegion, fillMaskedRegion } from '@workbench/canvas-engine/se
 
 type PixelTarget =
   | { kind: 'raster'; layerId: string; transparencyLocked: boolean }
-  | { kind: 'control'; transaction: ControlPixelEditTransaction; transparencyLocked: false };
+  | { kind: 'control'; transaction: PixelEditTransaction; transparencyLocked: false };
 
 export interface SelectionPixelControllerOptions {
   readonly selection: SelectionState;
@@ -22,15 +25,17 @@ export interface SelectionPixelControllerOptions {
   readonly layers: LayerCacheStore;
   readonly history: History;
   readonly applyImagePatch: ImagePatchApply;
-  readonly getDocument: () => CanvasDocumentContractV2 | null;
-  readonly beginControlEdit: (layerId: string) => ControlPixelEditTransaction | null;
+  readonly getDocument: () => CanvasDocumentContractV3 | null;
+  readonly beginPixelEdit: (layerId: string) => PixelEditTransaction | null;
   readonly canEdit: () => boolean;
   readonly isGestureActive: () => boolean;
   readonly getFillColor: () => string;
   readonly endBurst: () => void;
   readonly deleteDerived: (layerId: string) => void;
   readonly invalidateLayer: (layerId: string) => void;
+  readonly isRasterCacheReady: (layer: CanvasLayerContract, document: CanvasDocumentContractV3) => boolean;
   readonly notifyPainted: (layerId: string) => void;
+  readonly requestRasterization: (layerId: string) => void;
   readonly markDirty: (layerId: string) => void;
 }
 
@@ -57,12 +62,13 @@ export class SelectionPixelController {
     if (!document?.selectedLayerId) {
       return null;
     }
-    const layer = document.layers.find((candidate) => candidate.id === document.selectedLayerId);
-    if (layer?.type === 'raster' && layer.source.type === 'paint' && !layer.isLocked && layer.isEnabled) {
+    const leaf = lookupDocumentLeaf(document, document.selectedLayerId);
+    const layer = leaf?.layer;
+    if (leaf && layer?.type === 'raster' && layer.source.type === 'paint' && isLeafEditable(leaf)) {
       return { kind: 'raster', layerId: layer.id, transparencyLocked: layer.isTransparencyLocked === true };
     }
     if (layer?.type === 'control') {
-      const transaction = this.deps.beginControlEdit(layer.id);
+      const transaction = this.deps.beginPixelEdit(layer.id);
       return transaction ? { kind: 'control', transaction, transparencyLocked: false } : null;
     }
     return null;
@@ -79,7 +85,15 @@ export class SelectionPixelController {
       return;
     }
     const selectionRect = roundOut(bounds);
-    const selectedLayer = document.layers.find((candidate) => candidate.id === document.selectedLayerId);
+    const selectedLayer = getDocumentLayer(document, document.selectedLayerId);
+    if (
+      selectedLayer?.type === 'raster' &&
+      selectedLayer.source.type === 'paint' &&
+      !this.deps.isRasterCacheReady(selectedLayer, document)
+    ) {
+      this.deps.requestRasterization(selectedLayer.id);
+      return;
+    }
     if (
       kind === 'erase' &&
       selectedLayer?.type === 'control' &&

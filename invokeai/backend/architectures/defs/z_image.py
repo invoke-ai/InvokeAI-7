@@ -34,6 +34,9 @@ register(
         scheduler_set="flow",
         scheduler_applies_to_graph=True,
         control_kinds=frozenset({"z_image_control"}),
+        # The text encoder masks positive conditioning; the denoiser takes a negative list but
+        # discards its masks, so a regional negative would act globally and is rejected instead.
+        supports_regional_guidance=True,
     ),
     VaeFacet(
         frozenset(

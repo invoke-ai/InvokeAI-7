@@ -81,3 +81,4 @@ class BoardMediaSummary:
     image_count: int = 0
     video_count: int = 0
     asset_count: int = 0
+    asset_video_count: int = 0

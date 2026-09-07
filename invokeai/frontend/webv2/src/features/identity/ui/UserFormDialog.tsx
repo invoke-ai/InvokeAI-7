@@ -52,7 +52,6 @@ export const UserFormDialog = ({
     <Dialog.Root
       lazyMount
       open={target !== null}
-      placement="center"
       scrollBehavior="inside"
       size="sm"
       unmountOnExit
@@ -67,18 +66,14 @@ export const UserFormDialog = ({
                 <Dialog.Header borderBottomWidth="1px" borderColor="border.subtle">
                   <Stack gap="0.5">
                     <Dialog.Title>{target.mode === 'create' ? t('users.addUser') : t('users.editUser')}</Dialog.Title>
-                    {target.mode === 'edit' ? (
-                      <Text color="fg.subtle" fontSize="xs">
-                        {target.user.email}
-                      </Text>
-                    ) : null}
+                    {target.mode === 'edit' ? <Dialog.Description>{target.user.email}</Dialog.Description> : null}
                   </Stack>
                 </Dialog.Header>
                 <UserForm key={getTargetKey(target)} target={target} onClose={onClose} onSaved={onSaved} />
               </>
             ) : null}
             <Dialog.CloseTrigger asChild>
-              <CloseButton color="fg.muted" size="sm" />
+              <CloseButton />
             </Dialog.CloseTrigger>
           </Dialog.Content>
         </Dialog.Positioner>
@@ -199,7 +194,7 @@ const UserForm = ({
   return (
     <>
       <Dialog.Body>
-        <Stack gap="4" py="2">
+        <Stack gap="4">
           {form.formError ? <AuthFormAlert message={form.formError} tone="error" /> : null}
           {isCreate ? (
             <Field error={form.errors.email} label={t('users.email')}>
@@ -268,7 +263,7 @@ const UserForm = ({
           </Switch.Root>
         </Stack>
       </Dialog.Body>
-      <Dialog.Footer gap="2">
+      <Dialog.Footer>
         <Button size="xs" variant="ghost" onClick={onClose}>
           {t('common.cancel')}
         </Button>

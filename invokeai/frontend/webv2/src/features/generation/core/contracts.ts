@@ -18,6 +18,7 @@ export interface BackendInvocationContract {
 }
 
 export interface BackendGraphEdgeContract {
+  type?: 'default' | 'loop_linkage';
   source: { node_id: string; field: string };
   destination: { node_id: string; field: string };
 }
@@ -40,6 +41,7 @@ export interface GraphEdgeContract {
   sourceField: string;
   targetNodeId: string;
   targetField: string;
+  type?: 'default' | 'loop_linkage';
 }
 
 export interface GraphContract {

@@ -16,14 +16,10 @@ export interface UpscaleUiAdapter {
   rawValues: Record<string, unknown>;
   reportError(message: string): void;
   showPromptSyntaxHighlighting: boolean;
-  touchGalleryImages(): void;
 }
 
 /** The adapter's callbacks, which are stable for the lifetime of a project. */
-export type UpscaleUiActions = Pick<
-  UpscaleUiAdapter,
-  'patchPromptDraft' | 'patchValues' | 'reportError' | 'touchGalleryImages'
->;
+export type UpscaleUiActions = Pick<UpscaleUiAdapter, 'patchPromptDraft' | 'patchValues' | 'reportError'>;
 
 const UpscaleUiContext = createContext<UpscaleUiAdapter | null>(null);
 /**
@@ -35,10 +31,10 @@ const UpscaleUiContext = createContext<UpscaleUiAdapter | null>(null);
 const UpscaleUiActionsContext = createContext<UpscaleUiActions | null>(null);
 
 export const UpscaleUiProvider = ({ adapter, children }: { adapter: UpscaleUiAdapter; children: ReactNode }) => {
-  const { patchPromptDraft, patchValues, reportError, touchGalleryImages } = adapter;
+  const { patchPromptDraft, patchValues, reportError } = adapter;
   const actions = useMemo<UpscaleUiActions>(
-    () => ({ patchPromptDraft, patchValues, reportError, touchGalleryImages }),
-    [patchPromptDraft, patchValues, reportError, touchGalleryImages]
+    () => ({ patchPromptDraft, patchValues, reportError }),
+    [patchPromptDraft, patchValues, reportError]
   );
 
   return (

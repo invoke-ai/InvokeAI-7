@@ -1,9 +1,11 @@
 import type { CanvasDocumentSnapshot, LayerExportGuard } from '@workbench/canvas-engine/capabilities';
-import type { CanvasStateContractV2 } from '@workbench/canvas-engine/contracts';
+import type { CanvasStateContractV3, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
 import type { ExportLayerPixelsResult } from '@workbench/canvas-engine/controllers/rasterExportController';
 import type { RasterSurface } from '@workbench/canvas-engine/render/raster';
 
 import { RasterMemoryBudgetController } from '@workbench/canvas-engine/controllers/rasterMemoryBudgetController';
+import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
+import { getDocumentLeaves } from '@workbench/canvas-engine/document/documentIndex';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createRasterSnapshotCapture, type CreateRasterSnapshotCaptureDeps } from './rasterSnapshotCapture';
@@ -26,8 +28,10 @@ const imageLayer = (id: string, size = 4) => ({
   type: 'raster',
 });
 
-const canvasState = (layerIds: readonly string[] = ['a']): CanvasStateContractV2 =>
-  ({ document: { layers: layerIds.map((id) => imageLayer(id)) } }) as unknown as CanvasStateContractV2;
+const canvasState = (layerIds: readonly string[] = ['a']): CanvasStateContractV3 =>
+  ({
+    document: { stacks: stacksFrom(layerIds.map((id) => imageLayer(id) as unknown as CanvasLayerContract)) },
+  }) as unknown as CanvasStateContractV3;
 
 const guard = (layerId: string): LayerExportGuard => ({ layerId }) as LayerExportGuard;
 
@@ -43,7 +47,7 @@ const okPixels = (layerId: string, size = 4): ExportLayerPixelsResult => ({
 interface Harness {
   deps: CreateRasterSnapshotCaptureDeps;
   state: {
-    canvas: CanvasStateContractV2 | null;
+    canvas: CanvasStateContractV3 | null;
     contentEpoch: number;
     disposed: boolean;
     documentGeneration: number;
@@ -57,7 +61,7 @@ let harness: Harness;
 
 const makeHarness = (overrides: Partial<CreateRasterSnapshotCaptureDeps> = {}): Harness => {
   const state = {
-    canvas: canvasState() as CanvasStateContractV2 | null,
+    canvas: canvasState() as CanvasStateContractV3 | null,
     contentEpoch: 0,
     disposed: false,
     documentGeneration: 1,
@@ -93,7 +97,7 @@ describe('captureDocumentSnapshot', () => {
   it('clones the canvas rather than aliasing it', () => {
     const snapshot = createRasterSnapshotCapture(harness.deps).captureDocumentSnapshot();
     expect(snapshot?.canvas).not.toBe(harness.state.canvas);
-    expect(snapshot?.canvas.document.layers[0]?.id).toBe('a');
+    expect(getDocumentLeaves(snapshot?.canvas.document)[0]?.id).toBe('a');
   });
 
   it('refuses once disposed, and when there is no canvas', () => {
@@ -143,6 +147,33 @@ describe('isDocumentSnapshotCurrent', () => {
 });
 
 describe('captureRasterSnapshot', () => {
+  it('holds and releases the purpose-built trim guard around live pixel capture', async () => {
+    let resolveRasterize!: (result: ExportLayerPixelsResult) => void;
+    const rasterizeLayerPixels = vi.fn(
+      () =>
+        new Promise<ExportLayerPixelsResult>((resolve) => {
+          resolveRasterize = resolve;
+        })
+    );
+    const releaseTrimPin = vi.fn();
+    const pinForTrim = vi.fn(() => ({ release: releaseTrimPin }));
+    const guarded = makeHarness({ pinForTrim, rasterizeLayerPixels });
+    const capture = createRasterSnapshotCapture(guarded.deps);
+    const snapshot = capture.captureDocumentSnapshot()!;
+
+    const pending = capture.captureRasterSnapshot(snapshot, ['a']);
+    expect(pinForTrim).toHaveBeenCalledWith('a', 0);
+    expect(releaseTrimPin).not.toHaveBeenCalled();
+
+    const pixels = okPixels('a');
+    if (pixels.status === 'ok') {
+      guarded.currentGuards.add(pixels.guard);
+    }
+    resolveRasterize(pixels);
+    await expect(pending).resolves.toMatchObject({ status: 'ok' });
+    expect(releaseTrimPin).toHaveBeenCalledOnce();
+  });
+
   it('detaches a surface per layer and reports the empty ones separately', async () => {
     harness.state.canvas = canvasState(['a', 'b']);
     harness.rasterize.mockImplementation((layerId: string) => {
@@ -214,8 +245,12 @@ describe('captureRasterSnapshot', () => {
 
   it('refuses a layer whose source cannot be exported', async () => {
     harness.state.canvas = {
-      document: { layers: [{ ...imageLayer('a'), source: { kind: 'polygon', type: 'shape' } }] },
-    } as unknown as CanvasStateContractV2;
+      document: {
+        stacks: stacksFrom([
+          { ...imageLayer('a'), source: { kind: 'polygon', type: 'shape' } } as unknown as CanvasLayerContract,
+        ]),
+      },
+    } as unknown as CanvasStateContractV3;
     const capture = createRasterSnapshotCapture(harness.deps);
     const snapshot = capture.captureDocumentSnapshot()!;
     expect((await capture.captureRasterSnapshot(snapshot, ['a'])).status).toBe('not-ready');

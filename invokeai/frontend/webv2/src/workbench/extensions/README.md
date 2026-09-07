@@ -12,13 +12,14 @@ The workbench shell is now structured around widget types and widget instances.
 Widgets should provide component icons, not icon IDs or import strings:
 
 ```tsx
+import type { WidgetManifest } from '@workbench/widgetContracts';
 import { LayersIcon } from 'lucide-react';
+import { layerSettingsContribution } from './settingsContribution';
 
-export const manifest = {
+export const manifest: WidgetManifest = {
   id: 'invoke.layers',
   version: 1,
   label: 'Layers',
-  labelText: 'Layers',
   icon: LayersIcon,
   allowedRegions: ['right'],
   allowMultiple: false,
@@ -27,11 +28,23 @@ export const manifest = {
     persistence: 'project',
     createInitial: () => ({}),
   },
-  view: LayersWidgetView,
+  load: () => import('./implementation'),
+  settings: layerSettingsContribution,
+  failurePolicy: { isolateRenderFailure: true, onRegistrationFailure: 'disable' },
 };
 ```
 
 Third-party widgets should ship icons as JSX/SVG components in their compiled widget bundle.
+
+## Settings contributions
+
+The optional `settings` contribution declares fields once and exposes a `quick` array of field IDs for the compact popover. All fields appear in the widget's full settings section and participate in search. A manifest with quick fields gets a shell-rendered popover and an “All settings” link; one without quick fields opens the full section directly. Widgets without preferences omit the contribution and the gear.
+
+Field metadata includes stable IDs, localized labels, optional descriptions/groups/search aliases, control type/options, and storage scope. The deferred `load` returns a `Field` binding, which receives the field, presentation surface, and resolved project/instance target. Bindings use the owning module's reads and commands and the shared Platform `SettingControl`. They must not create a widget view or engine merely to edit a preference. Complex editors use the custom field kind and remain searchable as destinations.
+
+Optional `WidgetImplementation.settingsActions` contributes owner-rendered actions below quick preferences, such as Canvas diagnostics. These remain actions with their own availability checks rather than persisted fields. Ordinary widget header actions remain available independently of settings.
+
+The settings catalog is composed from first-party manifests, not live instance registration, so preferences remain discoverable when a widget is closed. A missing project or instance is an explicit unavailable state, not a request to create one. Settings navigation carries the originating instance and returns focus to its gear after closing.
 
 ## Discovery Options
 

@@ -3,8 +3,11 @@ import type { TextEditSession } from '@workbench/canvas-engine/api';
 import type { CanvasEngineHandle } from '@workbench/widgets/canvas/useCanvasEngine';
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent } from 'react';
 
+import { useNotify } from '@workbench/useNotify';
 import { useTextEditSession } from '@workbench/widgets/canvas/engineStoreHooks';
+import { reportStructuralCommit } from '@workbench/widgets/canvas/useStructuralCommit';
 import { useCallback, useSyncExternalStore } from 'react';
+import { useTranslation } from 'react-i18next';
 
 type TextEditEngine = Pick<CanvasEngineHandle, 'interaction' | 'layers' | 'viewport'>;
 
@@ -101,12 +104,18 @@ const TextEditable = ({ engine, session }: TextEditableProps) => {
     [engine, source.content]
   );
 
-  const onBlur = useCallback(
-    (event: { currentTarget: HTMLElement }) => {
-      engine.layers.commitTextEdit(readEditableText(event.currentTarget));
+  const notify = useNotify();
+  const { t } = useTranslation();
+  const commit = useCallback(
+    (element: HTMLElement) => {
+      const result = engine.layers.commitTextEdit(readEditableText(element));
+      if (result) {
+        reportStructuralCommit(result, notify.error, t);
+      }
     },
-    [engine]
+    [engine, notify, t]
   );
+  const onBlur = useCallback((event: { currentTarget: HTMLElement }) => commit(event.currentTarget), [commit]);
 
   const onKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLDivElement>) => {
@@ -119,10 +128,10 @@ const TextEditable = ({ engine, session }: TextEditableProps) => {
       }
       if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
         event.preventDefault();
-        engine.layers.commitTextEdit(readEditableText(event.currentTarget));
+        commit(event.currentTarget);
       }
     },
-    [engine]
+    [commit, engine]
   );
 
   const origin = viewport.documentToScreen({ x: transform.x, y: transform.y });

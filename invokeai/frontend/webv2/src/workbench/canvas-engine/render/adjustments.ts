@@ -1,7 +1,4 @@
-import type { CanvasAdjustmentsContract } from '@workbench/canvas-engine/contracts';
-
-/** The identity adjustment (no brightness/contrast/saturation, no curves). */
-export const DEFAULT_ADJUSTMENTS: CanvasAdjustmentsContract = { brightness: 0, contrast: 0, saturation: 0 };
+import type { CanvasAdjustmentEntry, CanvasAdjustmentsContract } from '@workbench/canvas-engine/contracts';
 
 const LUT_SIZE = 256;
 
@@ -121,92 +118,258 @@ export const buildCurveLut = (points: CurvePoints | undefined): Uint8ClampedArra
   return lut;
 };
 
+/** True when `entry` cannot change a pixel, regardless of enablement. */
+export const isIdentityAdjustmentEntry = (entry: CanvasAdjustmentEntry): boolean => {
+  switch (entry.type) {
+    case 'brightness-contrast':
+      return entry.brightness === 0 && entry.contrast === 0;
+    case 'exposure':
+      return entry.stops === 0;
+    case 'levels':
+      return (
+        entry.inBlack === 0 &&
+        entry.inWhite === 255 &&
+        entry.gamma === 1 &&
+        entry.outBlack === 0 &&
+        entry.outWhite === 255
+      );
+    case 'hsl':
+      return entry.saturation === 0;
+    case 'hue':
+      return entry.rotation % 360 === 0;
+    case 'invert':
+      return false;
+    case 'curves':
+      return isIdentityCurve(entry.curves.r) && isIdentityCurve(entry.curves.g) && isIdentityCurve(entry.curves.b);
+  }
+};
+
+const contributes = (entry: CanvasAdjustmentEntry): boolean => entry.isEnabled && !isIdentityAdjustmentEntry(entry);
+
+/** True when the stack is a no-op: empty, or only disabled/identity entries. */
+export const isIdentityAdjustments = (adjustments: CanvasAdjustmentsContract | undefined): boolean =>
+  !adjustments || adjustments.every((entry) => !contributes(entry));
+
 /**
- * Builds the composed per-channel LUTs for `adjustments`:
- * `contrast(brightness(curve(i)))`, clamped to `[0, 255]`. Brightness/contrast are
- * shared across channels; the curve is per-channel.
+ * One step of the compiled pixel pass. Per-channel entries fold into LUT
+ * segments (adjacent ones compose into ONE lut); saturation and hue are
+ * cross-channel and stand alone.
  */
-export const buildAdjustmentLuts = (
-  adjustments: CanvasAdjustmentsContract
-): { r: Uint8ClampedArray; g: Uint8ClampedArray; b: Uint8ClampedArray } => {
-  const brightnessOffset = (adjustments.brightness ?? 0) * 255;
-  const contrastFactor = 1 + (adjustments.contrast ?? 0);
-  const curves = adjustments.curves;
-
-  const compose = (curveLut: Uint8ClampedArray): Uint8ClampedArray => {
-    const out = new Uint8ClampedArray(LUT_SIZE);
-    for (let i = 0; i < LUT_SIZE; i++) {
-      const curved = curveLut[i];
-      const brightened = curved + brightnessOffset;
-      const contrasted = (brightened - 128) * contrastFactor + 128;
-      out[i] = clamp255(Math.round(contrasted));
+export type CompiledAdjustmentSegment =
+  | {
+      readonly kind: 'lut';
+      readonly r: Uint8ClampedArray;
+      readonly g: Uint8ClampedArray;
+      readonly b: Uint8ClampedArray;
     }
-    return out;
-  };
+  | { readonly kind: 'saturation'; readonly factor: number }
+  | { readonly kind: 'matrix'; readonly m: readonly number[] };
 
-  return {
-    b: compose(buildCurveLut(curves?.b)),
-    g: compose(buildCurveLut(curves?.g)),
-    r: compose(buildCurveLut(curves?.r)),
-  };
+const brightnessContrastLut = (brightness: number, contrast: number): Uint8ClampedArray => {
+  const offset = brightness * 255;
+  const factor = 1 + contrast;
+  const lut = new Uint8ClampedArray(LUT_SIZE);
+  for (let i = 0; i < LUT_SIZE; i++) {
+    lut[i] = clamp255(Math.round((i + offset - 128) * factor + 128));
+  }
+  return lut;
 };
 
-/** True when `adjustments` is a no-op (identity brightness/contrast/saturation + identity curves). */
-export const isIdentityAdjustments = (adjustments: CanvasAdjustmentsContract | undefined): boolean => {
-  if (!adjustments) {
-    return true;
+const levelsLut = (entry: Extract<CanvasAdjustmentEntry, { type: 'levels' }>): Uint8ClampedArray => {
+  const inSpan = Math.max(1, entry.inWhite - entry.inBlack);
+  const outSpan = entry.outWhite - entry.outBlack;
+  const exponent = 1 / Math.max(0.01, entry.gamma);
+  const lut = new Uint8ClampedArray(LUT_SIZE);
+  for (let i = 0; i < LUT_SIZE; i++) {
+    const normalized = Math.min(1, Math.max(0, (i - entry.inBlack) / inSpan));
+    lut[i] = clamp255(Math.round(entry.outBlack + Math.pow(normalized, exponent) * outSpan));
   }
-  if ((adjustments.brightness ?? 0) !== 0 || (adjustments.contrast ?? 0) !== 0 || (adjustments.saturation ?? 0) !== 0) {
-    return false;
-  }
-  const { curves } = adjustments;
-  if (!curves) {
-    return true;
-  }
-  return isIdentityCurve(curves.r) && isIdentityCurve(curves.g) && isIdentityCurve(curves.b);
+  return lut;
 };
 
-/** A deterministic cache key fully identifying an adjustment's pixel effect. */
+const invertLut = (): Uint8ClampedArray => {
+  const lut = new Uint8ClampedArray(LUT_SIZE);
+  for (let i = 0; i < LUT_SIZE; i++) {
+    lut[i] = 255 - i;
+  }
+  return lut;
+};
+
+const srgbToLinear = (v: number): number => (v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4));
+const linearToSrgb = (v: number): number => (v <= 0.0031308 ? v * 12.92 : 1.055 * Math.pow(v, 1 / 2.4) - 0.055);
+
+/** True exposure: 2^stops in linear light, not a gamma-space brightness multiply. */
+const exposureLut = (stops: number): Uint8ClampedArray => {
+  const factor = Math.pow(2, stops);
+  const lut = new Uint8ClampedArray(LUT_SIZE);
+  for (let i = 0; i < LUT_SIZE; i++) {
+    lut[i] = clamp255(Math.round(linearToSrgb(Math.min(1, srgbToLinear(i / 255) * factor)) * 255));
+  }
+  return lut;
+};
+
+const identityLut = (): Uint8ClampedArray => {
+  const lut = new Uint8ClampedArray(LUT_SIZE);
+  for (let i = 0; i < LUT_SIZE; i++) {
+    lut[i] = i;
+  }
+  return lut;
+};
+
+/** The SVG feColorMatrix `hueRotate` matrix: luminance-preserving rotation around the gray axis. */
+const hueRotateMatrix = (degrees: number): number[] => {
+  const radians = (degrees * Math.PI) / 180;
+  const cos = Math.cos(radians);
+  const sin = Math.sin(radians);
+  return [
+    0.213 + cos * 0.787 - sin * 0.213,
+    0.715 - cos * 0.715 - sin * 0.715,
+    0.072 - cos * 0.072 + sin * 0.928,
+    0.213 - cos * 0.213 + sin * 0.143,
+    0.715 + cos * 0.285 + sin * 0.14,
+    0.072 - cos * 0.072 - sin * 0.283,
+    0.213 - cos * 0.213 - sin * 0.787,
+    0.715 - cos * 0.715 + sin * 0.715,
+    0.072 + cos * 0.928 + sin * 0.072,
+  ];
+};
+
+/** `outer` applied after `inner`, folded into one table. */
+const composeLut = (inner: Uint8ClampedArray, outer: Uint8ClampedArray): Uint8ClampedArray => {
+  const lut = new Uint8ClampedArray(LUT_SIZE);
+  for (let i = 0; i < LUT_SIZE; i++) {
+    lut[i] = outer[inner[i]];
+  }
+  return lut;
+};
+
+const entryLuts = (
+  entry: Extract<CanvasAdjustmentEntry, { type: 'brightness-contrast' | 'exposure' | 'levels' | 'invert' | 'curves' }>
+): { r: Uint8ClampedArray; g: Uint8ClampedArray; b: Uint8ClampedArray } => {
+  if (entry.type === 'curves') {
+    return { b: buildCurveLut(entry.curves.b), g: buildCurveLut(entry.curves.g), r: buildCurveLut(entry.curves.r) };
+  }
+  if (entry.type === 'levels') {
+    const lut = levelsLut(entry);
+    const channel = entry.channel ?? 'rgb';
+    if (channel === 'rgb') {
+      return { b: lut, g: lut, r: lut };
+    }
+    return {
+      b: channel === 'b' ? lut : identityLut(),
+      g: channel === 'g' ? lut : identityLut(),
+      r: channel === 'r' ? lut : identityLut(),
+    };
+  }
+  const lut =
+    entry.type === 'brightness-contrast'
+      ? brightnessContrastLut(entry.brightness, entry.contrast)
+      : entry.type === 'exposure'
+        ? exposureLut(entry.stops)
+        : invertLut();
+  return { b: lut, g: lut, r: lut };
+};
+
+/**
+ * Compiles the stack into the fewest segments that reproduce it in order:
+ * enabled non-identity entries only, adjacent per-channel entries folded into
+ * one LUT trio. The empty result means identity.
+ */
+export const compileAdjustments = (adjustments: CanvasAdjustmentsContract | undefined): CompiledAdjustmentSegment[] => {
+  const segments: CompiledAdjustmentSegment[] = [];
+  for (const entry of adjustments ?? []) {
+    if (!contributes(entry)) {
+      continue;
+    }
+    if (entry.type === 'hsl') {
+      segments.push({ factor: 1 + entry.saturation, kind: 'saturation' });
+      continue;
+    }
+    if (entry.type === 'hue') {
+      segments.push({ kind: 'matrix', m: hueRotateMatrix(entry.rotation) });
+      continue;
+    }
+    const luts = entryLuts(entry);
+    const last = segments[segments.length - 1];
+    if (last?.kind === 'lut') {
+      segments[segments.length - 1] = {
+        b: composeLut(last.b, luts.b),
+        g: composeLut(last.g, luts.g),
+        kind: 'lut',
+        r: composeLut(last.r, luts.r),
+      };
+    } else {
+      segments.push({ ...luts, kind: 'lut' });
+    }
+  }
+  return segments;
+};
+
+/** A deterministic cache key fully identifying the stack's pixel effect; entry ids do not affect it. */
 export const adjustmentsKey = (adjustments: CanvasAdjustmentsContract | undefined): string => {
-  if (isIdentityAdjustments(adjustments)) {
+  const active = (adjustments ?? []).filter(contributes);
+  if (active.length === 0) {
     return 'identity';
   }
-  const a = adjustments as CanvasAdjustmentsContract;
   const curveKey = (pts: CurvePoints | undefined): string =>
     pts && pts.length > 0 ? pts.map(([x, y]) => `${x},${y}`).join(';') : '-';
-  return [
-    `b${a.brightness ?? 0}`,
-    `c${a.contrast ?? 0}`,
-    `s${a.saturation ?? 0}`,
-    `r:${curveKey(a.curves?.r)}`,
-    `g:${curveKey(a.curves?.g)}`,
-    `bl:${curveKey(a.curves?.b)}`,
-  ].join('|');
+  return active
+    .map((entry) => {
+      switch (entry.type) {
+        case 'brightness-contrast':
+          return `bc:${entry.brightness},${entry.contrast}`;
+        case 'exposure':
+          return `ex:${entry.stops}`;
+        case 'levels':
+          // Unscoped entries keep their pre-`channel` key so caches survive.
+          return `lv:${entry.channel && entry.channel !== 'rgb' ? `${entry.channel}:` : ''}${entry.inBlack},${entry.inWhite},${entry.gamma},${entry.outBlack},${entry.outWhite}`;
+        case 'hsl':
+          return `s:${entry.saturation}`;
+        case 'hue':
+          return `h:${entry.rotation}`;
+        case 'invert':
+          return 'inv';
+        case 'curves':
+          return `cv:${curveKey(entry.curves.r)}|${curveKey(entry.curves.g)}|${curveKey(entry.curves.b)}`;
+      }
+    })
+    .join('||');
 };
 
 /**
- * Applies `adjustments` to `imageData` IN PLACE: the composed per-channel LUTs
- * remap R/G/B, then saturation lerps each channel toward its luma. Alpha is never
- * modified. A no-op for identity adjustments.
+ * Applies the stack to `imageData` IN PLACE in one pixel pass: the compiled
+ * segments run in order per pixel — LUT remaps, saturation luma lerps. Alpha
+ * is never modified. A no-op for an identity stack.
  */
 export const applyAdjustments = (imageData: ImageData, adjustments: CanvasAdjustmentsContract | undefined): void => {
-  if (isIdentityAdjustments(adjustments)) {
+  const segments = compileAdjustments(adjustments);
+  if (segments.length === 0) {
     return;
   }
-  const a = adjustments as CanvasAdjustmentsContract;
-  const { b: lutB, g: lutG, r: lutR } = buildAdjustmentLuts(a);
-  const sat = 1 + (a.saturation ?? 0);
-  const applySaturation = sat !== 1;
   const { data } = imageData;
   for (let i = 0; i + 3 < data.length; i += 4) {
-    let r = lutR[data[i]];
-    let g = lutG[data[i + 1]];
-    let b = lutB[data[i + 2]];
-    if (applySaturation) {
-      const lum = LUMA_R * r + LUMA_G * g + LUMA_B * b;
-      r = clamp255(Math.round(lum + (r - lum) * sat));
-      g = clamp255(Math.round(lum + (g - lum) * sat));
-      b = clamp255(Math.round(lum + (b - lum) * sat));
+    let r = data[i];
+    let g = data[i + 1];
+    let b = data[i + 2];
+    for (const segment of segments) {
+      if (segment.kind === 'lut') {
+        r = segment.r[r];
+        g = segment.g[g];
+        b = segment.b[b];
+      } else if (segment.kind === 'saturation') {
+        const lum = LUMA_R * r + LUMA_G * g + LUMA_B * b;
+        r = clamp255(Math.round(lum + (r - lum) * segment.factor));
+        g = clamp255(Math.round(lum + (g - lum) * segment.factor));
+        b = clamp255(Math.round(lum + (b - lum) * segment.factor));
+      } else {
+        const { m } = segment;
+        const nr = m[0] * r + m[1] * g + m[2] * b;
+        const ng = m[3] * r + m[4] * g + m[5] * b;
+        const nb = m[6] * r + m[7] * g + m[8] * b;
+        r = clamp255(Math.round(nr));
+        g = clamp255(Math.round(ng));
+        b = clamp255(Math.round(nb));
+      }
     }
     data[i] = r;
     data[i + 1] = g;

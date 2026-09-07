@@ -38,7 +38,13 @@ import {
   WAN_TI2V_PIXEL_MULTIPLE,
   type VideoDimensions,
 } from './dimensions';
-import { MIN_VIDEO_TRIM_FRAMES, resolveVideoMode, VIDEO_ASPECT_RATIO_IDS } from './settings';
+import {
+  applyReferenceExtendSourceVideo,
+  applyReferenceExtendNumFrames,
+  MIN_VIDEO_TRIM_FRAMES,
+  resolveVideoMode,
+  VIDEO_ASPECT_RATIO_IDS,
+} from './settings';
 
 // Video capabilities registry keyed by model base AND variant: unlike still-image
 // generation, Wan's variants differ structurally (which conditioning modes exist,
@@ -82,12 +88,20 @@ export interface VideoFpsPolicy {
 /**
  * The family's distillation fast path: which LoRA(s) it runs on and the
  * sampling parameters they were trained for. Wan A14B uses the Lightning
- * high/low pair; MiniMax H3 uses the single Turbo LoRA (the bundled H3
- * templates default to it at 6 steps).
+ * high/low pair; MiniMax H3 uses a single Turbo LoRA.
+ *
+ * `steps` is the count the family's reference LoRA was distilled for (the
+ * bundled H3 templates assume the 6-step repack). Releases trained for a
+ * different schedule are resolved per-LoRA by `getAcceleratorSteps`.
  */
 export interface VideoAcceleratorConfig {
   label: 'Lightning' | 'Turbo';
   steps: number;
+  /**
+   * Step counts for releases whose names carry no "N-step" token. First match
+   * wins; consulted only when the name does not state the count itself.
+   */
+  stepOverrides?: readonly { pattern: RegExp; steps: number }[];
   cfgScale: number;
   cfgScaleLowNoise: number | null;
 }
@@ -109,6 +123,8 @@ interface VideoVariantConfig {
   negativePrompt: { visible: boolean; usage: VideoNegativePromptUsage };
   accelerator: VideoAcceleratorConfig | null;
   audioOutput: boolean;
+  /** Ref2VA reference caps; present only on variants whose modes include 'reference'. */
+  references?: { maxVideos: number; maxImages: number; extend?: boolean };
 }
 
 export const WAN_LIGHTNING_ACCELERATOR: VideoAcceleratorConfig = {
@@ -118,11 +134,25 @@ export const WAN_LIGHTNING_ACCELERATOR: VideoAcceleratorConfig = {
   steps: 4,
 };
 
+// LightX2V's H3 release is distilled to 8 steps where the repack the templates
+// assume is 6, and only its *file* name says so — the starter installs it as
+// "MiniMax H3 LightX2V Turbo LoRA", so the org name is the signal that survives.
+const LIGHTX2V_PATTERN = /(?:^|[^a-z0-9])lightx2v(?:[^a-z0-9]|$)/i;
+
 export const MINIMAX_H3_TURBO_ACCELERATOR: VideoAcceleratorConfig = {
   cfgScale: 1,
   cfgScaleLowNoise: null,
   label: 'Turbo',
   steps: 6,
+  stepOverrides: [{ pattern: LIGHTX2V_PATTERN, steps: 8 }],
+};
+
+/** The Ref2VA-trained 4-step Turbo distillation (Comfy-Org's ref2v turbo repack). */
+export const MINIMAX_H3_REF2V_TURBO_ACCELERATOR: VideoAcceleratorConfig = {
+  cfgScale: 1,
+  cfgScaleLowNoise: null,
+  label: 'Turbo',
+  steps: 4,
 };
 
 const WAN_TARGET_RESOLUTION_OPTIONS: readonly VideoTargetResolutionOption[] = [
@@ -202,27 +232,59 @@ const MINIMAX_H3_FL2VA: VideoVariantConfig = {
   targetResolutions: MINIMAX_H3_TARGET_RESOLUTION_OPTIONS,
 };
 
+// The Ref2VA task transformer supports ONLY reference-conditioned generation (upstream
+// declares tasks: ["ref2va"]); everything else it inherits from the FL2VA panel policy.
+const MINIMAX_H3_REF2VA: VideoVariantConfig = {
+  ...MINIMAX_H3_FL2VA,
+  accelerator: MINIMAX_H3_REF2V_TURBO_ACCELERATOR,
+  modes: ['reference'],
+  // `extend` = reference-extend: an Initial Video the new clip is appended to,
+  // with a linked tail reference for continuity (no frame conditioning — the
+  // panel derives a reference from the clip instead).
+  references: { extend: true, maxImages: 9, maxVideos: 3 },
+};
+
 export const VIDEO_GENERATION: Record<
   SupportedVideoBase,
   { variants: Record<string, VideoVariantConfig>; fallback: VideoVariantConfig }
 > = {
-  'minimax-h3': { fallback: MINIMAX_H3_FL2VA, variants: { fl2va: MINIMAX_H3_FL2VA } },
+  // ref2va is REGISTERED, never the fallback: an unknown future variant may fall back to
+  // fl2va's config, but a known ref2va transformer must not silently get fl2va's modes.
+  'minimax-h3': { fallback: MINIMAX_H3_FL2VA, variants: { fl2va: MINIMAX_H3_FL2VA, ref2va: MINIMAX_H3_REF2VA } },
   wan: { fallback: WAN_FALLBACK_VARIANT, variants: WAN_VARIANTS },
 };
 
 export const SUPPORTED_VIDEO_BASES = Object.keys(VIDEO_GENERATION) as SupportedVideoBase[];
 
 /**
- * MiniMax H3 mains must be the Diffusers folder install — the loader sources
- * five of its six submodels from it; single-file H3 checkpoints are only usable
- * as the transformer override slot.
+ * A model the video panel can reason about at all: any Wan main, and MiniMax
+ * H3 mains in both shapes — the Diffusers folder install and the single-file
+ * transformer checkpoint. For H3 the checkpoint IS the model identity (its
+ * task variant decides the panel's mode); the Diffusers install supplies the
+ * five other submodels, either as the model itself (full install) or through
+ * the component-source slot (checkpoint main).
  */
 export const isSupportedVideoModel = <T extends { base: string; type: string; format?: string }>(
   model: T
 ): model is T & MainModelConfig =>
-  model.type === 'main' && (model.base === 'wan' || (model.base === 'minimax-h3' && model.format === 'diffusers'));
+  model.type === 'main' &&
+  (model.base === 'wan' ||
+    (model.base === 'minimax-h3' && (model.format === 'diffusers' || model.format === 'checkpoint')));
 
-export const isVideoModelSelectable = <T extends ModelConfig>(model: T): boolean => isSupportedVideoModel(model);
+/**
+ * What the top model selector offers — like the image Generate panel, the top
+ * pick is what decides the panel's UI, so it lists the identity-bearing models:
+ * H3 single-file transformers (either task variant) and full Diffusers
+ * installs. Excluded, though still "supported" for stored/recalled state:
+ * a components-only folder (no transformer weights — it belongs in the Model
+ * Components slot) and a Ref2VA Diffusers folder (its `transformer_ref`
+ * weights are not folder-loadable; the single-file checkpoint is the runnable
+ * form, with the folder serving as the component source).
+ */
+export const isVideoModelSelectable = <T extends ModelConfig>(model: T): boolean =>
+  isSupportedVideoModel(model) &&
+  !isComponentsOnlyH3Main(model) &&
+  !(model.base === 'minimax-h3' && model.format === 'diffusers' && model.variant === 'ref2va');
 
 /**
  * A slim MiniMax H3 folder install: tokenizer/processor/VAEs only, no
@@ -401,17 +463,23 @@ export interface VideoModelPolicy {
     negativeUsedInGraph: boolean;
     negativeHelpText?: string;
   };
+  /** Ref2VA reference caps; null unless the effective variant has a reference mode. */
+  references: { maxVideos: number; maxImages: number; extend?: boolean } | null;
   ui: {
     cfgVisible: boolean;
     cfgLowNoiseVisible: boolean;
     fpsVisible: boolean;
     /** The family's distillation fast path, or null when it has none. */
     accelerator: VideoAcceleratorConfig | null;
+    /** Steps for the fast path as currently configured, or null when it has none. */
+    acceleratorSteps: number | null;
     audioOutput: boolean;
   };
 }
 
 export const getVideoModelPolicy = (model: MainModelConfig | undefined, settings: VideoSettings): VideoModelPolicy => {
+  // The H3 task (fl2va vs ref2va) lives on the selected model itself: a
+  // single-file transformer checkpoint carries its own variant.
   const config = getVideoConfig(model);
 
   return {
@@ -424,9 +492,18 @@ export const getVideoModelPolicy = (model: MainModelConfig | undefined, settings
     modes: config.modes,
     pixelMultiple: config.pixelMultiple,
     prompt: getVideoPromptPolicy(model, settings),
+    references: config.references ?? null,
     targetResolutions: config.targetResolutions,
     ui: {
       accelerator: config.accelerator,
+      // The step count the help text quotes is the one the *running*
+      // accelerator LoRA was distilled for — with the 8-step LightX2V Turbo
+      // LoRA on, "6 steps" would be a lie. It is deliberately NOT folded into
+      // `accelerator`: that stays the family config, so callers can keep using
+      // it as the reference other counts are resolved against.
+      acceleratorSteps: config.accelerator
+        ? getAcceleratorSteps(config.accelerator, getRecordedAcceleratorLoras(settings))
+        : null,
       audioOutput: config.audioOutput,
       cfgLowNoiseVisible: config.cfg.lowNoiseVisible,
       cfgVisible: config.cfg.visible,
@@ -443,6 +520,23 @@ export interface WanLightningLoraPair {
   low: LoraModelConfig;
 }
 
+export interface FindAcceleratorLoraOptions {
+  /**
+   * Accept only LoRAs that also name the model family. Used when the candidate
+   * list is the user's own Concepts list rather than the installed catalog:
+   * there is no better-named release for a look-alike to lose to, so a
+   * personal "Turbo …" LoRA — or a T2V Lightning pair sitting on an I2V main —
+   * would otherwise be mistaken for a distillation fast path.
+   */
+  requireFamilyName?: boolean;
+}
+
+/** MiniMax H3 only: the task variant decides which Turbo distillation qualifies. */
+export interface FindMiniMaxH3TurboLoraOptions extends FindAcceleratorLoraOptions {
+  /** The effective model's variant; ref2va REQUIRES the ref2v-token repack, every other variant excludes it. */
+  variant?: string | null;
+}
+
 // "high"/"low" as standalone words. \b is useless here because release files
 // use underscores ("high_noise_model") where \w breaks no boundary, while a
 // plain word-suffix match swallows "Slow"/"Thigh" — so the token must be
@@ -454,10 +548,17 @@ const LOW_NOISE_PATTERN = /(?:^|[^a-z0-9])low(?:[^a-z0-9]|$)/i;
  * The installed Lightning LoRA pair for a Wan A14B main, if any. When pairs for
  * more than one family are installed (e.g. T2V and I2V releases), the one
  * naming the main's family wins; noise assignment comes from the model names.
+ *
+ * `requireFamilyName` drops the fallback and demands the family token, so a
+ * T2V pair is not read as a valid accelerator for an I2V main — the question
+ * asked when the candidates are LoRAs already in the panel rather than the
+ * catalog the toggle is free to pick from. With no family token to demand it
+ * matches nothing, leaving the answer to the catalog.
  */
 export const findWanLightningLoraPair = (
   models: readonly ModelConfig[],
-  mainVariant: string | null | undefined
+  mainVariant: string | null | undefined,
+  { requireFamilyName = false }: FindAcceleratorLoraOptions = {}
 ): WanLightningLoraPair | null => {
   const candidates = models.filter(
     (model): model is ModelConfig & LoraModelConfig =>
@@ -471,8 +572,14 @@ export const findWanLightningLoraPair = (
   const familyToken = typeof mainVariant === 'string' ? mainVariant.split('_')[0] : undefined;
   const familyPattern = familyToken ? new RegExp(`(?:^|[^a-z0-9])${familyToken}(?:[^a-z0-9]|$)`, 'i') : null;
   const score = (model: LoraModelConfig): number => (familyPattern?.test(model.name) ? 0 : 1);
+  // With `requireFamilyName` and no family token to check against (an unprobed
+  // Wan release on the fallback variant) there is nothing to verify, so this
+  // fails closed rather than accepting everything — the caller falls back to
+  // the catalog pick, which is a real answer.
   const pick = (pattern: RegExp): LoraModelConfig | null =>
-    candidates.filter((model) => pattern.test(model.name)).sort((a, b) => score(a) - score(b))[0] ?? null;
+    candidates
+      .filter((model) => pattern.test(model.name) && (!requireFamilyName || score(model) === 0))
+      .sort((a, b) => score(a) - score(b))[0] ?? null;
 
   const high = pick(HIGH_NOISE_PATTERN);
   const low = pick(LOW_NOISE_PATTERN);
@@ -482,44 +589,181 @@ export const findWanLightningLoraPair = (
 
 const TURBO_PATTERN = /(?:^|[^a-z0-9])turbo(?:[^a-z0-9]|$)/i;
 const MINIMAX_H3_NAME_PATTERN = /(?:^|[^a-z0-9])(?:minimax|h3)(?:[^a-z0-9]|$)/i;
+// Ref2VA-trained distillation LoRAs (delimited "ref2v"/"ref2va" token). They must never
+// auto-apply to an FL2VA generation - the Ref2V Turbo repack is trained against the Ref2VA
+// transformer only.
+const MINIMAX_H3_REF2V_PATTERN = /(?:^|[^a-z0-9])ref2va?(?:[^a-z0-9]|$)/i;
 
 /**
  * The installed MiniMax H3 Turbo distillation LoRA, if any. Distillation LoRAs
  * carry no dedicated taxonomy, so this is a name heuristic: a delimited
  * "turbo" token, preferring names that also name the model family, with a
  * deterministic tie-break — a user's own "Turbo …" style LoRA loses to the
- * real repack whenever one is installed.
+ * real repack whenever one is installed. Ref2VA-trained turbo LoRAs are
+ * excluded: the FL2VA accelerator must not pick them.
  */
-export const findMiniMaxH3TurboLora = (models: readonly ModelConfig[]): LoraModelConfig | null => {
+export const findMiniMaxH3TurboLora = (
+  models: readonly ModelConfig[],
+  { requireFamilyName = false, variant = 'fl2va' }: FindMiniMaxH3TurboLoraOptions = {}
+): LoraModelConfig | null => {
   const score = (model: LoraModelConfig): number => (MINIMAX_H3_NAME_PATTERN.test(model.name) ? 0 : 1);
+  // The task decides which distillation qualifies: ref2va REQUIRES the ref2v-token repack,
+  // every other variant excludes it — the two are trained against different transformers.
+  const matchesTask = (name: string): boolean =>
+    variant === 'ref2va' ? MINIMAX_H3_REF2V_PATTERN.test(name) : !MINIMAX_H3_REF2V_PATTERN.test(name);
 
   return (
     models
       .filter(
         (model): model is ModelConfig & LoraModelConfig =>
-          isLoraModelConfig(model) && model.base === 'minimax-h3' && TURBO_PATTERN.test(model.name)
+          isLoraModelConfig(model) &&
+          model.base === 'minimax-h3' &&
+          TURBO_PATTERN.test(model.name) &&
+          matchesTask(model.name) &&
+          (!requireFamilyName || MINIMAX_H3_NAME_PATTERN.test(model.name))
       )
       .sort((a, b) => score(a) - score(b) || a.name.localeCompare(b.name))[0] ?? null
   );
 };
 
-/** The accelerator LoRA entries for a model, or null when they are not installed. */
-const findAcceleratorLoraEntries = (model: MainModelConfig, models: readonly ModelConfig[]): GenerateLora[] | null => {
+/**
+ * The complete accelerator LoRA set contained in `candidates`, or null when it
+ * is not all there. The candidates are the installed catalog when asking what
+ * the toggle *would* run, and the user's own Concepts list when asking what is
+ * actually running. `model` must be the EFFECTIVE model: for MiniMax H3 the
+ * task variant (fl2va vs ref2va) decides which Turbo distillation qualifies.
+ */
+export const findAcceleratorLorasIn = (
+  model: MainModelConfig,
+  candidates: readonly ModelConfig[],
+  options: FindAcceleratorLoraOptions = {}
+): LoraModelConfig[] | null => {
   if (model.base === 'minimax-h3') {
-    const turbo = findMiniMaxH3TurboLora(models);
+    const turbo = findMiniMaxH3TurboLora(candidates, {
+      ...options,
+      variant: typeof model.variant === 'string' ? model.variant : 'fl2va',
+    });
 
-    return turbo ? [{ isEnabled: true, model: turbo, weight: 1 }] : null;
+    return turbo ? [turbo] : null;
   }
 
-  const pair = findWanLightningLoraPair(models, model.variant);
+  const pair = findWanLightningLoraPair(candidates, model.variant, options);
 
-  return pair
-    ? [
-        { isEnabled: true, model: pair.high, weight: 1 },
-        { isEnabled: true, model: pair.low, weight: 1 },
-      ]
-    : null;
+  return pair ? [pair.high, pair.low] : null;
 };
+
+// "4-step", "8 steps", "6step" — how a distillation release states the schedule
+// it was trained for. Two digits at most, so a checkpoint tag ("step600") or a
+// rank cannot be read as a step count.
+const STEP_COUNT_PATTERN = /(?:^|[^a-z0-9])(\d{1,2})[ _-]?steps?(?:[^a-z0-9]|$)/i;
+
+/**
+ * The step count one distillation LoRA was trained for. Its name is the only
+ * record of it: an explicit "N-step" token wins, then the family's per-release
+ * overrides, and failing both the family's reference count.
+ */
+const getLoraAcceleratorSteps = (config: VideoAcceleratorConfig, lora: LoraModelConfig): number => {
+  const stated = Number(STEP_COUNT_PATTERN.exec(lora.name)?.[1] ?? 0);
+
+  if (stated > 0) {
+    return stated;
+  }
+
+  return config.stepOverrides?.find((override) => override.pattern.test(lora.name))?.steps ?? config.steps;
+};
+
+/**
+ * The step count for a whole accelerator set. Both halves of a Wan Lightning
+ * pair state the same schedule; if a mismatched pair is ever assembled, the
+ * higher count is the safe pick — under-stepping is what reads as a broken
+ * model.
+ */
+export const getAcceleratorSteps = (config: VideoAcceleratorConfig, loras: readonly LoraModelConfig[]): number =>
+  loras.reduce((steps, lora) => Math.max(steps, getLoraAcceleratorSteps(config, lora)), 0) || config.steps;
+
+/** The LoRA models the user currently has switched on in the Concepts list. */
+const getEnabledLoraModels = (settings: Pick<VideoSettings, 'loras'>): LoraModelConfig[] =>
+  settings.loras.filter((lora) => lora.isEnabled).map((lora) => lora.model);
+
+/** The LoRA models the accelerator toggle recorded, as they stand in the list. */
+const getRecordedAcceleratorLoras = (
+  settings: Pick<VideoSettings, 'acceleratorEnabled' | 'acceleratorLoraKeys' | 'loras'>
+): LoraModelConfig[] => {
+  const recorded = new Set(settings.acceleratorLoraKeys);
+
+  return settings.acceleratorEnabled
+    ? settings.loras.filter((lora) => recorded.has(lora.model.key)).map((lora) => lora.model)
+    : [];
+};
+
+/**
+ * The complete accelerator set contained in `candidates`, judged the way the
+ * panel has to judge LoRAs the user is holding: one that names the model's own
+ * family, or failing that the very set the catalog would install. The
+ * family-name requirement keeps a personal "Turbo …" LoRA — or a T2V Lightning
+ * pair left over on an I2V main — from passing as a fast path; the catalog
+ * pick is exempt from it because it is what the toggle itself installs, odd
+ * name and all.
+ */
+const findAcceleratorAmong = (
+  model: MainModelConfig,
+  candidates: readonly LoraModelConfig[],
+  models: readonly ModelConfig[]
+): LoraModelConfig[] | null => {
+  const named = findAcceleratorLorasIn(model, candidates, { requireFamilyName: true });
+
+  if (named) {
+    return named;
+  }
+
+  const catalogPick = findAcceleratorLorasIn(model, models);
+
+  return catalogPick?.every((lora) => candidates.some((candidate) => candidate.key === lora.key)) ? catalogPick : null;
+};
+
+/**
+ * Whether the settings' recorded accelerator keys still name a complete set of
+ * enabled LoRAs that is a valid fast path *for this model* — the question both
+ * the model-switch reconcile and the Concepts-list reconcile turn on. Asked of
+ * the recorded keys alone, so with two Turbo LoRAs enabled the one the user
+ * anchored on keeps the fast path instead of losing it to a tie-break.
+ */
+const isRecordedAcceleratorIntact = (
+  settings: Pick<VideoSettings, 'acceleratorLoraKeys' | 'loras'>,
+  model: MainModelConfig,
+  models: readonly ModelConfig[],
+  config: VideoVariantConfig
+): boolean => {
+  const recorded = new Set(settings.acceleratorLoraKeys);
+
+  if (!config.accelerator || recorded.size === 0) {
+    return false;
+  }
+
+  // Deduplicated by key: a list holding the same LoRA twice (a hand-edited
+  // project file, metadata whose graph listed one twice) must not make this
+  // permanently false — the identity guarantee in `syncVideoWidgetValuesWithModels`
+  // depends on an unchanged value reaching the 'unchanged' outcome.
+  const live = [
+    ...new Map(
+      getEnabledLoraModels(settings)
+        .filter((lora) => recorded.has(lora.key))
+        .map((lora) => [lora.key, lora])
+    ).values(),
+  ];
+
+  return live.length === recorded.size && findAcceleratorAmong(model, live, models)?.length === recorded.size;
+};
+
+/**
+ * The accelerator LoRA entries for a model, or null when they are not
+ * installed. Deliberately catalog-only: the family name test is all that
+ * separates a distillation LoRA from any other, and "MiniMax H3 …" is how a
+ * user names their OWN H3 LoRA too, so letting the panel's list steer this
+ * would let the toggle arm itself on a LoRA with no distillation in it.
+ */
+const findAcceleratorLoraEntries = (model: MainModelConfig, models: readonly ModelConfig[]): GenerateLora[] | null =>
+  findAcceleratorLorasIn(model, models)?.map((lora) => ({ isEnabled: true, model: lora, weight: 1 })) ?? null;
 
 export interface AcceleratorToggleResult {
   settings: VideoSettings;
@@ -583,7 +827,86 @@ export const getAcceleratorToggleResult = (
         ...withoutAccelerators.filter((lora) => !entries.some((e) => e.model.key === lora.model.key)),
         ...entries,
       ],
-      steps: config.accelerator.steps,
+      steps: getAcceleratorSteps(
+        config.accelerator,
+        entries.map((entry) => entry.model)
+      ),
+    },
+  };
+};
+
+export type AcceleratorLoraChangeOutcome = 'unchanged' | 'switched' | 'disabled';
+
+export interface AcceleratorLoraChangeResult {
+  settings: VideoSettings;
+  outcome: AcceleratorLoraChangeOutcome;
+  /** The LoRA set now driving the fast path — only set when `outcome` is 'switched'. */
+  acceleratorLoras: LoraModelConfig[] | null;
+}
+
+/**
+ * Re-reads the fast path from the Concepts list after it changes. The flag has
+ * to describe what is actually enabled, so swapping one Turbo LoRA for another
+ * keeps the fast path — re-anchored on the new LoRA, at the step count *it*
+ * was distilled for — instead of tearing it down. Only a list with no complete
+ * accelerator left in it turns the toggle off and restores the model's own
+ * sampling defaults: a silent 6-step run with no distillation LoRA behind it
+ * just reads as a broken model.
+ *
+ * Strictly a repair of a fast path that is already ON. An off accelerator is
+ * never armed by a list edit, however accelerator-shaped the LoRA that lands
+ * in it looks: the name heuristic cannot tell a distillation release from a
+ * user's own "… Turbo …" LoRA, and arming on it would silently drop a
+ * hand-tuned step count onto a LoRA that does not support it.
+ */
+export const getAcceleratorLoraChangeResult = (
+  settings: VideoSettings,
+  model: MainModelConfig,
+  models: readonly ModelConfig[],
+  loras: GenerateLora[]
+): AcceleratorLoraChangeResult => {
+  // The two H3 tasks (fl2va vs ref2va) have different accelerators; the task
+  // lives on the selected model's own variant.
+  const config = getVideoConfig(model);
+  const next: VideoSettings = { ...settings, loras };
+
+  // Nothing to repair, and nothing this function is allowed to start.
+  if (!settings.acceleratorEnabled) {
+    return { acceleratorLoras: null, outcome: 'unchanged', settings: next };
+  }
+
+  // The recorded set is still running: leave everything the user tuned alone.
+  if (isRecordedAcceleratorIntact(next, model, models, config)) {
+    return { acceleratorLoras: null, outcome: 'unchanged', settings: next };
+  }
+
+  const replacement = config.accelerator ? findAcceleratorAmong(model, getEnabledLoraModels(next), models) : null;
+
+  if (replacement && config.accelerator) {
+    return {
+      acceleratorLoras: replacement,
+      outcome: 'switched',
+      settings: {
+        ...next,
+        acceleratorEnabled: true,
+        acceleratorLoraKeys: replacement.map((lora) => lora.key),
+        cfgScale: config.accelerator.cfgScale,
+        cfgScaleLowNoise: config.accelerator.cfgScaleLowNoise,
+        steps: getAcceleratorSteps(config.accelerator, replacement),
+      },
+    };
+  }
+
+  return {
+    acceleratorLoras: null,
+    outcome: 'disabled',
+    settings: {
+      ...next,
+      acceleratorEnabled: false,
+      acceleratorLoraKeys: [],
+      cfgScale: config.defaults.cfgScale,
+      cfgScaleLowNoise: config.defaults.cfgScaleLowNoise,
+      steps: config.defaults.steps,
     },
   };
 };
@@ -773,41 +1096,79 @@ export const getVideoComponentSectionPolicy = (
     return createComponentPolicy(model.format !== 'diffusers', slots);
   }
 
-  // MiniMax H3: a full Diffusers install bundles everything, so both slots
-  // are optional single-file overrides (e.g. the int8 repacks). A slim
-  // "components-only" install (tokenizer/processor/VAEs without transformer
-  // or text-encoder weights — the backend probe records `components_only`)
-  // REQUIRES both overrides: without this gate Invoke enables and the loader
-  // fails minutes into the run.
-  const componentsOnly = isComponentsOnlyH3Main(model);
+  // MiniMax H3. The top model selection carries the task identity (its variant
+  // decides the panel's generation mode); this section supplies what that
+  // selection does not bundle:
+  // - a single-file transformer checkpoint at top REQUIRES a Diffusers H3
+  //   install in the Model Components slot (tokenizer/processor/VAEs come from
+  //   it — full and components-only installs both qualify), plus the
+  //   single-file Qwen3-VL encoder when that install is components-only;
+  // - a full Diffusers install at top bundles everything, so only the optional
+  //   text-encoder override is offered.
+  if (model.format === 'diffusers') {
+    // A components-only install can still sit at top as legacy stored state
+    // (it is no longer selectable); validation steers the user to pick a
+    // single-file transformer as the model, and the encoder slot stays
+    // required so the panel keeps showing what the install cannot provide.
+    const componentsOnly = isComponentsOnlyH3Main(model);
 
-  return createComponentPolicy(componentsOnly, [
+    return createComponentPolicy(componentsOnly, [
+      {
+        filter: (candidate) => candidate.type === 'qwen3_vl_encoder' && candidate.base === 'minimax-h3',
+        helpText: componentsOnly
+          ? 'Required: this install has no text-encoder weights, so the text encoder must come from a single-file Qwen3-VL checkpoint.'
+          : 'Optional single-file Qwen3-VL encoder used in place of the main model’s text encoder.',
+        key: 'h3TextEncoderModel',
+        label: 'Text encoder (single file)',
+        missingMessage: `${model.name} is a components-only install — select a single-file Text encoder.`,
+        modelTypes: ['qwen3_vl_encoder'],
+        required: componentsOnly ? () => true : undefined,
+        valueKind: 'component',
+      },
+    ]);
+  }
+
+  return createComponentPolicy(true, [
     {
       filter: (candidate) =>
-        candidate.type === 'main' && candidate.base === 'minimax-h3' && candidate.format === 'checkpoint',
-      helpText: componentsOnly
-        ? 'Required: this main model is a components-only install, so the transformer must come from a single-file checkpoint (e.g. pruned int8).'
-        : 'Optional single-file transformer (e.g. pruned int8) used in place of the main model’s transformer.',
-      key: 'h3TransformerModel',
-      label: 'Transformer (single file)',
-      missingMessage: `${model.name} is a components-only install — select a single-file Transformer.`,
+        candidate.type === 'main' && candidate.base === 'minimax-h3' && candidate.format === 'diffusers',
+      helpText:
+        'Required: a Diffusers MiniMax H3 install (full or components-only) provides the tokenizer, processor, and VAEs the single-file transformer does not carry.',
+      key: 'componentSourceModel',
+      label: 'Model components',
+      missingMessage: `${model.name} is a single-file transformer — select a Diffusers MiniMax H3 install under Model Components.`,
       modelTypes: ['main'],
-      required: componentsOnly ? () => true : undefined,
+      required: () => true,
       valueKind: 'main',
     },
     {
       filter: (candidate) => candidate.type === 'qwen3_vl_encoder' && candidate.base === 'minimax-h3',
-      helpText: componentsOnly
-        ? 'Required: this main model is a components-only install, so the text encoder must come from a single-file Qwen3-VL checkpoint.'
-        : 'Optional single-file Qwen3-VL encoder used in place of the main model’s text encoder.',
+      helpText:
+        'Required when the Model Components install is components-only (no text-encoder weights); a full install provides its own.',
       key: 'h3TextEncoderModel',
       label: 'Text encoder (single file)',
-      missingMessage: `${model.name} is a components-only install — select a single-file Text encoder.`,
+      missingMessage:
+        'The selected Model Components install has no text-encoder weights — select a single-file Text encoder.',
       modelTypes: ['qwen3_vl_encoder'],
-      required: componentsOnly ? () => true : undefined,
+      required: (ctx) => !isH3TextEncoderSatisfied(ctx),
       valueKind: 'component',
     },
   ]);
+};
+
+/** The H3 Diffusers install a checkpoint main draws its components from, if a valid one is selected. */
+const getH3ComponentSource = (ctx: VideoComponentPolicyContext): MainModelConfig | null => {
+  const source = ctx.settings.componentSourceModel;
+
+  return source && source.base === 'minimax-h3' && source.format === 'diffusers' ? source : null;
+};
+
+// A full Diffusers source carries text-encoder weights; a components-only one
+// does not, so the single-file Qwen3-VL override becomes required.
+const isH3TextEncoderSatisfied = (ctx: VideoComponentPolicyContext): boolean => {
+  const source = getH3ComponentSource(ctx);
+
+  return source !== null && !isComponentsOnlyH3Main(source);
 };
 
 const getVideoComponentPolicyContext = (
@@ -888,6 +1249,22 @@ export const getWanExpertWiringWarning = (
 // ---------------------------------------------------------------------------
 // Defaults & model-selection transitions
 
+/**
+ * The H3 Diffusers install a single-file transformer main should draw its
+ * components from. A full install is preferred (it also covers the text
+ * encoder); a components-only folder qualifies otherwise. Used to seed
+ * defaults/reset and to fill an empty slot on model selection — a checkpoint
+ * main is un-invokable without one.
+ */
+const findH3ComponentSource = (models: readonly ModelConfig[]): MainModelConfig | null => {
+  const candidates = models.filter(
+    (candidate): candidate is ModelConfig & MainModelConfig =>
+      candidate.type === 'main' && candidate.base === 'minimax-h3' && candidate.format === 'diffusers'
+  );
+
+  return candidates.find((candidate) => !isComponentsOnlyH3Main(candidate)) ?? candidates[0] ?? null;
+};
+
 export const getDefaultVideoSettings = (
   model?: MainModelConfig,
   models: readonly ModelConfig[] = []
@@ -901,7 +1278,11 @@ export const getDefaultVideoSettings = (
     batchCount: 1,
     cfgScale: config.defaults.cfgScale,
     cfgScaleLowNoise: config.defaults.cfgScaleLowNoise,
-    componentSourceModel: null,
+    // A single-file H3 main cannot run without a Diffusers install in the
+    // Model Components slot, so defaults (and reset, which reuses them) seed
+    // one from the catalog instead of starting un-invokable.
+    componentSourceModel:
+      model && model.base === 'minimax-h3' && model.format === 'checkpoint' ? findH3ComponentSource(models) : null,
     firstFrameImage: null,
     fps: config.fps.defaultValue,
     h3TextEncoderModel: null,
@@ -915,6 +1296,7 @@ export const getDefaultVideoSettings = (
     numFrames: config.frames.defaultValue,
     positivePrompt: '',
     positivePromptHeightPx: 96,
+    references: [],
     seed: Math.floor(Math.random() * SEED_MAX),
     shouldRandomizeSeed: true,
     sourceVideo: null,
@@ -969,6 +1351,11 @@ export const getVideoSettingsWithModelDefaults = (
     ].map((lora) => (isLoraCompatibleWithModel(lora.model, model) ? lora : { ...lora, isEnabled: false })),
     modelKey: model.key,
     numFrames: modelDefaults.numFrames,
+    // A reset clears the references list along with the components: on an
+    // FL2VA model the orphaned list would otherwise linger for the widget
+    // sync to sweep away silently. (Frame/source conditioning media stay
+    // untouched: they remain valid under the FL2VA policy.)
+    references: modelDefaults.references,
     steps: modelDefaults.steps,
     targetResolution: modelDefaults.targetResolution,
     vae: modelDefaults.vae,
@@ -1017,9 +1404,52 @@ export const getVideoModelSelectionResult = ({
   const clearedLabels: string[] = [];
   const modes = config.modes;
 
-  if (next.sourceVideo && !modes.includes('extend')) {
+  if (next.references.length > 0 && !modes.includes('reference')) {
+    next.references = [];
+    addClearedLabel(clearedLabels, 'References');
+  }
+
+  if (next.sourceVideo && !modes.includes('extend') && !config.references?.extend) {
     next.sourceVideo = null;
     addClearedLabel(clearedLabels, 'Initial video');
+  }
+
+  // The frame count is snapped BEFORE the tail reference is derived: the window
+  // is budgeted against it, and deriving first left a Wan panel's count (as low
+  // as 5) sizing a window for a 90-frame H3 generation — under the 13 frames
+  // text conditioning needs, so Generate failed outright.
+  const snappedFrames = snapVideoNumFrames(model, next.numFrames);
+  const framesChanged = snappedFrames !== next.numFrames;
+
+  if (framesChanged) {
+    next.numFrames = snappedFrames;
+    addClearedLabel(clearedLabels, 'Frames');
+  }
+
+  // Reference-extend: a surviving Initial Video (e.g. carried over from an
+  // FL2VA extend setup) gets its linked tail reference derived, so the switch
+  // lands on a generatable panel. Only when none exists yet: the transition
+  // also runs on task-neutral edits (a same-model re-selection, a component
+  // change), and re-deriving there would reset a hand-tuned trim the help
+  // text only promises to reset on cutpoint changes.
+  if (
+    config.references?.extend &&
+    next.sourceVideo &&
+    !next.references.some((entry) => entry.kind === 'video' && entry.fromSourceVideo === true)
+  ) {
+    next.references = applyReferenceExtendSourceVideo(
+      next.references,
+      next.sourceVideo,
+      config.references.maxVideos,
+      next.numFrames
+    );
+  }
+
+  // A tail reference carried in from another model keeps a window budgeted for
+  // that model's frame count. Only when the count actually moved: otherwise a
+  // task-neutral re-selection would reset a hand-tuned trim.
+  if (config.references?.extend && framesChanged) {
+    next.references = applyReferenceExtendNumFrames(next.references, next.numFrames);
   }
 
   if (next.firstFrameImage && !modes.includes('first-frame') && !modes.includes('first-last')) {
@@ -1044,13 +1474,6 @@ export const getVideoModelSelectionResult = ({
     addClearedLabel(clearedLabels, 'Target resolution');
   }
 
-  const snappedFrames = snapVideoNumFrames(model, next.numFrames);
-
-  if (snappedFrames !== next.numFrames) {
-    next.numFrames = snappedFrames;
-    addClearedLabel(clearedLabels, 'Frames');
-  }
-
   const clampedFps =
     config.fps.editable && Number.isFinite(next.fps)
       ? Math.min(config.fps.max, Math.max(config.fps.min, Math.round(next.fps)))
@@ -1062,24 +1485,16 @@ export const getVideoModelSelectionResult = ({
   }
 
   if (next.acceleratorEnabled) {
-    // Carry the "fast path" intent across model switches: when the new model
-    // resolves to the SAME accelerator LoRA set, everything the user may have
-    // tuned (steps, CFG, LoRA weights) is left alone. Only when the identity
-    // changes (Lightning ↔ Turbo) is the toggle re-applied, and when the new
-    // model has no accelerator — or its LoRAs are not installed — the fast
+    // Carry the "fast path" intent across model switches: when the LoRAs the
+    // user is actually running are still a valid accelerator for the new model,
+    // everything they may have tuned (steps, CFG, LoRA weights) is left alone.
+    // Only when that set no longer applies (Lightning ↔ Turbo, or a Wan pair
+    // aimed at the other expert family) is the toggle re-applied — and when the
+    // new model has no accelerator, or its LoRAs are not installed, the fast
     // path turns off, restoring the model's own steps/CFG.
-    const targetEntries = config.accelerator ? findAcceleratorLoraEntries(model, models) : null;
-    const targetKeys = targetEntries?.map((entry) => entry.model.key).sort() ?? null;
-    const currentKeys = [...next.acceleratorLoraKeys].sort();
-    const sameAccelerator =
-      targetKeys !== null &&
-      targetKeys.length === currentKeys.length &&
-      targetKeys.every((key, index) => key === currentKeys[index]);
-
-    if (!sameAccelerator) {
-      const result = targetEntries
-        ? getAcceleratorToggleResult(next, model, models, true)
-        : getAcceleratorToggleResult(next, model, models, false);
+    if (!isRecordedAcceleratorIntact(next, model, models, config)) {
+      const targetEntries = config.accelerator ? findAcceleratorLoraEntries(model, models) : null;
+      const result = getAcceleratorToggleResult(next, model, models, targetEntries !== null);
 
       Object.assign(next, result.settings);
       addClearedLabel(clearedLabels, 'Acceleration');
@@ -1119,6 +1534,14 @@ export const getVideoModelSelectionResult = ({
     }
   }
 
+  // A single-file H3 main is un-invokable without a component source; fill an
+  // empty slot from the catalog — including one the loop above just cleared
+  // (and reported) as incompatible. An explicit compatible pick is never
+  // overwritten.
+  if (model.base === 'minimax-h3' && model.format === 'checkpoint' && !next.componentSourceModel) {
+    next.componentSourceModel = findH3ComponentSource(models);
+  }
+
   return { clearedLabels, settings: next };
 };
 
@@ -1130,6 +1553,7 @@ const VIDEO_MODE_DESCRIPTIONS: Record<VideoGenerationMode, string> = {
   'first-frame': 'starting from a first frame',
   'first-last': 'first-to-last-frame interpolation',
   'last-frame': 'ending on a last frame',
+  reference: 'reference-conditioned generation',
   txt2vid: 'text-to-video',
 };
 
@@ -1169,18 +1593,84 @@ export const getVideoValidationReasons = (model: MainModelConfig, settings: Vide
     return ['Video needs a supported video model before it can be invoked.'];
   }
 
+  // Supported-but-not-selectable H3 shapes can reach the model slot as stored
+  // or recalled state; name the actual fix instead of failing downstream.
+  if (isComponentsOnlyH3Main(model)) {
+    return [
+      `${model.name} is a components-only install. Select a single-file MiniMax H3 transformer as the model; this install then provides its components.`,
+    ];
+  }
+  if (model.base === 'minimax-h3' && model.format === 'diffusers' && model.variant === 'ref2va') {
+    return [
+      `${model.name} is a Ref2VA folder install, whose transformer weights cannot be folder-loaded. Select a single-file Ref2VA transformer as the model; this install can serve as its Model Components.`,
+    ];
+  }
+
   const config = getVideoConfig(model);
   const reasons: string[] = [];
   const mode = resolveVideoMode(settings);
+  const referenceOnly = config.modes.length === 1 && config.modes[0] === 'reference';
 
   if (settings.firstFrameImage && settings.sourceVideo) {
     reasons.push('A first frame and an initial video cannot be combined. Clear one of them.');
   }
 
+  if (settings.references.length > 0 && (settings.firstFrameImage || settings.lastFrameImage)) {
+    reasons.push('References cannot be combined with first/last frames. Clear one side.');
+  }
+
+  if (settings.references.length > 0 && settings.sourceVideo && !config.references?.extend) {
+    reasons.push('References cannot be combined with an initial video on this model. Clear one side.');
+  }
+
   if (!config.modes.includes(mode)) {
-    reasons.push(`${model.name} does not support ${VIDEO_MODE_DESCRIPTIONS[mode]}.`);
+    if (referenceOnly && settings.references.length === 0) {
+      // The generic message would say "does not support text-to-video", which reads as a
+      // model defect; the actual fix is to add a reference.
+      reasons.push('Reference-to-video needs at least one image or video reference.');
+    } else {
+      reasons.push(`${model.name} does not support ${VIDEO_MODE_DESCRIPTIONS[mode]}.`);
+    }
   } else if (mode === 'extend' && settings.lastFrameImage && !config.modes.includes('first-last')) {
     reasons.push(`${model.name} cannot target a destination image while extending a video.`);
+  }
+
+  if (mode === 'reference') {
+    const caps = config.references;
+    const videoCount = settings.references.filter((reference) => reference.kind === 'video').length;
+    const imageCount = settings.references.length - videoCount;
+    const allAudioOnly =
+      settings.references.length > 0 &&
+      settings.references.every((reference) => reference.kind === 'video' && reference.conditioning === 'audio');
+
+    if (allAudioOnly) {
+      reasons.push(
+        'At least one reference must contribute visuals — add an image, or set a video reference to include video.'
+      );
+    }
+    if (caps && videoCount > caps.maxVideos) {
+      reasons.push(`At most ${caps.maxVideos} video references are supported.`);
+    }
+    if (caps && imageCount > caps.maxImages) {
+      reasons.push(`At most ${caps.maxImages} image references are supported.`);
+    }
+    for (const reference of settings.references) {
+      if (reference.kind !== 'video') {
+        continue;
+      }
+      if (!Number.isInteger(reference.clip.startFrame) || !Number.isInteger(reference.clip.endFrame)) {
+        reasons.push('Reference video trim bounds must be whole frame numbers.');
+        break;
+      }
+      if (
+        reference.clip.startFrame < 0 ||
+        reference.clip.endFrame > reference.clip.numFrames - 1 ||
+        reference.clip.endFrame < reference.clip.startFrame
+      ) {
+        reasons.push('A reference video trim is outside its clip.');
+        break;
+      }
+    }
   }
 
   if (!isValidVideoNumFrames(model, settings.numFrames)) {

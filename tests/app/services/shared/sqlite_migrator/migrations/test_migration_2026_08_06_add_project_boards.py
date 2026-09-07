@@ -535,8 +535,9 @@ def test_it_runs_once_through_the_real_migrator_and_is_not_reapplied(tmp_path: P
 
     before = SqliteMigrator(db=db)
     for migration in all_migrations:
-        if migration.id != MIGRATION_ID:
-            before.register_migration(migration)
+        if migration.id == MIGRATION_ID:
+            break
+        before.register_migration(migration)
     before.run_migrations()
 
     cursor = db._conn.cursor()

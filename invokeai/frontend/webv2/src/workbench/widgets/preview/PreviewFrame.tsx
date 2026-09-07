@@ -11,6 +11,7 @@ import { Button } from '@platform/ui/Button';
 import { GripHorizontalIcon } from 'lucide-react';
 import {
   useCallback,
+  useEffect,
   useId,
   useImperativeHandle,
   useMemo,
@@ -20,6 +21,7 @@ import {
   type MouseEvent,
   type ReactNode,
   type Ref,
+  type SyntheticEvent,
 } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -36,6 +38,13 @@ interface PreviewFrameProps {
   dragItem?: GalleryItemRef;
   frameHeight: number;
   frameWidth: number;
+  /**
+   * Painted over `source` until the browser has decoded it — the last denoise
+   * frame, so a finished image swaps in over the pixels it grew from rather
+   * than over a blank card. `onSourceLoaded` fires once the swap has happened.
+   */
+  holdSource?: StreamingImageSource | null;
+  onSourceLoaded?: (src: string) => void;
   isItemCurrent?: (itemKey: GalleryItemKey) => boolean;
   /**
    * No live frame carries a caption of any kind. The frame is styled exactly
@@ -82,9 +91,11 @@ const PreviewImageFrame = ({
   dragItem,
   frameHeight,
   frameWidth,
+  holdSource,
   isLive,
   loupeControlsRef,
   onContextMenu,
+  onSourceLoaded,
   padding,
   paddingBottom,
   shouldAntialiasLiveImage,
@@ -145,15 +156,76 @@ const PreviewImageFrame = ({
     }),
     [isLive, shouldAntialiasLiveImage]
   );
+  const imageRef = useRef<HTMLImageElement | null>(null);
+  const [settledSrc, setSettledSrc] = useState<string | null>(null);
+  const isHolding = Boolean(holdSource && source && settledSrc !== source.src);
+  const handleSourceSettled = useCallback(
+    (event: SyntheticEvent<HTMLImageElement>) => {
+      const src = event.currentTarget.getAttribute('src');
+
+      // Only tracked while a hold is up: a live frame is a new data URL every
+      // step, and settling each one would re-render the frame per step for
+      // nothing.
+      if (src === null || !holdSource) {
+        return;
+      }
+
+      setSettledSrc(src);
+      onSourceLoaded?.(src);
+    },
+    [holdSource, onSourceLoaded]
+  );
+  // A hold arriving after the image already decoded (a cached image, or the
+  // element reused across a source swap) would never see a load event.
+  useEffect(() => {
+    const image = imageRef.current;
+
+    if (
+      !holdSource ||
+      !source ||
+      !image ||
+      image.getAttribute('src') !== source.src ||
+      !image.complete ||
+      image.naturalWidth === 0
+    ) {
+      return;
+    }
+
+    setSettledSrc(source.src);
+    onSourceLoaded?.(source.src);
+  }, [holdSource, onSourceLoaded, source]);
+  const heldImageStyle = useMemo<CSSProperties>(() => ({ ...imageStyle, visibility: 'hidden' }), [imageStyle]);
+  const holdImageStyle = useMemo<CSSProperties>(
+    () => ({
+      height: '100%',
+      imageRendering: shouldAntialiasLiveImage ? undefined : 'pixelated',
+      inset: 0,
+      objectFit: 'contain',
+      pointerEvents: 'none',
+      position: 'absolute',
+      width: '100%',
+    }),
+    [shouldAntialiasLiveImage]
+  );
   const media = source ? (
-    <img
-      alt={source.alt}
-      draggable={false}
-      height={frameHeight}
-      src={source.src}
-      style={imageStyle}
-      width={frameWidth}
-    />
+    <>
+      <img
+        ref={imageRef}
+        alt={source.alt}
+        draggable={false}
+        height={frameHeight}
+        src={source.src}
+        style={isHolding ? heldImageStyle : imageStyle}
+        width={frameWidth}
+        onError={handleSourceSettled}
+        onLoad={handleSourceSettled}
+      />
+      {/* The hidden finished image keeps the frame's geometry; the held frame
+          only paints over it until the real pixels are ready. */}
+      {isHolding && holdSource ? (
+        <img aria-hidden="true" alt="" draggable={false} src={holdSource.src} style={holdImageStyle} />
+      ) : null}
+    </>
   ) : null;
   if (variant === 'inset') {
     return (
@@ -179,6 +251,12 @@ const PreviewImageFrame = ({
       fill="flex"
       padding={padding}
       paddingBottom={paddingBottom}
+      // The whole stage is the loupe's viewport, so it — not just the media
+      // card — has to keep the browser's own pan and pinch off the surface:
+      // otherwise the first finger of a pinch is claimed as a page gesture and
+      // the pointer stream stops mid-zoom. A live render has no loupe to put in
+      // their place, so it leaves them alone.
+      touchAction={isLive ? undefined : 'none'}
       {...loupe.stageProps}
     >
       {/* Never armed over a live render: arming a comparison pauses live-follow
@@ -203,7 +281,6 @@ const PreviewImageFrame = ({
           aria-label={t('widgets.preview.resetZoom')}
           as="button"
           bottom="2"
-          cursor="pointer"
           position="absolute"
           right="2"
           size="xs"

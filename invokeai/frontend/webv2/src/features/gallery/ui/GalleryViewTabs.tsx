@@ -1,7 +1,8 @@
-import type { GalleryView } from '@features/gallery/core/types';
+import type { GalleryBoard, GalleryView } from '@features/gallery/core/types';
 
-import { SegmentGroup, Text } from '@chakra-ui/react';
-import { useCallback } from 'react';
+import { Text } from '@chakra-ui/react';
+import { SegmentTabs } from '@platform/ui';
+import { useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { getGalleryCountForView } from './galleryBoardLabels';
@@ -11,60 +12,83 @@ const GALLERY_VIEW_TABS = [
   { labelKey: 'common.media', value: 'images' },
   { labelKey: 'common.assets', value: 'assets' },
 ] satisfies { labelKey: string; value: GalleryView }[];
-const CHECKED_VIEW_TAB_STYLES = { bg: 'accent.solid', color: 'accent.contrast' } as const;
 
 /**
- * Media / Assets, each carrying the selected board's count for that view so
- * the split is legible before you switch.
- *
- * A segmented control rather than a tablist: this chooses which items the grid
- * queries and owns no panel of its own. Real tabs publish `aria-controls`
- * pointing at a tabpanel, and there is none to point at — the grid is a
- * sibling slot each layout shell places independently.
+ * Media / Assets, each carrying `board`'s count for that view so the split is
+ * legible before you switch. The same `SegmentTabs` strip the layer panes use;
+ * the caller wires the tabpanel by putting `segmentTabsPanelId(idBase)` on its
+ * grid container.
  */
-export const GalleryViewTabs = () => {
+export const GalleryViewSegmentTabs = ({
+  activeView,
+  board,
+  idBase,
+  onSelect,
+}: {
+  activeView: GalleryView;
+  board: GalleryBoard | undefined;
+  idBase: string;
+  onSelect: (view: GalleryView) => void;
+}) => {
   const { t } = useTranslation();
-  const { actions, gallery } = useGalleryWidget();
-  const selectedBoard = gallery.boards.find((board) => board.id === gallery.selectedBoardId);
 
+  // SegmentTabs re-fires selecting the active tab (its collapsible-toggle
+  // affordance); a same-view write would only dirty the widget values.
   const handleViewChange = useCallback(
-    (event: { value: string | null }) => {
-      if (event.value) {
-        actions.setView(event.value as GalleryView);
+    (value: GalleryView) => {
+      if (value !== activeView) {
+        onSelect(value);
       }
     },
-    [actions]
+    [activeView, onSelect]
   );
 
-  return (
-    <SegmentGroup.Root
-      aria-label={t('common.view')}
-      size="xs"
-      value={gallery.galleryView}
-      onValueChange={handleViewChange}
-    >
-      <SegmentGroup.Indicator />
-      {GALLERY_VIEW_TABS.map(({ labelKey, value }) => {
-        const count = selectedBoard ? getGalleryCountForView(selectedBoard, value) : null;
+  const tabs = useMemo(
+    () =>
+      GALLERY_VIEW_TABS.map(({ labelKey, value }) => {
+        const count = board ? getGalleryCountForView(board, value) : null;
 
-        return (
-          <SegmentGroup.Item key={value} value={value} _checked={CHECKED_VIEW_TAB_STYLES}>
-            <SegmentGroup.ItemHiddenInput />
-            <SegmentGroup.ItemText display="flex" fontSize="xs" gap="1.5">
+        return {
+          id: value,
+          label: (
+            <Text as="span" display="flex" gap="1.5">
               {t(labelKey)}
               {count === null ? null : (
-                // Dimmed from the item's own text colour rather than pinned to
-                // `fg.muted`: the checked item swaps to `accent.contrast`, and a
-                // fixed muted grey is unreadable on the accent fill. 0.8 is the
-                // dimmest that still clears 4.5:1 in both states.
+                // Dimmed from the tab's own text colour, so it tracks the
+                // shown/idle swap; 0.8 stays comfortably legible on both.
                 <Text as="span" color="currentColor" fontVariantNumeric="tabular-nums" opacity="0.8">
                   {count}
                 </Text>
               )}
-            </SegmentGroup.ItemText>
-          </SegmentGroup.Item>
-        );
-      })}
-    </SegmentGroup.Root>
+            </Text>
+          ),
+        };
+      }),
+    [board, t]
+  );
+
+  return (
+    <SegmentTabs
+      activeId={activeView}
+      ariaLabel={t('common.view')}
+      idBase={idBase}
+      isCompact
+      tabs={tabs}
+      onSelect={handleViewChange}
+    />
+  );
+};
+
+export const GalleryViewTabs = ({ idBase }: { idBase: string }) => {
+  const { actions, gallery } = useGalleryWidget();
+  const selectedBoard = gallery.boards.find((board) => board.id === gallery.selectedBoardId);
+
+  return (
+    <GalleryViewSegmentTabs
+      activeView={gallery.galleryView}
+      board={selectedBoard}
+      idBase={idBase}
+      onSelect={actions.setView}
+    />
   );
 };

@@ -6,7 +6,7 @@ lastUpdated: 2026-08-22
 
 import { Card, CardGrid, Steps, LinkButton } from '@astrojs/starlight/components';
 
-InvokeAI ships **fifteen ready-made video workflows** — ten for **Wan 2.2** and five for **MiniMax H3** — so you can start generating video without wiring up nodes yourself. Each one is a complete recipe — open it from the **Workflows** library, pick your models, type a prompt (and/or drop in an image), and press **Invoke**.
+InvokeAI ships **sixteen ready-made video workflows** — ten for **Wan 2.2** and six for **MiniMax H3** — so you can start generating video without wiring up nodes yourself. Each one is a complete recipe — open it from the **Workflows** library, pick your models, type a prompt (and/or drop in an image), and press **Invoke**.
 
 This page helps you choose the right workflow and run it. For how the models work under the hood, VRAM details, and troubleshooting, see the [Video Generation guide](/concepts/video-generation/).
 
@@ -34,7 +34,7 @@ Whenever a workflow won't run because a model field is empty, open its **Notes**
 
 ## Which workflow should I use?
 
-The Wan workflows come in three families — **Text to Video**, **Image to Video**, and **Extend Video** — each with a high-quality option, a "concept LoRA" variant, and a lighter low-VRAM option — plus an **Interpolate** workflow that bridges two images and an **Extend Video to Image** variant that steers a continuation toward a target frame. The five **MiniMax H3** workflows cover the same conditioning modes with one model — and add sound.
+The Wan workflows come in three families — **Text to Video**, **Image to Video**, and **Extend Video** — each with a high-quality option, a "concept LoRA" variant, and a lighter low-VRAM option — plus an **Interpolate** workflow that bridges two images and an **Extend Video to Image** variant that steers a continuation toward a target frame. The six **MiniMax H3** workflows cover the same conditioning modes — plus reference-conditioned generation — and add sound.
 
 | I want to… | Use | Notes |
 |---|---|---|
@@ -44,6 +44,7 @@ The Wan workflows come in three families — **Text to Video**, **Image to Video
 | Make a video that *ends on* an image | **Last Frame to Video - MiniMax H3** | H3 only — the video builds toward your image. |
 | Make a video between two images | **Interpolate 2 Images to Video - Wan 2.2 Lightning** or **First and Last Frame to Video - MiniMax H3** | Provide a start and end image; the model interpolates between them. |
 | Make a video longer than one generation | **Extend Video - Wan 2.2 Lightning** or **Extend Video - MiniMax H3** | Continues an existing video and stitches the pieces together. |
+| Make a clip **in the style/likeness of reference media** | **Reference to Video - MiniMax H3** | Conditions on up to 3 reference videos and 9 images (Ref2VA transformer required); reference order changes the result. |
 | Extend a video toward a specific end frame | **Extend Video to Image - Wan 2.2 Lightning** | Continues a video and interpolates the new part to a target image. |
 | Add my own style/subject LoRAs | the **w/ Concept LoRAs** variant of a Wan workflow | Same as the base workflow, plus slots for your LoRAs. |
 | Run on a smaller GPU (≈12–16 GB) | a **TI2V-5B (Low Quality)** workflow | Smaller model, lower memory, lower quality. |
@@ -128,7 +129,7 @@ Because the endpoint is pinned to your image, it's ideal for bridging a clip to 
 
 ## Bundled MiniMax H3 workflows
 
-One model, five workflows, every conditioning mode — and every output is an MP4 with a **jointly generated stereo soundtrack**. All five default to the **Turbo** step-distillation LoRA (6 steps); H3 has no CFG or negative prompt to tune, and always renders at 24 fps.
+One model family, six workflows, every conditioning mode — and every output is an MP4 with a **jointly generated stereo soundtrack**. All default to a **Turbo** step-distillation LoRA (6 steps for FL2VA, 4 for Ref2VA); H3 has no CFG or negative prompt to tune, and always renders at 24 fps. **Reference to Video** needs the Ref2VA transformer selected in the model loader; the other five use FL2VA.
 
 <CardGrid>
   <Card title="Text to Video - MiniMax H3" icon="pencil">

@@ -2,6 +2,7 @@ import type { ChangeEvent } from 'react';
 
 import { Icon, Popover, Portal, Stack, Text, Textarea, IconButton } from '@chakra-ui/react';
 import { useProjectGraphCommands } from '@features/workflow/ui/useProjectGraphCommands';
+import { PopoverContent } from '@platform/ui/Popover';
 import { FileTextIcon } from 'lucide-react';
 import { useCallback } from 'react';
 
@@ -51,7 +52,7 @@ export const FieldDescriptionPopover = ({
       </Popover.Trigger>
       <Portal>
         <Popover.Positioner>
-          <Popover.Content bg="bg.muted" borderColor="border.emphasized" borderWidth="1px" w="18rem">
+          <PopoverContent w="18rem">
             <Popover.Body p="2">
               <Stack gap="1">
                 <Text color="fg.subtle" fontSize="2xs" lineHeight={1.3}>
@@ -70,7 +71,7 @@ export const FieldDescriptionPopover = ({
                 />
               </Stack>
             </Popover.Body>
-          </Popover.Content>
+          </PopoverContent>
         </Popover.Positioner>
       </Portal>
     </Popover.Root>

@@ -1,5 +1,6 @@
 import os
 import threading
+import time
 from pathlib import Path
 from queue import Empty, Queue
 from typing import TYPE_CHECKING, Any, Callable, Optional
@@ -8,7 +9,11 @@ import numpy as np
 import torch
 from PIL import Image
 
-from invokeai.app.services.image_index.image_index_base import ImageIndexServiceBase, TextSearchUnavailableError
+from invokeai.app.services.image_index.image_index_base import (
+    ImageIndexServiceBase,
+    TextSearchUnavailableError,
+    VocabBuildState,
+)
 from invokeai.app.services.image_index.image_index_common import EMBEDDING_DTYPE, ImageIndexStatus
 from invokeai.app.services.image_index.projection import compute_umap, projection_params, scope_hash
 from invokeai.app.services.image_records.image_records_common import ImageCategory
@@ -52,6 +57,12 @@ _MAX_ATTEMPTS = 3
 # Consecutive systemic failures back off exponentially from _POLL_SECONDS up to this ceiling,
 # so an outage that lasts hours does not retry at 1 Hz while still recovering promptly.
 _MAX_BACKOFF_SECONDS = 60.0
+
+# A memoized vocabulary-build failure is retried at most this often. Transient causes (an OOM
+# while the GPU was busy generating, a text-tower load that lost a race) recover on the next
+# labels request after the window; a permanently broken install still answers from memory for
+# everything in between, at one rebuild attempt per window rather than one per points refresh.
+_VOCAB_FAILURE_RETRY_SECONDS = 600.0
 
 
 def _normalize_query_vector(vector: np.ndarray) -> np.ndarray:
@@ -192,6 +203,12 @@ def warm_up_attention(config: "InvokeAIAppConfig", logger: "Logger") -> None:
         logger.warning("Attention warm-up failed", exc_info=True)
 
 
+# Minimum gap between re-resolutions of a missing embedding model. The map's
+# status endpoint is polled, and each attempt is a model-store query, so the
+# retry is throttled rather than run per request.
+_ACTIVATION_RETRY_INTERVAL_S = 5.0
+
+
 class ImageIndexService(ImageIndexServiceBase):
     """Embeds gallery images on a daemon worker thread.
 
@@ -245,6 +262,14 @@ class ImageIndexService(ImageIndexServiceBase):
         self._invoker: Optional["Invoker"] = None
         self._model_config: Optional["AnyModelConfig"] = None
         self._model_id: Optional[str] = None
+        # Serializes late activation (try_activate) against itself and stop():
+        # it registers image callbacks and starts the worker, and two concurrent
+        # map requests must not do either twice.
+        self._activation_lock = threading.Lock()
+        self._last_activation_attempt: float = 0.0
+        # Set by stop() so a request that raced shutdown cannot start a worker
+        # the invoker will never join.
+        self._stopped = False
         self._encode_fn: Optional[EncodeFn] = None
         # RAM-resident model used only in CPU mode; see _encode_with_model.
         self._cpu_model: Optional[Any] = None
@@ -271,9 +296,22 @@ class ImageIndexService(ImageIndexServiceBase):
         # MODEL_LOAD_LOCK, contending with generation's model loads — once per
         # points refresh, forever.
         self._vocab_failure: Optional[Exception] = None
+        # When _vocab_failure was memoized (time.monotonic). A failure is not
+        # forever: an OOM while the GPU was busy generating, or a text-tower
+        # load that lost a race, recovers — so a request arriving after
+        # _VOCAB_FAILURE_RETRY_SECONDS drops the memo and queues a rebuild.
+        # The window keeps the vision-only case above at one from_pretrained
+        # attempt per window instead of one per points refresh.
+        self._vocab_failed_at: Optional[float] = None
         # Set by a labels request, serviced on the worker: the build is minutes
         # of encoder work and must never run on a request thread.
         self._vocab_build_requested = threading.Event()
+        # Set by invalidate_vocab (the supplementary vocabulary changed, or a
+        # failed build should be retried). The worker clears the RAM cache and
+        # the memoized failure before rebuilding. A flag rather than clearing
+        # them inline: invalidation runs on request threads, and _vocab_lock
+        # is held by the worker for the whole of a minutes-long build.
+        self._vocab_invalidate_requested = threading.Event()
         # Guards the lazy _processor/_cpu_model init: embed_image runs on
         # request threads concurrently with the indexer worker.
         self._vision_init_lock = threading.Lock()
@@ -348,14 +386,29 @@ class ImageIndexService(ImageIndexServiceBase):
             if self._vocab_cache is not None:
                 return self._vocab_cache
             if self._vocab_failure is not None:
-                # Cleared again on the way out, not just when it was stored:
-                # re-raising a persistent exception re-attaches a fresh traceback
-                # to it, so without this the frames grow by one propagation per
-                # labels request, forever, each set holding that request's caller
-                # frame — whose `record` is the whole projection, coordinates
-                # included. Clearing here bounds it to the one propagation in
-                # flight instead, which the next request replaces.
-                raise self._vocab_failure.with_traceback(None)
+                # Aged past the retry window: drop the memo and fall through to
+                # queue a rebuild. The failure may have been transient (an OOM
+                # while the GPU was busy generating); answering from memory
+                # forever would pin one bad minute as a permanent outage.
+                # A stopped worker is exempt — it would never consume the
+                # build request, so the request would 409 "still being
+                # prepared" for the rest of the process's life; the memoized
+                # failure (the real cause) is the better answer there.
+                if (
+                    self._vocab_failed_at is None
+                    or self._stop_event.is_set()
+                    or time.monotonic() - self._vocab_failed_at < _VOCAB_FAILURE_RETRY_SECONDS
+                ):
+                    # Cleared again on the way out, not just when it was stored:
+                    # re-raising a persistent exception re-attaches a fresh traceback
+                    # to it, so without this the frames grow by one propagation per
+                    # labels request, forever, each set holding that request's caller
+                    # frame — whose `record` is the whole projection, coordinates
+                    # included. Clearing here bounds it to the one propagation in
+                    # flight instead, which the next request replaces.
+                    raise self._vocab_failure.with_traceback(None)
+                self._vocab_failure = None
+                self._vocab_failed_at = None
             if self._invoker is None or self._model_id is None:
                 raise TextSearchUnavailableError("The image index is not running")
 
@@ -363,13 +416,45 @@ class ImageIndexService(ImageIndexServiceBase):
 
         raise TextSearchUnavailableError("Cluster labels are still being prepared; try again shortly")
 
+    def invalidate_vocab(self) -> None:
+        # Flags only — never _vocab_lock, which the worker holds for the whole
+        # of a build; taking it here would park a request thread for minutes.
+        #
+        # The invalidation flag is set BEFORE the build-request flag. The
+        # worker reads them in the opposite order (clears the build request,
+        # then checks for invalidation), so whichever flag the worker's pass
+        # misses is still set for its next pass; set the other way around, an
+        # invalidation could slip between the worker's two reads and leave a
+        # stale cache standing with no rebuild queued.
+        self._vocab_invalidate_requested.set()
+        self._vocab_build_requested.set()
+
+    def get_vocab_build_state(self) -> tuple[VocabBuildState, Optional[str]]:
+        if self._invoker is None or self._model_id is None:
+            return "unavailable", None
+        # Flags first: a pending invalidation means the current cache (or
+        # failure) is about to be discarded, so reporting it would be a lie.
+        if self._vocab_invalidate_requested.is_set() or self._vocab_build_requested.is_set():
+            return "building", None
+        # The worker holds _vocab_lock for the whole of a build; a failed
+        # non-blocking acquire IS the "in progress" signal. The only other
+        # holders (get_vocab_embeddings, and this method on another request
+        # thread) hold it for microseconds, so a false "building" is a
+        # transient a client's next poll corrects.
+        if not self._vocab_lock.acquire(blocking=False):
+            return "building", None
+        try:
+            if self._vocab_failure is not None:
+                return "error", str(self._vocab_failure)
+            if self._vocab_cache is not None:
+                return "ready", None
+            return "idle", None
+        finally:
+            self._vocab_lock.release()
+
     def _build_vocab_embeddings(self) -> None:
         """Build and cache the phrase embeddings. Index-worker thread only."""
-        from invokeai.app.services.image_index.cluster_labels import (
-            ensemble_phrase_embeddings,
-            load_vocabulary,
-            vocab_fingerprint,
-        )
+        from invokeai.app.services.image_index.cluster_labels import load_vocabulary
 
         with self._vocab_lock:
             if self._vocab_cache is not None or self._vocab_failure is not None:
@@ -377,31 +462,35 @@ class ImageIndexService(ImageIndexServiceBase):
             if self._invoker is None or self._model_id is None:
                 return
 
-            vocabulary = load_vocabulary()
-            fingerprint = vocab_fingerprint(vocabulary)
+            bundled = load_vocabulary()
+            # Read inside the lock, and only after the worker cleared the
+            # invalidation flags: a replacement committed after this read sets
+            # the flags again, which forces another pass over the new rows.
+            custom = self._invoker.services.image_index_records.get_custom_vocab_terms()
+            # The bundled phrase wins a collision: it keeps the bundled cache
+            # file's fingerprint independent of the custom list, and the label
+            # the user would get is the same phrase either way.
+            bundled_keys = {phrase.casefold() for phrase in bundled}
+            custom = [term for term in custom if term.casefold() not in bundled_keys]
+
             # The model hash contains ':' (e.g. 'blake3:...'), illegal in
             # Windows filenames.
             model_tag = self._model_id.replace(":", "_")[:24]
-            cache_path = self._invoker.services.configuration.db_path.parent / f"cluster_vocab_{model_tag}.npz"
+            cache_dir = self._invoker.services.configuration.db_path.parent
 
-            if cache_path.exists():
-                try:
-                    # Closed explicitly: np.load returns a lazily-read NpzFile
-                    # holding the zip handle open, and the rewrite below
-                    # truncates this very file on a fingerprint mismatch.
-                    with np.load(cache_path, allow_pickle=False) as cached:
-                        if str(cached["fingerprint"]) == fingerprint:
-                            self._vocab_cache = (vocabulary, cached["embeddings"].astype(EMBEDDING_DTYPE))
-
-                    if self._vocab_cache is not None:
-                        return
-                except Exception:
-                    self._invoker.services.logger.warning("Discarding unreadable cluster vocabulary cache")
-
-            # First run for this model: embedding ~1700 phrases x 7 templates
-            # takes minutes — hence the disk cache.
+            # Two cache tiers: the bundled vocabulary (~1700 phrases, minutes
+            # to embed, effectively immutable) and the custom terms (a few
+            # hundred at most, seconds). Caching them separately means an edit
+            # to the custom list never pays the bundled tier's build again.
             try:
-                embeddings = ensemble_phrase_embeddings(self._embed_texts, vocabulary)
+                bundled_matrix = self._load_or_embed_phrases(bundled, cache_dir / f"cluster_vocab_{model_tag}.npz")
+                if custom:
+                    custom_matrix = self._load_or_embed_phrases(
+                        custom, cache_dir / f"cluster_vocab_custom_{model_tag}.npz"
+                    )
+                    self._vocab_cache = (bundled + custom, np.concatenate([bundled_matrix, custom_matrix]))
+                else:
+                    self._vocab_cache = (bundled, bundled_matrix)
             except Exception as e:
                 self._invoker.services.logger.warning("Could not build the cluster vocabulary", exc_info=True)
                 # Remembered, so a vision-only install answers the next request
@@ -420,38 +509,75 @@ class ImageIndexService(ImageIndexServiceBase):
                 e.__cause__ = None
                 e.__context__ = None
                 self._vocab_failure = e.with_traceback(None)
+                self._vocab_failed_at = time.monotonic()
 
-                return
+    def _load_or_embed_phrases(self, phrases: list[str], cache_path: Path) -> np.ndarray:
+        """One vocabulary tier's embedding matrix, from its disk cache or the encoder.
 
+        Index-worker thread only, under `_vocab_lock`. Raises on encoder
+        failure (the caller memoizes it); a cache-write failure only warns.
+        """
+        from invokeai.app.services.image_index.cluster_labels import ensemble_phrase_embeddings, vocab_fingerprint
+
+        assert self._invoker is not None
+        fingerprint = vocab_fingerprint(phrases)
+
+        if cache_path.exists():
             try:
-                cache_path.parent.mkdir(parents=True, exist_ok=True)
-                # Written aside and renamed: two processes sharing a db_dir can
-                # first-run at once, and a kill mid-write would otherwise leave
-                # a truncated archive that costs another full re-embed.
-                #
-                # The staging name has to end in `.npz` because np.savez appends
-                # that extension to any path that lacks it: written as `.tmp`,
-                # the archive landed at `.tmp.npz` and the rename below then
-                # failed on the `.tmp` that was never created. The failure was
-                # swallowed by the handler, so the cache never reached disk and
-                # every restart re-embedded the whole vocabulary (minutes,
-                # during which cluster labels are unavailable) while leaking one
-                # orphaned staging file per run.
-                staging_path = cache_path.with_name(f"{cache_path.name}.{os.getpid()}.tmp.npz")
-                np.savez(staging_path, embeddings=embeddings, fingerprint=np.str_(fingerprint))
-                os.replace(staging_path, cache_path)
+                # Closed explicitly: np.load returns a lazily-read NpzFile
+                # holding the zip handle open, and the rewrite below
+                # truncates this very file on a fingerprint mismatch.
+                with np.load(cache_path, allow_pickle=False) as cached:
+                    if str(cached["fingerprint"]) == fingerprint:
+                        embeddings = cached["embeddings"].astype(EMBEDDING_DTYPE)
+
+                        # A row-count mismatch means the file does not describe
+                        # these phrases no matter what its fingerprint claims
+                        # (corruption, or a hash collision) — and it would not
+                        # fail here: it row-misaligns the merged matrix, and
+                        # label_clusters then indexes past the vocabulary on
+                        # every labels request.
+                        if embeddings.shape[0] == len(phrases):
+                            return embeddings
+                        self._invoker.services.logger.warning(
+                            f"Discarding cluster vocabulary cache with mismatched row count at {cache_path}"
+                        )
             except Exception:
-                # With the exception, not just the path. The in-memory cache
-                # below is assigned either way, so a write failure costs
-                # nothing until the next restart and is invisible until someone
-                # goes looking at startup times. The `.tmp` bug above survived
-                # because this line said only that something had gone wrong,
-                # never what — the FileNotFoundError it swallowed names the
-                # missing staging file outright.
-                self._invoker.services.logger.warning(
-                    f"Could not write cluster vocabulary cache to {cache_path}", exc_info=True
-                )
-            self._vocab_cache = (vocabulary, embeddings)
+                self._invoker.services.logger.warning("Discarding unreadable cluster vocabulary cache")
+
+        # First run for this tier: embedding ~1700 phrases x 7 templates
+        # takes minutes for the bundled vocabulary — hence the disk cache.
+        embeddings = ensemble_phrase_embeddings(self._embed_texts, phrases)
+
+        try:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            # Written aside and renamed: two processes sharing a db_dir can
+            # first-run at once, and a kill mid-write would otherwise leave
+            # a truncated archive that costs another full re-embed.
+            #
+            # The staging name has to end in `.npz` because np.savez appends
+            # that extension to any path that lacks it: written as `.tmp`,
+            # the archive landed at `.tmp.npz` and the rename below then
+            # failed on the `.tmp` that was never created. The failure was
+            # swallowed by the handler, so the cache never reached disk and
+            # every restart re-embedded the whole vocabulary (minutes,
+            # during which cluster labels are unavailable) while leaking one
+            # orphaned staging file per run.
+            staging_path = cache_path.with_name(f"{cache_path.name}.{os.getpid()}.tmp.npz")
+            np.savez(staging_path, embeddings=embeddings, fingerprint=np.str_(fingerprint))
+            os.replace(staging_path, cache_path)
+        except Exception:
+            # With the exception, not just the path. The caller caches the
+            # matrix in RAM either way, so a write failure costs
+            # nothing until the next restart and is invisible until someone
+            # goes looking at startup times. The `.tmp` bug above survived
+            # because this line said only that something had gone wrong,
+            # never what — the FileNotFoundError it swallowed names the
+            # missing staging file outright.
+            self._invoker.services.logger.warning(
+                f"Could not write cluster vocabulary cache to {cache_path}", exc_info=True
+            )
+        return embeddings
 
     def _get_text_encoder(self) -> tuple[Any, Any, bool]:
         with self._text_encoder_lock:
@@ -463,11 +589,18 @@ class ImageIndexService(ImageIndexServiceBase):
 
                 from transformers import AutoTokenizer, CLIPTextModelWithProjection, SiglipTextModel
 
+                from invokeai.backend.model_manager.util.clip_tower_config import clip_tower_config_override
+
                 model_path = str(self._model_abs_path())
                 is_siglip = self._model_config.type is ModelType.SigLIP
                 try:
                     tokenizer = AutoTokenizer.from_pretrained(model_path, local_files_only=True)
                     text_cls = SiglipTextModel if is_siglip else CLIPTextModelWithProjection
+                    # Full-CLIP checkpoints may carry a nested projection_dim
+                    # that disagrees with the weights; see
+                    # clip_tower_config_override.
+                    tower_config = None if is_siglip else clip_tower_config_override(model_path, "text")
+                    extra_kwargs = {} if tower_config is None else {"config": tower_config}
                     # skip_torch_weight_init serializes nothing: it monkey-patches
                     # torch.nn.Linear/_ConvNd/Embedding.reset_parameters process-wide
                     # and restores whatever it saw on entry. Two threads inside it at
@@ -478,7 +611,7 @@ class ImageIndexService(ImageIndexServiceBase):
                     # load_state_dict(assign=True) would hijack these parameters onto
                     # the meta device. Same reasoning as ModelLoader._load_and_cache.
                     with MODEL_LOAD_LOCK.write_lock(), skip_torch_weight_init():
-                        model = text_cls.from_pretrained(model_path, local_files_only=True)
+                        model = text_cls.from_pretrained(model_path, local_files_only=True, **extra_kwargs)
                 except Exception as e:
                     # Vision-only or partial installs (e.g. the IP-Adapter image
                     # encoder, or a full-CLIP checkpoint shipped without tokenizer
@@ -610,18 +743,109 @@ class ImageIndexService(ImageIndexServiceBase):
                 "only 'cpu' selects CPU mode"
             )
 
-        if self._encode_fn_override is not None:
-            self._encode_fn = self._encode_fn_override
-            self._model_id = self._model_id_override
-        else:
-            model_config = self._resolve_model_config(config.image_index_model)
-            if model_config is None:
-                invoker.services.logger.warning(self._model_not_installed_message(config.image_index_model))
+        # The whole activation under the same lock the late-activation path
+        # takes: `self._invoker` is assigned above, so a map request arriving
+        # mid-start can reach try_activate, and two unsynchronized activations
+        # would register the image callbacks twice and leave a second worker
+        # that stop() never joins.
+        with self._activation_lock:
+            if self._model_id is not None:
+                # A request beat the invoker to it; that path did the whole job.
                 return
-            self._model_config = model_config
-            self._model_id = model_config.hash
-            self._encode_fn = self._encode_with_model
+            self._last_activation_attempt = time.monotonic()
+            if self._encode_fn_override is not None:
+                self._encode_fn = self._encode_fn_override
+                self._model_id = self._model_id_override
+            else:
+                model_config = self._resolve_model_config(config.image_index_model)
+                if model_config is None:
+                    # Not fatal: the model can be installed while the server runs
+                    # (the image map offers exactly that), and try_activate picks
+                    # it up from the next map request.
+                    invoker.services.logger.warning(self._model_not_installed_message(config.image_index_model))
+                    return
+                # `_model_id` last: it is what every other thread reads as
+                # "the indexer is running", and embed_image/embed_text raise if
+                # they see it before the encoder behind it.
+                self._model_config = model_config
+                self._encode_fn = self._encode_with_model
+                self._model_id = model_config.hash
 
+            # Unguarded, unlike try_activate's: a failure here aborts the
+            # invoker's start and the server fails to boot, loudly, rather
+            # than serving with a half-started indexer.
+            self._launch_worker(invoker)
+
+    def try_activate(self) -> bool:
+        """Resolve the configured encoder again and start indexing if it is now installed.
+
+        `start()` resolves the model once, at server start, and leaves the
+        service inert when it is missing — so a model installed afterwards (the
+        image map's own message offers that install) would not be indexed until
+        the next restart. The image map endpoints call this, so opening the
+        panel is enough to pick the model up. Throttled, because those
+        endpoints are polled.
+        """
+        # Fast path, unlocked: the overwhelmingly common case is a running
+        # indexer, and every map request would otherwise queue on the lock.
+        if self._model_id is not None:
+            return True
+        invoker = self._invoker
+        if invoker is None or not invoker.services.configuration.image_index_enabled:
+            return False
+
+        with self._activation_lock:
+            if self._model_id is not None:
+                return True
+            if self._stopped or (self._worker is not None and self._worker.is_alive()):
+                return False
+            now = time.monotonic()
+            if now - self._last_activation_attempt < _ACTIVATION_RETRY_INTERVAL_S:
+                return False
+            self._last_activation_attempt = now
+
+            config = invoker.services.configuration
+            try:
+                model_config = self._resolve_model_config(config.image_index_model)
+            except Exception:
+                # Unlike start(), this runs on a request thread: a model-store
+                # failure must degrade the map to `model_missing`, which is
+                # what these endpoints reported before they resolved anything,
+                # rather than turning three read endpoints into 500s.
+                invoker.services.logger.warning("Image index: could not resolve the embedding model", exc_info=True)
+                return False
+            if model_config is None:
+                # Silent: start() already logged the diagnosis once, and this
+                # runs on a polled endpoint.
+                return False
+
+            invoker.services.logger.info(
+                f"Image index: embedding model '{config.image_index_model}' is now installed; starting the indexer"
+            )
+            # `_model_id` last, and rolled back as a set: it is the flag every
+            # other thread reads as "the indexer is running". Published before
+            # the worker exists, a failed launch would wedge the service there
+            # permanently — the fast path above would answer True forever while
+            # nothing consumed the queue, and no later request would retry.
+            self._model_config = model_config
+            self._encode_fn = self._encode_with_model
+            self._model_id = model_config.hash
+            try:
+                self._launch_worker(invoker)
+            except Exception:
+                self._model_config = None
+                self._encode_fn = None
+                self._model_id = None
+                invoker.services.logger.warning(
+                    "Image index: could not start the indexer after the model became available; "
+                    "the next image map request will retry",
+                    exc_info=True,
+                )
+                return False
+            return True
+
+    def _launch_worker(self, invoker: "Invoker") -> None:
+        """Wire the image callbacks and start the worker thread. Runs once per active model."""
         discarded = invoker.services.image_index_records.delete_embeddings_for_other_models(self._model_id)
         if discarded:
             invoker.services.logger.info(
@@ -637,6 +861,10 @@ class ImageIndexService(ImageIndexServiceBase):
         self._worker.start()
 
     def stop(self, invoker: Optional["Invoker"] = None) -> None:
+        # Under the lock so a map request cannot be midway through starting a
+        # worker that this stop would then never see.
+        with self._activation_lock:
+            self._stopped = True
         self._stop_event.set()
         if self._worker is not None and self._worker.is_alive():
             self._worker.join(timeout=10)
@@ -772,7 +1000,31 @@ class ImageIndexService(ImageIndexServiceBase):
                     # result of a build that is already covering it, and
                     # _build_vocab_embeddings is a no-op once one has landed.
                     self._vocab_build_requested.clear()
-                    self._build_vocab_embeddings()
+                    if self._vocab_invalidate_requested.is_set():
+                        # Cleared before the caches are dropped: an
+                        # invalidation arriving after this clear re-sets both
+                        # flags (in that order — see invalidate_vocab), so it
+                        # is picked up on the next pass rather than lost.
+                        # Dropping the memoized failure here makes
+                        # invalidate_vocab the retry path for a failed build.
+                        self._vocab_invalidate_requested.clear()
+                        with self._vocab_lock:
+                            self._vocab_cache = None
+                            self._vocab_failure = None
+                            self._vocab_failed_at = None
+                    try:
+                        self._build_vocab_embeddings()
+                    except Exception:
+                        # The build memoizes encoder failures itself; what
+                        # raises here is its pre-build state read (the bundled
+                        # file, the custom-terms table) — transient-class
+                        # failures. Keep the request queued so the next pass
+                        # retries it: with the flag already cleared and the
+                        # caches dropped, letting it escape would strand the
+                        # rebuild in 'idle' with no spinner, no error, and no
+                        # retry until something next asks for labels.
+                        self._vocab_build_requested.set()
+                        raise
                     continue
                 projection_job = self._next_projection_job()
                 if projection_job is not None:
@@ -1241,12 +1493,19 @@ class ImageIndexService(ImageIndexServiceBase):
             return (
                 f"Image indexing is enabled, but the installed model named '{model_name}' is of type "
                 f"'{types}', not a CLIP Vision or SigLIP image encoder. Install the image-encoder model of "
-                "the same name (for the default, the 'CLIP ViT-L Image Encoder' starter model from source "
-                "'InvokeAI/clip-vit-large-patch14'). The image index will not be updated."
+                "the same name (for the default, the 'DFN2B CLIP ViT-L Image Encoder' starter model from "
+                "source 'apple/DFN2B-CLIP-ViT-L-14-39B'). The image index will not be updated."
             )
+        # Upgrades hit this branch: installs that never set image_index_model
+        # adopt the new default name, which is not installed yet. Name both
+        # ways out — installing the new starter (full re-index) or pinning the
+        # previous default to keep the embeddings already computed under it.
         return (
             f"Image indexing is enabled but the embedding model '{model_name}' is not installed "
-            "(expected a CLIP Vision or SigLIP model). The image index will not be updated."
+            "(expected a CLIP Vision or SigLIP model). For the default, install the "
+            "'DFN2B CLIP ViT-L Image Encoder' starter model from source 'apple/DFN2B-CLIP-ViT-L-14-39B' "
+            "(the gallery will re-index). To keep embeddings computed under the previous default instead, "
+            "set image_index_model: clip-vit-large-patch14. The image index will not be updated."
         )
 
     def _resolve_model_config(self, model_name: str) -> Optional["AnyModelConfig"]:
@@ -1348,16 +1607,20 @@ class ImageIndexService(ImageIndexServiceBase):
                 if self._cpu_model is None:
                     from transformers import CLIPVisionModelWithProjection, SiglipVisionModel
 
+                    from invokeai.backend.model_manager.util.clip_tower_config import clip_tower_config_override
+
                     model_path = str(self._model_abs_path())
-                    model_cls = (
-                        SiglipVisionModel
-                        if self._model_config.type is ModelType.SigLIP
-                        else CLIPVisionModelWithProjection
-                    )
+                    is_siglip = self._model_config.type is ModelType.SigLIP
+                    model_cls = SiglipVisionModel if is_siglip else CLIPVisionModelWithProjection
+                    # Full-CLIP checkpoints may carry a nested projection_dim
+                    # that disagrees with the weights; see
+                    # clip_tower_config_override.
+                    tower_config = None if is_siglip else clip_tower_config_override(model_path, "vision")
+                    extra_kwargs = {} if tower_config is None else {"config": tower_config}
                     # Process-global patch, so it needs the process-global lock —
                     # see _get_text_encoder for what goes wrong without it.
                     with MODEL_LOAD_LOCK.write_lock(), skip_torch_weight_init():
-                        model = model_cls.from_pretrained(model_path, local_files_only=True)
+                        model = model_cls.from_pretrained(model_path, local_files_only=True, **extra_kwargs)
                     model.eval()
                     self._cpu_model = model
             return self._embed(self._cpu_model, images, torch.device("cpu"))

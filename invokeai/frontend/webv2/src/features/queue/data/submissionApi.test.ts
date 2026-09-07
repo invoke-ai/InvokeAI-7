@@ -4,6 +4,7 @@ import { accountLifecycle } from '@platform/state/accountLifecycle';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
+  apiFetch: vi.fn(),
   apiFetchJson: vi.fn(),
 }));
 
@@ -12,13 +13,68 @@ vi.mock('@platform/transport/http', () => ({
   ApiError: class ApiError extends Error {
     status: number;
 
-    constructor(status: number) {
-      super('API error');
+    constructor(message: string, status: number) {
+      super(message);
       this.status = status;
     }
   },
+  apiFetch: mocks.apiFetch,
   apiFetchJson: mocks.apiFetchJson,
 }));
+
+describe('acknowledgeQueueEnqueue', () => {
+  it('releases the exact enqueue receipt', async () => {
+    const { acknowledgeQueueEnqueue } = await import('./submissionApi');
+
+    await acknowledgeQueueEnqueue('project-1', 'local-1');
+
+    expect(mocks.apiFetch).toHaveBeenCalledWith('/api/v1/queue/default/enqueue_batch/acknowledge', {
+      body: JSON.stringify({ idempotency_key: 'webv2:project-1:local-1' }),
+      headers: { 'Content-Type': 'application/json' },
+      method: 'POST',
+    });
+  });
+});
+
+describe('getQueueEnqueueReceipt', () => {
+  it.each([
+    { batch_id: 'batch-1', enqueued: 1, item_ids: [], requested: 1 },
+    { batch_id: 'batch-1', enqueued: 2, item_ids: [11, 11], requested: 2 },
+    { batch_id: '', enqueued: 1, item_ids: [11], requested: 1 },
+    { batch_id: 'batch-1', enqueued: 1, item_ids: [-1], requested: 1 },
+    { batch_id: 'batch-1', enqueued: 2, item_ids: [11, 12], requested: 1 },
+    { batch_id: 'batch-1', enqueued: 0, item_ids: [], requested: 1 },
+  ])('rejects malformed accepted receipts: %j', async (receipt) => {
+    const { getQueueEnqueueReceipt } = await import('./submissionApi');
+    mocks.apiFetchJson.mockResolvedValueOnce(receipt);
+    await expect(getQueueEnqueueReceipt('project-1', 'local-1')).rejects.toThrow('Invalid queue enqueue response');
+  });
+
+  it('loads only the caller-owned receipt and maps its accepted ids', async () => {
+    const { getQueueEnqueueReceipt } = await import('./submissionApi');
+    mocks.apiFetchJson.mockResolvedValueOnce({ batch_id: 'batch-1', enqueued: 2, item_ids: [11, 12], requested: 3 });
+
+    await expect(getQueueEnqueueReceipt('project-1', 'local-1')).resolves.toEqual({
+      batchId: 'batch-1',
+      enqueued: 2,
+      itemIds: [11, 12],
+      requested: 3,
+    });
+    expect(mocks.apiFetchJson).toHaveBeenLastCalledWith(
+      '/api/v1/queue/default/enqueue_batch/receipt?idempotency_key=webv2%3Aproject-1%3Alocal-1'
+    );
+  });
+
+  it('treats only 404 as an absent receipt', async () => {
+    const { getQueueEnqueueReceipt } = await import('./submissionApi');
+    const { ApiError } = await import('@platform/transport/http');
+    mocks.apiFetchJson.mockRejectedValueOnce(new ApiError('not found', 404));
+    await expect(getQueueEnqueueReceipt('project-1', 'local-1')).resolves.toBeNull();
+    const offline = new Error('offline');
+    mocks.apiFetchJson.mockRejectedValueOnce(offline);
+    await expect(getQueueEnqueueReceipt('project-1', 'local-1')).rejects.toBe(offline);
+  });
+});
 
 const createRequest = (overrides: Partial<QueueEnqueueGenerateRequest> = {}): QueueEnqueueGenerateRequest => ({
   batchCount: 3,
@@ -52,7 +108,9 @@ const getSubmittedBody = () => {
 
   return JSON.parse(init?.body as string) as {
     batch: {
+      batch_id?: string;
       data: { field_name: string; items: unknown[]; node_path: string }[][];
+      idempotency_key: string;
       origin: string;
       runs: number;
     };
@@ -110,6 +168,8 @@ describe('enqueueGenerate', () => {
     await enqueueGenerate(createRequest());
 
     expect(getSubmittedBody().batch.origin).toBe('webv2:p:project-1:q:local-1');
+    expect(getSubmittedBody().batch.idempotency_key).toBe('webv2:project-1:local-1');
+    expect(getSubmittedBody().batch.batch_id).toBeUndefined();
   });
 
   describe('expanded prompts', () => {
@@ -184,12 +244,37 @@ describe('enqueueWorkflow', () => {
     });
   });
 
+  it('rejects ambiguous accepted ids but accepts an explicit zero-capacity result', async () => {
+    const { enqueueWorkflow } = await import('./submissionApi');
+    mocks.apiFetchJson.mockResolvedValueOnce({
+      batch: { batch_id: 'batch-1' },
+      enqueued: 1,
+      item_ids: [],
+      requested: 2,
+    });
+    await expect(enqueueWorkflow(createWorkflowRequest())).rejects.toThrow('Invalid queue enqueue response');
+    mocks.apiFetchJson.mockResolvedValueOnce({
+      batch: { batch_id: 'batch-1' },
+      enqueued: 0,
+      item_ids: [],
+      requested: 2,
+    });
+    await expect(enqueueWorkflow(createWorkflowRequest())).resolves.toEqual({
+      batchId: 'batch-1',
+      enqueued: 0,
+      itemIds: [],
+      requested: 2,
+    });
+  });
+
   it('submits workflow runs for the requested batch count', async () => {
     const { enqueueWorkflow } = await import('./submissionApi');
 
     await enqueueWorkflow(createWorkflowRequest());
 
     expect(getSubmittedBody().batch.runs).toBe(2);
+    expect(getSubmittedBody().batch.idempotency_key).toBe('webv2:project-1:local-1');
+    expect(getSubmittedBody().batch.batch_id).toBeUndefined();
   });
 
   it('does not cap workflow runs', async () => {
@@ -205,6 +290,50 @@ describe('getResultImages', () => {
   beforeEach(() => {
     accountLifecycle.activate('test-account');
     mocks.apiFetchJson.mockReset();
+  });
+
+  it.each(['image', 'video'] as const)('bounds %s metadata requests for collection-sized results', async (kind) => {
+    let active = 0;
+    let peak = 0;
+    mocks.apiFetchJson.mockImplementation(async (url: string) => {
+      if (url === '/api/v1/queue/default/i/1') {
+        return {
+          item_id: 1,
+          status: 'completed',
+          session: {
+            results: Object.fromEntries(
+              Array.from({ length: 20 }, (_, index) => [
+                String(index),
+                {
+                  [kind]: { [`${kind}_name`]: `asset-${index}` },
+                },
+              ])
+            ),
+          },
+        };
+      }
+      active += 1;
+      peak = Math.max(peak, active);
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 1);
+      });
+      active -= 1;
+      return {
+        image_name: url.split('/').at(-1),
+        image_url: url,
+        thumbnail_url: url,
+        height: 512,
+        width: 512,
+        is_intermediate: false,
+      };
+    });
+    const { getResultImages, getResultVideoNames } = await import('./submissionApi');
+    const result =
+      kind === 'image'
+        ? await getResultImages(1, 'source-1', '2026-09-04T00:00:00Z')
+        : await getResultVideoNames(1, { excludeIntermediate: true });
+    expect(result).toHaveLength(20);
+    expect(peak).toBeLessThanOrEqual(8);
   });
 
   it('can restrict image extraction to explicit result node ids', async () => {
@@ -282,6 +411,40 @@ describe('getResultImages', () => {
     const images = await getResultImages(1, 'source-1', '2026-06-15T00:00:00.000Z');
 
     expect(images.map((image) => image.imageName)).toEqual(['external-a.png', 'external-b.png']);
+  });
+
+  it('carries the backend creation timestamp, normalized to ISO, alongside the submission instant', async () => {
+    mocks.apiFetchJson.mockImplementation((url: string) => {
+      if (url === '/api/v1/queue/default/i/1') {
+        return Promise.resolve({
+          item_id: 1,
+          session: {
+            results: {
+              output: { image: { image_name: 'result.png' }, type: 'image_output' },
+            },
+          },
+          status: 'completed',
+        });
+      }
+
+      const imageName = decodeURIComponent(url.replace('/api/v1/images/i/', ''));
+      return Promise.resolve({
+        created_at: '2026-06-15 00:12:34.000',
+        height: 768,
+        image_name: imageName,
+        image_url: `/images/${imageName}`,
+        is_intermediate: false,
+        thumbnail_url: `/thumbs/${imageName}`,
+        width: 1024,
+      });
+    });
+
+    const { getResultImages } = await import('./submissionApi');
+
+    const [image] = await getResultImages(1, 'source-1', '2026-06-15T00:00:00.000Z');
+
+    expect(image?.createdAt).toBe('2026-06-15T00:12:34.000Z');
+    expect(image?.queuedAt).toBe('2026-06-15T00:00:00.000Z');
   });
 
   it('does not issue image requests from queue data resolved after an account switch', async () => {

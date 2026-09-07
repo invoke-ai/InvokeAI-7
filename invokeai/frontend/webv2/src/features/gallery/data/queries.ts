@@ -4,6 +4,12 @@ import type { GalleryBoardOrderBy, GalleryOrderDir, GalleryView } from '@feature
 import type { AccountScope } from '@platform/state/accountLifecycle';
 
 import { toGalleryItemKey } from '@features/gallery/core/items';
+import {
+  GALLERY_MAX_INFINITE_PAGES,
+  GALLERY_MAX_ROWS,
+  GALLERY_PAGE_SIZE,
+  GALLERY_STARRED_STRIP_LIMIT,
+} from '@features/gallery/core/paging';
 import { toGallerySemanticQuery } from '@features/gallery/core/semanticImageQuery';
 import { assertAccountScopeCurrent, captureAccountScope } from '@platform/state/accountLifecycle';
 import {
@@ -27,9 +33,7 @@ import {
   listSemanticGalleryItemNames,
 } from './backend';
 
-export const GALLERY_PAGE_SIZE = 60;
-export const GALLERY_MAX_INFINITE_PAGES = 10;
-export const GALLERY_MAX_ROWS = GALLERY_PAGE_SIZE * GALLERY_MAX_INFINITE_PAGES;
+export { GALLERY_MAX_INFINITE_PAGES, GALLERY_MAX_ROWS, GALLERY_PAGE_SIZE, GALLERY_STARRED_STRIP_LIMIT };
 
 export interface GalleryBoardsQuery {
   includeArchived?: boolean;
@@ -60,7 +64,8 @@ export interface GalleryItemsFilter {
    * apply to a ranked result set.
    */
   semanticQuery?: GallerySemanticReference | null;
-  starredFirst?: boolean;
+  /** true = only starred items, false = only unstarred; absent = all. */
+  starred?: boolean;
 }
 
 export interface CanonicalGalleryItemsFilter {
@@ -72,10 +77,17 @@ export interface CanonicalGalleryItemsFilter {
   searchTerm: string;
   /** Label-free semantic reference: a file query is keyed by its registry id. */
   semantic?: GallerySemanticQuery;
-  starredFirst: boolean;
+  starred?: boolean;
 }
 
-export type GalleryItemsWindow = { kind: 'anchor'; offset: number } | { kind: 'infinite' };
+/**
+ * An infinite window can start below the top of the listing: `offset` (a row
+ * offset, normalized to a page multiple, default 0) anchors where the window
+ * begins, and the `GALLERY_MAX_ROWS` reach applies from there. This is what
+ * lets a reveal land the gallery on an image deeper than the base window
+ * could ever load — every board/search/view change resets the anchor to 0.
+ */
+export type GalleryItemsWindow = { kind: 'anchor'; offset: number } | { kind: 'infinite'; offset?: number };
 
 interface GalleryAccountKey {
   accountId: string | null;
@@ -90,9 +102,15 @@ type GalleryItemsInfiniteQueryKey = readonly [
   CanonicalGalleryItemsFilter,
 ];
 
-type GalleryItemsAnchorQueryKey = readonly [...GalleryItemsInfiniteQueryKey, 'anchor', number];
+type GalleryItemsAnchorQueryKey = readonly [...GalleryItemsInfiniteQueryKey, 'anchor' | 'infinite', number];
 
-export type GalleryItemsListQueryKey = GalleryItemsAnchorQueryKey | GalleryItemsInfiniteQueryKey;
+/** The bounded starred strip: one `GalleryItemsPage`, not an infinite window. */
+type GalleryItemsStripQueryKey = readonly [...GalleryItemsInfiniteQueryKey, 'strip'];
+
+export type GalleryItemsListQueryKey =
+  | GalleryItemsAnchorQueryKey
+  | GalleryItemsInfiniteQueryKey
+  | GalleryItemsStripQueryKey;
 
 const canonicalizeBoardsQuery = (query: GalleryBoardsQuery): CanonicalGalleryBoardsQuery => ({
   includeArchived: query.includeArchived ?? false,
@@ -107,9 +125,9 @@ export const canonicalizeGalleryItemsFilter = (filter: GalleryItemsFilter): Cano
   if (semantic) {
     // A ranked result set answers to the reference alone: the semantic branch
     // of `galleryItemNamesOptionsForOwner` sends only the query, so board,
-    // view, order, starred-first and the date range change nothing about the
-    // response. Keeping them in the key made clicking a board — or toggling
-    // starred-first, or switching the images/assets tab — mint a fresh key and
+    // view, order, the starred filter and the date range change nothing about
+    // the response. Keeping them in the key made clicking a board — or toggling
+    // the starred filter, or switching the images/assets tab — mint a fresh key and
     // re-run the search for byte-identical results, which for a dropped file
     // means re-uploading the blob and for a URL reference means the server
     // re-downloads the remote image. Pinned rather than omitted so the shape
@@ -121,7 +139,6 @@ export const canonicalizeGalleryItemsFilter = (filter: GalleryItemsFilter): Cano
       orderDir: 'DESC',
       searchTerm: '',
       semantic,
-      starredFirst: false,
     };
   }
 
@@ -132,7 +149,7 @@ export const canonicalizeGalleryItemsFilter = (filter: GalleryItemsFilter): Cano
     galleryView: filter.galleryView,
     orderDir: filter.orderDir ?? 'DESC',
     searchTerm: filter.searchTerm.trim(),
-    starredFirst: filter.starredFirst ?? false,
+    ...(filter.starred !== undefined ? { starred: filter.starred } : {}),
   };
 };
 
@@ -144,8 +161,19 @@ const getAccountKey = (owner: AccountScope): GalleryAccountKey => ({
 const normalizePageOffset = (offset: number): number =>
   Math.max(0, Math.floor(offset / GALLERY_PAGE_SIZE) * GALLERY_PAGE_SIZE);
 
-const getWindowKey = (window: GalleryItemsWindow): readonly [] | readonly ['anchor', number] =>
-  window.kind === 'infinite' ? [] : ([window.kind, normalizePageOffset(window.offset)] as const);
+const getWindowKey = (
+  window: GalleryItemsWindow
+): readonly [] | readonly ['anchor', number] | readonly ['infinite', number] => {
+  if (window.kind === 'infinite') {
+    const offset = normalizePageOffset(window.offset ?? 0);
+
+    // A zero offset keeps the historical key shape, so every existing
+    // consumer of the base window shares one cache entry with it.
+    return offset === 0 ? [] : (['infinite', offset] as const);
+  }
+
+  return [window.kind, normalizePageOffset(window.offset)] as const;
+};
 
 export const galleryKeys = {
   all: ['gallery'] as const,
@@ -162,6 +190,8 @@ export const galleryKeys = {
     window: GalleryItemsWindow = { kind: 'infinite' }
   ): GalleryItemsListQueryKey =>
     [...galleryKeys.itemListsForAccount(owner), filter, ...getWindowKey(window)] as GalleryItemsListQueryKey,
+  starredStrip: (owner: AccountScope, filter: CanonicalGalleryItemsFilter): GalleryItemsStripQueryKey =>
+    [...galleryKeys.itemListsForAccount(owner), filter, 'strip'] as const,
   itemNamesRoot: () => [...galleryKeys.itemsRoot(), 'names'] as const,
   itemNamesForAccount: (owner: AccountScope) => [...galleryKeys.itemNamesRoot(), getAccountKey(owner)] as const,
   itemNames: (owner: AccountScope, filter: CanonicalGalleryItemsFilter) =>
@@ -274,6 +304,39 @@ const fetchSharedDateBoardNames = (
   });
 };
 
+/**
+ * One range read of a filter's listing, shared by the per-page queryFn and
+ * the window rebuild so the two cannot diverge. Name-list filters hydrate a
+ * slice of one shared name fetch — re-running a semantic search re-uploads a
+ * dropped file's blob. The result is clamped to `limit`.
+ */
+export const fetchGalleryItemsRange = async (
+  client: QueryClient,
+  owner: AccountScope,
+  filter: CanonicalGalleryItemsFilter,
+  { limit, offset, signal }: { limit: number; offset: number; signal: AbortSignal }
+): Promise<GalleryItemsPage> => {
+  let result: GalleryItemsPage;
+
+  if (filter.semantic || isDateBoardId(filter.boardId)) {
+    const namesOptions = galleryItemNamesOptionsForOwner(owner, filter);
+    const names = await fetchSharedDateBoardNames(client, namesOptions.queryKey, signal, () =>
+      client.fetchQuery(namesOptions)
+    );
+
+    assertAccountScopeCurrent(owner);
+    signal.throwIfAborted();
+    result = await hydrateGalleryDateBoardItemPage({ ...names, limit, offset, signal });
+  } else {
+    result = await listGalleryItems({ ...filter, limit, offset, signal });
+  }
+
+  assertAccountScopeCurrent(owner);
+  signal.throwIfAborted();
+
+  return result.items.length <= limit ? result : { ...result, items: result.items.slice(0, limit) };
+};
+
 export const galleryBoardsOptions = (query: GalleryBoardsQuery = {}) => {
   const owner = captureAccountScope();
   const canonicalQuery = canonicalizeBoardsQuery(query);
@@ -302,7 +365,8 @@ const getNextPageParam = (
   lastPageParam: number
 ): number | undefined => {
   const nextOffset = lastPageParam + GALLERY_PAGE_SIZE;
-  const isInsideWindow = window.kind === 'anchor' || nextOffset < GALLERY_MAX_ROWS;
+  const isInsideWindow =
+    window.kind === 'anchor' || nextOffset < normalizePageOffset(window.offset ?? 0) + GALLERY_MAX_ROWS;
 
   return isInsideWindow && nextOffset < lastPage.total ? nextOffset : undefined;
 };
@@ -314,8 +378,11 @@ export const galleryItemsInfiniteOptions = (
   const owner = captureAccountScope();
   const filter = canonicalizeGalleryItemsFilter(inputFilter);
   const normalizedWindow =
-    window.kind === 'infinite' ? window : ({ ...window, offset: normalizePageOffset(window.offset) } as const);
-  const initialPageParam = normalizedWindow.kind === 'infinite' ? 0 : normalizedWindow.offset;
+    window.kind === 'infinite'
+      ? ({ kind: 'infinite', offset: normalizePageOffset(window.offset ?? 0) } as const)
+      : ({ ...window, offset: normalizePageOffset(window.offset) } as const);
+  const initialPageParam = normalizedWindow.offset;
+  const isBaseInfiniteWindow = normalizedWindow.kind === 'infinite' && normalizedWindow.offset === 0;
 
   return infiniteQueryOptions<
     GalleryItemsPage,
@@ -324,61 +391,62 @@ export const galleryItemsInfiniteOptions = (
     GalleryItemsListQueryKey,
     number
   >({
-    ...(normalizedWindow.kind === 'infinite' ? {} : { gcTime: 0 }),
+    // Anchored windows (paginated pages and deep infinite reveals) are
+    // transient views; only the base window's cache is worth keeping around.
+    ...(isBaseInfiniteWindow ? {} : { gcTime: 0 }),
     getNextPageParam: (lastPage, allPages, lastPageParam) =>
       allPages.length >= GALLERY_MAX_INFINITE_PAGES
         ? undefined
         : getNextPageParam(normalizedWindow, lastPage, lastPageParam),
-    getPreviousPageParam: (_firstPage, allPages, firstPageParam) =>
-      allPages.length < GALLERY_MAX_INFINITE_PAGES && firstPageParam >= GALLERY_PAGE_SIZE
+    getPreviousPageParam: (_firstPage, allPages, firstPageParam) => {
+      // An anchored INFINITE window must not grow upward past its anchor: its
+      // cache key names that start offset, and the grid — which shares the
+      // entry and cannot request earlier pages itself — would have 60 items
+      // spliced in above its viewport, shifting the content under the user.
+      // Paginated anchors keep growing freely: their consumer slices out the
+      // one page it wants by pageParam, so a prepend is invisible there, and
+      // Preview walks backwards through exactly this mechanism.
+      const lowestPageParam = normalizedWindow.kind === 'infinite' ? normalizedWindow.offset : 0;
+
+      return allPages.length < GALLERY_MAX_INFINITE_PAGES && firstPageParam - GALLERY_PAGE_SIZE >= lowestPageParam
         ? firstPageParam - GALLERY_PAGE_SIZE
-        : undefined,
+        : undefined;
+    },
     initialPageParam,
     maxPages: GALLERY_MAX_INFINITE_PAGES,
-    queryFn: async ({ client, pageParam, signal }) => {
-      const requestSignal = AbortSignal.any([signal, owner.signal]);
-      let result: GalleryItemsPage;
-
-      // Semantic and date-board queries share one mechanism: the ordered name
-      // list is fetched once (shared across pages, both consumers, and the
-      // 60s stale window) and every page hydrates a slice of it. For semantic
-      // queries this is also what keeps ranks consistent across pages — and
-      // what keeps a dropped-file reference from re-uploading its blob on
-      // every page fetch.
-      if (filter.semantic || isDateBoardId(filter.boardId)) {
-        const namesOptions = galleryItemNamesOptionsForOwner(owner, filter);
-        const names = await fetchSharedDateBoardNames(client, namesOptions.queryKey, requestSignal, () =>
-          client.fetchQuery(namesOptions)
-        );
-
-        assertAccountScopeCurrent(owner);
-        requestSignal.throwIfAborted();
-        result = await hydrateGalleryDateBoardItemPage({
-          ...names,
-          limit: GALLERY_PAGE_SIZE,
-          offset: pageParam,
-          signal: requestSignal,
-        });
-      } else {
-        result = await listGalleryItems({
-          ...filter,
-          limit: GALLERY_PAGE_SIZE,
-          offset: pageParam,
-          signal: requestSignal,
-        });
-      }
-
-      assertAccountScopeCurrent(owner);
-      requestSignal.throwIfAborted();
-
-      return result.items.length <= GALLERY_PAGE_SIZE
-        ? result
-        : { ...result, items: result.items.slice(0, GALLERY_PAGE_SIZE) };
-    },
+    queryFn: ({ client, pageParam, signal }) =>
+      fetchGalleryItemsRange(client, owner, filter, {
+        limit: GALLERY_PAGE_SIZE,
+        offset: pageParam,
+        signal: AbortSignal.any([signal, owner.signal]),
+      }),
     queryKey: galleryKeys.items(owner, filter, normalizedWindow),
     staleTime: 60_000,
   });
 };
+
+/**
+ * The starred strip shares the list key family (and so the account-wide
+ * invalidation and mutation patching) with the listing it sits above, keyed
+ * on that listing's filter plus `starred: true`.
+ */
+export const galleryStarredStripOptions = (inputFilter: GalleryItemsFilter) => {
+  const owner = captureAccountScope();
+  const filter: CanonicalGalleryItemsFilter = { ...canonicalizeGalleryItemsFilter(inputFilter), starred: true };
+
+  return queryOptions({
+    queryFn: ({ client, signal }) =>
+      fetchGalleryItemsRange(client, owner, filter, {
+        limit: GALLERY_STARRED_STRIP_LIMIT,
+        offset: 0,
+        signal: AbortSignal.any([signal, owner.signal]),
+      }),
+    queryKey: galleryKeys.starredStrip(owner, filter),
+    staleTime: 60_000,
+  });
+};
+
+export const isGalleryStarredStripQueryKey = (queryKey: QueryKey): boolean => queryKey[5] === 'strip';
 
 export const flattenGalleryItemsData = (data: InfiniteData<GalleryItemsPage, number> | undefined): GalleryItem[] => {
   if (!data) {

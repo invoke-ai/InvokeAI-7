@@ -64,7 +64,7 @@ export const NodePackContextMenu = ({
                   <Menu.ItemText fontSize="xs">{t('nodes.copyPath')}</Menu.ItemText>
                 </Menu.Item>
                 <Menu.Separator />
-                <Menu.Item color="fg.error" value="uninstall" onClick={() => setPendingUninstall(pack)}>
+                <Menu.Item data-danger="" value="uninstall" onClick={() => setPendingUninstall(pack)}>
                   <Icon as={Trash2Icon} boxSize="3.5" />
                   <Menu.ItemText fontSize="xs">{t('nodes.uninstall')}</Menu.ItemText>
                 </Menu.Item>

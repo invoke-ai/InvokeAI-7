@@ -1,18 +1,24 @@
 import type {
   CanvasAdjustmentsContract,
   CanvasBlendMode,
-  CanvasDocumentContractV2,
-  CanvasLayerContract,
+  CanvasDocumentContractV3,
   CanvasLayerSourceContract,
   CanvasRasterLayerContractV2,
 } from '@workbench/canvas-engine/contracts';
+import type { SemanticLeaf } from '@workbench/canvas-engine/document-model/semanticLeaf';
+import type { GroupCompositeScope } from '@workbench/canvas-engine/render/groupCompositeScopes';
 import type { RasterSurface } from '@workbench/canvas-engine/render/raster';
 import type { Mat2d, Rect } from '@workbench/canvas-engine/types';
 
+import { compileDocumentLeaves } from '@workbench/canvas-engine/document-model/documentModel';
 import { fromTRS, multiply } from '@workbench/canvas-engine/math/mat2d';
 import { roundOut, transformBounds, union } from '@workbench/canvas-engine/math/rect';
 import { adjustmentsKey, applyAdjustments, isIdentityAdjustments } from '@workbench/canvas-engine/render/adjustments';
 import { blendToComposite } from '@workbench/canvas-engine/render/compositor';
+import {
+  collectCompositedGroups,
+  planGroupCompositeScopes,
+} from '@workbench/canvas-engine/render/groupCompositeScopes';
 
 type Ctx = RasterSurface['ctx'];
 
@@ -32,6 +38,8 @@ export interface CompositeLayerRef {
 export interface CompositeEntry {
   bbox: Rect;
   layers: readonly CompositeLayerRef[];
+  /** Adjusted-group isolation scopes over `layers` (top-first, nested). Absent ⇒ fully pass-through. */
+  groupScopes?: readonly GroupCompositeScope[];
 }
 
 export interface BaseRasterCompositeEntry extends CompositeEntry {
@@ -55,9 +63,10 @@ const defaultReadImageData = (surface: RasterSurface, rect: Rect): ImageData =>
 const defaultWriteImageData = (surface: RasterSurface, imageData: ImageData, x: number, y: number): void =>
   surface.ctx.putImageData(imageData, x, y);
 
-/** True when a layer is an enabled raster layer with rasterizable, non-empty pixels. */
-const isBaseRasterLayer = (layer: CanvasLayerContract): layer is CanvasRasterLayerContractV2 => {
-  if (!layer.isEnabled || layer.type !== 'raster') {
+/** True when a leaf is a contributing raster layer with rasterizable, non-empty pixels. */
+const isBaseRasterLeaf = (leaf: SemanticLeaf): leaf is SemanticLeaf & { layer: CanvasRasterLayerContractV2 } => {
+  const { layer } = leaf;
+  if (!leaf.contributionEnabled || layer.type !== 'raster') {
     return false;
   }
   if (layer.source.type === 'image') {
@@ -79,7 +88,7 @@ const sourceRefOf = (source: CanvasLayerSourceContract): string => {
 };
 
 /** The native (unscaled) content rect of a base-raster layer's source (layer-local). */
-const contentRectOf = (layer: CanvasRasterLayerContractV2, doc: CanvasDocumentContractV2): Rect => {
+const contentRectOf = (layer: CanvasRasterLayerContractV2, doc: CanvasDocumentContractV3): Rect => {
   const { source } = layer;
   if (source.type === 'image') {
     return { height: source.image.height, width: source.image.width, x: 0, y: 0 };
@@ -92,7 +101,7 @@ const contentRectOf = (layer: CanvasRasterLayerContractV2, doc: CanvasDocumentCo
 };
 
 /** Projects a document layer into its frozen composite contribution. */
-const toLayerRef = (layer: CanvasRasterLayerContractV2, doc: CanvasDocumentContractV2): CompositeLayerRef => {
+const toLayerRef = (layer: CanvasRasterLayerContractV2, doc: CanvasDocumentContractV3): CompositeLayerRef => {
   const rect = contentRectOf(layer, doc);
   const hasAdjustments = !isIdentityAdjustments(layer.adjustments);
   return {
@@ -150,19 +159,25 @@ export const getCompositeLayerBounds = (layers: readonly CompositeLayerRef[]): R
   return bounds;
 };
 
+const scopeKey = (scope: GroupCompositeScope): string =>
+  `${scope.id}@${scope.start}-${scope.end}:${adjustmentsKey(scope.adjustments)}:${scope.opacity}:${scope.blendMode}(${scope.children.map(scopeKey).join(',')})`;
+
 /** Plans the enabled base-raster layers over an exact document-space rectangle. */
-export const planBaseRasterComposite = (document: CanvasDocumentContractV2, rect: Rect): BaseRasterCompositeEntry => {
-  const layers = document.layers.filter(isBaseRasterLayer).map((layer) => toLayerRef(layer, document));
+export const planBaseRasterComposite = (document: CanvasDocumentContractV3, rect: Rect): BaseRasterCompositeEntry => {
+  const drawn = compileDocumentLeaves(document).filter(isBaseRasterLeaf);
+  const layers = drawn.map((leaf) => toLayerRef(leaf.layer, document));
+  const groupScopes = planGroupCompositeScopes(drawn, collectCompositedGroups(document));
   return {
     bbox: rect,
-    key: `base-raster|${rectKey(rect)}|${layers.map(layerKey).join('|')}`,
+    key: `base-raster|${rectKey(rect)}|${layers.map(layerKey).join('|')}|${groupScopes.map(scopeKey).join('|')}`,
     kind: 'base-raster',
     layers,
+    ...(groupScopes.length > 0 ? { groupScopes } : {}),
   };
 };
 
 /** Tight outward-rounded bounds of all enabled raster content in the document. */
-export const getBaseRasterContentBounds = (document: CanvasDocumentContractV2): Rect | null => {
+export const getBaseRasterContentBounds = (document: CanvasDocumentContractV3): Rect | null => {
   const bounds = getCompositeLayerBounds(planBaseRasterComposite(document, document.bbox).layers);
   return bounds === null ? null : roundOut(bounds);
 };
@@ -192,21 +207,12 @@ export const renderRasterComposite = async (
   const { bbox } = entry;
   const width = Math.max(0, bbox.width);
   const height = Math.max(0, bbox.height);
-  const surface = deps.backend.createSurface(width, height);
-  const ctx = surface.ctx;
   const readImageData = deps.readImageData ?? defaultReadImageData;
   const writeImageData = deps.writeImageData ?? defaultWriteImageData;
-
-  setTransform(ctx, { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 });
-  ctx.clearRect(0, 0, surface.width, surface.height);
-
   const view = bboxView(bbox);
-  // Layers are stored top-first (index 0 = top-most); draw bottom→top.
-  for (let i = entry.layers.length - 1; i >= 0; i--) {
-    const ref = entry.layers[i];
-    if (!ref) {
-      continue;
-    }
+  const fullRect: Rect = { height, width, x: 0, y: 0 };
+
+  const drawRef = async (ctx: Ctx, ref: CompositeLayerRef): Promise<void> => {
     const layerSurface = await deps.getLayerSurface(ref.id);
     if (ref.adjustments) {
       // Bake non-destructive adjustments so the generated image matches what the
@@ -218,7 +224,6 @@ export const renderRasterComposite = async (
       tempCtx.clearRect(0, 0, width, height);
       setTransform(tempCtx, multiply(view, layerMatrix(ref)));
       tempCtx.drawImage(layerSurface.surface.canvas, layerSurface.rect.x, layerSurface.rect.y);
-      const fullRect: Rect = { height, width, x: 0, y: 0 };
       const pixels = readImageData(temp, fullRect);
       applyAdjustments(pixels, ref.adjustments);
       writeImageData(temp, pixels, 0, 0);
@@ -228,7 +233,7 @@ export const renderRasterComposite = async (
       ctx.globalCompositeOperation = blendToComposite(ref.blendMode);
       ctx.drawImage(temp.canvas, 0, 0);
       ctx.restore();
-      continue;
+      return;
     }
     ctx.save();
     ctx.globalAlpha = ref.opacity;
@@ -238,7 +243,49 @@ export const renderRasterComposite = async (
     // layers place their pixels off-zero).
     ctx.drawImage(layerSurface.surface.canvas, layerSurface.rect.x, layerSurface.rect.y);
     ctx.restore();
-  }
+  };
 
+  /** Draws `[start, end)` bottom→top; a scope isolates into a buffer, applies its stack, lands source-over. */
+  const renderRange = async (
+    ctx: Ctx,
+    start: number,
+    end: number,
+    scopes: readonly GroupCompositeScope[]
+  ): Promise<void> => {
+    let scopeIndex = scopes.length - 1;
+    for (let i = end - 1; i >= start;) {
+      const scope = scopeIndex >= 0 ? scopes[scopeIndex]! : null;
+      if (scope && i >= scope.start && i < scope.end) {
+        const buffer = deps.backend.createSurface(width, height);
+        setTransform(buffer.ctx, { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 });
+        buffer.ctx.clearRect(0, 0, width, height);
+        await renderRange(buffer.ctx, scope.start, scope.end, scope.children);
+        if (!isIdentityAdjustments(scope.adjustments)) {
+          const pixels = readImageData(buffer, fullRect);
+          applyAdjustments(pixels, scope.adjustments);
+          writeImageData(buffer, pixels, 0, 0);
+        }
+        ctx.save();
+        setTransform(ctx, { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 });
+        ctx.globalAlpha = scope.opacity;
+        ctx.globalCompositeOperation = blendToComposite(scope.blendMode);
+        ctx.drawImage(buffer.canvas, 0, 0);
+        ctx.restore();
+        i = scope.start - 1;
+        scopeIndex -= 1;
+        continue;
+      }
+      const ref = entry.layers[i];
+      if (ref) {
+        await drawRef(ctx, ref);
+      }
+      i -= 1;
+    }
+  };
+
+  const surface = deps.backend.createSurface(width, height);
+  setTransform(surface.ctx, { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 });
+  surface.ctx.clearRect(0, 0, surface.width, surface.height);
+  await renderRange(surface.ctx, 0, entry.layers.length, entry.groupScopes ?? []);
   return surface;
 };

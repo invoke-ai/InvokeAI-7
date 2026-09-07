@@ -9,7 +9,7 @@ import { Group } from '@platform/ui/Group';
 import { MenuContent } from '@platform/ui/Menu';
 import { Link } from '@tanstack/react-router';
 import { BUILT_IN_LAYOUT_PRESET_LABELS, LAUNCHPAD_LAYOUT_IDS } from '@workbench/launchpad/intents';
-import { ChevronDownIcon, LayersIcon, PlusIcon, TypeIcon, WorkflowIcon } from 'lucide-react';
+import { ChevronDownIcon, ClapperboardIcon, LayersIcon, PlusIcon, TypeIcon, WorkflowIcon } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 /**
@@ -17,14 +17,14 @@ import { useTranslation } from 'react-i18next';
  *
  * The plain click keeps the old behaviour — a draft in whatever preset the
  * account last used — because most of the time the arrangement is not the
- * decision being made. The caret is for when it is: it names the three shipped
+ * decision being made. The caret is for when it is: it names the shipped
  * layouts so starting from "Edit" does not mean opening a draft and then
  * rearranging it.
  *
  * Labels come from the shared id/label map that `layoutPresets` also builds
  * from, so the menu and the editor's preset strip cannot disagree about what a
  * layout is called — without the Launchpad having to load the preset table's
- * three full widget-region snapshots. Icons are mapped locally for the same
+ * full widget-region snapshots. Icons are mapped locally for the same
  * reason: `resolveLayoutPresetIcon` exists for the custom-preset picker and
  * carries its whole curated catalogue.
  */
@@ -36,6 +36,7 @@ const LAYOUT_ICONS: Record<BuiltInLayoutPresetId, LucideIcon> = {
   automate: WorkflowIcon,
   compose: TypeIcon,
   edit: LayersIcon,
+  video: ClapperboardIcon,
 };
 
 interface NewProjectLayoutItem {

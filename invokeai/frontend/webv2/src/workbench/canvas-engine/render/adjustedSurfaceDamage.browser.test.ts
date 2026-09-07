@@ -22,12 +22,10 @@ import { describe, expect, it } from 'vitest';
 
 const WIDTH = 320;
 const HEIGHT = 240;
-const ADJUSTMENTS = {
-  brightness: 0.25,
-  contrast: 0.15,
-  hue: 0,
-  saturation: -0.2,
-} as unknown as CanvasAdjustmentsContract;
+const ADJUSTMENTS: CanvasAdjustmentsContract = [
+  { brightness: 0.25, contrast: 0.15, id: 'bc', isEnabled: true, type: 'brightness-contrast' },
+  { id: 'sat', isEnabled: true, saturation: -0.2, type: 'hsl' },
+];
 
 /** A layer cache seeded with a gradient, plus an adjusted cache over it. */
 const setup = (withDamageTracking: boolean) => {

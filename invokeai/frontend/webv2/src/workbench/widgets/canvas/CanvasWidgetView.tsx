@@ -4,20 +4,28 @@ import type { MouseEvent as ReactMouseEvent } from 'react';
 import { Box } from '@chakra-ui/react';
 import { useDndMonitor, type DragEndEvent } from '@dnd-kit/core';
 import { useQueueItemProgressImage } from '@features/queue/react';
+import { useMountEffect } from '@platform/react/useMountEffect';
+import { preloadCanvasInvocation } from '@workbench/activeInvocationSubmission';
 import { getCanvasImportNotice } from '@workbench/canvas-operations/api';
-import { createLayerId } from '@workbench/canvasLayerOps';
 import { getCanvasStagingSlots } from '@workbench/canvasStagingView';
 import { recordCanvasImportError } from '@workbench/image-actions/canvasImportError';
+import { readLayerPanelState } from '@workbench/layerPanelState';
 import { useWorkbenchSettingsSelector } from '@workbench/settings/store';
 import { useCanvasProjectMutationDispatch } from '@workbench/useCanvasProjectMutationDispatch';
+import { useNotify } from '@workbench/useNotify';
 import { CanvasLayerContextMenu } from '@workbench/widgets/layers/LayerContextMenu';
+import { clearLayerPropertiesRequest } from '@workbench/widgets/layers/layerPropertiesRequestStore';
 import { getProjectWidgetValues } from '@workbench/widgetState';
-import { useActiveProjectSelector, useWorkbenchCommands, useWorkbenchQueries } from '@workbench/WorkbenchContext';
+import {
+  useActiveProjectId,
+  useActiveProjectSelector,
+  useWorkbenchCommands,
+  useWorkbenchQueries,
+} from '@workbench/WorkbenchContext';
 import { useCallback, useEffect, useEffectEvent, useLayoutEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { gridSizeForModelBase } from './bboxGrid';
-import { CanvasBottomControls } from './CanvasBottomControls';
 import { CanvasBottomOverlay } from './CanvasBottomOverlay';
 import { copyBlobToClipboard, decodeImageBlob, readClipboardImage } from './canvasClipboard';
 import {
@@ -41,6 +49,8 @@ import {
 import { CanvasSurface } from './CanvasSurface';
 import { CanvasSurfaceContextLayout } from './CanvasSurfaceContextLayout';
 import { resolveCheckerColors } from './checkerColors';
+import { CanvasColorFeed } from './color-system/CanvasColorFeed';
+import { useActiveColorCommands } from './color-system/useActiveColors';
 import { useCanvasOperation } from './engineStoreHooks';
 import { executeCanvasImageDropImport } from './executeCanvasImageDropImport';
 import { StagingBar } from './StagingBar';
@@ -50,31 +60,47 @@ import { ToolStrip } from './ToolStrip';
 import { useCanvasEngine } from './useCanvasEngine';
 import { useCanvasGallerySave } from './useCanvasGallerySave';
 import { useCreateFromBbox } from './useCreateFromBbox';
+import { reportPreparedCommit, reportStructuralCommit } from './useStructuralCommit';
 
 /**
  * The canvas widget shell. The engine owns pixels and interaction and renders
  * into {@link CanvasSurface}; this component only wires the reducer-backed
- * chrome around it — command/hotkey registration, the settings-store feed, and
- * the floating bottom chrome (tool options + staging). Zoom / fit / settings
- * live in the widget header ({@link CanvasHeaderActions}).
+ * chrome around it — command/hotkey registration, the settings-store feed and
+ * the floating staging bar. Tool and operation settings live in the
+ * Properties widget; zoom / fit / settings in the widget header
+ * ({@link CanvasHeaderActions}).
  */
 export const CanvasWidgetView = ({ runtime }: WidgetViewProps) => {
   const { t } = useTranslation();
+  const notify = useNotify();
   const { canvas: canvasCommands, notifications, queue } = useWorkbenchCommands();
   const canvasDispatch = useCanvasProjectMutationDispatch();
   const queries = useWorkbenchQueries();
   const engine = useCanvasEngine();
+  const projectId = useActiveProjectId();
   const canvas = useActiveProjectSelector((project) => project.canvas);
   const queueItems = useActiveProjectSelector((project) => project.queue.items);
   const antialiasProgressImages = useActiveProjectSelector((project) => project.settings.antialiasProgressImages);
   const { document, stagingArea } = canvas;
   const operation = useCanvasOperation(engine);
+  const operationKind = operation?.status === 'active' ? operation.identity.kind : null;
+  // An operation's panel supersedes any pending layer-properties request.
+  useEffect(() => {
+    if (operationKind) {
+      clearLayerPropertiesRequest();
+    }
+  }, [operationKind]);
   const { isSaving, save: saveToGallery } = useCanvasGallerySave(engine);
   const { createFromBbox, isCreating } = useCreateFromBbox(engine);
 
-  // Right-click on the canvas surface: hit-test the layer under the cursor and
-  // open either the shared per-layer menu or the global empty-space menu at the
-  // pointer. Locked interaction skips the hit-test but keeps global save visible.
+  // Canvas invocation stays code-split from the rest of the workbench, but the
+  // canvas being mounted is a strong intent signal. Warm it while the user edits
+  // instead of making the first Ctrl+Enter pay the chunk download/evaluation.
+  useMountEffect(preloadCanvasInvocation);
+
+  // Right-click on the canvas surface targets the selected layer (the panel is
+  // the sole authority; the stack is never hit-tested) and opens either the
+  // shared per-layer menu or the global menu at the pointer.
   const [contextMenuTarget, setContextMenuTarget] = useState<CanvasContextMenuTarget | null>(null);
   const closeContextMenu = useCallback(() => setContextMenuTarget(null), []);
   // The bbox tool snaps to a model-dependent grid; the engine is model-agnostic,
@@ -100,13 +126,17 @@ export const CanvasWidgetView = ({ runtime }: WidgetViewProps) => {
       return;
     }
     for (const setting of CANVAS_SETTINGS) {
-      // Only engine-backed settings feed a store; React-consumed ones (e.g.
-      // showProgressOnCanvas, read below) have no store and are skipped here.
+      // Only engine-backed settings feed a store; settings consumed elsewhere
+      // in the frontend have no store and are skipped here.
       if (setting.store) {
         engine.interaction.set(setting.store, settings[setting.key]);
       }
     }
   }, [engine, settings]);
+
+  // The pair↔engine bridge lives in a null child so per-pointermove pair
+  // edits never re-render this shell; the commands feed the X/D hotkeys below.
+  const colorCommands = useActiveColorCommands();
 
   // The checkerboard fills the whole (unbounded) canvas, so its two square colors
   // come from theme tokens rather than hardcoded greys. Resolve them from the live
@@ -140,7 +170,7 @@ export const CanvasWidgetView = ({ runtime }: WidgetViewProps) => {
     hasSelectedCandidate: selectedCandidate !== undefined,
     hasStagingSlots,
     isCanvasGenerationInFlight,
-    operationKind: operation?.status === 'active' ? operation.identity.kind : null,
+    operationKind,
   });
   const isInteractionLocked = interactionCapabilities.isSurfaceInteractionLocked;
   const handleSurfaceContextMenu = useCallback(
@@ -264,14 +294,20 @@ export const CanvasWidgetView = ({ runtime }: WidgetViewProps) => {
   }, [engine, isInteractionLocked]);
 
   /* eslint-disable react/react-compiler -- imperative engine payload is mutable by design */
-  const acceptStagedImage = useCallback(() => {
-    if (selectedSlot?.kind === 'candidate') {
-      engine?.layers.commitStagedImage({
-        candidate: selectedSlot.candidate,
-        selectedImageIndex: stagingArea.selectedImageIndex,
-      });
-    }
-  }, [engine, selectedSlot, stagingArea.selectedImageIndex]);
+  const commitSelectedStagedImage = useCallback(
+    (continueStaging: boolean) => {
+      if (selectedSlot?.kind === 'candidate') {
+        engine?.layers.commitStagedImage({
+          candidate: selectedSlot.candidate,
+          continueStaging,
+          selectedImageIndex: stagingArea.selectedImageIndex,
+        });
+      }
+    },
+    [engine, selectedSlot, stagingArea.selectedImageIndex]
+  );
+  const acceptStagedImage = useCallback(() => commitSelectedStagedImage(false), [commitSelectedStagedImage]);
+  const saveStagedImageAndContinue = useCallback(() => commitSelectedStagedImage(true), [commitSelectedStagedImage]);
   /* eslint-enable react/react-compiler */
   const cancelQueueItem = useCallback((queueItemId: string) => queue.cancel(undefined, queueItemId), [queue]);
   const cycleStagedImage = useCallback(
@@ -285,6 +321,10 @@ export const CanvasWidgetView = ({ runtime }: WidgetViewProps) => {
   const discardSelectedStagedImage = useCallback(
     () => canvasDispatch({ type: 'discardSelectedStagedImage' }),
     [canvasDispatch]
+  );
+  const preloadStagedCandidate = useCallback(
+    (imageName: string) => engine?.previews.preloadStagedPreview(imageName),
+    [engine]
   );
   const selectStagedImage = useCallback(
     (imageIndex: number) => canvasDispatch({ imageIndex, type: 'setStagedImageIndex' }),
@@ -343,16 +383,23 @@ export const CanvasWidgetView = ({ runtime }: WidgetViewProps) => {
   }, [engine]);
 
   const executeCanvasHotkey = useEffectEvent((commandId: string) => {
+    const selectedLayerIds = readLayerPanelState(projectId, document.selectedLayerId).selectedIds;
     executeCanvasHotkeyCommand(commandId, {
       copySelection,
-      createLayerId,
       dispatch: canvasDispatch,
       document,
       engine,
       hasSelectedStagedCandidate: selectedCandidate !== undefined,
       hasStagingSlots,
       isInteractionLocked,
+      notifyLayerDuplicateFailed: () =>
+        notifications.add({ kind: 'error', title: t('widgets.layers.actions.copyFailed') }),
       pasteFromClipboard,
+      reportPreparedCommit: (outcome) => reportPreparedCommit(outcome, notify.error, t),
+      reportStructuralCommit: (result) => reportStructuralCommit(result, notify.error, t),
+      resetActiveColors: colorCommands.resetPair,
+      selectedLayerIds,
+      swapActiveColors: colorCommands.swapPair,
       t,
     });
   });
@@ -391,6 +438,9 @@ export const CanvasWidgetView = ({ runtime }: WidgetViewProps) => {
       ['canvas.invertSelection', t('widgets.canvas.commands.invertSelection'), ['mod+shift+i']],
       ['canvas.brushSizeDown', t('widgets.canvas.commands.decreaseBrushSize'), ['[']],
       ['canvas.brushSizeUp', t('widgets.canvas.commands.increaseBrushSize'), [']']],
+      // The active color pair: X swaps, D resets to black/white.
+      ['canvas.toggleFillColor', t('widgets.canvas.commands.swapColors'), ['x']],
+      ['canvas.setFillColorsToDefault', t('widgets.canvas.commands.resetColors'), ['d']],
       // Move the selected layer: arrows nudge 1px, shift+arrows 10px.
       ['canvas.nudgeLeft', t('widgets.canvas.commands.nudgeLeft'), ['arrowleft']],
       ['canvas.nudgeRight', t('widgets.canvas.commands.nudgeRight'), ['arrowright']],
@@ -402,6 +452,8 @@ export const CanvasWidgetView = ({ runtime }: WidgetViewProps) => {
       ['canvas.nudgeDownLarge', t('widgets.canvas.commands.nudgeDownLarge'), ['shift+arrowdown']],
       // Layer management.
       ['canvas.duplicateLayer', t('widgets.canvas.commands.duplicateLayer'), ['mod+j']],
+      ['canvas.groupLayers', t('widgets.canvas.commands.groupLayers'), ['mod+g']],
+      ['canvas.ungroupLayers', t('widgets.canvas.commands.ungroupLayers'), ['mod+shift+g']],
       ['canvas.mergeDown', t('widgets.canvas.commands.mergeDown'), ['mod+e']],
       ['canvas.layerForward', t('widgets.canvas.commands.layerForward'), ['mod+]']],
       ['canvas.layerBackward', t('widgets.canvas.commands.layerBackward'), ['mod+[']],
@@ -457,6 +509,7 @@ export const CanvasWidgetView = ({ runtime }: WidgetViewProps) => {
       role="region"
       w="full"
     >
+      <CanvasColorFeed engine={engine} />
       <CanvasSurfaceContextLayout surface={canvasSurface} onContextMenu={handleSurfaceContextMenu}>
         <CanvasImageDropOverlay
           isDocumentEditingLocked={interactionCapabilities.isDocumentEditingLocked}
@@ -469,7 +522,6 @@ export const CanvasWidgetView = ({ runtime }: WidgetViewProps) => {
               beforeDangerItems={compositeSubmenus}
               dispatch={canvasDispatch}
               engine={engine}
-              layers={document.layers}
               showGroupLabels
               target={layerContextMenuTarget}
               onClose={closeContextMenu}
@@ -482,12 +534,7 @@ export const CanvasWidgetView = ({ runtime }: WidgetViewProps) => {
           </CanvasGlobalContextMenu>
         ) : null}
 
-        {/*
-         * Floating bottom-center chrome: the staging bar (when active) stacks
-         * directly above the always-present tool options bar — "just like the
-         * staging UI". The wrapper is click-through so the canvas stays
-         * interactive around the bars; each bar re-enables pointer events.
-         */}
+        {/* Staging keeps its bottom-center slot; the wrapper is click-through and the bar re-enables pointer events. */}
         <CanvasBottomOverlay.Root>
           {hasStagingSlots || isCanvasGenerationInFlight ? (
             <CanvasBottomOverlay.Staging>
@@ -508,20 +555,15 @@ export const CanvasWidgetView = ({ runtime }: WidgetViewProps) => {
                 onCycle={cycleStagedImage}
                 onDiscardAll={discardAllStagedImages}
                 onDiscardSelected={discardSelectedStagedImage}
+                onPreloadCandidate={preloadStagedCandidate}
                 onSelectImage={selectStagedImage}
+                onSaveToLayerAndContinue={saveStagedImageAndContinue}
                 onSetAutoSwitch={setStagingAutoSwitch}
                 onToggleThumbnails={toggleStagingThumbnails}
                 onToggleVisibility={toggleStagingVisibility}
               />
             </CanvasBottomOverlay.Staging>
           ) : null}
-          <CanvasBottomOverlay.Controls>
-            <CanvasBottomControls
-              engine={engine}
-              isExternalInteractionLocked={isInteractionLocked}
-              operation={operation}
-            />
-          </CanvasBottomOverlay.Controls>
         </CanvasBottomOverlay.Root>
       </CanvasSurfaceContextLayout>
     </Box>

@@ -4,13 +4,15 @@
  * Given a layer `source`, produces a {@link RasterSurface} holding its
  * rasterized pixels. `image`, `paint`, `shape`, `gradient`, and `text` are
  * implemented. A `polygon` shape (no points-editing UX yet) throws — the
- * dispatch only routes rect/ellipse.
+ * dispatch only routes parametric (non-polygon).
  *
  * Zero React, zero import-time side effects.
  */
 
 import type { CanvasLayerSourceContract } from '@workbench/canvas-engine/contracts';
 import type { RasterSurface } from '@workbench/canvas-engine/render/raster';
+
+import { isEmptyPolygonShape } from '@workbench/canvas-engine/document/sources';
 
 import type { RasterizeDeps, RasterizeResult } from './types';
 
@@ -42,8 +44,8 @@ export const rasterizeSource = (
     case 'paint':
       return rasterizePaintSource(source, deps, target);
     case 'shape':
-      if (source.kind === 'polygon') {
-        throw new Error("rasterizeSource: 'polygon' shapes are not implemented yet (deferred)");
+      if (isEmptyPolygonShape(source)) {
+        throw new Error('rasterizeSource: a polygon shape needs at least three points');
       }
       return rasterizeShapeSource(source, deps, target);
     case 'gradient':

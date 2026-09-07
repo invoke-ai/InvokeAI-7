@@ -92,6 +92,7 @@ vi.mock('@workbench/launchpad/formatRelativeTime', () => ({ formatRelativeTime: 
 vi.mock('@workbench/projects/components', () => ({ OpenProjectDialog: () => null }));
 vi.mock('@workbench/projects/library', () => ({
   refreshProjectLibrary: vi.fn(() => Promise.resolve()),
+  renameLibraryProject: vi.fn(() => Promise.resolve()),
   useProjectLibrarySelector: (selector: (snapshot: { summaries: [] }) => unknown) => selector({ summaries: [] }),
 }));
 vi.mock('@workbench/projects/useProjectActions', () => ({

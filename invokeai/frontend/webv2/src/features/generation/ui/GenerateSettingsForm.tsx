@@ -6,7 +6,7 @@ import { Stack } from '@chakra-ui/react';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 
 import { GenerateAdvancedFields } from './GenerateAdvancedFields';
-import { GenerateCanvasCompositingSection } from './GenerateCanvasCompositingSection';
+import { GenerateCanvasSections } from './GenerateCanvasSections';
 import { GenerateComponentsSection } from './GenerateComponentsSection';
 import {
   applyGenerateSettingsPatch,
@@ -281,7 +281,7 @@ export const GenerateSettingsForm = ({
         onCommitImmediate={commitPatchImmediately}
       />
 
-      <GenerateCanvasCompositingSection />
+      <GenerateCanvasSections />
     </Stack>
   );
 };

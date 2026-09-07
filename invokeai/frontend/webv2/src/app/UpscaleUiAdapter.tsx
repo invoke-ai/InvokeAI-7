@@ -1,10 +1,8 @@
 import type { UpscaleUiAdapter } from '@features/upscale';
 import type { ReactNode } from 'react';
 
-import { invalidateGallery } from '@features/gallery/queries';
 import { areProjectPromptDraftsEqual, getPromptDraftFromValues } from '@features/generation/settings';
 import { UpscaleUiProvider } from '@features/upscale';
-import { useQueryClient } from '@tanstack/react-query';
 import { useWorkbenchPreferenceSelector } from '@workbench/settings/store';
 import { getProjectWidgetValues } from '@workbench/widgetState';
 import { useActiveProjectSelector, useWorkbenchCommands } from '@workbench/WorkbenchContext';
@@ -36,7 +34,6 @@ export const UpscaleUiAdapterProvider = ({ children }: { children: ReactNode }) 
     (preferences) => preferences.showPromptSyntaxHighlighting
   );
   const commands = useWorkbenchCommands();
-  const queryClient = useQueryClient();
   // The port's callbacks are keyed to the project, not to its contents: rebuilding
   // them whenever `rawValues` changes would hand every consumer new function
   // identities on each keystroke, re-rendering memoized fields that did not change.
@@ -53,7 +50,6 @@ export const UpscaleUiAdapterProvider = ({ children }: { children: ReactNode }) 
     (message) => commands.notifications.reportError({ area: 'upscale', message, namespace: 'generation' }),
     [commands]
   );
-  const touchGalleryImages = useCallback(() => void invalidateGallery(queryClient), [queryClient]);
   const adapter = useMemo<UpscaleUiAdapter>(
     () => ({
       ...project,
@@ -61,9 +57,8 @@ export const UpscaleUiAdapterProvider = ({ children }: { children: ReactNode }) 
       patchValues,
       reportError,
       showPromptSyntaxHighlighting,
-      touchGalleryImages,
     }),
-    [patchPromptDraft, patchValues, project, reportError, showPromptSyntaxHighlighting, touchGalleryImages]
+    [patchPromptDraft, patchValues, project, reportError, showPromptSyntaxHighlighting]
   );
 
   return <UpscaleUiProvider adapter={adapter}>{children}</UpscaleUiProvider>;

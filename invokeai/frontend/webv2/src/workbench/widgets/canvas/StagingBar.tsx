@@ -17,9 +17,10 @@ import {
 import { galleryDurability } from '@features/gallery';
 import { galleryImageUrls } from '@features/gallery/utility';
 import { useQueueItemProgress, useQueueItemProgressImage } from '@features/queue/react';
-import { Button, IconButton, MenuContent, toaster, Tooltip } from '@platform/ui';
+import { Button, Group, IconButton, MenuContent, toaster, Tooltip } from '@platform/ui';
 import { StreamingImageFrame } from '@platform/ui/streaming-image/StreamingImageFrame';
 import { progressImageToStreamingSource } from '@platform/ui/streaming-image/streamingImageSource';
+import { wheelScrollsHorizontally } from '@platform/ui/wheelScrollsHorizontally';
 import { getCancelableCanvasStagingQueueItemId } from '@workbench/canvasStagingView';
 import { CanvasOptionsBar } from '@workbench/widgets/canvas/tool-options/CanvasOptionsBar';
 import {
@@ -35,10 +36,11 @@ import {
   Trash2Icon,
   XIcon,
 } from 'lucide-react';
-import { useCallback, useState } from 'react';
+import { useCallback, useState, type MouseEvent as ReactMouseEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { CanvasFloatingBarDivider } from './CanvasFloatingBar';
+import { StagingItemContextMenu, type StagingItemContextMenuTarget } from './StagingItemContextMenu';
 
 type AutoSwitchMode = CanvasStagingAreaContractV2['autoSwitchMode'];
 
@@ -63,7 +65,9 @@ interface StagingBarProps {
   onCycle: (direction: -1 | 1) => void;
   onDiscardAll: () => void;
   onDiscardSelected: () => void;
+  onPreloadCandidate: (imageName: string) => void;
   onSelectImage: (imageIndex: number) => void;
+  onSaveToLayerAndContinue: () => void;
   onSetAutoSwitch: (mode: AutoSwitchMode) => void;
   onToggleThumbnails: () => void;
   onToggleVisibility: () => void;
@@ -95,13 +99,23 @@ export const StagingBar = ({
   onCycle,
   onDiscardAll,
   onDiscardSelected,
+  onPreloadCandidate,
   onSelectImage,
+  onSaveToLayerAndContinue,
   onSetAutoSwitch,
   onToggleThumbnails,
   onToggleVisibility,
 }: StagingBarProps) => {
   const { t } = useTranslation();
   const [isSaving, setIsSaving] = useState(false);
+  const [contextMenuTarget, setContextMenuTarget] = useState<StagingItemContextMenuTarget | null>(null);
+  const closeContextMenu = useCallback(() => setContextMenuTarget(null), []);
+  // The menu's candidate actions act on the selection, so it only stays open
+  // while its slot is the selected one: an auto-switch to a newer result
+  // closes it rather than letting Discard hit the wrong candidate.
+  if (contextMenuTarget && selectedSlot?.id !== contextMenuTarget.slot.id) {
+    setContextMenuTarget(null);
+  }
   const hasSlots = slots.length > 0;
   const cancelableQueueItemId = getCancelableCanvasStagingQueueItemId(selectedSlot);
 
@@ -126,6 +140,16 @@ export const StagingBar = ({
 
   return (
     <Stack align="center" gap="2" w="full">
+      {contextMenuTarget ? (
+        <StagingItemContextMenu
+          canAccept={canAccept}
+          target={contextMenuTarget}
+          onAccept={onAccept}
+          onClose={closeContextMenu}
+          onDiscard={onDiscardSelected}
+          onSaveToGallery={() => void handleSaveToGallery()}
+        />
+      ) : null}
       {hasSlots ? (
         // The strip spans the whole canvas widget and scrolls within it: the
         // overlay's staging slot stretches, so this width is definite and a long
@@ -141,7 +165,7 @@ export const StagingBar = ({
           variant="hover"
           w="full"
         >
-          <ScrollArea.Viewport h="full" scrollPaddingInline="2" w="full">
+          <ScrollArea.Viewport ref={wheelScrollsHorizontally} h="full" scrollPaddingInline="2" w="full">
             {/*
              * Leave the content slot's width alone: its inline `min-width:
              * fit-content` grows it to hold every thumbnail, so `justify` only
@@ -157,6 +181,23 @@ export const StagingBar = ({
                     index={index}
                     isSelected={index === selectedImageIndex}
                     slot={slot}
+                    onContextMenu={(event) => {
+                      if (slot.kind !== 'candidate') {
+                        return;
+                      }
+                      // The menu acts on the selected candidate, so a right-click selects first.
+                      // The keyboard's context-menu key reports no pointer; anchor to the thumbnail.
+                      event.preventDefault();
+                      onSelectImage(index);
+                      const rect = event.currentTarget.getBoundingClientRect();
+                      const fromKeyboard = event.clientX === 0 && event.clientY === 0;
+                      setContextMenuTarget({
+                        slot,
+                        x: fromKeyboard ? rect.left + rect.width / 2 : event.clientX,
+                        y: fromKeyboard ? rect.top : event.clientY,
+                      });
+                    }}
+                    onPreloadCandidate={onPreloadCandidate}
                     onSelect={() => onSelectImage(index)}
                   />
                 ))}
@@ -280,10 +321,35 @@ export const StagingBar = ({
                   {t('common.discardAll')}
                 </Button>
 
-                <Button disabled={!canAccept} size="xs" onClick={onAccept}>
-                  <CheckIcon />
-                  {t('widgets.canvas.acceptToLayer')}
-                </Button>
+                <Menu.Root positioning={MENU_POSITIONING}>
+                  <Group attached>
+                    <Button disabled={!canAccept} size="xs" onClick={onAccept}>
+                      <CheckIcon />
+                      {t('widgets.canvas.acceptToLayer')}
+                    </Button>
+                    <Menu.Trigger asChild>
+                      <IconButton
+                        aria-label={t('widgets.canvas.staging.moreAcceptOptions')}
+                        disabled={!canAccept}
+                        minW="0"
+                        size="xs"
+                        w="6"
+                      >
+                        <ChevronDownIcon />
+                      </IconButton>
+                    </Menu.Trigger>
+                  </Group>
+                  <Portal>
+                    <Menu.Positioner>
+                      <MenuContent minW="13rem" py="1">
+                        <Menu.Item value="save-disabled-layer" onClick={onSaveToLayerAndContinue}>
+                          <EyeOffIcon size={14} />
+                          <Menu.ItemText fontSize="xs">{t('widgets.canvas.staging.saveAsDisabledLayer')}</Menu.ItemText>
+                        </Menu.Item>
+                      </MenuContent>
+                    </Menu.Positioner>
+                  </Portal>
+                </Menu.Root>
               </>
             ) : null}
           </>
@@ -340,12 +406,16 @@ const StagingThumbnail = ({
   index,
   isSelected,
   slot,
+  onContextMenu,
+  onPreloadCandidate,
   onSelect,
 }: {
   antialiasProgressImages: boolean;
   index: number;
   isSelected: boolean;
   slot: CanvasStagingSlot;
+  onContextMenu: (event: ReactMouseEvent<HTMLElement>) => void;
+  onPreloadCandidate: (imageName: string) => void;
   onSelect: () => void;
 }) => {
   const { t } = useTranslation();
@@ -359,6 +429,14 @@ const StagingThumbnail = ({
     },
     [isSelected]
   );
+  const preloadCandidate = useCallback(() => {
+    // Once a candidate's small thumbnail settles, warm its full bytes in the
+    // engine so cycling to it only pays the bitmap decode. The cache promotes a
+    // selected candidate out of the background queue when necessary.
+    if (slot.kind === 'candidate') {
+      onPreloadCandidate(slot.candidate.imageName);
+    }
+  }, [onPreloadCandidate, slot]);
 
   return (
     <Stack
@@ -377,12 +455,15 @@ const StagingThumbnail = ({
       shadow={isSelected ? '0 0 0 1px {colors.accent.solid}' : 'md'}
       style={{ aspectRatio: '1 / 1' }}
       onClick={onSelect}
+      onContextMenu={onContextMenu}
     >
       {slot.kind === 'candidate' ? (
         <img
           alt={slot.candidate.imageName}
           src={slot.candidate.thumbnailUrl || galleryImageUrls.thumbnail(slot.candidate.imageName)}
           style={{ display: 'block', height: '100%', objectFit: 'cover', width: '100%' }}
+          onError={preloadCandidate}
+          onLoad={preloadCandidate}
         />
       ) : (
         <StagingPlaceholderThumbnail antialiasProgressImages={antialiasProgressImages} slot={slot} />

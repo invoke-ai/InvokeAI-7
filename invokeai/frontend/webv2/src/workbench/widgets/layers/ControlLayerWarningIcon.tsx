@@ -14,12 +14,19 @@ import { useSelectedMainModel } from './useSelectedMainModel';
  * generation time (no model, incompatible adapter, …). Renders nothing for
  * other layer types and healthy control layers.
  */
-export const ControlLayerWarningIcon = ({ layer }: { layer: CanvasLayerContract }) => {
+/** `contributing` is the effective enablement; a layer gated by a group is not validated. */
+export const ControlLayerWarningIcon = ({
+  layer,
+  contributing = layer.isEnabled,
+}: {
+  layer: CanvasLayerContract;
+  contributing?: boolean;
+}) => {
   const { t } = useTranslation();
   const models = useModelsSelector((snapshot) => snapshot.models);
   const mainModel = useSelectedMainModel();
 
-  if (layer.type !== 'control' || !layer.isEnabled || !mainModel) {
+  if (layer.type !== 'control' || !contributing || !mainModel) {
     return null;
   }
   const reason = getControlLayerAttentionReason(layer, mainModel.base, models);

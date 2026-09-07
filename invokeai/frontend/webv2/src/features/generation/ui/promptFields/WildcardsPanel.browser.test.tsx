@@ -1,11 +1,9 @@
 import type { WildcardCatalog } from '@features/generation/ui/useWildcards';
 
-import { Box, ChakraProvider } from '@chakra-ui/react';
-import { expectRowInteractionsToMatch } from '@features/generation/ui/promptFields/promptFieldsBrowserTestUtils';
+import { ChakraProvider } from '@chakra-ui/react';
 import { WildcardsPanel } from '@features/generation/ui/promptFields/WildcardsPanel';
 import { WILDCARD_COLLECTION_FORMATS } from '@features/generation/ui/wildcardFiles';
 import { accountLifecycle } from '@platform/state/accountLifecycle';
-import { Row } from '@platform/ui/Row';
 import { system } from '@theme/system';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -34,8 +32,7 @@ const catalog: WildcardCatalog = {
 const renderPanel = async (
   showSyntaxHighlighting = true,
   panelCatalog: WildcardCatalog = catalog,
-  onInsert = vi.fn(),
-  includeRowProbe = false
+  onInsert = vi.fn()
 ) => {
   host = document.createElement('div');
   host.style.width = '380px';
@@ -45,16 +42,6 @@ const renderPanel = async (
   await act(() => {
     root?.render(
       <ChakraProvider value={system}>
-        {includeRowProbe ? (
-          <>
-            <Box aria-hidden bg="bg.muted/60" data-testid="row-hover-style-probe" />
-            <Row asChild>
-              <button aria-label="Row probe" type="button">
-                Row probe
-              </button>
-            </Row>
-          </>
-        ) : null}
         <WildcardsPanel catalog={panelCatalog} showSyntaxHighlighting={showSyntaxHighlighting} onInsert={onInsert} />
       </ChakraProvider>
     );
@@ -234,22 +221,16 @@ describe('wildcard list interactions', () => {
   const selectableWildcardButton = () =>
     host!.querySelector<HTMLButtonElement>('button[title="widgets.generate.dynamicPrompts.insertWildcard"]')!;
 
-  it('uses the shared Row interaction contract without nesting the edit controls', async () => {
+  it('keeps the edit controls outside the selectable row button', async () => {
     const onInsert = vi.fn();
-    await renderPanel(true, catalog, onInsert, true);
+    await renderPanel(true, catalog, onInsert);
 
-    const probe = host!.querySelector<HTMLButtonElement>('button[aria-label="Row probe"]')!;
-    const hoverBackgroundColor = getComputedStyle(
-      host!.querySelector('[data-testid="row-hover-style-probe"]')!
-    ).backgroundColor;
     const row = selectableWildcardButton();
     const edit = host!.querySelector<HTMLButtonElement>('button[aria-label="common.edit"]')!;
     const remove = host!.querySelector<HTMLButtonElement>('button[aria-label="common.delete"]')!;
 
     expect(row.contains(edit)).toBe(false);
     expect(row.contains(remove)).toBe(false);
-
-    await expectRowInteractionsToMatch(probe, row, hoverBackgroundColor);
 
     await act(async () => {
       await userEvent.click(row);

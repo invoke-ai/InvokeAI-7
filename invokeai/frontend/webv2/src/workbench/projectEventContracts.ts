@@ -14,8 +14,7 @@ export type ProjectEventType =
   | 'invocation-updated'
   | 'queue-submitted'
   | 'canvas-layer-accepted'
-  | 'graph-replaced'
-  | 'graph-snapshot-saved';
+  | 'graph-replaced';
 
 export interface ProjectEvent {
   id: string;

@@ -51,9 +51,9 @@ export const GalleryBoardRow = ({
   });
 
   const counts = getBoardCounts(board);
-  const mediaCount = counts.imageCount + counts.videoCount;
+  const mediaCount = Math.max(0, counts.imageCount + counts.videoCount - counts.assetVideoCount);
   const countsBreakdown = t('widgets.gallery.boardCountsBreakdown', {
-    assets: counts.assetCount,
+    assets: counts.assetCount + counts.assetVideoCount,
     media: mediaCount,
   });
 
@@ -129,17 +129,23 @@ export const GalleryBoardRow = ({
 
   return (
     <Box
-      // An outline rather than a border, so the drop affordance never reflows the list.
+      // An outline rather than a border, so the drop affordance never reflows
+      // the list; over the row it steps up to a solid inset ring.
       bg={isOver ? 'accent.muted' : undefined}
-      outline={canDropItems ? '1px dashed' : undefined}
+      outline={isOver ? '2px solid' : canDropItems ? '1px dashed' : undefined}
       outlineColor={canDropItems ? 'accent.solid' : undefined}
+      // Inset keeps the ring inside the row; the selected row's opaque accent
+      // fill would cover it, so its ring stays outside where it reads.
+      outlineOffset={isOver && !isSelected ? '-2px' : undefined}
       rounded="sm"
+      transition="background var(--wb-motion-duration-fast) ease"
       w="full"
     >
       <GalleryBoardRowShell
         ref={setNodeRef}
         actions={actions}
         cover={cover}
+        isDropTarget={canDropItems}
         isSelected={isSelected}
         label={boardLabel}
         subtitle={subtitle}

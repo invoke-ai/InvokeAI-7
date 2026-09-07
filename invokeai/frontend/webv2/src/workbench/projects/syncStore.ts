@@ -1,7 +1,7 @@
 import { registerAccountOwnedResource } from '@platform/state/accountLifecycle';
 import { createExternalStore } from '@platform/state/externalStore';
 
-import type { ProjectPushOutcome } from './projectFlush';
+import type { ProjectPushOutcome, ProjectSchemaRefusal } from './projectFlush';
 
 /**
  * The bridge between the project sync layer and everything outside the editor.
@@ -22,18 +22,31 @@ export interface ProjectSyncInfo {
   revision: number | null;
   /** True when the local document differs from what the server acknowledged. */
   isPendingPush: boolean;
+  /** Present when the server requires a newer canvas schema than this client supports. */
+  schemaRefusal?: ProjectSchemaRefusal;
+  /** Divergent local work awaits an explicit user decision. */
+  conflict?: { detectedAt: string; kind: 'deleted' | 'revision'; serverRevision?: number };
 }
 
 export interface ProjectSyncSnapshot {
   projects: Record<string, ProjectSyncInfo>;
   hasPendingChanges: boolean;
   lastSyncedAt: string | null;
+  localDraftStatus: 'ok' | 'unavailable';
+  recoverableDrafts: Array<{
+    editorSessionId: string;
+    generation: number;
+    projectId: string;
+    updatedAt: number;
+  }>;
 }
 
 const EMPTY_PROJECT_SYNC: ProjectSyncSnapshot = {
   hasPendingChanges: false,
   lastSyncedAt: null,
+  localDraftStatus: 'ok',
   projects: {},
+  recoverableDrafts: [],
 };
 const store = createExternalStore<ProjectSyncSnapshot>(EMPTY_PROJECT_SYNC);
 
@@ -54,14 +67,7 @@ registerAccountOwnedResource({
 export interface OpenProjectHandle {
   /** Close the tab, after the project has been deleted on the server. */
   close: () => void;
-  /**
-   * Delete the project on the server, from inside the sync engine's mutation queue.
-   *
-   * The queue is the point. Marking the project deleted stops a save that has not begun but says
-   * nothing to a `PUT` already on the wire, which returns 404 once the delete commits — and the
-   * engine's answer to a 404 is to fork the local edits into a new server-side project, a copy of
-   * the thing just deleted. Deleting *through* the queue lets the in-flight push finish first.
-   */
+  /** Delete through the sync engine's mutation queue so in-flight saves finish first. */
   deleteOnServer: () => Promise<void>;
   /**
    * Push the live document, and report whether the server actually took it.
@@ -108,9 +114,51 @@ export const useProjectSync = (): ProjectSyncSnapshot => store.useSnapshot();
 
 export const useProjectSyncSelector = store.useSelector;
 
+export const getProjectSyncSnapshot = store.getSnapshot;
+
 export const reportProjectSync = (update: Omit<ProjectSyncSnapshot, 'lastSyncedAt'>): void => {
   store.setSnapshot({
     ...update,
     lastSyncedAt: update.hasPendingChanges ? store.getSnapshot().lastSyncedAt : new Date().toISOString(),
   });
+};
+
+export const reportProjectSyncEntry = (
+  projectId: string,
+  info: ProjectSyncInfo,
+  update: Pick<ProjectSyncSnapshot, 'hasPendingChanges' | 'localDraftStatus' | 'recoverableDrafts'>
+): void => {
+  const snapshot = store.getSnapshot();
+  const projects = { ...snapshot.projects, [projectId]: info };
+  const hasPendingChanges =
+    update.hasPendingChanges ||
+    Object.values(projects).some(
+      (project) => project.isPendingPush || project.conflict !== undefined || project.schemaRefusal !== undefined
+    );
+  store.setSnapshot({
+    ...snapshot,
+    ...update,
+    hasPendingChanges,
+    projects,
+    lastSyncedAt: hasPendingChanges ? snapshot.lastSyncedAt : new Date().toISOString(),
+  });
+};
+
+export const resolveProjectSyncConflict = (
+  projectId: string,
+  replacement?: { projectId: string; revision: number },
+  hasServicePendingChanges = false
+): void => {
+  const snapshot = store.getSnapshot();
+  const projects = { ...snapshot.projects };
+  delete projects[projectId];
+  if (replacement) {
+    projects[replacement.projectId] = { isPendingPush: false, revision: replacement.revision };
+  }
+  const hasPendingChanges =
+    hasServicePendingChanges ||
+    Object.values(projects).some(
+      (project) => project.isPendingPush || project.conflict !== undefined || project.schemaRefusal !== undefined
+    );
+  store.setSnapshot({ ...snapshot, hasPendingChanges, projects });
 };

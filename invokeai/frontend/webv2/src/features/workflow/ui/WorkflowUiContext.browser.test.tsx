@@ -42,7 +42,6 @@ const createMutablePort = <Snapshot,>(initialSnapshot: Snapshot) => {
 
 const projectState = (id = 'project-1') => ({
   galleryValues: {},
-  graphHistory: [],
   id,
   isWorkflowRunning: false,
   projectGraph: { edges: [], nodes: [], version: 1 as const },
@@ -53,6 +52,7 @@ const preferencesState = () => ({
   reduceMotion: false,
   themeId: 'classic' as const,
   workflowEdgeStyle: 'curved' as const,
+  workflowEdgesBehindNodes: false,
   workflowShowMinimap: true,
   workflowSnapToGrid: false,
   workflowValidateConnections: true,

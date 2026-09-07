@@ -329,7 +329,9 @@ export const createPointerPipeline = (deps: PointerPipelineDeps): PointerPipelin
         return;
       }
       if (isAltKey(event) && !event.repeat) {
-        beginTempTool('alt', ALT_TEMP_TOOL);
+        if (!deps.getActiveTool()?.usesAltKey) {
+          beginTempTool('alt', ALT_TEMP_TOOL);
+        }
         return;
       }
       if (isBboxKey(event) && !event.repeat) {

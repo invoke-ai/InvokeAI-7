@@ -1,10 +1,13 @@
-import type { CanvasDocumentContractV2, CanvasImageRef, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
+import type { CanvasDocumentContractV3, CanvasImageRef, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
 import type { History } from '@workbench/canvas-engine/history/history';
 import type { ImagePatchApply } from '@workbench/canvas-engine/history/imagePatch';
 import type { CanvasProjectMutation } from '@workbench/canvas-engine/mutationContracts';
 import type { LayerCacheStore } from '@workbench/canvas-engine/render/layerCache';
 import type { Rect } from '@workbench/canvas-engine/types';
 
+import { lookupDocumentLeaf } from '@workbench/canvas-engine/document-model/documentModel';
+import { getDocumentLayer } from '@workbench/canvas-engine/document/documentIndex';
+import { isLeafEditable } from '@workbench/canvas-engine/document/layerEligibility';
 import { getSourceContentRect, isMaskLayer } from '@workbench/canvas-engine/document/sources';
 import { createImagePatchEntry } from '@workbench/canvas-engine/history/imagePatch';
 import { invert as invertMatrix } from '@workbench/canvas-engine/math/mat2d';
@@ -15,10 +18,10 @@ export interface MaskLayerControllerOptions {
   readonly layers: LayerCacheStore;
   readonly history: History;
   readonly applyImagePatch: ImagePatchApply;
-  readonly getDocument: () => CanvasDocumentContractV2 | null;
+  readonly getDocument: () => CanvasDocumentContractV3 | null;
   readonly canEdit: () => boolean;
   readonly isGestureActive: () => boolean;
-  readonly isCacheReady: (layer: CanvasLayerContract, document: CanvasDocumentContractV2) => boolean;
+  readonly isCacheReady: (layer: CanvasLayerContract, document: CanvasDocumentContractV3) => boolean;
   readonly endBurst: () => void;
   readonly discardPersisted: (layerId: string) => void;
   readonly markDirty: (layerId: string) => void;
@@ -39,7 +42,7 @@ export class MaskLayerController {
       return false;
     }
     const document = this.deps.getDocument();
-    const layer = document?.layers.find((candidate) => candidate.id === layerId);
+    const layer = getDocumentLayer(document, layerId);
     if (!document || !layer || !isMaskLayer(layer) || layer.isLocked) {
       return false;
     }
@@ -90,8 +93,9 @@ export class MaskLayerController {
       return false;
     }
     const document = this.deps.getDocument();
-    const layer = document?.layers.find((candidate) => candidate.id === layerId);
-    if (!document || !layer || !isMaskLayer(layer) || layer.isLocked || !layer.isEnabled) {
+    const leaf = lookupDocumentLeaf(document, layerId);
+    const layer = leaf?.layer;
+    if (!document || !layer || !isMaskLayer(layer) || !isLeafEditable(leaf)) {
       return false;
     }
     if (!this.deps.isCacheReady(layer, document)) {

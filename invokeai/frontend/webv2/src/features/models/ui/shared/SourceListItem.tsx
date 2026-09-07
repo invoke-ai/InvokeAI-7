@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 
 import { Badge, HStack, Icon, Spinner, Stack, Text } from '@chakra-ui/react';
 import { useActiveInstallSources } from '@features/models/data/installsStore';
-import { openInstallQueue } from '@features/models/ui/uiStore';
+import { openInstallQueue, openModelDetail } from '@features/models/ui/uiStore';
 import { Button, Panel } from '@platform/ui';
 import { MiddleTruncate } from '@platform/ui/MiddleTruncate';
 import { DownloadIcon } from 'lucide-react';
@@ -47,15 +47,19 @@ export const SourceListItem = ({
 
 /**
  * Install action with live state: idle → Install button; queuing/active →
- * disabled "Installing…" with a jump to the install queue; done → badge.
+ * disabled "Installing…" with a jump to the install queue; done → badge with a
+ * jump to the installed model's page when the library knows which one it is.
  */
 export const InstallSourceButton = ({
+  installedModelKey = null,
   isInstalled = false,
   isPending = false,
   onInstall,
   source,
 }: {
-  /** Already in the library (renders a static badge). */
+  /** The library model this source landed as; implies installed. */
+  installedModelKey?: string | null;
+  /** Already in the library, without a known model to open. */
   isInstalled?: boolean;
   /** The install POST is in flight (before a job exists). */
   isPending?: boolean;
@@ -67,11 +71,25 @@ export const InstallSourceButton = ({
   const activeSources = useActiveInstallSources();
   const isInstalling = isPending || activeSources.has(source);
 
-  if (isInstalled) {
+  if (isInstalled || installedModelKey !== null) {
     return (
-      <Badge colorPalette="green" flexShrink={0} fontSize="2xs" size="sm" variant="surface">
-        {t('models.installed')}
-      </Badge>
+      <HStack flexShrink={0} gap="1.5">
+        <Badge colorPalette="green" fontSize="2xs" size="sm" variant="surface">
+          {t('models.installed')}
+        </Badge>
+        {installedModelKey !== null ? (
+          <Button
+            size="2xs"
+            variant="ghost"
+            onClick={(event) => {
+              event.stopPropagation();
+              openModelDetail(installedModelKey);
+            }}
+          >
+            {t('models.viewModel')}
+          </Button>
+        ) : null}
+      </HStack>
     );
   }
 

@@ -4,7 +4,8 @@ import {
   GALLERY_BOARD_PANEL_MIN_HEIGHT_PX,
   GALLERY_MIN_GRID_HEIGHT_PX,
 } from '@features/gallery/core/settings';
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { segmentTabsPanelId, segmentTabsTabId } from '@platform/ui';
+import { useCallback, useId, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { GalleryBoardsPanel } from './GalleryBoardsPanel';
@@ -13,6 +14,7 @@ import { GalleryItemSearch } from './GalleryItemSearch';
 import { GalleryItemSortMenu } from './GalleryItemSortMenu';
 import { GallerySelectionBar } from './GallerySelectionBar';
 import { GALLERY_SPLIT_HANDLE_SIZE_PX, GallerySplitHandle } from './GallerySplitHandle';
+import { GalleryStarredFilterToggle } from './GalleryStarredFilterToggle';
 import { GalleryUploadButton } from './GalleryUploadButton';
 import { GalleryViewTabs } from './GalleryViewTabs';
 import { useGalleryWidget } from './GalleryWidgetContext';
@@ -26,6 +28,7 @@ export const GalleryStackedLayout = () => {
   const { t } = useTranslation();
   const { actions, gallery } = useGalleryWidget();
   const { boardPanelCollapsed, boardPanelHeightPx } = gallery.settings;
+  const viewTabsIdBase = useId();
   const [dragHeightPx, setDragHeightPx] = useState<number | null>(null);
   const [containerContentHeightPx, setContainerContentHeightPx] = useState<number | null>(null);
   const [controlsHeightPx, setControlsHeightPx] = useState<number | null>(null);
@@ -121,8 +124,9 @@ export const GalleryStackedLayout = () => {
         )}
         <Stack ref={controlsRef} flexShrink={0} gap="2" minW="0">
           <HStack gap="1" minW="0">
-            <GalleryViewTabs />
+            <GalleryViewTabs idBase={viewTabsIdBase} />
             <Spacer />
+            <GalleryStarredFilterToggle />
             <GalleryItemSortMenu />
             <GalleryUploadButton
               boards={gallery.boards}
@@ -132,7 +136,15 @@ export const GalleryStackedLayout = () => {
           </HStack>
           <GalleryItemSearch />
         </Stack>
-        <Flex data-gallery-grid-wrapper flex="1" minH={`${GALLERY_MIN_GRID_HEIGHT_PX}px`} minW="0">
+        <Flex
+          aria-labelledby={segmentTabsTabId(viewTabsIdBase, gallery.galleryView)}
+          data-gallery-grid-wrapper
+          flex="1"
+          id={segmentTabsPanelId(viewTabsIdBase)}
+          minH={`${GALLERY_MIN_GRID_HEIGHT_PX}px`}
+          minW="0"
+          role="tabpanel"
+        >
           <GalleryImageGrid />
         </Flex>
       </Stack>

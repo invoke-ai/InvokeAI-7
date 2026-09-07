@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { IconButton } from './Button';
 import { toaster } from './toaster';
+import { useScrollAreaPhantomHeal } from './useScrollAreaPhantomHeal';
 
 /**
  * The workbench's standard JSON preview: a monospace block with a copy button
@@ -29,6 +30,9 @@ export const JsonPreview = ({
 }) => {
   const [hasCopied, setHasCopied] = useState(false);
   const copyResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const viewportRef = useRef<HTMLDivElement | null>(null);
+
+  useScrollAreaPhantomHeal(viewportRef);
   const json = useMemo(() => text ?? JSON.stringify(value, null, 2) ?? 'null', [text, value]);
 
   useEffect(
@@ -84,7 +88,7 @@ export const JsonPreview = ({
         <Icon as={hasCopied ? CheckIcon : CopyIcon} boxSize="3" color={hasCopied ? 'green.solid' : undefined} />
       </IconButton>
       <ScrollArea.Root flex="1" maxW="full" minH="0" minW="0" size="xs" variant="hover" w="full">
-        <ScrollArea.Viewport aria-label={label} h="full" maxH={maxH} minW="0" role="region" w="full">
+        <ScrollArea.Viewport ref={viewportRef} aria-label={label} h="full" maxH={maxH} minW="0" role="region" w="full">
           <ScrollArea.Content w="full">
             <Code
               bg="transparent"

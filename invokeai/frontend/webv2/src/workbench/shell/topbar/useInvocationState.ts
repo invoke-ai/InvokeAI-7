@@ -12,8 +12,10 @@ import {
 } from '@features/generation/settings';
 import { ensureModelsLoaded, useModelsSelector } from '@features/models';
 import { useInvocationTemplatesSelector } from '@features/workflow/react';
+import { localizeForLoopValidationReason } from '@features/workflow/utility';
 import { useMountEffect } from '@platform/react/useMountEffect';
 import { submitActiveInvocation } from '@workbench/activeInvocationSubmission';
+import { useIsCanvasInvocationPreparing } from '@workbench/canvasInvocationPreparation';
 import { getPlacedWidgetTypeIds, getVisibleWidgetTypeIds, graphWidgetSources } from '@workbench/graphWidgets';
 import {
   createInvocationRouteInputSelector,
@@ -52,6 +54,7 @@ export interface InvocationState {
   batchCount: number;
   blockingReasons: string[];
   invocation: InvocationRoute;
+  isPreparing: boolean;
   isValid: boolean;
   sources: GraphWidgetSource[];
   visibleTypeIds: ReadonlySet<WidgetTypeId>;
@@ -73,6 +76,8 @@ export const useInvocationState = (): InvocationState => {
   const modelsStatus = useModelsSelector((snapshot) => snapshot.status);
   const availabilityModels = modelsStatus === 'loaded' ? models : undefined;
   const { invocation } = routeInput;
+  const isCanvasPreparing = useIsCanvasInvocationPreparing(routeInput.projectId);
+  const isPreparing = invocation.sourceId === 'canvas' && isCanvasPreparing;
 
   // Project-graph route validation reads the invocation templates imperatively;
   // subscribing here keeps the resolved route live while they load.
@@ -107,9 +112,9 @@ export const useInvocationState = (): InvocationState => {
     () => [
       ...(isConnected ? [] : ['The backend is disconnected.']),
       ...(expansionReason === null ? [] : [expansionReason]),
-      ...resolvedRoute.validationReasons,
+      ...resolvedRoute.validationReasons.map((reason) => localizeForLoopValidationReason(reason, t)),
     ],
-    [expansionReason, isConnected, resolvedRoute.validationReasons]
+    [expansionReason, isConnected, resolvedRoute.validationReasons, t]
   );
   const isValid = isInvocationRouteValid(resolvedRoute) && isConnected && expansionReason === null;
 
@@ -134,6 +139,7 @@ export const useInvocationState = (): InvocationState => {
     blockingReasons,
     invocation,
     invoke,
+    isPreparing,
     isValid,
     placedTypeIds,
     promptExpansion,

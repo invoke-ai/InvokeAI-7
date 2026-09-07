@@ -17,6 +17,9 @@ import { useTranslation } from 'react-i18next';
  */
 
 const TILE_COLUMNS = { base: 1, lg: 5, sm: 2 } as const;
+// Pro-app convention (see the theme's cursor tokens): tiles act like
+// controls, so they keep the arrow instead of the anchor's pointer.
+const TILE_LINK_STYLE = { cursor: 'default' } as const;
 const TILE_HOVER = { bg: 'bg.muted', borderColor: 'border.emphasized' } as const;
 const TILE_TRANSITION =
   'border-color var(--wb-motion-duration-medium) ease, background var(--wb-motion-duration-medium) ease';
@@ -52,7 +55,7 @@ const IntentTile = ({ id }: { id: LaunchpadIntentId }) => {
   const search = useMemo(() => ({ intent: id, new: true }) as const, [id]);
 
   return (
-    <Link search={search} to="/app">
+    <Link search={search} style={TILE_LINK_STYLE} to="/app">
       <Stack
         bg="bg.subtle"
         borderColor="border.subtle"

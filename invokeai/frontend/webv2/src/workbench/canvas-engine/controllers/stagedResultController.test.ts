@@ -1,6 +1,12 @@
-import type { CanvasStagingCandidateContract, CanvasStateContractV2 } from '@workbench/canvas-engine/contracts';
+import type { CanvasStagingCandidateContract, CanvasStateContractV3 } from '@workbench/canvas-engine/contracts';
 import type { CanvasProjectMutation } from '@workbench/canvasProjectMutations';
 
+import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
+import { getDocumentLeaves } from '@workbench/canvas-engine/document/documentIndex';
+import { removeNodes } from '@workbench/canvas-engine/document/documentTree';
+import { insertNodesAtAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
+import { createTestInsertionAnchorCapture } from '@workbench/canvas-engine/document/insertionAnchors.testStub';
+import { createTestEditConcurrency } from '@workbench/canvas-engine/editConcurrency.testStub';
 import { createHistory } from '@workbench/canvas-engine/history/history';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -18,14 +24,14 @@ const candidate: CanvasStagingCandidateContract = {
 };
 const selection = { candidate, selectedImageIndex: 0 } as const;
 
-const makeCanvas = (): CanvasStateContractV2 => ({
+const makeCanvas = (): CanvasStateContractV3 => ({
   document: {
     background: 'transparent',
     bbox: { height: 100, width: 100, x: 0, y: 0 },
     height: 100,
-    layers: [],
+    stacks: stacksFrom([]),
     selectedLayerId: null,
-    version: 2,
+    version: 3,
     width: 100,
   },
   documentRevision: 0,
@@ -38,7 +44,7 @@ const makeCanvas = (): CanvasStateContractV2 => ({
     pendingImages: [candidate],
     selectedImageIndex: 0,
   },
-  version: 2,
+  version: 3,
 });
 
 describe('StagedResultController', () => {
@@ -53,12 +59,16 @@ describe('StagedResultController', () => {
             ...reducerCanvas,
             document: {
               ...reducerCanvas.document,
-              layers: mutation.removeIds
-                ? reducerCanvas.document.layers.filter((layer) => !mutation.removeIds?.includes(layer.id))
-                : mutation.add
-                  ? [...mutation.add.layers, ...reducerCanvas.document.layers]
-                  : reducerCanvas.document.layers,
-              selectedLayerId: mutation.selectedLayerId,
+              stacks: mutation.removeIds
+                ? removeNodes(reducerCanvas.document.stacks, new Set(mutation.removeIds))
+                : (mutation.add ?? []).reduce(
+                    (stacks, insertion) => insertNodesAtAnchor(stacks, insertion.anchor, insertion.nodes),
+                    reducerCanvas.document.stacks
+                  ),
+              selectedLayerId:
+                mutation.selectedLayerId === undefined
+                  ? reducerCanvas.document.selectedLayerId
+                  : mutation.selectedLayerId,
             },
           };
           expect(reducerAccepted()).toBe(true);
@@ -74,7 +84,7 @@ describe('StagedResultController', () => {
         const layer = mutation.layer;
         reducerCanvas = {
           ...reducerCanvas,
-          document: { ...reducerCanvas.document, layers: [layer], selectedLayerId: layer.id },
+          document: { ...reducerCanvas.document, stacks: stacksFrom([layer]), selectedLayerId: layer.id },
           stagingArea: { ...reducerCanvas.stagingArea, isVisible: false, pendingImageIds: [], pendingImages: [] },
         };
         mirrorDocument = reducerCanvas.document;
@@ -83,7 +93,8 @@ describe('StagedResultController', () => {
       }
     );
     const controller = new StagedResultController({
-      capturePermit: () => ({ epoch: 1 }),
+      captureInsertionAnchor: createTestInsertionAnchorCapture('p'),
+      concurrency: createTestEditConcurrency({ capturePermit: () => ({ epoch: 1 }) }),
       createEventId: () => 'event-1',
       createLayerId: () => 'layer-1',
       dispatchPrepared,
@@ -91,13 +102,11 @@ describe('StagedResultController', () => {
       getCanvasState: () => reducerCanvas,
       getDocument: () => mirrorDocument,
       history,
-      isGestureActive: () => false,
-      isPermitCurrent: () => true,
       now: () => '2026-07-16T01:00:00.000Z',
     });
 
     expect(controller.commit(selection)).toEqual({ status: 'committed', layerId: 'layer-1' });
-    expect(reducerCanvas.document.layers[0]).toMatchObject({
+    expect(getDocumentLeaves(reducerCanvas.document)[0]).toMatchObject({
       id: 'layer-1',
       opacity: 0.5,
       source: { image: { imageName: 'result.png' }, type: 'image' },
@@ -107,13 +116,13 @@ describe('StagedResultController', () => {
     expect(history.canUndo()).toBe(true);
 
     history.undo();
-    expect(reducerCanvas.document.layers).toEqual([]);
+    expect(getDocumentLeaves(reducerCanvas.document)).toEqual([]);
     expect(reducerCanvas.document.selectedLayerId).toBeNull();
     expect(reducerCanvas.stagingArea.pendingImages).toEqual([]);
 
     history.redo();
-    expect(reducerCanvas.document.layers[0]).toBe(reducerCanvas.document.layers[0]);
-    expect(reducerCanvas.document.layers[0]?.id).toBe('layer-1');
+    expect(getDocumentLeaves(reducerCanvas.document)[0]).toBe(getDocumentLeaves(reducerCanvas.document)[0]);
+    expect(getDocumentLeaves(reducerCanvas.document)[0]?.id).toBe('layer-1');
     expect(reducerCanvas.stagingArea.pendingImages).toEqual([]);
   });
 
@@ -121,7 +130,8 @@ describe('StagedResultController', () => {
     const canvas = makeCanvas();
     const history = createHistory();
     const controller = new StagedResultController({
-      capturePermit: () => ({ epoch: 1 }),
+      captureInsertionAnchor: createTestInsertionAnchorCapture('p'),
+      concurrency: createTestEditConcurrency({ capturePermit: () => ({ epoch: 1 }) }),
       createEventId: () => 'event-1',
       createLayerId: () => 'layer-1',
       dispatchPrepared: () => {
@@ -131,13 +141,11 @@ describe('StagedResultController', () => {
       getCanvasState: () => canvas,
       getDocument: () => canvas.document,
       history,
-      isGestureActive: () => false,
-      isPermitCurrent: () => true,
       now: () => '2026-07-16T01:00:00.000Z',
     });
 
     expect(controller.commit(selection)).toEqual({ status: 'stale' });
-    expect(canvas.document.layers).toEqual([]);
+    expect(getDocumentLeaves(canvas.document)).toEqual([]);
     expect(canvas.stagingArea.pendingImages).toEqual([candidate]);
     expect(history.canUndo()).toBe(false);
   });
@@ -151,7 +159,12 @@ describe('StagedResultController', () => {
     const dispatchPrepared = vi.fn();
     const history = createHistory();
     const controller = new StagedResultController({
-      capturePermit: () => permit,
+      captureInsertionAnchor: createTestInsertionAnchorCapture('p'),
+      concurrency: createTestEditConcurrency({
+        capturePermit: () => permit,
+        isGestureActive: () => gestureActive,
+        isPermitCurrent: () => permitCurrent,
+      }),
       createEventId: () => 'event-1',
       createLayerId: () => 'layer-1',
       dispatchPrepared,
@@ -159,8 +172,6 @@ describe('StagedResultController', () => {
       getCanvasState: () => canvas,
       getDocument: () => canvas.document,
       history,
-      isGestureActive: () => gestureActive,
-      isPermitCurrent: () => permitCurrent,
       now: () => '2026-07-16T01:00:00.000Z',
     });
 
@@ -173,7 +184,8 @@ describe('StagedResultController', () => {
     const canvas = makeCanvas();
     const history = createHistory();
     const controller = new StagedResultController({
-      capturePermit: () => ({ epoch: 1 }),
+      captureInsertionAnchor: createTestInsertionAnchorCapture('p'),
+      concurrency: createTestEditConcurrency({ capturePermit: () => ({ epoch: 1 }) }),
       createEventId: () => 'event-1',
       createLayerId: () => 'layer-1',
       dispatchPrepared: () => {
@@ -183,8 +195,6 @@ describe('StagedResultController', () => {
       getCanvasState: () => canvas,
       getDocument: () => canvas.document,
       history,
-      isGestureActive: () => false,
-      isPermitCurrent: () => true,
       now: () => '2026-07-16T01:00:00.000Z',
     });
 
@@ -201,7 +211,8 @@ describe('StagedResultController', () => {
     history.undo();
     expect(history.canRedo()).toBe(true);
     const controller = new StagedResultController({
-      capturePermit: () => ({ epoch: 1 }),
+      captureInsertionAnchor: createTestInsertionAnchorCapture('p'),
+      concurrency: createTestEditConcurrency({ capturePermit: () => ({ epoch: 1 }) }),
       createEventId: () => 'event-1',
       createLayerId: () => 'layer-1',
       dispatchPrepared: (mutation, reducerAccepted, mirrorAccepted) => {
@@ -212,7 +223,7 @@ describe('StagedResultController', () => {
           ...reducerCanvas,
           document: {
             ...reducerCanvas.document,
-            layers: [mutation.layer],
+            stacks: stacksFrom([mutation.layer]),
             selectedLayerId: mutation.layer.id,
           },
           stagingArea: {
@@ -231,8 +242,6 @@ describe('StagedResultController', () => {
       getCanvasState: () => reducerCanvas,
       getDocument: () => mirrorDocument,
       history,
-      isGestureActive: () => false,
-      isPermitCurrent: () => true,
       now: () => '2026-07-16T01:00:00.000Z',
     });
 
@@ -251,7 +260,8 @@ describe('StagedResultController', () => {
     const dispatchPrepared = vi.fn();
     const history = createHistory();
     const controller = new StagedResultController({
-      capturePermit: () => ({ epoch: 1 }),
+      captureInsertionAnchor: createTestInsertionAnchorCapture('p'),
+      concurrency: createTestEditConcurrency({ capturePermit: () => ({ epoch: 1 }) }),
       createEventId: () => 'event-1',
       createLayerId: () => 'layer-1',
       dispatchPrepared,
@@ -259,8 +269,6 @@ describe('StagedResultController', () => {
       getCanvasState: () => canvas,
       getDocument: () => canvas?.document ?? null,
       history,
-      isGestureActive: () => false,
-      isPermitCurrent: () => true,
       now: () => '2026-07-16T01:00:00.000Z',
     });
 
@@ -274,7 +282,8 @@ describe('StagedResultController', () => {
     const dispatchPrepared = vi.fn();
     const history = createHistory();
     const controller = new StagedResultController({
-      capturePermit: () => ({ epoch: 1 }),
+      captureInsertionAnchor: createTestInsertionAnchorCapture('p'),
+      concurrency: createTestEditConcurrency({ capturePermit: () => ({ epoch: 1 }) }),
       createEventId: () => 'event-1',
       createLayerId: () => 'layer-1',
       dispatchPrepared,
@@ -282,8 +291,6 @@ describe('StagedResultController', () => {
       getCanvasState: () => canvas,
       getDocument: () => canvas.document,
       history,
-      isGestureActive: () => false,
-      isPermitCurrent: () => true,
       now: () => '2026-07-16T01:00:00.000Z',
     });
 

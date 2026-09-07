@@ -26,6 +26,9 @@ export interface QueueSubmissionSnapshot {
 export interface QueueItem {
   id: string;
   status: QueueHistoryItemStatus;
+  /** Whether this run can still exist in durable browser recovery storage. */
+  localRecoveryState?: 'durable' | 'local-only' | 'uncertain';
+  cancellationPending?: boolean;
   cancellable: boolean;
   snapshot: QueueSubmissionSnapshot;
   backendItemIds?: number[];

@@ -3,7 +3,6 @@ import {
   DndContext,
   DragOverlay,
   KeyboardSensor,
-  PointerSensor,
   useSensor,
   useSensors,
   type DragEndEvent,
@@ -16,7 +15,7 @@ import { useMountEffect } from '@platform/react/useMountEffect';
 import { FocusRegionProvider } from '@workbench/focusRegions';
 import { WidgetIcon } from '@workbench/iconResolver';
 import { PROJECT_CONTENT_PANEL_ID } from '@workbench/projects/projectTabsA11y';
-import { WidgetBar } from '@workbench/widget-frame';
+import { WidgetBar, type WidgetBarGroup } from '@workbench/widget-frame';
 import { FloatingWidgetLayer } from '@workbench/widget-frame/FloatingWidgetLayer';
 import {
   getRegionDropState,
@@ -43,8 +42,16 @@ import { useTranslation } from 'react-i18next';
 import { BottomPanel } from './BottomPanel';
 import { CenterArea } from './CenterArea';
 import { DocumentTitleProgress } from './DocumentTitleProgress';
+import {
+  HoldToDragSensor,
+  PrimaryMouseSensor,
+  TOUCH_DRAG_HOLD_DELAY_MS,
+  TOUCH_DRAG_MOVE_TOLERANCE_PX,
+} from './holdToDragSensor';
 import { WorkbenchNotificationToaster } from './notifications';
 import { LeftPanel, RightPanel } from './Panels';
+import { ProjectConflictBanner } from './ProjectConflictBanner';
+import { QueueRecoveryBanner } from './QueueRecoveryBanner';
 import { StatusBar } from './StatusBar';
 import { TopBar } from './topbar';
 
@@ -71,7 +78,12 @@ export const WorkbenchShell = () => {
   const rightRegion = useActiveProjectSelector((project) => project.widgetRegions.right);
   const placementProject = useActiveProjectSelector(getWidgetPlacementProject, areWidgetPlacementProjectsEqual);
   const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    // `PrimaryMouseSensor`/`HoldToDragSensor` replace the stock `PointerSensor`:
+    // see holdToDragSensor.ts for why touch gestures need the hold gate.
+    useSensor(PrimaryMouseSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(HoldToDragSensor, {
+      activationConstraint: { delay: TOUCH_DRAG_HOLD_DELAY_MS, tolerance: TOUCH_DRAG_MOVE_TOLERANCE_PX },
+    }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
   );
   const [activeDrag, setActiveDrag] = useState<ActiveWidgetDrag | null>(null);
@@ -180,12 +192,9 @@ export const WorkbenchShell = () => {
     [placementProject, widgets]
   );
   const handleDragCancel = useCallback(() => setActiveDrag(null), []);
-  const handleSelectLeft = useCallback(
-    (instanceId: string) => revealWidgetPlacement({ instanceId, project: placementProject, region: 'left', widgets }),
-    [placementProject, widgets]
-  );
-  const handleSelectRight = useCallback(
-    (instanceId: string) => revealWidgetPlacement({ instanceId, project: placementProject, region: 'right', widgets }),
+  const handleSelect = useCallback(
+    (region: WidgetBarGroup['region'], instanceId: string) =>
+      revealWidgetPlacement({ instanceId, project: placementProject, region, widgets }),
     [placementProject, widgets]
   );
   const handleToggleLeft = useCallback(
@@ -224,6 +233,28 @@ export const WorkbenchShell = () => {
           }),
     [placementProject, widgets]
   );
+  const leftRailGroups = useMemo(
+    () => [
+      {
+        activeId: panels.isLeftOpen && !leftRegion.isCollapsed ? leftRegion.activeInstanceId : null,
+        dropState: leftDropState,
+        railItems: leftRailItems,
+        region: 'left' as const,
+      },
+    ],
+    [leftDropState, leftRailItems, leftRegion.activeInstanceId, leftRegion.isCollapsed, panels.isLeftOpen]
+  );
+  const rightRailGroups = useMemo(
+    () => [
+      {
+        activeId: panels.isRightOpen && !rightRegion.isCollapsed ? rightRegion.activeInstanceId : null,
+        dropState: rightDropState,
+        railItems: rightRailItems,
+        region: 'right' as const,
+      },
+    ],
+    [panels.isRightOpen, rightDropState, rightRailItems, rightRegion.activeInstanceId, rightRegion.isCollapsed]
+  );
 
   return (
     <FocusRegionProvider>
@@ -240,6 +271,8 @@ export const WorkbenchShell = () => {
           <WorkbenchNotificationToaster />
           <DocumentTitleProgress />
           <TopBar />
+          <ProjectConflictBanner />
+          <QueueRecoveryBanner />
 
           <Flex aria-labelledby="workbench-project-heading" as="main" flex="1" minH="0" overflow="hidden">
             <VisuallyHidden as="h1" id="workbench-project-heading">
@@ -257,13 +290,10 @@ export const WorkbenchShell = () => {
               role="region"
             >
               <WidgetBar
-                activeId={panels.isLeftOpen && !leftRegion.isCollapsed ? leftRegion.activeInstanceId : null}
-                dropState={leftDropState}
+                groups={leftRailGroups}
                 menuItems={leftMenuItems}
-                railItems={leftRailItems}
-                region="left"
                 side="left"
-                onSelect={handleSelectLeft}
+                onSelect={handleSelect}
                 onToggle={handleToggleLeft}
               />
               {panels.isLeftOpen && !leftRegion.isCollapsed && canShowLeftPanel ? (
@@ -274,13 +304,10 @@ export const WorkbenchShell = () => {
                 <RightPanel instanceId={rightRegion.activeInstanceId} />
               ) : null}
               <WidgetBar
-                activeId={panels.isRightOpen && !rightRegion.isCollapsed ? rightRegion.activeInstanceId : null}
-                dropState={rightDropState}
+                groups={rightRailGroups}
                 menuItems={rightMenuItems}
-                railItems={rightRailItems}
-                region="right"
                 side="right"
-                onSelect={handleSelectRight}
+                onSelect={handleSelect}
                 onToggle={handleToggleRight}
               />
             </Flex>
@@ -291,11 +318,20 @@ export const WorkbenchShell = () => {
         </Flex>
         <FloatingWidgetLayer />
         <GalleryDragCursor />
-        <DragOverlay>{activeDrag ? <WidgetDragPreview activeDrag={activeDrag} /> : null}</DragOverlay>
+        {/* The overlay renders whenever anything is being dragged, even with no
+            preview to show — and it is a fixed, full-size div over the dragged
+            element. Without this it swallows every pointer event aimed at what
+            is underneath, which is how a second finger meant for the preview's
+            pinch never reaches the preview. */}
+        <DragOverlay style={DRAG_OVERLAY_STYLE}>
+          {activeDrag ? <WidgetDragPreview activeDrag={activeDrag} /> : null}
+        </DragOverlay>
       </DndContext>
     </FocusRegionProvider>
   );
 };
+
+const DRAG_OVERLAY_STYLE = { pointerEvents: 'none' } as const;
 
 const WidgetDragPreview = ({ activeDrag }: { activeDrag: ActiveWidgetDrag }) => (
   <HStack bg="bg" borderWidth="1px" gap="2" px="3" py="2" rounded="md" shadow="lg">

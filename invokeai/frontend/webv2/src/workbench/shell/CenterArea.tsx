@@ -45,6 +45,10 @@ const CENTER_MENU_POSITIONING = { placement: 'bottom-start' } as const;
 const CENTER_PREFERRED_REGIONS = ['center'] as const;
 
 const CENTER_CHROME_INSET_STYLE = { '--wb-center-chrome-inset': '3rem' } as React.CSSProperties;
+// The work surface's floor. Side panels shrink to honour it (see
+// `WidgetPanelFrame`), so on a portrait tablet the center stays usable instead
+// of collapsing to nothing between two fixed-width panels.
+const CENTER_MIN_WIDTH = '20rem';
 
 export const CenterArea = () => {
   const { t } = useTranslation();
@@ -150,7 +154,7 @@ export const CenterArea = () => {
       direction="column"
       flex="1"
       minH="0"
-      minW="0"
+      minW={CENTER_MIN_WIDTH}
       style={CENTER_CHROME_INSET_STYLE}
       {...focusRegionProps}
     >

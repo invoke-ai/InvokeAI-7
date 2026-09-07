@@ -14,25 +14,33 @@
  *   triggers a browser download. Verified by types + manual QA (opening the PSD).
  *
  * ### Conventions
- * - **Order.** The canvas document stores layers top-first (index 0 = top-most).
- *   ag-psd's `children` array is BOTTOM-to-top (`children[0]` is the bottom-most
- *   layer, written first to the PSD layer records, which the format stores
- *   bottom-up). So the plan reverses the top-first input into bottom-to-top.
+ * - **Order.** The canvas document stores nodes top-first (index 0 = top-most) at
+ *   every level of the raster tree. ag-psd's `children` array is BOTTOM-to-top
+ *   (`children[0]` is the bottom-most layer, written first to the PSD layer
+ *   records, which the format stores bottom-up). So the plan reverses every
+ *   level of the top-first input into bottom-to-top.
+ * - **Folders.** Groups become pass-through PSD folders with their own name and
+ *   visibility; a folder whose subtree exports nothing is dropped with it. The
+ *   flat leaf order is the depth-first order of the tree, which is also the
+ *   visual order because groups do not composite in isolation.
  * - **Bounds.** The PSD canvas is the union of every EXPORTED layer's
  *   world-space (document-space) content AABB — document/bbox-independent. An
  *   empty union means nothing to export.
  * - **Opacity.** ag-psd's `Layer.opacity` is 0..1 (the writer multiplies by 255
  *   internally), NOT 0..255. Our `layer.opacity` is already 0..1, so it passes
  *   through unchanged (clamped).
- * - **Hidden.** Every raster layer with content is exported; hidden (disabled)
- *   layers are written with `hidden: true` rather than dropped.
+ * - **Hidden.** Every raster layer with content is exported; a layer disabled in
+ *   its own right is written with `hidden: true` rather than dropped, and a
+ *   disabled group becomes a hidden folder. The merged preview flattens only the
+ *   leaves that contribute (enabled with every ancestor enabled), which is what
+ *   Photoshop shows for the same flags.
  * - **Adjustments.** Non-destructive raster adjustments are BAKED into the
  *   layer's pixels (PSD has no matching non-destructive representation we emit),
  *   exactly as `compositeForGeneration` bakes them, so the PSD matches what the
  *   user sees. Opacity/blend stay as PSD layer properties (not baked).
  */
 
-import type { CanvasAdjustmentsContract, CanvasBlendMode } from '@workbench/canvas-engine/contracts';
+import type { CanvasAdjustmentsContract, CanvasBlendMode, CanvasColorLabel } from '@workbench/canvas-engine/contracts';
 import type { RasterSurface } from '@workbench/canvas-engine/render/raster';
 import type { Mat2d, Rect } from '@workbench/canvas-engine/types';
 import type { BlendMode, Layer as AgPsdLayer, Psd } from 'ag-psd';
@@ -87,7 +95,7 @@ const BLEND_MODE_TO_PSD: Record<CanvasBlendMode, BlendMode> = {
 /** The ag-psd blend key for a document blend mode ('normal' for anything unmapped). */
 export const blendModeToPsd = (mode: CanvasBlendMode): BlendMode => BLEND_MODE_TO_PSD[mode] ?? 'normal';
 
-/** One raster layer's export-relevant facts, in the document's top-first order. */
+/** One raster layer's export-relevant facts, at its place in the top-first tree. */
 export interface PsdExportLayerInput {
   id: string;
   name: string;
@@ -97,14 +105,38 @@ export interface PsdExportLayerInput {
   /** 0..1. */
   opacity: number;
   blendMode: CanvasBlendMode;
-  /** Hidden (disabled) layers are exported with `hidden: true`, not dropped. */
+  /** The layer's own flag; a disabled layer is exported with `hidden: true`, not dropped. */
   isEnabled: boolean;
+  /** Organizational color label; PSD carries it natively as `layerColor`. */
+  colorLabel?: CanvasColorLabel;
   /** Non-destructive adjustments to bake into the layer's pixels, if any. */
   adjustments?: CanvasAdjustmentsContract;
 }
 
+/** A raster group: a folder in the PSD, children top-first. */
+export interface PsdExportGroupInput {
+  type: 'group';
+  id: string;
+  name: string;
+  /** The group's own flag; a disabled group is a hidden folder. */
+  isEnabled: boolean;
+  /** 0..1; PSD folders carry opacity natively. Absent means 1. */
+  opacity?: number;
+  /** PSD folders carry a blend mode natively. Absent means 'normal'. */
+  blendMode?: CanvasBlendMode;
+  /** Organizational color label; PSD carries it natively as `layerColor`. */
+  colorLabel?: CanvasColorLabel;
+  children: readonly PsdExportNodeInput[];
+}
+
+export type PsdExportNodeInput = PsdExportLayerInput | PsdExportGroupInput;
+
+const isGroupInput = (input: PsdExportNodeInput): input is PsdExportGroupInput =>
+  'type' in input && input.type === 'group';
+
 /** A single planned PSD layer (already in ag-psd bottom-to-top order). */
 export interface PsdPlanLayer {
+  kind: 'layer';
   id: string;
   name: string;
   /** Position within the PSD canvas (relative to the union origin). */
@@ -122,9 +154,30 @@ export interface PsdPlanLayer {
   blendMode: BlendMode;
   /** Canvas `globalCompositeOperation` for the flattened composite preview. */
   compositeBlend: GlobalCompositeOperation;
+  /** The layer's own visibility flag, as the PSD stores it. */
   hidden: boolean;
+  /** Enabled with every folder above it enabled: the leaves the merged preview flattens. */
+  contributes: boolean;
+  colorLabel?: CanvasColorLabel;
   adjustments?: CanvasAdjustmentsContract;
 }
+
+/** A planned PSD folder; `children` are in ag-psd bottom-to-top order. */
+export interface PsdPlanFolder {
+  kind: 'folder';
+  id: string;
+  name: string;
+  hidden: boolean;
+  /** 0..1; written onto the folder, and applied when the preview isolates it. */
+  opacity: number;
+  blendMode: BlendMode;
+  /** Canvas `globalCompositeOperation` for the flattened composite preview. */
+  compositeBlend: GlobalCompositeOperation;
+  colorLabel?: CanvasColorLabel;
+  children: PsdPlanNode[];
+}
+
+export type PsdPlanNode = PsdPlanLayer | PsdPlanFolder;
 
 /** A successful export plan. */
 export interface PsdExportOk {
@@ -134,8 +187,10 @@ export interface PsdExportOk {
   height: number;
   /** The union bounds in document space (origin is the PSD's (0,0)). */
   canvasRect: Rect;
-  /** Layers in ag-psd order (bottom-to-top). */
+  /** Every exported layer, flattened, in ag-psd order (bottom-to-top). */
   layers: PsdPlanLayer[];
+  /** The folder tree the PSD carries, bottom-to-top at every level; `layers` are its leaves. */
+  tree: PsdPlanNode[];
   /** Distinct blend modes that had no PSD equivalent (fell back to 'normal'). */
   unmappedBlends: string[];
 }
@@ -155,28 +210,39 @@ const layerMatrix = (t: PsdLayerTransform): Mat2d => fromTRS({ x: t.x, y: t.y },
 const clamp01 = (value: number): number => (value < 0 ? 0 : value > 1 ? 1 : value);
 
 /**
- * Plans a PSD export from raster layers (top-first). Computes each layer's
- * world-space AABB, unions them for the PSD canvas, and produces per-layer PSD
- * entries in bottom-to-top order. Layers with no content (empty rect, or a
- * degenerate zero-area transform) contribute nothing and are omitted. Returns
- * `empty` when nothing has content and `too-large` when the union exceeds the
- * dimension cap.
+ * Plans a PSD export from the raster tree (top-first at every level). Computes
+ * each layer's world-space AABB, unions them for the PSD canvas, and produces
+ * per-layer PSD entries in bottom-to-top order plus the folder tree they sit in.
+ * Layers with no content (empty rect, or a degenerate zero-area transform)
+ * contribute nothing and are omitted, and so is any folder left without a leaf.
+ * Returns `empty` when nothing has content and `too-large` when the union
+ * exceeds the dimension cap.
  */
 export const planPsdExport = (
-  inputs: readonly PsdExportLayerInput[],
+  inputs: readonly PsdExportNodeInput[],
   options: PlanPsdExportOptions = {}
 ): PsdExportPlan => {
   const maxDimension = options.maxDimension ?? PSD_MAX_DIMENSION;
 
-  // World-space AABB per layer (null = no content: empty local rect or a
-  // zero-area transform that collapses the bounds).
-  const withBounds = inputs.map((input) => {
-    if (isEmpty(input.contentRect)) {
-      return { input, worldRect: null as Rect | null };
+  // Leaves in depth-first (visual, top-first) order with their effective enablement, and the
+  // world-space AABB of each (null = no content: empty local rect or a zero-area transform).
+  const withBounds: { input: PsdExportLayerInput; contributes: boolean; worldRect: Rect | null }[] = [];
+  const walk = (nodes: readonly PsdExportNodeInput[], enabled: boolean): void => {
+    for (const node of nodes) {
+      if (isGroupInput(node)) {
+        walk(node.children, enabled && node.isEnabled);
+        continue;
+      }
+      const contributes = enabled && node.isEnabled;
+      if (isEmpty(node.contentRect)) {
+        withBounds.push({ contributes, input: node, worldRect: null });
+        continue;
+      }
+      const worldRect = roundOut(transformBounds(layerMatrix(node.transform), node.contentRect));
+      withBounds.push({ contributes, input: node, worldRect: isEmpty(worldRect) ? null : worldRect });
     }
-    const worldRect = roundOut(transformBounds(layerMatrix(input.transform), input.contentRect));
-    return { input, worldRect: isEmpty(worldRect) ? null : worldRect };
-  });
+  };
+  walk(inputs, true);
 
   let bounds: Rect | null = null;
   for (const { worldRect } of withBounds) {
@@ -193,11 +259,12 @@ export const planPsdExport = (
   }
 
   const unmappedBlends = new Set<string>();
-  // ag-psd order is bottom-to-top; inputs are top-first, so reverse. Layers
+  // ag-psd order is bottom-to-top; leaves are top-first, so reverse. Layers
   // without content are dropped.
   const layers: PsdPlanLayer[] = [];
+  const byId = new Map<string, PsdPlanLayer>();
   for (let i = withBounds.length - 1; i >= 0; i -= 1) {
-    const { input, worldRect } = withBounds[i]!;
+    const { contributes, input, worldRect } = withBounds[i]!;
     if (!worldRect) {
       continue;
     }
@@ -207,14 +274,17 @@ export const planPsdExport = (
     }
     const left = worldRect.x - canvasRect.x;
     const top = worldRect.y - canvasRect.y;
-    layers.push({
+    const layer: PsdPlanLayer = {
       adjustments: input.adjustments,
       blendMode: mapped ?? 'normal',
       bottom: top + worldRect.height,
+      colorLabel: input.colorLabel,
       compositeBlend: blendToComposite(input.blendMode),
       contentRect: input.contentRect,
+      contributes,
       hidden: !input.isEnabled,
       id: input.id,
+      kind: 'layer',
       left,
       name: input.name,
       opacity: clamp01(input.opacity),
@@ -222,14 +292,58 @@ export const planPsdExport = (
       top,
       transform: input.transform,
       worldRect,
-    });
+    };
+    layers.push(layer);
+    byId.set(input.id, layer);
   }
+
+  // The same reversal at every level of the tree; folders keep only what survived.
+  const buildTree = (nodes: readonly PsdExportNodeInput[]): PsdPlanNode[] => {
+    const out: PsdPlanNode[] = [];
+    for (let i = nodes.length - 1; i >= 0; i -= 1) {
+      const node = nodes[i]!;
+      if (isGroupInput(node)) {
+        const children = buildTree(node.children);
+        if (children.length > 0) {
+          const blendMode = node.blendMode ?? 'normal';
+          const opacity = clamp01(node.opacity ?? 1);
+          // A default group is PASS-THROUGH: its members blend with what is
+          // below the group. Photoshop's folder default is the same, so only a
+          // group that actually composites in isolation (opacity or blend)
+          // gets an isolating folder blend key.
+          const isolated = opacity !== 1 || blendMode !== 'normal';
+          const mapped = BLEND_MODE_TO_PSD[blendMode];
+          if (!mapped) {
+            unmappedBlends.add(blendMode);
+          }
+          out.push({
+            blendMode: isolated ? (mapped ?? 'normal') : 'pass through',
+            children,
+            colorLabel: node.colorLabel,
+            compositeBlend: blendToComposite(blendMode),
+            hidden: !node.isEnabled,
+            id: node.id,
+            kind: 'folder',
+            name: node.name,
+            opacity,
+          });
+        }
+        continue;
+      }
+      const layer = byId.get(node.id);
+      if (layer) {
+        out.push(layer);
+      }
+    }
+    return out;
+  };
 
   return {
     canvasRect,
     height: canvasRect.height,
     layers,
     status: 'ok',
+    tree: buildTree(inputs),
     unmappedBlends: [...unmappedBlends],
     width: canvasRect.width,
   };
@@ -357,41 +471,82 @@ export const executePsdExport = async (
   const writePsdFn = deps.writePsd ?? defaultWritePsd;
   const download = deps.download ?? defaultDownload;
 
-  const children: AgPsdLayer[] = [];
+  const bakedById = new Map<string, AgPsdLayer>();
   const baked: { planLayer: PsdPlanLayer; surface: RasterSurface }[] = [];
 
   for (const planLayer of plan.layers) {
     throwIfAborted(deps.signal);
     const { imageData, surface } = await bakeLayer(planLayer, deps, read, write);
     baked.push({ planLayer, surface });
-    children.push({
+    bakedById.set(planLayer.id, {
       blendMode: planLayer.blendMode,
       bottom: planLayer.bottom,
       hidden: planLayer.hidden,
       imageData,
       left: planLayer.left,
+      ...(planLayer.colorLabel ? { layerColor: planLayer.colorLabel } : {}),
       name: planLayer.name,
       opacity: planLayer.opacity,
       right: planLayer.right,
       top: planLayer.top,
     });
   }
+  const toChildren = (nodes: readonly PsdPlanNode[]): AgPsdLayer[] =>
+    nodes.map((node) =>
+      node.kind === 'folder'
+        ? {
+            blendMode: node.blendMode,
+            children: toChildren(node.children),
+            hidden: node.hidden,
+            ...(node.colorLabel ? { layerColor: node.colorLabel } : {}),
+            name: node.name,
+            opacity: node.opacity,
+            opened: true,
+          }
+        : bakedById.get(node.id)!
+    );
+  const children = toChildren(plan.tree);
 
-  // Flatten the enabled layers (bottom-to-top = plan order) into the merged
-  // composite the PSD carries as its full-document preview.
+  // Flatten the contributing tree (bottom-to-top at every level) into the merged
+  // composite the PSD carries as its full-document preview. A folder with
+  // non-default opacity/blend is isolated into a buffer first — readers apply
+  // those properties to the folder's composite, and the preview must match the
+  // file's own layers.
   throwIfAborted(deps.signal);
+  const surfaceById = new Map(baked.map(({ planLayer, surface }) => [planLayer.id, surface]));
+  const drawPreview = (ctx: Ctx, nodes: readonly PsdPlanNode[]): void => {
+    for (const node of nodes) {
+      if (node.hidden) {
+        continue;
+      }
+      if (node.kind === 'folder') {
+        if (node.opacity === 1 && node.compositeBlend === 'source-over') {
+          drawPreview(ctx, node.children);
+          continue;
+        }
+        const buffer = deps.backend.createSurface(plan.width, plan.height);
+        setTransform(buffer.ctx, { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 });
+        buffer.ctx.clearRect(0, 0, plan.width, plan.height);
+        drawPreview(buffer.ctx, node.children);
+        ctx.globalAlpha = node.opacity;
+        ctx.globalCompositeOperation = node.compositeBlend;
+        ctx.drawImage(buffer.canvas, 0, 0);
+        continue;
+      }
+      const surface = surfaceById.get(node.id);
+      if (!surface) {
+        continue;
+      }
+      ctx.globalAlpha = node.opacity;
+      ctx.globalCompositeOperation = node.compositeBlend;
+      ctx.drawImage(surface.canvas, node.left, node.top);
+    }
+  };
   const composite = deps.backend.createSurface(plan.width, plan.height);
   const cctx = composite.ctx;
   setTransform(cctx, { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 });
   cctx.clearRect(0, 0, plan.width, plan.height);
-  for (const { planLayer, surface } of baked) {
-    if (planLayer.hidden) {
-      continue;
-    }
-    cctx.globalAlpha = planLayer.opacity;
-    cctx.globalCompositeOperation = planLayer.compositeBlend;
-    cctx.drawImage(surface.canvas, planLayer.left, planLayer.top);
-  }
+  drawPreview(cctx, plan.tree);
   cctx.globalAlpha = 1;
   cctx.globalCompositeOperation = 'source-over';
 

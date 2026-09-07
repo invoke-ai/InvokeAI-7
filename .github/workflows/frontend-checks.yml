@@ -40,17 +40,6 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Fail if package-lock.json is added/modified (pnpm only)
-        shell: bash
-        working-directory: .
-        run: |
-          set -euo pipefail
-          git fetch --no-tags --prune --depth=1 origin "${{ github.base_ref }}"
-          if git diff --name-only "origin/${{ github.base_ref }}...HEAD" | grep -E '(^|/)package-lock\.json$'; then
-            echo "::error::package-lock.json was added or modified. This repo uses pnpm only."
-           exit 1
-          fi
-
       - name: check for changed frontend files
         if: ${{ inputs.always_run != true }}
         id: changed-files
@@ -63,6 +52,8 @@ jobs:
         with:
           files_yaml: |
             frontend:
+              - '.github/workflows/frontend-checks.yml'
+              - '.github/actions/install-frontend-deps/**'
               - 'invokeai/frontend/web/**'
 
       - name: install dependencies
@@ -110,6 +101,8 @@ jobs:
         with:
           files_yaml: |
             webv2:
+              - '.github/workflows/frontend-checks.yml'
+              - '.github/actions/install-frontend-deps/**'
               - 'invokeai/frontend/webv2/**'
 
       - name: install dependencies

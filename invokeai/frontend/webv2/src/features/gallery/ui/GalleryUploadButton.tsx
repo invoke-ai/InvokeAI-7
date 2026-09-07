@@ -1,4 +1,5 @@
 import type { GalleryBoard } from '@features/gallery/core/types';
+import type { TFunction } from 'i18next';
 
 import { Icon } from '@chakra-ui/react';
 import { getGalleryBoardLabel } from '@features/gallery/core/boardLabels';
@@ -10,6 +11,26 @@ import { useTranslation } from 'react-i18next';
 
 import { useGalleryUploadInput } from './useGalleryUploadInput';
 
+/** Tooltip/aria text for an upload control; null when the board cannot receive uploads. */
+export const getGalleryUploadTargetLabel = (
+  boards: readonly GalleryBoard[],
+  selectedBoardId: string,
+  t: TFunction
+): { isAvailable: boolean; label: string } => {
+  if (isDateBoardId(selectedBoardId)) {
+    return { isAvailable: false, label: t('widgets.gallery.uploadsUnavailableForDateBoards') };
+  }
+
+  const selectedBoard = boards.find((board) => board.id === selectedBoardId);
+
+  return {
+    isAvailable: true,
+    label: t('widgets.gallery.uploadMediaToBoard', {
+      name: selectedBoard ? getGalleryBoardLabel(selectedBoard, t) : t('widgets.gallery.selectedBoardFallback'),
+    }),
+  };
+};
+
 export const GalleryUploadButton = ({
   boards,
   selectedBoardId,
@@ -17,16 +38,10 @@ export const GalleryUploadButton = ({
 }: {
   boards: GalleryBoard[];
   selectedBoardId: string;
-  onUploadFiles: (files: File[]) => Promise<void>;
+  onUploadFiles: (files: File[]) => Promise<unknown>;
 }) => {
   const { t } = useTranslation();
-  const selectedBoard = boards.find((board) => board.id === selectedBoardId);
-  const isVirtualTarget = isDateBoardId(selectedBoardId);
-  const label = isVirtualTarget
-    ? t('widgets.gallery.uploadsUnavailableForDateBoards')
-    : t('widgets.gallery.uploadMediaToBoard', {
-        name: selectedBoard ? getGalleryBoardLabel(selectedBoard, t) : t('widgets.gallery.selectedBoardFallback'),
-      });
+  const { isAvailable, label } = getGalleryUploadTargetLabel(boards, selectedBoardId, t);
 
   const { inputProps, openPicker } = useGalleryUploadInput(onUploadFiles);
 
@@ -37,7 +52,7 @@ export const GalleryUploadButton = ({
         <IconButton
           aria-label={label}
           color="fg.muted"
-          disabled={isVirtualTarget}
+          disabled={!isAvailable}
           size="xs"
           variant="ghost"
           onClick={openPicker}

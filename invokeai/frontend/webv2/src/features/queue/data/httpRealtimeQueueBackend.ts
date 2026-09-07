@@ -13,6 +13,7 @@ import {
   clearScopedQueue,
   getCurrentQueueItem,
   getNextQueueItem,
+  getProgressPreviews,
   getQueueItem,
   getQueueItemIds,
   getQueueItemsByIds,
@@ -22,10 +23,18 @@ import {
   retryItemsById,
   resumeQueueProcessor,
 } from './serverApi';
-import { enqueueGenerate, enqueueWorkflow, getResultImages, getResultVideoNames } from './submissionApi';
+import {
+  acknowledgeQueueEnqueue,
+  enqueueGenerate,
+  enqueueWorkflow,
+  getQueueEnqueueReceipt,
+  getResultImages,
+  getResultVideoNames,
+} from './submissionApi';
 
 /** Production adapter for the queue backend port. */
 export const queueBackend: QueueBackendPort = {
+  acknowledgeEnqueue: acknowledgeQueueEnqueue,
   cancelCurrentItem: cancelCurrentQueueItem,
   cancelQueueItems,
   cancelQueueItemsByBatchIds: async (batchIds) => {
@@ -40,6 +49,7 @@ export const queueBackend: QueueBackendPort = {
   emit: socketHub.emit,
   enqueueGenerate,
   enqueueWorkflow,
+  getEnqueueReceipt: getQueueEnqueueReceipt,
   getItem: async (itemId) => mapQueueBackendItemDTO(await getQueueItem(itemId)),
   getResultImages,
   getResultVideoNames,
@@ -56,6 +66,7 @@ export const queueBackend: QueueBackendPort = {
   },
   readItemIds: async (order, scope, signal) => mapQueueItemIdsDTO(await getQueueItemIds(order, scope, signal)),
   readItemsById: async (itemIds, signal) => (await getQueueItemsByIds(itemIds, signal)).map(mapQueueItemDTO),
+  readProgressPreviews: getProgressPreviews,
   readNext: async (scope, signal) => {
     const item = await getNextQueueItem(scope, signal);
 

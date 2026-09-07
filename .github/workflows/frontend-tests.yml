@@ -52,6 +52,8 @@ jobs:
         with:
           files_yaml: |
             frontend:
+              - '.github/workflows/frontend-tests.yml'
+              - '.github/actions/install-frontend-deps/**'
               - 'invokeai/frontend/web/**'
 
       - name: install dependencies
@@ -65,7 +67,7 @@ jobs:
 
   frontend-webv2-tests:
     runs-on: ubuntu-latest
-    timeout-minutes: 10 # expected run time: <2 min
+    timeout-minutes: 20 # Includes browser suites, performance sampling, and project-file journeys.
     defaults:
       run:
         working-directory: invokeai/frontend/webv2
@@ -80,6 +82,7 @@ jobs:
           files_yaml: |
             webv2:
               - '.github/workflows/frontend-tests.yml'
+              - '.github/actions/install-frontend-deps/**'
               - 'invokeai/frontend/webv2/**'
 
       - name: install dependencies
@@ -90,7 +93,7 @@ jobs:
 
       - name: install Chromium
         if: ${{ steps.changed-files.outputs.webv2_any_changed == 'true' || inputs.always_run == true }}
-        run: 'pnpm exec playwright install chromium'
+        run: 'pnpm exec playwright install --with-deps chromium'
         shell: bash
 
       - name: architecture completion gates

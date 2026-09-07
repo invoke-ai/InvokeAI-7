@@ -113,6 +113,7 @@ describe('persisted Gallery selection readers', () => {
   it('converts a canonical image item for legacy image-only consumers', () => {
     expect(selection.getSelectedGalleryImageFromValues({ selectedImage: imageItem })).toEqual({
       boardId: imageItem.boardId,
+      createdAt: imageItem.createdAt,
       height: imageItem.height,
       imageCategory: imageItem.category,
       imageName: imageItem.name,
@@ -141,5 +142,47 @@ describe('persisted Gallery selection readers', () => {
 
   it('falls back to the canonical selected item object when persisted keys are absent', () => {
     expect(getPersistedSelectedGalleryItemKeys({ selectedImage: videoItem })).toEqual(['video:shared']);
+  });
+});
+
+describe('getGalleryDeletionSuccessor', () => {
+  const ref = (name: string): { kind: 'image'; name: string } => ({ kind: 'image', name });
+  const keys = (...names: string[]): Set<`image:${string}`> => new Set(names.map((name) => `image:${name}` as const));
+
+  it('picks the next item in display order — the one that slides into the deleted slot', () => {
+    expect(selection.getGalleryDeletionSuccessor([ref('a'), ref('b'), ref('c')], 'image:b', keys('b'))).toEqual(
+      ref('c')
+    );
+  });
+
+  it('falls back to the nearest earlier item at the end of the list', () => {
+    expect(selection.getGalleryDeletionSuccessor([ref('a'), ref('b'), ref('c')], 'image:c', keys('c'))).toEqual(
+      ref('b')
+    );
+  });
+
+  it('skips ineligible refs in both directions', () => {
+    expect(
+      selection.getGalleryDeletionSuccessor([ref('a'), ref('b'), ref('c'), ref('d')], 'image:b', keys('b', 'c', 'd'))
+    ).toEqual(ref('a'));
+  });
+
+  it('stays in the regular block when starred-first names lead the list', () => {
+    // Regression: the old earlier-first walk crossed the section boundary, so
+    // deleting the first regular item selected the LAST STARRED item.
+    const orderedRefs = [ref('starred-1'), ref('starred-2'), ref('regular-1'), ref('regular-2')];
+
+    expect(selection.getGalleryDeletionSuccessor(orderedRefs, 'image:regular-1', keys('regular-1'))).toEqual(
+      ref('regular-2')
+    );
+  });
+
+  it('returns null when the primary is not in the list', () => {
+    expect(selection.getGalleryDeletionSuccessor([ref('a')], 'image:missing', keys('a'))).toBeNull();
+    expect(selection.getGalleryDeletionSuccessor([], 'image:a', keys('a'))).toBeNull();
+  });
+
+  it('returns null when nothing survives', () => {
+    expect(selection.getGalleryDeletionSuccessor([ref('a')], 'image:a', keys('a'))).toBeNull();
   });
 });

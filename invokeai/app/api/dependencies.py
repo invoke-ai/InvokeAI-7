@@ -46,6 +46,7 @@ from invokeai.app.services.model_relationships.model_relationships_default impor
 from invokeai.app.services.names.names_default import SimpleNameService
 from invokeai.app.services.object_serializer.object_serializer_disk import ObjectSerializerDisk
 from invokeai.app.services.object_serializer.object_serializer_forward_cache import ObjectSerializerForwardCache
+from invokeai.app.services.progress_previews.progress_previews_default import MemoryProgressPreviews
 from invokeai.app.services.project_records.project_records_sqlite import ProjectRecordsSqlite
 from invokeai.app.services.session_processor.session_processor_default import (
     DefaultSessionProcessor,
@@ -213,6 +214,7 @@ class ApiDependencies:
             events=events,
             image_files=image_files,
             image_moves=image_moves,
+            progress_previews=MemoryProgressPreviews(),
             image_records=image_records,
             images=images,
             invocation_cache=invocation_cache,

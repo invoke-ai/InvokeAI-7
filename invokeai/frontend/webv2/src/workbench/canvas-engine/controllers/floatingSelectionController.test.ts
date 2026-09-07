@@ -1,7 +1,8 @@
-import type { CanvasDocumentContractV2, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
+import type { CanvasDocumentContractV3, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
 import type { SelectionState } from '@workbench/canvas-engine/selection/selectionState';
 import type { PlacedSurface, Rect } from '@workbench/canvas-engine/types';
 
+import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
 import { createHistory } from '@workbench/canvas-engine/history/history';
 import { createLayerCacheStore } from '@workbench/canvas-engine/render/layerCache';
 import { createTestStubRasterBackend } from '@workbench/canvas-engine/render/raster.testStub';
@@ -21,13 +22,13 @@ const paintLayer = (id: string, transform: Partial<CanvasLayerContract['transfor
   type: 'raster',
 });
 
-const makeDoc = (layers: CanvasLayerContract[]): CanvasDocumentContractV2 => ({
+const makeDoc = (layers: CanvasLayerContract[]): CanvasDocumentContractV3 => ({
   background: 'transparent',
   bbox: { height: 100, width: 100, x: 0, y: 0 },
   height: 100,
-  layers,
+  stacks: stacksFrom(layers),
   selectedLayerId: layers[0]?.id ?? null,
-  version: 2,
+  version: 3,
   width: 100,
 });
 
@@ -36,7 +37,7 @@ const createHarness = (options: { layer?: CanvasLayerContract; maskRect?: Rect; 
   const layers = createLayerCacheStore(backend);
   const history = createHistory();
   const layer = options.layer ?? paintLayer('a');
-  let document: CanvasDocumentContractV2 | null = makeDoc([layer]);
+  let document: CanvasDocumentContractV3 | null = makeDoc([layer]);
 
   const maskRect = options.maskRect ?? { height: 30, width: 30, x: 20, y: 20 };
   const maskSurface: PlacedSurface = {
@@ -55,7 +56,9 @@ const createHarness = (options: { layer?: CanvasLayerContract; maskRect?: Rect; 
     invert: vi.fn(),
     mask: () => maskSurface,
     replaceMask,
+    restore: vi.fn(),
     selectAll: vi.fn(),
+    snapshot: vi.fn(() => ({ alpha: null, bounds: null, commits: [], rect: null, selected: false })),
   } as SelectionState;
 
   // Seed a cache so there is something to lift out of.
@@ -93,6 +96,7 @@ const createHarness = (options: { layer?: CanvasLayerContract; maskRect?: Rect; 
     layer,
     layers,
     replaceMask,
+    selection,
     removeLayer: () => {
       document = makeDoc([]);
     },
@@ -250,6 +254,23 @@ describe('FloatingSelectionController: commit', () => {
     // The hole at x ∈ [20,50) unioned with the landing region at x ∈ [60,90).
     expect(rect.x).toBe(20);
     expect(rect.x + rect.width).toBe(90);
+  });
+
+  it('moves the ants inside the same step as the pixels, so one undo puts both back', () => {
+    const h = createHarness();
+    const before = { alpha: null, bounds: null, commits: [], rect: null, selected: false };
+    const after = { ...before, selected: true };
+    (h.selection.snapshot as ReturnType<typeof vi.fn>).mockReturnValueOnce(before).mockReturnValueOnce(after);
+    h.controller.lift('a');
+    move(h.controller, 40, 0);
+    h.controller.commit();
+
+    expect(h.history.entries()).toEqual({ future: [], past: ['Move selection'] });
+    h.history.undo();
+    expect(h.calls.applyImagePatch).toHaveBeenCalledTimes(1);
+    expect(h.selection.restore).toHaveBeenLastCalledWith(before);
+    h.history.redo();
+    expect(h.selection.restore).toHaveBeenLastCalledWith(after);
   });
 
   it('marks the layer dirty so the baked pixels persist', () => {

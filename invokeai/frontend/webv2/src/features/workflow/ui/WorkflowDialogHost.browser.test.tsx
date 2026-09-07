@@ -92,7 +92,6 @@ describe('WorkflowDialogHost library autosave under StrictMode', () => {
     const boundGraph = { ...createProjectGraph('workflow-1'), libraryWorkflowId: 'library-workflow-1' };
     const project = createMutablePort({
       galleryValues: {},
-      graphHistory: [],
       id: 'project-1',
       isWorkflowRunning: false,
       projectGraph: boundGraph,
@@ -106,8 +105,6 @@ describe('WorkflowDialogHost library autosave under StrictMode', () => {
         editGraph: vi.fn(),
         redo: vi.fn(),
         replace: vi.fn(),
-        restoreSnapshot: vi.fn(),
-        saveSnapshot: vi.fn(),
         undo: vi.fn(),
       },
       getProjectGraph: () => project.port.getSnapshot().projectGraph,
@@ -182,7 +179,6 @@ describe('WorkflowDialogHost library autosave under StrictMode', () => {
     const boundGraph = { ...createProjectGraph('workflow-1'), libraryWorkflowId: 'library-workflow-1' };
     const project = createMutablePort({
       galleryValues: {},
-      graphHistory: [],
       id: 'project-1',
       isWorkflowRunning: false,
       projectGraph: boundGraph,
@@ -196,8 +192,6 @@ describe('WorkflowDialogHost library autosave under StrictMode', () => {
         editGraph: vi.fn(),
         redo: vi.fn(),
         replace: vi.fn(),
-        restoreSnapshot: vi.fn(),
-        saveSnapshot: vi.fn(),
         undo: vi.fn(),
       },
       getProjectGraph: () => project.port.getSnapshot().projectGraph,
@@ -264,7 +258,6 @@ describe('WorkflowDialogHost library autosave under StrictMode', () => {
     const boundGraph = { ...createProjectGraph('workflow-1'), libraryWorkflowId: 'library-workflow-1' };
     const project = createMutablePort({
       galleryValues: {},
-      graphHistory: [],
       id: 'project-1',
       isWorkflowRunning: false,
       projectGraph: boundGraph,
@@ -282,8 +275,6 @@ describe('WorkflowDialogHost library autosave under StrictMode', () => {
         editGraph: vi.fn(),
         redo: vi.fn(),
         replace: vi.fn(),
-        restoreSnapshot: vi.fn(),
-        saveSnapshot: vi.fn(),
         undo: vi.fn(),
       },
       getProjectGraph: () => project.port.getSnapshot().projectGraph,

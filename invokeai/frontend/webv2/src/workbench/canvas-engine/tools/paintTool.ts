@@ -15,7 +15,14 @@
  */
 
 import type { CanvasLayerContract, CanvasRasterLayerContractV2 } from '@workbench/canvas-engine/contracts';
+import type { CanvasNodeInsertionAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
 import type { PointerInput } from '@workbench/canvas-engine/types';
+
+import { lookupDocumentLeaf } from '@workbench/canvas-engine/document-model/documentModel';
+import { getDocumentLeaves } from '@workbench/canvas-engine/document/documentIndex';
+import { isLeafPaintable, isLayerTransparencyLocked } from '@workbench/canvas-engine/document/layerEligibility';
+import { isMaskLayer } from '@workbench/canvas-engine/document/sources';
+import { fromTRS, invert } from '@workbench/canvas-engine/math/mat2d';
 
 import type { StrokeCommittedEvent, Tool, ToolContext } from './tool';
 
@@ -36,6 +43,8 @@ export interface PaintToolSpec {
   color(ctx: ToolContext): string;
   /** Freehand thinning for this gesture; 0 disables pressure sensitivity. */
   thinning(ctx: ToolContext): number;
+  /** Edge hardness in [0, 1]; absent means 1 (crisp). */
+  hardness?(ctx: ToolContext): number;
   /** Whether pen pressure modulates alpha along the stroke. Absent means never (eraser). */
   pressureOpacity?(ctx: ToolContext): boolean;
 }
@@ -48,8 +57,8 @@ interface PaintTarget {
   layerId: string;
   commit(event: StrokeCommittedEvent): void;
   cancel(): void;
-  /** When the gesture auto-created its layer, the created contract + insert index (for history). */
-  createdLayer?: { layer: CanvasLayerContract; index: number };
+  /** When the gesture auto-created its layer, the created contract + its anchor (for history). */
+  createdLayer?: { layer: CanvasLayerContract; anchor: CanvasNodeInsertionAnchor };
   /**
    * Overrides the brush colour for this gesture (mask targets paint an opaque
    * stencil — the stored RGB is irrelevant, the compositor colorizes by alpha).
@@ -69,54 +78,59 @@ interface PaintTarget {
    * silently attenuate the mask (a ~50% denoise, invisible in the tinted overlay).
    */
   forceOpaque?: boolean;
+  /**
+   * The target layer's committed transform. The session paints layer-local
+   * pixels through its inverse so the stroke lands under the cursor even on a
+   * moved, scaled or rotated layer. Absent ⇒ identity (a freshly auto-created
+   * layer).
+   */
+  transform?: CanvasLayerContract['transform'];
 }
 
-/** True for a mask-bearing layer (inpaint mask / regional guidance) — a paintable alpha stencil. */
-const isMaskLayer = (layer: CanvasLayerContract): boolean =>
-  layer.type === 'inpaint_mask' || layer.type === 'regional_guidance';
-
 /** Resolves (or auto-creates) the paint target for a gesture, or `null` to no-op. */
-const resolveTarget = (ctx: ToolContext): PaintTarget | null => {
+const resolveTarget = (ctx: ToolContext, tool: PaintToolSpec['id']): PaintTarget | null => {
   const doc = ctx.getDocument();
   if (!doc) {
     return null;
   }
-  const selected = doc.selectedLayerId ? doc.layers.find((layer) => layer.id === doc.selectedLayerId) : undefined;
+  const leaf = doc.selectedLayerId ? lookupDocumentLeaf(doc, doc.selectedLayerId) : null;
+  const selected = leaf?.layer;
 
-  if (selected && selected.type === 'raster' && selected.source.type === 'paint') {
+  if (leaf && selected && selected.type === 'raster' && selected.source.type === 'paint') {
     // The selection is a paint layer: paint into it, unless it's locked/disabled
     // (a no-op — don't silently spawn a new layer over the user's locked target).
-    if (selected.isLocked || !selected.isEnabled) {
+    if (!isLeafPaintable(leaf)) {
       return null;
+    }
+    if (selected.source.bitmap) {
+      const entry = ctx.layers.get(selected.id);
+      if (!entry || entry.stale) {
+        // A durable paint source can legitimately have no cache while disabled
+        // or outside the current frame. Never grow a transparent stroke-sized
+        // cache over it; the compositor's rasterization pass will publish the
+        // source first, and the next gesture can edit the complete pixels.
+        ctx.requestLayerRasterization?.(selected.id);
+        return null;
+      }
     }
     // The cache (if any) keeps its current content extent; the stroke grows it.
     return {
       cancel: () => undefined,
       commit: (event) => ctx.emitStrokeCommitted(event),
       layerId: selected.id,
+      transform: selected.transform,
       transparencyLocked: selected.isTransparencyLocked === true,
     };
   }
 
-  if (selected && isMaskLayer(selected)) {
-    // The selection is a mask: paint the stroke into its alpha stencil cache
-    // (brush adds coverage, eraser removes — the shared stroke session handles
-    // both via its composite op). Never auto-create a paint layer here. A
-    // locked/hidden mask refuses the stroke (a no-op, not a spawn).
-    if (selected.isLocked || !selected.isEnabled) {
+  if (leaf && selected?.type === 'raster' && selected.source.type === 'image' && tool === 'eraser') {
+    // Erasing is a destructive pixel edit, so materialize the image into an
+    // undoable paint layer in place. A locked/disabled/unready image refuses the
+    // transaction; never spawn a new layer over the selected image.
+    if (!isLeafPaintable(leaf) || isLayerTransparencyLocked(selected)) {
       return null;
     }
-    return {
-      cancel: () => undefined,
-      color: MASK_STROKE_COLOR,
-      commit: (event) => ctx.emitStrokeCommitted(event),
-      forceOpaque: true,
-      layerId: selected.id,
-    };
-  }
-
-  if (selected?.type === 'control') {
-    const transaction = ctx.beginControlPixelEdit?.(selected.id) ?? null;
+    const transaction = ctx.beginPixelEdit?.(selected.id) ?? null;
     if (!transaction) {
       return null;
     }
@@ -124,6 +138,47 @@ const resolveTarget = (ctx: ToolContext): PaintTarget | null => {
       cancel: transaction.cancel,
       commit: transaction.commitStroke,
       layerId: transaction.layerId,
+      // No transform on purpose: materialization BAKES the layer's placement
+      // into document-space pixels and resets the layer to identity, so the
+      // session's document coordinates already are the cache's coordinates.
+    };
+  }
+
+  if (leaf && selected && isMaskLayer(selected)) {
+    // The selection is a mask: paint the stroke into its alpha stencil cache
+    // (brush adds coverage, eraser removes — the shared stroke session handles
+    // both via its composite op). Never auto-create a paint layer here. A
+    // locked/disabled mask refuses the stroke (a no-op, not a spawn).
+    if (!isLeafPaintable(leaf)) {
+      return null;
+    }
+    if (selected.mask.bitmap) {
+      const entry = ctx.layers.get(selected.id);
+      if (!entry || entry.stale) {
+        ctx.requestLayerRasterization?.(selected.id);
+        return null;
+      }
+    }
+    return {
+      cancel: () => undefined,
+      color: MASK_STROKE_COLOR,
+      commit: (event) => ctx.emitStrokeCommitted(event),
+      forceOpaque: true,
+      layerId: selected.id,
+      transform: selected.transform,
+    };
+  }
+
+  if (selected?.type === 'control') {
+    const transaction = ctx.beginPixelEdit?.(selected.id) ?? null;
+    if (!transaction) {
+      return null;
+    }
+    return {
+      cancel: transaction.cancel,
+      commit: transaction.commitStroke,
+      layerId: transaction.layerId,
+      // No transform on purpose: see the materialized-eraser branch above.
     };
   }
 
@@ -131,19 +186,20 @@ const resolveTarget = (ctx: ToolContext): PaintTarget | null => {
   // fresh paint layer (inserted on top and selected by the reducer) and paint
   // into it. This is the single allowed gesture-start dispatch.
   const layerId = ctx.createLayerId();
+  const previousSelectedLayerId = doc.selectedLayerId;
   const layer: CanvasRasterLayerContractV2 = {
     blendMode: 'normal',
     id: layerId,
     isEnabled: true,
     isLocked: false,
-    name: `Layer ${doc.layers.length + 1}`,
+    name: `Layer ${getDocumentLeaves(doc).length + 1}`,
     opacity: 1,
     source: { bitmap: null, type: 'paint' },
     transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 },
     type: 'raster',
   };
-  // Auto-create inserts at the top (index 0); the reducer selects it.
-  ctx.dispatch({ layer, type: 'addCanvasLayer' });
+  const anchor = ctx.captureInsertionAnchor('raster', doc.selectedLayerId);
+  ctx.dispatch({ anchor, layer, type: 'addCanvasLayer' });
 
   // A brand-new empty paint layer: create a zero-rect cache marked fresh so the
   // async rasterize pass doesn't clobber the stroke mid-gesture. The first stroke
@@ -151,9 +207,20 @@ const resolveTarget = (ctx: ToolContext): PaintTarget | null => {
   const entry = ctx.layers.getOrCreateRect(layerId, { height: 0, width: 0, x: 0, y: 0 });
   entry.stale = false;
   return {
-    cancel: () => undefined,
+    // The dispatch above happens at pointer-DOWN, before any pixel exists, and sits
+    // outside history (the stroke's composed entry owns the create+paint pair), so it
+    // needs a real rollback like the control branch's. Reached whenever
+    // `strokeSession.commit()` returns null — every point clipped away by the
+    // generation frame or the selection — plus pointercancel and a mid-drag switch.
+    cancel: () => {
+      ctx.layers.delete(layerId);
+      ctx.dispatch({ ids: [layerId], type: 'removeCanvasLayers' });
+      // The reducer's nearest-neighbour fallback would otherwise select whatever sits
+      // at the top, not what the user had selected when the gesture began.
+      ctx.dispatch({ id: previousSelectedLayerId, type: 'setCanvasSelectedLayer' });
+    },
     commit: (event) => ctx.emitStrokeCommitted(event),
-    createdLayer: { index: 0, layer },
+    createdLayer: { anchor, layer },
     layerId,
   };
 };
@@ -211,7 +278,7 @@ export const createPaintTool = (spec: PaintToolSpec): Tool => {
       if (session || (input.buttons & PRIMARY_BUTTON) === 0) {
         return;
       }
-      const resolvedTarget = resolveTarget(ctx);
+      const resolvedTarget = resolveTarget(ctx, spec.id);
       updateCursorRing(ctx, input);
       if (!resolvedTarget) {
         return;
@@ -222,6 +289,18 @@ export const createPaintTool = (spec: PaintToolSpec): Tool => {
         return;
       }
       const composite = resolvedTarget.transparencyLocked && spec.id === 'brush' ? 'source-atop' : spec.composite;
+      const layerTransform = resolvedTarget.transform
+        ? fromTRS(
+            { x: resolvedTarget.transform.x, y: resolvedTarget.transform.y },
+            resolvedTarget.transform.rotation,
+            resolvedTarget.transform.scaleX,
+            resolvedTarget.transform.scaleY
+          )
+        : null;
+      if (layerTransform && !invert(layerTransform)) {
+        // A zero-scale layer has no paintable geometry to invert into.
+        return;
+      }
       target = resolvedTarget;
       try {
         session = createStrokeSession({
@@ -232,9 +311,13 @@ export const createPaintTool = (spec: PaintToolSpec): Tool => {
           clipRect: ctx.getStrokeClipRect?.() ?? null,
           color: target.color ?? spec.color(ctx),
           composite,
+          // Mask strokes are an all-or-nothing stencil; a feathered edge would
+          // silently attenuate the denoise strength.
+          hardness: target.forceOpaque ? 1 : (spec.hardness?.(ctx) ?? 1),
           createdLayer: target.createdLayer ?? null,
           ctx,
           layerId: target.layerId,
+          layerTransform,
           // Mask strokes are forced opaque (an alpha stencil is all-or-nothing); a
           // brush-opacity mask stroke would silently attenuate the denoise strength.
           opacity: target.forceOpaque ? 1 : spec.opacity(ctx),

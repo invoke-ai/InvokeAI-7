@@ -1,6 +1,7 @@
 import type { XYPosition } from '@features/workflow/contracts';
 
 import { Icon, Menu, Portal } from '@chakra-ui/react';
+import { MenuContent } from '@platform/ui/Menu';
 import {
   ChevronsDownUpIcon,
   ChevronsUpDownIcon,
@@ -76,7 +77,7 @@ export const NodeContextMenu = ({
     <Menu.Root open={menuState !== null} positioning={positioning} onOpenChange={onOpenChange}>
       <Portal>
         <Menu.Positioner>
-          <Menu.Content minW="11rem">
+          <MenuContent minW="11rem">
             {!menuState ? null : menuState.kind === 'pane' ? (
               <PaneAddConnectorMenuItem position={menuState.position} onAddConnector={onAddConnector} />
             ) : (
@@ -102,14 +103,14 @@ export const NodeContextMenu = ({
                   </Menu.Item>
                 ) : null}
                 <Menu.Separator borderColor="border.subtle" />
-                <Menu.Item color="fg.error" value="delete" onClick={onDelete}>
+                <Menu.Item data-danger="" value="delete" onClick={onDelete}>
                   <Icon as={Trash2Icon} boxSize="3.5" />
                   <Menu.ItemText>Delete</Menu.ItemText>
                   <Menu.ItemCommand>Del</Menu.ItemCommand>
                 </Menu.Item>
               </>
             )}
-          </Menu.Content>
+          </MenuContent>
         </Menu.Positioner>
       </Portal>
     </Menu.Root>

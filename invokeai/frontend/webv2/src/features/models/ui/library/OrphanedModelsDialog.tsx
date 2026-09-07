@@ -112,7 +112,6 @@ export const OrphanedModelsDialog = ({ onClose }: { onClose: () => void }) => {
   return (
     <Dialog.Root
       open
-      placement="center"
       scrollBehavior="inside"
       size="md"
       onOpenChange={(event) => {
@@ -128,9 +127,7 @@ export const OrphanedModelsDialog = ({ onClose }: { onClose: () => void }) => {
             <Dialog.Header borderBottomWidth="1px" borderColor="border.subtle">
               <Stack gap="0.5">
                 <Dialog.Title>{t('models.orphanedTitle')}</Dialog.Title>
-                <Text color="fg.subtle" fontSize="2xs">
-                  {t('models.orphanedDescription')}
-                </Text>
+                <Dialog.Description>{t('models.orphanedDescription')}</Dialog.Description>
               </Stack>
             </Dialog.Header>
             <Dialog.Body>
@@ -147,7 +144,7 @@ export const OrphanedModelsDialog = ({ onClose }: { onClose: () => void }) => {
                   {t('models.noOrphaned')}
                 </Text>
               ) : (
-                <Stack gap="1.5" py="2">
+                <Stack gap="1.5">
                   <Checkbox.Root
                     checked={
                       selectedPaths.size === 0 ? false : selectedPaths.size === orphans.length ? true : 'indeterminate'
@@ -193,7 +190,7 @@ export const OrphanedModelsDialog = ({ onClose }: { onClose: () => void }) => {
                 </Stack>
               )}
             </Dialog.Body>
-            <Dialog.Footer gap="2">
+            <Dialog.Footer>
               <Button disabled={isDeleting} size="xs" variant="ghost" onClick={onClose}>
                 {t('common.close')}
               </Button>
@@ -209,7 +206,7 @@ export const OrphanedModelsDialog = ({ onClose }: { onClose: () => void }) => {
               </Button>
             </Dialog.Footer>
             <Dialog.CloseTrigger asChild>
-              <CloseButton color="fg.muted" size="sm" />
+              <CloseButton />
             </Dialog.CloseTrigger>
           </Dialog.Content>
         </Dialog.Positioner>

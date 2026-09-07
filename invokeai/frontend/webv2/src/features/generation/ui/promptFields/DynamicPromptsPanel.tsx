@@ -23,6 +23,13 @@ import { useTranslation } from 'react-i18next';
 /** Rendering every row of a 10,000-prompt expansion would cost more than it tells the user. */
 const MAX_PREVIEW_ROWS = 200;
 const TABULAR_NUMS = { fontVariantNumeric: 'tabular-nums' } as const;
+// The rows sit on the popover's `bg.muted` surface, where the row recipe's
+// `bg.muted/60` hover is invisible — hover needs the next surface step.
+const PROMPT_ROW_HOVER_PROPS = { bg: 'bg.emphasized/60' } as const;
+// The preview text is the row's whole point; a disabled row loses its
+// affordances (row-recipe hover, dimming, not-allowed cursor), not its ink.
+const DISABLED_PROMPT_ROW_PROPS = { cursor: 'default', opacity: 1 } as const;
+const NO_HOVER_PROPS = { bg: 'transparent' } as const;
 const MENU_POSITIONING = { placement: 'bottom-start' } as const;
 const SWITCH_CHECKED = { bg: 'accent.solid' } as const;
 
@@ -211,6 +218,9 @@ export const DynamicPromptsPanel = ({
             <DynamicPromptRow
               key={`${index}-${prompt}`}
               index={index}
+              // Pulling the only expansion in would paste back what the prompt
+              // box already says; the row stays a plain preview then.
+              isDisabled={expansion.prompts.length === 1}
               prompt={prompt}
               showSyntaxHighlighting={showSyntaxHighlighting}
               onUsePrompt={onUsePrompt}
@@ -229,11 +239,13 @@ export const DynamicPromptsPanel = ({
 
 const DynamicPromptRow = ({
   index,
+  isDisabled,
   onUsePrompt,
   prompt,
   showSyntaxHighlighting,
 }: {
   index: number;
+  isDisabled: boolean;
   prompt: string;
   showSyntaxHighlighting: boolean;
   onUsePrompt: (prompt: string) => void;
@@ -254,10 +266,12 @@ const DynamicPromptRow = ({
       px="2"
       py="1.5"
       textStyle="xs"
-      title={t('widgets.generate.dynamicPrompts.usePrompt')}
+      title={isDisabled ? undefined : t('widgets.generate.dynamicPrompts.usePrompt')}
       whiteSpace="nowrap"
+      _disabled={DISABLED_PROMPT_ROW_PROPS}
+      _hover={isDisabled ? NO_HOVER_PROPS : PROMPT_ROW_HOVER_PROPS}
     >
-      <button type="button" onClick={handleClick}>
+      <button disabled={isDisabled} type="button" onClick={handleClick}>
         <Text as="span" color="fg.subtle" css={TABULAR_NUMS} fontSize="2xs">
           {index + 1}
         </Text>

@@ -7,6 +7,9 @@ import { CSS } from '@dnd-kit/utilities';
 import { getWidgetInstanceDragData, getWidgetInstanceDragId } from '@workbench/widgetDnd';
 import { useCallback } from 'react';
 
+const WIDGET_FILL_TRANSITION =
+  'background var(--chakra-durations-faster) ease, border-color var(--chakra-durations-faster) ease, color var(--chakra-durations-faster) ease';
+
 export const useWidgetSortable = ({
   disabled,
   instanceId,
@@ -70,6 +73,12 @@ export const useWidgetSortable = ({
       onKeyDownCapture: handleSemanticKeyDownCapture,
     },
     setNodeRef: setSortableNodeRef,
-    style: { transform: CSS.Transform.toString(transform), transition },
+    style: {
+      transform: CSS.Transform.toString(transform),
+      // dnd-kit's inline transform transition replaces the CSS transition
+      // outright, which froze the chips' hover fills; compose the fill fade
+      // back in (motion-aware duration token).
+      transition: [transition, WIDGET_FILL_TRANSITION].filter(Boolean).join(', '),
+    },
   };
 };

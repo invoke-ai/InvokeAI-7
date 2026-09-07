@@ -118,7 +118,7 @@ export const GenerateConceptsContent = ({
       </Field>
 
       {loras.length === 0 ? (
-        <Text color="fg.subtle" fontSize="2xs">
+        <Text color="fg.muted" fontSize="2xs">
           {t('widgets.generate.addConceptsHelp')}
         </Text>
       ) : (
@@ -203,7 +203,7 @@ const LoraRow = ({
             ) : null}
           </HStack>
           {lora.model.trigger_phrases?.length ? (
-            <Text color="fg.subtle" fontSize="2xs" truncate>
+            <Text color="fg.muted" fontSize="2xs" truncate>
               {lora.model.trigger_phrases.join(', ')}
             </Text>
           ) : null}

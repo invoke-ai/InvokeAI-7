@@ -1,22 +1,24 @@
 import type { CanvasDocumentSnapshot } from '@workbench/canvas-engine/capabilities';
 import type {
-  CanvasDocumentContractV2,
+  CanvasDocumentContractV3,
   CanvasRasterLayerContractV2,
-  CanvasStateContractV2,
+  CanvasStateContractV3,
 } from '@workbench/canvas-engine/contracts';
 import type { ExecutePsdExportDeps, PsdExportPlan } from '@workbench/canvas-engine/export/psdExport';
 import type { CanvasRasterSnapshot } from '@workbench/canvas-engine/rasterTransactions';
 
+import { groupContract, stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
+import { getDocumentLeaves } from '@workbench/canvas-engine/document/documentIndex';
 import { createTestStubRasterBackend } from '@workbench/canvas-engine/render/raster.testStub';
 import { describe, expect, it, vi } from 'vitest';
 
 import { derivePsdPixelAreaLimit, PSD_ALLOCATION_BYTES_PER_PIXEL, PsdExportController } from './psdExportController';
 
-const document: CanvasDocumentContractV2 = {
+const document: CanvasDocumentContractV3 = {
   background: 'transparent',
   bbox: { height: 100, width: 100, x: 0, y: 0 },
   height: 100,
-  layers: [
+  stacks: stacksFrom([
     {
       blendMode: 'normal',
       id: 'layer',
@@ -28,13 +30,13 @@ const document: CanvasDocumentContractV2 = {
       transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 },
       type: 'raster',
     },
-  ],
+  ]),
   selectedLayerId: null,
-  version: 2,
+  version: 3,
   width: 100,
 };
 
-const canvas: CanvasStateContractV2 = {
+const canvas: CanvasStateContractV3 = {
   document,
   documentRevision: 0,
   snapshots: [],
@@ -46,10 +48,10 @@ const canvas: CanvasStateContractV2 = {
     pendingImages: [],
     selectedImageIndex: 0,
   },
-  version: 2,
+  version: 3,
 };
 
-const canvasWithDocument = (nextDocument: CanvasDocumentContractV2): CanvasStateContractV2 => ({
+const canvasWithDocument = (nextDocument: CanvasDocumentContractV3): CanvasStateContractV3 => ({
   ...canvas,
   document: nextDocument,
 });
@@ -99,9 +101,9 @@ describe('PsdExportController', () => {
 
   it('plans a new bitmap-less paint layer from its captured unflushed live pixels', async () => {
     const backend = createTestStubRasterBackend();
-    const paintDocument: CanvasDocumentContractV2 = {
+    const paintDocument: CanvasDocumentContractV3 = {
       ...document,
-      layers: [
+      stacks: stacksFrom([
         {
           blendMode: 'normal',
           id: 'paint',
@@ -113,7 +115,7 @@ describe('PsdExportController', () => {
           transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 },
           type: 'raster',
         },
-      ],
+      ]),
     };
     const paintCanvas = canvasWithDocument(paintDocument);
     const documentSnapshot: CanvasDocumentSnapshot = { canvas: paintCanvas, documentGeneration: 6 };
@@ -152,12 +154,12 @@ describe('PsdExportController', () => {
   it('plans and reserves from a grown live-cache rect instead of smaller persisted source bounds', async () => {
     const backend = createTestStubRasterBackend();
     const smallLayer: CanvasRasterLayerContractV2 = {
-      ...(document.layers[0] as CanvasRasterLayerContractV2),
+      ...(getDocumentLeaves(document)[0] as CanvasRasterLayerContractV2),
       source: { image: { height: 10, imageName: 'small.png', width: 10 }, type: 'image' },
     };
-    const smallDocument: CanvasDocumentContractV2 = {
+    const smallDocument: CanvasDocumentContractV3 = {
       ...document,
-      layers: [smallLayer],
+      stacks: stacksFrom([smallLayer]),
     };
     const grownCanvas = canvasWithDocument(smallDocument);
     const documentSnapshot: CanvasDocumentSnapshot = { canvas: grownCanvas, documentGeneration: 7 };
@@ -196,14 +198,14 @@ describe('PsdExportController', () => {
 
   it('exports valid captured pixels while skipping a confirmed-empty paint layer', async () => {
     const backend = createTestStubRasterBackend();
-    const validLayer = document.layers[0] as CanvasRasterLayerContractV2;
+    const validLayer = getDocumentLeaves(document)[0] as CanvasRasterLayerContractV2;
     const blankLayer: CanvasRasterLayerContractV2 = {
       ...validLayer,
       id: 'blank',
       name: 'Blank',
       source: { bitmap: null, type: 'paint' },
     };
-    const mixedCanvas = canvasWithDocument({ ...document, layers: [validLayer, blankLayer] });
+    const mixedCanvas = canvasWithDocument({ ...document, stacks: stacksFrom([validLayer, blankLayer]) });
     const documentSnapshot: CanvasDocumentSnapshot = { canvas: mixedCanvas, documentGeneration: 8 };
     const execute = vi.fn((plan: PsdExportPlan) => {
       if (plan.status !== 'ok') {
@@ -246,12 +248,12 @@ describe('PsdExportController', () => {
   it('returns nothing when every requested raster layer is confirmed empty', async () => {
     const backend = createTestStubRasterBackend();
     const blankLayer: CanvasRasterLayerContractV2 = {
-      ...(document.layers[0] as CanvasRasterLayerContractV2),
+      ...(getDocumentLeaves(document)[0] as CanvasRasterLayerContractV2),
       id: 'blank',
       name: 'Blank',
       source: { bitmap: null, type: 'paint' },
     };
-    const blankCanvas = canvasWithDocument({ ...document, layers: [blankLayer] });
+    const blankCanvas = canvasWithDocument({ ...document, stacks: stacksFrom([blankLayer]) });
     const documentSnapshot: CanvasDocumentSnapshot = { canvas: blankCanvas, documentGeneration: 9 };
     const release = vi.fn();
     const controller = new PsdExportController({
@@ -404,5 +406,63 @@ describe('PsdExportController', () => {
     await expect(exportPromise).resolves.toBe('aborted');
     expect(snapshotRelease).toHaveBeenCalledOnce();
     expect(reservationRelease).toHaveBeenCalledOnce();
+  });
+});
+
+describe('PsdExportController — raster tree', () => {
+  it('plans the raster tree as folders with own flags and skips leaves with nothing captured', async () => {
+    const backend = createTestStubRasterBackend();
+    const surface = backend.createSurface(100, 100);
+    const rect = { height: 100, width: 100, x: 0, y: 0 };
+    const leaf = (id: string, isEnabled = true): CanvasRasterLayerContractV2 => ({
+      ...(getDocumentLeaves(document)[0] as CanvasRasterLayerContractV2),
+      id,
+      isEnabled,
+      name: id,
+    });
+    const treeDocument: CanvasDocumentContractV3 = {
+      ...document,
+      stacks: stacksFrom([
+        groupContract('G', [leaf('inner', false), groupContract('empty', [leaf('blank')])], { isEnabled: false }),
+        leaf('root'),
+      ]),
+    };
+    const documentSnapshot: CanvasDocumentSnapshot = {
+      canvas: canvasWithDocument(treeDocument),
+      documentGeneration: 1,
+    };
+    const rasterSnapshot: CanvasRasterSnapshot = {
+      ...documentSnapshot,
+      emptyLayerIds: new Set(['blank']),
+      layerSurfaces: new Map([
+        ['inner', { rect, surface }],
+        ['root', { rect, surface }],
+      ]),
+      release: vi.fn(),
+    };
+    const execute = vi.fn((_plan: PsdExportPlan) => Promise.resolve());
+    const controller = new PsdExportController({
+      backend,
+      captureDocumentSnapshot: () => documentSnapshot,
+      captureRasterSnapshot: () => Promise.resolve({ snapshot: rasterSnapshot, status: 'ok' as const }),
+      execute,
+      getAvailableBytes: () => 10_000_000,
+      isDocumentSnapshotCurrent: () => true,
+      reserve: () => ({ lease: { release: vi.fn() }, status: 'ok' }),
+    });
+
+    await expect(controller.export('tree')).resolves.toBe('exported');
+    const plan = execute.mock.calls[0]![0];
+    if (plan.status !== 'ok') {
+      throw new Error(plan.status);
+    }
+    expect(plan.tree.map((node) => (node.kind === 'folder' ? `${node.name}/` : node.id))).toEqual(['root', 'G/']);
+    const folder = plan.tree[1];
+    expect(folder.kind === 'folder' && folder.hidden).toBe(true);
+    expect(folder.kind === 'folder' && folder.children.map((node) => node.id)).toEqual(['inner']);
+    expect(plan.layers.map((layer) => [layer.id, layer.hidden, layer.contributes])).toEqual([
+      ['root', false, true],
+      ['inner', true, false],
+    ]);
   });
 });

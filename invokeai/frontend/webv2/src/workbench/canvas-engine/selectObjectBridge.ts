@@ -1,11 +1,12 @@
 import type { SelectObjectStartContext } from '@workbench/canvas-engine/applicationHost';
 import type { LayerExportGuard } from '@workbench/canvas-engine/capabilities';
-import type { CanvasDocumentContractV2, CanvasImageRef } from '@workbench/canvas-engine/contracts';
+import type { CanvasDocumentContractV3, CanvasImageRef } from '@workbench/canvas-engine/contracts';
 import type { DecodeImageResult } from '@workbench/canvas-engine/controllers/rasterController';
 import type { LayerCacheStore } from '@workbench/canvas-engine/render/layerCache';
 import type { RasterSurface } from '@workbench/canvas-engine/render/raster';
 import type { Rect } from '@workbench/canvas-engine/types';
 
+import { lookupDocumentLeaf } from '@workbench/canvas-engine/document-model/documentModel';
 import { fromTRS } from '@workbench/canvas-engine/math/mat2d';
 import { isEmpty, roundOut, transformBounds } from '@workbench/canvas-engine/math/rect';
 
@@ -14,7 +15,7 @@ const SELECT_OBJECT_PREVIEW_TINT = '#38bdf8';
 
 export interface CreateSelectObjectBridgeDeps {
   readonly layerCache: LayerCacheStore;
-  readonly getDocument: () => CanvasDocumentContractV2 | null;
+  readonly getDocument: () => CanvasDocumentContractV3 | null;
   readonly captureGuard: (layerId: string) => LayerExportGuard | null;
   readonly decodeImage: (
     image: CanvasImageRef,
@@ -78,17 +79,18 @@ export const createSelectObjectBridge = (deps: CreateSelectObjectBridgeDeps): Se
 
   prepareSelectObjectStart: (layerId) => {
     const document = deps.getDocument();
-    const layer = document?.layers.find((candidate) => candidate.id === layerId);
-    if (!document || !layer) {
+    const leaf = lookupDocumentLeaf(document, layerId);
+    const layer = leaf?.layer;
+    if (!document || !leaf || !layer) {
       return { status: 'missing' };
     }
     if (layer.type !== 'raster' && layer.type !== 'control') {
       return { status: 'unsupported' };
     }
-    if (!layer.isEnabled) {
+    if (!leaf.contributionEnabled) {
       return { status: 'disabled' };
     }
-    if (layer.isLocked) {
+    if (leaf.effectiveLocked) {
       return { status: 'locked' };
     }
     const guard = deps.captureGuard(layer.id);

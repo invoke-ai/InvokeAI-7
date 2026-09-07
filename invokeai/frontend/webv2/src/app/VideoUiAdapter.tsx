@@ -2,18 +2,18 @@ import type { VideoUiAdapter } from '@features/video';
 import type { ReactNode } from 'react';
 
 import { invalidateGallery } from '@features/gallery/queries';
-import { areProjectPromptDraftsEqual, getPromptDraftFromValues } from '@features/generation/settings';
 import { VideoUiProvider } from '@features/video';
 import { useQueryClient } from '@tanstack/react-query';
 import { useWorkbenchPreferenceSelector } from '@workbench/settings/store';
 import { getProjectWidgetValues } from '@workbench/widgetState';
 import { useActiveProjectSelector, useWorkbenchCommands } from '@workbench/WorkbenchContext';
-import { useCallback, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 
 /**
- * Production binding of Video's UI port: maps the video widget instance and
- * the shared prompt draft out of the Workbench aggregate. No second adapter is
- * expected.
+ * Production binding of Video's UI port: maps the video widget instance out of
+ * the Workbench aggregate. No second adapter is expected. Video's prompt is one
+ * of those widget values — it is not the project draft Generate and Upscale
+ * share — so nothing but `rawValues` is joined here.
  */
 export const VideoUiAdapterProvider = ({ children }: { children: ReactNode }) => {
   const project = useActiveProjectSelector(
@@ -22,30 +22,37 @@ export const VideoUiAdapterProvider = ({ children }: { children: ReactNode }) =>
 
       return {
         projectId: activeProject.id,
-        promptDraft: getPromptDraftFromValues(getProjectWidgetValues(activeProject, 'generate')),
         rawValues: instance?.state.values ?? {},
       };
     },
-    (left, right) =>
-      left.projectId === right.projectId &&
-      areProjectPromptDraftsEqual(left.promptDraft, right.promptDraft) &&
-      left.rawValues === right.rawValues
+    (left, right) => left.projectId === right.projectId && left.rawValues === right.rawValues
   );
   // Syntax highlighting is a per-user preference, not a property of the
   // project, so it is joined here rather than read off the document.
   const showPromptSyntaxHighlighting = useWorkbenchPreferenceSelector(
     (preferences) => preferences.showPromptSyntaxHighlighting
   );
+  // Uploads from the video panel land on the gallery's currently selected board. This
+  // deliberately reads the RAW selectedBoardId — the same value the queue snapshots as
+  // galleryBoardId for generation results — so uploads and generations land on the same
+  // board, rather than replicating the gallery view's display-side fallbacks.
+  const uploadBoardId = useActiveProjectSelector((activeProject) => {
+    const selectedBoardId = getProjectWidgetValues(activeProject, 'gallery').selectedBoardId;
+
+    return typeof selectedBoardId === 'string' ? selectedBoardId : 'none';
+  });
+  // Ref-backed so the port's actions keep their stable-for-the-project identity: a
+  // board click must not re-render every useVideoUiActions consumer in the panel.
+  const uploadBoardIdRef = useRef(uploadBoardId);
+  useEffect(() => {
+    uploadBoardIdRef.current = uploadBoardId;
+  }, [uploadBoardId]);
   const commands = useWorkbenchCommands();
   const queryClient = useQueryClient();
   // The port's callbacks are keyed to the project, not to its contents: rebuilding
   // them whenever `rawValues` changes would hand every consumer new function
   // identities on each keystroke, re-rendering memoized fields that did not change.
   const { projectId } = project;
-  const patchPromptDraft = useCallback<VideoUiAdapter['patchPromptDraft']>(
-    (values) => commands.generation.patchPromptDraft(values, 'video', projectId),
-    [commands, projectId]
-  );
   const patchValues = useCallback<VideoUiAdapter['patchValues']>(
     (values, origin) => commands.widgets.patchValues('video', values, projectId, origin),
     [commands, projectId]
@@ -55,16 +62,17 @@ export const VideoUiAdapterProvider = ({ children }: { children: ReactNode }) =>
     [commands]
   );
   const touchGalleryImages = useCallback(() => void invalidateGallery(queryClient), [queryClient]);
+  const getUploadBoardId = useCallback(() => uploadBoardIdRef.current, []);
   const adapter = useMemo<VideoUiAdapter>(
     () => ({
       ...project,
-      patchPromptDraft,
+      getUploadBoardId,
       patchValues,
       reportError,
       showPromptSyntaxHighlighting,
       touchGalleryImages,
     }),
-    [patchPromptDraft, patchValues, project, reportError, showPromptSyntaxHighlighting, touchGalleryImages]
+    [getUploadBoardId, patchValues, project, reportError, showPromptSyntaxHighlighting, touchGalleryImages]
   );
 
   return <VideoUiProvider adapter={adapter}>{children}</VideoUiProvider>;

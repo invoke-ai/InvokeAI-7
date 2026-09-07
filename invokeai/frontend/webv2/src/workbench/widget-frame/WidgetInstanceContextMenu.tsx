@@ -1,5 +1,6 @@
 import { Icon, Menu, Portal, Text } from '@chakra-ui/react';
-import { XIcon } from 'lucide-react';
+import { MenuContent } from '@platform/ui/Menu';
+import { ArrowLeftToLineIcon, ArrowRightToLineIcon, XIcon } from 'lucide-react';
 import { useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -13,18 +14,23 @@ export interface WidgetInstanceContextMenuTarget {
 
 interface WidgetInstanceContextMenuProps {
   target: WidgetInstanceContextMenuTarget | null;
+  /** With `onSetAlignment`, offers moving the widget between the strip's two clusters. */
+  isAlignedEnd?: (item: WidgetEnableMenuItem) => boolean;
   isRemoveDisabled?: (item: WidgetEnableMenuItem) => boolean;
   removeDisabledLabel?: string;
   onClose: () => void;
   onRemove: (item: WidgetEnableMenuItem) => void;
+  onSetAlignment?: (item: WidgetEnableMenuItem, align: 'start' | 'end') => void;
 }
 
 const REMOVE_DISABLED_PROPS = { opacity: 0.4 };
 
 export const WidgetInstanceContextMenu = ({
+  isAlignedEnd,
   isRemoveDisabled,
   onClose,
   onRemove,
+  onSetAlignment,
   removeDisabledLabel = 'Required',
   target,
 }: WidgetInstanceContextMenuProps) => {
@@ -45,6 +51,12 @@ export const WidgetInstanceContextMenu = ({
     [onClose]
   );
   const isDisabled = target ? isRemoveDisabled?.(target.item) === true : false;
+  const isEnd = target ? isAlignedEnd?.(target.item) === true : false;
+  const handleToggleAlignment = useCallback(() => {
+    if (target) {
+      onSetAlignment?.(target.item, isEnd ? 'start' : 'end');
+    }
+  }, [isEnd, onSetAlignment, target]);
   const handleRemove = useCallback(() => {
     if (target && isRemoveDisabled?.(target.item) !== true) {
       onRemove(target.item);
@@ -63,7 +75,13 @@ export const WidgetInstanceContextMenu = ({
       <Portal>
         <Menu.Positioner>
           {target ? (
-            <Menu.Content minW="12rem">
+            <MenuContent minW="12rem">
+              {onSetAlignment && target.item.isEnabled ? (
+                <Menu.Item value="toggle-alignment" onClick={handleToggleAlignment}>
+                  <Icon as={isEnd ? ArrowLeftToLineIcon : ArrowRightToLineIcon} boxSize="3.5" />
+                  <Menu.ItemText>{isEnd ? t('widgets.moveToLeftSide') : t('widgets.moveToRightSide')}</Menu.ItemText>
+                </Menu.Item>
+              ) : null}
               <Menu.Item
                 value="remove-widget"
                 disabled={isDisabled}
@@ -78,7 +96,7 @@ export const WidgetInstanceContextMenu = ({
                   </Text>
                 ) : null}
               </Menu.Item>
-            </Menu.Content>
+            </MenuContent>
           ) : null}
         </Menu.Positioner>
       </Portal>

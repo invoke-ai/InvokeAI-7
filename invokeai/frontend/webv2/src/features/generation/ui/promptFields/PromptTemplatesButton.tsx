@@ -10,6 +10,7 @@ import { useOnPendingPromptTemplateDraft } from '@features/generation/ui/promptT
 import { isPromptTemplateMissing, usePromptTemplates } from '@features/generation/ui/usePromptTemplates';
 import { IconButton } from '@platform/ui/Button';
 import { MiddleTruncate } from '@platform/ui/MiddleTruncate';
+import { PopoverContent } from '@platform/ui/Popover';
 import { Tooltip } from '@platform/ui/Tooltip';
 import { LayoutTemplateIcon } from 'lucide-react';
 import { useCallback, useId, useMemo, useState } from 'react';
@@ -145,7 +146,7 @@ export const PromptTemplatesButton = ({
       </Tooltip>
       <Portal>
         <Popover.Positioner>
-          <Popover.Content bg="bg.muted" borderColor="border.emphasized" borderWidth="1px" w="26rem">
+          <PopoverContent w="26rem">
             <Popover.Body p="2.5">
               {editorTarget ? (
                 <PromptTemplateEditor
@@ -174,7 +175,7 @@ export const PromptTemplatesButton = ({
                 />
               )}
             </Popover.Body>
-          </Popover.Content>
+          </PopoverContent>
         </Popover.Positioner>
       </Portal>
     </Popover.Root>

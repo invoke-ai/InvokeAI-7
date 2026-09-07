@@ -1,15 +1,17 @@
 import type { LayerExportGuard } from '@workbench/canvas-engine/capabilities';
 import type {
-  CanvasDocumentContractV2,
+  CanvasDocumentContractV3,
   CanvasLayerContract,
   CanvasLayerSourceContract,
 } from '@workbench/canvas-engine/contracts';
+import type { CanvasEditConcurrency } from '@workbench/canvas-engine/editConcurrency';
 import type { History } from '@workbench/canvas-engine/history/history';
 import type { CanvasProjectMutation } from '@workbench/canvas-engine/mutationContracts';
 import type { PreparedLayerCacheReplacement } from '@workbench/canvas-engine/render/layerCache';
 import type { RasterBackend, RasterSurface } from '@workbench/canvas-engine/render/raster';
 import type { Rect } from '@workbench/canvas-engine/types';
 
+import { getDocumentLayer } from '@workbench/canvas-engine/document/documentIndex';
 import { renderableSourceOf } from '@workbench/canvas-engine/document/sources';
 import { intersect, isEmpty, roundOut } from '@workbench/canvas-engine/math/rect';
 
@@ -27,21 +29,19 @@ interface PixelSnapshot {
   rect: Rect;
 }
 
-export interface CropLayerControllerOptions<Permit> {
+export interface CropLayerControllerOptions {
+  readonly concurrency: CanvasEditConcurrency;
   readonly backend: RasterBackend;
   readonly history: History;
-  readonly getDocument: () => CanvasDocumentContractV2 | null;
-  readonly getReducerDocument: () => CanvasDocumentContractV2 | null;
-  readonly capturePermit: () => Permit | null;
-  readonly isPermitCurrent: (permit: Permit) => boolean;
-  readonly isGestureActive: () => boolean;
+  readonly getDocument: () => CanvasDocumentContractV3 | null;
+  readonly getReducerDocument: () => CanvasDocumentContractV3 | null;
   readonly endBurst: () => void;
   readonly isSupportedSource: (source: CanvasLayerSourceContract) => boolean;
   readonly exportBaked: (layerId: string) => Promise<ExportResult>;
   readonly isGuardCurrent: (guard: LayerExportGuard) => boolean;
   readonly captureCache: (
     layer: CanvasLayerContract,
-    document: CanvasDocumentContractV2
+    document: CanvasDocumentContractV3
   ) => PixelSnapshot | null | 'not-ready';
   readonly preparePixels: (layerId: string, rect: Rect, pixels: RasterSurface) => PreparedLayerCacheReplacement;
   readonly installPrepared: (prepared: PreparedLayerCacheReplacement) => void;
@@ -54,18 +54,18 @@ export interface CropLayerControllerOptions<Permit> {
 }
 
 /** Owns guarded crop-to-bbox conversion and replayable pixel snapshots. */
-export class CropLayerController<Permit> {
+export class CropLayerController {
   private disposed = false;
-  constructor(private readonly deps: CropLayerControllerOptions<Permit>) {}
+  constructor(private readonly deps: CropLayerControllerOptions) {}
 
   async crop(layerId: string): Promise<CropLayerResult> {
-    const permit = this.deps.capturePermit();
-    if (this.disposed || !permit || this.deps.isGestureActive()) {
+    const permit = this.deps.concurrency.capturePermit();
+    if (this.disposed || !permit || this.deps.concurrency.isGestureActive()) {
       return { status: 'busy' };
     }
     this.deps.endBurst();
     const document = this.deps.getDocument();
-    const layer = document?.layers.find((candidate) => candidate.id === layerId);
+    const layer = getDocumentLayer(document, layerId);
     if (!document || !layer) {
       return { status: 'missing' };
     }
@@ -82,15 +82,15 @@ export class CropLayerController<Permit> {
         return { status: exported.status === 'disabled' ? 'not-ready' : exported.status };
       }
       try {
-        if (!this.deps.isPermitCurrent(permit)) {
+        if (!this.deps.concurrency.isPermitCurrent(permit)) {
           return { status: 'busy' };
         }
         const liveDocument = this.deps.getDocument();
-        const liveLayer = liveDocument?.layers.find((candidate) => candidate.id === layerId);
+        const liveLayer = getDocumentLayer(liveDocument, layerId);
         if (!liveDocument || !liveLayer) {
           return { status: 'missing' };
         }
-        if (!this.deps.isPermitCurrent(permit) || this.deps.isGestureActive()) {
+        if (!this.deps.concurrency.isPermitCurrent(permit) || this.deps.concurrency.isGestureActive()) {
           return { status: 'busy' };
         }
         if (liveLayer.isLocked) {
@@ -132,8 +132,8 @@ export class CropLayerController<Permit> {
         const publish = (contract: CanvasLayerContract, prepared: PreparedLayerCacheReplacement): void => {
           this.deps.dispatchPrepared(
             { layer: contract, layerId, type: 'replaceCanvasLayer' },
-            () => this.deps.getReducerDocument()?.layers.find((candidate) => candidate.id === layerId) === contract,
-            () => this.deps.getDocument()?.layers.find((candidate) => candidate.id === layerId) === contract
+            () => getDocumentLayer(this.deps.getReducerDocument(), layerId) === contract,
+            () => getDocumentLayer(this.deps.getDocument(), layerId) === contract
           );
           try {
             this.deps.discardPersisted(layerId);
@@ -146,7 +146,7 @@ export class CropLayerController<Permit> {
           publish(contract, this.deps.preparePixels(layerId, snapshot.rect, snapshot.pixels));
         const afterPixels = { pixels: cropped, rect: cropRect };
         const prepared = this.deps.preparePixels(layerId, cropRect, cropped);
-        if (!this.deps.isPermitCurrent(permit)) {
+        if (!this.deps.concurrency.isPermitCurrent(permit)) {
           return { status: 'busy' };
         }
         publish(after, prepared);

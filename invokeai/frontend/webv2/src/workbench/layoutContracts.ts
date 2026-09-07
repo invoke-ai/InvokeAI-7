@@ -2,12 +2,12 @@ import type { InvocationSourceId, ResultDestination } from './invocationContract
 import type { WidgetInstanceId, WidgetTypeId } from './widgetContracts';
 
 /**
- * The three shipped layout presets. A preset names an *arrangement*, never a
+ * The shipped layout presets. A preset names an *arrangement*, never a
  * widget — `edit` opens Canvas but is not "the Canvas view", and a preset may
  * have several graph widgets open at once. Source resolution is a separate
  * concern (see `graphWidgets.ts`).
  */
-export type BuiltInLayoutPresetId = 'compose' | 'edit' | 'automate';
+export type BuiltInLayoutPresetId = 'compose' | 'edit' | 'automate' | 'video';
 
 export type LayoutPresetId = BuiltInLayoutPresetId | (string & {});
 
@@ -20,6 +20,11 @@ export interface PanelState {
 }
 
 export type WidgetRegion = 'left' | 'right' | 'bottom' | 'center';
+
+export const WIDGET_REGIONS: readonly WidgetRegion[] = ['left', 'right', 'bottom', 'center'];
+
+export const isWidgetRegion = (value: unknown): value is WidgetRegion =>
+  typeof value === 'string' && (WIDGET_REGIONS as readonly string[]).includes(value);
 
 export type FloatingWidgetMode = 'windowed' | 'maximized' | 'shaded';
 
@@ -45,6 +50,9 @@ export interface FloatingWidgetState {
 export interface WidgetRegionState {
   activeInstanceId: WidgetInstanceId;
   instanceIds: WidgetInstanceId[];
+  /** Instances rendered in the strip's trailing cluster (bottom region only).
+   * Ids not currently placed are inert — a widget re-enabled later keeps its side. */
+  alignEndInstanceIds?: WidgetInstanceId[];
   isCollapsed: boolean;
   sizePx: number;
 }

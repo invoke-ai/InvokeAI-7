@@ -1,5 +1,5 @@
 import type { GenerateModelConfig, GenerateWidgetValues, MainModelConfig } from '@features/generation/contracts';
-import type { CanvasDocumentContractV2 } from '@workbench/canvas-engine/contracts';
+import type { CanvasDocumentContractV3 } from '@workbench/canvas-engine/contracts';
 import type { CanvasEngine } from '@workbench/canvas-engine/engine';
 import type { RasterCompositeExportResult } from '@workbench/canvas-engine/exportRasterComposite';
 import type { Rect } from '@workbench/canvas-engine/types';
@@ -59,11 +59,11 @@ const createProject = (boardId = 'board-1', generateOverrides: Partial<GenerateW
   return project;
 };
 
-const createDocument = (bbox: Rect): CanvasDocumentContractV2 => ({ bbox }) as unknown as CanvasDocumentContractV2;
+const createDocument = (bbox: Rect): CanvasDocumentContractV3 => ({ bbox }) as unknown as CanvasDocumentContractV3;
 
 const createHarness = (
   options: {
-    document?: CanvasDocumentContractV2 | null;
+    document?: CanvasDocumentContractV3 | null;
     exportResult?: RasterCompositeExportResult;
     onFlush?: () => void;
   } = {}
@@ -100,7 +100,7 @@ const createHarness = (
     flushPendingUploads,
     getDocument,
     order,
-    setDocument: (next: CanvasDocumentContractV2 | null) => {
+    setDocument: (next: CanvasDocumentContractV3 | null) => {
       document = next;
     },
     uploadImage,

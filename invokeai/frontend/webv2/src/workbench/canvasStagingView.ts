@@ -1,4 +1,4 @@
-import type { CanvasStagingCandidateContract, CanvasStateContractV2 } from '@workbench/canvas-engine/api';
+import type { CanvasStagingCandidateContract, CanvasStateContractV3 } from '@workbench/canvas-engine/api';
 import type { WorkbenchQueueItem as QueueItem } from '@workbench/queueHistoryContracts';
 
 import { getQueueItemSnapshotBatchCount, getQueueItemSnapshotDimensions } from '@features/queue/contracts';
@@ -25,7 +25,7 @@ export interface CanvasCandidateSlot {
 
 export type CanvasStagingSlot = CanvasCandidateSlot | CanvasQueuePlaceholderSlot;
 
-const isActiveCanvasQueueItemForDocument = (canvas: CanvasStateContractV2, item: QueueItem): boolean =>
+const isActiveCanvasQueueItemForDocument = (canvas: CanvasStateContractV3, item: QueueItem): boolean =>
   item.snapshot.destination === 'canvas' &&
   (item.status === 'pending' || item.status === 'running') &&
   item.snapshot.canvas.documentRevision === canvas.documentRevision;
@@ -115,7 +115,7 @@ const createPlaceholderSlot = (item: QueueItem, itemIndex: number): CanvasQueueP
 };
 
 export const getCanvasQueuePlaceholderSlots = (
-  canvas: CanvasStateContractV2,
+  canvas: CanvasStateContractV3,
   queueItems: readonly QueueItem[]
 ): CanvasQueuePlaceholderSlot[] => {
   const placeholders: CanvasQueuePlaceholderSlot[] = [];
@@ -170,7 +170,7 @@ const getCandidatesByQueueItemId = (
 };
 
 const getCanvasStagingSlotsForQueueItem = (
-  canvas: CanvasStateContractV2,
+  canvas: CanvasStateContractV3,
   item: QueueItem,
   candidates: readonly CanvasStagingCandidateContract[]
 ): CanvasStagingSlot[] => {
@@ -225,7 +225,7 @@ const getCanvasStagingSlotsForQueueItem = (
 };
 
 export const getCanvasStagingSlots = (
-  canvas: CanvasStateContractV2,
+  canvas: CanvasStateContractV3,
   queueItems: readonly QueueItem[]
 ): CanvasStagingSlot[] => {
   const candidatesByQueueItemId = getCandidatesByQueueItemId(canvas.stagingArea.pendingImages);
@@ -249,11 +249,11 @@ export const getCanvasStagingSlots = (
   return [...orphanCandidateSlots, ...slots];
 };
 
-export const getCanvasStagingSlotCount = (canvas: CanvasStateContractV2, queueItems: readonly QueueItem[]): number =>
+export const getCanvasStagingSlotCount = (canvas: CanvasStateContractV3, queueItems: readonly QueueItem[]): number =>
   getCanvasStagingSlots(canvas, queueItems).length;
 
 export const getFirstCanvasPlaceholderSlotIndex = (
-  canvas: CanvasStateContractV2,
+  canvas: CanvasStateContractV3,
   queueItems: readonly QueueItem[]
 ): number => getCanvasStagingSlots(canvas, queueItems).findIndex((slot) => slot.kind === 'placeholder');
 

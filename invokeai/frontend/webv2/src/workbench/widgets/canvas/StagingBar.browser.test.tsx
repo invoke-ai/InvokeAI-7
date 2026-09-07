@@ -7,10 +7,18 @@ import { createInstance } from 'i18next';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { I18nextProvider, initReactI18next } from 'react-i18next';
-import { afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { CanvasBottomOverlay } from './CanvasBottomOverlay';
 import { StagingBar } from './StagingBar';
+
+const contextMenu = vi.hoisted(() => ({ targets: [] as { slotId: string; x: number; y: number }[] }));
+vi.mock('./StagingItemContextMenu', () => ({
+  StagingItemContextMenu: ({ target }: { target: { slot: { id: string }; x: number; y: number } }) => {
+    contextMenu.targets.push({ slotId: target.slot.id, x: target.x, y: target.y });
+    return <div data-testid="staging-context-menu" />;
+  },
+}));
 
 /** Roughly the width of a canvas widget on a laptop — wide enough for the bar, far too narrow for 24 thumbnails. */
 const CANVAS_WIDTH = 900;
@@ -39,6 +47,15 @@ const makeSlot = (index: number): CanvasStagingSlot => ({
   width: 512,
 });
 
+const makePlaceholder = (index: number): CanvasStagingSlot => ({
+  height: 512,
+  id: `slot-${index}`,
+  itemIndex: index,
+  kind: 'placeholder',
+  queueItemId: 'queue-item',
+  width: 512,
+});
+
 let host: HTMLDivElement | null = null;
 let root: Root | null = null;
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -51,8 +68,15 @@ const interact = (action: () => void): Promise<void> =>
     });
   });
 
-const renderStagingBar = async (slotCount: number, selectedImageIndex = 0) => {
-  const slots = Array.from({ length: slotCount }, (_, index) => makeSlot(index));
+const renderStagingBar = async (
+  slotCount: number,
+  selectedImageIndex = 0,
+  onSaveToLayerAndContinue: () => void = noop,
+  onPreloadCandidate: (imageName: string) => void = noop,
+  onSelectImage: (index: number) => void = noop,
+  slotAt: (index: number) => CanvasStagingSlot = makeSlot
+) => {
+  const slots = Array.from({ length: slotCount }, (_, index) => slotAt(index));
   const selectedSlot = slots[selectedImageIndex];
 
   if (!host) {
@@ -85,7 +109,9 @@ const renderStagingBar = async (slotCount: number, selectedImageIndex = 0) => {
                   onCycle={noop}
                   onDiscardAll={noop}
                   onDiscardSelected={noop}
-                  onSelectImage={noop}
+                  onPreloadCandidate={onPreloadCandidate}
+                  onSelectImage={onSelectImage}
+                  onSaveToLayerAndContinue={onSaveToLayerAndContinue}
                   onSetAutoSwitch={noop}
                   onToggleThumbnails={noop}
                   onToggleVisibility={noop}
@@ -172,5 +198,83 @@ describe('StagingBar thumbnail strip', () => {
     const trailingGap = bounds.right - thumbnails[1]!.getBoundingClientRect().right;
     expect(leadingGap).toBeGreaterThan(0);
     expect(Math.abs(leadingGap - trailingGap)).toBeLessThan(2);
+  });
+
+  it('warms full-resolution bytes for every candidate once its thumbnail settles', async () => {
+    const onPreloadCandidate = vi.fn();
+    await renderStagingBar(3, 0, noop, onPreloadCandidate);
+    const images = Array.from(document.querySelectorAll<HTMLImageElement>('img'));
+
+    await interact(() => {
+      images[0]?.dispatchEvent(new Event('error'));
+      images.slice(1).forEach((image) => image.dispatchEvent(new Event('load')));
+    });
+
+    expect(onPreloadCandidate).toHaveBeenCalledWith('image-0');
+    expect(onPreloadCandidate).toHaveBeenCalledWith('image-1');
+    expect(onPreloadCandidate).toHaveBeenCalledWith('image-2');
+  });
+
+  it('selects a right-clicked candidate and opens its context menu at the pointer', async () => {
+    const onSelectImage = vi.fn();
+    const { thumbnails } = await renderStagingBar(3, 2, noop, noop, onSelectImage);
+
+    const event = new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 120, clientY: 80 });
+    await interact(() => thumbnails[2]!.dispatchEvent(event));
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(onSelectImage).toHaveBeenCalledWith(2);
+    expect(contextMenu.targets.at(-1)).toEqual({ slotId: 'slot-2', x: 120, y: 80 });
+    expect(document.querySelector('[data-testid="staging-context-menu"]')).not.toBeNull();
+  });
+
+  it('leaves the native menu alone on an in-progress placeholder', async () => {
+    const { thumbnails } = await renderStagingBar(3, 0, noop, noop, noop, makePlaceholder);
+    const before = contextMenu.targets.length;
+
+    const event = new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 10, clientY: 10 });
+    await interact(() => thumbnails[1]!.dispatchEvent(event));
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(contextMenu.targets).toHaveLength(before);
+  });
+
+  it('anchors a keyboard-opened context menu to the thumbnail itself', async () => {
+    const { thumbnails } = await renderStagingBar(3, 1);
+    const rect = thumbnails[1]!.getBoundingClientRect();
+
+    await interact(() => thumbnails[1]!.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true })));
+
+    expect(contextMenu.targets.at(-1)).toEqual({ slotId: 'slot-1', x: rect.left + rect.width / 2, y: rect.top });
+  });
+
+  it('closes the context menu once the selection moves off its candidate', async () => {
+    const { thumbnails } = await renderStagingBar(3, 1);
+    await interact(() =>
+      thumbnails[1]!.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 50, clientY: 50 }))
+    );
+    expect(document.querySelector('[data-testid="staging-context-menu"]')).not.toBeNull();
+
+    // An auto-switch lands a newer result: the bar re-renders with that one selected.
+    await renderStagingBar(3, 2);
+
+    expect(document.querySelector('[data-testid="staging-context-menu"]')).toBeNull();
+  });
+
+  it('offers a split-button action that saves without ending staging', async () => {
+    const onSaveToLayerAndContinue = vi.fn();
+    await renderStagingBar(1, 0, onSaveToLayerAndContinue);
+
+    const trigger = document.querySelector<HTMLButtonElement>('button[aria-label="More accept options"]');
+    expect(trigger).not.toBeNull();
+    await interact(() => trigger!.click());
+
+    const menuItem = Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]')).find((item) =>
+      item.textContent?.includes('Save & Continue')
+    );
+    expect(menuItem).toBeDefined();
+    await interact(() => menuItem!.click());
+
+    expect(onSaveToLayerAndContinue).toHaveBeenCalledOnce();
   });
 });

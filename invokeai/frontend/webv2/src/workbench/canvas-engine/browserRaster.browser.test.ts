@@ -1,10 +1,11 @@
 import type {
-  CanvasDocumentContractV2,
+  CanvasDocumentContractV3,
   CanvasLayerSourceContract,
   CanvasRasterLayerContractV2,
 } from '@workbench/canvas-engine/contracts';
 import type { Mat2d } from '@workbench/canvas-engine/types';
 
+import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
 import { executePsdExport, planPsdExport } from '@workbench/canvas-engine/export/psdExport';
 import { createHistory } from '@workbench/canvas-engine/history/history';
 import { createImagePatchEntry } from '@workbench/canvas-engine/history/imagePatch';
@@ -12,6 +13,7 @@ import { sampleDocumentColor } from '@workbench/canvas-engine/render/colorSample
 import { compositeDocument } from '@workbench/canvas-engine/render/compositor';
 import { createLayerCacheStore } from '@workbench/canvas-engine/render/layerCache';
 import { createDomRasterBackend, type RasterSurface } from '@workbench/canvas-engine/render/raster';
+import { rasterizeShapeSource } from '@workbench/canvas-engine/render/rasterizers/shapeRasterizer';
 import { rasterizeTextSource } from '@workbench/canvas-engine/render/rasterizers/textRasterizer';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -45,13 +47,13 @@ const rasterLayer = (
   ...overrides,
 });
 
-const documentWith = (layers: CanvasRasterLayerContractV2[]): CanvasDocumentContractV2 => ({
+const documentWith = (layers: CanvasRasterLayerContractV2[]): CanvasDocumentContractV3 => ({
   background: 'transparent',
   bbox: { height: 8, width: 8, x: 0, y: 0 },
   height: 8,
-  layers,
+  stacks: stacksFrom(layers),
   selectedLayerId: layers[0]?.id ?? null,
-  version: 2,
+  version: 3,
   width: 8,
 });
 
@@ -190,21 +192,28 @@ describe('real browser raster acceptance', () => {
     expectPixel(surface, 0, 0, [0, 0, 255, 255]);
   });
 
-  it('round-trips a small real PSD with layer and composite pixels', async () => {
+  it('round-trips a small real PSD with a folder, layer pixels and a merged preview of the contributing leaves', async () => {
     const backend = createDomRasterBackend();
-    const layerSurface = backend.createSurface(2, 2);
-    layerSurface.ctx.fillStyle = '#ff0000';
-    layerSurface.ctx.fillRect(0, 0, 2, 2);
+    const fill = (color: string) => {
+      const surface = backend.createSurface(2, 2);
+      surface.ctx.fillStyle = color;
+      surface.ctx.fillRect(0, 0, 2, 2);
+      return surface;
+    };
+    const surfaces = { blue: fill('#0000ff'), red: fill('#ff0000') };
+    const leaf = (id: string, name: string) => ({
+      blendMode: 'normal' as const,
+      contentRect: { height: 2, width: 2, x: 0, y: 0 },
+      id,
+      isEnabled: true,
+      name,
+      opacity: 1,
+      transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 },
+    });
+    // A disabled folder above the red base: its blue leaf is exported but stays out of the preview.
     const plan = planPsdExport([
-      {
-        blendMode: 'normal',
-        contentRect: { height: 2, width: 2, x: 0, y: 0 },
-        id: 'red',
-        isEnabled: true,
-        name: 'Red',
-        opacity: 1,
-        transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 },
-      },
+      { children: [leaf('blue', 'Blue')], id: 'g', isEnabled: false, name: 'Group', type: 'group' },
+      leaf('red', 'Red'),
     ]);
     let bytes: ArrayBuffer | null = null;
 
@@ -213,10 +222,10 @@ describe('real browser raster acceptance', () => {
       download: (data) => {
         bytes = data;
       },
-      getLayerSurface: () =>
+      getLayerSurface: (id) =>
         Promise.resolve({
           rect: { height: 2, width: 2, x: 0, y: 0 },
-          surface: layerSurface,
+          surface: surfaces[id as keyof typeof surfaces],
         }),
     });
 
@@ -225,8 +234,153 @@ describe('real browser raster acceptance', () => {
     const parsed = readPsd(bytes!, { useImageData: true });
     expect(parsed.width).toBe(2);
     expect(parsed.height).toBe(2);
-    expect(parsed.children?.map((child) => child.name)).toEqual(['Red']);
+    expect(parsed.children?.map((child) => child.name)).toEqual(['Red', 'Group']);
+    expect(parsed.children![1]).toMatchObject({ hidden: true });
+    expect(parsed.children![1]!.children?.map((child) => child.name)).toEqual(['Blue']);
     expect(Array.from(parsed.imageData!.data.slice(0, 4))).toEqual([255, 0, 0, 255]);
     expect(Array.from(parsed.children![0]!.imageData!.data.slice(0, 4))).toEqual([255, 0, 0, 255]);
+    expect(Array.from(parsed.children![1]!.children![0]!.imageData!.data.slice(0, 4))).toEqual([0, 0, 255, 255]);
+  });
+
+  it('writes a merged preview pixel-equivalent to compositing the contributing leaves with their opacity and blend', async () => {
+    const backend = createDomRasterBackend();
+    const fill = (color: string) => {
+      const surface = backend.createSurface(2, 2);
+      surface.ctx.fillStyle = color;
+      surface.ctx.fillRect(0, 0, 2, 2);
+      return surface;
+    };
+    const surfaces = { base: fill('#ff8040'), tint: fill('#4080ff') };
+    const leaf = (id: string, name: string, opacity: number, blendMode: 'normal' | 'multiply') => ({
+      blendMode,
+      contentRect: { height: 2, width: 2, x: 0, y: 0 },
+      id,
+      isEnabled: true,
+      name,
+      opacity,
+      transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 },
+    });
+    // An enabled folder above the base: its tinted leaf contributes at half opacity, multiplied.
+    const plan = planPsdExport([
+      { children: [leaf('tint', 'Tint', 0.5, 'multiply')], id: 'g', isEnabled: true, name: 'Group', type: 'group' },
+      leaf('base', 'Base', 1, 'normal'),
+    ]);
+    let bytes: ArrayBuffer | null = null;
+    await executePsdExport(plan, 'preview.psd', {
+      backend,
+      download: (data) => {
+        bytes = data;
+      },
+      getLayerSurface: (id) =>
+        Promise.resolve({ rect: { height: 2, width: 2, x: 0, y: 0 }, surface: surfaces[id as keyof typeof surfaces] }),
+    });
+
+    const reference = backend.createSurface(2, 2);
+    reference.ctx.drawImage(surfaces.base.canvas, 0, 0);
+    reference.ctx.globalAlpha = 0.5;
+    reference.ctx.globalCompositeOperation = 'multiply';
+    reference.ctx.drawImage(surfaces.tint.canvas, 0, 0);
+    const expected = Array.from(reference.ctx.getImageData(0, 0, 2, 2).data);
+
+    const { readPsd } = await import('ag-psd');
+    const parsed = readPsd(bytes!, { useImageData: true });
+    expect(Array.from(parsed.imageData!.data)).toEqual(expected);
+    expect(parsed.children?.map((child) => child.name)).toEqual(['Base', 'Group']);
+  });
+
+  it('rasterizes triangle and star shapes with the documented geometry', async () => {
+    const backend = createDomRasterBackend();
+    const deps = {
+      backend,
+      documentSize: { height: 64, width: 64 },
+      resolver: () => Promise.resolve(new Blob()),
+      store: createLayerCacheStore(backend),
+    };
+    const alphaAt = (surface: { ctx: CanvasRenderingContext2D }, x: number, y: number) =>
+      surface.ctx.getImageData(x, y, 1, 1).data[3]!;
+
+    const triangle = await rasterizeShapeSource(
+      { fill: '#ff0000', height: 64, kind: 'triangle', stroke: null, strokeWidth: 0, type: 'shape', width: 64 },
+      deps
+    );
+    const tri = triangle.surface as { ctx: CanvasRenderingContext2D };
+    expect(alphaAt(tri, 32, 32)).toBeGreaterThan(0);
+    expect(alphaAt(tri, 32, 4)).toBeGreaterThan(0);
+    expect(alphaAt(tri, 4, 62)).toBeGreaterThan(0);
+    expect(alphaAt(tri, 4, 4)).toBe(0);
+    expect(alphaAt(tri, 60, 4)).toBe(0);
+
+    const star = await rasterizeShapeSource(
+      { fill: '#00ff00', height: 64, kind: 'star', stroke: null, strokeWidth: 0, type: 'shape', width: 64 },
+      deps
+    );
+    const st = star.surface as { ctx: CanvasRenderingContext2D };
+    expect(alphaAt(st, 32, 32)).toBeGreaterThan(0);
+    expect(alphaAt(st, 32, 4)).toBeGreaterThan(0);
+    expect(alphaAt(st, 46, 32)).toBeGreaterThan(0);
+    // The left spike reaches where a triangle would be empty, and the bottom
+    // concave notch is empty where a triangle would be filled — these two pins
+    // discriminate the star from every other kind.
+    expect(alphaAt(st, 5, 22)).toBeGreaterThan(0);
+    expect(alphaAt(st, 32, 60)).toBe(0);
+    expect(alphaAt(st, 52, 32)).toBe(0);
+    expect(alphaAt(st, 4, 4)).toBe(0);
+  });
+
+  it('writes folder opacity/blend natively and isolates the folder in the merged preview', async () => {
+    const backend = createDomRasterBackend();
+    const fill = (color: string) => {
+      const surface = backend.createSurface(2, 2);
+      surface.ctx.fillStyle = color;
+      surface.ctx.fillRect(0, 0, 2, 2);
+      return surface;
+    };
+    const surfaces = { base: fill('#0000ff'), red: fill('#ff0000'), white: fill('#ffffff') };
+    const leaf = (id: string, name: string) => ({
+      blendMode: 'normal' as const,
+      contentRect: { height: 2, width: 2, x: 0, y: 0 },
+      id,
+      isEnabled: true,
+      name,
+      opacity: 1,
+      transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 },
+    });
+    // Opaque red over opaque white inside a 50% folder over a blue base. The
+    // FOLDER composite is pure red, so the preview must be red 50% over blue —
+    // per-leaf flattening would let white bleed through.
+    const plan = planPsdExport([
+      {
+        blendMode: 'normal',
+        children: [leaf('red', 'Red'), leaf('white', 'White')],
+        id: 'g',
+        isEnabled: true,
+        name: 'Faded',
+        opacity: 0.5,
+        type: 'group',
+      },
+      leaf('base', 'Base'),
+    ]);
+    let bytes: ArrayBuffer | null = null;
+    await executePsdExport(plan, 'folder-opacity.psd', {
+      backend,
+      download: (data) => {
+        bytes = data;
+      },
+      getLayerSurface: (id) =>
+        Promise.resolve({ rect: { height: 2, width: 2, x: 0, y: 0 }, surface: surfaces[id as keyof typeof surfaces] }),
+    });
+
+    const reference = backend.createSurface(2, 2);
+    reference.ctx.drawImage(surfaces.base.canvas, 0, 0);
+    reference.ctx.globalAlpha = 0.5;
+    reference.ctx.drawImage(surfaces.red.canvas, 0, 0);
+    const expected = Array.from(reference.ctx.getImageData(0, 0, 2, 2).data);
+
+    const { readPsd } = await import('ag-psd');
+    const parsed = readPsd(bytes!, { useImageData: true });
+    expect(Array.from(parsed.imageData!.data)).toEqual(expected);
+    const folder = parsed.children!.find((child) => child.name === 'Faded')!;
+    expect(folder.opacity).toBeCloseTo(0.5, 2);
+    expect(folder.blendMode).toBe('normal');
   });
 });

@@ -6,9 +6,11 @@ describe('firstPartyHotkeyCatalog', () => {
   it('keeps legacy default hotkey parity', () => {
     // 91 legacy-parity entries + `canvas.newSession` (webv2 new-canvas command,
     // no default keys — Task 46) + `app.openCommandPalette` (webv2-only, mod+k)
-    // + the six top-bar redesign commands (alt+mod+enter, mod+p, an unbound save,
-    // and alt+1..3) + `app.openSettings` (mod+,).
-    expect(firstPartyHotkeyCatalog).toHaveLength(100);
+    // + the seven top-bar redesign commands (alt+mod+enter, mod+p, an unbound
+    // save, and alt+1..4) + `app.openSettings` (mod+,) + `gallery.toggleStarredOnly`
+    // (webv2 starred-only listing filter, unbound) + the two unbound canvas
+    // gallery saves (`canvas.saveToGallery`, `canvas.saveBboxToGallery`).
+    expect(firstPartyHotkeyCatalog).toHaveLength(104);
     expect(firstPartyHotkeyCatalog.map((hotkey) => hotkey.id)).toContain('app.invoke');
     expect(firstPartyHotkeyCatalog.map((hotkey) => hotkey.id)).toContain('app.openCommandPalette');
     expect(firstPartyHotkeyCatalog.map((hotkey) => hotkey.id)).toContain('canvas.mergeDown');
@@ -16,11 +18,13 @@ describe('firstPartyHotkeyCatalog', () => {
     expect(firstPartyHotkeyCatalog.map((hotkey) => hotkey.id)).toContain('workflows.copySelection');
     expect(firstPartyHotkeyCatalog.map((hotkey) => hotkey.id)).toContain('gallery.galleryNavLeft');
     expect(firstPartyHotkeyCatalog.map((hotkey) => hotkey.id)).toContain('gallery.remix');
+    expect(firstPartyHotkeyCatalog.map((hotkey) => hotkey.id)).toContain('gallery.toggleStarredOnly');
     expect(firstPartyHotkeyCatalog.map((hotkey) => hotkey.id)).toContain('viewer.deleteImage');
     expect(firstPartyHotkeyCatalog.map((hotkey) => hotkey.id)).toContain('app.invokeToOtherDestination');
     expect(firstPartyHotkeyCatalog.map((hotkey) => hotkey.id)).toContain('app.openProjectSwitcher');
     expect(firstPartyHotkeyCatalog.map((hotkey) => hotkey.id)).toContain('app.saveLayoutPreset');
     expect(firstPartyHotkeyCatalog.map((hotkey) => hotkey.id)).toContain('app.selectComposePreset');
+    expect(firstPartyHotkeyCatalog.map((hotkey) => hotkey.id)).toContain('app.selectVideoPreset');
   });
 
   it('uses the exported command-palette definition as the catalog entry', () => {
@@ -33,6 +37,14 @@ describe('firstPartyHotkeyCatalog', () => {
     const openSettings = firstPartyHotkeyCatalog.find((hotkey) => hotkey.id === 'app.openSettings');
 
     expect(openSettings).toMatchObject({ allowInEditable: true, defaultKeys: ['mod+,'], implemented: true });
+  });
+
+  it('marks the color pair swap and reset as implemented on their classic keys', () => {
+    const swap = firstPartyHotkeyCatalog.find((hotkey) => hotkey.id === 'canvas.toggleFillColor');
+    const reset = firstPartyHotkeyCatalog.find((hotkey) => hotkey.id === 'canvas.setFillColorsToDefault');
+
+    expect(swap).toMatchObject({ defaultKeys: ['x'], implemented: true });
+    expect(reset).toMatchObject({ defaultKeys: ['d'], implemented: true });
   });
 
   it('keeps layout saving explicit and out of editable controls', () => {

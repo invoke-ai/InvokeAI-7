@@ -1,11 +1,14 @@
 import type {
   CanvasControlLayerContract,
-  CanvasDocumentContractV2,
+  CanvasDocumentContractV3,
   CanvasRegionalGuidanceLayerContract,
 } from '@workbench/canvas-engine/contracts';
 
 import { accountLifecycle } from '@platform/state/accountLifecycle';
+import { getDocumentLeaves } from '@workbench/canvas-engine/api';
+import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
 import { createBitmapStore } from '@workbench/canvas-engine/document/bitmapStore';
+import { stackTopAnchor } from '@workbench/canvas-engine/document/insertionAnchors.testStub';
 import { createTestStubRasterBackend } from '@workbench/canvas-engine/render/raster.testStub';
 import {
   createCompositeDedupeCache,
@@ -16,7 +19,7 @@ import {
   planControlComposites,
   planRegionalMaskComposites,
 } from '@workbench/canvas-operations/generationCompositePlan';
-import { createEmptyCanvasDocumentV2 } from '@workbench/canvasMigration';
+import { createEmptyCanvasDocument } from '@workbench/canvasMigration';
 import { applyCanvasProjectMutation } from '@workbench/canvasProjectMutations';
 import { createInitialWorkbenchState } from '@workbench/workbenchState';
 import { describe, expect, it, vi } from 'vitest';
@@ -104,13 +107,13 @@ const regionalLayer = (id: string): CanvasRegionalGuidanceLayerContract => ({
   type: 'regional_guidance',
 });
 
-const invocationDocument = (): CanvasDocumentContractV2 => ({
+const invocationDocument = (): CanvasDocumentContractV3 => ({
   background: 'transparent',
   bbox: { height: 64, width: 64, x: 0, y: 0 },
   height: 64,
-  layers: [controlLayer('control-a'), regionalLayer('regional-a')],
+  stacks: stacksFrom([controlLayer('control-a'), regionalLayer('regional-a')]),
   selectedLayerId: 'control-a',
-  version: 2,
+  version: 3,
   width: 64,
 });
 
@@ -343,10 +346,11 @@ describe('createEngineRegistry', () => {
     const registry = createEngineRegistry({ timers: fakeTimers.timers });
     let project = createInitialWorkbenchState().projects[0]!;
     project = applyCanvasProjectMutation(project, {
-      document: createEmptyCanvasDocumentV2(),
+      document: createEmptyCanvasDocument(),
       type: 'replaceCanvasDocument',
     });
     project = applyCanvasProjectMutation(project, {
+      anchor: stackTopAnchor(project.id),
       layer: {
         blendMode: 'normal',
         id: 'pending-layer',
@@ -385,7 +389,7 @@ describe('createEngineRegistry', () => {
       dispatch: mutationPort.dispatch,
       encodeSurface: () => Promise.resolve(new Blob(['pending-pixels'], { type: 'image/png' })),
       getLayerSource: () => {
-        const layer = project.canvas.document.layers.find((candidate) => candidate.id === 'pending-layer');
+        const layer = getDocumentLeaves(project.canvas.document).find((candidate) => candidate.id === 'pending-layer');
         return layer?.type === 'raster' && layer.source.type === 'paint' ? layer.source : null;
       },
       getLayerSurface: () => ({ offset: { x: 0, y: 0 }, surface }),
@@ -413,7 +417,7 @@ describe('createEngineRegistry', () => {
     uploaded.resolve({ height: 8, imageName: 'persisted-after-reacquire.png', width: 8 });
     await bitmapStore.flushPendingUploads();
 
-    const layer = project.canvas.document.layers.find((candidate) => candidate.id === 'pending-layer');
+    const layer = getDocumentLeaves(project.canvas.document).find((candidate) => candidate.id === 'pending-layer');
     expect(layer?.type === 'raster' && layer.source.type === 'paint' ? layer.source.bitmap?.imageName : null).toBe(
       'persisted-after-reacquire.png'
     );

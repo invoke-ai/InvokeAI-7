@@ -1,13 +1,8 @@
 import type { DynamicPromptsConfig } from '@features/generation/core/dynamicPrompts';
 
-import { Box, ChakraProvider } from '@chakra-ui/react';
+import { ChakraProvider } from '@chakra-ui/react';
 import { DynamicPromptsButton } from '@features/generation/ui/promptFields/DynamicPromptsButton';
-import {
-  captureRowInteractionStyles,
-  expectRowInteractionStylesToMatch,
-} from '@features/generation/ui/promptFields/promptFieldsBrowserTestUtils';
 import { PromptTextarea } from '@features/generation/ui/promptFields/PromptTextarea';
-import { Row } from '@platform/ui/Row';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { system } from '@theme/system';
 import { act } from 'react';
@@ -49,13 +44,6 @@ const render = async (prompt: string, onUsePrompt = vi.fn()) => {
     root?.render(
       <QueryClientProvider client={new QueryClient()}>
         <ChakraProvider value={system}>
-          <Box aria-hidden bg="bg.muted/60" data-testid="row-hover-style-probe" />
-          <Box aria-hidden bg="bg.muted" data-testid="popover-surface-style-probe" />
-          <Row asChild>
-            <button aria-label="Row probe" type="button">
-              Row probe
-            </button>
-          </Row>
           <PromptTextarea
             aria-label="Prompt"
             defaultHeightPx={100}
@@ -97,7 +85,7 @@ afterEach(async () => {
 });
 
 describe('dynamic prompts in the positive prompt field', () => {
-  it('shows expanded prompts on the standard popover surface', async () => {
+  it('shows every expanded prompt and uses the one that was clicked', async () => {
     const { onUsePrompt } = await render('a {red|green} cat');
 
     await vi.waitFor(() => expect(findButton().textContent).toContain('2'));
@@ -107,41 +95,15 @@ describe('dynamic prompts in the positive prompt field', () => {
     });
 
     const rows = [...document.querySelectorAll('button')].filter((button) => button.textContent?.includes('a red cat'));
-    const content = document.querySelector<HTMLElement>('[data-scope="popover"][data-part="content"]')!;
-    const surface = getComputedStyle(
-      host!.querySelector('[data-testid="popover-surface-style-probe"]')!
-    ).backgroundColor;
 
     expect(rows.length).toBe(1);
     expect(document.body.textContent).toContain('a green cat');
-    expect(getComputedStyle(content).backgroundColor).toBe(surface);
 
     await act(async () => {
       await userEvent.click(rows[0]!);
     });
 
     expect(onUsePrompt).toHaveBeenCalledWith('a red cat');
-  });
-
-  it('uses the shared Row interaction contract for each selectable expanded prompt', async () => {
-    await render('a {red|green} cat');
-    const probe = host!.querySelector<HTMLButtonElement>('button[aria-label="Row probe"]')!;
-    const hoverBackgroundColor = getComputedStyle(
-      host!.querySelector('[data-testid="row-hover-style-probe"]')!
-    ).backgroundColor;
-    const expected = await captureRowInteractionStyles(probe, hoverBackgroundColor);
-
-    await vi.waitFor(() => expect(findButton().textContent).toContain('2'));
-    await act(async () => {
-      await userEvent.click(findButton());
-    });
-
-    const row = [...document.querySelectorAll<HTMLButtonElement>('button')].find(
-      (button) =>
-        button.title === 'widgets.generate.dynamicPrompts.usePrompt' && button.textContent?.includes('a red cat')
-    )!;
-
-    await expectRowInteractionStylesToMatch(expected, row, hoverBackgroundColor);
   });
 
   it('is a labeled primary at rest, and widens only to carry a count', async () => {

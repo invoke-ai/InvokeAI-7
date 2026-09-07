@@ -1,4 +1,3 @@
-import type { ProjectPromptDraft, ProjectPromptDraftPatch } from '@features/generation/settings';
 import type { VideoWidgetValues } from '@features/video/core/types';
 import type { ReactNode } from 'react';
 
@@ -9,10 +8,14 @@ import { createContext, use, useMemo } from 'react';
  * may not import workbench), not a test seam; no second adapter is expected.
  */
 export interface VideoUiAdapter {
-  patchPromptDraft(values: ProjectPromptDraftPatch): void;
+  /**
+   * The board a file upload from the video panel should land on — the gallery's
+   * currently selected board. A callback rather than a value so upload handlers
+   * read it at upload time without subscribing to board-selection changes.
+   */
+  getUploadBoardId(): string;
   patchValues(values: Partial<VideoWidgetValues>, origin?: 'user' | 'system'): void;
   projectId: string;
-  promptDraft: ProjectPromptDraft;
   rawValues: Record<string, unknown>;
   reportError(message: string): void;
   showPromptSyntaxHighlighting: boolean;
@@ -22,7 +25,7 @@ export interface VideoUiAdapter {
 /** The adapter's callbacks, which are stable for the lifetime of a project. */
 export type VideoUiActions = Pick<
   VideoUiAdapter,
-  'patchPromptDraft' | 'patchValues' | 'reportError' | 'touchGalleryImages'
+  'getUploadBoardId' | 'patchValues' | 'reportError' | 'touchGalleryImages'
 >;
 
 const VideoUiContext = createContext<VideoUiAdapter | null>(null);
@@ -35,10 +38,10 @@ const VideoUiContext = createContext<VideoUiAdapter | null>(null);
 const VideoUiActionsContext = createContext<VideoUiActions | null>(null);
 
 export const VideoUiProvider = ({ adapter, children }: { adapter: VideoUiAdapter; children: ReactNode }) => {
-  const { patchPromptDraft, patchValues, reportError, touchGalleryImages } = adapter;
+  const { getUploadBoardId, patchValues, reportError, touchGalleryImages } = adapter;
   const actions = useMemo<VideoUiActions>(
-    () => ({ patchPromptDraft, patchValues, reportError, touchGalleryImages }),
-    [patchPromptDraft, patchValues, reportError, touchGalleryImages]
+    () => ({ getUploadBoardId, patchValues, reportError, touchGalleryImages }),
+    [getUploadBoardId, patchValues, reportError, touchGalleryImages]
   );
 
   return (

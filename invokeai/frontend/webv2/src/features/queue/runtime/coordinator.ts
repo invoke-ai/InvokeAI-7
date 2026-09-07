@@ -17,6 +17,7 @@ import {
 import {
   isTerminalBackendStatus,
   parseQueueItemOrigin,
+  parseQueueItemOriginProjectId,
   type InvocationCompleteEvent,
   type InvocationErrorEvent,
   type InvocationProgressEvent,
@@ -30,12 +31,14 @@ import {
   type ProgressImageTarget,
 } from '@features/queue/data/progressImageStore';
 import { queueItemProgressStore, type QueueItemProgressSink } from '@features/queue/data/progressStore';
+import { mapWithConcurrency } from '@platform/core/concurrency';
 import { captureAccountScope, isAccountScopeCurrent } from '@platform/state/accountLifecycle';
 import { ApiError } from '@platform/transport/http';
 
 const GALLERY_REFRESH_COALESCE_MS = 400;
 const SAFETY_SWEEP_INTERVAL_MS = 30_000;
 const TERMINAL_EVENT_BUFFER_LIMIT = 256;
+const BACKEND_READ_CONCURRENCY = 16;
 
 /**
  * Queue's view of model-load activity derived from socket events. The
@@ -65,10 +68,12 @@ export type QueueCoordinatorBackendPort = Pick<
   | 'enqueueGenerate'
   | 'enqueueWorkflow'
   | 'getItem'
+  | 'getEnqueueReceipt'
   | 'getResultImages'
   | 'listItems'
   | 'on'
   | 'onConnectionChange'
+  | 'readProgressPreviews'
 >;
 
 export interface QueueCoordinatorCallbacks {
@@ -90,8 +95,17 @@ export class QueueItemCancelledError extends Error {
   }
 }
 
+/** Thrown when an enqueue response definitively reports zero accepted items. */
+export class QueueEnqueueNotAcceptedError extends Error {
+  constructor(workKind: 'generation' | 'workflow') {
+    super(`The backend queue did not accept this ${workKind}. The queue may be full.`);
+    this.name = 'QueueEnqueueNotAcceptedError';
+  }
+}
+
 export interface ReconcileInput {
   id: string;
+  projectId?: string;
   status: 'pending' | 'running';
   backendItemIds?: number[];
   backendBatchId?: string;
@@ -99,11 +113,11 @@ export interface ReconcileInput {
 
 export type ReconcileOutcome =
   /** A pending item the backend already accepted before the reload; do not re-enqueue. */
-  | { kind: 'adopted'; backendItemIds: number[]; backendBatchId?: string }
+  | { kind: 'adopted'; backendItemIds: number[]; backendBatchId?: string; missingBackendItemIds?: number[] }
   /** A running item whose backend items were found again; its results are awaitable. */
-  | { kind: 'resumed' }
+  | { kind: 'resumed'; backendItemIds?: number[]; missingBackendItemIds?: number[] }
   /** A running item whose backend items no longer exist (queue cleared or pruned). */
-  | { kind: 'missing' }
+  | { kind: 'missing'; backendItemIds?: number[]; backendBatchId?: string }
   /** A pending item the backend has never seen; submit it normally. */
   | { kind: 'enqueue' };
 
@@ -114,6 +128,7 @@ export interface CancelRunRequest {
 
 export interface QueueCoordinator {
   connect(): void;
+  detachRun(localQueueItemId: string): void;
   dispose(): void;
   /**
    * Match persisted pending/running queue items against the live backend queue
@@ -209,6 +224,12 @@ export const createQueueCoordinator = (
    */
   const recentTerminalOutcomes = new Map<number, TerminalOutcome>();
   const latestStatusSequences = new Map<number, number>();
+  /**
+   * Per backend item, the session and revision of the last accepted preview
+   * frame. Socket delivery is ordered, so this only bites when a second source
+   * — the reconnect snapshot the backend is to grow — races the live stream.
+   */
+  const latestFrameGates = new Map<number, { revision: number | null; sessionId: string }>();
 
   const detachers: Array<() => void> = [];
   let isAttached = false;
@@ -216,6 +237,7 @@ export const createQueueCoordinator = (
   let galleryRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   let sweepTimer: ReturnType<typeof setInterval> | null = null;
   let isSweeping = false;
+  let isSweepRequested = false;
   const isActive = (): boolean => !isDisposed && isAccountScopeCurrent(owner);
 
   const scheduleGalleryRefresh = (): void => {
@@ -299,13 +321,14 @@ export const createQueueCoordinator = (
     }
 
     waits.delete(backendItemId);
+    latestFrameGates.delete(backendItemId);
     const progressTarget = getProgressImageTarget(wait.localQueueItemId, backendItemId);
-    const clearProgressImage = (): void => {
+    const releaseProgressSlot = (): void => {
       if (isActive()) {
+        activeProgressTarget.clear(progressTarget);
         progressImage.clear(progressTarget);
       }
     };
-    activeProgressTarget.clear(progressTarget);
     const state = runProgress.get(wait.localQueueItemId);
 
     if (state) {
@@ -324,24 +347,30 @@ export const createQueueCoordinator = (
     }
 
     if (outcome.status === 'completed') {
+      // Held before routing starts: the finished image swaps in over this frame
+      // once the browser has decoded it, and the batch's next slot shows it
+      // until a frame of its own arrives.
+      progressImage.hold(progressTarget);
       const routingPromise = callbacks.onBackendItemComplete?.(wait.localQueueItemId, backendItemId);
 
       if (routingPromise) {
+        // The slot stays followed until routing lands. Released on the terminal
+        // event, Preview fell out of live-follow two HTTP round trips before the
+        // finished image could be selected, and showed the previous selection
+        // in between.
+        activeProgressTarget.settle(progressTarget);
         void Promise.resolve(routingPromise)
-          .finally(clearProgressImage)
+          .finally(releaseProgressSlot)
           .catch(() => undefined);
       } else {
-        clearProgressImage();
+        releaseProgressSlot();
       }
+    } else {
+      releaseProgressSlot();
     }
 
     if (outcome.status === 'canceled') {
-      clearProgressImage();
       callbacks.onBackendItemCancelled?.(wait.localQueueItemId, backendItemId);
-    }
-
-    if (outcome.status === 'failed') {
-      clearProgressImage();
     }
 
     wait.settle(outcome);
@@ -390,9 +419,20 @@ export const createQueueCoordinator = (
     publishRunProgress(localQueueItemId);
   };
 
-  /** Slow safety net for events lost to disconnects; runs on reconnect and on a long interval. */
+  /**
+   * Slow safety net for events lost to disconnects; runs on reconnect, on the
+   * tab becoming visible, and on a long interval. A request made while one is in
+   * flight runs again afterwards rather than being dropped: the visibility sweep
+   * often fires while the network is still coming back and the reconnect sweep
+   * a second later is the one that can actually reach the backend.
+   */
   const sweep = async (): Promise<void> => {
-    if (!isActive() || isSweeping || waits.size === 0) {
+    if (!isActive() || waits.size === 0) {
+      return;
+    }
+
+    if (isSweeping) {
+      isSweepRequested = true;
       return;
     }
 
@@ -419,6 +459,42 @@ export const createQueueCoordinator = (
       );
     } finally {
       isSweeping = false;
+
+      if (isSweepRequested) {
+        isSweepRequested = false;
+        void sweep();
+      }
+    }
+  };
+
+  /**
+   * Ask the backend for the latest preview frame of every running item and feed
+   * each through the socket handler, where the revision gate drops anything the
+   * live stream already delivered. Covers the frames lost while a hidden tab's
+   * socket was down, and the frames a reloaded page never saw. Best effort: the
+   * backend also replays them on `subscribe_queue`, and a failure here only means
+   * waiting for the next step.
+   */
+  const refreshProgressPreviews = async (): Promise<void> => {
+    if (!isActive() || waits.size === 0 || !backend.readProgressPreviews) {
+      return;
+    }
+
+    let previews: Awaited<ReturnType<NonNullable<typeof backend.readProgressPreviews>>>;
+
+    try {
+      previews = await backend.readProgressPreviews();
+    } catch {
+      return;
+    }
+
+    if (!isActive()) {
+      return;
+    }
+
+    for (const preview of previews) {
+      // Structurally the socket payload; the port cannot name the event type.
+      handleProgress(preview as unknown as InvocationProgressEvent);
     }
   };
 
@@ -437,6 +513,13 @@ export const createQueueCoordinator = (
     }
 
     if (!isTerminalBackendStatus(event.status)) {
+      // Back to the queue (a workflow-call parent waiting on its child, a retry):
+      // whatever frames follow belong to a new leg, and after a backend restart
+      // their revisions start over.
+      if (event.status === 'pending' || event.status === 'waiting') {
+        latestFrameGates.delete(event.item_id);
+      }
+
       return;
     }
 
@@ -465,6 +548,30 @@ export const createQueueCoordinator = (
     }
   };
 
+  /**
+   * Whether a frame is older than one already shown for its backend item;
+   * records it as the newest when it is not. A new session on the same item
+   * starts over.
+   */
+  const isStaleFrame = (event: InvocationProgressEvent): boolean => {
+    const revision = event.revision ?? null;
+    const gate = latestFrameGates.get(event.item_id);
+
+    if (
+      gate &&
+      gate.sessionId === event.session_id &&
+      revision !== null &&
+      gate.revision !== null &&
+      revision <= gate.revision
+    ) {
+      return true;
+    }
+
+    latestFrameGates.set(event.item_id, { revision, sessionId: event.session_id });
+
+    return false;
+  };
+
   const handleProgress = (event: InvocationProgressEvent): void => {
     if (!isActive()) {
       return;
@@ -473,6 +580,10 @@ export const createQueueCoordinator = (
     const wait = waits.get(event.item_id);
 
     if (!wait) {
+      return;
+    }
+
+    if (event.image?.dataURL && isStaleFrame(event)) {
       return;
     }
 
@@ -499,18 +610,20 @@ export const createQueueCoordinator = (
 
   /**
    * React to the shared socket's connection lifecycle. The Platform hub owns
-   * transport mechanics only; this Queue coordinator clears its domain stores
-   * and, on (re)connect, schedules a gallery refresh and missed-event sweep.
+   * transport mechanics only; this Queue coordinator clears its transient
+   * per-node and model-load state and, on (re)connect, schedules a gallery
+   * refresh and missed-event sweep.
+   *
+   * The followed slot and its last frame deliberately survive a drop: the run
+   * continues on the backend and the sweep reconciles its durable outcome, so
+   * wiping them only ever produced a blank card — until the next event if the
+   * run was still going, or for good if it finished while disconnected.
    */
   const handleConnectionChange = (status: BackendConnectionStatus): void => {
     if (!isActive()) {
       return;
     }
 
-    if (status !== 'connected') {
-      activeProgressTarget.clear();
-      progressImage.clear();
-    }
     progress.clearAll?.();
     nodeExecution.clearAll();
     modelLoads.reset();
@@ -570,6 +683,23 @@ export const createQueueCoordinator = (
     // has already connected still triggers the initial clear + sweep.
     detachers.push(backend.onConnectionChange(handleConnectionChange));
 
+    // A hidden tab's socket is often dropped by the server (its pings are
+    // timer-throttled) and socket.io reconnects on its own backoff once the tab
+    // is back. The outcome is on the backend already, so sweep on the
+    // visibility edge itself rather than waiting for the reconnect edge.
+    if (typeof document !== 'undefined') {
+      const visibilityDocument = document;
+      const handleVisibilityChange = (): void => {
+        if (visibilityDocument.visibilityState === 'visible') {
+          void sweep();
+          void refreshProgressPreviews();
+        }
+      };
+
+      visibilityDocument.addEventListener('visibilitychange', handleVisibilityChange);
+      detachers.push(() => visibilityDocument.removeEventListener('visibilitychange', handleVisibilityChange));
+    }
+
     sweepTimer = setInterval(() => {
       void sweep();
     }, sweepIntervalMs);
@@ -613,6 +743,7 @@ export const createQueueCoordinator = (
     runProgress.clear();
     recentTerminalOutcomes.clear();
     latestStatusSequences.clear();
+    latestFrameGates.clear();
   };
 
   const reconcile = async (items: ReconcileInput[]): Promise<Map<string, ReconcileOutcome>> => {
@@ -622,22 +753,32 @@ export const createQueueCoordinator = (
       return outcomes;
     }
 
-    const backendItems = items.every((item) => item.backendItemIds?.length)
+    const resolvedItems = await mapWithConcurrency(items, BACKEND_READ_CONCURRENCY, async (item) => {
+      if (item.backendItemIds?.length || !item.projectId || !backend.getEnqueueReceipt) {
+        return item;
+      }
+      const receipt = await backend.getEnqueueReceipt(item.projectId, item.id);
+      return receipt ? { ...item, backendBatchId: receipt.batchId, backendItemIds: receipt.itemIds } : item;
+    });
+    const canReadExactItems = resolvedItems.every(
+      (item) => item.backendItemIds?.length || (item.projectId && backend.getEnqueueReceipt)
+    );
+    const backendItems = canReadExactItems
       ? (
-          await Promise.all(
-            items
-              .flatMap((item) => item.backendItemIds ?? [])
-              .map(async (itemId) => {
-                try {
-                  return await backend.getItem(itemId);
-                } catch (error) {
-                  if (error instanceof ApiError && error.status === 404) {
-                    return undefined;
-                  }
-
-                  throw error;
+          await mapWithConcurrency(
+            [...new Set(resolvedItems.flatMap((item) => item.backendItemIds ?? []))],
+            BACKEND_READ_CONCURRENCY,
+            async (itemId) => {
+              try {
+                return await backend.getItem(itemId);
+              } catch (error) {
+                if (error instanceof ApiError && error.status === 404) {
+                  return undefined;
                 }
-              })
+
+                throw error;
+              }
+            }
           )
         ).filter((item) => item !== undefined)
       : await backend.listItems();
@@ -647,30 +788,34 @@ export const createQueueCoordinator = (
     }
 
     const backendItemsById = new Map(backendItems.map((item) => [item.id, item]));
-    const backendItemsByLocalId = new Map<string, QueueBackendItem[]>();
 
-    for (const backendItem of backendItems) {
-      const localQueueItemId = parseQueueItemOrigin(backendItem.origin);
-
-      if (localQueueItemId) {
-        backendItemsByLocalId.set(localQueueItemId, [
-          ...(backendItemsByLocalId.get(localQueueItemId) ?? []),
-          backendItem,
-        ]);
-      }
-    }
-
-    for (const item of items) {
+    for (const item of resolvedItems) {
+      const matchesIdentity = (backendItem: QueueBackendItem | undefined): backendItem is QueueBackendItem =>
+        backendItem !== undefined &&
+        parseQueueItemOrigin(backendItem.origin) === item.id &&
+        (item.projectId === undefined || parseQueueItemOriginProjectId(backendItem.origin) === item.projectId);
       const knownBackendItems = item.backendItemIds?.length
         ? item.backendItemIds.map((backendItemId) => backendItemsById.get(backendItemId))
-        : (backendItemsByLocalId.get(item.id) ?? []);
-      const foundBackendItems = knownBackendItems.filter((backendItem) => backendItem !== undefined);
+        : backendItems.filter(matchesIdentity);
+      const foundBackendItems = knownBackendItems.filter(matchesIdentity);
+      const missingBackendItemIds = item.backendItemIds?.filter(
+        (_backendItemId, index) => !matchesIdentity(knownBackendItems[index])
+      );
 
-      if (foundBackendItems.length !== knownBackendItems.length || foundBackendItems.length === 0) {
+      if (foundBackendItems.length === 0) {
         // A pending item with no backend trace was never accepted and is safe
         // to submit; a running item with (partially) vanished backend items is
         // unrecoverable.
-        outcomes.set(item.id, item.status === 'pending' ? { kind: 'enqueue' } : { kind: 'missing' });
+        outcomes.set(
+          item.id,
+          item.status === 'pending' && !item.backendItemIds?.length
+            ? { kind: 'enqueue' }
+            : {
+                ...(item.backendBatchId ? { backendBatchId: item.backendBatchId } : {}),
+                ...(item.backendItemIds?.length ? { backendItemIds: item.backendItemIds } : {}),
+                kind: 'missing',
+              }
+        );
         continue;
       }
 
@@ -685,25 +830,35 @@ export const createQueueCoordinator = (
 
       outcomes.set(
         item.id,
-        item.status === 'running' ? { kind: 'resumed' } : { backendBatchId, backendItemIds, kind: 'adopted' }
+        item.status === 'running'
+          ? {
+              kind: 'resumed',
+              ...(missingBackendItemIds?.length ? { backendItemIds, missingBackendItemIds } : {}),
+            }
+          : {
+              backendBatchId,
+              backendItemIds,
+              kind: 'adopted',
+              ...(missingBackendItemIds?.length ? { missingBackendItemIds } : {}),
+            }
       );
     }
+
+    // A reloaded page has no frame for a run it just re-adopted; the socket only
+    // brings the next step's.
+    void refreshProgressPreviews();
 
     return outcomes;
   };
 
-  /** Reject partial acceptance and start tracking the accepted backend items. */
+  /** Start tracking the accepted backend items. */
   const adoptEnqueueResult = (
     localQueueItemId: string,
     result: QueueEnqueueResult,
     workKind: 'generation' | 'workflow'
   ): QueueEnqueueResult => {
     if (result.enqueued === 0) {
-      throw new Error(`The backend queue did not accept this ${workKind}. The queue may be full.`);
-    }
-
-    if (result.requested !== result.enqueued) {
-      throw new Error(`The backend queue accepted ${result.enqueued} of ${result.requested} requested items.`);
+      throw new QueueEnqueueNotAcceptedError(workKind);
     }
 
     beginRun(localQueueItemId, result.itemIds, result.batchId);
@@ -764,12 +919,13 @@ export const createQueueCoordinator = (
         throw new QueueItemCancelledError(localQueueItemId);
       }
 
-      const imagesPerItem = await Promise.all(
-        completedBackendItemIds.map((backendItemId) =>
+      const imagesPerItem = await mapWithConcurrency(
+        completedBackendItemIds,
+        BACKEND_READ_CONCURRENCY,
+        (backendItemId) =>
           options
             ? backend.getResultImages(backendItemId, localQueueItemId, queuedAt, options)
             : backend.getResultImages(backendItemId, localQueueItemId, queuedAt)
-        )
       );
 
       return imagesPerItem.flat();
@@ -784,13 +940,13 @@ export const createQueueCoordinator = (
 
   const cancelRun = async ({ backendBatchId, backendItemIds }: CancelRunRequest): Promise<void> => {
     try {
-      if (backendItemIds?.length) {
-        await backend.cancelQueueItems(backendItemIds);
+      if (backendBatchId) {
+        await backend.cancelQueueItemsByBatchIds([backendBatchId]);
         return;
       }
 
-      if (backendBatchId) {
-        await backend.cancelQueueItemsByBatchIds([backendBatchId]);
+      if (backendItemIds?.length) {
+        await backend.cancelQueueItems(backendItemIds);
       }
     } catch (error) {
       if (error instanceof ApiError && error.status === 404) {
@@ -801,5 +957,26 @@ export const createQueueCoordinator = (
     }
   };
 
-  return { cancelRun, connect, dispose, reconcile, submitGenerate, submitWorkflow, waitForResults };
+  const detachRun = (localQueueItemId: string): void => {
+    const run = runs.get(localQueueItemId);
+    for (const backendItemId of run?.backendItemIds ?? []) {
+      const wait = waits.get(backendItemId);
+      if (wait?.localQueueItemId === localQueueItemId) {
+        waits.delete(backendItemId);
+        latestFrameGates.delete(backendItemId);
+        wait.settle({ status: 'canceled' });
+      }
+    }
+    runs.delete(localQueueItemId);
+    runProgress.delete(localQueueItemId);
+    for (let itemIndex = 1; itemIndex <= (run?.backendItemIds.length ?? 0); itemIndex += 1) {
+      const target = { itemIndex, queueItemId: localQueueItemId };
+      activeProgressTarget.clear(target);
+      progressImage.clear(target);
+    }
+    progressImage.clearHeld(localQueueItemId);
+    progress.clear(localQueueItemId);
+  };
+
+  return { cancelRun, connect, detachRun, dispose, reconcile, submitGenerate, submitWorkflow, waitForResults };
 };

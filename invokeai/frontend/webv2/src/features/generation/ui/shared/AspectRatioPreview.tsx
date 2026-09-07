@@ -16,7 +16,6 @@ export const AspectRatioPreview = ({ boxSize = '8', ratio }: Props) => {
         aria-hidden="true"
         bg="bg.subtle"
         borderColor="fg.muted"
-        borderStyle="dashed"
         borderWidth="1px"
         display="block"
         h={isWide ? `${100 / normalizedRatio}%` : 'full'}

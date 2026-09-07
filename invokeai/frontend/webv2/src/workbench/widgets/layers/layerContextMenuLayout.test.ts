@@ -1,9 +1,10 @@
 import type {
-  CanvasDocumentContractV2,
+  CanvasDocumentContractV3,
   CanvasLayerContract,
   CanvasRasterLayerContractV2,
 } from '@workbench/canvas-engine/contracts';
 
+import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
 import { describe, expect, it } from 'vitest';
 
 import { getLayerContextActions } from './layerContextActions';
@@ -27,13 +28,13 @@ const paintLayer = (id: string, patch: Partial<CanvasRasterLayerContractV2> = {}
   ...patch,
 });
 
-const makeDocument = (layers: CanvasLayerContract[]): CanvasDocumentContractV2 => ({
+const makeDocument = (layers: CanvasLayerContract[]): CanvasDocumentContractV3 => ({
   background: 'transparent',
   bbox: { height: 512, width: 512, x: 0, y: 0 },
   height: 512,
-  layers,
+  stacks: stacksFrom(layers),
   selectedLayerId: layers[0]?.id ?? null,
-  version: 2,
+  version: 3,
   width: 512,
 });
 
@@ -41,12 +42,17 @@ const actionsFor = (layer: CanvasLayerContract, layers: readonly CanvasLayerCont
   getLayerContextActions({
     canRunWorkflow: true,
     document: makeDocument([...layers]),
+    hiddenByAncestor: false,
     hasEngine: true,
     hasSupportedContent: true,
     hasWorkflowBindings: true,
-    index: layers.indexOf(layer),
     interactionLocked: false,
+    selectedIds: [layer.id],
+    canGroupSelection: true,
+    canDeleteSelection: true,
+    canMergeSelection: true,
     layer,
+    modelBase: null,
   });
 
 const layoutFor = (layer: CanvasLayerContract, layers: readonly CanvasLayerContract[] = [layer]) =>
@@ -72,12 +78,21 @@ describe('getLayerContextMenuLayout', () => {
     expect(summarize(upper, [upper, below])).toEqual([
       {
         id: 'quick',
-        items: ['arrange(move-to-front,move-forward,move-backward,move-to-back)', 'duplicate'],
+        items: ['arrange(move-to-front,move-forward,move-backward,move-to-back)', 'duplicate', 'group'],
         presentation: 'row',
       },
       {
         id: 'primary',
-        items: ['transform', 'rename', 'fit-to-bbox', 'adjustments', 'filter', 'select-object', 'run-workflow'],
+        items: [
+          'transform',
+          'rename',
+          'fit-to-bbox',
+          'add-adjustment(add-brightness-contrast,add-exposure,add-levels,add-curves,add-hsl,add-hue,add-invert)',
+          'add-regenerate-region',
+          'filter',
+          'select-object',
+          'run-workflow',
+        ],
         presentation: 'list',
       },
       {
@@ -91,28 +106,31 @@ describe('getLayerContextMenuLayout', () => {
         presentation: 'list',
       },
       { id: 'output', items: ['crop-to-bbox', 'save-to-assets'], presentation: 'list' },
-      { id: 'state', items: ['toggle-visibility', 'toggle-lock'], presentation: 'list' },
+      {
+        id: 'state',
+        items: [
+          'toggle-visibility',
+          'toggle-lock',
+          'color-label(color-label-red,color-label-orange,color-label-yellow,color-label-green,color-label-blue,color-label-violet,color-label-gray,color-label-none)',
+        ],
+        presentation: 'list',
+      },
       { id: 'danger', items: ['delete'], presentation: 'list' },
     ]);
   });
 
-  it('groups inpaint modifiers and regional additions into type-specific submenus', () => {
+  it('keeps the primary section lean now the panes own the per-type additions', () => {
     const inpaint = createInpaintMaskLayer('Mask', 'mask');
     const regional = createRegionalGuidanceLayer('Region', 0, 'region');
 
     expect(summarize(inpaint)[1]).toEqual({
       id: 'primary',
-      items: ['add-modifiers(inpaint-noise,inpaint-denoise-limit)', 'rename', 'fit-to-bbox', 'extract-masked-area'],
+      items: ['rename', 'fit-to-bbox', 'add-noise', 'add-denoise-limit', 'extract-masked-area'],
       presentation: 'list',
     });
     expect(summarize(regional)[1]).toEqual({
       id: 'primary',
-      items: [
-        'add-regional(regional-positive-prompt,regional-negative-prompt,regional-reference-image)',
-        'rename',
-        'fit-to-bbox',
-        'regional-auto-negative',
-      ],
+      items: ['rename', 'fit-to-bbox', 'regional-auto-negative', 'add-reference-image'],
       presentation: 'list',
     });
   });

@@ -121,4 +121,43 @@ describe('previewGraphToDocument', () => {
     expect(compiled.edges).toHaveLength(1);
     expect(compiled.edges[0]).toMatchObject({ sourceNodeId: 'seed', targetField: 'seed' });
   });
+
+  it('preserves a direct loop-linkage edge when opening a preview as a document', () => {
+    const loopTemplates = {
+      for: template('for', { collection: input('collection', { input: 'connection' }) }),
+      for_return: template('for_return', {
+        loop_linkage: input('loop_linkage', { input: 'connection' }),
+        output: input('output'),
+      }),
+    };
+    const loopGraph: PreviewGraphLike = {
+      edges: [
+        {
+          id: 'loop-edge',
+          sourceField: 'loop_linkage',
+          sourceNodeId: 'for',
+          targetField: 'loop_linkage',
+          targetNodeId: 'for-return',
+          type: 'loop_linkage',
+        },
+      ],
+      nodes: [
+        { id: 'for', inputs: {}, type: 'for' },
+        { id: 'for-return', inputs: {}, type: 'for_return' },
+      ],
+    };
+
+    const { document } = previewGraphToDocument(loopGraph, loopTemplates);
+
+    expect(document.edges).toEqual([
+      {
+        id: expect.any(String),
+        source: 'for',
+        sourceHandle: 'loop_linkage',
+        target: 'for-return',
+        targetHandle: 'loop_linkage',
+        type: 'loop_linkage',
+      },
+    ]);
+  });
 });

@@ -67,15 +67,7 @@ export const PreviewMetadataPanel = ({
 
   return (
     <Stack gap="2">
-      <HStack
-        as="button"
-        aria-expanded={isOpen}
-        color="fg.muted"
-        cursor="pointer"
-        gap="1"
-        w="fit-content"
-        onClick={onToggle}
-      >
+      <HStack as="button" aria-expanded={isOpen} color="fg.muted" gap="1" w="fit-content" onClick={onToggle}>
         <Icon as={isOpen ? ChevronDownIcon : ChevronRightIcon} boxSize="3" />
         <Text fontSize="2xs" fontWeight="700" textTransform="uppercase">
           {t('widgets.preview.details')}

@@ -199,8 +199,12 @@ installer/InvokeAI-Installer/
 .claude/
 .superpowers/
 
+# Temporary agent planning artifacts.
+**/.agents/plans/
+**/.codex/plans/
+**/.claude/plans/
+**/docs/plans/
+**/docs/superpowers/
+
 # Weblate configuration file
 weblate.ini
-
-# Local dev launcher scripts
-start_frontend.sh

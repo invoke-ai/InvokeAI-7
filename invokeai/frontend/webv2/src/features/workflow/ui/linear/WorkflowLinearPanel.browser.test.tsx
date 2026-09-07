@@ -139,8 +139,6 @@ describe('Form builder drag and drop (dnd-kit)', () => {
             editGraph,
             redo: () => undefined,
             replace: () => undefined,
-            restoreSnapshot: () => undefined,
-            saveSnapshot: () => undefined,
             undo: () => undefined,
           },
           widgets: { open: () => undefined, patchValues: () => undefined },

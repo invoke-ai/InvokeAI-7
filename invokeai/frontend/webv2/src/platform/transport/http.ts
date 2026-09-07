@@ -67,11 +67,13 @@ export const absolutizeApiUrl = (url: string): string => {
 };
 
 export class ApiError extends Error {
+  readonly headers: Headers;
   readonly status: number;
 
-  constructor(message: string, status: number) {
+  constructor(message: string, status: number, headers?: HeadersInit) {
     super(message);
     this.name = 'ApiError';
+    this.headers = new Headers(headers);
     this.status = status;
   }
 }
@@ -138,7 +140,7 @@ export const assertOk = async (response: Response): Promise<Response> => {
   }
 
   const text = await response.text();
-  throw new ApiError(text || `${response.status} ${response.statusText}`, response.status);
+  throw new ApiError(text || `${response.status} ${response.statusText}`, response.status, response.headers);
 };
 
 const fetchWithAuthToken = (path: string, init: RequestInit | undefined, token: string | null): Promise<Response> => {
@@ -217,6 +219,14 @@ export const getApiErrorMessage = (error: unknown, fallback: string): string => 
         return parsed.detail;
       }
 
+      if (parsed.detail && typeof parsed.detail === 'object') {
+        const message = (parsed.detail as { message?: unknown }).message;
+
+        if (typeof message === 'string' && message) {
+          return message;
+        }
+      }
+
       // Validation errors come as a list of issues; surface the first one.
       if (Array.isArray(parsed.detail)) {
         const message = getValidationIssueMessage(parsed.detail[0]);
@@ -259,10 +269,10 @@ export const sleep = (ms: number, signal?: AbortSignal): Promise<void> =>
     }
 
     const onAbort = (): void => {
-      window.clearTimeout(timeoutId);
+      globalThis.clearTimeout(timeoutId);
       reject(signal?.reason);
     };
-    const timeoutId = window.setTimeout(() => {
+    const timeoutId = globalThis.setTimeout(() => {
       signal?.removeEventListener('abort', onAbort);
       resolve();
     }, ms);

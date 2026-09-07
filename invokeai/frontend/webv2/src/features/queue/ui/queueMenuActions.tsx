@@ -11,8 +11,6 @@ import { refreshQueue, useNowNextItems, useQueueCounts } from './queueDataStore'
 import { useQueueQueryScope } from './queueScope';
 import { useQueueUi } from './QueueUiContext';
 
-const ERROR_ITEM_HOVER_PROPS = { bg: 'bg.error', color: 'fg.error' };
-
 interface QueueMenuActionInputs {
   labels: {
     cancelAll: string;
@@ -140,7 +138,7 @@ export const useQueueMenuActions = ({
 
   const cancelAllExceptCurrent = useCallback(() => {
     queueCommands
-      .cancelScopedItems(scope, current?.id ?? null)
+      .cancelScopedItems(scope, { keepCurrent: true })
       .then(() => refreshQueue())
       .then(() =>
         notify.success(
@@ -154,7 +152,7 @@ export const useQueueMenuActions = ({
           getApiErrorMessage(error, t('widgets.queue.couldNotCancelItems'))
         )
       );
-  }, [current?.id, notify, scope, t]);
+  }, [notify, scope, t]);
 
   const runProcessorAction = useCallback(
     (label: 'pause' | 'resume') => {
@@ -276,13 +274,7 @@ const DestructiveQueueMenuItem = ({ action }: { action: QueueMenuAction }) => {
   );
 
   return (
-    <Menu.Item
-      color="fg.error"
-      disabled={action.disabled}
-      value={action.label}
-      _hover={ERROR_ITEM_HOVER_PROPS}
-      onClick={onClick}
-    >
+    <Menu.Item data-danger="" disabled={action.disabled} value={action.label} onClick={onClick}>
       <Icon as={action.icon} boxSize="3" />
       <Menu.ItemText>{action.label}</Menu.ItemText>
     </Menu.Item>

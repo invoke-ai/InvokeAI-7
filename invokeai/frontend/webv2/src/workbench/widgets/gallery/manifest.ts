@@ -1,5 +1,6 @@
 import type { WidgetManifest } from '@workbench/widgetContracts';
 
+import { gallerySettingsContribution } from '@features/gallery/settingsContribution';
 import { ImageIcon } from 'lucide-react';
 
 export const galleryWidgetManifest: WidgetManifest = {
@@ -13,9 +14,9 @@ export const galleryWidgetManifest: WidgetManifest = {
   load: () =>
     import('@features/gallery/widget').then((module) => ({
       footer: module.GalleryWidgetFooter,
-      headerActions: module.GalleryWidgetHeaderActions,
       headerLabel: module.GalleryWidgetLabel,
       view: module.GalleryWidgetView,
     })),
+  settings: gallerySettingsContribution,
   version: 1,
 };

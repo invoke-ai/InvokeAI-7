@@ -1,11 +1,13 @@
 import type { Project } from '@workbench/projectContracts';
 
+import { stripInfiniteWindowAnchor, stripSessionScopedGallerySearch } from '@features/gallery/contracts';
+
 /**
  * The project *document* codec: the wire and file shape of a project, and the
  * migrations that heal older ones. It deliberately knows nothing about the
  * Workbench reducer.
  *
- * Rehydrating a document into a live `Project` needs `normalizeWorkbenchProject`
+ * Rehydrating a document into a live `Project` needs `loadWorkbenchProject`
  * from the aggregate state module, which transitively owns generation graphs,
  * widget state, and every policy the editor runs on. Keeping that step out of
  * this module is what lets the Launchpad read, write, and shape-check project
@@ -13,13 +15,93 @@ import type { Project } from '@workbench/projectContracts';
  * `./syncedPersistence` for the rehydrating half.
  */
 
-/**
- * Undo/redo stacks are session-only (each entry is a full project snapshot,
- * far too heavy to autosave); everything else in the project document is the
- * project, verbatim.
- */
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 2;
+export const PROJECT_DOCUMENT_MAX_BYTES = 32 * 1024 * 1024;
+
+export type ProjectDocumentV2 = Omit<
+  Pick<
+    Project,
+    | 'canvas'
+    | 'floatingWidgets'
+    | 'id'
+    | 'invocation'
+    | 'layout'
+    | 'name'
+    | 'projectGraph'
+    | 'promptHistory'
+    | 'settings'
+    | 'widgetGraphs'
+    | 'widgetInstances'
+    | 'widgetRegions'
+  >,
+  'floatingWidgets'
+> & {
+  documentSchemaVersion: typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
+  floatingWidgets?: Project['floatingWidgets'];
+};
+
+export const stripSessionScopedGalleryState = (project: Project): Project => {
+  let didChange = false;
+  const widgetInstances = Object.fromEntries(
+    Object.entries(project.widgetInstances).map(([instanceId, instance]) => {
+      if (instance.typeId !== 'gallery') {
+        return [instanceId, instance];
+      }
+      const values = instance.state.values;
+      const strippedValues = stripSessionScopedGallerySearch(values);
+      const strippedAnchorValues = stripInfiniteWindowAnchor(strippedValues ?? values);
+      if (strippedValues === null && strippedAnchorValues === null) {
+        return [instanceId, instance];
+      }
+      didChange = true;
+      return [
+        instanceId,
+        { ...instance, state: { ...instance.state, values: strippedAnchorValues ?? strippedValues ?? values } },
+      ];
+    })
+  );
+
+  return didChange ? { ...project, widgetInstances } : project;
+};
+
+export const serializeProjectDocumentV2 = (project: Project): ProjectDocumentV2 => {
+  const persistent = stripSessionScopedGalleryState(project);
+  const document: ProjectDocumentV2 = {
+    canvas: persistent.canvas,
+    documentSchemaVersion: PROJECT_DOCUMENT_SCHEMA_VERSION,
+    ...(persistent.floatingWidgets ? { floatingWidgets: persistent.floatingWidgets } : {}),
+    id: persistent.id,
+    invocation: persistent.invocation,
+    layout: persistent.layout,
+    name: persistent.name,
+    projectGraph: persistent.projectGraph,
+    promptHistory: persistent.promptHistory,
+    settings: persistent.settings,
+    widgetGraphs: persistent.widgetGraphs,
+    widgetInstances: persistent.widgetInstances,
+    widgetRegions: persistent.widgetRegions,
+  };
+
+  return document;
+};
+
+export const serializeProjectDocumentV2Json = (
+  project: Project
+): { byteSize: number; document: ProjectDocumentV2; documentJson: string } => {
+  const document = serializeProjectDocumentV2(project);
+  const documentJson = JSON.stringify(document);
+
+  return { byteSize: new TextEncoder().encode(documentJson).byteLength, document, documentJson };
+};
+
 export const serializeProjectDocument = (project: Project): Record<string, unknown> => {
-  const { undoRedo: _undoRedo, ...document } = project;
+  const {
+    events: _events,
+    graphHistory: _graphHistory,
+    queue: _queue,
+    undoRedo: _undoRedo,
+    ...document
+  } = stripSessionScopedGalleryState(project) as Project & { graphHistory?: unknown };
 
   return document;
 };
@@ -38,38 +120,14 @@ const normalizeInvocationSourceId = (sourceId: unknown): unknown => {
 
 export const normalizeLegacyProjectDocument = (data: Record<string, unknown>): Record<string, unknown> => {
   const invocation = data.invocation;
-  const queue = data.queue;
+  const { events: _events, graphHistory: _graphHistory, queue: _queue, ...document } = data;
 
   return {
-    ...data,
+    ...document,
     invocation:
       invocation && typeof invocation === 'object'
         ? { ...invocation, sourceId: normalizeInvocationSourceId((invocation as { sourceId?: unknown }).sourceId) }
         : invocation,
-    queue:
-      queue && typeof queue === 'object' && Array.isArray((queue as { items?: unknown }).items)
-        ? {
-            ...queue,
-            items: (queue as { items: unknown[] }).items.map((item) => {
-              if (!item || typeof item !== 'object') {
-                return item;
-              }
-
-              const snapshot = (item as { snapshot?: unknown }).snapshot;
-
-              return {
-                ...item,
-                snapshot:
-                  snapshot && typeof snapshot === 'object'
-                    ? {
-                        ...snapshot,
-                        sourceId: normalizeInvocationSourceId((snapshot as { sourceId?: unknown }).sourceId),
-                      }
-                    : snapshot,
-              };
-            }),
-          }
-        : queue,
   };
 };
 
@@ -159,4 +217,5 @@ export const isProjectDocumentShape = (data: Record<string, unknown>): boolean =
   typeof data.id === 'string' &&
   typeof data.name === 'string' &&
   typeof data.layout === 'object' &&
-  data.layout !== null;
+  data.layout !== null &&
+  (data.documentSchemaVersion === undefined || data.documentSchemaVersion === PROJECT_DOCUMENT_SCHEMA_VERSION);
