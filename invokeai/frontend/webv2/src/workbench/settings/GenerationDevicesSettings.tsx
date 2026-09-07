@@ -1,6 +1,6 @@
 import type { GenerationDevicesSetting } from '@features/queue/devices';
 
-import { Spinner, Stack, Switch, Text } from '@chakra-ui/react';
+import { HStack, Spinner, Stack, Switch, Text } from '@chakra-ui/react';
 import { useCapabilities } from '@features/identity';
 import {
   getDeviceNameLabels,
@@ -9,6 +9,7 @@ import {
   useGenerationDevices,
 } from '@features/queue/devices';
 import { useMountEffect } from '@platform/react/useMountEffect';
+import { ModifiedSettingIndicator } from '@platform/ui/settings/ModifiedSettingIndicator';
 import { useCallback, useMemo, useState } from 'react';
 
 /**
@@ -88,23 +89,29 @@ export const GenerationDevicesSettings = () => {
 
   if (options.length <= 1) {
     return (
-      <Text color="fg.subtle" fontSize="xs">
-        {options.length === 1
-          ? `Generation runs on ${labels[options[0].device] ?? options[0].device}. Parallel generation needs more than one accelerator.`
-          : 'No accelerators were detected, so generation runs on a single device.'}
-      </Text>
+      <HStack align="start" gap="2">
+        <Text color="fg.muted" fontSize="xs">
+          {options.length === 1
+            ? `Generation runs on ${labels[options[0].device] ?? options[0].device}. Parallel generation needs more than one accelerator.`
+            : 'No accelerators were detected, so generation runs on a single device.'}
+        </Text>
+        {!isAuto ? <ModifiedSettingIndicator label="Generation devices" /> : null}
+      </HStack>
     );
   }
 
   if (!canManageAppConfig) {
     return (
       <Stack gap="1">
-        <Text color="fg" fontSize="xs">
-          {isAuto
-            ? 'Every available accelerator is used for generation.'
-            : selectedDevices.map((device) => labels[device] ?? device).join(', ')}
-        </Text>
-        <Text color="fg.subtle" fontSize="xs">
+        <HStack gap="2">
+          <Text color="fg" fontSize="xs">
+            {isAuto
+              ? 'Every available accelerator is used for generation.'
+              : selectedDevices.map((device) => labels[device] ?? device).join(', ')}
+          </Text>
+          {!isAuto ? <ModifiedSettingIndicator label="Generation devices" /> : null}
+        </HStack>
+        <Text color="fg.muted" fontSize="xs">
           Only an administrator can change which accelerators are used.
         </Text>
       </Stack>
@@ -117,6 +124,7 @@ export const GenerationDevicesSettings = () => {
         checked={isAuto}
         description="New accelerators are picked up automatically."
         label="Use every available accelerator"
+        isModified={!isAuto}
         onChange={toggleAuto}
       />
       {isAuto ? null : (
@@ -138,7 +146,7 @@ export const GenerationDevicesSettings = () => {
         </Text>
       ) : null}
       {didChange ? (
-        <Text color="fg.subtle" fontSize="xs">
+        <Text color="fg.muted" fontSize="xs">
           Restart InvokeAI for changes to take effect.
         </Text>
       ) : null}
@@ -175,11 +183,13 @@ const DeviceSwitch = ({
   checked,
   description,
   label,
+  isModified,
   onChange,
 }: {
   checked: boolean;
   description?: string;
   label: string;
+  isModified?: boolean;
   onChange: (checked: boolean) => void;
 }) => {
   const handleCheckedChange = useCallback(
@@ -198,11 +208,14 @@ const DeviceSwitch = ({
       onCheckedChange={handleCheckedChange}
     >
       <Stack gap="0.5">
-        <Switch.Label color="fg" fontSize="sm" fontWeight="500">
-          {label}
-        </Switch.Label>
+        <HStack gap="2">
+          <Switch.Label color="fg" fontSize="sm" fontWeight="500">
+            {label}
+          </Switch.Label>
+          {isModified ? <ModifiedSettingIndicator label={label} /> : null}
+        </HStack>
         {description ? (
-          <Text color="fg.subtle" fontSize="xs">
+          <Text color="fg.muted" fontSize="xs">
             {description}
           </Text>
         ) : null}

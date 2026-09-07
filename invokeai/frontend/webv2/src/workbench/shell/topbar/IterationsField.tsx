@@ -48,8 +48,8 @@ export const IterationsField = () => {
         allowMouseWheel
         flexShrink={0}
         min={MIN_BATCH_COUNT}
-        rounded="l2"
-        size="xs"
+        rounded="control"
+        size="sm"
         value={String(batchCount)}
         w="14"
         onValueChange={handleValueChange}

@@ -15,6 +15,7 @@ import {
   extractGenerationMeta,
   getResultImageName,
 } from '@features/queue/contracts';
+import { createUuid } from '@platform/browser/randomUuid';
 import { useMountEffect } from '@platform/react/useMountEffect';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -30,9 +31,9 @@ import { lazy, useMemo } from 'react';
 export const getGenerationSelectedGalleryImage = getSelectedGalleryImageFromValues;
 
 const ModelSelect = lazy(() => import('@features/models/react').then((module) => ({ default: module.ModelSelect })));
-const GenerateCanvasCompositingSection = lazy(() =>
-  import('@workbench/widgets/canvas/GenerateCanvasCompositingSection').then((module) => ({
-    default: module.GenerateCanvasCompositingSection,
+const GenerateCanvasSections = lazy(() =>
+  import('@workbench/widgets/canvas/GenerateCanvasSections').then((module) => ({
+    default: module.GenerateCanvasSections,
   }))
 );
 
@@ -111,7 +112,7 @@ const useGenerationQueueInsights = (projectId: string): GenerationUiAdapter['que
 export const GenerationUiAdapterProvider = ({ children }: { children: ReactNode }) => {
   // The generate widget needs its model picker as soon as it renders. Left to
   // Suspense, `ModelSelect` was fetched in a second wave after the boot
-  // widget wave had already finished. `GenerateCanvasCompositingSection` is
+  // widget wave had already finished. `GenerateCanvasSections` is
   // canvas-only and stays lazy — warming it would add bytes to every boot.
   useMountEffect(() => {
     void import('@features/models/react');
@@ -159,9 +160,25 @@ export const GenerationUiAdapterProvider = ({ children }: { children: ReactNode 
       // Hash navigation, matching the app.selectModelsTab command. Going through
       // useNavigate or the models UI store would pull either the router hooks or
       // the store into the editor/launchpad initial bundles (architecture budget).
-      // The manager opens on Add Models by default, which is where this link wants to land.
-      openManager: () => {
-        window.location.hash = `#/models?project=${encodeURIComponent(project.activeProjectId)}`;
+      // The manager opens on Add Models by default, which is where this link
+      // wants to land; a model type seeds its catalog filter through the same
+      // dynamic-import seam `WorkflowUiAdapter.openAddModels` uses, before the
+      // navigation, so the first paint is already filtered.
+      openManager: (options) => {
+        const navigateToManager = () => {
+          window.location.hash = `#/models?project=${encodeURIComponent(project.activeProjectId)}`;
+        };
+        const modelType = options?.modelType;
+
+        if (modelType === undefined) {
+          navigateToManager();
+          return;
+        }
+
+        void import('@features/models/launchpad').then(({ requestAddModelsTypeFilter }) => {
+          requestAddModelsTypeFilter(modelType);
+          navigateToManager();
+        });
       },
       status: modelsStatus,
     }),
@@ -217,7 +234,7 @@ export const GenerationUiAdapterProvider = ({ children }: { children: ReactNode 
         });
       },
       save: (label, weights, multiplier) => {
-        const preset = { id: crypto.randomUUID(), label, multiplier, weights };
+        const preset = { id: createUuid(), label, multiplier, weights };
 
         void patchWorkbenchPreferences({
           krea2RebalancePresets: [...getWorkbenchPreferences().krea2RebalancePresets, preset],
@@ -247,7 +264,7 @@ export const GenerationUiAdapterProvider = ({ children }: { children: ReactNode 
         });
       },
       save: (label, values) => {
-        const preset = { id: crypto.randomUUID(), label, values };
+        const preset = { id: createUuid(), label, values };
 
         void patchWorkbenchPreferences({
           generatePresets: [...getWorkbenchPreferences().generatePresets, preset],
@@ -274,7 +291,7 @@ export const GenerationUiAdapterProvider = ({ children }: { children: ReactNode 
 
   const adapter = useMemo<GenerationUiAdapter>(
     () => ({
-      CanvasCompositingSection: GenerateCanvasCompositingSection,
+      CanvasGenerationSections: GenerateCanvasSections,
       account: accountGroup,
       capabilities: capabilitiesGroup,
       gallery: galleryGroup,

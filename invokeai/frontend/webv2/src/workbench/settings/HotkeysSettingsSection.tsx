@@ -2,6 +2,7 @@ import type { HotkeyCategory, HotkeyDefinition } from '@workbench/hotkeys';
 
 import { Badge, Box, Flex, HStack, Icon, Input, InputGroup, Kbd, ScrollArea, Stack, Text } from '@chakra-ui/react';
 import { Button, IconButton } from '@platform/ui';
+import { ModifiedSettingIndicator } from '@platform/ui/settings/ModifiedSettingIndicator';
 import {
   firstPartyHotkeyCatalog,
   formatHotkeyForPlatform,
@@ -10,7 +11,7 @@ import {
   useExtensionHotkeyDefinitions,
 } from '@workbench/hotkeys';
 import { ShortcutKeyGlyph } from '@workbench/hotkeys/keyGlyphs';
-import { patchWorkbenchPreferences, useWorkbenchPreferences } from '@workbench/settings/store';
+import { patchWorkbenchPreferences, useWorkbenchPreferenceSelector } from '@workbench/settings/store';
 import { CheckIcon, PlusIcon, RotateCcwIcon, SearchIcon, Trash2Icon, XIcon } from 'lucide-react';
 import { Fragment, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from 'react-hook-tanstack-virtual';
@@ -33,6 +34,13 @@ const CATEGORY_LABEL_KEYS: Record<HotkeyCategory, string> = {
 const CATEGORY_ORDER: HotkeyCategory[] = ['app', 'canvas', 'workflows', 'viewer', 'gallery'];
 
 const SEARCH_START_ELEMENT = <Icon as={SearchIcon} boxSize="3.5" />;
+
+// Virtualizer internals mutate while computing a range; subscribe only to rendered values.
+const selectVirtualRows = ({
+  measureElement,
+  totalSize,
+  virtualItems,
+}: ReturnType<typeof useVirtualizer<HTMLDivElement, HTMLElement>>) => ({ measureElement, totalSize, virtualItems });
 
 const normalizeKeys = (keys: string[]): string[] => keys.map(normalizeHotkeyString).filter(Boolean);
 
@@ -164,7 +172,7 @@ const buildRows = ({
 
 export const HotkeysSettingsSection = () => {
   const { t } = useTranslation();
-  const { customHotkeys } = useWorkbenchPreferences();
+  const customHotkeys = useWorkbenchPreferenceSelector((preferences) => preferences.customHotkeys);
   const extensionHotkeys = useExtensionHotkeyDefinitions();
   const [searchTerm, setSearchTerm] = useState('');
   const deferredSearchTerm = useDeferredValue(searchTerm);
@@ -176,13 +184,16 @@ export const HotkeysSettingsSection = () => {
   );
   const conflictMap = useMemo(() => buildConflictMap(catalog, customHotkeys), [catalog, customHotkeys]);
   const modifiedCount = Object.keys(customHotkeys).length;
-  const virtualizer = useVirtualizer({
-    count: rows.length,
-    estimateSize: (index) => (rows[index]?.kind === 'category' ? 36 : 86),
-    getScrollElement: () => scrollRef.current,
-    measureElement: (element) => element.getBoundingClientRect().height,
-    overscan: 8,
-  });
+  const virtualizer = useVirtualizer(
+    {
+      count: rows.length,
+      estimateSize: (index) => (rows[index]?.kind === 'category' ? 36 : 86),
+      getScrollElement: () => scrollRef.current,
+      measureElement: (element) => element.getBoundingClientRect().height,
+      overscan: 8,
+    },
+    selectVirtualRows
+  );
 
   const saveHotkey = useCallback(
     (hotkeyId: string, keys: string[]) => {
@@ -217,7 +228,7 @@ export const HotkeysSettingsSection = () => {
           <Text color="fg" fontSize="sm" fontWeight="600">
             {t('hotkeys.title')}
           </Text>
-          <Text color="fg.subtle" fontSize="xs">
+          <Text color="fg.muted" fontSize="xs">
             {t('hotkeys.description')}
           </Text>
         </Stack>
@@ -359,6 +370,9 @@ const HotkeyListRow = ({
           .flatMap((key) => conflictMap.get(key) ?? [])
           .find((entry) => entry.hotkey.id !== hotkey.id && canScopesOverlap(hotkey, entry.hotkey));
   const canSave = !hasDuplicate && !conflict && (isDirty || isEditing);
+  const defaultKeys = normalizeKeys(hotkey.defaultKeys);
+  const isModified =
+    effectiveKeys.length !== defaultKeys.length || effectiveKeys.some((key) => !defaultKeys.includes(key));
 
   const updateDraftKey = useCallback((index: number, key: string) => {
     setDraftKeys((current) => current.map((candidate, candidateIndex) => (candidateIndex === index ? key : candidate)));
@@ -407,13 +421,9 @@ const HotkeyListRow = ({
               {t('hotkeys.pending')}
             </Badge>
           ) : null}
-          {isCustomized ? (
-            <Badge colorPalette="blue" size="xs" variant="surface">
-              {t('hotkeys.custom')}
-            </Badge>
-          ) : null}
+          {isModified ? <ModifiedSettingIndicator label={getHotkeyTitle(hotkey)} /> : null}
         </HStack>
-        <Text color="fg.subtle" fontSize="2xs" truncate>
+        <Text color="fg.muted" fontSize="2xs" truncate>
           {hotkey.description ?? hotkey.id}
         </Text>
         {conflict ? (
@@ -442,7 +452,7 @@ const HotkeyListRow = ({
               />
             ))
           ) : (
-            <Text color="fg.subtle" fontSize="2xs">
+            <Text color="fg.muted" fontSize="2xs">
               {t('hotkeys.disabled')}
             </Text>
           )}
@@ -561,7 +571,7 @@ const HotkeyChip = ({
             <ShortcutKeyGlyph fallback={part} part={part} />
           </Kbd>
           {index < parts.length - 1 ? (
-            <Text color="fg.subtle" fontSize="2xs">
+            <Text color="fg.muted" fontSize="2xs">
               +
             </Text>
           ) : null}

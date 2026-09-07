@@ -12,10 +12,12 @@
  * side effects.
  */
 
+import type { ParametricShapeKind } from '@workbench/canvas-engine/contracts';
 import type { Mat2d, Rect, Vec2 } from '@workbench/canvas-engine/types';
 
 import { applyToPoint, getScale, invert } from '@workbench/canvas-engine/math/mat2d';
 import { transformBounds } from '@workbench/canvas-engine/math/rect';
+import { buildParametricShapePath } from '@workbench/canvas-engine/render/rasterizers/shapeRasterizer';
 import { drawMarchingAnts, type MarchingAntsRender } from '@workbench/canvas-engine/selection/marchingAnts';
 import { BBOX_HANDLES, bboxHandlePoint } from '@workbench/canvas-engine/tools/bboxHitTest';
 import { TRANSFORM_ROTATE_NUB_PX } from '@workbench/canvas-engine/transform/transformMath';
@@ -53,10 +55,10 @@ export interface OverlayCursor {
   radiusDoc: number;
 }
 
-/** A live rect-or-ellipse drag outline in document space (shape and marquee tools). */
+/** A live parametric-shape drag outline in document space (shape and marquee tools). */
 export interface RectShapePreview {
   rect: Rect;
-  kind: 'rect' | 'ellipse';
+  kind: ParametricShapeKind;
 }
 
 /** Everything the overlay needs to draw a frame. */
@@ -93,10 +95,19 @@ export interface OverlayState {
    */
   transformFrame?: TransformFrameOverlay | null;
   /**
-   * The in-progress lasso polygon (document-space points), drawn as a live dashed
-   * outline while a lasso drag is underway. Absent/`null` when idle.
+   * The in-progress lasso outline (document space): a freehand drag, or a
+   * polygon session with its placed vertices and close cue. Absent/`null` when idle.
    */
-  lassoPreview?: readonly Vec2[] | null;
+  lassoPreview?:
+    | { kind: 'freehand'; points: readonly Vec2[] }
+    | {
+        kind: 'polygon';
+        points: readonly Vec2[];
+        cursor: Vec2 | null;
+        closeRadiusPx: number | null;
+        closeArmed: boolean;
+      }
+    | null;
   /**
    * The committed selection's marching ants: the outline paths (document space)
    * plus the animated dash phase. Absent/`null` when there is no selection.
@@ -114,12 +125,19 @@ export interface OverlayState {
    */
   marqueePreview?: RectShapePreview | null;
   /**
-   * The in-progress gradient-tool drag vector (document-space start/end),
-   * drawn as a direction indicator. Absent/`null` when idle.
+   * The in-progress gradient-tool drag (document-space start/end): a linear
+   * ramp's vector, or a radial one's center and radius. Absent/`null` when idle.
    */
-  gradientPreview?: { start: Vec2; end: Vec2 } | null;
+  gradientPreview?: { kind: 'linear' | 'radial'; start: Vec2; end: Vec2 } | null;
   /** Dedicated Select Object mask preview, already colorized by the engine. */
-  samPreview?: { surface: RasterSurface; rect: Rect; opacity: number } | null;
+  samPreview?: {
+    surface: RasterSurface;
+    rect: Rect;
+    opacity: number;
+    /** True-edge outline for marching ants, document space; `null` skips the ants. */
+    outline: Path2D | null;
+    phase: number;
+  } | null;
   /** Select Object visual prompt geometry in document space. */
   samInput?: { includePoints: readonly Vec2[]; excludePoints: readonly Vec2[]; bbox: Rect | null } | null;
 }
@@ -310,18 +328,30 @@ const drawTransformFrame = (ctx: Ctx, state: OverlayState): void => {
 const LASSO_PREVIEW_COLOR = '#38bdf8';
 const LASSO_PREVIEW_DASH: readonly number[] = [4, 4];
 
-/** Draws the in-progress lasso polygon as a dashed screen-space outline. */
+/** Screen-space half-size of a placed polygon vertex knob. */
+const LASSO_VERTEX_HALF_PX = 2;
+
+/**
+ * Draws the in-progress lasso as a dashed screen-space outline. A polygon also
+ * shows its placed vertices and, once it can close, a ring on the first one at
+ * the close hit radius, filled while the cursor is inside it.
+ */
 const drawLassoPreview = (ctx: Ctx, state: OverlayState): void => {
-  const points = state.lassoPreview;
-  if (!points || points.length < 2) {
+  const preview = state.lassoPreview;
+  if (!preview) {
+    return;
+  }
+  const outline = preview.kind === 'polygon' && preview.cursor ? [...preview.points, preview.cursor] : preview.points;
+  if (outline.length < 2) {
     return;
   }
   ctx.save();
   ctx.strokeStyle = LASSO_PREVIEW_COLOR;
+  ctx.fillStyle = LASSO_PREVIEW_COLOR;
   ctx.lineWidth = 1;
   ctx.setLineDash([...LASSO_PREVIEW_DASH]);
   ctx.beginPath();
-  points.forEach((point, index) => {
+  outline.forEach((point, index) => {
     const p = applyToPoint(state.view, point);
     if (index === 0) {
       ctx.moveTo(p.x, p.y);
@@ -333,6 +363,26 @@ const drawLassoPreview = (ctx: Ctx, state: OverlayState): void => {
   ctx.closePath();
   ctx.stroke();
   ctx.setLineDash([]);
+  if (preview.kind === 'polygon') {
+    preview.points.forEach((point, index) => {
+      const p = applyToPoint(state.view, point);
+      if (index === 0 && preview.closeRadiusPx !== null) {
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, preview.closeRadiusPx, 0, Math.PI * 2);
+        if (preview.closeArmed) {
+          ctx.fill();
+        }
+        ctx.stroke();
+      } else {
+        ctx.fillRect(
+          p.x - LASSO_VERTEX_HALF_PX,
+          p.y - LASSO_VERTEX_HALF_PX,
+          LASSO_VERTEX_HALF_PX * 2,
+          LASSO_VERTEX_HALF_PX * 2
+        );
+      }
+    });
+  }
   ctx.restore();
 };
 
@@ -350,26 +400,17 @@ const drawRectShapePreview = (ctx: Ctx, state: OverlayState, preview: RectShapeP
   ctx.strokeStyle = LAYER_OUTLINE_COLOR;
   ctx.lineWidth = 1;
   ctx.setLineDash([...BBOX_DASH]);
-  ctx.beginPath();
-  if (preview.kind === 'ellipse') {
-    ctx.ellipse(
-      screen.x + screen.width / 2,
-      screen.y + screen.height / 2,
-      Math.abs(screen.width) / 2,
-      Math.abs(screen.height) / 2,
-      0,
-      0,
-      Math.PI * 2
-    );
-  } else {
-    ctx.rect(screen.x, screen.y, screen.width, screen.height);
-  }
+  // The same path the rasterizer commits, so the outline is the shape it makes.
+  buildParametricShapePath(ctx, preview.kind, screen.x, screen.y, Math.abs(screen.width), Math.abs(screen.height), 0);
   ctx.stroke();
   ctx.setLineDash([]);
   ctx.restore();
 };
 
-/** Draws the gradient-tool drag vector (a line with endpoint dots) in screen space. */
+/**
+ * Draws the gradient-tool drag in screen space: the vector with endpoint dots,
+ * plus the circle a radial gradient will fill.
+ */
 const drawGradientPreview = (ctx: Ctx, state: OverlayState): void => {
   const preview = state.gradientPreview;
   if (!preview) {
@@ -386,6 +427,13 @@ const drawGradientPreview = (ctx: Ctx, state: OverlayState): void => {
   ctx.moveTo(start.x, start.y);
   ctx.lineTo(end.x, end.y);
   ctx.stroke();
+  if (preview.kind === 'radial') {
+    ctx.setLineDash([...BBOX_DASH]);
+    ctx.beginPath();
+    ctx.arc(start.x, start.y, Math.hypot(end.x - start.x, end.y - start.y), 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
   for (const point of [start, end]) {
     ctx.beginPath();
     ctx.arc(point.x, point.y, 3, 0, Math.PI * 2);
@@ -411,6 +459,9 @@ const drawSamPreview = (ctx: Ctx, state: OverlayState): void => {
   ctx.globalAlpha = preview.opacity;
   ctx.drawImage(preview.surface.canvas, preview.rect.x, preview.rect.y, preview.rect.width, preview.rect.height);
   ctx.restore();
+  if (preview.outline) {
+    drawMarchingAnts(ctx, state.view, { matrix: null, paths: [preview.outline], phase: preview.phase });
+  }
 };
 
 const drawSamGeometry = (ctx: Ctx, state: OverlayState): void => {

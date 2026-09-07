@@ -33,7 +33,7 @@ const createQueueItem = ({
     destination: 'gallery',
     filterIntermediateResults: false,
     galleryBoardId: null,
-    graph: { edges: [], id: 'graph-1', label: 'Graph', nodes: [], updatedAt: submittedAt, version: 1 },
+    graph: { id: 'graph-1', label: 'Graph' },
     presentation: { batchCount, height: 1024, width: 1024 },
     sourceId,
     submittedAt,

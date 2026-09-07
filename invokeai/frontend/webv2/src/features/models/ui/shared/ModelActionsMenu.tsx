@@ -66,7 +66,7 @@ export const ModelActionMenuItems = ({
       ) : null}
       {extraItems}
       <Menu.Separator />
-      <Menu.Item color="fg.error" value="delete" onClick={() => onRequestConfirm({ kind: 'delete', model })}>
+      <Menu.Item data-danger="" value="delete" onClick={() => onRequestConfirm({ kind: 'delete', model })}>
         <Icon as={Trash2Icon} boxSize="3.5" />
         <Menu.ItemText fontSize="xs">{t('models.deleteModel')}</Menu.ItemText>
       </Menu.Item>

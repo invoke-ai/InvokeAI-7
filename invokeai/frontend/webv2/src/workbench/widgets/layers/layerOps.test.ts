@@ -1,11 +1,14 @@
-import type { CanvasLayerContract, CanvasRasterLayerContractV2 } from '@workbench/canvas-engine/contracts';
-import type { CanvasProjectMutation } from '@workbench/canvasProjectMutations';
+import type {
+  CanvasDocumentContractV3,
+  CanvasLayerContract,
+  CanvasRasterLayerContractV2,
+} from '@workbench/canvas-engine/contracts';
 
+import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
   applyStructuralPreview,
-  applyStructural,
   type CanvasStructuralEngine,
   canConvertRasterControl,
   canMergeLayerDown,
@@ -35,12 +38,7 @@ import {
   DEFAULT_INPAINT_MASK_FILL,
   fitLayerTransformToBbox,
   getControlTransparencyEffectPatch,
-  getInpaintDenoiseLimitPatch,
-  getInpaintNoisePatch,
   getRegionalGuidanceAutoNegativePatch,
-  getRegionalGuidanceNegativePromptPatch,
-  getRegionalGuidancePositivePromptPatch,
-  getRegionalGuidanceReferenceImagePatch,
   isMergeableRasterLayer,
   nextControlLayerName,
   nextInpaintMaskName,
@@ -141,72 +139,57 @@ describe('isMergeableRasterLayer', () => {
 });
 
 describe('canMergeLayerDown', () => {
-  const layers = [paintLayer('top'), imageLayer('mid'), maskLayer('bottom')];
+  const documentOf = (layers: CanvasLayerContract[]): CanvasDocumentContractV3 => ({
+    background: 'transparent',
+    bbox: { height: 100, width: 100, x: 0, y: 0 },
+    height: 100,
+    stacks: stacksFrom(layers),
+    selectedLayerId: null,
+    version: 3,
+    width: 100,
+  });
+  const document = documentOf([paintLayer('top'), imageLayer('mid'), maskLayer('bottom')]);
 
   it('requires an engine (merge is pixel work)', () => {
-    expect(canMergeLayerDown(layers, 0, false)).toBe(false);
+    expect(canMergeLayerDown(document, 'top', false)).toBe(false);
   });
 
   it('allows merging when the layer and the one below are both mergeable', () => {
-    expect(canMergeLayerDown(layers, 0, true)).toBe(true);
+    expect(canMergeLayerDown(document, 'top', true)).toBe(true);
   });
 
   it('disallows merging into a non-mergeable below layer', () => {
-    // index 1 (mid, image) sits above the mask layer, which cannot be merged into.
-    expect(canMergeLayerDown(layers, 1, true)).toBe(false);
+    expect(canMergeLayerDown(document, 'mid', true)).toBe(false);
   });
 
   it('disallows merging the bottom-most layer (nothing below)', () => {
-    expect(canMergeLayerDown(layers, 2, true)).toBe(false);
+    expect(canMergeLayerDown(document, 'bottom', true)).toBe(false);
   });
 
   it('disallows merging when the upper layer is locked', () => {
-    const lockedTop = [paintLayer('top', { isLocked: true }), imageLayer('mid'), maskLayer('bottom')];
-    expect(canMergeLayerDown(lockedTop, 0, true)).toBe(false);
+    const lockedTop = documentOf([paintLayer('top', { isLocked: true }), imageLayer('mid'), maskLayer('bottom')]);
+    expect(canMergeLayerDown(lockedTop, 'top', true)).toBe(false);
   });
 
   it('disallows merging when the below layer is locked', () => {
-    const lockedMid = [paintLayer('top'), { ...imageLayer('mid'), isLocked: true }, maskLayer('bottom')];
-    expect(canMergeLayerDown(lockedMid, 0, true)).toBe(false);
-  });
-});
-
-describe('applyStructural', () => {
-  const forward: CanvasProjectMutation = { ids: ['a'], type: 'removeCanvasLayers' };
-  const inverse: CanvasProjectMutation = { index: 0, layer: paintLayer('a'), type: 'addCanvasLayer' };
-
-  it('routes through the engine history when an engine is attached', () => {
-    const commitStructural = vi.fn();
-    const engine = { layers: { commitStructural } } as unknown as CanvasStructuralEngine;
-    const dispatch = vi.fn();
-
-    applyStructural(engine, dispatch, 'Delete layer', forward, inverse);
-
-    expect(commitStructural).toHaveBeenCalledWith('Delete layer', forward, inverse);
-    expect(dispatch).not.toHaveBeenCalled();
-  });
-
-  it('falls back to a plain forward dispatch without an engine', () => {
-    const dispatch = vi.fn();
-
-    applyStructural(null, dispatch, 'Delete layer', forward, inverse);
-
-    expect(dispatch).toHaveBeenCalledWith(forward);
-    expect(dispatch).toHaveBeenCalledTimes(1);
+    const lockedMid = documentOf([paintLayer('top'), { ...imageLayer('mid'), isLocked: true }, maskLayer('bottom')]);
+    expect(canMergeLayerDown(lockedMid, 'top', true)).toBe(false);
   });
 });
 
 describe('applyStructuralPreview', () => {
+  const action = { id: 'layer', patch: { opacity: 0.5 }, type: 'updateCanvasLayer' } as const;
+
   it('routes a live document edit through the engine guard', () => {
-    const action = { id: 'layer', patch: { opacity: 0.5 }, type: 'updateCanvasLayer' } as const;
     const applyPreview = vi.fn(() => false);
     const engine = { layers: { applyStructuralPreview: applyPreview } } as unknown as CanvasStructuralEngine;
-    const dispatch = vi.fn();
 
-    expect(applyStructuralPreview(engine, dispatch, action)).toBe(false);
-
+    expect(applyStructuralPreview(engine, action)).toBe(false);
     expect(applyPreview).toHaveBeenCalledWith(action);
-    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it('refuses a live edit without an engine', () => {
+    expect(applyStructuralPreview(null, action)).toBe(false);
   });
 });
 
@@ -466,41 +449,12 @@ describe('menu patch helpers', () => {
   it('builds control transparency effect patches', () => {
     const layer = createControlLayer('control', 'c1');
 
-    expect(getControlTransparencyEffectPatch(layer)).toEqual({
-      forward: { layerType: 'control', withTransparencyEffect: false },
-      inverse: { layerType: 'control', withTransparencyEffect: true },
-    });
+    expect(getControlTransparencyEffectPatch(layer)).toEqual({ layerType: 'control', withTransparencyEffect: false });
   });
 
-  it('builds regional prompt and reference image patches', () => {
+  it('builds the auto-negative toggle patch', () => {
     const layer = createRegionalGuidanceLayer('region', 0, 'r1');
-
-    expect(getRegionalGuidancePositivePromptPatch(layer)).toEqual({
-      forward: { layerType: 'regional_guidance', positivePrompt: '' },
-      inverse: { layerType: 'regional_guidance', positivePrompt: null },
-    });
-    expect(getRegionalGuidanceNegativePromptPatch(layer)).toEqual({
-      forward: { layerType: 'regional_guidance', negativePrompt: '' },
-      inverse: { layerType: 'regional_guidance', negativePrompt: null },
-    });
-    expect(getRegionalGuidanceAutoNegativePatch(layer)).toEqual({
-      forward: { autoNegative: true, layerType: 'regional_guidance' },
-      inverse: { autoNegative: false, layerType: 'regional_guidance' },
-    });
-    expect(getRegionalGuidanceReferenceImagePatch(layer, 'sdxl').forward.referenceImages).toHaveLength(1);
-  });
-
-  it('builds inpaint modifier patches', () => {
-    const layer = createInpaintMaskLayer('mask', 'm1');
-
-    expect(getInpaintNoisePatch(layer)).toEqual({
-      forward: { layerType: 'inpaint_mask', noiseLevel: 0.25 },
-      inverse: { layerType: 'inpaint_mask', noiseLevel: undefined },
-    });
-    expect(getInpaintDenoiseLimitPatch(layer)).toEqual({
-      forward: { denoiseLimit: 0.8, layerType: 'inpaint_mask' },
-      inverse: { denoiseLimit: undefined, layerType: 'inpaint_mask' },
-    });
+    expect(getRegionalGuidanceAutoNegativePatch(layer)).toEqual({ autoNegative: true, layerType: 'regional_guidance' });
   });
 });
 
@@ -508,9 +462,10 @@ describe('convertRasterControlLayer', () => {
   it('converts raster→control preserving source/id/name/transform and applying the default adapter', () => {
     const source = { image: { height: 48, imageName: 'pic', width: 64 }, type: 'image' } as const;
     const transform = { rotation: 10, scaleX: 2, scaleY: 2, x: 5, y: 6 };
-    const raster = paintLayer('r', { name: 'My Layer', opacity: 0.5, source, transform });
+    const raster = paintLayer('r', { colorLabel: 'red', name: 'My Layer', opacity: 0.5, source, transform });
     const converted = convertRasterControlLayer(raster, 'control');
     expect(converted).toMatchObject({
+      colorLabel: 'red',
       id: 'r',
       name: 'My Layer',
       opacity: 0.5,

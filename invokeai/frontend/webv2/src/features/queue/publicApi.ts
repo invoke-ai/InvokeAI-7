@@ -1,12 +1,26 @@
 import type { QueueFeatureCommands, QueueQueryScope, QueueReadModel, QueueWorkflowRunSink } from './core/types';
 import type { QueueItemProgressPort, QueueRealtimeRuntime } from './data/realtimeRuntime';
-import type { QueueHistoryPort, QueueResultDestinationPort, QueueRuntime } from './runtime';
+import type {
+  QueueHistoryPort,
+  QueueResultDestinationPort,
+  QueueRunJournalPort,
+  QueueRunLockPort,
+  QueueRuntime,
+} from './runtime';
 import type { QueueModelLoadPort, QueueNodeExecutionPort } from './runtime/coordinator';
 
 import { queueBackend } from './data/httpRealtimeQueueBackend';
 import { queueReadModelOptions } from './data/queries';
 import { createQueueRealtimeRuntime } from './data/realtimeRuntime';
 import { createQueueRuntime } from './runtime';
+import { createQueueReceiptAcknowledgements, type QueueReceiptStorePort } from './runtime/receiptAcknowledgements';
+
+export const createProductionQueueReceiptAcknowledgements = (store: QueueReceiptStorePort, isActive: () => boolean) =>
+  createQueueReceiptAcknowledgements({
+    acknowledge: (projectId, queueItemId) => queueBackend.acknowledgeEnqueue!(projectId, queueItemId),
+    isActive,
+    store,
+  });
 
 export const queueCommands: QueueFeatureCommands = {
   cancelCurrentItem: queueBackend.cancelCurrentItem,
@@ -42,15 +56,21 @@ export const createProductionQueueRealtimeRuntime = ({
 
 export const createProductionQueueRuntime = ({
   destinations,
+  ensureProjectPersisted,
   ensureTemplatesLoaded,
   history,
+  journal,
+  locks,
   modelLoads,
   nodeExecution,
   workflowRuns,
 }: {
   destinations: QueueResultDestinationPort;
+  ensureProjectPersisted?(projectId: string): Promise<'ready' | 'refused' | 'retry'>;
   ensureTemplatesLoaded: () => void;
   history: QueueHistoryPort;
+  journal?: QueueRunJournalPort;
+  locks?: QueueRunLockPort;
   modelLoads: QueueModelLoadPort;
   nodeExecution: QueueNodeExecutionPort;
   workflowRuns?: QueueWorkflowRunSink;
@@ -58,8 +78,11 @@ export const createProductionQueueRuntime = ({
   createQueueRuntime({
     backend: queueBackend,
     destinations,
+    ensureProjectPersisted,
     ensureTemplatesLoaded,
     history,
+    journal,
+    locks,
     modelLoads,
     nodeExecution,
     workflowRuns,

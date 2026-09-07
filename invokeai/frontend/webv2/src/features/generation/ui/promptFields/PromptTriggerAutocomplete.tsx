@@ -143,7 +143,6 @@ const AutocompleteOption = ({
       aria-selected={isActive}
       bg={isActive ? 'bg.emphasized' : undefined}
       color="fg"
-      cursor="pointer"
       fontSize="xs"
       id={id}
       px="2"

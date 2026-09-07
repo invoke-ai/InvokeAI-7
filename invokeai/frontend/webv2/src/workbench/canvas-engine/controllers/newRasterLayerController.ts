@@ -1,4 +1,12 @@
-import type { CanvasDocumentContractV2, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
+import type { CanvasDocumentContractV3, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
+import type { CanvasCommandRefusal } from '@workbench/canvas-engine/document/commandRefusal';
+import type { CanvasNodeInsertionAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
+import type { LayerStackKind } from '@workbench/canvas-engine/document/layerStacks';
+import type {
+  CanvasEditConcurrency,
+  CanvasTransactionOutcome,
+  SubsetOf,
+} from '@workbench/canvas-engine/editConcurrency';
 import type { History } from '@workbench/canvas-engine/history/history';
 import type { CanvasProjectMutation } from '@workbench/canvas-engine/mutationContracts';
 import type { LayerCacheStore, PreparedLayerCacheReplacement } from '@workbench/canvas-engine/render/layerCache';
@@ -6,24 +14,26 @@ import type { RasterBackend, RasterSurface } from '@workbench/canvas-engine/rend
 import type { SelectionState } from '@workbench/canvas-engine/selection/selectionState';
 import type { Rect, Vec2 } from '@workbench/canvas-engine/types';
 
+import { getDocumentLayer, isNodeAbsent } from '@workbench/canvas-engine/document/documentIndex';
 import { isEmpty, roundOut, transformBounds } from '@workbench/canvas-engine/math/rect';
 import { liftSelectedPixels } from '@workbench/canvas-engine/selection/floatingSelection';
 import { layerMatrix } from '@workbench/canvas-engine/tools/moveHitTest';
 
-export type NewRasterLayerResult = { status: 'created'; layerId: string } | { status: 'busy' | 'empty' | 'missing' };
+export type NewRasterLayerResult =
+  | { status: 'created'; layerId: string }
+  | { status: SubsetOf<CanvasTransactionOutcome, 'busy'> | SubsetOf<CanvasCommandRefusal, 'missing'> | 'empty' };
 
-export interface NewRasterLayerControllerOptions<Permit> {
+export interface NewRasterLayerControllerOptions {
+  readonly concurrency: CanvasEditConcurrency;
   readonly backend: RasterBackend;
   readonly layers: LayerCacheStore;
   readonly selection: SelectionState;
   readonly history: History;
-  readonly getDocument: () => CanvasDocumentContractV2 | null;
-  readonly getReducerDocument: () => CanvasDocumentContractV2 | null;
-  readonly capturePermit: () => Permit | null;
-  readonly isPermitCurrent: (permit: Permit) => boolean;
-  readonly isGestureActive: () => boolean;
+  readonly getDocument: () => CanvasDocumentContractV3 | null;
+  readonly getReducerDocument: () => CanvasDocumentContractV3 | null;
   readonly endBurst: () => void;
   readonly createLayerId: () => string;
+  readonly captureInsertionAnchor: (stack: LayerStackKind, aboveId: string | null) => CanvasNodeInsertionAnchor;
   readonly preparePixels: (layerId: string, rect: Rect, pixels: RasterSurface) => PreparedLayerCacheReplacement;
   readonly installPrepared: (prepared: PreparedLayerCacheReplacement) => void;
   readonly dispatchPrepared: (
@@ -47,18 +57,18 @@ export interface NewRasterLayerControllerOptions<Permit> {
  * The new layer is inserted directly above the active one, which is where the
  * user is looking, and becomes the selection.
  */
-export class NewRasterLayerController<Permit> {
+export class NewRasterLayerController {
   private disposed = false;
 
-  constructor(private readonly deps: NewRasterLayerControllerOptions<Permit>) {}
+  constructor(private readonly deps: NewRasterLayerControllerOptions) {}
 
   /**
    * Inserts `pixels` as a new paint layer covering `rect` (document space).
    * `pixels` is consumed as-is — the caller owns getting it into document space.
    */
   insert(rect: Rect, pixels: RasterSurface, name: string, label: string): NewRasterLayerResult {
-    const permit = this.deps.capturePermit();
-    if (this.disposed || !permit || this.deps.isGestureActive()) {
+    const permit = this.deps.concurrency.capturePermit();
+    if (this.disposed || !permit || this.deps.concurrency.isGestureActive()) {
       return { status: 'busy' };
     }
     const document = this.deps.getDocument();
@@ -87,31 +97,29 @@ export class NewRasterLayerController<Permit> {
       type: 'raster',
     };
 
-    // Above the active layer: index 0 is top-most, so "above" is one index lower.
-    const activeIndex = document.layers.findIndex((candidate) => candidate.id === document.selectedLayerId);
-    const insertIndex = activeIndex >= 0 ? activeIndex : 0;
+    const anchor = this.deps.captureInsertionAnchor('raster', document.selectedLayerId);
     const previousSelectedLayerId = document.selectedLayerId;
 
     const apply = (): void => {
       const prepared = this.deps.preparePixels(layerId, rect, pixels);
       this.deps.dispatchPrepared(
         {
-          add: { index: insertIndex, layers: [layer] },
+          add: [{ anchor, nodes: [layer] }],
           enabledUpdates: [],
           selectedLayerId: layerId,
           type: 'applyCanvasLayerStackMutation',
         },
         () =>
           this.deps.getReducerDocument()?.selectedLayerId === layerId &&
-          this.deps.getReducerDocument()?.layers.some((candidate) => candidate === layer) === true,
+          getDocumentLayer(this.deps.getReducerDocument(), layer.id) === layer,
         () =>
           this.deps.getDocument()?.selectedLayerId === layerId &&
-          this.deps.getDocument()?.layers.some((candidate) => candidate === layer) === true
+          getDocumentLayer(this.deps.getDocument(), layer.id) === layer
       );
       this.deps.installPrepared(prepared);
     };
 
-    if (!this.deps.isPermitCurrent(permit)) {
+    if (!this.deps.concurrency.isPermitCurrent(permit)) {
       return { status: 'busy' };
     }
     apply();
@@ -130,10 +138,10 @@ export class NewRasterLayerController<Permit> {
           },
           () =>
             this.deps.getReducerDocument()?.selectedLayerId === previousSelectedLayerId &&
-            this.deps.getReducerDocument()?.layers.some((candidate) => candidate.id === layerId) === false,
+            isNodeAbsent(this.deps.getReducerDocument(), layerId),
           () =>
             this.deps.getDocument()?.selectedLayerId === previousSelectedLayerId &&
-            this.deps.getDocument()?.layers.some((candidate) => candidate.id === layerId) === false
+            isNodeAbsent(this.deps.getDocument(), layerId)
         ),
     });
     return { layerId, status: 'created' };
@@ -145,7 +153,7 @@ export class NewRasterLayerController<Permit> {
    */
   liftSelectionToLayer(name: string, label: string): NewRasterLayerResult {
     const document = this.deps.getDocument();
-    const layer = document?.layers.find((candidate) => candidate.id === document.selectedLayerId);
+    const layer = getDocumentLayer(document, document?.selectedLayerId);
     const mask = this.deps.selection.mask();
     const entry = layer ? this.deps.layers.get(layer.id) : undefined;
     if (!document || !layer || !mask || !entry || isEmpty(entry.rect)) {

@@ -9,6 +9,7 @@ import type {
 
 import { ChakraProvider } from '@chakra-ui/react';
 import { system } from '@theme/system';
+import { closeWorkbenchSettings, settingsDialogStore } from '@workbench/settings/settingsDialogStore';
 import i18next from 'i18next';
 import { MapIcon, TagsIcon } from 'lucide-react';
 import { act } from 'react';
@@ -19,9 +20,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 /**
  * A floated widget renders bare inside this window, so its header controls
  * only exist here — the map's label and selection toggles used to disappear on
- * float. The window mounts the widget's own actions and nothing else: the
- * frame-level chrome (settings, the overflow menu, the float control) is
- * replaced by this bar's shade/maximize/dock buttons.
+ * float. The window mounts widget actions and the shared settings gear, with
+ * its own shade/maximize/dock controls replacing the frame's layout controls.
  */
 
 const windowMocks = vi.hoisted(() => ({
@@ -33,20 +33,26 @@ const windowMocks = vi.hoisted(() => ({
   setFloatingMode: vi.fn(),
 }));
 
+const project = {
+  id: 'project-1',
+  widgetInstances: {
+    'image-map-instance': {
+      createdAt: 0,
+      id: 'image-map-instance',
+      state: { values: {} },
+      typeId: 'image-map',
+    },
+  },
+  widgetRegions: { center: { activeInstanceId: null, instanceIds: [] } },
+};
+
 vi.mock('@workbench/WorkbenchContext', () => ({
-  useActiveProjectSelector: (selector: (project: unknown) => unknown) =>
-    selector({
-      id: 'project-1',
-      widgetInstances: {
-        'image-map-instance': {
-          createdAt: 0,
-          id: 'image-map-instance',
-          state: { values: {} },
-          typeId: 'image-map',
-        },
-      },
-      widgetRegions: { center: { activeInstanceId: null, instanceIds: [] } },
-    }),
+  useActiveProjectSelector: (selector: (project: unknown) => unknown) => selector(project),
+  useActiveProjectId: () => project.id,
+  useWorkbenchQueries: () => ({
+    getProject: (projectId: string) => (projectId === project.id ? project : null),
+    isActiveProject: (projectId: string) => projectId === project.id,
+  }),
   useWorkbenchCommands: () => ({ widgets: windowMocks }),
 }));
 
@@ -63,9 +69,8 @@ vi.mock('./createWidgetRuntime', () => ({ useWidgetRuntime: () => ({}) }));
 
 import { FloatingWidgetWindow } from './FloatingWidgetWindow';
 
-// `settingsSection` and `headerMenu` are what separate the widget's own
-// actions from the full header cluster: were the window to mount the `actions`
-// slot instead, the settings gear and the overflow trigger would appear here.
+// The floating slot includes settings, while the overflow menu belongs to the
+// full docked header cluster.
 const manifest = {
   allowFloating: true,
   allowedRegions: ['center', 'left', 'right'],
@@ -73,7 +78,7 @@ const manifest = {
   icon: MapIcon,
   id: 'image-map',
   label: () => 'Image Map',
-  settingsSection: 'image-map',
+  settings: { id: 'imageMap', label: 'Image Map', fields: [], load: () => Promise.resolve({ Field: () => null }) },
   version: 1,
 } as unknown as WidgetManifest;
 
@@ -130,6 +135,7 @@ await i18n.use(initReactI18next).init({
         widgets: {
           floating: { dock: 'Dock to panel', maximize: 'Maximize', move: 'Move {{label}} window', shade: 'Shade' },
           labels: { imageMap: 'Image Map' },
+          settingsLabel: '{{label}} settings',
         },
       },
     },
@@ -159,6 +165,7 @@ const renderWindow = async (floatingState: FloatingWidgetState = state) => {
 };
 
 beforeEach(() => {
+  closeWorkbenchSettings();
   windowMocks.actionsRegion = null;
   windowMocks.useFailingWidget = false;
   windowMocks.dockFloating.mockClear();
@@ -184,15 +191,28 @@ describe('FloatingWidgetWindow chrome', () => {
     expect(windowMocks.actionsRegion).toBe('floating');
   });
 
-  it('leaves the frame-level chrome to the window, which carries its own', async () => {
+  it('keeps one shared settings gear without duplicating the window layout controls', async () => {
     await renderWindow();
 
-    // The manifest has a settings section and the implementation a header
-    // menu, so the full actions cluster would put both in this bar.
-    expect(host?.querySelector('button[aria-label*="settings"]')).toBeNull();
+    expect(host?.querySelectorAll('button[aria-label="Image Map settings"]')).toHaveLength(1);
     expect(host?.querySelector('button[aria-label*="actions"]')).toBeNull();
     expect(host?.querySelector('button[aria-label="Float Window"]')).toBeNull();
     expect(host?.querySelector<HTMLButtonElement>('button[aria-label="Dock to panel"]')).not.toBeNull();
+  });
+
+  it('opens settings for the floating widget instance and remembers its gear for focus restoration', async () => {
+    await renderWindow();
+    const gear = host!.querySelector<HTMLButtonElement>('button[aria-label="Image Map settings"]')!;
+    await act(async () => {
+      gear.click();
+      await Promise.resolve();
+    });
+    expect(settingsDialogStore.getSnapshot()).toMatchObject({
+      isOpen: true,
+      sectionId: 'imageMap',
+      target: { instanceId: 'image-map-instance', projectId: 'project-1' },
+    });
+    expect(settingsDialogStore.getSnapshot().returnFocus).toBe(gear);
   });
 
   it('keeps the window usable when the widget implementation fails to load', async () => {
@@ -238,6 +258,7 @@ describe('FloatingWidgetWindow chrome', () => {
     await renderWindow({ ...state, mode: 'shaded' });
 
     expect(host?.querySelector('button[aria-label="Toggle cluster labels"]')).not.toBeNull();
+    expect(host?.querySelector('button[aria-label="Image Map settings"]')).not.toBeNull();
     expect(host?.querySelector('[data-testid="map-body"]')).toBeNull();
   });
 

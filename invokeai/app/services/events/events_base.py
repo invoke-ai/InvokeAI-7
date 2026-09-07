@@ -80,11 +80,14 @@ class EventServiceBase:
         message: str,
         percentage: float | None = None,
         image: "ProgressImage | None" = None,
-    ) -> None:
-        """Emitted at periodically during an invocation"""
-        self.dispatch(
-            InvocationProgressEvent.build(queue_item, invocation.get_event_invocation(), message, percentage, image)
+        revision: int | None = None,
+    ) -> InvocationProgressEvent:
+        """Emitted periodically during an invocation. Returns the event so the caller can retain it."""
+        event = InvocationProgressEvent.build(
+            queue_item, invocation.get_event_invocation(), message, percentage, image, revision
         )
+        self.dispatch(event)
+        return event
 
     def emit_invocation_complete(
         self, queue_item: "SessionQueueItem", invocation: "BaseInvocation", output: "BaseInvocationOutput"

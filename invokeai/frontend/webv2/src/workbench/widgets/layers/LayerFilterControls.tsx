@@ -20,7 +20,6 @@ import { useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
 const SELECT_POSITIONING_DOWN = { placement: 'bottom-end', sameWidth: false } as const;
-const SELECT_POSITIONING_UP = { placement: 'top-end', sameWidth: false } as const;
 const SPANDREL_MODEL_TYPES: ModelTaxonomyType[] = ['spandrel_image_to_image'];
 
 interface LayerFilterControlsProps {
@@ -28,35 +27,23 @@ interface LayerFilterControlsProps {
   settings: Record<string, unknown>;
   disabled: boolean;
   focusFilter: boolean;
-  variant?: LayerFilterControlsVariant;
+  /** Which controls to render; the context toolbar shows the type in its bar and the parameters in its More menu. */
+  parts?: 'all' | 'params' | 'type';
   onFilterTypeChange(value: string): void;
   onSettingsChange(value: Record<string, unknown>): void;
 }
 
-type LayerFilterControlsVariant = 'operation' | 'property';
-
-export const getLayerFilterControlPolicy = (variant: LayerFilterControlsVariant) =>
-  variant === 'operation'
-    ? ({
-        controlMinH: undefined,
-        controlSize: 'xs',
-        fieldOrientation: 'horizontal',
-        fieldW: { enum: '13rem', filter: '11rem', model: '16rem', number: '17rem', string: '13rem' },
-        modelSize: 'xs',
-        positioning: SELECT_POSITIONING_UP,
-        showFilterLabel: false,
-        showNumberStepper: false,
-      } as const)
-    : ({
-        controlMinH: undefined,
-        controlSize: 'xs',
-        fieldOrientation: 'vertical',
-        fieldW: undefined,
-        modelSize: 'xs',
-        positioning: SELECT_POSITIONING_DOWN,
-        showFilterLabel: true,
-        showNumberStepper: true,
-      } as const);
+/** The pane form is the one consumer left; the toolbar's horizontal variant died with it. */
+export const getLayerFilterControlPolicy = () =>
+  ({
+    controlMinH: undefined,
+    controlSize: 'xs',
+    fieldOrientation: 'vertical',
+    modelSize: 'xs',
+    positioning: SELECT_POSITIONING_DOWN,
+    showFilterLabel: true,
+    showNumberStepper: true,
+  }) as const;
 
 export const LayerFilterControls = ({
   disabled,
@@ -64,8 +51,8 @@ export const LayerFilterControls = ({
   focusFilter,
   onFilterTypeChange,
   onSettingsChange,
+  parts = 'all',
   settings,
-  variant = 'property',
 }: LayerFilterControlsProps) => {
   const { t } = useTranslation();
   const definition = getFilterDefinition(filterType);
@@ -80,8 +67,7 @@ export const LayerFilterControls = ({
     [t]
   );
   const filterValue = useMemo(() => [filterType], [filterType]);
-  const policy = getLayerFilterControlPolicy(variant);
-  const filterFieldW = policy.fieldW?.filter;
+  const policy = getLayerFilterControlPolicy();
   const filterTriggerProps = useMemo(
     () => ({ autoFocus: focusFilter, minH: policy.controlMinH }),
     [focusFilter, policy.controlMinH]
@@ -117,26 +103,24 @@ export const LayerFilterControls = ({
 
   return (
     <>
-      {policy.showFilterLabel ? (
-        <Field label={t('widgets.layers.control.filter')} w={filterFieldW}>
-          {filterSelect}
-        </Field>
+      {parts === 'params' ? null : policy.showFilterLabel ? (
+        <Field label={t('widgets.layers.control.filter')}>{filterSelect}</Field>
       ) : (
-        <Box flexShrink="0" w={filterFieldW}>
-          {filterSelect}
-        </Box>
+        <Box flexShrink="0">{filterSelect}</Box>
       )}
-      {definition?.params.map((param) => (
-        <FilterParamField
-          key={param.key}
-          disabled={disabled}
-          param={param}
-          policy={policy}
-          settings={settings}
-          value={settings[param.key]}
-          onChange={handleSettingChange}
-        />
-      ))}
+      {parts === 'type'
+        ? null
+        : definition?.params.map((param) => (
+            <FilterParamField
+              key={param.key}
+              disabled={disabled}
+              param={param}
+              policy={policy}
+              settings={settings}
+              value={settings[param.key]}
+              onChange={handleSettingChange}
+            />
+          ))}
     </>
   );
 };
@@ -247,7 +231,7 @@ const FilterParamField = ({ disabled, param, policy, settings, value, onChange }
 
   if (param.kind === 'enum' && enumCollection) {
     return (
-      <Field label={label} orientation={policy.fieldOrientation} w={policy.fieldW?.enum}>
+      <Field label={label} orientation={policy.fieldOrientation}>
         <Select
           aria-label={label}
           collection={enumCollection}
@@ -266,7 +250,7 @@ const FilterParamField = ({ disabled, param, policy, settings, value, onChange }
   if (param.kind === 'model') {
     const model = isSpandrelModelIdentifier(value) ? (value as { key: string }) : null;
     return (
-      <Field label={label} orientation={policy.fieldOrientation} required w={policy.fieldW?.model}>
+      <Field label={label} orientation={policy.fieldOrientation} required>
         <ModelSelect
           disabled={disabled}
           invalid={!model}
@@ -282,7 +266,7 @@ const FilterParamField = ({ disabled, param, policy, settings, value, onChange }
 
   if (param.kind === 'string') {
     return (
-      <Field label={label} orientation={policy.fieldOrientation} w={policy.fieldW?.string}>
+      <Field label={label} orientation={policy.fieldOrientation}>
         <Input
           disabled={disabled}
           minH={policy.controlMinH}
@@ -299,7 +283,7 @@ const FilterParamField = ({ disabled, param, policy, settings, value, onChange }
   }
 
   return (
-    <Field label={label} orientation={policy.fieldOrientation} w={policy.fieldW?.number}>
+    <Field label={label} orientation={policy.fieldOrientation}>
       <HStack gap="2">
         <Slider
           aria-label={labelAria}

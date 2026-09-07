@@ -121,7 +121,52 @@ describe('marqueeTool: drag → commit', () => {
     expect(h.commits[0]!.path).toEqual({ d: ellipsePathData({ height: 20, width: 40, x: 0, y: 0 }) });
   });
 
-  it('resolves the boolean op from the modifiers held at release', () => {
+  it('shapes with a modifier pressed mid-drag without changing the op', () => {
+    const h = createHarness();
+    const tool = createMarqueeTool();
+
+    down(tool, h.ctx, pointer(10, 10));
+    move(tool, h.ctx, pointer(40, 30, { shift: true }));
+    up(tool, h.ctx, pointer(40, 30, { shift: true }));
+
+    expect(h.commits[0]!.op).toBe('replace');
+    expect(h.commits[0]!.bounds).toEqual({ height: 30, width: 30, x: 10, y: 10 });
+  });
+
+  it('adds with shift held before the press, without constraining the rect', () => {
+    const h = createHarness();
+    const tool = createMarqueeTool();
+
+    drag(tool, h.ctx, pointer(10, 10, { shift: true }), pointer(40, 30, { shift: true }));
+
+    expect(h.commits[0]!.op).toBe('add');
+    expect(h.commits[0]!.bounds).toEqual({ height: 20, width: 30, x: 10, y: 10 });
+  });
+
+  it('lets an op key released mid-drag shape the rect when pressed again', () => {
+    const h = createHarness();
+    const tool = createMarqueeTool();
+
+    down(tool, h.ctx, pointer(10, 10, { shift: true }));
+    move(tool, h.ctx, pointer(20, 15));
+    move(tool, h.ctx, pointer(40, 30, { shift: true }));
+    up(tool, h.ctx, pointer(40, 30, { shift: true }));
+
+    expect(h.commits[0]!.op).toBe('add');
+    expect(h.commits[0]!.bounds).toEqual({ height: 30, width: 30, x: 10, y: 10 });
+  });
+
+  it('subtracts with alt held before the press, without drawing from the center', () => {
+    const h = createHarness();
+    const tool = createMarqueeTool();
+
+    drag(tool, h.ctx, pointer(10, 10, { alt: true }), pointer(40, 30, { alt: true }));
+
+    expect(h.commits[0]!.op).toBe('subtract');
+    expect(h.commits[0]!.bounds).toEqual({ height: 20, width: 30, x: 10, y: 10 });
+  });
+
+  it('resolves the boolean op from the modifiers held at the press', () => {
     const cases: [{ shift?: boolean; alt?: boolean }, string][] = [
       [{ shift: true }, 'add'],
       [{ alt: true }, 'subtract'],

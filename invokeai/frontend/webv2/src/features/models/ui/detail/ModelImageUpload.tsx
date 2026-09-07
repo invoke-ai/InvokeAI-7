@@ -90,7 +90,6 @@ const ModelImageUploadForModel = ({ model, onError, onUpdated }: ModelImageUploa
       bg={isDropActive ? 'accent.muted' : 'bg.emphasized'}
       borderStyle={hasImage ? 'solid' : 'dashed'}
       boxSize="24"
-      cursor="pointer"
       flexShrink={0}
       isOver={isDropActive}
       overflow="hidden"

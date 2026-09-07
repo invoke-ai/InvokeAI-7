@@ -3,18 +3,36 @@ import type { GalleryBoard } from '@features/gallery/core/types';
 import type { AccountScope } from '@platform/state/accountLifecycle';
 
 import { accountLifecycle, captureAccountScope } from '@platform/state/accountLifecycle';
-import { QueryClient, type InfiniteData } from '@tanstack/react-query';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { InfiniteQueryObserver, QueryClient, type InfiniteData } from '@tanstack/react-query';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { ALL_READABLE_BOARDS_ID } from './backend';
-import { canonicalizeGalleryItemsFilter, galleryKeys } from './queries';
+import {
+  ALL_READABLE_BOARDS_ID,
+  hydrateGalleryDateBoardItemPage,
+  listGalleryDateBoardItemNames,
+  listGalleryItems,
+} from './backend';
+import {
+  canonicalizeGalleryItemsFilter,
+  galleryItemsInfiniteOptions,
+  galleryKeys,
+  type GalleryItemsFilter,
+} from './queries';
 import {
   getGalleryItemBoardIdsFromCaches,
+  getGalleryItemStarredFromCaches,
   invalidateGallery,
   invalidateGalleryItems,
   patchGalleryBoardCaches,
   patchGalleryItemCaches,
 } from './queryCache';
+
+vi.mock('./backend', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  hydrateGalleryDateBoardItemPage: vi.fn(),
+  listGalleryDateBoardItemNames: vi.fn(),
+  listGalleryItems: vi.fn(),
+}));
 
 type GalleryItemsData = InfiniteData<GalleryItemsPage, number>;
 
@@ -73,16 +91,8 @@ const createData = (pages: GalleryItem[][]): GalleryItemsData => {
   };
 };
 
-const getItemsKey = (boardId: string, owner: AccountScope = captureAccountScope(), starredFirst = false) =>
-  galleryKeys.items(
-    owner,
-    canonicalizeGalleryItemsFilter({
-      boardId,
-      galleryView: 'images',
-      searchTerm: '',
-      starredFirst,
-    })
-  );
+const getItemsKey = (boardId: string, owner: AccountScope = captureAccountScope()) =>
+  galleryKeys.items(owner, canonicalizeGalleryItemsFilter({ boardId, galleryView: 'images', searchTerm: '' }));
 
 const getData = (client: QueryClient, queryKey: ReturnType<typeof getItemsKey>): GalleryItemsData => {
   const data = client.getQueryData<GalleryItemsData>(queryKey);
@@ -139,10 +149,41 @@ describe('Gallery item cache patches', () => {
     expect(rolledBack.pages[0]?.items[1]).toBe(samePageUntouched);
   });
 
-  it('patches star state immediately when the active list sorts starred items first', () => {
+  it('drops a starred item from the unstarred listing window and decrements its total', () => {
     const client = createClient();
     const target = createItem('target.png');
-    const key = getItemsKey('board-1', captureAccountScope(), true);
+    const other = createItem('other.png');
+    const key = galleryKeys.items(
+      captureAccountScope(),
+      canonicalizeGalleryItemsFilter({ boardId: 'board-1', galleryView: 'images', searchTerm: '', starred: false })
+    );
+
+    client.setQueryData(key, createData([[target, other]]));
+    const rollback = patchGalleryItemCaches(client, {
+      kind: 'star',
+      result: getResult([{ kind: 'image', name: target.name }]),
+      starred: true,
+    });
+
+    expect(getData(client, key).pages[0]).toEqual({ items: [other], total: 1 });
+
+    rollback();
+
+    expect(getData(client, key).pages[0]).toEqual({ items: [target, other], total: 2 });
+  });
+
+  it('flips star state in place in a ranked window, which lists by similarity rather than by flag', () => {
+    const client = createClient();
+    const target = createItem('target.png');
+    const key = galleryKeys.items(
+      captureAccountScope(),
+      canonicalizeGalleryItemsFilter({
+        boardId: 'board-1',
+        galleryView: 'images',
+        searchTerm: '',
+        semanticQuery: { imageName: 'ref.png', kind: 'image' },
+      })
+    );
 
     client.setQueryData(key, createData([[target]]));
 
@@ -244,6 +285,110 @@ describe('Gallery item cache patches', () => {
     expect(after.pages.map((page) => page.total)).toEqual([2]);
   });
 
+  describe('starred strip entries', () => {
+    const getStripKey = (boardId: string) =>
+      galleryKeys.starredStrip(
+        captureAccountScope(),
+        canonicalizeGalleryItemsFilter({ boardId, galleryView: 'images', searchTerm: '', starred: true })
+      );
+    const getStrip = (client: QueryClient, key: ReturnType<typeof getStripKey>): GalleryItemsPage => {
+      const page = client.getQueryData<GalleryItemsPage>(key);
+
+      if (!page) {
+        throw new Error('missing strip');
+      }
+
+      return page;
+    };
+
+    it('drops an unstarred item and its count at once, and rolls the strip back', () => {
+      const client = createClient();
+      const target = createItem('target.png', 'board-1', true);
+      const other = createItem('other.png', 'board-1', true);
+      const key = getStripKey('board-1');
+      const before: GalleryItemsPage = { items: [target, other], total: 5 };
+
+      client.setQueryData(key, before);
+      const rollback = patchGalleryItemCaches(client, {
+        kind: 'star',
+        result: getResult([{ kind: 'image', name: target.name }]),
+        starred: false,
+      });
+
+      expect(getStrip(client, key)).toEqual({ items: [other], total: 4 });
+
+      rollback();
+
+      expect(getStrip(client, key)).toEqual(before);
+    });
+
+    it('leaves the strip to the refetch when an item is starred', () => {
+      const client = createClient();
+      const key = getStripKey('board-1');
+      const before: GalleryItemsPage = { items: [createItem('starred.png', 'board-1', true)], total: 1 };
+
+      client.setQueryData(key, before);
+      patchGalleryItemCaches(client, {
+        kind: 'star',
+        result: getResult([{ kind: 'image', name: 'newly-starred.png' }]),
+        starred: true,
+      });
+
+      expect(getStrip(client, key)).toEqual(before);
+    });
+
+    it('removes deleted items and items moved off the board, keeping ones moved within all-boards views', () => {
+      const client = createClient();
+      const deleted = createItem('deleted.png', 'board-1', true);
+      const moved = createItem('moved.png', 'board-1', true, 'video');
+      const kept = createItem('kept.png', 'board-1', true);
+      const boardKey = getStripKey('board-1');
+      const allKey = getStripKey(ALL_READABLE_BOARDS_ID);
+
+      client.setQueryData(boardKey, { items: [deleted, moved, kept], total: 3 });
+      client.setQueryData(allKey, { items: [deleted, moved, kept], total: 3 });
+      patchGalleryItemCaches(client, { kind: 'delete', result: getResult([{ kind: 'image', name: deleted.name }]) });
+      patchGalleryItemCaches(client, {
+        boardId: 'board-2',
+        kind: 'move',
+        result: getResult([{ kind: 'video', name: moved.name }]),
+      });
+
+      expect(getStrip(client, boardKey)).toEqual({ items: [kept], total: 1 });
+      expect(getStrip(client, allKey)).toEqual({ items: [{ ...moved, boardId: 'board-2' }, kept], total: 2 });
+    });
+
+    it('drops an unstarred item from a starred-only listing window too, not just the strip', () => {
+      const client = createClient();
+      const target = createItem('target.png', 'board-1', true);
+      const other = createItem('other.png', 'board-1', true);
+      const key = galleryKeys.items(
+        captureAccountScope(),
+        canonicalizeGalleryItemsFilter({ boardId: 'board-1', galleryView: 'images', searchTerm: '', starred: true })
+      );
+
+      client.setQueryData(key, createData([[target, other]]));
+      patchGalleryItemCaches(client, {
+        kind: 'star',
+        result: getResult([{ kind: 'image', name: target.name }]),
+        starred: false,
+      });
+
+      expect(getData(client, key).pages[0]).toEqual({ items: [other], total: 1 });
+    });
+
+    it('reads prior starred flags from the strip for rollback', () => {
+      const client = createClient();
+      const stripOnly = createItem('strip-only.png', 'board-1', true);
+
+      client.setQueryData(getStripKey('board-1'), { items: [stripOnly], total: 1 });
+
+      expect(getGalleryItemStarredFromCaches(client, [{ kind: 'image', name: stripOnly.name }])).toEqual(
+        new Map([['image:strip-only.png', true]])
+      );
+    });
+  });
+
   it('does not let rollback clobber a later concurrent cache update', () => {
     const client = createClient();
     const target = createItem('target.png');
@@ -312,6 +457,7 @@ describe('getGalleryItemBoardIdsFromCaches', () => {
 const createBoard = (id: string, overrides: Partial<GalleryBoard> = {}): GalleryBoard => ({
   archived: false,
   assetCount: 0,
+  assetVideoCount: 0,
   id,
   imageCount: 1,
   kind: 'board',
@@ -380,6 +526,221 @@ describe('patchGalleryBoardCaches', () => {
     patchGalleryBoardCaches(client, 'board-1', { archived: true });
 
     expect(client.getQueryData(key)).toBe(boards);
+  });
+});
+
+describe('Gallery window rebuild', () => {
+  const listFilter: GalleryItemsFilter = {
+    boardId: 'board-1',
+    galleryView: 'images',
+    searchTerm: '',
+  };
+  const dateFilter: GalleryItemsFilter = { ...listFilter, boardId: 'by_date:2026-07-25' };
+
+  const createPageItems = (prefix: string, count: number): GalleryItem[] =>
+    Array.from({ length: count }, (_, index) => createItem(`${prefix}-${index}.png`));
+
+  const observeItems = (client: QueryClient, filter: GalleryItemsFilter): (() => void) =>
+    new InfiniteQueryObserver(client, galleryItemsInfiniteOptions(filter)).subscribe(() => undefined);
+
+  /** A two-page stale window under `filter`, ready for an invalidation pass. */
+  const setUpStaleWindow = (filter: GalleryItemsFilter = listFilter, pages?: GalleryItem[][]) => {
+    const client = createClient();
+    const key = galleryKeys.items(captureAccountScope(), canonicalizeGalleryItemsFilter(filter));
+    const windowPages = pages ?? [createPageItems('stale-a', 60), createPageItems('stale-b', 60)];
+
+    client.setQueryData(key, createData(windowPages));
+
+    return { client, key, pages: windowPages };
+  };
+
+  beforeEach(() => {
+    accountLifecycle.activate('gallery-window-rebuild-test');
+    vi.mocked(hydrateGalleryDateBoardItemPage).mockReset();
+    vi.mocked(listGalleryDateBoardItemNames).mockReset();
+    vi.mocked(listGalleryItems).mockReset();
+  });
+
+  it('refreshes an observed multi-page window with one span request, leaving it fresh and in place', async () => {
+    const { client, key } = setUpStaleWindow();
+    const unsubscribe = observeItems(client, listFilter);
+
+    vi.mocked(listGalleryItems).mockResolvedValue({ items: createPageItems('fresh', 100), total: 100 });
+
+    await invalidateGalleryItems(client);
+
+    expect(vi.mocked(listGalleryItems)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(listGalleryItems)).toHaveBeenCalledWith(expect.objectContaining({ limit: 120, offset: 0 }));
+
+    const data = getData(client, key);
+
+    expect(data.pageParams).toEqual([0, 60]);
+    expect(data.pages[0]?.items).toHaveLength(60);
+    expect(data.pages[1]?.items).toHaveLength(40);
+    expect(data.pages[0]?.items[0]?.name).toBe('fresh-0.png');
+    expect(data.pages.every((page) => page.total === 100)).toBe(true);
+    expect(client.getQueryState(key)?.isInvalidated).toBe(false);
+    unsubscribe();
+  });
+
+  it('still collapses an unobserved multi-page window to its anchor page', async () => {
+    const { client, key, pages } = setUpStaleWindow();
+
+    await invalidateGalleryItems(client);
+
+    const data = getData(client, key);
+
+    expect(vi.mocked(listGalleryItems)).not.toHaveBeenCalled();
+    expect(data.pageParams).toEqual([0]);
+    expect(data.pages[0]?.items).toBe(pages[0]);
+    expect(client.getQueryState(key)?.isInvalidated).toBe(true);
+  });
+
+  it('falls back to the collapse when the span request fails', async () => {
+    const { client, key, pages } = setUpStaleWindow();
+    const unsubscribe = observeItems(client, listFilter);
+
+    vi.mocked(listGalleryItems).mockRejectedValue(new Error('offline'));
+
+    await invalidateGalleryItems(client);
+
+    const data = getData(client, key);
+
+    expect(vi.mocked(listGalleryItems)).toHaveBeenCalledWith(expect.objectContaining({ limit: 120, offset: 0 }));
+    expect(data.pageParams).toEqual([0]);
+    expect(data.pages[0]?.items).toBe(pages[0]);
+    unsubscribe();
+  });
+
+  it('discards a rebuild that lost to a concurrent cache write', async () => {
+    const { client, key } = setUpStaleWindow();
+    const concurrentPage = [createItem('concurrent.png')];
+    let unsubscribe: (() => void) | undefined;
+
+    vi.mocked(listGalleryItems).mockImplementation(() => {
+      client.setQueryData(key, createData([concurrentPage, [createItem('concurrent-b.png')]]));
+      // Deactivate so the trailing invalidation cannot refetch through this mock.
+      unsubscribe?.();
+
+      return Promise.resolve({ items: createPageItems('fresh', 120), total: 120 });
+    });
+    unsubscribe = observeItems(client, listFilter);
+
+    await invalidateGalleryItems(client);
+
+    const data = getData(client, key);
+
+    expect(data.pageParams).toEqual([0]);
+    expect(data.pages[0]?.items.map((item) => item.name)).toEqual(['concurrent.png']);
+    expect(client.getQueryState(key)?.isInvalidated).toBe(true);
+  });
+
+  it('rebuilds an observed date-board window through a fresh name list and one span hydration', async () => {
+    const { client, key } = setUpStaleWindow(dateFilter);
+    const unsubscribe = observeItems(client, dateFilter);
+
+    vi.mocked(listGalleryDateBoardItemNames).mockResolvedValue({
+      items: createPageItems('fresh', 130).map(({ kind, name }) => ({ kind, name })),
+      total: 130,
+    });
+    vi.mocked(hydrateGalleryDateBoardItemPage).mockResolvedValue({
+      items: createPageItems('fresh', 120),
+      total: 130,
+    });
+
+    await invalidateGalleryItems(client);
+
+    expect(vi.mocked(listGalleryDateBoardItemNames)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(hydrateGalleryDateBoardItemPage)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(hydrateGalleryDateBoardItemPage)).toHaveBeenCalledWith(
+      expect.objectContaining({ limit: 120, offset: 0, total: 130 })
+    );
+
+    const data = getData(client, key);
+
+    expect(data.pageParams).toEqual([0, 60]);
+    expect(data.pages[1]?.items).toHaveLength(60);
+    expect(client.getQueryState(key)?.isInvalidated).toBe(false);
+    unsubscribe();
+  });
+
+  it('bails to the collapse when a page fetch starts during the span read', async () => {
+    const { client, key } = setUpStaleWindow();
+    const observer = new InfiniteQueryObserver(client, galleryItemsInfiniteOptions(listFilter));
+    const unsubscribe = observer.subscribe(() => undefined);
+
+    vi.mocked(listGalleryItems).mockImplementation(({ limit, offset }) => {
+      if (limit === 120) {
+        // A scroll mid-span-read snapshotted the old pages; a swap would be
+        // clobbered when it resolves, so the rebuild must stand down.
+        void observer.fetchNextPage();
+
+        return Promise.resolve({ items: createPageItems('fresh', 120), total: 200 });
+      }
+
+      if (offset === 120) {
+        return new Promise(() => {
+          // The mid-rebuild scroll's page never lands.
+        });
+      }
+
+      return Promise.resolve({ items: createPageItems(`page-${offset}`, 60), total: 200 });
+    });
+
+    await invalidateGalleryItems(client);
+
+    const data = getData(client, key);
+
+    expect(data.pages.flatMap((page) => page.items.map((item) => item.name))).not.toContain('fresh-0.png');
+    expect(data.pageParams).toEqual([0]);
+    unsubscribe();
+  });
+
+  it('keeps one empty page when the span comes back empty', async () => {
+    const { client, key } = setUpStaleWindow();
+    const unsubscribe = observeItems(client, listFilter);
+
+    vi.mocked(listGalleryItems).mockResolvedValue({ items: [], total: 0 });
+
+    await invalidateGalleryItems(client);
+
+    const data = getData(client, key);
+
+    expect(data.pageParams).toEqual([0]);
+    expect(data.pages).toEqual([{ items: [], total: 0 }]);
+    expect(client.getQueryState(key)?.isInvalidated).toBe(false);
+    unsubscribe();
+  });
+
+  it('collapses a video-heavy name-hydrated window instead of re-reading every video', async () => {
+    const createVideos = (prefix: string): GalleryItem[] =>
+      Array.from({ length: 60 }, (_, index) => createItem(`${prefix}-${index}.mp4`, 'board-1', false, 'video'));
+    const { client, key } = setUpStaleWindow(dateFilter, [createVideos('stale-a'), createVideos('stale-b')]);
+    const unsubscribe = observeItems(client, dateFilter);
+
+    vi.mocked(listGalleryDateBoardItemNames).mockResolvedValue({ items: [], total: 0 });
+    vi.mocked(hydrateGalleryDateBoardItemPage).mockResolvedValue({ items: [], total: 0 });
+
+    await invalidateGalleryItems(client);
+
+    // The collapsed window may refetch one page; the span-sized re-read must not happen.
+    expect(vi.mocked(hydrateGalleryDateBoardItemPage)).not.toHaveBeenCalledWith(
+      expect.objectContaining({ limit: 120 })
+    );
+    expect(getData(client, key).pageParams).toEqual([0]);
+    unsubscribe();
+  });
+
+  it('does not re-read a window watched only by a disabled observer', async () => {
+    const { client, key } = setUpStaleWindow();
+    const observer = new InfiniteQueryObserver(client, { ...galleryItemsInfiniteOptions(listFilter), enabled: false });
+    const unsubscribe = observer.subscribe(() => undefined);
+
+    await invalidateGalleryItems(client);
+
+    expect(vi.mocked(listGalleryItems)).not.toHaveBeenCalled();
+    expect(getData(client, key).pageParams).toEqual([0]);
+    unsubscribe();
   });
 });
 

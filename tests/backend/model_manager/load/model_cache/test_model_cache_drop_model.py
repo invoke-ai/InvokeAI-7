@@ -172,6 +172,12 @@ def test_drop_model_updates_stats_and_fires_callbacks(cache: ModelCache):
 def test_make_room_returns_clear_result_and_updates_current_cache_usage(cache: ModelCache):
     cache.put("model-a", torch.nn.Linear(4, 4))
     cache.put("model-b", torch.nn.Linear(4, 4))
+    # Release the admission grace the way a real loader does — make_room spares entries still
+    # awaiting their first lock (the loader's handle keeps them alive; evicting frees nothing).
+    for key in ("model-a", "model-b"):
+        record = cache.get(key)
+        cache.lock(record, None)
+        cache.unlock(record)
     cache.stats = CacheStats()
     before_bytes = cache._get_ram_in_use()
 

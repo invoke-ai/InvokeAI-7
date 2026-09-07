@@ -73,6 +73,12 @@ export const WorkflowLibraryGrid = ({
     }
 
     const handleScroll = () => {
+      // A grid that doesn't overflow cannot have been scrolled near its
+      // bottom by anyone; a scroll event there is measurement noise.
+      if (viewport.scrollHeight <= viewport.clientHeight) {
+        return;
+      }
+
       const remaining = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
 
       if (remaining <= viewport.clientHeight * NEAR_BOTTOM_VIEWPORTS) {

@@ -1,6 +1,6 @@
 import { Box, Icon, Popover, Portal, Slider, Stack, Text } from '@chakra-ui/react';
 import { useWorkflowPreferencesSelector } from '@features/workflow/ui/WorkflowUiContext';
-import { IconButton, Toolbar, ToolbarButton, ToolbarSeparator, Tooltip } from '@platform/ui';
+import { IconButton, PopoverContent, Toolbar, ToolbarButton, ToolbarSeparator, Tooltip } from '@platform/ui';
 import { useReactFlow } from '@xyflow/react';
 import {
   BlendIcon,
@@ -93,8 +93,8 @@ export const EditorToolbar = ({
                   `Popover.Trigger asChild` would clone that component's Tooltip
                   wrapper instead of the button. Size is load bearing — `Toolbar`
                   is a column Stack, so it stretches every sibling to the widest
-                  child, and one `sm` button here squared off the whole strip at
-                  36px while the rest stayed 32px tall. */}
+                  child, and one `sm` button here once widened the whole strip
+                  past the `xs` squares. */}
               <IconButton
                 aria-label="Node opacity"
                 aria-pressed={nodeOpacity < 1}
@@ -107,7 +107,7 @@ export const EditorToolbar = ({
           </Tooltip>
           <Portal>
             <Popover.Positioner>
-              <Popover.Content w="12rem">
+              <PopoverContent w="12rem">
                 <Popover.Body p="3">
                   <Stack gap="1.5">
                     <Text color="fg.muted" fontSize="2xs" fontWeight="600">
@@ -130,7 +130,7 @@ export const EditorToolbar = ({
                     </Slider.Root>
                   </Stack>
                 </Popover.Body>
-              </Popover.Content>
+              </PopoverContent>
             </Popover.Positioner>
           </Portal>
         </Popover.Root>

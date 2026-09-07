@@ -238,6 +238,38 @@ describe('parseOpenApiToTemplates', () => {
     expect(templates.denoise?.outputs.latents?.type.name).toBe('LatentsField');
     expect(templates.add?.outputs.value?.type.name).toBe('IntegerField');
   });
+
+  it('preserves output scopes and hidden scheduler outputs', () => {
+    const parsed = parseOpenApiToTemplates({
+      components: {
+        schemas: {
+          ForInvocation: {
+            class: 'invocation',
+            output: { $ref: '#/components/schemas/ForOutput' },
+            properties: { type: { default: 'for' } },
+          },
+          ForOutput: {
+            class: 'output',
+            properties: {
+              item: { field_kind: 'output', output_scope: 'iteration', type: 'string' },
+              output_collection: {
+                field_kind: 'output',
+                output_scope: 'final',
+                type: 'array',
+                items: { type: 'string' },
+              },
+              output: { field_kind: 'output', ui_hidden: true, type: 'string' },
+              type: { default: 'for_output' },
+            },
+          },
+        },
+      },
+    });
+
+    expect(parsed.for?.outputs.item?.outputScope).toBe('iteration');
+    expect(parsed.for?.outputs.output_collection?.outputScope).toBe('final');
+    expect(parsed.for?.outputs.output?.uiHidden).toBe(true);
+  });
 });
 
 describe('parseFieldType', () => {

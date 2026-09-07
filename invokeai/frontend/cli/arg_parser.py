@@ -13,6 +13,8 @@ _config_file_help = r"""Path to the invokeai.yaml configuration file. If omitted
 _parser = ArgumentParser(description="Invoke Studio", formatter_class=RawTextHelpFormatter)
 _parser.add_argument("--root", type=str, help=_root_help)
 _parser.add_argument("--config", dest="config_file", type=str, help=_config_file_help)
+_webv2_help = r"""Serve the webv2 frontend (invokeai/frontend/webv2) instead of the legacy web frontend. The webv2 frontend must be built first (make frontendv2-build)."""
+_parser.add_argument("--webv2", action="store_true", help=_webv2_help)
 _parser.add_argument("--version", action="version", version=__version__, help="Displays the version and exits.")
 
 

@@ -16,7 +16,7 @@ const mocks = vi.hoisted(() => ({
   selectBoard: vi.fn(),
   selectItem: vi.fn(),
   setPage: vi.fn(),
-  settings: { imageOrderDir: 'DESC', paginationMode: 'paginated', starredFirst: true } as Record<string, unknown>,
+  settings: { imageOrderDir: 'DESC', paginationMode: 'paginated' } as Record<string, unknown>,
   setView: vi.fn(),
 }));
 
@@ -138,14 +138,13 @@ const namesWithImageAt = (imageName: string, index: number) => ({
     kind: 'image',
     name: position === index ? imageName : `other-${String(position)}.png`,
   })),
-  starredCount: 0,
   total: index + 1,
 });
 
 beforeEach(() => {
   mocks.cachedPageCount = null;
   mocks.galleryValues = {};
-  mocks.settings = { imageOrderDir: 'DESC', paginationMode: 'paginated', starredFirst: true };
+  mocks.settings = { imageOrderDir: 'DESC', paginationMode: 'paginated' };
   // Empty boards read as "still loading" — the reveal gives the board the
   // benefit of the doubt, matching the gallery's own fallback rules.
   mocks.fetchBoards.mockResolvedValue([]);
@@ -154,7 +153,7 @@ beforeEach(() => {
 
     return Promise.resolve();
   });
-  mocks.fetchNames.mockResolvedValue({ items: [], starredCount: 0, total: 0 });
+  mocks.fetchNames.mockResolvedValue({ items: [], total: 0 });
   mocks.registerImageCluster.mockReturnValue('cluster-key-1');
 });
 
@@ -212,7 +211,7 @@ describe('useMapSelection', () => {
     });
 
     it('lands the gallery on the page holding the image in paginated mode', async () => {
-      mocks.settings = { imageOrderDir: 'DESC', paginationMode: 'paginated', starredFirst: true };
+      mocks.settings = { imageOrderDir: 'DESC', paginationMode: 'paginated' };
       mocks.resolveMany.mockResolvedValue([{ boardId: 'board-a', image_name: 'deep.png', imageCategory: 'general' }]);
       mocks.fetchNames.mockResolvedValue(namesWithImageAt('deep.png', 130));
       await mount();
@@ -227,7 +226,7 @@ describe('useMapSelection', () => {
     });
 
     it("resolves the image's position against the listing the reveal lands on", async () => {
-      mocks.settings = { imageOrderDir: 'ASC', paginationMode: 'paginated', starredFirst: false };
+      mocks.settings = { imageOrderDir: 'ASC', paginationMode: 'paginated' };
       mocks.resolveMany.mockResolvedValue([{ boardId: 'board-a', image_name: 'a.png', imageCategory: 'general' }]);
       mocks.fetchNames.mockResolvedValue(namesWithImageAt('a.png', 0));
       await mount();
@@ -239,7 +238,7 @@ describe('useMapSelection', () => {
         galleryView: 'images',
         orderDir: 'ASC',
         searchTerm: '',
-        starredFirst: false,
+        starred: false,
       });
     });
 
@@ -247,7 +246,7 @@ describe('useMapSelection', () => {
       // A plain prefetch is not enough: the mounted gallery keeps the query
       // fresh, and a fresh cache short-circuits the fetch WITHOUT honoring
       // the `pages` option — the window would never grow.
-      mocks.settings = { imageOrderDir: 'DESC', paginationMode: 'infinite', starredFirst: true };
+      mocks.settings = { imageOrderDir: 'DESC', paginationMode: 'infinite' };
       mocks.resolveMany.mockResolvedValue([{ boardId: 'board-a', image_name: 'deep.png', imageCategory: 'general' }]);
       mocks.fetchNames.mockResolvedValue(namesWithImageAt('deep.png', 130));
       await mount();
@@ -261,7 +260,7 @@ describe('useMapSelection', () => {
     });
 
     it('skips the fetch when the window already covers the image', async () => {
-      mocks.settings = { imageOrderDir: 'DESC', paginationMode: 'infinite', starredFirst: true };
+      mocks.settings = { imageOrderDir: 'DESC', paginationMode: 'infinite' };
       mocks.cachedPageCount = 5;
       mocks.resolveMany.mockResolvedValue([{ boardId: 'board-a', image_name: 'deep.png', imageCategory: 'general' }]);
       mocks.fetchNames.mockResolvedValue(namesWithImageAt('deep.png', 130));
@@ -277,7 +276,7 @@ describe('useMapSelection', () => {
       // The base infinite window cannot load beyond GALLERY_MAX_ROWS, so a
       // deeper image is revealed by anchoring the window at its page instead
       // of loading toward it; the mounted gallery query fetches on its own.
-      mocks.settings = { imageOrderDir: 'DESC', paginationMode: 'infinite', starredFirst: true };
+      mocks.settings = { imageOrderDir: 'DESC', paginationMode: 'infinite' };
       mocks.resolveMany.mockResolvedValue([{ boardId: 'board-a', image_name: 'deep.png', imageCategory: 'general' }]);
       mocks.fetchNames.mockResolvedValue(namesWithImageAt('deep.png', 700));
       await mount();
@@ -296,13 +295,13 @@ describe('useMapSelection', () => {
       // unrelated screen of images.
       const names = deferred<ReturnType<typeof namesWithImageAt>>();
 
-      mocks.settings = { imageOrderDir: 'DESC', paginationMode: 'paginated', starredFirst: true };
+      mocks.settings = { imageOrderDir: 'DESC', paginationMode: 'paginated' };
       mocks.resolveMany.mockResolvedValue([{ boardId: 'board-a', image_name: 'deep.png', imageCategory: 'general' }]);
       mocks.fetchNames.mockReturnValue(names.promise);
       await mount();
 
       await flush(() => handle.click?.('deep.png'));
-      mocks.settings = { imageOrderDir: 'ASC', paginationMode: 'paginated', starredFirst: true };
+      mocks.settings = { imageOrderDir: 'ASC', paginationMode: 'paginated' };
       await flush(() => names.resolve(namesWithImageAt('deep.png', 130)));
 
       expect(mocks.setPage).not.toHaveBeenCalled();
@@ -314,7 +313,7 @@ describe('useMapSelection', () => {
       // The gallery falls back to Uncategorized for a board its boards query
       // does not list (archived with "show archived" off); landing on the
       // hidden board's page number there would jump to an unrelated page.
-      mocks.settings = { imageOrderDir: 'DESC', paginationMode: 'paginated', starredFirst: true };
+      mocks.settings = { imageOrderDir: 'DESC', paginationMode: 'paginated' };
       mocks.fetchBoards.mockResolvedValue([{ id: 'board-other' }]);
       mocks.resolveMany.mockResolvedValue([
         { boardId: 'board-archived', image_name: 'deep.png', imageCategory: 'general' },
@@ -330,7 +329,7 @@ describe('useMapSelection', () => {
     });
 
     it('keeps the page landing when the boards lookup fails', async () => {
-      mocks.settings = { imageOrderDir: 'DESC', paginationMode: 'paginated', starredFirst: true };
+      mocks.settings = { imageOrderDir: 'DESC', paginationMode: 'paginated' };
       mocks.fetchBoards.mockRejectedValue(new Error('boards endpoint down'));
       mocks.resolveMany.mockResolvedValue([{ boardId: 'board-a', image_name: 'deep.png', imageCategory: 'general' }]);
       mocks.fetchNames.mockResolvedValue(namesWithImageAt('deep.png', 130));
@@ -350,7 +349,28 @@ describe('useMapSelection', () => {
 
       await flush(() => handle.click?.('a.png'));
 
-      expect(mocks.patchValues).toHaveBeenCalledWith('gallery', { searchTerm: '', semanticImageQuery: null });
+      expect(mocks.patchValues).toHaveBeenCalledWith('gallery', {
+        searchTerm: '',
+        semanticImageQuery: null,
+        starredOnly: false,
+      });
+    });
+
+    it('reveals a starred image in the starred listing it belongs to', async () => {
+      mocks.resolveMany.mockResolvedValue([
+        { boardId: 'board-a', image_name: 'a.png', imageCategory: 'general', starred: true },
+      ]);
+      mocks.fetchNames.mockResolvedValue(namesWithImageAt('a.png', 0));
+      await mount();
+
+      await flush(() => handle.click?.('a.png'));
+
+      expect(mocks.fetchNames.mock.calls[0]?.[0].filter).toMatchObject({ boardId: 'board-a', starred: true });
+      expect(mocks.patchValues).toHaveBeenCalledWith('gallery', {
+        searchTerm: '',
+        semanticImageQuery: null,
+        starredOnly: true,
+      });
     });
 
     it('leaves the filters alone when none are active', async () => {

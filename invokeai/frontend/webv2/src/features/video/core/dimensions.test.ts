@@ -9,6 +9,7 @@ import {
   MINIMAX_H3_NUM_FRAMES_CHOICES,
   MINIMAX_H3_NUM_FRAMES_DEFAULT,
   resolveMiniMaxH3Canvas,
+  resolveMiniMaxH3ReferenceImage,
   scaleAndSnapWanDimensions,
   snapMiniMaxH3NumFrames,
   snapWanNumFrames,
@@ -147,6 +148,50 @@ describe('MiniMax H3 frame counts', () => {
     expect(snapMiniMaxH3NumFrames(0)).toBe(90);
     expect(snapMiniMaxH3NumFrames(10_000)).toBe(345);
     expect(snapMiniMaxH3NumFrames(Number.NaN)).toBe(MINIMAX_H3_NUM_FRAMES_DEFAULT);
+  });
+});
+
+describe('resolveMiniMaxH3ReferenceImage', () => {
+  // Cross-checked against the backend's own `resolve_reference_image_short_edge` +
+  // `normalize_reference_image` (the graph encodes exactly these sizes).
+  const LANDSCAPE_AREA = 1344 * 768;
+  const SQUARE_AREA = 768 * 768;
+
+  it.each([
+    // source, detail, target area, normalized size, rows
+    [1920, 1080, 'max', LANDSCAPE_AREA, 3648, 2048, 7296],
+    [1920, 1080, 'match', LANDSCAPE_AREA, 1344, 768, 1008],
+    [4032, 3024, 'max', LANDSCAPE_AREA, 2720, 2048, 5440],
+    [4032, 3024, 'match', LANDSCAPE_AREA, 1184, 896, 1036],
+    [3024, 4032, 'match', LANDSCAPE_AREA, 896, 1184, 1036],
+    [1024, 1024, 'max', LANDSCAPE_AREA, 2048, 2048, 4096],
+    [1920, 1080, 'match', SQUARE_AREA, 1024, 576, 576],
+    [1024, 1024, 'match', SQUARE_AREA, 768, 768, 576],
+  ] as const)(
+    '%sx%s at %s detail normalizes to %sx%s',
+    (width, height, detail, targetArea, expectedWidth, expectedHeight, expectedRows) => {
+      expect(resolveMiniMaxH3ReferenceImage(width, height, detail, targetArea)).toEqual({
+        dimensions: { height: expectedHeight, width: expectedWidth },
+        rows: expectedRows,
+      });
+    }
+  );
+
+  it('never scales a match-detail reference above the 2048 rule', () => {
+    const huge = resolveMiniMaxH3ReferenceImage(4000, 4000, 'match', 4096 * 4096);
+
+    expect(huge?.dimensions).toEqual({ height: 2048, width: 2048 });
+  });
+
+  it('sizes a max-detail reference without a target area', () => {
+    expect(resolveMiniMaxH3ReferenceImage(1920, 1080, 'max', null)?.rows).toBe(7296);
+  });
+
+  it('returns null when match detail has no area to match, or the source is degenerate', () => {
+    expect(resolveMiniMaxH3ReferenceImage(1920, 1080, 'match', null)).toBeNull();
+    expect(resolveMiniMaxH3ReferenceImage(1920, 1080, 'match', 0)).toBeNull();
+    expect(resolveMiniMaxH3ReferenceImage(0, 1080, 'max', LANDSCAPE_AREA)).toBeNull();
+    expect(resolveMiniMaxH3ReferenceImage(Number.NaN, 1080, 'max', LANDSCAPE_AREA)).toBeNull();
   });
 });
 

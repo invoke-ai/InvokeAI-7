@@ -325,7 +325,6 @@ export const IPAdapterControls = ({
         <Collapsible.Trigger
           alignItems="center"
           color="fg.muted"
-          cursor="pointer"
           display="flex"
           fontSize="2xs"
           fontWeight="medium"

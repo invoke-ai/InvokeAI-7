@@ -182,6 +182,13 @@ export const SystemPromptsField = ({ catalog, onSelect, selectedId }: SystemProm
   const handleSelectChange = useCallback(({ value }: { value: string[] }) => onSelect(value[0] ?? null), [onSelect]);
 
   const selectValue = useMemo(() => (selectedId ? [selectedId] : []), [selectedId]);
+  // The Select primitive renders `valueText` verbatim in the closed trigger, so
+  // it must carry the selected prompt's name — a static string would mask the
+  // selection ("None" while a prompt is active).
+  const selectedName = useMemo(
+    () => (selectedId ? (prompts.find((prompt) => prompt.id === selectedId)?.name ?? null) : null),
+    [prompts, selectedId]
+  );
 
   if (isManaging && editorTarget) {
     return (
@@ -289,7 +296,7 @@ export const SystemPromptsField = ({ catalog, onSelect, selectedId }: SystemProm
           id={selectId}
           size="xs"
           value={selectValue}
-          valueText={t('widgets.generate.systemPrompts.none')}
+          valueText={selectedName ?? t('widgets.generate.systemPrompts.none')}
           onValueChange={handleSelectChange}
         />
         <Tooltip content={t('widgets.generate.systemPrompts.manage')}>

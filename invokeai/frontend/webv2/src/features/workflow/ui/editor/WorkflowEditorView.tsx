@@ -20,6 +20,7 @@ import {
   createWorkflowId,
   getWorkflowSourceFieldType,
   getWorkflowTargetFieldType,
+  LOOP_LINKAGE_FIELD,
   validateConnection,
 } from '@features/workflow/utility';
 import { useModifierHeld } from '@platform/react/useModifierHeld';
@@ -72,6 +73,7 @@ import {
   type WorkflowFlowInstance,
 } from './flowInstanceStore';
 import { InvocationFlowNode } from './InvocationFlowNode';
+import LoopBodyBoundaryOverlay from './LoopBodyBoundaryOverlay';
 import { NodeContextMenu, type WorkflowContextMenuState } from './NodeContextMenu';
 import { NotesFlowNode } from './NotesFlowNode';
 import {
@@ -95,6 +97,7 @@ const nodeTypes: NodeTypes = {
 
 const edgeTypes: EdgeTypes = {
   default: WorkflowEdge,
+  loop_linkage: WorkflowEdge,
   step: WorkflowEdge,
 };
 
@@ -110,7 +113,9 @@ const SNAP_GRID: [number, number] = [24, 24];
 const DELETE_KEY_CODES = ['Backspace', 'Delete'];
 
 const DEFAULT_EDGE_OPTIONS = { style: { strokeWidth: 2 } };
-const DEFAULT_VIEWPORT = { x: 0, y: 0, zoom: 1 } as const;
+// A fresh graph starts clear of the floating toolbar in the left gutter, so
+// its first column's node controls are not covered before the user pans.
+const DEFAULT_VIEWPORT = { x: 56, y: 0, zoom: 1 } as const;
 
 interface WorkflowFlowModel {
   edges: WorkflowFlowEdge[];
@@ -227,6 +232,7 @@ const WorkflowFlow = ({ runtime }: { runtime: WorkflowRuntimeApi }) => {
     reduceMotion,
     themeId,
     workflowEdgeStyle,
+    workflowEdgesBehindNodes,
     workflowShowMinimap,
     workflowSnapToGrid,
     workflowValidateConnections,
@@ -235,6 +241,7 @@ const WorkflowFlow = ({ runtime }: { runtime: WorkflowRuntimeApi }) => {
       reduceMotion: preferences.reduceMotion,
       themeId: preferences.themeId,
       workflowEdgeStyle: preferences.workflowEdgeStyle,
+      workflowEdgesBehindNodes: preferences.workflowEdgesBehindNodes,
       workflowShowMinimap: preferences.workflowShowMinimap,
       workflowSnapToGrid: preferences.workflowSnapToGrid,
       workflowValidateConnections: preferences.workflowValidateConnections,
@@ -735,7 +742,10 @@ const WorkflowFlow = ({ runtime }: { runtime: WorkflowRuntimeApi }) => {
           sourceHandle: connection.sourceHandle,
           target: connection.target,
           targetHandle: connection.targetHandle,
-          type: 'default',
+          type:
+            connection.sourceHandle === LOOP_LINKAGE_FIELD && connection.targetHandle === LOOP_LINKAGE_FIELD
+              ? 'loop_linkage'
+              : 'default',
         },
         type: 'addEdge',
       });
@@ -972,12 +982,15 @@ const WorkflowFlow = ({ runtime }: { runtime: WorkflowRuntimeApi }) => {
         animation: 'dashdraw var(--wb-motion-duration-slow) linear var(--wb-motion-animation-iteration-count)',
         strokeDasharray: '5',
       },
+      // The edge layer is a stacking context of its own, so sinking it keeps
+      // every edge (including ones xyflow elevates for a selection) under nodes.
+      ...(workflowEdgesBehindNodes ? { '& .react-flow__edges': { zIndex: -1 } } : {}),
       ...(tool === 'eraser'
         ? { '& .react-flow__edge, & .react-flow__node, & .react-flow__pane': { cursor: 'crosshair' } }
         : {}),
       ...(tool === 'lasso' ? { '& .react-flow__pane': { cursor: 'crosshair' } } : {}),
     }),
-    [nodeOpacity, tool]
+    [nodeOpacity, tool, workflowEdgesBehindNodes]
   );
   const panOnDrag = useMemo(() => (tool === 'pan' ? true : [1, 2]), [tool]);
   const proOptions = useMemo(() => ({ hideAttribution: true }), []);
@@ -1035,7 +1048,7 @@ const WorkflowFlow = ({ runtime }: { runtime: WorkflowRuntimeApi }) => {
         defaultEdgeOptions={DEFAULT_EDGE_OPTIONS}
         defaultViewport={defaultViewport}
         deleteKeyCode={DELETE_KEY_CODES}
-        elevateEdgesOnSelect
+        elevateEdgesOnSelect={!workflowEdgesBehindNodes}
         edges={renderedFlowEdges}
         edgeTypes={edgeTypes}
         isValidConnection={isValidConnection}
@@ -1073,6 +1086,7 @@ const WorkflowFlow = ({ runtime }: { runtime: WorkflowRuntimeApi }) => {
           size={1.5}
           variant={BackgroundVariant.Dots}
         />
+        <LoopBodyBoundaryOverlay edges={projectGraph.edges} nodes={projectGraph.nodes} />
         <EditorToolbar
           nodeOpacity={nodeOpacity}
           tool={tool}

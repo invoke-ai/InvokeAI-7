@@ -3,9 +3,11 @@ import { useMountEffect } from '@platform/react/useMountEffect';
 import { areArraysEqual } from '@platform/state/selectors';
 import { useNavigate } from '@tanstack/react-router';
 import { resolveLaunchpadIntent } from '@workbench/launchpad/intents';
+import { useTranslation } from 'react-i18next';
 
 import type { WorkbenchSearch } from './projects/session';
 
+import { describeRefusedProject } from './projects/projectLoadRefusal';
 import {
   useWorkbenchCommands,
   useWorkbenchHasHydrated,
@@ -18,6 +20,7 @@ const HydratedSessionController = ({ search }: { search: WorkbenchSearch }) => {
   const navigate = useNavigate();
   const persistence = useWorkbenchPersistenceService();
   const projectIds = useWorkbenchSelector((snapshot) => snapshot.projects.map((project) => project.id), areArraysEqual);
+  const { t } = useTranslation();
 
   useMountEffect(() => {
     if (search.new === true) {
@@ -54,14 +57,16 @@ const HydratedSessionController = ({ search }: { search: WorkbenchSearch }) => {
     }
 
     let isCancelled = false;
-    void persistence.hydrateProjectFromServer(requestedProjectId).then((project) => {
+    void persistence.hydrateProjectFromServer(requestedProjectId).then((result) => {
       if (isCancelled) {
         return;
       }
 
-      if (project) {
+      if (result.status === 'loaded') {
         flushGenerateDrafts();
-        commands.projects.open(project);
+        commands.projects.open(result.project);
+      } else if (result.status === 'refused') {
+        commands.notifications.add({ kind: 'error', ...describeRefusedProject(result.refused, t) });
       } else {
         commands.notifications.add({
           kind: 'info',

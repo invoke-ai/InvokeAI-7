@@ -27,6 +27,23 @@ export const copyBlobToClipboard = async (blob: Blob, deps: CopyBlobToClipboardD
 type LayerAssetExportFailureStatus = Exclude<ExportBakedLayerBlobResult['status'], 'ok'>;
 type LayerAssetExportResult = { status: 'ok'; blob: Blob } | { status: LayerAssetExportFailureStatus };
 
+interface CopyLayerToClipboardDeps extends CopyBlobToClipboardDeps {
+  exportLayer(layerId: string, options: { includeDisabled: boolean }): Promise<LayerAssetExportResult>;
+}
+
+/** Bakes the layer (disabled or not) to PNG and puts it on the clipboard; a failed export reports its status. */
+export const copyLayerToClipboard = async (
+  layerId: string,
+  { exportLayer, ...clipboard }: CopyLayerToClipboardDeps
+): Promise<'ok' | LayerAssetExportFailureStatus> => {
+  const result = await exportLayer(layerId, { includeDisabled: true });
+  if (result.status !== 'ok') {
+    return result.status;
+  }
+  await copyBlobToClipboard(result.blob, clipboard);
+  return 'ok';
+};
+
 interface SaveLayerToAssetsDeps {
   exportLayer(
     layerId: string,

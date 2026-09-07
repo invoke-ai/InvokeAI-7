@@ -1,4 +1,8 @@
+import type { ModelConfig } from '@features/models/core/types';
+
 import { ChakraProvider } from '@chakra-ui/react';
+import { setModelsSnapshotForTests } from '@features/models/data/modelsStore';
+import { getModelsUiSnapshotForTests, updateModelsUi } from '@features/models/ui/uiStore';
 import { system } from '@theme/system';
 import { act, StrictMode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -16,11 +20,33 @@ import { AddModelsView } from './AddModelsView';
 
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 
+// One starter the backend marks installed by source, one it marks installed by
+// name; the library model behind each is what the row must link to.
+const INSTALLED_STARTERS = [
+  {
+    base: 'sdxl',
+    description: 'Pulled from its recorded source.',
+    is_installed: true,
+    name: 'Juggernaut XL',
+    source: 'https://example/juggernaut-xl.safetensors',
+    type: 'main',
+  },
+  {
+    base: 'sdxl',
+    description: 'Renamed after install.',
+    is_installed: true,
+    name: 'Dreamshaper XL',
+    previous_names: ['Dreamshaper'],
+    source: 'https://example/dreamshaper-xl.safetensors',
+    type: 'main',
+  },
+];
+
 vi.mock('@features/models/data/startersStore', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   ensureStartersLoaded: vi.fn(),
   useStartersSelector: (selector: (snapshot: unknown) => unknown) =>
-    selector({ error: null, response: { starter_bundles: {}, starter_models: [] }, status: 'loaded' }),
+    selector({ error: null, response: { starter_bundles: {}, starter_models: INSTALLED_STARTERS }, status: 'loaded' }),
 }));
 
 vi.mock('@features/models/data/externalProvidersStore', async (importOriginal) => ({
@@ -81,7 +107,7 @@ describe('AddModelsView search seed', () => {
     document.body.append(host);
 
     const store = await import('@features/models/ui/uiStore');
-    store.clearAddModelsSeed();
+    store.clearAddModelsSeeds();
   });
 
   afterEach(() => {
@@ -115,5 +141,43 @@ describe('AddModelsView search seed', () => {
     expect(searchBox()?.value).toBe('');
 
     await unmount();
+  });
+
+  it('links each installed starter to the library model it became', async () => {
+    setModelsSnapshotForTests({
+      models: [
+        {
+          base: 'sdxl',
+          key: 'by-source',
+          name: 'Juggernaut XL',
+          path: 'main/juggernaut-xl.safetensors',
+          source: INSTALLED_STARTERS[0]!.source,
+          type: 'main',
+        },
+        {
+          base: 'sdxl',
+          key: 'by-name',
+          name: 'Dreamshaper',
+          path: 'main/dreamshaper.safetensors',
+          source: 'https://elsewhere/dreamshaper',
+          type: 'main',
+        },
+      ] as ModelConfig[],
+      status: 'loaded',
+    });
+    await mount();
+
+    const links = [...document.querySelectorAll('button')].filter(
+      (button) => button.textContent === 'models.viewModel'
+    );
+    expect(links).toHaveLength(2);
+    for (const [index, key] of ['by-source', 'by-name'].entries()) {
+      updateModelsUi({ activeModelKey: null, activeTab: 'add' });
+      await act(() => links[index]!.click());
+      expect(getModelsUiSnapshotForTests()).toMatchObject({ activeModelKey: key, activeTab: 'details' });
+    }
+
+    await unmount();
+    setModelsSnapshotForTests({ models: [], status: 'loaded' });
   });
 });

@@ -3,7 +3,7 @@ import type { PromptTemplateRecord } from '@features/generation/data/promptTempl
 import type { PromptTemplateCatalog } from '@features/generation/ui/usePromptTemplates';
 import type { ChangeEvent } from 'react';
 
-import { Box, HStack, Input, Separator, Stack, Text } from '@chakra-ui/react';
+import { Box, HStack, Icon, Input, Separator, Stack, Text } from '@chakra-ui/react';
 import { searchCatalog } from '@features/generation/core/catalogSearch';
 import { PROMPT_TEMPLATE_PLACEHOLDER } from '@features/generation/core/promptTemplates';
 import { toPromptTemplateSnapshot } from '@features/generation/data/promptTemplates';
@@ -22,11 +22,14 @@ import { ConfirmDialog } from '@platform/ui/ConfirmDialog';
 import { Row } from '@platform/ui/Row';
 import { Scrollable } from '@platform/ui/Scrollable';
 import { Tooltip } from '@platform/ui/Tooltip';
-import { DownloadIcon, ImageIcon, PencilIcon, PlusIcon, TrashIcon, UploadIcon } from 'lucide-react';
+import { CheckIcon, DownloadIcon, ImageIcon, PencilIcon, PlusIcon, TrashIcon, UploadIcon } from 'lucide-react';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 const THUMBNAIL_SIZE = '7';
+// The rows sit on the popover's `bg.muted` surface, where the row recipe's
+// `bg.muted/60` hover is invisible — hover needs the next surface step.
+const TEMPLATE_ROW_HOVER_PROPS = { bg: 'bg.emphasized/60' };
 const TEMPLATE_THUMBNAIL_FALLBACK = (
   <Box
     alignItems="center"
@@ -386,7 +389,6 @@ const TemplateRow = ({
   return (
     <HStack align="center" gap="1" pr="1">
       <Row
-        active={isActive ? 'accent' : 'none'}
         aria-current={isActive || undefined}
         asChild
         flex="1"
@@ -395,23 +397,22 @@ const TemplateRow = ({
         minW="0"
         px="2"
         py="1.5"
-        rounded="sm"
+        rounded="control"
+        _hover={TEMPLATE_ROW_HOVER_PROPS}
       >
         <button type="button" onClick={handleApply}>
           <TemplateThumbnail template={template} />
           <Stack align="start" flex="1" gap="0" minW="0">
-            <Text
-              as="span"
-              color={isActive ? 'accent.contrast' : 'fg'}
-              fontSize="xs"
-              fontWeight={isActive ? '600' : '400'}
-            >
+            <Text as="span" fontSize="xs" fontWeight={isActive ? '600' : '400'}>
               {template.name}
             </Text>
-            <Text as="span" color={isActive ? 'accent.contrast' : 'fg.muted'} fontFamily="mono" fontSize="2xs" truncate>
+            <Text as="span" color="fg.muted" fontFamily="mono" fontSize="2xs" truncate>
               {summary}
             </Text>
           </Stack>
+          {/* The applied marker: a check, not a filled row — the popover
+              surface stays quiet and the accent stays an accent. */}
+          {isActive ? <Icon as={CheckIcon} boxSize="3.5" color="accent.fg" flexShrink={0} /> : null}
         </button>
       </Row>
       {onEdit ? (

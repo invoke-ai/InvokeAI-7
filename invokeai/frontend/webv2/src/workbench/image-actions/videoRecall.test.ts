@@ -283,6 +283,7 @@ describe('buildVideoRecallSettings', () => {
     expect(result?.mediaNames).toEqual({
       firstFrameName: 'first.png',
       lastFrameName: null,
+      references: [],
       sourceVideoName: null,
       sourceVideoTrim: null,
     });
@@ -402,5 +403,201 @@ describe('buildVideoRecallSettings', () => {
         models: catalog,
       })
     ).toBeNull();
+  });
+});
+
+describe('ref2va reference recall', () => {
+  const catalog = [WAN_T2V, WAN_I2V, h3Model(), LIGHTNING_HIGH, LIGHTNING_LOW];
+  const currentValues = { ...createDefaultVideoWidgetValues([h3Model()]) };
+  const h3RefMetadata = (extra: Record<string, unknown> = {}): Record<string, unknown> => ({
+    generation_mode: 'minimax_h3_ref2v',
+    height: 768,
+    minimax_h3_references: [
+      { conditioning: 'video_audio', end_frame: 47, kind: 'video', start_frame: 2, video_name: 'ref.mp4' },
+      { detail: 'match', image_name: 'ref.png', kind: 'image' },
+      { kind: 'video' },
+    ],
+    model: { base: 'minimax-h3', key: 'h3-main', name: 'MiniMax H3', type: 'main' },
+    num_frames: 124,
+    positive_prompt: 'a red fox',
+    seed: 7,
+    steps: 4,
+    width: 1344,
+    ...extra,
+  });
+
+  it('recognizes the ref2v generation mode as video metadata', () => {
+    expect(isVideoGenerationMetadata({ generation_mode: 'minimax_h3_ref2v' })).toBe(true);
+  });
+
+  it('reports the ordered references, tolerantly skipping malformed entries', () => {
+    const result = buildVideoRecallSettings({
+      currentValues,
+      kind: 'all',
+      metadata: h3RefMetadata(),
+      models: catalog,
+    });
+
+    expect(result?.fields).toContain('media');
+    expect(result?.mediaNames.references).toEqual([
+      { conditioning: 'video_audio', kind: 'video', name: 'ref.mp4', trim: { endFrame: 47, startFrame: 2 } },
+      { detail: 'match', kind: 'image', name: 'ref.png' },
+    ]);
+    // References replace the frame/source slots.
+    expect(result?.mediaNames.firstFrameName).toBeNull();
+    expect(result?.values.references).toEqual([]);
+  });
+
+  it("clears the panel's held media so the executor re-hydrates references on a clean slate", () => {
+    const holding = {
+      ...currentValues,
+      firstFrameImage: { height: 4, image_name: 'held.png', width: 4 },
+    };
+    const result = buildVideoRecallSettings({
+      currentValues: holding,
+      kind: 'all',
+      metadata: h3RefMetadata(),
+      models: catalog,
+    });
+
+    expect(result?.values.firstFrameImage).toBeNull();
+  });
+});
+
+describe('model-position recall shapes', () => {
+  const install = h3Model();
+  const checkpoint: MainModelConfig = {
+    base: 'minimax-h3',
+    format: 'checkpoint',
+    key: 'h3-ref2va-ckpt',
+    name: 'MiniMax H3 Ref2VA Transformer (int8, pruned)',
+    type: 'main',
+    variant: 'ref2va',
+  };
+  const ref2vTurbo = {
+    base: 'minimax-h3',
+    key: 'ref2v-turbo',
+    name: 'MiniMax H3 Ref2V Turbo LoRA',
+    type: 'lora' as const,
+  };
+  const catalog = [install, checkpoint, ref2vTurbo];
+  const currentValues = { ...createDefaultVideoWidgetValues([install]) };
+
+  it('promotes a legacy transformer-override recording onto the model slot before deriving the accelerator', () => {
+    // Pre model-positions metadata: the Diffusers install as `model`, the
+    // checkpoint as an override extra. The 4-step Ref2V Turbo derivation only
+    // succeeds if the promote lands first — it needs the ref2va variant.
+    const result = buildVideoRecallSettings({
+      currentValues,
+      kind: 'all',
+      metadata: {
+        generation_mode: 'minimax_h3_ref2v',
+        loras: [{ model: { key: ref2vTurbo.key }, weight: 1 }],
+        minimax_h3_references: [{ detail: 'max', image_name: 'ref.png', kind: 'image' }],
+        minimax_h3_transformer_model: { key: checkpoint.key },
+        model: { key: install.key },
+        num_frames: 124,
+        steps: 4,
+      },
+      models: catalog,
+    });
+
+    expect(result?.values.model?.key).toBe(checkpoint.key);
+    expect(result?.values.componentSourceModel?.key).toBe(install.key);
+    expect(result?.values.h3TransformerModel).toBeNull();
+    expect(result?.values.modelKey).toBe(checkpoint.key);
+    expect(result?.values).toMatchObject({ acceleratorEnabled: true, acceleratorLoraKeys: [ref2vTurbo.key] });
+  });
+
+  it('recalls the recorded component source for a checkpoint-main recording', () => {
+    const result = buildVideoRecallSettings({
+      currentValues,
+      kind: 'all',
+      metadata: {
+        generation_mode: 'minimax_h3_ref2v',
+        minimax_h3_component_source: { key: install.key },
+        minimax_h3_references: [{ detail: 'max', image_name: 'ref.png', kind: 'image' }],
+        model: { key: checkpoint.key },
+        num_frames: 124,
+      },
+      models: catalog,
+    });
+
+    expect(result?.fields).toContain('model');
+    expect(result?.values.model?.key).toBe(checkpoint.key);
+    expect(result?.values.componentSourceModel?.key).toBe(install.key);
+  });
+  it('promotes the recorded transformer even when the recorded install itself is gone', () => {
+    // The transformer defines the run; the panel's current model (a
+    // checkpoint) stands in for the missing install and must not suppress the
+    // promote — pre-fix the references were dropped as unsupported.
+    const panelCheckpoint: MainModelConfig = {
+      base: 'minimax-h3',
+      format: 'checkpoint',
+      key: 'h3-fl2va-ckpt',
+      name: 'MiniMax H3 FL2VA Transformer (int8)',
+      type: 'main',
+      variant: 'fl2va',
+    };
+    const result = buildVideoRecallSettings({
+      currentValues: { ...currentValues, model: panelCheckpoint, modelKey: panelCheckpoint.key },
+      kind: 'all',
+      metadata: {
+        generation_mode: 'minimax_h3_ref2v',
+        minimax_h3_references: [{ detail: 'max', image_name: 'ref.png', kind: 'image' }],
+        minimax_h3_transformer_model: { key: checkpoint.key },
+        model: { key: 'h3-install-gone' },
+        num_frames: 124,
+      },
+      models: [panelCheckpoint, checkpoint],
+    });
+
+    expect(result?.values.model?.key).toBe(checkpoint.key);
+    expect(result?.fields).toContain('model');
+    expect(result?.values.h3TransformerModel).toBeNull();
+    expect(result?.mediaNames.references).toHaveLength(1);
+  });
+
+  it('drops a corrupt transformer-override recording that names a non-main', () => {
+    const result = buildVideoRecallSettings({
+      currentValues,
+      kind: 'all',
+      metadata: {
+        generation_mode: 'minimax_h3_ref2v',
+        minimax_h3_references: [{ detail: 'max', image_name: 'ref.png', kind: 'image' }],
+        minimax_h3_transformer_model: { key: ref2vTurbo.key },
+        model: { key: install.key },
+        num_frames: 124,
+      },
+      models: catalog,
+    });
+
+    expect(result?.values.model?.key).toBe(install.key);
+    expect(result?.values.h3TransformerModel).toBeNull();
+  });
+
+  it('reports the source video alongside the references for a reference-extend recording', () => {
+    const result = buildVideoRecallSettings({
+      currentValues,
+      kind: 'all',
+      metadata: {
+        generation_mode: 'minimax_h3_ref2v',
+        minimax_h3_component_source: { key: install.key },
+        minimax_h3_references: [
+          { conditioning: 'video_audio', end_frame: 400, kind: 'video', start_frame: 260, video_name: 'long.mp4' },
+        ],
+        model: { key: checkpoint.key },
+        num_frames: 124,
+        source_video: { video_name: 'long.mp4' },
+        source_video_end_frame: 400,
+        source_video_start_frame: 10,
+      },
+      models: catalog,
+    });
+
+    expect(result?.fields).toContain('media');
+    expect(result?.mediaNames.references).toHaveLength(1);
+    expect(result?.mediaNames.sourceVideoName).toBe('long.mp4');
+    expect(result?.mediaNames.sourceVideoTrim).toEqual({ endFrame: 400, startFrame: 10 });
   });
 });

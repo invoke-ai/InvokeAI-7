@@ -14,11 +14,11 @@
  *
  * ### Collection skips history, remapping does not
  *
- * Queue entries embed whole canvas snapshots and the gallery keeps sixty recents, so bundling
- * everything turns a working project into a multi-gigabyte archive; {@link collectLiveAssetRefs}
- * walks only what the project needs to open. {@link remapAssetRefs} walks everything, because a
- * renamed asset's references must all follow — including the history we chose not to bundle, which
- * would otherwise point at the pre-import name forever.
+ * Legacy queue entries embedded whole canvas snapshots and the gallery keeps sixty recents, so
+ * bundling everything could turn a working project into a multi-gigabyte archive;
+ * {@link collectLiveAssetRefs} walks only what the project needs to open. {@link remapAssetRefs}
+ * walks everything, because imported legacy documents may still contain history while their asset
+ * references are being rewritten before canonical serialization removes it.
  */
 
 /** Keys whose string values name an image. */
@@ -270,17 +270,22 @@ const readGalleryRecentImageName = (projectDocument: Record<string, unknown>): s
   return null;
 };
 
+/** Leaves of a raw forest in preorder, tolerating malformed nodes. */
+const rawLeaves = (nodes: unknown): Record<string, unknown>[] =>
+  Array.isArray(nodes)
+    ? nodes.flatMap((node) => (!isRecord(node) ? [] : node.type === 'group' ? rawLeaves(node.children) : [node]))
+    : [];
+
 const readTopmostCanvasImageName = (projectDocument: Record<string, unknown>): string | null => {
   const canvas = projectDocument.canvas;
 
-  if (!isRecord(canvas) || !isRecord(canvas.document) || !Array.isArray(canvas.document.layers)) {
+  if (!isRecord(canvas) || !isRecord(canvas.document) || !isRecord(canvas.document.stacks)) {
     return null;
   }
 
-  // Layer index 0 is the top-most layer, which is the one a person would call
-  // "what this project looks like".
-  for (const layer of canvas.document.layers) {
-    if (!isRecord(layer) || !isRecord(layer.source)) {
+  // The top-most raster leaf is the one a person would call "what this project looks like".
+  for (const layer of rawLeaves(canvas.document.stacks.raster)) {
+    if (!isRecord(layer.source)) {
       continue;
     }
 

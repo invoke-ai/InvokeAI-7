@@ -34,15 +34,26 @@ class AudioExtractionError(RuntimeError):
     """ffmpeg failed to decode an audio track for a reason other than 'no audio stream'."""
 
 
-def extract_audio_pcm(video_path: Path) -> tuple[np.ndarray, int] | None:
+def extract_audio_pcm(video_path: Path, *, float_pcm: bool = False) -> tuple[np.ndarray, int] | None:
     """Decode ``video_path``'s audio track to float32 stereo PCM at its native sample rate.
 
     Returns ``(samples, sample_rate)`` with ``samples`` shaped ``(2, n)`` in [-1, 1], or
     ``None`` when the container has no audio stream. Mono sources are upmixed to stereo by
-    ffmpeg; multi-channel sources are downmixed.
+    ffmpeg; multi-channel sources are downmixed (MiniMax H3's reference implementation would
+    reject >2 channels instead — an accepted divergence).
+
+    With ``float_pcm=True`` the decode goes through ``pcm_f32le`` instead of ``pcm_s16le``,
+    preserving the container's float samples without an int16 quantization. MiniMax H3
+    reference conditioning requires this: upstream conditions on the decoder's float output.
     """
-    with tempfile.NamedTemporaryFile(prefix="invokeai_audio_extract_", suffix=".wav", delete=False) as tmp:
-        wav_path = Path(tmp.name)
+    suffix = ".f32" if float_pcm else ".wav"
+    with tempfile.NamedTemporaryFile(prefix="invokeai_audio_extract_", suffix=suffix, delete=False) as tmp:
+        out_path = Path(tmp.name)
+    codec_args = (
+        # Raw float32 interleaved stereo: the stdlib `wave` module cannot read float WAVs,
+        # so the float branch writes a headerless `f32le` stream and notes the rate below.
+        ["-acodec", "pcm_f32le", "-f", "f32le"] if float_pcm else ["-acodec", "pcm_s16le"]
+    )
     try:
         try:
             proc = subprocess.run(
@@ -56,9 +67,8 @@ def extract_audio_pcm(video_path: Path) -> tuple[np.ndarray, int] | None:
                     "-vn",
                     "-ac",
                     "2",
-                    "-acodec",
-                    "pcm_s16le",
-                    str(wav_path),
+                    *codec_args,
+                    str(out_path),
                 ],
                 capture_output=True,
                 timeout=600,
@@ -74,7 +84,14 @@ def extract_audio_pcm(video_path: Path) -> tuple[np.ndarray, int] | None:
             raise AudioExtractionError(
                 f"ffmpeg could not extract audio from {video_path.name}: {stderr.strip()[-500:]}"
             )
-        with wave.open(str(wav_path), "rb") as wav:
+        if float_pcm:
+            rate = _probe_audio_sample_rate(video_path)
+            raw = out_path.read_bytes()
+            if not raw or rate is None:
+                return None
+            data = np.frombuffer(raw, dtype=np.float32).reshape(-1, 2).T
+            return np.ascontiguousarray(data), rate
+        with wave.open(str(out_path), "rb") as wav:
             rate = wav.getframerate()
             n = wav.getnframes()
             raw = wav.readframes(n)
@@ -83,7 +100,38 @@ def extract_audio_pcm(video_path: Path) -> tuple[np.ndarray, int] | None:
         data = np.frombuffer(raw, dtype=np.int16).reshape(-1, 2).T
         return data.astype(np.float32) / 32768.0, rate
     finally:
-        wav_path.unlink(missing_ok=True)
+        out_path.unlink(missing_ok=True)
+
+
+def _probe_audio_sample_rate(video_path: Path) -> int | None:
+    """The native sample rate of ``video_path``'s FIRST audio stream, or None without one.
+
+    A raw ``f32le`` dump carries no header, so the rate is read off the container instead —
+    and the float decode pins ``-map 0:a:0`` precisely so this banner-order lookup and the
+    decoded stream agree. The bundled ffmpeg binary ships without ffprobe; parsing the
+    stream banner ffmpeg prints for an input with no output is the established fallback.
+    """
+    try:
+        proc = subprocess.run(
+            [_ffmpeg_exe(), "-hide_banner", "-i", str(video_path)],
+            capture_output=True,
+            timeout=60,
+        )
+    except subprocess.TimeoutExpired as e:
+        raise AudioExtractionError(f"ffmpeg timed out probing audio in {video_path.name}") from e
+    # ffmpeg exits non-zero for probe-only invocations; the stream info is on stderr, e.g.
+    # "Stream #0:1[0x2](und): Audio: aac (LC) ..., 44100 Hz, stereo, ...".
+    stderr = proc.stderr.decode("utf-8", errors="replace")
+    for line in stderr.splitlines():
+        if "Audio:" in line and "Hz" in line:
+            for token in line.split(","):
+                token = token.strip()
+                if token.endswith("Hz"):
+                    try:
+                        return int(token[:-2].strip())
+                    except ValueError:
+                        continue
+    return None
 
 
 def resample_linear(samples: np.ndarray, num_output_samples: int) -> np.ndarray:

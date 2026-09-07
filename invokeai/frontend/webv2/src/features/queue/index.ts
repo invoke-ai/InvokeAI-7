@@ -43,6 +43,7 @@ export {
   isBackendSubmittableSourceId,
   shouldSubmitPendingQueueItem,
 } from './core/submissionRules';
+export { MAX_QUEUE_BATCH_ITEMS } from './core/promptBatch';
 export {
   buildProjectQueueItemOriginPrefix,
   buildQueueItemOrigin,
@@ -58,5 +59,11 @@ export {
   type InvocationStartedEvent,
   type QueueItemStatusChangedEvent,
 } from './data/events';
-export { createProductionQueueRuntime, getQueueReadModelOptions, queueCommands } from './publicApi';
+export {
+  createProductionQueueRuntime,
+  createProductionQueueReceiptAcknowledgements,
+  getQueueReadModelOptions,
+  queueCommands,
+} from './publicApi';
+export type { QueueRunLockPort } from './runtime';
 export { hasPendingWorkflowQueueItem } from './ui/queueViewModel';

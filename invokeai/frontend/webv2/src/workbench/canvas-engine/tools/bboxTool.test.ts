@@ -1,9 +1,11 @@
-import type { CanvasDocumentContractV2 } from '@workbench/canvas-engine/contracts';
+import type { CanvasDocumentContractV3 } from '@workbench/canvas-engine/contracts';
 import type { Tool, ToolContext } from '@workbench/canvas-engine/tools/tool';
 import type { PointerInput, Vec2 } from '@workbench/canvas-engine/types';
 import type { Viewport } from '@workbench/canvas-engine/viewport';
 import type { CanvasProjectMutation } from '@workbench/canvasProjectMutations';
 
+import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
+import { createTestInsertionAnchorCapture } from '@workbench/canvas-engine/document/insertionAnchors.testStub';
 import { createEngineStores } from '@workbench/canvas-engine/engineStores';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -12,13 +14,13 @@ import { createBboxTool } from './bboxTool';
 // Grid-aligned start frame (grid 8) so a zero-net-move gesture is a true no-op.
 const bbox = { height: 96, width: 96, x: 16, y: 16 };
 
-const makeDoc = (): CanvasDocumentContractV2 => ({
+const makeDoc = (): CanvasDocumentContractV3 => ({
   background: 'transparent',
   bbox: { ...bbox },
   height: 512,
-  layers: [],
+  stacks: stacksFrom([]),
   selectedLayerId: null,
-  version: 2,
+  version: 3,
   width: 512,
 });
 
@@ -57,16 +59,20 @@ interface Harness {
   ctx: ToolContext;
   dispatched: CanvasProjectMutation[];
   commits: StructuralCommit[];
-  previewOf: () => CanvasDocumentContractV2['bbox'] | null;
+  previewOf: () => CanvasDocumentContractV3['bbox'] | null;
 }
 
-const createHarness = (doc: CanvasDocumentContractV2): Harness => {
+const createHarness = (doc: CanvasDocumentContractV3): Harness => {
   const dispatched: CanvasProjectMutation[] = [];
   const commits: StructuralCommit[] = [];
   const stores = createEngineStores();
   const ctx: ToolContext = {
     backend: null as never,
-    commitStructural: (label, forward, inverse) => commits.push({ forward, inverse, label }),
+    commitStructural: (label, forward, inverse) => {
+      commits.push({ forward, inverse, label });
+      return { status: 'committed' as const };
+    },
+    captureInsertionAnchor: createTestInsertionAnchorCapture('p'),
     createLayerId: () => 'x',
     createPath2D: (d) => ({ d }) as unknown as Path2D,
     dispatch: (action) => dispatched.push(action),

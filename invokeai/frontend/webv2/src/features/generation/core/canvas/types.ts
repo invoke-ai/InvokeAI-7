@@ -19,6 +19,16 @@ export interface Rect {
 export type CanvasInfillMethod = 'patchmatch' | 'lama' | 'cv2' | 'color' | 'tile';
 export type CanvasCoherenceMode = 'Gaussian Blur' | 'Box Blur' | 'Staged';
 
+/** Legacy "Scale Before Processing": how the bbox maps to the size the model denoises at. */
+export type CanvasScaleMethod = 'none' | 'auto' | 'manual';
+
+export interface CanvasScalingSettings {
+  method: CanvasScaleMethod;
+  /** The manual processing size; a null side falls back to the bbox's. */
+  width: number | null;
+  height: number | null;
+}
+
 export interface CanvasCompositingSettings {
   infillMethod: CanvasInfillMethod;
   infillTileSize: number;
@@ -75,6 +85,8 @@ export interface CompileCanvasGraphInput {
   strength: number;
   /** Resolved infill / coherence / mask-blur knobs and output-compositing policy. */
   compositing: CanvasCompositingSettings;
+  /** Processing-size policy; absent means the bbox snapped to the model grid. */
+  scaling?: CanvasScalingSettings;
   /**
    * Valid, already-resolved control layers (each with its own uploaded composite
    * image name). The executor filters + composites these; the compiler only

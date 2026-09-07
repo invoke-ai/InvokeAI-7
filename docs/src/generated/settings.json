@@ -855,7 +855,7 @@
     },
     {
       "category": "IMAGE INDEX",
-      "default": false,
+      "default": true,
       "description": "Maintain a semantic embedding index of gallery images, used by the image map and semantic search features.",
       "env_var": "INVOKEAI_IMAGE_INDEX_ENABLED",
       "literal_values": [],

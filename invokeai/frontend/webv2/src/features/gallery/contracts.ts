@@ -35,8 +35,12 @@ export {
 } from './core/items';
 export { GALLERY_RECENT_IMAGE_LIMIT, getBoundedRecentImages } from './core/recentImages';
 export {
+  gallerySemanticReferenceKey,
   getImageCluster,
   parseGallerySemanticReference,
+  stripInfiniteWindowAnchor,
+  stripSessionScopedGallerySearch,
+  stripUnresolvableGallerySearch,
   registerImageCluster,
   type GallerySemanticReference,
 } from './core/semanticImageQuery';
@@ -55,6 +59,7 @@ export {
   getGalleryPage,
   getGallerySelectedImagePage,
   getGallerySelectedImageQuery,
+  getGallerySemanticImageQuery,
   getGalleryPlaceholderInsertionIndex,
   type GalleryCurrentItem,
   type GalleryGenerationSequence,
@@ -63,6 +68,7 @@ export {
   type GallerySelectedImageQuery,
 } from './ui/galleryStateView';
 export {
+  getGalleryDeletionSuccessor,
   getPersistedSelectedGalleryItemKeys,
   getSelectedGalleryImageFromValues,
   getSelectedGalleryItemFromValues,

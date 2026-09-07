@@ -238,7 +238,7 @@ export const WorkflowRequirementsList = ({ errorMessage, resolved, onFindModel }
       ) : null}
       {!errorMessage && resolved === null
         ? Array.from({ length: SKELETON_ROW_COUNT }, (_unused, index) => (
-            <Skeleton key={index} data-requirement-placeholder h="3" rounded="sm" variant="pulse" w="24" />
+            <Skeleton key={index} data-requirement-placeholder h="3" rounded="sm" w="24" />
           ))
         : null}
       {!errorMessage && resolved !== null && resolved.length > 0 ? (

@@ -1,5 +1,5 @@
 import type {
-  CanvasDocumentContractV2,
+  CanvasDocumentContractV3,
   CanvasImageRef,
   CanvasLayerContract,
   CanvasLayerSourceContract,
@@ -38,7 +38,7 @@ export interface RasterControllerOptions {
   readonly backend: RasterBackend;
   readonly diagnostics: CanvasDiagnostics;
   readonly onVersionChange?: (layerId: string) => void;
-  readonly getDocument?: () => CanvasDocumentContractV2 | null;
+  readonly getDocument?: () => CanvasDocumentContractV3 | null;
   readonly getLayerImageName?: (layer: CanvasLayerContract) => string | null;
   readonly imageResolver?: (imageName: string, signal?: AbortSignal) => Promise<Blob>;
 }
@@ -56,7 +56,7 @@ export class RasterController {
   private readonly thumbnailKeys = new Map<string, string>();
   private documentGeneration = 0;
   private disposed = false;
-  private readonly getDocument: () => CanvasDocumentContractV2 | null;
+  private readonly getDocument: () => CanvasDocumentContractV3 | null;
   private readonly getLayerImageName: (layer: CanvasLayerContract) => string | null;
   private readonly backend: RasterBackend;
   private readonly imageResolver: ((imageName: string, signal?: AbortSignal) => Promise<Blob>) | null;

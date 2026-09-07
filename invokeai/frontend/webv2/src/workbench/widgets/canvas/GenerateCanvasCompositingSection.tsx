@@ -1,9 +1,9 @@
 /**
  * Canvas compositing settings for the generate widget.
  *
- * Denoising strength USED to live here; it moved to the layers panel's
- * Photoshop-style header (`widgets/layers/LayersPanelHeader.tsx`). This section
- * holds the rest of the legacy canvas compositing controls — infill method,
+ * One of the Generate form's canvas-only sections (`GenerateCanvasSections`),
+ * alongside the denoising strength. This section
+ * holds the legacy canvas compositing controls — infill method,
  * coherence pass mode / edge size / min denoise, and mask blur — persisted
  * per-project in the canvas widget's own `state.values` (same store as
  * `denoisingStrength`), read back by `prepareCanvasInvocation` and threaded into
@@ -17,6 +17,7 @@ import type { CanvasCoherenceMode, CanvasInfillMethod } from '@workbench/widgets
 import { Badge, createListCollection, NumberInput, Stack } from '@chakra-ui/react';
 import { GenerationSettingsSection } from '@features/generation/components';
 import { ColorPicker, Field, formatHexColor, parseHexColor, Select } from '@platform/ui';
+import { getCanvasEngine } from '@workbench/canvas-operations/api';
 import {
   CANVAS_COHERENCE_EDGE_SIZE_MAX,
   CANVAS_COMPOSITING_KEYS,
@@ -24,7 +25,7 @@ import {
   readCanvasCompositingSettings,
 } from '@workbench/widgets/canvas/invoke/canvasCompositing';
 import { getProjectWidgetValues } from '@workbench/widgetState';
-import { useActiveProjectSelector, useWorkbenchCommands } from '@workbench/WorkbenchContext';
+import { useActiveProjectId, useActiveProjectSelector, useWorkbenchCommands } from '@workbench/WorkbenchContext';
 import { useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -41,6 +42,7 @@ const selectCanvasValues = (project: Parameters<typeof getProjectWidgetValues>[0
 export const GenerateCanvasCompositingSection = () => {
   const { t } = useTranslation();
   const { widgets } = useWorkbenchCommands();
+  const projectId = useActiveProjectId();
   const values = useActiveProjectSelector(selectCanvasValues);
   const settings = useMemo(() => readCanvasCompositingSettings(values), [values]);
 
@@ -134,6 +136,13 @@ export const GenerateCanvasCompositingSection = () => {
     [patch]
   );
 
+  // The generate form outlives the canvas widget's engine lease, so the sampler
+  // peeks non-owningly at click time instead of holding an engine alive.
+  const handleSampleInfillColor = useCallback(
+    () => getCanvasEngine(projectId)?.tools.requestColorSample() ?? Promise.resolve(null),
+    [projectId]
+  );
+
   const opt = (key: string) => t(`widgets.generate.compositingOptions.${key}`);
 
   // The collapsed header carries the effective recipe — infill method and mask
@@ -170,6 +179,7 @@ export const GenerateCanvasCompositingSection = () => {
               aria-label={opt('infillColorValue')}
               value={infillColor}
               withAlpha
+              onSampleColor={handleSampleInfillColor}
               onValueChange={handleInfillColorChange}
             />
           </Field>

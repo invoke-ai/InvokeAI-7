@@ -52,7 +52,7 @@ import { Combobox, Field, IconButton, Select, Tooltip } from '@platform/ui';
 import { SliderNumberField } from '@platform/ui/SliderNumberField';
 import { toaster } from '@platform/ui/toaster';
 import { DicesIcon } from 'lucide-react';
-import { memo, useCallback, useMemo } from 'react';
+import { memo, useCallback, useId, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { areInputImagesEquivalent, valuesAreEqual } from './upscaleComparators';
@@ -284,6 +284,13 @@ export const UpscaleWidgetView = () => {
     [t, values]
   );
   const patch = useCallback((next: Partial<UpscaleWidgetValues>) => patchValues(next), [patchValues]);
+  // Chakra's `Field.Root` hands its single `ids.control` to EVERY control
+  // inside it, and the seed Field holds the NumberInput, the shuffle button
+  // and this switch. Without an id of its own the switch's hidden input
+  // collides with the seed input, so the `<label>` Switch.Root renders points
+  // at the seed field and clicking the toggle only moved focus.
+  const seedSwitchId = useId();
+  const seedSwitchIds = useMemo(() => ({ hiddenInput: `${seedSwitchId}-randomize-seed` }), [seedSwitchId]);
   const patchPromptDraft = useCallback((next: ProjectPromptDraftPatch) => patchDraft(next), [patchDraft]);
 
   useMountEffect(() => {
@@ -639,7 +646,12 @@ export const UpscaleWidgetView = () => {
                   <DicesIcon />
                 </IconButton>
               </Tooltip>
-              <Switch.Root checked={values.shouldRandomizeSeed} size="sm" onCheckedChange={set.randomizeSeed}>
+              <Switch.Root
+                checked={values.shouldRandomizeSeed}
+                ids={seedSwitchIds}
+                size="sm"
+                onCheckedChange={set.randomizeSeed}
+              >
                 <Switch.HiddenInput />
                 <Switch.Control _checked={SWITCH_CHECKED_PROPS}>
                   <Switch.Thumb />

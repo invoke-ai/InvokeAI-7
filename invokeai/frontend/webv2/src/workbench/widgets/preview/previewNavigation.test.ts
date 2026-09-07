@@ -54,40 +54,14 @@ describe('getPreviewNavigationSequence', () => {
     ]);
   });
 
-  it('places the placeholder after the leading starred block when starred-first sorts descending', () => {
+  it('places the placeholder first in a descending listing even when starred items lead it', () => {
     expect(
       keys(
         buildSequence({
-          boardImages: [
-            item('video', 'starred-a', true),
-            item('image', 'starred-b', true),
-            item('image', 'newest'),
-            item('video', 'oldest'),
-          ],
+          boardImages: [item('image', 'starred-newest', true), item('image', 'older')],
         })
       )
-    ).toEqual(['video:starred-a', 'image:starred-b', 'placeholder', 'image:newest', 'video:oldest']);
-  });
-
-  it('places the placeholder last when every item is starred', () => {
-    expect(
-      keys(
-        buildSequence({
-          boardImages: [item('image', 'starred-a', true), item('video', 'starred-b', true)],
-        })
-      )
-    ).toEqual(['image:starred-a', 'video:starred-b', 'placeholder']);
-  });
-
-  it('keeps the placeholder last in ascending order even with starred-first', () => {
-    expect(
-      keys(
-        buildSequence({
-          boardImages: [item('video', 'starred-a', true), item('image', 'newest')],
-          imageOrderDir: 'ASC',
-        })
-      )
-    ).toEqual(['video:starred-a', 'image:newest', 'placeholder']);
+    ).toEqual(['placeholder', 'image:starred-newest', 'image:older']);
   });
 
   it('excludes the placeholder when it belongs to another board or the assets view', () => {

@@ -1,5 +1,6 @@
 import type { ModelConfig } from '@features/models';
 import type { ProjectGraphState } from '@features/workflow/contracts';
+import type { ForLoopValidationReason } from '@features/workflow/utility';
 import type { CanvasLayerContract } from '@workbench/canvas-engine/api';
 import type {
   InvocationMode,
@@ -22,6 +23,7 @@ import { getVideoWidgetValidationReasons, normalizeVideoWidgetValues } from '@fe
 import { getProjectGraphReadiness } from '@features/workflow/graph';
 import { getInvocationTemplatesSnapshot } from '@features/workflow/react';
 import { areArraysEqual, createStableSelector } from '@platform/state/selectors';
+import { compileContributingLayers } from '@workbench/canvas-engine/api';
 
 import { getBlockingControlLayerIssues } from './controlLayerChecks';
 import { getProjectWidgetValues } from './widgetState';
@@ -133,7 +135,7 @@ export const getInvocationRouteInput = (project: Project): InvocationRouteInput 
     height: project.canvas.document.bbox.height,
     width: project.canvas.document.bbox.width,
   },
-  canvasLayers: project.canvas.document.layers,
+  canvasLayers: compileContributingLayers(project.canvas.document),
   generateValues: getProjectWidgetValues(project, 'generate'),
   upscaleValues: getProjectWidgetValues(project, 'upscale'),
   videoValues: getProjectWidgetValues(project, 'video'),
@@ -201,7 +203,7 @@ export const resolveInvocationRouteInput = (
   // templates store so the result stays live.
   const projectGraphReadiness =
     sourceId === 'workflow' ? getProjectGraphReadiness(input.projectGraph, getInvocationTemplatesSnapshot()) : null;
-  const validationReasons: string[] = [];
+  const validationReasons: Array<string | ForLoopValidationReason> = [];
 
   if (!isInvocationSourceAvailable(sourceId)) {
     validationReasons.push(`${getSourceLabel(sourceId)} is not an available invocation source.`);

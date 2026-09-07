@@ -20,10 +20,31 @@ import { useLayoutEffect } from 'react';
  */
 const THEME_HINT_STORAGE_KEY = 'invokeai:v7:webv2:theme';
 const REDUCE_MOTION_HINT_STORAGE_KEY = 'invokeai:v7:webv2:reduce-motion';
+const HIGH_CONTRAST_HINT_STORAGE_KEY = 'invokeai:v7:webv2:high-contrast';
+
+/** Mirrors a boolean appearance flag onto `<html data-*>` and its pre-paint hint. */
+const applyRootFlag = (dataKey: 'highContrast' | 'reduceMotion', hintKey: string, enabled: boolean): void => {
+  const root = document.documentElement;
+  if (enabled) {
+    root.dataset[dataKey] = 'true';
+  } else {
+    delete root.dataset[dataKey];
+  }
+  try {
+    if (enabled) {
+      window.localStorage.setItem(hintKey, 'true');
+    } else {
+      window.localStorage.removeItem(hintKey);
+    }
+  } catch {
+    // Storage unavailable — the next load just waits for settings to resolve.
+  }
+};
 
 export const ThemeController = () => {
-  const { reduceMotion, status, themeId } = useWorkbenchSettingsSelector(
+  const { highContrast, reduceMotion, status, themeId } = useWorkbenchSettingsSelector(
     (snapshot) => ({
+      highContrast: snapshot.preferences.highContrast,
       reduceMotion: snapshot.preferences.reduceMotion,
       status: snapshot.status,
       themeId: snapshot.preferences.themeId,
@@ -51,28 +72,16 @@ export const ThemeController = () => {
   }, [hasResolved, themeId]);
 
   useLayoutEffect(() => {
-    if (!hasResolved) {
-      return;
-    }
-
-    const root = document.documentElement;
-
-    if (reduceMotion) {
-      root.dataset.reduceMotion = 'true';
-    } else {
-      delete root.dataset.reduceMotion;
-    }
-
-    try {
-      if (reduceMotion) {
-        window.localStorage.setItem(REDUCE_MOTION_HINT_STORAGE_KEY, 'true');
-      } else {
-        window.localStorage.removeItem(REDUCE_MOTION_HINT_STORAGE_KEY);
-      }
-    } catch {
-      // Storage unavailable — the next load just waits for settings to resolve.
+    if (hasResolved) {
+      applyRootFlag('reduceMotion', REDUCE_MOTION_HINT_STORAGE_KEY, reduceMotion);
     }
   }, [hasResolved, reduceMotion]);
+
+  useLayoutEffect(() => {
+    if (hasResolved) {
+      applyRootFlag('highContrast', HIGH_CONTRAST_HINT_STORAGE_KEY, highContrast);
+    }
+  }, [hasResolved, highContrast]);
 
   return null;
 };

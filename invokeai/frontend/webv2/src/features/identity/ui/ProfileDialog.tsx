@@ -1,4 +1,4 @@
-import { Dialog, HStack, Input, Portal, Stack, Text } from '@chakra-ui/react';
+import { Dialog, HStack, Input, Portal, Stack } from '@chakra-ui/react';
 import { createProfileSchema, PASSWORD_RULES_HINT, type ProfileFormValues } from '@features/identity/core/schemas';
 import {
   generatePassword,
@@ -34,7 +34,6 @@ export const ProfileDialog = ({ isOpen, onClose, user }: { isOpen: boolean; onCl
     <Dialog.Root
       lazyMount
       open={isOpen}
-      placement="center"
       scrollBehavior="inside"
       size="sm"
       unmountOnExit
@@ -47,14 +46,12 @@ export const ProfileDialog = ({ isOpen, onClose, user }: { isOpen: boolean; onCl
             <Dialog.Header borderBottomWidth="1px" borderColor="border.subtle">
               <Stack gap="0.5">
                 <Dialog.Title>{t('auth.account')}</Dialog.Title>
-                <Text color="fg.subtle" fontSize="xs">
-                  {t('auth.signedInAs', { email: user.email })}
-                </Text>
+                <Dialog.Description>{t('auth.signedInAs', { email: user.email })}</Dialog.Description>
               </Stack>
             </Dialog.Header>
             <ProfileForm user={user} onClose={onClose} />
             <Dialog.CloseTrigger asChild>
-              <CloseButton color="fg.muted" size="sm" />
+              <CloseButton />
             </Dialog.CloseTrigger>
           </Dialog.Content>
         </Dialog.Positioner>
@@ -146,7 +143,7 @@ const ProfileForm = ({ onClose, user }: { onClose: () => void; user: UserDTO }) 
   return (
     <>
       <Dialog.Body>
-        <Stack gap="5" py="2">
+        <Stack gap="5">
           {form.formError ? <AuthFormAlert message={form.formError} tone="error" /> : null}
           <Field helpText={t('auth.profileDisplayNameHelp')} label={t('users.displayName')}>
             <Input
@@ -198,7 +195,7 @@ const ProfileForm = ({ onClose, user }: { onClose: () => void; user: UserDTO }) 
           </Stack>
         </Stack>
       </Dialog.Body>
-      <Dialog.Footer gap="2">
+      <Dialog.Footer>
         <Button size="xs" variant="ghost" onClick={onClose}>
           {t('common.cancel')}
         </Button>

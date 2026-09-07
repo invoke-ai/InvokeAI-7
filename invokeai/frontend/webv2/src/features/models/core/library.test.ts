@@ -162,6 +162,16 @@ describe('getModelPickerGroups', () => {
     expect(all.groups.flatMap((group) => group.models.map((m) => m.key))).toEqual(['c', 'a', 'b', 'd']);
   });
 
+  it('ignores a base filter this picker does not offer', () => {
+    const result = getModelPickerGroups(library, {
+      baseFilter: new Set(['sdxl']),
+      filter: (model) => model.base === 'sd-1',
+      modelTypes: ['main', 'lora', 'vae'],
+    });
+
+    expect(result.groups.flatMap((group) => group.models.map((m) => m.key))).toEqual(['c']);
+  });
+
   it('exposes availableBases that stay stable across base filtering', () => {
     const expected = ['sd-1', 'sdxl', 'flux', 'any'];
 

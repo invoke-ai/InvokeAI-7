@@ -178,7 +178,9 @@ The bundles are independent; installing both totals ~56 GB (shared components ar
 
 ### MiniMax H3
 
-MiniMax H3 is a single **FL2VA** model — *first/last-frame to video with audio*. One checkpoint covers every conditioning mode the panel offers (text-to-video, first frame, last frame, both, and extend), and every generation includes a **jointly generated stereo soundtrack**, muxed into the MP4 as AAC.
+MiniMax H3 ships as two task transformers that share every other component. **FL2VA** — *first/last-frame to video with audio* — covers text-to-video, first frame, last frame, both, and extend. **Ref2VA** — *reference to video with audio* — conditions a new clip on **reference media**: up to 3 videos and 9 images, in an order you choose (order changes the result). Every generation from either includes a **jointly generated stereo soundtrack**, muxed into the MP4 as AAC.
+
+The panel switches task by transformer: select the Ref2VA single-file transformer in **Model Components** and the conditioning sections become the ordered **References** list; select the FL2VA transformer to get the five frame/extend modes back. A video reference can contribute its image track, its soundtrack, or both — soundtrack-only references must be paired with at least one visual reference. Image references default to a high-detail 2048 px encoding ("Max"); the "Match generation size" option is several times faster at some fidelity cost.
 
 What makes it different from Wan in practice:
 
@@ -190,11 +192,13 @@ What makes it different from Wan in practice:
 
 #### Installing MiniMax H3
 
-The **MiniMax H3** starter bundle (~62 GB) installs the working set:
+The **MiniMax H3** starter bundle (~85 GB) installs the working set:
 
 * **MiniMax H3 Components** (~11 GB) — the Diffusers-format main: tokenizer, processor, and the video + audio VAEs. **This is the model you select in the Video panel.**
-* **MiniMax H3 FL2VA Transformer (int8, pruned)** (~21 GB) and **MiniMax H3 Text Encoder (int8)** (~27 GB) — single-file builds that slot into the panel's **Model Components** overrides (the bundled templates and the panel wire them the same way).
-* **MiniMax H3 Turbo LoRA** and **MiniMax H3 LightX2V Turbo LoRA** — two independent step-distillation LoRAs (both Apache 2.0); the Turbo toggle picks one automatically.
+* **MiniMax H3 FL2VA Transformer (int8, pruned)** and **MiniMax H3 Ref2VA Transformer (int8, pruned)** (~21 GB each) plus **MiniMax H3 Text Encoder (int8)** (~27 GB) — single-file builds that slot into the panel's **Model Components** overrides (the bundled templates and the panel wire them the same way). The transformer you pick decides the task: FL2VA for the frame/extend modes, Ref2VA for reference conditioning.
+* **MiniMax H3 Turbo LoRA**, **MiniMax H3 LightX2V Turbo LoRA**, and **MiniMax H3 Ref2V Turbo LoRA** — independent step-distillation LoRAs; the Turbo toggle picks the one matching the selected task (the Ref2V build is trained against the Ref2VA transformer only).
+
+Reference conditioning adds rows to every denoising step roughly linearly: a few references typically cost ~1–2 GiB of extra activation memory, but a full-detail 2048×2048 image reference alone adds ~4096 rows (about 1 GiB), and three full-length video references can triple the packed sequence. Prefer "Match generation size" for image references and trimmed clips for video references on smaller cards.
 
 H3 is the heaviest local video option — With 16 GB VRAM, `enable_partial_loading` enabled and 32 GB of system RAM it can create a full 345 frame video (about 14s) at 768x768 resolution, but for larger or longer videos a high-VRAM GPU (24 GB+) is strongly recommended.
 

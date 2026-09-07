@@ -88,7 +88,12 @@ export interface History {
   canRetain(bytes: number): boolean;
   /** Evicts oldest entries until retained bytes are at or below `budgetBytes`. */
   trimToBytes(budgetBytes: number): void;
-  /** Subscribes to any change in `canUndo`/`canRedo`. Returns an unsubscribe function. */
+  /**
+   * Labels of every retained step: `past` oldest-first (its last element is
+   * what `undo()` reverts), `future` next-redo-first. Fresh arrays per call.
+   */
+  entries(): { past: readonly string[]; future: readonly string[] };
+  /** Subscribes to every stack mutation (push, amend, undo, redo, clear, eviction). Returns an unsubscribe function. */
   subscribe(listener: () => void): () => void;
 }
 
@@ -153,6 +158,11 @@ export const createHistory = (opts: CreateHistoryOptions = {}): History => {
       }
     }
   };
+
+  const entries = (): { past: readonly string[]; future: readonly string[] } => ({
+    future: redoStack.map((entry) => entry.label).reverse(),
+    past: undoStack.map((entry) => entry.label),
+  });
 
   const push = (entry: HistoryEntry): void => {
     // Replaying an entry must never record a new one; drop it defensively.
@@ -339,6 +349,7 @@ export const createHistory = (opts: CreateHistoryOptions = {}): History => {
   return {
     amendLast,
     byteSize: () => undoBytes + redoBytes,
+    entries,
     canRetain: (bytes) => Number.isFinite(bytes) && Math.max(0, Math.ceil(bytes)) <= byteBudget,
     canRedo: () => redoStack.length > 0,
     canUndo: () => undoStack.length > 0,

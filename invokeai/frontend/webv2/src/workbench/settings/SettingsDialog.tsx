@@ -1,905 +1,350 @@
-import type { WorkbenchThemeId } from '@theme/themes';
-import type { DeveloperLogLevel, DeveloperLogNamespace } from '@workbench/diagnostics/contracts';
-import type { Project } from '@workbench/projectContracts';
-import type { ProjectSettings, WorkbenchLanguage, WorkbenchPreferences } from '@workbench/settings/contracts';
-import type { SettingsSectionId } from '@workbench/widgetContracts';
+import type { ChangeEvent, UIEvent } from 'react';
 
+import { Box, Dialog, Flex, HStack, Icon, Input, NativeSelect, Stack, Text, VisuallyHidden } from '@chakra-ui/react';
+import { useCapabilities } from '@features/identity';
+import { useMountEffect } from '@platform/react/useMountEffect';
+import { Button } from '@platform/ui/Button';
+import { PanelHeader } from '@platform/ui/PanelHeader';
+import { resolveSettingsText } from '@platform/ui/settings/contracts';
 import {
-  Box,
-  chakra,
-  Checkbox,
-  createListCollection,
-  Dialog,
-  Flex,
-  HStack,
-  Icon,
-  Portal,
-  SimpleGrid,
-  Stack,
-  Switch,
-  Text,
-  Field,
-  useSlotRecipe,
-} from '@chakra-ui/react';
-import { WORKBENCH_LANGUAGE_OPTIONS } from '@platform/i18n/languages';
-import { Button, CloseButton, ConfirmDialog, Select, Tabs } from '@platform/ui';
-import { themeCardRecipe } from '@theme/recipes';
-import { previewSwatches, THEMES, type ThemeDefinition } from '@theme/system';
-import { registerHotkeyModalLayer } from '@workbench/hotkeys';
-import { clearAllWorkbenchData } from '@workbench/projects/syncedPersistence';
-import {
-  shallowEqual,
+  useActiveProjectId,
   useHasWorkbenchProvider,
-  useOptionalWorkbenchCommands,
-  useOptionalWorkbenchPersistenceService,
-  useOptionalWorkbenchSelector,
+  useWorkbenchQueries,
+  useWorkbenchSubscription,
 } from '@workbench/WorkbenchContext';
-import {
-  CheckIcon,
-  Code2Icon,
-  DatabaseIcon,
-  FolderIcon,
-  KeyboardIcon,
-  ListOrderedIcon,
-  MapIcon,
-  PaletteIcon,
-  RotateCcwIcon,
-  SettingsIcon,
-  SlidersHorizontalIcon,
-  Trash2Icon,
-  WorkflowIcon,
-  type LucideIcon,
-} from 'lucide-react';
-import { useCallback, useEffect, useId, useMemo, useState, type ReactNode } from 'react';
+import { SearchIcon, XIcon } from 'lucide-react';
+import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { GenerationDevicesSettings } from './GenerationDevicesSettings';
-import { HotkeysSettingsSection } from './HotkeysSettingsSection';
-import { ImageMapVocabularySettings } from './ImageMapVocabularySettings';
-import { setWorkbenchSettingsSection, settingsDialogStore } from './settingsDialogStore';
+import type { SettingsSection } from './catalog';
+
+import { searchSettings, settingsCatalog } from './catalog';
 import {
-  clearWorkbenchSettings,
-  DEVELOPER_LOG_LEVELS,
-  DEVELOPER_LOG_NAMESPACES,
-  patchWorkbenchPreferences,
-  useWorkbenchPreferences,
-  useWorkbenchSettings,
-} from './store';
+  closeWorkbenchSettings,
+  getSettingsSectionScroll,
+  rememberSettingsSectionScroll,
+  setSettingsQuery,
+  setWorkbenchSettingsSection,
+  settingsDialogStore,
+} from './settingsDialogStore';
+import { SettingsEntryView } from './SettingsEntryView';
+import { SettingsScopeLabel } from './SettingsScopeLabel';
+import { patchWorkbenchPreferences, useWorkbenchSettingsSelector } from './store';
 
-interface SettingsTabDefinition {
-  value: SettingsSectionId;
-  label: string;
-  icon: LucideIcon;
-  condition?: boolean;
-  children: ReactNode;
-}
-
-const updatePreferences = (patch: Partial<WorkbenchPreferences>): void => {
-  void patchWorkbenchPreferences(patch);
+/** Warm code, never mounted editors or data queries, before exposing section navigation. */
+export const prepareSettingsDialog = async (): Promise<void> => {
+  const resources = new Set(settingsCatalog.flatMap((section) => section.entries.map((entry) => entry.resource)));
+  await Promise.allSettled([
+    ...[...resources].map((resource) => resource.load()),
+    import('./ApplicationSettingField').then((module) => module.prepareApplicationSettings()),
+  ]);
 };
 
-const SETTINGS_TAB_LIST_WIDTH = { base: '40', md: '52' };
-const SETTINGS_CONTENT_PADDING = { base: '4', md: '5' };
-const THEME_GRID_COLUMNS = { base: 2, md: 3 };
-const DEVELOPER_GRID_COLUMNS = { base: 1, md: 2 };
-const DANGER_BUTTON_HOVER_STYLES = { bg: 'fg.error', color: 'bg.subtle' };
-const SWITCH_CHECKED_STYLES = { bg: 'accent.solid' };
-const FIELD_ALIGN_ITEMS = { base: 'stretch', md: 'center' };
-const FIELD_FLEX_DIRECTION = { base: 'column', md: 'row' };
-const SELECT_MAX_WIDTH = { base: 'full', md: '56' };
+const GROUPS = ['application', 'project', 'widgets', 'system'] as const;
+const DIRECTION = { base: 'column', sm: 'row' } as const;
+const SIDEBAR_WIDTH = { base: 'full', sm: '44', md: '56' };
+const SIDEBAR_RIGHT_BORDER = { base: '0', sm: '1px' };
+const SIDEBAR_BOTTOM_BORDER = { base: '1px', sm: '0' };
+const SEARCH_PADDING = { base: '12', sm: '3' };
+const MOBILE_DISPLAY = { base: 'block', sm: 'none' };
+const DESKTOP_DISPLAY = { base: 'none', sm: 'block' };
+const CONTENT_PADDING = { base: '4', md: '6' };
+const clearSearch = () => setSettingsQuery('');
+const rememberScroll = (event: UIEvent<HTMLDivElement>) => {
+  const current = settingsDialogStore.getSnapshot();
+  if (!current.query.trim()) {
+    rememberSettingsSectionScroll(current.sectionId, event.currentTarget.scrollTop);
+  }
+};
+const retrySave = () => {
+  void patchWorkbenchPreferences({});
+};
 
-export const SettingsDialog = ({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) => {
-  useEffect(() => {
-    if (!isOpen) {
-      return;
-    }
-
-    return registerHotkeyModalLayer('settings');
-  }, [isOpen]);
-
-  const handleOpenChange = useCallback(
-    (event: { open: boolean }) => {
-      if (!event.open) {
-        onClose();
+const ProjectLifetime = () => {
+  const projectId = useActiveProjectId();
+  const queries = useWorkbenchQueries();
+  const subscribe = useWorkbenchSubscription();
+  useMountEffect(() =>
+    subscribe(() => {
+      if (!queries.isActiveProject(projectId)) {
+        closeWorkbenchSettings();
       }
-    },
-    [onClose]
+    })
   );
-
-  return (
-    <Dialog.Root
-      closeOnInteractOutside={false}
-      lazyMount
-      open={isOpen}
-      placement="center"
-      scrollBehavior="inside"
-      size="xl"
-      unmountOnExit
-      onOpenChange={handleOpenChange}
-    >
-      <SettingsDialogContent onClose={onClose} />
-    </Dialog.Root>
-  );
+  return null;
 };
 
-const SettingsDialogContent = ({ onClose }: { onClose: () => void }) => {
-  const { t } = useTranslation();
-  const { error, scope, status } = useWorkbenchSettings();
-  const handlePositionerClick = useCallback(
-    (event: { target: EventTarget; currentTarget: EventTarget }) => {
-      if (event.target === event.currentTarget) {
-        onClose();
-      }
-    },
-    [onClose]
-  );
-
-  return (
-    <Portal>
-      <Dialog.Backdrop pointerEvents="auto" />
-      <Dialog.Positioner pointerEvents="auto" onClick={handlePositionerClick}>
-        <Dialog.Content h="min(46rem, calc(100dvh - 4rem))" maxW="4xl">
-          <Dialog.Header borderBottomWidth="1px" borderColor="border.subtle">
-            <Flex alignItems="start" gap="2">
-              <Icon as={SettingsIcon} boxSize="5" />
-              <Stack gap="1">
-                <Dialog.Title lineHeight={1} mt="0.5">
-                  {t('settings.title')}
-                </Dialog.Title>
-                <Text color="fg.subtle" fontSize="xs">
-                  {scope === 'user' ? t('settings.descriptionUser') : t('settings.descriptionGlobal')}
-                </Text>
-                {status === 'error' && error ? (
-                  <Text color="fg.error" fontSize="2xs">
-                    {error}
-                  </Text>
-                ) : null}
-              </Stack>
-            </Flex>
-          </Dialog.Header>
-          <Dialog.Body minH="0" p="0">
-            <SettingsTabs />
-          </Dialog.Body>
-          <Dialog.CloseTrigger asChild>
-            <CloseButton size="sm" />
-          </Dialog.CloseTrigger>
-        </Dialog.Content>
-      </Dialog.Positioner>
-    </Portal>
-  );
-};
-
-const SettingsTabs = () => {
+const SettingsDialog = () => {
   const { t } = useTranslation();
   const hasWorkbench = useHasWorkbenchProvider();
-  const settingsTabs: SettingsTabDefinition[] = useMemo(
-    () => [
-      {
-        children: <AppearanceSection />,
-        icon: PaletteIcon,
-        label: t('settings.tabs.appearance'),
-        value: 'appearance',
-      },
-      {
-        children: <BehaviorSection />,
-        icon: SlidersHorizontalIcon,
-        label: t('settings.tabs.behavior'),
-        value: 'behavior',
-      },
-      {
-        children: <HotkeysSettingsSection />,
-        icon: KeyboardIcon,
-        label: t('settings.tabs.hotkeys'),
-        value: 'hotkeys',
-      },
-      {
-        children: <ProjectSection />,
-        condition: hasWorkbench,
-        icon: FolderIcon,
-        label: t('settings.tabs.project'),
-        value: 'project',
-      },
-      {
-        children: <QueueSection />,
-        icon: ListOrderedIcon,
-        label: t('settings.tabs.queue'),
-        value: 'queue',
-      },
-      {
-        children: <WorkflowSection />,
-        icon: WorkflowIcon,
-        label: t('settings.tabs.workflow'),
-        value: 'workflow',
-      },
-      {
-        children: <ImageMapSection />,
-        icon: MapIcon,
-        label: t('settings.tabs.imageMap'),
-        value: 'imageMap',
-      },
-      {
-        children: <DeveloperSection />,
-        icon: Code2Icon,
-        label: t('settings.tabs.developer'),
-        value: 'developer',
-      },
-      {
-        children: <WorkspaceSection />,
-        icon: DatabaseIcon,
-        label: t('settings.tabs.workspace'),
-        value: 'workspace',
-      },
-    ],
-    [hasWorkbench, t]
-  );
-  const tabs = settingsTabs.filter((tab) => tab.condition !== false);
-  const sectionId = settingsDialogStore.useSelector((snapshot) => snapshot.sectionId);
-  const activeSectionId = tabs.some((tab) => tab.value === sectionId) ? sectionId : 'appearance';
-  const handleValueChange = useCallback((event: { value: string }) => {
-    setWorkbenchSettingsSection(event.value as SettingsSectionId);
-  }, []);
-
-  return (
-    <Tabs.Root
-      display="flex"
-      h="full"
-      minH="0"
-      orientation="vertical"
-      value={activeSectionId}
-      variant="subtle"
-      onValueChange={handleValueChange}
-    >
-      <Tabs.List
-        alignItems="stretch"
-        bg="bg"
-        borderColor="border.subtle"
-        borderRightWidth="1px"
-        flexShrink={0}
-        p="1"
-        gap="0.5"
-        w={SETTINGS_TAB_LIST_WIDTH}
-      >
-        {tabs.map((tab) => (
-          <SettingsTabTrigger key={tab.value} icon={tab.icon} label={tab.label} value={tab.value} />
-        ))}
-      </Tabs.List>
-      <Box flex="1" minW="0" overflowY="auto" p={SETTINGS_CONTENT_PADDING}>
-        {tabs.map((tab) => (
-          <Tabs.Content key={tab.value} m="0" p="0" value={tab.value}>
-            {tab.children}
-          </Tabs.Content>
-        ))}
-      </Box>
-    </Tabs.Root>
-  );
-};
-
-const SettingsTabTrigger = ({ icon, label, value }: { icon: LucideIcon; label: string; value: string }) => (
-  <Tabs.Trigger justifyContent="flex-start" textAlign="start" value={value} w="full">
-    <Icon as={icon} boxSize="3.5" flexShrink={0} />
-    <Text truncate>{label}</Text>
-  </Tabs.Trigger>
-);
-
-const SettingsSection = ({
-  children,
-  description,
-  title,
-}: {
-  children: ReactNode;
-  description: string;
-  title: string;
-}) => (
-  <Stack gap="3">
-    <Stack gap="0.5">
-      <Text color="fg" fontSize="sm" fontWeight="600">
-        {title}
-      </Text>
-      <Text color="fg.subtle" fontSize="xs">
-        {description}
-      </Text>
-    </Stack>
-    {children}
-  </Stack>
-);
-
-const AppearanceSection = () => {
-  const { t } = useTranslation();
-  const { language, reduceMotion, showFocusRegionHighlight, themeId } = useWorkbenchPreferences();
-
-  const selectTheme = useCallback((nextThemeId: WorkbenchThemeId) => {
-    updatePreferences({ themeId: nextThemeId });
-  }, []);
-  const updateLanguage = useCallback((value: string) => {
-    updatePreferences({ language: value as WorkbenchLanguage });
-  }, []);
-  const updateReduceMotion = useCallback((checked: boolean) => {
-    updatePreferences({ reduceMotion: checked });
-  }, []);
-  const updateShowFocusRegionHighlight = useCallback((checked: boolean) => {
-    updatePreferences({ showFocusRegionHighlight: checked });
-  }, []);
-
-  return (
-    <SettingsSection description="Choose a theme, language, and motion behavior." title="Appearance">
-      <SimpleGrid columns={THEME_GRID_COLUMNS} gap="3">
-        {THEMES.map((theme) => (
-          <ThemeCard key={theme.id} selected={theme.id === themeId} theme={theme} onSelect={selectTheme} />
-        ))}
-      </SimpleGrid>
-      <SettingSelect
-        description={t('settings.languageDescription')}
-        label={t('settings.language')}
-        options={WORKBENCH_LANGUAGE_OPTIONS}
-        value={language}
-        onChange={updateLanguage}
-      />
-      <SettingToggle
-        checked={reduceMotion}
-        description="Disable transitions and animations across the workbench."
-        label="Reduce motion"
-        onChange={updateReduceMotion}
-      />
-      <SettingToggle
-        checked={showFocusRegionHighlight}
-        label={t('settings.enableHighlightFocusedRegions')}
-        onChange={updateShowFocusRegionHighlight}
-      />
-    </SettingsSection>
-  );
-};
-
-const ThemeCard = ({
-  onSelect,
-  selected,
-  theme,
-}: {
-  onSelect: (themeId: WorkbenchThemeId) => void;
-  selected: boolean;
-  theme: ThemeDefinition;
-}) => {
-  const recipe = useSlotRecipe({ recipe: themeCardRecipe });
-  const styles = recipe({ selected });
-  const [surface, control, brandColor, accentColor] = previewSwatches(theme);
-  const handleSelect = useCallback(() => onSelect(theme.id), [onSelect, theme.id]);
-
-  return (
-    <chakra.button type="button" aria-pressed={selected} css={styles.root} onClick={handleSelect}>
-      <Flex css={styles.preview}>
-        <Box css={styles.swatch} bg={surface} />
-        <Box css={styles.swatch} bg={control} />
-        <Box css={styles.swatch} bg={brandColor} />
-        <Box css={styles.swatch} bg={accentColor} />
-      </Flex>
-      <Box css={styles.body}>
-        <HStack justify="space-between" w="full">
-          <Text css={styles.name}>{theme.label}</Text>
-          <Box css={styles.indicator}>
-            <Icon as={CheckIcon} boxSize="3" />
-          </Box>
-        </HStack>
-        <Text css={styles.description}>{theme.description}</Text>
-      </Box>
-    </chakra.button>
-  );
-};
-
-const BehaviorSection = () => {
-  const {
-    autoSwitchInvocationRoute,
-    confirmImageDeletion,
-    enableInformationalPopovers,
-    enableModelDescriptions,
-    notifyOnEnqueue,
-    preferNumericAttentionStyle,
-    showPromptSyntaxHighlighting,
-  } = useWorkbenchPreferences();
-  const updateAutoSwitchInvocationRoute = useCallback((checked: boolean) => {
-    updatePreferences({ autoSwitchInvocationRoute: checked });
-  }, []);
-  const updateConfirmImageDeletion = useCallback((checked: boolean) => {
-    updatePreferences({ confirmImageDeletion: checked });
-  }, []);
-  const updateEnableInformationalPopovers = useCallback((checked: boolean) => {
-    updatePreferences({ enableInformationalPopovers: checked });
-  }, []);
-  const updateEnableModelDescriptions = useCallback((checked: boolean) => {
-    updatePreferences({ enableModelDescriptions: checked });
-  }, []);
-  const updateNotifyOnEnqueue = useCallback((checked: boolean) => {
-    updatePreferences({ notifyOnEnqueue: checked });
-  }, []);
-  const updatePreferNumericAttentionStyle = useCallback((checked: boolean) => {
-    updatePreferences({ preferNumericAttentionStyle: checked });
-  }, []);
-  const updateShowPromptSyntaxHighlighting = useCallback((checked: boolean) => {
-    updatePreferences({ showPromptSyntaxHighlighting: checked });
-  }, []);
-
-  return (
-    <SettingsSection description="Safety checks, prompt editing, and user-assistance behavior." title="Behavior">
-      <SettingToggle
-        checked={autoSwitchInvocationRoute}
-        description="Switch the Invoke source and destination to match the surface you are editing. Locked sources and destinations are never changed."
-        label="Auto-switch Invoke route"
-        onChange={updateAutoSwitchInvocationRoute}
-      />
-      <SettingToggle
-        checked={confirmImageDeletion}
-        description="Ask for confirmation before permanently deleting images."
-        label="Confirm image deletion"
-        onChange={updateConfirmImageDeletion}
-      />
-      <SettingToggle
-        checked={enableInformationalPopovers}
-        description="Show educational popovers on controls that have extra guidance."
-        label="Enable informational popovers"
-        onChange={updateEnableInformationalPopovers}
-      />
-      <SettingToggle
-        checked={enableModelDescriptions}
-        description="Include model descriptions in model dropdowns where available."
-        label="Enable model descriptions in dropdowns"
-        onChange={updateEnableModelDescriptions}
-      />
-      <SettingToggle
-        checked={notifyOnEnqueue}
-        description="Show a toast for every successful enqueue. Off, enqueues are still recorded in the notification center."
-        label="Notify when queued"
-        onChange={updateNotifyOnEnqueue}
-      />
-      <SettingToggle
-        checked={preferNumericAttentionStyle}
-        description="Prefer numeric prompt attention syntax when controls insert attention weights."
-        label="Prefer numeric attention style"
-        onChange={updatePreferNumericAttentionStyle}
-      />
-      <SettingToggle
-        checked={showPromptSyntaxHighlighting}
-        description="Experimental. Color prompt syntax in prompt fields without changing the prompt text or validation behavior."
-        label="Highlight prompt syntax (experimental)"
-        onChange={updateShowPromptSyntaxHighlighting}
-      />
-    </SettingsSection>
-  );
-};
-
-const ProjectSection = () => {
-  const activeProject = useOptionalWorkbenchSelector<Pick<Project, 'name' | 'settings'> | null>(
-    (snapshot) => ({ name: snapshot.activeProject.name, settings: snapshot.activeProject.settings }),
-    null,
-    shallowEqual
-  );
-  const commands = useOptionalWorkbenchCommands();
-  const updateProjectSettings = useCallback(
-    (patch: Partial<ProjectSettings>) => {
-      commands?.account.updateProjectPreferences(patch);
-    },
-    [commands]
-  );
-  const updateUseCpuNoise = useCallback(
-    (checked: boolean) => {
-      updateProjectSettings({ useCpuNoise: checked });
-    },
-    [updateProjectSettings]
-  );
-  const updateShowProgressDetails = useCallback(
-    (checked: boolean) => {
-      updateProjectSettings({ showProgressDetails: checked });
-    },
-    [updateProjectSettings]
-  );
-  const updateAntialiasProgressImages = useCallback(
-    (checked: boolean) => {
-      updateProjectSettings({ antialiasProgressImages: checked });
-    },
-    [updateProjectSettings]
-  );
-
-  if (!activeProject || !commands) {
-    return null;
-  }
-
-  const settings = activeProject.settings;
-
-  return (
-    <SettingsSection
-      description={`Settings saved with ${activeProject.name}. Future project-only settings can live here without becoming user preferences.`}
-      title="Project"
-    >
-      <SettingToggle
-        checked={settings.useCpuNoise}
-        description="Use CPU noise generation for deterministic legacy-compatible outputs."
-        label="Use CPU noise"
-        onChange={updateUseCpuNoise}
-      />
-      <SettingToggle
-        checked={settings.showProgressDetails}
-        comingSoon
-        description="Show detailed invocation progress when the backend reports it."
-        label="Show progress details"
-        onChange={updateShowProgressDetails}
-      />
-      <SettingToggle
-        checked={settings.antialiasProgressImages}
-        description="Smooth progress previews instead of rendering them pixelated."
-        label="Antialias progress images"
-        onChange={updateAntialiasProgressImages}
-      />
-    </SettingsSection>
-  );
-};
-
-const WorkflowSection = () => {
-  const { workflowEdgeStyle, workflowShowMinimap, workflowSnapToGrid, workflowValidateConnections } =
-    useWorkbenchPreferences();
-  const updateWorkflowEdgeStyle = useCallback((value: string) => {
-    updatePreferences({ workflowEdgeStyle: value === 'square' ? 'square' : 'curved' });
-  }, []);
-  const updateWorkflowSnapToGrid = useCallback((checked: boolean) => {
-    updatePreferences({ workflowSnapToGrid: checked });
-  }, []);
-  const updateWorkflowShowMinimap = useCallback((checked: boolean) => {
-    updatePreferences({ workflowShowMinimap: checked });
-  }, []);
-  const updateWorkflowValidateConnections = useCallback((checked: boolean) => {
-    updatePreferences({ workflowValidateConnections: checked });
-  }, []);
-
-  return (
-    <SettingsSection description="Editing behavior for the project graph workflow editor." title="Workflow">
-      <SettingSelect
-        description="How connections between nodes are drawn in the editor."
-        label="Connection style"
-        options={WORKFLOW_EDGE_STYLE_OPTIONS}
-        value={workflowEdgeStyle}
-        onChange={updateWorkflowEdgeStyle}
-      />
-      <SettingToggle
-        checked={workflowSnapToGrid}
-        description="Snap nodes to the grid while dragging. When off, hold Ctrl to snap temporarily."
-        label="Always snap to grid"
-        onChange={updateWorkflowSnapToGrid}
-      />
-      <SettingToggle
-        checked={workflowShowMinimap}
-        description="Show the minimap overview in the corner of the workflow editor."
-        label="Show minimap"
-        onChange={updateWorkflowShowMinimap}
-      />
-      <SettingToggle
-        checked={workflowValidateConnections}
-        description="Reject connections between incompatible field types while wiring nodes. Turn off to wire anything (runs may fail)."
-        label="Validate connections"
-        onChange={updateWorkflowValidateConnections}
-      />
-    </SettingsSection>
-  );
-};
-
-const QueueSection = () => {
-  const { queueJobsScope } = useWorkbenchPreferences();
-  const updateQueueJobsScope = useCallback((value: string) => {
-    updatePreferences({ queueJobsScope: value === 'active-project' ? 'active-project' : 'all' });
-  }, []);
-
-  return (
-    <Stack gap="6">
-      <SettingsSection description="Choose which jobs the Queue widget includes in its counts and lists." title="Queue">
-        <SettingSelect
-          description="Show jobs from only the active project, or all queue jobs visible to you."
-          label="Show jobs from"
-          options={QUEUE_JOBS_SCOPE_OPTIONS}
-          value={queueJobsScope}
-          onChange={updateQueueJobsScope}
-        />
-      </SettingsSection>
-      <SettingsSection
-        description="Accelerators used for generation. With more than one selected, InvokeAI runs a session on each at the same time. This is a server-wide setting."
-        title="Generation Devices"
-      >
-        <GenerationDevicesSettings />
-      </SettingsSection>
-    </Stack>
-  );
-};
-
-const ImageMapSection = () => {
-  const { t } = useTranslation();
-
-  return (
-    <Stack gap="6">
-      <SettingsSection
-        description={t('settings.imageMapVocabulary.description')}
-        title={t('settings.imageMapVocabulary.title')}
-      >
-        <ImageMapVocabularySettings />
-      </SettingsSection>
-    </Stack>
-  );
-};
-
-const DeveloperSection = () => {
-  const { developerLogEnabled, developerLogLevel, developerLogNamespaces, developerPerformanceTimingsEnabled } =
-    useWorkbenchPreferences();
-  const enabledNamespaces = useMemo(() => new Set(developerLogNamespaces), [developerLogNamespaces]);
-
-  const toggleNamespace = useCallback(
-    (namespace: DeveloperLogNamespace, checked: boolean) => {
-      const next = checked
-        ? [...developerLogNamespaces, namespace]
-        : developerLogNamespaces.filter((candidate) => candidate !== namespace);
-
-      updatePreferences({
-        developerLogNamespaces: DEVELOPER_LOG_NAMESPACES.filter((candidate) => next.includes(candidate)),
-      });
-    },
-    [developerLogNamespaces]
-  );
-  const updateDeveloperLogEnabled = useCallback((checked: boolean) => {
-    updatePreferences({ developerLogEnabled: checked });
-  }, []);
-  const updateDeveloperLogLevel = useCallback((value: string) => {
-    updatePreferences({ developerLogLevel: value as DeveloperLogLevel });
-  }, []);
-  const updateDeveloperPerformanceTimingsEnabled = useCallback((checked: boolean) => {
-    updatePreferences({ developerPerformanceTimingsEnabled: checked });
-  }, []);
-
-  return (
-    <SettingsSection
-      description="Current-user diagnostics settings. Entries are still grouped by project and kept in memory only."
-      title="Developer"
-    >
-      <SettingToggle
-        checked={developerLogEnabled}
-        description="Record selected diagnostic log events in the Diagnostics widget."
-        label="Record diagnostic logs"
-        onChange={updateDeveloperLogEnabled}
-      />
-      <SettingSelect
-        description="Minimum log level recorded in the Diagnostics widget."
-        label="Log level"
-        options={DEVELOPER_LOG_LEVEL_OPTIONS}
-        value={developerLogLevel}
-        onChange={updateDeveloperLogLevel}
-      />
-      <SettingToggle
-        checked={developerPerformanceTimingsEnabled}
-        description="Record performance measurements such as workflow editor timing and project serialization costs."
-        label="Collect performance timings"
-        onChange={updateDeveloperPerformanceTimingsEnabled}
-      />
-      <Stack gap="2">
-        <Text color="fg" fontSize="sm" fontWeight="500">
-          Log namespaces
-        </Text>
-        <SimpleGrid columns={DEVELOPER_GRID_COLUMNS} gap="2">
-          {DEVELOPER_LOG_NAMESPACES.map((namespace) => (
-            <DeveloperNamespaceCheckbox
-              key={namespace}
-              checked={enabledNamespaces.has(namespace)}
-              namespace={namespace}
-              toggleNamespace={toggleNamespace}
-            />
-          ))}
-        </SimpleGrid>
-      </Stack>
-    </SettingsSection>
-  );
-};
-
-const DeveloperNamespaceCheckbox = ({
-  checked,
-  namespace,
-  toggleNamespace,
-}: {
-  checked: boolean;
-  namespace: DeveloperLogNamespace;
-  toggleNamespace: (namespace: DeveloperLogNamespace, checked: boolean) => void;
-}) => {
-  const handleCheckedChange = useCallback(
-    (event: { checked: boolean | 'indeterminate' }) => toggleNamespace(namespace, event.checked === true),
-    [namespace, toggleNamespace]
-  );
-
-  return (
-    <Checkbox.Root checked={checked} size="sm" onCheckedChange={handleCheckedChange}>
-      <Checkbox.HiddenInput />
-      <Checkbox.Control />
-      <Checkbox.Label color="fg.muted" fontSize="xs">
-        {formatSettingLabel(namespace)}
-      </Checkbox.Label>
-    </Checkbox.Root>
-  );
-};
-
-const WorkspaceSection = () => {
-  const commands = useOptionalWorkbenchCommands();
-  const mountedPersistence = useOptionalWorkbenchPersistenceService();
-  const { scope } = useWorkbenchSettings();
-  const [isClearConfirmOpen, setIsClearConfirmOpen] = useState(false);
-
-  const clearSavedData = useCallback(async () => {
-    await Promise.all([
-      mountedPersistence ? mountedPersistence.clearWorkbench() : clearAllWorkbenchData(),
-      clearWorkbenchSettings(),
-    ]);
-    window.location.reload();
-  }, [mountedPersistence]);
-  const resetLayout = useCallback(() => commands?.layout.reset(), [commands]);
-  const openClearConfirm = useCallback(() => setIsClearConfirmOpen(true), []);
-  const closeClearConfirm = useCallback(() => setIsClearConfirmOpen(false), []);
-
-  return (
-    <SettingsSection
-      description="Reset the layout, or permanently delete saved projects and settings."
-      title="Workspace"
-    >
-      <HStack gap="2" wrap="wrap">
-        {commands ? (
-          <Button size="sm" variant="outline" onClick={resetLayout}>
-            <RotateCcwIcon />
-            Reset layout
-          </Button>
-        ) : null}
-        <Button
-          borderColor="border.emphasized"
-          color="fg.error"
-          size="sm"
-          variant="outline"
-          _hover={DANGER_BUTTON_HOVER_STYLES}
-          onClick={openClearConfirm}
-        >
-          <Trash2Icon />
-          Clear saved data…
-        </Button>
-      </HStack>
-      <ConfirmDialog
-        body={
-          scope === 'user'
-            ? 'This permanently deletes all projects and settings for your account on this server. It cannot be undone.'
-            : 'This permanently deletes all projects and settings for this install. It cannot be undone.'
-        }
-        confirmLabel="Delete everything"
-        isOpen={isClearConfirmOpen}
-        title="Clear saved data?"
-        onClose={closeClearConfirm}
-        onConfirm={clearSavedData}
-      />
-    </SettingsSection>
-  );
-};
-
-const SettingToggle = ({
-  checked,
-  comingSoon,
-  description,
-  label,
-  onChange,
-}: {
-  checked: boolean;
-  comingSoon?: boolean;
-  description?: string;
-  label: string;
-  onChange: (checked: boolean) => void;
-}) => {
-  const descriptionId = useId();
-  const handleCheckedChange = useCallback(
-    (event: { checked: boolean | 'indeterminate' }) => onChange(event.checked === true),
-    [onChange]
-  );
-
-  return (
-    <Switch.Root
-      alignItems="center"
-      checked={checked}
-      disabled={comingSoon}
-      display="flex"
-      gap="4"
-      justifyContent="space-between"
-      w="full"
-      onCheckedChange={handleCheckedChange}
-    >
-      <Stack gap="0.5">
-        <Switch.Label color="fg" fontSize="sm" fontWeight="500" m="0">
-          {label}
-        </Switch.Label>
-        {description && (
-          <Text color="fg.subtle" fontSize="xs" id={descriptionId}>
-            {description}
-          </Text>
-        )}
-      </Stack>
-      <Switch.HiddenInput aria-describedby={descriptionId} />
-      <Switch.Control flexShrink={0} _checked={SWITCH_CHECKED_STYLES}>
-        <Switch.Thumb />
-      </Switch.Control>
-    </Switch.Root>
-  );
-};
-
-const SettingSelect = ({
-  comingSoon,
-  description,
-  label,
-  onChange,
-  options,
-  value,
-}: {
-  comingSoon?: boolean;
-  description?: string;
-  label: string;
-  onChange: (value: string) => void;
-  options: readonly { label: string; value: string }[];
-  value: string;
-}) => {
-  const collection = useMemo(() => createListCollection({ items: options }), [options]);
-  const selectedValue = useMemo(() => [value], [value]);
-  const handleValueChange = useCallback(
-    ({ value: next }: { value: string[] }) => {
-      const nextValue = next[0];
-
-      if (nextValue !== undefined) {
-        onChange(nextValue);
+  const { canManageAppConfig } = useCapabilities();
+  const state = settingsDialogStore.useSelector((snapshot) => snapshot);
+  const error = useWorkbenchSettingsSelector((snapshot) => snapshot.error);
+  const sections = settingsCatalog.filter((section) => section.id !== 'server' || canManageAppConfig);
+  const active = sections.find((section) => section.id === state.sectionId) ?? sections[0];
+  const searching = state.query.trim().length > 0;
+  const matches = searchSettings(sections, state.query, t);
+  const displayed = searching
+    ? matches.filter((section) => !state.searchSection || section.id === state.searchSection)
+    : [active];
+  const count = matches.reduce((total, section) => total + section.entries.length, 0);
+  const selectSection = useCallback(
+    (sectionId: string) => {
+      if (searching) {
+        settingsDialogStore.patchSnapshot({ searchSection: sectionId || null });
+      } else {
+        setWorkbenchSettingsSection(sectionId);
       }
     },
-    [onChange]
+    [searching]
   );
-
+  const selectAllResults = useCallback(() => selectSection(''), [selectSection]);
+  const changeSection = useCallback(
+    (event: ChangeEvent<HTMLSelectElement>) => selectSection(event.target.value),
+    [selectSection]
+  );
+  const changeQuery = useCallback((event: ChangeEvent<HTMLInputElement>) => setSettingsQuery(event.target.value), []);
+  const attachBody = useCallback((element: HTMLDivElement | null) => {
+    const current = settingsDialogStore.getSnapshot();
+    if (element && !current.query.trim() && !current.entryId) {
+      element.scrollTop = getSettingsSectionScroll(current.sectionId);
+    }
+  }, []);
   return (
-    <Field.Root
-      alignItems={FIELD_ALIGN_ITEMS}
-      disabled={comingSoon}
-      display="flex"
-      flexDirection={FIELD_FLEX_DIRECTION}
-      gap="3"
-      justifyContent="space-between"
-    >
-      <Stack gap="0.5">
-        <Field.Label color="fg" fontSize="sm" fontWeight="500" m="0">
-          {label}
-        </Field.Label>
-        {description && (
-          <Field.HelperText color="fg.subtle" fontSize="xs" m="0">
-            {description}
-          </Field.HelperText>
-        )}
-      </Stack>
-      <Select
-        collection={collection}
-        disabled={comingSoon}
+    <Flex h="full" minH="0" direction={DIRECTION}>
+      {hasWorkbench ? <ProjectLifetime /> : null}
+      <Flex
+        as="aside"
+        w={SIDEBAR_WIDTH}
         flexShrink={0}
-        maxW={SELECT_MAX_WIDTH}
-        size="sm"
-        value={selectedValue}
-        w="full"
-        onValueChange={handleValueChange}
-      />
-    </Field.Root>
+        direction="column"
+        bg="bg"
+        borderRightWidth={SIDEBAR_RIGHT_BORDER}
+        borderBottomWidth={SIDEBAR_BOTTOM_BORDER}
+        borderColor="border.subtle"
+        minH="0"
+      >
+        <Box p="3" pe={SEARCH_PADDING}>
+          <HStack position="relative">
+            <Icon as={SearchIcon} position="absolute" left="2.5" boxSize="3.5" color="fg.muted" pointerEvents="none" />
+            <Input
+              aria-label={t('settingsDialog.search')}
+              placeholder={t('settingsDialog.search')}
+              value={state.query}
+              ps="8"
+              pe="8"
+              size="sm"
+              onChange={changeQuery}
+            />
+            {state.query ? (
+              <Button
+                aria-label={t('settingsDialog.clearSearch')}
+                position="absolute"
+                right="0"
+                size="2xs"
+                variant="ghost"
+                onClick={clearSearch}
+              >
+                <XIcon />
+              </Button>
+            ) : null}
+          </HStack>
+        </Box>
+        <Box display={MOBILE_DISPLAY} px="3" pb="3">
+          <NativeSelect.Root size="sm">
+            <NativeSelect.Field
+              aria-label={t('settingsDialog.section')}
+              value={searching ? (state.searchSection ?? '') : active.id}
+              onChange={changeSection}
+            >
+              {searching ? <option value="">{t('settingsDialog.allResults')}</option> : null}
+              {(searching ? matches : sections).map((section) => (
+                <option key={section.id} value={section.id}>
+                  {resolveSettingsText(section.label, t)}
+                </option>
+              ))}
+            </NativeSelect.Field>
+            <NativeSelect.Indicator />
+          </NativeSelect.Root>
+        </Box>
+        <Box
+          as="nav"
+          aria-label={t('settings.title')}
+          display={DESKTOP_DISPLAY}
+          overflowY="auto"
+          flex="1"
+          minH="0"
+          px="2"
+          pb="3"
+        >
+          {searching ? (
+            <Button
+              w="full"
+              justifyContent="space-between"
+              size="sm"
+              variant={!state.searchSection ? 'subtle' : 'ghost'}
+              onClick={selectAllResults}
+            >
+              {t('settingsDialog.allResults')}
+              <Text fontSize="xs">{count}</Text>
+            </Button>
+          ) : null}
+          {GROUPS.map((group) => {
+            const groupSections = (searching ? matches : sections).filter((section) => section.group === group);
+            if (!groupSections.length) {
+              return null;
+            }
+            return (
+              <Stack key={group} gap="0.5" mt="4">
+                <Text px="2" pb="1" fontSize="2xs" fontWeight="600" color="fg.muted" textTransform="uppercase">
+                  {t(`settingsDialog.groups.${group}`)}
+                </Text>
+                {groupSections.map((section) => (
+                  <SettingsNavigationItem
+                    key={section.id}
+                    section={section}
+                    selected={(searching ? state.searchSection : active.id) === section.id}
+                    searching={searching}
+                    onSelect={selectSection}
+                  />
+                ))}
+              </Stack>
+            );
+          })}
+        </Box>
+      </Flex>
+      <Flex direction="column" flex="1" minW="0" minH="0">
+        <Dialog.Header asChild>
+          <PanelHeader px="4" pe="12" py="0">
+            <HStack gap="2">
+              <Icon as={searching ? SearchIcon : active.icon} boxSize="4" />
+              <Dialog.Title fontSize="xs" fontWeight="700">
+                <VisuallyHidden>{t('settings.title')}: </VisuallyHidden>
+                {searching ? t('settingsDialog.results') : resolveSettingsText(active.label, t)}
+              </Dialog.Title>
+            </HStack>
+          </PanelHeader>
+        </Dialog.Header>
+        {error ? (
+          <HStack role="alert" px="4" py="2" bg="bg.error">
+            <Text fontSize="xs" color="fg.error" flex="1">
+              {error}
+            </Text>
+            <Button size="xs" onClick={retrySave}>
+              {t('common.retry')}
+            </Button>
+          </HStack>
+        ) : null}
+        <VisuallyHidden role="status">{searching ? t('settingsDialog.resultCount', { count }) : ''}</VisuallyHidden>
+        <Box
+          key={searching ? `search:${state.searchSection ?? ''}` : active.id}
+          ref={attachBody}
+          onScroll={rememberScroll}
+          overflowY="auto"
+          flex="1"
+          minH="0"
+          px={CONTENT_PADDING}
+          pb="4"
+        >
+          {displayed.map((section) => (
+            <SettingsSectionContent
+              key={section.id}
+              section={section}
+              search={searching}
+              onReveal={setWorkbenchSettingsSection}
+            />
+          ))}
+          {searching && !displayed.length ? (
+            <Stack align="center" py="12" gap="3">
+              <Text color="fg.muted">{t('settingsDialog.noResults')}</Text>
+              <Button size="sm" variant="outline" onClick={clearSearch}>
+                {t('settingsDialog.clearSearch')}
+              </Button>
+            </Stack>
+          ) : null}
+        </Box>
+      </Flex>
+    </Flex>
   );
 };
 
-const formatSettingLabel = (value: string): string =>
-  value
-    .split('-')
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(' ');
+const SettingsNavigationItem = ({
+  section,
+  selected,
+  searching,
+  onSelect,
+}: {
+  section: SettingsSection;
+  selected: boolean;
+  searching: boolean;
+  onSelect: (sectionId: string) => void;
+}) => {
+  const { t } = useTranslation();
+  const select = useCallback(() => onSelect(section.id), [onSelect, section.id]);
+  return (
+    <Button
+      w="full"
+      justifyContent="start"
+      size="sm"
+      variant={selected ? 'subtle' : 'ghost'}
+      aria-current={selected ? 'page' : undefined}
+      onClick={select}
+    >
+      <Icon as={section.icon} boxSize="3.5" flexShrink={0} />
+      <Text flex="1" textAlign="start" whiteSpace="normal">
+        {resolveSettingsText(section.label, t)}
+      </Text>
+      {searching ? <Text fontSize="2xs">{section.entries.length}</Text> : null}
+    </Button>
+  );
+};
 
-const WORKFLOW_EDGE_STYLE_OPTIONS = [
-  { label: 'Curved', value: 'curved' },
-  { label: 'Square', value: 'square' },
-];
-
-const QUEUE_JOBS_SCOPE_OPTIONS = [
-  { label: 'Active project', value: 'active-project' },
-  { label: 'All', value: 'all' },
-];
-
-const DEVELOPER_LOG_LEVEL_OPTIONS = DEVELOPER_LOG_LEVELS.map((value) => ({
-  label: formatSettingLabel(value),
-  value,
-}));
-
-/** Default export so the top bar can host this body behind `React.lazy`. */
+const SettingsSectionContent = ({
+  section,
+  search,
+  onReveal,
+}: {
+  section: SettingsSection;
+  search: boolean;
+  onReveal: (sectionId: string, entryId?: string) => void;
+}) => {
+  const { t } = useTranslation();
+  const target = settingsDialogStore.useSelector((snapshot) =>
+    snapshot.sectionId === section.id ? snapshot.target : undefined
+  );
+  return (
+    <Box>
+      {!search && section.entries[0] ? (
+        <Box pt="3">
+          <SettingsScopeLabel scope={section.entries[0].field.scope} />
+        </Box>
+      ) : null}
+      {search ? (
+        <Stack gap="0.5" pt="5">
+          <Text as="h3" fontWeight="600" fontSize="sm">
+            {resolveSettingsText(section.label, t)}
+          </Text>
+          {section.entries[0] ? <SettingsScopeLabel scope={section.entries[0].field.scope} /> : null}
+        </Stack>
+      ) : null}
+      {section.entries.map((entry, index) => (
+        <SettingsEntryView
+          key={entry.field.id}
+          entry={entry}
+          section={section}
+          target={target}
+          search={search}
+          onReveal={onReveal}
+          showGroup={Boolean(
+            entry.field.group &&
+            resolveSettingsText(entry.field.group, t) !==
+              (section.entries[index - 1]?.field.group
+                ? resolveSettingsText(section.entries[index - 1].field.group!, t)
+                : '')
+          )}
+        />
+      ))}
+    </Box>
+  );
+};
 export default SettingsDialog;

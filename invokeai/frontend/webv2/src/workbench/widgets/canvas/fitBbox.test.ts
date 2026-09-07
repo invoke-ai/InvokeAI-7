@@ -1,5 +1,6 @@
-import type { CanvasDocumentContractV2, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
+import type { CanvasDocumentContractV3, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
 
+import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
 import { describe, expect, it } from 'vitest';
 
 import { computeFitBboxToLayers, computeFitBboxToMasks, fitRectToGrid, unionRenderableBounds } from './fitBbox';
@@ -51,16 +52,16 @@ const inpaintMask = (
   bitmap: { imageName: string; width: number; height: number } | null
 ): CanvasLayerContract => maskLayer('inpaint_mask', id, x, y, bitmap);
 
-const docWith = (layers: CanvasLayerContract[]): CanvasDocumentContractV2 =>
+const docWith = (layers: CanvasLayerContract[]): CanvasDocumentContractV3 =>
   ({
     background: 'transparent',
     bbox: { height: 512, width: 512, x: 0, y: 0 },
     height: 1024,
-    layers,
+    stacks: stacksFrom(layers),
     selectedLayerId: null,
-    version: 2,
+    version: 3,
     width: 1024,
-  }) as CanvasDocumentContractV2;
+  }) as CanvasDocumentContractV3;
 
 describe('fitRectToGrid', () => {
   it('snaps the rect inward to grid multiples (top-left up, size down)', () => {

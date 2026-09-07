@@ -4,11 +4,12 @@ import type {
   StagedPreviewInput,
   StagedPreviewPlacement,
 } from '@workbench/canvas-engine/capabilities';
-import type { CanvasDocumentContractV2 } from '@workbench/canvas-engine/contracts';
+import type { CanvasDocumentContractV3 } from '@workbench/canvas-engine/contracts';
 import type { PreviewStateController } from '@workbench/canvas-engine/controllers/previewStateController';
 import type { RasterSurface } from '@workbench/canvas-engine/render/raster';
 import type { ImageResolver } from '@workbench/canvas-engine/render/rasterizers';
 
+import { getDocumentLayer } from '@workbench/canvas-engine/document/documentIndex';
 import { LayerFilterOutputDimensionError } from '@workbench/canvas-engine/filterError';
 
 import { createStagedPreviewBlobCache } from './stagedPreviewBlobCache';
@@ -32,7 +33,7 @@ export interface CreatePreviewPublisherDeps {
   ) => Promise<{ surface: RasterSurface; decodedWidth: number; decodedHeight: number }>;
   readonly invalidateAll: () => void;
   readonly invalidateLayer: (layerId: string) => void;
-  readonly getDocument: () => CanvasDocumentContractV2 | null;
+  readonly getDocument: () => CanvasDocumentContractV3 | null;
   readonly isGuardCurrent: (guard: LayerExportGuard) => boolean;
 }
 
@@ -234,7 +235,7 @@ export const createPreviewPublisher = (deps: CreatePreviewPublisherDeps): Previe
 
     setGuardedFilterPreview: (layerId, input, guard) => {
       const validate = (): FilterPreviewOutcome => {
-        const liveLayer = deps.getDocument()?.layers.find((candidate) => candidate.id === layerId);
+        const liveLayer = getDocumentLayer(deps.getDocument(), layerId);
         if (!liveLayer) {
           return 'missing';
         }

@@ -13,6 +13,8 @@ import type { WidgetInstanceId, WidgetTypeId } from '@workbench/widgetContracts'
 
 import { BUILT_IN_LAYOUT_PRESET_LABELS } from '@workbench/launchpad/intents';
 
+// Notifications read as ambient status, not a tool: they live on the right.
+const defaultBottomAlignEndInstanceIds: WidgetInstanceId[] = ['notifications'];
 const defaultBottomInstanceIds: WidgetInstanceId[] = [
   'server-status',
   'queue-status',
@@ -40,7 +42,6 @@ const defaultInstanceTypes: Record<WidgetInstanceId, WidgetTypeId> = {
   queue: 'queue',
   'queue-status': 'queue-status',
   'server-status': 'server-status',
-  'version-status': 'version-status',
   workflow: 'workflow',
   'workflow:bottom': 'workflow',
   'workflow:center': 'workflow',
@@ -48,15 +49,23 @@ const defaultInstanceTypes: Record<WidgetInstanceId, WidgetTypeId> = {
 
 const createRegion = ({
   activeInstanceId,
+  alignEndInstanceIds,
   instanceIds,
   isCollapsed = false,
   sizePx,
 }: {
   activeInstanceId: WidgetInstanceId;
+  alignEndInstanceIds?: WidgetInstanceId[];
   instanceIds: WidgetInstanceId[];
   isCollapsed?: boolean;
   sizePx: number;
-}): WidgetRegionState => ({ activeInstanceId, instanceIds, isCollapsed, sizePx });
+}): WidgetRegionState => ({
+  activeInstanceId,
+  ...(alignEndInstanceIds ? { alignEndInstanceIds } : {}),
+  instanceIds,
+  isCollapsed,
+  sizePx,
+});
 
 const createWidgetInstances = (
   widgetRegions: Record<WidgetRegion, WidgetRegionState>
@@ -157,6 +166,7 @@ export const builtInLayoutPresetDescriptors: BuiltInLayoutPresetDescriptor[] = [
     widgetRegions: {
       bottom: createRegion({
         activeInstanceId: 'gallery:bottom',
+        alignEndInstanceIds: defaultBottomAlignEndInstanceIds,
         instanceIds: defaultBottomInstanceIds,
         isCollapsed: true,
         sizePx: 180,
@@ -174,7 +184,7 @@ export const builtInLayoutPresetDescriptors: BuiltInLayoutPresetDescriptor[] = [
       }),
       left: createRegion({
         activeInstanceId: 'generate',
-        instanceIds: ['generate', 'upscale', 'video'],
+        instanceIds: ['generate', 'upscale'],
         sizePx: 450,
       }),
       right: createRegion({
@@ -196,6 +206,7 @@ export const builtInLayoutPresetDescriptors: BuiltInLayoutPresetDescriptor[] = [
     widgetRegions: {
       bottom: createRegion({
         activeInstanceId: 'gallery:bottom',
+        alignEndInstanceIds: defaultBottomAlignEndInstanceIds,
         instanceIds: defaultBottomInstanceIds,
         isCollapsed: true,
         sizePx: 180,
@@ -207,12 +218,15 @@ export const builtInLayoutPresetDescriptors: BuiltInLayoutPresetDescriptor[] = [
       }),
       left: createRegion({
         activeInstanceId: 'generate',
-        instanceIds: ['generate', 'upscale', 'video'],
+        instanceIds: ['generate', 'upscale'],
         sizePx: 450,
       }),
       right: createRegion({
         activeInstanceId: 'layers',
-        instanceIds: ['layers', 'preview', 'gallery', 'image-map', 'queue'],
+        // Preview docks behind Layers: the editors are Layers panes, but the
+        // preview is a floatable widget, and its float/dock pair and floated
+        // Invoke control are only reachable where it is actually placed.
+        instanceIds: ['layers', 'preview'],
         sizePx: 450,
       }),
     },
@@ -229,6 +243,7 @@ export const builtInLayoutPresetDescriptors: BuiltInLayoutPresetDescriptor[] = [
     widgetRegions: {
       bottom: createRegion({
         activeInstanceId: 'gallery:bottom',
+        alignEndInstanceIds: defaultBottomAlignEndInstanceIds,
         instanceIds: defaultBottomInstanceIds,
         isCollapsed: true,
         sizePx: 180,
@@ -264,6 +279,7 @@ export const builtInLayoutPresetDescriptors: BuiltInLayoutPresetDescriptor[] = [
     widgetRegions: {
       bottom: createRegion({
         activeInstanceId: 'gallery:bottom',
+        alignEndInstanceIds: defaultBottomAlignEndInstanceIds,
         instanceIds: defaultBottomInstanceIds,
         isCollapsed: true,
         sizePx: 180,

@@ -15,6 +15,7 @@ from invokeai.app.invocations.workflow_return import (
     WorkflowReturnInvocation,
     WorkflowReturnOutput,
 )
+from invokeai.app.services.progress_previews.progress_previews_default import MemoryProgressPreviews
 from invokeai.app.services.session_processor.session_processor_default import (
     DefaultSessionProcessor,
     DefaultSessionRunner,
@@ -815,6 +816,7 @@ def _build_runner(monkeypatch: pytest.MonkeyPatch) -> DefaultSessionRunner:
             (),
             {
                 "performance_statistics": _DummyStats(),
+                "progress_previews": MemoryProgressPreviews(),
                 "events": _DummyEvents(),
                 "logger": _DummyLogger(),
                 "configuration": _DummyConfig(),
@@ -847,6 +849,7 @@ def _build_workflow_runner(monkeypatch: pytest.MonkeyPatch, session_queue=None):
             (),
             {
                 "performance_statistics": _DummyStats(),
+                "progress_previews": MemoryProgressPreviews(),
                 "events": events,
                 "logger": _DummyLogger(),
                 "configuration": _DummyConfig(),
@@ -1214,6 +1217,7 @@ def test_run_node_does_not_swallow_sigint_in_subprocess() -> None:
                 (),
                 {
                     "performance_statistics": DummyStats(),
+                    "progress_previews": MemoryProgressPreviews(),
                     "events": DummyEvents(),
                     "logger": DummyLogger(),
                     "configuration": DummyConfig(),
@@ -1252,6 +1256,7 @@ def test_on_after_run_session_does_not_complete_incomplete_session(monkeypatch: 
             (),
             {
                 "performance_statistics": _DummyStats(),
+                "progress_previews": MemoryProgressPreviews(),
                 "events": _DummyEvents(),
                 "logger": _DummyLogger(),
                 "configuration": _DummyConfig(),
@@ -1369,6 +1374,7 @@ def test_run_persists_waiting_session_without_completing_queue_item(monkeypatch:
             (),
             {
                 "performance_statistics": _DummyStats(),
+                "progress_previews": MemoryProgressPreviews(),
                 "events": _DummyEvents(),
                 "logger": _DummyLogger(),
                 "configuration": _DummyConfig(),

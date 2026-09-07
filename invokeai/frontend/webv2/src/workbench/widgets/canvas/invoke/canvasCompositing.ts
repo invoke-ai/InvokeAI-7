@@ -4,8 +4,8 @@
  *
  * Like {@link import('./canvasStrength').readCanvasDenoisingStrength}, these
  * values are persisted per-project inside the canvas widget's own state values
- * (`widgetInstances['canvas'].state.values`), so they survive reloads and ride
- * along in queue snapshots. The generate widget's compositing section owns the
+ * (`widgetInstances['canvas'].state.values`), so they survive reloads and are
+ * consumed when the queue submission is compiled. The generate widget's compositing section owns the
  * numeric controls; the canvas settings menu owns the masked-only output flag.
  * `prepareCanvasInvocation` reads them together — defaulted + clamped — and
  * threads one generation-facing contract into the pure graph compiler.

@@ -1,10 +1,8 @@
-import type { CanvasAdjustmentsContract } from '@workbench/canvas-engine/contracts';
-
 import { describe, expect, it, vi } from 'vitest';
 
 import { curvePointFromSvg, curvePointToSvg, finishCurveDragResult, getCurveGridCoordinates } from './curveEditorMath';
 
-const BEFORE: CanvasAdjustmentsContract = {
+const BEFORE = {
   brightness: 0,
   contrast: 0,
   curves: {
@@ -24,10 +22,10 @@ const BEFORE: CanvasAdjustmentsContract = {
   saturation: 0,
 };
 
-const CURRENT: CanvasAdjustmentsContract = {
+const CURRENT = {
   ...BEFORE,
   curves: {
-    ...BEFORE.curves!,
+    ...BEFORE.curves,
     r: [
       [0, 32],
       [255, 255],

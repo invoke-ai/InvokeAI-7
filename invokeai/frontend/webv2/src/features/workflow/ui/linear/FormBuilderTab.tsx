@@ -34,6 +34,7 @@ import { useProjectGraphCommands } from '@features/workflow/ui/useProjectGraphCo
 import { useWorkflowHostCommands } from '@features/workflow/ui/WorkflowUiContext';
 import { getFormChildren, getResolvedWorkflowEdges, getWorkflowFieldInvalidReason } from '@features/workflow/utility';
 import { Button, DropZone, IconButton } from '@platform/ui';
+import { MenuContent } from '@platform/ui/Menu';
 import { Columns2Icon, CrosshairIcon, GripVerticalIcon, InfoIcon, PlusIcon, Rows2Icon, XIcon } from 'lucide-react';
 import {
   createContext,
@@ -502,14 +503,14 @@ const AddElementMenu = () => {
       </Menu.Trigger>
       <Portal>
         <Menu.Positioner>
-          <Menu.Content minW="11rem">
+          <MenuContent minW="11rem">
             {ADDABLE_FORM_ELEMENT_KEYS.map((key) => (
               <Menu.Item key={key} value={key} onClick={() => add(key)}>
                 <Icon as={FORM_ELEMENT_META[key].icon} boxSize="3" />
                 {FORM_ELEMENT_META[key].label}
               </Menu.Item>
             ))}
-          </Menu.Content>
+          </MenuContent>
         </Menu.Positioner>
       </Portal>
     </Menu.Root>

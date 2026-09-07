@@ -135,6 +135,78 @@ describe('renderOverlay', () => {
     expect(moveTos).toHaveLength(4);
   });
 
+  it.each([
+    ['radial', 1],
+    ['linear', 0],
+  ] as const)('previews a %s gradient drag as its vector plus %s screen-space circle', (kind, circles) => {
+    const backend = createTestStubRasterBackend();
+    const target = backend.createSurface(200, 200);
+    renderOverlay(
+      target,
+      baseState({
+        gradientPreview: { end: { x: 13, y: 14 }, kind, start: { x: 10, y: 10 } },
+        showBbox: false,
+        view: { a: 2, b: 0, c: 0, d: 2, e: 0, f: 0 },
+      })
+    );
+    // The endpoint dots are 3px arcs; the radius circle spans the screen-space drag.
+    const arcs = target.callLog.filter((e) => e.op === 'arc').map((e) => e.args);
+    expect(arcs.filter((args) => args[2] !== 3)).toHaveLength(circles);
+    if (circles > 0) {
+      expect(arcs.find((args) => args[2] !== 3)?.slice(0, 3)).toEqual([20, 20, 10]);
+    }
+  });
+
+  it("marks a polygon lasso's vertices and fills the first-vertex ring once a click there would close it", () => {
+    const points = [
+      { x: 10, y: 10 },
+      { x: 50, y: 10 },
+      { x: 50, y: 50 },
+    ];
+    const render = (closeArmed: boolean) => {
+      const backend = createTestStubRasterBackend();
+      const target = backend.createSurface(200, 200);
+      renderOverlay(
+        target,
+        baseState({
+          lassoPreview: { closeArmed, closeRadiusPx: 8, cursor: { x: 12, y: 12 }, kind: 'polygon', points },
+          showBbox: false,
+        })
+      );
+      return target.callLog;
+    };
+    const idle = render(false);
+    // The ring is the close hit radius itself, so it never disagrees with the click.
+    expect(idle.filter((e) => e.op === 'arc').map((e) => e.args.slice(0, 3))).toEqual([[10, 10, 8]]);
+    expect(idle.filter((e) => e.op === 'fillRect')).toHaveLength(2);
+    expect(idle.filter((e) => e.op === 'fill')).toHaveLength(0);
+
+    const armed = render(true);
+    expect(armed.filter((e) => e.op === 'fill')).toHaveLength(1);
+  });
+
+  it('draws no close ring while the polygon cannot close yet', () => {
+    const backend = createTestStubRasterBackend();
+    const target = backend.createSurface(200, 200);
+    renderOverlay(
+      target,
+      baseState({
+        lassoPreview: {
+          closeArmed: false,
+          closeRadiusPx: null,
+          cursor: { x: 30, y: 30 },
+          kind: 'polygon',
+          points: [
+            { x: 10, y: 10 },
+            { x: 50, y: 10 },
+          ],
+        },
+        showBbox: false,
+      })
+    );
+    expect(target.callLog.filter((e) => e.op === 'arc')).toHaveLength(0);
+  });
+
   it('draws the dedicated SAM mask preview before its bbox, handles, and colored points', () => {
     const backend = createTestStubRasterBackend();
     const target = backend.createSurface(200, 200);
@@ -147,7 +219,13 @@ describe('renderOverlay', () => {
           excludePoints: [{ x: 50, y: 60 }],
           includePoints: [{ x: 30, y: 40 }],
         },
-        samPreview: { opacity: 0.45, rect: { height: 10, width: 20, x: 20, y: 30 }, surface: mask },
+        samPreview: {
+          outline: null,
+          phase: 0,
+          opacity: 0.45,
+          rect: { height: 10, width: 20, x: 20, y: 30 },
+          surface: mask,
+        },
         showBbox: false,
       })
     );

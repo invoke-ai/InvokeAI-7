@@ -103,12 +103,15 @@ export const useMapSelection = (): MapSelectionActions => {
           // The board listing the gallery will show once the reveal below has
           // cleared any search: identical filter shape, so the name list (and
           // the prefetched pages) land in the cache the gallery reads.
+          // The grid partitions on the flag: a starred image is revealed in
+          // the starred-only listing, an unstarred one in the plain listing.
+          const wantsStarredOnly = image.starred === true;
           const listingFilter = {
             boardId: image.boardId,
             galleryView: targetView,
             orderDir: settings.imageOrderDir,
             searchTerm: '',
-            starredFirst: settings.starredFirst,
+            starred: wantsStarredOnly,
           };
           // The image's position within its board's ordering, which is what
           // lets the gallery land on the right page rather than page 0. A
@@ -154,22 +157,28 @@ export const useMapSelection = (): MapSelectionActions => {
           const settingsNow = getGallerySettings(values);
 
           // The listing's ordering may have changed while the name list was
-          // in flight (sort direction, starred-first); the computed index
-          // describes the old ordering, so the page landing is dropped.
-          if (
-            settingsNow.imageOrderDir !== settings.imageOrderDir ||
-            settingsNow.starredFirst !== settings.starredFirst
-          ) {
+          // in flight (sort direction); the computed index describes the old
+          // ordering, so the page landing is dropped.
+          if (settingsNow.imageOrderDir !== settings.imageOrderDir) {
             boardIndex = null;
           }
 
           const currentView: GalleryView = values.galleryView === 'assets' ? 'assets' : 'images';
           const hasSearch = typeof values.searchTerm === 'string' && values.searchTerm !== '';
 
-          // Filters would hide the board listing the index was computed
-          // against (the image may not match them), so the reveal clears them.
-          if (hasSearch || (values.semanticImageQuery !== null && values.semanticImageQuery !== undefined)) {
-            commands.widgets.patchValues('gallery', { searchTerm: '', semanticImageQuery: null });
+          // Filters would hide the listing the index was computed against
+          // (the image may not match them), so the reveal clears them and sets
+          // the starred filter to the image's own side of the partition.
+          if (
+            hasSearch ||
+            (values.starredOnly === true) !== wantsStarredOnly ||
+            (values.semanticImageQuery !== null && values.semanticImageQuery !== undefined)
+          ) {
+            commands.widgets.patchValues('gallery', {
+              searchTerm: '',
+              semanticImageQuery: null,
+              starredOnly: wantsStarredOnly,
+            });
           }
 
           if (currentView !== targetView) {

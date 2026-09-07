@@ -1,10 +1,11 @@
-/* oxlint-disable react-perf/jsx-no-new-object-as-prop */
 import type {
   NormalizedWidgetManifest,
   RegisteredWidget,
   WidgetImplementation,
   WidgetInstanceContract,
 } from '@workbench/widgetContracts';
+/* oxlint-disable react-perf/jsx-no-new-object-as-prop */
+import type * as workbenchContext from '@workbench/WorkbenchContext';
 
 import { ChakraProvider, Stack, Text } from '@chakra-ui/react';
 import { StatusWidgetChip } from '@platform/ui';
@@ -35,8 +36,14 @@ const workbenchMocks = vi.hoisted(() => ({
   runtime: {},
 }));
 
-vi.mock('@workbench/WorkbenchContext', () => ({
+vi.mock('@workbench/WorkbenchContext', async (importOriginal) => ({
+  ...(await importOriginal<typeof workbenchContext>()),
   shallowEqual: Object.is,
+  useActiveProjectId: () => workbenchMocks.project.id,
+  useWorkbenchQueries: () => ({
+    getProject: (projectId: string) => (projectId === workbenchMocks.project.id ? workbenchMocks.project : null),
+    isActiveProject: (projectId: string) => projectId === workbenchMocks.project.id,
+  }),
   useActiveProjectSelector: (selector: (project: typeof workbenchMocks.project) => unknown) =>
     selector(workbenchMocks.project),
   useWorkbenchCommands: () => ({ layout: { setRegionCollapsed: () => {}, setRegionSize: () => {} } }),
@@ -115,7 +122,7 @@ const createDeferredWidget = () => {
   );
   const manifest: NormalizedWidgetManifest = {
     allowMultiple: false,
-    allowedRegions: ['bottom', 'center', 'right'],
+    allowedRegions: ['bottom', 'center', 'left', 'right'],
     apiVersion: 1,
     failurePolicy: { isolateRenderFailure: true, onRegistrationFailure: 'disable' },
     icon: TestIcon,
@@ -205,11 +212,12 @@ afterEach(async () => {
 });
 
 describe('WidgetRenderer loading identity transitions', () => {
-  // The center region has no header row of its own — `CenterArea` floats that
-  // chrome above the work surface — so the identity slot lives in panel frames.
+  // The center region and the right-rail docks have no header row of their own
+  // (`CenterArea` and the dock tab strips carry it), so the identity slot lives
+  // in the left and bottom panel frames.
   it('swaps spinner for icon without moving a renamed standard header', async () => {
     const { resolve, widget } = createDeferredWidget();
-    await render(<WidgetRenderer instance={createInstance('Renamed widget')} region="right" widget={widget} />);
+    await render(<WidgetRenderer instance={createInstance('Renamed widget')} region="left" widget={widget} />);
 
     const loadingGeometry = getIdentityGeometry();
     expect(host?.textContent).toContain('Renamed widget');
@@ -225,7 +233,7 @@ describe('WidgetRenderer loading identity transitions', () => {
 
   it('keeps the identity slot aligned when a custom header label loads', async () => {
     const { resolve, widget } = createDeferredWidget();
-    await render(<WidgetRenderer instance={createInstance()} region="right" widget={widget} />);
+    await render(<WidgetRenderer instance={createInstance()} region="left" widget={widget} />);
 
     const loadingGeometry = getIdentityGeometry();
     await resolve({ headerLabel: CustomHeaderLabel, view: TestView });
@@ -292,7 +300,7 @@ describe('WidgetRenderer failure containment', () => {
 
   it('keeps a crashed panel widget framed and resizable', async () => {
     const { resolve, widget } = createDeferredWidget();
-    await render(<WidgetRenderer instance={createInstance()} region="right" widget={widget} />);
+    await render(<WidgetRenderer instance={createInstance()} region="left" widget={widget} />);
 
     await resolve({ view: ThrowingView });
     await expect.poll(() => host?.querySelector('[data-testid="widget-failure"]')).not.toBeNull();

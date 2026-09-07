@@ -1,9 +1,22 @@
-import type { ReactElement } from 'react';
+import type { HTMLAttributes, ReactElement, ReactNode } from 'react';
 
-import { Heading, HoverCard, HStack, Icon, Link, Portal, Separator, Spacer, Stack, Text } from '@chakra-ui/react';
+import {
+  Heading,
+  HoverCard,
+  HStack,
+  Icon,
+  Link,
+  mergeProps,
+  Portal,
+  Separator,
+  Spacer,
+  Stack,
+  Text,
+  useHoverCardContext,
+} from '@chakra-ui/react';
 import { Button } from '@platform/ui/Button';
 import { ExternalLinkIcon } from 'lucide-react';
-import { useMemo } from 'react';
+import { cloneElement, createContext, useContext, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { DEFAULT_HINT_PLACEMENT, getFeatureHint, type FeatureHintId } from './hintRegistry';
@@ -40,7 +53,7 @@ const HintCard = ({ hint, onDisable }: { hint: FeatureHintId; onDisable: (() => 
           <Separator />
           <HStack gap="2" minH="4">
             {onDisable && (
-              <Button color="fg.subtle" fontSize="2xs" h="auto" px="0" size="2xs" variant="plain" onClick={onDisable}>
+              <Button color="fg.subtle" fontSize="2xs" h="auto" px="1" size="2xs" variant="plain" onClick={onDisable}>
                 {t('common.dontShowMeThese')}
               </Button>
             )}
@@ -56,6 +69,34 @@ const HintCard = ({ hint, onDisable }: { hint: FeatureHintId; onDisable: (() => 
       )}
     </Stack>
   );
+};
+
+type ExclusionHandlers = Pick<HTMLAttributes<HTMLElement>, 'onPointerEnter' | 'onPointerLeave'>;
+
+const ExclusionContext = createContext<ExclusionHandlers | null>(null);
+
+/** Hands the trigger's own pointer handlers, swapped, to any exclusion inside the trigger. */
+const ExclusionProvider = ({ children }: { children: ReactNode }) => {
+  const { onPointerEnter, onPointerLeave } = useHoverCardContext().getTriggerProps();
+  const handlers = useMemo<ExclusionHandlers | null>(
+    () =>
+      onPointerEnter && onPointerLeave ? { onPointerEnter: onPointerLeave, onPointerLeave: onPointerEnter } : null,
+    [onPointerEnter, onPointerLeave]
+  );
+  return <ExclusionContext.Provider value={handlers}>{children}</ExclusionContext.Provider>;
+};
+
+/**
+ * A region inside a hint's trigger that the pointer can rest on without
+ * summoning the hint — controls that carry their own tooltips. Entering the
+ * region counts as leaving the trigger and leaving it as re-entering, so the
+ * card closes over the region and reopens over the rest of the trigger. React
+ * dispatches enter events outermost first, so a pointer landing straight on the
+ * region never opens the card. Keyboard focus on the trigger is unaffected.
+ */
+export const FeatureHintExclusion = ({ children }: { children: ReactElement<HTMLAttributes<HTMLElement>> }) => {
+  const handlers = useContext(ExclusionContext);
+  return handlers ? cloneElement(children, mergeProps(handlers, children.props)) : children;
 };
 
 export interface FeatureHintProps {
@@ -89,7 +130,9 @@ export const FeatureHint = ({ children, hint }: FeatureHintProps) => {
 
   return (
     <HoverCard.Root closeDelay={CLOSE_DELAY} lazyMount openDelay={OPEN_DELAY} positioning={positioning} unmountOnExit>
-      <HoverCard.Trigger asChild>{children}</HoverCard.Trigger>
+      <ExclusionProvider>
+        <HoverCard.Trigger asChild>{children}</HoverCard.Trigger>
+      </ExclusionProvider>
       <Portal>
         <HoverCard.Positioner>
           <HoverCard.Content>

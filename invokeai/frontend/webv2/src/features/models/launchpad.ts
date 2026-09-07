@@ -10,4 +10,4 @@ export { ModelsNotice } from './ui/launchpad/ModelsNotice';
  * only ever reached by `import()`, so seeding a search from the editor costs
  * the editor nothing until someone clicks.
  */
-export { requestAddModelsSearch } from './ui/uiStore';
+export { requestAddModelsSearch, requestAddModelsTypeFilter } from './ui/uiStore';

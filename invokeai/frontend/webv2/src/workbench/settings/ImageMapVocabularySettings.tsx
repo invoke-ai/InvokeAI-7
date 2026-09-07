@@ -225,7 +225,7 @@ export const ImageMapVocabularySettings = () => {
           </HStack>
         </Field>
       ) : (
-        <Text color="fg.subtle" fontSize="xs">
+        <Text color="fg.muted" fontSize="xs">
           {t('settings.imageMapVocabulary.adminOnly')}
         </Text>
       )}
@@ -252,7 +252,7 @@ export const ImageMapVocabularySettings = () => {
           ))}
         </Wrap>
       ) : (
-        <Text color="fg.subtle" fontSize="2xs">
+        <Text color="fg.muted" fontSize="2xs">
           {t('settings.imageMapVocabulary.noTermsYet')}
         </Text>
       )}
@@ -295,13 +295,13 @@ const VocabularyStatusLine = ({
 
   return (
     <Stack gap="1">
-      <Text color="fg.subtle" fontSize="2xs">
+      <Text color="fg.muted" fontSize="2xs">
         {t('settings.imageMapVocabulary.count', { count: vocab.terms.length, max: vocab.maxTerms })}
       </Text>
       {vocab.state === 'building' ? (
         <HStack gap="1.5">
           <Spinner size="xs" />
-          <Text color="fg.subtle" fontSize="2xs">
+          <Text color="fg.muted" fontSize="2xs">
             {progress
               ? t('settings.imageMapVocabulary.rebuildingQueued', { progress: progress.counts })
               : t('settings.imageMapVocabulary.rebuilding')}
@@ -321,7 +321,7 @@ const VocabularyStatusLine = ({
         </HStack>
       ) : null}
       {vocab.state === 'unavailable' ? (
-        <Text color="fg.subtle" fontSize="2xs">
+        <Text color="fg.muted" fontSize="2xs">
           {t('settings.imageMapVocabulary.indexOff')}
         </Text>
       ) : null}

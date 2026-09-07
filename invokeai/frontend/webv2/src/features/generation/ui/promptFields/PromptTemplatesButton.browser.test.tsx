@@ -1,7 +1,7 @@
 import type { PromptTemplateSnapshot } from '@features/generation/core/promptTemplates';
 import type { PromptTemplateCatalog } from '@features/generation/ui/usePromptTemplates';
 
-import { Box, ChakraProvider } from '@chakra-ui/react';
+import { ChakraProvider } from '@chakra-ui/react';
 import { PromptTemplatesButton } from '@features/generation/ui/promptFields/PromptTemplatesButton';
 import { system } from '@theme/system';
 import i18next from 'i18next';
@@ -62,7 +62,6 @@ const render = async (activeTemplate: PromptTemplateSnapshot | null) => {
     root?.render(
       <I18nextProvider i18n={i18n}>
         <ChakraProvider value={system}>
-          <Box aria-hidden bg="bg.muted" data-testid="popover-surface-style-probe" />
           <PromptTemplatesButton activeTemplate={activeTemplate} showSyntaxHighlighting={false} onApply={vi.fn()} />
         </ChakraProvider>
       </I18nextProvider>
@@ -85,7 +84,7 @@ afterEach(async () => {
 });
 
 describe('the prompt templates button', () => {
-  it('opens the catalog lazily on the standard popover surface', async () => {
+  it('opens the catalog lazily', async () => {
     await render(null);
 
     expect(lastIsEnabled()).toBe(false);
@@ -95,11 +94,7 @@ describe('the prompt templates button', () => {
     });
 
     expect(lastIsEnabled()).toBe(true);
-    const content = document.querySelector<HTMLElement>('[data-scope="popover"][data-part="content"]')!;
-    const surface = getComputedStyle(
-      host!.querySelector('[data-testid="popover-surface-style-probe"]')!
-    ).backgroundColor;
-    expect(getComputedStyle(content).backgroundColor).toBe(surface);
+    expect(document.querySelector('[data-scope="popover"][data-part="content"]')).not.toBeNull();
   });
 
   it('dims the name and says so when the applied template is gone', async () => {

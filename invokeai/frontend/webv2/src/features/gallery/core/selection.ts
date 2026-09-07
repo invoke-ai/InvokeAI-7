@@ -8,6 +8,7 @@ import {
   toGalleryItemKey,
   type GalleryItem,
   type GalleryItemKey,
+  type GalleryItemRef,
 } from './items';
 
 const isRecord = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === 'object';
@@ -93,6 +94,40 @@ export const getPersistedSelectedGalleryItemKeys = (galleryValues: Record<string
   const selectedItem = getSelectedGalleryItemFromValues(galleryValues);
 
   return selectedItem ? [toGalleryItemKey(selectedItem)] : [];
+};
+
+/**
+ * Successor after deleting `primaryKey`: the next eligible entry in display
+ * order, else the nearest earlier one — later-first stays out of the starred block.
+ */
+export const getGalleryDeletionSuccessor = (
+  orderedRefs: readonly GalleryItemRef[],
+  primaryKey: GalleryItemKey,
+  ineligibleKeys: ReadonlySet<GalleryItemKey>
+): GalleryItemRef | null => {
+  const primaryIndex = orderedRefs.findIndex((ref) => toGalleryItemKey(ref) === primaryKey);
+
+  if (primaryIndex < 0) {
+    return null;
+  }
+
+  for (let index = primaryIndex + 1; index < orderedRefs.length; index += 1) {
+    const candidate = orderedRefs[index];
+
+    if (candidate && !ineligibleKeys.has(toGalleryItemKey(candidate))) {
+      return candidate;
+    }
+  }
+
+  for (let index = primaryIndex - 1; index >= 0; index -= 1) {
+    const candidate = orderedRefs[index];
+
+    if (candidate && !ineligibleKeys.has(toGalleryItemKey(candidate))) {
+      return candidate;
+    }
+  }
+
+  return null;
 };
 
 /*

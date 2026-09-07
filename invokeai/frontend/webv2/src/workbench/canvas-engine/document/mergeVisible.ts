@@ -1,52 +1,71 @@
-import type { CanvasLayerContract } from '@workbench/canvas-engine/contracts';
+import type { CanvasDocumentContractV3, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
+import type { SemanticLeaf } from '@workbench/canvas-engine/document-model/semanticLeaf';
+
+import { getDocumentIndex } from './documentIndex';
+import { isLayerEditable } from './layerEligibility';
 
 export type HasMergeVisibleContent = (layerId: string) => boolean;
 
-/** Returns eligible contributors in document order (top-most first). */
-export const getMergeVisibleRasterLayers = (
-  layers: readonly CanvasLayerContract[],
+/** Contributing raster leaves with content, top first. */
+export const getMergeVisibleRasterLeaves = (
+  leaves: readonly SemanticLeaf[],
   hasContent: HasMergeVisibleContent
-): CanvasLayerContract[] =>
-  layers.filter((layer) => layer.type === 'raster' && layer.isEnabled && hasContent(layer.id));
+): SemanticLeaf[] =>
+  leaves.filter((leaf) => leaf.stack === 'raster' && leaf.contributionEnabled && hasContent(leaf.id));
 
-/** Whether the raster group's merge-visible action has at least two contributors. */
-export const canMergeVisibleRasters = (
-  layers: readonly CanvasLayerContract[],
+/** Contributing raster layers with content, top first. */
+export const getMergeVisibleRasterLayers = (
+  leaves: readonly SemanticLeaf[],
   hasContent: HasMergeVisibleContent
-): boolean => getMergeVisibleRasterLayers(layers, hasContent).length >= 2;
+): CanvasLayerContract[] => getMergeVisibleRasterLeaves(leaves, hasContent).map((leaf) => leaf.layer);
+
+/** Whether the raster stack's merge-visible action has at least two contributors. */
+export const canMergeVisibleRasters = (leaves: readonly SemanticLeaf[], hasContent: HasMergeVisibleContent): boolean =>
+  getMergeVisibleRasterLayers(leaves, hasContent).length >= 2;
 
 /**
- * Destructive merge-selected may only collapse one uninterrupted span of the
- * raster stack. Other layer groups do not participate in raster compositing
- * order, so a mask/control layer between two selected rasters is harmless; an
- * unselected raster between them is not.
+ * Destructive merge-selected may only collapse one uninterrupted run of raster siblings: leaves
+ * under one parent with nothing between them, since any node in between takes part in the
+ * composite between the selected layers.
  */
 export const areSelectedRasterLayersContiguous = (
-  layers: readonly CanvasLayerContract[],
+  document: Pick<CanvasDocumentContractV3, 'stacks'>,
   selectedLayerIds: ReadonlySet<string>
 ): boolean => {
-  const rasterLayers = layers.filter((layer) => layer.type === 'raster');
-  const selectedIndexes = rasterLayers.flatMap((layer, index) => (selectedLayerIds.has(layer.id) ? [index] : []));
-  if (selectedIndexes.length < 2 || selectedIndexes.length !== selectedLayerIds.size) {
+  if (selectedLayerIds.size < 2) {
     return false;
   }
-  return selectedIndexes.at(-1)! - selectedIndexes[0]! + 1 === selectedIndexes.length;
+  const index = getDocumentIndex(document);
+  const entries = [...selectedLayerIds].map((id) => index.byId.get(id));
+  const first = entries[0];
+  if (
+    !first ||
+    entries.some(
+      (entry) => !entry || entry.node.type !== 'raster' || entry.stack !== 'raster' || entry.parentId !== first.parentId
+    )
+  ) {
+    return false;
+  }
+  const positions = entries.map((entry) => entry!.siblingIndex).sort((a, b) => a - b);
+  return positions.at(-1)! - positions[0]! + 1 === positions.length;
 };
 
 /** Whether merge-selected can flatten the exact selection without changing the rendered composite. */
 export const canMergeSelectedRasters = (
-  layers: readonly CanvasLayerContract[],
+  document: Pick<CanvasDocumentContractV3, 'stacks'>,
+  leaves: readonly SemanticLeaf[],
   selectedLayerIds: ReadonlySet<string>,
   hasContent: HasMergeVisibleContent
 ): boolean =>
-  areSelectedRasterLayersContiguous(layers, selectedLayerIds) &&
-  layers
-    .filter((layer) => selectedLayerIds.has(layer.id))
+  areSelectedRasterLayersContiguous(document, selectedLayerIds) &&
+  leaves
+    .filter((leaf) => selectedLayerIds.has(leaf.id))
     .every(
-      (layer) =>
-        layer.type === 'raster' &&
-        layer.isEnabled &&
-        !layer.isLocked &&
-        layer.blendMode === 'normal' &&
-        hasContent(layer.id)
+      (leaf) =>
+        leaf.stack === 'raster' &&
+        leaf.contributionEnabled &&
+        !leaf.effectiveLocked &&
+        isLayerEditable(leaf.layer) &&
+        leaf.layer.blendMode === 'normal' &&
+        hasContent(leaf.id)
     );

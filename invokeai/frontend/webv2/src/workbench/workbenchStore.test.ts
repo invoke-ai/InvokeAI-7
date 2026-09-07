@@ -1,3 +1,4 @@
+import { stackTopAnchor } from '@workbench/canvas-engine/document/insertionAnchors.testStub';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { CanvasLayerContract } from './canvas-engine/contracts';
@@ -5,10 +6,14 @@ import type { LayoutPreset, LayoutPresetRoute } from './layoutContracts';
 import type { WorkbenchInternalStore, WorkbenchSnapshot } from './workbenchStore';
 
 import { clearProjectDiagnostics, configureDiagnostics, getProjectDiagnostics } from './diagnostics/logger';
+import { publishLayerPanelSelection, readLayerPanelState, toggleLayerStackCollapsed } from './layerPanelState';
 import { areWidgetPlacementProjectsEqual, getWidgetPlacementProject } from './widgetPlacementMeta';
 import { getProjectWidgetValues } from './widgetState';
 import { createInitialWorkbenchState } from './workbenchState';
-import { createWorkbenchStore, publishLayerPanelSelection, readLayerPanelSelection } from './workbenchStore';
+import { createWorkbenchStore } from './workbenchStore';
+
+const overlays = vi.hoisted(() => ({ closeWidgetOverlays: vi.fn() }));
+vi.mock('@platform/ui/widgetOverlayRegistry', () => overlays);
 
 const paintLayer = (id: string): CanvasLayerContract => ({
   blendMode: 'normal',
@@ -70,36 +75,162 @@ describe('createWorkbenchStore', () => {
     expect(snapshot.projects).toHaveLength(1);
   });
 
-  it('resets transient layer multi-selection across project switches even without a Layers panel', () => {
+  it('blocks persistence retargets only for queue work that has reached the backend', () => {
+    const runningState = createInitialWorkbenchState();
+    const source = runningState.projects[0]!;
+    runningState.projects[0] = {
+      ...source,
+      queue: {
+        items: [{ backendItemIds: [11], id: 'run-1', status: 'running' } as (typeof source.queue.items)[number]],
+      },
+    };
+    const runningStore = createWorkbenchStore(runningState);
+    const payload = {
+      boardId: 'copy-board',
+      name: `${source.name} (copy)`,
+      project: { ...source, id: 'copy-id' },
+      projectId: source.id,
+      sourceName: source.name,
+      targetProjectId: 'copy-id',
+    };
+
+    expect(runningStore.internal.persistence.retargetProject(payload)).toEqual({
+      ok: false,
+      reason: 'active-queue-runs',
+    });
+
+    for (const status of ['completed', 'failed', 'cancelled'] as const) {
+      const terminalStore = createWorkbenchStore({
+        ...runningState,
+        projects: [
+          {
+            ...runningState.projects[0]!,
+            queue: {
+              items: [
+                {
+                  backendItemIds: [11],
+                  id: 'run-1',
+                  status,
+                } as (typeof source.queue.items)[number],
+              ],
+            },
+          },
+        ],
+      });
+      expect(terminalStore.internal.persistence.retargetProject(payload)).toEqual({ ok: true });
+    }
+
+    const pendingState = createInitialWorkbenchState();
+    pendingState.projects[0] = {
+      ...pendingState.projects[0]!,
+      queue: { items: [{ id: 'pending-1', status: 'pending' } as (typeof source.queue.items)[number]] },
+    };
+    const pendingStore = createWorkbenchStore(pendingState);
+    const pendingSource = pendingState.projects[0]!;
+    expect(
+      pendingStore.internal.persistence.retargetProject({
+        ...payload,
+        project: { ...pendingSource, id: 'copy-id' },
+        projectId: pendingSource.id,
+        sourceName: pendingSource.name,
+      })
+    ).toEqual({ ok: true });
+  });
+
+  it('blocks persistence retargets while durable cancellation is pending', () => {
+    const state = createInitialWorkbenchState();
+    const source = state.projects[0]!;
+    state.projects[0] = {
+      ...source,
+      queue: {
+        items: [
+          {
+            backendItemIds: [11],
+            cancellationPending: true,
+            id: 'run-1',
+            status: 'cancelled',
+          } as (typeof source.queue.items)[number],
+        ],
+      },
+    };
+    const store = createWorkbenchStore(state);
+
+    expect(
+      store.internal.persistence.retargetProject({
+        boardId: 'copy-board',
+        name: `${source.name} (copy)`,
+        project: { ...source, id: 'copy-id' },
+        projectId: source.id,
+        sourceName: source.name,
+        targetProjectId: 'copy-id',
+      })
+    ).toEqual({ ok: false, reason: 'active-queue-runs' });
+  });
+
+  it("keeps each project's transient layer multi-selection across project switches", () => {
     const store = createWorkbenchStore();
     const firstProjectId = store.getSnapshot().activeProject.id;
-    store.commands.canvas.apply(firstProjectId, { layer: paintLayer('a'), type: 'addCanvasLayer' });
-    store.commands.canvas.apply(firstProjectId, { layer: paintLayer('b'), type: 'addCanvasLayer' });
+    store.commands.canvas.apply(firstProjectId, {
+      anchor: stackTopAnchor(firstProjectId),
+      layer: paintLayer('a'),
+      type: 'addCanvasLayer',
+    });
+    store.commands.canvas.apply(firstProjectId, {
+      anchor: stackTopAnchor(firstProjectId),
+      layer: paintLayer('b'),
+      type: 'addCanvasLayer',
+    });
     publishLayerPanelSelection({ primaryId: 'b', projectId: firstProjectId, selectedIds: ['a', 'b'] });
 
     const secondProject = store.commands.projects.create();
     store.commands.projects.switchTo(firstProjectId);
 
-    expect(readLayerPanelSelection(firstProjectId, 'b').selectedIds).toEqual(['b']);
-    expect(readLayerPanelSelection(secondProject.id, null).selectedIds).toEqual([]);
+    expect(readLayerPanelState(firstProjectId, 'b').selectedIds).toEqual(['a', 'b']);
+    expect(readLayerPanelState(secondProject.id, null).selectedIds).toEqual([]);
+  });
+
+  it("clears every project's panel state on hydration", () => {
+    const store = createWorkbenchStore();
+    const projectId = store.getSnapshot().activeProject.id;
+    store.commands.canvas.apply(projectId, {
+      anchor: stackTopAnchor(projectId),
+      layer: paintLayer('a'),
+      type: 'addCanvasLayer',
+    });
+    store.commands.canvas.apply(projectId, {
+      anchor: stackTopAnchor(projectId),
+      layer: paintLayer('b'),
+      type: 'addCanvasLayer',
+    });
+    publishLayerPanelSelection({ primaryId: 'b', projectId, selectedIds: ['a', 'b'] });
+    toggleLayerStackCollapsed(projectId, 'b', 'raster');
+    expect(readLayerPanelState(projectId, 'b')).toMatchObject({ collapsedStacks: ['raster'], selectedIds: ['a', 'b'] });
+
+    store.internal.persistence.hydrate(createInitialWorkbenchState());
+
+    expect(readLayerPanelState(projectId, 'b')).toMatchObject({ collapsedStacks: [], selectedIds: ['b'] });
   });
 
   it('does not resurrect stale secondaries after external primary changes in the same project', () => {
     const store = createWorkbenchStore();
     const projectId = store.getSnapshot().activeProject.id;
     for (const id of ['a', 'b', 'c']) {
-      store.commands.canvas.apply(projectId, { layer: paintLayer(id), type: 'addCanvasLayer' });
+      store.commands.canvas.apply(projectId, {
+        anchor: stackTopAnchor(projectId),
+        layer: paintLayer(id),
+        type: 'addCanvasLayer',
+      });
     }
     // Model a panel-originated multi-selection: it publishes before dispatching
     // its new primary, so the store preserves the selected set.
     publishLayerPanelSelection({ primaryId: 'c', projectId, selectedIds: ['a', 'c'] });
     store.commands.canvas.apply(projectId, { id: 'c', type: 'setCanvasSelectedLayer' });
-    expect(readLayerPanelSelection(projectId, 'c').selectedIds).toEqual(['a', 'c']);
+    expect(readLayerPanelState(projectId, 'c').selectedIds).toEqual(['a', 'c']);
 
     store.commands.canvas.apply(projectId, { id: 'b', type: 'setCanvasSelectedLayer' });
     store.commands.canvas.apply(projectId, { id: 'c', type: 'setCanvasSelectedLayer' });
 
-    expect(readLayerPanelSelection(projectId, 'c').selectedIds).toEqual(['c']);
+    expect(readLayerPanelState(projectId, 'c').selectedIds).toEqual(['c']);
   });
 
   it('coordinates layout preset activation across every command caller', async () => {
@@ -183,6 +314,31 @@ describe('createWorkbenchStore', () => {
     await activation;
 
     expect(store.getSnapshot().activeProject.layout.presetId).toBe('edit');
+  });
+
+  it('closes widget overlays only for changes that hide or replace a shown widget', () => {
+    const store = createWorkbenchStore();
+    overlays.closeWidgetOverlays.mockClear();
+    const project = store.getSnapshot().activeProject;
+    const [region, regionState] = Object.entries(project.widgetRegions).find(
+      ([, state]) => state.instanceIds.length > 1
+    )!;
+    const other = regionState.instanceIds.find((id) => id !== regionState.activeInstanceId)!;
+
+    store.commands.projects.rename(project.id, 'Renamed');
+    expect(overlays.closeWidgetOverlays).not.toHaveBeenCalled();
+
+    store.commands.widgets.select({ projectId: project.id, region: region as never, widgetId: other });
+    expect(overlays.closeWidgetOverlays).toHaveBeenCalledTimes(1);
+
+    store.commands.widgets.select({ projectId: project.id, region: region as never, widgetId: other });
+    expect(overlays.closeWidgetOverlays).toHaveBeenCalledTimes(1);
+
+    store.commands.layout.applyPreset('edit');
+    expect(overlays.closeWidgetOverlays).toHaveBeenCalledTimes(2);
+
+    store.commands.projects.create();
+    expect(overlays.closeWidgetOverlays).toHaveBeenCalledTimes(3);
   });
 
   it('notifies subscribers once for reducer changes and not for no-op reducer results', () => {
@@ -541,10 +697,37 @@ describe('createWorkbenchStore', () => {
     expect(store.commands.projects.close(firstProjectId)).toEqual({ ok: true });
     expect(store.getSnapshot().activeProject.id).toBe(secondProject.id);
     expect(store.commands.projects.close(secondProject.id)).toEqual({ ok: false, reason: 'last-project' });
-    expect(store.getSnapshot().notifications[0]).toMatchObject({
-      kind: 'error',
-      title: 'Project close blocked',
-    });
+    expect(store.getSnapshot().notifications).toEqual([]);
+  });
+
+  it.each([
+    { cancellationPending: undefined, status: 'pending' as const },
+    { cancellationPending: undefined, status: 'running' as const },
+    { cancellationPending: true, status: 'cancelled' as const },
+  ])('keeps a project open while queue work is active ($status)', ({ cancellationPending, status }) => {
+    const state = createInitialWorkbenchState();
+    const project = state.projects[0]!;
+    state.projects[0] = {
+      ...project,
+      queue: {
+        items: [
+          {
+            cancellable: true,
+            ...(cancellationPending === undefined ? {} : { cancellationPending }),
+            id: 'active-run',
+            snapshot: {} as (typeof project.queue.items)[number]['snapshot'],
+            status,
+          },
+        ],
+      },
+    };
+    const store = createWorkbenchStore(state);
+
+    expect(store.commands.projects.close(project.id)).toEqual({ ok: false, reason: 'active-queue-runs' });
+    store.commands.projects.create();
+
+    expect(store.commands.projects.close(project.id)).toEqual({ ok: false, reason: 'active-queue-runs' });
+    expect(store.getSnapshot().projects.some((candidate) => candidate.id === project.id)).toBe(true);
   });
 
   it('applies Canvas and Workflow edits without exposing aggregate reducer actions', () => {

@@ -7,6 +7,7 @@ import {
   formatViolation,
   getModuleOwner,
   isExcepted,
+  isProductionSourcePath,
   primeImportSources,
   resolveImportPath,
 } from './dependencyPolicy';
@@ -21,7 +22,7 @@ const sources = import.meta.glob('../**/*.{ts,tsx}', {
 }) as Record<string, string>;
 
 const toSourcePath = (path: string): string => path.replace(/^\.\.\//, '');
-const isProduction = (path: string): boolean => !/\.(?:test|browser\.test)\.[^.]+$/.test(path);
+const isProduction = isProductionSourcePath;
 
 afterAll(closeSourceAnalysis);
 
@@ -122,6 +123,47 @@ describe('dependency policy rules', () => {
     expect(checkSource('features/example/core/policy.ts', source)).toContainEqual(
       expect.objectContaining({ rule: 'feature-core-purity' })
     );
+  });
+
+  it.each([
+    'react',
+    '@chakra-ui/react',
+    'i18next',
+    '@platform/ui',
+    '@workbench/canvas-engine/render/compositor',
+    '@workbench/canvas-engine/history/documentPatch',
+    '@workbench/canvas-engine/engine',
+    '@workbench/canvasProjectMutations',
+    '@workbench/widgets/layers/layerOps',
+    '@workbench/canvas-engine/document/sources',
+    '@workbench/canvas-engine/document/bitmapStore',
+  ])('keeps the pure document model free of engine, screen and framework imports: %s', (specifier) => {
+    expect(checkDependency('workbench/canvas-engine/document-model/documentModel.ts', specifier)).toContainEqual(
+      expect.objectContaining({ rule: 'document-model-purity' })
+    );
+  });
+
+  it('lets the reducer share the document seam helpers without widening the public API', () => {
+    const reducer = 'workbench/canvasProjectMutations.ts';
+    expect(checkDependency(reducer, '@workbench/canvas-engine/document/layerStacks')).toEqual([]);
+    expect(checkDependency(reducer, '@workbench/canvas-engine/document/selectionRepair')).toEqual([]);
+    expect(checkDependency(reducer, '@workbench/canvas-engine/document/insertionAnchors')).toEqual([]);
+    expect(checkDependency(reducer, '@workbench/canvas-engine/document/sources')).toContainEqual(
+      expect.objectContaining({ rule: 'canvas-private-interface' })
+    );
+    expect(
+      checkDependency('workbench/widgets/layers/layerGroups.ts', '@workbench/canvas-engine/document/layerStacks')
+    ).toContainEqual(expect.objectContaining({ rule: 'canvas-private-interface' }));
+  });
+
+  it('permits the pure document model to read document facts, math and contracts', () => {
+    const source = 'workbench/canvas-engine/document-model/documentModel.ts';
+    expect(checkDependency(source, './semanticLeaf')).toEqual([]);
+    expect(checkDependency(source, '@workbench/canvas-engine/document/layerStacks')).toEqual([]);
+    expect(checkDependency(source, '@workbench/canvas-engine/math/mat2d')).toEqual([]);
+    expect(checkDependency(source, '@workbench/canvas-engine/contracts')).toEqual([]);
+    expect(checkDependency(source, '@workbench/canvas-engine/mutationContracts')).toEqual([]);
+    expect(checkDependency('workbench/canvas-engine/document-model/documentModel.test.ts', 'vitest')).toEqual([]);
   });
 
   it('permits feature Core to depend on other pure Core and Platform State modules', () => {

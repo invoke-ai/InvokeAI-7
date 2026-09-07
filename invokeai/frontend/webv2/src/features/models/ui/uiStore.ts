@@ -1,4 +1,4 @@
-import type { FoundModel } from '@features/models/core/types';
+import type { FoundModel, ModelTaxonomyType } from '@features/models/core/types';
 
 import { DEFAULT_LIBRARY_FILTERS, type ModelLibraryFilters } from '@features/models/core/library';
 import { registerAccountOwnedResource } from '@platform/state/accountLifecycle';
@@ -31,11 +31,17 @@ export interface ModelsUiSnapshot {
   /**
    * A pending Add Models search, handed over by a surface outside the manager
    * (see {@link requestAddModelsSearch}). Strictly one-shot: the view takes it
-   * at mount and {@link clearAddModelsSeed} empties it, so the box keeps its own
-   * local state and still resets when the view unmounts. `null` = nothing
+   * at mount and {@link clearAddModelsSeeds} empties it, so the box keeps its
+   * own local state and still resets when the view unmounts. `null` = nothing
    * pending, which is not the same as a seeded empty string.
    */
   addModelsSeed: string | null;
+  /**
+   * A pending starter-catalog type filter, one-shot exactly like
+   * {@link ModelsUiSnapshot.addModelsSeed} — for links that know what *kind* of
+   * model is missing rather than which one.
+   */
+  addModelsTypeSeed: ModelTaxonomyType | null;
   /** Model focused in the manager library's detail pane. */
   activeModelKey: string | null;
   /**
@@ -60,16 +66,20 @@ export interface ModelsUiSnapshot {
   libraryScrollOffsets: Record<string, number>;
   /** Compact/full row density per picker id, remembered across opens. */
   pickerCompactViews: Record<string, boolean>;
+  /** Base-architecture chips toggled on per picker id, remembered across opens. */
+  pickerBaseFilters: Record<string, readonly string[]>;
 }
 
 const createInitialModelsUiSnapshot = (): ModelsUiSnapshot => ({
   activeModelKey: null,
   activeTab: 'add',
   addModelsSeed: null,
+  addModelsTypeSeed: null,
   filters: { ...DEFAULT_LIBRARY_FILTERS },
   hfLookup: null,
   highlightProviderId: null,
   libraryScrollOffsets: {},
+  pickerBaseFilters: {},
   pickerCompactViews: {},
   queueExpanded: false,
   scan: null,
@@ -162,6 +172,24 @@ export const requestAddModelsSearch = (query: string): void => {
   updateModelsUi({
     activeTab: 'add',
     addModelsSeed: query,
+    addModelsTypeSeed: null,
+    hfLookup: null,
+    scan: null,
+    selectedBundleName: null,
+  });
+};
+
+/**
+ * Open Add Models with the starter catalog filtered to one model type. The same
+ * navigate-from-elsewhere contract as {@link requestAddModelsSearch}, for links
+ * that know what kind of model is missing (prompt expansion needs a `text_llm`)
+ * rather than which one.
+ */
+export const requestAddModelsTypeFilter = (typeFilter: ModelTaxonomyType): void => {
+  updateModelsUi({
+    activeTab: 'add',
+    addModelsSeed: null,
+    addModelsTypeSeed: typeFilter,
     hfLookup: null,
     scan: null,
     selectedBundleName: null,
@@ -171,16 +199,19 @@ export const requestAddModelsSearch = (query: string): void => {
 /** Reads a pending seed without consuming it — safe to call from a `useState` initializer, which StrictMode double-invokes. */
 export const getAddModelsSeed = (): string => store.getSnapshot().addModelsSeed ?? '';
 
+/** Pure read, like {@link getAddModelsSeed}. */
+export const getAddModelsTypeSeed = (): ModelTaxonomyType | null => store.getSnapshot().addModelsTypeSeed;
+
 /**
- * Consumes the pending seed. Silent because the only reader took it in the same
- * commit and nothing subscribes to it: a notify here would be a store write
- * whose only effect is re-rendering the view that just read it.
+ * Consumes the pending seeds. Silent because the only reader took them in the
+ * same commit and nothing subscribes to them: a notify here would be a store
+ * write whose only effect is re-rendering the view that just read it.
  */
-export const clearAddModelsSeed = (): void => {
+export const clearAddModelsSeeds = (): void => {
   const snapshot = store.getSnapshot();
 
-  if (snapshot.addModelsSeed !== null) {
-    store.setSnapshotSilently({ ...snapshot, addModelsSeed: null });
+  if (snapshot.addModelsSeed !== null || snapshot.addModelsTypeSeed !== null) {
+    store.setSnapshotSilently({ ...snapshot, addModelsSeed: null, addModelsTypeSeed: null });
   }
 };
 
@@ -211,6 +242,13 @@ export const setPickerCompactView = (pickerId: string, isCompact: boolean): void
   const snapshot = store.getSnapshot();
 
   updateModelsUi({ pickerCompactViews: { ...snapshot.pickerCompactViews, [pickerId]: isCompact } });
+};
+
+/** Base filters are a per-picker preference too; an empty list means "every base". */
+export const setPickerBaseFilters = (pickerId: string, bases: readonly string[]): void => {
+  const snapshot = store.getSnapshot();
+
+  updateModelsUi({ pickerBaseFilters: { ...snapshot.pickerBaseFilters, [pickerId]: bases } });
 };
 
 export const getModelsUiSnapshotForTests = (): ModelsUiSnapshot => store.getSnapshot();

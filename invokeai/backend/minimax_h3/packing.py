@@ -36,6 +36,7 @@ without it: `MiniMaxH3Transformer3DModel` then needs no attention mask, which ke
 backends available.
 """
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 import numpy as np
@@ -84,6 +85,19 @@ MINIMAX_H3_KEYFRAME_NOISE_AUG = 0.999
 # The seeded posterior sample of the keyframe VAE encode. Fixed at 42 independently of the request seed.
 MINIMAX_H3_KEYFRAME_ENCODE_SEED = 42
 
+# Reference caps of the `ref2va` task, per the reference implementation: at most 9 image, 3 video and 3 audio
+# references, and at most 12 in total. At least one reference must be visual (image or video).
+MINIMAX_H3_MAX_IMAGE_REFERENCES = 9
+MINIMAX_H3_MAX_VIDEO_REFERENCES = 3
+MINIMAX_H3_MAX_AUDIO_REFERENCES = 3
+MINIMAX_H3_MAX_REFERENCES = 12
+
+# Reference images are resized to a 2048 pixel short edge (upscaling included, no area cap) - a deliberately
+# different rule than the 768 canvas that keyframes and targets use. The text conditioner reads reference videos
+# at 2 fps.
+MINIMAX_H3_REFERENCE_IMAGE_SHORT_EDGE = 2048
+MINIMAX_H3_TEXT_VIDEO_SAMPLE_FPS = 2.0
+
 # Rotary-time constants. One latent frame spans `5/3 * frames_per_latent` rotary units, where the pattern
 # `(1, 4, 4, 4, 4)` mirrors the VAE's 17-pixel-frames-to-5-latent-frames grouping; the spatial axes are normalized
 # by the square root of the latent area and scaled by 32.
@@ -124,6 +138,50 @@ class MiniMaxH3PackedSequence:
     text_indices: torch.Tensor
     num_condition_video_rows: int
     num_condition_audio_rows: int
+
+
+def validate_reference_kinds(kinds: Sequence[str]) -> None:
+    r"""
+    Reject reference combinations the `ref2va` task does not accept.
+
+    Args:
+        kinds (`Sequence[str]`): The kind (`"image"`, `"video"` or `"audio"`) of every reference, in packed order.
+    """
+    for kind in kinds:
+        if kind not in ("image", "video", "audio"):
+            raise ValueError(f"A reference must be an 'image', a 'video' or an 'audio', got {kind!r}.")
+    if not kinds:
+        raise ValueError("Reference-to-video needs at least one reference; use the `t2va` workflow instead.")
+    if set(kinds) == {"audio"}:
+        raise ValueError("An audio reference cannot be used alone; add at least one image or video reference.")
+    counts = {kind: sum(1 for k in kinds if k == kind) for kind in ("image", "video", "audio")}
+    caps = {
+        "image": MINIMAX_H3_MAX_IMAGE_REFERENCES,
+        "video": MINIMAX_H3_MAX_VIDEO_REFERENCES,
+        "audio": MINIMAX_H3_MAX_AUDIO_REFERENCES,
+    }
+    for kind, cap in caps.items():
+        if counts[kind] > cap:
+            raise ValueError(f"At most {cap} {kind} references are supported, got {counts[kind]}.")
+    if len(kinds) > MINIMAX_H3_MAX_REFERENCES:
+        raise ValueError(f"At most {MINIMAX_H3_MAX_REFERENCES} references are supported, got {len(kinds)}.")
+
+
+@dataclass
+class MiniMaxH3ReferenceLayoutEntry:
+    r"""
+    The layout-relevant description of one `ref2va` reference.
+
+    Attributes:
+        kind (`str`):
+            `"image"`, `"video"` or `"audio"`.
+        has_audio (`bool`):
+            Whether the reference carries audio rows: `True` for an `"audio"` reference and for a `"video"`
+            reference with a soundtrack.
+    """
+
+    kind: str
+    has_audio: bool
 
 
 def resolve_canvas_size(aspect_width: float, aspect_height: float) -> tuple[int, int]:
@@ -193,9 +251,7 @@ def video_latent_num_frames(num_frames: int) -> int:
     """
     if num_frames % MINIMAX_H3_FRAMES_PER_CHUNK != MINIMAX_H3_LATENTS_PER_CHUNK:
         raise ValueError(f"`num_frames` must be of the form 17 * n + 5, got {num_frames}.")
-    return (
-        num_frames - MINIMAX_H3_LATENTS_PER_CHUNK
-    ) // MINIMAX_H3_FRAMES_PER_CHUNK * MINIMAX_H3_LATENTS_PER_CHUNK + 2
+    return (num_frames - MINIMAX_H3_LATENTS_PER_CHUNK) // MINIMAX_H3_FRAMES_PER_CHUNK * MINIMAX_H3_LATENTS_PER_CHUNK + 2
 
 
 def audio_latent_num_frames(num_frames: int) -> int:
@@ -364,6 +420,41 @@ def _temporal_position_span(num_latent_frames: int) -> float:
     return float(spans.sum())
 
 
+def _frame_position_grid(
+    latent_height: int, latent_width: int, patch_h: int, patch_w: int
+) -> tuple[torch.Tensor, torch.Tensor]:
+    r"""The `(h, w)` rotary coordinates of one latent frame, and the width axis they were built from."""
+    sqrt_area = np.sqrt(latent_height * latent_width)
+    height_grid = _spatial_position_grid(latent_height, patch_h, sqrt_area)
+    width_grid = _spatial_position_grid(latent_width, patch_w, sqrt_area)
+    grids = torch.meshgrid(height_grid, width_grid, indexing="ij")
+    return torch.stack([grid.reshape(-1) for grid in grids], dim=-1), width_grid
+
+
+def _fill_audio_positions(
+    position_ids: torch.Tensor,
+    rows: slice,
+    num_audio_latents: int,
+    rotary_time: float,
+    width_grid: torch.Tensor,
+    audio_channels: int,
+) -> None:
+    r"""
+    Place one channel-major audio block.
+
+    Audio rows carry no height coordinate and are pinned to the two extremes of the width grid of *their own* block —
+    the target grid for a standalone audio reference, the video's grid for a soundtrack.
+    """
+    time = rotary_time + torch.arange(num_audio_latents, dtype=torch.float64)
+    position_ids[rows, 0] = time.repeat(audio_channels)
+    position_ids[rows, 2] = torch.cat(
+        [
+            torch.full((num_audio_latents,), float(width_grid[0]), dtype=torch.float64),
+            torch.full((num_audio_latents,), float(width_grid[-1]), dtype=torch.float64),
+        ]
+    )
+
+
 def build_packed_sequence(
     text_token_tags: torch.Tensor,
     num_latent_frames: int,
@@ -461,6 +552,162 @@ def build_packed_sequence(
         text_indices=text_indices,
         num_condition_video_rows=num_condition_rows,
         num_condition_audio_rows=0,
+    )
+
+
+def build_ref2va_packed_sequence(
+    text_token_tags: torch.Tensor,
+    references: Sequence[MiniMaxH3ReferenceLayoutEntry],
+    condition_latent_shapes: tuple[tuple[int, int, int], ...],
+    audio_condition_row_counts: tuple[int, ...],
+    num_latent_frames: int,
+    latent_height: int,
+    latent_width: int,
+    num_audio_latents: int,
+    patch_size: tuple[int, int, int],
+) -> MiniMaxH3PackedSequence:
+    r"""
+    Build the `[text | reference blocks | target audio | target video]` layout of the `ref2va` task.
+
+    Args:
+        text_token_tags (`torch.Tensor` of shape `(num_text_tokens,)`):
+            The modality tag of every text row. Text is tagged `1`, except for the rows of a reference's vision
+            block, which MiniMax-H3 tags `0` (video).
+        references (`Sequence[MiniMaxH3ReferenceLayoutEntry]`):
+            The references, in packed order. Only their modality is read here; the geometry comes from the shape
+            arguments.
+        condition_latent_shapes (`tuple[tuple[int, int, int], ...]`):
+            One `(num_latent_frames, latent_height, latent_width)` triple per image and video reference, in packed
+            order — the shape of what the reference encoder produced.
+        audio_condition_row_counts (`tuple[int, ...]`):
+            One packed row count (`num_audio_latents * 2`) per audio-bearing reference, in packed order.
+        num_latent_frames (`int`): Number of target latent frames.
+        latent_height (`int`): Target latent height.
+        latent_width (`int`): Target latent width.
+        num_audio_latents (`int`): Number of target audio latents per channel.
+        patch_size (`tuple[int, int, int]`): The transformer's `(t, h, w)` patch.
+
+    Returns:
+        [`MiniMaxH3PackedSequence`]
+    """
+    _, patch_h, patch_w = patch_size
+    num_text_tokens = text_token_tags.shape[0]
+    num_target_video_rows = num_latent_frames * (latent_height // patch_h) * (latent_width // patch_w)
+    num_target_audio_rows = num_audio_latents * MINIMAX_H3_AUDIO_CHANNELS
+
+    # The geometry of every reference block is the shape of what the encoder produced for it, so the two can never
+    # disagree. Both lists are in packed order but skip the references they do not apply to, so they are consumed as
+    # iterators alongside the reference list rather than indexed by it.
+    visual_geometry = iter(condition_latent_shapes)
+    audio_row_counts = iter(audio_condition_row_counts)
+    num_reference_video_rows = sum(
+        frames * (height // patch_h) * (width // patch_w) for frames, height, width in condition_latent_shapes
+    )
+    num_reference_audio_rows = sum(audio_condition_row_counts)
+    sequence_length = (
+        num_text_tokens
+        + num_reference_video_rows
+        + num_reference_audio_rows
+        + num_target_audio_rows
+        + num_target_video_rows
+    )
+
+    position_ids = torch.zeros(sequence_length, 3, dtype=torch.float64)
+    position_ids[:num_text_tokens, 0] = torch.arange(num_text_tokens, dtype=torch.float64)
+    target_frame_grid, target_width_grid = _frame_position_grid(latent_height, latent_width, patch_h, patch_w)
+
+    # Reference blocks, in request order. `rotary_time` is the shared audio/video clock: it starts where the text
+    # rows end and every block pushes it forward by the time that block occupies.
+    video_indices, audio_indices = [], []
+    cursor = num_text_tokens
+    rotary_time = float(num_text_tokens)
+    for reference in references:
+        if reference.kind == "image":
+            num_latent_frames_, reference_height, reference_width = next(visual_geometry)
+            num_video_rows = num_latent_frames_ * (reference_height // patch_h) * (reference_width // patch_w)
+            rows = slice(cursor, cursor + num_video_rows)
+            cursor = rows.stop
+            video_indices.append(torch.arange(rows.start, rows.stop))
+            frame_grid, _ = _frame_position_grid(reference_height, reference_width, patch_h, patch_w)
+            position_ids[rows, 0] = rotary_time
+            position_ids[rows, 1:] = frame_grid
+            # An image is a single frame and takes a single integer rotary slot, not a latent frame's 5/3 units.
+            rotary_time += 1.0
+        elif reference.kind == "audio":
+            num_audio_rows = next(audio_row_counts)
+            reference_audio_latents = num_audio_rows // MINIMAX_H3_AUDIO_CHANNELS
+            rows = slice(cursor, cursor + num_audio_rows)
+            cursor = rows.stop
+            audio_indices.append(torch.arange(rows.start, rows.stop))
+            _fill_audio_positions(
+                position_ids, rows, reference_audio_latents, rotary_time, target_width_grid, MINIMAX_H3_AUDIO_CHANNELS
+            )
+            rotary_time += float(reference_audio_latents)
+        elif reference.kind == "video":
+            # A video reference's soundtrack rows are packed immediately before its video rows and share their
+            # origin, so the two are rotary-aligned exactly as the generated audio and video are.
+            num_audio_rows = next(audio_row_counts) if reference.has_audio else 0
+            reference_audio_latents = num_audio_rows // MINIMAX_H3_AUDIO_CHANNELS
+            num_latent_frames_, reference_height, reference_width = next(visual_geometry)
+            num_video_rows = num_latent_frames_ * (reference_height // patch_h) * (reference_width // patch_w)
+            audio_rows = slice(cursor, cursor + num_audio_rows)
+            video_rows = slice(audio_rows.stop, audio_rows.stop + num_video_rows)
+            cursor = video_rows.stop
+            audio_indices.append(torch.arange(audio_rows.start, audio_rows.stop))
+            video_indices.append(torch.arange(video_rows.start, video_rows.stop))
+
+            frame_grid, width_grid = _frame_position_grid(reference_height, reference_width, patch_h, patch_w)
+            _fill_audio_positions(
+                position_ids, audio_rows, reference_audio_latents, rotary_time, width_grid, MINIMAX_H3_AUDIO_CHANNELS
+            )
+            frame_time = _temporal_position_grid(num_latent_frames_, rotary_time)
+            position_ids[video_rows, 0] = frame_time.repeat_interleave(frame_grid.shape[0])
+            position_ids[video_rows, 1:] = frame_grid.repeat(num_latent_frames_, 1)
+            # The rotary time this reference advances the clock by, summed sequentially in float64. That is *not*
+            # how `_temporal_position_span` sums the same series — it reproduces a numpy pairwise sum, and the two
+            # orders differ in the last ulp from 16 latent frames onwards. The reference implementation keeps both,
+            # one per call site, so the port has to as well.
+            video_span = sum(
+                _ROPE_FRAME_RESCALE * _ROPE_FRAMES_PER_LATENT[index % len(_ROPE_FRAMES_PER_LATENT)]
+                for index in range(num_latent_frames_)
+            )
+            rotary_time += max(float(reference_audio_latents), video_span)
+        else:
+            raise ValueError(f"A reference must be an 'image', a 'video' or an 'audio', got {reference.kind!r}.")
+
+    # The generated rows. Target audio and target video share the origin the reference blocks left behind.
+    audio_start = cursor
+    video_start = audio_start + num_target_audio_rows
+    _fill_audio_positions(
+        position_ids,
+        slice(audio_start, video_start),
+        num_audio_latents,
+        rotary_time,
+        target_width_grid,
+        MINIMAX_H3_AUDIO_CHANNELS,
+    )
+    frame_time = _temporal_position_grid(num_latent_frames, rotary_time)
+    position_ids[video_start:, 0] = frame_time.repeat_interleave(target_frame_grid.shape[0])
+    position_ids[video_start:, 1:] = target_frame_grid.repeat(num_latent_frames, 1)
+
+    video_indices = torch.cat(video_indices + [torch.arange(video_start, sequence_length)])
+    audio_indices = torch.cat(audio_indices + [torch.arange(audio_start, video_start)])
+    text_indices = torch.arange(num_text_tokens)
+
+    token_tags = torch.empty(sequence_length, dtype=torch.long)
+    token_tags[text_indices] = text_token_tags.to(torch.long)
+    token_tags[audio_indices] = MINIMAX_H3_AUDIO_TAG
+    token_tags[video_indices] = MINIMAX_H3_VIDEO_TAG
+
+    return MiniMaxH3PackedSequence(
+        sequence_length=sequence_length,
+        position_ids=position_ids,
+        token_tags=token_tags,
+        video_indices=video_indices,
+        audio_indices=audio_indices,
+        text_indices=text_indices,
+        num_condition_video_rows=num_reference_video_rows,
+        num_condition_audio_rows=num_reference_audio_rows,
     )
 
 

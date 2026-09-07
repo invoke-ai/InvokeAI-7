@@ -1,17 +1,17 @@
 import type { GalleryBoardOrderBy, GalleryOrderDir } from '@features/gallery/core/types';
 
 import { HStack, Icon, Input, InputGroup, Menu, Portal } from '@chakra-ui/react';
+import { DEFAULT_GALLERY_SETTINGS } from '@features/gallery/core/settings';
 import { CloseButton, IconButton } from '@platform/ui/Button';
 import { MenuContent } from '@platform/ui/Menu';
 import { Tooltip } from '@platform/ui/Tooltip';
 import {
   ArchiveIcon,
-  ArrowUpDownIcon,
   CalendarIcon,
   CheckIcon,
-  EyeIcon,
   FolderIcon,
   SearchIcon,
+  SlidersHorizontalIcon,
   type LucideIcon,
 } from 'lucide-react';
 import { useCallback, useMemo, type ChangeEvent, type KeyboardEvent, type Ref } from 'react';
@@ -24,15 +24,10 @@ const SEARCH_START_ELEMENT = <Icon as={SearchIcon} size="xs" />;
 const SORT_MENU_POSITIONING = { placement: 'bottom-end' } as const;
 
 /**
- * Board search plus the two list controls: what the panel shows, and how it is
- * ordered. Both are icon-only in both layouts — the wide sidebar has no room
- * for labels, and giving the stacked layout labelled variants would be exactly
- * the size-conditional behaviour this redesign exists to remove.
- *
- * Visibility is one menu rather than a toggle button per group. Two buttons
- * was already a row of unlabelled icons whose meaning you had to hover for,
- * and other-project boards make three; a menu names each one and has room for
- * the next.
+ * Board search plus one options menu covering both list controls: what the
+ * panel shows, and how it is ordered. A single icon-only trigger — the wide
+ * sidebar has no room for labels, and two adjacent unlabelled icon buttons
+ * read as noise you had to hover to tell apart.
  */
 export const GalleryBoardFilters = ({
   ref,
@@ -50,11 +45,13 @@ export const GalleryBoardFilters = ({
   const { t } = useTranslation();
   const { actions, gallery } = useGalleryWidget();
   const { boardOrderBy, boardOrderDir, showArchivedBoards, showDateBoards, showOtherProjectBoards } = gallery.settings;
-  const sortTriggerIds = useMenuTriggerIds();
-  const visibilityTriggerIds = useMenuTriggerIds();
-  // Any non-default lifts the trigger out of `fg.muted`, so a filtered panel is
-  // legible without opening the menu.
-  const isVisibilityFiltered = showArchivedBoards || showDateBoards || !showOtherProjectBoards;
+  const menuTriggerIds = useMenuTriggerIds();
+  // Any non-default visibility lifts the trigger out of `fg.muted`, so a
+  // filtered panel is legible without opening the menu.
+  const isVisibilityFiltered =
+    showArchivedBoards !== DEFAULT_GALLERY_SETTINGS.showArchivedBoards ||
+    showDateBoards !== DEFAULT_GALLERY_SETTINGS.showDateBoards ||
+    showOtherProjectBoards !== DEFAULT_GALLERY_SETTINGS.showOtherProjectBoards;
 
   const handleSearchChange = useCallback(
     (event: ChangeEvent<HTMLInputElement>) => onSearchChange(event.currentTarget.value),
@@ -121,16 +118,16 @@ export const GalleryBoardFilters = ({
           onKeyDown={handleSearchKeyDown}
         />
       </InputGroup>
-      <Menu.Root closeOnSelect={false} ids={visibilityTriggerIds} positioning={SORT_MENU_POSITIONING}>
-        <Tooltip content={t('widgets.gallery.boardVisibility')} ids={visibilityTriggerIds}>
+      <Menu.Root closeOnSelect={false} ids={menuTriggerIds} positioning={SORT_MENU_POSITIONING}>
+        <Tooltip content={t('widgets.gallery.filterAndSortBoards')} ids={menuTriggerIds}>
           <Menu.Trigger asChild>
             <IconButton
-              aria-label={t('widgets.gallery.boardVisibility')}
+              aria-label={t('widgets.gallery.filterAndSortBoards')}
               color={isVisibilityFiltered ? 'fg' : 'fg.muted'}
               size="xs"
               variant="ghost"
             >
-              <Icon as={EyeIcon} boxSize="3.5" />
+              <Icon as={SlidersHorizontalIcon} boxSize="3.5" />
             </IconButton>
           </Menu.Trigger>
         </Tooltip>
@@ -161,21 +158,7 @@ export const GalleryBoardFilters = ({
                   onSelect={handleToggleOtherProjectBoards}
                 />
               </Menu.ItemGroup>
-            </MenuContent>
-          </Menu.Positioner>
-        </Portal>
-      </Menu.Root>
-      <Menu.Root ids={sortTriggerIds} positioning={SORT_MENU_POSITIONING}>
-        <Tooltip content={t('widgets.gallery.sortBoards')} ids={sortTriggerIds}>
-          <Menu.Trigger asChild>
-            <IconButton aria-label={t('widgets.gallery.sortBoards')} color="fg.muted" size="xs" variant="ghost">
-              <Icon as={ArrowUpDownIcon} boxSize="3.5" />
-            </IconButton>
-          </Menu.Trigger>
-        </Tooltip>
-        <Portal>
-          <Menu.Positioner>
-            <MenuContent minW="9rem">
+              <Menu.Separator />
               <Menu.ItemGroup>
                 <Menu.ItemGroupLabel>{t('widgets.gallery.sortBoardsBy')}</Menu.ItemGroupLabel>
                 <Menu.RadioItemGroup value={boardOrderBy} onValueChange={handleOrderByChange}>

@@ -1,6 +1,6 @@
 import type {
   CanvasControlLayerContract,
-  CanvasDocumentContractV2,
+  CanvasDocumentContractV3,
   CanvasImageRef,
   CanvasLayerContract,
   CanvasRasterLayerContractV2,
@@ -10,6 +10,7 @@ import type { RasterSurface } from '@workbench/canvas-engine/render/raster';
 import type { StubRasterSurface } from '@workbench/canvas-engine/render/raster.testStub';
 import type { Rect } from '@workbench/canvas-operations/generationContracts';
 
+import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
 import { createTestStubRasterBackend } from '@workbench/canvas-engine/render/raster.testStub';
 import { planComposites, planControlComposites } from '@workbench/canvas-operations/generationCompositePlan';
 import { describe, expect, it, vi } from 'vitest';
@@ -57,13 +58,13 @@ const controlLayer = (id: string, overrides: Partial<CanvasControlLayerContract>
   ...overrides,
 });
 
-const makeDoc = (layers: CanvasLayerContract[]): CanvasDocumentContractV2 => ({
+const makeDoc = (layers: CanvasLayerContract[]): CanvasDocumentContractV3 => ({
   background: 'transparent',
   bbox: { height: 100, width: 100, x: 0, y: 0 },
   height: 100,
-  layers,
+  stacks: stacksFrom(layers),
   selectedLayerId: null,
-  version: 2,
+  version: 3,
   width: 100,
 });
 
@@ -309,19 +310,19 @@ const inpaintMask = (
   overrides: Partial<{ denoiseLimit: number; noiseLevel: number }> = {}
 ): CanvasLayerContract => ({
   blendMode: 'normal',
-  denoiseLimit: overrides.denoiseLimit,
+  ...(overrides.denoiseLimit === undefined ? {} : { denoise: { isEnabled: true, limit: overrides.denoiseLimit } }),
   id,
   isEnabled: true,
   isLocked: false,
   mask: { bitmap: imageRef(`${id}-bmp`, 64, 48), fill: { color: '#ff0000', style: 'solid' } },
   name: id,
-  noiseLevel: overrides.noiseLevel,
+  ...(overrides.noiseLevel === undefined ? {} : { noise: { isEnabled: true, level: overrides.noiseLevel } }),
   opacity: 1,
   transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 },
   type: 'inpaint_mask',
 });
 
-const maskEntryOf = (doc: CanvasDocumentContractV2) =>
+const maskEntryOf = (doc: CanvasDocumentContractV3) =>
   planComposites(doc, BBOX).entries.find((e) => e.kind === 'inpaint-mask')!;
 
 /** A grayscale ImageData that is uniformly white or has a single dark pixel. */
@@ -431,7 +432,13 @@ describe('executeCompositePlan — raster adjustments baked into generation pixe
 
     // Adjusted layer: brightness bake → the executor reads the temp, applies the
     // LUT, and writes the adjusted pixels back before compositing.
-    const adjustedDoc = makeDoc([rasterLayer('b', { adjustments: { brightness: 0.5, contrast: 0, saturation: 0 } })]);
+    const adjustedDoc = makeDoc([
+      rasterLayer('b', {
+        adjustments: [
+          { brightness: 0.5, contrast: 0, id: 'adj-bc', isEnabled: true, type: 'brightness-contrast' as const },
+        ],
+      }),
+    ]);
     await executeCompositePlan(planComposites(adjustedDoc, BBOX), harness.deps);
     expect(writeImageData).toHaveBeenCalledTimes(1);
   });

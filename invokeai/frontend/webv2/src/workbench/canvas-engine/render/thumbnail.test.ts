@@ -12,7 +12,7 @@ import {
 
 const rasterLayer = (source: CanvasLayerSourceContract): CanvasLayerContract =>
   ({
-    adjustments: { brightness: 0, contrast: 0, saturation: 0 },
+    adjustments: [{ brightness: 0, contrast: 0, id: 'adj-bc', isEnabled: true, type: 'brightness-contrast' as const }],
     blendMode: 'normal',
     id: 'raster',
     isEnabled: true,
@@ -162,7 +162,9 @@ describe('getLayerThumbnailDisplayKey', () => {
     expect(
       getLayerThumbnailDisplayKey({
         ...raster,
-        adjustments: { brightness: 0.2, contrast: 0, saturation: 0 },
+        adjustments: [
+          { brightness: 0.2, contrast: 0, id: 'adj-bc', isEnabled: true, type: 'brightness-contrast' as const },
+        ],
       } as CanvasLayerContract)
     ).not.toBe(getLayerThumbnailDisplayKey(raster));
     expect(getLayerThumbnailDisplayKey({ ...control, withTransparencyEffect: false } as CanvasLayerContract)).not.toBe(

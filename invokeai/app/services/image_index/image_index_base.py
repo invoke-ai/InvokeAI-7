@@ -34,6 +34,18 @@ class ImageIndexServiceBase(ABC):
         """Content hash of the active embedding model, or None if the indexer is not running."""
         pass
 
+    def try_activate(self) -> bool:
+        """Start indexing if the configured embedding model has since been installed.
+
+        Concrete when the base's other methods are abstract because the answer
+        for an inert implementation is simply "whatever it already was": only
+        the real service can pick a model up mid-run. Callers use this on
+        request paths that would otherwise report `model_missing` for the rest
+        of the process. Returns True if the indexer is running on return; may
+        touch the model store, so call it off the event loop.
+        """
+        return self.model_id is not None
+
     @abstractmethod
     def get_status(self) -> ImageIndexStatus | None:
         """Get index progress counts, or None if the indexer is not running."""

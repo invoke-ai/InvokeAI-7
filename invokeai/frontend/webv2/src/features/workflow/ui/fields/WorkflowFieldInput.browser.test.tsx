@@ -4,7 +4,7 @@ import { ChakraProvider } from '@chakra-ui/react';
 import { DndContext } from '@dnd-kit/core';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { system } from '@theme/system';
-import { act, useCallback, useState } from 'react';
+import { act, cloneElement, useCallback, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { userEvent } from 'vitest/browser';
@@ -16,6 +16,26 @@ import { WorkflowFieldInput } from './WorkflowFieldInput';
 const uploadImageMock = vi.fn();
 const uploadVideoMock = vi.fn();
 const resolveItemMock = vi.fn();
+
+const pickerState = vi.hoisted(() => ({ accept: null as readonly string[] | null }));
+
+// The real picker needs the gallery data layer; the field's contract with it is
+// the accepted kinds it passes and the item it gets back.
+vi.mock('@features/gallery/picker', () => ({
+  GalleryPickerPopover: ({
+    accept,
+    children,
+    onPick,
+  }: {
+    accept: readonly string[];
+    children: React.ReactElement<{ onClick?: () => void }>;
+    onPick: (item: unknown) => void;
+  }) => {
+    pickerState.accept = accept;
+
+    return cloneElement(children, { onClick: () => onPick(SELECTED_GALLERY_VIDEO) });
+  },
+}));
 
 vi.mock('@features/gallery', () => ({
   formatGalleryVideoDuration: (seconds: number) => `${seconds}s`,
@@ -245,22 +265,17 @@ describe('WorkflowFieldInput media inputs', () => {
     await renderField(VIDEO_TEMPLATE, undefined, vi.fn());
 
     expect(host.textContent).not.toContain('Connection only');
-    expect(host.textContent).toContain('Drop a video here');
-    expect(findButton('Use gallery selection').disabled).toBe(true);
+    expect(findButton('widgets.gallery.picker.chooseVideo').disabled).toBe(false);
+    expect(pickerState.accept).toEqual(['video']);
     expect(findButton('Upload').disabled).toBe(false);
-    expect(host.querySelector<HTMLInputElement>('input[type="file"]')?.accept).toBe('video/*');
+    expect(host.querySelector<HTMLInputElement>('input[type="file"]')?.accept).toBe('video/*,audio/*');
   });
 
-  it('adopts a selected gallery video and clears it', async () => {
-    galleryValues.selectedImage = SELECTED_GALLERY_VIDEO;
+  it('adopts a video picked from the gallery, shows its details, and clears it', async () => {
     const onChange = vi.fn();
 
     await renderField(VIDEO_TEMPLATE, undefined, onChange);
-
-    const useSelection = findButton('Use gallery selection');
-
-    expect(useSelection.disabled).toBe(false);
-    await act(() => useSelection.click());
+    await act(() => findButton('widgets.gallery.picker.chooseVideo').click());
     expect(onChange).toHaveBeenCalledWith({ video_name: 'clip.mp4' });
 
     await renderField(VIDEO_TEMPLATE, { video_name: 'clip.mp4' }, onChange);
@@ -272,14 +287,6 @@ describe('WorkflowFieldInput media inputs', () => {
 
     await act(() => findButton('Clear').click());
     expect(onChange).toHaveBeenCalledWith(undefined);
-  });
-
-  it('does not offer a selected gallery image to a video field', async () => {
-    galleryValues.selectedImage = { ...SELECTED_GALLERY_VIDEO, kind: 'image' };
-
-    await renderField(VIDEO_TEMPLATE, undefined, vi.fn());
-
-    expect(findButton('Use gallery selection').disabled).toBe(true);
   });
 
   it('keeps COLLECTION media fields connection-only (the widget would write a bare object into a list)', async () => {

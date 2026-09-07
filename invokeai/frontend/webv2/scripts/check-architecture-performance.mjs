@@ -108,6 +108,16 @@ const failures = measurements.flatMap((measurement) =>
 );
 const launchpad = measurements.find((measurement) => measurement.routeId === 'launchpad');
 const editor = measurements.find((measurement) => measurement.routeId === 'editor');
+// Shared settings metadata must not turn Launchpad overlays into editor boot paths.
+for (const source of [
+  'src/workbench/palette/LaunchpadCommandPaletteDialog.tsx',
+  'src/workbench/settings/SettingsDialog.tsx',
+]) {
+  const overlay = measureRouteBuild(manifest, chunkSourceManifest, source, source, (file) => assetCache.get(file));
+  for (const owner of ['src/app/WorkbenchApp.tsx', 'src/workbench/widget-frame/WidgetRenderer.tsx']) {
+    assert.ok(!overlay.sourceOwners.includes(`source:${owner}`), `${source} eagerly includes editor runtime ${owner}.`);
+  }
+}
 const widgetImplementationSources = [...WIDGET_SOURCES.keys()];
 for (const source of widgetImplementationSources) {
   assert.ok(manifest[source], `Registered widget implementation ${source} is missing from the build manifest.`);

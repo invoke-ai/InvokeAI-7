@@ -1,4 +1,5 @@
 import type { CanvasLayerContract } from '@workbench/canvas-engine/contracts';
+import type { CanvasNodeInsertionAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
 import type { History, HistoryEntry } from '@workbench/canvas-engine/history/history';
 import type { ImagePatchApply } from '@workbench/canvas-engine/history/imagePatch';
 import type { CanvasProjectMutation } from '@workbench/canvas-engine/mutationContracts';
@@ -20,6 +21,10 @@ export interface CreateStrokeCommitDeps {
   readonly strokeListeners: ReadonlySet<(event: StrokeCommittedEvent) => void>;
 }
 
+/** The history label for a committed pixel stroke. */
+export const strokeCommitLabel = (tool: StrokeCommittedEvent['tool']): string =>
+  tool === 'eraser' ? 'Eraser stroke' : tool === 'shape' ? 'Draw shape' : 'Brush stroke';
+
 export interface StrokeCommit {
   /** Records one committed tool stroke: persistence, history, then subscriber fanout. */
   commitOrdinaryStroke(event: StrokeCommittedEvent): void;
@@ -37,7 +42,7 @@ export const createStrokeCommit = (deps: CreateStrokeCommitDeps): StrokeCommit =
   const { applyImagePatch, dispatchCanvasMutation, history, layerCache } = deps;
 
   const createComposedPaintEntry = (
-    created: { layer: CanvasLayerContract; index: number },
+    created: { layer: CanvasLayerContract; anchor: CanvasNodeInsertionAnchor },
     event: StrokeCommittedEvent,
     label: string
   ): HistoryEntry => {
@@ -48,7 +53,7 @@ export const createStrokeCommit = (deps: CreateStrokeCommitDeps): StrokeCommit =
       bytes,
       label,
       redo: () => {
-        dispatchCanvasMutation({ index: created.index, layer: created.layer, type: 'addCanvasLayer' });
+        dispatchCanvasMutation({ anchor: created.anchor, layer: created.layer, type: 'addCanvasLayer' });
         // Re-create an EMPTY cache marked fresh so the async rasterize pass can't
         // clobber the restored stroke; `applyImagePatch` grows it to the stroke's
         // content bounds and writes the `after` pixels.
@@ -75,7 +80,7 @@ export const createStrokeCommit = (deps: CreateStrokeCommitDeps): StrokeCommit =
       // stroke, so this never fires during apply — the guard is belt-and-braces.
       if (!history.isApplying()) {
         deps.commitPaintEdit();
-        const label = event.tool === 'eraser' ? 'Eraser stroke' : 'Brush stroke';
+        const label = strokeCommitLabel(event.tool);
         history.push(
           event.createdLayer
             ? createComposedPaintEntry(event.createdLayer, event, label)

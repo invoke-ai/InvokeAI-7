@@ -1,10 +1,20 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
+  ApiError: class ApiError extends Error {
+    readonly status: number;
+
+    constructor(message: string, status: number) {
+      super(message);
+      this.name = 'ApiError';
+      this.status = status;
+    }
+  },
   apiFetchJson: vi.fn(),
 }));
 
 vi.mock('@platform/transport/http', () => ({
+  ApiError: mocks.ApiError,
   apiFetchJson: mocks.apiFetchJson,
   getApiErrorMessage: (_error: unknown, fallback: string) => fallback,
 }));
@@ -37,6 +47,21 @@ const BACKEND_RESPONSE = {
   state: 'ready',
   updated_at: '2026-08-02 12:00:00',
   visible_hash: 'hash-1',
+};
+
+// A labels response stamped for some other projection, which the store must
+// discard. Tests that exercise the points/status flows answer labels requests
+// with this: a body without a `labels` key throws a TypeError in the api
+// mapping, which the store classifies as a network failure and retries —
+// arming a real-timer chain that outlives the test.
+const FOREIGN_LABELS_RESPONSE = { labels: {}, updated_at: 'another projection', visible_hash: 'another set' };
+
+const mockPointsWithForeignLabels = (): void => {
+  mocks.apiFetchJson.mockImplementation((url: string) =>
+    url.startsWith('/api/v1/image_map/cluster_labels')
+      ? Promise.resolve(FOREIGN_LABELS_RESPONSE)
+      : Promise.resolve(BACKEND_RESPONSE)
+  );
 };
 
 describe('image map api', () => {
@@ -104,8 +129,13 @@ describe('image map store', () => {
     });
   });
 
+  // Retry-schedule tests fake the clock; restore it whatever their outcome.
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('loads points into the snapshot', async () => {
-    mocks.apiFetchJson.mockResolvedValue(BACKEND_RESPONSE);
+    mockPointsWithForeignLabels();
 
     await refreshImageMapPoints();
 
@@ -244,8 +274,191 @@ describe('image map store', () => {
     expect(imageMapStore.getSnapshot().clusterLabels).toEqual({ '0': { alternates: [], label: 'cats' } });
   });
 
+  it('retries a labels request that raced the vocabulary build', async () => {
+    vi.useFakeTimers();
+    // After a backend restart the vocabulary embeddings are not in memory
+    // yet: the first labels request 409s while the index worker builds them.
+    mocks.apiFetchJson.mockImplementation((url: string) => {
+      if (url.startsWith('/api/v1/image_map/cluster_labels')) {
+        return Promise.reject(new mocks.ApiError('Cluster labels are still being prepared; try again shortly', 409));
+      }
+
+      return Promise.resolve(BACKEND_RESPONSE);
+    });
+
+    await refreshImageMapPoints();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(imageMapStore.getSnapshot().clusterLabels).toBeNull();
+
+    // The build lands; the retry succeeds and the labels appear.
+    mocks.apiFetchJson.mockImplementation((url: string) => {
+      if (url.startsWith('/api/v1/image_map/cluster_labels')) {
+        return Promise.resolve({
+          labels: { '0': { label: 'cats' } },
+          updated_at: BACKEND_RESPONSE.updated_at,
+          visible_hash: BACKEND_RESPONSE.visible_hash,
+        });
+      }
+
+      return Promise.resolve(BACKEND_RESPONSE);
+    });
+
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(mocks.apiFetchJson).toHaveBeenCalledTimes(3);
+    expect(imageMapStore.getSnapshot().clusterLabels).toEqual({ '0': { alternates: [], label: 'cats' } });
+  });
+
+  it('retires a pending retry when a newer labels request takes over', async () => {
+    vi.useFakeTimers();
+    mocks.apiFetchJson.mockImplementation((url: string) => {
+      if (url.startsWith('/api/v1/image_map/cluster_labels')) {
+        return Promise.reject(new mocks.ApiError('Cluster labels are still being prepared; try again shortly', 409));
+      }
+
+      return Promise.resolve(BACKEND_RESPONSE);
+    });
+
+    await refreshImageMapPoints();
+    await vi.advanceTimersByTimeAsync(0);
+
+    // A newer refresh supersedes the failing chain and resolves its own labels.
+    mocks.apiFetchJson.mockImplementation((url: string) => {
+      if (url.startsWith('/api/v1/image_map/cluster_labels')) {
+        return Promise.resolve({
+          labels: { '0': { label: 'cats' } },
+          updated_at: BACKEND_RESPONSE.updated_at,
+          visible_hash: BACKEND_RESPONSE.visible_hash,
+        });
+      }
+
+      return Promise.resolve(BACKEND_RESPONSE);
+    });
+
+    await refreshImageMapPoints();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(imageMapStore.getSnapshot().clusterLabels).toEqual({ '0': { alternates: [], label: 'cats' } });
+
+    // The first chain's retry timer fires: it must neither re-request nor
+    // disturb the newer chain's labels.
+    const callsBeforeRetry = mocks.apiFetchJson.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(mocks.apiFetchJson.mock.calls.length).toBe(callsBeforeRetry);
+    expect(imageMapStore.getSnapshot().clusterLabels).toEqual({ '0': { alternates: [], label: 'cats' } });
+  });
+
+  it('does not retry a labels failure the client cannot outwait', async () => {
+    vi.useFakeTimers();
+    mocks.apiFetchJson.mockImplementation((url: string) => {
+      if (url.startsWith('/api/v1/image_map/cluster_labels')) {
+        return Promise.reject(new mocks.ApiError('Forbidden', 403));
+      }
+
+      return Promise.resolve(BACKEND_RESPONSE);
+    });
+
+    await refreshImageMapPoints();
+    await vi.advanceTimersByTimeAsync(300_000);
+
+    // One points fetch, one labels attempt, nothing after.
+    expect(mocks.apiFetchJson).toHaveBeenCalledTimes(2);
+    expect(imageMapStore.getSnapshot().clusterLabels).toBeNull();
+  });
+
+  it('gives up on a persistently unavailable vocabulary after the schedule', async () => {
+    vi.useFakeTimers();
+    const labelsCalls = (): number =>
+      mocks.apiFetchJson.mock.calls.filter((call: unknown[]) =>
+        String(call[0]).startsWith('/api/v1/image_map/cluster_labels')
+      ).length;
+    mocks.apiFetchJson.mockImplementation((url: string) => {
+      if (url.startsWith('/api/v1/image_map/cluster_labels')) {
+        return Promise.reject(new mocks.ApiError('Cluster labels are still being prepared; try again shortly', 409));
+      }
+
+      return Promise.resolve(BACKEND_RESPONSE);
+    });
+
+    await refreshImageMapPoints();
+    // The whole backoff schedule: 9 retries after the first attempt.
+    await vi.advanceTimersByTimeAsync(300_000);
+
+    expect(labelsCalls()).toBe(10);
+    expect(imageMapStore.getSnapshot().clusterLabels).toBeNull();
+  });
+
+  it('retries a labels request that failed at the network layer', async () => {
+    vi.useFakeTimers();
+    // fetch() rejects with a bare TypeError when the request never reaches a
+    // server — a backend restarting under an open map, say.
+    mocks.apiFetchJson.mockImplementation((url: string) => {
+      if (url.startsWith('/api/v1/image_map/cluster_labels')) {
+        return Promise.reject(new TypeError('Failed to fetch'));
+      }
+
+      return Promise.resolve(BACKEND_RESPONSE);
+    });
+
+    await refreshImageMapPoints();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(imageMapStore.getSnapshot().clusterLabels).toBeNull();
+
+    // The backend comes back; the retry succeeds and the labels appear.
+    mocks.apiFetchJson.mockImplementation((url: string) => {
+      if (url.startsWith('/api/v1/image_map/cluster_labels')) {
+        return Promise.resolve({
+          labels: { '0': { label: 'cats' } },
+          updated_at: BACKEND_RESPONSE.updated_at,
+          visible_hash: BACKEND_RESPONSE.visible_hash,
+        });
+      }
+
+      return Promise.resolve(BACKEND_RESPONSE);
+    });
+
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(imageMapStore.getSnapshot().clusterLabels).toEqual({ '0': { alternates: [], label: 'cats' } });
+  });
+
+  it('clears labels when the newest request fails outright', async () => {
+    // L1 lands labels; L2's request then fails with its sequence still
+    // current — the failure must wipe them rather than leave L1's clustering
+    // annotated over the newer point set. (L2's failure is a plain Error:
+    // non-retryable, so no timer is armed either.)
+    mocks.apiFetchJson.mockImplementation((url: string) => {
+      if (url.startsWith('/api/v1/image_map/cluster_labels')) {
+        return Promise.resolve({
+          labels: { '0': { label: 'cats' } },
+          updated_at: BACKEND_RESPONSE.updated_at,
+          visible_hash: BACKEND_RESPONSE.visible_hash,
+        });
+      }
+
+      return Promise.resolve(BACKEND_RESPONSE);
+    });
+    await refreshImageMapPoints();
+    await vi.waitFor(() => {
+      expect(imageMapStore.getSnapshot().clusterLabels).not.toBeNull();
+    });
+
+    mocks.apiFetchJson.mockImplementation((url: string) => {
+      if (url.startsWith('/api/v1/image_map/cluster_labels')) {
+        return Promise.reject(new Error('boom'));
+      }
+
+      return Promise.resolve(BACKEND_RESPONSE);
+    });
+    await refreshImageMapPoints();
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+
+    expect(imageMapStore.getSnapshot().clusterLabels).toBeNull();
+  });
+
   it('records errors and keeps prior data', async () => {
-    mocks.apiFetchJson.mockResolvedValue(BACKEND_RESPONSE);
+    mockPointsWithForeignLabels();
     await refreshImageMapPoints();
 
     mocks.apiFetchJson.mockRejectedValue(new Error('boom'));
@@ -282,6 +495,78 @@ describe('image map store', () => {
       resolveRequest(response);
       await refresh;
     }
+  });
+
+  it('collapses mid-flight refresh requests into one rerun', async () => {
+    // The socket runtime can call refresh while the first load is still in
+    // flight (projection-ready is admitted during 'loading'), and several
+    // events may land inside one fetch's window. Every caller must join the
+    // in-flight request, and exactly one rerun may follow — not one per
+    // caller, and never a parallel fetch.
+    const pointsResolvers: Array<(value: typeof BACKEND_RESPONSE) => void> = [];
+    mocks.apiFetchJson.mockImplementation((url: string) => {
+      if (url.startsWith('/api/v1/image_map/points')) {
+        return new Promise((resolve) => {
+          pointsResolvers.push(resolve);
+        });
+      }
+
+      return Promise.resolve({
+        labels: { '0': { label: 'cats' } },
+        updated_at: BACKEND_RESPONSE.updated_at,
+        visible_hash: BACKEND_RESPONSE.visible_hash,
+      });
+    });
+
+    const calls = [refreshImageMapPoints(), refreshImageMapPoints(), refreshImageMapPoints()];
+    // All three joined the one in-flight fetch; no parallel point set.
+    expect(pointsResolvers).toHaveLength(1);
+
+    pointsResolvers[0]?.(BACKEND_RESPONSE);
+    await Promise.all(calls);
+
+    // Exactly one rerun follows the settle.
+    await vi.waitFor(() => expect(pointsResolvers).toHaveLength(2));
+    pointsResolvers[1]?.(BACKEND_RESPONSE);
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+
+    // No runaway: the rerun found nothing to queue behind it.
+    expect(pointsResolvers).toHaveLength(2);
+    expect(imageMapStore.getSnapshot().loadState).toBe('loaded');
+  });
+
+  it('still runs the queued rerun when the in-flight fetch fails', async () => {
+    // A refresh admitted during 'loading' must not be lost to the first fetch
+    // failing: the rerun runs anyway and can still recover the map.
+    let pointsCall = 0;
+    mocks.apiFetchJson.mockImplementation((url: string) => {
+      if (!url.startsWith('/api/v1/image_map/points')) {
+        return Promise.resolve({
+          labels: { '0': { label: 'cats' } },
+          updated_at: BACKEND_RESPONSE.updated_at,
+          visible_hash: BACKEND_RESPONSE.visible_hash,
+        });
+      }
+
+      pointsCall += 1;
+      return pointsCall === 1 ? Promise.reject(new Error('backend down')) : Promise.resolve(BACKEND_RESPONSE);
+    });
+
+    const first = refreshImageMapPoints();
+    refreshImageMapPoints();
+    await first;
+
+    // The rerun ran (a second points fetch) despite the first one failing,
+    // and it recovered the map. Without the queued rerun, pointsCall would
+    // sit at 1 and loadState at 'error'.
+    await vi.waitFor(() => expect(pointsCall).toBe(2));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+
+    expect(imageMapStore.getSnapshot().loadState).toBe('loaded');
   });
 });
 
@@ -376,6 +661,9 @@ describe('snapshot transitions', () => {
       state: 'ready',
       updated_at: null,
     });
+    // The labels request this refresh fires must not hit the exhausted
+    // once-queue (an undefined body arms a retry timer — see above).
+    mocks.apiFetchJson.mockResolvedValueOnce(FOREIGN_LABELS_RESPONSE);
 
     await refreshImageMapPoints();
 
@@ -473,11 +761,15 @@ describe('image index progress', () => {
   it('seeds the counts from the status endpoint when the map first loads', async () => {
     // Status events only fire as batches complete, so a panel opened while the
     // worker is parked behind a generation would otherwise show no progress.
-    mocks.apiFetchJson.mockImplementation((url: string) =>
-      url.startsWith('/api/v1/image_map/status')
-        ? Promise.resolve({ enabled: true, index: { embedded: 40, failed: 0, total: 100 } })
-        : Promise.resolve(BACKEND_RESPONSE)
-    );
+    mocks.apiFetchJson.mockImplementation((url: string) => {
+      if (url.startsWith('/api/v1/image_map/status')) {
+        return Promise.resolve({ enabled: true, index: { embedded: 40, failed: 0, total: 100 } });
+      }
+
+      return url.startsWith('/api/v1/image_map/cluster_labels')
+        ? Promise.resolve(FOREIGN_LABELS_RESPONSE)
+        : Promise.resolve(BACKEND_RESPONSE);
+    });
 
     ensureImageMapLoaded();
 
@@ -487,13 +779,17 @@ describe('image index progress', () => {
 
   it('does not let a slow seed rewind counts a status event already delivered', async () => {
     let resolveStatus: (value: unknown) => void = () => {};
-    mocks.apiFetchJson.mockImplementation((url: string) =>
-      url.startsWith('/api/v1/image_map/status')
-        ? new Promise((resolve) => {
-            resolveStatus = resolve;
-          })
-        : Promise.resolve(BACKEND_RESPONSE)
-    );
+    mocks.apiFetchJson.mockImplementation((url: string) => {
+      if (url.startsWith('/api/v1/image_map/status')) {
+        return new Promise((resolve) => {
+          resolveStatus = resolve;
+        });
+      }
+
+      return url.startsWith('/api/v1/image_map/cluster_labels')
+        ? Promise.resolve(FOREIGN_LABELS_RESPONSE)
+        : Promise.resolve(BACKEND_RESPONSE);
+    });
 
     ensureImageMapLoaded();
     recordImageIndexStatus({ embedded: 90, failed: 0, pending: 10, total: 100 }, 1_000);

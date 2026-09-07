@@ -128,7 +128,6 @@ describe('listSemanticGalleryItemNames', () => {
         { kind: 'image', name: 'first.png' },
         { kind: 'image', name: 'second.png' },
       ],
-      starredCount: 0,
       total: 2,
     });
   });
@@ -142,7 +141,6 @@ describe('listSemanticGalleryItemNames', () => {
         { kind: 'image', name: 'near.png' },
         { kind: 'image', name: 'far.png' },
       ],
-      starredCount: 0,
       total: 2,
     });
     // An evicted key (another cluster registered, or a reload) degrades to an
@@ -151,7 +149,6 @@ describe('listSemanticGalleryItemNames', () => {
     registerImageCluster(['other.png'], 'newer');
     await expect(listSemanticGalleryItemNames({ query: { clusterId, kind: 'cluster' } })).resolves.toEqual({
       items: [],
-      starredCount: 0,
       total: 0,
     });
     expect(mocks.apiFetchJson).not.toHaveBeenCalled();

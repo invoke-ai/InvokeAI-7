@@ -301,6 +301,18 @@ describe('flowAdapters identity preservation', () => {
     });
   });
 
+  it('renders direct loop linkage edges with their dedicated flow type and style', () => {
+    const doc = createDoc({
+      edges: [{ ...createEdge('link', 'a', 'value', 'b', 'a'), type: 'loop_linkage' }],
+    });
+    const rendered = toFlowEdges(doc, [], 'step', new Set(), createTemplates());
+
+    expect(rendered[0]).toMatchObject({
+      data: { fieldTypeLabel: 'Loop linkage', isLoopLinkage: true, stroke: '#22c55e', strokeDasharray: '6 4' },
+      type: 'loop_linkage',
+    });
+  });
+
   it('replaces edges when templates resolve their field type styling', () => {
     const doc = createDoc();
     const untyped = toFlowEdges(doc, [], 'default');

@@ -1,3 +1,5 @@
+import type { GalleryItem } from '@features/gallery';
+import type { GalleryMediaSlotLabels, GalleryMediaSlotValue } from '@features/gallery/mediaSlot';
 /* oxlint-disable react-perf/jsx-no-new-function-as-prop */
 import type {
   PromptTemplateCreateDraft,
@@ -10,18 +12,19 @@ import type { PromptTemplateCatalog } from '@features/generation/ui/usePromptTem
 import type { ChangeEvent } from 'react';
 
 import { HStack, Input, Stack, Text } from '@chakra-ui/react';
+import { GalleryMediaSlot } from '@features/gallery/mediaSlot';
 import { PROMPT_TEMPLATE_PLACEHOLDER } from '@features/generation/core/promptTemplates';
 import { useGenerationUi } from '@features/generation/ui/GenerationUiContext';
 import { PromptPanelHeader } from '@features/generation/ui/promptFields/PromptPanelHeader';
 import { PromptTemplateImage } from '@features/generation/ui/promptFields/PromptTemplateImage';
 import { PromptTextarea } from '@features/generation/ui/promptFields/PromptTextarea';
 import { useMountEffect } from '@platform/react/useMountEffect';
+import { captureAccountScope } from '@platform/state/accountLifecycle';
 import { getApiErrorMessage } from '@platform/transport/http';
-import { Button, IconButton } from '@platform/ui/Button';
-import { DropZone } from '@platform/ui/DropZone';
+import { Button } from '@platform/ui/Button';
 import { Field } from '@platform/ui/Field';
 import { Tooltip } from '@platform/ui/Tooltip';
-import { CheckIcon, ImageUpIcon, XIcon } from 'lucide-react';
+import { CheckIcon, XIcon } from 'lucide-react';
 import { useCallback, useId, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -43,10 +46,14 @@ interface EditorDraft {
   image: PromptTemplateImageUpdate;
   /** Undefined keeps the stored image, a URL previews a replacement, null removes it. */
   imagePreviewUrl?: string | null;
+  /** What the slot names the replacement: the picked item or file. */
+  imageName?: string;
 }
 
 const MAX_NAME_LENGTH = 128;
 const NEW_TEMPLATE_IMAGE = { hasImage: false, id: 'new' } as const;
+const IMAGE_ONLY = ['image'] as const;
+const IMAGE_DROP_ID = 'prompt-template-image';
 
 export const PromptTemplateEditor = ({
   catalog,
@@ -59,7 +66,6 @@ export const PromptTemplateEditor = ({
   const { t } = useTranslation();
   const { notifications } = useGenerationUi();
   const nameFieldId = useId();
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [draft, setDraft] = useState<EditorDraft>({
     image: { kind: 'preserve' },
     name: template?.name ?? '',
@@ -69,6 +75,7 @@ export const PromptTemplateEditor = ({
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const objectUrlRef = useRef<string | null>(null);
+  const galleryFetchRef = useRef<AbortController | null>(null);
 
   /**
    * Swaps in a preview URL for a picked file, releasing the previous one.
@@ -88,6 +95,7 @@ export const PromptTemplateEditor = ({
   }, []);
 
   useMountEffect(() => () => {
+    galleryFetchRef.current?.abort();
     if (objectUrlRef.current) {
       URL.revokeObjectURL(objectUrlRef.current);
     }
@@ -149,8 +157,6 @@ export const PromptTemplateEditor = ({
     []
   );
 
-  const pickImage = useCallback(() => fileInputRef.current?.click(), []);
-
   // The value has to be read before `setDraft`, not inside the updater: React
   // nulls `currentTarget` once the handler returns, and an updater can run after
   // that.
@@ -160,30 +166,105 @@ export const PromptTemplateEditor = ({
     []
   );
 
-  const handleImageChange = useCallback(
-    (event: ChangeEvent<HTMLInputElement>) => {
-      const file = event.currentTarget.files?.[0];
+  /** Cancels a pending gallery fetch and hands back a controller for the next one. */
+  const abortGalleryFetch = useCallback((): AbortController => {
+    galleryFetchRef.current?.abort();
+    galleryFetchRef.current = new AbortController();
+    return galleryFetchRef.current;
+  }, []);
 
-      if (file) {
-        const imagePreviewUrl = takeObjectUrl(file);
+  const setImageBlob = useCallback(
+    (blob: Blob, imageName: string) => {
+      const imagePreviewUrl = takeObjectUrl(blob);
 
-        setDraft((current) => ({
-          ...current,
-          image: { blob: file, kind: 'replace' },
-          imagePreviewUrl,
-        }));
-      }
-
-      // Reset so re-picking the same file still fires a change.
-      event.currentTarget.value = '';
+      setDraft((current) => ({ ...current, image: { blob, kind: 'replace' }, imageName, imagePreviewUrl }));
     },
     [takeObjectUrl]
   );
 
+  // A gallery pick fetches the full image so it is uploaded like a local file.
+  // Only the latest pick may land: a later local file, gallery pick, clear, or
+  // unmount aborts an in-flight fetch.
+  const handleGalleryPick = useCallback(
+    (item: GalleryItem) => {
+      const controller = abortGalleryFetch();
+      const owner = captureAccountScope();
+      const signal = AbortSignal.any([controller.signal, owner.signal]);
+
+      void fetch(item.fullUrl, { signal })
+        .then((response) => {
+          if (!response.ok) {
+            throw new Error(String(response.status));
+          }
+          return response.blob();
+        })
+        .then((blob) => {
+          if (!signal.aborted) {
+            setImageBlob(blob, item.name);
+          }
+        })
+        .catch(() => {
+          if (!signal.aborted) {
+            setError(t('widgets.generate.promptTemplates.couldNotLoadImage'));
+          }
+        });
+    },
+    [abortGalleryFetch, setImageBlob, t]
+  );
+
+  const handleUploadFile = useCallback(
+    (file: File) => {
+      abortGalleryFetch();
+      setImageBlob(file, file.name);
+    },
+    [abortGalleryFetch, setImageBlob]
+  );
+
   const clearImage = useCallback(() => {
+    abortGalleryFetch();
     takeObjectUrl(null);
-    setDraft((current) => ({ ...current, image: { kind: 'remove' }, imagePreviewUrl: null }));
-  }, [takeObjectUrl]);
+    setDraft((current) => ({ ...current, image: { kind: 'remove' }, imageName: undefined, imagePreviewUrl: null }));
+  }, [abortGalleryFetch, takeObjectUrl]);
+
+  const handleSlotChange = useCallback(
+    (item: GalleryItem | null) => {
+      if (item === null) {
+        clearImage();
+      } else if (item.kind === 'image') {
+        handleGalleryPick(item);
+      }
+    },
+    [clearImage, handleGalleryPick]
+  );
+  const slotLabels = useMemo<Partial<GalleryMediaSlotLabels>>(
+    () => ({
+      choose: t('widgets.generate.promptTemplates.addImage'),
+      remove: t('widgets.generate.promptTemplates.removeImage'),
+      replace: t('widgets.generate.promptTemplates.replaceImage'),
+    }),
+    [t]
+  );
+  const slotThumbnail = useMemo(
+    () => (
+      <PromptTemplateImage
+        alt=""
+        boxSize="full"
+        fallback={null}
+        localPreviewUrl={draft.imagePreviewUrl}
+        objectFit="contain"
+        rounded="sm"
+        template={template ?? NEW_TEMPLATE_IMAGE}
+      />
+    ),
+    [draft.imagePreviewUrl, template]
+  );
+  const slotValue = useMemo<GalleryMediaSlotValue | null>(
+    () =>
+      hasImage
+        ? { kind: 'image', name: draft.imageName ?? template?.name ?? t('widgets.generate.promptTemplates.image') }
+        : null,
+    [draft.imageName, hasImage, t, template?.name]
+  );
 
   const reportSaveError = useCallback(
     (caught: unknown) =>
@@ -280,62 +361,15 @@ export const PromptTemplateEditor = ({
       </Field>
 
       <Field label={t('widgets.generate.promptTemplates.image')}>
-        <HStack gap="2">
-          {template ? (
-            <PromptTemplateImage
-              alt=""
-              boxSize="12"
-              flexShrink="0"
-              fallback={null}
-              localPreviewUrl={draft.imagePreviewUrl}
-              objectFit="cover"
-              rounded="md"
-              template={template}
-            />
-          ) : draft.imagePreviewUrl ? (
-            <PromptTemplateImage
-              alt=""
-              boxSize="12"
-              fallback={null}
-              localPreviewUrl={draft.imagePreviewUrl}
-              objectFit="cover"
-              rounded="md"
-              template={NEW_TEMPLATE_IMAGE}
-            />
-          ) : null}
-          <DropZone
-            alignItems="center"
-            as="button"
-            cursor="pointer"
-            display="flex"
-            flex="1"
-            gap="1.5"
-            justifyContent="center"
-            px="2"
-            py="2.5"
-            onClick={pickImage}
-          >
-            <ImageUpIcon size={14} />
-            <Text as="span" fontSize="2xs">
-              {hasImage
-                ? t('widgets.generate.promptTemplates.replaceImage')
-                : t('widgets.generate.promptTemplates.addImage')}
-            </Text>
-          </DropZone>
-          {hasImage ? (
-            <Tooltip content={t('widgets.generate.promptTemplates.removeImage')}>
-              <IconButton
-                aria-label={t('widgets.generate.promptTemplates.removeImage')}
-                size="2xs"
-                variant="ghost"
-                onClick={clearImage}
-              >
-                <XIcon />
-              </IconButton>
-            </Tooltip>
-          ) : null}
-          <input accept="image/*" hidden ref={fileInputRef} type="file" onChange={handleImageChange} />
-        </HStack>
+        <GalleryMediaSlot
+          accept={IMAGE_ONLY}
+          dropId={IMAGE_DROP_ID}
+          labels={slotLabels}
+          thumbnail={slotThumbnail}
+          value={slotValue}
+          onChange={handleSlotChange}
+          onUploadFile={handleUploadFile}
+        />
       </Field>
 
       {error ? (

@@ -10,15 +10,48 @@ const NEG_COND_ID = 'neg_cond';
 const POS_COND_COLLECT_ID = 'pos_cond_collect';
 const NEG_COND_COLLECT_ID = 'neg_cond_collect';
 
-/** The base models regional guidance supports. */
-export type RegionalGuidanceBase = 'sd-1' | 'sdxl' | 'flux' | 'flux2' | 'krea-2';
+/** The base models whose text encoder accepts a region mask and whose denoiser accepts a conditioning list. */
+export type RegionalGuidanceBase = 'sd-1' | 'sd-2' | 'sdxl' | 'flux' | 'flux2' | 'krea-2' | 'z-image' | 'anima';
+
+/** The reference-image node kind a base's regions can consume. */
+export type RegionalReferenceImageKind = 'ip_adapter' | 'flux_redux';
+
+/** What the backend honours per region for one base, beyond the masked positive prompt. */
+export interface RegionalGuidanceSupport {
+  /** Display name used in rejection reasons and settings hints. */
+  label: string;
+  /** Masked regional negative prompts reach the negative collector. */
+  negativePrompt: boolean;
+  /** The positive prompt can be re-encoded over the inverted mask as a negative. */
+  autoNegative: boolean;
+  /** Mask-scoped reference images, or `null` when the denoiser has no regional image path. */
+  referenceImages: RegionalReferenceImageKind | null;
+}
+
+/**
+ * Mirrors the backend: `compel` / `sdxl_compel_prompt` + `denoise_latents` mask both
+ * prompt polarities; FLUX / FLUX.2 / Krea-2 / Z-Image / Anima denoisers mask positive
+ * conditioning only (Z-Image and Anima accept negative lists but discard their masks,
+ * so a "regional" negative there would silently act globally and is rejected instead).
+ */
+const REGIONAL_GUIDANCE_SUPPORT: Record<RegionalGuidanceBase, RegionalGuidanceSupport> = {
+  'sd-1': { autoNegative: true, label: 'SD 1.x', negativePrompt: true, referenceImages: 'ip_adapter' },
+  'sd-2': { autoNegative: true, label: 'SD 2.x', negativePrompt: true, referenceImages: 'ip_adapter' },
+  sdxl: { autoNegative: true, label: 'SDXL', negativePrompt: true, referenceImages: 'ip_adapter' },
+  flux: { autoNegative: false, label: 'FLUX', negativePrompt: false, referenceImages: 'flux_redux' },
+  flux2: { autoNegative: false, label: 'FLUX.2', negativePrompt: false, referenceImages: null },
+  'krea-2': { autoNegative: false, label: 'Krea-2', negativePrompt: false, referenceImages: null },
+  'z-image': { autoNegative: false, label: 'Z-Image', negativePrompt: false, referenceImages: null },
+  anima: { autoNegative: false, label: 'Anima', negativePrompt: false, referenceImages: null },
+};
 
 /** True when `base` supports regional guidance at all. */
 export const isRegionalGuidanceSupportedForBase = (base: string): base is RegionalGuidanceBase =>
-  base === 'sd-1' || base === 'sdxl' || base === 'flux' || base === 'flux2' || base === 'krea-2';
+  Object.hasOwn(REGIONAL_GUIDANCE_SUPPORT, base);
 
-/** Whether a base supports regional NEGATIVE prompts / autoNegative (SD family only). */
-const supportsRegionalNegative = (base: RegionalGuidanceBase): boolean => base === 'sd-1' || base === 'sdxl';
+/** The per-base support matrix, or `null` for a base with no regional path. */
+export const getRegionalGuidanceSupport = (base: string | null): RegionalGuidanceSupport | null =>
+  base !== null && isRegionalGuidanceSupportedForBase(base) ? REGIONAL_GUIDANCE_SUPPORT[base] : null;
 
 /** A resolved reference-image (component) model identifier — the backend model field shape. */
 export interface RegionalReferenceModel {
@@ -91,7 +124,12 @@ const conditioningNodeType = (base: RegionalGuidanceBase, modelVariant?: string 
       return modelVariant === 'dev' ? 'flux2_dev_text_encoder' : 'flux2_klein_text_encoder';
     case 'krea-2':
       return 'krea2_text_encoder';
+    case 'z-image':
+      return 'z_image_text_encoder';
+    case 'anima':
+      return 'anima_text_encoder';
     case 'sd-1':
+    case 'sd-2':
       return 'compel';
   }
 };
@@ -115,7 +153,11 @@ const copyEncoderFields = (base: RegionalGuidanceBase, modelVariant?: string | n
       return modelVariant === 'dev' ? ['mistral_encoder', 'max_seq_len'] : ['qwen3_encoder', 'max_seq_len'];
     case 'krea-2':
       return ['qwen3_vl_encoder'];
+    case 'z-image':
+    case 'anima':
+      return ['qwen3_encoder'];
     case 'sd-1':
+    case 'sd-2':
       return ['clip'];
   }
 };
@@ -188,10 +230,11 @@ const addRegionalConditioning = (
  * filter first. Wires, per enabled region:
  * - `alpha_mask_to_tensor` from the uploaded region mask;
  * - positive prompt → regional conditioning → `pos_cond_collect`;
- * - negative prompt (SD only) → regional conditioning → `neg_cond_collect`;
- * - autoNegative (SD only) → `invert_tensor_mask` + positive prompt re-encoded →
+ * - negative prompt → regional conditioning → `neg_cond_collect`;
+ * - autoNegative → `invert_tensor_mask` + positive prompt re-encoded →
  *   `neg_cond_collect` (push the positive prompt away outside the region);
- * - reference images → mask-scoped `ip_adapter` (SD) / `flux_redux` (FLUX).
+ * - reference images → mask-scoped `ip_adapter` (SD) / `flux_redux` (FLUX);
+ * each gated by the base's {@link RegionalGuidanceSupport}.
  */
 export const addRegionalGuidance = (graph: BackendGraphContract, options: AddRegionalGuidanceOptions): void => {
   const { base, modelVariant, regions, transformRegionalPositiveConditioning } = options;
@@ -204,7 +247,7 @@ export const addRegionalGuidance = (graph: BackendGraphContract, options: AddReg
     throw new Error('addRegionalGuidance: base graph is missing the positive conditioning collector.');
   }
   const negCondCollect = graph.nodes[NEG_COND_COLLECT_ID] ?? null;
-  const withNegative = supportsRegionalNegative(base);
+  const support = REGIONAL_GUIDANCE_SUPPORT[base];
 
   let ipAdapterCollector: BackendInvocationContract | null = null;
   let fluxReduxCollector: BackendInvocationContract | null = null;
@@ -231,8 +274,8 @@ export const addRegionalGuidance = (graph: BackendGraphContract, options: AddReg
       addEdge(graph, conditioningSource, 'conditioning', posCondCollect, 'item');
     }
 
-    // Negative prompt → negative collector (SD only; FLUX has no negative path).
-    if (region.negativePrompt && withNegative && negCondCollect) {
+    // Negative prompt → negative collector.
+    if (region.negativePrompt && support.negativePrompt && negCondCollect) {
       const negCond = addRegionalConditioning(
         graph,
         base,
@@ -247,7 +290,7 @@ export const addRegionalGuidance = (graph: BackendGraphContract, options: AddReg
 
     // autoNegative: re-encode the POSITIVE prompt over the INVERTED mask into the
     // negative collector — pushes the region's prompt away everywhere outside it.
-    if (region.autoNegative && region.positivePrompt && withNegative && negCondCollect) {
+    if (region.autoNegative && region.positivePrompt && support.autoNegative && negCondCollect) {
       const invert = addNode(graph, { id: `rg_invert_mask_${region.id}`, type: 'invert_tensor_mask' });
       addEdge(graph, maskToTensor, 'mask', invert, 'mask');
       const inverted = addRegionalConditioning(
@@ -264,7 +307,7 @@ export const addRegionalGuidance = (graph: BackendGraphContract, options: AddReg
 
     // Reference images (mask-scoped): ip_adapter on SD, flux_redux on FLUX.
     for (const ref of region.referenceImages) {
-      if (ref.type === 'ip_adapter' && (base === 'sd-1' || base === 'sdxl')) {
+      if (ref.type === 'ip_adapter' && support.referenceImages === 'ip_adapter') {
         if (!ipAdapterCollector) {
           ipAdapterCollector = resolveDenoiseCollector(graph, denoise, 'ip_adapter', 'regional_ip_adapter_collector');
         }
@@ -281,7 +324,7 @@ export const addRegionalGuidance = (graph: BackendGraphContract, options: AddReg
         });
         addEdge(graph, maskToTensor, 'mask', node, 'mask');
         addEdge(graph, node, 'ip_adapter', ipAdapterCollector, 'item');
-      } else if (ref.type === 'flux_redux' && base === 'flux') {
+      } else if (ref.type === 'flux_redux' && support.referenceImages === 'flux_redux') {
         if (!fluxReduxCollector) {
           fluxReduxCollector = resolveDenoiseCollector(
             graph,
@@ -306,17 +349,19 @@ export const addRegionalGuidance = (graph: BackendGraphContract, options: AddReg
 };
 
 /**
- * Returns the legacy-parity rejection reason for a regional-guidance region, or
- * `null` when it can contribute to generation. Mirrors
- * `getRegionalGuidanceWarnings`:
- * - unsupported main base (sd-2 / sd-3 / cogview / …) → "unsupported model";
+ * Returns the rejection reason for a regional-guidance region, or `null` when it
+ * can contribute to generation:
+ * - a base with no regional path (sd-3 / cogview / …) → "unsupported model";
  * - no drawn mask content → "no region";
- * - no positive prompt, no negative prompt, and no reference images → "empty";
- * - FLUX-family and Krea-2 negative prompts / autoNegative are unsupported;
- * - FLUX.2 and Krea-2 regional reference images are unsupported.
+ * - nothing the base's {@link RegionalGuidanceSupport} honours → "empty".
  *
- * Per-reference-image model/image validity is resolved by the caller (which drops
- * incomplete reference images before building), matching how control layers work.
+ * A negative prompt or reference images the base does not honour are simply not
+ * submitted (the layer keeps them for other models); the region still
+ * contributes whatever the base does honour. Auto-negative never decides on its
+ * own: it only re-encodes an existing positive prompt.
+ *
+ * `referenceImageCount` counts references the caller has already resolved to a
+ * usable image + model, matching how control layers work.
  */
 export const getRegionalGuidanceRejectionReason = (params: {
   layerName: string;
@@ -324,29 +369,23 @@ export const getRegionalGuidanceRejectionReason = (params: {
   hasContent: boolean;
   positivePrompt: string | null;
   negativePrompt: string | null;
-  autoNegative: boolean;
   referenceImageCount: number;
 }): string | null => {
-  const { autoNegative, hasContent, layerName, mainBase, negativePrompt, positivePrompt, referenceImageCount } = params;
+  const { hasContent, layerName, mainBase, negativePrompt, positivePrompt, referenceImageCount } = params;
 
-  if (!isRegionalGuidanceSupportedForBase(mainBase)) {
+  const support = getRegionalGuidanceSupport(mainBase);
+  if (!support) {
     return `Regional guidance "${layerName}" is not supported for the selected base model.`;
   }
   if (!hasContent) {
     return `Regional guidance "${layerName}" has no masked region.`;
   }
-  if (!positivePrompt && !negativePrompt && referenceImageCount === 0) {
-    return `Regional guidance "${layerName}" has no prompt or reference image.`;
-  }
-  const positiveOnlyLabel = mainBase === 'flux' ? 'FLUX' : mainBase === 'flux2' ? 'FLUX.2' : 'Krea-2';
-  if ((mainBase === 'flux' || mainBase === 'flux2' || mainBase === 'krea-2') && negativePrompt) {
-    return `Regional guidance "${layerName}" negative prompts are not supported for ${positiveOnlyLabel}.`;
-  }
-  if ((mainBase === 'flux' || mainBase === 'flux2' || mainBase === 'krea-2') && autoNegative) {
-    return `Regional guidance "${layerName}" auto-negative is not supported for ${positiveOnlyLabel}.`;
-  }
-  if ((mainBase === 'flux2' || mainBase === 'krea-2') && referenceImageCount > 0) {
-    return `Regional guidance "${layerName}" reference images are not supported for ${positiveOnlyLabel}.`;
+  const contributes =
+    Boolean(positivePrompt) ||
+    (Boolean(negativePrompt) && support.negativePrompt) ||
+    (referenceImageCount > 0 && support.referenceImages !== null);
+  if (!contributes) {
+    return `Regional guidance "${layerName}" has no prompt or reference image ${support.label} can use.`;
   }
   return null;
 };

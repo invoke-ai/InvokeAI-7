@@ -17,16 +17,34 @@ rebinds ``MiniMaxH3VideoCausalConv3d.forward`` to that decomposition.
 Numerics: identical math up to floating-point summation order — max abs error vs
 ``F.conv3d`` is ~1e-6 in fp32.
 
+Unlike the Wan twin, this decomposition stays on for EVERY HIP version. The Wan
+one was retired on HIP >= 7.2 because new MIOpen ran Wan's conv3ds at full speed
+and the decomposition showed allocator-state-dependent corruption in Wan *decodes*
+there. Neither finding transfers to this encoder: measured on a W7900 with torch
+2.13.0+rocm7.2 (HIP 7.2.53211), one 17-frame 768x448 reference chunk encodes in
+208 s fp32 / 222 s under fp16 autocast on native MIOpen conv3d (peak 9.2 GiB —
+the Im3d2Col column buffer), against 3.6 s / 2.7 s decomposed (peak 6.7 GiB).
+That is the same ~50x Im3d2Col penalty as on older HIP, so the retirement was
+wrong for these shapes (3x3x3 taps over 17-frame chunks with reflect padding);
+the H3 encoder was never re-timed when it happened.
+
+``INVOKEAI_ROCM_CONV3D=native`` (the Wan module's diagnostic override, shared)
+leaves the stock forward in place on any HIP version, for A/B or if a future
+MIOpen fixes the fallback.
+
 The patch is class-level and idempotent, applied only when torch is a ROCm/HIP
 build. It covers every ``AutoencoderKLMiniMaxH3`` consumer (keyframe
-conditioning, latents-to-image/video encode paths) regardless of which loader
-constructed it.
+conditioning, reference conditioning, latents-to-image/video encode paths)
+regardless of which loader constructed it.
 """
+
+import os
 
 import torch
 import torch.nn.functional as F
 
 _SENTINEL = "_invokeai_rocm_conv2d_decomposition"
+_MODE = os.environ.get("INVOKEAI_ROCM_CONV3D", "decomposed").strip().lower()
 
 
 def _decomposed_conv3d(module: torch.nn.Conv3d, x: torch.Tensor) -> torch.Tensor:
@@ -73,21 +91,17 @@ def _patch_minimax_h3_causal_conv3d() -> None:
 
 
 def patch_minimax_h3_causal_conv3d_for_rocm() -> None:
-    """Apply the conv2d decomposition on ROCm builds older than HIP 7.2; no-op elsewhere.
+    """Apply the conv2d decomposition on every ROCm build; no-op elsewhere.
 
     Call from any loader that constructs an ``AutoencoderKLMiniMaxH3``. cuDNN has
     real implicit-GEMM conv3d kernels, so CUDA builds keep the stock path.
 
-    HIP >= 7.2 also keeps the stock path, mirroring the Wan decomposition (see
-    ``invokeai.backend.wan.rocm_causal_conv3d.patch_wan_causal_conv3d_for_rocm`` for the
-    full story): new MIOpen runs these conv3ds at full speed, and the identical Wan
-    decomposition exhibited allocator-state-dependent row corruption there — this encoder
-    shares the code, so it shares the retirement.
+    There is deliberately no HIP-version gate (see the module docstring): MIOpen in
+    torch 2.13.0+rocm7.2 still takes the ~50x Im3d2Col fallback for this encoder's
+    shapes. ``INVOKEAI_ROCM_CONV3D=native`` opts out for diagnosis.
     """
-    from invokeai.backend.wan.rocm_causal_conv3d import hip_version_at_least
-
     if torch.version.hip is None:
         return
-    if hip_version_at_least(7, 2):
+    if _MODE == "native":
         return
     _patch_minimax_h3_causal_conv3d()

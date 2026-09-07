@@ -511,7 +511,7 @@ export const GenerateDimensionFields = ({
               </Tooltip>
             </HStack>
             <HStack gap="2" justify="space-between" minH="5" mt="auto">
-              <Text color="fg.subtle" fontSize="2xs">
+              <Text color="fg.muted" fontSize="2xs">
                 {t('widgets.generate.megapixelsValue', { value: megapixels.toFixed(2) })}
                 {isAtRecommendedSize ? ` · ${t('widgets.generate.sizeRecommended')}` : ''}
                 {/* Grounded in this project's recent completed runs, never a guess. */}

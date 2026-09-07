@@ -59,6 +59,16 @@ const setInputValue = (input: HTMLInputElement, value: string): void => {
   input.dispatchEvent(new Event('input', { bubbles: true }));
 };
 
+/** Each select trigger's accessible name, resolved through its aria-labelledby references. */
+const selectTriggerNames = (host: HTMLElement): string[] =>
+  [...host.querySelectorAll('[data-scope="select"][data-part="trigger"]')].map((trigger) =>
+    (trigger.getAttribute('aria-labelledby') ?? '')
+      .split(' ')
+      .map((id) => document.getElementById(id)?.textContent?.trim() ?? '')
+      .join(' ')
+      .trim()
+  );
+
 describe('ModelEditForm', () => {
   let host: HTMLDivElement;
   let root: Root;
@@ -99,9 +109,10 @@ describe('ModelEditForm', () => {
   it('offers format, a constrained variant select, and config path for a checkpoint main', async () => {
     await mount(checkpointMain);
 
-    expect(host.querySelector('[aria-label="models.format"]')).not.toBeNull();
+    // Each select trigger is named by its surrounding field's label.
+    expect(selectTriggerNames(host)).toContain('models.format');
     // sd-1 main has a curated variant list, so the field is a select.
-    expect(host.querySelector('[aria-label="models.variant"]')).not.toBeNull();
+    expect(selectTriggerNames(host)).toContain('models.variant');
     expect(host.textContent).toContain('models.configPath');
     expect(host.querySelector<HTMLInputElement>('input[value="v1-inference.yaml"]')).not.toBeNull();
   });
@@ -111,7 +122,7 @@ describe('ModelEditForm', () => {
 
     expect(host.textContent).not.toContain('models.configPath');
     // sdxl vae has no variant concept: free-text input, no select trigger.
-    expect(host.querySelector('[aria-label="models.variant"]')).toBeNull();
+    expect(selectTriggerNames(host)).not.toContain('models.variant');
   });
 
   it('submits format and config_path alongside the identity fields', async () => {

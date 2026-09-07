@@ -23,7 +23,7 @@ const MOVE_MENU_POSITIONING = { placement: 'top-end' } as const;
  */
 export const GallerySelectionBar = () => {
   const { t } = useTranslation();
-  const { gallery, itemActions } = useGalleryWidget();
+  const { gallery, itemActions, loadedItems } = useGalleryWidget();
   const moveTriggerIds = useMenuTriggerIds();
   const selectedItemKeys = gallery.selectedItemKeys;
   const selectionCount = selectedItemKeys.length;
@@ -32,10 +32,7 @@ export const GallerySelectionBar = () => {
 
   // Star acts on the whole selection: only "unstar all" when every selected
   // item is already starred, matching the `.` hotkey.
-  const shouldStar = useMemo(
-    () => shouldStarSelection(gallery.items, selectedItemRefs),
-    [gallery.items, selectedItemRefs]
-  );
+  const shouldStar = useMemo(() => shouldStarSelection(loadedItems, selectedItemRefs), [loadedItems, selectedItemRefs]);
 
   const moveTargets = useMemo(
     () =>
@@ -51,8 +48,8 @@ export const GallerySelectionBar = () => {
   );
 
   const handleDownload = useCallback(
-    () => void itemActions.downloadItems(selectedItemRefs, gallery.items),
-    [gallery.items, itemActions, selectedItemRefs]
+    () => void itemActions.downloadItems(selectedItemRefs, loadedItems),
+    [itemActions, loadedItems, selectedItemRefs]
   );
 
   const handleDelete = useCallback(

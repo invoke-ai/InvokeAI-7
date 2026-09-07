@@ -179,6 +179,9 @@ const surfaces = [
     ready: async (page) => {
       await waitForWorkbench(page);
       await selectLayoutPreset(page, 'Edit', 'Canvas');
+      // The Layers panel's Properties pane is the canvas's settings surface; the journey must scan it, not a fallback.
+      await page.getByRole('tab', { exact: true, name: 'Properties', selected: true }).waitFor();
+      await page.getByRole('tabpanel').getByText('Tool', { exact: true }).waitFor();
     },
   },
   {
@@ -190,6 +193,8 @@ const surfaces = [
       await waitForWorkbench(page);
       await selectLayoutPreset(page, 'Compose', 'Preview');
       await selectCenterView(page, 'Preview', 'Gallery');
+      // The default project board is empty; scan the populated fixture gallery.
+      await centerRegion(page).getByRole('button').filter({ hasText: 'Uncategorized' }).click();
       await centerRegion(page).getByRole('list', { exact: true, name: 'Gallery items' }).waitFor();
     },
   },
@@ -305,20 +310,21 @@ const runKeyboardJourney = async (browser) => {
     await previewTrigger.focus();
     await previewTrigger.press('Enter');
 
+    // Compose keeps Preview and Gallery as its center views; Canvas lives under "Add to center".
     const previewItem = page.getByRole('menuitemradio', { exact: true, name: 'Preview' });
-    const canvasItem = page.getByRole('menuitemradio', { exact: true, name: 'Canvas' });
+    const galleryItem = page.getByRole('menuitemradio', { exact: true, name: 'Gallery' });
     const centerViewMenu = page.getByRole('menu');
 
-    await canvasItem.waitFor();
+    await galleryItem.waitFor();
     assert.equal(await previewItem.getAttribute('aria-checked'), 'true');
     await expectFocused(centerViewMenu, 'Opening the center view menu should focus its composite.');
     assert.equal(await centerViewMenu.getAttribute('aria-activedescendant'), await previewItem.getAttribute('id'));
     await centerViewMenu.press('ArrowDown');
-    assert.equal(await centerViewMenu.getAttribute('aria-activedescendant'), await canvasItem.getAttribute('id'));
+    assert.equal(await centerViewMenu.getAttribute('aria-activedescendant'), await galleryItem.getAttribute('id'));
     await centerViewMenu.press('Enter');
-    const canvasTrigger = centerViewTrigger(page, 'Canvas');
-    await canvasTrigger.waitFor();
-    await expectFocused(canvasTrigger, 'Selecting a center view should restore focus to the view selector.');
+    const galleryTrigger = centerViewTrigger(page, 'Gallery');
+    await galleryTrigger.waitFor();
+    await expectFocused(galleryTrigger, 'Selecting a center view should restore focus to the view selector.');
 
     if (pageErrors.length > 0) {
       throw new AggregateError(pageErrors, 'keyboard-critical-journey raised uncaught browser errors.');
@@ -389,7 +395,7 @@ const runTopbarMenuJourney = async (browser) => {
   try {
     await waitForWorkbench(page);
 
-    const leftWidgetRail = page.getByRole('navigation', { exact: true, name: 'Left widget visibility' });
+    const leftWidgetRail = page.getByRole('navigation', { exact: true, name: 'Create widget visibility' });
     const upscaleWidget = leftWidgetRail.getByRole('button', { exact: true, name: 'Upscale' });
     await upscaleWidget.click({ button: 'right' });
     await page.getByRole('menuitem', { exact: true, name: 'Remove Upscale' }).click();
@@ -597,6 +603,7 @@ const runVideoPreviewJourney = async (browser) => {
     await selectLayoutPreset(page, 'Compose', 'Preview');
 
     const rightPanel = page.getByRole('complementary', { exact: true, name: 'right widget panel' });
+    await rightPanel.getByRole('button').filter({ hasText: 'Uncategorized' }).click();
     const gallery = rightPanel.getByRole('list', { exact: true, name: 'Gallery items' });
     const selectVideo = rightPanel.getByRole('button', {
       exact: true,
@@ -709,6 +716,7 @@ const runKeepAliveStateJourney = async (browser) => {
     await selectLayoutPreset(page, 'Compose', 'Preview');
 
     const rightPanel = page.getByRole('complementary', { exact: true, name: 'right widget panel' });
+    await rightPanel.getByRole('button').filter({ hasText: 'Uncategorized' }).click();
     const galleryItems = rightPanel.getByRole('list', { exact: true, name: 'Gallery items' });
     await galleryItems.waitFor();
 
@@ -813,6 +821,138 @@ const runKeepAliveStateJourney = async (browser) => {
   }
 };
 
+/**
+ * The layers panel's fixed panes: every pane block switches by pointer and by
+ * keyboard (arrows rove, Enter selects — SegmentTabs is manual-activation),
+ * tool switches reshape the Properties pane without losing it, and axe passes
+ * with the non-default panes (Swatches/History/Overview) active — states the
+ * static canvas surface never reaches.
+ */
+const LAYERS_PANEL_SCOPE = { include: ['[data-hotkey-widget-type-id="layers"]'] };
+
+const runLayersPanesJourney = async (browser) => {
+  const { context, page, pageErrors } = await openRepresentativePage(browser, representativeProjectPath);
+
+  try {
+    await waitForWorkbench(page);
+    await selectLayoutPreset(page, 'Edit', 'Canvas');
+    const propertiesTab = page.getByRole('tab', { exact: true, name: 'Properties' });
+    await propertiesTab.waitFor();
+
+    // Tool switching swaps the Tool section's rows in place.
+    const tools = page.getByRole('toolbar', { exact: true, name: 'Tools' });
+    await tools.getByRole('button', { exact: true, name: 'Brush' }).click();
+    await page.getByRole('tabpanel', { exact: true, name: 'Properties' }).getByText('Size', { exact: true }).waitFor();
+    await tools.getByRole('button', { exact: true, name: 'View' }).click();
+    await page.getByRole('tabpanel', { exact: true, name: 'Properties' }).waitFor();
+
+    // Pointer: activate every non-default pane across the three blocks.
+    await page.getByRole('tab', { exact: true, name: 'Overview' }).click();
+    await page.getByRole('button', { exact: true, name: 'Pan the canvas view' }).waitFor();
+    await page.getByRole('tab', { exact: true, name: 'History' }).click();
+    await page.getByRole('tabpanel', { exact: true, name: 'History' }).waitFor();
+    await page.getByRole('tab', { exact: true, name: 'Swatches' }).click();
+    await page.getByRole('tabpanel', { exact: true, name: 'Swatches' }).waitFor();
+
+    await waitForSettledDocument(page);
+    // Scoped to the layers widget: this journey certifies the panel's states;
+    // the page-wide sweep belongs to the canvas surface scan, and the left
+    // rail's lazily mounted generation sections would otherwise leak into the
+    // result nondeterministically depending on load timing.
+    await assertNoAxeViolations(page, 'workbench-layers-panes', LAYERS_PANEL_SCOPE);
+
+    // Keyboard: arrows rove within the block's tablist, Enter activates.
+    const overviewTab = page.getByRole('tab', { exact: true, name: 'Overview' });
+    await overviewTab.focus();
+    await overviewTab.press('ArrowLeft');
+    const transformTab = page.getByRole('tab', { exact: true, name: 'Transform' });
+    await expectFocused(transformTab, 'ArrowLeft should move focus from Overview to Transform.');
+    await transformTab.press('Enter');
+    await page.getByRole('tabpanel', { exact: true, name: 'Transform' }).waitFor();
+    assert.equal(await transformTab.getAttribute('aria-selected'), 'true');
+
+    // Second scan: the Transform pane's states are distinct from the first
+    // scan's Swatches/History/Overview set and must pass on their own.
+    await waitForSettledDocument(page);
+    await assertNoAxeViolations(page, 'workbench-layers-panes:transform', LAYERS_PANEL_SCOPE);
+
+    if (pageErrors.length > 0) {
+      throw new AggregateError(pageErrors, 'workbench-layers-panes raised uncaught browser errors.');
+    }
+
+    return { id: 'workbench-layers-panes', status: 'passed' };
+  } finally {
+    await context.close();
+  }
+};
+
+const SETTINGS_DIALOG_SCOPE = { include: ['[data-scope="dialog"][data-part="content"]'] };
+
+const runSettingsJourney = async (browser) => {
+  const { context, page, pageErrors } = await openRepresentativePage(browser, representativeProjectPath);
+  const id = 'workbench-settings';
+
+  try {
+    await waitForWorkbench(page);
+    const gear = page.getByRole('button', { exact: true, name: 'Gallery settings' });
+    await gear.click();
+    await page.getByRole('button', { exact: true, name: 'All Gallery settings…' }).click();
+    const dialog = page.getByRole('dialog', { name: /^Settings:/ });
+    await dialog.waitFor();
+    const navigation = dialog.getByRole('navigation', { exact: true, name: 'Settings' });
+    const sectionNames = await navigation.getByRole('button').allTextContents();
+    assert.equal(
+      sectionNames.length,
+      14,
+      'All application, project, widget, and system sections must be discoverable.'
+    );
+    for (const name of sectionNames) {
+      await navigation.getByRole('button', { exact: true, name }).click();
+      await page.getByRole('dialog', { exact: true, name: `Settings: ${name}` }).waitFor();
+      await page.waitForLoadState('networkidle');
+      await waitForSettledDocument(page);
+      // Certify the settings surface; representative surface scans retain page-wide workbench coverage.
+      await assertNoAxeViolations(page, `${id}:${name}`, SETTINGS_DIALOG_SCOPE);
+    }
+
+    const search = dialog.getByRole('textbox', { exact: true, name: 'Search settings…' });
+    await search.focus();
+    await search.pressSequentially('numeric attention');
+    const numericAttention = dialog.getByRole('checkbox', { exact: true, name: 'Prefer numeric attention style' });
+    await numericAttention.waitFor();
+    await expectFocused(search, 'Filtering settings should keep keyboard focus in search.');
+    await numericAttention.focus();
+    await numericAttention.press('Space');
+    assert.equal(await numericAttention.isChecked(), true);
+    await assertNoAxeViolations(page, `${id}:search`, SETTINGS_DIALOG_SCOPE);
+    await dialog.getByRole('button', { exact: true, name: 'Show in section' }).click();
+    await expectFocused(numericAttention, 'Revealing a setting should focus its control.');
+    await page.keyboard.press('Escape');
+    await dialog.waitFor({ state: 'hidden' });
+    await expectFocused(gear, 'Closing settings should return focus to its widget gear.');
+
+    await gear.press('Enter');
+    const popover = page.locator('[data-scope="popover"][data-part="content"][data-state="open"]');
+    await popover.waitFor();
+    await popover.evaluate(async (element) => {
+      await Promise.all(element.getAnimations({ subtree: true }).map((animation) => animation.finished));
+    });
+    await waitForSettledDocument(page);
+    // Quick settings are nonmodal; scan their popup independently of the workbench behind it.
+    await assertNoAxeViolations(page, `${id}:quick`, { include: ['[data-scope="popover"][data-part="content"]'] });
+    await page.keyboard.press('Escape');
+    await popover.waitFor({ state: 'hidden' });
+    await expectFocused(gear, 'Closing quick settings should restore focus to its widget gear.');
+
+    if (pageErrors.length > 0) {
+      throw new AggregateError(pageErrors, `${id} raised uncaught browser errors.`);
+    }
+    return { id, status: 'passed' };
+  } finally {
+    await context.close();
+  }
+};
+
 const mockBackend = await startMockBackend(backendPort, { profile: 'representative' });
 const preview = spawn(
   'pnpm',
@@ -854,6 +994,12 @@ try {
   }
   if (!requestedJourney || requestedJourney === 'workbench-keep-alive-state') {
     reports.push(await runKeepAliveStateJourney(browser));
+  }
+  if (!requestedJourney || requestedJourney === 'workbench-layers-panes') {
+    reports.push(await runLayersPanesJourney(browser));
+  }
+  if (!requestedJourney || requestedJourney === 'workbench-settings') {
+    reports.push(await runSettingsJourney(browser));
   }
   if (reports.length === 0) {
     throw new Error(`Unknown accessibility journey ${JSON.stringify(requestedJourney)}.`);

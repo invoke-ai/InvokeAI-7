@@ -7,7 +7,7 @@ import type {
 } from '@features/gallery/core/items';
 import type { GalleryBoard } from '@features/gallery/core/types';
 import type { AccountScope } from '@platform/state/accountLifecycle';
-import type { InfiniteData, QueryClient, QueryKey } from '@tanstack/react-query';
+import type { InfiniteData, Query, QueryClient, QueryKey } from '@tanstack/react-query';
 
 import { toGalleryItemKey } from '@features/gallery/core/items';
 import { pruneImageClusterMembers } from '@features/gallery/core/semanticImageQuery';
@@ -17,9 +17,12 @@ import { hashKey } from '@tanstack/react-query';
 
 import { ALL_READABLE_BOARDS_ID, isDateBoardId } from './backend';
 import {
+  fetchGalleryItemsRange,
+  GALLERY_PAGE_SIZE,
   galleryKeys,
   getGalleryItemListQueries,
   getGalleryItemsFilterFromKey,
+  isGalleryStarredStripQueryKey,
   type CanonicalGalleryItemsFilter,
 } from './queries';
 
@@ -28,9 +31,12 @@ export type GalleryItemCachePatch =
   | { boardId: string; kind: 'move'; result: GalleryItemMutationResult }
   | { kind: 'star'; result: GalleryItemMutationResult; starred: boolean };
 
+/** A list window's pages, or the starred strip's single page. */
+type GalleryItemsCacheData = InfiniteData<GalleryItemsPage, number> | GalleryItemsPage;
+
 interface ItemCacheRollbackEntry {
-  after: InfiniteData<GalleryItemsPage, number>;
-  before: InfiniteData<GalleryItemsPage, number>;
+  after: GalleryItemsCacheData;
+  before: GalleryItemsCacheData;
   queryKey: QueryKey;
 }
 
@@ -42,6 +48,23 @@ const isGalleryItemsData = (value: unknown): value is InfiniteData<GalleryItemsP
   const data = value as { pages?: unknown; pageParams?: unknown };
 
   return Array.isArray(data.pages) && Array.isArray(data.pageParams);
+};
+
+const isGalleryItemsPage = (value: unknown): value is GalleryItemsPage =>
+  typeof value === 'object' &&
+  value !== null &&
+  Array.isArray((value as { items?: unknown }).items) &&
+  typeof (value as { total?: unknown }).total === 'number';
+
+/** The pages a list-family cache entry holds, whichever shape it is. */
+const getCachedPages = (query: Query): GalleryItemsPage[] => {
+  const data = query.state.data;
+
+  if (isGalleryItemsData(data)) {
+    return data.pages;
+  }
+
+  return isGalleryStarredStripQueryKey(query.queryKey) && isGalleryItemsPage(data) ? [data] : [];
 };
 
 const mapPageItems = (
@@ -74,6 +97,29 @@ const mapPageItems = (
   };
 };
 
+/**
+ * Whether a patch takes matching items out of a listing with this filter.
+ * Ranked similarity windows are board-agnostic (a move never changes
+ * membership); a starred-only listing — the strip, or the grid under the
+ * starred filter — loses an item the moment it is unstarred.
+ */
+const patchRemovesItems = (filter: CanonicalGalleryItemsFilter, patch: GalleryItemCachePatch): boolean => {
+  if (patch.kind === 'delete') {
+    return true;
+  }
+
+  if (patch.kind === 'star') {
+    return filter.starred !== undefined && filter.starred !== patch.starred;
+  }
+
+  return (
+    filter.semantic === undefined &&
+    filter.boardId !== ALL_READABLE_BOARDS_ID &&
+    filter.boardId !== patch.boardId &&
+    !isDateBoardId(filter.boardId)
+  );
+};
+
 const patchItemPage = (
   page: GalleryItemsPage,
   filter: CanonicalGalleryItemsFilter,
@@ -81,44 +127,29 @@ const patchItemPage = (
   itemKeys: ReadonlySet<GalleryItemKey>,
   removedItemCount: number
 ): GalleryItemsPage => {
-  if (patch.kind === 'star') {
-    return mapPageItems(page, (item) => {
-      if (!itemKeys.has(toGalleryItemKey(item)) || item.starred === patch.starred) {
-        return item;
-      }
-
-      return { ...item, starred: patch.starred };
-    });
-  }
-
-  if (patch.kind === 'delete') {
+  if (patchRemovesItems(filter, patch)) {
     return mapPageItems(page, (item) => (itemKeys.has(toGalleryItemKey(item)) ? null : item), removedItemCount);
   }
 
-  // Ranked similarity windows are board-agnostic: moving an image to another
-  // board never changes its membership in the result set.
-  const keepsMovedItems =
-    filter.semantic !== undefined ||
-    filter.boardId === ALL_READABLE_BOARDS_ID ||
-    filter.boardId === patch.boardId ||
-    isDateBoardId(filter.boardId);
+  return mapPageItems(page, (item) => {
+    if (!itemKeys.has(toGalleryItemKey(item))) {
+      return item;
+    }
 
-  return mapPageItems(
-    page,
-    (item) => {
-      if (!itemKeys.has(toGalleryItemKey(item))) {
-        return item;
-      }
+    if (patch.kind === 'star') {
+      return item.starred === patch.starred ? item : { ...item, starred: patch.starred };
+    }
 
-      if (!keepsMovedItems) {
-        return null;
-      }
-
+    if (patch.kind === 'move') {
       return item.boardId === patch.boardId ? item : { ...item, boardId: patch.boardId };
-    },
-    keepsMovedItems ? 0 : removedItemCount
-  );
+    }
+
+    return item;
+  });
 };
+
+const countRemovedItems = (page: GalleryItemsPage, itemKeys: ReadonlySet<GalleryItemKey>): number =>
+  page.items.filter((item) => itemKeys.has(toGalleryItemKey(item))).length;
 
 const patchItemsInfiniteData = (
   data: InfiniteData<GalleryItemsPage, number>,
@@ -126,16 +157,9 @@ const patchItemsInfiniteData = (
   patch: GalleryItemCachePatch,
   itemKeys: ReadonlySet<GalleryItemKey>
 ): InfiniteData<GalleryItemsPage, number> => {
-  const removesItems =
-    patch.kind === 'delete' ||
-    (patch.kind === 'move' &&
-      filter.semantic === undefined &&
-      filter.boardId !== ALL_READABLE_BOARDS_ID &&
-      filter.boardId !== patch.boardId &&
-      !isDateBoardId(filter.boardId));
   const removedItemKeys = new Set<GalleryItemKey>();
 
-  if (removesItems) {
+  if (patchRemovesItems(filter, patch)) {
     for (const page of data.pages) {
       for (const item of page.items) {
         const key = toGalleryItemKey(item);
@@ -156,6 +180,27 @@ const patchItemsInfiniteData = (
   });
 
   return changed ? { ...data, pages } : data;
+};
+
+const patchItemsCacheData = (
+  query: Query,
+  filter: CanonicalGalleryItemsFilter,
+  patch: GalleryItemCachePatch,
+  itemKeys: ReadonlySet<GalleryItemKey>
+): { after: GalleryItemsCacheData; before: GalleryItemsCacheData } | null => {
+  const before = query.state.data;
+
+  if (isGalleryItemsData(before)) {
+    return { after: patchItemsInfiniteData(before, filter, patch, itemKeys), before };
+  }
+
+  // A newly starred item is left to the trailing refetch, which knows where
+  // it belongs chronologically in the strip.
+  if (isGalleryStarredStripQueryKey(query.queryKey) && isGalleryItemsPage(before)) {
+    return { after: patchItemPage(before, filter, patch, itemKeys, countRemovedItems(before, itemKeys)), before };
+  }
+
+  return null;
 };
 
 /**
@@ -179,23 +224,17 @@ export const patchGalleryItemCaches = (client: QueryClient, patch: GalleryItemCa
   const rollbackEntries: ItemCacheRollbackEntry[] = [];
 
   for (const query of getGalleryItemListQueries(client)) {
-    const before = query.state.data;
     const filter = getGalleryItemsFilterFromKey(query.queryKey);
+    const patched = filter ? patchItemsCacheData(query, filter, patch, itemKeys) : null;
 
-    if (!filter || !isGalleryItemsData(before)) {
+    if (!patched || patched.after === patched.before) {
       continue;
     }
 
-    const after = patchItemsInfiniteData(before, filter, patch, itemKeys);
-
-    if (after === before) {
-      continue;
-    }
-
-    const applied = client.setQueryData<InfiniteData<GalleryItemsPage, number>>(query.queryKey, after);
+    const applied = client.setQueryData<GalleryItemsCacheData>(query.queryKey, patched.after);
 
     if (applied) {
-      rollbackEntries.push({ after: applied, before, queryKey: query.queryKey });
+      rollbackEntries.push({ after: applied, before: patched.before, queryKey: query.queryKey });
     }
   }
 
@@ -203,7 +242,7 @@ export const patchGalleryItemCaches = (client: QueryClient, patch: GalleryItemCa
     rollbackClusterMembers?.();
     rollBackUnclaimedEntries(
       rollbackEntries,
-      (entry) => client.getQueryData<InfiniteData<GalleryItemsPage, number>>(entry.queryKey),
+      (entry) => client.getQueryData<GalleryItemsCacheData>(entry.queryKey),
       (entry) => client.setQueryData(entry.queryKey, entry.before)
     );
   };
@@ -226,13 +265,7 @@ export const getGalleryItemBoardIdsFromCaches = (
       break;
     }
 
-    const data = query.state.data;
-
-    if (!isGalleryItemsData(data)) {
-      continue;
-    }
-
-    for (const page of data.pages) {
+    for (const page of getCachedPages(query)) {
       for (const item of page.items) {
         const key = toGalleryItemKey(item);
 
@@ -264,13 +297,7 @@ export const getGalleryItemStarredFromCaches = (
       break;
     }
 
-    const data = query.state.data;
-
-    if (!isGalleryItemsData(data)) {
-      continue;
-    }
-
-    for (const page of data.pages) {
+    for (const page of getCachedPages(query)) {
       for (const item of page.items) {
         const key = toGalleryItemKey(item);
 
@@ -342,6 +369,116 @@ export const patchGalleryBoardCaches = (
     );
 };
 
+/** The contiguous row range a window's pages cover, or null for a shape the rebuild cannot reason about. */
+const getGalleryWindowSpan = (
+  data: InfiniteData<GalleryItemsPage, number>
+): { offset: number; rowCount: number } | null => {
+  const [firstOffset] = data.pageParams;
+
+  if (typeof firstOffset !== 'number') {
+    return null;
+  }
+
+  const isContiguous = data.pageParams.every(
+    (pageParam, index) => pageParam === firstOffset + index * GALLERY_PAGE_SIZE
+  );
+
+  return isContiguous ? { offset: firstOffset, rowCount: data.pageParams.length * GALLERY_PAGE_SIZE } : null;
+};
+
+/**
+ * Swaps an active window's pages atomically from one span-sized read. False
+ * falls back to the collapse: the read failed or the entry changed meanwhile.
+ */
+const rebuildGalleryItemWindow = async (client: QueryClient, owner: AccountScope, query: Query): Promise<boolean> => {
+  const filter = getGalleryItemsFilterFromKey(query.queryKey);
+  const before = query.state.data;
+
+  if (!filter || !isGalleryItemsData(before)) {
+    return false;
+  }
+
+  const span = getGalleryWindowSpan(before);
+
+  if (!span) {
+    return false;
+  }
+
+  // Name-hydrated windows fetch videos one by one; re-reading a video-heavy
+  // span every mutation would cost more than the collapse ever did.
+  if (
+    (filter.semantic !== undefined || isDateBoardId(filter.boardId)) &&
+    before.pages.reduce((count, page) => count + page.items.filter((item) => item.kind === 'video').length, 0) >
+      GALLERY_PAGE_SIZE
+  ) {
+    return false;
+  }
+
+  let result: GalleryItemsPage;
+
+  try {
+    result = await fetchGalleryItemsRange(client, owner, filter, {
+      limit: span.rowCount,
+      offset: span.offset,
+      signal: owner.signal,
+    });
+  } catch {
+    return false;
+  }
+
+  const liveQuery = client.getQueryCache().get(query.queryHash);
+
+  // A page fetch that started during the span read snapshotted the old pages
+  // and will land after this swap; only an idle, untouched entry may take it.
+  if (liveQuery?.state.data !== before || liveQuery.state.fetchStatus !== 'idle') {
+    return false;
+  }
+
+  const pages: GalleryItemsPage[] = [];
+
+  for (let index = 0; index < result.items.length; index += GALLERY_PAGE_SIZE) {
+    pages.push({ items: result.items.slice(index, index + GALLERY_PAGE_SIZE), total: result.total });
+  }
+
+  // TanStack never stores zero pages; an emptied span keeps one empty page.
+  if (pages.length === 0) {
+    pages.push({ items: [], total: result.total });
+  }
+
+  client.setQueryData<InfiniteData<GalleryItemsPage, number>>(query.queryKey, {
+    pageParams: pages.map((_, index) => span.offset + index * GALLERY_PAGE_SIZE),
+    pages,
+  });
+
+  return true;
+};
+
+/** Collapses a window to its anchor page, so its refetch replays one request. */
+const collapseGalleryItemWindowToAnchor = (client: QueryClient, query: Query): void => {
+  // A transient entry (anchored windows carry gcTime 0) may have been
+  // collected while a rebuild awaited; writing to its key would resurrect it.
+  if (client.getQueryCache().get(query.queryHash) !== query) {
+    return;
+  }
+
+  const data = query.state.data;
+
+  if (!isGalleryItemsData(data) || data.pages.length <= 1) {
+    return;
+  }
+
+  const anchorOffset =
+    (query.queryKey[5] === 'anchor' || query.queryKey[5] === 'infinite') && typeof query.queryKey[6] === 'number'
+      ? query.queryKey[6]
+      : 0;
+  const anchorIndex = Math.max(0, data.pageParams.indexOf(anchorOffset));
+
+  client.setQueryData<InfiniteData<GalleryItemsPage, number>>(query.queryKey, {
+    pageParams: [data.pageParams[anchorIndex] ?? anchorOffset],
+    pages: [data.pages[anchorIndex] ?? data.pages[0]],
+  });
+};
+
 const runGalleryInvalidation = async (
   client: QueryClient,
   owner: AccountScope,
@@ -356,9 +493,11 @@ const runGalleryInvalidation = async (
   });
   await client.cancelQueries({ queryKey: galleryKeys.itemListsForAccount(owner) });
 
-  // Refetching an infinite query replays every retained page. Collapse each
-  // logical window to its pinned page first; users can explicitly load the
-  // surrounding pages again, while a mutation costs one list request.
+  const rebuiltQueryHashes = new Set<string>();
+
+  // An ACTIVE multi-page window swaps in one span read — collapsing it
+  // rearranges the rows under the user; unwatched windows just collapse to
+  // their pinned page and regrow on the next mount.
   for (const query of getGalleryItemListQueries(client, owner)) {
     const data = query.state.data;
 
@@ -366,19 +505,18 @@ const runGalleryInvalidation = async (
       continue;
     }
 
-    const anchorOffset =
-      (query.queryKey[5] === 'anchor' || query.queryKey[5] === 'infinite') && typeof query.queryKey[6] === 'number'
-        ? query.queryKey[6]
-        : 0;
-    const anchorIndex = Math.max(0, data.pageParams.indexOf(anchorOffset));
+    if (query.isActive() && (await rebuildGalleryItemWindow(client, owner, query))) {
+      rebuiltQueryHashes.add(query.queryHash);
+      continue;
+    }
 
-    client.setQueryData<InfiniteData<GalleryItemsPage, number>>(query.queryKey, {
-      pageParams: [data.pageParams[anchorIndex] ?? anchorOffset],
-      pages: [data.pages[anchorIndex] ?? data.pages[0]],
-    });
+    collapseGalleryItemWindowToAnchor(client, query);
   }
 
-  await client.invalidateQueries({ queryKey: galleryKeys.itemListsForAccount(owner) });
+  await client.invalidateQueries({
+    predicate: (query) => !rebuiltQueryHashes.has(query.queryHash),
+    queryKey: galleryKeys.itemListsForAccount(owner),
+  });
 
   if (includeBoards) {
     await client.invalidateQueries({ queryKey: galleryKeys.boardsForAccount(owner) });

@@ -57,10 +57,28 @@ describe('models ui store', () => {
     expect(store.getAddModelsSeed()).toBe('Juggernaut XL');
     expect(store.getAddModelsSeed()).toBe('Juggernaut XL');
 
-    store.clearAddModelsSeed();
+    store.clearAddModelsSeeds();
 
     // The next time Add Models opens on its own, the box is empty again.
     expect(store.getAddModelsSeed()).toBe('');
+  });
+
+  it('hands the starter type-filter seed over exactly once, and the two seeds displace each other', async () => {
+    const store = await import('./uiStore');
+
+    store.requestAddModelsTypeFilter('text_llm');
+    expect(store.getModelsUiSnapshotForTests().activeTab).toBe('add');
+    expect(store.getAddModelsTypeSeed()).toBe('text_llm');
+    expect(store.getAddModelsSeed()).toBe('');
+
+    store.requestAddModelsSearch('Juggernaut XL');
+    expect(store.getAddModelsTypeSeed()).toBeNull();
+
+    store.requestAddModelsTypeFilter('llava_onevision');
+    expect(store.getAddModelsSeed()).toBe('');
+
+    store.clearAddModelsSeeds();
+    expect(store.getAddModelsTypeSeed()).toBeNull();
   });
 
   it('keeps the bundle selection until it is explicitly replaced', async () => {

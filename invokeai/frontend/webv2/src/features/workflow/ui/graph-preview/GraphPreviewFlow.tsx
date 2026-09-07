@@ -11,10 +11,11 @@ import type { TFunction } from 'i18next';
 
 import { Badge, Box, Stack, Text } from '@chakra-ui/react';
 import { isInvocationNode, type ProjectGraphState, type XYPosition } from '@features/workflow/contracts';
+import { getCanonicalWorkflowEdges } from '@features/workflow/core/forLoops';
 import { getLayeredPositions } from '@features/workflow/core/graphLayout';
 import '@xyflow/react/dist/style.css';
+import { LOOP_LINKAGE_STROKE } from '@features/workflow/ui/loopLinkage';
 import { useWorkflowPreferencesSelector } from '@features/workflow/ui/WorkflowUiContext';
-import { getResolvedWorkflowEdges } from '@features/workflow/utility';
 import { Background, BackgroundVariant, Handle, Position, ReactFlow } from '@xyflow/react';
 import { useCallback, useId, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -48,14 +49,15 @@ export const documentToPreviewGraph = (
 
   return {
     graph: {
-      edges: getResolvedWorkflowEdges(document.nodes, document.edges)
-        .filter((edge) => invocationNodeIds.has(edge.source) && invocationNodeIds.has(edge.target))
+      edges: getCanonicalWorkflowEdges(document)
+        .filter((edge) => invocationNodeIds.has(edge.source.node_id) && invocationNodeIds.has(edge.destination.node_id))
         .map((edge) => ({
           id: edge.id,
-          sourceField: edge.sourceHandle,
-          sourceNodeId: edge.source,
-          targetField: edge.targetHandle,
-          targetNodeId: edge.target,
+          sourceField: edge.source.field,
+          sourceNodeId: edge.source.node_id,
+          targetField: edge.destination.field,
+          targetNodeId: edge.destination.node_id,
+          ...(edge.type ? { type: edge.type } : {}),
         })),
       id: document.id,
       label: document.name || fallbackLabel,
@@ -140,6 +142,9 @@ const toPreviewEdges = (graph: WorkflowPreviewGraph): FlowEdge[] =>
     source: edge.sourceNodeId,
     target: edge.targetNodeId,
     type: 'default',
+    ...(edge.type === 'loop_linkage'
+      ? { style: { stroke: LOOP_LINKAGE_STROKE, strokeDasharray: '6 4', strokeWidth: 2 } }
+      : {}),
   }));
 
 export const GraphPreviewFlow = ({

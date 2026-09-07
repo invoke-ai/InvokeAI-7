@@ -40,6 +40,7 @@ const searchContext = () => ({ signal: new AbortController().signal });
 const uncategorized: GalleryBoard = {
   archived: false,
   assetCount: 0,
+  assetVideoCount: 0,
   id: 'none',
   imageCount: 1,
   kind: 'uncategorized',

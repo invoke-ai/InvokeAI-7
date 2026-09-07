@@ -1,8 +1,9 @@
-import type { CanvasDocumentContractV2, CanvasImageRef, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
+import type { CanvasDocumentContractV3, CanvasImageRef, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
 import type { RasterSurface } from '@workbench/canvas-engine/render/raster';
 import type { Rect } from '@workbench/canvas-engine/types';
 
 import { RasterMemoryBudgetController } from '@workbench/canvas-engine/controllers/rasterMemoryBudgetController';
+import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
 import { createTestStubRasterBackend } from '@workbench/canvas-engine/render/raster.testStub';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -46,17 +47,17 @@ const controlLayer = (id: string): CanvasLayerContract => ({
   withTransparencyEffect: false,
 });
 
-const makeDoc = (layers: CanvasLayerContract[]): CanvasDocumentContractV2 => ({
+const makeDoc = (layers: CanvasLayerContract[]): CanvasDocumentContractV3 => ({
   background: 'transparent',
   bbox: { height: 128, width: 128, x: 0, y: 0 },
   height: 128,
-  layers,
+  stacks: stacksFrom(layers),
   selectedLayerId: null,
-  version: 2,
+  version: 3,
   width: 128,
 });
 
-const makeDeps = (document: CanvasDocumentContractV2) => {
+const makeDeps = (document: CanvasDocumentContractV3) => {
   const stub = createTestStubRasterBackend();
   const snapshot: RasterCompositeExportSnapshot = {
     contentEpoch: 1,
@@ -173,7 +174,16 @@ describe('exportRasterComposite', () => {
     if (layer.type !== 'raster') {
       throw new Error('Expected raster layer');
     }
-    const { deps } = makeDeps(makeDoc([{ ...layer, adjustments: { brightness: 0.1, contrast: 0, saturation: 0 } }]));
+    const { deps } = makeDeps(
+      makeDoc([
+        {
+          ...layer,
+          adjustments: [
+            { brightness: 0.1, contrast: 0, id: 'adj-bc', isEnabled: true, type: 'brightness-contrast' as const },
+          ],
+        },
+      ])
+    );
     const reserve = vi.fn(() => ({ lease: { release: vi.fn() }, status: 'ok' as const }));
     deps.reserve = reserve;
 

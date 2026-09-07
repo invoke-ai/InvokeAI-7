@@ -1,4 +1,5 @@
-import type { WidgetInstanceId, WorkbenchRegion } from '@workbench/widgetContracts';
+import type { WidgetRegion } from '@workbench/layoutContracts';
+import type { WidgetInstanceId } from '@workbench/widgetContracts';
 
 import { MissingWidgetFrame, WidgetRendererById } from '@workbench/widget-frame';
 import { areWidgetRenderInstancesEqual } from '@workbench/widget-frame/widgetRenderInstance';
@@ -15,20 +16,17 @@ import {
   withoutInstancesShownElsewhere,
 } from './useMountedInstanceIds';
 
+type PanelRegion = Exclude<WidgetRegion, 'center'>;
+
 /** Left panel — hosts the active registered widget panel view. */
 export const LeftPanel = ({ instanceId }: { instanceId: WidgetInstanceId }) => (
-  <WidgetPanelSlot instanceId={instanceId} panel="leftPanel" />
+  <WidgetPanelSlot instanceId={instanceId} region="left" />
 );
 
 /** Right panel — hosts the active registered widget panel view. */
 export const RightPanel = ({ instanceId }: { instanceId: WidgetInstanceId }) => (
-  <WidgetPanelSlot instanceId={instanceId} panel="rightPanel" />
+  <WidgetPanelSlot instanceId={instanceId} region="right" />
 );
-
-const panelRegions = {
-  leftPanel: 'left',
-  rightPanel: 'right',
-} as const satisfies Record<string, WorkbenchRegion>;
 
 /**
  * Keeps the panel widgets this session has already shown mounted behind the
@@ -36,10 +34,10 @@ const panelRegions = {
  * their scroll position, selection and virtualizer state. The remembered set is
  * independent of the region's `instanceIds`, which a preset replaces wholesale.
  */
-const WidgetPanelSlot = ({ instanceId, panel }: { instanceId: WidgetInstanceId; panel: keyof typeof panelRegions }) => {
+export const WidgetPanelSlot = ({ instanceId, region }: { instanceId: WidgetInstanceId; region: PanelRegion }) => {
   const projectId = useActiveProjectId();
   const activeIdsElsewhere = useActiveProjectSelector(
-    (project) => getActiveInstanceIdsOutside(project.widgetRegions, panelRegions[panel], project.floatingWidgets),
+    (project) => getActiveInstanceIdsOutside(project.widgetRegions, region, project.floatingWidgets),
     areInstanceIdListsEqual
   );
   const mountedIds = withoutInstancesShownElsewhere(
@@ -52,27 +50,20 @@ const WidgetPanelSlot = ({ instanceId, panel }: { instanceId: WidgetInstanceId; 
     <>
       {mountedIds.map((id) => (
         <Activity key={id} mode={id === instanceId ? 'visible' : 'hidden'}>
-          <WidgetPanelInstance instanceId={id} panel={panel} />
+          <WidgetPanelInstance instanceId={id} region={region} />
         </Activity>
       ))}
     </>
   );
 };
 
-const WidgetPanelInstance = ({
-  instanceId,
-  panel,
-}: {
-  instanceId: WidgetInstanceId;
-  panel: keyof typeof panelRegions;
-}) => {
+const WidgetPanelInstance = ({ instanceId, region }: { instanceId: WidgetInstanceId; region: PanelRegion }) => {
   const { t } = useTranslation();
   const instance = useActiveProjectSelector(
     (project) => project.widgetInstances[instanceId],
     areWidgetRenderInstancesEqual
   );
   const widget = instance ? getWidgetById(instance.typeId) : undefined;
-  const region = panelRegions[panel];
 
   if (!instance || !widget || widget.status !== 'enabled') {
     return <MissingWidgetFrame label={widget ? resolveWidgetLabel(widget.manifest, t) : instanceId} region={region} />;

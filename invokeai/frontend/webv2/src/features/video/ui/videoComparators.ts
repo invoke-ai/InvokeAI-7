@@ -52,6 +52,7 @@ export const areVideoValuesEqual = (left: VideoWidgetValues, right: VideoWidgetV
     areVideoLorasEquivalent(left.loras, right.loras) &&
     stableStringify(left.firstFrameImage) === stableStringify(right.firstFrameImage) &&
     stableStringify(left.lastFrameImage) === stableStringify(right.lastFrameImage) &&
+    stableStringify(left.references) === stableStringify(right.references) &&
     stableStringify(left.sourceVideo) === stableStringify(right.sourceVideo) &&
     stableStringify(left.vae) === stableStringify(right.vae) &&
     stableStringify(left.wanT5EncoderModel) === stableStringify(right.wanT5EncoderModel) &&

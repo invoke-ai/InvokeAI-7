@@ -445,6 +445,15 @@ describe('pointer pipeline: temporary modifier tools', () => {
     expect(h.setTool).toHaveBeenLastCalledWith('brush', { temporary: true });
   });
 
+  it('leaves alt to a tool that uses it as a gesture modifier', () => {
+    const h = createHarness({ tools: ['view', 'brush', 'colorPicker'] });
+    (h.tool as { usesAltKey?: boolean }).usesAltKey = true;
+    h.pipeline.onPointerEnter();
+    h.pipeline.onKeyDown(makeKeyEvent({ code: 'AltLeft' }));
+    h.pipeline.onKeyUp(makeKeyEvent({ code: 'AltLeft' }));
+    expect(h.setTool).not.toHaveBeenCalled();
+  });
+
   it('quick-tapping C sticky-selects the bbox tool after the temporary preview switch', () => {
     const h = createHarness({ tools: ['view', 'brush', 'bbox'] });
     h.pipeline.onPointerEnter();

@@ -1,16 +1,11 @@
-import type { NumberInput as ChakraNumberInput, SliderValueChangeDetails } from '@chakra-ui/react';
+import type { NumberInput as ChakraNumberInput } from '@chakra-ui/react';
 import type { KeyboardEvent } from 'react';
 
-import { HStack, NumberInput, Text } from '@chakra-ui/react';
-import { ColorPicker, Slider, ToggleIconButton } from '@platform/ui';
+import { chakra } from '@chakra-ui/react';
 import { MAX_BRUSH_SIZE, MIN_BRUSH_SIZE } from '@workbench/canvas-engine/api';
-import { useBrushOptions } from '@workbench/widgets/canvas/engineStoreHooks';
-import { useColorSampler } from '@workbench/widgets/canvas/useColorSampler';
-import { DropletIcon, PenLineIcon } from 'lucide-react';
-import { useCallback, useMemo, useReducer } from 'react';
+import { FormNumberField, FormSlider, useNumberCommit } from '@workbench/widgets/canvas/tool-presentation/FormControls';
+import { useLayoutEffect, useRef, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-
-import type { ToolOptionsComponentProps } from './ToolOptionsBar';
 
 export const BRUSH_SIZE_SLIDER_MAX_SIZE = 600;
 export const BRUSH_SIZE_SLIDER_MIN = 0;
@@ -38,8 +33,6 @@ export const formatBrushSize = (size: number): string =>
     .toFixed(2)
     .replace(/\.?0+$/, '');
 
-const formatOpacityPercent = (value: number): string => `${Math.round(value)}%`;
-
 export const getBrushSizeKeyboardStep = (size: number, direction: -1 | 1): number => {
   if (size < 1 || (direction < 0 && size === 1)) {
     return 0.01;
@@ -53,56 +46,22 @@ export const getBrushSizeKeyboardStep = (size: number, direction: -1 | 1): numbe
   return 10;
 };
 
-interface PaintSizeOpacityControlsProps {
-  opacity: number;
-  setOpacity: (opacity: number) => void;
-  setSize: (size: number) => void;
-  size: number;
-  sizeLabel: string;
-}
-
-/** Shared size + opacity controls for the brush and eraser. */
-export const PaintSizeOpacityControls = ({
-  opacity,
-  setOpacity,
+/** Logarithmic size slider plus an exact numeric field, shared by the brush and eraser. */
+export const PaintSizeControl = ({
+  label,
   setSize,
   size,
-  sizeLabel,
-}: PaintSizeOpacityControlsProps) => {
-  const { t } = useTranslation();
-  const sizeAriaLabel = useMemo(() => [sizeLabel], [sizeLabel]);
-  const opacityAriaLabel = useMemo(() => [t('widgets.canvas.toolOptions.opacity')], [t]);
-  const sliderValue = useMemo(() => [brushSizeToSliderPosition(size)], [size]);
-  const opacityValue = useMemo(() => [Math.round(opacity * 100)], [opacity]);
-  const numberInputValue = useMemo(() => formatBrushSize(size), [size]);
-  const [numberInputResetVersion, resetNumberInput] = useReducer((version: number) => version + 1, 0);
-  const formatCurrentSizePx = useCallback(() => `${numberInputValue}px`, [numberInputValue]);
-
-  const onSliderSizeChange = useCallback(
-    ({ value }: SliderValueChangeDetails) => {
-      const next = value[0];
-      if (next !== undefined && Number.isFinite(next)) {
-        setSize(sliderPositionToBrushSize(next));
-      }
-    },
-    [setSize]
-  );
-  const onNumberSizeCommit = useCallback(
-    ({ valueAsNumber }: ChakraNumberInput.ValueChangeDetails) => {
-      if (Number.isFinite(valueAsNumber)) {
-        setSize(clampBrushSize(valueAsNumber));
-      }
-      // NumberInput retains the literal draft it was given. Always remount it
-      // after commit so rounding/clamping (including a no-op engine update)
-      // cannot leave the field disagreeing with the accepted size.
-      resetNumberInput();
-    },
-    [setSize]
-  );
+}: {
+  label: string;
+  setSize: (size: number) => void;
+  size: number;
+}) => {
+  const numberValue = formatBrushSize(size);
+  const formatPx = useCallback(() => `${numberValue}px`, [numberValue]);
+  const onSlider = useCallback((position: number) => setSize(sliderPositionToBrushSize(position)), [setSize]);
+  const onCommit = useNumberCommit((value) => setSize(clampBrushSize(value)));
   const onSliderKeyDownCapture = useCallback(
     (event: KeyboardEvent<HTMLDivElement>) => {
-      // Preserve the slider primitive's native modifier-key semantics. This
-      // override is only for unmodified logical brush-size navigation.
       if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) {
         return;
       }
@@ -133,132 +92,174 @@ export const PaintSizeOpacityControls = ({
     },
     [setSize, size]
   );
-  const onOpacityChange = useCallback(
-    ({ value }: SliderValueChangeDetails) => {
-      const next = value[0];
-      if (next !== undefined && Number.isFinite(next)) {
-        setOpacity(next / 100);
-      }
-    },
-    [setOpacity]
-  );
 
   return (
     <>
-      <HStack align="center" gap="1.5">
-        <Text color="fg.muted" fontSize="2xs">
-          {t('widgets.canvas.toolOptions.size')}
-        </Text>
-        <Slider
-          aria-label={sizeAriaLabel}
-          formatValue={formatCurrentSizePx}
-          getAriaValueText={formatCurrentSizePx}
-          max={BRUSH_SIZE_SLIDER_MAX}
-          min={BRUSH_SIZE_SLIDER_MIN}
-          size="sm"
-          step={BRUSH_SIZE_SLIDER_STEP}
-          value={sliderValue}
-          w="7rem"
-          onKeyDownCapture={onSliderKeyDownCapture}
-          onValueChange={onSliderSizeChange}
-        />
-        <NumberInput.Root
-          max={MAX_BRUSH_SIZE}
-          min={MIN_BRUSH_SIZE}
-          size="xs"
-          step={0.1}
-          defaultValue={numberInputValue}
-          key={`${numberInputValue}:${numberInputResetVersion}`}
-          w="4.5rem"
-          onValueCommit={onNumberSizeCommit}
-        >
-          <NumberInput.Control />
-          <NumberInput.Input aria-label={sizeLabel} fontSize="xs" />
-        </NumberInput.Root>
-      </HStack>
-      <HStack align="center" gap="1.5">
-        <Text color="fg.muted" fontSize="2xs">
-          {t('widgets.canvas.toolOptions.opacity')}
-        </Text>
-        <Slider
-          aria-label={opacityAriaLabel}
-          formatValue={formatOpacityPercent}
-          max={100}
-          min={0}
-          size="sm"
-          value={opacityValue}
-          w="6rem"
-          onValueChange={onOpacityChange}
-        />
-      </HStack>
+      <FormSlider
+        aria-label={label}
+        formatValue={formatPx}
+        getAriaValueText={formatPx}
+        max={BRUSH_SIZE_SLIDER_MAX}
+        min={BRUSH_SIZE_SLIDER_MIN}
+        step={BRUSH_SIZE_SLIDER_STEP}
+        value={brushSizeToSliderPosition(size)}
+        onKeyDownCapture={onSliderKeyDownCapture}
+        onValueChange={onSlider}
+      />
+      <FormNumberField
+        aria-label={label}
+        max={MAX_BRUSH_SIZE}
+        min={MIN_BRUSH_SIZE}
+        step={0.1}
+        suffix="px"
+        value={numberValue}
+        onValueCommit={onCommit}
+      />
     </>
   );
 };
 
-/** Brush tool options: color swatch, size (slider + numeric), opacity, and pressure sensitivity. */
-export const BrushOptions = ({ engine }: ToolOptionsComponentProps) => {
+const formatPercent = (value: number): string => `${Math.round(value)}%`;
+
+/** Opacity slider plus a percent field, shared by the brush and eraser. */
+export const PaintOpacityControl = ({
+  opacity,
+  setOpacity,
+}: {
+  opacity: number;
+  setOpacity: (opacity: number) => void;
+}) => {
   const { t } = useTranslation();
-  const options = useBrushOptions(engine);
-
-  const setSize = useCallback(
-    (size: number) => engine.interaction.set('brushOptions', { ...options, size: clampBrushSize(size) }),
-    [engine, options]
+  const label = t('widgets.canvas.toolOptions.opacity');
+  const percent = Math.round(opacity * 100);
+  const onSlider = useCallback((value: number) => setOpacity(value / 100), [setOpacity]);
+  const onNumber = useCallback(
+    ({ valueAsNumber }: ChakraNumberInput.ValueChangeDetails) => {
+      if (Number.isFinite(valueAsNumber)) {
+        setOpacity(Math.max(0, Math.min(100, valueAsNumber)) / 100);
+      }
+    },
+    [setOpacity]
   );
-
-  const setOpacity = useCallback(
-    (opacity: number) => engine.interaction.set('brushOptions', { ...options, opacity }),
-    [engine, options]
-  );
-
-  const onColorChange = useCallback(
-    (hex: string) => engine.interaction.set('brushOptions', { ...options, color: hex }),
-    [engine, options]
-  );
-  const sampleColor = useColorSampler(engine);
-
-  const onPressureWidthToggle = useCallback(
-    (checked: boolean) => engine.interaction.set('brushOptions', { ...options, pressureAffectsWidth: checked }),
-    [engine, options]
-  );
-
-  const onPressureOpacityToggle = useCallback(
-    (checked: boolean) => engine.interaction.set('brushOptions', { ...options, pressureAffectsOpacity: checked }),
-    [engine, options]
-  );
-
   return (
-    <HStack align="center" gap="3">
-      <ColorPicker
-        aria-label={t('widgets.canvas.toolOptions.brushColor')}
-        value={options.color}
-        onSampleColor={sampleColor}
-        onValueChange={onColorChange}
+    <>
+      <FormSlider
+        aria-label={label}
+        formatValue={formatPercent}
+        max={100}
+        min={0}
+        value={percent}
+        onValueChange={onSlider}
       />
-      <PaintSizeOpacityControls
-        opacity={options.opacity}
-        setOpacity={setOpacity}
-        setSize={setSize}
-        size={options.size}
-        sizeLabel={t('widgets.canvas.toolOptions.brushSize')}
+      <FormNumberField
+        aria-label={label}
+        max={100}
+        min={0}
+        suffix="%"
+        value={String(percent)}
+        onValueChange={onNumber}
       />
-      {/*
-        Two independent toggles rather than one pressure switch: width and opacity are separate
-        pressure responses, and opacity additionally costs a full scratch refill per frame.
-        Each is an aria-labelled button, so unlike sibling switches sharing a
-        Field.Root they cannot collide on a hidden-input id.
-      */}
-      <ToggleIconButton
-        checked={options.pressureAffectsWidth}
-        icon={PenLineIcon}
-        label={t('widgets.canvas.toolOptions.pressureAffectsWidth')}
-        onCheckedChange={onPressureWidthToggle}
+    </>
+  );
+};
+
+/** Hardness slider plus a percent field, shared by the brush and eraser. */
+export const PaintHardnessControl = ({
+  hardness,
+  setHardness,
+}: {
+  hardness: number;
+  setHardness: (hardness: number) => void;
+}) => {
+  const { t } = useTranslation();
+  const label = t('widgets.canvas.toolOptions.hardness');
+  const percent = Math.round(hardness * 100);
+  const onSlider = useCallback((value: number) => setHardness(value / 100), [setHardness]);
+  const onNumber = useCallback(
+    ({ valueAsNumber }: ChakraNumberInput.ValueChangeDetails) => {
+      if (Number.isFinite(valueAsNumber)) {
+        setHardness(Math.max(0, Math.min(100, valueAsNumber)) / 100);
+      }
+    },
+    [setHardness]
+  );
+  return (
+    <>
+      <FormSlider
+        aria-label={label}
+        formatValue={formatPercent}
+        max={100}
+        min={0}
+        value={percent}
+        onValueChange={onSlider}
       />
-      <ToggleIconButton
-        checked={options.pressureAffectsOpacity}
-        icon={DropletIcon}
-        label={t('widgets.canvas.toolOptions.pressureAffectsOpacity')}
-        onCheckedChange={onPressureOpacityToggle}
+      <FormNumberField
+        aria-label={label}
+        max={100}
+        min={0}
+        suffix="%"
+        value={String(percent)}
+        onValueChange={onNumber}
       />
-    </HStack>
+    </>
+  );
+};
+
+/** Live stroke preview; the edge uses the stroke session's feather formula (sigma = (1 − hardness) · d / 4). */
+export const PaintStrokePreview = ({
+  color,
+  hardness,
+  opacity,
+  size,
+}: {
+  color: string;
+  hardness: number;
+  opacity: number;
+  size: number;
+}) => {
+  const { t } = useTranslation();
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  useLayoutEffect(() => {
+    const canvas = canvasRef.current;
+    const ctx = canvas?.getContext('2d');
+    if (!canvas || !ctx) {
+      return;
+    }
+    const dpr = globalThis.devicePixelRatio || 1;
+    const width = canvas.clientWidth;
+    const height = canvas.clientHeight;
+    canvas.width = Math.max(1, Math.round(width * dpr));
+    canvas.height = Math.max(1, Math.round(height * dpr));
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, width, height);
+    // Fit radius + curve swing + the full 3-sigma feather inside the box, so
+    // softness has room to demonstrate instead of clipping at the edges.
+    const swing = height * 0.14;
+    const featherFactor = 1 + 1.5 * (1 - hardness);
+    const drawn = Math.max(1, Math.min(size, (height - 2 * swing - 8) / featherFactor));
+    const sigma = ((1 - hardness) * drawn) / 4;
+    ctx.filter = sigma > 0 ? `blur(${sigma}px)` : 'none';
+    ctx.globalAlpha = opacity;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = drawn;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    const inset = Math.max(12, drawn / 2 + sigma * 3);
+    const mid = height / 2;
+    ctx.moveTo(inset, mid + swing);
+    ctx.bezierCurveTo(width * 0.35, mid - swing * 2, width * 0.65, mid + swing * 2, width - inset, mid - swing);
+    ctx.stroke();
+    ctx.filter = 'none';
+  }, [color, hardness, opacity, size]);
+  return (
+    <chakra.canvas
+      ref={canvasRef}
+      aria-label={t('widgets.canvas.toolOptions.strokePreview')}
+      bg="bg.inset"
+      h="28"
+      role="img"
+      rounded="sm"
+      w="full"
+    />
   );
 };

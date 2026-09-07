@@ -8,25 +8,67 @@ import type {
 } from '@features/queue/core/types';
 
 import { buildGeneratePromptBatchPlan, sanitizeBatchCount } from '@features/queue/core/promptBatch';
+import { mapWithConcurrency } from '@platform/core/concurrency';
 import { assertAccountScopeCurrent, captureAccountScope } from '@platform/state/accountLifecycle';
-import { absolutizeApiUrl, ApiError, apiFetchJson } from '@platform/transport/http';
+import { normalizeServerTimestamp } from '@platform/time/serverTimestamp';
+import { absolutizeApiUrl, ApiError, apiFetch, apiFetchJson } from '@platform/transport/http';
 
 import type { QueueImageDTO, QueueServerItemDTO } from './serverTypes';
 
 import { buildQueueItemOrigin } from './events';
 import { getQueueItem } from './serverApi';
 
-const mapEnqueueResult = (result: {
-  batch?: { batch_id?: string };
-  enqueued?: number;
-  item_ids?: number[];
-  requested?: number;
-}): QueueEnqueueResult => ({
-  batchId: result.batch?.batch_id,
-  enqueued: result.enqueued ?? 0,
-  itemIds: result.item_ids ?? [],
-  requested: result.requested ?? 0,
-});
+const getQueueIdempotencyKey = (projectId: string, sourceQueueItemId: string): string =>
+  `webv2:${projectId}:${sourceQueueItemId}`;
+
+export const acknowledgeQueueEnqueue = async (projectId: string, sourceQueueItemId: string): Promise<void> => {
+  await apiFetch('/api/v1/queue/default/enqueue_batch/acknowledge', {
+    body: JSON.stringify({ idempotency_key: getQueueIdempotencyKey(projectId, sourceQueueItemId) }),
+    headers: { 'Content-Type': 'application/json' },
+    method: 'POST',
+  });
+};
+
+export const getQueueEnqueueReceipt = async (
+  projectId: string,
+  sourceQueueItemId: string
+): Promise<QueueEnqueueResult | null> => {
+  const query = new URLSearchParams({ idempotency_key: getQueueIdempotencyKey(projectId, sourceQueueItemId) });
+  try {
+    const result = await apiFetchJson<unknown>(`/api/v1/queue/default/enqueue_batch/receipt?${query}`);
+    return mapEnqueueResult(result, true);
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 404) {
+      return null;
+    }
+    throw error;
+  }
+};
+
+const mapEnqueueResult = (value: unknown, isReceipt = false): QueueEnqueueResult => {
+  const result = value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
+  const batch = result.batch && typeof result.batch === 'object' ? (result.batch as Record<string, unknown>) : {};
+  const batchId = isReceipt ? result.batch_id : batch.batch_id;
+  const { enqueued, item_ids: itemIds, requested } = result;
+  if (
+    typeof batchId !== 'string' ||
+    batchId.length === 0 ||
+    typeof requested !== 'number' ||
+    !Number.isSafeInteger(requested) ||
+    requested < 1 ||
+    typeof enqueued !== 'number' ||
+    !Number.isSafeInteger(enqueued) ||
+    enqueued < (isReceipt ? 1 : 0) ||
+    enqueued > requested ||
+    !Array.isArray(itemIds) ||
+    itemIds.length !== enqueued ||
+    new Set(itemIds).size !== itemIds.length ||
+    itemIds.some((id) => !Number.isSafeInteger(id) || id <= 0)
+  ) {
+    throw new Error('Invalid queue enqueue response');
+  }
+  return { batchId, enqueued, itemIds, requested };
+};
 
 export const enqueueGenerate = async (request: QueueEnqueueGenerateRequest): Promise<QueueEnqueueResult> => {
   const plan = buildGeneratePromptBatchPlan({
@@ -40,17 +82,14 @@ export const enqueueGenerate = async (request: QueueEnqueueGenerateRequest): Pro
     seedNodeId: request.seedNodeId,
     shouldRandomizeSeed: request.shouldRandomizeSeed,
   });
-  const result = await apiFetchJson<{
-    batch?: { batch_id?: string };
-    enqueued?: number;
-    item_ids?: number[];
-    requested?: number;
-  }>('/api/v1/queue/default/enqueue_batch', {
+  const result = await apiFetchJson<unknown>('/api/v1/queue/default/enqueue_batch', {
     body: JSON.stringify({
       batch: {
         data: plan.data,
         destination: request.destination,
         graph: request.graph,
+        idempotency_key: getQueueIdempotencyKey(request.projectId, request.sourceQueueItemId),
+        project_id: request.projectId,
         origin: buildQueueItemOrigin(request.sourceQueueItemId, request.projectId),
         runs: plan.runs,
       },
@@ -63,16 +102,13 @@ export const enqueueGenerate = async (request: QueueEnqueueGenerateRequest): Pro
 };
 
 export const enqueueWorkflow = async (request: QueueEnqueueWorkflowRequest): Promise<QueueEnqueueResult> => {
-  const result = await apiFetchJson<{
-    batch?: { batch_id?: string };
-    enqueued?: number;
-    item_ids?: number[];
-    requested?: number;
-  }>('/api/v1/queue/default/enqueue_batch', {
+  const result = await apiFetchJson<unknown>('/api/v1/queue/default/enqueue_batch', {
     body: JSON.stringify({
       batch: {
         destination: request.destination,
         graph: request.graph,
+        idempotency_key: getQueueIdempotencyKey(request.projectId, request.sourceQueueItemId),
+        project_id: request.projectId,
         origin: buildQueueItemOrigin(request.sourceQueueItemId, request.projectId),
         runs: sanitizeBatchCount(request.batchCount),
       },
@@ -141,6 +177,7 @@ const getResultImage = async (
     const image = await apiFetchJson<QueueImageDTO>(`/api/v1/images/i/${encodeURIComponent(imageName)}`, { signal });
 
     return {
+      createdAt: normalizeServerTimestamp(image.created_at),
       height: image.height,
       imageName: image.image_name,
       imageUrl: absolutizeApiUrl(image.image_url),
@@ -168,10 +205,11 @@ export const getResultImages = async (
   const item = await getQueueItem(itemId, owner.signal);
 
   assertAccountScopeCurrent(owner);
-  const images = await Promise.all(
-    getResultImageNames(item, options).map((imageName) =>
-      getResultImage(imageName, queuedAt, sourceQueueItemId, owner.signal)
-    )
+  const images = await mapWithConcurrency(
+    getResultImageNames(item, options),
+    8,
+    (imageName) => getResultImage(imageName, queuedAt, sourceQueueItemId, owner.signal),
+    { signal: owner.signal }
   );
 
   assertAccountScopeCurrent(owner);
@@ -242,7 +280,9 @@ export const getResultVideoNames = async (itemId: number, options?: QueueResultV
     return videoNames;
   }
 
-  const intermediateFlags = await Promise.all(videoNames.map((name) => isIntermediateVideo(name, owner.signal)));
+  const intermediateFlags = await mapWithConcurrency(videoNames, 8, (name) => isIntermediateVideo(name, owner.signal), {
+    signal: owner.signal,
+  });
 
   assertAccountScopeCurrent(owner);
   return videoNames.filter((_, index) => !intermediateFlags[index]);

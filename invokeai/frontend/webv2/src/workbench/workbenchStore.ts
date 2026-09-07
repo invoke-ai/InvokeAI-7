@@ -8,11 +8,14 @@ import {
   type GeneratedImageContract,
 } from '@features/gallery/contracts';
 import { createExternalStore } from '@platform/state/externalStore';
+import { closeWidgetOverlays } from '@platform/ui/widgetOverlayRegistry';
+import { hasActiveQueueRuns, hasInFlightQueueRuns } from '@workbench/queue-integration/activeQueueRuns';
 
 import type { CanvasEditIntent } from './autoRoutePolicy';
 import type { CanvasProjectMutation } from './canvasProjectMutations';
 
 import { recordDiagnosticEntry } from './diagnostics/logger';
+import { clearLayerPanelStates, reconcileLayerPanelStates } from './layerPanelState';
 import { createLayoutPresetActivator, loadLayoutPresetWidgets } from './layoutPresetActivation';
 import { resolveSavedLayoutPreset } from './layoutPresetSnapshots';
 import { getLayoutWidgetTypeIds } from './layoutWidgetSet';
@@ -24,54 +27,25 @@ import {
   type __WorkbenchReducerActionInternal,
 } from './workbenchState';
 
+/**
+ * Which widgets the shell shows: the active project, each region's active
+ * instance, and the floating windows. A change hides or replaces widgets, and
+ * an overlay open inside one would otherwise outlive it in its portal.
+ */
+const visibleWidgetsKey = (state: WorkbenchState): string => {
+  const project = state.projects.find((candidate) => candidate.id === state.activeProjectId);
+  if (!project) {
+    return '';
+  }
+  const regions = Object.entries(project.widgetRegions).map(
+    ([region, { activeInstanceId }]) => `${region}=${activeInstanceId}`
+  );
+  return [project.id, ...regions, ...Object.keys(project.floatingWidgets ?? {})].join('|');
+};
+
 type WorkbenchAction = __WorkbenchReducerActionInternal;
 type ActionPayload<Type extends WorkbenchAction['type']> = Omit<Extract<WorkbenchAction, { type: Type }>, 'type'>;
 type WorkbenchDispatch = (action: WorkbenchAction) => void;
-
-/** Event-time bridge from the transient Layers-panel selection to canvas-wide hotkeys. */
-export interface LayerPanelSelectionSnapshot {
-  primaryId: string | null;
-  projectId: string;
-  selectedIds: readonly string[];
-}
-
-let activeLayerPanelSelection: LayerPanelSelectionSnapshot = { primaryId: null, projectId: '', selectedIds: [] };
-
-export const publishLayerPanelSelection = (selection: LayerPanelSelectionSnapshot): void => {
-  activeLayerPanelSelection = {
-    primaryId: selection.primaryId,
-    projectId: selection.projectId,
-    selectedIds: [...selection.selectedIds],
-  };
-};
-
-export const resetLayerPanelSelection = (projectId: string, primaryId: string | null): void => {
-  activeLayerPanelSelection = { primaryId, projectId, selectedIds: primaryId ? [primaryId] : [] };
-};
-
-const reconcileLayerPanelSelection = (project: Project): void => {
-  const { layers, selectedLayerId } = project.canvas.document;
-  if (activeLayerPanelSelection.projectId !== project.id || activeLayerPanelSelection.primaryId !== selectedLayerId) {
-    resetLayerPanelSelection(project.id, selectedLayerId);
-    return;
-  }
-  const existing = new Set(layers.map((layer) => layer.id));
-  const selectedIds = activeLayerPanelSelection.selectedIds.filter((id) => existing.has(id));
-  if (selectedLayerId && !selectedIds.includes(selectedLayerId)) {
-    selectedIds.push(selectedLayerId);
-  }
-  if (
-    selectedIds.length !== activeLayerPanelSelection.selectedIds.length ||
-    selectedIds.some((id, index) => id !== activeLayerPanelSelection.selectedIds[index])
-  ) {
-    activeLayerPanelSelection = { ...activeLayerPanelSelection, selectedIds };
-  }
-};
-
-export const readLayerPanelSelection = (projectId: string, primaryId: string | null): LayerPanelSelectionSnapshot =>
-  activeLayerPanelSelection.projectId === projectId && activeLayerPanelSelection.primaryId === primaryId
-    ? activeLayerPanelSelection
-    : { primaryId, projectId, selectedIds: primaryId ? [primaryId] : [] };
 
 type MechanicalCommand<Type extends WorkbenchAction['type']> = keyof ActionPayload<Type> extends never
   ? () => void
@@ -103,7 +77,10 @@ const createCommandFactory = (dispatch: WorkbenchDispatch) => {
 
 export type ProjectCommandResult =
   | { ok: true }
-  | { ok: false; reason: 'invalid-name' | 'last-project' | 'project-not-found' };
+  | {
+      ok: false;
+      reason: 'active-queue-runs' | 'invalid-name' | 'last-project' | 'project-not-found' | 'target-already-open';
+    };
 
 const createCommands = (
   dispatch: WorkbenchDispatch,
@@ -138,6 +115,7 @@ const createCommands = (
       appendStagingCandidate: command('appendCanvasStagingCandidate'),
     },
     gallery: {
+      clearSelection: command('clearGallerySelection', (projectId?: string) => ({ projectId })),
       patchItems: command(
         'patchGalleryItems',
         (
@@ -178,8 +156,9 @@ const createCommands = (
         (
           itemKeys: ActionPayload<'setGalleryMultiSelection'>['itemKeys'],
           primaryItem: ActionPayload<'setGalleryMultiSelection'>['primaryItem'],
-          projectId?: string
-        ) => ({ itemKeys, primaryItem, projectId })
+          projectId?: string,
+          selectionPage?: number
+        ) => ({ itemKeys, primaryItem, projectId, selectionPage })
       ),
       toggleItemSelection: command(
         'toggleGalleryItemInSelection',
@@ -229,6 +208,10 @@ const createCommands = (
       setSearchTerm: command('setGallerySearchTerm', (searchTerm: string, projectId?: string) => ({
         projectId,
         searchTerm,
+      })),
+      setStarredOnly: command('setGalleryStarredOnly', (starredOnly: boolean, projectId?: string) => ({
+        projectId,
+        starredOnly,
       })),
       setView: command(
         'setGalleryView',
@@ -374,12 +357,17 @@ const createCommands = (
     },
     projects: {
       close: (projectId: string): ProjectCommandResult => {
-        if (!getState().projects.some((project) => project.id === projectId)) {
+        const state = getState();
+        const project = state.projects.find((project) => project.id === projectId);
+        if (!project) {
           return { ok: false, reason: 'project-not-found' };
         }
 
-        if (getState().projects.length === 1) {
-          dispatch({ projectId, type: 'closeProject' });
+        if (hasActiveQueueRuns(project)) {
+          return { ok: false, reason: 'active-queue-runs' };
+        }
+
+        if (state.projects.length === 1) {
           return { ok: false, reason: 'last-project' };
         }
 
@@ -424,14 +412,19 @@ const createCommands = (
       clearCompleted: command('clearCompletedQueueItems'),
       markBackendCancelled: command('markQueueItemBackendCancelled'),
       markBackendSubmitted: command('markQueueItemBackendSubmitted'),
+      setCancellationPending: command('setQueueItemCancellationPending'),
+      setLocalRecoveryState: command('setQueueItemLocalRecoveryState'),
       routePartialResults: command('routeQueueItemPartialResults'),
       routeResults: command('routeQueueItemResults'),
+      restoreFromJournal: command('restoreQueueItemsFromJournal'),
       setConnectionStatus: command('setBackendConnectionStatus'),
       setStatus: command('setQueueItemStatus'),
     },
     widgets: {
       dockFloating: command('dockFloatingWidget', (instanceId: string) => ({ instanceId })),
-      float: command('floatWidget', (instanceId: string) => ({ instanceId })),
+      float: command('floatWidget', (instanceId: string, region?: ActionPayload<'floatWidget'>['region']) =>
+        region ? { instanceId, region } : { instanceId }
+      ),
       focusFloating: command('focusFloatingWidget', (instanceId: string) => ({ instanceId })),
       move: command('moveWidgetInstance'),
       open: command('openRegionWidget'),
@@ -458,6 +451,7 @@ const createCommands = (
         })
       ),
       reorder: command('reorderWidgetInstances'),
+      setAlignment: command('setWidgetInstanceAlignment'),
       select: command('selectRegionWidget'),
       setFloatingGeometry: command(
         'setFloatingWidgetGeometry',
@@ -490,8 +484,6 @@ const createCommands = (
         (document: ActionPayload<'replaceProjectGraph'>['document'], label: string) => ({ document, label })
       ),
       redo: command('redoProjectChange'),
-      restoreSnapshot: command('restoreProjectGraphSnapshot', (snapshotId: string) => ({ snapshotId })),
-      saveSnapshot: command('saveProjectGraphSnapshot'),
       undo: command('undoProjectChange'),
     },
   };
@@ -517,9 +509,24 @@ const createPersistenceAdapter = (dispatch: WorkbenchDispatch, getState: () => W
     },
     getState,
     hydrate: command('hydrateWorkbench', (state: WorkbenchState) => ({ state })),
-    reconcileConflict: command('reconcileProjectConflict'),
-    reconcileDeletedProject: command('reconcileDeletedProject'),
+    replaceProjectFromServer: command('replaceProjectFromServer'),
+    retargetProject: (payload: ActionPayload<'retargetProject'>): ProjectCommandResult => {
+      const state = getState();
+      if (!state.projects.some((project) => project.id === payload.projectId)) {
+        return { ok: false, reason: 'project-not-found' };
+      }
+      const source = state.projects.find((project) => project.id === payload.projectId);
+      if (source && hasInFlightQueueRuns(source)) {
+        return { ok: false, reason: 'active-queue-runs' };
+      }
+      if (state.projects.some((project) => project.id === payload.targetProjectId)) {
+        return { ok: false, reason: 'target-already-open' };
+      }
+      dispatch({ ...payload, type: 'retargetProject' });
+      return { ok: true };
+    },
     saveFailed: command('autosaveFailed', (error: string) => ({ error })),
+    savePending: command('autosavePending', (error: string) => ({ error })),
     saveStarted: command('autosaveStarted'),
     saveSucceeded: command('autosaveSucceeded', (savedAt: string) => ({ savedAt })),
   };
@@ -693,6 +700,10 @@ export const createWorkbenchStore = (
       autoSwitchInvocationRoute: getWorkbenchPreferences().autoSwitchInvocationRoute,
     });
 
+    if (nextState !== previousState && visibleWidgetsKey(nextState) !== visibleWidgetsKey(previousState)) {
+      closeWidgetOverlays();
+    }
+
     if (
       action.type === 'applyPreset' ||
       action.type === 'hydrateWorkbench' ||
@@ -701,15 +712,13 @@ export const createWorkbenchStore = (
       invalidateLayoutPresetActivation();
     }
 
-    const activeProject = getActiveProject(nextState);
     if (action.type === 'hydrateWorkbench') {
-      resetLayerPanelSelection(activeProject.id, activeProject.canvas.document.selectedLayerId);
-    } else {
-      // Panel-originated primary changes publish before dispatch and therefore
-      // survive this reconciliation. Any external primary change, project
-      // switch, or layer removal collapses/filter stale secondaries here at the
-      // always-live store boundary, even while the Layers widget is unmounted.
-      reconcileLayerPanelSelection(activeProject);
+      clearLayerPanelStates();
+    } else if (nextState !== previousState) {
+      // The always-live store boundary collapses stale secondaries after an
+      // external primary change or layer removal, even while the Layers widget
+      // is unmounted.
+      reconcileLayerPanelStates(nextState.projects);
     }
 
     setSnapshotState(nextState);

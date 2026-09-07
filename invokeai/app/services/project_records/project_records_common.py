@@ -4,6 +4,15 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+DEFAULT_PROJECT_CANVAS_SCHEMA_VERSION = 2
+"""Compatibility floor assigned to projects created before schema negotiation existed.
+
+The project service deliberately treats the document as opaque. Clients declare the newest canvas
+schema they understand, while this stored floor says how new a client must be to edit the project.
+Keeping the default at v2 lets older clients continue to use existing projects; once a project is
+upgraded, the floor only moves forward.
+"""
+
 
 class ProjectRecordNotFoundError(Exception):
     """Raised when a project record is not found for the requesting user."""
@@ -26,6 +35,52 @@ class ProjectRecordConflictError(Exception):
         self.current_revision = current_revision
         super().__init__(
             f"Project {project_id} is at revision {current_revision}; the save expected revision {expected_revision}"
+        )
+
+
+PROJECT_DOCUMENT_MAX_BYTES = 32 * 1024 * 1024
+"""Maximum compact UTF-8 JSON size accepted for a project document."""
+
+
+class ProjectDocumentTooLargeError(Exception):
+    """Raised before an oversized project document is written."""
+
+    def __init__(self, actual_bytes: int, max_bytes: int = PROJECT_DOCUMENT_MAX_BYTES) -> None:
+        self.actual_bytes = actual_bytes
+        self.max_bytes = max_bytes
+        super().__init__(f"Project document is {actual_bytes} bytes; the limit is {max_bytes} bytes")
+
+
+class ProjectDocumentInvalidError(Exception):
+    """Raised when a project document cannot be represented as standards-compliant UTF-8 JSON."""
+
+    def __init__(self) -> None:
+        super().__init__("Project document must contain valid UTF-8 JSON values")
+
+
+class ProjectCanvasSchemaUnsupportedError(Exception):
+    """Raised before an incapable client may read or write a project document."""
+
+    def __init__(self, project_id: str, minimum_version: int, client_maximum_version: int) -> None:
+        self.project_id = project_id
+        self.minimum_version = minimum_version
+        self.client_maximum_version = client_maximum_version
+        super().__init__(
+            f"Project {project_id} requires canvas schema {minimum_version}, but this client supports up to"
+            f" schema {client_maximum_version}. Update the client before opening or editing this project."
+        )
+
+
+class ProjectCanvasSchemaDowngradeError(Exception):
+    """Raised when a save tries to lower a project's compatibility floor."""
+
+    def __init__(self, project_id: str, current_version: int, requested_version: int) -> None:
+        self.project_id = project_id
+        self.current_version = current_version
+        self.requested_version = requested_version
+        super().__init__(
+            f"Project {project_id} requires canvas schema {current_version}; its compatibility floor cannot be"
+            f" lowered to schema {requested_version}"
         )
 
 
@@ -76,6 +131,9 @@ class ProjectSummaryDTO(BaseModel):
     board_id: str = Field(description="The project's private board; only project APIs may rename or delete it")
     name: str = Field(description="The project's display name")
     revision: int = Field(description="Monotonic revision, incremented on every save")
+    minimum_canvas_schema_version: int = Field(
+        ge=1, description="Oldest canvas schema a client must support before it may read or write this project"
+    )
     created_at: str = Field(description="When the project was created")
     updated_at: str = Field(description="When the project was last saved")
 

@@ -50,7 +50,6 @@ const renderTitle = (title: string, matchIndexes?: readonly number[]): ReactNode
 
 // Rows stay out of the tab order for the combobox aria-activedescendant pattern.
 const rowButtonProps = {
-  cursor: 'pointer',
   gap: '2.5',
   h: `${ENTRY_ROW_HEIGHT_PX}px`,
   px: '3',

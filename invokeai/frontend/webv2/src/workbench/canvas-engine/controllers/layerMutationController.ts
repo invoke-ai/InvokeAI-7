@@ -1,11 +1,27 @@
 import type { DuplicateLayersResult } from '@workbench/canvas-engine/capabilities';
-import type { CanvasDocumentContractV2, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
+import type { CanvasDocumentContractV3, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
 import type { RasterMemoryReservationResult } from '@workbench/canvas-engine/controllers/rasterMemoryBudgetController';
+import type { CanvasNodeInsertionAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
+import type { LayerStackKind } from '@workbench/canvas-engine/document/layerStacks';
+import type { CanvasEditConcurrency } from '@workbench/canvas-engine/editConcurrency';
 import type { History } from '@workbench/canvas-engine/history/history';
 import type { CanvasProjectMutation } from '@workbench/canvas-engine/mutationContracts';
 import type { PreparedLayerCacheReplacement } from '@workbench/canvas-engine/render/layerCache';
 import type { RasterSurface } from '@workbench/canvas-engine/render/raster';
 import type { Rect } from '@workbench/canvas-engine/types';
+
+import { lookupDocumentLeaf } from '@workbench/canvas-engine/document-model/documentModel';
+import {
+  getDocumentIndex,
+  getDocumentLayer,
+  hasDocumentNode,
+  isNodeAbsent,
+  outermostNodes,
+  type CanvasNodeEntry,
+} from '@workbench/canvas-engine/document/documentIndex';
+import { cloneSubtree, collectSubtreeLeaves } from '@workbench/canvas-engine/document/documentTree';
+import { insertNodesAtAnchor } from '@workbench/canvas-engine/document/insertionAnchors';
+import { haveSameStructure } from '@workbench/canvas-engine/document/layerStacks';
 
 export type CapturedLayerCache = { pixels: RasterSurface; rect: Rect } | null | 'not-ready';
 
@@ -25,10 +41,11 @@ type DuplicateRasterPreparationResult =
   | { readonly status: 'ready'; readonly layer: CanvasLayerContract }
   | { readonly status: 'not-ready' | 'over-budget' };
 
-export interface LayerMutationControllerOptions<Permit> {
-  readonly canEdit: () => boolean;
-  readonly capturePermit: () => Permit | null;
-  readonly captureCache: (layer: CanvasLayerContract, document: CanvasDocumentContractV2) => CapturedLayerCache;
+export interface LayerMutationControllerOptions {
+  readonly concurrency: CanvasEditConcurrency;
+  readonly captureCache: (layer: CanvasLayerContract, document: CanvasDocumentContractV3) => CapturedLayerCache;
+  readonly captureInsertionAnchor: (stack: LayerStackKind, aboveId: string | null) => CanvasNodeInsertionAnchor;
+  readonly captureRestoreAnchor: (nodeId: string) => CanvasNodeInsertionAnchor | null;
   readonly createLayerId: () => string;
   readonly discardPersisted: (layerId: string) => void;
   readonly dispatchPrepared: (
@@ -39,16 +56,15 @@ export interface LayerMutationControllerOptions<Permit> {
   readonly endBurst: () => void;
   readonly getDuplicateRasterPlan: (
     layer: CanvasLayerContract,
-    document: CanvasDocumentContractV2
+    document: CanvasDocumentContractV3
   ) => DuplicateLayerRasterPlan;
-  readonly getDocument: () => CanvasDocumentContractV2 | null;
-  readonly getReducerDocument: () => CanvasDocumentContractV2 | null;
-  readonly getSelectedLayerIds: (document: CanvasDocumentContractV2) => readonly string[];
+  readonly getDocument: () => CanvasDocumentContractV3 | null;
+  readonly getEditRevision: () => number;
+  readonly getReducerDocument: () => CanvasDocumentContractV3 | null;
+  readonly getSelectedLayerIds: (document: CanvasDocumentContractV3) => readonly string[];
   readonly history: History;
   readonly hasPendingPixelWork: (layerId: string) => boolean;
   readonly installPrepared: (prepared: PreparedLayerCacheReplacement, persist?: boolean) => void;
-  readonly isGestureActive: () => boolean;
-  readonly isPermitCurrent: (permit: Permit) => boolean;
   readonly needsPixelPersistence: (layer: CanvasLayerContract) => boolean;
   readonly preparePixels: (layerId: string, rect: Rect, pixels: RasterSurface) => PreparedLayerCacheReplacement;
   readonly publishSelectedLayerIds: (primaryId: string | null, selectedIds: readonly string[]) => void;
@@ -56,31 +72,41 @@ export interface LayerMutationControllerOptions<Permit> {
   readonly pinDuplicateRasterSources: (layerIds: readonly string[]) => { release(): void };
   readonly reserve: (bytes: number) => RasterMemoryReservationResult;
   readonly scheduleDuplicateRasterization: (layerIds: readonly string[]) => void;
-  readonly sameContract: (document: CanvasDocumentContractV2 | null, layer: CanvasLayerContract) => boolean;
+  readonly sameContract: (document: CanvasDocumentContractV3 | null, layer: CanvasLayerContract) => boolean;
   readonly trackDetached: (bytes: number) => { release(): void };
 }
 
+/** The outermost requested nodes in document order, or `null` when any id is absent or none is given. */
+const duplicateRoots = (document: CanvasDocumentContractV3, ids: readonly string[]): CanvasNodeEntry[] | null => {
+  const index = getDocumentIndex(document);
+  const unique = [...new Set(ids)];
+  if (unique.length === 0 || unique.some((id) => !index.byId.has(id))) {
+    return null;
+  }
+  return outermostNodes(index, unique);
+};
+
 /** Owns failure-atomic copy and cross-type conversion mutations. */
-export class LayerMutationController<Permit> {
+export class LayerMutationController {
   private duplicateInFlight = false;
 
-  constructor(private readonly options: LayerMutationControllerOptions<Permit>) {}
+  constructor(private readonly options: LayerMutationControllerOptions) {}
 
   async duplicate(layerIds: readonly string[]): Promise<DuplicateLayersResult> {
     const o = this.options;
-    const permit = o.capturePermit();
-    if (this.duplicateInFlight || !permit || !o.canEdit() || o.isGestureActive()) {
+    const permit = o.concurrency.capturePermit();
+    if (this.duplicateInFlight || !permit || !o.concurrency.canEdit() || o.concurrency.isGestureActive()) {
       return { status: 'busy' };
     }
     const document = o.getDocument();
     if (!document) {
       return { status: 'nothing' };
     }
-    const requested = new Set(layerIds);
-    const sources = document.layers.filter((layer) => requested.has(layer.id));
-    if (sources.length === 0 || sources.length !== requested.size) {
+    const roots = duplicateRoots(document, layerIds);
+    if (!roots) {
       return { status: 'nothing' };
     }
+    const sources = roots.flatMap((entry) => collectSubtreeLeaves(entry.node));
     const plans = sources.map((source) => o.getDuplicateRasterPlan(source, document));
     const notReadySources = sources.filter((_source, index) => plans[index]?.type === 'not-ready');
     if (notReadySources.length === 0) {
@@ -102,7 +128,7 @@ export class LayerMutationController<Permit> {
           return { status: 'stale' };
         }
       }
-      if (!o.isPermitCurrent(permit) || o.isGestureActive() || o.getDocument() !== document) {
+      if (!o.concurrency.isPermitCurrent(permit) || o.concurrency.isGestureActive() || o.getDocument() !== document) {
         return { status: 'stale' };
       }
       return this.commitDuplicate(layerIds);
@@ -114,7 +140,7 @@ export class LayerMutationController<Permit> {
 
   private commitDuplicate(layerIds: readonly string[]): DuplicateLayersResult {
     const o = this.options;
-    if (!o.canEdit() || o.isGestureActive()) {
+    if (!o.concurrency.canEdit() || o.concurrency.isGestureActive()) {
       return { status: 'busy' };
     }
     o.endBurst();
@@ -122,11 +148,11 @@ export class LayerMutationController<Permit> {
     if (!document) {
       return { status: 'nothing' };
     }
-    const requested = new Set(layerIds);
-    const sources = document.layers.filter((layer) => requested.has(layer.id));
-    if (sources.length === 0 || sources.length !== requested.size) {
+    const roots = duplicateRoots(document, layerIds);
+    if (!roots) {
       return { status: 'nothing' };
     }
+    const sources = roots.flatMap((entry) => collectSubtreeLeaves(entry.node));
     const plans = sources.map((source) => o.getDuplicateRasterPlan(source, document));
     let retainedBytes = 0;
     let reserveBytes = 0;
@@ -162,58 +188,58 @@ export class LayerMutationController<Permit> {
       if (captures.some((capture) => capture === 'not-ready')) {
         return { status: 'not-ready' };
       }
-      const existingIds = new Set(document.layers.map((layer) => layer.id));
-      const duplicates = sources.map((source) => {
-        const duplicate = structuredClone(source);
-        duplicate.id = o.createLayerId();
-        duplicate.name = `${source.name} copy`;
+      const existingIds = new Set(getDocumentIndex(document).byId.keys());
+      const idMap = new Map<string, string>();
+      const clones = roots.map((entry) => {
+        const { node } = cloneSubtree(entry.node, o.createLayerId, idMap);
+        return { ...node, name: `${entry.node.name} copy` };
+      });
+      const cloneLeaves = new Map(
+        clones.flatMap((clone) => collectSubtreeLeaves(clone)).map((leaf) => [leaf.id, leaf])
+      );
+      // The cloned leaf for each pixel source, in source order; clones are fresh objects, so an
+      // empty plan can strip their durable pixel reference in place before they enter the document.
+      const duplicates = sources.map((source, index) => {
+        const duplicate = cloneLeaves.get(idMap.get(source.id)!)!;
+        if (plans[index]?.type === 'empty') {
+          if (duplicate.type === 'raster' || duplicate.type === 'control') {
+            if (duplicate.source.type === 'paint') {
+              duplicate.source = { bitmap: null, type: 'paint' };
+            }
+          } else {
+            duplicate.mask = { ...duplicate.mask, bitmap: null, offset: { x: 0, y: 0 } };
+          }
+        }
         return duplicate;
       });
-      for (const [index, duplicate] of duplicates.entries()) {
-        if (plans[index]?.type !== 'empty') {
-          continue;
-        }
-        if (duplicate.type === 'raster' || duplicate.type === 'control') {
-          if (duplicate.source.type === 'paint') {
-            duplicate.source = { bitmap: null, type: 'paint' };
-          }
-        } else if (duplicate.type === 'regional_guidance' || duplicate.type === 'inpaint_mask') {
-          duplicate.mask = { ...duplicate.mask, bitmap: null, offset: { x: 0, y: 0 } };
-        }
-      }
-      if (
-        duplicates.some((layer) => existingIds.has(layer.id)) ||
-        new Set(duplicates.map((layer) => layer.id)).size !== duplicates.length
-      ) {
+      const createdIds = [...idMap.values()];
+      if (createdIds.some((id) => existingIds.has(id)) || new Set(createdIds).size !== createdIds.length) {
         return { status: 'stale' };
       }
-      const duplicateBySource = new Map(sources.map((source, index) => [source.id, duplicates[index]!]));
-      const orderedIds = document.layers.flatMap((layer) => {
-        const duplicate = duplicateBySource.get(layer.id);
-        return duplicate ? [duplicate.id, layer.id] : [layer.id];
-      });
+      const insertions = roots.map((entry, index) => ({
+        anchor: o.captureInsertionAnchor(entry.stack, entry.node.id),
+        nodes: [clones[index]!],
+      }));
+      const expectedStacks = insertions.reduce(
+        (stacks, insertion) => insertNodesAtAnchor(stacks, insertion.anchor, insertion.nodes),
+        document.stacks
+      );
       const selectedLayerId =
-        (document.selectedLayerId ? duplicateBySource.get(document.selectedLayerId)?.id : null) ?? duplicates[0]!.id;
+        (document.selectedLayerId ? idMap.get(document.selectedLayerId) : undefined) ?? clones[0]!.id;
       const previousSelectedLayerId = document.selectedLayerId;
       const previousSelectedIds = [...o.getSelectedLayerIds(document)];
-      const originalIds = document.layers.map((layer) => layer.id);
-      const duplicateIds = duplicates.map((layer) => layer.id);
-      const hasDuplicates = (candidate: CanvasDocumentContractV2 | null): boolean =>
-        candidate?.selectedLayerId === selectedLayerId &&
-        candidate.layers.length === orderedIds.length &&
-        candidate.layers.every((layer, index) => layer.id === orderedIds[index]);
-      const hasOriginals = (candidate: CanvasDocumentContractV2 | null): boolean =>
-        candidate?.selectedLayerId === previousSelectedLayerId &&
-        candidate.layers.length === originalIds.length &&
-        candidate.layers.every((layer, index) => layer.id === originalIds[index]);
+      const duplicateIds = clones.map((clone) => clone.id);
+      const hasDuplicates = (candidate: CanvasDocumentContractV3 | null): boolean =>
+        candidate?.selectedLayerId === selectedLayerId && haveSameStructure(candidate.stacks, expectedStacks);
+      const hasOriginals = (candidate: CanvasDocumentContractV3 | null): boolean =>
+        candidate?.selectedLayerId === previousSelectedLayerId && haveSameStructure(candidate.stacks, document.stacks);
       const applyPrepared = (
         prepared: readonly { duplicate: CanvasLayerContract; replacement: PreparedLayerCacheReplacement }[]
       ): void => {
         o.dispatchPrepared(
           {
-            add: { index: 0, layers: duplicates },
+            add: insertions,
             enabledUpdates: [],
-            orderedIds,
             selectedLayerId,
             type: 'applyCanvasLayerStackMutation',
           },
@@ -326,15 +352,20 @@ export class LayerMutationController<Permit> {
     }
   }
 
-  copy(label: string, sourceLayerId: string, layer: CanvasLayerContract, index: number): boolean {
+  copy(label: string, sourceLayerId: string, layer: CanvasLayerContract, anchor: CanvasNodeInsertionAnchor): boolean {
     const o = this.options;
-    if (!o.canEdit() || o.isGestureActive()) {
+    if (!o.concurrency.canEdit() || o.concurrency.isGestureActive()) {
       return false;
     }
     o.endBurst();
     const document = o.getDocument();
-    const source = document?.layers.find((candidate) => candidate.id === sourceLayerId);
-    if (!document || !source || document.layers.some((candidate) => candidate.id === layer.id)) {
+    const source = getDocumentLayer(document, sourceLayerId);
+    if (
+      !document ||
+      !source ||
+      anchor.capturedEditRevision !== o.getEditRevision() ||
+      hasDocumentNode(document, layer.id)
+    ) {
       return false;
     }
     const captured = o.captureCache(source, document);
@@ -346,17 +377,15 @@ export class LayerMutationController<Permit> {
       const prepared = captured ? o.preparePixels(layer.id, captured.rect, captured.pixels) : null;
       o.dispatchPrepared(
         {
-          add: { index, layers: [layer] },
+          add: [{ anchor, nodes: [layer] }],
           enabledUpdates: [],
           selectedLayerId: layer.id,
           type: 'applyCanvasLayerStackMutation',
         },
         () =>
           o.getReducerDocument()?.selectedLayerId === layer.id &&
-          o.getReducerDocument()?.layers.some((candidate) => candidate === layer) === true,
-        () =>
-          o.getDocument()?.selectedLayerId === layer.id &&
-          o.getDocument()?.layers.some((candidate) => candidate === layer) === true
+          getDocumentLayer(o.getReducerDocument(), layer.id) === layer,
+        () => o.getDocument()?.selectedLayerId === layer.id && getDocumentLayer(o.getDocument(), layer.id) === layer
       );
       if (prepared) {
         o.installPrepared(prepared, o.needsPixelPersistence(layer));
@@ -373,10 +402,8 @@ export class LayerMutationController<Permit> {
           { enabledUpdates: [], removeIds: [layer.id], selectedLayerId, type: 'applyCanvasLayerStackMutation' },
           () =>
             o.getReducerDocument()?.selectedLayerId === selectedLayerId &&
-            o.getReducerDocument()?.layers.some((candidate) => candidate.id === layer.id) === false,
-          () =>
-            o.getDocument()?.selectedLayerId === selectedLayerId &&
-            o.getDocument()?.layers.some((candidate) => candidate.id === layer.id) === false
+            isNodeAbsent(o.getReducerDocument(), layer.id),
+          () => o.getDocument()?.selectedLayerId === selectedLayerId && isNodeAbsent(o.getDocument(), layer.id)
         ),
     });
     return true;
@@ -384,23 +411,36 @@ export class LayerMutationController<Permit> {
 
   convert(label: string, expected: CanvasLayerContract, after: CanvasLayerContract): boolean {
     const o = this.options;
-    if (!o.canEdit() || o.isGestureActive() || expected.id !== after.id || expected.type === after.type) {
+    if (
+      !o.concurrency.canEdit() ||
+      o.concurrency.isGestureActive() ||
+      expected.id !== after.id ||
+      expected.type === after.type
+    ) {
       return false;
     }
     o.endBurst();
     const document = o.getDocument();
-    const current = document?.layers.find((candidate) => candidate.id === expected.id);
-    if (!document || !current || current !== expected || current.isLocked || current.type !== expected.type) {
+    const current = getDocumentLayer(document, expected.id);
+    if (
+      !document ||
+      !current ||
+      current !== expected ||
+      current.type !== expected.type ||
+      lookupDocumentLeaf(document, current.id)?.effectiveLocked !== false
+    ) {
       return false;
     }
     const captured = o.captureCache(current, document);
     if (captured === 'not-ready') {
       return false;
     }
-    const apply = (layer: CanvasLayerContract): void => {
+    // A conversion changes stacks, so undo carries the leaf back to its captured place.
+    const restoreAnchor = o.captureRestoreAnchor(current.id) ?? undefined;
+    const apply = (layer: CanvasLayerContract, anchor?: CanvasNodeInsertionAnchor): void => {
       const prepared = captured ? o.preparePixels(layer.id, captured.rect, captured.pixels) : null;
       o.dispatchPrepared(
-        { id: layer.id, layer, targetType: layer.type, type: 'convertCanvasLayer' },
+        { anchor, id: layer.id, layer, targetType: layer.type, type: 'convertCanvasLayer' },
         () => o.sameContract(o.getReducerDocument(), layer),
         () => o.sameContract(o.getDocument(), layer)
       );
@@ -420,7 +460,7 @@ export class LayerMutationController<Permit> {
       label,
       redo: () => apply(after),
       replayFailureAtomic: true,
-      undo: () => apply(before),
+      undo: () => apply(before, restoreAnchor),
     });
     return true;
   }

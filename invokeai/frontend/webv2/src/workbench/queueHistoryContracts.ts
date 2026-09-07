@@ -1,20 +1,22 @@
 import type { GenerateWidgetValues } from '@features/generation/contracts';
 import type { QueueItem, QueueState, QueueSubmissionSnapshot } from '@features/queue/contracts';
+import type { VideoWidgetValues } from '@features/video';
 
-import type { CanvasStateContractV2 } from './canvas-engine/api';
-import type { WidgetInstanceContract, WidgetInstanceId, WidgetStateMap } from './widgetContracts';
+import type { CanvasStateContractV3 } from './canvas-engine/api';
 
-/** Workbench-owned persistence context that Queue stores but never interprets. */
+export interface QueueCanvasSessionRef {
+  document: Pick<CanvasStateContractV3['document'], 'bbox' | 'height' | 'width'>;
+  documentRevision: number;
+}
+
+export interface WorkbenchQueueRecallValues {
+  generateValues?: GenerateWidgetValues;
+  videoValues?: VideoWidgetValues;
+}
+
 export interface WorkbenchQueueSubmissionContext {
-  canvas: CanvasStateContractV2;
-  generate?: {
-    negativePromptNodeId: string;
-    positivePromptNodeId: string;
-    seedNodeId: string;
-    values: GenerateWidgetValues;
-  };
-  widgetInstances: Record<WidgetInstanceId, WidgetInstanceContract>;
-  widgetStates: WidgetStateMap;
+  canvas: QueueCanvasSessionRef;
+  recall?: WorkbenchQueueRecallValues;
 }
 
 export type WorkbenchQueueItem = Omit<QueueItem, 'snapshot'> & {

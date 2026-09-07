@@ -2,6 +2,7 @@ import type { WidgetRegion } from '@workbench/layoutContracts';
 import type {
   WidgetInstanceId,
   WidgetInstanceRuntimeMeta,
+  WidgetHeaderActions,
   WidgetHeaderLabel,
   WidgetHeaderMenu,
   WidgetManifest,
@@ -13,18 +14,24 @@ import type {
 import { Box, Flex, HStack, Icon, Stack, Text } from '@chakra-ui/react';
 import { flushWorkbenchDrafts } from '@platform/react/draftRegistry';
 import { useMountEffect } from '@platform/react/useMountEffect';
-import { IconButton, Tooltip } from '@platform/ui';
+import { IconButton } from '@platform/ui/Button';
+import { PanelHeader } from '@platform/ui/PanelHeader';
+import { Tooltip } from '@platform/ui/Tooltip';
 import { useFocusRegionProps } from '@workbench/focusRegions';
-import { openWorkbenchSettings } from '@workbench/settings/settingsDialogStore';
+import { isWidgetRegion } from '@workbench/layoutContracts';
+import { WidgetSettingsButton } from '@workbench/settings/WidgetSettingsButton';
 import { resolveWidgetInstanceLabel } from '@workbench/widgetLabels';
-import { getEnabledCenterViewCount } from '@workbench/widgetPlacementCommands';
-import { areWidgetPlacementProjectsEqual, getWidgetPlacementProject } from '@workbench/widgetPlacementMeta';
 import { useActiveProjectSelector, useWorkbenchCommands } from '@workbench/WorkbenchContext';
-import { clampPanelSize, getPanelSizeBounds, shouldSnapPanelShut } from '@workbench/workbenchState';
-import { useWorkbenchWidgetRegistry } from '@workbench/WorkbenchWidgetRegistryContext';
-import { PictureInPicture2Icon, SettingsIcon } from 'lucide-react';
+import {
+  clampPanelSize,
+  getPanelSizeBounds,
+  getVisiblePanelCollapseThreshold,
+  shouldSnapPanelShutAt,
+} from '@workbench/workbenchState';
+import { PictureInPicture2Icon } from 'lucide-react';
 import {
   useCallback,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -78,6 +85,28 @@ export const WidgetPanelFrame = ({
   // the store's collapse is only committed on release.
   const isSnappedShut = drag?.isSnappedShut ?? false;
   const renderSizePx = isSnappedShut ? 0 : displaySizePx;
+  // Side panels yield to a viewport that cannot hold them (see
+  // `panelSizeProps`), so the width on screen can sit below the stored one.
+  // The gesture, the keyboard floor and the separator's announced value all
+  // work from what is on screen; the store keeps the preferred size.
+  const frameRef = useRef<HTMLDivElement | null>(null);
+  const [measuredSizePx, setMeasuredSizePx] = useState<number | null>(null);
+
+  useEffect(() => {
+    const frame = frameRef.current;
+
+    if (isBottom || !frame || typeof ResizeObserver === 'undefined') {
+      return;
+    }
+
+    const observer = new ResizeObserver(() => setMeasuredSizePx(Math.round(frame.getBoundingClientRect().width)));
+
+    observer.observe(frame);
+
+    return () => observer.disconnect();
+  }, [isBottom]);
+  const visibleSizePx =
+    isSnappedShut || measuredSizePx === null ? displaySizePx : Math.min(measuredSizePx, displaySizePx);
   const { max: maxPanelSizePx, min: minPanelSizePx } = getPanelSizeBounds(region);
   const focusRegionProps = useFocusRegionProps(region);
 
@@ -91,7 +120,6 @@ export const WidgetPanelFrame = ({
     },
     [layout, region, regionState.sizePx]
   );
-
   const handlePointerDown = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
       event.preventDefault();
@@ -99,6 +127,9 @@ export const WidgetPanelFrame = ({
       const startX = event.clientX;
       const startY = event.clientY;
       const startSizePx = regionState.sizePx;
+      // How far the viewport has squeezed the panel below its stored size.
+      const squeezePx = clampPanelSize(region, startSizePx) - visibleSizePx;
+      const collapseThresholdPx = getVisiblePanelCollapseThreshold(region, visibleSizePx);
       const direction = isLeft ? 1 : -1;
       const pointerSession = new AbortController();
 
@@ -120,7 +151,7 @@ export const WidgetPanelFrame = ({
         const rawSizePx = startSizePx + deltaPx;
 
         nextDrag = {
-          isSnappedShut: shouldSnapPanelShut(region, rawSizePx, nextDrag.isSnappedShut),
+          isSnappedShut: shouldSnapPanelShutAt(collapseThresholdPx, rawSizePx - squeezePx, nextDrag.isSnappedShut),
           sizePx: clampPanelSize(region, rawSizePx),
         };
         setDrag(nextDrag);
@@ -152,7 +183,7 @@ export const WidgetPanelFrame = ({
       window.addEventListener('pointerup', handlePointerUp, { signal: pointerSession.signal });
       window.addEventListener('pointercancel', handlePointerCancel, { signal: pointerSession.signal });
     },
-    [commitSize, isBottom, isLeft, layout, region, regionState.sizePx]
+    [commitSize, isBottom, isLeft, layout, region, regionState.sizePx, visibleSizePx]
   );
 
   const handleKeyDown = useCallback(
@@ -180,8 +211,9 @@ export const WidgetPanelFrame = ({
       event.preventDefault();
 
       // Keyboard parity with the drag: a further collapse-ward step at the
-      // floor collapses, instead of silently clamping forever.
-      if (sizeChange < 0 && displaySizePx <= minPanelSizePx) {
+      // floor collapses, instead of silently clamping forever. A squeezed
+      // panel is already below the floor on screen, so it collapses too.
+      if (sizeChange < 0 && visibleSizePx <= minPanelSizePx) {
         layout.setRegionCollapsed(region, true);
 
         return;
@@ -189,10 +221,18 @@ export const WidgetPanelFrame = ({
 
       commitSize(displaySizePx + sizeChange);
     },
-    [commitSize, displaySizePx, isBottom, isLeft, layout, maxPanelSizePx, minPanelSizePx, region]
+    [commitSize, displaySizePx, isBottom, isLeft, layout, maxPanelSizePx, minPanelSizePx, region, visibleSizePx]
   );
+  // The stored size is a preference, not a guarantee: side panels yield
+  // (`flexShrink`) when the viewport cannot hold both of them plus the
+  // center's minimum — a portrait tablet — so the center never collapses and
+  // the opposite rail never gets pushed offscreen. The bottom panel keeps a
+  // hard height because the column has no minimum-width peer to protect.
   const panelSizeProps = useMemo(
-    () => (isBottom ? { h: `${renderSizePx}px`, w: 'full' } : { h: 'full', w: `${renderSizePx}px` }),
+    () =>
+      isBottom
+        ? { flexShrink: 0, h: `${renderSizePx}px`, w: 'full' }
+        : { flexShrink: 1, h: 'full', w: `${renderSizePx}px` },
     [renderSizePx, isBottom]
   );
   // Inside the panel's box, never straddling its edge: the frame clips its
@@ -217,9 +257,9 @@ export const WidgetPanelFrame = ({
       borderLeftWidth={!isLeft && !isBottom && !isSnappedShut ? '1px' : '0'}
       borderTopWidth={isBottom && !isSnappedShut ? '1px' : '0'}
       direction="column"
-      flexShrink={0}
       overflow="hidden"
       minW="0"
+      ref={frameRef}
       data-hotkey-widget-instance-id={instanceId}
       data-hotkey-widget-region={region}
       data-hotkey-widget-type-id={typeId}
@@ -231,8 +271,8 @@ export const WidgetPanelFrame = ({
         aria-label={`Resize ${region} widget panel`}
         aria-orientation={isBottom ? 'horizontal' : 'vertical'}
         aria-valuemax={maxPanelSizePx}
-        aria-valuemin={minPanelSizePx}
-        aria-valuenow={displaySizePx}
+        aria-valuemin={Math.min(minPanelSizePx, visibleSizePx)}
+        aria-valuenow={visibleSizePx}
         as="div"
         cursor={isBottom ? 'ns-resize' : 'ew-resize'}
         position="absolute"
@@ -270,23 +310,29 @@ export const WidgetFloatButton = ({
   region: WorkbenchRegion;
 }) => {
   const { t } = useTranslation();
-  const placementProject = useActiveProjectSelector(getWidgetPlacementProject, areWidgetPlacementProjectsEqual);
-  const { getWidgetById } = useWorkbenchWidgetRegistry();
   const { widgets } = useWorkbenchCommands();
+  // A dialog or popover's chrome never floats; anything else is a dockable
+  // layout region, which is also the dock-back target.
+  const dockableRegion = isWidgetRegion(region) ? region : undefined;
   // Floating unmounts the docked subtree; the draft registry's cleanup only
-  // deregisters the flusher, so an uncommitted edit is lost without this.
+  // deregisters the flusher, so an uncommitted edit is lost without this. The
+  // region rides along: one instance may be placed in several regions (the
+  // preview lives in the center and a rail), and the window docks back into
+  // the one whose button was clicked.
   const handleFloat = useCallback(() => {
+    if (!dockableRegion) {
+      return;
+    }
+
     flushWorkbenchDrafts();
-    widgets.float(instanceId);
-  }, [instanceId, widgets]);
+    widgets.float(instanceId, dockableRegion);
+  }, [dockableRegion, instanceId, widgets]);
   // Floating is offered only from dockable regions; the floating window's own
-  // chrome carries the dock control. The last center *view* is not offered it
-  // either — floating it out would leave the work surface with nothing to
-  // show, which is why `closeWidgetPlacement` refuses the same removal.
-  const canFloat =
-    Boolean(manifest.allowFloating) &&
-    region !== 'floating' &&
-    !(region === 'center' && getEnabledCenterViewCount(placementProject, getWidgetById) === 1);
+  // chrome carries the dock control. Even the last center *view* may float:
+  // the emptied surface falls back to the center's fallback view, and the
+  // window's dock control restores it — only the destructive placements
+  // (`closeWidgetPlacement`, `toggleRegionWidget`) still refuse that.
+  const canFloat = Boolean(manifest.allowFloating) && dockableRegion !== undefined;
 
   if (!canFloat) {
     return null;
@@ -317,6 +363,7 @@ export const WidgetFloatButton = ({
 export const WidgetHeaderActionsGroup = ({
   actions,
   HeaderMenu,
+  SettingsActions,
   instance,
   manifest,
   region,
@@ -324,33 +371,23 @@ export const WidgetHeaderActionsGroup = ({
 }: {
   actions?: ReactNode;
   HeaderMenu?: WidgetHeaderMenu;
+  SettingsActions?: WidgetHeaderActions;
   instance: WidgetInstanceRuntimeMeta;
   manifest: WidgetManifest;
   region: WorkbenchRegion;
   runtime: WidgetRuntimeApi;
 }) => {
-  const { t } = useTranslation();
-  const label = resolveWidgetInstanceLabel(instance, manifest, t);
-  const handleSettingsClick = useCallback(
-    () => openWorkbenchSettings(manifest.settingsSection),
-    [manifest.settingsSection]
-  );
-
   return (
     <HStack flexShrink={0} gap="0.5">
       {actions}
-      {manifest.settingsSection ? (
-        <Tooltip content={t('widgets.settingsLabel', { label })}>
-          <IconButton
-            aria-label={t('widgets.settingsLabel', { label })}
-            color="fg.muted"
-            size="2xs"
-            variant="ghost"
-            onClick={handleSettingsClick}
-          >
-            <Icon as={SettingsIcon} boxSize="3.5" />
-          </IconButton>
-        </Tooltip>
+      {manifest.settings ? (
+        <WidgetSettingsButton
+          SettingsActions={SettingsActions}
+          instance={instance}
+          manifest={manifest}
+          region={region}
+          runtime={runtime}
+        />
       ) : null}
       <WidgetFloatButton instanceId={instance.id} manifest={manifest} region={region} />
       <WidgetActionsMenu
@@ -368,6 +405,7 @@ export const WidgetHeader = ({
   actions,
   HeaderLabel,
   HeaderMenu,
+  SettingsActions,
   instance,
   manifest,
   region,
@@ -376,6 +414,7 @@ export const WidgetHeader = ({
   actions?: ReactNode;
   HeaderLabel?: WidgetHeaderLabel;
   HeaderMenu?: WidgetHeaderMenu;
+  SettingsActions?: WidgetHeaderActions;
   instance: WidgetInstanceRuntimeMeta;
   manifest: WidgetManifest;
   region: WorkbenchRegion;
@@ -387,7 +426,7 @@ export const WidgetHeader = ({
   const label = resolveWidgetInstanceLabel(instance, manifest, t);
 
   return (
-    <HStack justify="space-between" borderBottomWidth={1} h={10} ps="3" pe="2">
+    <PanelHeader>
       <HStack flex="1" gap="1.5" minW="0">
         <WidgetIdentityIcon icon={manifest.icon} />
         {HeaderLabel && !instance.title ? (
@@ -401,13 +440,14 @@ export const WidgetHeader = ({
       </HStack>
       <WidgetHeaderActionsGroup
         HeaderMenu={HeaderMenu}
+        SettingsActions={SettingsActions}
         actions={actions}
         instance={instance}
         manifest={manifest}
         region={region}
         runtime={runtime}
       />
-    </HStack>
+    </PanelHeader>
   );
 };
 

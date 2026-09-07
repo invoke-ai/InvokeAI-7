@@ -10,7 +10,7 @@ import type {
  * How a video generation is conditioned. There is no explicit mode selector:
  * the mode is inferred from which inputs are filled — see `resolveVideoMode`.
  */
-export type VideoGenerationMode = 'txt2vid' | 'first-frame' | 'last-frame' | 'first-last' | 'extend';
+export type VideoGenerationMode = 'txt2vid' | 'first-frame' | 'last-frame' | 'first-last' | 'extend' | 'reference';
 
 /** A gallery video selected as the clip to extend, with the trim range to keep. */
 export interface VideoSourceClip {
@@ -23,6 +23,39 @@ export interface VideoSourceClip {
   startFrame: number;
   endFrame: number;
 }
+
+/**
+ * Which streams a Ref2VA video reference conditions. The graph-literal values of the
+ * `minimax_h3_video_reference` node: 'audio' maps to upstream's standalone audio-reference
+ * kind, sourced from the video's soundtrack.
+ */
+export type VideoReferenceConditioning = 'video_audio' | 'video' | 'audio';
+
+/** Ref2VA image-reference sizing: 'max' = 2048px short edge, 'match' = generation's pixel area. */
+export type VideoReferenceImageDetail = 'max' | 'match';
+
+/**
+ * One ordered Ref2VA reference. Order is part of the request contract — a different order
+ * is a different generation — so references live in a single ordered array whatever their
+ * kind. A video reference reuses `VideoSourceClip` for its trim bounds.
+ */
+export type VideoReferenceItem =
+  | {
+      kind: 'video';
+      clip: VideoSourceClip;
+      conditioning: VideoReferenceConditioning;
+      /**
+       * True on the reference the panel derives from the Initial Video in
+       * Ref2VA extend mode: it tracks that clip's identity, and its trim
+       * defaults re-derive from the cutpoint (up to ~5s of lead-in at 24 fps,
+       * capped at the generated frame count so the backend keeps the whole
+       * window) whenever the Initial Video trim or the frame count changes.
+       * It is an ordinary reference otherwise — reorderable, trimmable,
+       * removable — and the flag is panel state only, never in metadata.
+       */
+      fromSourceVideo?: boolean;
+    }
+  | { kind: 'image'; image: ImageWithDims; detail: VideoReferenceImageDetail };
 
 export type WanTargetResolution = '480p' | '720p' | '1080p';
 export type MiniMaxH3TargetResolution = '768 highres' | '768 lowres';
@@ -53,8 +86,20 @@ export interface VideoSettings {
    * either `firstFrameImage` or `sourceVideo`.
    */
   lastFrameImage: ImageWithDims | null;
-  /** The clip to extend. Mutually exclusive with `firstFrameImage`. */
+  /**
+   * The clip to extend. Mutually exclusive with `firstFrameImage`. On an
+   * FL2VA model this drives extend mode; on a Ref2VA model it coexists with
+   * `references` (reference-extend: the new clip is appended to it, and a
+   * linked tail reference provides continuity).
+   */
   sourceVideo: VideoSourceClip | null;
+  /**
+   * Ref2VA references, in conditioning order (up to 3 videos and 9 images).
+   * Mutually exclusive with `firstFrameImage`/`lastFrameImage`; `sourceVideo`
+   * may coexist on a Ref2VA model (reference-extend). Only a Ref2VA
+   * transformer consumes them — see `resolveVideoMode` and the `reference` mode.
+   */
+  references: VideoReferenceItem[];
   aspectRatioId: VideoAspectRatioId;
   targetResolution: VideoTargetResolution;
   numFrames: number;
@@ -86,9 +131,19 @@ export interface VideoSettings {
   wanT5EncoderModel: ModelIdentifierConfig | null;
   /** The low-noise expert of a Wan 2.2 A14B mixture-of-experts pair. */
   wanLowNoiseModel: MainModelConfig | null;
-  /** Optional Diffusers main model used as a component source for split/quantized Wan models. */
+  /**
+   * Diffusers main model used as a component source for single-file mains:
+   * split/quantized Wan models, and single-file MiniMax H3 transformers
+   * (which take tokenizer/processor/VAEs from it).
+   */
   componentSourceModel: MainModelConfig | null;
-  /** Optional single-file MiniMax H3 transformer override (e.g. the pruned int8 repack). */
+  /**
+   * LEGACY — pre model-positions persisted shape only. The single-file H3
+   * transformer used to be an override slot; it is the top model selection
+   * now. `syncVideoWidgetValuesWithModels` promotes a stored value onto
+   * `model` (keeping the old main as `componentSourceModel`); nothing writes
+   * this field any more.
+   */
   h3TransformerModel: MainModelConfig | null;
   /** Optional single-file MiniMax H3 Qwen3-VL text-encoder override. */
   h3TextEncoderModel: ModelIdentifierConfig | null;

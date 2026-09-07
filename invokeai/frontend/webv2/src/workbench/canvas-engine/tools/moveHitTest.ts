@@ -25,7 +25,7 @@
  */
 
 import type {
-  CanvasDocumentContractV2,
+  CanvasDocumentContractV3,
   CanvasLayerBaseContract,
   CanvasLayerContract,
 } from '@workbench/canvas-engine/contracts';
@@ -48,7 +48,7 @@ type LayerTransform = CanvasLayerBaseContract['transform'];
  */
 export const hittableLayerRect = (
   layer: CanvasLayerContract,
-  doc: CanvasDocumentContractV2,
+  doc: CanvasDocumentContractV3,
   liveRect?: Rect
 ): Rect | null => {
   if (!renderableSourceOf(layer)) {
@@ -74,7 +74,7 @@ export const hittableLayerRect = (
  */
 export const hittableLayerSize = (
   layer: CanvasLayerContract,
-  doc: CanvasDocumentContractV2
+  doc: CanvasDocumentContractV3
 ): { width: number; height: number } | null => {
   const rect = hittableLayerRect(layer, doc);
   return rect ? { height: rect.height, width: rect.width } : null;
@@ -84,10 +84,13 @@ export const hittableLayerSize = (
 export const layerMatrix = (transform: LayerTransform) =>
   fromTRS({ x: transform.x, y: transform.y }, transform.rotation, transform.scaleX, transform.scaleY);
 
-/** True when `point` (document space) falls inside `layer`'s rendered bounds. */
+/**
+ * True when `point` (document space) falls inside `layer`'s rendered bounds.
+ * @internal No production caller today; kept for a future stack hit-test consumer.
+ */
 export const hitTestLayer = (
   layer: CanvasLayerContract,
-  doc: CanvasDocumentContractV2,
+  doc: CanvasDocumentContractV3,
   point: Vec2,
   liveRect?: Rect
 ): boolean => {
@@ -112,7 +115,7 @@ export const hitTestLayer = (
  */
 export const layerOutlineCorners = (
   layer: CanvasLayerContract,
-  doc: CanvasDocumentContractV2,
+  doc: CanvasDocumentContractV3,
   override?: { x: number; y: number; scaleX?: number; scaleY?: number; rotation?: number } | null
 ): Vec2[] | null => {
   const rect = hittableLayerRect(layer, doc);

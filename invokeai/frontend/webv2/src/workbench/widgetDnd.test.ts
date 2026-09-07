@@ -10,6 +10,8 @@ import {
   getWidgetInstanceDragData,
   getWidgetInstanceDragId,
   getWidgetRegionDropData,
+  getWidgetRegionEndDropData,
+  getWidgetRegionEndDropId,
   resolveWidgetDragEnd,
   widgetCollisionDetection,
 } from './widgetDnd';
@@ -91,6 +93,98 @@ const createProjectWithPreviewInCenterAndRight = (): Project => {
     },
   };
 };
+
+const createProjectWithBottomEndCluster = (): Project => {
+  const project = getActiveProject(createInitialWorkbenchState());
+
+  return {
+    ...project,
+    widgetRegions: {
+      ...project.widgetRegions,
+      bottom: {
+        ...project.widgetRegions.bottom,
+        alignEndInstanceIds: ['notifications'],
+      },
+    },
+  };
+};
+
+const getBottomWidget = (_typeId: WidgetTypeId) => ({
+  manifest: { allowedRegions: ['bottom' as const], allowMultiple: false },
+});
+
+describe('bottom cluster drops', () => {
+  it('dropping on the trailing spacer joins the end cluster at the end', () => {
+    const project = createProjectWithBottomEndCluster();
+    const [first] = project.widgetRegions.bottom.instanceIds;
+    const resolution = resolveWidgetDragEnd(
+      project,
+      getWidgetInstanceDragData('bottom', first!, first as WidgetTypeId),
+      getWidgetRegionEndDropData('bottom'),
+      getBottomWidget
+    );
+
+    expect(resolution).toMatchObject({ align: 'end', type: 'reorder' });
+    expect((resolution as { instanceIds: string[] }).instanceIds.at(-1)).toBe(first);
+  });
+
+  it("landing beside a widget adopts that widget's cluster", () => {
+    const project = createProjectWithBottomEndCluster();
+    const [first] = project.widgetRegions.bottom.instanceIds;
+    const resolution = resolveWidgetDragEnd(
+      project,
+      getWidgetInstanceDragData('bottom', first!, first as WidgetTypeId),
+      getWidgetInstanceDragData('bottom', 'notifications', 'notifications'),
+      getBottomWidget
+    );
+
+    expect(resolution).toMatchObject({ align: 'end', type: 'reorder' });
+  });
+
+  it('keeps a same-cluster reorder free of alignment changes', () => {
+    const project = createProjectWithBottomEndCluster();
+    const [first, second] = project.widgetRegions.bottom.instanceIds;
+    const resolution = resolveWidgetDragEnd(
+      project,
+      getWidgetInstanceDragData('bottom', first!, first as WidgetTypeId),
+      getWidgetInstanceDragData('bottom', second!, second as WidgetTypeId),
+      getBottomWidget
+    );
+
+    expect(resolution).toMatchObject({ type: 'reorder' });
+    expect(resolution).not.toHaveProperty('align');
+  });
+});
+
+describe('bottom cluster collisions', () => {
+  it('a pointer over the spacer wins the end zone, not the nearest chip', () => {
+    // The spacer sits inside the strip's own region droppable, which used to
+    // shadow it into the nearest-chip fallback — the drop then landed beside
+    // a start chip and the gesture silently did nothing.
+    const collisions = widgetCollisionDetection(
+      createCollisionArgs({
+        activeData: getWidgetInstanceDragData('bottom', 'server-status', 'server-status'),
+        collisionRect: getRect(200, 0, 10, 10),
+        droppables: [
+          { data: getWidgetRegionDropData('bottom'), id: 'widget-region:bottom', rect: getRect(0, 0, 600, 24) },
+          {
+            data: getWidgetInstanceDragData('bottom', 'notifications', 'notifications'),
+            id: getWidgetInstanceDragId('bottom', 'notifications'),
+            rect: getRect(0, 0, 80, 24),
+          },
+          {
+            data: getWidgetRegionEndDropData('bottom'),
+            id: getWidgetRegionEndDropId('bottom'),
+            rect: getRect(100, 0, 400, 24),
+          },
+        ],
+        pointerCoordinates: { x: 205, y: 12 },
+      })
+    );
+
+    expect(collisions.map((collision) => collision.id)).toEqual([getWidgetRegionEndDropId('bottom')]);
+  });
+});
 
 describe('widget dnd helpers', () => {
   it('uses region-scoped draggable ids for duplicated widget instances', () => {

@@ -29,15 +29,11 @@ import type { SupportedGenerateBase } from '@features/generation/core/baseGenera
 import type { BackendGraphContract, BackendInvocationContract } from '@features/generation/core/contracts';
 import type { GenerateModelConfig, GenerateSettings } from '@features/generation/core/types';
 
-import {
-  getGenerationDimensions,
-  getGenerationValidationReasons,
-} from '@features/generation/core/baseGenerationPolicies';
+import { getGenerationValidationReasons } from '@features/generation/core/baseGenerationPolicies';
 import { GRAPH_BUILDERS } from '@features/generation/core/graph';
 import { addEdge, addNode, toGraphContract } from '@features/generation/core/graphBuilder';
 import { addKrea2ConditioningEnhancers } from '@features/generation/core/krea2Conditioning';
 import { getIsPidSupportedBase } from '@features/generation/core/pid';
-import { clampDimension } from '@features/generation/core/settings';
 
 import type {
   CanvasCompositingSettings,
@@ -48,6 +44,7 @@ import type {
 
 import { addControlLayers } from './addControlLayers';
 import { addRegionalGuidance, isRegionalGuidanceSupportedForBase } from './addRegionalGuidance';
+import { type CanvasSize, resolveCanvasProcessingSize } from './canvasProcessingSize';
 
 /**
  * The backend image-to-latents (encode) node type per supported base. sd-1 /
@@ -97,28 +94,6 @@ const canvasDenoisingStart = (model: GenerateModelConfig, strength: number): num
 
 /** True for the image-referencing modes (everything but pure txt2img). */
 const isImageMode = (mode: CompileCanvasGraphInput['mode']): boolean => mode !== 'txt2img';
-
-interface CanvasSize {
-  width: number;
-  height: number;
-}
-
-const getCanvasProcessingSize = (
-  model: GenerateModelConfig,
-  settings: GenerateSettings,
-  bbox: CompileCanvasGraphInput['bbox']
-): CanvasSize => {
-  const { grid } = getGenerationDimensions(model, settings.pidMode);
-
-  // Normalize only the model's hard dimension constraints. Legacy canvas also
-  // had an optional "Scale Before Processing" policy that upscaled small bboxes
-  // to the model's optimal pixel area; webv2 keeps Generate dimensions
-  // user-controlled and must not silently add that compute/quality policy here.
-  return {
-    height: clampDimension(bbox.height, grid),
-    width: clampDimension(bbox.width, grid),
-  };
-};
 
 const sizesMatch = (left: CanvasSize, right: CanvasSize): boolean =>
   left.width === right.width && left.height === right.height;
@@ -697,7 +672,7 @@ const graftOutpaint = (
  */
 export const compileCanvasGraph = (input: CompileCanvasGraphInput): CompiledCanvasGraph => {
   const { bbox, compositeImageName, destination, mode, model, projectSettings, strength } = input;
-  const processingSize = getCanvasProcessingSize(model, input.settings, bbox);
+  const processingSize = resolveCanvasProcessingSize(model, input.settings.pidMode, bbox, input.scaling);
   const settings = withProcessingDimensions(input.settings, processingSize);
 
   const validationReasons = [...getCanvasValidationReasons(input), ...getGenerationValidationReasons(model, settings)];
@@ -744,7 +719,7 @@ export const compileCanvasGraph = (input: CompileCanvasGraphInput): CompiledCanv
 
   // Regional guidance applies in every mode too. The executor already composited
   // + uploaded each region's mask and resolved its reference-image models; it
-  // passes only valid regions for a supported base (SD1 / SDXL / FLUX / FLUX.2 / Krea-2).
+  // passes only regions valid for the base's regional-guidance support matrix.
   if (input.regionalGuidance && input.regionalGuidance.length > 0 && isRegionalGuidanceSupportedForBase(model.base)) {
     addRegionalGuidance(backendGraph, {
       base: model.base,

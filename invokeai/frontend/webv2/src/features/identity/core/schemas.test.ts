@@ -113,6 +113,14 @@ describe('getApiErrorMessage', () => {
     );
   });
 
+  it('unwraps messages from structured FastAPI details', () => {
+    const body = JSON.stringify({
+      detail: { code: 'canvas_schema_unsupported', message: 'This project requires a newer client.' },
+    });
+
+    expect(getApiErrorMessage(new ApiError(body, 412), 'fallback')).toBe('This project requires a newer client.');
+  });
+
   it('unwraps the first validation issue', () => {
     const body = JSON.stringify({ detail: [{ loc: ['body', 'email'], msg: 'value is not a valid email address' }] });
 

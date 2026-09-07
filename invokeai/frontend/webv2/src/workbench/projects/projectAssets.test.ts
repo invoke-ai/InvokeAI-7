@@ -37,9 +37,9 @@ const noMappings = { images: new Map<string, string>(), videos: new Map<string, 
 
 const projectDocument = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
   canvas: {
-    document: { layers: [imageLayer('layer-1', 'live-image.png')], version: 2 },
-    snapshots: [{ document: { layers: [imageLayer('layer-old', 'snapshot-image.png')] }, id: 'snap-1' }],
-    version: 2,
+    document: { stacks: { raster: [imageLayer('layer-1', 'live-image.png')] }, version: 3 },
+    snapshots: [{ document: { stacks: { raster: [imageLayer('layer-old', 'snapshot-image.png')] } }, id: 'snap-1' }],
+    version: 3,
   },
   events: [{ imageName: 'event-image.png' }],
   graphHistory: [{ document: { nodes: [{ data: { image: { image_name: 'history-image.png' } } }] }, id: 'gh-1' }],
@@ -48,7 +48,9 @@ const projectDocument = (overrides: Record<string, unknown> = {}): Record<string
   name: 'Project',
   projectGraph: { nodes: [{ data: { inputs: { image: { image_name: 'graph-image.png' } } }, id: 'node-1' }] },
   queue: {
-    items: [{ id: 'q-1', snapshot: { canvas: { document: { layers: [imageLayer('l', 'queue-image.png')] } } } }],
+    items: [
+      { id: 'q-1', snapshot: { canvas: { document: { stacks: { raster: [imageLayer('l', 'queue-image.png')] } } } } },
+    ],
   },
   widgetInstances: {
     'upscale-1': { state: { values: { inputImage: { image_name: 'upscale-input.png' } } }, typeId: 'upscale' },
@@ -81,19 +83,27 @@ describe('collectLiveAssetRefs', () => {
     expect(images.has('recent-a.png')).toBe(false);
   });
 
-  it('finds references nested through arrays and mask bitmaps', () => {
+  it('finds references nested through groups, arrays and mask bitmaps', () => {
     const { images } = collectLiveAssetRefs(
       projectDocument({
         canvas: {
           document: {
-            layers: [
-              { id: 'mask-1', mask: { bitmap: imageRef('mask.png'), fill: {} }, type: 'inpaint_mask' },
-              {
-                id: 'rg-1',
-                referenceImages: [{ config: { image: imageRef('reference.png'), type: 'ip_adapter' } }],
-                type: 'regional_guidance',
-              },
-            ],
+            stacks: {
+              inpaint_mask: [
+                {
+                  children: [{ id: 'mask-1', mask: { bitmap: imageRef('mask.png'), fill: {} }, type: 'inpaint_mask' }],
+                  id: 'group-1',
+                  type: 'group',
+                },
+              ],
+              regional_guidance: [
+                {
+                  id: 'rg-1',
+                  referenceImages: [{ config: { image: imageRef('reference.png'), type: 'ip_adapter' } }],
+                  type: 'regional_guidance',
+                },
+              ],
+            },
           },
         },
       })
@@ -292,7 +302,7 @@ describe('stripInstallationState', () => {
    * authored input that has to survive the round trip.
    */
   it.each([
-    ['no selection', { canvas: { document: { layers: [imageLayer('l1', 'a.png')] } }, id: 'p1' }],
+    ['no selection', { canvas: { document: { stacks: { raster: [imageLayer('l1', 'a.png')] } } }, id: 'p1' }],
     [
       'an already-blank URL',
       { widgetStates: { gallery: { values: { recentImages: [{ imageName: 'a.png', imageUrl: '' }] } } } },
@@ -317,9 +327,9 @@ describe('remapAssetRefs', () => {
     const remapped = remapAssetRefs(projectDocument(), {
       ...noMappings,
       images: new Map([['live-image.png', 'uploaded-1.png']]),
-    }) as { canvas: { document: { layers: { source: { image: { imageName: string } } }[] } } };
+    }) as { canvas: { document: { stacks: { raster: { source: { image: { imageName: string } } }[] } } } };
 
-    expect(remapped.canvas.document.layers[0]!.source.image.imageName).toBe('uploaded-1.png');
+    expect(remapped.canvas.document.stacks.raster[0]!.source.image.imageName).toBe('uploaded-1.png');
   });
 
   it('rewrites history references too, so nothing keeps pointing at the pre-import name', () => {
@@ -330,16 +340,20 @@ describe('remapAssetRefs', () => {
         ['snapshot-image.png', 'uploaded-snapshot.png'],
       ]),
     }) as {
-      canvas: { snapshots: { document: { layers: { source: { image: { imageName: string } } }[] } }[] };
+      canvas: { snapshots: { document: { stacks: { raster: { source: { image: { imageName: string } } }[] } } }[] };
       queue: {
-        items: { snapshot: { canvas: { document: { layers: { source: { image: { imageName: string } } }[] } } } }[];
+        items: {
+          snapshot: { canvas: { document: { stacks: { raster: { source: { image: { imageName: string } } }[] } } } };
+        }[];
       };
     };
 
-    expect(remapped.queue.items[0]!.snapshot.canvas.document.layers[0]!.source.image.imageName).toBe(
+    expect(remapped.queue.items[0]!.snapshot.canvas.document.stacks.raster[0]!.source.image.imageName).toBe(
       'uploaded-queue.png'
     );
-    expect(remapped.canvas.snapshots[0]!.document.layers[0]!.source.image.imageName).toBe('uploaded-snapshot.png');
+    expect(remapped.canvas.snapshots[0]!.document.stacks.raster[0]!.source.image.imageName).toBe(
+      'uploaded-snapshot.png'
+    );
   });
 
   it('rewrites the backend spelling of the key as well', () => {
@@ -366,18 +380,18 @@ describe('remapAssetRefs', () => {
   /** The namespaces are separate, so a shared name must not cross over. */
   it('never rewrites an image through the video mapping, or the reverse', () => {
     const document = projectDocument({
-      canvas: { document: { layers: [imageLayer('l', 'shared')] } },
+      canvas: { document: { stacks: { raster: [imageLayer('l', 'shared')] } } },
       projectGraph: { nodes: [{ data: { inputs: { video: { video_name: 'shared' } } }, id: 'n' }] },
     });
     const remapped = remapAssetRefs(document, {
       images: new Map([['shared', 'image-side']]),
       videos: new Map([['shared', 'video-side']]),
     }) as {
-      canvas: { document: { layers: { source: { image: { imageName: string } } }[] } };
+      canvas: { document: { stacks: { raster: { source: { image: { imageName: string } } }[] } } };
       projectGraph: { nodes: { data: { inputs: { video: { video_name: string } } } }[] };
     };
 
-    expect(remapped.canvas.document.layers[0]!.source.image.imageName).toBe('image-side');
+    expect(remapped.canvas.document.stacks.raster[0]!.source.image.imageName).toBe('image-side');
     expect(remapped.projectGraph.nodes[0]!.data.inputs.video.video_name).toBe('video-side');
   });
 
@@ -385,13 +399,39 @@ describe('remapAssetRefs', () => {
     const remapped = remapAssetRefs(projectDocument(), {
       ...noMappings,
       images: new Map([['not-present.png', 'other.png']]),
-    }) as { canvas: { document: { layers: { source: { image: { imageName: string } } }[] } } };
+    }) as { canvas: { document: { stacks: { raster: { source: { image: { imageName: string } } }[] } } } };
 
-    expect(remapped.canvas.document.layers[0]!.source.image.imageName).toBe('live-image.png');
+    expect(remapped.canvas.document.stacks.raster[0]!.source.image.imageName).toBe('live-image.png');
   });
 });
 
 describe('selectCoverImageName', () => {
+  it('reads the top-most raster leaf through nested groups', () => {
+    const document = projectDocument({
+      canvas: {
+        document: {
+          stacks: {
+            raster: [
+              {
+                children: [
+                  {
+                    children: [{ id: 'deep', source: { image: imageRef('deep.png'), type: 'image' }, type: 'raster' }],
+                    id: 'inner',
+                    type: 'group',
+                  },
+                  { id: 'later', source: { image: imageRef('later.png'), type: 'image' }, type: 'raster' },
+                ],
+                id: 'outer',
+                type: 'group',
+              },
+            ],
+          },
+        },
+      },
+    });
+    expect(selectCoverImageName(document)).toBe('deep.png');
+  });
+
   it('prefers the newest gallery result', () => {
     expect(
       selectCoverImageName(projectDocument({ widgetInstances: galleryInstance(['newest.png', 'older.png']) }))
@@ -406,14 +446,17 @@ describe('selectCoverImageName', () => {
     expect(
       selectCoverImageName(
         projectDocument({
-          canvas: { document: { layers: [paintLayer('empty', null), imageLayer('below', 'below.png')] } },
+          canvas: { document: { stacks: { raster: [paintLayer('empty', null), imageLayer('below', 'below.png')] } } },
         })
       )
     ).toBe('below.png');
   });
 
   it.each([
-    ['a project that has produced nothing', { canvas: { document: { layers: [] } }, id: 'p', layout: {}, name: 'n' }],
+    [
+      'a project that has produced nothing',
+      { canvas: { document: { stacks: { raster: [] } } }, id: 'p', layout: {}, name: 'n' },
+    ],
     ['a document missing the canvas entirely', { id: 'p', layout: {}, name: 'n' }],
   ])('is null for %s', (_label, document) => {
     expect(selectCoverImageName(document)).toBeNull();

@@ -7,6 +7,7 @@ import {
   type GalleryItem,
   type GalleryItemKey,
 } from '@features/gallery/core/items';
+import { GALLERY_PAGE_SIZE } from '@features/gallery/core/paging';
 import { getBoundedRecentImages } from '@features/gallery/core/recentImages';
 import {
   getPersistedSelectedGalleryItemKeys,
@@ -28,6 +29,7 @@ import { getQueueItemSnapshotBatchCount, getQueueItemSnapshotDimensions } from '
 const UNCATEGORIZED_BOARD: GalleryBoard = {
   archived: false,
   assetCount: 0,
+  assetVideoCount: 0,
   id: 'none',
   imageCount: 0,
   kind: 'uncategorized',
@@ -83,10 +85,19 @@ export interface GalleryStateView {
   compareImageKey: GalleryItemKey | null;
   currentItem: GalleryCurrentItem;
   galleryView: GalleryView;
+  /** A compare image is set and differs from the visible image selection. */
+  isComparisonActive: boolean;
   items: GalleryItem[];
   isLoading: boolean;
+  /** The grid's current page in paginated mode; the window anchor otherwise. */
+  page: number;
   pendingPlaceholders: GalleryQueuePlaceholder[];
   projectBoardId: string | null;
+  /**
+   * The selection's stamped paginated page, when the stamp names the listing
+   * the grid is showing; null otherwise. Reveals follow it across pages.
+   */
+  revealTargetPage: number | null;
   searchTerm: string;
   selectedBoardId: string;
   selectedItemKey: GalleryItemKey | null;
@@ -94,6 +105,8 @@ export interface GalleryStateView {
   /** Active image-similarity query, rendered as a chip in place of the search text. */
   semanticImageQuery: GallerySemanticReference | null;
   settings: GallerySettings;
+  /** The listing is restricted to starred items. */
+  starredOnly: boolean;
 }
 
 interface SortableGalleryQueueSlot {
@@ -102,25 +115,9 @@ interface SortableGalleryQueueSlot {
   submittedAt: string;
 }
 
-interface GalleryOrderImage {
-  starred?: boolean;
-}
-
-// Starred-first placement is pinned in gallery/core/settings.ts, so this
-// always inserts after the leading starred block rather than branching on a
-// flag that no longer varies.
-export const getGalleryPlaceholderInsertionIndex = (
-  images: GalleryOrderImage[],
-  imageOrderDir: GalleryOrderDir
-): number => {
-  if (imageOrderDir !== 'DESC') {
-    return images.length;
-  }
-
-  const firstUnstarredIndex = images.findIndex((image) => !image.starred);
-
-  return firstUnstarredIndex === -1 ? images.length : firstUnstarredIndex;
-};
+// Newest-first placeholders land at the top; oldest-first listings take them at the end.
+export const getGalleryPlaceholderInsertionIndex = (itemCount: number, imageOrderDir: GalleryOrderDir): number =>
+  imageOrderDir === 'DESC' ? 0 : itemCount;
 
 export const getGalleryGenerationSequence = (
   queueItems: QueueItem[],
@@ -237,8 +234,15 @@ export const getGalleryView = (values: Record<string, unknown>): GalleryView =>
 export const getGallerySearchTerm = (values: Record<string, unknown>): string =>
   typeof values.searchTerm === 'string' ? values.searchTerm : '';
 
+/** The starred-only listing filter; a session value kept beside `searchTerm`. */
+export const getGalleryStarredOnly = (values: Record<string, unknown>): boolean => values.starredOnly === true;
+
 export const getGallerySemanticImageQuery = (values: Record<string, unknown>): GallerySemanticReference | null =>
   parseGallerySemanticReference(values.semanticImageQuery);
+
+/** The saved board choice as persisted, before any resolution against loaded boards. */
+export const getGalleryRawSelectedBoardId = (values: Record<string, unknown>): string | null =>
+  typeof values.selectedBoardId === 'string' ? values.selectedBoardId : null;
 
 /**
  * Where new results land, resolved against the boards this install actually has.
@@ -250,9 +254,10 @@ export const getGallerySemanticImageQuery = (values: Record<string, unknown>): G
  *
  * An empty board list means "still loading", not "no such board", so nothing resolves yet.
  */
-export const getGallerySelectedBoardId = (values: Record<string, unknown>, backendBoards: GalleryBoard[]): string => {
-  const selectedBoardId = typeof values.selectedBoardId === 'string' ? values.selectedBoardId : null;
-
+export const resolveGallerySelectedBoardId = (
+  { projectBoardId, selectedBoardId }: { projectBoardId: string | null; selectedBoardId: string | null },
+  backendBoards: GalleryBoard[]
+): string => {
   if (backendBoards.length === 0) {
     return selectedBoardId ?? 'none';
   }
@@ -261,14 +266,18 @@ export const getGallerySelectedBoardId = (values: Record<string, unknown>, backe
     return selectedBoardId;
   }
 
-  const projectBoardId = getGalleryProjectBoardId(values);
-
   if (projectBoardId !== null && backendBoards.some((board) => board.id === projectBoardId)) {
     return projectBoardId;
   }
 
   return 'none';
 };
+
+export const getGallerySelectedBoardId = (values: Record<string, unknown>, backendBoards: GalleryBoard[]): string =>
+  resolveGallerySelectedBoardId(
+    { projectBoardId: getGalleryProjectBoardId(values), selectedBoardId: getGalleryRawSelectedBoardId(values) },
+    backendBoards
+  );
 
 export const getGalleryPage = (values: Record<string, unknown>): number =>
   typeof values.galleryPage === 'number' && Number.isFinite(values.galleryPage)
@@ -287,6 +296,7 @@ export interface GallerySelectedImageQuery {
   page: number;
   paginationMode: 'infinite' | 'paginated';
   searchTerm: string;
+  starredOnly: boolean;
 }
 
 export const getGallerySelectedImageQuery = (values: Record<string, unknown>): GallerySelectedImageQuery => {
@@ -320,6 +330,7 @@ export const getGallerySelectedImageQuery = (values: Record<string, unknown>): G
         ? query.paginationMode
         : settings.paginationMode,
     searchTerm: query && typeof query.searchTerm === 'string' ? query.searchTerm : String(values.searchTerm ?? ''),
+    starredOnly: query && typeof query.starredOnly === 'boolean' ? query.starredOnly : getGalleryStarredOnly(values),
   };
 };
 
@@ -338,23 +349,6 @@ export const getGalleryCompareImage = (values: Record<string, unknown>): Gallery
     selectedImageName: null,
   });
 
-export const getGalleryQueuePlaceholders = (
-  queueItems: QueueItem[],
-  {
-    galleryView,
-    imageOrderDir = 'ASC',
-    searchTerm,
-    selectedBoardId,
-  }: { galleryView: GalleryView; imageOrderDir?: GalleryOrderDir; searchTerm: string; selectedBoardId: string }
-): GalleryQueuePlaceholder[] => {
-  return getVisibleGalleryQueuePlaceholders(getGalleryGenerationSequence(queueItems, null).chronologicalSlots, {
-    galleryView,
-    imageOrderDir,
-    searchTerm,
-    selectedBoardId,
-  });
-};
-
 const getVisibleGalleryQueuePlaceholders = (
   chronologicalSlots: GalleryQueuePlaceholder[],
   {
@@ -371,6 +365,24 @@ const getVisibleGalleryQueuePlaceholders = (
   const placeholders = chronologicalSlots.filter((placeholder) => placeholder.boardId === selectedBoardId);
 
   return imageOrderDir === 'DESC' ? [...placeholders].reverse() : placeholders;
+};
+
+/**
+ * Whether this page/window can show where a NEW image lands (placeholders
+ * render only there): page 0 for newest-first and the unanchored infinite
+ * window; the row-`total` page for oldest-first — deliberately nonexistent
+ * when the last page is exactly full, and unknowable without a total.
+ */
+const isGalleryWindowAtIncomingItemLanding = (
+  settings: GallerySettings,
+  page: number,
+  totalImages: number | null
+): boolean => {
+  if (settings.paginationMode === 'infinite' || settings.imageOrderDir === 'DESC') {
+    return page === 0;
+  }
+
+  return totalImages !== null && page === Math.floor(totalImages / GALLERY_PAGE_SIZE);
 };
 
 export const getGalleryStateView = (
@@ -399,11 +411,13 @@ export const getGalleryStateView = (
   const galleryView = getGalleryView(values);
   const settings = getGallerySettings(values);
   const searchTerm = getGallerySearchTerm(values);
+  const starredOnly = getGalleryStarredOnly(values);
   const boards = backendBoards.length
     ? backendBoards
     : [
         {
           ...UNCATEGORIZED_BOARD,
+          assetVideoCount: items.filter((item) => item.kind === 'video' && item.category !== 'general').length,
           imageCount: items.filter((item) => item.kind === 'image' && item.category === 'general').length,
           projectId: null,
           videoCount: items.filter((item) => item.kind === 'video').length,
@@ -419,18 +433,19 @@ export const getGalleryStateView = (
   const generationSequence = getGalleryGenerationSequence(queueItems, liveTarget);
   // A ranked similarity result has no chronological insertion point, so
   // pending placeholders (which stand in for images-to-come) are hidden while
-  // a semantic query is active — exactly as they are for a text search.
+  // a semantic query is active — exactly as they are for a text search, and
+  // for the starred-only filter, which a fresh generation never matches.
   const semanticImageQuery = getGallerySemanticImageQuery(values);
-  // Placeholders stand in for images that will land at the TOP of the board's
-  // listing. An infinite window anchored mid-board (a deep reveal) shows a
-  // slice nowhere near the top, so they are hidden there too.
-  const isAnchoredInfiniteWindow = settings.paginationMode === 'infinite' && getGalleryPage(values) > 0;
+  const page = getGalleryPage(values);
+  const isAnchoredInfiniteWindow = settings.paginationMode === 'infinite' && page > 0;
+  const showsIncomingItemLanding = isGalleryWindowAtIncomingItemLanding(settings, page, getGalleryTotalImages(values));
   const visibleActivePlaceholder =
     settings.showPendingItems &&
     galleryView === 'images' &&
     searchTerm.trim() === '' &&
     semanticImageQuery === null &&
-    !isAnchoredInfiniteWindow
+    !starredOnly &&
+    showsIncomingItemLanding
       ? generationSequence.liveSlot?.boardId === selectedBoardId
         ? generationSequence.liveSlot
         : null
@@ -441,17 +456,34 @@ export const getGalleryStateView = (
     liveFollowEnabled,
     selectedItemKey: visibleSelectedItemKey,
   });
+  const selectedImageQuery = getGallerySelectedImageQuery(values);
+  const revealTargetPage =
+    settings.paginationMode === 'paginated' &&
+    selectedImageQuery.paginationMode === 'paginated' &&
+    semanticImageQuery === null &&
+    selectedImageQuery.boardId === selectedBoardId &&
+    selectedImageQuery.galleryView === galleryView &&
+    selectedImageQuery.imageOrderDir === settings.imageOrderDir &&
+    selectedImageQuery.searchTerm === searchTerm &&
+    selectedImageQuery.starredOnly === starredOnly &&
+    // A starred item lives in the strip, never on a page of the unstarred
+    // listing; Preview stamps its starred-list page, which the grid must not follow.
+    (starredOnly || selectedItem?.starred !== true)
+      ? selectedImageQuery.page
+      : null;
 
   return {
-    anchoredWindowPage: isAnchoredInfiniteWindow ? getGalleryPage(values) : 0,
+    anchoredWindowPage: isAnchoredInfiniteWindow ? page : 0,
     boards,
     compareImageKey,
     currentItem,
     galleryView,
+    isComparisonActive,
     items,
     isLoading,
+    page,
     pendingPlaceholders:
-      settings.showPendingItems && semanticImageQuery === null && !isAnchoredInfiniteWindow
+      settings.showPendingItems && semanticImageQuery === null && !starredOnly && showsIncomingItemLanding
         ? getVisibleGalleryQueuePlaceholders(generationSequence.chronologicalSlots, {
             galleryView,
             imageOrderDir: settings.imageOrderDir,
@@ -460,6 +492,7 @@ export const getGalleryStateView = (
           })
         : [],
     projectBoardId: getGalleryProjectBoardId(values),
+    revealTargetPage,
     searchTerm,
     selectedBoardId,
     selectedItemKey: visibleSelectedItemKey,
@@ -469,13 +502,15 @@ export const getGalleryStateView = (
         : selectedItemKeys,
     semanticImageQuery,
     settings,
+    starredOnly,
   };
 };
 
 export const getBoardCounts = (
   board: GalleryBoard
-): { assetCount: number; imageCount: number; videoCount: number } => ({
+): { assetCount: number; assetVideoCount: number; imageCount: number; videoCount: number } => ({
   assetCount: board.assetCount,
+  assetVideoCount: board.assetVideoCount,
   imageCount: board.imageCount,
   videoCount: board.videoCount,
 });

@@ -2,11 +2,12 @@ import type { GraphPreviewSourceState, WorkflowInvocationSourceId } from '@featu
 import type { ReactFlowInstance } from '@xyflow/react';
 import type { ReactNode } from 'react';
 
-import { Box, Dialog, Icon, Portal, SegmentGroup, Stack, Text } from '@chakra-ui/react';
+import { Box, Dialog, Icon, Portal, Stack, Text } from '@chakra-ui/react';
+import { localizeForLoopValidationReason } from '@features/workflow/core/forLoops';
 import { useWorkflowGraphPreview } from '@features/workflow/ui/WorkflowUiContext';
-import { Button, JsonPreview, toaster } from '@platform/ui';
+import { Button, JsonPreview, SegmentTabs, segmentTabsPanelId, segmentTabsTabId, toaster } from '@platform/ui';
 import { CheckIcon, ChevronUpIcon, CopyIcon, TriangleAlertIcon } from 'lucide-react';
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useId, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { GraphPreviewFlow } from './GraphPreviewFlow';
@@ -34,14 +35,11 @@ interface GraphPreviewDialogProps {
 
 type PreviewMode = 'graph' | 'list' | 'json';
 
-const MODE_VALUES: readonly PreviewMode[] = ['graph', 'list', 'json'];
-const isPreviewMode = (value: string | null): value is PreviewMode => MODE_VALUES.includes(value as PreviewMode);
-
 const modeItems = [
   { labelKey: 'graphPreview.graph', value: 'graph' },
   { labelKey: 'graphPreview.list', value: 'list' },
   { labelKey: 'common.json', value: 'json' },
-] as const;
+] as const satisfies readonly { labelKey: string; value: PreviewMode }[];
 
 const COPY_RESET_DELAY_MS = 1500;
 const SELECT_AND_REVEAL_FIT_VIEW_OPTIONS = { duration: 150, maxZoom: 1 } as const;
@@ -84,6 +82,7 @@ export const GraphPreviewDialog = ({
 }: GraphPreviewDialogProps) => {
   const { t } = useTranslation();
   const graphPreview = useWorkflowGraphPreview();
+  const modeTabsIdBase = useId();
   const [mode, setMode] = useState<PreviewMode>('graph');
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [hasCopied, setHasCopied] = useState(false);
@@ -91,6 +90,9 @@ export const GraphPreviewDialog = ({
   const flowInstanceRef = useRef<ReactFlowInstance | null>(null);
   const dialogRoute = graphPreview.getRoute(sourceId);
   const canInvoke = dialogRoute?.canInvoke === true;
+  const validationMessage = dialogRoute?.validationMessage
+    ? localizeForLoopValidationReason(dialogRoute.validationMessage, t)
+    : undefined;
   const hasInvalidReasons = source.invalidReasons.length > 0;
 
   const graph = source.graph;
@@ -110,11 +112,7 @@ export const GraphPreviewDialog = ({
   );
 
   const handleOpenChange = useCallback((event: { open: boolean }) => closeAndReset(event.open), [closeAndReset]);
-  const handleModeChange = useCallback((event: { value: string | null }) => {
-    if (isPreviewMode(event.value)) {
-      setMode(event.value);
-    }
-  }, []);
+  const handleModeChange = useCallback((value: PreviewMode) => setMode(value), []);
   const closeDialog = useCallback(() => closeAndReset(false), [closeAndReset]);
   const invokeRoute = useCallback(() => {
     void graphPreview.invoke(sourceId).then((submitted) => {
@@ -194,6 +192,7 @@ export const GraphPreviewDialog = ({
       .catch(() => toaster.create({ title: t('graphPreview.copyFailed'), type: 'error' }));
   }, [graph, t]);
 
+  const modeTabs = useMemo(() => modeItems.map((item) => ({ id: item.value, label: t(item.labelKey) })), [t]);
   const jsonLabel = useMemo(() => t('graphPreview.graphJsonLabel', { title: sourceLabel }), [t, sourceLabel]);
   const subtitle = useMemo(() => {
     const compiledFrom = t('graphPreview.compiledFrom', { source: sourceLabel });
@@ -201,13 +200,7 @@ export const GraphPreviewDialog = ({
   }, [t, sourceLabel, source.isLive]);
 
   return (
-    <Dialog.Root
-      open={isOpen}
-      placement="center"
-      size="xl"
-      onExitComplete={onExitComplete}
-      onOpenChange={handleOpenChange}
-    >
+    <Dialog.Root open={isOpen} size="xl" onExitComplete={onExitComplete} onOpenChange={handleOpenChange}>
       <Portal>
         <Dialog.Backdrop />
         <Dialog.Positioner>
@@ -219,25 +212,31 @@ export const GraphPreviewDialog = ({
             <Dialog.Header alignItems="center" flexDirection="row" justifyContent="space-between">
               <Stack gap="0.5" minW="0">
                 <Dialog.Title>{t('graphPreview.title')}</Dialog.Title>
-                <Text color="fg.muted" fontSize="xs">
-                  {subtitle}
-                </Text>
+                <Dialog.Description>{subtitle}</Dialog.Description>
               </Stack>
-              <SegmentGroup.Root size="xs" value={mode} onValueChange={handleModeChange}>
-                <SegmentGroup.Indicator />
-                {modeItems.map((item) => (
-                  <SegmentGroup.Item key={item.value} value={item.value}>
-                    <SegmentGroup.ItemHiddenInput />
-                    <SegmentGroup.ItemText>{t(item.labelKey)}</SegmentGroup.ItemText>
-                  </SegmentGroup.Item>
-                ))}
-              </SegmentGroup.Root>
+              <SegmentTabs
+                activeId={mode}
+                ariaLabel={t('graphPreview.title')}
+                idBase={modeTabsIdBase}
+                isCompact
+                tabs={modeTabs}
+                onSelect={handleModeChange}
+              />
             </Dialog.Header>
-            <Dialog.Body display="flex" flex="1" flexDirection="column" gap="3" minH="0">
+            <Dialog.Body
+              aria-labelledby={segmentTabsTabId(modeTabsIdBase, mode)}
+              display="flex"
+              flex="1"
+              flexDirection="column"
+              gap="3"
+              id={segmentTabsPanelId(modeTabsIdBase)}
+              minH="0"
+              role="tabpanel"
+            >
               {hasInvalidReasons ? (
                 <InvalidBanner>
                   <Text>
-                    {t('graphPreview.invalidTitle')} {source.invalidReasons[0]}
+                    {t('graphPreview.invalidTitle')} {localizeForLoopValidationReason(source.invalidReasons[0], t)}
                   </Text>
                 </InvalidBanner>
               ) : null}
@@ -305,13 +304,13 @@ export const GraphPreviewDialog = ({
                     cursor={canInvoke ? undefined : 'not-allowed'}
                     opacity={canInvoke ? undefined : 0.6}
                     size="xs"
-                    title={dialogRoute.validationMessage}
+                    title={validationMessage}
                     onClick={invokeRoute}
                   >
                     {t('graphPreview.invokeRoute', { route: dialogRoute.label })}
                   </Button>
                 ) : null}
-                <Button size="xs" variant="outline" onClick={closeDialog}>
+                <Button size="xs" variant="ghost" onClick={closeDialog}>
                   {t('common.close')}
                 </Button>
               </Box>

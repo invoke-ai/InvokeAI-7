@@ -138,7 +138,7 @@ export const ResizableTextarea = ({
     <Box position="relative">
       {underlay}
       <ScrollArea.Root
-        borderRadius="l2"
+        borderRadius="control"
         h={`${displayHeightPx}px`}
         size="xs"
         variant="hover"

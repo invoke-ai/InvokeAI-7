@@ -104,7 +104,7 @@ export const InvokeButton = ({ state }: { state: InvocationState }) => {
         cursor={canInvoke ? undefined : 'not-allowed'}
         flexShrink={0}
         opacity={canInvoke ? undefined : 0.55}
-        size="xs"
+        size="sm"
         onBlur={handleBlur}
         onClick={canInvoke ? handleClick : undefined}
         onFocus={handleFocus}

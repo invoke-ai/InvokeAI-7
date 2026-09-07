@@ -5,8 +5,8 @@
  *
  * Each setting is a boolean persisted in the canvas widget's own state values
  * (`widgetInstances['canvas'].state.values[key]`) — the same plumbing as the
- * denoising strength (`invoke/canvasStrength.ts`), so it survives reloads and
- * rides along in queue snapshots. Persistence is per-user (per-project), NEVER in
+ * denoising strength (`invoke/canvasStrength.ts`), so it survives reloads and is
+ * read when a queue submission is compiled. Persistence is per-user (per-project), NEVER in
  * the canvas undo history.
  *
  * A setting either drives an engine boolean store (`store` set — React resolves
@@ -152,9 +152,6 @@ export const CANVAS_SETTINGS: readonly CanvasBooleanSetting[] = [
     store: 'ruleOfThirds',
   },
 ];
-
-/** The sections, in popover render order. */
-export const CANVAS_SETTING_SECTIONS: readonly CanvasSettingSection[] = ['behavior', 'display', 'grid'];
 
 /** Resolved settings, keyed by persisted setting key (default-applied). */
 export type ResolvedCanvasSettings = Record<string, boolean>;

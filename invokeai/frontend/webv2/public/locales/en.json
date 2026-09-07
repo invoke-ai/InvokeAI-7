@@ -179,7 +179,10 @@
       "format": "Color format",
       "sampleFromCanvas": "Pick a color from the canvas",
       "sampleFromScreen": "Pick a color from the screen",
-      "opacity": "Opacity (%)"
+      "opacity": "Opacity (%)",
+      "hue": "Hue",
+      "saturationValue": "Saturation and value",
+      "saturationValueText": "Saturation {{saturation}}%, value {{value}}%"
     },
     "configure": "Configure",
     "copy": "Copy",
@@ -246,7 +249,8 @@
     "unknownTime": "Unknown time",
     "view": "View",
     "viewJson": "View JSON",
-    "widgetViewUnavailable": "Widget view unavailable."
+    "widgetViewUnavailable": "Widget view unavailable.",
+    "loading": "Loading…"
   },
   "app": {
     "name": "Invoke AI",
@@ -393,6 +397,7 @@
       "remaining_one": "{{count}} image remaining. Open queue",
       "remaining_other": "{{count}} images remaining. Open queue",
       "route": "{{source}} to {{destination}} · {{graph}}",
+      "shiftCancelsAll": "Shift-click cancels all",
       "waitingForProgress": "Backend accepted batch; waiting for progress event.",
       "waitingToStart": "Waiting to start"
     },
@@ -410,7 +415,9 @@
   },
   "projects": {
     "allSavedAlreadyOpen": "All saved projects are already open.",
+    "activeRunsMustFinish": "Wait for active queue runs to finish first.",
     "closeProjectLabel": "Close {{name}}",
+    "closeBlocked": "Project not closed",
     "couldNotOpen": "Could not open project",
     "couldNotOpenDescription": "\"{{name}}\" could not be loaded from the server.",
     "createNewProject": "Create new project",
@@ -428,6 +435,8 @@
     "exported": "Exported \"{{name}}\"",
     "exporting": "Exporting \"{{name}}\"…",
     "failedToLoad": "Failed to load your projects.",
+    "requiresNewerInvoke": "Requires a newer Invoke",
+    "legacyFormat": "Older project format",
     "file": {
       "bundlingProgress": "Bundling {{completed}} of {{total}} assets…",
       "damaged": "This project file is damaged and cannot be opened.",
@@ -439,6 +448,7 @@
       "missingReferences_other": "{{count}} project references could not be included.",
       "notAProject": "This file is not an Invoke project.",
       "notSynced": "This project has changes that have not reached the server yet. Try again once it reconnects.",
+      "updateClient": "This project now requires a newer version of Invoke. Your local changes remain saved in this browser.",
       "supersededElsewhere": "This project was changed on another device. Your local edits continue in the recovered copy — use that one instead.",
       "packing": "Packing the archive…",
       "restoringProgress": "Restoring {{completed}} of {{total}} assets…",
@@ -464,6 +474,12 @@
     "importWithEllipsis": "Import…",
     "libraryDescription": "Every project saved to your account.",
     "listView": "List view",
+    "load": {
+      "invalid": "\"{{name}}\" contains canvas data this version of Invoke cannot read, and it was not opened.",
+      "multiple": "{{count}} saved projects were not opened because this version of Invoke cannot read them: {{names}}.",
+      "legacyVersion": "\"{{name}}\" was saved by an older version of Invoke and cannot be opened here.",
+      "unsupportedVersion": "\"{{name}}\" was saved by a newer version of Invoke and cannot be opened here."
+    },
     "newProject": "New project",
     "newProjectWithLayout": "Start with a layout",
     "noSavedProjects": "No saved projects yet.",
@@ -752,6 +768,34 @@
       "paragraphs": [
         "Enables windowed attention used by HiDiffusion.",
         "Can boost local detail, but may affect global coherence."
+      ]
+    },
+    "layerStackControl": {
+      "heading": "Control Layers",
+      "paragraphs": [
+        "Layers that guide generation with structural hints such as edges, depth, or pose maps.",
+        "Each control layer pairs its image with a control model and a weight that sets how strongly it steers the result."
+      ]
+    },
+    "layerStackInpaintMask": {
+      "heading": "Inpaint Masks",
+      "paragraphs": [
+        "Masks that mark regions of the image for regeneration.",
+        "Painted areas are regenerated on the next invoke; noise and denoise-limit modifiers tune how strongly the area may change."
+      ]
+    },
+    "layerStackRaster": {
+      "heading": "Raster Layers",
+      "paragraphs": [
+        "The pixel layers that compose your image and feed generation.",
+        "Layers apply top to bottom, and each can carry a stack of non-destructive adjustments such as levels, curves, or hue."
+      ]
+    },
+    "layerStackRegionalGuidance": {
+      "heading": "Regional Guidance",
+      "paragraphs": [
+        "Regions that apply prompts and reference images to part of the image.",
+        "Painted regions scope their prompts and reference images to just that area of the canvas."
       ]
     },
     "model": {
@@ -1234,6 +1278,7 @@
     "useSupportedImage": "Use a PNG, JPEG, or WebP image.",
     "variant": "Variant",
     "variantHelp": "Architecture variant, e.g. inpaint or dev.",
+    "viewModel": "View model",
     "viewQueue": "View queue",
     "waitingForDownload": "Waiting for download"
   },
@@ -1274,6 +1319,32 @@
     "nodeType": "Type: {{type}}",
     "nodeVersion": "Version: {{version}}",
     "nodeClassification": "Classification: {{classification}}",
+    "iterationOutputs": "Iteration outputs",
+    "finalOutputs": "Final outputs",
+    "forLoopValidationFailed": "For loop validation failed",
+    "forLoopMissingIterationOutput": "The For node must have at least one iteration output connection",
+    "forLoopReturnCount": "The For node must have exactly one matching ForReturn",
+    "forLoopUnterminatedBody": "Every For body path must terminate at its matching ForReturn",
+    "forLoopNestedUnsupported": "This nested For loop arrangement is not supported",
+    "forLoopIterateUnsupported": "Iterate nodes are not supported in this For loop body",
+    "forLoopIteratorInputUnsupported": "For loop body inputs cannot depend on an external Iterate node",
+    "forLoopFinalOutputInBody": "Final-scoped For outputs cannot feed the loop body",
+    "forLoopBodyEscape": "For loop body paths cannot leave the loop before ForReturn",
+    "forLoopInputCount": "For inputs have too many connections",
+    "forReturnInputCount": "ForReturn inputs have too many connections",
+    "forLoopLinkageMissing": "Every For and ForReturn must have loop linkage",
+    "forLoopLinkageInvalid": "Loop linkage must connect a For to its ForReturn",
+    "forLoopLinkageDuplicate": "A For and ForReturn can each belong to only one loop",
+    "forReturnOwnership": "Each ForReturn must belong to exactly one For",
+    "forLoopBodyBoundary": "For loop body",
+    "forLoopBodyBoundaryStatus": {
+      "missing_linkage": "missing loop linkage",
+      "invalid_linkage": "invalid loop linkage",
+      "duplicate_linkage": "duplicate loop linkage",
+      "missing_return": "missing ForReturn",
+      "multiple_returns": "multiple ForReturns",
+      "orphan_return": "orphan ForReturn"
+    },
     "nodeDetailsAria": "Details for {{title}}",
     "nodePackLabel": "Node pack: {{name}}",
     "nodesDirectory": "Nodes Directory",
@@ -1403,6 +1474,7 @@
     "language": "Language",
     "languageDescription": "Interface language. New workbench copy falls back to English until translators add coverage.",
     "tabs": {
+      "about": "About",
       "appearance": "Appearance",
       "behavior": "Behavior",
       "developer": "Developer",
@@ -1412,6 +1484,14 @@
       "workflow": "Workflow",
       "workspace": "Workspace",
       "imageMap": "Image Map"
+    },
+    "about": {
+      "title": "About Invoke",
+      "description": "Version and system information for this Invoke server.",
+      "github": "GitHub",
+      "discord": "Discord",
+      "loading": "Loading system information…",
+      "systemInformation": "System information"
     },
     "imageMapVocabulary": {
       "title": "Cluster Label Vocabulary",
@@ -1432,13 +1512,218 @@
       "indexOff": "The image index is not running. Terms are saved and will apply when it is next enabled.",
       "saveFailed": "Could not save the vocabulary.",
       "loadFailed": "Could not load the vocabulary."
+    },
+    "catalog": {
+      "themeId": {
+        "label": "Theme",
+        "description": "Choose the workbench colors."
+      },
+      "highContrast": {
+        "label": "High contrast",
+        "description": "Strengthen text and border contrast on every theme."
+      },
+      "reduceMotion": {
+        "label": "Reduce motion",
+        "description": "Disable transitions and animations across the workbench."
+      },
+      "showFocusRegionHighlight": {
+        "label": "Highlight focused regions",
+        "description": "Highlight the region receiving keyboard shortcuts."
+      },
+      "autoSwitchInvocationRoute": {
+        "label": "Auto-switch Invoke route",
+        "description": "Match the Invoke source and destination to the surface you are editing. Locked routes are never changed."
+      },
+      "enableInformationalPopovers": {
+        "label": "Enable informational popovers",
+        "description": "Show educational popovers on controls that have extra guidance."
+      },
+      "enableModelDescriptions": {
+        "label": "Show model descriptions",
+        "description": "Include model descriptions in model dropdowns where available."
+      },
+      "notifyOnEnqueue": {
+        "label": "Notify when queued",
+        "description": "Show a toast for each successful enqueue. Enqueues are always recorded in the notification center."
+      },
+      "preferNumericAttentionStyle": {
+        "label": "Prefer numeric attention style",
+        "description": "Use numeric prompt attention syntax when inserting attention weights."
+      },
+      "showPromptSyntaxHighlighting": {
+        "label": "Highlight prompt syntax",
+        "description": "Color syntax in prompt fields without changing their text or validation."
+      },
+      "hotkeys": {
+        "label": "Keyboard shortcuts",
+        "description": "Find and customize keyboard shortcuts."
+      },
+      "useCpuNoise": {
+        "label": "Use CPU noise",
+        "description": "Use CPU noise generation for deterministic legacy-compatible outputs."
+      },
+      "confirmImageDeletion": {
+        "label": "Confirm image deletion",
+        "description": "Ask for confirmation before permanently deleting images."
+      },
+      "antialiasProgressImages": {
+        "label": "Antialias progress images",
+        "description": "Smooth progress previews instead of rendering them pixelated."
+      },
+      "workflowSnapToGrid": {
+        "label": "Always snap to grid",
+        "description": "Snap nodes to the grid while dragging. When off, hold Ctrl to snap temporarily."
+      },
+      "workflowEdgesBehindNodes": {
+        "label": "Keep highlighted connections behind nodes",
+        "description": "Connections to a selected node normally rise above other nodes. Keep them beneath so they never cover node controls."
+      },
+      "workflowShowMinimap": {
+        "label": "Show minimap",
+        "description": "Show an overview in the corner of the workflow editor."
+      },
+      "workflowValidateConnections": {
+        "label": "Validate connections",
+        "description": "Reject incompatible field connections. Disabling validation allows connections that may fail during a run."
+      },
+      "imageMapVocabulary": {
+        "label": "Vocabulary",
+        "description": "Manage the vocabulary used to organize the Image Map."
+      },
+      "developerLogEnabled": {
+        "label": "Record diagnostic logs",
+        "description": "Record selected diagnostic events in the Diagnostics widget."
+      },
+      "developerPerformanceTimingsEnabled": {
+        "label": "Collect performance timings",
+        "description": "Record workflow editing and project serialization measurements."
+      },
+      "developerLogNamespaces": {
+        "label": "Log namespaces",
+        "description": "Choose which diagnostic sources to record."
+      },
+      "generationDevices": {
+        "label": "Generation devices",
+        "description": "Server-wide accelerator selection. Changes require a server restart."
+      },
+      "workspaceActions": {
+        "label": "Data & workspace",
+        "description": "Reset the layout or permanently delete saved projects and settings."
+      },
+      "about": {
+        "label": "About InvokeAI",
+        "description": "Version, build, and server information."
+      },
+      "language": {
+        "label": "Language"
+      },
+      "workflowEdgeStyle": {
+        "label": "Connection style",
+        "description": "How connections between nodes are drawn."
+      },
+      "options": {
+        "curved": "Curved",
+        "square": "Square",
+        "activeProject": "Active project",
+        "all": "All projects",
+        "trace": "Trace",
+        "debug": "Debug",
+        "info": "Info",
+        "warn": "Warn",
+        "error": "Error",
+        "fatal": "Fatal"
+      },
+      "queueJobsScope": {
+        "label": "Show jobs from",
+        "description": "Choose which jobs the Queue widget includes in counts and lists."
+      },
+      "developerLogLevel": {
+        "label": "Log level"
+      },
+      "sections": {
+        "appearance": "Appearance",
+        "behavior": "Behavior",
+        "hotkeys": "Keyboard shortcuts",
+        "project": "Project",
+        "gallery": "Gallery",
+        "preview": "Preview",
+        "workflow": "Workflow",
+        "queue": "Queue",
+        "imageMap": "Image Map",
+        "developer": "Developer",
+        "server": "Server",
+        "workspace": "Data & workspace",
+        "about": "About"
+      }
     }
   },
   "shell": {
     "addCurrentLayout": "Add current layout...",
+    "backendUnavailable": {
+      "connectionFailed": "Could not reach the project server",
+      "description": "The editor is paused so it cannot replace your saved session with incomplete data. Retry when the server is available, or export a browser draft below.",
+      "draftsTitle": "Recoverable browser drafts",
+      "draftsUnavailable": "Browser recovery storage is unavailable. Drafts may still exist, but cannot be listed or exported in this browser session.",
+      "draftUnavailable": "This browser draft is no longer available. Reload and try again.",
+      "exportDraft": "Export draft",
+      "exportFailed": "The browser draft could not be exported.",
+      "loadMore": "Load more drafts",
+      "loadingDrafts": "Looking for drafts…",
+      "noDrafts": "No browser drafts are available.",
+      "retry": "Retry connection",
+      "title": "Projects are temporarily unavailable"
+    },
     "builtInPresets": "Built-in presets",
     "customLayout": "Custom layout {{number}}",
     "customPresets": "Custom presets",
+    "projectConflict": {
+      "actionFailed": "The project recovery action failed.",
+      "backupDescription": "Server saves continue, but browser crash recovery is unavailable until local storage recovers.",
+      "backupTitle": "Local crash recovery is unavailable",
+      "confirmTitle": "Resolve project conflict?",
+      "copyOpenedDuringResolution": "The project copy opened before recovery finished. Close it and retry.",
+      "deletedDescription": "This project was deleted elsewhere. Your local work remains available until you choose what to do.",
+      "deletedTitle": "Project deleted on the server",
+      "deleteDraft": "Delete draft",
+      "deleteDraftConfirmBody": "Permanently delete this browser draft? This cannot be undone.",
+      "recoverableDraftDescription": "A browser draft for project {{projectId}} could not be opened automatically. Export it before deleting it or retrying recovery.",
+      "recoverableDraftPosition": "Draft {{number}} of {{count}}.",
+      "recoverableDraftTitle": "Recoverable project draft available",
+      "nextDraft": "Next draft",
+      "previousDraft": "Previous draft",
+      "discard": "Discard local work",
+      "discardConfirmBody": "Permanently discard the local draft? This cannot be undone.",
+      "draftUnavailable": "The local draft is unavailable.",
+      "export": "Export local draft",
+      "revisionDescription": "The server and this tab contain different edits. You can keep both versions or replace this tab with the server version.",
+      "revisionTitle": "Project changed elsewhere",
+      "saveAsNew": "Save as new project",
+      "saveAsNewConfirmBody": "Create a separate project from the local version? Editing is paused until the copy is safely created.",
+      "schemaDescription": "This project needs a newer version of InvokeAI. Export it before discarding the local draft.",
+      "schemaTitle": "Project schema is not supported",
+      "serverVersionUnavailable": "The server version could not be loaded.",
+      "useServer": "Use server version",
+      "useServerConfirmBody": "Replace the local draft with the current server version? Local changes will be discarded."
+    },
+    "queueRecovery": {
+      "actionFailed": "The queue recovery action failed.",
+      "description": "Project {{projectId}} has locally saved queue run recovery data.",
+      "discard": "Discard recovery",
+      "discardConfirmBody": "Permanently discard this project's local queue recovery data? This does not cancel work that may still be running on the server.",
+      "discardConfirmTitle": "Discard queue recovery?",
+      "export": "Export recovery",
+      "loading": "Looking for queue recovery data…",
+      "lockContended": "This project's queue recovery is active in another tab. Close that tab or wait for its runs to finish.",
+      "lockUnavailable": "Queue recovery cannot be discarded because cross-tab coordination is unavailable.",
+      "next": "Next",
+      "open": "Open project",
+      "openFailed": "The project could not be opened. Its local queue recovery data is still available.",
+      "position": "Recovery {{number}} of {{count}}.",
+      "previous": "Previous",
+      "storageUnavailable": "Browser queue recovery storage may contain data, but it cannot be inspected in this browser session.",
+      "storageUnavailableTitle": "Queue recovery storage is unavailable",
+      "title": "Queue run recovery available"
+    },
     "deleteLayoutPreset": "Delete preset",
     "deleteLayoutPresetBody": "Delete \"{{name}}\"? This only removes the saved preset.",
     "deleteLayoutPresetQuestion": "Delete layout preset?",
@@ -1470,6 +1755,8 @@
       "unshade": "Unshade"
     },
     "loadingLabel": "Loading {{label}}",
+    "moveToLeftSide": "Move to left side",
+    "moveToRightSide": "Move to right side",
     "removeWidget": "Remove {{label}}",
     "panelLabel": "{{region}} widget panel",
     "resizePanel": "Resize {{region}} widget panel",
@@ -1481,6 +1768,87 @@
       "createWidgets": "Create widgets",
       "inspectWidgets": "Inspect widgets"
     },
+    "properties": {
+      "noCanvas": "Open a canvas to edit its properties.",
+      "groups": {
+        "settings": "Settings",
+        "gestures": "Gestures",
+        "input": "Input",
+        "stroke": "Stroke",
+        "dynamics": "Dynamics",
+        "shape": "Shape",
+        "gradient": "Gradient",
+        "stops": "Stops",
+        "font": "Font",
+        "paragraph": "Paragraph",
+        "frame": "Frame",
+        "selection": "Selection"
+      },
+      "foreground": "Foreground",
+      "gestures": {
+        "click": "Click",
+        "drag": "Drag",
+        "scroll": "Scroll",
+        "shiftClick": "Shift+Click",
+        "clickPoint": "Click a point",
+        "holdAlt": "Hold Alt",
+        "holdSpace": "Hold Space"
+      },
+      "hints": {
+        "view": {
+          "drag": "Pan the canvas.",
+          "scroll": "Zoom in and out.",
+          "hold": "Pan from any tool; release to return."
+        },
+        "colorPicker": {
+          "click": "Sample the color under the cursor into the active color target.",
+          "hold": "Sample from any tool; release to keep painting with the picked color."
+        },
+        "sam": {
+          "click": "Place a point with the current label.",
+          "shiftClick": "Place a point with the opposite label.",
+          "clickPoint": "Remove that point.",
+          "drag": "Draw or adjust the search box."
+        }
+      },
+      "target": {
+        "defaults": "Defaults",
+        "editing": "Editing: {{name}}",
+        "newText": "New text"
+      },
+      "rows": {
+        "color": "Color",
+        "kind": "Kind",
+        "width": "Width",
+        "angle": "Angle",
+        "stop": "Stop",
+        "offset": "Offset",
+        "family": "Family",
+        "size": "Size",
+        "weight": "Weight",
+        "lineHeight": "Leading",
+        "align": "Align",
+        "aspect": "Aspect",
+        "shape": "Shape",
+        "mode": "Mode"
+      },
+      "sections": {
+        "operation": "Operation",
+        "tool": "Tool",
+        "layer": "Layer"
+      }
+    },
+    "transform": {
+      "edit": "Transform layer",
+      "groupSelected": "Select a layer inside this group to transform.",
+      "hint": "Each field commits one undoable change to the selected layer.",
+      "noSelection": "No layer selected",
+      "position": "Position",
+      "rotation": "Rotation",
+      "scale": "Scale",
+      "session": "Transform in progress",
+      "title": "Transform"
+    },
     "labels": {
       "autosaveStatus": "Autosave",
       "canvas": "Canvas",
@@ -1489,6 +1857,8 @@
       "generate": "Generate",
       "imageMap": "Image Map",
       "layers": "Layers",
+      "properties": "Properties",
+      "transform": "Transform",
       "notifications": "Notifications",
       "preview": "Preview",
       "project": "Project",
@@ -1496,9 +1866,12 @@
       "queueStatus": "Queue status",
       "serverStatus": "Server Status",
       "upscale": "Upscale",
-      "versionStatus": "Version",
       "workflow": "Workflow",
-      "video": "Video"
+      "video": "Video",
+      "color": "Color",
+      "swatches": "Swatches",
+      "history": "History",
+      "overview": "Overview"
     },
     "generate": {
       "activeCount_one": "{{count}} active",
@@ -1507,6 +1880,7 @@
       "addConcept": "Add concept",
       "addConceptsHelp": "Add LoRAs/concepts here to blend them into this generation.",
       "addPromptTrigger": "Add prompt trigger",
+      "addReferenceImage": "Add reference image",
       "advanced": "Advanced",
       "aspectRatio": "Aspect ratio",
       "cfgRescale": "CFG rescale",
@@ -1550,7 +1924,6 @@
       "deletePresetNamed": "Delete preset {{name}}",
       "deletePromptHistoryItem": "Delete prompt history item",
       "denoisingStrength": "Denoising strength",
-      "denoisingStrengthHelp": "How much the generation reworks the existing canvas content. Only applies to image-to-image (when content fills the generation frame).",
       "disableConcept": "Disable {{name}}",
       "disableReferenceImage": "Disable reference image",
       "dropImageToPrompt": "Describe this image",
@@ -1696,6 +2069,8 @@
       "modeStyle": "Style",
       "model": "Model",
       "modelDefault": "Model default",
+      "moveReferenceImageDown": "Move reference image down",
+      "moveReferenceImageUp": "Move reference image up",
       "moreRatios": "More aspect ratios",
       "nativePx": "{{size}} px native",
       "negativePrompt": "Negative prompt",
@@ -1707,25 +2082,42 @@
       "noPromptHistoryYet": "No prompt history yet.",
       "noPromptTriggersAvailable": "No prompt triggers available.",
       "noSupportedModels": "No compatible generation model was found on the backend.",
-      "noTextLlmInstalled": "No Text LLM installed",
-      "noVisionModelInstalled": "No vision model installed",
       "offCount_one": "{{count}} off",
       "offCount_other": "{{count}} off",
       "openModelManager": "Open Model Manager",
       "override": "Override",
       "positivePrompt": "Positive prompt",
+      "presetDeleteBody": "Delete the preset \"{{name}}\"? This cannot be undone.",
+      "presetDeleteTitle": "Delete preset?",
       "presetModelMissing": "This preset's model is not installed.",
       "presetName": "Preset name",
       "presets": "Presets",
+      "presetsEmpty": "No presets yet. Save the current settings to reuse them later.",
+      "presetsNoMatches": "No presets match your search.",
       "presetUnreadable": "This preset could not be read.",
       "promptHistory": "Prompt history",
       "promptHistoryEntries": "Prompt history entries",
       "promptHistoryKeyboardHelp": "Alt+Up/Down switches between prompts while focused.",
       "recentSeeds": "Recent seeds",
+      "renamePresetNamed": "Rename preset {{name}}",
+      "renamePresetTitle": "Rename preset",
       "resetToModelDefault": "Reset to model default",
-      "savePreset": "Save as preset…",
       "savePresetAction": "Save",
       "savePresetTitle": "Save preset",
+      "scaleBeforeProcessing": "Scale before processing",
+      "scalingOptions": {
+        "height": "Height",
+        "method": "Scale method",
+        "methods": {
+          "auto": "Auto",
+          "manual": "Manual",
+          "none": "Off"
+        },
+        "processingAtFrame": "Generates at the generation size; nothing to resize.",
+        "processingSize": "Generates at {{width}}x{{height}}, then resizes back to the generation size.",
+        "width": "Width"
+      },
+      "searchPresets": "Search presets",
       "secondsPerRun": "~{{value}}s/run",
       "sizePreviewHandle": "Drag to resize the generation size",
       "switchModelBody": "Switching to {{name}} turns off or removes: {{labels}}.",
@@ -1778,6 +2170,7 @@
         "addImage": "Add an image",
         "replaceImage": "Replace image",
         "removeImage": "Remove image",
+        "couldNotLoadImage": "Could not load that image",
         "import": "Import",
         "importHelp": "Import templates from a CSV or JSON file with name, prompt and negative_prompt.",
         "export": "Export",
@@ -1800,7 +2193,6 @@
       "referenceImage": "Reference Image",
       "referenceImageModel": "Reference image model",
       "referenceImages": "Reference images",
-      "referenceImagesHelp": "Upload an image or drag images from Gallery here.",
       "referenceImagesUnsupported": "Reference images are not supported by the selected model.",
       "referencesMax": "References ×{{count}}",
       "removeConcept": "Remove concept",
@@ -1882,11 +2274,9 @@
       "creativity": "Creativity",
       "creativityHelp": "Higher values invent more detail and increase prompt influence.",
       "detailGuidance": "Detail guidance",
-      "dropImage": "Drop Image",
       "enableNegativePrompt": "Enable negative prompt",
       "generation": "Generation",
       "inputSize": "Input",
-      "inputImageAlt": "Upscale input image",
       "largeOutput": "Large output",
       "largeOutputDescription": "This output may take substantially longer and require more VRAM. Check tile settings before queueing.",
       "lorasRemoved": "Removed {{count}} incompatible LoRA model(s).",
@@ -1918,10 +2308,7 @@
       "random": "Random",
       "ready": "Ready",
       "readyDescription": "The upscale graph is ready to queue.",
-      "removeImage": "Remove image",
       "removeLora": "Remove {{name}}",
-      "replaceImage": "Replace upscale input image",
-      "replaceOrDrop": "Replace or drop another image",
       "scale": "Scale",
       "scaleHelp": "Output dimensions are the source dimensions multiplied by this value.",
       "scheduler": "Scheduler",
@@ -1948,11 +2335,7 @@
       "tileOverlapHelp": "More overlap reduces seams but increases processing and memory use.",
       "tileSize": "Tile size",
       "tileSizeHelp": "Larger tiles may improve continuity but require more VRAM.",
-      "unsupportedFile": "Upscale accepts PNG, JPEG, and WebP images.",
       "upscale": "Upscale",
-      "uploadImage": "Upload upscale input image",
-      "uploadOrDrop": "Upload a PNG, JPEG, or WebP, or drop one image from Gallery",
-      "uploadingImage": "Uploading image…",
       "vae": "VAE",
       "vaeCleared": "The incompatible VAE was cleared.",
       "vaePrecision": "VAE precision"
@@ -1963,24 +2346,18 @@
     },
     "project": {
       "copyId": "Copy project id",
-      "deleteRecovery": "Delete recovery",
-      "deleteRecoveryAria": "Delete {{name}}",
-      "deleteRecoveryBody": "Delete \"{{name}}\"? The recovery copy is removed permanently.",
-      "deleteRecoveryTitle": "Delete recovery?",
+      "activeRuns": "Active runs",
+      "activeRunCounts": "{{running}} running · {{queued}} queued",
       "events": "Events",
       "graphNodes": "Graph nodes",
       "idCopied": "Project id copied",
       "nameHelp": "Saved with the project.",
       "nameLabel": "Project name",
-      "openOriginal": "Open original \"{{name}}\"",
-      "openRecovery": "Open {{name}}",
-      "queueItems": "Queue items",
-      "recoveries": "Recoveries",
-      "recoveryCopy": "Recovery copy",
-      "recoveryForkedDescription": "Forked {{time}} after this project was changed elsewhere.",
       "sync": "Sync",
-      "syncOffline": "Offline — saved in this browser",
+      "syncOffline": "Offline — awaiting sync",
       "syncSynced": "Synced (revision {{revision}})",
+      "syncConflict": "Needs conflict resolution",
+      "syncUpdateClient": "Update Invoke to sync",
       "syncWaiting": "Waiting to sync"
     },
     "preview": {
@@ -2015,6 +2392,7 @@
       "hideInProgressDiffusion": "Hide in-progress diffusion",
       "imageCount_one": "{{count}} image",
       "imageCount_other": "{{count}} images",
+      "invoke": "Invoke",
       "itemCount_one": "{{count}} item",
       "itemCount_other": "{{count}} items",
       "loadingBoard": "Loading board",
@@ -2116,11 +2494,13 @@
       "recallAll": "Recall All",
       "recallFromGallery": "Recall this generation from the gallery",
       "recallUnavailable": "Nothing recallable for this item — select a supported Generate model first.",
+      "recallUnavailableForItem": "Nothing recallable for this item.",
       "resumeProcessor": "Resume Processor",
       "sendToCanvas": "Send to canvas",
       "sendToCanvasComingSoon": "Sending queue results to the canvas is coming soon.",
       "settingsRecalled": "Settings recalled",
       "settingsRecalledDescription": "Loaded these settings into Generate.",
+      "settingsRecalledIntoVideoDescription": "Loaded these settings into Video.",
       "took": "Took",
       "waiting_one": "{{count}} waiting",
       "waiting_other": "{{count}} waiting",
@@ -2186,7 +2566,11 @@
         "selectTransformTool": "Select transform tool",
         "selectViewTool": "Select view tool",
         "toggleNonRasterLayers": "Hide control, guidance and mask layers",
-        "undo": "Undo canvas edit"
+        "undo": "Undo canvas edit",
+        "groupLayers": "Group selected layers",
+        "ungroupLayers": "Ungroup selected layers",
+        "swapColors": "Swap foreground and background colors",
+        "resetColors": "Reset colors to black and white"
       },
       "contextMenu": {
         "createError": "Couldn't create from BBox",
@@ -2213,7 +2597,7 @@
         "fitBboxToLayers": "Fit frame to layers",
         "fitBboxToMasks": "Fit frame to masks",
         "fitToView": "Fit to view",
-        "frameSize": "Generation frame size",
+        "moreSaveOptions": "More save options",
         "newCanvas": "New canvas",
         "newCanvasConfirm": "Clear all layers and start a fresh canvas? This cannot be undone.",
         "newSession": "New session",
@@ -2232,7 +2616,14 @@
         "empty": "No gallery images were available to add.",
         "failed": "Couldn't add images to canvas",
         "inpaintMask": "Inpaint Mask",
-        "newLayerFromImage": "New Layer from Image",
+        "newCanvasFromImage_one": "New Canvas from Image",
+        "newCanvasFromImage_other": "New Canvas from Images",
+        "newCanvasSuccess_one": "Created a new canvas from the image",
+        "newCanvasSuccess_other": "Created a new canvas from {{count}} images",
+        "newFromImage_one": "New from Image",
+        "newFromImage_other": "New from Images",
+        "newLayerFromImage_one": "New Layer from Image",
+        "newLayerFromImage_other": "New Layers from Images",
         "partial_one": "Added {{successCount}} image; {{failedCount}} could not be prepared.",
         "partial_other": "Added {{successCount}} images; {{failedCount}} could not be prepared.",
         "raster": "Raster Layer",
@@ -2278,19 +2669,38 @@
         "autoSwitchProgress": "In progress",
         "generating": "Generating…",
         "moreAcceptOptions": "More accept options",
+        "recall": "Recall settings",
         "saveAsDisabledLayer": "Save & Continue",
         "saveError": "Couldn't save to gallery",
         "saveToGallery": "Save to gallery",
         "saved": "Saved to gallery",
         "savedDescription": "{{name}} added to your gallery."
       },
+      "structural": {
+        "failed": "Canvas edit failed",
+        "gestureActive": "Finish the current canvas gesture, then try again.",
+        "notReady": "The canvas is not ready to record this edit.",
+        "refusedInvalidTarget": "That layer cannot be the target of this edit.",
+        "refusedLocked": "A locked layer is in the way. Unlock it first.",
+        "refusedMissing": "A layer this edit needs is no longer in the canvas.",
+        "refusedUnsupported": "This edit is not available here.",
+        "refusedWrongType": "This edit does not apply to this kind of layer.",
+        "rejected": "The canvas did not accept this edit. Nothing changed.",
+        "reverted": "The edit could not be verified and was reverted.",
+        "stale": "The canvas changed before this edit landed. Try again.",
+        "unmirrored": "The edit was reverted, but the canvas view may be out of date.",
+        "unverified": "The edit could not be verified or reverted. Check the canvas before continuing.",
+        "refusedNotSiblings": "Only items that share the same group can be grouped together.",
+        "refusedDepth": "Groups can nest at most 10 levels deep.",
+        "refusedCycle": "A group can't be moved into itself.",
+        "refusedNodeLimit": "The canvas can't hold more than 10,000 layers and groups."
+      },
       "surface": "Canvas surface",
       "toolOptions": {
-        "applyTransform": "Apply",
-        "aspectRatio": "Aspect ratio",
         "brushColor": "Brush color",
         "brushSize": "Brush size",
-        "cancelTransform": "Cancel",
+        "hardness": "Hardness",
+        "strokePreview": "Stroke preview",
         "deselect": "Deselect",
         "eraseSelection": "Erase",
         "eraserSize": "Eraser size",
@@ -2299,11 +2709,13 @@
         "frameWidth": "W",
         "gradientAngle": "Angle",
         "gradientEdit": "Edit gradient",
-        "gradientEnd": "End",
-        "gradientKind": "Gradient type",
         "gradientLinear": "Linear",
         "gradientRadial": "Radial",
-        "gradientStart": "Start",
+        "gradientAddStop": "Add stop",
+        "gradientRemoveStop": "Remove stop",
+        "gradientStopAt": "Gradient stop at {{percent}}%",
+        "gradientStopColor": "Stop color",
+        "gradientStops": "Stops",
         "invertSelection": "Invert",
         "lassoFreehand": "Freehand",
         "lassoHint": "Draw a shape to select. Shift adds, Alt subtracts.",
@@ -2311,8 +2723,7 @@
         "lassoPolygonHint": "Click to place points. Double-click, Enter, or click the first point to close.",
         "lassoShape": "Lasso mode",
         "liftSelectionToLayer": "New layer",
-        "lockAspect": "Lock aspect ratio",
-        "marqueeHint": "Drag to select a region. Shift constrains, Alt draws from centre.",
+        "marqueeHint": "Drag to select a region. Shift adds, Alt subtracts; press them mid-drag to constrain or draw from center.",
         "marqueeKind": "Marquee shape",
         "movePosition": "Move layer",
         "opacity": "Opacity",
@@ -2323,18 +2734,30 @@
         "rotation": "Rotation",
         "scaleHeight": "H %",
         "scaleWidth": "W %",
+        "selectAll": "Select all",
+        "selectionActions": "Actions",
         "selectionAdd": "Add",
         "selectionIntersect": "Intersect",
         "selectionMode": "Selection mode",
+        "selectionNeedsPaintLayer": "Select an unlocked, visible paint layer first",
+        "selectionNeedsSelection": "Make a selection first",
         "selectionReplace": "Replace",
         "selectionSubtract": "Subtract",
         "setFrame": "Set generation frame",
         "shapeEdit": "Edit shape",
         "shapeEllipse": "Ellipse",
         "shapeFill": "Fill",
+        "shapeFreehand": "Freehand",
+        "shapeFreehandHint": "Drag to draw a freeform shape.",
         "shapeHint": "Drag to draw a shape.",
-        "shapeKind": "Shape type",
+        "shapePolygon": "Polygon",
+        "shapePolygonHint": "Click to place points. Double-click, Enter, or click the first point to close.",
         "shapeRect": "Rectangle",
+        "shapeStar": "Star",
+        "shapeTarget": "Place on",
+        "shapeTargetNew": "New layer",
+        "shapeTargetSelected": "Selected layer",
+        "shapeTriangle": "Triangle",
         "shapeStroke": "Stroke",
         "shapeStrokeWidth": "Stroke width",
         "size": "Size",
@@ -2346,17 +2769,20 @@
         "textFont": "Font",
         "textLineHeight": "Line height",
         "textSize": "Font size",
-        "textWeight": "Weight"
+        "textWeight": "Weight",
+        "gradientPairPreset": "Foreground to background preset"
       },
       "tools": {
         "bbox": "Generation frame",
         "brush": "Brush",
+        "colorPicker": "Color picker",
         "eraser": "Eraser",
         "gradient": "Gradient",
         "label": "Tools",
         "lasso": "Lasso select",
         "marquee": "Marquee select",
         "move": "Move",
+        "sam": "Select object",
         "shape": "Shape",
         "text": "Text",
         "transform": "Transform",
@@ -2381,7 +2807,6 @@
       "detailsWithEllipsis": "Workflow details…",
       "exportJson": "Export workflow JSON",
       "form": "Form",
-      "graphHistorySnapshots": "Graph History Snapshots",
       "importJsonWithEllipsis": "Import workflow JSON…",
       "inspectorTabs": {
         "data": "Data",
@@ -2409,7 +2834,6 @@
       "resizeNodeInspector": "Resize node inspector",
       "runOutputsNotRecorded": "Run outputs are not recorded per node yet; results currently route to the Gallery or Canvas. This tab will show the node's outputs from its most recent run once run records land.",
       "newWorkflowWithEllipsis": "New workflow…",
-      "saveGraphSnapshot": "Save graph snapshot",
       "saveToLibrary": "Save to library",
       "selectNodeToInspect": "Select a node in the Workflow editor to inspect it.",
       "selectedNodeInspector": "Selected node inspector",
@@ -2423,17 +2847,11 @@
     "layers": {
       "actions": {
         "addControlLayer": "Control layer",
-        "addDenoiseLimit": "Add denoise limit",
-        "addImageNoise": "Add image noise",
         "addInpaintMask": "Inpaint mask",
-        "addNegativePrompt": "Add negative prompt",
-        "addPositivePrompt": "Add positive prompt",
         "addRasterLayer": "Raster layer",
-        "addReferenceImage": "Add reference image",
         "addRegionalGuidance": "Regional guidance",
         "addRegionalReferenceImage": "Regional reference image",
         "actionFailed": "Layer action failed",
-        "adjustments": "Adjustments",
         "blendMode": "Blend mode",
         "busy": "The canvas is busy. Try again when the current action finishes.",
         "copyFailed": "The layer could not be copied.",
@@ -2458,30 +2876,33 @@
         "disableAutoNegative": "Disable auto-negative",
         "disableTransparencyEffect": "Disable transparent preview",
         "disabled": "Enable the layer before using this action.",
-        "disableSelected": "Disable selected layers",
         "duplicate": "Duplicate layer",
         "duplicateSelected": "Duplicate selected layers",
         "empty": "This layer has no content.",
         "enableAutoNegative": "Enable auto-negative",
-        "enableSelected": "Enable selected layers",
         "enableTransparencyEffect": "Enable transparent preview",
         "exclude": "Exclude layer below",
         "extractMaskedArea": "Extract masked area",
         "fitToBbox": "Fit to bbox",
-        "hide": "Hide layer",
+        "disableLayer": "Disable layer",
+        "enableLayer": "Enable layer",
+        "disableSelected": "Disable selected",
+        "enableSelected": "Enable selected",
+        "disableGroup": "Disable group",
+        "enableGroup": "Enable group",
+        "hideLayer": "Hide layer",
+        "showLayer": "Show layer",
+        "hideSelectedLayers": "Hide selected",
+        "showSelectedLayers": "Show selected",
         "intersect": "Intersect with layer below",
         "mergeSelected": "Merge selected layers",
         "lock": "Lock layer",
-        "lockSelected": "Lock selected layers",
+        "lockSelected": "Lock selected",
         "locked": "Unlock the layer before using this action.",
         "mergeDown": "Merge down",
         "missing": "The layer no longer exists.",
         "moveBackward": "Move backward",
         "moveForward": "Move forward",
-        "moveSelectedBackward": "Move selected layers backward",
-        "moveSelectedForward": "Move selected layers forward",
-        "moveSelectedToBack": "Move selected layers to back",
-        "moveSelectedToFront": "Move selected layers to front",
         "moveToBack": "Move to back",
         "moveToFront": "Move to front",
         "notReady": "The layer content is still loading. Try again shortly.",
@@ -2492,19 +2913,39 @@
         "runWorkflow": "Run workflow",
         "saveLayerToAssets": "Save layer to assets",
         "select": "Select {{name}}",
-        "selectedCount_one": "{{count}} layer selected",
-        "selectedCount_other": "{{count}} layers selected",
         "selectObject": "Select object",
-        "show": "Show layer",
         "toggleAutoNegative": "Toggle auto-negative",
-        "toggleHidden": "Show/hide on canvas",
+        "toggleHidden": "Show/hide layer",
         "toggleLock": "Toggle lock",
         "toggleTransparencyEffect": "Toggle transparent preview",
-        "toggleVisibility": "Toggle visibility",
+        "toggleVisibility": "Enable/disable",
         "transform": "Transform",
         "unsupported": "This action is not supported for this layer.",
         "unlock": "Unlock layer",
-        "unlockSelected": "Unlock selected layers"
+        "unlockSelected": "Unlock selected",
+        "group": "Group layers",
+        "groupSelected": "Group selected layers",
+        "ungroup": "Ungroup",
+        "newGroup": "New group",
+        "expandGroup": "Expand group",
+        "collapseGroup": "Collapse group",
+        "indent": "Move into the group above",
+        "outdent": "Move out of the group",
+        "groupLocked": "Locked by a group",
+        "groupDisabled": "Disabled by a group",
+        "groupHidden": "Hidden by a group",
+        "duplicateCount_one": "Duplicate layer",
+        "duplicateCount_other": "Duplicate {{count}} layers",
+        "groupCount_one": "Group layer",
+        "groupCount_other": "Group {{count}} layers",
+        "deleteCount_one": "Delete layer",
+        "deleteCount_other": "Delete {{count}} layers",
+        "toggleActive": "Enable/disable layer",
+        "hideModifiers": "Hide modifiers",
+        "showModifiers": "Show modifiers",
+        "addDenoiseLimit": "Add denoise limit",
+        "addNoise": "Add noise",
+        "addRegenerateRegion": "Add regenerate region"
       },
       "control": {
         "apply": "Apply",
@@ -2630,8 +3071,16 @@
         "weight": "Weight"
       },
       "rasterFilter": {
-        "autoProcess": "Auto",
-        "autoProcessDescription": "Process automatically when settings change",
+        "applyAs": "Apply as",
+        "autoProcess": "Process automatically",
+        "categories": {
+          "edge": "Edge detection",
+          "depth": "Depth & normal",
+          "pose": "Pose & face",
+          "color": "Color & tone",
+          "noise": "Blur & noise",
+          "upscale": "Upscale"
+        },
         "busy": "Finish the current canvas interaction, then try again.",
         "cancel": "Cancel",
         "commitFailure": "The filtered pixels could not be committed: {{message}}",
@@ -2738,16 +3187,27 @@
         "brightness": "Brightness",
         "channel": "Channel",
         "channels": {
-          "b": "Blue",
+          "rgb": "RGB",
+          "r": "Red",
           "g": "Green",
-          "r": "Red"
+          "b": "Blue"
         },
         "contrast": "Contrast",
         "curves": "Curves",
+        "exposure": "Exposure",
         "curvesHint": "Drag points to bend the curve. Double-click empty space to add a point; double-click a point to remove it.",
-        "reset": "Reset adjustments",
+        "levels": "Levels",
+        "inputLevels": "Input levels",
+        "inputBlack": "Input black point",
+        "inputWhite": "Input white point",
+        "gamma": "Gamma",
+        "outputLevels": "Output levels",
+        "outputBlack": "Output black point",
+        "outputWhite": "Output white point",
+        "hue": "Hue",
+        "invert": "Invert",
+        "invertHint": "Inverts the layer’s colors. This adjustment has no options.",
         "saturation": "Saturation",
-        "title": "Adjustments",
         "transparencyLock": "Lock transparency"
       },
       "blendModes": {
@@ -2768,8 +3228,6 @@
         "screen": "Screen",
         "soft-light": "Soft light"
       },
-      "denoisingStrength": "Denoising strength",
-      "denoisingStrengthHelp": "How much the canvas image is changed. Lower keeps more of the original; higher allows bigger changes.",
       "empty": "No layers yet. Add a layer or paint on the canvas to get started.",
       "groupActions": {
         "collapse": "Collapse group",
@@ -2788,8 +3246,8 @@
         "mergeVisible": "Merge visible",
         "new": "New layer",
         "showAll": "Show all",
-        "toggleVisibility": "Toggle group visibility",
-        "toggleHidden": "Show/hide all on canvas"
+        "toggleVisibility": "Enable/disable group",
+        "toggleHidden": "Show/hide group"
       },
       "groups": {
         "control": "Control Layers",
@@ -2811,27 +3269,36 @@
           "horizontal": "Horizontal",
           "solid": "Solid",
           "vertical": "Vertical"
-        }
+        },
+        "editInColorPane": "Edit tint in the Color pane"
       },
       "menuGroups": {
         "layers": "Layers",
         "regional": "Regional"
       },
       "menu": {
-        "add": "Add",
-        "addModifiers": "Add modifiers",
         "arrange": "Arrange",
         "booleanOperations": "Boolean operations",
         "convertTo": "Convert to",
-        "copyTo": "Copy to"
+        "copyTo": "Copy to",
+        "addAdjustment": "Add adjustment",
+        "colorLabel": "Color label"
+      },
+      "labels": {
+        "none": "None",
+        "red": "Red",
+        "orange": "Orange",
+        "yellow": "Yellow",
+        "green": "Green",
+        "blue": "Blue",
+        "violet": "Violet",
+        "gray": "Gray"
       },
       "options": "Layer options",
-      "properties": "Layer properties",
       "regionalGuidance": {
         "addReferenceImage": "Add reference image",
         "autoNegative": "Auto-Negative",
         "clearReferenceImage": "Clear reference image",
-        "flux2PositiveOnly": "FLUX.2 regional guidance supports positive prompts only. Negative prompts, Auto-Negative, and reference images must be removed before generation.",
         "method": "Method",
         "methods": {
           "composition": "Composition",
@@ -2848,11 +3315,11 @@
         "positivePrompt": "Positive prompt",
         "positivePromptPlaceholder": "Region positive prompt",
         "referenceImage": "Reference image",
-        "referenceImageHelp": "Upload or drag an image from the gallery.",
+        "referenceImageHelp": "Choose an image from the gallery, drop one here, or upload a file.",
         "referenceImages": "Reference images",
         "removeReferenceImage": "Remove reference image",
         "selectModel": "Select a model",
-        "setReferenceImage": "Set reference image",
+        "unsupportedModel": "The selected model does not support regional guidance. This layer is skipped during generation.",
         "weight": "Weight"
       },
       "types": {
@@ -2860,7 +3327,95 @@
         "image": "Image",
         "inpaint_mask": "Inpaint",
         "paint": "Paint",
-        "regional_guidance": "Region"
+        "gradient": "Gradient",
+        "shape": "Shape",
+        "text": "Text",
+        "regional_guidance": "Region",
+        "group": "Group"
+      },
+      "groupSummary_one": "{{count}} layer",
+      "groupSummary_other": "{{count}} layers",
+      "groupEmpty": "Empty group",
+      "groupSelectedHint": "Select a layer inside this group to paint.",
+      "tree": "Layer tree",
+      "summary": {
+        "referenceImages_one": "{{count}} reference image",
+        "referenceImages_other": "{{count}} reference images",
+        "denoiseLimit": "Denoise ≤ {{value}}%",
+        "noise": "Noise {{value}}%"
+      },
+      "footer": {
+        "filter": "Filter layers",
+        "degraded": "Large document: thumbnails and drag reordering are off."
+      },
+      "dropRefused": "Can't drop here: {{reason}}",
+      "panes": {
+        "collapse": "Collapse editor panes",
+        "expand": "Expand editor panes",
+        "resize": "Resize editor panes",
+        "tabs": "Layer editor panes"
+      },
+      "colorPane": {
+        "addToPalette": "Add current color to palette",
+        "background": "Background color",
+        "channels": {
+          "blue": "Blue",
+          "brightness": "Brightness",
+          "green": "Green",
+          "hex": "Hex color",
+          "hue": "Hue",
+          "lightness": "Lightness",
+          "red": "Red",
+          "saturation": "Saturation"
+        },
+        "collapse": "Collapse color pane",
+        "expand": "Expand color pane",
+        "foreground": "Foreground color",
+        "format": "Color value format",
+        "palette": "Project palette",
+        "pickerModeBox": "Switch to box picker",
+        "pickerModeWheel": "Switch to wheel picker",
+        "recents": "Recent colors",
+        "removeSwatchHint": "{{color}} — right-click or press Delete to remove",
+        "resize": "Resize color pane",
+        "swatches": "Swatches",
+        "tabs": "Color panes",
+        "maskTint": "Mask tint"
+      },
+      "historyPane": {
+        "count_one": "{{count}} step",
+        "count_other": "{{count}} steps",
+        "empty": "No edits yet.",
+        "steps": "Edit history"
+      },
+      "overviewPane": {
+        "pan": "Pan the canvas view"
+      },
+      "treeTabs": "Layer panel views",
+      "modifiers": {
+        "disable": "Disable",
+        "enable": "Enable",
+        "parentDisabled": "Layer is disabled",
+        "toggleActive": "Enable/disable",
+        "denoise": "Denoise limit",
+        "denoiseHelp": "Caps how strongly generation may repaint the masked area.",
+        "noise": "Noise",
+        "regenerateRegion": "Regenerate region",
+        "removeRegion": "Remove regenerate region",
+        "regionHint": "Shows this layer's content as a live inpaint mask: everything on the layer, now and as you keep editing it, marks its area to regenerate while enabled.",
+        "noiseHelp": "Adds noise inside the masked area before generation.",
+        "removeDenoise": "Remove denoise limit",
+        "removeNoise": "Remove noise",
+        "brightnessContrast": "Brightness/Contrast",
+        "duplicateAdjustment": "Duplicate adjustment",
+        "renameAdjustment": "Rename adjustment",
+        "renameRegion": "Rename region",
+        "moveDown": "Move down",
+        "moveUp": "Move up",
+        "removeAdjustment": "Remove adjustment",
+        "reorderAdjustment": "Reorder adjustment",
+        "moveReferenceImage": "Move reference image",
+        "moveToLayer": "Move to “{{name}}”"
       }
     },
     "gallery": {
@@ -2892,7 +3447,8 @@
         "navigationRight": "Gallery navigation right",
         "navigationUp": "Gallery navigation up",
         "selectAllOnPage": "Select all gallery images on page",
-        "toggleStarImage": "Toggle gallery image star"
+        "toggleStarImage": "Toggle gallery image star",
+        "toggleStarredOnly": "Toggle gallery starred-only filter"
       },
       "clearClusterSearch": "Clear cluster filter",
       "clearImageSearch": "Clear image similarity search",
@@ -2934,6 +3490,7 @@
       "emptyBoardUploadHint": "Drop media here or click to upload",
       "exportProjectFromBoard": "Export project (.invk)",
       "expandStarredItems": "Expand starred items",
+      "filterAndSortBoards": "Filter & sort boards",
       "generationProgress": "Generation progress",
       "generationProgressPercent": "Generation {{percentage}}%",
       "imageCount_one": "{{count}} image",
@@ -2982,9 +3539,49 @@
       "newest": "Newest",
       "noBoardsMatchSearch": "No boards match this search.",
       "noImagesMatch": "No items match this board, tab, or search.",
+      "noStarredItemsMatch": "No starred items match this board, tab, or search.",
       "oldest": "Oldest",
       "otherProjectBoards": "Other projects' boards",
       "pagination": "Pagination",
+      "picker": {
+        "addedItem": "{{name}} (added)",
+        "boardCount_one": "{{count}} board",
+        "boardCount_other": "{{count}} boards",
+        "boardsLabel": "Boards",
+        "changeBoardNamed": "Change board ({{name}})",
+        "chooseImage": "Choose image",
+        "chooseMedia": "Choose image or video",
+        "chooseVideo": "Choose video",
+        "dropHint": "or drop one from the Gallery",
+        "dropImage": "Drop image",
+        "dropMedia": "Drop image or video",
+        "dropVideo": "Drop video",
+        "empty": "Nothing in {{name}} yet",
+        "findBoard": "Find a board…",
+        "itemCount_one": "{{count}} item",
+        "itemCount_other": "{{count}} items",
+        "itemsLabel": "Gallery items",
+        "matchCount_one": "{{count}} match",
+        "matchCount_other": "{{count}} matches",
+        "openGallery": "Open Gallery",
+        "remainingCount_one": "{{count}} more can be added",
+        "remainingCount_other": "{{count}} more can be added",
+        "remainingNone": "Nothing more can be added",
+        "removeImage": "Remove image",
+        "removeMedia": "Remove",
+        "removeVideo": "Remove video",
+        "replaceHint": "Click to replace, or drop from the Gallery",
+        "replaceImage": "Replace image",
+        "replaceMedia": "Replace",
+        "replaceVideo": "Replace video",
+        "searchIn": "Search {{name}}…",
+        "unsupportedImage": "Images can't be used here",
+        "unsupportedVideo": "Videos can't be used here",
+        "upload": "Upload",
+        "uploadFailed": "The upload didn't go through. Check the notifications for details.",
+        "windowLimit": "Showing the first {{count}} items. Narrow the search to reach the rest.",
+        "working": "Working…"
+      },
       "preparingDownload": "Preparing download",
       "renameBoard": "Rename board",
       "resizeBoardPanel": "Resize board panel",
@@ -3012,12 +3609,17 @@
       "settingsGridSize": "Grid Size",
       "settingsThumbnails": "Thumbnails",
       "showPendingItems": "Show pending items",
-      "sortBoards": "Sort boards",
       "sortBoardsAscending": "Sort boards ascending",
       "sortBoardsBy": "Sort by",
       "sortBoardsDescending": "Sort boards descending",
+      "sortBy": "Sort by",
       "starImage": "Star {{name}}",
+      "showAllStarred": "Show all",
+      "showAllStarredItems": "Show all starred items",
       "starredItems": "Starred",
+      "starredOnly": "Starred only",
+      "starredOnlyTooltip": "Show only starred items",
+      "starredOnlyUnavailable": "The starred filter does not apply to similarity results",
       "starSelection": "Star selection",
       "statusChip_one": "Gallery: {{count}} item",
       "statusChip_other": "Gallery: {{count}} items",
@@ -3038,13 +3640,14 @@
       "uploadSuccessTitle_other": "Uploaded {{count}} files",
       "uploadSummary": "{{images}} and {{videos}} uploaded to {{board}}. {{failed}} failed.",
       "uploadsUnavailableForDateBoards": "Uploads are unavailable for date boards",
-      "uploadUnsupported": "No supported media files to upload (PNG, JPEG, WebP, or MP4).",
+      "uploadUnsupported": "No supported media files to upload (PNG, JPEG, or WebP images; video files; or audio files).",
       "videoCount_one": "{{count}} video",
       "videoCount_other": "{{count}} videos",
       "windowAnchored": "Showing this board from item {{index}}.",
       "backToBoardTop": "Back to top",
       "windowLimit": "Showing the first {{count}} items. Narrow the search or switch to Pages to reach the rest.",
-      "windowLimitFrom": "Showing {{count}} items from item {{index}}. Narrow the search or switch to Pages to reach the rest."
+      "windowLimitFrom": "Showing {{count}} items from item {{index}}. Narrow the search or switch to Pages to reach the rest.",
+      "boardOrder": "Board order"
     },
     "queueStatus": {
       "idle": "Queue idle",
@@ -3058,11 +3661,6 @@
       "label": "Server Status",
       "labelWithError": "{{label}}: {{error}}"
     },
-    "versionStatus": {
-      "chipLabel": "Version 7.0",
-      "description": "Invoke V7 shell version 7.0.",
-      "label": "Version"
-    },
     "video": {
       "accelerator": "{{label}} (fast)",
       "acceleratorHelp": "Runs the {{label}} distillation LoRA at {{steps}} steps. Slower but sometimes higher-quality results with it off.",
@@ -3072,6 +3670,7 @@
       "cfg": "CFG",
       "cfgLowNoise": "CFG (Low Noise)",
       "cfgLowNoiseHelp": "Guidance for the low-noise half of the A14B expert schedule.",
+      "chooseReference": "Choose from Gallery",
       "derivedSize": "Output size: {{width}} × {{height}}",
       "derivedSizeUnavailable": "Output size unavailable for the current settings.",
       "dimensions": "Dimensions",
@@ -3107,24 +3706,22 @@
       "initialFrames": "Start & End Images",
       "initialVideo": "Initial Video",
       "initialVideoBlocked": "Clear the first frame to extend a video instead.",
+      "initialVideoCapBlocked": "All 3 video reference slots are in use, so there is no room for the continuity reference this clip needs. Remove a video reference first.",
       "lastFrame": "Last Frame",
       "lastFrameExtendHelp": "Optional destination: the extension ends on this image.",
       "lastFrameHelp": "Optional: the video ends on this image (interpolates from the first frame).",
       "removeClip": "Remove video",
-      "removeFrame": "Remove",
-      "replaceClip": "Replace the initial video",
-      "replaceFrame": "Replace the frame image",
+      "sampleLength": "Sample Length (Frames)",
+      "sampleLengthWithSeconds": "Sample Length · {{seconds}}s",
+      "trim": "Trim",
       "trimEnd": "End Frame",
+      "trimEndShort": "End",
       "trimHelp": "The kept range of the source clip. The extension continues from the end frame.",
       "trimStart": "Start Frame",
-      "unsupportedImageFile": "Please choose a PNG, JPEG, or WebP image.",
+      "trimStartShort": "Start",
       "unsupportedVideoFile": "Please choose a video file.",
-      "uploadClip": "Upload a video",
-      "uploadFrame": "Upload a frame image",
-      "uploadOrDropClip": "Upload or drop a video from the Gallery",
-      "uploadOrDropFrame": "Upload or drop an image from the Gallery",
+      "uploadImageReference": "Upload image",
       "uploadingClip": "Uploading video…",
-      "uploadingFrame": "Uploading image…",
       "clearStaleMedia": "Clear",
       "staleFirstFrame": "A first frame is set, but this model does not support starting from one.",
       "staleLastFrame": "A last frame is set, but this model does not support ending on one.",
@@ -3148,7 +3745,28 @@
         "singleLow": "\"{{mainName}}\" is tagged as the low-noise expert. When running a single expert, the high-noise one is usually the better choice.",
         "swap": "Swap experts",
         "swapped": "The filename tags suggest these two experts are swapped. The wiring is authoritative — swap if unintended."
-      }
+      },
+      "addReference": "Add reference",
+      "dropReference": "Drop Reference",
+      "moveReferenceDown": "Move reference down",
+      "moveReferenceUp": "Move reference up",
+      "referenceConditioningAudio": "Audio only",
+      "referenceConditioningVideo": "Video only",
+      "referenceConditioningVideoAudio": "Video + audio",
+      "referenceDetailMatch": "Match generation size",
+      "referenceDetailMax": "Max detail (2048px, slower)",
+      "referenceExtendCapFull": "Initial video not set",
+      "referenceExtendCapFullDescription": "All 3 video reference slots are in use, so there is no room for the continuity reference this clip needs. Remove a video reference, then drop the clip again.",
+      "referenceExtendHelp": "The generated video is appended to this clip at its End Frame. A linked video reference samples up to the last ~5 seconds before that cutpoint for continuity — never more than the generated clip's own length, since the model discards the overrun at the seam. Its trim re-derives whenever the cutpoints or the frame count change.",
+      "referenceImageCapRace": "All {{max}} image reference slots filled while this one was loading, so it was not added.",
+      "referenceImageCost": "{{width}}×{{height}} · {{rows}} rows per step",
+      "referenceVideoCapRace": "All {{max}} video or audio reference slots filled while this one was loading, so it was not added.",
+      "referenceFromInitialVideo": "Initial video",
+      "references": "References",
+      "referencesHelp": "Up to 3 videos and 9 images condition the generation, in order — reordering references changes the result. A video reference can contribute its image track, its soundtrack, or both. An uploaded audio file becomes a waveform clip that fills a video slot and conditions on its soundtrack. Every reference adds rows to each denoising step, so the first image reference starts at maximum detail and later ones match the generation size.",
+      "removeReference": "Remove reference",
+      "staleReferences": "References are set but the selected model cannot use them.",
+      "uploadVideoReference": "Upload video or audio"
     }
   },
   "workflowLibrary": {
@@ -3204,5 +3822,41 @@
     "title": "Workflows",
     "untitled": "Untitled Workflow",
     "yours": "Yours"
+  },
+  "settingsDialog": {
+    "search": "Search settings…",
+    "clearSearch": "Clear search",
+    "section": "Settings section",
+    "allResults": "All results",
+    "results": "Search results",
+    "resultCount_one": "{{count}} setting found",
+    "resultCount_other": "{{count}} settings found",
+    "noResults": "No settings match your search.",
+    "openEditor": "Open editor",
+    "showInSection": "Show in section",
+    "allWidgetSettings": "All {{widget}} settings…",
+    "loadFailed": "These settings could not be loaded. Try again.",
+    "instanceUnavailable": "Open a project containing this widget to edit its settings.",
+    "projectUnavailable": "Open a project to edit these settings.",
+    "groups": {
+      "application": "Application",
+      "project": "Project",
+      "widgets": "Widgets",
+      "system": "System"
+    },
+    "scope": {
+      "preference": "Saved in your preferences",
+      "project": "Saved with this project",
+      "instance": "Saved with this widget in this project",
+      "server": "Applies to the whole server",
+      "install": "Saved for this install"
+    },
+    "fields": {
+      "comparisonMode": "Comparison mode",
+      "showClusterLabels": "Show cluster labels",
+      "clickSelectsCluster": "Select clusters on click"
+    },
+    "changedFromDefault": "Changed from default",
+    "changedSetting": "{{setting}}: changed from default"
   }
 }

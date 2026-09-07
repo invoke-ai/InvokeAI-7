@@ -1,7 +1,6 @@
 import type { ModelLoadInfo } from '@features/models';
 import type { QueueItem } from '@features/queue/contracts';
 import type { QueueItemProgress } from '@features/queue/react';
-import type { ReactNode } from 'react';
 
 import { Badge, chakra, HStack, Icon, Menu, Portal, Progress, Stack, Text } from '@chakra-ui/react';
 import { useModelLoads } from '@features/models';
@@ -12,6 +11,7 @@ import {
 } from '@features/queue/contracts';
 import { QueueMenuItems, useQueueMenuActions } from '@features/queue/menu';
 import { useIsProcessorPaused } from '@features/queue/react';
+import { useMountEffect } from '@platform/react/useMountEffect';
 import { Button, IconButton } from '@platform/ui/Button';
 import { Group } from '@platform/ui/Group';
 import { MenuContent } from '@platform/ui/Menu';
@@ -21,8 +21,8 @@ import { getDestinationLabel, getSourceLabel } from '@workbench/invocation';
 import { useActiveQueueProgress } from '@workbench/queue-integration/useActiveQueueProgress';
 import { useOpenWorkbenchWidget } from '@workbench/useOpenWorkbenchWidget';
 import { useWorkbenchSelector } from '@workbench/WorkbenchContext';
-import { ChevronDownIcon, ListOrderedIcon, PauseIcon, XIcon } from 'lucide-react';
-import { useCallback, useMemo } from 'react';
+import { ChevronDownIcon, ListOrderedIcon, ListXIcon, PauseIcon, XIcon } from 'lucide-react';
+import { useCallback, useMemo, useState, type MouseEvent, type PointerEvent, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 
 const TOOLTIP_CONTENT_PROPS = { maxW: '22rem', p: '0' };
@@ -41,7 +41,9 @@ export const QueueCluster = () => {
   const modelLoads = useModelLoads();
   const openWorkbenchWidget = useOpenWorkbenchWidget();
   const actions = useQueueMenuActions({ includeOpenQueue: true });
-  const cancelCurrent = actions[0];
+  const [cancelCurrent, cancelAll] = actions;
+  const [isCancelHovered, setIsCancelHovered] = useState(false);
+  const [isShiftHeld, setIsShiftHeld] = useState(false);
 
   const { progress: runningProgress, queueItems, summary } = useActiveQueueProgress();
   const { current, remaining, total } = summary;
@@ -55,8 +57,41 @@ export const QueueCluster = () => {
   const tone: QueueTone = isPaused && hasOpenWork ? 'paused' : hasOpenWork && isConnected ? 'running' : 'idle';
   const progressValue = getDeterminateProgressFraction(runningProgress?.percentage);
   const isCancellable = !cancelCurrent?.disabled;
+  const [lastCancellable, setLastCancellable] = useState(isCancellable);
+
+  // The "x" unmounts while hovered when the running job finishes, so its
+  // pointer-leave never fires; reset the gesture state with it.
+  if (isCancellable !== lastCancellable) {
+    setLastCancellable(isCancellable);
+
+    if (!isCancellable) {
+      setIsCancelHovered(false);
+      setIsShiftHeld(false);
+    }
+  }
+
+  const isCancelAllArmed = isCancelHovered && isShiftHeld && cancelAll !== undefined && !cancelAll.disabled;
 
   const handleOpenQueue = useCallback(() => openWorkbenchWidget('queue'), [openWorkbenchWidget]);
+  const handleCancelPointerEnter = useCallback((event: PointerEvent<HTMLButtonElement>) => {
+    setIsCancelHovered(true);
+    setIsShiftHeld(event.shiftKey);
+  }, []);
+  const handleCancelPointerLeave = useCallback(() => {
+    setIsCancelHovered(false);
+    setIsShiftHeld(false);
+  }, []);
+  const handleCancelClick = useCallback(
+    (event: MouseEvent<HTMLButtonElement>) => {
+      if (event.shiftKey && cancelAll && !cancelAll.disabled) {
+        cancelAll.onClick();
+        return;
+      }
+
+      cancelCurrent?.onClick();
+    },
+    [cancelAll, cancelCurrent]
+  );
 
   return (
     <Menu.Root>
@@ -73,7 +108,7 @@ export const QueueCluster = () => {
             fontVariantNumeric="tabular-nums"
             overflow="hidden"
             position="relative"
-            size="xs"
+            size="sm"
             px={2}
             variant={tone === 'idle' ? 'outline' : 'subtle'}
             onClick={handleOpenQueue}
@@ -90,24 +125,37 @@ export const QueueCluster = () => {
         </QueueButtonTooltip>
 
         {isCancellable && cancelCurrent ? (
-          <Tooltip content={cancelCurrent.label} showArrow>
+          <Tooltip
+            content={
+              isCancelAllArmed && cancelAll
+                ? cancelAll.label
+                : `${cancelCurrent.label} · ${t('topbar.queue.shiftCancelsAll')}`
+            }
+            showArrow
+          >
             <IconButton
-              aria-label={cancelCurrent.label}
+              aria-label={isCancelAllArmed && cancelAll ? cancelAll.label : cancelCurrent.label}
               color="fg.error"
-              size="xs"
+              size="sm"
               variant="outline"
-              onClick={cancelCurrent.onClick}
+              onClick={handleCancelClick}
+              onPointerEnter={handleCancelPointerEnter}
+              onPointerLeave={handleCancelPointerLeave}
             >
-              <Icon as={XIcon} />
+              <Icon as={isCancelAllArmed ? ListXIcon : XIcon} />
             </IconButton>
           </Tooltip>
         ) : null}
+        {/* Shift over the hovered button swaps it to cancel-all live; pointer
+            events alone cannot see a bare shift press, so watch the keyboard
+            only while hovered. */}
+        {isCancelHovered ? <ShiftKeyWatcher onChange={setIsShiftHeld} /> : null}
 
         <Menu.Trigger asChild>
           <IconButton
             aria-label={t('topbar.queue.actions')}
             color="fg.subtle"
-            size="xs"
+            size="sm"
             minW="0"
             w="6"
             variant="outline"
@@ -128,6 +176,24 @@ export const QueueCluster = () => {
       </Portal>
     </Menu.Root>
   );
+};
+
+const ShiftKeyWatcher = ({ onChange }: { onChange: (isShiftHeld: boolean) => void }) => {
+  useMountEffect(() => {
+    const readShift = (event: KeyboardEvent) => onChange(event.shiftKey);
+    const clearShift = () => onChange(false);
+
+    window.addEventListener('keydown', readShift);
+    window.addEventListener('keyup', readShift);
+    window.addEventListener('blur', clearShift);
+    return () => {
+      window.removeEventListener('keydown', readShift);
+      window.removeEventListener('keyup', readShift);
+      window.removeEventListener('blur', clearShift);
+    };
+  });
+
+  return null;
 };
 
 const QueueButtonTooltip = ({

@@ -20,6 +20,16 @@ const SELECTED_CONTAINER_CSS: SystemStyleObject = {
   color: 'accent.contrast',
 } as const;
 
+/**
+ * While a compatible drag targets the row, the container's own hover fill
+ * stands down: it would paint over the accent drop tint the row draws behind
+ * it, flashing it out right as the drag arrives.
+ */
+const DROP_TARGET_CONTAINER_CSS: SystemStyleObject = {
+  ...ROW_CONTAINER_CSS,
+  _hover: { bg: 'transparent' },
+} as const;
+
 /** The container owns the fill, so the button contributes only its focus ring. */
 const ROW_BUTTON_CSS = { _hover: { bg: 'transparent' }, bg: 'transparent' } as const;
 
@@ -33,6 +43,7 @@ export const GalleryBoardRowShell = ({
   ariaLabel,
   children,
   cover,
+  isDropTarget = false,
   isSelected = false,
   label,
   labelWeight,
@@ -47,6 +58,8 @@ export const GalleryBoardRowShell = ({
   /** Trailing metadata rendered inside the row button (dates, counts, badges). */
   children?: ReactNode;
   cover: ReactNode;
+  /** A compatible drag is in flight and this row could receive it. */
+  isDropTarget?: boolean;
   isSelected?: boolean;
   label: string;
   labelWeight?: string;
@@ -55,7 +68,10 @@ export const GalleryBoardRowShell = ({
   onContextMenu?: (event: MouseEvent) => void;
   onSelect: () => void;
 }) => {
-  const containerCss = useMemo(() => (isSelected ? SELECTED_CONTAINER_CSS : ROW_CONTAINER_CSS), [isSelected]);
+  const containerCss = useMemo(
+    () => (isSelected ? SELECTED_CONTAINER_CSS : isDropTarget ? DROP_TARGET_CONTAINER_CSS : ROW_CONTAINER_CSS),
+    [isDropTarget, isSelected]
+  );
 
   return (
     <HStack ref={ref} css={containerCss} gap="0" pe="1" w="full">

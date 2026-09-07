@@ -217,6 +217,43 @@ describe('gallery optimistic rollback against the real reducer', () => {
     expect(getProjectWidgetValues(getProject(restored, projectId), 'gallery').selectedImage).toEqual(galleryItem);
   });
 
+  it('restores swept references even when an initial video occupies the panel (reference-extend pair)', () => {
+    // sourceVideo <-> references is a LEGAL pair on a Ref2VA reference-extend
+    // panel; treating them as rivals made a failed deletion permanently drop
+    // the reference the sweep removed.
+    const seeded = seedProjectWithItem();
+    const projectId = seeded.projectId;
+    const sourceClip = {
+      endFrame: 79,
+      fps: 16,
+      height: 480,
+      numFrames: 81,
+      startFrame: 0,
+      video_name: 'clip.mp4',
+      width: 832,
+    };
+    const imageReference = { detail: 'max', image: { height: 480, image_name: 'a.png', width: 832 }, kind: 'image' };
+    const state = workbenchReducer(seeded.state, {
+      projectId,
+      type: 'patchWidgetValues',
+      values: { references: [imageReference], sourceVideo: sourceClip },
+      widgetId: 'video',
+    });
+
+    const before = captureGalleryWidgetKeyValues(state.projects);
+    const afterRemoval = workbenchReducer(state, { itemKeys: ['image:a.png'], type: 'removeGalleryItems' });
+
+    expect(getProjectWidgetValues(getProject(afterRemoval, projectId), 'video').references).toEqual([]);
+
+    const entries = diffGalleryWidgetKeyValues(before, afterRemoval.projects);
+    const patches = selectRestorableGalleryWidgetPatches(entries, afterRemoval.projects);
+    const restored = applyRestorePatches(afterRemoval, patches);
+    const videoValues = getProjectWidgetValues(getProject(restored, projectId), 'video');
+
+    expect(videoValues.references).toEqual([imageReference]);
+    expect(videoValues.sourceVideo).toEqual(sourceClip);
+  });
+
   it('still restores a cleared video slot when its rival stayed empty', () => {
     const seeded = seedProjectWithItem();
     const projectId = seeded.projectId;

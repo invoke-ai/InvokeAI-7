@@ -2,6 +2,8 @@ import type { WidgetManifest } from '@workbench/widgetContracts';
 
 import { MapIcon } from 'lucide-react';
 
+import { imageMapSettingsContribution } from './settingsContribution';
+
 export const imageMapWidgetManifest: WidgetManifest = {
   allowFloating: true,
   allowMultiple: false,
@@ -12,6 +14,6 @@ export const imageMapWidgetManifest: WidgetManifest = {
   label: (t) => t('widgets.labels.imageMap'),
   load: () => import('./implementation').then((module) => module.widgetImplementation),
   loadHost: () => import('./ImageMapDataRuntime').then((module) => module.ImageMapDataRuntime),
-  settingsSection: 'imageMap',
+  settings: imageMapSettingsContribution,
   version: 1,
 };

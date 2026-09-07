@@ -10,9 +10,12 @@ import {
   inputRecipe,
   menuSlotRecipe,
   numberInputSlotRecipe,
+  popoverSlotRecipe,
   progressCircleSlotRecipe,
+  scrollAreaSlotRecipe,
   segmentGroupSlotRecipe,
   selectSlotRecipe,
+  skeletonRecipe,
   sliderSlotRecipe,
   tabsSlotRecipe,
   textareaRecipe,
@@ -89,6 +92,26 @@ const ref = (step: NeutralStep): string => `{colors.neutral.${step}}`;
 const stepRef = (darkStep: NeutralStep, lightStep: NeutralStep): TokenValue =>
   colorToken((theme) => ref(theme.colorScheme === 'light' ? lightStep : darkStep));
 
+/**
+ * The high-contrast boost only differs by color scheme, so two conditions
+ * cover every theme: ramp-step references resolve per theme on their own.
+ * Unrelated to Chakra's built-in `_highContrast` (`forced-colors`); these key
+ * off the app preference.
+ */
+const withHighContrast = (token: TokenValue, darkStep: NeutralStep, lightStep: NeutralStep): TokenValue => {
+  token.value._highContrastDark = ref(darkStep);
+  token.value._highContrastLight = ref(lightStep);
+  return token;
+};
+
+/** A ramp-step token with a stronger step pair under high contrast. */
+const contrastStepRef = (
+  darkStep: NeutralStep,
+  lightStep: NeutralStep,
+  highDarkStep: NeutralStep,
+  highLightStep: NeutralStep
+): TokenValue => withHighContrast(stepRef(darkStep, lightStep), highDarkStep, highLightStep);
+
 const STEPS: NeutralStep[] = [50, 100, 200, 300, 400, 500, 600, 700, 800, 900, 950];
 
 /** The default panel surface of a theme — `bg.subtle`'s step. Used as the floor for tints. */
@@ -145,20 +168,21 @@ const semanticColors = {
   'bg.success': mix(success, 14, surface),
   'bg.warning': mix(warning, 14, surface),
 
-  // Foreground.
+  // Foreground. Muted/subtle text carries the contrast burden: under high
+  // contrast they climb toward `fg` while staying a visible rank below it.
   fg: stepRef(50, 950),
-  'fg.muted': stepRef(300, 700),
-  'fg.subtle': stepRef(400, 500),
+  'fg.muted': contrastStepRef(300, 700, 200, 800),
+  'fg.subtle': contrastStepRef(400, 500, 300, 700),
   'fg.grid': colorToken((theme) => theme.colors.grid),
   'fg.error': colorToken(danger),
   'fg.success': colorToken(success),
   'fg.warning': colorToken(warning),
 
   // Borders.
-  border: stepRef(600, 300),
-  'border.subtle': stepRef(600, 300),
-  'border.muted': stepRef(600, 300),
-  'border.emphasized': stepRef(500, 400),
+  border: contrastStepRef(600, 300, 300, 500),
+  'border.subtle': contrastStepRef(600, 300, 300, 500),
+  'border.muted': contrastStepRef(600, 300, 300, 500),
+  'border.emphasized': contrastStepRef(500, 400, 200, 600),
   'border.error': colorToken(danger),
   'border.image': colorToken((theme) => (theme.colorScheme === 'light' ? 'oklch(0 0 0 / 0.1)' : 'oklch(1 0 0 / 0.1)')),
 
@@ -179,15 +203,35 @@ const semanticColors = {
     fg: grayToken((theme) => (theme.colorScheme === 'light' ? theme.colors.neutral[950] : theme.colors.neutral[50])),
     subtle: grayToken((theme) => theme.colors.fill),
     muted: grayToken((theme) => theme.colors.control),
-    emphasized: grayToken((theme) =>
-      theme.colorScheme === 'light' ? theme.colors.neutral[400] : theme.colors.neutral[500]
+    emphasized: withHighContrast(
+      grayToken((theme) => (theme.colorScheme === 'light' ? theme.colors.neutral[400] : theme.colors.neutral[500])),
+      300,
+      600
     ),
     solid: grayToken((theme) => (theme.colorScheme === 'light' ? theme.colors.neutral[950] : theme.colors.neutral[50])),
     focusRing: grayToken(accentSolid),
-    border: grayToken((theme) =>
-      theme.colorScheme === 'light' ? theme.colors.neutral[400] : theme.colors.neutral[500]
+    border: withHighContrast(
+      grayToken((theme) => (theme.colorScheme === 'light' ? theme.colors.neutral[400] : theme.colors.neutral[500])),
+      300,
+      600
+    ),
+    /**
+     * Interaction-fill base for the default palette: fg pulled toward the
+     * accent, so translucent hovers read in the menus' cool-tinted family
+     * instead of a flat gray. Used at low alpha (`gray.hoverTint/10`).
+     */
+    hoverTint: grayToken(
+      (theme) =>
+        `color-mix(in oklab, ${theme.colors.accent.solid} 40%, ${
+          theme.colorScheme === 'light' ? theme.colors.neutral[950] : theme.colors.neutral[50]
+        })`
     ),
   },
+  // Palette-tinted interaction fills for the non-default palettes buttons use.
+  red: { hoverTint: { value: '{colors.red.fg}' } },
+  orange: { hoverTint: { value: '{colors.orange.fg}' } },
+  green: { hoverTint: { value: '{colors.green.fg}' } },
+  blue: { hoverTint: { value: '{colors.blue.fg}' } },
   /**
    * Invoke identity palette (lime). Authored from two seeds (`solid` + `contrast`),
    * like `accent`; the rest derive. `brand.fg` is the seed on the dark themes and a
@@ -204,6 +248,7 @@ const semanticColors = {
     emphasized: mix(brandSolid, 36, surface),
     focusRing: colorToken(accentSolid),
     border: colorToken(brandSolid),
+    hoverTint: colorToken(brandFg),
   },
   /** Selection / focus palette (blue). Use via `accent.solid` or `colorPalette="accent"`. */
   accent: {
@@ -215,6 +260,7 @@ const semanticColors = {
     emphasized: mix(accentSolid, 36, surface),
     focusRing: colorToken(accentSolid),
     border: colorToken(accentSolid),
+    hoverTint: colorToken(accentSolid),
   },
 };
 
@@ -223,12 +269,21 @@ const semanticColors = {
 const themeConditions = Object.fromEntries(
   NON_DEFAULT_THEMES.map((theme) => [conditionName(theme.id), `:root[data-theme=${theme.id}]`])
 );
+// The attribute pair outranks the plain `[data-theme]` conditions; light
+// themes are enumerated so a future light theme cannot fall into the dark arm.
+const lightThemeSelectors = THEMES.filter((theme) => theme.colorScheme === 'light')
+  .map((theme) => `[data-theme=${theme.id}]`)
+  .join(', ');
+const highContrastConditions = {
+  highContrastDark: `:root[data-high-contrast=true]:not(${lightThemeSelectors})`,
+  highContrastLight: `:root[data-high-contrast=true]:is(${lightThemeSelectors})`,
+};
 
 const motionDurationToken = (base: string): TokenValue => ({ value: { base, _reduceMotion: '1ms' } });
 const motionAnimationToken = (base: string): TokenValue => ({ value: { base, _reduceMotion: 'none' } });
 
 const config = defineConfig({
-  conditions: { ...themeConditions, reduceMotion: ':root[data-reduce-motion=true]' },
+  conditions: { ...themeConditions, ...highContrastConditions, reduceMotion: ':root[data-reduce-motion=true]' },
   globalCss: {
     'html, body, #root': {
       height: '100%',
@@ -238,10 +293,18 @@ const config = defineConfig({
       color: 'fg',
       fontFamily: 'body',
       margin: 0,
-      minHeight: '720px',
-      minWidth: '960px',
       overflow: 'hidden',
     },
+    // Interactive elements keep the default arrow even over their text —
+    // without this, non-button rows (picker options, menu items) compute
+    // `auto` and show the I-beam. Recipes still override (e.g. not-allowed).
+    // Attribute values stay unquoted: serialized markup assertions (SamOptions)
+    // grep for the quoted forms. No `[role=combobox]` — zag puts that role on
+    // type-able inputs, which must keep the I-beam.
+    'button, [role=button], [role=menuitem], [role=menuitemcheckbox], [role=menuitemradio], [role=option], [role=tab], [role=radio], [role=checkbox], [role=switch]':
+      {
+        cursor: 'default',
+      },
     // While a gallery-item drag is in flight (body flag set by
     // GalleryDragCursor) the closed-hand cursor applies everywhere: without
     // the descendant rule, every element that sets its own cursor (buttons,
@@ -264,8 +327,11 @@ const config = defineConfig({
       '--wb-motion-animation-iteration-count': '1',
       scrollBehavior: 'auto !important',
     },
+    // `backgroundImage` too: the shine gradient frozen mid-sweep reads as a
+    // smudge, so reduce-motion falls back to the flat fill.
     ':root[data-reduce-motion="true"] .chakra-skeleton': {
       animation: 'none !important',
+      backgroundImage: 'none !important',
     },
     // A loading spinner is essential status, not decoration — frozen, its arc
     // reads as a broken icon. It slows to a crawl instead of stopping; WCAG
@@ -278,6 +344,17 @@ const config = defineConfig({
   },
   theme: {
     tokens: {
+      // Pro-app convention: controls keep the default arrow cursor; pointer is
+      // reserved for links. Overrides Chakra's `button`/`switch` pointer tokens.
+      cursor: {
+        button: { value: 'default' },
+        switch: { value: 'default' },
+      },
+      radii: {
+        // The shared corner for interactive controls — buttons and the
+        // segment-tab pills meet between Chakra's l2 (4px) and md (6px).
+        control: { value: '0.3125rem' },
+      },
       fonts: {
         body: {
           value: "Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
@@ -310,6 +387,7 @@ const config = defineConfig({
     recipes: {
       button: buttonRecipe,
       input: inputRecipe,
+      skeleton: skeletonRecipe,
       textarea: textareaRecipe,
     },
     slotRecipes: {
@@ -320,7 +398,9 @@ const config = defineConfig({
       hoverCard: hoverCardSlotRecipe,
       menu: menuSlotRecipe,
       numberInput: numberInputSlotRecipe,
+      popover: popoverSlotRecipe,
       progressCircle: progressCircleSlotRecipe,
+      scrollArea: scrollAreaSlotRecipe,
       segmentGroup: segmentGroupSlotRecipe,
       select: selectSlotRecipe,
       slider: sliderSlotRecipe,

@@ -1,5 +1,7 @@
 import type { CanvasControlLayerContract, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
 
+import { documentFrom, groupContract } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
+import { compileDocumentLeaves } from '@workbench/canvas-engine/document-model/documentModel';
 import { createTestStubRasterBackend, type StubRasterSurface } from '@workbench/canvas-engine/render/raster.testStub';
 import { describe, expect, it } from 'vitest';
 
@@ -7,7 +9,7 @@ import {
   bakePixelEditSurface,
   buildMaterializedPixelLayer,
   decidePixelEdit,
-  isLayerPixelEditEligible,
+  isLeafPixelEditEligible,
 } from './controlPixelEdit';
 
 const control = (overrides: Partial<CanvasControlLayerContract> = {}): CanvasControlLayerContract => ({
@@ -96,7 +98,7 @@ describe('decidePixelEdit', () => {
   });
 });
 
-describe('isLayerPixelEditEligible', () => {
+describe('isLeafPixelEditEligible', () => {
   const rasterPaint: CanvasLayerContract = {
     blendMode: 'normal',
     id: 'raster',
@@ -149,7 +151,14 @@ describe('isLayerPixelEditEligible', () => {
     ['disabled control', control({ isEnabled: false }), false],
     ['missing layer', undefined, false],
   ] as const)('returns %s eligibility for %s', (_scenario, layer, expected) => {
-    expect(isLayerPixelEditEligible(layer)).toBe(expected);
+    expect(isLeafPixelEditEligible(layer ? compileDocumentLeaves(documentFrom([layer]))[0] : null)).toBe(expected);
+  });
+
+  it('refuses a leaf whose ancestor is disabled or locked', () => {
+    const gated = compileDocumentLeaves(documentFrom([groupContract('g', [control()], { isEnabled: false })]));
+    expect(isLeafPixelEditEligible(gated[0])).toBe(false);
+    const locked = compileDocumentLeaves(documentFrom([groupContract('g', [control()], { isLocked: true })]));
+    expect(isLeafPixelEditEligible(locked[0])).toBe(false);
   });
 });
 
@@ -171,7 +180,10 @@ describe('buildMaterializedPixelLayer', () => {
 
   it('clears raster adjustments after baking them into a paint source', () => {
     const before: CanvasLayerContract = {
-      adjustments: { brightness: 0.2, contrast: -0.1, saturation: 0.3 },
+      adjustments: [
+        { brightness: 0.2, contrast: -0.1, id: 'adj-bc', isEnabled: true, type: 'brightness-contrast' as const },
+        { id: 'adj-hsl', isEnabled: true, saturation: 0.3, type: 'hsl' as const },
+      ],
       blendMode: 'normal',
       id: 'image',
       isEnabled: true,

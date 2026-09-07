@@ -1,10 +1,11 @@
 import { IconButton } from '@platform/ui/Button';
 import { Tooltip } from '@platform/ui/Tooltip';
 import { SettingsIcon } from 'lucide-react';
-import { useCallback } from 'react';
 
 import { SettingsDialogHost } from './SettingsDialogHost';
 import { openWorkbenchSettings } from './settingsDialogStore';
+
+const handleOpen = () => openWorkbenchSettings();
 
 /**
  * The Launchpad's settings entry point, kept deliberately thin. The workbench
@@ -12,8 +13,6 @@ import { openWorkbenchSettings } from './settingsDialogStore';
  * {@link SettingsDialogHost} on its own.
  */
 export const SettingsButton = () => {
-  const handleOpen = useCallback(() => openWorkbenchSettings(), []);
-
   return (
     <>
       <Tooltip content="Settings">

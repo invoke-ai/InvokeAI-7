@@ -300,6 +300,7 @@ const preferencesSnapshot = {
   reduceMotion: false,
   themeId: 'classic' as const,
   workflowEdgeStyle: 'curved' as const,
+  workflowEdgesBehindNodes: false,
   workflowShowMinimap: true,
   workflowSnapToGrid: false,
   workflowValidateConnections: true,
@@ -313,7 +314,6 @@ const preferencesSnapshot = {
 // reason `preferencesSnapshot` above is hoisted rather than built inline.
 const createProjectSnapshot = () => ({
   galleryValues: {},
-  graphHistory: [],
   id: 'project-1',
   isWorkflowRunning: false,
   projectGraph: { edges: [], nodes: [], version: 1 as const },
@@ -330,8 +330,6 @@ const createWorkflowUiAdapter = (): WorkflowUiAdapter => {
       editGraph: vi.fn(),
       redo: vi.fn(),
       replace: vi.fn(),
-      restoreSnapshot: vi.fn(),
-      saveSnapshot: vi.fn(),
       undo: vi.fn(),
     },
     getProjectGraph: () => ({ edges: [], nodes: [], version: 1 as const }),
@@ -430,13 +428,13 @@ describe('GraphPreviewDialog', () => {
   });
 
   const switchToMode = async (mode: 'graph' | 'list' | 'json') => {
-    const input = document.querySelector<HTMLInputElement>(`input[value="${mode}"]`);
-    expect(input).not.toBeNull();
-    const label = input?.closest('label');
-    expect(label).not.toBeNull();
+    const tab = [...document.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find((candidate) =>
+      candidate.id.endsWith(`-tab-${mode}`)
+    );
+    expect(tab).not.toBeUndefined();
 
     await act(() => {
-      label?.click();
+      tab?.click();
     });
   };
 
@@ -560,14 +558,7 @@ describe('GraphPreviewDialog', () => {
 
     expect(document.querySelector('[data-flow-stub]')).not.toBeNull();
 
-    const jsonInput = document.querySelector<HTMLInputElement>('input[value="json"]');
-    expect(jsonInput).not.toBeNull();
-    const jsonLabel = jsonInput?.closest('label');
-    expect(jsonLabel).not.toBeNull();
-
-    await act(() => {
-      jsonLabel?.click();
-    });
+    await switchToMode('json');
 
     expect(document.querySelector('[data-flow-stub]')).toBeNull();
     expect(document.body.textContent ?? '').toContain('"denoise_latents"');
@@ -622,7 +613,10 @@ describe('GraphPreviewDialog', () => {
     await clickButtonWithText('denoise_latents');
 
     // List selection reveals the node in graph mode, not list mode.
-    expect(document.querySelector<HTMLInputElement>('input[value="graph"]')?.checked).toBe(true);
+    const graphTab = [...document.querySelectorAll<HTMLElement>('[role="tab"]')].find((candidate) =>
+      candidate.id.endsWith('-tab-graph')
+    );
+    expect(graphTab?.getAttribute('aria-selected')).toBe('true');
     expect(document.querySelector('[data-flow-stub]')).not.toBeNull();
 
     const text = document.body.textContent ?? '';

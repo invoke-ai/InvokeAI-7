@@ -146,6 +146,21 @@ const pointer = (type: string, target: EventTarget, clientX: number, clientY: nu
   );
 };
 
+/** A non-primary touch — a second finger joining the one already down. */
+const secondFinger = (type: string, target: EventTarget, clientX: number, clientY: number): void => {
+  target.dispatchEvent(
+    new PointerEvent(type, {
+      bubbles: true,
+      button: type === 'pointermove' ? -1 : 0,
+      clientX,
+      clientY,
+      isPrimary: false,
+      pointerId: 2,
+      pointerType: 'touch',
+    })
+  );
+};
+
 afterEach(async () => {
   await interact(() => root?.unmount());
   host?.remove();
@@ -172,6 +187,35 @@ describe('PreviewFrame image drag', () => {
       items: [{ kind: 'image', name: 'preview.png' }],
       kind: 'gallery-item',
     });
+  });
+
+  it('gives a second finger the pinch and abandons the drag it interrupted', async () => {
+    // On a touch screen a pinch starts as one finger on the image, which the
+    // pointer sensor has already taken as the start of a drag. The second
+    // finger has to take the gesture over outright: a drag left running would
+    // keep the image following finger one and drop it somewhere on release.
+    const onDrop = await renderHarness();
+    const image = host!.querySelector<HTMLImageElement>('img[alt="preview.png"]')!;
+    const frame = image.parentElement!;
+
+    await interact(() => pointer('pointerdown', image, 140, 140));
+    // Past the sensor's 6px activation distance: the drag is running.
+    await interact(() => pointer('pointermove', image, 170, 140));
+    await interact(() => secondFinger('pointerdown', image, 220, 140));
+    // The fingers spread from 50px apart to 150px, so the pinch trebles the image.
+    await interact(() => {
+      pointer('pointermove', image, 150, 140);
+      secondFinger('pointermove', image, 300, 140);
+    });
+
+    expect(frame.style.transform).toContain('scale(3)');
+
+    await interact(() => {
+      pointer('pointerup', image, 150, 140);
+      secondFinger('pointerup', image, 300, 140);
+    });
+
+    expect(onDrop).not.toHaveBeenCalled();
   });
 
   it('does not offer its own compare target to the image it is showing', async () => {

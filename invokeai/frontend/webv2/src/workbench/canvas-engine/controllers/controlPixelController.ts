@@ -1,6 +1,6 @@
 /** Transactional pixel editing for controls and destructively edited raster images. */
 
-import type { CanvasControlLayerContract, CanvasDocumentContractV2 } from '@workbench/canvas-engine/contracts';
+import type { CanvasControlLayerContract, CanvasDocumentContractV3 } from '@workbench/canvas-engine/contracts';
 import type { BitmapStore } from '@workbench/canvas-engine/document/bitmapStore';
 import type { History } from '@workbench/canvas-engine/history/history';
 import type { ImagePatchApply } from '@workbench/canvas-engine/history/imagePatch';
@@ -15,6 +15,8 @@ import type { PixelEditTransaction, PixelEditPatch, StrokeCommittedEvent } from 
 import type { LayerTransform } from '@workbench/canvas-engine/transform/transformMath';
 import type { Rect } from '@workbench/canvas-engine/types';
 
+import { lookupDocumentLeaf } from '@workbench/canvas-engine/document-model/documentModel';
+import { getDocumentLayer } from '@workbench/canvas-engine/document/documentIndex';
 import { getSourceContentRect } from '@workbench/canvas-engine/document/sources';
 import {
   bakePixelEditSurface,
@@ -25,6 +27,7 @@ import {
 import { createImagePatchEntry } from '@workbench/canvas-engine/history/imagePatch';
 import { createLayerSnapshotEntry } from '@workbench/canvas-engine/history/layerSnapshot';
 import { isEmpty } from '@workbench/canvas-engine/math/rect';
+import { strokeCommitLabel } from '@workbench/canvas-engine/strokeCommit';
 
 export interface PixelEditControllerOptions {
   readonly applyImagePatch: ImagePatchApply;
@@ -36,12 +39,12 @@ export interface PixelEditControllerOptions {
   readonly endBurst: () => void;
   readonly getActiveProjectId: () => string | null;
   readonly getAdjustedSurface: (layer: PixelEditableLayer, entry: LayerCacheEntry) => RasterSurface | null;
-  readonly getDocument: () => CanvasDocumentContractV2 | null;
+  readonly getDocument: () => CanvasDocumentContractV3 | null;
   readonly getTransformSession: () => unknown;
   readonly history: History;
   readonly installPrepared: (prepared: PreparedLayerCacheReplacement, persist?: boolean) => void;
   readonly invalidate: (layerId: string, overlay?: boolean) => void;
-  readonly isCacheReady: (layer: PixelEditableLayer, document: CanvasDocumentContractV2) => boolean;
+  readonly isCacheReady: (layer: PixelEditableLayer, document: CanvasDocumentContractV3) => boolean;
   readonly isOperationIdle: () => boolean;
   readonly layers: LayerCacheStore;
   readonly notifyPainted: (layerId: string) => void;
@@ -99,7 +102,7 @@ export class PixelEditController {
   begin(layerId: string): PixelEditTransaction | null {
     const o = this.options;
     const document = o.getDocument();
-    const layer = document?.layers.find((candidate) => candidate.id === layerId);
+    const layer = getDocumentLayer(document, layerId);
     if (
       !o.canEdit() ||
       !document ||
@@ -112,8 +115,11 @@ export class PixelEditController {
     ) {
       return null;
     }
+    const leaf = lookupDocumentLeaf(document, layerId);
     const contentRect = getSourceContentRect(layer, document);
     const decision = decidePixelEdit({
+      contributionEnabled: leaf?.contributionEnabled ?? false,
+      effectiveLocked: leaf?.effectiveLocked ?? true,
       hasSourceContent: !isEmpty(contentRect),
       isCacheReady: o.isCacheReady(layer, document),
       layer,
@@ -218,7 +224,7 @@ export class PixelEditController {
         !o.canEdit() ||
         !o.isOperationIdle() ||
         document?.selectedLayerId !== layerId ||
-        document.layers.find((candidate) => candidate.id === layerId) !== layer
+        getDocumentLayer(document, layerId) !== layer
       ) {
         cancel();
         return false;
@@ -269,7 +275,7 @@ export class PixelEditController {
           return;
         }
         if (
-          commitPatch(event.tool === 'eraser' ? 'Eraser stroke' : 'Brush stroke', {
+          commitPatch(strokeCommitLabel(event.tool), {
             after: event.afterImageData,
             before: event.beforeImageData,
             rect: event.dirtyRect,
@@ -401,7 +407,7 @@ export class PixelEditController {
         !o.canEdit() ||
         !o.isOperationIdle() ||
         document?.selectedLayerId !== layerId ||
-        document.layers.find((candidate) => candidate.id === layerId) !== layer ||
+        getDocumentLayer(document, layerId) !== layer ||
         !edited ||
         (event && event.layerId !== layerId)
       ) {
@@ -451,7 +457,7 @@ export class PixelEditController {
       commitStroke: (event) =>
         isImageDataEqual(event.beforeImageData, event.afterImageData)
           ? cancel()
-          : commit(event.tool === 'eraser' ? 'Eraser stroke' : 'Brush stroke', event),
+          : commit(strokeCommitLabel(event.tool), event),
       layerId,
     };
     owner = { cancel, layerId };

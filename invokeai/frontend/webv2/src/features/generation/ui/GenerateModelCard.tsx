@@ -15,7 +15,7 @@ import { isGenerateModelConfig, isVaeModelConfig } from '@features/generation/co
 import { Button } from '@platform/ui/Button';
 import { ConfirmDialog } from '@platform/ui/ConfirmDialog';
 import { Field } from '@platform/ui/Field';
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { GenerationModelSelect as ModelSelect, useGenerationUi } from './GenerationUiContext';
@@ -52,6 +52,7 @@ export const GenerateModelCard = ({
   const { i18n, t } = useTranslation();
   const ui = useGenerationUi();
   const { openManager } = ui.models;
+  const openManagerForMainModels = useCallback(() => openManager({ modelType: 'main' }), [openManager]);
   // A switch that clears incompatible settings waits behind a confirm. Only the
   // model is held; the transition is recomputed against live settings on
   // confirm, and the labels shown come from a preview run of the same move.
@@ -142,7 +143,7 @@ export const GenerateModelCard = ({
 
       {selectedModel ? (
         <HStack gap="2" justify="space-between">
-          <Text color="fg.subtle" fontSize="2xs" minW="0">
+          <Text color="fg.muted" fontSize="2xs" minW="0">
             {features.join(' · ')}
           </Text>
           {overrideCount > 0 ? (
@@ -152,7 +153,7 @@ export const GenerateModelCard = ({
           ) : null}
         </HStack>
       ) : isLoadingModels ? (
-        <Text color="fg.subtle" fontSize="2xs">
+        <Text color="fg.muted" fontSize="2xs">
           {t('widgets.generate.loadingModels')}
         </Text>
       ) : loadError ? (
@@ -164,12 +165,12 @@ export const GenerateModelCard = ({
           <Text color="fg.error" fontSize="2xs">
             {t('widgets.generate.noSupportedModels')}
           </Text>
-          <Button alignSelf="flex-start" size="2xs" variant="outline" onClick={openManager}>
+          <Button alignSelf="flex-start" size="2xs" variant="outline" onClick={openManagerForMainModels}>
             {t('widgets.generate.openModelManager')}
           </Button>
         </Stack>
       ) : (
-        <Text color="fg.subtle" fontSize="2xs">
+        <Text color="fg.muted" fontSize="2xs">
           {t('widgets.generate.chooseModelToStart')}
         </Text>
       )}

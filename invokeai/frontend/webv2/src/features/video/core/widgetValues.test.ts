@@ -49,10 +49,11 @@ describe('createDefaultVideoWidgetValues', () => {
     expect(values.steps).toBe(40);
   });
 
-  it('skips a checkpoint-format MiniMax H3 main (transformer override, not a main)', () => {
-    const values = createDefaultVideoWidgetValues([h3Model('checkpoint')]);
-
-    expect(values.model).toBeNull();
+  it('picks a single-file MiniMax H3 checkpoint but never a components-only install', () => {
+    // The checkpoint is the model identity now; the components-only folder
+    // belongs in the Model Components slot, not the top selector.
+    expect(createDefaultVideoWidgetValues([h3Model('checkpoint')]).model?.key).toBe(h3Model('checkpoint').key);
+    expect(createDefaultVideoWidgetValues([{ ...h3Model(), components_only: true }]).model).toBeNull();
   });
 
   it('turns the accelerator on when its LoRAs are installed', () => {
@@ -64,6 +65,48 @@ describe('createDefaultVideoWidgetValues', () => {
 
 describe('syncVideoWidgetValuesWithModels', () => {
   const model = wanModel('i2v_a14b', 'gguf_quantized');
+
+  it('promotes a legacy transformer override to the top model slot', () => {
+    // Pre model-positions persisted shape: the Diffusers install at top, the
+    // single-file transformer in the override slot. The transformer is the
+    // model identity now; the install stays on as its component source.
+    const install = h3Model();
+    const checkpoint = { ...h3Model('checkpoint', 'h3-ckpt'), name: 'MiniMax H3 Ref2VA (int8)', variant: 'ref2va' };
+    const stored = {
+      ...createDefaultVideoWidgetValues([install, checkpoint]),
+      h3TransformerModel: checkpoint,
+      model: install,
+      modelKey: install.key,
+    };
+    const synced = syncVideoWidgetValuesWithModels(stored, [install, checkpoint]);
+
+    expect(synced.model?.key).toBe(checkpoint.key);
+    expect(synced.modelKey).toBe(checkpoint.key);
+    expect(synced.componentSourceModel?.key).toBe(install.key);
+    expect(synced.h3TransformerModel).toBeNull();
+    // Stable: a second sync of the promoted value returns it untouched.
+    expect(syncVideoWidgetValuesWithModels(synced, [install, checkpoint])).toBe(synced);
+  });
+
+  it('keeps the installed Diffusers main when the legacy transformer override is uninstalled', () => {
+    // An uninstalled override must not evict the still-installed install from
+    // the top slot (which would auto-pick a different family): the install
+    // stays, and the dead override is dropped like any uninstalled component.
+    const wan = wanModel('t2v_a14b');
+    const install = h3Model();
+    const checkpoint = { ...h3Model('checkpoint', 'h3-ckpt'), variant: 'ref2va' };
+    const stored = {
+      ...createDefaultVideoWidgetValues([wan, install, checkpoint]),
+      h3TransformerModel: checkpoint,
+      model: install,
+      modelKey: install.key,
+    };
+    const synced = syncVideoWidgetValuesWithModels(stored, [wan, install]);
+
+    expect(synced.model?.key).toBe(install.key);
+    expect(synced.h3TransformerModel).toBeNull();
+    expect(synced.componentSourceModel).toBeNull();
+  });
 
   it('returns the same object when nothing changed', () => {
     const catalog = [model, WAN_VAE_16];

@@ -19,7 +19,7 @@ import {
   isAccountScopeCurrent,
   type AccountScope,
 } from '@platform/state/accountLifecycle';
-import { Button } from '@platform/ui';
+import { Button, CloseButton } from '@platform/ui';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -298,7 +298,7 @@ export const ReferenceImageCropDialog = ({
   }, [close, cropBox, gallery, image, notifications, onApply, onClose]);
 
   return (
-    <Dialog.Root lazyMount open={isOpen} placement="center" size="lg" unmountOnExit onOpenChange={handleOpenChange}>
+    <Dialog.Root lazyMount open={isOpen} size="lg" unmountOnExit onOpenChange={handleOpenChange}>
       <Portal>
         <Dialog.Backdrop />
         <Dialog.Positioner>
@@ -306,6 +306,9 @@ export const ReferenceImageCropDialog = ({
             <Dialog.Header>
               <Dialog.Title>{t('widgets.generate.cropReferenceImage')}</Dialog.Title>
             </Dialog.Header>
+            <Dialog.CloseTrigger asChild>
+              <CloseButton disabled={isApplying} />
+            </Dialog.CloseTrigger>
             <Dialog.Body>
               <Stack gap="3">
                 <Text color="fg.muted" fontSize="xs">
@@ -396,7 +399,7 @@ export const ReferenceImageCropDialog = ({
               >
                 {t('common.reset')}
               </Button>
-              <Button disabled={isApplying} size="xs" variant="outline" onClick={close}>
+              <Button disabled={isApplying} size="xs" variant="ghost" onClick={close}>
                 {t('common.cancel')}
               </Button>
               <Button loading={isApplying} size="xs" onClick={applyCrop}>

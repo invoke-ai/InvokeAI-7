@@ -111,6 +111,7 @@ export const toGraphContract = (backendGraph: BackendGraphContract, label: strin
     sourceNodeId: edge.source.node_id,
     targetField: edge.destination.field,
     targetNodeId: edge.destination.node_id,
+    ...(edge.type ? { type: edge.type } : {}),
   })),
   id: backendGraph.id,
   label,

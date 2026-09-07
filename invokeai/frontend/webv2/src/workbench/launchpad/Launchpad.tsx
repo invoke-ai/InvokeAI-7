@@ -13,6 +13,7 @@ import { LaunchpadNav, type LaunchpadNavGroupId } from './LaunchpadNav';
 import { LaunchpadTopBar } from './LaunchpadTopBar';
 import { HomePage } from './pages/HomePage';
 import { ProjectsPage } from './pages/ProjectsPage';
+import { ProjectActionsMenuProvider } from './projects/ProjectActionsMenuHost';
 
 /**
  * The landing surface at `/`: a full-height shell with a slim section rail and
@@ -131,11 +132,13 @@ export const Launchpad = () => {
   );
 
   return (
-    <Flex bg="bg" color="fg" direction="column" h="100dvh" overflow="hidden">
-      <LaunchpadTopBar />
-      <LaunchpadSections sections={filtered} />
-      <LaunchpadCommandPalette />
-    </Flex>
+    <ProjectActionsMenuProvider>
+      <Flex bg="bg" color="fg" direction="column" h="100dvh" overflow="hidden">
+        <LaunchpadTopBar />
+        <LaunchpadSections sections={filtered} />
+        <LaunchpadCommandPalette />
+      </Flex>
+    </ProjectActionsMenuProvider>
   );
 };
 

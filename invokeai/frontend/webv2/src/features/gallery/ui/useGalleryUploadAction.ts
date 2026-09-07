@@ -29,11 +29,13 @@ const toErrorMessage = (error: unknown): string => (error instanceof Error ? err
 export const useGalleryUploadAction = ({
   boards,
   getCurrentGalleryLocation,
-  selectedBoardId,
+  selectedBoardId: selectedBoardIdOrGetter,
 }: {
   boards: GalleryBoard[];
-  getCurrentGalleryLocation: () => { galleryView: GalleryView; selectedBoardId: string };
-  selectedBoardId: string;
+  /** Where the gallery is showing on completion; the newest upload visible there gets selected. Omit to leave the selection alone. */
+  getCurrentGalleryLocation?: () => { galleryView: GalleryView; selectedBoardId: string };
+  /** A getter is read when the upload starts, for hosts that must not re-render on board changes. */
+  selectedBoardId: string | (() => string);
 }): GalleryActions['uploadFiles'] => {
   const { gallery, notifications } = useGalleryUi();
   const queryClient = useQueryClient();
@@ -42,6 +44,8 @@ export const useGalleryUploadAction = ({
   return useCallback(
     async (files) => {
       const owner = captureAccountScope();
+      const selectedBoardId =
+        typeof selectedBoardIdOrGetter === 'function' ? selectedBoardIdOrGetter() : selectedBoardIdOrGetter;
 
       if (isDateBoardId(selectedBoardId)) {
         notifications.reportError({
@@ -49,7 +53,7 @@ export const useGalleryUploadAction = ({
           message: t('widgets.gallery.uploadDateBoardUnavailable'),
           namespace: 'gallery',
         });
-        return;
+        return [];
       }
 
       const accepted = files.flatMap((file) => {
@@ -64,7 +68,7 @@ export const useGalleryUploadAction = ({
           message: t('widgets.gallery.uploadUnsupported'),
           namespace: 'gallery',
         });
-        return;
+        return [];
       }
 
       const getBoard = (boardId: string) => boards.find((board) => board.id === boardId);
@@ -78,7 +82,9 @@ export const useGalleryUploadAction = ({
         notifications.reportError({ area: 'gallery-actions', message: toErrorMessage(error), namespace: 'gallery' });
 
       try {
-        const targetBoardId = selectedBoard?.kind === 'board' ? selectedBoardId : 'none';
+        // Only a board known to be virtual is demoted; an id the (possibly
+        // narrower or still-loading) list does not name is trusted as given.
+        const targetBoardId = selectedBoard && selectedBoard.kind !== 'board' ? 'none' : selectedBoardId;
         const imageUploads = accepted.filter((upload) => upload.kind === 'image');
         const videoUploads = accepted.filter((upload) => upload.kind === 'video');
         const imageResultsPromise = Promise.allSettled(
@@ -125,17 +131,19 @@ export const useGalleryUploadAction = ({
             message: firstFailure ? getApiErrorMessage(firstFailure.reason, fallback) : fallback,
             namespace: 'gallery',
           });
-          return;
+          return [];
         }
 
-        const currentGalleryLocation = getCurrentGalleryLocation();
-        const visibleUploads = uploadedItems.filter(
-          (item) =>
-            item.boardId === currentGalleryLocation.selectedBoardId &&
-            (currentGalleryLocation.galleryView === 'images'
-              ? item.category === 'general'
-              : item.category === 'control' || item.category === 'mask' || item.category === 'user')
-        );
+        const currentGalleryLocation = getCurrentGalleryLocation?.();
+        const visibleUploads = currentGalleryLocation
+          ? uploadedItems.filter(
+              (item) =>
+                item.boardId === currentGalleryLocation.selectedBoardId &&
+                (currentGalleryLocation.galleryView === 'images'
+                  ? item.category === 'general'
+                  : item.category === 'control' || item.category === 'mask' || item.category === 'user')
+            )
+          : [];
         const newestVisibleUpload = visibleUploads.reduce<GalleryItem | undefined>(
           (newest, item) =>
             newest === undefined || compareGalleryItems(item, newest, { orderDir: 'DESC' }) < 0 ? item : newest,
@@ -163,14 +171,16 @@ export const useGalleryUploadAction = ({
             failedCount > 0 ? { succeeded: uploadedItems.length, total: files.length } : { count: uploadedItems.length }
           ),
         });
+
+        return uploadedItems;
       } catch (error: unknown) {
-        if (!isAccountScopeCurrent(owner)) {
-          return;
+        if (isAccountScopeCurrent(owner)) {
+          recordError(error);
         }
 
-        recordError(error);
+        return [];
       }
     },
-    [boards, gallery, getCurrentGalleryLocation, notifications, queryClient, selectedBoardId, t]
+    [boards, gallery, getCurrentGalleryLocation, notifications, queryClient, selectedBoardIdOrGetter, t]
   );
 };

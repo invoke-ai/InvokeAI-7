@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
-import { activeProgressTargetStore, getActiveProgressTargets } from './activeProgressTargetStore';
+import {
+  activeProgressTargetStore,
+  getActiveProgressTargets,
+  getFollowedProgressTargets,
+} from './activeProgressTargetStore';
 
 const target = (queueItemId: string, itemIndex: number) => ({ itemIndex, queueItemId });
 
@@ -64,5 +68,51 @@ describe('activeProgressTargetStore', () => {
     activeProgressTargetStore.set(target('queue-1', 1));
 
     expect(getActiveProgressTargets()[0]).toEqual(target('queue-1', 1));
+  });
+
+  it('keeps a settling slot followable but out of the running set', () => {
+    // Completed, result not routed yet: the single-slot preview keeps following
+    // it, while the tile grid must not count it or a single-GPU batch would
+    // flash into two tiles at every item boundary.
+    activeProgressTargetStore.set(target('queue-1', 1));
+    activeProgressTargetStore.set(target('queue-1', 2));
+
+    activeProgressTargetStore.settle(target('queue-1', 1));
+
+    expect(getActiveProgressTargets()).toEqual([target('queue-1', 2)]);
+    // Running first: the settling slot is followed only when nothing is running.
+    expect(getFollowedProgressTargets()).toEqual([target('queue-1', 2), target('queue-1', 1)]);
+
+    activeProgressTargetStore.clear(target('queue-1', 1));
+
+    expect(getFollowedProgressTargets()).toEqual([target('queue-1', 2)]);
+  });
+
+  it('ignores settling a slot that never reported progress', () => {
+    activeProgressTargetStore.set(target('queue-1', 1));
+    const first = getFollowedProgressTargets();
+
+    activeProgressTargetStore.settle(target('queue-1', 2));
+
+    expect(getFollowedProgressTargets()).toBe(first);
+  });
+
+  it('returns a settled slot to the running set when it reports progress again', () => {
+    activeProgressTargetStore.set(target('queue-1', 1));
+    activeProgressTargetStore.settle(target('queue-1', 1));
+
+    activeProgressTargetStore.set(target('queue-1', 1));
+
+    expect(getActiveProgressTargets()).toEqual([target('queue-1', 1)]);
+    expect(getFollowedProgressTargets()).toEqual([target('queue-1', 1)]);
+  });
+
+  it('clears settling slots along with running ones', () => {
+    activeProgressTargetStore.set(target('queue-1', 1));
+    activeProgressTargetStore.settle(target('queue-1', 1));
+
+    activeProgressTargetStore.clear();
+
+    expect(getFollowedProgressTargets()).toEqual([]);
   });
 });

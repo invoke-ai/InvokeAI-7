@@ -98,7 +98,6 @@ describe('useSaveWorkflowToLibrary bind-then-sync', () => {
     const initialGraph = createProjectGraph('workflow-1');
     const project = createMutablePort({
       galleryValues: {},
-      graphHistory: [],
       id: 'project-1',
       isWorkflowRunning: false,
       projectGraph: initialGraph,
@@ -119,8 +118,6 @@ describe('useSaveWorkflowToLibrary bind-then-sync', () => {
         editGraph: vi.fn(),
         redo: vi.fn(),
         replace: vi.fn(),
-        restoreSnapshot: vi.fn(),
-        saveSnapshot: vi.fn(),
         undo: vi.fn(),
       },
       notifications: { error: vi.fn(), info: vi.fn(), success: vi.fn() },
@@ -201,7 +198,6 @@ describe('useSaveWorkflowToLibrary saveDocumentAsNew', () => {
     const initialGraph = createProjectGraph('workflow-1');
     const project = createMutablePort({
       galleryValues: {},
-      graphHistory: [],
       id: 'project-1',
       isWorkflowRunning: false,
       projectGraph: initialGraph,
@@ -217,8 +213,6 @@ describe('useSaveWorkflowToLibrary saveDocumentAsNew', () => {
         editGraph: vi.fn(),
         redo: vi.fn(),
         replace: vi.fn(),
-        restoreSnapshot: vi.fn(),
-        saveSnapshot: vi.fn(),
         undo: vi.fn(),
       },
       notifications: { error: vi.fn(), info: vi.fn(), success: vi.fn() },

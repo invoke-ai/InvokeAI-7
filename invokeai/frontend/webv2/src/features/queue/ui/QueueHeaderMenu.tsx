@@ -11,8 +11,6 @@ import { QueueMenuItems, useQueueMenuActions } from './queueMenuActions';
 import { useQueueQueryScope } from './queueScope';
 import { useQueueUi } from './QueueUiContext';
 
-const ERROR_ITEM_HOVER_PROPS = { bg: 'bg.error', color: 'fg.error' };
-
 /**
  * Queue actions contributed to the frame's shared actions menu via the manifest
  * `headerMenu` slot. This intentionally uses the same action model as the
@@ -75,23 +73,11 @@ export const QueueHeaderMenu = () => {
         <Menu.ItemGroupLabel color="fg.subtle" fontSize="2xs" textTransform="uppercase">
           {t('common.clear')}
         </Menu.ItemGroupLabel>
-        <Menu.Item
-          color="fg.error"
-          disabled={counts.failed === 0}
-          value="clear-failed-items"
-          _hover={ERROR_ITEM_HOVER_PROPS}
-          onClick={onClearFailed}
-        >
+        <Menu.Item data-danger="" disabled={counts.failed === 0} value="clear-failed-items" onClick={onClearFailed}>
           <Icon as={Trash2Icon} boxSize="3" />
           <Menu.ItemText>{t('widgets.queue.clearFailedItems')}</Menu.ItemText>
         </Menu.Item>
-        <Menu.Item
-          color="fg.error"
-          disabled={counts.total === 0}
-          value="clear-all-items"
-          _hover={ERROR_ITEM_HOVER_PROPS}
-          onClick={onClearAll}
-        >
+        <Menu.Item data-danger="" disabled={counts.total === 0} value="clear-all-items" onClick={onClearAll}>
           <Icon as={TrashIcon} boxSize="3" />
           <Menu.ItemText>{t('widgets.queue.clearAllItems')}</Menu.ItemText>
         </Menu.Item>

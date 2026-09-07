@@ -25,7 +25,7 @@ const { operations, renderSharedLaunch } = vi.hoisted(() => ({
   renderSharedLaunch: vi.fn(),
 }));
 const ENGINE = {
-  document: { getDocument: vi.fn(() => ({ layers: [] })) },
+  document: { getDocument: vi.fn(() => ({ layers: [] })), model: () => null },
   exports: { hasExportableLayerContent: vi.fn(() => false) },
 } as unknown as CanvasEngine;
 
@@ -44,6 +44,7 @@ vi.mock('@features/models', () => ({
 vi.mock('@workbench/WorkbenchContext', () => ({
   useActiveProjectId: () => 'project',
   useActiveProjectSelector: () => null,
+  useOptionalWorkbenchCommands: () => null,
   useWorkbenchCommands: () => ({ canvas: { apply: vi.fn() } }),
 }));
 vi.mock('react-i18next', () => ({

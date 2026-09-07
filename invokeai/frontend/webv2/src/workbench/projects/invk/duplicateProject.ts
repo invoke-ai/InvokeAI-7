@@ -21,7 +21,7 @@ import {
   createStagingBoard,
   isRequestCancellation,
 } from './assetTransport';
-import { InvkFormatError } from './format';
+import { InvkFormatError, toInvkFormatReason } from './format';
 import {
   createRestoredMediaLedger,
   restoreProjectMedia,
@@ -47,6 +47,8 @@ export interface DuplicateProjectInput {
   owner: AccountScope;
   /** The acknowledged source record — for an open project, flushed first. */
   record: ProjectRecordDTO;
+  /** Stable identity reserved before the operation, used by retry-safe conflict copies. */
+  identity?: { id: string; name: string };
 }
 
 export interface DuplicateProjectDeps {
@@ -121,8 +123,8 @@ export const duplicateProjectRecord = async (
   deps: DuplicateProjectDeps = {}
 ): Promise<DuplicateProjectResult> => {
   const { owner } = input;
-  const id = createProjectId();
-  const name = `${input.record.name} copy`;
+  const id = input.identity?.id ?? createProjectId();
+  const name = input.identity?.name ?? `${input.record.name} copy`;
 
   assertAccountScopeCurrent(owner);
 
@@ -132,15 +134,21 @@ export const duplicateProjectRecord = async (
 
   assertAccountScopeCurrent(owner);
 
-  const project = deserializeProjectDocument({ ...stripInstallationState(input.record.data), id, name });
+  const loaded = deserializeProjectDocument({ ...stripInstallationState(input.record.data), id, name });
 
-  if (!project) {
+  if (loaded.status === 'refused') {
+    throw new InvkFormatError(toInvkFormatReason(loaded.refused), 'The project document was refused.');
+  }
+
+  if (loaded.status !== 'loaded') {
     throw new InvkFormatError('damaged', 'The project document will not rehydrate.');
   }
 
-  const { applyAuthoritativeProjectBoard, serializeProjectDocument } =
+  const project = loaded.project;
+
+  const { applyAuthoritativeProjectBoard, serializeProjectDocument, serializeProjectDocumentV2 } =
     await import('@workbench/projects/projectDocument');
-  const canonicalDocument = serializeProjectDocument(project);
+  const canonicalDocument = input.identity ? serializeProjectDocumentV2(project) : serializeProjectDocument(project);
   const boardItems = input.boardItems as readonly InvkBoardItem[];
   const stagingBoardId = boardItems.length === 0 ? null : await createStagingBoard(name, owner.signal);
   const ledger = createRestoredMediaLedger(stagingBoardId);
@@ -182,6 +190,7 @@ export const duplicateProjectRecord = async (
     const record = await createProjectSettled(
       {
         data: remapAssetRefs(canonicalDocument, restored.mappings),
+        minimum_canvas_schema_version: input.record.minimum_canvas_schema_version,
         name,
         project_id: id,
         ...(stagingBoardId === null ? {} : { board_id: stagingBoardId }),

@@ -1,6 +1,7 @@
 import { Box, Flex, HStack, Spacer, Stack } from '@chakra-ui/react';
 import { GALLERY_BOARD_PANEL_MAX_WIDTH_PX, GALLERY_BOARD_PANEL_MIN_WIDTH_PX } from '@features/gallery/core/settings';
-import { useCallback, useState } from 'react';
+import { segmentTabsPanelId, segmentTabsTabId } from '@platform/ui';
+import { useCallback, useId, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { GalleryBoardsPanel } from './GalleryBoardsPanel';
@@ -9,6 +10,7 @@ import { GalleryItemSearch } from './GalleryItemSearch';
 import { GalleryItemSortMenu } from './GalleryItemSortMenu';
 import { GallerySelectionBar } from './GallerySelectionBar';
 import { GallerySplitHandle } from './GallerySplitHandle';
+import { GalleryStarredFilterToggle } from './GalleryStarredFilterToggle';
 import { GalleryUploadButton } from './GalleryUploadButton';
 import { GalleryViewTabs } from './GalleryViewTabs';
 import { useGalleryWidget } from './GalleryWidgetContext';
@@ -24,6 +26,7 @@ export const GalleryWideLayout = () => {
   const { t } = useTranslation();
   const { actions, gallery } = useGalleryWidget();
   const { boardPanelCollapsed, boardPanelWidthPx } = gallery.settings;
+  const viewTabsIdBase = useId();
   const [dragWidthPx, setDragWidthPx] = useState<number | null>(null);
   const displayWidthPx = dragWidthPx ?? boardPanelWidthPx;
 
@@ -64,11 +67,12 @@ export const GalleryWideLayout = () => {
             looking at the grid — find, order, add, configure — collects at the
             end, so the eye has one place to go. */}
         <HStack gap="1" minW="0" pb="2" pe="3" ps="3" pt={CHROME_INSET_PADDING_TOP}>
-          <GalleryViewTabs />
+          <GalleryViewTabs idBase={viewTabsIdBase} />
           <Spacer />
           <Box flex="1" maxW="22rem" minW="9rem">
             <GalleryItemSearch />
           </Box>
+          <GalleryStarredFilterToggle />
           <GalleryItemSortMenu />
           <GalleryUploadButton
             boards={gallery.boards}
@@ -76,7 +80,17 @@ export const GalleryWideLayout = () => {
             onUploadFiles={actions.uploadFiles}
           />
         </HStack>
-        <Box flex="1" minH="0" minW="0" pb="2" pe="3" ps="3">
+        <Box
+          aria-labelledby={segmentTabsTabId(viewTabsIdBase, gallery.galleryView)}
+          flex="1"
+          id={segmentTabsPanelId(viewTabsIdBase)}
+          minH="0"
+          minW="0"
+          pb="2"
+          pe="3"
+          ps="3"
+          role="tabpanel"
+        >
           <GalleryImageGrid />
         </Box>
         <GallerySelectionBar />

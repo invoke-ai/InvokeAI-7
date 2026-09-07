@@ -1,7 +1,7 @@
 import { accountLifecycle } from '@platform/state/accountLifecycle';
 import { describe, expect, it, vi } from 'vitest';
 
-import { copyBlobToClipboard, saveLayerToAssets } from './layerExportActions';
+import { copyBlobToClipboard, copyLayerToClipboard, saveLayerToAssets } from './layerExportActions';
 
 describe('copyBlobToClipboard', () => {
   it('writes a ClipboardItem using the blob MIME type', async () => {
@@ -29,6 +29,34 @@ describe('copyBlobToClipboard', () => {
 
   it('fails when the clipboard API is unavailable', async () => {
     await expect(copyBlobToClipboard(new Blob(['pixels']))).rejects.toThrow('Clipboard image copy is unavailable');
+  });
+});
+
+describe('copyLayerToClipboard', () => {
+  it('bakes the layer with disabled content and writes it; a refused export reports its status', async () => {
+    const write = vi.fn(() => Promise.resolve());
+    class TestClipboardItem {
+      presentationStyle: PresentationStyle = 'unspecified';
+      types: string[] = [];
+      constructor(items: Record<string, Blob>) {
+        this.types = Object.keys(items);
+      }
+      getType(): Promise<Blob> {
+        return Promise.resolve(new Blob());
+      }
+    }
+    const blob = new Blob(['pixels'], { type: 'image/png' });
+    const exportLayer = vi.fn((layerId: string) =>
+      Promise.resolve(layerId === 'ok' ? { blob, status: 'ok' as const } : { status: 'empty' as const })
+    );
+    const deps = { ClipboardItemCtor: TestClipboardItem, clipboard: { write }, exportLayer };
+
+    await expect(copyLayerToClipboard('ok', deps)).resolves.toBe('ok');
+    expect(exportLayer).toHaveBeenCalledWith('ok', { includeDisabled: true });
+    expect(write).toHaveBeenCalledTimes(1);
+
+    await expect(copyLayerToClipboard('blank', deps)).resolves.toBe('empty');
+    expect(write).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -45,6 +45,8 @@ interface BackendBoardDTO {
   asset_count: number;
   /** Videos on the board. Counted separately from `image_count` by the backend. */
   video_count?: number;
+  /** Asset-category (non-'general') videos on the board; uploaded videos are assets. */
+  asset_video_count?: number;
   archived: boolean;
   cover_image_name?: string | null;
   /** Set instead of `cover_image_name` when the board's most recent item is a video. */
@@ -81,22 +83,50 @@ const GALLERY_UPLOAD_KIND_BY_MIME = new Map<string, GalleryUploadKind>([
   ['image/jpg', 'image'],
   ['image/png', 'image'],
   ['image/webp', 'image'],
-  ['video/mp4', 'video'],
 ]);
 
+// The server normalizes every accepted upload to H.264 MP4 at ingest — foreign
+// containers/codecs (.mov, HEVC, …) are remuxed or transcoded, and audio files are
+// wrapped into waveform videos — so both video/* and audio/* upload as 'video'.
 const GALLERY_UPLOAD_KIND_BY_EXTENSION = new Map<string, GalleryUploadKind>([
   ['.jpeg', 'image'],
   ['.jpg', 'image'],
   ['.png', 'image'],
   ['.webp', 'image'],
   ['.mp4', 'video'],
+  ['.mov', 'video'],
+  ['.m4v', 'video'],
+  ['.webm', 'video'],
+  ['.mkv', 'video'],
+  ['.avi', 'video'],
+  ['.mpg', 'video'],
+  ['.mpeg', 'video'],
+  ['.3gp', 'video'],
+  ['.wmv', 'video'],
+  ['.asf', 'video'],
+  ['.mp3', 'video'],
+  ['.m4a', 'video'],
+  ['.aac', 'video'],
+  ['.wav', 'video'],
+  ['.flac', 'video'],
+  ['.ogg', 'video'],
+  ['.oga', 'video'],
+  ['.opus', 'video'],
+  ['.aiff', 'video'],
+  ['.aif', 'video'],
+  ['.wma', 'video'],
 ]);
 
 export const classifyGalleryUpload = (file: Pick<File, 'name' | 'type'>): { kind: GalleryUploadKind } | null => {
-  const mimeKind = GALLERY_UPLOAD_KIND_BY_MIME.get(file.type.toLowerCase());
+  const mimeType = file.type.toLowerCase();
+  const mimeKind = GALLERY_UPLOAD_KIND_BY_MIME.get(mimeType);
 
   if (mimeKind) {
     return { kind: mimeKind };
+  }
+
+  if (mimeType.startsWith('video/') || mimeType.startsWith('audio/')) {
+    return { kind: 'video' };
   }
 
   const lowerName = file.name.toLowerCase();
@@ -209,6 +239,7 @@ const getBoardCoverThumbnailUrl = (
 const mapBoard = (board: BackendBoardDTO): GalleryBoard => ({
   archived: board.archived,
   assetCount: board.asset_count,
+  assetVideoCount: board.asset_video_count ?? 0,
   coverImageName: board.cover_image_name,
   coverThumbnailUrl: getBoardCoverThumbnailUrl(board),
   coverVideoName: board.cover_video_name,
@@ -244,17 +275,20 @@ const getGalleryTotal = async ({
 };
 
 /**
- * Videos carry no category split — the gallery's Images/Assets views are an image-only
- * distinction — so this counts every non-intermediate video on the board.
+ * Counts non-intermediate videos on a board, optionally restricted to a category set —
+ * the same general/asset split the images use (uploaded videos are 'user', generated
+ * are 'general').
  */
 const getGalleryVideoTotal = async ({
   boardId,
+  categories,
   signal,
 }: {
   boardId: string;
+  categories?: string[];
   signal?: AbortSignal;
 }): Promise<number> => {
-  const query = toSearchParams({ board_id: boardId, is_intermediate: false, limit: 0, offset: 0 });
+  const query = toSearchParams({ board_id: boardId, categories, is_intermediate: false, limit: 0, offset: 0 });
   const body = await apiFetchJson<{ total: number }>(`/api/v1/videos/?${query}`, { signal });
 
   return body.total;
@@ -262,6 +296,7 @@ const getGalleryVideoTotal = async ({
 
 const mapImage = (image: BackendImageDTO): GalleryImage => ({
   boardId: image.board_id ?? 'none',
+  createdAt: image.created_at,
   height: image.height,
   imageCategory: image.image_category,
   imageName: image.image_name,
@@ -369,13 +404,20 @@ export const listGalleryBoards = async ({
     { signal }
   );
 
-  const [body, uncategorizedImageCount, uncategorizedAssetCount, uncategorizedVideoCount] = await Promise.all([
+  const [
+    body,
+    uncategorizedImageCount,
+    uncategorizedAssetCount,
+    uncategorizedVideoCount,
+    uncategorizedAssetVideoCount,
+  ] = await Promise.all([
     boardsBodyPromise,
     getGalleryTotal({ boardId: 'none', categories: imageCategories, signal }),
     getGalleryTotal({ boardId: 'none', categories: assetCategories, signal }),
     // Real boards carry `video_count` in their DTO, but the uncategorized pseudo-board is
-    // assembled here, so its video total needs its own request.
+    // assembled here, so its video totals need their own requests.
     getGalleryVideoTotal({ boardId: 'none', signal }),
+    getGalleryVideoTotal({ boardId: 'none', categories: assetCategories, signal }),
   ]);
   const boards = Array.isArray(body) ? body : (body.items ?? []);
 
@@ -383,6 +425,7 @@ export const listGalleryBoards = async ({
     {
       archived: false,
       assetCount: uncategorizedAssetCount,
+      assetVideoCount: uncategorizedAssetVideoCount,
       id: 'none',
       imageCount: uncategorizedImageCount,
       kind: 'uncategorized',
@@ -408,6 +451,7 @@ interface VirtualDateBoardDTO {
   image_count: number;
   asset_count: number;
   video_count?: number;
+  asset_video_count?: number;
   cover_image_name?: string | null;
   cover_video_name?: string | null;
 }
@@ -418,6 +462,7 @@ export const listGalleryDateBoards = async (signal?: AbortSignal): Promise<Galle
   return body.map((board) => ({
     archived: false,
     assetCount: board.asset_count,
+    assetVideoCount: board.asset_video_count ?? 0,
     coverImageName: board.cover_image_name,
     coverThumbnailUrl: getBoardCoverThumbnailUrl(board),
     coverVideoName: board.cover_video_name,
@@ -530,7 +575,6 @@ const listPaletteDateBoardImageNames = async ({
   orderDir,
   searchTerm,
   signal,
-  starredFirst,
 }: {
   boardId: string;
   createdFrom?: string;
@@ -539,7 +583,6 @@ const listPaletteDateBoardImageNames = async ({
   orderDir: GalleryOrderDir;
   searchTerm: string;
   signal?: AbortSignal;
-  starredFirst: boolean;
 }): Promise<PaletteDateBoardImageNames> => {
   // Palette results remain intentionally image-only, but derive from the
   // polymorphic item_names endpoint so no webv2 path regresses to image_names.
@@ -551,7 +594,6 @@ const listPaletteDateBoardImageNames = async ({
     orderDir,
     searchTerm,
     signal,
-    starredFirst,
   });
   const imageNames = result.items.filter((ref) => ref.kind === 'image').map((ref) => ref.name);
 
@@ -563,7 +605,6 @@ const listPaletteDateBoardImageNames = async ({
 
 export interface GalleryItemNames {
   items: GalleryItemRef[];
-  starredCount: number;
   total: number;
 }
 
@@ -575,16 +616,12 @@ interface GalleryItemNamesRequest {
   orderDir: GalleryOrderDir;
   searchTerm: string;
   signal?: AbortSignal;
-  starredFirst: boolean;
+  /** true = only starred items, false = only unstarred; absent = all. */
+  starred?: boolean;
 }
 
-const mapGalleryItemNames = (body: {
-  items: GalleryItemRef[];
-  starred_count: number;
-  total_count: number;
-}): GalleryItemNames => ({
+const mapGalleryItemNames = (body: { items: GalleryItemRef[]; total_count: number }): GalleryItemNames => ({
   items: body.items,
-  starredCount: normalizeTotal(body.starred_count, 0),
   total: normalizeTotal(body.total_count, body.items.length),
 });
 
@@ -596,7 +633,7 @@ export const listGalleryItemNames = async ({
   orderDir,
   searchTerm,
   signal,
-  starredFirst,
+  starred,
 }: GalleryItemNamesRequest): Promise<GalleryItemNames> => {
   const query = toSearchParams({
     board_id: boardId,
@@ -606,13 +643,15 @@ export const listGalleryItemNames = async ({
     is_intermediate: false,
     order_dir: orderDir,
     search_term: searchTerm.trim() || undefined,
-    starred_first: starredFirst,
+    starred,
+    // The backend defaults to starred-first; the grid orders chronologically
+    // and carries starred items in its own strip.
+    starred_first: false,
   });
-  const body = await apiFetchJson<{
-    items: GalleryItemRef[];
-    starred_count: number;
-    total_count: number;
-  }>(`/api/v1/gallery/items/names?${query}`, { signal });
+  const body = await apiFetchJson<{ items: GalleryItemRef[]; total_count: number }>(
+    `/api/v1/gallery/items/names?${query}`,
+    { signal }
+  );
 
   return mapGalleryItemNames(body);
 };
@@ -625,28 +664,26 @@ export const listGalleryDateBoardItemNames = async ({
   orderDir,
   searchTerm,
   signal,
-  starredFirst,
+  starred,
 }: GalleryItemNamesRequest): Promise<GalleryItemNames> => {
   if (
     (createdFrom !== undefined || createdTo !== undefined) &&
     !isTimestampInRange(getDateFromBoardId(boardId), { from: createdFrom, to: createdTo })
   ) {
-    return { items: [], starredCount: 0, total: 0 };
+    return { items: [], total: 0 };
   }
 
   const query = toSearchParams({
     categories: galleryView === 'assets' ? assetCategories : imageCategories,
     order_dir: orderDir,
     search_term: searchTerm.trim() || undefined,
-    starred_first: starredFirst,
+    starred,
+    starred_first: false,
   });
-  const body = await apiFetchJson<{
-    items: GalleryItemRef[];
-    starred_count: number;
-    total_count: number;
-  }>(`/api/v1/virtual_boards/by_date/${encodeURIComponent(getDateFromBoardId(boardId))}/item_names?${query}`, {
-    signal,
-  });
+  const body = await apiFetchJson<{ items: GalleryItemRef[]; total_count: number }>(
+    `/api/v1/virtual_boards/by_date/${encodeURIComponent(getDateFromBoardId(boardId))}/item_names?${query}`,
+    { signal }
+  );
 
   return mapGalleryItemNames(body);
 };
@@ -735,7 +772,8 @@ interface GalleryListRequest {
   orderDir?: GalleryOrderDir;
   searchTerm: string;
   signal?: AbortSignal;
-  starredFirst?: boolean;
+  /** true = only starred items, false = only unstarred; absent = all. */
+  starred?: boolean;
 }
 
 interface GalleryItemsRequest extends GalleryListRequest {
@@ -753,7 +791,7 @@ export const listGalleryItems = async ({
   orderDir = 'DESC',
   searchTerm,
   signal,
-  starredFirst = false,
+  starred,
 }: GalleryItemsRequest): Promise<GalleryItemsPage> => {
   const query = toSearchParams({
     board_id: boardId,
@@ -765,7 +803,8 @@ export const listGalleryItems = async ({
     offset,
     order_dir: orderDir,
     search_term: searchTerm.trim() || undefined,
-    starred_first: starredFirst,
+    starred,
+    starred_first: false,
   });
   const body = await apiFetchJson<{
     items: BackendGalleryItemDTO[];
@@ -846,7 +885,7 @@ export const searchGallerySemantic = async (
  * The ranked result set as item refs, in relevance order. Pages hydrate
  * slices of this list (`hydrateGalleryDateBoardItemPage`), and range
  * selection / deletion neighbors read it directly. Semantic results are
- * image-only and carry no starred information.
+ * image-only.
  */
 export const listSemanticGalleryItemNames = async ({
   query,
@@ -863,7 +902,6 @@ export const listSemanticGalleryItemNames = async ({
 
     return {
       items: imageNames.map((name) => ({ kind: 'image', name })),
-      starredCount: 0,
       total: imageNames.length,
     };
   }
@@ -872,7 +910,6 @@ export const listSemanticGalleryItemNames = async ({
 
   return {
     items: results.map((result) => ({ kind: 'image', name: result.imageName })),
-    starredCount: 0,
     total: results.length,
   };
 };
@@ -887,7 +924,6 @@ export const listPaletteImages = async ({
   orderDir = 'DESC',
   searchTerm,
   signal,
-  starredFirst = false,
 }: GalleryListRequest): Promise<GalleryImagesPage> => {
   if (isDateBoardId(boardId)) {
     const names = await listPaletteDateBoardImageNames({
@@ -898,7 +934,6 @@ export const listPaletteImages = async ({
       orderDir,
       searchTerm,
       signal,
-      starredFirst,
     });
 
     return hydratePaletteDateBoardImagePage({ ...names, limit, offset, signal });
@@ -914,7 +949,7 @@ export const listPaletteImages = async ({
     offset,
     order_dir: orderDir,
     search_term: searchTerm.trim() || undefined,
-    starred_first: starredFirst,
+    starred_first: false,
   });
   const body = await apiFetchJson<ListImagesResponse | BackendImageDTO[]>(`/api/v1/images/?${query}`, { signal });
   const items = Array.isArray(body) ? body : (body.items ?? []);
@@ -1494,7 +1529,9 @@ export const uploadGalleryVideo = async (
   const query = toSearchParams({
     board_id: getUploadBoardId(boardId),
     is_intermediate: false,
-    video_category: 'general',
+    // Uploads are user assets (the Assets view), mirroring `image_category: 'user'` on
+    // image uploads; generated videos save as 'general' (the Media view).
+    video_category: 'user',
   });
   const body = new FormData();
   body.append('file', file);

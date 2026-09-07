@@ -12,7 +12,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { ControlLayerGraphInput } from './addControlLayers';
 import type { RegionalGuidanceInput } from './addRegionalGuidance';
-import type { CanvasCompileMode, CanvasCompositingSettings, Rect } from './types';
+import type { CanvasCompileMode, CanvasCompositingSettings, CanvasScalingSettings, Rect } from './types';
 
 import { compileCanvasGraph } from './compileCanvasGraph';
 
@@ -118,6 +118,7 @@ const compile = (
     maskImageName?: string | null;
     noiseMaskImageName?: string | null;
     compositing?: Partial<CanvasCompositingSettings>;
+    scaling?: CanvasScalingSettings;
     strength?: number;
     destination?: 'canvas' | 'gallery';
     outputOnlyMaskedRegions?: boolean;
@@ -136,6 +137,7 @@ const compile = (
     },
     controlLayers: overrides.controlLayers,
     regionalGuidance: overrides.regionalGuidance,
+    scaling: overrides.scaling,
     destination: overrides.destination ?? 'canvas',
     maskImageName:
       'maskImageName' in overrides ? overrides.maskImageName : mode === 'inpaint' ? 'canvas-mask.png' : null,
@@ -493,6 +495,52 @@ describe('compileCanvasGraph', () => {
       expect(backendGraph.nodes.noise).toMatchObject({ height: 64, width: 64 });
       expect(backendGraph.nodes.canvas_processing_output).toBeUndefined();
       expect(backendGraph.nodes.canvas_output?.type).toBe('l2i');
+    });
+
+    it('denoises a small txt2img bbox at the optimal area when scaling is automatic', () => {
+      // SD 1.x: grid 8, optimal 512. 2:1 grows to 728×368 (720×360 is just under 512²).
+      const { backendGraph } = compile(sd1Model, 'txt2img', {
+        bbox: { height: 128, width: 256, x: 0, y: 0 },
+        scaling: { height: null, method: 'auto', width: null },
+      });
+
+      expect(backendGraph.nodes.noise).toMatchObject({ height: 368, width: 728 });
+      expect(backendGraph.nodes.canvas_output).toMatchObject({ height: 128, type: 'img_resize', width: 256 });
+    });
+
+    it('scales an img2img source up to the optimal area for processing when scaling is automatic', () => {
+      // FLUX.2: grid 16, optimal 1024. 2:1 grows to 1456×736 (1440×720 is just under 1024²).
+      const { backendGraph } = compile(flux2Model, 'img2img', {
+        bbox: { height: 256, width: 512, x: 0, y: 0 },
+        scaling: { height: null, method: 'auto', width: null },
+      });
+
+      expect(backendGraph.nodes.canvas_resize_initial_to_processing).toMatchObject({
+        height: 736,
+        type: 'img_resize',
+        width: 1456,
+      });
+      expect(backendGraph.nodes.canvas_output).toMatchObject({ height: 256, type: 'img_resize', width: 512 });
+    });
+
+    it('processes at the manual size and restores the bbox footprint', () => {
+      const { backendGraph } = compile(flux2Model, 'img2img', {
+        bbox: { height: 512, width: 512, x: 0, y: 0 },
+        scaling: { height: 768, method: 'manual', width: 1024 },
+      });
+
+      expect(backendGraph.nodes.canvas_resize_initial_to_processing).toMatchObject({ height: 768, width: 1024 });
+      expect(backendGraph.nodes.canvas_output).toMatchObject({ height: 512, type: 'img_resize', width: 512 });
+    });
+
+    it('leaves an on-grid bbox alone when scaling is off', () => {
+      const { backendGraph } = compile(flux2Model, 'img2img', {
+        bbox: { height: 512, width: 512, x: 0, y: 0 },
+        scaling: { height: 768, method: 'none', width: 1024 },
+      });
+
+      expect(backendGraph.nodes.canvas_resize_initial_to_processing).toBeUndefined();
+      expect(backendGraph.nodes.canvas_output?.type).not.toBe('img_resize');
     });
 
     it('resizes an off-grid img2img source before processing and restores the bbox footprint', () => {
@@ -904,9 +952,40 @@ describe('compileCanvasGraph — regional guidance', () => {
     expect(backendGraph.nodes.rg_pos_cond_inverted_r1).toBeDefined();
   });
 
-  it('is a no-op for an unsupported base (sd-2)', () => {
-    const { backendGraph } = compile(sd2Model, 'txt2img', { regionalGuidance: [region('r1')] });
+  it('grafts SD2 regional conditioning through compel like SD1', () => {
+    const { backendGraph } = compile(sd2Model, 'txt2img', {
+      regionalGuidance: [region('r1', { negativePrompt: 'blurry' })],
+    });
+    expect(backendGraph.nodes.rg_pos_cond_r1).toMatchObject({ prompt: 'a cat', type: 'compel' });
+    expect(backendGraph.nodes.rg_neg_cond_r1).toMatchObject({ prompt: 'blurry', type: 'compel' });
+    expect(getEdge(backendGraph, 'rg_pos_cond_r1', 'clip')?.source.node_id).toBe(
+      getEdge(backendGraph, 'pos_cond', 'clip')?.source.node_id
+    );
+  });
+
+  it('is a no-op for a base with no regional path (sd-3)', () => {
+    const { backendGraph } = compile(sd3Model, 'txt2img', { regionalGuidance: [region('r1')] });
     expect(backendGraph.nodes.rg_mask_to_tensor_r1).toBeUndefined();
+  });
+
+  it.each([
+    ['Z-Image', zImageModel, 'z_image_text_encoder'],
+    ['Anima', animaModel, 'anima_text_encoder'],
+  ] as const)('grafts %s regions through the shared Qwen3 encoder', (_label, model, encoderType) => {
+    const { backendGraph } = compile(model, 'txt2img', {
+      regionalGuidance: [region('r1'), region('r2', { positivePrompt: 'a dog' })],
+      settings: { cfgScale: 4 },
+    });
+
+    expect(backendGraph.nodes.rg_pos_cond_r1).toMatchObject({ prompt: 'a cat', type: encoderType });
+    expect(backendGraph.nodes.rg_pos_cond_r2).toMatchObject({ prompt: 'a dog', type: encoderType });
+    expect(getEdge(backendGraph, 'rg_pos_cond_r1', 'qwen3_encoder')?.source.node_id).toBe('model_loader');
+    expect(getEdge(backendGraph, 'rg_pos_cond_r1', 'mask')?.source.node_id).toBe('rg_mask_to_tensor_r1');
+    const collected = backendGraph.edges
+      .filter((edge) => edge.destination.node_id === 'pos_cond_collect')
+      .map((edge) => edge.source.node_id);
+    expect(collected).toEqual(['pos_cond', 'rg_pos_cond_r1', 'rg_pos_cond_r2']);
+    expect(getEdge(backendGraph, 'neg_cond_collect', 'item')?.source.node_id).toBe('neg_cond');
   });
 
   it('coexists with control layers in one graph', () => {

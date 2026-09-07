@@ -316,7 +316,6 @@ const SeedField = ({ onCommit, settings }: Pick<GenerateRenderSectionProps, 'onC
                   }
                   borderWidth="1px"
                   boxSize="5"
-                  cursor="pointer"
                   overflow="hidden"
                   rounded="3px"
                   onClick={() => onCommit({ seed: item.seed, shouldRandomizeSeed: false })}

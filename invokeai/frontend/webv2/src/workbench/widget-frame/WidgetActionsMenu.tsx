@@ -9,7 +9,8 @@ import type {
 
 import { Icon, Menu, Portal, Text } from '@chakra-ui/react';
 import { flushWorkbenchDrafts } from '@platform/react/draftRegistry';
-import { IconButton } from '@platform/ui';
+import { IconButton } from '@platform/ui/Button';
+import { MenuContent } from '@platform/ui/Menu';
 import { createGraphBearingSurface } from '@workbench/graphSurfaces';
 import { resolveWidgetLabel } from '@workbench/widgetLabels';
 import { useActiveProjectSelector, useWorkbenchCommands } from '@workbench/WorkbenchContext';
@@ -125,13 +126,13 @@ export const WidgetActionsMenu = ({
         </Menu.Trigger>
         <Portal>
           <Menu.Positioner>
-            <Menu.Content minW="13rem">
+            <MenuContent minW="13rem">
               {surface ? <GraphSurfaceMenuItems surface={surface} onPreview={handlePreview} /> : null}
               {surface && HeaderMenu ? <Menu.Separator borderColor="border.subtle" /> : null}
               {HeaderMenu ? (
                 <HeaderMenu instance={instance} manifest={manifest} region={region} runtime={runtime} />
               ) : null}
-            </Menu.Content>
+            </MenuContent>
           </Menu.Positioner>
         </Portal>
       </Menu.Root>

@@ -1,12 +1,13 @@
 import type {
   CanvasControlLayerContract,
-  CanvasDocumentContractV2,
+  CanvasDocumentContractV3,
   CanvasImageRef,
   CanvasLayerContract,
   CanvasRasterLayerContractV2,
   CanvasRegionalGuidanceLayerContract,
 } from '@workbench/canvas-engine/contracts';
 
+import { groupContract, stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
 import { describe, expect, it } from 'vitest';
 
 import type { Rect } from './generationContracts';
@@ -56,19 +57,19 @@ const BBOX: Rect = { height: 200, width: 200, x: 0, y: 0 };
 
 const makeDoc = (
   layers: CanvasLayerContract[],
-  overrides: Partial<CanvasDocumentContractV2> = {}
-): CanvasDocumentContractV2 => ({
+  overrides: Partial<CanvasDocumentContractV3> = {}
+): CanvasDocumentContractV3 => ({
   background: 'transparent',
   bbox: { height: 200, width: 200, x: 0, y: 0 },
   height: 300,
-  layers,
+  stacks: stacksFrom(layers),
   selectedLayerId: null,
-  version: 2,
+  version: 3,
   width: 400,
   ...overrides,
 });
 
-const keyOf = (doc: CanvasDocumentContractV2, bbox: Rect = BBOX): string => planComposites(doc, bbox).entries[0]!.key;
+const keyOf = (doc: CanvasDocumentContractV3, bbox: Rect = BBOX): string => planComposites(doc, bbox).entries[0]!.key;
 
 describe('planComposites — plan shape', () => {
   it('emits a single base-raster entry scoped to the bbox', () => {
@@ -219,14 +220,18 @@ const inpaintMask = (
   overrides: Partial<{
     bitmap: CanvasImageRef | null;
     noiseLevel: number;
+    noiseEnabled: boolean;
     denoiseLimit: number;
+    denoiseEnabled: boolean;
     isEnabled: boolean;
     isHidden: boolean;
     offset: { x: number; y: number };
   }> = {}
 ): CanvasLayerContract => ({
   blendMode: 'normal',
-  denoiseLimit: overrides.denoiseLimit,
+  ...(overrides.denoiseLimit === undefined
+    ? {}
+    : { denoise: { isEnabled: overrides.denoiseEnabled ?? true, limit: overrides.denoiseLimit } }),
   id,
   isEnabled: overrides.isEnabled ?? true,
   isHidden: overrides.isHidden,
@@ -237,13 +242,15 @@ const inpaintMask = (
     ...(overrides.offset ? { offset: overrides.offset } : {}),
   },
   name: id,
-  noiseLevel: overrides.noiseLevel,
+  ...(overrides.noiseLevel === undefined
+    ? {}
+    : { noise: { isEnabled: overrides.noiseEnabled ?? true, level: overrides.noiseLevel } }),
   opacity: 1,
   transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 },
   type: 'inpaint_mask',
 });
 
-const entryOfKind = (doc: CanvasDocumentContractV2, kind: string) =>
+const entryOfKind = (doc: CanvasDocumentContractV3, kind: string) =>
   planComposites(doc, BBOX).entries.find((e) => e.kind === kind);
 
 describe('planComposites — inpaint-mask entries', () => {
@@ -276,6 +283,53 @@ describe('planComposites — inpaint-mask entries', () => {
     expect(entry!.maskLayers!.map((l) => l.id)).toEqual(['shown', 'hidden']);
   });
 
+  it("unions a regenerate-region raster's own alpha into the inpaint mask at full denoise", () => {
+    const region = { fill: { color: '#e07575', style: 'diagonal' as const }, isEnabled: true };
+    const doc = makeDoc([rasterLayer('r1', { inpaint: region }), inpaintMask('m1')]);
+    const entry = entryOfKind(doc, 'inpaint-mask');
+    expect(entry!.maskLayers!.map((l) => l.id)).toEqual(['m1', 'r1']);
+    const ref = entry!.maskLayers![1]!;
+    expect(ref.attributeValue).toBe(1);
+    expect(ref.sourceRef).toBe('region:image:r1');
+    expect(ref.contentSize).toEqual({ height: 48, width: 64 });
+  });
+
+  it('emits an inpaint-mask entry for a region alone, and never a noise entry for it', () => {
+    const region = { fill: { color: '#e07575', style: 'diagonal' as const }, isEnabled: true };
+    const kinds = planComposites(makeDoc([rasterLayer('r1', { inpaint: region })]), BBOX).entries.map((e) => e.kind);
+    expect(kinds).toEqual(['base-raster', 'inpaint-mask']);
+  });
+
+  it('excludes disabled regions, empty paint layers, disabled layers, and unrasterizable polygons', () => {
+    const region = { fill: { color: '#e07575', style: 'diagonal' as const }, isEnabled: true };
+    const doc = makeDoc([
+      rasterLayer('on', { inpaint: region }),
+      rasterLayer('off', { inpaint: { ...region, isEnabled: false } }),
+      rasterLayer('empty', { inpaint: region, source: { bitmap: null, type: 'paint' } }),
+      rasterLayer('layer-off', { inpaint: region, isEnabled: false }),
+      rasterLayer('poly', {
+        inpaint: region,
+        source: { fill: '#fff', height: 10, kind: 'polygon', width: 10, type: 'shape' } as never,
+      }),
+    ]);
+    const entry = entryOfKind(doc, 'inpaint-mask');
+    expect(entry!.maskLayers!.map((l) => l.id)).toEqual(['on']);
+  });
+
+  it("keys a parametric-source region on the source's pixel-determining fields", () => {
+    const region = { fill: { color: '#e07575', style: 'diagonal' as const }, isEnabled: true };
+    const textDoc = (content: string) =>
+      makeDoc([
+        rasterLayer('t1', {
+          inpaint: region,
+          source: { color: '#fff', content, fontFamily: 'Inter', fontSize: 24, type: 'text' } as never,
+        }),
+      ]);
+    const keyFor = (doc: CanvasDocumentContractV3) => entryOfKind(doc, 'inpaint-mask')!.key;
+    expect(keyFor(textDoc('HELLO'))).not.toBe(keyFor(textDoc('WORLD')));
+    expect(keyFor(textDoc('HELLO'))).toBe(keyFor(textDoc('HELLO')));
+  });
+
   it('resolves an undefined denoiseLimit to the legacy default (1.0)', () => {
     const entry = entryOfKind(makeDoc([inpaintMask('m1')]), 'inpaint-mask');
     expect(entry!.maskLayers![0]!.attributeValue).toBe(1);
@@ -284,6 +338,14 @@ describe('planComposites — inpaint-mask entries', () => {
   it('uses the layer denoiseLimit when defined', () => {
     const entry = entryOfKind(makeDoc([inpaintMask('m1', { denoiseLimit: 0.4 })]), 'inpaint-mask');
     expect(entry!.maskLayers![0]!.attributeValue).toBe(0.4);
+  });
+
+  it('treats a disabled denoise modifier as the legacy default (disabled === absent)', () => {
+    const entry = entryOfKind(
+      makeDoc([inpaintMask('m1', { denoiseEnabled: false, denoiseLimit: 0.4 })]),
+      'inpaint-mask'
+    );
+    expect(entry!.maskLayers![0]!.attributeValue).toBe(1);
   });
 
   it('unions multiple masks into the denoise-limit entry', () => {
@@ -307,6 +369,14 @@ describe('planComposites — noise-mask entries', () => {
     expect(entry!.maskLayers![0]!.attributeValue).toBe(0.15);
   });
 
+  it('treats a disabled noise modifier as absent, never as noise 0', () => {
+    const kinds = planComposites(
+      makeDoc([inpaintMask('m1', { noiseEnabled: false, noiseLevel: 0.4 })]),
+      BBOX
+    ).entries.map((e) => e.kind);
+    expect(kinds).toEqual(['base-raster', 'inpaint-mask']);
+  });
+
   it('treats noiseLevel 0 as defined (included), distinct from undefined (excluded)', () => {
     const entry = entryOfKind(makeDoc([inpaintMask('m1', { noiseLevel: 0 })]), 'noise-mask');
     expect(entry).toBeDefined();
@@ -315,7 +385,7 @@ describe('planComposites — noise-mask entries', () => {
 });
 
 describe('planComposites — mask entry keys', () => {
-  const maskKeyOf = (doc: CanvasDocumentContractV2, kind: string): string | undefined => entryOfKind(doc, kind)?.key;
+  const maskKeyOf = (doc: CanvasDocumentContractV3, kind: string): string | undefined => entryOfKind(doc, kind)?.key;
 
   it('is stable for identical documents', () => {
     const a = makeDoc([inpaintMask('m1', { denoiseLimit: 0.5 })]);
@@ -513,19 +583,38 @@ describe('planRegionalMaskComposites', () => {
 describe('planComposites — raster adjustments in the base key', () => {
   it('folds a non-identity adjustment into the base-raster entry (and its key)', () => {
     const plain = rasterLayer('a');
-    const adjusted = rasterLayer('a', { adjustments: { brightness: 0.5, contrast: 0, saturation: 0 } });
+    const adjusted = rasterLayer('a', {
+      adjustments: [
+        { brightness: 0.5, contrast: 0, id: 'adj-bc', isEnabled: true, type: 'brightness-contrast' as const },
+      ],
+    });
     const plan = planComposites(makeDoc([adjusted]), BBOX);
     const ref = plan.entries[0]!.layers[0]!;
-    expect(ref.adjustments).toEqual({ brightness: 0.5, contrast: 0, saturation: 0 });
+    expect(ref.adjustments).toEqual(adjusted.type === 'raster' ? adjusted.adjustments : undefined);
     // A changed adjustment changes the entry key so the executor re-composites/uploads.
     expect(keyOf(makeDoc([plain]))).not.toBe(keyOf(makeDoc([adjusted])));
   });
 
   it('ignores an identity adjustment (no key churn)', () => {
     const plain = rasterLayer('a');
-    const identityAdj = rasterLayer('a', { adjustments: { brightness: 0, contrast: 0, saturation: 0 } });
+    const identityAdj = rasterLayer('a', {
+      adjustments: [
+        { brightness: 0, contrast: 0, id: 'adj-bc', isEnabled: true, type: 'brightness-contrast' as const },
+      ],
+    });
     expect(plan0(plain)).toBe(plan0(identityAdj));
   });
 });
 
 const plan0 = (layer: CanvasLayerContract): string => planComposites(makeDoc([layer]), BBOX).entries[0]!.key;
+
+describe('planComposites — group gating', () => {
+  it('excludes a raster leaf whose group is disabled', () => {
+    const doc = {
+      ...makeDoc([]),
+      stacks: stacksFrom([groupContract('g', [rasterLayer('inner')], { isEnabled: false }), rasterLayer('root')]),
+    };
+    expect(planComposites(doc, BBOX).entries[0]!.layers.map((layer) => layer.id)).toEqual(['root']);
+    expect(getBaseRasterContentBounds(doc)).toEqual({ height: 48, width: 64, x: 0, y: 0 });
+  });
+});

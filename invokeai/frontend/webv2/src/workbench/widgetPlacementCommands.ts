@@ -185,6 +185,14 @@ export const dispatchWidgetDragEndPlacement = ({
       region: resolution.region,
     });
 
+    if (resolution.align) {
+      widgets.setAlignment({
+        align: resolution.align,
+        instanceId: resolution.activeInstanceId,
+        region: resolution.region,
+      });
+    }
+
     return { ok: true, region: resolution.region };
   }
 
@@ -194,6 +202,10 @@ export const dispatchWidgetDragEndPlacement = ({
     toIndex: resolution.toIndex,
     toRegion: resolution.toRegion,
   });
+
+  if (resolution.align) {
+    widgets.setAlignment({ align: resolution.align, instanceId: resolution.instanceId, region: resolution.toRegion });
+  }
 
   return { ok: true, region: resolution.toRegion };
 };

@@ -17,6 +17,7 @@ vi.mock('@dnd-kit/core', () => ({ useDndMonitor: () => undefined }));
 vi.mock('@workbench/WorkbenchContext', () => ({
   useActiveProjectId: () => harness.project!.id,
   useActiveProjectSelector: (selector: (project: Project) => unknown) => selector(harness.project!),
+  useOptionalWorkbenchCommands: () => null,
   useWorkbenchCommands: () => ({
     canvas: { apply: vi.fn() },
     notifications: { add: vi.fn(), reportError: vi.fn() },
@@ -40,7 +41,6 @@ vi.mock('./useCanvasGallerySave', () => ({
 vi.mock('./useCreateFromBbox', () => ({
   useCreateFromBbox: () => ({ createFromBbox: () => undefined, isCreating: false }),
 }));
-vi.mock('./CanvasBottomControls', () => ({ CanvasBottomControls: () => null }));
 vi.mock('./CanvasCreateFromBboxSubmenu', () => ({ CanvasCreateFromBboxSubmenu: () => null }));
 vi.mock('./CanvasGlobalContextMenu', () => ({ CanvasGlobalContextMenu: () => null }));
 vi.mock('./CanvasImageDropOverlay', () => ({ CanvasImageDropOverlay: () => null }));

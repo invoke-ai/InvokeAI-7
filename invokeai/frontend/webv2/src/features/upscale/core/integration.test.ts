@@ -65,16 +65,9 @@ describe('Upscale snapshot submission', () => {
 
     const project = state.projects.find((candidate) => candidate.id === projectId)!;
     const queueItem = project.queue.items[0]!;
-    const snapshotValues = queueItem.snapshot.widgetStates.upscale?.values;
 
     expect(queueItem.snapshot.sourceId).toBe('upscale');
-    expect(snapshotValues).toMatchObject({
-      batchCount: 3,
-      inputImage: { image_name: 'input.png' },
-      negativePrompt: 'blur',
-      positivePrompt: 'fine detail',
-      seed: Math.floor(0.25 * 4_294_967_295),
-    });
+    expect(queueItem.snapshot.recall).toBeUndefined();
     expect(project.promptHistory[0]).toEqual({ negativePrompt: 'blur', positivePrompt: 'fine detail' });
     expect(project.widgetGraphs.upscale?.backendGraph?.nodes.upscale_output).toMatchObject({
       is_intermediate: false,

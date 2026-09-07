@@ -9,5 +9,11 @@ import { getBoardCounts } from './galleryStateView';
 export const getGalleryCountForView = (board: GalleryBoard, galleryView: GalleryView): number => {
   const counts = getBoardCounts(board);
 
-  return galleryView === 'assets' ? counts.assetCount : counts.imageCount + counts.videoCount;
+  // Videos split across the views the same way images do: uploaded ('user') videos are
+  // assets, generated ('general') videos are media. Clamped: the uncategorized
+  // pseudo-board's counts come from parallel requests, so a delete landing between
+  // them can transiently report more asset videos than videos.
+  return galleryView === 'assets'
+    ? counts.assetCount + counts.assetVideoCount
+    : Math.max(0, counts.imageCount + counts.videoCount - counts.assetVideoCount);
 };

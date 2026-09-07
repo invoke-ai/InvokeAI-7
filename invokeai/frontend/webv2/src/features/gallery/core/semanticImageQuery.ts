@@ -174,6 +174,114 @@ export const pruneImageClusterMembers = (imageNames: readonly string[]): (() => 
  * legacy bare-image-name shape, and reads a file key that no longer resolves
  * in the registry as no search at all.
  */
+/**
+ * A reference that only this session can resolve — a dropped file or an
+ * image-map cluster.
+ *
+ * Both kinds name an entry in an in-memory registry, and their ids carry a
+ * per-realm token, so a persisted one can never resolve again: a reload, or a
+ * second tab, reads it as no search at all. Anything set against the ranking
+ * it named — the page the footer was on, above all — describes a list that
+ * will not exist there either.
+ */
+const isSessionScopedGallerySemanticReference = (value: unknown): boolean =>
+  !!value &&
+  typeof value === 'object' &&
+  ((value as Record<string, unknown>).kind === 'file' || (value as Record<string, unknown>).kind === 'cluster');
+
+/**
+ * The same values with every position that was set against a ranking the
+ * caller's test rejects, or null when there is nothing to drop.
+ *
+ * While a similarity search is on screen the footer paginates the RANKING, so
+ * the gallery's page and the page stamped on the selection are both indexes
+ * into it. Left behind by a search that is gone, they are read as board pages
+ * and answer with an unrelated slice. Only keys that are actually carrying a
+ * position are rewritten: normalizing must not mint state that was never
+ * stored.
+ *
+ * The test differs by caller, and the difference matters. See
+ * `stripSessionScopedGallerySearch` and `stripUnresolvableGallerySearch`.
+ */
+const stripGallerySearchPositions = (
+  values: Record<string, unknown>,
+  shouldStrip: (value: unknown) => boolean
+): Record<string, unknown> | null => {
+  if (!shouldStrip(values.semanticImageQuery)) {
+    return null;
+  }
+
+  const nextValues: Record<string, unknown> = { ...values, semanticImageQuery: null };
+
+  if (typeof values.galleryPage === 'number' && values.galleryPage !== 0) {
+    nextValues.galleryPage = 0;
+  }
+
+  if (typeof values.selectedImagePage === 'number' && values.selectedImagePage !== 0) {
+    nextValues.selectedImagePage = 0;
+  }
+
+  const selectedImageQuery =
+    values.selectedImageQuery && typeof values.selectedImageQuery === 'object'
+      ? (values.selectedImageQuery as Record<string, unknown>)
+      : null;
+
+  if (selectedImageQuery && typeof selectedImageQuery.page === 'number' && selectedImageQuery.page !== 0) {
+    nextValues.selectedImageQuery = { ...selectedImageQuery, page: 0 };
+  }
+
+  return nextValues;
+};
+
+/**
+ * The same values with an infinite window's mid-board anchor dropped, or null
+ * when there is none.
+ *
+ * In infinite mode `galleryPage` is not a page number but the anchor of a
+ * mid-board window, set by a reveal from the image map. That is a "you are
+ * here" for the session that made it: restored anywhere else it opens the
+ * gallery stranded in the middle of a board, with no page control (the
+ * footer's is paginated-only) and no way back to the top short of switching
+ * boards. Paginated pages stay — there the value really is the page the user
+ * was reading.
+ */
+export const stripInfiniteWindowAnchor = (values: Record<string, unknown>): Record<string, unknown> | null =>
+  values.paginationMode !== 'paginated' && typeof values.galleryPage === 'number' && values.galleryPage > 0
+    ? { ...values, galleryPage: 0 }
+    : null;
+
+/**
+ * For the SAVE path: drop what the realm reading this back will not have.
+ *
+ * A dropped file or an image-map cluster names an entry in an in-memory
+ * registry, and its id carries a per-realm token, so it resolves here and
+ * nowhere else — the test has to be what the value IS, not whether it works
+ * right now, because right now it does.
+ */
+export const stripSessionScopedGallerySearch = (values: Record<string, unknown>): Record<string, unknown> | null =>
+  stripGallerySearchPositions(
+    values,
+    (value) =>
+      isSessionScopedGallerySemanticReference(value) ||
+      (value !== null && value !== undefined && parseGallerySemanticReference(value) === null)
+  );
+
+/**
+ * For the ADOPTION path: drop only what this realm cannot resolve.
+ *
+ * `normalizeWorkbenchProject` runs on projects that never left — closing and
+ * reopening one, a conflict fork rescuing the live copy, an export re-imported
+ * into the same session. There the registry entry is still live and the
+ * ranking is still on screen, so asking what the value IS would delete the
+ * search the user is looking at. Asking whether it resolves HERE answers both
+ * cases with one test.
+ */
+export const stripUnresolvableGallerySearch = (values: Record<string, unknown>): Record<string, unknown> | null =>
+  stripGallerySearchPositions(
+    values,
+    (value) => value !== null && value !== undefined && parseGallerySemanticReference(value) === null
+  );
+
 export const parseGallerySemanticReference = (value: unknown): GallerySemanticReference | null => {
   // Legacy shape: a bare image name.
   if (typeof value === 'string' && value) {

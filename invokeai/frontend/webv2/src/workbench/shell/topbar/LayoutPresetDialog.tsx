@@ -31,7 +31,8 @@ import { getInitialLayoutPresetIconId, getInitialLayoutPresetRoute } from './lay
 import { layoutPresetIconGroups } from './layoutPresetIcons';
 import { RoutingDestinationSegments } from './RoutingDestinationSegments';
 
-const layoutPresetIconIds = layoutPresetIconGroups.flatMap((group) => group.options.map((option) => option.id));
+const layoutPresetIconOptions = layoutPresetIconGroups.flatMap((group) => group.options);
+const layoutPresetIconIds = layoutPresetIconOptions.map((option) => option.id);
 
 type SourceSelectItem = GraphWidgetSource & { value: InvocationSourceId };
 
@@ -183,7 +184,7 @@ export const LayoutPresetDialog = ({
               <Dialog.Header>
                 <Dialog.Title>{title}</Dialog.Title>
                 <Dialog.CloseTrigger asChild>
-                  <CloseButton size="sm" type="button" />
+                  <CloseButton type="button" />
                 </Dialog.CloseTrigger>
               </Dialog.Header>
               <Dialog.Body>
@@ -208,25 +209,18 @@ export const LayoutPresetDialog = ({
                     <Text color="fg.subtle" fontSize="2xs" fontWeight="700" textTransform="uppercase">
                       {t('topbar.presets.icon')}
                     </Text>
-                    {layoutPresetIconGroups.map((group) => (
-                      <Stack key={group.label} gap="1.5">
-                        <Text color="fg.muted" fontSize="2xs">
-                          {group.label}
-                        </Text>
-                        <SimpleGrid columns={8} gap="1">
-                          {group.options.map((entry) => (
-                            <IconOption
-                              key={entry.id}
-                              icon={entry.icon}
-                              iconId={entry.id}
-                              isSelected={entry.id === iconId}
-                              label={entry.label}
-                              onSelect={setIconId}
-                            />
-                          ))}
-                        </SimpleGrid>
-                      </Stack>
-                    ))}
+                    <SimpleGrid columns={8} gap="1">
+                      {layoutPresetIconOptions.map((entry) => (
+                        <IconOption
+                          key={entry.id}
+                          icon={entry.icon}
+                          iconId={entry.id}
+                          isSelected={entry.id === iconId}
+                          label={entry.label}
+                          onSelect={setIconId}
+                        />
+                      ))}
+                    </SimpleGrid>
                   </Stack>
                   <Field
                     helpText={sourceOptions.length === 0 ? t('topbar.presets.noInvocationSource') : undefined}
@@ -258,7 +252,7 @@ export const LayoutPresetDialog = ({
                 </Stack>
               </Dialog.Body>
               <Dialog.Footer>
-                <Button size="xs" type="button" variant="outline" onClick={onClose}>
+                <Button size="xs" type="button" variant="ghost" onClick={onClose}>
                   {t('common.cancel')}
                 </Button>
                 <Button disabled={!canSubmit} size="xs" type="submit">

@@ -157,7 +157,11 @@ export const isCompactBottomItem = <Instance extends WidgetPlacementInstanceMeta
 
 export const isExpandableBottomItem = <Instance extends WidgetPlacementInstanceMeta>(
   item: WidgetRegionItem<Instance>
-): boolean => item.widget.manifest.bottomPanel !== 'tooltip';
+): boolean => item.widget.manifest.bottomPanel !== 'tooltip' && item.widget.manifest.bottomPanel !== 'popover';
+
+export const isPopoverBottomItem = <Instance extends WidgetPlacementInstanceMeta>(
+  item: WidgetRegionItem<Instance>
+): boolean => item.widget.manifest.bottomPanel === 'popover';
 
 export const canRemoveItem = (item: WidgetRegionItem, viewModel: WidgetRegionViewModel): boolean => {
   if (viewModel.region !== 'center') {

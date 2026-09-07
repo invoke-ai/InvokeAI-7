@@ -131,6 +131,23 @@ class _GenerationDevicePool:
         if lock is not None:
             lock.release()
 
+    def any_other_device_busy(self, device: Optional[torch.device]) -> bool:
+        """True when any registered generation device OTHER than ``device`` is in use.
+
+        "In use" means its exclusive-use lock is held — a native session is running on it, or
+        a borrower is running an encoder there. Used to decide whether a process-global,
+        peer-convoying operation (``TorchDevice.empty_cache``) is safe to run right now.
+        ``device=None`` (a caller with no pinned session device, e.g. a maintenance thread)
+        treats EVERY busy device as "other". Single-device and legacy installs have at most
+        one registered lock, so a device's own worker always gets False — pre-multi-GPU
+        behavior is unchanged there.
+        """
+        exclude_key = None
+        if device is not None and device.type in _OFFLOAD_DEVICE_TYPES:
+            exclude_key = str(TorchDevice.normalize(device))
+        with self._registry_lock:
+            return any(lock.locked() for key, lock in self._device_locks.items() if key != exclude_key)
+
     def reset(self) -> None:
         """Clear all registered devices (used by tests)."""
         with self._registry_lock:

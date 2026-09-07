@@ -63,7 +63,7 @@ export const RoutingControl = ({ state }: { state: InvocationState }) => {
             overflow="visible"
             p="0"
             position="relative"
-            size="xs"
+            size="sm"
             variant="outline"
             w="34px"
             display="grid"

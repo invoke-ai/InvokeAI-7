@@ -42,7 +42,7 @@ from invokeai.app.services.shared.graph import CollectInvocation, IterateInvocat
 from invokeai.app.services.shared.invocation_context import InvocationContextData, build_invocation_context
 from invokeai.app.util.profiler import Profiler
 from invokeai.backend.util.device_pool import GENERATION_DEVICE_POOL
-from invokeai.backend.util.devices import TorchDevice
+from invokeai.backend.util.devices import TorchDevice, disable_conv_benchmark_empty_cache
 
 # A failed owner lookup is retried before the item is refused, so that a transient error
 # — a busy-timeout on the shared SQLite connection under multi-GPU write contention, say —
@@ -280,12 +280,21 @@ class DefaultSessionRunner(SessionRunnerBase):
                 if self._on_after_run_node_callbacks and isinstance(invocation, (IterateInvocation, CollectInvocation)):
                     control_collection = invocation.collection
                 # Save output and history
-                queue_item.session.complete(invocation.id, output)
+                finalized_outputs = queue_item.session.complete(invocation.id, output)
 
                 if control_collection is not None:
                     invocation.collection = control_collection
                 try:
                     self._on_after_run_node(invocation, queue_item, output)
+                    for finalized_invocation, finalized_output in finalized_outputs:
+                        # For output collections are finalized when their matching ForReturn completes. Emit a
+                        # follow-up event so listeners receive the materialized final collection, not the placeholder
+                        # produced when the For iteration started.
+                        self._services.events.emit_invocation_complete(
+                            invocation=finalized_invocation,
+                            queue_item=queue_item,
+                            output=finalized_output,
+                        )
                 finally:
                     if control_collection is not None:
                         invocation.collection = []
@@ -404,6 +413,9 @@ class DefaultSessionRunner(SessionRunnerBase):
             f"On after run session: queue item {queue_item.item_id}, session {queue_item.session_id}"
         )
 
+        # The item's preview frame is disposable: whatever the outcome, nothing may replay it now.
+        self._services.progress_previews.clear(queue_item.item_id)
+
         # If we are profiling, stop the profiler and dump the profile & stats
         if self._profiler is not None:
             profile_path = self._profiler.stop()
@@ -464,6 +476,9 @@ class DefaultSessionRunner(SessionRunnerBase):
             f"On after run node: queue item {queue_item.item_id}, session {queue_item.session_id}, node {invocation.id} ({invocation.get_type()})"
         )
 
+        # The node's denoise is over: its last frame must not be replayed as if still running.
+        self._services.progress_previews.clear_node(queue_item.item_id, invocation.id)
+
         # Send complete event on successful runs
         self._services.events.emit_invocation_complete(invocation=invocation, queue_item=queue_item, output=output)
 
@@ -486,6 +501,7 @@ class DefaultSessionRunner(SessionRunnerBase):
         - Emits an invocation error event.
         - Run any callbacks registered for this event.
         """
+        self._services.progress_previews.clear_node(queue_item.item_id, invocation.id)
 
         self._services.logger.debug(
             f"On node error: queue item {queue_item.item_id}, session {queue_item.session_id}, node {invocation.id} ({invocation.get_type()})"
@@ -617,6 +633,12 @@ class DefaultSessionProcessor(SessionProcessorBase):
         # Register the generation devices so the model loader can discover idle GPUs to host text
         # encoders on (see offload_text_encoders_to_idle_gpus). None means legacy single-device mode.
         GENERATION_DEVICE_POOL.set_generation_devices([d for d in devices if d is not None])
+
+        # With more than one CUDA/HIP generation device, torch's post-conv-algorithm-search global
+        # emptyCache() convoys the peer GPU's in-flight step from C++, where the peer-aware
+        # empty_cache wrapper cannot intercept it. Trade it for cached workspace blocks instead.
+        if sum(1 for d in devices if d is not None and d.type == "cuda") > 1:
+            disable_conv_benchmark_empty_cache()
 
         # If profiling is enabled, create a profiler. The same profiler will be used for all sessions. Internally,
         # the profiler will create a new profile for each session. Profiling uses a process-global cProfile, which
@@ -1053,6 +1075,8 @@ class DefaultSessionProcessor(SessionProcessorBase):
         self._invoker.services.logger.error(error_traceback)
 
         if queue_item is not None:
+            # This path bypasses the runner's after-session hook; the item's frame must not outlive it.
+            self._invoker.services.progress_previews.clear(queue_item.item_id)
             try:
                 queue_item = self._invoker.services.session_queue.set_queue_item_session(
                     queue_item.item_id, queue_item.session

@@ -1,7 +1,8 @@
-import type { CanvasDocumentContractV2 } from '@workbench/canvas-engine/contracts';
+import type { CanvasDocumentContractV3, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
 import type { RasterSurface } from '@workbench/canvas-engine/render/raster';
 import type { FloatingSelection } from '@workbench/canvas-engine/selection/floatingSelection';
 
+import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
 import { describe, expect, it } from 'vitest';
 
 import { floatingSelectionFrame } from './floatingSelectionFrame';
@@ -17,13 +18,19 @@ const float = (overrides: Partial<FloatingSelection> = {}): FloatingSelection =>
     ...overrides,
   }) as unknown as FloatingSelection;
 
-const documentOf = (layerIds: readonly string[]): CanvasDocumentContractV2 =>
+const documentOf = (layerIds: readonly string[]): CanvasDocumentContractV3 =>
   ({
-    layers: layerIds.map((id) => ({
-      id,
-      transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 10, y: 20 },
-    })),
-  }) as unknown as CanvasDocumentContractV2;
+    stacks: stacksFrom(
+      layerIds.map(
+        (id) =>
+          ({
+            id,
+            transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 10, y: 20 },
+            type: 'raster',
+          }) as unknown as CanvasLayerContract
+      )
+    ),
+  }) as unknown as CanvasDocumentContractV3;
 
 describe('floatingSelectionFrame', () => {
   it('describes the composite and the ants together', () => {
@@ -63,8 +70,14 @@ describe('floatingSelectionFrame', () => {
 
   it('reports nothing when the layer transform cannot be inverted', () => {
     const collapsed = {
-      layers: [{ id: 'layer-1', transform: { rotation: 0, scaleX: 0, scaleY: 0, x: 0, y: 0 } }],
-    } as unknown as CanvasDocumentContractV2;
+      stacks: stacksFrom([
+        {
+          id: 'layer-1',
+          transform: { rotation: 0, scaleX: 0, scaleY: 0, x: 0, y: 0 },
+          type: 'raster',
+        } as unknown as CanvasLayerContract,
+      ]),
+    } as unknown as CanvasDocumentContractV3;
     expect(floatingSelectionFrame(float(), collapsed)).toBeNull();
   });
 });

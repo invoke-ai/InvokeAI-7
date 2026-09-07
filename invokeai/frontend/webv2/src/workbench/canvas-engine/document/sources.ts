@@ -13,15 +13,18 @@
  */
 
 import type {
-  CanvasDocumentContractV2,
+  CanvasDocumentContractV3,
   CanvasLayerContract,
   CanvasLayerSourceContract,
+  ParametricShapeKind,
 } from '@workbench/canvas-engine/contracts';
 import type { Rect } from '@workbench/canvas-engine/types';
 
 import { fromTRS } from '@workbench/canvas-engine/math/mat2d';
 import { transformBounds } from '@workbench/canvas-engine/math/rect';
 import { estimateTextExtent } from '@workbench/canvas-engine/render/rasterizers/textRasterizer';
+
+import { isLayerContributing } from './layerEligibility';
 
 /** A layer type that carries a rasterizable `source` (raster or control). */
 type SourceLayer = Extract<CanvasLayerContract, { source: CanvasLayerSourceContract }>;
@@ -36,54 +39,6 @@ const hasSource = (layer: CanvasLayerContract): layer is SourceLayer =>
 /** True when a layer carries a `mask` (inpaint mask / regional guidance). */
 export const isMaskLayer = (layer: CanvasLayerContract): layer is MaskLayer =>
   layer.type === 'inpaint_mask' || layer.type === 'regional_guidance';
-
-/**
- * The layer types that can be hidden without being disabled — everything drawn
- * on canvas purely to SHOW you where an effect applies.
- *
- * Raster layers are excluded on purpose: the raster stack is the generation
- * input, so hiding one and still generating from it is not a state that can be
- * explained to a user. Their contracts have no `isHidden` field at all.
- */
-export type HideableLayer = Extract<CanvasLayerContract, { type: 'control' | 'inpaint_mask' | 'regional_guidance' }>;
-
-/** True when `layer` supports being hidden independently of being enabled. */
-export const isHideableLayer = (layer: CanvasLayerContract): layer is HideableLayer =>
-  layer.type === 'control' || isMaskLayer(layer);
-
-/**
- * True when `layer`'s on-canvas preview is suppressed. DISPLAY ONLY — callers
- * that decide what the image contains (generation, export) must NOT consult it;
- * that is `isEnabled`'s job.
- */
-export const isLayerHidden = (layer: CanvasLayerContract): boolean => isHideableLayer(layer) && layer.isHidden === true;
-
-/** The number of strict composite groups (see {@link layerGroupRank}). */
-export const LAYER_GROUP_COUNT = 4;
-
-/**
- * The strict composite-group rank of a layer, ordered bottom→top: raster (0) <
- * control (1) < regional guidance (2) < inpaint mask (3). Mirrors legacy
- * `arrangeEntities` / `CanvasEntityRendererModule` and the layers panel's grouped
- * sections, so a layer's global insertion index never lets it draw — or be
- * hit-tested — out of group order (a raster created above a control layer still
- * composites, and is grabbed, below it). The compositor draws groups in this
- * order; the move/context-menu hit-test iterates them top→bottom, keeping the two
- * in lockstep so the layer the user clicks is the layer they see on top.
- */
-export const layerGroupRank = (layer: CanvasLayerContract): number => {
-  switch (layer.type) {
-    case 'control':
-      return 1;
-    case 'regional_guidance':
-      return 2;
-    case 'inpaint_mask':
-      return 3;
-    default:
-      // raster (and any future non-grouped renderable) composites at the bottom.
-      return 0;
-  }
-};
 
 /**
  * A mask layer's alpha bitmap viewed as a `paint` source, so the whole paint
@@ -111,13 +66,16 @@ export const renderableSourceOf = (layer: CanvasLayerContract): CanvasLayerSourc
   return maskAsPaintSource(layer);
 };
 
+/** A polygon shape needs three points to fill; anything less has no raster. */
+export const isEmptyPolygonShape = (source: { kind: ParametricShapeKind | 'polygon'; points?: unknown[] }): boolean =>
+  source.kind === 'polygon' && (source.points?.length ?? 0) < 3;
+
 /**
- * True when a layer's source is one the engine can rasterize today: image,
- * paint, gradient, text, or a rect/ellipse shape. A `polygon` shape has no
- * rasterizer yet (deferred), so it is not renderable.
+ * True when a layer's source is one the engine can rasterize: image, paint,
+ * gradient, text, or a shape — a polygon only once it has three points.
  */
 export const isRenderableLayer = (layer: CanvasLayerContract): boolean => {
-  if (!layer.isEnabled) {
+  if (!isLayerContributing(layer)) {
     return false;
   }
   // Mask layers are renderable whenever enabled: an empty (bitmap-less) mask
@@ -136,29 +94,11 @@ export const isRenderableLayer = (layer: CanvasLayerContract): boolean => {
     case 'text':
       return true;
     case 'shape':
-      return source.kind !== 'polygon';
+      return !isEmptyPolygonShape(source);
     default:
       return false;
   }
 };
-
-/**
- * True when a layer carries pixels the engine can rasterize AND merge: an
- * enabled, unlocked paint/image raster layer. Narrower than
- * {@link isRenderableLayer} — masks, control layers, shapes, text, and gradient
- * layers are all renderable but NOT mergeable. Locked matches the paint tool's
- * rule (`isLocked || !isEnabled` refuses a paint target): merge writes pixels
- * into the below layer and deletes the upper one, so it must refuse a locked
- * layer on either side just as painting refuses a locked target. The layers
- * panel's merge-down enablement (`canMergeLayerDown`) and the engine's
- * `mergeLayerDown` guard both defer to this single predicate so the hotkey,
- * context menu, and engine can never disagree about what is mergeable.
- */
-export const isMergeableRasterLayer = (layer: CanvasLayerContract): boolean =>
-  layer.isEnabled &&
-  !layer.isLocked &&
-  layer.type === 'raster' &&
-  (layer.source.type === 'paint' || layer.source.type === 'image');
 
 /**
  * A layer's content rectangle in its LOCAL (untransformed) coordinate space —
@@ -174,7 +114,7 @@ export const isMergeableRasterLayer = (layer: CanvasLayerContract): boolean =>
  *
  * Throws for layers without a rasterizable source, so callers fail loudly.
  */
-export const getSourceContentRect = (layer: CanvasLayerContract, doc: CanvasDocumentContractV2): Rect => {
+export const getSourceContentRect = (layer: CanvasLayerContract, doc: CanvasDocumentContractV3): Rect => {
   const source = renderableSourceOf(layer);
   if (!source) {
     throw new Error(`getSourceContentRect: layer type '${layer.type}' has no rasterizable source`);
@@ -216,7 +156,7 @@ export const getSourceContentRect = (layer: CanvasLayerContract, doc: CanvasDocu
  * projected through the layer transform (rotation-aware). Used for culling and
  * fit-to-content. Throws for layers without a rasterizable source.
  */
-export const getSourceBounds = (layer: CanvasLayerContract, doc: CanvasDocumentContractV2): Rect => {
+export const getSourceBounds = (layer: CanvasLayerContract, doc: CanvasDocumentContractV3): Rect => {
   const contentRect = getSourceContentRect(layer, doc);
   const { transform } = layer;
   const matrix = fromTRS({ x: transform.x, y: transform.y }, transform.rotation, transform.scaleX, transform.scaleY);
@@ -226,7 +166,7 @@ export const getSourceBounds = (layer: CanvasLayerContract, doc: CanvasDocumentC
 /** The native (unscaled) pixel size of a layer's raster cache surface. */
 export const getSourcePixelSize = (
   layer: CanvasLayerContract,
-  doc: CanvasDocumentContractV2
+  doc: CanvasDocumentContractV3
 ): { width: number; height: number } => {
   const rect = getSourceContentRect(layer, doc);
   return { height: rect.height, width: rect.width };

@@ -20,6 +20,7 @@ import {
   hasModelDefaultVae,
   isLoraCompatibleWithModel,
   isGenerateSettings,
+  moveReferenceImage,
   normalizeGenerateSettings,
   syncGenerateWidgetValuesWithModels,
   syncGenerateLorasWithModels,
@@ -414,6 +415,31 @@ describe('dimension helpers', () => {
     expect(wide.width % 8).toBe(0);
     expect(wide.height % 8).toBe(0);
     expect(wide.width / wide.height).toBeCloseTo(16 / 9, 1);
+  });
+
+  it('moves a reference image one step through the stack, and no-ops at the ends', () => {
+    const referenceImages = ['a', 'b', 'c'].map((id) => ({
+      config: { image: null, model: null, type: 'flux_kontext_reference_image' as const },
+      id,
+      isEnabled: true,
+    }));
+    const idsOf = (list: readonly { id: string }[]) => list.map(({ id }) => id);
+
+    expect(idsOf(moveReferenceImage(referenceImages, 'c', -1))).toEqual(['a', 'c', 'b']);
+    expect(idsOf(moveReferenceImage(referenceImages, 'a', 1))).toEqual(['b', 'a', 'c']);
+
+    // Order IS conditioning order, so a move must reorder and nothing else:
+    // entries keep their identity rather than being rebuilt.
+    const moved = moveReferenceImage(referenceImages, 'a', 1);
+
+    expect(moved[1]).toBe(referenceImages[0]);
+
+    // Out-of-range moves and an unknown id return the SAME array, which is how
+    // the caller knows to skip the settings write entirely.
+    expect(moveReferenceImage(referenceImages, 'a', -1)).toBe(referenceImages);
+    expect(moveReferenceImage(referenceImages, 'c', 1)).toBe(referenceImages);
+    expect(moveReferenceImage(referenceImages, 'missing', 1)).toBe(referenceImages);
+    expect(moveReferenceImage([], 'a', 1)).toEqual([]);
   });
 
   it('uses larger dimension grids for model families that require them', () => {

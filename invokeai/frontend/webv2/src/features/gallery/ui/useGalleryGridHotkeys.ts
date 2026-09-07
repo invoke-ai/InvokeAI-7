@@ -1,13 +1,14 @@
-import type { GalleryItemRef } from '@features/gallery/core/items';
+import type { GalleryItem, GalleryItemRef } from '@features/gallery/core/items';
 
 import { shouldStarSelection, toGalleryItemKey, toGalleryItemRef } from '@features/gallery/core/items';
 import { useEffect, useEffectEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import type { GalleryGridNavDirection, GalleryGridNavigation } from './galleryGridLayout';
+
+import { getGalleryGridNavigationStep } from './galleryGridLayout';
 import { useGalleryUi } from './GalleryUiContext';
 import { useGalleryWidget } from './GalleryWidgetContext';
-
-type GalleryNavDirection = 'down' | 'left' | 'right' | 'up';
 
 const GALLERY_HOTKEYS = [
   ['gallery.selectAllOnPage', 'widgets.gallery.commands.selectAllOnPage', null, ['mod+a']],
@@ -22,7 +23,8 @@ const GALLERY_HOTKEYS = [
   ['gallery.galleryNavLeftAlt', 'widgets.gallery.commands.navigationLeft', 'left', ['alt+arrowleft']],
   ['gallery.deleteSelection', 'widgets.gallery.commands.deleteSelection', null, ['delete', 'backspace']],
   ['gallery.starImage', 'widgets.gallery.commands.toggleStarImage', null, ['.']],
-] as const satisfies readonly (readonly [string, string, GalleryNavDirection | null, readonly string[]])[];
+  ['gallery.toggleStarredOnly', 'widgets.gallery.commands.toggleStarredOnly', null, []],
+] as const satisfies readonly (readonly [string, string, GalleryGridNavDirection | null, readonly string[]])[];
 
 /**
  * Registers the grid's commands and their default keys.
@@ -34,29 +36,31 @@ const GALLERY_HOTKEYS = [
 export const useGalleryGridHotkeys = ({
   actionSelectionRefs,
   columnCount,
+  loadedItems,
+  navigation,
   scrollToItemIndex,
 }: {
   actionSelectionRefs: GalleryItemRef[];
   columnCount: number;
+  /** Everything on hand for star-state lookups, strip included. */
+  loadedItems: readonly GalleryItem[];
+  /** The arrow-key index space: shown strip cells, then the listing. */
+  navigation: GalleryGridNavigation;
   scrollToItemIndex: (itemIndex: number) => void;
 }) => {
   const { t } = useTranslation();
   const { actions, gallery, itemActions, runtime } = useGalleryWidget();
-  const { widgets } = useGalleryUi();
+  const { gallery: galleryCommands } = useGalleryUi();
 
-  const navigate = useEffectEvent((direction: GalleryNavDirection) => {
-    const itemCount = gallery.items.length;
-
-    if (itemCount === 0) {
+  const navigate = useEffectEvent((direction: GalleryGridNavDirection) => {
+    if (navigation.items.length === 0) {
       return;
     }
 
-    const selectedIndex = gallery.items.findIndex((item) => toGalleryItemKey(item) === gallery.selectedItemKey);
-    const fallbackIndex = selectedIndex === -1 ? 0 : selectedIndex;
-    const delta =
-      direction === 'right' ? 1 : direction === 'left' ? -1 : direction === 'down' ? columnCount : -columnCount;
-    const nextIndex = Math.min(itemCount - 1, Math.max(0, fallbackIndex + delta));
-    const nextItem = gallery.items[nextIndex];
+    const selectedIndex = navigation.items.findIndex((item) => toGalleryItemKey(item) === gallery.selectedItemKey);
+    const nextIndex =
+      selectedIndex === -1 ? 0 : getGalleryGridNavigationStep(navigation, columnCount, selectedIndex, direction);
+    const nextItem = navigation.items[nextIndex];
 
     if (nextItem && (nextIndex !== selectedIndex || selectedIndex === -1)) {
       actions.selectItem(nextItem);
@@ -75,11 +79,7 @@ export const useGalleryGridHotkeys = ({
     }
 
     if (commandId === 'gallery.clearSelection') {
-      widgets.patchGalleryValues({
-        selectedImage: null,
-        selectedImageName: null,
-        selectedImageNames: [],
-      });
+      galleryCommands.clearSelection();
       return;
     }
 
@@ -89,7 +89,12 @@ export const useGalleryGridHotkeys = ({
     }
 
     if (commandId === 'gallery.starImage' && actionSelectionRefs.length > 0) {
-      void itemActions.setItemsStarred(actionSelectionRefs, shouldStarSelection(gallery.items, actionSelectionRefs));
+      void itemActions.setItemsStarred(actionSelectionRefs, shouldStarSelection(loadedItems, actionSelectionRefs));
+      return;
+    }
+
+    if (commandId === 'gallery.toggleStarredOnly' && gallery.semanticImageQuery === null) {
+      actions.setStarredOnly(!gallery.starredOnly);
     }
   });
 

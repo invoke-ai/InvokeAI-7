@@ -1,7 +1,8 @@
 import type { ProjectGraphState } from '@features/workflow/contracts';
 import type { BackendConnectionStatus } from '@platform/transport/types';
 
-import type { CanvasStateContractV2 } from './canvas-engine/api';
+import type { CanvasStateContractV3 } from './canvas-engine/api';
+import type { CanvasLoadRefusal } from './canvasLoadContracts';
 import type { GraphContract } from './graphContracts';
 import type { InvocationControllerState } from './invocationContracts';
 import type {
@@ -25,13 +26,6 @@ export type { ProjectEvent, ProjectEventType } from './projectEventContracts';
 export interface Project {
   id: string;
   name: string;
-  /**
-   * Set on recovery forks created when a save loses a revision race: the id
-   * of the root project this recovered from (chains collapse to the root, so
-   * a recovery of a recovery still points at the original).
-   */
-  recoveryOf?: string;
-  recoveredAt?: string;
   settings: ProjectSettings;
   layout: ProjectLayoutState;
   invocation: InvocationControllerState;
@@ -47,13 +41,37 @@ export interface Project {
    */
   floatingWidgets?: Record<WidgetInstanceId, FloatingWidgetState>;
   widgetGraphs: Partial<Record<WidgetTypeId, GraphContract>>;
-  canvas: CanvasStateContractV2;
-  graphHistory: GraphHistorySnapshot[];
+  canvas: CanvasStateContractV3;
   promptHistory: PromptHistoryItem[];
   undoRedo: UndoRedoHistory;
   queue: WorkbenchQueueState;
   events: ProjectEvent[];
 }
+
+/** A persisted project the canvas version gate refused. `raw` is the untouched document, kept for recovery. */
+export interface ProjectDocumentLoadRefusal {
+  raw: unknown;
+  scope: 'project-document';
+  status: 'unsupported-version';
+  version: number;
+}
+
+interface RefusedWorkbenchProjectBase {
+  projectId: string;
+  projectName: string;
+  raw: unknown;
+}
+
+export type RefusedWorkbenchProject = RefusedWorkbenchProjectBase &
+  (
+    | { refusal: CanvasLoadRefusal; source: 'canvas'; queueItem?: never }
+    | { refusal: ProjectDocumentLoadRefusal; source: 'project-document'; queueItem?: never }
+  );
+
+export type ProjectLoadResult =
+  | { status: 'loaded'; project: Project }
+  | { status: 'refused'; refused: RefusedWorkbenchProject }
+  | { status: 'unavailable' };
 
 export interface WorkbenchState {
   projects: Project[];
@@ -89,21 +107,6 @@ export interface WorkbenchNotification {
   category?: WorkbenchNotificationCategory;
   /** Coalesced repeat count (see addNotification); absent = 1. */
   occurrenceCount?: number;
-}
-
-/**
- * One entry of the project's graph history. Queue submissions record the
- * compiled `graph`; workflow snapshots (manual save, pre-replacement) record
- * the editable `document`, which is what makes them restorable.
- */
-export interface GraphHistorySnapshot {
-  id: string;
-  createdAt: string;
-  label: string;
-  /** UTF-8 serialized bytes retained by this snapshot, populated during creation or hydration. */
-  retainedBytes?: number;
-  graph?: GraphContract;
-  document?: ProjectGraphState;
 }
 
 export interface PromptHistoryItem {

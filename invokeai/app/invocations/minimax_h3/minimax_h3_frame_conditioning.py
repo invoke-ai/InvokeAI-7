@@ -21,6 +21,7 @@ from invokeai.backend.minimax_h3.autoencoder_kl_minimax_h3 import AutoencoderKLM
 from invokeai.backend.minimax_h3.keyframe_conditioning import encode_keyframes, prepare_keyframes
 from invokeai.backend.minimax_h3.packing import MINIMAX_H3_CANVAS_MULTIPLE
 from invokeai.backend.model_manager.load.model_cache.utils import get_effective_device
+from invokeai.backend.util.vae_working_memory import estimate_vae_working_memory_minimax_h3
 
 
 @invocation_output("minimax_h3_frame_conditioning_output")
@@ -37,7 +38,7 @@ class MiniMaxH3FrameConditioningOutput(BaseInvocationOutput):
     title="Frame Conditioning - MiniMax H3",
     tags=["conditioning", "minimax", "video", "i2v"],
     category="conditioning",
-    version="1.0.0",
+    version="1.0.1",
     classification=Classification.Prototype,
 )
 class MiniMaxH3FrameConditioningInvocation(BaseInvocation):
@@ -76,7 +77,8 @@ class MiniMaxH3FrameConditioningInvocation(BaseInvocation):
             raise TypeError(
                 f"Expected AutoencoderKLMiniMaxH3 for the MiniMax H3 video VAE, got {type(vae_info.model).__name__}."
             )
-        with vae_info.model_on_device() as (_, vae):
+        working_memory = estimate_vae_working_memory_minimax_h3("encode", vae_info.model, self.height, self.width, 1)
+        with vae_info.model_on_device(working_mem_bytes=working_memory) as (_, vae):
             assert isinstance(vae, AutoencoderKLMiniMaxH3)
             context.util.signal_progress("Encoding MiniMax H3 keyframes")
             rows = encode_keyframes(vae, keyframes, device=get_effective_device(vae))

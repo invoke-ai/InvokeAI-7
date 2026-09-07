@@ -98,6 +98,29 @@ describe('createAntsAnimator', () => {
     expect(onStep).toHaveBeenCalledTimes(2);
   });
 
+  it('fires onFrame every rAF and onStep only on the boundary', () => {
+    const driver = createDriver();
+    const onFrame = vi.fn();
+    const onStep = vi.fn();
+    const animator = createAntsAnimator({
+      cancelFrame: driver.cancelFrame,
+      intervalMs: 100,
+      now: driver.now,
+      onFrame,
+      onStep,
+      requestFrame: driver.requestFrame,
+    });
+    animator.start();
+    driver.flush();
+    driver.advance(40);
+    driver.flush();
+    driver.advance(40);
+    driver.flush();
+    expect(onFrame).toHaveBeenCalledTimes(3);
+    expect(onStep).toHaveBeenCalledTimes(1);
+    animator.stop();
+  });
+
   it('stop cancels the pending frame and halts rescheduling (no timer leak)', () => {
     const driver = createDriver();
     const onStep = vi.fn();

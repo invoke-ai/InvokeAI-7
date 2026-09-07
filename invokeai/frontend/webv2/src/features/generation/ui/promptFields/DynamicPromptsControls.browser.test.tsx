@@ -89,13 +89,8 @@ const openPopover = async () => {
   });
 };
 
-/**
- * Segment labels intercept pointer events, so the visible text is the click
- * target. i18n is not bootstrapped in browser tests, so labels render as keys —
- * segments are addressed by their stable value instead.
- */
-const segmentLabel = (value: string) =>
-  document.querySelector(`[data-scope="segment-group"][data-part="item-text"][id$=":radio:label:${value}"]`);
+/** i18n is not bootstrapped in browser tests, so tabs are addressed by their stable id. */
+const tabButton = (id: string) => document.querySelector<HTMLElement>(`[role="tab"][id$="-tab-${id}"]`);
 
 const captureError = (event: ErrorEvent) => pageErrors.push(event.message);
 
@@ -137,7 +132,7 @@ describe('dynamic prompts popover controls', () => {
     }
 
     expect(pageErrors).toEqual([]);
-    expect(segmentLabel('preview'), 'popover should still be mounted').toBeTruthy();
+    expect(tabButton('preview'), 'popover should still be mounted').toBeTruthy();
   });
 
   it('sends a click on the seed label to the switch, not the number input', async () => {
@@ -258,22 +253,11 @@ describe('dynamic prompts popover controls', () => {
     const summaryHeight = headerControl();
 
     await act(async () => {
-      await userEvent.click(segmentLabel('wildcards')!);
+      await userEvent.click(tabButton('wildcards')!);
     });
 
     // The summary badge and the "New wildcard" button sit in the same slot on
     // either tab, so switching tabs must not change the header's shape.
     expect(headerControl()).toBe(summaryHeight);
-  });
-
-  it('keeps the tabs to their content width rather than stretching them', async () => {
-    await render(vi.fn());
-    await openPopover();
-
-    const tabs = segmentLabel('preview')!.closest('[data-scope="segment-group"][data-part="root"]')!;
-
-    // Asserting the computed alignment rather than a pixel width: browser tests
-    // render i18n keys, so the labels are not their real size here.
-    expect(getComputedStyle(tabs).alignSelf).toBe('start');
   });
 });

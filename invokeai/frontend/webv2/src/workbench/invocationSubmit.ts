@@ -183,6 +183,7 @@ const dispatchResolvedInvocation = async (
       owner,
       positivePrompts,
       projectId: project.id,
+      canvasValues: getProjectWidgetValues(project, 'canvas'),
       projectSettings: project.settings,
       strength: readCanvasDenoisingStrength(getProjectWidgetValues(project, 'canvas')),
     });

@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Any, Callable, Optional, Tuple
+from typing import Any, Callable, Literal, Optional, Tuple
 
 from pydantic import BaseModel, ConfigDict, Field, RootModel, TypeAdapter
 from pydantic.fields import _Unset
@@ -31,7 +31,7 @@ class UIType(str, Enum, metaclass=MetaEnum):
 
     - Any Field
     We cannot infer the usage of `typing.Any` via schema parsing, so you *must* use `ui_type=UIType.Any` to
-    indicate that the field accepts any type. Use with caution. This cannot be used on outputs.
+    indicate that the field accepts any type. Use with caution. On inputs, this renders as a connection-only field.
 
     - Scheduler Field
     Special handling in the UI is needed for this field, which otherwise would be parsed as a plain enum field.
@@ -191,6 +191,8 @@ class FieldDescriptions:
     minimax_h3_text_encoder = "Qwen3-VL-32B tokenizer, processor and text encoder for MiniMax H3"
     minimax_h3_frame_conditioning = "First/last-keyframe (VAE-latent) conditioning for MiniMax H3"
     minimax_h3_audio_vae = "Audio VAE (stereo, 32 kHz) for MiniMax H3"
+    minimax_h3_reference_media = "One ordered Ref2VA reference (image or video) for MiniMax H3"
+    minimax_h3_reference_conditioning = "Ordered, VAE-encoded Ref2VA reference conditioning for MiniMax H3"
     sdxl_main_model = "SDXL Main model (UNet, VAE, CLIP1, CLIP2) to load"
     sdxl_refiner_model = "SDXL Refiner Main Modde (UNet, VAE, CLIP2) to load"
     onnx_main_model = "ONNX Main model (UNet, VAE, CLIP) to load"
@@ -477,6 +479,67 @@ class MiniMaxH3FrameConditioningField(BaseModel):
     height: int = Field(description="Canvas height used during VAE encoding (matches denoise height).")
 
 
+class MiniMaxH3ReferenceMediaField(BaseModel):
+    """One ordered Ref2VA reference for MiniMax H3: the raw media plus its conditioning options.
+
+    Carries no tensors — both the Prompt node and the Reference Conditioning node normalize
+    the same media independently (the FL2VA keyframe precedent), and the denoise node
+    cross-checks the two sides via the signature embedded in each side's output. Exactly one
+    of ``image`` / ``video`` is set; ``video_conditioning`` selects which streams a video
+    reference conditions ("audio" maps to upstream's standalone audio-reference kind, sourced
+    from the video's soundtrack).
+    """
+
+    image: Optional[ImageField] = Field(default=None, description="The reference image, for an image reference.")
+    video: Optional[VideoField] = Field(default=None, description="The reference video, for a video/audio reference.")
+    video_conditioning: Literal["video_audio", "video", "audio"] = Field(
+        default="video_audio",
+        description="Which streams a video reference conditions: video + soundtrack, video only, or soundtrack only.",
+    )
+    image_detail: Literal["max", "match"] = Field(
+        default="max",
+        description="Image reference sizing: 'max' (2048 px short edge, highest fidelity) or 'match' "
+        "(scaled to the generation's pixel area, several times faster).",
+    )
+    start_frame: int = Field(
+        default=0, description="First source frame of a video reference (inclusive, 0-based; negative from the end)."
+    )
+    end_frame: int = Field(
+        default=-1, description="Last source frame of a video reference (inclusive; negative from the end)."
+    )
+
+
+class MiniMaxH3EncodedReferenceField(BaseModel):
+    """One VAE-encoded Ref2VA reference, in packed order."""
+
+    kind: Literal["image", "video", "audio"] = Field(description="The reference's packed-block kind.")
+    video_rows_name: Optional[str] = Field(
+        default=None, description="Name of the saved clean (N, 96) visual rows tensor. None for 'audio'."
+    )
+    latent_frames: Optional[int] = Field(default=None, description="Latent frame count of the visual rows.")
+    latent_height: Optional[int] = Field(default=None, description="Latent height of the visual rows.")
+    latent_width: Optional[int] = Field(default=None, description="Latent width of the visual rows.")
+    audio_rows_name: Optional[str] = Field(
+        default=None, description="Name of the saved clean (A, 32) soundtrack rows tensor, when the reference has one."
+    )
+
+
+class MiniMaxH3ReferenceConditioningField(BaseModel):
+    """Ordered, VAE-encoded Ref2VA reference conditioning for MiniMax H3.
+
+    Rows are CLEAN: the denoise node noise-augments the visual rows to t=0.999 with the
+    request seed's leading draws; audio rows are never noised. ``signature`` is the ordered
+    per-reference fingerprint the denoise node compares against the prompt conditioning's,
+    so the two sides cannot silently disagree about what was encoded.
+    """
+
+    references: list[MiniMaxH3EncodedReferenceField] = Field(description="The encoded references, in packed order.")
+    num_frames: int = Field(description="The generated frame count the references were truncated for.")
+    signature: list[str] = Field(description="Ordered structural fingerprint, one entry per reference.")
+    width: int = Field(default=1344, description="Target canvas width the references were prepared for.")
+    height: int = Field(default=768, description="Target canvas height the references were prepared for.")
+
+
 class ConditioningField(BaseModel):
     """A conditioning tensor primitive value"""
 
@@ -547,6 +610,17 @@ class FieldKind(str, Enum, metaclass=MetaEnum):
     Output = "output"
     Internal = "internal"
     NodeAttribute = "node_attribute"
+
+
+class OutputScope(str, Enum, metaclass=MetaEnum):
+    """
+    The execution scope for an output field.
+    - `Iteration`: The field emits values for a loop body's current iteration.
+    - `Final`: The field emits values after a loop boundary completes.
+    """
+
+    Iteration = "iteration"
+    Final = "final"
 
 
 class InputFieldJSONSchemaExtra(BaseModel):
@@ -630,6 +704,7 @@ class OutputFieldJSONSchemaExtra(BaseModel):
     ui_hidden: bool = False
     ui_order: Optional[int] = None
     ui_type: Optional[UIType] = None
+    output_scope: Optional[OutputScope] = None
 
     model_config = ConfigDict(
         validate_assignment=True,
@@ -949,6 +1024,7 @@ def OutputField(
     ui_type: Optional[UIType] = None,
     ui_hidden: bool = False,
     ui_order: Optional[int] = None,
+    output_scope: Optional[OutputScope] = None,
 ) -> Any:
     """
     Creates an output field for an invocation output.
@@ -965,6 +1041,9 @@ def OutputField(
 
         ui_order: Specifies the order in which this field should be rendered in the UI. If omitted, the field will be
         rendered after all fields with an explicit order, in the order they are defined in the Invocation class.
+
+        output_scope: Optionally specifies whether this output is scoped to a loop iteration or to the final loop
+        result. Unscoped outputs have the normal invocation output behavior.
     """
 
     return Field(
@@ -987,6 +1066,7 @@ def OutputField(
             ui_hidden=ui_hidden,
             ui_order=ui_order,
             ui_type=ui_type,
+            output_scope=output_scope,
             field_kind=FieldKind.Output,
         ).model_dump(exclude_none=True),
     )

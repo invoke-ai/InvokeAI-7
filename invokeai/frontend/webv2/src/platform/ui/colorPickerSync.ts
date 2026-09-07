@@ -13,6 +13,12 @@ import { normalizeHex } from './color';
  * `parseColor` yields for an indeterminate hue — the picker would only ever
  * be able to *emit* a new hue at S=0, never actually keep it.
  *
+ * The round trip is only swallowed while one is actually outstanding
+ * (`isAwaitingEcho`: armed by an emit, consumed by the next external change).
+ * Without that, an independent change that lands back on the last-emitted
+ * value — an X foreground/background swap and back is the everyday case —
+ * would be misread as our own echo and leave the swatch stale.
+ *
  * Values are compared after normalization, so a consumer that stores or echoes
  * back a differently-cased or shorthand form of the same color (`#FF0000` for
  * `#ff0000`, `#f00` for `#ff0000`, `#ff0000ff` for `#ff0000`) does not count as
@@ -21,12 +27,14 @@ import { normalizeHex } from './color';
 export const shouldSyncExternalColor = (
   externalValue: string,
   previousExternalValue: string,
-  lastEmittedValue: string
+  lastEmittedValue: string,
+  isAwaitingEcho: boolean
 ): boolean => {
   const external = normalizeHex(externalValue, externalValue);
 
-  return (
-    external !== normalizeHex(previousExternalValue, previousExternalValue) &&
-    external !== normalizeHex(lastEmittedValue, lastEmittedValue)
-  );
+  if (external === normalizeHex(previousExternalValue, previousExternalValue)) {
+    return false;
+  }
+
+  return !(isAwaitingEcho && external === normalizeHex(lastEmittedValue, lastEmittedValue));
 };

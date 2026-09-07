@@ -7,6 +7,7 @@ import { getGalleryBoardLabel } from './boardLabels';
 const createBoard = (overrides: Partial<GalleryBoard> = {}): GalleryBoard => ({
   archived: false,
   assetCount: 3,
+  assetVideoCount: 0,
   id: 'dogs',
   imageCount: 50,
   kind: 'board',

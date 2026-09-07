@@ -53,6 +53,8 @@ import { useActiveLayoutPresetId, useLayoutDrift } from './useLayoutDrift';
 import { useTopbarShortcut } from './useTopbarShortcut';
 
 const PRESET_MENU_ATTRIBUTE = 'data-preset-menu';
+const TAB_FILL_TRANSITION =
+  'background var(--chakra-durations-faster) ease, border-color var(--chakra-durations-faster) ease, color var(--chakra-durations-faster) ease';
 const PRESET_SCROLL_CSS = { '&::-webkit-scrollbar': { display: 'none' }, scrollbarWidth: 'none' } as const;
 const PRESET_TAB_KEYS_BLOCKED_DURING_DRAG = new Set(['ArrowDown', 'ArrowLeft', 'ArrowRight', 'End', 'Home']);
 const DND_MODIFIERS = [restrictToHorizontalAxis, restrictToParentElement];
@@ -223,7 +225,7 @@ export const LayoutPresetStrip = () => {
         <Tooltip content={t('topbar.presets.saveAsTooltip')} showArrow>
           <IconButton
             aria-label={t('topbar.presets.saveAsTooltip')}
-            size="xs"
+            size="sm"
             variant="ghost"
             onClick={openSaveAsDialog}
           >
@@ -282,7 +284,10 @@ const PresetTab = ({
       opacity: isDragging ? 0.5 : undefined,
       position: 'relative' as const,
       transform: CSS.Translate.toString(transform),
-      transition,
+      // dnd-kit's inline transform transition replaces the recipe's CSS
+      // transition outright, which froze hover/selected fills; compose the
+      // buttons' fill fade back in (motion-aware duration token).
+      transition: [transition, TAB_FILL_TRANSITION].filter(Boolean).join(', '),
       zIndex: isDragging ? 1 : undefined,
     }),
     [isDragging, transform, transition]
@@ -368,12 +373,14 @@ const PresetTab = ({
       {...listeners}
       aria-label={showDrift ? `${preset.label}, ${t('topbar.presets.unsaved')}` : preset.label}
       aria-keyshortcuts={isActive ? 'ArrowDown' : undefined}
-      cursor={isDragging ? 'grabbing' : 'pointer'}
+      cursor={isDragging ? 'grabbing' : 'default'}
       data-layout-preset-id={preset.id}
       gap="1.5"
       style={dndStyle}
       touchAction="pan-x"
       value={preset.id}
+      _hover={PRESET_TAB_HOVER_PROPS}
+      _selected={PRESET_TAB_SELECTED_PROPS}
       onClick={handleClick}
       onContextMenu={handleContextMenu}
       onFocus={handlePreload}
@@ -381,7 +388,7 @@ const PresetTab = ({
       onPointerDown={handlePointerDown}
       onPointerEnter={handlePreload}
     >
-      <Icon as={icon} boxSize="3.5" flexShrink={0} />
+      <Icon as={icon} boxSize="3.5" color={isActive ? 'brand.fg' : undefined} flexShrink={0} />
       <Text as="span" css={HIDE_BELOW_PRESET_LABEL_WIDTH}>
         {preset.label}
       </Text>
@@ -407,6 +414,10 @@ const PresetTab = ({
 };
 
 const MENU_AFFORDANCE_HOVER_PROPS = { bg: 'bg.emphasized', color: 'fg' } as const;
+
+// Same fills as the widget rail's hover and active items (`WIDGET_ITEM_SX`).
+const PRESET_TAB_HOVER_PROPS = { bg: 'bg.emphasized', color: 'fg' } as const;
+const PRESET_TAB_SELECTED_PROPS = { bg: 'bg.emphasized', color: 'fg' } as const;
 
 const DriftDot = () => <Box aria-hidden="true" bg="accent.solid" boxSize="1.5" flexShrink={0} rounded="full" />;
 
@@ -524,7 +535,7 @@ const PresetMenu = ({
                 <Menu.ItemText>{t('topbar.presets.editWithEllipsis')}</Menu.ItemText>
               </Menu.Item>
               {isCustom ? (
-                <Menu.Item color="fg.error" value="delete-preset" _hover={DELETE_HOVER_PROPS} onClick={remove}>
+                <Menu.Item data-danger="" value="delete-preset" onClick={remove}>
                   <Icon as={Trash2Icon} boxSize="3.5" />
                   <Menu.ItemText>{t('topbar.presets.deleteWithEllipsis')}</Menu.ItemText>
                 </Menu.Item>
@@ -542,5 +553,3 @@ const PresetMenu = ({
     </Menu.Root>
   );
 };
-
-const DELETE_HOVER_PROPS = { bg: 'bg.error', color: 'fg.error' } as const;

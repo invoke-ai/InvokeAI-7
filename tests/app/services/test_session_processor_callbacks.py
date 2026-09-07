@@ -5,6 +5,7 @@ from unittest.mock import Mock
 
 import pytest
 
+from invokeai.app.services.progress_previews.progress_previews_default import MemoryProgressPreviews
 from invokeai.app.services.session_processor.session_processor_default import DefaultSessionRunner
 from invokeai.app.services.shared.graph import CollectInvocation, Graph, GraphExecutionState, IterateInvocation
 
@@ -21,6 +22,7 @@ def test_after_run_node_callback_receives_control_node_inputs(monkeypatch: pytes
 
     services = SimpleNamespace(
         configuration=SimpleNamespace(node_cache_size=0),
+        progress_previews=MemoryProgressPreviews(),
         events=Mock(),
         logger=Mock(),
         performance_statistics=Mock(),

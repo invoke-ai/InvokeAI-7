@@ -64,13 +64,19 @@ export const cloneFloatingWidgets = (
 ): Record<WidgetInstanceId, FloatingWidgetState> =>
   Object.fromEntries(Object.entries(floatingWidgets).map(([instanceId, state]) => [instanceId, { ...state }]));
 
+const cloneWidgetRegionState = (region: WidgetRegionState): WidgetRegionState => ({
+  ...region,
+  instanceIds: [...region.instanceIds],
+  ...(region.alignEndInstanceIds ? { alignEndInstanceIds: [...region.alignEndInstanceIds] } : {}),
+});
+
 export const cloneLayoutPresetWidgetRegions = (
   widgetRegionState: Record<WidgetRegion, WidgetRegionState>
 ): Record<WidgetRegion, WidgetRegionState> => ({
-  bottom: { ...widgetRegionState.bottom, instanceIds: [...widgetRegionState.bottom.instanceIds] },
-  center: { ...widgetRegionState.center, instanceIds: [...widgetRegionState.center.instanceIds] },
-  left: { ...widgetRegionState.left, instanceIds: [...widgetRegionState.left.instanceIds] },
-  right: { ...widgetRegionState.right, instanceIds: [...widgetRegionState.right.instanceIds] },
+  bottom: cloneWidgetRegionState(widgetRegionState.bottom),
+  center: cloneWidgetRegionState(widgetRegionState.center),
+  left: cloneWidgetRegionState(widgetRegionState.left),
+  right: cloneWidgetRegionState(widgetRegionState.right),
 });
 
 export const createLayoutPresetSnapshot = (project: Project): LayoutPresetSnapshot => {
@@ -115,7 +121,8 @@ const areWidgetRegionsEqual = (left: WidgetRegionState, right: WidgetRegionState
   left.activeInstanceId === right.activeInstanceId &&
   left.isCollapsed === right.isCollapsed &&
   left.sizePx === right.sizePx &&
-  areArraysEqual(left.instanceIds, right.instanceIds);
+  areArraysEqual(left.instanceIds, right.instanceIds) &&
+  areArraysEqual(left.alignEndInstanceIds ?? [], right.alignEndInstanceIds ?? []);
 
 const areWidgetInstanceSnapshotsEqual = (
   left: LayoutPresetSnapshot['widgetInstances'],

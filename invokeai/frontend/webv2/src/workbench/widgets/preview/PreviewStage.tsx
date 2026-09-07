@@ -96,7 +96,6 @@ export const FittedFrame = ({
     css={getFittedFrameCss(frameWidth, frameHeight)}
     overflow="hidden"
     position="relative"
-    rounded="lg"
     {...props}
   />
 );

@@ -283,9 +283,11 @@ def test_empty_model_cache_aggregates_per_device_results(monkeypatch: Any, clien
         def __init__(self, models_cleared: int, bytes_freed: int) -> None:
             self._result = CacheClearResult(models_cleared=models_cleared, bytes_freed=bytes_freed)
             self.requested: list[int] = []
+            self.spared_grace: list[bool] = []
 
-        def make_room(self, bytes_needed: int) -> CacheClearResult:
+        def make_room(self, bytes_needed: int, spare_awaiting_first_use: bool = True) -> CacheClearResult:
             self.requested.append(bytes_needed)
+            self.spared_grace.append(spare_awaiting_first_use)
             return self._result
 
     cache_0 = _Cache(models_cleared=2, bytes_freed=100)
@@ -302,6 +304,9 @@ def test_empty_model_cache_aggregates_per_device_results(monkeypatch: Any, clien
     # Both devices were actually asked to clear, not just the API thread's default cache.
     assert len(cache_0.requested) == 1
     assert len(cache_1.requested) == 1
+    # A user-requested full clear outranks the admission grace.
+    assert cache_0.spared_grace == [False]
+    assert cache_1.spared_grace == [False]
 
 
 def test_empty_model_cache_clears_duplicate_cache_objects_once(monkeypatch: Any, client: TestClient) -> None:
@@ -313,7 +318,7 @@ def test_empty_model_cache_clears_duplicate_cache_objects_once(monkeypatch: Any,
         def __init__(self) -> None:
             self.calls = 0
 
-        def make_room(self, bytes_needed: int) -> CacheClearResult:
+        def make_room(self, bytes_needed: int, spare_awaiting_first_use: bool = True) -> CacheClearResult:
             self.calls += 1
             return CacheClearResult(models_cleared=2, bytes_freed=100)
 

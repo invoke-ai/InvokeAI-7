@@ -208,6 +208,15 @@ class MiniMaxH3ConditioningInfo:
     height: int | None = None
     """Canvas height the keyframes were prepared at (None when no keyframes)."""
 
+    reference_signature: tuple[str, ...] = ()
+    """Per-reference fingerprints (packed order) of a Ref2VA request's vision context. The
+    denoise node cross-checks this against its reference-conditioning input: the references
+    must reach the text conditioning and the VAE condition rows together, in the same order,
+    with the same options."""
+
+    reference_num_frames: int | None = None
+    """The generated frame count the references were truncated for (None without references)."""
+
     def to(self, device: torch.device | None = None, dtype: torch.dtype | None = None):
         self.prompt_embeds = self.prompt_embeds.to(device=device, dtype=dtype)
         # Tags are structural (long); only the device moves.

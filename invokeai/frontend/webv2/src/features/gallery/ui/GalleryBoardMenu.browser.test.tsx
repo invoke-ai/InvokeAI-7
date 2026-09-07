@@ -38,6 +38,7 @@ vi.mock('react-i18next', () => ({
 const board = {
   archived: false,
   assetCount: 0,
+  assetVideoCount: 0,
   id: 'board-1',
   imageCount: 2,
   kind: 'board',

@@ -5,17 +5,23 @@ import {
   assertAccountScopeCurrent,
   captureAccountScope,
   isAccountScopeCurrent,
+  registerAccountOwnedResource,
 } from '@platform/state/accountLifecycle';
+import { createKeyedTransientStore } from '@platform/state/externalStore';
 import { useQueryClient } from '@tanstack/react-query';
 import { saveCanvasToGallery, type CanvasGallerySaveRegion } from '@workbench/canvas-operations/api';
 import { useNotify } from '@workbench/useNotify';
 import { useWorkbenchCommands, useWorkbenchQueries } from '@workbench/WorkbenchContext';
-import { useCallback, useRef, useState } from 'react';
+import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { getCanvasGallerySaveErrorAction, withMatchingCanvasProject } from './canvasGallerySaveState';
 
 type CanvasGallerySaveEngine = Pick<CanvasEngineHandle, 'document' | 'exports' | 'lifecycle' | 'projectId'>;
+
+/** Projects with a save in flight: the header button and the context menu share the gate and the busy state. */
+const savingProjects = createKeyedTransientStore<string, true>();
+registerAccountOwnedResource({ clear: () => savingProjects.clear(), name: 'canvas-gallery-saves' });
 
 export const useCanvasGallerySave = (
   engine: CanvasGallerySaveEngine | null
@@ -25,21 +31,18 @@ export const useCanvasGallerySave = (
   const queries = useWorkbenchQueries();
   const { notifications } = useWorkbenchCommands();
   const queryClient = useQueryClient();
-  const isSavingRef = useRef(false);
-  const [isSaving, setIsSaving] = useState(false);
+  const isSaving = savingProjects.useValue(engine?.projectId ?? '') === true;
 
   const save = useCallback(
     async (region: CanvasGallerySaveRegion): Promise<void> => {
-      if (isSavingRef.current) {
+      const project = queries.getSnapshot().activeProject;
+      if (savingProjects.get(project.id)) {
         return;
       }
-
-      const project = queries.getSnapshot().activeProject;
       const owner = captureAccountScope();
 
       await withMatchingCanvasProject(engine, project.id, async (matchedEngine) => {
-        isSavingRef.current = true;
-        setIsSaving(true);
+        savingProjects.set(project.id, true);
 
         try {
           const result = await saveCanvasToGallery({ engine: matchedEngine, project, region });
@@ -67,8 +70,7 @@ export const useCanvasGallerySave = (
             getCanvasGallerySaveErrorAction(error, project.id, t('widgets.canvas.contextMenu.saveError'))
           );
         } finally {
-          isSavingRef.current = false;
-          setIsSaving(false);
+          savingProjects.delete(project.id);
         }
       });
     },

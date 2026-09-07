@@ -33,12 +33,14 @@
  */
 
 import type {
-  CanvasDocumentContractV2,
+  CanvasDocumentContractV3,
   CanvasLayerContract,
   CanvasLayerSourceContract,
 } from '@workbench/canvas-engine/contracts';
 import type { Vec2 } from '@workbench/canvas-engine/types';
 
+import { compileDocumentLeaves } from '@workbench/canvas-engine/document-model/documentModel';
+import { isLeafEditable } from '@workbench/canvas-engine/document/layerEligibility';
 import { applyToPoint, invert } from '@workbench/canvas-engine/math/mat2d';
 import { estimateTextExtent } from '@workbench/canvas-engine/render/rasterizers/textRasterizer';
 
@@ -53,9 +55,8 @@ type TextSource = Extract<CanvasLayerSourceContract, { type: 'text' }>;
 /** A text-sourced raster layer. */
 type TextLayer = Extract<CanvasLayerContract, { type: 'raster' }> & { source: TextSource };
 
-/** True when `layer` is an enabled, unlocked text layer (an edit-session candidate). */
-const isEditableTextLayer = (layer: CanvasLayerContract): layer is TextLayer =>
-  layer.type === 'raster' && layer.source.type === 'text' && layer.isEnabled && !layer.isLocked;
+const isTextLayer = (layer: CanvasLayerContract): layer is TextLayer =>
+  layer.type === 'raster' && layer.source.type === 'text';
 
 /**
  * The rendered text-block size for hit-testing: the live cache surface size when
@@ -71,9 +72,10 @@ const textLayerSize = (layer: TextLayer, ctx: ToolContext): { width: number; hei
 };
 
 /** The top-most editable text layer whose rendered block contains `point` (document space), or `null`. */
-const topTextLayerAt = (doc: CanvasDocumentContractV2, point: Vec2, ctx: ToolContext): TextLayer | null => {
-  for (const layer of doc.layers) {
-    if (!isEditableTextLayer(layer)) {
+const topTextLayerAt = (doc: CanvasDocumentContractV3, point: Vec2, ctx: ToolContext): TextLayer | null => {
+  for (const leaf of compileDocumentLeaves(doc)) {
+    const layer = leaf.layer;
+    if (!isTextLayer(layer) || !isLeafEditable(leaf)) {
       continue;
     }
     const inverse = invert(layerMatrix(layer.transform));

@@ -150,6 +150,14 @@ class InvocationProgressEvent(InvocationEventBase):
         default=None,
         description="The device processing this session, e.g. 'cuda:1' (set only when running on a GPU)",
     )
+    revision: int | None = Field(
+        default=None,
+        description=(
+            "Monotonic per queue item and session, set on image-bearing frames. A frame at or below a "
+            "revision already shown is stale: the same frame may reach a client twice (live stream and "
+            "reconnect replay) and must never move the preview backwards."
+        ),
+    )
 
     @classmethod
     def build(
@@ -159,6 +167,7 @@ class InvocationProgressEvent(InvocationEventBase):
         message: str,
         percentage: float | None = None,
         image: ProgressImage | None = None,
+        revision: int | None = None,
     ) -> "InvocationProgressEvent":
         # Report the GPU executing the session. Prefer the queue item's persisted device: the
         # thread-local session device is temporarily re-pinned to a borrowed idle GPU during
@@ -191,6 +200,7 @@ class InvocationProgressEvent(InvocationEventBase):
             image=image,
             message=message,
             device=device,
+            revision=revision,
         )
 
 

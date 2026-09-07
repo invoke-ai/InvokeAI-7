@@ -49,6 +49,38 @@ describe('rasterizeShapeSource — extent + sizing', () => {
   });
 });
 
+describe('rasterizeShapeSource — polygon', () => {
+  it('traces the stored vertices, rescaled into the stroke inset box', async () => {
+    const deps = makeDeps();
+    const surface = (
+      await rasterizeShapeSource(
+        rect({
+          fill: null,
+          height: 40,
+          kind: 'polygon',
+          points: [
+            { x: 0, y: 0 },
+            { x: 60, y: 0 },
+            { x: 30, y: 40 },
+          ],
+          stroke: '#0000ff',
+          strokeWidth: 8,
+          width: 60,
+        }),
+        deps
+      )
+    ).surface as StubRasterSurface;
+    // Inset 4px per side: the 60×40 box becomes 52×32 at (4, 4).
+    expect(surface.callLog.find((e) => e.op === 'moveTo')?.args).toEqual([4, 4]);
+    expect(surface.callLog.filter((e) => e.op === 'lineTo').map((e) => e.args)).toEqual([
+      [56, 4],
+      [30, 36],
+    ]);
+    expect(ops(surface)).toContain('closePath');
+    expect(ops(surface)).toContain('stroke');
+  });
+});
+
 describe('rasterizeShapeSource — rect', () => {
   it('fills a rect covering the full extent when fill is set and no stroke', async () => {
     const deps = makeDeps();
@@ -96,6 +128,31 @@ describe('rasterizeShapeSource — ellipse', () => {
       .surface as StubRasterSurface;
     expect(ops(surface)).toContain('ellipse');
     expect(ops(surface)).toContain('fill');
+  });
+});
+
+describe('rasterizeShapeSource — triangle and star', () => {
+  it('draws a closed three-vertex path for the triangle kind', async () => {
+    const deps = makeDeps();
+    const surface = (await rasterizeShapeSource(rect({ fill: '#abcdef', kind: 'triangle' }), deps))
+      .surface as StubRasterSurface;
+    const log = ops(surface);
+    expect(log).toContain('moveTo');
+    expect(log.filter((op) => op === 'lineTo')).toHaveLength(2);
+    expect(log).toContain('closePath');
+    expect(log).toContain('fill');
+  });
+
+  it('draws a closed ten-vertex path for the star kind and strokes with round joins', async () => {
+    const deps = makeDeps();
+    const surface = (
+      await rasterizeShapeSource(rect({ fill: null, kind: 'star', stroke: '#123456', strokeWidth: 4 }), deps)
+    ).surface as StubRasterSurface;
+    const log = ops(surface);
+    expect(log.filter((op) => op === 'lineTo')).toHaveLength(9);
+    expect(log).toContain('closePath');
+    expect(log).toContain('stroke');
+    expect((surface.ctx as unknown as { lineJoin: string }).lineJoin).toBe('round');
   });
 });
 

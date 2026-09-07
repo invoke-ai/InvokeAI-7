@@ -831,6 +831,26 @@ class SocketIO:
             f"Socket {sid} (user_id: {user_id}, is_admin: {is_admin}) subscribed to queue {queue_id} and user room {user_room}"
         )
 
+        await self._replay_progress_previews(sid, user_id, queue_id)
+
+    async def _replay_progress_previews(self, sid: str, user_id: str, queue_id: str) -> None:
+        """Send this socket the latest preview frame of each running queue item the user owns.
+
+        A reconnecting tab otherwise shows nothing until the next denoising step. The frames carry
+        their original revisions, so a socket that never lost them drops the duplicates. Sent to
+        this socket only: the user's other sockets already have them.
+        """
+        from invokeai.app.api.dependencies import ApiDependencies
+
+        invoker = getattr(ApiDependencies, "invoker", None)
+        if invoker is None:
+            return
+
+        for event in invoker.services.progress_previews.list_for_user(user_id, queue_id):
+            await self._sio.emit(
+                event=InvocationProgressEvent.__event_name__, data=event.model_dump(mode="json"), to=sid
+            )
+
     async def _handle_unsub_queue(self, sid: str, data: Any) -> None:
         await self._sio.leave_room(sid, QueueSubscriptionEvent(**data).queue_id)
 

@@ -107,9 +107,72 @@ describe('attachImageMapDataRuntime', () => {
     const detach = attachImageMapDataRuntime();
 
     // `loading` used to pass the guard, so the event set `rerunRequested` and
-    // forced a second full point set the moment the first settled.
+    // forced a second full point set the moment the first settled. The poke
+    // still must not pass: it fires at indexer quiescence, so a backfill
+    // running while the map first loads would double every fetch. The
+    // accepted trade: embedding enqueues no recompute, so a poke landing in
+    // the first-load window is the only announcement of that image — it stays
+    // off the map until the next event or a manual refresh.
     imageMapStore.patchSnapshot({ loadState: 'loading' });
     getHandler('image_index_updated')({ user_id: 'u1' });
+
+    expect(mocks.refreshImageMapPoints).not.toHaveBeenCalled();
+    detach();
+  });
+
+  it('refetches for a projection ready during the first load', () => {
+    const detach = attachImageMapDataRuntime();
+    const onReady = getHandler('image_map_projection_ready');
+
+    // A recompute can finish while the fetch it was enqueued by is still in
+    // flight: that fetch was served the projection the recompute replaced, and
+    // dropping the announcement strands the stale points (with labels the
+    // mismatch check keeps discarding) until some later event fires. The
+    // store's dedup turns this call into a single queued rerun, not a parallel
+    // fetch.
+    imageMapStore.patchSnapshot({ loadState: 'loading' });
+    onReady({ user_id: 'u1' });
+
+    expect(mocks.refreshImageMapPoints).toHaveBeenCalledTimes(1);
+    detach();
+  });
+
+  it('refetches for a projection ready after a failed load', () => {
+    const detach = attachImageMapDataRuntime();
+    const onReady = getHandler('image_map_projection_ready');
+
+    // loadState 'error' with no fetch in flight (the first load failed): the
+    // event starts a fresh fetch rather than being dropped — the failing
+    // first load may have missed the projection it announced.
+    imageMapStore.patchSnapshot({ loadState: 'error' });
+    onReady({ user_id: 'u1' });
+
+    expect(mocks.refreshImageMapPoints).toHaveBeenCalledTimes(1);
+    detach();
+  });
+
+  it('still ignores a foreign projection ready during the first load', () => {
+    const detach = attachImageMapDataRuntime();
+    const onReady = getHandler('image_map_projection_ready');
+
+    mocks.getAuthSession.mockReturnValue({ user: { user_id: 'me' } });
+    imageMapStore.patchSnapshot({ loadState: 'loading' });
+
+    onReady({ user_id: 'someone-else' });
+    expect(mocks.refreshImageMapPoints).not.toHaveBeenCalled();
+
+    detach();
+  });
+
+  it('leaves a failed canvas alone for a projection ready during the first load', () => {
+    const detach = attachImageMapDataRuntime();
+    const onReady = getHandler('image_map_projection_ready');
+
+    // A retry in flight after a WebGL failure: the canvas stays failed until
+    // that retry's own success clears the error, and a mid-flight event must
+    // not start another refresh that would remount into the same failure.
+    imageMapStore.patchSnapshot({ loadState: 'loading', renderError: 'The map failed to render.' });
+    onReady({ user_id: 'u1' });
 
     expect(mocks.refreshImageMapPoints).not.toHaveBeenCalled();
     detach();

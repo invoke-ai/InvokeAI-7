@@ -74,15 +74,15 @@ afterEach(async () => {
 });
 
 describe('editor toolbar', () => {
-  it('keeps every button on the shared 32px toolbar box', async () => {
+  it('keeps every button on one shared square toolbar box', async () => {
     // The node-opacity button is hand-rolled rather than a ToolbarButton, so it
     // never picked up the primitive's size. That is not a local defect: Toolbar
     // is a column Stack, and its default stretch alignment let one `sm` button
-    // widen every sibling to 36px while they kept their 32px height, turning
-    // the whole strip into rectangles four pixels wider than the canvas one.
+    // widen every sibling while they kept their height, turning the whole
+    // strip into rectangles wider than the canvas one.
     await render(1);
 
-    expect(new Set(buttonBoxes())).toEqual(new Set(['32x32']));
+    expect(new Set(buttonBoxes())).toEqual(new Set(['28x28']));
   });
 
   it('states node opacity the way the tool buttons state themselves', async () => {
@@ -96,6 +96,6 @@ describe('editor toolbar', () => {
 
     expect(opacity.getAttribute('aria-pressed')).toBe('true');
     expect(paintedFill(opacity)).toBe(paintedFill(activeTool));
-    expect(new Set(buttonBoxes())).toEqual(new Set(['32x32']));
+    expect(new Set(buttonBoxes())).toEqual(new Set(['28x28']));
   });
 });

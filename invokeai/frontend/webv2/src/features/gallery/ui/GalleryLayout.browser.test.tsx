@@ -18,6 +18,7 @@ import type { GalleryWidgetContextValue } from './GalleryWidgetContext';
 import { GalleryStackedLayout } from './GalleryStackedLayout';
 import { GalleryWideLayout } from './GalleryWideLayout';
 import { GalleryWidgetContext } from './GalleryWidgetContext';
+import { EMPTY_GALLERY_STARRED_STRIP } from './useGalleryStarredStrip';
 
 vi.mock('@features/queue/react', () => ({
   useQueueItemProgress: () => null,
@@ -35,6 +36,7 @@ vi.mock('react-i18next', () => ({
 const board: GalleryBoard = {
   archived: false,
   assetCount: 3,
+  assetVideoCount: 0,
   id: 'dogs',
   imageCount: 50,
   kind: 'board',
@@ -71,7 +73,9 @@ const createGallery = (overrides: Partial<GalleryStateView> = {}) =>
     selectedBoardId: 'dogs',
     selectedItemKey: 'image:a.png',
     selectedItemKeys: ['image:a.png', 'image:b.png'],
+    semanticImageQuery: null,
     settings: DEFAULT_GALLERY_SETTINGS,
+    starredOnly: false,
     ...overrides,
   }) as unknown as GalleryStateView;
 
@@ -87,6 +91,7 @@ const createContextValue = () =>
   ({
     ...contextBase,
     gallery: activeGallery,
+    loadedItems: activeGallery.items,
     region: 'center',
   }) as unknown as GalleryWidgetContextValue;
 
@@ -97,6 +102,7 @@ const contextBase = {
     selectBoard: vi.fn(),
     selectProjectBoard: vi.fn(),
     setSearchTerm: vi.fn(),
+    setStarredOnly: vi.fn(),
     setView: vi.fn(),
     updateSettings: vi.fn(),
     uploadFiles: vi.fn(),
@@ -104,6 +110,7 @@ const contextBase = {
   filter: { boardId: 'dogs', galleryView: 'images', searchTerm: '' },
   gallery,
   isWindowTruncated: false,
+  starredStrip: EMPTY_GALLERY_STARRED_STRIP,
   itemActions: {
     deleteItems: vi.fn(),
     downloadItems: vi.fn(),
@@ -121,7 +128,7 @@ const adapter = {
   ImageContextMenu: () => null,
   account: { enableLiveFollow: vi.fn() },
   antialiasProgressImages: false,
-  widgets: { patchGalleryValues: vi.fn() },
+  widgets: { openGallery: vi.fn(() => true), patchGalleryValues: vi.fn() },
 } as unknown as GalleryUiAdapter;
 
 let host: HTMLDivElement | null = null;
@@ -269,6 +276,66 @@ describe('gallery layout shells', () => {
 
       expect(uploadForDateBoard?.disabled).toBe(true);
     }
+  });
+
+  it('offers the starred-only filter in both shells, pressed while active and disabled under a ranked query', async () => {
+    for (const Layout of [GalleryStackedLayout, GalleryWideLayout]) {
+      setGallery(createGallery({ starredOnly: false }));
+      await renderLayout(Layout);
+
+      const toggle = host?.querySelector<HTMLButtonElement>('button[aria-label="widgets.gallery.starredOnly"]');
+
+      expect(toggle, 'starred filter toggle did not render in the toolbar').not.toBeNull();
+      expect(toggle?.getAttribute('aria-pressed')).toBe('false');
+
+      await act(() => {
+        toggle?.click();
+      });
+      expect(contextBase.actions.setStarredOnly).toHaveBeenLastCalledWith(true);
+
+      setGallery(createGallery({ starredOnly: true }));
+      await renderLayout(Layout);
+      expect(
+        host
+          ?.querySelector<HTMLButtonElement>('button[aria-label="widgets.gallery.starredOnly"]')
+          ?.getAttribute('aria-pressed')
+      ).toBe('true');
+
+      setGallery(createGallery({ semanticImageQuery: { imageName: 'ref.png', kind: 'image' }, starredOnly: true }));
+      await renderLayout(Layout);
+
+      const ranked = host?.querySelector<HTMLButtonElement>('button[aria-label="widgets.gallery.starredOnly"]');
+
+      // Inert but focusable, so the tooltip can say why it does not apply.
+      expect(ranked?.getAttribute('aria-disabled')).toBe('true');
+      expect(ranked?.disabled).toBe(false);
+      expect(ranked?.getAttribute('aria-pressed')).toBe('false');
+      (contextBase.actions.setStarredOnly as ReturnType<typeof vi.fn>).mockClear();
+      await act(() => {
+        ranked?.click();
+      });
+      expect(contextBase.actions.setStarredOnly).not.toHaveBeenCalled();
+    }
+  });
+
+  it('moves focus to the toolbar toggle when Show all removes the strip header', async () => {
+    const starredItem = { ...createItem('starred.png'), starred: true };
+
+    contextBase.starredStrip = { items: [starredItem], total: 9 };
+    setGallery(createGallery({ items: [createItem('a.png')], starredOnly: false }));
+    await renderLayout(GalleryWideLayout);
+
+    const showAll = host?.querySelector<HTMLButtonElement>('button[aria-label="widgets.gallery.showAllStarredItems"]');
+
+    expect(showAll, 'Show all did not render').not.toBeNull();
+    showAll?.focus();
+    await act(() => {
+      showAll?.click();
+    });
+
+    expect(contextBase.actions.setStarredOnly).toHaveBeenLastCalledWith(true);
+    expect(document.activeElement?.getAttribute('aria-label')).toBe('widgets.gallery.starredOnly');
+    contextBase.starredStrip = EMPTY_GALLERY_STARRED_STRIP;
   });
 
   it('hides the board column and its handle in both shells when collapsed', async () => {

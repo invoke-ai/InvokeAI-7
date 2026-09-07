@@ -1,5 +1,38 @@
 import type { HotkeyCategory, HotkeyDefinition } from './types';
 
+/**
+ * Intentional browser-default interception
+ *
+ * Every registered hotkey prevents default, but only entries with handlers
+ * actually shadow a browser chord. Handlers come from two registries sharing
+ * the same scope resolution: this catalog's `implemented` set, and the
+ * extension-hotkey path (`CanvasWidgetView` registers the canvas's runtime
+ * chords there with `allowInEditable: false`; several ids — X/D color pair,
+ * undo/redo, delete, entity nav, mergeDown, transformSelected — exist in BOTH,
+ * resolving at equal widget-scope priority). A catalog entry with no handler
+ * anywhere (the mod+0…4 zoom chords) intercepts nothing.
+ *
+ * Chords that deliberately override a browser default, outside editable
+ * fields (hotkeys skip editables unless listed in `editableAppHotkeys`):
+ *
+ * - mod+p (`app.openProjectSwitcher`) — print dialog;
+ * - mod+k (`app.openCommandPalette`) — address-bar search;
+ * - mod+, (`app.openSettings`) — browser settings, where the browser
+ *   delivers the event to the page at all;
+ * - mod+z / mod+shift+z / mod+y (canvas and workflow undo/redo) — native
+ *   text undo;
+ * - mod+a / mod+c / mod+v (canvas, workflow, gallery select/copy/paste) —
+ *   the app's own selection/clipboard semantics replace the page's;
+ * - canvas mod+e (merge down) — macOS "use selection for find" / address-bar
+ *   search; mod+d (deselect) — bookmark; mod+shift+i (invert selection) —
+ *   devtools where delivered; mod+t (transform) — browser-reserved in most
+ *   builds, fires only where forwarded.
+ *
+ * Scoping bounds the blast radius: `app.*` chords are global, everything
+ * else fires only while its widget owns focus (`categoryScopes`). Bare keys
+ * ([ ] tool width, X/D, tool mnemonics) conflict with no browser default.
+ */
+
 const categoryScopes = {
   app: { kind: 'global' },
   canvas: { kind: 'widget', typeId: 'canvas' },
@@ -41,8 +74,12 @@ const implemented = new Set([
   'canvas.fitBboxToMasks',
   'canvas.newSession',
   'canvas.nextEntity',
+  'canvas.saveBboxToGallery',
+  'canvas.saveToGallery',
   'canvas.prevEntity',
   'canvas.redo',
+  'canvas.setFillColorsToDefault',
+  'canvas.toggleFillColor',
   'canvas.undo',
   'gallery.clearSelection',
   'gallery.deleteSelection',
@@ -57,6 +94,7 @@ const implemented = new Set([
   'gallery.remix',
   'gallery.selectAllOnPage',
   'gallery.starImage',
+  'gallery.toggleStarredOnly',
   'viewer.nextComparisonMode',
   'viewer.deleteImage',
   'viewer.recallAll',
@@ -79,9 +117,10 @@ const implemented = new Set([
 /**
  * Hotkeys that must fire with the caret inside a text field or numeric input.
  *
- * There is no second Invoke button anywhere in the application, so `app.invoke`
- * and its variants are load-bearing: a prompt textarea that swallows ⌘↵ leaves
- * the user with no way to submit at all.
+ * The topbar's Invoke button is the only one that is always on screen (the
+ * floating preview window carries a second one, but only while it floats), so
+ * `app.invoke` and its variants are load-bearing: a prompt textarea that
+ * swallows ⌘↵ leaves the user with no way to submit at all.
  */
 const editableAppHotkeys = new Set([
   'app.focusPrompt',
@@ -212,8 +251,10 @@ export const firstPartyHotkeyCatalog: HotkeyDefinition[] = [
   hotkey('canvas', 'toggleNonRasterLayers', ['shift+h']),
   hotkey('canvas', 'fitBboxToMasks', ['shift+b']),
   hotkey('canvas', 'toggleBbox', ['shift+o']),
-  // New canvas session: no default keys — assignable via the hotkeys settings.
+  // New canvas session and the gallery saves: no default keys — assignable via the hotkeys settings.
   hotkey('canvas', 'newSession', []),
+  hotkey('canvas', 'saveToGallery', []),
+  hotkey('canvas', 'saveBboxToGallery', []),
   hotkey('workflows', 'addNode', ['shift+a', 'space']),
   hotkey('workflows', 'copySelection', ['mod+c']),
   hotkey('workflows', 'pasteSelection', ['mod+v']),
@@ -246,4 +287,5 @@ export const firstPartyHotkeyCatalog: HotkeyDefinition[] = [
   hotkey('gallery', 'deleteSelection', ['delete', 'backspace']),
   hotkey('gallery', 'remix', ['r']),
   hotkey('gallery', 'starImage', ['.']),
+  hotkey('gallery', 'toggleStarredOnly', []),
 ];

@@ -18,11 +18,15 @@ import { parseDateTokens } from '@platform/search/dateTokens';
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { useCallback, useMemo } from 'react';
 
+import { resolveGallerySelectedBoardId } from './galleryStateView';
+
 export interface GalleryData {
   boards: GalleryBoard[];
   filter: GalleryItemsFilter;
   hasMore: boolean;
   isLoadingItems: boolean;
+  /** The resolved board the items were fetched for. */
+  selectedBoardId: string;
   /**
    * True when the infinite window is full *and* the board holds more images
    * than it can reach. `hasMore` is false in that case exactly as it is at the
@@ -38,6 +42,8 @@ export interface GalleryData {
   total: number | null;
 }
 
+const EMPTY_BOARDS: GalleryBoard[] = [];
+
 const useGalleryBoards = ({ settings }: { settings: GallerySettings }) => {
   const query = useQuery(
     galleryBoardsOptions({
@@ -48,14 +54,19 @@ const useGalleryBoards = ({ settings }: { settings: GallerySettings }) => {
     })
   );
 
-  return { boards: query.data ?? [] };
+  return { boards: query.data ?? EMPTY_BOARDS };
 };
 
 const isRecentItemVisible = (item: GalleryItem, filter: GalleryItemsFilter): boolean => {
+  // A recent belongs to the unstarred listing (the grid); the starred-only
+  // listing has no slot for it — exactly like a text search — and a recent
+  // starred since it landed has moved to the strip.
   if (
     filter.searchTerm !== '' ||
     filter.createdFrom !== undefined ||
     filter.createdTo !== undefined ||
+    filter.starred === true ||
+    (filter.starred === false && item.starred) ||
     Boolean(filter.semanticQuery) ||
     isDateBoardId(filter.boardId)
   ) {
@@ -104,7 +115,7 @@ export const mergeGalleryItemWindow = ({
   // destroy; the backend order is the meaning of the list. (No recent items
   // are overlaid in that mode, so the merge is the backend window itself.)
   if (!filter.semanticQuery) {
-    mergedItems.sort((a, b) => compareGalleryItems(a, b, filter));
+    mergedItems.sort((a, b) => compareGalleryItems(a, b, { orderDir: filter.orderDir }));
   }
 
   return mergedItems.slice(0, maxRows);
@@ -136,24 +147,32 @@ export const isGalleryWindowTruncated = ({
 export const useGalleryData = ({
   galleryView,
   page,
+  projectBoardId,
   recentImages,
   searchTerm,
   selectedBoardId,
   semanticQuery = null,
   settings,
+  starred,
 }: {
   galleryView: GalleryView;
   page: number;
+  projectBoardId: string | null;
   recentImages: readonly GeneratedImageContract[];
   searchTerm: string;
-  selectedBoardId: string;
+  selectedBoardId: string | null;
   /** When set, items come from semantic search (similarity order) instead of the board listing. */
   semanticQuery?: GallerySemanticReference | null;
   settings: GallerySettings;
+  /**
+   * Partition to list: the grid asks for unstarred (`false`) or, under its
+   * starred filter, starred (`true`); consumers like the picker omit it and
+   * see everything.
+   */
+  starred?: boolean;
 }): GalleryData => {
   const { boards } = useGalleryBoards({ settings });
-  const boardId =
-    boards.length === 0 || boards.some((board) => board.id === selectedBoardId) ? selectedBoardId : 'none';
+  const boardId = resolveGallerySelectedBoardId({ projectBoardId, selectedBoardId }, boards);
   const isPaginated = settings.paginationMode === 'paginated';
   const dateParse = useMemo(() => parseDateTokens(searchTerm), [searchTerm]);
   const filter = useMemo<GalleryItemsFilter>(
@@ -165,7 +184,7 @@ export const useGalleryData = ({
       orderDir: settings.imageOrderDir,
       searchTerm: dateParse.text,
       ...(semanticQuery ? { semanticQuery } : {}),
-      starredFirst: settings.starredFirst,
+      ...(starred !== undefined ? { starred } : {}),
     }),
     [
       boardId,
@@ -175,7 +194,7 @@ export const useGalleryData = ({
       galleryView,
       semanticQuery,
       settings.imageOrderDir,
-      settings.starredFirst,
+      starred,
     ]
   );
   const {
@@ -241,5 +260,16 @@ export const useGalleryData = ({
     void fetchNextPage();
   }, [fetchNextPage, hasMore, isFetchingNextPage]);
 
-  return { boards, filter, hasMore, isLoadingItems: isFetching, isWindowTruncated, items, loadMore, queryError, total };
+  return {
+    boards,
+    filter,
+    hasMore,
+    isLoadingItems: isFetching,
+    isWindowTruncated,
+    items,
+    loadMore,
+    queryError,
+    selectedBoardId: boardId,
+    total,
+  };
 };

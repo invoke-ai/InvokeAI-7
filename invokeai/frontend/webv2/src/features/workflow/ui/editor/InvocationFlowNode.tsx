@@ -18,6 +18,8 @@ import { useWorkflowNodeExecutionState } from '@features/workflow/ui/WorkflowUiC
 import {
   cloneWorkflowFieldDefault,
   getFieldTypeLabel,
+  getOutputFieldNamesByScope,
+  getOutputFieldRows,
   getWorkflowFieldInvalidReason,
   isDirectInputField,
   isExposableField,
@@ -478,6 +480,18 @@ const OutputFieldRow = ({ isSkeleton, template }: { isSkeleton: boolean; templat
   );
 };
 
+const OutputScopeHeader = ({ scope }: { scope: 'iteration' | 'final' }) => {
+  const { t } = useTranslation();
+
+  return (
+    <Box px={WORKFLOW_NODE_DENSITY.rowPaddingX} py={WORKFLOW_NODE_DENSITY.rowPaddingY}>
+      <Text color="fg.subtle" fontSize="2xs" fontWeight="600" textAlign="end">
+        {scope === 'iteration' ? t('nodes.iterationOutputs') : t('nodes.finalOutputs')}
+      </Text>
+    </Box>
+  );
+};
+
 /** Keeps every handle mounted (invisible) so edges stay attached when rows are not rendered. */
 const HiddenHandles = ({
   inputTemplates,
@@ -609,6 +623,8 @@ const ExpandedInvocationNode = ({ data, selected }: NodeProps<InvocationFlowNode
   const exposedFieldNames = new Set(data.exposedFieldNames);
   const inputTemplates = templateView.inputTemplates;
   const outputTemplates = templateView.outputTemplates;
+  const outputTemplatesByName = new Map(outputTemplates.map((template) => [template.name, template]));
+  const outputRows = getOutputFieldRows(getOutputFieldNamesByScope(outputTemplates));
   const isOpen = node.data.isOpen;
   const isRunning = execution?.status === 'running';
   const isMissingRequiredInput = hasMissingRequiredInputs(node, Object.values(template.inputs), connectedFieldNames);
@@ -647,9 +663,17 @@ const ExpandedInvocationNode = ({ data, selected }: NodeProps<InvocationFlowNode
         </>
       ) : isOpen ? (
         <Box {...getWorkflowNodeBodyProps({ roundedBottom: !withFooter && !withOutputPreview })}>
-          {outputTemplates.map((outputTemplate) => (
-            <OutputFieldRow key={outputTemplate.name} isSkeleton={isZoomedOut} template={outputTemplate} />
-          ))}
+          {outputRows.map((row) =>
+            row.type === 'header' ? (
+              <OutputScopeHeader key={`output-scope-${row.scope}`} scope={row.scope} />
+            ) : (
+              <OutputFieldRow
+                key={row.fieldName}
+                isSkeleton={isZoomedOut}
+                template={outputTemplatesByName.get(row.fieldName) as FieldOutputTemplate}
+              />
+            )
+          )}
           {inputTemplates.map((inputTemplate) => (
             <InputFieldRow
               key={inputTemplate.name}

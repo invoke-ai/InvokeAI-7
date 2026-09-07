@@ -4,7 +4,7 @@ import type { FoundModel } from '@features/models/core/types';
 import { Checkbox, HStack, Icon, Stack, Text } from '@chakra-ui/react';
 import { ResultsListHeader } from '@features/models/ui/shared/ResultsListHeader';
 import { InstallSourceButton, SourceListItem } from '@features/models/ui/shared/SourceListItem';
-import { useInstalledSources } from '@features/models/ui/shared/useInstalledSources';
+import { useInstalledSourceKeys } from '@features/models/ui/shared/useInstalledSources';
 import { sourceFileName, useSourceNameFilter } from '@features/models/ui/shared/useSourceNameFilter';
 import { IconButton } from '@platform/ui';
 import { XIcon } from 'lucide-react';
@@ -34,8 +34,8 @@ export const ScanResults = ({
   const { filter, filteredItems: filteredResults, setFilter } = useSourceNameFilter(scan.results, pathOf);
   // Live library state: `is_installed` is a scan-time snapshot, so a model
   // installed from this list would otherwise keep offering Install forever.
-  const installedSources = useInstalledSources();
-  const isRowInstalled = (result: FoundModel) => result.is_installed || installedSources.has(result.path);
+  const installedSourceKeys = useInstalledSourceKeys();
+  const isRowInstalled = (result: FoundModel) => result.is_installed || installedSourceKeys.has(result.path);
 
   const notInstalledCount = scan.results.filter((result) => !isRowInstalled(result)).length;
   const installable = filteredResults.filter((result) => !isRowInstalled(result));
@@ -92,6 +92,7 @@ export const ScanResults = ({
           titleTooltip={result.path}
           trailing={
             <InstallSourceButton
+              installedModelKey={installedSourceKeys.get(result.path) ?? null}
               isInstalled={isRowInstalled(result)}
               isPending={pendingSources.has(result.path)}
               source={result.path}

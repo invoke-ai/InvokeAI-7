@@ -121,6 +121,7 @@ const Probe = ({
       {
         archived: false,
         assetCount: 0,
+        assetVideoCount: 0,
         id: 'board-1',
         imageCount: 2,
         kind: 'board',
@@ -131,6 +132,7 @@ const Probe = ({
       {
         archived: false,
         assetCount: 0,
+        assetVideoCount: 0,
         id: 'none',
         imageCount: 0,
         kind: 'uncategorized',
@@ -159,6 +161,7 @@ const adapter: GalleryUiAdapter = {
   antialiasProgressImages: false,
   exportProject: vi.fn(),
   gallery: {
+    clearSelection: noop,
     reconcileDeletedBoardOutcome,
     selectBoard,
     selectImage: noop,
@@ -169,6 +172,7 @@ const adapter: GalleryUiAdapter = {
     setPage: noop,
     setPageInfo: noop,
     setSearchTerm: noop,
+    setStarredOnly: noop,
     setView: noop,
     toggleItemSelection: noop,
     updateSettings: noop,
@@ -184,7 +188,7 @@ const adapter: GalleryUiAdapter = {
   projectId: 'project-1',
   projectName: 'Project',
   queueItems: [],
-  widgets: { patchGalleryValues },
+  widgets: { openGallery: () => true, patchGalleryValues },
 };
 
 let selectedBoardId = 'board-1';
@@ -494,7 +498,7 @@ describe('mixed gallery upload', () => {
       .mockRejectedValueOnce(new Error('bad second video'))
       .mockResolvedValueOnce(videoUpload('third.mp4', '2026-07-30T12:00:05.000Z'));
 
-    let upload: Promise<void> | undefined;
+    let upload: Promise<unknown> | undefined;
     act(() => {
       upload = actionsRef.current?.uploadFiles([
         new File(['image'], 'one.png', { type: 'image/png' }),
@@ -561,7 +565,7 @@ describe('mixed gallery upload', () => {
       })
     );
 
-    let upload: Promise<void> | undefined;
+    let upload: Promise<unknown> | undefined;
     act(() => {
       upload = actionsRef.current?.uploadFiles([new File(['image'], 'photo.png', { type: 'image/png' })]);
     });
@@ -598,7 +602,7 @@ describe('mixed gallery upload', () => {
       })
     );
 
-    let upload: Promise<void> | undefined;
+    let upload: Promise<unknown> | undefined;
     act(() => {
       upload = actionsRef.current?.uploadFiles([new File(['image'], 'photo.png', { type: 'image/png' })]);
     });
@@ -647,7 +651,7 @@ describe('mixed gallery upload', () => {
       })
     );
 
-    let upload: Promise<void> | undefined;
+    let upload: Promise<unknown> | undefined;
     act(() => {
       upload = actionsRef.current?.uploadFiles([
         new File(['video'], 'one.mp4', { type: 'video/mp4' }),

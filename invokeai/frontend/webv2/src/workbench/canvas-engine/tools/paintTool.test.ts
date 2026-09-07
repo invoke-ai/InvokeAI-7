@@ -1,6 +1,6 @@
 import type {
   CanvasControlLayerContract,
-  CanvasDocumentContractV2,
+  CanvasDocumentContractV3,
   CanvasLayerContract,
 } from '@workbench/canvas-engine/contracts';
 import type { StubRasterBackend, StubRasterSurface } from '@workbench/canvas-engine/render/raster.testStub';
@@ -13,6 +13,8 @@ import type {
 import type { PointerInput } from '@workbench/canvas-engine/types';
 import type { CanvasProjectMutation } from '@workbench/canvasProjectMutations';
 
+import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
+import { createTestInsertionAnchorCapture } from '@workbench/canvas-engine/document/insertionAnchors.testStub';
 import { createEngineStores } from '@workbench/canvas-engine/engineStores';
 import { isEmpty } from '@workbench/canvas-engine/math/rect';
 import { createLayerCacheStore, type LayerCacheStore } from '@workbench/canvas-engine/render/layerCache';
@@ -87,13 +89,13 @@ const controlTransaction = (layerId = 'control'): PixelEditTransaction => ({
   layerId,
 });
 
-const makeDoc = (layers: CanvasLayerContract[], selectedLayerId: string | null): CanvasDocumentContractV2 => ({
+const makeDoc = (layers: CanvasLayerContract[], selectedLayerId: string | null): CanvasDocumentContractV3 => ({
   background: 'transparent',
   bbox: { height: 100, width: 100, x: 0, y: 0 },
   height: 100,
-  layers,
+  stacks: stacksFrom(layers),
   selectedLayerId,
-  version: 2,
+  version: 3,
   width: 100,
 });
 
@@ -127,7 +129,7 @@ interface Harness {
 }
 
 const createHarness = (
-  doc: CanvasDocumentContractV2,
+  doc: CanvasDocumentContractV3,
   transaction: PixelEditTransaction | null | undefined = undefined
 ): Harness => {
   const backend = createTestStubRasterBackend();
@@ -144,6 +146,7 @@ const createHarness = (
   const ctx: ToolContext = {
     backend,
     ...(beginPixelEdit ? { beginPixelEdit } : {}),
+    captureInsertionAnchor: createTestInsertionAnchorCapture('p'),
     commitStructural: vi.fn(),
     createLayerId: () => {
       const id = `new-layer-${(idCounter += 1)}`;
@@ -577,7 +580,7 @@ describe('auto-created layer rollback (a gesture that commits nothing leaves no 
    * The auto-create dispatch happens at pointer-DOWN, outside history, so a gesture
    * producing no dirty rect must roll the layer back itself or strand it un-undoably.
    */
-  const clipped = (doc: CanvasDocumentContractV2) => {
+  const clipped = (doc: CanvasDocumentContractV3) => {
     const h = createHarness(doc);
     // Clip-to-bbox on with the stroke outside the frame, so `commit()` returns null.
     const ctx: ToolContext = { ...h.ctx, getStrokeClipRect: () => ({ height: 10, width: 10, x: 0, y: 0 }) };

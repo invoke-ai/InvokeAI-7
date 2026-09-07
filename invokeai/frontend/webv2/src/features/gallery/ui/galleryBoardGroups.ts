@@ -10,7 +10,7 @@ export interface GalleryBoardGroups {
   dateBoards: GalleryBoard[];
   /** Any row at all survived the search — drives the "no matches" copy. */
   hasAnyMatch: boolean;
-  /** Project board (if any), then other boards, then Uncategorized last. */
+  /** Uncategorized first, then the project board (if any), then other boards. */
   yourBoards: GalleryBoard[];
 }
 
@@ -46,8 +46,10 @@ export const getGalleryBoardGroups = ({
   const matchesSearch = (name: string) => !normalizedSearchTerm || name.toLowerCase().includes(normalizedSearchTerm);
 
   const uncategorizedBoard = boards.find((board) => board.kind === 'uncategorized') ?? null;
-  const projectBoard = projectBoardId ? (boards.find((board) => board.id === projectBoardId) ?? null) : null;
-  const projectRowName = projectBoard?.name ?? projectName;
+  const fetchedProjectBoard = projectBoardId ? (boards.find((board) => board.id === projectBoardId) ?? null) : null;
+  // The board renames with its project server-side, but the fetched list can lag
+  // a rename — the live project name is authoritative for the open project's row.
+  const projectBoard = fetchedProjectBoard ? { ...fetchedProjectBoard, name: projectName } : null;
 
   const matchesBoardSearch = (board: GalleryBoard) => matchesSearch(getGalleryBoardLabel(board, t));
   // The open project's own board is never "another project's", whatever the
@@ -64,16 +66,18 @@ export const getGalleryBoardGroups = ({
   const dateBoards = showDates ? boards.filter((board) => board.kind === 'date' && matchesBoardSearch(board)) : [];
   const archivedBoards = showArchived ? regularBoards.filter((board) => board.archived) : [];
 
+  // The one fixed system row keeps a fixed seat at the top (legacy-gallery
+  // parity) instead of drifting down as boards accumulate.
   const yourBoards = [
+    ...(uncategorizedBoard && matchesBoardSearch(uncategorizedBoard) ? [uncategorizedBoard] : []),
     ...(projectBoard && matchesBoardSearch(projectBoard) ? [projectBoard] : []),
     ...regularBoards.filter((board) => !board.archived),
-    ...(uncategorizedBoard && matchesBoardSearch(uncategorizedBoard) ? [uncategorizedBoard] : []),
   ];
 
   const hasAnyMatch = yourBoards.length > 0 || dateBoards.length > 0 || archivedBoards.length > 0;
   const hasExactMatch =
     boards.some((board) => getGalleryBoardLabel(board, t).toLowerCase() === normalizedSearchTerm) ||
-    projectRowName.toLowerCase() === normalizedSearchTerm;
+    projectName.toLowerCase() === normalizedSearchTerm;
 
   return {
     archivedBoards,

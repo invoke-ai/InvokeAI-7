@@ -1,6 +1,6 @@
 import type { ImageWithDims } from '@features/generation/contracts';
 import type { ModelConfig, ModelTaxonomyType } from '@features/models';
-import type { VideoSourceClip, VideoWidgetValues } from '@features/video/core/types';
+import type { VideoReferenceItem, VideoSourceClip, VideoWidgetValues } from '@features/video/core/types';
 
 import { createListCollection, HStack, NumberInput, Stack, Switch, Text } from '@chakra-ui/react';
 import { GenerationSettingsSection } from '@features/generation/components';
@@ -8,7 +8,15 @@ import { isMainModelConfig, sanitizeBatchCount, SEED_MAX } from '@features/gener
 import { ensureModelsLoaded, useModelsSelector } from '@features/models';
 import { ModelSelect } from '@features/models/react';
 import { getVideoDurationSeconds, invertVideoAspectRatioId } from '@features/video/core/dimensions';
-import { normalizeVideoWidgetValues, resolveVideoMode, VIDEO_ASPECT_RATIO_IDS } from '@features/video/core/settings';
+import {
+  applyReferenceExtendSourceVideo,
+  applyReferenceExtendNumFrames,
+  canPlaceReferenceExtendAnchor,
+  pinReferenceExtendAnchor,
+  normalizeVideoWidgetValues,
+  resolveVideoMode,
+  VIDEO_ASPECT_RATIO_IDS,
+} from '@features/video/core/settings';
 import {
   getAcceleratorLoraChangeResult,
   getAcceleratorToggleResult,
@@ -24,7 +32,7 @@ import { Button } from '@platform/ui/Button';
 import { SliderNumberField } from '@platform/ui/SliderNumberField';
 import { toaster } from '@platform/ui/toaster';
 import { ArrowLeftRightIcon, DicesIcon } from 'lucide-react';
-import { useCallback, useMemo } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { areVideoValuesEqual } from './videoComparators';
@@ -32,6 +40,7 @@ import { VideoComponentsSection } from './VideoComponentsSection';
 import { VideoConceptsSection } from './VideoConceptsSection';
 import { VideoPromptFields } from './VideoFormFields';
 import { VideoFrameImageField } from './VideoFrameImageField';
+import { VideoReferenceListField } from './VideoReferenceListField';
 import { VideoSourceClipField } from './VideoSourceClipField';
 import { useVideoUi, useVideoUiActions } from './VideoUiContext';
 
@@ -143,6 +152,49 @@ export const VideoWidgetView = () => {
 
   const patch = useCallback((next: Partial<VideoWidgetValues>) => patchValues(next), [patchValues]);
 
+  // Always the newest normalized list. The reference field's add handlers
+  // `await` a gallery resolve before writing, and the Initial Video field and
+  // the Frames slider write references too — so an updater that resolved
+  // against a captured array would clobber whichever of those landed during
+  // the await, silently deleting the anchor or restoring a window the frame
+  // count had already re-derived.
+  // Synced in an effect rather than during render: this file's react-compiler
+  // rule forbids touching a ref while rendering, and a gallery resolve lands
+  // whole frames later, long after the commit.
+  // Keyed by PROJECT, and carrying a LIVENESS bit. The widget is reconciled,
+  // never remounted, across a project switch (the <Activity> key is the panel
+  // instance), while `patch` stays bound to the project its render belonged
+  // to — so a bare latest-list ref tracks whichever project is ACTIVE, and a
+  // gallery resolve landing after a switch would write the new project's
+  // reference list into the old project, wholesale. And a hidden <Activity>
+  // destroys effects while promise continuations keep running: the ref then
+  // freezes with the projectId still matching, so a same-project guard would
+  // happily replay a list the store has since rewritten (a gallery deletion
+  // sweep, say) — resurrecting swept references. `live` is true exactly while
+  // the sync effect is mounted, which is the only time the ref's contents can
+  // be trusted; a write finding it false or mismatched is dropped.
+  //
+  // "Fresh" here means effect-fresh, not instantaneous: two resolves landing
+  // in the same microtask drain still read the same pre-commit list. That
+  // window is inherent to reading through React state at all.
+  const referencesRef = useRef({ live: true, projectId, references: values.references });
+
+  useEffect(() => {
+    referencesRef.current = { live: true, projectId, references: values.references };
+
+    return () => {
+      referencesRef.current = { ...referencesRef.current, live: false };
+    };
+  }, [projectId, values.references]);
+
+  // Chakra's `Field.Root` hands its single `ids.control` to EVERY control
+  // inside it, and this Field holds three. Without an id of its own the
+  // switch's hidden input collides with the seed NumberInput, so the
+  // `<label>` Switch.Root renders points at the seed field: clicking the
+  // toggle focused the seed input and never toggled anything.
+  const seedSwitchId = useId();
+  const seedSwitchIds = useMemo(() => ({ hiddenInput: `${seedSwitchId}-randomize-seed` }), [seedSwitchId]);
+
   useMountEffect(() => {
     void ensureModelsLoaded();
   });
@@ -208,7 +260,6 @@ export const VideoWidgetView = () => {
       cfgScale: (cfgScale: number) => patch({ cfgScale }),
       cfgScaleLowNoise: (cfgScaleLowNoise: number) => patch({ cfgScaleLowNoise }),
       fps: (fps: number) => patch({ fps }),
-      numFrames: (numFrames: number) => patch({ numFrames }),
       randomizeSeed: (details: { checked: boolean }) => patch({ shouldRandomizeSeed: details.checked }),
       seed: ({ valueAsNumber }: NumberInput.ValueChangeDetails) =>
         Number.isFinite(valueAsNumber) && patch({ seed: valueAsNumber }),
@@ -234,17 +285,112 @@ export const VideoWidgetView = () => {
   // video are different ways to claim the same conditioning slot, so setting
   // one clears the other. A last frame combines with either — with a first
   // frame it interpolates (FLF2V); with a source video it is the destination
-  // the extension should land on.
+  // the extension should land on. On a reference-extend panel the initial
+  // video and the references coexist — the setter keeps the linked tail
+  // reference in step with the clip and its cutpoints.
+  const referenceExtend = Boolean(policy.references?.extend);
+  const maxVideoReferences = policy.references?.maxVideos ?? 3;
   const setFirstFrame = useCallback(
     (firstFrameImage: ImageWithDims | null) =>
       patch({ firstFrameImage, ...(firstFrameImage ? { sourceVideo: null } : {}) }),
     [patch]
   );
   const setLastFrame = useCallback((lastFrameImage: ImageWithDims | null) => patch({ lastFrameImage }), [patch]);
-  const setSourceVideo = useCallback(
-    (sourceVideo: VideoSourceClip | null) => patch({ sourceVideo, ...(sourceVideo ? { firstFrameImage: null } : {}) }),
-    [patch]
+  // Not part of `set`: that object is memoized on `patch` alone so the field
+  // setters keep the children's `memo` intact, and this one has to track the
+  // reference list. The linked tail reference's window is budgeted against the
+  // generated frame count — the backend discards an ill-fitting window at its
+  // SEAM end — so the count and the window move together. The re-derive is
+  // idempotent: this fires once per keystroke of the Frames input, unclamped,
+  // so typing "345" arrives as 3, then 34, then 345.
+  const setNumFrames = useCallback(
+    (numFrames: number) =>
+      patch(
+        referenceExtend && referencesRef.current.live && referencesRef.current.projectId === projectId
+          ? { numFrames, references: applyReferenceExtendNumFrames(referencesRef.current.references, numFrames) }
+          : { numFrames }
+      ),
+    // Reads the list through the ref so the Frames control keeps a stable
+    // prop identity: depending on `values.references` re-created this on every
+    // panel patch, re-rendering the slider against the file's stable-identity
+    // contract. Safe because the re-derive is idempotent in `numFrames`. The
+    // project guard is unreachable for this synchronous caller; it keeps the
+    // ref's contract uniform.
+    [patch, projectId, referenceExtend]
   );
+  const setSourceVideo = useCallback(
+    (sourceVideo: VideoSourceClip | null) => {
+      if (referenceExtend) {
+        // Same guard as `setReferences`: the clip field's adopt and upload
+        // paths call this after an await, and a captured list would clobber a
+        // reference added meanwhile. Dropped when the project moved on or the
+        // sync effect is unmounted — the ref is effect-fresh, not live, and
+        // only vouches for its contents while mounted.
+        if (!referencesRef.current.live || referencesRef.current.projectId !== projectId) {
+          return;
+        }
+        const current = referencesRef.current.references;
+        const references = applyReferenceExtendSourceVideo(current, sourceVideo, maxVideoReferences, values.numFrames);
+
+        // Unchanged identity with a clip set means the video cap is full and
+        // no same-clip entry could be adopted. REFUSE the whole drop: patching
+        // the clip anyway produced an extension with no continuity anchor at
+        // all, behind nothing but a toast -- and the cap gate then froze the
+        // clip's trim sliders. (The gate cannot pre-empt this case: it can
+        // only ask about the clip currently set, and this drop is a different
+        // one.) Clearing is never refused -- removing the linked entry cannot
+        // overflow anything.
+        if (sourceVideo && references === current) {
+          toaster.create({
+            description: t('widgets.video.referenceExtendCapFullDescription'),
+            title: t('widgets.video.referenceExtendCapFull'),
+            type: 'warning',
+          });
+
+          return;
+        }
+        patch({ references, sourceVideo, ...(sourceVideo ? { firstFrameImage: null } : {}) });
+        return;
+      }
+      patch({ sourceVideo, ...(sourceVideo ? { firstFrameImage: null } : {}) });
+    },
+    [maxVideoReferences, patch, projectId, referenceExtend, t, values.numFrames]
+  );
+  // The single choke point for every list edit the reference field makes — add,
+  // remove, retrim, reorder — so pinning the continuity anchor here covers all
+  // of them. Request order is rotary order and the generation continues from
+  // the LAST reference, so the anchor's position is derived, not user-set.
+  const setReferences = useCallback(
+    (update: (current: VideoReferenceItem[]) => VideoReferenceItem[]) => {
+      // A pending edit is DROPPED when the ref cannot vouch for the list:
+      // the project moved on (this callback's `patch` still targets the one
+      // it rendered for), or the sync effect is unmounted (a hidden panel's
+      // continuations would replay a frozen list over whatever the store has
+      // done since). Losing one add beats overwriting a list the user can see.
+      if (!referencesRef.current.live || referencesRef.current.projectId !== projectId) {
+        return;
+      }
+      const updated = update(referencesRef.current.references);
+
+      // Identity return means the updater declined (an apply-time cap check)
+      // or had nothing to do: patching anyway would still fire this spread's
+      // firstFrameImage/lastFrameImage clearing — a refused add erasing frame
+      // slots it never touched — and dirty the project with a no-op write.
+      if (updated === referencesRef.current.references) {
+        return;
+      }
+      const next = referenceExtend ? pinReferenceExtendAnchor(updated) : updated;
+
+      patch({
+        references: next,
+        ...(next.length > 0
+          ? { firstFrameImage: null, lastFrameImage: null, ...(referenceExtend ? {} : { sourceVideo: null }) }
+          : {}),
+      });
+    },
+    [patch, projectId, referenceExtend]
+  );
+  const clearReferences = useCallback(() => patch({ references: [] }), [patch]);
   const setLoras = useCallback(
     (loras: VideoWidgetValues['loras']) => {
       // While the fast path is on it follows the list: a different complete
@@ -310,6 +456,18 @@ export const VideoWidgetView = () => {
   const supportsFirstFrame = policy.modes.includes('first-frame') || policy.modes.includes('first-last');
   const supportsLastFrame = policy.modes.includes('first-last') || policy.modes.includes('last-frame');
   const supportsExtend = policy.modes.includes('extend');
+  const supportsReferences = policy.modes.includes('reference');
+  const supportsInitialVideo = supportsExtend || referenceExtend;
+  // Setting an Initial Video on a reference-extend panel has to place a linked
+  // tail reference, which needs a free video slot -- unless an existing entry
+  // can be adopted, which consumes none. Deferring to the same predicate the
+  // setter's refusal uses keeps the two from drifting: gating on the flag alone
+  // disabled the field after a recall, which restores references UNFLAGGED
+  // beside the source video, and `disabled` reaches the clip's trim sliders too
+  // -- so the cutpoint could not be moved on a clip that was legitimately set.
+  const initialVideoCapBlocked =
+    referenceExtend &&
+    !canPlaceReferenceExtendAnchor(values.references, values.sourceVideo?.video_name, maxVideoReferences);
   const hasConditioningMedia = Boolean(values.firstFrameImage || values.lastFrameImage || values.sourceVideo);
   const derivedSourceText = dimensions ? t(`widgets.video.dimensionSource.${dimensions.source}`) : undefined;
   const derivedSizeText = dimensions
@@ -413,16 +571,44 @@ export const VideoWidgetView = () => {
       {!supportsLastFrame && values.lastFrameImage ? (
         <StaleMediaStub label={t('widgets.video.staleLastFrame')} onClear={clearLastFrame} />
       ) : null}
-      {!supportsExtend && values.sourceVideo ? (
+      {!supportsInitialVideo && values.sourceVideo ? (
         <StaleMediaStub label={t('widgets.video.staleSourceVideo')} onClear={clearSourceVideo} />
       ) : null}
+      {!supportsReferences && values.references.length > 0 ? (
+        <StaleMediaStub label={t('widgets.video.staleReferences')} onClear={clearReferences} />
+      ) : null}
 
-      {supportsExtend ? (
+      {supportsReferences ? (
+        <GenerationSettingsSection label={t('widgets.video.references')} sectionId="video-references" defaultOpen>
+          <Stack gap="3" p="2">
+            <VideoReferenceListField
+              maxImages={policy.references?.maxImages ?? 9}
+              maxVideos={policy.references?.maxVideos ?? 3}
+              references={values.references}
+              targetArea={dimensions ? dimensions.width * dimensions.height : null}
+              onChange={setReferences}
+            />
+          </Stack>
+        </GenerationSettingsSection>
+      ) : null}
+
+      {supportsInitialVideo ? (
         <GenerationSettingsSection label={t('widgets.video.initialVideo')} sectionId="video-source" defaultOpen>
           <Stack gap="3" p="2">
+            {referenceExtend ? (
+              <Text color="fg.muted" fontSize="2xs" textWrap="pretty">
+                {t('widgets.video.referenceExtendHelp')}
+              </Text>
+            ) : null}
             <VideoSourceClipField
-              disabled={Boolean(values.firstFrameImage)}
-              disabledReason={values.firstFrameImage ? t('widgets.video.initialVideoBlocked') : undefined}
+              disabled={Boolean(values.firstFrameImage) || initialVideoCapBlocked}
+              disabledReason={
+                values.firstFrameImage
+                  ? t('widgets.video.initialVideoBlocked')
+                  : initialVideoCapBlocked
+                    ? t('widgets.video.initialVideoCapBlocked')
+                    : undefined
+              }
               sourceVideo={values.sourceVideo}
               onChange={setSourceVideo}
             />
@@ -468,7 +654,7 @@ export const VideoWidgetView = () => {
               min={framesSlider.min}
               step={framesSlider.step}
               value={values.numFrames}
-              onChange={set.numFrames}
+              onChange={setNumFrames}
             />
           </Field>
           {policy.ui.fpsVisible ? (
@@ -575,15 +761,22 @@ export const VideoWidgetView = () => {
                 <DicesIcon />
               </IconButton>
               <HStack gap="1">
-                <Switch.Root checked={values.shouldRandomizeSeed} size="sm" onCheckedChange={set.randomizeSeed}>
+                <Switch.Root
+                  checked={values.shouldRandomizeSeed}
+                  ids={seedSwitchIds}
+                  size="sm"
+                  onCheckedChange={set.randomizeSeed}
+                >
                   <Switch.HiddenInput />
                   <Switch.Control _checked={SWITCH_CHECKED_PROPS}>
                     <Switch.Thumb />
                   </Switch.Control>
+                  {/* Inside Switch.Root, so the words are part of the control
+                      (they were an inert sibling <Text> before). */}
+                  <Switch.Label color="fg.muted" fontSize="2xs">
+                    {t('widgets.video.randomizeSeed')}
+                  </Switch.Label>
                 </Switch.Root>
-                <Text color="fg.muted" fontSize="2xs">
-                  {t('widgets.video.randomizeSeed')}
-                </Text>
               </HStack>
             </HStack>
           </Field>

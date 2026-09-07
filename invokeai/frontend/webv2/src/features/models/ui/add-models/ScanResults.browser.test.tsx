@@ -3,6 +3,7 @@ import type { ModelConfig, ModelInstallJob } from '@features/models/core/types';
 import { ChakraProvider } from '@chakra-ui/react';
 import { addInstallJob, replaceInstallJob } from '@features/models/data/installsStore';
 import { setModelsSnapshotForTests } from '@features/models/data/modelsStore';
+import { getModelsUiSnapshotForTests, updateModelsUi } from '@features/models/ui/uiStore';
 import { accountLifecycle } from '@platform/state/accountLifecycle';
 import { system } from '@theme/system';
 import { act } from 'react';
@@ -100,5 +101,12 @@ describe('ScanResults install badge lifecycle', () => {
 
     expect(host.textContent).not.toContain('models.installing');
     expect(host.textContent).toContain('models.installed');
+
+    // The installed row links to the model it became.
+    updateModelsUi({ activeModelKey: null, activeTab: 'add' });
+    const viewModel = [...host.querySelectorAll('button')].find((button) => button.textContent === 'models.viewModel');
+    expect(viewModel).toBeDefined();
+    await act(() => viewModel!.click());
+    expect(getModelsUiSnapshotForTests()).toMatchObject({ activeModelKey: 'installed-key', activeTab: 'details' });
   });
 });

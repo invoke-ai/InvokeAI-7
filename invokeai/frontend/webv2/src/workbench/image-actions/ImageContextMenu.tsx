@@ -11,7 +11,7 @@ import {
   toGalleryItemKey,
 } from '@features/gallery';
 import { createVideoSourceClip } from '@features/video';
-import { MenuContent, Tooltip } from '@platform/ui';
+import { MenuContent, MenuIconItem } from '@platform/ui';
 import { MiddleTruncate } from '@platform/ui/MiddleTruncate';
 import { useOpenWorkbenchWidget } from '@workbench/useOpenWorkbenchWidget';
 import { useWorkbenchCommands } from '@workbench/WorkbenchContext';
@@ -76,8 +76,6 @@ const MENU_CONTENT_PROPS = {
   overflow: 'hidden',
 } as const;
 const MENU_POSITIONING_PROPS = { placement: 'right-start' } as const;
-const QUICK_MENU_TOOLTIP_CONTENT_PROPS = { fontSize: '2xs' } as const;
-const QUICK_MENU_TOOLTIP_POSITIONING_PROPS = { placement: 'top' } as const;
 
 const isUsableGalleryImage = (value: unknown): value is GalleryImage =>
   Boolean(value) &&
@@ -381,9 +379,11 @@ const SingleItemMenuItems = ({
     }
 
     openWidget('video', { preferredRegions: ['left'] });
-    // An initial video and a first frame are mutually exclusive in the panel.
+    // An initial video, a first frame, and Ref2VA references all claim the same
+    // conditioning slot: extending clears the rivals.
     widgets.patchValues('video', {
       firstFrameImage: null,
+      references: [],
       sourceVideo: createVideoSourceClip({
         durationSeconds: item.durationSeconds,
         fps: item.fps,
@@ -398,25 +398,25 @@ const SingleItemMenuItems = ({
   return (
     <>
       <HStack gap="1">
-        <QuickMenuItem
+        <MenuIconItem
           icon={ExternalLinkIcon}
           label="Open in new tab"
           value="open-in-new-tab"
-          onClick={handleOpenInNewTab}
+          onSelect={handleOpenInNewTab}
         />
-        <QuickMenuItem
+        <MenuIconItem
           icon={DownloadIcon}
           label={`Download ${mediaLabel}`}
           value="download-item"
-          onClick={handleDownload}
+          onSelect={handleDownload}
         />
-        <QuickMenuItem icon={EyeIcon} label="Open in preview" value="open-in-preview" onClick={handleOpenPreview} />
-        <QuickMenuItem
+        <MenuIconItem icon={EyeIcon} label="Open in preview" value="open-in-preview" onSelect={handleOpenPreview} />
+        <MenuIconItem
           icon={StarIcon}
           iconFill={item.starred ? 'currentColor' : 'none'}
           label={`${item.starred ? 'Unstar' : 'Star'} ${mediaLabel}`}
           value="toggle-starred"
-          onClick={handleToggleStarred}
+          onSelect={handleToggleStarred}
         />
       </HStack>
       <Menu.Separator borderColor="border.subtle" />
@@ -481,7 +481,7 @@ const SingleItemMenuItems = ({
       <ChangeBoardSubMenu boards={boards} currentBoardId={item.boardId} onMove={handleMove} />
       <Menu.Separator borderColor="border.subtle" />
       <ContextMenuItem
-        color="fg.error"
+        isDanger
         icon={Trash2Icon}
         label={item.kind === 'video' ? 'Delete Video' : 'Delete Item'}
         value="delete-item"
@@ -530,17 +530,17 @@ const BulkItemMenuItems = ({
       </Text>
       <Menu.Separator borderColor="border.subtle" />
       <HStack gap="1">
-        <QuickMenuItem
+        <MenuIconItem
           icon={ExternalLinkIcon}
           label="Open in new tab"
           value="open-primary-in-new-tab"
-          onClick={handleOpenInNewTab}
+          onSelect={handleOpenInNewTab}
         />
-        <QuickMenuItem
+        <MenuIconItem
           icon={EyeIcon}
           label="Open in preview"
           value="open-primary-in-preview"
-          onClick={handleOpenPreview}
+          onSelect={handleOpenPreview}
         />
       </HStack>
       <Menu.Separator borderColor="border.subtle" />
@@ -560,7 +560,7 @@ const BulkItemMenuItems = ({
       <ChangeBoardSubMenu boards={boards} currentBoardId={null} onMove={handleMove} />
       <Menu.Separator borderColor="border.subtle" />
       <ContextMenuItem
-        color="fg.error"
+        isDanger
         icon={Trash2Icon}
         label="Delete Selection"
         value="delete-selection"
@@ -730,9 +730,11 @@ const SingleImageMenuItems = ({
   }, [generation, image.height, image.imageName, image.width, openWidget, widgets]);
   const handleSendToVideo = useCallback(() => {
     openWidget('video', { preferredRegions: ['left'] });
-    // The first frame and an initial video are mutually exclusive in the panel.
+    // The first frame, an initial video, and Ref2VA references all claim the same
+    // conditioning slot: sending a frame clears the rivals.
     widgets.patchValues('video', {
       firstFrameImage: { height: image.height, image_name: image.imageName, width: image.width },
+      references: [],
       sourceVideo: null,
     });
     generation.setSource('video');
@@ -827,13 +829,7 @@ const SingleImageMenuItems = ({
       <NewFromImageSubMenu actions={actions} images={images} isBulk={false} />
       <ChangeBoardSubMenu boards={boards} currentBoardId={image.boardId} onMove={handleMove} />
       <Menu.Separator borderColor="border.subtle" />
-      <ContextMenuItem
-        color="fg.error"
-        icon={Trash2Icon}
-        label="Delete Image"
-        value="delete-image"
-        onClick={handleDelete}
-      />
+      <ContextMenuItem isDanger icon={Trash2Icon} label="Delete Image" value="delete-image" onClick={handleDelete} />
     </>
   );
 };
@@ -853,26 +849,26 @@ const OpenInNewTabQuickMenuItem = ({ image }: { image: GalleryImage }) => {
   const handleClick = useCallback(() => window.open(image.imageUrl, '_blank', 'noopener'), [image.imageUrl]);
 
   return (
-    <QuickMenuItem icon={ExternalLinkIcon} label="Open in new tab" value="open-in-new-tab" onClick={handleClick} />
+    <MenuIconItem icon={ExternalLinkIcon} label="Open in new tab" value="open-in-new-tab" onSelect={handleClick} />
   );
 };
 
 const CopyQuickMenuItem = ({ actions, image }: { actions: ImageActions; image: GalleryImage }) => {
   const handleClick = useCallback(() => void actions.copyImage(image), [actions, image]);
 
-  return <QuickMenuItem icon={CopyIcon} label="Copy to clipboard" value="copy-to-clipboard" onClick={handleClick} />;
+  return <MenuIconItem icon={CopyIcon} label="Copy to clipboard" value="copy-to-clipboard" onSelect={handleClick} />;
 };
 
 const DownloadQuickMenuItem = ({ actions, image }: { actions: ImageActions; image: GalleryImage }) => {
   const handleClick = useCallback(() => void actions.downloadImage(image), [actions, image]);
 
-  return <QuickMenuItem icon={DownloadIcon} label="Download image" value="download-image" onClick={handleClick} />;
+  return <MenuIconItem icon={DownloadIcon} label="Download image" value="download-image" onSelect={handleClick} />;
 };
 
 const OpenPreviewQuickMenuItem = ({ actions, image }: { actions: ImageActions; image: GalleryImage }) => {
   const handleClick = useCallback(() => actions.openImageInPreview(image), [actions, image]);
 
-  return <QuickMenuItem icon={EyeIcon} label="Open in preview" value="open-in-preview" onClick={handleClick} />;
+  return <MenuIconItem icon={EyeIcon} label="Open in preview" value="open-in-preview" onSelect={handleClick} />;
 };
 
 const ToggleStarQuickMenuItem = ({ actions, image }: { actions: ImageActions; image: GalleryImage }) => {
@@ -882,12 +878,12 @@ const ToggleStarQuickMenuItem = ({ actions, image }: { actions: ImageActions; im
   );
 
   return (
-    <QuickMenuItem
+    <MenuIconItem
       icon={StarIcon}
       iconFill={image.starred ? 'currentColor' : 'none'}
       label={image.starred ? 'Unstar image' : 'Star image'}
       value="toggle-starred"
-      onClick={handleClick}
+      onSelect={handleClick}
     />
   );
 };
@@ -940,7 +936,7 @@ const BulkMenuItems = ({
       <ChangeBoardSubMenu boards={boards} currentBoardId={null} onMove={handleMove} />
       <Menu.Separator borderColor="border.subtle" />
       <ContextMenuItem
-        color="fg.error"
+        isDanger
         icon={Trash2Icon}
         label="Delete Selection"
         value="delete-selection"
@@ -958,12 +954,21 @@ const NewFromImageSubMenu = ({
   actions: ImageActions;
   images: GalleryImage[];
   isBulk: boolean;
-}) => (
-  <ContextSubMenu icon={FileImageIcon} label={isBulk ? 'New from Images' : 'New from Image'}>
-    <ContextMenuItem disabled icon={FileImageIcon} label="New Canvas from Image" value="new-canvas-from-image" />
-    <GalleryCanvasImportSubMenu actions={actions} images={images} isBulk={isBulk} />
-  </ContextSubMenu>
-);
+}) => {
+  const { t } = useTranslation();
+  const handleNewCanvas = useCallback(() => void actions.createCanvasFromImages(images), [actions, images]);
+  return (
+    <ContextSubMenu icon={FileImageIcon} label={t('widgets.canvas.import.newFromImage', { count: images.length })}>
+      <ContextMenuItem
+        icon={FileImageIcon}
+        label={t('widgets.canvas.import.newCanvasFromImage', { count: images.length })}
+        value="new-canvas-from-image"
+        onClick={handleNewCanvas}
+      />
+      <GalleryCanvasImportSubMenu actions={actions} images={images} isBulk={isBulk} />
+    </ContextSubMenu>
+  );
+};
 
 const GalleryCanvasImportSubMenu = ({
   actions,
@@ -978,7 +983,7 @@ const GalleryCanvasImportSubMenu = ({
   const items = getGalleryCanvasImportMenuItems(isBulk);
 
   return (
-    <ContextSubMenu icon={LayersIcon} label={t('widgets.canvas.import.newLayerFromImage')}>
+    <ContextSubMenu icon={LayersIcon} label={t('widgets.canvas.import.newLayerFromImage', { count: images.length })}>
       {items.map((item) => (
         <GalleryCanvasImportDestinationMenuItem key={item.destination} actions={actions} images={images} item={item} />
       ))}
@@ -1088,54 +1093,27 @@ const ContextSubMenu = ({
   </Menu.Root>
 );
 
-const QuickMenuItem = ({
-  icon,
-  iconFill,
-  label,
-  value,
-  onClick,
-}: {
-  icon: LucideIcon;
-  /** Lucide icons are stroke-only, so `'currentColor'` is how an on state reads. */
-  iconFill?: string;
-  label: string;
-  value: string;
-  onClick: () => void;
-}) => (
-  <Tooltip
-    showArrow
-    content={label}
-    contentProps={QUICK_MENU_TOOLTIP_CONTENT_PROPS}
-    openDelay={300}
-    positioning={QUICK_MENU_TOOLTIP_POSITIONING_PROPS}
-  >
-    <Menu.Item aria-label={label} flex="1" justifyContent="center" value={value} onClick={onClick}>
-      <Icon as={icon} boxSize="4" color="fg" fill={iconFill} />
-    </Menu.Item>
-  </Tooltip>
-);
-
 const ContextMenuItem = ({
-  color,
   disabled,
   icon,
   iconFill,
+  isDanger,
   label,
   value,
   onClick,
 }: {
-  color?: string;
   disabled?: boolean;
   icon: LucideIcon;
   /** Lucide icons are stroke-only, so `'currentColor'` is how an on state reads. */
   iconFill?: string;
+  isDanger?: boolean;
   label: string;
   value: string;
   onClick?: () => void;
 }) => (
-  <Menu.Item color={color} disabled={disabled} value={value} onClick={onClick}>
+  <Menu.Item data-danger={isDanger ? '' : undefined} disabled={disabled} value={value} onClick={onClick}>
     <HStack gap="2" minW="0" w="full">
-      <Icon as={icon} boxSize="3.5" color={color ?? 'fg.subtle'} fill={iconFill} flexShrink={0} />
+      <Icon as={icon} boxSize="3.5" color={isDanger ? undefined : 'fg.subtle'} fill={iconFill} flexShrink={0} />
       <Text flex="1" fontSize="xs">
         {label}
       </Text>

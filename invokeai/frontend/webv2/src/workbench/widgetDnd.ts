@@ -10,6 +10,7 @@ import {
   type ClientRect,
 } from '@dnd-kit/core';
 import { arrayMove } from '@dnd-kit/sortable';
+import { isWidgetRegion as isKnownWidgetRegion } from '@workbench/layoutContracts';
 
 const clipsOverflow = (value: string): boolean => value !== 'visible';
 
@@ -55,7 +56,10 @@ export const measureDroppableVisibleRect = (element: HTMLElement): ClientRect =>
 
 export interface WidgetDndProject {
   widgetInstances: Record<WidgetInstanceId, { typeId: WidgetTypeId; title?: string }>;
-  widgetRegions: Record<WidgetRegion, Pick<WidgetRegionState, 'activeInstanceId' | 'instanceIds'>>;
+  widgetRegions: Record<
+    WidgetRegion,
+    Pick<WidgetRegionState, 'activeInstanceId' | 'alignEndInstanceIds' | 'instanceIds'>
+  >;
 }
 
 export interface ActiveWidgetDrag {
@@ -78,7 +82,13 @@ export interface WidgetRegionDropData {
   region: WidgetRegion;
 }
 
-export type WidgetDndData = WidgetInstanceDragData | WidgetRegionDropData;
+/** The trailing cluster of a strip (the flex spacer): dropping here aligns the widget to the end. */
+export interface WidgetRegionEndDropData {
+  kind: 'widget-region-end';
+  region: WidgetRegion;
+}
+
+export type WidgetDndData = WidgetInstanceDragData | WidgetRegionDropData | WidgetRegionEndDropData;
 
 export interface WidgetDndManifestLookupResult {
   manifest: {
@@ -101,6 +111,8 @@ export type WidgetDragEndResolution =
       instanceIds: WidgetInstanceId[];
       region: WidgetRegion;
       type: 'reorder';
+      /** Cluster the drop landed in, when it differs from the widget's current one. */
+      align?: 'start' | 'end';
     }
   | {
       fromRegion: WidgetRegion;
@@ -108,12 +120,20 @@ export type WidgetDragEndResolution =
       toIndex: number;
       toRegion: WidgetRegion;
       type: 'move';
+      align?: 'start' | 'end';
     };
 
 export const getWidgetInstanceDragId = (region: WidgetRegion, instanceId: WidgetInstanceId): string =>
   `widget-instance:${region}:${instanceId}`;
 
 export const getWidgetRegionDropId = (region: WidgetRegion): string => `widget-region:${region}`;
+
+export const getWidgetRegionEndDropId = (region: WidgetRegion): string => `widget-region-end:${region}`;
+
+export const getWidgetRegionEndDropData = (region: WidgetRegion): WidgetRegionEndDropData => ({
+  kind: 'widget-region-end',
+  region,
+});
 
 export const getWidgetInstanceDragData = (
   region: WidgetRegion,
@@ -136,8 +156,11 @@ export const isWidgetInstanceDragData = (data: unknown): data is WidgetInstanceD
 export const isWidgetRegionDropData = (data: unknown): data is WidgetRegionDropData =>
   isRecord(data) && data.kind === 'widget-region' && isWidgetRegion(data.region);
 
+export const isWidgetRegionEndDropData = (data: unknown): data is WidgetRegionEndDropData =>
+  isRecord(data) && data.kind === 'widget-region-end' && isWidgetRegion(data.region);
+
 export const isWidgetDndData = (data: unknown): data is WidgetDndData =>
-  isWidgetInstanceDragData(data) || isWidgetRegionDropData(data);
+  isWidgetInstanceDragData(data) || isWidgetRegionDropData(data) || isWidgetRegionEndDropData(data);
 
 export const regionHasWidgetType = (
   project: WidgetDndProject,
@@ -224,11 +247,31 @@ export const resolveWidgetDragEnd = (
   }
 
   if (fromRegion === overRegion) {
+    const overRegionState = project.widgetRegions[overRegion];
+    const alignEndIds = overRegionState.alignEndInstanceIds ?? [];
+    const isActiveEnd = alignEndIds.includes(activeData.instanceId);
+
+    // Dropping on the strip's trailing spacer joins the end cluster.
+    if (overData.kind === 'widget-region-end') {
+      const oldIndex = overRegionState.instanceIds.indexOf(activeData.instanceId);
+
+      if (oldIndex === -1) {
+        return null;
+      }
+
+      return {
+        activeInstanceId: activeData.instanceId,
+        ...(isActiveEnd ? {} : { align: 'end' }),
+        instanceIds: arrayMove(overRegionState.instanceIds, oldIndex, overRegionState.instanceIds.length - 1),
+        region: overRegion,
+        type: 'reorder',
+      };
+    }
+
     if (overData.kind !== 'widget-instance') {
       return null;
     }
 
-    const overRegionState = project.widgetRegions[overRegion];
     const oldIndex = overRegionState.instanceIds.indexOf(activeData.instanceId);
     const toIndex = Math.max(0, overRegionState.instanceIds.indexOf(overData.instanceId));
 
@@ -236,8 +279,12 @@ export const resolveWidgetDragEnd = (
       return null;
     }
 
+    // Landing beside a widget adopts that widget's cluster.
+    const isOverEnd = alignEndIds.includes(overData.instanceId);
+
     return {
       activeInstanceId: activeData.instanceId,
+      ...(isOverEnd === isActiveEnd ? {} : { align: isOverEnd ? 'end' : 'start' }),
       instanceIds: arrayMove(overRegionState.instanceIds, oldIndex, toIndex),
       region: overRegion,
       type: 'reorder',
@@ -250,11 +297,19 @@ export const resolveWidgetDragEnd = (
 
   const overRegionState = project.widgetRegions[overRegion];
   const toIndex =
-    overData.kind === 'widget-region'
-      ? overRegionState.instanceIds.length
-      : Math.max(0, overRegionState.instanceIds.indexOf(overData.instanceId));
+    overData.kind === 'widget-instance'
+      ? Math.max(0, overRegionState.instanceIds.indexOf(overData.instanceId))
+      : overRegionState.instanceIds.length;
+  // Entering a region adopts the drop target's cluster; a remembered end
+  // alignment from an earlier placement is cleared when landing at the start.
+  const targetIsEnd =
+    overData.kind === 'widget-region-end' ||
+    (overData.kind === 'widget-instance' && (overRegionState.alignEndInstanceIds ?? []).includes(overData.instanceId));
+  const hasStaleEndAlignment = (overRegionState.alignEndInstanceIds ?? []).includes(activeData.instanceId);
+  const align = targetIsEnd ? ('end' as const) : hasStaleEndAlignment ? ('start' as const) : undefined;
 
   return {
+    ...(align ? { align } : {}),
     fromRegion,
     instanceId: activeData.instanceId,
     toIndex,
@@ -317,6 +372,17 @@ export const widgetCollisionDetection: CollisionDetection = (args) => {
     }
 
     if (isWidgetInstanceDragData(activeData)) {
+      // The trailing-cluster spacer sits inside its strip's own region
+      // droppable, which would otherwise shadow it into the nearest-chip
+      // fallback below; a direct pointer hit on it wins like a chip hit.
+      const endZoneCollisions = pointerCollisions.filter((collision) =>
+        isWidgetRegionEndDropData(getCollisionData(args, collision.id))
+      );
+
+      if (endZoneCollisions.length > 0) {
+        return endZoneCollisions;
+      }
+
       const widgetRegionCollisions = pointerCollisions.filter((collision) => {
         return isWidgetRegionDropData(getCollisionData(args, collision.id));
       });
@@ -357,5 +423,4 @@ const getCollisionData = (args: Parameters<CollisionDetection>[0], id: unknown):
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null;
 
-const isWidgetRegion = (value: unknown): value is WidgetRegion =>
-  value === 'left' || value === 'right' || value === 'center' || value === 'bottom';
+const isWidgetRegion = (value: unknown): value is WidgetRegion => isKnownWidgetRegion(value);

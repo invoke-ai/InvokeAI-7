@@ -20,6 +20,12 @@ class BoardDTO(BoardRecord):
     """The number of videos in the board."""
     asset_count: int = Field(description="The number of assets in the board.")
     """The number of assets in the board."""
+    asset_video_count: int = Field(
+        default=0, description="The number of asset-category (non-'general') videos in the board."
+    )
+    """Uploaded videos are assets ('user' category) while generated videos are 'general', mirroring
+    images. `video_count` stays the total so "delete board with N videos" copy remains honest; this
+    field lets clients split the total across the Media/Assets views."""
     owner_username: Optional[str] = Field(default=None, description="The username of the board owner (for admin view).")
     """The username of the board owner (for admin view)."""
     project_id: Optional[str] = Field(default=None, description="The id of the project that owns this board, if any.")
@@ -39,6 +45,7 @@ def board_record_to_dto(
     owner_username: Optional[str] = None,
     cover_video_name: Optional[str] = None,
     video_count: int = 0,
+    asset_video_count: int = 0,
     project_id: Optional[str] = None,
 ) -> BoardDTO:
     """Converts a board record to a board DTO."""
@@ -49,6 +56,7 @@ def board_record_to_dto(
         image_count=image_count,
         video_count=video_count,
         asset_count=asset_count,
+        asset_video_count=asset_video_count,
         owner_username=owner_username,
         project_id=project_id,
     )

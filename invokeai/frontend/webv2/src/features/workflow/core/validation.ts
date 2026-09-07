@@ -14,9 +14,12 @@ import {
   CONNECTOR_OUTPUT_HANDLE,
   resolveConnectorSourceIndexed,
   resolveConnectorTargetsIndexed,
+  resolveLoopLinkagePath,
 } from './connectors';
 import { createWorkflowGraphIndex, type WorkflowGraphIndex } from './graphIndex';
 import { isConnectorNode, isInvocationNode } from './types';
+
+export const LOOP_LINKAGE_FIELD = 'loop_linkage';
 
 /**
  * Connection validation, ported from the legacy editor's
@@ -106,6 +109,9 @@ export const wouldCreateCycle = (sourceNodeId: string, targetNodeId: string, edg
     visited.add(nodeId);
 
     for (const edge of edges) {
+      if (edge.type === 'loop_linkage') {
+        continue;
+      }
       if (edge.source === nodeId) {
         stack.push(edge.target);
       }
@@ -120,6 +126,9 @@ export const hasAnyCycle = (nodes: WorkflowNode[], edges: WorkflowEdge[]): boole
   const adjacency = new Map<string, string[]>();
 
   for (const edge of edges) {
+    if (edge.type === 'loop_linkage') {
+      continue;
+    }
     adjacency.set(edge.source, [...(adjacency.get(edge.source) ?? []), edge.target]);
   }
 
@@ -300,6 +309,213 @@ const hasValidSourceHandle = (node: WorkflowNode, handle: string, templates: Inv
   return isConnectorNode(node) && handle === CONNECTOR_OUTPUT_HANDLE;
 };
 
+const isLoopLinkageHandle = (handle: string): boolean => handle === LOOP_LINKAGE_FIELD;
+
+interface LoopLinkageOwnership {
+  forNodeId: string;
+  returnNodeId: string;
+}
+
+const getLoopLinkageOwnerships = (document: Pick<ProjectGraphState, 'edges' | 'nodes'>): LoopLinkageOwnership[] => {
+  const ownerships: LoopLinkageOwnership[] = [];
+
+  for (const edge of document.edges) {
+    if (
+      edge.type === 'loop_linkage' &&
+      edge.sourceHandle === LOOP_LINKAGE_FIELD &&
+      edge.targetHandle === LOOP_LINKAGE_FIELD
+    ) {
+      ownerships.push({ forNodeId: edge.source, returnNodeId: edge.target });
+      continue;
+    }
+
+    if (edge.type !== 'default' || edge.targetHandle !== LOOP_LINKAGE_FIELD) {
+      continue;
+    }
+
+    const path = resolveLoopLinkagePath(edge, document.nodes, document.edges);
+    if (path) {
+      ownerships.push({ forNodeId: path.forNodeId, returnNodeId: path.returnNodeId });
+    }
+  }
+
+  return ownerships;
+};
+
+const hasLoopLinkageOwnershipConflict = (
+  candidate: LoopLinkageOwnership,
+  existingOwnerships: LoopLinkageOwnership[]
+): boolean =>
+  existingOwnerships.some(
+    (ownership) => ownership.forNodeId === candidate.forNodeId || ownership.returnNodeId === candidate.returnNodeId
+  );
+
+const getConnectorTerminalEdges = (connectorId: string, index: WorkflowGraphIndex): WorkflowEdge[] => {
+  const pendingConnectorIds = [connectorId];
+  const visitedConnectorIds = new Set<string>();
+  const terminalEdges: WorkflowEdge[] = [];
+
+  while (pendingConnectorIds.length > 0) {
+    const currentConnectorId = pendingConnectorIds.pop();
+    if (currentConnectorId === undefined || visitedConnectorIds.has(currentConnectorId)) {
+      continue;
+    }
+
+    visitedConnectorIds.add(currentConnectorId);
+
+    for (const edge of index.connectorOutputsById.get(currentConnectorId) ?? []) {
+      const targetNode = index.nodesById.get(edge.target);
+      if (targetNode && isConnectorNode(targetNode) && edge.targetHandle === CONNECTOR_INPUT_HANDLE) {
+        pendingConnectorIds.push(targetNode.id);
+      } else {
+        terminalEdges.push(edge);
+      }
+    }
+  }
+
+  return terminalEdges;
+};
+
+const isValidLoopLinkageConnection = (
+  sourceNode: WorkflowNode,
+  sourceHandle: string,
+  targetNode: WorkflowNode,
+  targetHandle: string,
+  document: Pick<ProjectGraphState, 'edges' | 'nodes'>,
+  index: WorkflowGraphIndex,
+  templates: InvocationTemplates
+): boolean => {
+  const existingOwnerships = getLoopLinkageOwnerships(document);
+
+  if (isInvocationNode(sourceNode) && isInvocationNode(targetNode)) {
+    const isDirectLinkage =
+      sourceNode.data.type === 'for' &&
+      targetNode.data.type === 'for_return' &&
+      sourceHandle === LOOP_LINKAGE_FIELD &&
+      targetHandle === LOOP_LINKAGE_FIELD;
+
+    return (
+      isDirectLinkage &&
+      !hasLoopLinkageOwnershipConflict({ forNodeId: sourceNode.id, returnNodeId: targetNode.id }, existingOwnerships)
+    );
+  }
+
+  if (isInvocationNode(sourceNode) && isConnectorNode(targetNode)) {
+    if (
+      sourceNode.data.type === 'for' &&
+      sourceHandle === LOOP_LINKAGE_FIELD &&
+      targetHandle === CONNECTOR_INPUT_HANDLE
+    ) {
+      if (existingOwnerships.some((ownership) => ownership.forNodeId === sourceNode.id)) {
+        return false;
+      }
+
+      const candidateEdge: WorkflowEdge = {
+        id: '__candidate-loop-linkage__',
+        source: sourceNode.id,
+        sourceHandle,
+        target: targetNode.id,
+        targetHandle,
+        type: 'default',
+      };
+      const terminalEdges = getConnectorTerminalEdges(targetNode.id, index);
+      if (terminalEdges.length === 0) {
+        return true;
+      }
+
+      const candidatePaths = terminalEdges.map((edge) =>
+        resolveLoopLinkagePath(edge, document.nodes, [...document.edges, candidateEdge])
+      );
+
+      return (
+        candidatePaths.length === 1 &&
+        candidatePaths[0] !== null &&
+        !hasLoopLinkageOwnershipConflict(candidatePaths[0], existingOwnerships)
+      );
+    }
+
+    return false;
+  }
+
+  if (isConnectorNode(sourceNode) && isInvocationNode(targetNode)) {
+    if (
+      targetNode.data.type !== 'for_return' ||
+      targetHandle !== LOOP_LINKAGE_FIELD ||
+      sourceHandle !== CONNECTOR_OUTPUT_HANDLE
+    ) {
+      return false;
+    }
+
+    const resolvedSource = resolveConnectorSourceIndexed(sourceNode.id, index, templates);
+    const resolvedSourceNode = resolvedSource ? index.nodesById.get(resolvedSource.nodeId) : undefined;
+
+    if (existingOwnerships.some((ownership) => ownership.returnNodeId === targetNode.id)) {
+      return false;
+    }
+
+    if (resolvedSource === null) {
+      return true;
+    }
+
+    const candidateEdge: WorkflowEdge = {
+      id: '__candidate-loop-linkage__',
+      source: sourceNode.id,
+      sourceHandle,
+      target: targetNode.id,
+      targetHandle,
+      type: 'default',
+    };
+    const stagedEdges = [...document.edges, candidateEdge];
+    const candidatePath = resolveLoopLinkagePath(candidateEdge, document.nodes, stagedEdges);
+
+    return (
+      resolvedSourceNode !== undefined &&
+      isInvocationNode(resolvedSourceNode) &&
+      resolvedSourceNode.data.type === 'for' &&
+      resolvedSource.fieldName === LOOP_LINKAGE_FIELD &&
+      candidatePath !== null &&
+      !hasLoopLinkageOwnershipConflict(candidatePath, existingOwnerships)
+    );
+  }
+
+  if (
+    isConnectorNode(sourceNode) &&
+    isConnectorNode(targetNode) &&
+    sourceHandle === CONNECTOR_OUTPUT_HANDLE &&
+    targetHandle === CONNECTOR_INPUT_HANDLE
+  ) {
+    const resolvedSource = resolveConnectorSourceIndexed(sourceNode.id, index, templates);
+    if (resolvedSource?.fieldName !== LOOP_LINKAGE_FIELD) {
+      return false;
+    }
+
+    const candidateEdge: WorkflowEdge = {
+      id: '__candidate-loop-linkage__',
+      source: sourceNode.id,
+      sourceHandle,
+      target: targetNode.id,
+      targetHandle,
+      type: 'default',
+    };
+    const terminalEdges = getConnectorTerminalEdges(targetNode.id, index);
+    if (terminalEdges.length === 0) {
+      return true;
+    }
+
+    const candidatePaths = terminalEdges.map((edge) =>
+      resolveLoopLinkagePath(edge, document.nodes, [...document.edges, candidateEdge])
+    );
+
+    return (
+      candidatePaths.length === 1 &&
+      candidatePaths[0] !== null &&
+      !hasLoopLinkageOwnershipConflict(candidatePaths[0], existingOwnerships)
+    );
+  }
+
+  return false;
+};
+
 /** Returns a human-readable rejection reason, or null when the connection is valid. */
 export const validateConnection = (
   candidate: ConnectionCandidate,
@@ -322,6 +538,17 @@ export const validateConnection = (
 
   if (!hasValidSourceHandle(sourceNode, sourceHandle, templates)) {
     return 'One of the fields has no known definition.';
+  }
+
+  const sourceConnectorLoopLinkage =
+    isConnectorNode(sourceNode) &&
+    sourceHandle === CONNECTOR_OUTPUT_HANDLE &&
+    resolveConnectorSourceIndexed(sourceNode.id, index, templates)?.fieldName === LOOP_LINKAGE_FIELD;
+
+  if (isLoopLinkageHandle(sourceHandle) || isLoopLinkageHandle(targetHandle) || sourceConnectorLoopLinkage) {
+    if (!isValidLoopLinkageConnection(sourceNode, sourceHandle, targetNode, targetHandle, document, index, templates)) {
+      return 'For loop linkage must connect a For to its ForReturn.';
+    }
   }
 
   if (isConnectorNode(targetNode)) {

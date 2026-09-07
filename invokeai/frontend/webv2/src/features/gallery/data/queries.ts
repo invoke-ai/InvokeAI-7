@@ -4,6 +4,12 @@ import type { GalleryBoardOrderBy, GalleryOrderDir, GalleryView } from '@feature
 import type { AccountScope } from '@platform/state/accountLifecycle';
 
 import { toGalleryItemKey } from '@features/gallery/core/items';
+import {
+  GALLERY_MAX_INFINITE_PAGES,
+  GALLERY_MAX_ROWS,
+  GALLERY_PAGE_SIZE,
+  GALLERY_STARRED_STRIP_LIMIT,
+} from '@features/gallery/core/paging';
 import { toGallerySemanticQuery } from '@features/gallery/core/semanticImageQuery';
 import { assertAccountScopeCurrent, captureAccountScope } from '@platform/state/accountLifecycle';
 import {
@@ -27,9 +33,7 @@ import {
   listSemanticGalleryItemNames,
 } from './backend';
 
-export const GALLERY_PAGE_SIZE = 60;
-export const GALLERY_MAX_INFINITE_PAGES = 10;
-export const GALLERY_MAX_ROWS = GALLERY_PAGE_SIZE * GALLERY_MAX_INFINITE_PAGES;
+export { GALLERY_MAX_INFINITE_PAGES, GALLERY_MAX_ROWS, GALLERY_PAGE_SIZE, GALLERY_STARRED_STRIP_LIMIT };
 
 export interface GalleryBoardsQuery {
   includeArchived?: boolean;
@@ -60,7 +64,8 @@ export interface GalleryItemsFilter {
    * apply to a ranked result set.
    */
   semanticQuery?: GallerySemanticReference | null;
-  starredFirst?: boolean;
+  /** true = only starred items, false = only unstarred; absent = all. */
+  starred?: boolean;
 }
 
 export interface CanonicalGalleryItemsFilter {
@@ -72,7 +77,7 @@ export interface CanonicalGalleryItemsFilter {
   searchTerm: string;
   /** Label-free semantic reference: a file query is keyed by its registry id. */
   semantic?: GallerySemanticQuery;
-  starredFirst: boolean;
+  starred?: boolean;
 }
 
 /**
@@ -99,7 +104,13 @@ type GalleryItemsInfiniteQueryKey = readonly [
 
 type GalleryItemsAnchorQueryKey = readonly [...GalleryItemsInfiniteQueryKey, 'anchor' | 'infinite', number];
 
-export type GalleryItemsListQueryKey = GalleryItemsAnchorQueryKey | GalleryItemsInfiniteQueryKey;
+/** The bounded starred strip: one `GalleryItemsPage`, not an infinite window. */
+type GalleryItemsStripQueryKey = readonly [...GalleryItemsInfiniteQueryKey, 'strip'];
+
+export type GalleryItemsListQueryKey =
+  | GalleryItemsAnchorQueryKey
+  | GalleryItemsInfiniteQueryKey
+  | GalleryItemsStripQueryKey;
 
 const canonicalizeBoardsQuery = (query: GalleryBoardsQuery): CanonicalGalleryBoardsQuery => ({
   includeArchived: query.includeArchived ?? false,
@@ -114,9 +125,9 @@ export const canonicalizeGalleryItemsFilter = (filter: GalleryItemsFilter): Cano
   if (semantic) {
     // A ranked result set answers to the reference alone: the semantic branch
     // of `galleryItemNamesOptionsForOwner` sends only the query, so board,
-    // view, order, starred-first and the date range change nothing about the
-    // response. Keeping them in the key made clicking a board — or toggling
-    // starred-first, or switching the images/assets tab — mint a fresh key and
+    // view, order, the starred filter and the date range change nothing about
+    // the response. Keeping them in the key made clicking a board — or toggling
+    // the starred filter, or switching the images/assets tab — mint a fresh key and
     // re-run the search for byte-identical results, which for a dropped file
     // means re-uploading the blob and for a URL reference means the server
     // re-downloads the remote image. Pinned rather than omitted so the shape
@@ -128,7 +139,6 @@ export const canonicalizeGalleryItemsFilter = (filter: GalleryItemsFilter): Cano
       orderDir: 'DESC',
       searchTerm: '',
       semantic,
-      starredFirst: false,
     };
   }
 
@@ -139,7 +149,7 @@ export const canonicalizeGalleryItemsFilter = (filter: GalleryItemsFilter): Cano
     galleryView: filter.galleryView,
     orderDir: filter.orderDir ?? 'DESC',
     searchTerm: filter.searchTerm.trim(),
-    starredFirst: filter.starredFirst ?? false,
+    ...(filter.starred !== undefined ? { starred: filter.starred } : {}),
   };
 };
 
@@ -180,6 +190,8 @@ export const galleryKeys = {
     window: GalleryItemsWindow = { kind: 'infinite' }
   ): GalleryItemsListQueryKey =>
     [...galleryKeys.itemListsForAccount(owner), filter, ...getWindowKey(window)] as GalleryItemsListQueryKey,
+  starredStrip: (owner: AccountScope, filter: CanonicalGalleryItemsFilter): GalleryItemsStripQueryKey =>
+    [...galleryKeys.itemListsForAccount(owner), filter, 'strip'] as const,
   itemNamesRoot: () => [...galleryKeys.itemsRoot(), 'names'] as const,
   itemNamesForAccount: (owner: AccountScope) => [...galleryKeys.itemNamesRoot(), getAccountKey(owner)] as const,
   itemNames: (owner: AccountScope, filter: CanonicalGalleryItemsFilter) =>
@@ -292,6 +304,39 @@ const fetchSharedDateBoardNames = (
   });
 };
 
+/**
+ * One range read of a filter's listing, shared by the per-page queryFn and
+ * the window rebuild so the two cannot diverge. Name-list filters hydrate a
+ * slice of one shared name fetch — re-running a semantic search re-uploads a
+ * dropped file's blob. The result is clamped to `limit`.
+ */
+export const fetchGalleryItemsRange = async (
+  client: QueryClient,
+  owner: AccountScope,
+  filter: CanonicalGalleryItemsFilter,
+  { limit, offset, signal }: { limit: number; offset: number; signal: AbortSignal }
+): Promise<GalleryItemsPage> => {
+  let result: GalleryItemsPage;
+
+  if (filter.semantic || isDateBoardId(filter.boardId)) {
+    const namesOptions = galleryItemNamesOptionsForOwner(owner, filter);
+    const names = await fetchSharedDateBoardNames(client, namesOptions.queryKey, signal, () =>
+      client.fetchQuery(namesOptions)
+    );
+
+    assertAccountScopeCurrent(owner);
+    signal.throwIfAborted();
+    result = await hydrateGalleryDateBoardItemPage({ ...names, limit, offset, signal });
+  } else {
+    result = await listGalleryItems({ ...filter, limit, offset, signal });
+  }
+
+  assertAccountScopeCurrent(owner);
+  signal.throwIfAborted();
+
+  return result.items.length <= limit ? result : { ...result, items: result.items.slice(0, limit) };
+};
+
 export const galleryBoardsOptions = (query: GalleryBoardsQuery = {}) => {
   const owner = captureAccountScope();
   const canonicalQuery = canonicalizeBoardsQuery(query);
@@ -369,50 +414,39 @@ export const galleryItemsInfiniteOptions = (
     },
     initialPageParam,
     maxPages: GALLERY_MAX_INFINITE_PAGES,
-    queryFn: async ({ client, pageParam, signal }) => {
-      const requestSignal = AbortSignal.any([signal, owner.signal]);
-      let result: GalleryItemsPage;
-
-      // Semantic and date-board queries share one mechanism: the ordered name
-      // list is fetched once (shared across pages, both consumers, and the
-      // 60s stale window) and every page hydrates a slice of it. For semantic
-      // queries this is also what keeps ranks consistent across pages — and
-      // what keeps a dropped-file reference from re-uploading its blob on
-      // every page fetch.
-      if (filter.semantic || isDateBoardId(filter.boardId)) {
-        const namesOptions = galleryItemNamesOptionsForOwner(owner, filter);
-        const names = await fetchSharedDateBoardNames(client, namesOptions.queryKey, requestSignal, () =>
-          client.fetchQuery(namesOptions)
-        );
-
-        assertAccountScopeCurrent(owner);
-        requestSignal.throwIfAborted();
-        result = await hydrateGalleryDateBoardItemPage({
-          ...names,
-          limit: GALLERY_PAGE_SIZE,
-          offset: pageParam,
-          signal: requestSignal,
-        });
-      } else {
-        result = await listGalleryItems({
-          ...filter,
-          limit: GALLERY_PAGE_SIZE,
-          offset: pageParam,
-          signal: requestSignal,
-        });
-      }
-
-      assertAccountScopeCurrent(owner);
-      requestSignal.throwIfAborted();
-
-      return result.items.length <= GALLERY_PAGE_SIZE
-        ? result
-        : { ...result, items: result.items.slice(0, GALLERY_PAGE_SIZE) };
-    },
+    queryFn: ({ client, pageParam, signal }) =>
+      fetchGalleryItemsRange(client, owner, filter, {
+        limit: GALLERY_PAGE_SIZE,
+        offset: pageParam,
+        signal: AbortSignal.any([signal, owner.signal]),
+      }),
     queryKey: galleryKeys.items(owner, filter, normalizedWindow),
     staleTime: 60_000,
   });
 };
+
+/**
+ * The starred strip shares the list key family (and so the account-wide
+ * invalidation and mutation patching) with the listing it sits above, keyed
+ * on that listing's filter plus `starred: true`.
+ */
+export const galleryStarredStripOptions = (inputFilter: GalleryItemsFilter) => {
+  const owner = captureAccountScope();
+  const filter: CanonicalGalleryItemsFilter = { ...canonicalizeGalleryItemsFilter(inputFilter), starred: true };
+
+  return queryOptions({
+    queryFn: ({ client, signal }) =>
+      fetchGalleryItemsRange(client, owner, filter, {
+        limit: GALLERY_STARRED_STRIP_LIMIT,
+        offset: 0,
+        signal: AbortSignal.any([signal, owner.signal]),
+      }),
+    queryKey: galleryKeys.starredStrip(owner, filter),
+    staleTime: 60_000,
+  });
+};
+
+export const isGalleryStarredStripQueryKey = (queryKey: QueryKey): boolean => queryKey[5] === 'strip';
 
 export const flattenGalleryItemsData = (data: InfiniteData<GalleryItemsPage, number> | undefined): GalleryItem[] => {
   if (!data) {

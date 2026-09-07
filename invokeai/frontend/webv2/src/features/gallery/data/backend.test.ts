@@ -181,6 +181,7 @@ describe('getGalleryImageByName', () => {
 
     await expect(getGalleryImageByName('folder/workflow result.png', controller.signal)).resolves.toEqual({
       boardId: 'board-1',
+      createdAt: '2026-07-09T12:00:00.000Z',
       height: 360,
       imageCategory: 'general',
       imageName: 'folder/workflow result.png',
@@ -438,7 +439,7 @@ describe('listGalleryItems', () => {
       orderDir: 'ASC',
       searchTerm: '  summer clip  ',
       signal: controller.signal,
-      starredFirst: true,
+      starred: true,
     });
 
     const [url, init] = mocks.apiFetchJson.mock.calls[0] as [string, RequestInit];
@@ -453,7 +454,9 @@ describe('listGalleryItems', () => {
     expect(params.get('limit')).toBe('17');
     expect(params.get('offset')).toBe('34');
     expect(params.get('order_dir')).toBe('ASC');
-    expect(params.get('starred_first')).toBe('true');
+    expect(params.get('starred')).toBe('true');
+    // The backend defaults to starred-first; the grid must pin it off.
+    expect(params.get('starred_first')).toBe('false');
     expect(params.get('search_term')).toBe('summer clip');
     expect(init.signal).toBe(controller.signal);
   });
@@ -771,9 +774,18 @@ describe('classifyGalleryUpload', () => {
     ['image/jpg', 'photo.bin', 'image'],
     ['image/webp', 'photo.bin', 'image'],
     ['video/mp4', 'clip.bin', 'video'],
+    ['video/quicktime', 'clip.bin', 'video'],
+    ['video/webm', 'clip.webm', 'video'],
+    ['audio/mpeg', 'song.bin', 'video'],
+    ['audio/wav', 'memo.bin', 'video'],
     ['', 'photo.PNG', 'image'],
+    ['', 'clip.MOV', 'video'],
+    ['', 'memo.m4a', 'video'],
     ['application/octet-stream', 'photo.jpeg', 'image'],
+    ['application/octet-stream', 'song.mp3', 'video'],
     ['binary/octet-stream', 'clip.MP4', 'video'],
+    ['application/octet-stream', 'clip.wmv', 'video'],
+    ['application/octet-stream', 'song.WMA', 'video'],
     ['application/pdf', 'photo.png', 'image'],
   ] as const)('classifies MIME %s and name %s as %s', (type, name, kind) => {
     expect(classifyGalleryUpload(new File(['media'], name, { type }))).toEqual({ kind });
@@ -782,7 +794,6 @@ describe('classifyGalleryUpload', () => {
   it.each([
     ['application/pdf', 'document.pdf'],
     ['', 'archive.zip'],
-    ['video/webm', 'clip.webm'],
     ['image/gif', 'animation.gif'],
   ] as const)('rejects unsupported MIME %s and name %s', (type, name) => {
     expect(classifyGalleryUpload(new File(['media'], name, { type }))).toBeNull();
@@ -827,7 +838,7 @@ describe('gallery uploads', () => {
     expect(init.body).toBeInstanceOf(FormData);
   });
 
-  it('uploads videos as durable general media to a real board', async () => {
+  it('uploads videos as durable user assets to a real board', async () => {
     const controller = new AbortController();
     mocks.apiFetchJson.mockResolvedValue({
       board_id: 'board-1',
@@ -859,7 +870,7 @@ describe('gallery uploads', () => {
     const [url, init] = mocks.apiFetchJson.mock.calls[0] as [string, RequestInit];
     const query = new URLSearchParams(url.split('?')[1]);
     expect(url.split('?')[0]).toBe('/api/v1/videos/upload');
-    expect(query.get('video_category')).toBe('general');
+    expect(query.get('video_category')).toBe('user');
     expect(query.get('is_intermediate')).toBe('false');
     expect(query.get('board_id')).toBe('board-1');
     expect(init).toMatchObject({ method: 'POST', signal: controller.signal });

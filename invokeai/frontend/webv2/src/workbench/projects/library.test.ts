@@ -1,3 +1,4 @@
+import type { BrowserLockResult } from '@platform/browser/webLocks';
 import type * as accountLifecycleModule from '@platform/state/accountLifecycle';
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -25,16 +26,34 @@ const api = vi.hoisted(() => ({
 
 /** The copying itself is `duplicateProject`'s own test; this file owns the library's part of it. */
 const duplication = vi.hoisted(() => ({ duplicateProjectRecord: vi.fn() }));
+const projectLocks = vi.hoisted(() => ({
+  acquireProjectMutationLock: vi.fn<() => Promise<BrowserLockResult>>(() =>
+    Promise.resolve({ kind: 'acquired', release: () => Promise.resolve() })
+  ),
+}));
+const queueJournal = vi.hoisted(() => ({
+  createAccountOwnedQueueRunJournal: vi.fn(() =>
+    Promise.resolve({
+      close: vi.fn(),
+      deleteForProject: vi.fn(() => Promise.resolve({ kind: 'removed' as const })),
+      listForProject: vi.fn(() => Promise.resolve({ entries: [], kind: 'available' as const, removedCorrupt: 0 })),
+    })
+  ),
+}));
 
 vi.mock('./api', () => api);
 vi.mock('./invk/duplicateProject', () => duplication);
+vi.mock('./projectLifecycleLocks', () => projectLocks);
+vi.mock('@workbench/queue-integration/queueRunJournal', () => queueJournal);
 
 let library: typeof libraryModule;
 let syncStore: typeof syncStoreModule;
 let account: typeof accountLifecycleModule;
 
 const summaryDto = (id: string, name: string, updatedAt: string) => ({
+  board_id: `board-for-${id}`,
   created_at: '2026-06-01 08:00:00.000',
+  minimum_canvas_schema_version: 3,
   name,
   project_id: id,
   revision: 1,
@@ -55,6 +74,14 @@ beforeEach(async () => {
   api.getProjectBoardSnapshot.mockReset();
   api.getProjectBoardSnapshot.mockResolvedValue({ items: [] });
   duplication.duplicateProjectRecord.mockReset();
+  projectLocks.acquireProjectMutationLock.mockReset();
+  projectLocks.acquireProjectMutationLock.mockResolvedValue({ kind: 'acquired', release: () => Promise.resolve() });
+  queueJournal.createAccountOwnedQueueRunJournal.mockReset();
+  queueJournal.createAccountOwnedQueueRunJournal.mockResolvedValue({
+    close: vi.fn(),
+    deleteForProject: vi.fn(() => Promise.resolve({ kind: 'removed' })),
+    listForProject: vi.fn(() => Promise.resolve({ entries: [], kind: 'available', removedCorrupt: 0 })),
+  });
 
   library = await import('./library');
   syncStore = await import('./syncStore');
@@ -109,6 +136,18 @@ describe('refreshProjectLibrary', () => {
     expect(status).toBe('ready');
     expect(summaries.map((summary) => summary.id)).toEqual(['newer', 'older']);
     expect(summaries[0].updatedAt).toBe('2026-06-10T10:00:00.000Z');
+    expect(summaries[0].minimumCanvasSchemaVersion).toBe(3);
+  });
+
+  it('identifies summaries that require a newer canvas reader without fetching the document', async () => {
+    api.listProjects.mockResolvedValue([
+      { ...summaryDto('future', 'Future', '2026-06-10 10:00:00.000'), minimum_canvas_schema_version: 4 },
+    ]);
+
+    await library.refreshProjectLibrary();
+
+    expect(library.isProjectSummaryCompatible(library.getProjectLibrary().summaries[0]!)).toBe(false);
+    expect(api.getProject).not.toHaveBeenCalled();
   });
 
   it('keeps the previous summaries and reports the failure on error', async () => {
@@ -243,6 +282,30 @@ describe('library mutations', () => {
     await library.deleteLibraryProject('closed');
 
     expect(api.deleteProject).toHaveBeenCalledWith('closed', expect.any(AbortSignal));
+  });
+
+  it('does not delete while another tab owns an active project run', async () => {
+    projectLocks.acquireProjectMutationLock.mockResolvedValueOnce({ kind: 'contended' });
+
+    await expect(library.deleteLibraryProject('closed')).rejects.toThrow('active queue runs');
+
+    expect(api.deleteProject).not.toHaveBeenCalled();
+    expect(queueJournal.createAccountOwnedQueueRunJournal).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when durable queue runs cannot be verified', async () => {
+    const release = vi.fn().mockResolvedValue(undefined);
+    projectLocks.acquireProjectMutationLock.mockResolvedValueOnce({ kind: 'acquired', release });
+    queueJournal.createAccountOwnedQueueRunJournal.mockResolvedValueOnce({
+      close: vi.fn(),
+      deleteForProject: vi.fn(),
+      listForProject: vi.fn().mockResolvedValue({ kind: 'unavailable' }),
+    });
+
+    await expect(library.deleteLibraryProject('closed')).rejects.toThrow('could not be verified');
+
+    expect(api.deleteProject).not.toHaveBeenCalled();
+    expect(release).toHaveBeenCalledOnce();
   });
 
   /**

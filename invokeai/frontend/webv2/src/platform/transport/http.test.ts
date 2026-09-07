@@ -6,6 +6,7 @@ vi.mock('./deploymentBase', () => ({
 }));
 
 import {
+  ApiError,
   absolutizeApiUrl,
   apiFetch,
   apiFetchJson,
@@ -38,6 +39,25 @@ describe('deployment-aware backend URLs', () => {
 });
 
 describe('request identity ownership', () => {
+  it('preserves response headers on API errors for Retry-After handling', async () => {
+    const identity = {};
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response('{"detail":{"code":"project_write_busy"}}', {
+          headers: { 'Retry-After': '1' },
+          status: 429,
+        })
+      )
+    );
+    configureHttpAuth({ getIdentity: () => identity, getToken: () => null, onUnauthorized: vi.fn() });
+
+    const error = await apiFetch('/api/v1/projects/').catch((error: unknown) => error);
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect((error as ApiError).headers.get('Retry-After')).toBe('1');
+  });
+
   it('does not expire a newer account when an older request returns 401', async () => {
     let token: string | null = 'token-a';
     let identity = {};

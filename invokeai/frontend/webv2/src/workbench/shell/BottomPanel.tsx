@@ -19,7 +19,8 @@ export const BottomPanel = () => {
     !bottomRegion.isCollapsed &&
     bottomRegion.instanceIds.includes(bottomRegion.activeInstanceId) &&
     widget?.status === 'enabled' &&
-    widget.manifest.bottomPanel !== 'tooltip';
+    widget.manifest.bottomPanel !== 'tooltip' &&
+    widget.manifest.bottomPanel !== 'popover';
 
   if (!canShowBottomPanel) {
     return null;

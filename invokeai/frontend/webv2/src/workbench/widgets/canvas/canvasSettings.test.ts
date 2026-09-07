@@ -7,7 +7,6 @@ import {
   CANVAS_INVERT_BRUSH_SCROLL_KEY,
   CANVAS_OUTPUT_ONLY_MASKED_REGIONS_KEY,
   CANVAS_RULE_OF_THIRDS_KEY,
-  CANVAS_SETTING_SECTIONS,
   CANVAS_SETTINGS,
   CANVAS_SHOW_BBOX_KEY,
   CANVAS_SHOW_GRID_KEY,
@@ -81,12 +80,9 @@ describe('canvasSettings persistence mapping', () => {
     expect(readCanvasBooleanSetting({ [CANVAS_SHOW_GRID_KEY]: 1 }, settingByKey(CANVAS_SHOW_GRID_KEY))).toBe(false);
   });
 
-  it('maps every setting to a unique key and a known section', () => {
+  it('maps every setting to a unique persisted key', () => {
     const keys = CANVAS_SETTINGS.map((s) => s.key);
     expect(new Set(keys).size).toBe(keys.length);
-    for (const setting of CANVAS_SETTINGS) {
-      expect(CANVAS_SETTING_SECTIONS).toContain(setting.section);
-    }
   });
 
   it('gives every engine-backed store a distinct store id (other frontend-consumed settings have none)', () => {

@@ -1,4 +1,4 @@
-import type { CanvasDocumentContractV2 } from '@workbench/canvas-engine/contracts';
+import type { CanvasDocumentContractV3 } from '@workbench/canvas-engine/contracts';
 import type { TransformSession } from '@workbench/canvas-engine/engineStores';
 import type { HistoryEntry } from '@workbench/canvas-engine/history/history';
 import type { CanvasProjectMutation } from '@workbench/canvas-engine/mutationContracts';
@@ -7,6 +7,9 @@ import type { RasterBackend, RasterSurface } from '@workbench/canvas-engine/rend
 import type { LayerTransform } from '@workbench/canvas-engine/transform/transformMath';
 import type { Rect } from '@workbench/canvas-engine/types';
 
+import { lookupDocumentLeaf } from '@workbench/canvas-engine/document-model/documentModel';
+import { getDocumentLayer } from '@workbench/canvas-engine/document/documentIndex';
+import { isLeafEditable } from '@workbench/canvas-engine/document/layerEligibility';
 import { isRenderableLayer } from '@workbench/canvas-engine/document/sources';
 import { createDocumentPatchEntry } from '@workbench/canvas-engine/history/documentPatch';
 import { isEmpty, roundOut, transformBounds } from '@workbench/canvas-engine/math/rect';
@@ -16,7 +19,7 @@ import { bakeMatrix } from '@workbench/canvas-engine/transform/transformMath';
 export interface TransformEditingControllerOptions {
   readonly session: { get(): TransformSession | null; set(value: TransformSession | null): void };
   readonly backend: RasterBackend;
-  readonly getDocument: () => CanvasDocumentContractV2 | null;
+  readonly getDocument: () => CanvasDocumentContractV3 | null;
   readonly getCache: (layerId: string) => LayerCacheEntry | null;
   readonly setOverride: (layerId: string, transform: LayerTransform | null) => void;
   readonly replaceCache: (layerId: string, rect: Rect, surface: RasterSurface) => void;
@@ -54,8 +57,9 @@ export class TransformEditingController {
       return;
     }
     const document = this.deps.getDocument();
-    const layer = document?.layers.find((candidate) => candidate.id === layerId);
-    if (!document || !layer || !layer.isEnabled || layer.isLocked || !hittableLayerSize(layer, document)) {
+    const leaf = lookupDocumentLeaf(document, layerId);
+    const layer = leaf?.layer;
+    if (!document || !layer || !isLeafEditable(leaf) || !hittableLayerSize(layer, document)) {
       return;
     }
     this.clearOverride();
@@ -117,14 +121,14 @@ export class TransformEditingController {
       return;
     }
     const document = this.deps.getDocument();
-    const layer = document?.layers.find((candidate) => candidate.id === session.layerId);
+    const layer = getDocumentLayer(document, session.layerId);
     const size = document && layer ? hittableLayerSize(layer, document) : null;
     if (
       !document ||
       !layer ||
       !size ||
       !isRenderableLayer(layer) ||
-      layer.isLocked ||
+      !isLeafEditable(lookupDocumentLeaf(document, session.layerId)) ||
       unchanged(session.transform, session.startTransform)
     ) {
       this.cancel();

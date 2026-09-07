@@ -1,5 +1,8 @@
 import type { SelectionState, SelectionStateDeps } from '@workbench/canvas-engine/selection/selectionState';
 
+import { createTestInsertionAnchorCapture } from '@workbench/canvas-engine/document/insertionAnchors.testStub';
+import { createTestEditConcurrency } from '@workbench/canvas-engine/editConcurrency.testStub';
+import { createHistory } from '@workbench/canvas-engine/history/history';
 import { describe, expect, it, vi } from 'vitest';
 
 import { EditingController } from './editingController';
@@ -15,15 +18,19 @@ const createSelection = (): SelectionState => ({
   invert: vi.fn(),
   mask: () => null,
   replaceMask: vi.fn(),
+  restore: vi.fn(),
   selectAll: vi.fn(),
+  snapshot: vi.fn(() => ({ alpha: null, bounds: null, commits: [], rect: null, selected: false })),
 });
 
 const createTextOptions = () => ({
   canEdit: () => true,
+  captureInsertionAnchor: createTestInsertionAnchorCapture('p'),
   commitStructural: vi.fn(),
   createLayerId: () => 'text-1',
   getDocument: () => null,
   invalidate: vi.fn(),
+  colors: { get: () => ({ background: '#ffffff', foreground: '#000000' }) },
   isGestureActive: () => false,
   options: { get: () => ({}) as never },
   session: { get: () => null, set: vi.fn() },
@@ -79,12 +86,10 @@ const createFloatingSelectionOptions = () => ({
 });
 
 const createSelectionImageOptions = () => ({
-  capturePermit: () => null,
+  concurrency: createTestEditConcurrency({ capturePermit: () => null, isPermitCurrent: () => false }),
   decodeImage: vi.fn(),
   getDocument: () => null,
-  isGestureActive: () => false,
   isGuardCurrent: () => false,
-  isPermitCurrent: () => false,
 });
 
 describe('EditingController', () => {
@@ -94,6 +99,7 @@ describe('EditingController', () => {
     const controller = new EditingController({
       floatingSelection: createFloatingSelectionOptions(),
       getDocument: () => null,
+      history: createHistory(),
       selection: {} as SelectionStateDeps,
       selectionPixels: createSelectionPixelOptions(),
       selectionImage: createSelectionImageOptions(),
@@ -102,7 +108,13 @@ describe('EditingController', () => {
       transform: createTransformOptions(),
     });
 
-    expect(controller.selection).toBe(selection);
+    // The exposed selection records history over the created state; the
+    // float and a document swap reach the state itself.
+    controller.selection.clear();
+    expect(selection.clear).toHaveBeenCalledTimes(1);
+    controller.discardSelection();
+    expect(selection.clear).toHaveBeenCalledTimes(2);
+    expect(controller.floatingSelection).toBeDefined();
     const lease = controller.edits.tryAcquire({ kind: 'filter', layerId: 'layer-1' });
     expect(lease?.isCurrent()).toBe(true);
 
@@ -117,6 +129,7 @@ describe('EditingController', () => {
     const controller = new EditingController({
       floatingSelection: createFloatingSelectionOptions(),
       getDocument: () => null,
+      history: createHistory(),
       selection: {} as SelectionStateDeps,
       selectionPixels: createSelectionPixelOptions(),
       selectionImage: createSelectionImageOptions(),

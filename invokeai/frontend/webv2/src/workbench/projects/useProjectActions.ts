@@ -8,6 +8,7 @@ import {
 } from '@platform/state/accountLifecycle';
 import { getApiErrorMessage } from '@platform/transport/http';
 import { useNavigate } from '@tanstack/react-router';
+import { hasActiveQueueRuns } from '@workbench/queue-integration/activeQueueRuns';
 import { useNotify } from '@workbench/useNotify';
 import {
   useWorkbenchCommands,
@@ -18,6 +19,10 @@ import {
 import { useTranslation } from 'react-i18next';
 
 import { deleteLibraryProject, refreshProjectLibrary } from './library';
+import { serializeProjectDocumentV2Json } from './projectDocument';
+import { describeRefusedProject } from './projectLoadRefusal';
+
+const CLOSE_FLUSH_ATTEMPTS = 3;
 
 /**
  * Open, close, and delete for projects, shared by the top bar and the Project
@@ -46,16 +51,34 @@ export const useProjectActions = (): {
   const notify = useNotify();
   const { t } = useTranslation();
 
-  /** When the last tab goes, the session empties and Home takes over. */
-  const leaveEditorIfLast = (projectId: string): boolean => {
-    if (queries.getSnapshot().projects.some((project) => project.id !== projectId)) {
-      return false;
+  const finishClose = async (projectId: string): Promise<void> => {
+    const closeResult = commands.projects.close(projectId);
+    if (closeResult.ok || closeResult.reason === 'project-not-found') {
+      persistenceService.releaseProjectSync(projectId);
+      return;
+    }
+    if (closeResult.reason === 'active-queue-runs') {
+      throw new Error(t('projects.activeRunsMustFinish'));
+    }
+    if (closeResult.reason !== 'last-project') {
+      throw new Error(t('projects.file.notSynced'));
     }
 
-    void persistenceService.persistEmptySession(persistence.getState());
-    void navigate({ to: '/' });
+    await persistenceService.persistEmptySession(persistence.getState());
+    const retry = commands.projects.close(projectId);
+    if (retry.ok || retry.reason === 'project-not-found') {
+      persistenceService.releaseProjectSync(projectId);
+      return;
+    }
+    if (retry.reason === 'active-queue-runs') {
+      throw new Error(t('projects.activeRunsMustFinish'));
+    }
+    if (retry.reason !== 'last-project') {
+      throw new Error(t('projects.file.notSynced'));
+    }
 
-    return true;
+    persistenceService.releaseProjectSync(projectId);
+    await navigate({ to: '/' });
   };
 
   const openProject = async (projectId: string, name: string): Promise<void> => {
@@ -70,18 +93,26 @@ export const useProjectActions = (): {
     }
 
     try {
-      const project = await persistenceService.hydrateProjectFromServer(projectId);
+      const result = await persistenceService.hydrateProjectFromServer(projectId, name);
 
       assertAccountScopeCurrent(owner);
 
-      if (!project) {
+      if (result.status === 'refused') {
+        const notice = describeRefusedProject(result.refused, t);
+
+        notify.error(notice.title, notice.message);
+
+        return;
+      }
+
+      if (result.status !== 'loaded') {
         notify.error(t('projects.couldNotOpen'), t('projects.couldNotOpenDescription', { name }));
         void refreshProjectLibrary();
 
         return;
       }
 
-      commands.projects.open(project);
+      commands.projects.open(result.project);
     } catch (error) {
       if (!isAccountScopeCurrent(owner)) {
         return;
@@ -95,50 +126,75 @@ export const useProjectActions = (): {
   };
 
   const closeProject = (project: Project): void => {
+    const owner = captureAccountScope();
     flushGenerateDrafts();
 
-    const projectToFlush = queries.getProject(project.id) ?? project;
-
-    // `.finally()` forwards the rejection it was chained onto, so `void` alone left an unhandled
-    // one behind — reachable by closing a tab while the account is going away, which is when the
-    // flush rejects. The tab is closing either way; the flush was best-effort.
-    void persistenceService
-      .flushProjectToServer(projectToFlush)
-      .finally(() => {
-        persistenceService.releaseProjectSync(project.id);
-      })
-      .catch(() => undefined);
-
-    if (leaveEditorIfLast(project.id)) {
+    if (hasActiveQueueRuns(queries.getProject(project.id) ?? project)) {
+      notify.error(t('projects.closeBlocked'), t('projects.activeRunsMustFinish'));
       return;
     }
 
-    commands.projects.close(project.id);
+    void (async () => {
+      for (let attempt = 0; attempt < CLOSE_FLUSH_ATTEMPTS; attempt += 1) {
+        const current = queries.getProject(project.id);
+        if (!current) {
+          return;
+        }
+        const outcome = await persistenceService.flushProjectToServer(current);
+        assertAccountScopeCurrent(owner);
+        if (outcome.kind === 'schema-refused') {
+          notify.error(t('projects.closeBlocked'), t('projects.file.updateClient'));
+          return;
+        }
+
+        if (outcome.kind === 'unsynced' || outcome.kind === 'conflicted') {
+          notify.error(t('projects.closeBlocked'), t('projects.file.notSynced'));
+          return;
+        }
+        if (
+          outcome.kind === 'acknowledged' &&
+          serializeProjectDocumentV2Json(queries.getProject(project.id) ?? current).documentJson !==
+            outcome.documentJson
+        ) {
+          continue;
+        }
+        await finishClose(project.id);
+        return;
+      }
+      notify.error(t('projects.closeBlocked'), t('projects.file.notSynced'));
+    })().catch((error) => {
+      if (!isAccountScopeCurrent(owner)) {
+        return;
+      }
+      notify.error(t('projects.closeBlocked'), getApiErrorMessage(error, t('projects.file.notSynced')));
+    });
   };
 
   const deleteProject = async (project: Project): Promise<void> => {
     flushGenerateDrafts();
 
+    if (hasActiveQueueRuns(project)) {
+      notify.error(t('projects.deleteFailed'), t('projects.activeRunsMustFinish'));
+      return;
+    }
+
+    const owner = captureAccountScope();
     try {
-      // Deletion goes through the library for every surface. For a project the workbench holds it
-      // routes through this editor's own sync handle, which issues the DELETE inside the sync
-      // engine's mutation queue — so a push already on the wire finishes first and cannot come back
-      // 404 and fork the project into a copy of the thing being deleted.
+      // Open projects delete through the sync engine so in-flight saves finish first.
       await deleteLibraryProject(project.id);
     } catch (error) {
-      // The handle unmarks its own failures; this covers the surfaces that reach a project the
-      // editor does not hold, and is idempotent for the ones it does.
-      persistenceService.unmarkProjectDeleted(project.id);
       notify.error(t('projects.deleteFailed'), error instanceof Error ? error.message : undefined);
 
       return;
     }
 
-    if (leaveEditorIfLast(project.id)) {
-      return;
+    try {
+      await finishClose(project.id);
+    } catch (error) {
+      if (isAccountScopeCurrent(owner)) {
+        notify.error(t('projects.deleteFailed'), getApiErrorMessage(error, t('projects.file.notSynced')));
+      }
     }
-
-    commands.projects.close(project.id);
   };
 
   return { closeProject, deleteProject, openProject };

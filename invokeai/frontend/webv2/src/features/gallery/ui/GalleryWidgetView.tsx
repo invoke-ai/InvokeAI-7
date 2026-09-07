@@ -1,5 +1,7 @@
+import type { GalleryItem } from '@features/gallery/core/items';
 import type { GalleryItemsFilter } from '@features/gallery/data/queries';
 
+import { toGalleryItemRef } from '@features/gallery/core/items';
 import { getBoundedRecentImages } from '@features/gallery/core/recentImages';
 import { getGallerySettings } from '@features/gallery/core/settings';
 import { GALLERY_PAGE_SIZE, galleryItemNamesOptions } from '@features/gallery/data/queries';
@@ -12,12 +14,15 @@ import { useTranslation } from 'react-i18next';
 import type { GalleryStateView } from './galleryStateView';
 
 import { GalleryBoardDragMonitor } from './GalleryBoardDragMonitor';
+import { mergeGalleryLoadedItems } from './galleryGridLayout';
 import { GalleryLayout } from './GalleryLayout';
 import {
   getGalleryPage,
+  getGalleryProjectBoardId,
+  getGalleryRawSelectedBoardId,
   getGallerySearchTerm,
-  getGallerySelectedBoardId,
   getGallerySemanticImageQuery,
+  getGalleryStarredOnly,
   getGalleryStateView,
   getGalleryTotalImages,
   getGalleryView,
@@ -29,9 +34,15 @@ import {
   type GalleryWidgetProps,
   type GalleryWidgetRuntime,
 } from './GalleryUiContext';
-import { GalleryWidgetContext, type GalleryActions, type GalleryWidgetContextValue } from './GalleryWidgetContext';
+import {
+  GalleryWidgetContext,
+  type GalleryActions,
+  type GalleryStarredStrip,
+  type GalleryWidgetContextValue,
+} from './GalleryWidgetContext';
 import { useGalleryActions } from './useGalleryActions';
 import { useGalleryData } from './useGalleryData';
+import { useGalleryStarredStrip } from './useGalleryStarredStrip';
 
 export const shouldPublishGalleryTotal = ({
   knownTotalImages,
@@ -75,6 +86,7 @@ export const GalleryWidgetView = ({ presentation, region, runtime }: GalleryWidg
   } = useGalleryUi();
   const galleryView = getGalleryView(galleryValues);
   const searchTerm = getGallerySearchTerm(galleryValues);
+  const starredOnly = getGalleryStarredOnly(galleryValues);
   const recentImages = useMemo(() => getBoundedRecentImages(galleryValues.recentImages), [galleryValues.recentImages]);
   const page = getGalleryPage(galleryValues);
   const knownTotalImages = getGalleryTotalImages(galleryValues);
@@ -84,11 +96,14 @@ export const GalleryWidgetView = ({ presentation, region, runtime }: GalleryWidg
   const data = useGalleryData({
     galleryView,
     page,
+    projectBoardId: getGalleryProjectBoardId(galleryValues),
     recentImages,
     searchTerm,
-    selectedBoardId: getGallerySelectedBoardId(galleryValues, []),
+    selectedBoardId: getGalleryRawSelectedBoardId(galleryValues),
     semanticQuery,
     settings,
+    // The grid partitions: starred items live in the strip above it.
+    starred: starredOnly,
   });
 
   // A failed similarity search renders exactly like an empty one ("no images
@@ -108,16 +123,30 @@ export const GalleryWidgetView = ({ presentation, region, runtime }: GalleryWidg
     });
   }, [notifications, semanticError]);
 
-  const { loadMore, total } = data;
-  const selectedBoardId = getGallerySelectedBoardId(galleryValues, data.boards);
-  const gallery = getGalleryStateView(
-    galleryValues,
-    data.boards,
-    data.items,
-    data.isLoadingItems,
-    queueItems,
-    liveFollowEnabled,
-    liveProgressTarget
+  const { loadMore, selectedBoardId, total } = data;
+  const gallery = useMemo(
+    () =>
+      getGalleryStateView(
+        galleryValues,
+        data.boards,
+        data.items,
+        data.isLoadingItems,
+        queueItems,
+        liveFollowEnabled,
+        liveProgressTarget
+      ),
+    [data.boards, data.isLoadingItems, data.items, galleryValues, liveFollowEnabled, liveProgressTarget, queueItems]
+  );
+  // No strip under a ranked result (no starred filter applies), under the
+  // starred-only listing (it would repeat the grid), or in a window anchored
+  // mid-board (the banner promises a slice, not the top of the board).
+  const starredStrip = useGalleryStarredStrip({
+    enabled: semanticQuery === null && !starredOnly && gallery.anchoredWindowPage === 0,
+    filter: data.filter,
+  });
+  const loadedItems = useMemo(
+    () => mergeGalleryLoadedItems(starredStrip.items, gallery.items),
+    [gallery.items, starredStrip.items]
   );
   const lastPublishedTotalRef = useRef<number | null>(null);
   const itemActionFilterIdentity = useMemo(() => JSON.stringify(data.filter), [data.filter]);
@@ -127,9 +156,10 @@ export const GalleryWidgetView = ({ presentation, region, runtime }: GalleryWidg
       const result = await queryClient.fetchQuery(galleryItemNamesOptions(data.filter));
 
       signal.throwIfAborted();
-      return result.items;
+      // Navigation order: the strip's starred items, then the listing.
+      return [...starredStrip.items.map(toGalleryItemRef), ...result.items];
     },
-    [data.filter, queryClient]
+    [data.filter, queryClient, starredStrip.items]
   );
   const itemActionContextRef = useRef<GalleryItemActionContext | null>(null);
   const galleryLocationRef = useRef({ galleryView, selectedBoardId });
@@ -207,7 +237,8 @@ export const GalleryWidgetView = ({ presentation, region, runtime }: GalleryWidg
   }, [galleryCommands, page, total]);
 
   if (region === 'bottom' && presentation !== 'expanded') {
-    return <GalleryStatusChip count={total ?? gallery.items.length} />;
+    // The listing total is unstarred-only; the strip's total is the rest.
+    return <GalleryStatusChip count={(total ?? gallery.items.length) + starredStrip.total} />;
   }
 
   return (
@@ -222,9 +253,11 @@ export const GalleryWidgetView = ({ presentation, region, runtime }: GalleryWidg
         filter={data.filter}
         gallery={gallery}
         isWindowTruncated={data.isWindowTruncated}
+        loadedItems={loadedItems}
         projectName={projectName}
         region={region}
         runtime={runtime}
+        starredStrip={starredStrip}
       />
     </ItemActionsProvider>
   );
@@ -235,22 +268,37 @@ const GalleryWidgetContent = ({
   filter,
   gallery,
   isWindowTruncated,
+  loadedItems,
   projectName,
   region,
   runtime,
+  starredStrip,
 }: {
   actions: GalleryActions;
   filter: GalleryItemsFilter;
   gallery: GalleryStateView;
   isWindowTruncated: boolean;
+  loadedItems: GalleryItem[];
   projectName: string;
   region: GalleryWidgetProps['region'];
   runtime: GalleryWidgetRuntime;
+  starredStrip: GalleryStarredStrip;
 }) => {
   const itemActions = useGalleryItemActions();
   const contextValue = useMemo<GalleryWidgetContextValue>(
-    () => ({ actions, filter, gallery, isWindowTruncated, itemActions, projectName, region, runtime }),
-    [actions, filter, gallery, isWindowTruncated, itemActions, projectName, region, runtime]
+    () => ({
+      actions,
+      filter,
+      gallery,
+      isWindowTruncated,
+      itemActions,
+      loadedItems,
+      projectName,
+      region,
+      runtime,
+      starredStrip,
+    }),
+    [actions, filter, gallery, isWindowTruncated, itemActions, loadedItems, projectName, region, runtime, starredStrip]
   );
 
   return (

@@ -22,10 +22,14 @@ import {
   flattenGalleryItemsData,
   GALLERY_MAX_ROWS,
   GALLERY_PAGE_SIZE,
+  GALLERY_STARRED_STRIP_LIMIT,
   galleryBoardsOptions,
   galleryItemNamesOptions,
   galleryItemsInfiniteOptions,
+  galleryStarredStripOptions,
   getGalleryItemListQueries,
+  getGalleryItemsFilterFromKey,
+  isGalleryStarredStripQueryKey,
   canonicalizeGalleryItemsFilter,
   type GalleryItemsFilter,
 } from './queries';
@@ -75,7 +79,6 @@ const baseFilter: GalleryItemsFilter = {
   galleryView: 'images',
   orderDir: 'DESC',
   searchTerm: 'portrait',
-  starredFirst: true,
 };
 
 describe('Gallery item query read model', () => {
@@ -153,7 +156,6 @@ describe('Gallery item query read model', () => {
     };
     const rankedNames = {
       items: [{ kind: 'image', name: 'ranked.png' }],
-      starredCount: 0,
       total: 1,
     };
 
@@ -345,7 +347,7 @@ describe('Gallery item query read model', () => {
   it('fetches one date-board ref list while hydrating multiple fixed pages', async () => {
     const queryClient = createQueryClient();
     const refs = Array.from({ length: 180 }, (_, index) => ({ kind: 'image' as const, name: `date-${index}` }));
-    backend.listGalleryDateBoardItemNames.mockResolvedValue({ items: refs, starredCount: 0, total: refs.length });
+    backend.listGalleryDateBoardItemNames.mockResolvedValue({ items: refs, total: refs.length });
     backend.hydrateGalleryDateBoardItemPage.mockImplementation(
       ({ limit, offset, total }: { limit: number; offset: number; total: number }) =>
         Promise.resolve(createPage({ count: limit, offset, prefix: 'date', total }))
@@ -367,7 +369,6 @@ describe('Gallery item query read model', () => {
 
       backend.listGalleryDateBoardItemNames.mockResolvedValueOnce({
         items: [{ kind: 'image', name: 'refreshed' }, ...refs],
-        starredCount: 0,
         total: refs.length + 1,
       });
       await invalidateGalleryItems(queryClient);
@@ -381,12 +382,10 @@ describe('Gallery item query read model', () => {
   it('does not cancel a shared date-name request when one list consumer is cancelled', async () => {
     const queryClient = createQueryClient();
     let namesSignal: AbortSignal | undefined;
-    let resolveNames:
-      | ((value: { items: { kind: 'image'; name: string }[]; starredCount: number; total: number }) => void)
-      | undefined;
+    let resolveNames: ((value: { items: { kind: 'image'; name: string }[]; total: number }) => void) | undefined;
     backend.listGalleryDateBoardItemNames.mockImplementation(
       ({ signal }: { signal: AbortSignal }) =>
-        new Promise<{ items: { kind: 'image'; name: string }[]; starredCount: number; total: number }>((resolve) => {
+        new Promise<{ items: { kind: 'image'; name: string }[]; total: number }>((resolve) => {
           namesSignal = signal;
           resolveNames = resolve;
         })
@@ -406,7 +405,7 @@ describe('Gallery item query read model', () => {
     await queryClient.cancelQueries({ exact: true, queryKey: pageOptions.queryKey });
 
     expect(namesSignal?.aborted).toBe(false);
-    resolveNames?.({ items: [{ kind: 'image', name: 'shared-date-0' }], starredCount: 0, total: 1 });
+    resolveNames?.({ items: [{ kind: 'image', name: 'shared-date-0' }], total: 1 });
     await expect(infiniteRequest).resolves.toMatchObject({
       pages: [{ items: [{ name: 'shared-date-0' }], total: 1 }],
     });
@@ -419,7 +418,7 @@ describe('canonicalizeGalleryItemsFilter under a semantic query', () => {
 
   it('ignores the controls a ranked result set does not answer to', () => {
     // The semantic branch sends only the reference, so board, view, order,
-    // starred-first and the date range change nothing about the response.
+    // the starred filter and the date range change nothing about the response.
     // While they stayed in the key, clicking a board minted a fresh key and
     // re-ran the search — re-uploading the dropped blob, or making the server
     // re-download a remote URL, to render byte-identical results.
@@ -434,7 +433,7 @@ describe('canonicalizeGalleryItemsFilter under a semantic query', () => {
       { boardId: 'board-b' },
       { galleryView: 'assets' as const },
       { orderDir: 'ASC' as const },
-      { starredFirst: true },
+      { starred: true },
       { createdFrom: '2026-01-01' },
     ]) {
       expect(
@@ -472,5 +471,73 @@ describe('canonicalizeGalleryItemsFilter under a semantic query', () => {
     const onBoardB = canonicalizeGalleryItemsFilter({ boardId: 'board-b', galleryView: 'images', searchTerm: '' });
 
     expect(onBoardA).not.toEqual(onBoardB);
+  });
+
+  it('keys the starred filter only when it is set', () => {
+    const unfiltered = canonicalizeGalleryItemsFilter({ boardId: 'board-a', galleryView: 'images', searchTerm: '' });
+    const starredOnly = canonicalizeGalleryItemsFilter({
+      boardId: 'board-a',
+      galleryView: 'images',
+      searchTerm: '',
+      starred: true,
+    });
+
+    expect(unfiltered).not.toHaveProperty('starred');
+    expect(starredOnly).toEqual({ ...unfiltered, starred: true });
+  });
+});
+
+describe('galleryStarredStripOptions', () => {
+  beforeEach(() => {
+    backend.hydrateGalleryDateBoardItemPage.mockReset();
+    backend.isDateBoardId.mockReset();
+    backend.listGalleryDateBoardItemNames.mockReset();
+    backend.listGalleryItems.mockReset();
+    accountLifecycle.activate('strip-query-test');
+    backend.isDateBoardId.mockImplementation((boardId: string) => boardId.startsWith('by_date:'));
+  });
+
+  it('reads one bounded starred-only range under the listing key family', async () => {
+    const queryClient = createQueryClient();
+    backend.listGalleryItems.mockResolvedValue(createPage({ count: 2, offset: 0, total: 9 }));
+
+    const options = galleryStarredStripOptions(baseFilter);
+    const page = await queryClient.fetchQuery(options);
+
+    expect(page.total).toBe(9);
+    // The strip lives in the list key family (so account-wide invalidation
+    // and mutation patching reach it) under the listing's filter plus `starred`.
+    expect(getGalleryItemListQueries(queryClient).map((query) => query.queryKey)).toEqual([options.queryKey]);
+    expect(getGalleryItemsFilterFromKey(options.queryKey)).toEqual({
+      ...canonicalizeGalleryItemsFilter(baseFilter),
+      starred: true,
+    });
+    expect(isGalleryStarredStripQueryKey(options.queryKey)).toBe(true);
+    expect(isGalleryStarredStripQueryKey(galleryItemsInfiniteOptions(baseFilter).queryKey)).toBe(false);
+    expect(backend.listGalleryItems).toHaveBeenCalledOnce();
+    expect(backend.listGalleryItems.mock.calls[0]?.[0]).toMatchObject({
+      boardId: 'board-1',
+      limit: GALLERY_STARRED_STRIP_LIMIT,
+      offset: 0,
+      starred: true,
+    });
+  });
+
+  it('routes a date board through its starred-only name list', async () => {
+    const queryClient = createQueryClient();
+    const refs = [{ kind: 'image' as const, name: 'starred-0' }];
+    backend.listGalleryDateBoardItemNames.mockResolvedValue({ items: refs, total: 1 });
+    backend.hydrateGalleryDateBoardItemPage.mockResolvedValue(createPage({ count: 1, offset: 0, total: 1 }));
+
+    await queryClient.fetchQuery(galleryStarredStripOptions({ ...baseFilter, boardId: 'by_date:2026-07-18' }));
+
+    expect(backend.listGalleryDateBoardItemNames.mock.calls[0]?.[0]).toMatchObject({
+      boardId: 'by_date:2026-07-18',
+      starred: true,
+    });
+    expect(backend.hydrateGalleryDateBoardItemPage).toHaveBeenCalledWith(
+      expect.objectContaining({ items: refs, limit: GALLERY_STARRED_STRIP_LIMIT, offset: 0 })
+    );
+    expect(backend.listGalleryItems).not.toHaveBeenCalled();
   });
 });

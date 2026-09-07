@@ -16,8 +16,9 @@ import {
 } from '@features/models/data/externalProvidersStore';
 import { ensureStartersLoaded, useStartersSelector } from '@features/models/data/startersStore';
 import {
-  clearAddModelsSeed,
+  clearAddModelsSeeds,
   getAddModelsSeed,
+  getAddModelsTypeSeed,
   openExternalProviderKeys,
   openModelManagerTab,
   updateModelsUi,
@@ -100,11 +101,17 @@ export const AddModelsView = () => {
       ),
     [providerConfigs]
   );
-  const [starterFilters, setStarterFilters] = useState<StarterModelFilters>(DEFAULT_STARTER_MODEL_FILTERS);
+  const [starterFilters, setStarterFilters] = useState<StarterModelFilters>(() => {
+    const typeSeed = getAddModelsTypeSeed();
+
+    return typeSeed === null
+      ? DEFAULT_STARTER_MODEL_FILTERS
+      : { ...DEFAULT_STARTER_MODEL_FILTERS, typeFilter: typeSeed };
+  });
 
   useMountEffect(() => {
-    // One-shot: a seed only ever fills the box the view was opened with.
-    clearAddModelsSeed();
+    // One-shot: a seed only ever fills the view it was opened with.
+    clearAddModelsSeeds();
     ensureStartersLoaded();
 
     const owner = captureAccountScope();

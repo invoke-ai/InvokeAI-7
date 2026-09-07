@@ -1,5 +1,6 @@
 import type { Project } from '@workbench/projectContracts';
 import type { ProjectSummary } from '@workbench/projects/library';
+import type { MouseEvent } from 'react';
 
 import { Icon, Menu, Portal, Stack, Text } from '@chakra-ui/react';
 import { flushGenerateDrafts } from '@features/generation/react';
@@ -11,10 +12,11 @@ import { ConfirmDialog } from '@platform/ui/ConfirmDialog';
 import { MenuContent } from '@platform/ui/Menu';
 import { MiddleTruncate } from '@platform/ui/MiddleTruncate';
 import { RenameDialog } from '@platform/ui/RenameDialog';
+import { toaster } from '@platform/ui/toaster';
 import { QueueCircularProgress } from '@workbench/components/QueueProgressIndicator';
 import { formatRelativeTime } from '@workbench/launchpad/formatRelativeTime';
 import { OpenProjectDialog } from '@workbench/projects/components';
-import { refreshProjectLibrary, useProjectLibrarySelector } from '@workbench/projects/library';
+import { refreshProjectLibrary, renameLibraryProject, useProjectLibrarySelector } from '@workbench/projects/library';
 import { useProjectActions } from '@workbench/projects/useProjectActions';
 import { useExportOpenProject } from '@workbench/projects/useProjectFileActions';
 import { useOpenWorkbenchWidget } from '@workbench/useOpenWorkbenchWidget';
@@ -42,7 +44,6 @@ import { projectSwitcherStore, setProjectSwitcherOpen } from './projectSwitcherS
 import { HIDE_BELOW_PROJECT_NAME_WIDTH } from './topbarBreakpoints';
 
 const MENU_POSITIONING = { placement: 'bottom-start' } as const;
-const DELETE_HOVER_PROPS = { bg: 'bg.error', color: 'fg.error' } as const;
 const RECENT_PROJECT_LIMIT = 5;
 
 export const ProjectSwitcher = () => {
@@ -71,6 +72,15 @@ export const ProjectSwitcher = () => {
     }
   }, []);
 
+  // Right-click opens the same dropdown: the trigger IS this control's context.
+  const handleTriggerContextMenu = useCallback(
+    (event: MouseEvent<HTMLButtonElement>) => {
+      event.preventDefault();
+      handleMenuOpenChange({ open: true });
+    },
+    [handleMenuOpenChange]
+  );
+
   const getProject = useCallback((projectId: string): Project | null => queries.getProject(projectId), [queries]);
 
   const createProject = useCallback(() => {
@@ -81,13 +91,27 @@ export const ProjectSwitcher = () => {
   const hideOpenDialog = useCallback(() => setIsOpenDialogVisible(false), []);
   const closeRenameDialog = useCallback(() => setRenameTarget(null), []);
   const closeDeleteDialog = useCallback(() => setDeleteTarget(null), []);
+  // Through the library, not the bare store command: the library path flushes
+  // an open project immediately, which is what renames its board on the server.
   const renameProject = useCallback(
-    (name: string) => {
-      if (renameTarget) {
-        projects.rename(renameTarget.id, name);
+    async (name: string) => {
+      if (!renameTarget) {
+        return;
+      }
+
+      try {
+        await renameLibraryProject(renameTarget.id, name);
+      } catch (error) {
+        toaster.create({
+          description: error instanceof Error ? error.message : undefined,
+          title: t('projects.renameFailed'),
+          type: 'error',
+        });
+        // The rename dialog stays open on a rejection, so the user keeps their input.
+        throw error;
       }
     },
-    [projects, renameTarget]
+    [renameTarget, t]
   );
   const confirmDeleteProject = useCallback(async () => {
     const project = deleteTarget ? getProject(deleteTarget.id) : null;
@@ -152,8 +176,9 @@ export const ProjectSwitcher = () => {
         <Menu.Trigger asChild>
           <Button
             aria-label={t('topbar.projectSwitcher.trigger', { name: activeProjectName })}
-            size="xs"
+            size="sm"
             variant="ghost"
+            onContextMenu={handleTriggerContextMenu}
           >
             <MiddleTruncate css={HIDE_BELOW_PROJECT_NAME_WIDTH} fontWeight="500" minW="0" text={activeProjectName} />
             <Icon as={ChevronsUpDownIcon} boxSize="3" color="fg.subtle" flexShrink={0} />
@@ -185,12 +210,7 @@ export const ProjectSwitcher = () => {
                 <Icon as={XIcon} boxSize="3.5" />
                 <Menu.ItemText>{t('common.close')}</Menu.ItemText>
               </Menu.Item>
-              <Menu.Item
-                color="fg.error"
-                value="delete-project"
-                _hover={DELETE_HOVER_PROPS}
-                onClick={deleteActiveProject}
-              >
+              <Menu.Item data-danger="" value="delete-project" onClick={deleteActiveProject}>
                 <Icon as={Trash2Icon} boxSize="3.5" />
                 <Menu.ItemText>{t('projects.deleteProjectWithEllipsis')}</Menu.ItemText>
               </Menu.Item>

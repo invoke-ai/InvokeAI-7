@@ -1,10 +1,10 @@
 import type { GenerateModelConfig, MainModelConfig } from '@features/generation/contracts';
 import type {
-  CanvasDocumentContractV2,
+  CanvasDocumentContractV3,
   CanvasControlLayerContract,
   CanvasLayerContract,
   CanvasRasterLayerContractV2,
-  CanvasStateContractV2,
+  CanvasStateContractV3,
   RegionalGuidanceReferenceImage,
   RegionalGuidanceReferenceImageAsset,
 } from '@workbench/canvas-engine/contracts';
@@ -16,6 +16,8 @@ import type { WorkbenchAction } from '@workbench/workbenchState.testing';
 import type { WorkbenchCommands } from '@workbench/workbenchStore';
 
 import { getDefaultGenerateSettings } from '@features/generation/settings';
+import { getDocumentLeaves } from '@workbench/canvas-engine/api';
+import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
 import { createTestStubRasterBackend } from '@workbench/canvas-engine/render/raster.testStub';
 import {
   composeForGeneration,
@@ -29,6 +31,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RunCanvasInvocationDeps } from './prepareCanvasInvocation';
 
 import { DEFAULT_CANVAS_COMPOSITING } from './canvasCompositing';
+import { DEFAULT_CANVAS_SCALING } from './canvasScaling';
 import {
   prepareCanvasInvocation,
   resolveRegionalReferenceImages,
@@ -97,13 +100,13 @@ const rasterLayer = (id: string, size = 64): CanvasRasterLayerContractV2 => ({
   type: 'raster',
 });
 
-const makeDoc = (layers: CanvasRasterLayerContractV2[], size = 64): CanvasDocumentContractV2 => ({
+const makeDoc = (layers: CanvasRasterLayerContractV2[], size = 64): CanvasDocumentContractV3 => ({
   background: 'transparent',
   bbox: { height: size, width: size, x: 0, y: 0 },
   height: size,
-  layers,
+  stacks: stacksFrom(layers),
   selectedLayerId: null,
-  version: 2,
+  version: 3,
   width: size,
 });
 
@@ -133,7 +136,7 @@ interface Harness {
 }
 
 interface HarnessOptions {
-  document?: CanvasDocumentContractV2;
+  document?: CanvasDocumentContractV3;
   destination?: 'canvas' | 'gallery';
   model?: GenerateModelConfig;
   strength?: number;
@@ -145,6 +148,7 @@ interface HarnessOptions {
   dispatch?: ReturnType<typeof vi.fn<(action: WorkbenchAction) => void>>;
   models?: RunCanvasInvocationDeps['models'];
   outputOnlyMaskedRegions?: boolean;
+  scaling?: RunCanvasInvocationDeps['scaling'];
 }
 
 const makeHarness = (options: HarnessOptions = {}): Harness => {
@@ -201,7 +205,7 @@ const makeHarness = (options: HarnessOptions = {}): Harness => {
   const releaseRasterSnapshot = vi.fn();
   const dedupe = createCompositeDedupeCache();
 
-  const makeCanvas = (document: CanvasDocumentContractV2): CanvasStateContractV2 => ({
+  const makeCanvas = (document: CanvasDocumentContractV3): CanvasStateContractV3 => ({
     document: structuredClone(document),
     documentRevision: 0,
     snapshots: [],
@@ -213,7 +217,7 @@ const makeHarness = (options: HarnessOptions = {}): Harness => {
       pendingImages: [],
       selectedImageIndex: 0,
     },
-    version: 2,
+    version: 3,
   });
 
   const executorDeps: GenerationCompositeExecutorDeps = {
@@ -258,6 +262,7 @@ const makeHarness = (options: HarnessOptions = {}): Harness => {
       outputOnlyMaskedRegions: options.outputOnlyMaskedRegions ?? true,
     },
     destination: options.destination ?? 'canvas',
+    scaling: options.scaling ?? DEFAULT_CANVAS_SCALING,
     commands: {
       generation: {
         submitCanvas: (payload) => dispatch({ ...payload, type: 'submitCanvasInvocationSnapshot' }),
@@ -350,6 +355,7 @@ describe('prepareCanvasInvocation generation-device boundary', () => {
       generateValues: harness.deps.generateValues,
       models: harness.deps.models,
       projectId: harness.deps.projectId,
+      canvasValues: { scaleMethod: 'manual', scaledHeight: 768, scaledWidth: 1024 },
       projectSettings: { useCpuNoise: false },
       strength: harness.deps.strength,
     });
@@ -401,6 +407,17 @@ describe('runCanvasInvocation', () => {
     expect(nodes.denoise_latents.denoising_start).toBeCloseTo(0.25, 10);
     expect(harness.notices()).toHaveLength(0);
     expect(harness.dedupe.byKey.size).toBeGreaterThan(0);
+  });
+
+  it('denoises at the persisted manual processing size and restores the bbox', async () => {
+    const harness = makeHarness({ scaling: { height: 768, method: 'manual', width: 1024 } });
+
+    await runCanvasInvocation(harness.deps);
+
+    const nodes = harness.submittedGraphs()[0]!.graph.backendGraph!.nodes;
+    expect(nodes.noise).toMatchObject({ height: 768, width: 1024 });
+    expect(nodes.canvas_resize_initial_to_processing).toMatchObject({ height: 768, width: 1024 });
+    expect(nodes.canvas_output).toMatchObject({ type: 'img_resize' });
   });
 
   it('reuses committed composite uploads on a later successful invocation', async () => {
@@ -522,7 +539,7 @@ describe('runCanvasInvocation', () => {
           pendingImages: [],
           selectedImageIndex: 0,
         },
-        version: 2,
+        version: 3,
       },
       documentGeneration: 0,
     });
@@ -634,7 +651,7 @@ describe('runCanvasInvocation', () => {
           pendingImages: [],
           selectedImageIndex: 0,
         },
-        version: 2,
+        version: 3,
       },
       documentGeneration: 9,
     });
@@ -646,7 +663,7 @@ describe('runCanvasInvocation', () => {
       liveDocument = {
         ...liveDocument,
         bbox: { height: 64, width: 64, x: 101, y: 202 },
-        layers: [rasterLayer('replacement-layer')],
+        stacks: stacksFrom([rasterLayer('replacement-layer')]),
       };
       return result;
     };
@@ -657,7 +674,7 @@ describe('runCanvasInvocation', () => {
     expect(harness.notices()).toEqual([]);
     expect(harness.submittedGraphs()).toHaveLength(1);
     expect(harness.submittedGraphs()[0]?.canvas.document.bbox).toEqual({ height: 64, width: 64, x: 7, y: 11 });
-    expect(harness.submittedGraphs()[0]?.canvas.document.layers[0]?.id).toBe('frozen-layer');
+    expect(getDocumentLeaves(harness.submittedGraphs()[0]?.canvas.document)[0]?.id).toBe('frozen-layer');
     expect(harness.releaseRasterSnapshot).toHaveBeenCalledTimes(1);
     expect(harness.dedupe.byKey.size).toBeGreaterThan(0);
   });
@@ -680,7 +697,7 @@ describe('runCanvasInvocation', () => {
             pendingImages: [],
             selectedImageIndex: 0,
           },
-          version: 2,
+          version: 3,
         },
         documentGeneration: 3,
       });
@@ -1008,6 +1025,125 @@ describe('runCanvasInvocation', () => {
   });
 });
 
+// ---- Regional guidance through the real composite pipeline ---------------
+
+const animaModel: MainModelConfig = { base: 'anima', key: 'anima-model', name: 'Anima', type: 'main' };
+const animaGenerateValues = (): Record<string, unknown> => ({
+  ...generateValuesFor(animaModel),
+  cfgScale: 4,
+  qwen3EncoderModel: { base: 'any', key: 'qwen3', name: 'Qwen3 Encoder', type: 'qwen3_encoder', variant: 'qwen3_06b' },
+  vae: { base: 'anima', key: 'anima-vae', name: 'Anima VAE', type: 'vae' },
+});
+
+const regionalLayer = (
+  id: string,
+  overrides: Partial<
+    Pick<
+      CanvasLayerContract & { type: 'regional_guidance' },
+      'positivePrompt' | 'negativePrompt' | 'autoNegative' | 'referenceImages'
+    >
+  > = {}
+): CanvasLayerContract => ({
+  autoNegative: false,
+  blendMode: 'normal',
+  id,
+  isEnabled: true,
+  isLocked: false,
+  mask: { bitmap: { height: 64, imageName: `${id}-bmp`, width: 64 }, fill: { color: '#00ff00', style: 'solid' } },
+  name: id,
+  negativePrompt: null,
+  opacity: 0.5,
+  positivePrompt: 'a red hat',
+  referenceImages: [],
+  transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 },
+  type: 'regional_guidance',
+  ...overrides,
+});
+
+describe('runCanvasInvocation — regional guidance on a Qwen3 base', () => {
+  const makeAnimaHarness = (layer: CanvasLayerContract) => {
+    const harness = makeHarness({ document: docWithLayers([layer]), model: animaModel });
+    harness.deps.generateValues = animaGenerateValues();
+    return harness;
+  };
+
+  it('composites an Anima region and grafts its masked prompt into the positive collector', async () => {
+    const harness = makeAnimaHarness(regionalLayer('rg'));
+
+    await runCanvasInvocation(harness.deps);
+
+    expect(harness.notices()).toHaveLength(0);
+    // The only upload is the region's own mask composite (no raster content → no base composite).
+    expect(harness.uploadImage).toHaveBeenCalledTimes(1);
+    const graph = harness.submittedGraphs()[0]?.graph.backendGraph;
+    expect(graph?.nodes.rg_pos_cond_rg).toMatchObject({ prompt: 'a red hat', type: 'anima_text_encoder' });
+    expect(graph?.nodes.rg_mask_to_tensor_rg).toMatchObject({
+      image: { image_name: 'composite-1.png' },
+      type: 'alpha_mask_to_tensor',
+    });
+    expect(
+      graph?.edges.some(
+        (edge) => edge.source.node_id === 'rg_pos_cond_rg' && edge.destination.node_id === 'pos_cond_collect'
+      )
+    ).toBe(true);
+  });
+
+  it.each([
+    ['a negative prompt', { negativePrompt: 'blurry' }],
+    ['auto-negative', { autoNegative: true }],
+    [
+      'a complete IP-Adapter reference',
+      {
+        referenceImages: [
+          {
+            config: {
+              beginEndStepPct: [0, 1],
+              clipVisionModel: 'ViT-H',
+              image: { imageName: 'ref.png' },
+              method: 'full',
+              model: { base: 'anima', key: 'ipa', name: 'IP Adapter', type: 'ip_adapter' },
+              type: 'ip_adapter',
+              weight: 1,
+            },
+            id: 'ref',
+            isEnabled: true,
+          },
+        ],
+      },
+    ],
+  ] as const)(
+    'still submits the positive prompt of an Anima region carrying %s, without the extra',
+    async (_label, overrides) => {
+      const harness = makeAnimaHarness(regionalLayer('rg', overrides as Parameters<typeof regionalLayer>[1]));
+
+      await runCanvasInvocation(harness.deps);
+
+      expect(harness.notices()).toHaveLength(0);
+      const graph = harness.submittedGraphs()[0]?.graph.backendGraph;
+      expect(graph?.nodes.rg_pos_cond_rg).toMatchObject({ prompt: 'a red hat', type: 'anima_text_encoder' });
+      expect(graph?.nodes.rg_neg_cond_rg).toBeUndefined();
+      expect(graph?.nodes.rg_pos_cond_inverted_rg).toBeUndefined();
+      expect(graph?.nodes.ip_adapter_ref).toBeUndefined();
+      const negativeSources = graph?.edges
+        .filter((edge) => edge.destination.node_id === 'neg_cond_collect')
+        .map((edge) => edge.source.node_id);
+      expect(negativeSources).toEqual(['neg_cond']);
+    }
+  );
+
+  it('skips an Anima region that carries only a negative prompt', async () => {
+    const harness = makeAnimaHarness(regionalLayer('rg', { negativePrompt: 'blurry', positivePrompt: null }));
+
+    await runCanvasInvocation(harness.deps);
+
+    expect(harness.notices()).toHaveLength(0);
+    expect(harness.uploadImage).not.toHaveBeenCalled();
+    const graph = harness.submittedGraphs()[0]?.graph.backendGraph;
+    expect(graph?.nodes.denoise_latents?.type).toBe('anima_denoise');
+    expect(graph?.nodes.rg_mask_to_tensor_rg).toBeUndefined();
+  });
+});
+
 // ---- Inpaint / outpaint mode dispatch -------------------------------------
 
 const inpaintMaskLayer = (id: string): CanvasLayerContract => ({
@@ -1022,13 +1158,13 @@ const inpaintMaskLayer = (id: string): CanvasLayerContract => ({
   type: 'inpaint_mask',
 });
 
-const docWithLayers = (layers: CanvasLayerContract[], size = 64): CanvasDocumentContractV2 => ({
+const docWithLayers = (layers: CanvasLayerContract[], size = 64): CanvasDocumentContractV3 => ({
   background: 'transparent',
   bbox: { height: size, width: size, x: 0, y: 0 },
   height: size,
-  layers,
+  stacks: stacksFrom(layers),
   selectedLayerId: null,
-  version: 2,
+  version: 3,
   width: size,
 });
 
@@ -1129,8 +1265,18 @@ describe('resolveRegionalReferenceImages', () => {
     expect(resolveRegionalReferenceImages({ referenceImages: [ipAdapterRef(asset)] }, 'flux2')).toEqual([]);
   });
 
-  it('drops regional reference images for Krea-2', () => {
-    expect(resolveRegionalReferenceImages({ referenceImages: [ipAdapterRef(asset)] }, 'krea-2')).toEqual([]);
+  it.each(['krea-2', 'z-image', 'anima'])('drops regional reference images for %s', (base) => {
+    const ref = ipAdapterRef(asset);
+    const matchingBase = { ...ref, config: { ...ref.config, model: { ...ipAdapterModel, base } } };
+    expect(resolveRegionalReferenceImages({ referenceImages: [matchingBase] }, base)).toEqual([]);
+  });
+
+  it('keeps an SD2 IP-Adapter ref whose model matches the base', () => {
+    const sd2Ref = {
+      ...ipAdapterRef(asset),
+      config: { ...ipAdapterRef(asset).config, model: { ...ipAdapterModel, base: 'sd-2' } },
+    };
+    expect(resolveRegionalReferenceImages({ referenceImages: [sd2Ref] }, 'sd-2')).toHaveLength(1);
   });
 
   it('drops a FLUX Redux ref with no image assigned', () => {

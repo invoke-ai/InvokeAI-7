@@ -280,6 +280,7 @@ export const buildLayerWorkflowGraph = (options: BuildLayerWorkflowGraphOptions)
     graph.edges.push({
       destination: { field: input.fieldName, node_id: input.nodeId },
       source: { field: 'image', node_id: sourceNodeId },
+      type: 'default',
     });
   }
 
@@ -298,6 +299,7 @@ export const buildLayerWorkflowGraph = (options: BuildLayerWorkflowGraphOptions)
   graph.edges.push({
     destination: { field: 'image', node_id: outputNodeId },
     source: { field: output.fieldName, node_id: output.nodeId },
+    type: 'default',
   });
 
   return { graph, outputNodeId };

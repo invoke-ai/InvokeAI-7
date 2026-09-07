@@ -4,6 +4,8 @@ import { Box, Code, HStack, Icon, Popover, Portal, Stack, Text } from '@chakra-u
 import { semanticReferenceFromDataTransfer } from '@features/gallery/core/semanticImageQuery';
 import { describeDateRange, findInvalidDateToken, formatIsoDate, parseDateTokens } from '@platform/search/dateTokens';
 import { CloseButton, IconButton } from '@platform/ui/Button';
+import { InputShell } from '@platform/ui/InputShell';
+import { PopoverContent } from '@platform/ui/Popover';
 import { CircleHelpIcon, ImageIcon, MapIcon, SparklesIcon } from 'lucide-react';
 import { useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -198,7 +200,7 @@ export const GalleryItemSearch = () => {
       outline={isDropTargetActive ? '2px solid' : undefined}
       outlineColor={isDropTargetActive ? 'accent.solid' : undefined}
       position="relative"
-      rounded="md"
+      rounded="control"
       w="full"
       onDragLeave={handleNativeDragLeave}
       onDragOver={handleNativeDragOver}
@@ -252,33 +254,8 @@ const GallerySemanticChip = ({ onClear, reference }: { onClear: () => void; refe
   const isText = reference.kind === 'text';
   const isCluster = reference.kind === 'cluster';
   const name = getSemanticReferenceName(reference) || t('widgets.gallery.semanticWebImage');
-
-  return (
-    <HStack
-      bg="bg"
-      borderColor="border.emphasized"
-      borderWidth="1px"
-      gap="1.5"
-      h="8"
-      minW="0"
-      px="2"
-      rounded="md"
-      title={getSemanticReferenceTitle(reference)}
-      w="full"
-    >
-      <Icon
-        as={isText ? SparklesIcon : isCluster ? MapIcon : ImageIcon}
-        boxSize="3.5"
-        color="fg.subtle"
-        flexShrink={0}
-      />
-      <Text color="fg.muted" flex="1" fontSize="xs" minW="0" truncate>
-        {isText
-          ? t('widgets.gallery.semanticTextSearch', { name })
-          : isCluster
-            ? t('widgets.gallery.semanticCluster', { name })
-            : t('widgets.gallery.semanticSimilarTo', { name })}
-      </Text>
+  const clearButton = useMemo(
+    () => (
       <CloseButton
         aria-label={
           isText
@@ -290,12 +267,36 @@ const GallerySemanticChip = ({ onClear, reference }: { onClear: () => void; refe
         size="2xs"
         onClick={onClear}
       />
-    </HStack>
+    ),
+    [isCluster, isText, onClear, t]
+  );
+  const kindIcon = useMemo(
+    () => (
+      <Icon
+        as={isText ? SparklesIcon : isCluster ? MapIcon : ImageIcon}
+        boxSize="3.5"
+        color="fg.subtle"
+        flexShrink={0}
+      />
+    ),
+    [isCluster, isText]
+  );
+
+  return (
+    <InputShell endElement={clearButton} startElement={kindIcon} title={getSemanticReferenceTitle(reference)}>
+      <Text color="fg.muted" flex="1" fontSize="xs" minW="0" truncate>
+        {isText
+          ? t('widgets.gallery.semanticTextSearch', { name })
+          : isCluster
+            ? t('widgets.gallery.semanticCluster', { name })
+            : t('widgets.gallery.semanticSimilarTo', { name })}
+      </Text>
+    </InputShell>
   );
 };
 
 /** Documents the closed date-token grammar the search box accepts. */
-const GallerySearchHelp = () => {
+export const GallerySearchHelp = () => {
   const { t } = useTranslation();
 
   return (
@@ -307,7 +308,7 @@ const GallerySearchHelp = () => {
       </Popover.Trigger>
       <Portal>
         <Popover.Positioner>
-          <Popover.Content maxW="18rem" p="3">
+          <PopoverContent maxW="18rem" p="3">
             <Stack gap="2">
               <Text fontSize="xs" fontWeight="600">
                 {t('widgets.gallery.searchHelpTitle')}
@@ -328,7 +329,7 @@ const GallerySearchHelp = () => {
                 ))}
               </Stack>
             </Stack>
-          </Popover.Content>
+          </PopoverContent>
         </Popover.Positioner>
       </Portal>
     </Popover.Root>
