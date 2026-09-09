@@ -269,6 +269,9 @@ const runRoundTrip = async ({ backend, browser, contexts, errors, tempDirectory 
     .getByRole('button', { exact: true, name: `Switch project. Current project: ${sourceProjectName}` })
     .click();
   await exportPage.getByRole('menuitem', { exact: true, name: 'Export' }).click();
+  await exportPage.getByRole('dialog', { name: `Export ${sourceProjectName}`, exact: true }).waitFor();
+  assert.equal(await exportPage.getByRole('checkbox', { name: 'Include font files', exact: true }).isChecked(), false);
+  await exportPage.getByRole('button', { name: 'Export project', exact: true }).click();
 
   const download = await downloadPromise;
   const archivePath = join(tempDirectory, 'fixture-project-002.invk');

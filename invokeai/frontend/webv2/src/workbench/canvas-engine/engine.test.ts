@@ -16472,6 +16472,26 @@ describe('text edit session', () => {
     engine.lifecycle.dispose();
   });
 
+  it('opening an edit on an unselected text layer selects it, so pane edits outlive the session', () => {
+    const { dispatch, engine } = makeEngine(textDoc({ selectedLayerId: null }));
+    engine.tools.setTool('text');
+    dispatch.mockClear();
+    engine.layers.openTextEdit('txt1');
+    expect(engine.stores.textEditSession.get()?.layerId).toBe('txt1');
+    expect(dispatch).toHaveBeenCalledWith({ id: 'txt1', type: 'setCanvasSelectedLayer' });
+    engine.lifecycle.dispose();
+  });
+
+  it('opening an edit on the selected text layer dispatches nothing', () => {
+    const { dispatch, engine } = makeEngine(textDoc());
+    engine.tools.setTool('text');
+    dispatch.mockClear();
+    engine.layers.openTextEdit('txt1');
+    expect(engine.stores.textEditSession.get()?.layerId).toBe('txt1');
+    expect(dispatch).not.toHaveBeenCalled();
+    engine.lifecycle.dispose();
+  });
+
   it('edit-mode commit dispatches ONE updateCanvasLayerSource with the exact inverse', () => {
     const { dispatch, engine, layerActions } = makeEngine(textDoc());
     engine.tools.setTool('text');

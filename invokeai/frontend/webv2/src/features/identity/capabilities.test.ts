@@ -22,6 +22,7 @@ describe('Identity route capabilities', () => {
       canManageImageMapVocabulary: false,
       canManageModels: false,
       canManageNodes: false,
+      canManageSharedFonts: false,
       canManagePromptTemplates: false,
       canManageUsers: false,
     });
@@ -33,6 +34,7 @@ describe('Identity route capabilities', () => {
       canManageImageMapVocabulary: true,
       canManageModels: true,
       canManageNodes: true,
+      canManageSharedFonts: true,
       canManagePromptTemplates: true,
       canManageUsers: false,
     });
@@ -54,6 +56,7 @@ describe('Identity route capabilities', () => {
       canManageImageMapVocabulary: false,
       canManageModels: false,
       canManageNodes: false,
+      canManageSharedFonts: false,
       canManagePromptTemplates: false,
       canManageUsers: false,
     });
@@ -62,6 +65,7 @@ describe('Identity route capabilities', () => {
       canManageImageMapVocabulary: true,
       canManageModels: true,
       canManageNodes: true,
+      canManageSharedFonts: true,
       canManagePromptTemplates: true,
       canManageUsers: true,
     });

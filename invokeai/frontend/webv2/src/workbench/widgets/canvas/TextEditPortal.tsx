@@ -5,11 +5,18 @@ import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent } from 'react';
 
 import { useNotify } from '@workbench/useNotify';
 import { useTextEditSession } from '@workbench/widgets/canvas/engineStoreHooks';
+import {
+  TextFontReadiness,
+  textFontKey,
+  textFontVariationSettings,
+  useResolvedTextFontFamily,
+} from '@workbench/widgets/canvas/textFontStyle';
 import { reportStructuralCommit } from '@workbench/widgets/canvas/useStructuralCommit';
-import { useCallback, useSyncExternalStore } from 'react';
+import { useCallback, useRef, useSyncExternalStore } from 'react';
 import { useTranslation } from 'react-i18next';
 
-type TextEditEngine = Pick<CanvasEngineHandle, 'interaction' | 'layers' | 'viewport'>;
+type TextEditEngine = Pick<CanvasEngineHandle, 'interaction' | 'layers' | 'viewport'> &
+  Partial<Pick<CanvasEngineHandle, 'fonts'>>;
 
 /**
  * The text-editing portal: a positioned `contenteditable` div, rendered over the
@@ -63,6 +70,25 @@ const placeCaretAtEnd = (el: HTMLElement): void => {
   selection.addRange(range);
 };
 
+/** Returns keyboard focus to the focusable CanvasSurface container after closing the editor. */
+const restoreCanvasFocus = (
+  surface: HTMLElement | null,
+  editable: HTMLElement,
+  ignoreNextBlur: { current: boolean }
+): void => {
+  if (!(surface instanceof HTMLElement) || surface.tabIndex !== -1) {
+    return;
+  }
+
+  if (document.activeElement === editable) {
+    ignoreNextBlur.current = true;
+  }
+  surface.focus({ preventScroll: true });
+  if (document.activeElement !== surface && ignoreNextBlur.current) {
+    ignoreNextBlur.current = false;
+  }
+};
+
 interface TextEditableProps {
   engine: TextEditEngine;
   session: TextEditSession;
@@ -78,6 +104,8 @@ const TextEditable = ({ engine, session }: TextEditableProps) => {
   useViewportTick(engine);
   const viewport = engine.viewport.getViewport();
   const { source, transform } = session;
+  const resolvedFontFamily = useResolvedTextFontFamily(engine.fonts, source);
+  const ignoreNextBlur = useRef(false);
 
   // Seeds content + focus once when the element mounts, and registers a live-
   // content reader with the engine so it can commit on a canvas pointerdown
@@ -115,7 +143,16 @@ const TextEditable = ({ engine, session }: TextEditableProps) => {
     },
     [engine, notify, t]
   );
-  const onBlur = useCallback((event: { currentTarget: HTMLElement }) => commit(event.currentTarget), [commit]);
+  const onBlur = useCallback(
+    (event: { currentTarget: HTMLElement }) => {
+      if (ignoreNextBlur.current) {
+        ignoreNextBlur.current = false;
+        return;
+      }
+      commit(event.currentTarget);
+    },
+    [commit]
+  );
 
   const onKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLDivElement>) => {
@@ -123,12 +160,20 @@ const TextEditable = ({ engine, session }: TextEditableProps) => {
       event.stopPropagation();
       if (event.key === 'Escape') {
         event.preventDefault();
+        const surface = event.currentTarget.parentElement;
         engine.layers.cancelTextEdit();
+        if (engine.interaction.get('textEditSession') === null) {
+          restoreCanvasFocus(surface, event.currentTarget, ignoreNextBlur);
+        }
         return;
       }
       if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
         event.preventDefault();
+        const surface = event.currentTarget.parentElement;
         commit(event.currentTarget);
+        if (engine.interaction.get('textEditSession') === null) {
+          restoreCanvasFocus(surface, event.currentTarget, ignoreNextBlur);
+        }
       }
     },
     [commit, engine]
@@ -142,8 +187,10 @@ const TextEditable = ({ engine, session }: TextEditableProps) => {
     border: 'none',
     color: source.color,
     cursor: 'text',
-    fontFamily: source.fontFamily,
+    fontFamily: resolvedFontFamily,
     fontSize: `${source.fontSize}px`,
+    fontStyle: source.fontStyle ?? 'normal',
+    fontVariationSettings: textFontVariationSettings(source) || 'normal',
     fontWeight: source.fontWeight,
     left: 0,
     lineHeight: source.lineHeight,
@@ -163,7 +210,8 @@ const TextEditable = ({ engine, session }: TextEditableProps) => {
 
   return (
     <div
-      aria-label="Text editor"
+      aria-label={t('widgets.canvas.toolOptions.textEdit')}
+      aria-multiline
       contentEditable
       dir="auto"
       ref={setRef}
@@ -183,5 +231,10 @@ export const TextEditPortal = ({ engine }: { engine: TextEditEngine }) => {
   if (!session) {
     return null;
   }
-  return <TextEditable key={session.id} engine={engine} session={session} />;
+  return (
+    <>
+      <TextFontReadiness key={textFontKey(session.source)} fonts={engine.fonts} source={session.source} />
+      <TextEditable key={session.id} engine={engine} session={session} />
+    </>
+  );
 };

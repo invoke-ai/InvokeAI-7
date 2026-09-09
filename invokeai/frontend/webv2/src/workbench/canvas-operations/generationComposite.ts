@@ -167,6 +167,9 @@ export const composeForGeneration = async (
   if (!documentSnapshot) {
     return { status: 'no-document' };
   }
+  if (options.signal.aborted) {
+    return { status: 'aborted' };
+  }
   const document = documentSnapshot.canvas.document;
   const bbox = document.bbox;
 
@@ -195,6 +198,14 @@ export const composeForGeneration = async (
     return capture;
   }
   const rasterSnapshot = capture.snapshot;
+
+  // A test/fallback host may resolve capture despite an already-aborted signal;
+  // preserve the no-pixel-output guarantee and release that caller-owned
+  // snapshot before returning.
+  if (options.signal.aborted) {
+    rasterSnapshot.release();
+    return { status: 'aborted' };
+  }
 
   // Operation-scoped dedupe: composites read/write a copy. Publication remains
   // provisional until the caller successfully compiles and dispatches.
@@ -228,7 +239,14 @@ export const composeForGeneration = async (
     // overlap the bbox is txt2img no matter the coverage. Also naturally skips a
     // zero-area bbox (`intersect` is null for empty rects). `intersect`'s strict
     // overlap matches generation's `rectsIntersect` (flush edges don't count).
-    const contentBounds = computeCompositeContentBounds(plan);
+    // The planner uses a DOM-free text extent estimate. Once capture has run,
+    // the detached surfaces provide actual measured rects, so a wide loaded
+    // font cannot be omitted from generation because its estimate was narrow.
+    const actualLayerRects = new Map<string, Rect>();
+    for (const [layerId, detached] of rasterSnapshot.layerSurfaces) {
+      actualLayerRects.set(layerId, detached.rect);
+    }
+    const contentBounds = computeCompositeContentBounds(plan, actualLayerRects);
 
     let mode: GenerationCompositeMode = 'txt2img';
     let baseImageName: string | null = null;
@@ -249,7 +267,7 @@ export const composeForGeneration = async (
       mode = options.detectMode({
         bbox,
         bboxFullyCovered: result.bboxFullyCovered,
-        contentBounds: result.contentBounds,
+        contentBounds,
         hasActiveInpaintMask: maskResult?.hasContent ?? false,
       });
 

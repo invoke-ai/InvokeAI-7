@@ -156,6 +156,14 @@ const surfaces = [
     ready: waitForProjects,
   },
   {
+    id: 'launchpad-fonts-empty',
+    path: '/#/fonts',
+    ready: async (page) => {
+      await page.getByRole('textbox', { exact: true, name: 'Search fonts' }).waitFor();
+      await page.getByText('No fonts available', { exact: true }).waitFor();
+    },
+  },
+  {
     id: 'launchpad-models-representative',
     path: '/#/models',
     ready: waitForModels,
@@ -270,13 +278,18 @@ const runKeyboardJourney = async (browser) => {
     await waitForHome(page);
 
     const projectsTab = page.getByRole('tab', { exact: true, name: 'Projects' });
+    const fontsTab = page.getByRole('tab', { exact: true, name: 'Fonts' });
     const modelsTab = page.getByRole('tab', { exact: true, name: 'Models' });
 
     // The rail is grouped, but it is still one tablist: arrowing off the last
     // Workspace tab has to land on the first Manage tab, skipping the headings.
     await projectsTab.focus();
     await projectsTab.press('ArrowDown');
-    await expectFocused(modelsTab, 'ArrowDown should move focus from Projects to Models.');
+    await expectFocused(fontsTab, 'ArrowDown should move focus from Projects to Fonts.');
+    assert.match(page.url(), /#\/fonts$/);
+    assert.equal(await fontsTab.getAttribute('aria-selected'), 'true');
+    await fontsTab.press('ArrowDown');
+    await expectFocused(modelsTab, 'ArrowDown should move focus from Fonts to Models.');
     await waitForModels(page);
     assert.match(page.url(), /#\/models$/);
     assert.equal(await modelsTab.getAttribute('aria-selected'), 'true');

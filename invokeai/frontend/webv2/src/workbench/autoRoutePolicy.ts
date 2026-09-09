@@ -121,6 +121,7 @@ const CANVAS_EDIT_CONFIDENCE = {
   mergeCanvasLayersDown: 'high',
   removeCanvasLayers: 'high',
   reorderCanvasSiblings: 'high',
+  replaceCanvasFontReferences: 'high',
   replaceCanvasDocument: 'none',
   replaceCanvasLayer: 'high',
   resizeCanvasDocument: 'high',

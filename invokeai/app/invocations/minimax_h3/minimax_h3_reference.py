@@ -200,16 +200,24 @@ class _ResolvedVideoRange:
         else:
             raise ValueError(f"Could not determine the frame rate of reference video {reference.video.video_name}.")
 
-        def resolve(value: int, name: str) -> int:
-            resolved = value + n_frames if value < 0 else value
-            if resolved < 0 or resolved >= n_frames:
-                raise ValueError(f"{name}={value} is out of range for a {n_frames}-frame reference video.")
-            return resolved
-
-        self.start = resolve(reference.start_frame, "start_frame")
-        self.end = resolve(reference.end_frame, "end_frame")
-        if self.start > self.end:
-            raise ValueError(f"start_frame ({self.start}) must not be after end_frame ({self.end}).")
+        start = reference.start_frame + n_frames if reference.start_frame < 0 else reference.start_frame
+        if start < 0 or start >= n_frames:
+            raise ValueError(
+                f"start_frame={reference.start_frame} is out of range for a {n_frames}-frame reference video."
+            )
+        self.start = start
+        # The sample LENGTH is pinned to what the clip can actually supply rather than
+        # rejected: "start here and take N frames" past the last frame reads as "take the
+        # rest of the clip", and the panel's frame count is an estimate the real count can
+        # undershoot. A start frame that is itself off the end has no such reading, and an
+        # end before the start is an inverted range, so both still raise.
+        end = reference.end_frame + n_frames if reference.end_frame < 0 else reference.end_frame
+        if end < self.start:
+            raise ValueError(
+                f"end_frame ({reference.end_frame} -> {end}) must not be before start_frame "
+                f"({reference.start_frame} -> {self.start})."
+            )
+        self.end = min(end, n_frames - 1)
 
 
 def load_reference_video_frames(

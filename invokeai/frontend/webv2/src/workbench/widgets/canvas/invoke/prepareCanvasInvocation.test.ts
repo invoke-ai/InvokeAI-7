@@ -604,7 +604,6 @@ describe('runCanvasInvocation', () => {
     const captureRasterSnapshot = vi.fn(() => Promise.resolve({ status: 'aborted' as const }));
     harness.host.captureRasterSnapshot = captureRasterSnapshot;
     harness.deps.signal = controller.signal;
-    controller.abort(new DOMException('invoke cancelled', 'AbortError'));
 
     await runCanvasInvocation(harness.deps);
 
@@ -614,6 +613,22 @@ describe('runCanvasInvocation', () => {
       expect.objectContaining({ signal: controller.signal })
     );
     expect(harness.submittedGraphs()).toHaveLength(0);
+  });
+
+  it('does not start raster capture when the orchestration signal is already aborted', async () => {
+    const harness = makeHarness();
+    const controller = new AbortController();
+    const captureRasterSnapshot = vi.fn(harness.host.captureRasterSnapshot);
+    harness.host.captureRasterSnapshot = captureRasterSnapshot;
+    harness.deps.signal = controller.signal;
+    controller.abort(new DOMException('invoke cancelled', 'AbortError'));
+
+    await runCanvasInvocation(harness.deps);
+
+    expect(captureRasterSnapshot).not.toHaveBeenCalled();
+    expect(harness.uploadImage).not.toHaveBeenCalled();
+    expect(harness.submittedGraphs()).toHaveLength(0);
+    expect(harness.notices()).toHaveLength(0);
   });
 
   it('quietly stops when its account signal expires during composition', async () => {

@@ -2,8 +2,10 @@ import type {
   CanvasDocumentContractV3,
   CanvasImageRef,
   CanvasLayerContract,
+  CanvasLayerSourceContract,
   CanvasStagingCandidateContract,
   CanvasStateContractV3,
+  CanvasTextFontRef,
 } from '@workbench/canvas-engine/contracts';
 import type { CanvasMutationOrigin } from '@workbench/canvas-engine/mutationContracts';
 import type { StrokeCommittedEvent } from '@workbench/canvas-engine/tools/tool';
@@ -34,6 +36,11 @@ import type {
   TransformSession,
 } from './engineStores';
 import type { RasterCompositeExportRequest, RasterCompositeExportResult } from './exportRasterComposite';
+import type {
+  CanvasFontReferenceGroup,
+  CanvasFontReplacementSummary,
+  CanvasFontReplacementTarget,
+} from './fontReferences';
 import type { CanvasProjectMutation } from './mutationContracts';
 import type { Rect, ToolId, Vec2 } from './types';
 import type { Viewport } from './viewport';
@@ -133,6 +140,23 @@ export interface CanvasInteractionStateCapability {
   getLayerThumbnailVersion(layerId: string): number | undefined;
   subscribeLayerThumbnailStatus(layerId: string, listener: () => void): () => void;
   subscribeLayerThumbnailVersion(layerId: string, listener: () => void): () => void;
+}
+
+/**
+ * Font resolution shared by Canvas rasterization and the editing portal.
+ * Implementations may return a browser-only family alias, but that alias must
+ * never be written into a persisted text source.
+ */
+export interface CanvasFontCapability {
+  resolveFamily(source: Extract<CanvasLayerSourceContract, { type: 'text' }>): string;
+  /** Starts/joins a live editor preview and isolates caller cancellation. */
+  ensurePreview(source: Extract<CanvasLayerSourceContract, { type: 'text' }>, signal?: AbortSignal): Promise<string>;
+  waitForReady(source: Extract<CanvasLayerSourceContract, { type: 'text' }>, signal?: AbortSignal): Promise<string>;
+  subscribe(listener: () => void): () => void;
+  /** Groups exact persisted custom references for missing-font recovery UI. */
+  collectReferences(document: CanvasDocumentContractV3): readonly CanvasFontReferenceGroup[];
+  /** Replaces every matching text source in one undoable structural edit. */
+  replaceAllReferences(from: CanvasTextFontRef, target: CanvasFontReplacementTarget): CanvasFontReplacementResult;
 }
 
 export interface CanvasCoreStoreCapability {
@@ -320,6 +344,10 @@ export type StructuralCommitResult =
   | { status: SubsetOf<CanvasTransactionOutcome, 'busy' | 'gesture-active' | 'not-ready'> | 'dispatch-rejected' }
   | { status: SubsetOf<CanvasTransactionOutcome, 'stale'>; expectedRevision: number; actualRevision: number }
   | { status: 'postcondition-failed'; recovered: 'reverted' | 'reverted-unmirrored' | 'unreverted' };
+
+export type CanvasFontReplacementResult =
+  | (CanvasFontReplacementSummary & { status: 'committed' | 'unchanged' })
+  | Exclude<StructuralCommitResult, { status: 'committed' }>;
 
 export interface StructuralCommitOptions {
   /** The edit revision the edit was prepared against; a mismatch refuses as `stale`. */
@@ -570,6 +598,7 @@ export interface CanvasEngine {
   readonly exports: CanvasEngineExportCapability;
   readonly diagnostics: CanvasDiagnosticsCapability;
   readonly interaction: CanvasInteractionStateCapability;
+  readonly fonts: CanvasFontCapability;
 }
 
 // Public Canvas-owned value contracts. These remain serializable and contain

@@ -968,6 +968,15 @@ export const startMockBackend = async (port, { profile = 'empty' } = {}) => {
         return json(200, []);
       }
 
+      if (method === 'GET' && path === '/api/v1/fonts') {
+        return json(200, {
+          items: [],
+          total: 0,
+          offset: Math.max(0, Number(url.searchParams.get('offset') ?? 0)),
+          limit: Number(url.searchParams.get('limit') ?? 100),
+        });
+      }
+
       // Dynamic prompt expansion. Enough of the `{a|b}` grammar for journeys to
       // exercise the preview and the batch dimension; the real generator lives
       // in the backend.

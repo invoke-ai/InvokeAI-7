@@ -27,7 +27,7 @@ export { rasterizeGradientSource } from './gradientRasterizer';
 export { rasterizeImageSource } from './imageRasterizer';
 export { rasterizePaintSource } from './paintRasterizer';
 export { rasterizeShapeSource } from './shapeRasterizer';
-export { rasterizeTextSource } from './textRasterizer';
+export { rasterizeTextSource, textFontString, textFontVariationSettings } from './textRasterizer';
 
 /**
  * Rasterizes any supported layer source into a surface. Throws only for the

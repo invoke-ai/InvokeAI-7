@@ -37,6 +37,21 @@ const rasterLayer = (
   ...overrides,
 });
 
+const textLayer = (id: string, overrides: Partial<CanvasRasterLayerContractV2> = {}): CanvasRasterLayerContractV2 =>
+  rasterLayer(id, {
+    source: {
+      align: 'left',
+      color: '#ffffff',
+      content: 'hello',
+      fontFamily: 'Inter',
+      fontSize: 20,
+      fontWeight: 400,
+      lineHeight: 1.2,
+      type: 'text',
+    },
+    ...overrides,
+  });
+
 const maskLayer = (id: string): CanvasLayerContract => ({
   autoNegative: false,
   blendMode: 'normal',
@@ -123,6 +138,72 @@ describe('planComposites — plan shape', () => {
     // Paint layers are content-sized: the persisted bitmap dims placed at its offset.
     expect(paint!.contentSize).toEqual({ height: 150, width: 200 });
     expect(paint!.contentOffset).toEqual({ x: 40, y: 25 });
+  });
+
+  it('includes committed text with its estimated content rect and complete source identity', () => {
+    const doc = makeDoc([textLayer('text')]);
+    const entry = planComposites(doc, BBOX).entries[0]!;
+    expect(entry.layers.map((layer) => layer.id)).toEqual(['text']);
+    expect(entry.layers[0]!.sourceRef).toContain('text:');
+    expect(entry.layers[0]!.contentSize).toEqual({ height: 24, width: 60 });
+
+    const edited = makeDoc([
+      textLayer('text', {
+        source: {
+          align: 'left',
+          color: '#ffffff',
+          content: 'edited text',
+          fontFamily: 'Inter',
+          fontSize: 20,
+          fontWeight: 400,
+          lineHeight: 1.2,
+          type: 'text',
+        },
+      }),
+    ]);
+    expect(planComposites(edited, BBOX).entries[0]!.key).not.toBe(entry.key);
+  });
+
+  it('keeps custom text in z-order over image content and keys the exact font reference', () => {
+    const fontRef = { contentHash: 'font-hash-v1', family: 'Studio Sans', id: 'font-studio', label: 'Studio Sans' };
+    const doc = makeDoc([
+      textLayer('text', {
+        source: {
+          align: 'left',
+          color: '#fff',
+          content: 'hello',
+          fontFamily: 'Studio Sans',
+          fontRef,
+          fontSize: 20,
+          fontWeight: 400,
+          lineHeight: 1.2,
+          type: 'text',
+        },
+      }),
+      rasterLayer('image'),
+    ]);
+    const entry = planComposites(doc, BBOX).entries[0]!;
+    expect(entry.layers.map((layer) => layer.id)).toEqual(['text', 'image']);
+    expect(entry.layers[0]!.contentSize).toEqual({ height: 24, width: 60 });
+    expect(entry.layers[0]!.sourceRef).toContain(JSON.stringify(fontRef.id));
+
+    const changedReference = makeDoc([
+      textLayer('text', {
+        source: {
+          align: 'left',
+          color: '#fff',
+          content: 'hello',
+          fontFamily: 'Studio Sans',
+          fontRef: { ...fontRef, contentHash: 'font-hash-v2' },
+          fontSize: 20,
+          fontWeight: 400,
+          lineHeight: 1.2,
+          type: 'text',
+        },
+      }),
+      rasterLayer('image'),
+    ]);
+    expect(planComposites(changedReference, BBOX).entries[0]!.key).not.toBe(entry.key);
   });
 
   it('excludes an empty (bitmap: null) paint layer so it cannot force outpaint', () => {

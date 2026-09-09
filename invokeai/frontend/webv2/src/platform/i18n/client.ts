@@ -8,10 +8,14 @@ void i18n
   .use(initReactI18next)
   .init({
     backend: {
-      loadPath: `${getDeploymentBaseUrl()}/locales/{{lng}}.json`,
+      loadPath: (_languages: readonly string[], namespaces: readonly string[]) =>
+        `${getDeploymentBaseUrl()}/locales/{{lng}}${namespaces[0] === 'fonts' ? '.fonts' : ''}.json`,
     },
     debug: false,
     fallbackLng: 'en',
+    fallbackNS: 'translation',
+    ns: ['translation'],
+    defaultNS: 'translation',
     interpolation: {
       escapeValue: false,
     },

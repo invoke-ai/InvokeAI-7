@@ -11,7 +11,13 @@
  * Zero React, zero import-time side effects.
  */
 
-import type { CanvasLayerSourceContract, ParametricShapeKind } from '@workbench/canvas-engine/contracts';
+import type {
+  CanvasLayerSourceContract,
+  CanvasTextFontRef,
+  CanvasTextFontStyle,
+  CanvasTextFontVariations,
+  ParametricShapeKind,
+} from '@workbench/canvas-engine/contracts';
 import type { SamInteractionState } from '@workbench/canvas-engine/samInteraction';
 import type { LayerTransform } from '@workbench/canvas-engine/transform/transformMath';
 import type { Rect, SelectionOp, ToolId, Vec2 } from '@workbench/canvas-engine/types';
@@ -179,6 +185,12 @@ export interface TextToolOptions {
   fontSize: number;
   /** CSS numeric weight (400/500/600/700). */
   fontWeight: number;
+  /** Stable custom-font identity, omitted for built-in font stacks. */
+  fontRef?: CanvasTextFontRef;
+  /** CSS style used by both the editing portal and Canvas rasterizer. Defaults to `normal`. */
+  fontStyle?: CanvasTextFontStyle;
+  /** Explicit OpenType variation coordinates for custom or variable faces. Defaults to `{}`. */
+  fontVariations?: CanvasTextFontVariations;
   /** Unitless line-height multiplier over `fontSize`. */
   lineHeight: number;
   align: 'left' | 'center' | 'right';
@@ -212,6 +224,8 @@ export const DEFAULT_TEXT_OPTIONS: TextToolOptions = {
   fontFamily: TEXT_FONT_FAMILIES[0]!.value,
   fontSize: 48,
   fontWeight: 400,
+  fontStyle: 'normal',
+  fontVariations: {},
   lineHeight: 1.2,
 };
 
@@ -706,10 +720,31 @@ const transformSessionEqual = (a: TransformSession | null, b: TransformSession |
   );
 };
 
+const textFontRefEqual = (a: CanvasTextFontRef | undefined, b: CanvasTextFontRef | undefined): boolean =>
+  a === b ||
+  (a !== undefined &&
+    b !== undefined &&
+    a.id === b.id &&
+    a.contentHash === b.contentHash &&
+    a.family === b.family &&
+    a.label === b.label);
+
+const textVariationsEqual = (
+  a: CanvasTextFontVariations | undefined,
+  b: CanvasTextFontVariations | undefined
+): boolean => {
+  const aKeys = Object.keys(a ?? {});
+  const bKeys = Object.keys(b ?? {});
+  return aKeys.length === bKeys.length && aKeys.every((key) => (a ?? {})[key] === (b ?? {})[key]);
+};
+
 const textOptionsEqual = (a: TextToolOptions, b: TextToolOptions): boolean =>
   a.fontFamily === b.fontFamily &&
   a.fontSize === b.fontSize &&
   a.fontWeight === b.fontWeight &&
+  textFontRefEqual(a.fontRef, b.fontRef) &&
+  a.fontStyle === b.fontStyle &&
+  textVariationsEqual(a.fontVariations, b.fontVariations) &&
   a.lineHeight === b.lineHeight &&
   a.align === b.align;
 
@@ -718,6 +753,9 @@ const textSourceEqual = (a: TextSource, b: TextSource): boolean =>
   a.fontFamily === b.fontFamily &&
   a.fontSize === b.fontSize &&
   a.fontWeight === b.fontWeight &&
+  textFontRefEqual(a.fontRef, b.fontRef) &&
+  (a.fontStyle ?? 'normal') === (b.fontStyle ?? 'normal') &&
+  textVariationsEqual(a.fontVariations ?? {}, b.fontVariations ?? {}) &&
   a.lineHeight === b.lineHeight &&
   a.align === b.align &&
   a.color === b.color;

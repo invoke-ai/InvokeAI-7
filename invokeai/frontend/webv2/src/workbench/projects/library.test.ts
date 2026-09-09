@@ -141,7 +141,7 @@ describe('refreshProjectLibrary', () => {
 
   it('identifies summaries that require a newer canvas reader without fetching the document', async () => {
     api.listProjects.mockResolvedValue([
-      { ...summaryDto('future', 'Future', '2026-06-10 10:00:00.000'), minimum_canvas_schema_version: 4 },
+      { ...summaryDto('future', 'Future', '2026-06-10 10:00:00.000'), minimum_canvas_schema_version: 5 },
     ]);
 
     await library.refreshProjectLibrary();

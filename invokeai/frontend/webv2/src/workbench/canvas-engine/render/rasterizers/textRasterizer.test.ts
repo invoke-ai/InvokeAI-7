@@ -7,7 +7,13 @@ import { describe, expect, it } from 'vitest';
 import type { TextSource } from './textRasterizer';
 import type { RasterizeDeps } from './types';
 
-import { estimateTextExtent, rasterizeTextSource, TEXT_CHAR_WIDTH_FACTOR, textFontString } from './textRasterizer';
+import {
+  estimateTextExtent,
+  rasterizeTextSource,
+  TEXT_CHAR_WIDTH_FACTOR,
+  textFontString,
+  textFontVariationSettings,
+} from './textRasterizer';
 
 const makeDeps = (): RasterizeDeps => {
   const backend = createTestStubRasterBackend();
@@ -45,6 +51,29 @@ describe('rasterizeTextSource — measurement + extent', () => {
     const surface = (await rasterizeTextSource(source, deps)).surface as StubRasterSurface;
     expect(surface.width).toBe(stubWidth(5, 20)); // 'hello' = 5 chars → 60
     expect(surface.height).toBe(Math.ceil(1 * 20 * 1.5)); // one line → 30
+  });
+
+  it('uses the injected runtime family and preserves style and variation coordinates', async () => {
+    const deps = { ...makeDeps(), resolveFontFamily: () => '__invoke_font_1' };
+    const source = text({
+      fontStyle: 'italic',
+      fontVariations: { wght: 650, opsz: 14 },
+    });
+    const surface = (await rasterizeTextSource(source, deps)).surface as StubRasterSurface;
+
+    expect(textFontString(source, '__invoke_font_1')).toBe('italic 400 20px __invoke_font_1');
+    expect(textFontVariationSettings(source)).toBe('"opsz" 14, "wght" 650');
+    expect(
+      surface.callLog.some(
+        (entry) => entry.op === 'set' && entry.args[0] === 'font' && entry.args[1] === 'italic 400 20px __invoke_font_1'
+      )
+    ).toBe(true);
+    expect(
+      surface.callLog.some(
+        (entry) =>
+          entry.op === 'set' && entry.args[0] === 'fontVariationSettings' && entry.args[1] === '"opsz" 14, "wght" 650'
+      )
+    ).toBe(true);
   });
 
   it('agrees with the pure estimateTextExtent (cache-size stability)', async () => {

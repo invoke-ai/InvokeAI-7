@@ -8,7 +8,7 @@ import { brushForm, eraserForm } from '@workbench/widgets/canvas/tool-options/pa
 import { selectObjectOperationForm } from '@workbench/widgets/canvas/tool-options/SamOptions';
 import { lassoForm, marqueeForm } from '@workbench/widgets/canvas/tool-options/selectionForm';
 import { shapeForm } from '@workbench/widgets/canvas/tool-options/ShapeOptions';
-import { textForm } from '@workbench/widgets/canvas/tool-options/TextOptions';
+import { textForm } from '@workbench/widgets/canvas/tool-options/textForm';
 
 import type { CanvasOperationKind, OperationPropertyForm, ToolPropertyForm } from './toolFormContracts';
 

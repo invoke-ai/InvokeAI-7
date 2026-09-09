@@ -94,7 +94,10 @@ def test_minimax_h3_bundle_contains_working_set_and_turbo_loras() -> None:
     lora_sources = {m.source for m in loras}
     assert "larryvrh/MiniMax-H3-Turbo-Lora::minimax_h3_turbo_v4_step600_ema.safetensors" in lora_sources
     assert "lightx2v/Minimax-h3-Turbo::minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors" in lora_sources
-    assert "Comfy-Org/MiniMax-H3::loras/minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors" in lora_sources
+    assert "lightx2v/Minimax-h3-Turbo::minimax_h3_ref2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors" in lora_sources
+    # The 4-step v0.1 Ref2V repack pans the camera whenever a video reference is used; it
+    # must not come back as a starter.
+    assert not any("ref2v_turbo_4step_v0.1" in s for s in lora_sources)
 
 
 def test_minimax_h3_bundle_models_are_registered_in_starter_models() -> None:

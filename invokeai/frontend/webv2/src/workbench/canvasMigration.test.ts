@@ -485,7 +485,7 @@ describe('loadCanvasState', () => {
   });
 
   it.each([
-    ['a future outer version', { ...createEmptyCanvasState(), version: 4 }, 'state', 4],
+    ['a future outer version', { ...createEmptyCanvasState(), version: 5 }, 'state', 5],
     ['an older outer version', { ...createEmptyCanvasState(), version: 2 }, 'state', 2],
     ['a legacy version', { ...createEmptyCanvasState(), version: 1 }, 'state', 1],
     [
@@ -498,10 +498,10 @@ describe('loadCanvasState', () => {
       'a snapshot of another version',
       {
         ...createEmptyCanvasState(),
-        snapshots: [{ createdAt: 'now', document: { ...createEmptyCanvasDocument(), version: 4 }, id: 'f', name: 'F' }],
+        snapshots: [{ createdAt: 'now', document: { ...createEmptyCanvasDocument(), version: 5 }, id: 'f', name: 'F' }],
       },
       'snapshot',
-      4,
+      5,
     ],
   ])('refuses %s before parsing anything', (_label, raw, scope, version) => {
     expect(refusal(raw)).toEqual({ raw, scope, status: 'unsupported-version', version });
@@ -539,6 +539,80 @@ describe('loadCanvasState', () => {
       scope: 'document',
       status: 'invalid',
     });
+  });
+
+  it('reads a v3 canvas and keeps the compatibility floor when no v4 typography is present', () => {
+    const current = createEmptyCanvasState();
+    const legacy = {
+      ...current,
+      document: { ...current.document, version: 3 as const },
+      version: 3 as const,
+    };
+
+    expect(load(legacy)).toEqual(legacy);
+  });
+
+  it('adopts v4 when a v3 canvas contains custom-font typography', () => {
+    const current = createEmptyCanvasState();
+    const textLayer = {
+      ...createEmptyPaintLayer('Text', 'text'),
+      source: {
+        align: 'left',
+        color: '#fff',
+        content: 'hello',
+        fontFamily: 'Example',
+        fontRef: { contentHash: 'a'.repeat(64), family: 'Example', id: 'font-1', label: 'Example Regular' },
+        fontSize: 24,
+        fontStyle: 'italic' as const,
+        fontVariations: { wght: 650 },
+        fontWeight: 650,
+        lineHeight: 1.2,
+        type: 'text' as const,
+      },
+    };
+    const legacy = {
+      ...current,
+      document: {
+        ...current.document,
+        stacks: { ...current.document.stacks, raster: [textLayer] },
+        version: 3 as const,
+      },
+      version: 3 as const,
+    };
+
+    const loaded = load(legacy);
+    expect(loaded.version).toBe(4);
+    expect(loaded.document.version).toBe(4);
+    expect(loaded.document.stacks.raster[0]).toMatchObject({ source: textLayer.source });
+  });
+
+  it('refuses a custom-font reference whose content hash is not a lowercase SHA-256', () => {
+    const current = createEmptyCanvasState();
+    const textLayer = {
+      ...createEmptyPaintLayer('Text', 'text'),
+      source: {
+        align: 'left',
+        color: '#fff',
+        content: 'hello',
+        fontFamily: 'Example',
+        fontRef: { contentHash: 'hash-a', family: 'Example', id: 'font-1', label: 'Example Regular' },
+        fontSize: 24,
+        fontWeight: 400,
+        lineHeight: 1.2,
+        type: 'text' as const,
+      },
+    };
+    const legacy = {
+      ...current,
+      document: {
+        ...current.document,
+        stacks: { ...current.document.stacks, raster: [textLayer] },
+        version: 3 as const,
+      },
+      version: 3 as const,
+    };
+
+    expect(refusal(legacy)).toMatchObject({ scope: 'document', status: 'invalid' });
   });
 
   it('passes a valid state through normalized, keeping every persisted field', () => {

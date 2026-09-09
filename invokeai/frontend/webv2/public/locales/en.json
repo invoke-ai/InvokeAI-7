@@ -80,6 +80,7 @@
       "workflows": "Workflows"
     },
     "launchpad": {
+      "goToFonts": "Go to Fonts",
       "goToModels": "Go to Models",
       "goToNodes": "Go to Nodes",
       "goToProjects": "Go to Projects",
@@ -506,7 +507,18 @@
       "name": "Name"
     },
     "unpin": "Unpin",
-    "viewLabel": "Project layout"
+    "viewLabel": "Project layout",
+    "fonts": {
+      "exportTitle": "Export {{name}}",
+      "includeFiles": "Include font files",
+      "exportDescription": "Without font files, recipients may need to install or replace fonts used in this project.",
+      "rightsReminder": "Only include fonts you have permission to redistribute. Recipients import them into their private libraries.",
+      "exportAction": "Export project",
+      "importTitle": "Font storage limit reached",
+      "quotaDescription": "This server has insufficient font storage. Import with font references, then install or replace missing fonts before generating or exporting images.",
+      "importReferences": "Import without font files",
+      "installing": "Installing fonts {{completed}} / {{total}}"
+    }
   },
   "users": {
     "accountCount_one": "{{count}} account in this workspace.",
@@ -559,6 +571,82 @@
     "updated": "User updated",
     "user": "User",
     "you": "You"
+  },
+  "fonts": {
+    "title": "Fonts",
+    "description": "Browse fonts available to this Invoke workspace and add your own files.",
+    "filterLabel": "Font library scope",
+    "filterMenu": "Filter fonts",
+    "library": "Font library",
+    "filters": {
+      "all": "All",
+      "my": "My fonts",
+      "shared": "Shared"
+    },
+    "searchLabel": "Search fonts",
+    "searchPlaceholder": "Search fonts…",
+    "upload": "Upload fonts",
+    "uploadShared": "Upload shared",
+    "loadMore": "Load more fonts",
+    "loadingMore": "Loading more fonts…",
+    "uploadScopeLabel": "Upload destination",
+    "rescan": "Rescan directory",
+    "scope": {
+      "private": "My font",
+      "shared": "Shared"
+    },
+    "source": {
+      "directory": "Server directory",
+      "uploaded": "Uploaded"
+    },
+    "previewText": "The quick brown fox jumps over the lazy dog.",
+    "loadingPreview": "Loading preview…",
+    "retryPreview": "Retry preview",
+    "axisCount_one": "{{count}} axis",
+    "axisCount_other": "{{count}} axes",
+    "namedInstances_one": "{{count}} named instance",
+    "namedInstances_other": "{{count}} named instances",
+    "fileSize": "{{bytes}}",
+    "emptyTitle": "No fonts available",
+    "emptyDescription": "Upload a TTF, OTF, WOFF, or WOFF2 file, or add one to the server fonts directory.",
+    "noSearchMatches": "No fonts match this search",
+    "noSearchMatchesDescription": "Try a different name or clear the search.",
+    "couldNotLoad": "Could not load fonts",
+    "rescanFailed": "Could not rescan the fonts directory",
+    "uploading": "Uploading…",
+    "uploaded": "Uploaded",
+    "duplicate": "Already available",
+    "uploadFailed": "Upload failed",
+    "deleteNamed": "Delete {{name}}",
+    "deleteTitle": "Delete font?",
+    "deleteBody": "Delete {{name}}? Existing projects keep their reference and may need a replacement.",
+    "deleteConfirm": "Delete font",
+    "deleteFailed": "Could not delete the font",
+    "missing": {
+      "warning_one": "Missing font — review",
+      "warning_other": "Missing fonts — review",
+      "title": "Missing fonts",
+      "description": "Some text fonts are unavailable. Previews use a fallback. Export, baking, and generation that use this text remain blocked until its fonts are restored or replaced.",
+      "continue": "Continue with previews",
+      "layers_one": "Used by {{count}} text layer",
+      "layers_other": "Used by {{count}} text layers",
+      "search": "Search replacement fonts",
+      "replacement": "Replacement font",
+      "select": "Select a replacement",
+      "upload": "Upload font",
+      "replaceAll": "Replace all uses",
+      "axesNotice": "Replacement preserves supported variation axes within their limits and resets unsupported axes. You can undo this change.",
+      "catalogError": "Unable to load the font library. Retry to reconnect.",
+      "failed": "The font could not be replaced. Finish the current Canvas operation and retry."
+    },
+    "addFonts": "Add Fonts",
+    "details": "Details",
+    "selectFont": "Select a font",
+    "selectFontDescription": "Choose a font from your library to preview it and view its details.",
+    "uploadDescription": "Upload TTF, OTF, WOFF or WOFF2 files. My fonts are private to your account; shared fonts are available to everyone on this server.",
+    "axesTitle": "Variation axes",
+    "axisDefault": "Default {{value}}",
+    "instancesTitle": "Named instances"
   },
   "graphPreview": {
     "back": "Back",
@@ -1460,7 +1548,8 @@
       "models": "Models",
       "nodes": "Nodes",
       "projects": "Projects",
-      "users": "Users"
+      "users": "Users",
+      "fonts": "Fonts"
     },
     "sectionsLabel": "Launchpad sections"
   },
@@ -1818,6 +1907,7 @@
       },
       "rows": {
         "color": "Color",
+        "fill": "Fill",
         "kind": "Kind",
         "width": "Width",
         "angle": "Angle",
@@ -1826,7 +1916,7 @@
         "family": "Family",
         "size": "Size",
         "weight": "Weight",
-        "lineHeight": "Leading",
+        "lineHeight": "Line height",
         "align": "Align",
         "aspect": "Aspect",
         "shape": "Shape",
@@ -2767,7 +2857,18 @@
         "textColor": "Text color",
         "textEdit": "Edit text",
         "textFont": "Font",
+        "textFontBuiltinGroup": "Built-in",
+        "textFontCustomGroup": "Custom",
+        "textFontDefaultPreset": "Default",
+        "textFontHideAdvancedAxes": "Hide hidden axes",
         "textLineHeight": "Line height",
+        "textFontPreset": "Preset",
+        "textFontResetAxes": "Reset axes",
+        "textFontShowAdvancedAxes": "Show hidden axes",
+        "textFontStyle": "Style",
+        "textFontStyleItalic": "Italic",
+        "textFontStyleNormal": "Regular",
+        "textFontStyleOblique": "Oblique",
         "textSize": "Font size",
         "textWeight": "Weight",
         "gradientPairPreset": "Foreground to background preset"
@@ -3757,7 +3858,7 @@
       "referenceDetailMax": "Max detail (2048px, slower)",
       "referenceExtendCapFull": "Initial video not set",
       "referenceExtendCapFullDescription": "All 3 video reference slots are in use, so there is no room for the continuity reference this clip needs. Remove a video reference, then drop the clip again.",
-      "referenceExtendHelp": "The generated video is appended to this clip at its End Frame. A linked video reference samples up to the last ~5 seconds before that cutpoint for continuity — never more than the generated clip's own length, since the model discards the overrun at the seam. Its trim re-derives whenever the cutpoints or the frame count change.",
+      "referenceExtendHelp": "The generated video is appended to this clip at its End Frame. A linked video reference samples up to the last ~5 seconds before that cutpoint for continuity — never more than the generated clip's own length, since the model discards the overrun at the end of the window. That trim is only a default: it re-derives whenever the cutpoints or the frame count change, until you move the reference's own Start Frame or Sample Length, after which it is left alone. Clear and re-set this clip to get the default back.",
       "referenceImageCapRace": "All {{max}} image reference slots filled while this one was loading, so it was not added.",
       "referenceImageCost": "{{width}}×{{height}} · {{rows}} rows per step",
       "referenceVideoCapRace": "All {{max}} video or audio reference slots filled while this one was loading, so it was not added.",

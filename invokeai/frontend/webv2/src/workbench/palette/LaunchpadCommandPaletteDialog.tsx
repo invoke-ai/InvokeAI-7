@@ -46,6 +46,7 @@ const LaunchpadCommandPaletteDialog = ({
         run: () => void navigate({ search: search.project ? { project: search.project } : {}, to: '/app' }),
       }),
       navEntry({ id: 'goToProjects', run: () => void navigate({ to: '/projects' }) }),
+      navEntry({ id: 'goToFonts', keywords: 'font typeface typography', run: () => void navigate({ to: '/fonts' }) }),
       ...(canManageModels ? [navEntry({ id: 'goToModels', run: () => void navigate({ to: '/models' }) })] : []),
       ...(canManageNodes ? [navEntry({ id: 'goToNodes', run: () => void navigate({ to: '/nodes' }) })] : []),
       ...(canManageUsers ? [navEntry({ id: 'goToUsers', run: () => void navigate({ to: '/users' }) })] : []),
