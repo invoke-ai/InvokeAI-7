@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
 import { resolve } from 'node:path';
 import process from 'node:process';
 import { chromium } from 'playwright';
@@ -7,6 +6,7 @@ import { chromium } from 'playwright';
 import { assertNoAxeViolations } from './accessibility/axe.mjs';
 import { MOCK_BACKEND_REPRESENTATIVE_VIDEO_NAME } from './mock-backend-fixtures.mjs';
 import { startMockBackend } from './mock-backend.mjs';
+import { killPreview, spawnPreview } from './preview-server.mjs';
 
 const root = resolve(import.meta.dirname, '..');
 const port = Number(process.env.INVOKEAI_ACCESSIBILITY_PORT ?? 4178);
@@ -967,16 +967,12 @@ const runSettingsJourney = async (browser) => {
 };
 
 const mockBackend = await startMockBackend(backendPort, { profile: 'representative' });
-const preview = spawn(
-  'pnpm',
-  ['exec', 'vite', 'preview', '--host', '127.0.0.1', '--port', String(port), '--strictPort'],
-  {
-    cwd: root,
-    detached: true,
-    env: { ...process.env, INVOKEAI_DEV_BACKEND: backendOrigin },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  }
-);
+const preview = spawnPreview({
+  cwd: root,
+  env: { ...process.env, INVOKEAI_DEV_BACKEND: backendOrigin },
+  port,
+  stdio: ['ignore', 'pipe', 'pipe'],
+});
 let previewError = '';
 let browser = null;
 
@@ -1027,7 +1023,7 @@ try {
 
   if (preview.pid) {
     try {
-      process.kill(-preview.pid, 'SIGTERM');
+      killPreview(preview.pid, 'SIGTERM');
     } catch {
       // Preview may already have exited after a startup failure.
     }

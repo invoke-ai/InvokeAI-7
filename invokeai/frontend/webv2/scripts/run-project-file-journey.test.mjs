@@ -25,7 +25,7 @@ const createSuccessfulDependencies = (events, overrides = {}) => {
       events.push('temp:create');
       return '/tmp/project-file-journey-test';
     },
-    killProcessGroup: (_pid, signal) => {
+    killPreview: (_pid, signal) => {
       events.push(`preview:${signal}`);
       queueMicrotask(() => preview.emit('exit', 0, signal));
     },
@@ -80,7 +80,7 @@ test('the deadline starts before setup and disposes a backend that resolves afte
 test('teardown attempts every owned resource and preserves the primary failure', async () => {
   const events = [];
   const { dependencies, preview } = createSuccessfulDependencies(events, {
-    killProcessGroup: (_pid, signal) => {
+    killPreview: (_pid, signal) => {
       events.push(`preview:${signal}`);
 
       if (signal === 'SIGKILL') {
