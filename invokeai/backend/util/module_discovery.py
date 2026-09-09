@@ -18,6 +18,9 @@ def _reraise(name: str) -> None:
     `__init__.py` is broken" into "the things it holds quietly do not exist" — the exact failure
     mode a registry filled by import is meant to avoid.
     """
+    # `walk_packages` calls this from inside its own `except ImportError`, so the original failure
+    # is chained implicitly and the traceback shows the offending file and line above this message.
+    # An explicit `raise ... from` would need `sys.exc_info()` and would only change the wording.
     raise ImportError(f"Failed to walk package {name!r} while discovering modules.")
 
 

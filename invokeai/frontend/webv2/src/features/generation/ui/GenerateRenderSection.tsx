@@ -37,6 +37,12 @@ import { GenerateToggleSwitch } from './shared/GenerateToggleSwitch';
 
 const STEPS_SLIDER_MAX = 100;
 
+/** The guidance/CFG slider's practical range. FLUX Fill recommends 30, which is off the track but
+ *  a real value, so the number input keeps its own looser bound — without it the field clamps the
+ *  model's own default away the first time it is focused. The node itself declares no upper bound. */
+const GUIDANCE_SLIDER_MAX = 10;
+const GUIDANCE_INPUT_MAX = 100;
+
 const SEED_END_ELEMENT_PROPS = { pointerEvents: 'auto', pr: '0.5' } as const;
 
 interface GenerateRenderSectionProps {
@@ -406,8 +412,9 @@ export const GenerateRenderSection = ({
               ariaLabel={policy.ui.guidanceLabel}
               defaultValue={modelDefaults?.cfgScale}
               marks={modelDefaults ? [modelDefaults.cfgScale] : undefined}
-              max={10}
+              max={GUIDANCE_SLIDER_MAX}
               min={0}
+              numberInputMax={GUIDANCE_INPUT_MAX}
               resetLabel={t('widgets.generate.useModelDefaultField', { field: policy.ui.guidanceLabel })}
               step={0.5}
               value={settings.cfgScale}

@@ -17,6 +17,7 @@ from invokeai.backend.quantization.fp8_scaled import (
     extract_comfy_quant_hints,
     extract_fp8_scaled_layers,
 )
+from tests.backend.model_manager.load.state_dicts.utils import token_extents
 from tests.backend.model_manager.load.state_dicts.z_image_transformer_scaled_fp8_keys import (
     state_dict_keys as scaled_keys,
 )
@@ -28,9 +29,9 @@ def _mock_state_dict(scale_value: float = 4.0) -> dict[str, torch.Tensor]:
     sd: dict[str, torch.Tensor] = {}
     for key, (shape, dtype) in scaled_keys.items():
         if key.endswith(".scale_weight"):
-            sd[key] = torch.full(shape, scale_value, dtype=torch.float32)
+            sd[key] = torch.full(token_extents(shape), scale_value, dtype=torch.float32)
         else:
-            sd[key] = torch.ones(shape, dtype=torch.float32).to(_DTYPES[dtype])
+            sd[key] = torch.ones(token_extents(shape), dtype=_DTYPES[dtype])
     return sd
 
 

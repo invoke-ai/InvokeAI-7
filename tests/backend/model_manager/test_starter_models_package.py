@@ -6,11 +6,13 @@ per-architecture modules, and the first test here is what stops a later tidy-up 
 """
 
 import ast
+import importlib
 import pkgutil
 from pathlib import Path
 
 import invokeai.backend.model_manager.starter_models as starters
 from invokeai.backend.model_manager.starter_models import STARTER_BUNDLES, STARTER_MODELS
+from invokeai.backend.model_manager.starter_models.types import StarterModel
 from invokeai.backend.model_manager.taxonomy import BaseModelType
 
 PACKAGE_DIR = Path(starters.__file__).parent
@@ -85,3 +87,38 @@ def test_the_package_splits_along_the_lines_it_claims() -> None:
     # `architectures/defs/`: the base value with `-` replaced by `_`.
     known = {b.value.replace("-", "_") for b in BaseModelType}
     assert architecture_modules <= known, sorted(architecture_modules - known)
+
+
+# Defined but reachable from nothing: not in `STARTER_MODELS`, not in a bundle, and not a dependency
+# of anything that is. Both pre-date the package split — they are recorded rather than removed
+# because deleting curated product data is a product decision, not a refactor's. The point of the
+# list is that it is closed: a *new* orphan fails the test below instead of joining them silently.
+KNOWN_UNREACHABLE = {
+    "ESRGAN_SRx4_DF2KOST_official",
+    "FLUX.1 Kontext dev",
+}
+
+
+def test_every_defined_model_is_reachable() -> None:
+    """A `StarterModel` defined in a submodule but never listed is invisible to users.
+
+    Before the split this was one file, where an unreferenced definition was at least visible while
+    scrolling past it. Across nineteen modules nothing shows it — the dialog simply never offers the
+    model, which looks like it was never added.
+    """
+    reachable = {id(m) for m in STARTER_MODELS}
+    reachable |= {id(m) for models in STARTER_BUNDLES.values() for m in models}
+    # One pass is enough: dependencies are leaves, and none declares dependencies of its own.
+    reachable |= {id(d) for m in STARTER_MODELS for d in (m.dependencies or [])}
+
+    orphans = set()
+    for info in pkgutil.iter_modules([str(PACKAGE_DIR)]):
+        module = importlib.import_module(f"{starters.__name__}.{info.name}")
+        for name, value in vars(module).items():
+            if isinstance(value, StarterModel) and not name.startswith("_") and id(value) not in reachable:
+                orphans.add(value.name)
+
+    assert sorted(orphans - KNOWN_UNREACHABLE) == []
+    assert sorted(KNOWN_UNREACHABLE - orphans) == [], (
+        "a known-unreachable model became reachable; drop it from the list"
+    )

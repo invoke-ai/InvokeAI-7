@@ -25,7 +25,7 @@ from invokeai.backend.architectures.facets.features import (
 )
 from invokeai.backend.architectures.facets.latent_space import LatentSpaceFacet
 from invokeai.backend.architectures.facets.modality import GenerationModeKind, ModalityFacet
-from invokeai.backend.architectures.registry import generative_bases, get
+from invokeai.backend.architectures.registry import generative_bases, require
 from invokeai.backend.model_manager.configs.default_settings import MainModelDefaultSettings
 from invokeai.backend.model_manager.taxonomy import BaseModelType
 
@@ -135,13 +135,12 @@ def architecture_capabilities() -> list[ArchitectureCapabilities]:
     """
     rows: list[ArchitectureCapabilities] = []
     for base in sorted(generative_bases(), key=lambda b: b.value):
-        modality = get(base, ModalityFacet)
-        features = get(base, FeaturesFacet)
-        latent_space = get(base, LatentSpaceFacet)
-        defaults = get(base, DefaultSettingsFacet)
         # All four are REQUIRED, so `validate()` has already refused to start without them.
-        assert modality is not None and features is not None and latent_space is not None
-        assert defaults is not None
+        # `require()` rather than `assert`: this is an API path, and `python -O` drops asserts.
+        modality = require(base, ModalityFacet)
+        features = require(base, FeaturesFacet)
+        latent_space = require(base, LatentSpaceFacet)
+        defaults = require(base, DefaultSettingsFacet)
 
         rendered = ArchitectureModality(modes=sorted(modality.modes), metadata_slug=modality.metadata_slug)
         rendered_features = _features_of(features, latent_space.primary.spatial_compression)

@@ -21,6 +21,7 @@ from invokeai.backend.quantization.fp8_scaled import (
 from tests.backend.model_manager.load.state_dicts.flux1_transformer_scaled_fp8_keys import (
     state_dict_keys as scaled_keys,
 )
+from tests.backend.model_manager.load.state_dicts.utils import token_extents
 
 _DTYPES = {"F8_E4M3": FP8_DTYPE, "F32": torch.float32, "BF16": torch.bfloat16}
 
@@ -30,13 +31,13 @@ def _build_state_dict() -> dict[str, torch.Tensor]:
     for key, (shape, dtype) in scaled_keys.items():
         torch_dtype = _DTYPES[dtype]
         if torch_dtype is FP8_DTYPE:
-            sd[key] = torch.zeros(shape, dtype=torch.float32).to(FP8_DTYPE)
+            sd[key] = torch.zeros(token_extents(shape), dtype=FP8_DTYPE)
         elif key.endswith((".scale_weight", ".scale_input")):
             # Real checkpoints carry calibrated scales; 1.0 is the placeholder value that
             # `_usable_input_scale` deliberately rejects, so it must not be used here.
-            sd[key] = torch.full(shape, 2.5, dtype=torch_dtype)
+            sd[key] = torch.full(token_extents(shape), 2.5, dtype=torch_dtype)
         else:
-            sd[key] = torch.zeros(shape, dtype=torch_dtype)
+            sd[key] = torch.zeros(token_extents(shape), dtype=torch_dtype)
     return sd
 
 
@@ -131,9 +132,9 @@ def test_bundle_conversion_keeps_the_scales_at_full_precision() -> None:
         "model.diffusion_model.double_blocks.0.img_attn.norm.key_norm.scale": torch.ones(128, dtype=torch.float32),
         "model.diffusion_model.double_blocks.0.img_attn.qkv.weight_scale": torch.full((), 2.5, dtype=torch.float32),
         "model.diffusion_model.double_blocks.0.img_attn.qkv.scale_weight": torch.full((), 2.5, dtype=torch.float32),
-        "model.diffusion_model.double_blocks.0.img_attn.qkv.weight": torch.zeros(9216, 3072, dtype=torch.float32).to(
-            FP8_DTYPE
-        ),
+        # Allocated as fp8 directly: the float32 round trip this once took is four bytes per
+        # element for a result that holds one.
+        "model.diffusion_model.double_blocks.0.img_attn.qkv.weight": torch.zeros(9216, 3072, dtype=FP8_DTYPE),
     }
 
     converted = convert_bundle_to_flux_transformer_checkpoint(sd)

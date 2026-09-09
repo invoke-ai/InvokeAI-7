@@ -26,6 +26,7 @@ import {
   isReferenceImageSupported,
   isSupportedGenerateModel,
 } from './baseGenerationPolicies';
+import { SUPPORTED_GENERATE_BASES } from './supportedBases';
 
 const createModel = (base: string, overrides: Partial<MainModelConfig> = {}): MainModelConfig => ({
   base,
@@ -1224,5 +1225,32 @@ describe('the guidance slider value from a model record', () => {
     const model = createModel('sdxl', { default_settings: { cfg_scale: 6.5, steps: 30 } } as Partial<MainModelConfig>);
 
     expect(getDefaultGenerateSettings(model).cfgScale).toBe(6.5);
+  });
+
+  it('ignores a guidance a CFG-labelled model also records', () => {
+    // `default_settings.guidance` is editable on *every* main model — it is in MAIN_FIELDS
+    // unconditionally (`defaultSettingsFields.ts`), not gated on base. So an SDXL record can carry
+    // one, and it must not displace the cfg_scale that base actually generates with. The case above
+    // has only cfg_scale set and would pass either way round.
+    const model = createModel('sdxl', {
+      default_settings: { cfg_scale: 7, guidance: 4, steps: 30 },
+    } as Partial<MainModelConfig>);
+
+    expect(getDefaultGenerateSettings(model).cfgScale).toBe(7);
+  });
+
+  it('reads the right field for every base in the table', () => {
+    // Swept rather than sampled: a base added to the capability table with the wrong label picks
+    // the wrong field silently, and the three cases above only name three bases.
+    for (const base of SUPPORTED_GENERATE_BASES) {
+      const model = createModel(base, {
+        default_settings: { cfg_scale: 7, guidance: 30 },
+      } as Partial<MainModelConfig>);
+      const label = getGenerationModelPolicy(model, createSettings(model)).ui.guidanceLabel;
+
+      expect(getDefaultGenerateSettings(model).cfgScale, `${base} (${label}) read the wrong field`).toBe(
+        label === 'Guidance' ? 30 : 7
+      );
+    }
   });
 });
