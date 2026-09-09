@@ -5,9 +5,10 @@ from invokeai.backend.architectures.facets.default_settings import DefaultSettin
 from invokeai.backend.architectures.facets.features import FeaturesFacet, NegativePrompt
 from invokeai.backend.architectures.facets.latent_space import SD15_4, LatentSpaceFacet
 from invokeai.backend.architectures.facets.modality import ModalityFacet
+from invokeai.backend.architectures.facets.variant import VariantFacet
 from invokeai.backend.architectures.registry import register
 from invokeai.backend.model_manager.configs.default_settings import MainModelDefaultSettings
-from invokeai.backend.model_manager.taxonomy import BaseModelType
+from invokeai.backend.model_manager.taxonomy import BaseModelType, ModelType, ModelVariantType
 from invokeai.backend.stable_diffusion.diffusion.conditioning_data import BasicConditioningInfo
 
 # SD 2.x previews with the SD 1.x factors; same four-channel VAE.
@@ -34,4 +35,5 @@ register(
         sd_vae_override=True,
         vae_precision=True,
     ),
+    VariantFacet({ModelType.Main: ModelVariantType}),
 )

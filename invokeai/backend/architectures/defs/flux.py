@@ -5,9 +5,10 @@ from invokeai.backend.architectures.facets.default_settings import DefaultSettin
 from invokeai.backend.architectures.facets.features import FeaturesFacet, NegativePrompt
 from invokeai.backend.architectures.facets.latent_space import FLUX_16, LatentSpaceFacet
 from invokeai.backend.architectures.facets.modality import ModalityFacet
+from invokeai.backend.architectures.facets.variant import VariantFacet
 from invokeai.backend.architectures.registry import register
 from invokeai.backend.model_manager.configs.default_settings import MainModelDefaultSettings
-from invokeai.backend.model_manager.taxonomy import BaseModelType, FluxVariantType
+from invokeai.backend.model_manager.taxonomy import BaseModelType, FluxVariantType, ModelType, PiDDecoderVariantType
 from invokeai.backend.stable_diffusion.diffusion.conditioning_data import FLUXConditioningInfo
 
 register(
@@ -43,5 +44,11 @@ register(
         control_kinds=frozenset({"controlnet", "control_lora"}),
         max_reference_images=5,
         supports_regional_guidance=True,
+    ),
+    VariantFacet(
+        {
+            ModelType.Main: FluxVariantType,
+            ModelType.PiDDecoder: PiDDecoderVariantType,
+        }
     ),
 )

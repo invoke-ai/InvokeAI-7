@@ -5,9 +5,10 @@ from invokeai.backend.architectures.facets.default_settings import DefaultSettin
 from invokeai.backend.architectures.facets.features import FeaturesFacet, NegativePrompt
 from invokeai.backend.architectures.facets.latent_space import WAN21_16, WAN22_48, LatentSpaceFacet
 from invokeai.backend.architectures.facets.modality import ModalityFacet
+from invokeai.backend.architectures.facets.variant import VariantFacet
 from invokeai.backend.architectures.registry import register
 from invokeai.backend.model_manager.configs.default_settings import MainModelDefaultSettings
-from invokeai.backend.model_manager.taxonomy import BaseModelType, WanVariantType
+from invokeai.backend.model_manager.taxonomy import BaseModelType, ModelType, WanLoRAVariantType, WanVariantType
 from invokeai.backend.stable_diffusion.diffusion.conditioning_data import WanConditioningInfo
 
 # Two variants that model identity cannot tell apart: A14B denoises in the 16-channel Wan 2.1
@@ -37,5 +38,14 @@ register(
         dimension_grid=16,
         guidance_label="Guidance",
         scheduler_set="flow",
+    ),
+    # The one architecture whose LoRAs carry a different variant enum from its mains. They are not
+    # interchangeable: an A14B LoRA (inner_dim=5120) against a TI2V-5B main (3072) crashes in the
+    # layer patcher, which is why the LoRA enum exists separately at all.
+    VariantFacet(
+        {
+            ModelType.Main: WanVariantType,
+            ModelType.LoRA: WanLoRAVariantType,
+        }
     ),
 )

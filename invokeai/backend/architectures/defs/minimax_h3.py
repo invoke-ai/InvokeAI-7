@@ -5,9 +5,10 @@ from invokeai.backend.architectures.facets.default_settings import DefaultSettin
 from invokeai.backend.architectures.facets.features import FeaturesFacet, NegativePrompt
 from invokeai.backend.architectures.facets.latent_space import MINIMAX_H3_24, LatentSpaceFacet
 from invokeai.backend.architectures.facets.modality import ModalityFacet
+from invokeai.backend.architectures.facets.variant import VariantFacet
 from invokeai.backend.architectures.registry import register
 from invokeai.backend.model_manager.configs.default_settings import MainModelDefaultSettings
-from invokeai.backend.model_manager.taxonomy import BaseModelType
+from invokeai.backend.model_manager.taxonomy import BaseModelType, MiniMaxH3VariantType, ModelType
 from invokeai.backend.stable_diffusion.diffusion.conditioning_data import MiniMaxH3ConditioningInfo
 
 register(
@@ -32,4 +33,7 @@ register(
         dimension_grid=32,
         guidance_label="Guidance",
     ),
+    # FL2VA and Ref2VA are the same architecture with different transformer weights; only the
+    # mains are labelled, and the turbo LoRAs are not variant-scoped.
+    VariantFacet({ModelType.Main: MiniMaxH3VariantType}),
 )

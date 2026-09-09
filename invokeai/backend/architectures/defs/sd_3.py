@@ -5,9 +5,10 @@ from invokeai.backend.architectures.facets.default_settings import DefaultSettin
 from invokeai.backend.architectures.facets.features import FeaturesFacet, NegativePrompt
 from invokeai.backend.architectures.facets.latent_space import SD3_16, LatentSpaceFacet
 from invokeai.backend.architectures.facets.modality import ModalityFacet
+from invokeai.backend.architectures.facets.variant import VariantFacet
 from invokeai.backend.architectures.registry import register
 from invokeai.backend.model_manager.configs.default_settings import MainModelDefaultSettings
-from invokeai.backend.model_manager.taxonomy import BaseModelType
+from invokeai.backend.model_manager.taxonomy import BaseModelType, ModelType, PiDDecoderVariantType
 from invokeai.backend.stable_diffusion.diffusion.conditioning_data import SD3ConditioningInfo
 
 register(
@@ -27,4 +28,6 @@ register(
         guidance_label="CFG",
         scheduler_set="standard",
     ),
+    # SD3 mains carry no variant; only its PiD decoder checkpoints do.
+    VariantFacet({ModelType.PiDDecoder: PiDDecoderVariantType}),
 )

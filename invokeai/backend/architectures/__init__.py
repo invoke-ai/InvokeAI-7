@@ -38,6 +38,11 @@ from invokeai.backend.architectures.facets.unet import (
     UNetDownscaleFacet,
     get_max_unet_downscale,
 )
+from invokeai.backend.architectures.facets.variant import (
+    VariantFacet,
+    declared_variant_enums,
+    get_variant_enum,
+)
 from invokeai.backend.architectures.registry import (
     ArchitectureError,
     defs_module_path,
@@ -65,11 +70,14 @@ __all__ = [
     "GenerationModeKind",
     "ModalityFacet",
     "UNetDownscaleFacet",
+    "VariantFacet",
     "LatentSpace",
     "LatentSpaceFacet",
     "conditioning_infos",
+    "declared_variant_enums",
     "generation_modes",
     "get_max_unet_downscale",
+    "get_variant_enum",
     "resolve_default_settings",
     "resolve_latent_space",
     "defs_module_path",

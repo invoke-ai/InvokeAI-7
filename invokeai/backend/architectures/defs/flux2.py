@@ -5,9 +5,10 @@ from invokeai.backend.architectures.facets.default_settings import DefaultSettin
 from invokeai.backend.architectures.facets.features import FeaturesFacet, NegativePrompt
 from invokeai.backend.architectures.facets.latent_space import FLUX2_32, LatentSpaceFacet
 from invokeai.backend.architectures.facets.modality import ModalityFacet
+from invokeai.backend.architectures.facets.variant import VariantFacet
 from invokeai.backend.architectures.registry import register
 from invokeai.backend.model_manager.configs.default_settings import MainModelDefaultSettings
-from invokeai.backend.model_manager.taxonomy import BaseModelType, Flux2VariantType
+from invokeai.backend.model_manager.taxonomy import BaseModelType, Flux2VariantType, ModelType, PiDDecoderVariantType
 from invokeai.backend.stable_diffusion.diffusion.conditioning_data import FLUXConditioningInfo
 
 register(
@@ -41,5 +42,13 @@ register(
         scheduler_applies_to_graph=True,
         max_reference_images=5,
         supports_regional_guidance=True,
+    ),
+    VariantFacet(
+        {
+            # FLUX.2 LoRAs are labelled with the same variant enum as the mains they target.
+            ModelType.Main: Flux2VariantType,
+            ModelType.LoRA: Flux2VariantType,
+            ModelType.PiDDecoder: PiDDecoderVariantType,
+        }
     ),
 )
