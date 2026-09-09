@@ -196,6 +196,58 @@ describe('BASE_GENERATION', () => {
     ).toMatchObject({ negativeVisible: true, negativeUsedInGraph: true });
   });
 
+  describe('the guidance slider takes the value its graph consumes', () => {
+    /**
+     * The guidance-distilled architectures declare both `cfg_scale` and `guidance`, where the
+     * cfg_scale of 1.0 only means "CFG is off" and the graph wires this one slider into the node's
+     * `guidance` input. `FeaturesFacet.guidance_label` states the rule on the backend side: the
+     * slider takes `guidance` where it is set and `cfg_scale` otherwise.
+     *
+     * Reading cfg_scale first made every one of them show 1.0 — worst on FLUX Fill, which
+     * recommends 30.0 and whose denoise node warns below 25.0 on every run.
+     */
+    const withDefaults = (base: string, default_settings: Record<string, number>) =>
+      getGenerationModelPolicy(
+        createModel(base, { default_settings }),
+        createSettings(createModel(base, { default_settings }))
+      ).defaults.cfgScale;
+
+    it('prefers guidance over the cfg_scale that sits beside it', () => {
+      expect(withDefaults('flux', { cfg_scale: 1.0, guidance: 30.0 })).toBe(30.0);
+      expect(withDefaults('flux', { cfg_scale: 1.0, guidance: 3.5 })).toBe(3.5);
+      expect(withDefaults('flux2', { cfg_scale: 1.0, guidance: 3.5 })).toBe(3.5);
+    });
+
+    it('still reads cfg_scale when that is the only one declared', () => {
+      expect(withDefaults('sdxl', { cfg_scale: 7.0 })).toBe(7.0);
+      expect(withDefaults('flux', { cfg_scale: 1.0 })).toBe(1.0);
+    });
+
+    it('ignores a guidance set on a base whose slider is a true CFG', () => {
+      // `default_settings.guidance` is offered for every main model, not just the FLUX family —
+      // `guidance` is in MAIN_FIELDS unconditionally. A user who turns it on for an SDXL model must
+      // not have it displace the cfg_scale that base actually generates with.
+      expect(withDefaults('sdxl', { cfg_scale: 7.0, guidance: 4.0 })).toBe(7.0);
+      expect(withDefaults('sd-1', { cfg_scale: 7.5, guidance: 4.0 })).toBe(7.5);
+      expect(withDefaults('qwen-image', { cfg_scale: 4.0, guidance: 30.0 })).toBe(4.0);
+    });
+
+    it('covers every base, so a new one cannot pick the wrong field by omission', () => {
+      for (const base of SUPPORTED_GENERATE_BASES) {
+        const label = BASE_GENERATION[base].guidanceLabel;
+        const resolved = withDefaults(base, { cfg_scale: 7.0, guidance: 30.0 });
+
+        expect(resolved, `${base} (${label}) read the wrong field`).toBe(label === 'Guidance' ? 30.0 : 7.0);
+      }
+    });
+
+    it('falls back to the base default when a model declares neither', () => {
+      expect(getGenerationModelPolicy(createModel('flux'), createSettings(createModel('flux'))).defaults.cfgScale).toBe(
+        BASE_GENERATION.flux.defaults.cfgScale
+      );
+    });
+  });
+
   it('matches expected UI availability per base', () => {
     expect(getGenerationModelPolicy(createModel('sd-1'), createSettings(createModel('sd-1'))).ui).toMatchObject({
       clipSkipMax: 12,

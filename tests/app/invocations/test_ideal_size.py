@@ -33,10 +33,18 @@ def _invoke(base: BaseModelType, width: int = 1024, height: int = 576, multiplie
         (BaseModelType.StableDiffusion1, (680, 384)),
         (BaseModelType.StableDiffusion2, (1024, 576)),
         (BaseModelType.StableDiffusionXL, (1360, 768)),
+        # The other three were hardcoded to 1024 and trimmed to 8. They now derive the dimension
+        # from `DefaultSettingsFacet.width` and the grid from `FeaturesFacet.dimension_grid`, so
+        # both halves are pinned here: a model-card width edited for a UX reason would otherwise
+        # silently move every legacy workflow's output resolution.
+        (BaseModelType.StableDiffusion3, (1360, 768)),
+        (BaseModelType.Flux, (1360, 768)),
+        (BaseModelType.Flux2, (1360, 768)),
     ],
 )
 def test_the_previously_supported_bases_are_unchanged(base: BaseModelType, expected: tuple[int, int]) -> None:
-    """SD 1.x, 2.x and XL have an 8-pixel grid, which is what the old hardcoded value was."""
+    """SD 1.x, 2.x and XL have an 8-pixel grid, which is what the old hardcoded value was. SD3,
+    FLUX and FLUX.2 land on 16 and happen to agree at this aspect ratio."""
     output = _invoke(base)
     assert (output.width, output.height) == expected
 

@@ -35,5 +35,8 @@ register(
         dimension_grid=16,
         guidance_label="CFG",
         scheduler_set="flow",
+        # ernie_image_denoise takes the scheduler as an input, so the graph builder passes the
+        # user's choice through rather than letting the node pick.
+        scheduler_applies_to_graph=True,
     ),
 )

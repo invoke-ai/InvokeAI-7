@@ -439,7 +439,20 @@ export const getGenerationDefaults = (model: GenerateModelConfig | undefined) =>
 
   return {
     cfgRescaleMultiplier: getNumber(defaults?.cfg_rescale_multiplier, 0),
-    cfgScale: getNumber(defaults?.cfg_scale ?? defaults?.guidance, config.defaults.cfgScale),
+    // There is one slider, and `guidanceLabel` is what it stands for: on a 'Guidance' base the
+    // graph wires it into the node's guidance input, on a 'CFG' base into cfg_scale. So read the
+    // field that matches. The guidance-distilled architectures declare both — FLUX Fill is
+    // `cfg_scale=1.0, guidance=30.0`, the 1.0 only meaning "CFG is off" — and reading cfg_scale
+    // first collapsed Fill's 30.0 to 1.0.
+    //
+    // The gate is not cosmetic: `default_settings.guidance` is editable on *any* main model (see
+    // `defaultSettingsFields.ts`, where `guidance` is in MAIN_FIELDS unconditionally), so an SDXL
+    // model can carry one. Preferring it there would hand a true CFG slider a value meant for a
+    // knob that base does not have.
+    cfgScale:
+      config.guidanceLabel === 'Guidance'
+        ? getNumber(defaults?.guidance ?? defaults?.cfg_scale, config.defaults.cfgScale)
+        : getNumber(defaults?.cfg_scale ?? defaults?.guidance, config.defaults.cfgScale),
     scheduler: defaults?.scheduler ?? config.defaults.scheduler,
     steps: Math.max(1, Math.round(getNumber(defaults?.steps, config.defaults.steps))),
     vaePrecision: defaults?.vae_precision === 'fp16' ? ('fp16' as const) : ('fp32' as const),

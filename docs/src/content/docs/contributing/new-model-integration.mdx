@@ -78,17 +78,20 @@ exists to prevent.
 
    Provide default generation parameters for the UI to use when this model is selected.
 
-   ```python title="invokeai/backend/model_manager/configs/main.py" ins={9-10}
-   class MainModelDefaultSettings:
-       @staticmethod
-       def from_base(base: BaseModelType, variant: AnyVariant | None = None):
-           match base:
-               case BaseModelType.Flux2:
-                   if variant == Flux2VariantType.Klein9BBase:
-                       return MainModelDefaultSettings(steps=28, cfg_scale=1.0, ...)
-                   return MainModelDefaultSettings(steps=4, cfg_scale=1.0, ...)
-               case BaseModelType.NewModel:  # NEW
-                   return MainModelDefaultSettings(steps=20, cfg_scale=7.0, ...)
+   These live in the architecture's own declaration, keyed by variant. `None` is the fallback for
+   a model whose variant is not listed.
+
+   ```python title="invokeai/backend/architectures/defs/new_model.py"
+   register(
+       BaseModelType.NewModel,
+       ...,
+       DefaultSettingsFacet(
+           {
+               NewModelVariantType.Turbo: MainModelDefaultSettings(steps=4, cfg_scale=1.0, ...),
+               None: MainModelDefaultSettings(steps=20, cfg_scale=7.0, width=1024, height=1024),
+           }
+       ),
+   )
    ```
 </Steps>
 
@@ -96,7 +99,7 @@ exists to prevent.
 - [ ] Extend `BaseModelType` enum (`taxonomy.py`)
 - [ ] Create variant enum if needed (`taxonomy.py`)
 - [ ] Update `AnyVariant` union (`taxonomy.py`)
-- [ ] Add default settings in `from_base()` (`configs/main.py`)
+- [ ] Declare default settings in `DefaultSettingsFacet` (`architectures/defs/<base>.py`)
 :::
 
 ---

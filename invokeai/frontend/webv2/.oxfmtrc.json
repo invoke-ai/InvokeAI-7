@@ -8,7 +8,8 @@
     "dist/**",
     "node_modules/**",
     "stats.html",
-    "src/features/generation/core/__snapshots__/generateGraphNodeTypes.json"
+    "src/features/generation/core/__snapshots__/generateGraphNodeTypes.json",
+    "src/features/generation/core/__snapshots__/baseGenerationCapabilities.json"
   ],
   "printWidth": 120,
   "semi": true,

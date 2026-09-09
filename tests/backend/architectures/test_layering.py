@@ -148,6 +148,21 @@ def _production_files() -> Iterable[tuple[str, str]]:
         yield path, p.read_text(encoding="utf-8")
 
 
+def test_the_walk_reaches_the_files_the_rules_are_about() -> None:
+    """The self-tests below prove `_violations` catches things. They say nothing about whether it is
+    ever handed anything: one more prefix in `EXCLUDED`, or an `rglob` that stops matching, and
+    `test_no_layering_violations` iterates an empty sequence and passes forever."""
+    scanned = {path for path, _ in _production_files()}
+
+    assert len(scanned) > 100
+    assert {
+        f"{ARCH_DIR}/registry.py",
+        f"{ARCH_DIR}/defs/wan.py",
+        f"{ARCH_DIR}/facets/latent_space.py",
+        "invokeai/app/util/step_callback.py",
+    } <= scanned
+
+
 def test_no_layering_violations() -> None:
     violations = sorted(v for path, source in _production_files() for v in _violations(path, source))
     assert violations == []

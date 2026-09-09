@@ -24,11 +24,13 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 SOURCE_ROOT = REPO_ROOT / "invokeai"
 
 # Excluded from the derived list: the registry is the mechanism, not the cost, and the starter
-# package is scaffolded below.
+# package is scaffolded below. Shipped migrations name many bases but must never be edited — they
+# record what already-migrated databases were told they got.
 NOT_A_COST = (
     "invokeai/frontend",
     "invokeai/backend/architectures/",
     "invokeai/backend/model_manager/starter_models/",
+    "invokeai/app/services/shared/sqlite_migrator/migrations/",
 )
 
 # Files a derivation cannot find, because the work there is to *add* something rather than to extend

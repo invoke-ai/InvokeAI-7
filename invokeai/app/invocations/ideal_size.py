@@ -60,7 +60,14 @@ class IdealSizeInvocation(BaseInvocation):
         dimension = settings.width * self.multiplier
         grid = require(unet_config.base, FeaturesFacet).dimension_grid
         min_dimension = math.floor(dimension * 0.5)
-        model_area = dimension * dimension  # hardcoded for now since all models are trained on square images
+        # NOTE: this squares the *recommended default* width, which is a product decision, not the
+        # native training resolution. They coincide for the SD family this node was written for, but
+        # not in general: MiniMax H3 is 1344x768, and squaring 1344 asks for 75% more area than it
+        # was trained on. Nor is the SD family the only thing that reaches here — the main-model
+        # loaders emit a `UNetField` only for SD, but `MetadataToModelInvocation` emits one for any
+        # `ModelType.Main`, so a workflow can route H3 into this node. Fixing it means declaring a
+        # native resolution rather than reusing the slider default.
+        model_area = dimension * dimension
 
         if aspect > 1.0:
             init_height = max(min_dimension, math.sqrt(model_area / aspect))

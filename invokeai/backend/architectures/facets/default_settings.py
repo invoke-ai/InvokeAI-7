@@ -49,6 +49,13 @@ class DefaultSettingsFacet(Facet):
     variant is modeled — the name is the only signal there is.
     """
 
+    def __post_init__(self) -> None:
+        if not self.by_variant:
+            raise ValueError(
+                "DefaultSettingsFacet declares no settings. `validate()` only checks that the facet is "
+                "present, so an empty mapping would boot and then resolve to None at generation time."
+            )
+
     def resolve(
         self,
         variant: AnyVariant | None = None,
