@@ -6,9 +6,15 @@ from invokeai.backend.architectures.facets.features import FeaturesFacet, Negati
 from invokeai.backend.architectures.facets.latent_space import WAN21_16, LatentSpaceFacet
 from invokeai.backend.architectures.facets.modality import ModalityFacet
 from invokeai.backend.architectures.facets.vae import VaeCompatibility, VaeFacet
+from invokeai.backend.architectures.facets.variant import VariantFacet
 from invokeai.backend.architectures.registry import register
 from invokeai.backend.model_manager.configs.default_settings import MainModelDefaultSettings
-from invokeai.backend.model_manager.taxonomy import BaseModelType
+from invokeai.backend.model_manager.taxonomy import (
+    BaseModelType,
+    ModelType,
+    PiDDecoderVariantType,
+    QwenImageVariantType,
+)
 from invokeai.backend.stable_diffusion.diffusion.conditioning_data import QwenImageConditioningInfo
 
 # Qwen-Image uses the Wan 2.1 VAE.
@@ -35,5 +41,11 @@ register(
                 VaeCompatibility(BaseModelType.Anima),
             }
         )
+    ),
+    VariantFacet(
+        {
+            ModelType.Main: QwenImageVariantType,
+            ModelType.PiDDecoder: PiDDecoderVariantType,
+        }
     ),
 )

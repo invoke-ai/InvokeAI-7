@@ -6,9 +6,10 @@ from invokeai.backend.architectures.facets.features import FeaturesFacet, Negati
 from invokeai.backend.architectures.facets.latent_space import FLUX_16, LatentSpaceFacet
 from invokeai.backend.architectures.facets.modality import ModalityFacet
 from invokeai.backend.architectures.facets.vae import VaeCompatibility, VaeFacet
+from invokeai.backend.architectures.facets.variant import VariantFacet
 from invokeai.backend.architectures.registry import register
 from invokeai.backend.model_manager.configs.default_settings import MainModelDefaultSettings
-from invokeai.backend.model_manager.taxonomy import BaseModelType, ZImageVariantType
+from invokeai.backend.model_manager.taxonomy import BaseModelType, ModelType, ZImageVariantType
 from invokeai.backend.stable_diffusion.diffusion.conditioning_data import ZImageConditioningInfo
 
 # Z-Image decodes with a FLUX-compatible 16-channel VAE.
@@ -45,5 +46,11 @@ register(
                 VaeCompatibility(BaseModelType.Flux),
             }
         )
+    ),
+    VariantFacet(
+        {
+            ModelType.Main: ZImageVariantType,
+            ModelType.LoRA: ZImageVariantType,
+        }
     ),
 )

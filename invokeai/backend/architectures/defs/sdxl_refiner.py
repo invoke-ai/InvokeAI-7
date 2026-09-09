@@ -5,9 +5,10 @@ from invokeai.backend.architectures.facets.default_settings import DefaultSettin
 from invokeai.backend.architectures.facets.features import FeaturesFacet, NegativePrompt
 from invokeai.backend.architectures.facets.latent_space import SDXL_4, LatentSpaceFacet
 from invokeai.backend.architectures.facets.modality import ModalityFacet
+from invokeai.backend.architectures.facets.variant import VariantFacet
 from invokeai.backend.architectures.registry import register
 from invokeai.backend.model_manager.configs.default_settings import MainModelDefaultSettings
-from invokeai.backend.model_manager.taxonomy import BaseModelType
+from invokeai.backend.model_manager.taxonomy import BaseModelType, ModelType, ModelVariantType
 from invokeai.backend.stable_diffusion.diffusion.conditioning_data import SDXLConditioningInfo
 
 # The refiner shares SDXL's VAE.
@@ -33,4 +34,5 @@ register(
         color_compensation=True,
         vae_precision=True,
     ),
+    VariantFacet({ModelType.Main: ModelVariantType}),
 )
