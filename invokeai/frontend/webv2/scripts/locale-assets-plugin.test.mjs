@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import test from 'node:test';
-import { build } from 'vite';
+import { build, createServer } from 'vite';
 
 import { localeAssetsPlugin } from './locale-assets-plugin.mjs';
 
@@ -58,4 +58,37 @@ test('invalid locale JSON fails the production build with the failing filename',
   await writeFile(resolve(projectRoot, 'public/locales/broken.json'), '{ invalid');
 
   await assert.rejects(buildFixture(projectRoot), /Invalid locale JSON: broken\.json/);
+});
+
+test('font namespace loads separately in production and development, preserving fallback locales', async (context) => {
+  const projectRoot = await createFixture(context);
+  const translations = { common: { retry: 'Retry' }, fonts: { title: 'Fonts 🎨' } };
+  await writeFile(resolve(projectRoot, 'public/locales/en.json'), JSON.stringify(translations));
+  await writeFile(resolve(projectRoot, 'public/locales/fr.json'), JSON.stringify({ common: { retry: 'Réessayer' } }));
+  await buildFixture(projectRoot);
+  assert.deepEqual(JSON.parse(await readFile(resolve(projectRoot, 'dist/locales/en.json'), 'utf8')), {
+    common: translations.common,
+  });
+  assert.deepEqual(JSON.parse(await readFile(resolve(projectRoot, 'dist/locales/en.fonts.json'), 'utf8')), {
+    fonts: translations.fonts,
+  });
+  assert.deepEqual(JSON.parse(await readFile(resolve(projectRoot, 'dist/locales/fr.fonts.json'), 'utf8')), {});
+  const server = await createServer({
+    root: projectRoot,
+    configFile: false,
+    logLevel: 'silent',
+    plugins: [localeAssetsPlugin({ projectRoot })],
+    server: { port: 0, host: '127.0.0.1' },
+  });
+  context.after(() => server.close());
+  await server.listen();
+  const origin = server.resolvedUrls.local[0];
+  for (const filename of ['en.json', 'en.fonts.json', 'fr.fonts.json']) {
+    const response = await fetch(new URL(`locales/${filename}`, origin));
+    assert.equal(response.status, 200);
+    assert.deepEqual(
+      await response.json(),
+      JSON.parse(await readFile(resolve(projectRoot, `dist/locales/${filename}`), 'utf8'))
+    );
+  }
 });

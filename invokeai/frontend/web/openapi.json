@@ -542,6 +542,77 @@
         ]
       }
     },
+    "/api/v1/utilities/fonts": {
+      "get": {
+        "tags": [
+          "utilities"
+        ],
+        "summary": "List User Fonts",
+        "operationId": "list_user_fonts",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserFontsResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/utilities/fonts/{font_path}": {
+      "get": {
+        "tags": [
+          "utilities"
+        ],
+        "summary": "Get User Font File",
+        "operationId": "get_user_font_file",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "font_path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Font Path"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/utilities/expand-prompt": {
       "post": {
         "tags": [
@@ -634,6 +705,436 @@
             "HTTPBearer": []
           }
         ]
+      }
+    },
+    "/api/v1/fonts": {
+      "get": {
+        "tags": [
+          "fonts"
+        ],
+        "summary": "List Fonts",
+        "operationId": "list_fonts",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 1000,
+              "minimum": 0,
+              "default": 100,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 200
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Search"
+            }
+          },
+          {
+            "name": "scope",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/FontScope",
+              "default": "all"
+            }
+          },
+          {
+            "name": "content_hash",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 64,
+                  "maxLength": 64,
+                  "pattern": "^[a-f0-9]{64}$"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Content Hash"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FontListResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "fonts"
+        ],
+        "summary": "Upload Font",
+        "operationId": "upload_font",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_font"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FontUploadResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/fonts/validate": {
+      "post": {
+        "tags": [
+          "fonts"
+        ],
+        "summary": "Validate Font",
+        "operationId": "validate_font",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_validate_font"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FontValidationResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/fonts/rescan": {
+      "post": {
+        "tags": [
+          "fonts"
+        ],
+        "summary": "Rescan Fonts",
+        "operationId": "rescan_fonts",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FontRescanResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/fonts/{font_id}/file": {
+      "get": {
+        "tags": [
+          "fonts"
+        ],
+        "summary": "Get Font File",
+        "operationId": "get_font_file",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "font_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "title": "Font Id"
+            }
+          },
+          {
+            "name": "expected_hash",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 64,
+                  "maxLength": 64,
+                  "pattern": "^[a-f0-9]{64}$"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Expected Hash"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/fonts/{font_id}": {
+      "get": {
+        "tags": [
+          "fonts"
+        ],
+        "summary": "Get Font",
+        "operationId": "get_font",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "font_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "title": "Font Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FontDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "fonts"
+        ],
+        "summary": "Delete Font",
+        "operationId": "delete_font",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "font_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "title": "Font Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/fonts/{font_id}/instance": {
+      "post": {
+        "tags": [
+          "fonts"
+        ],
+        "summary": "Create Font Instance",
+        "operationId": "create_font_instance",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "font_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "title": "Font Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FontInstanceRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v2/models/capabilities": {
@@ -7034,16 +7535,6 @@
             "description": "The session ID associated with this upload, if any"
           }
         ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "multipart/form-data": {
-              "schema": {
-                "$ref": "#/components/schemas/Body_upload_video"
-              }
-            }
-          }
-        },
         "responses": {
           "201": {
             "description": "The video was uploaded successfully",
@@ -7065,6 +7556,39 @@
                 "schema": {
                   "$ref": "#/components/schemas/HTTPValidationError"
                 }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "contentMediaType": "application/octet-stream",
+                    "title": "File"
+                  },
+                  "metadata": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Metadata",
+                    "description": "The metadata to associate with the video, must be a stringified JSON dict"
+                  }
+                },
+                "type": "object",
+                "required": [
+                  "file"
+                ],
+                "title": "Body_upload_video"
               }
             }
           }
@@ -19498,6 +20022,26 @@
         ],
         "title": "Body_update_workflow_is_public"
       },
+      "Body_upload_font": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File",
+            "description": "The font file to upload"
+          },
+          "scope": {
+            "type": "string",
+            "title": "Scope",
+            "default": "private"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_upload_font"
+      },
       "Body_upload_image": {
         "properties": {
           "file": {
@@ -19539,31 +20083,20 @@
         ],
         "title": "Body_upload_image"
       },
-      "Body_upload_video": {
+      "Body_validate_font": {
         "properties": {
           "file": {
             "type": "string",
             "contentMediaType": "application/octet-stream",
-            "title": "File"
-          },
-          "metadata": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Metadata",
-            "description": "The metadata to associate with the video, must be a stringified JSON dict"
+            "title": "File",
+            "description": "The font file to validate"
           }
         },
         "type": "object",
         "required": [
           "file"
         ],
-        "title": "Body_upload_video"
+        "title": "Body_validate_font"
       },
       "BooleanCollectionInvocation": {
         "category": "primitives",
@@ -38673,6 +39206,310 @@
         "title": "FluxVariantType",
         "description": "FLUX.1 model variants."
       },
+      "FontAxisDTO": {
+        "properties": {
+          "tag": {
+            "type": "string",
+            "title": "Tag"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "minimum": {
+            "type": "number",
+            "title": "Minimum"
+          },
+          "default": {
+            "type": "number",
+            "title": "Default"
+          },
+          "maximum": {
+            "type": "number",
+            "title": "Maximum"
+          },
+          "hidden": {
+            "type": "boolean",
+            "title": "Hidden"
+          }
+        },
+        "type": "object",
+        "required": [
+          "tag",
+          "label",
+          "minimum",
+          "default",
+          "maximum",
+          "hidden"
+        ],
+        "title": "FontAxisDTO"
+      },
+      "FontDTO": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "family": {
+            "type": "string",
+            "title": "Family"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "style": {
+            "type": "string",
+            "title": "Style"
+          },
+          "weight": {
+            "type": "integer",
+            "title": "Weight"
+          },
+          "content_hash": {
+            "type": "string",
+            "title": "Content Hash"
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "private",
+              "shared"
+            ],
+            "title": "Scope"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "uploaded",
+              "directory"
+            ],
+            "title": "Source"
+          },
+          "filename": {
+            "type": "string",
+            "title": "Filename"
+          },
+          "byte_size": {
+            "type": "integer",
+            "title": "Byte Size"
+          },
+          "url": {
+            "type": "string",
+            "title": "Url"
+          },
+          "axes": {
+            "items": {
+              "$ref": "#/components/schemas/FontAxisDTO"
+            },
+            "type": "array",
+            "title": "Axes"
+          },
+          "instances": {
+            "items": {
+              "$ref": "#/components/schemas/FontInstanceDTO"
+            },
+            "type": "array",
+            "title": "Instances"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "family",
+          "label",
+          "style",
+          "weight",
+          "content_hash",
+          "scope",
+          "source",
+          "filename",
+          "byte_size",
+          "url",
+          "axes",
+          "instances"
+        ],
+        "title": "FontDTO"
+      },
+      "FontInstanceDTO": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "coordinates": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Coordinates"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "coordinates"
+        ],
+        "title": "FontInstanceDTO"
+      },
+      "FontInstanceRequest": {
+        "properties": {
+          "content_hash": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Content Hash"
+          },
+          "coordinates": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Coordinates"
+          }
+        },
+        "type": "object",
+        "required": [
+          "content_hash"
+        ],
+        "title": "FontInstanceRequest"
+      },
+      "FontListResponse": {
+        "properties": {
+          "offset": {
+            "type": "integer",
+            "title": "Offset"
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/FontDTO"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "offset",
+          "limit",
+          "total",
+          "items"
+        ],
+        "title": "FontListResponse"
+      },
+      "FontRescanResponse": {
+        "properties": {
+          "indexed": {
+            "type": "integer",
+            "title": "Indexed"
+          },
+          "revision": {
+            "type": "integer",
+            "title": "Revision"
+          }
+        },
+        "type": "object",
+        "required": [
+          "indexed",
+          "revision"
+        ],
+        "title": "FontRescanResponse"
+      },
+      "FontScope": {
+        "type": "string",
+        "enum": [
+          "private",
+          "shared",
+          "all"
+        ],
+        "title": "FontScope",
+        "description": "The account scope of an uploaded font."
+      },
+      "FontUploadResponse": {
+        "properties": {
+          "font": {
+            "$ref": "#/components/schemas/FontDTO"
+          },
+          "created": {
+            "type": "boolean",
+            "title": "Created"
+          }
+        },
+        "type": "object",
+        "required": [
+          "font",
+          "created"
+        ],
+        "title": "FontUploadResponse"
+      },
+      "FontValidationResponse": {
+        "properties": {
+          "filename": {
+            "type": "string",
+            "title": "Filename"
+          },
+          "family": {
+            "type": "string",
+            "title": "Family"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "style": {
+            "type": "string",
+            "title": "Style"
+          },
+          "weight": {
+            "type": "integer",
+            "title": "Weight"
+          },
+          "content_hash": {
+            "type": "string",
+            "title": "Content Hash"
+          },
+          "byte_size": {
+            "type": "integer",
+            "title": "Byte Size"
+          },
+          "axes": {
+            "items": {
+              "$ref": "#/components/schemas/FontAxisDTO"
+            },
+            "type": "array",
+            "title": "Axes"
+          },
+          "instances": {
+            "items": {
+              "$ref": "#/components/schemas/FontInstanceDTO"
+            },
+            "type": "array",
+            "title": "Instances"
+          }
+        },
+        "type": "object",
+        "required": [
+          "filename",
+          "family",
+          "label",
+          "style",
+          "weight",
+          "content_hash",
+          "byte_size",
+          "axes",
+          "instances"
+        ],
+        "title": "FontValidationResponse"
+      },
       "ForInvocation": {
         "class": "invocation",
         "classification": "stable",
@@ -56241,6 +57078,36 @@
             "title": "Outputs Dir",
             "description": "Path to directory for outputs.",
             "default": "outputs"
+          },
+          "fonts_dir": {
+            "type": "string",
+            "format": "path",
+            "title": "Fonts Dir",
+            "description": "Path to directory for custom fonts.",
+            "default": "fonts"
+          },
+          "fonts_storage_dir": {
+            "type": "string",
+            "format": "path",
+            "title": "Fonts Storage Dir",
+            "description": "Path to application-managed uploaded fonts.",
+            "default": "fonts-uploaded"
+          },
+          "max_font_upload_bytes": {
+            "type": "integer",
+            "maximum": 134217728.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Max Font Upload Bytes",
+            "description": "Maximum size of one uploaded custom font in bytes.",
+            "default": 33554432
+          },
+          "max_font_library_bytes": {
+            "type": "integer",
+            "maximum": 17179869184.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Max Font Library Bytes",
+            "description": "Maximum total size of uploaded custom fonts in bytes per account or shared library.",
+            "default": 1073741824
           },
           "image_subfolder_strategy": {
             "type": "string",
@@ -99777,6 +100644,91 @@
         ],
         "title": "UserDTO",
         "description": "User data transfer object."
+      },
+      "UserFont": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "family": {
+            "type": "string",
+            "title": "Family"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "url": {
+            "type": "string",
+            "title": "Url"
+          },
+          "faces": {
+            "items": {
+              "$ref": "#/components/schemas/UserFontFace"
+            },
+            "type": "array",
+            "title": "Faces"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "family",
+          "label",
+          "path",
+          "url",
+          "faces"
+        ],
+        "title": "UserFont"
+      },
+      "UserFontFace": {
+        "properties": {
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "url": {
+            "type": "string",
+            "title": "Url"
+          },
+          "weight": {
+            "type": "integer",
+            "title": "Weight"
+          },
+          "style": {
+            "type": "string",
+            "title": "Style"
+          }
+        },
+        "type": "object",
+        "required": [
+          "path",
+          "url",
+          "weight",
+          "style"
+        ],
+        "title": "UserFontFace"
+      },
+      "UserFontsResponse": {
+        "properties": {
+          "fonts": {
+            "items": {
+              "$ref": "#/components/schemas/UserFont"
+            },
+            "type": "array",
+            "title": "Fonts"
+          }
+        },
+        "type": "object",
+        "required": [
+          "fonts"
+        ],
+        "title": "UserFontsResponse"
       },
       "UserProfileUpdateRequest": {
         "properties": {

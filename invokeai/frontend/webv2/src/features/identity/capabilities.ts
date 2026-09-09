@@ -7,6 +7,8 @@ export interface Capabilities {
   canManageImageMapVocabulary: boolean;
   canManageModels: boolean;
   canManageNodes: boolean;
+  /** Upload, delete, and rescan shared fonts; all authenticated users can read fonts. */
+  canManageSharedFonts: boolean;
   /** Bulk import/export of prompt templates; the routes are admin-only. */
   canManagePromptTemplates: boolean;
   canManageUsers: boolean;
@@ -19,6 +21,7 @@ export const getCapabilities = (session: AuthSession): Capabilities => {
       canManageImageMapVocabulary: false,
       canManageModels: false,
       canManageNodes: false,
+      canManageSharedFonts: false,
       canManagePromptTemplates: false,
       canManageUsers: false,
     };
@@ -32,6 +35,7 @@ export const getCapabilities = (session: AuthSession): Capabilities => {
     canManageImageMapVocabulary: isAdmin,
     canManageModels: isAdmin,
     canManageNodes: isAdmin,
+    canManageSharedFonts: isAdmin,
     // Matches the routers' `AdminUserOrDefault`: everyone qualifies in
     // single-user mode, only admins once multiuser is on.
     canManagePromptTemplates: isAdmin,

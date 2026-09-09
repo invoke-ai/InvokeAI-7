@@ -17,6 +17,7 @@ export const FEATURE_PUBLIC_INTERFACES: Readonly<Record<string, readonly string[
     'utility',
     'widget',
   ],
+  fonts: ['contracts', 'launchpad', 'react', 'runtime'],
   generation: [
     'canvasGraph',
     'canvasProcessingSize',

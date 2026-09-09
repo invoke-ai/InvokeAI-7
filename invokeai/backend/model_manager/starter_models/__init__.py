@@ -390,10 +390,10 @@ from invokeai.backend.model_manager.starter_models.minimax_h3 import (
     minimax_h3_int8_transformer as minimax_h3_int8_transformer,
 )
 from invokeai.backend.model_manager.starter_models.minimax_h3 import (
-    minimax_h3_lightx2v_turbo_lora as minimax_h3_lightx2v_turbo_lora,
+    minimax_h3_lightx2v_ref2v_turbo_lora as minimax_h3_lightx2v_ref2v_turbo_lora,
 )
 from invokeai.backend.model_manager.starter_models.minimax_h3 import (
-    minimax_h3_ref2v_turbo_lora as minimax_h3_ref2v_turbo_lora,
+    minimax_h3_lightx2v_turbo_lora as minimax_h3_lightx2v_turbo_lora,
 )
 from invokeai.backend.model_manager.starter_models.minimax_h3 import (
     minimax_h3_ref2va_int8_transformer as minimax_h3_ref2va_int8_transformer,
@@ -865,7 +865,7 @@ STARTER_MODELS: list[StarterModel] = [
     minimax_h3_components,
     minimax_h3_turbo_lora,
     minimax_h3_lightx2v_turbo_lora,
-    minimax_h3_ref2v_turbo_lora,
+    minimax_h3_lightx2v_ref2v_turbo_lora,
     gemini_flash_image,
     gemini_pro_image_preview,
     gemini_3_1_flash_image_preview,
@@ -1049,7 +1049,7 @@ minimax_h3_bundle: list[StarterModel] = [
     minimax_h3_ref2va_int8_transformer,
     minimax_h3_turbo_lora,
     minimax_h3_lightx2v_turbo_lora,
-    minimax_h3_ref2v_turbo_lora,
+    minimax_h3_lightx2v_ref2v_turbo_lora,
 ]
 
 STARTER_BUNDLES: dict[str, StarterModelBundle] = {

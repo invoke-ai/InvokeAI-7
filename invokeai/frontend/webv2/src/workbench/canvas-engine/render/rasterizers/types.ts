@@ -6,6 +6,7 @@
  * cycle. Zero React, zero side effects.
  */
 
+import type { CanvasLayerSourceContract } from '@workbench/canvas-engine/contracts';
 import type { DecodedBitmapPool } from '@workbench/canvas-engine/render/decodedBitmapPool';
 import type { LayerCacheStore } from '@workbench/canvas-engine/render/layerCache';
 import type { RasterBackend, RasterSurface } from '@workbench/canvas-engine/render/raster';
@@ -18,6 +19,9 @@ import type { Rect } from '@workbench/canvas-engine/types';
  * stays node-testable.
  */
 export type ImageResolver = (imageName: string, signal?: AbortSignal) => Promise<Blob>;
+
+/** A text source whose family may be replaced by an injected custom-font alias. */
+export type RasterizeTextSource = Extract<CanvasLayerSourceContract, { type: 'text' }>;
 
 /**
  * The result of rasterizing a source: the surface holding its pixels plus the
@@ -42,6 +46,8 @@ export interface RasterizeDeps {
   store: LayerCacheStore;
   /** Coalesces concurrent decodes and owns decoded pixels only for the duration of a rasterization. */
   bitmapPool?: DecodedBitmapPool;
+  /** Resolves a stable persisted face to the runtime family used for this render. */
+  resolveFontFamily?: (source: RasterizeTextSource) => string;
   /**
    * Document pixel size. Layers are content-sized, so this only backs the
    * legacy default for gradients that predate the explicit extent field (they

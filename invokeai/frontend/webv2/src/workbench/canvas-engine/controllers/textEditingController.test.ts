@@ -1,6 +1,6 @@
 import type { StructuralCommitResult } from '@workbench/canvas-engine/capabilities';
 import type { CanvasDocumentContractV3 } from '@workbench/canvas-engine/contracts';
-import type { TextEditSession } from '@workbench/canvas-engine/engineStores';
+import type { TextEditSession, TextToolOptions } from '@workbench/canvas-engine/engineStores';
 
 import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
 import { EMPTY_STACKS } from '@workbench/canvas-engine/document/documentTree';
@@ -10,7 +10,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { TextEditingController } from './textEditingController';
 
-const createHarness = (document: CanvasDocumentContractV3) => {
+const createHarness = (document: CanvasDocumentContractV3, textOptions: TextToolOptions = DEFAULT_TEXT_OPTIONS) => {
   let session: TextEditSession | null = null;
   const commitStructural = vi.fn<(label: string, forward: unknown, inverse: unknown) => StructuralCommitResult>(() => ({
     status: 'committed',
@@ -25,7 +25,7 @@ const createHarness = (document: CanvasDocumentContractV3) => {
     getDocument: () => document,
     invalidate,
     isGestureActive: () => false,
-    options: { get: () => DEFAULT_TEXT_OPTIONS },
+    options: { get: () => textOptions },
     session: {
       get: () => session,
       set: (value) => (session = value),
@@ -68,6 +68,38 @@ describe('TextEditingController', () => {
     expect(h.getSession()).toBeNull();
     expect(h.commitStructural).not.toHaveBeenCalled();
     expect(h.invalidate).toHaveBeenCalledWith({ overlay: true });
+  });
+
+  it('carries custom font identity, style, and exact variation coordinates into the structural source', () => {
+    const options: TextToolOptions = {
+      ...DEFAULT_TEXT_OPTIONS,
+      fontFamily: 'Catalog Family',
+      fontRef: { contentHash: 'hash-1', family: 'Catalog Family', id: 'font-1', label: 'Catalog Regular' },
+      fontStyle: 'italic',
+      fontVariations: { opsz: 14, wght: 650 },
+      fontWeight: 650,
+    };
+    const h = createHarness(
+      {
+        bbox: { height: 1, width: 1, x: 0, y: 0 },
+        height: 1,
+        stacks: stacksFrom([]),
+        width: 1,
+      } as never,
+      options
+    );
+
+    h.controller.openCreate({ x: 0, y: 0 });
+    h.controller.commit('hello');
+
+    const forward = h.commitStructural.mock.calls[0]?.[1] as {
+      layer?: { source?: { fontRef?: unknown; fontStyle?: string; fontVariations?: unknown } };
+    };
+    expect(forward.layer?.source).toMatchObject({
+      fontRef: options.fontRef,
+      fontStyle: 'italic',
+      fontVariations: { opsz: 14, wght: 650 },
+    });
   });
 });
 

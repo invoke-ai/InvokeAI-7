@@ -8,6 +8,7 @@ import { system } from '@theme/system';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { page } from 'vitest/browser';
 
 import { StagingItemContextMenu } from './StagingItemContextMenu';
 
@@ -100,8 +101,12 @@ const menuItem = (label: string): HTMLElement => {
   return item;
 };
 
-/** Selects a menu item the way a mouse does: highlight it (zag selects the highlighted item), then click. */
+/** Real pointer events let the menu finish highlighting before selection; disabled rows remain inert under synthetic clicks too. */
 const activate = async (label: string): Promise<void> => {
+  if (menuItem(label).getAttribute('aria-disabled') !== 'true') {
+    await act(() => page.getByRole('menuitem', { name: label, exact: true }).click());
+    return;
+  }
   await interact(() =>
     menuItem(label).dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerType: 'mouse' }))
   );

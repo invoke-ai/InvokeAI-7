@@ -194,11 +194,33 @@ const setTransform = (ctx: Ctx, m: Mat2d): void => {
  * Union of a plan's base-raster content bounds in document space, or `null`
  * when the plan has no enabled raster content. Pure geometry (no pixels, no
  * upload), so the invoke orchestrator can run it as a bounds-only pre-pass to
- * decide txt2img (no bbox overlap) *before* paying for a composite/encode/upload.
+ * decide txt2img (no bbox overlap) before paying for a composite/encode/upload.
+ * When `actualLayerRects` is supplied, those detached cache rects replace the
+ * planner's estimates for sources whose browser metrics can differ from their
+ * DOM-free extent.
  */
-export const computeCompositeContentBounds = (plan: CompositePlan): Rect | null => {
+export const computeCompositeContentBounds = (
+  plan: CompositePlan,
+  actualLayerRects?: ReadonlyMap<string, Rect>
+): Rect | null => {
   const entry = plan.entries.find((e) => e.kind === 'base-raster');
-  return entry ? getCompositeLayerBounds(entry.layers) : null;
+  if (!entry) {
+    return null;
+  }
+  if (!actualLayerRects || actualLayerRects.size === 0) {
+    return getCompositeLayerBounds(entry.layers);
+  }
+  const layers = entry.layers.map((layer) => {
+    const rect = actualLayerRects.get(layer.id);
+    return rect
+      ? {
+          ...layer,
+          contentOffset: { x: rect.x, y: rect.y },
+          contentSize: { height: rect.height, width: rect.width },
+        }
+      : layer;
+  });
+  return getCompositeLayerBounds(layers);
 };
 
 /** True when every pixel of `imageData` is fully opaque (alpha === 255). Empty → false. */

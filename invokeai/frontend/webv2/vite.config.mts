@@ -20,6 +20,10 @@ const PROJECT_ROOT = fileURLToPath(new URL('.', import.meta.url));
 // Modules both routes fetch eagerly. Grouping keeps a module with two
 // consumers from being split into its own request on each route.
 const ROUTE_SHARED_MODULES = [
+  '/features/fonts/data/keys.ts',
+  '/features/fonts/launchpad.tsx',
+  '/features/fonts/react.tsx',
+  '/features/fonts/runtime.ts',
   '/features/models/data/modelLoadStore.ts',
   '/features/models/index.ts',
   '/features/models/ui/ModelsPage.tsx',
@@ -49,6 +53,7 @@ const ROUTE_SHARED_MODULES = [
   '/workbench/launchpad/intents.ts',
   '/workbench/palette/settingsEntryDeps.ts',
   '/workbench/projects/covers.ts',
+  '/workbench/projects/components/ProjectFileOptionsProvider.tsx',
   '/workbench/projects/ids.ts',
   '/workbench/projects/invk/format.ts',
   '/workbench/projects/library.ts',
@@ -128,6 +133,39 @@ const WIDGET_HOST_MODULES = [
   '/workbench/widgets/image-map/ImageMapDataRuntime.tsx',
 ] as const;
 
+// Canvas and Layers already load these interaction/form modules together.
+// Keep their shared text-tool consumers from creating extra activation requests.
+const CANVAS_LAYER_SHARED_MODULES = [
+  '/features/workflow/core/layerWorkflow.ts',
+  '/workbench/canvas-operations/react.ts',
+  '/workbench/canvas-operations/useCanvasEngine.ts',
+  '/workbench/canvasProjectMutationPort.ts',
+  '/workbench/useCanvasProjectMutationDispatch.ts',
+  '/workbench/widgets/canvas/canvasInteractionLock.ts',
+  '/workbench/widgets/canvas/color-system/colorPair.ts',
+  '/workbench/widgets/canvas/color-system/useActiveColors.ts',
+  '/workbench/widgets/canvas/engineStoreHooks.ts',
+  '/workbench/widgets/canvas/textFontStyle.tsx',
+  '/workbench/widgets/canvas/tool-presentation/FormControls.tsx',
+  '/workbench/widgets/canvas/tool-presentation/PropertyPrimitives.tsx',
+  '/workbench/widgets/canvas/tool-presentation/propertyGroupStore.ts',
+  '/workbench/widgets/canvas/useCanvasEngine.ts',
+  '/workbench/widgets/canvas/useColorSampler.ts',
+  '/workbench/widgets/canvas/useStructuralCommit.ts',
+  '/workbench/widgets/layers/LayerContextMenu.tsx',
+  '/workbench/widgets/layers/RunLayerWorkflowDialog.tsx',
+  '/workbench/widgets/layers/colorLabels.ts',
+  '/workbench/widgets/layers/layerActionSession.ts',
+  '/workbench/widgets/layers/layerContextActions.ts',
+  '/workbench/widgets/layers/layerContextMenuLayout.ts',
+  '/workbench/widgets/layers/layerExportActions.ts',
+  '/workbench/widgets/layers/layerGroupCommands.ts',
+  '/workbench/widgets/layers/layerMenuState.ts',
+  '/workbench/widgets/layers/layerPropertiesRequestStore.ts',
+  '/workbench/widgets/layers/runLayerWorkflow.ts',
+  '/workbench/widgets/layers/useSelectedModelBase.ts',
+];
+
 const matchesAnySuffix = (id: string, suffixes: readonly string[]) => suffixes.some((suffix) => id.endsWith(suffix));
 
 const getLegacyChunkName = (id: string): string | null => {
@@ -200,6 +238,12 @@ export default defineConfig({
       output: {
         codeSplitting: {
           groups: [
+            {
+              includeDependenciesRecursively: false,
+              name: 'canvas-layer-shared',
+              priority: 30,
+              test: (id) => matchesAnySuffix(id, CANVAS_LAYER_SHARED_MODULES),
+            },
             {
               includeDependenciesRecursively: false,
               name: 'gallery-state',

@@ -62,6 +62,13 @@ export interface LayerCacheEntry {
   stale: boolean;
   /** Monotonic access tick, used to order LRU eviction. */
   lastUsed: number;
+  /**
+   * Browser family alias used for the most recent text rasterization. The alias
+   * identifies the exact account-scoped face/variation in the Canvas font
+   * runtime, so output can reject pixels rendered with a fallback family after
+   * the real face becomes available.
+   */
+  renderedFontFamily?: string;
 }
 
 /**

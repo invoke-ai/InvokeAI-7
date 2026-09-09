@@ -46,7 +46,7 @@ import { isOverlayStack, layerStackOf, reorderSiblings } from '@workbench/canvas
 import { repairSelectedLayerId } from '@workbench/canvas-engine/document/selectionRepair';
 import { prependProjectEvent } from '@workbench/projectEvents';
 
-import { normalizeCanvasDocumentContract } from './canvasMigration';
+import { canvasDocumentRequiresFontSchemaV4, normalizeCanvasDocumentContract } from './canvasMigration';
 import {
   getCanvasStagingCandidateFingerprint,
   getCanvasStagingSlotCount,
@@ -69,6 +69,7 @@ const CANVAS_PROJECT_MUTATION_TYPES: ReadonlySet<string> = new Set<CanvasProject
   'mergeCanvasLayersDown',
   'removeCanvasLayers',
   'reorderCanvasSiblings',
+  'replaceCanvasFontReferences',
   'replaceCanvasDocument',
   'replaceCanvasLayer',
   'resizeCanvasDocument',
@@ -117,16 +118,26 @@ const withRepairedSelection = (document: CanvasDocumentContractV3): CanvasDocume
   return selectedLayerId === document.selectedLayerId ? document : { ...document, selectedLayerId };
 };
 
-const setCanvasDocument = (project: Project, document: CanvasDocumentContractV3): Project =>
-  document === project.canvas.document ? project : { ...project, canvas: { ...project.canvas, document } };
+const setCanvasDocument = (project: Project, document: CanvasDocumentContractV3): Project => {
+  const schemaVersion: 3 | 4 =
+    project.canvas.version === 4 || document.version === 4 || canvasDocumentRequiresFontSchemaV4(document) ? 4 : 3;
+  const nextDocument = document.version === schemaVersion ? document : { ...document, version: schemaVersion };
+  return nextDocument === project.canvas.document && schemaVersion === project.canvas.version
+    ? project
+    : { ...project, canvas: { ...project.canvas, document: nextDocument, version: schemaVersion } };
+};
 
 const updateCanvasDocument = (
   project: Project,
   update: (document: CanvasDocumentContractV3) => CanvasDocumentContractV3
 ): Project => setCanvasDocument(project, update(project.canvas.document));
 
-const setCanvasState = (project: Project, canvas: CanvasStateContractV3): Project =>
-  canvas === project.canvas ? project : { ...project, canvas };
+const setCanvasState = (project: Project, canvas: CanvasStateContractV3): Project => {
+  const hasV4Snapshot = canvas.snapshots.some((snapshot) => snapshot.document.version === 4);
+  const schemaVersion: 3 | 4 = canvas.version === 4 || canvas.document.version === 4 || hasV4Snapshot ? 4 : 3;
+  const nextCanvas = canvas.version === schemaVersion ? canvas : { ...canvas, version: schemaVersion };
+  return nextCanvas === project.canvas ? project : { ...project, canvas: nextCanvas };
+};
 
 const withStacks = (document: CanvasDocumentContractV3, stacks: CanvasStackForests): CanvasDocumentContractV3 =>
   stacks === document.stacks ? document : { ...document, stacks };
@@ -955,6 +966,15 @@ export const applyCanvasProjectMutation = (project: Project, mutation: CanvasPro
             document: withRepairedSelection(document),
             documentRevision: project.canvas.documentRevision + 1,
             stagingArea: clearStagingArea(project.canvas.stagingArea),
+          })
+        : project;
+    }
+    case 'replaceCanvasFontReferences': {
+      const document = normalizeCanvasDocumentContract(structuredClone(mutation.document));
+      return document
+        ? setCanvasState(project, {
+            ...project.canvas,
+            document: withRepairedSelection(document),
           })
         : project;
     }

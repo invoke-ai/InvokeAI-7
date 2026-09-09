@@ -513,6 +513,25 @@ class ModelClassificationResult:
 
 class ModelConfigFactory:
     @staticmethod
+    def _detach_traceback(e: Exception) -> Exception:
+        """Drop the traceback and exception chain from a failed match before it is stored.
+
+        A stored traceback pins the frames of the config class that raised it, and those frames hold the
+        model's whole state dict in their locals. Exception/traceback/frame is a reference cycle, so the
+        state dict survives until the cyclic collector runs - and that collector is driven by object
+        counts, while a state dict is a few thousand objects holding gigabytes. Installing a queue of
+        models therefore accumulates every probed checkpoint in RAM (and, for safetensors, keeps the file
+        mapped, which is why moving the file afterwards needs retries on Windows).
+
+        Nothing reads these tracebacks: `details` is only ever consumed for the exception's type and
+        message.
+        """
+        e.__traceback__ = None
+        e.__context__ = None
+        e.__cause__ = None
+        return e
+
+    @staticmethod
     def from_dict(fields: dict[str, Any]) -> AnyModelConfig:
         """Return the appropriate config object from raw dict values."""
         model = AnyModelConfigValidator.validate_python(fields)
@@ -722,19 +741,19 @@ class ModelConfigFactory:
                 details[candidate_name] = candidate_class.from_model_on_disk(mod, fields)  # type: ignore
             except NotAMatchError as e:
                 # This means the model didn't match this config class. It's not an error, just no match.
-                details[candidate_name] = e
+                details[candidate_name] = ModelConfigFactory._detach_traceback(e)
             except InvalidMatchError as e:
                 # This means the model *is* this config class' kind of model, but is unusable (e.g. a
                 # truncated checkpoint). Recorded like any other result here; the fallback below is
                 # what treats it differently from a plain no-match.
-                details[candidate_name] = e
+                details[candidate_name] = ModelConfigFactory._detach_traceback(e)
             except ValidationError as e:
                 # This means the model matched, but we couldn't create the pydantic model instance for the config.
                 # Maybe invalid overrides were provided?
-                details[candidate_name] = e
+                details[candidate_name] = ModelConfigFactory._detach_traceback(e)
             except Exception as e:
                 # Some other unexpected error occurred. Store the exception for reporting later.
-                details[candidate_name] = e
+                details[candidate_name] = ModelConfigFactory._detach_traceback(e)
 
         # Extract just the successful matches
         matches = [r for r in details.values() if isinstance(r, Config_Base)]

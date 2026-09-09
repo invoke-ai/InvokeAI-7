@@ -144,6 +144,7 @@ invokeai.example.yaml
 /configs/
 /nodes/
 /outputs/
+/fonts/
 
 # Spyder project settings
 .spyderproject
@@ -208,3 +209,8 @@ installer/InvokeAI-Installer/
 
 # Weblate configuration file
 weblate.ini
+
+# Node dependencies and tool caches. The web app has its own .gitignore, but a repo-root
+# node_modules/ (created by running a JS tool from the repo root) was not covered by anything,
+# so vitest cache artifacts could be committed by accident.
+node_modules/

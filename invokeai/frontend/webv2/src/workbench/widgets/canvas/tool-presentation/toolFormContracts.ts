@@ -5,7 +5,7 @@ import type { ComponentType } from 'react';
 
 export type CanvasToolOptionsEngine = Pick<
   CanvasEngineHandle,
-  'document' | 'interaction' | 'layers' | 'projectId' | 'selection' | 'tools' | 'viewport'
+  'document' | 'fonts' | 'interaction' | 'layers' | 'projectId' | 'selection' | 'tools' | 'viewport'
 >;
 
 export type CanvasOperationKind = Extract<CanvasOperationState, { status: 'active' }>['identity']['kind'];

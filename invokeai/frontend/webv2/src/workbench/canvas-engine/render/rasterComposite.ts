@@ -11,6 +11,7 @@ import type { RasterSurface } from '@workbench/canvas-engine/render/raster';
 import type { Mat2d, Rect } from '@workbench/canvas-engine/types';
 
 import { compileDocumentLeaves } from '@workbench/canvas-engine/document-model/documentModel';
+import { getSourceContentRect } from '@workbench/canvas-engine/document/sources';
 import { fromTRS, multiply } from '@workbench/canvas-engine/math/mat2d';
 import { roundOut, transformBounds, union } from '@workbench/canvas-engine/math/rect';
 import { adjustmentsKey, applyAdjustments, isIdentityAdjustments } from '@workbench/canvas-engine/render/adjustments';
@@ -72,8 +73,19 @@ const isBaseRasterLeaf = (leaf: SemanticLeaf): leaf is SemanticLeaf & { layer: C
   if (layer.source.type === 'image') {
     return true;
   }
-  return layer.source.type === 'paint' && layer.source.bitmap !== null;
+  if (layer.source.type === 'paint') {
+    return layer.source.bitmap !== null;
+  }
+  return layer.source.type === 'text' && layer.source.content.length > 0;
 };
+
+/** JSON with recursively sorted object keys, so text edits produce deterministic identities. */
+const stableSourceKey = (value: unknown): string =>
+  JSON.stringify(value, (_key, entry: unknown) =>
+    entry && typeof entry === 'object' && !Array.isArray(entry)
+      ? Object.fromEntries(Object.entries(entry).sort(([a], [b]) => (a < b ? -1 : 1)))
+      : entry
+  );
 
 /** A stable string identifying a source's pixels (its asset name, or an empty sentinel). */
 const sourceRefOf = (source: CanvasLayerSourceContract): string => {
@@ -82,6 +94,8 @@ const sourceRefOf = (source: CanvasLayerSourceContract): string => {
       return `image:${source.image.imageName}`;
     case 'paint':
       return source.bitmap ? `paint:${source.bitmap.imageName}` : 'paint:empty';
+    case 'text':
+      return `text:${stableSourceKey(source)}`;
     default:
       return `${source.type}:unsupported`;
   }
@@ -96,6 +110,9 @@ const contentRectOf = (layer: CanvasRasterLayerContractV2, doc: CanvasDocumentCo
   if (source.type === 'paint' && source.bitmap) {
     const offset = source.offset ?? { x: 0, y: 0 };
     return { height: source.bitmap.height, width: source.bitmap.width, x: offset.x, y: offset.y };
+  }
+  if (source.type === 'text') {
+    return getSourceContentRect(layer, doc);
   }
   return { height: doc.height, width: doc.width, x: 0, y: 0 };
 };

@@ -488,6 +488,24 @@ describe('LayersTree selection, surfaces and structure', () => {
     expect(output('selected-layers')).toBe('first,second,third');
   });
 
+  it('deletes the focused row with Delete and the selection with Backspace, keeping focus in the tree', async () => {
+    await renderTree(trio());
+    treeitem('Second').focus();
+    await act(() => userEvent.keyboard('{Delete}'));
+    expect(output('layer-order')).toBe('first,third');
+    expect(document.activeElement).toBe(treeitem('Third'));
+
+    // The last row falls back to the row above it.
+    treeitem('Third').focus();
+    await act(() => userEvent.keyboard('{Delete}'));
+    expect(output('layer-order')).toBe('first');
+    expect(document.activeElement).toBe(treeitem('First'));
+
+    await act(() => userEvent.click(treeitem('First')));
+    await act(() => userEvent.keyboard('{Backspace}'));
+    expect(output('layer-order')).toBe('');
+  });
+
   it('keeps the visibility dot isolated from row selection', async () => {
     await renderTree(trio());
     const dot = host!.querySelector<HTMLButtonElement>(

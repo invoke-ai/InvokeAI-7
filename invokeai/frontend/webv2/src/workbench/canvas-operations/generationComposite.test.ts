@@ -31,6 +31,36 @@ const rasterLayer = (id: string, size = 64): CanvasRasterLayerContractV2 => ({
   type: 'raster',
 });
 
+const textLayer = (id: string, overrides: Partial<CanvasRasterLayerContractV2> = {}): CanvasRasterLayerContractV2 => ({
+  ...rasterLayer(id),
+  source: {
+    align: 'left',
+    color: '#ffffff',
+    content: 'hello',
+    fontFamily: 'Inter',
+    fontSize: 32,
+    fontWeight: 400,
+    lineHeight: 1.2,
+    type: 'text',
+  },
+  ...overrides,
+});
+
+const customTextLayer = (id: string): CanvasRasterLayerContractV2 =>
+  textLayer(id, {
+    source: {
+      align: 'left',
+      color: '#ffffff',
+      content: 'hello',
+      fontFamily: 'Custom Sans',
+      fontRef: { contentHash: 'hash-v1', family: 'Custom Sans', id: 'font-1', label: 'Custom Sans' },
+      fontSize: 32,
+      fontWeight: 400,
+      lineHeight: 1.2,
+      type: 'text',
+    },
+  });
+
 const controlLayer = (id: string): CanvasControlLayerContract => ({
   adapter: { beginEndStepPct: [0, 1], controlMode: 'balanced', kind: 'controlnet', model: null, weight: 0.75 },
   blendMode: 'normal',
@@ -120,6 +150,7 @@ interface HostHarness {
 
 interface HostOptions {
   alpha?: number;
+  layerRects?: Readonly<Record<string, Rect>>;
   uploadImage?: (blob: Blob) => Promise<CanvasImageUploadResult>;
 }
 
@@ -157,12 +188,13 @@ const makeHost = (document: CanvasDocumentContractV3, options: HostOptions = {})
       const detached = new Map<string, { rect: Rect; surface: RasterSurface }>();
       for (const layerId of layerIds) {
         surfaceIds.push(layerId);
+        const rect = options.layerRects?.[layerId] ?? { height: 64, width: 64, x: 0, y: 0 };
         let surface = layerSurfaces.get(layerId);
         if (!surface) {
-          surface = stub.createSurface(64, 64);
+          surface = stub.createSurface(rect.width, rect.height);
           layerSurfaces.set(layerId, surface);
         }
-        detached.set(layerId, { rect: { height: 64, width: 64, x: 0, y: 0 }, surface });
+        detached.set(layerId, { rect, surface });
       }
       return Promise.resolve({
         snapshot: {
@@ -320,6 +352,61 @@ describe('composeForGeneration', () => {
     expect(result.composites.baseImageName).toBe('composite-1.png');
     expect(getDocumentLeaves(result.composites.canvas.document)[0]?.id).toBe('base');
     expect(result.composites.bbox).toEqual({ height: 64, width: 64, x: 0, y: 0 });
+  });
+
+  it('uses captured custom-text bounds when browser metrics exceed the pure estimate', async () => {
+    const text = customTextLayer('text');
+    const document = {
+      ...makeDoc([text]),
+      // The estimate is 60px wide, so this bbox only edge-touches it. The
+      // captured surface below is 100px wide, representing a wider loaded face.
+      bbox: { height: 32, width: 4, x: 60, y: 0 },
+    };
+    const harness = makeHost(document, { layerRects: { text: { height: 32, width: 100, x: 0, y: 0 } } });
+    const detectMode = vi.fn(() => 'img2img' as const);
+
+    const result = await compose(harness.host, { detectMode });
+
+    expect(result.status).toBe('ok');
+    expect(detectMode).toHaveBeenCalledWith(
+      expect.objectContaining({
+        bbox: { height: 32, width: 4, x: 60, y: 0 },
+        contentBounds: { height: 32, width: 100, x: 0, y: 0 },
+      })
+    );
+    expect(harness.uploadImage).toHaveBeenCalledOnce();
+  });
+
+  it('requests custom text from raster capture and composites the authorized pixels', async () => {
+    const text = customTextLayer('text');
+    const harness = makeHost(makeDoc([text]));
+    const captureRasterSnapshot = vi.fn(harness.host.captureRasterSnapshot);
+    harness.host.captureRasterSnapshot = captureRasterSnapshot;
+
+    const result = await compose(harness.host);
+    expect(result.status).toBe('ok');
+    expect(captureRasterSnapshot).toHaveBeenCalledWith(
+      expect.any(Object),
+      ['text'],
+      expect.objectContaining({ signal: expect.any(AbortSignal) })
+    );
+    expect(harness.surfaceIds).toContain('text');
+    expect(harness.uploadImage).toHaveBeenCalledOnce();
+    if (result.status === 'ok') {
+      expect(result.composites.mode).toBe('img2img');
+      expect(result.composites.baseImageName).toBe('composite-1.png');
+    }
+  });
+
+  it('fails closed when raster capture cannot authorize a custom text font', async () => {
+    const text = customTextLayer('text');
+    const harness = makeHost(makeDoc([text]));
+    harness.host.captureRasterSnapshot = vi.fn(() => Promise.resolve({ status: 'not-ready' as const }));
+
+    const result = await compose(harness.host);
+
+    expect(result).toEqual({ status: 'not-ready' });
+    expect(harness.uploadImage).not.toHaveBeenCalled();
   });
 
   it('executes the inpaint mask before consulting detectMode and reports its coverage', async () => {

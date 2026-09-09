@@ -2,7 +2,7 @@
 export const MIN_SUPPORTED_CANVAS_SCHEMA_VERSION = 3;
 
 /** Newest canvas document schema this build can safely read, edit, and write. */
-export const MAX_SUPPORTED_CANVAS_SCHEMA_VERSION = 3;
+export const MAX_SUPPORTED_CANVAS_SCHEMA_VERSION = 4;
 
 /** Whether a project whose documents need at least `minimumCanvasSchemaVersion` can be opened here. */
 export const isCanvasSchemaVersionSupported = (minimumCanvasSchemaVersion: number): boolean =>

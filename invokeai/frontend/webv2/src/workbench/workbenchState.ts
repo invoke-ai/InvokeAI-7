@@ -989,7 +989,7 @@ const cloneCanvas = (canvas: CanvasStateContractV3): CanvasStateContractV3 => {
   const document = structuredClone(canvas.document);
 
   return {
-    version: 3,
+    version: canvas.version,
     document,
     documentRevision: canvas.documentRevision,
     snapshots: canvas.snapshots.map((snapshot) => ({ ...snapshot, document: structuredClone(snapshot.document) })),

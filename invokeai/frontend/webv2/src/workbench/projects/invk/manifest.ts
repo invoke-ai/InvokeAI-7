@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { zInvkFontDependency } from './fonts';
 import { INVK_EXTENSION, INVK_VERSION, InvkFormatError } from './format';
 
 /**
@@ -39,6 +40,7 @@ const zManifestV2 = z.object({
   /** Entry path of the preview image, when the archive carries one. */
   cover: z.string().optional(),
   createdAt: z.string(),
+  fonts: z.array(zInvkFontDependency).optional(),
   /** Highest canvas schema version required by the source project and its retained history. */
   minimumCanvasSchemaVersion: z.number().int().min(1).optional(),
   name: z.string(),
@@ -86,6 +88,7 @@ export const buildInvkManifest = (input: {
   appVersion: string;
   cover?: string;
   createdAt: string;
+  fonts?: InvkManifest['fonts'];
   minimumCanvasSchemaVersion?: number;
   name: string;
   sourceProjectId?: string;
@@ -95,6 +98,7 @@ export const buildInvkManifest = (input: {
   createdAt: input.createdAt,
   name: input.name,
   version: INVK_VERSION,
+  ...(input.fonts === undefined || input.fonts.length === 0 ? {} : { fonts: input.fonts }),
   ...(input.cover === undefined ? {} : { cover: input.cover }),
   ...(input.minimumCanvasSchemaVersion === undefined
     ? {}
