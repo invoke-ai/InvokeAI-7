@@ -14,6 +14,7 @@ from invokeai.backend.quantization.fp8_scaled import FP8_DTYPE, is_scale_metadat
 from tests.backend.model_manager.load.state_dicts.flux2_transformer_fp8mixed_keys import (
     state_dict_keys as mixed_keys,
 )
+from tests.backend.model_manager.load.state_dicts.utils import token_extents
 
 _DTYPES = {"F8_E4M3": FP8_DTYPE, "F32": torch.float32, "BF16": torch.bfloat16}
 
@@ -21,12 +22,19 @@ SCALE_VALUE = 0.25
 
 
 def _mock_state_dict() -> dict[str, torch.Tensor]:
+    """Builds the captured layout at a token size.
+
+    The assertions below read key names, dtypes, values and -- in one case -- rank; none reads an
+    extent. Materializing the real extents means 2.3 billion elements: ~5GB for one call, and a
+    ~15GB peak across this file, which cannot be afforded once CI runs several test processes at
+    once. Every dimension is capped while rank and dtype are kept exactly as captured.
+    """
     sd: dict[str, torch.Tensor] = {}
     for key, (shape, dtype) in mixed_keys.items():
         if key.endswith((".weight_scale", ".input_scale")):
             sd[key] = torch.tensor(SCALE_VALUE, dtype=torch.float32)
         else:
-            sd[key] = torch.ones(shape, dtype=torch.float32).to(_DTYPES[dtype])
+            sd[key] = torch.ones(token_extents(shape), dtype=_DTYPES[dtype])
     return sd
 
 

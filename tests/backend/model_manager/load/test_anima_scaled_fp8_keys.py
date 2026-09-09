@@ -32,6 +32,7 @@ from tests.backend.model_manager.load.state_dicts.anima_transformer_scaled_fp8_k
 from tests.backend.model_manager.load.state_dicts.anima_transformer_scaled_fp8_keys import (
     state_dict_keys as anima_keys,
 )
+from tests.backend.model_manager.load.state_dicts.utils import token_extents
 
 _DTYPES = {"F8_E4M3": FP8_DTYPE, "F32": torch.float32, "BF16": torch.bfloat16, "U8": torch.uint8}
 
@@ -52,12 +53,12 @@ def _build_state_dict() -> dict[str, torch.Tensor]:
             # parses the blob. Python's `False` would not parse and the flag would vanish.
             sd[key] = torch.frombuffer(bytearray(json.dumps(blob).encode()), dtype=torch.uint8).clone()
         elif torch_dtype is FP8_DTYPE:
-            sd[key] = torch.zeros(shape, dtype=torch.float32).to(FP8_DTYPE)
+            sd[key] = torch.zeros(token_extents(shape), dtype=FP8_DTYPE)
         elif key.endswith((".weight_scale", ".input_scale")):
             # 1.0 is the placeholder `_usable_input_scale` rejects, so it must not be used here.
-            sd[key] = torch.full(shape, 2.5, dtype=torch_dtype)
+            sd[key] = torch.full(token_extents(shape), 2.5, dtype=torch_dtype)
         else:
-            sd[key] = torch.zeros(shape, dtype=torch_dtype)
+            sd[key] = torch.zeros(token_extents(shape), dtype=torch_dtype)
     return _filter_non_model_keys(_strip_anima_bundle_prefix(sd))
 
 

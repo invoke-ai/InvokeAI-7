@@ -6,6 +6,7 @@
 # play well with fixtures (F401 and F811), so this is cleaner than importing in all files that use these fixtures.
 import logging
 import shutil
+import sys
 from pathlib import Path
 
 import pytest
@@ -109,3 +110,49 @@ def invokeai_root_dir(tmp_path_factory) -> Path:
     temp_dir: Path = tmp_path_factory.mktemp("data") / "invokeai_root"
     shutil.copytree(root_template, temp_dir)
     return temp_dir
+
+
+# --- Peak memory reporting -------------------------------------------------------------------
+#
+# Running the suite across xdist workers multiplies its memory footprint, and the failure mode is
+# silent: the runner is killed mid-run, so there is no summary, no failing test and no clue which
+# file was responsible. Reporting each worker's peak turns a future blow-up into a number that
+# moves in the CI log before it takes a runner down. `--max-worker-restart=0` in the workflow
+# makes the death itself fail the run immediately rather than after sixteen restarts.
+
+_worker_peak_rss: dict[str, int] = {}
+
+
+def _peak_rss_bytes() -> int:
+    if sys.platform == "win32":
+        import psutil
+
+        return psutil.Process().memory_info().peak_wset
+    import resource
+
+    peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    # ru_maxrss is bytes on macOS and kilobytes on Linux.
+    return peak if sys.platform == "darwin" else peak * 1024
+
+
+def pytest_sessionfinish(session: pytest.Session) -> None:
+    """Hands this worker's peak to the controller; `workeroutput` exists only in a worker."""
+    output = getattr(session.config, "workeroutput", None)
+    if output is not None:
+        output["peak_rss_bytes"] = _peak_rss_bytes()
+
+
+def pytest_testnodedown(node, error) -> None:  # noqa: ANN001  # xdist types are not exported
+    peak = getattr(node, "workeroutput", {}).get("peak_rss_bytes")
+    if peak is not None:
+        _worker_peak_rss[node.gateway.id] = peak
+
+
+def pytest_terminal_summary(terminalreporter) -> None:  # noqa: ANN001
+    if not _worker_peak_rss:
+        return
+    peaks = _worker_peak_rss.values()
+    terminalreporter.write_line(
+        f"peak RSS: {max(peaks) / 2**30:.2f}GB worst worker, "
+        f"{sum(peaks) / 2**30:.2f}GB summed over {len(_worker_peak_rss)} workers"
+    )

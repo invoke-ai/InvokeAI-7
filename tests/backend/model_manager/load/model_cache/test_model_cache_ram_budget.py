@@ -3721,14 +3721,17 @@ def test_dropped_cache_is_collectable_and_its_worker_exits(mock_logger):
     store = SharedCpuWeightsStore()
     budget = RamBudget(max_bytes=int(S * 8), shared_store=store)
 
-    def worker_count() -> int:
-        return sum(1 for t in threading.enumerate() if t.name == "model-cache-deferred-work")
+    def workers() -> set[threading.Thread]:
+        return {t for t in threading.enumerate() if t.name == "model-cache-deferred-work"}
 
-    before = worker_count()
+    # Identity, not a count: a worker from an earlier test in this process may still be winding
+    # down, and one starting as another exits leaves the count unchanged. Threads also start
+    # asynchronously, so the set is converged on rather than sampled at one instant.
+    before = workers()
     cache = _make_cache(store, budget, mock_logger)
     module = DummyModule()
     cache.put("model", module)
-    assert worker_count() == before + 1
+    assert _wait_until(lambda: workers() - before), "the cache never started its worker"
 
     cache_ref = weakref.ref(cache)
     module_ref = weakref.ref(module)
@@ -3738,7 +3741,7 @@ def test_dropped_cache_is_collectable_and_its_worker_exits(mock_logger):
     assert cache_ref() is None, "the worker thread kept the ModelCache alive"
     assert module_ref() is None, "the dropped cache's model is still resident in RAM"
     # The finalizer wakes the parked worker so it exits rather than leaking a thread per cache.
-    assert _wait_until(lambda: worker_count() == before), "the worker thread outlived its cache"
+    assert _wait_until(lambda: not workers() - before), "the worker thread outlived its cache"
 
 
 def test_dropped_non_shared_cache_releases_only_its_budget_charge(mock_logger):

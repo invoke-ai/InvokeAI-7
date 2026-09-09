@@ -20,16 +20,22 @@ _DTYPES = {"F8_E4M3": FP8_DTYPE, "F32": torch.float32, "BF16": torch.bfloat16}
 
 
 def _build_state_dict() -> dict[str, torch.Tensor]:
+    """Builds the captured layout at exact extents but almost no storage.
+
+    The extents matter here -- the fused qkv is split into thirds, so they cannot be capped the
+    way the sibling fixtures are -- but the values do not, so each tensor is one element expanded
+    to its full shape. Materializing 5.6e8 elements instead costs ~2GB, which is more than the
+    CI test processes can hold alongside one another.
+    """
     sd: dict[str, torch.Tensor] = {}
     for key, (shape, dtype) in klein_keys.items():
         torch_dtype = _DTYPES[dtype]
-        if torch_dtype is FP8_DTYPE:
-            sd[key] = torch.zeros(shape, dtype=torch.float32).to(FP8_DTYPE)
-        elif key.endswith((".weight_scale", ".input_scale")):
+        if key.endswith((".weight_scale", ".input_scale")):
             # 1.0 is the placeholder `_usable_input_scale` rejects, so it must not be used here.
-            sd[key] = torch.full(shape, 2.5, dtype=torch_dtype)
+            fill = 2.5
         else:
-            sd[key] = torch.zeros(shape, dtype=torch_dtype)
+            fill = 0.0
+        sd[key] = torch.full((), fill, dtype=torch_dtype).expand(shape)
     return sd
 
 
