@@ -40,6 +40,26 @@
       "guidance": null,
       "cpu_only": null,
       "fp8_storage": null
+    },
+    "vae": {
+      "accepted": [
+        {
+          "base": "anima",
+          "latent_channels": null
+        },
+        {
+          "base": "flux",
+          "latent_channels": null
+        },
+        {
+          "base": "qwen-image",
+          "latent_channels": null
+        },
+        {
+          "base": "wan",
+          "latent_channels": 16
+        }
+      ]
     }
   },
   {
@@ -83,7 +103,8 @@
       "guidance": null,
       "cpu_only": null,
       "fp8_storage": null
-    }
+    },
+    "vae": null
   },
   {
     "base": "ernie-image",
@@ -126,7 +147,8 @@
       "guidance": null,
       "cpu_only": null,
       "fp8_storage": null
-    }
+    },
+    "vae": null
   },
   {
     "base": "flux",
@@ -169,7 +191,8 @@
       "guidance": 3.5,
       "cpu_only": null,
       "fp8_storage": null
-    }
+    },
+    "vae": null
   },
   {
     "base": "flux",
@@ -212,7 +235,8 @@
       "guidance": 30.0,
       "cpu_only": null,
       "fp8_storage": null
-    }
+    },
+    "vae": null
   },
   {
     "base": "flux",
@@ -255,7 +279,8 @@
       "guidance": null,
       "cpu_only": null,
       "fp8_storage": null
-    }
+    },
+    "vae": null
   },
   {
     "base": "flux2",
@@ -298,7 +323,8 @@
       "guidance": null,
       "cpu_only": null,
       "fp8_storage": null
-    }
+    },
+    "vae": null
   },
   {
     "base": "flux2",
@@ -341,7 +367,8 @@
       "guidance": 3.5,
       "cpu_only": null,
       "fp8_storage": null
-    }
+    },
+    "vae": null
   },
   {
     "base": "flux2",
@@ -384,7 +411,8 @@
       "guidance": null,
       "cpu_only": null,
       "fp8_storage": null
-    }
+    },
+    "vae": null
   },
   {
     "base": "flux2",
@@ -427,7 +455,8 @@
       "guidance": null,
       "cpu_only": null,
       "fp8_storage": null
-    }
+    },
+    "vae": null
   },
   {
     "base": "ideogram-4",
@@ -470,7 +499,8 @@
       "guidance": null,
       "cpu_only": null,
       "fp8_storage": null
-    }
+    },
+    "vae": null
   },
   {
     "base": "krea-2",
@@ -513,6 +543,18 @@
       "guidance": null,
       "cpu_only": null,
       "fp8_storage": null
+    },
+    "vae": {
+      "accepted": [
+        {
+          "base": "anima",
+          "latent_channels": null
+        },
+        {
+          "base": "qwen-image",
+          "latent_channels": null
+        }
+      ]
     }
   },
   {
@@ -556,6 +598,18 @@
       "guidance": null,
       "cpu_only": null,
       "fp8_storage": null
+    },
+    "vae": {
+      "accepted": [
+        {
+          "base": "anima",
+          "latent_channels": null
+        },
+        {
+          "base": "qwen-image",
+          "latent_channels": null
+        }
+      ]
     }
   },
   {
@@ -599,7 +653,8 @@
       "guidance": null,
       "cpu_only": null,
       "fp8_storage": null
-    }
+    },
+    "vae": null
   },
   {
     "base": "qwen-image",
@@ -642,6 +697,18 @@
       "guidance": null,
       "cpu_only": null,
       "fp8_storage": null
+    },
+    "vae": {
+      "accepted": [
+        {
+          "base": "anima",
+          "latent_channels": null
+        },
+        {
+          "base": "qwen-image",
+          "latent_channels": null
+        }
+      ]
     }
   },
   {
@@ -685,7 +752,8 @@
       "guidance": null,
       "cpu_only": null,
       "fp8_storage": null
-    }
+    },
+    "vae": null
   },
   {
     "base": "sd-2",
@@ -728,7 +796,8 @@
       "guidance": null,
       "cpu_only": null,
       "fp8_storage": null
-    }
+    },
+    "vae": null
   },
   {
     "base": "sd-3",
@@ -771,7 +840,8 @@
       "guidance": null,
       "cpu_only": null,
       "fp8_storage": null
-    }
+    },
+    "vae": null
   },
   {
     "base": "sdxl",
@@ -814,7 +884,8 @@
       "guidance": null,
       "cpu_only": null,
       "fp8_storage": null
-    }
+    },
+    "vae": null
   },
   {
     "base": "sdxl-refiner",
@@ -857,7 +928,8 @@
       "guidance": null,
       "cpu_only": null,
       "fp8_storage": null
-    }
+    },
+    "vae": null
   },
   {
     "base": "wan",
@@ -900,6 +972,18 @@
       "guidance": null,
       "cpu_only": null,
       "fp8_storage": null
+    },
+    "vae": {
+      "accepted": [
+        {
+          "base": "wan",
+          "latent_channels": 16
+        },
+        {
+          "base": "wan",
+          "latent_channels": 48
+        }
+      ]
     }
   },
   {
@@ -943,6 +1027,18 @@
       "guidance": null,
       "cpu_only": null,
       "fp8_storage": null
+    },
+    "vae": {
+      "accepted": [
+        {
+          "base": "wan",
+          "latent_channels": 16
+        },
+        {
+          "base": "wan",
+          "latent_channels": 48
+        }
+      ]
     }
   },
   {
@@ -986,6 +1082,14 @@
       "guidance": null,
       "cpu_only": null,
       "fp8_storage": null
+    },
+    "vae": {
+      "accepted": [
+        {
+          "base": "flux",
+          "latent_channels": null
+        }
+      ]
     }
   },
   {
@@ -1029,6 +1133,14 @@
       "guidance": null,
       "cpu_only": null,
       "fp8_storage": null
+    },
+    "vae": {
+      "accepted": [
+        {
+          "base": "flux",
+          "latent_channels": null
+        }
+      ]
     }
   }
 ]

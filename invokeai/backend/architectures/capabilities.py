@@ -25,7 +25,8 @@ from invokeai.backend.architectures.facets.features import (
 )
 from invokeai.backend.architectures.facets.latent_space import LatentSpaceFacet
 from invokeai.backend.architectures.facets.modality import GenerationModeKind, ModalityFacet
-from invokeai.backend.architectures.registry import generative_bases, require
+from invokeai.backend.architectures.facets.vae import VaeFacet
+from invokeai.backend.architectures.registry import generative_bases, get, require
 from invokeai.backend.model_manager.configs.default_settings import MainModelDefaultSettings
 from invokeai.backend.model_manager.taxonomy import BaseModelType
 
@@ -80,6 +81,30 @@ class ArchitectureFeatures(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class VaeAcceptance(BaseModel):
+    """One VAE this architecture's decode accepts."""
+
+    base: BaseModelType
+    latent_channels: int | None = Field(
+        default=None,
+        description="Null unless the base ships VAEs of more than one latent width; only wan does.",
+    )
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class ArchitectureVae(BaseModel):
+    """Which VAEs an architecture's decode accepts, beyond its own base.
+
+    Served because the clients keep their own copy of this and it drifts: widening a backend list
+    without the picker leaves a VAE that loads but cannot be chosen.
+    """
+
+    accepted: list[VaeAcceptance]
+
+    model_config = ConfigDict(extra="forbid")
+
+
 class ArchitectureCapabilities(BaseModel):
     """One row of the table."""
 
@@ -92,6 +117,9 @@ class ArchitectureCapabilities(BaseModel):
     features: ArchitectureFeatures
     defaults: MainModelDefaultSettings | None = Field(
         default=None, description="Recommended generation parameters, if the architecture has any."
+    )
+    vae: ArchitectureVae | None = Field(
+        default=None, description="Null where the architecture declares no VAE compatibility beyond its own base."
     )
 
     model_config = ConfigDict(extra="forbid")
@@ -144,6 +172,18 @@ def architecture_capabilities() -> list[ArchitectureCapabilities]:
 
         rendered = ArchitectureModality(modes=sorted(modality.modes), metadata_slug=modality.metadata_slug)
         rendered_features = _features_of(features, latent_space.primary.spatial_compression)
+        # Optional: most architectures accept only their own base, which needs no row.
+        vae_facet = get(base, VaeFacet)
+        rendered_vae = (
+            ArchitectureVae(
+                accepted=[
+                    VaeAcceptance(base=c.base, latent_channels=c.latent_channels)
+                    for c in sorted(vae_facet.accepted, key=lambda c: (c.base.value, c.latent_channels or 0))
+                ]
+            )
+            if vae_facet is not None
+            else None
+        )
 
         rows.append(
             ArchitectureCapabilities(
@@ -151,6 +191,7 @@ def architecture_capabilities() -> list[ArchitectureCapabilities]:
                 modality=rendered,
                 features=rendered_features,
                 defaults=defaults.resolve(),
+                vae=rendered_vae,
             )
         )
         for variant in sorted(v for v in defaults.by_variant if v is not None):
@@ -163,6 +204,7 @@ def architecture_capabilities() -> list[ArchitectureCapabilities]:
                     modality=rendered,
                     features=rendered_features,
                     defaults=defaults.by_variant[variant],
+                    vae=rendered_vae,
                 )
             )
     return rows

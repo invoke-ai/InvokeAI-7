@@ -59,6 +59,14 @@ export interface ArchitectureCapabilitiesRow {
     cpu_only: boolean | null;
     fp8_storage: boolean | null;
   } | null;
+  /**
+   * Which VAEs this architecture's decode accepts beyond its own base, or null where it accepts
+   * only its own. `latent_channels` is null unless the base ships VAEs of more than one width;
+   * today only `wan` does, and its two are different decoders.
+   */
+  vae: {
+    accepted: { base: string; latent_channels: number | null }[];
+  } | null;
 }
 
 const FALLBACK_STEPS = 30;

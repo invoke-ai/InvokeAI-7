@@ -4,6 +4,8 @@ export type GenerateComponentCandidate = {
   base: string;
   format?: string;
   key?: string;
+  /** VAE latent width. Only `wan` ships more than one, and its two are different decoders. */
+  latent_channels?: number | null;
   submodels?: Record<string, unknown> | null;
   type: string;
   variant?: unknown;
@@ -139,7 +141,15 @@ export const getCompatibleDiffusersComponentSource = <T extends GenerateComponen
 ): T | undefined =>
   source && isCompatibleDiffusersComponentSourceForModel(selectedModel, source) ? source : undefined;
 
-export const isAnimaVae = isVaeForBases(['anima', 'qwen-image', 'flux']);
+/**
+ * Anima's decode takes an `AutoencoderKLWan` or a `FluxAutoEncoder`, and the Wan-family file is the
+ * same 194-tensor checkpoint whichever base it was installed under — see the `VaeFacet` in
+ * `architectures/defs/anima.py`, which is where this list is declared. The 48-channel Wan VAE is a
+ * different decoder, so the width is part of the condition rather than the base alone.
+ */
+export const isAnimaVae: GenerateComponentFilter = (model) =>
+  model.type === 'vae' &&
+  (['anima', 'qwen-image', 'flux'].includes(model.base) || (model.base === 'wan' && model.latent_channels === 16));
 
 /**
  * Krea-2 decodes with the Qwen-Image VAE (16-channel), which is why its graph reuses
@@ -148,7 +158,16 @@ export const isAnimaVae = isVaeForBases(['anima', 'qwen-image', 'flux']);
  * `krea2_model_loader`'s own `ui_model_base=[QwenImage, Anima]`. Restricting this to
  * `qwen-image` hides a working VAE that the backend would have accepted.
  */
-export const isKrea2Vae = isVaeForBases(['qwen-image', 'anima']);
+/**
+ * Qwen-Image's VAE, wherever it is registered from.
+ *
+ * The same weights ship registered under either base, which is why the backend's `VaeFacet` for
+ * qwen-image accepts both — see `architectures/defs/qwen_image.py`. Krea-2 decodes with this VAE
+ * too, so it shares the predicate rather than keeping a second list that can drift from it.
+ */
+export const isQwenImageFamilyVae = isVaeForBases(['qwen-image', 'anima']);
+
+export const isKrea2Vae = isQwenImageFamilyVae;
 
 export const isVaeCompatibleWithGenerateModel = (model: GenerateModelConfig, vae: VaeModelConfig): boolean => {
   if (model.type === 'external_image_generator') {
@@ -161,7 +180,7 @@ export const isVaeCompatibleWithGenerateModel = (model: GenerateModelConfig, vae
     case 'z-image':
       return isVaeForBases(['flux'])(vae);
     case 'qwen-image':
-      return isVaeForBases(['qwen-image'])(vae);
+      return isQwenImageFamilyVae(vae);
     case 'krea-2':
       return isKrea2Vae(vae);
     case 'flux2':

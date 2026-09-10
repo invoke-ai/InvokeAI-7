@@ -5174,6 +5174,8 @@ export type components = {
             features: components["schemas"]["ArchitectureFeatures"];
             /** @description Recommended generation parameters, if the architecture has any. */
             defaults?: components["schemas"]["MainModelDefaultSettings"] | null;
+            /** @description Null where the architecture declares no VAE compatibility beyond its own base. */
+            vae?: components["schemas"]["ArchitectureVae"] | null;
         };
         /**
          * ArchitectureFeatures
@@ -5274,6 +5276,17 @@ export type components = {
              * @description Prefix its mode strings carry in image metadata; null means unprefixed.
              */
             metadata_slug?: string | null;
+        };
+        /**
+         * ArchitectureVae
+         * @description Which VAEs an architecture's decode accepts, beyond its own base.
+         *
+         *     Served because the clients keep their own copy of this and it drifts: widening a backend list
+         *     without the picker leaves a VAE that loads but cannot be chosen.
+         */
+        ArchitectureVae: {
+            /** Accepted */
+            accepted: components["schemas"]["VaeAcceptance"][];
         };
         /**
          * BaseMetadata
@@ -43365,6 +43378,18 @@ export type components = {
              * @enum {integer}
              */
             latent_channels: 16 | 48;
+        };
+        /**
+         * VaeAcceptance
+         * @description One VAE this architecture's decode accepts.
+         */
+        VaeAcceptance: {
+            base: components["schemas"]["BaseModelType"];
+            /**
+             * Latent Channels
+             * @description Null unless the base ships VAEs of more than one latent width; only wan does.
+             */
+            latent_channels?: number | null;
         };
         /** ValidationError */
         ValidationError: {

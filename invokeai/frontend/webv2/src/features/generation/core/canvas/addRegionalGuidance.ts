@@ -54,7 +54,12 @@ const REGIONAL_GUIDANCE_SUPPORT: Record<RegionalGuidanceBase, RegionalGuidanceSu
  * in. Only the *answer* comes from the capability table now.
  */
 export const isRegionalGuidanceSupportedForBase = (base: string): base is RegionalGuidanceBase =>
-  getArchitectureFeatures(base)?.supports_regional_guidance ?? false;
+  // Both halves, or the predicate is unsound: it narrows to the key set of the matrix below, while
+  // the backend's answer is what decides. A base the backend newly declares supported but that has
+  // no row here would satisfy the old check, and `REGIONAL_GUIDANCE_SUPPORT[base]` would then hand
+  // back `undefined` typed as a support object. Requiring the row keeps the type honest and makes
+  // the drift a missing feature rather than a crash.
+  (getArchitectureFeatures(base)?.supports_regional_guidance ?? false) && base in REGIONAL_GUIDANCE_SUPPORT;
 
 /**
  * The per-base support matrix, or `null` for a base with no regional path.

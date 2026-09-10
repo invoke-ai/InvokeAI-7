@@ -1,6 +1,10 @@
+import {
+  seedArchitectureCapabilities,
+  architectureCapabilitiesFixture,
+} from '@features/generation/core/architectureCapabilities.testing';
 import { describe, expect, it } from 'vitest';
 
-import type { ComponentModelConfig, GenerateModelConfig } from './types';
+import type { ComponentModelConfig, GenerateModelConfig, VaeModelConfig } from './types';
 
 import {
   getCompatibleSelectedComponentKey,
@@ -36,6 +40,8 @@ const FLUX1_SDNQ_COMPONENTS = [...STANDARD_SDNQ_COMPONENTS, 'text_encoder_2', 't
 
 const submodelsWithout = (components: readonly string[], missing: string): Record<string, object> =>
   Object.fromEntries(components.filter((component) => component !== missing).map((component) => [component, {}]));
+
+seedArchitectureCapabilities();
 
 describe('Generate component compatibility', () => {
   it('only treats SDNQ folders with every required pipeline component as self-contained', () => {
@@ -177,5 +183,44 @@ describe('isVaeForBases', () => {
 
   it('never matches a non-vae model', () => {
     expect(isVaeForBases(['flux'])({ base: 'flux', type: 'main' } as never)).toBe(false);
+  });
+});
+
+describe('the VAE filters and the backend declarations', () => {
+  /**
+   * webv2 keeps its own copy of which VAE bases a model accepts, and the backend now declares the
+   * same fact in `VaeFacet`. Two copies drift: this PR widened qwen-image to accept the anima
+   * registration and the picker kept refusing it, so a VAE the backend would have loaded could not
+   * be selected. Binding the filter to the served table is what makes the next widening show up
+   * here instead of in a user's model list.
+   */
+  it('accepts every VAE base the backend declares for that architecture', () => {
+    const declared = architectureCapabilitiesFixture.filter((row) => row.vae);
+    expect(declared.length).toBeGreaterThan(0);
+
+    for (const row of declared) {
+      const model = {
+        base: row.base,
+        key: `${row.base}-main`,
+        name: row.base,
+        type: 'main' as const,
+      } as unknown as GenerateModelConfig;
+
+      for (const accepted of row.vae!.accepted) {
+        const vae = {
+          base: accepted.base,
+          key: `${accepted.base}-vae`,
+          name: `${accepted.base} vae`,
+          type: 'vae' as const,
+          // Only wan distinguishes VAEs by latent width; the others leave it null.
+          ...(accepted.latent_channels === null ? {} : { latent_channels: accepted.latent_channels }),
+        } as unknown as VaeModelConfig;
+
+        expect(
+          isVaeCompatibleWithGenerateModel(model, vae),
+          `${row.base} should accept a VAE registered under ${accepted.base}`
+        ).toBe(true);
+      }
+    }
   });
 });

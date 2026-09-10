@@ -17,6 +17,7 @@ import {
   legacyGeneratedImageToGalleryItem,
   registerImageCluster,
 } from '@features/gallery/contracts';
+import { seedArchitectureCapabilities } from '@features/generation/core/architectureCapabilities.testing';
 import { MAX_PROMPT_HISTORY } from '@features/generation/settings';
 import { createDefaultUpscaleWidgetValues } from '@features/upscale';
 import { getDocumentLeaves } from '@workbench/canvas-engine/api';
@@ -47,6 +48,10 @@ import {
   type WorkbenchAction,
   workbenchReducer as reduceWorkbench,
 } from './workbenchState.testing';
+
+// Generation policy now fails closed without the capability table, and a submission cannot
+// happen before app boot has fetched it. Seeding it here is what the running app does.
+seedArchitectureCapabilities();
 
 const generationDeviceMock = vi.hoisted(() => ({
   options: [] as { device: string; name: string }[],

@@ -17712,6 +17712,17 @@
               }
             ],
             "description": "Recommended generation parameters, if the architecture has any."
+          },
+          "vae": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ArchitectureVae"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null where the architecture declares no VAE compatibility beyond its own base."
           }
         },
         "additionalProperties": false,
@@ -17878,6 +17889,22 @@
         "required": ["modes"],
         "title": "ArchitectureModality",
         "description": "What this architecture can produce, and what it calls it in image metadata."
+      },
+      "ArchitectureVae": {
+        "properties": {
+          "accepted": {
+            "items": {
+              "$ref": "#/components/schemas/VaeAcceptance"
+            },
+            "type": "array",
+            "title": "Accepted"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["accepted"],
+        "title": "ArchitectureVae",
+        "description": "Which VAEs an architecture's decode accepts, beyond its own base.\n\nServed because the clients keep their own copy of this and it drifts: widening a backend list\nwithout the picker leaves a VAE that loads but cannot be chosen."
       },
       "BaseMetadata": {
         "properties": {
@@ -97615,6 +97642,30 @@
         ],
         "title": "VAE_Diffusers_Wan_Config",
         "description": "Model config for Wan 2.2 VAE in diffusers folder layout (AutoencoderKLWan)."
+      },
+      "VaeAcceptance": {
+        "properties": {
+          "base": {
+            "$ref": "#/components/schemas/BaseModelType"
+          },
+          "latent_channels": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latent Channels",
+            "description": "Null unless the base ships VAEs of more than one latent width; only wan does."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["base"],
+        "title": "VaeAcceptance",
+        "description": "One VAE this architecture's decode accepts."
       },
       "ValidationError": {
         "properties": {

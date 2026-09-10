@@ -1,4 +1,11 @@
-import { seedArchitectureCapabilities } from '@features/generation/core/architectureCapabilities.testing';
+import {
+  resetArchitectureCapabilities,
+  setArchitectureCapabilities,
+} from '@features/generation/core/architectureCapabilities';
+import {
+  architectureCapabilitiesFixture,
+  seedArchitectureCapabilities,
+} from '@features/generation/core/architectureCapabilities.testing';
 import { describe, expect, it } from 'vitest';
 
 import type {
@@ -1252,5 +1259,41 @@ describe('the guidance slider value from a model record', () => {
         label === 'Guidance' ? 30 : 7
       );
     }
+  });
+});
+
+describe('without the capability table', () => {
+  /**
+   * The gate has to sit where every enqueue path passes, not only where the Generate widget looks.
+   * `getGenerationValidationReasons` is that place: graph.ts, compileCanvasGraph.ts and
+   * previewGraph.ts all call it. Gating only the widget's resolver left the canvas and the topbar
+   * compiling against FALLBACK_GENERATION_CONFIG — a grid of 8 for bases that reject anything but
+   * 16, which is the enqueue failure this feature exists to prevent.
+   */
+  it('blocks every model, including ones that are otherwise fine', () => {
+    const model = createModel('flux', { variant: 'dev' });
+    const settings = createSettings(model);
+
+    // Seeded by the file-level fixture; drop it to stand in for a failed or in-flight fetch.
+    resetArchitectureCapabilities();
+
+    const reasons = getGenerationValidationReasons(model, settings);
+
+    expect(reasons.length).toBeGreaterThan(0);
+    // Not "needs a supported model": that is the answer the fallback gives, and it sends the reader
+    // looking at their model instead of at the backend.
+    expect(reasons[0]).toMatch(/capabilities/i);
+  });
+
+  it('stops blocking once the table arrives', () => {
+    const model = createModel('flux', { variant: 'dev' });
+    const settings = createSettings(model);
+
+    resetArchitectureCapabilities();
+    expect(getGenerationValidationReasons(model, settings)[0]).toMatch(/capabilities/i);
+
+    setArchitectureCapabilities(architectureCapabilitiesFixture);
+
+    expect(getGenerationValidationReasons(model, settings)[0] ?? '').not.toMatch(/capabilities/i);
   });
 });

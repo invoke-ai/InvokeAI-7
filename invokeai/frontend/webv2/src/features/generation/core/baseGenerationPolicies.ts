@@ -8,6 +8,7 @@ import type { BaseGenerationConfig, GuidanceLabel } from '@features/generation/c
 import {
   getArchitectureFeatures,
   getArchitectureGenerationConfig,
+  hasArchitectureCapabilities,
 } from '@features/generation/core/architectureCapabilities';
 import {
   isSupportedGenerateBase,
@@ -32,6 +33,7 @@ import {
   isAnimaQwen3Encoder,
   isAnimaVae,
   isKrea2Vae,
+  isQwenImageFamilyVae,
   isClipVariant,
   isDiffusersMainForBase,
   isFlux2DiffusersSourceForModel,
@@ -983,7 +985,7 @@ const getBaseComponentSectionPolicy = (
         {
           ...vaeSlot(
             'Optional override, or required with a non-Diffusers model and no component source.',
-            isVaeForBases(['qwen-image'])
+            isQwenImageFamilyVae
           ),
           required: (ctx) => !isBundledOrDiffusersSourceSatisfied(ctx),
           missingMessage: 'Generate needs a VAE for non-Diffusers Qwen Image models.',
@@ -1613,6 +1615,16 @@ const getModelFamilyValidationReasons = (model: MainModelConfig, settings: Gener
 };
 
 export const getGenerationValidationReasons = (model: GenerateModelConfig, settings: GenerateSettings): string[] => {
+  // Before anything else, and before the unsupported-model reason: without the capability table
+  // every answer below is the fallback's, not the architecture's -- a grid of 8 for a base that
+  // rejects anything but 16, and "no supported model" for a model that is perfectly supported.
+  // This is the one function all three compile paths share (graph.ts, compileCanvasGraph.ts,
+  // previewGraph.ts), so gating here is what makes the canvas and the topbar fail closed too,
+  // rather than only the Generate widget's own resolver.
+  if (!hasArchitectureCapabilities()) {
+    return ['Model capabilities have not loaded yet. Generation is blocked until they arrive.'];
+  }
+
   if (!isSupportedGenerateModel(model)) {
     return ['Generate needs a supported model before it can be invoked.'];
   }

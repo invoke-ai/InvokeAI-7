@@ -215,7 +215,9 @@ describe('the support matrix and the served capabilities', () => {
 
     expect(declaredSupported.length).toBeGreaterThan(0);
     for (const base of declaredSupported) {
-      expect(getRegionalGuidanceSupport(base), base).not.toBeNull();
+      // `toBeTruthy`, not `not.toBeNull`: a base with no row reaches this as `undefined`, which
+      // passes a null check and made this guard inert for exactly the drift it exists to catch.
+      expect(getRegionalGuidanceSupport(base), base).toBeTruthy();
     }
   });
 });
