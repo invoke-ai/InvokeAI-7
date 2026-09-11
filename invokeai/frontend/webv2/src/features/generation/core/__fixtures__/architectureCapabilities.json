@@ -1119,7 +1119,7 @@
         "visible": true,
         "usage": "always"
       },
-      "dimension_grid": 16,
+      "dimension_grid": 32,
       "spatial_compression": 8,
       "guidance_label": "Guidance",
       "scheduler_set": "flow",

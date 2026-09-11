@@ -1,5 +1,7 @@
 """Unit tests for the Z-Image GGUF/ComfyUI -> diffusers state-dict converter."""
 
+import json
+
 import pytest
 import torch
 
@@ -7,6 +9,7 @@ from invokeai.backend.model_manager.load.model_loaders.z_image import (
     _convert_z_image_gguf_to_diffusers,
     _remap_z_image_layer_paths,
 )
+from invokeai.backend.quantization.int8_convrot import extract_int8_convrot_markers
 from tests.backend.model_manager.load.state_dicts.utils import keys_to_mock_state_dict
 from tests.backend.model_manager.load.state_dicts.z_image_transformer_comfyui_keys import (
     state_dict_keys as z_image_keys,
@@ -70,6 +73,13 @@ class TestConvertZImageGgufToDiffusers:
         assert torch.allclose(out["blk.attention.to_v.weight"], qkv[4:6])
 
 
+def _marker_blob(marker: dict) -> torch.Tensor:
+    return torch.frombuffer(bytearray(json.dumps(marker).encode("utf-8")), dtype=torch.uint8)
+
+
+MARKER = {"format": "int8_tensorwise", "convrot": True, "convrot_groupsize": 256}
+
+
 class TestQkvQuantizationSideChannel:
     """A scaled-fp8 checkpoint puts a `scale_weight` next to the fused `qkv.weight`.
 
@@ -129,6 +139,20 @@ class TestQkvQuantizationSideChannel:
                     "blk.attention.qkv.weight_scale": torch.arange(4, dtype=torch.float32),
                 }
             )
+
+    def test_the_markers_are_readable_after_the_conversion(self) -> None:
+        """Why Z-Image reads them after converting rather than before: unlike Krea-2's converter,
+        this one carries `.comfy_quant` onto the final module names, so no re-keying is needed."""
+        prefix = "layers.0.attention"
+        sd = {
+            f"{prefix}.qkv.weight": torch.zeros(3 * 4, 256, dtype=torch.int8),
+            f"{prefix}.qkv.weight_scale": torch.ones(3 * 4, 1),
+            f"{prefix}.qkv.comfy_quant": _marker_blob(MARKER),
+            "x_embedder.weight": torch.zeros(2, 2),
+        }
+        markers = extract_int8_convrot_markers(_convert_z_image_gguf_to_diffusers(sd))
+        assert set(markers) == {f"{prefix}.to_q", f"{prefix}.to_k", f"{prefix}.to_v"}
+        assert all(m == MARKER for m in markers.values())
 
 
 class TestMetadataPathRemap:

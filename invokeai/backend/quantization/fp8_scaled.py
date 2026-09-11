@@ -822,8 +822,13 @@ def survives_split_and_cast(
     return layer is None or is_matmul_usable_scale(tensor, layer.weight_scale)
 
 
-def _is_castable_float(tensor: Any) -> bool:
-    """Whether ``tensor`` is a floating-point payload that may be cast to the compute dtype."""
+def is_castable_float(tensor: Any) -> bool:
+    """Whether ``tensor`` is a floating-point payload that may be cast to the compute dtype.
+
+    Public because the int8 path's own cast (``int8_convrot.cast_unquantized``) owes the state dict
+    the same guarantee and must not carry a second copy of this predicate: the two casts differ in
+    which *quantized* payloads they pin, never in what counts as a float.
+    """
     is_floating_point = getattr(tensor, "is_floating_point", None)
     if not callable(is_floating_point):
         return False
@@ -861,7 +866,7 @@ def cast_state_dict(
         if keep_fp8 and can_stay_quantized(key, tensor, model, patterns):
             kept += 1
             continue
-        if not _is_castable_float(tensor):
+        if not is_castable_float(tensor):
             # Integer payloads (embedding indices, packed buffers) are not weights and must keep
             # their dtype. Loaders used to guard this themselves; centralizing it here means a
             # loader that switches to `cast_state_dict` does not silently lose the guard.
@@ -897,7 +902,7 @@ def predict_cast_state_dict_size(
     total = 0
     for key, tensor in sd.items():
         stays = keep_fp8 and survives_split_and_cast(key, tensor, model, patterns, scaled_layer_for(key, scaled_layers))
-        if stays or not _is_castable_float(tensor):
+        if stays or not is_castable_float(tensor):
             total += tensor.nelement() * tensor.element_size()
         else:
             total += tensor.nelement() * dtype.itemsize

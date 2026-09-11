@@ -8,6 +8,11 @@ declaration under `architectures/defs/`, its invocation package, and its starter
 declaration is generated with every required facet present but obviously wrong, so it fails loudly
 at boot until someone fills it in — a stub that boots would be worse than no stub.
 
+"Fails loudly" is carried by `LatentSpace.__post_init__`, not by `registry.validate()`, which only
+checks that the required facets are *present*: the placeholder projection is a single all-zero row,
+which no VAE has, so constructing it raises while `defs/` is being imported. That is before the
+registry is even called, and the traceback names the generated file.
+
 The rest cannot be generated, and the point of this script is as much to enumerate that rest as to
 write the three. That list is *derived* on each run rather than written down here: any module naming
 five or more `BaseModelType` members is dispatching on base, so a new one has to be added to it by
@@ -73,6 +78,8 @@ from invokeai.backend.stable_diffusion.diffusion.conditioning_data import BasicC
 
 # TODO: the latent -> RGB projection for this VAE, one row per latent channel. If the architecture
 # reuses another's VAE, import that LatentSpace instead of declaring a second copy of its matrix.
+# An all-zero projection is rejected by LatentSpace, so importing this module raises until it is
+# replaced — that is what keeps a half-filled declaration from reaching a generation.
 {enum_name.upper()}_LATENT_RGB_FACTORS = [
     [0.0, 0.0, 0.0],
 ]
@@ -195,7 +202,8 @@ def main() -> int:
         print(f"  {count:>3} bases   {path}")
 
     print(
-        "\nThe app will not boot until the generated declaration is filled in — that is deliberate."
+        "\nThe app will not boot until the generated declaration is filled in — that is deliberate:"
+        "\nits placeholder latent projection is all zeros, which LatentSpace refuses to construct."
         if args.write
         else "\nNothing was written. Re-run with --write."
     )

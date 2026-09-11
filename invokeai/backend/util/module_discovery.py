@@ -8,6 +8,7 @@ pitfalls are handled and tested in one place.
 """
 
 import pkgutil
+from collections.abc import Iterator
 from pathlib import Path
 
 
@@ -24,6 +25,35 @@ def _reraise(name: str) -> None:
     raise ImportError(f"Failed to walk package {name!r} while discovering modules.")
 
 
+def _holds_modules(directory: Path) -> bool:
+    """Whether `directory` contains any module that discovery would be expected to reach.
+
+    Ignores `_`-prefixed path components, so a stale `__pycache__` does not make an ordinary data
+    directory look like a package someone forgot to finish.
+    """
+    return any(
+        not any(part.startswith("_") for part in module.relative_to(directory).parts)
+        for module in directory.rglob("*.py")
+    )
+
+
+def _orphan_directories(package_dir: Path) -> Iterator[Path]:
+    """Directories under `package_dir` that hold modules but have no `__init__.py`.
+
+    `pkgutil.walk_packages` does not descend into such a directory, and says nothing about it: every
+    module below it is simply absent from the result, which is indistinguishable from there being
+    nothing to find. That is the discovery mistake that actually happens — one `__init__.py`
+    forgotten in a new subdirectory — so it is looked for rather than waited for.
+    """
+    for child in sorted(package_dir.iterdir()):
+        if not child.is_dir() or child.name.startswith("_"):
+            continue
+        if (child / "__init__.py").exists():
+            yield from _orphan_directories(child)
+        elif _holds_modules(child):
+            yield child
+
+
 def discover_modules(root: Path, prefix: str) -> list[str]:
     """Fully-qualified names of every non-private module in the package tree rooted at `root`.
 
@@ -35,10 +65,21 @@ def discover_modules(root: Path, prefix: str) -> list[str]:
     module as internal. Packages themselves are skipped — importing them is a side effect of the
     walk, and it is their contents that carry the registrations.
 
+    A directory holding modules but no `__init__.py` raises: `walk_packages` would skip it in
+    silence, which is the one discovery failure that produces no symptom at all.
+
     Names only; importing them is the caller's job. Keeping the two apart is what lets the walk be
     tested against a synthetic tree, which matters because a walker with a bug returns an empty list
     and no test that merely asserts "some modules were found" would notice.
     """
+    orphans = [d.relative_to(root).as_posix() for d in _orphan_directories(root)]
+    if orphans:
+        raise ImportError(
+            f"These directories under {root} hold modules but no __init__.py, so nothing in them is "
+            f"discovered and nothing registers: {', '.join(orphans)}. Add an __init__.py to each, or "
+            f"rename it with a leading underscore if it is not meant to be imported."
+        )
+
     names: list[str] = []
     for info in pkgutil.walk_packages([str(root)], prefix=prefix, onerror=_reraise):
         relative = info.name.removeprefix(prefix)

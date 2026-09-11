@@ -42,6 +42,17 @@ from tests.fixtures.sqlite_database import create_mock_sqlite_database  # noqa: 
 from tests.test_nodes import TestEventService
 
 
+@pytest.fixture(autouse=True)
+def _clear_deferred_empty_cache():
+    """`TorchDevice._empty_cache_deferred` is process-global: a test that exercises a peer-aware
+    skip must not make a later test perform a real (GPU-initializing) empty_cache."""
+    from invokeai.backend.util.devices import TorchDevice
+
+    TorchDevice._empty_cache_deferred.clear()
+    yield
+    TorchDevice._empty_cache_deferred.clear()
+
+
 @pytest.fixture
 def mock_services() -> InvocationServices:
     # Image indexing is on by default, but `model_manager` below is None: starting

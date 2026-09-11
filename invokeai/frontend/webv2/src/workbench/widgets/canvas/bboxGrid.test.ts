@@ -26,6 +26,15 @@ describe('gridSizeForModelBase', () => {
     }
   });
 
+  it('reads the 32px grid Wan TI2V-5B declares, from the table the backend really serves', () => {
+    // Against the committed fixture rather than a hand-built row: this is the one architecture
+    // whose grid is not a property of the base, and 1280x720 is the size that slips through a
+    // base-only lookup -- both multiples of 16, and 720 % 32 === 16.
+    expect(gridSizeForModelBase('wan', 'ti2v_5b')).toBe(32);
+    expect(gridSizeForModelBase('wan')).toBe(16);
+    expect(720 % gridSizeForModelBase('wan', 'ti2v_5b')).not.toBe(0);
+  });
+
   it('no longer offers 8px steps for architectures that reject them', () => {
     // The drift this replaces: these three fell through to the default 8 here while their denoise
     // nodes carry multiple_of=16, so the canvas offered sizes that failed at enqueue time.

@@ -59,6 +59,15 @@ from invokeai.backend.quantization.fp8_scaled import (
     warn_on_unattached_scales,
 )
 from invokeai.backend.quantization.gguf.loaders import gguf_sd_loader
+from invokeai.backend.quantization.int8_convrot import (
+    cast_unquantized,
+    drop_unconsumed_quantization_sidecars,
+    extract_int8_convrot_markers,
+    predict_int8_cast_size,
+    reject_unmarked_int8_weights,
+    split_int8_convrot_layers,
+    swap_in_int8_linears,
+)
 from invokeai.backend.quantization.sdnq.detection import is_sdnq_folder
 from invokeai.backend.quantization.sdnq.loaders import raise_on_incomplete_sdnq_load, sdnq_sd_loader
 from invokeai.backend.qwen3.qwen3_tokenizer import load_bundled_qwen3_tokenizer
@@ -149,7 +158,10 @@ def _convert_z_image_gguf_to_diffusers(sd: dict[str, Any]) -> dict[str, Any]:
                 # Quantization side-channel for the fused weight. It has to travel with the split,
                 # or the recovered scale is keyed on `...attention.qkv`, a module path that no
                 # longer exists — `attach_fp8_scales` then finds nothing and the three split
-                # weights stay quantized but *unscaled*, i.e. off by 1/weight_scale.
+                # weights stay quantized but *unscaled*, i.e. off by 1/weight_scale. The same
+                # applies to a `comfy_quant` marker, which is why that suffix is in the list too:
+                # without it `extract_int8_convrot_markers` would find no marker for the split
+                # weights and reject the checkpoint as having orphaned int8 tensors.
                 if suffix in QKV_SPLIT_SIDECHANNEL_SUFFIXES:
                     for name, part in zip(("to_q", "to_k", "to_v"), split_qkv_sidechannel(key, value), strict=True):
                         new_sd[f"{prefix}.attention.{name}.{suffix}"] = part
@@ -534,52 +546,105 @@ class ZImageCheckpointModel(ModelLoader):
         for k in keys_to_remove:
             del sd[k]
 
-        # ComfyUI 'scaled fp8' (fp8 weight + .weight_scale/.scale_weight). Until now the loader
-        # deleted those scales and cast the weight — silently producing a weight off by
-        # 1/weight_scale — and had no way to tell such a checkpoint from a raw fp8 one.
-        layer_hints = {**extract_comfy_quant_hints(sd), **header_hints}
-        fp8_layers = extract_fp8_scaled_layers(sd, layer_hints=layer_hints)
+        # Two ComfyUI side-channel formats reach this loader, and a checkpoint carries one or the
+        # other: `comfy_quant` names its format per layer, and `int8_tensorwise` never appears in a
+        # file that also ships fp8 weight scales. Deciding once, up front, keeps the two casts from
+        # having to understand each other -- `cast_unquantized` treats int8 payloads as opaque,
+        # `cast_state_dict` reasons about fp8 matmul eligibility, and neither is correct for the
+        # other's tensors.
+        int8_markers = extract_int8_convrot_markers(sd)
 
-        # Handle memory management and dtype conversion. A checkpoint that ships raw fp8 weights
-        # (fp8 tensors, no weight_scale) keeps them when the fp8 matmul is available — casting them
-        # here would discard both the VRAM saving and the tensor cores before the model is built.
-        keep_fp8 = should_keep_fp8_weights(self._torch_device)
-        if fp8_layers and not keep_fp8:
-            # Legacy behavior, but now with the scale actually applied: fold it into the weight.
-            dequantize_fp8_scaled(sd, fp8_layers, model_dtype)
-            fp8_layers = {}
+        # Outside the branch on purpose -- see the helper, which explains why.
+        reject_unmarked_int8_weights(sd, int8_markers, "Z-Image")
 
-        # Honor the model's own precision-sensitive list. Z-Image declares
-        # ["t_embedder", "cap_embedder"], and `TimestepEmbedder.forward` casts its activations to
-        # `self.mlp[0].weight.dtype` — an fp8 weight there turns the activations fp8 and the forward
-        # dies in `x.abs()`. Those layers must be dequantized even though the rest stays quantized.
-        skip_patterns = _model_declared_skip_patterns(model)
-        # Scaled layers that the cast would dequantize anyway are folded here, scale applied, so
-        # `cast_state_dict` never strips a scale it cannot put back.
-        # Reserve before the split, not after: `split_fp8_scaled_layers` dequantizes its unusable
-        # subset through fp32, so reserving afterwards lets that transient peak land on an
-        # unreserved cache. `scaled_layers` is what keeps that honest: the split also widens layers
-        # whose scale layout `scaled_mm` cannot apply, and without the mapping the prediction would
-        # charge those 1 byte/element and arrive at 2.
-        self._ram_cache.make_room(
-            predict_cast_state_dict_size(
+        if int8_markers:
+            # Markers are read *after* the key conversion above, which carries them (and their
+            # scales) through the fused-QKV split onto the module names the model actually has --
+            # so no re-keying is needed here.
+            #
+            # Filtered in place rather than rebound: the `sd.clear()` below has to reach the same
+            # dict the checkpoint was read into, or the originals stay alive through it and peak
+            # RAM overshoots the `make_room()` reservation (see
+            # test_state_dict_is_released_before_the_fp8_cast).
+            kept_sd = drop_unconsumed_quantization_sidecars(sd)
+            sd.clear()
+            sd.update(kept_sd)
+            del kept_sd
+
+            # Honor the model's own precision-sensitive list here too, not only on the fp8 side.
+            # Z-Image declares ["t_embedder", "cap_embedder"] because
+            # `ZImageTimestepEmbedder.forward` reads `self.mlp[0].weight.dtype` to pick the dtype
+            # it casts its activations to; on an `Int8ConvrotLinear` that reads `torch.int8`, the
+            # forward falls through to a `compute_dtype` attribute these modules do not have, and
+            # the timestep branch silently runs in float32 into a bf16 model.
+            skip_patterns = _model_declared_skip_patterns(model)
+
+            # Reserve before the split, not after: the split dequantizes the layers it widens, so
+            # reserving afterwards lets that transient land on an unreserved cache. The prediction
+            # is given the same inputs, so it charges those layers the compute dtype's width and
+            # the int8 payloads their actual one byte -- reserving two would ask the cache to free
+            # memory this load never uses.
+            self._ram_cache.make_room(
+                predict_int8_cast_size(sd, model_dtype, int8_markers, model=model, skip_patterns=skip_patterns)
+            )
+
+            quantized = split_int8_convrot_layers(
+                sd, int8_markers, model_dtype, model=model, skip_patterns=skip_patterns
+            )
+            cast_unquantized(sd, model_dtype, quantized)
+            swap_in_int8_linears(model, sd, quantized)
+            # The fp8 reporting below is keyed on these; an int8 checkpoint keeps neither.
+            fp8_layers: dict[str, Any] = {}
+            kept = 0
+        else:
+            # ComfyUI 'scaled fp8' (fp8 weight + .weight_scale/.scale_weight). Until now the loader
+            # deleted those scales and cast the weight — silently producing a weight off by
+            # 1/weight_scale — and had no way to tell such a checkpoint from a raw fp8 one.
+            layer_hints = {**extract_comfy_quant_hints(sd), **header_hints}
+            fp8_layers = extract_fp8_scaled_layers(sd, layer_hints=layer_hints)
+
+            # Handle memory management and dtype conversion. A checkpoint that ships raw fp8 weights
+            # (fp8 tensors, no weight_scale) keeps them when the fp8 matmul is available — casting
+            # them here would discard both the VRAM saving and the tensor cores before the model is
+            # built.
+            keep_fp8 = should_keep_fp8_weights(self._torch_device)
+            if fp8_layers and not keep_fp8:
+                # Legacy behavior, but now with the scale actually applied: fold it into the weight.
+                dequantize_fp8_scaled(sd, fp8_layers, model_dtype)
+                fp8_layers = {}
+
+            # Honor the model's own precision-sensitive list. Z-Image declares
+            # ["t_embedder", "cap_embedder"], and `TimestepEmbedder.forward` casts its activations to
+            # `self.mlp[0].weight.dtype` — an fp8 weight there turns the activations fp8 and the
+            # forward dies in `x.abs()`. Those layers must be dequantized even though the rest stays
+            # quantized.
+            skip_patterns = _model_declared_skip_patterns(model)
+            # Scaled layers that the cast would dequantize anyway are folded here, scale applied, so
+            # `cast_state_dict` never strips a scale it cannot put back.
+            # Reserve before the split, not after: `split_fp8_scaled_layers` dequantizes its unusable
+            # subset through fp32, so reserving afterwards lets that transient peak land on an
+            # unreserved cache. `scaled_layers` is what keeps that honest: the split also widens
+            # layers whose scale layout `scaled_mm` cannot apply, and without the mapping the
+            # prediction would charge those 1 byte/element and arrive at 2.
+            self._ram_cache.make_room(
+                predict_cast_state_dict_size(
+                    sd,
+                    model_dtype,
+                    keep_fp8=keep_fp8,
+                    model=model,
+                    skip_patterns=skip_patterns,
+                    scaled_layers=fp8_layers,
+                )
+            )
+
+            fp8_layers = split_fp8_scaled_layers(sd, fp8_layers, model_dtype, model=model, skip_patterns=skip_patterns)
+            kept = cast_state_dict(
                 sd,
                 model_dtype,
                 keep_fp8=keep_fp8,
                 model=model,
                 skip_patterns=skip_patterns,
-                scaled_layers=fp8_layers,
             )
-        )
-
-        fp8_layers = split_fp8_scaled_layers(sd, fp8_layers, model_dtype, model=model, skip_patterns=skip_patterns)
-        kept = cast_state_dict(
-            sd,
-            model_dtype,
-            keep_fp8=keep_fp8,
-            model=model,
-            skip_patterns=skip_patterns,
-        )
 
         model.load_state_dict(sd, assign=True)
         # `assign=True` aliases every param to its `sd` tensor, so the dict keeps the whole model

@@ -25,7 +25,7 @@ from invokeai.app.services.model_records.model_records_base import ModelRecordCh
 from invokeai.app.services.shared.invocation_context import InvocationContext
 from invokeai.backend.flux.redux.flux_redux_model import FluxReduxModel
 from invokeai.backend.model_manager.configs.factory import AnyModelConfig
-from invokeai.backend.model_manager.starter_models import siglip
+from invokeai.backend.model_manager.starter_models.common import siglip
 from invokeai.backend.model_manager.taxonomy import BaseModelType, ModelType
 from invokeai.backend.sig_lip.sig_lip_pipeline import SigLipPipeline
 from invokeai.backend.util.devices import TorchDevice

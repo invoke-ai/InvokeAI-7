@@ -136,6 +136,8 @@ def force_real_empty_cache() -> None:
     that they did this — a peer device's in-flight step will stall until this returns.
     """
     real = getattr(torch.cuda.empty_cache, "__wrapped__", torch.cuda.empty_cache)
+    # A real, process-global release satisfies any release a peer-aware skip deferred.
+    TorchDevice._empty_cache_deferred.clear()
     real()
 
 

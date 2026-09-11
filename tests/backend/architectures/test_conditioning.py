@@ -1,15 +1,21 @@
 """The conditioning facet, and the `safe_globals` list built from it."""
 
-from invokeai.backend.architectures import conditioning_infos, generative_bases
+import ast
+from pathlib import Path
+
+from invokeai.backend.architectures import conditioning_infos, conditioning_safe_globals, generative_bases
 from invokeai.backend.architectures.facets.conditioning import ConditioningFacet
 from invokeai.backend.architectures.registry import get
 from invokeai.backend.model_manager.taxonomy import BaseModelType
 from invokeai.backend.stable_diffusion.diffusion.conditioning_data import (
     BasicConditioningInfo,
+    ConditioningFieldData,
     FLUXConditioningInfo,
     IPAdapterConditioningInfo,
     SDXLConditioningInfo,
 )
+
+DEPENDENCIES = Path(__file__).parents[3] / "invokeai" / "app" / "api" / "dependencies.py"
 
 
 def test_every_architecture_declares_a_conditioning_type() -> None:
@@ -54,13 +60,67 @@ def test_the_declared_classes_are_the_ones_that_get_serialized() -> None:
     assert all(isinstance(cls, type) for cls in infos)
 
 
-def test_it_matches_what_dependencies_installs() -> None:
-    """The list the app actually builds, assembled the same way `dependencies` assembles it."""
-    from invokeai.backend.stable_diffusion.diffusion.conditioning_data import ConditioningFieldData
+def _dependencies_ast() -> ast.Module:
+    return ast.parse(DEPENDENCIES.read_text(encoding="utf-8"))
 
-    safe_globals = [ConditioningFieldData, *conditioning_infos()]
-    assert len(safe_globals) == 14
+
+def _conditioning_serializer_call() -> ast.Call:
+    """The `ObjectSerializerDisk[ConditioningFieldData](...)` call in `dependencies.py`.
+
+    Found by its type parameter, which is what distinguishes it from the tensor serializer built
+    three lines above it.
+    """
+    calls = [
+        node
+        for node in ast.walk(_dependencies_ast())
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Subscript)
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "ObjectSerializerDisk"
+        and isinstance(node.func.slice, ast.Name)
+        and node.func.slice.id == "ConditioningFieldData"
+    ]
+    assert len(calls) == 1, f"expected exactly one conditioning serializer in {DEPENDENCIES.name}, found {len(calls)}"
+    return calls[0]
+
+
+def test_dependencies_passes_the_assembled_list_as_safe_globals() -> None:
+    """Read out of `dependencies.py` itself, because this is the assertion the PR exists for.
+
+    Importing `dependencies` to inspect the built list is not an option — it pulls in the whole
+    service graph — and rebuilding the list here would only ever agree with itself: shortening the
+    call site to `[ConditioningFieldData]` would leave such a test green and the first FLUX, Wan or
+    Qwen generation dying mid-graph on an `UnpicklingError`. So the call site is parsed instead.
+    """
+    keywords = [kw for kw in _conditioning_serializer_call().keywords if kw.arg == "safe_globals"]
+    assert len(keywords) == 1, "safe_globals is not passed by keyword"
+
+    argument = keywords[0].value
+    assert isinstance(argument, ast.Call) and isinstance(argument.func, ast.Name), (
+        "safe_globals must be the assembled list itself, not an expression built at the call site"
+    )
+    assert argument.func.id == "conditioning_safe_globals"
+    assert not argument.args and not argument.keywords
+
+
+def test_dependencies_imports_that_list_from_the_architecture_package() -> None:
+    """Otherwise the name asserted above could be satisfied by anything defined locally."""
+    imported = {
+        alias.name
+        for node in ast.walk(_dependencies_ast())
+        if isinstance(node, ast.ImportFrom) and node.module == "invokeai.backend.architectures"
+        for alias in node.names
+    }
+    assert "conditioning_safe_globals" in imported
+
+
+def test_the_assembled_list_holds_every_conditioning_class_exactly_once() -> None:
+    """The content of what the call site passes: the envelope first, then all thirteen classes."""
+    safe_globals = conditioning_safe_globals()
+
     assert safe_globals[0] is ConditioningFieldData
+    assert set(safe_globals[1:]) == set(conditioning_infos())
+    assert len(safe_globals) == 14
     assert len(set(safe_globals)) == len(safe_globals), "a class appears twice"
 
 

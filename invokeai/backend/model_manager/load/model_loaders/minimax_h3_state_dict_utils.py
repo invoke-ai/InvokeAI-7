@@ -34,7 +34,7 @@ from typing import Any
 
 import torch
 
-from invokeai.backend.minimax_h3.int8_convrot import parse_comfy_quant_marker
+from invokeai.backend.quantization.int8_convrot import parse_comfy_quant_bytes, parse_comfy_quant_marker
 
 
 def read_comfy_quant_markers(path: Path) -> dict[str, dict[str, Any]]:
@@ -43,6 +43,11 @@ def read_comfy_quant_markers(path: Path) -> dict[str, dict[str, Any]]:
 
     Lets the loader reject unsupported quantization formats (e.g. the fp8_scaled repacks, which
     share this key layout) before committing to a ~20 GiB read.
+
+    Marker bytes go through the same tolerant parser the state-dict readers use. This reader runs
+    FIRST, so a strict parse here is what a NUL-padded marker -- which Comfy writes, and which that
+    parser exists to absorb -- would actually hit: a `JSONDecodeError` out of the middle of a load,
+    naming neither the file nor the key.
     """
     markers: dict[str, dict[str, Any]] = {}
     with open(path, "rb") as f:
@@ -54,7 +59,7 @@ def read_comfy_quant_markers(path: Path) -> dict[str, dict[str, Any]]:
                 continue
             start, end = entry["data_offsets"]
             f.seek(8 + header_len + start)
-            markers[key[: -len(".comfy_quant")]] = json.loads(f.read(end - start).decode("utf-8"))
+            markers[key[: -len(".comfy_quant")]] = parse_comfy_quant_bytes(f.read(end - start))
     return markers
 
 

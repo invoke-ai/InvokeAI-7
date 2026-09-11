@@ -37,6 +37,10 @@ register(
     FeaturesFacet(
         negative_prompt=NegativePrompt(visible=True, usage="always"),
         dimension_grid=16,
+        # The transformer's patch_size=(1, 2, 2) doubles the VAE's spatial compression: 8x VAE for
+        # A14B is a 16-pixel grid, the TI2V-5B Wan2.2-VAE's 16x is a 32-pixel one. `wan_denoise`
+        # enforces the A14B number as a field constraint and the TI2V-5B one inside `invoke()`.
+        dimension_grid_by_variant={WanVariantType.TI2V_5B: 32},
         guidance_label="Guidance",
         scheduler_set="flow",
     ),

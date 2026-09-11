@@ -3,8 +3,11 @@
 import ast
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
+
+from invokeai.backend.architectures import registry
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
@@ -33,12 +36,28 @@ def test_the_declaration_carries_every_required_facet() -> None:
     assert REQUIRED_FACETS <= called, sorted(REQUIRED_FACETS - called)
 
 
-def test_the_declaration_is_obviously_unfinished() -> None:
-    """It must not look plausible. Someone who runs the scaffolder and forgets to fill it in should
-    ship nothing — the placeholder projection is a single black row."""
-    source = defs_module("new-model", "NewModel")
-    assert source.count("TODO") >= 5
-    assert "[0.0, 0.0, 0.0]" in source
+def test_the_generated_declaration_refuses_to_be_imported(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The scaffolder's central claim, executed.
+
+    Its docstring promises the stub "fails loudly at boot until someone fills it in". `validate()`
+    alone does not deliver that — it checks only that the required facets are present, and the stub
+    declares all five with values that pass their own constructors. The all-zero latent projection
+    is what makes the promise true: it raises while the module is being executed, which for a file
+    under `defs/` is during boot.
+
+    The module is executed with `register` replaced, so a stub that ever stopped raising could not
+    pass this by reaching the real registry instead.
+    """
+    registered: list[tuple[Any, ...]] = []
+    monkeypatch.setattr(registry, "register", lambda *args: registered.append(args))
+
+    with pytest.raises(registry.ArchitectureError, match="rgb_factors is all zeros"):
+        exec(  # noqa: S102 -- executing the generated module *is* the behaviour under test
+            compile(defs_module("new-model", "NewModel"), "defs/new_model.py", "exec"),
+            {"__name__": "invokeai.backend.architectures.defs.new_model"},
+        )
+
+    assert registered == [], "the stub reached register(), so a boot would have accepted it"
 
 
 def test_the_slug_convention_matches_the_registry() -> None:
@@ -58,13 +77,16 @@ def test_the_residual_list_is_derived_from_the_tree() -> None:
     assert "invokeai/backend/model_manager/configs/main.py" in residual
 
     # No longer dispatching — each of these was a chain the registry absorbed. If one reappears
-    # here, a facet has been bypassed.
+    # here, a facet has been bypassed. Checked at threshold=1, not at the reporting threshold: a
+    # reintroduced four-branch `if/elif` in step_callback.py is exactly the regression this guards,
+    # and it would sit under a five-base floor unnoticed.
+    every_module_naming_a_base = dict(derive_residual_edits(REPO_ROOT / "invokeai", threshold=1))
     for absorbed in (
         "invokeai/app/util/step_callback.py",
         "invokeai/app/api/dependencies.py",
         "invokeai/app/invocations/ideal_size.py",
     ):
-        assert absorbed not in residual, f"{absorbed} dispatches on base again"
+        assert absorbed not in every_module_naming_a_base, f"{absorbed} dispatches on base again"
 
 
 def test_the_registry_itself_is_never_listed_as_a_cost() -> None:

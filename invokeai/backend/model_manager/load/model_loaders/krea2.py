@@ -47,6 +47,17 @@ from invokeai.backend.quantization.fp8_scaled import (
     warn_on_unattached_scales,
 )
 from invokeai.backend.quantization.gguf.loaders import gguf_sd_loader
+from invokeai.backend.quantization.int8_convrot import (
+    cast_unquantized,
+    drop_unconsumed_quantization_sidecars,
+    extract_int8_convrot_markers,
+    predict_int8_cast_size,
+    reject_foreign_quantization_scales,
+    reject_unmarked_int8_weights,
+    resolve_quantized_module_paths,
+    split_int8_convrot_layers,
+    swap_in_int8_linears,
+)
 from invokeai.backend.util.devices import TorchDevice
 
 # Kept as a module-level alias: this helper moved to model_manager.util.qwen3_vl so the MiniMax H3
@@ -130,7 +141,26 @@ def _remap_native_layer_paths(layer_names: Any) -> dict[str, str]:
     return mapping
 
 
-def _convert_krea2_native_to_diffusers(sd: dict[str, Any]) -> dict[str, Any]:
+# The original final-block up/down projections have no counterpart in the diffusers
+# ``Krea2FinalLayer`` (a clean AdaLN + linear). Named once because two steps act on them: the
+# converter drops them, and the single-file loader drops them *before* dequantizing so it never
+# spends work - or trips over an exotic scale layout - on tensors that are about to be discarded.
+DISCARDED_NATIVE_FINAL_KEYS = ("last.down", "last.up")
+
+
+def _drop_discarded_native_final_layers(sd: dict[str, Any]) -> dict[str, Any]:
+    """Remove the dropped final-block projections together with their quantization metadata."""
+    doomed = {
+        f"{path}{suffix}"
+        for path in DISCARDED_NATIVE_FINAL_KEYS
+        for suffix in (".weight", ".weight_scale", ".comfy_quant")
+    }
+    if not doomed & set(sd):
+        return sd
+    return {k: v for k, v in sd.items() if k not in doomed}
+
+
+def _convert_krea2_native_to_diffusers(sd: dict[str, Any], *, key_map: dict[str, str] | None = None) -> dict[str, Any]:
     """Convert a native/ComfyUI-format Krea-2 state dict (e.g. GGUF) to diffusers Krea2Transformer2DModel keys.
 
     Top-level module renames::
@@ -164,7 +194,7 @@ def _convert_krea2_native_to_diffusers(sd: dict[str, Any]) -> dict[str, Any]:
             _put_unique_key(new_sd, key, value, source=key, source_of=source_of, what="Krea-2 checkpoint")
             continue
         # Drop original-only final-block projections (no diffusers equivalent).
-        if key in ("last.down.weight", "last.up.weight"):
+        if key in tuple(f"{p}.weight" for p in DISCARDED_NATIVE_FINAL_KEYS):
             continue
 
         k = key
@@ -187,10 +217,11 @@ def _convert_krea2_native_to_diffusers(sd: dict[str, Any]) -> dict[str, Any]:
             k = "txt_in.linear_1." + k[len("txtmlp.1.") :]
         elif k.startswith("txtmlp.3."):
             k = "txt_in.linear_2." + k[len("txtmlp.3.") :]
-        elif k == "last.linear.weight":
-            k = "final_layer.linear.weight"
-        elif k == "last.linear.bias":
-            k = "final_layer.linear.bias"
+        elif k.startswith("last.linear."):
+            # Prefix rather than an exact match per suffix: a quantized build carries
+            # `last.linear.weight_scale` too, and an exact rule leaves it behind under the old name
+            # -- which the loader only notices as a missing scale, well after the rename.
+            k = "final_layer.linear." + k[len("last.linear.") :]
         elif k == "last.norm.scale":
             k = "final_layer.norm.weight"
         elif k == "last.modulation.lin":
@@ -221,6 +252,8 @@ def _convert_krea2_native_to_diffusers(sd: dict[str, Any]) -> dict[str, Any]:
             value = torch.as_tensor(_to_plain_tensor(value)).reshape(6, -1)
 
         _put_unique_key(new_sd, k, value, source=key, source_of=source_of, what="Krea-2 checkpoint")
+        if key_map is not None:
+            key_map[key] = k
     return new_sd
 
 
@@ -322,9 +355,16 @@ class Krea2DiffusersModel(GenericDiffusersLoader):
 class Krea2CheckpointModel(ModelLoader):
     """Class to load Krea-2 transformer models from single-file checkpoints (safetensors).
 
-    Handles plain bf16/fp16 checkpoints as well as ComfyUI 'scaled fp8' checkpoints (fp8 weight +
-    ``.weight_scale``), and both the diffusers and native/ComfyUI key naming. Apply the fp8-storage
-    setting to keep the (large) transformer fp8-resident; otherwise it loads in full precision.
+    Handles plain bf16/fp16 checkpoints, ComfyUI 'scaled fp8' checkpoints (fp8 weight +
+    ``.weight_scale``) and ComfyUI 'int8_tensorwise' checkpoints (int8 weight + per-output-channel
+    ``.weight_scale`` + a ``.comfy_quant`` marker, optionally convrot-rotated), in both the diffusers
+    and native/ComfyUI key naming. Apply the fp8-storage setting to keep the (large) transformer
+    fp8-resident; otherwise it loads in full precision.
+
+    The int8 build stays int8-resident: `swap_in_int8_linears` installs `Int8ConvrotLinear`, which
+    holds the stored codes and dequantizes per forward, so a 12.0 GiB checkpoint stays 12.0 GiB.
+    What it does not get is int8 *compute* -- that needs a kernel InvokeAI does not have yet -- so
+    the saving here is resident memory, not speed.
     """
 
     def _load_model(
@@ -355,82 +395,137 @@ class Krea2CheckpointModel(ModelLoader):
         sd = load_file(model_path)
         metadata = read_safetensors_metadata(model_path, self._logger)
         sd = _strip_comfyui_prefix(sd)
-        # Per-layer `.comfy_quant` markers are read first (they are popped out of `sd` here, before
-        # the key conversion). Checkpoints ship the flags in either the header or these markers;
-        # without both, a checkpoint using only the per-tensor form has its
-        # full_precision_matrix_mult layers silently multiplied in fp8. The header wins on the rare
-        # checkpoint carrying both. Header names carry the prefix that was just stripped off the
-        # state dict, so strip it from them too or they match nothing.
-        layer_hints = {
-            **extract_comfy_quant_hints(sd),
-            **strip_layer_path_prefix(parse_quantization_metadata(metadata)),
-        }
-        if _is_native_krea2_format(sd):
-            # Take the quantization side channel out before renaming. The converter renames
-            # ".weight"-suffixed keys by substring and five more by whole-key equality, so a sibling
-            # ".scale_weight", ".input_scale", or any scale on one of the equality-renamed keys
-            # (e.g. `last.linear.weight_scale`) would be left behind at its old path while the
-            # weight moves — and then silently dropped, leaving the weight unscaled.
-            detached = detach_layer_sidechannel(sd)
-            sd = _convert_krea2_native_to_diffusers(sd)
-            # The metadata and the detached scales still name layers natively; rename both the same
-            # way or the per-layer flags (notably full_precision_matrix_mult) match nothing.
-            path_map = _remap_native_layer_paths({*detached, *layer_hints})
-            orphaned = reattach_layer_sidechannel(sd, detached, path_map)
-            if orphaned:
-                # INFO, not DEBUG: a dropped scale leaves its weight off by 1/weight_scale with no
-                # other symptom, so the one line that mentions it must be visible by default.
-                self._logger.info(
-                    f"Krea-2: dropped quantization side-channel for {len(orphaned)} module(s) with no "
-                    f"diffusers counterpart (e.g. {orphaned[0]})."
-                )
-            layer_hints = {path_map.get(name, name): hints for name, hints in layer_hints.items()}
+        # Discard what the key conversion below would discard anyway, before anything is spent on
+        # it. One repack quantizes `last.up` with a blockwise scale grid this decode does not
+        # implement; refusing a tensor that is on its way to the bin would be an odd way to fail.
+        sd = _drop_discarded_native_final_layers(sd)
 
-        # ComfyUI 'scaled fp8' checkpoints (fp8 weight + .weight_scale, optionally .input_scale).
-        fp8_layers = extract_fp8_scaled_layers(sd, layer_hints=layer_hints)
-        keep_fp8 = should_keep_fp8_weights(target_device)
-        if fp8_layers and not keep_fp8:
-            # Legacy behavior: fold the scales into the weights. Keeping them quantized without the
-            # fp8 matmul would halve VRAM but run slower, so both are tied to the same setting.
-            dequantize_fp8_scaled(sd, fp8_layers, model_dtype)
-            fp8_layers = {}
+        # Two ComfyUI side-channel formats reach this loader and a checkpoint carries one or the
+        # other, so the format is decided once here. `int8_tensorwise` has to be recognised before
+        # the key conversion below: that conversion renames `.weight` by substring and so carries a
+        # sibling `.weight_scale` along but NOT `.comfy_quant`, which would separate an int8 weight
+        # from the marker that says it is rotated. Taken down the fp8 path instead, such a weight
+        # would be scaled but never un-rotated -- a state dict that loads cleanly and generates
+        # noise.
+        int8_markers = extract_int8_convrot_markers(sd)
+
+        # Outside the branch on purpose -- see the helper, which explains why. Z-Image has always
+        # had this; Krea-2 did not, so an int8 weight whose marker was missing or unparseable was
+        # cast to the compute dtype as raw codes and loaded silently.
+        reject_unmarked_int8_weights(sd, int8_markers, "Krea-2")
+
+        if int8_markers:
+            sd = drop_unconsumed_quantization_sidecars(sd)
+            # Native/ComfyUI key naming → diffusers Krea2Transformer2DModel keys.
+            key_map: dict[str, str] = {}
+            if _is_native_krea2_format(sd):
+                sd = _convert_krea2_native_to_diffusers(sd, key_map=key_map)
+            quantized = resolve_quantized_module_paths(int8_markers, key_map)
+        else:
+            # Per-layer `.comfy_quant` markers are read first (they are popped out of `sd` here, before
+            # the key conversion). Checkpoints ship the flags in either the header or these markers;
+            # without both, a checkpoint using only the per-tensor form has its
+            # full_precision_matrix_mult layers silently multiplied in fp8. The header wins on the rare
+            # checkpoint carrying both. Header names carry the prefix that was just stripped off the
+            # state dict, so strip it from them too or they match nothing.
+            layer_hints = {
+                **extract_comfy_quant_hints(sd),
+                **strip_layer_path_prefix(parse_quantization_metadata(metadata)),
+            }
+            if _is_native_krea2_format(sd):
+                # Take the quantization side channel out before renaming. The converter renames
+                # ".weight"-suffixed keys by substring and five more by whole-key equality, so a sibling
+                # ".scale_weight", ".input_scale", or any scale on one of the equality-renamed keys
+                # (e.g. `last.linear.weight_scale`) would be left behind at its old path while the
+                # weight moves — and then silently dropped, leaving the weight unscaled.
+                detached = detach_layer_sidechannel(sd)
+                sd = _convert_krea2_native_to_diffusers(sd)
+                # The metadata and the detached scales still name layers natively; rename both the same
+                # way or the per-layer flags (notably full_precision_matrix_mult) match nothing.
+                path_map = _remap_native_layer_paths({*detached, *layer_hints})
+                orphaned = reattach_layer_sidechannel(sd, detached, path_map)
+                if orphaned:
+                    # INFO, not DEBUG: a dropped scale leaves its weight off by 1/weight_scale with no
+                    # other symptom, so the one line that mentions it must be visible by default.
+                    self._logger.info(
+                        f"Krea-2: dropped quantization side-channel for {len(orphaned)} module(s) with no "
+                        f"diffusers counterpart (e.g. {orphaned[0]})."
+                    )
+                layer_hints = {path_map.get(name, name): hints for name, hints in layer_hints.items()}
+
+            # ComfyUI 'scaled fp8' checkpoints (fp8 weight + .weight_scale, optionally .input_scale).
+            fp8_layers = extract_fp8_scaled_layers(sd, layer_hints=layer_hints)
+            keep_fp8 = should_keep_fp8_weights(target_device)
+            if fp8_layers and not keep_fp8:
+                # Legacy behavior: fold the scales into the weights. Keeping them quantized without the
+                # fp8 matmul would halve VRAM but run slower, so both are tied to the same setting.
+                dequantize_fp8_scaled(sd, fp8_layers, model_dtype)
+                fp8_layers = {}
 
         with accelerate.init_empty_weights():
             model = Krea2Transformer2DModel(**KREA2_TRANSFORMER_CONFIG)
 
-        skip_patterns = _model_declared_skip_patterns(model)
-        # Scaled layers the cast would dequantize anyway (skip patterns, non-Linear weights) are
-        # folded here, with their scale applied. Left to `cast_state_dict` they would be cast
-        # *without* it and `attach_fp8_scales` would then skip them for no longer being fp8 —
-        # a weight silently off by 1/weight_scale. Krea-2's `time_embed.linear_1/linear_2` are
-        # ordinary quantized Linears in a ComfyUI export and match the model's `time_embed` pattern.
-        # Reserve before the split, not after: `split_fp8_scaled_layers` dequantizes its unusable
-        # subset through fp32, so reserving afterwards lets that transient peak land on an
-        # unreserved cache. `scaled_layers` is what keeps that honest: the split also widens layers
-        # whose scale layout `scaled_mm` cannot apply, and without the mapping the prediction would
-        # charge those 1 byte/element and arrive at 2.
-        self._ram_cache.make_room(
-            predict_cast_state_dict_size(
+        if int8_markers:
+            # Honor the model's own precision-sensitive list here too, not only on the fp8 side.
+            # Krea-2 declares `time_embed` and the `norm*` modules; `time_embed.linear_1/linear_2`
+            # are ordinary quantized Linears in a ComfyUI export, and a module that reads its own
+            # weight's dtype finds `torch.int8` on an `Int8ConvrotLinear`.
+            skip_patterns = _model_declared_skip_patterns(model)
+
+            # Before anything is cast: a scale left over from another scheme means its weight is
+            # about to be cast without it, and the orphan disappears into `strict=False` below.
+            # After the model exists, so a merged file's bundled submodels -- which this loader does
+            # not prefix-filter out and never loads -- cannot fail a checkpoint that works.
+            reject_foreign_quantization_scales(sd, quantized, "Krea-2", model)
+
+            # Reserve before the split, not after: the split dequantizes the layers it widens, so
+            # reserving afterwards lets that transient land on an unreserved cache. The prediction
+            # is given the same inputs, so it charges those layers the compute dtype's width and
+            # the int8 payloads their actual one byte -- reserving two would ask the cache to free
+            # ~12 GB that this load never uses.
+            self._ram_cache.make_room(
+                predict_int8_cast_size(sd, model_dtype, quantized, model=model, skip_patterns=skip_patterns)
+            )
+            quantized = split_int8_convrot_layers(sd, quantized, model_dtype, model=model, skip_patterns=skip_patterns)
+            cast_unquantized(sd, model_dtype, quantized)
+            swap_in_int8_linears(model, sd, quantized)
+            # The fp8 reporting below is keyed on these; an int8 checkpoint keeps neither.
+            fp8_layers = {}
+            kept = 0
+        else:
+            skip_patterns = _model_declared_skip_patterns(model)
+            # Scaled layers the cast would dequantize anyway (skip patterns, non-Linear weights) are
+            # folded here, with their scale applied. Left to `cast_state_dict` they would be cast
+            # *without* it and `attach_fp8_scales` would then skip them for no longer being fp8 —
+            # a weight silently off by 1/weight_scale. Krea-2's `time_embed.linear_1/linear_2` are
+            # ordinary quantized Linears in a ComfyUI export and match the model's `time_embed` pattern.
+            # Reserve before the split, not after: `split_fp8_scaled_layers` dequantizes its unusable
+            # subset through fp32, so reserving afterwards lets that transient peak land on an
+            # unreserved cache. `scaled_layers` is what keeps that honest: the split also widens layers
+            # whose scale layout `scaled_mm` cannot apply, and without the mapping the prediction would
+            # charge those 1 byte/element and arrive at 2.
+            self._ram_cache.make_room(
+                predict_cast_state_dict_size(
+                    sd,
+                    model_dtype,
+                    keep_fp8=keep_fp8,
+                    model=model,
+                    skip_patterns=skip_patterns,
+                    scaled_layers=fp8_layers,
+                )
+            )
+
+            fp8_layers = split_fp8_scaled_layers(sd, fp8_layers, model_dtype, model=model, skip_patterns=skip_patterns)
+            # A checkpoint with raw fp8 weights (fp8 tensors and no weight_scale) yields no fp8_layers at
+            # all, but its weights are still usable on the tensor cores, so the same `keep_fp8` covers
+            # both kinds.
+            kept = cast_state_dict(
                 sd,
                 model_dtype,
                 keep_fp8=keep_fp8,
                 model=model,
                 skip_patterns=skip_patterns,
-                scaled_layers=fp8_layers,
             )
-        )
-
-        fp8_layers = split_fp8_scaled_layers(sd, fp8_layers, model_dtype, model=model, skip_patterns=skip_patterns)
-        # A checkpoint with raw fp8 weights (fp8 tensors and no weight_scale) yields no fp8_layers at
-        # all, but its weights are still usable on the tensor cores, so the same `keep_fp8` covers
-        # both kinds.
-        kept = cast_state_dict(
-            sd,
-            model_dtype,
-            keep_fp8=keep_fp8,
-            model=model,
-            skip_patterns=skip_patterns,
-        )
 
         model.load_state_dict(sd, assign=True, strict=False)
         _reject_incomplete_load(model, what="Krea-2 single-file checkpoint")
@@ -605,8 +700,12 @@ def _qwen3vl_target_key(key: str) -> str:
     return "language_model." + key
 
 
-def _remap_qwen3vl_singlefile_keys(sd: dict[str, Any]) -> dict[str, Any]:
-    """Remap ComfyUI single-file Qwen3-VL keys to the transformers ``Qwen3VLModel`` layout."""
+def _remap_qwen3vl_singlefile_keys(sd: dict[str, Any], *, key_map: dict[str, str] | None = None) -> dict[str, Any]:
+    """Remap ComfyUI single-file Qwen3-VL keys to the transformers ``Qwen3VLModel`` layout.
+
+    `key_map` records old key -> new key when given, which `resolve_quantized_module_paths` needs to
+    carry `comfy_quant` markers onto the module paths the model actually has.
+    """
     out: dict[str, Any] = {}
     source_of: dict[Any, Any] = {}
     what = "Qwen3-VL encoder checkpoint"
@@ -614,7 +713,10 @@ def _remap_qwen3vl_singlefile_keys(sd: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(k, str):
             _put_unique_key(out, k, v, source=k, source_of=source_of, what=what)
             continue
-        _put_unique_key(out, _qwen3vl_target_key(k), v, source=k, source_of=source_of, what=what)
+        new_key = _qwen3vl_target_key(k)
+        _put_unique_key(out, new_key, v, source=k, source_of=source_of, what=what)
+        if key_map is not None:
+            key_map[k] = new_key
     return out
 
 
@@ -698,69 +800,114 @@ class Qwen3VLEncoderCheckpointLoader(ModelLoader):
         model_dtype = TorchDevice.choose_bfloat16_safe_dtype(target_device)
 
         sd = load_file(str(model_path))
-        metadata = read_safetensors_metadata(model_path, self._logger)
-        # Per-layer markers must be read before extract_fp8_scaled_layers() drops them, and before
-        # the key remap, which would not carry a ".comfy_quant" suffix to a sensible destination.
-        layer_hints = {**extract_comfy_quant_hints(sd), **parse_quantization_metadata(metadata)}
+        # Same one-or-the-other split as the transformer above, and here it also guards the fp8
+        # *detection*: an int8 layer ships a `.weight_scale` too, so probing for scales without
+        # ruling out int8 first would keep the encoder "fp8-resident" over weights that were never
+        # fp8.
+        int8_markers = extract_int8_convrot_markers(sd)
 
-        # Remap BEFORE pulling the scales out. The remap rewrites whole keys, so each
-        # ".weight_scale" travels with its ".weight" and the recovered layer paths already match the
-        # model's module paths — which is what attach_fp8_scales() resolves them against.
-        sd = _remap_qwen3vl_singlefile_keys(sd)
-        layer_hints = {_qwen3vl_target_key(path): hints for path, hints in layer_hints.items()}
+        # Outside the branch on purpose -- see the helper, which explains why. Z-Image has always
+        # had this; Krea-2 did not, so an int8 weight whose marker was missing or unparseable was
+        # cast to the compute dtype as raw codes and loaded silently.
+        reject_unmarked_int8_weights(sd, int8_markers, "Qwen3-VL encoder")
 
-        # ComfyUI 'scaled fp8' (fp8 weight + .weight_scale). Only the language-model linears are
-        # quantized in the checkpoints seen so far; the visual tower stays bf16 either way.
-        fp8_layers = extract_fp8_scaled_layers(sd, layer_hints=layer_hints)
-        source_is_fp8 = bool(fp8_layers) or any(
-            getattr(t, "dtype", None) in (torch.float8_e4m3fn, torch.float8_e5m2) for t in sd.values()
-        )
-        # Resolved once. `device_supports_fp8_matmul` deliberately does not cache an inconclusive
-        # probe, so two calls can disagree: a transient failure here followed by a success below
-        # would leave the scales already folded while the raw Linears stay quantized, i.e. the
-        # encoder silently on the storage path with the matmul log line never printed.
-        keep_matmul_fp8 = should_keep_fp8_weights(target_device)
-        if fp8_layers and not keep_matmul_fp8:
-            # Legacy behavior: fold the scales into the weights. Without the fp8 matmul, staying
-            # quantized would save VRAM but cost speed, so the two are tied to the same setting.
-            dequantize_fp8_scaled(sd, fp8_layers, model_dtype)
+        if int8_markers:
+            sd = drop_unconsumed_quantization_sidecars(sd)
+            key_map: dict[str, str] = {}
+            sd = _remap_qwen3vl_singlefile_keys(sd, key_map=key_map)
+            quantized = resolve_quantized_module_paths(int8_markers, key_map)
+            source_is_fp8 = False
             fp8_layers = {}
+            keep_matmul_fp8 = False
+            # An int8 encoder stays int8-resident, so there is nothing for the fp8 matmul path to
+            # keep. The storage pass below is off for a different reason: `_apply_fp8_to_nn_module`
+            # casts only `_FP8_SUPPORTED_PYTORCH_LAYERS`, and `Int8ConvrotLinear` is not one of them
+            # (nor does it own parameters), so it would walk past every quantized layer and convert
+            # only what this path already left dense -- work with no saving on the layers that matter.
+            use_fp8_storage = False
+        else:
+            metadata = read_safetensors_metadata(model_path, self._logger)
+            # Per-layer markers must be read before extract_fp8_scaled_layers() drops them, and before
+            # the key remap, which would not carry a ".comfy_quant" suffix to a sensible destination.
+            layer_hints = {**extract_comfy_quant_hints(sd), **parse_quantization_metadata(metadata)}
+
+            # Remap BEFORE pulling the scales out. The remap rewrites whole keys, so each
+            # ".weight_scale" travels with its ".weight" and the recovered layer paths already match the
+            # model's module paths — which is what attach_fp8_scales() resolves them against.
+            sd = _remap_qwen3vl_singlefile_keys(sd)
+            layer_hints = {_qwen3vl_target_key(path): hints for path, hints in layer_hints.items()}
+
+            # ComfyUI 'scaled fp8' (fp8 weight + .weight_scale). Only the language-model linears are
+            # quantized in the checkpoints seen so far; the visual tower stays bf16 either way.
+            fp8_layers = extract_fp8_scaled_layers(sd, layer_hints=layer_hints)
+            source_is_fp8 = bool(fp8_layers) or any(
+                getattr(t, "dtype", None) in (torch.float8_e4m3fn, torch.float8_e5m2) for t in sd.values()
+            )
+            # Resolved once. `device_supports_fp8_matmul` deliberately does not cache an inconclusive
+            # probe, so two calls can disagree: a transient failure here followed by a success below
+            # would leave the scales already folded while the raw Linears stay quantized, i.e. the
+            # encoder silently on the storage path with the matmul log line never printed.
+            keep_matmul_fp8 = should_keep_fp8_weights(target_device)
+            if fp8_layers and not keep_matmul_fp8:
+                # Legacy behavior: fold the scales into the weights. Without the fp8 matmul, staying
+                # quantized would save VRAM but cost speed, so the two are tied to the same setting.
+                dequantize_fp8_scaled(sd, fp8_layers, model_dtype)
+                fp8_layers = {}
 
         te_config = self._load_hf_config()
         with accelerate.init_empty_weights():
             model = Qwen3VLModel._from_config(te_config)
 
-        # Same ordering contract as every other loader in this series: split *before* the cast.
-        # A per-key `if dtype is not FP8_DTYPE` cast looks equivalent and is not — it keeps every
-        # fp8 tensor quantized, including the ones that must not stay:
-        #
-        #  - a 1-D fp8 norm (checkpoints that "quantize everything" ship these) would keep its
-        #    scale as an unused buffer on a non-Linear and the forward would compute on the raw
-        #    fp8 codes, i.e. off by 1/weight_scale with nothing logged;
-        #  - an e5m2 scaled weight would be cast *without* its scale, since only e4m3fn is spared;
-        #  - a block-wise scale would reach `scaled_mm_linear` unchecked and raise mid-generation.
-        #
-        # `split_fp8_scaled_layers` applies exactly those filters and dequantizes the affected
-        # layers *with* their scale, so what remains is what the matmul can actually consume.
-        # The storage path below re-quantizes to fp8 anyway, so casting the raw fp8 Linears to
-        # `model_dtype` here would double both this reservation and the host-RAM peak (~4.4 -> ~8.9
-        # GiB on the 4B encoder) for a round trip that ends where it started -- e4m3fn is a subset
-        # of bf16, so it is value-exact. Keep them for either consumer.
-        use_fp8_storage = source_is_fp8 and _device_supports_fp8_storage(self._torch_device, self._logger)
-        keep_fp8 = keep_matmul_fp8 or use_fp8_storage
-        # Reserve before the split: it dequantizes its unusable subset through fp32, so reserving
-        # afterwards lets that transient peak land on an unreserved cache. `scaled_layers` keeps the
-        # prediction in step with the split's own scale-layout filter.
-        self._ram_cache.make_room(
-            predict_cast_state_dict_size(sd, model_dtype, keep_fp8=keep_fp8, model=model, scaled_layers=fp8_layers)
-        )
-        fp8_layers = split_fp8_scaled_layers(sd, fp8_layers, model_dtype, model=model)
-        # No `skip_patterns` here on purpose: this model declares none, and the storage pass below
-        # applies `_FP8_DEFAULT_SKIP_PATTERNS` itself. Those two lists used to have to not intersect
-        # on a 2-D Linear -- such a weight would arrive fp8 from the state dict, be skipped by the
-        # cast pass, and forward on raw fp8 codes. `_apply_fp8_to_nn_module` now restores the compute
-        # dtype on the modules it skips, so the two lists are independent again.
-        cast_state_dict(sd, model_dtype, keep_fp8=keep_fp8, model=model)
+        if int8_markers:
+            # `Qwen3VLModel` declares no precision-sensitive modules, but read them rather than
+            # assume: the split is also what keeps a marker on a non-Linear (a "quantize
+            # everything" repack's 1-D norms) out of `swap_in_int8_linears`.
+            skip_patterns = _model_declared_skip_patterns(model)
+
+            # Before anything is cast: a scale left over from another scheme means its weight is
+            # about to be cast without it, and the orphan disappears into `strict=False` below.
+            reject_foreign_quantization_scales(sd, quantized, "Qwen3-VL encoder", model)
+
+            # Reserve before the split -- it dequantizes the layers it widens -- and charge the int8
+            # payloads their actual one byte rather than the compute dtype's two.
+            self._ram_cache.make_room(
+                predict_int8_cast_size(sd, model_dtype, quantized, model=model, skip_patterns=skip_patterns)
+            )
+            quantized = split_int8_convrot_layers(sd, quantized, model_dtype, model=model, skip_patterns=skip_patterns)
+            cast_unquantized(sd, model_dtype, quantized)
+            swap_in_int8_linears(model, sd, quantized)
+        else:
+            # Same ordering contract as every other loader in this series: split *before* the cast.
+            # A per-key `if dtype is not FP8_DTYPE` cast looks equivalent and is not — it keeps every
+            # fp8 tensor quantized, including the ones that must not stay:
+            #
+            #  - a 1-D fp8 norm (checkpoints that "quantize everything" ship these) would keep its
+            #    scale as an unused buffer on a non-Linear and the forward would compute on the raw
+            #    fp8 codes, i.e. off by 1/weight_scale with nothing logged;
+            #  - an e5m2 scaled weight would be cast *without* its scale, since only e4m3fn is spared;
+            #  - a block-wise scale would reach `scaled_mm_linear` unchecked and raise mid-generation.
+            #
+            # `split_fp8_scaled_layers` applies exactly those filters and dequantizes the affected
+            # layers *with* their scale, so what remains is what the matmul can actually consume.
+            # The storage path below re-quantizes to fp8 anyway, so casting the raw fp8 Linears to
+            # `model_dtype` here would double both this reservation and the host-RAM peak (~4.4 -> ~8.9
+            # GiB on the 4B encoder) for a round trip that ends where it started -- e4m3fn is a subset
+            # of bf16, so it is value-exact. Keep them for either consumer.
+            use_fp8_storage = source_is_fp8 and _device_supports_fp8_storage(self._torch_device, self._logger)
+            keep_fp8 = keep_matmul_fp8 or use_fp8_storage
+            # Reserve before the split: it dequantizes its unusable subset through fp32, so reserving
+            # afterwards lets that transient peak land on an unreserved cache. `scaled_layers` keeps the
+            # prediction in step with the split's own scale-layout filter.
+            self._ram_cache.make_room(
+                predict_cast_state_dict_size(sd, model_dtype, keep_fp8=keep_fp8, model=model, scaled_layers=fp8_layers)
+            )
+            fp8_layers = split_fp8_scaled_layers(sd, fp8_layers, model_dtype, model=model)
+            # No `skip_patterns` here on purpose: this model declares none, and the storage pass below
+            # applies `_FP8_DEFAULT_SKIP_PATTERNS` itself. Those two lists used to have to not intersect
+            # on a 2-D Linear -- such a weight would arrive fp8 from the state dict, be skipped by the
+            # cast pass, and forward on raw fp8 codes. `_apply_fp8_to_nn_module` now restores the compute
+            # dtype on the modules it skips, so the two lists are independent again.
+            cast_state_dict(sd, model_dtype, keep_fp8=keep_fp8, model=model)
 
         model.load_state_dict(sd, assign=True, strict=False)
         _reject_incomplete_load(model, what="Qwen3-VL encoder checkpoint")

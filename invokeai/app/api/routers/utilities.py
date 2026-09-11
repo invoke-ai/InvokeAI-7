@@ -22,6 +22,11 @@ from invokeai.app.api.routers.image_move_maintenance import assert_image_move_ma
 from invokeai.app.services.events.events_base import EventServiceBase
 from invokeai.app.services.image_files.image_files_common import ImageFileNotFoundException
 from invokeai.app.services.model_records.model_records_base import UnknownModelException
+from invokeai.app.services.system_prompt_records.system_prompt_records_common import (
+    EXPAND_PROMPT_MAX_TOKENS_DEFAULT,
+    EXPAND_PROMPT_MAX_TOKENS_MAX,
+    EXPAND_PROMPT_MAX_TOKENS_MIN,
+)
 from invokeai.app.services.wildcard_records.wildcard_records_common import build_wildcard_manager
 from invokeai.app.util.dynamicprompts import expand_dynamic_prompt
 from invokeai.app.util.misc import SEED_MAX, get_random_seed
@@ -357,7 +362,15 @@ def get_user_font_file(font_path: str, _current_user: CurrentUserOrDefault) -> F
 class ExpandPromptRequest(BaseModel):
     prompt: str
     model_key: str
-    max_tokens: int = Field(default=300, ge=1, le=2048)
+    max_tokens: int = Field(
+        default=EXPAND_PROMPT_MAX_TOKENS_DEFAULT,
+        ge=EXPAND_PROMPT_MAX_TOKENS_MIN,
+        le=EXPAND_PROMPT_MAX_TOKENS_MAX,
+        description=(
+            "Cap on the tokens the LLM may emit. Clients that expand with a stored system prompt "
+            "send that prompt's own `max_tokens` here; omitting it uses the default."
+        ),
+    )
     system_prompt: str | None = None
     seed: int | None = Field(default=None, ge=0, le=SEED_MAX, description="Seed for reproducible text generation")
     task_id: str | None = Field(

@@ -4,16 +4,20 @@ ERNIE-Image's name-based detection is covered by tests/backend/model_manager/tes
 which now runs through this resolver.
 """
 
+from typing import Any
+
 import pytest
 
 from invokeai.backend.architectures import generative_bases, resolve_default_settings
 from invokeai.backend.architectures.facets.default_settings import DefaultSettingsFacet
 from invokeai.backend.architectures.registry import get
 from invokeai.backend.model_manager.taxonomy import (
+    AnyVariant,
     BaseModelType,
     Flux2VariantType,
     FluxVariantType,
     Krea2VariantType,
+    WanVariantType,
     ZImageVariantType,
 )
 
@@ -33,36 +37,232 @@ def test_every_architecture_declares_defaults() -> None:
     assert undeclared == []
 
 
-def test_the_refiner_declares_a_canvas_but_no_sampler_settings() -> None:
-    """It is a second pass over an SDXL latent, driven by the UI's own refiner parameters."""
-    settings = resolve_default_settings(BaseModelType.StableDiffusionXLRefiner)
-    assert settings is not None
-    assert (settings.width, settings.height) == (1024, 1024)
-    assert (settings.steps, settings.cfg_scale) == (None, None)
+_SQUARE_1024 = {"width": 1024, "height": 1024}
+
+# The whole matrix, hand-transcribed from `architectures/defs/` rather than read back out of it.
+# Each row is *every* field its declaration sets — the comparison is against
+# `model_dump(exclude_none=True)` — so a field nobody thought to pin cannot arrive unnoticed
+# either.
+#
+# These numbers are persisted onto a model's config when it is identified and drive the generation
+# sliders from then on, so editing one reaches users without passing through any UI review. This
+# table is what makes such an edit a reviewable diff.
+#
+# Where the values come from:
+#
+# scheduler:  mirrors `BASE_GENERATION[base].defaults.scheduler` in webv2's
+#             `baseGenerationPolicies.ts` for all fourteen bases that table knows. Which scheduler
+#             to prefer is a product decision, not a model-card fact, and mirroring means nothing
+#             changes for users when webv2 switches over to these values. MiniMax H3 and the SDXL
+#             refiner are absent from that table and declare none — see
+#             `test_every_architecture_with_a_scheduler_declares_which_one`.
+# sd-1/2/XL:  the classic Stable Diffusion defaults, which every SD generation is built around,
+#             each on its native canvas. 2.x is the judgment call: 768 is right for the
+#             v-prediction checkpoints and wrong for the 512 `-base` ones, and nothing in the
+#             config distinguishes them, so one of the two had to be picked.
+# refiner:    a canvas and nothing else. It is a second pass over an SDXL latent, driven by the
+#             UI's own refiner parameters, and is never run on its own.
+# sd-3:       stable-diffusion-3.5-medium, 40 steps at guidance 4.5. Medium, not Large (28/3.5):
+#             there is one `sd-3` row and no variant to tell them apart.
+# cogview4:   THUDM/CogView4-6B, 50 steps at guidance 3.5 — true CFG, it takes a negative prompt.
+# flux:       `guidance` is the distilled guidance embedding, not CFG, so cfg_scale stays at its
+#             floor (1.0, meaning "off") for every FLUX and FLUX.2 variant. schnell is
+#             timestep-distilled and ignores guidance entirely. Fill's 30.0 is corroborated
+#             in-tree: `flux_denoise.py` warns when guidance drops below 25.0 for a Fill model.
+#             dev's card uses 50 steps; 28 is the de-facto standard and what FLUX.2 [dev] declares,
+#             so the two stay consistent.
+# ernie:      the base model's 50/4.0, and Turbo's 8/1.0 — reached by name hint rather than
+#             variant, because the two share an architecture and a config with nothing to probe.
+# z-image:    Tongyi-MAI/Z-Image-Turbo, `num_inference_steps=9`, guidance 0 -> cfg_scale 1.0. The
+#             undistilled base needs more steps and supports CFG.
+# ideogram-4: cfg_scale 1.0, because the model is CFG-distilled and cannot do CFG at all —
+#             `ideogram4_denoise` has no `cfg_scale` input, only `guidance_scale`, and the
+#             FeaturesFacet says `negative_prompt: never`. This field previously held 7.0, taken
+#             from the main weight in our own PRESETS. That number is the sampler's internal
+#             guidance schedule, not a default anyone sets: the node reads `guidance_scale=None` as
+#             "use the preset", and webv2 sends nothing unless the user overrides it through
+#             Ideogram's own dedicated fields. Declaring 7.0 advertised a CFG default for a model
+#             with no CFG. 48 steps is the preset default, V4_QUALITY_48.
+# krea-2:     Diffusers' Krea-2 guidance 4.5 uses cond + 4.5 * (cond - uncond), equivalent to
+#             InvokeAI's CFG convention at 5.5. Turbo is distilled; cfg_scale's floor is 1.
+DEFAULT_SETTINGS_MATRIX: list[tuple[str, BaseModelType, AnyVariant | None, str | None, dict[str, Any]]] = [
+    (
+        "sd-1",
+        BaseModelType.StableDiffusion1,
+        None,
+        None,
+        {"scheduler": "euler_a", "steps": 30, "cfg_scale": 7.0, "width": 512, "height": 512},
+    ),
+    (
+        "sd-2",
+        BaseModelType.StableDiffusion2,
+        None,
+        None,
+        {"scheduler": "euler_a", "steps": 30, "cfg_scale": 7.0, "width": 768, "height": 768},
+    ),
+    (
+        "sdxl",
+        BaseModelType.StableDiffusionXL,
+        None,
+        None,
+        {"scheduler": "euler_a", "steps": 30, "cfg_scale": 7.0, **_SQUARE_1024},
+    ),
+    ("sdxl-refiner", BaseModelType.StableDiffusionXLRefiner, None, None, {**_SQUARE_1024}),
+    (
+        "sd-3",
+        BaseModelType.StableDiffusion3,
+        None,
+        None,
+        {"scheduler": "euler_a", "steps": 40, "cfg_scale": 4.5, **_SQUARE_1024},
+    ),
+    (
+        "cogview4",
+        BaseModelType.CogView4,
+        None,
+        None,
+        {"scheduler": "euler_a", "steps": 50, "cfg_scale": 3.5, **_SQUARE_1024},
+    ),
+    (
+        "flux-schnell",
+        BaseModelType.Flux,
+        FluxVariantType.Schnell,
+        None,
+        {"scheduler": "euler", "steps": 4, "cfg_scale": 1.0, **_SQUARE_1024},
+    ),
+    (
+        "flux-dev-fill",
+        BaseModelType.Flux,
+        FluxVariantType.DevFill,
+        None,
+        {"scheduler": "euler", "steps": 50, "cfg_scale": 1.0, "guidance": 30.0, **_SQUARE_1024},
+    ),
+    (
+        "flux-dev",
+        BaseModelType.Flux,
+        FluxVariantType.Dev,
+        None,
+        {"scheduler": "euler", "steps": 28, "cfg_scale": 1.0, "guidance": 3.5, **_SQUARE_1024},
+    ),
+    (
+        "flux2-dev",
+        BaseModelType.Flux2,
+        Flux2VariantType.Dev,
+        None,
+        {"scheduler": "euler", "steps": 28, "cfg_scale": 1.0, "guidance": 3.5, **_SQUARE_1024},
+    ),
+    (
+        "flux2-klein-4b-base",
+        BaseModelType.Flux2,
+        Flux2VariantType.Klein4BBase,
+        None,
+        {"scheduler": "euler", "steps": 28, "cfg_scale": 1.0, **_SQUARE_1024},
+    ),
+    (
+        "flux2-klein-9b-base",
+        BaseModelType.Flux2,
+        Flux2VariantType.Klein9BBase,
+        None,
+        {"scheduler": "euler", "steps": 28, "cfg_scale": 1.0, **_SQUARE_1024},
+    ),
+    (
+        "flux2-klein-distilled",
+        BaseModelType.Flux2,
+        None,
+        None,
+        {"scheduler": "euler", "steps": 4, "cfg_scale": 1.0, **_SQUARE_1024},
+    ),
+    (
+        "ernie-image",
+        BaseModelType.ErnieImage,
+        None,
+        None,
+        {"scheduler": "euler", "steps": 50, "cfg_scale": 4.0, **_SQUARE_1024},
+    ),
+    (
+        "ernie-image-turbo",
+        BaseModelType.ErnieImage,
+        None,
+        "ERNIE-Image-Turbo",
+        {"scheduler": "euler", "steps": 8, "cfg_scale": 1.0, **_SQUARE_1024},
+    ),
+    (
+        "qwen-image",
+        BaseModelType.QwenImage,
+        None,
+        None,
+        {"scheduler": "euler_a", "steps": 40, "cfg_scale": 4.0, **_SQUARE_1024},
+    ),
+    (
+        "z-image-base",
+        BaseModelType.ZImage,
+        ZImageVariantType.ZBase,
+        None,
+        {"scheduler": "euler", "steps": 50, "cfg_scale": 4.0, **_SQUARE_1024},
+    ),
+    (
+        "z-image-turbo",
+        BaseModelType.ZImage,
+        None,
+        None,
+        {"scheduler": "euler", "steps": 9, "cfg_scale": 1.0, **_SQUARE_1024},
+    ),
+    (
+        "ideogram-4",
+        BaseModelType.Ideogram4,
+        None,
+        None,
+        {"scheduler": "euler", "steps": 48, "cfg_scale": 1.0, **_SQUARE_1024},
+    ),
+    (
+        "krea-2-base",
+        BaseModelType.Krea2,
+        Krea2VariantType.Base,
+        None,
+        {"scheduler": "euler", "steps": 28, "cfg_scale": 5.5, **_SQUARE_1024},
+    ),
+    (
+        "krea-2-turbo",
+        BaseModelType.Krea2,
+        None,
+        None,
+        {"scheduler": "euler", "steps": 8, "cfg_scale": 1.0, **_SQUARE_1024},
+    ),
+    (
+        "wan-ti2v-5b",
+        BaseModelType.Wan,
+        WanVariantType.TI2V_5B,
+        None,
+        {"scheduler": "euler", "steps": 30, "cfg_scale": 5.0, **_SQUARE_1024},
+    ),
+    (
+        "wan-a14b",
+        BaseModelType.Wan,
+        None,
+        None,
+        {"scheduler": "euler", "steps": 40, "cfg_scale": 4.0, **_SQUARE_1024},
+    ),
+    ("minimax-h3", BaseModelType.MiniMaxH3, None, None, {"steps": 50, "cfg_scale": 1.0, "width": 1344, "height": 768}),
+    ("anima", BaseModelType.Anima, None, None, {"scheduler": "euler", "steps": 35, "cfg_scale": 4.5, **_SQUARE_1024}),
+]
 
 
 @pytest.mark.parametrize(
-    ("variant", "expected"),
-    [
-        (ZImageVariantType.ZBase, (50, 4.0)),
-        (None, (9, 1.0)),
-    ],
+    ("base", "variant", "name", "expected"),
+    [pytest.param(*row[1:], id=row[0]) for row in DEFAULT_SETTINGS_MATRIX],
 )
-def test_z_image_dispatches_on_variant(variant: ZImageVariantType | None, expected: tuple[int, float]) -> None:
-    settings = resolve_default_settings(BaseModelType.ZImage, variant)
-    assert settings is not None
-    assert (settings.steps, settings.cfg_scale) == expected
+def test_the_resolved_defaults_are_exactly_what_was_declared(
+    base: BaseModelType, variant: AnyVariant | None, name: str | None, expected: dict[str, Any]
+) -> None:
+    settings = resolve_default_settings(base, variant, name)
+    assert settings is not None, base.value
+    assert settings.model_dump(exclude_none=True) == expected
 
 
-def test_flux2_has_three_distinct_answers() -> None:
-    """[dev] carries guidance, the undistilled Klein bases carry steps, distilled Klein carries neither."""
-    dev = resolve_default_settings(BaseModelType.Flux2, Flux2VariantType.Dev)
-    klein_base = resolve_default_settings(BaseModelType.Flux2, Flux2VariantType.Klein4BBase)
-    klein = resolve_default_settings(BaseModelType.Flux2, None)
-    assert dev is not None and klein_base is not None and klein is not None
-    assert (dev.steps, dev.guidance) == (28, 3.5)
-    assert (klein_base.steps, klein_base.guidance) == (28, None)
-    assert (klein.steps, klein.guidance) == (4, None)
+def test_the_matrix_covers_every_architecture() -> None:
+    """A new architecture whose defaults are pinned nowhere is the state this table exists to end,
+    and parametrizing over the table cannot notice its own omission."""
+    covered = {row[1].value for row in DEFAULT_SETTINGS_MATRIX}
+    assert sorted({b.value for b in generative_bases()} - covered) == []
 
 
 def test_an_unknown_variant_falls_back() -> None:
@@ -86,73 +286,6 @@ def test_a_variant_from_another_architecture_falls_back_rather_than_matching() -
     assert resolve_default_settings(BaseModelType.Flux2, FluxVariantType.Schnell) == resolve_default_settings(
         BaseModelType.Flux2, None
     )
-
-
-def test_flux1_dispatches_on_variant() -> None:
-    """Three genuinely different answers, and `guidance` is not CFG.
-
-    FLUX's `guidance` is the distilled guidance embedding, so cfg_scale stays at its floor (1.0,
-    meaning "off") for every variant. Fill's 30.0 is corroborated in-tree: `flux_denoise.py` warns
-    when guidance drops below 25.0 for a Fill model.
-    """
-    schnell = resolve_default_settings(BaseModelType.Flux, FluxVariantType.Schnell)
-    dev = resolve_default_settings(BaseModelType.Flux, FluxVariantType.Dev)
-    fill = resolve_default_settings(BaseModelType.Flux, FluxVariantType.DevFill)
-    assert schnell is not None and dev is not None and fill is not None
-
-    assert (schnell.steps, schnell.guidance) == (4, None), "schnell is distilled and ignores guidance"
-    assert (dev.steps, dev.guidance) == (28, 3.5)
-    assert (fill.steps, fill.guidance) == (50, 30.0)
-    assert {schnell.cfg_scale, dev.cfg_scale, fill.cfg_scale} == {1.0}, "FLUX never uses CFG"
-
-
-def test_the_researched_values_are_what_the_model_cards_say() -> None:
-    """Pinned against their sources, so a later edit has to argue with the citation.
-
-    cogview4: THUDM/CogView4-6B, 50 steps at guidance 3.5 (true CFG — it takes a negative prompt).
-    sd-3:     stable-diffusion-3.5-medium, 40 steps at guidance 4.5. Medium, not Large (28/3.5):
-              there is one `sd-3` row and no variant to tell them apart.
-    z-image:  Tongyi-MAI/Z-Image-Turbo, `num_inference_steps=9`, guidance 0 -> cfg_scale 1.0.
-    ideogram: 1.0, because the model is CFG-distilled and cannot do CFG at all -- `ideogram4_denoise`
-              has no `cfg_scale` input, only `guidance_scale`, and the FeaturesFacet says
-              `negative_prompt: never`. This field previously held 7.0, taken from the main weight in
-              our own PRESETS. That number is the sampler's internal guidance schedule, not a default
-              anyone sets: the node reads `guidance_scale=None` as "use the preset", and webv2 sends
-              nothing unless the user overrides it through Ideogram's own dedicated fields. Declaring
-              7.0 advertised a CFG default for a model that has no CFG.
-    """
-    expected = {
-        BaseModelType.CogView4: (50, 3.5),
-        BaseModelType.StableDiffusion3: (40, 4.5),
-        BaseModelType.ZImage: (9, 1.0),
-        BaseModelType.Ideogram4: (48, 1.0),
-        BaseModelType.ErnieImage: (50, 4.0),
-        # The classic Stable Diffusion defaults, which every SD generation is built around.
-        BaseModelType.StableDiffusion1: (30, 7.0),
-        BaseModelType.StableDiffusion2: (30, 7.0),
-        BaseModelType.StableDiffusionXL: (30, 7.0),
-    }
-    for base, (steps, cfg) in expected.items():
-        settings = resolve_default_settings(base)
-        assert settings is not None, base.value
-        assert (settings.steps, settings.cfg_scale) == (steps, cfg), base.value
-
-
-def test_the_sd_family_keeps_its_native_sizes() -> None:
-    """Same steps and CFG, three different canvases — 2.x is the judgment call.
-
-    768 is right for the v-prediction checkpoints and wrong for the 512 `-base` ones. Nothing in the
-    config distinguishes them, so one of the two had to be picked.
-    """
-    sizes = {
-        BaseModelType.StableDiffusion1: (512, 512),
-        BaseModelType.StableDiffusion2: (768, 768),
-        BaseModelType.StableDiffusionXL: (1024, 1024),
-    }
-    for base, (width, height) in sizes.items():
-        settings = resolve_default_settings(base)
-        assert settings is not None, base.value
-        assert (settings.width, settings.height) == (width, height), base.value
 
 
 def test_every_architecture_with_a_scheduler_declares_which_one() -> None:

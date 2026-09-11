@@ -15,16 +15,22 @@ from invokeai.backend.util.module_discovery import discover_modules
 
 @pytest.fixture
 def tree(tmp_path: Path) -> Iterator[Path]:
-    """A miniature package: one flat module, one in a subpackage, plus things that must be skipped."""
+    """A miniature package: one flat module, one in a subpackage, plus things that must be skipped.
+
+    `assets/` holds no modules and so is none of discovery's business; it is here because the
+    missing-`__init__.py` check must not mistake an ordinary data directory for a broken package.
+    """
     root = tmp_path / "synthetic_pkg"
     (root / "sub").mkdir(parents=True)
     (root / "__pycache__").mkdir()
+    (root / "assets").mkdir()
     (root / "__init__.py").write_text("", encoding="utf-8")
     (root / "flat.py").write_text("", encoding="utf-8")
     (root / "_private.py").write_text("", encoding="utf-8")
     (root / "sub" / "__init__.py").write_text("", encoding="utf-8")
     (root / "sub" / "nested.py").write_text("", encoding="utf-8")
     (root / "__pycache__" / "stale.py").write_text("", encoding="utf-8")
+    (root / "assets" / "palette.json").write_text("{}", encoding="utf-8")
 
     sys.path.insert(0, str(tmp_path))
     try:
@@ -52,3 +58,33 @@ def test_reports_a_broken_subpackage(tree: Path) -> None:
     (tree / "sub" / "__init__.py").write_text("raise RuntimeError('boom')", encoding="utf-8")
     with pytest.raises(ImportError, match="synthetic_pkg.sub"):
         discover_modules(tree, "synthetic_pkg.")
+
+
+def test_reports_a_directory_with_no_init(tree: Path) -> None:
+    """`walk_packages` does not descend into one, and does not complain either.
+
+    The result is a module that is simply never imported and a registration that silently never
+    happens — the failure this whole module exists to make impossible.
+    """
+    (tree / "sub_noinit").mkdir()
+    (tree / "sub_noinit" / "orphan.py").write_text("", encoding="utf-8")
+
+    with pytest.raises(ImportError, match="sub_noinit"):
+        discover_modules(tree, "synthetic_pkg.")
+
+
+def test_reports_a_directory_with_no_init_nested_in_a_package(tree: Path) -> None:
+    """The same mistake one level down, where it is easier to make and harder to spot."""
+    (tree / "sub" / "deeper").mkdir()
+    (tree / "sub" / "deeper" / "orphan.py").write_text("", encoding="utf-8")
+
+    with pytest.raises(ImportError, match="sub/deeper"):
+        discover_modules(tree, "synthetic_pkg.")
+
+
+def test_a_directory_holding_no_modules_is_not_reported(tree: Path) -> None:
+    """`assets/` and `__pycache__` have no `__init__.py` either, and neither is a mistake.
+
+    Without this, the check above would fire on every data directory in the repository.
+    """
+    assert discover_modules(tree, "synthetic_pkg.")

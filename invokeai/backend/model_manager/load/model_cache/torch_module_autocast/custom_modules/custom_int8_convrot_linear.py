@@ -1,6 +1,5 @@
 import torch
 
-from invokeai.backend.minimax_h3.int8_convrot import Int8ConvrotLinear
 from invokeai.backend.model_manager.load.model_cache.torch_module_autocast.cast_to_device import cast_to_device
 from invokeai.backend.model_manager.load.model_cache.torch_module_autocast.custom_modules.custom_linear import (
     autocast_linear_forward_sidecar_patches,
@@ -9,6 +8,7 @@ from invokeai.backend.model_manager.load.model_cache.torch_module_autocast.custo
     CustomModuleMixin,
 )
 from invokeai.backend.patches.layers.param_shape_utils import get_param_shape
+from invokeai.backend.quantization.int8_convrot import Int8ConvrotLinear
 
 
 class CustomInt8ConvrotLinear(Int8ConvrotLinear, CustomModuleMixin):

@@ -107,7 +107,7 @@ def _add_user_interactive() -> bool:
 
     try:
         config = get_config()
-        db = SqliteDatabase(config.db_path, InvokeAILogger.get_logger())
+        db = SqliteDatabase(config.db_path, InvokeAILogger.get_logger(), synchronous=config.db_synchronous)
         user_service = UserService(db)
 
         user_data = UserCreateRequest(email=email, display_name=display_name, password=password, is_admin=is_admin)
@@ -148,7 +148,7 @@ def _add_user_cli(email: str, password: str, display_name: str | None = None, is
 
     try:
         config = get_config()
-        db = SqliteDatabase(config.db_path, InvokeAILogger.get_logger())
+        db = SqliteDatabase(config.db_path, InvokeAILogger.get_logger(), synchronous=config.db_synchronous)
         user_service = UserService(db)
 
         user_data = UserCreateRequest(email=email, display_name=display_name, password=password, is_admin=is_admin)
@@ -224,7 +224,7 @@ def _delete_user_interactive() -> bool:
     try:
         config = get_config()
         logger = InvokeAILogger.get_logger(config=config)
-        db = SqliteDatabase(config.db_path, logger)
+        db = SqliteDatabase(config.db_path, logger, synchronous=config.db_synchronous)
         user_service = UserService(db)
 
         user = user_service.get_by_email(email)
@@ -272,7 +272,7 @@ def _delete_user_cli(email: str, force: bool = False) -> bool:
     try:
         config = get_config()
         logger = InvokeAILogger.get_logger(config=config)
-        db = SqliteDatabase(config.db_path, logger)
+        db = SqliteDatabase(config.db_path, logger, synchronous=config.db_synchronous)
         user_service = UserService(db)
 
         user = user_service.get_by_email(email)
@@ -348,7 +348,7 @@ def _list_users_table() -> bool:
 
     config = get_config()
     logger = InvokeAILogger.get_logger(config=config)
-    db = SqliteDatabase(config.db_path, logger)
+    db = SqliteDatabase(config.db_path, logger, synchronous=config.db_synchronous)
     user_service = UserService(db)
 
     try:
@@ -388,7 +388,7 @@ def _list_users_json() -> bool:
 
     config = get_config()
     logger = InvokeAILogger.get_logger(config=config)
-    db = SqliteDatabase(config.db_path, logger)
+    db = SqliteDatabase(config.db_path, logger, synchronous=config.db_synchronous)
     user_service = UserService(db)
 
     try:
@@ -463,7 +463,7 @@ def _modify_user_interactive() -> bool:
 
     try:
         config = get_config()
-        db = SqliteDatabase(config.db_path, InvokeAILogger.get_logger())
+        db = SqliteDatabase(config.db_path, InvokeAILogger.get_logger(), synchronous=config.db_synchronous)
         user_service = UserService(db)
 
         user = user_service.get_by_email(email)
@@ -564,7 +564,7 @@ def _modify_user_cli(
 
     try:
         config = get_config()
-        db = SqliteDatabase(config.db_path, InvokeAILogger.get_logger())
+        db = SqliteDatabase(config.db_path, InvokeAILogger.get_logger(), synchronous=config.db_synchronous)
         user_service = UserService(db)
 
         user = user_service.get_by_email(email)

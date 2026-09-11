@@ -66,7 +66,7 @@ from invokeai.app.services.videos.videos_default import VideoService
 from invokeai.app.services.wildcard_records.wildcard_records_sqlite import SqliteWildcardRecordsStorage
 from invokeai.app.services.workflow_records.workflow_records_sqlite import SqliteWorkflowRecordsStorage
 from invokeai.app.services.workflow_thumbnails.workflow_thumbnails_disk import WorkflowThumbnailFileStorageDisk
-from invokeai.backend.architectures import conditioning_infos
+from invokeai.backend.architectures import conditioning_safe_globals
 from invokeai.backend.architectures import validate as validate_architectures
 from invokeai.backend.stable_diffusion.diffusion.conditioning_data import ConditioningFieldData
 from invokeai.backend.util.logging import InvokeAILogger
@@ -104,10 +104,13 @@ class ApiDependencies:
         loop: asyncio.AbstractEventLoop,
         logger: Logger = logger,
     ) -> None:
-        # Before anything else, and at module scope above rather than lazily inside a function: the
-        # registry has to be filled before `ObjectSerializerDisk` is constructed below, because that
-        # mutates process-global torch state (`add_safe_globals`). Also covers every embedder that
-        # never goes through `run_app` — tests, and scripts/generate_openapi_schema.py.
+        # The one authoritative architecture gate. Every entry point that builds services comes
+        # through here — `run_app`'s lifespan, and the embedders and tests that never go through
+        # `run_app` at all — so this is the only place it is called. It runs before anything else
+        # because `ObjectSerializerDisk` below derives its `safe_globals` from the registry, and
+        # that mutates process-global torch state. The import above is at module scope rather than
+        # lazily inside this function for the same reason, one step earlier: it is what fills the
+        # registry, and importing this module is all `scripts/generate_openapi_schema.py` does.
         validate_architectures()
 
         logger.info(f"InvokeAI version {__version__}")
@@ -162,8 +165,9 @@ class ApiDependencies:
                 # Every architecture's conditioning class, from what each declares under
                 # invokeai/backend/architectures/defs/. Missing one here fails nowhere near
                 # here: the encoder runs, writes its output, and the denoise node then dies
-                # unpickling it.
-                safe_globals=[ConditioningFieldData, *conditioning_infos()],
+                # unpickling it — which is why the list is assembled in one place and this call
+                # site is asserted against it in tests/backend/architectures/test_conditioning.py.
+                safe_globals=conditioning_safe_globals(),
                 ephemeral=True,
             ),
         )
