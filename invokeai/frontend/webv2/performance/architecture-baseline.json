@@ -337,7 +337,7 @@
         "initialRawBytes": 2972354,
         "largestAssetRawBytes": 747209,
         "otherAssetRawBytes": 0,
-        "ownedRawBytes": 131277,
+        "ownedRawBytes": 131330,
         "requestCount": 106,
         "scriptRequestCount": 90,
         "sourceOwners": [
@@ -1031,7 +1031,7 @@
         "initialRawBytes": 3002078,
         "largestAssetRawBytes": 754682,
         "otherAssetRawBytes": 0,
-        "ownedRawBytes": 131277,
+        "ownedRawBytes": 131330,
         "requestCount": 106,
         "scriptRequestCount": 90
       },

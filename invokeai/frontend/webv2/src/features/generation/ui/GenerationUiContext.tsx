@@ -54,6 +54,8 @@ export interface GenerationUiAdapter {
   capabilities: {
     /** Bulk import/export of prompt templates; the backend routes are admin-only. */
     canManagePromptTemplates: boolean;
+    /** Edit prompts shared with everyone; never another user's private prompt. */
+    canManageSharedSystemPrompts: boolean;
   };
   gallery: {
     selectedImage: GenerationSelectedImage | null;

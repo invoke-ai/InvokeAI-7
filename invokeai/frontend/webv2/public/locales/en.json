@@ -2227,6 +2227,8 @@
         "maxTokensInvalid": "Enter a whole number between {{min}} and {{max}}, or leave it empty.",
         "none": "No system prompts",
         "shared": "Shared",
+        "duplicate": "Duplicate",
+        "sharedEditWarning": "Shared with everyone. Changes apply to all users.",
         "deleteTitle": "Delete system prompt",
         "deleteBody": "“{{name}}” will be deleted. This cannot be undone.",
         "couldNotSave": "Could not save this system prompt.",

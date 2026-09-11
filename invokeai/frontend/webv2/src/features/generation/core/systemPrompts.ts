@@ -47,16 +47,61 @@ export const classifySystemPrompts = <T extends SystemPromptOwnershipRecord>(
 export const isOwnedSystemPrompt = (record: SystemPromptOwnershipRecord, account: SystemPromptAccount): boolean =>
   !account.multiuserEnabled || (account.currentUserId !== null && record.userId === account.currentUserId);
 
+/** What the viewer is allowed to change, beyond what they own. */
+export interface SystemPromptEditAuthority extends SystemPromptAccount {
+  /** Admin-derived. Grants edit rights over shared prompts only -- see `canEditSystemPrompt`. */
+  canManageSharedPrompts: boolean;
+}
+
+/**
+ * Own prompts always; shared ones when the viewer may manage them.
+ *
+ * Deliberately never true for another user's private prompt: the REST layer does let an admin
+ * write one, but offering it here would turn a moderation capability into an everyday button.
+ * `classifySystemPrompts` already keeps those records out of the list, and this is the second
+ * guard so that a change to the first cannot silently expose them.
+ */
+export const canEditSystemPrompt = (
+  record: SystemPromptOwnershipRecord,
+  authority: SystemPromptEditAuthority
+): boolean => isOwnedSystemPrompt(record, authority) || (authority.canManageSharedPrompts && record.isPublic);
+
 export class SystemPromptOwnershipError extends Error {
   constructor() {
-    super('Only personal system prompts can be changed.');
+    super('Only your own system prompts, or shared ones you manage, can be changed.');
     this.name = 'SystemPromptOwnershipError';
   }
 }
 
-export const requireOwnedSystemPrompt = (record: SystemPromptOwnershipRecord, account: SystemPromptAccount): void => {
-  if (!isOwnedSystemPrompt(record, account)) {
+export const requireEditableSystemPrompt = (
+  record: SystemPromptOwnershipRecord,
+  authority: SystemPromptEditAuthority
+): void => {
+  if (!canEditSystemPrompt(record, authority)) {
     throw new SystemPromptOwnershipError();
+  }
+};
+
+/**
+ * A name for a copy that does not collide with one already in the list.
+ *
+ * Duplicating twice gives "... (copy)" then "... (copy 2)". A source that is itself a copy keeps
+ * its suffix rather than being parsed apart, so the chain stays readable and the rule stays one
+ * anyone can predict from the name they are looking at.
+ */
+export const buildDuplicateName = (sourceName: string, existingNames: Iterable<string>): string => {
+  const taken = new Set(existingNames);
+  const base = `${sourceName} (copy)`;
+
+  if (!taken.has(base)) {
+    return base;
+  }
+  for (let suffix = 2; ; suffix++) {
+    const candidate = `${sourceName} (copy ${String(suffix)})`;
+
+    if (!taken.has(candidate)) {
+      return candidate;
+    }
   }
 };
 
