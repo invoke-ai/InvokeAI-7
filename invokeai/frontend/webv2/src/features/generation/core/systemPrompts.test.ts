@@ -4,7 +4,9 @@ import {
   classifySystemPrompts,
   isOwnedSystemPrompt,
   parseMaxTokensInput,
-  requireOwnedSystemPrompt,
+  buildDuplicateName,
+  canEditSystemPrompt,
+  requireEditableSystemPrompt,
   resolveSelectedSystemPromptId,
   SYSTEM_PROMPT_MAX_TOKENS_MAX,
   SYSTEM_PROMPT_MAX_TOKENS_MIN,
@@ -50,13 +52,17 @@ describe('classifySystemPrompts', () => {
   });
 });
 
-describe('isOwnedSystemPrompt / requireOwnedSystemPrompt', () => {
+describe('isOwnedSystemPrompt / requireEditableSystemPrompt', () => {
   it('allows the owner and refuses another user’s shared prompt', () => {
     expect(isOwnedSystemPrompt(record('a', 'me', false), MULTIUSER)).toBe(true);
     expect(isOwnedSystemPrompt(record('b', 'someone', true), MULTIUSER)).toBe(false);
 
-    expect(() => requireOwnedSystemPrompt(record('b', 'someone', true), MULTIUSER)).toThrow(SystemPromptOwnershipError);
-    expect(() => requireOwnedSystemPrompt(record('a', 'me', false), MULTIUSER)).not.toThrow();
+    const noAuthority = { ...MULTIUSER, canManageSharedPrompts: false };
+
+    expect(() => requireEditableSystemPrompt(record('b', 'someone', true), noAuthority)).toThrow(
+      SystemPromptOwnershipError
+    );
+    expect(() => requireEditableSystemPrompt(record('a', 'me', false), noAuthority)).not.toThrow();
   });
 
   it('treats an anonymous multiuser session as owning nothing', () => {
@@ -111,5 +117,55 @@ describe('parseMaxTokensInput', () => {
     for (const raw of ['12e2', '1.5', '-5', '0x10', 'abc', '5 0']) {
       expect(parseMaxTokensInput(raw)).toBe('invalid');
     }
+  });
+});
+
+describe('canEditSystemPrompt', () => {
+  const MANAGER = { ...MULTIUSER, canManageSharedPrompts: true };
+  const MEMBER = { ...MULTIUSER, canManageSharedPrompts: false };
+
+  it('lets a manager edit a prompt shared by someone else', () => {
+    const sharedByOther = record('b', 'someone', true);
+
+    expect(canEditSystemPrompt(sharedByOther, MEMBER)).toBe(false);
+    expect(canEditSystemPrompt(sharedByOther, MANAGER)).toBe(true);
+  });
+
+  it('never lets a manager edit another user’s private prompt', () => {
+    // The REST layer does allow an admin to write this one. Offering it in the UI would turn a
+    // moderation capability into an everyday button, so the client refuses regardless of rights.
+    const privateOfOther = record('c', 'someone', false);
+
+    expect(canEditSystemPrompt(privateOfOther, MANAGER)).toBe(false);
+    expect(() => requireEditableSystemPrompt(privateOfOther, MANAGER)).toThrow(SystemPromptOwnershipError);
+  });
+
+  it('leaves own prompts editable without any management rights', () => {
+    expect(canEditSystemPrompt(record('a', 'me', false), MEMBER)).toBe(true);
+  });
+
+  it('keeps everything editable in single-user mode', () => {
+    const singleUser = { ...SINGLE_USER, canManageSharedPrompts: false };
+
+    expect(canEditSystemPrompt(record('a', 'system', true), singleUser)).toBe(true);
+  });
+});
+
+describe('buildDuplicateName', () => {
+  it('suffixes the source name', () => {
+    expect(buildDuplicateName('Ref2VA', [])).toBe('Ref2VA (copy)');
+  });
+
+  it('numbers past names already taken, so repeated copies stay distinguishable', () => {
+    expect(buildDuplicateName('Ref2VA', ['Ref2VA (copy)'])).toBe('Ref2VA (copy 2)');
+    expect(buildDuplicateName('Ref2VA', ['Ref2VA (copy)', 'Ref2VA (copy 2)'])).toBe('Ref2VA (copy 3)');
+  });
+
+  it('skips a gap rather than reusing a name in the list', () => {
+    expect(buildDuplicateName('Ref2VA', ['Ref2VA (copy)', 'Ref2VA (copy 3)'])).toBe('Ref2VA (copy 2)');
+  });
+
+  it('copies a copy without parsing the suffix apart', () => {
+    expect(buildDuplicateName('Ref2VA (copy)', ['Ref2VA (copy)'])).toBe('Ref2VA (copy) (copy)');
   });
 });

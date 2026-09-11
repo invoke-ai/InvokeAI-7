@@ -21,7 +21,7 @@ import { MiddleTruncate } from '@platform/ui/MiddleTruncate';
 import { Scrollable } from '@platform/ui/Scrollable';
 import { Select } from '@platform/ui/Select';
 import { Tooltip } from '@platform/ui/Tooltip';
-import { PencilIcon, PlusIcon, SettingsIcon, TrashIcon } from 'lucide-react';
+import { CopyIcon, PencilIcon, PlusIcon, SettingsIcon, TrashIcon } from 'lucide-react';
 import { useCallback, useId, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -46,40 +46,57 @@ const EMPTY_DRAFT: Draft = { content: '', maxTokens: '', name: '' };
 const SystemPromptRow = ({
   canEdit,
   onDelete,
+  onDuplicate,
   onEdit,
   prompt,
 }: {
   canEdit: boolean;
   prompt: SystemPromptRecord;
   onDelete: (prompt: SystemPromptRecord) => void;
+  onDuplicate: (prompt: SystemPromptRecord) => void;
   onEdit: (prompt: SystemPromptRecord) => void;
 }) => {
   const { t } = useTranslation();
   const handleEdit = useCallback(() => onEdit(prompt), [onEdit, prompt]);
   const handleDelete = useCallback(() => onDelete(prompt), [onDelete, prompt]);
+  const handleDuplicate = useCallback(() => onDuplicate(prompt), [onDuplicate, prompt]);
 
   return (
     <HStack justify="space-between" px="1" py="0.5">
       <MiddleTruncate fontSize="xs" minW="0" text={prompt.name} />
-      {canEdit ? (
-        <HStack gap="0.5">
-          <Tooltip content={t('common.edit')}>
-            <IconButton aria-label={t('common.edit')} size="2xs" variant="ghost" onClick={handleEdit}>
-              <PencilIcon />
-            </IconButton>
-          </Tooltip>
-          <Tooltip content={t('common.delete')}>
-            <IconButton aria-label={t('common.delete')} size="2xs" variant="ghost" onClick={handleDelete}>
-              <TrashIcon />
-            </IconButton>
-          </Tooltip>
-        </HStack>
-      ) : (
-        // Shared by someone else. Says why it has no controls without adding colour.
-        <Text color="fg.subtle" fontSize="2xs">
-          {t('widgets.generate.systemPrompts.shared')}
-        </Text>
-      )}
+      <HStack gap="0.5">
+        {/* Copying needs no rights over the source, so it is the one control every row has --
+            it is how someone adapts a prompt they cannot edit. */}
+        <Tooltip content={t('widgets.generate.systemPrompts.duplicate')}>
+          <IconButton
+            aria-label={t('widgets.generate.systemPrompts.duplicate')}
+            size="2xs"
+            variant="ghost"
+            onClick={handleDuplicate}
+          >
+            <CopyIcon />
+          </IconButton>
+        </Tooltip>
+        {canEdit ? (
+          <>
+            <Tooltip content={t('common.edit')}>
+              <IconButton aria-label={t('common.edit')} size="2xs" variant="ghost" onClick={handleEdit}>
+                <PencilIcon />
+              </IconButton>
+            </Tooltip>
+            <Tooltip content={t('common.delete')}>
+              <IconButton aria-label={t('common.delete')} size="2xs" variant="ghost" onClick={handleDelete}>
+                <TrashIcon />
+              </IconButton>
+            </Tooltip>
+          </>
+        ) : (
+          // Shared by someone else. Says why it has no edit controls without adding colour.
+          <Text color="fg.subtle" fontSize="2xs">
+            {t('widgets.generate.systemPrompts.shared')}
+          </Text>
+        )}
+      </HStack>
     </HStack>
   );
 };
@@ -174,6 +191,26 @@ export const SystemPromptsField = ({ catalog, onSelect, selectedId }: SystemProm
     setEditorTarget(null);
   }, [catalog, draft, editorTarget, onSelect, t]);
 
+  const duplicatePrompt = useCallback(
+    async (prompt: SystemPromptRecord) => {
+      setError(null);
+
+      let copy: SystemPromptRecord;
+
+      try {
+        copy = await catalog.duplicate(prompt);
+      } catch (caught) {
+        setError(getApiErrorMessage(caught, t('widgets.generate.systemPrompts.couldNotSave')));
+        return;
+      }
+
+      // A copy is made to be used or edited, so hand the user straight to it.
+      onSelect(copy.id);
+      startEdit(copy);
+    },
+    [catalog, onSelect, startEdit, t]
+  );
+
   const confirmDelete = useCallback(async () => {
     if (!pendingDelete) {
       return;
@@ -199,6 +236,7 @@ export const SystemPromptsField = ({ catalog, onSelect, selectedId }: SystemProm
 
   const cancelDelete = useCallback(() => setPendingDelete(null), []);
   const handleSave = useCallback(() => void saveDraft(), [saveDraft]);
+  const handleDuplicate = useCallback((prompt: SystemPromptRecord) => void duplicatePrompt(prompt), [duplicatePrompt]);
   const handleConfirmDelete = useCallback(() => void confirmDelete(), [confirmDelete]);
   const handleNameChange = useCallback(
     (event: ChangeEvent<HTMLInputElement>) => setDraft((current) => ({ ...current, name: event.target.value })),
@@ -241,6 +279,11 @@ export const SystemPromptsField = ({ catalog, onSelect, selectedId }: SystemProm
             editorTarget.record ? t('widgets.generate.systemPrompts.edit') : t('widgets.generate.systemPrompts.new')
           }
         />
+        {editorTarget.record?.isPublic ? (
+          <Text color="fg.muted" fontSize="2xs">
+            {t('widgets.generate.systemPrompts.sharedEditWarning')}
+          </Text>
+        ) : null}
         <Field id={nameFieldId} label={t('widgets.generate.systemPrompts.name')}>
           <Input
             id={nameFieldId}
@@ -319,6 +362,7 @@ export const SystemPromptsField = ({ catalog, onSelect, selectedId }: SystemProm
                   canEdit={canEdit(prompt)}
                   prompt={prompt}
                   onDelete={setPendingDelete}
+                  onDuplicate={handleDuplicate}
                   onEdit={startEdit}
                 />
               ))}

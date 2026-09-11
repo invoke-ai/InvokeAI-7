@@ -11,6 +11,8 @@ export interface Capabilities {
   canManageSharedFonts: boolean;
   /** Bulk import/export of prompt templates; the routes are admin-only. */
   canManagePromptTemplates: boolean;
+  /** Edit prompts shared with everyone. Never covers another user's private prompt. */
+  canManageSharedSystemPrompts: boolean;
   canManageUsers: boolean;
 }
 
@@ -23,6 +25,7 @@ export const getCapabilities = (session: AuthSession): Capabilities => {
       canManageNodes: false,
       canManageSharedFonts: false,
       canManagePromptTemplates: false,
+      canManageSharedSystemPrompts: false,
       canManageUsers: false,
     };
   }
@@ -39,6 +42,9 @@ export const getCapabilities = (session: AuthSession): Capabilities => {
     // Matches the routers' `AdminUserOrDefault`: everyone qualifies in
     // single-user mode, only admins once multiuser is on.
     canManagePromptTemplates: isAdmin,
+    // The router lets an admin write any prompt; the UI offers it only for shared ones, so an
+    // admin never edits another user's private prompt by accident.
+    canManageSharedSystemPrompts: isAdmin,
     canManageUsers: session.multiuserEnabled && session.user?.is_admin === true,
   };
 };
