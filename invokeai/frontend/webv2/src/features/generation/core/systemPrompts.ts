@@ -79,3 +79,44 @@ export const resolveSelectedSystemPromptId = (
 
   return prompts[0]?.id ?? null;
 };
+
+/**
+ * Bounds the Expand Prompt endpoint enforces on a per-prompt output-token cap
+ * (`ExpandPromptRequest.max_tokens`). Kept here so the editor can reject a bad value in place
+ * rather than surfacing a 422.
+ */
+export const SYSTEM_PROMPT_MAX_TOKENS_MIN = 1;
+export const SYSTEM_PROMPT_MAX_TOKENS_MAX = 2048;
+/** What the backend uses when a prompt names no cap of its own. Shown as the field's placeholder. */
+export const SYSTEM_PROMPT_MAX_TOKENS_DEFAULT = 300;
+
+/** `null` = leave it to the backend default; `'invalid'` = not saveable. */
+export type ParsedMaxTokens = number | null | 'invalid';
+
+/**
+ * Reads the editor's max-tokens input.
+ *
+ * The draft holds the raw string rather than a number so a half-typed value is never clamped
+ * out from under the user; the result is only interpreted on save.
+ */
+export const parseMaxTokensInput = (raw: string): ParsedMaxTokens => {
+  const trimmed = raw.trim();
+
+  if (trimmed === '') {
+    return null;
+  }
+
+  // Deliberately strict: `Number('12e3')` and `Number(' 12 ')` both parse, and neither is a
+  // token count anyone meant to type.
+  if (!/^\d+$/.test(trimmed)) {
+    return 'invalid';
+  }
+
+  const parsed = Number(trimmed);
+
+  if (parsed < SYSTEM_PROMPT_MAX_TOKENS_MIN || parsed > SYSTEM_PROMPT_MAX_TOKENS_MAX) {
+    return 'invalid';
+  }
+
+  return parsed;
+};

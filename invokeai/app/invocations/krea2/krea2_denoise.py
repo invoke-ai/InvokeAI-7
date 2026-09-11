@@ -1,5 +1,7 @@
 import json
 import math
+import statistics
+import time
 from contextlib import ExitStack
 from pathlib import Path
 from typing import Callable, Iterator, Optional
@@ -25,7 +27,12 @@ from invokeai.app.invocations.fields import (
 from invokeai.app.invocations.model import TransformerField
 from invokeai.app.invocations.primitives import LatentsOutput
 from invokeai.app.services.shared.invocation_context import InvocationContext
-from invokeai.backend.krea2.attention import Krea2RegionalPromptingState, build_krea2_attention_processors
+from invokeai.app.util.startup_utils import log_attention_backends
+from invokeai.backend.krea2.attention import (
+    Krea2RegionalPromptingState,
+    build_krea2_attention_processors,
+    resolve_krea2_sdpa_backends,
+)
 from invokeai.backend.krea2.regional_prompting import (
     Krea2RegionalPromptingExtension,
     Krea2TextConditioning,
@@ -42,17 +49,85 @@ from invokeai.backend.krea2.sampling_utils import (
     prepare_position_ids,
     unpack_latents,
 )
-from invokeai.backend.model_manager.taxonomy import BaseModelType, ModelFormat
+from invokeai.backend.model_manager.taxonomy import BaseModelType
 from invokeai.backend.patches.layer_patcher import LayerPatcher, PatchSpec
 from invokeai.backend.patches.lora_conversions.krea2_lora_constants import KREA2_LORA_TRANSFORMER_PREFIX
 from invokeai.backend.patches.model_patch_raw import ModelPatchRaw
+from invokeai.backend.quantization.int8_convrot import (
+    peak_int8_dequant_transient_bytes,
+    requires_sidecar_patching,
+)
 from invokeai.backend.rectified_flow.rectified_flow_inpaint_extension import RectifiedFlowInpaintExtension
 from invokeai.backend.stable_diffusion.diffusers_pipeline import PipelineIntermediateState
 from invokeai.backend.stable_diffusion.diffusion.conditioning_data import Krea2ConditioningInfo
+from invokeai.backend.util import sdpa_scope
 from invokeai.backend.util.devices import TorchDevice
+from invokeai.backend.util.logging import InvokeAILogger
 
 # Krea-2 latent channels (Qwen-Image VAE z_dim). The packed transformer in_channels is 16 * patch_size**2 = 64.
 KREA2_LATENT_CHANNELS = 16
+
+
+logger = InvokeAILogger.get_logger(__name__)
+
+
+class _Krea2StepBenchmark:
+    """Per-step timing for the Krea-2 denoise loop, for A/B-ing SDPA backends.
+
+    Off unless KREA2_SDPA_BACKEND_ENV_VAR is set, and off on non-CUDA devices. That matters: the
+    `cuda.synchronize()` calls on both sides of a step serialise the loop, so the default path must
+    not reach them at all.
+    """
+
+    def __init__(self, device: torch.device, label: str) -> None:
+        self._device = device
+        self._label = label
+        self._step_ms: list[float] = []
+        self._step_started_at = 0.0
+        # A window that did not own the process-global backend selection ran under someone else's
+        # policy. For an exclusive override that voids the measurement, so the summary has to say it
+        # rather than print a label for a kernel that may not have run.
+        self._foreign_windows_at_start = sdpa_scope.foreign_window_entries()
+        # Reset here, immediately before the loop, so the reported peak is the loop's and not the
+        # model load's.
+        torch.cuda.reset_peak_memory_stats(device)
+
+    @classmethod
+    def create(cls, device: torch.device) -> "_Krea2StepBenchmark | None":
+        override = resolve_krea2_sdpa_backends().override
+        if override is None or device.type != "cuda":
+            return None
+        return cls(device, override)
+
+    def start_step(self) -> None:
+        torch.cuda.synchronize(self._device)
+        self._step_started_at = time.perf_counter()
+
+    def end_step(self) -> None:
+        torch.cuda.synchronize(self._device)
+        self._step_ms.append((time.perf_counter() - self._step_started_at) * 1000)
+
+    def log_summary(self) -> None:
+        if not self._step_ms:
+            return
+        peak_gib = torch.cuda.max_memory_allocated(self._device) / 2**30
+        first_ms = self._step_ms[0]
+        # The first step absorbs kernel selection and allocator warmup -- on a cold cuDNN run it has
+        # been seen at 2606 ms against a 1451 ms steady mean -- so it is reported, not averaged in.
+        steady = self._step_ms[1:] or self._step_ms
+        foreign = sdpa_scope.foreign_window_entries() - self._foreign_windows_at_start
+        if foreign:
+            logger.warning(
+                f"Krea-2 SDPA benchmark [{self._label}]: {foreign} attention window(s) ran under another "
+                "session's backend policy, so these timings are not a measurement of the requested kernel."
+            )
+        logger.info(
+            f"Krea-2 SDPA benchmark [{self._label}]: {len(self._step_ms)} steps | "
+            f"first {first_ms:.0f} ms | "
+            f"steady mean {statistics.mean(steady):.0f} ms, median {statistics.median(steady):.0f} ms, "
+            f"min {min(steady):.0f} ms, max {max(steady):.0f} ms | "
+            f"peak torch.cuda.max_memory_allocated {peak_gib:.3f} GiB"
+        )
 
 
 @invocation(
@@ -409,7 +484,6 @@ class Krea2DenoiseInvocation(BaseInvocation, WithMetadata, WithBoard):
         )
 
         transformer_config = context.models.get_config(self.transformer.transformer)
-        model_is_quantized = transformer_config.format in (ModelFormat.GGUFQuantized,)
         num_train_timesteps = scheduler.config.num_train_timesteps
 
         # Estimate the peak working memory (activations) the transformer forward needs and ask the model
@@ -429,6 +503,18 @@ class Krea2DenoiseInvocation(BaseInvocation, WithMetadata, WithBoard):
                 pos_extension, neg_extension, inference_dtype
             ),
         )
+        # An int8_tensorwise build stores its linears quantized and materializes the dequantized,
+        # derotated weight per forward call. That transient is alive alongside the activations above,
+        # so it is added rather than compared -- and it is invisible to an activation estimate, which
+        # is how a model that loaded comfortably OOMs in its first step. Zero for any other format.
+        estimated_working_memory += peak_int8_dequant_transient_bytes(transformer_info.model, inference_dtype)
+
+        # Once per device per process, and from here rather than from startup: the probe allocates,
+        # so on the boot path it would create a CUDA context on an idle server -- and on `cuda:0`,
+        # which need not be a device this session ever uses. Before the model is locked, because it
+        # ends with `empty_cache()` and dropping the allocator's blocks is cheap now and expensive
+        # once the transformer is resident.
+        log_attention_backends(logger, device)
 
         with ExitStack() as exit_stack:
             (cached_weights, transformer) = exit_stack.enter_context(
@@ -439,6 +525,10 @@ class Krea2DenoiseInvocation(BaseInvocation, WithMetadata, WithBoard):
             # SDPA for enable_gqa=True, which PyTorch only supports on the math backend — that materializes the
             # full O(seq^2) score matrix (~5.7 GB per attention at 1280x720, ~40 GB at 2560x1440) and OOMs. Swap
             # in a memory-efficient processor that expands the KV heads and uses the O(seq) SDPA kernel instead.
+            # Whether LoRA has to go on as a sidecar. Asked of the loaded module tree rather than the
+            # format, which cannot see an int8_tensorwise build's Int8ConvrotLinear layers.
+            model_is_quantized = requires_sidecar_patching(transformer, transformer_config.format)
+
             regional_prompting_state = Krea2RegionalPromptingState()
             transformer.set_attn_processor(build_krea2_attention_processors(transformer, regional_prompting_state))
             # The processors remain installed on the cached transformer after this invocation. Do not let them
@@ -459,7 +549,11 @@ class Krea2DenoiseInvocation(BaseInvocation, WithMetadata, WithBoard):
             pos_regional_attention_mask = pos_extension.get_attention_mask()
             neg_regional_attention_mask = neg_extension.get_attention_mask() if neg_extension is not None else None
 
+            benchmark = _Krea2StepBenchmark.create(device)
+
             for step_idx, t in enumerate(tqdm(timesteps_sched)):
+                if benchmark is not None:
+                    benchmark.start_step()
                 # The pipeline passes timestep / num_train_timesteps to the transformer.
                 timestep = (t / num_train_timesteps).expand(latents.shape[0]).to(inference_dtype)
 
@@ -504,6 +598,9 @@ class Krea2DenoiseInvocation(BaseInvocation, WithMetadata, WithBoard):
                     )
                     latents = pack_latents(latents_4d, 1, KREA2_LATENT_CHANNELS, latent_height, latent_width)
 
+                if benchmark is not None:
+                    benchmark.end_step()
+
                 step_callback(
                     PipelineIntermediateState(
                         step=step_idx + 1,
@@ -513,6 +610,9 @@ class Krea2DenoiseInvocation(BaseInvocation, WithMetadata, WithBoard):
                         latents=unpack_latents(latents, latent_height, latent_width),
                     ),
                 )
+
+        if benchmark is not None:
+            benchmark.log_summary()
 
         # Unpack to 4D then add a frame dim for the Qwen-Image VAE: (B, C, 1, H, W).
         latents = unpack_latents(latents, latent_height, latent_width)

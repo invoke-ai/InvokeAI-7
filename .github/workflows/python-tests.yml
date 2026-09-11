@@ -30,13 +30,20 @@ on:
         type: boolean
         default: true
 
+# One run per pull request: a new push cancels the superseded run. The PR number is used rather
+# than the head branch, which two forks can share. Pushes to main and merge groups fall back to
+# the run id and never cancel each other. The group names the workflow literally
+# because `github.workflow` is the caller's name inside a reusable workflow, and release.yml calls
+# several of these at once.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  group: python-tests-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
 jobs:
   matrix:
     strategy:
+      # Let the other platforms finish when one runner fails, so a rerun repeats only the failed job.
+      fail-fast: false
       matrix:
         python-version:
           - '3.11'
@@ -62,8 +69,7 @@ jobs:
     env:
       PIP_USE_PEP517: '1'
       # One compute thread per worker. Torch otherwise sizes its thread pools to the whole
-      # machine, so `-n logical` puts vCPUs^2 threads on a runner: they fight for the same cores
-      # and, on the Windows CPU build, the fp8 tests take a native worker down with them.
+      # machine, so `-n logical` puts vCPUs^2 threads on a runner that fight for the same cores.
       OMP_NUM_THREADS: '1'
       MKL_NUM_THREADS: '1'
 
@@ -90,6 +96,13 @@ jobs:
               - '.github/workflows/python-tests.yml'
               - 'invokeai/**'
               - '!invokeai/frontend/web/**'
+              - '!invokeai/frontend/webv2/**'
+              # Re-includes must follow the exclusions above.
+              # test_imports.py walks every package, including the frontend ones.
+              - 'invokeai/frontend/web/**/*.py'
+              - 'invokeai/frontend/webv2/**/*.py'
+              # test_workflow_graph_builder.py validates these editor fixtures against the backend.
+              - 'invokeai/frontend/webv2/src/features/workflow/core/fixtures/**'
               - 'tests/**'
               # tests/ covers a few of these (e.g. test_check_pins.py, test_docs_json_export.py)
               - 'scripts/**'

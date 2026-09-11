@@ -2,36 +2,60 @@ export type KnownBrowserIssueId = 'canvas-readback-integrity';
 
 export type KnownBrowserIssueSeverity = 'warning' | 'error';
 
+export type BrowserFamily = 'brave' | 'chromium' | 'firefox' | 'other';
+
 export interface KnownBrowserIssueWorkaround {
   id: string;
   instructionKey: string;
   copyableValue?: string;
+  /** Families this instruction applies to; omitted means every browser. */
+  browsers?: readonly BrowserFamily[];
 }
 
 export interface BrowserIssueDetectionEnvironment {
-  createCanvas: () => HTMLCanvasElement | null;
+  browserFamily: BrowserFamily;
+  createCanvas: () => HTMLCanvasElement;
 }
 
-export interface KnownBrowserIssue {
+export interface DetectedBrowserIssue {
   id: KnownBrowserIssueId;
   severity: KnownBrowserIssueSeverity;
   titleKey: string;
   descriptionKey: string;
   workarounds: readonly KnownBrowserIssueWorkaround[];
-  detect: (environment: BrowserIssueDetectionEnvironment) => boolean | Promise<boolean>;
 }
+
+export interface KnownBrowserIssue extends DetectedBrowserIssue {
+  detect: (environment: BrowserIssueDetectionEnvironment) => boolean;
+}
+
+interface BrowserIdentity {
+  brave?: { isBrave?: unknown };
+  userAgent: string;
+}
+
+export const identifyBrowserFamily = ({ brave, userAgent }: BrowserIdentity): BrowserFamily => {
+  if (typeof brave?.isBrave === 'function') {
+    return 'brave';
+  }
+
+  if (userAgent.includes('Firefox/')) {
+    return 'firefox';
+  }
+
+  if (userAgent.includes('Chrome/')) {
+    return 'chromium';
+  }
+
+  return 'other';
+};
 
 const CANVAS_PROBE_SIZE = 32;
 
-const DEFAULT_DETECTION_ENVIRONMENT: BrowserIssueDetectionEnvironment = {
-  createCanvas: () => {
-    if (typeof document === 'undefined') {
-      return null;
-    }
-
-    return document.createElement('canvas');
-  },
-};
+const createDefaultDetectionEnvironment = (): BrowserIssueDetectionEnvironment => ({
+  browserFamily: identifyBrowserFamily(navigator as Navigator & BrowserIdentity),
+  createCanvas: () => document.createElement('canvas'),
+});
 
 const createExpectedCanvasPixels = (): Uint8ClampedArray => {
   const pixels = new Uint8ClampedArray(CANVAS_PROBE_SIZE * CANVAS_PROBE_SIZE * 4);
@@ -51,11 +75,6 @@ const createExpectedCanvasPixels = (): Uint8ClampedArray => {
 const hasUnsafeCanvasReadback = (environment: BrowserIssueDetectionEnvironment): boolean => {
   try {
     const canvas = environment.createCanvas();
-
-    if (!canvas) {
-      return true;
-    }
-
     canvas.width = CANVAS_PROBE_SIZE;
     canvas.height = CANVAS_PROBE_SIZE;
 
@@ -91,6 +110,17 @@ export const KNOWN_BROWSER_ISSUES = [
     titleKey: 'launchpad.browserIssues.canvasReadbackIntegrity.title',
     workarounds: [
       {
+        browsers: ['brave'],
+        id: 'brave',
+        instructionKey: 'launchpad.browserIssues.canvasReadbackIntegrity.braveWorkaround',
+      },
+      {
+        browsers: ['firefox'],
+        id: 'firefox',
+        instructionKey: 'launchpad.browserIssues.canvasReadbackIntegrity.firefoxWorkaround',
+      },
+      {
+        browsers: ['chromium'],
         copyableValue: 'helium://flags/#helium-noise-canvas',
         id: 'helium',
         instructionKey: 'launchpad.browserIssues.canvasReadbackIntegrity.heliumWorkaround',
@@ -103,14 +133,20 @@ export const KNOWN_BROWSER_ISSUES = [
   },
 ] as const satisfies readonly KnownBrowserIssue[];
 
-export const detectKnownBrowserIssues = async (
-  environment: BrowserIssueDetectionEnvironment = DEFAULT_DETECTION_ENVIRONMENT
-): Promise<readonly KnownBrowserIssue[]> => {
-  const results: (KnownBrowserIssue | null)[] = await Promise.all(
-    KNOWN_BROWSER_ISSUES.map(async (issue): Promise<KnownBrowserIssue | null> =>
-      (await issue.detect(environment)) ? issue : null
-    )
-  );
+const REGISTERED_ISSUES: readonly KnownBrowserIssue[] = KNOWN_BROWSER_ISSUES;
 
-  return results.filter((issue): issue is KnownBrowserIssue => issue !== null);
-};
+export const detectKnownBrowserIssues = (
+  environment: BrowserIssueDetectionEnvironment = createDefaultDetectionEnvironment()
+): readonly DetectedBrowserIssue[] =>
+  REGISTERED_ISSUES.flatMap(({ detect, ...issue }): DetectedBrowserIssue[] =>
+    detect(environment)
+      ? [
+          {
+            ...issue,
+            workarounds: issue.workarounds.filter(
+              (workaround) => !workaround.browsers || workaround.browsers.includes(environment.browserFamily)
+            ),
+          },
+        ]
+      : []
+  );

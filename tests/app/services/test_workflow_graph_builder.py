@@ -119,8 +119,13 @@ FOR_LOOP_FIXTURE_DIR = (
     / "fixtures"
 )
 
+FOR_LOOP_FIXTURES = sorted(FOR_LOOP_FIXTURE_DIR.glob("for-loop-*.json"))
+# CI's python-tests change filter re-includes this directory by path; a silent empty glob would
+# hide both a moved fixture directory and the resulting stale filter.
+assert FOR_LOOP_FIXTURES, f"no for-loop fixtures found in {FOR_LOOP_FIXTURE_DIR}"
 
-@pytest.mark.parametrize("fixture_path", sorted(FOR_LOOP_FIXTURE_DIR.glob("for-loop-*.json")))
+
+@pytest.mark.parametrize("fixture_path", FOR_LOOP_FIXTURES)
 def test_for_loop_fixtures_have_matching_backend_validation(fixture_path: Path):
     fixture = json.loads(fixture_path.read_text())
     graph = build_graph_from_workflow(fixture)

@@ -1485,9 +1485,11 @@
   "launchpad": {
     "browserIssues": {
       "canvasReadbackIntegrity": {
+        "braveWorkaround": "Click the Brave Shields icon in the address bar and turn Shields off for this site, then reload Invoke.",
         "description": "Your browser is modifying or blocking canvas pixel data. This can make later strokes noisy or pixelated.",
+        "firefoxWorkaround": "Click the canvas permission icon in the address bar and allow this site to read canvas data. If no icon appears, click the shield icon and turn off Enhanced Tracking Protection for this site. Then reload Invoke.",
         "genericWorkaround": "If you use another privacy browser or canvas-protection extension, allow unmodified canvas access for this site, then reload Invoke.",
-        "heliumWorkaround": "Open the setting below, disable “[Helium Noise] Canvas pixel noising”, then relaunch Helium.",
+        "heliumWorkaround": "In Helium, open the address below, disable “[Helium Noise] Canvas pixel noising”, then relaunch Helium.",
         "title": "Canvas protection may corrupt painted strokes"
       },
       "copyFailed": "Could not copy browser setting",
@@ -2222,6 +2224,9 @@
         "namePlaceholder": "Concise and literal",
         "content": "Instructions",
         "contentPlaceholder": "Describe how the model should rewrite the prompt.",
+        "maxTokens": "Max output length",
+        "maxTokensHelp": "Tokens the model may generate with this prompt. Leave empty for the default ({{tokens}}).",
+        "maxTokensInvalid": "Enter a whole number between {{min}} and {{max}}, or leave it empty.",
         "none": "No system prompts",
         "shared": "Shared",
         "deleteTitle": "Delete system prompt",

@@ -1,10 +1,13 @@
-"""Tests for the MiniMax H3 denoising loop, on a micro-config CPU transformer."""
+"""Tests for the MiniMax H3 denoising loop: a micro-config CPU transformer, plus one slow GPU test."""
+
+import threading
+import time
 
 import pytest
 import torch
 
 from invokeai.app.services.session_processor.session_processor_common import CanceledException
-from invokeai.backend.minimax_h3.denoise import denoise
+from invokeai.backend.minimax_h3.denoise import _cancel_between_blocks, denoise
 from invokeai.backend.minimax_h3.sampling import build_denoise_state
 from invokeai.backend.minimax_h3.transformer_minimax_h3 import MiniMaxH3Transformer3DModel
 
@@ -117,6 +120,126 @@ def test_cancellation_raises(tiny_transformer):
     polls = iter([False, True, True, True])
     with pytest.raises(CanceledException):
         denoise(tiny_transformer, state, prompt_embeds, is_canceled=lambda: next(polls))
+
+
+def test_cancellation_is_polled_between_transformer_blocks():
+    """A cancel that lands mid-step must stop the forward at the next block boundary, not at
+    the end of the step: with two blocks, a poll that turns True after the first block's
+    pre-hook leaves the second block unrun. The hooks must not outlive the call — the
+    transformer is a shared cache resident."""
+    torch.manual_seed(0)
+    transformer = MiniMaxH3Transformer3DModel(**{**TINY_CONFIG, "num_layers": 2})
+    transformer.eval()
+    block_forwards: list[int] = []
+    for index, block in enumerate(transformer.transformer_blocks):
+        block.register_forward_hook(lambda module, args, output, index=index: block_forwards.append(index))
+    hooks_before = [dict(block._forward_pre_hooks) for block in transformer.transformer_blocks]
+
+    state = _state()
+    prompt_embeds = torch.randn(1, 3, TINY_CONFIG["text_dim"])
+    # Polls: step-loop check (False), block 0 pre-hook (False), block 1 pre-hook (True).
+    polls = iter([False, False, True])
+    with pytest.raises(CanceledException):
+        denoise(transformer, state, prompt_embeds, is_canceled=lambda: next(polls))
+
+    assert block_forwards == [0], "the forward did not stop at the first block boundary after the cancel"
+    assert [dict(block._forward_pre_hooks) for block in transformer.transformer_blocks] == hooks_before, (
+        "cancel pre-hooks leaked onto the shared transformer"
+    )
+
+
+class _HeavyBlock(torch.nn.Module):
+    """Tens of milliseconds of GPU work per call: a step of them outlasts the CPU's enqueue time
+    by orders of magnitude, as the real stack does."""
+
+    DIM = 8192
+
+    def __init__(self, device: torch.device):
+        super().__init__()
+        self.weight = torch.nn.Parameter(torch.randn(self.DIM, self.DIM, dtype=torch.bfloat16, device=device) * 0.01)
+
+    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        for _ in range(8):
+            hidden_states = torch.nn.functional.layer_norm(hidden_states @ self.weight, (self.DIM,)).to(torch.bfloat16)
+        return hidden_states
+
+
+class _HeavyStack(torch.nn.Module):
+    """Stands in for the transformer: `_cancel_between_blocks` only needs `transformer_blocks`."""
+
+    def __init__(self, device: torch.device, num_blocks: int):
+        super().__init__()
+        self.transformer_blocks = torch.nn.ModuleList([_HeavyBlock(device) for _ in range(num_blocks)])
+
+    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        for block in self.transformer_blocks:
+            hidden_states = block(hidden_states)
+        return hidden_states
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="measures cancel latency against queued GPU kernels")
+def test_mid_step_cancel_idles_the_gpu_within_a_block():
+    """Kernel launches are asynchronous: without a wait in the poll, the CPU enqueues every block
+    of a step in tens of milliseconds and parks at the step's end, so a cancel landing mid-step
+    is not seen until the next step and the GPU grinds through the whole step (observed on the
+    dual-GPU rig: a cancel during H3 step 2 kept the GPU busy until the step ended). The poll
+    must wait for the queued work, so that the GPU goes idle within about a block of the cancel."""
+    device = torch.device("cuda")
+    num_blocks = 16
+    torch.manual_seed(0)
+    stack = _HeavyStack(device, num_blocks).eval()
+    hidden_states = torch.randn(4096, _HeavyBlock.DIM, dtype=torch.bfloat16, device=device)
+    cancel = threading.Event()
+
+    def timed_forward(stack: _HeavyStack, hidden_states: torch.Tensor) -> tuple[float, bool]:
+        torch.cuda.synchronize(device)
+        start = time.perf_counter()
+        canceled = False
+        try:
+            with torch.no_grad(), _cancel_between_blocks(stack, cancel.is_set, device):  # type: ignore[arg-type]
+                stack(hidden_states)
+        except CanceledException:
+            canceled = True
+        torch.cuda.synchronize(device)
+        return time.perf_counter() - start, canceled
+
+    full_step, canceled = timed_forward(stack, hidden_states)
+    assert not canceled
+    block_time = full_step / num_blocks
+
+    cancel_at = full_step * 0.4
+    timer = threading.Timer(cancel_at, cancel.set)
+    timer.start()
+    try:
+        elapsed, canceled = timed_forward(stack, hidden_states)
+    finally:
+        timer.cancel()
+        # 2 GiB of synthetic weights: hand them back rather than leaving them cached for the session.
+        del stack, hidden_states
+        torch.cuda.empty_cache()
+    assert canceled, f"cancel at {cancel_at:.2f}s was never seen inside the {full_step:.2f}s step"
+    idle_after_cancel = elapsed - cancel_at
+    # The bound is one block plus the poll's own latency; without the wait it is the rest of the
+    # step (~0.6 * full_step). Allow generous scheduling jitter on the dev machine.
+    assert idle_after_cancel < 3 * block_time, (
+        f"GPU stayed busy {idle_after_cancel:.2f}s after the cancel (block ~{block_time:.2f}s, step {full_step:.2f}s)"
+    )
+
+
+def test_uncanceled_run_leaves_no_hooks_and_polls_every_block(tiny_transformer):
+    polls: list[bool] = []
+
+    def is_canceled() -> bool:
+        polls.append(False)
+        return False
+
+    state = _state()
+    prompt_embeds = torch.randn(1, 3, TINY_CONFIG["text_dim"])
+    denoise(tiny_transformer, state, prompt_embeds, is_canceled=is_canceled)
+    # One poll per step plus one per block per step.
+    assert len(polls) == NUM_EVALS * (1 + TINY_CONFIG["num_layers"])
+    assert all(not block._forward_pre_hooks for block in tiny_transformer.transformer_blocks)
 
 
 def test_denoise_is_deterministic(tiny_transformer):

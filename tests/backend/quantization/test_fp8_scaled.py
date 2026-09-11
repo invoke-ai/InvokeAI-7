@@ -655,11 +655,15 @@ class TestCustomLinearIntegration:
         """With the matmul off, the weight must still be dequantized *with* its scale."""
         set_fp8_matmul_enabled(False)
         dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        # CPU inference is float32 in the product (TorchDevice.choose_torch_dtype). A bf16 input
+        # here would also hit an illegal-instruction fault (0xC000001D) in the Windows CPU torch
+        # build's bf16 GEMM on some GitHub runner CPUs, taking the whole xdist worker down.
+        dtype = torch.bfloat16 if dev.type == "cuda" else torch.float32
         model = self._module(dev)
-        x = torch.randn(32, 64, device=dev, dtype=torch.bfloat16)
+        x = torch.randn(32, 64, device=dev, dtype=dtype)
 
         got = model(x)
-        w_ref = dequantize_weight(model[0].weight, model[0].weight_scale, torch.bfloat16)
+        w_ref = dequantize_weight(model[0].weight, model[0].weight_scale, dtype)
         expected = torch.nn.functional.linear(x, w_ref)
         assert torch.equal(got, expected)
 

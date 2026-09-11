@@ -11705,6 +11705,7 @@ export type components = {
             model_key: string;
             /**
              * Max Tokens
+             * @description Cap on the tokens the LLM may emit. Clients that expand with a stored system prompt send that prompt's own `max_tokens` here; omitting it uses the default.
              * @default 300
              */
             max_tokens?: number;
@@ -20922,6 +20923,7 @@ export type components = {
          *         download_cache_dir: Path to the directory that contains dynamically downloaded models.
          *         legacy_conf_dir: Path to directory of legacy checkpoint config files.
          *         db_dir: Path to InvokeAI databases directory.
+         *         db_synchronous: SQLite durability setting. `full`, the default and what InvokeAI has always used, flushes every commit to disk. `normal` acknowledges commits without waiting for that flush - measured at roughly 12x shorter commits on an SSD - and cannot corrupt the database under WAL, which is why it is refused, with a warning, when WAL is unavailable for the database file. What `normal` gives up is the most recent transactions on a power loss or OS crash: a just-written image record or queue status, not the image file itself.<br>Valid values: `full`, `normal`
          *         outputs_dir: Path to directory for outputs.
          *         image_subfolder_strategy: Strategy for organizing images into subfolders. 'flat' stores all images in a single folder. 'date' organizes by YYYY/MM/DD. 'type' organizes by image category. 'hash' uses first 2 characters of UUID for filesystem performance.<br>Valid values: `flat`, `date`, `type`, `hash`
          *         custom_nodes_dir: Path to directory for custom nodes.
@@ -20957,7 +20959,7 @@ export type components = {
          *         pid_memory_optimization: Enable experimental PiD decode memory optimizations. Roughly halves the peak activation memory of a PiD decode; in exchange the decoded image changes slightly, because neither the chunked pixel pathway nor the float32 sampler intermediates are bit-exact with the default path.
          *         attention_type: Attention type.<br>Valid values: `auto`, `normal`, `xformers`, `sliced`, `torch-sdp`
          *         attention_slice_size: Slice size, valid when attention_type=="sliced".<br>Valid values: `auto`, `balanced`, `max`, `1`, `2`, `3`, `4`, `5`, `6`, `7`, `8`
-         *         force_tiled_decode: Whether to enable tiled VAE decode (reduces memory consumption with some performance penalty).
+         *         force_tiled_decode: Whether to enable tiled VAE decode (reduces memory consumption with some performance penalty). A tiled decode is not pixel-identical to a single-pass one: a VAE decoder normalises and attends over the whole image, so the difference is spread across it rather than confined to the tile seams. As of this release the setting also applies to FLUX.1, which previously ignored it.
          *         pil_compress_level: The compress_level setting of PIL.Image.save(), used for PNG encoding. All settings are lossless. 0 = no compression, 1 = fastest with slightly larger filesize, 9 = slowest with smallest filesize. 1 is typically the best setting.
          *         max_queue_size: Maximum number of items in the session queue.
          *         session_queue_mode: Session queue mode. Use 'FIFO' for traditional first-in-first-out, or 'round_robin' to serve each user's jobs in turn. In single-user mode, FIFO is always used regardless of this setting.<br>Valid values: `FIFO`, `round_robin`
@@ -21117,6 +21119,13 @@ export type components = {
              * @default databases
              */
             db_dir?: string;
+            /**
+             * Db Synchronous
+             * @description SQLite durability setting. `full`, the default and what InvokeAI has always used, flushes every commit to disk. `normal` acknowledges commits without waiting for that flush - measured at roughly 12x shorter commits on an SSD - and cannot corrupt the database under WAL, which is why it is refused, with a warning, when WAL is unavailable for the database file. What `normal` gives up is the most recent transactions on a power loss or OS crash: a just-written image record or queue status, not the image file itself.
+             * @default full
+             * @enum {string}
+             */
+            db_synchronous?: "full" | "normal";
             /**
              * Outputs Dir
              * Format: path
@@ -21375,7 +21384,7 @@ export type components = {
             attention_slice_size?: "auto" | "balanced" | "max" | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
             /**
              * Force Tiled Decode
-             * @description Whether to enable tiled VAE decode (reduces memory consumption with some performance penalty).
+             * @description Whether to enable tiled VAE decode (reduces memory consumption with some performance penalty). A tiled decode is not pixel-identical to a single-pass one: a VAE decoder normalises and attends over the whole image, so the difference is spread across it rather than confined to the tile seams. As of this release the setting also applies to FLUX.1, which previously ignored it.
              * @default false
              */
             force_tiled_decode?: boolean;
@@ -40194,6 +40203,11 @@ export type components = {
              * @description Whether the prompt is shared with all users.
              */
             is_public?: boolean | null;
+            /**
+             * Max Tokens
+             * @description The new output-token cap. Unlike the other fields, an explicitly supplied null is a change -- it clears the cap back to the default; omitting the field leaves it alone.
+             */
+            max_tokens?: number | null;
         };
         /**
          * SystemPromptField
@@ -40218,6 +40232,11 @@ export type components = {
              * @description The system prompt content.
              */
             content: string;
+            /**
+             * Max Tokens
+             * @description Cap on the tokens the LLM may emit when expanding with this prompt. Null means use the default of 300.
+             */
+            max_tokens?: number | null;
             /**
              * Id
              * @description The system prompt ID.
@@ -40258,6 +40277,11 @@ export type components = {
              * @description The system prompt content.
              */
             content: string;
+            /**
+             * Max Tokens
+             * @description Cap on the tokens the LLM may emit when expanding with this prompt. Null means use the default of 300.
+             */
+            max_tokens?: number | null;
         };
         /** T2IAdapterField */
         T2IAdapterField: {
@@ -41485,8 +41509,8 @@ export type components = {
             text_llm_model?: components["schemas"]["ModelIdentifierField"] | null;
             /**
              * Max Tokens
-             * @description Maximum number of tokens to generate.
-             * @default 300
+             * @description Maximum number of tokens to generate. 0 uses the preset's own cap, or 300 if it does not set one.
+             * @default 0
              */
             max_tokens?: number;
             /**
@@ -46336,6 +46360,18 @@ export type components = {
              * @default null
              */
             vae?: components["schemas"]["VAEField"] | null;
+            /**
+             * Tiled
+             * @description Processing using overlapping tiles (reduce memory consumption)
+             * @default false
+             */
+            tiled?: boolean;
+            /**
+             * Tile Size
+             * @description The tile size for VAE tiling in pixels (image space). If set to 0, the default tile size for the model will be used. Larger tile sizes generally produce better results at the cost of higher memory usage.
+             * @default 0
+             */
+            tile_size?: number;
             /**
              * type
              * @default z_image_l2i

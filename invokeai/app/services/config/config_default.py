@@ -33,6 +33,7 @@ LOG_FORMAT = Literal["plain", "color", "syslog", "legacy"]
 LOG_LEVEL = Literal["debug", "info", "warning", "error", "critical"]
 SESSION_QUEUE_MODE = Literal["FIFO", "round_robin"]
 IMAGE_SUBFOLDER_STRATEGY = Literal["flat", "date", "type", "hash"]
+DB_SYNCHRONOUS = Literal["full", "normal"]
 CONFIG_SCHEMA_VERSION = "4.0.3"
 # Path prefixes owned by real routes/mounts. A `base_url` starting with one of these would collide
 # with routing and silently brick the server, so it is rejected during validation.
@@ -87,6 +88,7 @@ class InvokeAIAppConfig(BaseSettings):
         download_cache_dir: Path to the directory that contains dynamically downloaded models.
         legacy_conf_dir: Path to directory of legacy checkpoint config files.
         db_dir: Path to InvokeAI databases directory.
+        db_synchronous: SQLite durability setting. `full`, the default and what InvokeAI has always used, flushes every commit to disk. `normal` acknowledges commits without waiting for that flush - measured at roughly 12x shorter commits on an SSD - and cannot corrupt the database under WAL, which is why it is refused, with a warning, when WAL is unavailable for the database file. What `normal` gives up is the most recent transactions on a power loss or OS crash: a just-written image record or queue status, not the image file itself.<br>Valid values: `full`, `normal`
         outputs_dir: Path to directory for outputs.
         image_subfolder_strategy: Strategy for organizing images into subfolders. 'flat' stores all images in a single folder. 'date' organizes by YYYY/MM/DD. 'type' organizes by image category. 'hash' uses first 2 characters of UUID for filesystem performance.<br>Valid values: `flat`, `date`, `type`, `hash`
         custom_nodes_dir: Path to directory for custom nodes.
@@ -122,7 +124,7 @@ class InvokeAIAppConfig(BaseSettings):
         pid_memory_optimization: Enable experimental PiD decode memory optimizations. Roughly halves the peak activation memory of a PiD decode; in exchange the decoded image changes slightly, because neither the chunked pixel pathway nor the float32 sampler intermediates are bit-exact with the default path.
         attention_type: Attention type.<br>Valid values: `auto`, `normal`, `xformers`, `sliced`, `torch-sdp`
         attention_slice_size: Slice size, valid when attention_type=="sliced".<br>Valid values: `auto`, `balanced`, `max`, `1`, `2`, `3`, `4`, `5`, `6`, `7`, `8`
-        force_tiled_decode: Whether to enable tiled VAE decode (reduces memory consumption with some performance penalty).
+        force_tiled_decode: Whether to enable tiled VAE decode (reduces memory consumption with some performance penalty). A tiled decode is not pixel-identical to a single-pass one: a VAE decoder normalises and attends over the whole image, so the difference is spread across it rather than confined to the tile seams. As of this release the setting also applies to FLUX.1, which previously ignored it.
         pil_compress_level: The compress_level setting of PIL.Image.save(), used for PNG encoding. All settings are lossless. 0 = no compression, 1 = fastest with slightly larger filesize, 9 = slowest with smallest filesize. 1 is typically the best setting.
         max_queue_size: Maximum number of items in the session queue.
         session_queue_mode: Session queue mode. Use 'FIFO' for traditional first-in-first-out, or 'round_robin' to serve each user's jobs in turn. In single-user mode, FIFO is always used regardless of this setting.<br>Valid values: `FIFO`, `round_robin`
@@ -190,6 +192,7 @@ class InvokeAIAppConfig(BaseSettings):
     download_cache_dir:            Path = Field(default=Path("models/.download_cache"), description="Path to the directory that contains dynamically downloaded models.")
     legacy_conf_dir:               Path = Field(default=Path("configs"), description="Path to directory of legacy checkpoint config files.")
     db_dir:                        Path = Field(default=Path("databases"),  description="Path to InvokeAI databases directory.")
+    db_synchronous:      DB_SYNCHRONOUS = Field(default="full", description="SQLite durability setting. `full`, the default and what InvokeAI has always used, flushes every commit to disk. `normal` acknowledges commits without waiting for that flush - measured at roughly 12x shorter commits on an SSD - and cannot corrupt the database under WAL, which is why it is refused, with a warning, when WAL is unavailable for the database file. What `normal` gives up is the most recent transactions on a power loss or OS crash: a just-written image record or queue status, not the image file itself.")
     outputs_dir:                   Path = Field(default=Path("outputs"),    description="Path to directory for outputs.")
     fonts_dir:                     Path = Field(default=Path("fonts"),      description="Path to directory for custom fonts.")
     fonts_storage_dir:             Path = Field(default=Path("fonts-uploaded"), description="Path to application-managed uploaded fonts.")
@@ -245,7 +248,7 @@ class InvokeAIAppConfig(BaseSettings):
     pid_memory_optimization:       bool = Field(default=False,              description="Enable experimental PiD decode memory optimizations. Roughly halves the peak activation memory of a PiD decode; in exchange the decoded image changes slightly, because neither the chunked pixel pathway nor the float32 sampler intermediates are bit-exact with the default path.")
     attention_type:      ATTENTION_TYPE = Field(default="auto",             description="Attention type.")
     attention_slice_size: ATTENTION_SLICE_SIZE = Field(default="auto",      description='Slice size, valid when attention_type=="sliced".')
-    force_tiled_decode:            bool = Field(default=False,              description="Whether to enable tiled VAE decode (reduces memory consumption with some performance penalty).")
+    force_tiled_decode:            bool = Field(default=False,              description="Whether to enable tiled VAE decode (reduces memory consumption with some performance penalty). A tiled decode is not pixel-identical to a single-pass one: a VAE decoder normalises and attends over the whole image, so the difference is spread across it rather than confined to the tile seams. As of this release the setting also applies to FLUX.1, which previously ignored it.")
     pil_compress_level:             int = Field(default=1,                  description="The compress_level setting of PIL.Image.save(), used for PNG encoding. All settings are lossless. 0 = no compression, 1 = fastest with slightly larger filesize, 9 = slowest with smallest filesize. 1 is typically the best setting.")
     max_queue_size:                 int = Field(default=10000, gt=0,        description="Maximum number of items in the session queue.")
     session_queue_mode: SESSION_QUEUE_MODE = Field(default="round_robin",   description="Session queue mode. Use 'FIFO' for strict first-in-first-out, or 'round_robin' to serve each user's jobs in turn. In round-robin mode, priority orders each user's own jobs, but the user rotation takes precedence: one user's high-priority job does not preempt another user's turn. In single-user mode, jobs are served in submission order either way — except that on multi-GPU systems the default 'round_robin' allows same-priority jobs to be reordered slightly so a freed GPU prefers jobs whose models it already has loaded. Set 'FIFO' to disable that reordering and enforce strict submission order.")

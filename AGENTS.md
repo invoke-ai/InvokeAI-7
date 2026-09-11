@@ -77,9 +77,10 @@ If the environment cannot spawn subagents, perform separate self-review passes w
 - Ignore rules keep recognized scratch/planning paths out of ordinary staging; they do not prevent force-adds or remove files already tracked by Git.
 - Inspect the staged diff and new files for planning material, including unexpected filenames. Never force-add planning artifacts or introduce `package-lock.json`/`yarn.lock`.
 
-## Commits
+## Commits and pull requests
 
 - Commit readiness does not itself authorize committing or pushing. Follow the request's existing authorization; do not add an automatic commit/push step to each subtask.
 - Use Conventional Commits with the shortest descriptive, skimmable subject that states the outcome.
 - Follow the subject with one to three short, factual lines summarizing material changes; use bullets when useful. Omit implementation narration and details already clear from the subject.
 - Leave authorship to the configured Git author. Do not add agent attribution or co-author trailers.
+- Pull request descriptions follow `.github/pull_request_template.md`: keep its headings in order, fill every applicable section per its inline guidance, and omit only the sections the template marks as conditional. Tick a checklist item only when it is true for the PR.

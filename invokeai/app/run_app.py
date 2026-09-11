@@ -87,6 +87,7 @@ def run_app() -> None:
         find_open_port,
         register_mime_types,
     )
+    from invokeai.backend.krea2.attention import resolve_krea2_sdpa_backends
 
     # Find an open port, and modify the config accordingly.
     first_open_port = find_open_port(app_config.port)
@@ -99,6 +100,9 @@ def run_app() -> None:
     apply_monkeypatches()
     register_mime_types()
     check_cudnn(logger)
+    # Fail here rather than inside a generation: the value is read per generation, so a typo would
+    # otherwise surface as a failed queue item minutes after the server came up.
+    resolve_krea2_sdpa_backends()
 
     # Initialize the app and event loop.
     app, loop = get_app()

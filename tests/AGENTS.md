@@ -1,6 +1,6 @@
 # Python tests
 
-- Read guidance for the production code under test. Follow existing suite placement (`tests/app/`, `tests/backend/`, or the owning root suite) and reuse appropriate fixtures from `conftest.py` and `fixtures/`.
+- Read guidance for the production code under test. Follow existing suite placement (`tests/app/`, `tests/backend/`, or the owning root suite) and reuse appropriate fixtures from `conftest.py` and `fixtures/`. Keep tests inside the Python tree's contracts: UI copy and docs prose belong to their own packages' checks. A test that must read a file outside `tests/`, `scripts/`, or the Python package tree (a shared contract fixture, for example) must add that path to the change filter in `.github/workflows/python-tests.yml`, or CI skips pytest when only that file changes.
 - Protect observable behavior at the interface that owns it. A test should fail for a plausible regression, use independently derived expectations, and survive implementation refactors that preserve the contract.
 - Avoid trivial type/constant/re-export tests, snapshots of incidental structure, duplicate coverage, implementation-shaped mock choreography, and benchmarks without a meaningful question. Remove obsolete tests.
 - Reproduce bugs with a focused failing case when feasible. Add edge/failure cases where they protect real behavior, not every imaginable branch. Use names describing outcomes.

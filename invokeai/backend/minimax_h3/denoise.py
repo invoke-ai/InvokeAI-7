@@ -16,8 +16,9 @@ Unset, the loop behaves exactly as before.
 
 import os
 import time
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Iterator
 
 import torch
 
@@ -122,6 +123,42 @@ def _profile_one_step(trace_target: str, device: torch.device, run_step: Callabl
         logger.warning(f"MiniMax H3 denoise: failed to write profile files to {trace_dir}", exc_info=True)
 
 
+@contextmanager
+def _cancel_between_blocks(
+    transformer: MiniMaxH3Transformer3DModel, is_canceled: Callable[[], bool] | None, device: torch.device
+) -> Iterator[None]:
+    """Poll ``is_canceled`` before every transformer block for the duration of the context.
+
+    A step is one forward through the full block stack — 40-100 s for a video on the reference
+    dual-GPU rig — and the step loop only polls between steps, so a cancel used to keep the GPU
+    busy for the rest of the step. Polling from a forward pre-hook on each block bounds the
+    latency to one block — provided the poll waits for the queued kernels first. Kernel launches
+    are asynchronous: left alone, the CPU enqueues the whole step's blocks in tens of
+    milliseconds and parks at the step's end, so every poll would already have run by the time a
+    mid-step cancel arrived and the GPU would grind through the step regardless. Waiting for the
+    previous block's kernels to finish before each poll costs one launch gap, under a millisecond
+    (below 0.5% of a step at production sizes). The hooks are removed on exit: the transformer is
+    a shared cache resident, and the callback belongs to this session.
+    """
+    if is_canceled is None:
+        yield
+        return
+    from invokeai.app.services.session_processor.session_processor_common import CanceledException
+
+    def raise_if_canceled(module: torch.nn.Module, args: tuple[object, ...]) -> None:
+        if device.type != "cpu":
+            torch.accelerator.synchronize(device)
+        if is_canceled():
+            raise CanceledException
+
+    handles = [block.register_forward_pre_hook(raise_if_canceled) for block in transformer.transformer_blocks]
+    try:
+        yield
+    finally:
+        for handle in handles:
+            handle.remove()
+
+
 def denoise(
     transformer: MiniMaxH3Transformer3DModel,
     state: MiniMaxH3DenoiseState,
@@ -139,8 +176,10 @@ def denoise(
             — the step's *predicted-clean* (x-hat-0) estimate of the GENERATED video rows
             (conditioning rows excluded), float32, for previews. Unlike the noisy running
             latents, the prediction is decodable at every step.
-        is_canceled: Polled once per step; a True return raises ``KeyboardInterrupt``-free
-            cancellation by letting the caller's exception type propagate from the callback.
+        is_canceled: Polled before every step and before every transformer block within a step,
+            after the previous block's kernels have finished; a True return raises
+            ``CanceledException`` from inside the forward, so a cancel idles the GPU within one
+            block rather than at the end of a 40-100 s step.
 
     Returns:
         The denoised ``(video_rows, audio_rows)`` (conditioning/reference rows still included).
@@ -202,14 +241,15 @@ def denoise(
             assert pred_x0_video_rows is not None
             step_callback(i + 1, total_steps, pred_x0_video_rows)
 
-    for i, t in enumerate(state.timesteps):
-        if is_canceled is not None and is_canceled():
-            raise CanceledException
+    with _cancel_between_blocks(transformer, is_canceled, latents.device):
+        for i, t in enumerate(state.timesteps):
+            if is_canceled is not None and is_canceled():
+                raise CanceledException
 
-        if i == profile_step_index:
-            assert profile_target is not None
-            _profile_one_step(profile_target, latents.device, lambda i=i, t=t: run_step(i, t))
-        else:
-            run_step(i, t)
+            if i == profile_step_index:
+                assert profile_target is not None
+                _profile_one_step(profile_target, latents.device, lambda i=i, t=t: run_step(i, t))
+            else:
+                run_step(i, t)
 
     return latents, audio_latents
