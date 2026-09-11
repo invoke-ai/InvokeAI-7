@@ -10,6 +10,11 @@ Two siblings solve the same problem for their own classes: `patch_qwen_image_vae
 Qwen-Image VAE, and `stable_diffusion.vae_tiling.patch_vae_tiling_params` for SD's. Neither fits
 here -- the SD one is typed to AutoencoderKL/AutoencoderTiny, patches three diffusers-specific
 attributes the FLUX autoencoder does not have, and leaves `use_tiling` to the caller.
+
+`diffusers_latent_tile` and `diffusers_vae_downsample` state constraints of the diffusers VAE
+classes rather than of this module, which is why they are public: the SD sibling derived the tile
+geometry independently and produced wrong-sized images for it, and it now calls these instead. A
+third copy of that arithmetic is the failure mode this module exists to stop.
 """
 
 from contextlib import contextmanager
@@ -29,6 +34,11 @@ _TILING_ATTRS = (
 )
 
 _MISSING = object()
+
+# Floor for the latent tile `diffusers_latent_tile` picks, and the bottom of its search. Below this
+# the tile stops being one: a 2-latent tile decodes a band narrower than the blend the overlap
+# factor asks for, and a 1-latent one is a single feature column.
+_MIN_DIFFUSERS_LATENT_TILE = 4
 
 
 @contextmanager
@@ -53,11 +63,11 @@ def scoped_vae_tiling(vae: Any, tile_size: int | None) -> Iterator[None]:
             # the two attributes afterwards is how the rest of this codebase sizes a diffusers VAE's
             # tiles; see `flux2/ref_image_extension.py`, which forces 512 for the same reason. Both
             # are in `_TILING_ATTRS`, so the finally block puts them back.
-            resolved = resolve_tile_size(tile_size)
+            downsample = diffusers_vae_downsample(vae)
+            latent_tile = diffusers_latent_tile(resolve_tile_size(tile_size), downsample, vae.tile_overlap_factor)
             vae.enable_tiling()
-            vae.tile_sample_min_size = resolved
-            downsample = 2 ** (len(vae.config.block_out_channels) - 1)
-            vae.tile_latent_min_size = max(1, resolved // downsample)
+            vae.tile_latent_min_size = latent_tile
+            vae.tile_sample_min_size = latent_tile * downsample
         yield
     finally:
         for name, value in original.items():
@@ -68,3 +78,51 @@ def scoped_vae_tiling(vae: Any, tile_size: int | None) -> Iterator[None]:
 def _accepts_tile_size(vae: Any) -> bool:
     """True if `enable_tiling` takes a tile size. Diffusers' AutoencoderKL takes no arguments."""
     return isinstance(vae, AutoEncoder)
+
+
+def diffusers_vae_downsample(vae: Any) -> int:
+    """Output pixels per latent element along one axis, for the diffusers VAE classes.
+
+    `AutoencoderTiny` names the ratio directly and uses that attribute in its own tiling; the
+    `AutoencoderKL` family implies it from the number of blocks.
+    """
+    spatial_scale_factor = getattr(vae, "spatial_scale_factor", None)
+    if spatial_scale_factor is not None:
+        return int(spatial_scale_factor)
+    return 2 ** (len(vae.config.block_out_channels) - 1)
+
+
+def diffusers_latent_tile(requested_sample_size: int, downsample: int, overlap_factor: float) -> int:
+    """The latent tile to give a diffusers VAE, at or below the requested size in output pixels
+    unless the request itself is under `_MIN_DIFFUSERS_LATENT_TILE` latents, which the floor wins.
+
+    `tile_sample_min_size` and `tile_latent_min_size` are not two independent knobs. `AutoencoderKL`
+    steps its latent loop by `int(tile_latent_min_size * (1 - tile_overlap_factor))` but crops each
+    decoded tile to `tile_sample_min_size - int(tile_sample_min_size * tile_overlap_factor)` output
+    pixels, and `_tiled_encode` mirrors that -- a pixel step against a latent crop. Those two
+    distances describe the same span only for some tiles; for the rest the loop and the crop
+    disagree and the assembled result is the wrong size. Measured on a 768x768 decode, 60 of the 84
+    legal tile sizes from 128 to 792 came out between 770 and 810 pixels at the stock 0.25 factor,
+    the 24 correct ones being exactly the multiples of 32.
+
+    So the latent tile is chosen first -- the largest at or below the request for which the two
+    agree -- and the caller derives the sample size from it. The expressions are evaluated as
+    diffusers evaluates them rather than reasoned about, because which tiles agree depends on how
+    the factor rounds in binary, not on its value as a fraction: at an 8x downsample 0.25 admits
+    every multiple of 4, 0.3 only multiples of 10, and 0.35 only multiples of 20.
+
+    Only the decode expression is evaluated. The encode one admits exactly the same tiles -- swept
+    over 7 overlap factors x 4 downsample ratios x the first 300 latent tiles, the two agree on
+    every single one -- so checking both would be the same question asked twice.
+    """
+    largest = max(_MIN_DIFFUSERS_LATENT_TILE, requested_sample_size // downsample)
+    for latent_tile in range(largest, _MIN_DIFFUSERS_LATENT_TILE - 1, -1):
+        sample_size = latent_tile * downsample
+        if int(latent_tile * (1 - overlap_factor)) * downsample == sample_size - int(sample_size * overlap_factor):
+            return latent_tile
+    # No tile in range works: the smallest one this factor admits is above the request, if it
+    # admits any at all. Unreachable for the 0.25 every AutoencoderKL ships, which admits every
+    # multiple of 4; possible only for a hand-set factor -- 0.35 admits nothing below 20 latents,
+    # so an 8x VAE finds nothing for a request of 128 to 152. Honour the request rather than
+    # failing the decode over it.
+    return largest

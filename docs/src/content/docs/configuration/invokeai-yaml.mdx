@@ -231,12 +231,18 @@ db_synchronous: full # default value
 
 | Value    | Behavior                                                                                                    |
 | -------- | ----------------------------------------------------------------------------------------------------------- |
-| `full`   | Every commit is flushed to disk before it is acknowledged. SQLite's own default, and InvokeAI's.              |
+| `full`   | Every commit is flushed to disk before it is acknowledged. What InvokeAI has always used, and SQLite's default on standard builds. |
 | `normal` | Commits are acknowledged without waiting for the flush. Much faster; a power loss may lose the last few.       |
 
 The setting can also be given as the `INVOKEAI_DB_SYNCHRONOUS` environment variable.
 
-**`normal` cannot corrupt the database.** InvokeAI runs SQLite in WAL mode, and WAL guarantees a consistent database either way. What `normal` gives up is the *most recent transactions* if the machine loses power or the OS crashes mid-write — a just-written image record or a queue status. The image file itself survives on disk, but nothing rebuilds the row, and the gallery is driven by the database: the image is simply gone from it. The gallery orphan scan does not heal this — it *archives* record-less files out of `outputs/` so you can delete them or re-import them, which takes the separate `invokeai/frontend/install/import_images.py` script.
+**`normal` cannot corrupt the database, as long as WAL is in effect.** InvokeAI runs SQLite in WAL mode, and WAL guarantees a consistent database either way. What `normal` gives up is the *most recent transactions* if the machine loses power or the OS crashes mid-write — a just-written image record or a queue status. The image file itself survives on disk, but nothing rebuilds the row, and the gallery is driven by the database: the image is simply gone from it. The gallery orphan scan does not heal this — it *archives* record-less files out of `outputs/` so you can delete them or re-import them, which takes the separate `invokeai/frontend/install/import_images.py` script.
+
+Running the database on a network share is not a supported configuration -- SQLite's locking is unreliable over NFS and SMB, and this is worth avoiding for reasons well beyond durability. Keep `db_dir` on local storage.
+
+The safeguard exists anyway, because WAL needs shared memory and a few setups cannot provide it: a database on a network share, some container volume drivers, and SQLite builds compiled without WAL all leave a rollback journal in place instead — and on a rollback journal, `normal` *can* corrupt the database on power loss. InvokeAI reads back the journal mode it actually got, so in that case it ignores `normal`, uses `full`, and logs a warning naming the mode. An in-memory database (`use_memory_db`) has no durability to trade and is unaffected.
+
+`db_synchronous` applies to the application's own database connection. The standalone scripts that open the database directly — `scripts/gallery_maintenance.py` and `invokeai/frontend/install/import_images.py` — leave SQLite's own default in place, so the measurements below describe the running app, not those scripts.
 
 Measured on a copy of a real library, 300 single-row inserts each committed on its own:
 
@@ -247,7 +253,7 @@ Measured on a copy of a real library, 300 single-row inserts each committed on i
 
 That is 12x shorter at the median. It matters more than the raw numbers suggest, because all database work is serialised through a single lock: a shorter write is also a shorter time during which every read is blocked.
 
-The default stays at `full` so that upgrading never silently changes anyone's durability. If you generate in large batches on a machine with reliable power, `normal` is the cheaper setting.
+The default stays at `full`, which is what InvokeAI has always run with, so upgrading does not weaken anyone's durability. It is now applied explicitly, which does tighten it on the uncommon SQLite build compiled with `SQLITE_DEFAULT_WAL_SYNCHRONOUS=1`, where WAL connections previously started at `normal`. If you generate in large batches on a machine with reliable power, `normal` is the cheaper setting.
 
 #### Logging
 

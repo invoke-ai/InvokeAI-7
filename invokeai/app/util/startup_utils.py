@@ -51,52 +51,73 @@ def probe_attention_backends(device: torch.device) -> dict[str, bool] | None:
     This asks about the *unmasked* case. A backend listed here can still be rejected for a specific
     call -- flash refuses the additive padding mask the regional-prompting paths pass, for instance --
     so this is a diagnostic, not a dispatch table.
+
+    It allocates on `device`, which creates that device's CUDA primary context if nothing has yet.
+    That context's VRAM is held for the process lifetime and `empty_cache()` does not release it, so
+    this belongs on a path that was going to touch the GPU anyway -- not on the boot path, where it
+    would park a context on an idle server, and on `cuda:0` rather than on a configured
+    `generation_devices` entry.
     """
     if device.type != "cuda":
         return None
-    probe = params = None
     try:
-        probe = torch.empty(
-            1,
-            _PROBE_HEADS,
-            _PROBE_SEQ_LEN,
-            _PROBE_HEAD_DIM,
-            device=device,
-            dtype=torch.float16,
-        )
-        params = torch.backends.cuda.SDPAParams(probe, probe, probe, None, 0.0, False, False)
-        return {
-            "cudnn": bool(torch.backends.cuda.can_use_cudnn_attention(params)),
-            "flash": bool(torch.backends.cuda.can_use_flash_attention(params)),
-            "efficient": bool(torch.backends.cuda.can_use_efficient_attention(params)),
-            # Always present -- it is the unfused fallback, not a kernel that can be missing.
-            "math": True,
-        }
+        probe = params = None
+        try:
+            probe = torch.empty(
+                1,
+                _PROBE_HEADS,
+                _PROBE_SEQ_LEN,
+                _PROBE_HEAD_DIM,
+                device=device,
+                dtype=torch.float16,
+            )
+            params = torch.backends.cuda.SDPAParams(probe, probe, probe, None, 0.0, False, False)
+            return {
+                "cudnn": bool(torch.backends.cuda.can_use_cudnn_attention(params)),
+                "flash": bool(torch.backends.cuda.can_use_flash_attention(params)),
+                "efficient": bool(torch.backends.cuda.can_use_efficient_attention(params)),
+                # Always present -- it is the unfused fallback, not a kernel that can be missing.
+                "math": True,
+            }
+        finally:
+            # Do not leave the probe tensor sitting in the caching allocator for the first
+            # generation. `empty_cache()` only releases blocks nothing references. Both locals still
+            # hold the probe here -- `SDPAParams` keeps a reference of its own -- so dropping both is
+            # what makes the call do anything at all. Measured: without this the segment stays
+            # reserved for the process lifetime, which is the opposite of what the line above says.
+            #
+            # Nested inside the `except` below, not beside it: a `finally` on the same `try` is not
+            # covered by that `try`'s handler, so a raise from `empty_cache()` would escape a
+            # function whose whole contract is that it does not.
+            del probe, params
+            torch.cuda.empty_cache()
     except Exception:
         # A diagnostic must never be the reason the server does not start.
         return None
-    finally:
-        # Do not leave the probe tensor sitting in the caching allocator for the first generation.
-        # `empty_cache()` only releases blocks nothing references. Both locals still hold the probe
-        # here -- `SDPAParams` keeps a reference of its own -- so dropping both is what makes the
-        # call do anything at all. Measured: without this the segment stays reserved for the
-        # process lifetime, which is the opposite of what the line above says.
-        del probe, params
-        torch.cuda.empty_cache()
+
+
+# Devices already reported. The line answers a support question ("which kernels does this build
+# have?"), so it is worth exactly once per device per process and nothing after that.
+_logged_attention_backends: set[str] = set()
 
 
 def log_attention_backends(logger: logging.Logger, device: torch.device) -> None:
-    """Log the SDPA backend availability once at startup.
+    """Log this device's SDPA backend availability, once per device.
 
     The point is support: a question about attention performance can then be answered by reading a
-    log line instead of asking the user to run a probe script.
+    log line instead of asking the user to run a probe script. Call it from a generation path rather
+    than from startup -- `probe_attention_backends` explains why.
     """
+    key = str(device)
+    if key in _logged_attention_backends:
+        return
     available = probe_attention_backends(device)
     if available is None:
         return
+    _logged_attention_backends.add(key)
     summary = " ".join(f"{name}={'yes' if ok else 'no'}" for name, ok in available.items())
     logger.info(
-        f"SDPA attention backends "
+        f"SDPA attention backends on {device} "
         f"(fp16, {_PROBE_HEADS} heads, seq {_PROBE_SEQ_LEN}, head_dim {_PROBE_HEAD_DIM}, no mask): {summary}"
     )
 

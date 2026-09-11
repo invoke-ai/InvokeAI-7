@@ -189,7 +189,10 @@ class MiniMaxH3CheckpointModel(ModelLoader):
             convert_minimax_h3_checkpoint_to_diffusers,
             read_comfy_quant_markers,
         )
-        from invokeai.backend.quantization.int8_convrot import Int8ConvrotLinear
+        from invokeai.backend.quantization.int8_convrot import (
+            INT8_TENSORWISE_FORMAT,
+            swap_in_int8_linears,
+        )
 
         model_path = Path(config.path)
 
@@ -201,9 +204,9 @@ class MiniMaxH3CheckpointModel(ModelLoader):
         # the ~20 GiB tensor read (the fp8_scaled repacks share this key layout).
         unsupported = sorted(
             {
-                str(marker.get("format"))
+                str(marker.get("format") or "unreadable")
                 for marker in read_comfy_quant_markers(model_path).values()
-                if marker.get("format") != "int8_tensorwise"
+                if marker.get("format") != INT8_TENSORWISE_FORMAT
             }
         )
         if unsupported:
@@ -253,20 +256,14 @@ class MiniMaxH3CheckpointModel(ModelLoader):
 
         # Swap each quantized nn.Linear for an Int8ConvrotLinear sized from the state dict. Its
         # persistent buffers are named `weight`/`weight_scale`, so the strict load below consumes
-        # the quantized tensors directly.
+        # the quantized tensors directly. Through the shared helper, not a second copy of it: that
+        # is what applies the scale-layout check and reads each marker's own `convrot_groupsize`
+        # instead of assuming 256 -- a 64-wide repack derotated with a 256-wide Hadamard runs and
+        # generates noise.
         for module_name, marker in quant_markers.items():
-            if marker.get("format") != "int8_tensorwise":
+            if marker.get("format") != INT8_TENSORWISE_FORMAT:
                 raise ValueError(f"Unsupported comfy_quant format {marker!r} on {module_name}")
-            parent = model.get_submodule(module_name.rsplit(".", 1)[0])
-            setattr(
-                parent,
-                module_name.rsplit(".", 1)[1],
-                Int8ConvrotLinear(
-                    weight=sd[module_name + ".weight"],
-                    weight_scale=sd[module_name + ".weight_scale"],
-                    convrot=bool(marker.get("convrot", False)),
-                ),
-            )
+        swap_in_int8_linears(model, sd, quant_markers)
 
         model.load_state_dict(sd, strict=True, assign=True)
 
@@ -274,7 +271,12 @@ class MiniMaxH3CheckpointModel(ModelLoader):
             # Match the modulation dtype to the LOADED block stack (bf16 from the file), not the
             # device's preferred compute dtype: on fp16-fallback devices the latter would emit
             # fp16 modulation into a bf16 stream and promote every block's activations to fp32.
-            set_curve_modulation_dtype(model, model.context_embedder.weight.dtype)
+            #
+            # Read off a block norm rather than `context_embedder`, which is an ordinary Linear and
+            # so a legitimate quantization target: on an `Int8ConvrotLinear` that reads `torch.int8`
+            # and every block would modulate in int8. A norm weight cannot be quantized here -- 1-D
+            # weights are refused by the swap above -- so this one is float by the time it is read.
+            set_curve_modulation_dtype(model, model.transformer_blocks[0].norm1.weight.dtype)
 
         return model
 
@@ -333,7 +335,10 @@ class MiniMaxH3TextEncoderCheckpointModel(ModelLoader):
             convert_minimax_h3_text_encoder_checkpoint,
             read_comfy_quant_markers,
         )
-        from invokeai.backend.quantization.int8_convrot import Int8ConvrotLinear
+        from invokeai.backend.quantization.int8_convrot import (
+            INT8_TENSORWISE_FORMAT,
+            swap_in_int8_linears,
+        )
 
         model_path = Path(config.path)
 
@@ -341,9 +346,9 @@ class MiniMaxH3TextEncoderCheckpointModel(ModelLoader):
         # tensor read (the nvfp4_awq repacks share this key layout).
         unsupported = sorted(
             {
-                str(marker.get("format"))
+                str(marker.get("format") or "unreadable")
                 for marker in read_comfy_quant_markers(model_path).values()
-                if marker.get("format") != "int8_tensorwise"
+                if marker.get("format") != INT8_TENSORWISE_FORMAT
             }
         )
         if unsupported:
@@ -392,19 +397,12 @@ class MiniMaxH3TextEncoderCheckpointModel(ModelLoader):
         # for this Identity before accepting a truncated encoder.
         model.model.language_model.norm = torch.nn.Identity()
 
+        # Shared helper, not a second copy: it applies the scale-layout check and reads each
+        # marker's own `convrot_groupsize` rather than assuming 256.
         for module_name, marker in quant_markers.items():
-            if marker.get("format") != "int8_tensorwise":
+            if marker.get("format") != INT8_TENSORWISE_FORMAT:
                 raise ValueError(f"Unsupported comfy_quant format {marker!r} on {module_name}")
-            parent = model.get_submodule(module_name.rsplit(".", 1)[0])
-            setattr(
-                parent,
-                module_name.rsplit(".", 1)[1],
-                Int8ConvrotLinear(
-                    weight=sd[module_name + ".weight"],
-                    weight_scale=sd[module_name + ".weight_scale"],
-                    convrot=bool(marker.get("convrot", False)),
-                ),
-            )
+        swap_in_int8_linears(model, sd, quant_markers)
 
         missing, unexpected = model.load_state_dict(sd, strict=False, assign=True)
         if unexpected:

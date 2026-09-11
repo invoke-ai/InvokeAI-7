@@ -7,6 +7,7 @@ dispatcher. Getting that answer wrong in the optimistic direction is not a slow 
 the math backend materialises the full [heads, seq, seq] score matrix.
 """
 
+import contextlib
 from unittest.mock import MagicMock
 
 import pytest
@@ -72,32 +73,86 @@ class TestTheDecisionIsConservative:
         assert proc._serves_grouped_query_attention(q, k, v, mask) is False
 
 
-class TestTheAnswerIsCached:
-    def test_the_dispatcher_is_asked_once_per_call_shape(self, monkeypatch):
-        """Dozens of attention calls per step share one shape; querying every time would be waste."""
+class TestTheHeadsAreOnlyPassedThroughWhenTheyDiffer:
+    def test_a_block_with_equal_head_counts_never_asks_and_never_sets_the_flag(self, monkeypatch):
+        """Krea-2's text-fusion blocks have num_heads == num_kv_heads, so there is nothing to expand
+        and nothing to ask. Asking anyway would pay the probe per call for a `False` the shapes
+        already settle -- and setting `enable_gqa` on equal head counts is a claim about the tensors
+        that is not this processor's to make."""
+        asked = MagicMock(return_value=True)
+        monkeypatch.setattr(torch.backends.cuda, "SDPAParams", MagicMock(return_value=MagicMock()))
+        monkeypatch.setattr(torch.backends.cuda, "can_use_cudnn_attention", asked)
+        monkeypatch.setattr(torch.backends.cuda, "can_use_flash_attention", asked)
+
+        seen: dict[str, object] = {}
+        real_sdpa = attention_module.F.scaled_dot_product_attention
+
+        def spy(query, key, value, attn_mask=None, enable_gqa=False, **kwargs):
+            seen["enable_gqa"] = enable_gqa
+            seen["kv_heads"] = key.shape[1]
+            return real_sdpa(query, key, value, attn_mask=attn_mask, enable_gqa=enable_gqa, **kwargs)
+
+        monkeypatch.setattr(attention_module.F, "scaled_dot_product_attention", spy)
+
+        attn = Krea2Attention(hidden_size=HQ * 16, num_heads=HQ, num_kv_heads=HQ, eps=1e-5).eval()
+        attn.set_processor(Krea2MemoryEfficientAttnProcessor())
+        with torch.no_grad():
+            attn(torch.randn(1, 24, attn.hidden_size), attention_mask=None, image_rotary_emb=None)
+
+        assert seen["enable_gqa"] is False
+        assert seen["kv_heads"] == HQ
+        assert asked.call_count == 0
+
+
+class TestTheAnswerIsNotCached:
+    """The answer turns on process-global state a cache key cannot enumerate.
+
+    `can_use_*` gates on the per-backend enable flags, which any `sdpa_policy` window in the process
+    can move. A cached "no" costs the expansion this function exists to skip for the rest of the
+    generation, with nothing logged -- the same reasoning `backend.util.attention` records for its
+    own dispatcher probe.
+    """
+
+    def test_a_changed_answer_is_seen_rather_than_remembered(self, monkeypatch):
         proc = Krea2MemoryEfficientAttnProcessor()
         q, k, v, mask = _tensors("cpu")
         monkeypatch.setattr(type(q), "is_cuda", property(lambda self: True), raising=False)
         monkeypatch.setattr(torch.backends.cuda, "SDPAParams", MagicMock(return_value=object()))
-        can_use = MagicMock(return_value=True)
-        monkeypatch.setattr(torch.backends.cuda, "can_use_cudnn_attention", can_use)
+        monkeypatch.setattr(torch.backends.cuda, "can_use_flash_attention", MagicMock(return_value=False))
 
-        for _ in range(5):
-            assert proc._serves_grouped_query_attention(q, k, v, mask) is True
-        assert can_use.call_count == 1
+        answers = iter([False, True])
+        monkeypatch.setattr(torch.backends.cuda, "can_use_cudnn_attention", lambda params: next(answers))
 
-    def test_a_different_mask_state_is_a_different_question(self, monkeypatch):
-        """Flash takes the unmasked call and refuses the masked one, so the two cannot share an
-        answer."""
-        proc = Krea2MemoryEfficientAttnProcessor()
+        assert proc._serves_grouped_query_attention(q, k, v, mask) is False
+        assert proc._serves_grouped_query_attention(q, k, v, mask) is True
+
+    def test_the_probe_is_asked_under_the_policy_the_call_will_run_with(self, monkeypatch):
+        """Asked outside the window, `can_use_*` answers for whatever policy is installed at that
+        moment -- which on a busy multi-GPU box is another session's, not this call's."""
+        from torch.nn.attention import _cur_sdpa_kernel_backends
+
+        exclusive = Krea2SdpaBackends(backends=(SDPBackend.CUDNN_ATTENTION,), set_priority=False)
+        proc = Krea2MemoryEfficientAttnProcessor(sdpa_backends=exclusive)
+        enabled_when_asked: list[set[SDPBackend]] = []
+
+        monkeypatch.setattr(torch.backends.cuda, "SDPAParams", MagicMock(return_value=MagicMock()))
+        monkeypatch.setattr(
+            torch.backends.cuda,
+            "can_use_cudnn_attention",
+            lambda params: enabled_when_asked.append(set(_cur_sdpa_kernel_backends())) or False,
+        )
         monkeypatch.setattr(torch.Tensor, "is_cuda", property(lambda self: True), raising=False)
-        monkeypatch.setattr(torch.backends.cuda, "SDPAParams", MagicMock(return_value=object()))
-        can_use = MagicMock(return_value=True)
-        monkeypatch.setattr(torch.backends.cuda, "can_use_cudnn_attention", can_use)
 
-        proc._serves_grouped_query_attention(*_tensors("cpu", masked=False))
-        proc._serves_grouped_query_attention(*_tensors("cpu", masked=True))
-        assert can_use.call_count == 2
+        attn = Krea2Attention(hidden_size=HQ * 16, num_heads=HQ, num_kv_heads=HKV, eps=1e-5).eval()
+        attn.set_processor(proc)
+        # The call itself cannot complete: an exclusive cuDNN policy leaves a CPU tensor with no
+        # viable kernel. That is downstream of what is being asserted -- the probe has already run by
+        # then, and moving it back outside the window makes the assertion below fail either way.
+        with torch.no_grad(), contextlib.suppress(RuntimeError):
+            attn(torch.randn(1, 24, attn.hidden_size), attention_mask=None, image_rotary_emb=None)
+
+        # Outside the window every backend is enabled, so this set is only reachable from inside it.
+        assert enabled_when_asked == [{SDPBackend.CUDNN_ATTENTION}]
 
 
 class TestTheExpansionStillHappensWhenItMust:

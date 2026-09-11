@@ -19,7 +19,9 @@ from invokeai.backend.quantization.int8_convrot import (
     dequantize_convrot_weight,
     extract_int8_convrot_markers,
     parse_comfy_quant_marker,
+    peak_int8_dequant_transient_bytes,
     requires_sidecar_patching,
+    shared_regular_hadamard,
 )
 
 
@@ -87,16 +89,94 @@ def test_int8_convrot_linear_matches_dequantized_f_linear() -> None:
 
 def test_int8_convrot_linear_state_dict_contract() -> None:
     """Persistent buffers must be named exactly `weight` / `weight_scale` (+ optional `bias`)
-    so the converted checkpoint's keys load directly and strict load_state_dict holds; the
-    Hadamard is computed, never loaded, but must still move with the module."""
+    so the converted checkpoint's keys load directly and strict load_state_dict holds. Nothing
+    else is registered: the derotation matrix is a constant of the scheme, taken from the shared
+    cache per forward rather than held once per layer."""
     torch.manual_seed(3)
     w = torch.randn(16, CONVROT_GROUP_SIZE)
     q, scale = _quantize_reference(w, convrot=True)
     bias = torch.randn(16)
     lin = Int8ConvrotLinear(q, scale, convrot=True, bias=bias)
     assert set(lin.state_dict().keys()) == {"weight", "weight_scale", "bias"}
-    assert {n for n, _ in lin.named_buffers()} == {"weight", "weight_scale", "hadamard", "bias"}
+    assert {n for n, _ in lin.named_buffers()} == {"weight", "weight_scale", "bias"}
     assert lin.state_dict()["weight"].dtype == torch.int8
+
+
+class TestTheDerotationMatrixIsSharedNotPerLayer:
+    """It is byte-identical across every layer of a given group size, and a model has hundreds of
+    them: Krea-2's transformer is 264 Linears, so a per-module 256x256 fp32 buffer is 69 MB of
+    duplicate resident weight, summed into the cache entry's size by `calc_module_size`."""
+
+    @staticmethod
+    def _layer(out_features: int) -> Int8ConvrotLinear:
+        torch.manual_seed(out_features)
+        weight, scale = _quantize_reference(torch.randn(out_features, CONVROT_GROUP_SIZE), convrot=True)
+        return Int8ConvrotLinear(weight, scale, convrot=True)
+
+    def test_layers_of_the_same_group_size_share_one_hadamard(self) -> None:
+        """The regression this guards is resident bytes, so it is measured in resident bytes: a
+        per-module buffer is what `calc_module_size` sums out of `model.buffers()`."""
+        model = torch.nn.Module()
+        model.a, model.b = self._layer(8), self._layer(16)
+        probe = torch.randn(2, CONVROT_GROUP_SIZE)
+        model.a(probe)
+        model.b(probe)
+
+        assert sum(b.nelement() * b.element_size() for b in model.buffers()) == sum(
+            t.nelement() * t.element_size() for t in (*model.a.state_dict().values(), *model.b.state_dict().values())
+        )
+
+    def test_one_matrix_is_kept_per_size_device_and_dtype(self) -> None:
+        """Keyed on all three. A cache keyed on size alone would hand a bf16 forward the fp32
+        matrix (or the reverse), and `@` would raise -- or, worse, a layer on another device would
+        be handed a matrix that is not there."""
+        cpu = torch.device("cpu")
+
+        assert shared_regular_hadamard(CONVROT_GROUP_SIZE, cpu, torch.float32) is shared_regular_hadamard(
+            CONVROT_GROUP_SIZE, cpu, torch.float32
+        )
+        assert shared_regular_hadamard(CONVROT_GROUP_SIZE, cpu, torch.float32) is not shared_regular_hadamard(
+            CONVROT_GROUP_SIZE, cpu, torch.float64
+        )
+        assert shared_regular_hadamard(CONVROT_GROUP_SIZE, cpu, torch.float32) is not shared_regular_hadamard(
+            4, cpu, torch.float32
+        )
+
+    def test_a_forward_gets_a_matrix_in_the_inputs_dtype(self) -> None:
+        """The matrix is no longer a buffer the module carries in one dtype; it is fetched for the
+        dtype the forward is running in, and the result must stay in that dtype."""
+        layer = self._layer(8)
+        probe = torch.randn(3, CONVROT_GROUP_SIZE, dtype=torch.float64)
+
+        out = layer(probe)
+
+        assert out.dtype is torch.float64
+        assert torch.allclose(out, layer(probe.to(torch.float32)).to(torch.float64), atol=1e-5)
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a CUDA device to move between")
+    def test_a_device_round_trip_still_produces_the_same_output(self) -> None:
+        """The matrix used to move with the module; now it is fetched per forward for the input's
+        device, so moving the layer to another device and back must not change what it computes.
+        A CPU-only `.to('cpu')` is a no-op and would pass either way, hence the real device."""
+        layer = self._layer(8)
+        probe = torch.randn(3, CONVROT_GROUP_SIZE)
+        before = layer(probe)
+
+        layer.to(torch.device("cuda"))
+        on_device = layer(probe.to("cuda")).cpu()
+        layer.to(torch.device("cpu"))
+
+        assert torch.allclose(on_device, before, atol=1e-5)
+        assert torch.equal(layer(probe), before)
+
+    def test_the_group_size_a_marker_declares_is_validated_at_construction(self) -> None:
+        """The matrix is built lazily now, so without a check here a checkpoint declaring a
+        power-of-2-but-not-4 width loads, caches, reaches VRAM, and raises mid-generation from a
+        forward that names neither the layer nor the file."""
+        weight = torch.zeros(8, 512, dtype=torch.int8)
+
+        with pytest.raises(ValueError, match=r"power of 4, got 512"):
+            Int8ConvrotLinear(weight, torch.ones(8, 1), convrot=True, group_size=512)
 
 
 def test_parse_comfy_quant_marker() -> None:
@@ -232,3 +312,35 @@ class TestWhetherLoraNeedsASidecar:
     @pytest.mark.parametrize("fmt", [ModelFormat.GGUFQuantized, ModelFormat.SDNQQuantized])
     def test_a_format_that_is_quantized_by_definition_needs_one(self, fmt):
         assert requires_sidecar_patching(self._model(int8=False), fmt) is True
+
+
+class TestThePerForwardDequantTransient:
+    """`Int8ConvrotLinear` materializes its dequantized weight per forward, so that allocation is
+    not part of the model's resident size and the calling node has to reserve for it."""
+
+    @staticmethod
+    def _model(*shapes: tuple[int, int]) -> torch.nn.Module:
+        model = torch.nn.Module()
+        for index, (out_features, in_features) in enumerate(shapes):
+            model.add_module(
+                str(index),
+                Int8ConvrotLinear(
+                    torch.zeros(out_features, in_features, dtype=torch.int8),
+                    torch.ones(out_features, 1),
+                    convrot=False,
+                ),
+            )
+        return model
+
+    def test_it_is_two_weights_of_the_largest_layer_in_the_compute_dtype(self) -> None:
+        """Two, not one: the dtype cast of the int8 weight is alive alongside the product it is
+        multiplied into, and that product is alive alongside the derotation matmul's output."""
+        model = self._model((4, CONVROT_GROUP_SIZE), (16, CONVROT_GROUP_SIZE))
+
+        assert peak_int8_dequant_transient_bytes(model, torch.bfloat16) == 2 * 16 * CONVROT_GROUP_SIZE * 2
+
+    def test_a_model_with_no_quantized_layers_needs_nothing(self) -> None:
+        model = torch.nn.Module()
+        model.dense = torch.nn.Linear(8, 8)
+
+        assert peak_int8_dequant_transient_bytes(model, torch.bfloat16) == 0

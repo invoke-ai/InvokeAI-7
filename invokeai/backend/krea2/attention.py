@@ -14,8 +14,9 @@ included, so where it is available the K/V heads can stay at 12 and the expansio
 ``repeat_interleave`` allocates two tensors four times larger than the originals, every call. Where no
 fused kernel takes GQA (the memory-efficient kernel refuses it outright, flash refuses the additive
 mask, and ROCm has no cuDNN at all) the expansion is still the only thing standing between this
-processor and the ~5.7 GB math path. So it is now conditional, decided per call shape by asking the
-dispatcher rather than by assuming -- see ``_serves_grouped_query_attention``.
+processor and the ~5.7 GB math path. So it is now conditional, decided per call by asking the
+dispatcher rather than by assuming -- see ``_serves_grouped_query_attention``, which runs inside the
+same SDPA window as the call it is answering for, because that is the state the answer depends on.
 
 The math is otherwise identical to ``Krea2AttnProcessor`` (q/k RMSNorm, rotary embeddings, sigmoid output gate).
 """
@@ -28,9 +29,10 @@ from typing import Protocol
 import torch
 import torch.nn.functional as F
 from diffusers.models.embeddings import apply_rotary_emb
-from torch.nn.attention import SDPBackend, sdpa_kernel
+from torch.nn.attention import SDPBackend
 
 from invokeai.backend.util.logging import InvokeAILogger
+from invokeai.backend.util.sdpa_scope import sdpa_policy
 
 logger = InvokeAILogger.get_logger(__name__)
 
@@ -67,7 +69,9 @@ _KREA2_SDPA_BACKENDS = [
 # Opt-in override, for measuring one backend against another and for support questions. Unset -- the
 # only state a user ever sees by default -- is the ranked list above, unchanged.
 KREA2_SDPA_BACKEND_ENV_VAR = "INVOKE_KREA2_SDPA_BACKEND"
-_PRIORITY_CUDNN = "priority-cudnn"
+# The ranked list above, named so a benchmarking run can state which policy it used. It is NOT a
+# request to rank cuDNN first -- the list is flash-first, because flash wins wherever a build has it.
+_RANKED_DEFAULT = "default"
 _EXCLUSIVE_BACKENDS = {
     "cudnn": SDPBackend.CUDNN_ATTENTION,
     "efficient": SDPBackend.EFFICIENT_ATTENTION,
@@ -86,26 +90,28 @@ class Krea2SdpaBackends:
 
     def describe(self) -> str:
         names = ", ".join(b.name for b in self.backends)
-        return f"sdpa_kernel([{names}], set_priority={self.set_priority})"
+        return f"sdpa_policy([{names}], set_priority={self.set_priority})"
 
 
 def resolve_krea2_sdpa_backends(raw_override: str | None = None) -> Krea2SdpaBackends:
     """Resolve the SDPA backend list, honouring KREA2_SDPA_BACKEND_ENV_VAR.
 
-    The exclusive modes are the point of the override: a run that completes proves that kernel was
-    actually used, because an unavailable backend raises visibly instead of quietly degrading to math.
+    The exclusive modes are the point of the override: an unavailable backend raises visibly instead
+    of quietly degrading to math, so a run that completes proves that kernel served it -- *provided*
+    the policy actually applied. It does not when another session already holds the process-global
+    window; see `sdpa_scope`, which counts those entries so the benchmark can say so.
     """
     raw = os.environ.get(KREA2_SDPA_BACKEND_ENV_VAR) if raw_override is None else raw_override
     if raw is None or not raw.strip():
         return Krea2SdpaBackends(backends=tuple(_KREA2_SDPA_BACKENDS), set_priority=True)
 
     value = raw.strip().lower()
-    if value == _PRIORITY_CUDNN:
+    if value == _RANKED_DEFAULT:
         return Krea2SdpaBackends(backends=tuple(_KREA2_SDPA_BACKENDS), set_priority=True, override=value)
     if value in _EXCLUSIVE_BACKENDS:
         return Krea2SdpaBackends(backends=(_EXCLUSIVE_BACKENDS[value],), set_priority=False, override=value)
 
-    valid = ", ".join([*sorted(_EXCLUSIVE_BACKENDS), _PRIORITY_CUDNN])
+    valid = ", ".join([*sorted(_EXCLUSIVE_BACKENDS), _RANKED_DEFAULT])
     raise ValueError(f"{KREA2_SDPA_BACKEND_ENV_VAR}={raw!r} is not a valid value. Valid values: {valid}.")
 
 
@@ -130,8 +136,6 @@ class Krea2MemoryEfficientAttnProcessor:
         self.regional_prompting_state = regional_prompting_state
         # Resolved once per generation and handed down, not read per attention call.
         self.sdpa_backends = sdpa_backends if sdpa_backends is not None else resolve_krea2_sdpa_backends()
-        # Keyed by the call shape; see `_serves_grouped_query_attention`.
-        self._gqa_support: dict[tuple, bool] = {}
 
     def __call__(
         self,
@@ -168,31 +172,23 @@ class Krea2MemoryEfficientAttnProcessor:
         key = key.transpose(1, 2)
         value = value.transpose(1, 2)
 
-        # Krea-2 has 48 query heads over 12 K/V heads. Passing them through as they are avoids
-        # allocating two tensors four times larger, but only some kernels serve that shape -- so ask,
-        # do not assume. Where the answer is no, expand as before: that is what keeps this off the
-        # math path, which materialises the full [heads, seq, seq] score matrix.
-        enable_gqa = attn.num_heads != attn.num_kv_heads and self._serves_grouped_query_attention(
-            query, key, value, attention_mask
-        )
-        if attn.num_heads != attn.num_kv_heads and not enable_gqa:
-            repeats = attn.num_heads // attn.num_kv_heads
-            key = key.repeat_interleave(repeats, dim=1)
-            value = value.repeat_interleave(repeats, dim=1)
+        # Both of these belong inside the window, and in this order. `can_use_*` reads the same
+        # process-global enable flags the window sets, so asking outside it answers for a different
+        # policy than the call will run under -- and the expansion, if needed, has to happen after
+        # the answer.
+        with sdpa_policy(self.sdpa_backends.backends, set_priority=self.sdpa_backends.set_priority):
+            # Krea-2 has 48 query heads over 12 K/V heads. Passing them through as they are avoids
+            # allocating two tensors four times larger, but only some kernels serve that shape -- so
+            # ask, do not assume. Where the answer is no, expand as before: that is what keeps this
+            # off the math path, which materialises the full [heads, seq, seq] score matrix.
+            enable_gqa = attn.num_heads != attn.num_kv_heads and self._serves_grouped_query_attention(
+                query, key, value, attention_mask
+            )
+            if attn.num_heads != attn.num_kv_heads and not enable_gqa:
+                repeats = attn.num_heads // attn.num_kv_heads
+                key = key.repeat_interleave(repeats, dim=1)
+                value = value.repeat_interleave(repeats, dim=1)
 
-        # `sdpa_kernel` sets process-global flags, not thread-local ones, and torch offers no
-        # thread-scoped variant. InvokeAI runs one generation session per GPU concurrently, so a
-        # session on another device inside this window is affected too. Measured, on both paths:
-        #
-        # - Default (the four-backend list): a foreign thread still sees all four enabled. Only the
-        #   priority order moves, so a concurrent call flash cannot serve may land on cuDNN rather
-        #   than efficient. Both are valid kernels; the effect is which one runs, not whether one
-        #   is available.
-        # - Exclusive override (`INVOKE_KREA2_SDPA_BACKEND=cudnn` and friends): a foreign thread
-        #   sees the other three *disabled* for the duration. That is opt-in, and the variable
-        #   exists for measuring one kernel against another rather than for normal operation --
-        #   worth knowing before reaching for it on a multi-GPU box.
-        with sdpa_kernel(list(self.sdpa_backends.backends), set_priority=self.sdpa_backends.set_priority):
             hidden_states = F.scaled_dot_product_attention(
                 query, key, value, attn_mask=attention_mask, enable_gqa=enable_gqa
             )
@@ -218,25 +214,15 @@ class Krea2MemoryEfficientAttnProcessor:
         drop it onto `math` at roughly 9 GB. That is the failure this whole processor exists to
         avoid, so the answer is asked of the dispatcher rather than inferred from the platform.
 
-        The answer depends only on the shape, dtype, device, whether a mask is present, and which
-        backends this processor permits -- all fixed for a given block within a generation -- so it is
-        cached, and the query costs nothing after the first call of each kind.
+        Must be called inside the `sdpa_policy` window the attention call will run under, and is not
+        cached: `can_use_*` gates on the process-global per-backend enable flags, which a cache key
+        cannot honestly enumerate -- the same reasoning `util.attention` records for its own probe. A
+        stale "no" costs the expansion this function exists to skip for the rest of the generation,
+        with nothing logged. Measured at 1.7us per call on the real shape, against 3.5ms for the attention itself.
         """
         if not query.is_cuda:
             # SDPAParams is a CUDA-only interface, and no other backend offers a fused GQA path.
             return False
-
-        cache_key = (
-            query.shape,
-            key.shape,
-            query.dtype,
-            query.device,
-            None if attention_mask is None else (attention_mask.shape, attention_mask.dtype),
-            self.sdpa_backends.backends,
-        )
-        cached = self._gqa_support.get(cache_key)
-        if cached is not None:
-            return cached
 
         try:
             params = torch.backends.cuda.SDPAParams(query, key, value, attention_mask, 0.0, False, True)
@@ -253,7 +239,6 @@ class Krea2MemoryEfficientAttnProcessor:
             # correct everywhere and merely costs memory.
             supported = False
 
-        self._gqa_support[cache_key] = supported
         return supported
 
 

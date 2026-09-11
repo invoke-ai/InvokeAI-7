@@ -32,7 +32,10 @@ from invokeai.backend.model_manager.taxonomy import BaseModelType, ModelFormat
 from invokeai.backend.patches.layer_patcher import LayerPatcher, PatchSpec
 from invokeai.backend.patches.lora_conversions.z_image_lora_constants import Z_IMAGE_LORA_TRANSFORMER_PREFIX
 from invokeai.backend.patches.model_patch_raw import ModelPatchRaw
-from invokeai.backend.quantization.int8_convrot import requires_sidecar_patching
+from invokeai.backend.quantization.int8_convrot import (
+    peak_int8_dequant_transient_bytes,
+    requires_sidecar_patching,
+)
 from invokeai.backend.rectified_flow.rectified_flow_inpaint_extension import RectifiedFlowInpaintExtension
 from invokeai.backend.stable_diffusion.diffusers_pipeline import PipelineIntermediateState
 from invokeai.backend.stable_diffusion.diffusion.conditioning_data import ZImageConditioningInfo
@@ -443,8 +446,23 @@ class ZImageDenoiseInvocation(BaseInvocation):
             ):
                 raise ValueError(f"Unsupported Z-Image model format: {transformer_config.format}")
 
+            # An int8_tensorwise build materializes each linear's dequantized, derotated weight per
+            # forward. That transient is not part of the model's resident size, so the cache has to
+            # be told to keep room for it or the first forward competes with weights it just placed.
+            # Read from the unlocked model, before the VRAM lock the reservation applies to; zero
+            # for every other build.
+            #
+            # Passed alone rather than added to an activation estimate because this node has none --
+            # the cache's `device_working_mem_gb` floor is what covers activations here, as it did
+            # before. That floor (3 GiB by default) is 20x Z-Image's largest int8 transient, so this
+            # only ever raises the reservation; a node that grows a real activation estimate should
+            # add the two, since the transient is alive alongside the activations.
+            int8_dequant_bytes = peak_int8_dequant_transient_bytes(transformer_info.model, inference_dtype)
+
             # Load transformer - always use base transformer, control is handled via extension
-            (cached_weights, transformer) = exit_stack.enter_context(transformer_info.model_on_device())
+            (cached_weights, transformer) = exit_stack.enter_context(
+                transformer_info.model_on_device(working_mem_bytes=int8_dequant_bytes)
+            )
 
             # Whether LoRA has to go on as a sidecar. Asked of the loaded module tree, not the
             # format: a `checkpoint` Z-Image may be an int8_tensorwise build, whose Linears are

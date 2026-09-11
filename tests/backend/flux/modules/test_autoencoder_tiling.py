@@ -4,8 +4,10 @@ The reference numbers for tiled-vs-untiled agreement come from measurement, not 
 own tiling of this VAE gives max 0.082 / mean 0.0022 per pixel at 1536px on a +/-1 image. A tiled
 decode of this architecture can never be exact, because the decoder's GroupNorms normalise over the
 whole spatial extent and its mid-block attention is global -- both see a different input when the
-image arrives in tiles. What *is* exact is the tile geometry, and `test_geometry_is_exact_without_
-the_global_operators` pins it by removing those two operators and demanding equality.
+image arrives in tiles. `test_the_full_decoder_lands_in_the_measured_accuracy_band` pins that gap
+from both sides on the shipping decoder. What *is* exact is the tile geometry, and
+`test_geometry_is_exact_without_the_global_operators` pins it by removing those two operators and
+demanding equality.
 """
 
 import numpy as np
@@ -86,16 +88,42 @@ class TestTilingState:
             ({"tile_sample_min_size": 500}, "divisible by 8"),
             ({"tile_overlap": 100}, "divisible by 8"),
             ({"tile_sample_min_size": 128, "tile_overlap": 128}, "must be smaller than"),
+            ({"tile_overlap": 0}, "greater than 0"),
+            # The automatic overlap for an 8px tile is min(128, 4) rounded down to a multiple of
+            # 8, i.e. 0. `merge_tiles_with_linear_blending` would take that as a blend band of
+            # zero pixels and butt the tiles together with a hard seam instead of blending.
+            ({"tile_sample_min_size": 8}, "greater than 0"),
         ],
     )
     def test_geometry_that_cannot_be_sliced_is_rejected(self, kwargs, message):
         # A tile edge that is not a multiple of the compression factor has no exact latent slice,
-        # and an overlap at least as large as the tile makes the layout degenerate.
+        # and an overlap at least as large as the tile -- or no overlap at all -- makes the layout
+        # degenerate.
         with pytest.raises(ValueError, match=message):
             _build_autoencoder().enable_tiling(**kwargs)
 
 
 class TestTiledDecode:
+    def test_the_full_decoder_lands_in_the_measured_accuracy_band(self):
+        """The counterweight to the test below: exactness is a property of the *geometry* only.
+
+        With the GroupNorms and the mid-block attention left in place -- i.e. the decoder that
+        actually ships -- a tiled decode differs from a single-pass one everywhere, because both
+        operators see the whole spatial extent and a tile is not the whole image. Measured on this
+        fixture at 768px: 0.113 at the shipped 512/128 geometry, against an output range of about
+        +/-2.7. The floor rules out the `enable_tiling` docstring's since-corrected claim of float32
+        epsilon; the ceiling has ~2.7x headroom over the measurement and rules out a blend band,
+        tile offset or slice that is merely plausible rather than right (a 128px tile, four times
+        the seams, already drifts to 0.67).
+        """
+        ae = _build_autoencoder()
+        z = torch.randn(1, 16, 96, 96)
+        with torch.no_grad():
+            untiled = ae.decode(z)
+            ae.enable_tiling()
+            tiled = ae.decode(z)
+        assert 1e-3 < (untiled - tiled).abs().max() < 0.3
+
     def test_geometry_is_exact_without_the_global_operators(self):
         ae = _build_autoencoder()
         _make_purely_convolutional(ae)
@@ -115,6 +143,20 @@ class TestTiledDecode:
             (128, 128),  # 2x2 tiles, evenly divided
             (100, 77),  # odd on both axes
             (64, 160),  # tiling on one axis only
+            # One axis exactly as small as the latent overlap (128px / 8 = 16). `calc_tiles_min_
+            # overlap` clamps the tile down to the image there and then divides by
+            # `tile - min_overlap`, which used to raise ZeroDivisionError -- including on the OOM
+            # retry, where it replaced the out-of-memory error with a division by zero.
+            (16, 96),
+            (96, 16),
+            # Same clamp, but the long axis now lands on a 15-latent (120px) tile overlap rather
+            # than a comfortable 32-latent one. That is *below* the configured 128px overlap, so
+            # the blend amount has to come from the clamped overlap; the configured one trips
+            # `merge_tiles_with_linear_blending`'s `tile.overlap >= blend_amount` assertion.
+            (16, 113),
+            # A 1-latent axis leaves no overlap at all once clamped, so the layout is degenerate
+            # and the decode falls back to a single pass.
+            (1, 96),
         ],
     )
     def test_shape_and_dtype_survive_every_layout(self, latent_hw):
@@ -182,19 +224,23 @@ class TestTiledDecode:
         with torch.no_grad():
             assert ae.decode(torch.randn(1, 16, 96, 96)).shape == (1, 3, 768, 768)
 
-    def test_finished_tiles_do_not_stay_on_the_decode_device(self):
-        # Bounding the peak is the entire point: a tile is moved off the device as soon as it is
-        # decoded, so what the merge sees is numpy on the host.
+    def test_every_tile_reaches_the_merge_as_a_host_array(self):
+        """What tiling bounds and what it does not.
+
+        A tile leaves the decode device as soon as it is decoded, which is what bounds *device*
+        memory to one tile. Host memory is a different story: the merge runs after the loop, so it
+        receives all of them at once and the host holds the whole image in tiles. The decoder's
+        docstring has to say both, and this is the observation behind it.
+        """
         ae = _build_autoencoder()
-        seen: list[type] = []
-        real_merge = None
+        seen: list[tuple[list[type], int]] = []
 
         import invokeai.backend.flux.modules.autoencoder as autoencoder_module
 
         real_merge = autoencoder_module.merge_tiles_with_linear_blending
 
         def spy(dst_image, tiles, tile_images, blend_amount):
-            seen.extend(type(t) for t in tile_images)
+            seen.append(([type(t) for t in tile_images], blend_amount))
             return real_merge(dst_image, tiles, tile_images, blend_amount)
 
         autoencoder_module.merge_tiles_with_linear_blending = spy
@@ -205,4 +251,38 @@ class TestTiledDecode:
         finally:
             autoencoder_module.merge_tiles_with_linear_blending = real_merge
 
-        assert seen and all(t is np.ndarray for t in seen)
+        # 96 latents against a 64-latent tile with a 16-latent minimum overlap needs two tiles per
+        # axis, so four in total -- and the merge is handed all four in one call. The blend band is
+        # the configured overlap here, because nothing about this layout forces the clamp.
+        assert seen == [([np.ndarray] * 4, DEFAULT_TILE_OVERLAP)]
+
+    def test_a_clamped_overlap_shrinks_the_blend_band_with_it(self):
+        """The blend band has to come from the overlap the layout was built with.
+
+        On a 128x904 image the clamp drops the latent overlap from 16 to 15, and the tiler then
+        lays the two columns out with exactly 15 latents (120px) of overlap. The configured 128px
+        would exceed that, and `merge_tiles_with_linear_blending` asserts every non-edge overlap is
+        at least the blend amount -- so passing `self.tile_overlap` here is an AssertionError deep
+        in the tiling utility, not a seam.
+        """
+        ae = _build_autoencoder()
+        seen: list[int] = []
+
+        import invokeai.backend.flux.modules.autoencoder as autoencoder_module
+
+        real_merge = autoencoder_module.merge_tiles_with_linear_blending
+
+        def spy(dst_image, tiles, tile_images, blend_amount):
+            seen.append(blend_amount)
+            return real_merge(dst_image, tiles, tile_images, blend_amount)
+
+        autoencoder_module.merge_tiles_with_linear_blending = spy
+        try:
+            ae.enable_tiling()
+            with torch.no_grad():
+                decoded = ae.decode(torch.randn(1, 16, 16, 113))
+        finally:
+            autoencoder_module.merge_tiles_with_linear_blending = real_merge
+
+        assert seen == [120]
+        assert decoded.shape == (1, 3, 128, 904)

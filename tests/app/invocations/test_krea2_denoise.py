@@ -13,7 +13,7 @@ from invokeai.app.invocations.krea2_denoise import (
 )
 from invokeai.app.invocations.model import ModelIdentifierField, TransformerField
 from invokeai.backend.model_manager.taxonomy import BaseModelType, Krea2VariantType, ModelFormat, ModelType
-from invokeai.backend.quantization.int8_convrot import Int8ConvrotLinear
+from invokeai.backend.quantization.int8_convrot import Int8ConvrotLinear, peak_int8_dequant_transient_bytes
 from invokeai.backend.stable_diffusion.diffusion.conditioning_data import ConditioningFieldData, Krea2ConditioningInfo
 
 
@@ -346,8 +346,18 @@ class _TransformerInfo:
     def __init__(self, transformer: _Transformer) -> None:
         self.transformer = transformer
 
+    @property
+    def model(self):
+        """`LoadedModel.model` -- the model without locking it.
+
+        Several denoise nodes read it to size their working-memory reservation, which has to happen
+        before `model_on_device` is entered.
+        """
+        return self.transformer
+
     @contextmanager
-    def model_on_device(self, **_kwargs):
+    def model_on_device(self, **kwargs):
+        self.working_mem_bytes = kwargs.get("working_mem_bytes")
         yield ({}, self.transformer)
 
 
@@ -796,3 +806,39 @@ class TestRequiresSidecarPatching:
         )
         tree = self._Tree(torch.nn.Linear(2, 2), int8_linear)
         assert requires_sidecar_patching(tree, ModelFormat.Checkpoint)
+
+
+class TestTheInt8DequantTransientReachesTheReservation:
+    """An int8_tensorwise build materializes the dequantized, derotated weight per forward call.
+
+    The activation estimate cannot see it -- the weights are buffers, and the transient is allocated
+    inside the layer -- so without this the cache reserves for the activations alone and a model that
+    loaded comfortably OOMs in its first step. A helper existing is not the same as it being called,
+    which is the regression worth catching here rather than in the helper's own unit test.
+    """
+
+    def _reservation_for(self, monkeypatch, tmp_path, transformer: _Transformer) -> int:
+        info = _TransformerInfo(transformer)
+        context = _runtime_context(tmp_path, transformer)
+        context.models.load = lambda _identifier: info
+        _patch_runtime(monkeypatch)
+        _runtime_invocation(cfg_scale=1.0)._run_diffusion(context)
+        return info.working_mem_bytes
+
+    def test_an_int8_model_reserves_the_transient_on_top_of_the_activations(self, monkeypatch, tmp_path) -> None:
+        dense = _Transformer()
+        quantized = _Transformer()
+        layer = Int8ConvrotLinear(
+            weight=torch.zeros(1024, 512, dtype=torch.int8),
+            weight_scale=torch.ones(1024, 1),
+            convrot=False,
+        )
+        quantized.modules = lambda: iter((quantized, layer))
+
+        dense_bytes = self._reservation_for(monkeypatch, tmp_path, dense)
+        quantized_bytes = self._reservation_for(monkeypatch, tmp_path, quantized)
+
+        # `_patch_runtime` pins the compute dtype to float32, which is what the node passes on.
+        transient = peak_int8_dequant_transient_bytes(quantized, torch.float32)
+        assert transient > 0
+        assert quantized_bytes == dense_bytes + transient

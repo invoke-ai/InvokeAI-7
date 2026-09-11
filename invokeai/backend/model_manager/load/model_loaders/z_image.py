@@ -63,7 +63,9 @@ from invokeai.backend.quantization.int8_convrot import (
     cast_unquantized,
     drop_unconsumed_quantization_sidecars,
     extract_int8_convrot_markers,
+    predict_int8_cast_size,
     reject_unmarked_int8_weights,
+    split_int8_convrot_layers,
     swap_in_int8_linears,
 )
 from invokeai.backend.quantization.sdnq.detection import is_sdnq_folder
@@ -569,16 +571,28 @@ class ZImageCheckpointModel(ModelLoader):
             sd.update(kept_sd)
             del kept_sd
 
-            # int8 payloads are one byte, not two: reserving the compute dtype's width for them
-            # would ask the cache to free memory this load never uses.
-            # `max(element_size, itemsize)` would charge the compute dtype's width for the int8
-            # payloads -- `max(1, 2)` is 2 -- which is the doubling this comment exists to avoid.
-            # `predict_cast_state_dict_size` charges each tensor what it will actually occupy.
-            new_sd_size = predict_cast_state_dict_size(sd, model_dtype, keep_fp8=False)
-            self._ram_cache.make_room(new_sd_size)
+            # Honor the model's own precision-sensitive list here too, not only on the fp8 side.
+            # Z-Image declares ["t_embedder", "cap_embedder"] because
+            # `ZImageTimestepEmbedder.forward` reads `self.mlp[0].weight.dtype` to pick the dtype
+            # it casts its activations to; on an `Int8ConvrotLinear` that reads `torch.int8`, the
+            # forward falls through to a `compute_dtype` attribute these modules do not have, and
+            # the timestep branch silently runs in float32 into a bf16 model.
+            skip_patterns = _model_declared_skip_patterns(model)
 
-            cast_unquantized(sd, model_dtype, int8_markers)
-            swap_in_int8_linears(model, sd, int8_markers)
+            # Reserve before the split, not after: the split dequantizes the layers it widens, so
+            # reserving afterwards lets that transient land on an unreserved cache. The prediction
+            # is given the same inputs, so it charges those layers the compute dtype's width and
+            # the int8 payloads their actual one byte -- reserving two would ask the cache to free
+            # memory this load never uses.
+            self._ram_cache.make_room(
+                predict_int8_cast_size(sd, model_dtype, int8_markers, model=model, skip_patterns=skip_patterns)
+            )
+
+            quantized = split_int8_convrot_layers(
+                sd, int8_markers, model_dtype, model=model, skip_patterns=skip_patterns
+            )
+            cast_unquantized(sd, model_dtype, quantized)
+            swap_in_int8_linears(model, sd, quantized)
             # The fp8 reporting below is keyed on these; an int8 checkpoint keeps neither.
             fp8_layers: dict[str, Any] = {}
             kept = 0

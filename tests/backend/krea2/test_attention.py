@@ -145,3 +145,45 @@ def test_cuda_fused_sdpa_accepts_dense_regional_mask(monkeypatch: pytest.MonkeyP
 
     assert output.is_cuda
     assert torch.isfinite(output).all()
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="the fused kernels are the thing under test")
+def test_the_ranked_backends_agree_numerically() -> None:
+    """Every backend in the ranked list must produce the same image.
+
+    Ranking cuDNN above the memory-efficient kernel changed which kernel serves a Krea-2 block on
+    builds without flash -- i.e. every Windows CUDA build. Nothing pinned that the kernels agree, so
+    a kernel that is merely *fast* could have been ranked in. The comparison is against MATH, the
+    unfused reference, because that is the one implementation whose result is not in question.
+    """
+    attn = _build_gqa_attention().to(device="cuda", dtype=torch.bfloat16)
+    hidden_states = torch.randn(1, 64, attn.hidden_size, device="cuda", dtype=torch.bfloat16)
+
+    def run(backend: SDPBackend) -> torch.Tensor:
+        processor = Krea2MemoryEfficientAttnProcessor(
+            sdpa_backends=krea2_attention.Krea2SdpaBackends(backends=(backend,), set_priority=False)
+        )
+        attn.set_processor(processor)
+        with torch.no_grad():
+            return attn(hidden_states, attention_mask=None, image_rotary_emb=None)
+
+    reference = run(SDPBackend.MATH)
+    head_dim = attn.hidden_size // attn.num_heads
+    probe = torch.empty(1, attn.num_heads, 64, head_dim, device="cuda", dtype=torch.bfloat16)
+    params = torch.backends.cuda.SDPAParams(probe, probe, probe, None, 0.0, False, False)
+    can_use = {
+        SDPBackend.CUDNN_ATTENTION: torch.backends.cuda.can_use_cudnn_attention,
+        SDPBackend.FLASH_ATTENTION: torch.backends.cuda.can_use_flash_attention,
+        SDPBackend.EFFICIENT_ATTENTION: torch.backends.cuda.can_use_efficient_attention,
+    }
+
+    compared = []
+    for backend, probe_fn in can_use.items():
+        if not probe_fn(params):
+            continue
+        compared.append(backend.name)
+        # bf16 accumulates in fp32 inside every one of these kernels, so the spread between them is
+        # the output dtype's own resolution, not the kernels'.
+        torch.testing.assert_close(run(backend), reference, rtol=1.6e-2, atol=1e-2)
+
+    assert compared, "no fused backend could serve the probe shape, so nothing was compared"

@@ -112,15 +112,19 @@ class TestTheOverride:
         assert choice.set_priority is False
         assert choice.override == value
 
-    def test_priority_cudnn_reproduces_the_default_list(self):
-        # This is the value the sm_86 pre-merge check runs with, so it must be the shipped list.
-        explicit = resolve_krea2_sdpa_backends(raw_override="priority-cudnn")
+    def test_default_names_the_shipped_list_without_changing_it(self):
+        """The value a benchmarking run exports to say "no override"; it must be the shipped list.
+
+        It used to be spelled `priority-cudnn`, which asserted an ordering it did not produce -- the
+        list is flash-first, because flash wins wherever a build has it."""
+        explicit = resolve_krea2_sdpa_backends(raw_override="default")
         default = resolve_krea2_sdpa_backends(raw_override=None)
         assert explicit.backends == default.backends
         assert explicit.set_priority == default.set_priority
-        assert explicit.override == "priority-cudnn"
+        assert explicit.override == "default"
+        assert explicit.backends[0] is SDPBackend.FLASH_ATTENTION
 
-    @pytest.mark.parametrize("value", ["  CUDNN  ", "Priority-CuDNN", "EFFICIENT"])
+    @pytest.mark.parametrize("value", ["  CUDNN  ", "Default", "EFFICIENT"])
     def test_values_are_stripped_and_lowercased(self, value):
         assert resolve_krea2_sdpa_backends(raw_override=value).override == value.strip().lower()
 
@@ -129,7 +133,7 @@ class TestTheOverride:
             resolve_krea2_sdpa_backends(raw_override="cudnn-attention")
         message = str(excinfo.value)
         assert KREA2_SDPA_BACKEND_ENV_VAR in message
-        for valid in ("cudnn", "efficient", "flash", "math", "priority-cudnn"):
+        for valid in ("cudnn", "efficient", "flash", "math", "default"):
             assert valid in message
 
     def test_the_environment_is_read_when_no_value_is_passed(self, monkeypatch):
@@ -200,7 +204,7 @@ class TestTheFallbackIsReal:
 
 
 class TestTheDispatchSite:
-    """That the resolved choice actually reaches `sdpa_kernel`.
+    """That the resolved choice actually reaches the SDPA window.
 
     Everything above asserts what `resolve_krea2_sdpa_backends` *returns*. None of it survives the
     processor ignoring that value: drop `set_priority=` from the call, or read the module constant
@@ -208,7 +212,7 @@ class TestTheDispatchSite:
     the entire measured win -- with all 31 tests still green.
 
     Spying on the context manager is the only place the effect is observable: torch exposes no way
-    to read back the priority order a `sdpa_kernel` window installed.
+    to read back the priority order a window installed.
     """
 
     def _run_with_spy(self, monkeypatch, processor):
@@ -219,7 +223,7 @@ class TestTheDispatchSite:
             seen["set_priority"] = set_priority
             return contextlib.nullcontext()
 
-        monkeypatch.setattr(krea2_attention, "sdpa_kernel", spy)
+        monkeypatch.setattr(krea2_attention, "sdpa_policy", spy)
 
         attn = Krea2Attention(hidden_size=256, num_heads=8, num_kv_heads=2, eps=1e-5).eval()
         attn.set_processor(processor)

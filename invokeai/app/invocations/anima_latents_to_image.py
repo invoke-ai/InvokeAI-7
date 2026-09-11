@@ -28,6 +28,7 @@ from invokeai.app.invocations.model import VAEField
 from invokeai.app.invocations.primitives import ImageOutput
 from invokeai.app.services.shared.invocation_context import InvocationContext
 from invokeai.backend.flux.modules.autoencoder import AutoEncoder as FluxAutoEncoder
+from invokeai.backend.krea2.vae_compat import patch_qwen_image_vae_tiling
 from invokeai.backend.util.devices import TorchDevice
 from invokeai.backend.util.oom import is_oom_error
 from invokeai.backend.util.vae_decode_diagnostics import (
@@ -43,7 +44,9 @@ from invokeai.backend.util.vae_working_memory import (
 
 # Tile geometry for tiled Wan VAE decode. 512px tiles with a 384px stride (128px blended
 # overlap) cap peak decode working memory at ~1.7GB regardless of image size, while images
-# <=512px still decode in a single pass.
+# <=512px still decode in a single pass. `patch_qwen_image_vae_tiling` derives that same stride
+# from the tile size (the VAE's stock 3/4 ratio); the stride is named here because the
+# working-memory constant was calibrated against this exact geometry.
 ANIMA_VAE_TILE_SIZE = 512
 ANIMA_VAE_TILE_STRIDE = 384
 
@@ -135,18 +138,6 @@ class AnimaLatentsToImageInvocation(BaseInvocation, WithMetadata, WithBoard):
                     # FLUX VAE handles scaling internally, expects 4D [B, C, H, W]
                     img = vae.decode(latents)
                 else:
-                    # The cached VAE instance is shared across invocations, so always set
-                    # the tiling state explicitly rather than leaving it as-is.
-                    if use_tiling:
-                        vae.enable_tiling(
-                            tile_sample_min_height=ANIMA_VAE_TILE_SIZE,
-                            tile_sample_min_width=ANIMA_VAE_TILE_SIZE,
-                            tile_sample_stride_height=ANIMA_VAE_TILE_STRIDE,
-                            tile_sample_stride_width=ANIMA_VAE_TILE_STRIDE,
-                        )
-                    else:
-                        vae.disable_tiling()
-
                     # Expects 5D latents [B, C, T, H, W]
                     if latents.ndim == 4:
                         latents = latents.unsqueeze(2)  # [B, C, H, W] -> [B, C, 1, H, W]
@@ -160,13 +151,31 @@ class AnimaLatentsToImageInvocation(BaseInvocation, WithMetadata, WithBoard):
                     # upstream corruption from decode-side corruption.
                     latents_finite = bool(torch.isfinite(latents).all())
 
+                    def decode_once() -> torch.Tensor:
+                        out = vae.decode(latents, return_dict=False)[0]
+                        if not bool(torch.isfinite(out).all()):
+                            # NaN survives clamp(-1, 1) and quantizes to 0: without this, the
+                            # failure renders as a silent black image. Diagnose and try to recover.
+                            out = self._recover_nonfinite_decode(context, vae, latents, out, latents_finite)
+                        return out
+
+                    # The cached VAE instance is shared across invocations and with the Qwen-Image
+                    # nodes, so the tile geometry is scoped: `enable_tiling` writes it onto the
+                    # module and `disable_tiling` restores only the flag, never the sizes.
                     try:
-                        decoded = vae.decode(latents, return_dict=False)[0]
+                        with patch_qwen_image_vae_tiling(vae, ANIMA_VAE_TILE_SIZE if use_tiling else None):
+                            decoded = decode_once()
                     except RuntimeError as e:
                         if use_tiling or not is_oom_error(e):
                             raise
                         # The working-memory estimate was insufficient on this system;
                         # retry once with tiling, which caps the peak allocation.
+                        context.util.signal_progress("VAE decode ran out of memory, retrying tiled")
+                        context.logger.warning(
+                            "VAE decode ran out of memory; retrying with tiling. The tiled result is not identical to an "
+                            "untiled decode -- the decoder's normalisation and attention are global, so the difference is "
+                            "spread over the image rather than confined to the seams."
+                        )
                         # Drop the failed attempt's traceback before retrying. It pins that
                         # decode's frames, and their locals hold the full-resolution
                         # activations -- exception/traceback/frame is a reference cycle rooted
@@ -176,18 +185,8 @@ class AnimaLatentsToImageInvocation(BaseInvocation, WithMetadata, WithBoard):
                         # `ModelConfigFactory._detach_traceback`.
                         e.__traceback__ = None
                         TorchDevice.empty_cache()
-                        vae.enable_tiling(
-                            tile_sample_min_height=ANIMA_VAE_TILE_SIZE,
-                            tile_sample_min_width=ANIMA_VAE_TILE_SIZE,
-                            tile_sample_stride_height=ANIMA_VAE_TILE_STRIDE,
-                            tile_sample_stride_width=ANIMA_VAE_TILE_STRIDE,
-                        )
-                        decoded = vae.decode(latents, return_dict=False)[0]
-
-                    if not bool(torch.isfinite(decoded).all()):
-                        # NaN survives clamp(-1, 1) and quantizes to 0: without this, the
-                        # failure renders as a silent black image. Diagnose and try to recover.
-                        decoded = self._recover_nonfinite_decode(context, vae, latents, decoded, latents_finite)
+                        with patch_qwen_image_vae_tiling(vae, ANIMA_VAE_TILE_SIZE):
+                            decoded = decode_once()
 
                     # Output is 5D [B, C, T, H, W] — squeeze temporal dim
                     if decoded.ndim == 5:
