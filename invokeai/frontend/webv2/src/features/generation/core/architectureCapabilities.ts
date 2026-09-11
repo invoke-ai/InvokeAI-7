@@ -15,6 +15,8 @@
  * from here -- the same shape `configureHttpAuth` uses in `platform/transport/http.ts`.
  */
 
+import { createListenerChannel } from '@platform/state/externalStoreCore';
+
 import type { BaseGenerationConfig, GuidanceLabel, NegativePromptUsage, SchedulerSetId } from './generationConfig';
 
 /** A capabilities row exactly as the backend serialises it. snake_case, unions kept open. */
@@ -139,20 +141,52 @@ const key = (base: string, variant: string | null): string => `${base}\u0000${va
 let rows: readonly ArchitectureCapabilitiesRow[] | null = null;
 let byKey = new Map<string, ArchitectureCapabilitiesRow>();
 let configByKey = new Map<string, BaseGenerationConfig>();
+let revision = 0;
+
+/**
+ * Fires whenever the table below is replaced or dropped.
+ *
+ * Everything here is synchronous module state, read during render and at enqueue time from all over
+ * the app. Without a change signal a reader that answered before the table arrived keeps its
+ * fallback answer for the rest of the session -- it has nothing to re-read on. `data/` mirrors this
+ * into its snapshot, so React and non-React readers subscribe to one signal.
+ */
+const channel = createListenerChannel();
+
+/** Subscribe to table replacements. Returns an unsubscribe function. */
+export const onArchitectureCapabilitiesChanged = channel.subscribe;
+
+/** Identity of the table currently held; `0` while there is none. */
+export const getArchitectureCapabilitiesRevision = (): number => revision;
 
 /** Called by `data/` once the table has been fetched. */
 export const setArchitectureCapabilities = (next: readonly ArchitectureCapabilitiesRow[]): void => {
-  rows = next;
-  byKey = new Map(next.map((row) => [key(row.base, row.variant), row]));
+  // Built into locals, then swapped in one step. Assigning `rows` first would publish a table that
+  // `hasArchitectureCapabilities` reports as present while the rows are still being mapped: a
+  // malformed row's throw would then leave every fail-closed gate open over an empty config map,
+  // so the widget would show the load error while the canvas and topbar used fallback policy.
+  const nextByKey = new Map(next.map((row) => [key(row.base, row.variant), row]));
   // Memoised so policy accessors stay O(1) and hand back referentially stable objects.
-  configByKey = new Map(next.map((row) => [key(row.base, row.variant), toBaseGenerationConfig(row)]));
+  const nextConfigByKey = new Map(next.map((row) => [key(row.base, row.variant), toBaseGenerationConfig(row)]));
+
+  rows = next;
+  byKey = nextByKey;
+  configByKey = nextConfigByKey;
+  revision += 1;
+  channel.notify();
 };
 
 /** Drop the table. The store calls this on account change; tests call it to isolate. */
 export const resetArchitectureCapabilities = (): void => {
+  if (rows === null) {
+    return;
+  }
+
   rows = null;
   byKey = new Map();
   configByKey = new Map();
+  revision = 0;
+  channel.notify();
 };
 
 export const hasArchitectureCapabilities = (): boolean => rows !== null;
@@ -186,5 +220,7 @@ export const getArchitectureGenerationConfig = (base: string, variant?: unknown)
  * `features` block onto every variant row of an architecture, so asking per variant would suggest
  * a precision that is not there.
  */
-export const getArchitectureFeatures = (base: string): ArchitectureCapabilitiesRow['features'] | undefined =>
-  byKey.get(key(base, null))?.features;
+export const getArchitectureFeatures = (
+  base: string,
+  variant?: unknown
+): ArchitectureCapabilitiesRow['features'] | undefined => getArchitectureCapabilityRow(base, variant)?.features;

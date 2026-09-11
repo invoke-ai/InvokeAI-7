@@ -4,6 +4,7 @@ export interface CanvasImportNotice {
   kind: 'error' | 'info' | 'success';
   titleKey:
     | 'widgets.canvas.import.blocked'
+    | 'widgets.canvas.import.capabilitiesUnavailable'
     | 'widgets.canvas.import.empty'
     | 'widgets.canvas.import.partial'
     | 'widgets.canvas.import.staleDocument'
@@ -37,6 +38,8 @@ export const getCanvasImportNotice = (result: ImportGalleryImagesResult): Canvas
       };
     case 'blocked':
       return { kind: 'info', titleKey: 'widgets.canvas.import.blocked' };
+    case 'capabilities-unavailable':
+      return { kind: 'info', titleKey: 'widgets.canvas.import.capabilitiesUnavailable' };
     case 'empty':
       return { kind: 'info', titleKey: 'widgets.canvas.import.empty' };
     case 'stale-document':

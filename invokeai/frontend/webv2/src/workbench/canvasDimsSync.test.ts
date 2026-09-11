@@ -1,15 +1,20 @@
 import type { MainModelConfig } from '@features/generation/contracts';
 import type { WorkbenchState } from '@workbench/projectContracts';
 
-import { seedArchitectureCapabilities } from '@features/generation/core/architectureCapabilities.testing';
-import { describe, expect, it } from 'vitest';
+import {
+  resetArchitectureCapabilities,
+  setArchitectureCapabilities,
+} from '@features/generation/core/architectureCapabilities';
+import {
+  architectureCapabilitiesFixture,
+  seedArchitectureCapabilities,
+} from '@features/generation/core/architectureCapabilities.testing';
+import { afterEach, describe, expect, it } from 'vitest';
 
 import type { CanvasProjectMutation } from './canvasProjectMutations';
 
 import { type CanvasDimsSnapshot, createCanvasDimsSync, reconcileCanvasDims } from './canvasDimsSync';
 import { getProjectWidgetValues } from './widgetState';
-
-seedArchitectureCapabilities();
 import { createWorkbenchStore } from './workbenchStore';
 
 const bbox = (width: number, height: number, x = 0, y = 0) => ({ height, width, x, y });
@@ -262,6 +267,8 @@ const setupCanvasStore = () => {
 };
 
 describe('createCanvasDimsSync (wiring)', () => {
+  seedArchitectureCapabilities();
+
   it('does not dispatch on mount when bbox and dims already agree', () => {
     const { getSyncDispatches, sync } = setupCanvasStore();
 
@@ -440,5 +447,79 @@ describe('createCanvasDimsSync (wiring)', () => {
     expect(values.width).toBe(896);
     expect(values.height).toBe(640);
     sync.dispose();
+  });
+});
+
+describe('createCanvasDimsSync before the capability table arrives', () => {
+  afterEach(resetArchitectureCapabilities);
+
+  const wanModel: MainModelConfig = { base: 'wan', key: 'test-wan-model', name: 'Test Wan Model', type: 'main' };
+
+  /** A saved canvas project whose frame is 8-aligned but not on Wan's 16px grid. */
+  const setupWanProject = () => {
+    const store = createWorkbenchStore();
+
+    store.commands.generation.setSource('canvas');
+    store.commands.generation.patchSettings({
+      height: 1024,
+      model: wanModel,
+      modelKey: wanModel.key,
+      width: 1024,
+    });
+    dispatchCanvas(store, { bbox: { height: 1032, width: 1032, x: 0, y: 0 }, type: 'setCanvasBbox' });
+
+    let syncDispatches = 0;
+    const countingStore = {
+      commands: {
+        canvas: store.commands.canvas,
+        generation: {
+          ...store.commands.generation,
+          patchSettings: (...args: Parameters<typeof store.commands.generation.patchSettings>) => {
+            syncDispatches += 1;
+            store.commands.generation.patchSettings(...args);
+          },
+        },
+      },
+      getState: store.getState,
+      subscribe: store.subscribe,
+    };
+
+    return { getSyncDispatches: () => syncDispatches, store, sync: createCanvasDimsSync(countingStore) };
+  };
+
+  it('writes nothing into the project while the architecture has no answer', () => {
+    // Reopening a saved canvas project: `prev` is null, so the bbox wins and the dims are patched
+    // and persisted. With no table the grid reads as 8, which is a real answer for SDXL and a guess
+    // for Wan -- and Wan's denoise node rejects anything but multiples of 16.
+    const { getSyncDispatches, store, sync } = setupWanProject();
+
+    expect(getSyncDispatches()).toBe(0);
+    expect(getActiveGenerate(store.getState()).values.width).toBe(1024);
+    sync.dispose();
+  });
+
+  it('reconciles as soon as the table lands, with no other change to the project', () => {
+    // The gap this closes: nothing else moves when the table arrives -- the widget's own resolver
+    // produces no patch for an already-consistent project -- so this listener has to hear about the
+    // table itself or the wrong dimensions stay persisted.
+    const { getSyncDispatches, store, sync } = setupWanProject();
+
+    setArchitectureCapabilities(architectureCapabilitiesFixture);
+
+    // The 1032px frame snapped onto Wan's declared 16px grid, not the fallback's 8.
+    const { values } = getActiveGenerate(store.getState());
+    expect(values.width).toBe(1040);
+    expect(values.height).toBe(1040);
+    expect(getSyncDispatches()).toBe(1);
+    sync.dispose();
+  });
+
+  it('stops listening to the table once disposed', () => {
+    const { getSyncDispatches, sync } = setupWanProject();
+
+    sync.dispose();
+    setArchitectureCapabilities(architectureCapabilitiesFixture);
+
+    expect(getSyncDispatches()).toBe(0);
   });
 });

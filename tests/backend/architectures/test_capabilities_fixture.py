@@ -36,6 +36,12 @@ REGEN_HINT = (
     f"and commit the result, so webv2's tests and mock backend see what this backend serves."
 )
 
+# The fixture is written by `json.dumps(indent=2)` below, which oxfmt would reflow -- so following
+# the hint above would redden webv2's `format:check` on a file nobody hand-edited. It is listed in
+# `.oxfmtrc.json`'s `ignorePatterns` for that reason, alongside `generateGraphNodeTypes.json`, the
+# other generated cross-stack artifact. Machine-written files are not the formatter's to own; if
+# that entry is removed, this writer has to emit oxfmt's exact output instead.
+
 
 def _rendered() -> list[dict[str, Any]]:
     return [row.model_dump(mode="json") for row in architecture_capabilities()]

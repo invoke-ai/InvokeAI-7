@@ -2,18 +2,20 @@ import type { CanvasRegionalGuidanceLayerContract } from '@workbench/canvas-engi
 import type { ComponentProps } from 'react';
 
 import { ChakraProvider } from '@chakra-ui/react';
-import { seedArchitectureCapabilities } from '@features/generation/core/architectureCapabilities.testing';
+import {
+  resetArchitectureCapabilities,
+  setArchitectureCapabilities,
+} from '@features/generation/core/architectureCapabilities';
+import { architectureCapabilitiesFixture } from '@features/generation/core/architectureCapabilities.testing';
 import { applyThemeToRoot } from '@theme/applyTheme';
 import { system } from '@theme/system';
 import { createInstance } from 'i18next';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { I18nextProvider, initReactI18next } from 'react-i18next';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { RegionalGuidanceSettings } from './RegionalGuidanceSettings';
-
-seedArchitectureCapabilities();
 
 let selectedBase: string | null = null;
 vi.mock('./useSelectedModelBase', () => ({ useSelectedModelBase: () => selectedBase }));
@@ -67,6 +69,7 @@ afterEach(async () => {
   host?.remove();
   host = null;
   root = null;
+  resetArchitectureCapabilities();
 });
 
 const alerts = () => [...host!.querySelectorAll('[role="alert"]')].map((el) => el.textContent);
@@ -76,6 +79,10 @@ const hasAutoNegativeSwitch = () =>
   Boolean(host!.textContent?.includes('widgets.layers.regionalGuidance.autoNegative'));
 
 describe('RegionalGuidanceSettings per model base', () => {
+  beforeEach(() => {
+    setArchitectureCapabilities(architectureCapabilitiesFixture);
+  });
+
   it('offers both prompt polarities on an SD base', async () => {
     await render('sd-1', createLayer());
     expect(alerts()).toEqual([]);
@@ -100,5 +107,41 @@ describe('RegionalGuidanceSettings per model base', () => {
     await render(null, createLayer());
     expect(alerts()).toEqual([]);
     expect(hasNegativeField()).toBe(true);
+  });
+});
+
+describe('RegionalGuidanceSettings before the capability table arrives', () => {
+  it('does not accuse a supported model of lacking a regional path', async () => {
+    // `getRegionalGuidanceSupport` answers `null` for every base while the table is missing. The
+    // panel used to read that as "unsupported model" and say so in a role="alert" -- for SD-1,
+    // permanently if the load failed -- while rendering the very controls it called unavailable.
+    await render('sd-1', createLayer());
+
+    expect(alerts()).toEqual([]);
+    expect(hasNegativeField()).toBe(true);
+    expect(hasAutoNegativeSwitch()).toBe(true);
+  });
+
+  it('renders the real answer once the table lands, without remounting', async () => {
+    await render('sd-3', createLayer());
+    expect(alerts()).toEqual([]);
+
+    await act(() => {
+      setArchitectureCapabilities(architectureCapabilitiesFixture);
+    });
+
+    expect(alerts()).toEqual(['widgets.layers.regionalGuidance.unsupportedModel']);
+  });
+
+  it('hides the negative controls once the table says the base ignores them', async () => {
+    await render('anima', createLayer({ autoNegative: true, negativePrompt: 'blurry' }));
+    expect(hasNegativeField()).toBe(true);
+
+    await act(() => {
+      setArchitectureCapabilities(architectureCapabilitiesFixture);
+    });
+
+    expect(hasNegativeField()).toBe(false);
+    expect(hasAutoNegativeSwitch()).toBe(false);
   });
 });

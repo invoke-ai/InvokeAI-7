@@ -218,8 +218,9 @@ const FALLBACK_GENERATION_CONFIG: BaseGenerationConfig = {
  *
  * The variant matters: FLUX Schnell wants 4 steps where dev wants 28, and the endpoint answers per
  * variant where they differ. Falling back keeps UI selectors crash-safe for external generators and
- * for an architecture the backend does not know; `isSupportedGenerateModel` still blocks invocation,
- * and `resolveGenerateWidgetValues` refuses to resolve at all until the table has arrived.
+ * for an architecture the backend does not know. It is not a licence to generate with fallback
+ * policy: `isArchitectureDescribed` is what blocks invocation for a supported base the served table
+ * omits, and `resolveGenerateWidgetValues` will not even select such a model.
  */
 const getBaseGenerationConfig = (
   model: (Pick<GenerateModelConfig, 'base' | 'type'> & { variant?: unknown }) | undefined
@@ -235,11 +236,26 @@ const getBaseGenerationConfig = (
  * The pixel grid generation dimensions must land on, or `null` if the backend has no row for this
  * architecture.
  *
+ * Variant-dependent: Wan A14B enforces multiples of 16 on its denoise node, TI2V-5B multiples of
+ * 32 in the reference-image encoder. Passing the variant is how the canvas offers a size that
+ * survives enqueue; omitting it falls back to the architecture's own row.
+ *
  * `null` rather than a default so callers keep owning their own "nothing selected" behaviour --
  * the canvas has a different sensible answer there than a generation graph does.
  */
-export const getDimensionGridForBase = (base: string): number | null =>
-  getArchitectureFeatures(base)?.dimension_grid ?? null;
+export const getDimensionGrid = (base: string, variant?: unknown): number | null =>
+  getArchitectureFeatures(base, variant)?.dimension_grid ?? null;
+
+/**
+ * Whether the served table actually describes this model's architecture.
+ *
+ * `isSupportedGenerateModel` answers from a static list of bases webv2 can build a graph for, which
+ * says nothing about whether the *backend* described that base in this build. Generating on a base
+ * the table omits would silently use `FALLBACK_GENERATION_CONFIG` -- grid 8, 30 steps, CFG 7 -- for
+ * an architecture whose denoise node may enforce something else entirely.
+ */
+export const isArchitectureDescribed = (model: Pick<GenerateModelConfig, 'base' | 'type'>): boolean =>
+  model.type === 'external_image_generator' || getArchitectureFeatures(model.base) !== undefined;
 
 const getNumber = (value: number | null | undefined, fallback: number): number =>
   Number.isFinite(value) && value !== null && value !== undefined ? value : fallback;
@@ -253,7 +269,10 @@ const getNumber = (value: number | null | undefined, fallback: number): number =
  * optimal side becomes PiD's 2048 rather than the model's 1024.
  */
 export const getGenerationDimensions = (
-  model: Pick<GenerateModelConfig, 'base' | 'type'> | undefined,
+  // `variant` participates: `getBaseGenerationConfig` prefers a variant row where the backend
+  // answers differently, and `optimalSide` comes from that row's default canvas. Optional because
+  // an architecture always has its own row; omitting it asks for the architecture's answer.
+  model: (Pick<GenerateModelConfig, 'base' | 'type'> & { variant?: unknown }) | undefined,
   pidMode: PidMode = 'off'
 ) => {
   const config = getBaseGenerationConfig(model);
@@ -1627,6 +1646,13 @@ export const getGenerationValidationReasons = (model: GenerateModelConfig, setti
 
   if (!isSupportedGenerateModel(model)) {
     return ['Generate needs a supported model before it can be invoked.'];
+  }
+
+  // A loaded table is not the same as a described architecture: a base inside `SUPPORTED_GENERATE_BASES`
+  // that this backend build does not serve a row for would otherwise compile against the fallback
+  // config. Reference images already fail closed this way; so does everything else now.
+  if (!isArchitectureDescribed(model)) {
+    return [`The backend does not describe the ${model.base} architecture, so it cannot be generated with.`];
   }
 
   const reasons = [

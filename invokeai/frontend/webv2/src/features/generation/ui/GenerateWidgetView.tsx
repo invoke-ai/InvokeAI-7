@@ -1,7 +1,7 @@
 import type { GenerationModelCatalogItem as ModelConfig } from '@features/generation/contracts';
 import type { GenerateModelConfig, GenerateSettings, LoraModelConfig } from '@features/generation/core/types';
 
-import { Stack, Text } from '@chakra-ui/react';
+import { HStack, Spinner, Stack, Text } from '@chakra-ui/react';
 import { getDefaultGenerateSettings, isSupportedGenerateModel } from '@features/generation/core/baseGenerationPolicies';
 import { isLoraModelConfig, normalizeGenerateSettings } from '@features/generation/core/settings';
 import {
@@ -10,7 +10,7 @@ import {
 } from '@features/generation/data/architectureCapabilitiesStore';
 import { resolveGenerateWidgetValues } from '@features/generation/settings';
 import { Button } from '@platform/ui/Button';
-import { useCallback, useMemo } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { getGenerateFormCommitPatch } from './generateFormViewModel';
@@ -22,6 +22,7 @@ export const GenerateWidgetView = () => {
   const ui = useGenerationUi();
   const capabilitiesStatus = useArchitectureCapabilitiesSelector((snapshot) => snapshot.status);
   const capabilitiesError = useArchitectureCapabilitiesSelector((snapshot) => snapshot.error);
+  const [hasRequestedRetry, setHasRequestedRetry] = useState(false);
   const projectId = ui.project.activeProjectId;
   const storedValues = ui.project.generateValues;
   const error = ui.models.error;
@@ -33,10 +34,29 @@ export const GenerateWidgetView = () => {
     () => models.filter((model): model is ModelConfig & LoraModelConfig => isLoraModelConfig(model)),
     [models]
   );
-  const resolved = useMemo(() => resolveGenerateWidgetValues({ models, storedValues }), [models, storedValues]);
+  // The resolver reads the architecture table from the core registry and fails closed while it is
+  // absent, so the load status is a real input here: without it a resolve attempted before the
+  // table arrives would be cached as `null` and survive the retry that fixed it, leaving a saved
+  // project with an empty model picker.
+  const resolved = useMemo(
+    () => (capabilitiesStatus === 'loaded' ? resolveGenerateWidgetValues({ models, storedValues }) : null),
+    [capabilitiesStatus, models, storedValues]
+  );
   const settings =
     resolved?.values ?? normalizeGenerateSettings(storedValues) ?? getDefaultGenerateSettings(supportedModels[0]);
   const selectedModel = resolved?.values.model;
+  // The click flips the status to `loading` synchronously. Keeping the failure surface mounted for
+  // the retry it started is what keeps the button -- and the user's focus -- in place.
+  const isRetrying = hasRequestedRetry && capabilitiesStatus === 'loading';
+
+  const retryCapabilities = useCallback(() => {
+    if (isRetrying) {
+      return;
+    }
+
+    setHasRequestedRetry(true);
+    ensureArchitectureCapabilitiesLoaded();
+  }, [isRetrying]);
 
   const commitSettings = useCallback(
     (nextSettings: GenerateSettings) => {
@@ -70,23 +90,44 @@ export const GenerateWidgetView = () => {
   // own -- and a single keystroke would commit them. App boot kicks the fetch, so this is one round
   // trip in practice.
   if (capabilitiesStatus !== 'loaded') {
-    return (
-      <Stack gap="1.5" p="1">
-        {capabilitiesStatus === 'error' ? (
-          <>
-            <Text color="fg.error" fontSize="2xs">
-              {capabilitiesError ?? t('widgets.generate.capabilitiesLoadFailed')}
-            </Text>
-            <Button size="xs" variant="outline" onClick={ensureArchitectureCapabilitiesLoaded}>
-              {t('widgets.generate.retry')}
-            </Button>
-          </>
-        ) : (
-          <Text color="fg.subtle" fontSize="2xs">
-            {t('widgets.generate.loadingCapabilities')}
+    if (capabilitiesStatus === 'error' || isRetrying) {
+      return (
+        <Stack aria-busy={isRetrying} aria-live="polite" gap="2" justify="center" minH="8rem" p="1" role="alert">
+          <Text color="fg.error" fontSize="2xs" textWrap="pretty">
+            {capabilitiesError ?? t('widgets.generate.capabilitiesLoadFailed')}
           </Text>
-        )}
-      </Stack>
+          {/* `aria-disabled` rather than `disabled`: a disabled button drops the focus it holds. */}
+          <Button
+            alignSelf="flex-start"
+            aria-busy={isRetrying}
+            aria-disabled={isRetrying}
+            size="xs"
+            variant="outline"
+            onClick={retryCapabilities}
+          >
+            {isRetrying ? <Spinner size="xs" /> : null}
+            {t('widgets.generate.retry')}
+          </Button>
+        </Stack>
+      );
+    }
+
+    return (
+      <HStack
+        align="center"
+        aria-atomic="true"
+        aria-busy="true"
+        aria-live="polite"
+        color="fg.muted"
+        gap="1.5"
+        justify="center"
+        minH="8rem"
+        p="1"
+        role="status"
+      >
+        <Spinner size="xs" />
+        <Text fontSize="2xs">{t('widgets.generate.loadingCapabilities')}</Text>
+      </HStack>
     );
   }
 

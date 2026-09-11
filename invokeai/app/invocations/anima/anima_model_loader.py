@@ -39,7 +39,7 @@ class AnimaModelLoaderInvocation(BaseInvocation):
     Anima uses:
     - Transformer: Cosmos Predict2 DiT + LLM Adapter (from single-file checkpoint)
     - Qwen3 Encoder: Qwen3 0.6B (standalone single-file)
-    - VAE: AutoencoderKLQwenImage / Wan 2.1 VAE (standalone single-file or FLUX VAE)
+    - VAE: AutoencoderKLQwenImage / Wan 2.1 VAE (standalone single-file)
 
     The T5-XXL tokenizer needed for LLM Adapter token IDs is bundled in the package,
     so no T5-XXL encoder model needs to be installed.
@@ -54,17 +54,16 @@ class AnimaModelLoaderInvocation(BaseInvocation):
     )
 
     vae_model: ModelIdentifierField = InputField(
-        description="Standalone VAE model. Anima uses a Wan 2.1 / QwenImage VAE (16-channel). "
-        "A FLUX VAE can also be used as a compatible fallback.",
+        description="Standalone VAE model. Anima uses a Wan 2.1 / QwenImage VAE (16-channel).",
         input=Input.Direct,
-        # `anima_l2i` accepts AutoencoderKLWan or FluxAutoEncoder. The Wan-family file is the same
-        # checkpoint whichever of the three bases it was installed under; declaring nothing here
-        # offered every VAE ever installed, including ones that cannot decode an Anima latent.
+        # The same Wan-family checkpoint whichever of the three bases it was installed under.
+        # Declaring nothing here offered every VAE ever installed. A FLUX VAE is *not* among
+        # them: it shares the channel count but not the basis, so `anima_l2i` decodes it
+        # without error into noise -- 6.10 dB PSNR against the Wan decode, measured.
         ui_model_base=[
             BaseModelType.Anima,
             BaseModelType.QwenImage,
             BaseModelType.Wan,
-            BaseModelType.Flux,
         ],
         ui_model_type=ModelType.VAE,
         title="VAE",

@@ -1,4 +1,5 @@
 import type { SelectValueChangeDetails } from '@chakra-ui/react';
+import type { ArchitectureCapabilitiesSnapshot } from '@features/generation/runtime';
 import type {
   CanvasMaskContract,
   CanvasMaskFillContract,
@@ -10,6 +11,8 @@ import type { ChangeEvent, FocusEvent } from 'react';
 import { createListCollection, HStack, IconButton, Stack, Switch, Text } from '@chakra-ui/react';
 import { PROMPT_ATTENTION_TARGET_PROPS, PromptTextarea } from '@features/generation/components';
 import { getRegionalGuidanceSupport } from '@features/generation/graph';
+import { getArchitectureCapabilitiesSnapshot, subscribeArchitectureCapabilities } from '@features/generation/runtime';
+import { useExternalStoreSelector } from '@platform/state/selectors';
 import { Button, ColorPicker, Field, Select, Tooltip } from '@platform/ui';
 import { useWorkbenchPreferenceSelector } from '@workbench/settings/store';
 import { armMaskTintTarget } from '@workbench/widgets/canvas/color-system/maskTintTarget';
@@ -71,13 +74,33 @@ export const RegionalGuidanceSettings = ({ engine, layer }: RegionalGuidanceSett
   const [negativePrompt, setNegativePrompt] = useState(layer.negativePrompt ?? '');
 
   const fill = layer.mask.fill;
+  // `getRegionalGuidanceSupport` answers from the capability table, which arrives over the network,
+  // and it is read here through the store's selector rather than called in the component body: the
+  // table is module state, so to React Compiler a bare call is a pure function of `base` and would
+  // be memoised for the panel's lifetime.
+  //
+  // Until the table arrives it answers `null` for *every* base, so "this model has no regional
+  // path" has to stay distinct from "nobody has said yet" -- otherwise a perfectly supported SD-1
+  // model is accused of being unsupported, permanently if the load failed, while the very controls
+  // the alert calls unavailable render right underneath it.
+  const { hasCapabilities, support } = useExternalStoreSelector(
+    subscribeArchitectureCapabilities,
+    getArchitectureCapabilitiesSnapshot,
+    useCallback(
+      (snapshot: ArchitectureCapabilitiesSnapshot) => ({
+        hasCapabilities: snapshot.revision > 0,
+        support: getRegionalGuidanceSupport(base),
+      }),
+      [base]
+    )
+  );
   // Negative controls are hidden on bases whose backend ignores regional negatives -- asked as "is
   // this the FLUX family?" before, which got krea-2 wrong: it rendered a regional negative prompt
   // and an Auto-Negative switch that `addRegionalGuidance` then discarded. The values stay on the
-  // layer for other models. With no selected model every control is offered.
-  const support = getRegionalGuidanceSupport(base);
-  const showNegativeControls = support?.negativePrompt !== false;
-  const unsupportedModel = base !== null && support === null;
+  // layer for other models. With no selected model, and until the table arrives, every control is
+  // offered.
+  const showNegativeControls = !hasCapabilities || support?.negativePrompt !== false;
+  const unsupportedModel = hasCapabilities && base !== null && support === null;
 
   const commitConfig = useCallback(
     (label: string, next: RegionalConfigPatch, before: RegionalConfigPatch) => {

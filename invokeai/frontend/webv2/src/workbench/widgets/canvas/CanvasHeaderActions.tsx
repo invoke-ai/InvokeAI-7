@@ -35,7 +35,7 @@ import { useTranslation } from 'react-i18next';
 import type { CanvasHeaderCommandContext } from './canvasHeaderCommands';
 import type { ResolvedCanvasSettings } from './canvasSettings';
 
-import { gridSizeForModelBase } from './bboxGrid';
+import { useModelGridSize } from './bboxGrid';
 import {
   applyFitBbox,
   confirmNewCanvas as confirmNewCanvasDocument,
@@ -66,6 +66,11 @@ const selectCanvasSettings = (project: Project): ResolvedCanvasSettings =>
 const selectModelBase = (project: Project): string | null => {
   const values = getProjectWidgetValues(project, 'generate') as { model?: { base?: unknown } } | undefined;
   return typeof values?.model?.base === 'string' ? values.model.base : null;
+};
+
+const selectModelVariant = (project: Project): string | null => {
+  const values = getProjectWidgetValues(project, 'generate') as { model?: { variant?: unknown } } | undefined;
+  return typeof values?.model?.variant === 'string' ? values.model.variant : null;
 };
 
 /**
@@ -99,6 +104,7 @@ const CanvasHeaderActionsInner = ({
   const { isSaving, save: saveToGallery } = useCanvasGallerySave(engine);
   const document = useActiveProjectSelector((project) => project.canvas.document);
   const modelBase = useActiveProjectSelector(selectModelBase);
+  const modelVariant = useActiveProjectSelector(selectModelVariant);
   const settings = useActiveProjectSelector(selectCanvasSettings, canvasSettingsEqual);
 
   const [isNewCanvasOpen, setIsNewCanvasOpen] = useState(false);
@@ -112,7 +118,8 @@ const CanvasHeaderActionsInner = ({
   const setZoom = (value: number) => zoomAtViewportCentre(engine, value);
 
   // Fit-bbox honors the snap-to-grid setting: snapping off ⇒ grid 1 (a plain round).
-  const gridSize = settings[CANVAS_SNAP_TO_GRID_KEY] ? gridSizeForModelBase(modelBase) : 1;
+  const modelGrid = useModelGridSize(modelBase, modelVariant);
+  const gridSize = settings[CANVAS_SNAP_TO_GRID_KEY] ? modelGrid : 1;
   const fitLayersRect = useMemo(() => computeFitBboxToLayers(document, gridSize), [document, gridSize]);
   const fitMasksRect = useMemo(() => computeFitBboxToMasks(document, gridSize), [document, gridSize]);
 

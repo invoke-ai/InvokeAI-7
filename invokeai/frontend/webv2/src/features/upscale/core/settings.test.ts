@@ -1,6 +1,7 @@
 import type { GenerateLora, VaeModelConfig } from '@features/generation/contracts';
 import type { ModelConfig } from '@features/models';
 
+import { seedArchitectureCapabilities } from '@features/generation/core/architectureCapabilities.testing';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -12,6 +13,9 @@ import {
   syncUpscaleWidgetValuesWithModels,
   UPSCALE_PRESETS,
 } from './settings';
+
+// VAE compatibility is served by the backend now, and the accessor fails closed without it.
+seedArchitectureCapabilities();
 
 const model = (key: string, type: string, base: string, name = key): ModelConfig => ({
   base,

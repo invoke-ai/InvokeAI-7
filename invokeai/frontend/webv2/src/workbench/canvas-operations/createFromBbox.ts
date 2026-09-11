@@ -107,12 +107,19 @@ export const createFromBbox = async (options: {
     if (imported.status === 'imported') {
       return { destination, layerIds: imported.layerIds, status: 'created' };
     }
-    if (imported.status === 'empty') {
-      // Unreachable: exactly one image is always passed. Kept for exhaustiveness.
-      return { status: 'blocked' };
+    switch (imported.status) {
+      case 'blocked':
+      case 'stale-document':
+      case 'stale-project':
+        return { status: imported.status };
+      case 'empty':
+        // Unreachable: exactly one image is always passed. Kept for exhaustiveness.
+        return { status: 'blocked' };
+      case 'capabilities-unavailable':
+        // Unreachable: only 'control-resized' consults the capability table, and this flow never
+        // asks for it -- CreateFromBboxLayerDestination excludes that destination.
+        return { status: 'blocked' };
     }
-
-    return imported;
   } catch (error) {
     if (!isAccountScopeCurrent(owner)) {
       return { status: 'stale' };

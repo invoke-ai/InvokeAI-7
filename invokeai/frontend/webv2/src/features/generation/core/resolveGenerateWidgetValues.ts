@@ -8,6 +8,7 @@ import type { GenerateWidgetValues } from './types';
 import {
   getAutoFlux2ComponentSourceModel,
   getDefaultGenerateSettings,
+  isArchitectureDescribed,
   isSupportedGenerateModel,
 } from './baseGenerationPolicies';
 import { syncPromptTemplateWithCatalog } from './promptTemplates';
@@ -76,7 +77,11 @@ export const resolveGenerateWidgetValues = ({
     return null;
   }
 
-  const supportedModels = models.filter(isSupportedGenerateModel);
+  // Described, not merely supported: `getDefaultGenerateSettings` below reads the architecture's
+  // grid, optimal size, steps and scheduler, and this resolver's patch is persisted. Selecting a
+  // base the served table omits would write `FALLBACK_GENERATION_CONFIG` into the project file --
+  // the same reason the whole resolver waits for the table in the first place.
+  const supportedModels = models.filter(isSupportedGenerateModel).filter(isArchitectureDescribed);
 
   if (supportedModels.length === 0) {
     return null;

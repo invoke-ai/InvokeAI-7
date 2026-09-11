@@ -32,13 +32,17 @@ register(
     VaeFacet(
         frozenset(
             {
-                # `anima_l2i` accepts AutoencoderKLWan or FluxAutoEncoder, each with its own
-                # decode path. The Wan-family file is registered under whichever base it was
-                # installed for -- all three point at the same 194-tensor checkpoint.
+                # The Wan 2.1 VAE, registered under whichever base it was installed for -- all
+                # three point at the same 194-tensor checkpoint.
+                #
+                # Not FLUX. `anima_l2i` takes a FluxAutoEncoder without raising, but that branch
+                # skips the Wan denormalisation and decodes a WAN21_16 latent in FLUX's basis:
+                # measured against the Anima VAE on real weights, 6.10 dB PSNR, 0.93 MAE, a
+                # magenta moire in place of the subject. Accepting it is a silent corruption, not
+                # a fallback. See `tests/backend/architectures/test_vae.py`.
                 VaeCompatibility(BaseModelType.Anima),
                 VaeCompatibility(BaseModelType.QwenImage),
                 VaeCompatibility(BaseModelType.Wan, latent_channels=16),
-                VaeCompatibility(BaseModelType.Flux),
             }
         )
     ),

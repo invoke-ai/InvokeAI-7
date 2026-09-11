@@ -1,9 +1,11 @@
 import type { DynamicPromptsExpansion } from '@features/generation/react';
+import type { ArchitectureCapabilitiesSnapshot } from '@features/generation/runtime';
 import type { GraphWidgetSource } from '@workbench/graphWidgets';
 import type { InvocationRoute, ResultDestination } from '@workbench/invocationContracts';
 import type { WidgetTypeId } from '@workbench/widgetContracts';
 
 import { useDynamicPrompts } from '@features/generation/react';
+import { getArchitectureCapabilitiesSnapshot, subscribeArchitectureCapabilities } from '@features/generation/runtime';
 import {
   getEffectivePrompts,
   normalizeGenerateSettings,
@@ -14,6 +16,7 @@ import { ensureModelsLoaded, useModelsSelector } from '@features/models';
 import { useInvocationTemplatesSelector } from '@features/workflow/react';
 import { localizeForLoopValidationReason } from '@features/workflow/utility';
 import { useMountEffect } from '@platform/react/useMountEffect';
+import { useExternalStoreSelector } from '@platform/state/selectors';
 import { submitActiveInvocation } from '@workbench/activeInvocationSubmission';
 import { useIsCanvasInvocationPreparing } from '@workbench/canvasInvocationPreparation';
 import { getPlacedWidgetTypeIds, getVisibleWidgetTypeIds, graphWidgetSources } from '@workbench/graphWidgets';
@@ -32,6 +35,8 @@ import { useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
 const selectInvocationRouteInput = createInvocationRouteInputSelector();
+const selectCapabilitiesRevision = (snapshot: ArchitectureCapabilitiesSnapshot): number => snapshot.revision;
+
 const areTypeIdSetsEqual = (left: ReadonlySet<WidgetTypeId>, right: ReadonlySet<WidgetTypeId>): boolean =>
   left.size === right.size && [...left].every((typeId) => right.has(typeId));
 
@@ -82,6 +87,14 @@ export const useInvocationState = (): InvocationState => {
   // Project-graph route validation reads the invocation templates imperatively;
   // subscribing here keeps the resolved route live while they load.
   useInvocationTemplatesSelector((snapshot) => snapshot.status);
+  // Same shape, for the architecture capability table: `getGenerationValidationReasons` fails closed
+  // while it is absent, so a load that only succeeds on retry has to reach Invoke on its own rather
+  // than waiting for the next unrelated edit to re-render this hook.
+  useExternalStoreSelector(
+    subscribeArchitectureCapabilities,
+    getArchitectureCapabilitiesSnapshot,
+    selectCapabilitiesRevision
+  );
   useMountEffect(() => {
     void ensureModelsLoaded();
   });

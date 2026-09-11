@@ -215,3 +215,29 @@ describe('without the backend capability table', () => {
     expect(resolveGenerateWidgetValues({ models: [model], storedValues: {} })).toBeNull();
   });
 });
+
+describe('resolveGenerateWidgetValues and an architecture the table omits', () => {
+  const rows = capabilitiesFixture as ArchitectureCapabilitiesRow[];
+
+  it('will not select a model whose architecture the backend did not describe', () => {
+    // The resolver's patch is persisted. Selecting a model with no row would write the fallback's
+    // grid, optimal size, step count and scheduler into the project file -- the same reason the
+    // whole resolver waits for the table in the first place, one level finer.
+    setArchitectureCapabilities(rows.filter((row) => row.base !== 'cogview4'));
+
+    expect(
+      resolveGenerateWidgetValues({ models: [createModel('cogview', { base: 'cogview4' })], storedValues: undefined })
+    ).toBeNull();
+  });
+
+  it('falls back to a described model rather than blocking the whole catalog', () => {
+    setArchitectureCapabilities(rows.filter((row) => row.base !== 'cogview4'));
+
+    const resolved = resolveGenerateWidgetValues({
+      models: [createModel('cogview', { base: 'cogview4' }), createModel('sdxl-model')],
+      storedValues: { modelKey: 'cogview' },
+    });
+
+    expect(resolved?.values.modelKey).toBe('sdxl-model');
+  });
+});

@@ -10,6 +10,20 @@ docker/** text eol=lf
 #
 # Only the working copy changes: these files are already stored with LF (`* text=auto` normalizes on
 # commit), so nothing in history is rewritten.
+#
+# It is not automatic on an existing checkout, and nothing warns you. Git applies `eol=lf` when it
+# writes a file, and a pull only writes files whose content changed -- so a CRLF working tree
+# becomes a mixed one: the files this revision touched are LF, the thousands it did not stay CRLF,
+# and `format:check` keeps failing, now on files nobody edited. Rewrite the rest once, from the
+# repository root, with nothing you want to keep uncommitted (this discards working-copy changes;
+# `git stash` first if you have any):
+#
+#     git rm --cached -r .
+#     git reset --hard
+#
+# `rm --cached` empties the index without touching disk; `reset --hard` then rewrites both from
+# HEAD, which is the only step that applies these rules to files whose content did not change.
+# `git status` is clean afterwards on a checkout that was already converted.
 invokeai/frontend/**/*.ts text eol=lf
 invokeai/frontend/**/*.tsx text eol=lf
 invokeai/frontend/**/*.mts text eol=lf

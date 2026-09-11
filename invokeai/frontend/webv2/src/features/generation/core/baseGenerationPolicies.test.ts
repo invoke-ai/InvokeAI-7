@@ -1297,3 +1297,58 @@ describe('without the capability table', () => {
     expect(getGenerationValidationReasons(model, settings)[0] ?? '').not.toMatch(/capabilities/i);
   });
 });
+
+describe('with a table that omits this architecture', () => {
+  /**
+   * A served table is not the same as a described architecture. `isSupportedGenerateModel` answers
+   * from a static list of bases webv2 can build a graph for; a backend build that does not serve a
+   * row for one of them used to fall straight through to `FALLBACK_GENERATION_CONFIG` -- grid 8,
+   * 30 steps, CFG 7, euler_a -- and compile. Reference images already failed closed on a missing
+   * row; the rest of policy does now too.
+   */
+  const withoutBase = (base: string) => architectureCapabilitiesFixture.filter((row) => row.base !== base);
+
+  it('blocks a supported base the backend did not describe', () => {
+    const model = createModel('cogview4');
+    const settings = createSettings(model);
+
+    setArchitectureCapabilities(withoutBase('cogview4'));
+
+    expect(getGenerationValidationReasons(model, settings)).toEqual([
+      'The backend does not describe the cogview4 architecture, so it cannot be generated with.',
+    ]);
+  });
+
+  it('leaves the architectures it did describe alone', () => {
+    const model = createModel('sdxl');
+
+    setArchitectureCapabilities(withoutBase('cogview4'));
+
+    expect(getGenerationValidationReasons(model, createSettings(model))).toEqual([]);
+  });
+
+  it('never asks the table about an external generator, which has no architecture row', () => {
+    setArchitectureCapabilities(withoutBase('cogview4'));
+
+    expect(getGenerationValidationReasons(externalModel, createSettings(externalModel))).toEqual([]);
+  });
+});
+
+describe('getGenerationDimensions and the variant it dispatches on', () => {
+  it('answers from the variant row when one differs, which its parameter type now admits', () => {
+    // `getBaseGenerationConfig` prefers a variant row and `optimalSide` comes from that row's
+    // default canvas, so the answer is variant-specific -- but the signature used to accept only
+    // `{ base, type }`, so a caller that built one of those type-checked and silently got the
+    // architecture's row. Every served variant declares 1024x1024 today, so the divergence has to
+    // be constructed to be observed at all.
+    const schnell = architectureCapabilitiesFixture.find((row) => row.base === 'flux' && row.variant === 'schnell')!;
+
+    setArchitectureCapabilities([
+      ...architectureCapabilitiesFixture.filter((row) => row !== schnell),
+      { ...schnell, defaults: { ...schnell.defaults!, height: 512, width: 512 } },
+    ]);
+
+    expect(getGenerationDimensions({ base: 'flux', type: 'main', variant: 'schnell' }).optimal).toBe(512);
+    expect(getGenerationDimensions({ base: 'flux', type: 'main' }).optimal).toBe(1024);
+  });
+});

@@ -11,10 +11,12 @@ import { afterEach, describe, expect, it } from 'vitest';
 import fixture from './__fixtures__/architectureCapabilities.json';
 import {
   type ArchitectureCapabilitiesRow,
+  getArchitectureCapabilitiesRevision,
   getArchitectureCapabilityRow,
   getArchitectureFeatures,
   getArchitectureGenerationConfig,
   hasArchitectureCapabilities,
+  onArchitectureCapabilitiesChanged,
   resetArchitectureCapabilities,
   setArchitectureCapabilities,
   toBaseGenerationConfig,
@@ -137,5 +139,47 @@ describe('the registry', () => {
     expect(hasArchitectureCapabilities()).toBe(false);
     expect(getArchitectureCapabilityRow('sd-1')).toBeUndefined();
     expect(getArchitectureFeatures('sd-1')).toBeUndefined();
+  });
+});
+
+describe('publishing the table', () => {
+  it('stays empty when a malformed row makes the mapping throw', () => {
+    // The wire type is applied by an unchecked `as` in the api module, so a row the backend never
+    // meant to serve is reachable. Publishing the rows before mapping them left the registry
+    // saying "loaded" over an empty config map: the widget would show the load error while every
+    // fail-closed gate elsewhere opened onto fallback policy for every architecture.
+    const malformed = [...rows, { base: 'broken', variant: null } as unknown as ArchitectureCapabilitiesRow];
+
+    expect(() => setArchitectureCapabilities(malformed)).toThrow();
+    expect(hasArchitectureCapabilities()).toBe(false);
+    expect(getArchitectureCapabilitiesRevision()).toBe(0);
+    expect(getArchitectureGenerationConfig('sd-1')).toBeUndefined();
+  });
+
+  it('keeps the previous table intact when a later push is malformed', () => {
+    setArchitectureCapabilities(rows);
+    const revision = getArchitectureCapabilitiesRevision();
+
+    expect(() =>
+      setArchitectureCapabilities([{ base: 'broken', variant: null } as unknown as ArchitectureCapabilitiesRow])
+    ).toThrow();
+    expect(getArchitectureCapabilitiesRevision()).toBe(revision);
+    expect(getArchitectureGenerationConfig('sd-1')?.defaults.steps).toBe(30);
+  });
+
+  it('notifies subscribers when the table is replaced or dropped', () => {
+    // The single subscription contract behind every imperative reader: renders, the bbox grid, the
+    // Invoke gate and the bbox <-> dims sync all re-read on this.
+    const seen: number[] = [];
+    const unsubscribe = onArchitectureCapabilitiesChanged(() => seen.push(getArchitectureCapabilitiesRevision()));
+
+    setArchitectureCapabilities(rows);
+    resetArchitectureCapabilities();
+    // Already empty: nothing changed, so nothing is announced.
+    resetArchitectureCapabilities();
+    unsubscribe();
+    setArchitectureCapabilities(rows);
+
+    expect(seen).toEqual([1, 0]);
   });
 });

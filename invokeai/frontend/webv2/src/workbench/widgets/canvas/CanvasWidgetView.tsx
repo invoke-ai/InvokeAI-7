@@ -25,7 +25,7 @@ import {
 import { lazy, Suspense, useCallback, useEffect, useEffectEvent, useLayoutEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { gridSizeForModelBase } from './bboxGrid';
+import { useModelGridSize } from './bboxGrid';
 import { CanvasBottomOverlay } from './CanvasBottomOverlay';
 import { copyBlobToClipboard, decodeImageBlob, readClipboardImage } from './canvasClipboard';
 import {
@@ -108,15 +108,21 @@ export const CanvasWidgetView = ({ runtime }: WidgetViewProps) => {
   // shared per-layer menu or the global menu at the pointer.
   const [contextMenuTarget, setContextMenuTarget] = useState<CanvasContextMenuTarget | null>(null);
   const closeContextMenu = useCallback(() => setContextMenuTarget(null), []);
-  // The bbox tool snaps to a model-dependent grid; the engine is model-agnostic,
-  // so read the active generate model's base and feed the grid size in.
+  // The bbox tool snaps to a model-dependent grid; the engine is model-agnostic, so read the
+  // active generate model and feed the grid size in. Two primitive selectors rather than one
+  // object, so the subscription compares by value.
   const modelBase = useActiveProjectSelector((project) => {
     const values = getProjectWidgetValues(project, 'generate') as { model?: { base?: unknown } } | undefined;
     return typeof values?.model?.base === 'string' ? values.model.base : null;
   });
+  const modelVariant = useActiveProjectSelector((project) => {
+    const values = getProjectWidgetValues(project, 'generate') as { model?: { variant?: unknown } } | undefined;
+    return typeof values?.model?.variant === 'string' ? values.model.variant : null;
+  });
+  const bboxGrid = useModelGridSize(modelBase, modelVariant);
   useEffect(() => {
-    engine?.viewport.setBboxGrid(gridSizeForModelBase(modelBase));
-  }, [engine, modelBase]);
+    engine?.viewport.setBboxGrid(bboxGrid);
+  }, [bboxGrid, engine]);
 
   // Canvas view settings (checkerboard / grid / invert-scroll) persist in the
   // canvas widget's per-project values; the engine only reads its stores, so

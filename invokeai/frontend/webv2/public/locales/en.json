@@ -2700,6 +2700,7 @@
       "hideStagingThumbnails": "Hide staging thumbnails",
       "import": {
         "blocked": "Finish the current canvas operation before adding images.",
+        "capabilitiesUnavailable": "The resize target depends on model capabilities, which haven't loaded yet. Try again in a moment.",
         "control": "Control Layer",
         "dropControl": "Add as Control Layer",
         "dropInpaintMask": "Add as Inpaint Mask",
