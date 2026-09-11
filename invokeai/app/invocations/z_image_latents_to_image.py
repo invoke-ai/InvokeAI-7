@@ -44,8 +44,8 @@ class ZImageLatentsToImageInvocation(BaseInvocation, WithMetadata, WithBoard):
     vae: VAEField = InputField(description=FieldDescriptions.vae, input=Input.Connection)
     tiled: bool = InputField(default=False, description=FieldDescriptions.tiled)
     # NOTE: tile_size = 0 is a special value. We use this rather than `int | None`, because the workflow UI does not
-    # offer a way to directly set None values. The size applies to InvokeAI's FLUX AutoEncoder; a diffusers
-    # AutoencoderKL tiles with its own geometry, which it does not expose as a single settable size.
+    # offer a way to directly set None values. InvokeAI's FLUX AutoEncoder takes the size as given; on a diffusers
+    # AutoencoderKL it is snapped down to a tile that VAE's own tiled decode can assemble -- see `scoped_vae_tiling`.
     tile_size: int = InputField(default=0, multiple_of=8, description=FieldDescriptions.vae_tile_size)
 
     @torch.no_grad()
@@ -121,6 +121,11 @@ class ZImageLatentsToImageInvocation(BaseInvocation, WithMetadata, WithBoard):
                     # The working-memory estimate was insufficient on this system. Retry once with
                     # tiling, which caps the peak allocation regardless of resolution.
                     context.util.signal_progress("VAE decode ran out of memory, retrying tiled")
+                    context.logger.warning(
+                        "VAE decode ran out of memory; retrying with tiling. The tiled result is not identical to an "
+                        "untiled decode -- the decoder's normalisation and attention are global, so the difference is "
+                        "spread over the image rather than confined to the seams."
+                    )
                     # Drop the failed attempt's traceback before retrying. It pins that
                     # decode's frames, and their locals hold the full-resolution
                     # activations -- exception/traceback/frame is a reference cycle rooted

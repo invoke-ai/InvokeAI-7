@@ -123,3 +123,63 @@ def test_an_unquantized_checkpoint_is_unaffected(monkeypatch, tmp_path) -> None:
     assert isinstance(model.layers[0].proj, torch.nn.Linear)
     assert not isinstance(model.layers[0].proj, Int8ConvrotLinear)
     assert torch.equal(model.layers[0].proj.weight, weight)
+
+
+class _TinyTimestepEmbedder(torch.nn.Module):
+    """Z-Image's `t_embedder` in miniature. Its real forward reads `self.mlp[0].weight.dtype` to
+    pick the dtype it casts its activations to, which is why the model declares it
+    precision-sensitive -- and why an `Int8ConvrotLinear` there (weight dtype `torch.int8`,
+    `is_floating_point()` False, no `compute_dtype` attribute) sends that branch somewhere the
+    model was never meant to run."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.mlp = torch.nn.ModuleList([torch.nn.Linear(CONVROT_GROUP_SIZE, 4, bias=False)])
+
+
+class _TinyZImageWithTimestepEmbedder(_TinyZImage):
+    _skip_layerwise_casting_patterns = ["t_embedder", "cap_embedder"]
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.t_embedder = _TinyTimestepEmbedder()
+
+
+def test_a_precision_sensitive_layer_is_not_left_int8(monkeypatch, tmp_path) -> None:
+    """The model's own `_skip_layerwise_casting_patterns` has to be honored on the int8 branch too.
+    The fp8 branch always read it; the int8 branch did not, so Z-Image's timestep embedder stayed
+    quantized and its forward picked its activation dtype off a `torch.int8` weight."""
+    torch.manual_seed(3)
+    sensitive = torch.randn(4, CONVROT_GROUP_SIZE)
+    ordinary = torch.randn(4, CONVROT_GROUP_SIZE)
+    sensitive_q, sensitive_scale = _quantize_convrot(sensitive)
+    ordinary_q, ordinary_scale = _quantize_convrot(ordinary)
+    state_dict = {
+        "t_embedder.mlp.0.weight": sensitive_q,
+        "t_embedder.mlp.0.weight_scale": sensitive_scale,
+        "t_embedder.mlp.0.comfy_quant": _marker_blob(MARKER),
+        "layers.0.proj.weight": ordinary_q,
+        "layers.0.proj.weight_scale": ordinary_scale,
+        "layers.0.proj.comfy_quant": _marker_blob(MARKER),
+    }
+    loader, config = _driver(monkeypatch, tmp_path, state_dict)
+    import diffusers
+
+    monkeypatch.setattr(diffusers, "ZImageTransformer2DModel", _TinyZImageWithTimestepEmbedder, raising=False)
+
+    model = loader._load_from_singlefile(config)
+
+    embedder_linear = model.t_embedder.mlp[0]
+    assert not isinstance(embedder_linear, Int8ConvrotLinear)
+    assert embedder_linear.weight.dtype is torch.float32
+    # Dequantized *with* its scale and derotation, not merely cast: the whole point of widening it
+    # here rather than dropping the marker.
+    assert torch.corrcoef(torch.stack([embedder_linear.weight.flatten(), sensitive.flatten()]))[0, 1] > 0.999
+
+    # Everything else still pays the one byte per weight this scheme exists for.
+    assert isinstance(model.layers[0].proj, Int8ConvrotLinear)
+    assert model.layers[0].proj.weight.dtype is torch.int8
+
+    # And the reservation covers the widened layer at its post-split width, not at one byte.
+    (reserved,), _ = loader._ram_cache.make_room.call_args
+    assert reserved >= sensitive.nelement() * 4 + ordinary_q.nelement()

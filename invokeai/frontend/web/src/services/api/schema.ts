@@ -20774,7 +20774,7 @@ export type components = {
          *         download_cache_dir: Path to the directory that contains dynamically downloaded models.
          *         legacy_conf_dir: Path to directory of legacy checkpoint config files.
          *         db_dir: Path to InvokeAI databases directory.
-         *         db_synchronous: SQLite durability setting. `full` (the default) flushes every commit to disk. `normal` acknowledges commits without waiting for that flush - measured at roughly 12x shorter commits on an SSD - and cannot corrupt the database, because WAL guarantees consistency either way. What it gives up is the most recent transactions on a power loss or OS crash: a just-written image record or queue status, not the image file itself.<br>Valid values: `full`, `normal`
+         *         db_synchronous: SQLite durability setting. `full`, the default and what InvokeAI has always used, flushes every commit to disk. `normal` acknowledges commits without waiting for that flush - measured at roughly 12x shorter commits on an SSD - and cannot corrupt the database under WAL, which is why it is refused, with a warning, when WAL is unavailable for the database file. What `normal` gives up is the most recent transactions on a power loss or OS crash: a just-written image record or queue status, not the image file itself.<br>Valid values: `full`, `normal`
          *         outputs_dir: Path to directory for outputs.
          *         image_subfolder_strategy: Strategy for organizing images into subfolders. 'flat' stores all images in a single folder. 'date' organizes by YYYY/MM/DD. 'type' organizes by image category. 'hash' uses first 2 characters of UUID for filesystem performance.<br>Valid values: `flat`, `date`, `type`, `hash`
          *         custom_nodes_dir: Path to directory for custom nodes.
@@ -20810,7 +20810,7 @@ export type components = {
          *         pid_memory_optimization: Enable experimental PiD decode memory optimizations. Roughly halves the peak activation memory of a PiD decode; in exchange the decoded image changes slightly, because neither the chunked pixel pathway nor the float32 sampler intermediates are bit-exact with the default path.
          *         attention_type: Attention type.<br>Valid values: `auto`, `normal`, `xformers`, `sliced`, `torch-sdp`
          *         attention_slice_size: Slice size, valid when attention_type=="sliced".<br>Valid values: `auto`, `balanced`, `max`, `1`, `2`, `3`, `4`, `5`, `6`, `7`, `8`
-         *         force_tiled_decode: Whether to enable tiled VAE decode (reduces memory consumption with some performance penalty).
+         *         force_tiled_decode: Whether to enable tiled VAE decode (reduces memory consumption with some performance penalty). A tiled decode is not pixel-identical to a single-pass one: a VAE decoder normalises and attends over the whole image, so the difference is spread across it rather than confined to the tile seams. As of this release the setting also applies to FLUX.1, which previously ignored it.
          *         pil_compress_level: The compress_level setting of PIL.Image.save(), used for PNG encoding. All settings are lossless. 0 = no compression, 1 = fastest with slightly larger filesize, 9 = slowest with smallest filesize. 1 is typically the best setting.
          *         max_queue_size: Maximum number of items in the session queue.
          *         session_queue_mode: Session queue mode. Use 'FIFO' for traditional first-in-first-out, or 'round_robin' to serve each user's jobs in turn. In single-user mode, FIFO is always used regardless of this setting.<br>Valid values: `FIFO`, `round_robin`
@@ -20972,7 +20972,7 @@ export type components = {
             db_dir?: string;
             /**
              * Db Synchronous
-             * @description SQLite durability setting. `full` (the default) flushes every commit to disk. `normal` acknowledges commits without waiting for that flush - measured at roughly 12x shorter commits on an SSD - and cannot corrupt the database, because WAL guarantees consistency either way. What it gives up is the most recent transactions on a power loss or OS crash: a just-written image record or queue status, not the image file itself.
+             * @description SQLite durability setting. `full`, the default and what InvokeAI has always used, flushes every commit to disk. `normal` acknowledges commits without waiting for that flush - measured at roughly 12x shorter commits on an SSD - and cannot corrupt the database under WAL, which is why it is refused, with a warning, when WAL is unavailable for the database file. What `normal` gives up is the most recent transactions on a power loss or OS crash: a just-written image record or queue status, not the image file itself.
              * @default full
              * @enum {string}
              */
@@ -21235,7 +21235,7 @@ export type components = {
             attention_slice_size?: "auto" | "balanced" | "max" | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
             /**
              * Force Tiled Decode
-             * @description Whether to enable tiled VAE decode (reduces memory consumption with some performance penalty).
+             * @description Whether to enable tiled VAE decode (reduces memory consumption with some performance penalty). A tiled decode is not pixel-identical to a single-pass one: a VAE decoder normalises and attends over the whole image, so the difference is spread across it rather than confined to the tile seams. As of this release the setting also applies to FLUX.1, which previously ignored it.
              * @default false
              */
             force_tiled_decode?: boolean;

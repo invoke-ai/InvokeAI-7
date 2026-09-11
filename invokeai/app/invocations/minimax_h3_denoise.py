@@ -74,7 +74,10 @@ from invokeai.backend.patches.lora_conversions.minimax_h3_lora_conversion_utils 
     is_minimax_h3_adaln_layer_path,
 )
 from invokeai.backend.patches.model_patch_raw import ModelPatchRaw
-from invokeai.backend.quantization.int8_convrot import Int8ConvrotLinear
+from invokeai.backend.quantization.int8_convrot import (
+    peak_int8_dequant_transient_bytes,
+    requires_sidecar_patching,
+)
 from invokeai.backend.stable_diffusion.diffusers_pipeline import PipelineIntermediateState
 from invokeai.backend.stable_diffusion.diffusion.conditioning_data import MiniMaxH3ConditioningInfo
 from invokeai.backend.util.devices import TorchDevice
@@ -467,7 +470,14 @@ class MiniMaxH3DenoiseInvocation(BaseInvocation):
             return step_callback
 
         estimated_working_memory = self._estimate_working_memory(state.layout, num_loras=len(self.transformer.loras))
+        transformer_config = context.models.get_config(self.transformer.transformer)
         transformer_info = context.models.load(self.transformer.transformer)
+        # An int8_convrot build materializes each linear's dequantized, derotated weight per forward
+        # (~620 MB for H3's fused-SwiGLU fc1), which the model's resident size does not account for.
+        # Added to the activation estimate rather than compared against it: the transient is alive
+        # inside the same forward. Zero on a bf16 build. Read from the unlocked model, before the
+        # VRAM lock the reservation applies to.
+        estimated_working_memory += peak_int8_dequant_transient_bytes(transformer_info.model, torch.bfloat16)
 
         # LoRA patches are materialized (RAM cache) before any VRAM locks. On the AdaLN-pruned
         # transformer the AdaLN layers cannot be weight patches (their 2688-dim input space was
@@ -526,8 +536,9 @@ class MiniMaxH3DenoiseInvocation(BaseInvocation):
             if lora_patch_specs or adaln_patches:
                 # Quantized (int8-convrot) layers cannot take direct weight patches; route every
                 # patched module through the sidecar path when any are present. bf16 models keep
-                # the faster direct patching.
-                force_sidecar = any(isinstance(m, Int8ConvrotLinear) for m in transformer.modules())
+                # the faster direct patching. Asked of the loaded module tree *and* the format,
+                # through the one helper every architecture on this scheme shares.
+                force_sidecar = requires_sidecar_patching(transformer, transformer_config.format)
                 stack.enter_context(
                     LayerPatcher.apply_smart_model_patches(
                         model=transformer,

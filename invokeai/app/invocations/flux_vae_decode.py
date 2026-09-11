@@ -42,13 +42,19 @@ class FluxVaeDecodeInvocation(BaseInvocation, WithMetadata, WithBoard):
         input=Input.Connection,
     )
 
-    def _vae_decode(self, vae_info: LoadedModel, latents: torch.Tensor) -> Image.Image:
+    def _vae_decode(self, context: InvocationContext, vae_info: LoadedModel, latents: torch.Tensor) -> Image.Image:
         assert isinstance(vae_info.model, (AutoEncoder, AutoencoderKL))
+
+        # This node has no tiling fields, so the config switch is the only way a user can ask for a
+        # tiled decode here -- the same one the Z-Image, SD and Qwen-Image decode nodes honour. 0 is
+        # the "use the VAE's default tile" sentinel shared by the estimator and `scoped_vae_tiling`.
+        use_tiling = context.config.get().force_tiled_decode
+        tile_size = 0 if use_tiling else None
 
         # Only estimate working memory for BFL AutoEncoder (diffusers VAE handles this internally)
         if isinstance(vae_info.model, AutoEncoder):
             estimated_working_memory = estimate_vae_working_memory_flux(
-                operation="decode", image_tensor=latents, vae=vae_info.model
+                operation="decode", image_tensor=latents, vae=vae_info.model, tile_size=tile_size
             )
         else:
             estimated_working_memory = 0
@@ -80,17 +86,22 @@ class FluxVaeDecodeInvocation(BaseInvocation, WithMetadata, WithBoard):
                     return vae.decode(latents)
                 return vae.decode(latents, return_dict=False)[0]
 
-            # This node has no tiling controls, so it decodes untiled -- but says so explicitly
-            # rather than inheriting whatever the last node to touch this shared, cached VAE left
-            # behind, and restores that state afterwards.
+            # The tiling state is set explicitly for this decode rather than inherited from whatever
+            # the last node to touch this shared, cached VAE left behind, and restored afterwards.
             try:
-                with scoped_vae_tiling(vae, None):
+                with scoped_vae_tiling(vae, tile_size):
                     img = decode()
             except RuntimeError as e:
-                if not is_oom_error(e):
+                if use_tiling or not is_oom_error(e):
                     raise
                 # The working-memory estimate was insufficient on this system. Retry once with
                 # tiling, which caps the peak allocation regardless of resolution.
+                context.util.signal_progress("VAE decode ran out of memory, retrying tiled")
+                context.logger.warning(
+                    "VAE decode ran out of memory; retrying with tiling. The tiled result is not identical to an "
+                    "untiled decode -- the decoder's normalisation and attention are global, so the difference is "
+                    "spread over the image rather than confined to the seams."
+                )
                 # Drop the failed attempt's traceback before retrying. It pins that
                 # decode's frames, and their locals hold the full-resolution
                 # activations -- exception/traceback/frame is a reference cycle rooted
@@ -113,7 +124,7 @@ class FluxVaeDecodeInvocation(BaseInvocation, WithMetadata, WithBoard):
         latents = context.tensors.load(self.latents.latents_name)
         vae_info = context.models.load(self.vae.vae)
         context.util.signal_progress("Running VAE")
-        image = self._vae_decode(vae_info=vae_info, latents=latents)
+        image = self._vae_decode(context=context, vae_info=vae_info, latents=latents)
 
         TorchDevice.empty_cache()
         image_dto = context.images.save(image=image)

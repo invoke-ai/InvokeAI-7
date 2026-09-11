@@ -349,13 +349,19 @@ class AutoEncoder(nn.Module):
         are in output pixels.
 
         `tile_overlap` defaults to DEFAULT_TILE_OVERLAP, shrunk to half the tile if the caller asked
-        for a tile that small. The alternative -- raising -- would turn a tile size the workflow UI
-        lets a user type into a failed generation.
+        for a tile that small, rather than raising: that would turn a tile size the workflow UI lets
+        a user type into a failed generation. The shrink bottoms out at one `spatial_compression`
+        step, below which there is no overlap left to blend and the geometry is rejected.
 
-        Note on accuracy: at the default 512/128 geometry a tiled decode reproduces the single-pass
-        one exactly (float32 epsilon, measured). It degrades as tiles get small relative to the
-        image, because more tiles mean the blend bands sit closer to the tiles' own zero-padded
-        borders. Prefer a large tile that fits over a small one that fits comfortably.
+        Note on accuracy: a tiled decode does not reproduce the single-pass one. The decoder's
+        GroupNorms normalise over the whole spatial extent and `mid.attn_1` is global, so a tile
+        sees different statistics than the full latent does -- and the difference is spread over the
+        whole image rather than confined to the seams. Measured on the tiny test fixture at the
+        default 512/128 geometry: max |tiled - untiled| of 0.12 at 768px and 0.19 at 1536px, against
+        an output range of about +/-3. What *is* exact is the tile geometry. Accuracy degrades
+        further as tiles get small relative to the image, because more tiles mean the blend bands
+        sit closer to the tiles' own zero-padded borders. Prefer a large tile that fits over a small
+        one that fits comfortably.
         """
         if tile_overlap is None:
             tile_overlap = min(DEFAULT_TILE_OVERLAP, tile_sample_min_size // 2)
@@ -366,6 +372,13 @@ class AutoEncoder(nn.Module):
             )
         if tile_overlap % self.spatial_compression != 0:
             raise ValueError(f"tile_overlap must be divisible by {self.spatial_compression}, got {tile_overlap}.")
+        if tile_overlap <= 0:
+            # Blending needs a band to blend over: `merge_tiles_with_linear_blending` builds its
+            # gradient with `np.linspace(..., num=blend_amount)`, so a zero overlap yields no
+            # gradient at all and the tiles butt together with a hard seam. Reachable only from a
+            # direct call -- the nodes go through `resolve_tile_size`, which floors at 128 -- and
+            # only for `tile_sample_min_size=8`, whose rounded-down automatic overlap is 0.
+            raise ValueError(f"tile_overlap must be greater than 0, got {tile_overlap}.")
         if tile_overlap >= tile_sample_min_size:
             raise ValueError(
                 f"tile_overlap ({tile_overlap}) must be smaller than tile_sample_min_size ({tile_sample_min_size})."
@@ -406,8 +419,12 @@ class AutoEncoder(nn.Module):
         """Decode `z` as overlapping tiles, blended back together linearly.
 
         `z` is expected to already be denormalised, i.e. this consumes what `decode()` hands to
-        `self.decoder`. Peak memory is bounded by one tile plus the destination image, because each
-        finished tile is moved to the CPU before the next one is decoded.
+        `self.decoder`. *Device* memory is what tiling bounds, to one tile: every finished tile is
+        moved to the CPU as soon as it is decoded. Host memory is not bounded -- the tiles
+        accumulate there until the merge runs after the loop, and the stack at the end copies the
+        merged image again. At 4096x4096 with the default geometry the host peak is 121 tiles of
+        512x512x3 float32 (~380MB) plus the merged array and the stacked copy of it (~200MB each),
+        so ~780MB, against ~200MB of device memory for the result.
 
         The tile layout is computed in *latent* space and scaled up afterwards. Computing it in pixel
         space would be wrong: `calc_tiles_min_overlap` distributes the leftover with integer
@@ -422,6 +439,16 @@ class AutoEncoder(nn.Module):
 
         # Nothing to gain from tiling something that already fits in a single tile.
         if latent_height <= latent_tile_size and latent_width <= latent_tile_size:
+            return self.decoder(z)
+
+        # `calc_tiles_min_overlap` clamps the tile down to the image on each axis and then divides
+        # by `tile - min_overlap`, so an axis exactly as small as the overlap divides by zero -- a
+        # 128x1024 image at the default 512/128 geometry, reachable from the node field, from
+        # `force_tiled_decode`, and from the OOM retry, where it would replace the OOM with a
+        # division-by-zero. Shrink the overlap to fit the smallest clamped tile; if nothing usable is
+        # left the layout is degenerate, and at that size a single pass is both correct and cheap.
+        latent_overlap = min(latent_overlap, min(latent_tile_size, latent_height, latent_width) - 1)
+        if latent_overlap < 1:
             return self.decoder(z)
 
         latent_tiles = calc_tiles_min_overlap(
@@ -473,7 +500,10 @@ class AutoEncoder(nn.Module):
                 dst_image=merged,
                 tiles=pixel_tiles,
                 tile_images=tile_images,
-                blend_amount=self.tile_overlap,
+                # Derived from the overlap the layout was actually built with, not from
+                # `self.tile_overlap`: the merge requires every non-edge tile overlap to be at least
+                # `blend_amount`, and the shrink above can put the two below the configured value.
+                blend_amount=latent_overlap * scale,
             )
             batch_images.append(torch.from_numpy(merged).permute(2, 0, 1))
 

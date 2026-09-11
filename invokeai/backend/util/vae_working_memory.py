@@ -77,6 +77,31 @@ def estimate_vae_working_memory_cogview4(
     return int(working_memory)
 
 
+# What a tiled decode does *not* bound: the assembled image, several times over, per output pixel.
+#
+# `AutoEncoder._tiled_decode` moves each tile to the host and merges there, so it lands one stacked
+# copy back on the device. Diffusers' `AutoencoderKL.tiled_decode` -- the other class this estimator
+# serves, through the Z-Image node -- assembles entirely on the device: every decoded tile stays
+# live in `rows` while the cropped rows and then the concatenated result are built. On top of
+# either, a decode node runs `clamp(-1, 1)`, `+ 1.0` and `* 127.5` over the result and then
+# `.byte()` it: more element-size RGB buffers plus the 8-bit one.
+#
+# Measured on this repo's fixtures (RTX 4090, fp32), device peak over baseline against one full
+# image, at 1024px and 2048px:
+#
+#   InvokeAI AutoEncoder   196.0 -> 200.0 MiB   image 12 -> 48 MiB   marginal slope 0.11
+#   diffusers AutoencoderKL 178.7 -> 235.1 MiB  image 12 -> 48 MiB   marginal slope 1.57
+#
+# The BFL class merges on the *host*, so almost nothing image-sized is on the device until the
+# final `stack(...).to(device)`, by which point the tile activations have been freed; the diffusers
+# class assembles on-device and grows at ~1.6 copies. Both peaks are dominated by the tile term
+# above, which is why the earlier value of 7 -- derived rather than measured -- over-reserved by
+# roughly 7x on the node it was named for. Four covers the measured slope plus the node's in-window
+# post-processing, and one constant still covers both classes.
+_FLUX_VAE_TILED_IMAGE_COPIES = 4
+_IMAGE_CHANNELS = 3
+
+
 def estimate_vae_working_memory_flux(
     operation: Literal["encode", "decode"],
     image_tensor: torch.Tensor,
@@ -85,10 +110,14 @@ def estimate_vae_working_memory_flux(
 ) -> int:
     """Estimate the working memory required by the invocation in bytes.
 
-    `tile_size` is in output pixels and defaults to None, i.e. a single-pass decode -- the six
-    existing call sites depend on that signature. When set, the estimate is bounded by one tile
-    instead of the whole image, because a tiled decode never holds more than that. `tile_size <= 0`
-    is the nodes' "use the default" sentinel; see `resolve_tile_size`.
+    `tile_size` is in output pixels and defaults to None, i.e. a single-pass decode -- the existing
+    call sites that pass no tile depend on that signature. When set, the decode term is bounded by
+    one tile instead of the whole image, and the full-resolution assembly and post-processing that
+    tiling does *not* bound are added on top. `tile_size <= 0` is the nodes' "use the default"
+    sentinel; see `resolve_tile_size`.
+
+    Only `decode` tiles: `AutoEncoder.encode` never consults `use_tiling`. So a `tile_size` with
+    `operation="encode"` would price a tiled encode that cannot happen, and no call site passes one.
     """
 
     latent_scale_factor_for_operation = LATENT_SCALE_FACTOR if operation == "decode" else 1
@@ -98,16 +127,28 @@ def estimate_vae_working_memory_flux(
     # Encoding uses ~45% the working memory as decoding.
     scaling_constant = 2200 if operation == "decode" else 1100
 
-    if tile_size is not None:
-        # Resolved against a module-level constant, never by reading `vae.tile_sample_min_size`: the
-        # VAE belongs to the model cache, so that attribute reflects whatever the previous
-        # invocation set rather than the default this node is asking for.
-        out_h = out_w = resolve_tile_size(tile_size)
+    out_h = latent_scale_factor_for_operation * image_tensor.shape[-2]
+    out_w = latent_scale_factor_for_operation * image_tensor.shape[-1]
+
+    # Resolved against a module-level constant, never by reading `vae.tile_sample_min_size`: the VAE
+    # belongs to the model cache, so that attribute reflects whatever the previous invocation set
+    # rather than the default this node is asking for.
+    tile = resolve_tile_size(tile_size) if tile_size is not None else None
+
+    # `_tiled_decode` short-circuits to a single pass once the tile covers the image on both axes,
+    # so a tile that large has to be priced as the untiled decode it will actually run. The node
+    # field carries no upper bound: a 2048px tile on a 1024px image would otherwise reserve ~23GB
+    # for a decode that needs ~4.6GB, evicting the transformer from the cache for nothing.
+    if tile is not None and (tile < out_h or tile < out_w):
+        # `calc_tiles_min_overlap` clamps the tile to the image *per axis*, so the largest tile the
+        # decode builds is this, not `tile` squared. Without the clamp an 8192px tile on a
+        # 1024x8200 image -- tiled, because one axis exceeds it -- prices 8192x8192.
+        tile_h = min(tile, out_h)
+        tile_w = min(tile, out_w)
         # A 25% margin for tile overlap and the number of tiles, mirroring the SD1/SDXL estimator.
-        working_memory = out_h * out_w * element_size * scaling_constant * 1.25
+        working_memory = tile_h * tile_w * element_size * scaling_constant * 1.25
+        working_memory += out_h * out_w * _IMAGE_CHANNELS * (_FLUX_VAE_TILED_IMAGE_COPIES * element_size + 1)
     else:
-        out_h = latent_scale_factor_for_operation * image_tensor.shape[-2]
-        out_w = latent_scale_factor_for_operation * image_tensor.shape[-1]
         working_memory = out_h * out_w * element_size * scaling_constant
 
     return int(working_memory)

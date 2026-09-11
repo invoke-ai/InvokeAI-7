@@ -203,7 +203,7 @@ def test_te_converted_keys_match_real_model_exactly() -> None:
     from transformers.models.qwen3_vl.configuration_qwen3_vl import Qwen3VLConfig
 
     from invokeai.backend.model_manager.util.qwen3_vl import normalize_qwen3vl_rope_config
-    from invokeai.backend.quantization.int8_convrot import Int8ConvrotLinear
+    from invokeai.backend.quantization.int8_convrot import swap_in_int8_linears
     from tests.model_identification.stripped_model_on_disk import StrippedModelOnDisk
 
     fixture_dir = (
@@ -235,20 +235,11 @@ def test_te_converted_keys_match_real_model_exactly() -> None:
     with torch.device("meta"):
         model = Qwen3VLForConditionalGeneration._from_config(te_config)
     model.model.language_model.norm = torch.nn.Identity()
-    for module_name in markers:
-        parent = model.get_submodule(module_name.rsplit(".", 1)[0])
-        weight = converted[module_name + ".weight"]
-        setattr(
-            parent,
-            module_name.rsplit(".", 1)[1],
-            Int8ConvrotLinear(
-                # Meta tensors: only keys and shapes are compared below, and real int8 zeros at the
-                # 32B model's shapes allocate ~24 GB - enough to get a CI runner OOM-killed.
-                weight=torch.zeros(weight.shape, dtype=torch.int8, device="meta"),
-                weight_scale=torch.zeros(weight.shape[0], 1, device="meta"),
-                convrot=True,
-            ),
-        )
+    # Through the loader's own swap, not a copy of it: the keys this test pins are the ones
+    # `Int8ConvrotLinear` registers, so a change to which buffers it carries has to reach here.
+    # The fixture's tensors are meta, which is also what keeps this affordable -- real int8 zeros at
+    # the 32B model's shapes allocate ~24 GB, enough to get a CI runner OOM-killed.
+    swap_in_int8_linears(model, converted, markers)
 
     expected = set(model.state_dict().keys()) - {"lm_head.weight"}
     got = set(converted.keys())

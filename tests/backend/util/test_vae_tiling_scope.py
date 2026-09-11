@@ -139,7 +139,7 @@ class TestDiffusersVaesAreHandledToo:
     """
 
     @staticmethod
-    def _vae(block_out_channels=(32, 64, 128, 128), sample_size=1024) -> AutoencoderKL:
+    def _vae(block_out_channels=(32, 64, 128, 128), sample_size=1024, norm_num_groups=32) -> AutoencoderKL:
         return AutoencoderKL(
             in_channels=3,
             out_channels=3,
@@ -148,12 +148,21 @@ class TestDiffusersVaesAreHandledToo:
             down_block_types=("DownEncoderBlock2D",) * len(block_out_channels),
             up_block_types=("UpDecoderBlock2D",) * len(block_out_channels),
             layers_per_block=1,
-            norm_num_groups=32,
+            norm_num_groups=norm_num_groups,
             sample_size=sample_size,
         )
 
     @pytest.mark.parametrize(
-        ("requested", "expected_sample"), [(384, 384), (256, 256), (0, DEFAULT_TILE_SAMPLE_MIN_SIZE)]
+        ("requested", "expected_sample"),
+        [
+            (384, 384),
+            (256, 256),
+            (0, DEFAULT_TILE_SAMPLE_MIN_SIZE),
+            # Not a multiple of 32, so the latent tile (25) is snapped down to 24: this VAE's
+            # tiled decode cannot assemble a correct image from a latent tile the overlap factor
+            # does not divide. See `test_every_tile_size_the_field_accepts_assembles_the_full_image`.
+            (200, 192),
+        ],
     )
     def test_the_requested_size_reaches_the_vae(self, requested, expected_sample):
         vae = self._vae()
@@ -173,6 +182,48 @@ class TestDiffusersVaesAreHandledToo:
             pass
 
         assert (vae.use_tiling, vae.tile_sample_min_size, vae.tile_latent_min_size) == before
+
+    def test_every_tile_size_the_field_accepts_assembles_the_full_image(self):
+        """The sweep the FLUX sibling above runs, pointed at the class that can actually fail it.
+
+        `tiled_decode` steps the latent loop by one quantity and crops each decoded tile by another,
+        and the two agree only for some tile sizes. Setting `tile_sample_min_size` and
+        `tile_latent_min_size` independently got that wrong for every `multiple_of=8` field value
+        that is not a multiple of 32: measured over this range, 36 of the 84 values assembled an
+        image between 514 and 542 pixels wide instead of 512.
+        """
+        # Four blocks for the real 8x latent grid; the widths only have to be legal, so they are
+        # cut to what keeps 84 decodes cheap on CPU.
+        vae = self._vae(block_out_channels=(4, 8, 16, 16), norm_num_groups=4).eval()
+        latent = torch.zeros(1, 4, 64, 64)
+
+        wrong: list[tuple[int, tuple[int, ...]]] = []
+        for tile_size in range(128, 800, 8):
+            with torch.no_grad(), scoped_vae_tiling(vae, tile_size):
+                decoded = vae.decode(latent, return_dict=False)[0]
+            if decoded.shape != (1, 3, 512, 512):
+                wrong.append((tile_size, tuple(decoded.shape)))
+
+        assert not wrong
+
+    @pytest.mark.parametrize("overlap_factor", [0.125, 0.2, 0.3, 1 / 3, 0.35])
+    def test_a_non_stock_overlap_factor_is_honoured_rather_than_assumed(self, overlap_factor):
+        """Which tiles a factor admits depends on how it rounds in binary, not on its value.
+
+        0.25 is the only factor diffusers ships, and at an 8x downsample it admits every multiple
+        of 4 -- exactly what treating the factor as the fraction it looks like would also pick. The
+        other factors are where that shortcut breaks: 0.3 admits only multiples of 10, and 0.35 only
+        multiples of 20, neither of which is the denominator of any nearby simple fraction. Reading
+        the answer out of diffusers' own two expressions is what gets those right; approximating
+        0.35 as 5/14 picks a wrong tile for every size below.
+        """
+        vae = self._vae(block_out_channels=(4, 8, 16, 16), norm_num_groups=4).eval()
+        vae.tile_overlap_factor = overlap_factor
+        latent = torch.zeros(1, 4, 64, 64)
+
+        for tile_size in (168, 200, 264, 328, 392):
+            with torch.no_grad(), scoped_vae_tiling(vae, tile_size):
+                assert vae.decode(latent, return_dict=False)[0].shape == (1, 3, 512, 512)
 
     def test_a_decode_at_the_vaes_default_resolution_actually_tiles(self):
         """The case the missing size costs: a 1024px decode against a VAE whose default tile is also
