@@ -18,6 +18,7 @@ import { useMemo } from 'react';
 import { BootWidgetHintController } from './BootWidgetHintController';
 import { GenerateWidgetSyncRuntime } from './GenerateWidgetSyncRuntime';
 import { QueueRuntimeAdapter } from './QueueRuntimeAdapter';
+import { RecallParametersRuntime } from './RecallParametersRuntime';
 import { WorkbenchUiPorts } from './workbenchPorts';
 
 /**
@@ -48,6 +49,7 @@ export const WorkbenchApp = () => {
         <BootWidgetHintController />
         <GenerateWidgetSyncRuntime />
         <LLMTaskProgressRuntime />
+        <RecallParametersRuntime />
         <WorkbenchUiPorts>
           <WorkbenchHotkeyRuntime />
           <WorkbenchCommandPalette />
