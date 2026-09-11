@@ -3,6 +3,12 @@ import type { SystemPromptCatalog } from '@features/generation/ui/promptFields/u
 import type { ChangeEvent } from 'react';
 
 import { createListCollection, HStack, Input, Stack, Text, Textarea } from '@chakra-ui/react';
+import {
+  parseMaxTokensInput,
+  SYSTEM_PROMPT_MAX_TOKENS_DEFAULT,
+  SYSTEM_PROMPT_MAX_TOKENS_MAX,
+  SYSTEM_PROMPT_MAX_TOKENS_MIN,
+} from '@features/generation/core/systemPrompts';
 import { PANEL_HEADER_CONTROL_HEIGHT, PromptPanelHeader } from '@features/generation/ui/promptFields/PromptPanelHeader';
 // Imported by subpath rather than from the `@platform/ui` barrel, which is at its
 // direct-importer budget (a dev-invalidation limit) — depending on the components
@@ -31,9 +37,11 @@ type EditorTarget = { record: SystemPromptRecord | null };
 interface Draft {
   name: string;
   content: string;
+  /** Raw input text — see `parseMaxTokensInput`. Empty means "use the backend default". */
+  maxTokens: string;
 }
 
-const EMPTY_DRAFT: Draft = { content: '', name: '' };
+const EMPTY_DRAFT: Draft = { content: '', maxTokens: '', name: '' };
 
 const SystemPromptRow = ({
   canEdit,
@@ -86,6 +94,7 @@ export const SystemPromptsField = ({ catalog, onSelect, selectedId }: SystemProm
   const { t } = useTranslation();
   const selectId = useId();
   const nameFieldId = useId();
+  const maxTokensFieldId = useId();
   const [isManaging, setIsManaging] = useState(false);
   const [editorTarget, setEditorTarget] = useState<EditorTarget | null>(null);
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
@@ -110,7 +119,11 @@ export const SystemPromptsField = ({ catalog, onSelect, selectedId }: SystemProm
   }, []);
 
   const startEdit = useCallback((record: SystemPromptRecord) => {
-    setDraft({ content: record.content, name: record.name });
+    setDraft({
+      content: record.content,
+      maxTokens: record.maxTokens === null ? '' : String(record.maxTokens),
+      name: record.name,
+    });
     setEditorTarget({ record });
   }, []);
 
@@ -121,13 +134,29 @@ export const SystemPromptsField = ({ catalog, onSelect, selectedId }: SystemProm
       return;
     }
 
+    const maxTokens = parseMaxTokensInput(draft.maxTokens);
+
+    // Save is disabled while the field is invalid, so this only catches a submit that raced the
+    // keystroke that broke it.
+    if (maxTokens === 'invalid') {
+      setError(
+        t('widgets.generate.systemPrompts.maxTokensInvalid', {
+          max: SYSTEM_PROMPT_MAX_TOKENS_MAX,
+          min: SYSTEM_PROMPT_MAX_TOKENS_MIN,
+        })
+      );
+      return;
+    }
+
+    const payload = { content: draft.content, maxTokens, name: draft.name };
+
     setIsSaving(true);
     setError(null);
 
     let saved: SystemPromptRecord;
 
     try {
-      saved = editorTarget.record ? await catalog.update(editorTarget.record, draft) : await catalog.create(draft);
+      saved = editorTarget.record ? await catalog.update(editorTarget.record, payload) : await catalog.create(payload);
     } catch (caught) {
       // `ApiError.message` is the raw response body, so the backend's own explanation only
       // reads properly once unwrapped. Reported in place — the popover has no toast surface.
@@ -179,7 +208,21 @@ export const SystemPromptsField = ({ catalog, onSelect, selectedId }: SystemProm
     (event: ChangeEvent<HTMLTextAreaElement>) => setDraft((current) => ({ ...current, content: event.target.value })),
     []
   );
+  const handleMaxTokensChange = useCallback(
+    (event: ChangeEvent<HTMLInputElement>) => setDraft((current) => ({ ...current, maxTokens: event.target.value })),
+    []
+  );
   const handleSelectChange = useCallback(({ value }: { value: string[] }) => onSelect(value[0] ?? null), [onSelect]);
+
+  const isMaxTokensInvalid = parseMaxTokensInput(draft.maxTokens) === 'invalid';
+  // Reported under the field as it is typed rather than only on save, since an out-of-range
+  // cap is the one thing here the backend would reject with a bare 422.
+  const maxTokensError = isMaxTokensInvalid
+    ? t('widgets.generate.systemPrompts.maxTokensInvalid', {
+        max: SYSTEM_PROMPT_MAX_TOKENS_MAX,
+        min: SYSTEM_PROMPT_MAX_TOKENS_MIN,
+      })
+    : null;
 
   const selectValue = useMemo(() => (selectedId ? [selectedId] : []), [selectedId]);
   // The Select primitive renders `valueText` verbatim in the closed trigger, so
@@ -215,6 +258,23 @@ export const SystemPromptsField = ({ catalog, onSelect, selectedId }: SystemProm
           value={draft.content}
           onChange={handleContentChange}
         />
+        <Field
+          error={maxTokensError}
+          helpText={t('widgets.generate.systemPrompts.maxTokensHelp', { tokens: SYSTEM_PROMPT_MAX_TOKENS_DEFAULT })}
+          id={maxTokensFieldId}
+          label={t('widgets.generate.systemPrompts.maxTokens')}
+        >
+          <Input
+            id={maxTokensFieldId}
+            // `inputMode` rather than `type="number"`: the spinner and the browser's own
+            // out-of-range handling would fight the empty-means-default reading of this field.
+            inputMode="numeric"
+            placeholder={String(SYSTEM_PROMPT_MAX_TOKENS_DEFAULT)}
+            size="xs"
+            value={draft.maxTokens}
+            onChange={handleMaxTokensChange}
+          />
+        </Field>
         {error ? (
           <Text color="fg.error" fontSize="xs">
             {error}
@@ -225,7 +285,7 @@ export const SystemPromptsField = ({ catalog, onSelect, selectedId }: SystemProm
             {t('common.cancel')}
           </Button>
           <Button
-            disabled={!draft.name.trim() || !draft.content.trim()}
+            disabled={!draft.name.trim() || !draft.content.trim() || isMaxTokensInvalid}
             loading={isSaving}
             size="xs"
             onClick={handleSave}

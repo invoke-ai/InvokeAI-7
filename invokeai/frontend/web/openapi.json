@@ -29859,6 +29859,7 @@
             "maximum": 2048.0,
             "minimum": 1.0,
             "title": "Max Tokens",
+            "description": "Cap on the tokens the LLM may emit. Clients that expand with a stored system prompt send that prompt's own `max_tokens` here; omitting it uses the default.",
             "default": 300
           },
           "system_prompt": {
@@ -91832,6 +91833,20 @@
             ],
             "title": "Is Public",
             "description": "Whether the prompt is shared with all users."
+          },
+          "max_tokens": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 2048.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Tokens",
+            "description": "The new output-token cap. Unlike the other fields, an explicitly supplied null is a change -- it clears the cap back to the default; omitting the field leaves it alone."
           }
         },
         "additionalProperties": false,
@@ -91864,6 +91879,20 @@
             "minLength": 1,
             "title": "Content",
             "description": "The system prompt content."
+          },
+          "max_tokens": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 2048.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Tokens",
+            "description": "Cap on the tokens the LLM may emit when expanding with this prompt. Null means use the default of 300."
           },
           "id": {
             "type": "string",
@@ -91911,6 +91940,20 @@
             "minLength": 1,
             "title": "Content",
             "description": "The system prompt content."
+          },
+          "max_tokens": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 2048.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Tokens",
+            "description": "Cap on the tokens the LLM may emit when expanding with this prompt. Null means use the default of 300."
           }
         },
         "additionalProperties": false,
@@ -94008,13 +94051,13 @@
             "ui_model_type": ["text_llm"]
           },
           "max_tokens": {
-            "default": 300,
-            "description": "Maximum number of tokens to generate.",
+            "default": 0,
+            "description": "Maximum number of tokens to generate. 0 uses the preset's own cap, or 300 if it does not set one.",
             "field_kind": "input",
             "input": "any",
             "maximum": 2048,
-            "minimum": 1,
-            "orig_default": 300,
+            "minimum": 0,
+            "orig_default": 0,
             "orig_required": false,
             "title": "Max Tokens",
             "type": "integer"
@@ -94043,7 +94086,7 @@
         "tags": ["llm", "text", "prompt", "preset", "template"],
         "title": "Text LLM (with System Prompt Preset)",
         "type": "object",
-        "version": "1.1.0",
+        "version": "1.2.0",
         "output": {
           "$ref": "#/components/schemas/StringOutput"
         }

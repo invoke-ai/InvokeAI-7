@@ -3,8 +3,11 @@ import { describe, expect, it } from 'vitest';
 import {
   classifySystemPrompts,
   isOwnedSystemPrompt,
+  parseMaxTokensInput,
   requireOwnedSystemPrompt,
   resolveSelectedSystemPromptId,
+  SYSTEM_PROMPT_MAX_TOKENS_MAX,
+  SYSTEM_PROMPT_MAX_TOKENS_MIN,
   SystemPromptOwnershipError,
 } from './systemPrompts';
 
@@ -83,5 +86,30 @@ describe('resolveSelectedSystemPromptId', () => {
   it('returns null when there is nothing to select', () => {
     expect(resolveSelectedSystemPromptId([], 'anything')).toBeNull();
     expect(resolveSelectedSystemPromptId([], null)).toBeNull();
+  });
+});
+
+describe('parseMaxTokensInput', () => {
+  it('reads an empty field as "use the backend default"', () => {
+    expect(parseMaxTokensInput('')).toBeNull();
+    expect(parseMaxTokensInput('   ')).toBeNull();
+  });
+
+  it('accepts a whole number inside the range the endpoint enforces', () => {
+    expect(parseMaxTokensInput('500')).toBe(500);
+    expect(parseMaxTokensInput(String(SYSTEM_PROMPT_MAX_TOKENS_MIN))).toBe(SYSTEM_PROMPT_MAX_TOKENS_MIN);
+    expect(parseMaxTokensInput(String(SYSTEM_PROMPT_MAX_TOKENS_MAX))).toBe(SYSTEM_PROMPT_MAX_TOKENS_MAX);
+  });
+
+  it('rejects values the endpoint would 422 on', () => {
+    expect(parseMaxTokensInput('0')).toBe('invalid');
+    expect(parseMaxTokensInput(String(SYSTEM_PROMPT_MAX_TOKENS_MAX + 1))).toBe('invalid');
+  });
+
+  it('rejects anything that is not a plain integer', () => {
+    // All of these survive `Number()`, and none of them is a token count someone meant to type.
+    for (const raw of ['12e2', '1.5', '-5', '0x10', 'abc', '5 0']) {
+      expect(parseMaxTokensInput(raw)).toBe('invalid');
+    }
   });
 });
