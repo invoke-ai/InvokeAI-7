@@ -29,6 +29,8 @@ register(
         guidance_label="CFG",
         scheduler_set="standard",
         scheduler_applies_to_graph=True,
+        supports_regional_guidance=True,
+        regional_negative=True,
         clip_skip_max=24,
         supports_seamless=True,
         supports_cfg_rescale=True,

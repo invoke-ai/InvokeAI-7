@@ -14,7 +14,11 @@ from invokeai.backend.architectures.capabilities import (
     architecture_capabilities,
 )
 from invokeai.backend.architectures.facet import Facet
-from invokeai.backend.architectures.facets.conditioning import ConditioningFacet, conditioning_infos
+from invokeai.backend.architectures.facets.conditioning import (
+    ConditioningFacet,
+    conditioning_infos,
+    conditioning_safe_globals,
+)
 from invokeai.backend.architectures.facets.default_settings import (
     DefaultSettingsFacet,
     resolve_default_settings,
@@ -74,6 +78,7 @@ __all__ = [
     "LatentSpace",
     "LatentSpaceFacet",
     "conditioning_infos",
+    "conditioning_safe_globals",
     "declared_variant_enums",
     "generation_modes",
     "get_max_unet_downscale",

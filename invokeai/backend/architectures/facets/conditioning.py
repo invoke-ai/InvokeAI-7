@@ -20,6 +20,7 @@ from typing import Any, ClassVar
 
 from invokeai.backend.architectures.facet import Facet
 from invokeai.backend.architectures.registry import generative_bases, get
+from invokeai.backend.stable_diffusion.diffusion.conditioning_data import ConditioningFieldData
 
 
 @dataclass(frozen=True)
@@ -47,3 +48,16 @@ def conditioning_infos() -> tuple[type[Any], ...]:
     """
     infos = {facet.info for base in generative_bases() if (facet := get(base, ConditioningFacet)) is not None}
     return tuple(sorted(infos, key=lambda cls: cls.__name__))
+
+
+def conditioning_safe_globals() -> list[type[Any]]:
+    """The exact list `dependencies` hands the conditioning `ObjectSerializerDisk`.
+
+    Assembled here rather than at the call site so that a test can assert the call site passes
+    *this* list. A test that rebuilt `[ConditioningFieldData, *conditioning_infos()]` itself would
+    only ever agree with itself, and would stay green if the call site were shortened.
+
+    `ConditioningFieldData` leads because it is the envelope every saved conditioning is wrapped in;
+    the per-architecture classes it holds follow.
+    """
+    return [ConditioningFieldData, *conditioning_infos()]

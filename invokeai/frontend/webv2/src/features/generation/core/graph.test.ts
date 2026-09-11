@@ -934,6 +934,49 @@ describe('Krea-2, Ideogram 4 and Wan graphs', () => {
   });
 });
 
+describe('ERNIE-Image graphs', () => {
+  const ernieModel: MainModelConfig = {
+    base: 'ernie-image',
+    format: 'diffusers',
+    key: 'ernie-image',
+    name: 'ERNIE-Image',
+    type: 'main',
+  };
+
+  it('encodes the negative prompt only while CFG is on', () => {
+    // `negative_conditioning` is required when guidance_scale != 1 and unused otherwise, and the
+    // coverage suite only ever compiles at the base default of 4 — so the CFG-off branch is
+    // compiled nowhere else. ERNIE-Image-Turbo ships `guidance=1.0`, which is how a user gets there.
+    const withCfg = compile(ernieModel, { cfgScale: 4 });
+
+    expect(withCfg.nodes.neg_cond?.type).toBe('ernie_image_text_encoder');
+    expect(getEdge(withCfg, 'neg_cond', 'text_encoder')?.source.node_id).toBe('model_loader');
+    expect(getEdge(withCfg, 'neg_cond', 'prompt')?.source.node_id).toBe('negative_prompt');
+    expect(getEdge(withCfg, 'denoise_latents', 'negative_conditioning')?.source.node_id).toBe('neg_cond');
+    expect(withCfg.nodes.denoise_latents?.guidance_scale).toBe(4);
+
+    const withoutCfg = compile(ernieModel, { cfgScale: 1 });
+
+    expect(withoutCfg.nodes.neg_cond).toBeUndefined();
+    expect(getEdge(withoutCfg, 'denoise_latents', 'negative_conditioning')).toBeUndefined();
+    expect(withoutCfg.nodes.denoise_latents?.guidance_scale).toBe(1);
+  });
+
+  it('builds the rest of the graph out of the one bundled pipeline', () => {
+    const graph = compile(ernieModel, { scheduler: 'dpmpp_2m' });
+
+    expect(graph.nodes.canvas_output?.type).toBe('ernie_image_vae_decode');
+    expect(getEdge(graph, 'canvas_output', 'vae')?.source.node_id).toBe('model_loader');
+    expect(getEdge(graph, 'denoise_latents', 'transformer')?.source.node_id).toBe('model_loader');
+    // The loader can hold a prompt enhancer resident, which cannot be idle-offloaded; Generate
+    // never surfaces it, so the graph has to keep asking for it to stay unloaded.
+    expect(graph.nodes.model_loader?.use_prompt_enhancer).toBe(false);
+    // The node's scheduler is a euler/heun/lcm Literal, so a standard-set value left over from
+    // another model has to be coerced before it reaches the graph.
+    expect(graph.nodes.denoise_latents?.scheduler).toBe('euler');
+  });
+});
+
 describe('PiD decode', () => {
   const pidDecoder = (base: string): ComponentModelConfig => ({
     base,

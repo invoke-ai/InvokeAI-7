@@ -25,5 +25,8 @@ register(
         guidance_label="CFG",
         scheduler_set="anima",
         scheduler_applies_to_graph=True,
+        # Positive conditioning only, for the same reason as Z-Image: the negative list is accepted
+        # but its masks are dropped.
+        supports_regional_guidance=True,
     ),
 )

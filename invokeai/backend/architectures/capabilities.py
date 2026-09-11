@@ -12,9 +12,13 @@ fields on a schema webv2 already consumes.
 
 Also deliberately not a computed field on `AnyModelConfig`: that would add these fields to all 115
 config schemas and risk them being persisted into model records.
+
+The models here are response-only and stay open. `extra="forbid"` on one would reject nothing at
+runtime -- nothing parses these -- and only stamp `additionalProperties: false` into `openapi.json`,
+which turns every field this table grows into a breaking change for a strictly-validating client.
 """
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field
 
 from invokeai.backend.architectures.facets.default_settings import DefaultSettingsFacet
 from invokeai.backend.architectures.facets.features import (
@@ -27,7 +31,7 @@ from invokeai.backend.architectures.facets.latent_space import LatentSpaceFacet
 from invokeai.backend.architectures.facets.modality import GenerationModeKind, ModalityFacet
 from invokeai.backend.architectures.registry import generative_bases, require
 from invokeai.backend.model_manager.configs.default_settings import MainModelDefaultSettings
-from invokeai.backend.model_manager.taxonomy import BaseModelType
+from invokeai.backend.model_manager.taxonomy import AnyVariant, BaseModelType
 
 
 class NegativePromptPolicy(BaseModel):
@@ -35,8 +39,6 @@ class NegativePromptPolicy(BaseModel):
     usage: NegativePromptUsage = Field(
         description="'always', 'cfg-gated' (only above CFG 1), or 'never'.",
     )
-
-    model_config = ConfigDict(extra="forbid")
 
 
 class ArchitectureModality(BaseModel):
@@ -48,14 +50,14 @@ class ArchitectureModality(BaseModel):
         description="Prefix its mode strings carry in image metadata; null means unprefixed.",
     )
 
-    model_config = ConfigDict(extra="forbid")
-
 
 class ArchitectureFeatures(BaseModel):
     """What a UI may offer for this architecture."""
 
     negative_prompt: NegativePromptPolicy
-    dimension_grid: int = Field(description="Width and height must be a multiple of this.")
+    dimension_grid: int = Field(
+        description="Width and height must be a multiple of this. A variant row may carry its own."
+    )
     spatial_compression: int = Field(description="How much smaller a latent is than the image, per side.")
     guidance_label: str = Field(description="What to call the guidance slider: 'CFG' or 'Guidance'.")
     scheduler_set: SchedulerSet | None = Field(
@@ -77,8 +79,6 @@ class ArchitectureFeatures(BaseModel):
     color_compensation: bool = False
     vae_precision: bool = False
 
-    model_config = ConfigDict(extra="forbid")
-
 
 class ArchitectureCapabilities(BaseModel):
     """One row of the table."""
@@ -94,16 +94,16 @@ class ArchitectureCapabilities(BaseModel):
         default=None, description="Recommended generation parameters, if the architecture has any."
     )
 
-    model_config = ConfigDict(extra="forbid")
 
-
-def _features_of(facet: FeaturesFacet, spatial_compression: int) -> ArchitectureFeatures:
+def _features_of(
+    facet: FeaturesFacet, spatial_compression: int, variant: AnyVariant | None = None
+) -> ArchitectureFeatures:
     return ArchitectureFeatures(
         negative_prompt=NegativePromptPolicy(
             visible=facet.negative_prompt.visible,
             usage=facet.negative_prompt.usage,
         ),
-        dimension_grid=facet.dimension_grid,
+        dimension_grid=facet.resolve_dimension_grid(variant),
         spatial_compression=spatial_compression,
         guidance_label=facet.guidance_label,
         scheduler_set=facet.scheduler_set,
@@ -125,11 +125,14 @@ def _features_of(facet: FeaturesFacet, spatial_compression: int) -> Architecture
 def architecture_capabilities() -> list[ArchitectureCapabilities]:
     """Every row, base rows first, then the variant rows that override them.
 
-    A variant gets its own row only where something actually differs — today that is the five
-    architectures whose recommended parameters depend on the variant. Feature differences that hang
-    on a variant are expressed on the base row instead, by
-    `features.reference_images_require_variant`; Qwen-Image is the only one, and inventing a row for
-    it would mean inventing which fields a variant row is allowed to omit.
+    A variant gets its own row only where something actually differs: its recommended parameters
+    (`DefaultSettingsFacet.by_variant`) or its dimension grid
+    (`FeaturesFacet.dimension_grid_by_variant`). Those two mappings are the whole rule — a row is
+    emitted for the union of their keys, and every row is rendered in full, so a client never has to
+    know which fields a variant row is allowed to omit.
+
+    Differences too small to have earned a mapping are expressed on the base row instead, by
+    `features.reference_images_require_variant`; Qwen-Image is the only one.
 
     Sorted by base value, then variant, so the response is stable and diffable.
     """
@@ -143,17 +146,19 @@ def architecture_capabilities() -> list[ArchitectureCapabilities]:
         defaults = require(base, DefaultSettingsFacet)
 
         rendered = ArchitectureModality(modes=sorted(modality.modes), metadata_slug=modality.metadata_slug)
-        rendered_features = _features_of(features, latent_space.primary.spatial_compression)
+        compression = latent_space.primary.spatial_compression
+        base_defaults = defaults.resolve()
 
         rows.append(
             ArchitectureCapabilities(
                 base=base,
                 modality=rendered,
-                features=rendered_features,
-                defaults=defaults.resolve(),
+                features=_features_of(features, compression),
+                defaults=base_defaults,
             )
         )
-        for variant in sorted(v for v in defaults.by_variant if v is not None):
+        differing = (set(defaults.by_variant) | set(features.dimension_grid_by_variant)) - {None}
+        for variant in sorted(differing):
             rows.append(
                 ArchitectureCapabilities(
                     base=base,
@@ -161,8 +166,8 @@ def architecture_capabilities() -> list[ArchitectureCapabilities]:
                     # "FluxVariantType.DevFill" rather than the "dev_fill" a client stores and sends.
                     variant=variant.value,
                     modality=rendered,
-                    features=rendered_features,
-                    defaults=defaults.by_variant[variant],
+                    features=_features_of(features, compression, variant),
+                    defaults=defaults.by_variant.get(variant, base_defaults),
                 )
             )
     return rows

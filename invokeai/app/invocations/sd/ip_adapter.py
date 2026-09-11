@@ -16,12 +16,12 @@ from invokeai.backend.model_manager.configs.ip_adapter import (
     IPAdapter_Checkpoint_Config_Base,
     IPAdapter_InvokeAI_Config_Base,
 )
-from invokeai.backend.model_manager.starter_models import (
-    StarterModel,
+from invokeai.backend.model_manager.starter_models.common import (
     clip_vit_l_image_encoder,
     ip_adapter_sd_image_encoder,
     ip_adapter_sdxl_image_encoder,
 )
+from invokeai.backend.model_manager.starter_models.types import StarterModel
 from invokeai.backend.model_manager.taxonomy import BaseModelType, ModelType
 
 

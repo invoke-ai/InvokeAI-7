@@ -107,7 +107,12 @@ def test_every_defined_model_is_reachable() -> None:
     model, which looks like it was never added.
     """
     reachable = {id(m) for m in STARTER_MODELS}
-    reachable |= {id(m) for models in STARTER_BUNDLES.values() for m in models}
+    # `bundle.models`, not `bundle`: `StarterModelBundle` is a pydantic model, so iterating it
+    # yields ('name', ...) field tuples whose ids belong to nothing. The set stayed correct only
+    # because every bundle entry is today the same object as its STARTER_MODELS row.
+    bundled = {id(m) for bundle in STARTER_BUNDLES.values() for m in bundle.models}
+    assert bundled, "no bundle contributed a model; the reachability set below would be too small"
+    reachable |= bundled
     # One pass is enough: dependencies are leaves, and none declares dependencies of its own.
     reachable |= {id(d) for m in STARTER_MODELS for d in (m.dependencies or [])}
 

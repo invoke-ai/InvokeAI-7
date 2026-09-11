@@ -12,14 +12,19 @@ previously expressed by duplicating matrices under different names.
 """
 
 from dataclasses import dataclass
-from typing import ClassVar
+from typing import ClassVar, Final
 
 import torch
 from PIL import Image
 
 from invokeai.backend.architectures.facet import Facet
-from invokeai.backend.architectures.registry import require
+from invokeai.backend.architectures.registry import ArchitectureError, require
 from invokeai.backend.model_manager.taxonomy import BaseModelType
+
+_DEFS_PACKAGE: Final = "invokeai/backend/architectures/defs/"
+"""Where a declaration lives. `registry.defs_module_path` names the exact file given a base; a
+`LatentSpace` is constructed before anything associates it with one, so the messages below point at
+the package and leave the filename to the traceback."""
 
 # origingally adapted from code by @erucipe and @keturn here:
 # https://discuss.huggingface.co/t/decoding-latents-to-rgb-without-upscaling/23204/7
@@ -263,6 +268,40 @@ class LatentSpace:
     rgb_bias: list[float] | None = None
     smooth_matrix: list[list[float]] | None = None
     """A 3x3 kernel convolved over the projection. Only SDXL's four-channel space uses one."""
+
+    def __post_init__(self) -> None:
+        """Reject a declaration `preview()` could not use.
+
+        Every shape here is read for the first time on the *first preview step* — after the model
+        has loaded and generation has begun — where a mismatch is a `RuntimeError` from a matmul or
+        a reshape. Checking at construction moves that to the import of the `defs/` module that
+        declared it, which happens at boot: the traceback names the file to fix, and a placeholder
+        never reaches a user's generation.
+        """
+        if len(self.rgb_factors) != self.channels or any(len(row) != 3 for row in self.rgb_factors):
+            widths = sorted({len(row) for row in self.rgb_factors})
+            raise ArchitectureError(
+                f"LatentSpace declares {self.channels} channels but its rgb_factors are "
+                f"{len(self.rgb_factors)} rows of width {widths}; the projection must be exactly "
+                f"{self.channels} rows of 3. The traceback names the module under {_DEFS_PACKAGE} "
+                f"that declared it."
+            )
+        if not any(factor for row in self.rgb_factors for factor in row):
+            raise ArchitectureError(
+                "LatentSpace.rgb_factors is all zeros, which projects every latent to the same "
+                "colour — it is the scaffolder's placeholder, not a VAE. Replace it with this "
+                f"VAE's real latent -> RGB matrix in the module under {_DEFS_PACKAGE} the traceback "
+                "names."
+            )
+        if self.rgb_bias is not None and len(self.rgb_bias) != 3:
+            raise ArchitectureError(
+                f"LatentSpace.rgb_bias has {len(self.rgb_bias)} entries; it is added to an RGB "
+                "triple and must have exactly 3."
+            )
+        if self.smooth_matrix is not None and (
+            len(self.smooth_matrix) != 3 or any(len(row) != 3 for row in self.smooth_matrix)
+        ):
+            raise ArchitectureError("LatentSpace.smooth_matrix is convolved as a 3x3 kernel and must be 3x3.")
 
     def preview(self, sample: torch.Tensor) -> Image.Image:
         """Project a latent sample to a low-resolution RGB image.

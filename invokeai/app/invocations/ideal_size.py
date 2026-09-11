@@ -58,7 +58,12 @@ class IdealSizeInvocation(BaseInvocation):
                 "ideal size to compute from."
             )
         dimension = settings.width * self.multiplier
-        grid = require(unet_config.base, FeaturesFacet).dimension_grid
+        # The variant matters where an architecture's grid depends on it -- Wan TI2V-5B wants
+        # multiples of 32 where A14B wants 16. `wan_denoise` reads it off the same config the same
+        # way; a config that has no `variant` field, or whose variant is not named, gets the base
+        # grid.
+        variant = getattr(unet_config, "variant", None)
+        grid = require(unet_config.base, FeaturesFacet).resolve_dimension_grid(variant)
         min_dimension = math.floor(dimension * 0.5)
         # NOTE: this squares the *recommended default* width, which is a product decision, not the
         # native training resolution. They coincide for the SD family this node was written for, but

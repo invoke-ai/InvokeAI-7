@@ -17713,7 +17713,6 @@
             "description": "Recommended generation parameters, if the architecture has any."
           }
         },
-        "additionalProperties": false,
         "type": "object",
         "required": ["base", "modality", "features"],
         "title": "ArchitectureCapabilities",
@@ -17727,7 +17726,7 @@
           "dimension_grid": {
             "type": "integer",
             "title": "Dimension Grid",
-            "description": "Width and height must be a multiple of this."
+            "description": "Width and height must be a multiple of this. A variant row may carry its own."
           },
           "spatial_compression": {
             "type": "integer",
@@ -17830,7 +17829,6 @@
             "default": false
           }
         },
-        "additionalProperties": false,
         "type": "object",
         "required": ["negative_prompt", "dimension_grid", "spatial_compression", "guidance_label"],
         "title": "ArchitectureFeatures",
@@ -17872,7 +17870,6 @@
             "description": "Prefix its mode strings carry in image metadata; null means unprefixed."
           }
         },
-        "additionalProperties": false,
         "type": "object",
         "required": ["modes"],
         "title": "ArchitectureModality",
@@ -78364,7 +78361,6 @@
             "description": "'always', 'cfg-gated' (only above CFG 1), or 'never'."
           }
         },
-        "additionalProperties": false,
         "type": "object",
         "required": ["visible", "usage"],
         "title": "NegativePromptPolicy"

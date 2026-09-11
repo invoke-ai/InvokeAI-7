@@ -53,12 +53,26 @@ def _declared(base_value: str) -> FeaturesFacet:
 
 
 def test_the_contract_covers_bases_that_exist() -> None:
-    """A base webv2 offers but the registry does not know is a broken generation path, and an empty
-    contract would make every other test in this module vacuous."""
-    assert BY_BASE, f"{CONTRACT_PATH.name} recorded no bases; regenerate it with `vitest -u`."
+    """A base webv2 offers but the registry does not know is a broken generation path, and a
+    shrunken contract would make every other test in this module vacuous — the per-base checks are
+    parametrized over this file, so a truncated one takes the assertions with it rather than
+    failing.
+
+    14 is the current length of webv2's `BASE_GENERATION`; a new architecture updates this number
+    and the file in the same commit.
+    """
+    assert len(BY_BASE) == 14, (
+        f"{CONTRACT_PATH.name} records {len(BY_BASE)} bases, not 14; regenerate it with `vitest -u` "
+        f"and update this count if webv2 really gained or dropped an architecture."
+    )
 
     registered = {base.value for base in generative_bases()}
     assert sorted(set(BY_BASE) - registered) == []
+    # The other direction is not an error, but it has to be a reviewable line: these two are the
+    # only architectures nothing in this module checks, because webv2 has no generation path for
+    # them. MiniMax H3 is video-first with its own hardcoded schedules, and the SDXL refiner is a
+    # second pass rather than a model you generate with.
+    assert sorted(registered - set(BY_BASE)) == ["minimax-h3", "sdxl-refiner"]
 
 
 @pytest.mark.parametrize("base_value", sorted(BY_BASE))

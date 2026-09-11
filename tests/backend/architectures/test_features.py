@@ -97,13 +97,21 @@ def test_reference_images_and_the_one_variant_condition() -> None:
 
 
 def test_regional_guidance_and_its_negative_subset() -> None:
-    """Regional negative prompts are a strict subset — only the SD family has them."""
+    """Transcribed from `REGIONAL_GUIDANCE_SUPPORT` in webv2's `addRegionalGuidance.ts`, which is
+    the only place these two facts live today — neither field is in the generated capability
+    contract, so `test_frontend_capability_parity.py` cannot check them.
+
+    Regional negative prompts are a strict subset: only the SD family's `compel` /
+    `sdxl_compel_prompt` path masks both prompt polarities. The FLUX / FLUX.2 / Krea-2 / Z-Image /
+    Anima denoisers mask positive conditioning only — Z-Image and Anima accept a negative list but
+    discard its masks, so a "regional" negative there would act globally and webv2 rejects it.
+    """
     regional = {
         b.value for b in generative_bases() if (f := get(b, FeaturesFacet)) is not None and f.supports_regional_guidance
     }
     negative = {b.value for b in generative_bases() if (f := get(b, FeaturesFacet)) is not None and f.regional_negative}
-    assert regional == {"sd-1", "sdxl", "flux", "flux2", "krea-2"}
-    assert negative == {"sd-1", "sdxl"}
+    assert regional == {"sd-1", "sd-2", "sdxl", "flux", "flux2", "krea-2", "z-image", "anima"}
+    assert negative == {"sd-1", "sd-2", "sdxl"}
     assert negative < regional, "a regional negative prompt without regional guidance is meaningless"
 
 

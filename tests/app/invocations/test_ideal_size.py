@@ -9,8 +9,8 @@ import pytest
 
 from invokeai.app.invocations.ideal_size import IdealSizeInvocation
 from invokeai.app.invocations.model import ModelIdentifierField, UNetField
-from invokeai.backend.architectures import ArchitectureError, generative_bases, resolve_default_settings
-from invokeai.backend.model_manager.taxonomy import BaseModelType, ModelType
+from invokeai.backend.architectures import ArchitectureError, generative_bases
+from invokeai.backend.model_manager.taxonomy import AnyVariant, BaseModelType, ModelType, WanVariantType
 
 
 def _unet(base: BaseModelType) -> UNetField:
@@ -19,71 +19,77 @@ def _unet(base: BaseModelType) -> UNetField:
     return UNetField(unet=identifier, scheduler=identifier, loras=[])
 
 
-def _invoke(base: BaseModelType, width: int = 1024, height: int = 576, multiplier: float = 1.0) -> Any:
+def _invoke(
+    base: BaseModelType,
+    width: int = 1024,
+    height: int = 576,
+    multiplier: float = 1.0,
+    variant: AnyVariant | None = None,
+) -> Any:
     node = IdealSizeInvocation(width=width, height=height, multiplier=multiplier, unet=_unet(base))
     context = MagicMock()
-    context.models.get_config.return_value = SimpleNamespace(base=base)
+    # No `variant` attribute at all unless one is asked for: plenty of model configs have none, and
+    # the node has to cope with that rather than only with `variant=None`.
+    config = SimpleNamespace(base=base) if variant is None else SimpleNamespace(base=base, variant=variant)
+    context.models.get_config.return_value = config
     return node.invoke(context)
 
 
-@pytest.mark.parametrize(
-    ("base", "expected"),
-    [
-        # The six the old if/elif covered, at the aspect ratio of the node's own defaults.
-        (BaseModelType.StableDiffusion1, (680, 384)),
-        (BaseModelType.StableDiffusion2, (1024, 576)),
-        (BaseModelType.StableDiffusionXL, (1360, 768)),
-        # The other three were hardcoded to 1024 and trimmed to 8. They now derive the dimension
-        # from `DefaultSettingsFacet.width` and the grid from `FeaturesFacet.dimension_grid`, so
-        # both halves are pinned here: a model-card width edited for a UX reason would otherwise
-        # silently move every legacy workflow's output resolution.
-        (BaseModelType.StableDiffusion3, (1360, 768)),
-        (BaseModelType.Flux, (1360, 768)),
-        (BaseModelType.Flux2, (1360, 768)),
-    ],
-)
-def test_the_previously_supported_bases_are_unchanged(base: BaseModelType, expected: tuple[int, int]) -> None:
-    """SD 1.x, 2.x and XL have an 8-pixel grid, which is what the old hardcoded value was. SD3,
-    FLUX and FLUX.2 land on 16 and happen to agree at this aspect ratio."""
+# What the node returns for each architecture at its own field defaults (1024x576). Derived by
+# hand, not from the implementation: the node squares the architecture's recommended width to get a
+# target area, fits that area to the requested 1.7778 aspect, floors, and trims to the dimension
+# grid. SD 1.x: 512^2 = 262144 px; height = sqrt(262144 / 1.7778) = 384; width = 682.67 -> 682 ->
+# trimmed to 680 on the 8-pixel grid.
+#
+# Both halves are pinned deliberately. The dimension follows `DefaultSettingsFacet.width`, so a
+# model-card width edited for a UX reason would otherwise silently move every legacy workflow's
+# output resolution; the grid follows `FeaturesFacet.dimension_grid`, which the old code hardcoded
+# to 8 for everything -- a FLUX size came back off-grid and the denoise node then rejected it.
+IDEAL_SIZE_AT_NODE_DEFAULTS: dict[BaseModelType, tuple[int, int]] = {
+    BaseModelType.Anima: (1360, 768),
+    BaseModelType.CogView4: (1344, 768),
+    BaseModelType.ErnieImage: (1360, 768),
+    BaseModelType.Flux: (1360, 768),
+    BaseModelType.Flux2: (1360, 768),
+    BaseModelType.Ideogram4: (1360, 768),
+    BaseModelType.Krea2: (1360, 768),
+    BaseModelType.MiniMaxH3: (1792, 992),
+    BaseModelType.QwenImage: (1360, 768),
+    BaseModelType.StableDiffusion1: (680, 384),
+    BaseModelType.StableDiffusion2: (1024, 576),
+    BaseModelType.StableDiffusion3: (1360, 768),
+    BaseModelType.StableDiffusionXL: (1360, 768),
+    BaseModelType.StableDiffusionXLRefiner: (1360, 768),
+    BaseModelType.Wan: (1360, 768),
+    BaseModelType.ZImage: (1360, 768),
+}
+
+
+@pytest.mark.parametrize(("base", "expected"), sorted(IDEAL_SIZE_AT_NODE_DEFAULTS.items(), key=lambda i: i[0].value))
+def test_the_ideal_size_is_pinned_for_every_architecture(base: BaseModelType, expected: tuple[int, int]) -> None:
+    """The old dispatch was an if/elif over six bases ending in `raise ValueError(Unsupported model
+    type)`, which fired here -- at generation time, after the model had loaded -- for the other
+    nine. Every architecture now has an answer, and these are the answers."""
     output = _invoke(base)
     assert (output.width, output.height) == expected
 
 
-def test_flux_now_lands_on_its_own_grid() -> None:
-    """The old code trimmed to 8 for every architecture. FLUX needs 16, so a size could come back
-    off-grid — the node would hand the graph a width the denoise node then rejects."""
-    output = _invoke(BaseModelType.Flux)
-    assert output.width % 16 == 0 and output.height % 16 == 0
+def test_every_architecture_is_pinned() -> None:
+    """A new architecture has to land in the table above, rather than going unchecked."""
+    assert set(IDEAL_SIZE_AT_NODE_DEFAULTS) == set(generative_bases())
 
 
-def test_every_architecture_gets_an_answer() -> None:
-    """The old dispatch raised `Unsupported model type` for nine of the sixteen — at generation
-    time, after the model had loaded."""
-    failed = []
-    for base in generative_bases():
-        settings = resolve_default_settings(base)
-        if settings is None or settings.width is None:
-            continue  # the refiner, which declares a canvas but is not run on its own
-        try:
-            _invoke(base)
-        except Exception as exc:  # noqa: BLE001 - the point is that nothing raises
-            failed.append(f"{base.value}: {type(exc).__name__}")
-    assert failed == []
+def test_wan_uses_the_grid_of_the_variant_it_was_given() -> None:
+    """TI2V-5B takes multiples of 32 where A14B takes 16, and `wan_denoise` only rejects the
+    mismatch inside `invoke()`. 1360 is the A14B answer and `1360 % 32 == 16`, so a TI2V-5B model
+    routed through this node used to produce a width its own denoise node refuses."""
+    a14b = _invoke(BaseModelType.Wan, variant=WanVariantType.T2V_A14B)
+    assert (a14b.width, a14b.height) == IDEAL_SIZE_AT_NODE_DEFAULTS[BaseModelType.Wan]
+    assert a14b.width % 32 == 16, "otherwise the case below proves nothing"
 
-
-def test_the_result_stays_on_the_declared_grid_for_every_architecture() -> None:
-    from invokeai.backend.architectures import FeaturesFacet, require
-
-    off_grid = []
-    for base in generative_bases():
-        settings = resolve_default_settings(base)
-        if settings is None or settings.width is None:
-            continue
-        grid = require(base, FeaturesFacet).dimension_grid
-        output = _invoke(base)
-        if output.width % grid or output.height % grid:
-            off_grid.append(f"{base.value}: {output.width}x{output.height} not a multiple of {grid}")
-    assert off_grid == []
+    ti2v = _invoke(BaseModelType.Wan, variant=WanVariantType.TI2V_5B)
+    assert (ti2v.width, ti2v.height) == (1344, 768)
+    assert ti2v.width % 32 == 0 and ti2v.height % 32 == 0
 
 
 def test_an_architecture_without_dimensions_says_so() -> None:

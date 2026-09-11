@@ -6,7 +6,8 @@ rather than at boot. The registry moves those facts next to each other, in one f
 architecture, and `validate()` turns "you forgot one" into a startup error.
 
 Storage and error behaviour follow `model_manager.load.model_loader_registry`: a plain dict, and a
-double registration raises with the full context rather than overwriting.
+double registration raises with the full context rather than overwriting. Re-stating the *same*
+declaration is the exception — see `register()`.
 """
 
 from typing import Final, TypeVar
@@ -32,6 +33,8 @@ _NOT_ARCHITECTURES: Final = frozenset(
 `register()` and `validate()` read it, so there is no second list to keep in sync."""
 
 _PACKAGE = "invokeai/backend/architectures"
+_FACETS_MODULE: Final = "invokeai.backend.architectures.facets"
+"""Where a facet has to live to be enforced by `validate()`. See the filter there."""
 
 
 class ArchitectureError(ValueError):
@@ -53,16 +56,17 @@ def defs_module_path(base: BaseModelType) -> str:
 
 
 def register(base: BaseModelType, *facets: Facet) -> None:
-    """Declare what `base` is. Called once per architecture, from its own module under `defs/`."""
+    """Declare what `base` is. Called once per architecture, from its own module under `defs/`.
+
+    Re-executing a `defs/` module — `importlib.reload`, or jurigged re-running the file on save
+    under `--dev_reload` — calls this again with the same arguments. An identical declaration is the
+    same fact stated twice, so it is a no-op; only a *differing* one is the collision this guard
+    exists for. Facets are frozen dataclasses, so "identical" is by value.
+    """
     if base in _NOT_ARCHITECTURES:
         raise ArchitectureError(
             f"'{base.value}' is not a model architecture and cannot be registered. "
             f"It is one of {sorted(b.value for b in _NOT_ARCHITECTURES)}."
-        )
-    if base in _ARCHITECTURES:
-        raise ArchitectureError(
-            f"Architecture '{base.value}' is already registered. Every architecture is declared "
-            f"exactly once, in {defs_module_path(base)}."
         )
 
     by_type: dict[type[Facet], Facet] = {}
@@ -74,6 +78,13 @@ def register(base: BaseModelType, *facets: Facet) -> None:
                 f"same register() call. See {defs_module_path(base)}."
             )
         by_type[facet_type] = facet
+
+    declared = _ARCHITECTURES.get(base)
+    if declared is not None and declared != by_type:
+        raise ArchitectureError(
+            f"Architecture '{base.value}' is already registered with a different declaration. Every "
+            f"architecture is declared exactly once, in {defs_module_path(base)}."
+        )
     _ARCHITECTURES[base] = by_type
 
 
@@ -128,8 +139,9 @@ def validate() -> None:
        automatic, so the way to fail here is to add an enum member and no file.
     2. Every registered architecture declares every facet marked `REQUIRED`.
 
-    Unlike the neighbouring custom-node check in `run_app`, which warns, this raises: architectures
-    are first-party and the set is closed, so an incomplete one is a bug in this repository.
+    Called from `ApiDependencies.initialize`, which is the one place every entry point that builds
+    services passes through. Unlike the custom-node checks in `run_app`, which warn, this raises:
+    architectures are first-party and the set is closed, so an incomplete one is a bug here.
     """
     missing_bases = sorted(
         base.value for base in BaseModelType if base not in _NOT_ARCHITECTURES and base not in _ARCHITECTURES
@@ -143,7 +155,16 @@ def validate() -> None:
             + "'-' replaced by '_'."
         )
 
-    required = [facet_type for facet_type in Facet.FACET_TYPES if facet_type.REQUIRED]
+    # `Facet.FACET_TYPES` collects every `Facet` subclass created anywhere in the interpreter,
+    # custom-node packs included. A pack that merely defines a REQUIRED facet would otherwise make
+    # this raise sixteen times over, naming first-party files under defs/ as the culprit — and
+    # `load_custom_nodes` has already swallowed the pack's own errors by then, so nothing would
+    # point at the pack. Only this package's facets are requirements of this package.
+    required = [
+        facet_type
+        for facet_type in Facet.FACET_TYPES
+        if facet_type.REQUIRED and facet_type.__module__.startswith(f"{_FACETS_MODULE}.")
+    ]
     problems = [
         f"'{base.value}' does not declare {facet_type.__name__} (add it in {defs_module_path(base)})"
         for base in sorted(_ARCHITECTURES, key=lambda b: b.value)

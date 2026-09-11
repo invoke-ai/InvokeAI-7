@@ -34,6 +34,9 @@ register(
         scheduler_set="flow",
         scheduler_applies_to_graph=True,
         control_kinds=frozenset({"z_image_control"}),
+        # The denoiser masks positive conditioning only: it accepts a negative list but discards
+        # the masks, so a "regional" negative would silently act globally.
+        supports_regional_guidance=True,
     ),
     VariantFacet(
         {

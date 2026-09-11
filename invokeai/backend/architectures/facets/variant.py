@@ -8,10 +8,10 @@ enum:
   layer patcher.
 - The PiD decoder's resolution presets are one enum shared across five bases.
 
-Two variant enums cannot live here at all: `ClipVariantType` and `Qwen3VariantType` sit on
-`base=Any` configs, and `Any` is a sentinel the registry refuses to register. They are named
-explicitly in `tests/backend/architectures/test_variants.py` so the completeness check against
-`AnyVariant` stays total rather than quietly partial.
+Three variant enums cannot live here at all: `ClipVariantType`, `Qwen3VariantType` and
+`MistralVariantType` sit on `base=Any` configs, and `Any` is a sentinel the registry refuses to
+register. They are named explicitly in `tests/backend/architectures/test_variants.py` so the
+completeness check against `AnyVariant` stays total rather than quietly partial.
 
 This facet is deliberately *not* wired into `configs/factory.py`. That module validates a bare
 variant string against `variant_type_adapter` without passing the base (`build_common_fields`), so

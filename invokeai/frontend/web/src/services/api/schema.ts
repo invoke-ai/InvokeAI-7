@@ -5183,7 +5183,7 @@ export type components = {
             negative_prompt: components["schemas"]["NegativePromptPolicy"];
             /**
              * Dimension Grid
-             * @description Width and height must be a multiple of this.
+             * @description Width and height must be a multiple of this. A variant row may carry its own.
              */
             dimension_grid: number;
             /**
