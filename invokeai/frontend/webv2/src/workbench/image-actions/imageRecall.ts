@@ -106,7 +106,7 @@ const getNullableString = (metadata: unknown, key: string): string | null | unde
   return typeof value === 'string' ? value : undefined;
 };
 
-const getBoolean = (metadata: unknown, key: string): boolean | null => {
+export const getBoolean = (metadata: unknown, key: string): boolean | null => {
   if (!isRecord(metadata)) {
     return null;
   }
@@ -132,7 +132,7 @@ const getInteger = (metadata: unknown, key: string): number | null => {
   return value !== null && Number.isInteger(value) ? value : null;
 };
 
-const getSeed = (metadata: unknown): number | null => {
+export const getSeed = (metadata: unknown): number | null => {
   const seed = getInteger(metadata, 'seed');
 
   return seed !== null && seed >= 0 && seed <= SEED_MAX ? seed : null;
@@ -150,19 +150,19 @@ const getImageDimension = (image: GalleryImage, key: 'height' | 'width', grid: n
   return Number.isFinite(dimension) && dimension >= 64 ? clampDimension(dimension, grid) : null;
 };
 
-const getSteps = (metadata: unknown): number | null => {
+export const getSteps = (metadata: unknown): number | null => {
   const steps = getInteger(metadata, 'steps');
 
   return steps !== null && steps >= 1 ? steps : null;
 };
 
-const getCfgScale = (metadata: unknown): number | null => {
+export const getCfgScale = (metadata: unknown): number | null => {
   const cfgScale = getNumber(metadata, 'cfg_scale');
 
   return cfgScale !== null && cfgScale >= 1 ? cfgScale : null;
 };
 
-const getCfgRescaleMultiplier = (metadata: unknown): number | null => {
+export const getCfgRescaleMultiplier = (metadata: unknown): number | null => {
   const cfgRescaleMultiplier = getNumber(metadata, 'cfg_rescale_multiplier');
 
   return cfgRescaleMultiplier !== null && cfgRescaleMultiplier >= 0 && cfgRescaleMultiplier < 1
@@ -170,7 +170,7 @@ const getCfgRescaleMultiplier = (metadata: unknown): number | null => {
     : null;
 };
 
-const getScheduler = (metadata: unknown): string | null => {
+export const getScheduler = (metadata: unknown): string | null => {
   const scheduler = getString(metadata, 'scheduler');
 
   return scheduler !== null && isKnownScheduler(scheduler) ? scheduler : null;
@@ -230,7 +230,7 @@ const getImageSize = (
   return width !== null && height !== null ? { height, width } : null;
 };
 
-const getMetadataSize = (
+export const getMetadataSize = (
   metadata: unknown,
   model: GenerateModelConfig
 ): Partial<Pick<GenerateWidgetValues, 'height' | 'width'>> => {
@@ -426,7 +426,7 @@ export const getMetadataReferenceImages = (metadata: unknown) => {
   ).filter((referenceImage) => referenceImage.config.image !== null);
 };
 
-const withDimensions = (
+export const withDimensions = (
   values: GenerateWidgetValues,
   size: Partial<Pick<GenerateWidgetValues, 'height' | 'width'>>
 ): GenerateWidgetValues => {
@@ -441,7 +441,7 @@ const withDimensions = (
   };
 };
 
-const getSupportedClipSkip = (metadata: unknown, model: GenerateModelConfig): number | null => {
+export const getSupportedClipSkip = (metadata: unknown, model: GenerateModelConfig): number | null => {
   const clipSkip = getClipSkip(metadata);
   const clipSkipMax = getClipSkipMax(model);
 
