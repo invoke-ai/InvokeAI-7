@@ -717,7 +717,7 @@
     {
       "category": "GENERATION",
       "default": false,
-      "description": "Whether to enable tiled VAE decode (reduces memory consumption with some performance penalty).",
+      "description": "Whether to enable tiled VAE decode (reduces memory consumption with some performance penalty). A tiled decode is not pixel-identical to a single-pass one: a VAE decoder normalises and attends over the whole image, so the difference is spread across it rather than confined to the tile seams. As of this release the setting also applies to FLUX.1, which previously ignored it.",
       "env_var": "INVOKEAI_FORCE_TILED_DECODE",
       "literal_values": [],
       "name": "force_tiled_decode",
