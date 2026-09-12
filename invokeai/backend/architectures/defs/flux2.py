@@ -38,6 +38,9 @@ register(
         negative_prompt=NegativePrompt(visible=False, usage="never"),
         dimension_grid=16,
         guidance_label="Guidance",
+        # flux2_denoise.guidance is le=20 -- unlike flux_denoise.guidance, which is unbounded and
+        # where FLUX Fill wants 30.
+        guidance_max=20.0,
         scheduler_set="flow",
         scheduler_applies_to_graph=True,
         max_reference_images=5,

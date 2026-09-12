@@ -5197,6 +5197,16 @@ export type components = {
              */
             guidance_label: string;
             /**
+             * Guidance Min
+             * @description Lowest guidance value the denoise node accepts; a smaller one fails at enqueue.
+             */
+            guidance_min: number;
+            /**
+             * Guidance Max
+             * @description Highest guidance value the denoise node accepts; null means it enforces no ceiling.
+             */
+            guidance_max?: number | null;
+            /**
              * Scheduler Set
              * @description Which scheduler family to offer; null means no choice.
              */
@@ -17224,7 +17234,7 @@ export type components = {
             base: "sdxl";
         };
         /**
-         * Ideal Size - SD1.5, SDXL
+         * Ideal Size
          * @description Calculates the ideal size for generation to avoid duplication
          */
         IdealSizeInvocation: {

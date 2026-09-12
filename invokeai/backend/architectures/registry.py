@@ -59,9 +59,14 @@ def register(base: BaseModelType, *facets: Facet) -> None:
     """Declare what `base` is. Called once per architecture, from its own module under `defs/`.
 
     Re-executing a `defs/` module — `importlib.reload`, or jurigged re-running the file on save
-    under `--dev_reload` — calls this again with the same arguments. An identical declaration is the
-    same fact stated twice, so it is a no-op; only a *differing* one is the collision this guard
-    exists for. Facets are frozen dataclasses, so "identical" is by value.
+    under `--dev_reload` — calls this again. An identical declaration is the same fact stated twice,
+    so it is a no-op; a *differing* one raises, which is the collision this guard exists for. Facets
+    are frozen dataclasses, so "identical" is by value.
+
+    A `defs/` module is therefore not usefully hot-reloadable: you reload it because you edited it,
+    and an edited declaration is exactly the differing case, so it raises and needs a restart. The
+    no-op path only keeps an *unedited* re-execution — a reload that swept this module up with the
+    one that changed — from failing for no reason.
     """
     if base in _NOT_ARCHITECTURES:
         raise ArchitectureError(

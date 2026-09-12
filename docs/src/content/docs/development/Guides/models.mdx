@@ -54,27 +54,35 @@ The first step is to declare your model in the system's taxonomy and provide rea
        VariantB = "variant_b"
    ```
 
-3. **Define Default Settings**
+3. **Declare the Architecture**
 
-   Provide default generation parameters (steps, CFG scale, etc.) for the UI to use when this model is selected.
+   Every `BaseModelType` that is not a sentinel needs a module under
+   `invokeai/backend/architectures/defs/`, named after the base value with `-` replaced by `_`. It
+   is picked up automatically — there is no import list — but `registry.validate()` runs at boot and
+   refuses to start when the file is missing or when it omits a required facet, naming the file.
 
-   These live in the architecture's own declaration, keyed by variant. `None` is the fallback for
-   a model whose variant is not listed.
+   Default generation parameters live in this declaration, keyed by variant. `None` is the fallback
+   for a model whose variant is not listed.
 
-   ```python title="invokeai/backend/architectures/defs/new_model.py"
+   ```python title="invokeai/backend/architectures/defs/newmodel.py"
    register(
        BaseModelType.NewModel,
        ...,
        DefaultSettingsFacet({None: MainModelDefaultSettings(steps=20, cfg_scale=7.0)}),
    )
    ```
+
+   `python scripts/new_architecture.py --base newmodel --name NewModel --write` generates this file
+   with every required facet present but deliberately wrong, so it fails at boot until each value is
+   filled in. It also prints the files it cannot generate, derived from the tree on each run.
 </Steps>
 
 :::tip[Checklist: Taxonomy]{icon="approve-check"}
   - [ ] Extend `BaseModelType` enum in `taxonomy.py`
   - [ ] Create variant enum if needed in `taxonomy.py`
   - [ ] Update `AnyVariant` union in `taxonomy.py`
-  - [ ] Declare default settings in `DefaultSettingsFacet` in `architectures/defs/<base>.py`
+  - [ ] Create `architectures/defs/<base>.py` with a `register(...)` call — the app will not boot without it
+  - [ ] Declare default settings in its `DefaultSettingsFacet`
 :::
 
 ---
@@ -277,12 +285,24 @@ This is where the actual mathematical implementation of the model lives.
 
 Invocations expose your PyTorch functions as isolated execution nodes in InvokeAI's graph.
 
+:::note[Where node files go]
+Node modules live in `invokeai/app/invocations/[newmodel]/`, one package per architecture. Three
+kinds of node are grouped by role instead, because they are shared across architectures rather than
+owned by one: VAE nodes go in `invocations/vae/`, text encoders in `invocations/text_encoder/`, and
+PiD decode/upscale in `invocations/pid/`. Generic nodes — noise, primitives, image ops, metadata —
+stay at the top level.
+
+Keep the architecture prefix on the filename (`newmodel_denoise.py`) even inside `newmodel/`. The
+package is discovered automatically, but it needs an `__init__.py`: a directory without one is not
+a package, and every node in it would simply not exist at runtime.
+:::
+
 <Steps>
 1. **Model Loader Invocation**
 
    Loads the components (Transformer, VAE, etc.) and provides them to downstream nodes.
 
-   ```python title="invokeai/app/invocations/[newmodel]_model_loader.py"
+   ```python title="invokeai/app/invocations/[newmodel]/[newmodel]_model_loader.py"
    @invocation("newmodel_model_loader", title="NewModel Loader", category="model_loader")
    class NewModelModelLoaderInvocation(BaseInvocation):
        model: ModelIdentifierField = InputField(description="Main model")
@@ -297,7 +317,7 @@ Invocations expose your PyTorch functions as isolated execution nodes in InvokeA
 
    Tokenizes the prompt and runs the text encoder(s).
 
-   ```python title="invokeai/app/invocations/[newmodel]_text_encoder.py"
+   ```python title="invokeai/app/invocations/text_encoder/[newmodel]_text_encoder.py"
    @invocation("newmodel_text_encode", title="NewModel Text Encoder", category="conditioning")
    class NewModelTextEncoderInvocation(BaseInvocation):
        prompt: str = InputField()
@@ -315,7 +335,7 @@ Invocations expose your PyTorch functions as isolated execution nodes in InvokeA
 
    Wraps the `denoise` loop you wrote in the previous section.
 
-   ```python title="invokeai/app/invocations/[newmodel]_denoise.py"
+   ```python title="invokeai/app/invocations/[newmodel]/[newmodel]_denoise.py"
    @invocation("newmodel_denoise", title="NewModel Denoise", category="latents")
    class NewModelDenoiseInvocation(BaseInvocation):
        latents: LatentsField | None = InputField(default=None)
@@ -341,11 +361,12 @@ Invocations expose your PyTorch functions as isolated execution nodes in InvokeA
 
 :::tip[Checklist: Invocations]{icon="approve-check"}
   - [ ] Define output classes (e.g., `NewModelLoaderOutput`)
-  - [ ] Model loader invocation (`[newmodel]_model_loader.py`)
-  - [ ] Text encoder invocation (`[newmodel]_text_encoder.py`)
-  - [ ] Denoise invocation (`[newmodel]_denoise.py`)
+  - [ ] Model loader invocation (`[newmodel]/[newmodel]_model_loader.py`)
+  - [ ] Text encoder invocation (`text_encoder/[newmodel]_text_encoder.py`)
+  - [ ] Denoise invocation (`[newmodel]/[newmodel]_denoise.py`)
   - [ ] Extend the standard `noise` invocation if the architecture supports external noise
-  - [ ] VAE encode/decode invocations (`[newmodel]_vae_encode.py`, `[newmodel]_vae_decode.py`)
+  - [ ] VAE encode/decode invocations (`vae/[newmodel]_vae_encode.py`, `vae/[newmodel]_vae_decode.py`)
+  - [ ] `__init__.py` in `invocations/[newmodel]/`, or none of its nodes are discovered
 :::
 
 ---
@@ -489,21 +510,26 @@ Finally, add any custom UI controls (like a specific scheduler dropdown) and man
 Depending on the model, you may want to support additional features.
 
 ### ControlNet Support
-Requires backend configuration (`configs/controlnet.py`), a custom invocation (`[newmodel]_controlnet.py`), and frontend graph integration (`addControlNets`).
+Requires backend configuration (`configs/controlnet.py`), a custom invocation (`[newmodel]/[newmodel]_controlnet.py`), and frontend graph integration (`addControlNets`).
 
 ### LoRA Support
 Requires defining a LoRA config (`configs/lora.py`), updating the model loader to pass LoRA fields, and wiring `addLoRAs` in the frontend graph builder.
 
 ### IP-Adapter
-Requires a custom invocation for image prompting (`[newmodel]_ip_adapter.py`) and frontend integration via `addIPAdapters`.
+Requires a custom invocation for image prompting (`[newmodel]/[newmodel]_ip_adapter.py`) and frontend integration via `addIPAdapters`.
 
 ---
 
 ## 9. Starter Models
 
-To allow users to easily download your model from the Model Manager UI, add it to the starter models list.
+To allow users to easily download your model from the Model Manager UI, add it to the starter models catalogue.
 
-```python title="invokeai/backend/model_manager/starter_models.py"
+The catalogue is a package: define the models in your own module, then list them in the package's
+`__init__.py`.
+
+```python title="invokeai/backend/model_manager/starter_models/[newmodel].py"
+from invokeai.backend.model_manager.starter_models.types import StarterModel
+
 newmodel_main = StarterModel(
     name="NewModel Main",
     base=BaseModelType.NewModel,
@@ -511,15 +537,26 @@ newmodel_main = StarterModel(
     description="NewModel main transformer.",
     type=ModelType.Main,
 )
+```
 
-STARTER_MODELS.append(newmodel_main)
+`STARTER_MODELS` is a curated order — it is what the install dialog shows, in the sequence someone
+chose — so insert where the model belongs rather than appending.
+
+```python title="invokeai/backend/model_manager/starter_models/__init__.py"
+from invokeai.backend.model_manager.starter_models.newmodel import newmodel_main
+
+STARTER_MODELS: list[StarterModel] = [
+    # ... existing models
+    newmodel_main,
+]
 ```
 
 :::tip[Checklist: Starter Models]{icon="approve-check"}
+- [ ] Create `starter_models/[newmodel].py`
 - [ ] Define main model StarterModel
-- [ ] Define VAE/Encoder StarterModels if separate
+- [ ] Define VAE/Encoder StarterModels if separate — shared ones live in `starter_models/common.py`
 - [ ] Set dependencies correctly if required
-- [ ] Add to `STARTER_MODELS` list
+- [ ] Import and place them in `STARTER_MODELS` in `starter_models/__init__.py`
 :::
 
 ---
@@ -532,11 +569,17 @@ A complete minimal `txt2img` integration touches the following areas:
 - invokeai
   - app/invocations
     - metadata.py
-    - `[newmodel]_model_loader.py`
-    - `[newmodel]_text_encoder.py`
-    - `[newmodel]_denoise.py`
-    - `[newmodel]_vae_decode.py`
+    - `[newmodel]`
+      - `__init__.py` required, or none of this package's nodes are discovered
+      - `[newmodel]_model_loader.py`
+      - `[newmodel]_denoise.py`
+    - text_encoder
+      - `[newmodel]_text_encoder.py`
+    - vae
+      - `[newmodel]_vae_decode.py`
   - backend
+    - architectures/defs
+      - `[newmodel].py` the architecture's declaration; the app refuses to boot without it
     - model_manager
       - taxonomy.py
       - configs
@@ -544,7 +587,9 @@ A complete minimal `txt2img` integration touches the following areas:
         - factory.py
       - load/model_loaders
         - `[newmodel].py`
-      - starter_models.py
+      - starter_models
+        - `[newmodel].py`
+        - `__init__.py` import the models here and place them in `STARTER_MODELS`
     - `[newmodel]`
       - sampling_utils.py
       - denoise.py

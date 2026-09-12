@@ -69,11 +69,14 @@ def test_the_rows_come_from_the_registry_not_a_service(client: TestClient, mock_
     """The response is the same table for every install. Nothing about it is looked up.
 
     Asserted by the model manager service never being touched: if a later version resolved
-    capabilities per model record, this is where it would show.
+    capabilities per model record, this is where it would show -- including a lookup that happened
+    to produce the same table, which the rendering test below would not catch.
     """
     mock_invoker.services.model_manager = MagicMock()
     assert client.get(URL).status_code == 200
-    mock_invoker.services.model_manager.assert_not_called()
+    # `mock_calls`, not `assert_not_called()`: that only sees the mock invoked as a function, so a
+    # `services.model_manager.store.get_model(...)` would pass it. `mock_calls` records the chain.
+    assert mock_invoker.services.model_manager.mock_calls == []
 
 
 def test_the_response_matches_what_the_registry_renders(client: TestClient) -> None:

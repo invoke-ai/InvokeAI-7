@@ -23,6 +23,8 @@ register(
         negative_prompt=NegativePrompt(visible=True, usage="cfg-gated"),
         dimension_grid=8,
         guidance_label="CFG",
+        # anima_denoise.guidance_scale is ge=1.0; 1.0 is CFG off.
+        guidance_min=1.0,
         scheduler_set="anima",
         scheduler_applies_to_graph=True,
         # Positive conditioning only, for the same reason as Z-Image: the negative list is accepted

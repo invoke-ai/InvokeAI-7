@@ -60,6 +60,13 @@ class ArchitectureFeatures(BaseModel):
     )
     spatial_compression: int = Field(description="How much smaller a latent is than the image, per side.")
     guidance_label: str = Field(description="What to call the guidance slider: 'CFG' or 'Guidance'.")
+    guidance_min: float = Field(
+        description="Lowest guidance value the denoise node accepts; a smaller one fails at enqueue."
+    )
+    guidance_max: float | None = Field(
+        default=None,
+        description="Highest guidance value the denoise node accepts; null means it enforces no ceiling.",
+    )
     scheduler_set: SchedulerSet | None = Field(
         default=None, description="Which scheduler family to offer; null means no choice."
     )
@@ -109,6 +116,8 @@ def _features_of(
         dimension_grid=facet.resolve_dimension_grid(variant),
         spatial_compression=latent_space.resolve_variant(variant).spatial_compression,
         guidance_label=facet.guidance_label,
+        guidance_min=facet.guidance_min,
+        guidance_max=facet.guidance_max,
         scheduler_set=facet.scheduler_set,
         scheduler_applies_to_graph=facet.scheduler_applies_to_graph,
         control_kinds=sorted(facet.control_kinds),

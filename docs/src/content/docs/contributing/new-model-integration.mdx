@@ -81,7 +81,7 @@ exists to prevent.
    These live in the architecture's own declaration, keyed by variant. `None` is the fallback for
    a model whose variant is not listed.
 
-   ```python title="invokeai/backend/architectures/defs/new_model.py"
+   ```python title="invokeai/backend/architectures/defs/newmodel.py"
    register(
        BaseModelType.NewModel,
        ...,
@@ -99,7 +99,8 @@ exists to prevent.
 - [ ] Extend `BaseModelType` enum (`taxonomy.py`)
 - [ ] Create variant enum if needed (`taxonomy.py`)
 - [ ] Update `AnyVariant` union (`taxonomy.py`)
-- [ ] Declare default settings in `DefaultSettingsFacet` (`architectures/defs/<base>.py`)
+- [ ] Create `architectures/defs/<base>.py` with a `register(...)` call — `validate()` refuses to boot without it
+- [ ] Declare default settings in its `DefaultSettingsFacet`
 :::
 
 ---
@@ -1033,9 +1034,16 @@ const recallNewmodelEncoderModel = async (metadata: CoreMetadata) => {
 
 ## 10. Starter Models
 
-To allow users to easily download your model from the Model Manager UI, add it to the starter models list.
+To allow users to easily download your model from the Model Manager UI, add it to the starter models catalogue.
 
-```python title="invokeai/backend/model_manager/starter_models.py"
+The catalogue is a package, one module per architecture. Define the models in your own module —
+`types.py` holds `StarterModel` itself, and `common.py` holds the encoders and upscalers that
+several architectures share, so import an existing dependency from there rather than declaring a
+second copy of it.
+
+```python title="invokeai/backend/model_manager/starter_models/[newmodel].py"
+from invokeai.backend.model_manager.starter_models.types import StarterModel
+
 # Main Model
 newmodel_main = StarterModel(
     name="NewModel Main",
@@ -1072,8 +1080,20 @@ newmodel_fp8 = StarterModel(
     type=ModelType.Main,
     dependencies=[newmodel_vae, newmodel_encoder],  # Dependencies!
 )
+```
 
-# Add to STARTER_MODELS list:
+Then list them in the package's `__init__.py`. `STARTER_MODELS` is a curated order — it is what the
+install dialog shows, in the sequence someone chose, and nothing could reconstruct that order if it
+were derived — so insert where the models belong rather than appending.
+
+```python title="invokeai/backend/model_manager/starter_models/__init__.py"
+from invokeai.backend.model_manager.starter_models.newmodel import (
+    newmodel_encoder,
+    newmodel_fp8,
+    newmodel_main,
+    newmodel_vae,
+)
+
 STARTER_MODELS: list[StarterModel] = [
     # ... existing models
     newmodel_main,
@@ -1084,12 +1104,13 @@ STARTER_MODELS: list[StarterModel] = [
 ```
 
 :::tip[Checklist: Starter Models]{icon="approve-check"}
+- [ ] Create `starter_models/[newmodel].py`
 - [ ] Define main model StarterModel
 - [ ] Define VAE StarterModel if separate
-- [ ] Define text encoder StarterModel if separate
+- [ ] Define text encoder StarterModel if separate, or reuse one from `starter_models/common.py`
 - [ ] Define quantized variants (FP8, GGUF, etc.)
 - [ ] Set dependencies correctly
-- [ ] Add to `STARTER_MODELS` list
+- [ ] Import them in `starter_models/__init__.py` and place them in `STARTER_MODELS`
 :::
 
 ---
@@ -1229,6 +1250,7 @@ For a **minimal txt2img integration**, the following files are required:
   - app/invocations
     - metadata.py
     - `[newmodel]`
+      - `__init__.py` required, or none of this package's nodes are discovered
       - `[newmodel]_model_loader.py`
       - `[newmodel]_denoise.py`
     - text_encoder
@@ -1236,6 +1258,8 @@ For a **minimal txt2img integration**, the following files are required:
     - vae
       - `[newmodel]_vae_decode.py`
   - backend
+    - architectures/defs
+      - `[newmodel].py` the architecture's declaration; `validate()` refuses to boot without it
     - model_manager
       - taxonomy.py
       - configs

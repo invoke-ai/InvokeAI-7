@@ -34,6 +34,8 @@ register(
         negative_prompt=NegativePrompt(visible=True, usage="cfg-gated"),
         dimension_grid=16,
         guidance_label="CFG",
+        # ernie_image_denoise.guidance_scale is ge=1.0; 1.0 is CFG off.
+        guidance_min=1.0,
         scheduler_set="flow",
         # ernie_image_denoise takes the scheduler as an input, so the graph builder passes the
         # user's choice through rather than letting the node pick.
