@@ -23,6 +23,7 @@ from invokeai.backend.model_manager.load.model_cache.model_cache import MODEL_LO
 from invokeai.backend.model_manager.load.optimizations import skip_torch_weight_init
 from invokeai.backend.model_manager.taxonomy import ModelType
 from invokeai.backend.util.devices import TorchDevice
+from invokeai.backend.util.load_report import suppress_load_report
 
 if TYPE_CHECKING:
     from logging import Logger
@@ -243,6 +244,12 @@ class ImageIndexService(ImageIndexServiceBase):
         self._systemic_failures = 0
         self._stop_event = threading.Event()
         self._backfill_pending = threading.Event()
+        # True once a backfill pass has announced itself in the log, so the pass reports its
+        # outcome exactly once however many times it is re-armed by a failed batch on the way
+        # through, paired with the size of `_failed` when it started. Written by the worker and
+        # by _launch_worker, which runs only while no worker is alive.
+        self._backfill_announced = False
+        self._backfill_failed_at_start = 0
         # Set by the image-service callbacks when counts changed; the worker
         # (the only emitter) turns it into one status event per sweep.
         self._status_dirty = threading.Event()
@@ -610,7 +617,9 @@ class ImageIndexService(ImageIndexServiceBase):
                     # makes it safe, and also excludes the concurrent VRAM move whose
                     # load_state_dict(assign=True) would hijack these parameters onto
                     # the meta device. Same reasoning as ModelLoader._load_and_cache.
-                    with MODEL_LOAD_LOCK.write_lock(), skip_torch_weight_init():
+                    # suppress_load_report: the vision tower in the same checkpoint is
+                    # unexpected here, by design.
+                    with MODEL_LOAD_LOCK.write_lock(), skip_torch_weight_init(), suppress_load_report():
                         model = text_cls.from_pretrained(model_path, local_files_only=True, **extra_kwargs)
                 except Exception as e:
                     # Vision-only or partial installs (e.g. the IP-Adapter image
@@ -856,6 +865,8 @@ class ImageIndexService(ImageIndexServiceBase):
         invoker.services.images.on_deleted(self._on_image_deleted)
 
         self._backfill_pending.set()
+        # A previous run stopped mid-pass leaves this set; this run's pass announces itself.
+        self._backfill_announced = False
         self._stop_event.clear()
         self._worker = threading.Thread(target=self._worker_loop, name="image_index_worker", daemon=True)
         self._worker.start()
@@ -1056,8 +1067,16 @@ class ImageIndexService(ImageIndexServiceBase):
             )
             batch = [name for name in candidates if name not in self._failed][:batch_size]
             if batch:
+                if not self._backfill_announced and self._announce_backfill_start():
+                    self._backfill_announced = True
+                    # `_failed` is cumulative over the process, so the outcome line can only
+                    # speak for this pass by diffing against where it started.
+                    self._backfill_failed_at_start = len(self._failed)
                 return batch
             self._backfill_pending.clear()
+            if self._backfill_announced:
+                self._backfill_announced = False
+                self._report_backfill_outcome()
             self._emit_status()
 
         try:
@@ -1071,6 +1090,58 @@ class ImageIndexService(ImageIndexServiceBase):
             except Empty:
                 break
         return batch
+
+    def _announce_backfill_start(self) -> bool:
+        """Log that images without an embedding are being indexed. False if it could not.
+
+        This and `_report_backfill_outcome` bracket one backfill pass — work the log
+        previously showed only as a transformers load report for the encoder, with no
+        indication of what was being done or whether it worked. The pair is best-effort: a
+        pass that is stopped, or that never drains because the encoder is down, leaves the
+        start line unanswered (the outage warns on its own).
+
+        Returns whether the line was logged, so a count that could not be read leaves the
+        announcement to a later batch instead of costing this one — this runs on the path
+        that returns work, where a raise would discard the batch and reach the worker's
+        handler as an unexpected error.
+        """
+        assert self._invoker is not None
+        try:
+            status = self.get_status()
+        except Exception:
+            return False
+        if status is None:
+            return False
+        # The running encoder, not the configured name, which can be edited mid-run. The
+        # injected-encoder seam runs without a model config, and then has no name to give.
+        named = f" with embedding model '{self._model_config.name}'" if self._model_config is not None else ""
+        self._invoker.services.logger.info(f"Image index: indexing {status.pending} image(s){named}")
+        return True
+
+    def _report_backfill_outcome(self) -> None:
+        """Log the result of the backfill pass that just drained.
+
+        Reached with nothing left to embed, so the pass is over one way or the other: either
+        every eligible image has an embedding, or the rest exhausted their attempts and are
+        excluded from `pending` (which is why the pass ends rather than retrying forever).
+
+        Only failures charged during this pass are reported as its outcome. `_failed` is
+        cumulative, so reporting it whole would warn about images that retired hours ago on
+        every later pass, for the life of the process.
+        """
+        assert self._invoker is not None
+        status = self.get_status()
+        if status is None:
+            return
+        logger = self._invoker.services.logger
+        retired = len(self._failed) - self._backfill_failed_at_start
+        if retired > 0:
+            logger.warning(
+                f"Image index: indexing finished with {retired} image(s) that could not be embedded "
+                f"({status.embedded} of {status.total} indexed)"
+            )
+        else:
+            logger.info(f"Image index: indexing complete ({status.embedded} of {status.total} images indexed)")
 
     def _process_batch(self, image_names: list[str]) -> bool:
         """Embed one batch. Returns False when anything in it failed."""
@@ -1619,7 +1690,9 @@ class ImageIndexService(ImageIndexServiceBase):
                     extra_kwargs = {} if tower_config is None else {"config": tower_config}
                     # Process-global patch, so it needs the process-global lock —
                     # see _get_text_encoder for what goes wrong without it.
-                    with MODEL_LOAD_LOCK.write_lock(), skip_torch_weight_init():
+                    # suppress_load_report: the text tower in the same checkpoint is
+                    # unexpected here, by design.
+                    with MODEL_LOAD_LOCK.write_lock(), skip_torch_weight_init(), suppress_load_report():
                         model = model_cls.from_pretrained(model_path, local_files_only=True, **extra_kwargs)
                     model.eval()
                     self._cpu_model = model

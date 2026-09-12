@@ -251,6 +251,86 @@ def test_unloadable_image_is_skipped_and_backfill_completes(
     assert "bad.png" in service._failed
 
 
+def test_backfill_logs_what_it_indexed_and_that_it_finished(
+    image_records: SqliteImageRecordStorage,
+    images_service: ImageService,
+    index_records: ImageIndexRecordsSqlite,
+    service: ImageIndexService,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    for i in range(3):
+        _save_image(image_records, f"img-{i}.png")
+
+    with caplog.at_level("INFO", logger="InvokeAI"):
+        service.start(_make_invoker(images_service, index_records))
+        # Waited on the log line itself: the pass reports its outcome after clearing the flag
+        # that says it is running, so waiting on the flag races the message.
+        _wait_until(lambda: "Image index: indexing complete (3 of 3 images indexed)" in caplog.text)
+        assert "Image index: indexing 3 image(s)" in caplog.text
+
+        # An image arriving afterwards is embedded from the queue, not by a backfill pass,
+        # so it does not re-announce one.
+        caplog.clear()
+        _save_image(image_records, "new.png")
+        images_service._on_changed(_dto_for(image_records, "new.png"))
+        _wait_until(lambda: index_records.get_embeddings(["new.png"], MODEL_ID)[0] == ["new.png"])
+        assert "Image index: indexing" not in caplog.text
+
+
+def test_restart_over_an_indexed_gallery_logs_nothing(
+    image_records: SqliteImageRecordStorage,
+    images_service: ImageService,
+    index_records: ImageIndexRecordsSqlite,
+    service: ImageIndexService,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # The common case on every restart: a pass with nothing to do must not announce itself,
+    # or the log gains a line per server start that says nothing happened.
+    _save_image(image_records, "already.png")
+    index_records.upsert_embedding("already.png", MODEL_ID, _unit_vec())
+    invoker = _make_invoker(images_service, index_records)
+
+    with caplog.at_level("INFO", logger="InvokeAI"):
+        service.start(invoker)
+        # The sweep that found nothing emits the status event, so this is the observable that
+        # the pass has been and gone.
+        _wait_until(lambda: any(e.embedded == 1 and e.pending == 0 for e in _status_events(invoker)))
+        assert "Image index: indexing" not in caplog.text
+
+
+def test_backfill_reports_images_it_could_not_embed(
+    image_records: SqliteImageRecordStorage,
+    images_service: ImageService,
+    index_records: ImageIndexRecordsSqlite,
+    service: ImageIndexService,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    _save_image(image_records, "good.png")
+    _save_image(image_records, "bad.png")
+
+    def get_pil_image(image_name: str) -> Image.Image:
+        if image_name == "bad.png":
+            raise FileNotFoundError(image_name)
+        return Image.new("RGB", (16, 16), "purple")
+
+    images_service.get_pil_image = get_pil_image  # type: ignore[method-assign]
+
+    with caplog.at_level("INFO", logger="InvokeAI"):
+        service.start(_make_invoker(images_service, index_records))
+        # The pass ends because the failure retired, so the outcome has to say so rather than
+        # claiming a complete index.
+        _wait_until(lambda: "Image index: indexing finished with 1 image(s) that could not be embedded" in caplog.text)
+        assert "indexing complete" not in caplog.text
+
+        # A later pass speaks for itself: the image that retired earlier is still in the
+        # cumulative failure set, but nothing failed this time.
+        caplog.clear()
+        _save_image(image_records, "later.png")
+        service._backfill_pending.set()
+        _wait_until(lambda: "Image index: indexing complete (2 of 3 images indexed)" in caplog.text)
+        assert "could not be embedded" not in caplog.text
+
+
 def test_transient_encode_failure_is_retried_to_success(
     image_records: SqliteImageRecordStorage,
     images_service: ImageService,
