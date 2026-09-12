@@ -33,6 +33,10 @@ export interface ArchitectureCapabilitiesRow {
     dimension_grid: number;
     spatial_compression: number;
     guidance_label: GuidanceLabel | (string & {});
+    /** The floor the denoise node enforces on the guidance field; `0` where it enforces none. */
+    guidance_min: number;
+    /** The ceiling the denoise node enforces, or `null` where it enforces none. */
+    guidance_max: number | null;
     /** No `flow-no-lcm` here: that set is reached by a frontend-only variant rule, see below. */
     scheduler_set: SchedulerSetId | null;
     scheduler_applies_to_graph: boolean;
@@ -123,6 +127,10 @@ export const toBaseGenerationConfig = (row: ArchitectureCapabilitiesRow): BaseGe
     schedulerSet: features.scheduler_set ?? 'standard',
     schedulerAppliesToGraph: features.scheduler_applies_to_graph,
     guidanceLabel,
+    // `??` like every sibling here: a backend that predates these fields would otherwise put
+    // `undefined` into a `number`, and `Math.max(undefined, value)` is NaN -- a broken thumb rather
+    // than the unbounded control this had before the fields existed.
+    guidance: { min: features.guidance_min ?? 0, max: features.guidance_max ?? null },
     negativePrompt: features.negative_prompt,
     ui: {
       sdVaeOverride: features.sd_vae_override,
@@ -216,9 +224,11 @@ export const getArchitectureGenerationConfig = (base: string, variant?: unknown)
 };
 
 /**
- * Feature flags for an architecture. Variant-independent by design: the backend copies one
- * `features` block onto every variant row of an architecture, so asking per variant would suggest
- * a precision that is not there.
+ * The `features` block for an architecture, preferring a variant row where the backend serves one.
+ *
+ * Most flags repeat unchanged on every variant row, but not all: `dimension_grid` is 16 for Wan
+ * A14B and 32 for TI2V-5B, and `guidance_min`/`guidance_max` sit in the same block. Callers that
+ * know the variant should pass it; omitting it asks for the architecture's own row.
  */
 export const getArchitectureFeatures = (
   base: string,

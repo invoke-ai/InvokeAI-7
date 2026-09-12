@@ -1044,6 +1044,45 @@ describe('Krea-2, Ideogram 4 and Wan policies', () => {
     expect(reasons).toContain('Generate height must be a multiple of 16.');
   });
 
+  it('rejects Ideogram 4 step and mu overrides outside what its denoise node accepts', () => {
+    // `steps` is ge=2 (the node keeps a polish step and a main step) and `mu` is ge=-4/le=4 -- the
+    // mu control used to offer 0..10, so more than half its track was rejected at enqueue and the
+    // whole negative half was unreachable.
+    const model = createModel('ideogram-4');
+
+    expect(getGenerationValidationReasons(model, createSettings(model, { ideogram4Steps: 1 }))).toContain(
+      'Ideogram 4 steps must be between 2 and 100.'
+    );
+    expect(getGenerationValidationReasons(model, createSettings(model, { ideogram4Mu: 5 }))).toContain(
+      'Ideogram 4 mu must be between -4 and 4.'
+    );
+    expect(
+      getGenerationValidationReasons(model, createSettings(model, { ideogram4Mu: -4, ideogram4Steps: 2 }))
+    ).toEqual([]);
+  });
+
+  it('rejects an Ideogram 4 guidance override outside what its denoise node accepts', () => {
+    // `ideogram4_denoise.guidance_scale` is ge=1/le=20, and graph.ts forwards the override verbatim
+    // whenever it is not null. Normalization only checks finiteness, so a value stored before the
+    // control was bounded survives a reload and fails at enqueue.
+    const model = createModel('ideogram-4');
+    const message = 'Ideogram 4 guidance must be between 1 and 20.';
+
+    expect(getGenerationValidationReasons(model, createSettings(model, { ideogram4GuidanceScale: 0.5 }))).toContain(
+      message
+    );
+    expect(getGenerationValidationReasons(model, createSettings(model, { ideogram4GuidanceScale: 20.5 }))).toContain(
+      message
+    );
+    expect(getGenerationValidationReasons(model, createSettings(model, { ideogram4GuidanceScale: 5 }))).not.toContain(
+      message
+    );
+    // Null means "let the preset decide" and is omitted from the graph entirely.
+    expect(
+      getGenerationValidationReasons(model, createSettings(model, { ideogram4GuidanceScale: null }))
+    ).not.toContain(message);
+  });
+
   it('accepts a Qwen-Image VAE registered under the anima base, as the backend loader does', () => {
     // The same physical Qwen-Image VAE is registered as `anima` or `qwen-image` depending on
     // which family it was installed for, and krea2_model_loader declares
@@ -1249,15 +1288,120 @@ describe('the guidance slider value from a model record', () => {
   it('reads the right field for every base in the table', () => {
     // Swept rather than sampled: a base added to the capability table with the wrong label picks
     // the wrong field silently, and the three cases above only name three bases.
+    // Both probes sit inside every architecture's served guidance range, so the clamp in
+    // `getGenerationDefaults` cannot mask a wrong field read (flux2's ceiling is 20).
     for (const base of SUPPORTED_GENERATE_BASES) {
       const model = createModel(base, {
-        default_settings: { cfg_scale: 7, guidance: 30 },
+        default_settings: { cfg_scale: 7, guidance: 9 },
       } as Partial<MainModelConfig>);
       const label = getGenerationModelPolicy(model, createSettings(model)).ui.guidanceLabel;
 
       expect(getDefaultGenerateSettings(model).cfgScale, `${base} (${label}) read the wrong field`).toBe(
-        label === 'Guidance' ? 30 : 7
+        label === 'Guidance' ? 9 : 7
       );
+    }
+  });
+});
+
+describe('the guidance range the architecture declares', () => {
+  seedArchitectureCapabilities();
+
+  /**
+   * Only the bound messages: the point is which end was violated, not whatever else a bare model
+   * record is missing (`createModel('flux')` has no encoders, for instance).
+   */
+  const guidanceReasons = (model: MainModelConfig, cfgScale: number): string[] =>
+    getGenerationValidationReasons(model, createSettings(model, { cfgScale })).filter((reason) =>
+      /^(CFG|Guidance) must be at (least|most) /.test(reason)
+    );
+
+  it('rejects a persisted guidance above the ceiling the node enforces', () => {
+    // The reported failure: a project saved at FLUX Fill's recommended 30 that then selects a
+    // FLUX.2 model. `flux2_denoise.guidance` is `le=20`, so the queue rejected it at enqueue.
+    const model = createModel('flux2');
+
+    expect(guidanceReasons(model, 30)).toEqual(['Guidance must be at most 20 for flux2 model.']);
+    expect(guidanceReasons(model, 20)).toEqual([]);
+  });
+
+  it('leaves an architecture whose node declares no ceiling alone', () => {
+    // `flux_denoise.guidance` is genuinely unbounded, and 30 is FLUX Fill's own recommendation.
+    expect(guidanceReasons(createModel('flux', { variant: 'dev_fill' }), 30)).toEqual([]);
+  });
+
+  it('rejects a guidance below the floor the node enforces', () => {
+    // `ernie_image_denoise.guidance_scale` is `ge=1.0`; the control used to offer 0 and 0.5.
+    const model = createModel('ernie-image');
+
+    expect(guidanceReasons(model, 0.5)).toEqual(['CFG must be at least 1 for ernie-image model.']);
+    expect(guidanceReasons(model, 1)).toEqual([]);
+  });
+
+  it('clamps a model record whose stored default the architecture would reject', () => {
+    // `default_settings.cfg_scale` is editable up to 200 on every main model, and a Guidance-labelled
+    // record with no `guidance` of its own falls back to it. Unclamped, the field's reset button and
+    // "reset all to model defaults" would both restore a value the gate then blocks.
+    const model = createModel('flux2', { default_settings: { cfg_scale: 50 } } as Partial<MainModelConfig>);
+
+    expect(getDefaultGenerateSettings(model).cfgScale).toBe(20);
+    expect(guidanceReasons(model, getDefaultGenerateSettings(model).cfgScale)).toEqual([]);
+
+    const floored = createModel('z-image', { default_settings: { cfg_scale: 0 } } as Partial<MainModelConfig>);
+
+    expect(getDefaultGenerateSettings(floored).cfgScale).toBe(1);
+  });
+
+  it('clamps the carried-over guidance when a model is selected, and says so', () => {
+    // The reported journey end to end: a project holding FLUX Fill's 30 picks a FLUX.2 model. The
+    // canonical transition repairs it the way it already repairs dimensions and CLIP skip, so the
+    // panel is usable rather than merely blocked -- and the cleared-label toast names the field.
+    const result = getGenerateModelSelectionResult({
+      currentValues: createSettings(createModel('flux', { variant: 'dev_fill' }), { cfgScale: 30 }),
+      model: createModel('flux2'),
+      models: [],
+    });
+
+    expect(result.settings.cfgScale).toBe(20);
+    expect(result.clearedLabels).toContain('Guidance');
+  });
+
+  it('leaves a carried-over guidance the new model accepts untouched', () => {
+    const result = getGenerateModelSelectionResult({
+      currentValues: createSettings(createModel('sdxl'), { cfgScale: 7 }),
+      model: createModel('flux2'),
+      models: [],
+    });
+
+    expect(result.settings.cfgScale).toBe(7);
+    expect(result.clearedLabels).not.toContain('Guidance');
+  });
+
+  it('enforces the served bound for every architecture in the table', () => {
+    // Swept rather than sampled: the three cases above name three bases, and a base whose bound is
+    // served but never consulted fails only at enqueue. Expected values come from the fixture --
+    // the backend's own answer -- not from the policy that is under test.
+    for (const row of architectureCapabilitiesFixture) {
+      // Variant rows included: the bounds are served per `(base, variant)`, and a regression to a
+      // base-only lookup would pass a sweep that skipped them.
+      const model = createModel(row.base, { variant: row.variant ?? undefined } as Partial<MainModelConfig>);
+
+      if (!isSupportedGenerateModel(model)) {
+        continue;
+      }
+
+      const where = `${row.base}/${row.variant ?? '-'}`;
+      const { guidance_max: max, guidance_min: min } = row.features;
+
+      expect(guidanceReasons(model, min), `${where} rejected its own floor`).toEqual([]);
+
+      if (min > 0) {
+        expect(guidanceReasons(model, min - 0.5), `${where} accepted a value below its floor`).toHaveLength(1);
+      }
+
+      if (max !== null) {
+        expect(guidanceReasons(model, max), `${where} rejected its own ceiling`).toEqual([]);
+        expect(guidanceReasons(model, max + 0.5), `${where} accepted a value above its ceiling`).toHaveLength(1);
+      }
     }
   });
 });

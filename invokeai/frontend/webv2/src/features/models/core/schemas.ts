@@ -37,7 +37,12 @@ const optionalBoundedNumber = (min: number, max: number, label: string) =>
 export const mainDefaultSettingsSchema = z.object({
   cfgRescaleMultiplier: optionalBoundedNumber(0, 0.99, 'CFG rescale multiplier'),
   cfgScale: optionalBoundedNumber(1, 200, 'CFG scale'),
-  guidance: optionalBoundedNumber(1, 20, 'Guidance'),
+  // Mirrors `MainModelDefaultSettings.guidance` on the record, which is `ge=1` with no ceiling.
+  // The ceiling used to be 20, which is below a value the app itself stores: FLUX.1 Fill's
+  // declared default is 30, so opening such a model and saving any field was refused. The real
+  // per-architecture ceiling is served as `features.guidance_max` and belongs to the generation
+  // feature, not here -- this schema only guards against nonsense, like cfgScale's 200 above.
+  guidance: optionalBoundedNumber(1, 200, 'Guidance'),
   height: optionalBoundedNumber(64, 8192, 'Height').refine(
     (value) => value === null || value % 8 === 0,
     'Height must be a multiple of 8.'

@@ -64,6 +64,12 @@ import {
   DEFAULT_KREA2_SEED_VARIANCE_STRENGTH,
   DEFAULT_REFERENCE_IMAGE_LIMIT,
   deriveAspectRatioId,
+  IDEOGRAM4_GUIDANCE_MAX,
+  IDEOGRAM4_GUIDANCE_MIN,
+  IDEOGRAM4_MU_MAX,
+  IDEOGRAM4_MU_MIN,
+  IDEOGRAM4_STEPS_MAX,
+  IDEOGRAM4_STEPS_MIN,
   isGenerateSettings,
   isLoraCompatibleWithModel,
   isValidKrea2RebalanceWeights,
@@ -191,6 +197,9 @@ export interface GenerationModelPolicy {
   };
   ui: {
     guidanceLabel: GuidanceLabel;
+    /** The node-enforced floor for the guidance control; `null` max means the node enforces none. */
+    guidanceMin: number;
+    guidanceMax: number | null;
     schedulerVisible: boolean;
     clipSkipMax: number | null;
     cfgRescaleVisible: boolean;
@@ -209,6 +218,10 @@ const FALLBACK_GENERATION_CONFIG: BaseGenerationConfig = {
   schedulerSet: 'standard',
   schedulerAppliesToGraph: false,
   guidanceLabel: 'CFG',
+  // Deliberately the widest range, not the narrowest: without a table `getGenerationValidationReasons`
+  // already blocks generation outright, so tightening the control here would only clamp a persisted
+  // value the user legitimately had -- FLUX Fill's 30 -- away while the capabilities are still in flight.
+  guidance: { min: 0, max: null },
   negativePrompt: { visible: true, usage: 'never' },
   ui: { sdVaeOverride: false, colorCompensation: false, vaePrecision: false, seamless: false, cfgRescale: false },
 };
@@ -259,6 +272,10 @@ export const isArchitectureDescribed = (model: Pick<GenerateModelConfig, 'base' 
 
 const getNumber = (value: number | null | undefined, fallback: number): number =>
   Number.isFinite(value) && value !== null && value !== undefined ? value : fallback;
+
+/** Hold a guidance value to what the architecture's denoise node accepts. */
+const clampGuidance = (value: number, guidance: BaseGenerationConfig['guidance']): number =>
+  Math.min(guidance.max ?? Number.POSITIVE_INFINITY, Math.max(guidance.min, value));
 
 /**
  * The dimension rules for a model, optionally adjusted for PiD.
@@ -315,7 +332,14 @@ export const getGenerationDefaults = (model: GenerateModelConfig | undefined) =>
 
   return {
     cfgRescaleMultiplier: getNumber(defaults?.cfg_rescale_multiplier, 0),
-    cfgScale: getNumber(getRecordGuidanceValue(defaults, config.guidanceLabel), config.defaults.cfgScale),
+    // Clamped like `steps` below and like the canvas size in `getDefaultGenerateSettings`: the
+    // model record's CFG field is editable up to 200 for every main model, so a Guidance-labelled
+    // architecture with a ceiling can be handed a default it would reject. Unclamped, the reset
+    // affordance and "reset all to model defaults" would both restore a blocked value.
+    cfgScale: clampGuidance(
+      getNumber(getRecordGuidanceValue(defaults, config.guidanceLabel), config.defaults.cfgScale),
+      config.guidance
+    ),
     scheduler: defaults?.scheduler ?? config.defaults.scheduler,
     steps: Math.max(1, Math.round(getNumber(defaults?.steps, config.defaults.steps))),
     vaePrecision: defaults?.vae_precision === 'fp16' ? ('fp16' as const) : ('fp32' as const),
@@ -419,6 +443,8 @@ export const getGenerationUiPolicy = (
 
   return {
     guidanceLabel: config.guidanceLabel,
+    guidanceMin: config.guidance.min,
+    guidanceMax: config.guidance.max,
     schedulerVisible: config.schedulerAppliesToGraph,
     clipSkipMax: config.ui.clipSkipMax ?? null,
     cfgRescaleVisible: config.ui.cfgRescale,
@@ -1397,6 +1423,18 @@ const getSettingsWithCompatibleModelSelections = (
     }
   }
 
+  // Beside CLIP skip, and for the same reason: the value carried over from the previous model can
+  // be outside what this one's denoise node accepts, and every model-selection entry point passes
+  // here. The cleared-label toast names it, so the move is reported rather than silent.
+  // `getGuidanceBoundReason` still guards the paths that do not transition through here -- a
+  // project reopened on a model whose bounds changed, metadata recall, settings written by API.
+  const clampedGuidance = clampGuidance(nextSettings.cfgScale, getBaseGenerationConfig(model).guidance);
+
+  if (clampedGuidance !== nextSettings.cfgScale) {
+    nextSettings.cfgScale = clampedGuidance;
+    addClearedLabel(clearedLabels, uiPolicy.guidanceLabel);
+  }
+
   if (!uiPolicy.clipSkipMax && nextSettings.clipSkip !== 0) {
     nextSettings.clipSkip = 0;
     addClearedLabel(clearedLabels, 'CLIP skip');
@@ -1604,6 +1642,35 @@ const getReferenceImageValidationReasons = (model: GenerateModelConfig, settings
 };
 
 /**
+ * How this guidance value breaks the bound the denoise node behind it enforces, or `null`.
+ *
+ * Model selection already clamps, so this is the backstop for everything that does not transition
+ * through it: a project reopened after its model's bounds changed, metadata recall (which carries
+ * any `cfg_scale >= 1`), or settings written straight to the record. Without it the graph compiles
+ * and the queue rejects it with a node-level error the user cannot act on -- `flux2_denoise.guidance`
+ * is `le=20`, and FLUX Fill's recommended 30 is a value a project genuinely holds.
+ *
+ * Returned as one message rather than a list: the two bounds cannot both be broken, and the Generate
+ * widget shows it on the field itself, where a list has nowhere to go.
+ */
+export const getGuidanceBoundReason = (
+  model: Pick<GenerateModelConfig, 'base' | 'name' | 'type'> & { variant?: unknown },
+  cfgScale: number
+): string | null => {
+  const { guidance, guidanceLabel } = getBaseGenerationConfig(model);
+
+  if (cfgScale < guidance.min) {
+    return `${guidanceLabel} must be at least ${guidance.min} for ${model.name}.`;
+  }
+
+  if (guidance.max !== null && cfgScale > guidance.max) {
+    return `${guidanceLabel} must be at most ${guidance.max} for ${model.name}.`;
+  }
+
+  return null;
+};
+
+/**
  * Rules that belong to one model family and have no home in the component-slot policies:
  * the slot machinery validates model selections, not scalar parameters or LoRA pairings.
  */
@@ -1618,6 +1685,22 @@ const getModelFamilyValidationReasons = (model: MainModelConfig, settings: Gener
     !isValidKrea2RebalanceWeights(settings.krea2RebalanceWeights)
   ) {
     reasons.push(`Krea-2 rebalance weights must be ${KREA2_REBALANCE_WEIGHT_COUNT} comma-separated numbers.`);
+  }
+
+  // Each Ideogram 4 override is forwarded verbatim whenever it is set, and normalization only
+  // checks that a persisted value is finite -- a value stored before these controls were bounded
+  // survives a reload and fails `ideogram4_denoise` at enqueue.
+  if (model.base === 'ideogram-4') {
+    for (const [label, value, min, max] of [
+      ['steps', settings.ideogram4Steps, IDEOGRAM4_STEPS_MIN, IDEOGRAM4_STEPS_MAX],
+      ['guidance', settings.ideogram4GuidanceScale, IDEOGRAM4_GUIDANCE_MIN, IDEOGRAM4_GUIDANCE_MAX],
+      ['mu', settings.ideogram4Mu, IDEOGRAM4_MU_MIN, IDEOGRAM4_MU_MAX],
+    ] as const) {
+      // Null is "let the preset decide" and is omitted from the graph entirely.
+      if (value !== null && (value < min || value > max)) {
+        reasons.push(`Ideogram 4 ${label} must be between ${min} and ${max}.`);
+      }
+    }
   }
 
   // A14B and 5B Wan LoRAs are not interchangeable — the layer patcher fails on a tensor-shape
@@ -1680,6 +1763,12 @@ export const getGenerationValidationReasons = (model: GenerateModelConfig, setti
 
   const componentPolicy = getComponentSectionPolicy(model, settings);
   reasons.push(...componentPolicy.validate(getComponentPolicyContext(model, settings)));
+  const guidanceReason = getGuidanceBoundReason(model, settings.cfgScale);
+
+  if (guidanceReason) {
+    reasons.push(guidanceReason);
+  }
+
   reasons.push(...getModelFamilyValidationReasons(model, settings));
 
   return reasons;

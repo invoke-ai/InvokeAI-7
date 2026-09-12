@@ -9,6 +9,12 @@ import { SliderNumberField } from './SliderNumberField';
 
 const formatScaleValue = (value: number): string => `${value}×`;
 
+const MARKS_WITH_ONE_OFF_TRACK = [
+  { label: 'min', value: 0 },
+  { label: 'mid', value: 5 },
+  { label: 'default', value: 30 },
+];
+
 let host: HTMLDivElement | null = null;
 let root: Root | null = null;
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -61,6 +67,31 @@ describe('SliderNumberField', () => {
 
     expect(input?.value).toBe('150');
     expect(thumb?.getAttribute('aria-valuenow')).toBe('100');
+  });
+
+  it('drops a mark the track cannot place instead of painting it past the end', async () => {
+    // Marks come from callers that also set a looser `numberInputMax` (a model default of 30 on a
+    // guidance track that stops at 10). The thumb clamps, but the marker was forwarded unclamped and
+    // painted off the track. Dropped rather than clamped: a marker sitting on the bound would label
+    // 10 as the default it is not. The number input still carries the real value.
+    const hosted = await mount(
+      <SliderNumberField
+        ariaLabel="Guidance"
+        marks={MARKS_WITH_ONE_OFF_TRACK}
+        max={10}
+        min={0}
+        numberInputMax={100}
+        step={0.5}
+        value={30}
+        onChange={vi.fn()}
+      />
+    );
+
+    expect([...hosted.querySelectorAll('[data-part="marker"]')].map((marker) => marker.textContent)).toEqual([
+      'min',
+      'mid',
+    ]);
+    expect(hosted.querySelector<HTMLInputElement>('input[aria-label="Guidance"]')?.value).toBe('30');
   });
 
   it('shows the formatted value on the thumb tooltip while it is focused', async () => {

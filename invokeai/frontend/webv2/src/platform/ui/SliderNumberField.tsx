@@ -21,6 +21,13 @@ type SliderNumberFieldProps = {
   min: number;
   max: number;
   step: number;
+  /**
+   * Reference points on the track. A mark outside `[min, max]` is dropped, not clamped: with
+   * `numberInputMin`/`Max` looser than the track, callers legitimately mark a value that has no
+   * position on it (a model default of 30 on a track that stops at 10), and a marker pinned to the
+   * bound would claim a default at a value that is not the default. `Slider` itself still paints
+   * whatever it is given.
+   */
   marks?: SliderMark[];
   /** Looser clamps for typed values (slider bounds apply otherwise). */
   numberInputMin?: number;
@@ -67,6 +74,11 @@ export const SliderNumberField = memo(function SliderNumberField({
   // looser bounds via numberInputMin/Max); the thumb clamps to stay on the track
   // instead of rendering off it, while the input keeps showing the typed value.
   const sliderValue = useMemo(() => [Math.min(max, Math.max(min, value))], [max, min, value]);
+  const placeableMarks = marks?.filter((mark) => {
+    const markValue = typeof mark === 'number' ? mark : mark.value;
+
+    return markValue >= min && markValue <= max;
+  });
   const handleSliderChange = useCallback(
     ({ value: values }: { value: number[] }) => {
       const next = values[0];
@@ -105,7 +117,7 @@ export const SliderNumberField = memo(function SliderNumberField({
         disabled={disabled}
         flex="1"
         formatValue={formatValue}
-        marks={marks}
+        marks={placeableMarks}
         max={max}
         min={min}
         minW="0"

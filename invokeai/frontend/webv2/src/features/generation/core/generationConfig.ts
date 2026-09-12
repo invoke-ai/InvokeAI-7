@@ -31,6 +31,15 @@ export interface BaseGenerationConfig {
   schedulerSet: SchedulerSetId;
   schedulerAppliesToGraph: boolean;
   guidanceLabel: GuidanceLabel;
+  /**
+   * What the denoise node behind the single guidance control actually validates, not what the
+   * slider's track shows: `min` is a floor the node enforces (`0` where it enforces none, since no
+   * sampler here reads a negative guidance), `max` a ceiling, or `null` where the node has none.
+   */
+  guidance: {
+    min: number;
+    max: number | null;
+  };
   negativePrompt: {
     visible: boolean;
     usage: NegativePromptUsage;
