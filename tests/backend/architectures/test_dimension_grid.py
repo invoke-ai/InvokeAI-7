@@ -17,7 +17,8 @@ import pytest
 from invokeai.app.invocations.wan.wan_denoise import _validate_spatial_dimensions
 from invokeai.backend.architectures import architecture_capabilities, generative_bases
 from invokeai.backend.architectures.facets.features import FeaturesFacet, NegativePrompt
-from invokeai.backend.architectures.registry import require
+from invokeai.backend.architectures.facets.latent_space import WAN21_16, WAN22_48, LatentSpace, LatentSpaceFacet
+from invokeai.backend.architectures.registry import ArchitectureError, require
 from invokeai.backend.model_manager.taxonomy import BaseModelType, ModelVariantType, WanVariantType
 
 
@@ -117,3 +118,42 @@ def test_the_variant_rows_of_a_base_stay_sorted() -> None:
     for base in generative_bases():
         variants = [r.variant for r in architecture_capabilities() if r.base is base and r.variant is not None]
         assert variants == sorted(variants), base.value
+
+
+def test_a_variant_row_reports_the_compression_of_the_space_it_denoises_in() -> None:
+    """The grid and the compression are two facts about the same space, and a row that got one
+    from the variant and the other from the base would be internally inconsistent. TI2V-5B
+    compresses 16x per side; A14B, and the base row, 8x."""
+    rows = {(r.base.value, r.variant): r for r in architecture_capabilities()}
+
+    wan_base = rows[("wan", None)]
+    wan_ti2v = rows[("wan", "ti2v_5b")]
+
+    assert (wan_base.features.dimension_grid, wan_base.features.spatial_compression) == (16, 8)
+    assert (wan_ti2v.features.dimension_grid, wan_ti2v.features.spatial_compression) == (32, 16)
+
+
+def test_resolving_a_space_by_variant_agrees_with_resolving_it_by_sample() -> None:
+    """Two ways to the same answer: generation has a tensor, the served table has a model record.
+    If they disagreed, a preview and the size the client was told would describe different spaces."""
+    import torch
+
+    from invokeai.backend.model_manager.taxonomy import BaseModelType, WanVariantType
+
+    facet = require(BaseModelType.Wan, LatentSpaceFacet)
+
+    for variant, channels in ((WanVariantType.TI2V_5B, 48), (None, 16)):
+        by_variant = facet.resolve_variant(variant)
+        by_sample = facet.resolve(torch.zeros(1, channels, 8, 8))
+        assert by_variant is by_sample, variant
+        assert by_variant.channels == channels
+
+
+def test_a_variant_cannot_name_a_space_the_facet_does_not_declare() -> None:
+    """`by_variant` names one of this facet's spaces; it does not introduce one. A space missing
+    from `alternates` is unreachable for `resolve`, so the two resolvers would disagree for every
+    real sample."""
+    stray = LatentSpace(channels=64, spatial_compression=8, rgb_factors=[[0.1, 0.1, 0.1]] * 64)
+
+    with pytest.raises(ArchitectureError, match="does not declare"):
+        LatentSpaceFacet(WAN21_16, alternates=(WAN22_48,), by_variant={WanVariantType.TI2V_5B: stray})

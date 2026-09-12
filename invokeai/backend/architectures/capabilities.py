@@ -96,15 +96,18 @@ class ArchitectureCapabilities(BaseModel):
 
 
 def _features_of(
-    facet: FeaturesFacet, spatial_compression: int, variant: AnyVariant | None = None
+    facet: FeaturesFacet, latent_space: LatentSpaceFacet, variant: AnyVariant | None = None
 ) -> ArchitectureFeatures:
+    # Resolved per row, not once per architecture: Wan TI2V-5B denoises in the 48-channel Wan2.2
+    # space at 16x where A14B is 16 channels at 8x, and a client joining on `(base, variant)`
+    # would otherwise read its base's compression.
     return ArchitectureFeatures(
         negative_prompt=NegativePromptPolicy(
             visible=facet.negative_prompt.visible,
             usage=facet.negative_prompt.usage,
         ),
         dimension_grid=facet.resolve_dimension_grid(variant),
-        spatial_compression=spatial_compression,
+        spatial_compression=latent_space.resolve_variant(variant).spatial_compression,
         guidance_label=facet.guidance_label,
         scheduler_set=facet.scheduler_set,
         scheduler_applies_to_graph=facet.scheduler_applies_to_graph,
@@ -146,18 +149,20 @@ def architecture_capabilities() -> list[ArchitectureCapabilities]:
         defaults = require(base, DefaultSettingsFacet)
 
         rendered = ArchitectureModality(modes=sorted(modality.modes), metadata_slug=modality.metadata_slug)
-        compression = latent_space.primary.spatial_compression
+
         base_defaults = defaults.resolve()
 
         rows.append(
             ArchitectureCapabilities(
                 base=base,
                 modality=rendered,
-                features=_features_of(features, compression),
+                features=_features_of(features, latent_space),
                 defaults=base_defaults,
             )
         )
-        differing = (set(defaults.by_variant) | set(features.dimension_grid_by_variant)) - {None}
+        differing = (
+            set(defaults.by_variant) | set(features.dimension_grid_by_variant) | set(latent_space.by_variant)
+        ) - {None}
         for variant in sorted(differing):
             rows.append(
                 ArchitectureCapabilities(
@@ -166,7 +171,7 @@ def architecture_capabilities() -> list[ArchitectureCapabilities]:
                     # "FluxVariantType.DevFill" rather than the "dev_fill" a client stores and sends.
                     variant=variant.value,
                     modality=rendered,
-                    features=_features_of(features, compression, variant),
+                    features=_features_of(features, latent_space, variant),
                     defaults=defaults.by_variant.get(variant, base_defaults),
                 )
             )

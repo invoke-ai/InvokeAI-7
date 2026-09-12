@@ -16,7 +16,13 @@ from invokeai.backend.stable_diffusion.diffusion.conditioning_data import WanCon
 # decides, so the sample's channel count is what resolves it.
 register(
     BaseModelType.Wan,
-    LatentSpaceFacet(WAN21_16, alternates=(WAN22_48,)),
+    LatentSpaceFacet(
+        WAN21_16,
+        alternates=(WAN22_48,),
+        # Generation tells these apart by the sample's channel count; the served table has only a
+        # model record, so the variant names it there.
+        by_variant={WanVariantType.TI2V_5B: WAN22_48},
+    ),
     ConditioningFacet(WanConditioningInfo),
     DefaultSettingsFacet(
         {

@@ -11,7 +11,8 @@ Nine latent spaces serve sixteen architectures, which is the point: the sharing 
 previously expressed by duplicating matrices under different names.
 """
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from typing import ClassVar, Final
 
 import torch
@@ -19,7 +20,7 @@ from PIL import Image
 
 from invokeai.backend.architectures.facet import Facet
 from invokeai.backend.architectures.registry import ArchitectureError, require
-from invokeai.backend.model_manager.taxonomy import BaseModelType
+from invokeai.backend.model_manager.taxonomy import AnyVariant, BaseModelType
 
 _DEFS_PACKAGE: Final = "invokeai/backend/architectures/defs/"
 """Where a declaration lives. `registry.defs_module_path` names the exact file given a base; a
@@ -393,6 +394,33 @@ class LatentSpaceFacet(Facet):
     model identity distinguishes them — the loaded checkpoint does. Empty for every other
     architecture, which is what keeps them from depending on the shape of a tensor.
     """
+
+    by_variant: Mapping[AnyVariant, LatentSpace] = field(default_factory=dict)
+    """Which of these spaces a variant denoises in, where the variant alone settles it.
+
+    `resolve` answers the same question from a tensor, which is what generation has; this answers
+    it from a model record, which is what the served capability table has. Wan TI2V-5B compresses
+    16x per side where A14B compresses 8x, and a client joining on `(base, variant)` would
+    otherwise be told its base's number.
+
+    Every value must be `primary` or one of `alternates`: this names an existing space for a
+    variant, it does not introduce one."""
+
+    def __post_init__(self) -> None:
+        known = (self.primary, *self.alternates)
+        unknown = sorted(str(v.channels) for v in self.by_variant.values() if v not in known)
+        if unknown:
+            raise ArchitectureError(
+                f"by_variant names {len(unknown)} latent space(s) this facet does not declare "
+                f"({', '.join(unknown)} channels). Add them to `alternates`, or `resolve` will "
+                "never return them for a real sample. See " + _DEFS_PACKAGE + "."
+            )
+
+    def resolve_variant(self, variant: AnyVariant | None = None) -> LatentSpace:
+        """The space one concrete model denoises in, from its variant alone."""
+        if variant is None:
+            return self.primary
+        return self.by_variant.get(variant, self.primary)
 
     def resolve(self, sample: torch.Tensor) -> LatentSpace:
         """Which space this sample is in.
