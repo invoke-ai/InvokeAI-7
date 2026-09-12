@@ -15456,6 +15456,11 @@ export type components = {
              * @description Video frames per second. None for images.
              */
             fps?: number | null;
+            /**
+             * Media Origin
+             * @description How a video entered the gallery, if it was marked: 'audio_upload' for an uploaded audio file the server wrapped into a waveform video. None for images and for unmarked videos.
+             */
+            media_origin?: string | null;
         };
         /**
          * GalleryItemKind
@@ -43443,6 +43448,11 @@ export type components = {
              * @default
              */
             video_subfolder?: string;
+            /**
+             * Media Origin
+             * @description How this video entered the gallery, if it was marked: 'audio_upload' for an uploaded audio file the server wrapped into a waveform video.
+             */
+            media_origin?: string | null;
             /**
              * Board Id
              * @description The id of the board the video belongs to, if one exists.

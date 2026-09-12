@@ -163,6 +163,7 @@ export interface BackendGalleryItemDTO {
   height: number;
   is_intermediate: boolean;
   kind: 'image' | 'video';
+  media_origin?: string | null;
   name: string;
   starred: boolean;
   thumbnail_url: string;
@@ -176,6 +177,7 @@ interface BackendVideoDTO {
   fps?: number | null;
   height: number;
   is_intermediate: boolean;
+  media_origin?: string | null;
   starred: boolean;
   thumbnail_url: string;
   video_category: GalleryItemCategory;
@@ -308,9 +310,17 @@ const mapImage = (image: BackendImageDTO): GalleryImage => ({
   width: image.width,
 });
 
+/**
+ * The `media_origin` marker as a string, or absent. The server coerces this, but the mapper
+ * validates what it is handed here the same way it validates `duration` -- a marker of any
+ * other shape means the same thing as no marker.
+ */
+const mediaOriginOf = (value: string | null | undefined): { mediaOrigin?: string } =>
+  typeof value === 'string' && value ? { mediaOrigin: value } : {};
+
 const mapGalleryItemBase = (
   item: BackendGalleryItemDTO
-): Omit<GalleryItem, 'durationSeconds' | 'fps' | 'kind' | 'sourceQueueItemId'> => ({
+): Omit<GalleryItem, 'durationSeconds' | 'fps' | 'kind' | 'mediaOrigin' | 'sourceQueueItemId'> => ({
   boardId: item.board_id ?? 'none',
   category: item.category,
   createdAt: item.created_at,
@@ -339,6 +349,7 @@ const mapGalleryItem = (item: BackendGalleryItemDTO): GalleryItem => {
     durationSeconds: item.duration,
     ...(item.fps === null || item.fps === undefined ? {} : { fps: item.fps }),
     kind: 'video',
+    ...mediaOriginOf(item.media_origin),
   };
 };
 
@@ -372,6 +383,7 @@ const mapVideo = (video: BackendVideoDTO): GalleryVideoItem => {
     height: video.height,
     isIntermediate: video.is_intermediate,
     kind: 'video',
+    ...mediaOriginOf(video.media_origin),
     name: video.video_name,
     starred: video.starred,
     thumbnailUrl: absolutizeApiUrl(video.thumbnail_url),

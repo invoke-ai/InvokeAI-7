@@ -208,6 +208,8 @@ const getOptionalBoolean = (url, name) => {
   return value === null ? undefined : value === 'true';
 };
 
+// `media_origin` is the one metadata key the DTO surfaces (the real server projects it out
+// of the metadata blob in SQL); the rest of a fixture's metadata stays behind /metadata.
 const toVideoDto = (video) => ({
   board_id: video.board_id,
   created_at: video.created_at,
@@ -215,6 +217,7 @@ const toVideoDto = (video) => ({
   fps: video.fps,
   height: video.height,
   is_intermediate: video.is_intermediate,
+  media_origin: video.metadata?.media_origin ?? null,
   starred: video.starred,
   thumbnail_url: video.thumbnail_url,
   video_category: video.video_category,
@@ -248,6 +251,7 @@ const toGalleryItem = (kind, value) =>
         height: value.height,
         is_intermediate: value.is_intermediate,
         kind,
+        media_origin: value.metadata?.media_origin ?? null,
         name: value.video_name,
         starred: value.starred,
         thumbnail_url: value.thumbnail_url,

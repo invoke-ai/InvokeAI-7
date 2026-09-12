@@ -776,3 +776,73 @@ class TestOrderingTieBreakers:
 
         # One stable choice across refetches: the kind/name-descending winner (b.mp4).
         assert covers == {(None, "b.mp4")}
+
+
+def _save_marked_video(store: SqliteVideoRecordStorage, name: str, user_id: str, metadata: str | None) -> None:
+    store.save(
+        video_name=name,
+        video_origin=ResourceOrigin.EXTERNAL,
+        video_category=ImageCategory.USER,
+        width=640,
+        height=360,
+        duration=1.0,
+        fps=24.0,
+        has_workflow=False,
+        is_intermediate=False,
+        metadata=metadata,
+        user_id=user_id,
+    )
+
+
+class TestMediaOriginOnListedItems:
+    """The listing carries `media_origin`, so a clip picked straight off the gallery grid
+    can be conditioned correctly without a follow-up /metadata request.
+
+    "Extend in Video" builds its source clip from a listed item rather than a resolve, so
+    the marker has to survive the polymorphic UNION as well as the video DTO.
+    """
+
+    def test_a_wrapped_audio_upload_is_marked(self, services) -> None:
+        _save_marked_video(services["videos"], "wrapped.mp4", "alice", '{"media_origin": "audio_upload"}')
+
+        listed = services["gallery"].list_items(user_id="alice", is_admin=False)
+
+        assert [(item.name, item.media_origin) for item in listed.items] == [("wrapped.mp4", "audio_upload")]
+
+    def test_ordinary_videos_and_images_carry_no_marker(self, services) -> None:
+        _save_marked_video(services["videos"], "plain.mp4", "alice", '{"note": "kept"}')
+        _save_marked_video(services["videos"], "bare.mp4", "alice", None)
+        _save_image(services["images"], "still.png", user_id="alice")
+
+        listed = services["gallery"].list_items(user_id="alice", is_admin=False)
+        origins = {item.name: item.media_origin for item in listed.items}
+
+        assert origins == {"plain.mp4": None, "bare.mp4": None, "still.png": None}
+
+    def test_a_non_string_marker_does_not_break_the_listing(self, services) -> None:
+        """One video with an odd `media_origin` must not fail the whole gallery page.
+
+        Upload metadata is validated only as a JSON object, so the extracted value can be an
+        int; building `GalleryItem` from it used to raise, and the listing is a UNION over
+        every item, so the failure was not confined to the offending video.
+        """
+        _save_marked_video(services["videos"], "odd.mp4", "alice", '{"media_origin": 7}')
+        _save_marked_video(services["videos"], "wrapped.mp4", "alice", '{"media_origin": "audio_upload"}')
+
+        listed = services["gallery"].list_items(user_id="alice", is_admin=False)
+        origins = {item.name: item.media_origin for item in listed.items}
+
+        assert origins == {"odd.mp4": None, "wrapped.mp4": "audio_upload"}
+
+    def test_a_malformed_metadata_blob_does_not_fail_the_page(self, services) -> None:
+        """The listing is a UNION over every item, so an unguarded `json_extract` raise here
+        would 500 the whole gallery page for one bad row — and for an admin, for everyone."""
+        _save_marked_video(services["videos"], "bad.mp4", "alice", "not json at all")
+        _save_marked_video(services["videos"], "wrapped.mp4", "alice", '{"media_origin": "audio_upload"}')
+
+        listed = services["gallery"].list_items(user_id="alice", is_admin=False)
+
+        assert {item.name: item.media_origin for item in listed.items} == {
+            "bad.mp4": None,
+            "wrapped.mp4": "audio_upload",
+        }

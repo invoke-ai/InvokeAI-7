@@ -8,7 +8,9 @@ import { galleryImages, galleryItems, galleryVideos } from '@features/gallery';
 import {
   createDefaultVideoWidgetValues,
   createVideoSourceClip,
+  getDefaultReferenceConditioning,
   getVideoModelPolicy,
+  isVideoReferenceConditioning,
   normalizeVideoWidgetValues,
   syncVideoWidgetValuesWithModels,
 } from '@features/video';
@@ -230,10 +232,13 @@ export const executeVideoRecall = async ({
             const endFrame = recorded.trim
               ? Math.min(Math.max(recorded.trim.endFrame, startFrame), clip.numFrames - 1)
               : clip.numFrames - 1;
-            const conditioning =
-              recorded.conditioning === 'video' || recorded.conditioning === 'audio'
-                ? recorded.conditioning
-                : 'video_audio';
+            // A recorded conditioning is what the run actually used, so it wins -- ALL THREE
+            // values of it, tested as a set. Only when the metadata recorded nothing usable
+            // does this fall back to the default the add path would pick, which for a
+            // wrapped audio upload is its soundtrack rather than a picture of its waveform.
+            const conditioning = isVideoReferenceConditioning(recorded.conditioning)
+              ? recorded.conditioning
+              : getDefaultReferenceConditioning(item.mediaOrigin);
 
             references.push({ clip: { ...clip, endFrame, startFrame }, conditioning, kind: 'video' });
           } catch {

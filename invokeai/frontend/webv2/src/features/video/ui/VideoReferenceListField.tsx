@@ -10,7 +10,7 @@ import type { ChangeEvent } from 'react';
 
 import { Badge, Box, createListCollection, HStack, Icon, Image, Input, Spinner, Stack, Text } from '@chakra-ui/react';
 import { useDndContext, useDndMonitor, useDroppable } from '@dnd-kit/core';
-import { galleryItems, galleryTransfers, galleryVideos, toGalleryItemKey } from '@features/gallery';
+import { galleryItems, galleryTransfers, toGalleryItemKey } from '@features/gallery';
 import { GalleryPickerPopover } from '@features/gallery/picker';
 import { galleryImageUrls, galleryVideoUrls, isGalleryItemDragData } from '@features/gallery/utility';
 import { resolveMiniMaxH3ReferenceImage } from '@features/video/core/dimensions';
@@ -552,10 +552,15 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
   );
 
   const addVideoItem = useCallback(
-    // The conditioning is passed in rather than derived here: only a caller holding the
-    // clip's metadata can tell a wrapped audio upload from footage. Callers without it get
-    // the ordinary video default -- and the entry back, so a late answer can correct it.
-    (item: GalleryVideoItem, conditioning: VideoReferenceConditioning = 'video_audio') => {
+    // The conditioning is derived here, from the marker the gallery item carries: it tells a
+    // wrapped audio upload from footage without a second request, so every caller gets the
+    // right answer synchronously.
+    (item: GalleryVideoItem) => {
+      // The marker is read here and NOT stored on the clip: a clip outlives the gallery
+      // record it came from (it is persisted in the project and re-uploaded under a fresh
+      // name on import, where the server does not re-derive the marker), so a copy on the
+      // clip would go stale, and nothing downstream should be tempted to trust it.
+      const conditioning = getDefaultReferenceConditioning(item.mediaOrigin);
       const clip = createVideoSourceClip(item);
       // Built outside the updater so the caller holds the same object the list does: it is
       // the only durable handle on this entry once reordering moves it.
@@ -598,17 +603,10 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
       setIsLoading(true);
 
       try {
-        // Fetched alongside the resolve, not after it: the metadata only picks the
-        // card's starting conditioning, and it must not add a round trip to the add.
-        // A missing or unreadable record is not a failure -- it just means the
-        // ordinary video default.
-        const [item, metadata] = await Promise.all([
-          galleryItems.resolve({ kind: 'video', name: videoName }),
-          galleryVideos.metadata(videoName).catch(() => null),
-        ]);
+        const item = await galleryItems.resolve({ kind: 'video', name: videoName });
 
         if (item?.kind === 'video') {
-          addVideoItem(item, getDefaultReferenceConditioning(metadata));
+          addVideoItem(item);
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -712,47 +710,16 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
   );
   const addPickedVideo = useCallback(
     (item: GalleryVideoItem) => {
-      // The card goes in SYNCHRONOUSLY and is corrected afterwards, rather than waiting on
-      // the metadata the way the drop and upload paths do. The picker stays open and judges
-      // each click against the reference list as it stands -- an add that had not landed yet
-      // would leave the tile pickable (a second click would duplicate it), leave the
-      // remaining count stale, and let two picks land in whichever order their fetches
-      // finished, which for references is a different generation.
-      const entry = addVideoItem(item);
-
-      if (!entry) {
-        return;
-      }
-
-      // The metadata is the only thing that tells a wrapped audio upload from footage. An
-      // unreadable record is not a failure -- the ordinary video default just stands.
-      void galleryVideos
-        .metadata(item.name)
-        .then((metadata) => {
-          const conditioning = getDefaultReferenceConditioning(metadata);
-
-          if (conditioning === entry.conditioning) {
-            return;
-          }
-          // The window is re-derived with the conditioning, not carried over: this path adds
-          // BEFORE it knows the answer, so the card is holding the footage default, and
-          // leaving it would give a picked soundtrack a shorter window than the same clip
-          // dropped or uploaded. Safe to recompute -- the identity match below already
-          // establishes that the window is still the one this code chose.
-          //
-          // Matched by identity, not index: a card the user has since edited is a different
-          // object and keeps their choice, and a removed one is simply no longer there.
-          onChange((current) =>
-            current.map((existing) =>
-              existing === entry
-                ? { ...entry, clip: getDefaultReferenceClip(entry.clip, conditioning), conditioning }
-                : existing
-            )
-          );
-        })
-        .catch(() => undefined);
+      // Fully synchronous, which the picker requires: it stays open and judges each click
+      // against the reference list as it stands, so an add that had not landed yet would
+      // leave the tile pickable (a second click would duplicate it), leave the remaining
+      // count stale, and let two picks land in whichever order their fetches finished --
+      // which for references is a different generation. This path used to add on the
+      // footage default and correct the card once a metadata fetch answered; the marker
+      // rides on the picked item, so there is nothing left to correct.
+      addVideoItem(item);
     },
-    [addVideoItem, onChange]
+    [addVideoItem]
   );
   const handlePick = useCallback(
     (item: GalleryItem) => {

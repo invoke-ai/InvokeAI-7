@@ -37708,6 +37708,18 @@
             ],
             "title": "Fps",
             "description": "Video frames per second. None for images."
+          },
+          "media_origin": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Media Origin",
+            "description": "How a video entered the gallery, if it was marked: 'audio_upload' for an uploaded audio file the server wrapped into a waveform video. None for images and for unmarked videos."
           }
         },
         "type": "object",
@@ -97761,6 +97773,18 @@
             "title": "Video Subfolder",
             "description": "The subfolder where the video is stored on disk.",
             "default": ""
+          },
+          "media_origin": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Media Origin",
+            "description": "How this video entered the gallery, if it was marked: 'audio_upload' for an uploaded audio file the server wrapped into a waveform video."
           },
           "board_id": {
             "anyOf": [

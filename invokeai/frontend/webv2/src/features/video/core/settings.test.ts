@@ -289,18 +289,16 @@ describe('createVideoSourceClip', () => {
 
 describe('getDefaultReferenceConditioning', () => {
   it('starts a wrapped audio upload on its soundtrack alone', () => {
-    expect(getDefaultReferenceConditioning({ media_origin: 'audio_upload' })).toBe('audio');
+    expect(getDefaultReferenceConditioning('audio_upload')).toBe('audio');
   });
 
   it('keeps video + audio for ordinary videos', () => {
-    expect(getDefaultReferenceConditioning({ generation_mode: 'minimax_h3_ref2v' })).toBe('video_audio');
-    expect(getDefaultReferenceConditioning({ media_origin: 'something_else' })).toBe('video_audio');
+    expect(getDefaultReferenceConditioning('some_other_origin')).toBe('video_audio');
   });
 
-  it('keeps video + audio when there is no metadata to read', () => {
+  it('keeps video + audio when the video carries no marker', () => {
     expect(getDefaultReferenceConditioning(null)).toBe('video_audio');
     expect(getDefaultReferenceConditioning(undefined)).toBe('video_audio');
-    expect(getDefaultReferenceConditioning({})).toBe('video_audio');
   });
 });
 
@@ -755,6 +753,18 @@ describe('reference-extend linkage', () => {
   const source24 = { ...longSource, fps: 24 };
   // The panel's default; every choice is on the 17n+5 grid.
   const FRAMES = 141;
+
+  it('anchors on video + audio -- the role needs visual rows', () => {
+    const [ordinary] = applyReferenceExtendSourceVideo([], source24, 3, FRAMES);
+
+    // Deliberately NOT derived from whether the clip is a wrapped audio upload. The anchor
+    // is what the generated frames continue from, an 'audio' reference emits no visual rows
+    // at all, and the all-audio validation does not fire when other references are visual --
+    // so the seam would go silently discontinuous. `anchorReferenceConditioning` promotes in
+    // the other direction. (The clip carries no marker at all, so this cannot regress by
+    // accident.)
+    expect(ordinary).toMatchObject({ conditioning: 'video_audio', fromSourceVideo: true });
+  });
 
   it('derives the tail trim: the window ending at the cutpoint, clamped at 0', () => {
     expect(deriveReferenceExtendClip(source24, FRAMES)).toMatchObject({ endFrame: 400, startFrame: 260 });
