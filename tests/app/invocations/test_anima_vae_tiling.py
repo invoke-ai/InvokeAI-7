@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, patch
 import torch
 from diffusers.models.autoencoders import AutoencoderKLWan
 
-from invokeai.app.invocations.anima_latents_to_image import (
+from invokeai.app.invocations.vae.anima_latents_to_image import (
     ANIMA_VAE_TILE_SIZE,
     ANIMA_VAE_TILE_STRIDE,
     AnimaLatentsToImageInvocation,

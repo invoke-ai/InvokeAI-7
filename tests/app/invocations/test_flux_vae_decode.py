@@ -12,7 +12,7 @@ import pytest
 import torch
 from diffusers.models.autoencoders.autoencoder_kl import AutoencoderKL
 
-from invokeai.app.invocations.flux_vae_decode import FluxVaeDecodeInvocation
+from invokeai.app.invocations.vae.flux_vae_decode import FluxVaeDecodeInvocation
 
 
 def _loaded_vae(shift_factor: float | None, scaling_factor: float = 0.3611) -> MagicMock:

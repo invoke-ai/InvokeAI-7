@@ -6,7 +6,7 @@ import pytest
 import torch
 from diffusers.models.autoencoders.autoencoder_kl import AutoencoderKL
 
-from invokeai.app.invocations.z_image_image_to_latents import ZImageImageToLatentsInvocation
+from invokeai.app.invocations.vae.z_image_image_to_latents import ZImageImageToLatentsInvocation
 from invokeai.backend.flux.modules.autoencoder import AutoEncoder as FluxAutoEncoder
 
 
@@ -49,7 +49,7 @@ class TestZImageWorkingMemory:
         mock_latents = torch.zeros(1, 16, 64, 64)
         mock_context.tensors.load.return_value = mock_latents
 
-        estimation_path = "invokeai.app.invocations.z_image_latents_to_image.estimate_vae_working_memory_flux"
+        estimation_path = "invokeai.app.invocations.vae.z_image_latents_to_image.estimate_vae_working_memory_flux"
 
         with patch(estimation_path) as mock_estimate:
             expected_memory = 1024 * 1024 * 500  # 500MB
@@ -66,7 +66,7 @@ class TestZImageWorkingMemory:
             mock_context.images.save.return_value = mock_image_dto
 
             # Import and create invocation using model_construct to bypass validation
-            from invokeai.app.invocations.z_image_latents_to_image import ZImageLatentsToImageInvocation
+            from invokeai.app.invocations.vae.z_image_latents_to_image import ZImageLatentsToImageInvocation
 
             invocation = ZImageLatentsToImageInvocation.model_construct(
                 latents=MagicMock(latents_name="test_latents"),
@@ -113,7 +113,7 @@ class TestZImageWorkingMemory:
         mock_image_tensor = torch.zeros(1, 3, 512, 512)
 
         # Mock the estimation function
-        estimation_path = "invokeai.app.invocations.z_image_image_to_latents.estimate_vae_working_memory_flux"
+        estimation_path = "invokeai.app.invocations.vae.z_image_image_to_latents.estimate_vae_working_memory_flux"
 
         with patch(estimation_path) as mock_estimate:
             expected_memory = 1024 * 1024 * 250  # 250MB

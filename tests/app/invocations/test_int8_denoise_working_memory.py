@@ -18,7 +18,7 @@ import pytest
 import torch
 
 from invokeai.app.invocations.fields import ZImageConditioningField
-from invokeai.app.invocations.z_image_denoise import ZImageDenoiseInvocation
+from invokeai.app.invocations.z_image.z_image_denoise import ZImageDenoiseInvocation
 from invokeai.backend.model_manager.taxonomy import BaseModelType, ModelFormat, ModelType
 from invokeai.backend.quantization.int8_convrot import CONVROT_GROUP_SIZE, Int8ConvrotLinear
 
@@ -84,11 +84,11 @@ class TestZImage:
 
         with (
             patch(
-                "invokeai.app.invocations.z_image_denoise.TorchDevice.choose_torch_device",
+                "invokeai.app.invocations.z_image.z_image_denoise.TorchDevice.choose_torch_device",
                 return_value=torch.device("cpu"),
             ),
             patch(
-                "invokeai.app.invocations.z_image_denoise.TorchDevice.choose_bfloat16_safe_dtype",
+                "invokeai.app.invocations.z_image.z_image_denoise.TorchDevice.choose_bfloat16_safe_dtype",
                 return_value=torch.bfloat16,
             ),
             patch.object(ZImageDenoiseInvocation, "_get_noise", return_value=torch.zeros(1, 16, 32, 32)),

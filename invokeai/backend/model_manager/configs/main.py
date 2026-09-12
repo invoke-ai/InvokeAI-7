@@ -3,7 +3,7 @@ from abc import ABC
 from pathlib import Path
 from typing import Any, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field
 
 from invokeai.backend.model_manager.configs.base import (
     Checkpoint_Config_Base,
@@ -12,6 +12,16 @@ from invokeai.backend.model_manager.configs.base import (
     SubmodelDefinition,
 )
 from invokeai.backend.model_manager.configs.clip_embed import get_clip_variant_type_from_config
+
+# Re-exported: `MainModelDefaultSettings` moved to its own module so the architecture registry
+# can hold instances of it without this module — which now looks the values *up* — becoming part
+# of an import cycle. Kept importable from here, where every caller already expects it.
+from invokeai.backend.model_manager.configs.default_settings import (  # noqa: E402
+    DEFAULTS_PRECISION as DEFAULTS_PRECISION,
+)
+from invokeai.backend.model_manager.configs.default_settings import (
+    MainModelDefaultSettings as MainModelDefaultSettings,
+)
 from invokeai.backend.model_manager.configs.flux2_variant import (
     flux2_variant_from_context_dim,
     flux2_variant_from_hidden_size,
@@ -47,116 +57,6 @@ from invokeai.backend.model_manager.taxonomy import (
 from invokeai.backend.quantization.gguf.ggml_tensor import GGMLTensor
 from invokeai.backend.quantization.sdnq.detection import is_sdnq_folder
 from invokeai.backend.quantization.sdnq.sdnq_tensor import SDNQTensor
-from invokeai.backend.stable_diffusion.schedulers.schedulers import SCHEDULER_NAME_VALUES
-
-DEFAULTS_PRECISION = Literal["fp16", "fp32"]
-
-
-class MainModelDefaultSettings(BaseModel):
-    vae: str | None = Field(default=None, description="Default VAE for this model (model key)")
-    vae_precision: DEFAULTS_PRECISION | None = Field(default=None, description="Default VAE precision for this model")
-    scheduler: SCHEDULER_NAME_VALUES | None = Field(default=None, description="Default scheduler for this model")
-    steps: int | None = Field(default=None, gt=0, description="Default number of steps for this model")
-    cfg_scale: float | None = Field(default=None, ge=1, description="Default CFG Scale for this model")
-    cfg_rescale_multiplier: float | None = Field(
-        default=None, ge=0, lt=1, description="Default CFG Rescale Multiplier for this model"
-    )
-    width: int | None = Field(default=None, multiple_of=8, ge=64, description="Default width for this model")
-    height: int | None = Field(default=None, multiple_of=8, ge=64, description="Default height for this model")
-    guidance: float | None = Field(default=None, ge=1, description="Default Guidance for this model")
-    cpu_only: bool | None = Field(default=None, description="Whether this model should run on CPU only")
-    fp8_storage: bool | None = Field(
-        default=None,
-        description="Store weights in FP8 to reduce VRAM usage (~50% savings). Weights are cast to compute dtype during inference.",
-    )
-
-    model_config = ConfigDict(extra="forbid")
-
-    @classmethod
-    def from_base(
-        cls,
-        base: BaseModelType,
-        variant: Flux2VariantType
-        | FluxVariantType
-        | ModelVariantType
-        | WanVariantType
-        | ZImageVariantType
-        | Krea2VariantType
-        | MiniMaxH3VariantType
-        | None = None,
-        name: str | None = None,
-        path: str | None = None,
-    ) -> Self | None:
-        match base:
-            case BaseModelType.StableDiffusion1:
-                return cls(width=512, height=512)
-            case BaseModelType.StableDiffusion2:
-                return cls(width=768, height=768)
-            case BaseModelType.StableDiffusionXL:
-                return cls(width=1024, height=1024)
-            case BaseModelType.ZImage:
-                # Different defaults based on variant
-                if variant == ZImageVariantType.ZBase:
-                    # Undistilled base model needs more steps and supports CFG
-                    # Recommended: steps=28-50, cfg_scale=3.0-5.0
-                    return cls(steps=50, cfg_scale=4.0, width=1024, height=1024)
-                else:
-                    # Turbo (distilled) uses fewer steps, no CFG
-                    return cls(steps=9, cfg_scale=1.0, width=1024, height=1024)
-            case BaseModelType.ErnieImage:
-                # ERNIE-Image-Turbo (distilled) uses fewer steps and CFG=1.0. The two checkpoints
-                # share an architecture and config, so there is nothing on disk to discriminate on
-                # and no Turbo variant is modeled. Fall back to the name, and also the install
-                # directory's own name so that renaming the model in the install dialog doesn't lose
-                # the Turbo defaults. Only the leaf name is matched: an in-place install records an
-                # absolute path, and an unrelated ancestor directory (e.g. /mnt/turbo-nvme/models/)
-                # must not silently give the base model Turbo's 8 steps and CFG 1.0.
-                path_name = Path(path).name if path else None
-                haystack = " ".join(part for part in (name, path_name) if part).lower()
-                if "turbo" in haystack:
-                    return cls(steps=8, cfg_scale=1.0, width=1024, height=1024)
-                return cls(steps=50, cfg_scale=4.0, width=1024, height=1024)
-            case BaseModelType.Anima:
-                return cls(steps=35, cfg_scale=4.5, width=1024, height=1024)
-            case BaseModelType.Ideogram4:
-                # Ideogram 4 uses sampler presets (default V4_QUALITY_48 = 48 steps) and a
-                # dual-branch guidance schedule; these are sensible UI defaults.
-                return cls(steps=48, cfg_scale=7.0, width=1024, height=1024)
-            case BaseModelType.Flux2:
-                # Different defaults based on variant
-                if variant == Flux2VariantType.Dev:
-                    # FLUX.2 [dev] is guidance-distilled (recommended guidance=3.5, 28 steps, CFG disabled)
-                    return cls(steps=28, cfg_scale=1.0, guidance=3.5, width=1024, height=1024)
-                elif variant in (Flux2VariantType.Klein4BBase, Flux2VariantType.Klein9BBase):
-                    # Undistilled base models need more steps
-                    return cls(steps=28, cfg_scale=1.0, width=1024, height=1024)
-                else:
-                    # Distilled models (Klein 4B, Klein 9B) use fewer steps
-                    return cls(steps=4, cfg_scale=1.0, width=1024, height=1024)
-            case BaseModelType.QwenImage:
-                return cls(steps=40, cfg_scale=4.0, width=1024, height=1024)
-            case BaseModelType.Krea2:
-                # Krea-2-Raw (Base, undistilled) needs more steps and CFG; Turbo (distilled) uses 8
-                # steps with CFG disabled. cfg_scale has a floor of 1 (ge=1); 1.0 means "no guidance".
-                if variant == Krea2VariantType.Base:
-                    # Diffusers' Krea-2 guidance 4.5 uses cond + 4.5 * (cond - uncond), which is
-                    # equivalent to InvokeAI's standard CFG convention at scale 5.5.
-                    return cls(steps=28, cfg_scale=5.5, width=1024, height=1024)
-                return cls(steps=8, cfg_scale=1.0, width=1024, height=1024)
-            case BaseModelType.Wan:
-                # Wan 2.2 recommended defaults differ by variant.
-                if variant == WanVariantType.TI2V_5B:
-                    return cls(steps=30, cfg_scale=5.0, width=1024, height=1024)
-                # Default to A14B settings (also used when variant is unknown).
-                return cls(steps=40, cfg_scale=4.0, width=1024, height=1024)
-            case BaseModelType.MiniMaxH3:
-                # H3 is guidance-distilled (no CFG; cfg_scale 1.0 means "no guidance") and was
-                # released for a fixed 768px short edge; 1344x768 is its native 16:9 canvas.
-                # Dimensions must be multiples of 32.
-                return cls(steps=50, cfg_scale=1.0, width=1344, height=768)
-            case _:
-                # TODO(psyche): Do we want defaults for other base types?
-                return None
 
 
 class Main_Config_Base(ABC, BaseModel):

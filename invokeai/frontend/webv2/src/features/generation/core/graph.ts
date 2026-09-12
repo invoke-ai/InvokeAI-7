@@ -837,6 +837,61 @@ const buildCogView4Graph = (
   return graph;
 };
 
+const buildErnieImageGraph = (
+  settings: GenerateSettings,
+  model: MainModelConfig,
+  outputIsIntermediate: boolean,
+  projectSettings: GenerationProjectSettings
+): BackendGraphContract => {
+  // No component slots: ernie_image_model_loader reads the transformer, VAE, text encoder and
+  // optional prompt enhancer out of one diffusers pipeline directory, so there is nothing for the
+  // user to supply separately and nothing to validate here.
+  const graph: BackendGraphContract = { edges: [], id: createId('ernie_image_graph'), nodes: {} };
+  const { negativePrompt, positivePrompt, seed } = addPromptAndSeedNodes(graph);
+  const scheduler = coerceSchedulerForGraph(model, settings.scheduler);
+  const useCfg = settings.cfgScale > 1;
+  const modelLoader = addNode(graph, {
+    id: 'model_loader',
+    model,
+    type: 'ernie_image_model_loader',
+    // The enhancer is a separate node with its own prompt rewriting and cannot be idle-offloaded;
+    // Generate does not surface it, so the loader is told not to hold it resident.
+    use_prompt_enhancer: false,
+  });
+  const posCond = addNode(graph, { id: 'pos_cond', type: 'ernie_image_text_encoder' });
+  const negCond = useCfg ? addNode(graph, { id: 'neg_cond', type: 'ernie_image_text_encoder' }) : null;
+  const denoise = addNode(graph, {
+    denoising_end: 1,
+    denoising_start: 0,
+    guidance_scale: settings.cfgScale,
+    height: settings.height,
+    id: 'denoise_latents',
+    scheduler,
+    steps: settings.steps,
+    type: 'ernie_image_denoise',
+    width: settings.width,
+  });
+  const output = addImageOutputNode(graph, 'ernie_image_vae_decode', outputIsIntermediate);
+
+  addEdge(graph, modelLoader, 'transformer', denoise, 'transformer');
+  addEdge(graph, modelLoader, 'text_encoder', posCond, 'text_encoder');
+  addEdge(graph, modelLoader, 'vae', output, 'vae');
+  addEdge(graph, positivePrompt, 'value', posCond, 'prompt');
+  addEdge(graph, posCond, 'conditioning', denoise, 'positive_conditioning');
+
+  if (negCond) {
+    addEdge(graph, modelLoader, 'text_encoder', negCond, 'text_encoder');
+    addEdge(graph, negativePrompt, 'value', negCond, 'prompt');
+    addEdge(graph, negCond, 'conditioning', denoise, 'negative_conditioning');
+  }
+
+  addEdge(graph, seed, 'value', denoise, 'seed');
+  addEdge(graph, denoise, 'latents', output, 'latents');
+  addMetadata(graph, output, settings, model, 'ernie_image_txt2img', projectSettings);
+
+  return graph;
+};
+
 const buildQwenImageGraph = (
   settings: GenerateSettings,
   model: MainModelConfig,
@@ -1408,6 +1463,7 @@ export const GRAPH_BUILDERS = {
   flux: buildFluxGraph,
   flux2: buildFlux2Graph,
   cogview4: buildCogView4Graph,
+  'ernie-image': buildErnieImageGraph,
   'qwen-image': buildQwenImageGraph,
   'z-image': buildZImageGraph,
   'ideogram-4': buildIdeogram4Graph,

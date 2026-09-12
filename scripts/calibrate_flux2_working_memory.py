@@ -59,7 +59,7 @@ import torch
 import torch.nn.functional as F
 from torch.nn.attention import SDPBackend, sdpa_kernel
 
-from invokeai.app.invocations.flux2_denoise import (
+from invokeai.app.invocations.flux2.flux2_denoise import (
     FLUX2_ATTENTION_HEAD_DIM,
     FLUX2_REFERENCE_HIDDEN_SIZE,
     Flux2DenoiseInvocation,

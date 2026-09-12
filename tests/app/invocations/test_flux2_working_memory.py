@@ -17,15 +17,15 @@ import torch
 import torch.nn.functional as F
 from diffusers.models.autoencoders.autoencoder_kl_flux2 import AutoencoderKLFlux2
 
-from invokeai.app.invocations.flux2_denoise import (
+from invokeai.app.invocations.flux2.flux2_denoise import (
     FLUX2_ATTENTION_HEAD_DIM,
     FLUX2_BYTES_PER_TOKEN_AT_REFERENCE_WIDTH,
     FLUX2_MAX_HIDDEN_SIZE,
     FLUX2_REFERENCE_HIDDEN_SIZE,
     Flux2DenoiseInvocation,
 )
-from invokeai.app.invocations.flux2_vae_decode import Flux2VaeDecodeInvocation
-from invokeai.app.invocations.flux2_vae_encode import Flux2VaeEncodeInvocation
+from invokeai.app.invocations.vae.flux2_vae_decode import Flux2VaeDecodeInvocation
+from invokeai.app.invocations.vae.flux2_vae_encode import Flux2VaeEncodeInvocation
 from invokeai.backend.util.attention import (
     SDPA_MATH_BYTES_PER_SCORE_ELEMENT,
     _diffusers_attention_dispatch,
@@ -502,7 +502,7 @@ class TestFlux2VaeInvocationsRequestWorkingMemory:
 
         expected = 10 * GB
         with patch(
-            "invokeai.app.invocations.flux2_vae_decode.estimate_vae_working_memory_flux2", return_value=expected
+            "invokeai.app.invocations.vae.flux2_vae_decode.estimate_vae_working_memory_flux2", return_value=expected
         ) as estimate:
             invocation = Flux2VaeDecodeInvocation.model_construct(
                 latents=MagicMock(latents_name="latents"), vae=MagicMock(vae=MagicMock())
@@ -526,10 +526,10 @@ class TestFlux2VaeInvocationsRequestWorkingMemory:
         expected = 4 * GB
         with (
             patch(
-                "invokeai.app.invocations.flux2_vae_encode.estimate_vae_working_memory_flux2", return_value=expected
+                "invokeai.app.invocations.vae.flux2_vae_encode.estimate_vae_working_memory_flux2", return_value=expected
             ) as estimate,
             patch(
-                "invokeai.app.invocations.flux2_vae_encode.image_resized_to_grid_as_tensor",
+                "invokeai.app.invocations.vae.flux2_vae_encode.image_resized_to_grid_as_tensor",
                 return_value=torch.zeros(3, 1024, 1024),
             ),
         ):
@@ -610,7 +610,7 @@ class TestFlux2DenoiseRequestsWorkingMemory:
         with (
             patch.object(Flux2DenoiseInvocation, "_get_bn_stats", return_value=None),
             patch("invokeai.backend.util.devices.TorchDevice.choose_torch_device", return_value=torch.device("cpu")),
-            patch("invokeai.app.invocations.flux2_denoise.Flux2RefImageExtension", return_value=ref_extension),
+            patch("invokeai.app.invocations.flux2.flux2_denoise.Flux2RefImageExtension", return_value=ref_extension),
             patch.object(
                 Flux2DenoiseInvocation, "_prepare_noise_tensor", return_value=torch.zeros(batch, 32, 128, 128)
             ),

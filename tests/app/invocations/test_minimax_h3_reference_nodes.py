@@ -19,8 +19,8 @@ from invokeai.app.invocations.fields import (
     MiniMaxH3ReferenceMediaField,
     VideoField,
 )
-from invokeai.app.invocations.minimax_h3_denoise import MiniMaxH3DenoiseInvocation
-from invokeai.app.invocations.minimax_h3_reference import (
+from invokeai.app.invocations.minimax_h3.minimax_h3_denoise import MiniMaxH3DenoiseInvocation
+from invokeai.app.invocations.minimax_h3.minimax_h3_reference import (
     _ResolvedVideoRange,
     load_reference_audio,
     normalize_reference_list,
@@ -28,8 +28,8 @@ from invokeai.app.invocations.minimax_h3_reference import (
     reference_kind,
     reference_signature_entry,
 )
-from invokeai.app.invocations.minimax_h3_text_encoder import MiniMaxH3TextEncoderInvocation
 from invokeai.app.invocations.model import MiniMaxH3TransformerField, ModelIdentifierField
+from invokeai.app.invocations.text_encoder.minimax_h3_text_encoder import MiniMaxH3TextEncoderInvocation
 from invokeai.backend.model_manager.taxonomy import BaseModelType, ModelType
 from invokeai.backend.stable_diffusion.diffusion.conditioning_data import MiniMaxH3ConditioningInfo
 
@@ -101,10 +101,12 @@ class TestResolvedVideoRange:
         reference.end_frame = end
         with (
             patch(
-                "invokeai.app.invocations.minimax_h3_reference.probe_video",
+                "invokeai.app.invocations.minimax_h3.minimax_h3_reference.probe_video",
                 return_value=(640, 480, n_frames / 24.0, 24.0),
             ),
-            patch("invokeai.app.invocations.minimax_h3_reference.decoder_frame_count", return_value=n_frames),
+            patch(
+                "invokeai.app.invocations.minimax_h3.minimax_h3_reference.decoder_frame_count", return_value=n_frames
+            ),
         ):
             return _ResolvedVideoRange(context, reference)
 
@@ -299,7 +301,7 @@ class TestReferenceAudioWindow:
 
     def _patch_pcm(self, monkeypatch, pcm):
         monkeypatch.setattr(
-            "invokeai.app.invocations.minimax_h3_reference.extract_audio_pcm",
+            "invokeai.app.invocations.minimax_h3.minimax_h3_reference.extract_audio_pcm",
             lambda path, float_pcm=False: (pcm, self.RATE),
         )
 

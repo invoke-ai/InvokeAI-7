@@ -2,7 +2,7 @@
 
 from PIL import Image
 
-from invokeai.app.invocations.qwen_image_text_encoder import (
+from invokeai.app.invocations.text_encoder.qwen_image_text_encoder import (
     QwenImageTextEncoderInvocation,
     _build_prompt,
 )

@@ -37,6 +37,7 @@ const BASE_LABELS: Record<string, string> = {
   any: 'Any',
   anima: 'Anima',
   cogview4: 'CogView4',
+  'ernie-image': 'ERNIE-Image',
   external: 'External',
   flux: 'FLUX',
   flux2: 'FLUX.2',

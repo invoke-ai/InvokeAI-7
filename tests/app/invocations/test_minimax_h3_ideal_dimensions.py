@@ -6,7 +6,7 @@ The node is a pure math transform — no context dependencies — so we can call
 
 import pytest
 
-from invokeai.app.invocations.minimax_h3_ideal_dimensions import MiniMaxH3IdealDimensionsInvocation
+from invokeai.app.invocations.minimax_h3.minimax_h3_ideal_dimensions import MiniMaxH3IdealDimensionsInvocation
 from invokeai.backend.minimax_h3.packing import (
     MINIMAX_H3_CANVAS_MULTIPLE,
     MINIMAX_H3_MAX_PIXELS,

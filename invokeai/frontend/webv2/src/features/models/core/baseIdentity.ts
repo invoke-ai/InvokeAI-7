@@ -69,6 +69,11 @@ export const MODEL_BASES = {
     label: 'CogView4',
     colorPalette: 'red',
   },
+  'ernie-image': {
+    base: 'ernie-image',
+    label: 'ERNIE-Image',
+    colorPalette: 'orange',
+  },
   'qwen-image': {
     base: 'qwen-image',
     label: 'Qwen Image',

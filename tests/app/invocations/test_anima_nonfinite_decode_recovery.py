@@ -12,8 +12,8 @@ from types import SimpleNamespace
 
 import torch
 
-import invokeai.app.invocations.anima_latents_to_image as anima_l2i
-from invokeai.app.invocations.anima_latents_to_image import AnimaLatentsToImageInvocation
+import invokeai.app.invocations.vae.anima_latents_to_image as anima_l2i
+from invokeai.app.invocations.vae.anima_latents_to_image import AnimaLatentsToImageInvocation
 
 
 class _StubWanVae(torch.nn.Module):

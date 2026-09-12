@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from invokeai.app.invocations.krea2_model_loader import Krea2ModelLoaderInvocation
+from invokeai.app.invocations.krea2.krea2_model_loader import Krea2ModelLoaderInvocation
 from invokeai.app.invocations.model import ModelIdentifierField
 from invokeai.backend.model_manager.taxonomy import BaseModelType, ModelFormat, ModelType
 
