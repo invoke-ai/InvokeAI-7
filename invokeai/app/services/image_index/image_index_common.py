@@ -1,19 +1,42 @@
 """Common types and helpers for the semantic image index services."""
 
+from typing import Literal, NamedTuple
+
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field
 
 EMBEDDING_DTYPE = np.float32
 
+MediaKind = Literal["image", "video"]
+
+
+class IndexedItem(NamedTuple):
+    """One indexable gallery item.
+
+    Images and videos are separate namespaces — separate tables, separate access joins,
+    separate URLs — so an indexed item is addressed by both. Names are server-assigned and
+    unique across both namespaces in practice, but the kind is what tells a client which
+    endpoint resolves the name, and the index never has to guess it from an extension.
+
+    A NamedTuple so it can key the worker's pending/failure bookkeeping and be compared and
+    sorted without ceremony.
+    """
+
+    kind: MediaKind
+    name: str
+
 
 class ImageIndexStatus(BaseModel):
-    """Progress of the embedding index for one embedding model."""
+    """Progress of the embedding index for one embedding model.
 
-    total: int = Field(description="Number of gallery images eligible for indexing")
-    embedded: int = Field(description="Number of eligible images that have an embedding")
+    Counts cover both media kinds: an indexed gallery is its images plus its videos.
+    """
+
+    total: int = Field(description="Number of gallery items (images and videos) eligible for indexing")
+    embedded: int = Field(description="Number of eligible items that have an embedding")
     failed: int = Field(
         default=0,
-        description="Eligible images that repeatedly failed to embed; excluded from pending so it can drain",
+        description="Eligible items that repeatedly failed to embed; excluded from pending so it can drain",
     )
 
     @property
@@ -25,16 +48,16 @@ class ImageIndexStatus(BaseModel):
 
 
 class ProjectionRecord(BaseModel):
-    """A cached 2D projection of a user's accessible images."""
+    """A cached 2D projection of a user's accessible gallery items."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     user_id: str = Field(description="The user the projection was computed for")
     model_id: str = Field(description="Content hash of the embedding model")
-    scope_hash: str = Field(description="Fingerprint of the image set the projection covers")
+    scope_hash: str = Field(description="Fingerprint of the item set the projection covers")
     params: str = Field(description="JSON of the projection parameters")
     point_count: int = Field(description="Number of projected points")
-    image_names: list[str] = Field(description="Image names, row-aligned with coords")
+    items: list[IndexedItem] = Field(description="Indexed items, row-aligned with coords")
     coords: np.ndarray = Field(description="float32 array of shape (point_count, 2)")
     created_at: str = Field(description="When the projection was first computed")
     updated_at: str = Field(description="When the projection was last recomputed")

@@ -14,11 +14,17 @@ from invokeai.app.services.image_index.image_index_base import (
     TextSearchUnavailableError,
     VocabBuildState,
 )
-from invokeai.app.services.image_index.image_index_common import EMBEDDING_DTYPE, ImageIndexStatus
+from invokeai.app.services.image_index.image_index_common import (
+    EMBEDDING_DTYPE,
+    ImageIndexStatus,
+    IndexedItem,
+    MediaKind,
+)
 from invokeai.app.services.image_index.projection import compute_umap, projection_params, scope_hash
 from invokeai.app.services.image_records.image_records_common import ImageCategory
 from invokeai.app.services.images.images_common import ImageDTO
 from invokeai.app.services.session_queue.session_queue_common import DEFAULT_QUEUE_ID
+from invokeai.app.services.videos.videos_common import VideoDTO
 from invokeai.backend.model_manager.load.model_cache.model_cache import MODEL_LOAD_LOCK
 from invokeai.backend.model_manager.load.optimizations import skip_torch_weight_init
 from invokeai.backend.model_manager.taxonomy import ModelType
@@ -210,13 +216,17 @@ _ACTIVATION_RETRY_INTERVAL_S = 5.0
 
 
 class ImageIndexService(ImageIndexServiceBase):
-    """Embeds gallery images on a daemon worker thread.
+    """Embeds gallery images and videos on a daemon worker thread.
 
-    The image-service callbacks only enqueue work and set a status-dirty
-    flag — they fire synchronously on the caller's thread and must never do
-    I/O. All embedding and all status emission happens on the worker, which
-    pauses while a generation is in progress unless it is configured to run
-    on the CPU.
+    A video is embedded through the thumbnail the video file store extracted
+    when it was created, so indexing one costs exactly what indexing an image
+    costs and needs no decoder here.
+
+    The image- and video-service callbacks only enqueue work and set a
+    status-dirty flag — they fire synchronously on the caller's thread and
+    must never do I/O. All embedding and all status emission happens on the
+    worker, which pauses while a generation is in progress unless it is
+    configured to run on the CPU.
     """
 
     def __init__(self, encode_fn: Optional[EncodeFn] = None, model_id: Optional[str] = None) -> None:
@@ -230,15 +240,15 @@ class ImageIndexService(ImageIndexServiceBase):
         self._encode_fn_override = encode_fn
         self._model_id_override = model_id
 
-        self._queue: Queue[str] = Queue()
-        self._pending: set[str] = set()
+        self._queue: Queue[IndexedItem] = Queue()
+        self._pending: set[IndexedItem] = set()
         self._pending_lock = threading.Lock()
-        # Per-image failure counts; after _MAX_ATTEMPTS the name moves to
+        # Per-item failure counts; after _MAX_ATTEMPTS the item moves to
         # _failed, which is excluded from backfill so a bad file cannot make
         # the backfill loop spin forever. Transient failures get retried.
-        self._attempts: dict[str, int] = {}
-        self._failed: set[str] = set()
-        # Consecutive failures of the machinery rather than of any image. Drives the retry
+        self._attempts: dict[IndexedItem, int] = {}
+        self._failed: set[IndexedItem] = set()
+        # Consecutive failures of the machinery rather than of any item. Drives the retry
         # backoff and is reset by the first batch that stores anything. Worker-thread only.
         self._systemic_failures = 0
         self._stop_event = threading.Event()
@@ -315,9 +325,9 @@ class ImageIndexService(ImageIndexServiceBase):
         # Guards the lazy _processor/_cpu_model init: embed_image runs on
         # request threads concurrently with the indexer worker.
         self._vision_init_lock = threading.Lock()
-        # scope_hash -> (names, matrix): the accessible embedding matrix for
+        # scope_hash -> (items, matrix): the accessible embedding matrix for
         # similarity search, so repeated queries skip re-reading BLOBs.
-        self._search_cache: dict[str, tuple[list[str], np.ndarray]] = {}
+        self._search_cache: dict[str, tuple[list[IndexedItem], np.ndarray]] = {}
         self._search_cache_lock = threading.Lock()
         # (vocabulary, embeddings) for cluster labeling; RAM + disk cached.
         self._vocab_cache: Optional[tuple[list[str], np.ndarray]] = None
@@ -639,20 +649,20 @@ class ImageIndexService(ImageIndexServiceBase):
                 self._text_encoder = (tokenizer, model, is_siglip)
             return self._text_encoder
 
-    def get_accessible_embeddings(self, user_id: str | None) -> tuple[list[str], np.ndarray]:
+    def get_accessible_embeddings(self, user_id: str | None) -> tuple[list[IndexedItem], np.ndarray]:
         if self._invoker is None or self._model_id is None:
             return [], np.empty((0, 0), dtype=EMBEDDING_DTYPE)
         records = self._invoker.services.image_index_records
 
-        names = records.list_accessible_embedded_images(user_id, self._model_id)
-        if not names:
+        items = records.list_accessible_embedded_items(user_id, self._model_id)
+        if not items:
             return [], np.empty((0, 0), dtype=EMBEDDING_DTYPE)
 
         # Memory math: one entry is N x dim float32 (~300 MB at 100k x 768),
         # so the LRU holds two entries and evicts oldest-first rather than
         # clearing wholesale. Keys self-invalidate: any change to the
         # accessible set changes the scope hash.
-        cache_key = scope_hash(self._model_id, names)
+        cache_key = scope_hash(self._model_id, items)
         with self._search_cache_lock:
             cached = self._search_cache.get(cache_key)
             if cached is not None:
@@ -663,7 +673,7 @@ class ImageIndexService(ImageIndexServiceBase):
             # Built outside the lock: a concurrent miss for the same scope
             # transiently builds a duplicate, which beats serializing every
             # search behind a multi-second BLOB read.
-            cached = records.get_embeddings(names, self._model_id)
+            cached = records.get_embeddings(items, self._model_id)
             with self._search_cache_lock:
                 while len(self._search_cache) >= 2:
                     self._search_cache.pop(next(iter(self._search_cache)))
@@ -671,16 +681,32 @@ class ImageIndexService(ImageIndexServiceBase):
 
         return cached
 
-    def search_similar(self, user_id: str | None, query_embedding: np.ndarray, limit: int) -> list[tuple[str, float]]:
-        found_names, matrix = self.get_accessible_embeddings(user_id)
+    def search_similar(
+        self,
+        user_id: str | None,
+        query_embedding: np.ndarray,
+        limit: int,
+        kinds: Optional[tuple[MediaKind, ...]] = None,
+    ) -> list[tuple[IndexedItem, float]]:
+        found_items, matrix = self.get_accessible_embeddings(user_id)
         if matrix.size == 0:
             return []
 
         scores = matrix @ query_embedding.astype(matrix.dtype)
-        top = min(limit, len(found_names))
+        # Restricting by kind selects among the SCORES, not among the rows: masking the matrix
+        # would copy it, and it is the largest array in the process (~300 MB at 100k x 768).
+        # The dot product over rows nobody asked for is a rounding error beside that.
+        candidates = np.arange(len(found_items))
+        if kinds is not None:
+            candidates = candidates[[found_items[index].kind in kinds for index in candidates]]
+            if candidates.size == 0:
+                return []
+            scores = scores[candidates]
+
+        top = min(limit, candidates.size)
         order = np.argpartition(-scores, top - 1)[:top]
         order = order[np.argsort(-scores[order])]
-        return [(found_names[index], float(scores[index])) for index in order]
+        return [(found_items[candidates[index]], float(scores[index])) for index in order]
 
     def request_projection(
         self,
@@ -848,12 +874,12 @@ class ImageIndexService(ImageIndexServiceBase):
         """Wire the image callbacks and start the worker thread. Runs once per active model."""
         discarded = invoker.services.image_index_records.delete_embeddings_for_other_models(self._model_id)
         if discarded:
-            invoker.services.logger.info(
-                f"Discarded {discarded} image embeddings computed by a previously-configured model"
-            )
+            invoker.services.logger.info(f"Discarded {discarded} embeddings computed by a previously-configured model")
 
         invoker.services.images.on_changed(self._on_image_changed)
         invoker.services.images.on_deleted(self._on_image_deleted)
+        invoker.services.videos.on_changed(self._on_video_changed)
+        invoker.services.videos.on_deleted(self._on_video_deleted)
 
         self._backfill_pending.set()
         self._stop_event.clear()
@@ -873,40 +899,61 @@ class ImageIndexService(ImageIndexServiceBase):
                     "Image index worker did not stop within 10s (likely mid-encode); abandoning daemon thread"
                 )
 
-    # --- Image service callbacks (caller's thread — enqueue and flag only, never I/O) ---
+    # --- Media service callbacks (caller's thread — enqueue and flag only, never I/O) ---
 
     def _on_image_changed(self, image_dto: ImageDTO) -> None:
-        if image_dto.is_intermediate or image_dto.image_category != ImageCategory.GENERAL:
-            # The image may have just LEFT eligibility (e.g. adopted as a
-            # canvas asset). Drop any failure bookkeeping so a name no longer
+        self._on_item_changed(
+            IndexedItem("image", image_dto.image_name),
+            eligible=not image_dto.is_intermediate and image_dto.image_category is ImageCategory.GENERAL,
+        )
+
+    def _on_image_deleted(self, image_name: str) -> None:
+        self._on_item_deleted(IndexedItem("image", image_name))
+
+    def _on_video_changed(self, video_dto: VideoDTO) -> None:
+        self._on_item_changed(
+            IndexedItem("video", video_dto.video_name),
+            # Videos carry the image category enum; `general` is the gallery's, exactly as for
+            # images. A video is enqueued from here rather than from its own creation path
+            # because this fires after the file store has written the thumbnail the embed reads.
+            eligible=not video_dto.is_intermediate and video_dto.video_category is ImageCategory.GENERAL,
+        )
+
+    def _on_video_deleted(self, video_name: str) -> None:
+        self._on_item_deleted(IndexedItem("video", video_name))
+
+    def _on_item_changed(self, item: IndexedItem, eligible: bool) -> None:
+        if not eligible:
+            # The item may have just LEFT eligibility (e.g. an image adopted as
+            # a canvas asset). Drop any failure bookkeeping so an item no longer
             # counted in the totals cannot skew `failed` (and thus `pending`)
             # for the rest of the process. Flag only when something was
             # actually forgotten — this branch also fires for every
             # intermediate save during generation, which must stay silent.
-            if image_dto.image_name in self._failed:
-                self._failed.discard(image_dto.image_name)
-                self._attempts.pop(image_dto.image_name, None)
+            if item in self._failed:
+                self._failed.discard(item)
+                self._attempts.pop(item, None)
                 self._status_dirty.set()
             return
         with self._pending_lock:
-            if image_dto.image_name in self._pending:
+            if item in self._pending:
                 return
-            self._pending.add(image_dto.image_name)
-        # Flagged before the enqueue so the worker reports the image as
+            self._pending.add(item)
+        # Flagged before the enqueue so the worker reports the item as
         # pending before it starts (and certainly before it finishes) the
         # embed. The worker does the emit: callbacks stay free of DB reads
         # (which could block the generation thread behind the worker's own
         # long transactions), and single-threaded emission means events can
         # never be dispatched with out-of-order counts.
         self._status_dirty.set()
-        self._queue.put(image_dto.image_name)
+        self._queue.put(item)
 
-    def _on_image_deleted(self, image_name: str) -> None:
-        # The DB row is removed by the images FK cascade; just forget local state.
+    def _on_item_deleted(self, item: IndexedItem) -> None:
+        # The DB row is removed by the images/videos FK cascade; just forget local state.
         with self._pending_lock:
-            self._pending.discard(image_name)
-        self._failed.discard(image_name)
-        self._attempts.pop(image_name, None)
+            self._pending.discard(item)
+        self._failed.discard(item)
+        self._attempts.pop(item, None)
         # A deletion gives the worker nothing to embed, so this flag is the
         # only signal clients get that the index shrank; the worker notices
         # within its poll interval. Bulk deletes coalesce into one emit.
@@ -1039,8 +1086,8 @@ class ImageIndexService(ImageIndexServiceBase):
                 self._status_dirty.set()
                 self._stop_event.wait(_POLL_SECONDS)
 
-    def _next_batch(self) -> Optional[list[str]]:
-        """Get the next batch of image names, preferring backfill work.
+    def _next_batch(self) -> Optional[list[IndexedItem]]:
+        """Get the next batch of items, preferring backfill work.
 
         Returns None when there is nothing to do right now.
         """
@@ -1049,12 +1096,12 @@ class ImageIndexService(ImageIndexServiceBase):
 
         if self._backfill_pending.is_set():
             assert self._model_id is not None
-            # Over-fetch by the failed count so permanently-failing images
+            # Over-fetch by the failed count so permanently-failing items
             # cannot occlude the rest of the backlog.
-            candidates = self._invoker.services.image_index_records.list_unembedded_image_names(
+            candidates = self._invoker.services.image_index_records.list_unembedded_items(
                 self._model_id, limit=batch_size + len(self._failed)
             )
-            batch = [name for name in candidates if name not in self._failed][:batch_size]
+            batch = [item for item in candidates if item not in self._failed][:batch_size]
             if batch:
                 return batch
             self._backfill_pending.clear()
@@ -1072,7 +1119,7 @@ class ImageIndexService(ImageIndexServiceBase):
                 break
         return batch
 
-    def _process_batch(self, image_names: list[str]) -> bool:
+    def _process_batch(self, items: list[IndexedItem]) -> bool:
         """Embed one batch. Returns False when anything in it failed."""
         assert self._invoker is not None
         assert self._encode_fn is not None
@@ -1081,28 +1128,28 @@ class ImageIndexService(ImageIndexServiceBase):
 
         try:
             images: list[Image.Image] = []
-            loaded_names: list[str] = []
-            for name in image_names:
+            loaded: list[IndexedItem] = []
+            for item in items:
                 try:
-                    images.append(self._invoker.services.images.get_pil_image(name).convert("RGB"))
-                    loaded_names.append(name)
+                    images.append(self._load_item_image(item))
+                    loaded.append(item)
                 except Exception as e:
-                    logger.warning(f"Image index: could not load '{name}' ({e})")
-                    self._record_failure([name])
+                    logger.warning(f"Image index: could not load {item.kind} '{item.name}' ({e})")
+                    self._record_failure([item])
 
-            if not loaded_names:
+            if not loaded:
                 return False
 
             try:
                 embeddings = np.asarray(self._encode_fn(images), dtype=EMBEDDING_DTYPE)
             except Exception:
-                logger.exception(f"Image index: failed to embed a batch of {len(loaded_names)} images")
-                self._attribute_batch_failure("the encoder raised", loaded_names)
+                logger.exception(f"Image index: failed to embed a batch of {len(loaded)} items")
+                self._attribute_batch_failure("the encoder raised", loaded)
                 return False
 
-            if embeddings.ndim != 2 or embeddings.shape[0] != len(loaded_names):
-                logger.error(f"Image index: encoder returned shape {embeddings.shape} for {len(loaded_names)} images")
-                self._attribute_batch_failure("the encoder returned an unusable result", loaded_names)
+            if embeddings.ndim != 2 or embeddings.shape[0] != len(loaded):
+                logger.error(f"Image index: encoder returned shape {embeddings.shape} for {len(loaded)} items")
+                self._attribute_batch_failure("the encoder returned an unusable result", loaded)
                 return False
 
             # L2-normalize so cosine similarity is a plain dot product downstream. The norm is
@@ -1113,43 +1160,43 @@ class ImageIndexService(ImageIndexServiceBase):
             # A row whose norm is zero or non-finite cannot be normalized: it stays all-zero or
             # becomes non-finite, either of which the storage layer rejects because it yields NaN
             # in every similarity it takes part in. Drop those rows and fail only their own
-            # names — the old `norms[norms == 0] = 1.0` handed an all-zero vector straight to
+            # items — the old `norms[norms == 0] = 1.0` handed an all-zero vector straight to
             # upsert_embedding, whose ValueError then failed the whole batch.
             degenerate = ~np.isfinite(norms).all(axis=1) | (norms[:, 0] == 0)
             if degenerate.any():
-                dropped = [name for name, bad in zip(loaded_names, degenerate, strict=True) if bad]
+                dropped = [item for item, bad in zip(loaded, degenerate, strict=True) if bad]
                 logger.warning(f"Image index: encoder returned unusable embeddings for {dropped}")
                 self._record_failure(dropped)
                 keep = ~degenerate
-                # Reassigned before `stored` and the handler below, so dropped names are already
+                # Reassigned before `stored` and the handler below, so dropped items are already
                 # accounted for and cannot be failed a second time. Shrinking it also makes the
-                # `len(loaded_names) == len(image_names)` return False, which re-arms the
-                # backfill so these images are retried rather than stranded.
-                loaded_names = [name for name, ok in zip(loaded_names, keep, strict=True) if ok]
+                # `len(loaded) == len(items)` return False, which re-arms the backfill so these
+                # items are retried rather than stranded.
+                loaded = [item for item, ok in zip(loaded, keep, strict=True) if ok]
                 embeddings = embeddings[keep]
                 norms = norms[keep]
             embeddings = (embeddings / norms).astype(np.float32)
 
-            stored: list[str] = []
+            stored: list[IndexedItem] = []
             try:
-                for name, embedding in zip(loaded_names, embeddings, strict=True):
-                    # Deliberately not caught per-image: any exception from here must reach the
-                    # handler below, which fails every unstored name and returns False to re-arm
-                    # the backfill. Swallowing one image's error here would leave it unembedded
+                for item, embedding in zip(loaded, embeddings, strict=True):
+                    # Deliberately not caught per-item: any exception from here must reach the
+                    # handler below, which fails every unstored item and returns False to re-arm
+                    # the backfill. Swallowing one item's error here would leave it unembedded
                     # with no retry ever scheduled, wedging `pending` above zero.
-                    self._invoker.services.image_index_records.upsert_embedding(name, self._model_id, embedding)
-                    stored.append(name)
-                    self._attempts.pop(name, None)
-                    # An image that recovers (e.g. re-embedded after an
+                    self._invoker.services.image_index_records.upsert_embedding(item, self._model_id, embedding)
+                    stored.append(item)
+                    self._attempts.pop(item, None)
+                    # An item that recovers (e.g. re-embedded after an
                     # update) must stop counting against the failed total.
-                    self._failed.discard(name)
+                    self._failed.discard(item)
             except Exception:
                 # A raise here (e.g. "database is locked") is a property of the database, not of
-                # any image, so it is systemic: the unstored names stay pending and are retried
+                # any item, so it is systemic: the unstored items stay pending and are retried
                 # rather than being charged an attempt each.
-                logger.exception(f"Image index: failed to store embeddings for a batch of {len(loaded_names)} images")
+                logger.exception(f"Image index: failed to store embeddings for a batch of {len(loaded)} items")
                 self._record_systemic_failure(
-                    "storing embeddings failed", [name for name in loaded_names if name not in stored]
+                    "storing embeddings failed", [item for item in loaded if item not in stored]
                 )
                 return False
             finally:
@@ -1158,28 +1205,43 @@ class ImageIndexService(ImageIndexServiceBase):
                     # Anything stored proves the encoder and the database are both working, so
                     # the outage (if there was one) is over and the backoff resets. In the
                     # `finally` deliberately, i.e. reached even when the handler above has just
-                    # counted a failure: a batch that stores ANY image is making progress, so
+                    # counted a failure: a batch that stores ANY item is making progress, so
                     # the backlog drains and quiescence arrives on its own. Moving this to the
                     # success path instead left the counter with no reset while every batch
                     # partially failed, which escalated the wait to its 60s ceiling — a far
                     # worse outcome under mild write contention than the flat 1Hz retry it was
                     # meant to fix.
                     self._systemic_failures = 0
-            return len(loaded_names) == len(image_names)
+            return len(loaded) == len(items)
         finally:
-            # Always release the batch from the dedup set — a name stuck in
+            # Always release the batch from the dedup set — an item stuck in
             # _pending can never be re-enqueued by callbacks.
-            self._forget_pending(image_names)
+            self._forget_pending(items)
 
-    def _attribute_batch_failure(self, reason: str, image_names: list[str]) -> None:
-        """Charge a whole-batch embedding failure to the images or to the machinery."""
+    def _load_item_image(self, item: IndexedItem) -> Image.Image:
+        """The pixels an item is embedded from, as RGB.
+
+        An image is embedded from the image itself; a video from the thumbnail the video file
+        store extracted when it was created. The thumbnail is a real frame of the video, and at
+        256px it is already larger than the 224px the vision towers resize to — so embedding it
+        costs nothing extra and needs no decoder on this path.
+        """
+        assert self._invoker is not None
+        if item.kind == "video":
+            path = self._invoker.services.videos.get_path(item.name, thumbnail=True)
+            with Image.open(path) as thumbnail:
+                return thumbnail.convert("RGB")
+        return self._invoker.services.images.get_pil_image(item.name).convert("RGB")
+
+    def _attribute_batch_failure(self, reason: str, items: list[IndexedItem]) -> None:
+        """Charge a whole-batch embedding failure to the items or to the machinery."""
         if self._encoder_is_healthy():
-            # The encoder works on a trivial image, so something about these images is what
+            # The encoder works on a trivial image, so something about these items is what
             # broke it. Charge them, so a poisonous one is quarantined after _MAX_ATTEMPTS and
             # stops blocking the rest of the backlog.
-            self._record_failure(image_names)
+            self._record_failure(items)
         else:
-            self._record_systemic_failure(reason, image_names)
+            self._record_systemic_failure(reason, items)
 
     def _encoder_is_healthy(self) -> bool:
         """Probe the encoder with a trivial image to tell a broken encoder from bad input.
@@ -1189,9 +1251,9 @@ class ImageIndexService(ImageIndexServiceBase):
         image in the batch may be corrupt. Repetition cannot separate the two — a real outage
         and a poisonous image both fail every time — so the encoder is asked directly.
 
-        A healthy encoder means the batch failed because of its contents, and the images are
+        A healthy encoder means the batch failed because of its contents, and the items are
         charged an attempt so a bad one is eventually quarantined and the backfill can move past
-        it. An unhealthy one means the machinery is down, and the images must not be charged.
+        it. An unhealthy one means the machinery is down, and the items must not be charged.
         """
         assert self._encode_fn is not None
         try:
@@ -1200,19 +1262,19 @@ class ImageIndexService(ImageIndexServiceBase):
             return False
         return probe.ndim == 2 and probe.shape[0] == 1 and probe.shape[1] > 0
 
-    def _record_systemic_failure(self, reason: str, image_names: list[str]) -> None:
-        """Record a failure of the machinery: back off, but charge no image for it.
+    def _record_systemic_failure(self, reason: str, items: list[IndexedItem]) -> None:
+        """Record a failure of the machinery: back off, but charge no item for it.
 
         `_MAX_ATTEMPTS` exists so one bad file cannot spin the backfill forever. Charging an
-        outage against that budget instead retires every image the outage touched, and because
+        outage against that budget instead retires every item the outage touched, and because
         nothing clears `_failed` but a successful embed, restoring the model would not bring
-        them back — only a restart would. The images stay pending here, so the sweep retries
+        them back — only a restart would. The items stay pending here, so the sweep retries
         them once the machinery recovers, and `pending` keeps telling the truth meanwhile.
         """
         assert self._invoker is not None
         self._systemic_failures += 1
         self._invoker.services.logger.warning(
-            f"Image index: {reason}; leaving {len(image_names)} image(s) pending for retry "
+            f"Image index: {reason}; leaving {len(items)} item(s) pending for retry "
             f"(consecutive failures: {self._systemic_failures})"
         )
 
@@ -1222,17 +1284,17 @@ class ImageIndexService(ImageIndexServiceBase):
         # Cap the exponent before the shift so a long outage cannot overflow it.
         return min(_POLL_SECONDS * (2 ** min(self._systemic_failures - 1, 16)), _MAX_BACKOFF_SECONDS)
 
-    def _record_failure(self, image_names: list[str]) -> None:
-        """Count a failure; move an image to the permanent-failure set only after repeated attempts."""
-        for name in image_names:
-            attempts = self._attempts.get(name, 0) + 1
-            self._attempts[name] = attempts
+    def _record_failure(self, items: list[IndexedItem]) -> None:
+        """Count a failure; move an item to the permanent-failure set only after repeated attempts."""
+        for item in items:
+            attempts = self._attempts.get(item, 0) + 1
+            self._attempts[item] = attempts
             if attempts >= _MAX_ATTEMPTS:
-                self._failed.add(name)
+                self._failed.add(item)
 
-    def _forget_pending(self, image_names: list[str]) -> None:
+    def _forget_pending(self, items: list[IndexedItem]) -> None:
         with self._pending_lock:
-            self._pending.difference_update(image_names)
+            self._pending.difference_update(items)
 
     # --- Projections ---
 
@@ -1283,8 +1345,8 @@ class ImageIndexService(ImageIndexServiceBase):
 
         scope_user = None if all_images else user_id
         try:
-            names = records.list_accessible_embedded_images(scope_user, self._model_id)
-            current_hash = scope_hash(self._model_id, names)
+            items = records.list_accessible_embedded_items(scope_user, self._model_id)
+            current_hash = scope_hash(self._model_id, items)
             cached = records.get_projection(user_id, self._model_id)
         except Exception:
             # The DB reads are as failure-prone as the fit ("database is
@@ -1311,7 +1373,7 @@ class ImageIndexService(ImageIndexServiceBase):
             # empty coords array reduces to False here too, so this subsumes the
             # count test rather than replacing it.
             and not np.isfinite(cached.coords).all(axis=1).any()
-            and bool(names)
+            and bool(items)
             and self._failed_scope_retry_available(user_id, current_hash)
         )
         if cached is not None and cached.scope_hash == current_hash and not retrying_failed_scope:
@@ -1328,7 +1390,7 @@ class ImageIndexService(ImageIndexServiceBase):
             # Read after the short-circuit, not before: this materializes every
             # accessible embedding (hundreds of MB on a large gallery), which is
             # pure waste on the no-op path that /points and /refresh drive.
-            found_names, matrix = records.get_embeddings(names, self._model_id)
+            found_items, matrix = records.get_embeddings(items, self._model_id)
         except Exception:
             logger.exception(f"Image map: could not read embeddings for user '{user_id}'; re-queueing")
             self._requeue_projection(user_id, all_images)
@@ -1342,8 +1404,8 @@ class ImageIndexService(ImageIndexServiceBase):
 
         try:
             coords = compute_umap(matrix)
-            if coords.shape[0] != len(found_names):
-                raise RuntimeError(f"projection produced {coords.shape[0]} points for {len(found_names)} images")
+            if coords.shape[0] != len(found_items):
+                raise RuntimeError(f"projection produced {coords.shape[0]} points for {len(found_items)} items")
             if not np.isfinite(coords).all():
                 # A NaN reaching the cache makes /points raise inside sklearn
                 # on every request, and the cache is only replaced when the
@@ -1351,13 +1413,13 @@ class ImageIndexService(ImageIndexServiceBase):
                 # Treat it as a failed fit and take the empty-cache path.
                 raise RuntimeError("projection produced non-finite coordinates")
         except Exception:
-            logger.exception(f"Image map: UMAP projection failed for user '{user_id}' ({len(found_names)} points)")
+            logger.exception(f"Image map: UMAP projection failed for user '{user_id}' ({len(found_items)} points)")
             # Cache an empty projection under the CURRENT scope hash. Serving
             # "empty" is honest, and it stops the client from re-enqueueing a
             # doomed recompute on every poll. It does NOT make the failure
             # terminal: _failed_scope_retry_available grants this scope one more fit
             # per process, and the next gallery change flips the hash anyway.
-            found_names = []
+            found_items = []
             coords = np.empty((0, 2), dtype=EMBEDDING_DTYPE)
 
         # Hash the scope the projection was computed against (on failure the
@@ -1368,8 +1430,8 @@ class ImageIndexService(ImageIndexServiceBase):
                 user_id,
                 self._model_id,
                 current_hash,
-                projection_params(n_points=len(found_names)),
-                found_names,
+                projection_params(n_points=len(found_items)),
+                found_items,
                 coords,
             )
         except Exception:
@@ -1389,7 +1451,7 @@ class ImageIndexService(ImageIndexServiceBase):
         # here means the budget is charged for exactly what it is meant to
         # bound: a failed fit that reached the cache.
         with self._projection_lock:
-            if found_names:
+            if found_items:
                 # A fit that produced points clears the marker, so a LATER
                 # failure over some future scope gets its own retry rather than
                 # inheriting this one's spent budget.
@@ -1397,7 +1459,7 @@ class ImageIndexService(ImageIndexServiceBase):
             elif retrying_failed_scope:
                 self._failed_projection_scopes[user_id] = current_hash
         try:
-            self._invoker.services.events.emit_image_map_projection_ready(user_id=user_id, point_count=len(found_names))
+            self._invoker.services.events.emit_image_map_projection_ready(user_id=user_id, point_count=len(found_items))
         except Exception:
             # The row is cached, so a polling client recovers on its own; only
             # an event-driven client would hang. Log rather than unwind into
@@ -1459,18 +1521,21 @@ class ImageIndexService(ImageIndexServiceBase):
             total=status.total, embedded=status.embedded, pending=status.pending, failed=status.failed
         )
 
-    def _record_owner_pokes(self, image_names: list[str]) -> None:
+    def _record_owner_pokes(self, items: list[IndexedItem]) -> None:
         """Queue a per-user poke for each owner of freshly stored embeddings.
 
         The status event is admin-only (its counts aggregate every user's
-        images), so without this, non-admin clients would never hear that
+        items), so without this, non-admin clients would never hear that
         their own generations reached the index. Owner lookups are DB reads,
         which is fine here: this runs on the worker thread.
         """
         assert self._invoker is not None
-        for name in image_names:
+        for item in items:
             try:
-                user_id = self._invoker.services.image_records.get_user_id(name)
+                if item.kind == "video":
+                    user_id = self._invoker.services.video_records.get_user_id(item.name)
+                else:
+                    user_id = self._invoker.services.image_records.get_user_id(item.name)
             except Exception:
                 continue
             if user_id:

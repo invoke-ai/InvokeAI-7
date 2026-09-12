@@ -4,6 +4,7 @@ import json
 
 import numpy as np
 
+from invokeai.app.services.image_index.image_index_common import IndexedItem
 from invokeai.app.services.image_index.projection import (
     DEFAULT_CLUSTER_EPS,
     adaptive_cluster_eps,
@@ -155,12 +156,20 @@ def test_compute_clusters_skips_huge_point_sets() -> None:
 
 
 def test_scope_hash_is_order_insensitive_and_discriminating() -> None:
-    assert scope_hash("m", ["a", "b"]) == scope_hash("m", ["b", "a"])
-    assert scope_hash("m", ["a", "b"]) != scope_hash("m", ["a", "c"])
-    assert scope_hash("m", ["a", "b"]) != scope_hash("m2", ["a", "b"])
+    a, b, c = IndexedItem("image", "a"), IndexedItem("image", "b"), IndexedItem("image", "c")
+    assert scope_hash("m", [a, b]) == scope_hash("m", [b, a])
+    assert scope_hash("m", [a, b]) != scope_hash("m", [a, c])
+    assert scope_hash("m", [a, b]) != scope_hash("m2", [a, b])
+    # A video joining the set changes it, so a cached projection computed before it existed
+    # is detected as stale.
+    assert scope_hash("m", [a, b]) != scope_hash("m", [a, b, IndexedItem("video", "clip.mp4")])
+    # The kind itself is NOT hashed: names identify items on their own, and hashing the kind
+    # would give every pre-video projection a new hash, costing every user a recomputed fit on
+    # the first load after the upgrade.
+    assert scope_hash("m", [IndexedItem("image", "x")]) == scope_hash("m", [IndexedItem("video", "x")])
     assert scope_hash("m", []) != scope_hash("m2", [])
     # Concatenation ambiguity: ["ab"] must differ from ["a", "b"].
-    assert scope_hash("m", ["ab"]) != scope_hash("m", ["a", "b"])
+    assert scope_hash("m", [IndexedItem("image", "ab")]) != scope_hash("m", [a, b])
 
 
 def test_projection_params_is_stable_json() -> None:
