@@ -52,27 +52,27 @@ class IdealSizeInvocation(BaseInvocation):
         # generation time — for the nine architectures nobody had added to it. The grid was
         # hardcoded to 8 besides, so a FLUX or CogView 4 size could come back off-grid.
         settings = resolve_default_settings(unet_config.base)
-        if settings is None or settings.width is None:
+        if settings is None or settings.width is None or settings.height is None:
             raise ArchitectureError(
                 f"Architecture '{unet_config.base.value}' declares no default dimensions, so there is no "
                 "ideal size to compute from."
             )
-        dimension = settings.width * self.multiplier
+        model_width = settings.width * self.multiplier
+        model_height = settings.height * self.multiplier
         # The variant matters where an architecture's grid depends on it -- Wan TI2V-5B wants
         # multiples of 32 where A14B wants 16. `wan_denoise` reads it off the same config the same
         # way; a config that has no `variant` field, or whose variant is not named, gets the base
         # grid.
         variant = getattr(unet_config, "variant", None)
         grid = require(unet_config.base, FeaturesFacet).resolve_dimension_grid(variant)
-        min_dimension = math.floor(dimension * 0.5)
-        # NOTE: this squares the *recommended default* width, which is a product decision, not the
-        # native training resolution. They coincide for the SD family this node was written for, but
-        # not in general: MiniMax H3 is 1344x768, and squaring 1344 asks for 75% more area than it
-        # was trained on. Nor is the SD family the only thing that reaches here — the main-model
-        # loaders emit a `UNetField` only for SD, but `MetadataToModelInvocation` emits one for any
-        # `ModelType.Main`, so a workflow can route H3 into this node. Fixing it means declaring a
-        # native resolution rather than reusing the slider default.
-        model_area = dimension * dimension
+        min_dimension = math.floor(min(model_width, model_height) * 0.5)
+        # Area, not a squared width. The declared default is a product decision rather than the
+        # native training resolution, and for fifteen of sixteen architectures it is square, so
+        # this is identical to the old `width * width` there. MiniMax H3 is the exception at
+        # 1344x768: squaring 1344 asked for 75% more area than it was trained on. The node is
+        # reachable for any `ModelType.Main` -- the loaders emit a `UNetField` only for SD, but
+        # `MetadataToModelInvocation` emits one for anything -- so that path is real.
+        model_area = model_width * model_height
 
         if aspect > 1.0:
             init_height = max(min_dimension, math.sqrt(model_area / aspect))
