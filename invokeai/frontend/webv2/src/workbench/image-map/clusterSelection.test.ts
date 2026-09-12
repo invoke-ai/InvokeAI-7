@@ -1,3 +1,6 @@
+import type { GalleryItemRef } from '@features/gallery/contracts';
+
+import { toGalleryItemKey } from '@features/gallery/contracts';
 import { describe, expect, it } from 'vitest';
 
 import type { ImageMapPoint } from './api';
@@ -10,45 +13,73 @@ import {
   HIGHLIGHTED_POINTS_TRACE,
 } from './imageMapTraces';
 
-const point = (imageName: string, x: number, y: number, cluster: number): ImageMapPoint => ({
-  cluster,
-  imageName,
-  x,
-  y,
-});
+const point = (name: string, x: number, y: number, cluster: number): ImageMapPoint => {
+  const item: GalleryItemRef = { kind: name.endsWith('.mp4') ? 'video' : 'image', name };
+
+  return { cluster, item, key: toGalleryItemKey(item), x, y };
+};
 
 const POINTS = [
   point('a.png', 0, 0, 0),
   point('b.png', 3, 0, 0),
   point('c.png', 1, 0, 0),
+  // A clip that landed in the same cluster as the images it looks like.
+  point('clip.mp4', 2, 0, 0),
   point('other.png', 50, 50, 1),
   point('noise.png', -50, 50, -1),
 ];
 
 describe('collectClusterSelection', () => {
   it('returns the clicked cluster ordered by distance from the click', () => {
-    expect(collectClusterSelection(POINTS, 'b.png')).toEqual(['b.png', 'c.png', 'a.png']);
+    // Members are kind-tagged keys: the gallery resolves each through the
+    // endpoint its kind names, so a video member cannot be read as an image.
+    expect(collectClusterSelection(POINTS, 'image:b.png')).toEqual([
+      'image:b.png',
+      'video:clip.mp4',
+      'image:c.png',
+      'image:a.png',
+    ]);
   });
 
-  it('returns null for noise points and unknown names', () => {
-    expect(collectClusterSelection(POINTS, 'noise.png')).toBeNull();
-    expect(collectClusterSelection(POINTS, 'missing.png')).toBeNull();
+  it('selects the cluster around a clicked video just as it does around an image', () => {
+    // b and c are equidistant from the clip, so input order breaks the tie.
+    expect(collectClusterSelection(POINTS, 'video:clip.mp4')).toEqual([
+      'video:clip.mp4',
+      'image:b.png',
+      'image:c.png',
+      'image:a.png',
+    ]);
+  });
+
+  it('returns null for noise points and unknown items', () => {
+    expect(collectClusterSelection(POINTS, 'image:noise.png')).toBeNull();
+    expect(collectClusterSelection(POINTS, 'image:missing.png')).toBeNull();
+    // The same name in the other namespace is a different item.
+    expect(collectClusterSelection(POINTS, 'image:clip.mp4')).toBeNull();
   });
 
   it('caps oversized clusters, keeping the nearest members', () => {
-    const capped = collectClusterSelection(POINTS, 'a.png', 2);
-    expect(capped).toEqual(['a.png', 'c.png']);
+    const capped = collectClusterSelection(POINTS, 'image:a.png', 2);
+    expect(capped).toEqual(['image:a.png', 'image:c.png']);
   });
 });
 
 describe('buildHighlightedPointsTrace', () => {
+  it('keeps each kind\u2019s shape under the selection overlay', () => {
+    // The overlay is drawn over the base point, so a selected video that lost
+    // its diamond here would read as an image for as long as it is selected.
+    const multi = buildHighlightedPointsTrace(POINTS, new Set(['image:a.png' as const, 'video:clip.mp4' as const]));
+
+    expect(multi.marker.symbol).toEqual(['circle', 'diamond']);
+  });
+
   it('draws only multi-selections, larger and outlined', () => {
-    const single = buildHighlightedPointsTrace(POINTS, new Set(['a.png']));
+    const single = buildHighlightedPointsTrace(POINTS, new Set(['image:a.png' as const]));
     expect(single.x).toEqual([]);
 
-    const multi = buildHighlightedPointsTrace(POINTS, new Set(['a.png', 'c.png']));
+    const multi = buildHighlightedPointsTrace(POINTS, new Set(['image:a.png' as const, 'video:clip.mp4' as const]));
     expect(multi.name).toBe(HIGHLIGHTED_POINTS_TRACE);
-    expect(multi.customdata).toEqual(['a.png', 'c.png']);
+    expect(multi.customdata).toEqual(['image:a.png', 'video:clip.mp4']);
     expect(multi.marker.size).toBe(8);
     expect(multi.marker.line).toEqual({ color: '#FFFFFF', width: 1 });
   });

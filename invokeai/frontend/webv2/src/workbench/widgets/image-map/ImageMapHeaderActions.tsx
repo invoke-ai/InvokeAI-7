@@ -38,9 +38,7 @@ export const ImageMapHeaderActions = (_props: WidgetViewProps) => {
         icon={GroupIcon}
         label="Toggle cluster selection mode"
         tooltip={
-          clickSelectsCluster
-            ? 'Click shows the whole cluster in the gallery'
-            : 'Click reveals one image in the gallery'
+          clickSelectsCluster ? 'Click shows the whole cluster in the gallery' : 'Click reveals one item in the gallery'
         }
         onCheckedChange={handleToggleClusterMode}
       />

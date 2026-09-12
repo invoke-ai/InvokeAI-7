@@ -19,6 +19,7 @@ import type {
   GalleryView,
 } from '@features/gallery/core/types';
 
+import { parseGalleryItemKey } from '@features/gallery/core/items';
 import { getExternalImageFile, getImageCluster } from '@features/gallery/core/semanticImageQuery';
 import { isTimestampInRange } from '@platform/search/dateTokens';
 import {
@@ -823,28 +824,38 @@ export const listGalleryItems = async ({
 export const SEMANTIC_SEARCH_MAX_RESULTS = 500;
 
 export interface GallerySemanticResult {
-  imageName: string;
+  ref: GalleryItemRef;
   /** Cosine similarity to the query; higher is more similar. */
   score: number;
 }
 
-type SemanticSearchBody = { results: { image_name: string; score: number }[] };
+type SemanticSearchBody = { results: { image_name: string; kind?: string; score: number }[] };
 
 const toSemanticResults = (body: SemanticSearchBody): GallerySemanticResult[] =>
-  body.results.map((result) => ({ imageName: result.image_name, score: result.score }));
+  // `image_name` carries the name whatever the kind is; `kind` says which
+  // namespace it belongs to. Only `video` names the other namespace — anything
+  // else reads as an image, which is the kind every hit used to be.
+  body.results.map((result) => ({
+    ref: { kind: result.kind === 'video' ? 'video' : 'image', name: result.image_name },
+    score: result.score,
+  }));
 
 /**
- * Ranks the caller's accessible images by similarity to the query. Text and
- * gallery-image queries hit the GET endpoint; URLs and dropped files POST to
- * the by-image endpoint (the file as multipart from the external-image
+ * Ranks the caller's accessible gallery items by similarity to the query. Text
+ * and gallery-image queries hit the GET endpoint; URLs and dropped files POST
+ * to the by-image endpoint (the file as multipart from the external-image
  * registry).
+ *
+ * `include_videos` is what opts this client into video results: the backend
+ * indexes them either way and serves them only to clients that say they can
+ * resolve each hit through the endpoint its kind names, which this one does.
  */
 export const searchGallerySemantic = async (
   query: Exclude<GallerySemanticQuery, { kind: 'cluster' }>,
   { limit = SEMANTIC_SEARCH_MAX_RESULTS, signal }: { limit?: number; signal?: AbortSignal } = {}
 ): Promise<GallerySemanticResult[]> => {
   if (query.kind === 'url') {
-    const params = toSearchParams({ image_url: query.url, limit });
+    const params = toSearchParams({ image_url: query.url, include_videos: true, limit });
 
     return toSemanticResults(
       await apiFetchJson<SemanticSearchBody>(`/api/v1/image_map/search_by_image?${params}`, {
@@ -866,16 +877,21 @@ export const searchGallerySemantic = async (
     form.append('image', entry.blob, entry.label || 'image');
 
     return toSemanticResults(
-      await apiFetchJson<SemanticSearchBody>(`/api/v1/image_map/search_by_image?${toSearchParams({ limit })}`, {
-        body: form,
-        method: 'POST',
-        signal,
-      })
+      await apiFetchJson<SemanticSearchBody>(
+        `/api/v1/image_map/search_by_image?${toSearchParams({ include_videos: true, limit })}`,
+        {
+          body: form,
+          method: 'POST',
+          signal,
+        }
+      )
     );
   }
 
   const params = toSearchParams(
-    query.kind === 'text' ? { limit, q: query.query } : { image_name: query.imageName, limit }
+    query.kind === 'text'
+      ? { include_videos: true, limit, q: query.query }
+      : { image_name: query.imageName, include_videos: true, limit }
   );
 
   return toSemanticResults(await apiFetchJson<SemanticSearchBody>(`/api/v1/image_map/search?${params}`, { signal }));
@@ -884,8 +900,8 @@ export const searchGallerySemantic = async (
 /**
  * The ranked result set as item refs, in relevance order. Pages hydrate
  * slices of this list (`hydrateGalleryDateBoardItemPage`), and range
- * selection / deletion neighbors read it directly. Semantic results are
- * image-only.
+ * selection / deletion neighbors read it directly. Results carry both media
+ * kinds: an indexed gallery is its images plus its videos.
  */
 export const listSemanticGalleryItemNames = async ({
   query,
@@ -897,19 +913,18 @@ export const listSemanticGalleryItemNames = async ({
   // A cluster query is an explicit member list held client-side (in proximity
   // order from the clicked map point); there is nothing to ask the server.
   if (query.kind === 'cluster') {
-    const cluster = getImageCluster(query.clusterId);
-    const imageNames = cluster?.imageNames ?? [];
+    const itemKeys = getImageCluster(query.clusterId)?.itemKeys ?? [];
 
     return {
-      items: imageNames.map((name) => ({ kind: 'image', name })),
-      total: imageNames.length,
+      items: itemKeys.map(parseGalleryItemKey),
+      total: itemKeys.length,
     };
   }
 
   const results = await searchGallerySemantic(query, { signal });
 
   return {
-    items: results.map((result) => ({ kind: 'image', name: result.imageName })),
+    items: results.map((result) => result.ref),
     total: results.length,
   };
 };

@@ -19,6 +19,8 @@ vi.mock('@platform/transport/http', () => ({
   getApiErrorMessage: (_error: unknown, fallback: string) => fallback,
 }));
 
+import type { ImageMapPoint } from './api';
+
 import { fetchImageMapPoints, fetchImageMapStatus, requestImageMapRefresh } from './api';
 import { CLUSTER_PALETTE, getClusterColor, NOISE_COLOR } from './clusterPalette';
 import {
@@ -38,10 +40,11 @@ import {
 
 const BACKEND_RESPONSE = {
   cluster_eps: 0.42,
-  point_count: 2,
+  point_count: 3,
   points: [
     { cluster: 0, image_name: 'a.png', x: 1.5, y: -2 },
     { cluster: -1, image_name: 'b.png', x: 0, y: 3 },
+    { cluster: 0, image_name: 'clip.mp4', kind: 'video', x: 2, y: -1 },
   ],
   stale: false,
   state: 'ready',
@@ -74,12 +77,23 @@ describe('image map api', () => {
 
     const result = await fetchImageMapPoints();
 
-    expect(mocks.apiFetchJson).toHaveBeenCalledWith('/api/v1/image_map/points');
+    // include_videos is what opts this client into video points; without it the
+    // backend serves images only, however much of the gallery is indexed.
+    expect(mocks.apiFetchJson).toHaveBeenCalledWith('/api/v1/image_map/points?include_videos=true');
     expect(result.state).toBe('ready');
-    expect(result.pointCount).toBe(2);
+    expect(result.pointCount).toBe(3);
     expect(result.clusterEps).toBe(0.42);
     expect(result.visibleHash).toBe('hash-1');
-    expect(result.points[0]).toEqual({ cluster: 0, imageName: 'a.png', x: 1.5, y: -2 });
+    expect(result.points[0]).toEqual({
+      cluster: 0,
+      item: { kind: 'image', name: 'a.png' },
+      key: 'image:a.png',
+      x: 1.5,
+      y: -2,
+    });
+    // A point without `kind` predates indexed videos and reads as an image.
+    expect(result.points[1]?.item).toEqual({ kind: 'image', name: 'b.png' });
+    expect(result.points[2]?.item).toEqual({ kind: 'video', name: 'clip.mp4' });
   });
 
   it('maps the model_missing state with the configured model name', async () => {
@@ -103,7 +117,9 @@ describe('image map api', () => {
 
     await fetchImageMapPoints({ eps: 0.4, minSamples: 5 });
 
-    expect(mocks.apiFetchJson).toHaveBeenCalledWith('/api/v1/image_map/points?eps=0.4&min_samples=5');
+    expect(mocks.apiFetchJson).toHaveBeenCalledWith(
+      '/api/v1/image_map/points?include_videos=true&eps=0.4&min_samples=5'
+    );
   });
 
   it('posts refresh requests', async () => {
@@ -141,7 +157,7 @@ describe('image map store', () => {
 
     const snapshot = imageMapStore.getSnapshot();
     expect(snapshot.loadState).toBe('loaded');
-    expect(snapshot.data?.points).toHaveLength(2);
+    expect(snapshot.data?.points).toHaveLength(3);
     expect(snapshot.error).toBeNull();
   });
 
@@ -163,7 +179,11 @@ describe('image map store', () => {
     // The labels endpoint must receive the exact eps the map was clustered
     // with; the adaptive default could resolve differently on a drifted set.
     await vi.waitFor(() => {
-      expect(mocks.apiFetchJson).toHaveBeenCalledWith('/api/v1/image_map/cluster_labels?eps=0.42');
+      expect(mocks.apiFetchJson).toHaveBeenCalledWith(
+        // Must match /points: the client discards labels whose visible hash
+        // disagrees, which a different item set would guarantee.
+        '/api/v1/image_map/cluster_labels?include_videos=true&eps=0.42'
+      );
       expect(imageMapStore.getSnapshot().clusterLabels).toEqual({
         '0': { alternates: ['kittens', 'pets'], label: 'cats' },
       });
@@ -222,7 +242,11 @@ describe('image map store', () => {
     await refreshImageMapPoints();
 
     await vi.waitFor(() => {
-      expect(mocks.apiFetchJson).toHaveBeenCalledWith('/api/v1/image_map/cluster_labels?eps=0.42');
+      expect(mocks.apiFetchJson).toHaveBeenCalledWith(
+        // Must match /points: the client discards labels whose visible hash
+        // disagrees, which a different item set would guarantee.
+        '/api/v1/image_map/cluster_labels?include_videos=true&eps=0.42'
+      );
     });
     // Flush the response handler: cluster ids from a different visible set
     // must not be applied to the rendered map.
@@ -246,7 +270,11 @@ describe('image map store', () => {
     });
     await refreshImageMapPoints();
     await vi.waitFor(() => {
-      expect(mocks.apiFetchJson).toHaveBeenCalledWith('/api/v1/image_map/cluster_labels?eps=0.42');
+      expect(mocks.apiFetchJson).toHaveBeenCalledWith(
+        // Must match /points: the client discards labels whose visible hash
+        // disagrees, which a different item set would guarantee.
+        '/api/v1/image_map/cluster_labels?include_videos=true&eps=0.42'
+      );
     });
 
     // L2: a newer refresh whose labels resolve first.
@@ -467,7 +495,7 @@ describe('image map store', () => {
     const snapshot = imageMapStore.getSnapshot();
     expect(snapshot.loadState).toBe('error');
     expect(snapshot.error).toBe('Failed to load the image map');
-    expect(snapshot.data?.points).toHaveLength(2);
+    expect(snapshot.data?.points).toHaveLength(3);
   });
 
   it('enters loading while retrying a failed points request', async () => {
@@ -580,19 +608,23 @@ describe('cluster palette', () => {
 });
 
 describe('trace builders', () => {
-  const points = [
-    { cluster: 0, imageName: 'a.png', x: 1, y: 2 },
-    { cluster: -1, imageName: 'b.png', x: 3, y: 4 },
+  const points: ImageMapPoint[] = [
+    { cluster: 0, item: { kind: 'image', name: 'a.png' }, key: 'image:a.png', x: 1, y: 2 },
+    { cluster: -1, item: { kind: 'video', name: 'clip.mp4' }, key: 'video:clip.mp4', x: 3, y: 4 },
   ];
 
-  it('builds the all-points scattergl trace with image names as customdata', () => {
+  it('builds the all-points scattergl trace with item keys as customdata', () => {
     const trace = buildAllPointsTrace(points);
 
     expect(trace.type).toBe('scattergl');
     expect(trace.name).toBe(ALL_POINTS_TRACE);
     expect(trace.x).toEqual([1, 3]);
     expect(trace.y).toEqual([2, 4]);
-    expect(trace.customdata).toEqual(['a.png', 'b.png']);
+    // Keys, not bare names: a click has to know which namespace to resolve in.
+    expect(trace.customdata).toEqual(['image:a.png', 'video:clip.mp4']);
+    // Kind gets the one channel colour and size do not already carry, so a
+    // clip is findable on the map without hovering every point.
+    expect(trace.marker.symbol).toEqual(['circle', 'diamond']);
     expect((trace.marker.color as string[])[0]).toBe(getClusterColor(0));
     // Noise points are dimmed relative to clustered points.
     const opacities = trace.marker.opacity as number[];
@@ -716,7 +748,9 @@ describe('image map status', () => {
 
     const status = await fetchImageMapStatus();
 
-    expect(mocks.apiFetchJson).toHaveBeenCalledWith('/api/v1/image_map/status');
+    // The same opt-in as /points: the projection counts in this response are
+    // filtered by it, so the two must agree about what the map contains.
+    expect(mocks.apiFetchJson).toHaveBeenCalledWith('/api/v1/image_map/status?include_videos=true');
     // Failures are excluded, exactly as `ImageIndexStatus.pending` does it, so
     // the queue can still drain to zero with images given up on.
     expect(status.index).toEqual({ embedded: 30, failed: 2, pending: 68, total: 100 });

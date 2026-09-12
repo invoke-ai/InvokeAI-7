@@ -1,8 +1,9 @@
 import type { GalleryView } from '@features/gallery';
+import type { GalleryItemKey, GalleryItemRef } from '@features/gallery/contracts';
 import type { GalleryItemsFilter } from '@features/gallery/queries';
 import type { QueryClient } from '@tanstack/react-query';
 
-import { galleryImages, legacyGeneratedImageToGalleryItem, toGalleryItemKey } from '@features/gallery';
+import { galleryItems, toGalleryItemKey } from '@features/gallery';
 import { getGallerySettings, registerImageCluster, requestGalleryItemReveal } from '@features/gallery/contracts';
 import {
   GALLERY_MAX_ROWS,
@@ -17,10 +18,10 @@ import { useWorkbenchCommands, useWorkbenchQueries } from '@workbench/WorkbenchC
 import { useCallback, useMemo } from 'react';
 
 export interface MapSelectionActions {
-  /** Reveal one image: land the gallery on its board, page, and grid cell. */
-  selectImage: (imageName: string) => void;
-  /** Show the whole cluster in the gallery, the clicked image selected. */
-  selectCluster: (primaryImageName: string, imageNames: string[], label: string) => void;
+  /** Reveal one item: land the gallery on its board, page, and grid cell. */
+  selectItem: (item: GalleryItemRef) => void;
+  /** Show the whole cluster in the gallery, the clicked item selected. */
+  selectCluster: (primaryItem: GalleryItemRef, itemKeys: GalleryItemKey[], label: string) => void;
 }
 
 /**
@@ -59,24 +60,25 @@ const ensureGalleryPagesLoaded = async (
 };
 
 /**
- * Turns map clicks into gallery navigation. The map only knows names; the
- * selection contract wants a full gallery item, so names are hydrated through
- * the bulk by-names resolver — always fresh, since a cached DTO's star/board
- * state can drift. ONE monotonic sequence spans both selection kinds, so
- * rapid clicks always resolve to the latest click regardless of which mode
- * each went through; a slow fetch can never overwrite a newer selection.
- * Preview follows the gallery selection on its own.
+ * Turns map clicks into gallery navigation. The map knows an item's kind and
+ * name; the selection contract wants a full gallery item, so each is hydrated
+ * through the by-ref resolver — always fresh, since a cached DTO's star/board
+ * state can drift, and kind-aware, since a point can be a video. ONE monotonic
+ * sequence spans both selection kinds, so rapid clicks always resolve to the
+ * latest click regardless of which mode each went through; a slow fetch can
+ * never overwrite a newer selection. Preview follows the gallery selection on
+ * its own.
  *
- * A single-image click is a full reveal: the gallery lands on the image's
- * board and view, any search or similarity filter is cleared (the image may
- * not match it), and the image's position in the board's ordering is looked
- * up so the grid can reach it — the page is selected in paginated mode, and
- * in infinite mode the pages down to it are loaded. The grid scrolls to the
- * newly selected item on its own once it is in the loaded window.
+ * A single click is a full reveal: the gallery lands on the item's board and
+ * view, any search or similarity filter is cleared (the item may not match
+ * it), and the item's position in the board's ordering is looked up so the
+ * grid can reach it — the page is selected in paginated mode, and in infinite
+ * mode the pages down to it are loaded. The grid scrolls to the newly selected
+ * item on its own once it is in the loaded window.
  *
  * A cluster click instead behaves like a search: the cluster's members (in
  * proximity order from the clicked point) become the gallery's list via a
- * `cluster` semantic reference, with the clicked image — the list's first
+ * `cluster` semantic reference, with the clicked item — the list's first
  * entry — as the selection.
  */
 export const useMapSelection = (): MapSelectionActions => {
@@ -84,22 +86,20 @@ export const useMapSelection = (): MapSelectionActions => {
   const queries = useWorkbenchQueries();
   const queryClient = useQueryClient();
 
-  const selectImage = useCallback(
-    (imageName: string) => {
+  const selectItem = useCallback(
+    (ref: GalleryItemRef) => {
       const sequence = ++selectionSequence;
 
-      galleryImages
-        .resolveMany([imageName])
-        .then(async (images) => {
-          const image = images.at(0);
-
-          if (!image || sequence !== selectionSequence) {
+      galleryItems
+        .resolve(ref)
+        .then(async (image) => {
+          if (sequence !== selectionSequence) {
             return;
           }
 
           const getGalleryValues = () => getProjectWidgetValues(queries.getSnapshot().activeProject, 'gallery');
           const settings = getGallerySettings(getGalleryValues());
-          const targetView: GalleryView = image.imageCategory === 'general' ? 'images' : 'assets';
+          const targetView: GalleryView = image.category === 'general' ? 'images' : 'assets';
           // The board listing the gallery will show once the reveal below has
           // cleared any search: identical filter shape, so the name list (and
           // the prefetched pages) land in the cache the gallery reads.
@@ -137,7 +137,7 @@ export const useMapSelection = (): MapSelectionActions => {
               .catch(() => null);
             const names = await queryClient.fetchQuery(galleryItemNamesOptions(listingFilter));
             const boards = await boardsPromise;
-            const index = names.items.findIndex((ref) => ref.kind === 'image' && ref.name === imageName);
+            const index = names.items.findIndex((item) => item.kind === ref.kind && item.name === ref.name);
             const isBoardListable =
               image.boardId === 'none' ||
               boards === null ||
@@ -214,11 +214,11 @@ export const useMapSelection = (): MapSelectionActions => {
             }
           }
 
-          commands.gallery.selectItem(legacyGeneratedImageToGalleryItem(image), undefined, page ?? undefined);
-          requestGalleryItemReveal(toGalleryItemKey({ kind: 'image', name: imageName }));
+          commands.gallery.selectItem(image, undefined, page ?? undefined);
+          requestGalleryItemReveal(toGalleryItemKey(ref));
         })
         .catch(() => {
-          // A click on a just-deleted image, or a blip mid-backend-restart,
+          // A click on a just-deleted item, or a blip mid-backend-restart,
           // simply leaves the selection unchanged.
         });
     },
@@ -226,39 +226,37 @@ export const useMapSelection = (): MapSelectionActions => {
   );
 
   const selectCluster = useCallback(
-    (primaryImageName: string, imageNames: string[], label: string) => {
+    (primaryItem: GalleryItemRef, itemKeys: GalleryItemKey[], label: string) => {
       const sequence = ++selectionSequence;
 
-      galleryImages
-        .resolveMany([primaryImageName])
-        .then((images) => {
-          const image = images.at(0);
-
-          if (!image || sequence !== selectionSequence) {
+      galleryItems
+        .resolve(primaryItem)
+        .then((image) => {
+          if (sequence !== selectionSequence) {
             return;
           }
 
-          // Same reason as `selectImage` above: the selection stamps the
+          // Same reason as `selectItem` above: the selection stamps the
           // navigation query from the board the gallery is showing, so land
-          // on the primary image's board first to keep that query coherent.
+          // on the primary item's board first to keep that query coherent.
           commands.gallery.selectBoard(image.boardId);
           // The member list lives in an in-memory registry (it can run to
-          // thousands of names); the persisted value keeps only the key. The
+          // thousands of items); the persisted value keeps only the key. The
           // page reset and search-term clear mirror setSemanticImageQuery in
           // the gallery's own actions.
-          const clusterId = registerImageCluster(imageNames, label);
+          const clusterId = registerImageCluster(itemKeys, label);
 
           commands.widgets.patchValues('gallery', {
             galleryPage: 0,
             searchTerm: '',
             semanticImageQuery: { clusterId, kind: 'cluster', label },
           });
-          // The clicked image is the proximity ordering's first entry, so it
+          // The clicked item is the proximity ordering's first entry, so it
           // is selected at the top of the cluster view; Preview follows. The
           // reveal brings the grid back to it even when this exact selection
           // is already current (re-clicking the cluster after scrolling away).
-          commands.gallery.selectItem(legacyGeneratedImageToGalleryItem(image));
-          requestGalleryItemReveal(toGalleryItemKey({ kind: 'image', name: primaryImageName }));
+          commands.gallery.selectItem(image);
+          requestGalleryItemReveal(toGalleryItemKey(primaryItem));
         })
         .catch(() => {
           // Selection is simply left unchanged on hydrate failure.
@@ -267,5 +265,5 @@ export const useMapSelection = (): MapSelectionActions => {
     [commands]
   );
 
-  return useMemo(() => ({ selectCluster, selectImage }), [selectCluster, selectImage]);
+  return useMemo(() => ({ selectCluster, selectItem }), [selectCluster, selectItem]);
 };

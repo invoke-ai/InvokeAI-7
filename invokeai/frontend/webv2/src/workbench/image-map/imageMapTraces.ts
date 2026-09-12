@@ -1,3 +1,4 @@
+import type { GalleryItemKey } from '@features/gallery/contracts';
 import type { Layout } from 'plotly.js';
 
 import type { ImageMapPoint } from './api';
@@ -33,18 +34,29 @@ export interface ScatterTrace {
     color: string | string[];
     opacity: number | number[];
     size: number;
-    symbol?: string;
+    symbol?: string | string[];
     line?: { color: string; width: number };
   };
 }
 
+/** Marker shapes per media kind; see `buildAllPointsTrace`. */
+const IMAGE_SYMBOL = 'circle';
+const VIDEO_SYMBOL = 'diamond';
+
 export const buildAllPointsTrace = (points: ImageMapPoint[]): ScatterTrace => ({
-  customdata: points.map((point) => point.imageName),
+  // The gallery's item key, so a click or hover resolves back to the kind the
+  // point stands for — plotly carries strings, and a bare name would not say
+  // whether it names an image or a video.
+  customdata: points.map((point) => point.key),
   hoverinfo: 'none',
   marker: {
     color: points.map((point) => getClusterColor(point.cluster)),
     opacity: points.map((point) => (point.cluster < 0 ? NOISE_OPACITY : POINT_OPACITY)),
     size: 5,
+    // Videos are diamonds. Color already carries the cluster, so kind needs
+    // the one remaining channel: without it a clip is pixel-identical to an
+    // image and can only be found by hovering points one at a time.
+    symbol: points.map((point) => (point.item.kind === 'video' ? VIDEO_SYMBOL : IMAGE_SYMBOL)),
   },
   mode: 'markers',
   name: ALL_POINTS_TRACE,
@@ -55,17 +67,17 @@ export const buildAllPointsTrace = (points: ImageMapPoint[]): ScatterTrace => ({
 
 /**
  * The gallery's multi-selection (e.g. a cluster click), drawn larger with a
- * white outline over the base points. Empty when fewer than two images are
+ * white outline over the base points. Empty when fewer than two items are
  * selected — a single selection is already marked by the gold target.
  */
 export const buildHighlightedPointsTrace = (
   points: ImageMapPoint[],
-  selectedNames: ReadonlySet<string>
+  selectedKeys: ReadonlySet<GalleryItemKey>
 ): ScatterTrace => {
-  const selected = selectedNames.size >= 2 ? points.filter((point) => selectedNames.has(point.imageName)) : [];
+  const selected = selectedKeys.size >= 2 ? points.filter((point) => selectedKeys.has(point.key)) : [];
 
   return {
-    customdata: selected.map((point) => point.imageName),
+    customdata: selected.map((point) => point.key),
     // 'skip': highlighted points sit over their base points, which carry the
     // same customdata — hit-testing should fall through to them.
     hoverinfo: 'skip',
@@ -73,6 +85,9 @@ export const buildHighlightedPointsTrace = (
       color: selected.map((point) => getClusterColor(point.cluster)),
       line: { color: '#FFFFFF', width: 1 },
       opacity: 1,
+      // The overlay sits on top of the base point, so it carries the kind's
+      // shape too — otherwise selecting a video turns its diamond into a circle.
+      symbol: selected.map((point) => (point.item.kind === 'video' ? VIDEO_SYMBOL : IMAGE_SYMBOL)),
       size: 8,
     },
     mode: 'markers',
@@ -172,7 +187,7 @@ export interface ClusterAnnotation {
  *
  * Ordered by cluster size (largest first, cluster id as the tiebreak): array
  * order is the keep-priority for declutterAnnotations, so when two labels
- * collide the one naming more images survives.
+ * collide the one naming more items survives.
  */
 export const buildClusterAnnotations = (
   points: ImageMapPoint[],

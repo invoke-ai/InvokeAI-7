@@ -720,3 +720,50 @@ test('copying media mints fresh identities and deleting a project keeps its medi
     );
   });
 });
+
+test('the image map serves videos only on request and keeps its two endpoints comparable', async () => {
+  await withRepresentativeBackend(async (backend) => {
+    const imagesOnly = await getJson(backend, '/api/v1/image_map/points');
+    const withVideos = await getJson(backend, '/api/v1/image_map/points?include_videos=true');
+
+    // The opt-in gate, which is the contract the real backend enforces: a
+    // client that cannot render videos must not be sent any.
+    assert.equal(
+      imagesOnly.points.some((point) => point.kind === 'video'),
+      false
+    );
+    assert.equal(
+      withVideos.points.some((point) => point.kind === 'video'),
+      true
+    );
+    // The footer reports point_count, so it has to match what was served.
+    assert.equal(imagesOnly.point_count, imagesOnly.points.length);
+    assert.equal(withVideos.point_count, withVideos.points.length);
+    assert.equal(withVideos.points.length > imagesOnly.points.length, true);
+
+    // The client discards a label set whose projection or visible set differs
+    // from the points it is holding, so a mock that answers inconsistently
+    // silently shows an unlabelled map.
+    const labels = await getJson(backend, '/api/v1/image_map/cluster_labels?include_videos=true');
+    assert.equal(labels.updated_at, withVideos.updated_at);
+    assert.equal(labels.visible_hash, withVideos.visible_hash);
+
+    // Every point names a real item of the kind it claims. Deliberately a
+    // video whose name is in no image: the fixtures include a video named like
+    // an image, and the cross-namespace assertion below needs a genuine miss.
+    const imageNames = new Set(imagesOnly.points.map((point) => point.image_name));
+    const video = withVideos.points.find((point) => point.kind === 'video' && !imageNames.has(point.image_name));
+    assert.equal((await getJson(backend, `/api/v1/videos/i/${video.image_name}`)).video_name, video.image_name);
+
+    const videoLabels = await getJson(
+      backend,
+      `/api/v1/image_map/image_labels?image_name=${video.image_name}&kind=video`
+    );
+    assert.equal(typeof videoLabels.label, 'string');
+    // A name from the other namespace is a miss, not another item's labels.
+    const crossed = await fetch(
+      `${backend.origin}/api/v1/image_map/image_labels?image_name=${video.image_name}&kind=image`
+    );
+    assert.equal(crossed.status, 404);
+  });
+});

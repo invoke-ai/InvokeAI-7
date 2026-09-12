@@ -1039,7 +1039,7 @@ describe('adopting a project from another realm', () => {
     // a project runs it, and so does the conflict fork that rescues the LIVE
     // copy. The registry entry is still here, the ranking is still on screen,
     // and deleting it would take the user's search with it.
-    const clusterId = registerImageCluster(['a.png', 'b.png'], 'beaches');
+    const clusterId = registerImageCluster(['image:a.png', 'image:b.png'], 'beaches');
     const values = galleryValuesOf(
       galleryProject({
         galleryPage: 3,
@@ -1077,7 +1077,7 @@ describe('adopting a project from another realm', () => {
   });
 
   it('retargets a project without disturbing its live session state', () => {
-    const clusterId = registerImageCluster(['a.png', 'b.png'], 'beaches');
+    const clusterId = registerImageCluster(['image:a.png', 'image:b.png'], 'beaches');
     let state = createInitialWorkbenchState();
     const project = getActiveProject(state);
     const staleCopy = project;

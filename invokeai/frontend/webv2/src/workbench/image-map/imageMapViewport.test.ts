@@ -12,7 +12,13 @@ import {
   type AxisRanges,
 } from './imageMapViewport';
 
-const point = (x: number, y: number): ImageMapPoint => ({ cluster: 0, imageName: `${x},${y}`, x, y });
+const point = (x: number, y: number): ImageMapPoint => ({
+  cluster: 0,
+  item: { kind: 'image', name: `${x},${y}` },
+  key: `image:${x},${y}`,
+  x,
+  y,
+});
 
 describe('computePercentileRanges', () => {
   it('returns null for no points and a non-degenerate box for one point', () => {
@@ -149,9 +155,10 @@ describe('fitRangesToAspect', () => {
   it('keeps at least 90% of points in view for any container shape', () => {
     // The user-facing contract for the first render: the fitted view must
     // show (nearly) the whole map, however skewed the container.
-    const points = Array.from({ length: 100 }, (_, index) => ({
+    const points: ImageMapPoint[] = Array.from({ length: 100 }, (_, index) => ({
       cluster: 0,
-      imageName: `p${index}.png`,
+      item: { kind: 'image', name: `p${index}.png` },
+      key: `image:p${index}.png` as const,
       x: Math.sin(index * 2.399) * 13,
       y: Math.cos(index * 1.618) * 7 + (index % 10),
     }));
