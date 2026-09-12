@@ -1120,7 +1120,7 @@
         "usage": "always"
       },
       "dimension_grid": 32,
-      "spatial_compression": 8,
+      "spatial_compression": 16,
       "guidance_label": "Guidance",
       "scheduler_set": "flow",
       "scheduler_applies_to_graph": false,
