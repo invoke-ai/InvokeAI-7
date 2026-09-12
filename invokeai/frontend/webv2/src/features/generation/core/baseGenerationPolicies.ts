@@ -1641,7 +1641,12 @@ export const getGenerationValidationReasons = (model: GenerateModelConfig, setti
   // previewGraph.ts), so gating here is what makes the canvas and the topbar fail closed too,
   // rather than only the Generate widget's own resolver.
   if (!hasArchitectureCapabilities()) {
-    return ['Model capabilities have not loaded yet. Generation is blocked until they arrive.'];
+    // Deliberately not state-aware: `core` cannot reach the store that knows loading from
+    // failed. Saying "not yet" would be a promise this cannot keep -- after a failed fetch
+    // nothing re-kicks it except the Generate panel's retry, so name that instead.
+    return [
+      'Model capabilities are not available. Generation is blocked until they load; if this persists, retry from the Generate panel.',
+    ];
   }
 
   if (!isSupportedGenerateModel(model)) {

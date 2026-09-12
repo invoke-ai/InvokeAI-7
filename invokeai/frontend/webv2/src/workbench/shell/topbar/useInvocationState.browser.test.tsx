@@ -81,7 +81,9 @@ describe('useInvocationState and the architecture capability table', () => {
       root?.render(<Probe />);
     });
 
-    expect(blockingReasons()).toBe('Model capabilities have not loaded yet. Generation is blocked until they arrive.');
+    expect(blockingReasons()).toBe(
+      'Model capabilities are not available. Generation is blocked until they load; if this persists, retry from the Generate panel.'
+    );
 
     // The retry button in the Generate widget, succeeding. Nothing else about the project changes,
     // so the route resolution has to be driven by the table's arrival alone.
