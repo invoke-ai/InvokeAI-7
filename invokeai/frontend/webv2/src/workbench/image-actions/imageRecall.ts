@@ -9,7 +9,7 @@ import type {
 
 import {
   getCompatibleReferenceImages,
-  getGenerationDimensions,
+  getDimensionGrid,
   getGenerationUiPolicy,
   getSettingsWithModelDefaults,
   isKnownScheduler,
@@ -223,7 +223,16 @@ const getImageSize = (
   image: GalleryImage,
   model: GenerateModelConfig
 ): Pick<GenerateWidgetValues, 'height' | 'width'> | null => {
-  const grid = getGenerationDimensions(model).grid;
+  // Fail closed: recalled dimensions are snapped to the architecture's grid and then persisted
+  // into the project. Without the served table every base reads as grid 8, so a krea-2 or
+  // CogView 4 project would store a size its denoise node rejects. Recalling nothing is
+  // recoverable; storing the wrong size silently is not.
+  const grid = getDimensionGrid(model.base, model.variant);
+
+  if (grid === null) {
+    return null;
+  }
+
   const width = getImageDimension(image, 'width', grid);
   const height = getImageDimension(image, 'height', grid);
 
@@ -234,7 +243,14 @@ const getMetadataSize = (
   metadata: unknown,
   model: GenerateModelConfig
 ): Partial<Pick<GenerateWidgetValues, 'height' | 'width'>> => {
-  const grid = getGenerationDimensions(model).grid;
+  // Same reason as getImageSize: an empty result means 'no size recalled', which the caller
+  // already handles, and the field list then does not claim a size was restored.
+  const grid = getDimensionGrid(model.base, model.variant);
+
+  if (grid === null) {
+    return {};
+  }
+
   const width = getDimension(metadata, 'width', grid);
   const height = getDimension(metadata, 'height', grid);
 

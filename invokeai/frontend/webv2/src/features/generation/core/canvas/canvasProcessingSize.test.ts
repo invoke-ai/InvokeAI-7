@@ -1,8 +1,11 @@
 import type { GenerateModelConfig } from '@features/generation/core/types';
 
+import { seedArchitectureCapabilities } from '@features/generation/core/architectureCapabilities.testing';
 import { describe, expect, it } from 'vitest';
 
 import { resolveCanvasProcessingSize } from './canvasProcessingSize';
+
+seedArchitectureCapabilities();
 
 const sd1 = { base: 'sd-1', type: 'main' } as GenerateModelConfig;
 const sdxl = { base: 'sdxl', type: 'main' } as GenerateModelConfig;

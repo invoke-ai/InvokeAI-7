@@ -1,6 +1,7 @@
 import type { MainModelConfig } from '@features/generation/contracts';
 import type { AccountScope } from '@platform/state/accountLifecycle';
 
+import { seedArchitectureCapabilities } from '@features/generation/core/architectureCapabilities.testing';
 import { getDefaultGenerateSettings } from '@features/generation/settings';
 import { describe, expect, it } from 'vitest';
 
@@ -9,6 +10,10 @@ import type { WorkbenchCommands, WorkbenchQueries } from './workbenchStore';
 import { submitActiveInvocation, type ActiveInvocationSubmissionRuntime } from './activeInvocationSubmission';
 import { isCanvasInvocationPreparing } from './canvasInvocationPreparation';
 import { createInitialWorkbenchState, workbenchReducer } from './workbenchState.testing';
+
+// Generation policy now fails closed without the capability table, and a submission cannot
+// happen before app boot has fetched it. Seeding it here is what the running app does.
+seedArchitectureCapabilities();
 
 const owner = { signal: new AbortController().signal } as AccountScope;
 

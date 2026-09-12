@@ -27,7 +27,6 @@ from invokeai.app.invocations.fields import (
 from invokeai.app.invocations.model import VAEField
 from invokeai.app.invocations.primitives import ImageOutput
 from invokeai.app.services.shared.invocation_context import InvocationContext
-from invokeai.backend.flux.modules.autoencoder import AutoEncoder as FluxAutoEncoder
 from invokeai.backend.krea2.vae_compat import patch_qwen_image_vae_tiling
 from invokeai.backend.util.devices import TorchDevice
 from invokeai.backend.util.oom import is_oom_error
@@ -39,7 +38,6 @@ from invokeai.backend.util.vae_decode_diagnostics import (
 )
 from invokeai.backend.util.vae_working_memory import (
     estimate_vae_working_memory_anima,
-    estimate_vae_working_memory_flux,
 )
 
 # Tile geometry for tiled Wan VAE decode. 512px tiles with a 384px stride (128px blended
@@ -93,37 +91,39 @@ class AnimaLatentsToImageInvocation(BaseInvocation, WithMetadata, WithBoard):
         latents = context.tensors.load(self.latents.latents_name)
 
         vae_info = context.models.load(self.vae.vae)
-        if not isinstance(vae_info.model, (AutoencoderKLWan, FluxAutoEncoder)):
+        if not isinstance(vae_info.model, AutoencoderKLWan):
+            # A FLUX VAE reaches here with the right shape -- 16 channels at 8x, same as Anima --
+            # and decodes without raising, which is why it was offered for a while. It is a
+            # different basis: measured against the correct decode of the same latent, 8.67 dB
+            # PSNR, a magenta moire in place of the subject, and the run still reports success.
+            # Refuse until someone implements the change of basis; a wrong image is worse than
+            # none, because nothing downstream can tell it apart from an intended one.
             raise TypeError(
-                f"Expected AutoencoderKLWan or FluxAutoEncoder for Anima VAE, got {type(vae_info.model).__name__}."
+                "Anima decodes in the 16-channel Wan 2.1 latent space, and "
+                f"{type(vae_info.model).__name__} is not that decoder. Choose a VAE registered under "
+                "'anima', 'qwen-image', or a 16-channel 'wan' VAE -- all three are the same "
+                "194-tensor checkpoint. A FLUX VAE has the same channel count but a different "
+                "basis, and converting between them is not implemented."
             )
 
-        use_tiling = False
-        if isinstance(vae_info.model, AutoencoderKLWan):
-            full_decode_working_memory = estimate_vae_working_memory_anima(
-                operation="decode",
-                image_tensor=latents,
-                vae=vae_info.model,
-                tile_size=None,
-            )
-            use_tiling = self._use_tiled_decode(TorchDevice.choose_torch_device(), full_decode_working_memory)
-            estimated_working_memory = estimate_vae_working_memory_anima(
-                operation="decode",
-                image_tensor=latents,
-                vae=vae_info.model,
-                tile_size=ANIMA_VAE_TILE_SIZE if use_tiling else None,
-            )
-        else:
-            estimated_working_memory = estimate_vae_working_memory_flux(
-                operation="decode",
-                image_tensor=latents,
-                vae=vae_info.model,
-            )
+        full_decode_working_memory = estimate_vae_working_memory_anima(
+            operation="decode",
+            image_tensor=latents,
+            vae=vae_info.model,
+            tile_size=None,
+        )
+        use_tiling = self._use_tiled_decode(TorchDevice.choose_torch_device(), full_decode_working_memory)
+        estimated_working_memory = estimate_vae_working_memory_anima(
+            operation="decode",
+            image_tensor=latents,
+            vae=vae_info.model,
+            tile_size=ANIMA_VAE_TILE_SIZE if use_tiling else None,
+        )
 
         with vae_info.model_on_device(working_mem_bytes=estimated_working_memory) as (_, vae):
             context.util.signal_progress("Running Anima VAE decode")
-            if not isinstance(vae, (AutoencoderKLWan, FluxAutoEncoder)):
-                raise TypeError(f"Expected AutoencoderKLWan or FluxAutoEncoder, got {type(vae).__name__}.")
+            if not isinstance(vae, AutoencoderKLWan):
+                raise TypeError(f"Expected AutoencoderKLWan, got {type(vae).__name__}.")
 
             vae_dtype = next(iter(vae.parameters())).dtype
             # Use the VAE's intended compute device (CUDA/MPS, or CPU if configured cpu_only). Do NOT infer it from
@@ -134,64 +134,60 @@ class AnimaLatentsToImageInvocation(BaseInvocation, WithMetadata, WithBoard):
             TorchDevice.empty_cache()
 
             with torch.inference_mode():
-                if isinstance(vae, FluxAutoEncoder):
-                    # FLUX VAE handles scaling internally, expects 4D [B, C, H, W]
-                    img = vae.decode(latents)
-                else:
-                    # Expects 5D latents [B, C, T, H, W]
-                    if latents.ndim == 4:
-                        latents = latents.unsqueeze(2)  # [B, C, H, W] -> [B, C, 1, H, W]
+                # Expects 5D latents [B, C, T, H, W]
+                if latents.ndim == 4:
+                    latents = latents.unsqueeze(2)  # [B, C, H, W] -> [B, C, 1, H, W]
 
-                    # Denormalize from denoiser space to raw VAE space
-                    # (same as diffusers WanPipeline and ComfyUI Wan21.process_out)
-                    latents_mean = torch.tensor(vae.config.latents_mean).view(1, -1, 1, 1, 1).to(latents)
-                    latents_std = torch.tensor(vae.config.latents_std).view(1, -1, 1, 1, 1).to(latents)
-                    latents = latents * latents_std + latents_mean
-                    # Cheap (latents are small); the black-image triage below needs it to tell
-                    # upstream corruption from decode-side corruption.
-                    latents_finite = bool(torch.isfinite(latents).all())
+                # Denormalize from denoiser space to raw VAE space
+                # (same as diffusers WanPipeline and ComfyUI Wan21.process_out)
+                latents_mean = torch.tensor(vae.config.latents_mean).view(1, -1, 1, 1, 1).to(latents)
+                latents_std = torch.tensor(vae.config.latents_std).view(1, -1, 1, 1, 1).to(latents)
+                latents = latents * latents_std + latents_mean
+                # Cheap (latents are small); the black-image triage below needs it to tell
+                # upstream corruption from decode-side corruption.
+                latents_finite = bool(torch.isfinite(latents).all())
 
-                    def decode_once() -> torch.Tensor:
-                        out = vae.decode(latents, return_dict=False)[0]
-                        if not bool(torch.isfinite(out).all()):
-                            # NaN survives clamp(-1, 1) and quantizes to 0: without this, the
-                            # failure renders as a silent black image. Diagnose and try to recover.
-                            out = self._recover_nonfinite_decode(context, vae, latents, out, latents_finite)
-                        return out
+                def decode_once() -> torch.Tensor:
+                    out = vae.decode(latents, return_dict=False)[0]
+                    if not bool(torch.isfinite(out).all()):
+                        # NaN survives clamp(-1, 1) and quantizes to 0: without this, the
+                        # failure renders as a silent black image. Diagnose and try to recover.
+                        out = self._recover_nonfinite_decode(context, vae, latents, out, latents_finite)
+                    return out
 
-                    # The cached VAE instance is shared across invocations and with the Qwen-Image
-                    # nodes, so the tile geometry is scoped: `enable_tiling` writes it onto the
-                    # module and `disable_tiling` restores only the flag, never the sizes.
-                    try:
-                        with patch_qwen_image_vae_tiling(vae, ANIMA_VAE_TILE_SIZE if use_tiling else None):
-                            decoded = decode_once()
-                    except RuntimeError as e:
-                        if use_tiling or not is_oom_error(e):
-                            raise
-                        # The working-memory estimate was insufficient on this system;
-                        # retry once with tiling, which caps the peak allocation.
-                        context.util.signal_progress("VAE decode ran out of memory, retrying tiled")
-                        context.logger.warning(
-                            "VAE decode ran out of memory; retrying with tiling. The tiled result is not identical to an "
-                            "untiled decode -- the decoder's normalisation and attention are global, so the difference is "
-                            "spread over the image rather than confined to the seams."
-                        )
-                        # Drop the failed attempt's traceback before retrying. It pins that
-                        # decode's frames, and their locals hold the full-resolution
-                        # activations -- exception/traceback/frame is a reference cycle rooted
-                        # on the stack, so `empty_cache()` frees nothing while `e` is bound and
-                        # the retry has to fit on top of it. Measured at 1536px: 1.4 GiB held,
-                        # and a retry that fails with it and succeeds without. Same reasoning as
-                        # `ModelConfigFactory._detach_traceback`.
-                        e.__traceback__ = None
-                        TorchDevice.empty_cache()
-                        with patch_qwen_image_vae_tiling(vae, ANIMA_VAE_TILE_SIZE):
-                            decoded = decode_once()
+                # The cached VAE instance is shared across invocations and with the Qwen-Image
+                # nodes, so the tile geometry is scoped: `enable_tiling` writes it onto the
+                # module and `disable_tiling` restores only the flag, never the sizes.
+                try:
+                    with patch_qwen_image_vae_tiling(vae, ANIMA_VAE_TILE_SIZE if use_tiling else None):
+                        decoded = decode_once()
+                except RuntimeError as e:
+                    if use_tiling or not is_oom_error(e):
+                        raise
+                    # The working-memory estimate was insufficient on this system;
+                    # retry once with tiling, which caps the peak allocation.
+                    context.util.signal_progress("VAE decode ran out of memory, retrying tiled")
+                    context.logger.warning(
+                        "VAE decode ran out of memory; retrying with tiling. The tiled result is not identical to an "
+                        "untiled decode -- the decoder's normalisation and attention are global, so the difference is "
+                        "spread over the image rather than confined to the seams."
+                    )
+                    # Drop the failed attempt's traceback before retrying. It pins that
+                    # decode's frames, and their locals hold the full-resolution
+                    # activations -- exception/traceback/frame is a reference cycle rooted
+                    # on the stack, so `empty_cache()` frees nothing while `e` is bound and
+                    # the retry has to fit on top of it. Measured at 1536px: 1.4 GiB held,
+                    # and a retry that fails with it and succeeds without. Same reasoning as
+                    # `ModelConfigFactory._detach_traceback`.
+                    e.__traceback__ = None
+                    TorchDevice.empty_cache()
+                    with patch_qwen_image_vae_tiling(vae, ANIMA_VAE_TILE_SIZE):
+                        decoded = decode_once()
 
-                    # Output is 5D [B, C, T, H, W] — squeeze temporal dim
-                    if decoded.ndim == 5:
-                        decoded = decoded.squeeze(2)
-                    img = decoded
+                # Output is 5D [B, C, T, H, W] — squeeze temporal dim
+                if decoded.ndim == 5:
+                    decoded = decoded.squeeze(2)
+                img = decoded
 
             img = img.clamp(-1, 1)
             img = rearrange(img[0], "c h w -> h w c")

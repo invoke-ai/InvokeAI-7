@@ -16831,7 +16831,7 @@
         "category": "model",
         "class": "invocation",
         "classification": "prototype",
-        "description": "Loads an Anima model, outputting its submodels.\n\nAnima uses:\n- Transformer: Cosmos Predict2 DiT + LLM Adapter (from single-file checkpoint)\n- Qwen3 Encoder: Qwen3 0.6B (standalone single-file)\n- VAE: AutoencoderKLQwenImage / Wan 2.1 VAE (standalone single-file or FLUX VAE)\n\nThe T5-XXL tokenizer needed for LLM Adapter token IDs is bundled in the package,\nso no T5-XXL encoder model needs to be installed.",
+        "description": "Loads an Anima model, outputting its submodels.\n\nAnima uses:\n- Transformer: Cosmos Predict2 DiT + LLM Adapter (from single-file checkpoint)\n- Qwen3 Encoder: Qwen3 0.6B (standalone single-file)\n- VAE: AutoencoderKLQwenImage / Wan 2.1 VAE (standalone single-file)\n\nThe T5-XXL tokenizer needed for LLM Adapter token IDs is bundled in the package,\nso no T5-XXL encoder model needs to be installed.",
         "node_pack": "invokeai",
         "properties": {
           "id": {
@@ -16870,11 +16870,12 @@
           },
           "vae_model": {
             "$ref": "#/components/schemas/ModelIdentifierField",
-            "description": "Standalone VAE model. Anima uses a Wan 2.1 / QwenImage VAE (16-channel). A FLUX VAE can also be used as a compatible fallback.",
+            "description": "Standalone VAE model. Anima uses a Wan 2.1 / QwenImage VAE (16-channel).",
             "field_kind": "input",
             "input": "direct",
             "orig_required": true,
             "title": "VAE",
+            "ui_model_base": ["anima", "qwen-image", "wan"],
             "ui_model_type": ["vae"]
           },
           "qwen3_encoder_model": {
@@ -17711,6 +17712,17 @@
               }
             ],
             "description": "Recommended generation parameters, if the architecture has any."
+          },
+          "vae": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ArchitectureVae"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null where the architecture declares no VAE compatibility beyond its own base."
           }
         },
         "type": "object",
@@ -17891,6 +17903,21 @@
         "required": ["modes"],
         "title": "ArchitectureModality",
         "description": "What this architecture can produce, and what it calls it in image metadata."
+      },
+      "ArchitectureVae": {
+        "properties": {
+          "accepted": {
+            "items": {
+              "$ref": "#/components/schemas/VaeAcceptance"
+            },
+            "type": "array",
+            "title": "Accepted"
+          }
+        },
+        "type": "object",
+        "required": ["accepted"],
+        "title": "ArchitectureVae",
+        "description": "Which VAEs an architecture's decode accepts, beyond its own base.\n\nServed because the clients keep their own copy of this and it drifts: widening a backend list\nwithout the picker leaves a VAE that loads but cannot be chosen."
       },
       "BaseMetadata": {
         "properties": {
@@ -33554,13 +33581,13 @@
               }
             ],
             "default": null,
-            "description": "Standalone VAE model. Flux2 Klein uses the same VAE as FLUX (16-channel). If not provided, VAE will be loaded from the Qwen3 Source model.",
+            "description": "Standalone VAE model (AutoencoderKLFlux2, 32-channel). If not provided, VAE will be loaded from the Qwen3 Source model.",
             "field_kind": "input",
             "input": "direct",
             "orig_default": null,
             "orig_required": false,
             "title": "VAE",
-            "ui_model_base": ["flux", "flux2"],
+            "ui_model_base": ["flux2"],
             "ui_model_type": ["vae"]
           },
           "qwen3_encoder_model": {
@@ -84016,7 +84043,7 @@
             "orig_default": null,
             "orig_required": false,
             "title": "VAE",
-            "ui_model_base": ["qwen-image"],
+            "ui_model_base": ["qwen-image", "anima"],
             "ui_model_type": ["vae"]
           },
           "qwen_vl_encoder_model": {
@@ -97677,6 +97704,29 @@
         ],
         "title": "VAE_Diffusers_Wan_Config",
         "description": "Model config for Wan 2.2 VAE in diffusers folder layout (AutoencoderKLWan)."
+      },
+      "VaeAcceptance": {
+        "properties": {
+          "base": {
+            "$ref": "#/components/schemas/BaseModelType"
+          },
+          "latent_channels": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latent Channels",
+            "description": "Null unless the base ships VAEs of more than one latent width; only wan does."
+          }
+        },
+        "type": "object",
+        "required": ["base"],
+        "title": "VaeAcceptance",
+        "description": "One VAE this architecture's decode accepts."
       },
       "ValidationError": {
         "properties": {

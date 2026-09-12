@@ -5,6 +5,7 @@ from invokeai.backend.architectures.facets.default_settings import DefaultSettin
 from invokeai.backend.architectures.facets.features import FeaturesFacet, NegativePrompt
 from invokeai.backend.architectures.facets.latent_space import WAN21_16, LatentSpaceFacet
 from invokeai.backend.architectures.facets.modality import ModalityFacet
+from invokeai.backend.architectures.facets.vae import VaeCompatibility, VaeFacet
 from invokeai.backend.architectures.facets.variant import VariantFacet
 from invokeai.backend.architectures.registry import register
 from invokeai.backend.model_manager.configs.default_settings import MainModelDefaultSettings
@@ -34,6 +35,16 @@ register(
         guidance_label="CFG",
         scheduler_set="flow",
         supports_regional_guidance=True,
+    ),
+    VaeFacet(
+        frozenset(
+            {
+                # Krea-2 decodes with the Qwen-Image VAE, which is why its graph reuses
+                # `qwen_image_l2i`. The same file also appears registered as `anima`.
+                VaeCompatibility(BaseModelType.QwenImage),
+                VaeCompatibility(BaseModelType.Anima),
+            }
+        )
     ),
     # The values are krea2_turbo / krea2_base rather than turbo / base, because variant strings are
     # resolved without base context in configs/factory.py and so must be globally unique.

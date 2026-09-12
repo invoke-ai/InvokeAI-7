@@ -6,6 +6,14 @@ import type { uploadCanvasImage } from '@workbench/canvas-operations/backend/can
 import type { CanvasProjectMutation } from '@workbench/canvasProjectMutations';
 import type { Project, WorkbenchState } from '@workbench/projectContracts';
 
+import {
+  resetArchitectureCapabilities,
+  setArchitectureCapabilities,
+} from '@features/generation/core/architectureCapabilities';
+import {
+  architectureCapabilitiesFixture,
+  seedArchitectureCapabilities,
+} from '@features/generation/core/architectureCapabilities.testing';
 import { accountLifecycle } from '@platform/state/accountLifecycle';
 import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
 import { createTestInsertionAnchorCapture } from '@workbench/canvas-engine/document/insertionAnchors.testStub';
@@ -219,6 +227,8 @@ const expectedLayer = (
     }
   }
 };
+
+seedArchitectureCapabilities();
 
 describe('importGalleryImagesToCanvas', () => {
   it.each<Exclude<GalleryCanvasImportDestination, 'control-resized'>>([
@@ -616,6 +626,10 @@ describe('importGalleryImagesToCanvas', () => {
 
   it('does not upload an old account image after local preprocessing crosses an account switch', async () => {
     accountLifecycle.activate('user-a');
+    // Activating an account drops the capability table with the rest of the previous account's
+    // state; the app reloads it for the incoming one. Resized imports are refused without it, and
+    // this test is about the account fence, not that gate.
+    setArchitectureCapabilities(architectureCapabilitiesFixture);
     const { project, state } = withProject();
     let resolveFetch: ((response: Response) => void) | undefined;
     const fetchImage = vi.fn<typeof fetch>(
@@ -719,5 +733,51 @@ describe('importGalleryImagesToCanvas', () => {
     await expect(importGalleryImagesToCanvas({ ...options, destination: 'raster' })).resolves.toMatchObject({
       status: 'imported',
     });
+  });
+});
+
+describe('importGalleryImagesToCanvas before the capability table arrives', () => {
+  it('refuses a resized import rather than uploading at fallback dimensions', async () => {
+    // The resize target is the model's native size and grid, and this is the one import path whose
+    // mistake cannot be taken back: the asset is uploaded and becomes a layer. With no table every
+    // architecture reads as 1024 / grid 8, so an SD-1 project would upload four times the area it
+    // asked for. Nothing re-derives it afterwards.
+    const { project, state } = withProject((value) => setModel(value, 'sd-1'));
+    const fetchImage = vi.fn<typeof fetch>();
+    const uploadImage = vi.fn<typeof uploadCanvasImage>();
+
+    resetArchitectureCapabilities();
+    const result = await importGalleryImagesToCanvas({
+      destination: 'control-resized',
+      applyCanvasMutation: () => undefined,
+      engine: engine(project.id),
+      fetchImage,
+      ...queriesFor(() => state),
+      images: [image('wide.png', 1600, 900)],
+      project,
+      uploadImage,
+    });
+
+    // Its own status, not 'blocked' -- that one tells the user to finish an operation they
+    // did not start, and gives them nothing to act on.
+    expect(result).toEqual({ status: 'capabilities-unavailable' });
+    expect(fetchImage).not.toHaveBeenCalled();
+    expect(uploadImage).not.toHaveBeenCalled();
+  });
+
+  it('still imports destinations that do not depend on the architecture', async () => {
+    const { project, state } = withProject((value) => setModel(value, 'sd-1'));
+
+    resetArchitectureCapabilities();
+    const result = await importGalleryImagesToCanvas({
+      destination: 'raster',
+      applyCanvasMutation: () => undefined,
+      engine: engine(project.id),
+      ...queriesFor(() => state),
+      images: [image('wide.png', 1600, 900)],
+      project,
+    });
+
+    expect(result.status).toBe('imported');
   });
 });

@@ -1,3 +1,4 @@
+import { seedArchitectureCapabilities } from '@features/generation/core/architectureCapabilities.testing';
 import { describe, expect, it } from 'vitest';
 
 import { getControlValidationReason } from './controlValidation';
@@ -11,6 +12,8 @@ const valid = {
   beginEndStepPct: [0, 1] as [number, number],
   weight: 0.75,
 };
+
+seedArchitectureCapabilities();
 
 describe('getControlValidationReason', () => {
   it('returns stable reason codes for the validation matrix', () => {

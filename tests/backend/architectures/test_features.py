@@ -98,12 +98,12 @@ def test_reference_images_and_the_one_variant_condition() -> None:
 
 def test_regional_guidance_and_its_negative_subset() -> None:
     """Transcribed from `REGIONAL_GUIDANCE_SUPPORT` in webv2's `addRegionalGuidance.ts`, which is
-    the only place these two facts live today — neither field is in the generated capability
-    contract, so `test_frontend_capability_parity.py` cannot check them.
+    the only place these two facts live today -- neither field is served in a form the frontend
+    fixture pins, so nothing else cross-checks them.
 
     Regional negative prompts are a strict subset: only the SD family's `compel` /
     `sdxl_compel_prompt` path masks both prompt polarities. The FLUX / FLUX.2 / Krea-2 / Z-Image /
-    Anima denoisers mask positive conditioning only — Z-Image and Anima accept a negative list but
+    Anima denoisers mask positive conditioning only -- Z-Image and Anima accept a negative list but
     discard its masks, so a "regional" negative there would act globally and webv2 rejects it.
     """
     regional = {
@@ -173,3 +173,34 @@ def test_an_architecture_that_cannot_do_cfg_declares_no_cfg() -> None:
         if features.negative_prompt.usage == "never" and settings.cfg_scale != 1.0:
             contradictory.append(f"{base.value}: cfg_scale={settings.cfg_scale} but negative prompt is 'never'")
     assert contradictory == []
+
+
+def test_scheduler_applies_to_graph_matches_the_node() -> None:
+    """The flag must agree with whether the denoise node actually takes a `scheduler` field.
+
+    `scheduler_applies_to_graph` drives whether the UI offers a scheduler dropdown at all. Declaring
+    it False for a node that reads one hides a control the graph honours and pins every generation
+    to whatever the node defaults to; declaring it True for a node without the field offers a
+    dropdown that reaches nothing.
+
+    ERNIE-Image shipped the first of those: `ernie_image_denoise` builds its sampler from
+    `ERNIE_IMAGE_SCHEDULER_MAP[self.scheduler]`, but the facet omitted the flag and it defaulted to
+    False. Thirteen of the fourteen agreed; nothing compared them, so the one that did not was
+    invisible.
+    """
+    schedulers = {
+        cls.get_type(): "scheduler" in cls.model_json_schema()["properties"]
+        for cls in InvocationRegistry.get_invocation_classes()
+    }
+
+    disagreements = []
+    for base, node_type in sorted(DENOISE_NODE.items(), key=lambda item: item[0].value):
+        features = get(base, FeaturesFacet)
+        if features is None or node_type not in schedulers:
+            continue
+        if schedulers[node_type] != features.scheduler_applies_to_graph:
+            disagreements.append(
+                f"{base.value}: {node_type} has scheduler field = {schedulers[node_type]}, "
+                f"facet declares scheduler_applies_to_graph = {features.scheduler_applies_to_graph}"
+            )
+    assert disagreements == []

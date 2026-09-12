@@ -1,6 +1,7 @@
 import type { GalleryImage, GalleryItem, GalleryItemKey, GalleryItemRef } from '@features/gallery';
 import type { CreateCanvasFromImagesResult } from '@workbench/canvas-operations/api';
 
+import { seedArchitectureCapabilities } from '@features/generation/core/architectureCapabilities.testing';
 import { accountLifecycle } from '@platform/state/accountLifecycle';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, createRef, type Ref, useImperativeHandle } from 'react';
@@ -269,6 +270,8 @@ afterEach(async () => {
   host = null;
   root = null;
 });
+
+seedArchitectureCapabilities();
 
 describe('new canvas from images', () => {
   const galleryImage = (imageName: string): GalleryImage => ({

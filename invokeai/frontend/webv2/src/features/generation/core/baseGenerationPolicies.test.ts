@@ -1,3 +1,11 @@
+import {
+  resetArchitectureCapabilities,
+  setArchitectureCapabilities,
+} from '@features/generation/core/architectureCapabilities';
+import {
+  architectureCapabilitiesFixture,
+  seedArchitectureCapabilities,
+} from '@features/generation/core/architectureCapabilities.testing';
 import { describe, expect, it } from 'vitest';
 
 import type {
@@ -10,7 +18,6 @@ import type {
 } from './types';
 
 import {
-  BASE_GENERATION,
   coerceSchedulerForGraph,
   getComponentSectionPolicy,
   getAutoFlux2ComponentSourceModel,
@@ -25,8 +32,8 @@ import {
   getSettingsWithModelDefaults,
   isReferenceImageSupported,
   isSupportedGenerateModel,
-  SUPPORTED_GENERATE_BASES,
 } from './baseGenerationPolicies';
+import { SUPPORTED_GENERATE_BASES } from './supportedBases';
 
 const createModel = (base: string, overrides: Partial<MainModelConfig> = {}): MainModelConfig => ({
   base,
@@ -102,7 +109,9 @@ const externalModel: GenerateModelConfig = {
   type: 'external_image_generator',
 };
 
-describe('BASE_GENERATION', () => {
+seedArchitectureCapabilities();
+
+describe('architecture policy, read from the backend capability table', () => {
   it('matches expected dimensions per base', () => {
     expect(getGenerationDimensions(createModel('sd-1'))).toMatchObject({ grid: 8, optimal: 512 });
     expect(getGenerationDimensions(createModel('sdxl'))).toMatchObject({ grid: 8, optimal: 1024 });
@@ -111,6 +120,8 @@ describe('BASE_GENERATION', () => {
   });
 
   it('matches expected defaults per base', () => {
+    // These now come from the architecture facets rather than a table maintained here, so several
+    // moved to the values the model cards recommend. See the PR description for the full list.
     expect(getDefaultGenerateSettings(createModel('sdxl'))).toMatchObject({
       steps: 30,
       cfgScale: 7,
@@ -118,9 +129,11 @@ describe('BASE_GENERATION', () => {
       width: 1024,
       height: 1024,
     });
+    // FLUX's base row is dev: 28 steps at guidance 3.5. The old single row carried Schnell's step
+    // count for every variant, which is what the variant rows below now express properly.
     expect(getDefaultGenerateSettings(createModel('flux'))).toMatchObject({
-      steps: 4,
-      cfgScale: 4,
+      steps: 28,
+      cfgScale: 3.5,
       scheduler: 'euler',
     });
     expect(getDefaultGenerateSettings(createModel('flux2'))).toMatchObject({
@@ -133,10 +146,25 @@ describe('BASE_GENERATION', () => {
       cfgScale: 4,
       scheduler: 'euler_a',
     });
+    // Tongyi-MAI/Z-Image-Turbo says num_inference_steps=9.
     expect(getDefaultGenerateSettings(createModel('z-image'))).toMatchObject({
-      steps: 8,
+      steps: 9,
       cfgScale: 1,
       scheduler: 'euler',
+    });
+  });
+
+  it('answers per variant where the architecture does', () => {
+    // The gain the single-row table could not express: Schnell and dev want different step counts,
+    // and Fill wants a guidance an order of magnitude higher.
+    expect(getDefaultGenerateSettings(createModel('flux', { variant: 'schnell' }))).toMatchObject({ steps: 4 });
+    expect(getDefaultGenerateSettings(createModel('flux', { variant: 'dev_fill' }))).toMatchObject({
+      steps: 50,
+      cfgScale: 30,
+    });
+    expect(getDefaultGenerateSettings(createModel('z-image', { variant: 'zbase' }))).toMatchObject({
+      steps: 50,
+      cfgScale: 4,
     });
   });
 
@@ -196,58 +224,6 @@ describe('BASE_GENERATION', () => {
     ).toMatchObject({ negativeVisible: true, negativeUsedInGraph: true });
   });
 
-  describe('the guidance slider takes the value its graph consumes', () => {
-    /**
-     * The guidance-distilled architectures declare both `cfg_scale` and `guidance`, where the
-     * cfg_scale of 1.0 only means "CFG is off" and the graph wires this one slider into the node's
-     * `guidance` input. `FeaturesFacet.guidance_label` states the rule on the backend side: the
-     * slider takes `guidance` where it is set and `cfg_scale` otherwise.
-     *
-     * Reading cfg_scale first made every one of them show 1.0 — worst on FLUX Fill, which
-     * recommends 30.0 and whose denoise node warns below 25.0 on every run.
-     */
-    const withDefaults = (base: string, default_settings: Record<string, number>) =>
-      getGenerationModelPolicy(
-        createModel(base, { default_settings }),
-        createSettings(createModel(base, { default_settings }))
-      ).defaults.cfgScale;
-
-    it('prefers guidance over the cfg_scale that sits beside it', () => {
-      expect(withDefaults('flux', { cfg_scale: 1.0, guidance: 30.0 })).toBe(30.0);
-      expect(withDefaults('flux', { cfg_scale: 1.0, guidance: 3.5 })).toBe(3.5);
-      expect(withDefaults('flux2', { cfg_scale: 1.0, guidance: 3.5 })).toBe(3.5);
-    });
-
-    it('still reads cfg_scale when that is the only one declared', () => {
-      expect(withDefaults('sdxl', { cfg_scale: 7.0 })).toBe(7.0);
-      expect(withDefaults('flux', { cfg_scale: 1.0 })).toBe(1.0);
-    });
-
-    it('ignores a guidance set on a base whose slider is a true CFG', () => {
-      // `default_settings.guidance` is offered for every main model, not just the FLUX family —
-      // `guidance` is in MAIN_FIELDS unconditionally. A user who turns it on for an SDXL model must
-      // not have it displace the cfg_scale that base actually generates with.
-      expect(withDefaults('sdxl', { cfg_scale: 7.0, guidance: 4.0 })).toBe(7.0);
-      expect(withDefaults('sd-1', { cfg_scale: 7.5, guidance: 4.0 })).toBe(7.5);
-      expect(withDefaults('qwen-image', { cfg_scale: 4.0, guidance: 30.0 })).toBe(4.0);
-    });
-
-    it('covers every base, so a new one cannot pick the wrong field by omission', () => {
-      for (const base of SUPPORTED_GENERATE_BASES) {
-        const label = BASE_GENERATION[base].guidanceLabel;
-        const resolved = withDefaults(base, { cfg_scale: 7.0, guidance: 30.0 });
-
-        expect(resolved, `${base} (${label}) read the wrong field`).toBe(label === 'Guidance' ? 30.0 : 7.0);
-      }
-    });
-
-    it('falls back to the base default when a model declares neither', () => {
-      expect(getGenerationModelPolicy(createModel('flux'), createSettings(createModel('flux'))).defaults.cfgScale).toBe(
-        BASE_GENERATION.flux.defaults.cfgScale
-      );
-    });
-  });
-
   it('matches expected UI availability per base', () => {
     expect(getGenerationModelPolicy(createModel('sd-1'), createSettings(createModel('sd-1'))).ui).toMatchObject({
       clipSkipMax: 12,
@@ -285,30 +261,15 @@ describe('BASE_GENERATION', () => {
     ).toBe(true);
   });
 
-  it('has generation config for every graph builder base', () => {
-    expect(SUPPORTED_GENERATE_BASES).toEqual([
-      'sd-1',
-      'sd-2',
-      'sdxl',
-      'sd-3',
-      'flux',
-      'flux2',
-      'cogview4',
-      'ernie-image',
-      'qwen-image',
-      'z-image',
-      'ideogram-4',
-      'krea-2',
-      'wan',
-      'anima',
-    ]);
-  });
+  // The ordered list of generatable bases is pinned in `supportedBases.test.ts`, which now owns it.
 
   it('does not mark display-only bases as generatable', () => {
     expect(isSupportedGenerateModel(createModel('sdxl-refiner'))).toBe(false);
     expect(isSupportedGenerateModel(createModel('unknown'))).toBe(false);
     expect(isSupportedGenerateModel(createModel('made-up'))).toBe(false);
-    expect(BASE_GENERATION).not.toHaveProperty('external');
+    // 'external' is the pseudo-base of external image generators; they are supported through
+    // `type === 'external_image_generator'`, not by having an architecture row.
+    expect(isSupportedGenerateModel(createModel('external'))).toBe(false);
   });
 });
 
@@ -1083,6 +1044,45 @@ describe('Krea-2, Ideogram 4 and Wan policies', () => {
     expect(reasons).toContain('Generate height must be a multiple of 16.');
   });
 
+  it('rejects Ideogram 4 step and mu overrides outside what its denoise node accepts', () => {
+    // `steps` is ge=2 (the node keeps a polish step and a main step) and `mu` is ge=-4/le=4 -- the
+    // mu control used to offer 0..10, so more than half its track was rejected at enqueue and the
+    // whole negative half was unreachable.
+    const model = createModel('ideogram-4');
+
+    expect(getGenerationValidationReasons(model, createSettings(model, { ideogram4Steps: 1 }))).toContain(
+      'Ideogram 4 steps must be between 2 and 100.'
+    );
+    expect(getGenerationValidationReasons(model, createSettings(model, { ideogram4Mu: 5 }))).toContain(
+      'Ideogram 4 mu must be between -4 and 4.'
+    );
+    expect(
+      getGenerationValidationReasons(model, createSettings(model, { ideogram4Mu: -4, ideogram4Steps: 2 }))
+    ).toEqual([]);
+  });
+
+  it('rejects an Ideogram 4 guidance override outside what its denoise node accepts', () => {
+    // `ideogram4_denoise.guidance_scale` is ge=1/le=20, and graph.ts forwards the override verbatim
+    // whenever it is not null. Normalization only checks finiteness, so a value stored before the
+    // control was bounded survives a reload and fails at enqueue.
+    const model = createModel('ideogram-4');
+    const message = 'Ideogram 4 guidance must be between 1 and 20.';
+
+    expect(getGenerationValidationReasons(model, createSettings(model, { ideogram4GuidanceScale: 0.5 }))).toContain(
+      message
+    );
+    expect(getGenerationValidationReasons(model, createSettings(model, { ideogram4GuidanceScale: 20.5 }))).toContain(
+      message
+    );
+    expect(getGenerationValidationReasons(model, createSettings(model, { ideogram4GuidanceScale: 5 }))).not.toContain(
+      message
+    );
+    // Null means "let the preset decide" and is omitted from the graph entirely.
+    expect(
+      getGenerationValidationReasons(model, createSettings(model, { ideogram4GuidanceScale: null }))
+    ).not.toContain(message);
+  });
+
   it('accepts a Qwen-Image VAE registered under the anima base, as the backend loader does', () => {
     // The same physical Qwen-Image VAE is registered as `anima` or `qwen-image` depending on
     // which family it was installed for, and krea2_model_loader declares
@@ -1241,5 +1241,258 @@ describe('Krea-2, Ideogram 4 and Wan policies', () => {
         createSettings(main, { loras: [{ isEnabled: false, model: a14bLora, weight: 1 }] })
       )
     ).toEqual([]);
+  });
+});
+
+describe('the guidance slider value from a model record', () => {
+  // MainModelDefaultSettings has separate cfg_scale and guidance fields; the UI has one control.
+  // Which field feeds it depends on guidanceLabel, and getting that backwards reads a distilled
+  // model's "CFG off" marker as its guidance setting.
+  it('prefers guidance over cfg_scale for a guidance-labelled architecture', () => {
+    const model = createModel('flux', {
+      variant: 'dev',
+      default_settings: { cfg_scale: 1, guidance: 3.5, steps: 28 },
+    } as Partial<MainModelConfig>);
+
+    // Not 1 — that is the CFG-off marker, and buildFluxGraph wires this value into `guidance`.
+    expect(getDefaultGenerateSettings(model).cfgScale).toBe(3.5);
+  });
+
+  it('falls back to cfg_scale when a guidance-labelled model records no guidance', () => {
+    const model = createModel('flux', {
+      variant: 'schnell',
+      default_settings: { cfg_scale: 1, steps: 4 },
+    } as Partial<MainModelConfig>);
+
+    expect(getDefaultGenerateSettings(model).cfgScale).toBe(1);
+  });
+
+  it('prefers cfg_scale for a CFG-labelled architecture', () => {
+    const model = createModel('sdxl', { default_settings: { cfg_scale: 6.5, steps: 30 } } as Partial<MainModelConfig>);
+
+    expect(getDefaultGenerateSettings(model).cfgScale).toBe(6.5);
+  });
+
+  it('ignores a guidance a CFG-labelled model also records', () => {
+    // `default_settings.guidance` is editable on *every* main model — it is in MAIN_FIELDS
+    // unconditionally (`defaultSettingsFields.ts`), not gated on base. So an SDXL record can carry
+    // one, and it must not displace the cfg_scale that base actually generates with. The case above
+    // has only cfg_scale set and would pass either way round.
+    const model = createModel('sdxl', {
+      default_settings: { cfg_scale: 7, guidance: 4, steps: 30 },
+    } as Partial<MainModelConfig>);
+
+    expect(getDefaultGenerateSettings(model).cfgScale).toBe(7);
+  });
+
+  it('reads the right field for every base in the table', () => {
+    // Swept rather than sampled: a base added to the capability table with the wrong label picks
+    // the wrong field silently, and the three cases above only name three bases.
+    // Both probes sit inside every architecture's served guidance range, so the clamp in
+    // `getGenerationDefaults` cannot mask a wrong field read (flux2's ceiling is 20).
+    for (const base of SUPPORTED_GENERATE_BASES) {
+      const model = createModel(base, {
+        default_settings: { cfg_scale: 7, guidance: 9 },
+      } as Partial<MainModelConfig>);
+      const label = getGenerationModelPolicy(model, createSettings(model)).ui.guidanceLabel;
+
+      expect(getDefaultGenerateSettings(model).cfgScale, `${base} (${label}) read the wrong field`).toBe(
+        label === 'Guidance' ? 9 : 7
+      );
+    }
+  });
+});
+
+describe('the guidance range the architecture declares', () => {
+  seedArchitectureCapabilities();
+
+  /**
+   * Only the bound messages: the point is which end was violated, not whatever else a bare model
+   * record is missing (`createModel('flux')` has no encoders, for instance).
+   */
+  const guidanceReasons = (model: MainModelConfig, cfgScale: number): string[] =>
+    getGenerationValidationReasons(model, createSettings(model, { cfgScale })).filter((reason) =>
+      /^(CFG|Guidance) must be at (least|most) /.test(reason)
+    );
+
+  it('rejects a persisted guidance above the ceiling the node enforces', () => {
+    // The reported failure: a project saved at FLUX Fill's recommended 30 that then selects a
+    // FLUX.2 model. `flux2_denoise.guidance` is `le=20`, so the queue rejected it at enqueue.
+    const model = createModel('flux2');
+
+    expect(guidanceReasons(model, 30)).toEqual(['Guidance must be at most 20 for flux2 model.']);
+    expect(guidanceReasons(model, 20)).toEqual([]);
+  });
+
+  it('leaves an architecture whose node declares no ceiling alone', () => {
+    // `flux_denoise.guidance` is genuinely unbounded, and 30 is FLUX Fill's own recommendation.
+    expect(guidanceReasons(createModel('flux', { variant: 'dev_fill' }), 30)).toEqual([]);
+  });
+
+  it('rejects a guidance below the floor the node enforces', () => {
+    // `ernie_image_denoise.guidance_scale` is `ge=1.0`; the control used to offer 0 and 0.5.
+    const model = createModel('ernie-image');
+
+    expect(guidanceReasons(model, 0.5)).toEqual(['CFG must be at least 1 for ernie-image model.']);
+    expect(guidanceReasons(model, 1)).toEqual([]);
+  });
+
+  it('clamps a model record whose stored default the architecture would reject', () => {
+    // `default_settings.cfg_scale` is editable up to 200 on every main model, and a Guidance-labelled
+    // record with no `guidance` of its own falls back to it. Unclamped, the field's reset button and
+    // "reset all to model defaults" would both restore a value the gate then blocks.
+    const model = createModel('flux2', { default_settings: { cfg_scale: 50 } } as Partial<MainModelConfig>);
+
+    expect(getDefaultGenerateSettings(model).cfgScale).toBe(20);
+    expect(guidanceReasons(model, getDefaultGenerateSettings(model).cfgScale)).toEqual([]);
+
+    const floored = createModel('z-image', { default_settings: { cfg_scale: 0 } } as Partial<MainModelConfig>);
+
+    expect(getDefaultGenerateSettings(floored).cfgScale).toBe(1);
+  });
+
+  it('clamps the carried-over guidance when a model is selected, and says so', () => {
+    // The reported journey end to end: a project holding FLUX Fill's 30 picks a FLUX.2 model. The
+    // canonical transition repairs it the way it already repairs dimensions and CLIP skip, so the
+    // panel is usable rather than merely blocked -- and the cleared-label toast names the field.
+    const result = getGenerateModelSelectionResult({
+      currentValues: createSettings(createModel('flux', { variant: 'dev_fill' }), { cfgScale: 30 }),
+      model: createModel('flux2'),
+      models: [],
+    });
+
+    expect(result.settings.cfgScale).toBe(20);
+    expect(result.clearedLabels).toContain('Guidance');
+  });
+
+  it('leaves a carried-over guidance the new model accepts untouched', () => {
+    const result = getGenerateModelSelectionResult({
+      currentValues: createSettings(createModel('sdxl'), { cfgScale: 7 }),
+      model: createModel('flux2'),
+      models: [],
+    });
+
+    expect(result.settings.cfgScale).toBe(7);
+    expect(result.clearedLabels).not.toContain('Guidance');
+  });
+
+  it('enforces the served bound for every architecture in the table', () => {
+    // Swept rather than sampled: the three cases above name three bases, and a base whose bound is
+    // served but never consulted fails only at enqueue. Expected values come from the fixture --
+    // the backend's own answer -- not from the policy that is under test.
+    for (const row of architectureCapabilitiesFixture) {
+      // Variant rows included: the bounds are served per `(base, variant)`, and a regression to a
+      // base-only lookup would pass a sweep that skipped them.
+      const model = createModel(row.base, { variant: row.variant ?? undefined } as Partial<MainModelConfig>);
+
+      if (!isSupportedGenerateModel(model)) {
+        continue;
+      }
+
+      const where = `${row.base}/${row.variant ?? '-'}`;
+      const { guidance_max: max, guidance_min: min } = row.features;
+
+      expect(guidanceReasons(model, min), `${where} rejected its own floor`).toEqual([]);
+
+      if (min > 0) {
+        expect(guidanceReasons(model, min - 0.5), `${where} accepted a value below its floor`).toHaveLength(1);
+      }
+
+      if (max !== null) {
+        expect(guidanceReasons(model, max), `${where} rejected its own ceiling`).toEqual([]);
+        expect(guidanceReasons(model, max + 0.5), `${where} accepted a value above its ceiling`).toHaveLength(1);
+      }
+    }
+  });
+});
+
+describe('without the capability table', () => {
+  /**
+   * The gate has to sit where every enqueue path passes, not only where the Generate widget looks.
+   * `getGenerationValidationReasons` is that place: graph.ts, compileCanvasGraph.ts and
+   * previewGraph.ts all call it. Gating only the widget's resolver left the canvas and the topbar
+   * compiling against FALLBACK_GENERATION_CONFIG — a grid of 8 for bases that reject anything but
+   * 16, which is the enqueue failure this feature exists to prevent.
+   */
+  it('blocks every model, including ones that are otherwise fine', () => {
+    const model = createModel('flux', { variant: 'dev' });
+    const settings = createSettings(model);
+
+    // Seeded by the file-level fixture; drop it to stand in for a failed or in-flight fetch.
+    resetArchitectureCapabilities();
+
+    const reasons = getGenerationValidationReasons(model, settings);
+
+    expect(reasons.length).toBeGreaterThan(0);
+    // Not "needs a supported model": that is the answer the fallback gives, and it sends the reader
+    // looking at their model instead of at the backend.
+    expect(reasons[0]).toMatch(/capabilities/i);
+  });
+
+  it('stops blocking once the table arrives', () => {
+    const model = createModel('flux', { variant: 'dev' });
+    const settings = createSettings(model);
+
+    resetArchitectureCapabilities();
+    expect(getGenerationValidationReasons(model, settings)[0]).toMatch(/capabilities/i);
+
+    setArchitectureCapabilities(architectureCapabilitiesFixture);
+
+    expect(getGenerationValidationReasons(model, settings)[0] ?? '').not.toMatch(/capabilities/i);
+  });
+});
+
+describe('with a table that omits this architecture', () => {
+  /**
+   * A served table is not the same as a described architecture. `isSupportedGenerateModel` answers
+   * from a static list of bases webv2 can build a graph for; a backend build that does not serve a
+   * row for one of them used to fall straight through to `FALLBACK_GENERATION_CONFIG` -- grid 8,
+   * 30 steps, CFG 7, euler_a -- and compile. Reference images already failed closed on a missing
+   * row; the rest of policy does now too.
+   */
+  const withoutBase = (base: string) => architectureCapabilitiesFixture.filter((row) => row.base !== base);
+
+  it('blocks a supported base the backend did not describe', () => {
+    const model = createModel('cogview4');
+    const settings = createSettings(model);
+
+    setArchitectureCapabilities(withoutBase('cogview4'));
+
+    expect(getGenerationValidationReasons(model, settings)).toEqual([
+      'The backend does not describe the cogview4 architecture, so it cannot be generated with.',
+    ]);
+  });
+
+  it('leaves the architectures it did describe alone', () => {
+    const model = createModel('sdxl');
+
+    setArchitectureCapabilities(withoutBase('cogview4'));
+
+    expect(getGenerationValidationReasons(model, createSettings(model))).toEqual([]);
+  });
+
+  it('never asks the table about an external generator, which has no architecture row', () => {
+    setArchitectureCapabilities(withoutBase('cogview4'));
+
+    expect(getGenerationValidationReasons(externalModel, createSettings(externalModel))).toEqual([]);
+  });
+});
+
+describe('getGenerationDimensions and the variant it dispatches on', () => {
+  it('answers from the variant row when one differs, which its parameter type now admits', () => {
+    // `getBaseGenerationConfig` prefers a variant row and `optimalSide` comes from that row's
+    // default canvas, so the answer is variant-specific -- but the signature used to accept only
+    // `{ base, type }`, so a caller that built one of those type-checked and silently got the
+    // architecture's row. Every served variant declares 1024x1024 today, so the divergence has to
+    // be constructed to be observed at all.
+    const schnell = architectureCapabilitiesFixture.find((row) => row.base === 'flux' && row.variant === 'schnell')!;
+
+    setArchitectureCapabilities([
+      ...architectureCapabilitiesFixture.filter((row) => row !== schnell),
+      { ...schnell, defaults: { ...schnell.defaults!, height: 512, width: 512 } },
+    ]);
+
+    expect(getGenerationDimensions({ base: 'flux', type: 'main', variant: 'schnell' }).optimal).toBe(512);
+    expect(getGenerationDimensions({ base: 'flux', type: 'main' }).optimal).toBe(1024);
   });
 });

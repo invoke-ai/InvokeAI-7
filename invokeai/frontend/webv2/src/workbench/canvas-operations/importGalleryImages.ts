@@ -5,6 +5,7 @@ import type { CanvasImageRef, CanvasLayerContract } from '@workbench/canvas-engi
 import type { CanvasProjectMutation } from '@workbench/canvasProjectMutations';
 import type { Project } from '@workbench/projectContracts';
 
+import { getArchitectureCapabilitiesSnapshot } from '@features/generation/runtime';
 import {
   calculateNewSize,
   getGenerationDimensions,
@@ -48,7 +49,7 @@ export type GalleryCanvasImportDestination =
 
 export type ImportGalleryImagesResult =
   | { status: 'imported'; layerIds: string[]; failedImageNames: string[] }
-  | { status: 'blocked' | 'empty' | 'stale-document' | 'stale-project' };
+  | { status: 'blocked' | 'capabilities-unavailable' | 'empty' | 'stale-document' | 'stale-project' };
 
 interface BuildLayerContext {
   bbox: Project['canvas']['document']['bbox'];
@@ -277,6 +278,15 @@ export const importGalleryImagesToCanvas = async (options: {
     let layerImages: readonly LayerImage[] = images;
     let failedImageNames: string[] = [];
     if (destination === 'control-resized') {
+      // The resize target is the model's native size and grid, and this is the one import path
+      // whose mistake is irreversible: the resized asset is uploaded to the server and becomes a
+      // layer. Without the table `getGenerationDimensions` answers 1024 / grid 8 for every
+      // architecture, so an SD-1 project would upload four times the area it asked for and a
+      // CogView 4 project an off-grid layer. Refuse instead, the way the Invoke gate does.
+      if (getArchitectureCapabilitiesSnapshot().revision === 0) {
+        return { status: 'capabilities-unavailable' };
+      }
+
       const resized = await resizeImages(images, project, fetchImage, uploadImage, owner.signal);
 
       assertAccountScopeCurrent(owner);

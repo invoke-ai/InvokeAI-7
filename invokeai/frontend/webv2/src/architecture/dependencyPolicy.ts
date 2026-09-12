@@ -186,9 +186,18 @@ const DOCUMENT_MODEL_DEPENDENCY_MODULES = [
   'workbench/canvas-engine/document/selectionRepair',
 ];
 
-/** Production sources: everything the architecture rules scan; tests, type tests and stories are not. */
-export const isProductionSourcePath = (path: string): boolean =>
-  !/\.(?:test|browser\.test|type-test|stories)\.[^.]+$/.test(path);
+/**
+ * Test-support suffixes, matched with or without a file extension so the same predicate classifies
+ * both a source path and a resolved (extensionless) import target.
+ */
+const TEST_SUPPORT_SUFFIX = /\.(?:test|type-test|testing|stories)(?:\.[^.]+)?$/;
+
+/**
+ * Production sources: everything the architecture rules scan. Tests, type tests, stories and the
+ * `.testing` helpers they share are not -- those import test runners and fixtures, so a production
+ * module reaching one pulls both into every bundle that route touches.
+ */
+export const isProductionSourcePath = (path: string): boolean => !TEST_SUPPORT_SUFFIX.test(path);
 
 /** The pure document model may only reach pure document facts, math, and contracts. */
 const isDocumentModelDependency = (target: string | null): boolean =>
@@ -222,6 +231,10 @@ export const checkDependency = (source: string, specifier: string): DependencyVi
 
   if (!target) {
     return violations;
+  }
+
+  if (isProductionSourcePath(sourcePath) && !isProductionSourcePath(target)) {
+    add('test-support-isolation');
   }
 
   const sourceOwner = getModuleOwner(sourcePath);

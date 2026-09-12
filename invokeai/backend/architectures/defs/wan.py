@@ -5,6 +5,7 @@ from invokeai.backend.architectures.facets.default_settings import DefaultSettin
 from invokeai.backend.architectures.facets.features import FeaturesFacet, NegativePrompt
 from invokeai.backend.architectures.facets.latent_space import WAN21_16, WAN22_48, LatentSpaceFacet
 from invokeai.backend.architectures.facets.modality import ModalityFacet
+from invokeai.backend.architectures.facets.vae import VaeCompatibility, VaeFacet
 from invokeai.backend.architectures.facets.variant import VariantFacet
 from invokeai.backend.architectures.registry import register
 from invokeai.backend.model_manager.configs.default_settings import MainModelDefaultSettings
@@ -51,6 +52,17 @@ register(
         # field with its own ge=0.0 and its own control, not this slider.
         guidance_min=1.0,
         scheduler_set="flow",
+    ),
+    VaeFacet(
+        frozenset(
+            {
+                # A14B uses the 16-channel Wan 2.1 VAE; TI2V-5B needs the 48-channel
+                # Wan2.2-VAE. Both are registered under `wan`, so the channel count is the
+                # only thing that tells them apart.
+                VaeCompatibility(BaseModelType.Wan, latent_channels=16),
+                VaeCompatibility(BaseModelType.Wan, latent_channels=48),
+            }
+        )
     ),
     # The one architecture whose LoRAs carry a different variant enum from its mains. They are not
     # interchangeable: an A14B LoRA (inner_dim=5120) against a TI2V-5B main (3072) crashes in the

@@ -37,8 +37,10 @@ register(
         # ernie_image_denoise.guidance_scale is ge=1.0; 1.0 is CFG off.
         guidance_min=1.0,
         scheduler_set="flow",
-        # ernie_image_denoise takes the scheduler as an input, so the graph builder passes the
-        # user's choice through rather than letting the node pick.
+        # `ernie_image_denoise` takes a `scheduler` field and builds the sampler from it
+        # (ERNIE_IMAGE_SCHEDULER_MAP), so the choice reaches the graph rather than being a
+        # UI affordance. Omitting this defaulted it to False, which would have hidden the
+        # dropdown and pinned every generation to the first entry.
         scheduler_applies_to_graph=True,
     ),
 )

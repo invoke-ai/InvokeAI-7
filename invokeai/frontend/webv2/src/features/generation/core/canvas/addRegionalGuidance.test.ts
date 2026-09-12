@@ -1,3 +1,7 @@
+import {
+  architectureCapabilitiesFixture,
+  seedArchitectureCapabilities,
+} from '@features/generation/core/architectureCapabilities.testing';
 import { describe, expect, it } from 'vitest';
 
 import type { AddRegionalGuidanceOptions, RegionalGuidanceInput, RegionalReferenceModel } from './addRegionalGuidance';
@@ -174,6 +178,8 @@ const hasEdge = (graph: TestGraph, s: string, sf: string, d: string, df: string)
     (e) => e.source.node_id === s && e.source.field === sf && e.destination.node_id === d && e.destination.field === df
   );
 
+seedArchitectureCapabilities();
+
 describe('isRegionalGuidanceSupportedForBase', () => {
   it('supports every base whose encoder takes a mask and whose denoiser takes a conditioning list', () => {
     for (const base of ['sd-1', 'sd-2', 'sdxl', 'flux', 'flux2', 'krea-2', 'z-image', 'anima']) {
@@ -181,6 +187,37 @@ describe('isRegionalGuidanceSupportedForBase', () => {
     }
     for (const base of ['sd-3', 'cogview4', 'qwen-image', 'ideogram-4', 'wan', 'external']) {
       expect(isRegionalGuidanceSupportedForBase(base), base).toBe(false);
+    }
+  });
+});
+
+describe('the support matrix and the served capabilities', () => {
+  // The graph builder decides regional negatives from the matrix while the layer settings UI asks
+  // the backend. They agreed when this merge landed only because the facets were corrected for
+  // sd-2, z-image and anima; nothing else keeps them from drifting apart again.
+  it('answer regional negatives identically for every base the matrix covers', () => {
+    for (const row of architectureCapabilitiesFixture) {
+      const support = getRegionalGuidanceSupport(row.base);
+      if (support !== null) {
+        expect(support.negativePrompt, row.base).toBe(row.features.regional_negative);
+      }
+    }
+  });
+
+  // isRegionalGuidanceSupportedForBase asserts `base is RegionalGuidanceBase` from the backend's
+  // answer, and getRegionalGuidanceSupport then indexes the matrix on that assertion. A base the
+  // backend declares supported but the matrix has no row for would hand callers an undefined typed
+  // as present -- so every served `true` must have a row.
+  it('give every base the backend declares supported a row in the matrix', () => {
+    const declaredSupported = architectureCapabilitiesFixture
+      .filter((row) => row.features.supports_regional_guidance)
+      .map((row) => row.base);
+
+    expect(declaredSupported.length).toBeGreaterThan(0);
+    for (const base of declaredSupported) {
+      // `toBeTruthy`, not `not.toBeNull`: a base with no row reaches this as `undefined`, which
+      // passes a null check and made this guard inert for exactly the drift it exists to catch.
+      expect(getRegionalGuidanceSupport(base), base).toBeTruthy();
     }
   });
 });

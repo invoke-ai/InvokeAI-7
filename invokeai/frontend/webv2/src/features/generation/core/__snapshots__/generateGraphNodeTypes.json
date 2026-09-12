@@ -277,7 +277,7 @@
           0
         ],
         "guidance_scale": [
-          4
+          4.5
         ],
         "height": [
           1024
@@ -289,7 +289,7 @@
           "euler"
         ],
         "steps": [
-          30
+          35
         ],
         "use_cache": [
           true
@@ -382,7 +382,7 @@
       ],
       "literalInputs": {
         "cfg_scale": [
-          7
+          3.5
         ],
         "height": [
           1024
@@ -391,7 +391,7 @@
           true
         ],
         "steps": [
-          30
+          50
         ],
         "use_cache": [
           true
@@ -499,7 +499,9 @@
         ],
         "cfg_scale": [
           1,
+          3.5,
           4,
+          4.5,
           7
         ],
         "clip_embed_model": [],
@@ -522,11 +524,12 @@
           "z_image_txt2img"
         ],
         "guidance": [
-          4
+          3.5
         ],
         "height": [
           1024,
-          512
+          512,
+          768
         ],
         "hidiffusion": [
           false
@@ -589,12 +592,15 @@
           false
         ],
         "steps": [
+          28,
           30,
+          35,
           4,
           40,
           48,
           50,
-          8
+          8,
+          9
         ],
         "t5_encoder": [],
         "use_cache": [
@@ -605,7 +611,8 @@
         "wan_t5_encoder": [],
         "width": [
           1024,
-          512
+          512,
+          768
         ]
       },
       "outputs": [
@@ -766,7 +773,7 @@
           0
         ],
         "guidance": [
-          4
+          3.5
         ],
         "height": [
           1024
@@ -775,7 +782,7 @@
           true
         ],
         "num_steps": [
-          4
+          28
         ],
         "scheduler": [
           "euler"
@@ -866,7 +873,8 @@
           0
         ],
         "guidance": [
-          1
+          1,
+          3.5
         ],
         "height": [
           1024
@@ -875,6 +883,7 @@
           true
         ],
         "num_steps": [
+          28,
           4
         ],
         "scheduler": [
@@ -1203,7 +1212,8 @@
       "literalInputs": {
         "height": [
           1024,
-          512
+          512,
+          768
         ],
         "is_intermediate": [
           true
@@ -1216,7 +1226,8 @@
         ],
         "width": [
           1024,
-          512
+          512,
+          768
         ]
       },
       "outputs": [
@@ -1315,7 +1326,7 @@
       ],
       "literalInputs": {
         "cfg_scale": [
-          7
+          4.5
         ],
         "denoising_end": [
           1
@@ -1330,7 +1341,7 @@
           true
         ],
         "steps": [
-          30
+          40
         ],
         "use_cache": [
           true
@@ -1559,7 +1570,7 @@
           "euler"
         ],
         "steps": [
-          8
+          9
         ],
         "use_cache": [
           true

@@ -5,6 +5,7 @@ from invokeai.backend.architectures.facets.default_settings import DefaultSettin
 from invokeai.backend.architectures.facets.features import FeaturesFacet, NegativePrompt
 from invokeai.backend.architectures.facets.latent_space import FLUX_16, LatentSpaceFacet
 from invokeai.backend.architectures.facets.modality import ModalityFacet
+from invokeai.backend.architectures.facets.vae import VaeCompatibility, VaeFacet
 from invokeai.backend.architectures.facets.variant import VariantFacet
 from invokeai.backend.architectures.registry import register
 from invokeai.backend.model_manager.configs.default_settings import MainModelDefaultSettings
@@ -36,9 +37,17 @@ register(
         scheduler_set="flow",
         scheduler_applies_to_graph=True,
         control_kinds=frozenset({"z_image_control"}),
-        # The denoiser masks positive conditioning only: it accepts a negative list but discards
-        # the masks, so a "regional" negative would silently act globally.
+        # The text encoder masks positive conditioning; the denoiser takes a negative list but
+        # discards its masks, so a regional negative would act globally and is rejected instead.
         supports_regional_guidance=True,
+    ),
+    VaeFacet(
+        frozenset(
+            {
+                # Z-Image decodes with a FLUX-compatible VAE; `z_image_model_loader` says so.
+                VaeCompatibility(BaseModelType.Flux),
+            }
+        )
     ),
     VariantFacet(
         {

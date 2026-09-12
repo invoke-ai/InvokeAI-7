@@ -6,7 +6,15 @@ import type {
   VaeModelConfig,
 } from '@features/generation/contracts';
 
-import { describe, expect, it } from 'vitest';
+import {
+  resetArchitectureCapabilities,
+  setArchitectureCapabilities,
+} from '@features/generation/core/architectureCapabilities';
+import {
+  architectureCapabilitiesFixture,
+  seedArchitectureCapabilities,
+} from '@features/generation/core/architectureCapabilities.testing';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { buildImageRecallSettings, getImageRecallCapabilities } from './imageRecall';
 
@@ -132,6 +140,8 @@ const metadata = {
   vae: { key: vaeModel.key },
   width: 513,
 };
+
+seedArchitectureCapabilities();
 
 describe('image recall', () => {
   it.each(['all', 'remix', 'prompts'] as const)(
@@ -505,6 +515,49 @@ describe('image recall', () => {
     expect(result?.values.width).toBe(512);
     expect(result?.values.height).toBe(768);
     expect(result?.values.aspectRatioId).toBe('2:3');
+  });
+
+  describe('before the capability table arrives', () => {
+    // Recalled dimensions are snapped to the architecture's grid and then persisted into the
+    // project. With no table every base reads as grid 8, so a 16- or 32-grid project would
+    // store a size its own denoise node rejects -- and nothing re-derives it afterwards.
+    beforeEach(() => {
+      resetArchitectureCapabilities();
+    });
+
+    afterEach(() => {
+      setArchitectureCapabilities(architectureCapabilitiesFixture);
+    });
+
+    it('recalls no size from the image rather than one snapped to the fallback grid', () => {
+      const result = buildImageRecallSettings({
+        currentValues: createValues(),
+        image,
+        kind: 'dimensions',
+        metadata: null,
+        models: [],
+        supportedModels: [],
+        vaeModels: [],
+      });
+
+      // Without the fix this is ['size'] with the width snapped to the fallback grid 8.
+      expect(result?.fields ?? []).not.toContain('size');
+    });
+
+    it('recalls no size from metadata either', () => {
+      const result = buildImageRecallSettings({
+        currentValues: createValues(),
+        image,
+        kind: 'all',
+        metadata: { height: 768, width: 512 },
+        models: [],
+        supportedModels: [],
+        vaeModels: [],
+      });
+
+      // Without the fix this is ['size'] with the width snapped to the fallback grid 8.
+      expect(result?.fields ?? []).not.toContain('size');
+    });
   });
 
   it('only enables standalone CLIP skip when the current model supports it', () => {

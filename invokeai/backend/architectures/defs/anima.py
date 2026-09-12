@@ -5,6 +5,7 @@ from invokeai.backend.architectures.facets.default_settings import DefaultSettin
 from invokeai.backend.architectures.facets.features import FeaturesFacet, NegativePrompt
 from invokeai.backend.architectures.facets.latent_space import WAN21_16, LatentSpaceFacet
 from invokeai.backend.architectures.facets.modality import ModalityFacet
+from invokeai.backend.architectures.facets.vae import VaeCompatibility, VaeFacet
 from invokeai.backend.architectures.registry import register
 from invokeai.backend.model_manager.configs.default_settings import MainModelDefaultSettings
 from invokeai.backend.model_manager.taxonomy import BaseModelType
@@ -27,8 +28,24 @@ register(
         guidance_min=1.0,
         scheduler_set="anima",
         scheduler_applies_to_graph=True,
-        # Positive conditioning only, for the same reason as Z-Image: the negative list is accepted
-        # but its masks are dropped.
+        # Same shape as Z-Image: masked positive conditioning only.
         supports_regional_guidance=True,
+    ),
+    VaeFacet(
+        frozenset(
+            {
+                # The Wan 2.1 VAE, registered under whichever base it was installed for -- all
+                # three point at the same 194-tensor checkpoint.
+                #
+                # Not FLUX. `anima_l2i` takes a FluxAutoEncoder without raising, but that branch
+                # skips the Wan denormalisation and decodes a WAN21_16 latent in FLUX's basis:
+                # measured against the Anima VAE on real weights, 6.10 dB PSNR, 0.93 MAE, a
+                # magenta moire in place of the subject. Accepting it is a silent corruption, not
+                # a fallback. See `tests/backend/architectures/test_vae.py`.
+                VaeCompatibility(BaseModelType.Anima),
+                VaeCompatibility(BaseModelType.QwenImage),
+                VaeCompatibility(BaseModelType.Wan, latent_channels=16),
+            }
+        )
     ),
 )

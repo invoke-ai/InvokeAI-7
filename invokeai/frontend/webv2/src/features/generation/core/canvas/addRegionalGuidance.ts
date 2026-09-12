@@ -1,5 +1,6 @@
 import type { BackendGraphContract, BackendInvocationContract } from '@features/generation/core/contracts';
 
+import { getArchitectureFeatures } from '@features/generation/core/architectureCapabilities';
 import { addEdge, addNode } from '@features/generation/core/graphBuilder';
 
 /** The deterministic denoise node id every canvas base graph uses. */
@@ -45,11 +46,27 @@ const REGIONAL_GUIDANCE_SUPPORT: Record<RegionalGuidanceBase, RegionalGuidanceSu
   anima: { autoNegative: false, label: 'Anima', negativePrompt: false, referenceImages: null },
 };
 
-/** True when `base` supports regional guidance at all. */
+/**
+ * True when `base` supports regional guidance at all.
+ *
+ * The narrowing to `RegionalGuidanceBase` stays: everything below this point dispatches on the
+ * literal to pick node types and field names, and that is graph knowledge the backend has no say
+ * in. Only the *answer* comes from the capability table now.
+ */
 export const isRegionalGuidanceSupportedForBase = (base: string): base is RegionalGuidanceBase =>
-  Object.hasOwn(REGIONAL_GUIDANCE_SUPPORT, base);
+  // Both halves, or the predicate is unsound: it narrows to the key set of the matrix below, while
+  // the backend's answer is what decides. A base the backend newly declares supported but that has
+  // no row here would satisfy the old check, and `REGIONAL_GUIDANCE_SUPPORT[base]` would then hand
+  // back `undefined` typed as a support object. Requiring the row keeps the type honest and makes
+  // the drift a missing feature rather than a crash.
+  (getArchitectureFeatures(base)?.supports_regional_guidance ?? false) && base in REGIONAL_GUIDANCE_SUPPORT;
 
-/** The per-base support matrix, or `null` for a base with no regional path. */
+/**
+ * The per-base support matrix, or `null` for a base with no regional path.
+ *
+ * The *answer* comes from the capability table; the row it selects is graph knowledge (which node
+ * kind a region's reference images become), which the backend has no say in.
+ */
 export const getRegionalGuidanceSupport = (base: string | null): RegionalGuidanceSupport | null =>
   base !== null && isRegionalGuidanceSupportedForBase(base) ? REGIONAL_GUIDANCE_SUPPORT[base] : null;
 

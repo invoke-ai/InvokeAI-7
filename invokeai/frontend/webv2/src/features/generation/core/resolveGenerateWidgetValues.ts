@@ -1,3 +1,4 @@
+import { hasArchitectureCapabilities } from '@features/generation/core/architectureCapabilities';
 import { areJsonValuesStructurallyEqual } from '@platform/core/json';
 
 import type { GenerationModelCatalogItem } from './contracts';
@@ -7,6 +8,7 @@ import type { GenerateWidgetValues } from './types';
 import {
   getAutoFlux2ComponentSourceModel,
   getDefaultGenerateSettings,
+  isArchitectureDescribed,
   isSupportedGenerateModel,
 } from './baseGenerationPolicies';
 import { syncPromptTemplateWithCatalog } from './promptTemplates';
@@ -68,7 +70,18 @@ export const resolveGenerateWidgetValues = ({
   promptTemplates,
   storedValues,
 }: ResolveGenerateWidgetValuesInput): ResolvedGenerateWidgetValues | null => {
-  const supportedModels = models.filter(isSupportedGenerateModel);
+  // Fail closed until the backend's architecture table has arrived. Resolving without it would
+  // fall back to generic defaults -- and this resolver's `systemPatch` is *persisted* into the
+  // project, so a fallback grid or step count would be written to disk rather than merely shown.
+  if (!hasArchitectureCapabilities()) {
+    return null;
+  }
+
+  // Described, not merely supported: `getDefaultGenerateSettings` below reads the architecture's
+  // grid, optimal size, steps and scheduler, and this resolver's patch is persisted. Selecting a
+  // base the served table omits would write `FALLBACK_GENERATION_CONFIG` into the project file --
+  // the same reason the whole resolver waits for the table in the first place.
+  const supportedModels = models.filter(isSupportedGenerateModel).filter(isArchitectureDescribed);
 
   if (supportedModels.length === 0) {
     return null;

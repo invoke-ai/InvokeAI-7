@@ -43,6 +43,28 @@ const TINY_PNG = Buffer.from(
 );
 const FIXTURE_VIDEO = readFileSync(resolve(import.meta.dirname, 'mock-assets/fixture-video.mp4'));
 const FIXTURE_VIDEO_POSTER = readFileSync(resolve(import.meta.dirname, 'mock-assets/fixture-video.webp'));
+// Served verbatim from the same file the backend pins in
+// `tests/backend/architectures/test_capabilities_fixture.py`, so the journey tests exercise the
+// payload the real route returns rather than a stand-in that can drift from it.
+const ARCHITECTURE_CAPABILITIES = JSON.parse(
+  readFileSync(
+    resolve(import.meta.dirname, '../src/features/generation/core/__fixtures__/architectureCapabilities.json'),
+    'utf8'
+  )
+);
+
+/**
+ * Fault switches, orthogonal to the workload profiles.
+ *
+ * The Generate panel gates its entire form on `GET /api/v2/models/capabilities`, so its outage,
+ * retry and recovery states are unreachable while that route always succeeds. `POST /__faults`
+ * (`{"capabilities": "error" | "empty" | "ok"}`, also accepted as a query parameter) makes the
+ * route fail for the rest of the session; `POST /__reset` clears the faults with the state.
+ */
+const CAPABILITY_FAULTS = new Set(['ok', 'error', 'empty']);
+
+const createFaults = () => ({ capabilities: 'ok' });
+
 const MOCK_USER_ID = 'fixture-user';
 
 const clone = (value) => structuredClone(value);
@@ -619,6 +641,7 @@ const parseByteRange = (value, size) => {
 export const startMockBackend = async (port, { profile = 'empty' } = {}) => {
   const initialProfile = assertMockBackendProfileName(profile);
   let state = createState(initialProfile);
+  let faults = createFaults();
 
   const server = createServer(async (request, response) => {
     const url = new URL(request.url, `http://127.0.0.1:${String(port)}`);
@@ -641,6 +664,8 @@ export const startMockBackend = async (port, { profile = 'empty' } = {}) => {
           return json(400, { detail: error instanceof Error ? error.message : String(error) });
         }
 
+        faults = createFaults();
+
         const collisions = [...url.searchParams.getAll('collide'), ...(body.collide ?? [])]
           .flatMap((value) => String(value).split(','))
           .map((value) => value.trim())
@@ -651,6 +676,23 @@ export const startMockBackend = async (port, { profile = 'empty' } = {}) => {
         }
 
         return json(200, { ok: true, ...getProfileInfo(state) });
+      }
+
+      if (path === '/__faults') {
+        if (method === 'POST') {
+          const body = await readJsonBody(request);
+          const requested = url.searchParams.get('capabilities') ?? body.capabilities;
+
+          if (requested !== undefined && requested !== null) {
+            if (!CAPABILITY_FAULTS.has(requested)) {
+              return json(400, { detail: `Unknown capabilities fault: ${String(requested)}` });
+            }
+
+            faults.capabilities = requested;
+          }
+        }
+
+        return json(200, { ok: true, faults: { ...faults } });
       }
 
       if (method === 'GET' && path === '/openapi.json') {
@@ -937,6 +979,13 @@ export const startMockBackend = async (port, { profile = 'empty' } = {}) => {
       }
       if (method === 'GET' && path === '/api/v2/models/install') {
         return json(200, []);
+      }
+      if (method === 'GET' && path === '/api/v2/models/capabilities') {
+        if (faults.capabilities === 'error') {
+          return json(500, { detail: 'Fixture capability outage.' });
+        }
+
+        return json(200, faults.capabilities === 'empty' ? [] : ARCHITECTURE_CAPABILITIES);
       }
       if (method === 'GET' && path === '/api/v2/models/starter_models') {
         return json(200, STARTER_MODELS_RESPONSE);

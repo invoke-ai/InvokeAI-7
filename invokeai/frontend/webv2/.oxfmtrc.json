@@ -9,7 +9,7 @@
     "node_modules/**",
     "stats.html",
     "src/features/generation/core/__snapshots__/generateGraphNodeTypes.json",
-    "src/features/generation/core/__snapshots__/baseGenerationCapabilities.json"
+    "src/features/generation/core/__fixtures__/architectureCapabilities.json"
   ],
   "printWidth": 120,
   "semi": true,

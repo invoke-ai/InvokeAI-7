@@ -65,7 +65,9 @@ class QwenImageModelLoaderInvocation(BaseInvocation):
         description="Standalone Qwen Image VAE model. "
         "If not provided, VAE will be loaded from the Component Source (or from the main model if it is Diffusers).",
         input=Input.Direct,
-        ui_model_base=BaseModelType.QwenImage,
+        # The same 16-channel checkpoint is registered under either base depending on which
+        # family it was installed for; krea2_model_loader already offers both.
+        ui_model_base=[BaseModelType.QwenImage, BaseModelType.Anima],
         ui_model_type=ModelType.VAE,
         title="VAE",
     )

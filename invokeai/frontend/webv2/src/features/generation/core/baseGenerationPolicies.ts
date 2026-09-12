@@ -1,9 +1,20 @@
 import type {
   GenerationModelCatalogItem as ModelConfig,
   GenerationModelTaxonomyType as ModelTaxonomyType,
-  KnownGenerationModelBase as KnownModelBase,
   PromptHistoryItem,
 } from '@features/generation/core/contracts';
+import type { BaseGenerationConfig, GuidanceLabel } from '@features/generation/core/generationConfig';
+
+import {
+  getArchitectureFeatures,
+  getArchitectureGenerationConfig,
+  hasArchitectureCapabilities,
+} from '@features/generation/core/architectureCapabilities';
+import {
+  isSupportedGenerateBase,
+  SUPPORTED_GENERATE_BASES,
+  type SupportedGenerateBase,
+} from '@features/generation/core/supportedBases';
 
 import type {
   GenerateModelConfig,
@@ -22,6 +33,7 @@ import {
   isAnimaQwen3Encoder,
   isAnimaVae,
   isKrea2Vae,
+  isQwenImageFamilyVae,
   isClipVariant,
   isDiffusersMainForBase,
   isFlux2DiffusersSourceForModel,
@@ -52,6 +64,12 @@ import {
   DEFAULT_KREA2_SEED_VARIANCE_STRENGTH,
   DEFAULT_REFERENCE_IMAGE_LIMIT,
   deriveAspectRatioId,
+  IDEOGRAM4_GUIDANCE_MAX,
+  IDEOGRAM4_GUIDANCE_MIN,
+  IDEOGRAM4_MU_MAX,
+  IDEOGRAM4_MU_MIN,
+  IDEOGRAM4_STEPS_MAX,
+  IDEOGRAM4_STEPS_MIN,
   isGenerateSettings,
   isLoraCompatibleWithModel,
   isValidKrea2RebalanceWeights,
@@ -71,38 +89,7 @@ export interface SchedulerOption {
   label: string;
 }
 
-export type SchedulerSetId = 'standard' | 'flow' | 'flow-no-lcm' | 'anima';
-
-export type NegativePromptUsage = 'always' | 'cfg-gated' | 'never';
-
-export type GuidanceLabel = 'CFG' | 'Guidance';
-
-export interface BaseGenerationConfig {
-  dimensions: {
-    grid: number;
-    optimalSide: number;
-  };
-  defaults: {
-    steps: number;
-    cfgScale: number;
-    scheduler: string;
-  };
-  schedulerSet: SchedulerSetId;
-  schedulerAppliesToGraph: boolean;
-  guidanceLabel: GuidanceLabel;
-  negativePrompt: {
-    visible: boolean;
-    usage: NegativePromptUsage;
-  };
-  ui: {
-    sdVaeOverride: boolean;
-    colorCompensation: boolean;
-    vaePrecision: boolean;
-    seamless: boolean;
-    cfgRescale: boolean;
-    clipSkipMax?: number;
-  };
-}
+export type { BaseGenerationConfig, GuidanceLabel } from '@features/generation/core/generationConfig';
 
 type GenerateDefaultSettings =
   | {
@@ -180,166 +167,7 @@ const ANIMA_SCHEDULERS = new Set(ANIMA_SCHEDULER_OPTIONS.map((option) => option.
 
 export const isKnownScheduler = (value: string): boolean => KNOWN_SCHEDULERS.has(value);
 
-export const BASE_GENERATION = {
-  'sd-1': {
-    dimensions: { grid: 8, optimalSide: 512 },
-    defaults: { steps: 30, cfgScale: 7, scheduler: 'euler_a' },
-    schedulerSet: 'standard',
-    schedulerAppliesToGraph: true,
-    guidanceLabel: 'CFG',
-    negativePrompt: { visible: true, usage: 'always' },
-    ui: {
-      sdVaeOverride: true,
-      colorCompensation: false,
-      vaePrecision: true,
-      seamless: true,
-      cfgRescale: true,
-      clipSkipMax: 12,
-    },
-  },
-  'sd-2': {
-    dimensions: { grid: 8, optimalSide: 512 },
-    defaults: { steps: 30, cfgScale: 7, scheduler: 'euler_a' },
-    schedulerSet: 'standard',
-    schedulerAppliesToGraph: true,
-    guidanceLabel: 'CFG',
-    negativePrompt: { visible: true, usage: 'always' },
-    ui: {
-      sdVaeOverride: true,
-      colorCompensation: false,
-      vaePrecision: true,
-      seamless: true,
-      cfgRescale: true,
-      clipSkipMax: 24,
-    },
-  },
-  sdxl: {
-    dimensions: { grid: 8, optimalSide: 1024 },
-    defaults: { steps: 30, cfgScale: 7, scheduler: 'euler_a' },
-    schedulerSet: 'standard',
-    schedulerAppliesToGraph: true,
-    guidanceLabel: 'CFG',
-    negativePrompt: { visible: true, usage: 'always' },
-    ui: { sdVaeOverride: true, colorCompensation: true, vaePrecision: true, seamless: true, cfgRescale: false },
-  },
-  'sd-3': {
-    dimensions: { grid: 16, optimalSide: 1024 },
-    defaults: { steps: 30, cfgScale: 7, scheduler: 'euler_a' },
-    schedulerSet: 'standard',
-    schedulerAppliesToGraph: false,
-    guidanceLabel: 'CFG',
-    negativePrompt: { visible: true, usage: 'always' },
-    ui: { sdVaeOverride: false, colorCompensation: false, vaePrecision: false, seamless: false, cfgRescale: false },
-  },
-  flux: {
-    dimensions: { grid: 16, optimalSide: 1024 },
-    defaults: { steps: 4, cfgScale: 4, scheduler: 'euler' },
-    schedulerSet: 'flow',
-    schedulerAppliesToGraph: true,
-    guidanceLabel: 'Guidance',
-    negativePrompt: { visible: false, usage: 'never' },
-    ui: { sdVaeOverride: false, colorCompensation: false, vaePrecision: false, seamless: false, cfgRescale: false },
-  },
-  flux2: {
-    dimensions: { grid: 16, optimalSide: 1024 },
-    defaults: { steps: 4, cfgScale: 1, scheduler: 'euler' },
-    schedulerSet: 'flow',
-    schedulerAppliesToGraph: true,
-    guidanceLabel: 'Guidance',
-    negativePrompt: { visible: false, usage: 'never' },
-    ui: { sdVaeOverride: false, colorCompensation: false, vaePrecision: false, seamless: false, cfgRescale: false },
-  },
-  cogview4: {
-    dimensions: { grid: 32, optimalSide: 1024 },
-    defaults: { steps: 30, cfgScale: 7, scheduler: 'euler_a' },
-    schedulerSet: 'standard',
-    schedulerAppliesToGraph: false,
-    guidanceLabel: 'CFG',
-    negativePrompt: { visible: true, usage: 'always' },
-    ui: { sdVaeOverride: false, colorCompensation: false, vaePrecision: false, seamless: false, cfgRescale: false },
-  },
-  'ernie-image': {
-    // ernie_image_denoise carries multiple_of=16 on width/height.
-    dimensions: { grid: 16, optimalSide: 1024 },
-    // The base model's numbers. ERNIE-Image-Turbo wants 8 steps at guidance 1.0, which arrives
-    // through the model's own default_settings rather than a second entry here: Turbo and the
-    // base model share an architecture and a config, so no variant discriminates them.
-    defaults: { steps: 50, cfgScale: 4, scheduler: 'euler' },
-    // ERNIE_IMAGE_SCHEDULER_MAP is euler/heun/lcm, and the denoise node takes the choice.
-    schedulerSet: 'flow',
-    schedulerAppliesToGraph: true,
-    guidanceLabel: 'CFG',
-    // negative_conditioning is 'required when guidance_scale != 1.0'.
-    negativePrompt: { visible: true, usage: 'cfg-gated' },
-    ui: { sdVaeOverride: false, colorCompensation: false, vaePrecision: false, seamless: false, cfgRescale: false },
-  },
-  'qwen-image': {
-    dimensions: { grid: 16, optimalSide: 1024 },
-    defaults: { steps: 40, cfgScale: 4, scheduler: 'euler_a' },
-    schedulerSet: 'standard',
-    schedulerAppliesToGraph: false,
-    guidanceLabel: 'CFG',
-    negativePrompt: { visible: true, usage: 'cfg-gated' },
-    ui: { sdVaeOverride: false, colorCompensation: false, vaePrecision: false, seamless: false, cfgRescale: false },
-  },
-  'z-image': {
-    dimensions: { grid: 16, optimalSide: 1024 },
-    defaults: { steps: 8, cfgScale: 1, scheduler: 'euler' },
-    schedulerSet: 'flow',
-    schedulerAppliesToGraph: true,
-    guidanceLabel: 'CFG',
-    negativePrompt: { visible: true, usage: 'cfg-gated' },
-    ui: { sdVaeOverride: false, colorCompensation: false, vaePrecision: false, seamless: false, cfgRescale: false },
-  },
-  'ideogram-4': {
-    // Enforced by ideogram4_denoise: width/height carry multipleOf=16.
-    dimensions: { grid: 16, optimalSide: 1024 },
-    // Steps and guidance come from the sampler preset unless explicitly overridden, so the
-    // shared step/CFG fields are inert here; the preset default is V4_QUALITY_48 (48 steps).
-    defaults: { steps: 48, cfgScale: 1, scheduler: 'euler' },
-    schedulerSet: 'flow',
-    schedulerAppliesToGraph: false,
-    guidanceLabel: 'Guidance',
-    negativePrompt: { visible: false, usage: 'never' },
-    ui: { sdVaeOverride: false, colorCompensation: false, vaePrecision: false, seamless: false, cfgRescale: false },
-  },
-  'krea-2': {
-    dimensions: { grid: 16, optimalSide: 1024 },
-    // Krea-2-Turbo's numbers. Krea-2-Raw wants ~28 steps at CFG ~4.5, which comes through the
-    // model's own default_settings rather than being hardcoded per variant here.
-    defaults: { steps: 8, cfgScale: 1, scheduler: 'euler' },
-    schedulerSet: 'flow',
-    schedulerAppliesToGraph: false,
-    guidanceLabel: 'CFG',
-    negativePrompt: { visible: true, usage: 'cfg-gated' },
-    ui: { sdVaeOverride: false, colorCompensation: false, vaePrecision: false, seamless: false, cfgRescale: false },
-  },
-  wan: {
-    // Wan's transformer patch-embeds with stride 2 and un-patches by 2; combined with the VAE's
-    // 8x spatial scale, dimensions must be multiples of 16 or the scheduler step fails on a
-    // latents-vs-noise spatial mismatch.
-    dimensions: { grid: 16, optimalSide: 1024 },
-    defaults: { steps: 40, cfgScale: 4, scheduler: 'euler' },
-    schedulerSet: 'flow',
-    schedulerAppliesToGraph: false,
-    guidanceLabel: 'Guidance',
-    negativePrompt: { visible: true, usage: 'always' },
-    ui: { sdVaeOverride: false, colorCompensation: false, vaePrecision: false, seamless: false, cfgRescale: false },
-  },
-  anima: {
-    dimensions: { grid: 8, optimalSide: 1024 },
-    defaults: { steps: 30, cfgScale: 4, scheduler: 'euler' },
-    schedulerSet: 'anima',
-    schedulerAppliesToGraph: true,
-    guidanceLabel: 'CFG',
-    negativePrompt: { visible: true, usage: 'cfg-gated' },
-    ui: { sdVaeOverride: false, colorCompensation: false, vaePrecision: false, seamless: false, cfgRescale: false },
-  },
-} as const satisfies Partial<Record<KnownModelBase, BaseGenerationConfig>>;
-
-export type SupportedGenerateBase = keyof typeof BASE_GENERATION;
-
-export const SUPPORTED_GENERATE_BASES = Object.keys(BASE_GENERATION) as SupportedGenerateBase[];
+export { isSupportedGenerateBase, SUPPORTED_GENERATE_BASES, type SupportedGenerateBase };
 
 export interface GenerationModelPolicy {
   isSupported: boolean;
@@ -369,6 +197,9 @@ export interface GenerationModelPolicy {
   };
   ui: {
     guidanceLabel: GuidanceLabel;
+    /** The node-enforced floor for the guidance control; `null` max means the node enforces none. */
+    guidanceMin: number;
+    guidanceMax: number | null;
     schedulerVisible: boolean;
     clipSkipMax: number | null;
     cfgRescaleVisible: boolean;
@@ -387,23 +218,64 @@ const FALLBACK_GENERATION_CONFIG: BaseGenerationConfig = {
   schedulerSet: 'standard',
   schedulerAppliesToGraph: false,
   guidanceLabel: 'CFG',
+  // Deliberately the widest range, not the narrowest: without a table `getGenerationValidationReasons`
+  // already blocks generation outright, so tightening the control here would only clamp a persisted
+  // value the user legitimately had -- FLUX Fill's 30 -- away while the capabilities are still in flight.
+  guidance: { min: 0, max: null },
   negativePrompt: { visible: true, usage: 'never' },
   ui: { sdVaeOverride: false, colorCompensation: false, vaePrecision: false, seamless: false, cfgRescale: false },
 };
 
-// Fallbacks keep UI selectors crash-safe; isSupportedGenerateModel() still blocks invocation.
+/**
+ * What the backend says about this model's architecture.
+ *
+ * The variant matters: FLUX Schnell wants 4 steps where dev wants 28, and the endpoint answers per
+ * variant where they differ. Falling back keeps UI selectors crash-safe for external generators and
+ * for an architecture the backend does not know. It is not a licence to generate with fallback
+ * policy: `isArchitectureDescribed` is what blocks invocation for a supported base the served table
+ * omits, and `resolveGenerateWidgetValues` will not even select such a model.
+ */
 const getBaseGenerationConfig = (
-  model: Pick<GenerateModelConfig, 'base' | 'type'> | undefined
+  model: (Pick<GenerateModelConfig, 'base' | 'type'> & { variant?: unknown }) | undefined
 ): BaseGenerationConfig => {
   if (!model || model.type === 'external_image_generator') {
     return FALLBACK_GENERATION_CONFIG;
   }
 
-  return (BASE_GENERATION as Partial<Record<string, BaseGenerationConfig>>)[model.base] ?? FALLBACK_GENERATION_CONFIG;
+  return getArchitectureGenerationConfig(model.base, model.variant) ?? FALLBACK_GENERATION_CONFIG;
 };
+
+/**
+ * The pixel grid generation dimensions must land on, or `null` if the backend has no row for this
+ * architecture.
+ *
+ * Variant-dependent: Wan A14B enforces multiples of 16 on its denoise node, TI2V-5B multiples of
+ * 32 in the reference-image encoder. Passing the variant is how the canvas offers a size that
+ * survives enqueue; omitting it falls back to the architecture's own row.
+ *
+ * `null` rather than a default so callers keep owning their own "nothing selected" behaviour --
+ * the canvas has a different sensible answer there than a generation graph does.
+ */
+export const getDimensionGrid = (base: string, variant?: unknown): number | null =>
+  getArchitectureFeatures(base, variant)?.dimension_grid ?? null;
+
+/**
+ * Whether the served table actually describes this model's architecture.
+ *
+ * `isSupportedGenerateModel` answers from a static list of bases webv2 can build a graph for, which
+ * says nothing about whether the *backend* described that base in this build. Generating on a base
+ * the table omits would silently use `FALLBACK_GENERATION_CONFIG` -- grid 8, 30 steps, CFG 7 -- for
+ * an architecture whose denoise node may enforce something else entirely.
+ */
+export const isArchitectureDescribed = (model: Pick<GenerateModelConfig, 'base' | 'type'>): boolean =>
+  model.type === 'external_image_generator' || getArchitectureFeatures(model.base) !== undefined;
 
 const getNumber = (value: number | null | undefined, fallback: number): number =>
   Number.isFinite(value) && value !== null && value !== undefined ? value : fallback;
+
+/** Hold a guidance value to what the architecture's denoise node accepts. */
+const clampGuidance = (value: number, guidance: BaseGenerationConfig['guidance']): number =>
+  Math.min(guidance.max ?? Number.POSITIVE_INFINITY, Math.max(guidance.min, value));
 
 /**
  * The dimension rules for a model, optionally adjusted for PiD.
@@ -414,7 +286,10 @@ const getNumber = (value: number | null | undefined, fallback: number): number =
  * optimal side becomes PiD's 2048 rather than the model's 1024.
  */
 export const getGenerationDimensions = (
-  model: Pick<GenerateModelConfig, 'base' | 'type'> | undefined,
+  // `variant` participates: `getBaseGenerationConfig` prefers a variant row where the backend
+  // answers differently, and `optimalSide` comes from that row's default canvas. Optional because
+  // an architecture always has its own row; omitting it asks for the architecture's answer.
+  model: (Pick<GenerateModelConfig, 'base' | 'type'> & { variant?: unknown }) | undefined,
   pidMode: PidMode = 'off'
 ) => {
   const config = getBaseGenerationConfig(model);
@@ -433,26 +308,38 @@ export const getGenerationDimensions = (
   };
 };
 
+/**
+ * The value the single guidance slider takes from a model record.
+ *
+ * `MainModelDefaultSettings` carries `cfg_scale` and `guidance` as separate fields, but the UI has
+ * one control -- `guidanceLabel` is the whole difference between them. Which field feeds it depends
+ * on the label: a guidance-distilled model records `cfg_scale: 1.0` meaning "CFG off" *and* the
+ * guidance value it actually samples with, so preferring `cfg_scale` reads the off-switch as the
+ * setting. FLUX dev records `{cfg_scale: 1.0, guidance: 3.5}` and `buildFluxGraph` wires
+ * `guidance: settings.cfgScale`, so the old order generated at guidance 1.0 instead of 3.5.
+ */
+const getRecordGuidanceValue = (
+  defaults: GenerateDefaultSettings | undefined,
+  guidanceLabel: GuidanceLabel
+): number | null | undefined =>
+  guidanceLabel === 'Guidance'
+    ? (defaults?.guidance ?? defaults?.cfg_scale)
+    : (defaults?.cfg_scale ?? defaults?.guidance);
+
 export const getGenerationDefaults = (model: GenerateModelConfig | undefined) => {
   const config = getBaseGenerationConfig(model);
   const defaults = model?.default_settings as GenerateDefaultSettings;
 
   return {
     cfgRescaleMultiplier: getNumber(defaults?.cfg_rescale_multiplier, 0),
-    // There is one slider, and `guidanceLabel` is what it stands for: on a 'Guidance' base the
-    // graph wires it into the node's guidance input, on a 'CFG' base into cfg_scale. So read the
-    // field that matches. The guidance-distilled architectures declare both — FLUX Fill is
-    // `cfg_scale=1.0, guidance=30.0`, the 1.0 only meaning "CFG is off" — and reading cfg_scale
-    // first collapsed Fill's 30.0 to 1.0.
-    //
-    // The gate is not cosmetic: `default_settings.guidance` is editable on *any* main model (see
-    // `defaultSettingsFields.ts`, where `guidance` is in MAIN_FIELDS unconditionally), so an SDXL
-    // model can carry one. Preferring it there would hand a true CFG slider a value meant for a
-    // knob that base does not have.
-    cfgScale:
-      config.guidanceLabel === 'Guidance'
-        ? getNumber(defaults?.guidance ?? defaults?.cfg_scale, config.defaults.cfgScale)
-        : getNumber(defaults?.cfg_scale ?? defaults?.guidance, config.defaults.cfgScale),
+    // Clamped like `steps` below and like the canvas size in `getDefaultGenerateSettings`: the
+    // model record's CFG field is editable up to 200 for every main model, so a Guidance-labelled
+    // architecture with a ceiling can be handed a default it would reject. Unclamped, the reset
+    // affordance and "reset all to model defaults" would both restore a blocked value.
+    cfgScale: clampGuidance(
+      getNumber(getRecordGuidanceValue(defaults, config.guidanceLabel), config.defaults.cfgScale),
+      config.guidance
+    ),
     scheduler: defaults?.scheduler ?? config.defaults.scheduler,
     steps: Math.max(1, Math.round(getNumber(defaults?.steps, config.defaults.steps))),
     vaePrecision: defaults?.vae_precision === 'fp16' ? ('fp16' as const) : ('fp32' as const),
@@ -556,6 +443,8 @@ export const getGenerationUiPolicy = (
 
   return {
     guidanceLabel: config.guidanceLabel,
+    guidanceMin: config.guidance.min,
+    guidanceMax: config.guidance.max,
     schedulerVisible: config.schedulerAppliesToGraph,
     clipSkipMax: config.ui.clipSkipMax ?? null,
     cfgRescaleVisible: config.ui.cfgRescale,
@@ -574,7 +463,7 @@ export const getGenerationUiPolicy = (
 export const isSupportedGenerateModel = <T extends { base: string; type: string }>(
   model: T
 ): model is T & GenerateModelConfig =>
-  (model.type === 'main' && model.base in BASE_GENERATION) ||
+  (model.type === 'main' && isSupportedGenerateBase(model.base)) ||
   (model.type === 'external_image_generator' && model.base === 'external');
 
 export const isGenerateModelSelectable = <T extends ModelConfig>(model: T): boolean => isSupportedGenerateModel(model);
@@ -1141,7 +1030,7 @@ const getBaseComponentSectionPolicy = (
         {
           ...vaeSlot(
             'Optional override, or required with a non-Diffusers model and no component source.',
-            isVaeForBases(['qwen-image'])
+            isQwenImageFamilyVae
           ),
           required: (ctx) => !isBundledOrDiffusersSourceSatisfied(ctx),
           missingMessage: 'Generate needs a VAE for non-Diffusers Qwen Image models.',
@@ -1344,11 +1233,18 @@ export const isReferenceImageSupported = (model: GenerateModelConfig | undefined
     return model.capabilities?.supports_reference_images === true;
   }
 
-  if (model.base === 'qwen-image') {
-    return model.variant === 'edit';
+  const features = getArchitectureFeatures(model.base);
+
+  if (!features || features.max_reference_images <= 0) {
+    return false;
   }
 
-  return ['flux', 'flux2', 'sd-1', 'sdxl'].includes(model.base);
+  // Qwen-Image accepts reference images only as the `edit` variant -- the one feature the backend
+  // qualifies by variant, which is why it says so on the architecture row rather than inventing a
+  // variant row for it.
+  return (
+    features.reference_images_require_variant === null || model.variant === features.reference_images_require_variant
+  );
 };
 
 export const getMaxReferenceImages = (model: GenerateModelConfig | undefined): number => {
@@ -1360,7 +1256,7 @@ export const getMaxReferenceImages = (model: GenerateModelConfig | undefined): n
     return Math.max(0, model.capabilities.max_reference_images);
   }
 
-  return DEFAULT_REFERENCE_IMAGE_LIMIT;
+  return getArchitectureFeatures(model.base)?.max_reference_images ?? DEFAULT_REFERENCE_IMAGE_LIMIT;
 };
 
 export const createReferenceImageId = (): string =>
@@ -1525,6 +1421,18 @@ const getSettingsWithCompatibleModelSelections = (
       nextSettings[key] = null;
       addClearedLabel(clearedLabels, COMPONENT_SETTING_LABELS[key]);
     }
+  }
+
+  // Beside CLIP skip, and for the same reason: the value carried over from the previous model can
+  // be outside what this one's denoise node accepts, and every model-selection entry point passes
+  // here. The cleared-label toast names it, so the move is reported rather than silent.
+  // `getGuidanceBoundReason` still guards the paths that do not transition through here -- a
+  // project reopened on a model whose bounds changed, metadata recall, settings written by API.
+  const clampedGuidance = clampGuidance(nextSettings.cfgScale, getBaseGenerationConfig(model).guidance);
+
+  if (clampedGuidance !== nextSettings.cfgScale) {
+    nextSettings.cfgScale = clampedGuidance;
+    addClearedLabel(clearedLabels, uiPolicy.guidanceLabel);
   }
 
   if (!uiPolicy.clipSkipMax && nextSettings.clipSkip !== 0) {
@@ -1734,6 +1642,35 @@ const getReferenceImageValidationReasons = (model: GenerateModelConfig, settings
 };
 
 /**
+ * How this guidance value breaks the bound the denoise node behind it enforces, or `null`.
+ *
+ * Model selection already clamps, so this is the backstop for everything that does not transition
+ * through it: a project reopened after its model's bounds changed, metadata recall (which carries
+ * any `cfg_scale >= 1`), or settings written straight to the record. Without it the graph compiles
+ * and the queue rejects it with a node-level error the user cannot act on -- `flux2_denoise.guidance`
+ * is `le=20`, and FLUX Fill's recommended 30 is a value a project genuinely holds.
+ *
+ * Returned as one message rather than a list: the two bounds cannot both be broken, and the Generate
+ * widget shows it on the field itself, where a list has nowhere to go.
+ */
+export const getGuidanceBoundReason = (
+  model: Pick<GenerateModelConfig, 'base' | 'name' | 'type'> & { variant?: unknown },
+  cfgScale: number
+): string | null => {
+  const { guidance, guidanceLabel } = getBaseGenerationConfig(model);
+
+  if (cfgScale < guidance.min) {
+    return `${guidanceLabel} must be at least ${guidance.min} for ${model.name}.`;
+  }
+
+  if (guidance.max !== null && cfgScale > guidance.max) {
+    return `${guidanceLabel} must be at most ${guidance.max} for ${model.name}.`;
+  }
+
+  return null;
+};
+
+/**
  * Rules that belong to one model family and have no home in the component-slot policies:
  * the slot machinery validates model selections, not scalar parameters or LoRA pairings.
  */
@@ -1750,6 +1687,22 @@ const getModelFamilyValidationReasons = (model: MainModelConfig, settings: Gener
     reasons.push(`Krea-2 rebalance weights must be ${KREA2_REBALANCE_WEIGHT_COUNT} comma-separated numbers.`);
   }
 
+  // Each Ideogram 4 override is forwarded verbatim whenever it is set, and normalization only
+  // checks that a persisted value is finite -- a value stored before these controls were bounded
+  // survives a reload and fails `ideogram4_denoise` at enqueue.
+  if (model.base === 'ideogram-4') {
+    for (const [label, value, min, max] of [
+      ['steps', settings.ideogram4Steps, IDEOGRAM4_STEPS_MIN, IDEOGRAM4_STEPS_MAX],
+      ['guidance', settings.ideogram4GuidanceScale, IDEOGRAM4_GUIDANCE_MIN, IDEOGRAM4_GUIDANCE_MAX],
+      ['mu', settings.ideogram4Mu, IDEOGRAM4_MU_MIN, IDEOGRAM4_MU_MAX],
+    ] as const) {
+      // Null is "let the preset decide" and is omitted from the graph entirely.
+      if (value !== null && (value < min || value > max)) {
+        reasons.push(`Ideogram 4 ${label} must be between ${min} and ${max}.`);
+      }
+    }
+  }
+
   // A14B and 5B Wan LoRAs are not interchangeable — the layer patcher fails on a tensor-shape
   // mismatch. getActiveCompatibleLoras would silently drop a mismatched one, so say so instead.
   if (model.base === 'wan') {
@@ -1764,8 +1717,30 @@ const getModelFamilyValidationReasons = (model: MainModelConfig, settings: Gener
 };
 
 export const getGenerationValidationReasons = (model: GenerateModelConfig, settings: GenerateSettings): string[] => {
+  // Before anything else, and before the unsupported-model reason: without the capability table
+  // every answer below is the fallback's, not the architecture's -- a grid of 8 for a base that
+  // rejects anything but 16, and "no supported model" for a model that is perfectly supported.
+  // This is the one function all three compile paths share (graph.ts, compileCanvasGraph.ts,
+  // previewGraph.ts), so gating here is what makes the canvas and the topbar fail closed too,
+  // rather than only the Generate widget's own resolver.
+  if (!hasArchitectureCapabilities()) {
+    // Deliberately not state-aware: `core` cannot reach the store that knows loading from
+    // failed. Saying "not yet" would be a promise this cannot keep -- after a failed fetch
+    // nothing re-kicks it except the Generate panel's retry, so name that instead.
+    return [
+      'Model capabilities are not available. Generation is blocked until they load; if this persists, retry from the Generate panel.',
+    ];
+  }
+
   if (!isSupportedGenerateModel(model)) {
     return ['Generate needs a supported model before it can be invoked.'];
+  }
+
+  // A loaded table is not the same as a described architecture: a base inside `SUPPORTED_GENERATE_BASES`
+  // that this backend build does not serve a row for would otherwise compile against the fallback
+  // config. Reference images already fail closed this way; so does everything else now.
+  if (!isArchitectureDescribed(model)) {
+    return [`The backend does not describe the ${model.base} architecture, so it cannot be generated with.`];
   }
 
   const reasons = [
@@ -1788,6 +1763,12 @@ export const getGenerationValidationReasons = (model: GenerateModelConfig, setti
 
   const componentPolicy = getComponentSectionPolicy(model, settings);
   reasons.push(...componentPolicy.validate(getComponentPolicyContext(model, settings)));
+  const guidanceReason = getGuidanceBoundReason(model, settings.cfgScale);
+
+  if (guidanceReason) {
+    reasons.push(guidanceReason);
+  }
+
   reasons.push(...getModelFamilyValidationReasons(model, settings));
 
   return reasons;

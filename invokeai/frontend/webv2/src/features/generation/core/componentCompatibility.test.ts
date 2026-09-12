@@ -1,6 +1,11 @@
+import { resetArchitectureCapabilities } from '@features/generation/core/architectureCapabilities';
+import {
+  seedArchitectureCapabilities,
+  architectureCapabilitiesFixture,
+} from '@features/generation/core/architectureCapabilities.testing';
 import { describe, expect, it } from 'vitest';
 
-import type { ComponentModelConfig, GenerateModelConfig } from './types';
+import type { ComponentModelConfig, GenerateModelConfig, VaeModelConfig } from './types';
 
 import {
   getCompatibleSelectedComponentKey,
@@ -36,6 +41,8 @@ const FLUX1_SDNQ_COMPONENTS = [...STANDARD_SDNQ_COMPONENTS, 'text_encoder_2', 't
 
 const submodelsWithout = (components: readonly string[], missing: string): Record<string, object> =>
   Object.fromEntries(components.filter((component) => component !== missing).map((component) => [component, {}]));
+
+seedArchitectureCapabilities();
 
 describe('Generate component compatibility', () => {
   it('only treats SDNQ folders with every required pipeline component as self-contained', () => {
@@ -139,8 +146,25 @@ describe('Generate component compatibility', () => {
   it('allows only backend-supported Anima VAE families', () => {
     expect(isAnimaVae(candidate({ base: 'anima', type: 'vae' }))).toBe(true);
     expect(isAnimaVae(candidate({ base: 'qwen-image', type: 'vae' }))).toBe(true);
-    expect(isAnimaVae(candidate({ base: 'flux', type: 'vae' }))).toBe(true);
+    expect(isAnimaVae(candidate({ base: 'wan', latent_channels: 16, type: 'vae' }))).toBe(true);
+    expect(isAnimaVae(candidate({ base: 'wan', latent_channels: 48, type: 'vae' }))).toBe(false);
+    // A FLUX VAE decodes an Anima latent without raising and returns a magenta smear.
+    expect(isAnimaVae(candidate({ base: 'flux', type: 'vae' }))).toBe(false);
     expect(isAnimaVae(candidate({ base: 'sdxl', type: 'vae' }))).toBe(false);
+  });
+
+  it('offers no VAE at all before the capability table has loaded', () => {
+    resetArchitectureCapabilities();
+
+    expect(isAnimaVae(candidate({ base: 'anima', type: 'vae' }))).toBe(false);
+    expect(
+      isVaeCompatibleWithGenerateModel({ base: 'sdxl', key: 'sdxl', name: 'SDXL', type: 'main' }, {
+        base: 'sdxl',
+        key: 'sdxl-vae',
+        name: 'SDXL VAE',
+        type: 'vae',
+      } as VaeModelConfig)
+    ).toBe(false);
   });
 
   it('centralizes generate VAE compatibility for cross-base families', () => {
@@ -177,5 +201,88 @@ describe('isVaeForBases', () => {
 
   it('never matches a non-vae model', () => {
     expect(isVaeForBases(['flux'])({ base: 'flux', type: 'main' } as never)).toBe(false);
+  });
+});
+
+describe('the VAE filters and the backend declarations', () => {
+  const mainOf = (base: string) =>
+    ({ base, key: `${base}-main`, name: base, type: 'main' as const }) as unknown as GenerateModelConfig;
+
+  const vaeOf = (base: string, latentChannels?: number) =>
+    ({
+      base,
+      key: `${base}-vae`,
+      name: `${base} vae`,
+      type: 'vae' as const,
+      ...(latentChannels === undefined ? {} : { latent_channels: latentChannels }),
+    }) as unknown as VaeModelConfig;
+
+  const ALL_BASES = [...new Set(architectureCapabilitiesFixture.map((row) => row.base))];
+
+  /**
+   * webv2 kept its own copy of which VAE bases a model accepts, and the backend declares the same
+   * fact in `VaeFacet`. Two copies drift: this PR widened qwen-image to accept the anima
+   * registration and the picker kept refusing it, so a VAE the backend would have loaded could not
+   * be selected. Reading the served table is what makes the next widening show up here instead of
+   * in a user's model list.
+   */
+  it('accepts every VAE base the backend declares for that architecture', () => {
+    const declared = architectureCapabilitiesFixture.filter((row) => row.vae);
+    expect(declared.length).toBeGreaterThan(0);
+
+    for (const row of declared) {
+      for (const accepted of row.vae!.accepted) {
+        expect(
+          // Only wan distinguishes VAEs by latent width; the others leave it null.
+          isVaeCompatibleWithGenerateModel(
+            mainOf(row.base),
+            vaeOf(accepted.base, accepted.latent_channels ?? undefined)
+          ),
+          `${row.base} should accept a VAE registered under ${accepted.base}`
+        ).toBe(true);
+      }
+    }
+  });
+
+  /**
+   * The half a one-directional check cannot see. This PR's headline VAE bug was a *narrowing* —
+   * Klein silently losing `flux` — and a filter that returned `true` for everything would satisfy
+   * the loop above while offering VAEs that decode to noise.
+   */
+  it('rejects every VAE base the backend does not declare for that architecture', () => {
+    for (const row of architectureCapabilitiesFixture) {
+      const accepted = row.vae?.accepted ?? [{ base: row.base, latent_channels: null }];
+      const acceptedBases = new Set(accepted.map((entry) => entry.base));
+
+      for (const base of ALL_BASES) {
+        if (acceptedBases.has(base)) {
+          continue;
+        }
+        expect(
+          isVaeCompatibleWithGenerateModel(mainOf(row.base), vaeOf(base)),
+          `${row.base} should refuse a VAE registered under ${base}`
+        ).toBe(false);
+      }
+
+      // A width constraint is a real constraint: wan ships a 16- and a 48-channel VAE under one
+      // base, and only one of them belongs to the family an architecture decodes with.
+      for (const entry of accepted) {
+        if (entry.latent_channels === null) {
+          continue;
+        }
+        const otherWidth = entry.latent_channels === 16 ? 48 : 16;
+        if (accepted.some((other) => other.base === entry.base && other.latent_channels === otherWidth)) {
+          continue;
+        }
+        expect(
+          isVaeCompatibleWithGenerateModel(mainOf(row.base), vaeOf(entry.base, otherWidth)),
+          `${row.base} should refuse a ${otherWidth}-channel ${entry.base} VAE`
+        ).toBe(false);
+      }
+    }
+  });
+
+  it('refuses an architecture the table says nothing about', () => {
+    expect(isVaeCompatibleWithGenerateModel(mainOf('not-an-architecture'), vaeOf('not-an-architecture'))).toBe(false);
   });
 });

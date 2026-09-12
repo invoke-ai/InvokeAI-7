@@ -122,6 +122,48 @@ def _build_l2i_invocation() -> AnimaLatentsToImageInvocation:
     )
 
 
+class TestAnimaRefusesAForeignDecoder:
+    """A FLUX VAE has Anima's channel count and compression but a different basis.
+
+    It used to be accepted -- the node had a `FluxAutoEncoder` branch, the picker offered it, and
+    the decode returned a magenta moire with the subject barely visible while the run reported
+    success. Measured against the correct decode of the same latent: 8.67 dB PSNR, mean absolute
+    error 84 of 255. Nothing downstream can tell such an image from an intended one, so the node
+    refuses instead of guessing."""
+
+    def test_a_flux_vae_is_refused_before_any_decode(self):
+        from invokeai.backend.flux.modules.autoencoder import AutoEncoder as FluxAutoEncoder
+
+        vae_info = MagicMock()
+        vae_info.model = MagicMock(spec=FluxAutoEncoder)
+        context = MagicMock()
+        context.models.load.return_value = vae_info
+        context.tensors.load.return_value = torch.zeros(1, 16, 64, 64)
+
+        with pytest.raises(TypeError, match="16-channel Wan 2.1 latent space"):
+            _build_l2i_invocation().invoke(context)
+
+        # Refused before the model is placed on a device: a wrong decode costs VRAM and time
+        # before it produces the wrong image.
+        vae_info.model_on_device.assert_not_called()
+
+    def test_the_message_names_what_to_choose_instead(self):
+        from invokeai.backend.flux.modules.autoencoder import AutoEncoder as FluxAutoEncoder
+
+        vae_info = MagicMock()
+        vae_info.model = MagicMock(spec=FluxAutoEncoder)
+        context = MagicMock()
+        context.models.load.return_value = vae_info
+        context.tensors.load.return_value = torch.zeros(1, 16, 64, 64)
+
+        with pytest.raises(TypeError) as excinfo:
+            _build_l2i_invocation().invoke(context)
+
+        message = str(excinfo.value)
+        for base in ("'anima'", "'qwen-image'", "'wan'"):
+            assert base in message, message
+
+
 class TestAnimaLatentsToImageOomFallback:
     @pytest.mark.parametrize(
         "oom_error",

@@ -1,4 +1,10 @@
-import { createGenerateWidgetSyncRuntime, type GenerateWidgetSyncProjectSnapshot } from '@features/generation/runtime';
+import {
+  createGenerateWidgetSyncRuntime,
+  ensureArchitectureCapabilitiesLoaded,
+  getArchitectureCapabilitiesSnapshot,
+  subscribeArchitectureCapabilities,
+  type GenerateWidgetSyncProjectSnapshot,
+} from '@features/generation/runtime';
 import { ensureModelsLoaded, getModelsSnapshot, subscribeModels } from '@features/models';
 import { useMountEffect } from '@platform/react/useMountEffect';
 import { createProjectedExternalStore } from '@platform/state/projectedExternalStore';
@@ -25,13 +31,21 @@ export const GenerateWidgetSyncRuntime = () => {
       select: (snapshot) => snapshot.models,
       source: { getSnapshot: getModelsSnapshot, subscribe: subscribeModels },
     });
+    const capabilitiesLoaded = createProjectedExternalStore({
+      select: (snapshot) => snapshot.status === 'loaded',
+      source: { getSnapshot: getArchitectureCapabilitiesSnapshot, subscribe: subscribeArchitectureCapabilities },
+    });
     const runtime = createGenerateWidgetSyncRuntime({
+      capabilitiesLoaded,
       models,
       patchValues: store.commands.generation.patchSettings,
       project,
       queryClient,
     });
 
+    // Kicked here, at app boot, so the gate's window is one round trip rather than "whenever the
+    // Generate panel is first opened".
+    ensureArchitectureCapabilitiesLoaded();
     void ensureModelsLoaded();
     return () => runtime.dispose();
   });

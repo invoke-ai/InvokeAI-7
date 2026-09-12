@@ -41,6 +41,7 @@ export {
   getDefaultGenerateSettings,
   getDefaultReferenceImageConfig,
   getGenerateModelSelectionResult,
+  getDimensionGrid,
   getGenerationDimensions,
   getGenerationModelAvailabilityReasons,
   getGenerationUiPolicy,

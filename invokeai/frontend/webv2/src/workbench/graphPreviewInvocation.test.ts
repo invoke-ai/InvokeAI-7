@@ -5,6 +5,7 @@ import type {
   ComponentModelConfig,
 } from '@features/generation/contracts';
 
+import { seedArchitectureCapabilities } from '@features/generation/core/architectureCapabilities.testing';
 import { getDefaultGenerateSettings } from '@features/generation/settings';
 import { captureAccountScope } from '@platform/state/accountLifecycle';
 import { createInitialWorkbenchState, workbenchReducer } from '@workbench/workbenchState.testing';
@@ -12,6 +13,10 @@ import { createWorkbenchStore } from '@workbench/workbenchStore';
 import { describe, expect, it, vi } from 'vitest';
 
 import { resolveAndSubmitGraphPreviewInvocation } from './graphPreviewInvocation';
+
+// Generation policy now fails closed without the capability table, and a submission cannot
+// happen before app boot has fetched it. Seeding it here is what the running app does.
+seedArchitectureCapabilities();
 
 const animaModel: MainModelConfig = { base: 'anima', key: 'anima-model', name: 'Anima', type: 'main' };
 const animaVae: VaeModelConfig = { base: 'qwen-image', key: 'anima-vae', name: 'Anima VAE', type: 'vae' };
