@@ -1616,13 +1616,14 @@ export type paths = {
         };
         /**
          * Search Image Map
-         * @description Ranks the user's accessible images by semantic similarity.
+         * @description Ranks the user's accessible images and videos by semantic similarity.
          *
          *     Provide exactly one of `q` (text search — requires the embedding model's
-         *     text encoder to be installed) or `image_name` (visual similarity — uses
-         *     the reference image's stored embedding when it exists, and otherwise
-         *     embeds the image file on demand, so unindexed images such as assets can
-         *     be reference images too).
+         *     text encoder to be installed), `image_name`, or `video_name` (visual
+         *     similarity — uses the reference item's stored embedding when it exists,
+         *     and otherwise embeds its file on demand, so unindexed items such as assets
+         *     can be reference items too). A video is represented by its thumbnail, the
+         *     same frame the index embedded.
          */
         get: operations["search_image_map"];
         put?: never;
@@ -1695,10 +1696,10 @@ export type paths = {
         };
         /**
          * Get Image Map Image Labels
-         * @description Labels one image with the vocabulary phrases most similar to its stored embedding.
+         * @description Labels one gallery item with the vocabulary phrases most similar to its stored embedding.
          *
-         *     Serves map hover cards, so it only covers images the index has embedded;
-         *     an unindexed image (assets, intermediates, not-yet-indexed) is a 404
+         *     Serves map hover cards, so it only covers items the index has embedded;
+         *     an unindexed item (assets, intermediates, not-yet-indexed) is a 404
          *     rather than an on-demand embed — a hover must never queue encoder work.
          *     Requires the embedding model's text encoder, like /cluster_labels.
          */
@@ -18211,21 +18212,23 @@ export type components = {
         /**
          * ImageIndexStatus
          * @description Progress of the embedding index for one embedding model.
+         *
+         *     Counts cover both media kinds: an indexed gallery is its images plus its videos.
          */
         ImageIndexStatus: {
             /**
              * Total
-             * @description Number of gallery images eligible for indexing
+             * @description Number of gallery items (images and videos) eligible for indexing
              */
             total: number;
             /**
              * Embedded
-             * @description Number of eligible images that have an embedding
+             * @description Number of eligible items that have an embedding
              */
             embedded: number;
             /**
              * Failed
-             * @description Eligible images that repeatedly failed to embed; excluded from pending so it can drain
+             * @description Eligible items that repeatedly failed to embed; excluded from pending so it can drain
              * @default 0
              */
             failed?: number;
@@ -18476,7 +18479,7 @@ export type components = {
         };
         /**
          * ImageMapImageLabelsResponse
-         * @description The best vocabulary labels for one image.
+         * @description The best vocabulary labels for one gallery item.
          */
         ImageMapImageLabelsResponse: {
             /**
@@ -18491,13 +18494,13 @@ export type components = {
             alternates: string[];
             /**
              * Score
-             * @description Cosine similarity of the best phrase to the image's embedding
+             * @description Cosine similarity of the best phrase to the item's embedding
              */
             score: number;
         };
         /**
          * ImageMapPoint
-         * @description One image's position on the 2D semantic map.
+         * @description One gallery item's position on the 2D semantic map.
          */
         ImageMapPoint: {
             /**
@@ -18512,9 +18515,15 @@ export type components = {
             y: number;
             /**
              * Image Name
-             * @description The image this point represents
+             * @description The image or video this point represents; `kind` says which namespace the name belongs to
              */
             image_name: string;
+            /**
+             * Kind
+             * @description Whether this point is an image or a video
+             * @enum {string}
+             */
+            kind: "image" | "video";
             /**
              * Cluster
              * @description DBSCAN cluster label; -1 means unclustered
@@ -18629,7 +18638,7 @@ export type components = {
         };
         /**
          * ImageMapSearchResponse
-         * @description Semantic search results over the user's embedded images.
+         * @description Semantic search results over the user's embedded gallery items.
          */
         ImageMapSearchResponse: {
             /**
@@ -18645,9 +18654,15 @@ export type components = {
         ImageMapSearchResult: {
             /**
              * Image Name
-             * @description The matching image
+             * @description The matching image or video; `kind` says which namespace the name belongs to
              */
             image_name: string;
+            /**
+             * Kind
+             * @description Whether this hit is an image or a video
+             * @enum {string}
+             */
+            kind: "image" | "video";
             /**
              * Score
              * @description Cosine similarity to the query; higher is more similar
@@ -20833,10 +20848,10 @@ export type components = {
          *         allow_unknown_models: Allow installation of models that we are unable to identify. If enabled, models will be marked as `unknown` in the database, and will not have any metadata associated with them. If disabled, unknown models will be rejected during installation.
          *         multiuser: Enable multiuser support. When disabled, the application runs in single-user mode using a default system account with administrator privileges. When enabled, requires user authentication and authorization.
          *         strict_password_checking: Enforce strict password requirements. When True, passwords must contain uppercase, lowercase, and numbers. When False (default), any password is accepted but its strength (weak/moderate/strong) is reported to the user.
-         *         image_index_enabled: Maintain a semantic embedding index of gallery images, used by the image map and semantic search features.
-         *         image_index_model: Name of the installed CLIP Vision or SigLIP model used to embed gallery images. Changing the model discards embeddings computed by the previous model.
+         *         image_index_enabled: Maintain a semantic embedding index of gallery images and videos, used by the image map and semantic search features.
+         *         image_index_model: Name of the installed CLIP Vision or SigLIP model used to embed gallery images and video thumbnails. Changing the model discards embeddings computed by the previous model.
          *         image_index_device: Set to `cpu` to compute image embeddings on the CPU with a service-local copy of the model - avoids VRAM use and lets indexing run during generations. Any other value is ignored: embeddings otherwise run on the model cache's device, pausing while generations are in progress.
-         *         image_index_batch_size: Number of images embedded per batch by the image index worker.
+         *         image_index_batch_size: Number of gallery items embedded per batch by the image index worker.
          *         external_alibabacloud_api_key: API key for Alibaba Cloud DashScope image generation.
          *         external_alibabacloud_base_url: Base URL override for Alibaba Cloud DashScope image generation.
          *         external_gemini_api_key: API key for Gemini image generation.
@@ -21345,13 +21360,13 @@ export type components = {
             strict_password_checking?: boolean;
             /**
              * Image Index Enabled
-             * @description Maintain a semantic embedding index of gallery images, used by the image map and semantic search features.
+             * @description Maintain a semantic embedding index of gallery images and videos, used by the image map and semantic search features.
              * @default true
              */
             image_index_enabled?: boolean;
             /**
              * Image Index Model
-             * @description Name of the installed CLIP Vision or SigLIP model used to embed gallery images. Changing the model discards embeddings computed by the previous model.
+             * @description Name of the installed CLIP Vision or SigLIP model used to embed gallery images and video thumbnails. Changing the model discards embeddings computed by the previous model.
              * @default DFN2B-CLIP-ViT-L-14-39B
              */
             image_index_model?: string;
@@ -21362,7 +21377,7 @@ export type components = {
             image_index_device?: string | null;
             /**
              * Image Index Batch Size
-             * @description Number of images embedded per batch by the image index worker.
+             * @description Number of gallery items embedded per batch by the image index worker.
              * @default 8
              */
             image_index_batch_size?: number;
@@ -49613,6 +49628,8 @@ export interface operations {
                 eps?: number | null;
                 /** @description DBSCAN min_samples for clustering */
                 min_samples?: number;
+                /** @description Include indexed videos among the returned items. Leave off unless the client resolves each item through the endpoint its `kind` names. */
+                include_videos?: boolean;
             };
             header?: never;
             path?: never;
@@ -49647,8 +49664,12 @@ export interface operations {
                 q?: string | null;
                 /** @description Reference image for similarity search */
                 image_name?: string | null;
+                /** @description Reference video for similarity search */
+                video_name?: string | null;
                 /** @description Maximum number of results */
                 limit?: number;
+                /** @description Include indexed videos among the returned items. Leave off unless the client resolves each item through the endpoint its `kind` names. */
+                include_videos?: boolean;
             };
             header?: never;
             path?: never;
@@ -49683,6 +49704,8 @@ export interface operations {
                 image_url?: string | null;
                 /** @description Maximum number of results */
                 limit?: number;
+                /** @description Include indexed videos among the returned items. Leave off unless the client resolves each item through the endpoint its `kind` names. */
+                include_videos?: boolean;
             };
             header?: never;
             path?: never;
@@ -49723,6 +49746,8 @@ export interface operations {
                 min_samples?: number;
                 /** @description Candidate labels per cluster */
                 top_k?: number;
+                /** @description Include indexed videos among the returned items. Leave off unless the client resolves each item through the endpoint its `kind` names. */
+                include_videos?: boolean;
             };
             header?: never;
             path?: never;
@@ -49753,8 +49778,10 @@ export interface operations {
     get_image_map_image_labels: {
         parameters: {
             query: {
-                /** @description The image to label */
+                /** @description The image or video to label */
                 image_name: string;
+                /** @description Which namespace image_name belongs to */
+                kind?: "image" | "video";
                 /** @description Number of candidate labels */
                 top_k?: number;
             };
@@ -49859,7 +49886,10 @@ export interface operations {
     };
     get_image_map_status: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Include indexed videos among the returned items. Leave off unless the client resolves each item through the endpoint its `kind` names. */
+                include_videos?: boolean;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -49873,6 +49903,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ImageMapStatusResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

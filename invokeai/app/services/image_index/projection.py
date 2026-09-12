@@ -19,7 +19,7 @@ from typing import Optional
 
 import numpy as np
 
-from invokeai.app.services.image_index.image_index_common import EMBEDDING_DTYPE
+from invokeai.app.services.image_index.image_index_common import EMBEDDING_DTYPE, IndexedItem
 
 DEFAULT_CLUSTER_EPS = 0.2
 DEFAULT_CLUSTER_MIN_SAMPLES = 10
@@ -233,16 +233,22 @@ def cluster_at_eps(
     return DBSCAN(eps=eps, min_samples=min_samples).fit(coords).labels_
 
 
-def scope_hash(model_id: str, image_names: list[str]) -> str:
-    """Fingerprint of an accessible-image set under one model.
+def scope_hash(model_id: str, items: list[IndexedItem]) -> str:
+    """Fingerprint of an accessible-item set under one model.
 
-    Order-insensitive: the caller may pass names in any order. Comparing the
+    Order-insensitive: the caller may pass items in any order. Comparing the
     stored hash against a freshly derived one detects staleness from any
-    cause — new/deleted images, board visibility changes, shares.
+    cause — new/deleted items, board visibility changes, shares.
+
+    Names alone identify the set: image and video names are both a UUID plus a
+    kind-specific extension, so one name cannot name two items. Leaving the
+    kind out of the digest also means a gallery with no videos keeps the
+    projection it had before videos were indexable, rather than every user
+    paying for a recomputed fit on the first load after an upgrade.
     """
     digest = hashlib.sha256()
     digest.update(model_id.encode("utf-8"))
-    for name in sorted(image_names):
+    for name in sorted(item.name for item in items):
         digest.update(b"\x00")
         digest.update(name.encode("utf-8"))
     return digest.hexdigest()

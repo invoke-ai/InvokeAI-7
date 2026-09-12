@@ -4,6 +4,7 @@ import inspect
 import threading
 import time
 import weakref
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Callable
 from unittest.mock import patch
@@ -16,7 +17,7 @@ from PIL import Image
 from invokeai.app.services.config.config_default import InvokeAIAppConfig
 from invokeai.app.services.events.events_common import ImageIndexStatusEvent, ImageIndexUpdatedEvent
 from invokeai.app.services.image_index import image_index_default
-from invokeai.app.services.image_index.image_index_common import EMBEDDING_DTYPE
+from invokeai.app.services.image_index.image_index_common import EMBEDDING_DTYPE, IndexedItem
 from invokeai.app.services.image_index.image_index_default import (
     _ACTIVATION_RETRY_INTERVAL_S,
     _MAX_ATTEMPTS,
@@ -30,6 +31,9 @@ from invokeai.app.services.image_records.image_records_sqlite import SqliteImage
 from invokeai.app.services.images.images_common import image_record_to_dto
 from invokeai.app.services.images.images_default import ImageService
 from invokeai.app.services.shared.sqlite.sqlite_database import SqliteDatabase
+from invokeai.app.services.video_records.video_records_sqlite import SqliteVideoRecordStorage
+from invokeai.app.services.videos.videos_common import VideoDTO, video_record_to_dto
+from invokeai.app.services.videos.videos_default import VideoService
 from invokeai.backend.util.devices import TorchDevice
 from invokeai.backend.util.logging import InvokeAILogger
 from tests.fixtures.sqlite_database import create_mock_sqlite_database
@@ -57,6 +61,16 @@ def _wait_for_spent_retry(service: "ImageIndexService", user_id: str, scope: str
     asserting the refusal races the worker, and loses on a slow runner.
     """
     _wait_until(lambda: service._failed_projection_scopes.get(user_id) == scope, timeout=15)
+
+
+def imgs(*names: str) -> list[IndexedItem]:
+    """The image-namespace items for these names."""
+    return [IndexedItem("image", name) for name in names]
+
+
+def vids(*names: str) -> list[IndexedItem]:
+    """The video-namespace items for these names."""
+    return [IndexedItem("video", name) for name in names]
 
 
 def _unit_vec() -> np.ndarray:
@@ -95,6 +109,29 @@ def images_service() -> ImageService:
     return images
 
 
+@pytest.fixture
+def video_records(db: SqliteDatabase) -> SqliteVideoRecordStorage:
+    return SqliteVideoRecordStorage(db=db)
+
+
+@pytest.fixture
+def videos_service(tmp_path: Path) -> VideoService:
+    """A video service whose thumbnails are real files, as the worker reads them from disk."""
+    videos = VideoService()
+    thumbnails = tmp_path / "video-thumbnails"
+    thumbnails.mkdir()
+
+    def get_path(video_name: str, thumbnail: bool = False) -> str:
+        assert thumbnail, "the index only ever reads a video's thumbnail"
+        path = thumbnails / f"{video_name}.webp"
+        if not path.exists():
+            Image.new("RGB", (16, 16), "teal").save(path, "WEBP")
+        return str(path)
+
+    videos.get_path = get_path  # type: ignore[method-assign]
+    return videos
+
+
 def _make_invoker(
     images_service: ImageService,
     index_records: ImageIndexRecordsSqlite,
@@ -103,6 +140,8 @@ def _make_invoker(
     device: str | None = "cpu",
     session_queue: object | None = None,
     model_manager: object | None = None,
+    videos_service: VideoService | None = None,
+    video_records: SqliteVideoRecordStorage | None = None,
 ) -> SimpleNamespace:
     config = InvokeAIAppConfig(
         use_memory_db=True,
@@ -115,6 +154,8 @@ def _make_invoker(
         logger=InvokeAILogger.get_logger(),
         images=images_service,
         image_records=image_records,
+        videos=videos_service if videos_service is not None else VideoService(),
+        video_records=video_records,
         image_index_records=index_records,
         events=TestEventService(),
         session_queue=session_queue,
@@ -160,6 +201,31 @@ def _save_image(
     )
 
 
+def _save_video(
+    video_records: SqliteVideoRecordStorage,
+    video_name: str,
+    is_intermediate: bool = False,
+    video_category: ImageCategory = ImageCategory.GENERAL,
+) -> None:
+    video_records.save(
+        video_name=video_name,
+        video_origin=ResourceOrigin.INTERNAL,
+        video_category=video_category,
+        width=16,
+        height=16,
+        duration=2.0,
+        fps=24.0,
+        has_workflow=False,
+        is_intermediate=is_intermediate,
+        user_id="system",
+    )
+
+
+def _video_dto_for(video_records: SqliteVideoRecordStorage, video_name: str) -> VideoDTO:
+    record = video_records.get(video_name)
+    return video_record_to_dto(record, video_url="http://x/v.mp4", thumbnail_url="http://x/v.webp", board_id=None)
+
+
 def _dto_for(image_records: SqliteImageRecordStorage, image_name: str):
     record = image_records.get(image_name)
     return image_record_to_dto(record, image_url="http://x/i.png", thumbnail_url="http://x/t.png", board_id=None)
@@ -202,9 +268,9 @@ def test_backfill_indexes_preexisting_eligible_images(
     assert status.total == 6
     assert status.pending == 0
     # Ineligible images have no rows.
-    assert index_records.get_embeddings(["intermediate.png", "mask.png"], MODEL_ID)[0] == []
+    assert index_records.get_embeddings(imgs("intermediate.png", "mask.png"), MODEL_ID)[0] == []
     # Stored embeddings are L2-normalized.
-    _, matrix = index_records.get_embeddings([f"img-{i}.png" for i in range(6)], MODEL_ID)
+    _, matrix = index_records.get_embeddings([IndexedItem("image", f"img-{i}.png") for i in range(6)], MODEL_ID)
     assert np.allclose(np.linalg.norm(matrix, axis=1), 1.0, atol=1e-5)
 
 
@@ -224,8 +290,8 @@ def test_on_changed_indexes_new_eligible_image_and_skips_ineligible(
     images_service._on_changed(_dto_for(image_records, "new.png"))
     images_service._on_changed(_dto_for(image_records, "new-intermediate.png"))
 
-    _wait_until(lambda: index_records.get_embeddings(["new.png"], MODEL_ID)[0] == ["new.png"])
-    assert index_records.get_embeddings(["new-intermediate.png"], MODEL_ID)[0] == []
+    _wait_until(lambda: index_records.get_embeddings(imgs("new.png"), MODEL_ID)[0] == imgs("new.png"))
+    assert index_records.get_embeddings(imgs("new-intermediate.png"), MODEL_ID)[0] == []
 
 
 def test_unloadable_image_is_skipped_and_backfill_completes(
@@ -246,9 +312,9 @@ def test_unloadable_image_is_skipped_and_backfill_completes(
     service.start(_make_invoker(images_service, index_records))
 
     _wait_until(lambda: not service._backfill_pending.is_set())
-    assert index_records.get_embeddings(["good.png"], MODEL_ID)[0] == ["good.png"]
-    assert index_records.get_embeddings(["bad.png"], MODEL_ID)[0] == []
-    assert "bad.png" in service._failed
+    assert index_records.get_embeddings(imgs("good.png"), MODEL_ID)[0] == imgs("good.png")
+    assert index_records.get_embeddings(imgs("bad.png"), MODEL_ID)[0] == []
+    assert IndexedItem("image", "bad.png") in service._failed
 
 
 def test_transient_encode_failure_is_retried_to_success(
@@ -268,8 +334,8 @@ def test_transient_encode_failure_is_retried_to_success(
     try:
         _save_image(image_records, "a.png")
         service.start(_make_invoker(images_service, index_records))
-        _wait_until(lambda: index_records.get_embeddings(["a.png"], MODEL_ID)[0] == ["a.png"], timeout=15)
-        assert "a.png" not in service._failed
+        _wait_until(lambda: index_records.get_embeddings(imgs("a.png"), MODEL_ID)[0] == imgs("a.png"), timeout=15)
+        assert IndexedItem("image", "a.png") not in service._failed
     finally:
         service.stop()
 
@@ -458,7 +524,7 @@ def test_broken_encoder_leaves_images_pending_rather_than_quarantined(
         # bounds per-image badness only. Retiring the image here would be a lie about the image
         # and — since nothing but a successful embed clears `_failed` — would survive the
         # encoder being fixed, leaving the index short until a restart.
-        assert "a.png" not in service._failed
+        assert IndexedItem("image", "a.png") not in service._failed
         assert service.get_status().pending == 1
     finally:
         service.stop()
@@ -552,10 +618,10 @@ def test_sustained_storage_failure_does_not_quarantine_images(
     outage = {"active": True}
     real_upsert = index_records.upsert_embedding
 
-    def flaky_upsert(name: str, model_id: str, embedding: np.ndarray) -> None:
+    def flaky_upsert(item: IndexedItem, model_id: str, embedding: np.ndarray) -> None:
         if outage["active"]:
             raise RuntimeError("database is locked")
-        real_upsert(name, model_id, embedding)
+        real_upsert(item, model_id, embedding)
 
     index_records.upsert_embedding = flaky_upsert  # type: ignore[method-assign]
 
@@ -646,10 +712,10 @@ def test_zero_norm_embedding_fails_only_its_own_image(
         _wait_until(lambda: not service._backfill_pending.is_set())
 
         # The healthy image is embedded despite sharing a batch with the degenerate one.
-        assert index_records.get_embeddings(["b-good.png"], MODEL_ID)[0] == ["b-good.png"]
-        assert index_records.get_embeddings(["a-bad.png"], MODEL_ID)[0] == []
-        _wait_until(lambda: "a-bad.png" in service._failed)
-        assert "b-good.png" not in service._failed
+        assert index_records.get_embeddings(imgs("b-good.png"), MODEL_ID)[0] == imgs("b-good.png")
+        assert index_records.get_embeddings(imgs("a-bad.png"), MODEL_ID)[0] == []
+        _wait_until(lambda: IndexedItem("image", "a-bad.png") in service._failed)
+        assert IndexedItem("image", "b-good.png") not in service._failed
     finally:
         service.stop()
 
@@ -666,17 +732,17 @@ def test_start_discards_only_other_models_embeddings(
     boot, and if it pruned nothing the index would accumulate dead rows forever.
     """
     _save_image(image_records, "a.png")
-    index_records.upsert_embedding("a.png", MODEL_ID, _unit_vec())
-    index_records.upsert_embedding("a.png", "stale-model-hash", _unit_vec())
-    assert index_records.get_embeddings(["a.png"], "stale-model-hash")[0] == ["a.png"]
+    index_records.upsert_embedding(IndexedItem("image", "a.png"), MODEL_ID, _unit_vec())
+    index_records.upsert_embedding(IndexedItem("image", "a.png"), "stale-model-hash", _unit_vec())
+    assert index_records.get_embeddings(imgs("a.png"), "stale-model-hash")[0] == imgs("a.png")
 
     service = ImageIndexService(encode_fn=_fake_encode, model_id=MODEL_ID)
     try:
         service.start(_make_invoker(images_service, index_records))
         _wait_until(lambda: not service._backfill_pending.is_set())
 
-        assert index_records.get_embeddings(["a.png"], "stale-model-hash")[0] == []
-        assert index_records.get_embeddings(["a.png"], MODEL_ID)[0] == ["a.png"]
+        assert index_records.get_embeddings(imgs("a.png"), "stale-model-hash")[0] == []
+        assert index_records.get_embeddings(imgs("a.png"), MODEL_ID)[0] == imgs("a.png")
     finally:
         service.stop()
 
@@ -688,12 +754,12 @@ def test_disabled_service_does_not_discard_embeddings(
 ) -> None:
     """Turning the feature off must not destroy an index built while it was on."""
     _save_image(image_records, "a.png")
-    index_records.upsert_embedding("a.png", "stale-model-hash", _unit_vec())
+    index_records.upsert_embedding(IndexedItem("image", "a.png"), "stale-model-hash", _unit_vec())
 
     service = ImageIndexService(encode_fn=_fake_encode, model_id=MODEL_ID)
     try:
         service.start(_make_invoker(images_service, index_records, enabled=False))
-        assert index_records.get_embeddings(["a.png"], "stale-model-hash")[0] == ["a.png"]
+        assert index_records.get_embeddings(imgs("a.png"), "stale-model-hash")[0] == imgs("a.png")
     finally:
         service.stop()
 
@@ -769,7 +835,7 @@ def test_projection_does_not_wait_for_an_in_progress_generation(
         # One image already embedded (so the projection has input) and one that cannot
         # be embedded while the generation holds the GPU (so the worker parks).
         _save_image(image_records, "done.png")
-        index_records.upsert_embedding("done.png", MODEL_ID, _unit_vec())
+        index_records.upsert_embedding(IndexedItem("image", "done.png"), MODEL_ID, _unit_vec())
         _save_image(image_records, "waiting.png")
 
         service.start(_make_invoker(images_service, index_records, device=None, session_queue=session_queue))
@@ -779,9 +845,9 @@ def test_projection_does_not_wait_for_an_in_progress_generation(
         _wait_until(lambda: index_records.get_projection("system", MODEL_ID) is not None, timeout=20.0)
         record = index_records.get_projection("system", MODEL_ID)
         assert record is not None
-        assert record.image_names == ["done.png"]
+        assert record.items == imgs("done.png")
         # And the embed really is still parked behind the generation.
-        assert index_records.get_embeddings(["waiting.png"], MODEL_ID)[0] == []
+        assert index_records.get_embeddings(imgs("waiting.png"), MODEL_ID)[0] == []
     finally:
         service.stop()
 
@@ -808,9 +874,9 @@ def test_a_partially_stored_batch_does_not_escalate_the_backoff(
 
         real_upsert = index_records.upsert_embedding
 
-        def flaky_upsert(image_name, model_id, embedding):
-            if image_name == "stored.png":
-                return real_upsert(image_name, model_id, embedding)
+        def flaky_upsert(item, model_id, embedding):
+            if item.name == "stored.png":
+                return real_upsert(item, model_id, embedding)
             raise RuntimeError("database is locked")
 
         index_records.upsert_embedding = flaky_upsert  # type: ignore[method-assign]
@@ -820,12 +886,12 @@ def test_a_partially_stored_batch_does_not_escalate_the_backoff(
 
         # Several rounds: the escalation this guards against is cumulative.
         for _ in range(8):
-            assert service._process_batch(["stored.png", "locked.png"]) is False
+            assert service._process_batch(imgs("stored.png", "locked.png")) is False
 
         assert service._systemic_failures == 0, "progress must clear the outage counter"
         assert service._backoff_seconds() == _POLL_SECONDS, "a draining index must not back off"
         # The half that stored is stored, and no image was charged an attempt.
-        assert index_records.get_embeddings(["stored.png"], MODEL_ID)[0] == ["stored.png"]
+        assert index_records.get_embeddings(imgs("stored.png"), MODEL_ID)[0] == imgs("stored.png")
         assert service._failed == set()
         assert service._attempts == {}
     finally:
@@ -979,7 +1045,7 @@ def test_permanently_failed_image_still_reaches_quiescence(
     invoker = _make_invoker(images_service, index_records)
     service.start(invoker)
 
-    _wait_until(lambda: "bad.png" in service._failed, timeout=15.0)
+    _wait_until(lambda: IndexedItem("image", "bad.png") in service._failed, timeout=15.0)
     # Failed images are excluded from pending, so the index settles and the
     # final emitted status reports quiescence over the embeddable remainder.
     _wait_until(lambda: any(e.total == 2 and e.embedded == 1 and e.pending == 0 for e in _status_events(invoker)))
@@ -1003,18 +1069,18 @@ def test_upsert_failure_routes_through_retry_to_success(
     real_upsert = index_records.upsert_embedding
     calls = {"count": 0}
 
-    def flaky_upsert(name: str, model_id: str, embedding: np.ndarray) -> None:
+    def flaky_upsert(item: IndexedItem, model_id: str, embedding: np.ndarray) -> None:
         calls["count"] += 1
         if calls["count"] == 1:
             raise RuntimeError("database is locked")
-        real_upsert(name, model_id, embedding)
+        real_upsert(item, model_id, embedding)
 
     index_records.upsert_embedding = flaky_upsert  # type: ignore[method-assign]
 
     _save_image(image_records, "flaky.png")
     images_service._on_changed(_dto_for(image_records, "flaky.png"))
 
-    _wait_until(lambda: index_records.get_embeddings(["flaky.png"], MODEL_ID)[0] == ["flaky.png"], timeout=15.0)
+    _wait_until(lambda: index_records.get_embeddings(imgs("flaky.png"), MODEL_ID)[0] == imgs("flaky.png"), timeout=15.0)
     _wait_until(lambda: any(e.total == 1 and e.embedded == 1 and e.pending == 0 for e in _status_events(invoker)))
 
 
@@ -1038,18 +1104,18 @@ def test_upsert_value_error_also_routes_through_retry(
     real_upsert = index_records.upsert_embedding
     calls = {"count": 0}
 
-    def flaky_upsert(name: str, model_id: str, embedding: np.ndarray) -> None:
+    def flaky_upsert(item: IndexedItem, model_id: str, embedding: np.ndarray) -> None:
         calls["count"] += 1
         if calls["count"] == 1:
             raise ValueError("rejected by a future storage-layer validation")
-        real_upsert(name, model_id, embedding)
+        real_upsert(item, model_id, embedding)
 
     index_records.upsert_embedding = flaky_upsert  # type: ignore[method-assign]
 
     _save_image(image_records, "flaky.png")
     images_service._on_changed(_dto_for(image_records, "flaky.png"))
 
-    _wait_until(lambda: index_records.get_embeddings(["flaky.png"], MODEL_ID)[0] == ["flaky.png"], timeout=15.0)
+    _wait_until(lambda: index_records.get_embeddings(imgs("flaky.png"), MODEL_ID)[0] == imgs("flaky.png"), timeout=15.0)
     _wait_until(lambda: any(e.total == 1 and e.embedded == 1 and e.pending == 0 for e in _status_events(invoker)))
 
 
@@ -1073,10 +1139,10 @@ def test_normalizable_extreme_magnitudes_are_not_dropped(
         service.start(_make_invoker(images_service, index_records))
         _wait_until(lambda: not service._backfill_pending.is_set())
 
-        names, matrix = index_records.get_embeddings(["tiny.png"], MODEL_ID)
-        assert names == ["tiny.png"]
+        names, matrix = index_records.get_embeddings(imgs("tiny.png"), MODEL_ID)
+        assert names == imgs("tiny.png")
         assert np.isclose(np.linalg.norm(matrix[0]), 1.0)
-        assert "tiny.png" not in service._failed
+        assert IndexedItem("image", "tiny.png") not in service._failed
     finally:
         service.stop()
 
@@ -1092,13 +1158,13 @@ def test_ineligible_transition_clears_failure_bookkeeping(
     service.start(invoker)
     _wait_until(lambda: not service._backfill_pending.is_set())
 
-    service._failed.add("gone.png")
-    service._attempts["gone.png"] = 3
+    service._failed.add(IndexedItem("image", "gone.png"))
+    service._attempts[IndexedItem("image", "gone.png")] = 3
     _save_image(image_records, "gone.png", image_category=ImageCategory.MASK)
     images_service._on_changed(_dto_for(image_records, "gone.png"))
 
-    assert "gone.png" not in service._failed
-    assert "gone.png" not in service._attempts
+    assert IndexedItem("image", "gone.png") not in service._failed
+    assert IndexedItem("image", "gone.png") not in service._attempts
     status = service.get_status()
     assert status is not None
     assert status.failed == 0
@@ -1162,7 +1228,7 @@ def test_projection_job_computes_and_caches(
     record = index_records.get_projection("system", MODEL_ID)
     assert record is not None
     assert record.point_count == 3
-    assert sorted(record.image_names) == [f"img-{i}.png" for i in range(3)]
+    assert sorted(record.items) == [IndexedItem("image", f"img-{i}.png") for i in range(3)]
     assert record.coords.shape == (3, 2)
     _wait_until(
         lambda: any(
@@ -1196,7 +1262,7 @@ def test_projection_failure_caches_empty_result_instead_of_looping(
     assert record.point_count == 0
     # The empty cache claims the scope it failed against, so it is NOT stale —
     # clients see "empty" rather than re-enqueueing a doomed recompute forever.
-    accessible = index_records.list_accessible_embedded_images(None, MODEL_ID)
+    accessible = index_records.list_accessible_embedded_items(None, MODEL_ID)
     assert record.scope_hash == scope_hash(MODEL_ID, accessible)
 
     # ...but "not stale" must not mean "never again". Asserting only the state
@@ -1280,7 +1346,7 @@ def test_a_cached_row_with_no_finite_points_is_a_failed_fit_not_a_result(
     service.start(_make_invoker(images_service, index_records))
     _wait_until(lambda: not service._backfill_pending.is_set())
 
-    names = index_records.list_accessible_embedded_images(None, MODEL_ID)
+    names = index_records.list_accessible_embedded_items(None, MODEL_ID)
     current_hash = scope_hash(MODEL_ID, names)
     index_records.set_projection(
         "system",
@@ -1327,7 +1393,7 @@ def test_a_lost_projection_write_does_not_burn_the_retry(
 
     # The empty row a failed fit leaves behind, stamped with the current scope:
     # what the retry is granted against.
-    names = index_records.list_accessible_embedded_images(None, MODEL_ID)
+    names = index_records.list_accessible_embedded_items(None, MODEL_ID)
     current_hash = scope_hash(MODEL_ID, names)
     index_records.set_projection(
         "system",
@@ -1387,7 +1453,7 @@ def test_an_explicit_refresh_restores_a_spent_retry(
 
     service.request_projection("system")
     _wait_until(lambda: fits["n"] == 1, timeout=15)
-    current_hash = scope_hash(MODEL_ID, index_records.list_accessible_embedded_images(None, MODEL_ID))
+    current_hash = scope_hash(MODEL_ID, index_records.list_accessible_embedded_items(None, MODEL_ID))
     assert service.request_projection("system", failed_scope=current_hash) is True
     _wait_until(lambda: fits["n"] == 2, timeout=15)
     _wait_for_spent_retry(service, "system", current_hash)
@@ -1440,7 +1506,7 @@ def test_systemic_embedding_outage_does_not_starve_projections(
         # can never embed while the encoder is down.
         _save_image(image_records, "done.png")
         _save_image(image_records, "stuck.png")
-        index_records.upsert_embedding("done.png", MODEL_ID, embedded_ok)
+        index_records.upsert_embedding(IndexedItem("image", "done.png"), MODEL_ID, embedded_ok)
 
         service.start(_make_invoker(images_service, index_records))
         _wait_until(lambda: service._systemic_failures >= 1, timeout=20.0)
@@ -1451,7 +1517,7 @@ def test_systemic_embedding_outage_does_not_starve_projections(
         _wait_until(lambda: index_records.get_projection("system", MODEL_ID) is not None, timeout=30.0)
         record = index_records.get_projection("system", MODEL_ID)
         assert record is not None
-        assert record.image_names == ["done.png"]
+        assert record.items == imgs("done.png")
         # And the outage is still an outage: no image was retired to make this happen.
         assert service._failed == set()
         assert service._systemic_failures >= 1
@@ -1480,11 +1546,11 @@ def test_search_similar_ranks_by_cosine_and_respects_scope(
 
     for name, vec in [("a.png", unit(0)), ("close.png", unit(1, mix=0.9)), ("far.png", unit(2))]:
         _save_image(image_records, name)
-        index_records.upsert_embedding(name, MODEL_ID, vec)
+        index_records.upsert_embedding(IndexedItem("image", name), MODEL_ID, vec)
 
     results = service.search_similar(None, unit(0), limit=2)
 
-    assert [name for name, _ in results] == ["a.png", "close.png"]
+    assert [item for item, _ in results] == imgs("a.png", "close.png")
     assert results[0][1] > results[1][1] > 0.0
 
     # limit caps the result count; scores are descending.
@@ -1551,7 +1617,7 @@ def test_projection_request_is_requeued_when_the_database_read_fails(
     answered `enqueued: true`, and an event-driven client would wait forever.
     """
     calls = {"n": 0}
-    real_list = index_records.list_accessible_embedded_images
+    real_list = index_records.list_accessible_embedded_items
 
     def flaky_list(user_id, model_id):
         calls["n"] += 1
@@ -1559,7 +1625,7 @@ def test_projection_request_is_requeued_when_the_database_read_fails(
             raise RuntimeError("database is locked")
         return real_list(user_id, model_id)
 
-    index_records.list_accessible_embedded_images = flaky_list  # type: ignore[method-assign]
+    index_records.list_accessible_embedded_items = flaky_list  # type: ignore[method-assign]
 
     service = ImageIndexService(encode_fn=_fake_encode, model_id=MODEL_ID)
     try:
@@ -1622,7 +1688,7 @@ def test_unchanged_scope_does_not_recompute_the_projection(
         # the row alone leaves the backfill unarmed, so the worker would never see it.
         _save_image(image_records, "new.png")
         images_service._on_changed(_dto_for(image_records, "new.png"))
-        _wait_until(lambda: index_records.get_embeddings(["new.png"], MODEL_ID)[0] == ["new.png"], timeout=30.0)
+        _wait_until(lambda: index_records.get_embeddings(imgs("new.png"), MODEL_ID)[0] == imgs("new.png"), timeout=30.0)
         with patch.object(image_index_default, "compute_umap", counting_umap):
             service.request_projection("system")
             _wait_until(lambda: fits["n"] == 2, timeout=30.0)
@@ -1956,7 +2022,7 @@ def test_search_similar_scopes_to_the_requesting_user(
 
     # system owns mine.png; the other user owns theirs.png (both unboarded).
     _save_image(image_records, "mine.png")
-    index_records.upsert_embedding("mine.png", MODEL_ID, unit(0))
+    index_records.upsert_embedding(IndexedItem("image", "mine.png"), MODEL_ID, unit(0))
     image_records.save(
         image_name="theirs.png",
         image_origin=ResourceOrigin.INTERNAL,
@@ -1966,16 +2032,16 @@ def test_search_similar_scopes_to_the_requesting_user(
         has_workflow=False,
         user_id=other_user.user_id,
     )
-    index_records.upsert_embedding("theirs.png", MODEL_ID, unit(0))
+    index_records.upsert_embedding(IndexedItem("image", "theirs.png"), MODEL_ID, unit(0))
 
     # The other user's scope must exclude the system user's private image
     # even though it scores identically.
     names = [name for name, _ in service.search_similar(other_user.user_id, unit(0), limit=10)]
-    assert names == ["theirs.png"]
+    assert names == imgs("theirs.png")
 
     # Admin scope (None) sees both.
-    admin_names = {name for name, _ in service.search_similar(None, unit(0), limit=10)}
-    assert admin_names == {"mine.png", "theirs.png"}
+    admin_items = {item for item, _ in service.search_similar(None, unit(0), limit=10)}
+    assert admin_items == set(imgs("mine.png", "theirs.png"))
 
 
 def test_query_vectors_reject_a_non_finite_embedding(service: ImageIndexService) -> None:
@@ -2532,3 +2598,193 @@ def test_a_transient_custom_terms_read_failure_keeps_the_rebuild_queued(
     _wait_until(lambda: service.get_vocab_build_state() == ("ready", None), timeout=15)
     assert calls["count"] >= 2
     assert service.get_vocab_embeddings()[0] == ["a cat", "dog"]
+
+
+# --- Videos ---
+
+
+def test_backfill_indexes_preexisting_videos(
+    image_records: SqliteImageRecordStorage,
+    images_service: ImageService,
+    videos_service: VideoService,
+    video_records: SqliteVideoRecordStorage,
+    index_records: ImageIndexRecordsSqlite,
+    service: ImageIndexService,
+) -> None:
+    _save_image(image_records, "img.png")
+    _save_video(video_records, "clip.mp4")
+    _save_video(video_records, "intermediate.mp4", is_intermediate=True)
+    _save_video(video_records, "mask.mp4", video_category=ImageCategory.MASK)
+
+    service.start(
+        _make_invoker(images_service, index_records, videos_service=videos_service, video_records=video_records)
+    )
+
+    _wait_until(lambda: index_records.count_index_status(MODEL_ID).embedded == 2)
+    assert index_records.get_embeddings(vids("clip.mp4"), MODEL_ID)[0] == vids("clip.mp4")
+    assert index_records.get_embeddings(vids("intermediate.mp4", "mask.mp4"), MODEL_ID)[0] == []
+
+
+def test_new_video_is_indexed_from_its_thumbnail(
+    images_service: ImageService,
+    videos_service: VideoService,
+    video_records: SqliteVideoRecordStorage,
+    index_records: ImageIndexRecordsSqlite,
+    service: ImageIndexService,
+) -> None:
+    invoker = _make_invoker(images_service, index_records, videos_service=videos_service, video_records=video_records)
+    service.start(invoker)
+    _wait_until(lambda: not service._backfill_pending.is_set())
+
+    _save_video(video_records, "new.mp4")
+    _save_video(video_records, "new-intermediate.mp4", is_intermediate=True)
+    # Fire the callbacks the way VideoService.create would, i.e. after the thumbnail is written.
+    videos_service._on_changed(_video_dto_for(video_records, "new.mp4"))
+    videos_service._on_changed(_video_dto_for(video_records, "new-intermediate.mp4"))
+
+    _wait_until(lambda: index_records.get_embeddings(vids("new.mp4"), MODEL_ID)[0] == vids("new.mp4"))
+    assert index_records.get_embeddings(vids("new-intermediate.mp4"), MODEL_ID)[0] == []
+
+
+def test_video_thumbnail_is_what_gets_embedded(
+    images_service: ImageService,
+    videos_service: VideoService,
+    video_records: SqliteVideoRecordStorage,
+    index_records: ImageIndexRecordsSqlite,
+) -> None:
+    # The embedding must come from the video's own thumbnail, not from the image service (which
+    # here returns a different colour) — a wrong source would still produce a plausible vector.
+    embedded: list[Image.Image] = []
+
+    def capture(images: list[Image.Image]) -> np.ndarray:
+        embedded.extend(images)
+        return np.stack([_unit_vec() for _ in images])
+
+    service = ImageIndexService(encode_fn=capture, model_id=MODEL_ID)
+    _save_video(video_records, "clip.mp4")
+    try:
+        service.start(
+            _make_invoker(images_service, index_records, videos_service=videos_service, video_records=video_records)
+        )
+        _wait_until(lambda: index_records.get_embeddings(vids("clip.mp4"), MODEL_ID)[0] == vids("clip.mp4"))
+    finally:
+        service.stop()
+
+    assert embedded, "the encoder was never called"
+    assert embedded[0].size == (16, 16)
+    # Nearest-colour rather than equality: the thumbnail is a lossy WEBP, so its pixels are
+    # near the colour it was written with, not identical to it.
+    pixel = embedded[0].getpixel((0, 0))
+    thumbnail_colour = Image.new("RGB", (1, 1), "teal").getpixel((0, 0))
+    image_service_colour = Image.new("RGB", (1, 1), "purple").getpixel((0, 0))
+
+    def distance(a: tuple[int, ...], b: tuple[int, ...]) -> int:
+        return sum(abs(x - y) for x, y in zip(a, b, strict=True))
+
+    assert distance(pixel, thumbnail_colour) < distance(pixel, image_service_colour)
+
+
+def test_unreadable_video_thumbnail_is_charged_to_the_video(
+    images_service: ImageService,
+    videos_service: VideoService,
+    video_records: SqliteVideoRecordStorage,
+    index_records: ImageIndexRecordsSqlite,
+    service: ImageIndexService,
+) -> None:
+    # A video whose thumbnail never got written must not stall the backfill; it retires after
+    # _MAX_ATTEMPTS exactly as an unreadable image does.
+    _save_video(video_records, "no-thumbnail.mp4")
+    videos_service.get_path = lambda video_name, thumbnail=False: "/nonexistent/thumb.webp"  # type: ignore[method-assign]
+
+    service.start(
+        _make_invoker(images_service, index_records, videos_service=videos_service, video_records=video_records)
+    )
+
+    _wait_until(lambda: IndexedItem("video", "no-thumbnail.mp4") in service._failed)
+    assert index_records.get_embeddings(vids("no-thumbnail.mp4"), MODEL_ID)[0] == []
+
+
+def test_deleted_video_is_forgotten(
+    images_service: ImageService,
+    videos_service: VideoService,
+    video_records: SqliteVideoRecordStorage,
+    index_records: ImageIndexRecordsSqlite,
+    service: ImageIndexService,
+) -> None:
+    invoker = _make_invoker(images_service, index_records, videos_service=videos_service, video_records=video_records)
+    service.start(invoker)
+    _save_video(video_records, "clip.mp4")
+    videos_service._on_changed(_video_dto_for(video_records, "clip.mp4"))
+    _wait_until(lambda: index_records.get_embeddings(vids("clip.mp4"), MODEL_ID)[0] == vids("clip.mp4"))
+
+    # Seeded so the assertions below depend on the delete callback rather than on the FK
+    # cascade: bookkeeping a deleted video leaves behind inflates `failed` for the life of the
+    # process, and `pending` can then never drain to zero.
+    service._failed.add(IndexedItem("video", "clip.mp4"))
+    service._attempts[IndexedItem("video", "clip.mp4")] = 3
+
+    video_records.delete("clip.mp4")
+    videos_service._on_deleted("clip.mp4")
+
+    _wait_until(lambda: index_records.count_index_status(MODEL_ID).total == 0)
+    assert IndexedItem("video", "clip.mp4") not in service._pending
+    assert IndexedItem("video", "clip.mp4") not in service._failed
+    assert IndexedItem("video", "clip.mp4") not in service._attempts
+
+
+def test_video_owner_is_poked_when_its_embedding_lands(
+    images_service: ImageService,
+    videos_service: VideoService,
+    video_records: SqliteVideoRecordStorage,
+    image_records: SqliteImageRecordStorage,
+    index_records: ImageIndexRecordsSqlite,
+    service: ImageIndexService,
+) -> None:
+    # The status event is admin-only, so this per-user poke is the only signal a non-admin
+    # gets that their generation reached the index. The owner has to be looked up in the
+    # videos table: asking the images table for a video name finds nothing, and the lookup is
+    # deliberately swallowed, so the map would simply never refresh for them.
+    invoker = _make_invoker(
+        images_service,
+        index_records,
+        image_records=image_records,
+        videos_service=videos_service,
+        video_records=video_records,
+    )
+    service.start(invoker)
+    _wait_until(lambda: not service._backfill_pending.is_set())
+
+    _save_video(video_records, "mine.mp4")
+    videos_service._on_changed(_video_dto_for(video_records, "mine.mp4"))
+
+    _wait_until(
+        lambda: any(
+            isinstance(e, ImageIndexUpdatedEvent) and e.user_id == "system" for e in invoker.services.events.events
+        )
+    )
+
+
+def test_video_leaving_eligibility_clears_its_failure_bookkeeping(
+    images_service: ImageService,
+    videos_service: VideoService,
+    video_records: SqliteVideoRecordStorage,
+    index_records: ImageIndexRecordsSqlite,
+    service: ImageIndexService,
+) -> None:
+    # A video that stops being a gallery item must stop counting against `failed`, or it skews
+    # `pending` for the rest of the process. The category half of the predicate is the part
+    # that is genuinely video-specific — a different field on a different DTO.
+    invoker = _make_invoker(images_service, index_records, videos_service=videos_service, video_records=video_records)
+    service.start(invoker)
+    _wait_until(lambda: not service._backfill_pending.is_set())
+
+    service._failed.add(IndexedItem("video", "gone.mp4"))
+    service._attempts[IndexedItem("video", "gone.mp4")] = 3
+    _save_video(video_records, "gone.mp4", video_category=ImageCategory.MASK)
+    videos_service._on_changed(_video_dto_for(video_records, "gone.mp4"))
+
+    assert IndexedItem("video", "gone.mp4") not in service._failed
+    assert IndexedItem("video", "gone.mp4") not in service._attempts
+    status = service.get_status()
+    assert status is not None
+    assert status.failed == 0
