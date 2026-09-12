@@ -12,9 +12,31 @@ from invokeai.backend.flux.modules.autoencoder import AutoEncoder, resolve_tile_
 from invokeai.backend.util.attention import sdpa_score_matrix_bytes
 from invokeai.backend.util.devices import TorchDevice
 
+# The diffusers AutoencoderKL (SD1/SDXL, SD3, CogView4) and the FLUX.1 AutoEncoder run the same
+# mid-block self-attention as the FLUX.2 VAE: one head over the 512-channel width, on the
+# 8x-downsampled grid. Where that attention runs on the math kernel (see `sdpa_score_matrix_bytes`)
+# its score matrix is the dominant term for a large untiled image, exactly as it is for FLUX.2;
+# `_vae_mid_block_score_matrix_bytes` prices it for those estimators the same way. The video VAEs
+# (Wan, Qwen-Image) need no such term: their ROCm constants below were measured with math attention.
+_CLASSIC_VAE_MID_BLOCK_HEADS = 1
+_CLASSIC_VAE_MID_BLOCK_HEAD_DIM = 512
+
 _WAN_VAE_SINGLE_FRAME_DECODE_SCALING_CONSTANT = 2900
 _WAN_VAE_VIDEO_DECODE_SCALING_CONSTANT_A14B = 6500
 _WAN_VAE_VIDEO_DECODE_SCALING_CONSTANT_TI2V = 7000
+
+
+def _vae_mid_block_score_matrix_bytes(
+    out_h: int, out_w: int, dtype: torch.dtype, batch_size: int = 1, device: torch.device | None = None
+) -> int:
+    """Score-matrix bytes for a classic VAE's mid-block attention over an `out_h` x `out_w` output."""
+    return sdpa_score_matrix_bytes(
+        device=device if device is not None else TorchDevice.choose_torch_device(),
+        dtype=dtype,
+        num_heads=_CLASSIC_VAE_MID_BLOCK_HEADS * batch_size,
+        head_dim=_CLASSIC_VAE_MID_BLOCK_HEAD_DIM,
+        seq_len=(out_h // LATENT_SCALE_FACTOR) * (out_w // LATENT_SCALE_FACTOR),
+    )
 
 
 def estimate_vae_working_memory_sd15_sdxl(
@@ -52,6 +74,12 @@ def estimate_vae_working_memory_sd15_sdxl(
         w = latent_scale_factor_for_operation * image_tensor.shape[-1]
         working_memory = h * w * element_size * scaling_constant
 
+    if isinstance(vae, AutoencoderKL):
+        # max, not sum: the mid-block attention and the full-resolution convolutions peak in
+        # different phases of the forward (see the FLUX.2 estimator for the measurements).
+        score_dtype = torch.float32 if fp32 else next(vae.parameters()).dtype
+        working_memory = max(working_memory, _vae_mid_block_score_matrix_bytes(h, w, score_dtype))
+
     if fp32:
         # If we are running in FP32, then we should account for the likely increase in model size (~250MB).
         working_memory += 250 * 2**20
@@ -74,7 +102,9 @@ def estimate_vae_working_memory_cogview4(
     scaling_constant = 2200 if operation == "decode" else 1100
     working_memory = h * w * element_size * scaling_constant
 
-    return int(working_memory)
+    # max, not sum: the mid-block attention and the full-resolution convolutions peak in different
+    # phases of the forward (see the FLUX.2 estimator for the measurements).
+    return int(max(working_memory, _vae_mid_block_score_matrix_bytes(h, w, next(vae.parameters()).dtype)))
 
 
 # What a tiled decode does *not* bound: the assembled image, several times over, per output pixel.
@@ -148,10 +178,15 @@ def estimate_vae_working_memory_flux(
         # A 25% margin for tile overlap and the number of tiles, mirroring the SD1/SDXL estimator.
         working_memory = tile_h * tile_w * element_size * scaling_constant * 1.25
         working_memory += out_h * out_w * _IMAGE_CHANNELS * (_FLUX_VAE_TILED_IMAGE_COPIES * element_size + 1)
+        score_h, score_w = tile_h, tile_w
     else:
         working_memory = out_h * out_w * element_size * scaling_constant
+        score_h, score_w = out_h, out_w
 
-    return int(working_memory)
+    # max, not sum: the mid-block attention and the full-resolution convolutions peak in different
+    # phases of the forward (see the FLUX.2 estimator for the measurements).
+    dtype = next(vae.parameters()).dtype
+    return int(max(working_memory, _vae_mid_block_score_matrix_bytes(score_h, score_w, dtype)))
 
 
 # The FLUX.2 VAE runs one attention block at the bottom of the encoder and one at the top of the
@@ -226,14 +261,15 @@ def estimate_vae_working_memory_flux2(
 
     That linear term holds only while ``AutoencoderKLFlux2``'s mid-block attention runs through a
     fused SDPA kernel, which is what CUDA does (verified: the memory-efficient kernel takes the
-    512-wide head, and measured peak stays linear from 512 to 1536px). A build with no fused kernel
-    for the shapes -- ROCm/gfx1100 reports ``math`` for this 512-wide head, though gfx1201 takes it
-    on flash, and MPS has no fused kernel at all -- materializes a (pixels/8)^2 score matrix, which
-    grows quadratically and overtakes the linear term somewhere past 1280px. We ask torch which path
-    applies rather than assuming, so the estimate is right on all of them.
+    512-wide head, and measured peak stays linear from 512 to 1536px). Where the math kernel runs
+    instead -- every ROCm build, by policy, because its fused kernels return wrong output for this
+    head width (see ``rocm_sdpa_uses_math_kernel``), and MPS, which has no fused kernel at all -- it
+    materializes a (pixels/8)^2 score matrix, which grows quadratically and overtakes the linear
+    term somewhere past 1280px. ``sdpa_score_matrix_bytes`` applies the ROCm rule and asks torch
+    for everything else, so the estimate is right on all of them.
 
     The two terms are independent: a build can have a fused kernel and still need the larger
-    convolution constant, which is exactly what gfx1201 does. They also do not add -- see the
+    convolution constant (gfx1201 did, before the ROCm rule above). They also do not add -- see the
     ``max`` at the end of this function for why, and for the measurements behind it. (Unlike the transformer, this attention does not go through
     diffusers' attention dispatcher -- ``AttnProcessor2_0`` calls ``F.scaled_dot_product_attention``
     itself -- so torch's own answer is the whole answer here.)
@@ -553,4 +589,6 @@ def estimate_vae_working_memory_sd3(
 
     working_memory = h * w * element_size * scaling_constant
 
-    return int(working_memory)
+    # max, not sum: the mid-block attention and the full-resolution convolutions peak in different
+    # phases of the forward (see the FLUX.2 estimator for the measurements).
+    return int(max(working_memory, _vae_mid_block_score_matrix_bytes(h, w, next(vae.parameters()).dtype)))

@@ -7,7 +7,7 @@ import type {
   WidgetViewProps,
 } from '@workbench/widgetContracts';
 
-import { ChakraProvider } from '@chakra-ui/react';
+import { ChakraProvider, HStack } from '@chakra-ui/react';
 import { system } from '@theme/system';
 import { closeWorkbenchSettings, settingsDialogStore } from '@workbench/settings/settingsDialogStore';
 import i18next from 'i18next';
@@ -86,10 +86,14 @@ const implementation: WidgetImplementation = {
   headerActions: ({ region }: WidgetViewProps) => {
     windowMocks.actionsRegion = region;
 
+    // Widgets group their actions in a flex row, as the real header actions
+    // do; the gear the window adds beside that group has to stay on its line.
     return (
-      <button aria-label="Toggle cluster labels" type="button">
-        <TagsIcon />
-      </button>
+      <HStack gap="1">
+        <button aria-label="Toggle cluster labels" type="button">
+          <TagsIcon />
+        </button>
+      </HStack>
     );
   },
   headerMenu: () => <div data-testid="header-menu" />,
@@ -198,6 +202,23 @@ describe('FloatingWidgetWindow chrome', () => {
     expect(host?.querySelector('button[aria-label*="actions"]')).toBeNull();
     expect(host?.querySelector('button[aria-label="Float Window"]')).toBeNull();
     expect(host?.querySelector<HTMLButtonElement>('button[aria-label="Dock to panel"]')).not.toBeNull();
+  });
+
+  it('keeps the settings gear in the title-bar strip instead of beneath the widget actions', async () => {
+    await renderWindow();
+
+    const action = host!.querySelector<HTMLButtonElement>('button[aria-label="Toggle cluster labels"]')!;
+    const gear = host!.querySelector<HTMLButtonElement>('button[aria-label="Image Map settings"]')!;
+    const shade = host!.querySelector<HTMLButtonElement>('button[aria-label="Shade"]')!;
+    const [actionRect, gearRect, shadeRect] = [action, gear, shade].map((button) => button.getBoundingClientRect());
+
+    // A block-level wrapper around the slot laid the gear out under the
+    // actions group — visibly a second row of chrome in the title bar.
+    expect(gearRect.top).toBeLessThan(actionRect.bottom);
+    expect(gearRect.bottom).toBeGreaterThan(actionRect.top);
+    // Strip order: widget actions, then the gear, then the window's controls.
+    expect(gearRect.left).toBeGreaterThanOrEqual(actionRect.right);
+    expect(shadeRect.left).toBeGreaterThanOrEqual(gearRect.right);
   });
 
   it('opens settings for the floating widget instance and remembers its gear for focus restoration', async () => {
