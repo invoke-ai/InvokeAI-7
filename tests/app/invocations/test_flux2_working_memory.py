@@ -1046,10 +1046,11 @@ class TestSdpaBackendProbe:
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="asks the real CUDA/ROCm dispatcher")
     def test_this_build_reports_its_own_dispatch(self):
         """The head dim is the discriminator that actually holds: CUDA's memory-efficient kernel
-        takes the VAE's 512-wide head, ROCm caps at 128 and reports `math` for it. Masks are not a
-        discriminator -- gfx1100 reports the memory-efficient kernel for a masked 128-wide head just
-        as CUDA does -- so the masked case only has to agree with whatever torch says, which is the
-        whole point of asking it."""
+        takes the VAE's 512-wide head, and on ROCm the head-dim guard sends it to `math` by policy
+        (its fused kernels return wrong output there). Masks are not a discriminator -- gfx1100
+        reports the memory-efficient kernel for a masked 128-wide head just as CUDA does -- so the
+        masked case only has to agree with whatever torch says, which is the whole point of asking
+        it."""
         vae_bytes = sdpa_score_matrix_bytes(
             device=torch.device("cuda"), dtype=torch.bfloat16, num_heads=1, head_dim=512, seq_len=16384
         )
