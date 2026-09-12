@@ -23,10 +23,15 @@ class IdealSizeOutput(BaseInvocationOutput):
 
 @invocation(
     "ideal_size",
-    title="Ideal Size - SD1.5, SDXL",
+    # No architecture suffix: the node reads what the architecture declares, so it now answers for
+    # every registered one rather than for the six the old if/elif named.
+    title="Ideal Size",
     tags=["latents", "math", "ideal_size"],
     category="latents",
-    version="1.0.6",
+    # Minor, not patch: the fields are unchanged, so existing workflows still load, but the answer
+    # moved. FLUX, FLUX.2 and SD3 are trimmed to their declared 16 rather than to a hardcoded 8,
+    # and every architecture outside the six the old if/elif named returns a size where it raised.
+    version="1.1.0",
 )
 class IdealSizeInvocation(BaseInvocation):
     """Calculates the ideal size for generation to avoid duplication"""

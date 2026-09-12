@@ -48,6 +48,9 @@ register(
         # enforces the A14B number as a field constraint and the TI2V-5B one inside `invoke()`.
         dimension_grid_by_variant={WanVariantType.TI2V_5B: 32},
         guidance_label="Guidance",
+        # wan_denoise.guidance_scale is ge=1.0. Its optional low-noise counterpart is a separate
+        # field with its own ge=0.0 and its own control, not this slider.
+        guidance_min=1.0,
         scheduler_set="flow",
     ),
     VaeFacet(

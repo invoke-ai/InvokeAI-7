@@ -17750,6 +17750,23 @@
             "title": "Guidance Label",
             "description": "What to call the guidance slider: 'CFG' or 'Guidance'."
           },
+          "guidance_min": {
+            "type": "number",
+            "title": "Guidance Min",
+            "description": "Lowest guidance value the denoise node accepts; a smaller one fails at enqueue."
+          },
+          "guidance_max": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Guidance Max",
+            "description": "Highest guidance value the denoise node accepts; null means it enforces no ceiling."
+          },
           "scheduler_set": {
             "anyOf": [
               {
@@ -17842,7 +17859,7 @@
           }
         },
         "type": "object",
-        "required": ["negative_prompt", "dimension_grid", "spatial_compression", "guidance_label"],
+        "required": ["negative_prompt", "dimension_grid", "spatial_compression", "guidance_label", "guidance_min"],
         "title": "ArchitectureFeatures",
         "description": "What a UI may offer for this architecture."
       },
@@ -42320,9 +42337,9 @@
         },
         "required": ["type", "id"],
         "tags": ["latents", "math", "ideal_size"],
-        "title": "Ideal Size - SD1.5, SDXL",
+        "title": "Ideal Size",
         "type": "object",
-        "version": "1.0.6",
+        "version": "1.1.0",
         "output": {
           "$ref": "#/components/schemas/IdealSizeOutput"
         }

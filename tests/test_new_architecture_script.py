@@ -1,8 +1,9 @@
 """The scaffolder generates valid stubs, and its residual list stays honest."""
 
 import ast
-import sys
+import importlib.util
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 
 import pytest
@@ -10,15 +11,29 @@ import pytest
 from invokeai.backend.architectures import registry
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
-from new_architecture import (  # noqa: E402
-    defs_module,
-    derive_residual_edits,
-    invocations_package,
-    planned_files,
-    starter_models_module,
-)
+
+def _load_module(module_path: Path, module_name: str) -> ModuleType:
+    """Load a `scripts/` module by path, as `test_check_pins.py` and `test_docs_json_export.py` do.
+
+    `scripts/` is not a package and is not importable. Putting it on `sys.path` instead would leave
+    it there for every other file the xdist worker runs afterwards, where a script's name could
+    shadow a real module.
+    """
+    spec = importlib.util.spec_from_file_location(module_name, module_path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+new_architecture = _load_module(REPO_ROOT / "scripts" / "new_architecture.py", "new_architecture")
+defs_module = new_architecture.defs_module
+derive_residual_edits = new_architecture.derive_residual_edits
+invocations_package = new_architecture.invocations_package
+planned_files = new_architecture.planned_files
+starter_models_module = new_architecture.starter_models_module
 
 REQUIRED_FACETS = {"LatentSpaceFacet", "ConditioningFacet", "DefaultSettingsFacet", "ModalityFacet", "FeaturesFacet"}
 

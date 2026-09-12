@@ -78,6 +78,28 @@ class FeaturesFacet(Facet):
     otherwise. Today only FLUX sets both (cfg_scale 1.0 meaning "off", guidance 3.5 meaning the
     distilled embedding)."""
 
+    guidance_min: float = 0.0
+    """Lowest value the guidance slider may offer.
+
+    Pinned to the `ge` of the node field the slider's value is actually sent as -- `guidance` for
+    the models whose `guidance_label` says so, `cfg_scale` or `guidance_scale` for the rest -- so a
+    test asserts the two agree and the UI cannot offer a number the graph will refuse. 0.0 is the
+    default because most denoise nodes constrain neither end, and a slider still starts somewhere.
+
+    Anima, ERNIE-Image, Wan and Z-Image are the exceptions: their `guidance_scale` is `ge=1.0`,
+    1.0 meaning "off", with nothing below it. The UI offered 0 and 0.5 for them anyway, and
+    `graph.ts` forwarded the value unchanged into an enqueue that failed validation."""
+
+    guidance_max: float | None = None
+    """Highest value the guidance slider may offer, or None where the node enforces no ceiling.
+
+    FLUX.2 is the only architecture with one: `flux2_denoise.guidance` is `le=20`, while the UI's
+    numeric input accepted 100 for every architecture alike -- so 30, a value FLUX Fill really does
+    want, persisted on a FLUX.2 model and was submitted and rejected.
+
+    None is the node's answer, not the UI's: a client still needs its own slider ceiling, and None
+    only says the graph will not reject a large value."""
+
     scheduler_set: SchedulerSet | None = None
     scheduler_applies_to_graph: bool = False
     """Whether the chosen scheduler reaches the graph, or is only a UI affordance."""
@@ -105,6 +127,12 @@ class FeaturesFacet(Facet):
                 "FeaturesFacet.dimension_grid_by_variant has a None key. Unlike "
                 "DefaultSettingsFacet.by_variant, it has no fallback entry: `dimension_grid` is the "
                 "answer for every variant not named here, and a None key would be dead weight."
+            )
+
+        if self.guidance_max is not None and self.guidance_max < self.guidance_min:
+            raise ValueError(
+                f"FeaturesFacet declares a guidance range that holds no values: guidance_min="
+                f"{self.guidance_min} is above guidance_max={self.guidance_max}."
             )
 
     def resolve_dimension_grid(self, variant: AnyVariant | None = None) -> int:
