@@ -218,9 +218,7 @@ export const patchGalleryItemCaches = (client: QueryClient, patch: GalleryItemCa
   // never reconcile it: prune it in the same optimistic step (and restore it
   // with the same rollback) as the list caches it feeds.
   const rollbackClusterMembers =
-    patch.kind === 'delete'
-      ? pruneImageClusterMembers(patch.result.succeeded.filter((ref) => ref.kind === 'image').map((ref) => ref.name))
-      : null;
+    patch.kind === 'delete' ? pruneImageClusterMembers(patch.result.succeeded.map(toGalleryItemKey)) : null;
   const rollbackEntries: ItemCacheRollbackEntry[] = [];
 
   for (const query of getGalleryItemListQueries(client)) {

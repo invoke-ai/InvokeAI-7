@@ -39,10 +39,31 @@ describe('searchGallerySemantic', () => {
 
     const results = await searchGallerySemantic({ kind: 'text', query: 'red barn' }, { limit: 50 });
 
-    expect(mocks.apiFetchJson).toHaveBeenCalledWith('/api/v1/image_map/search?limit=50&q=red+barn', {
-      signal: undefined,
+    expect(mocks.apiFetchJson).toHaveBeenCalledWith(
+      '/api/v1/image_map/search?include_videos=true&limit=50&q=red+barn',
+      {
+        signal: undefined,
+      }
+    );
+    expect(results).toEqual([{ ref: { kind: 'image', name: 'a.png' }, score: 0.9 }]);
+  });
+
+  it('carries each hit kind so videos hydrate through their own endpoint', async () => {
+    mocks.apiFetchJson.mockResolvedValue({
+      results: [
+        { image_name: 'clip.mp4', kind: 'video', score: 0.9 },
+        { image_name: 'a.png', kind: 'image', score: 0.5 },
+      ],
     });
-    expect(results).toEqual([{ imageName: 'a.png', score: 0.9 }]);
+
+    const results = await searchGallerySemantic({ kind: 'text', query: 'surf' });
+
+    // Reading a video hit as an image sends the gallery to /images/i/<name>,
+    // which 404s — a ranked result that renders as a broken tile.
+    expect(results).toEqual([
+      { ref: { kind: 'video', name: 'clip.mp4' }, score: 0.9 },
+      { ref: { kind: 'image', name: 'a.png' }, score: 0.5 },
+    ]);
   });
 
   it('builds image-similarity queries with the default result cap', async () => {
@@ -50,9 +71,12 @@ describe('searchGallerySemantic', () => {
 
     await searchGallerySemantic({ imageName: 'ref.png', kind: 'image' });
 
-    expect(mocks.apiFetchJson).toHaveBeenCalledWith('/api/v1/image_map/search?image_name=ref.png&limit=500', {
-      signal: undefined,
-    });
+    expect(mocks.apiFetchJson).toHaveBeenCalledWith(
+      '/api/v1/image_map/search?image_name=ref.png&include_videos=true&limit=500',
+      {
+        signal: undefined,
+      }
+    );
   });
 
   it('POSTs url queries to the by-image endpoint', async () => {
@@ -61,10 +85,10 @@ describe('searchGallerySemantic', () => {
     const results = await searchGallerySemantic({ kind: 'url', url: 'https://example.com/cat.jpg' }, { limit: 25 });
 
     expect(mocks.apiFetchJson).toHaveBeenCalledWith(
-      '/api/v1/image_map/search_by_image?image_url=https%3A%2F%2Fexample.com%2Fcat.jpg&limit=25',
+      '/api/v1/image_map/search_by_image?image_url=https%3A%2F%2Fexample.com%2Fcat.jpg&include_videos=true&limit=25',
       { method: 'POST', signal: undefined }
     );
-    expect(results).toEqual([{ imageName: 'a.png', score: 0.8 }]);
+    expect(results).toEqual([{ ref: { kind: 'image', name: 'a.png' }, score: 0.8 }]);
   });
 
   it('POSTs registered dropped files as multipart and fails clearly when the blob is gone', async () => {
@@ -75,7 +99,7 @@ describe('searchGallerySemantic', () => {
 
     const [path, init] = mocks.apiFetchJson.mock.calls[0] as [string, RequestInit];
 
-    expect(path).toBe('/api/v1/image_map/search_by_image?limit=10');
+    expect(path).toBe('/api/v1/image_map/search_by_image?include_videos=true&limit=10');
     expect(init.method).toBe('POST');
     expect(init.body).toBeInstanceOf(FormData);
     expect((init.body as FormData).get('image')).toBeInstanceOf(Blob);
@@ -134,19 +158,21 @@ describe('listSemanticGalleryItemNames', () => {
 
   it('answers cluster queries from the registry without a server round trip', async () => {
     mocks.apiFetchJson.mockReset();
-    const clusterId = registerImageCluster(['near.png', 'far.png'], 'beaches');
+    const clusterId = registerImageCluster(['image:near.png', 'video:clip.mp4'], 'beaches');
 
     await expect(listSemanticGalleryItemNames({ query: { clusterId, kind: 'cluster' } })).resolves.toEqual({
       items: [
         { kind: 'image', name: 'near.png' },
-        { kind: 'image', name: 'far.png' },
+        // A clip clustered with the images it resembles is listed as a video,
+        // so the gallery hydrates it through the videos endpoint.
+        { kind: 'video', name: 'clip.mp4' },
       ],
       total: 2,
     });
     // An evicted key (another cluster registered, or a reload) degrades to an
     // empty list rather than an error — the parse layer clears the reference
     // before the UI would ever show that.
-    registerImageCluster(['other.png'], 'newer');
+    registerImageCluster(['image:other.png'], 'newer');
     await expect(listSemanticGalleryItemNames({ query: { clusterId, kind: 'cluster' } })).resolves.toEqual({
       items: [],
       total: 0,

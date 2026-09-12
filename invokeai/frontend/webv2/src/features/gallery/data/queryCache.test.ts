@@ -2,6 +2,7 @@ import type { GalleryItem, GalleryItemMutationResult, GalleryItemsPage } from '@
 import type { GalleryBoard } from '@features/gallery/core/types';
 import type { AccountScope } from '@platform/state/accountLifecycle';
 
+import { getImageCluster, registerImageCluster } from '@features/gallery/core/semanticImageQuery';
 import { accountLifecycle, captureAccountScope } from '@platform/state/accountLifecycle';
 import { InfiniteQueryObserver, QueryClient, type InfiniteData } from '@tanstack/react-query';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -194,6 +195,24 @@ describe('Gallery item cache patches', () => {
     });
 
     expect(getData(client, key).pages[0]?.items[0]).toEqual({ ...target, starred: true });
+  });
+
+  it('prunes a deleted video from the active cluster filter, and restores it on rollback', () => {
+    // The cluster's member list is client-owned, so nothing on the server can
+    // reconcile it: a video deletion that skipped the prune would leave the
+    // cluster view counting a clip that no longer exists, with a trailing page
+    // cell that can never hydrate.
+    const client = createClient();
+    const clusterId = registerImageCluster(['image:kept.png', 'video:gone.mp4'], 'beaches');
+
+    const rollback = patchGalleryItemCaches(client, {
+      kind: 'delete',
+      result: getResult([{ kind: 'video', name: 'gone.mp4' }]),
+    });
+
+    expect(getImageCluster(clusterId)?.itemKeys).toEqual(['image:kept.png']);
+    rollback();
+    expect(getImageCluster(clusterId)?.itemKeys).toEqual(['image:kept.png', 'video:gone.mp4']);
   });
 
   it('deletes matching qualified items across pages and keeps each page total consistent', () => {

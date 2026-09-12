@@ -25,26 +25,61 @@ describe('image map image-label cache', () => {
     accountLifecycle.activate('user-a');
   });
 
-  it('caches resolved labels per image name', async () => {
+  it('caches resolved labels per item', async () => {
     mocks.apiFetchJson.mockResolvedValue({ alternates: ['boat', 'harbor'], label: 'ship' });
 
-    await expect(getImageLabels('a.png')).resolves.toEqual({ alternates: ['boat', 'harbor'], label: 'ship' });
-    await expect(getImageLabels('a.png')).resolves.toEqual({ alternates: ['boat', 'harbor'], label: 'ship' });
+    await expect(getImageLabels({ kind: 'image', name: 'a.png' })).resolves.toEqual({
+      alternates: ['boat', 'harbor'],
+      label: 'ship',
+    });
+    await expect(getImageLabels({ kind: 'image', name: 'a.png' })).resolves.toEqual({
+      alternates: ['boat', 'harbor'],
+      label: 'ship',
+    });
     expect(mocks.apiFetchJson).toHaveBeenCalledTimes(1);
   });
 
-  it('caches a definitive per-image failure but retries transient ones', async () => {
+  it('keeps labels for a video apart from an image with the same name', async () => {
+    // The fixtures ship exactly this: a video named like an image. Keying the
+    // cache by name alone would serve one item's tags for the other.
+    mocks.apiFetchJson.mockResolvedValueOnce({ alternates: [], label: 'photo' });
+    mocks.apiFetchJson.mockResolvedValueOnce({ alternates: [], label: 'clip' });
+
+    await expect(getImageLabels({ kind: 'image', name: 'shared.png' })).resolves.toEqual({
+      alternates: [],
+      label: 'photo',
+    });
+    await expect(getImageLabels({ kind: 'video', name: 'shared.png' })).resolves.toEqual({
+      alternates: [],
+      label: 'clip',
+    });
+    expect(mocks.apiFetchJson).toHaveBeenCalledTimes(2);
+  });
+
+  it('asks for video labels in the video namespace', async () => {
+    mocks.apiFetchJson.mockResolvedValue({ alternates: [], label: 'surf' });
+
+    await getImageLabels({ kind: 'video', name: 'clip.mp4' });
+
+    // Without the kind the backend would look the name up among images and
+    // answer 404, which the cache would then remember as "no labels".
+    const [url] = mocks.apiFetchJson.mock.calls[0] as [string];
+    expect(url).toContain('image_name=clip.mp4');
+    expect(url).toContain('kind=video');
+  });
+
+  it('caches a definitive per-item failure but retries transient ones', async () => {
     // 404: the image is simply not indexed; asking again cannot change that.
     mocks.apiFetchJson.mockRejectedValue(new ApiError('not indexed', 404));
-    await expect(getImageLabels('a.png')).resolves.toBeNull();
-    await expect(getImageLabels('a.png')).resolves.toBeNull();
+    await expect(getImageLabels({ kind: 'image', name: 'a.png' })).resolves.toBeNull();
+    await expect(getImageLabels({ kind: 'image', name: 'a.png' })).resolves.toBeNull();
     expect(mocks.apiFetchJson).toHaveBeenCalledTimes(1);
 
     // A network failure is retried on the next hover.
     mocks.apiFetchJson.mockRejectedValue(new Error('offline'));
-    await expect(getImageLabels('b.png')).resolves.toBeNull();
+    await expect(getImageLabels({ kind: 'image', name: 'b.png' })).resolves.toBeNull();
     mocks.apiFetchJson.mockResolvedValue({ alternates: [], label: 'ship' });
-    await expect(getImageLabels('b.png')).resolves.toEqual({ alternates: [], label: 'ship' });
+    await expect(getImageLabels({ kind: 'image', name: 'b.png' })).resolves.toEqual({ alternates: [], label: 'ship' });
   });
 
   it('backs a server error off instead of caching it as "this image has no labels"', async () => {
@@ -54,14 +89,17 @@ describe('image map image-label cache', () => {
       // A backend or proxy restart mid-sweep must not permanently blank the
       // tags of every image the pointer crossed during the outage...
       mocks.apiFetchJson.mockRejectedValue(new ApiError('bad gateway', 502));
-      await expect(getImageLabels('a.png')).resolves.toBeNull();
-      await expect(getImageLabels('b.png')).resolves.toBeNull();
+      await expect(getImageLabels({ kind: 'image', name: 'a.png' })).resolves.toBeNull();
+      await expect(getImageLabels({ kind: 'image', name: 'b.png' })).resolves.toBeNull();
       // ...but a deterministic 500 must not refire on every hover either.
       expect(mocks.apiFetchJson).toHaveBeenCalledTimes(1);
 
       vi.setSystemTime(Date.now() + 61_000);
       mocks.apiFetchJson.mockResolvedValue({ alternates: [], label: 'ship' });
-      await expect(getImageLabels('a.png')).resolves.toEqual({ alternates: [], label: 'ship' });
+      await expect(getImageLabels({ kind: 'image', name: 'a.png' })).resolves.toEqual({
+        alternates: [],
+        label: 'ship',
+      });
     } finally {
       vi.useRealTimers();
     }
@@ -73,16 +111,19 @@ describe('image map image-label cache', () => {
     try {
       mocks.apiFetchJson.mockRejectedValue(new ApiError('still being prepared', 409));
 
-      await expect(getImageLabels('a.png')).resolves.toBeNull();
+      await expect(getImageLabels({ kind: 'image', name: 'a.png' })).resolves.toBeNull();
       // Server-wide, so sweeping the map must not fire one request per point.
-      await expect(getImageLabels('b.png')).resolves.toBeNull();
+      await expect(getImageLabels({ kind: 'image', name: 'b.png' })).resolves.toBeNull();
       expect(mocks.apiFetchJson).toHaveBeenCalledTimes(1);
 
       // The vocabulary is built lazily by the index worker: a 409 can simply
       // mean "not ready yet", so the cooldown must expire rather than latch.
       vi.setSystemTime(Date.now() + 61_000);
       mocks.apiFetchJson.mockResolvedValue({ alternates: [], label: 'ship' });
-      await expect(getImageLabels('c.png')).resolves.toEqual({ alternates: [], label: 'ship' });
+      await expect(getImageLabels({ kind: 'image', name: 'c.png' })).resolves.toEqual({
+        alternates: [],
+        label: 'ship',
+      });
     } finally {
       vi.useRealTimers();
     }
@@ -90,13 +131,13 @@ describe('image map image-label cache', () => {
 
   it('keeps serving labels it already has while a 409 cooldown is active', async () => {
     mocks.apiFetchJson.mockResolvedValue({ alternates: [], label: 'ship' });
-    await getImageLabels('a.png');
+    await getImageLabels({ kind: 'image', name: 'a.png' });
 
     mocks.apiFetchJson.mockRejectedValue(new ApiError('still being prepared', 409));
-    await expect(getImageLabels('b.png')).resolves.toBeNull();
+    await expect(getImageLabels({ kind: 'image', name: 'b.png' })).resolves.toBeNull();
 
     // The cooldown suppresses new requests, never cached results.
-    await expect(getImageLabels('a.png')).resolves.toEqual({ alternates: [], label: 'ship' });
+    await expect(getImageLabels({ kind: 'image', name: 'a.png' })).resolves.toEqual({ alternates: [], label: 'ship' });
   });
 
   it('drops cached labels when a vocabulary rebuild lands', async () => {
@@ -104,28 +145,31 @@ describe('image map image-label cache', () => {
     // makes every cached answer stale — including a cooldown that was only
     // ever waiting for that rebuild.
     mocks.apiFetchJson.mockResolvedValue({ alternates: [], label: 'ship' });
-    await getImageLabels('a.png');
+    await getImageLabels({ kind: 'image', name: 'a.png' });
     expect(mocks.apiFetchJson).toHaveBeenCalledTimes(1);
 
     clearImageLabels();
 
     mocks.apiFetchJson.mockResolvedValue({ alternates: [], label: 'sailboat' });
-    await expect(getImageLabels('a.png')).resolves.toEqual({ alternates: [], label: 'sailboat' });
+    await expect(getImageLabels({ kind: 'image', name: 'a.png' })).resolves.toEqual({
+      alternates: [],
+      label: 'sailboat',
+    });
   });
 
   it('clears the cooldown on account switch', async () => {
     mocks.apiFetchJson.mockRejectedValue(new ApiError('index disabled', 409));
-    await expect(getImageLabels('a.png')).resolves.toBeNull();
+    await expect(getImageLabels({ kind: 'image', name: 'a.png' })).resolves.toBeNull();
 
     accountLifecycle.invalidate();
     accountLifecycle.activate('user-b');
     mocks.apiFetchJson.mockResolvedValue({ alternates: [], label: 'ship' });
-    await expect(getImageLabels('a.png')).resolves.toEqual({ alternates: [], label: 'ship' });
+    await expect(getImageLabels({ kind: 'image', name: 'a.png' })).resolves.toEqual({ alternates: [], label: 'ship' });
   });
 
   it('clears settled entries and stale in-flight results on account invalidation', async () => {
     mocks.apiFetchJson.mockResolvedValue({ alternates: [], label: 'user-a-label' });
-    await getImageLabels('a.png');
+    await getImageLabels({ kind: 'image', name: 'a.png' });
 
     // A request still in flight when the account switches must not seed the
     // next account's cache.
@@ -136,7 +180,7 @@ describe('image map image-label cache', () => {
           resolveLate = resolve;
         })
     );
-    const late = getImageLabels('b.png');
+    const late = getImageLabels({ kind: 'image', name: 'b.png' });
 
     accountLifecycle.invalidate();
     resolveLate({ alternates: [], label: 'stale-b-label' });
@@ -144,7 +188,13 @@ describe('image map image-label cache', () => {
 
     accountLifecycle.activate('user-b');
     mocks.apiFetchJson.mockResolvedValue({ alternates: [], label: 'user-b-label' });
-    await expect(getImageLabels('a.png')).resolves.toEqual({ alternates: [], label: 'user-b-label' });
-    await expect(getImageLabels('b.png')).resolves.toEqual({ alternates: [], label: 'user-b-label' });
+    await expect(getImageLabels({ kind: 'image', name: 'a.png' })).resolves.toEqual({
+      alternates: [],
+      label: 'user-b-label',
+    });
+    await expect(getImageLabels({ kind: 'image', name: 'b.png' })).resolves.toEqual({
+      alternates: [],
+      label: 'user-b-label',
+    });
   });
 });

@@ -12,7 +12,7 @@ const mocks = vi.hoisted(() => ({
   patchValues: vi.fn(),
   registerImageCluster: vi.fn(),
   requestReveal: vi.fn(),
-  resolveMany: vi.fn(),
+  resolve: vi.fn(),
   selectBoard: vi.fn(),
   selectItem: vi.fn(),
   setPage: vi.fn(),
@@ -21,8 +21,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('@features/gallery', () => ({
-  galleryImages: { resolveMany: mocks.resolveMany },
-  legacyGeneratedImageToGalleryItem: (image: { image_name: string }) => image,
+  galleryItems: { resolve: mocks.resolve },
   toGalleryItemKey: (ref: { kind: string; name: string }) => `${ref.kind}:${ref.name}`,
 }));
 
@@ -81,17 +80,23 @@ let root: Root | null = null;
 
 /** Published from an effect, not during render, so the probe stays render-pure. */
 const handle: {
-  click: ((imageName: string) => void) | null;
-  clickCluster: ((primaryImageName: string, imageNames: string[], label: string) => void) | null;
+  click: ((item: { kind: 'image' | 'video'; name: string }) => void) | null;
+  clickCluster:
+    | ((
+        primaryItem: { kind: 'image' | 'video'; name: string },
+        itemKeys: `image:${string}`[] | `video:${string}`[] | (`image:${string}` | `video:${string}`)[],
+        label: string
+      ) => void)
+    | null;
 } = { click: null, clickCluster: null };
 
 const Probe = () => {
-  const { selectCluster, selectImage } = useMapSelection();
+  const { selectCluster, selectItem } = useMapSelection();
 
   useEffect(() => {
-    handle.click = selectImage;
+    handle.click = selectItem;
     handle.clickCluster = selectCluster;
-  }, [selectCluster, selectImage]);
+  }, [selectCluster, selectItem]);
 
   return null;
 };
@@ -167,7 +172,7 @@ afterEach(async () => {
   mocks.patchValues.mockReset();
   mocks.registerImageCluster.mockReset();
   mocks.requestReveal.mockReset();
-  mocks.resolveMany.mockReset();
+  mocks.resolve.mockReset();
   mocks.selectBoard.mockReset();
   mocks.selectItem.mockReset();
   mocks.setPage.mockReset();
@@ -175,22 +180,72 @@ afterEach(async () => {
 });
 
 describe('useMapSelection', () => {
-  describe('selectImage', () => {
+  describe('selectItem', () => {
     it('dispatches the selection and a reveal for a click', async () => {
-      mocks.resolveMany.mockResolvedValue([{ boardId: 'board-a', image_name: 'a.png', imageCategory: 'general' }]);
+      mocks.resolve.mockResolvedValue({ boardId: 'board-a', category: 'general', kind: 'image', name: 'a.png' });
       await mount();
 
-      await flush(() => handle.click?.('a.png'));
+      await flush(() => handle.click?.({ kind: 'image', name: 'a.png' }));
 
       expect(mocks.selectItem).toHaveBeenCalledTimes(1);
       expect(mocks.selectItem.mock.calls[0]?.[0]).toEqual({
         boardId: 'board-a',
-        image_name: 'a.png',
-        imageCategory: 'general',
+        category: 'general',
+        kind: 'image',
+        name: 'a.png',
       });
       // The reveal channel is what scrolls the grid; the selection alone must
       // not (auto-selected generation results would yank the scroll).
       expect(mocks.requestReveal).toHaveBeenCalledWith('image:a.png');
+    });
+
+    it('reveals a clicked video through its own namespace', async () => {
+      // Resolved as a video, revealed under a video key: hydrating a clip
+      // through the images endpoint 404s, and an `image:` reveal key never
+      // matches the grid cell holding it.
+      mocks.resolve.mockResolvedValue({ boardId: 'board-a', category: 'general', kind: 'video', name: 'clip.mp4' });
+      mocks.fetchNames.mockResolvedValue({
+        items: [
+          { kind: 'image', name: 'a.png' },
+          { kind: 'video', name: 'clip.mp4' },
+        ],
+        total_count: 2,
+      });
+      await mount();
+
+      await flush(() => handle.click?.({ kind: 'video', name: 'clip.mp4' }));
+
+      expect(mocks.resolve).toHaveBeenCalledWith({ kind: 'video', name: 'clip.mp4' });
+      expect(mocks.selectItem.mock.calls[0]?.[0]).toEqual({
+        boardId: 'board-a',
+        category: 'general',
+        kind: 'video',
+        name: 'clip.mp4',
+      });
+      expect(mocks.requestReveal).toHaveBeenCalledWith('video:clip.mp4');
+    });
+
+    it('finds a video at its own position in a mixed listing', async () => {
+      // The position lookup matches on kind as well as name. The two entries
+      // are two pages apart, so matching on name alone lands the gallery on
+      // the image's page and the clip is nowhere on screen.
+      mocks.settings = { imageOrderDir: 'DESC', paginationMode: 'paginated' };
+      mocks.resolve.mockResolvedValue({ boardId: 'board-a', category: 'general', kind: 'video', name: 'shared' });
+      mocks.fetchNames.mockResolvedValue({
+        items: [
+          { kind: 'image', name: 'shared' },
+          ...Array.from({ length: 119 }, (_, index) => ({ kind: 'image', name: `img-${String(index)}.png` })),
+          { kind: 'video', name: 'shared' },
+        ],
+        total_count: 121,
+      });
+      await mount();
+
+      await flush(() => handle.click?.({ kind: 'video', name: 'shared' }));
+
+      // Index 120 of a 60-per-page listing is page 2; the image's index 0 is page 0.
+      expect(mocks.setPage).toHaveBeenCalledWith(2);
+      expect(mocks.requestReveal).toHaveBeenCalledWith('video:shared');
     });
 
     it("selects the image's board before the image itself", async () => {
@@ -199,12 +254,15 @@ describe('useMapSelection', () => {
       // cross-board click without this left that query describing a list the
       // image was never in, and Preview's next/prev found no cursor and went
       // dead until the user re-selected from the grid.
-      mocks.resolveMany.mockResolvedValue([
-        { boardId: 'board-portraits', image_name: 'a.png', imageCategory: 'general' },
-      ]);
+      mocks.resolve.mockResolvedValue({
+        boardId: 'board-portraits',
+        category: 'general',
+        kind: 'image',
+        name: 'a.png',
+      });
       await mount();
 
-      await flush(() => handle.click?.('a.png'));
+      await flush(() => handle.click?.({ kind: 'image', name: 'a.png' }));
 
       expect(mocks.selectBoard).toHaveBeenCalledWith('board-portraits');
       expect(mocks.selectBoard.mock.invocationCallOrder[0]).toBeLessThan(mocks.selectItem.mock.invocationCallOrder[0]);
@@ -212,11 +270,11 @@ describe('useMapSelection', () => {
 
     it('lands the gallery on the page holding the image in paginated mode', async () => {
       mocks.settings = { imageOrderDir: 'DESC', paginationMode: 'paginated' };
-      mocks.resolveMany.mockResolvedValue([{ boardId: 'board-a', image_name: 'deep.png', imageCategory: 'general' }]);
+      mocks.resolve.mockResolvedValue({ boardId: 'board-a', category: 'general', kind: 'image', name: 'deep.png' });
       mocks.fetchNames.mockResolvedValue(namesWithImageAt('deep.png', 130));
       await mount();
 
-      await flush(() => handle.click?.('deep.png'));
+      await flush(() => handle.click?.({ kind: 'image', name: 'deep.png' }));
 
       expect(mocks.setPage).toHaveBeenCalledWith(2);
       expect(mocks.selectItem).toHaveBeenCalledTimes(1);
@@ -227,11 +285,11 @@ describe('useMapSelection', () => {
 
     it("resolves the image's position against the listing the reveal lands on", async () => {
       mocks.settings = { imageOrderDir: 'ASC', paginationMode: 'paginated' };
-      mocks.resolveMany.mockResolvedValue([{ boardId: 'board-a', image_name: 'a.png', imageCategory: 'general' }]);
+      mocks.resolve.mockResolvedValue({ boardId: 'board-a', category: 'general', kind: 'image', name: 'a.png' });
       mocks.fetchNames.mockResolvedValue(namesWithImageAt('a.png', 0));
       await mount();
 
-      await flush(() => handle.click?.('a.png'));
+      await flush(() => handle.click?.({ kind: 'image', name: 'a.png' }));
 
       expect(mocks.fetchNames.mock.calls[0]?.[0].filter).toEqual({
         boardId: 'board-a',
@@ -247,11 +305,11 @@ describe('useMapSelection', () => {
       // fresh, and a fresh cache short-circuits the fetch WITHOUT honoring
       // the `pages` option — the window would never grow.
       mocks.settings = { imageOrderDir: 'DESC', paginationMode: 'infinite' };
-      mocks.resolveMany.mockResolvedValue([{ boardId: 'board-a', image_name: 'deep.png', imageCategory: 'general' }]);
+      mocks.resolve.mockResolvedValue({ boardId: 'board-a', category: 'general', kind: 'image', name: 'deep.png' });
       mocks.fetchNames.mockResolvedValue(namesWithImageAt('deep.png', 130));
       await mount();
 
-      await flush(() => handle.click?.('deep.png'));
+      await flush(() => handle.click?.({ kind: 'image', name: 'deep.png' }));
 
       expect(mocks.setPage).not.toHaveBeenCalled();
       expect(mocks.fetchInfiniteQuery).toHaveBeenCalledTimes(1);
@@ -262,11 +320,11 @@ describe('useMapSelection', () => {
     it('skips the fetch when the window already covers the image', async () => {
       mocks.settings = { imageOrderDir: 'DESC', paginationMode: 'infinite' };
       mocks.cachedPageCount = 5;
-      mocks.resolveMany.mockResolvedValue([{ boardId: 'board-a', image_name: 'deep.png', imageCategory: 'general' }]);
+      mocks.resolve.mockResolvedValue({ boardId: 'board-a', category: 'general', kind: 'image', name: 'deep.png' });
       mocks.fetchNames.mockResolvedValue(namesWithImageAt('deep.png', 130));
       await mount();
 
-      await flush(() => handle.click?.('deep.png'));
+      await flush(() => handle.click?.({ kind: 'image', name: 'deep.png' }));
 
       expect(mocks.fetchInfiniteQuery).not.toHaveBeenCalled();
       expect(mocks.selectItem).toHaveBeenCalledTimes(1);
@@ -277,11 +335,11 @@ describe('useMapSelection', () => {
       // deeper image is revealed by anchoring the window at its page instead
       // of loading toward it; the mounted gallery query fetches on its own.
       mocks.settings = { imageOrderDir: 'DESC', paginationMode: 'infinite' };
-      mocks.resolveMany.mockResolvedValue([{ boardId: 'board-a', image_name: 'deep.png', imageCategory: 'general' }]);
+      mocks.resolve.mockResolvedValue({ boardId: 'board-a', category: 'general', kind: 'image', name: 'deep.png' });
       mocks.fetchNames.mockResolvedValue(namesWithImageAt('deep.png', 700));
       await mount();
 
-      await flush(() => handle.click?.('deep.png'));
+      await flush(() => handle.click?.({ kind: 'image', name: 'deep.png' }));
 
       expect(mocks.fetchInfiniteQuery).not.toHaveBeenCalled();
       expect(mocks.setPage).toHaveBeenCalledWith(11);
@@ -296,11 +354,11 @@ describe('useMapSelection', () => {
       const names = deferred<ReturnType<typeof namesWithImageAt>>();
 
       mocks.settings = { imageOrderDir: 'DESC', paginationMode: 'paginated' };
-      mocks.resolveMany.mockResolvedValue([{ boardId: 'board-a', image_name: 'deep.png', imageCategory: 'general' }]);
+      mocks.resolve.mockResolvedValue({ boardId: 'board-a', category: 'general', kind: 'image', name: 'deep.png' });
       mocks.fetchNames.mockReturnValue(names.promise);
       await mount();
 
-      await flush(() => handle.click?.('deep.png'));
+      await flush(() => handle.click?.({ kind: 'image', name: 'deep.png' }));
       mocks.settings = { imageOrderDir: 'ASC', paginationMode: 'paginated' };
       await flush(() => names.resolve(namesWithImageAt('deep.png', 130)));
 
@@ -315,13 +373,16 @@ describe('useMapSelection', () => {
       // hidden board's page number there would jump to an unrelated page.
       mocks.settings = { imageOrderDir: 'DESC', paginationMode: 'paginated' };
       mocks.fetchBoards.mockResolvedValue([{ id: 'board-other' }]);
-      mocks.resolveMany.mockResolvedValue([
-        { boardId: 'board-archived', image_name: 'deep.png', imageCategory: 'general' },
-      ]);
+      mocks.resolve.mockResolvedValue({
+        boardId: 'board-archived',
+        category: 'general',
+        kind: 'image',
+        name: 'deep.png',
+      });
       mocks.fetchNames.mockResolvedValue(namesWithImageAt('deep.png', 130));
       await mount();
 
-      await flush(() => handle.click?.('deep.png'));
+      await flush(() => handle.click?.({ kind: 'image', name: 'deep.png' }));
 
       expect(mocks.setPage).not.toHaveBeenCalled();
       expect(mocks.selectBoard).toHaveBeenCalledWith('board-archived');
@@ -331,11 +392,11 @@ describe('useMapSelection', () => {
     it('keeps the page landing when the boards lookup fails', async () => {
       mocks.settings = { imageOrderDir: 'DESC', paginationMode: 'paginated' };
       mocks.fetchBoards.mockRejectedValue(new Error('boards endpoint down'));
-      mocks.resolveMany.mockResolvedValue([{ boardId: 'board-a', image_name: 'deep.png', imageCategory: 'general' }]);
+      mocks.resolve.mockResolvedValue({ boardId: 'board-a', category: 'general', kind: 'image', name: 'deep.png' });
       mocks.fetchNames.mockResolvedValue(namesWithImageAt('deep.png', 130));
       await mount();
 
-      await flush(() => handle.click?.('deep.png'));
+      await flush(() => handle.click?.({ kind: 'image', name: 'deep.png' }));
 
       expect(mocks.setPage).toHaveBeenCalledWith(2);
     });
@@ -344,10 +405,10 @@ describe('useMapSelection', () => {
       // The image was located in the plain board listing; an active filter
       // would show some other list entirely.
       mocks.galleryValues = { searchTerm: 'sunset', semanticImageQuery: { kind: 'text', query: 'sunset' } };
-      mocks.resolveMany.mockResolvedValue([{ boardId: 'board-a', image_name: 'a.png', imageCategory: 'general' }]);
+      mocks.resolve.mockResolvedValue({ boardId: 'board-a', category: 'general', kind: 'image', name: 'a.png' });
       await mount();
 
-      await flush(() => handle.click?.('a.png'));
+      await flush(() => handle.click?.({ kind: 'image', name: 'a.png' }));
 
       expect(mocks.patchValues).toHaveBeenCalledWith('gallery', {
         searchTerm: '',
@@ -357,13 +418,17 @@ describe('useMapSelection', () => {
     });
 
     it('reveals a starred image in the starred listing it belongs to', async () => {
-      mocks.resolveMany.mockResolvedValue([
-        { boardId: 'board-a', image_name: 'a.png', imageCategory: 'general', starred: true },
-      ]);
+      mocks.resolve.mockResolvedValue({
+        boardId: 'board-a',
+        category: 'general',
+        kind: 'image',
+        name: 'a.png',
+        starred: true,
+      });
       mocks.fetchNames.mockResolvedValue(namesWithImageAt('a.png', 0));
       await mount();
 
-      await flush(() => handle.click?.('a.png'));
+      await flush(() => handle.click?.({ kind: 'image', name: 'a.png' }));
 
       expect(mocks.fetchNames.mock.calls[0]?.[0].filter).toMatchObject({ boardId: 'board-a', starred: true });
       expect(mocks.patchValues).toHaveBeenCalledWith('gallery', {
@@ -374,38 +439,38 @@ describe('useMapSelection', () => {
     });
 
     it('leaves the filters alone when none are active', async () => {
-      mocks.resolveMany.mockResolvedValue([{ boardId: 'board-a', image_name: 'a.png', imageCategory: 'general' }]);
+      mocks.resolve.mockResolvedValue({ boardId: 'board-a', category: 'general', kind: 'image', name: 'a.png' });
       await mount();
 
-      await flush(() => handle.click?.('a.png'));
+      await flush(() => handle.click?.({ kind: 'image', name: 'a.png' }));
 
       expect(mocks.patchValues).not.toHaveBeenCalled();
     });
 
     it('switches the gallery to the assets tab for a non-general image', async () => {
-      mocks.resolveMany.mockResolvedValue([{ boardId: 'board-a', image_name: 'a.png', imageCategory: 'user' }]);
+      mocks.resolve.mockResolvedValue({ boardId: 'board-a', category: 'user', kind: 'image', name: 'a.png' });
       await mount();
 
-      await flush(() => handle.click?.('a.png'));
+      await flush(() => handle.click?.({ kind: 'image', name: 'a.png' }));
 
       expect(mocks.setView).toHaveBeenCalledWith('assets');
     });
 
     it('does not touch the view when it already matches', async () => {
-      mocks.resolveMany.mockResolvedValue([{ boardId: 'board-a', image_name: 'a.png', imageCategory: 'general' }]);
+      mocks.resolve.mockResolvedValue({ boardId: 'board-a', category: 'general', kind: 'image', name: 'a.png' });
       await mount();
 
-      await flush(() => handle.click?.('a.png'));
+      await flush(() => handle.click?.({ kind: 'image', name: 'a.png' }));
 
       expect(mocks.setView).not.toHaveBeenCalled();
     });
 
     it('still selects when the position lookup fails', async () => {
-      mocks.resolveMany.mockResolvedValue([{ boardId: 'board-a', image_name: 'a.png', imageCategory: 'general' }]);
+      mocks.resolve.mockResolvedValue({ boardId: 'board-a', category: 'general', kind: 'image', name: 'a.png' });
       mocks.fetchNames.mockRejectedValue(new Error('names endpoint down'));
       await mount();
 
-      await flush(() => handle.click?.('a.png'));
+      await flush(() => handle.click?.({ kind: 'image', name: 'a.png' }));
 
       expect(mocks.setPage).not.toHaveBeenCalled();
       expect(mocks.selectBoard).toHaveBeenCalledWith('board-a');
@@ -415,10 +480,10 @@ describe('useMapSelection', () => {
     });
 
     it('does not touch the board for a click that never resolves an image', async () => {
-      mocks.resolveMany.mockResolvedValue([]);
+      mocks.resolve.mockRejectedValue(new Error('not found'));
       await mount();
 
-      await flush(() => handle.click?.('gone.png'));
+      await flush(() => handle.click?.({ kind: 'image', name: 'gone.png' }));
 
       expect(mocks.selectBoard).not.toHaveBeenCalled();
       expect(mocks.selectItem).not.toHaveBeenCalled();
@@ -427,13 +492,34 @@ describe('useMapSelection', () => {
   });
 
   describe('selectCluster', () => {
-    it('shows the cluster as a gallery filter with the clicked image selected and revealed', async () => {
-      mocks.resolveMany.mockResolvedValue([{ boardId: 'board-a', image_name: 'a.png', imageCategory: 'general' }]);
+    it('registers a cluster around a clicked video and reveals the clip', async () => {
+      // Cluster mode has its own resolve and its own reveal key; a clip clicked
+      // here must not be hydrated or revealed as an image.
+      mocks.resolve.mockResolvedValue({ boardId: 'board-a', category: 'general', kind: 'video', name: 'clip.mp4' });
       await mount();
 
-      await flush(() => handle.clickCluster?.('a.png', ['a.png', 'b.png', 'c.png'], 'beaches'));
+      await flush(() =>
+        handle.clickCluster?.({ kind: 'video', name: 'clip.mp4' }, ['video:clip.mp4', 'image:a.png'], 'beaches')
+      );
 
-      expect(mocks.registerImageCluster).toHaveBeenCalledWith(['a.png', 'b.png', 'c.png'], 'beaches');
+      expect(mocks.resolve).toHaveBeenCalledWith({ kind: 'video', name: 'clip.mp4' });
+      expect(mocks.registerImageCluster).toHaveBeenCalledWith(['video:clip.mp4', 'image:a.png'], 'beaches');
+      expect(mocks.requestReveal).toHaveBeenCalledWith('video:clip.mp4');
+    });
+
+    it('shows the cluster as a gallery filter with the clicked image selected and revealed', async () => {
+      mocks.resolve.mockResolvedValue({ boardId: 'board-a', category: 'general', kind: 'image', name: 'a.png' });
+      await mount();
+
+      await flush(() =>
+        handle.clickCluster?.(
+          { kind: 'image', name: 'a.png' },
+          ['image:a.png', 'image:b.png', 'image:c.png'],
+          'beaches'
+        )
+      );
+
+      expect(mocks.registerImageCluster).toHaveBeenCalledWith(['image:a.png', 'image:b.png', 'image:c.png'], 'beaches');
       expect(mocks.patchValues).toHaveBeenCalledWith('gallery', {
         galleryPage: 0,
         searchTerm: '',
@@ -442,8 +528,9 @@ describe('useMapSelection', () => {
       expect(mocks.selectItem).toHaveBeenCalledTimes(1);
       expect(mocks.selectItem.mock.calls[0]?.[0]).toEqual({
         boardId: 'board-a',
-        image_name: 'a.png',
-        imageCategory: 'general',
+        category: 'general',
+        kind: 'image',
+        name: 'a.png',
       });
       // Re-clicking the same cluster point after scrolling away must return
       // the grid to the top; the reveal channel carries that even when the
@@ -455,22 +542,29 @@ describe('useMapSelection', () => {
       // The selection stamps the navigation query from the list the gallery
       // is currently showing, so the primary image's board must be current
       // before the selection lands.
-      mocks.resolveMany.mockResolvedValue([
-        { boardId: 'board-landscapes', image_name: 'a.png', imageCategory: 'general' },
-      ]);
+      mocks.resolve.mockResolvedValue({
+        boardId: 'board-landscapes',
+        category: 'general',
+        kind: 'image',
+        name: 'a.png',
+      });
       await mount();
 
-      await flush(() => handle.clickCluster?.('a.png', ['a.png', 'b.png'], 'label'));
+      await flush(() =>
+        handle.clickCluster?.({ kind: 'image', name: 'a.png' }, ['image:a.png', 'image:b.png'], 'label')
+      );
 
       expect(mocks.selectBoard).toHaveBeenCalledWith('board-landscapes');
       expect(mocks.selectBoard.mock.invocationCallOrder[0]).toBeLessThan(mocks.selectItem.mock.invocationCallOrder[0]);
     });
 
     it('leaves the gallery alone when the primary image cannot be resolved', async () => {
-      mocks.resolveMany.mockResolvedValue([]);
+      mocks.resolve.mockRejectedValue(new Error('not found'));
       await mount();
 
-      await flush(() => handle.clickCluster?.('gone.png', ['gone.png', 'b.png'], 'label'));
+      await flush(() =>
+        handle.clickCluster?.({ kind: 'image', name: 'gone.png' }, ['image:gone.png', 'image:b.png'], 'label')
+      );
 
       expect(mocks.registerImageCluster).not.toHaveBeenCalled();
       expect(mocks.patchValues).not.toHaveBeenCalled();
@@ -483,45 +577,45 @@ describe('useMapSelection', () => {
     // The two entry points must not race each other: switching cluster mode
     // mid-flight would otherwise let a stale resolution overwrite a newer
     // selection.
-    const slow = deferred<{ boardId: string; image_name: string; imageCategory: string }[]>();
-    const fast = deferred<{ boardId: string; image_name: string; imageCategory: string }[]>();
+    const slow = deferred<{ boardId: string; category: string; kind: string; name: string }>();
+    const fast = deferred<{ boardId: string; category: string; kind: string; name: string }>();
 
-    mocks.resolveMany.mockReturnValueOnce(slow.promise).mockReturnValueOnce(fast.promise);
+    mocks.resolve.mockReturnValueOnce(slow.promise).mockReturnValueOnce(fast.promise);
     await mount();
 
     await flush(() => {
-      handle.clickCluster?.('slow.png', ['slow.png'], 'label');
-      handle.click?.('fast.png');
+      handle.clickCluster?.({ kind: 'image', name: 'slow.png' }, ['image:slow.png'], 'label');
+      handle.click?.({ kind: 'image', name: 'fast.png' });
     });
     await flush(() => {
-      fast.resolve([{ boardId: 'board-a', image_name: 'fast.png', imageCategory: 'general' }]);
-      slow.resolve([{ boardId: 'board-a', image_name: 'slow.png', imageCategory: 'general' }]);
+      fast.resolve({ boardId: 'board-a', category: 'general', kind: 'image', name: 'fast.png' });
+      slow.resolve({ boardId: 'board-a', category: 'general', kind: 'image', name: 'slow.png' });
     });
 
     expect(mocks.patchValues).not.toHaveBeenCalled();
     expect(mocks.selectItem).toHaveBeenCalledTimes(1);
-    expect(mocks.selectItem.mock.calls[0]?.[0].image_name).toBe('fast.png');
+    expect(mocks.selectItem.mock.calls[0]?.[0].name).toBe('fast.png');
   });
 
   it('ignores a slow click that resolves after a newer one', async () => {
-    const slow = deferred<{ boardId: string; image_name: string; imageCategory: string }[]>();
-    const fast = deferred<{ boardId: string; image_name: string; imageCategory: string }[]>();
+    const slow = deferred<{ boardId: string; category: string; kind: string; name: string }>();
+    const fast = deferred<{ boardId: string; category: string; kind: string; name: string }>();
 
-    mocks.resolveMany.mockReturnValueOnce(slow.promise).mockReturnValueOnce(fast.promise);
+    mocks.resolve.mockReturnValueOnce(slow.promise).mockReturnValueOnce(fast.promise);
     await mount();
 
     await flush(() => {
-      handle.click?.('slow.png');
-      handle.click?.('fast.png');
+      handle.click?.({ kind: 'image', name: 'slow.png' });
+      handle.click?.({ kind: 'image', name: 'fast.png' });
     });
 
     await flush(() => {
-      fast.resolve([{ boardId: 'board-a', image_name: 'fast.png', imageCategory: 'general' }]);
-      slow.resolve([{ boardId: 'board-a', image_name: 'slow.png', imageCategory: 'general' }]);
+      fast.resolve({ boardId: 'board-a', category: 'general', kind: 'image', name: 'fast.png' });
+      slow.resolve({ boardId: 'board-a', category: 'general', kind: 'image', name: 'slow.png' });
     });
 
     // Only the most recent click may win, regardless of resolution order.
-    expect(mocks.selectItem.mock.calls.map((call) => call[0].image_name)).toEqual(['fast.png']);
+    expect(mocks.selectItem.mock.calls.map((call) => call[0].name)).toEqual(['fast.png']);
   });
 
   it('ignores a click whose position lookup lands after a newer click', async () => {
@@ -530,18 +624,18 @@ describe('useMapSelection', () => {
     // gallery after a newer click has already landed it elsewhere.
     const slowNames = deferred<ReturnType<typeof namesWithImageAt>>();
 
-    mocks.resolveMany
-      .mockResolvedValueOnce([{ boardId: 'board-a', image_name: 'slow.png', imageCategory: 'general' }])
-      .mockResolvedValueOnce([{ boardId: 'board-b', image_name: 'fast.png', imageCategory: 'general' }]);
+    mocks.resolve
+      .mockResolvedValueOnce({ boardId: 'board-a', category: 'general', kind: 'image', name: 'slow.png' })
+      .mockResolvedValueOnce({ boardId: 'board-b', category: 'general', kind: 'image', name: 'fast.png' });
     mocks.fetchNames.mockReturnValueOnce(slowNames.promise).mockResolvedValueOnce(namesWithImageAt('fast.png', 0));
     await mount();
 
-    await flush(() => handle.click?.('slow.png'));
-    await flush(() => handle.click?.('fast.png'));
+    await flush(() => handle.click?.({ kind: 'image', name: 'slow.png' }));
+    await flush(() => handle.click?.({ kind: 'image', name: 'fast.png' }));
     await flush(() => slowNames.resolve(namesWithImageAt('slow.png', 0)));
 
     expect(mocks.selectBoard.mock.calls).toEqual([['board-b']]);
-    expect(mocks.selectItem.mock.calls.map((call) => call[0].image_name)).toEqual(['fast.png']);
+    expect(mocks.selectItem.mock.calls.map((call) => call[0].name)).toEqual(['fast.png']);
   });
 
   it('ignores a click left in flight across an unmount/remount', async () => {
@@ -549,32 +643,32 @@ describe('useMapSelection', () => {
     // so the abandoned click compares against a dead counter, passes, and
     // overwrites the newer mount's selection. Reachable by switching the right
     // panel away from the map and back while a hydrate is in flight.
-    const stale = deferred<{ boardId: string; image_name: string; imageCategory: string }[]>();
-    const fresh = deferred<{ boardId: string; image_name: string; imageCategory: string }[]>();
+    const stale = deferred<{ boardId: string; category: string; kind: string; name: string }>();
+    const fresh = deferred<{ boardId: string; category: string; kind: string; name: string }>();
 
-    mocks.resolveMany.mockReturnValueOnce(stale.promise).mockReturnValueOnce(fresh.promise);
+    mocks.resolve.mockReturnValueOnce(stale.promise).mockReturnValueOnce(fresh.promise);
 
     await mount();
-    await flush(() => handle.click?.('stale.png'));
+    await flush(() => handle.click?.({ kind: 'image', name: 'stale.png' }));
     await unmount();
 
     await mount();
-    await flush(() => handle.click?.('fresh.png'));
+    await flush(() => handle.click?.({ kind: 'image', name: 'fresh.png' }));
 
     await flush(() => {
-      fresh.resolve([{ boardId: 'board-a', image_name: 'fresh.png', imageCategory: 'general' }]);
-      stale.resolve([{ boardId: 'board-a', image_name: 'stale.png', imageCategory: 'general' }]);
+      fresh.resolve({ boardId: 'board-a', category: 'general', kind: 'image', name: 'fresh.png' });
+      stale.resolve({ boardId: 'board-a', category: 'general', kind: 'image', name: 'stale.png' });
     });
 
-    expect(mocks.selectItem.mock.calls.map((call) => call[0].image_name)).toEqual(['fresh.png']);
+    expect(mocks.selectItem.mock.calls.map((call) => call[0].name)).toEqual(['fresh.png']);
   });
 
-  it('leaves the selection alone when hydrate fails or the image is gone', async () => {
-    mocks.resolveMany.mockRejectedValueOnce(new Error('deleted')).mockResolvedValueOnce([]);
+  it('leaves the selection alone when hydrate fails or the item is gone', async () => {
+    mocks.resolve.mockRejectedValueOnce(new Error('deleted')).mockRejectedValueOnce(new Error('missing'));
     await mount();
 
-    await flush(() => handle.click?.('gone.png'));
-    await flush(() => handle.click?.('missing.png'));
+    await flush(() => handle.click?.({ kind: 'image', name: 'gone.png' }));
+    await flush(() => handle.click?.({ kind: 'image', name: 'missing.png' }));
 
     expect(mocks.selectItem).not.toHaveBeenCalled();
   });

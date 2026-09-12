@@ -228,7 +228,7 @@ export const ImageMapWidgetView = (_props: WidgetViewProps) => {
 
   return (
     <CenteredMessage
-      detail="Generate or import images and they will appear here, clustered by visual similarity."
+      detail="Generate or import images and videos and they will appear here, clustered by visual similarity."
       title="Nothing to map yet"
     />
   );
