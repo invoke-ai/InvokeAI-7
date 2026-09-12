@@ -653,6 +653,20 @@ export const getDefaultReferenceImageDetail = (references: VideoReferenceItem[])
 export const MIN_VIDEO_TRIM_FRAMES = 2;
 
 /**
+ * The trim as playable seconds, for previewing the window a clip actually selects.
+ *
+ * The bounds are INCLUSIVE frame indices, so the window runs to the far edge of
+ * `endFrame`'s display interval rather than to its start — playing to `endFrame / fps`
+ * would cut the last selected frame. Null when the record carries no usable frame rate:
+ * a persisted clip only has to hold a finite `fps` to hydrate, and a zero would put the
+ * whole clip's length behind a play button that claims to play the selection.
+ */
+export const videoClipSpanSeconds = (clip: VideoSourceClip): { endSeconds: number; startSeconds: number } | null =>
+  Number.isFinite(clip.fps) && clip.fps > 0
+    ? { endSeconds: (clip.endFrame + 1) / clip.fps, startSeconds: clip.startFrame / clip.fps }
+    : null;
+
+/**
  * The MAXIMUM lead-in the reference-extend tail reference samples ahead of the
  * cutpoint, expressed at 24 fps: ~5s, and exactly on the 17n+5 frame grid
  * (17*8+5) so the backend's 24 fps resample + snap-down keeps all of it.

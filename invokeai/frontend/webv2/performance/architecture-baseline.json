@@ -10,7 +10,7 @@
         "initialRawBytes": 2010846,
         "largestAssetRawBytes": 747218,
         "otherAssetRawBytes": 0,
-        "ownedRawBytes": 74441,
+        "ownedRawBytes": 74443,
         "requestCount": 44,
         "scriptRequestCount": 28,
         "sourceOwners": [
@@ -319,7 +319,7 @@
         "initialRawBytes": 2030955,
         "largestAssetRawBytes": 754691,
         "otherAssetRawBytes": 0,
-        "ownedRawBytes": 74441,
+        "ownedRawBytes": 74443,
         "requestCount": 44,
         "scriptRequestCount": 28
       },
@@ -337,7 +337,7 @@
         "initialRawBytes": 2990384,
         "largestAssetRawBytes": 747218,
         "otherAssetRawBytes": 0,
-        "ownedRawBytes": 131266,
+        "ownedRawBytes": 131729,
         "requestCount": 106,
         "scriptRequestCount": 90,
         "sourceOwners": [
@@ -1011,6 +1011,7 @@
           "source:src/workbench/widgets/preview/manifest.ts",
           "source:src/workbench/widgets/preview/previewSettings.ts",
           "source:src/workbench/widgets/preview/settingsContribution.ts",
+          "source:src/workbench/widgets/preview/spanPlaybackRequest.ts",
           "source:src/workbench/widgets/project/manifest.ts",
           "source:src/workbench/widgets/queue-status/manifest.ts",
           "source:src/workbench/widgets/queue/manifest.ts",
@@ -1031,7 +1032,7 @@
         "initialRawBytes": 3020288,
         "largestAssetRawBytes": 754691,
         "otherAssetRawBytes": 0,
-        "ownedRawBytes": 131266,
+        "ownedRawBytes": 131729,
         "requestCount": 106,
         "scriptRequestCount": 90
       },

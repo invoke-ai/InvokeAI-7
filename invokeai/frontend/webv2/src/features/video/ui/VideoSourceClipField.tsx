@@ -23,6 +23,7 @@ import { ChevronDownIcon, FilmIcon, UploadIcon, XIcon } from 'lucide-react';
 import { memo, useCallback, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { PlayClipSpanButton } from './PlayClipSpanButton';
 import { TrimBoundThumb } from './TrimBoundThumb';
 import { useVideoUiActions } from './VideoUiContext';
 
@@ -310,48 +311,53 @@ export const VideoSourceClipField = memo(
               </Text>
             ) : null}
             <Field helpText={t('widgets.video.trimHelp')} label={t('widgets.video.trim')}>
-              <Stack gap="1" w="full">
-                <HStack gap="2">
-                  <TrimBoundThumb
-                    fps={sourceVideo.fps}
-                    frame={sourceVideo.startFrame}
-                    label={t('widgets.video.trimStartShort')}
-                    src={previewSrc}
-                  />
-                  <Box flex="1" minW="0">
-                    <SliderNumberField
-                      ariaLabel={t('widgets.video.trimStart')}
-                      disabled={disabled}
-                      max={maxFrameIndex}
-                      min={0}
-                      showStepper
-                      step={1}
-                      value={sourceVideo.startFrame}
-                      onChange={setStartFrame}
+              {/* The play button leads both bound rows rather than sitting in one of
+                  them: it plays the range they bracket, not either edge. */}
+              <HStack align="center" gap="2" w="full">
+                <PlayClipSpanButton clip={sourceVideo} />
+                <Stack flex="1" gap="1" minW="0">
+                  <HStack gap="2">
+                    <TrimBoundThumb
+                      fps={sourceVideo.fps}
+                      frame={sourceVideo.startFrame}
+                      label={t('widgets.video.trimStartShort')}
+                      src={previewSrc}
                     />
-                  </Box>
-                </HStack>
-                <HStack gap="2">
-                  <TrimBoundThumb
-                    fps={sourceVideo.fps}
-                    frame={sourceVideo.endFrame}
-                    label={t('widgets.video.trimEndShort')}
-                    src={previewSrc}
-                  />
-                  <Box flex="1" minW="0">
-                    <SliderNumberField
-                      ariaLabel={t('widgets.video.trimEnd')}
-                      disabled={disabled}
-                      max={maxFrameIndex}
-                      min={0}
-                      showStepper
-                      step={1}
-                      value={sourceVideo.endFrame}
-                      onChange={setEndFrame}
+                    <Box flex="1" minW="0">
+                      <SliderNumberField
+                        ariaLabel={t('widgets.video.trimStart')}
+                        disabled={disabled}
+                        max={maxFrameIndex}
+                        min={0}
+                        showStepper
+                        step={1}
+                        value={sourceVideo.startFrame}
+                        onChange={setStartFrame}
+                      />
+                    </Box>
+                  </HStack>
+                  <HStack gap="2">
+                    <TrimBoundThumb
+                      fps={sourceVideo.fps}
+                      frame={sourceVideo.endFrame}
+                      label={t('widgets.video.trimEndShort')}
+                      src={previewSrc}
                     />
-                  </Box>
-                </HStack>
-              </Stack>
+                    <Box flex="1" minW="0">
+                      <SliderNumberField
+                        ariaLabel={t('widgets.video.trimEnd')}
+                        disabled={disabled}
+                        max={maxFrameIndex}
+                        min={0}
+                        showStepper
+                        step={1}
+                        value={sourceVideo.endFrame}
+                        onChange={setEndFrame}
+                      />
+                    </Box>
+                  </HStack>
+                </Stack>
+              </HStack>
             </Field>
             <HStack justify="end">
               <Button disabled={isLoading} size="xs" variant="ghost" onClick={handleClear}>

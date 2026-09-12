@@ -26,6 +26,7 @@ import {
   normalizeVideoSettings,
   normalizeVideoWidgetValues,
   resolveVideoMode,
+  videoClipSpanSeconds,
   VIDEO_SOURCE_FALLBACK_FPS,
 } from './settings';
 import { getDefaultVideoSettings } from './videoPolicies';
@@ -207,6 +208,23 @@ describe('isVideoSourceClip', () => {
     expect(isVideoSourceClip(SOURCE_VIDEO)).toBe(true);
     expect(isVideoSourceClip({ ...SOURCE_VIDEO, fps: undefined })).toBe(false);
     expect(isVideoSourceClip({ ...SOURCE_VIDEO, video_name: 7 })).toBe(false);
+  });
+});
+
+describe('videoClipSpanSeconds', () => {
+  it('runs to the far edge of the last selected frame', () => {
+    // 16 fps, frames 0..79 inclusive: stopping at 79/16 would cut the final frame short.
+    expect(videoClipSpanSeconds(SOURCE_VIDEO)).toEqual({ endSeconds: 5, startSeconds: 0 });
+    expect(videoClipSpanSeconds({ ...SOURCE_VIDEO, endFrame: 47, startFrame: 32 })).toEqual({
+      endSeconds: 3,
+      startSeconds: 2,
+    });
+  });
+
+  it('has no span to offer for a clip with no usable frame rate', () => {
+    // A persisted clip only has to hold a FINITE fps to hydrate, and a zero would put the
+    // whole clip behind a control that claims to play the selection.
+    expect(videoClipSpanSeconds({ ...SOURCE_VIDEO, fps: 0 })).toBeNull();
   });
 });
 

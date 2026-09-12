@@ -3816,6 +3816,7 @@
       "lastFrame": "Last Frame",
       "lastFrameExtendHelp": "Optional destination: the extension ends on this image.",
       "lastFrameHelp": "Optional: the video ends on this image (interpolates from the first frame).",
+      "playSelection": "Play selection in Preview",
       "removeClip": "Remove video",
       "sampleLength": "Sample Length (Frames)",
       "sampleLengthWithSeconds": "Sample Length · {{seconds}}s",

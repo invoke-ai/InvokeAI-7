@@ -40,6 +40,7 @@ import { ArrowDownIcon, ArrowUpIcon, ChevronDownIcon, FilmIcon, ImagePlusIcon, U
 import { memo, useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { PlayClipSpanButton } from './PlayClipSpanButton';
 import { TrimBoundThumb } from './TrimBoundThumb';
 import { useVideoUiActions } from './VideoUiContext';
 
@@ -276,9 +277,15 @@ const ReferenceCard = memo(function ReferenceCard({
   return (
     <Box borderWidth="1px" p="2" rounded="md">
       <HStack align="start" gap="2">
-        <Badge fontVariantNumeric="tabular-nums" size="xs" variant="solid">
-          {index + 1}
-        </Badge>
+        <Stack align="center" flexShrink={0} gap="1">
+          <Badge fontVariantNumeric="tabular-nums" size="xs" variant="solid">
+            {index + 1}
+          </Badge>
+          {/* Leading the card, left of every thumbnail it shows: plays what the trim
+              below actually selected, which the two still bounds cannot convey — and for
+              an audio reference, whose frames are a drawing of the sound, nothing can. */}
+          {reference.kind === 'video' ? <PlayClipSpanButton clip={reference.clip} /> : null}
+        </Stack>
         {reference.kind === 'image' ? (
           <Box bg="blackAlpha.300" flexShrink={0} h="12" overflow="hidden" rounded="sm" w="16">
             <Image alt="" fit="cover" h="100%" src={galleryImageUrls.thumbnail(name)} w="100%" />
