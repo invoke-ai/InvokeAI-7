@@ -155,6 +155,16 @@ If, after restarting the app, this doesn't improve your performance, either rest
   (for example `MIOPEN_FIND_MODE=NORMAL` to let MIOpen re-tune its kernel database).
 :::
 
+:::note[Wide-head attention runs on the math kernel]
+  On ROCm builds Invoke routes attention whose head dimension exceeds 256 to PyTorch's math kernel.
+  The fused kernels return wrong output there on torch 2.13 / ROCm 7.2 (measured on a W7900), which
+  showed up as black or noisy images from the image VAEs - their mid-block attention is one 512-wide
+  head. The math kernel materializes the attention matrix, so large untiled VAE decodes reserve
+  more VRAM (about 4 GB at 1024px, 21 GB at 1536px) and may push other models out of the cache;
+  tiled decoding keeps that bounded. Export `INVOKE_ROCM_FUSED_SDPA_MAX_HEAD_DIM` to raise the
+  threshold on a build whose fused kernels are known to be correct.
+:::
+
 Run `rocm-smi` on your system's command line verify that drivers and ROCm are installed. If this command fails, or doesn't report versions, you will need to install them.
 
 Go to the [ROCm Documentation] and carefully follow the instructions for your system to get everything installed.

@@ -1039,7 +1039,7 @@ describe('adopting a project from another realm', () => {
     // a project runs it, and so does the conflict fork that rescues the LIVE
     // copy. The registry entry is still here, the ranking is still on screen,
     // and deleting it would take the user's search with it.
-    const clusterId = registerImageCluster(['a.png', 'b.png'], 'beaches');
+    const clusterId = registerImageCluster(['image:a.png', 'image:b.png'], 'beaches');
     const values = galleryValuesOf(
       galleryProject({
         galleryPage: 3,
@@ -1077,7 +1077,7 @@ describe('adopting a project from another realm', () => {
   });
 
   it('retargets a project without disturbing its live session state', () => {
-    const clusterId = registerImageCluster(['a.png', 'b.png'], 'beaches');
+    const clusterId = registerImageCluster(['image:a.png', 'image:b.png'], 'beaches');
     let state = createInitialWorkbenchState();
     const project = getActiveProject(state);
     const staleCopy = project;
@@ -4110,6 +4110,189 @@ describe('workbenchReducer Phase 5 generation flow', () => {
     state = workbenchReducer(state, { image: compareImage, type: 'setGalleryCompareImage' });
 
     expect(getActiveProject(state).settings.showProgressImagesInViewer).toBe(false);
+  });
+
+  it('resets the page and stamps the selection query when the starred-only filter changes', () => {
+    let state = createInitialWorkbenchState();
+
+    state = workbenchReducer(state, { page: 4, type: 'setGalleryPage' });
+    state = workbenchReducer(state, { starredOnly: true, type: 'setGalleryStarredOnly' });
+
+    let values = getProjectWidgetValues(getActiveProject(state), 'gallery');
+    expect(values.starredOnly).toBe(true);
+    expect(values.galleryPage).toBe(0);
+
+    state = workbenchReducer(state, { item: createGalleryImageItem('starred.png'), type: 'selectGalleryItem' });
+    values = getProjectWidgetValues(getActiveProject(state), 'gallery');
+    expect(values.selectedImageQuery).toMatchObject({ starredOnly: true });
+
+    // Releasing the filter is a listing change too: the page resets, and a
+    // later selection is stamped against the unfiltered listing.
+    state = workbenchReducer(state, { page: 2, type: 'setGalleryPage' });
+    state = workbenchReducer(state, { starredOnly: false, type: 'setGalleryStarredOnly' });
+    state = workbenchReducer(state, {
+      itemKeys: ['image:a.png', 'image:b.png'],
+      primaryItem: createGalleryImageItem('b.png'),
+      type: 'setGalleryMultiSelection',
+    });
+    values = getProjectWidgetValues(getActiveProject(state), 'gallery');
+    expect(values.galleryPage).toBe(0);
+    expect(values.selectedImageQuery).toMatchObject({ starredOnly: false });
+  });
+
+  it('stamps a landing generation against the unfiltered listing', () => {
+    // A fresh result is never starred, so following it means leaving the
+    // starred-only listing — the stamp says so, exactly as it clears the search.
+    let state = primeGenerate();
+    state = workbenchReducer(state, { destination: 'gallery', type: 'setInvocationDestination' });
+    state = workbenchReducer(state, { starredOnly: true, type: 'setGalleryStarredOnly' });
+    state = submitGenerate(state);
+
+    const project = getActiveProject(state);
+    const queueItem = project.queue.items[0];
+    state = workbenchReducer(state, {
+      images: [createImage('completed.png', queueItem.id)],
+      projectId: project.id,
+      queueItemId: queueItem.id,
+      type: 'routeQueueItemResults',
+    });
+
+    expect(getProjectWidgetValues(getActiveProject(state), 'gallery').selectedImageQuery).toMatchObject({
+      searchTerm: '',
+      starredOnly: false,
+    });
+  });
+
+  it('exits a similarity search when the view moves to another board', () => {
+    // A ranking answers with images from wherever they live, so it is not a
+    // view OF any board; left up, a board click would be answered with the
+    // same results under a new board name.
+    let state = createInitialWorkbenchState();
+
+    state = workbenchReducer(state, { boardId: 'board-a', type: 'selectGalleryBoard' });
+    state = workbenchReducer(state, {
+      type: 'patchWidgetValues',
+      values: { galleryPage: 4, semanticImageQuery: { kind: 'text', query: 'sunset' } },
+      widgetId: 'gallery',
+    });
+
+    state = workbenchReducer(state, { boardId: 'board-b', type: 'selectGalleryBoard' });
+
+    const values = getProjectWidgetValues(getActiveProject(state), 'gallery');
+
+    expect(values.semanticImageQuery).toBeNull();
+    expect(values.selectedBoardId).toBe('board-b');
+    expect(values.galleryPage).toBe(0);
+  });
+
+  it('keeps a similarity search when the board already shown is picked again', () => {
+    // A text or image reference survives a reload, so a click that changes
+    // nothing about the view must not erase persisted state — and autosave
+    // the loss — on what reads as a no-op.
+    let state = createInitialWorkbenchState();
+
+    state = workbenchReducer(state, { boardId: 'board-a', type: 'selectGalleryBoard' });
+    state = workbenchReducer(state, {
+      type: 'patchWidgetValues',
+      values: { semanticImageQuery: { kind: 'text', query: 'sunset' } },
+      widgetId: 'gallery',
+    });
+
+    state = workbenchReducer(state, { boardId: 'board-a', type: 'selectGalleryBoard' });
+
+    expect(getProjectWidgetValues(getActiveProject(state), 'gallery').semanticImageQuery).toEqual({
+      kind: 'text',
+      query: 'sunset',
+    });
+  });
+
+  it('leaves the page stamped on the selection alone when a search is dismissed by a board move', () => {
+    // The selection here was made BEFORE the search, so its page is a real
+    // board position that the search never rewrote (setSemanticImageQuery
+    // touches only the grid's page). Zeroing it — as the adoption path must,
+    // having no better information — would cost Preview the cursor it still
+    // has and strand its arrows at the top of the board.
+    let state = createInitialWorkbenchState();
+
+    state = workbenchReducer(state, { boardId: 'board-a', type: 'selectGalleryBoard' });
+    state = workbenchReducer(state, {
+      item: createGalleryImageItem('deep.png'),
+      selectionPage: 7,
+      type: 'selectGalleryItem',
+    });
+    state = workbenchReducer(state, {
+      type: 'patchWidgetValues',
+      values: { semanticImageQuery: { kind: 'text', query: 'sunset' } },
+      widgetId: 'gallery',
+    });
+
+    state = workbenchReducer(state, { boardId: 'board-b', type: 'selectGalleryBoard' });
+
+    const values = getProjectWidgetValues(getActiveProject(state), 'gallery');
+
+    expect(values.semanticImageQuery).toBeNull();
+    expect(values.selectedImagePage).toBe(7);
+    expect((values.selectedImageQuery as { boardId: string; page: number }).page).toBe(7);
+    expect((values.selectedImageQuery as { boardId: string; page: number }).boardId).toBe('board-a');
+  });
+
+  it('exits a similarity search when the Images/Assets tab is switched, but not when it is re-clicked', () => {
+    // The two tabs are two listings and the ranking is a view of neither. A
+    // gallery that never touched the setting has no galleryView at all, and
+    // that reads as Images — so clicking Images there is not a switch.
+    let state = createInitialWorkbenchState();
+
+    state = workbenchReducer(state, {
+      type: 'patchWidgetValues',
+      values: { semanticImageQuery: { kind: 'text', query: 'sunset' } },
+      widgetId: 'gallery',
+    });
+
+    state = workbenchReducer(state, { galleryView: 'images', type: 'setGalleryView' });
+
+    expect(getProjectWidgetValues(getActiveProject(state), 'gallery').semanticImageQuery).toEqual({
+      kind: 'text',
+      query: 'sunset',
+    });
+
+    state = workbenchReducer(state, { galleryView: 'assets', type: 'setGalleryView' });
+
+    const values = getProjectWidgetValues(getActiveProject(state), 'gallery');
+
+    expect(values.semanticImageQuery).toBeNull();
+    expect(values.galleryView).toBe('assets');
+  });
+
+  it('exits a similarity search when the board being viewed is deleted', () => {
+    // Deleting the viewed board moves the view to Uncategorized without
+    // going through `selectGalleryBoard`, so the rule has to be applied here
+    // too — otherwise the ranking survives under a board name that is gone.
+    let state = createInitialWorkbenchState();
+
+    state = workbenchReducer(state, { boardId: 'doomed-board', type: 'selectGalleryBoard' });
+    state = workbenchReducer(state, {
+      type: 'patchWidgetValues',
+      values: { semanticImageQuery: { kind: 'text', query: 'sunset' } },
+      widgetId: 'gallery',
+    });
+
+    state = workbenchReducer(state, {
+      outcome: {
+        boardId: 'doomed-board',
+        deletedBoardImageNames: [],
+        deletedBoardVideoNames: [],
+        deletedImageNames: [],
+        deletedVideoNames: [],
+        failedImageNames: [],
+        failedVideoNames: [],
+      },
+      type: 'reconcileDeletedGalleryBoard',
+    });
+
+    const values = getProjectWidgetValues(getActiveProject(state), 'gallery');
+
+    expect(values.selectedBoardId).toBe('none');
+    expect(values.semanticImageQuery).toBeNull();
   });
 
   it('stores selected backend board id for gallery submissions', () => {

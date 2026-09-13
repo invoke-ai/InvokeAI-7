@@ -356,6 +356,40 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/utilities/fonts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List User Fonts */
+        get: operations["list_user_fonts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/utilities/fonts/{font_path}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get User Font File */
+        get: operations["get_user_font_file"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/utilities/expand-prompt": {
         parameters: {
             query?: never;
@@ -390,6 +424,110 @@ export type paths = {
          * @description Generate a descriptive prompt from an image using a vision-language model.
          */
         post: operations["image_to_prompt"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/fonts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Fonts */
+        get: operations["list_fonts"];
+        put?: never;
+        /** Upload Font */
+        post: operations["upload_font"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/fonts/validate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Validate Font */
+        post: operations["validate_font"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/fonts/rescan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Rescan Fonts */
+        post: operations["rescan_fonts"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/fonts/{font_id}/file": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Font File */
+        get: operations["get_font_file"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/fonts/{font_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Font */
+        get: operations["get_font"];
+        put?: never;
+        post?: never;
+        /** Delete Font */
+        delete: operations["delete_font"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/fonts/{font_id}/instance": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Font Instance */
+        post: operations["create_font_instance"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1478,13 +1616,14 @@ export type paths = {
         };
         /**
          * Search Image Map
-         * @description Ranks the user's accessible images by semantic similarity.
+         * @description Ranks the user's accessible images and videos by semantic similarity.
          *
          *     Provide exactly one of `q` (text search — requires the embedding model's
-         *     text encoder to be installed) or `image_name` (visual similarity — uses
-         *     the reference image's stored embedding when it exists, and otherwise
-         *     embeds the image file on demand, so unindexed images such as assets can
-         *     be reference images too).
+         *     text encoder to be installed), `image_name`, or `video_name` (visual
+         *     similarity — uses the reference item's stored embedding when it exists,
+         *     and otherwise embeds its file on demand, so unindexed items such as assets
+         *     can be reference items too). A video is represented by its thumbnail, the
+         *     same frame the index embedded.
          */
         get: operations["search_image_map"];
         put?: never;
@@ -1557,10 +1696,10 @@ export type paths = {
         };
         /**
          * Get Image Map Image Labels
-         * @description Labels one image with the vocabulary phrases most similar to its stored embedding.
+         * @description Labels one gallery item with the vocabulary phrases most similar to its stored embedding.
          *
-         *     Serves map hover cards, so it only covers images the index has embedded;
-         *     an unindexed image (assets, intermediates, not-yet-indexed) is a 404
+         *     Serves map hover cards, so it only covers items the index has embedded;
+         *     an unindexed item (assets, intermediates, not-yet-indexed) is a 404
          *     rather than an on-demand embed — a hover must never queue encoder work.
          *     Requires the embedding model's text encoder, like /cluster_labels.
          */
@@ -2736,6 +2875,26 @@ export type paths = {
          * @description Immediately cancels all queue items except in-processing items. Non-admin users can only cancel their own items.
          */
         put: operations["cancel_all_except_current"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/queue/{queue_id}/cancel_all": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Cancel All
+         * @description Immediately cancels all queue items, in-progress items included. Non-admin users can only cancel their own items.
+         */
+        put: operations["cancel_all"];
         post?: never;
         delete?: never;
         options?: never;
@@ -5707,6 +5866,19 @@ export type components = {
              */
             is_public: boolean;
         };
+        /** Body_upload_font */
+        Body_upload_font: {
+            /**
+             * File
+             * @description The font file to upload
+             */
+            file: Blob;
+            /**
+             * Scope
+             * @default private
+             */
+            scope?: string;
+        };
         /** Body_upload_image */
         Body_upload_image: {
             /** File */
@@ -5723,15 +5895,13 @@ export type components = {
              */
             metadata?: string | null;
         };
-        /** Body_upload_video */
-        Body_upload_video: {
-            /** File */
-            file: Blob;
+        /** Body_validate_font */
+        Body_validate_font: {
             /**
-             * Metadata
-             * @description The metadata to associate with the video, must be a stringified JSON dict
+             * File
+             * @description The font file to validate
              */
-            metadata?: string | null;
+            file: Blob;
         };
         /**
          * Boolean Collection Primitive
@@ -6810,6 +6980,17 @@ export type components = {
          * @description Result of canceling by a destination
          */
         CancelByDestinationResult: {
+            /**
+             * Canceled
+             * @description Number of queue items canceled
+             */
+            canceled: number;
+        };
+        /**
+         * CancelByQueueIDResult
+         * @description Result of canceling by queue id
+         */
+        CancelByQueueIDResult: {
             /**
              * Canceled
              * @description Number of queue items canceled
@@ -11376,6 +11557,7 @@ export type components = {
             model_key: string;
             /**
              * Max Tokens
+             * @description Cap on the tokens the LLM may emit. Clients that expand with a stored system prompt send that prompt's own `max_tokens` here; omitting it uses the default.
              * @default 300
              */
             max_tokens?: number;
@@ -14828,6 +15010,125 @@ export type components = {
          * @enum {string}
          */
         FluxVariantType: "schnell" | "dev" | "dev_fill";
+        /** FontAxisDTO */
+        FontAxisDTO: {
+            /** Tag */
+            tag: string;
+            /** Label */
+            label: string;
+            /** Minimum */
+            minimum: number;
+            /** Default */
+            default: number;
+            /** Maximum */
+            maximum: number;
+            /** Hidden */
+            hidden: boolean;
+        };
+        /** FontDTO */
+        FontDTO: {
+            /** Id */
+            id: string;
+            /** Family */
+            family: string;
+            /** Label */
+            label: string;
+            /** Style */
+            style: string;
+            /** Weight */
+            weight: number;
+            /** Content Hash */
+            content_hash: string;
+            /**
+             * Scope
+             * @enum {string}
+             */
+            scope: "private" | "shared";
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "uploaded" | "directory";
+            /** Filename */
+            filename: string;
+            /** Byte Size */
+            byte_size: number;
+            /** Url */
+            url: string;
+            /** Axes */
+            axes: components["schemas"]["FontAxisDTO"][];
+            /** Instances */
+            instances: components["schemas"]["FontInstanceDTO"][];
+        };
+        /** FontInstanceDTO */
+        FontInstanceDTO: {
+            /** Name */
+            name: string;
+            /** Coordinates */
+            coordinates: {
+                [key: string]: number;
+            };
+        };
+        /** FontInstanceRequest */
+        FontInstanceRequest: {
+            /** Content Hash */
+            content_hash: string;
+            /** Coordinates */
+            coordinates?: {
+                [key: string]: number;
+            };
+        };
+        /** FontListResponse */
+        FontListResponse: {
+            /** Offset */
+            offset: number;
+            /** Limit */
+            limit: number;
+            /** Total */
+            total: number;
+            /** Items */
+            items: components["schemas"]["FontDTO"][];
+        };
+        /** FontRescanResponse */
+        FontRescanResponse: {
+            /** Indexed */
+            indexed: number;
+            /** Revision */
+            revision: number;
+        };
+        /**
+         * FontScope
+         * @description The account scope of an uploaded font.
+         * @enum {string}
+         */
+        FontScope: "private" | "shared" | "all";
+        /** FontUploadResponse */
+        FontUploadResponse: {
+            font: components["schemas"]["FontDTO"];
+            /** Created */
+            created: boolean;
+        };
+        /** FontValidationResponse */
+        FontValidationResponse: {
+            /** Filename */
+            filename: string;
+            /** Family */
+            family: string;
+            /** Label */
+            label: string;
+            /** Style */
+            style: string;
+            /** Weight */
+            weight: number;
+            /** Content Hash */
+            content_hash: string;
+            /** Byte Size */
+            byte_size: number;
+            /** Axes */
+            axes: components["schemas"]["FontAxisDTO"][];
+            /** Instances */
+            instances: components["schemas"]["FontInstanceDTO"][];
+        };
         /** ForInvocation */
         ForInvocation: {
             /**
@@ -15156,6 +15457,11 @@ export type components = {
              * @description Video frames per second. None for images.
              */
             fps?: number | null;
+            /**
+             * Media Origin
+             * @description How a video entered the gallery, if it was marked: 'audio_upload' for an uploaded audio file the server wrapped into a waveform video. None for images and for unmarked videos.
+             */
+            media_origin?: string | null;
         };
         /**
          * GalleryItemKind
@@ -17906,21 +18212,23 @@ export type components = {
         /**
          * ImageIndexStatus
          * @description Progress of the embedding index for one embedding model.
+         *
+         *     Counts cover both media kinds: an indexed gallery is its images plus its videos.
          */
         ImageIndexStatus: {
             /**
              * Total
-             * @description Number of gallery images eligible for indexing
+             * @description Number of gallery items (images and videos) eligible for indexing
              */
             total: number;
             /**
              * Embedded
-             * @description Number of eligible images that have an embedding
+             * @description Number of eligible items that have an embedding
              */
             embedded: number;
             /**
              * Failed
-             * @description Eligible images that repeatedly failed to embed; excluded from pending so it can drain
+             * @description Eligible items that repeatedly failed to embed; excluded from pending so it can drain
              * @default 0
              */
             failed?: number;
@@ -18171,7 +18479,7 @@ export type components = {
         };
         /**
          * ImageMapImageLabelsResponse
-         * @description The best vocabulary labels for one image.
+         * @description The best vocabulary labels for one gallery item.
          */
         ImageMapImageLabelsResponse: {
             /**
@@ -18186,13 +18494,13 @@ export type components = {
             alternates: string[];
             /**
              * Score
-             * @description Cosine similarity of the best phrase to the image's embedding
+             * @description Cosine similarity of the best phrase to the item's embedding
              */
             score: number;
         };
         /**
          * ImageMapPoint
-         * @description One image's position on the 2D semantic map.
+         * @description One gallery item's position on the 2D semantic map.
          */
         ImageMapPoint: {
             /**
@@ -18207,9 +18515,15 @@ export type components = {
             y: number;
             /**
              * Image Name
-             * @description The image this point represents
+             * @description The image or video this point represents; `kind` says which namespace the name belongs to
              */
             image_name: string;
+            /**
+             * Kind
+             * @description Whether this point is an image or a video
+             * @enum {string}
+             */
+            kind: "image" | "video";
             /**
              * Cluster
              * @description DBSCAN cluster label; -1 means unclustered
@@ -18324,7 +18638,7 @@ export type components = {
         };
         /**
          * ImageMapSearchResponse
-         * @description Semantic search results over the user's embedded images.
+         * @description Semantic search results over the user's embedded gallery items.
          */
         ImageMapSearchResponse: {
             /**
@@ -18340,9 +18654,15 @@ export type components = {
         ImageMapSearchResult: {
             /**
              * Image Name
-             * @description The matching image
+             * @description The matching image or video; `kind` says which namespace the name belongs to
              */
             image_name: string;
+            /**
+             * Kind
+             * @description Whether this hit is an image or a video
+             * @enum {string}
+             */
+            kind: "image" | "video";
             /**
              * Score
              * @description Cosine similarity to the query; higher is more similar
@@ -20474,6 +20794,7 @@ export type components = {
          *         download_cache_dir: Path to the directory that contains dynamically downloaded models.
          *         legacy_conf_dir: Path to directory of legacy checkpoint config files.
          *         db_dir: Path to InvokeAI databases directory.
+         *         db_synchronous: SQLite durability setting. `full`, the default and what InvokeAI has always used, flushes every commit to disk. `normal` acknowledges commits without waiting for that flush - measured at roughly 12x shorter commits on an SSD - and cannot corrupt the database under WAL, which is why it is refused, with a warning, when WAL is unavailable for the database file. What `normal` gives up is the most recent transactions on a power loss or OS crash: a just-written image record or queue status, not the image file itself.<br>Valid values: `full`, `normal`
          *         outputs_dir: Path to directory for outputs.
          *         image_subfolder_strategy: Strategy for organizing images into subfolders. 'flat' stores all images in a single folder. 'date' organizes by YYYY/MM/DD. 'type' organizes by image category. 'hash' uses first 2 characters of UUID for filesystem performance.<br>Valid values: `flat`, `date`, `type`, `hash`
          *         custom_nodes_dir: Path to directory for custom nodes.
@@ -20496,6 +20817,8 @@ export type components = {
          *         device_working_mem_gb: The amount of working memory to keep available on the compute device (in GB). Has no effect if running on CPU. If you are experiencing OOM errors, try increasing this value.
          *         enable_partial_loading: Enable partial loading of models. This enables models to run with reduced VRAM requirements (at the cost of slower speed) by streaming the model from RAM to VRAM as its used. In some edge cases, partial loading can cause models to run more slowly if they were previously being fully loaded into VRAM.
          *         keep_ram_copy_of_weights: Whether to keep a full RAM copy of a model's weights when the model is loaded in VRAM. Keeping a RAM copy increases average RAM usage, but speeds up model switching and LoRA patching (assuming there is sufficient RAM). Set this to False if RAM pressure is consistently high.
+         *         fp8_compute: Keep ComfyUI 'scaled fp8' checkpoints quantized instead of dequantizing them at load, and run their matmuls on the fp8 tensor cores (requires an Ada/SM 8.9 or newer NVIDIA GPU; falls back automatically otherwise). Roughly halves the transformer's VRAM and speeds up denoising, but quantizes activations as well, so images will differ from previous versions at the same seed. Reproducibility also requires the model to be FULLY resident in VRAM: a layer whose weights are still in RAM falls back to the dequantized path, and since which layers are resident shifts from run to run, the same seed then yields visibly different images. For repeatable output, ensure the model loads at 100% (e.g. enable_partial_loading=false with enough free VRAM).
+         *         fp8_compute_full_precision_hints: Honor the per-layer 'full_precision_matrix_mult' flags that some scaled-fp8 checkpoints ship. Those layers then dequantize on every forward instead of using the fp8 tensor cores, which can cost a large part of the fp8_compute speedup - on checkpoints that mark many layers, most of it. Set to false to run every quantized layer on the fp8 tensor cores, ignoring the producer's instruction; faster, but the marked layers were flagged as numerically sensitive, so quality may suffer. Only has an effect when fp8_compute is enabled.
          *         ram: DEPRECATED: This setting is no longer used. It has been replaced by `max_cache_ram_gb`, but most users will not need to use this config since automatic cache size limits should work well in most cases. This config setting will be removed once the new model cache behavior is stable.
          *         vram: DEPRECATED: This setting is no longer used. It has been replaced by `max_cache_vram_gb`, but most users will not need to use this config since automatic cache size limits should work well in most cases. This config setting will be removed once the new model cache behavior is stable.
          *         lazy_offload: DEPRECATED: This setting is no longer used. Lazy-offloading is enabled by default. This config setting will be removed once the new model cache behavior is stable.
@@ -20507,7 +20830,7 @@ export type components = {
          *         pid_memory_optimization: Enable experimental PiD decode memory optimizations. Roughly halves the peak activation memory of a PiD decode; in exchange the decoded image changes slightly, because neither the chunked pixel pathway nor the float32 sampler intermediates are bit-exact with the default path.
          *         attention_type: Attention type.<br>Valid values: `auto`, `normal`, `xformers`, `sliced`, `torch-sdp`
          *         attention_slice_size: Slice size, valid when attention_type=="sliced".<br>Valid values: `auto`, `balanced`, `max`, `1`, `2`, `3`, `4`, `5`, `6`, `7`, `8`
-         *         force_tiled_decode: Whether to enable tiled VAE decode (reduces memory consumption with some performance penalty).
+         *         force_tiled_decode: Whether to enable tiled VAE decode (reduces memory consumption with some performance penalty). A tiled decode is not pixel-identical to a single-pass one: a VAE decoder normalises and attends over the whole image, so the difference is spread across it rather than confined to the tile seams. As of this release the setting also applies to FLUX.1, which previously ignored it.
          *         pil_compress_level: The compress_level setting of PIL.Image.save(), used for PNG encoding. All settings are lossless. 0 = no compression, 1 = fastest with slightly larger filesize, 9 = slowest with smallest filesize. 1 is typically the best setting.
          *         max_queue_size: Maximum number of items in the session queue.
          *         session_queue_mode: Session queue mode. Use 'FIFO' for traditional first-in-first-out, or 'round_robin' to serve each user's jobs in turn. In single-user mode, FIFO is always used regardless of this setting.<br>Valid values: `FIFO`, `round_robin`
@@ -20525,10 +20848,10 @@ export type components = {
          *         allow_unknown_models: Allow installation of models that we are unable to identify. If enabled, models will be marked as `unknown` in the database, and will not have any metadata associated with them. If disabled, unknown models will be rejected during installation.
          *         multiuser: Enable multiuser support. When disabled, the application runs in single-user mode using a default system account with administrator privileges. When enabled, requires user authentication and authorization.
          *         strict_password_checking: Enforce strict password requirements. When True, passwords must contain uppercase, lowercase, and numbers. When False (default), any password is accepted but its strength (weak/moderate/strong) is reported to the user.
-         *         image_index_enabled: Maintain a semantic embedding index of gallery images, used by the image map and semantic search features.
-         *         image_index_model: Name of the installed CLIP Vision or SigLIP model used to embed gallery images. Changing the model discards embeddings computed by the previous model.
+         *         image_index_enabled: Maintain a semantic embedding index of gallery images and videos, used by the image map and semantic search features.
+         *         image_index_model: Name of the installed CLIP Vision or SigLIP model used to embed gallery images and video thumbnails. Changing the model discards embeddings computed by the previous model.
          *         image_index_device: Set to `cpu` to compute image embeddings on the CPU with a service-local copy of the model - avoids VRAM use and lets indexing run during generations. Any other value is ignored: embeddings otherwise run on the model cache's device, pausing while generations are in progress.
-         *         image_index_batch_size: Number of images embedded per batch by the image index worker.
+         *         image_index_batch_size: Number of gallery items embedded per batch by the image index worker.
          *         external_alibabacloud_api_key: API key for Alibaba Cloud DashScope image generation.
          *         external_alibabacloud_base_url: Base URL override for Alibaba Cloud DashScope image generation.
          *         external_gemini_api_key: API key for Gemini image generation.
@@ -20668,12 +20991,45 @@ export type components = {
              */
             db_dir?: string;
             /**
+             * Db Synchronous
+             * @description SQLite durability setting. `full`, the default and what InvokeAI has always used, flushes every commit to disk. `normal` acknowledges commits without waiting for that flush - measured at roughly 12x shorter commits on an SSD - and cannot corrupt the database under WAL, which is why it is refused, with a warning, when WAL is unavailable for the database file. What `normal` gives up is the most recent transactions on a power loss or OS crash: a just-written image record or queue status, not the image file itself.
+             * @default full
+             * @enum {string}
+             */
+            db_synchronous?: "full" | "normal";
+            /**
              * Outputs Dir
              * Format: path
              * @description Path to directory for outputs.
              * @default outputs
              */
             outputs_dir?: string;
+            /**
+             * Fonts Dir
+             * Format: path
+             * @description Path to directory for custom fonts.
+             * @default fonts
+             */
+            fonts_dir?: string;
+            /**
+             * Fonts Storage Dir
+             * Format: path
+             * @description Path to application-managed uploaded fonts.
+             * @default fonts-uploaded
+             */
+            fonts_storage_dir?: string;
+            /**
+             * Max Font Upload Bytes
+             * @description Maximum size of one uploaded custom font in bytes.
+             * @default 33554432
+             */
+            max_font_upload_bytes?: number;
+            /**
+             * Max Font Library Bytes
+             * @description Maximum total size of uploaded custom fonts in bytes per account or shared library.
+             * @default 1073741824
+             */
+            max_font_library_bytes?: number;
             /**
              * Image Subfolder Strategy
              * @description Strategy for organizing images into subfolders. 'flat' stores all images in a single folder. 'date' organizes by YYYY/MM/DD. 'type' organizes by image category. 'hash' uses first 2 characters of UUID for filesystem performance.
@@ -20808,6 +21164,18 @@ export type components = {
              */
             keep_ram_copy_of_weights?: boolean;
             /**
+             * Fp8 Compute
+             * @description Keep ComfyUI 'scaled fp8' checkpoints quantized instead of dequantizing them at load, and run their matmuls on the fp8 tensor cores (requires an Ada/SM 8.9 or newer NVIDIA GPU; falls back automatically otherwise). Roughly halves the transformer's VRAM and speeds up denoising, but quantizes activations as well, so images will differ from previous versions at the same seed. Reproducibility also requires the model to be FULLY resident in VRAM: a layer whose weights are still in RAM falls back to the dequantized path, and since which layers are resident shifts from run to run, the same seed then yields visibly different images. For repeatable output, ensure the model loads at 100% (e.g. enable_partial_loading=false with enough free VRAM).
+             * @default false
+             */
+            fp8_compute?: boolean;
+            /**
+             * Fp8 Compute Full Precision Hints
+             * @description Honor the per-layer 'full_precision_matrix_mult' flags that some scaled-fp8 checkpoints ship. Those layers then dequantize on every forward instead of using the fp8 tensor cores, which can cost a large part of the fp8_compute speedup - on checkpoints that mark many layers, most of it. Set to false to run every quantized layer on the fp8 tensor cores, ignoring the producer's instruction; faster, but the marked layers were flagged as numerically sensitive, so quality may suffer. Only has an effect when fp8_compute is enabled.
+             * @default true
+             */
+            fp8_compute_full_precision_hints?: boolean;
+            /**
              * Ram
              * @description DEPRECATED: This setting is no longer used. It has been replaced by `max_cache_ram_gb`, but most users will not need to use this config since automatic cache size limits should work well in most cases. This config setting will be removed once the new model cache behavior is stable.
              */
@@ -20887,7 +21255,7 @@ export type components = {
             attention_slice_size?: "auto" | "balanced" | "max" | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
             /**
              * Force Tiled Decode
-             * @description Whether to enable tiled VAE decode (reduces memory consumption with some performance penalty).
+             * @description Whether to enable tiled VAE decode (reduces memory consumption with some performance penalty). A tiled decode is not pixel-identical to a single-pass one: a VAE decoder normalises and attends over the whole image, so the difference is spread across it rather than confined to the tile seams. As of this release the setting also applies to FLUX.1, which previously ignored it.
              * @default false
              */
             force_tiled_decode?: boolean;
@@ -20992,13 +21360,13 @@ export type components = {
             strict_password_checking?: boolean;
             /**
              * Image Index Enabled
-             * @description Maintain a semantic embedding index of gallery images, used by the image map and semantic search features.
+             * @description Maintain a semantic embedding index of gallery images and videos, used by the image map and semantic search features.
              * @default true
              */
             image_index_enabled?: boolean;
             /**
              * Image Index Model
-             * @description Name of the installed CLIP Vision or SigLIP model used to embed gallery images. Changing the model discards embeddings computed by the previous model.
+             * @description Name of the installed CLIP Vision or SigLIP model used to embed gallery images and video thumbnails. Changing the model discards embeddings computed by the previous model.
              * @default DFN2B-CLIP-ViT-L-14-39B
              */
             image_index_model?: string;
@@ -21009,7 +21377,7 @@ export type components = {
             image_index_device?: string | null;
             /**
              * Image Index Batch Size
-             * @description Number of images embedded per batch by the image index worker.
+             * @description Number of gallery items embedded per batch by the image index worker.
              * @default 8
              */
             image_index_batch_size?: number;
@@ -39692,6 +40060,11 @@ export type components = {
              * @description Whether the prompt is shared with all users.
              */
             is_public?: boolean | null;
+            /**
+             * Max Tokens
+             * @description The new output-token cap. Unlike the other fields, an explicitly supplied null is a change -- it clears the cap back to the default; omitting the field leaves it alone.
+             */
+            max_tokens?: number | null;
         };
         /**
          * SystemPromptField
@@ -39716,6 +40089,11 @@ export type components = {
              * @description The system prompt content.
              */
             content: string;
+            /**
+             * Max Tokens
+             * @description Cap on the tokens the LLM may emit when expanding with this prompt. Null means use the default of 300.
+             */
+            max_tokens?: number | null;
             /**
              * Id
              * @description The system prompt ID.
@@ -39756,6 +40134,11 @@ export type components = {
              * @description The system prompt content.
              */
             content: string;
+            /**
+             * Max Tokens
+             * @description Cap on the tokens the LLM may emit when expanding with this prompt. Null means use the default of 300.
+             */
+            max_tokens?: number | null;
         };
         /** T2IAdapterField */
         T2IAdapterField: {
@@ -40983,8 +41366,8 @@ export type components = {
             text_llm_model?: components["schemas"]["ModelIdentifierField"] | null;
             /**
              * Max Tokens
-             * @description Maximum number of tokens to generate.
-             * @default 300
+             * @description Maximum number of tokens to generate. 0 uses the preset's own cap, or 300 if it does not set one.
+             * @default 0
              */
             max_tokens?: number;
             /**
@@ -41731,6 +42114,37 @@ export type components = {
              * @default 0
              */
             token_epoch?: number;
+        };
+        /** UserFont */
+        UserFont: {
+            /** Id */
+            id: string;
+            /** Family */
+            family: string;
+            /** Label */
+            label: string;
+            /** Path */
+            path: string;
+            /** Url */
+            url: string;
+            /** Faces */
+            faces: components["schemas"]["UserFontFace"][];
+        };
+        /** UserFontFace */
+        UserFontFace: {
+            /** Path */
+            path: string;
+            /** Url */
+            url: string;
+            /** Weight */
+            weight: number;
+            /** Style */
+            style: string;
+        };
+        /** UserFontsResponse */
+        UserFontsResponse: {
+            /** Fonts */
+            fonts: components["schemas"]["UserFont"][];
         };
         /**
          * UserProfileUpdateRequest
@@ -43049,6 +43463,11 @@ export type components = {
              * @default
              */
             video_subfolder?: string;
+            /**
+             * Media Origin
+             * @description How this video entered the gallery, if it was marked: 'audio_upload' for an uploaded audio file the server wrapped into a waveform video.
+             */
+            media_origin?: string | null;
             /**
              * Board Id
              * @description The id of the board the video belongs to, if one exists.
@@ -45804,6 +46223,18 @@ export type components = {
              */
             vae?: components["schemas"]["VAEField"] | null;
             /**
+             * Tiled
+             * @description Processing using overlapping tiles (reduce memory consumption)
+             * @default false
+             */
+            tiled?: boolean;
+            /**
+             * Tile Size
+             * @description The tile size for VAE tiling in pixels (image space). If set to 0, the default tile size for the model will be used. Larger tile sizes generally produce better results at the cost of higher memory usage.
+             * @default 0
+             */
+            tile_size?: number;
+            /**
              * type
              * @default z_image_l2i
              * @constant
@@ -46609,6 +47040,57 @@ export interface operations {
             };
         };
     };
+    list_user_fonts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserFontsResponse"];
+                };
+            };
+        };
+    };
+    get_user_font_file: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                font_path: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     expand_prompt: {
         parameters: {
             query?: never;
@@ -46662,6 +47144,255 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ImageToPromptResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_fonts: {
+        parameters: {
+            query?: {
+                offset?: number;
+                limit?: number;
+                search?: string | null;
+                scope?: components["schemas"]["FontScope"];
+                content_hash?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FontListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    upload_font: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_upload_font"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FontUploadResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    validate_font: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_validate_font"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FontValidationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rescan_fonts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FontRescanResponse"];
+                };
+            };
+        };
+    };
+    get_font_file: {
+        parameters: {
+            query?: {
+                expected_hash?: string | null;
+            };
+            header?: never;
+            path: {
+                font_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_font: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                font_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FontDTO"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_font: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                font_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_font_instance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                font_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FontInstanceRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -48897,6 +49628,8 @@ export interface operations {
                 eps?: number | null;
                 /** @description DBSCAN min_samples for clustering */
                 min_samples?: number;
+                /** @description Include indexed videos among the returned items. Leave off unless the client resolves each item through the endpoint its `kind` names. */
+                include_videos?: boolean;
             };
             header?: never;
             path?: never;
@@ -48931,8 +49664,12 @@ export interface operations {
                 q?: string | null;
                 /** @description Reference image for similarity search */
                 image_name?: string | null;
+                /** @description Reference video for similarity search */
+                video_name?: string | null;
                 /** @description Maximum number of results */
                 limit?: number;
+                /** @description Include indexed videos among the returned items. Leave off unless the client resolves each item through the endpoint its `kind` names. */
+                include_videos?: boolean;
             };
             header?: never;
             path?: never;
@@ -48967,6 +49704,8 @@ export interface operations {
                 image_url?: string | null;
                 /** @description Maximum number of results */
                 limit?: number;
+                /** @description Include indexed videos among the returned items. Leave off unless the client resolves each item through the endpoint its `kind` names. */
+                include_videos?: boolean;
             };
             header?: never;
             path?: never;
@@ -49007,6 +49746,8 @@ export interface operations {
                 min_samples?: number;
                 /** @description Candidate labels per cluster */
                 top_k?: number;
+                /** @description Include indexed videos among the returned items. Leave off unless the client resolves each item through the endpoint its `kind` names. */
+                include_videos?: boolean;
             };
             header?: never;
             path?: never;
@@ -49037,8 +49778,10 @@ export interface operations {
     get_image_map_image_labels: {
         parameters: {
             query: {
-                /** @description The image to label */
+                /** @description The image or video to label */
                 image_name: string;
+                /** @description Which namespace image_name belongs to */
+                kind?: "image" | "video";
                 /** @description Number of candidate labels */
                 top_k?: number;
             };
@@ -49143,7 +49886,10 @@ export interface operations {
     };
     get_image_map_status: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Include indexed videos among the returned items. Leave off unless the client resolves each item through the endpoint its `kind` names. */
+                include_videos?: boolean;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -49157,6 +49903,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ImageMapStatusResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -49179,7 +49934,15 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "multipart/form-data": components["schemas"]["Body_upload_video"];
+                "multipart/form-data": {
+                    /** File */
+                    file: Blob;
+                    /**
+                     * Metadata
+                     * @description The metadata to associate with the video, must be a stringified JSON dict
+                     */
+                    metadata?: string | null;
+                };
             };
         };
         responses: {
@@ -49867,6 +50630,8 @@ export interface operations {
                 order_dir?: components["schemas"]["SQLiteDirection"];
                 /** @description Whether to sort by starred items first */
                 starred_first?: boolean;
+                /** @description Filter by starred state: true for starred items only, false for unstarred only. Omit to include both. */
+                starred?: boolean | null;
                 /** @description The term to search for */
                 search_term?: string | null;
                 /** @description Inclusive start date (YYYY-MM-DD) to filter by created_at. */
@@ -49921,6 +50686,8 @@ export interface operations {
                 order_dir?: components["schemas"]["SQLiteDirection"];
                 /** @description Whether to sort by starred items first */
                 starred_first?: boolean;
+                /** @description Filter by starred state: true for starred items only, false for unstarred only. Omit to include both. */
+                starred?: boolean | null;
                 /** @description The term to search for */
                 search_term?: string | null;
             };
@@ -49965,6 +50732,8 @@ export interface operations {
                 order_dir?: components["schemas"]["SQLiteDirection"];
                 /** @description Whether to sort by starred items first */
                 starred_first?: boolean;
+                /** @description Filter by starred state: true for starred items only, false for unstarred only. Omit to include both. */
+                starred?: boolean | null;
                 /** @description The term to search for */
                 search_term?: string | null;
                 /** @description Inclusive start date (YYYY-MM-DD) to filter by created_at. */
@@ -50410,6 +51179,8 @@ export interface operations {
             query?: {
                 /** @description Whether to sort starred items first */
                 starred_first?: boolean;
+                /** @description Filter by starred state: true for starred items only, false for unstarred only. Omit to include both. */
+                starred?: boolean | null;
                 /** @description The sort direction */
                 order_dir?: components["schemas"]["SQLiteDirection"];
                 /** @description The categories of items to include */
@@ -51339,7 +52110,10 @@ export interface operations {
     };
     cancel_all_except_current: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Only cancel queue items whose origin starts with this prefix */
+                origin_prefix?: string | null;
+            };
             header?: never;
             path: {
                 /** @description The queue id to perform this operation on */
@@ -51356,6 +52130,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CancelAllExceptCurrentResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cancel_all: {
+        parameters: {
+            query?: {
+                /** @description Only cancel queue items whose origin starts with this prefix */
+                origin_prefix?: string | null;
+            };
+            header?: never;
+            path: {
+                /** @description The queue id to perform this operation on */
+                queue_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CancelByQueueIDResult"];
                 };
             };
             /** @description Validation Error */

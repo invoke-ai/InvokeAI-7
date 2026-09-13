@@ -147,12 +147,19 @@ export const MINIMAX_H3_TURBO_ACCELERATOR: VideoAcceleratorConfig = {
   stepOverrides: [{ pattern: LIGHTX2V_PATTERN, steps: 8 }],
 };
 
-/** The Ref2VA-trained 4-step Turbo distillation (Comfy-Org's ref2v turbo repack). */
+/**
+ * The Ref2VA-trained Turbo distillations. The reference count is the 4-step v0.1
+ * repack's (Comfy-Org's ref2v turbo); the LightX2V 8-step v1.0 release that
+ * superseded it — the starter model since 2026-09-07 — states its schedule via the
+ * override, like its FL2VA sibling. v0.1 pans the camera rightward whenever a video
+ * reference is conditioned on; v1.0 does not.
+ */
 export const MINIMAX_H3_REF2V_TURBO_ACCELERATOR: VideoAcceleratorConfig = {
   cfgScale: 1,
   cfgScaleLowNoise: null,
   label: 'Turbo',
   steps: 4,
+  stepOverrides: [{ pattern: LIGHTX2V_PATTERN, steps: 8 }],
 };
 
 const WAN_TARGET_RESOLUTION_OPTIONS: readonly VideoTargetResolutionOption[] = [
@@ -588,6 +595,11 @@ export const findWanLightningLoraPair = (
 };
 
 const TURBO_PATTERN = /(?:^|[^a-z0-9])turbo(?:[^a-z0-9]|$)/i;
+// A LightX2V distillation release: the token the starter names carry, or the org's own
+// file-name form (minimax_h3_<task>_turbo_<N>step_v<major>…), which is the name a by-URL
+// install keeps — such an install must not lose the pick to an older starter-named repack.
+const LIGHTX2V_RELEASE_PATTERN =
+  /(?:^|[^a-z0-9])lightx2v(?:[^a-z0-9]|$)|minimax_h3_(?:fl2v|ref2v)_turbo_\d{1,2}step_v\d/i;
 const MINIMAX_H3_NAME_PATTERN = /(?:^|[^a-z0-9])(?:minimax|h3)(?:[^a-z0-9]|$)/i;
 // Ref2VA-trained distillation LoRAs (delimited "ref2v"/"ref2va" token). They must never
 // auto-apply to an FL2VA generation - the Ref2V Turbo repack is trained against the Ref2VA
@@ -597,16 +609,24 @@ const MINIMAX_H3_REF2V_PATTERN = /(?:^|[^a-z0-9])ref2va?(?:[^a-z0-9]|$)/i;
 /**
  * The installed MiniMax H3 Turbo distillation LoRA, if any. Distillation LoRAs
  * carry no dedicated taxonomy, so this is a name heuristic: a delimited
- * "turbo" token, preferring names that also name the model family, with a
- * deterministic tie-break — a user's own "Turbo …" style LoRA loses to the
- * real repack whenever one is installed. Ref2VA-trained turbo LoRAs are
+ * "turbo" token, preferring names that also name the model family, then the
+ * LightX2V releases over the earlier repacks they superseded (the 4-step v0.1
+ * Ref2V repack pans the camera whenever a video reference is used; the
+ * LightX2V v1.0 files replaced both it and the larryvrh FL2VA v4 as starters),
+ * with a deterministic tie-break — a user's own "Turbo …" style LoRA loses to
+ * the real repack whenever one is installed. Ref2VA-trained turbo LoRAs are
  * excluded: the FL2VA accelerator must not pick them.
  */
 export const findMiniMaxH3TurboLora = (
   models: readonly ModelConfig[],
   { requireFamilyName = false, variant = 'fl2va' }: FindMiniMaxH3TurboLoraOptions = {}
 ): LoraModelConfig | null => {
-  const score = (model: LoraModelConfig): number => (MINIMAX_H3_NAME_PATTERN.test(model.name) ? 0 : 1);
+  // Family name first (0/2), then the LightX2V generation (0/1): a family-named
+  // older repack still beats a LightX2V-named look-alike that omits the family.
+  const score = (model: LoraModelConfig): number =>
+    (MINIMAX_H3_NAME_PATTERN.test(model.name) ? 0 : 2) + (LIGHTX2V_RELEASE_PATTERN.test(model.name) ? 0 : 1);
+  // Within a tier the release stating the higher schedule is the later one (the 4-step
+  // v0.1 Ref2V repack against the 8-step v1.0 that replaced it, both under raw file names).
   // The task decides which distillation qualifies: ref2va REQUIRES the ref2v-token repack,
   // every other variant excludes it — the two are trained against different transformers.
   const matchesTask = (name: string): boolean =>
@@ -622,7 +642,10 @@ export const findMiniMaxH3TurboLora = (
           matchesTask(model.name) &&
           (!requireFamilyName || MINIMAX_H3_NAME_PATTERN.test(model.name))
       )
-      .sort((a, b) => score(a) - score(b) || a.name.localeCompare(b.name))[0] ?? null
+      .sort(
+        (a, b) =>
+          score(a) - score(b) || getStatedStepCount(b.name) - getStatedStepCount(a.name) || a.name.localeCompare(b.name)
+      )[0] ?? null
   );
 };
 
@@ -657,13 +680,16 @@ export const findAcceleratorLorasIn = (
 // rank cannot be read as a step count.
 const STEP_COUNT_PATTERN = /(?:^|[^a-z0-9])(\d{1,2})[ _-]?steps?(?:[^a-z0-9]|$)/i;
 
+/** The schedule a distillation LoRA's name states, or 0 when it states none. */
+const getStatedStepCount = (name: string): number => Number(STEP_COUNT_PATTERN.exec(name)?.[1] ?? 0);
+
 /**
  * The step count one distillation LoRA was trained for. Its name is the only
  * record of it: an explicit "N-step" token wins, then the family's per-release
  * overrides, and failing both the family's reference count.
  */
 const getLoraAcceleratorSteps = (config: VideoAcceleratorConfig, lora: LoraModelConfig): number => {
-  const stated = Number(STEP_COUNT_PATTERN.exec(lora.name)?.[1] ?? 0);
+  const stated = getStatedStepCount(lora.name);
 
   if (stated > 0) {
     return stated;

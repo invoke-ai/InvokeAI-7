@@ -91,6 +91,7 @@ const adapter: GalleryUiAdapter = {
     setPage: noop,
     setPageInfo: noop,
     setSearchTerm: noop,
+    setStarredOnly: noop,
     setView: noop,
     toggleItemSelection: noop,
     updateSettings: noop,

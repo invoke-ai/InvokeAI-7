@@ -4,19 +4,14 @@ import type { ReactNode } from 'react';
 import { GalleryUiProvider } from '@features/gallery/react';
 import { useActiveProgressTarget } from '@features/queue/react';
 import { useMountEffect } from '@platform/react/useMountEffect';
+import { captureAccountScope, isAccountScopeCurrent } from '@platform/state/accountLifecycle';
 import { useExportLibraryProject } from '@workbench/projects/useProjectFileActions';
 import { useOpenWorkbenchWidget } from '@workbench/useOpenWorkbenchWidget';
-import { getProjectWidgetValues } from '@workbench/widgetState';
-import {
-  useActiveProjectId,
-  useActiveProjectName,
-  useActiveProjectSelector,
-  useWidgetValuesSelector,
-  useWorkbenchCommands,
-} from '@workbench/WorkbenchContext';
+import { getProjectWidgetInstance } from '@workbench/widgetState';
+import { useActiveProjectSelector, useWorkbenchCommands, useWorkbenchQueries } from '@workbench/WorkbenchContext';
 import { lazy, useMemo } from 'react';
 
-const selectWidgetValues = (values: Record<string, unknown>): Record<string, unknown> => values;
+const EMPTY_WIDGET_VALUES: Record<string, unknown> = Object.freeze({});
 
 const GalleryItemActionsAdapter = lazy(() =>
   import('./GalleryImageActionsBridge').then((module) => ({ default: module.GalleryItemActionsAdapter }))
@@ -30,15 +25,27 @@ const GalleryImageContextMenu = lazy(() =>
  * the Workbench aggregate. No second adapter is expected.
  */
 export const GalleryUiAdapterProvider = ({ children }: { children: ReactNode }) => {
-  const projectId = useActiveProjectId();
-  const projectName = useActiveProjectName();
-  const galleryValues = useActiveProjectSelector((project) => getProjectWidgetValues(project, 'gallery'));
-  const generateValues = useWidgetValuesSelector('generate', selectWidgetValues);
-  const queueItems = useActiveProjectSelector((project) => project.queue.items);
-  const antialiasProgressImages = useActiveProjectSelector((project) => project.settings.antialiasProgressImages);
-  const liveFollowEnabled = useActiveProjectSelector((project) => project.settings.showProgressImagesInViewer);
+  const {
+    projectId,
+    projectName,
+    galleryValues,
+    generateValues,
+    queueItems,
+    antialiasProgressImages,
+    liveFollowEnabled,
+  } = useActiveProjectSelector((project) => ({
+    projectId: project.id,
+    projectName: project.name,
+    galleryValues: getProjectWidgetInstance(project, 'gallery')?.state?.values ?? EMPTY_WIDGET_VALUES,
+    generateValues: getProjectWidgetInstance(project, 'generate')?.state?.values ?? EMPTY_WIDGET_VALUES,
+    queueItems: project.queue.items,
+    antialiasProgressImages: project.settings.antialiasProgressImages,
+    liveFollowEnabled: project.settings.showProgressImagesInViewer,
+  }));
   const liveProgressTarget = useActiveProgressTarget();
   const { account, gallery, notifications, widgets } = useWorkbenchCommands();
+  const queries = useWorkbenchQueries();
+  const accountScope = captureAccountScope();
   const exportProject = useExportLibraryProject();
   const openWorkbenchWidget = useOpenWorkbenchWidget();
   // These are `lazy()` children of an adapter that only ever mounts in the
@@ -55,7 +62,14 @@ export const GalleryUiAdapterProvider = ({ children }: { children: ReactNode }) 
       },
       antialiasProgressImages,
       exportProject,
-      gallery,
+      gallery: {
+        ...gallery,
+        updateSettings: (settings) => {
+          if (isAccountScopeCurrent(accountScope) && queries.isActiveProject(projectId)) {
+            gallery.updateSettings(settings, projectId);
+          }
+        },
+      },
       galleryValues,
       generateValues,
       ItemActionsProvider: GalleryItemActionsAdapter,
@@ -73,6 +87,7 @@ export const GalleryUiAdapterProvider = ({ children }: { children: ReactNode }) 
     }),
     [
       account,
+      accountScope,
       antialiasProgressImages,
       exportProject,
       gallery,
@@ -85,6 +100,7 @@ export const GalleryUiAdapterProvider = ({ children }: { children: ReactNode }) 
       projectId,
       projectName,
       queueItems,
+      queries,
       widgets,
     ]
   );

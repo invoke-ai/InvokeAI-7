@@ -9,16 +9,16 @@ import type { LayerCacheEntry, LayerCacheStore } from '@workbench/canvas-engine/
 
 import { areJsonValuesStructurallyEqual } from '@platform/core/json';
 import { getDocumentLayer } from '@workbench/canvas-engine/document/documentIndex';
-import { getSourceContentRect, renderableSourceOf } from '@workbench/canvas-engine/document/sources';
+import {
+  getSourceContentRect,
+  isEmptyPolygonShape,
+  renderableSourceOf,
+} from '@workbench/canvas-engine/document/sources';
 import { isEmpty } from '@workbench/canvas-engine/math/rect';
 
-/** Polygon shapes have no raster path, so they can never back an export. */
-export const isSupportedExportSource = (source: CanvasLayerSourceContract): boolean => {
-  if (source.type === 'shape') {
-    return source.kind !== 'polygon';
-  }
-  return true;
-};
+/** A pointless polygon shape has no raster, so it can never back an export. */
+export const isSupportedExportSource = (source: CanvasLayerSourceContract): boolean =>
+  source.type !== 'shape' || !isEmptyPolygonShape(source);
 
 /** A raster layer a PSD or raster export can contain; an empty layer is still counted and handled at export time. */
 export const isExportableRasterLayer = (layer: CanvasLayerContract): boolean =>

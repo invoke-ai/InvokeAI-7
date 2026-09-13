@@ -153,9 +153,6 @@ export const CANVAS_SETTINGS: readonly CanvasBooleanSetting[] = [
   },
 ];
 
-/** The sections, in popover render order. */
-export const CANVAS_SETTING_SECTIONS: readonly CanvasSettingSection[] = ['behavior', 'display', 'grid'];
-
 /** Resolved settings, keyed by persisted setting key (default-applied). */
 export type ResolvedCanvasSettings = Record<string, boolean>;
 

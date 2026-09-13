@@ -16,7 +16,7 @@ export {
   type ImageRecallResult,
 } from './imageRecall';
 export { executeImageRecall, getCurrentGenerateValues } from './executeImageRecall';
-export { getImageRecallVerb, RecallActionButtons } from './RecallActionButtons';
+export { getImageRecallVerb, IMAGE_RECALL_KINDS, RecallActionButtons } from './RecallActionButtons';
 export { getSelectedGalleryImage, getSelectedGalleryImageFromValues } from './selectedImage';
 export { useImageActions, type ImageActions } from './useImageActions';
 export { useDeletionConfirmation, type RequestDeletionConfirmation } from './useDeletionConfirmation';

@@ -321,13 +321,14 @@ export const importGalleryImagesToCanvas = async (options: {
       return { status: 'stale-document' };
     }
 
-    if (isActiveProject(project.id)) {
-      const committed = matchingProjectEngine?.layers.commitStructural('Import gallery images', forward, inverse);
-      if (committed?.status !== 'committed') {
+    if (matchingProjectEngine && isActiveProject(project.id)) {
+      const committed = matchingProjectEngine.layers.commitStructural('Import gallery images', forward, inverse);
+      if (committed.status !== 'committed') {
         return { status: 'blocked' };
       }
     } else {
-      // A background project has no live editing session; the import lands as ingestion.
+      // No live editing session — a background project, or the active project
+      // with its canvas closed — so the import lands as ingestion.
       applyCanvasMutation(project.id, forward);
     }
     return { failedImageNames, layerIds: layers.map((layer) => layer.id), status: 'imported' };

@@ -33,6 +33,7 @@ import {
 } from './panes/editorPaneLayout';
 import { HistoryPane } from './panes/HistoryPane';
 import { LayerColorPane, LayerEditorPanes } from './panes/LayerEditorPanes';
+import { useCanvasHistoryHotkeys } from './useCanvasHistoryHotkeys';
 import { useLayerSelectionCommands } from './useLayerSelectionCommands';
 
 /**
@@ -68,6 +69,7 @@ export const LayersWidgetView = ({ runtime }: WidgetViewProps) => {
   const degraded = nodeCount > LAYER_PANEL_DEGRADE_THRESHOLD;
 
   const selectionCommands = useLayerSelectionCommands(engine, projectId, panel.selectedIds, editingLocked);
+  useCanvasHistoryHotkeys(runtime, engine);
   const handleFilter = useCallback(
     (filter: string) => setLayerPanelFilter(projectId, selectedLayerId, filter),
     [projectId, selectedLayerId]

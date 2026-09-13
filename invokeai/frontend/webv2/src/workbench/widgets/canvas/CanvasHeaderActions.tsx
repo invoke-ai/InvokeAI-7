@@ -4,15 +4,17 @@ import type { WidgetViewProps } from '@workbench/widgetContracts';
 /* oxlint-disable react-perf/jsx-no-new-function-as-prop */
 import type { CanvasEngineHandle } from '@workbench/widgets/canvas/useCanvasEngine';
 
-import { Box, HStack, Icon, Menu, Portal, Text } from '@chakra-ui/react';
+import { Box, HStack, Icon, Menu, Portal, Spinner, Stack, Text } from '@chakra-ui/react';
 import { useModifierHeld } from '@platform/react/useModifierHeld';
-import { IconButton } from '@platform/ui/Button';
+import { Button, IconButton } from '@platform/ui/Button';
 import { ConfirmDialog } from '@platform/ui/ConfirmDialog';
+import { Group } from '@platform/ui/Group';
 import { MenuContent } from '@platform/ui/Menu';
 import { Tooltip } from '@platform/ui/Tooltip';
+import { getCanvasEngine } from '@workbench/canvas-operations/api';
 import { useNotify } from '@workbench/useNotify';
 import { getProjectWidgetValues } from '@workbench/widgetState';
-import { useActiveProjectSelector, useWorkbenchCommands } from '@workbench/WorkbenchContext';
+import { useActiveProjectId, useActiveProjectSelector } from '@workbench/WorkbenchContext';
 import {
   BugIcon,
   CheckIcon,
@@ -22,16 +24,16 @@ import {
   FrameIcon,
   MaximizeIcon,
   Redo2Icon,
-  SettingsIcon,
+  SaveIcon,
   SquareDashedBottomIcon,
   Trash2Icon,
   Undo2Icon,
 } from 'lucide-react';
-import { Fragment, useCallback, useEffect, useEffectEvent, useMemo, useState } from 'react';
+import { useCallback, useEffect, useEffectEvent, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import type { CanvasHeaderCommandContext } from './canvasHeaderCommands';
-import type { CanvasBooleanSetting, ResolvedCanvasSettings } from './canvasSettings';
+import type { ResolvedCanvasSettings } from './canvasSettings';
 
 import { gridSizeForModelBase } from './bboxGrid';
 import {
@@ -40,22 +42,17 @@ import {
   executeCanvasHeaderCommand,
   zoomAtViewportCentre,
 } from './canvasHeaderCommands';
-import {
-  CANVAS_SETTING_SECTIONS,
-  CANVAS_SETTINGS,
-  CANVAS_SNAP_TO_GRID_KEY,
-  canvasSettingsEqual,
-  resolveCanvasSettings,
-} from './canvasSettings';
+import { CANVAS_SNAP_TO_GRID_KEY, canvasSettingsEqual, resolveCanvasSettings } from './canvasSettings';
 import { useCanvasCanRedo, useCanvasCanUndo, useCanvasDocumentEditingLocked, useCanvasZoom } from './engineStoreHooks';
 import { computeFitBboxToLayers, computeFitBboxToMasks } from './fitBbox';
 import { useCanvasEngine } from './useCanvasEngine';
+import { useCanvasGallerySave } from './useCanvasGallerySave';
 import { reportStructuralCommit } from './useStructuralCommit';
 import { formatZoomPercent, zoomMenuOptions } from './zoomOptions';
 
 type CanvasHeaderEngine = Pick<
   CanvasEngineHandle,
-  'diagnostics' | 'document' | 'history' | 'interaction' | 'layers' | 'viewport'
+  'diagnostics' | 'document' | 'exports' | 'history' | 'interaction' | 'layers' | 'lifecycle' | 'projectId' | 'viewport'
 >;
 
 const ZOOM_OPTIONS = zoomMenuOptions();
@@ -74,12 +71,12 @@ const selectModelBase = (project: Project): string | null => {
 /**
  * Canvas widget header actions, in legacy toolbar order: the zoom-percent menu, a
  * reset-view (fit content to view) button, fit-bbox-to-layers / fit-bbox-to-masks,
- * undo / redo, a new-session menu, and the sectioned settings popover. Rendered in
- * the widget frame's header slot; resolves the shared engine like the layers header
- * does, and renders nothing until it is available.
+ * undo / redo, save-to-gallery (canvas, with the bbox region in its menu), and a
+ * new-session menu. Rendered in the widget frame's header slot; resolves the
+ * shared engine like the layers header does, and renders nothing until it is
+ * available.
  *
- * Excluded per product decision: the project (save/load) menu, a save-to-gallery
- * button (its command/hotkey stays), and the snapshot menu.
+ * Excluded per product decision: the project (save/load) menu and the snapshot menu.
  */
 export const CanvasHeaderActions = ({ runtime }: WidgetViewProps) => {
   const engine = useCanvasEngine();
@@ -99,6 +96,7 @@ const CanvasHeaderActionsInner = ({
   const canUndo = useCanvasCanUndo(engine);
   const canRedo = useCanvasCanRedo(engine);
   const editingLocked = useCanvasDocumentEditingLocked(engine);
+  const { isSaving, save: saveToGallery } = useCanvasGallerySave(engine);
   const document = useActiveProjectSelector((project) => project.canvas.document);
   const modelBase = useActiveProjectSelector(selectModelBase);
   const settings = useActiveProjectSelector(selectCanvasSettings, canvasSettingsEqual);
@@ -126,6 +124,7 @@ const CanvasHeaderActionsInner = ({
     fitMasksRect,
     openNewCanvas,
     reportStructuralCommit: (result) => reportStructuralCommit(result, notify.error, t),
+    saveToGallery: (region) => void saveToGallery(region),
     t,
   });
 
@@ -137,9 +136,10 @@ const CanvasHeaderActionsInner = ({
   );
 
   // Commands (hotkey-assignable; catalog ids `canvas.fitBboxToLayers` /
-  // `canvas.fitBboxToMasks` / `canvas.newSession`). `useEffectEvent` reads the
-  // latest fit rects / dialog opener without re-registering per document change.
-  // The new-session command routes through the SAME confirm dialog as the button.
+  // `canvas.fitBboxToMasks` / `canvas.saveToGallery` / `canvas.saveBboxToGallery` /
+  // `canvas.newSession`). `useEffectEvent` reads the latest fit rects / dialog
+  // opener without re-registering per document change. The new-session command
+  // routes through the SAME confirm dialog as the button.
   const executeHeaderCommand = useEffectEvent((commandId: string) =>
     executeCanvasHeaderCommand(commandId, commandContext())
   );
@@ -149,6 +149,8 @@ const CanvasHeaderActionsInner = ({
       ['canvas.fitBboxToLayers', t('widgets.canvas.controls.fitBboxToLayers'), ['shift+n']],
       ['canvas.fitBboxToMasks', t('widgets.canvas.controls.fitBboxToMasks'), ['shift+b']],
       // No default keys — assignable through the hotkeys settings.
+      ['canvas.saveToGallery', t('widgets.canvas.contextMenu.saveCanvasToGallery'), []],
+      ['canvas.saveBboxToGallery', t('widgets.canvas.contextMenu.saveBboxToGallery'), []],
       ['canvas.newSession', t('widgets.canvas.controls.newSession'), []],
     ] as const;
     const disposers = entries.flatMap(([id, title, defaultKeys]) => [
@@ -253,6 +255,48 @@ const CanvasHeaderActionsInner = ({
         </IconButton>
       </Tooltip>
 
+      <HeaderDivider />
+
+      <Menu.Root positioning={MENU_POSITIONING}>
+        <Group attached css={SPLIT_GROUP_CSS}>
+          <Tooltip content={t('widgets.canvas.contextMenu.saveCanvasToGallery')}>
+            <IconButton
+              aria-label={t('widgets.canvas.contextMenu.saveCanvasToGallery')}
+              color="fg.muted"
+              disabled={editingLocked || isSaving}
+              size="2xs"
+              variant="ghost"
+              onClick={() => void saveToGallery('canvas')}
+            >
+              {isSaving ? <Spinner size="xs" /> : <SaveIcon />}
+            </IconButton>
+          </Tooltip>
+          <Menu.Trigger asChild>
+            <IconButton
+              aria-label={t('widgets.canvas.controls.moreSaveOptions')}
+              color="fg.muted"
+              disabled={editingLocked || isSaving}
+              minW="0"
+              size="2xs"
+              variant="ghost"
+              w="6"
+            >
+              <ChevronDownIcon size={12} />
+            </IconButton>
+          </Menu.Trigger>
+        </Group>
+        <Portal>
+          <Menu.Positioner>
+            <MenuContent minW="11rem" py="1">
+              <Menu.Item value="save-bbox" onClick={() => void saveToGallery('bbox')}>
+                <Icon as={SaveIcon} boxSize="3.5" color="fg.subtle" />
+                <Menu.ItemText fontSize="xs">{t('widgets.canvas.contextMenu.saveBboxToGallery')}</Menu.ItemText>
+              </Menu.Item>
+            </MenuContent>
+          </Menu.Positioner>
+        </Portal>
+      </Menu.Root>
+
       <Menu.Root positioning={MENU_POSITIONING}>
         <Tooltip content={t('widgets.canvas.controls.newSession')}>
           <span style={{ display: 'inline-flex' }}>
@@ -281,8 +325,6 @@ const CanvasHeaderActionsInner = ({
         </Portal>
       </Menu.Root>
 
-      <CanvasSettingsMenu editingLocked={editingLocked} engine={engine} />
-
       <ConfirmDialog
         body={t('widgets.canvas.controls.newCanvasConfirm')}
         confirmLabel={t('widgets.canvas.controls.newCanvas')}
@@ -296,80 +338,49 @@ const CanvasHeaderActionsInner = ({
 };
 
 /** A thin vertical rule separating header-action groups (matching legacy's dividers). */
+// Ghost buttons have no border to collapse, and the attached overlap would
+// leave the save button under 24px of unobscured target.
+const SPLIT_GROUP_CSS = { '& > *:not(:last-child)': { marginEnd: 0 } } as const;
+
 const HeaderDivider = () => <Box bg="border.subtle" flexShrink={0} h="4" mx="1" w="1px" />;
 
-/**
- * The gear-icon settings popover: the data-driven boolean preferences grouped into
- * Behavior / Display / Grid sections, plus a Shift-revealed Debug group of engine
- * actions (matching legacy `CanvasSettingsPopover`). `closeOnSelect={false}` keeps
- * it open while toggling. Settings persist per-project and never enter undo history.
- */
-const CanvasSettingsMenu = ({ editingLocked, engine }: { editingLocked: boolean; engine: CanvasHeaderEngine }) => {
+/** Diagnostics use an existing engine; opening settings must never acquire a canvas engine lease. */
+export const CanvasSettingsActions = (_props: WidgetViewProps) => {
+  const projectId = useActiveProjectId();
+  const engine = getCanvasEngine(projectId);
+  return engine ? <CanvasSettingsActionsInner engine={engine} /> : null;
+};
+
+const CanvasSettingsActionsInner = ({ engine }: { engine: CanvasHeaderEngine }) => {
   const { t } = useTranslation();
-  const { widgets } = useWorkbenchCommands();
-  const settings = useActiveProjectSelector(selectCanvasSettings, canvasSettingsEqual);
-  // Shift reveals the Debug section, matching legacy `useShiftModifier` (event-driven).
   const shiftHeld = useModifierHeld('Shift');
-
-  const toggle = (setting: CanvasBooleanSetting) => {
-    widgets.patchValues('canvas', { [setting.key]: !settings[setting.key] });
-  };
-
+  const editingLocked = useCanvasDocumentEditingLocked(engine);
+  if (!shiftHeld) {
+    return null;
+  }
   return (
-    <Menu.Root closeOnSelect={false} positioning={MENU_POSITIONING}>
-      <Menu.Trigger asChild>
-        <IconButton aria-label={t('widgets.canvas.settings.label')} color="fg.muted" size="2xs" variant="ghost">
-          <SettingsIcon />
-        </IconButton>
-      </Menu.Trigger>
-      <Portal>
-        <Menu.Positioner>
-          <MenuContent minW="15rem" py="1">
-            {CANVAS_SETTING_SECTIONS.map((section, sectionIndex) => (
-              <Fragment key={section}>
-                {sectionIndex > 0 ? <Menu.Separator borderColor="border.subtle" /> : null}
-                <Menu.ItemGroup>
-                  <Menu.ItemGroupLabel color="fg.subtle" fontSize="2xs" textTransform="uppercase">
-                    {t(`widgets.canvas.settings.sections.${section}`)}
-                  </Menu.ItemGroupLabel>
-                  {CANVAS_SETTINGS.filter((setting) => setting.section === section).map((setting) => (
-                    <Menu.Item key={setting.key} value={setting.key} onClick={() => toggle(setting)}>
-                      <Icon as={CheckIcon} boxSize="3.5" opacity={settings[setting.key] ? 1 : 0} />
-                      <Menu.ItemText fontSize="xs">{t(setting.labelKey)}</Menu.ItemText>
-                    </Menu.Item>
-                  ))}
-                </Menu.ItemGroup>
-              </Fragment>
-            ))}
-            {shiftHeld ? (
-              <>
-                <Menu.Separator borderColor="border.subtle" />
-                <Menu.ItemGroup>
-                  <Menu.ItemGroupLabel color="fg.subtle" fontSize="2xs" textTransform="uppercase">
-                    {t('widgets.canvas.settings.sections.debug')}
-                  </Menu.ItemGroupLabel>
-                  <Menu.Item value="debug-clear-caches" onClick={() => void engine.diagnostics.clearCaches()}>
-                    <Icon as={DatabaseIcon} boxSize="3.5" color="fg.subtle" />
-                    <Menu.ItemText fontSize="xs">{t('widgets.canvas.settings.clearCaches')}</Menu.ItemText>
-                  </Menu.Item>
-                  <Menu.Item value="debug-log-info" onClick={() => engine.diagnostics.logDebugInfo()}>
-                    <Icon as={BugIcon} boxSize="3.5" color="fg.subtle" />
-                    <Menu.ItemText fontSize="xs">{t('widgets.canvas.settings.logDebugInfo')}</Menu.ItemText>
-                  </Menu.Item>
-                  <Menu.Item
-                    disabled={editingLocked}
-                    value="debug-clear-history"
-                    onClick={() => engine.history.clearHistory()}
-                  >
-                    <Icon as={Trash2Icon} boxSize="3.5" color="fg.subtle" />
-                    <Menu.ItemText fontSize="xs">{t('widgets.canvas.settings.clearHistory')}</Menu.ItemText>
-                  </Menu.Item>
-                </Menu.ItemGroup>
-              </>
-            ) : null}
-          </MenuContent>
-        </Menu.Positioner>
-      </Portal>
-    </Menu.Root>
+    <Stack borderTopWidth="1px" borderColor="border.subtle" gap="1" pt="2">
+      <Text color="fg.subtle" fontSize="2xs" textTransform="uppercase">
+        {t('widgets.canvas.settings.sections.debug')}
+      </Text>
+      <Button size="xs" variant="ghost" justifyContent="start" onClick={() => void engine.diagnostics.clearCaches()}>
+        <DatabaseIcon />
+        {t('widgets.canvas.settings.clearCaches')}
+      </Button>
+      <Button size="xs" variant="ghost" justifyContent="start" onClick={() => engine.diagnostics.logDebugInfo()}>
+        <BugIcon />
+        {t('widgets.canvas.settings.logDebugInfo')}
+      </Button>
+      <Button
+        disabled={editingLocked}
+        size="xs"
+        variant="ghost"
+        justifyContent="start"
+        onClick={() => engine.history.clearHistory()}
+      >
+        <Trash2Icon />
+        {t('widgets.canvas.settings.clearHistory')}
+      </Button>
+    </Stack>
   );
 };

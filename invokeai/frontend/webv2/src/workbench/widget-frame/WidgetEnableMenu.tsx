@@ -3,6 +3,7 @@ import type { RegisteredWidget, WidgetIconComponent, WidgetInstanceId, WidgetTyp
 
 import { Flex, Icon, Menu, Portal, Text } from '@chakra-ui/react';
 import { IconButton } from '@platform/ui/Button';
+import { MenuContent } from '@platform/ui/Menu';
 import { WidgetIcon } from '@workbench/iconResolver';
 import { CheckIcon, MoreHorizontalIcon } from 'lucide-react';
 import { useCallback, useMemo } from 'react';
@@ -89,7 +90,7 @@ export const WidgetEnableMenu = ({
 }: WidgetEnableMenuProps) => {
   const { t } = useTranslation();
   const content = (
-    <Menu.Content minW="12rem">
+    <MenuContent minW="12rem">
       <Menu.ItemGroup>
         <Menu.ItemGroupLabel color="fg.subtle" fontSize="2xs" textTransform="uppercase">
           {groupLabel}
@@ -101,7 +102,7 @@ export const WidgetEnableMenu = ({
           return <WidgetEnableMenuRow key={item.id} disabled={disabled} item={item} meta={meta} onToggle={onToggle} />;
         })}
       </Menu.ItemGroup>
-    </Menu.Content>
+    </MenuContent>
   );
 
   const contextPositioning = useMemo(

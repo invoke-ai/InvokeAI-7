@@ -92,6 +92,27 @@ export type CanvasBlendMode =
   | 'color'
   | 'luminosity';
 
+/**
+ * Stable identity for an indexed custom font face.
+ *
+ * The family and label are deliberately copied into the document alongside
+ * the opaque id and hash. They keep an unresolved document understandable and
+ * let the missing-font recovery UI offer a useful replacement without ever
+ * persisting the browser-only family alias used by the font runtime.
+ */
+export interface CanvasTextFontRef {
+  id: string;
+  contentHash: string;
+  family: string;
+  label: string;
+}
+
+/** CSS font style accepted by both CanvasRenderingContext2D and FontFace. */
+export type CanvasTextFontStyle = 'normal' | 'italic' | 'oblique';
+
+/** Explicit OpenType variation coordinates, keyed by four-character axis tag. */
+export type CanvasTextFontVariations = Readonly<Record<string, number>>;
+
 /** A reference to a persisted image asset by name, not by resolved URL. */
 export interface CanvasImageRef {
   imageName: string;
@@ -100,7 +121,7 @@ export interface CanvasImageRef {
   contentHash?: string;
 }
 
-/** The drag-drawable shape kinds; `polygon` (point lists) stays a non-tool source. */
+/** The box-parametric shape kinds; `polygon` carries its own point list instead. */
 export type ParametricShapeKind = 'rect' | 'ellipse' | 'triangle' | 'star';
 
 export type CanvasLayerSourceContract =
@@ -124,6 +145,12 @@ export type CanvasLayerSourceContract =
       fontFamily: string;
       fontSize: number;
       fontWeight: number;
+      /** Optional stable custom-font identity; omitted for built-in/legacy text. */
+      fontRef?: CanvasTextFontRef;
+      /** Defaults to `normal` for documents written before v4. */
+      fontStyle?: CanvasTextFontStyle;
+      /** Defaults to an empty coordinate set for documents written before v4. */
+      fontVariations?: CanvasTextFontVariations;
       lineHeight: number;
       align: 'left' | 'center' | 'right';
       color: string;
@@ -131,6 +158,7 @@ export type CanvasLayerSourceContract =
   | {
       type: 'shape';
       kind: ParametricShapeKind | 'polygon';
+      /** Polygon vertices in layer-local px across the `width`×`height` box, closed implicitly. */
       points?: { x: number; y: number }[];
       width: number;
       height: number;
@@ -152,6 +180,16 @@ export type CanvasLayerSourceContract =
        */
       width?: number;
       height?: number;
+      /**
+       * Where the gradient sits in the extent (layer-local px): the midpoint of
+       * a linear ramp, or the radial center. Absent = the extent center.
+       */
+      center?: { x: number; y: number };
+      /**
+       * Linear: the distance between the 0 and 1 stops; radial: the radius.
+       * Absent = a ramp fitted to the extent (the legacy, fixed-center look).
+       */
+      span?: number;
     };
 
 /** Photoshop's layer-color palette; also the PSD `layerColor` vocabulary. */
@@ -396,7 +434,8 @@ export const CANVAS_MAX_NODE_DEPTH = 10;
 export const CANVAS_MAX_NODE_COUNT = 10_000;
 
 export interface CanvasDocumentContractV3 {
-  version: 3;
+  /** v3 is read for compatibility; v4 is the current writable schema. */
+  version: 3 | 4;
   width: number;
   height: number;
   background: 'transparent' | { color: string };
@@ -405,6 +444,9 @@ export interface CanvasDocumentContractV3 {
   /** A leaf or a group; leaf-only tools refuse a group rather than guessing a descendant. */
   selectedLayerId: string | null;
 }
+
+/** Current writable document contract. v3 remains accepted at the load boundary. */
+export type CanvasDocumentContractV4 = Omit<CanvasDocumentContractV3, 'version'> & { version: 4 };
 
 export interface CanvasSnapshotContract {
   id: string;
@@ -418,7 +460,8 @@ export interface CanvasStagingAreaContractV2 extends CanvasStagingAreaContract {
 }
 
 export interface CanvasStateContractV3 {
-  version: 3;
+  /** v3 is read for compatibility; v4 is the current writable schema. */
+  version: 3 | 4;
   document: CanvasDocumentContractV3;
   /**
    * Monotonic counter bumped whenever the document is swapped wholesale
@@ -432,3 +475,6 @@ export interface CanvasStateContractV3 {
   snapshots: CanvasSnapshotContract[];
   stagingArea: CanvasStagingAreaContractV2;
 }
+
+/** Current writable state contract. v3 remains accepted at the load boundary. */
+export type CanvasStateContractV4 = Omit<CanvasStateContractV3, 'version'> & { version: 4 };

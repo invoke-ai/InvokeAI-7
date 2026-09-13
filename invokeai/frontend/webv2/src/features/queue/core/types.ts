@@ -251,7 +251,7 @@ export interface QueueResultVideoOptions extends QueueResultImageOptions {
 export interface QueueFeatureCommands {
   cancelCurrentItem(): Promise<void>;
   cancelItem(itemId: number): Promise<void>;
-  cancelScopedItems(scope?: QueueQueryScope, currentItemId?: number | null): Promise<void>;
+  cancelScopedItems(scope?: QueueQueryScope, options?: { keepCurrent?: boolean }): Promise<void>;
   clearFailedItems(scope?: QueueQueryScope): Promise<void>;
   clearItems(scope?: QueueQueryScope): Promise<void>;
   pauseProcessor(): Promise<void>;

@@ -1,10 +1,12 @@
 /**
- * Pure data for the layers-panel add-layer surfaces (kept free of React so the
- * grouping is unit-testable). The header menu renders {@link ADD_LAYER_MENU}; each
+ * React-free data and base gating for the layers-panel add-layer surfaces, so
+ * the grouping is unit-testable. The header menu renders {@link ADD_LAYER_MENU}; each
  * stack header's "New" button uses {@link stackAddItemId} to add its own type.
  */
 
 import type { LayerStackKind } from '@workbench/canvas-engine/api';
+
+import { canAddRegionalReferenceImage } from './layerOps';
 
 /** The distinct "add a layer" actions offered across the panel's add surfaces. */
 export type AddLayerItemId =
@@ -53,7 +55,7 @@ export const ADD_LAYER_MENU: readonly AddLayerMenuGroup[] = [
 
 /** Whether an add action is supported by the selected model base. */
 export const isAddLayerItemAvailable = (id: AddLayerItemId, base: string | null): boolean =>
-  id !== 'regional_reference_image' || base !== 'flux2';
+  id !== 'regional_reference_image' || canAddRegionalReferenceImage(base);
 
 /** The add-layer action a stack-header "New" button triggers for its type. */
 export const stackAddItemId = (stack: LayerStackKind): AddLayerItemId => stack;

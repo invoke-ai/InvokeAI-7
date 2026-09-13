@@ -25,6 +25,7 @@ from invokeai.app.services.external_generation.providers import (
     SeedreamProvider,
 )
 from invokeai.app.services.external_generation.startup import sync_configured_external_starter_models
+from invokeai.app.services.fonts.fonts_default import FontService
 from invokeai.app.services.gallery.gallery_default import SqliteGalleryService
 from invokeai.app.services.image_files.image_files_disk import DiskImageFileStorage
 from invokeai.app.services.image_index.image_index_default import ImageIndexService, warm_up_attention
@@ -221,6 +222,14 @@ class ApiDependencies:
         users = UserService(db=db)
         image_index_records = ImageIndexRecordsSqlite(db=db)
         image_index = ImageIndexService()
+        fonts = FontService(
+            db=db,
+            fonts_dir=configuration.fonts_path,
+            storage_dir=configuration.fonts_storage_path,
+            logger=logger,
+            max_upload_bytes=configuration.max_font_upload_bytes,
+            max_library_bytes=configuration.max_font_library_bytes,
+        )
 
         services = InvocationServices(
             board_image_records=board_image_records,
@@ -266,6 +275,7 @@ class ApiDependencies:
             gallery=gallery,
             image_index_records=image_index_records,
             image_index=image_index,
+            fonts=fonts,
         )
 
         # Constructing the Invoker starts every service, including the session

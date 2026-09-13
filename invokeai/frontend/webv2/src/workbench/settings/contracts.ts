@@ -1,4 +1,5 @@
 import type { WorkbenchLanguage } from '@platform/i18n/languages';
+import type { SettingsTarget } from '@platform/ui/settings/contracts';
 import type { WorkbenchThemeId } from '@theme/themes';
 import type { DeveloperLogLevel, DeveloperLogNamespace } from '@workbench/diagnostics/contracts';
 import type { ProjectSortId, ProjectsViewId } from '@workbench/launchpad/projects/projectLibraryView';
@@ -81,6 +82,10 @@ export interface WorkbenchPreferences {
   workflowValidateConnections: boolean;
   /** Connection line rendering in the workflow editor. */
   workflowEdgeStyle: 'curved' | 'square';
+  /** Keep connections of a selected node beneath nodes instead of raising them over node controls. */
+  workflowEdgesBehindNodes: boolean;
+  /** Raise text and border contrast on every theme (a11y). */
+  highContrast: boolean;
   /** Account-bound overrides keyed by hotkey id (`app.invoke`, `gallery.galleryNavLeft`, etc.). */
   customHotkeys: Record<string, string[]>;
   /** Generate panel section open/closed overrides keyed by section id; absent = section default. */
@@ -95,4 +100,11 @@ export interface WorkbenchPreferences {
   krea2RebalancePresets: StoredRebalancePreset[];
   /** User-saved Generate settings snapshots ("recipes"), in the order they were saved. */
   generatePresets: StoredGeneratePreset[];
+}
+
+export type SettingsSectionId = string;
+export interface SettingsDestination {
+  sectionId: SettingsSectionId;
+  entryId?: string;
+  target?: SettingsTarget;
 }

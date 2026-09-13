@@ -48,6 +48,7 @@ const contextOf = (overrides: Partial<CanvasHeaderCommandContext> = {}): CanvasH
   fitLayersRect: FIT_LAYERS,
   fitMasksRect: FIT_MASKS,
   openNewCanvas: vi.fn(),
+  saveToGallery: vi.fn(),
   t: (key) => key,
   ...overrides,
 });
@@ -165,6 +166,17 @@ describe('executeCanvasHeaderCommand', () => {
     executeCanvasHeaderCommand('canvas.fitBboxToLayers', ctx);
     executeCanvasHeaderCommand('canvas.fitBboxToMasks', ctx);
     expect(engine.layers.commitStructural).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['canvas.saveToGallery', 'canvas'],
+    ['canvas.saveBboxToGallery', 'bbox'],
+  ] as const)('%s saves the %s region, unless an operation owns the document', (commandId, region) => {
+    const saveToGallery = vi.fn();
+    executeCanvasHeaderCommand(commandId, contextOf({ editingLocked: true, saveToGallery }));
+    expect(saveToGallery).not.toHaveBeenCalled();
+    executeCanvasHeaderCommand(commandId, contextOf({ saveToGallery }));
+    expect(saveToGallery).toHaveBeenCalledWith(region);
   });
 
   it('ignores an unknown command id', () => {

@@ -27,6 +27,7 @@ vi.mock('@features/generation/ui/GenerationUiContext', async (importOriginal) =>
   // unmocked module instance, which no provider in this harness fills.
   GenerationModelSelect: stubs.ModelSelect,
   useGenerationUi: () => ({
+    capabilities: { canManagePromptTemplates: false, canManageSharedSystemPrompts: false },
     gallery: { selectedImage: stubs.selectedImage },
     models: {
       catalog: [{ base: 'any', key: 'llava-1', name: 'LLaVA', type: 'llava_onevision' }],

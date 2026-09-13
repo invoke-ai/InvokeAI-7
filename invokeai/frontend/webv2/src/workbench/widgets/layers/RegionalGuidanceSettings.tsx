@@ -9,6 +9,7 @@ import type { ChangeEvent, FocusEvent } from 'react';
 
 import { createListCollection, HStack, IconButton, Stack, Switch, Text } from '@chakra-ui/react';
 import { PROMPT_ATTENTION_TARGET_PROPS, PromptTextarea } from '@features/generation/components';
+import { getRegionalGuidanceSupport } from '@features/generation/graph';
 import { Button, ColorPicker, Field, Select, Tooltip } from '@platform/ui';
 import { useWorkbenchPreferenceSelector } from '@workbench/settings/store';
 import { armMaskTintTarget } from '@workbench/widgets/canvas/color-system/maskTintTarget';
@@ -70,10 +71,11 @@ export const RegionalGuidanceSettings = ({ engine, layer }: RegionalGuidanceSett
   const [negativePrompt, setNegativePrompt] = useState(layer.negativePrompt ?? '');
 
   const fill = layer.mask.fill;
-  const isFlux = base === 'flux';
-  const isFlux2 = base === 'flux2';
-  const isFluxFamily = isFlux || isFlux2;
-  const showNegativeControls = !isFluxFamily || Boolean(layer.negativePrompt) || layer.autoNegative;
+  // Negative controls are hidden on bases whose backend ignores regional negatives; the values
+  // stay on the layer for other models. With no selected model every control is offered.
+  const support = getRegionalGuidanceSupport(base);
+  const showNegativeControls = support?.negativePrompt !== false;
+  const unsupportedModel = base !== null && support === null;
 
   const commitConfig = useCallback(
     (label: string, next: RegionalConfigPatch, before: RegionalConfigPatch) => {
@@ -208,11 +210,11 @@ export const RegionalGuidanceSettings = ({ engine, layer }: RegionalGuidanceSett
 
   return (
     <Stack gap="2">
-      {isFlux2 && (
-        <Text color="fg.warning" fontSize="xs" role="alert">
-          {t('widgets.layers.regionalGuidance.flux2PositiveOnly')}
+      {unsupportedModel ? (
+        <Text color="fg.warning" fontSize="2xs" role="alert">
+          {t('widgets.layers.regionalGuidance.unsupportedModel')}
         </Text>
-      )}
+      ) : null}
       <Field label={t('widgets.layers.regionalGuidance.positivePrompt')}>
         <PromptTextarea
           {...PROMPT_ATTENTION_TARGET_PROPS}

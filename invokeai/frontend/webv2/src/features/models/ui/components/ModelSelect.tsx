@@ -9,7 +9,7 @@ import { formatBytes, getModelTypeLabel, getModelTypePluralLabel } from '@featur
 import { getModelImageUrl } from '@features/models/data/api';
 import { ensureModelsLoaded, useModelsSelector } from '@features/models/data/modelsStore';
 import { useModelsUi } from '@features/models/ui/ModelsUiContext';
-import { setPickerCompactView, useModelsUiSelector } from '@features/models/ui/uiStore';
+import { setPickerBaseFilters, setPickerCompactView, useModelsUiSelector } from '@features/models/ui/uiStore';
 import { useMountEffect } from '@platform/react/useMountEffect';
 import { areArraysEqual } from '@platform/state/selectors';
 import { Button, CloseButton, IconButton, PopoverContent, Tooltip } from '@platform/ui';
@@ -31,6 +31,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 const EMPTY_BASES: ReadonlySet<string> = new Set();
+const EMPTY_BASE_LIST: readonly string[] = [];
 const EMPTY_KEYS: ReadonlySet<string> = new Set();
 
 const getOptionId = (model: ModelConfig): string => model.key;
@@ -117,11 +118,16 @@ export const ModelSelect = ({
   const loadError = useModelsSelector((snapshot) => snapshot.error);
   const loadStatus = useModelsSelector((snapshot) => snapshot.status);
   const [isOpen, setIsOpen] = useState(false);
-  const [selectedBases, setSelectedBases] = useState<ReadonlySet<string>>(EMPTY_BASES);
   const [lastDisabled, setLastDisabled] = useState(disabled);
 
   const pickerId = id ?? `models:${modelTypes.join('+')}`;
   const isCompact = useModelsUiSelector((snapshot) => snapshot.pickerCompactViews[pickerId] ?? false);
+  const rememberedBases = useModelsUiSelector((snapshot) => snapshot.pickerBaseFilters[pickerId] ?? EMPTY_BASE_LIST);
+  const selectedBases = useMemo<ReadonlySet<string>>(() => new Set(rememberedBases), [rememberedBases]);
+  const setSelectedBases = useCallback(
+    (bases: ReadonlySet<string>) => setPickerBaseFilters(pickerId, [...bases]),
+    [pickerId]
+  );
   const relatedKeyList = useLazyRelatedModelKeys(isOpen ? value : null);
   const relatedKeys = useMemo<ReadonlySet<string>>(
     () => (relatedKeyList ? new Set(relatedKeyList) : EMPTY_KEYS),
@@ -137,7 +143,6 @@ export const ModelSelect = ({
 
     if (disabled) {
       setIsOpen(false);
-      setSelectedBases(EMPTY_BASES);
     }
   }
 
@@ -173,26 +178,20 @@ export const ModelSelect = ({
     [groups, t]
   );
 
-  const closeAndReset = () => {
-    setIsOpen(false);
-    setSelectedBases(EMPTY_BASES);
-  };
   const toggleBase = (base: string) => {
-    setSelectedBases((prev) => {
-      const next = new Set(prev);
+    const next = new Set(selectedBases);
 
-      if (next.has(base)) {
-        next.delete(base);
-      } else {
-        next.add(base);
-      }
+    if (next.has(base)) {
+      next.delete(base);
+    } else {
+      next.add(base);
+    }
 
-      return next;
-    });
+    setSelectedBases(next);
   };
   const selectModel = (model: ModelConfig) => {
     onChange(model);
-    closeAndReset();
+    setIsOpen(false);
   };
   const canClear = isClearable && Boolean(value);
 
@@ -229,13 +228,7 @@ export const ModelSelect = ({
             return;
           }
 
-          if (event.open) {
-            setSelectedBases(EMPTY_BASES);
-            setIsOpen(true);
-            return;
-          }
-
-          closeAndReset();
+          setIsOpen(event.open);
         }}
       >
         <Box minW="0" position="relative" w="full">
@@ -264,7 +257,7 @@ export const ModelSelect = ({
               {selectedModel ? (
                 <ModelButtonContent model={selectedModel} />
               ) : (
-                <Text as="span" color="fg.subtle" fontSize="xs" minW="0" truncate>
+                <Text as="span" color="fg.muted" fontSize="xs" minW="0" truncate>
                   {placeholder ?? t('models.scopeSelect', { scope: scopeLabel })}
                 </Text>
               )}
@@ -284,7 +277,7 @@ export const ModelSelect = ({
               onClick={(event) => {
                 event.stopPropagation();
                 onChange(null);
-                closeAndReset();
+                setIsOpen(false);
               }}
               onMouseDown={(event) => {
                 event.stopPropagation();

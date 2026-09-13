@@ -300,6 +300,7 @@ const preferencesSnapshot = {
   reduceMotion: false,
   themeId: 'classic' as const,
   workflowEdgeStyle: 'curved' as const,
+  workflowEdgesBehindNodes: false,
   workflowShowMinimap: true,
   workflowSnapToGrid: false,
   workflowValidateConnections: true,

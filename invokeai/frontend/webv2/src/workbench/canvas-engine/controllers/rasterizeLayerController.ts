@@ -6,7 +6,7 @@ import type { RasterBackend } from '@workbench/canvas-engine/render/raster';
 import type { RasterizeDeps } from '@workbench/canvas-engine/render/rasterizers';
 
 import { getDocumentLayer } from '@workbench/canvas-engine/document/documentIndex';
-import { getSourceContentRect } from '@workbench/canvas-engine/document/sources';
+import { getSourceContentRect, isEmptyPolygonShape } from '@workbench/canvas-engine/document/sources';
 import { roundOut, transformBounds } from '@workbench/canvas-engine/math/rect';
 import { rasterizeSource } from '@workbench/canvas-engine/render/rasterizers';
 import { bakeMatrix } from '@workbench/canvas-engine/transform/transformMath';
@@ -44,7 +44,7 @@ export class RasterizeLayerController {
     const source = layer.source;
     if (
       (source.type !== 'shape' && source.type !== 'gradient' && source.type !== 'text') ||
-      (source.type === 'shape' && source.kind === 'polygon')
+      (source.type === 'shape' && isEmptyPolygonShape(source))
     ) {
       return false;
     }

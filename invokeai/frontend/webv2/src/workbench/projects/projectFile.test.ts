@@ -34,6 +34,13 @@ const api = vi.hoisted(() => ({
 const downloads = vi.hoisted(() => ({ downloadBlob: vi.fn(), downloadText: vi.fn() }));
 
 const covers = vi.hoisted(() => ({ recordProjectCover: vi.fn() }));
+const fontTransport = vi.hoisted(() => ({
+  download: vi.fn(),
+  remove: vi.fn(async () => {}),
+  upload: vi.fn(),
+  validate: vi.fn(async () => {}),
+}));
+vi.mock('./invk/fontTransport', () => ({ createFontArchiveTransport: () => fontTransport }));
 
 const transport = vi.hoisted(() => ({
   coverExtensionForMime: () => 'webp',
@@ -595,7 +602,7 @@ describe('importing a project board', () => {
 
     const rewrittenEntries = new Map([...entries].map(([path, bytes]) => [path, binaryEntry(bytes)]));
 
-    rewrittenEntries.set('manifest.json', textEntry(JSON.stringify({ ...manifest, minimumCanvasSchemaVersion: 4 })));
+    rewrittenEntries.set('manifest.json', textEntry(JSON.stringify({ ...manifest, minimumCanvasSchemaVersion: 5 })));
     const archive = new File([await writeArchive(rewrittenEntries)], original.name);
 
     await expect(projectFile.importProjectFile(archive)).rejects.toMatchObject({ reason: 'unsupported-version' });
@@ -983,5 +990,80 @@ describe('importProjectFile', () => {
     await expect(imported).rejects.toThrow('no longer active');
     expect(api.createProjectSettled).not.toHaveBeenCalled();
     account.accountLifecycle.invalidate();
+  });
+});
+
+describe('embedded font project imports', () => {
+  const fontProject = async () => {
+    const { sha256Hex } = await import('@platform/browser/sha256');
+    const bytes = new Uint8Array([0, 1, 0, 0, 4, 5, 6]);
+    const font = {
+      contentHash: await sha256Hex(bytes),
+      family: 'Example',
+      id: 'source-font',
+      label: 'Example Regular',
+    };
+    const project = createDraftProject([]);
+    const layer = {
+      ...rasterImageLayer('text', 'unused.png'),
+      source: {
+        align: 'left' as const,
+        color: '#ffffff',
+        content: 'Portable typography',
+        fontFamily: 'Example',
+        fontRef: font,
+        fontSize: 40,
+        fontWeight: 400,
+        lineHeight: 1.2,
+        type: 'text' as const,
+      },
+    };
+    project.canvas.document.stacks = stacksFrom([layer]);
+    fontTransport.download.mockResolvedValue({ bytes, filename: 'Example.ttf' });
+    fontTransport.upload.mockResolvedValue({ created: true, font: { ...font, id: 'imported-font' } });
+    await projectFile.exportOpenProject(project, { includeFonts: true });
+    return capturedArchive();
+  };
+
+  it('validates included fonts, installs them privately, and persists remapped references', async () => {
+    const archive = await fontProject();
+    acceptCreate();
+    const result = await projectFile.importProjectFile(archive);
+    const { collectFontDependencies } = await import('./invk/fonts');
+    expect(collectFontDependencies(result.record.data)[0]?.references).toEqual(['imported-font']);
+    expect(fontTransport.validate).toHaveBeenCalledTimes(1);
+    expect(fontTransport.upload).toHaveBeenCalledTimes(1);
+    expect(fontTransport.remove).not.toHaveBeenCalled();
+  });
+
+  it('rejects invalid font payloads before creating any server resources', async () => {
+    const archive = await fontProject();
+    fontTransport.validate.mockRejectedValue(new Error('Invalid font tables'));
+    await expect(projectFile.importProjectFile(archive)).rejects.toThrow('Invalid font tables');
+    expect(fontTransport.upload).not.toHaveBeenCalled();
+    expect(transport.createStagingBoard).not.toHaveBeenCalled();
+    expect(api.createProjectSettled).not.toHaveBeenCalled();
+  });
+
+  it('cleans up newly installed fonts only when failed project creation proves absence', async () => {
+    const archive = await fontProject();
+    const { ProjectCreateAbsentError: AbsentError } = await import('./api');
+    api.createProjectSettled.mockRejectedValue(new AbsentError(new Error('rejected')));
+    await expect(projectFile.importProjectFile(archive)).rejects.toBeInstanceOf(AbsentError);
+    expect(fontTransport.remove).toHaveBeenCalledWith('imported-font', expect.any(AbortSignal));
+    fontTransport.remove.mockClear();
+    api.createProjectSettled.mockRejectedValue(new Error('Unknown create outcome'));
+    await expect(projectFile.importProjectFile(archive)).rejects.toThrow('Unknown create outcome');
+    expect(fontTransport.remove).not.toHaveBeenCalled();
+  });
+
+  it('allows an explicit references-only retry without installing or deleting fonts', async () => {
+    const archive = await fontProject();
+    acceptCreate();
+    const result = await projectFile.importProjectFile(archive, { skipEmbeddedFonts: true });
+    const { collectFontDependencies } = await import('./invk/fonts');
+    expect(collectFontDependencies(result.record.data)[0]?.references).toEqual(['source-font']);
+    expect(fontTransport.upload).not.toHaveBeenCalled();
+    expect(fontTransport.remove).not.toHaveBeenCalled();
   });
 });

@@ -852,8 +852,10 @@ export const colorPickerSlotRecipe = defineSlotRecipe({
 /**
  * Skeletons sweep a subtle highlight instead of pulsing. The gradient rests on
  * the same `bg.emphasized` surface the stock pulse used; the band is a small
- * fg lift so it stays quiet on every theme. Reduce-motion is handled by the
- * global `.chakra-skeleton` animation kill in `system.ts`.
+ * fg lift so it stays quiet on every theme. The sweep runs linear: the stock
+ * ease-in-out lingers at each end and rushes the middle, which reads as a
+ * stutter. Reduce-motion is handled by the global `.chakra-skeleton`
+ * animation kill in `system.ts`.
  */
 export const skeletonRecipe = defineRecipe({
   ...chakraRecipes.skeleton,
@@ -864,6 +866,7 @@ export const skeletonRecipe = defineRecipe({
       shine: {
         ...chakraRecipes.skeleton.variants?.variant?.shine,
         '--duration': '2s',
+        animation: 'bg-position var(--duration) linear infinite',
         '--end-color': 'colors.bg.emphasized',
         '--start-color': 'color-mix(in oklab, {colors.fg} 8%, {colors.bg.emphasized})',
       },
@@ -1017,7 +1020,7 @@ export const themeCardRecipe = defineSlotRecipe({
       gap: '0.5',
     },
     name: { color: 'fg', fontSize: 'sm', fontWeight: '600' },
-    description: { color: 'fg.subtle', fontSize: '2xs', lineHeight: '1.3' },
+    description: { color: 'fg.muted', fontSize: '2xs', lineHeight: '1.3' },
     indicator: {
       alignItems: 'center',
       borderRadius: 'full',

@@ -46,6 +46,7 @@ vi.mock('./CanvasGlobalContextMenu', () => ({ CanvasGlobalContextMenu: () => nul
 vi.mock('./CanvasImageDropOverlay', () => ({ CanvasImageDropOverlay: () => null }));
 vi.mock('./CanvasSaveToGallerySubmenu', () => ({ CanvasSaveToGallerySubmenu: () => null }));
 vi.mock('./CanvasSurface', () => ({ CanvasSurface: () => null }));
+vi.mock('./MissingFontsDialog', () => ({ MissingFontsDialog: () => null }));
 vi.mock('./ToolStrip', () => ({ ToolStrip: () => null }));
 vi.mock('@workbench/widgets/layers/LayerContextMenu', () => ({ CanvasLayerContextMenu: () => null }));
 
@@ -99,7 +100,10 @@ describe('CanvasWidgetView staged acceptance eligibility', () => {
     harness.engine = null;
     expect(getAcceptButtonTag(renderView())).toContain('disabled=""');
 
-    harness.engine = { layers: { commitStagedImage: vi.fn() } } as unknown as CanvasEngine;
+    harness.engine = {
+      fonts: { collectReferences: () => [] },
+      layers: { commitStagedImage: vi.fn() },
+    } as unknown as CanvasEngine;
     expect(getAcceptButtonTag(renderView())).not.toContain('disabled=""');
   });
 });

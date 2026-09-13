@@ -1,9 +1,11 @@
 import type { DateRange } from '@platform/search/dateTokens';
 import type { CustomHotkeys, HotkeyDefinition } from '@workbench/hotkeys/types';
-import type { WorkbenchPreferences } from '@workbench/settings/contracts';
-import type { SettingsSectionId } from '@workbench/widgetContracts';
+import type { SettingsDestination, SettingsSectionId, WorkbenchPreferences } from '@workbench/settings/contracts';
 import type { TFunction } from 'i18next';
 
+import { resolveSettingsText } from '@platform/ui/settings/contracts';
+import { preferenceSettingsFields } from '@workbench/settings/applicationContributions';
+import { settingsCatalog } from '@workbench/settings/catalog';
 import fuzzysort from 'fuzzysort';
 
 import { getPaletteContributionKey } from './contributionKey';
@@ -282,37 +284,8 @@ export const buildCatalogCommandEntries = ({
 // Settings source
 // ---------------------------------------------------------------------------
 
-type BooleanPreferenceKey = {
-  [Key in keyof WorkbenchPreferences]: WorkbenchPreferences[Key] extends boolean ? Key : never;
-}[keyof WorkbenchPreferences];
-
-const SETTING_TOGGLES: ReadonlyArray<{ key: BooleanPreferenceKey; keywords?: string; title: string }> = [
-  { key: 'reduceMotion', keywords: 'animation appearance', title: 'Reduce Motion' },
-  { key: 'confirmImageDeletion', keywords: 'delete safety', title: 'Confirm Image Deletion' },
-  { key: 'showFocusRegionHighlight', keywords: 'panel outline', title: 'Show Focus Region Highlight' },
-  { key: 'enableInformationalPopovers', keywords: 'help tooltips', title: 'Informational Popovers' },
-  { key: 'enableModelDescriptions', keywords: 'model manager', title: 'Model Descriptions' },
-  { key: 'developerLogEnabled', keywords: 'debug console', title: 'Developer Logging' },
-  { key: 'workflowSnapToGrid', keywords: 'workflow editor nodes', title: 'Snap Workflow Nodes to Grid' },
-  { key: 'workflowShowMinimap', keywords: 'workflow editor', title: 'Show Workflow Minimap' },
-  { key: 'workflowValidateConnections', keywords: 'workflow editor edges', title: 'Validate Workflow Connections' },
-];
-
-const SETTINGS_SECTIONS: ReadonlyArray<{ id: SettingsSectionId; title: string }> = [
-  { id: 'appearance', title: 'Appearance' },
-  { id: 'behavior', title: 'Behavior' },
-  { id: 'hotkeys', title: 'Hotkeys' },
-  { id: 'project', title: 'Project' },
-  { id: 'queue', title: 'Queue' },
-  { id: 'workflow', title: 'Workflow' },
-  { id: 'imageMap', title: 'Image Map' },
-  { id: 'developer', title: 'Developer' },
-  { id: 'workspace', title: 'Workspace' },
-  { id: 'about', title: 'About' },
-];
-
 export interface SettingsEntryDeps {
-  openSettingsSection: (sectionId: SettingsSectionId) => void;
+  openSettingsSection: (destination: SettingsSectionId | SettingsDestination) => void;
   patchPreferences: (patch: Partial<WorkbenchPreferences>) => unknown;
   /** Transient theme preview while the Theme stage is open (no persistence). */
   previewTheme?: (themeId: string) => void;
@@ -344,132 +317,119 @@ export const buildSettingsEntries = (
   deps: SettingsEntryDeps,
   t: TFunction
 ): PaletteEntry[] => {
-  const toggles = SETTING_TOGGLES.map<PaletteEntry>(({ key, keywords, title }) => ({
-    group: 'Settings',
-    groupLabel: t('commandPalette.groups.settings'),
-    id: `setting.${key}`,
-    isPersistentRecent: true,
-    keepOpen: true,
-    keywords: keywords ? `${keywords} toggle` : 'toggle',
-    run: () => deps.patchPreferences({ [key]: !preferences[key] }),
-    subtitle: preferences[key] ? t('commandPalette.settings.on') : t('commandPalette.settings.off'),
-    title: t(`commandPalette.settings.toggles.${key}`, { defaultValue: title }),
-  }));
-
-  // Multi-value preferences push an inline value-picker stage; mod+Enter (or
-  // the section deep-link rows) still reaches the full settings dialog.
-  const enumEntry = ({
-    id,
-    keywords,
-    options,
-    sectionId,
-    stagePreview,
-    subtitle,
-    title,
-  }: {
-    id: string;
-    keywords: string;
-    options: PaletteStageOption[];
-    sectionId: SettingsSectionId;
-    stagePreview?: Pick<PaletteStage, 'clearPreview' | 'preview'>;
-    subtitle: string;
-    title: string;
-  }): PaletteEntry => ({
-    group: 'Settings',
-    groupLabel: t('commandPalette.groups.settings'),
-    id,
-    isPersistentRecent: true,
-    keywords,
-    run: () => deps.openSettingsSection(sectionId),
-    secondary: { label: t('commandPalette.actions.openInSettings'), run: () => deps.openSettingsSection(sectionId) },
-    stage: { options, title, ...stagePreview },
-    subtitle,
-    title,
+  const directPreferenceIds = new Set(preferenceSettingsFields.map(({ field }) => field.id));
+  directPreferenceIds.add('themeId');
+  const preferenceEntries = preferenceSettingsFields.map<PaletteEntry>(({ field, sectionId }) => {
+    const title = resolveSettingsText(field.label, t);
+    const section = settingsCatalog.find((candidate) => candidate.id === sectionId);
+    const open = () => deps.openSettingsSection({ entryId: field.id, sectionId });
+    const value = preferences[field.id as keyof WorkbenchPreferences];
+    const entry: PaletteEntry = {
+      group: 'Settings',
+      groupLabel: t('commandPalette.groups.settings'),
+      id: `setting.${field.id}`,
+      isPersistentRecent: true,
+      keywords: [
+        section ? resolveSettingsText(section.label, t) : '',
+        field.description ? resolveSettingsText(field.description, t) : '',
+        field.keywords ?? '',
+      ].join(' '),
+      run: open,
+      secondary: { label: t('commandPalette.actions.openInSettings'), run: open },
+      title,
+    };
+    if (field.kind === 'boolean' && typeof value === 'boolean') {
+      return {
+        ...entry,
+        keepOpen: true,
+        keywords: `${entry.keywords} toggle`,
+        run: () => deps.patchPreferences({ [field.id]: !value }),
+        subtitle: value ? t('commandPalette.settings.on') : t('commandPalette.settings.off'),
+      };
+    }
+    if (field.kind === 'select') {
+      const options =
+        field.id === 'language'
+          ? deps.languageOptions
+          : field.options.map((option) => ({ ...option, label: resolveSettingsText(option.label, t) }));
+      return {
+        ...entry,
+        keywords: `${entry.keywords} ${options.map((option) => option.label).join(' ')}`,
+        stage: {
+          options: options.map((option) => ({
+            apply: () => deps.patchPreferences({ [field.id]: option.value }),
+            id: option.value,
+            isCurrent: value === option.value,
+            label: option.label,
+          })),
+          title,
+        },
+        subtitle: options.find((option) => option.value === value)?.label ?? String(value),
+      };
+    }
+    return entry;
   });
 
-  const enums: PaletteEntry[] = [
-    enumEntry({
-      id: 'setting.themeId',
-      keywords: 'appearance color dark light',
+  const themeField = settingsCatalog
+    .find((section) => section.id === 'appearance')
+    ?.entries.find(({ field }) => field.id === 'themeId')?.field;
+  const themeTitle = themeField ? resolveSettingsText(themeField.label, t) : t('commandPalette.settings.values.theme');
+  const openTheme = () => deps.openSettingsSection({ entryId: 'themeId', sectionId: 'appearance' });
+  const themeEntry: PaletteEntry = {
+    group: 'Settings',
+    groupLabel: t('commandPalette.groups.settings'),
+    id: 'setting.themeId',
+    isPersistentRecent: true,
+    keywords: `${themeField?.keywords ?? ''} ${themeField?.description ? resolveSettingsText(themeField.description, t) : ''} ${deps.themes.map((theme) => theme.label).join(' ')}`,
+    run: openTheme,
+    secondary: { label: t('commandPalette.actions.openInSettings'), run: openTheme },
+    stage: {
       options: deps.themes.map((theme) => ({
         apply: () => deps.patchPreferences({ themeId: theme.id }),
         id: theme.id,
         isCurrent: theme.id === preferences.themeId,
         label: theme.label,
       })),
-      sectionId: 'appearance',
-      stagePreview:
-        deps.previewTheme && deps.clearThemePreview
-          ? { clearPreview: deps.clearThemePreview, preview: deps.previewTheme }
-          : undefined,
-      subtitle: deps.themes.find((theme) => theme.id === preferences.themeId)?.label ?? preferences.themeId,
-      title: t('commandPalette.settings.values.theme'),
-    }),
-    enumEntry({
-      id: 'setting.language',
-      keywords: 'locale translation',
-      options: deps.languageOptions.map((language) => ({
-        apply: () => deps.patchPreferences({ language: language.value }),
-        id: language.value,
-        isCurrent: language.value === preferences.language,
-        label: language.label,
-      })),
-      sectionId: 'appearance',
-      subtitle:
-        deps.languageOptions.find((language) => language.value === preferences.language)?.label ?? preferences.language,
-      title: t('commandPalette.settings.values.language'),
-    }),
-    enumEntry({
-      id: 'setting.workflowEdgeStyle',
-      keywords: 'workflow editor connections',
-      options: (['curved', 'square'] as const).map((style) => ({
-        apply: () => deps.patchPreferences({ workflowEdgeStyle: style }),
-        id: style,
-        isCurrent: style === preferences.workflowEdgeStyle,
-        label:
-          style === 'square' ? t('commandPalette.settings.values.square') : t('commandPalette.settings.values.curved'),
-      })),
-      sectionId: 'workflow',
-      subtitle:
-        preferences.workflowEdgeStyle === 'square'
-          ? t('commandPalette.settings.values.square')
-          : t('commandPalette.settings.values.curved'),
-      title: t('commandPalette.settings.values.workflowEdgeStyle'),
-    }),
-    enumEntry({
-      id: 'setting.queueJobsScope',
-      keywords: 'queue filter',
-      options: (['active-project', 'all'] as const).map((scope) => ({
-        apply: () => deps.patchPreferences({ queueJobsScope: scope }),
-        id: scope,
-        isCurrent: scope === preferences.queueJobsScope,
-        label:
-          scope === 'all'
-            ? t('commandPalette.settings.values.allProjects')
-            : t('commandPalette.settings.values.activeProject'),
-      })),
-      sectionId: 'queue',
-      subtitle:
-        preferences.queueJobsScope === 'all'
-          ? t('commandPalette.settings.values.allProjects')
-          : t('commandPalette.settings.values.activeProject'),
-      title: t('commandPalette.settings.values.queueJobsScope'),
-    }),
-  ];
+      title: themeTitle,
+      ...(deps.previewTheme && deps.clearThemePreview
+        ? { clearPreview: deps.clearThemePreview, preview: deps.previewTheme }
+        : {}),
+    },
+    subtitle: deps.themes.find((theme) => theme.id === preferences.themeId)?.label ?? preferences.themeId,
+    title: themeTitle,
+  };
 
-  const sections = SETTINGS_SECTIONS.map<PaletteEntry>(({ id, title }) => ({
+  const sections = settingsCatalog.map<PaletteEntry>(({ id, label }) => ({
     group: 'Settings',
     groupLabel: t('commandPalette.groups.settings'),
     id: `settings.section.${id}`,
     isPersistentRecent: true,
     keywords: 'settings preferences open',
     run: () => deps.openSettingsSection(id),
-    title: t('commandPalette.settings.settingsSection', {
-      section: t(`commandPalette.settings.sections.${id}`, { defaultValue: title }),
-    }),
+    title: t('commandPalette.settings.settingsSection', { section: resolveSettingsText(label, t) }),
   }));
+  const fields = settingsCatalog.flatMap((section) =>
+    section.entries
+      .filter(({ field }) => field.scope !== 'preference' || !directPreferenceIds.has(field.id))
+      .map<PaletteEntry>(({ field }) => ({
+        group: 'Settings',
+        groupLabel: t('commandPalette.groups.settings'),
+        id: `setting.${section.id}.${field.id}`,
+        isPersistentRecent: true,
+        keywords: [
+          resolveSettingsText(section.label, t),
+          field.description ? resolveSettingsText(field.description, t) : '',
+          field.group ? resolveSettingsText(field.group, t) : '',
+          field.keywords ?? '',
+          field.kind === 'select' ? field.options.map((option) => resolveSettingsText(option.label, t)).join(' ') : '',
+        ].join(' '),
+        run: () => deps.openSettingsSection({ entryId: field.id, sectionId: section.id }),
+        subtitle: resolveSettingsText(section.label, t),
+        title: resolveSettingsText(field.label, t),
+      }))
+  );
 
-  return [...toggles, ...enums, ...sections];
+  return [...preferenceEntries, themeEntry, ...sections, ...fields];
 };
 
 // ---------------------------------------------------------------------------

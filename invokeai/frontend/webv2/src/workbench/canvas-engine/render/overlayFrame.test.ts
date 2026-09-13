@@ -256,8 +256,8 @@ describe('settings pass-through', () => {
   });
 
   it('forwards the in-progress tool previews', () => {
-    const gradient = { end: { x: 1, y: 1 }, start: { x: 0, y: 0 } };
-    const lasso = [{ x: 0, y: 0 }];
+    const gradient = { end: { x: 1, y: 1 }, kind: 'linear' as const, start: { x: 0, y: 0 } };
+    const lasso = { kind: 'freehand' as const, points: [{ x: 0, y: 0 }] };
     const marquee = { kind: 'rect' as const, rect: { height: 2, width: 2, x: 0, y: 0 } };
     const shape = { kind: 'ellipse' as const, rect: { height: 3, width: 3, x: 1, y: 1 } };
     harness.stores.gradientPreview.set(gradient);

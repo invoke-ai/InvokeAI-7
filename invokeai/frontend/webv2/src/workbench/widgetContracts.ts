@@ -1,3 +1,4 @@
+import type { SettingsContribution } from '@platform/ui/settings/contracts';
 import type { TFunction } from 'i18next';
 import type { ComponentType, ExoticComponent, JSXElementConstructor, SVGProps } from 'react';
 
@@ -94,6 +95,7 @@ export type WidgetHost = ComponentType;
 export interface WidgetImplementation {
   view: WidgetView;
   headerActions?: WidgetHeaderActions;
+  settingsActions?: WidgetHeaderActions;
   headerLabel?: WidgetHeaderLabel;
   headerMenu?: WidgetHeaderMenu;
   footer?: WidgetFooter;
@@ -273,19 +275,6 @@ export interface WidgetWorkbenchApi {
   closeWidgetInstance: (instanceId: WidgetInstanceId) => WidgetWorkbenchApiResult;
 }
 
-/** Sections of the workbench settings dialog, addressable via `openWorkbenchSettings`. */
-export type SettingsSectionId =
-  | 'appearance'
-  | 'behavior'
-  | 'hotkeys'
-  | 'project'
-  | 'queue'
-  | 'workflow'
-  | 'imageMap'
-  | 'developer'
-  | 'workspace'
-  | 'about';
-
 export interface WidgetManifest {
   /** Widget runtime API contract version. Defaults to 1 during registry normalization. */
   apiVersion?: 1;
@@ -321,8 +310,8 @@ export interface WidgetManifest {
    * its own chunk.
    */
   loadHost?: () => Promise<WidgetHost>;
-  /** When set, the frame header shows a gear that opens this settings dialog section. */
-  settingsSection?: SettingsSectionId;
+  /** Shared definitions for the shell's quick controls and full settings dialog. */
+  settings?: SettingsContribution;
   state?: WidgetStateRegistration;
   graphBearing?: {
     sourceId: InvocationSourceId;

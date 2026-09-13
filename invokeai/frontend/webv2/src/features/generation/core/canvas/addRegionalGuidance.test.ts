@@ -5,6 +5,7 @@ import type { AddRegionalGuidanceOptions, RegionalGuidanceInput, RegionalReferen
 import {
   addRegionalGuidance,
   getRegionalGuidanceRejectionReason,
+  getRegionalGuidanceSupport,
   isRegionalGuidanceSupportedForBase,
 } from './addRegionalGuidance';
 
@@ -112,6 +113,39 @@ const krea2BaseGraph = (): TestGraph => ({
   },
 });
 
+/** A minimal Qwen3-encoder graph (Z-Image / Anima): pos + neg collectors, CFG on. */
+const qwen3BaseGraph = (encoderType: 'z_image_text_encoder' | 'anima_text_encoder'): TestGraph => ({
+  edges: [
+    {
+      destination: { field: 'qwen3_encoder', node_id: 'pos_cond' },
+      source: { field: 'qwen3_encoder', node_id: 'model_loader' },
+    },
+    {
+      destination: { field: 'qwen3_encoder', node_id: 'neg_cond' },
+      source: { field: 'qwen3_encoder', node_id: 'model_loader' },
+    },
+    {
+      destination: { field: 'positive_conditioning', node_id: 'denoise_latents' },
+      source: { field: 'collection', node_id: 'pos_cond_collect' },
+    },
+    {
+      destination: { field: 'negative_conditioning', node_id: 'denoise_latents' },
+      source: { field: 'collection', node_id: 'neg_cond_collect' },
+    },
+  ],
+  id: 'g',
+  nodes: {
+    denoise_latents: {
+      id: 'denoise_latents',
+      type: encoderType === 'anima_text_encoder' ? 'anima_denoise' : 'z_image_denoise',
+    },
+    neg_cond: { id: 'neg_cond', type: encoderType },
+    neg_cond_collect: { id: 'neg_cond_collect', type: 'collect' },
+    pos_cond: { id: 'pos_cond', type: encoderType },
+    pos_cond_collect: { id: 'pos_cond_collect', type: 'collect' },
+  },
+});
+
 const ipModel = (base: string): RegionalReferenceModel => ({
   base,
   key: `ip-${base}`,
@@ -141,14 +175,61 @@ const hasEdge = (graph: TestGraph, s: string, sf: string, d: string, df: string)
   );
 
 describe('isRegionalGuidanceSupportedForBase', () => {
-  it('supports sd-1 / sdxl / flux / flux2 / krea-2 and nothing else', () => {
-    expect(isRegionalGuidanceSupportedForBase('sd-1')).toBe(true);
-    expect(isRegionalGuidanceSupportedForBase('sdxl')).toBe(true);
-    expect(isRegionalGuidanceSupportedForBase('flux')).toBe(true);
-    expect(isRegionalGuidanceSupportedForBase('flux2')).toBe(true);
-    expect(isRegionalGuidanceSupportedForBase('krea-2')).toBe(true);
-    expect(isRegionalGuidanceSupportedForBase('sd-3')).toBe(false);
-    expect(isRegionalGuidanceSupportedForBase('cogview4')).toBe(false);
+  it('supports every base whose encoder takes a mask and whose denoiser takes a conditioning list', () => {
+    for (const base of ['sd-1', 'sd-2', 'sdxl', 'flux', 'flux2', 'krea-2', 'z-image', 'anima']) {
+      expect(isRegionalGuidanceSupportedForBase(base), base).toBe(true);
+    }
+    for (const base of ['sd-3', 'cogview4', 'qwen-image', 'ideogram-4', 'wan', 'external']) {
+      expect(isRegionalGuidanceSupportedForBase(base), base).toBe(false);
+    }
+  });
+});
+
+describe('getRegionalGuidanceSupport', () => {
+  it('masks both polarities plus IP-Adapters on the SD family only', () => {
+    for (const base of ['sd-1', 'sd-2', 'sdxl']) {
+      expect(getRegionalGuidanceSupport(base)).toMatchObject({
+        autoNegative: true,
+        negativePrompt: true,
+        referenceImages: 'ip_adapter',
+      });
+    }
+    expect(getRegionalGuidanceSupport('flux')).toMatchObject({
+      autoNegative: false,
+      negativePrompt: false,
+      referenceImages: 'flux_redux',
+    });
+    for (const base of ['flux2', 'krea-2', 'z-image', 'anima']) {
+      expect(getRegionalGuidanceSupport(base), base).toMatchObject({
+        autoNegative: false,
+        negativePrompt: false,
+        referenceImages: null,
+      });
+    }
+    expect(getRegionalGuidanceSupport('sd-3')).toBeNull();
+    expect(getRegionalGuidanceSupport(null)).toBeNull();
+  });
+});
+
+describe('addRegionalGuidance — Z-Image / Anima', () => {
+  it.each([
+    ['z-image', 'z_image_text_encoder'],
+    ['anima', 'anima_text_encoder'],
+  ] as const)('%s wires a masked positive prompt through its Qwen3 encoder, positive only', (base, encoderType) => {
+    const g = run(qwen3BaseGraph(encoderType), {
+      base,
+      regions: [region({ autoNegative: true, negativePrompt: 'blurry' })],
+    });
+
+    expect(g.nodes.rg_pos_cond_r1).toMatchObject({ prompt: 'a cat', type: encoderType });
+    expect(hasEdge(g, 'model_loader', 'qwen3_encoder', 'rg_pos_cond_r1', 'qwen3_encoder')).toBe(true);
+    expect(hasEdge(g, 'rg_mask_to_tensor_r1', 'mask', 'rg_pos_cond_r1', 'mask')).toBe(true);
+    expect(hasEdge(g, 'rg_pos_cond_r1', 'conditioning', 'pos_cond_collect', 'item')).toBe(true);
+    // The backend discards masks on negative conditioning for these bases, so nothing reaches the
+    // negative collector even though the graph has one.
+    expect(g.nodes.rg_neg_cond_r1).toBeUndefined();
+    expect(g.nodes.rg_pos_cond_inverted_r1).toBeUndefined();
+    expect(g.edges.some((e) => e.destination.node_id === 'neg_cond_collect')).toBe(false);
   });
 });
 
@@ -273,6 +354,16 @@ describe('addRegionalGuidance — SD1', () => {
   });
 });
 
+describe('addRegionalGuidance — SD2', () => {
+  it('uses the compel encoder with both polarities like SD1', () => {
+    const g = run(sdBaseGraph(), { base: 'sd-2', regions: [region({ autoNegative: true, negativePrompt: 'blurry' })] });
+    expect(g.nodes.rg_pos_cond_r1).toMatchObject({ prompt: 'a cat', type: 'compel' });
+    expect(g.nodes.rg_neg_cond_r1).toMatchObject({ prompt: 'blurry', type: 'compel' });
+    expect(g.nodes.rg_pos_cond_inverted_r1).toBeDefined();
+    expect(hasEdge(g, 'clip_skip', 'clip', 'rg_pos_cond_r1', 'clip')).toBe(true);
+  });
+});
+
 describe('addRegionalGuidance — SDXL', () => {
   it('sets prompt + style on the sdxl encoder and copies clip + clip2', () => {
     const g = run(sdBaseGraph({ sdxl: true }), { base: 'sdxl', regions: [region()] });
@@ -360,7 +451,6 @@ describe('addRegionalGuidance — multiple regions coexist', () => {
 
 describe('getRegionalGuidanceRejectionReason', () => {
   const params = {
-    autoNegative: false,
     hasContent: true,
     layerName: 'Region 1',
     mainBase: 'sd-1',
@@ -382,41 +472,54 @@ describe('getRegionalGuidanceRejectionReason', () => {
   });
 
   it('rejects a region with no prompt and no reference images', () => {
-    expect(getRegionalGuidanceRejectionReason({ ...params, positivePrompt: null, referenceImageCount: 0 })).toMatch(
-      /no prompt or reference/
-    );
+    expect(getRegionalGuidanceRejectionReason({ ...params, positivePrompt: null })).toMatch(/no prompt or reference/);
   });
 
-  it('rejects a FLUX negative prompt / autoNegative', () => {
-    expect(getRegionalGuidanceRejectionReason({ ...params, mainBase: 'flux', negativePrompt: 'blurry' })).toMatch(
-      /negative prompts are not supported for FLUX/
-    );
-    expect(getRegionalGuidanceRejectionReason({ ...params, autoNegative: true, mainBase: 'flux' })).toMatch(
-      /auto-negative is not supported for FLUX/
-    );
+  it('accepts an SD region that only carries a negative prompt or a reference image', () => {
+    expect(
+      getRegionalGuidanceRejectionReason({ ...params, negativePrompt: 'blurry', positivePrompt: null })
+    ).toBeNull();
+    expect(getRegionalGuidanceRejectionReason({ ...params, positivePrompt: null, referenceImageCount: 1 })).toBeNull();
+    expect(
+      getRegionalGuidanceRejectionReason({ ...params, mainBase: 'sd-2', positivePrompt: null, referenceImageCount: 1 })
+    ).toBeNull();
   });
 
-  it('rejects FLUX.2 negative prompts, autoNegative, and reference images', () => {
-    expect(getRegionalGuidanceRejectionReason({ ...params, mainBase: 'flux2', negativePrompt: 'blurry' })).toMatch(
-      /negative prompts are not supported for FLUX\.2/
-    );
-    expect(getRegionalGuidanceRejectionReason({ ...params, autoNegative: true, mainBase: 'flux2' })).toMatch(
-      /auto-negative is not supported for FLUX\.2/
-    );
-    expect(getRegionalGuidanceRejectionReason({ ...params, mainBase: 'flux2', referenceImageCount: 1 })).toMatch(
-      /reference images are not supported for FLUX\.2/
-    );
+  it.each(['flux', 'flux2', 'krea-2', 'z-image', 'anima'])(
+    'keeps a %s region whose positive prompt is usable even with unsupported extras attached',
+    (mainBase) => {
+      expect(
+        getRegionalGuidanceRejectionReason({
+          ...params,
+          mainBase,
+          negativePrompt: 'blurry',
+          referenceImageCount: 1,
+        })
+      ).toBeNull();
+    }
+  );
+
+  it.each([
+    ['flux', 'FLUX', 0],
+    ['flux2', 'FLUX.2', 1],
+    ['krea-2', 'Krea-2', 1],
+    ['z-image', 'Z-Image', 1],
+    ['anima', 'Anima', 1],
+  ])('rejects a %s region that carries only what the base ignores', (mainBase, label, referenceImageCount) => {
+    expect(
+      getRegionalGuidanceRejectionReason({
+        ...params,
+        mainBase,
+        negativePrompt: 'blurry',
+        positivePrompt: null,
+        referenceImageCount,
+      })
+    ).toBe(`Regional guidance "Region 1" has no prompt or reference image ${label} can use.`);
   });
 
-  it('rejects Krea-2 negative prompts, autoNegative, and reference images', () => {
-    expect(getRegionalGuidanceRejectionReason({ ...params, mainBase: 'krea-2', negativePrompt: 'blurry' })).toMatch(
-      /negative prompts are not supported for Krea-2/
-    );
-    expect(getRegionalGuidanceRejectionReason({ ...params, autoNegative: true, mainBase: 'krea-2' })).toMatch(
-      /auto-negative is not supported for Krea-2/
-    );
-    expect(getRegionalGuidanceRejectionReason({ ...params, mainBase: 'krea-2', referenceImageCount: 1 })).toMatch(
-      /reference images are not supported for Krea-2/
-    );
+  it('keeps a FLUX region that only carries a Redux reference image', () => {
+    expect(
+      getRegionalGuidanceRejectionReason({ ...params, mainBase: 'flux', positivePrompt: null, referenceImageCount: 1 })
+    ).toBeNull();
   });
 });

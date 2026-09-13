@@ -379,6 +379,7 @@ const PresetTab = ({
       style={dndStyle}
       touchAction="pan-x"
       value={preset.id}
+      _hover={PRESET_TAB_HOVER_PROPS}
       _selected={PRESET_TAB_SELECTED_PROPS}
       onClick={handleClick}
       onContextMenu={handleContextMenu}
@@ -414,9 +415,9 @@ const PresetTab = ({
 
 const MENU_AFFORDANCE_HOVER_PROPS = { bg: 'bg.emphasized', color: 'fg' } as const;
 
-// The strip sits on topbar chrome the accent.subtle fill blends into; the
-// SegmentTabs translucent shown-tab fill reads there (nav sidebars keep stock).
-const PRESET_TAB_SELECTED_PROPS = { bg: 'gray.hoverTint/15', color: 'fg' } as const;
+// Same fills as the widget rail's hover and active items (`WIDGET_ITEM_SX`).
+const PRESET_TAB_HOVER_PROPS = { bg: 'bg.emphasized', color: 'fg' } as const;
+const PRESET_TAB_SELECTED_PROPS = { bg: 'bg.emphasized', color: 'fg' } as const;
 
 const DriftDot = () => <Box aria-hidden="true" bg="accent.solid" boxSize="1.5" flexShrink={0} rounded="full" />;
 

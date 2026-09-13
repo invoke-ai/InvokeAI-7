@@ -13,6 +13,8 @@ import { Box, Flex, Text } from '@chakra-ui/react';
 import { getWidgetReadyMark, markSemanticReady } from '@platform/performance/semanticReady';
 import { useMountEffect } from '@platform/react/useMountEffect';
 import { Scrollable } from '@platform/ui/Scrollable';
+import { WidgetOverlayOwnerContext } from '@platform/ui/widgetOverlays';
+import { WidgetSettingsButton } from '@workbench/settings/WidgetSettingsButton';
 import { areWidgetPlacementProjectsEqual, getWidgetPlacementProject } from '@workbench/widgetPlacementMeta';
 import { useActiveProjectSelector } from '@workbench/WorkbenchContext';
 import { useWorkbenchWidgetRegistry } from '@workbench/WorkbenchWidgetRegistryContext';
@@ -37,8 +39,8 @@ interface WidgetRendererByIdProps extends Omit<WidgetViewProps, 'instance' | 'ma
 /**
  * The chrome slots a region can hoist out of the widget frame. `actions` is the
  * full trailing cluster (widget actions, settings, float, overflow menu);
- * `viewActions` is the widget's own `headerActions` alone, for chrome that
- * already carries its own frame controls.
+ * `viewActions` contains widget actions and settings, for chrome that already
+ * carries its own layout controls.
  */
 type WidgetChromeSlotName = 'actions' | 'label' | 'viewActions';
 
@@ -137,15 +139,27 @@ const WidgetChromeSlot = ({
   }
 
   // The window chrome around a floating widget already carries the frame's own
-  // controls (shade, maximize, dock), so it takes the widget's actions alone —
-  // a floated widget keeps the toggles its docked header shows.
+  // controls (shade, maximize, dock). Preferences remain available beside the
+  // widget's own actions without duplicating those layout controls.
   if (slot === 'viewActions') {
-    return actions;
+    return (
+      <>
+        {actions}
+        <WidgetSettingsButton
+          SettingsActions={implementation.settingsActions}
+          instance={instanceMeta}
+          manifest={widget.manifest}
+          region={region}
+          runtime={runtime}
+        />
+      </>
+    );
   }
 
   return (
     <WidgetHeaderActionsGroup
       HeaderMenu={implementation.headerMenu}
+      SettingsActions={implementation.settingsActions}
       actions={actions}
       instance={instanceMeta}
       manifest={widget.manifest}
@@ -220,16 +234,18 @@ const LoadedWidgetRenderer = ({ instance, presentation, region, widget }: Widget
   );
 
   return (
-    <WidgetShellFrame
-      implementation={implementation}
-      instance={instanceMeta}
-      presentation={presentation}
-      region={region}
-      runtime={runtime}
-      widget={widget}
-    >
-      {content}
-    </WidgetShellFrame>
+    <WidgetOverlayOwnerContext value>
+      <WidgetShellFrame
+        implementation={implementation}
+        instance={instanceMeta}
+        presentation={presentation}
+        region={region}
+        runtime={runtime}
+        widget={widget}
+      >
+        {content}
+      </WidgetShellFrame>
+    </WidgetOverlayOwnerContext>
   );
 };
 
@@ -381,6 +397,7 @@ const HeaderSlot = memo(function HeaderSlot({
       <WidgetHeader
         HeaderLabel={implementation.headerLabel}
         HeaderMenu={implementation.headerMenu}
+        SettingsActions={implementation.settingsActions}
         actions={actions}
         instance={instance}
         manifest={widget.manifest}

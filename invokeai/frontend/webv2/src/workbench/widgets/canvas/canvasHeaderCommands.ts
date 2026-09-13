@@ -4,6 +4,7 @@ import type {
   Rect,
   StructuralCommitResult,
 } from '@workbench/canvas-engine/api';
+import type { CanvasGallerySaveRegion } from '@workbench/canvas-operations/api';
 
 import { createNewCanvasState } from '@workbench/canvasMigration';
 
@@ -41,6 +42,8 @@ export interface CanvasHeaderCommandContext extends NewCanvasContext {
   /** Opens the confirm dialog. The destructive replace only runs from its confirm. */
   readonly openNewCanvas: () => void;
   readonly reportStructuralCommit: (result: StructuralCommitResult) => void;
+  /** Composites the region and uploads it to the gallery's current board. */
+  readonly saveToGallery: (region: CanvasGallerySaveRegion) => void;
   readonly t: (key: string) => string;
 }
 
@@ -97,5 +100,9 @@ export const executeCanvasHeaderCommand = (commandId: string, ctx: CanvasHeaderC
     applyFitBbox(ctx, ctx.fitMasksRect, false);
   } else if (commandId === 'canvas.newSession') {
     ctx.openNewCanvas();
+  } else if (commandId === 'canvas.saveToGallery' && !ctx.editingLocked) {
+    ctx.saveToGallery('canvas');
+  } else if (commandId === 'canvas.saveBboxToGallery' && !ctx.editingLocked) {
+    ctx.saveToGallery('bbox');
   }
 };

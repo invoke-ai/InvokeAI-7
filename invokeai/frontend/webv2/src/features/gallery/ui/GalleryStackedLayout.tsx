@@ -14,6 +14,7 @@ import { GalleryItemSearch } from './GalleryItemSearch';
 import { GalleryItemSortMenu } from './GalleryItemSortMenu';
 import { GallerySelectionBar } from './GallerySelectionBar';
 import { GALLERY_SPLIT_HANDLE_SIZE_PX, GallerySplitHandle } from './GallerySplitHandle';
+import { GalleryStarredFilterToggle } from './GalleryStarredFilterToggle';
 import { GalleryUploadButton } from './GalleryUploadButton';
 import { GalleryViewTabs } from './GalleryViewTabs';
 import { useGalleryWidget } from './GalleryWidgetContext';
@@ -125,6 +126,7 @@ export const GalleryStackedLayout = () => {
           <HStack gap="1" minW="0">
             <GalleryViewTabs idBase={viewTabsIdBase} />
             <Spacer />
+            <GalleryStarredFilterToggle />
             <GalleryItemSortMenu />
             <GalleryUploadButton
               boards={gallery.boards}

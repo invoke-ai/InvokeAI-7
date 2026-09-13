@@ -12,6 +12,7 @@ interface SystemPromptDTO {
   content: string;
   user_id: string;
   is_public: boolean;
+  max_tokens: number | null;
 }
 
 export interface SystemPromptRecord {
@@ -20,11 +21,14 @@ export interface SystemPromptRecord {
   content: string;
   userId: string;
   isPublic: boolean;
+  /** Cap on the tokens Expand Prompt may generate with this prompt; null means the backend default. */
+  maxTokens: number | null;
 }
 
 export interface SystemPromptDraft {
   name: string;
   content: string;
+  maxTokens: number | null;
 }
 
 export const systemPromptKeys = {
@@ -36,6 +40,8 @@ const mapSystemPrompt = (dto: SystemPromptDTO): SystemPromptRecord => ({
   content: dto.content,
   id: dto.id,
   isPublic: dto.is_public,
+  // Absent on a backend older than the column; treated the same as an unset cap.
+  maxTokens: dto.max_tokens ?? null,
   name: dto.name,
   userId: dto.user_id,
 });
@@ -61,7 +67,7 @@ export const systemPromptsQueryOptions = () =>
 export const createSystemPrompt = async (draft: SystemPromptDraft): Promise<SystemPromptRecord> =>
   mapSystemPrompt(
     await apiFetchJson<SystemPromptDTO>(`${SYSTEM_PROMPTS_BASE}/`, {
-      body: JSON.stringify({ content: draft.content, name: draft.name }),
+      body: JSON.stringify({ content: draft.content, max_tokens: draft.maxTokens, name: draft.name }),
       method: 'POST',
     })
   );
@@ -69,7 +75,9 @@ export const createSystemPrompt = async (draft: SystemPromptDraft): Promise<Syst
 export const updateSystemPrompt = async (id: string, draft: SystemPromptDraft): Promise<SystemPromptRecord> =>
   mapSystemPrompt(
     await apiFetchJson<SystemPromptDTO>(`${SYSTEM_PROMPTS_BASE}/i/${encodeURIComponent(id)}`, {
-      body: JSON.stringify({ content: draft.content, name: draft.name }),
+      // `max_tokens` is sent on every update, including as an explicit null: the backend reads a
+      // present-but-null as "clear the cap", and an omitted key as "leave it alone".
+      body: JSON.stringify({ content: draft.content, max_tokens: draft.maxTokens, name: draft.name }),
       method: 'PATCH',
     })
   );

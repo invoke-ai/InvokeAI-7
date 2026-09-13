@@ -20,6 +20,104 @@ const adjust = (
 
 describe('prompt attention adjustment', () => {
   it.each([
+    ['(a b)++', 'a', 'decrement', '(a b+)+'],
+    ['(a b+)++', 'a', 'increment', '(a b)+++'],
+    ['x (a+ b)+', 'x (a+', 'increment', '(x a++ b)+'],
+    ['(a b)+', 'a', 'increment', '(a+ b)+'],
+  ] as const)('adjusts and absorbs group selections: %s / %s', (prompt, selected, direction, expected) => {
+    expect(adjust(prompt, selected, direction).prompt).toBe(expected);
+  });
+
+  it('keeps inherited symbolic attention when numeric style is preferred for new weights', () => {
+    expect(adjust('(a b)+', 'a', 'increment', true).prompt).toBe('(a+ b)+');
+  });
+
+  it('preserves nested prompt functions when surrounding text changes', () => {
+    expect(adjust("(x ('a', 'b').and())+", 'x', 'increment').prompt).toBe("(x+ ('a', 'b').and())+");
+  });
+
+  it('does not delete text after an unmatched closing parenthesis', () => {
+    expect(adjust('a ) tail', 'a', 'increment').prompt).toBe('a+ ) tail');
+  });
+
+  it('keeps the selection local after absorbing an equal-weight neighbour', () => {
+    const first = adjust('(a b+)++', 'a', 'increment');
+    expect(first.prompt).toBe('(a b)+++');
+    expect(first.prompt.slice(first.selectionStart, first.selectionEnd)).toBe('a');
+    expect(adjustPromptAttention(first.prompt, first.selectionStart, first.selectionEnd, 'decrement').prompt).toBe(
+      '(a b+)++'
+    );
+  });
+
+  it('retains separate words when touching groups merge or become neutral', () => {
+    expect(adjust('(a)1.1(b)1.2', 'a', 'increment').prompt).toBe('(a b)1.2');
+    expect(adjust('(red)cat blue', 'blue', 'increment').prompt).toBe('red cat blue+');
+    const result = adjust('(red)+(blue)+', 'red', 'decrement');
+    expect(result).toEqual({ prompt: 'red blue+', selectionStart: 0, selectionEnd: 3 });
+    expect(adjustPromptAttention(result.prompt, result.selectionStart, result.selectionEnd, 'decrement').prompt).toBe(
+      'red- blue+'
+    );
+  });
+
+  it.each([
+    [1, '(red+ blue)+'],
+    [9, '(red blue+)+'],
+    [0, '(red blue)++'],
+    [10, '(red blue)++'],
+  ])('targets the adjacent word at content boundaries and the group outside them: caret %s', (caret, expected) => {
+    expect(adjust('(red blue)+', [caret as number, caret as number], 'increment').prompt).toBe(expected);
+  });
+
+  it.each([
+    ['a (b)1.1', 'a', 'increment', '(a b)1.1'],
+    ['(a)1.1 b', 'b', 'increment', '(a b)1.1'],
+    ['(a b)1.2', 'a', 'decrement', '(a)1.1 (b)1.2'],
+    ['(a+ b)1.2', 'a+', 'increment', '(a)1.42 (b)1.2'],
+    ['((a)1.2 b)+', 'a', 'increment', '(a)1.42 b+'],
+    ['(a- b)+ c', 'c', 'increment', '(a)0.99 (b c)+'],
+    ['(a)0 b', 'a', 'decrement', '(a)-0.1 b'],
+    ['a (b c)+', 'a (', 'increment', '(a b c)+'],
+    ['café landscape', 'café', 'increment', 'café+ landscape'],
+    ['🌄 landscape', '🌄', 'increment', '🌄+ landscape'],
+    ['🌄+ landscape', '🌄+', 'decrement', '🌄 landscape'],
+    ['razor-sharp teeth', 'razor', 'increment', '(razor+)-sharp teeth'],
+    ['(a)0.0000001 b', 'b', 'increment', '(a)0.0000001 b+'],
+    ['a (unfinished', 'a', 'increment', 'a+ (unfinished'],
+    ['a <unfinished', 'a', 'increment', 'a+ <unfinished'],
+    ['a )1.20 tail', 'a', 'increment', 'a+ )1.20 tail'],
+    ["(  'a',\n 'b'  ) .blend(0.70, 0.30)", 'a', 'increment', "(  'a+',\n 'b'  ) .blend(0.70, 0.30)"],
+    ["(x ('a', 'b').and())+", 'a', 'increment', "(x ('a+', 'b').and())+"],
+    ["(x ('a', 'b').and())2", 'a', 'increment', "(x ('(a)1.05', 'b').and())2"],
+    ["(('a', 'b').and(), c).blend(0.5, 0.5)", 'a', 'increment', "(('a+', 'b').and(), c).blend(0.5, 0.5)"],
+  ] as const)('handles weight and syntax boundaries: %s / %s', (prompt, selected, direction, expected) => {
+    expect(adjust(prompt, selected, direction).prompt).toBe(expected);
+  });
+
+  it.each([' ', '\n', '().and()', "('a', 'b').blend(0.7, 0.3)"])(
+    'leaves non-content selections alone: %s',
+    (prompt) => {
+      const selection: [number, number] = prompt.includes('blend') ? [prompt.indexOf('0.7'), prompt.length] : [0, 1];
+      expect(adjust(prompt, selection, 'increment').prompt).toBe(prompt);
+    }
+  );
+
+  it.each(['increment', 'decrement'] as const)('keeps long sequences of symbolic steps exact: %s', (direction) => {
+    let result = { prompt: 'a b', selectionStart: 0, selectionEnd: 1 };
+    for (let count = 0; count < 100; count++) {
+      result = adjustPromptAttention(result.prompt, result.selectionStart, result.selectionEnd, direction);
+    }
+    expect(result.prompt).toBe(`a${(direction === 'increment' ? '+' : '-').repeat(100)} b`);
+    for (let count = 0; count < 100; count++) {
+      result = adjustPromptAttention(
+        result.prompt,
+        result.selectionStart,
+        result.selectionEnd,
+        direction === 'increment' ? 'decrement' : 'increment'
+      );
+    }
+    expect(result).toEqual({ prompt: 'a b', selectionStart: 0, selectionEnd: 1 });
+  });
+  it.each([
     ['hello world', 'hello', 'increment', 'hello+ world'],
     ['hello world', 'hello', 'decrement', 'hello- world'],
     ['hello+ world', 'hello+', 'increment', 'hello++ world'],

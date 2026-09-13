@@ -4,7 +4,7 @@ import type { KeyboardEvent, MouseEvent } from 'react';
 
 import { Box, HStack, Icon, Text, VisuallyHidden } from '@chakra-ui/react';
 import { IconButton, Tooltip } from '@platform/ui';
-import { FeatureHint } from '@platform/ui/hints/FeatureHint';
+import { FeatureHint, FeatureHintExclusion } from '@platform/ui/hints/FeatureHint';
 import { ChevronDownIcon } from 'lucide-react';
 import { memo, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -98,7 +98,8 @@ const LayerStackHeaderComponent = ({
   return (
     // The informational popover triggers on the whole tree item, so it opens
     // for the roving keyboard focus as well as hover; the persistent
-    // described-by span announces the gist without the card.
+    // described-by span announces the gist without the card. The action
+    // buttons carry their own tooltips, so hovering them is excluded.
     <FeatureHint hint={hintId}>
       <Box
         ref={element}
@@ -151,23 +152,25 @@ const LayerStackHeaderComponent = ({
           >
             {t(`widgets.layers.groups.${stack}`)} ({leafCount})
           </Text>
-          <HStack gap="0.5" onClick={stopPropagation} onMouseDown={keepFocus}>
-            {actions.map((action) => (
-              <Tooltip key={action.id} content={action.label}>
-                <IconButton
-                  aria-label={action.label}
-                  color="fg.muted"
-                  disabled={action.disabled}
-                  size="2xs"
-                  tabIndex={-1}
-                  variant="ghost"
-                  onClick={action.run}
-                >
-                  <Icon as={action.icon} boxSize="3.5" />
-                </IconButton>
-              </Tooltip>
-            ))}
-          </HStack>
+          <FeatureHintExclusion>
+            <HStack gap="0.5" onClick={stopPropagation} onMouseDown={keepFocus}>
+              {actions.map((action) => (
+                <Tooltip key={action.id} content={action.label}>
+                  <IconButton
+                    aria-label={action.label}
+                    color="fg.muted"
+                    disabled={action.disabled}
+                    size="2xs"
+                    tabIndex={-1}
+                    variant="ghost"
+                    onClick={action.run}
+                  >
+                    <Icon as={action.icon} boxSize="3.5" />
+                  </IconButton>
+                </Tooltip>
+              ))}
+            </HStack>
+          </FeatureHintExclusion>
         </HStack>
       </Box>
     </FeatureHint>

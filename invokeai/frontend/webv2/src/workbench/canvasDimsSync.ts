@@ -7,9 +7,9 @@
  * canvas footprint, including off-grid sizes. Resizing the bbox (tool gesture,
  * the frame form, undo/redo) drives width/height snapped to the selected model's
  * hard processing grid; the canvas graph resizes inputs to that processing size
- * and the result back to the bbox. Unlike legacy's optional "Scale Before
- * Processing" policy, this does not silently upscale small bboxes to an optimal
- * pixel area. Editing the generate dimensions (or picking an aspect preset)
+ * and the result back to the bbox. The optional "Scale before processing"
+ * policy (`resolveCanvasProcessingSize`) applies only at submit and never
+ * touches the dimensions synced here. Editing the generate dimensions (or picking an aspect preset)
  * still resizes the bbox in place (top-left anchored). Position-only bbox moves
  * never touch the dimensions.
  *

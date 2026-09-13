@@ -16,7 +16,7 @@ import {
 } from '@features/generation/graph';
 import { getCompatibleDiffusersComponentSource } from '@features/generation/settings';
 
-import type { VideoGenerationMode, VideoReferenceItem, VideoSettings } from './types';
+import type { VideoGenerationMode, VideoReferenceItem, VideoSettings, VideoSourceClip } from './types';
 
 import { resolveVideoMode } from './settings';
 import { getVideoDimensions, getVideoModelPolicy, getVideoValidationReasons } from './videoPolicies';
@@ -104,7 +104,7 @@ const addReferenceNode = (
     conditioning: reference.conditioning,
     end_frame: endFrame,
     id: `reference_${index + 1}`,
-    start_frame: toReferenceStartIndex(reference, endFrame),
+    start_frame: toReferenceStartIndex(reference.clip, endFrame),
     type: 'minimax_h3_video_reference',
     video: { video_name: reference.clip.video_name },
   });
@@ -115,28 +115,31 @@ const addReferenceNode = (
  *
  * `toTailAwareIndex` sends a near-the-end bound out NEGATIVE, resolved against
  * the clip's REAL frame count, and leaves anything further back POSITIVE, taken
- * from the panel's ESTIMATE. That split is right for a hand-picked trim, whose
- * start is an absolute position the estimate must not drift — but the linked
- * tail window straddles it: the cutpoint end goes negative while the start,
- * ~124 frames back, stays positive, so what the backend extracts is
- * `tail + (real - estimate)` frames rather than `tail`. That length is a budget
- * the backend enforces by discarding the overrun at the SEAM (see
- * `deriveReferenceExtendClip`), so it has to survive an inexact estimate.
+ * from the panel's ESTIMATE. Applied to each bound independently that splits a
+ * window across two index spaces: a window ENDING in the tail but starting
+ * further back emits a negative end beside a positive start, so the backend
+ * extracts `length + (real - estimate)` frames — or, when the window is short
+ * enough for the estimate error to swallow it, resolves the end BEFORE the
+ * start and fails the generation outright. (`[295,296]` of an estimated 300
+ * emits `295 / -4`; against a real 298 that is start 295, end 294.)
  *
- * The linked entry's start is not an absolute pick — it is defined as
- * `tail - 1` frames before the cutpoint — so it rides the same negative anchor
- * and the window keeps its length whatever the real count turns out to be.
+ * So the two bounds are converted TOGETHER. Once the end has gone tail-relative
+ * the window is anchored to the real end anyway, and what is worth preserving
+ * is its LENGTH — which is also the budget the backend enforces by discarding
+ * the overrun from the window's end (see `deriveReferenceExtendClip`), so it
+ * has to survive an inexact estimate. The start rides the same anchor.
  *
- * Two cases stay absolute. A cutpoint far enough from the end leaves both
- * bounds on the estimate already. And a start within `TAIL_INDEX_SLOP` of the
- * clip's own beginning stays absolute because the relative form resolves to
+ * Two cases stay absolute. A window far enough from the end leaves both bounds
+ * on the estimate already. And a start within `TAIL_INDEX_SLOP` of the clip's
+ * own beginning stays absolute because the relative form resolves to
  * `startFrame + (real - estimate)`, which goes NEGATIVE once the estimate
- * overshoots by more than `startFrame` — and `_ResolvedVideoRange.resolve`
- * rejects an out-of-range index outright rather than clamping, failing the
- * whole generation. That can only arise when the window fills nearly the entire
- * clip, where its length cannot be honoured anyway; below the slop the absolute
- * form is always in range, and the drift it costs is the estimate error itself,
- * a frame or two.
+ * overshoots by more than `startFrame` — and `_ResolvedVideoRange` rejects an
+ * out-of-range START index outright rather than clamping, failing the whole
+ * generation. (Only the END bound is clamped there, pinning the sample length
+ * to the frames the clip can supply.) That can only arise when the window
+ * fills nearly the entire clip, where its length cannot be honoured anyway;
+ * below the slop the absolute form is always in range, and the drift it costs
+ * is the estimate error itself, a frame or two.
  *
  * DECIDED: the slop is not widened beyond 3. An estimate error past the slop
  * can still fail the relative form, but only on a clip barely longer than the
@@ -145,10 +148,8 @@ const addReferenceNode = (
  * remove the cliff — it would move it, and pay for the move with silent length
  * drift on every clip inside the wider margin.
  */
-const toReferenceStartIndex = (reference: Extract<VideoReferenceItem, { kind: 'video' }>, endIndex: number): number => {
-  const { clip } = reference;
-
-  if (reference.fromSourceVideo !== true || endIndex >= 0 || clip.startFrame <= TAIL_INDEX_SLOP) {
+const toReferenceStartIndex = (clip: VideoSourceClip, endIndex: number): number => {
+  if (endIndex >= 0 || clip.startFrame <= TAIL_INDEX_SLOP) {
     return toTailAwareIndex(clip.startFrame, clip.numFrames);
   }
 

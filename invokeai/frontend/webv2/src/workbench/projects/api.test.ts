@@ -40,7 +40,7 @@ beforeEach(() => {
 describe('createProjectSettled', () => {
   const request = { data: {}, name: 'Imported', project_id: 'project-1' };
   const post = () => ({
-    body: JSON.stringify({ ...request, max_canvas_schema_version: 3, minimum_canvas_schema_version: 3 }),
+    body: JSON.stringify({ ...request, max_canvas_schema_version: 4, minimum_canvas_schema_version: 3 }),
     method: 'POST',
     signal: expect.anything(),
   });
@@ -78,7 +78,7 @@ describe('createProjectSettled', () => {
     expect(transport.apiFetchJson).toHaveBeenNthCalledWith(2, '/api/v1/projects/', post());
     expect(transport.apiFetchJson).toHaveBeenNthCalledWith(
       3,
-      '/api/v1/projects/project-1?max_canvas_schema_version=3',
+      '/api/v1/projects/project-1?max_canvas_schema_version=4',
       expect.anything()
     );
   });
@@ -212,7 +212,7 @@ describe('canvas schema compatibility declarations', () => {
 
     await getProject('project/one');
 
-    expect(transport.apiFetchJson).toHaveBeenCalledWith('/api/v1/projects/project%2Fone?max_canvas_schema_version=3', {
+    expect(transport.apiFetchJson).toHaveBeenCalledWith('/api/v1/projects/project%2Fone?max_canvas_schema_version=4', {
       signal: undefined,
     });
   });
@@ -226,7 +226,7 @@ describe('canvas schema compatibility declarations', () => {
       body: JSON.stringify({
         data: {},
         name: 'Project',
-        max_canvas_schema_version: 3,
+        max_canvas_schema_version: 4,
         minimum_canvas_schema_version: 3,
       }),
       method: 'POST',
@@ -250,7 +250,7 @@ describe('canvas schema compatibility declarations', () => {
         expected_revision: 4,
         minimum_canvas_schema_version: 3,
         name: 'Project',
-        max_canvas_schema_version: 3,
+        max_canvas_schema_version: 4,
       }),
       method: 'PUT',
       signal: undefined,

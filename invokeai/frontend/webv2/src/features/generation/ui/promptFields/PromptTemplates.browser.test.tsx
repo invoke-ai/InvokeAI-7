@@ -1,7 +1,10 @@
+import type { GalleryUiAdapter } from '@features/gallery/react';
 import type { PromptTemplateRecord } from '@features/generation/data/promptTemplates';
 import type { PromptTemplateCatalog } from '@features/generation/ui/usePromptTemplates';
 
 import { ChakraProvider } from '@chakra-ui/react';
+import { DndContext } from '@dnd-kit/core';
+import { GalleryUiProvider } from '@features/gallery/react';
 import { exportPromptTemplates } from '@features/generation/data/promptTemplates';
 import { PromptTemplateEditor } from '@features/generation/ui/promptFields/PromptTemplateEditor';
 import { PromptTemplatesPanel } from '@features/generation/ui/promptFields/PromptTemplatesPanel';
@@ -152,6 +155,15 @@ const createCatalog = (overrides: Partial<PromptTemplateCatalog> = {}): PromptTe
   ...overrides,
 });
 
+// The editor's image slot needs the gallery UI port and a drag context.
+const galleryAdapter = {
+  gallery: { selectBoard: vi.fn(), selectItem: vi.fn(), setView: vi.fn() },
+  galleryValues: { galleryView: 'images', selectedBoardId: 'none' },
+  notifications: { add: vi.fn(), reportError: vi.fn() },
+  projectName: 'Project',
+  widgets: { openGallery: () => true, patchGalleryValues: vi.fn() },
+} as unknown as GalleryUiAdapter;
+
 const render = async (element: React.ReactNode) => {
   host = document.createElement('div');
   host.style.width = '400px';
@@ -162,7 +174,11 @@ const render = async (element: React.ReactNode) => {
   const contents = (
     <I18nextProvider i18n={i18n}>
       <QueryClientProvider client={queryClient}>
-        <ChakraProvider value={system}>{element}</ChakraProvider>
+        <ChakraProvider value={system}>
+          <GalleryUiProvider adapter={galleryAdapter}>
+            <DndContext>{element}</DndContext>
+          </GalleryUiProvider>
+        </ChakraProvider>
       </QueryClientProvider>
     </I18nextProvider>
   );

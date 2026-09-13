@@ -12,6 +12,7 @@ import {
   useWorkflowNotifications,
 } from '@features/workflow/ui/WorkflowUiContext';
 import { downloadText } from '@platform/browser/downloadBlob';
+import { MenuContent } from '@platform/ui/Menu';
 import { BookmarkIcon, DownloadIcon, GitForkIcon, PencilRulerIcon } from 'lucide-react';
 import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -131,7 +132,7 @@ export const GraphPreviewOpenAsMenu = ({
       <Menu.Trigger asChild>{children}</Menu.Trigger>
       <Portal>
         <Menu.Positioner>
-          <Menu.Content minW="16rem">
+          <MenuContent minW="16rem">
             {canEditInEditor ? (
               <MenuActionItem
                 hint={t('graphPreview.editInEditorHint')}
@@ -165,7 +166,7 @@ export const GraphPreviewOpenAsMenu = ({
               value="download-json"
               onSelect={handleDownloadJson}
             />
-          </Menu.Content>
+          </MenuContent>
         </Menu.Positioner>
       </Portal>
     </Menu.Root>

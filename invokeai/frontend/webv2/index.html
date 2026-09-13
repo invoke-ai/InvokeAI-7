@@ -19,6 +19,7 @@
             forest: 'dark',
             light: 'light',
             mono: 'dark',
+            osakaJade: 'dark',
             ultradark: 'dark',
           };
           var id = localStorage.getItem('invokeai:v7:webv2:theme');
@@ -37,6 +38,9 @@
           }
           if (localStorage.getItem('invokeai:v7:webv2:reduce-motion') === 'true') {
             root.setAttribute('data-reduce-motion', 'true');
+          }
+          if (localStorage.getItem('invokeai:v7:webv2:high-contrast') === 'true') {
+            root.setAttribute('data-high-contrast', 'true');
           }
           var language = localStorage.getItem('invokeai:v7:webv2:language');
           if (language) {

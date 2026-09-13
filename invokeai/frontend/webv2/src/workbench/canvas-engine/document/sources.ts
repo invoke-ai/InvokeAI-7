@@ -16,6 +16,7 @@ import type {
   CanvasDocumentContractV3,
   CanvasLayerContract,
   CanvasLayerSourceContract,
+  ParametricShapeKind,
 } from '@workbench/canvas-engine/contracts';
 import type { Rect } from '@workbench/canvas-engine/types';
 
@@ -65,10 +66,13 @@ export const renderableSourceOf = (layer: CanvasLayerContract): CanvasLayerSourc
   return maskAsPaintSource(layer);
 };
 
+/** A polygon shape needs three points to fill; anything less has no raster. */
+export const isEmptyPolygonShape = (source: { kind: ParametricShapeKind | 'polygon'; points?: unknown[] }): boolean =>
+  source.kind === 'polygon' && (source.points?.length ?? 0) < 3;
+
 /**
- * True when a layer's source is one the engine can rasterize today: image,
- * paint, gradient, text, or a parametric (non-polygon) shape. A `polygon` shape has no
- * rasterizer yet (deferred), so it is not renderable.
+ * True when a layer's source is one the engine can rasterize: image, paint,
+ * gradient, text, or a shape — a polygon only once it has three points.
  */
 export const isRenderableLayer = (layer: CanvasLayerContract): boolean => {
   if (!isLayerContributing(layer)) {
@@ -90,7 +94,7 @@ export const isRenderableLayer = (layer: CanvasLayerContract): boolean => {
     case 'text':
       return true;
     case 'shape':
-      return source.kind !== 'polygon';
+      return !isEmptyPolygonShape(source);
     default:
       return false;
   }

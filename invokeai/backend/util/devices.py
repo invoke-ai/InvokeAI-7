@@ -68,6 +68,12 @@ class TorchDevice:
     # patcher, etc.) resolve to the calling worker's GPU without per-call-site changes.
     _session_device = threading.local()
 
+    # Set when a peer-aware empty_cache (this class's or the installed torch.cuda wrapper) skipped
+    # the real call because another generation device was mid-session. The skipped release is
+    # not lost: `flush_deferred_empty_cache()` performs it at the next quiet moment — a busy
+    # worker's step boundary or a session's end (see `flush_deferred_empty_cache`).
+    _empty_cache_deferred = threading.Event()
+
     @classmethod
     def set_session_device(cls, device: Union[str, torch.device]) -> None:
         """Pin the calling thread's execution device. Used by multi-GPU session workers."""
@@ -343,19 +349,50 @@ class TorchDevice:
         session, skip it rather than convoy. Cost of skipping: driver-level free-memory
         queries (``mem_get_info``) count the still-cached blocks as used, so the model cache's
         VRAM accounting turns conservative until a quiet-moment call runs. On single-GPU
-        installs there is never another busy device, so behavior is unchanged.
+        installs a worker never sees another busy device, so its own calls run as before; only
+        a thread with no session device (the cache keep-alive timer, the cache's background
+        worker) defers while the worker is mid-session, and that release now lands at the
+        worker's next step boundary instead of being dropped.
+
+        A skipped call is recorded as deferred rather than dropped: the memory it would have
+        returned (a canceled session's working set, a timed-out cache's weights) stays cached in
+        the allocator — invisible to the caller's own accounting, but counted as used by the
+        driver and every other process — until `flush_deferred_empty_cache()` runs it from a
+        quiet moment. Without that, VRAM freed on one GPU stayed resident until the peer's
+        whole render finished and something else happened to call empty_cache.
         """
         if cls._another_generation_device_busy():
+            cls._empty_cache_deferred.set()
             InvokeAILogger.get_logger(cls.__name__).debug(
-                "Skipping empty_cache: another generation device is mid-session."
+                "Deferring empty_cache: another generation device is mid-session."
             )
             return
+        # Clear before running: a skip that races in after this point re-sets the flag, so a
+        # request is never lost, only (harmlessly) repeated.
+        cls._empty_cache_deferred.clear()
         if torch.backends.mps.is_available():
             torch.mps.empty_cache()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
         if _xpu_is_available():
             torch.xpu.empty_cache()
+
+    @classmethod
+    def flush_deferred_empty_cache(cls) -> None:
+        """Run an empty_cache that a peer-aware skip deferred, if the pool is quiet now.
+
+        Call this from points where the calling worker's own device is at a natural sync point
+        and a driver-level free is cheap — a denoise step boundary (the progress path calls it)
+        or the end of a session. It is a flag test when nothing is pending, so it is safe to call
+        often. When a device other than the caller's is still mid-session the flush is skipped
+        again (and stays pending): on a two-GPU box the requester's session has ended, so the
+        busy worker's own step boundary is the first quiet moment and the release lands there —
+        within one of its steps instead of at the end of its render. The cost to the busy worker
+        is re-allocating its own cached working blocks on the next step, once per request.
+        """
+        if not cls._empty_cache_deferred.is_set():
+            return
+        cls.empty_cache()
 
     @classmethod
     def _another_generation_device_busy(cls) -> bool:
@@ -490,10 +527,13 @@ def install_peer_aware_empty_cache() -> None:
     @wraps(original_empty_cache)
     def peer_aware_empty_cache() -> None:
         if TorchDevice._another_generation_device_busy():
+            # Deferred, not dropped — see TorchDevice.empty_cache / flush_deferred_empty_cache.
+            TorchDevice._empty_cache_deferred.set()
             InvokeAILogger.get_logger("TorchDevice").debug(
-                "Skipping torch.cuda.empty_cache: another generation device is mid-session."
+                "Deferring torch.cuda.empty_cache: another generation device is mid-session."
             )
             return
+        TorchDevice._empty_cache_deferred.clear()
         original_empty_cache()
 
     setattr(peer_aware_empty_cache, _PEER_AWARE_SENTINEL, True)

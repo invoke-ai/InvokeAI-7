@@ -4,7 +4,7 @@ from typing import Literal, Optional
 import numpy as np
 from PIL import Image
 
-from invokeai.app.services.image_index.image_index_common import ImageIndexStatus
+from invokeai.app.services.image_index.image_index_common import ImageIndexStatus, IndexedItem, MediaKind
 
 
 class TextSearchUnavailableError(Exception):
@@ -20,12 +20,15 @@ VocabBuildState = Literal["unavailable", "idle", "building", "ready", "error"]
 
 
 class ImageIndexServiceBase(ABC):
-    """Background service that keeps the semantic image index up to date.
+    """Background service that keeps the semantic index up to date.
 
     When enabled and an embedding model is available, the service embeds every
-    eligible gallery image (non-intermediate, `general` category) on a worker
-    thread: a backfill pass covers images that existed before the service
-    started, and image-service callbacks cover images created afterwards.
+    eligible gallery item (non-intermediate, `general` category) on a worker
+    thread: a backfill pass covers items that existed before the service
+    started, and image- and video-service callbacks cover items created
+    afterwards. A video is embedded through its thumbnail — the representative
+    frame extracted when the video was created — so it takes part in the map
+    and in search exactly as an image does.
     """
 
     @property
@@ -80,11 +83,11 @@ class ImageIndexServiceBase(ABC):
         pass
 
     @abstractmethod
-    def get_accessible_embeddings(self, user_id: str | None) -> tuple[list[str], np.ndarray]:
-        """Names + L2-normalized embedding matrix of the user's accessible images.
+    def get_accessible_embeddings(self, user_id: str | None) -> tuple[list[IndexedItem], np.ndarray]:
+        """Items + L2-normalized embedding matrix of the user's accessible gallery.
 
         Served from a small LRU keyed by the accessible-set scope hash (which
-        self-invalidates on any set change). Rows align with names. Pass
+        self-invalidates on any set change). Rows align with items. Pass
         user_id=None for the admin scope. Call off the event loop.
         """
         pass
@@ -126,13 +129,20 @@ class ImageIndexServiceBase(ABC):
         pass
 
     @abstractmethod
-    def search_similar(self, user_id: str | None, query_embedding: np.ndarray, limit: int) -> list[tuple[str, float]]:
-        """Rank the user's accessible embedded images by cosine similarity.
+    def search_similar(
+        self,
+        user_id: str | None,
+        query_embedding: np.ndarray,
+        limit: int,
+        kinds: Optional[tuple[MediaKind, ...]] = None,
+    ) -> list[tuple[IndexedItem, float]]:
+        """Rank the user's accessible embedded items by cosine similarity.
 
         Embeddings are L2-normalized, so similarity is a dot product. Pass
-        user_id=None for the admin scope. Returns (image_name, score) pairs,
-        best first. Call off the event loop — the accessible embedding matrix
-        may be read from the database on a cache miss.
+        user_id=None for the admin scope, and `kinds` to restrict results to
+        those media kinds (None means every kind). Returns (item, score)
+        pairs, best first. Call off the event loop — the accessible embedding
+        matrix may be read from the database on a cache miss.
         """
         pass
 
@@ -152,7 +162,7 @@ class ImageIndexServiceBase(ABC):
 
         Args:
             user_id: The user whose projection cache to update.
-            all_images: Compute over every embedded image (admin scope)
+            all_images: Compute over every embedded item (admin scope)
                 rather than the user's accessible set.
             failed_scope: The scope hash of a cached projection the caller
                 believes to be a failed fit. The request is refused once that

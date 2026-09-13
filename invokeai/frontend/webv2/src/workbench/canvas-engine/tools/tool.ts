@@ -47,8 +47,8 @@ export interface StrokeCommittedEvent {
   beforeImageData: ImageData;
   /** Cache pixels within `dirtyRect` after the stroke. */
   afterImageData: ImageData;
-  /** Which tool produced the stroke. */
-  tool: 'brush' | 'eraser';
+  /** Which tool produced the stroke; a `shape` is one drawn as pixels onto a paint layer. */
+  tool: 'brush' | 'eraser' | 'shape';
   /**
    * When the gesture auto-created its paint layer on pointer-down, the created
    * layer contract (and where it was inserted). The engine composes this into
@@ -279,4 +279,9 @@ export interface Tool {
   onWheel?(ctx: ToolContext, deltaY: number, screenAnchor: { x: number; y: number }, modifiers: PointerModifiers): void;
   /** The CSS cursor to show while this tool is active. */
   cursor?(ctx: ToolContext): string;
+  /**
+   * Alt is one of this tool's gesture modifiers (selection ops), so the pointer
+   * pipeline must not turn an alt-hold into the temporary color picker.
+   */
+  readonly usesAltKey?: boolean;
 }

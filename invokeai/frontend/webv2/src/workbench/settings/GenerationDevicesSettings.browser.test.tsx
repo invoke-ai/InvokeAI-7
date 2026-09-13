@@ -2,8 +2,10 @@ import type { GenerationDevicesSnapshot } from '@features/queue/devices';
 
 import { ChakraProvider } from '@chakra-ui/react';
 import { system } from '@theme/system';
+import { createInstance } from 'i18next';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
+import { I18nextProvider, initReactI18next } from 'react-i18next';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { userEvent } from 'vitest/browser';
 
@@ -43,6 +45,12 @@ const TWO_GPUS = [
   { device: 'cuda:1', name: 'RTX 4090' },
 ];
 
+const i18n = createInstance();
+await i18n.use(initReactI18next).init({
+  lng: 'en',
+  resources: { en: { translation: { settingsDialog: { changedSetting: '{{setting}} differs from its default' } } } },
+});
+
 let host: HTMLDivElement | null = null;
 let root: Root | null = null;
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -53,7 +61,9 @@ const render = async (snapshot: Partial<GenerationDevicesSnapshot>): Promise<voi
   await act(() => {
     root?.render(
       <ChakraProvider value={system}>
-        <GenerationDevicesSettings />
+        <I18nextProvider i18n={i18n}>
+          <GenerationDevicesSettings />
+        </I18nextProvider>
       </ChakraProvider>
     );
   });
@@ -109,10 +119,19 @@ describe('GenerationDevicesSettings', () => {
     expect(host?.querySelectorAll('input[type="checkbox"]')).toHaveLength(3);
   });
 
+  it('marks explicit device lists as changed and removes the marker when auto is restored', async () => {
+    await render({ options: TWO_GPUS, setting: ['cuda:0', 'cuda:1'] });
+    expect(host?.querySelectorAll('[role="img"][aria-label$="differs from its default"]')).toHaveLength(1);
+    await render({ options: TWO_GPUS, setting: 'auto' });
+    expect(host?.querySelector('[role="img"][aria-label$="differs from its default"]')).toBeNull();
+    await render({ loadState: 'loading', options: TWO_GPUS, setting: ['cuda:0'] });
+    expect(host?.querySelector('[role="img"][aria-label$="differs from its default"]')).toBeNull();
+  });
+
   it('saves the devices in effect when auto is turned off, changing nothing else', async () => {
     await render({ options: TWO_GPUS, setting: 'auto' });
 
-    await userEvent.click(switchControls()[0]!);
+    await act(() => userEvent.click(switchControls()[0]!));
 
     // Leaving auto must not silently narrow the device set.
     expect(mocks.updateGenerationDevices).toHaveBeenCalledWith(['cuda:0', 'cuda:1']);
@@ -123,7 +142,7 @@ describe('GenerationDevicesSettings', () => {
 
     expect(host?.textContent).not.toContain('Restart InvokeAI');
 
-    await userEvent.click(switchControls()[0]!);
+    await act(() => userEvent.click(switchControls()[0]!));
 
     expect(host?.textContent).toContain('Restart InvokeAI for changes to take effect.');
   });
@@ -134,7 +153,7 @@ describe('GenerationDevicesSettings', () => {
     // Index 0 is the auto switch; the per-device switches follow in device order, so
     // index 2 is cuda:1 — the only selected device. Turning it off would write an
     // empty list, which the backend rejects and which would fail the next startup.
-    await userEvent.click(switchControls()[2]!);
+    await act(() => userEvent.click(switchControls()[2]!));
 
     expect(mocks.updateGenerationDevices).not.toHaveBeenCalled();
     expect(host?.textContent).toContain('Select at least one generation device.');
@@ -147,6 +166,9 @@ describe('GenerationDevicesSettings', () => {
     expect(host?.textContent).toContain('RTX 4090');
     expect(host?.textContent).toContain('Only an administrator can change which accelerators are used.');
     expect(host?.querySelectorAll('input[type="checkbox"]')).toHaveLength(0);
+    expect(
+      host?.querySelector('[role="img"][aria-label="Generation devices differs from its default"]')
+    ).not.toBeNull();
   });
 
   it('surfaces a load failure instead of rendering empty controls', async () => {

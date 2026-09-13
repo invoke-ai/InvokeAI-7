@@ -1,4 +1,3 @@
-import { spawn } from 'node:child_process';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import process from 'node:process';
@@ -15,6 +14,7 @@ import {
   waitForRequiredRequests,
   waitForStableRequests,
 } from './performance-budgets.mjs';
+import { killPreview, spawnPreview } from './preview-server.mjs';
 import { getWidgetId } from './widget-sources.mjs';
 
 const root = resolve(import.meta.dirname, '..');
@@ -624,16 +624,12 @@ const runSample = async (browser, fixture, sample) => {
 // in-memory mock backend, never a live InvokeAI instance with real data.
 const mockBackend = await startMockBackend(backendPort);
 
-const preview = spawn(
-  'pnpm',
-  ['exec', 'vite', 'preview', '--host', '127.0.0.1', '--port', String(port), '--strictPort'],
-  {
-    cwd: root,
-    detached: true,
-    env: { ...process.env, INVOKEAI_DEV_BACKEND: backendOrigin },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  }
-);
+const preview = spawnPreview({
+  cwd: root,
+  env: { ...process.env, INVOKEAI_DEV_BACKEND: backendOrigin },
+  port,
+  stdio: ['ignore', 'pipe', 'pipe'],
+});
 let previewError = '';
 preview.stderr.on('data', (chunk) => {
   previewError += String(chunk);
@@ -855,7 +851,7 @@ try {
   await browser?.close();
   if (preview.pid) {
     try {
-      process.kill(-preview.pid, 'SIGTERM');
+      killPreview(preview.pid, 'SIGTERM');
     } catch {
       // The preview process may have already exited after a startup failure.
     }

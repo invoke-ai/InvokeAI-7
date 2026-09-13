@@ -37,7 +37,6 @@ const buildSequence = (overrides: Partial<Parameters<typeof getPreviewNavigation
     boardImages: [item('image', 'newest'), item('video', 'middle'), item('image', 'oldest')],
     galleryView: 'images',
     imageOrderDir: 'DESC',
-    starredFirst: true,
     ...overrides,
   });
 
@@ -55,51 +54,14 @@ describe('getPreviewNavigationSequence', () => {
     ]);
   });
 
-  it('places the placeholder after the leading starred block when starred-first sorts descending', () => {
-    expect(
-      keys(
-        buildSequence({
-          boardImages: [
-            item('video', 'starred-a', true),
-            item('image', 'starred-b', true),
-            item('image', 'newest'),
-            item('video', 'oldest'),
-          ],
-        })
-      )
-    ).toEqual(['video:starred-a', 'image:starred-b', 'placeholder', 'image:newest', 'video:oldest']);
-  });
-
-  it('places the placeholder first in a flat descending listing even when starred items lead it', () => {
+  it('places the placeholder first in a descending listing even when starred items lead it', () => {
     expect(
       keys(
         buildSequence({
           boardImages: [item('image', 'starred-newest', true), item('image', 'older')],
-          starredFirst: false,
         })
       )
     ).toEqual(['placeholder', 'image:starred-newest', 'image:older']);
-  });
-
-  it('places the placeholder last when every item is starred', () => {
-    expect(
-      keys(
-        buildSequence({
-          boardImages: [item('image', 'starred-a', true), item('video', 'starred-b', true)],
-        })
-      )
-    ).toEqual(['image:starred-a', 'video:starred-b', 'placeholder']);
-  });
-
-  it('keeps the placeholder last in ascending order even with starred-first', () => {
-    expect(
-      keys(
-        buildSequence({
-          boardImages: [item('video', 'starred-a', true), item('image', 'newest')],
-          imageOrderDir: 'ASC',
-        })
-      )
-    ).toEqual(['video:starred-a', 'image:newest', 'placeholder']);
   });
 
   it('excludes the placeholder when it belongs to another board or the assets view', () => {

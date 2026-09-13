@@ -200,10 +200,10 @@ export const GenerationUiAdapterProvider = ({ children }: { children: ReactNode 
     () => ({ patchGenerateSettings: generation.patchSettings }),
     [generation]
   );
-  const { canManagePromptTemplates } = useCapabilities();
+  const { canManagePromptTemplates, canManageSharedSystemPrompts } = useCapabilities();
   const capabilitiesGroup = useMemo<GenerationUiAdapter['capabilities']>(
-    () => ({ canManagePromptTemplates }),
-    [canManagePromptTemplates]
+    () => ({ canManagePromptTemplates, canManageSharedSystemPrompts }),
+    [canManagePromptTemplates, canManageSharedSystemPrompts]
   );
   const accountGroup = useMemo<GenerationUiAdapter['account']>(
     () => ({

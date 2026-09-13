@@ -105,6 +105,8 @@ export interface GalleryStateView {
   /** Active image-similarity query, rendered as a chip in place of the search text. */
   semanticImageQuery: GallerySemanticReference | null;
   settings: GallerySettings;
+  /** The listing is restricted to starred items. */
+  starredOnly: boolean;
 }
 
 interface SortableGalleryQueueSlot {
@@ -113,29 +115,9 @@ interface SortableGalleryQueueSlot {
   submittedAt: string;
 }
 
-interface GalleryOrderImage {
-  starred?: boolean;
-}
-
-// Newest-first placeholders land at the top (below any leading starred
-// block); oldest-first listings take them at the end.
-export const getGalleryPlaceholderInsertionIndex = (
-  images: GalleryOrderImage[],
-  imageOrderDir: GalleryOrderDir,
-  starredFirst: boolean
-): number => {
-  if (imageOrderDir !== 'DESC') {
-    return images.length;
-  }
-
-  if (!starredFirst) {
-    return 0;
-  }
-
-  const firstUnstarredIndex = images.findIndex((image) => !image.starred);
-
-  return firstUnstarredIndex === -1 ? images.length : firstUnstarredIndex;
-};
+// Newest-first placeholders land at the top; oldest-first listings take them at the end.
+export const getGalleryPlaceholderInsertionIndex = (itemCount: number, imageOrderDir: GalleryOrderDir): number =>
+  imageOrderDir === 'DESC' ? 0 : itemCount;
 
 export const getGalleryGenerationSequence = (
   queueItems: QueueItem[],
@@ -252,6 +234,9 @@ export const getGalleryView = (values: Record<string, unknown>): GalleryView =>
 export const getGallerySearchTerm = (values: Record<string, unknown>): string =>
   typeof values.searchTerm === 'string' ? values.searchTerm : '';
 
+/** The starred-only listing filter; a session value kept beside `searchTerm`. */
+export const getGalleryStarredOnly = (values: Record<string, unknown>): boolean => values.starredOnly === true;
+
 export const getGallerySemanticImageQuery = (values: Record<string, unknown>): GallerySemanticReference | null =>
   parseGallerySemanticReference(values.semanticImageQuery);
 
@@ -311,6 +296,7 @@ export interface GallerySelectedImageQuery {
   page: number;
   paginationMode: 'infinite' | 'paginated';
   searchTerm: string;
+  starredOnly: boolean;
 }
 
 export const getGallerySelectedImageQuery = (values: Record<string, unknown>): GallerySelectedImageQuery => {
@@ -344,6 +330,7 @@ export const getGallerySelectedImageQuery = (values: Record<string, unknown>): G
         ? query.paginationMode
         : settings.paginationMode,
     searchTerm: query && typeof query.searchTerm === 'string' ? query.searchTerm : String(values.searchTerm ?? ''),
+    starredOnly: query && typeof query.starredOnly === 'boolean' ? query.starredOnly : getGalleryStarredOnly(values),
   };
 };
 
@@ -424,6 +411,7 @@ export const getGalleryStateView = (
   const galleryView = getGalleryView(values);
   const settings = getGallerySettings(values);
   const searchTerm = getGallerySearchTerm(values);
+  const starredOnly = getGalleryStarredOnly(values);
   const boards = backendBoards.length
     ? backendBoards
     : [
@@ -445,7 +433,8 @@ export const getGalleryStateView = (
   const generationSequence = getGalleryGenerationSequence(queueItems, liveTarget);
   // A ranked similarity result has no chronological insertion point, so
   // pending placeholders (which stand in for images-to-come) are hidden while
-  // a semantic query is active — exactly as they are for a text search.
+  // a semantic query is active — exactly as they are for a text search, and
+  // for the starred-only filter, which a fresh generation never matches.
   const semanticImageQuery = getGallerySemanticImageQuery(values);
   const page = getGalleryPage(values);
   const isAnchoredInfiniteWindow = settings.paginationMode === 'infinite' && page > 0;
@@ -455,6 +444,7 @@ export const getGalleryStateView = (
     galleryView === 'images' &&
     searchTerm.trim() === '' &&
     semanticImageQuery === null &&
+    !starredOnly &&
     showsIncomingItemLanding
       ? generationSequence.liveSlot?.boardId === selectedBoardId
         ? generationSequence.liveSlot
@@ -474,7 +464,11 @@ export const getGalleryStateView = (
     selectedImageQuery.boardId === selectedBoardId &&
     selectedImageQuery.galleryView === galleryView &&
     selectedImageQuery.imageOrderDir === settings.imageOrderDir &&
-    selectedImageQuery.searchTerm === searchTerm
+    selectedImageQuery.searchTerm === searchTerm &&
+    selectedImageQuery.starredOnly === starredOnly &&
+    // A starred item lives in the strip, never on a page of the unstarred
+    // listing; Preview stamps its starred-list page, which the grid must not follow.
+    (starredOnly || selectedItem?.starred !== true)
       ? selectedImageQuery.page
       : null;
 
@@ -489,7 +483,7 @@ export const getGalleryStateView = (
     isLoading,
     page,
     pendingPlaceholders:
-      settings.showPendingItems && semanticImageQuery === null && showsIncomingItemLanding
+      settings.showPendingItems && semanticImageQuery === null && !starredOnly && showsIncomingItemLanding
         ? getVisibleGalleryQueuePlaceholders(generationSequence.chronologicalSlots, {
             galleryView,
             imageOrderDir: settings.imageOrderDir,
@@ -508,6 +502,7 @@ export const getGalleryStateView = (
         : selectedItemKeys,
     semanticImageQuery,
     settings,
+    starredOnly,
   };
 };
 

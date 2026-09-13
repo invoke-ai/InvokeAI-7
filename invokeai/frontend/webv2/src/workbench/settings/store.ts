@@ -64,6 +64,7 @@ export const DEFAULT_PREFERENCES: WorkbenchPreferences = {
   enableModelDescriptions: true,
   generatePresets: [],
   generateSectionsOpen: {},
+  highContrast: false,
   krea2RebalancePresets: [],
   language: 'en',
   launchpadPinnedProjectIds: [],
@@ -77,6 +78,7 @@ export const DEFAULT_PREFERENCES: WorkbenchPreferences = {
   showFocusRegionHighlight: true,
   themeId: DEFAULT_THEME_ID,
   workflowEdgeStyle: 'curved',
+  workflowEdgesBehindNodes: false,
   workflowShowMinimap: true,
   workflowSnapToGrid: false,
   workflowValidateConnections: true,
@@ -341,6 +343,8 @@ export const normalizeWorkbenchPreferences = (preferences?: WorkbenchPreferences
       : preferences?.queueJobsScope === 'active-project' || preferences?.queueJobsScope === 'all'
         ? preferences.queueJobsScope
         : DEFAULT_PREFERENCES.queueJobsScope,
+  highContrast:
+    typeof preferences?.highContrast === 'boolean' ? preferences.highContrast : DEFAULT_PREFERENCES.highContrast,
   reduceMotion:
     typeof preferences?.reduceMotion === 'boolean' ? preferences.reduceMotion : DEFAULT_PREFERENCES.reduceMotion,
   showFocusRegionHighlight:
@@ -358,6 +362,10 @@ export const normalizeWorkbenchPreferences = (preferences?: WorkbenchPreferences
       : preferences?.workflowEdgeStyle === 'curved'
         ? preferences.workflowEdgeStyle
         : DEFAULT_PREFERENCES.workflowEdgeStyle,
+  workflowEdgesBehindNodes:
+    typeof preferences?.workflowEdgesBehindNodes === 'boolean'
+      ? preferences.workflowEdgesBehindNodes
+      : DEFAULT_PREFERENCES.workflowEdgesBehindNodes,
   workflowShowMinimap:
     typeof preferences?.workflowShowMinimap === 'boolean'
       ? preferences.workflowShowMinimap

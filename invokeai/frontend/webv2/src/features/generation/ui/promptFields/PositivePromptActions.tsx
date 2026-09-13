@@ -442,6 +442,9 @@ const ExpandPromptButton = ({
 
     try {
       const result = await expandPrompt({
+        // A structured prompt needs more room than the endpoint's default allows, so the
+        // selected prompt's own cap travels with it. Omitted when it has none.
+        max_tokens: selectedSystemPrompt?.maxTokens ?? undefined,
         model_key: selectedModel.key,
         prompt: positivePrompt,
         system_prompt: selectedSystemPrompt?.content ?? null,

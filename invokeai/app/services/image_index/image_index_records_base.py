@@ -2,18 +2,20 @@ from abc import ABC, abstractmethod
 
 import numpy as np
 
-from invokeai.app.services.image_index.image_index_common import ImageIndexStatus, ProjectionRecord
+from invokeai.app.services.image_index.image_index_common import ImageIndexStatus, IndexedItem, ProjectionRecord
 
 
 class ImageIndexRecordsBase(ABC):
-    """Storage for the semantic image index.
+    """Storage for the semantic index over gallery images and videos.
 
-    Embeddings are global: one row per (image_name, model_id), shared by every
-    user who can access the image. Projections are per-user caches over the
-    set of images that user can access.
+    Embeddings are global: one row per (item, model_id), shared by every user
+    who can access the item. Projections are per-user caches over the set of
+    items that user can access.
 
-    Only "gallery" images are indexed: non-intermediate images in the
-    `general` category.
+    Only "gallery" items are indexed: non-intermediate images and videos in
+    the `general` category. Each media kind has its own embedding table, so an
+    embedding is deleted with its media by foreign key and eligibility and
+    board access are answered from that kind's own tables.
 
     Every method here is its own unit of work and must not be called from inside another
     service's open transaction. `SqliteDatabase.transaction()` commits and rolls back the whole
@@ -23,10 +25,10 @@ class ImageIndexRecordsBase(ABC):
     """
 
     @abstractmethod
-    def upsert_embedding(self, image_name: str, model_id: str, embedding: np.ndarray) -> None:
-        """Insert or replace the embedding for an image under the given model.
+    def upsert_embedding(self, item: IndexedItem, model_id: str, embedding: np.ndarray) -> None:
+        """Insert or replace the embedding for an item under the given model.
 
-        A no-op if the image no longer exists (it may be deleted between being
+        A no-op if the item no longer exists (it may be deleted between being
         scheduled for embedding and the write landing).
 
         All embeddings stored under one model_id must share the same dim;
@@ -39,14 +41,14 @@ class ImageIndexRecordsBase(ABC):
         pass
 
     @abstractmethod
-    def get_embeddings(self, image_names: list[str], model_id: str) -> tuple[list[str], np.ndarray]:
-        """Fetch embeddings for the given images.
+    def get_embeddings(self, items: list[IndexedItem], model_id: str) -> tuple[list[IndexedItem], np.ndarray]:
+        """Fetch embeddings for the given items.
 
-        Duplicate input names are deduplicated, preserving first-seen order.
+        Duplicate input items are deduplicated, preserving first-seen order.
 
         Returns:
-            A tuple of (found_names, matrix) where matrix has shape
-            (len(found_names), dim) and rows align with found_names. Images
+            A tuple of (found_items, matrix) where matrix has shape
+            (len(found_items), dim) and rows align with found_items. Items
             without a stored embedding are silently omitted.
 
             When nothing matches, the matrix is empty with shape (0, 0): no row was read, so
@@ -56,8 +58,8 @@ class ImageIndexRecordsBase(ABC):
         pass
 
     @abstractmethod
-    def delete_embedding(self, image_name: str) -> None:
-        """Delete all stored embeddings for an image (across all models)."""
+    def delete_embedding(self, item: IndexedItem) -> None:
+        """Delete all stored embeddings for an item (across all models)."""
         pass
 
     @abstractmethod
@@ -73,29 +75,35 @@ class ImageIndexRecordsBase(ABC):
         pass
 
     @abstractmethod
-    def list_unembedded_image_names(self, model_id: str, limit: int) -> list[str]:
-        """List eligible images that have no embedding under the given model, oldest first."""
+    def list_unembedded_items(self, model_id: str, limit: int) -> list[IndexedItem]:
+        """List eligible items that have no embedding under the given model, oldest first.
+
+        Both media kinds are merged into one sequence by creation time, so the batch is the
+        oldest work in the gallery rather than every image before any video. It is strict
+        FIFO, not a per-kind quota: a large backlog of old images is indexed before newer
+        videos, exactly as an all-image backlog is indexed in order.
+        """
         pass
 
     @abstractmethod
     def count_index_status(self, model_id: str) -> ImageIndexStatus:
-        """Count eligible images and how many of them are embedded under the given model."""
+        """Count eligible items of both kinds and how many are embedded under the given model."""
         pass
 
     @abstractmethod
-    def list_accessible_embedded_images(self, user_id: str | None, model_id: str) -> list[str]:
-        """List embedded images the user can access, sorted by image name.
+    def list_accessible_embedded_items(self, user_id: str | None, model_id: str) -> list[IndexedItem]:
+        """List embedded items the user can access: images sorted by name, then videos.
 
-        A user can access their own unboarded images, images on boards they own, images on
-        shared or public boards, and images on boards individually shared with them
+        A user can access their own unboarded items, items on boards they own, items on
+        shared or public boards, and items on boards individually shared with them
         (shared_boards). Pass user_id=None for the admin scope.
 
-        Images on an archived board are excluded from every scope, including the admin one,
-        matching the gallery's "all" listing. So the admin scope is every embedded image that
-        is not archived, not literally every embedded image.
+        Items on an archived board are excluded from every scope, including the admin one,
+        matching the gallery's "all" listing. So the admin scope is every embedded item that
+        is not archived, not literally every embedded item.
 
-        The sorted result is the input to the projection scope hash, so the
-        ordering here must stay stable.
+        The result is the input to the projection scope hash, so the ordering
+        here must stay stable.
         """
         pass
 
@@ -132,7 +140,7 @@ class ImageIndexRecordsBase(ABC):
         model_id: str,
         scope_hash: str,
         params: str,
-        image_names: list[str],
+        items: list[IndexedItem],
         coords: np.ndarray,
     ) -> None:
         """Insert or replace the user's cached projection.
@@ -142,10 +150,10 @@ class ImageIndexRecordsBase(ABC):
         Args:
             user_id: The user the projection was computed for.
             model_id: Content hash of the embedding model.
-            scope_hash: Fingerprint of the image set the projection covers.
+            scope_hash: Fingerprint of the item set the projection covers.
             params: JSON of the projection parameters.
-            image_names: Image names, row-aligned with coords.
-            coords: float32 array of shape (len(image_names), 2).
+            items: Indexed items, row-aligned with coords.
+            coords: float32 array of shape (len(items), 2).
         """
         pass
 

@@ -26,6 +26,7 @@ from invokeai.backend.model_manager.load.load_default import (
     _QUANTIZED_MODEL_FORMATS,
     ModelLoader,
     _device_supports_fp8_storage,
+    _model_declared_skip_patterns,
 )
 from invokeai.backend.model_manager.load.model_cache.torch_module_autocast.custom_modules.custom_linear import (
     CustomLinear,
@@ -34,6 +35,7 @@ from invokeai.backend.model_manager.load.model_cache.torch_module_autocast.torch
     apply_custom_layers_to_model,
 )
 from invokeai.backend.model_manager.taxonomy import BaseModelType, ModelFormat, ModelType, SubModelType
+from invokeai.backend.util.fp8 import FP8_COMPUTE_DTYPE_ATTR
 
 
 def _make_loader(device: str = "cuda") -> ModelLoader:
@@ -692,3 +694,218 @@ def test_device_supports_fp8_storage_is_cached_per_device():
     # xpu:1 has not been probed, so a failing probe there must be observed, not short-circuited.
     with patch("torch.zeros", side_effect=RuntimeError("no float8 on this device")):
         assert _device_supports_fp8_storage(torch.device("xpu", 1)) is False
+
+
+def test_model_declared_skip_patterns_unions_both_diffusers_attributes():
+    """`enable_layerwise_casting()` unions `_skip_layerwise_casting_patterns` with
+    `_keep_in_fp32_modules`. We replaced that call with our own hook-based path, so we have to read
+    both — otherwise a model that declares only the latter loses its exclusions silently.
+    """
+
+    class _Model(torch.nn.Module):
+        _skip_layerwise_casting_patterns = ["t_embedder"]
+        _keep_in_fp32_modules = ["time_embedder"]
+
+    assert _model_declared_skip_patterns(_Model()) == ("t_embedder", "time_embedder")
+
+
+def test_model_declared_skip_patterns_tolerates_missing_and_odd_declarations():
+    """Most models declare neither attribute; diffusers sets them to `None` on some. A bare string
+    is accepted too, so a subclass that writes one instead of a list isn't silently expanded into
+    per-character patterns."""
+
+    class _Bare(torch.nn.Module):
+        pass
+
+    class _Nulls(torch.nn.Module):
+        _skip_layerwise_casting_patterns = None
+        _keep_in_fp32_modules = None
+
+    class _Strings(torch.nn.Module):
+        _keep_in_fp32_modules = "time_embedder"
+
+    assert _model_declared_skip_patterns(_Bare()) == ()
+    assert _model_declared_skip_patterns(_Nulls()) == ()
+    assert _model_declared_skip_patterns(_Strings()) == ("time_embedder",)
+
+
+def test_keep_in_fp32_modules_are_not_cast():
+    """End-to-end through the cast: a module named only by `_keep_in_fp32_modules` keeps its
+    compute dtype."""
+
+    class _Model(torch.nn.Module):
+        _keep_in_fp32_modules = ["time_embedder"]
+
+        def __init__(self):
+            super().__init__()
+            self.time_embedder = torch.nn.Linear(4, 4)
+            self.attn = torch.nn.Linear(4, 4)
+
+    loader = _make_loader(device="cuda")
+    model = _Model().to(torch.bfloat16)
+
+    with patch.object(ModelLoader, "_should_use_fp8", return_value=True):
+        loader._apply_fp8_layerwise_casting(model, _make_config(ModelType.Main, fp8=True))
+
+    assert model.time_embedder.weight.dtype == torch.bfloat16
+    assert model.attn.weight.dtype == torch.float8_e4m3fn
+
+
+class TestAlreadyFp8StorageGuard:
+    """FP8 storage must not run over weights that are already fp8 and headed for the tensor cores.
+
+    Layerwise casting installs a pre-hook that restores the compute dtype before every forward. On
+    a scaled-fp8 checkpoint that hook does two things at once: `_can_use_fp8_matmul` no longer sees
+    an fp8 weight, so the matmul silently falls back, and the hook upcasts the weight *without*
+    applying its `weight_scale`, i.e. a weight off by `1/weight_scale`. Neither is visible in the
+    output of a successful generation, so the guard is load-bearing and needs a test that fails if
+    it is reverted.
+    """
+
+    def _model(self) -> torch.nn.Module:
+        model = torch.nn.Sequential(torch.nn.Linear(16, 32))
+        model[0].weight = torch.nn.Parameter(
+            torch.zeros(32, 16, dtype=torch.float32).to(torch.float8_e4m3fn), requires_grad=False
+        )
+        return model
+
+    def test_a_model_whose_weights_are_already_fp8_is_left_alone(self) -> None:
+        loader = _make_loader("cuda")
+        model = self._model()
+
+        with patch("invokeai.backend.model_manager.load.load_default.should_keep_fp8_weights", return_value=True):
+            result = loader._apply_fp8_layerwise_casting(model, _make_config(ModelType.Main, fp8=True))
+
+        assert result is model
+        # No compute-dtype marker means `_apply_fp8_to_nn_module` never ran over it.
+        assert getattr(model, FP8_COMPUTE_DTYPE_ATTR, None) is None
+        assert model[0].weight.dtype is torch.float8_e4m3fn
+
+    def test_a_full_precision_model_is_still_cast(self) -> None:
+        """The guard must key on the weights, not merely on fp8_compute being enabled."""
+        loader = _make_loader("cuda")
+        model = torch.nn.Sequential(torch.nn.Linear(16, 32))
+
+        with patch("invokeai.backend.model_manager.load.load_default.should_keep_fp8_weights", return_value=True):
+            loader._apply_fp8_layerwise_casting(model, _make_config(ModelType.Main, fp8=True))
+
+        assert model[0].weight.dtype is torch.float8_e4m3fn
+        assert getattr(model, FP8_COMPUTE_DTYPE_ATTR, None) is not None
+
+    def test_ordinary_storage_casting_is_unaffected_when_the_matmul_is_unavailable(self) -> None:
+        """The guard must not become a blanket "skip fp8 storage" once fp8_compute is off.
+
+        Only the already-fp8 case is protected. A full-precision model still gets the storage cast,
+        which is the entire point of the toggle on a card without the fp8 matmul.
+
+        (The mirror case -- an already-fp8 model with the matmul *off* -- is unreachable: every
+        loader either folds the scales or casts raw fp8 away when `should_keep_fp8_weights` is
+        False, so nothing fp8 survives to reach this method. `set_fp8_compute_dtype` refuses it
+        outright rather than recording float8 as a compute dtype.)
+        """
+        loader = _make_loader("cuda")
+        model = torch.nn.Sequential(torch.nn.Linear(16, 32))
+
+        with patch("invokeai.backend.model_manager.load.load_default.should_keep_fp8_weights", return_value=False):
+            loader._apply_fp8_layerwise_casting(model, _make_config(ModelType.Main, fp8=True))
+
+        assert model[0].weight.dtype is torch.float8_e4m3fn
+
+
+class TestApplyFp8SkipCallback:
+    """The `skip=` callback keeps scaled-fp8 layers out of the storage cast.
+
+    Its one caller (the Qwen3-VL encoder) casts the *unquantized* remainder of a partly-quantized
+    checkpoint to fp8 storage while leaving the scaled layers on the matmul path. Without the
+    callback those layers would be cast without their scale.
+    """
+
+    def test_a_module_the_callback_rejects_is_not_cast(self) -> None:
+        model = torch.nn.Sequential()
+        model.add_module("keep", torch.nn.Linear(16, 32))
+        model.add_module("cast", torch.nn.Linear(16, 32))
+        model.keep.weight_scale = torch.tensor(2.0)
+
+        ModelLoader._apply_fp8_to_nn_module(
+            model,
+            storage_dtype=torch.float8_e4m3fn,
+            compute_dtype=torch.bfloat16,
+            skip=lambda _name, module: getattr(module, "weight_scale", None) is not None,
+        )
+
+        assert model.keep.weight.dtype is not torch.float8_e4m3fn
+        assert model.cast.weight.dtype is torch.float8_e4m3fn
+
+
+class TestSkippedModulesNeverKeepCheckpointFp8:
+    """A pattern-skipped module must not be left holding float8 weights.
+
+    The cast pass installs the upcast pre-hook only on modules it casts. A module it *skips* keeps
+    whatever dtype it arrived with — fine when that is the compute dtype, silently fatal when the
+    loader kept the checkpoint's fp8 weights: no hook, no cast back, and the forward runs on raw fp8
+    codes. Reachable wherever a loader combines `keep_fp8` with fp8 storage on the remainder (the
+    Qwen3-VL encoder), and otherwise dependent on the loader's skip list and
+    `_FP8_DEFAULT_SKIP_PATTERNS` never naming the same Linear.
+    """
+
+    def _model(self) -> torch.nn.Module:
+        model = torch.nn.Module()
+        # `proj_out` is in `_FP8_DEFAULT_SKIP_PATTERNS`; `attn` is not.
+        model.add_module("proj_out", torch.nn.Linear(16, 32))
+        model.add_module("attn", torch.nn.Linear(16, 32))
+        return model
+
+    def test_a_pattern_skipped_module_is_restored_to_the_compute_dtype(self) -> None:
+        model = self._model()
+        # As a loader that kept checkpoint fp8 weights would hand it over.
+        model.proj_out.weight = torch.nn.Parameter(
+            torch.zeros(32, 16, dtype=torch.bfloat16).to(torch.float8_e4m3fn), requires_grad=False
+        )
+
+        ModelLoader._apply_fp8_to_nn_module(model, storage_dtype=torch.float8_e4m3fn, compute_dtype=torch.bfloat16)
+
+        assert model.proj_out.weight.dtype is torch.bfloat16, "skipped module left computing on fp8 codes"
+        assert model.attn.weight.dtype is torch.float8_e4m3fn
+
+    def test_an_extra_skip_pattern_gets_the_same_treatment(self) -> None:
+        model = self._model()
+        model.attn.weight = torch.nn.Parameter(
+            torch.zeros(32, 16, dtype=torch.bfloat16).to(torch.float8_e4m3fn), requires_grad=False
+        )
+
+        ModelLoader._apply_fp8_to_nn_module(
+            model,
+            storage_dtype=torch.float8_e4m3fn,
+            compute_dtype=torch.bfloat16,
+            extra_skip_patterns=("attn",),
+        )
+
+        assert model.attn.weight.dtype is torch.bfloat16
+
+    def test_a_full_precision_skipped_module_is_untouched(self) -> None:
+        """The restore must not disturb the ordinary case it shares a branch with."""
+        model = self._model()
+        model.proj_out.weight = torch.nn.Parameter(torch.zeros(32, 16, dtype=torch.float32), requires_grad=False)
+
+        ModelLoader._apply_fp8_to_nn_module(model, storage_dtype=torch.float8_e4m3fn, compute_dtype=torch.bfloat16)
+
+        assert model.proj_out.weight.dtype is torch.float32
+
+    def test_a_caller_skipped_scaled_layer_keeps_its_fp8_weight(self) -> None:
+        """The `skip=` callback means the opposite of a pattern skip: its one caller excludes
+        scaled-fp8 layers, which stay quantized and go through `_scaled_mm` with their
+        `weight_scale`. Upcasting those would drop the scale."""
+        model = self._model()
+        model.attn.weight = torch.nn.Parameter(
+            torch.zeros(32, 16, dtype=torch.bfloat16).to(torch.float8_e4m3fn), requires_grad=False
+        )
+        model.attn.weight_scale = torch.tensor(2.0)
+
+        ModelLoader._apply_fp8_to_nn_module(
+            model,
+            storage_dtype=torch.float8_e4m3fn,
+            compute_dtype=torch.bfloat16,
+            skip=lambda _name, module: getattr(module, "weight_scale", None) is not None,
+        )
+
+        assert model.attn.weight.dtype is torch.float8_e4m3fn

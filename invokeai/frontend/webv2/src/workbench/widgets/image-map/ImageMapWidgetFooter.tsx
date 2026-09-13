@@ -50,7 +50,7 @@ export const ImageMapWidgetFooter = (_props: WidgetViewProps) => {
           </>
         ) : null}
         {skipped ? (
-          <Tooltip content="These images repeatedly failed to embed and were given up on.">
+          <Tooltip content="These items repeatedly failed to embed and were given up on.">
             <Text truncate>· {indexCounts.failed} skipped</Text>
           </Tooltip>
         ) : null}

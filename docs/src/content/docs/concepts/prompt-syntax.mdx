@@ -88,6 +88,16 @@ You can group phrases and apply weight to the whole group, then nest another wei
 
 In this example, the outer group strengthens the whole phrase, and the inner group gives `blue eyes` even more emphasis.
 
+## Adjust weights with the keyboard in Webv2
+
+In a prompt field, select text and press **Ctrl+Up** or **Ctrl+Down** to raise or lower its attention. With no selection, the shortcut targets the word at the caret. Selecting a group's parentheses or weight targets its contents.
+
+- A selection inside a group changes only the selected words. A selection crossing a group boundary changes the selected words on both sides.
+- Symbolic weights move one `+` or `-` step. Numeric weights change by `0.1` of effective attention, including inherited group weights.
+- The numeric attention preference controls new weights; existing group weights retain their style.
+- Adjacent content with matching weights merges, while the adjusted content stays selected for the next keypress.
+- Inside prompt functions, the shortcut adjusts prompt arguments and preserves function parameters. Use **Ctrl+Z** to undo a weight change.
+
 ## Blend prompts with `.blend()`
 
 Use `.blend()` to mix the meaning of two or more prompts.

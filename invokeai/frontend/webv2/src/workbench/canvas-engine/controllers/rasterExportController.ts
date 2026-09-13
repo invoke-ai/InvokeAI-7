@@ -9,6 +9,7 @@ import type {
   CanvasLayerContract,
   CanvasLayerSourceContract,
 } from '@workbench/canvas-engine/contracts';
+import type { CanvasTextSource } from '@workbench/canvas-engine/render/fontLoader';
 import type { LayerCacheEntry, LayerCacheStore } from '@workbench/canvas-engine/render/layerCache';
 import type { RasterBackend } from '@workbench/canvas-engine/render/raster';
 import type { Rect } from '@workbench/canvas-engine/types';
@@ -48,6 +49,10 @@ export interface RasterExportControllerOptions {
     | { status: 'ok'; lease: { release(): void } }
     | { status: 'over-budget'; requestedBytes: number; availableBytes: number };
   readonly pin?: (layerId: string) => { release(): void };
+  /** Resolves custom font bytes before an operation whose pixels leave the editor. */
+  readonly waitForFont?: (source: CanvasTextSource, signal?: AbortSignal) => Promise<string>;
+  /** Invalidates cached pixels rendered with a fallback family after output readiness recovers. */
+  readonly invalidateLayerCache?: (layerId: string) => void;
 }
 
 interface ReservedExportLayerPixels {
@@ -122,6 +127,24 @@ export class RasterExportController {
     }
     if (!this.options.isSupportedSource(source)) {
       return { status: 'unsupported' };
+    }
+    if (source.type === 'text' && this.options.waitForFont) {
+      let readyFontFamily: string;
+      try {
+        readyFontFamily = await this.options.waitForFont(source, options.signal);
+      } catch {
+        return { status: options.signal?.aborted ? 'aborted' : 'not-ready' };
+      }
+      const cachedText = this.options.layers.peek(layerId);
+      if (
+        source.fontRef &&
+        cachedText &&
+        !cachedText.stale &&
+        !isEmpty(cachedText.rect) &&
+        cachedText.renderedFontFamily !== readyFontFamily
+      ) {
+        (this.options.invalidateLayerCache ?? this.options.layers.invalidate)(layerId);
+      }
     }
     const liveEntry = this.options.layers.get(layerId);
     if (liveEntry && !liveEntry.stale && !this.options.isRasterizing(layer) && !isEmpty(liveEntry.rect)) {

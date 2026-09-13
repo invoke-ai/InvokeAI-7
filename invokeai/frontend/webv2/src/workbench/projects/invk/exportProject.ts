@@ -1,3 +1,4 @@
+import { sha256Hex } from '@platform/browser/sha256';
 import { mapWithConcurrency } from '@platform/core/concurrency';
 import { collectLiveAssetRefs, selectCoverImageName, stripInstallationState } from '@workbench/projects/projectAssets';
 
@@ -14,6 +15,12 @@ import {
   isRequestCancellation,
 } from './assetTransport';
 import { buildInvkBoardSnapshot } from './board';
+import {
+  collectFontDependencies,
+  INVK_MAX_FONT_BYTES,
+  type FontArchiveTransport,
+  type InvkFontDependency,
+} from './fonts';
 import {
   INVK_BOARD_ENTRY,
   INVK_DOCUMENT_ENTRY,
@@ -45,6 +52,8 @@ export interface InvkExportPlan {
   documentJson: string;
   /** Download file name, including the extension. */
   fileName: string;
+  fonts: InvkFontDependency[];
+  includeFonts: boolean;
   manifestInput: {
     appVersion: string;
     createdAt: string;
@@ -69,6 +78,7 @@ export const planInvkExport = (input: {
   minimumCanvasSchemaVersion: number;
   name: string;
   projectDocument: Record<string, unknown>;
+  includeFonts?: boolean;
 }): InvkExportPlan => {
   const sourceProjectId = typeof input.projectDocument.id === 'string' ? input.projectDocument.id : undefined;
 
@@ -78,10 +88,11 @@ export const planInvkExport = (input: {
   const projectDocument = stripInstallationState(input.projectDocument);
   const boardSnapshot = buildInvkBoardSnapshot(input.boardItems);
   const transferItems = planMediaTransfer(boardSnapshot.items, toMediaRefs(collectLiveAssetRefs(projectDocument)));
+  const fonts = collectFontDependencies(projectDocument);
 
   // Refused before a single byte is fetched. An archive that cannot be packed is not worth the
   // hundreds of round trips it would take to discover that at the end.
-  const worstCaseEntries = FIXED_ENTRY_COUNT + transferItems.length + 1;
+  const worstCaseEntries = FIXED_ENTRY_COUNT + transferItems.length + (input.includeFonts ? fonts.length : 0) + 1;
 
   if (worstCaseEntries > INVK_MAX_ENTRIES) {
     throw new InvkFormatError('too-large', `Project needs ${worstCaseEntries} archive entries`);
@@ -94,6 +105,8 @@ export const planInvkExport = (input: {
     // bytes per line would be the largest entry in the archive before deflate.
     documentJson: JSON.stringify(projectDocument),
     fileName: toInvkFileName(input.name),
+    fonts,
+    includeFonts: input.includeFonts ?? false,
     manifestInput: {
       appVersion: input.appVersion,
       createdAt: input.createdAt,
@@ -118,6 +131,7 @@ export interface InvkExportDeps {
   fetchVideoBytes?: (videoName: string, signal?: AbortSignal) => Promise<Uint8Array | null>;
   onProgress?: (progress: InvkExportProgress) => void;
   signal?: AbortSignal;
+  fontTransport?: FontArchiveTransport;
 }
 
 export interface InvkExportResult extends ProjectTransferIssues {
@@ -137,6 +151,29 @@ export const executeInvkExport = async (plan: InvkExportPlan, deps: InvkExportDe
   let bundledImageCount = 0;
   let bundledVideoCount = 0;
   let completed = 0;
+  const fonts = plan.fonts.map((font) => ({ ...font }));
+  const total = plan.transferItems.length + (plan.includeFonts ? fonts.length : 0);
+
+  if (plan.includeFonts && fonts.length > 0) {
+    const fontTransport = deps.fontTransport ?? (await import('./fontTransport')).createFontArchiveTransport();
+    for (const font of fonts) {
+      deps.signal?.throwIfAborted();
+      const { bytes, filename } = await fontTransport.download(font, deps.signal);
+      const extension = filename.split('.').at(-1)?.toLowerCase();
+      if (
+        !extension ||
+        !['ttf', 'otf', 'woff', 'woff2'].includes(extension) ||
+        bytes.byteLength > INVK_MAX_FONT_BYTES ||
+        (await sha256Hex(bytes)) !== font.contentHash
+      ) {
+        throw new InvkFormatError('damaged', `The font file for ${font.label} is unavailable or changed.`);
+      }
+      font.entry = `fonts/${font.contentHash}.${extension}`;
+      entries.set(font.entry, binaryEntry(bytes));
+      completed += 1;
+      deps.onProgress?.({ completed, phase: 'bundling', total });
+    }
+  }
 
   /** Unservable is `null`; cancelled rethrows. */
   const skipUnservable = async <T>(read: () => Promise<T | null>): Promise<T | null> => {
@@ -167,7 +204,7 @@ export const executeInvkExport = async (plan: InvkExportPlan, deps: InvkExportDe
     );
 
     completed += 1;
-    deps.onProgress?.({ completed, phase: 'bundling', total: assets.length });
+    deps.onProgress?.({ completed, phase: 'bundling', total });
 
     if (bytes === null) {
       // Reported against every role it filled: the same failure costs a board result and a canvas
@@ -199,10 +236,11 @@ export const executeInvkExport = async (plan: InvkExportPlan, deps: InvkExportDe
   // step that precedes handing a file to the browser.
   deps.signal?.throwIfAborted();
 
-  deps.onProgress?.({ completed: assets.length, phase: 'packing', total: assets.length });
+  deps.onProgress?.({ completed, phase: 'packing', total });
 
   const manifest = buildInvkManifest({
     ...plan.manifestInput,
+    fonts,
     ...(coverEntryName === undefined ? {} : { cover: coverEntryName }),
   });
 

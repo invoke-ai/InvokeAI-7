@@ -12,8 +12,8 @@ import { getEffectiveReferenceImage } from '@features/generation/core/referenceI
 import { getReferenceImageUrls } from '@features/generation/data/referenceImageUrls';
 import { GenerationModelSelect as ModelSelect } from '@features/generation/ui/GenerationUiContext';
 import { IconButton, ToggleDot, Tooltip } from '@platform/ui';
-import { ChevronDownIcon, CropIcon, ImageIcon, RulerIcon, Trash2Icon } from 'lucide-react';
-import { memo, useCallback, useState } from 'react';
+import { ArrowDownIcon, ArrowUpIcon, ChevronDownIcon, CropIcon, ImageIcon, RulerIcon, Trash2Icon } from 'lucide-react';
+import { memo, useCallback, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { formatWeight, getModeLabelKey } from './referenceImageConfig';
@@ -44,16 +44,20 @@ const OVERLAY_GRADIENT_STYLE: CSSProperties = {
 };
 
 interface ReferenceImageCardProps {
+  count: number;
   index: number;
   referenceImage: GenerateReferenceImage;
   selectedModel: GenerateModelConfig | undefined;
+  onMove: (id: string, direction: -1 | 1) => void;
   onPatch: (id: string, patch: Partial<GenerateReferenceImage>) => void;
   onRemove: (id: string) => void;
   onUseSize: (image: GenerateReferenceImageAsset) => void;
 }
 
 const ReferenceImageCardBase = ({
+  count,
   index,
+  onMove,
   onPatch,
   onRemove,
   onUseSize,
@@ -62,6 +66,10 @@ const ReferenceImageCardBase = ({
 }: ReferenceImageCardProps) => {
   const { t } = useTranslation();
   const [isCollapsed, setIsCollapsed] = useState(false);
+  const moveUpRef = useRef<HTMLButtonElement>(null);
+  const moveDownRef = useRef<HTMLButtonElement>(null);
+  const canMoveUp = index > 0;
+  const canMoveDown = index < count - 1;
   const config = referenceImage.config;
   const isEnabled = referenceImage.isEnabled;
   const selectedBase = selectedModel?.base;
@@ -81,6 +89,27 @@ const ReferenceImageCardBase = ({
   );
 
   const handleRemove = useCallback(() => onRemove(referenceImage.id), [onRemove, referenceImage.id]);
+
+  // A move that lands on either end disables the very button that was just
+  // activated, and a disabled element cannot hold focus — a keyboard user
+  // would be dropped to <body> on the last step of walking a card to the top.
+  // The card's DOM nodes survive the reorder (the list is keyed by id), so
+  // handing focus to the arrow that stays live keeps their place in the stack.
+  const handleMoveUp = useCallback(() => {
+    onMove(referenceImage.id, -1);
+
+    if (index - 1 === 0) {
+      moveDownRef.current?.focus();
+    }
+  }, [index, onMove, referenceImage.id]);
+
+  const handleMoveDown = useCallback(() => {
+    onMove(referenceImage.id, 1);
+
+    if (index + 1 === count - 1) {
+      moveUpRef.current?.focus();
+    }
+  }, [count, index, onMove, referenceImage.id]);
 
   const handleCrop = useCallback(
     (image: GenerateReferenceImageAsset) => changeConfig({ ...config, image }),
@@ -129,6 +158,34 @@ const ReferenceImageCardBase = ({
         )}
 
         <HStack gap="0.5">
+          {/* Card order is conditioning order, so the stack is reordered in
+              place — the same arrow pair the video panel's references use. */}
+          <Tooltip content={t('widgets.generate.moveReferenceImageUp')}>
+            <IconButton
+              ref={moveUpRef}
+              aria-label={t('widgets.generate.moveReferenceImageUp')}
+              color="fg.muted"
+              disabled={!canMoveUp}
+              size="2xs"
+              variant="ghost"
+              onClick={handleMoveUp}
+            >
+              <Icon as={ArrowUpIcon} />
+            </IconButton>
+          </Tooltip>
+          <Tooltip content={t('widgets.generate.moveReferenceImageDown')}>
+            <IconButton
+              ref={moveDownRef}
+              aria-label={t('widgets.generate.moveReferenceImageDown')}
+              color="fg.muted"
+              disabled={!canMoveDown}
+              size="2xs"
+              variant="ghost"
+              onClick={handleMoveDown}
+            >
+              <Icon as={ArrowDownIcon} />
+            </IconButton>
+          </Tooltip>
           <IconButton
             aria-label={
               isCollapsed ? t('widgets.generate.expandReferenceImage') : t('widgets.generate.collapseReferenceImage')

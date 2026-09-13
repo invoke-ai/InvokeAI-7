@@ -1,7 +1,8 @@
 /**
  * Rasterizes a `text` layer source. Text layers are PARAMETRIC and
  * EDITABLE-FOREVER: their pixels are derived from the source params (`content`,
- * `fontFamily`, `fontSize`, `fontWeight`, `lineHeight`, `align`, `color`) rather
+ * `fontFamily`, `fontSize`, `fontWeight`, `fontStyle`, `fontVariations`,
+ * `lineHeight`, `align`, `color`) rather
  * than a persisted bitmap, so a style/content edit re-renders for free — the
  * headline upgrade over legacy's rasterized (frozen) text.
  *
@@ -45,9 +46,18 @@ type Ctx = RasterSurface['ctx'];
  */
 export const TEXT_CHAR_WIDTH_FACTOR = 0.6;
 
-/** The CSS `font` shorthand for a text source (`"<weight> <size>px <family>"`). */
-export const textFontString = (source: TextSource): string =>
-  `${source.fontWeight} ${source.fontSize}px ${source.fontFamily}`;
+/** The CSS `font` shorthand for a text source (`"<style> <weight> <size>px <family>"`). */
+export const textFontString = (source: TextSource, family = source.fontFamily): string => {
+  const style = source.fontStyle && source.fontStyle !== 'normal' ? `${source.fontStyle} ` : '';
+  return `${style}${source.fontWeight} ${source.fontSize}px ${family}`;
+};
+
+/** A stable CSS/OpenType representation of the exact coordinates carried by a text source. */
+export const textFontVariationSettings = (source: TextSource): string =>
+  Object.entries(source.fontVariations ?? {})
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([tag, value]) => `"${tag}" ${value}`)
+    .join(', ');
 
 /** Splits a text source's content into lines on `\n`; always at least one (possibly empty) line. */
 export const textLines = (content: string): string[] => content.split('\n');
@@ -95,11 +105,15 @@ export const rasterizeTextSource = (
   target?: RasterSurface
 ): Promise<RasterizeResult> => {
   const lines = textLines(source.content);
-  const font = textFontString(source);
+  const font = textFontString(source, deps.resolveFontFamily?.(source));
+  const context = (ctx: Ctx): Ctx & { fontVariationSettings?: string } =>
+    ctx as Ctx & { fontVariationSettings?: string };
+  const variationSettings = textFontVariationSettings(source);
 
   // Measure on the target's own ctx (or a fresh surface) with the font applied.
   const surface = target ?? deps.backend.createSurface(1, 1);
   surface.ctx.font = font;
+  context(surface.ctx).fontVariationSettings = variationSettings || 'normal';
   const { height, width } = measureBlock(surface.ctx, source, lines);
 
   if (surface.width !== width || surface.height !== height) {
@@ -111,6 +125,7 @@ export const rasterizeTextSource = (
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(0, 0, width, height);
   ctx.font = font;
+  context(ctx).fontVariationSettings = variationSettings || 'normal';
   ctx.textBaseline = 'top';
   ctx.fillStyle = source.color;
 

@@ -59,6 +59,14 @@ client from opening a v3 project: it is treated as v2, not as unrestricted. The 
 forward-version gate and the project API adapter consume the same constant so advertised support
 cannot drift from actual parsing support.
 
+## Custom fonts
+
+Webv2 exports font dependencies in the manifest's optional `fonts` array. Each dependency records a SHA-256 content hash, readable family and face labels, source reference IDs, and an optional `fonts/<hash>.<extension>` entry. The Canvas schema compatibility floor protects the newer editable text fields; the ZIP manifest remains version 2.
+
+**Include font files** is unchecked by default. When selected, export authenticates and verifies every required font download, bundles each original file once, and fails if a requested font is missing or changed. Variable fonts travel as their original files, preserving editable axes. Export does not infer redistribution rights from metadata.
+
+Import verifies dependency paths and hashes before any mutation, preflights font validity, then installs embedded files into the recipient's private library. Exact private duplicates are reused; font references are remapped by content hash, never by family name. A quota failure can be retried explicitly with references only. Cleanup tracks newly created font IDs and never deletes pre-existing duplicates or resources whose project creation outcome is unknown.
+
 ## File format
 
 `.invk` files are ZIP archives. The current manifest version is `2`.

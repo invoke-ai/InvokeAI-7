@@ -1,4 +1,5 @@
 /* oxlint-disable react-perf/jsx-no-new-function-as-prop */
+import type * as fonts from '@features/fonts';
 import type { CanvasLayerSourceContract } from '@workbench/canvas-engine/api';
 import type { CanvasOperationState } from '@workbench/canvas-operations/api';
 import type { CanvasEngine } from '@workbench/canvas-operations/createCanvasEngine';
@@ -7,6 +8,7 @@ import type { CanvasProjectMutationPort } from '@workbench/canvasProjectMutation
 import type { Project } from '@workbench/projectContracts';
 
 import { Box, ChakraProvider } from '@chakra-ui/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { system } from '@theme/system';
 import {
   groupContract,
@@ -36,6 +38,16 @@ const harness = vi.hoisted(() => ({
   project: null as Project | null,
 }));
 
+// The text form's catalog query must not reach the network from this harness.
+vi.mock('@features/fonts', async (importOriginal) => ({
+  ...(await importOriginal<typeof fonts>()),
+  fontsInfiniteQueryOptions: () => ({
+    getNextPageParam: () => undefined,
+    initialPageParam: 0,
+    queryFn: () => Promise.resolve({ items: [], limit: 100, offset: 0, total: 0 }),
+    queryKey: ['font-catalog-pane-test'],
+  }),
+}));
 vi.mock('@workbench/WorkbenchContext', async () => {
   const { useSyncExternalStore } = await import('react');
   const subscribe = (listener: () => void) => {
@@ -164,6 +176,7 @@ const createFakeOperations = () => {
   };
 };
 
+const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 let host: HTMLDivElement | null = null;
 let root: Root | null = null;
 let registry: EngineRegistry | null = null;
@@ -180,7 +193,7 @@ const settle = () =>
 
 const IDENTITY = { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 };
 
-type Selection = 'none' | 'layer' | 'group' | 'mask' | 'shape' | 'gradient';
+type Selection = 'none' | 'layer' | 'group' | 'mask' | 'shape' | 'gradient' | 'text';
 
 const SHAPE_SOURCE = {
   fill: '#ff0000',
@@ -191,6 +204,16 @@ const SHAPE_SOURCE = {
   type: 'shape',
   width: 10,
 } satisfies Extract<CanvasLayerSourceContract, { type: 'shape' }>;
+const TEXT_SOURCE = {
+  align: 'center',
+  color: '#123456',
+  content: 'Hello there\nsecond line',
+  fontFamily: 'system-ui, sans-serif',
+  fontSize: 72,
+  fontWeight: 700,
+  lineHeight: 1.5,
+  type: 'text',
+} satisfies Extract<CanvasLayerSourceContract, { type: 'text' }>;
 const GRADIENT_SOURCE = {
   angle: 0,
   height: 10,
@@ -214,9 +237,11 @@ const mount = async (View: typeof PropertiesPane, selection: Selection = 'none')
           ? [layerContract('l0', 'raster', { name: 'My Shape', source: SHAPE_SOURCE })]
           : selection === 'gradient'
             ? [layerContract('l0', 'raster', { name: 'My Gradient', source: GRADIENT_SOURCE })]
-            : selection === 'mask'
-              ? [layerContract('m0', 'inpaint_mask', { name: 'Mask' })]
-              : [groupContract('g0', [layerContract('l0', 'raster', { name: 'Paint' })], { name: 'Folder' })];
+            : selection === 'text'
+              ? [layerContract('l0', 'raster', { name: 'My Text', source: TEXT_SOURCE })]
+              : selection === 'mask'
+                ? [layerContract('m0', 'inpaint_mask', { name: 'Mask' })]
+                : [groupContract('g0', [layerContract('l0', 'raster', { name: 'Paint' })], { name: 'Folder' })];
   harness.project = applyCanvasProjectMutation(base, {
     document: {
       ...createEmptyCanvasDocument(),
@@ -238,7 +263,9 @@ const mount = async (View: typeof PropertiesPane, selection: Selection = 'none')
     root?.render(
       <I18nextProvider i18n={i18n}>
         <ChakraProvider value={system}>
-          <View />
+          <QueryClientProvider client={queryClient}>
+            <View />
+          </QueryClientProvider>
         </ChakraProvider>
       </I18nextProvider>
     );
@@ -337,6 +364,47 @@ describe('Properties pane', () => {
     const width = page.getByRole('slider', { exact: true, name: 'Stroke width' });
     await expect.element(width).toBeVisible();
     expect(width.element().getAttribute('data-disabled')).not.toBeNull();
+  });
+
+  it('previews the selected text layer above its form and offers style and weight on one row', async () => {
+    await mount(PropertiesPane, 'text');
+    await act(() => engine!.tools.setTool('text'));
+    await settle();
+    await expect.element(page.getByRole('combobox', { exact: true, name: 'Style' })).toBeVisible();
+    // The specimen card carries the chip and the layer's first line in its own style.
+    expect(host!.textContent).not.toContain('second line');
+    const specimen = Array.from(host!.querySelectorAll<HTMLElement>('[aria-hidden="true"]')).find((el) =>
+      el.textContent?.startsWith('Hello there')
+    )!;
+    expect(specimen.parentElement!.textContent).toContain('Editing: My Text');
+    expect(getComputedStyle(specimen).fontWeight).toBe('700');
+    expect(getComputedStyle(specimen).textAlign).toBe('center');
+    expect(getComputedStyle(specimen).color).toBe('rgb(18, 52, 86)');
+    const style = page.getByRole('combobox', { exact: true, name: 'Style' }).element();
+    const weight = page.getByRole('combobox', { exact: true, name: 'Weight' }).element();
+    expect(Math.abs(style.getBoundingClientRect().top - weight.getBoundingClientRect().top)).toBeLessThan(2);
+    expect((page.getByRole('spinbutton', { exact: true, name: 'Font size' }).element() as HTMLInputElement).value).toBe(
+      '72'
+    );
+  });
+
+  it('steps the log-scaled text size slider by whole pixels from the keyboard', async () => {
+    await mount(PropertiesPane);
+    await act(() => engine!.tools.setTool('text'));
+    await settle();
+    const slider = page.getByRole('slider', { exact: true, name: 'Font size' });
+    await expect.element(slider).toBeVisible();
+    const field = () =>
+      (page.getByRole('spinbutton', { exact: true, name: 'Font size' }).element() as HTMLInputElement).value;
+    expect(field()).toBe('48');
+    await act(() => (slider.element() as HTMLElement).focus());
+    await act(() => userEvent.keyboard('{ArrowRight}'));
+    expect(field()).toBe('49');
+    await act(() => userEvent.keyboard('{PageUp}'));
+    expect(field()).toBe('59');
+    await act(() => userEvent.keyboard('{ArrowLeft}'));
+    expect(field()).toBe('58');
+    expect(engine!.interaction.get('textOptions').fontSize).toBe(58);
   });
 
   it('names a selected gradient in the chip and moves a default stop from the keyboard', async () => {

@@ -106,6 +106,7 @@ const makeHarness = (overrides: Partial<CreateLayerRasterizerDeps> = {}): Harnes
         ensure: (_font, onReady) => {
           result.fontReady = onReady;
         },
+        resolveFamily: (source) => source.fontFamily,
       },
       getDocument: () => document.value,
       hasCanvasState: () => state.hasCanvas,
@@ -372,6 +373,7 @@ describe('text sources', () => {
   it('re-invalidates once the real font arrives', async () => {
     harness.document.value = documentOf([textLayer()]);
     await start(textLayer());
+    expect(harness.entry.renderedFontFamily).toBe('Inter');
     expect(harness.fontReady).toBeTypeOf('function');
     harness.fontReady?.();
     expect(harness.spies.invalidateLayerCache).toHaveBeenCalledWith('layer-1');

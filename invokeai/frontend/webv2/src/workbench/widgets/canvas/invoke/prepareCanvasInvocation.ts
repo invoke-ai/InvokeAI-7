@@ -30,7 +30,7 @@
  * shallower user-facing guard from the instant the command begins.
  */
 
-import type { GenerateModelConfig } from '@features/generation/contracts';
+import type { CanvasScalingSettings, GenerateModelConfig } from '@features/generation/contracts';
 import type { ModelConfig } from '@features/models';
 import type {
   CanvasControlLayerContract,
@@ -49,7 +49,7 @@ import {
   getControlValidationReason,
   getControlValidationReasonMessage,
   getRegionalGuidanceRejectionReason,
-  isRegionalGuidanceSupportedForBase,
+  getRegionalGuidanceSupport,
   type ControlLayerGraphInput,
   type ControlValidationReason,
   type RegionalGuidanceInput,
@@ -69,6 +69,8 @@ import {
   DEFAULT_CANVAS_COMPOSITING,
   type CanvasCompositingSettings,
 } from '@workbench/widgets/canvas/invoke/canvasCompositing';
+
+import { readCanvasScaling } from './canvasScaling';
 
 /** Title on every canvas-invoke failure notice. */
 export const CANVAS_INVOKE_ERROR_TITLE = 'Canvas generation failed';
@@ -121,6 +123,8 @@ export interface RunCanvasInvocationDeps {
   strength: number;
   /** Persisted compositing settings (infill / coherence / mask blur / output policy), defaulted + clamped. */
   compositing: CanvasCompositingSettings;
+  /** Persisted "scale before processing" policy, defaulted. */
+  scaling: CanvasScalingSettings;
   commands: Pick<WorkbenchCommands, 'generation' | 'notifications'>;
   /** Localizes a control-layer rejection; defaults to the English validation sentence. */
   formatControlLayerError?: (code: ControlValidationReason, layerName: string) => string;
@@ -216,12 +220,13 @@ export const resolveRegionalReferenceImages = (
   base: string
 ): RegionalReferenceImageInput[] => {
   const inputs: RegionalReferenceImageInput[] = [];
+  const kind = getRegionalGuidanceSupport(base)?.referenceImages ?? null;
   for (const ref of region.referenceImages) {
     if (!ref.isEnabled) {
       continue;
     }
     const { config } = ref;
-    if (config.type === 'ip_adapter' && (base === 'sd-1' || base === 'sdxl')) {
+    if (config.type === 'ip_adapter' && kind === 'ip_adapter') {
       if (!config.image || !config.model || config.model.base !== base) {
         continue;
       }
@@ -241,7 +246,7 @@ export const resolveRegionalReferenceImages = (
         type: 'ip_adapter',
         weight: config.weight,
       });
-    } else if (config.type === 'flux_redux' && base === 'flux') {
+    } else if (config.type === 'flux_redux' && kind === 'flux_redux') {
       if (!config.image || !config.model || config.model.base !== base) {
         continue;
       }
@@ -266,8 +271,8 @@ export const resolveRegionalReferenceImages = (
 /**
  * Regional-guidance policy + metadata side-channel for the composite operation.
  * `shouldComposite` resolves each region's reference images and rejects regions
- * invalid for the base (unsupported base, FLUX + negative/autoNegative, all
- * prompts + references empty) with a SILENT skip, mirroring legacy.
+ * that cannot contribute for the base (no regional support, or nothing the
+ * base's support matrix honours) with a SILENT skip, mirroring legacy.
  * `toGraphInputs` joins the composited mask image names back with the recorded
  * prompt/reference metadata.
  */
@@ -281,18 +286,14 @@ const createRegionalGuidanceCollector = (
 
   return {
     shouldComposite: (layer) => {
-      if (!isRegionalGuidanceSupportedForBase(model.base)) {
-        return false;
-      }
       const referenceImages = resolveRegionalReferenceImages(layer, model.base);
       const rejection = getRegionalGuidanceRejectionReason({
-        autoNegative: layer.autoNegative,
         hasContent: true,
         layerName: layer.name,
         mainBase: model.base,
         negativePrompt: layer.negativePrompt,
         positivePrompt: layer.positivePrompt,
-        referenceImageCount: layer.referenceImages.length,
+        referenceImageCount: referenceImages.length,
       });
       if (rejection) {
         return false;
@@ -392,6 +393,7 @@ export const runCanvasInvocation = async (deps: RunCanvasInvocationDeps): Promis
       projectSettings: deps.projectSettings,
       randDevice: deps.randDevice,
       regionalGuidance: regions.toGraphInputs(composites.regionalMaskImages),
+      scaling: deps.scaling,
       settings,
       strength: deps.strength,
     });
@@ -450,6 +452,11 @@ export interface PrepareCanvasInvocationArgs {
   /** Expanded positive prompts, resolved by the caller before submitting. */
   positivePrompts?: string[];
   projectSettings: Pick<ProjectSettings, 'useCpuNoise'>;
+  /**
+   * The canvas widget's persisted values. The scaling policy is read here, in
+   * the lazily loaded orchestrator, so its reader stays out of the eager submit path.
+   */
+  canvasValues?: Record<string, unknown>;
   strength: number;
   signal?: AbortSignal;
   /**
@@ -497,6 +504,7 @@ export const prepareCanvasInvocation = async (args: PrepareCanvasInvocationArgs)
     projectSettings: args.projectSettings,
     randDevice: resolveRandDeviceMetadata(args.projectSettings.useCpuNoise, getGenerationDevicesSnapshot().options),
     signal,
+    scaling: readCanvasScaling(args.canvasValues),
     strength: args.strength,
   });
 };

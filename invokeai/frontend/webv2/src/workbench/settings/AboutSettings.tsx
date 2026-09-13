@@ -54,7 +54,7 @@ export const AboutSettings = () => {
       </HStack>
 
       {info.loadState === 'loading' || info.loadState === 'idle' ? (
-        <HStack color="fg.subtle" gap="2">
+        <HStack color="fg.muted" gap="2">
           <Spinner size="xs" />
           <Text fontSize="xs">{t('settings.about.loading')}</Text>
         </HStack>

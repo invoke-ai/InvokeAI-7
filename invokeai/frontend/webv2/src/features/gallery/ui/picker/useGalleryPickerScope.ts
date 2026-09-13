@@ -39,7 +39,7 @@ export const useGalleryPickerScope = () => {
   }));
   const deferredSearchTerm = useDeferredValue(scope.searchTerm);
   const settings = useMemo<GallerySettings>(
-    () => ({ ...getGallerySettings(galleryValues), paginationMode: 'infinite', starredFirst: true }),
+    () => ({ ...getGallerySettings(galleryValues), paginationMode: 'infinite' }),
     [galleryValues]
   );
   const data = useGalleryData({

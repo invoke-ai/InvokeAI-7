@@ -3,6 +3,8 @@ import type {
   CanvasDiagnosticsCapability,
   CanvasEngine,
   CanvasEngineExportCapability,
+  CanvasFontCapability,
+  CanvasFontReplacementResult,
   CanvasEngineLayerCapability,
   CanvasEnginePreviewCapability,
   CanvasEngineToolCapability,
@@ -72,7 +74,7 @@ import type {
   CanvasLayerSourceContract,
 } from '@workbench/canvas-engine/contracts';
 import type { CreatePath2D } from '@workbench/canvas-engine/freehand';
-import type { FontLoadApi } from '@workbench/canvas-engine/render/fontLoader';
+import type { CanvasFontRuntime, CanvasTextSource, FontLoadApi } from '@workbench/canvas-engine/render/fontLoader';
 import type { LayerCacheEntry, LayerCacheStore } from '@workbench/canvas-engine/render/layerCache';
 import type { OverlayCursor } from '@workbench/canvas-engine/render/overlayRenderer';
 import type { RenderScheduler } from '@workbench/canvas-engine/render/scheduler';
@@ -120,6 +122,7 @@ import {
   type EngineStores,
   type ScalarStore,
   type TextStylePatch,
+  type TextToolOptions,
 } from '@workbench/canvas-engine/engineStores';
 import {
   exportRasterComposite as exportRasterCompositeWithDeps,
@@ -171,6 +174,7 @@ import { createBitmapStore, type BitmapStore } from './document/bitmapStore';
 import { createDocumentMirror, type DocumentMirror } from './document/documentMirror';
 import { decideLayerChange } from './document/layerChangeDecision';
 import { getSourceBounds, getSourceContentRect, isRenderableLayer, renderableSourceOf } from './document/sources';
+import { collectCanvasFontReferences, replaceCanvasFontReferences } from './fontReferences';
 import { createLayerExportGuards, isSupportedExportSource } from './layerExportGuards';
 import { createLayerRasterizer } from './layerRasterizer';
 import { createPreviewPublisher } from './previewPublisher';
@@ -277,7 +281,7 @@ export interface CanvasEngineOptions {
    * pending font loads. Defaults to the browser's `document.fonts` (or a no-op
    * in node). Tests inject a fake to drive the load without a real FontFaceSet.
    */
-  fonts?: FontLoadApi | null;
+  fonts?: FontLoadApi | CanvasFontRuntime | null;
   /** Enables deterministic raster/render counters. Disabled by default. */
   enableDiagnostics?: boolean;
 }
@@ -419,7 +423,7 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
   // resolves (a no-op in node / when `document.fonts` is absent). `undefined`
   // opts.fonts falls back to the DOM api; an explicit `null` forces the no-op.
   const fontLoader = createFontLoader(opts.fonts === undefined ? domFontLoadApi() : opts.fonts);
-
+  let syncActiveFontSources: () => void = () => undefined;
   const tools = new Map<ToolId, Tool>([
     ['view', createViewTool()],
     ['brush', createBrushTool()],
@@ -920,6 +924,7 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
       onChange: () => stores.hasFloatingSelection.set(floatingSelection.has()),
     },
     getDocument: () => mirror.getDocument(),
+    history,
     selection: {
       backend,
       createPath2D: createPath2DImpl,
@@ -1202,6 +1207,7 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
     bitmapPool: rasterController.bitmaps,
     documentSize: { height: doc.height, width: doc.width },
     resolver: imageResolver,
+    resolveFontFamily: fontLoader.resolveFamily,
     signal,
     store: layerCache,
   });
@@ -1259,6 +1265,35 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
     inverse: CanvasProjectMutation,
     options?: StructuralCommitOptions
   ): StructuralCommitResult => structuralController.commit(label, forward, inverse, options);
+  const replaceAllFontReferences = (
+    from: Parameters<CanvasFontCapability['replaceAllReferences']>[0],
+    target: Parameters<CanvasFontCapability['replaceAllReferences']>[1]
+  ): CanvasFontReplacementResult => {
+    const before = mirror.getDocument();
+    if (!before) {
+      return { status: 'not-ready' };
+    }
+    const expectedRevision = mutationContext.getEditRevision();
+    const summary = replaceCanvasFontReferences(before, from, target);
+    if (summary.replacedCount === 0) {
+      return { ...summary, status: 'unchanged' };
+    }
+    const result = commitStructural(
+      'Replace missing font',
+      { document: summary.document, type: 'replaceCanvasFontReferences' },
+      { document: before, type: 'replaceCanvasFontReferences' },
+      { expectedRevision }
+    );
+    return result.status === 'committed' ? { ...summary, status: 'committed' } : result;
+  };
+  const fonts: CanvasFontCapability = {
+    collectReferences: collectCanvasFontReferences,
+    ensurePreview: fontLoader.ensurePreview,
+    replaceAllReferences: replaceAllFontReferences,
+    resolveFamily: fontLoader.resolveFamily,
+    subscribe: fontLoader.subscribe,
+    waitForReady: fontLoader.waitForReady,
+  };
   const nudgeSelectedLayer = (dx: number, dy: number): StructuralCommitResult => structuralController.nudge(dx, dy);
   // Tools commit at pointer-up with nowhere to show a refusal; contention is expected, anything else is logged.
   const commitToolStructural = (
@@ -1283,11 +1318,13 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
     isRasterizing: isCurrentRasterizationJob,
     isSupportedSource: isSupportedExportSource,
     layers: layerCache,
+    invalidateLayerCache,
     pin: (layerId) => rasterController.memory.pin(layerId, lifecycleGeneration),
     reserve: (bytes) => {
       syncMemoryBaselines();
       return rasterController.memory.reserve(bytes, { generation: lifecycleGeneration, purpose: 'raster-export' });
     },
+    waitForFont: fontLoader.waitForReady,
   });
   const rasterizeLayerPixels = rasterExportController.rasterize.bind(rasterExportController);
   const prepareLayerRasterCache = async (layerId: string) => {
@@ -1560,7 +1597,7 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
       // A float belongs to the outgoing document's layer. Cancel (not commit):
       // the layer it would bake into is about to be replaced.
       cleanup.run(() => floatingSelection.cancel());
-      cleanup.run(() => selection.clear());
+      cleanup.run(() => editingController.discardSelection());
       cleanup.run(() => stores.lassoPreview.set(null));
       cleanup.run(() => stores.marqueePreview.set(null));
       const doc = mirror.getDocument();
@@ -1741,6 +1778,44 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
     onStagingChanged: () => scheduler.invalidate({ overlay: true }),
   });
 
+  let fontSourceStacks: CanvasDocumentContractV3['stacks'] | null = null;
+  let documentFontSources: CanvasTextSource[] = [];
+  let draftFontSource: CanvasTextSource | undefined;
+  let defaultsFontOptions: TextToolOptions | undefined;
+  let defaultsFontSource: CanvasTextSource | undefined;
+  syncActiveFontSources = () => {
+    const document = mutationPort.getCanvasState()?.document;
+    const stacks = document?.stacks ?? null;
+    const draft = document ? stores.textEditSession.get()?.source : undefined;
+    // The text defaults are active too: the pane previews them, and the next
+    // created text rasterizes with them.
+    const options = document ? stores.textOptions.get() : undefined;
+    if (stacks === fontSourceStacks && draft === draftFontSource && options === defaultsFontOptions) {
+      return;
+    }
+    if (stacks !== fontSourceStacks) {
+      fontSourceStacks = stacks;
+      documentFontSources = document
+        ? getDocumentLeaves(document).flatMap((layer) =>
+            (layer.type === 'raster' || layer.type === 'control') && layer.source.type === 'text' ? [layer.source] : []
+          )
+        : [];
+    }
+    if (options !== defaultsFontOptions) {
+      defaultsFontOptions = options;
+      defaultsFontSource = options ? { ...options, color: '#000000', content: '', type: 'text' } : undefined;
+    }
+    draftFontSource = draft;
+    fontLoader.setActiveSources([
+      ...documentFontSources,
+      ...(draft ? [draft] : []),
+      ...(defaultsFontSource ? [defaultsFontSource] : []),
+    ]);
+  };
+  syncActiveFontSources();
+  const unsubscribeTextFontSources = stores.textEditSession.subscribe(syncActiveFontSources);
+  const unsubscribeTextDefaultsFontSources = stores.textOptions.subscribe(syncActiveFontSources);
+
   for (const layer of getDocumentLeaves(mirror.getDocument())) {
     rasterController.setThumbnailKey(layer.id, getLayerThumbnailDisplayKey(layer));
     const imageName = layerImageName(layer);
@@ -1754,6 +1829,7 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
   // this project cannot resurrect it.
   let projectWasPresent = mutationPort.getCanvasState() !== null;
   const unsubscribeProjectPreviewLifecycle = mutationPort.subscribe(() => {
+    syncActiveFontSources();
     const projectIsPresent = mutationPort.getCanvasState() !== null;
     if (projectWasPresent && !projectIsPresent) {
       const cleanup = createCleanupAccumulator();
@@ -2505,7 +2581,14 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
   const setTextEditContentReader = (reader: (() => string) | null): void =>
     editingController.text.setContentReader(reader);
   const openTextCreate = (point: Vec2): void => editingController.text.openCreate(point);
-  const openTextEdit = (layerId: string): void => editingController.text.openEdit(layerId);
+  // The pane keeps styling the layer after the portal's blur commits the
+  // session, so opening an edit also makes that layer the document selection.
+  const openTextEdit = (layerId: string): void => {
+    editingController.text.openEdit(layerId);
+    if (stores.textEditSession.get()?.layerId === layerId && mirror.getDocument()?.selectedLayerId !== layerId) {
+      dispatchCanvasMutation({ id: layerId, type: 'setCanvasSelectedLayer' });
+    }
+  };
   const updateTextEditStyle = (patch: TextStylePatch): void => editingController.text.updateStyle(patch);
   const cancelTextEdit = (): void => editingController.text.cancel();
   const commitTextEdit = (content: string, styleChanges?: TextStylePatch): StructuralCommitResult | null =>
@@ -2630,6 +2713,8 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
     cleanup.run(unsubscribeBboxOverlay);
     cleanup.run(unsubscribeRuleOfThirds);
     cleanup.run(unsubscribeProjectPreviewLifecycle);
+    cleanup.run(unsubscribeTextFontSources);
+    cleanup.run(unsubscribeTextDefaultsFontSources);
     cleanup.run(() => mutationContext.dispose());
     cleanup.run(unsubscribeHistoryEpoch);
     cleanup.run(() => historyController.dispose());
@@ -2638,6 +2723,7 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
     cleanup.run(() => previewPublisher.dispose());
     cleanup.run(() => renderController.dispose());
     cleanup.run(() => rasterController.dispose());
+    cleanup.run(() => fontLoader.dispose());
     cleanup.run(() => stores.thumbnailStatus.clear());
     cleanup.run(() => strokeListeners.clear());
     cleanup.run(() => toolChangeListeners.clear());
@@ -3188,6 +3274,7 @@ export const createCanvasEngine = (opts: CanvasEngineOptions): CanvasEngineCoreC
     document: documentCapability,
     edits: editingController.edits,
     exports: exportCapability,
+    fonts,
     history: historyCapability,
     interaction,
     lifecycle,

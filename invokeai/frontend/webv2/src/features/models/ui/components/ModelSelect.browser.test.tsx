@@ -140,6 +140,31 @@ describe('ModelSelect loading states', () => {
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ key: 'sdxl-main' }));
   });
 
+  it('remembers the base filter across a close and reopen', async () => {
+    const sd1Main = { ...model, base: 'sd-1', key: 'sd1-main', name: 'SD1 Main' } as ModelConfig;
+    setModelsSnapshotForTests({ error: null, models: [model, sd1Main], status: 'loaded' });
+    await renderPicker({ id: 'test-base-filter' });
+
+    const chip = () =>
+      Array.from(document.querySelectorAll<HTMLElement>('[data-scope="popover"] [role="button"][aria-pressed]')).find(
+        (badge) => badge.textContent === 'SDXL'
+      ) ?? null;
+    await expect.poll(chip).not.toBeNull();
+    await act(() => chip()!.click());
+    await expect.poll(() => chip()?.getAttribute('aria-pressed')).toBe('true');
+    await expect
+      .poll(() => [...document.querySelectorAll('[role="option"]')].map((option) => option.textContent ?? ''))
+      .not.toContainEqual(expect.stringContaining('SD1 Main'));
+
+    await act(() => host.querySelector<HTMLButtonElement>('[aria-haspopup="listbox"]')?.click());
+    await act(() => host.querySelector<HTMLButtonElement>('[aria-haspopup="listbox"]')?.click());
+
+    await expect.poll(() => chip()?.getAttribute('aria-pressed')).toBe('true');
+    await expect
+      .poll(() => [...document.querySelectorAll('[role="option"]')].map((option) => option.textContent ?? ''))
+      .not.toContainEqual(expect.stringContaining('SD1 Main'));
+  });
+
   it('remembers the compact row density across a close and reopen', async () => {
     setModelsSnapshotForTests({ error: null, models: [model, secondSdxlModel], status: 'loaded' });
     await renderPicker({ id: 'test-compact' });

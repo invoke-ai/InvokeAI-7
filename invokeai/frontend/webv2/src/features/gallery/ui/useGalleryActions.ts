@@ -205,6 +205,7 @@ export const useGalleryActions = ({
       selectItemRange: (items, primaryItem) => gallery.setItemMultiSelection(items.map(toGalleryItemKey), primaryItem),
       setCompareItem: gallery.setCompareItem,
       setSearchTerm: gallery.setSearchTerm,
+      setStarredOnly: gallery.setStarredOnly,
       // The similarity reference is widget state rather than a workbench
       // command: it patches the gallery widget's persisted values, the same
       // surface the parsed query is read back from. Changing the query resets

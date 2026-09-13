@@ -1,43 +1,78 @@
-import type { SettingsSectionId } from '@workbench/widgetContracts';
-
 import { registerAccountOwnedResource } from '@platform/state/accountLifecycle';
 import { createExternalStore } from '@platform/state/externalStore';
 
-/**
- * Open/close state for the workbench settings dialog, addressable from
- * anywhere: widget frames, menus, and commands call `openWorkbenchSettings`
- * with the section they want. The dialog itself is hosted by the top bar's
- * `SettingsButton`, which subscribes to this store.
- */
+import type { SettingsDestination, SettingsSectionId } from './contracts';
 
-interface SettingsDialogSnapshot {
+import { settingsDialogResource } from './dialogResource';
+
+interface SettingsDialogSnapshot extends SettingsDestination {
   isOpen: boolean;
-  sectionId: SettingsSectionId;
+  query: string;
+  searchSection: string | null;
+  returnFocus: HTMLElement | null;
+  generation: number;
 }
-
-const INITIAL_SETTINGS_DIALOG_SNAPSHOT: SettingsDialogSnapshot = {
+const initialSnapshot = (): SettingsDialogSnapshot => ({
   isOpen: false,
   sectionId: 'appearance',
+  query: '',
+  searchSection: null,
+  returnFocus: null,
+  generation: 0,
+});
+export const settingsDialogStore = createExternalStore<SettingsDialogSnapshot>(initialSnapshot());
+const sectionScrollPositions = new Map<SettingsSectionId, number>();
+export const getSettingsSectionScroll = (sectionId: SettingsSectionId): number =>
+  sectionScrollPositions.get(sectionId) ?? 0;
+export const rememberSettingsSectionScroll = (sectionId: SettingsSectionId, offset: number): void => {
+  sectionScrollPositions.set(sectionId, offset);
 };
-
-export const settingsDialogStore = createExternalStore<SettingsDialogSnapshot>(INITIAL_SETTINGS_DIALOG_SNAPSHOT);
-
 registerAccountOwnedResource({
-  clear: () => {
-    settingsDialogStore.setSnapshot(INITIAL_SETTINGS_DIALOG_SNAPSHOT);
-  },
   name: 'settings-dialog',
+  clear: () => {
+    sectionScrollPositions.clear();
+    settingsDialogStore.setSnapshot({
+      ...initialSnapshot(),
+      generation: settingsDialogStore.getSnapshot().generation + 1,
+    });
+  },
 });
 
-/** Open the workbench settings dialog, optionally at a specific section. */
-export const openWorkbenchSettings = (sectionId: SettingsSectionId = 'appearance'): void => {
-  settingsDialogStore.setSnapshot({ isOpen: true, sectionId });
+export const openWorkbenchSettings = (
+  destination?: SettingsSectionId | SettingsDestination,
+  returnFocus?: HTMLElement
+): void => {
+  settingsDialogResource.preload();
+  const current = settingsDialogStore.getSnapshot();
+  const next = typeof destination === 'string' ? { sectionId: destination } : destination;
+  settingsDialogStore.setSnapshot({
+    ...current,
+    isOpen: true,
+    query: '',
+    searchSection: null,
+    entryId: undefined,
+    target: undefined,
+    ...next,
+    returnFocus:
+      returnFocus ??
+      (typeof document !== 'undefined' && document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null),
+  });
 };
-
 export const closeWorkbenchSettings = (): void => {
   settingsDialogStore.patchSnapshot({ isOpen: false });
 };
-
-export const setWorkbenchSettingsSection = (sectionId: SettingsSectionId): void => {
-  settingsDialogStore.patchSnapshot({ sectionId });
+export const setWorkbenchSettingsSection = (sectionId: SettingsSectionId, entryId?: string): void => {
+  settingsDialogStore.patchSnapshot({
+    sectionId,
+    entryId,
+    query: '',
+    searchSection: null,
+    target:
+      settingsDialogStore.getSnapshot().sectionId === sectionId ? settingsDialogStore.getSnapshot().target : undefined,
+  });
+};
+export const setSettingsQuery = (query: string): void => {
+  settingsDialogStore.patchSnapshot({ query, searchSection: null, entryId: undefined });
 };

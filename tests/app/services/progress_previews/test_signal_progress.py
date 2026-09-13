@@ -70,3 +70,20 @@ def test_imageless_progress_is_neither_throttled_nor_revisioned() -> None:
     assert len(events.emitted) == 2
     assert all("revision" not in call and call.get("image") is None for call in events.emitted)
     assert previews.get(7) is None
+
+
+def test_signal_progress_flushes_a_deferred_empty_cache(monkeypatch) -> None:
+    """Every denoise loop reports progress once per step, which is the busy worker's natural
+    boundary for performing a process-global empty_cache that a peer deferred. Both the
+    imageless and the image-bearing paths must reach the flush."""
+    from invokeai.backend.util.devices import TorchDevice
+
+    flushes: list[int] = []
+    monkeypatch.setattr(TorchDevice, "flush_deferred_empty_cache", classmethod(lambda cls: flushes.append(1)))
+    clock = _Clock()
+    util, _events, _previews = _util(clock)
+
+    util.signal_progress("Denoising", 0.1)
+    assert len(flushes) == 1
+    util.signal_progress("Denoising", 0.2, Image.new("RGB", (8, 8)), (64, 64))
+    assert len(flushes) == 2

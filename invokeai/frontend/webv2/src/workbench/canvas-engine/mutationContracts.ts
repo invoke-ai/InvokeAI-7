@@ -156,6 +156,8 @@ export type CanvasProjectMutation =
   | { type: 'setCanvasBbox'; bbox: CanvasDocumentContractV3['bbox'] }
   | { type: 'setCanvasSelectedLayer'; id: string | null }
   | { type: 'resizeCanvasDocument'; width: number; height: number; offsetX?: number; offsetY?: number }
+  /** Replaces text sources while preserving the document revision for one undoable font recovery edit. */
+  | { type: 'replaceCanvasFontReferences'; document: CanvasDocumentContractV3 }
   | { type: 'replaceCanvasDocument'; document: CanvasDocumentContractV3 }
   | { type: 'saveCanvasSnapshot'; id: string; name: string; createdAt: string }
   | { type: 'restoreCanvasSnapshot'; snapshotId: string }

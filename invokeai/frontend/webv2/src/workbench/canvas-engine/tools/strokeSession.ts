@@ -76,7 +76,7 @@ export interface StrokeSessionConfig {
    * already opaque, alpha never grows).
    */
   composite: 'source-over' | 'destination-out' | 'source-atop';
-  tool: 'brush' | 'eraser';
+  tool: 'brush' | 'eraser' | 'shape';
   /** Set only when this gesture auto-created its paint layer (for the composed history entry). */
   createdLayer?: { layer: CanvasLayerContract; anchor: CanvasNodeInsertionAnchor } | null;
   /**

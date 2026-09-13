@@ -10,6 +10,8 @@ import { apiFetchJson } from '@platform/transport/http';
 
 const QUEUE_ID = 'default';
 const QUEUE_MUTATION_CONCURRENCY = 8;
+/** The backend's per-request cap on hydrating items by id (`MAX_QUEUE_ITEM_IDS_PER_REQUEST`). */
+const QUEUE_ITEM_IDS_PER_REQUEST = 1000;
 const buildQueueUrl = (path = ''): string => `/api/v1/queue/${QUEUE_ID}/${path}`;
 
 const buildQueryString = (params: Record<string, string | undefined>): string => {
@@ -89,16 +91,20 @@ export const getQueueItemIds = (
     { signal }
   );
 
-export const getQueueItemsByIds = (itemIds: number[], signal?: AbortSignal): Promise<QueueServerItemDTO[]> => {
-  if (itemIds.length === 0) {
-    return Promise.resolve([]);
+/** Hydrates items in id order, one bounded request per page of ids. */
+export const getQueueItemsByIds = async (itemIds: number[], signal?: AbortSignal): Promise<QueueServerItemDTO[]> => {
+  const items: QueueServerItemDTO[] = [];
+
+  for (let start = 0; start < itemIds.length; start += QUEUE_ITEM_IDS_PER_REQUEST) {
+    const page = await apiFetchJson<QueueServerItemDTO[]>(buildQueueUrl('items_by_ids'), {
+      body: JSON.stringify({ item_ids: itemIds.slice(start, start + QUEUE_ITEM_IDS_PER_REQUEST) }),
+      method: 'POST',
+      signal,
+    });
+    items.push(...page);
   }
 
-  return apiFetchJson<QueueServerItemDTO[]>(buildQueueUrl('items_by_ids'), {
-    body: JSON.stringify({ item_ids: itemIds }),
-    method: 'POST',
-    signal,
-  });
+  return items;
 };
 
 export const clearQueue = (signal?: AbortSignal): Promise<unknown> =>
@@ -148,8 +154,17 @@ export const clearScopedQueue = async (scope: QueueQueryScope = {}): Promise<voi
   assertAccountScopeCurrent(owner);
 };
 
-export const cancelAllExceptCurrent = (signal?: AbortSignal): Promise<unknown> =>
-  apiFetchJson(buildQueueUrl('cancel_all_except_current'), { method: 'PUT', signal });
+export const cancelAllExceptCurrent = (scope: QueueQueryScope = {}, signal?: AbortSignal): Promise<unknown> =>
+  apiFetchJson(buildQueueUrl(`cancel_all_except_current${buildQueryString({ origin_prefix: scope.originPrefix })}`), {
+    method: 'PUT',
+    signal,
+  });
+
+export const cancelAll = (scope: QueueQueryScope = {}, signal?: AbortSignal): Promise<unknown> =>
+  apiFetchJson(buildQueueUrl(`cancel_all${buildQueryString({ origin_prefix: scope.originPrefix })}`), {
+    method: 'PUT',
+    signal,
+  });
 
 export const cancelQueueItem = (itemId: number, signal?: AbortSignal): Promise<unknown> =>
   apiFetchJson(buildQueueUrl(`i/${itemId}/cancel`), { method: 'PUT', signal });
@@ -165,27 +180,14 @@ export const cancelCurrentQueueItem = async (): Promise<void> => {
   }
 };
 
+/** Cancels the scope in one server-side sweep; `keepCurrent` spares whatever is in progress. */
 export const cancelScopedQueueItems = async (
   scope: QueueQueryScope = {},
-  currentItemId?: number | null
+  options: { keepCurrent?: boolean } = {}
 ): Promise<void> => {
   const owner = captureAccountScope();
-  const idsResult = await getQueueItemIds('desc', scope, owner.signal);
 
-  assertAccountScopeCurrent(owner);
-  const items = await getQueueItemsByIds(idsResult.item_ids, owner.signal);
-
-  assertAccountScopeCurrent(owner);
-  const cancellableItemIds = items
-    .filter(
-      (item) =>
-        item.user_id !== 'redacted' &&
-        item.item_id !== currentItemId &&
-        (item.status === 'pending' || item.status === 'in_progress')
-    )
-    .map((item) => item.item_id);
-
-  await cancelQueueItems(cancellableItemIds, owner.signal);
+  await (options.keepCurrent ? cancelAllExceptCurrent(scope, owner.signal) : cancelAll(scope, owner.signal));
   assertAccountScopeCurrent(owner);
 };
 

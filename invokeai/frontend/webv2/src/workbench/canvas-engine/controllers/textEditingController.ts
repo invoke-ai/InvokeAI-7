@@ -37,14 +37,52 @@ export interface TextEditingControllerOptions {
   readonly invalidate: (payload: { layers?: string[]; overlay?: true }) => void;
 }
 
+const fontRefEqual = (left: TextSource['fontRef'], right: TextSource['fontRef']): boolean =>
+  left === right ||
+  (left !== undefined &&
+    right !== undefined &&
+    left.id === right.id &&
+    left.contentHash === right.contentHash &&
+    left.family === right.family &&
+    left.label === right.label);
+
+const fontVariationsEqual = (left: TextSource['fontVariations'], right: TextSource['fontVariations']): boolean => {
+  const leftEntries = Object.entries(left ?? {});
+  const rightEntries = Object.entries(right ?? {});
+  return (
+    leftEntries.length === rightEntries.length &&
+    leftEntries.every(([tag, value]) => (right?.[tag] ?? undefined) === value)
+  );
+};
+
 const sourcesEqual = (left: TextSource, right: TextSource): boolean =>
   left.content === right.content &&
   left.fontFamily === right.fontFamily &&
   left.fontSize === right.fontSize &&
   left.fontWeight === right.fontWeight &&
+  fontRefEqual(left.fontRef, right.fontRef) &&
+  (left.fontStyle ?? 'normal') === (right.fontStyle ?? 'normal') &&
+  fontVariationsEqual(left.fontVariations, right.fontVariations) &&
   left.lineHeight === right.lineHeight &&
   left.align === right.align &&
   left.color === right.color;
+
+/** Keeps default typography out of new documents while accepting older explicit defaults. */
+const canonicalizeSource = (source: TextSource): TextSource => {
+  const next: TextSource = { ...source };
+  if (next.fontRef) {
+    next.fontRef = { ...next.fontRef };
+  }
+  if (next.fontStyle === 'normal') {
+    delete next.fontStyle;
+  }
+  if (!next.fontVariations || Object.keys(next.fontVariations).length === 0) {
+    delete next.fontVariations;
+  } else {
+    next.fontVariations = { ...next.fontVariations };
+  }
+  return next;
+};
 
 /** Owns create/edit text session state and its structural commits. */
 export class TextEditingController {
@@ -56,7 +94,7 @@ export class TextEditingController {
 
   private sourceFromOptions(content: string): TextSource {
     const options = this.deps.options.get();
-    return {
+    const source: TextSource = {
       align: options.align,
       color: this.deps.colors.get().foreground,
       content,
@@ -66,6 +104,16 @@ export class TextEditingController {
       lineHeight: options.lineHeight,
       type: 'text',
     };
+    if (options.fontRef) {
+      source.fontRef = { ...options.fontRef };
+    }
+    if (options.fontStyle && options.fontStyle !== 'normal') {
+      source.fontStyle = options.fontStyle;
+    }
+    if (options.fontVariations && Object.keys(options.fontVariations).length > 0) {
+      source.fontVariations = { ...options.fontVariations };
+    }
+    return canonicalizeSource(source);
   }
 
   setContentReader(reader: (() => string) | null): void {
@@ -101,8 +149,8 @@ export class TextEditingController {
       id: ++this.sessionId,
       layerId,
       mode: 'edit',
-      source: { ...layer.source },
-      startSource: { ...layer.source },
+      source: canonicalizeSource(layer.source),
+      startSource: canonicalizeSource(layer.source),
       transform: { ...layer.transform },
     });
     this.deps.invalidate({ layers: [layerId] });
@@ -113,7 +161,11 @@ export class TextEditingController {
     if (this.disposed || !session) {
       return;
     }
-    this.deps.session.set({ ...session, source: { ...session.source, ...patch } });
+    const source = canonicalizeSource({ ...session.source, ...patch });
+    if ('fontRef' in patch) {
+      source.fontRef = patch.fontRef ? { ...patch.fontRef } : undefined;
+    }
+    this.deps.session.set({ ...session, source });
   }
 
   cancel(): void {
@@ -139,7 +191,7 @@ export class TextEditingController {
     if (!session) {
       return null;
     }
-    const finalSource: TextSource = { ...session.source, ...styleChanges, content };
+    const finalSource = canonicalizeSource({ ...session.source, ...styleChanges, content });
     if (session.mode === 'create') {
       if (content.trim() === '') {
         this.cancel();

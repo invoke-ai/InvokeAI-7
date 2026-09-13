@@ -28,25 +28,39 @@ describe('external image registry', () => {
 
 describe('image cluster registry', () => {
   it('holds a single slot: registering a new cluster evicts the previous one', () => {
-    const firstId = registerImageCluster(['a.png', 'b.png'], 'first cluster');
+    const firstId = registerImageCluster(['image:a.png', 'image:b.png'], 'first cluster');
 
-    expect(getImageCluster(firstId)).toEqual({ imageNames: ['a.png', 'b.png'], label: 'first cluster' });
+    expect(getImageCluster(firstId)).toEqual({ itemKeys: ['image:a.png', 'image:b.png'], label: 'first cluster' });
 
-    const secondId = registerImageCluster(['c.png'], 'second cluster');
+    const secondId = registerImageCluster(['image:c.png'], 'second cluster');
 
     expect(secondId).not.toBe(firstId);
     expect(getImageCluster(firstId)).toBe(null);
-    expect(getImageCluster(secondId)).toEqual({ imageNames: ['c.png'], label: 'second cluster' });
+    expect(getImageCluster(secondId)).toEqual({ itemKeys: ['image:c.png'], label: 'second cluster' });
+  });
+
+  it('prunes a deleted video member, which is why the delete patch keys by kind', () => {
+    // Video deletions used to be filtered out of the prune, so a cluster kept
+    // counting a clip that no longer existed: the member list is client-owned,
+    // so no refetch reconciles it, and the trailing page holds a cell that can
+    // never hydrate.
+    const clusterId = registerImageCluster(['image:a.png', 'video:clip.mp4'], 'beaches');
+
+    const rollback = pruneImageClusterMembers(['video:clip.mp4']);
+
+    expect(getImageCluster(clusterId)?.itemKeys).toEqual(['image:a.png']);
+    rollback();
+    expect(getImageCluster(clusterId)?.itemKeys).toEqual(['image:a.png', 'video:clip.mp4']);
   });
 
   it('prunes deleted members with a rollback, preserving order', () => {
-    const clusterId = registerImageCluster(['a.png', 'b.png', 'c.png'], 'beaches');
-    const rollback = pruneImageClusterMembers(['b.png', 'unrelated.png']);
+    const clusterId = registerImageCluster(['image:a.png', 'image:b.png', 'image:c.png'], 'beaches');
+    const rollback = pruneImageClusterMembers(['image:b.png', 'image:unrelated.png']);
 
-    expect(getImageCluster(clusterId)?.imageNames).toEqual(['a.png', 'c.png']);
+    expect(getImageCluster(clusterId)?.itemKeys).toEqual(['image:a.png', 'image:c.png']);
 
     rollback();
-    expect(getImageCluster(clusterId)?.imageNames).toEqual(['a.png', 'b.png', 'c.png']);
+    expect(getImageCluster(clusterId)?.itemKeys).toEqual(['image:a.png', 'image:b.png', 'image:c.png']);
   });
 
   it('rolls back only its own removals when another prune interleaves', () => {
@@ -55,31 +69,31 @@ describe('image cluster registry', () => {
     // resurrect the second deletion's image; an identity guard would skip the
     // restore entirely and strand the failed deletion's image outside the
     // cluster for good.
-    const clusterId = registerImageCluster(['a.png', 'b.png', 'c.png'], 'beaches');
-    const rollbackFirst = pruneImageClusterMembers(['a.png']);
+    const clusterId = registerImageCluster(['image:a.png', 'image:b.png', 'image:c.png'], 'beaches');
+    const rollbackFirst = pruneImageClusterMembers(['image:a.png']);
 
-    pruneImageClusterMembers(['b.png']);
-    expect(getImageCluster(clusterId)?.imageNames).toEqual(['c.png']);
+    pruneImageClusterMembers(['image:b.png']);
+    expect(getImageCluster(clusterId)?.itemKeys).toEqual(['image:c.png']);
 
     rollbackFirst();
-    expect(getImageCluster(clusterId)?.imageNames).toEqual(['a.png', 'c.png']);
+    expect(getImageCluster(clusterId)?.itemKeys).toEqual(['image:a.png', 'image:c.png']);
   });
 
   it('makes pruning a no-op when nothing matches, and rollback a no-op once superseded', () => {
-    const clusterId = registerImageCluster(['a.png'], 'beaches');
+    const clusterId = registerImageCluster(['image:a.png'], 'beaches');
 
     // Nothing to prune: the entry is untouched.
-    pruneImageClusterMembers(['other.png']);
-    expect(getImageCluster(clusterId)?.imageNames).toEqual(['a.png']);
+    pruneImageClusterMembers(['image:other.png']);
+    expect(getImageCluster(clusterId)?.itemKeys).toEqual(['image:a.png']);
 
     // A rollback captured before a newer registration must not resurrect the
     // old list into the newer cluster's slot.
-    const rollback = pruneImageClusterMembers(['a.png']);
-    const newerId = registerImageCluster(['x.png'], 'newer');
+    const rollback = pruneImageClusterMembers(['image:a.png']);
+    const newerId = registerImageCluster(['image:x.png'], 'newer');
 
     rollback();
     expect(getImageCluster(clusterId)).toBe(null);
-    expect(getImageCluster(newerId)?.imageNames).toEqual(['x.png']);
+    expect(getImageCluster(newerId)?.itemKeys).toEqual(['image:x.png']);
   });
 });
 
@@ -150,7 +164,7 @@ describe('parseGallerySemanticReference', () => {
   });
 
   it('parses cluster references while registered and drops dangling cluster keys', () => {
-    const clusterId = registerImageCluster(['a.png', 'b.png'], 'beaches');
+    const clusterId = registerImageCluster(['image:a.png', 'image:b.png'], 'beaches');
 
     expect(parseGallerySemanticReference({ clusterId, kind: 'cluster', label: 'beaches' })).toEqual({
       clusterId,
@@ -166,7 +180,7 @@ describe('parseGallerySemanticReference', () => {
     });
     // Registering evicts prior entries, so a stale key reads as no search —
     // exactly how a reload behaves.
-    registerImageCluster(['c.png'], 'newer');
+    registerImageCluster(['image:c.png'], 'newer');
     expect(parseGallerySemanticReference({ clusterId, kind: 'cluster', label: 'beaches' })).toBe(null);
   });
 });

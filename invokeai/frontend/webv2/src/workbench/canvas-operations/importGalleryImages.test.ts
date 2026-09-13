@@ -382,6 +382,23 @@ describe('importGalleryImagesToCanvas', () => {
     expect(dispatch).not.toHaveBeenCalled();
   });
 
+  it('ingests through the reducer when the active project has no live engine', async () => {
+    const { project, state } = withProject();
+    const dispatch = vi.fn<(action: WorkbenchAction) => void>();
+    const result = await importGalleryImagesToCanvas({
+      destination: 'raster',
+      applyCanvasMutation: (projectId, mutation) =>
+        dispatch({ mutation, projectId, type: 'applyCanvasProjectMutation' }),
+      engine: null,
+      ...queriesFor(() => state),
+      images: [image('a.png')],
+      project,
+    });
+    expect(result.status).toBe('imported');
+    expect(dispatch).toHaveBeenCalledOnce();
+    expect(getForwardLayers(dispatch.mock.calls[0]![0]).map((layer) => layer.type)).toEqual(['raster']);
+  });
+
   it('blocks a locked matching engine before resized preprocessing', async () => {
     const { project, state } = withProject();
     const fetchImage = vi.fn<typeof fetch>();

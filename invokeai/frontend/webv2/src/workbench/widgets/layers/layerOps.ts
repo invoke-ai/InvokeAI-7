@@ -25,6 +25,7 @@ import type {
 
 export type { CanvasStructuralEngine } from '@workbench/canvas-engine/api';
 
+import { getRegionalGuidanceSupport } from '@features/generation/graph';
 import { getSourceContentRect, isMergeableRasterLayer, mergeDownEligibility } from '@workbench/canvas-engine/api';
 import { CONTROL_ADAPTER_DEFAULTS } from '@workbench/controlAdapters';
 
@@ -287,7 +288,7 @@ export const createRegionalReferenceImage = (
   base: string | null,
   id: string = createReferenceImageId()
 ): RegionalGuidanceReferenceImage => {
-  if (base === 'flux') {
+  if (getRegionalGuidanceSupport(base)?.referenceImages === 'flux_redux') {
     return {
       config: { image: null, imageInfluence: 'highest', model: null, type: 'flux_redux' },
       id,
@@ -308,6 +309,10 @@ export const createRegionalReferenceImage = (
     isEnabled: true,
   };
 };
+
+/** Whether a regional reference image can be added; with no model selected every option stays open. */
+export const canAddRegionalReferenceImage = (base: string | null): boolean =>
+  base === null || Boolean(getRegionalGuidanceSupport(base)?.referenceImages);
 
 /**
  * Builds a regional-guidance layer pre-seeded with ONE empty reference image

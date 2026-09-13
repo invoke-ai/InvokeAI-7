@@ -23,7 +23,7 @@ from typing import Callable, Iterator, Optional
 
 import torch
 import torchvision.transforms as tv_transforms
-from torch.nn.attention import SDPBackend, sdpa_kernel
+from torch.nn.attention import SDPBackend
 from torchvision.transforms.functional import resize as tv_resize
 from torchvision.transforms.functional import to_tensor
 from tqdm import tqdm
@@ -68,6 +68,7 @@ from invokeai.backend.rectified_flow.rectified_flow_inpaint_extension import (
 from invokeai.backend.stable_diffusion.diffusers_pipeline import PipelineIntermediateState
 from invokeai.backend.stable_diffusion.diffusion.conditioning_data import AnimaConditioningInfo, Range
 from invokeai.backend.util.devices import TorchDevice
+from invokeai.backend.util.sdpa_scope import sdpa_policy
 
 # Anima uses 8x spatial compression (VAE downsamples by 2^3)
 ANIMA_LATENT_SCALE_FACTOR = 8
@@ -676,7 +677,7 @@ class AnimaDenoiseInvocation(BaseInvocation):
             # CUDA — elsewhere torch's default backend is already fast.
             if device.type == "cuda" and sys.platform == "win32":
                 exit_stack.enter_context(
-                    sdpa_kernel(
+                    sdpa_policy(
                         [
                             SDPBackend.CUDNN_ATTENTION,
                             SDPBackend.FLASH_ATTENTION,

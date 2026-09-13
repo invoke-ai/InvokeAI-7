@@ -11,6 +11,7 @@ import type { LucideIcon } from 'lucide-react';
 import {
   getDocumentIndex,
   getSourceContentRect,
+  isEmptyPolygonShape,
   isHideableLayer,
   isNodeHidden,
   isPixelBackedLayer,
@@ -52,7 +53,7 @@ import {
 } from 'lucide-react';
 
 import { COLOR_LABEL_ITEMS } from './colorLabels';
-import { canConvertRasterControl, canMergeLayerDown } from './layerOps';
+import { canAddRegionalReferenceImage, canConvertRasterControl, canMergeLayerDown } from './layerOps';
 
 export type LayerContextActionId =
   | 'add-reference-image'
@@ -276,7 +277,7 @@ const isParametricRasterizable = (layer: CanvasLayerContract): boolean =>
   layer.type === 'raster' &&
   (layer.source.type === 'gradient' ||
     layer.source.type === 'text' ||
-    (layer.source.type === 'shape' && layer.source.kind !== 'polygon'));
+    (layer.source.type === 'shape' && !isEmptyPolygonShape(layer.source)));
 
 const hasFilterableLayerContent = (context: LayerContextActionState): boolean => {
   if (!context.hasSupportedContent || (context.layer.type !== 'raster' && context.layer.type !== 'control')) {
@@ -291,7 +292,9 @@ const hasFilterableLayerContent = (context: LayerContextActionState): boolean =>
   if (context.layer.type !== 'raster') {
     return false;
   }
-  return source.type === 'text' || source.type === 'gradient' || (source.type === 'shape' && source.kind !== 'polygon');
+  return (
+    source.type === 'text' || source.type === 'gradient' || (source.type === 'shape' && !isEmptyPolygonShape(source))
+  );
 };
 
 /** Where the layer sits among its siblings (index 0 = top), or null when absent. */
@@ -546,7 +549,7 @@ export const LAYER_CONTEXT_ACTION_DEFINITIONS: readonly LayerContextActionDefini
     icon: ImagePlusIcon,
     id: 'add-reference-image',
     isEnabled: isLayerMutable,
-    isVisible: (context) => context.modelBase !== 'flux2',
+    isVisible: (context) => canAddRegionalReferenceImage(context.modelBase),
     labelKey: 'widgets.layers.regionalGuidance.addReferenceImage',
     order: 55,
     section: 'primary',

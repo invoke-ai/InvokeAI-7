@@ -866,6 +866,24 @@ describe('createDocumentModel', () => {
       expect(Object.hasOwn(mask, 'noise')).toBe(false);
     });
 
+    it('round-trips setting and clearing a regional prompt, which the layer stores as null', () => {
+      const project = projectWith([layer('g1', 'regional_guidance'), layer('r1')], 'g1');
+      const set = roundTrip(project, {
+        before: { layerType: 'regional_guidance', negativePrompt: null },
+        config: { layerType: 'regional_guidance', negativePrompt: 'blurry' },
+        id: 'g1',
+        type: 'patch-config',
+      });
+      const cleared = roundTrip(set.after, {
+        before: { layerType: 'regional_guidance', negativePrompt: 'blurry' },
+        config: { layerType: 'regional_guidance', negativePrompt: null },
+        id: 'g1',
+        type: 'patch-config',
+      });
+      const region = getDocumentLeaves(cleared.after.canvas.document).find((leaf) => leaf.id === 'g1')!;
+      expect(region).toMatchObject({ negativePrompt: null });
+    });
+
     it('round-trips an atomic cross-layer config batch and refuses malformed batches', () => {
       const ref = {
         config: {

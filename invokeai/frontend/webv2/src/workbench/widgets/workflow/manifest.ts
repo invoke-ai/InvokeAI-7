@@ -1,6 +1,7 @@
 import type { WidgetManifest } from '@workbench/widgetContracts';
 
 import { loadWorkflowWidgetHost, loadWorkflowWidgetImplementation } from '@features/workflow/widget';
+import { workflowSettings } from '@workbench/settings/applicationContributions';
 import { WorkflowIcon } from 'lucide-react';
 
 export const workflowWidgetManifest: WidgetManifest = {
@@ -18,6 +19,6 @@ export const workflowWidgetManifest: WidgetManifest = {
   label: (t) => t('widgets.labels.workflow'),
   load: loadWorkflowWidgetImplementation,
   loadHost: loadWorkflowWidgetHost,
-  settingsSection: 'workflow',
+  settings: workflowSettings,
   version: 1,
 };

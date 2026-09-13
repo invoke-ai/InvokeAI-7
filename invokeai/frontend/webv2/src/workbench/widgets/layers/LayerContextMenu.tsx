@@ -18,7 +18,7 @@ import type { ComponentProps, Dispatch, ReactNode } from 'react';
 import { HStack, Icon, Menu, Portal, Text } from '@chakra-ui/react';
 import { galleryTransfers } from '@features/gallery';
 import { useModelsSelector } from '@features/models';
-import { IconButton, MenuActionItem, MenuContent, RenameDialog, Tooltip } from '@platform/ui';
+import { IconButton, MenuActionItem, MenuContent, MenuIconItem, RenameDialog, Tooltip } from '@platform/ui';
 import {
   canMergeSelectedRasters,
   getDocumentIndex,
@@ -86,7 +86,7 @@ import {
   getLayerContextMenuLayout,
   getLayerContextMenuRenderEntries,
 } from './layerContextMenuLayout';
-import { copyBlobToClipboard, saveLayerToAssets } from './layerExportActions';
+import { copyLayerToClipboard, saveLayerToAssets } from './layerExportActions';
 import { canGroupSelection, groupLayers } from './layerGroupCommands';
 import { resolveMenuTargetForRender } from './layerMenuState';
 import {
@@ -587,11 +587,10 @@ const LayerMenu = ({
     if (!engine) {
       throw makeStatusError('not-ready');
     }
-    const result = await engine.exports.exportBakedLayerBlob(layer.id, { includeDisabled: true });
-    if (result.status !== 'ok') {
-      throw makeStatusError(result.status);
+    const status = await copyLayerToClipboard(layer.id, { exportLayer: engine.exports.exportBakedLayerBlob });
+    if (status !== 'ok') {
+      throw makeStatusError(status);
     }
-    await copyBlobToClipboard(result.blob);
   }, [engine, layer.id, makeStatusError]);
 
   const handleCropToBbox = useCallback(async () => {
@@ -1237,7 +1236,7 @@ const LayerMenuIconActionItem = ({
   const onSelect = useCallback(() => runAction(action), [action, runAction]);
 
   return (
-    <LayerMenuIconItem
+    <MenuIconItem
       disabled={action.isDisabled}
       icon={action.icon}
       label={t(action.labelKey, { count: action.labelCount, defaultValue: action.defaultLabel })}
@@ -1303,40 +1302,4 @@ const LayerMenuItem = ({
     value={value}
     onSelect={onSelect}
   />
-);
-
-const LayerMenuIconItem = ({
-  disabled,
-  icon,
-  label,
-  onSelect,
-  tone,
-  value,
-}: {
-  disabled?: boolean;
-  icon: LucideIcon;
-  label: string;
-  onSelect: () => void;
-  tone?: 'danger';
-  value: string;
-}) => (
-  <Tooltip
-    showArrow
-    content={label}
-    contentProps={QUICK_MENU_TOOLTIP_CONTENT_PROPS}
-    openDelay={300}
-    positioning={QUICK_MENU_TOOLTIP_POSITIONING_PROPS}
-  >
-    <Menu.Item
-      aria-label={label}
-      data-danger={tone === 'danger' ? '' : undefined}
-      disabled={disabled}
-      flex="1"
-      justifyContent="center"
-      value={value}
-      onSelect={onSelect}
-    >
-      <Icon as={icon} boxSize="4" color={tone === 'danger' ? undefined : 'fg'} />
-    </Menu.Item>
-  </Tooltip>
 );

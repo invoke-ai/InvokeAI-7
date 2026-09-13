@@ -21,8 +21,10 @@ from typing import Callable
 
 import torch
 
+from invokeai.app.services.session_processor.session_processor_common import CanceledException
 from invokeai.backend.minimax_h3.sampling import MiniMaxH3DenoiseState
 from invokeai.backend.minimax_h3.transformer_minimax_h3 import MiniMaxH3Transformer3DModel
+from invokeai.backend.util.cancel_hooks import cancel_before_forward
 from invokeai.backend.util.logging import InvokeAILogger
 
 PROFILE_ENV_VAR = "INVOKEAI_PROFILE_H3_DENOISE"
@@ -139,14 +141,14 @@ def denoise(
             — the step's *predicted-clean* (x-hat-0) estimate of the GENERATED video rows
             (conditioning rows excluded), float32, for previews. Unlike the noisy running
             latents, the prediction is decodable at every step.
-        is_canceled: Polled once per step; a True return raises ``KeyboardInterrupt``-free
-            cancellation by letting the caller's exception type propagate from the callback.
+        is_canceled: Polled before every step and before every transformer block within a step,
+            after the previous block's kernels have finished; a True return raises
+            ``CanceledException`` from inside the forward, so a cancel idles the GPU within one
+            block rather than at the end of a 40-100 s step.
 
     Returns:
         The denoised ``(video_rows, audio_rows)`` (conditioning/reference rows still included).
     """
-    from invokeai.app.services.session_processor.session_processor_common import CanceledException
-
     num_condition_video_rows = state.layout.num_condition_video_rows
     num_condition_audio_rows = state.layout.num_condition_audio_rows
 
@@ -202,14 +204,17 @@ def denoise(
             assert pred_x0_video_rows is not None
             step_callback(i + 1, total_steps, pred_x0_video_rows)
 
-    for i, t in enumerate(state.timesteps):
-        if is_canceled is not None and is_canceled():
-            raise CanceledException
+    # One step is a forward through the full block stack (40-100 s for a video on the reference
+    # dual-GPU rig), so the step loop's own poll is not enough: poll before every block too.
+    with cancel_before_forward(transformer.transformer_blocks, is_canceled, latents.device):
+        for i, t in enumerate(state.timesteps):
+            if is_canceled is not None and is_canceled():
+                raise CanceledException
 
-        if i == profile_step_index:
-            assert profile_target is not None
-            _profile_one_step(profile_target, latents.device, lambda i=i, t=t: run_step(i, t))
-        else:
-            run_step(i, t)
+            if i == profile_step_index:
+                assert profile_target is not None
+                _profile_one_step(profile_target, latents.device, lambda i=i, t=t: run_step(i, t))
+            else:
+                run_step(i, t)
 
     return latents, audio_latents

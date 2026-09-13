@@ -66,6 +66,8 @@ export interface ModelsUiSnapshot {
   libraryScrollOffsets: Record<string, number>;
   /** Compact/full row density per picker id, remembered across opens. */
   pickerCompactViews: Record<string, boolean>;
+  /** Base-architecture chips toggled on per picker id, remembered across opens. */
+  pickerBaseFilters: Record<string, readonly string[]>;
 }
 
 const createInitialModelsUiSnapshot = (): ModelsUiSnapshot => ({
@@ -77,6 +79,7 @@ const createInitialModelsUiSnapshot = (): ModelsUiSnapshot => ({
   hfLookup: null,
   highlightProviderId: null,
   libraryScrollOffsets: {},
+  pickerBaseFilters: {},
   pickerCompactViews: {},
   queueExpanded: false,
   scan: null,
@@ -239,6 +242,13 @@ export const setPickerCompactView = (pickerId: string, isCompact: boolean): void
   const snapshot = store.getSnapshot();
 
   updateModelsUi({ pickerCompactViews: { ...snapshot.pickerCompactViews, [pickerId]: isCompact } });
+};
+
+/** Base filters are a per-picker preference too; an empty list means "every base". */
+export const setPickerBaseFilters = (pickerId: string, bases: readonly string[]): void => {
+  const snapshot = store.getSnapshot();
+
+  updateModelsUi({ pickerBaseFilters: { ...snapshot.pickerBaseFilters, [pickerId]: bases } });
 };
 
 export const getModelsUiSnapshotForTests = (): ModelsUiSnapshot => store.getSnapshot();

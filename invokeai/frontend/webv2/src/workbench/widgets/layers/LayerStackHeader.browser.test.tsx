@@ -4,6 +4,7 @@ import { applyThemeToRoot } from '@theme/applyTheme';
 import { system } from '@theme/system';
 import { createEmptyCanvasDocument } from '@workbench/canvasMigration';
 import { createInstance } from 'i18next';
+import { PlusIcon } from 'lucide-react';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { I18nextProvider, initReactI18next } from 'react-i18next';
@@ -14,7 +15,11 @@ import type { LayerRowCommands } from './layerRowCommands';
 
 import { LayerStackHeader } from './LayerStackHeader';
 
-vi.mock('./useLayerStackActions', () => ({ useLayerStackActions: () => [] }));
+vi.mock('./useLayerStackActions', () => ({
+  useLayerStackActions: () => [
+    { disabled: false, icon: PlusIcon, id: 'add', label: 'New layer', run: () => undefined },
+  ],
+}));
 
 const HEADING = 'Raster Layers';
 const GIST = 'The pixel layers that compose your image and feed generation.';
@@ -53,6 +58,15 @@ const hintsAdapter: FeatureHintsAdapter = { enabled: true, onDisable: null };
 let host: HTMLDivElement | null = null;
 let root: Root | null = null;
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+const wait = (ms: number): Promise<void> =>
+  act(
+    () =>
+      new Promise<void>((resolve) => {
+        globalThis.setTimeout(resolve, ms);
+      })
+  );
+const hintCard = (): Element | null => document.querySelector('[data-scope="hover-card"][data-part="content"]');
 
 const settle = (action: () => void): Promise<void> =>
   act(async () => {
@@ -112,14 +126,34 @@ describe('LayerStackHeader hint', () => {
       await userEvent.tab();
     });
     expect(document.activeElement).toBe(header);
-    await act(
-      () =>
-        new Promise<void>((resolve) => {
-          globalThis.setTimeout(resolve, 900);
-        })
-    );
-    const card = document.querySelector('[data-scope="hover-card"][data-part="content"]');
+    await wait(900);
+    const card = hintCard();
     expect(card?.textContent).toContain(HEADING);
     expect(card?.textContent).toContain(GIST);
+  });
+
+  it('opens over the title but never while the pointer rests on a stack action', async () => {
+    await render();
+    const action = host!.querySelector<HTMLElement>('button[aria-label="New layer"]')!;
+    const title = [...host!.querySelectorAll<HTMLElement>('[role="treeitem"] *')].find(
+      (element) => element.textContent === 'Raster Layers (0)'
+    )!;
+
+    await act(() => userEvent.hover(action));
+    await wait(900);
+    expect(hintCard()).toBeNull();
+
+    await act(() => userEvent.hover(title));
+    await wait(900);
+    expect(hintCard()?.textContent).toContain(HEADING);
+
+    await act(() => userEvent.hover(action));
+    await wait(900);
+    expect(hintCard()).toBeNull();
+
+    // Leaving the header straight from an action must not arm a late open.
+    await act(() => userEvent.unhover(action));
+    await wait(900);
+    expect(hintCard()).toBeNull();
   });
 });

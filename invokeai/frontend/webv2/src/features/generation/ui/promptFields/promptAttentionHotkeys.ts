@@ -50,6 +50,7 @@ export const adjustFocusedPromptAttention = (
     return false;
   }
 
+  const selectionDirection = textarea.selectionDirection;
   const result = adjustPromptAttention(
     textarea.value,
     textarea.selectionStart,
@@ -63,7 +64,7 @@ export const adjustFocusedPromptAttention = (
   }
 
   replaceTextareaValue(textarea, result.prompt);
-  textarea.setSelectionRange(result.selectionStart, result.selectionEnd);
+  textarea.setSelectionRange(result.selectionStart, result.selectionEnd, selectionDirection);
 
   return true;
 };

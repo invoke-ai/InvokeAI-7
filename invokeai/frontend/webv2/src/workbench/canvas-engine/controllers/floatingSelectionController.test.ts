@@ -56,7 +56,9 @@ const createHarness = (options: { layer?: CanvasLayerContract; maskRect?: Rect; 
     invert: vi.fn(),
     mask: () => maskSurface,
     replaceMask,
+    restore: vi.fn(),
     selectAll: vi.fn(),
+    snapshot: vi.fn(() => ({ alpha: null, bounds: null, commits: [], rect: null, selected: false })),
   } as SelectionState;
 
   // Seed a cache so there is something to lift out of.
@@ -94,6 +96,7 @@ const createHarness = (options: { layer?: CanvasLayerContract; maskRect?: Rect; 
     layer,
     layers,
     replaceMask,
+    selection,
     removeLayer: () => {
       document = makeDoc([]);
     },
@@ -251,6 +254,23 @@ describe('FloatingSelectionController: commit', () => {
     // The hole at x ∈ [20,50) unioned with the landing region at x ∈ [60,90).
     expect(rect.x).toBe(20);
     expect(rect.x + rect.width).toBe(90);
+  });
+
+  it('moves the ants inside the same step as the pixels, so one undo puts both back', () => {
+    const h = createHarness();
+    const before = { alpha: null, bounds: null, commits: [], rect: null, selected: false };
+    const after = { ...before, selected: true };
+    (h.selection.snapshot as ReturnType<typeof vi.fn>).mockReturnValueOnce(before).mockReturnValueOnce(after);
+    h.controller.lift('a');
+    move(h.controller, 40, 0);
+    h.controller.commit();
+
+    expect(h.history.entries()).toEqual({ future: [], past: ['Move selection'] });
+    h.history.undo();
+    expect(h.calls.applyImagePatch).toHaveBeenCalledTimes(1);
+    expect(h.selection.restore).toHaveBeenLastCalledWith(before);
+    h.history.redo();
+    expect(h.selection.restore).toHaveBeenLastCalledWith(after);
   });
 
   it('marks the layer dirty so the baked pixels persist', () => {

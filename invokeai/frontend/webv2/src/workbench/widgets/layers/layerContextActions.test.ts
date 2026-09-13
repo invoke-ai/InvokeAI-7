@@ -530,11 +530,19 @@ describe('getLayerContextActions', () => {
     expect(effects.setColorLabel).toHaveBeenLastCalledWith(null);
   });
 
-  it('offers add-reference-image on regional layers unless the model base is flux2', () => {
+  it('offers add-reference-image on regional layers unless the model base has no regional image path', () => {
     const regional = makeLayer('regional_guidance');
     expect(byId(getLayerContextActions(makeState(regional)), 'add-reference-image').isDisabled).toBe(false);
-    const flux2Actions = getLayerContextActions(makeState(regional, { modelBase: 'flux2' }));
-    expect(flux2Actions.some((action) => action.id === 'add-reference-image')).toBe(false);
+    expect(
+      byId(getLayerContextActions(makeState(regional, { modelBase: 'flux' })), 'add-reference-image')
+    ).toBeDefined();
+    for (const modelBase of ['flux2', 'anima', 'z-image']) {
+      const actions = getLayerContextActions(makeState(regional, { modelBase }));
+      expect(
+        actions.some((action) => action.id === 'add-reference-image'),
+        modelBase
+      ).toBe(false);
+    }
     const rasterActions = getLayerContextActions(makeState(makeLayer('raster')));
     expect(rasterActions.some((action) => action.id === 'add-reference-image')).toBe(false);
   });
@@ -786,27 +794,30 @@ describe('getLayerContextActions', () => {
     }
   });
 
-  it('hides filter for empty paint and polygon raster sources', () => {
+  it('hides filter for empty paint and pointless polygon sources, but offers it for a drawn polygon', () => {
     const empty = createEmptyPaintLayer('Empty', 'filter-empty');
+    const polygonSource = (points: { x: number; y: number }[]) => ({
+      fill: '#fff',
+      height: 20,
+      kind: 'polygon' as const,
+      points,
+      stroke: null,
+      strokeWidth: 0,
+      type: 'shape' as const,
+      width: 20,
+    });
+    const pointless = paintLayer('filter-pointless', { source: polygonSource([]) });
     const polygon = paintLayer('filter-polygon', {
-      source: {
-        fill: '#fff',
-        height: 20,
-        kind: 'polygon',
-        points: [
-          { x: 0, y: 0 },
-          { x: 20, y: 0 },
-          { x: 10, y: 20 },
-        ],
-        stroke: null,
-        strokeWidth: 0,
-        type: 'shape',
-        width: 20,
-      },
+      source: polygonSource([
+        { x: 0, y: 0 },
+        { x: 20, y: 0 },
+        { x: 10, y: 20 },
+      ]),
     });
 
     expect(idsFor(empty, [empty], { hasSupportedContent: false })).not.toContain('filter');
-    expect(idsFor(polygon, [polygon], { hasSupportedContent: true })).not.toContain('filter');
+    expect(idsFor(pointless, [pointless], { hasSupportedContent: true })).not.toContain('filter');
+    expect(idsFor(polygon, [polygon], { hasSupportedContent: true })).toContain('filter');
   });
 
   it('enables raster filter only with an engine, unlocked layer, and unlocked interaction', () => {

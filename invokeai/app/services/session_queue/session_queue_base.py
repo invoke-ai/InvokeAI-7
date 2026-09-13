@@ -192,13 +192,19 @@ class SessionQueueBase(ABC):
         pass
 
     @abstractmethod
-    def cancel_by_queue_id(self, queue_id: str) -> CancelByQueueIDResult:
-        """Cancels all queue items with matching queue ID"""
+    def cancel_by_queue_id(
+        self, queue_id: str, user_id: Optional[str] = None, origin_prefix: Optional[str] = None
+    ) -> CancelByQueueIDResult:
+        """Cancels every queue item, in-progress items included. If user_id is provided, only cancels items
+        owned by that user; if origin_prefix is provided, only cancels items whose origin starts with it."""
         pass
 
     @abstractmethod
-    def cancel_all_except_current(self, queue_id: str, user_id: Optional[str] = None) -> CancelAllExceptCurrentResult:
-        """Cancels all queue items except in-progress items. If user_id is provided, only cancels items owned by that user."""
+    def cancel_all_except_current(
+        self, queue_id: str, user_id: Optional[str] = None, origin_prefix: Optional[str] = None
+    ) -> CancelAllExceptCurrentResult:
+        """Cancels all queue items except in-progress items. If user_id is provided, only cancels items owned by
+        that user; if origin_prefix is provided, only cancels items whose origin starts with it."""
         pass
 
     @abstractmethod

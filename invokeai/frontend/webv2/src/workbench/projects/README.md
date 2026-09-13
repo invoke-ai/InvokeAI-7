@@ -19,6 +19,14 @@ The old workbench mirror, sync map, and refused-project localStorage keys are de
 
 Cold-start offline editing is not supported. When the backend cannot load, the unavailable screen provides retry and local draft/run exports. Conflicted or schema-refused drafts are retained until explicitly resolved or deleted; they are never silently evicted.
 
+## Font dependencies
+
+Custom text retains an immutable font reference and explicit variation coordinates. Browser registration names are runtime state and never enter the project document. New typography requires Canvas schema 4; documents without it retain their existing compatibility floor.
+
+Project archives record font dependencies by content hash. Export defaults to references only; **Include font files** embeds the original referenced files, once per hash, after authenticated download and checksum verification. A failed required font download fails the embedded export rather than producing a silently incomplete archive.
+
+Import verifies declared entries and checksums, then validates all embedded fonts before creating server resources. Fonts are uploaded privately and the canonical document's references are remapped to the destination IDs. Duplicate uploads reuse existing private records. Rollback removes only newly created fonts and only when project creation has not been attempted or has confirmed absence; an ambiguous create response retains the resources. Font quota failures offer an explicit references-only retry. Changing accounts cancels the operation and prevents cleanup under another user's credentials.
+
 ## Verification
 
 Run `pnpm lint`, `pnpm test`, `pnpm test:browser`, and `pnpm run test:performance:build` from webv2. Queue receipt tests also cover backend admission, account isolation, project deletion, partial acceptance, and idempotent retries. Browser tests exercise actual IndexedDB transactions and Web Locks.

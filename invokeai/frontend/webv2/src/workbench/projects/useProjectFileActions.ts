@@ -1,10 +1,12 @@
 import type { Project } from '@workbench/projectContracts';
 
+import { fontKeys } from '@features/fonts/contracts';
 import {
   assertAccountScopeCurrent,
   captureAccountScope,
   isAccountScopeCurrent,
 } from '@platform/state/accountLifecycle';
+import { useQueryClient } from '@tanstack/react-query';
 import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -12,6 +14,8 @@ import type { ProjectRecordDTO } from './api';
 import type { DuplicatedProject } from './library';
 import type { ProjectFileDirection } from './projectFileErrors';
 
+import { useProjectFileOptions } from './components/ProjectFileOptionsProvider';
+import { FontImportQuotaError } from './invk/format';
 import { duplicateLibraryProject } from './library';
 import { exportLibraryProject, exportOpenProject, importProjectFile, pickProjectFile } from './projectFile';
 import { startProjectFileReport } from './projectFileToasts';
@@ -56,6 +60,8 @@ const runReported = async <T>(
  */
 export const useImportProjectFile = (onImported: (record: ProjectRecordDTO) => Promise<void> | void): (() => void) => {
   const { t } = useTranslation();
+  const { requestReferencesOnlyImport } = useProjectFileOptions();
+  const queryClient = useQueryClient();
 
   const importFile = useCallback(async () => {
     const owner = captureAccountScope();
@@ -66,14 +72,30 @@ export const useImportProjectFile = (onImported: (record: ProjectRecordDTO) => P
     }
 
     await runReported(t, { failed: t('projects.importFailed'), running: t('projects.importing') }, async (report) => {
-      const { record, ...issues } = await importProjectFile(file, { onProgress: report.report, owner });
+      let outcome;
+      try {
+        outcome = await importProjectFile(file, { onProgress: report.report, owner });
+      } catch (error) {
+        if (!(error instanceof FontImportQuotaError) || !isAccountScopeCurrent(owner)) {
+          throw error;
+        }
+        if (!(await requestReferencesOnlyImport(owner))) {
+          report.dismiss();
+          return;
+        }
+        outcome = await importProjectFile(file, { onProgress: report.report, owner, skipEmbeddedFonts: true });
+      }
+      const { record, ...issues } = outcome;
 
       assertAccountScopeCurrent(owner);
       report.succeed(t('projects.imported', { name: record.name }), issues);
       await onImported(record);
       assertAccountScopeCurrent(owner);
     });
-  }, [onImported, t]);
+    if (isAccountScopeCurrent(owner)) {
+      void queryClient.invalidateQueries({ queryKey: fontKeys.all });
+    }
+  }, [onImported, queryClient, requestReferencesOnlyImport, t]);
 
   return useCallback(() => void importFile(), [importFile]);
 };
@@ -81,20 +103,27 @@ export const useImportProjectFile = (onImported: (record: ProjectRecordDTO) => P
 /** Export a project that is only a library row — its document comes from the server. */
 export const useExportLibraryProject = (): ((projectId: string, name: string) => void) => {
   const { t } = useTranslation();
+  const { requestExportOptions } = useProjectFileOptions();
 
   return useCallback(
     (projectId: string, name: string) => {
-      void runReported(
-        t,
-        { direction: 'write', failed: t('projects.exportFailed'), running: t('projects.exporting', { name }) },
-        async (report, owner) => {
-          const issues = await exportLibraryProject(projectId, { onProgress: report.report, owner });
-
-          report.succeed(t('projects.exported', { name }), issues);
+      const owner = captureAccountScope();
+      void requestExportOptions(name, owner).then(async (options) => {
+        if (!options || !isAccountScopeCurrent(owner)) {
+          return;
         }
-      );
+        await runReported(
+          t,
+          { direction: 'write', failed: t('projects.exportFailed'), running: t('projects.exporting', { name }) },
+          async (report) => {
+            const issues = await exportLibraryProject(projectId, { ...options, onProgress: report.report, owner });
+
+            report.succeed(t('projects.exported', { name }), issues);
+          }
+        );
+      });
     },
-    [t]
+    [requestExportOptions, t]
   );
 };
 
@@ -137,23 +166,30 @@ export const useDuplicateProject = (
 /** Export a project that is open in the editor, from its live document. */
 export const useExportOpenProject = (): ((project: Project) => void) => {
   const { t } = useTranslation();
+  const { requestExportOptions } = useProjectFileOptions();
 
   return useCallback(
     (project: Project) => {
-      void runReported(
-        t,
-        {
-          direction: 'write',
-          failed: t('projects.exportFailed'),
-          running: t('projects.exporting', { name: project.name }),
-        },
-        async (report, owner) => {
-          const issues = await exportOpenProject(project, { onProgress: report.report, owner });
-
-          report.succeed(t('projects.exported', { name: project.name }), issues);
+      const owner = captureAccountScope();
+      void requestExportOptions(project.name, owner).then(async (options) => {
+        if (!options || !isAccountScopeCurrent(owner)) {
+          return;
         }
-      );
+        await runReported(
+          t,
+          {
+            direction: 'write',
+            failed: t('projects.exportFailed'),
+            running: t('projects.exporting', { name: project.name }),
+          },
+          async (report) => {
+            const issues = await exportOpenProject(project, { ...options, onProgress: report.report, owner });
+
+            report.succeed(t('projects.exported', { name: project.name }), issues);
+          }
+        );
+      });
     },
-    [t]
+    [requestExportOptions, t]
   );
 };

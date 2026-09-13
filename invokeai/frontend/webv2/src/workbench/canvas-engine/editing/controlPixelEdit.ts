@@ -6,6 +6,7 @@ import type { RasterBackend, RasterSurface } from '@workbench/canvas-engine/rend
 import type { Rect } from '@workbench/canvas-engine/types';
 
 import { isLeafEditable } from '@workbench/canvas-engine/document/layerEligibility';
+import { isEmptyPolygonShape } from '@workbench/canvas-engine/document/sources';
 import { roundOut, transformBounds } from '@workbench/canvas-engine/math/rect';
 import { bakeMatrix, IDENTITY_TRANSFORM, type LayerTransform } from '@workbench/canvas-engine/transform/transformMath';
 
@@ -36,7 +37,7 @@ const isIdentity = (transform: LayerTransform): boolean =>
 const isRasterizable = (layer: PixelEditableLayer): boolean =>
   layer.type === 'raster'
     ? layer.source.type === 'image' || layer.source.type === 'paint'
-    : layer.source.type !== 'shape' || layer.source.kind !== 'polygon';
+    : layer.source.type !== 'shape' || !isEmptyPolygonShape(layer.source);
 
 /** Whether the leaf, with its ancestors applied, can take a direct pixel edit. */
 export const isLeafPixelEditEligible = (leaf: SemanticLeaf | null | undefined): boolean =>

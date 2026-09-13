@@ -1,11 +1,12 @@
 import { Box, Flex, VisuallyHidden, type SystemStyleObject } from '@chakra-ui/react';
+import { FontsPage } from '@features/fonts/launchpad';
 import { useCapabilities, UsersPage } from '@features/identity';
 import { ModelsPage } from '@features/models';
 import { NodesPage } from '@features/nodes';
 import { Tabs } from '@platform/ui';
 import { useLocation, useNavigate } from '@tanstack/react-router';
 import { LaunchpadCommandPalette } from '@workbench/palette/LaunchpadCommandPalette';
-import { BoxIcon, BlocksIcon, FolderIcon, HouseIcon, UsersIcon, type LucideIcon } from 'lucide-react';
+import { BlocksIcon, BoxIcon, FolderIcon, HouseIcon, TypeIcon, UsersIcon, type LucideIcon } from 'lucide-react';
 import { useCallback, useMemo, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -28,7 +29,7 @@ import { ProjectActionsMenuProvider } from './projects/ProjectActionsMenuHost';
  * not peers: a flat list gave "Users" the same standing as "Projects".
  */
 
-type LaunchpadSectionId = 'home' | 'projects' | 'models' | 'nodes' | 'users';
+type LaunchpadSectionId = 'home' | 'projects' | 'models' | 'nodes' | 'users' | 'fonts';
 
 interface LaunchpadSection {
   id: LaunchpadSectionId;
@@ -40,7 +41,7 @@ interface LaunchpadSection {
 }
 
 const DEFAULT_SECTION_ID: LaunchpadSectionId = 'home';
-const SECTION_IDS: readonly string[] = ['home', 'projects', 'models', 'nodes', 'users'];
+const SECTION_IDS: readonly string[] = ['home', 'projects', 'models', 'nodes', 'users', 'fonts'];
 
 const isSectionId = (value: string): value is LaunchpadSectionId => SECTION_IDS.includes(value);
 
@@ -55,7 +56,8 @@ const normalizeSectionId = (value: string): LaunchpadSectionId | null => {
   return isSectionId(id) ? id : null;
 };
 
-const SECTION_PATHS: Record<LaunchpadSectionId, '/' | '/projects' | '/models' | '/nodes' | '/users'> = {
+const SECTION_PATHS: Record<LaunchpadSectionId, '/' | '/projects' | '/models' | '/nodes' | '/users' | '/fonts'> = {
+  fonts: '/fonts',
   home: '/',
   models: '/models',
   nodes: '/nodes',
@@ -101,6 +103,13 @@ export const Launchpad = () => {
             id: 'projects',
             label: t('launchpad.sections.projects'),
             render: () => <ProjectsPage />,
+          },
+          {
+            group: 'manage',
+            icon: TypeIcon,
+            id: 'fonts',
+            label: t('launchpad.sections.fonts'),
+            render: () => <FontsPage />,
           },
           {
             condition: canManageModels,

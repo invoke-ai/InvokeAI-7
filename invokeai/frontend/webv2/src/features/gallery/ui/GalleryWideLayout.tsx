@@ -10,6 +10,7 @@ import { GalleryItemSearch } from './GalleryItemSearch';
 import { GalleryItemSortMenu } from './GalleryItemSortMenu';
 import { GallerySelectionBar } from './GallerySelectionBar';
 import { GallerySplitHandle } from './GallerySplitHandle';
+import { GalleryStarredFilterToggle } from './GalleryStarredFilterToggle';
 import { GalleryUploadButton } from './GalleryUploadButton';
 import { GalleryViewTabs } from './GalleryViewTabs';
 import { useGalleryWidget } from './GalleryWidgetContext';
@@ -71,6 +72,7 @@ export const GalleryWideLayout = () => {
           <Box flex="1" maxW="22rem" minW="9rem">
             <GalleryItemSearch />
           </Box>
+          <GalleryStarredFilterToggle />
           <GalleryItemSortMenu />
           <GalleryUploadButton
             boards={gallery.boards}

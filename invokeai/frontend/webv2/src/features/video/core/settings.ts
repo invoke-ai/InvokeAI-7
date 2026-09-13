@@ -89,14 +89,41 @@ export const VIDEO_REFERENCE_MAX_IMAGES = 9;
  */
 export const DEFAULT_REFERENCE_SAMPLE_FRAMES = 200;
 
+/** A sample length clamped to what the clip could ever hold, whatever a control emitted. */
+export const clampReferenceSampleFrames = (clip: VideoSourceClip, rawSampleFrames: number): number =>
+  Math.min(Math.max(1, Math.round(rawSampleFrames)), Math.max(0, clip.numFrames - 1) + 1);
+
+/**
+ * The sample length a reference is asking for: its recorded intent, else its own window.
+ *
+ * The intent is what makes the two controls independent under a DRAG. A slider emits a
+ * value per pointer step, and each one is committed, so a window that took its length
+ * from the state it was handed would shrink at the clip's end and stay short on the way
+ * back — one overshoot and back would leave a 200-frame sample at 1 frame. The requested
+ * length is therefore carried on the reference (`sampleFrames`) and only the EFFECTIVE
+ * window is clamped.
+ */
+export const referenceSampleFrames = (reference: Extract<VideoReferenceItem, { kind: 'video' }>): number =>
+  clampReferenceSampleFrames(
+    reference.clip,
+    reference.sampleFrames ?? reference.clip.endFrame - reference.clip.startFrame + 1
+  );
+
 /**
  * Move a reference clip's sample window to a new start frame.
  *
- * Ordinary references slide at CONSTANT length, stopping at the clip's end rather than
- * shrinking — a transient overshoot during a drag must not ratchet the sample down. The
- * reference-extend anchor (`pinEnd`) instead keeps its end frame pinned to the Initial
- * Video cutpoint (seam continuity depends on the frames adjacent to it; see
- * deriveReferenceExtendClip), so moving its start only adjusts the lead-in length.
+ * The two controls are independent: the start frame reaches every frame of the clip, and
+ * the sample length is what gives way — the window keeps the requested length while there
+ * is clip left to fill it and is pinned to the remaining frames past that, so
+ * `start + length` never runs beyond the last frame. (The length slider's ceiling in the
+ * panel is the same `numFrames - startFrame`, so the control tracks what the window can
+ * actually hold.) Pass `requestedSampleFrames` — `referenceSampleFrames` of the reference
+ * BEFORE the drag — to keep a clamped window recoverable; it defaults to the window's own
+ * length, which is the identity only while the window still fits.
+ *
+ * Every video reference trims this way, the reference-extend anchor included: Ref2VA has
+ * no frame-exact seam to protect (see deriveReferenceExtendClip), so the anchor's window
+ * is a default the user may move off the cutpoint like any other.
  *
  * Self-healing by construction: the returned window always satisfies
  * 0 <= start <= end <= numFrames - 1, even from a corrupt persisted trim.
@@ -104,51 +131,41 @@ export const DEFAULT_REFERENCE_SAMPLE_FRAMES = 200;
 export const slideReferenceSampleWindow = (
   clip: VideoSourceClip,
   rawStart: number,
-  pinEnd: boolean
+  requestedSampleFrames?: number
 ): VideoSourceClip => {
   const maxFrame = Math.max(0, clip.numFrames - 1);
+  const sampleFrames = clampReferenceSampleFrames(clip, requestedSampleFrames ?? clip.endFrame - clip.startFrame + 1);
+  const startFrame = Math.min(Math.max(0, Math.round(rawStart)), maxFrame);
 
-  if (pinEnd) {
-    const endFrame = Math.min(Math.max(0, clip.endFrame), maxFrame);
-    const startFrame = Math.min(Math.max(0, Math.round(rawStart)), endFrame);
-
-    return { ...clip, endFrame, startFrame };
-  }
-
-  const sampleFrames = Math.min(Math.max(1, clip.endFrame - clip.startFrame + 1), maxFrame + 1);
-  const startFrame = Math.min(Math.max(0, Math.round(rawStart)), maxFrame - (sampleFrames - 1));
-
-  return { ...clip, endFrame: startFrame + sampleFrames - 1, startFrame };
+  return { ...clip, endFrame: Math.min(startFrame + sampleFrames - 1, maxFrame), startFrame };
 };
 
 /**
  * Resize a reference clip's sample window to a new length in frames.
  *
- * Ordinary references grow from the start frame (the end moves, clamped to the clip); the
- * reference-extend anchor (`pinEnd`) grows backward from its pinned end (the start moves),
- * since its end must stay on the Initial Video cutpoint. Same self-healing bounds as
- * slideReferenceSampleWindow.
+ * The window grows forward from its start frame, with the end clamped to the clip. Same
+ * self-healing bounds as slideReferenceSampleWindow. The caller records the requested
+ * length on the reference as `sampleFrames`; this returns only the window it produces.
  */
-export const resizeReferenceSampleWindow = (
-  clip: VideoSourceClip,
-  rawSampleFrames: number,
-  pinEnd: boolean
-): VideoSourceClip => {
+export const resizeReferenceSampleWindow = (clip: VideoSourceClip, rawSampleFrames: number): VideoSourceClip => {
   const maxFrame = Math.max(0, clip.numFrames - 1);
-  const sampleFrames = Math.min(Math.max(1, Math.round(rawSampleFrames)), maxFrame + 1);
-
-  if (pinEnd) {
-    const endFrame = Math.min(Math.max(0, clip.endFrame), maxFrame);
-
-    return { ...clip, endFrame, startFrame: Math.max(0, endFrame - (sampleFrames - 1)) };
-  }
-
+  const sampleFrames = clampReferenceSampleFrames(clip, rawSampleFrames);
   const startFrame = Math.min(Math.max(0, clip.startFrame), maxFrame);
 
   return { ...clip, endFrame: Math.min(startFrame + sampleFrames - 1, maxFrame), startFrame };
 };
 
 const VIDEO_REFERENCE_CONDITIONINGS = ['video_audio', 'video', 'audio'] as const;
+
+/**
+ * Whether a value is one of the three conditionings a video reference can carry.
+ *
+ * Exported for recall, which must tell "the run recorded this" from "the run recorded
+ * nothing usable" -- the two take different branches, and enumerating the literals at the
+ * call site is how one of them gets forgotten.
+ */
+export const isVideoReferenceConditioning = (value: unknown): value is VideoReferenceConditioning =>
+  VIDEO_REFERENCE_CONDITIONINGS.includes(value as (typeof VIDEO_REFERENCE_CONDITIONINGS)[number]);
 const VIDEO_REFERENCE_IMAGE_DETAILS = ['max', 'match'] as const;
 
 export const isVideoReferenceItem = (value: unknown): value is VideoReferenceItem => {
@@ -209,7 +226,13 @@ const sanitizeVideoReferences = (value: unknown, sourceVideoName?: string): Vide
   }
   valid = valid.map((entry, index) =>
     index !== flagged && entry.kind === 'video' && entry.fromSourceVideo === true
-      ? { ...entry, fromSourceVideo: false }
+      ? // `trimOverridden` goes with the flag: it only ever means "this ANCHOR's window
+        // is the user's". Left behind on a demoted entry it would be honoured again the
+        // next time adopt-by-name picked that entry up as the anchor, and the clip's
+        // default window would never be derived. The recorded sample length goes with
+        // it — a request kept beside a window it did not produce would spring the window
+        // back to it on the next drag.
+        { ...entry, fromSourceVideo: false, sampleFrames: undefined, trimOverridden: false }
       : entry
   );
 
@@ -232,7 +255,7 @@ const sanitizeVideoReferences = (value: unknown, sourceVideoName?: string): Vide
     for (let index = valid.length - 1; index >= 0; index -= 1) {
       const entry = valid[index]!;
 
-      if (entry.kind === 'video' && entry.clip.video_name === sourceVideoName) {
+      if (entry.kind === 'video' && entry.clip.video_name === sourceVideoName && canAnchorReferenceExtend(entry)) {
         valid = valid.map((candidate, candidateIndex) =>
           candidateIndex === index && candidate.kind === 'video' ? { ...candidate, fromSourceVideo: true } : candidate
         );
@@ -543,15 +566,158 @@ export const createVideoSourceClip = (item: {
  * The conditioning a video reference starts on when it is added from the gallery or an
  * upload.
  *
+ * NOT used for the reference-extend anchor: that role requires visual rows, so it takes
+ * `video_audio` regardless of the clip and promotes an adopted audio-only entry via
+ * {@link anchorReferenceConditioning}.
+ *
  * Audio uploads are stored as videos: the server wraps an uploaded audio file into a
- * rendered-waveform clip at ingest and stamps `media_origin: audio_upload` on it. Those
- * frames are a picture of the sound rather than footage anyone means to condition on, so
+ * rendered-waveform clip at ingest and marks it `audio_upload`. Those frames are a picture
+ * of the sound rather than footage anyone means to condition on — and conditioning on them
+ * is not free, it costs a video reference slot and roughly doubles the packed sequence — so
  * such a reference defaults to its soundtrack alone. Everything else keeps video + audio.
  * This is only the starting value — the card's selector still offers all three.
+ *
+ * Takes the marker rather than a metadata bag: it rides on the gallery item and on
+ * `VideoSourceClip`, so no caller needs a second request to decide this.
  */
-export const getDefaultReferenceConditioning = (
-  metadata: Record<string, unknown> | null | undefined
-): VideoReferenceConditioning => (metadata?.media_origin === 'audio_upload' ? 'audio' : 'video_audio');
+export const getDefaultReferenceConditioning = (mediaOrigin: string | null | undefined): VideoReferenceConditioning =>
+  mediaOrigin === 'audio_upload' ? 'audio' : 'video_audio';
+
+/**
+ * Whether a video reference can serve as the reference-extend ANCHOR.
+ *
+ * The anchor carries the tail of the Initial Video across the seam, and that is what the
+ * generated frames continue from. An 'audio' reference contributes soundtrack rows and no
+ * visual rows at all — the backend decodes a reference's frames only when its packed kind
+ * is `video` (`reference_kind`) — so it has nothing to offer the seam. Nor does it fail
+ * loudly: the all-audio validation reason needs EVERY reference to be audio-only, so one
+ * image reference alongside is enough to let a silently discontinuous seam queue.
+ *
+ * So an audio-only reference is never CHOSEN as the anchor. Adoption and the recall
+ * re-derive both skip it, and the anchor is appended fresh instead — which keeps the
+ * soundtrack the user actually asked for rather than overwriting it with a role it cannot
+ * fill. Only an entry already claiming the flag is converted, by
+ * {@link anchorReferenceConditioning}.
+ */
+const canAnchorReferenceExtend = (entry: VideoReferenceItem): boolean =>
+  entry.kind === 'video' && entry.conditioning !== 'audio';
+
+/**
+ * The conditioning an entry keeps once it IS the reference-extend anchor.
+ *
+ * Only reached for an entry already carrying the flag: a record written before
+ * {@link canAnchorReferenceExtend} existed, or a hand-edited one. Promoting keeps the
+ * soundtrack the choice asked for and restores the visuals the role requires; 'video' and
+ * 'video_audio' are the user's own answer and pass through.
+ *
+ * Deliberately applied only in `applyReferenceExtendSourceVideo`, where the window is
+ * either re-derived alongside it or is one the user picked for THIS anchor
+ * (`trimOverridden`). Promoting in normalization instead would turn an entry that was
+ * merely inert into one emitting visual rows from whatever window it happens to hold —
+ * for a mis-flagged entry, the opening of the clip rather than the tail, which is a worse
+ * seam than no anchor at all.
+ */
+export const anchorReferenceConditioning = (conditioning: VideoReferenceConditioning): VideoReferenceConditioning =>
+  conditioning === 'audio' ? 'video_audio' : conditioning;
+
+/**
+ * The structured-prompt labels one reference answers to, or `null` where it has none.
+ *
+ * Ref2VA presents every reference to the model under a per-MODALITY label numbered in
+ * attachment order — `<Picture i>` for an image, `<Video k>` for conditioned footage,
+ * `<Audio j>` for a soundtrack — and the prompt refers to references only by those labels.
+ * The three counters run independently, so a reference's label numbers are not its position
+ * in the list: the second card can be `<Picture 1>`, and a video contributing both streams
+ * claims one number from each of two counters.
+ *
+ * Mirrors the backend's `build_ref2va_presentation` numbering (audio on 'video_audio' and
+ * 'audio', a `<Video k>` on everything else video-kind), which is the numbering the model
+ * actually sees. The two must not drift: a label shown here that the prompt cannot address
+ * is worse than no label at all.
+ */
+export type VideoReferencePromptLabels = {
+  audio: number | null;
+  picture: number | null;
+  video: number | null;
+};
+
+/**
+ * The labels, spelled the way the prompt must spell them.
+ *
+ * Never translated and never reformatted: these are tokens the text encoder matches
+ * literally, so what the badge shows is exactly what the user types into the prompt. The
+ * visual track leads a reference that carries both, since that is what the card depicts.
+ */
+export const formatReferencePromptLabels = (labels: VideoReferencePromptLabels): string[] => {
+  const formatted: string[] = [];
+
+  if (labels.picture !== null) {
+    formatted.push(`<Picture ${labels.picture}>`);
+  }
+  if (labels.video !== null) {
+    formatted.push(`<Video ${labels.video}>`);
+  }
+  if (labels.audio !== null) {
+    formatted.push(`<Audio ${labels.audio}>`);
+  }
+
+  return formatted;
+};
+
+/** {@link VideoReferencePromptLabels} for every reference, positionally. */
+export const referencePromptLabels = (references: readonly VideoReferenceItem[]): VideoReferencePromptLabels[] => {
+  const counts = { audio: 0, picture: 0, video: 0 };
+
+  return references.map((reference) => {
+    if (reference.kind === 'image') {
+      counts.picture += 1;
+      return { audio: null, picture: counts.picture, video: null };
+    }
+
+    if (reference.conditioning !== 'audio') {
+      counts.video += 1;
+    }
+    if (reference.conditioning !== 'video') {
+      counts.audio += 1;
+    }
+
+    return {
+      audio: reference.conditioning === 'video' ? null : counts.audio,
+      picture: null,
+      video: reference.conditioning === 'audio' ? null : counts.video,
+    };
+  });
+};
+
+/**
+ * The sample window a newly added video reference starts on.
+ *
+ * Footage starts on {@link DEFAULT_REFERENCE_SAMPLE_FRAMES} from the clip's head, because
+ * every reference frame is VAE-encoded into rows the denoiser re-attends at every step.
+ *
+ * An AUDIO-ONLY reference starts on the whole clip. It pays none of that cost: the backend
+ * decodes a reference's frames only when its packed kind is `video` (`reference_kind`), so
+ * an 'audio' reference contributes soundtrack rows and no visual rows at all — and those
+ * rows are bounded by the GENERATED duration, not by how long the window is. What the
+ * window decides is which audio the model hears: the track is sliced to the window and only
+ * THEN truncated to the generated duration, so a window shorter than the generation cuts
+ * the soundtrack off early. At 8s that is every frame count above 200 — over half of the
+ * ones the panel offers.
+ *
+ * Only the starting value — the card's sample-length control still trims either kind, and
+ * changing a card's conditioning afterwards leaves the window the user can see alone.
+ */
+export const getDefaultReferenceClip = (
+  clip: VideoSourceClip,
+  conditioning: VideoReferenceConditioning
+): VideoSourceClip => ({
+  ...clip,
+  endFrame:
+    conditioning === 'audio'
+      ? Math.max(0, clip.numFrames - 1)
+      : Math.max(0, Math.min(DEFAULT_REFERENCE_SAMPLE_FRAMES, clip.numFrames) - 1),
+  startFrame: 0,
+});
 
 /**
  * The detail a newly added image reference starts on.
@@ -573,6 +739,20 @@ export const getDefaultReferenceImageDetail = (references: VideoReferenceItem[])
 export const MIN_VIDEO_TRIM_FRAMES = 2;
 
 /**
+ * The trim as playable seconds, for previewing the window a clip actually selects.
+ *
+ * The bounds are INCLUSIVE frame indices, so the window runs to the far edge of
+ * `endFrame`'s display interval rather than to its start — playing to `endFrame / fps`
+ * would cut the last selected frame. Null when the record carries no usable frame rate:
+ * a persisted clip only has to hold a finite `fps` to hydrate, and a zero would put the
+ * whole clip's length behind a play button that claims to play the selection.
+ */
+export const videoClipSpanSeconds = (clip: VideoSourceClip): { endSeconds: number; startSeconds: number } | null =>
+  Number.isFinite(clip.fps) && clip.fps > 0
+    ? { endSeconds: (clip.endFrame + 1) / clip.fps, startSeconds: clip.startFrame / clip.fps }
+    : null;
+
+/**
  * The MAXIMUM lead-in the reference-extend tail reference samples ahead of the
  * cutpoint, expressed at 24 fps: ~5s, and exactly on the 17n+5 frame grid
  * (17*8+5) so the backend's 24 fps resample + snap-down keeps all of it.
@@ -586,12 +766,19 @@ export const MIN_VIDEO_TRIM_FRAMES = 2;
 export const VIDEO_REFERENCE_EXTEND_TAIL_FRAMES = 141;
 
 /**
- * The tail reference's default trim: the frames right before the cutpoint,
+ * The tail reference's DEFAULT trim: the frames right before the cutpoint,
  * sized so the backend keeps ALL of them.
  *
+ * A default, not a constraint. Ref2VA conditions on reference CONTENT — there
+ * is no frame-exact seam here the way FL2VA extend has one — so which frames
+ * the anchor samples is an editorial choice, and the cutpoint is only the
+ * likeliest one. A clip that fades to black at the cutpoint wants the fade
+ * concatenated and NOT conditioned on, so the user can move the window off the
+ * cutpoint (`trimOverridden`) and the panel then leaves it alone.
+ *
  * Three backend rules bound the window, and every one of them discards from
- * the END — the frames adjacent to the cutpoint, the only ones continuity
- * depends on. `normalize_reference_video_frames` resamples onto H3's fixed
+ * the END of it — where this default puts the frames nearest the cutpoint.
+ * `normalize_reference_video_frames` resamples onto H3's fixed
  * 24 fps and truncates to the GENERATED frame count keeping the FRONT
  * (`frames[:num_frames]`); `encode_reference_video` then snaps what survives
  * DOWN to the `17n + 5` grid the video VAE encodes without padding.
@@ -704,10 +891,10 @@ const tailSourceFrames = (budget: number, fps: number): number => {
  * `numFrames`, so the values a keystroke or a drag passes through leave no
  * trace.
  *
- * The cost is that a hand-tuned linked trim resets on a frame-count change as
- * well as on a cutpoint change — the same bargain the section's help text
- * already describes, and the backend leaves no alternative: a window that does
- * not fit the budget loses its seam end.
+ * A window the user has moved by hand (`trimOverridden`) is exempt. The budget
+ * still binds it — the backend discards the overrun from the window's end —
+ * but that is equally true of every ordinary video reference, and silently
+ * rewriting a deliberate editorial choice is the worse failure of the two.
  */
 export const applyReferenceExtendNumFrames = (
   references: VideoReferenceItem[],
@@ -715,7 +902,7 @@ export const applyReferenceExtendNumFrames = (
 ): VideoReferenceItem[] => {
   let changed = false;
   const next = references.map((entry) => {
-    if (entry.kind !== 'video' || entry.fromSourceVideo !== true) {
+    if (entry.kind !== 'video' || entry.fromSourceVideo !== true || entry.trimOverridden === true) {
       return entry;
     }
     const startFrame = referenceExtendStartFrame(entry.clip, numFrames);
@@ -725,7 +912,8 @@ export const applyReferenceExtendNumFrames = (
     }
     changed = true;
 
-    return { ...entry, clip: { ...entry.clip, startFrame } };
+    // Re-derived, so the user's recorded sample length no longer describes it.
+    return { ...entry, clip: { ...entry.clip, startFrame }, sampleFrames: undefined };
   });
 
   return changed ? next : references;
@@ -792,9 +980,11 @@ export const canPlaceReferenceExtendAnchor = (
  *
  * - clearing the Initial Video removes its linked reference;
  * - setting or re-trimming it re-derives the linked reference's default trim
- *   (the tail window ending on the cutpoint) — a manually tuned trim
- *   therefore holds only until the next cutpoint change, which the section's
- *   help text says;
+ *   (the tail window ending on the cutpoint), UNLESS the user has moved that
+ *   window by hand and the clip is the same one — an override is a deliberate
+ *   editorial choice about which frames condition the generation, and a
+ *   cutpoint move is not a reason to discard it. Switching to a different clip
+ *   does discard it: the bounds index frames that are no longer there;
  * - with no linked entry yet, an existing video reference for the same clip
  *   is adopted (recall restores the pair without the linkage flag; adopting
  *   avoids a duplicate), else a new one is APPENDED — unless the video cap is
@@ -835,13 +1025,52 @@ export const applyReferenceExtendSourceVideo = (
   const linkedIndex =
     flaggedIndex >= 0
       ? flaggedIndex
-      : references.findIndex((entry) => entry.kind === 'video' && entry.clip.video_name === sourceVideo.video_name);
+      : references.findIndex(
+          (entry) =>
+            entry.kind === 'video' &&
+            entry.clip.video_name === sourceVideo.video_name &&
+            // An audio-only reference to this clip is the user's soundtrack, not a
+            // continuity anchor: adopting it would replace their window with the tail and
+            // still leave the seam with no visuals. Fall through and append instead.
+            canAnchorReferenceExtend(entry)
+        );
 
   if (linkedIndex >= 0) {
     return pinReferenceExtendAnchor(
-      references.map((entry, index) =>
-        index === linkedIndex && entry.kind === 'video' ? { ...linked, conditioning: entry.conditioning } : entry
-      )
+      references.map((entry, index) => {
+        if (index !== linkedIndex || entry.kind !== 'video') {
+          return entry;
+        }
+        // Safe to convert an audio-only entry here: it is the flagged anchor, or one just
+        // adopted into the role, and the role needs visual rows. See
+        // `anchorReferenceConditioning`.
+        const conditioning = anchorReferenceConditioning(entry.conditioning);
+
+        // `fromSourceVideo` is required, not implied by `linkedIndex`: the adopt-by-name
+        // fallback above reaches UNFLAGGED entries (recall restores the pair without the
+        // flag), and those have never been an anchor, so they get the derived default.
+        if (
+          entry.fromSourceVideo !== true ||
+          entry.trimOverridden !== true ||
+          entry.clip.video_name !== sourceVideo.video_name
+        ) {
+          return { ...linked, conditioning };
+        }
+
+        return {
+          ...linked,
+          // Re-probed dimensions and frame rate come from the source record;
+          // the trim is the user's. Sliding the window to its own start re-
+          // clamps it against a frame count that may have moved with the probe.
+          clip: slideReferenceSampleWindow(
+            { ...sourceVideo, endFrame: entry.clip.endFrame, startFrame: entry.clip.startFrame },
+            entry.clip.startFrame
+          ),
+          conditioning,
+          sampleFrames: entry.sampleFrames,
+          trimOverridden: true,
+        };
+      })
     );
   }
 

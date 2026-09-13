@@ -27,6 +27,7 @@ import {
 import { createImagePatchEntry } from '@workbench/canvas-engine/history/imagePatch';
 import { createLayerSnapshotEntry } from '@workbench/canvas-engine/history/layerSnapshot';
 import { isEmpty } from '@workbench/canvas-engine/math/rect';
+import { strokeCommitLabel } from '@workbench/canvas-engine/strokeCommit';
 
 export interface PixelEditControllerOptions {
   readonly applyImagePatch: ImagePatchApply;
@@ -274,7 +275,7 @@ export class PixelEditController {
           return;
         }
         if (
-          commitPatch(event.tool === 'eraser' ? 'Eraser stroke' : 'Brush stroke', {
+          commitPatch(strokeCommitLabel(event.tool), {
             after: event.afterImageData,
             before: event.beforeImageData,
             rect: event.dirtyRect,
@@ -456,7 +457,7 @@ export class PixelEditController {
       commitStroke: (event) =>
         isImageDataEqual(event.beforeImageData, event.afterImageData)
           ? cancel()
-          : commit(event.tool === 'eraser' ? 'Eraser stroke' : 'Brush stroke', event),
+          : commit(strokeCommitLabel(event.tool), event),
       layerId,
     };
     owner = { cancel, layerId };

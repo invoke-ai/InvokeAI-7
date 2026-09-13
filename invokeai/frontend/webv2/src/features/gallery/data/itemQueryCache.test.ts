@@ -88,7 +88,7 @@ describe('Qualified gallery cache patches', () => {
     });
 
     client.setQueryData(itemsKey, createData([createItem('image', 'one')]));
-    client.setQueryData(namesKey, { items: [{ kind: 'image', name: 'one' }], starredCount: 0, total: 1 });
+    client.setQueryData(namesKey, { items: [{ kind: 'image', name: 'one' }], total: 1 });
     client.setQueryData(boardsKey, []);
 
     await Promise.all([invalidateGallery(client), invalidateGallery(client), invalidateGallery(client)]);

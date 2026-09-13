@@ -7,11 +7,12 @@ from typing import Literal, Optional
 import numpy as np
 from fastapi import File, HTTPException, Query, UploadFile, status
 from fastapi.routing import APIRouter
+from PIL import Image
 from pydantic import BaseModel, Field
 
 from invokeai.app.api.auth_dependencies import AdminUserOrDefault, CurrentUserOrDefault
 from invokeai.app.api.dependencies import ApiDependencies
-from invokeai.app.api.routers._access import assert_image_read_access
+from invokeai.app.api.routers._access import assert_image_read_access, assert_video_read_access
 from invokeai.app.services.image_files.image_files_common import ImageFileNotFoundException
 from invokeai.app.services.image_index.cluster_labels import (
     MAX_CUSTOM_VOCAB_TERM_LENGTH,
@@ -19,7 +20,11 @@ from invokeai.app.services.image_index.cluster_labels import (
     normalize_custom_vocab_terms,
 )
 from invokeai.app.services.image_index.image_index_base import TextSearchUnavailableError, VocabBuildState
-from invokeai.app.services.image_index.image_index_common import ImageIndexStatus
+from invokeai.app.services.image_index.image_index_common import (
+    ImageIndexStatus,
+    IndexedItem,
+    MediaKind,
+)
 from invokeai.app.services.image_index.projection import (
     DEFAULT_CLUSTER_MIN_SAMPLES,
     MAX_CLUSTERED_POINTS,
@@ -30,6 +35,7 @@ from invokeai.app.services.image_index.projection import (
     scope_hash,
 )
 from invokeai.app.services.image_records.image_records_common import ImageRecordNotFoundException
+from invokeai.app.services.video_records.video_records_common import VideoRecordNotFoundException
 
 image_map_router = APIRouter(prefix="/v1/image_map", tags=["image_map"])
 
@@ -37,11 +43,14 @@ ImageMapState = Literal["disabled", "model_missing", "empty", "computing", "read
 
 
 class ImageMapPoint(BaseModel):
-    """One image's position on the 2D semantic map."""
+    """One gallery item's position on the 2D semantic map."""
 
     x: float = Field(description="UMAP x coordinate")
     y: float = Field(description="UMAP y coordinate")
-    image_name: str = Field(description="The image this point represents")
+    image_name: str = Field(
+        description="The image or video this point represents; `kind` says which namespace the name belongs to"
+    )
+    kind: MediaKind = Field(description="Whether this point is an image or a video")
     cluster: int = Field(description="DBSCAN cluster label; -1 means unclustered")
 
 
@@ -173,7 +182,7 @@ def _release_refresh_slot(user_id: str) -> None:
 # over a round-robin access pattern misses every time, and any single caller
 # could evict everyone else by varying `eps` across a handful of requests.
 _CLUSTER_CACHE_USERS = 32
-_ClusterCacheKey = tuple[str, Optional[str], str, Optional[float], int]
+_ClusterCacheKey = tuple[str, Optional[str], str, Optional[float], int, tuple[MediaKind, ...]]
 _cluster_cache: "OrderedDict[str, tuple[_ClusterCacheKey, np.ndarray, Optional[float]]]" = OrderedDict()
 
 
@@ -210,11 +219,59 @@ def _active_model_id(services) -> Optional[str]:
     return model_id
 
 
+# Videos are indexed whether or not a client can render them, so serving them is opt-in: a
+# client that resolves every name through the images endpoints (as the shipped gallery does)
+# would turn a video into a broken tile and a selectable item that does not exist.
+IncludeVideosQuery = Query(
+    default=False,
+    description="Include indexed videos among the returned items. Leave off unless the client "
+    "resolves each item through the endpoint its `kind` names.",
+)
+
+
+def _served_kinds(include_videos: bool) -> tuple[MediaKind, ...]:
+    return ("image", "video") if include_videos else ("image",)
+
+
+def _search_reference(image_name: Optional[str], video_name: Optional[str]) -> Optional[IndexedItem]:
+    """The reference item for a similarity search, or None when none was given.
+
+    Naming both is refused rather than resolved by precedence: it is a caller mistake, and the
+    endpoint's "exactly one of" contract is what tells the caller so.
+    """
+    if image_name is not None and video_name is not None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Provide exactly one of q, image_name or video_name",
+        )
+    if image_name is not None:
+        return IndexedItem("image", image_name)
+    if video_name is not None:
+        return IndexedItem("video", video_name)
+    return None
+
+
+def _reference_image(services, item: IndexedItem) -> Image.Image:
+    """The pixels a reference item is embedded from.
+
+    A video is represented by its thumbnail — the frame the index itself embeds — so an
+    unindexed video answers the same query an indexed one would, and no decoder runs on a
+    request thread.
+    """
+    if item.kind == "video":
+        # Copied out of the context manager so the thumbnail's file handle is closed here
+        # rather than whenever the returned image is collected.
+        with Image.open(services.videos.get_path(item.name, thumbnail=True)) as thumbnail:
+            return thumbnail.copy()
+    return services.images.get_pil_image(item.name)
+
+
 @image_map_router.get("/points", operation_id="get_image_map_points", response_model=ImageMapPointsResponse)
 async def get_image_map_points(
     current_user: CurrentUserOrDefault,
     eps: Optional[float] = ClusterEpsQuery,
     min_samples: int = ClusterMinSamplesQuery,
+    include_videos: bool = IncludeVideosQuery,
 ) -> ImageMapPointsResponse:
     """Gets the current user's semantic image map.
 
@@ -240,13 +297,19 @@ async def get_image_map_points(
         return ImageMapPointsResponse(points=[], state="disabled", stale=False, point_count=0)
 
     user_id, is_admin = _scope(current_user)
-    current_names = services.image_index_records.list_accessible_embedded_images(
-        None if is_admin else user_id, model_id
+    kinds = _served_kinds(include_videos)
+    # Both reads are SQLite work under the process-wide database lock, and on a large gallery
+    # the accessible listing is the expensive one — so they run off the event loop, like the
+    # clustering below.
+    current_items, record = await asyncio.to_thread(
+        lambda: (
+            services.image_index_records.list_accessible_embedded_items(None if is_admin else user_id, model_id),
+            services.image_index_records.get_projection(user_id, model_id),
+        )
     )
-    record = services.image_index_records.get_projection(user_id, model_id)
 
     if record is None:
-        if not current_names:
+        if not current_items:
             return ImageMapPointsResponse(points=[], state="empty", stale=False, point_count=0)
         enqueued = services.image_index.request_projection(user_id, all_images=is_admin)
         # stale means "a recompute is pending"; when nothing could be enqueued
@@ -256,17 +319,17 @@ async def get_image_map_points(
             points=[], state="computing" if enqueued else "empty", stale=enqueued, point_count=0
         )
 
-    current_hash = scope_hash(model_id, current_names)
+    current_hash = scope_hash(model_id, current_items)
     stale = record.scope_hash != current_hash
 
     if stale:
         services.image_index.request_projection(user_id, all_images=is_admin)
 
-    # Serve only points still in the user's current accessible set, so images
+    # Serve only points still in the user's current accessible set, so items
     # un-shared (or deleted) since the projection was computed never leak out
     # of a stale cache. Filtering happens BEFORE clustering: labels computed
     # over hidden points would let density-chaining through an inaccessible
-    # image leak its existence (and be wrong besides). All of this is CPU-bound
+    # item leak its existence (and be wrong besides). All of this is CPU-bound
     # and O(point count) — including the accessibility mask, which is a Python
     # membership test per cached point — so it runs off the event loop. Hoisting
     # the mask into the coroutine to decide the retry first cost 54ms of event
@@ -274,16 +337,21 @@ async def get_image_map_points(
     # in the process; the retry decision is made below instead, from the one
     # fact it actually needs.
     def build_points() -> tuple[list[ImageMapPoint], Optional[float], bool, str]:
-        accessible = set(current_names)
+        accessible = set(current_items)
+        # The kind filter narrows what is SERVED, never what the scope hash covers: the
+        # projection is fitted over every accessible item, so hashing a filtered set would
+        # make every cached projection look permanently stale to an images-only client.
         visible_mask = np.fromiter(
-            (name in accessible for name in record.image_names), dtype=bool, count=len(record.image_names)
+            (item in accessible and item.kind in kinds for item in record.items),
+            dtype=bool,
+            count=len(record.items),
         )
         # A NaN cannot be serialized as valid JSON, so one corrupt coordinate
         # would fail the whole response; rows written before the projection
         # writer grew its isfinite guard are still out there in existing
         # databases.
         visible_mask &= np.isfinite(record.coords).all(axis=1)
-        visible_names = [name for name, keep in zip(record.image_names, visible_mask, strict=True) if keep]
+        visible_items = [item for item, keep in zip(record.items, visible_mask, strict=True) if keep]
         visible_coords = record.coords[visible_mask]
 
         # Every input to the clustering is pinned by this key: which projection
@@ -292,18 +360,21 @@ async def get_image_map_points(
         # two DBSCAN parameters. The cache is keyed by user on top of this, so
         # one user's labels can never be served to another even if all of these
         # collide.
-        cache_key: _ClusterCacheKey = (record.scope_hash, record.updated_at, current_hash, eps, min_samples)
+        # The served kinds are part of the key: labels are computed over the visible points,
+        # and an entry built for one kind filter is a different-length array for another —
+        # which the zip below would refuse, 500ing whichever request read it second.
+        cache_key: _ClusterCacheKey = (record.scope_hash, record.updated_at, current_hash, eps, min_samples, kinds)
         cached_labels = _cluster_cache_get(user_id, cache_key)
         if cached_labels is not None:
             labels, resolved_eps = cached_labels
             return (
                 [
-                    ImageMapPoint(x=float(x), y=float(y), image_name=name, cluster=int(label))
-                    for name, (x, y), label in zip(visible_names, visible_coords, labels, strict=True)
+                    ImageMapPoint(x=float(x), y=float(y), image_name=item.name, kind=item.kind, cluster=int(label))
+                    for item, (x, y), label in zip(visible_items, visible_coords, labels, strict=True)
                 ],
                 resolved_eps,
                 True,
-                scope_hash(model_id, visible_names),
+                scope_hash(model_id, visible_items),
             )
 
         try:
@@ -334,19 +405,25 @@ async def get_image_map_points(
             labels = np.full((visible_coords.shape[0],), -1, dtype=np.int64)
         return (
             [
-                ImageMapPoint(x=float(x), y=float(y), image_name=name, cluster=int(label))
-                for name, (x, y), label in zip(visible_names, visible_coords, labels, strict=True)
+                ImageMapPoint(x=float(x), y=float(y), image_name=item.name, kind=item.kind, cluster=int(label))
+                for item, (x, y), label in zip(visible_items, visible_coords, labels, strict=True)
             ],
             resolved_eps,
             bool(visible_mask.any()),
-            scope_hash(model_id, visible_names),
+            scope_hash(model_id, visible_items),
         )
 
     points, resolved_eps, any_visible, visible_hash = await asyncio.to_thread(build_points)
 
     retrying = False
-    if not stale and current_names and not any_visible:
-        # Nothing servable over a gallery that HAS embedded images: a failed
+    # Only items of a kind this caller is served can evidence a failed fit. An accessible set
+    # that is all videos, read by a client that asked for images, is empty for a reason the
+    # projection cannot fix — and asking anyway starts the exact cycle `failed_scope` exists to
+    # stop: the worker short-circuits on the matching scope hash without ever marking the scope
+    # failed, emits projection_ready, and the client comes straight back with another /points.
+    servable_exists = any(item.kind in kinds for item in current_items)
+    if not stale and servable_exists and not any_visible:
+        # Nothing servable over a gallery that HAS embedded items of this kind: a failed
         # fit, not a result — and it is stamped with the current scope, so
         # staleness will never ask for it again. `failed_scope` makes the
         # service refuse this once the scope's single retry is spent, so a
@@ -369,12 +446,13 @@ async def get_image_map_points(
 class ImageMapSearchResult(BaseModel):
     """One semantic search hit."""
 
-    image_name: str = Field(description="The matching image")
+    image_name: str = Field(description="The matching image or video; `kind` says which namespace the name belongs to")
+    kind: MediaKind = Field(description="Whether this hit is an image or a video")
     score: float = Field(description="Cosine similarity to the query; higher is more similar")
 
 
 class ImageMapSearchResponse(BaseModel):
-    """Semantic search results over the user's embedded images."""
+    """Semantic search results over the user's embedded gallery items."""
 
     results: list[ImageMapSearchResult] = Field(description="Ranked results, most similar first")
 
@@ -384,20 +462,25 @@ async def search_image_map(
     current_user: CurrentUserOrDefault,
     q: Optional[str] = Query(default=None, max_length=500, description="Text query to embed and search with"),
     image_name: Optional[str] = Query(default=None, description="Reference image for similarity search"),
+    video_name: Optional[str] = Query(default=None, description="Reference video for similarity search"),
     limit: int = Query(default=100, ge=1, le=500, description="Maximum number of results"),
+    include_videos: bool = IncludeVideosQuery,
 ) -> ImageMapSearchResponse:
-    """Ranks the user's accessible images by semantic similarity.
+    """Ranks the user's accessible images and videos by semantic similarity.
 
     Provide exactly one of `q` (text search — requires the embedding model's
-    text encoder to be installed) or `image_name` (visual similarity — uses
-    the reference image's stored embedding when it exists, and otherwise
-    embeds the image file on demand, so unindexed images such as assets can
-    be reference images too).
+    text encoder to be installed), `image_name`, or `video_name` (visual
+    similarity — uses the reference item's stored embedding when it exists,
+    and otherwise embeds its file on demand, so unindexed items such as assets
+    can be reference items too). A video is represented by its thumbnail, the
+    same frame the index embedded.
     """
     services = ApiDependencies.invoker.services
-    if (q is None) == (image_name is None):
+    reference = _search_reference(image_name, video_name)
+    if (q is None) == (reference is None):
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Provide exactly one of q or image_name"
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Provide exactly one of q, image_name or video_name",
         )
 
     model_id = services.image_index.model_id
@@ -416,16 +499,19 @@ async def search_image_map(
         except TextSearchUnavailableError as e:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
     else:
-        assert image_name is not None
-        assert_image_read_access(image_name, current_user)
-        found, matrix = services.image_index_records.get_embeddings([image_name], model_id)
+        assert reference is not None
+        if reference.kind == "video":
+            assert_video_read_access(reference.name, current_user)
+        else:
+            assert_image_read_access(reference.name, current_user)
+        found, matrix = services.image_index_records.get_embeddings([reference], model_id)
         if found:
             query_embedding = matrix[0]
         else:
             # Not in the index (assets and intermediates are never indexed) —
             # embed the stored file on demand for this one query.
             def embed_from_file() -> np.ndarray:
-                pil = services.images.get_pil_image(image_name)
+                pil = _reference_image(services, reference)
                 # Capped exactly as the uploaded/downloaded path is: the encoder
                 # downscales to ~224px either way, and convert("RGB") on a large
                 # stored image materializes hundreds of MB on a request thread.
@@ -442,28 +528,34 @@ async def search_image_map(
                 query_embedding = await asyncio.to_thread(embed_from_file)
             except HTTPException:
                 raise
-            except (ImageFileNotFoundException, ImageRecordNotFoundException, OSError):
+            except (ImageFileNotFoundException, ImageRecordNotFoundException, VideoRecordNotFoundException, OSError):
                 # The stored file is missing or undecodable — the only failure
-                # here that is really about this image. Both record and file
+                # here that is really about this item. Both record and file
                 # exceptions are plain Exceptions rather than OSError, so they
                 # have to be named; PIL's decode failures are OSError subclasses.
-                services.logger.warning(f"Image search: cannot read '{image_name}' for on-demand embed", exc_info=True)
+                services.logger.warning(
+                    f"Image search: cannot read {reference.kind} '{reference.name}' for on-demand embed", exc_info=True
+                )
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
-                    detail="This image could not be embedded for search (its file may be missing)",
+                    detail="This item could not be embedded for search (its file may be missing)",
                 )
             except Exception:
                 # An encoder fault, a stopped index, an OOM. Reporting these as
                 # "file may be missing" sent anyone debugging to the wrong place.
-                services.logger.error(f"Image search: failed to embed '{image_name}' on demand", exc_info=True)
+                services.logger.error(
+                    f"Image search: failed to embed {reference.kind} '{reference.name}' on demand", exc_info=True
+                )
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="This image could not be embedded for search",
+                    detail="This item could not be embedded for search",
                 )
 
-    results = await asyncio.to_thread(services.image_index.search_similar, scope_user, query_embedding, limit)
+    results = await asyncio.to_thread(
+        services.image_index.search_similar, scope_user, query_embedding, limit, _served_kinds(include_videos)
+    )
     return ImageMapSearchResponse(
-        results=[ImageMapSearchResult(image_name=name, score=score) for name, score in results]
+        results=[ImageMapSearchResult(image_name=item.name, kind=item.kind, score=score) for item, score in results]
     )
 
 
@@ -591,6 +683,7 @@ async def search_image_map_by_image(
     image: Optional[UploadFile] = File(default=None, description="Reference image file"),
     image_url: Optional[str] = Query(default=None, max_length=2000, description="URL of a reference image"),
     limit: int = Query(default=100, ge=1, le=500, description="Maximum number of results"),
+    include_videos: bool = IncludeVideosQuery,
 ) -> ImageMapSearchResponse:
     """Ranks the user's accessible images by similarity to an arbitrary reference image.
 
@@ -650,9 +743,11 @@ async def search_image_map_by_image(
             detail="The reference could not be decoded as an image",
         )
 
-    results = await asyncio.to_thread(services.image_index.search_similar, scope_user, query_embedding, limit)
+    results = await asyncio.to_thread(
+        services.image_index.search_similar, scope_user, query_embedding, limit, _served_kinds(include_videos)
+    )
     return ImageMapSearchResponse(
-        results=[ImageMapSearchResult(image_name=name, score=score) for name, score in results]
+        results=[ImageMapSearchResult(image_name=item.name, kind=item.kind, score=score) for item, score in results]
     )
 
 
@@ -687,6 +782,7 @@ async def get_image_map_cluster_labels(
     eps: Optional[float] = ClusterEpsQuery,
     min_samples: int = ClusterMinSamplesQuery,
     top_k: int = Query(default=3, ge=1, le=10, description="Candidate labels per cluster"),
+    include_videos: bool = IncludeVideosQuery,
 ) -> ImageMapClusterLabelsResponse:
     """Labels the user's visible clusters with the most similar vocabulary phrases.
 
@@ -716,25 +812,28 @@ async def get_image_map_cluster_labels(
     except TextSearchUnavailableError as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
 
-    current_names = services.image_index_records.list_accessible_embedded_images(
-        None if is_admin else user_id, model_id
-    )
+    current_items = services.image_index_records.list_accessible_embedded_items(None if is_admin else user_id, model_id)
 
     def build() -> tuple[dict[int, dict], str]:
-        accessible = set(current_names)
+        accessible = set(current_items)
+        # Exactly the mask /points applies, kind filter included: the two responses' visible
+        # hashes are compared by the client, so they must cover the same set.
+        kinds = _served_kinds(include_videos)
         mask = np.fromiter(
-            (name in accessible for name in record.image_names), dtype=bool, count=len(record.image_names)
+            (item in accessible and item.kind in kinds for item in record.items),
+            dtype=bool,
+            count=len(record.items),
         )
         # Exactly the mask /points applies, non-finite filter included. Without
         # it this endpoint's visible_hash is computed over a different set of
-        # names than the one /points reports, so every response the client
+        # items than the one /points reports, so every response the client
         # receives fails the hash comparison it is told to make and all labels
         # are discarded — and the clustering below is handed a NaN, which
         # sklearn raises on, 500ing this user until their gallery changes.
         mask &= np.isfinite(record.coords).all(axis=1)
-        visible_names = [name for name, keep in zip(record.image_names, mask, strict=True) if keep]
-        visible_hash = scope_hash(model_id, visible_names)
-        if not visible_names:
+        visible_items = [item for item, keep in zip(record.items, mask, strict=True) if keep]
+        visible_hash = scope_hash(model_id, visible_items)
+        if not visible_items:
             return {}, visible_hash
         visible_coords = record.coords[mask]
         try:
@@ -762,25 +861,25 @@ async def get_image_map_cluster_labels(
         if not clustered.any():
             return {}, visible_hash
 
-        cluster_by_name = dict(zip(visible_names, cluster_ids, strict=True))
+        cluster_by_item = dict(zip(visible_items, cluster_ids, strict=True))
         # The accessible matrix comes from the same LRU the search endpoint
         # uses — this endpoint fires after every points refresh, and a full
         # BLOB read per request would not scale to large galleries.
-        accessible_names, accessible_matrix = services.image_index.get_accessible_embeddings(
+        accessible_items, accessible_matrix = services.image_index.get_accessible_embeddings(
             None if is_admin else user_id
         )
-        row_by_name = {name: index for index, name in enumerate(accessible_names)}
+        row_by_item = {item: index for index, item in enumerate(accessible_items)}
         # Noise rows are excluded here rather than inside label_clusters: they
         # contribute to no centroid, so gathering them only widens the copy.
-        found_names = [
-            name
-            for name, is_clustered in zip(visible_names, clustered, strict=True)
-            if is_clustered and name in row_by_name
+        found_items = [
+            item
+            for item, is_clustered in zip(visible_items, clustered, strict=True)
+            if is_clustered and item in row_by_item
         ]
-        if not found_names:
+        if not found_items:
             return {}, visible_hash
-        embeddings = accessible_matrix[[row_by_name[name] for name in found_names]]
-        aligned = np.fromiter((cluster_by_name[name] for name in found_names), dtype=np.int64, count=len(found_names))
+        embeddings = accessible_matrix[[row_by_item[item] for item in found_items]]
+        aligned = np.fromiter((cluster_by_item[item] for item in found_items), dtype=np.int64, count=len(found_items))
         return label_clusters(aligned, embeddings, vocabulary, vocab_embeddings, top_k=top_k), visible_hash
 
     labels, visible_hash = await asyncio.to_thread(build)
@@ -797,11 +896,11 @@ async def get_image_map_cluster_labels(
 
 
 class ImageMapImageLabelsResponse(BaseModel):
-    """The best vocabulary labels for one image."""
+    """The best vocabulary labels for one gallery item."""
 
     label: str = Field(description="Best-matching vocabulary phrase")
     alternates: list[str] = Field(description="Runner-up phrases")
-    score: float = Field(description="Cosine similarity of the best phrase to the image's embedding")
+    score: float = Field(description="Cosine similarity of the best phrase to the item's embedding")
 
 
 @image_map_router.get(
@@ -809,13 +908,14 @@ class ImageMapImageLabelsResponse(BaseModel):
 )
 async def get_image_map_image_labels(
     current_user: CurrentUserOrDefault,
-    image_name: str = Query(description="The image to label"),
+    image_name: str = Query(description="The image or video to label"),
+    kind: MediaKind = Query(default="image", description="Which namespace image_name belongs to"),
     top_k: int = Query(default=3, ge=1, le=10, description="Number of candidate labels"),
 ) -> ImageMapImageLabelsResponse:
-    """Labels one image with the vocabulary phrases most similar to its stored embedding.
+    """Labels one gallery item with the vocabulary phrases most similar to its stored embedding.
 
-    Serves map hover cards, so it only covers images the index has embedded;
-    an unindexed image (assets, intermediates, not-yet-indexed) is a 404
+    Serves map hover cards, so it only covers items the index has embedded;
+    an unindexed item (assets, intermediates, not-yet-indexed) is a 404
     rather than an on-demand embed — a hover must never queue encoder work.
     Requires the embedding model's text encoder, like /cluster_labels.
     """
@@ -824,7 +924,11 @@ async def get_image_map_image_labels(
     if model_id is None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="The image index is not enabled")
 
-    assert_image_read_access(image_name, current_user)
+    item = IndexedItem(kind, image_name)
+    if item.kind == "video":
+        assert_video_read_access(item.name, current_user)
+    else:
+        assert_image_read_access(item.name, current_user)
 
     try:
         vocabulary, vocab_embeddings = await asyncio.to_thread(services.image_index.get_vocab_embeddings)
@@ -838,22 +942,22 @@ async def get_image_map_image_labels(
     #
     # A stored row whose blob length disagrees with its `dim` column raises out
     # of `blob_to_embedding`, and a row whose dim disagrees with the vocabulary
-    # matrix raises out of the matmul below. Both are this one image's data
+    # matrix raises out of the matmul below. Both are this one item's data
     # being unusable, so both answer 404 like the degenerate-vector case — an
     # unhandled 500 here would refire on every hover of that point, which is
     # once per pointer sweep rather than once per user action.
     try:
-        found, matrix = await asyncio.to_thread(services.image_index_records.get_embeddings, [image_name], model_id)
+        found, matrix = await asyncio.to_thread(services.image_index_records.get_embeddings, [item], model_id)
         if not found:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="This image has no stored embedding to label"
+                status_code=status.HTTP_404_NOT_FOUND, detail="This item has no stored embedding to label"
             )
 
         # float64 for the norm, and a degenerate row is refused rather than
         # passed through — exactly as `_normalize_query_vector` does for search
         # queries. Dividing by a zero or non-finite norm makes every score NaN,
         # and `argpartition` then returns arbitrary rows: the card would present
-        # three unrelated vocabulary phrases as this image's tags, with a
+        # three unrelated vocabulary phrases as this item's tags, with a
         # `score` that serializes as JSON null against a schema that declares it
         # a float. The writer rejects such rows now, but ones predating that
         # guard are still out there — the same assumption this file already
@@ -867,9 +971,11 @@ async def get_image_map_image_labels(
     except HTTPException:
         raise
     except ValueError:
-        services.logger.warning(f"Image map: cannot label '{image_name}' from its stored embedding", exc_info=True)
+        services.logger.warning(
+            f"Image map: cannot label {item.kind} '{item.name}' from its stored embedding", exc_info=True
+        )
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="This image's stored embedding cannot be labeled"
+            status_code=status.HTTP_404_NOT_FOUND, detail="This item's stored embedding cannot be labeled"
         )
 
     # Bounded by the score vector too, not just the phrase list: a cached vocab
@@ -988,7 +1094,9 @@ def update_image_map_vocab(update: ImageMapVocabUpdate, current_user: AdminUserO
 
 
 @image_map_router.get("/status", operation_id="get_image_map_status", response_model=ImageMapStatusResponse)
-def get_image_map_status(current_user: CurrentUserOrDefault) -> ImageMapStatusResponse:
+def get_image_map_status(
+    current_user: CurrentUserOrDefault, include_videos: bool = IncludeVideosQuery
+) -> ImageMapStatusResponse:
     """Gets embedding index progress and the user's projection cache status."""
     services = ApiDependencies.invoker.services
     model_id = _active_model_id(services)
@@ -1007,15 +1115,17 @@ def get_image_map_status(current_user: CurrentUserOrDefault) -> ImageMapStatusRe
     if record is None:
         projection = ImageMapProjectionStatus(state="empty", stale=False, point_count=0)
     else:
-        current_names = services.image_index_records.list_accessible_embedded_images(
+        current_items = services.image_index_records.list_accessible_embedded_items(
             None if is_admin else user_id, model_id
         )
         # Count only currently-accessible points; a stale record's raw count
-        # would reveal the size of a since-revoked scope.
-        visible_count = len(set(record.image_names) & set(current_names))
+        # would reveal the size of a since-revoked scope. Kinds the caller did not ask for are
+        # excluded too, so this count matches the points /points would serve it.
+        kinds = _served_kinds(include_videos)
+        visible_count = len({item for item in set(record.items) & set(current_items) if item.kind in kinds})
         projection = ImageMapProjectionStatus(
             state="ready" if visible_count else "empty",
-            stale=record.scope_hash != scope_hash(model_id, current_names),
+            stale=record.scope_hash != scope_hash(model_id, current_items),
             point_count=visible_count,
             updated_at=record.updated_at,
         )

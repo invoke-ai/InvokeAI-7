@@ -28,6 +28,7 @@ from invokeai.backend.model_manager.load.load_base import LoadedModel, LoadedMod
 from invokeai.backend.model_manager.taxonomy import AnyModel, BaseModelType, ModelFormat, ModelType, SubModelType
 from invokeai.backend.stable_diffusion.diffusers_pipeline import PipelineIntermediateState
 from invokeai.backend.stable_diffusion.diffusion.conditioning_data import ConditioningFieldData
+from invokeai.backend.util.devices import TorchDevice
 
 if TYPE_CHECKING:
     from invokeai.app.invocations.baseinvocation import BaseInvocation
@@ -885,6 +886,13 @@ class UtilInterface(InvocationContextInterface):
             image_size: The optional size of the image to display. If omitted, the image will be displayed at its
                 original size.
         """
+
+        # Every denoise loop reports here once per step, so this is where a busy worker reaches a
+        # natural boundary in its own GPU work. If a peer deferred a process-global empty_cache
+        # (skipped so as not to stall THIS worker mid-step), run it now, from this thread, where
+        # the driver-level free costs this device at most a re-allocation of its cached working
+        # blocks. A flag test when nothing is pending.
+        TorchDevice.flush_deferred_empty_cache()
 
         queue_item = self._data.queue_item
 

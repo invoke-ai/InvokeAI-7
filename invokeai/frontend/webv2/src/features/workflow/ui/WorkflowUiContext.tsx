@@ -17,6 +17,7 @@ export interface WorkflowPreferences {
   reduceMotion: boolean;
   themeId: 'classic' | 'light' | 'osakaJade' | 'mono' | 'ultradark';
   workflowEdgeStyle: 'curved' | 'square';
+  workflowEdgesBehindNodes: boolean;
   workflowShowMinimap: boolean;
   workflowSnapToGrid: boolean;
   workflowValidateConnections: boolean;

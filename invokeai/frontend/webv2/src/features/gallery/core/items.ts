@@ -35,6 +35,12 @@ export interface GalleryVideoItem extends GalleryItemBase {
   durationSeconds: number;
   fps?: number;
   kind: 'video';
+  /**
+   * How the video entered the gallery, when the server marked it. `'audio_upload'` means an
+   * uploaded audio file the ingest converter wrapped into a rendered-waveform video — its
+   * frames are a picture of the sound, not footage.
+   */
+  mediaOrigin?: string;
 }
 
 export type GalleryItem = GalleryImageItem | GalleryVideoItem;
@@ -95,16 +101,12 @@ const compareSqliteBinaryText = (a: string, b: string): number => (a === b ? 0 :
 const compareCreatedAt = (a: string, b: string): number =>
   compareSqliteBinaryText(normalizeServerTimestamp(a), normalizeServerTimestamp(b));
 
-/** Mirrors the backend's starred/time/kind/name order for mixed gallery items. */
+/** Mirrors the backend's time/kind/name order for mixed gallery items. */
 export const compareGalleryItems = (
   a: GalleryItem,
   b: GalleryItem,
-  { orderDir = 'DESC', starredFirst = false }: { orderDir?: GalleryOrderDir; starredFirst?: boolean }
+  { orderDir = 'DESC' }: { orderDir?: GalleryOrderDir } = {}
 ): number => {
-  if (starredFirst && a.starred !== b.starred) {
-    return a.starred ? -1 : 1;
-  }
-
   const direction = orderDir === 'ASC' ? 1 : -1;
   const chronologicalOrder = compareCreatedAt(a.createdAt, b.createdAt);
 

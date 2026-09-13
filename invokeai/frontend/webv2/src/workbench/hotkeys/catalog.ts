@@ -74,6 +74,8 @@ const implemented = new Set([
   'canvas.fitBboxToMasks',
   'canvas.newSession',
   'canvas.nextEntity',
+  'canvas.saveBboxToGallery',
+  'canvas.saveToGallery',
   'canvas.prevEntity',
   'canvas.redo',
   'canvas.setFillColorsToDefault',
@@ -92,6 +94,7 @@ const implemented = new Set([
   'gallery.remix',
   'gallery.selectAllOnPage',
   'gallery.starImage',
+  'gallery.toggleStarredOnly',
   'viewer.nextComparisonMode',
   'viewer.deleteImage',
   'viewer.recallAll',
@@ -248,8 +251,10 @@ export const firstPartyHotkeyCatalog: HotkeyDefinition[] = [
   hotkey('canvas', 'toggleNonRasterLayers', ['shift+h']),
   hotkey('canvas', 'fitBboxToMasks', ['shift+b']),
   hotkey('canvas', 'toggleBbox', ['shift+o']),
-  // New canvas session: no default keys — assignable via the hotkeys settings.
+  // New canvas session and the gallery saves: no default keys — assignable via the hotkeys settings.
   hotkey('canvas', 'newSession', []),
+  hotkey('canvas', 'saveToGallery', []),
+  hotkey('canvas', 'saveBboxToGallery', []),
   hotkey('workflows', 'addNode', ['shift+a', 'space']),
   hotkey('workflows', 'copySelection', ['mod+c']),
   hotkey('workflows', 'pasteSelection', ['mod+v']),
@@ -282,4 +287,5 @@ export const firstPartyHotkeyCatalog: HotkeyDefinition[] = [
   hotkey('gallery', 'deleteSelection', ['delete', 'backspace']),
   hotkey('gallery', 'remix', ['r']),
   hotkey('gallery', 'starImage', ['.']),
+  hotkey('gallery', 'toggleStarredOnly', []),
 ];

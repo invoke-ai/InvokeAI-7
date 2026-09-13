@@ -36,6 +36,7 @@ from invokeai.backend.minimax_h3.packing import (
     MINIMAX_H3_PIXEL_STD,
 )
 from invokeai.backend.model_manager.load.model_cache.utils import get_effective_device
+from invokeai.backend.util.cancel_hooks import cancel_before_forward
 from invokeai.backend.util.devices import TorchDevice
 from invokeai.backend.util.vae_working_memory import estimate_vae_working_memory_minimax_h3
 
@@ -99,7 +100,9 @@ def decode_video_latents(
         # The H3 VAE tiles spatially by default (256px tiles / 64px overlap) and the released
         # frames are the blended-tile ones — never toggle tiling on the shared cached instance:
         # it would silently change every later encode/decode using the same cached model.
-        with torch.inference_mode():
+        # The decoder runs once per spatial tile of every temporal chunk, so a cancel lands within
+        # one tile rather than at the end of the whole decode.
+        with torch.inference_mode(), cancel_before_forward([vae.decoder], context.util.is_canceled, device):
             latents_mean = torch.tensor(vae.config.latents_mean).view(1, -1, 1, 1, 1).to(latents)
             latents_std = torch.tensor(vae.config.latents_std).view(1, -1, 1, 1, 1).to(latents)
             latents = latents * latents_std + latents_mean

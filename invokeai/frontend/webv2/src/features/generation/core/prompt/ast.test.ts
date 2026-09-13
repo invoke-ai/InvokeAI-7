@@ -58,4 +58,25 @@ describe('prompt AST', () => {
     expect(roundTrip("('one', 'two')\n.and()")).toBe("('one', 'two').and()");
     expect(roundTrip('(one, two)\n.and()')).toBe('(one, two).and()');
   });
+
+  it.each(['a ) tail', '(unfinished', 'a <unfinished', '< spaced embedding >', 'a > b', 'café+', '🌄+', '𐐀𐐁+'])(
+    'preserves text and incomplete syntax: %s',
+    (prompt) => {
+      expect(roundTrip(prompt)).toBe(prompt);
+    }
+  );
+
+  it('keeps unicode words and surrogate pairs together with their attention', () => {
+    expect(tokenizePrompt('café+ 🌄+ 𐐀𐐁+').map((token) => token.type)).toEqual([
+      'word',
+      'weight',
+      'whitespace',
+      'word',
+      'weight',
+      'whitespace',
+      'word',
+      'weight',
+    ]);
+    expect(parsePrompt('🌄+')[0]).toMatchObject({ text: '🌄', attention: '+', range: { start: 0, end: 3 } });
+  });
 });

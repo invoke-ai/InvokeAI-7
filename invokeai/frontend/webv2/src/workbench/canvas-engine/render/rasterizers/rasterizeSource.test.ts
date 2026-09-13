@@ -180,7 +180,7 @@ describe('rasterizeSource — paint', () => {
 });
 
 describe('rasterizeSource — unimplemented sources', () => {
-  it('throws for the deferred polygon shape kind', () => {
+  it('throws for a polygon shape without enough points to fill', () => {
     const { backend } = createSpyBackend();
     const resolver = vi.fn<ImageResolver>(() => Promise.resolve(new Blob()));
     const deps = makeDeps(resolver, backend);
@@ -193,7 +193,29 @@ describe('rasterizeSource — unimplemented sources', () => {
       type: 'shape',
       width: 10,
     } as unknown as CanvasLayerSourceContract;
-    expect(() => rasterizeSource(source, deps)).toThrow(/not implemented/i);
+    expect(() => rasterizeSource(source, deps)).toThrow(/three points/i);
+  });
+
+  it('rasterizes a polygon shape once it has points', async () => {
+    const { backend } = createSpyBackend();
+    const resolver = vi.fn<ImageResolver>(() => Promise.resolve(new Blob()));
+    const deps = makeDeps(resolver, backend);
+    const source = {
+      fill: '#000000',
+      height: 10,
+      kind: 'polygon',
+      points: [
+        { x: 0, y: 0 },
+        { x: 10, y: 0 },
+        { x: 5, y: 10 },
+      ],
+      stroke: null,
+      strokeWidth: 0,
+      type: 'shape',
+      width: 10,
+    } as unknown as CanvasLayerSourceContract;
+    const { rect } = await rasterizeSource(source, deps);
+    expect(rect).toEqual({ height: 10, width: 10, x: 0, y: 0 });
   });
 
   it('rasterizes shape, gradient, and text sources (no longer throwing)', async () => {

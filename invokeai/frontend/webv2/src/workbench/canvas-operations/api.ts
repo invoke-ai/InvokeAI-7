@@ -16,6 +16,7 @@ export {
   type ImportGalleryImagesResult,
 } from './importGalleryImages';
 export { getCanvasImportNotice } from './canvasImportNotice';
+export { createCanvasFromImages, type CreateCanvasFromImagesResult } from './createCanvasFromImages';
 export {
   createFromBbox,
   type CreateFromBboxDestination,

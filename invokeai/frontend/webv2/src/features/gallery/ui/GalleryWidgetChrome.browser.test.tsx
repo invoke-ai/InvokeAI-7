@@ -9,7 +9,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { GalleryWidgetHeaderActions, GalleryWidgetLabel } from './GalleryWidgetChrome';
+import { GalleryWidgetLabel } from './GalleryWidgetChrome';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -56,7 +56,7 @@ const createAdapter = (values: Record<string, unknown>) =>
   }) as unknown as GalleryUiAdapter;
 
 const renderChrome = async (
-  Component: typeof GalleryWidgetLabel | typeof GalleryWidgetHeaderActions,
+  Component: typeof GalleryWidgetLabel,
   values: Record<string, unknown> = {},
   region: 'center' | 'right' = 'right'
 ) => {
@@ -135,16 +135,5 @@ describe('GalleryWidgetLabel', () => {
     });
 
     expect(updateSettings).toHaveBeenCalledWith({ boardPanelCollapsed: true });
-  });
-});
-
-describe('GalleryWidgetHeaderActions', () => {
-  it('offers settings in every region, since the body renders neither (upload now lives in the toolbar)', async () => {
-    for (const region of ['center', 'right'] as const) {
-      await renderChrome(GalleryWidgetHeaderActions, { selectedBoardId: 'dogs' }, region);
-
-      expect(host?.querySelector('button[aria-label="widgets.gallery.settings"]'), region).not.toBeNull();
-      expect(host?.querySelector('button[aria-label^="widgets.gallery.upload"]'), region).toBeNull();
-    }
   });
 });

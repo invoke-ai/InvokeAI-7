@@ -107,6 +107,7 @@ const mocks = vi.hoisted(() => {
         preview: { state: { values: {} }, typeId: 'preview' },
       },
     },
+    galleryItemFilters: [] as Array<{ boardId: string; starred?: boolean }>,
     galleryItemPageOffsets: [] as number[],
     galleryItemWindowOffsets: [] as number[],
     galleryItemPages: [] as GalleryItemsPage[],
@@ -170,9 +171,10 @@ vi.mock('@features/gallery/queries', () => ({
     data?.pages.flatMap((page) => page.items) ?? [],
   galleryBoardsOptions: () => ({ queryFn: () => [], queryKey: ['test-boards'], staleTime: Infinity }),
   galleryItemsInfiniteOptions: (
-    query: { boardId: string; orderDir?: 'ASC' | 'DESC' },
+    query: { boardId: string; orderDir?: 'ASC' | 'DESC'; starred?: boolean },
     window: { kind: 'anchor' | 'infinite' | 'page'; offset?: number } = { kind: 'infinite' }
   ) => {
+    mocks.galleryItemFilters.push(query);
     const pages = mocks.galleryItemPages.map((page) => {
       const items = page.items.filter((item) => item.boardId === query.boardId);
 
@@ -459,6 +461,7 @@ beforeEach(() => {
     boardId: 'none',
   };
   mocks.project.widgetInstances.gallery.state.values.selectedImageName = 'newest';
+  mocks.galleryItemFilters.length = 0;
   mocks.galleryItemPageOffsets.length = 0;
   mocks.galleryItemWindowOffsets.length = 0;
   mocks.imageActionOptions = null;
@@ -499,6 +502,56 @@ afterEach(async () => {
 });
 
 describe('preview keyboard navigation boundary', () => {
+  it('walks the unstarred listing the grid shows by default, and the starred one for a starred selection', async () => {
+    await render();
+
+    expect(mocks.galleryItemFilters.length).toBeGreaterThan(0);
+    expect(mocks.galleryItemFilters.every((query) => query.starred === false)).toBe(true);
+
+    // A starred item lives in the grid's strip, so its neighbors are the
+    // other starred items, whatever listing the grid was showing.
+    mocks.galleryItemFilters.length = 0;
+    setGalleryValues({
+      recentImages: mocks.recentImages.map((image) =>
+        image.imageName === 'newest' ? { ...image, starred: true } : image
+      ),
+      selectedImage: { ...legacyImage('newest', '2026-07-23T00:00:00.000Z'), starred: true },
+      selectedImageName: 'newest',
+    });
+    await render();
+
+    expect(mocks.galleryItemFilters.length).toBeGreaterThan(0);
+    expect(mocks.galleryItemFilters.every((query) => query.starred === true)).toBe(true);
+  });
+
+  it('anchors a strip selection at the top of the starred listing, not at the grid page it was stamped with', async () => {
+    // Paginated mode, grid on page 2: the stamp says page 2 of the unstarred
+    // listing, but the clicked strip item sits at the top of the starred one.
+    const starredItem = { ...createImageItem('starred-top', '2026-07-23T00:00:00.000Z'), starred: true };
+    const starredNext = { ...createImageItem('starred-next', '2026-07-22T00:00:00.000Z'), starred: true };
+
+    setGalleryValues({
+      galleryPage: 2,
+      paginationMode: 'paginated',
+      recentImages: [],
+      selectedImage: { ...legacyImage('starred-top', '2026-07-23T00:00:00.000Z'), starred: true },
+      selectedImageName: 'starred-top',
+      selectedImageQuery: { ...deepQuery, page: 2, paginationMode: 'paginated' },
+    });
+    mocks.galleryItemPages = [{ items: [starredItem, starredNext], total: 2 }];
+
+    await render();
+    await pressArrow('ArrowRight');
+
+    expect(mocks.galleryItemWindowOffsets.every((offset) => offset === 0)).toBe(true);
+    expect(mocks.commands.gallery.selectItem).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'starred-next' }),
+      undefined,
+      expect.any(Number),
+      true
+    );
+  });
+
   it('handles one arrow press as exactly one selection and stops propagation', async () => {
     const documentKeydown = vi.fn();
     document.addEventListener('keydown', documentKeydown);
@@ -572,6 +625,39 @@ describe('preview keyboard navigation boundary', () => {
     expect(mocks.commands.gallery.selectItem).toHaveBeenCalledTimes(1);
     expect(mocks.commands.gallery.selectItem).toHaveBeenCalledWith(
       expect.objectContaining({ kind: 'image', name: 'batch-1' }),
+      undefined,
+      expect.any(Number),
+      true
+    );
+  });
+
+  it('walks the starred-only listing the selection was made in, and keeps recents out of it', async () => {
+    // The grid under the starred filter shows starred items only; Preview's
+    // arrows must step through that same list, and a fresh (unstarred)
+    // generation has no place in it.
+    const starredNewer = { ...createImageItem('starred-newer', '2026-07-20T00:00:02.000Z'), starred: true };
+    const starredOlder = { ...createImageItem('starred-older', '2026-07-20T00:00:01.000Z'), starred: true };
+
+    setGalleryValues({
+      recentImages: [legacyImage('fresh-generation', '2026-07-23T00:00:00.000Z', 'queue-item-done')],
+      selectedImage: legacyImage('starred-newer', '2026-07-20T00:00:02.000Z'),
+      selectedImageName: 'starred-newer',
+      selectedImageQuery: { ...deepQuery, page: 0, starredOnly: true },
+      starredOnly: true,
+    });
+    mocks.galleryItemPages = [{ items: [starredNewer, starredOlder], total: 2 }];
+
+    await render();
+
+    expect(mocks.galleryItemFilters.at(-1)).toMatchObject({ boardId: 'none', starred: true });
+    expect(mocks.galleryItemFilters.every((query) => query.starred === true)).toBe(true);
+
+    await pressArrow('ArrowRight');
+    await pressArrow('ArrowLeft');
+
+    expect(mocks.commands.gallery.selectItem).toHaveBeenCalledTimes(1);
+    expect(mocks.commands.gallery.selectItem).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'starred-older' }),
       undefined,
       expect.any(Number),
       true

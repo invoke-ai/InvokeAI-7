@@ -62,3 +62,38 @@ def test_gallery_list_endpoints_reject_invalid_created_range_dates(
     response = client.get(path, params={param: "2026-02-31"})
 
     assert response.status_code == 422
+
+
+@pytest.mark.parametrize(
+    ("path", "service_index"),
+    [("/api/v1/gallery/items/", 0), ("/api/v1/gallery/items/names", 1), ("/api/v1/gallery/item_names", 2)],
+)
+@pytest.mark.parametrize(("value", "expected"), [("true", True), ("false", False), (None, None)])
+def test_gallery_list_endpoints_forward_starred_filter(
+    monkeypatch: Any,
+    mock_invoker: Invoker,
+    client: TestClient,
+    path: str,
+    service_index: int,
+    value: str | None,
+    expected: bool | None,
+) -> None:
+    service_calls = _prepare_gallery_router_test(monkeypatch, mock_invoker)
+
+    response = client.get(path, params={} if value is None else {"starred": value})
+
+    assert response.status_code == 200
+    assert service_calls[service_index].call_args.kwargs["starred"] is expected
+
+
+@pytest.mark.parametrize(
+    "path", ["/api/v1/gallery/items/", "/api/v1/gallery/items/names", "/api/v1/gallery/item_names"]
+)
+def test_gallery_list_endpoints_reject_non_boolean_starred(
+    monkeypatch: Any, mock_invoker: Invoker, client: TestClient, path: str
+) -> None:
+    _prepare_gallery_router_test(monkeypatch, mock_invoker)
+
+    response = client.get(path, params={"starred": "maybe"})
+
+    assert response.status_code == 422

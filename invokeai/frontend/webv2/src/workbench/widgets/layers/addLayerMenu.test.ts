@@ -32,10 +32,14 @@ describe('ADD_LAYER_MENU', () => {
 });
 
 describe('isAddLayerItemAvailable', () => {
-  it('hides only regional reference-image creation for FLUX.2', () => {
-    expect(isAddLayerItemAvailable('regional_reference_image', 'flux2')).toBe(false);
-    expect(isAddLayerItemAvailable('regional_guidance', 'flux2')).toBe(true);
-    expect(isAddLayerItemAvailable('regional_reference_image', 'flux')).toBe(true);
+  it('hides only regional reference-image creation on bases without a regional image path', () => {
+    for (const base of ['flux2', 'krea-2', 'z-image', 'anima', 'sd-3']) {
+      expect(isAddLayerItemAvailable('regional_reference_image', base), base).toBe(false);
+      expect(isAddLayerItemAvailable('regional_guidance', base), base).toBe(true);
+    }
+    for (const base of ['sd-1', 'sd-2', 'sdxl', 'flux', null]) {
+      expect(isAddLayerItemAvailable('regional_reference_image', base), String(base)).toBe(true);
+    }
   });
 });
 

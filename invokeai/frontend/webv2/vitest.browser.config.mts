@@ -35,6 +35,7 @@ export default mergeConfig(
         provider: playwright(),
       },
       include: ['src/**/*.browser.test.{ts,tsx}'],
+      setupFiles: ['./scripts/browser-test-console.ts'],
     },
   })
 );

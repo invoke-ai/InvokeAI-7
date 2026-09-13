@@ -18,6 +18,7 @@ from invokeai.app.services.session_queue.session_queue_common import (
     CancelAllExceptCurrentResult,
     CancelByBatchIDsResult,
     CancelByDestinationResult,
+    CancelByQueueIDResult,
     ClearResult,
     DeleteAllExceptCurrentResult,
     DeleteByDestinationResult,
@@ -447,16 +448,42 @@ def pause(
 def cancel_all_except_current(
     current_user: CurrentUserOrDefault,
     queue_id: str = Path(description="The queue id to perform this operation on"),
+    origin_prefix: Optional[str] = Query(
+        default=None, description="Only cancel queue items whose origin starts with this prefix"
+    ),
 ) -> CancelAllExceptCurrentResult:
     """Immediately cancels all queue items except in-processing items. Non-admin users can only cancel their own items."""
     try:
         # Admin users can cancel all items, non-admin users can only cancel their own
         user_id = None if current_user.is_admin else current_user.user_id
         return ApiDependencies.invoker.services.session_queue.cancel_all_except_current(
-            queue_id=queue_id, user_id=user_id
+            queue_id=queue_id, user_id=user_id, origin_prefix=origin_prefix
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Unexpected error while canceling all except current: {e}")
+
+
+@session_queue_router.put(
+    "/{queue_id}/cancel_all",
+    operation_id="cancel_all",
+    responses={200: {"model": CancelByQueueIDResult}},
+)
+def cancel_all(
+    current_user: CurrentUserOrDefault,
+    queue_id: str = Path(description="The queue id to perform this operation on"),
+    origin_prefix: Optional[str] = Query(
+        default=None, description="Only cancel queue items whose origin starts with this prefix"
+    ),
+) -> CancelByQueueIDResult:
+    """Immediately cancels all queue items, in-progress items included. Non-admin users can only cancel their own items."""
+    try:
+        # Admin users can cancel all items, non-admin users can only cancel their own
+        user_id = None if current_user.is_admin else current_user.user_id
+        return ApiDependencies.invoker.services.session_queue.cancel_by_queue_id(
+            queue_id=queue_id, user_id=user_id, origin_prefix=origin_prefix
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Unexpected error while canceling all: {e}")
 
 
 @session_queue_router.put(

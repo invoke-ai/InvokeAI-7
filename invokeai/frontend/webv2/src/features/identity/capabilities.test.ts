@@ -22,7 +22,9 @@ describe('Identity route capabilities', () => {
       canManageImageMapVocabulary: false,
       canManageModels: false,
       canManageNodes: false,
+      canManageSharedFonts: false,
       canManagePromptTemplates: false,
+      canManageSharedSystemPrompts: false,
       canManageUsers: false,
     });
   });
@@ -33,7 +35,9 @@ describe('Identity route capabilities', () => {
       canManageImageMapVocabulary: true,
       canManageModels: true,
       canManageNodes: true,
+      canManageSharedFonts: true,
       canManagePromptTemplates: true,
+      canManageSharedSystemPrompts: true,
       canManageUsers: false,
     });
   });
@@ -54,7 +58,9 @@ describe('Identity route capabilities', () => {
       canManageImageMapVocabulary: false,
       canManageModels: false,
       canManageNodes: false,
+      canManageSharedFonts: false,
       canManagePromptTemplates: false,
+      canManageSharedSystemPrompts: false,
       canManageUsers: false,
     });
     expect(getCapabilities(session({ user: { ...baseUser, is_admin: true } }))).toEqual({
@@ -62,7 +68,9 @@ describe('Identity route capabilities', () => {
       canManageImageMapVocabulary: true,
       canManageModels: true,
       canManageNodes: true,
+      canManageSharedFonts: true,
       canManagePromptTemplates: true,
+      canManageSharedSystemPrompts: true,
       canManageUsers: true,
     });
   });

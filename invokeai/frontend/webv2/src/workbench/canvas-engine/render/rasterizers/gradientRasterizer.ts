@@ -6,9 +6,10 @@
  * default to the document dims (see {@link RasterizeDeps.documentSize}), so they
  * render identically. The compositor positions the extent via the layer transform.
  *
- * Linear: the gradient line runs through the extent center along `angle`
- * (degrees; 0° = left→right), long enough to cover the box corners. Radial:
- * centered on the extent, radius reaching the farthest corner.
+ * Linear: the gradient line runs through `center` along `angle` (degrees;
+ * 0° = left→right) for `span` px. Radial: `span` is the radius around `center`.
+ * Without an anchor the ramp is centered on the extent and fitted to its
+ * corners (how gradients looked before the drag placed them).
  *
  * Zero React, zero import-time side effects.
  */
@@ -23,20 +24,20 @@ type Ctx = RasterSurface['ctx'];
 
 /** Builds the CSS-like gradient for the source across a `width`×`height` box. */
 const buildGradient = (ctx: Ctx, source: GradientSource, width: number, height: number): CanvasGradient => {
-  const cx = width / 2;
-  const cy = height / 2;
+  const cx = source.center?.x ?? width / 2;
+  const cy = source.center?.y ?? height / 2;
 
   let gradient: CanvasGradient;
   if (source.kind === 'radial') {
-    const radius = Math.hypot(width / 2, height / 2);
+    const radius = source.span ?? Math.hypot(width / 2, height / 2);
     gradient = ctx.createRadialGradient(cx, cy, 0, cx, cy, radius);
   } else {
     const rad = (source.angle * Math.PI) / 180;
     const dx = Math.cos(rad);
     const dy = Math.sin(rad);
-    // Half-length along the direction that just covers the box (projection of
-    // the box's half-extents onto the gradient direction).
-    const half = (Math.abs(dx) * width + Math.abs(dy) * height) / 2;
+    // Fitted fallback: the projection of the box's half-extents onto the
+    // gradient direction, so the ramp just covers the corners.
+    const half = source.span !== undefined ? source.span / 2 : (Math.abs(dx) * width + Math.abs(dy) * height) / 2;
     gradient = ctx.createLinearGradient(cx - dx * half, cy - dy * half, cx + dx * half, cy + dy * half);
   }
 

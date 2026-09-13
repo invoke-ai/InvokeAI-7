@@ -160,3 +160,60 @@ def test_lock_paced_yields_global_lock_to_waiting_writer():
     assert stream_done.wait(timeout=10), "paced stream did not settle after the writer finished"
     stream_thread.join(timeout=10)
     writer_thread.join(timeout=10)
+
+
+def _paced_wrapper(claim: MagicMock, cache: MagicMock) -> LoadedModelWithoutConfig:
+    record = MagicMock()
+    record.awaiting_first_use = False
+    record.cached_model.total_bytes.return_value = 1 << 20
+    cache.release_first_use_grace = None
+    cache.register_first_use_hold = None
+    return LoadedModelWithoutConfig(cache_record=record, cache=cache, first_use_claim=claim)
+
+
+def test_multi_pass_paced_enter_releases_first_use_claim_exactly_once():
+    """The first-use claim is released after the whole paced stream settles, and only once.
+
+    Releasing per pass would drop the eviction shield while later passes are still streaming;
+    releasing again on re-entry would double-release a claim that no longer belongs to us.
+    """
+    cache = MagicMock()
+    claim = MagicMock()
+    releases_seen_by_pass: list[int] = []
+    settled_by_pass = iter([False, False, True])
+
+    def pass_runs_with_claim_held(*args, **kwargs):
+        releases_seen_by_pass.append(claim.release.call_count)
+        return next(settled_by_pass, True)
+
+    cache.lock.side_effect = pass_runs_with_claim_held
+    cache.continue_lock.side_effect = pass_runs_with_claim_held
+    loaded = _paced_wrapper(claim, cache)
+
+    with loaded:
+        claim.release.assert_called_once()
+    # Initial lock() plus two continue_lock() passes, none of which saw the claim released.
+    assert releases_seen_by_pass == [0, 0, 0]
+    assert cache.continue_lock.call_count == 2
+
+    with loaded:
+        pass
+    claim.release.assert_called_once()
+
+
+def test_paced_stream_failure_does_not_release_first_use_claim_synchronously():
+    """A pass that raises behaves like a failed lock(): the cache already unpinned the entry, so
+    no unlock is owed, and the claim stays with the wrapper so its shield outlives the failure
+    until the wrapper itself is dropped (the claim's own finalizer releases it then)."""
+    cache = MagicMock()
+    cache.lock.return_value = False
+    cache.continue_lock.side_effect = RuntimeError("stream failed mid-pass")
+    claim = MagicMock()
+    loaded = _paced_wrapper(claim, cache)
+
+    with pytest.raises(RuntimeError, match="stream failed mid-pass"):
+        with loaded:
+            pass
+
+    claim.release.assert_not_called()
+    cache.unlock.assert_not_called()

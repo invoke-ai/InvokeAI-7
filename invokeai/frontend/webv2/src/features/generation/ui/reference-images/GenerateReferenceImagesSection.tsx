@@ -23,7 +23,7 @@ import {
   isReferenceImageSupported,
 } from '@features/generation/core/baseGenerationPolicies';
 import { generatedImageToReferenceImage, getEffectiveReferenceImage } from '@features/generation/core/referenceImage';
-import { clampDimension, deriveAspectRatioId } from '@features/generation/core/settings';
+import { clampDimension, deriveAspectRatioId, moveReferenceImage } from '@features/generation/core/settings';
 import { useGenerationUi } from '@features/generation/ui/GenerationUiContext';
 import {
   assertAccountScopeCurrent,
@@ -75,6 +75,14 @@ export const GenerateReferenceImagesContent = ({
 
   const appendReferenceImages = useCallback(
     (images: GenerateReferenceImageAsset[]) => {
+      // Ids are minted HERE rather than inside the updater. A pending updater
+      // is applied twice — once against the draft the user sees, then again
+      // against the freshly committed settings when the debounce flushes — so
+      // an id created inside it differs between the two. Any later edit keyed
+      // to the id the card renders under (a reorder, a patch) would then find
+      // nothing at flush and be silently dropped.
+      const ids = images.map(() => createReferenceImageId());
+
       onCommit((currentSettings) => {
         const remaining = getMaxReferenceImages(selectedModel) - currentSettings.referenceImages.length;
 
@@ -86,9 +94,9 @@ export const GenerateReferenceImagesContent = ({
           ...currentSettings,
           referenceImages: [
             ...currentSettings.referenceImages,
-            ...images.slice(0, remaining).map((image) => ({
+            ...images.slice(0, remaining).map((image, index) => ({
               config: getDefaultReferenceImageConfig(selectedModel, models, image),
-              id: createReferenceImageId(),
+              id: ids[index] ?? createReferenceImageId(),
               isEnabled: true,
             })),
           ],
@@ -116,6 +124,22 @@ export const GenerateReferenceImagesContent = ({
         ...currentSettings,
         referenceImages: currentSettings.referenceImages.filter((referenceImage) => referenceImage.id !== id),
       }));
+    },
+    [onCommit]
+  );
+
+  // Card order is conditioning order, so a move is just a reorder of the
+  // settings array — the same gesture the video panel's reference stack uses.
+  // The updater form keeps it correct against a concurrent debounced commit.
+  const handleMoveReferenceImage = useCallback(
+    (id: string, direction: -1 | 1) => {
+      onCommit((currentSettings) => {
+        const referenceImages = moveReferenceImage(currentSettings.referenceImages, id, direction);
+
+        return referenceImages === currentSettings.referenceImages
+          ? currentSettings
+          : { ...currentSettings, referenceImages: [...referenceImages] };
+      });
     },
     [onCommit]
   );
@@ -294,7 +318,7 @@ export const GenerateReferenceImagesContent = ({
             {t('widgets.generate.addReferenceImage')}
             <Icon as={ChevronDownIcon} boxSize="3" color="fg.subtle" />
           </HStack>
-          <Text as="span" color="fg.subtle">
+          <Text as="span" color="fg.muted">
             {t('widgets.gallery.picker.dropHint')}
           </Text>
         </DropZone>
@@ -311,9 +335,11 @@ export const GenerateReferenceImagesContent = ({
           {referenceImages.map((referenceImage, index) => (
             <ReferenceImageCard
               key={referenceImage.id}
+              count={referenceImageCount}
               index={index}
               referenceImage={referenceImage}
               selectedModel={selectedModel}
+              onMove={handleMoveReferenceImage}
               onPatch={patchReferenceImage}
               onRemove={removeReferenceImage}
               onUseSize={applyReferenceImageSize}

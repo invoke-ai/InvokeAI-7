@@ -4,21 +4,26 @@ import { fileURLToPath, URL } from 'node:url';
 import { defineConfig } from 'vite';
 
 import { chunkSourceManifest } from './scripts/chunk-source-manifest.mjs';
+import { localeAssetsPlugin } from './scripts/locale-assets-plugin.mjs';
 import { serviceWorkerPlugin } from './scripts/service-worker-plugin.mjs';
 
-// Override with e.g. INVOKEAI_DEV_BACKEND=http://127.0.0.1:9091 when the
-// backend dev server runs on a non-default port.
+// INVOKEAI_DEV_BACKEND=http://127.0.0.1:9091 points at a non-default backend.
 const BACKEND_URL = process.env.INVOKEAI_DEV_BACKEND ?? 'http://127.0.0.1:9090';
 const BACKEND_WS_URL = BACKEND_URL.replace(/^http/, 'ws');
 
-// Set e.g. INVOKEAI_DEV_HOSTS=my-box.local,10.0.0.5 when reaching the dev
-// server by a hostname other than localhost.
+// INVOKEAI_DEV_HOSTS=my-box.local,10.0.0.5 allows other hostnames.
 const ALLOWED_HOSTS = process.env.INVOKEAI_DEV_HOSTS?.split(',')
   .map((host) => host.trim())
   .filter(Boolean);
 const PROJECT_ROOT = fileURLToPath(new URL('.', import.meta.url));
 
+// Modules both routes fetch eagerly. Grouping keeps a module with two
+// consumers from being split into its own request on each route.
 const ROUTE_SHARED_MODULES = [
+  '/features/fonts/data/keys.ts',
+  '/features/fonts/launchpad.tsx',
+  '/features/fonts/react.tsx',
+  '/features/fonts/runtime.ts',
   '/features/models/data/modelLoadStore.ts',
   '/features/models/index.ts',
   '/features/models/ui/ModelsPage.tsx',
@@ -26,80 +31,44 @@ const ROUTE_SHARED_MODULES = [
   '/features/nodes/index.ts',
   '/features/nodes/ui/NodesPage.tsx',
   '/platform/browser/downloadBlob.ts',
-  // Brand marks. The Launchpad's help menu and the editor's app menu both link
-  // to Discord, and without grouping that one shared module the editor pulls
-  // the whole Launchpad chunk in after it — the same regression the
-  // `launchpad/intents.ts` note below describes.
   '/platform/ui/BrandIcon.tsx',
+  '/platform/ui/Button.tsx',
+  '/platform/ui/Tooltip.tsx',
+  '/platform/ui/RetryBoundary.tsx',
+  '/platform/ui/PanelHeader.tsx',
+  '/platform/ui/settings/contracts.ts',
   '/platform/core/concurrency.ts',
   '/platform/query/client.ts',
   '/platform/time/serverTimestamp.ts',
   '/platform/transport/connectionStore.ts',
   '/platform/transport/socketHub.ts',
-  // Both routes confirm destructive actions (deleting a project, discarding
-  // an import) with the same dialog. Splitting the widget hosts out of their
-  // view chunks gave it a second, editor-only consumer alongside the
-  // Launchpad's — without grouping it crosses the automatic chunking
-  // algorithm's single-consumer threshold and gets extracted into its own
-  // file on both routes, in place of the free inline copies each had before.
   '/platform/ui/ConfirmDialog.tsx',
-  // Name/identifier truncation used eagerly by Launchpad project cards and
-  // editor widget chrome alike.
   '/platform/ui/MiddleTruncate.tsx',
   '/platform/ui/theme/applyTheme.ts',
   '/workbench/components/WorkbenchSplashScreen.tsx',
   '/workbench/hotkeys/catalog.ts',
+  '/workbench/hotkeys/modalLayer.ts',
   '/workbench/launchpad/formatRelativeTime.ts',
-  // The Launchpad writes `?intent=` and the editor's session controller reads
-  // it. Without this the editor pulls the whole Launchpad chunk for a lookup
-  // table — a 66 KB, one-extra-request regression on the editor route.
+  // Without this the editor pulls the whole Launchpad chunk for one lookup table.
   '/workbench/launchpad/intents.ts',
   '/workbench/palette/settingsEntryDeps.ts',
   '/workbench/projects/covers.ts',
+  '/workbench/projects/components/ProjectFileOptionsProvider.tsx',
   '/workbench/projects/ids.ts',
-  // The `.invk` surface both routes touch eagerly: the extension for the file
-  // picker, and the error class every import call site catches to translate.
-  // The schema, the ZIP codec and the archive itself stay behind lazy imports.
   '/workbench/projects/invk/format.ts',
   '/workbench/projects/library.ts',
-  // Editor-eager through `syncedPersistence` (cover selection on every save)
-  // and Launchpad-eager through the import workflow. Pulling it out of the
-  // shared chunk to spare the Launchpad ~1.5 KB cost the editor a whole extra
-  // request, because nothing else would then group it — a round trip is the
-  // worse end of that trade.
   '/workbench/projects/projectAssets.ts',
   '/workbench/projects/projectFile.ts',
   '/workbench/projects/projectFileErrors.ts',
-  // Both routes offer Import and Export, so both need the reporter and the
-  // hooks that drive it.
   '/workbench/projects/projectFileToasts.ts',
   '/workbench/projects/useProjectFileActions.ts',
   '/workbench/settings/SettingsDialogHost.tsx',
 ] as const;
 
-// Everything the editor route fetches on every boot, folded into one chunk:
-// the topbar UI (project switcher, layout preset admin) and the realtime
-// runtime the boot-time `widget-hosts` chunk shares with it (queue's live
-// progress/device stores, workflow's validation). Named for what it is —
-// "always fetched on every editor boot" — rather than for the topbar alone,
-// so it stays accurate as more editor-eager modules land here; a name tied
-// to one UI feature would send whoever reads a network panel or a chunk
-// budget chasing that feature instead of the runtime code actually there.
-//
-// The runtime modules are here because splitting the widget hosts out of
-// their view chunks (see `WIDGET_HOST_MODULES`) gave each a second,
-// independent consumer alongside the always-static editor shell; without
-// grouping, that crosses the automatic chunking algorithm's single-consumer
-// threshold and each gets extracted into its own file — several extra
-// editor-only requests for code that was previously duplicated inline for
-// free. Folding them into the chunk the editor shell already pays for once
-// costs it bytes, not a request — the same trade `route-shared` makes for
-// both routes above, scoped here to the editor alone because none of this
-// is reachable from the Launchpad.
+// Modules every editor boot fetches (topbar UI plus the realtime runtime the
+// widget hosts share), folded into one chunk so they cost bytes, not requests.
 const EDITOR_BOOT_SHARED_MODULES = [
-  // The gallery picker's trigger shell (every boot widget with an image slot
-  // mounts one) plus the Gallery widget UI its lazy view shares; the widget
-  // boots every editor route, so this moves bytes rather than adding requests.
+  '/app/GalleryUiAdapter.tsx',
   '/features/gallery/picker.ts',
   '/features/gallery/ui/GalleryBoardCover.tsx',
   '/features/gallery/ui/GalleryBoardRowShell.tsx',
@@ -121,20 +90,81 @@ const EDITOR_BOOT_SHARED_MODULES = [
   '/workbench/shell/topbar/ProjectSwitcher.tsx',
 ] as const;
 
-// The singleton widget hosts the editor mounts once at boot: workflow's
-// dialog shell, queue's data runtime, image-map's data runtime. Each is
-// fetched together with the other two on every editor boot, all three are
-// always needed, and none is ever needed without the others — splitting
-// them into three separate chunks (one per widget's `loadHost`) traded a
-// shared-chunk request for a per-widget one three times over. Grouping them
-// back into a single chunk keeps the per-host code-splitting boundary (so a
-// host still never drags its widget's view chunk along) while paying for
-// that boundary once instead of three times.
+// Widget metadata shared by the registry, settings and palette; kept apart
+// from editor boot UI so Launchpad settings cannot pull in the editor.
+const WIDGET_METADATA_MODULES = [
+  '/features/gallery/settingsContribution.ts',
+  '/features/queue/widget.ts',
+  '/features/workflow/widget.ts',
+  '/workbench/settings/applicationContributions.ts',
+  '/workbench/settings/catalog.ts',
+  '/workbench/widgets/canvas/canvasSettings.ts',
+  '/workbench/widgets/canvas/settingsContribution.ts',
+  '/workbench/widgets/image-map/settingsContribution.ts',
+  '/workbench/widgets/layers/panes/editorPaneLayout.ts',
+  '/workbench/widgets/manifests.ts',
+  '/workbench/widgets/preview/settingsContribution.ts',
+  '/workbench/widgets/preview/previewSettings.ts',
+] as const;
+
+// Gallery's shared state projection and UI port travel together.
+const GALLERY_STATE_MODULES = [
+  '/features/gallery/core/items.ts',
+  '/features/gallery/core/recentImages.ts',
+  '/features/gallery/core/selection.ts',
+  '/features/gallery/core/semanticImageQuery.ts',
+  '/features/gallery/core/settings.ts',
+  '/features/gallery/ui/GalleryUiContext.tsx',
+  '/features/gallery/ui/galleryStateView.ts',
+  '/features/queue/contracts.ts',
+  '/features/queue/core/generationMeta.ts',
+  '/features/queue/core/historySnapshot.ts',
+  '/features/queue/core/historySummary.ts',
+  '/features/queue/core/progressRail.ts',
+  '/features/queue/core/submissionRules.ts',
+  '/features/queue/data/events.ts',
+] as const;
+
+// The widget hosts the editor mounts once at boot, in one chunk instead of
+// one request per host.
 const WIDGET_HOST_MODULES = [
   '/features/queue/ui/QueueDataRuntime.tsx',
   '/features/workflow/ui/WorkflowWidgetChrome.tsx',
   '/workbench/widgets/image-map/ImageMapDataRuntime.tsx',
 ] as const;
+
+// Canvas and Layers already load these interaction/form modules together.
+// Keep their shared text-tool consumers from creating extra activation requests.
+const CANVAS_LAYER_SHARED_MODULES = [
+  '/features/workflow/core/layerWorkflow.ts',
+  '/workbench/canvas-operations/react.ts',
+  '/workbench/canvas-operations/useCanvasEngine.ts',
+  '/workbench/canvasProjectMutationPort.ts',
+  '/workbench/useCanvasProjectMutationDispatch.ts',
+  '/workbench/widgets/canvas/canvasInteractionLock.ts',
+  '/workbench/widgets/canvas/color-system/colorPair.ts',
+  '/workbench/widgets/canvas/color-system/useActiveColors.ts',
+  '/workbench/widgets/canvas/engineStoreHooks.ts',
+  '/workbench/widgets/canvas/textFontStyle.tsx',
+  '/workbench/widgets/canvas/tool-presentation/FormControls.tsx',
+  '/workbench/widgets/canvas/tool-presentation/PropertyPrimitives.tsx',
+  '/workbench/widgets/canvas/tool-presentation/propertyGroupStore.ts',
+  '/workbench/widgets/canvas/useCanvasEngine.ts',
+  '/workbench/widgets/canvas/useColorSampler.ts',
+  '/workbench/widgets/canvas/useStructuralCommit.ts',
+  '/workbench/widgets/layers/LayerContextMenu.tsx',
+  '/workbench/widgets/layers/RunLayerWorkflowDialog.tsx',
+  '/workbench/widgets/layers/colorLabels.ts',
+  '/workbench/widgets/layers/layerActionSession.ts',
+  '/workbench/widgets/layers/layerContextActions.ts',
+  '/workbench/widgets/layers/layerContextMenuLayout.ts',
+  '/workbench/widgets/layers/layerExportActions.ts',
+  '/workbench/widgets/layers/layerGroupCommands.ts',
+  '/workbench/widgets/layers/layerMenuState.ts',
+  '/workbench/widgets/layers/layerPropertiesRequestStore.ts',
+  '/workbench/widgets/layers/runLayerWorkflow.ts',
+  '/workbench/widgets/layers/useSelectedModelBase.ts',
+];
 
 const matchesAnySuffix = (id: string, suffixes: readonly string[]) => suffixes.some((suffix) => id.endsWith(suffix));
 
@@ -162,10 +192,6 @@ const getLegacyChunkName = (id: string): string | null => {
     return 'shell-shared';
   }
 
-  if (matchesAnySuffix(id, ['/features/gallery/core/items.ts', '/features/gallery/ui/galleryStateView.ts'])) {
-    return 'gallery-state';
-  }
-
   if (!id.includes('/node_modules/')) {
     return null;
   }
@@ -182,8 +208,6 @@ const getLegacyChunkName = (id: string): string | null => {
     return 'yaml';
   }
 
-  // Only `projects/invk/archive.ts` reaches for this, and only when a project
-  // file is actually read or written — the same treatment ag-psd gets.
   if (id.includes('/node_modules/fflate/')) {
     return 'fflate';
   }
@@ -216,6 +240,18 @@ export default defineConfig({
           groups: [
             {
               includeDependenciesRecursively: false,
+              name: 'canvas-layer-shared',
+              priority: 30,
+              test: (id) => matchesAnySuffix(id, CANVAS_LAYER_SHARED_MODULES),
+            },
+            {
+              includeDependenciesRecursively: false,
+              name: 'gallery-state',
+              priority: 30,
+              test: (id) => matchesAnySuffix(id, GALLERY_STATE_MODULES),
+            },
+            {
+              includeDependenciesRecursively: false,
               name: 'route-shared',
               priority: 30,
               test: (id) => matchesAnySuffix(id, ROUTE_SHARED_MODULES),
@@ -228,13 +264,19 @@ export default defineConfig({
             },
             {
               includeDependenciesRecursively: false,
+              name: 'widget-metadata',
+              priority: 30,
+              test: (id) =>
+                matchesAnySuffix(id, WIDGET_METADATA_MODULES) || /\/workbench\/widgets\/[^/]+\/manifest\.ts$/.test(id),
+            },
+            {
+              includeDependenciesRecursively: false,
               name: 'widget-hosts',
               priority: 30,
               test: (id) => matchesAnySuffix(id, WIDGET_HOST_MODULES),
             },
             {
-              // Plotly is large (~1MB min) and only used by the lazy-loaded
-              // Image Map plot; keep it out of the eager vendor chunk.
+              // ~1 MB, only the lazy Image Map plot needs it.
               name: 'plotly',
               priority: 30,
               test: (id) => id.includes('plotly') && id.includes('node_modules'),
@@ -254,6 +296,7 @@ export default defineConfig({
       presets: [reactCompilerPreset()],
     }),
     chunkSourceManifest({ projectRoot: PROJECT_ROOT }),
+    localeAssetsPlugin({ projectRoot: PROJECT_ROOT }),
     serviceWorkerPlugin({ projectRoot: PROJECT_ROOT }),
   ],
   resolve: {

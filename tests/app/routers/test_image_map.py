@@ -1,17 +1,23 @@
 """Tests for the /v1/image_map endpoints: serving, staleness, and user scoping."""
 
 import logging
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient
+from PIL import Image
 
 from invokeai.app.api.dependencies import ApiDependencies
 from invokeai.app.api_app import app
+from invokeai.app.services.board_video_records.board_video_records_sqlite import SqliteBoardVideoRecordStorage
 from invokeai.app.services.config.config_default import InvokeAIAppConfig
 from invokeai.app.services.image_index.image_index_base import ImageIndexServiceBase
-from invokeai.app.services.image_index.image_index_common import ImageIndexStatus
+from invokeai.app.services.image_index.image_index_common import (
+    ImageIndexStatus,
+    IndexedItem,
+)
 from invokeai.app.services.image_index.image_index_records_sqlite import ImageIndexRecordsSqlite
 from invokeai.app.services.image_index.projection import scope_hash
 from invokeai.app.services.image_records.image_records_common import ImageCategory, ResourceOrigin
@@ -19,6 +25,8 @@ from invokeai.app.services.image_records.image_records_sqlite import SqliteImage
 from invokeai.app.services.invocation_services import InvocationServices
 from invokeai.app.services.invoker import Invoker
 from invokeai.app.services.users.users_common import UserCreateRequest
+from invokeai.app.services.video_records.video_records_sqlite import SqliteVideoRecordStorage
+from invokeai.app.services.videos.videos_default import VideoService
 from invokeai.backend.util.logging import InvokeAILogger
 from tests.fixtures.sqlite_database import create_mock_sqlite_database
 
@@ -43,6 +51,7 @@ class FakeImageIndexService(ImageIndexServiceBase):
         self.projection_requests: list[tuple[str, bool]] = []
         self.spent_failed_scopes: dict[str, str] = {}
         self.search_calls: list[tuple[str | None, int]] = []
+        self.search_kinds: list[tuple[str, ...] | None] = []
         self.search_results: list[tuple[str, float]] = []
         self.text_unavailable = False
         self.embedded_texts: list[str] = []
@@ -75,17 +84,25 @@ class FakeImageIndexService(ImageIndexServiceBase):
         vector[0] = 1.0
         return vector
 
-    def get_accessible_embeddings(self, user_id: str | None) -> tuple[list[str], np.ndarray]:
+    def get_accessible_embeddings(self, user_id: str | None) -> tuple[list[IndexedItem], np.ndarray]:
         # Wired to the real records store by the mock_services fixture so
         # endpoints exercising the accessible matrix see seeded embeddings.
         if self.index_records is None:
             return [], np.empty((0, 0), dtype=np.float32)
-        names = self.index_records.list_accessible_embedded_images(user_id, MODEL_ID)
-        return self.index_records.get_embeddings(names, MODEL_ID)
+        items = self.index_records.list_accessible_embedded_items(user_id, MODEL_ID)
+        return self.index_records.get_embeddings(items, MODEL_ID)
 
-    def search_similar(self, user_id: str | None, query_embedding: np.ndarray, limit: int) -> list[tuple[str, float]]:
+    def search_similar(
+        self,
+        user_id: str | None,
+        query_embedding: np.ndarray,
+        limit: int,
+        kinds: tuple[str, ...] | None = None,
+    ) -> list[tuple[IndexedItem, float]]:
         self.search_calls.append((user_id, limit))
-        return self.search_results[:limit]
+        self.search_kinds.append(kinds)
+        results = [(item, score) for item, score in self.search_results if kinds is None or item.kind in kinds]
+        return results[:limit]
 
     def get_vocab_embeddings(self) -> tuple[list[str], np.ndarray]:
         from invokeai.app.services.image_index.image_index_base import TextSearchUnavailableError
@@ -137,8 +154,28 @@ def image_index_service() -> FakeImageIndexService:
     return FakeImageIndexService()
 
 
+def _video_service(thumbnails: Path, video_records: SqliteVideoRecordStorage) -> VideoService:
+    """A video service that resolves thumbnails to real files, which is all these endpoints read.
+
+    It goes through the record store first, like the real one: a name with no video raises
+    rather than resolving to a fabricated file, which is what makes the not-found paths real.
+    """
+    videos = VideoService()
+
+    def get_path(video_name: str, thumbnail: bool = False) -> str:
+        assert thumbnail, "these endpoints only ever read a video's thumbnail"
+        video_records.get(video_name)
+        path = thumbnails / f"{video_name}.webp"
+        if not path.exists():
+            Image.new("RGB", (16, 16), "teal").save(path, "WEBP")
+        return str(path)
+
+    videos.get_path = get_path  # type: ignore[method-assign]
+    return videos
+
+
 @pytest.fixture
-def mock_services(image_index_service: FakeImageIndexService) -> InvocationServices:
+def mock_services(image_index_service: FakeImageIndexService, tmp_path: Path) -> InvocationServices:
     from invokeai.app.services.board_image_records.board_image_records_sqlite import SqliteBoardImageRecordStorage
     from invokeai.app.services.board_records.board_records_sqlite import SqliteBoardRecordStorage
     from invokeai.app.services.boards.boards_default import BoardService
@@ -191,10 +228,10 @@ def mock_services(image_index_service: FakeImageIndexService) -> InvocationServi
         users=UserService(db),
         wildcard_records=None,  # type: ignore
         system_prompt_records=None,  # type: ignore
-        videos=None,  # type: ignore
+        videos=_video_service(tmp_path, video_records := SqliteVideoRecordStorage(db=db)),
         video_files=None,  # type: ignore
-        video_records=None,  # type: ignore
-        board_video_records=None,  # type: ignore
+        video_records=video_records,
+        board_video_records=SqliteBoardVideoRecordStorage(db=db),
         gallery=None,  # type: ignore
         image_index_records=(index_records := ImageIndexRecordsSqlite(db=db)),
         image_index=image_index_service,
@@ -236,7 +273,24 @@ def _seed_embedded_image(mock_invoker: Invoker, image_name: str, user_id: str = 
     )
     rng = np.random.default_rng(abs(hash(image_name)) % (2**32))
     vec = rng.standard_normal(DIM).astype(np.float32)
-    _records(mock_invoker).upsert_embedding(image_name, MODEL_ID, vec / np.linalg.norm(vec))
+    _records(mock_invoker).upsert_embedding(IndexedItem("image", image_name), MODEL_ID, vec / np.linalg.norm(vec))
+
+
+def _seed_embedded_video(mock_invoker: Invoker, video_name: str, user_id: str = SYSTEM_USER_ID) -> None:
+    mock_invoker.services.video_records.save(
+        video_name=video_name,
+        video_origin=ResourceOrigin.INTERNAL,
+        video_category=ImageCategory.GENERAL,
+        width=16,
+        height=16,
+        duration=2.0,
+        fps=24.0,
+        has_workflow=False,
+        user_id=user_id,
+    )
+    rng = np.random.default_rng(abs(hash(video_name)) % (2**32))
+    vec = rng.standard_normal(DIM).astype(np.float32)
+    _records(mock_invoker).upsert_embedding(IndexedItem("video", video_name), MODEL_ID, vec / np.linalg.norm(vec))
 
 
 def _save_unembedded_image(mock_invoker: Invoker, image_name: str, user_id: str = SYSTEM_USER_ID) -> None:
@@ -251,13 +305,21 @@ def _save_unembedded_image(mock_invoker: Invoker, image_name: str, user_id: str 
     )
 
 
-def _seed_projection(mock_invoker: Invoker, user_id: str, image_names: list[str], coords: np.ndarray) -> None:
-    accessible = _records(mock_invoker).list_accessible_embedded_images(
+def imgs(*names: str) -> list[IndexedItem]:
+    """The image-namespace items for these names."""
+    return [IndexedItem("image", name) for name in names]
+
+
+def vids(*names: str) -> list[IndexedItem]:
+    """The video-namespace items for these names."""
+    return [IndexedItem("video", name) for name in names]
+
+
+def _seed_projection(mock_invoker: Invoker, user_id: str, items: list[IndexedItem], coords: np.ndarray) -> None:
+    accessible = _records(mock_invoker).list_accessible_embedded_items(
         None if user_id == SYSTEM_USER_ID else user_id, MODEL_ID
     )
-    _records(mock_invoker).set_projection(
-        user_id, MODEL_ID, scope_hash(MODEL_ID, accessible), "{}", image_names, coords
-    )
+    _records(mock_invoker).set_projection(user_id, MODEL_ID, scope_hash(MODEL_ID, accessible), "{}", items, coords)
 
 
 # --- Single-user mode (system admin) ---
@@ -315,7 +377,7 @@ def test_points_served_with_live_eps_clustering(mock_invoker: Invoker, client: T
         _seed_embedded_image(mock_invoker, name)
     # Two tight pairs far apart (span 30 -> the server-side eps clamp is ~1.5).
     coords = np.array([[0.0, 0.0], [0.4, 0.0], [30.0, 30.0], [30.4, 30.0]], dtype=np.float32)
-    _seed_projection(mock_invoker, SYSTEM_USER_ID, names, coords)
+    _seed_projection(mock_invoker, SYSTEM_USER_ID, imgs(*names), coords)
 
     clustered = client.get("/api/v1/image_map/points", params={"eps": 0.5, "min_samples": 2}).json()
     assert clustered["state"] == "ready"
@@ -344,7 +406,7 @@ def test_stale_projection_filters_now_inaccessible_names_and_requests_refresh(
     _seed_embedded_image(mock_invoker, "keep.png")
     _seed_embedded_image(mock_invoker, "gone.png")
     coords = np.array([[0.0, 0.0], [1.0, 1.0]], dtype=np.float32)
-    _seed_projection(mock_invoker, SYSTEM_USER_ID, ["keep.png", "gone.png"], coords)
+    _seed_projection(mock_invoker, SYSTEM_USER_ID, imgs("keep.png", "gone.png"), coords)
     # The image disappears after the projection was cached.
     mock_invoker.services.image_records.delete("gone.png")
 
@@ -369,7 +431,7 @@ def test_status_endpoint(mock_invoker: Invoker, client: TestClient) -> None:
     assert body["projection"]["state"] == "empty"
 
     _seed_embedded_image(mock_invoker, "a.png")
-    _seed_projection(mock_invoker, SYSTEM_USER_ID, ["a.png"], np.zeros((1, 2), dtype=np.float32))
+    _seed_projection(mock_invoker, SYSTEM_USER_ID, imgs("a.png"), np.zeros((1, 2), dtype=np.float32))
     body = client.get("/api/v1/image_map/status").json()
     assert body["projection"]["state"] == "ready"
     assert body["projection"]["stale"] is False
@@ -486,7 +548,7 @@ def test_multiuser_projection_and_scope_are_per_user(
 
     # user1 has a private (unboarded) embedded image and a cached projection.
     _seed_embedded_image(mock_invoker, "private1.png", user_id=user1_id)
-    accessible1 = _records(mock_invoker).list_accessible_embedded_images(user1_id, MODEL_ID)
+    accessible1 = _records(mock_invoker).list_accessible_embedded_items(user1_id, MODEL_ID)
     _records(mock_invoker).set_projection(
         user1_id, MODEL_ID, scope_hash(MODEL_ID, accessible1), "{}", accessible1, np.zeros((1, 2), dtype=np.float32)
     )
@@ -526,7 +588,7 @@ def test_multiuser_stale_cache_never_leaks_revoked_names(multiuser, mock_invoker
         MODEL_ID,
         "stale-hash",
         "{}",
-        ["was-shared.png", "own2.png"],
+        imgs("was-shared.png", "own2.png"),
         np.zeros((2, 2), dtype=np.float32),
     )
 
@@ -562,7 +624,7 @@ def test_cluster_labels_computed_only_over_accessible_points(
         MODEL_ID,
         "stale-hash",
         "{}",
-        ["p1.png", "hidden.png", "p2.png", "far.png"],
+        imgs("p1.png", "hidden.png", "p2.png", "far.png"),
         np.array([[0.0, 0.0], [1.5, 0.0], [3.0, 0.0], [0.0, 60.0]], dtype=np.float32),
     )
 
@@ -654,7 +716,7 @@ def test_repeat_points_requests_reuse_the_clustering(monkeypatch, mock_invoker: 
     for name in names:
         _seed_embedded_image(mock_invoker, name)
     coords = np.array([[0.0, 0.0], [0.4, 0.0], [30.0, 30.0], [30.4, 30.0]], dtype=np.float32)
-    _seed_projection(mock_invoker, SYSTEM_USER_ID, names, coords)
+    _seed_projection(mock_invoker, SYSTEM_USER_ID, imgs(*names), coords)
 
     first = client.get("/api/v1/image_map/points", params={"eps": 0.5, "min_samples": 2}).json()
     for _ in range(4):
@@ -671,7 +733,7 @@ def test_repeat_points_requests_reuse_the_clustering(monkeypatch, mock_invoker: 
 
     # A recomputed projection (same scope, new coordinates) must not be served
     # from the entry the previous one left behind.
-    _seed_projection(mock_invoker, SYSTEM_USER_ID, names, coords[::-1].copy())
+    _seed_projection(mock_invoker, SYSTEM_USER_ID, imgs(*names), coords[::-1].copy())
     reprojected = client.get("/api/v1/image_map/points", params={"eps": 0.5, "min_samples": 2}).json()
     assert calls["n"] == 4, "a rewritten projection must recluster"
     assert reprojected["points"] != first["points"]
@@ -686,7 +748,7 @@ def test_cluster_cache_is_bounded(monkeypatch, mock_invoker: Invoker, client: Te
     _seed_projection(
         mock_invoker,
         SYSTEM_USER_ID,
-        names,
+        imgs(*names),
         np.array([[0.0, 0.0], [0.4, 0.0], [30.0, 30.0], [30.4, 30.0]], dtype=np.float32),
     )
 
@@ -768,7 +830,7 @@ def test_an_all_non_finite_projection_is_not_permanently_blank(
     names = ["a.png", "b.png"]
     for name in names:
         _seed_embedded_image(mock_invoker, name)
-    _seed_projection(mock_invoker, SYSTEM_USER_ID, names, np.full((2, 2), np.nan, dtype=np.float32))
+    _seed_projection(mock_invoker, SYSTEM_USER_ID, imgs(*names), np.full((2, 2), np.nan, dtype=np.float32))
 
     body = client.get("/api/v1/image_map/points").json()
 
@@ -791,7 +853,7 @@ def test_search_disabled_index_conflicts(image_index_service: FakeImageIndexServ
 
 
 def test_text_search_returns_ranked_results(image_index_service: FakeImageIndexService, client: TestClient) -> None:
-    image_index_service.search_results = [("a.png", 0.9), ("b.png", 0.5)]
+    image_index_service.search_results = [(IndexedItem("image", "a.png"), 0.9), (IndexedItem("image", "b.png"), 0.5)]
 
     body = client.get("/api/v1/image_map/search", params={"limit": 10, "q": "a red barn"}).json()
 
@@ -799,8 +861,8 @@ def test_text_search_returns_ranked_results(image_index_service: FakeImageIndexS
     # System user is admin in single-user mode -> global (None) scope.
     assert image_index_service.search_calls == [(None, 10)]
     assert body["results"] == [
-        {"image_name": "a.png", "score": 0.9},
-        {"image_name": "b.png", "score": 0.5},
+        {"image_name": "a.png", "kind": "image", "score": 0.9},
+        {"image_name": "b.png", "kind": "image", "score": 0.5},
     ]
 
 
@@ -819,7 +881,10 @@ def test_image_search_uses_stored_embedding(
     mock_invoker: Invoker, image_index_service: FakeImageIndexService, client: TestClient
 ) -> None:
     _seed_embedded_image(mock_invoker, "ref.png")
-    image_index_service.search_results = [("ref.png", 1.0), ("close.png", 0.8)]
+    image_index_service.search_results = [
+        (IndexedItem("image", "ref.png"), 1.0),
+        (IndexedItem("image", "close.png"), 0.8),
+    ]
 
     body = client.get("/api/v1/image_map/search", params={"image_name": "ref.png"}).json()
 
@@ -835,7 +900,7 @@ def test_image_search_embeds_unindexed_reference_on_demand(
 
     _save_unembedded_image(mock_invoker, "not-indexed.png")
     monkeypatch.setattr(mock_invoker.services.images, "get_pil_image", lambda name: Image.new("RGB", (4, 4)))
-    image_index_service.search_results = [("a.png", 0.7)]
+    image_index_service.search_results = [(IndexedItem("image", "a.png"), 0.7)]
 
     body = client.get("/api/v1/image_map/search", params={"image_name": "not-indexed.png"}).json()
 
@@ -916,7 +981,7 @@ def test_cluster_labels_skips_the_embedding_gather_when_nothing_clustered(
     # len(visible) x D float32 for nothing — gigabytes on the large galleries
     # /points is written for, once per points refresh.
     _seed_embedded_image(mock_invoker, "a.png")
-    _seed_projection(mock_invoker, SYSTEM_USER_ID, ["a.png"], np.zeros((1, 2), dtype=np.float32))
+    _seed_projection(mock_invoker, SYSTEM_USER_ID, imgs("a.png"), np.zeros((1, 2), dtype=np.float32))
 
     monkeypatch.setattr(
         "invokeai.app.api.routers.image_map.compute_clusters",
@@ -949,7 +1014,7 @@ def test_search_by_image_upload_returns_ranked_results(
 
     buffer = BytesIO()
     Image.new("RGB", (8, 8), color=(200, 30, 30)).save(buffer, format="PNG")
-    image_index_service.search_results = [("a.png", 0.9), ("b.png", 0.4)]
+    image_index_service.search_results = [(IndexedItem("image", "a.png"), 0.9), (IndexedItem("image", "b.png"), 0.4)]
 
     response = client.post(
         "/api/v1/image_map/search_by_image",
@@ -1086,9 +1151,9 @@ def test_cluster_labels_align_with_served_clusters(mock_invoker: Invoker, client
         ("b2.png", axis_vec(1)),
     ]:
         _save_unembedded_image(mock_invoker, name)
-        _records(mock_invoker).upsert_embedding(name, MODEL_ID, vec)
+        _records(mock_invoker).upsert_embedding(IndexedItem("image", name), MODEL_ID, vec)
     coords = np.array([[0.0, 0.0], [0.4, 0.0], [30.0, 30.0], [30.4, 30.0]], dtype=np.float32)
-    _seed_projection(mock_invoker, SYSTEM_USER_ID, ["a1.png", "a2.png", "b1.png", "b2.png"], coords)
+    _seed_projection(mock_invoker, SYSTEM_USER_ID, imgs("a1.png", "a2.png", "b1.png", "b2.png"), coords)
 
     points = client.get("/api/v1/image_map/points", params={"eps": 0.5, "min_samples": 2}).json()
     labels = client.get("/api/v1/image_map/cluster_labels", params={"eps": 0.5, "min_samples": 2, "top_k": 2}).json()[
@@ -1138,9 +1203,9 @@ def test_cluster_labels_survive_a_non_finite_row_the_way_points_does(mock_invoke
         vector = np.zeros(DIM, dtype=np.float32)
         vector[index % 2] = 1.0
         _save_unembedded_image(mock_invoker, name)
-        _records(mock_invoker).upsert_embedding(name, MODEL_ID, vector)
+        _records(mock_invoker).upsert_embedding(IndexedItem("image", name), MODEL_ID, vector)
     coords = np.array([[0.0, 0.0], [0.2, 0.0], [np.nan, np.nan]], dtype=np.float32)
-    _seed_projection(mock_invoker, SYSTEM_USER_ID, names, coords)
+    _seed_projection(mock_invoker, SYSTEM_USER_ID, imgs(*names), coords)
 
     points = client.get("/api/v1/image_map/points", params={"min_samples": 2}).json()
     labels_response = client.get("/api/v1/image_map/cluster_labels", params={"min_samples": 2})
@@ -1156,7 +1221,7 @@ def test_cluster_labels_unavailable_text_encoder_conflicts(
     mock_invoker: Invoker, image_index_service: FakeImageIndexService, client: TestClient
 ) -> None:
     _seed_embedded_image(mock_invoker, "a.png")
-    _seed_projection(mock_invoker, SYSTEM_USER_ID, ["a.png"], np.zeros((1, 2), dtype=np.float32))
+    _seed_projection(mock_invoker, SYSTEM_USER_ID, imgs("a.png"), np.zeros((1, 2), dtype=np.float32))
     image_index_service.text_unavailable = True
 
     assert client.get("/api/v1/image_map/cluster_labels").status_code == 409
@@ -1272,7 +1337,9 @@ def test_image_labels_rank_the_vocabulary_for_one_image(mock_invoker: Invoker, c
     # unstable — happen to break a tie.
     vector = np.array([0.6, 0.8, 0.3, 0.1], dtype=np.float32)
     _save_unembedded_image(mock_invoker, "leaning.png")
-    _records(mock_invoker).upsert_embedding("leaning.png", MODEL_ID, vector / np.linalg.norm(vector))
+    _records(mock_invoker).upsert_embedding(
+        IndexedItem("image", "leaning.png"), MODEL_ID, vector / np.linalg.norm(vector)
+    )
 
     body = client.get("/api/v1/image_map/image_labels", params={"image_name": "leaning.png"}).json()
 
@@ -1365,7 +1432,7 @@ def test_image_labels_refuse_a_degenerate_stored_embedding(
     assert "label" not in response.json(), "a refusal must not carry an arbitrary vocabulary phrase"
     # The row IS present: this must be the degenerate-vector refusal, not the
     # not-indexed 404, or the test would pass without exercising the guard.
-    assert response.json()["detail"] == "This image's stored embedding cannot be labeled"
+    assert response.json()["detail"] == "This item's stored embedding cannot be labeled"
 
 
 def test_image_labels_corrupt_blob_is_404_not_500(mock_invoker: Invoker, client: TestClient) -> None:
@@ -1404,3 +1471,256 @@ def test_image_labels_dim_mismatch_with_the_vocabulary_is_404_not_500(
     response = client.get("/api/v1/image_map/image_labels", params={"image_name": "wide.png"})
 
     assert response.status_code == 404
+
+
+# --- Videos on the map ---
+
+
+def test_points_carry_the_kind_of_each_item(mock_invoker: Invoker, client: TestClient) -> None:
+    # A client resolves a point's thumbnail from a kind-specific endpoint, so a video point
+    # that claimed to be an image would render as a broken image.
+    _seed_embedded_image(mock_invoker, "a.png")
+    _seed_embedded_video(mock_invoker, "clip.mp4")
+    _seed_projection(
+        mock_invoker,
+        SYSTEM_USER_ID,
+        [IndexedItem("image", "a.png"), IndexedItem("video", "clip.mp4")],
+        np.array([[0.0, 0.0], [1.0, 1.0]], dtype=np.float32),
+    )
+
+    body = client.get("/api/v1/image_map/points", params={"include_videos": True}).json()
+
+    assert body["state"] == "ready"
+    assert {(p["image_name"], p["kind"]) for p in body["points"]} == {("a.png", "image"), ("clip.mp4", "video")}
+
+
+def test_a_new_video_makes_the_projection_stale(mock_invoker: Invoker, client: TestClient) -> None:
+    # Staleness is about the projection, not about what this client renders: the fit has to
+    # cover the video before any client can be shown it, and the scope hash is taken over the
+    # whole accessible set for exactly that reason. One refit per new item, the same as for a
+    # new image — not a poll loop, since the refit clears it.
+    _seed_embedded_image(mock_invoker, "a.png")
+    _seed_projection(mock_invoker, SYSTEM_USER_ID, imgs("a.png"), np.zeros((1, 2), dtype=np.float32))
+    assert client.get("/api/v1/image_map/points").json()["stale"] is False
+
+    _seed_embedded_video(mock_invoker, "clip.mp4")
+
+    assert client.get("/api/v1/image_map/points").json()["stale"] is True
+
+
+def test_search_by_video_reference_uses_its_stored_embedding(
+    image_index_service: FakeImageIndexService, mock_invoker: Invoker, client: TestClient
+) -> None:
+    _seed_embedded_video(mock_invoker, "ref.mp4")
+    image_index_service.search_results = [
+        (IndexedItem("video", "ref.mp4"), 1.0),
+        (IndexedItem("image", "close.png"), 0.8),
+    ]
+
+    response = client.get("/api/v1/image_map/search", params={"video_name": "ref.mp4", "include_videos": True})
+
+    assert response.status_code == 200
+    assert response.json()["results"] == [
+        {"image_name": "ref.mp4", "kind": "video", "score": 1.0},
+        {"image_name": "close.png", "kind": "image", "score": 0.8},
+    ]
+    # The stored embedding was used; nothing was embedded on demand.
+    assert image_index_service.embedded_images == []
+
+
+def test_search_refuses_both_an_image_and_a_video_reference(client: TestClient) -> None:
+    response = client.get("/api/v1/image_map/search", params={"image_name": "a.png", "video_name": "clip.mp4"})
+
+    assert response.status_code == 422
+
+
+def test_image_labels_accept_a_video(
+    image_index_service: FakeImageIndexService, mock_invoker: Invoker, client: TestClient
+) -> None:
+    _seed_embedded_video(mock_invoker, "clip.mp4")
+
+    response = client.get("/api/v1/image_map/image_labels", params={"image_name": "clip.mp4", "kind": "video"})
+
+    assert response.status_code == 200
+    assert response.json()["label"] in {"alpha", "beta", "gamma", "delta"}
+
+
+def test_image_labels_do_not_read_a_video_through_the_image_namespace(
+    mock_invoker: Invoker, client: TestClient
+) -> None:
+    # Without the kind, a video name would be looked up among images: a 404 at best, and at
+    # worst another item's embedding if the namespaces ever shared names.
+    _seed_embedded_video(mock_invoker, "clip.mp4")
+
+    response = client.get("/api/v1/image_map/image_labels", params={"image_name": "clip.mp4"})
+
+    assert response.status_code == 404
+
+
+def test_points_hide_videos_unless_the_client_asks_for_them(mock_invoker: Invoker, client: TestClient) -> None:
+    # A client that resolves every point through the images endpoints — which the shipped
+    # gallery does — would render a video point as a broken tile, so serving them is opt-in.
+    _seed_embedded_image(mock_invoker, "a.png")
+    _seed_embedded_video(mock_invoker, "clip.mp4")
+    _seed_projection(
+        mock_invoker,
+        SYSTEM_USER_ID,
+        [IndexedItem("image", "a.png"), IndexedItem("video", "clip.mp4")],
+        np.array([[0.0, 0.0], [1.0, 1.0]], dtype=np.float32),
+    )
+
+    body = client.get("/api/v1/image_map/points").json()
+
+    assert [p["image_name"] for p in body["points"]] == ["a.png"]
+    # The projection covers both items, so hiding one must not make the cache look stale —
+    # that would have the client asking for a recompute on every poll, forever.
+    assert body["stale"] is False
+    assert body["state"] == "ready"
+
+
+def test_hidden_videos_are_left_out_of_the_status_count(mock_invoker: Invoker, client: TestClient) -> None:
+    _seed_embedded_image(mock_invoker, "a.png")
+    _seed_embedded_video(mock_invoker, "clip.mp4")
+    _seed_projection(
+        mock_invoker,
+        SYSTEM_USER_ID,
+        [IndexedItem("image", "a.png"), IndexedItem("video", "clip.mp4")],
+        np.array([[0.0, 0.0], [1.0, 1.0]], dtype=np.float32),
+    )
+
+    default_body = client.get("/api/v1/image_map/status").json()
+    opted_in_body = client.get("/api/v1/image_map/status", params={"include_videos": True}).json()
+
+    assert default_body["projection"]["point_count"] == 1
+    assert opted_in_body["projection"]["point_count"] == 2
+
+
+def test_cluster_labels_cover_the_same_items_as_points(mock_invoker: Invoker, client: TestClient) -> None:
+    # The client compares the two responses' visible_hash and discards labels computed over a
+    # different set, so both endpoints must apply the same kind filter.
+    _seed_embedded_image(mock_invoker, "a.png")
+    _seed_embedded_video(mock_invoker, "clip.mp4")
+    _seed_projection(
+        mock_invoker,
+        SYSTEM_USER_ID,
+        [IndexedItem("image", "a.png"), IndexedItem("video", "clip.mp4")],
+        np.array([[0.0, 0.0], [1.0, 1.0]], dtype=np.float32),
+    )
+
+    for params in ({}, {"include_videos": True}):
+        points = client.get("/api/v1/image_map/points", params=params).json()
+        labels = client.get("/api/v1/image_map/cluster_labels", params=params).json()
+        assert points["visible_hash"] == labels["visible_hash"], params
+
+
+def test_search_hides_videos_unless_the_client_asks_for_them(
+    image_index_service: FakeImageIndexService, mock_invoker: Invoker, client: TestClient
+) -> None:
+    image_index_service.search_results = [(IndexedItem("video", "clip.mp4"), 0.9), (IndexedItem("image", "a.png"), 0.5)]
+
+    default_body = client.get("/api/v1/image_map/search", params={"q": "cat"}).json()
+    opted_in_body = client.get("/api/v1/image_map/search", params={"q": "cat", "include_videos": True}).json()
+
+    assert [result["image_name"] for result in default_body["results"]] == ["a.png"]
+    assert [result["image_name"] for result in opted_in_body["results"]] == ["clip.mp4", "a.png"]
+    # The service is told which kinds to rank, rather than the endpoint trimming the ranking
+    # afterwards — which would return fewer hits than the caller's limit.
+    assert image_index_service.search_kinds == [("image",), ("image", "video")]
+
+
+def test_video_search_reference_embeds_the_thumbnail_on_demand(
+    image_index_service: FakeImageIndexService, mock_invoker: Invoker, client: TestClient
+) -> None:
+    # A video that is not in the index — an intermediate, or one generated seconds ago — is
+    # still usable as a reference: its thumbnail is embedded for this one query. Asking the
+    # images store for it would 404 instead.
+    mock_invoker.services.video_records.save(
+        video_name="fresh.mp4",
+        video_origin=ResourceOrigin.INTERNAL,
+        video_category=ImageCategory.GENERAL,
+        width=16,
+        height=16,
+        duration=2.0,
+        fps=24.0,
+        has_workflow=False,
+        user_id=SYSTEM_USER_ID,
+    )
+    image_index_service.search_results = [(IndexedItem("image", "a.png"), 0.6)]
+
+    response = client.get("/api/v1/image_map/search", params={"video_name": "fresh.mp4"})
+
+    assert response.status_code == 200
+    assert len(image_index_service.embedded_images) == 1
+    # The thumbnail, not the video file: 16x16 is what the fixture writes.
+    assert image_index_service.embedded_images[0].size == (16, 16)
+
+
+def test_video_search_reference_reports_a_missing_video_as_not_found(mock_invoker: Invoker, client: TestClient) -> None:
+    response = client.get("/api/v1/image_map/search", params={"video_name": "no-such.mp4"})
+
+    assert response.status_code == 404
+
+
+def test_multiuser_video_reference_enforces_read_access(multiuser, mock_invoker: Invoker, client: TestClient) -> None:
+    # The video access clause is a different join against different tables than the image one,
+    # so it needs its own end-to-end check: a wrong join leaks another user's private video.
+    _create_user(mock_invoker, "admin@test.com", is_admin=True)
+    user1_id = _create_user(mock_invoker, "user1@test.com")
+    _create_user(mock_invoker, "user2@test.com")
+    user2_headers = _login(client, "user2@test.com")
+
+    _seed_embedded_video(mock_invoker, "private1.mp4", user_id=user1_id)
+
+    refused = client.get("/api/v1/image_map/search", params={"video_name": "private1.mp4"}, headers=user2_headers)
+    labels_refused = client.get(
+        "/api/v1/image_map/image_labels",
+        params={"image_name": "private1.mp4", "kind": "video"},
+        headers=user2_headers,
+    )
+
+    assert refused.status_code == 403
+    assert labels_refused.status_code == 403
+
+
+def test_multiuser_video_on_a_shared_board_is_readable(multiuser, mock_invoker: Invoker, client: TestClient) -> None:
+    from invokeai.app.services.board_records.board_records_common import BoardChanges, BoardVisibility
+
+    _create_user(mock_invoker, "admin@test.com", is_admin=True)
+    user1_id = _create_user(mock_invoker, "user1@test.com")
+    _create_user(mock_invoker, "user2@test.com")
+    user2_headers = _login(client, "user2@test.com")
+
+    _seed_embedded_video(mock_invoker, "shared1.mp4", user_id=user1_id)
+    board = mock_invoker.services.board_records.save("Shared", user1_id).board_id
+    mock_invoker.services.board_records.update(board, BoardChanges(board_visibility=BoardVisibility.Shared))
+    mock_invoker.services.board_video_records.add_video_to_board(board, "shared1.mp4")
+
+    response = client.get("/api/v1/image_map/search", params={"video_name": "shared1.mp4"}, headers=user2_headers)
+
+    assert response.status_code == 200
+
+
+def test_a_video_only_gallery_answers_empty_instead_of_asking_forever(
+    image_index_service: FakeImageIndexService, mock_invoker: Invoker, client: TestClient
+) -> None:
+    # Nothing servable here is the kind filter's doing, not a failed fit: the projection covers
+    # the video and its coordinates are fine. Diagnosing it as a failure asks the worker for a
+    # recompute, which short-circuits on the matching scope hash and emits projection_ready —
+    # which the client answers with another /points, for the life of the process.
+    _seed_embedded_video(mock_invoker, "clip.mp4")
+    _seed_projection(
+        mock_invoker, SYSTEM_USER_ID, [IndexedItem("video", "clip.mp4")], np.zeros((1, 2), dtype=np.float32)
+    )
+
+    first = client.get("/api/v1/image_map/points").json()
+    second = client.get("/api/v1/image_map/points").json()
+
+    assert first["state"] == "empty"
+    assert first["stale"] is False
+    assert first["points"] == []
+    # A settled answer, not one that changes every time the client asks again.
+    assert second == first
+    # The mechanism, not just the symptom: the endpoint must not ask for a recompute at all.
+    # Each request is answered with a projection_ready event, which is what brings the client
+    # back for another /points.
+    assert image_index_service.projection_requests == []

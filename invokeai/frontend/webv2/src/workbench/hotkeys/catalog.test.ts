@@ -7,8 +7,10 @@ describe('firstPartyHotkeyCatalog', () => {
     // 91 legacy-parity entries + `canvas.newSession` (webv2 new-canvas command,
     // no default keys — Task 46) + `app.openCommandPalette` (webv2-only, mod+k)
     // + the seven top-bar redesign commands (alt+mod+enter, mod+p, an unbound
-    // save, and alt+1..4) + `app.openSettings` (mod+,).
-    expect(firstPartyHotkeyCatalog).toHaveLength(101);
+    // save, and alt+1..4) + `app.openSettings` (mod+,) + `gallery.toggleStarredOnly`
+    // (webv2 starred-only listing filter, unbound) + the two unbound canvas
+    // gallery saves (`canvas.saveToGallery`, `canvas.saveBboxToGallery`).
+    expect(firstPartyHotkeyCatalog).toHaveLength(104);
     expect(firstPartyHotkeyCatalog.map((hotkey) => hotkey.id)).toContain('app.invoke');
     expect(firstPartyHotkeyCatalog.map((hotkey) => hotkey.id)).toContain('app.openCommandPalette');
     expect(firstPartyHotkeyCatalog.map((hotkey) => hotkey.id)).toContain('canvas.mergeDown');
@@ -16,6 +18,7 @@ describe('firstPartyHotkeyCatalog', () => {
     expect(firstPartyHotkeyCatalog.map((hotkey) => hotkey.id)).toContain('workflows.copySelection');
     expect(firstPartyHotkeyCatalog.map((hotkey) => hotkey.id)).toContain('gallery.galleryNavLeft');
     expect(firstPartyHotkeyCatalog.map((hotkey) => hotkey.id)).toContain('gallery.remix');
+    expect(firstPartyHotkeyCatalog.map((hotkey) => hotkey.id)).toContain('gallery.toggleStarredOnly');
     expect(firstPartyHotkeyCatalog.map((hotkey) => hotkey.id)).toContain('viewer.deleteImage');
     expect(firstPartyHotkeyCatalog.map((hotkey) => hotkey.id)).toContain('app.invokeToOtherDestination');
     expect(firstPartyHotkeyCatalog.map((hotkey) => hotkey.id)).toContain('app.openProjectSwitcher');

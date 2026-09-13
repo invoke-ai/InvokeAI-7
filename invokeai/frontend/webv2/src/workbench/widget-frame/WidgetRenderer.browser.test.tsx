@@ -1,10 +1,11 @@
-/* oxlint-disable react-perf/jsx-no-new-object-as-prop */
 import type {
   NormalizedWidgetManifest,
   RegisteredWidget,
   WidgetImplementation,
   WidgetInstanceContract,
 } from '@workbench/widgetContracts';
+/* oxlint-disable react-perf/jsx-no-new-object-as-prop */
+import type * as workbenchContext from '@workbench/WorkbenchContext';
 
 import { ChakraProvider, Stack, Text } from '@chakra-ui/react';
 import { StatusWidgetChip } from '@platform/ui';
@@ -35,8 +36,14 @@ const workbenchMocks = vi.hoisted(() => ({
   runtime: {},
 }));
 
-vi.mock('@workbench/WorkbenchContext', () => ({
+vi.mock('@workbench/WorkbenchContext', async (importOriginal) => ({
+  ...(await importOriginal<typeof workbenchContext>()),
   shallowEqual: Object.is,
+  useActiveProjectId: () => workbenchMocks.project.id,
+  useWorkbenchQueries: () => ({
+    getProject: (projectId: string) => (projectId === workbenchMocks.project.id ? workbenchMocks.project : null),
+    isActiveProject: (projectId: string) => projectId === workbenchMocks.project.id,
+  }),
   useActiveProjectSelector: (selector: (project: typeof workbenchMocks.project) => unknown) =>
     selector(workbenchMocks.project),
   useWorkbenchCommands: () => ({ layout: { setRegionCollapsed: () => {}, setRegionSize: () => {} } }),

@@ -54,6 +54,27 @@ export type VideoReferenceItem =
        * removable — and the flag is panel state only, never in metadata.
        */
       fromSourceVideo?: boolean;
+      /**
+       * True once the user has moved the anchor's OWN trim controls. The
+       * derived window is a default, not a constraint: Ref2VA conditions on
+       * reference content with no frame-exact seam to protect, so where the
+       * sample ends is an editorial choice (a clip that fades to black wants
+       * the fade concatenated but not conditioned on). From then on the panel
+       * stops re-deriving the window from the cutpoint and the frame count,
+       * and the entry is trimmed like any other reference. Clearing and
+       * re-setting the Initial Video drops the override. Panel state only,
+       * never in metadata; meaningless without `fromSourceVideo`.
+       */
+      trimOverridden?: boolean;
+      /**
+       * The sample length the user last asked for, in frames. The window stored in
+       * `clip` is this clamped to the frames the clip has left from its start frame —
+       * keeping the request separate is what lets a start-frame drag run into the end
+       * of the clip and come back with the length intact. Absent until a control is
+       * touched, where the window's own length is the request. Panel state only, never
+       * in metadata; read it through `referenceSampleFrames`.
+       */
+      sampleFrames?: number;
     }
   | { kind: 'image'; image: ImageWithDims; detail: VideoReferenceImageDetail };
 

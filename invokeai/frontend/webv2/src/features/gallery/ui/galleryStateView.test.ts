@@ -10,6 +10,7 @@ import {
   getGalleryGenerationSequence,
   getGalleryLiveSlots,
   getGallerySelectedBoardId,
+  getGallerySelectedImageQuery,
   getGallerySemanticImageQuery,
   getGalleryStateView,
 } from './galleryStateView';
@@ -185,8 +186,13 @@ describe('gallery state view', () => {
     });
   });
 
-  it('parses persisted gallery settings with safe defaults and ignores a persisted starredFirst', () => {
-    const gallery = getGalleryStateView({ boardOrderBy: 'board_name', starredFirst: false }, boards, [], false);
+  it('parses persisted gallery settings with safe defaults', () => {
+    const gallery = getGalleryStateView(
+      { boardOrderBy: 'board_name', starredSectionCollapsed: 'yes' },
+      boards,
+      [],
+      false
+    );
 
     expect(gallery.settings).toEqual({
       boardOrderBy: 'board_name',
@@ -203,9 +209,12 @@ describe('gallery state view', () => {
       showImageDimensions: false,
       showOtherProjectBoards: false,
       showPendingItems: true,
-      starredFirst: true,
+      starredSectionCollapsed: false,
       thumbnailFit: 'square',
     });
+    expect(
+      getGalleryStateView({ starredSectionCollapsed: true }, boards, [], false).settings.starredSectionCollapsed
+    ).toBe(true);
   });
 
   it('exposes comparison state only while an image selection differs from the compare image', () => {
@@ -241,6 +250,7 @@ describe('gallery state view', () => {
         page: 2,
         paginationMode: 'paginated',
         searchTerm: '',
+        starredOnly: false,
       },
     };
     const pageOf = (values: Record<string, unknown>, stamp: Record<string, unknown> = {}) =>
@@ -259,12 +269,30 @@ describe('gallery state view', () => {
     expect(pageOf({}, { paginationMode: 'infinite' })).toBeNull();
     expect(pageOf({ imageOrderDir: 'ASC' })).toBeNull();
     expect(pageOf({ searchTerm: 'cats' })).toBeNull();
+    expect(pageOf({ starredOnly: true })).toBeNull();
+    expect(pageOf({ starredOnly: true }, { starredOnly: true })).toBe(2);
+    // A starred selection sits in the strip, so no page of the unstarred grid holds it.
+    expect(pageOf({ selectedImage: { ...createImageItem('starred.png'), starred: true } })).toBeNull();
+    expect(
+      pageOf(
+        { selectedImage: { ...createImageItem('starred.png'), starred: true }, starredOnly: true },
+        { starredOnly: true }
+      )
+    ).toBe(2);
     expect(pageOf({ semanticImageQuery: { imageName: 'ref.png', kind: 'image' } })).toBeNull();
   });
 
-  it('derives starred-first from the pagination mode: sectioned infinite window, flat paginated pages', () => {
-    expect(getGalleryStateView({ paginationMode: 'infinite' }, boards, [], false).settings.starredFirst).toBe(true);
-    expect(getGalleryStateView({ paginationMode: 'paginated' }, boards, [], false).settings.starredFirst).toBe(false);
+  it('reads the starred-only filter as a strict boolean and stamps it on the selection query', () => {
+    expect(getGalleryStateView({ starredOnly: true }, boards, [], false).starredOnly).toBe(true);
+    expect(getGalleryStateView({ starredOnly: 'true' }, boards, [], false).starredOnly).toBe(false);
+    expect(getGalleryStateView({}, boards, [], false).starredOnly).toBe(false);
+
+    // The stamp wins over the live value: navigation walks the listing the
+    // selection was made in, not the one the grid has since switched to.
+    expect(
+      getGallerySelectedImageQuery({ selectedImageQuery: { starredOnly: true }, starredOnly: false })
+    ).toMatchObject({ starredOnly: true });
+    expect(getGallerySelectedImageQuery({ starredOnly: true })).toMatchObject({ starredOnly: true });
   });
 
   it('qualifies legacy names and preserves ordered mixed-media selection keys', () => {
@@ -559,10 +587,14 @@ describe('gallery state view', () => {
     expect(getPendingPlaceholders(queueItems, { selectedBoardId: 'board-1' })).toEqual([]);
   });
 
-  it('hides placeholders while searching or browsing assets', () => {
+  it('hides placeholders while searching, browsing assets, or filtering to starred items', () => {
     const queueItems = [createQueueItem({ boardId: 'none', status: 'pending' })];
 
     expect(getPendingPlaceholders(queueItems, { searchTerm: 'cat', selectedBoardId: 'none' })).toEqual([]);
+    expect(getPendingPlaceholders(queueItems, { selectedBoardId: 'none', starredOnly: true })).toEqual([]);
+    expect(
+      getGalleryStateView({ selectedBoardId: 'none', starredOnly: true }, boards, [], false, queueItems).currentItem
+    ).toBeNull();
     expect(getPendingPlaceholders(queueItems, { galleryView: 'assets', selectedBoardId: 'none' })).toEqual([]);
     expect(
       getGalleryStateView({ selectedBoardId: 'none' }, boards, [], false, queueItems).pendingPlaceholders

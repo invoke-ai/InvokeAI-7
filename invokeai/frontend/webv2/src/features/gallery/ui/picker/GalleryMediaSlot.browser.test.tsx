@@ -324,6 +324,23 @@ describe('GalleryMediaSlot', () => {
     expect(alertText()).toBe('widgets.gallery.picker.uploadFailed');
   });
 
+  it('hands an uploaded file to the consumer instead of the gallery and shows a custom thumbnail', async () => {
+    const onUploadFile = vi.fn();
+    const value: GalleryMediaSlotValue = { kind: 'image', name: 'stored preview' };
+
+    await renderSlot({ onUploadFile, thumbnail: <span data-testid="custom-thumb" />, value });
+
+    expect(host?.querySelector('[data-testid="custom-thumb"]')).not.toBeNull();
+    expect(host?.querySelector('img')).toBeNull();
+
+    const file = new File(['image'], 'local.png', { type: 'image/png' });
+    await changeFile(file);
+
+    expect(onUploadFile).toHaveBeenCalledExactlyOnceWith(file);
+    expect(mocks.uploadGalleryImage).not.toHaveBeenCalled();
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
   it('shows the current value with a replace hint and clears it', async () => {
     const value: GalleryMediaSlotValue = { height: 96, kind: 'image', name: 'chosen.png', width: 128 };
 

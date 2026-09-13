@@ -1317,9 +1317,17 @@ class SqliteSessionQueue(SessionQueueBase):
         self._emit_queue_items_canceled(queue_id, deleted_item_ids_by_user)
         return DeleteAllExceptCurrentResult(deleted=count)
 
-    def cancel_by_queue_id(self, queue_id: str) -> CancelByQueueIDResult:
-        match_filter = "queue_id == ?"
+    def cancel_by_queue_id(
+        self, queue_id: str, user_id: Optional[str] = None, origin_prefix: Optional[str] = None
+    ) -> CancelByQueueIDResult:
+        user_filter = "AND user_id = ?" if user_id is not None else ""
+        origin_filter = "AND origin LIKE ?" if origin_prefix is not None else ""
+        match_filter = f"queue_id == ? {user_filter} {origin_filter}"
         params: list[Any] = [queue_id]
+        if user_id is not None:
+            params.append(user_id)
+        if origin_prefix is not None:
+            params.append(f"{origin_prefix}%")
 
         with self._db.transaction() as cursor:
             where = f"""--sql
@@ -1349,11 +1357,14 @@ class SqliteSessionQueue(SessionQueueBase):
         self._emit_queue_items_canceled(queue_id, canceled_item_ids_by_user)
         return CancelByQueueIDResult(canceled=count)
 
-    def cancel_all_except_current(self, queue_id: str, user_id: Optional[str] = None) -> CancelAllExceptCurrentResult:
+    def cancel_all_except_current(
+        self, queue_id: str, user_id: Optional[str] = None, origin_prefix: Optional[str] = None
+    ) -> CancelAllExceptCurrentResult:
         current_chain_item_ids = self._get_current_workflow_call_chain_item_ids(queue_id)
         with self._db.transaction() as cursor:
-            # Build WHERE clause with optional user_id filter
+            # Build WHERE clause with optional user_id and origin_prefix filters
             user_filter = "AND user_id = ?" if user_id is not None else ""
+            origin_filter = "AND origin LIKE ?" if origin_prefix is not None else ""
             current_chain_filter = ""
             if current_chain_item_ids:
                 placeholders = ", ".join(["?" for _ in current_chain_item_ids])
@@ -1363,11 +1374,14 @@ class SqliteSessionQueue(SessionQueueBase):
                   queue_id == ?
                   AND status IN ('pending', 'waiting')
                   {user_filter}
+                  {origin_filter}
                   {current_chain_filter}
                 """
-            params = [queue_id]
+            params: list[Any] = [queue_id]
             if user_id is not None:
                 params.append(user_id)
+            if origin_prefix is not None:
+                params.append(f"{origin_prefix}%")
             params.extend(current_chain_item_ids)
 
             canceled_item_ids_by_user = self._collect_item_ids_by_user(cursor, where, params)

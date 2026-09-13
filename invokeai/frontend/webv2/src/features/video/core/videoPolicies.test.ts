@@ -8,8 +8,9 @@ import {
   findMiniMaxH3TurboLora,
   findWanLightningLoraPair,
   getAcceleratorLoraChangeResult,
-  getDefaultVideoSettings,
+  getAcceleratorSteps,
   getAcceleratorToggleResult,
+  getDefaultVideoSettings,
   getVideoComponentSectionPolicy,
   getVideoDimensions,
   getVideoModelAvailabilityReasons,
@@ -20,8 +21,9 @@ import {
   getVideoValidationReasons,
   getWanExpertWiringWarning,
   isSupportedVideoModel,
-  isVideoModelSelectable,
   isValidVideoNumFrames,
+  isVideoModelSelectable,
+  MINIMAX_H3_REF2V_TURBO_ACCELERATOR,
   snapVideoNumFrames,
   WAN_LIGHTNING_ACCELERATOR,
 } from './videoPolicies';
@@ -1210,6 +1212,77 @@ describe('ref2va accelerator auto-pick', () => {
     expect(result.missingLoras).toBe(false);
     expect(result.settings.acceleratorLoraKeys).toEqual(['ref2v-turbo']);
     expect(result.settings.steps).toBe(4);
+  });
+
+  const LIGHTX2V_REF2V_TURBO = {
+    base: 'minimax-h3',
+    key: 'lightx2v-ref2v-turbo',
+    name: 'MiniMax H3 LightX2V Ref2V Turbo LoRA',
+    type: 'lora' as const,
+  };
+
+  it('prefers the LightX2V ref2v release over the 4-step v0.1 repack whichever order they are listed in', () => {
+    // The v0.1 repack pans the camera rightward whenever a video reference is used; the
+    // LightX2V v1.0 release superseded it as the starter model and must win when both are
+    // installed — by generation, not by the accident of alphabetical order.
+    expect(findMiniMaxH3TurboLora([REF2V_TURBO, LIGHTX2V_REF2V_TURBO], { variant: 'ref2va' })).toMatchObject({
+      key: 'lightx2v-ref2v-turbo',
+    });
+    expect(findMiniMaxH3TurboLora([LIGHTX2V_REF2V_TURBO, REF2V_TURBO], { variant: 'ref2va' })).toMatchObject({
+      key: 'lightx2v-ref2v-turbo',
+    });
+    // Still a Ref2VA-only distillation: the FL2VA accelerator must not pick it up.
+    expect(findMiniMaxH3TurboLora([LIGHTX2V_REF2V_TURBO, FL2VA_TURBO], { variant: 'fl2va' })).toMatchObject({
+      key: 'turbo',
+    });
+  });
+
+  it('a by-URL install of the LightX2V release, named by its file, still beats the old starter-named repack', () => {
+    // model_on_disk names a URL install after the file stem, which carries no "LightX2V"
+    // token — only the org's file-name form. It must not lose to the v0.1 repack on an
+    // alphabetical tie (a space collates before an underscore).
+    const rawNew = {
+      base: 'minimax-h3',
+      key: 'raw-new',
+      name: 'minimax_h3_ref2v_turbo_8step_v1.0_768p_comfyui_bf16',
+      type: 'lora' as const,
+    };
+    const rawOld = {
+      base: 'minimax-h3',
+      key: 'raw-old',
+      name: 'minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16',
+      type: 'lora' as const,
+    };
+
+    expect(findMiniMaxH3TurboLora([REF2V_TURBO, rawNew], { variant: 'ref2va' })).toMatchObject({ key: 'raw-new' });
+    expect(findMiniMaxH3TurboLora([rawNew, rawOld], { variant: 'ref2va' })).toMatchObject({ key: 'raw-new' });
+    expect(findMiniMaxH3TurboLora([rawOld, rawNew], { variant: 'ref2va' })).toMatchObject({ key: 'raw-new' });
+    // The raw file name states its schedule, so the toggle runs it at 8 steps.
+    expect(getAcceleratorSteps(MINIMAX_H3_REF2V_TURBO_ACCELERATOR, [rawNew])).toBe(8);
+    expect(getAcceleratorSteps(MINIMAX_H3_REF2V_TURBO_ACCELERATOR, [rawOld])).toBe(4);
+  });
+
+  it('a family-named older repack still beats a LightX2V-named look-alike without the family', () => {
+    const lookAlike = { base: 'minimax-h3', key: 'look-alike', name: 'LightX2V Ref2V Turbo', type: 'lora' as const };
+
+    expect(findMiniMaxH3TurboLora([lookAlike, REF2V_TURBO], { variant: 'ref2va' })).toMatchObject({
+      key: 'ref2v-turbo',
+    });
+  });
+
+  it('the accelerator toggle runs the LightX2V ref2v release at its 8-step schedule', () => {
+    const model = ref2vaTransformer();
+    const settings = settingsFor(model);
+    const result = getAcceleratorToggleResult(
+      settings,
+      model,
+      [model, REF2V_TURBO, LIGHTX2V_REF2V_TURBO, FL2VA_TURBO],
+      true
+    );
+
+    expect(result.missingLoras).toBe(false);
+    expect(result.settings.acceleratorLoraKeys).toEqual(['lightx2v-ref2v-turbo']);
+    expect(result.settings.steps).toBe(8);
   });
 });
 

@@ -1,4 +1,5 @@
 import { Icon, Menu, Portal, Text } from '@chakra-ui/react';
+import { MenuContent } from '@platform/ui/Menu';
 import { ArrowLeftToLineIcon, ArrowRightToLineIcon, XIcon } from 'lucide-react';
 import { useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -74,7 +75,7 @@ export const WidgetInstanceContextMenu = ({
       <Portal>
         <Menu.Positioner>
           {target ? (
-            <Menu.Content minW="12rem">
+            <MenuContent minW="12rem">
               {onSetAlignment && target.item.isEnabled ? (
                 <Menu.Item value="toggle-alignment" onClick={handleToggleAlignment}>
                   <Icon as={isEnd ? ArrowLeftToLineIcon : ArrowRightToLineIcon} boxSize="3.5" />
@@ -95,7 +96,7 @@ export const WidgetInstanceContextMenu = ({
                   </Text>
                 ) : null}
               </Menu.Item>
-            </Menu.Content>
+            </MenuContent>
           ) : null}
         </Menu.Positioner>
       </Portal>

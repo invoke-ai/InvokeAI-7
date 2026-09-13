@@ -22,7 +22,7 @@ import {
   useWorkbenchCommands,
   useWorkbenchQueries,
 } from '@workbench/WorkbenchContext';
-import { useCallback, useEffect, useEffectEvent, useLayoutEffect, useMemo, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useEffectEvent, useLayoutEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { gridSizeForModelBase } from './bboxGrid';
@@ -62,6 +62,10 @@ import { useCanvasGallerySave } from './useCanvasGallerySave';
 import { useCreateFromBbox } from './useCreateFromBbox';
 import { reportPreparedCommit, reportStructuralCommit } from './useStructuralCommit';
 
+const MissingFontsDialog = lazy(() =>
+  import('./MissingFontsDialog').then((module) => ({ default: module.MissingFontsDialog }))
+);
+
 /**
  * The canvas widget shell. The engine owns pixels and interaction and renders
  * into {@link CanvasSurface}; this component only wires the reducer-backed
@@ -82,6 +86,7 @@ export const CanvasWidgetView = ({ runtime }: WidgetViewProps) => {
   const queueItems = useActiveProjectSelector((project) => project.queue.items);
   const antialiasProgressImages = useActiveProjectSelector((project) => project.settings.antialiasProgressImages);
   const { document, stagingArea } = canvas;
+  const fontReferences = useMemo(() => engine?.fonts.collectReferences(document) ?? [], [document, engine]);
   const operation = useCanvasOperation(engine);
   const operationKind = operation?.status === 'active' ? operation.identity.kind : null;
   // An operation's panel supersedes any pending layer-properties request.
@@ -510,6 +515,11 @@ export const CanvasWidgetView = ({ runtime }: WidgetViewProps) => {
       w="full"
     >
       <CanvasColorFeed engine={engine} />
+      {engine && fontReferences.length > 0 ? (
+        <Suspense fallback={null}>
+          <MissingFontsDialog key={projectId} engine={engine} groups={fontReferences} />
+        </Suspense>
+      ) : null}
       <CanvasSurfaceContextLayout surface={canvasSurface} onContextMenu={handleSurfaceContextMenu}>
         <CanvasImageDropOverlay
           isDocumentEditingLocked={interactionCapabilities.isDocumentEditingLocked}

@@ -227,17 +227,6 @@ describe('gallery item ordering', () => {
     expect(sorted.map((item) => item.name)).toEqual(['legacy.png', 'backend.png']);
   });
 
-  it('keeps starred items first regardless of timestamp shape', () => {
-    const starredOlderBackend = { ...sqliteItem, createdAt: '2026-08-29 02:28:40.566', starred: true };
-    const unstarredNewerOverlay = { ...overlayItem, createdAt: '2026-08-29T13:01:20.649Z' };
-
-    const sorted = [unstarredNewerOverlay, starredOlderBackend].sort((a, b) =>
-      compareGalleryItems(a, b, { orderDir: 'DESC', starredFirst: true })
-    );
-
-    expect(sorted.map((item) => item.name)).toEqual(['backend.png', 'legacy.png']);
-  });
-
   it('falls through to the kind tie-breaker when the two shapes name the same instant', () => {
     const image = { ...sqliteItem, createdAt: '2026-08-29 13:01:20.649' };
     const video = { ...image, durationSeconds: 2, kind: 'video' as const, name: 'backend.png' };

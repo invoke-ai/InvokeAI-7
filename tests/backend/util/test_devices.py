@@ -716,6 +716,96 @@ def test_install_peer_aware_empty_cache_wraps_torch_entry_point(monkeypatch):
         torch_mod.cuda.empty_cache = original
 
 
+def test_skipped_empty_cache_is_deferred_and_flushed_at_a_quiet_moment(monkeypatch):
+    """A peer-aware skip must not lose the release: it is recorded as deferred, stays pending
+    while any other device is still busy, and is performed exactly once by the first flush that
+    finds the pool quiet."""
+    import torch as torch_mod
+
+    from invokeai.backend.util.device_pool import GENERATION_DEVICE_POOL
+    from invokeai.backend.util.devices import TorchDevice
+
+    calls: list[str] = []
+    monkeypatch.setattr(torch_mod.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch_mod.cuda, "empty_cache", lambda: calls.append("cuda"))
+    monkeypatch.setattr(torch_mod.backends.mps, "is_available", lambda: False)
+
+    GENERATION_DEVICE_POOL.set_generation_devices([torch.device("cuda:0"), torch.device("cuda:1")])
+    TorchDevice._empty_cache_deferred.clear()
+    try:
+        # Nothing pending: a flush is a no-op even when quiet.
+        TorchDevice.flush_deferred_empty_cache()
+        assert calls == []
+
+        # Worker on cuda:0 finishes (cancels) while cuda:1 is mid-render: its release is deferred.
+        GENERATION_DEVICE_POOL.acquire_session(torch.device("cuda:1"))
+        TorchDevice.set_session_device(torch.device("cuda:0"))
+        try:
+            TorchDevice.empty_cache()
+            assert calls == []
+            assert TorchDevice._empty_cache_deferred.is_set(), "skip did not record a deferred release"
+            # The requester itself cannot flush while the peer is busy; the request stays pending.
+            TorchDevice.flush_deferred_empty_cache()
+            assert calls == []
+            assert TorchDevice._empty_cache_deferred.is_set()
+        finally:
+            TorchDevice.clear_session_device()
+
+        # The busy worker on cuda:1 reaches a step boundary: no OTHER device is busy from its
+        # point of view, so it performs the deferred release itself, once.
+        TorchDevice.set_session_device(torch.device("cuda:1"))
+        try:
+            TorchDevice.flush_deferred_empty_cache()
+            assert calls == ["cuda"], "busy worker did not flush the deferred release at its step boundary"
+            assert not TorchDevice._empty_cache_deferred.is_set()
+            TorchDevice.flush_deferred_empty_cache()
+            assert calls == ["cuda"], "a flushed request was repeated"
+        finally:
+            TorchDevice.clear_session_device()
+            GENERATION_DEVICE_POOL.release_session(torch.device("cuda:1"))
+    finally:
+        TorchDevice._empty_cache_deferred.clear()
+        GENERATION_DEVICE_POOL.reset()
+
+
+def test_peer_aware_wrapper_defers_and_a_direct_run_clears_the_request(monkeypatch):
+    """Third-party calls through the installed torch.cuda.empty_cache wrapper defer the same
+    way, and any real run (from either entry point) satisfies the pending request."""
+    import torch as torch_mod
+
+    from invokeai.backend.util.device_pool import GENERATION_DEVICE_POOL
+    from invokeai.backend.util.devices import TorchDevice, install_peer_aware_empty_cache
+
+    calls: list[str] = []
+    original = torch_mod.cuda.empty_cache
+    monkeypatch.setattr(torch_mod.cuda, "empty_cache", lambda: calls.append("cuda"))
+    TorchDevice._empty_cache_deferred.clear()
+    try:
+        install_peer_aware_empty_cache()
+        GENERATION_DEVICE_POOL.set_generation_devices([torch.device("cuda:0"), torch.device("cuda:1")])
+        try:
+            TorchDevice.set_session_device(torch.device("cuda:0"))
+            GENERATION_DEVICE_POOL.acquire_session(torch.device("cuda:1"))
+            try:
+                torch_mod.cuda.empty_cache()  # what diffusers calls
+                assert calls == []
+                assert TorchDevice._empty_cache_deferred.is_set(), "wrapper skip did not defer the release"
+            finally:
+                GENERATION_DEVICE_POOL.release_session(torch.device("cuda:1"))
+            # Quiet again: a direct call runs and clears the request, so a later flush is a no-op.
+            torch_mod.cuda.empty_cache()
+            assert calls == ["cuda"]
+            assert not TorchDevice._empty_cache_deferred.is_set(), "a real run left the request pending"
+            TorchDevice.flush_deferred_empty_cache()
+            assert calls == ["cuda"]
+        finally:
+            TorchDevice.clear_session_device()
+            GENERATION_DEVICE_POOL.reset()
+    finally:
+        TorchDevice._empty_cache_deferred.clear()
+        torch_mod.cuda.empty_cache = original
+
+
 def test_disable_conv_benchmark_empty_cache_flips_torch_flag():
     """The multi-GPU startup path must clear torch's post-conv-find emptyCache flag (and no-op
     gracefully on builds that lack it)."""

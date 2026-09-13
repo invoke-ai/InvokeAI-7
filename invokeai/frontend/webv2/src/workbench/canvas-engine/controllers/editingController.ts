@@ -1,5 +1,6 @@
 import type { CanvasDocumentContractV3 } from '@workbench/canvas-engine/contracts';
 import type { CanvasEditGate, CanvasEditGateController } from '@workbench/canvas-engine/editGate';
+import type { History } from '@workbench/canvas-engine/history/history';
 import type { SelectionState, SelectionStateDeps } from '@workbench/canvas-engine/selection/selectionState';
 import type { Rect } from '@workbench/canvas-engine/types';
 
@@ -7,6 +8,7 @@ import { compileDocumentLeaves } from '@workbench/canvas-engine/document-model/d
 import { getSourceBounds, isRenderableLayer } from '@workbench/canvas-engine/document/sources';
 import { createCanvasEditGate } from '@workbench/canvas-engine/editGate';
 import { roundOut, union } from '@workbench/canvas-engine/math/rect';
+import { withSelectionHistory } from '@workbench/canvas-engine/selection/selectionHistory';
 import { createSelectionState } from '@workbench/canvas-engine/selection/selectionState';
 
 import { FloatingSelectionController, type FloatingSelectionControllerOptions } from './floatingSelectionController';
@@ -17,6 +19,8 @@ import { TransformEditingController, type TransformEditingControllerOptions } fr
 
 export interface EditingControllerOptions {
   readonly selection: SelectionStateDeps;
+  /** Records selection changes; the float folds its own mask move into its entry instead. */
+  readonly history: History;
   readonly getDocument: () => CanvasDocumentContractV3 | null;
   readonly createSelectionState?: (deps: SelectionStateDeps) => SelectionState;
   readonly createEditGate?: () => CanvasEditGateController;
@@ -29,7 +33,9 @@ export interface EditingControllerOptions {
 
 /** Owns transient editing state whose lifetime follows one engine instance. */
 export class EditingController {
+  /** The recording selection: every change through it is an undo step. */
   readonly selection: SelectionState;
+  private readonly rawSelection: SelectionState;
   readonly edits: CanvasEditGate;
   readonly text: TextEditingController;
   readonly transform: TransformEditingController;
@@ -41,7 +47,8 @@ export class EditingController {
   private disposed = false;
 
   constructor(options: EditingControllerOptions) {
-    this.selection = (options.createSelectionState ?? createSelectionState)(options.selection);
+    this.rawSelection = (options.createSelectionState ?? createSelectionState)(options.selection);
+    this.selection = withSelectionHistory(this.rawSelection, options.history);
     this.getDocument = options.getDocument;
     this.editGate = (options.createEditGate ?? createCanvasEditGate)();
     this.edits = this.editGate;
@@ -54,7 +61,7 @@ export class EditingController {
     });
     this.floatingSelection = new FloatingSelectionController({
       ...options.floatingSelection,
-      selection: this.selection,
+      selection: this.rawSelection,
     });
   }
 
@@ -87,6 +94,11 @@ export class EditingController {
 
   deselect(): void {
     this.selection.clear();
+  }
+
+  /** Drops the selection without a history step: the document it belonged to is going away. */
+  discardSelection(): void {
+    this.rawSelection.clear();
   }
 
   invertSelection(): void {

@@ -363,13 +363,16 @@ export const FloatingWidgetWindow = ({
         <HStack flexShrink={0} gap="1">
           {/* The widget's own header toggles: floated content renders bare, so
               without this the docked header's controls would simply vanish on
-              float. Frame-level actions stay out — this bar carries its own. */}
+              float. Frame-level actions stay out — this bar carries its own.
+              The slot yields siblings (the widget's actions group and the
+              settings gear), so the wrapper is a row: as a block it stacked the
+              gear under the actions instead of continuing the strip. */}
           {isEnabled && widget ? (
             <FloatingChromeBoundary>
               <Suspense fallback={null}>
-                <Box onDoubleClick={stopChromeEvent} onPointerDown={stopChromeEvent}>
+                <HStack gap="1" onDoubleClick={stopChromeEvent} onPointerDown={stopChromeEvent}>
                   <WidgetChromeSlotById instanceId={instanceId} region="floating" slot="viewActions" widget={widget} />
-                </Box>
+                </HStack>
               </Suspense>
             </FloatingChromeBoundary>
           ) : null}

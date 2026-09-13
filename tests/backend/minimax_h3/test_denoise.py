@@ -119,6 +119,47 @@ def test_cancellation_raises(tiny_transformer):
         denoise(tiny_transformer, state, prompt_embeds, is_canceled=lambda: next(polls))
 
 
+def test_cancellation_is_polled_between_transformer_blocks():
+    """A cancel that lands mid-step must stop the forward at the next block boundary, not at
+    the end of the step: with two blocks, a poll that turns True after the first block's
+    pre-hook leaves the second block unrun. The hooks must not outlive the call — the
+    transformer is a shared cache resident."""
+    torch.manual_seed(0)
+    transformer = MiniMaxH3Transformer3DModel(**{**TINY_CONFIG, "num_layers": 2})
+    transformer.eval()
+    block_forwards: list[int] = []
+    for index, block in enumerate(transformer.transformer_blocks):
+        block.register_forward_hook(lambda module, args, output, index=index: block_forwards.append(index))
+    hooks_before = [dict(block._forward_pre_hooks) for block in transformer.transformer_blocks]
+
+    state = _state()
+    prompt_embeds = torch.randn(1, 3, TINY_CONFIG["text_dim"])
+    # Polls: step-loop check (False), block 0 pre-hook (False), block 1 pre-hook (True).
+    polls = iter([False, False, True])
+    with pytest.raises(CanceledException):
+        denoise(transformer, state, prompt_embeds, is_canceled=lambda: next(polls))
+
+    assert block_forwards == [0], "the forward did not stop at the first block boundary after the cancel"
+    assert [dict(block._forward_pre_hooks) for block in transformer.transformer_blocks] == hooks_before, (
+        "cancel pre-hooks leaked onto the shared transformer"
+    )
+
+
+def test_uncanceled_run_leaves_no_hooks_and_polls_every_block(tiny_transformer):
+    polls: list[bool] = []
+
+    def is_canceled() -> bool:
+        polls.append(False)
+        return False
+
+    state = _state()
+    prompt_embeds = torch.randn(1, 3, TINY_CONFIG["text_dim"])
+    denoise(tiny_transformer, state, prompt_embeds, is_canceled=is_canceled)
+    # One poll per step plus one per block per step.
+    assert len(polls) == NUM_EVALS * (1 + TINY_CONFIG["num_layers"])
+    assert all(not block._forward_pre_hooks for block in tiny_transformer.transformer_blocks)
+
+
 def test_denoise_is_deterministic(tiny_transformer):
     prompt_embeds = torch.randn(1, 3, TINY_CONFIG["text_dim"], generator=torch.Generator().manual_seed(2))
     v1, a1 = denoise(tiny_transformer, _state(), prompt_embeds.clone())

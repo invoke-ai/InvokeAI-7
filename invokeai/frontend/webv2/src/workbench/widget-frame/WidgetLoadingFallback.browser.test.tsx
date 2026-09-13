@@ -1,5 +1,6 @@
-/* oxlint-disable react-perf/jsx-no-new-array-as-prop, react-perf/jsx-no-new-object-as-prop */
 import type { NormalizedWidgetManifest, RegisteredWidget, WidgetInstanceContract } from '@workbench/widgetContracts';
+/* oxlint-disable react-perf/jsx-no-new-array-as-prop, react-perf/jsx-no-new-object-as-prop */
+import type * as workbenchContext from '@workbench/WorkbenchContext';
 
 import { ChakraProvider } from '@chakra-ui/react';
 import { system } from '@theme/system';
@@ -13,7 +14,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 // Panel frames read the region's persisted size; the fallback under test only
 // needs a stable one, so the store is stubbed rather than booted.
-vi.mock('@workbench/WorkbenchContext', () => ({
+vi.mock('@workbench/WorkbenchContext', async (importOriginal) => ({
+  ...(await importOriginal<typeof workbenchContext>()),
   shallowEqual: Object.is,
   useActiveProjectSelector: (
     selector: (project: {

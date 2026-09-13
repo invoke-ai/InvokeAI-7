@@ -1,4 +1,4 @@
-import type { CanvasDocumentContractV3 } from '@workbench/canvas-engine/contracts';
+import type { CanvasDocumentContractV3, CanvasLayerContract } from '@workbench/canvas-engine/contracts';
 import type { Tool, ToolContext } from '@workbench/canvas-engine/tools/tool';
 import type { PointerInput, Vec2 } from '@workbench/canvas-engine/types';
 import type { Viewport } from '@workbench/canvas-engine/viewport';
@@ -7,11 +7,27 @@ import type { CanvasProjectMutation } from '@workbench/canvasProjectMutations';
 import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
 import { createTestInsertionAnchorCapture } from '@workbench/canvas-engine/document/insertionAnchors.testStub';
 import { createEngineStores } from '@workbench/canvas-engine/engineStores';
+import { createLayerCacheStore } from '@workbench/canvas-engine/render/layerCache';
+import { createTestStubRasterBackend, type StubRasterSurface } from '@workbench/canvas-engine/render/raster.testStub';
 import { describe, expect, it, vi } from 'vitest';
 
-import { createShapeTool, rectFromDrag } from './shapeTool';
+import { createShapeTool, polygonShapeFrom, rectFromDrag } from './shapeTool';
 
-const makeDoc = (): CanvasDocumentContractV3 => ({
+const paintLayer = (over: Partial<CanvasLayerContract> = {}): CanvasLayerContract =>
+  ({
+    blendMode: 'normal',
+    id: 'paint-1',
+    isEnabled: true,
+    isLocked: false,
+    name: 'Paint',
+    opacity: 1,
+    source: { bitmap: null, type: 'paint' },
+    transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 },
+    type: 'raster',
+    ...over,
+  }) as CanvasLayerContract;
+
+const makeDoc = (over: Partial<CanvasDocumentContractV3> = {}): CanvasDocumentContractV3 => ({
   background: 'transparent',
   bbox: { height: 96, width: 96, x: 0, y: 0 },
   height: 512,
@@ -19,20 +35,25 @@ const makeDoc = (): CanvasDocumentContractV3 => ({
   selectedLayerId: null,
   version: 3,
   width: 512,
+  ...over,
 });
 
 const identityViewport = {
   documentToScreen: (p: Vec2): Vec2 => ({ x: p.x, y: p.y }),
 } as unknown as Viewport;
 
-const pointer = (x: number, y: number, opts: { shift?: boolean; buttons?: number } = {}): PointerInput => ({
+const pointer = (
+  x: number,
+  y: number,
+  opts: { shift?: boolean; buttons?: number; timeStamp?: number } = {}
+): PointerInput => ({
   buttons: opts.buttons ?? 1,
   documentPoint: { x, y },
   modifiers: { alt: false, ctrl: false, meta: false, shift: opts.shift ?? false },
   pointerType: 'mouse',
   pressure: 0.5,
   screenPoint: { x, y },
-  timeStamp: 0,
+  timeStamp: opts.timeStamp ?? 0,
 });
 
 interface StructuralCommit {
@@ -45,9 +66,11 @@ const createHarness = (doc: CanvasDocumentContractV3) => {
   const dispatched: CanvasProjectMutation[] = [];
   const commits: StructuralCommit[] = [];
   const stores = createEngineStores();
+  const backend = createTestStubRasterBackend();
+  const layers = createLayerCacheStore(backend);
   let idCounter = 0;
   const ctx: ToolContext = {
-    backend: null as never,
+    backend,
     commitStructural: (label, forward, inverse) => {
       commits.push({ forward, inverse, label });
       return { status: 'committed' as const };
@@ -59,7 +82,7 @@ const createHarness = (doc: CanvasDocumentContractV3) => {
     emitStrokeCommitted: vi.fn(),
     getDocument: () => doc,
     invalidate: vi.fn(),
-    layers: null as never,
+    layers,
     notifyLayerPainted: vi.fn(),
     setLayerTransformOverride: vi.fn(),
     setOverlayCursor: vi.fn(),
@@ -67,7 +90,7 @@ const createHarness = (doc: CanvasDocumentContractV3) => {
     updateCursor: vi.fn(),
     viewport: identityViewport,
   };
-  return { commits, ctx, dispatched, previewOf: () => stores.shapePreview.get(), stores };
+  return { commits, ctx, dispatched, layers, previewOf: () => stores.shapePreview.get(), stores };
 };
 
 const down = (t: Tool, ctx: ToolContext, i: PointerInput): void => t.onPointerDown?.(ctx, i);
@@ -131,7 +154,13 @@ describe('shape tool: creation', () => {
 
   it('resolves the pair at gesture start for the enabled fill and stroke', () => {
     const h = createHarness(makeDoc());
-    h.stores.shapeOptions.set({ fillEnabled: true, kind: 'ellipse', strokeEnabled: true, strokeWidth: 4 });
+    h.stores.shapeOptions.set({
+      fillEnabled: true,
+      kind: 'ellipse',
+      strokeEnabled: true,
+      strokeWidth: 4,
+      target: 'new',
+    });
     h.stores.colorPair.set({ background: '#0000ff', foreground: '#ff0000' });
     const tool = createShapeTool();
 
@@ -194,5 +223,250 @@ describe('shape tool: creation', () => {
     // A subsequent up does nothing (gesture already dropped).
     up(tool, h.ctx, pointer(70, 50));
     expect(h.commits).toHaveLength(0);
+  });
+});
+
+describe('shape tool: polygon and freehand kinds', () => {
+  const click = (tool: Tool, ctx: ToolContext, x: number, y: number, timeStamp: number): void => {
+    down(tool, ctx, pointer(x, y, { timeStamp }));
+    up(tool, ctx, pointer(x, y, { timeStamp }));
+  };
+
+  it('places polygon vertices click by click and commits one layer on close, points relative to its box', () => {
+    const h = createHarness(makeDoc());
+    h.stores.shapeOptions.set({ ...h.stores.shapeOptions.get(), kind: 'polygon' });
+    const tool = createShapeTool();
+
+    click(tool, h.ctx, 10, 10, 0);
+    click(tool, h.ctx, 50, 10, 1000);
+    move(tool, h.ctx, pointer(50, 40));
+    expect(h.stores.lassoPreview.get()).toMatchObject({
+      kind: 'polygon',
+      points: [
+        { x: 10, y: 10 },
+        { x: 50, y: 10 },
+      ],
+    });
+    click(tool, h.ctx, 50, 40, 2000);
+    expect(h.commits).toHaveLength(0);
+    tool.onKeyCommand?.(h.ctx, 'apply');
+
+    expect(h.commits).toHaveLength(1);
+    const forward = h.commits[0]?.forward;
+    if (forward?.type === 'addCanvasLayer' && forward.layer.type === 'raster') {
+      expect(forward.layer.source).toMatchObject({
+        height: 30,
+        kind: 'polygon',
+        points: [
+          { x: 0, y: 0 },
+          { x: 40, y: 0 },
+          { x: 40, y: 30 },
+        ],
+        width: 40,
+      });
+      expect(forward.layer.transform).toMatchObject({ x: 10, y: 10 });
+    } else {
+      throw new Error('expected a polygon layer');
+    }
+    expect(h.stores.lassoPreview.get()).toBeNull();
+  });
+
+  it('traces a freehand drag into a closed polygon', () => {
+    const h = createHarness(makeDoc());
+    h.stores.shapeOptions.set({ ...h.stores.shapeOptions.get(), kind: 'freehand' });
+    const tool = createShapeTool();
+
+    down(tool, h.ctx, pointer(0, 0));
+    move(tool, h.ctx, pointer(30, 0));
+    move(tool, h.ctx, pointer(30, 30));
+    expect(h.stores.lassoPreview.get()).toMatchObject({ kind: 'freehand' });
+    up(tool, h.ctx, pointer(0, 30));
+
+    const forward = h.commits[0]?.forward;
+    if (forward?.type === 'addCanvasLayer' && forward.layer.type === 'raster') {
+      expect(forward.layer.source).toMatchObject({ height: 30, kind: 'polygon', width: 30 });
+      expect((forward.layer.source as { points?: unknown[] }).points).toHaveLength(4);
+    } else {
+      throw new Error('expected a polygon layer');
+    }
+  });
+
+  it('commits nothing for a flat polygon', () => {
+    // The third point survives the 1px dedupe; only the sub-pixel bounds reject it.
+    expect(
+      polygonShapeFrom(
+        [
+          { x: 0, y: 0 },
+          { x: 40, y: 0 },
+          { x: 20, y: 0.5 },
+        ],
+        { fill: '#000', stroke: null, strokeWidth: 0 }
+      )
+    ).toBeNull();
+  });
+
+  it('closes the polygon with a click on the first vertex', () => {
+    const h = createHarness(makeDoc());
+    h.stores.shapeOptions.set({ ...h.stores.shapeOptions.get(), kind: 'polygon' });
+    const tool = createShapeTool();
+
+    click(tool, h.ctx, 10, 10, 0);
+    click(tool, h.ctx, 50, 10, 1000);
+    click(tool, h.ctx, 50, 40, 2000);
+    move(tool, h.ctx, pointer(13, 12));
+    expect(h.stores.lassoPreview.get()).toMatchObject({ closeArmed: true, kind: 'polygon' });
+    expect(tool.cursor?.(h.ctx)).toBe('pointer');
+    click(tool, h.ctx, 13, 12, 3000);
+
+    expect(h.commits).toHaveLength(1);
+    expect(h.stores.lassoPreview.get()).toBeNull();
+  });
+
+  it('drops an open polygon when the kind changes mid-session', () => {
+    const h = createHarness(makeDoc());
+    h.stores.shapeOptions.set({ ...h.stores.shapeOptions.get(), kind: 'polygon' });
+    const tool = createShapeTool();
+
+    click(tool, h.ctx, 10, 10, 0);
+    click(tool, h.ctx, 50, 10, 1000);
+    h.stores.shapeOptions.set({ ...h.stores.shapeOptions.get(), kind: 'rect' });
+    move(tool, h.ctx, pointer(50, 40));
+    expect(h.stores.lassoPreview.get()).toBeNull();
+
+    // The next press starts a fresh rect drag rather than extending the polygon.
+    down(tool, h.ctx, pointer(0, 0));
+    move(tool, h.ctx, pointer(20, 20));
+    up(tool, h.ctx, pointer(20, 20));
+    expect(h.commits).toHaveLength(1);
+    const forward = h.commits[0]?.forward;
+    if (forward?.type === 'addCanvasLayer' && forward.layer.type === 'raster') {
+      expect(forward.layer.source).toMatchObject({ kind: 'rect', width: 20 });
+    } else {
+      throw new Error('expected a rect layer');
+    }
+  });
+});
+
+describe('shape tool: placement', () => {
+  it('draws onto the selected paint layer as one stroke event, growing its cache to the shape', () => {
+    const layer = paintLayer({ transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 100, y: 50 } });
+    const h = createHarness(makeDoc({ stacks: stacksFrom([layer]), selectedLayerId: 'paint-1' }));
+    const tool = createShapeTool();
+
+    down(tool, h.ctx, pointer(110, 60));
+    move(tool, h.ctx, pointer(170, 100));
+    up(tool, h.ctx, pointer(170, 100));
+
+    expect(h.commits).toHaveLength(0);
+    expect(h.ctx.emitStrokeCommitted).toHaveBeenCalledOnce();
+    const event = vi.mocked(h.ctx.emitStrokeCommitted).mock.calls[0]![0];
+    // Layer-local: the document rect minus the layer's offset.
+    expect(event.dirtyRect).toEqual({ height: 40, width: 60, x: 10, y: 10 });
+    expect(event.tool).toBe('shape');
+    expect(event.layerId).toBe('paint-1');
+    expect(h.layers.get('paint-1')?.rect).toEqual({ height: 40, width: 60, x: 10, y: 10 });
+    const surface = h.layers.get('paint-1')?.surface as StubRasterSurface;
+    expect(surface.callLog.some((entry) => entry.op === 'drawImage')).toBe(true);
+  });
+
+  it('maps the shape through a scaled layer and clamps the cache growth to the selection', () => {
+    const layer = paintLayer({ transform: { rotation: 0, scaleX: 2, scaleY: 2, x: 100, y: 50 } });
+    const h = createHarness(makeDoc({ stacks: stacksFrom([layer]), selectedLayerId: 'paint-1' }));
+    const mask = h.ctx.backend.createSurface(40, 40);
+    h.ctx.getSelectionMask = () => ({ rect: { height: 40, width: 40, x: 100, y: 50 }, surface: mask });
+    const tool = createShapeTool();
+
+    down(tool, h.ctx, pointer(110, 60));
+    move(tool, h.ctx, pointer(170, 100));
+    up(tool, h.ctx, pointer(170, 100));
+
+    const event = vi.mocked(h.ctx.emitStrokeCommitted).mock.calls[0]![0];
+    // Document 110..140 × 60..90 (the selection's extent) → local (5..20, 5..20) at half scale.
+    expect(event.dirtyRect).toEqual({ height: 15, width: 15, x: 5, y: 5 });
+    expect(h.layers.get('paint-1')?.rect).toEqual(event.dirtyRect);
+  });
+
+  it('clips to the bbox and skips a shape that lands entirely outside the selection', () => {
+    const h = createHarness(makeDoc({ stacks: stacksFrom([paintLayer()]), selectedLayerId: 'paint-1' }));
+    const mask = h.ctx.backend.createSurface(10, 10);
+    h.ctx.getSelectionMask = () => ({ rect: { height: 10, width: 10, x: 0, y: 0 }, surface: mask });
+    h.ctx.getStrokeClipRect = () => ({ height: 8, width: 8, x: 0, y: 0 });
+    const tool = createShapeTool();
+
+    down(tool, h.ctx, pointer(4, 4));
+    move(tool, h.ctx, pointer(60, 60));
+    up(tool, h.ctx, pointer(60, 60));
+    expect(vi.mocked(h.ctx.emitStrokeCommitted).mock.calls[0]![0].dirtyRect).toEqual({
+      height: 4,
+      width: 4,
+      x: 4,
+      y: 4,
+    });
+
+    down(tool, h.ctx, pointer(20, 20));
+    move(tool, h.ctx, pointer(60, 60));
+    up(tool, h.ctx, pointer(60, 60));
+    // Nothing to draw: no stroke event, no history, no new layer.
+    expect(h.ctx.emitStrokeCommitted).toHaveBeenCalledOnce();
+    expect(h.commits).toHaveLength(0);
+    expect(h.layers.get('paint-1')?.rect).toEqual({ height: 4, width: 4, x: 4, y: 4 });
+  });
+
+  it('refuses a locked paint layer instead of spawning a layer over it', () => {
+    const h = createHarness(
+      makeDoc({ stacks: stacksFrom([paintLayer({ isLocked: true })]), selectedLayerId: 'paint-1' })
+    );
+    const tool = createShapeTool();
+
+    down(tool, h.ctx, pointer(10, 10));
+    move(tool, h.ctx, pointer(70, 50));
+    up(tool, h.ctx, pointer(70, 50));
+
+    expect(h.ctx.emitStrokeCommitted).not.toHaveBeenCalled();
+    expect(h.commits).toHaveLength(0);
+  });
+
+  it('waits for a durable paint layer whose pixels are not cached yet', () => {
+    const durable = paintLayer({ source: { bitmap: { height: 8, imageName: 'b', width: 8 }, type: 'paint' } });
+    const h = createHarness(makeDoc({ stacks: stacksFrom([durable]), selectedLayerId: 'paint-1' }));
+    h.ctx.requestLayerRasterization = vi.fn();
+    const tool = createShapeTool();
+
+    down(tool, h.ctx, pointer(10, 10));
+    move(tool, h.ctx, pointer(70, 50));
+    up(tool, h.ctx, pointer(70, 50));
+
+    expect(h.ctx.requestLayerRasterization).toHaveBeenCalledWith('paint-1');
+    expect(h.ctx.emitStrokeCommitted).not.toHaveBeenCalled();
+    expect(h.commits).toHaveLength(0);
+  });
+
+  it('falls back to a new shape layer when the selection is not a paint layer', () => {
+    const image = paintLayer({
+      id: 'image-1',
+      source: { image: { height: 8, imageName: 'i', width: 8 }, type: 'image' },
+    });
+    const h = createHarness(makeDoc({ stacks: stacksFrom([image]), selectedLayerId: 'image-1' }));
+    const tool = createShapeTool();
+
+    down(tool, h.ctx, pointer(10, 10));
+    move(tool, h.ctx, pointer(70, 50));
+    up(tool, h.ctx, pointer(70, 50));
+
+    expect(h.ctx.emitStrokeCommitted).not.toHaveBeenCalled();
+    expect(h.commits[0]?.forward.type).toBe('addCanvasLayer');
+  });
+
+  it('creates a shape layer over a paint layer when the target is a new layer', () => {
+    const h = createHarness(makeDoc({ stacks: stacksFrom([paintLayer()]), selectedLayerId: 'paint-1' }));
+    h.stores.shapeOptions.set({ ...h.stores.shapeOptions.get(), target: 'new' });
+    const tool = createShapeTool();
+
+    down(tool, h.ctx, pointer(10, 10));
+    move(tool, h.ctx, pointer(70, 50));
+    up(tool, h.ctx, pointer(70, 50));
+
+    expect(h.ctx.emitStrokeCommitted).not.toHaveBeenCalled();
+    expect(h.commits[0]?.forward.type).toBe('addCanvasLayer');
   });
 });

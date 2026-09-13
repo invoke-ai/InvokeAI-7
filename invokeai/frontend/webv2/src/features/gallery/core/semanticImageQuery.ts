@@ -1,3 +1,5 @@
+import type { GalleryItemKey } from './items';
+
 /**
  * Identity of a semantic gallery search: a text prompt, a gallery image, a
  * web image URL, a dropped file held in the external-image registry, or an
@@ -91,17 +93,21 @@ export const getExternalImageFile = (fileId: string): { blob: Blob; label: strin
 /*
  * In-memory registry for image-map cluster queries, mirroring the file
  * registry above: a cluster's member list (which can run to thousands of
- * names) cannot live in persisted widget values, so the persisted value keeps
+ * items) cannot live in persisted widget values, so the persisted value keeps
  * a registry key, and a key that no longer resolves (e.g. after a reload)
  * reads as a cleared search. Only one cluster query is active at a time, so
  * registering a new cluster evicts the previous one.
+ *
+ * Members are item keys rather than bare names: a cluster on the map can hold
+ * videos as well as images, and the gallery resolves each member through the
+ * endpoint its kind names.
  */
 
 let nextClusterId = 0;
 
-const clusters = new Map<string, { imageNames: string[]; label: string }>();
+const clusters = new Map<string, { itemKeys: GalleryItemKey[]; label: string }>();
 
-export const registerImageCluster = (imageNames: string[], label: string): string => {
+export const registerImageCluster = (itemKeys: GalleryItemKey[], label: string): string => {
   nextClusterId += 1;
   // Same shape as file ids: the random token keeps a persisted id from a
   // previous JS realm (another tab, a reload) from resolving to this realm's
@@ -109,41 +115,41 @@ export const registerImageCluster = (imageNames: string[], label: string): strin
   const clusterId = `cluster-${String(nextClusterId)}-${Math.random().toString(36).slice(2, 10)}`;
 
   clusters.clear();
-  clusters.set(clusterId, { imageNames, label });
+  clusters.set(clusterId, { itemKeys, label });
 
   return clusterId;
 };
 
-export const getImageCluster = (clusterId: string): { imageNames: string[]; label: string } | null =>
+export const getImageCluster = (clusterId: string): { itemKeys: GalleryItemKey[]; label: string } | null =>
   clusters.get(clusterId) ?? null;
 
 /**
- * Drops deleted images from the registered cluster, in step with the gallery's
+ * Drops deleted items from the registered cluster, in step with the gallery's
  * optimistic cache patch: the member list is client-owned, so without this the
- * cluster view's total (and its trailing page) would keep counting images that
- * no longer exist. Returns a rollback that puts back exactly the names THIS
+ * cluster view's total (and its trailing page) would keep counting items that
+ * no longer exist. Returns a rollback that puts back exactly the members THIS
  * call removed — a no-op once a different registration owns the slot.
  */
-export const pruneImageClusterMembers = (imageNames: readonly string[]): (() => void) => {
+export const pruneImageClusterMembers = (itemKeys: readonly GalleryItemKey[]): (() => void) => {
   const entry = [...clusters.entries()].at(0);
 
-  if (!entry || imageNames.length === 0) {
+  if (!entry || itemKeys.length === 0) {
     return () => undefined;
   }
 
   const [clusterId, cluster] = entry;
-  const requested = new Set(imageNames);
-  const originalNames = cluster.imageNames;
-  const removedNames = originalNames.filter((name) => requested.has(name));
+  const requested = new Set(itemKeys);
+  const originalKeys = cluster.itemKeys;
+  const removedKeys = originalKeys.filter((key) => requested.has(key));
 
-  if (removedNames.length === 0) {
+  if (removedKeys.length === 0) {
     return () => undefined;
   }
 
-  const removed = new Set(removedNames);
+  const removed = new Set(removedKeys);
 
   clusters.set(clusterId, {
-    imageNames: originalNames.filter((name) => !removed.has(name)),
+    itemKeys: originalKeys.filter((key) => !removed.has(key)),
     label: cluster.label,
   });
 
@@ -158,12 +164,12 @@ export const pruneImageClusterMembers = (imageNames: readonly string[]): (() => 
     // that a concurrent deletion's prune (or its rollback) landing in between
     // survives: whatever this call did not remove keeps whatever state the
     // other call left it in. Restoring the captured array instead would either
-    // resurrect that deletion's images or — guarded on identity — skip the
-    // restore entirely and strand a failed deletion's image outside the list.
-    const restored = new Set([...current.imageNames, ...removedNames]);
+    // resurrect that deletion's items or — guarded on identity — skip the
+    // restore entirely and strand a failed deletion's item outside the list.
+    const restored = new Set([...current.itemKeys, ...removedKeys]);
 
     clusters.set(clusterId, {
-      imageNames: originalNames.filter((name) => restored.has(name)),
+      itemKeys: originalKeys.filter((key) => restored.has(key)),
       label: current.label,
     });
   };

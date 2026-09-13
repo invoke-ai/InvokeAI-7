@@ -16,10 +16,7 @@ export const GALLERY_MIN_GRID_HEIGHT_PX = 128;
 export const GALLERY_BOARD_PANEL_MIN_WIDTH_PX = 180;
 export const GALLERY_BOARD_PANEL_MAX_WIDTH_PX = 420;
 
-/**
- * User-tunable gallery settings, persisted in the widget's `values` record —
- * except `starredFirst`, which is derived, never stored.
- */
+/** User-tunable gallery settings, persisted in the widget's `values` record. */
 export interface GallerySettings {
   boardOrderBy: GalleryBoardOrderBy;
   boardOrderDir: GalleryOrderDir;
@@ -41,16 +38,10 @@ export interface GallerySettings {
    */
   showOtherProjectBoards: boolean;
   showPendingItems: boolean;
-  /** Derived from `paginationMode` — see `isGalleryStarredFirst`. */
-  starredFirst: boolean;
+  /** Disclosure of the starred strip at the top of the grid. */
+  starredSectionCollapsed: boolean;
   thumbnailFit: GalleryThumbnailFit;
 }
-
-/**
- * Starred items form a section only under infinite pagination; a starred-first
- * order cut into fixed pages spills the section across page boundaries.
- */
-export const isGalleryStarredFirst = (paginationMode: GalleryPaginationMode): boolean => paginationMode === 'infinite';
 
 export const DEFAULT_GALLERY_SETTINGS: GallerySettings = {
   boardOrderBy: 'created_at',
@@ -67,7 +58,7 @@ export const DEFAULT_GALLERY_SETTINGS: GallerySettings = {
   showImageDimensions: false,
   showOtherProjectBoards: false,
   showPendingItems: true,
-  starredFirst: isGalleryStarredFirst('infinite'),
+  starredSectionCollapsed: false,
   thumbnailFit: 'square',
 };
 
@@ -139,7 +130,10 @@ export const getGallerySettings = (values: Record<string, unknown>): GallerySett
       typeof values.showPendingItems === 'boolean'
         ? values.showPendingItems
         : DEFAULT_GALLERY_SETTINGS.showPendingItems,
-    starredFirst: isGalleryStarredFirst(paginationMode),
+    starredSectionCollapsed:
+      typeof values.starredSectionCollapsed === 'boolean'
+        ? values.starredSectionCollapsed
+        : DEFAULT_GALLERY_SETTINGS.starredSectionCollapsed,
     thumbnailFit: values.thumbnailFit === 'aspect' ? 'aspect' : DEFAULT_GALLERY_SETTINGS.thumbnailFit,
   };
 };

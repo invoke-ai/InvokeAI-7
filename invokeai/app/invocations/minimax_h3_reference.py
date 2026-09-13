@@ -47,6 +47,7 @@ from invokeai.backend.minimax_h3.autoencoder_kl_minimax_h3 import AutoencoderKLM
 from invokeai.backend.minimax_h3.autoencoder_kl_minimax_h3_audio import AutoencoderKLMiniMaxH3Audio
 from invokeai.backend.minimax_h3.packing import (
     MINIMAX_H3_CANVAS_MULTIPLE,
+    MINIMAX_H3_FPS,
     validate_reference_kinds,
 )
 from invokeai.backend.minimax_h3.presets import MINIMAX_H3_MIN_VIDEO_FRAMES
@@ -199,16 +200,24 @@ class _ResolvedVideoRange:
         else:
             raise ValueError(f"Could not determine the frame rate of reference video {reference.video.video_name}.")
 
-        def resolve(value: int, name: str) -> int:
-            resolved = value + n_frames if value < 0 else value
-            if resolved < 0 or resolved >= n_frames:
-                raise ValueError(f"{name}={value} is out of range for a {n_frames}-frame reference video.")
-            return resolved
-
-        self.start = resolve(reference.start_frame, "start_frame")
-        self.end = resolve(reference.end_frame, "end_frame")
-        if self.start > self.end:
-            raise ValueError(f"start_frame ({self.start}) must not be after end_frame ({self.end}).")
+        start = reference.start_frame + n_frames if reference.start_frame < 0 else reference.start_frame
+        if start < 0 or start >= n_frames:
+            raise ValueError(
+                f"start_frame={reference.start_frame} is out of range for a {n_frames}-frame reference video."
+            )
+        self.start = start
+        # The sample LENGTH is pinned to what the clip can actually supply rather than
+        # rejected: "start here and take N frames" past the last frame reads as "take the
+        # rest of the clip", and the panel's frame count is an estimate the real count can
+        # undershoot. A start frame that is itself off the end has no such reading, and an
+        # end before the start is an inverted range, so both still raise.
+        end = reference.end_frame + n_frames if reference.end_frame < 0 else reference.end_frame
+        if end < self.start:
+            raise ValueError(
+                f"end_frame ({reference.end_frame} -> {end}) must not be before start_frame "
+                f"({reference.start_frame} -> {self.start})."
+            )
+        self.end = min(end, n_frames - 1)
 
 
 def load_reference_video_frames(
@@ -251,6 +260,12 @@ def load_reference_audio(
     pcm, rate = extracted
     window_start = round(span.start * rate / span.fps)
     window_end = round((span.end + 1) * rate / span.fps)
+    # Only the generated duration ever survives normalize_reference_audio, so bound the
+    # window here rather than carrying samples that are about to be dropped. This is what
+    # keeps the silence-pad below cheap: np.pad allocates the WHOLE window, and an
+    # audio-only reference defaults to its entire clip, so padding an unbounded window
+    # would copy a full-length track to preserve an alignment truncation then discards.
+    window_end = min(window_end, window_start + int(num_frames / MINIMAX_H3_FPS * rate))
     window = pcm[:, window_start:window_end]
     if window.shape[1] == 0:
         raise ValueError(

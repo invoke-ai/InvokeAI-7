@@ -24,6 +24,14 @@ def _mock_wan_vae(dtype: torch.dtype = torch.float16) -> MagicMock:
     param = torch.zeros(1, dtype=dtype)
     # Return a fresh iterator on every call so the estimator can be called repeatedly.
     vae.parameters.side_effect = lambda: iter([param])
+    # `patch_qwen_image_vae_tiling` records and restores these; they are set in
+    # `AutoencoderKLWan.__init__` rather than on the class, so a spec'd mock does not have them.
+    # The stock values keep any assertion against them reading as real numbers.
+    vae.use_tiling = False
+    vae.tile_sample_min_height = 256
+    vae.tile_sample_min_width = 256
+    vae.tile_sample_stride_height = 192
+    vae.tile_sample_stride_width = 192
     return vae
 
 
@@ -143,6 +151,8 @@ class TestAnimaLatentsToImageOomFallback:
             tile_sample_stride_height=ANIMA_VAE_TILE_STRIDE,
             tile_sample_stride_width=ANIMA_VAE_TILE_STRIDE,
         )
+        # The retry takes noticeably longer than the failed attempt; the user is told why.
+        context.util.signal_progress.assert_any_call("VAE decode ran out of memory, retrying tiled")
         assert result.width == 64
 
     def test_non_oom_runtime_error_propagates_without_retry(self):

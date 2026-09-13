@@ -18,7 +18,7 @@ import { z } from 'zod';
 
 import type { CanvasLoadDiagnostic, CanvasLoadResult, CanvasVersionScope } from './canvasLoadContracts';
 
-import { MAX_SUPPORTED_CANVAS_SCHEMA_VERSION } from './canvasSchemaVersion';
+import { MAX_SUPPORTED_CANVAS_SCHEMA_VERSION, MIN_SUPPORTED_CANVAS_SCHEMA_VERSION } from './canvasSchemaVersion';
 import { normalizeControlAdapter } from './controlAdapters';
 
 export const DEFAULT_CANVAS_DOCUMENT_WIDTH = 1024;
@@ -43,6 +43,12 @@ const zPaintSource = z.object({
   offset: zCoordinate.optional(),
   type: z.literal('paint'),
 });
+const zTextFontRef = z.object({
+  contentHash: z.string().regex(/^[a-f0-9]{64}$/u),
+  family: z.string(),
+  id: z.string().min(1),
+  label: z.string(),
+});
 const zLayerSource = z.discriminatedUnion('type', [
   zPaintSource,
   z.object({ image: zImageRef, type: z.literal('image') }),
@@ -53,6 +59,9 @@ const zLayerSource = z.discriminatedUnion('type', [
     fontFamily: z.string(),
     fontSize: zFiniteNumber,
     fontWeight: zFiniteNumber,
+    fontRef: zTextFontRef.optional(),
+    fontStyle: z.enum(['normal', 'italic', 'oblique']).optional(),
+    fontVariations: z.record(z.string().min(1), zFiniteNumber).optional(),
     lineHeight: zFiniteNumber,
     type: z.literal('text'),
   }),
@@ -68,8 +77,10 @@ const zLayerSource = z.discriminatedUnion('type', [
   }),
   z.object({
     angle: zFiniteNumber,
+    center: zCoordinate.optional(),
     height: zFiniteNumber.positive().optional(),
     kind: z.enum(['linear', 'radial']),
+    span: zFiniteNumber.positive().optional(),
     stops: z.array(z.object({ color: z.string(), offset: zFiniteNumber })),
     type: z.literal('gradient'),
     width: zFiniteNumber.positive().optional(),
@@ -345,6 +356,23 @@ const createDefaultStagingArea = (): CanvasStagingAreaContractV2 => ({
   selectedImageIndex: 0,
 });
 
+/** v4 is adopted only when a document actually carries custom-font typography. */
+const textSourceRequiresV4 = (source: unknown): boolean =>
+  isRecord(source) &&
+  source.type === 'text' &&
+  ('fontRef' in source || 'fontStyle' in source || 'fontVariations' in source);
+
+const nodeRequiresV4 = (node: unknown): boolean =>
+  isRecord(node) &&
+  (textSourceRequiresV4(node.source) || (Array.isArray(node.children) && node.children.some(nodeRequiresV4)));
+
+/** Returns whether a document uses any v4-only custom-font source fields. */
+export const canvasDocumentRequiresFontSchemaV4 = (document: Pick<CanvasDocumentContractV3, 'stacks'>): boolean =>
+  Object.values(document.stacks).some((roots) => roots.some(nodeRequiresV4));
+
+const writableDocumentVersion = (declaredVersion: unknown, stacks: CanvasStackForests): 3 | 4 =>
+  declaredVersion === 4 || canvasDocumentRequiresFontSchemaV4({ stacks }) ? 4 : 3;
+
 /**
  * Converts a `{x,y,width,height}` placement rect, plus the native size of the image it places,
  * into a layer `transform`. Used by the "accept staged image into a raster layer" reducer path.
@@ -406,6 +434,14 @@ const classifyVersion = (value: unknown): DeclaredVersion => {
   if (value === MAX_SUPPORTED_CANVAS_SCHEMA_VERSION) {
     return { kind: 'current' };
   }
+  if (
+    typeof value === 'number' &&
+    Number.isInteger(value) &&
+    value >= MIN_SUPPORTED_CANVAS_SCHEMA_VERSION &&
+    value < MAX_SUPPORTED_CANVAS_SCHEMA_VERSION
+  ) {
+    return { kind: 'current' };
+  }
   if (typeof value === 'number' && Number.isInteger(value) && value >= 1) {
     return { kind: 'other', version: value };
   }
@@ -426,7 +462,7 @@ const unsupported = (scope: CanvasVersionScope, version: number): Refusal => ({
   version,
 });
 
-/** Refuses any declared version other than the current one before anything is defaulted or parsed. */
+/** Refuses unsupported declared versions before anything is defaulted or parsed. */
 const checkVersion = (value: Record<string, unknown>, scope: CanvasVersionScope, path: string): Refusal | null => {
   const version = classifyVersion(value.version);
   switch (version.kind) {
@@ -596,6 +632,7 @@ export const normalizeCanvasDocumentContract = (
         ...document,
         ...normalizeCanvasDocumentGeometry(document.width, document.height, document.bbox),
         stacks: parsed.stacks,
+        version: writableDocumentVersion(document.version, parsed.stacks),
       }
     : null;
 };
@@ -637,7 +674,7 @@ const loadCanvasDocument = (
       ...normalizeCanvasDocumentGeometry(value.width, value.height, value.bbox),
       selectedLayerId,
       stacks: stacks.stacks,
-      version: 3,
+      version: writableDocumentVersion(value.version, stacks.stacks),
     },
   };
 };
@@ -700,7 +737,12 @@ const loadCanvasStateStep = (canvas: unknown): LoadStep<CanvasStateContractV3> =
       documentRevision: asNumber(canvas.documentRevision, 0),
       snapshots,
       stagingArea: normalizeStagingArea(canvas),
-      version: 3,
+      version:
+        canvas.version === MAX_SUPPORTED_CANVAS_SCHEMA_VERSION ||
+        document.value.version === MAX_SUPPORTED_CANVAS_SCHEMA_VERSION ||
+        snapshots.some((snapshot) => snapshot.document.version === MAX_SUPPORTED_CANVAS_SCHEMA_VERSION)
+          ? MAX_SUPPORTED_CANVAS_SCHEMA_VERSION
+          : 3,
     },
   };
 };

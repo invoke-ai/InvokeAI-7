@@ -21,6 +21,10 @@ export interface CreateStrokeCommitDeps {
   readonly strokeListeners: ReadonlySet<(event: StrokeCommittedEvent) => void>;
 }
 
+/** The history label for a committed pixel stroke. */
+export const strokeCommitLabel = (tool: StrokeCommittedEvent['tool']): string =>
+  tool === 'eraser' ? 'Eraser stroke' : tool === 'shape' ? 'Draw shape' : 'Brush stroke';
+
 export interface StrokeCommit {
   /** Records one committed tool stroke: persistence, history, then subscriber fanout. */
   commitOrdinaryStroke(event: StrokeCommittedEvent): void;
@@ -76,7 +80,7 @@ export const createStrokeCommit = (deps: CreateStrokeCommitDeps): StrokeCommit =
       // stroke, so this never fires during apply — the guard is belt-and-braces.
       if (!history.isApplying()) {
         deps.commitPaintEdit();
-        const label = event.tool === 'eraser' ? 'Eraser stroke' : 'Brush stroke';
+        const label = strokeCommitLabel(event.tool);
         history.push(
           event.createdLayer
             ? createComposedPaintEntry(event.createdLayer, event, label)

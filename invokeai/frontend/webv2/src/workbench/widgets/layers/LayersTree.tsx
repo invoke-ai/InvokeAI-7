@@ -9,6 +9,7 @@ import { Box, Text } from '@chakra-ui/react';
 import { DndContext, DragOverlay, pointerWithin, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
 import { restrictToVerticalAxis } from '@dnd-kit/modifiers';
 import { useMountEffect } from '@platform/react/useMountEffect';
+import { toaster } from '@platform/ui';
 import { Scrollable } from '@platform/ui/Scrollable';
 import { getDocumentIndex, getDocumentNode, lookupDocumentNodeState } from '@workbench/canvas-engine/api';
 import {
@@ -40,6 +41,7 @@ import {
   type ProjectedChildRow,
 } from './layerChildRows';
 import { clearLayerChildSelection, selectLayerChild, useLayerChildSelection } from './layerChildSelection';
+import { copyLayerToClipboard } from './layerExportActions';
 import { createAdjustmentId } from './layerOps';
 import {
   flattenPanelRows,
@@ -307,6 +309,7 @@ export const LayersTree = ({
     dispatch,
     document,
     editingLocked,
+    engine,
     onRevealProperties,
     panel,
     panelRows,
@@ -323,6 +326,7 @@ export const LayersTree = ({
       dispatch,
       document,
       editingLocked,
+      engine,
       onRevealProperties,
       panel,
       panelRows,
@@ -368,6 +372,39 @@ export const LayersTree = ({
     [runStructural, t]
   );
 
+  // Deletes the focused row (or the selection it belongs to) and keeps keyboard
+  // focus in the tree: the nearest surviving row below, else above.
+  const removeRows = useCallback(
+    (key: string) => {
+      const { document: currentDocument, engine: currentEngine, panel: current, visibleRowIds: rows } = latest.current;
+      const vm = lookupDocumentNodeState(currentDocument, key);
+      if (!vm) {
+        return;
+      }
+      // The menu's rule: the selection when the row is part of it, else the row alone.
+      const ids = current.selectedIds.includes(key) ? current.selectedIds : [key];
+      // A stray key on a locked row is ignored, as the menu disables its Delete.
+      if (currentEngine?.document.model()?.refusalFor({ ids, type: 'remove' })) {
+        return;
+      }
+      const removed = new Set(ids);
+      const survives = (id: string): boolean => {
+        const state = lookupDocumentNodeState(currentDocument, id);
+        return !!state && !removed.has(id) && !state.parentIds.some((ancestor) => removed.has(ancestor));
+      };
+      const index = rows.indexOf(key);
+      const next = rows.slice(index + 1).find(survives) ?? rows.slice(0, Math.max(0, index)).reverse().find(survives);
+      const outcome = runStructural(
+        t(ids.length > 1 ? 'widgets.layers.actions.deleteSelected' : 'widgets.layers.actions.delete'),
+        { ids, type: 'remove' }
+      );
+      if (outcome.status === 'committed' && next) {
+        focusItem(next);
+      }
+    },
+    [focusItem, runStructural, t]
+  );
+
   const commands = useMemo<LayerRowCommands>(
     () => ({
       endRename: () => setRenamingId(null),
@@ -400,10 +437,34 @@ export const LayersTree = ({
           }
           return;
         }
+        if (
+          !childRow &&
+          !isHeaderKey(key) &&
+          (event.ctrlKey || event.metaKey) &&
+          !event.shiftKey &&
+          !event.altKey &&
+          event.key.toLowerCase() === 'c'
+        ) {
+          event.preventDefault();
+          const { engine: currentEngine } = latest.current;
+          if (currentEngine) {
+            void copyLayerToClipboard(key, { exportLayer: currentEngine.exports.exportBakedLayerBlob })
+              .then((status) => status === 'ok' || Promise.reject(new Error(status)))
+              .catch(() => toaster.create({ title: t('widgets.layers.actions.copyFailed'), type: 'warning' }));
+          }
+          return;
+        }
         if (childRow && (event.key === 'Delete' || event.key === 'Backspace')) {
           event.preventDefault();
           if (!latest.current.editingLocked) {
             removeChildRow(childRow);
+          }
+          return;
+        }
+        if (!isHeaderKey(key) && (event.key === 'Delete' || event.key === 'Backspace')) {
+          event.preventDefault();
+          if (!latest.current.editingLocked) {
+            removeRows(key);
           }
           return;
         }
@@ -602,7 +663,7 @@ export const LayersTree = ({
         }
       },
     }),
-    [focusItem, movingIds, removeChildRow, runStructural, t]
+    [focusItem, movingIds, removeChildRow, removeRows, runStructural, t]
   );
 
   const closeSurface = useCallback(() => {

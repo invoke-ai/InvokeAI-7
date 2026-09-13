@@ -12,6 +12,7 @@ import {
   adjustmentsKey,
   getBaseRasterContentBounds,
   getCompositeLayerBounds,
+  isEmptyPolygonShape,
   planBaseRasterComposite,
 } from '@workbench/canvas-engine/api';
 import { compileDocumentLeaves } from '@workbench/canvas-engine/document-model/documentModel';
@@ -81,13 +82,13 @@ const isInpaintMaskWithContent = (layer: CanvasLayerContract): layer is CanvasIn
  * A raster layer whose regenerate region is enabled and whose source can both
  * hold pixels and rasterize: the layer's OWN content alpha joins the inpaint
  * mask. Invoke flushes paint uploads before planning, so a stroked layer always
- * carries its bitmap; polygon shapes have no rasterizer and would fail the
- * snapshot capture, so they never enter the plan.
+ * carries its bitmap; a pointless polygon shape has no raster and would fail
+ * the snapshot capture, so it never enters the plan.
  */
 const isRegionRasterWithContent = (layer: CanvasLayerContract): layer is CanvasRasterLayerContractV2 =>
   layer.type === 'raster' &&
   layer.inpaint?.isEnabled === true &&
-  !(layer.source.type === 'shape' && layer.source.kind === 'polygon') &&
+  !(layer.source.type === 'shape' && isEmptyPolygonShape(layer.source)) &&
   (layer.source.type !== 'paint' || layer.source.bitmap !== null);
 
 /** JSON with recursively sorted object keys, so equal sources always serialize identically. */

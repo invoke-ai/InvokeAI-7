@@ -2,7 +2,9 @@
  * Engine-transient pixel selection.
  *
  * Per the plan's state-tier table, a selection is *interaction* state: it lives
- * on the engine, never in the reducer contract, and is not undoable. The source
+ * on the engine, never in the reducer contract. It is undoable only through the
+ * engine's own history, which {@link SelectionState.snapshot} / `restore` serve
+ * (see `selectionHistory.ts`); persistence never sees it. The source
  * of truth is the set of closed `Path2D` polygons the lasso tool commits; the
  * derived artifact is a bounded **mask surface** (alpha 255 inside the
  * selection), sized to the selection extent and placed in document space (a
@@ -12,26 +14,21 @@
  * kept only for {@link marchingAnts} rendering (stroking the outlines), not for
  * re-deriving the mask.
  *
- * ## Marching-ants approximation
+ * ## Marching ants
  *
- * Ants are stroked from the committed path LIST (each path drawn dashed), not by
- * tracing the mask's true edge. This matches the mask exactly for `replace` and
- * `add`, and reads correctly for `subtract` (the cut-out path's outline shows as
- * a hole) and `selectAll`/`invert` (a document-border path is included). It is an
- * approximation for `intersect` and for heavily overlapping compositions, where
- * the true selection outline is the boolean result rather than the union of the
- * source outlines — the ants may show interior source edges that the mask does
- * not. The exception is {@link SelectionState.replaceMask} (pixel-mask
- * replacement, e.g. a Select Object result), whose ants ARE traced from the
- * mask's true edge via {@link traceMaskOutlinePath}. The mask itself is always
- * exact.
+ * A `replace` strokes its own path. Every boolean op (`add` / `subtract` /
+ * `intersect`) re-traces the mask's true edge via {@link traceMaskOutlinePath},
+ * the same way {@link SelectionState.replaceMask} does, so the ants show the
+ * boolean result rather than the union of the source outlines. `selectAll` /
+ * `invert` keep their document-border path. When a trace yields nothing after
+ * an `add` (a raster stub with no readable pixels), the source paths are
+ * stroked instead; after `subtract` / `intersect` an empty trace means the mask
+ * is empty, and the selection is dropped.
  *
  * ## Emptiness
  *
- * `hasSelection` is tracked structurally, not by scanning pixels (a scan is
- * unavailable on the node raster stub and costly on the DOM). Consequently,
- * `subtract`ing away the entire selection leaves `hasSelection` true until an
- * explicit deselect — a known, documented limitation of this phase.
+ * `hasSelection` is structural for `replace` / `add` (they cannot empty the
+ * mask) and pixel-derived for `subtract` / `intersect` through the same trace.
  *
  * Zero React, zero import-time side effects.
  */
@@ -50,6 +47,19 @@ export interface SelectionCommit {
   /** The path's document-space bounds (used to maintain the selection bounds cheaply). */
   bounds: Rect;
   op: SelectionOp;
+}
+
+/**
+ * A restorable capture of the selection: the mask's alpha plane over `rect`
+ * plus the bookkeeping the mask alone cannot recover. Alpha-only keeps a
+ * full-document capture at one byte per pixel; the mask is white by contract.
+ */
+export interface SelectionSnapshot {
+  readonly alpha: Uint8ClampedArray<ArrayBuffer> | null;
+  readonly rect: Rect | null;
+  readonly commits: readonly SelectionCommit[];
+  readonly bounds: Rect | null;
+  readonly selected: boolean;
 }
 
 /** The engine-facing selection handle. */
@@ -83,6 +93,10 @@ export interface SelectionState {
   invert(domain: Rect): void;
   /** Clears the selection (deselect). */
   clear(): void;
+  /** Captures the selection for a later {@link restore}; the capture is immutable and detached. */
+  snapshot(): SelectionSnapshot;
+  /** Reinstates a captured selection exactly, notifying like any other mutation. */
+  restore(snapshot: SelectionSnapshot): void;
   /** Releases the mask surface reference. */
   dispose(): void;
 }
@@ -98,6 +112,29 @@ export interface SelectionStateDeps {
 }
 
 const MASK_FILL = '#ffffff';
+
+/** `ImageData` is absent on the node raster stub; a structural stand-in carries the same fields. */
+const createImageData = (data: Uint8ClampedArray<ArrayBuffer>, width: number, height: number): ImageData =>
+  typeof ImageData === 'undefined'
+    ? ({ colorSpace: 'srgb', data, height, width } as ImageData)
+    : new ImageData(data, width, height);
+
+const alphaOf = (pixels: ImageData): Uint8ClampedArray<ArrayBuffer> => {
+  const alpha = new Uint8ClampedArray(pixels.width * pixels.height);
+  for (let index = 0; index < alpha.length; index += 1) {
+    alpha[index] = pixels.data[index * 4 + 3] ?? 0;
+  }
+  return alpha;
+};
+
+/** Expands an alpha plane back into the mask's white-with-coverage pixels. */
+const pixelsOf = (alpha: Uint8ClampedArray<ArrayBuffer>, width: number, height: number): ImageData => {
+  const data = new Uint8ClampedArray(alpha.length * 4).fill(255);
+  for (let index = 0; index < alpha.length; index += 1) {
+    data[index * 4 + 3] = alpha[index] ?? 0;
+  }
+  return createImageData(data, width, height);
+};
 
 /** Builds a closed rectangle `Path2D` (document space) via the injected factory. */
 const rectPath = (createPath2D: CreatePath2D, r: Rect): Path2D => createPath2D(rectPathData(r));
@@ -127,6 +164,14 @@ export const createSelectionState = (deps: SelectionStateDeps): SelectionState =
   let commits: SelectionCommit[] = [];
   let selectionBounds: Rect | null = null;
   let selected = false;
+  // The last capture stays valid until the next mutation, so a change recorded
+  // as before/after reads the mask back once, not twice.
+  let cachedSnapshot: SelectionSnapshot | null = null;
+
+  const changed = (): void => {
+    cachedSnapshot = null;
+    onChange();
+  };
 
   /**
    * Ensures the mask surface exists and covers `rect` (integer bounds),
@@ -206,7 +251,7 @@ export const createSelectionState = (deps: SelectionStateDeps): SelectionState =
     if (mask) {
       clearSurface(mask);
     }
-    onChange();
+    changed();
   };
 
   const replaceMask = (next: PlacedSurface): void => {
@@ -221,7 +266,7 @@ export const createSelectionState = (deps: SelectionStateDeps): SelectionState =
       commits = [];
       selectionBounds = null;
       selected = false;
-      onChange();
+      changed();
     };
     if (isEmpty(rect) || next.surface.width <= 0 || next.surface.height <= 0) {
       publishEmptyReplacement();
@@ -242,10 +287,7 @@ export const createSelectionState = (deps: SelectionStateDeps): SelectionState =
     }
 
     const copiedData = new Uint8ClampedArray(source.data);
-    const copied =
-      typeof ImageData === 'undefined'
-        ? ({ colorSpace: source.colorSpace, data: copiedData, height: source.height, width: source.width } as ImageData)
-        : new ImageData(copiedData, source.width, source.height);
+    const copied = createImageData(copiedData, source.width, source.height);
     // Prepare every fallible replacement artifact before publishing any state.
     // If allocation, pixel upload, or Path2D construction fails, the exact prior
     // selection remains authoritative and the engine may safely report failure.
@@ -264,7 +306,7 @@ export const createSelectionState = (deps: SelectionStateDeps): SelectionState =
     commits = [{ bounds: rect, op: 'replace', path: nextPath }];
     selectionBounds = rect;
     selected = true;
-    onChange();
+    changed();
   };
 
   const commit = (next: SelectionCommit): void => {
@@ -284,7 +326,7 @@ export const createSelectionState = (deps: SelectionStateDeps): SelectionState =
       commits = [next];
       selectionBounds = bounds;
       selected = true;
-      onChange();
+      changed();
       return;
     }
 
@@ -301,7 +343,6 @@ export const createSelectionState = (deps: SelectionStateDeps): SelectionState =
         ? ensureMask(bounds)
         : ensureMask(selectionBounds ?? bounds ?? { height: 0, width: 0, x: 0, y: 0 });
     fillPath(surface, { x: maskRect!.x, y: maskRect!.y }, next.path, compositeForOp(next.op));
-    commits.push(next);
 
     switch (next.op) {
       case 'add':
@@ -309,15 +350,47 @@ export const createSelectionState = (deps: SelectionStateDeps): SelectionState =
         selected = selected || bounds !== null;
         break;
       case 'subtract':
-        // Bounds can only shrink; without a pixel scan we keep the (over-approx)
-        // prior bounds. `selected` stays true — see module docs.
+        // Bounds only shrink; they stay the prior over-approximation, and the
+        // trace below decides whether anything is left.
         break;
       case 'intersect':
         selectionBounds = selectionBounds && bounds ? intersect(selectionBounds, bounds) : null;
         selected = selectionBounds !== null;
         break;
     }
-    onChange();
+
+    const outline = selected ? traceCurrentOutline() : null;
+    if (outline) {
+      commits = [{ bounds: selectionBounds ?? roundOut(next.bounds), op: 'replace', path: createPath2D(outline) }];
+    } else if (next.op === 'add') {
+      commits.push(next);
+    } else {
+      clear();
+      return;
+    }
+    changed();
+  };
+
+  /** The mask's true edge as path data, or null when it holds no pixels. */
+  const traceCurrentOutline = (): string | null => {
+    if (!mask || !maskRect || isEmpty(maskRect)) {
+      return null;
+    }
+    const pixels = mask.ctx.getImageData(0, 0, maskRect.width, maskRect.height);
+    // A subtract that emptied the mask is the common way to get here: one alpha
+    // scan settles it without paying for two full traces.
+    let hasAlpha = false;
+    for (let index = 3; index < pixels.data.length; index += 4) {
+      if (pixels.data[index] !== 0) {
+        hasAlpha = true;
+        break;
+      }
+    }
+    if (!hasAlpha) {
+      return null;
+    }
+    const source = { data: pixels.data, height: maskRect.height, width: maskRect.width };
+    return traceMaskOutlinePath(source, maskRect) || traceMaskOutlinePath(source, maskRect, 1) || null;
   };
 
   const selectAll = (domain: Rect): void => {
@@ -334,7 +407,7 @@ export const createSelectionState = (deps: SelectionStateDeps): SelectionState =
     commits = [{ bounds: rect, op: 'replace', path: rectPath(createPath2D, rect) }];
     selectionBounds = rect;
     selected = !isEmpty(rect);
-    onChange();
+    changed();
   };
 
   const invert = (domain: Rect): void => {
@@ -369,6 +442,35 @@ export const createSelectionState = (deps: SelectionStateDeps): SelectionState =
     commits = [{ bounds: rect, op: 'replace', path: rectPath(createPath2D, rect) }, ...commits];
     selectionBounds = rect;
     selected = true;
+    changed();
+  };
+
+  const snapshot = (): SelectionSnapshot => {
+    if (cachedSnapshot) {
+      return cachedSnapshot;
+    }
+    const captured = selected && mask && maskRect && !isEmpty(maskRect) ? maskRect : null;
+    cachedSnapshot = {
+      alpha: captured ? alphaOf(mask!.ctx.getImageData(0, 0, captured.width, captured.height)) : null,
+      bounds: selectionBounds,
+      commits: [...commits],
+      rect: captured,
+      selected,
+    };
+    return cachedSnapshot;
+  };
+
+  const restore = (next: SelectionSnapshot): void => {
+    if (next.alpha && next.rect) {
+      const surface = resetMask(next.rect);
+      surface.ctx.putImageData(pixelsOf(next.alpha, next.rect.width, next.rect.height), 0, 0);
+    } else if (mask) {
+      clearSurface(mask);
+    }
+    commits = [...next.commits];
+    selectionBounds = next.bounds;
+    selected = next.selected;
+    cachedSnapshot = next;
     onChange();
   };
 
@@ -392,6 +494,7 @@ export const createSelectionState = (deps: SelectionStateDeps): SelectionState =
     commit,
     containsPoint,
     dispose: () => {
+      cachedSnapshot = null;
       mask = null;
       maskRect = null;
       commits = [];
@@ -402,6 +505,8 @@ export const createSelectionState = (deps: SelectionStateDeps): SelectionState =
     invert,
     mask: () => (selected && mask && maskRect ? { rect: maskRect, surface: mask } : null),
     replaceMask,
+    restore,
     selectAll,
+    snapshot,
   };
 };

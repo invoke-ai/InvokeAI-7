@@ -58,10 +58,15 @@ const useGalleryBoards = ({ settings }: { settings: GallerySettings }) => {
 };
 
 const isRecentItemVisible = (item: GalleryItem, filter: GalleryItemsFilter): boolean => {
+  // A recent belongs to the unstarred listing (the grid); the starred-only
+  // listing has no slot for it — exactly like a text search — and a recent
+  // starred since it landed has moved to the strip.
   if (
     filter.searchTerm !== '' ||
     filter.createdFrom !== undefined ||
     filter.createdTo !== undefined ||
+    filter.starred === true ||
+    (filter.starred === false && item.starred) ||
     Boolean(filter.semanticQuery) ||
     isDateBoardId(filter.boardId)
   ) {
@@ -110,7 +115,7 @@ export const mergeGalleryItemWindow = ({
   // destroy; the backend order is the meaning of the list. (No recent items
   // are overlaid in that mode, so the merge is the backend window itself.)
   if (!filter.semanticQuery) {
-    mergedItems.sort((a, b) => compareGalleryItems(a, b, filter));
+    mergedItems.sort((a, b) => compareGalleryItems(a, b, { orderDir: filter.orderDir }));
   }
 
   return mergedItems.slice(0, maxRows);
@@ -148,6 +153,7 @@ export const useGalleryData = ({
   selectedBoardId,
   semanticQuery = null,
   settings,
+  starred,
 }: {
   galleryView: GalleryView;
   page: number;
@@ -158,6 +164,12 @@ export const useGalleryData = ({
   /** When set, items come from semantic search (similarity order) instead of the board listing. */
   semanticQuery?: GallerySemanticReference | null;
   settings: GallerySettings;
+  /**
+   * Partition to list: the grid asks for unstarred (`false`) or, under its
+   * starred filter, starred (`true`); consumers like the picker omit it and
+   * see everything.
+   */
+  starred?: boolean;
 }): GalleryData => {
   const { boards } = useGalleryBoards({ settings });
   const boardId = resolveGallerySelectedBoardId({ projectBoardId, selectedBoardId }, boards);
@@ -172,7 +184,7 @@ export const useGalleryData = ({
       orderDir: settings.imageOrderDir,
       searchTerm: dateParse.text,
       ...(semanticQuery ? { semanticQuery } : {}),
-      starredFirst: settings.starredFirst,
+      ...(starred !== undefined ? { starred } : {}),
     }),
     [
       boardId,
@@ -182,7 +194,7 @@ export const useGalleryData = ({
       galleryView,
       semanticQuery,
       settings.imageOrderDir,
-      settings.starredFirst,
+      starred,
     ]
   );
   const {

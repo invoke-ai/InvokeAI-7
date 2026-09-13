@@ -19,6 +19,7 @@ import {
   uploadBoardVideo,
 } from './assetTransport';
 import { parseInvkBoardSnapshot } from './board';
+import { type EmbeddedFont, readEmbeddedFonts } from './fonts';
 import {
   INVK_BOARD_ENTRY,
   INVK_DOCUMENT_ENTRY,
@@ -50,6 +51,7 @@ export interface InvkArchiveContents {
   cover: { bytes: Uint8Array; entryName: string } | null;
   /** Bundled image bytes, keyed by the image name the exporting server used. */
   images: Map<string, Uint8Array>;
+  fonts?: EmbeddedFont[];
   manifest: InvkManifest;
   projectDocument: Record<string, unknown>;
   /** Bundled video bytes, keyed by the video name the exporting server used. */
@@ -157,13 +159,16 @@ export const readInvkArchive = async (file: File): Promise<InvkArchiveContents> 
   }
 
   const coverBytes = manifest.cover === undefined ? undefined : entries.get(manifest.cover);
+  const projectDocument = parseDocumentEntry(documentEntry);
+  const fonts = await readEmbeddedFonts(manifest.fonts ?? [], projectDocument, entries);
 
   return {
     boardSnapshot,
     cover: coverBytes === undefined ? null : { bytes: coverBytes, entryName: manifest.cover! },
     images,
+    fonts,
     manifest,
-    projectDocument: parseDocumentEntry(documentEntry),
+    projectDocument,
     videos,
   };
 };

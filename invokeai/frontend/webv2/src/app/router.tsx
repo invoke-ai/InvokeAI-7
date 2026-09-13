@@ -1,3 +1,4 @@
+import { FontsRuntimeProvider } from '@features/fonts/react';
 import {
   AuthSessionUnavailableError,
   AuthUnavailableScreen,
@@ -25,6 +26,7 @@ import {
 import { WorkbenchSplashScreen } from '@workbench/components/WorkbenchSplashScreen';
 import { isLaunchpadIntentId, isLaunchpadLayoutId } from '@workbench/launchpad/intents';
 import { Launchpad } from '@workbench/launchpad/Launchpad';
+import { ProjectFileOptionsProvider } from '@workbench/projects/components/ProjectFileOptionsProvider';
 import { peekOpenProjectIds, type WorkbenchSearch } from '@workbench/projects/session';
 import { loadWorkbenchSettings } from '@workbench/settings/store';
 import { Fragment } from 'react';
@@ -72,6 +74,8 @@ const rootRoute = createRootRoute({ component: Outlet, errorComponent: RouterErr
  * editor/model-manager view code.
  */
 const AuthenticatedLayout = () => {
+  'use no memo';
+  // Account transitions are infrequent; provider composition does not need a memo cache.
   const session = useAuthSession();
 
   if (session.phase !== 'ready') {
@@ -86,7 +90,11 @@ const AuthenticatedLayout = () => {
     <Fragment key={session.accountEpoch}>
       <SocketHubRuntime />
       <ModelInstallRuntime />
-      <Outlet />
+      <FontsRuntimeProvider>
+        <ProjectFileOptionsProvider>
+          <Outlet />
+        </ProjectFileOptionsProvider>
+      </FontsRuntimeProvider>
     </Fragment>
   );
 };
@@ -122,22 +130,24 @@ const requireLaunchpadCapability = async (capability: keyof Capabilities): Promi
 
 // `/` plus a deep-link alias per Launchpad section. All render the same shell;
 // it reads the path to pick the active page.
-const homeRoute = createRoute({
+const launchpadRouteOptions = {
   component: Launchpad,
   getParentRoute: () => authenticatedRoute,
+};
+
+const homeRoute = createRoute({
+  ...launchpadRouteOptions,
   path: '/',
 });
 
 const projectsHomeRoute = createRoute({
-  component: Launchpad,
-  getParentRoute: () => authenticatedRoute,
+  ...launchpadRouteOptions,
   path: 'projects',
 });
 
 const modelsHomeRoute = createRoute({
   beforeLoad: () => requireLaunchpadCapability('canManageModels'),
-  component: Launchpad,
-  getParentRoute: () => authenticatedRoute,
+  ...launchpadRouteOptions,
   path: 'models',
   validateSearch: (search: Record<string, unknown>): { project?: string } => ({
     project: typeof search.project === 'string' && search.project.length > 0 ? search.project : undefined,
@@ -146,16 +156,19 @@ const modelsHomeRoute = createRoute({
 
 const nodesHomeRoute = createRoute({
   beforeLoad: () => requireLaunchpadCapability('canManageNodes'),
-  component: Launchpad,
-  getParentRoute: () => authenticatedRoute,
+  ...launchpadRouteOptions,
   path: 'nodes',
 });
 
 const usersHomeRoute = createRoute({
   beforeLoad: () => requireLaunchpadCapability('canManageUsers'),
-  component: Launchpad,
-  getParentRoute: () => authenticatedRoute,
+  ...launchpadRouteOptions,
   path: 'users',
+});
+
+const fontsHomeRoute = createRoute({
+  ...launchpadRouteOptions,
+  path: 'fonts',
 });
 
 const workbenchRoute = createRoute({
@@ -240,6 +253,7 @@ export const router = createRouter({
       modelsHomeRoute,
       nodesHomeRoute,
       usersHomeRoute,
+      fontsHomeRoute,
       workbenchRoute,
     ]),
     loginRoute,

@@ -11,41 +11,9 @@ import { getAuthSession } from '@features/identity';
 
 import { createDeferredResource } from './deferredResource';
 import { createWidgetImplementationResource } from './widgetImplementationResource';
-import { autosaveStatusWidgetManifest } from './widgets/autosave-status/manifest';
-import { canvasWidgetManifest } from './widgets/canvas/manifest';
-import { diagnosticsWidgetManifest } from './widgets/diagnostics/manifest';
-import { galleryWidgetManifest } from './widgets/gallery/manifest';
-import { generateWidgetManifest } from './widgets/generate/manifest';
-import { imageMapWidgetManifest } from './widgets/image-map/manifest';
-import { layersWidgetManifest } from './widgets/layers/manifest';
-import { notificationsWidgetManifest } from './widgets/notifications/manifest';
-import { previewWidgetManifest } from './widgets/preview/manifest';
-import { projectWidgetManifest } from './widgets/project/manifest';
-import { queueStatusWidgetManifest } from './widgets/queue-status/manifest';
-import { queueWidgetManifest } from './widgets/queue/manifest';
-import { serverStatusWidgetManifest } from './widgets/server-status/manifest';
-import { upscaleWidgetManifest } from './widgets/upscale/manifest';
-import { videoWidgetManifest } from './widgets/video/manifest';
-import { workflowWidgetManifest } from './widgets/workflow/manifest';
+import { firstPartyWidgetManifests } from './widgets/manifests';
 
-export const firstPartyWidgetManifests: WidgetManifest[] = [
-  generateWidgetManifest,
-  workflowWidgetManifest,
-  upscaleWidgetManifest,
-  videoWidgetManifest,
-  canvasWidgetManifest,
-  diagnosticsWidgetManifest,
-  galleryWidgetManifest,
-  imageMapWidgetManifest,
-  previewWidgetManifest,
-  projectWidgetManifest,
-  layersWidgetManifest,
-  queueWidgetManifest,
-  notificationsWidgetManifest,
-  serverStatusWidgetManifest,
-  queueStatusWidgetManifest,
-  autosaveStatusWidgetManifest,
-];
+export { firstPartyWidgetManifests } from './widgets/manifests';
 
 const createFailure = (widgetId: WidgetTypeId, error: unknown): WidgetFailure => ({
   details: error instanceof Error ? (error.stack ?? error.message) : String(error),

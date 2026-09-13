@@ -15,7 +15,8 @@ import { SelectionActions } from './SelectionOptionsRow';
 
 interface CapturedButton {
   children?: ReactNode;
-  disabled?: boolean;
+  /** The row disables through `aria-disabled` so the reason tooltip and keyboard focus keep working. */
+  'aria-disabled'?: boolean;
 }
 
 const { activeProject, buttons, hasSelection } = vi.hoisted(() => ({
@@ -27,7 +28,7 @@ const { activeProject, buttons, hasSelection } = vi.hoisted(() => ({
 vi.mock('@platform/ui/Button', () => ({
   Button: (props: CapturedButton) => {
     buttons.set(String(props.children), props);
-    return <button disabled={props.disabled}>{props.children}</button>;
+    return <button aria-disabled={props['aria-disabled']}>{props.children}</button>;
   },
 }));
 vi.mock('@workbench/widgets/canvas/engineStoreHooks', () => ({
@@ -47,6 +48,7 @@ const engine = {
     fillSelection: vi.fn(),
     invertSelection: vi.fn(),
     liftSelectionToLayer: vi.fn(),
+    selectAll: vi.fn(),
   },
 } as unknown as CanvasEngine;
 
@@ -75,6 +77,14 @@ beforeEach(() => {
   hasSelection.current = true;
 });
 
+describe('SelectionActions select all', () => {
+  it('stays available with no selection and no eligible layer', () => {
+    hasSelection.current = false;
+    const captured = renderRow(createControlLayer('Control', 'control-1', 'sd-1', null));
+    expect(captured.get('widgets.canvas.toolOptions.selectAll')?.['aria-disabled']).toBe(false);
+  });
+});
+
 describe('SelectionActions pixel target eligibility', () => {
   const rasterPaint = createEmptyPaintLayer('Raster', 'raster');
   const controlPaint = createControlLayer('Control', 'control');
@@ -91,21 +101,21 @@ describe('SelectionActions pixel target eligibility', () => {
     { disabled: true, layer: rasterImage, scenario: 'raster image' },
   ])('sets Fill and Erase disabled=$disabled for $scenario', ({ disabled, layer }) => {
     const rendered = renderRow(layer);
-    expect(rendered.get('widgets.canvas.toolOptions.fillSelection')?.disabled).toBe(disabled);
-    expect(rendered.get('widgets.canvas.toolOptions.eraseSelection')?.disabled).toBe(disabled);
+    expect(rendered.get('widgets.canvas.toolOptions.fillSelection')?.['aria-disabled']).toBe(disabled);
+    expect(rendered.get('widgets.canvas.toolOptions.eraseSelection')?.['aria-disabled']).toBe(disabled);
   });
 
   it('disables every action with no live selection, even on an eligible layer', () => {
     hasSelection.current = false;
     const rendered = renderRow(rasterPaint);
     for (const key of ['fillSelection', 'eraseSelection', 'invertSelection', 'deselect']) {
-      expect(rendered.get(`widgets.canvas.toolOptions.${key}`)?.disabled).toBe(true);
+      expect(rendered.get(`widgets.canvas.toolOptions.${key}`)?.['aria-disabled']).toBe(true);
     }
   });
 
   it('leaves invert and deselect enabled on an ineligible layer (they need only a selection)', () => {
     const rendered = renderRow(rasterImage);
-    expect(rendered.get('widgets.canvas.toolOptions.invertSelection')?.disabled).toBe(false);
-    expect(rendered.get('widgets.canvas.toolOptions.deselect')?.disabled).toBe(false);
+    expect(rendered.get('widgets.canvas.toolOptions.invertSelection')?.['aria-disabled']).toBe(false);
+    expect(rendered.get('widgets.canvas.toolOptions.deselect')?.['aria-disabled']).toBe(false);
   });
 });

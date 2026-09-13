@@ -1,4 +1,6 @@
 /* oxlint-disable react-perf/jsx-no-new-object-as-prop */
+import type * as workbenchContext from '@workbench/WorkbenchContext';
+
 import { ChakraProvider } from '@chakra-ui/react';
 import { system } from '@theme/system';
 import { FocusRegionProvider } from '@workbench/focusRegions';
@@ -17,7 +19,8 @@ const frameMocks = vi.hoisted(() => ({
 // The frame reads the region's persisted size and writes back through the
 // layout commands; both are stubbed so the drag arithmetic is what is under
 // test, not the reducer.
-vi.mock('@workbench/WorkbenchContext', () => ({
+vi.mock('@workbench/WorkbenchContext', async (importOriginal) => ({
+  ...(await importOriginal<typeof workbenchContext>()),
   shallowEqual: Object.is,
   useActiveProjectSelector: (
     selector: (project: {

@@ -45,7 +45,9 @@ const getGalleryItemRange = (
  * when the click happened.
  */
 export const useGalleryGridSelection = () => {
-  const { actions, filter, gallery } = useGalleryWidget();
+  // `loadedItems` includes the strip, whose starred items the listing window
+  // may not hold; the context menu and ctrl-toggle must resolve those too.
+  const { actions, filter, gallery, loadedItems, starredStrip } = useGalleryWidget();
   const queryClient = useQueryClient();
   const [contextMenuTarget, setContextMenuTarget] = useState<GalleryItemContextMenuTarget | null>(null);
 
@@ -73,8 +75,8 @@ export const useGalleryGridSelection = () => {
 
     const primaryTargetItemKey = toGalleryItemKey(primaryTargetItem);
 
-    return gallery.items.some((item) => toGalleryItemKey(item) === primaryTargetItemKey) ? contextMenuTarget : null;
-  }, [contextMenuTarget, gallery.items]);
+    return loadedItems.some((item) => toGalleryItemKey(item) === primaryTargetItemKey) ? contextMenuTarget : null;
+  }, [contextMenuTarget, loadedItems]);
 
   const selectItemRange = useCallback(
     async (item: GalleryItem) => {
@@ -123,11 +125,13 @@ export const useGalleryGridSelection = () => {
         }
       }
 
-      if (!selectFromRefs(materializedRefs)) {
+      // The names list describes the listing only; a range inside the strip
+      // resolves against the strip's own order.
+      if (!selectFromRefs(materializedRefs) && !selectFromRefs(starredStrip.items.map(toGalleryItemRef))) {
         actions.selectItem(item);
       }
     },
-    [actions, filter, gallery.items, queryClient]
+    [actions, filter, gallery.items, queryClient, starredStrip.items]
   );
 
   const handleThumbnailClick = useCallback(
@@ -147,7 +151,7 @@ export const useGalleryGridSelection = () => {
         const remainingItemKeys = gallery.selectedItemKeys.filter((key) => key !== itemKey);
         const nextPrimaryItem =
           gallery.selectedItemKey === itemKey
-            ? (gallery.items.find(
+            ? (loadedItems.find(
                 (candidate) => toGalleryItemKey(candidate) === remainingItemKeys[remainingItemKeys.length - 1]
               ) ?? null)
             : null;
@@ -157,7 +161,7 @@ export const useGalleryGridSelection = () => {
         actions.selectItem(item);
       }
     },
-    [actions, gallery.items, gallery.selectedItemKey, gallery.selectedItemKeys, selectItemRange]
+    [actions, gallery.selectedItemKey, gallery.selectedItemKeys, loadedItems, selectItemRange]
   );
 
   const handleThumbnailContextMenu = useCallback(
@@ -167,7 +171,7 @@ export const useGalleryGridSelection = () => {
       if (selectedItemKeys.has(itemKey) && selectedItemKeys.size > 1) {
         const selectionItems = [
           item,
-          ...gallery.items.filter(
+          ...loadedItems.filter(
             (candidate) => toGalleryItemKey(candidate) !== itemKey && selectedItemKeys.has(toGalleryItemKey(candidate))
           ),
         ];
@@ -178,7 +182,7 @@ export const useGalleryGridSelection = () => {
 
       setContextMenuTarget({ itemRefs: [toGalleryItemRef(item)], items: [item], x, y });
     },
-    [gallery.items, selectedItemKeys, selectedItemRefs]
+    [loadedItems, selectedItemKeys, selectedItemRefs]
   );
 
   const getDragItems = useCallback(
@@ -214,6 +218,7 @@ export const useGalleryGridSelection = () => {
     handleCloseContextMenu,
     handleThumbnailClick,
     handleThumbnailContextMenu,
+    loadedItems,
     selectedItemKeys,
     syncRangeInteractionContext,
   };

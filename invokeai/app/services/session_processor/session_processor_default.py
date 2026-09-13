@@ -817,6 +817,30 @@ class DefaultSessionProcessor(SessionProcessorBase):
                     self._poll_now()
                 return
 
+    def _release_vram_after_session(self, worker: _SessionWorker) -> None:
+        """Return this worker's unoccupied cached VRAM to the driver now that its session is over.
+
+        A canceled session aborts mid-node, orphaning the whole denoise working set in the
+        caching allocator; nothing downstream (a VAE decode, say) runs to release it, so the
+        GPU keeps reporting the memory as used. Ask for the release explicitly. On a multi-GPU
+        box with a peer mid-render the call is deferred (see `TorchDevice.empty_cache`) and the
+        peer performs it at its next step boundary. A session that ran to completion has
+        released its own working memory along the way, so it only flushes a release a peer
+        deferred onto it — a flag test when nothing is pending.
+
+        Both are best effort: the session's outcome is already recorded, and a free on a sick
+        device context must not fail the worker.
+        """
+        try:
+            if worker.cancel_event.is_set():
+                TorchDevice.empty_cache()
+            else:
+                TorchDevice.flush_deferred_empty_cache()
+        except Exception:
+            self._invoker.services.logger.warning(
+                f"Could not release cached VRAM after the session on {worker.label}", exc_info=True
+            )
+
     def resume(self) -> SessionProcessorStatus:
         if not self._resume_event.is_set():
             self._resume_event.set()
@@ -1029,6 +1053,7 @@ class DefaultSessionProcessor(SessionProcessorBase):
                         worker.runner.workflow_call_queue_lifecycle.run_queue_item(worker.queue_item)
                     finally:
                         GENERATION_DEVICE_POOL.release_session(worker.device)
+                    self._release_vram_after_session(worker)
 
                 except Exception as e:
                     error_type = e.__class__.__name__

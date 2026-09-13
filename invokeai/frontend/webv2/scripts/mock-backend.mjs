@@ -130,6 +130,42 @@ const timestamp = (state) => {
   return value;
 };
 
+/**
+ * The projection's timestamp. Fixed, and deliberately NOT `timestamp(state)`:
+ * that advances the fixture's mutation clock on every call, so the map's two
+ * endpoints would answer with different `updated_at` values and the client
+ * would discard every cluster-label response as belonging to another
+ * projection — and it would drift the clock on plain GETs besides.
+ */
+const IMAGE_MAP_UPDATED_AT = '2026-01-01 00:00:00.000';
+
+/**
+ * One map point per gallery item, at deterministic coordinates so the map is
+ * comparable across runs. Cluster ids are assigned round-robin rather than
+ * derived from position — nothing here runs DBSCAN, and the client only needs
+ * ids that are stable and non-empty. Videos plot beside images, which is the
+ * whole point of the kind field.
+ */
+const imageMapPoints = (state, includeVideos) => {
+  const items = [
+    ...[...state.images.keys()].map((name) => ({ kind: 'image', name })),
+    ...(includeVideos ? [...state.videos.keys()].map((name) => ({ kind: 'video', name })) : []),
+  ];
+
+  return items.map((item, index) => {
+    const angle = index * 2.399;
+    const cluster = index % 3 === 2 ? -1 : index % 2;
+
+    return {
+      cluster,
+      image_name: item.name,
+      kind: item.kind,
+      x: Math.cos(angle) * (2 + cluster) + cluster * 6,
+      y: Math.sin(angle) * (2 + cluster),
+    };
+  });
+};
+
 const summaryOf = (project) => ({
   board_id: project.board_id,
   created_at: project.created_at,
@@ -208,6 +244,8 @@ const getOptionalBoolean = (url, name) => {
   return value === null ? undefined : value === 'true';
 };
 
+// `media_origin` is the one metadata key the DTO surfaces (the real server projects it out
+// of the metadata blob in SQL); the rest of a fixture's metadata stays behind /metadata.
 const toVideoDto = (video) => ({
   board_id: video.board_id,
   created_at: video.created_at,
@@ -215,6 +253,7 @@ const toVideoDto = (video) => ({
   fps: video.fps,
   height: video.height,
   is_intermediate: video.is_intermediate,
+  media_origin: video.metadata?.media_origin ?? null,
   starred: video.starred,
   thumbnail_url: video.thumbnail_url,
   video_category: video.video_category,
@@ -248,6 +287,7 @@ const toGalleryItem = (kind, value) =>
         height: value.height,
         is_intermediate: value.is_intermediate,
         kind,
+        media_origin: value.metadata?.media_origin ?? null,
         name: value.video_name,
         starred: value.starred,
         thumbnail_url: value.thumbnail_url,
@@ -281,6 +321,7 @@ const filterGalleryItems = (state, url, { createdDate } = {}) => {
   const createdFrom = url.searchParams.get('created_from');
   const createdTo = url.searchParams.get('created_to');
   const intermediate = getOptionalBoolean(url, 'is_intermediate');
+  const starred = getOptionalBoolean(url, 'starred');
   const searchTerm = url.searchParams.get('search_term')?.trim().toLocaleLowerCase() ?? '';
 
   return getGalleryCandidates(state)
@@ -292,6 +333,9 @@ const filterGalleryItems = (state, url, { createdDate } = {}) => {
         return false;
       }
       if (intermediate !== undefined && item.is_intermediate !== intermediate) {
+        return false;
+      }
+      if (starred !== undefined && Boolean(item.starred) !== starred) {
         return false;
       }
       if (createdDate && item.created_at.slice(0, 10) !== createdDate) {
@@ -662,6 +706,65 @@ export const startMockBackend = async (port, { profile = 'empty' } = {}) => {
         });
       }
 
+      // --- Image map -------------------------------------------------------
+      // Enough of the semantic map for the widget to render: every fixture
+      // item gets a point, laid out on a deterministic spiral so clusters are
+      // stable across runs. Videos are served only when the client asks for
+      // them, exactly as the backend does.
+      if (method === 'GET' && path === '/api/v1/image_map/points') {
+        const includeVideos = url.searchParams.get('include_videos') === 'true';
+        const points = imageMapPoints(state, includeVideos);
+
+        return json(200, {
+          cluster_eps: 0.5,
+          point_count: points.length,
+          points,
+          stale: false,
+          state: 'ready',
+          updated_at: IMAGE_MAP_UPDATED_AT,
+          visible_hash: `visible-${String(includeVideos)}`,
+        });
+      }
+
+      if (method === 'GET' && path === '/api/v1/image_map/cluster_labels') {
+        return json(200, {
+          labels: { 0: { alternates: ['sunset', 'coastline'], label: 'beaches' } },
+          // Same value and same kind filter as /points: the client compares
+          // both before it will use a label set.
+          updated_at: IMAGE_MAP_UPDATED_AT,
+          visible_hash: `visible-${String(url.searchParams.get('include_videos') === 'true')}`,
+        });
+      }
+
+      if (method === 'GET' && path === '/api/v1/image_map/image_labels') {
+        const name = url.searchParams.get('image_name') ?? '';
+        const isVideo = url.searchParams.get('kind') === 'video';
+        const exists = isVideo ? state.videos.has(name) : state.images.has(name);
+
+        // 404 for an item this namespace does not hold, like the real route —
+        // which is what lets the label cache's definitive-miss path be
+        // exercised against the mock at all.
+        if (!exists) {
+          return json(404, { detail: 'This item has no stored embedding to label' });
+        }
+
+        return json(200, { alternates: ['surf', 'shoreline'], label: isVideo ? 'clip' : 'photo' });
+      }
+
+      if (method === 'GET' && path === '/api/v1/image_map/status') {
+        const total = state.images.size + state.videos.size;
+
+        return json(200, {
+          enabled: true,
+          index: { embedded: total, failed: 0, total },
+          projection: { point_count: total, stale: false, state: 'ready', updated_at: IMAGE_MAP_UPDATED_AT },
+        });
+      }
+
+      if (method === 'POST' && path === '/api/v1/image_map/refresh') {
+        return json(200, { enqueued: true });
+      }
+
       if (method === 'GET' && path === '/api/v1/app/version') {
         return json(200, { version: 'fixture' });
       }
@@ -962,6 +1065,15 @@ export const startMockBackend = async (port, { profile = 'empty' } = {}) => {
 
       if (method === 'GET' && (path === '/api/v1/wildcards' || path === '/api/v1/wildcards/')) {
         return json(200, []);
+      }
+
+      if (method === 'GET' && path === '/api/v1/fonts') {
+        return json(200, {
+          items: [],
+          total: 0,
+          offset: Math.max(0, Number(url.searchParams.get('offset') ?? 0)),
+          limit: Number(url.searchParams.get('limit') ?? 100),
+        });
       }
 
       // Dynamic prompt expansion. Enough of the `{a|b}` grammar for journeys to

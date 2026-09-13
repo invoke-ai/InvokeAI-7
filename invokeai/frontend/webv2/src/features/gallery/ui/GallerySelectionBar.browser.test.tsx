@@ -12,8 +12,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { GalleryStateView } from './galleryStateView';
 import type { GalleryWidgetContextValue } from './GalleryWidgetContext';
 
+import { mergeGalleryLoadedItems } from './galleryGridLayout';
 import { GallerySelectionBar } from './GallerySelectionBar';
 import { GalleryWidgetContext } from './GalleryWidgetContext';
+import { EMPTY_GALLERY_STARRED_STRIP } from './useGalleryStarredStrip';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -94,8 +96,17 @@ let host: HTMLDivElement | null = null;
 let root: Root | null = null;
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const renderBar = async (gallery: GalleryStateView) => {
-  const contextValue = { gallery, itemActions } as unknown as GalleryWidgetContextValue;
+const renderBar = async (
+  gallery: GalleryStateView,
+  starredStrip: { items: GalleryItem[]; total: number } | null = null
+) => {
+  const strip = starredStrip ?? EMPTY_GALLERY_STARRED_STRIP;
+  const contextValue = {
+    gallery,
+    itemActions,
+    loadedItems: mergeGalleryLoadedItems(strip.items, gallery.items),
+    starredStrip: strip,
+  } as unknown as GalleryWidgetContextValue;
 
   await act(() =>
     root?.render(
@@ -167,6 +178,16 @@ describe('GallerySelectionBar', () => {
 
   it('unstars only once every member is already starred', async () => {
     await renderBar(createGallery({ items: [createItem('a.png', true), createItem('b.png', true)] }));
+    await click(getButton('widgets.gallery.unstarSelection'));
+
+    expect(itemActions.setItemsStarred).toHaveBeenCalledWith(expect.anything(), false);
+  });
+
+  it('reads star state from the strip for a selection the listing window has not loaded', async () => {
+    await renderBar(createGallery({ items: [] }), {
+      items: [createItem('a.png', true), createItem('b.png', true)],
+      total: 2,
+    });
     await click(getButton('widgets.gallery.unstarSelection'));
 
     expect(itemActions.setItemsStarred).toHaveBeenCalledWith(expect.anything(), false);

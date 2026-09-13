@@ -76,13 +76,15 @@ export const parseProjectFile = (text: string): Record<string, unknown> | null =
  */
 export interface ProjectFileProgress {
   completed: number;
-  phase: 'bundling' | 'packing' | 'restoring';
+  phase: 'bundling' | 'packing' | 'restoring' | 'restoring-fonts';
   total: number;
 }
 
 export interface ProjectFileOptions {
   onProgress?: (progress: ProjectFileProgress) => void;
   owner?: AccountScope;
+  includeFonts?: boolean;
+  skipEmbeddedFonts?: boolean;
 }
 
 export interface ProjectExportOutcome extends ProjectTransferIssues {
@@ -141,6 +143,7 @@ const exportProjectDocument = async (
     minimumCanvasSchemaVersion,
     name,
     projectDocument,
+    includeFonts: options.includeFonts ?? false,
   });
 
   const result = await executeInvkExport(plan, {
@@ -265,6 +268,13 @@ export const importProjectFile = async (
   const archive = source.format === 'invk' ? source.contents : null;
   // Loaded only for an archive: a legacy JSON document restores nothing, so it has nothing to undo.
   const restoreMedia = archive === null ? null : await import('./invk/restoreProjectMedia');
+  const fontTransfer = archive?.fonts?.length && !options.skipEmbeddedFonts ? await import('./invk/fonts') : null;
+  const fontTransport = fontTransfer ? (await import('./invk/fontTransport')).createFontArchiveTransport() : null;
+  const fontLedger = fontTransfer?.createRestoredFontLedger() ?? null;
+
+  if (fontTransfer && fontTransport && archive?.fonts) {
+    await fontTransfer.preflightEmbeddedFonts(archive.fonts, fontTransport, owner.signal);
+  }
 
   assertAccountScopeCurrent(owner);
 
@@ -280,9 +290,21 @@ export const importProjectFile = async (
       : null;
   const ledger = restoreMedia?.createRestoredMediaLedger(stagingBoardId) ?? null;
   let didCreateProject = false;
+  let didAttemptProjectCreate = false;
 
   try {
     assertAccountScopeCurrent(owner);
+
+    if (fontTransfer && fontTransport && fontLedger && archive?.fonts) {
+      await fontTransfer.restoreEmbeddedFonts(
+        archive.fonts,
+        fontLedger,
+        fontTransport,
+        owner.signal,
+        (completed, total) => options.onProgress?.({ completed, phase: 'restoring-fonts', total })
+      );
+      assertAccountScopeCurrent(owner);
+    }
 
     const restored =
       archive === null || ledger === null
@@ -307,11 +329,14 @@ export const importProjectFile = async (
 
     assertAccountScopeCurrent(owner);
 
-    const document = restored === null ? canonicalDocument : remapAssetRefs(canonicalDocument, restored.mappings);
+    const mediaDocument = restored === null ? canonicalDocument : remapAssetRefs(canonicalDocument, restored.mappings);
+    const document =
+      fontTransfer && fontLedger ? fontTransfer.remapFontReferences(mediaDocument, fontLedger.mappings) : mediaDocument;
     const minimumCanvasSchemaVersion = Math.max(
       getProjectCanvasSchemaRequirement(document),
       archive?.manifest.minimumCanvasSchemaVersion ?? 1
     );
+    didAttemptProjectCreate = true;
     const record = await createProjectSettled(
       {
         data: document,
@@ -350,12 +375,23 @@ export const importProjectFile = async (
       },
     };
   } catch (error) {
+    if (fontTransfer && fontTransport && fontLedger && isAccountScopeCurrent(owner)) {
+      const rollback = () => fontTransfer.rollbackRestoredFonts(fontLedger, fontTransport, owner.signal);
+      if (!didAttemptProjectCreate) {
+        await rollback();
+      } else if (restoreMedia) {
+        await restoreMedia.rollbackUnlessProjectExists(error, didCreateProject, owner, rollback);
+      }
+    }
     // Reached through the lazily-loaded module, so a legacy JSON import still never pulls the
     // restore engine into the graph — it has no media to undo.
     if (ledger !== null && restoreMedia !== null) {
-      await restoreMedia.rollbackUnlessProjectExists(error, didCreateProject, owner, () =>
-        restoreMedia.rollbackRestoredMedia(ledger, { signal: owner.signal })
-      );
+      const rollback = () => restoreMedia.rollbackRestoredMedia(ledger, { signal: owner.signal });
+      if (!didAttemptProjectCreate && isAccountScopeCurrent(owner)) {
+        await rollback();
+      } else {
+        await restoreMedia.rollbackUnlessProjectExists(error, didCreateProject, owner, rollback);
+      }
     }
 
     throw error;

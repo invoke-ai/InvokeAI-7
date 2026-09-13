@@ -88,6 +88,7 @@ const createGallery = (settings: Partial<GallerySettings> = {}): GalleryStateVie
     selectedItemKey: null,
     selectedItemKeys: [],
     settings: { ...DEFAULT_GALLERY_SETTINGS, showArchivedBoards: true, showDateBoards: true, ...settings },
+    starredOnly: false,
     ...({} as Record<string, never>),
   }) as GalleryStateView;
 

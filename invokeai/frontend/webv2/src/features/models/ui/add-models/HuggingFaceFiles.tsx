@@ -4,7 +4,7 @@ import type { HFLookupState } from '@features/models/ui/uiStore';
 import { Stack } from '@chakra-ui/react';
 import { ResultsListHeader } from '@features/models/ui/shared/ResultsListHeader';
 import { InstallSourceButton, SourceListItem } from '@features/models/ui/shared/SourceListItem';
-import { useInstalledSources } from '@features/models/ui/shared/useInstalledSources';
+import { useInstalledSourceKeys } from '@features/models/ui/shared/useInstalledSources';
 import { sourceFileName, useSourceNameFilter } from '@features/models/ui/shared/useSourceNameFilter';
 import { useTranslation } from 'react-i18next';
 
@@ -28,7 +28,7 @@ export const HuggingFaceFiles = ({
   const { filter, filteredItems: filteredUrls, setFilter } = useSourceNameFilter(lookup.urls, urlOf);
   // A model's recorded install source is the URL it was pulled from, so this
   // marks rows Installed live once the library refresh lands.
-  const installedSources = useInstalledSources();
+  const installedSourceKeys = useInstalledSourceKeys();
 
   const installAll = () => {
     onInstallAll([...filteredUrls]);
@@ -53,7 +53,7 @@ export const HuggingFaceFiles = ({
           titleTooltip={url}
           trailing={
             <InstallSourceButton
-              isInstalled={installedSources.has(url)}
+              installedModelKey={installedSourceKeys.get(url) ?? null}
               isPending={pendingSources.has(url)}
               source={url}
               onInstall={() => onInstall(url)}

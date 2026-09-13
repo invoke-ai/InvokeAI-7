@@ -4,7 +4,12 @@ import type { GalleryBoardOrderBy, GalleryOrderDir, GalleryView } from '@feature
 import type { AccountScope } from '@platform/state/accountLifecycle';
 
 import { toGalleryItemKey } from '@features/gallery/core/items';
-import { GALLERY_MAX_INFINITE_PAGES, GALLERY_MAX_ROWS, GALLERY_PAGE_SIZE } from '@features/gallery/core/paging';
+import {
+  GALLERY_MAX_INFINITE_PAGES,
+  GALLERY_MAX_ROWS,
+  GALLERY_PAGE_SIZE,
+  GALLERY_STARRED_STRIP_LIMIT,
+} from '@features/gallery/core/paging';
 import { toGallerySemanticQuery } from '@features/gallery/core/semanticImageQuery';
 import { assertAccountScopeCurrent, captureAccountScope } from '@platform/state/accountLifecycle';
 import {
@@ -28,7 +33,7 @@ import {
   listSemanticGalleryItemNames,
 } from './backend';
 
-export { GALLERY_MAX_INFINITE_PAGES, GALLERY_MAX_ROWS, GALLERY_PAGE_SIZE };
+export { GALLERY_MAX_INFINITE_PAGES, GALLERY_MAX_ROWS, GALLERY_PAGE_SIZE, GALLERY_STARRED_STRIP_LIMIT };
 
 export interface GalleryBoardsQuery {
   includeArchived?: boolean;
@@ -59,7 +64,8 @@ export interface GalleryItemsFilter {
    * apply to a ranked result set.
    */
   semanticQuery?: GallerySemanticReference | null;
-  starredFirst?: boolean;
+  /** true = only starred items, false = only unstarred; absent = all. */
+  starred?: boolean;
 }
 
 export interface CanonicalGalleryItemsFilter {
@@ -71,7 +77,7 @@ export interface CanonicalGalleryItemsFilter {
   searchTerm: string;
   /** Label-free semantic reference: a file query is keyed by its registry id. */
   semantic?: GallerySemanticQuery;
-  starredFirst: boolean;
+  starred?: boolean;
 }
 
 /**
@@ -98,7 +104,13 @@ type GalleryItemsInfiniteQueryKey = readonly [
 
 type GalleryItemsAnchorQueryKey = readonly [...GalleryItemsInfiniteQueryKey, 'anchor' | 'infinite', number];
 
-export type GalleryItemsListQueryKey = GalleryItemsAnchorQueryKey | GalleryItemsInfiniteQueryKey;
+/** The bounded starred strip: one `GalleryItemsPage`, not an infinite window. */
+type GalleryItemsStripQueryKey = readonly [...GalleryItemsInfiniteQueryKey, 'strip'];
+
+export type GalleryItemsListQueryKey =
+  | GalleryItemsAnchorQueryKey
+  | GalleryItemsInfiniteQueryKey
+  | GalleryItemsStripQueryKey;
 
 const canonicalizeBoardsQuery = (query: GalleryBoardsQuery): CanonicalGalleryBoardsQuery => ({
   includeArchived: query.includeArchived ?? false,
@@ -113,9 +125,9 @@ export const canonicalizeGalleryItemsFilter = (filter: GalleryItemsFilter): Cano
   if (semantic) {
     // A ranked result set answers to the reference alone: the semantic branch
     // of `galleryItemNamesOptionsForOwner` sends only the query, so board,
-    // view, order, starred-first and the date range change nothing about the
-    // response. Keeping them in the key made clicking a board — or toggling
-    // starred-first, or switching the images/assets tab — mint a fresh key and
+    // view, order, the starred filter and the date range change nothing about
+    // the response. Keeping them in the key made clicking a board — or toggling
+    // the starred filter, or switching the images/assets tab — mint a fresh key and
     // re-run the search for byte-identical results, which for a dropped file
     // means re-uploading the blob and for a URL reference means the server
     // re-downloads the remote image. Pinned rather than omitted so the shape
@@ -127,7 +139,6 @@ export const canonicalizeGalleryItemsFilter = (filter: GalleryItemsFilter): Cano
       orderDir: 'DESC',
       searchTerm: '',
       semantic,
-      starredFirst: false,
     };
   }
 
@@ -138,7 +149,7 @@ export const canonicalizeGalleryItemsFilter = (filter: GalleryItemsFilter): Cano
     galleryView: filter.galleryView,
     orderDir: filter.orderDir ?? 'DESC',
     searchTerm: filter.searchTerm.trim(),
-    starredFirst: filter.starredFirst ?? false,
+    ...(filter.starred !== undefined ? { starred: filter.starred } : {}),
   };
 };
 
@@ -179,6 +190,8 @@ export const galleryKeys = {
     window: GalleryItemsWindow = { kind: 'infinite' }
   ): GalleryItemsListQueryKey =>
     [...galleryKeys.itemListsForAccount(owner), filter, ...getWindowKey(window)] as GalleryItemsListQueryKey,
+  starredStrip: (owner: AccountScope, filter: CanonicalGalleryItemsFilter): GalleryItemsStripQueryKey =>
+    [...galleryKeys.itemListsForAccount(owner), filter, 'strip'] as const,
   itemNamesRoot: () => [...galleryKeys.itemsRoot(), 'names'] as const,
   itemNamesForAccount: (owner: AccountScope) => [...galleryKeys.itemNamesRoot(), getAccountKey(owner)] as const,
   itemNames: (owner: AccountScope, filter: CanonicalGalleryItemsFilter) =>
@@ -411,6 +424,29 @@ export const galleryItemsInfiniteOptions = (
     staleTime: 60_000,
   });
 };
+
+/**
+ * The starred strip shares the list key family (and so the account-wide
+ * invalidation and mutation patching) with the listing it sits above, keyed
+ * on that listing's filter plus `starred: true`.
+ */
+export const galleryStarredStripOptions = (inputFilter: GalleryItemsFilter) => {
+  const owner = captureAccountScope();
+  const filter: CanonicalGalleryItemsFilter = { ...canonicalizeGalleryItemsFilter(inputFilter), starred: true };
+
+  return queryOptions({
+    queryFn: ({ client, signal }) =>
+      fetchGalleryItemsRange(client, owner, filter, {
+        limit: GALLERY_STARRED_STRIP_LIMIT,
+        offset: 0,
+        signal: AbortSignal.any([signal, owner.signal]),
+      }),
+    queryKey: galleryKeys.starredStrip(owner, filter),
+    staleTime: 60_000,
+  });
+};
+
+export const isGalleryStarredStripQueryKey = (queryKey: QueryKey): boolean => queryKey[5] === 'strip';
 
 export const flattenGalleryItemsData = (data: InfiniteData<GalleryItemsPage, number> | undefined): GalleryItem[] => {
   if (!data) {

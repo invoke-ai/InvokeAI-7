@@ -8,6 +8,7 @@ import {
   type GeneratedImageContract,
 } from '@features/gallery/contracts';
 import { createExternalStore } from '@platform/state/externalStore';
+import { closeWidgetOverlays } from '@platform/ui/widgetOverlayRegistry';
 import { hasActiveQueueRuns, hasInFlightQueueRuns } from '@workbench/queue-integration/activeQueueRuns';
 
 import type { CanvasEditIntent } from './autoRoutePolicy';
@@ -25,6 +26,22 @@ import {
   __workbenchReducerInternal,
   type __WorkbenchReducerActionInternal,
 } from './workbenchState';
+
+/**
+ * Which widgets the shell shows: the active project, each region's active
+ * instance, and the floating windows. A change hides or replaces widgets, and
+ * an overlay open inside one would otherwise outlive it in its portal.
+ */
+const visibleWidgetsKey = (state: WorkbenchState): string => {
+  const project = state.projects.find((candidate) => candidate.id === state.activeProjectId);
+  if (!project) {
+    return '';
+  }
+  const regions = Object.entries(project.widgetRegions).map(
+    ([region, { activeInstanceId }]) => `${region}=${activeInstanceId}`
+  );
+  return [project.id, ...regions, ...Object.keys(project.floatingWidgets ?? {})].join('|');
+};
 
 type WorkbenchAction = __WorkbenchReducerActionInternal;
 type ActionPayload<Type extends WorkbenchAction['type']> = Omit<Extract<WorkbenchAction, { type: Type }>, 'type'>;
@@ -191,6 +208,10 @@ const createCommands = (
       setSearchTerm: command('setGallerySearchTerm', (searchTerm: string, projectId?: string) => ({
         projectId,
         searchTerm,
+      })),
+      setStarredOnly: command('setGalleryStarredOnly', (starredOnly: boolean, projectId?: string) => ({
+        projectId,
+        starredOnly,
       })),
       setView: command(
         'setGalleryView',
@@ -678,6 +699,10 @@ export const createWorkbenchStore = (
     const nextState = __workbenchReducerInternal(state, action, {
       autoSwitchInvocationRoute: getWorkbenchPreferences().autoSwitchInvocationRoute,
     });
+
+    if (nextState !== previousState && visibleWidgetsKey(nextState) !== visibleWidgetsKey(previousState)) {
+      closeWidgetOverlays();
+    }
 
     if (
       action.type === 'applyPreset' ||

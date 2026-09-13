@@ -9,7 +9,7 @@ import { createTestInsertionAnchorCapture } from '@workbench/canvas-engine/docum
 import { createEngineStores } from '@workbench/canvas-engine/engineStores';
 import { describe, expect, it, vi } from 'vitest';
 
-import { angleFromDrag, createGradientTool } from './gradientTool';
+import { createGradientTool, placementFromDrag } from './gradientTool';
 
 const gradientLayer = (over: Partial<CanvasLayerContract> = {}): CanvasLayerContract =>
   ({
@@ -97,23 +97,38 @@ const down = (t: Tool, ctx: ToolContext, i: PointerInput): void => t.onPointerDo
 const move = (t: Tool, ctx: ToolContext, i: PointerInput): void => t.onPointerMove?.(ctx, i, [i]);
 const up = (t: Tool, ctx: ToolContext, i: PointerInput): void => t.onPointerUp?.(ctx, i);
 
-describe('angleFromDrag', () => {
-  it('is 0° for a left→right drag and 90° for a top→bottom drag', () => {
-    expect(angleFromDrag({ x: 0, y: 0 }, { x: 10, y: 0 })).toBeCloseTo(0);
-    expect(angleFromDrag({ x: 0, y: 0 }, { x: 0, y: 10 })).toBeCloseTo(90);
+describe('placementFromDrag', () => {
+  it('centers a linear ramp on the drag midpoint, as long as the drag, along its angle', () => {
+    expect(placementFromDrag('linear', { x: 10, y: 20 }, { x: 10, y: 120 })).toEqual({
+      angle: 90,
+      center: { x: 10, y: 70 },
+      span: 100,
+    });
+  });
+
+  it('centers a radial gradient on the press point with the drag length as radius', () => {
+    expect(placementFromDrag('radial', { x: 10, y: 20 }, { x: 40, y: 60 })).toEqual({
+      angle: expect.any(Number),
+      center: { x: 10, y: 20 },
+      span: 50,
+    });
+  });
+
+  it('never yields a zero span', () => {
+    expect(placementFromDrag('linear', { x: 5, y: 5 }, { x: 5, y: 5 }).span).toBe(1);
   });
 });
 
 describe('gradient tool: create when no gradient selected', () => {
-  it('creates a document-covering gradient layer with the drag angle', () => {
-    const h = createHarness(makeDoc());
+  it('creates a bbox-sized gradient layer placed where the drag went', () => {
+    const h = createHarness(makeDoc({ bbox: { height: 96, width: 96, x: 100, y: 200 } }));
     const tool = createGradientTool();
 
-    down(tool, h.ctx, pointer(10, 10));
-    move(tool, h.ctx, pointer(10, 110));
-    expect(h.previewOf()).toEqual({ end: { x: 10, y: 110 }, start: { x: 10, y: 10 } });
+    down(tool, h.ctx, pointer(110, 210));
+    move(tool, h.ctx, pointer(110, 310));
+    expect(h.previewOf()).toEqual({ end: { x: 110, y: 310 }, kind: 'linear', start: { x: 110, y: 210 } });
 
-    up(tool, h.ctx, pointer(10, 110));
+    up(tool, h.ctx, pointer(110, 310));
 
     expect(h.dispatched).toHaveLength(0);
     expect(h.commits).toHaveLength(1);
@@ -126,7 +141,11 @@ describe('gradient tool: create when no gradient selected', () => {
     ) {
       expect(forward.layer.source.angle).toBeCloseTo(90);
       expect(forward.layer.source.kind).toBe('linear');
-      expect(forward.layer.transform).toEqual({ rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 });
+      // Layer-local: the drag minus the bbox origin the layer sits at.
+      expect(forward.layer.source.center).toEqual({ x: 10, y: 60 });
+      expect(forward.layer.source.span).toBe(100);
+      expect(forward.layer.source.width).toBe(96);
+      expect(forward.layer.transform).toEqual({ rotation: 0, scaleX: 1, scaleY: 1, x: 100, y: 200 });
     } else {
       throw new Error('expected a gradient layer');
     }
@@ -193,7 +212,7 @@ describe('gradient tool: create when no gradient selected', () => {
 });
 
 describe('gradient tool: edit selected gradient layer', () => {
-  it('commits ONE updateCanvasLayerSource with the new angle (kind/stops preserved)', () => {
+  it('commits ONE updateCanvasLayerSource with the new placement (kind/stops preserved)', () => {
     const layer = gradientLayer();
     const doc = makeDoc({ stacks: stacksFrom([layer]), selectedLayerId: 'grad-existing' });
     const h = createHarness(doc);
@@ -210,6 +229,8 @@ describe('gradient tool: edit selected gradient layer', () => {
     if (forward?.type === 'updateCanvasLayerSource' && forward.source.type === 'gradient') {
       expect(forward.id).toBe('grad-existing');
       expect(forward.source.angle).toBeCloseTo(0);
+      expect(forward.source.center).toEqual({ x: 50, y: 0 });
+      expect(forward.source.span).toBe(100);
       expect(forward.source.kind).toBe('linear');
       expect(forward.source.stops).toHaveLength(2);
     } else {
@@ -238,7 +259,30 @@ describe('gradient tool: edit selected gradient layer', () => {
     expect(h.previewOf()).toBeNull();
   });
 
-  it('is a no-op when the selected gradient layer is radial (angle has no visual effect)', () => {
+  it("reads the drag in the layer's local space when it is moved, scaled and rotated", () => {
+    // Local +x points down the document after a quarter turn: a downward
+    // document drag of 200px is a 100px local drag along +x at scale 2.
+    const layer = gradientLayer({ transform: { rotation: Math.PI / 2, scaleX: 2, scaleY: 2, x: 100, y: 100 } });
+    const doc = makeDoc({ stacks: stacksFrom([layer]), selectedLayerId: 'grad-existing' });
+    const h = createHarness(doc);
+    const tool = createGradientTool();
+
+    down(tool, h.ctx, pointer(100, 100));
+    move(tool, h.ctx, pointer(100, 300));
+    up(tool, h.ctx, pointer(100, 300));
+
+    const forward = h.commits[0]?.forward;
+    if (forward?.type === 'updateCanvasLayerSource' && forward.source.type === 'gradient') {
+      expect(forward.source.angle).toBeCloseTo(0);
+      expect(forward.source.center?.x).toBeCloseTo(50);
+      expect(forward.source.center?.y).toBeCloseTo(0);
+      expect(forward.source.span).toBeCloseTo(100);
+    } else {
+      throw new Error('expected an updateCanvasLayerSource gradient edit');
+    }
+  });
+
+  it('re-centers a selected radial gradient on the press point with the drag as its radius', () => {
     const layer = gradientLayer({
       source: {
         angle: 0,
@@ -254,15 +298,20 @@ describe('gradient tool: edit selected gradient layer', () => {
     const h = createHarness(doc);
     const tool = createGradientTool();
 
-    down(tool, h.ctx, pointer(0, 0));
-    move(tool, h.ctx, pointer(100, 0));
-    up(tool, h.ctx, pointer(100, 0));
+    down(tool, h.ctx, pointer(20, 30));
+    move(tool, h.ctx, pointer(50, 70));
+    expect(h.previewOf()?.kind).toBe('radial');
+    up(tool, h.ctx, pointer(50, 70));
 
-    // A radial gradient ignores `angle`, so dragging on one would only ever
-    // produce an angle-only, visually-inert commit. Skipped entirely: no
-    // commit, no dispatch, no dangling preview.
-    expect(h.commits).toHaveLength(0);
-    expect(h.dispatched).toHaveLength(0);
+    expect(h.commits).toHaveLength(1);
+    const forward = h.commits[0]?.forward;
+    if (forward?.type === 'updateCanvasLayerSource' && forward.source.type === 'gradient') {
+      expect(forward.source.kind).toBe('radial');
+      expect(forward.source.center).toEqual({ x: 20, y: 30 });
+      expect(forward.source.span).toBe(50);
+    } else {
+      throw new Error('expected an updateCanvasLayerSource gradient edit');
+    }
     expect(h.previewOf()).toBeNull();
   });
 

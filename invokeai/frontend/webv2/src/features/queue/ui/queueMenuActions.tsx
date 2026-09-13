@@ -138,7 +138,7 @@ export const useQueueMenuActions = ({
 
   const cancelAllExceptCurrent = useCallback(() => {
     queueCommands
-      .cancelScopedItems(scope, current?.id ?? null)
+      .cancelScopedItems(scope, { keepCurrent: true })
       .then(() => refreshQueue())
       .then(() =>
         notify.success(
@@ -152,7 +152,7 @@ export const useQueueMenuActions = ({
           getApiErrorMessage(error, t('widgets.queue.couldNotCancelItems'))
         )
       );
-  }, [current?.id, notify, scope, t]);
+  }, [notify, scope, t]);
 
   const runProcessorAction = useCallback(
     (label: 'pause' | 'resume') => {

@@ -34,10 +34,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { userEvent } from 'vitest/browser';
 
 import type { GalleryStateView } from './galleryStateView';
-import type { GalleryActions, GalleryWidgetContextValue } from './GalleryWidgetContext';
+import type { GalleryActions, GalleryStarredStrip, GalleryWidgetContextValue } from './GalleryWidgetContext';
 
+import { mergeGalleryLoadedItems } from './galleryGridLayout';
 import { GalleryImageGrid } from './GalleryImageGrid';
 import { GalleryWidgetContext } from './GalleryWidgetContext';
+import { EMPTY_GALLERY_STARRED_STRIP } from './useGalleryStarredStrip';
 
 const mocks = vi.hoisted(() => ({
   fetchNames: vi.fn(),
@@ -114,12 +116,16 @@ void i18n.use(initReactI18next).init({
               navigationUp: 'Up',
               selectAllOnPage: 'Select all',
               toggleStarImage: 'Toggle star',
+              toggleStarredOnly: 'Toggle starred filter',
             },
             generationProgress: 'Generation progress',
             generationProgressPercent: 'Generation {{percentage}}%',
             itemsAriaLabel: 'Gallery items',
             loadingBackendGallery: 'Loading gallery',
             noImagesMatch: 'No items',
+            noStarredItemsMatch: 'No starred items',
+            showAllStarred: 'Show all',
+            showAllStarredItems: 'Show all starred items',
             collapseStarredItems: 'Collapse starred items',
             dropMediaToUploadToBoard: 'Drop media to {{name}}',
             emptyBoardUploadHint: 'Drop media here or click to upload',
@@ -199,12 +205,11 @@ const createFilter = (gallery: GalleryStateView): GalleryItemsFilter => {
     galleryView: gallery.galleryView,
     orderDir: gallery.settings.imageOrderDir,
     searchTerm: parse.text,
-    starredFirst: gallery.settings.starredFirst,
   };
 };
 
-/** Infinite-mode settings — the only mode where the starred section renders. */
-const SECTIONED_SETTINGS = { ...getGallerySettings({}), imageDensityPercent: 0 };
+/** Infinite-mode settings at the sparsest density, so few columns fit the harness. */
+const DENSE_SETTINGS = { ...getGallerySettings({}), imageDensityPercent: 0 };
 
 const createGallery = (overrides: Partial<GalleryStateView> = {}): GalleryStateView => {
   const items = overrides.items ?? [
@@ -232,6 +237,7 @@ const createGallery = (overrides: Partial<GalleryStateView> = {}): GalleryStateV
     selectedItemKeys: ['image:first.png'],
     semanticImageQuery: null,
     settings: { ...getGallerySettings({ paginationMode: 'paginated' }), imageDensityPercent: 0 },
+    starredOnly: false,
     ...overrides,
   };
 };
@@ -241,7 +247,9 @@ const actionMocks = {
   selectItem: vi.fn(),
   selectItemRange: vi.fn(),
   setCompareItem: vi.fn(),
+  setStarredOnly: vi.fn(),
   toggleItemInSelection: vi.fn(),
+  updateSettings: vi.fn(),
 };
 const imageActionMocks = {
   deleteItems: vi.fn(),
@@ -284,10 +292,11 @@ const createActions = (): GalleryActions =>
     selectProjectBoard: vi.fn(),
     setCompareItem: actionMocks.setCompareItem,
     setSearchTerm: noop,
+    setStarredOnly: actionMocks.setStarredOnly,
     setView: noop,
     toggleImageInSelection: actionMocks.toggleItemInSelection,
     toggleItemInSelection: actionMocks.toggleItemInSelection,
-    updateSettings: noop,
+    updateSettings: actionMocks.updateSettings,
     uploadFiles: vi.fn(),
   }) as unknown as GalleryActions;
 
@@ -348,7 +357,13 @@ let host: HTMLDivElement | null = null;
 let root: Root | null = null;
 let queryClient: QueryClient | null = null;
 let currentGallery = createGallery();
+let currentStrip: GalleryStarredStrip = EMPTY_GALLERY_STARRED_STRIP;
 let onDragStart = vi.fn();
+
+/** The strip the next renders show; `total` defaults to the item count. */
+const setStrip = (items: GalleryItem[], total = items.length) => {
+  currentStrip = { items, total };
+};
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const DragMonitor = () => {
@@ -378,9 +393,11 @@ const Harness = ({
     gallery,
     itemActions: imageActionMocks,
     isWindowTruncated: false,
+    loadedItems: mergeGalleryLoadedItems(currentStrip.items, gallery.items),
     projectName: 'Project',
     region: 'right',
     runtime,
+    starredStrip: currentStrip,
   } as unknown as GalleryWidgetContextValue;
 
   return (
@@ -470,6 +487,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   registeredCommands.clear();
   currentGallery = createGallery();
+  currentStrip = EMPTY_GALLERY_STARRED_STRIP;
   queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   host = document.createElement('div');
   host.style.cssText = 'height:480px;left:20px;position:fixed;top:20px;width:600px;';
@@ -488,13 +506,15 @@ afterEach(async () => {
 });
 
 describe('GalleryImageGrid mixed item cells', () => {
-  it('separates starred items into an expanded disclosure above regular items', async () => {
-    await renderGallery(
-      createGallery({
-        items: [createItem('image', 'starred.png', { starred: true }), createItem('image', 'regular.png')],
-        settings: SECTIONED_SETTINGS,
-      })
+  const starred = createItem('image', 'starred.png', { starred: true });
+  const sectionOrder = () =>
+    Array.from(host?.querySelectorAll('[data-gallery-section]') ?? []).map((row) =>
+      row.getAttribute('data-gallery-section')
     );
+
+  it('puts the starred strip in an expanded disclosure above the unstarred listing', async () => {
+    setStrip([starred]);
+    await renderGallery(createGallery({ items: [createItem('image', 'regular.png')], settings: DENSE_SETTINGS }));
 
     const trigger = getButton('Collapse starred items');
     const starredSection = host?.querySelector('[data-gallery-section="starred"]');
@@ -505,19 +525,28 @@ describe('GalleryImageGrid mixed item cells', () => {
     expect(trigger.closest('[role="list"]')).toBeNull();
     expect(starredSection?.querySelector('button[aria-label="Select starred.png for preview"]')).not.toBeNull();
     expect(regularSection?.querySelector('button[aria-label="Select regular.png for preview"]')).not.toBeNull();
-    expect(
-      Array.from(host?.querySelectorAll('[data-gallery-section]') ?? []).map((row) =>
-        row.getAttribute('data-gallery-section')
-      )
-    ).toEqual(['starred', 'regular']);
+    expect(host?.querySelectorAll('button[aria-label="Select starred.png for preview"]')).toHaveLength(1);
+    expect(sectionOrder()).toEqual(['starred', 'regular']);
+    // Every starred item is on screen, so there is nothing more to show.
+    expect(host?.querySelector('button[aria-label="Show all starred items"]')).toBeNull();
+  });
+
+  it('offers Show all when the board holds more starred items than the strip, switching to the starred listing', async () => {
+    setStrip([starred], 7);
+    await renderGallery(createGallery({ items: [createItem('image', 'regular.png')], settings: DENSE_SETTINGS }));
+
+    const trigger = getButton('Collapse starred items');
+    expect([...trigger.querySelectorAll<HTMLElement>('span')].some((span) => span.textContent === '7')).toBe(true);
+
+    await click(getButton('Show all starred items'));
+
+    expect(actionMocks.setStarredOnly).toHaveBeenCalledExactlyOnceWith(true);
   });
 
   it.each(['bg', 'bg.panel'] as const)('keeps the starred count readable on the %s surface', async (background) => {
+    setStrip([starred]);
     await renderGallery(
-      createGallery({
-        items: [createItem('image', 'starred.png', { starred: true }), createItem('image', 'regular.png')],
-        settings: SECTIONED_SETTINGS,
-      }),
+      createGallery({ items: [createItem('image', 'regular.png')], settings: DENSE_SETTINGS }),
       false,
       background
     );
@@ -541,27 +570,22 @@ describe('GalleryImageGrid mixed item cells', () => {
   });
 
   it('matches board disclosure chrome while retaining the star marker', async () => {
-    await renderGallery(
-      createGallery({
-        items: [createItem('image', 'starred.png', { starred: true }), createItem('image', 'regular.png')],
-        settings: SECTIONED_SETTINGS,
-      })
-    );
+    setStrip([starred], 3);
+    await renderGallery(createGallery({ items: [createItem('image', 'regular.png')], settings: DENSE_SETTINGS }));
 
     const trigger = getButton('Collapse starred items');
     const header = trigger.parentElement;
 
     expect(header?.getBoundingClientRect().height).toBe(24);
     expect(trigger.querySelector('svg.lucide-star')).not.toBeNull();
+    // The Show all control shares the row without growing it.
+    expect(getButton('Show all starred items').getBoundingClientRect().height).toBeLessThanOrEqual(24);
   });
 
   it('keeps the starred label and grid together before a dedicated trailing gap', async () => {
-    await renderGallery(
-      createGallery({
-        items: [createItem('image', 'starred.png', { starred: true }), createItem('image', 'regular.png')],
-        settings: SECTIONED_SETTINGS,
-      })
-    );
+    setStrip([starred]);
+    const gallery = createGallery({ items: [createItem('image', 'regular.png')], settings: DENSE_SETTINGS });
+    await renderGallery(gallery);
 
     const listRect = host?.querySelector('[role="list"]')?.getBoundingClientRect();
     const headerRect = getButton('Collapse starred items').parentElement?.getBoundingClientRect();
@@ -574,7 +598,11 @@ describe('GalleryImageGrid mixed item cells', () => {
     expect(regularRect.top - starredRect.bottom).toBeCloseTo(8 + GALLERY_STARRED_SEPARATOR_HEIGHT_PX, 0);
     expect(host?.querySelector('[data-gallery-starred-separator]')).not.toBeNull();
 
+    // The disclosure is a persisted setting, so collapsing goes through the
+    // owner and comes back as the next render's settings.
     await click(getButton('Collapse starred items'));
+    expect(actionMocks.updateSettings).toHaveBeenCalledExactlyOnceWith({ starredSectionCollapsed: true });
+    await renderGallery({ ...gallery, settings: { ...DENSE_SETTINGS, starredSectionCollapsed: true } });
 
     const collapsedHeaderRect = getButton('Expand starred items').parentElement?.getBoundingClientRect();
     const collapsedRegularRect = getButton('Select regular.png for preview').getBoundingClientRect();
@@ -586,42 +614,118 @@ describe('GalleryImageGrid mixed item cells', () => {
     expect(host?.querySelector('[data-gallery-starred-separator]')).toBeNull();
   });
 
-  it('collapses only the starred items and omits the disclosure when no stars are loaded', async () => {
+  it('collapses only the strip cells, keeps the count, and omits the disclosure when the strip is empty', async () => {
+    setStrip([starred], 4);
     await renderGallery(
       createGallery({
-        items: [createItem('image', 'starred.png', { starred: true }), createItem('image', 'regular.png')],
-        settings: SECTIONED_SETTINGS,
+        items: [createItem('image', 'regular.png')],
+        settings: { ...DENSE_SETTINGS, starredSectionCollapsed: true },
       })
     );
 
-    await click(getButton('Collapse starred items'));
+    const trigger = getButton('Expand starred items');
 
-    expect(getButton('Expand starred items').getAttribute('aria-expanded')).toBe('false');
+    expect(trigger.getAttribute('aria-expanded')).toBe('false');
+    expect([...trigger.querySelectorAll<HTMLElement>('span')].some((span) => span.textContent === '4')).toBe(true);
     expect(host?.querySelector('button[aria-label="Select starred.png for preview"]')).toBeNull();
     expect(host?.querySelector('button[aria-label="Select regular.png for preview"]')).not.toBeNull();
+    // Collapsed, nothing is shown, so Show all still leads to the rest.
+    expect(host?.querySelector('button[aria-label="Show all starred items"]')).not.toBeNull();
 
-    await renderGallery(createGallery({ items: [createItem('image', 'regular.png')], settings: SECTIONED_SETTINGS }));
+    await click(trigger);
+    expect(actionMocks.updateSettings).toHaveBeenLastCalledWith({ starredSectionCollapsed: false });
+
+    setStrip([]);
+    await renderGallery(createGallery({ items: [createItem('image', 'regular.png')], settings: DENSE_SETTINGS }));
 
     expect(host?.querySelector('button[aria-label="Expand starred items"]')).toBeNull();
     expect(host?.querySelector('button[aria-label="Collapse starred items"]')).toBeNull();
   });
 
-  it('renders starred items inline with no section on flat paginated pages', async () => {
+  it('shows the strip on paginated pages too, and no chrome when the strip is empty', async () => {
+    setStrip([starred]);
+    await renderGallery(createGallery({ items: [createItem('image', 'regular.png')] }));
+
+    expect(host?.querySelector('button[aria-label="Collapse starred items"]')).not.toBeNull();
+    expect(sectionOrder()).toEqual(['starred', 'regular']);
+
+    setStrip([]);
+    await renderGallery(createGallery({ items: [createItem('image', 'regular.png')] }));
+
+    expect(host?.querySelector('button[aria-label="Collapse starred items"]')).toBeNull();
+    expect(sectionOrder()).toEqual(['regular']);
+  });
+
+  it('keeps showing the strip when every item on the board is starred', async () => {
+    setStrip([starred]);
+    await renderGallery(createGallery({ items: [], pendingPlaceholders: [], settings: DENSE_SETTINGS }));
+
+    expect(getButton('Collapse starred items')).not.toBeNull();
+    expect(host?.querySelector('button[aria-label="Select starred.png for preview"]')).not.toBeNull();
+    expect(host?.querySelector('[role="button"]')).toBeNull();
+    expect(host?.textContent).not.toContain('Drop media');
+  });
+
+  it('caps the strip at three rows of the current column count', async () => {
+    const starredItems = Array.from({ length: 40 }, (_, index) =>
+      createItem('image', `starred-${index}.png`, { starred: true })
+    );
+    setStrip(starredItems, 40);
+    await renderGallery(createGallery({ items: [createItem('image', 'regular.png')], settings: DENSE_SETTINGS }));
+
+    const stripRows = host?.querySelectorAll('[data-gallery-section="starred"]') ?? [];
+    const stripCells = host?.querySelectorAll('[data-gallery-section="starred"] [role="listitem"]').length ?? 0;
+    const columnCount = stripRows[0]?.querySelectorAll('[role="listitem"]').length ?? 0;
+
+    expect(stripRows).toHaveLength(3);
+    expect(columnCount).toBeGreaterThan(0);
+    expect(stripCells).toBe(3 * columnCount);
+    expect(host?.querySelector('button[aria-label="Show all starred items"]')).not.toBeNull();
+  });
+
+  it('walks the arrow keys from the strip into the listing and back across the seam', async () => {
+    const regular = createItem('image', 'regular.png');
+    setStrip([starred]);
     await renderGallery(
       createGallery({
-        items: [createItem('image', 'starred.png', { starred: true }), createItem('image', 'regular.png')],
+        items: [regular],
+        selectedItemKey: 'image:starred.png',
+        selectedItemKeys: ['image:starred.png'],
+        settings: DENSE_SETTINGS,
       })
     );
 
-    expect(host?.querySelector('button[aria-label="Collapse starred items"]')).toBeNull();
-    expect(
-      Array.from(host?.querySelectorAll('[data-gallery-section]') ?? []).map((row) =>
-        row.getAttribute('data-gallery-section')
-      )
-    ).toEqual(['regular']);
-    expect(
-      host?.querySelector('[data-gallery-section="regular"] button[aria-label="Select starred.png for preview"]')
-    ).not.toBeNull();
+    registeredCommands.get('gallery.galleryNavRight')?.();
+    expect(actionMocks.selectItem).toHaveBeenLastCalledWith(regular);
+
+    await renderGallery({
+      ...currentGallery,
+      selectedItemKey: 'image:regular.png',
+      selectedItemKeys: ['image:regular.png'],
+    });
+    registeredCommands.get('gallery.galleryNavLeft')?.();
+    expect(actionMocks.selectItem).toHaveBeenLastCalledWith(starred);
+  });
+
+  it('stars from the strip for a selection the listing window has not loaded', async () => {
+    setStrip([starred]);
+    await renderGallery(
+      createGallery({
+        items: [createItem('image', 'regular.png')],
+        selectedItemKey: 'image:starred.png',
+        selectedItemKeys: ['image:starred.png'],
+        settings: DENSE_SETTINGS,
+      })
+    );
+
+    registeredCommands.get('gallery.starImage')?.();
+    expect(imageActionMocks.setItemsStarred).toHaveBeenCalledWith([{ kind: 'image', name: 'starred.png' }], false);
+
+    await click(getButton('Unstar starred.png'));
+    expect(imageActionMocks.setItemsStarred).toHaveBeenCalledTimes(2);
+
+    registeredCommands.get('gallery.toggleStarredOnly')?.();
+    expect(actionMocks.setStarredOnly).toHaveBeenCalledExactlyOnceWith(true);
   });
 
   it('renders same-name media independently and gives a video a static accessible poster', async () => {
@@ -866,7 +970,7 @@ describe('GalleryImageGrid range selection', () => {
   ];
 
   it('does not load names on render and lazily selects the backend-ordered mixed range on Shift-click', async () => {
-    mocks.fetchNames.mockResolvedValue({ items: orderedRefs, starredCount: 0, total: orderedRefs.length });
+    mocks.fetchNames.mockResolvedValue({ items: orderedRefs, total: orderedRefs.length });
     const gallery = createGallery({ items: rangeItems });
 
     await renderGallery(gallery);
@@ -888,13 +992,8 @@ describe('GalleryImageGrid range selection', () => {
       galleryView: gallery.galleryView,
       orderDir: gallery.settings.imageOrderDir,
       searchTerm: '',
-      starredFirst: gallery.settings.starredFirst,
     };
-    queryClient?.setQueryData(getNamesKey(filter), {
-      items: orderedRefs,
-      starredCount: 0,
-      total: orderedRefs.length,
-    });
+    queryClient?.setQueryData(getNamesKey(filter), { items: orderedRefs, total: orderedRefs.length });
 
     await renderGallery(gallery);
     await click(getButton('Select last.png for preview'), { shiftKey: true });
@@ -904,7 +1003,7 @@ describe('GalleryImageGrid range selection', () => {
   });
 
   it('ignores a names response after the filter identity changes', async () => {
-    let resolveNames: ((value: { items: GalleryItemRef[]; starredCount: number; total: number }) => void) | null = null;
+    let resolveNames: ((value: { items: GalleryItemRef[]; total: number }) => void) | null = null;
     mocks.fetchNames.mockReturnValue(
       new Promise((resolve) => {
         resolveNames = resolve;
@@ -915,13 +1014,13 @@ describe('GalleryImageGrid range selection', () => {
     await renderGallery(gallery);
     await click(getButton('Select last.png for preview'), { shiftKey: true });
     await renderGallery({ ...gallery, searchTerm: 'different filter' });
-    await interact(() => resolveNames?.({ items: orderedRefs, starredCount: 0, total: orderedRefs.length }));
+    await interact(() => resolveNames?.({ items: orderedRefs, total: orderedRefs.length }));
 
     expect(actionMocks.selectItemRange).not.toHaveBeenCalled();
   });
 
   it('ignores a names response after the account epoch changes', async () => {
-    let resolveNames: ((value: { items: GalleryItemRef[]; starredCount: number; total: number }) => void) | null = null;
+    let resolveNames: ((value: { items: GalleryItemRef[]; total: number }) => void) | null = null;
     mocks.fetchNames.mockReturnValue(
       new Promise((resolve) => {
         resolveNames = resolve;
@@ -931,7 +1030,7 @@ describe('GalleryImageGrid range selection', () => {
     await renderGallery(createGallery({ items: rangeItems }));
     await click(getButton('Select last.png for preview'), { shiftKey: true });
     accountLifecycle.activate('other-grid-user');
-    await interact(() => resolveNames?.({ items: orderedRefs, starredCount: 0, total: orderedRefs.length }));
+    await interact(() => resolveNames?.({ items: orderedRefs, total: orderedRefs.length }));
 
     expect(actionMocks.selectItemRange).not.toHaveBeenCalled();
   });
@@ -998,6 +1097,13 @@ describe('GalleryImageGrid upload drop zone', () => {
     );
 
     expect(host?.textContent).toContain('No items');
+    expect(host?.querySelector('[role="button"]')).toBeNull();
+  });
+
+  it('reports the starred empty state instead of the upload target under the starred-only listing', async () => {
+    await renderGallery(createGallery({ items: [], pendingPlaceholders: [], starredOnly: true }));
+
+    expect(host?.textContent).toContain('No starred items');
     expect(host?.querySelector('[role="button"]')).toBeNull();
   });
 
@@ -1074,24 +1180,26 @@ describe('GalleryImageGrid reveal requests', () => {
     expect(mocks.scrollToIndex).not.toHaveBeenCalled();
   });
 
-  it('keeps a reveal pending while its item has no row, then scrolls when one appears', async () => {
-    // A starred item under a collapsed Starred section is loaded but has no
-    // row to scroll to; consuming the reveal there would silently drop it.
+  it('reveals a starred item in the strip, and keeps the reveal pending while the strip is collapsed', async () => {
     const starred = createItem('image', 'starred.png', { starred: true });
+    setStrip([starred]);
     const gallery = createGallery({
-      items: [starred, createItem('image', 'regular.png')],
+      items: [createItem('image', 'regular.png')],
       selectedItemKey: 'image:starred.png',
       selectedItemKeys: ['image:starred.png'],
-      settings: SECTIONED_SETTINGS,
+      settings: { ...DENSE_SETTINGS, starredSectionCollapsed: true },
     });
 
     await renderGallery(gallery);
-    await click(getButton('Collapse starred items'));
     await interact(() => requestGalleryItemReveal('image:starred.png'));
+    // Loaded but row-less under the collapsed disclosure: consuming the
+    // reveal here would silently drop it.
     expect(mocks.scrollToIndex).not.toHaveBeenCalled();
 
-    await click(getButton('Expand starred items'));
+    await renderGallery({ ...gallery, settings: DENSE_SETTINGS });
     expect(mocks.scrollToIndex).toHaveBeenCalledTimes(1);
+    // Row 0 is the header; the strip row is next.
+    expect(mocks.scrollToIndex).toHaveBeenCalledWith(1);
   });
 
   /** A persisted off-page selection of deep.png with page-zero content loaded. */
@@ -1204,10 +1312,9 @@ describe('GalleryImageGrid virtualization', () => {
   });
 
   it('re-measures when the row model changes without a resize, and only then', async () => {
-    const gallery = createGallery({
-      items: [createItem('image', 'starred.png', { starred: true }), createItem('image', 'regular.png')],
-      settings: SECTIONED_SETTINGS,
-    });
+    const starred = createItem('image', 'starred.png', { starred: true });
+    setStrip([starred]);
+    const gallery = createGallery({ items: [createItem('image', 'regular.png')], settings: DENSE_SETTINGS });
 
     await renderGallery(gallery);
 
@@ -1215,7 +1322,7 @@ describe('GalleryImageGrid virtualization', () => {
     // explicit measure() the virtualizer would keep serving the expanded
     // offsets — the new rows would paint below a stale starred-sized hole.
     mocks.measure.mockClear();
-    await click(getButton('Collapse starred items'));
+    await renderGallery({ ...gallery, settings: { ...DENSE_SETTINGS, starredSectionCollapsed: true } });
     expect(mocks.measure).toHaveBeenCalled();
 
     // Swapping the item list (e.g. the media/assets view switch) is the same
@@ -1236,7 +1343,7 @@ describe('GalleryImageGrid virtualization', () => {
     await renderGallery(
       createGallery({
         items,
-        settings: SECTIONED_SETTINGS,
+        settings: DENSE_SETTINGS,
       })
     );
     await vi.waitFor(() => expect(actionMocks.loadMore).toHaveBeenCalled());

@@ -1,6 +1,5 @@
 import { unzipSync, zipSync } from 'fflate';
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -17,6 +16,7 @@ import {
   PROJECT_FILE_BOARD_ID,
 } from './mock-backend-fixtures.mjs';
 import { startMockBackend } from './mock-backend.mjs';
+import { killPreview, spawnPreview } from './preview-server.mjs';
 
 const root = resolve(import.meta.dirname, '..');
 const port = Number(process.env.INVOKEAI_PROJECT_FILE_PORT ?? 4180);
@@ -269,6 +269,9 @@ const runRoundTrip = async ({ backend, browser, contexts, errors, tempDirectory 
     .getByRole('button', { exact: true, name: `Switch project. Current project: ${sourceProjectName}` })
     .click();
   await exportPage.getByRole('menuitem', { exact: true, name: 'Export' }).click();
+  await exportPage.getByRole('dialog', { name: `Export ${sourceProjectName}`, exact: true }).waitFor();
+  assert.equal(await exportPage.getByRole('checkbox', { name: 'Include font files', exact: true }).isChecked(), false);
+  await exportPage.getByRole('button', { name: 'Export project', exact: true }).click();
 
   const download = await downloadPromise;
   const archivePath = join(tempDirectory, 'fixture-project-002.invk');
@@ -523,16 +526,16 @@ const withTimeout = async (run, durationMs, label) => {
 
 const getDefaultDependencies = () => ({
   createTempDirectory: () => mkdtemp(join(tmpdir(), 'invokeai-project-file-journey-')),
-  killProcessGroup: (pid, signal) => process.kill(-pid, signal),
+  killPreview,
   launchBrowser: ({ timeoutMs }) => chromium.launch({ headless: true, timeout: timeoutMs }),
   now: () => performance.now(),
   removeTempDirectory: (directory) => rm(directory, { force: true, recursive: true }),
   runRoundTrip,
   spawnPreview: () =>
-    spawn('pnpm', ['exec', 'vite', 'preview', '--host', '127.0.0.1', '--port', String(port), '--strictPort'], {
+    spawnPreview({
       cwd: root,
-      detached: true,
       env: { ...process.env, INVOKEAI_DEV_BACKEND: backendOrigin },
+      port,
       stdio: ['ignore', 'ignore', 'pipe'],
     }),
   startBackend: () => startMockBackend(backendPort, { profile: 'representative' }),
@@ -651,7 +654,7 @@ export const executeProjectFileJourney = async ({
       });
 
     try {
-      dependencies.killProcessGroup(preview.pid, 'SIGTERM');
+      dependencies.killPreview(preview.pid, 'SIGTERM');
     } catch (error) {
       if (error?.code !== 'ESRCH') {
         throw error;
@@ -664,7 +667,7 @@ export const executeProjectFileJourney = async ({
     }
 
     try {
-      dependencies.killProcessGroup(preview.pid, 'SIGKILL');
+      dependencies.killPreview(preview.pid, 'SIGKILL');
     } catch (error) {
       if (error?.code !== 'ESRCH') {
         throw error;

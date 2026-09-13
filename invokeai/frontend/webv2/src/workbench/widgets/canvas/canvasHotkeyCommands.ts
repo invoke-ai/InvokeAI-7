@@ -239,7 +239,7 @@ export const executeCanvasHotkeyCommand = (commandId: string, ctx: CanvasHotkeyC
       if (engine.interaction.get('activeTool') === 'shape') {
         // Repeat presses cycle the kind, like the marquee hotkey.
         const shape = engine.interaction.get('shapeOptions');
-        const order = ['rect', 'ellipse', 'triangle', 'star'] as const;
+        const order = ['rect', 'ellipse', 'triangle', 'star', 'polygon', 'freehand'] as const;
         const next = order[(order.indexOf(shape.kind) + 1) % order.length]!;
         engine.interaction.set('shapeOptions', { ...shape, kind: next });
       } else {

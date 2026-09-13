@@ -11,7 +11,13 @@
  * Zero React, zero import-time side effects.
  */
 
-import type { CanvasLayerSourceContract, ParametricShapeKind } from '@workbench/canvas-engine/contracts';
+import type {
+  CanvasLayerSourceContract,
+  CanvasTextFontRef,
+  CanvasTextFontStyle,
+  CanvasTextFontVariations,
+  ParametricShapeKind,
+} from '@workbench/canvas-engine/contracts';
 import type { SamInteractionState } from '@workbench/canvas-engine/samInteraction';
 import type { LayerTransform } from '@workbench/canvas-engine/transform/transformMath';
 import type { Rect, SelectionOp, ToolId, Vec2 } from '@workbench/canvas-engine/types';
@@ -97,19 +103,28 @@ export interface GradientStop {
  * foreground/background pair at gesture start — there is no second global
  * shape color; a selected shape's explicit fill/stroke is document state.
  */
+export type ShapeToolKind = ParametricShapeKind | 'polygon' | 'freehand';
+
+/** Where a drawn shape lands: pixels on the selected paint layer, or its own shape layer. */
+export type ShapeToolTarget = 'selected' | 'new';
+
 export interface ShapeToolOptions {
-  kind: ParametricShapeKind;
+  /** The box-parametric kinds drag out a rect; `polygon` places vertices, `freehand` traces a drag. */
+  kind: ShapeToolKind;
+  /** Falls back to a new shape layer whenever the selected layer cannot take pixels. */
+  target: ShapeToolTarget;
   fillEnabled: boolean;
   strokeEnabled: boolean;
   strokeWidth: number;
 }
 
-/** Sensible starting shape options: a filled rect, no stroke. */
+/** Sensible starting shape options: a filled rect, no stroke, drawn onto the selected paint layer. */
 export const DEFAULT_SHAPE_OPTIONS: ShapeToolOptions = {
   fillEnabled: true,
   kind: 'rect',
   strokeEnabled: false,
   strokeWidth: 8,
+  target: 'selected',
 };
 
 /** Largest shape stroke width (document px) the options bar clamps to. */
@@ -128,6 +143,25 @@ export interface GradientToolOptions {
   /** `pair` = the built-in FG→BG preset, resolved when the drag starts. */
   preset: 'pair' | 'custom';
   stops: GradientStop[];
+}
+
+/** The lasso tool's in-flight outline: a freehand drag, or a polygon being placed vertex by vertex. */
+export type LassoPreview =
+  | { kind: 'freehand'; points: readonly Vec2[] }
+  | {
+      kind: 'polygon';
+      points: readonly Vec2[];
+      cursor: Vec2 | null;
+      /** Once the polygon can close, a press this many screen px from the first vertex closes it; the overlay rings that radius. */
+      closeRadiusPx: number | null;
+      closeArmed: boolean;
+    };
+
+/** The gradient tool's in-flight drag: start → end in document space. */
+export interface GradientPreview {
+  kind: 'linear' | 'radial';
+  start: Vec2;
+  end: Vec2;
 }
 
 /** Sensible starting gradient options: the FG→BG preset, horizontal linear. */
@@ -151,6 +185,12 @@ export interface TextToolOptions {
   fontSize: number;
   /** CSS numeric weight (400/500/600/700). */
   fontWeight: number;
+  /** Stable custom-font identity, omitted for built-in font stacks. */
+  fontRef?: CanvasTextFontRef;
+  /** CSS style used by both the editing portal and Canvas rasterizer. Defaults to `normal`. */
+  fontStyle?: CanvasTextFontStyle;
+  /** Explicit OpenType variation coordinates for custom or variable faces. Defaults to `{}`. */
+  fontVariations?: CanvasTextFontVariations;
   /** Unitless line-height multiplier over `fontSize`. */
   lineHeight: number;
   align: 'left' | 'center' | 'right';
@@ -184,6 +224,8 @@ export const DEFAULT_TEXT_OPTIONS: TextToolOptions = {
   fontFamily: TEXT_FONT_FAMILIES[0]!.value,
   fontSize: 48,
   fontWeight: 400,
+  fontStyle: 'normal',
+  fontVariations: {},
   lineHeight: 1.2,
 };
 
@@ -477,11 +519,10 @@ export interface EngineStores {
   shapePreview: ScalarStore<{ rect: Rect; kind: ParametricShapeKind } | null>;
   /**
    * The live gradient-tool drag preview: the drag vector's start/end points in
-   * document space, drawn on the overlay as a direction indicator (a gradient
-   * necessarily fills the document, so only its ANGLE is previewed, not a
-   * bounding box). `null` when idle; cleared on commit/cancel.
+   * document space. The overlay draws a linear ramp as the vector and a radial
+   * one as the circle it will fill. `null` when idle; cleared on commit/cancel.
    */
-  gradientPreview: ScalarStore<{ start: Vec2; end: Vec2 } | null>;
+  gradientPreview: ScalarStore<GradientPreview | null>;
   /**
    * Whether a pixel selection currently exists. React reads it to enable the
    * fill/erase/invert/deselect controls and the engine gates selection hotkeys
@@ -498,12 +539,13 @@ export interface EngineStores {
   /** Core-only visual SAM interaction state; application session status remains outside the engine. */
   samInteraction: ScalarStore<SamInteractionState | null>;
   /**
-   * The in-progress lasso polygon (document-space points) during a lasso drag,
-   * or `null` when idle. The overlay renders it as a live dashed preview in
-   * place of a committed selection; cleared on commit/cancel. Like `bboxPreview`,
-   * it is a transient channel — no dispatch, no React subscriber.
+   * The in-progress lasso outline (document space), or `null` when idle. The
+   * overlay draws a freehand drag as a dashed outline; a polygon session also
+   * shows its placed vertices, the rubber band to the cursor, and whether the
+   * cursor sits on the first vertex (a click there closes). Cleared on
+   * commit/cancel. Like `bboxPreview`, a transient channel — no dispatch.
    */
-  lassoPreview: ScalarStore<readonly Vec2[] | null>;
+  lassoPreview: ScalarStore<LassoPreview | null>;
   /**
    * The live marquee-tool drag outline (document-space rect + shape), or `null`
    * when idle. Like `lassoPreview`, a transient overlay-only channel: the mask
@@ -613,6 +655,7 @@ const marqueeOptionsEqual = (a: MarqueeToolOptions, b: MarqueeToolOptions): bool
 
 const shapeOptionsEqual = (a: ShapeToolOptions, b: ShapeToolOptions): boolean =>
   a.kind === b.kind &&
+  a.target === b.target &&
   a.fillEnabled === b.fillEnabled &&
   a.strokeEnabled === b.strokeEnabled &&
   a.strokeWidth === b.strokeWidth;
@@ -643,11 +686,17 @@ const rectShapePreviewEqual = (
   );
 };
 
-const gradientPreviewEqual = (a: { start: Vec2; end: Vec2 } | null, b: { start: Vec2; end: Vec2 } | null): boolean => {
+const gradientPreviewEqual = (a: GradientPreview | null, b: GradientPreview | null): boolean => {
   if (a === null || b === null) {
     return a === b;
   }
-  return a.start.x === b.start.x && a.start.y === b.start.y && a.end.x === b.end.x && a.end.y === b.end.y;
+  return (
+    a.kind === b.kind &&
+    a.start.x === b.start.x &&
+    a.start.y === b.start.y &&
+    a.end.x === b.end.x &&
+    a.end.y === b.end.y
+  );
 };
 
 const bboxPreviewEqual = (a: Rect | null, b: Rect | null): boolean => {
@@ -671,10 +720,31 @@ const transformSessionEqual = (a: TransformSession | null, b: TransformSession |
   );
 };
 
+const textFontRefEqual = (a: CanvasTextFontRef | undefined, b: CanvasTextFontRef | undefined): boolean =>
+  a === b ||
+  (a !== undefined &&
+    b !== undefined &&
+    a.id === b.id &&
+    a.contentHash === b.contentHash &&
+    a.family === b.family &&
+    a.label === b.label);
+
+const textVariationsEqual = (
+  a: CanvasTextFontVariations | undefined,
+  b: CanvasTextFontVariations | undefined
+): boolean => {
+  const aKeys = Object.keys(a ?? {});
+  const bKeys = Object.keys(b ?? {});
+  return aKeys.length === bKeys.length && aKeys.every((key) => (a ?? {})[key] === (b ?? {})[key]);
+};
+
 const textOptionsEqual = (a: TextToolOptions, b: TextToolOptions): boolean =>
   a.fontFamily === b.fontFamily &&
   a.fontSize === b.fontSize &&
   a.fontWeight === b.fontWeight &&
+  textFontRefEqual(a.fontRef, b.fontRef) &&
+  a.fontStyle === b.fontStyle &&
+  textVariationsEqual(a.fontVariations, b.fontVariations) &&
   a.lineHeight === b.lineHeight &&
   a.align === b.align;
 
@@ -683,6 +753,9 @@ const textSourceEqual = (a: TextSource, b: TextSource): boolean =>
   a.fontFamily === b.fontFamily &&
   a.fontSize === b.fontSize &&
   a.fontWeight === b.fontWeight &&
+  textFontRefEqual(a.fontRef, b.fontRef) &&
+  (a.fontStyle ?? 'normal') === (b.fontStyle ?? 'normal') &&
+  textVariationsEqual(a.fontVariations ?? {}, b.fontVariations ?? {}) &&
   a.lineHeight === b.lineHeight &&
   a.align === b.align &&
   a.color === b.color;
@@ -726,9 +799,9 @@ export const createEngineStores = (initialTool: ToolId = 'view'): EngineStores =
     { ...DEFAULT_GRADIENT_OPTIONS, stops: DEFAULT_GRADIENT_OPTIONS.stops.map((s) => ({ ...s })) },
     gradientOptionsEqual
   ),
-  gradientPreview: createScalarStore<{ start: Vec2; end: Vec2 } | null>(null, gradientPreviewEqual),
+  gradientPreview: createScalarStore<GradientPreview | null>(null, gradientPreviewEqual),
   lassoOptions: createScalarStore<LassoToolOptions>({ ...DEFAULT_LASSO_OPTIONS }, lassoOptionsEqual),
-  lassoPreview: createScalarStore<readonly Vec2[] | null>(null),
+  lassoPreview: createScalarStore<LassoPreview | null>(null),
   marqueeOptions: createScalarStore<MarqueeToolOptions>({ ...DEFAULT_MARQUEE_OPTIONS }, marqueeOptionsEqual),
   marqueePreview: createScalarStore<{ rect: Rect; kind: 'rect' | 'ellipse' } | null>(null, rectShapePreviewEqual),
   rasterContentEpoch: createScalarStore<number>(0),

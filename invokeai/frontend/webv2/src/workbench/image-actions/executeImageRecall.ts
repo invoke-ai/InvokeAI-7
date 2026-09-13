@@ -1,5 +1,10 @@
 import type { GalleryImage } from '@features/gallery';
-import type { GenerateModelConfig, GenerateWidgetValues, VaeModelConfig } from '@features/generation/contracts';
+import type {
+  GenerateModelConfig,
+  GenerateReferenceImage,
+  GenerateWidgetValues,
+  VaeModelConfig,
+} from '@features/generation/contracts';
 import type { ModelConfig } from '@features/models';
 import type { WorkbenchCommands } from '@workbench/workbenchStore';
 
@@ -60,6 +65,29 @@ const loadImageMetadata = (imageName: string, owner: AccountScope): Promise<unkn
 
   imageMetadataRequests.set(imageName, { owner, promise: request });
   return request;
+};
+
+/**
+ * Drops reference images whose effective asset is no longer in the gallery,
+ * using one bulk lookup. Entries without an asset are dropped as well.
+ */
+export const filterAvailableReferenceImages = async (
+  referenceImages: GenerateReferenceImage[],
+  signal: AbortSignal
+): Promise<GenerateReferenceImage[]> => {
+  const effectiveNames = referenceImages.flatMap((referenceImage) =>
+    referenceImage.config.image ? [getEffectiveReferenceImage(referenceImage.config.image).image_name] : []
+  );
+  const availableNames = new Set(
+    (await galleryImages.resolveMany([...new Set(effectiveNames)], signal)).map(
+      (availableImage) => availableImage.imageName
+    )
+  );
+
+  return referenceImages.filter((referenceImage) => {
+    const referenceAsset = referenceImage.config.image;
+    return referenceAsset && availableNames.has(getEffectiveReferenceImage(referenceAsset).image_name);
+  });
 };
 
 export const getCurrentGenerateValues = ({
@@ -153,20 +181,8 @@ export const executeImageRecall = async ({
     }
 
     if (result.fields.includes('referenceImages')) {
-      const effectiveNames = result.values.referenceImages.flatMap((referenceImage) =>
-        referenceImage.config.image ? [getEffectiveReferenceImage(referenceImage.config.image).image_name] : []
-      );
-      const availableNames = new Set(
-        (await galleryImages.resolveMany([...new Set(effectiveNames)], owner.signal)).map(
-          (availableImage) => availableImage.imageName
-        )
-      );
-
+      result.values.referenceImages = await filterAvailableReferenceImages(result.values.referenceImages, owner.signal);
       assertAccountScopeCurrent(owner);
-      result.values.referenceImages = result.values.referenceImages.filter((referenceImage) => {
-        const referenceAsset = referenceImage.config.image;
-        return referenceAsset && availableNames.has(getEffectiveReferenceImage(referenceAsset).image_name);
-      });
 
       if (result.values.referenceImages.length === 0) {
         result.fields = result.fields.filter((field) => field !== 'referenceImages');

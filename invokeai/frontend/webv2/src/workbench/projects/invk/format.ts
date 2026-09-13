@@ -36,6 +36,13 @@ export const INVK_BOARD_ENTRY = 'board.json';
 export const INVK_IMAGES_PREFIX = 'images/';
 export const INVK_VIDEOS_PREFIX = 'videos/';
 
+export class FontImportQuotaError extends Error {
+  constructor() {
+    super('The font library has insufficient space for the embedded fonts.');
+    this.name = 'FontImportQuotaError';
+  }
+}
+
 export type InvkFormatReason =
   /** A ZIP, but the manifest is a canvas project written by the previous frontend. */
   | 'legacy-canvas-project'

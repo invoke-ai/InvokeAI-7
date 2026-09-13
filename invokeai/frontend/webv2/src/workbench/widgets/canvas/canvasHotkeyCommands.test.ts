@@ -434,11 +434,15 @@ describe('tool selection', () => {
     expect(engine.interaction.set).toHaveBeenCalledWith('shapeOptions', { fillEnabled: true, kind: 'ellipse' });
   });
 
-  it('shape cycles star back around to rect', () => {
-    const engine = run('canvas.tool.shape', {
+  it('shape cycles star on to polygon, and freehand back around to rect', () => {
+    const fromStar = run('canvas.tool.shape', {
       engine: createEngine({ activeTool: 'shape', shapeOptions: { kind: 'star' } as never }),
     });
-    expect(engine.interaction.set).toHaveBeenCalledWith('shapeOptions', { kind: 'rect' });
+    expect(fromStar.interaction.set).toHaveBeenCalledWith('shapeOptions', { kind: 'polygon' });
+    const fromFreehand = run('canvas.tool.shape', {
+      engine: createEngine({ activeTool: 'shape', shapeOptions: { kind: 'freehand' } as never }),
+    });
+    expect(fromFreehand.interaction.set).toHaveBeenCalledWith('shapeOptions', { kind: 'rect' });
   });
 });
 

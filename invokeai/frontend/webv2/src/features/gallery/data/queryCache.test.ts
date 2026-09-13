@@ -2,6 +2,7 @@ import type { GalleryItem, GalleryItemMutationResult, GalleryItemsPage } from '@
 import type { GalleryBoard } from '@features/gallery/core/types';
 import type { AccountScope } from '@platform/state/accountLifecycle';
 
+import { getImageCluster, registerImageCluster } from '@features/gallery/core/semanticImageQuery';
 import { accountLifecycle, captureAccountScope } from '@platform/state/accountLifecycle';
 import { InfiniteQueryObserver, QueryClient, type InfiniteData } from '@tanstack/react-query';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -20,6 +21,7 @@ import {
 } from './queries';
 import {
   getGalleryItemBoardIdsFromCaches,
+  getGalleryItemStarredFromCaches,
   invalidateGallery,
   invalidateGalleryItems,
   patchGalleryBoardCaches,
@@ -90,16 +92,8 @@ const createData = (pages: GalleryItem[][]): GalleryItemsData => {
   };
 };
 
-const getItemsKey = (boardId: string, owner: AccountScope = captureAccountScope(), starredFirst = false) =>
-  galleryKeys.items(
-    owner,
-    canonicalizeGalleryItemsFilter({
-      boardId,
-      galleryView: 'images',
-      searchTerm: '',
-      starredFirst,
-    })
-  );
+const getItemsKey = (boardId: string, owner: AccountScope = captureAccountScope()) =>
+  galleryKeys.items(owner, canonicalizeGalleryItemsFilter({ boardId, galleryView: 'images', searchTerm: '' }));
 
 const getData = (client: QueryClient, queryKey: ReturnType<typeof getItemsKey>): GalleryItemsData => {
   const data = client.getQueryData<GalleryItemsData>(queryKey);
@@ -156,10 +150,41 @@ describe('Gallery item cache patches', () => {
     expect(rolledBack.pages[0]?.items[1]).toBe(samePageUntouched);
   });
 
-  it('patches star state immediately when the active list sorts starred items first', () => {
+  it('drops a starred item from the unstarred listing window and decrements its total', () => {
     const client = createClient();
     const target = createItem('target.png');
-    const key = getItemsKey('board-1', captureAccountScope(), true);
+    const other = createItem('other.png');
+    const key = galleryKeys.items(
+      captureAccountScope(),
+      canonicalizeGalleryItemsFilter({ boardId: 'board-1', galleryView: 'images', searchTerm: '', starred: false })
+    );
+
+    client.setQueryData(key, createData([[target, other]]));
+    const rollback = patchGalleryItemCaches(client, {
+      kind: 'star',
+      result: getResult([{ kind: 'image', name: target.name }]),
+      starred: true,
+    });
+
+    expect(getData(client, key).pages[0]).toEqual({ items: [other], total: 1 });
+
+    rollback();
+
+    expect(getData(client, key).pages[0]).toEqual({ items: [target, other], total: 2 });
+  });
+
+  it('flips star state in place in a ranked window, which lists by similarity rather than by flag', () => {
+    const client = createClient();
+    const target = createItem('target.png');
+    const key = galleryKeys.items(
+      captureAccountScope(),
+      canonicalizeGalleryItemsFilter({
+        boardId: 'board-1',
+        galleryView: 'images',
+        searchTerm: '',
+        semanticQuery: { imageName: 'ref.png', kind: 'image' },
+      })
+    );
 
     client.setQueryData(key, createData([[target]]));
 
@@ -170,6 +195,24 @@ describe('Gallery item cache patches', () => {
     });
 
     expect(getData(client, key).pages[0]?.items[0]).toEqual({ ...target, starred: true });
+  });
+
+  it('prunes a deleted video from the active cluster filter, and restores it on rollback', () => {
+    // The cluster's member list is client-owned, so nothing on the server can
+    // reconcile it: a video deletion that skipped the prune would leave the
+    // cluster view counting a clip that no longer exists, with a trailing page
+    // cell that can never hydrate.
+    const client = createClient();
+    const clusterId = registerImageCluster(['image:kept.png', 'video:gone.mp4'], 'beaches');
+
+    const rollback = patchGalleryItemCaches(client, {
+      kind: 'delete',
+      result: getResult([{ kind: 'video', name: 'gone.mp4' }]),
+    });
+
+    expect(getImageCluster(clusterId)?.itemKeys).toEqual(['image:kept.png']);
+    rollback();
+    expect(getImageCluster(clusterId)?.itemKeys).toEqual(['image:kept.png', 'video:gone.mp4']);
   });
 
   it('deletes matching qualified items across pages and keeps each page total consistent', () => {
@@ -259,6 +302,110 @@ describe('Gallery item cache patches', () => {
 
     expect(after.pages.flatMap((page) => page.items)).toEqual([{ ...target, boardId: 'board-2' }, untouched]);
     expect(after.pages.map((page) => page.total)).toEqual([2]);
+  });
+
+  describe('starred strip entries', () => {
+    const getStripKey = (boardId: string) =>
+      galleryKeys.starredStrip(
+        captureAccountScope(),
+        canonicalizeGalleryItemsFilter({ boardId, galleryView: 'images', searchTerm: '', starred: true })
+      );
+    const getStrip = (client: QueryClient, key: ReturnType<typeof getStripKey>): GalleryItemsPage => {
+      const page = client.getQueryData<GalleryItemsPage>(key);
+
+      if (!page) {
+        throw new Error('missing strip');
+      }
+
+      return page;
+    };
+
+    it('drops an unstarred item and its count at once, and rolls the strip back', () => {
+      const client = createClient();
+      const target = createItem('target.png', 'board-1', true);
+      const other = createItem('other.png', 'board-1', true);
+      const key = getStripKey('board-1');
+      const before: GalleryItemsPage = { items: [target, other], total: 5 };
+
+      client.setQueryData(key, before);
+      const rollback = patchGalleryItemCaches(client, {
+        kind: 'star',
+        result: getResult([{ kind: 'image', name: target.name }]),
+        starred: false,
+      });
+
+      expect(getStrip(client, key)).toEqual({ items: [other], total: 4 });
+
+      rollback();
+
+      expect(getStrip(client, key)).toEqual(before);
+    });
+
+    it('leaves the strip to the refetch when an item is starred', () => {
+      const client = createClient();
+      const key = getStripKey('board-1');
+      const before: GalleryItemsPage = { items: [createItem('starred.png', 'board-1', true)], total: 1 };
+
+      client.setQueryData(key, before);
+      patchGalleryItemCaches(client, {
+        kind: 'star',
+        result: getResult([{ kind: 'image', name: 'newly-starred.png' }]),
+        starred: true,
+      });
+
+      expect(getStrip(client, key)).toEqual(before);
+    });
+
+    it('removes deleted items and items moved off the board, keeping ones moved within all-boards views', () => {
+      const client = createClient();
+      const deleted = createItem('deleted.png', 'board-1', true);
+      const moved = createItem('moved.png', 'board-1', true, 'video');
+      const kept = createItem('kept.png', 'board-1', true);
+      const boardKey = getStripKey('board-1');
+      const allKey = getStripKey(ALL_READABLE_BOARDS_ID);
+
+      client.setQueryData(boardKey, { items: [deleted, moved, kept], total: 3 });
+      client.setQueryData(allKey, { items: [deleted, moved, kept], total: 3 });
+      patchGalleryItemCaches(client, { kind: 'delete', result: getResult([{ kind: 'image', name: deleted.name }]) });
+      patchGalleryItemCaches(client, {
+        boardId: 'board-2',
+        kind: 'move',
+        result: getResult([{ kind: 'video', name: moved.name }]),
+      });
+
+      expect(getStrip(client, boardKey)).toEqual({ items: [kept], total: 1 });
+      expect(getStrip(client, allKey)).toEqual({ items: [{ ...moved, boardId: 'board-2' }, kept], total: 2 });
+    });
+
+    it('drops an unstarred item from a starred-only listing window too, not just the strip', () => {
+      const client = createClient();
+      const target = createItem('target.png', 'board-1', true);
+      const other = createItem('other.png', 'board-1', true);
+      const key = galleryKeys.items(
+        captureAccountScope(),
+        canonicalizeGalleryItemsFilter({ boardId: 'board-1', galleryView: 'images', searchTerm: '', starred: true })
+      );
+
+      client.setQueryData(key, createData([[target, other]]));
+      patchGalleryItemCaches(client, {
+        kind: 'star',
+        result: getResult([{ kind: 'image', name: target.name }]),
+        starred: false,
+      });
+
+      expect(getData(client, key).pages[0]).toEqual({ items: [other], total: 1 });
+    });
+
+    it('reads prior starred flags from the strip for rollback', () => {
+      const client = createClient();
+      const stripOnly = createItem('strip-only.png', 'board-1', true);
+
+      client.setQueryData(getStripKey('board-1'), { items: [stripOnly], total: 1 });
+
+      expect(getGalleryItemStarredFromCaches(client, [{ kind: 'image', name: stripOnly.name }])).toEqual(
+        new Map([['image:strip-only.png', true]])
+      );
+    });
   });
 
   it('does not let rollback clobber a later concurrent cache update', () => {
@@ -406,7 +553,6 @@ describe('Gallery window rebuild', () => {
     boardId: 'board-1',
     galleryView: 'images',
     searchTerm: '',
-    starredFirst: false,
   };
   const dateFilter: GalleryItemsFilter = { ...listFilter, boardId: 'by_date:2026-07-25' };
 
@@ -514,7 +660,6 @@ describe('Gallery window rebuild', () => {
 
     vi.mocked(listGalleryDateBoardItemNames).mockResolvedValue({
       items: createPageItems('fresh', 130).map(({ kind, name }) => ({ kind, name })),
-      starredCount: 0,
       total: 130,
     });
     vi.mocked(hydrateGalleryDateBoardItemPage).mockResolvedValue({
@@ -592,7 +737,7 @@ describe('Gallery window rebuild', () => {
     const { client, key } = setUpStaleWindow(dateFilter, [createVideos('stale-a'), createVideos('stale-b')]);
     const unsubscribe = observeItems(client, dateFilter);
 
-    vi.mocked(listGalleryDateBoardItemNames).mockResolvedValue({ items: [], starredCount: 0, total: 0 });
+    vi.mocked(listGalleryDateBoardItemNames).mockResolvedValue({ items: [], total: 0 });
     vi.mocked(hydrateGalleryDateBoardItemPage).mockResolvedValue({ items: [], total: 0 });
 
     await invalidateGalleryItems(client);

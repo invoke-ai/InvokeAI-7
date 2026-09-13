@@ -1,4 +1,5 @@
 /* oxlint-disable react-perf/jsx-no-new-object-as-prop */
+import type * as workbenchContext from '@workbench/WorkbenchContext';
 import type { WorkbenchInternalStore } from '@workbench/workbenchStore';
 
 import { ChakraProvider } from '@chakra-ui/react';
@@ -19,7 +20,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const storeRef = vi.hoisted(() => ({ current: null as WorkbenchInternalStore | null }));
 
-vi.mock('@workbench/WorkbenchContext', () => ({
+vi.mock('@workbench/WorkbenchContext', async (importOriginal) => ({
+  ...(await importOriginal<typeof workbenchContext>()),
   shallowEqual: Object.is,
   useActiveProjectSelector: (selector: (project: never) => unknown) => {
     const store = storeRef.current!;

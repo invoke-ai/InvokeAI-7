@@ -1,5 +1,6 @@
-/* oxlint-disable react-perf/jsx-no-new-object-as-prop */
 import type { RegisteredWidget, WidgetManifest, WidgetTypeId, WorkbenchRegion } from '@workbench/widgetContracts';
+/* oxlint-disable react-perf/jsx-no-new-object-as-prop */
+import type * as workbenchContext from '@workbench/WorkbenchContext';
 
 import { ChakraProvider } from '@chakra-ui/react';
 import { system } from '@theme/system';
@@ -29,7 +30,8 @@ vi.mock('@platform/react/draftRegistry', () => ({
   flushWorkbenchDrafts: floatMocks.flushWorkbenchDrafts,
 }));
 
-vi.mock('@workbench/WorkbenchContext', () => ({
+vi.mock('@workbench/WorkbenchContext', async (importOriginal) => ({
+  ...(await importOriginal<typeof workbenchContext>()),
   useActiveProjectSelector: (selector: (project: unknown) => unknown) =>
     selector({
       id: 'project-1',

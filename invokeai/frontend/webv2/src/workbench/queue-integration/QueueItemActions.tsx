@@ -1,116 +1,29 @@
 import type { QueueItemReadModel } from '@features/queue/contracts';
 
 import { Dialog, Icon, Portal } from '@chakra-ui/react';
-import { createGenerateFormValuesSelector } from '@features/generation/react';
-import { isSupportedGenerateModel } from '@features/generation/settings';
-import { ensureModelsLoaded, useModelsSelector } from '@features/models';
 import { extractGenerationMeta } from '@features/queue/contracts';
-import { useMountEffect } from '@platform/react/useMountEffect';
 import { Button, CloseButton } from '@platform/ui/Button';
 import { JsonPreview } from '@platform/ui/JsonPreview';
-import {
-  EMPTY_IMAGE_RECALL_CAPABILITIES,
-  getCurrentGenerateValues,
-  getImageRecallTitle,
-  RecallActionButtons,
-  type ImageRecallKind,
-} from '@workbench/image-actions';
+import { RecallActionButtons } from '@workbench/image-actions';
 import { useNotify } from '@workbench/useNotify';
-import { useOpenWorkbenchWidget } from '@workbench/useOpenWorkbenchWidget';
-import { useWidgetValuesSelector, useWorkbenchCommands } from '@workbench/WorkbenchContext';
 import { FileTextIcon, WandSparklesIcon } from 'lucide-react';
 import { useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { getQueueRecallCapabilities, getVideoQueueRecallCapabilities, planQueueRecall } from './queueRecall';
-import { useLocalRecallSnapshot } from './useLocalRecallSnapshot';
-
-const selectGenerateRecallValues = createGenerateFormValuesSelector();
+import { useQueueItemRecall } from './useQueueItemRecall';
 
 /**
  * Per-item actions for the RECENT details panel. Recall uses the shared
  * {@link RecallActionButtons} verbs (same look as the preview's metadata
- * panel): items this client submitted recall from the exact submission
- * snapshot; foreign items still offer prompts + the executed seed from the
- * session. "View JSON" opens the raw queue item in a dialog.
+ * panel) over {@link useQueueItemRecall}. "View JSON" opens the raw queue
+ * item in a dialog.
  */
 export const QueueItemActions = ({ item }: { item: QueueItemReadModel }) => {
   const { t } = useTranslation();
-  const { generation, widgets } = useWorkbenchCommands();
-  const openWidget = useOpenWorkbenchWidget();
   const notify = useNotify();
-  const recall = useLocalRecallSnapshot(item.origin);
-  const isRecallPending = recall === undefined;
-  const localGenerateValues = recall?.generateValues ?? null;
-  const videoSnapshot = recall?.videoValues ?? null;
-  const isVideoItem = recall?.sourceId === 'video';
   const [jsonOpen, setJsonOpen] = useState(false);
-  const generateValues = useWidgetValuesSelector('generate', selectGenerateRecallValues);
-  const models = useModelsSelector((snapshot) => snapshot.models);
-  const supportedModels = useMemo(() => models.filter(isSupportedGenerateModel), [models]);
   const meta = useMemo(() => extractGenerationMeta(item), [item]);
-  const capabilities = useMemo(
-    () =>
-      isRecallPending
-        ? EMPTY_IMAGE_RECALL_CAPABILITIES
-        : isVideoItem
-          ? getVideoQueueRecallCapabilities(videoSnapshot, meta)
-          : getQueueRecallCapabilities(localGenerateValues, meta),
-    [isRecallPending, isVideoItem, localGenerateValues, meta, videoSnapshot]
-  );
-
-  useMountEffect(() => {
-    void ensureModelsLoaded();
-  });
-
-  const onRecall = useCallback(
-    (kind: ImageRecallKind) => {
-      if (isRecallPending) {
-        return;
-      }
-      const current = getCurrentGenerateValues({ generateValues, supportedModels });
-      const plan = planQueueRecall(kind, { current, isVideoItem, meta, snapshot: localGenerateValues, videoSnapshot });
-
-      if (!plan) {
-        notify.info(
-          getImageRecallTitle(kind),
-          // The Generate copy names a missing Generate model, which is not why
-          // a video recall would come back empty.
-          t(isVideoItem ? 'widgets.queue.recallUnavailableForItem' : 'widgets.queue.recallUnavailable')
-        );
-        return;
-      }
-
-      // Both branches write to the ACTIVE project, not the project that owns the
-      // item: with the default `all` queue scope Recent lists other projects'
-      // items too, and "recall" means "load this into the panel I am looking at".
-      // `openWidget` follows the same rule, so the write and the reveal agree.
-      if (plan.target === 'video') {
-        widgets.patchValues('video', plan.patch);
-        openWidget('video', { preferredRegions: ['left'] });
-        notify.success(getImageRecallTitle(kind), t('widgets.queue.settingsRecalledIntoVideoDescription'));
-        return;
-      }
-
-      generation.setSettings(plan.values);
-      openWidget('generate', { preferredRegions: ['left'] });
-      notify.success(getImageRecallTitle(kind), t('widgets.queue.settingsRecalledDescription'));
-    },
-    [
-      generateValues,
-      generation,
-      isVideoItem,
-      isRecallPending,
-      localGenerateValues,
-      meta,
-      notify,
-      openWidget,
-      supportedModels,
-      t,
-      widgets,
-      videoSnapshot,
-    ]
-  );
+  const { capabilities, recall: onRecall } = useQueueItemRecall(item.origin, meta);
 
   const onSendToCanvas = useCallback(
     () => notify.info(t('widgets.queue.sendToCanvas'), t('widgets.queue.sendToCanvasComingSoon')),

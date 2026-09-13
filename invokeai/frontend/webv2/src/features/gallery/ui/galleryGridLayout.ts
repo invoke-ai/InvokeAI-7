@@ -75,7 +75,95 @@ export type GalleryGridSection = 'regular' | 'starred';
 export type GalleryGridRow =
   | { cells: GalleryGridCell[]; key: string; kind: 'cells'; section: GalleryGridSection }
   | { key: string; kind: 'starred-gap'; withSeparator: boolean }
-  | { itemCount: number; key: string; kind: 'starred-header' };
+  | { key: string; kind: 'starred-header'; shownCount: number; total: number };
+
+/** The starred strip shows at most this many rows at the current column count. */
+const GALLERY_STARRED_STRIP_MAX_ROWS = 3;
+
+const getGalleryStarredStripItems = (starredItems: readonly GalleryItem[], columnCount: number): GalleryItem[] =>
+  starredItems.slice(0, GALLERY_STARRED_STRIP_MAX_ROWS * columnCount);
+
+/**
+ * The keyboard and scroll index space: the shown strip cells first, then the
+ * listing. The grid is unstarred-only, so no item occurs twice.
+ */
+export interface GalleryGridNavigation {
+  items: GalleryItem[];
+  regularStart: number;
+}
+
+export const buildGalleryGridNavigation = ({
+  columnCount,
+  isStarredOpen,
+  items,
+  starredItems,
+}: {
+  columnCount: number;
+  isStarredOpen: boolean;
+  items: readonly GalleryItem[];
+  starredItems: readonly GalleryItem[];
+}): GalleryGridNavigation => {
+  const stripItems = isStarredOpen ? getGalleryStarredStripItems(starredItems, columnCount) : [];
+
+  return { items: [...stripItems, ...items], regularStart: stripItems.length };
+};
+
+/**
+ * Every item the grid has on hand — strip first, then the listing. The two
+ * refetch independently, so an item can sit on both sides for a moment.
+ */
+export const mergeGalleryLoadedItems = (
+  starredItems: readonly GalleryItem[],
+  items: readonly GalleryItem[]
+): GalleryItem[] => {
+  if (starredItems.length === 0) {
+    return items as GalleryItem[];
+  }
+
+  const seen = new Set(starredItems.map(toGalleryItemKey));
+
+  return [...starredItems, ...items.filter((item) => !seen.has(toGalleryItemKey(item)))];
+};
+
+export type GalleryGridNavDirection = 'down' | 'left' | 'right' | 'up';
+
+/**
+ * The next navigation index for an arrow key. Left/right walk the flat
+ * sequence; up/down move by visual row, and each section chunks its own rows,
+ * so a step across the seam keeps its column instead of drifting by the
+ * strip's partial last row. Clamped within each section's rows and to the
+ * ends of the sequence; a move that has nowhere to go returns `fromIndex`.
+ */
+export const getGalleryGridNavigationStep = (
+  { items, regularStart }: GalleryGridNavigation,
+  columnCount: number,
+  fromIndex: number,
+  direction: GalleryGridNavDirection
+): number => {
+  const lastIndex = items.length - 1;
+
+  if (direction === 'left' || direction === 'right') {
+    return Math.min(lastIndex, Math.max(0, fromIndex + (direction === 'right' ? 1 : -1)));
+  }
+
+  const stripRowCount = Math.ceil(regularStart / columnCount);
+  const listingCount = items.length - regularStart;
+  const listingRowCount = Math.ceil(listingCount / columnCount);
+  const sectionIndex = fromIndex < regularStart ? fromIndex : fromIndex - regularStart;
+  const row = (fromIndex < regularStart ? 0 : stripRowCount) + Math.floor(sectionIndex / columnCount);
+  const column = sectionIndex % columnCount;
+  const targetRow = row + (direction === 'down' ? 1 : -1);
+
+  if (targetRow < 0 || targetRow >= stripRowCount + listingRowCount) {
+    return fromIndex;
+  }
+
+  if (targetRow < stripRowCount) {
+    return Math.min(regularStart - 1, targetRow * columnCount + column);
+  }
+
+  return Math.min(lastIndex, regularStart + (targetRow - stripRowCount) * columnCount + column);
+};
 
 const getGalleryGridCellKey = (cell: GalleryGridCell): string =>
   cell.kind === 'placeholder' ? `placeholder:${cell.placeholder.id}` : toGalleryItemKey(cell.item);
@@ -108,9 +196,10 @@ const chunkGalleryCellsIntoRows = (
 };
 
 /**
- * The grid's row model in one pure pass: a starred-first listing gets a
- * disclosure section, a flat one chunks in order, and placeholders slot in
- * where their images will land.
+ * The grid's row model in one pure pass: the bounded starred strip gets a
+ * disclosure section above the listing, the listing chunks in order, and
+ * placeholders slot in where their images will land. Cell indices follow
+ * `buildGalleryGridNavigation`.
  */
 export const buildGalleryGridRows = ({
   columnCount,
@@ -118,35 +207,30 @@ export const buildGalleryGridRows = ({
   isStarredOpen,
   items,
   pendingPlaceholders,
-  starredFirst,
+  starredItems,
+  starredTotal,
 }: {
   columnCount: number;
   imageOrderDir: GalleryOrderDir;
   isStarredOpen: boolean;
-  items: GalleryItem[];
-  pendingPlaceholders: GalleryQueuePlaceholder[];
-  starredFirst: boolean;
+  items: readonly GalleryItem[];
+  pendingPlaceholders: readonly GalleryQueuePlaceholder[];
+  starredItems: readonly GalleryItem[];
+  starredTotal: number;
 }): GalleryGridRow[] => {
-  const regularItemCells: GalleryGridCell[] = [];
-  const regularItems: GalleryItem[] = [];
-  const starredItemCells: GalleryGridCell[] = [];
-
-  items.forEach((item, itemIndex) => {
-    const cell: GalleryGridCell = { item, itemIndex, kind: 'item' };
-
-    if (starredFirst && item.starred) {
-      starredItemCells.push(cell);
-    } else {
-      regularItemCells.push(cell);
-      regularItems.push(item);
-    }
-  });
-
+  const stripItems = getGalleryStarredStripItems(starredItems, columnCount);
+  const shownCount = isStarredOpen ? stripItems.length : 0;
+  const starredCells: GalleryGridCell[] = stripItems.map((item, itemIndex) => ({ item, itemIndex, kind: 'item' }));
+  const regularItemCells: GalleryGridCell[] = items.map((item, index) => ({
+    item,
+    itemIndex: shownCount + index,
+    kind: 'item',
+  }));
   const placeholderCells: GalleryGridCell[] = pendingPlaceholders.map((placeholder) => ({
     kind: 'placeholder',
     placeholder,
   }));
-  const placeholderInsertionIndex = getGalleryPlaceholderInsertionIndex(regularItems, imageOrderDir, starredFirst);
+  const placeholderInsertionIndex = getGalleryPlaceholderInsertionIndex(items.length, imageOrderDir);
   const regularCells = [
     ...regularItemCells.slice(0, placeholderInsertionIndex),
     ...placeholderCells,
@@ -154,11 +238,11 @@ export const buildGalleryGridRows = ({
   ];
   const rows: GalleryGridRow[] = [];
 
-  if (starredItemCells.length > 0) {
-    rows.push({ itemCount: starredItemCells.length, key: 'starred-header', kind: 'starred-header' });
+  if (stripItems.length > 0) {
+    rows.push({ key: 'starred-header', kind: 'starred-header', shownCount, total: starredTotal });
 
     if (isStarredOpen) {
-      rows.push(...chunkGalleryCellsIntoRows(starredItemCells, columnCount, 'starred'));
+      rows.push(...chunkGalleryCellsIntoRows(starredCells, columnCount, 'starred'));
     }
 
     if (regularCells.length > 0) {

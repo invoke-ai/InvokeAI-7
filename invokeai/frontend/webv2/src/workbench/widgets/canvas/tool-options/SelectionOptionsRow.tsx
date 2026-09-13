@@ -79,9 +79,38 @@ export const SelectionOpModeButtons = ({
 };
 
 /**
- * Commands over the live selection. Fill, erase and lift need an eligible
- * (unlocked, visible) paint layer — the same rule the engine enforces; invert
- * and deselect need only a selection.
+ * A selection command; while unavailable, its tooltip says what is missing
+ * instead of going quiet. The button is aria-disabled rather than natively
+ * disabled so it still emits the pointer events the tooltip needs and stays
+ * reachable by keyboard, where the reason reads as its description.
+ */
+const SelectionAction = ({
+  disabledReason,
+  label,
+  onClick,
+}: {
+  disabledReason: string | null;
+  label: string;
+  onClick: () => void;
+}) => {
+  const guarded = useCallback(() => {
+    if (disabledReason === null) {
+      onClick();
+    }
+  }, [disabledReason, onClick]);
+  return (
+    <Tooltip content={disabledReason ?? ''} disabled={disabledReason === null}>
+      <Button aria-disabled={disabledReason !== null} size="xs" variant="ghost" onClick={guarded}>
+        {label}
+      </Button>
+    </Tooltip>
+  );
+};
+
+/**
+ * Commands over the live selection. Select all always works; fill, erase and
+ * lift need an eligible (unlocked, visible) paint layer — the same rule the
+ * engine enforces; invert and deselect need only a selection.
  */
 export const SelectionActions = ({ engine }: ToolFormProps) => {
   const { t } = useTranslation();
@@ -90,29 +119,43 @@ export const SelectionActions = ({ engine }: ToolFormProps) => {
     const { document } = project.canvas;
     return isLeafPixelEditEligible(lookupDocumentLeaf(document, document.selectedLayerId ?? ''));
   });
+  const onSelectAll = useCallback(() => engine.selection.selectAll(), [engine]);
   const onFill = useCallback(() => engine.selection.fillSelection(), [engine]);
   const onErase = useCallback(() => engine.selection.eraseSelection(), [engine]);
   const onInvert = useCallback(() => engine.selection.invertSelection(), [engine]);
   const onDeselect = useCallback(() => engine.selection.deselect(), [engine]);
   const onLiftToLayer = useCallback(() => engine.selection.liftSelectionToLayer(), [engine]);
-  const canEdit = hasSelection && canPaintTarget;
+  const needsSelection = hasSelection ? null : t('widgets.canvas.toolOptions.selectionNeedsSelection');
+  const needsPaintTarget =
+    needsSelection ?? (canPaintTarget ? null : t('widgets.canvas.toolOptions.selectionNeedsPaintLayer'));
   return (
     <HStack flexWrap="wrap" gap="1">
-      <Button disabled={!canEdit} size="xs" variant="ghost" onClick={onFill}>
-        {t('widgets.canvas.toolOptions.fillSelection')}
-      </Button>
-      <Button disabled={!canEdit} size="xs" variant="ghost" onClick={onErase}>
-        {t('widgets.canvas.toolOptions.eraseSelection')}
-      </Button>
-      <Button disabled={!canEdit} size="xs" variant="ghost" onClick={onLiftToLayer}>
-        {t('widgets.canvas.toolOptions.liftSelectionToLayer')}
-      </Button>
-      <Button disabled={!hasSelection} size="xs" variant="ghost" onClick={onInvert}>
-        {t('widgets.canvas.toolOptions.invertSelection')}
-      </Button>
-      <Button disabled={!hasSelection} size="xs" variant="ghost" onClick={onDeselect}>
-        {t('widgets.canvas.toolOptions.deselect')}
-      </Button>
+      <SelectionAction disabledReason={null} label={t('widgets.canvas.toolOptions.selectAll')} onClick={onSelectAll} />
+      <SelectionAction
+        disabledReason={needsPaintTarget}
+        label={t('widgets.canvas.toolOptions.fillSelection')}
+        onClick={onFill}
+      />
+      <SelectionAction
+        disabledReason={needsPaintTarget}
+        label={t('widgets.canvas.toolOptions.eraseSelection')}
+        onClick={onErase}
+      />
+      <SelectionAction
+        disabledReason={needsPaintTarget}
+        label={t('widgets.canvas.toolOptions.liftSelectionToLayer')}
+        onClick={onLiftToLayer}
+      />
+      <SelectionAction
+        disabledReason={needsSelection}
+        label={t('widgets.canvas.toolOptions.invertSelection')}
+        onClick={onInvert}
+      />
+      <SelectionAction
+        disabledReason={needsSelection}
+        label={t('widgets.canvas.toolOptions.deselect')}
+        onClick={onDeselect}
+      />
     </HStack>
   );
 };

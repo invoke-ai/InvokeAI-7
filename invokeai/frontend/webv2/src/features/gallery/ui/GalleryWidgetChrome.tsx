@@ -12,7 +12,6 @@ import { useTranslation } from 'react-i18next';
 import type { GalleryWidgetProps } from './GalleryUiContext';
 
 import { BoardCover, BoardCoverIcon } from './GalleryBoardCover';
-import { GallerySettingsMenu } from './GallerySettingsMenu';
 import { getGallerySelectedBoardId } from './galleryStateView';
 import { useGalleryUi } from './GalleryUiContext';
 
@@ -83,16 +82,6 @@ export const GalleryWidgetLabel = ({ region }: GalleryChromeProps) => {
         <MiddleTruncate fontWeight="600" minW="0" text={boardName} />
         <Icon as={isCollapsed ? ChevronsUpDownIcon : ChevronsDownUpIcon} boxSize="3" color="fg.subtle" flexShrink={0} />
       </Button>
-    </HStack>
-  );
-};
-
-export const GalleryWidgetHeaderActions = (_props: GalleryChromeProps) => {
-  const { gallery, settings } = useGalleryChromeBoards();
-
-  return (
-    <HStack gap="0.5">
-      <GallerySettingsMenu settings={settings} onUpdateSettings={gallery.updateSettings} />
     </HStack>
   );
 };

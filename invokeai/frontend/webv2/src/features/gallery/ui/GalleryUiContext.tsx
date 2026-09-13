@@ -65,9 +65,10 @@ export interface GalleryCommandsPort {
   setPage(page: number): void;
   setPageInfo(totalImages: number): void;
   setSearchTerm(searchTerm: string): void;
+  setStarredOnly(starredOnly: boolean): void;
   setView(view: GalleryView): void;
   toggleItemSelection(item: GalleryItem, nextPrimaryItem: GalleryItem | null): void;
-  updateSettings(settings: Partial<Omit<GallerySettings, 'starredFirst'>>): void;
+  updateSettings(settings: Partial<GallerySettings>): void;
 }
 
 export interface GalleryNotificationsPort {

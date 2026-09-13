@@ -439,7 +439,7 @@ describe('listGalleryItems', () => {
       orderDir: 'ASC',
       searchTerm: '  summer clip  ',
       signal: controller.signal,
-      starredFirst: true,
+      starred: true,
     });
 
     const [url, init] = mocks.apiFetchJson.mock.calls[0] as [string, RequestInit];
@@ -454,7 +454,9 @@ describe('listGalleryItems', () => {
     expect(params.get('limit')).toBe('17');
     expect(params.get('offset')).toBe('34');
     expect(params.get('order_dir')).toBe('ASC');
-    expect(params.get('starred_first')).toBe('true');
+    expect(params.get('starred')).toBe('true');
+    // The backend defaults to starred-first; the grid must pin it off.
+    expect(params.get('starred_first')).toBe('false');
     expect(params.get('search_term')).toBe('summer clip');
     expect(init.signal).toBe(controller.signal);
   });
@@ -549,6 +551,50 @@ describe('mixed gallery item details', () => {
       width: 1280,
     });
     expect(mocks.apiFetchJson).toHaveBeenCalledWith('/api/v1/videos/i/folder%2Fclip.mp4', { signal: undefined });
+  });
+
+  it('carries the media-origin marker so a reference needs no follow-up metadata fetch', async () => {
+    mocks.apiFetchJson.mockResolvedValue({
+      board_id: null,
+      created_at: '2026-07-20T10:00:00.000Z',
+      duration: 4.5,
+      fps: 24,
+      height: 360,
+      is_intermediate: false,
+      media_origin: 'audio_upload',
+      starred: false,
+      thumbnail_url: '/thumbnails/song.webp',
+      video_category: 'user',
+      video_name: 'song.mp4',
+      video_url: '/videos/song.mp4',
+      width: 640,
+    });
+
+    const item = await galleryItems.resolve({ kind: 'video', name: 'song.mp4' });
+
+    expect(item).toMatchObject({ kind: 'video', mediaOrigin: 'audio_upload' });
+  });
+
+  it('leaves the marker off a video the server did not mark', async () => {
+    mocks.apiFetchJson.mockResolvedValue({
+      board_id: null,
+      created_at: '2026-07-20T10:00:00.000Z',
+      duration: 4.5,
+      fps: 24,
+      height: 360,
+      is_intermediate: false,
+      media_origin: null,
+      starred: false,
+      thumbnail_url: '/thumbnails/clip.webp',
+      video_category: 'user',
+      video_name: 'clip.mp4',
+      video_url: '/videos/clip.mp4',
+      width: 640,
+    });
+
+    const item = await galleryItems.resolve({ kind: 'video', name: 'clip.mp4' });
+
+    expect(item && 'mediaOrigin' in item).toBe(false);
   });
 
   it('fetches focused video metadata and workflow details', async () => {

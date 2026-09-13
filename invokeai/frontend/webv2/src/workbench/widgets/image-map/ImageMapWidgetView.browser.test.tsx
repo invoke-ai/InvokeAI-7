@@ -313,8 +313,8 @@ describe('Image Map indexing activity', () => {
         modelName: null,
         pointCount: 2,
         points: [
-          { cluster: 0, imageName: 'a.png', x: 0, y: 0 },
-          { cluster: 0, imageName: 'b.png', x: 1, y: 1 },
+          { cluster: 0, item: { kind: 'image', name: 'a.png' }, key: 'image:a.png', x: 0, y: 0 },
+          { cluster: 0, item: { kind: 'image', name: 'b.png' }, key: 'image:b.png', x: 1, y: 1 },
         ],
         stale: false,
         state: 'ready',
@@ -358,7 +358,7 @@ describe('Image Map indexing activity', () => {
     expect(host?.querySelector('[data-testid="plot"]')).not.toBeNull();
     expect(host?.textContent).toContain('indexing 1,204/18,050');
     // The map stays: the badge must not replace it.
-    expect(host?.textContent).not.toContain('Indexing images');
+    expect(host?.textContent).not.toContain('Indexing gallery');
   });
 
   it('names the labels in the badge, since they vanish while the vocabulary rebuilds', async () => {

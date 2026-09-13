@@ -27,7 +27,6 @@ const filter = {
   galleryView: 'images' as const,
   orderDir: 'DESC' as const,
   searchTerm: '',
-  starredFirst: false,
 };
 
 const createBackendItem = (name: string, createdAt: string): GalleryItem => ({
@@ -45,7 +44,7 @@ const createBackendItem = (name: string, createdAt: string): GalleryItem => ({
 });
 
 describe('mergeGalleryItemWindow', () => {
-  it('deduplicates by qualified key and mirrors server starred/time/kind/name ordering', () => {
+  it('deduplicates by qualified key and mirrors server time/kind/name ordering', () => {
     const image = {
       boardId: 'none',
       category: 'general',
@@ -68,7 +67,7 @@ describe('mergeGalleryItemWindow', () => {
     const recent = asGenerated(
       createImage(99, {
         imageName: 'recent',
-        queuedAt: image.createdAt,
+        queuedAt: '2026-07-30T12:00:01.000Z',
         starred: true,
       })
     );
@@ -76,7 +75,7 @@ describe('mergeGalleryItemWindow', () => {
     expect(
       mergeGalleryItemWindow({
         backendItems: [image, video, image],
-        filter: { ...filter, starredFirst: true },
+        filter,
         maxRows: 60,
         recentImages: [recent],
       }).map(({ kind, name }) => `${kind}:${name}`)
@@ -122,6 +121,32 @@ describe('mergeGalleryItemWindow', () => {
         recentImages: [asGenerated(createImage(1))],
       }).map((item) => item.name)
     ).toEqual(['oldest.png', 'newest.png', 'middle.png']);
+  });
+
+  it('overlays recents onto the unstarred listing only, and never a recent that has since been starred', () => {
+    const backend = createBackendItem('backend.png', '2026-01-01T00:00:00.000Z');
+    const fresh = asGenerated(createImage(1));
+    const starredSince = asGenerated(createImage(2, { starred: true }));
+
+    expect(
+      mergeGalleryItemWindow({
+        backendItems: [backend],
+        filter: { ...filter, starred: false },
+        maxRows: 60,
+        recentImages: [fresh, starredSince],
+      }).map((item) => item.name)
+    ).toEqual([fresh.imageName, backend.name]);
+
+    const starred = { ...createBackendItem('starred.png', '2026-01-01T00:00:00.000Z'), starred: true };
+
+    expect(
+      mergeGalleryItemWindow({
+        backendItems: [starred],
+        filter: { ...filter, starred: true },
+        maxRows: 60,
+        recentImages: [fresh],
+      })
+    ).toEqual([starred]);
   });
 
   it('places an overlaid recent by its instant, not by timestamp shape, against backend items', () => {

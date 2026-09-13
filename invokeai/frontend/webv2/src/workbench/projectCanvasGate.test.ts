@@ -13,14 +13,14 @@ describe('gateProjectCanvases', () => {
   });
 
   it('refuses a project whose live canvas is unsupported or invalid, keeping the raw document', () => {
-    const future = { canvas: { ...canvas, version: 4 }, id: 'p', name: 'P' };
+    const future = { canvas: { ...canvas, version: 5 }, id: 'p', name: 'P' };
     const broken = { canvas: { ...canvas, version: '2' }, id: 'p', name: 'P' };
 
     expect(gateProjectCanvases(future)).toMatchObject({
       projectId: 'p',
       projectName: 'P',
       raw: future,
-      refusal: { scope: 'state', status: 'unsupported-version', version: 4 },
+      refusal: { scope: 'state', status: 'unsupported-version', version: 5 },
       source: 'canvas',
     });
     expect(gateProjectCanvases(broken)).toMatchObject({

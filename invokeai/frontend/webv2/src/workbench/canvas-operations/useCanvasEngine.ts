@@ -1,5 +1,6 @@
 import type { CanvasEngine, ImageResolver } from '@workbench/canvas-engine/api';
 
+import { useFontRuntime } from '@features/fonts/react';
 import { galleryImageUrls } from '@features/gallery/utility';
 import { getModelsSnapshot } from '@features/models';
 import { createCanvasProjectMutationPort } from '@workbench/canvasProjectMutationPort';
@@ -59,6 +60,7 @@ export const createCanvasEngineResource = (projectId: string, deps: EngineDeps):
 
 /** Returns the active project's shared engine through a balanced registry lease. */
 export const useCanvasEngine = (): CanvasEngineHandle | null => {
+  const fonts = useFontRuntime();
   const store = useWorkbenchInternalStore();
   const { notifications } = useWorkbenchCommands();
   const projectId = useActiveProjectId();
@@ -77,10 +79,11 @@ export const useCanvasEngine = (): CanvasEngineHandle | null => {
         setSelectedLayerIds: (primaryId, selectedIds) =>
           publishLayerPanelSelection({ primaryId, projectId, selectedIds }),
         imageResolver: createImageResolver(),
+        fonts,
         mutationPort: createCanvasProjectMutationPort(store, projectId),
         reportError: notifications.reportError,
       }),
-    [notifications.reportError, projectId, store]
+    [fonts, notifications.reportError, projectId, store]
   );
 
   return useSyncExternalStore(resource.subscribe, resource.getSnapshot, resource.getSnapshot);

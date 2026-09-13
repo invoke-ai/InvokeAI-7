@@ -4,7 +4,6 @@ Base class for model loading in InvokeAI.
 """
 
 import time
-import weakref
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
 from logging import Logger
@@ -23,6 +22,7 @@ from invokeai.backend.model_manager.load.model_cache.cached_model.cached_model_w
 from invokeai.backend.model_manager.load.model_cache.model_cache import (
     MODEL_LOAD_LOCK,
     VRAM_MOVE_PASS_BYTES,
+    FirstUseClaim,
     ModelCache,
 )
 from invokeai.backend.model_manager.taxonomy import AnyModel, SubModelType
@@ -59,21 +59,85 @@ class LoadedModelWithoutConfig:
     do not have a state_dict, in which case this value will be None.
     """
 
-    def __init__(self, cache_record: CacheRecord, cache: ModelCache):
+    def __init__(self, cache_record: CacheRecord, cache: ModelCache, first_use_claim: Optional[FirstUseClaim] = None):
         self._cache_record = cache_record
         self._cache = cache
-        release_first_use_grace = getattr(cache, "release_first_use_grace", None)
-        if cache_record.awaiting_first_use and release_first_use_grace is not None:
-            # This handle owns the grace: put()'s sweep keeps a grace whose holder is alive
-            # (an in-flight multi-model load) and clears one whose holder is gone. The finalizer
-            # carries its own ref so the release can tell whether the grace has since been
-            # re-registered to a newer, still-live handle.
-            holder_ref = weakref.ref(self)
-            cache_record.grace_holder = holder_ref
-            self._first_use_finalizer = finalize(self, release_first_use_grace, cache_record, holder_ref)
-            self._first_use_finalizer.atexit = False
-        else:
+        # The record must stay shielded from the eviction sweeps until this wrapper's first lock:
+        # without that, a sweep racing the window — a peer's budget reconcile, another model's
+        # make-room, or the cache's shutdown() — evicts the record out from under the wrapper,
+        # detaching it from the cache's RAM accounting and (for shared weights) from store
+        # ownership while its tensors live on, so a peer's reload of the key mints a duplicate
+        # canonical copy the budget counts once.
+        #
+        # `first_use_claim` is that shield, and callers should always supply one: it was armed by
+        # ModelCache.get_with_first_use_claim() under the same lock acquisition as the lookup, so
+        # the window is covered from its very first instruction. Adopting it is just holding the
+        # reference — its hold is released on the first lock (_end_first_use_window) or, if this
+        # wrapper is dropped un-entered, by the claim's own finalizer when it dies with us.
+        self._first_use_claim = first_use_claim
+        # Fallback for a record obtained through plain get() (or by a caller that could not get a
+        # claim): arm the hold here instead. The instructions between that get() returning and
+        # this constructor are then unshielded — an eviction landing exactly there is the
+        # pre-existing, tolerated issue-7513 detached path, and register_first_use_hold declines
+        # to arm on a record that already lost that race. The finalizer below also covers the
+        # put()-set admission grace for a record whose hold could not be armed (no deferred worker
+        # running). Both release routes quote the epoch the hold was armed under, so a hold the
+        # cache's dead-worker recovery already zeroed is never re-released against a successor.
+        release_grace = getattr(cache, "release_first_use_grace", None)
+        register_hold = getattr(cache, "register_first_use_hold", None)
+        self._first_use_hold_epoch: Optional[int] = (
+            register_hold(cache_record)
+            if first_use_claim is None and register_hold is not None and release_grace is not None
+            else None
+        )
+        self._first_use_finalizer = None
+        try:
+            if (
+                first_use_claim is None
+                and release_grace is not None
+                and (self._first_use_hold_epoch is not None or cache_record.awaiting_first_use)
+            ):
+                self._first_use_finalizer = finalize(
+                    self,
+                    release_grace,
+                    cache_record,
+                    self._first_use_hold_epoch is not None,
+                    self._first_use_hold_epoch if self._first_use_hold_epoch is not None else 0,
+                )
+                self._first_use_finalizer.atexit = False
+        except BaseException:
+            # finalize() allocates, and the cache runs at the RAM ceiling by design. A hold armed
+            # above with no finalizer to carry its release would shield its record from every
+            # eviction path — shutdown()'s sweep included — for the life of the process. Detach
+            # first: a failure AFTER the finalizer was registered would otherwise leave it live,
+            # and its later release would double-decrement, consuming a hold that by then may
+            # belong to a different holder.
+            if self._first_use_finalizer is not None:
+                self._first_use_finalizer.detach()
+                self._first_use_finalizer = None
+            if self._first_use_hold_epoch is not None:
+                release_hold = getattr(cache, "release_first_use_hold", None)
+                if release_hold is not None:
+                    release_hold(cache_record, self._first_use_hold_epoch)
+                self._first_use_hold_epoch = None
+            raise
+
+    def _end_first_use_window(self) -> None:
+        """This wrapper's first lock ended its get()->lock() window: the record is now pinned by
+        its lock count, so drop the abandonment finalizer and release the first-use hold. Runs at
+        most once — later re-entries of the context manager find nothing to release."""
+        if self._first_use_claim is not None:
+            claim, self._first_use_claim = self._first_use_claim, None
+            claim.release()
+        if self._first_use_finalizer is not None:
+            self._first_use_finalizer.detach()
             self._first_use_finalizer = None
+        if self._first_use_hold_epoch is not None:
+            hold_epoch = self._first_use_hold_epoch
+            self._first_use_hold_epoch = None
+            release_hold = getattr(self._cache, "release_first_use_hold", None)
+            if release_hold is not None:
+                release_hold(self._cache_record, hold_epoch)
 
     def _lock_paced(self, working_mem_bytes: Optional[int]) -> None:
         """Move the model into VRAM in bounded passes, yielding the global load lock between them.
@@ -118,8 +182,7 @@ class LoadedModelWithoutConfig:
 
     def __enter__(self) -> AnyModel:
         self._lock_paced(None)
-        if self._first_use_finalizer is not None:
-            self._first_use_finalizer.detach()
+        self._end_first_use_window()
         try:
             self.repair_required_tensors_on_device()
             return self.model
@@ -140,8 +203,7 @@ class LoadedModelWithoutConfig:
             model.
         """
         self._lock_paced(working_mem_bytes)
-        if self._first_use_finalizer is not None:
-            self._first_use_finalizer.detach()
+        self._end_first_use_window()
         try:
             self.repair_required_tensors_on_device()
             yield (self._cache_record.cached_model.get_cpu_state_dict(), self._cache_record.cached_model.model)
@@ -157,8 +219,7 @@ class LoadedModelWithoutConfig:
     def model_in_ram(self) -> Generator[AnyModel, None, None]:
         """Pin the model's cache record in RAM without moving the model to its execution device."""
         self._cache.lock_in_ram(self._cache_record)
-        if self._first_use_finalizer is not None:
-            self._first_use_finalizer.detach()
+        self._end_first_use_window()
         try:
             yield self.model
         finally:
@@ -210,8 +271,14 @@ class LoadedModelWithoutConfig:
 class LoadedModel(LoadedModelWithoutConfig):
     """Context manager object that mediates transfer from RAM<->VRAM."""
 
-    def __init__(self, config: Optional[AnyModelConfig], cache_record: CacheRecord, cache: ModelCache):
-        super().__init__(cache_record=cache_record, cache=cache)
+    def __init__(
+        self,
+        config: Optional[AnyModelConfig],
+        cache_record: CacheRecord,
+        cache: ModelCache,
+        first_use_claim: Optional[FirstUseClaim] = None,
+    ):
+        super().__init__(cache_record=cache_record, cache=cache, first_use_claim=first_use_claim)
         self.config = config
 
 

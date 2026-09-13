@@ -49,6 +49,38 @@ describe('rasterizeShapeSource — extent + sizing', () => {
   });
 });
 
+describe('rasterizeShapeSource — polygon', () => {
+  it('traces the stored vertices, rescaled into the stroke inset box', async () => {
+    const deps = makeDeps();
+    const surface = (
+      await rasterizeShapeSource(
+        rect({
+          fill: null,
+          height: 40,
+          kind: 'polygon',
+          points: [
+            { x: 0, y: 0 },
+            { x: 60, y: 0 },
+            { x: 30, y: 40 },
+          ],
+          stroke: '#0000ff',
+          strokeWidth: 8,
+          width: 60,
+        }),
+        deps
+      )
+    ).surface as StubRasterSurface;
+    // Inset 4px per side: the 60×40 box becomes 52×32 at (4, 4).
+    expect(surface.callLog.find((e) => e.op === 'moveTo')?.args).toEqual([4, 4]);
+    expect(surface.callLog.filter((e) => e.op === 'lineTo').map((e) => e.args)).toEqual([
+      [56, 4],
+      [30, 36],
+    ]);
+    expect(ops(surface)).toContain('closePath');
+    expect(ops(surface)).toContain('stroke');
+  });
+});
+
 describe('rasterizeShapeSource — rect', () => {
   it('fills a rect covering the full extent when fill is set and no stroke', async () => {
     const deps = makeDeps();

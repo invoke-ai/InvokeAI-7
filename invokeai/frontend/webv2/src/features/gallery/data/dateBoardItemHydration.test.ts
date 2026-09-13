@@ -77,18 +77,19 @@ describe('Gallery item names and date hydration', () => {
         galleryView: 'images',
         orderDir: 'DESC',
         searchTerm: '',
-        starredFirst: true,
+        starred: true,
       })
     ).resolves.toEqual({
       items: [
         { kind: 'video', name: 'clip.mp4' },
         { kind: 'image', name: 'still.png' },
       ],
-      starredCount: 1,
       total: 2,
     });
 
     expect(mocks.apiFetchJson.mock.calls[0]?.[0]).toContain('/by_date/2026-07-30/item_names?');
+    expect(mocks.apiFetchJson.mock.calls[0]?.[0]).toContain('starred=true');
+    expect(mocks.apiFetchJson.mock.calls[0]?.[0]).toContain('starred_first=false');
     expect(mocks.apiFetchJson.mock.calls[0]?.[0]).not.toContain('image_names');
   });
 
@@ -102,7 +103,6 @@ describe('Gallery item names and date hydration', () => {
       galleryView: 'images',
       orderDir: 'DESC',
       searchTerm: ' portrait ',
-      starredFirst: false,
     });
 
     const url = mocks.apiFetchJson.mock.calls[0]?.[0] as string;

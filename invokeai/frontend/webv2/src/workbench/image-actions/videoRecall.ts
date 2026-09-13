@@ -282,7 +282,7 @@ export const deriveAcceleratorRecallState = (
 ): Pick<VideoWidgetValues, 'acceleratorEnabled' | 'acceleratorLoraKeys'> => {
   // The H3 task variant lives on the model itself (a single-file transformer
   // checkpoint carries its own variant), and the two tasks have DIFFERENT
-  // accelerators (fl2va Turbo at 6 steps, ref2v Turbo at 4). Callers must
+  // accelerators (fl2va Turbo at 6 or 8 steps, ref2v Turbo at 4 or 8). Callers must
   // promote a legacy transformer override onto `model` before deriving this.
   const accelerator = getVideoModelPolicy(model, settings).ui.accelerator;
   const recalled = accelerator

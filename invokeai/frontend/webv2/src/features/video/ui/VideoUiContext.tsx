@@ -1,3 +1,4 @@
+import type { GalleryVideoItem } from '@features/gallery';
 import type { VideoWidgetValues } from '@features/video/core/types';
 import type { ReactNode } from 'react';
 
@@ -15,6 +16,13 @@ export interface VideoUiAdapter {
    */
   getUploadBoardId(): string;
   patchValues(values: Partial<VideoWidgetValues>, origin?: 'user' | 'system'): void;
+  /**
+   * Show `item` in the Preview widget and loop the given window of it — how the
+   * panel's play buttons let a trim be judged before it is generated against.
+   * Selecting the item is part of the gesture: Preview shows the gallery
+   * selection, and the panel has no other way to put a clip in front of it.
+   */
+  playVideoSpanInPreview(span: { endSeconds: number; item: GalleryVideoItem; startSeconds: number }): void;
   projectId: string;
   rawValues: Record<string, unknown>;
   reportError(message: string): void;
@@ -25,7 +33,7 @@ export interface VideoUiAdapter {
 /** The adapter's callbacks, which are stable for the lifetime of a project. */
 export type VideoUiActions = Pick<
   VideoUiAdapter,
-  'getUploadBoardId' | 'patchValues' | 'reportError' | 'touchGalleryImages'
+  'getUploadBoardId' | 'patchValues' | 'playVideoSpanInPreview' | 'reportError' | 'touchGalleryImages'
 >;
 
 const VideoUiContext = createContext<VideoUiAdapter | null>(null);
@@ -38,10 +46,10 @@ const VideoUiContext = createContext<VideoUiAdapter | null>(null);
 const VideoUiActionsContext = createContext<VideoUiActions | null>(null);
 
 export const VideoUiProvider = ({ adapter, children }: { adapter: VideoUiAdapter; children: ReactNode }) => {
-  const { getUploadBoardId, patchValues, reportError, touchGalleryImages } = adapter;
+  const { getUploadBoardId, patchValues, playVideoSpanInPreview, reportError, touchGalleryImages } = adapter;
   const actions = useMemo<VideoUiActions>(
-    () => ({ getUploadBoardId, patchValues, reportError, touchGalleryImages }),
-    [getUploadBoardId, patchValues, reportError, touchGalleryImages]
+    () => ({ getUploadBoardId, patchValues, playVideoSpanInPreview, reportError, touchGalleryImages }),
+    [getUploadBoardId, patchValues, playVideoSpanInPreview, reportError, touchGalleryImages]
   );
 
   return (

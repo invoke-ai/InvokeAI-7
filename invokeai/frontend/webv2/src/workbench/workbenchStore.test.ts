@@ -12,6 +12,9 @@ import { getProjectWidgetValues } from './widgetState';
 import { createInitialWorkbenchState } from './workbenchState';
 import { createWorkbenchStore } from './workbenchStore';
 
+const overlays = vi.hoisted(() => ({ closeWidgetOverlays: vi.fn() }));
+vi.mock('@platform/ui/widgetOverlayRegistry', () => overlays);
+
 const paintLayer = (id: string): CanvasLayerContract => ({
   blendMode: 'normal',
   id,
@@ -311,6 +314,31 @@ describe('createWorkbenchStore', () => {
     await activation;
 
     expect(store.getSnapshot().activeProject.layout.presetId).toBe('edit');
+  });
+
+  it('closes widget overlays only for changes that hide or replace a shown widget', () => {
+    const store = createWorkbenchStore();
+    overlays.closeWidgetOverlays.mockClear();
+    const project = store.getSnapshot().activeProject;
+    const [region, regionState] = Object.entries(project.widgetRegions).find(
+      ([, state]) => state.instanceIds.length > 1
+    )!;
+    const other = regionState.instanceIds.find((id) => id !== regionState.activeInstanceId)!;
+
+    store.commands.projects.rename(project.id, 'Renamed');
+    expect(overlays.closeWidgetOverlays).not.toHaveBeenCalled();
+
+    store.commands.widgets.select({ projectId: project.id, region: region as never, widgetId: other });
+    expect(overlays.closeWidgetOverlays).toHaveBeenCalledTimes(1);
+
+    store.commands.widgets.select({ projectId: project.id, region: region as never, widgetId: other });
+    expect(overlays.closeWidgetOverlays).toHaveBeenCalledTimes(1);
+
+    store.commands.layout.applyPreset('edit');
+    expect(overlays.closeWidgetOverlays).toHaveBeenCalledTimes(2);
+
+    store.commands.projects.create();
+    expect(overlays.closeWidgetOverlays).toHaveBeenCalledTimes(3);
   });
 
   it('notifies subscribers once for reducer changes and not for no-op reducer results', () => {

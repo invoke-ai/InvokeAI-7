@@ -557,7 +557,7 @@ describe('compileVideoGraph — MiniMax H3 Ref2VA', () => {
     );
   });
 
-  it('reference-extend: only the linked tail window is anchored to the clip end', () => {
+  it('a window ending in the tail anchors BOTH bounds to the clip end', () => {
     const linked = (clip: Record<string, unknown>, flag = true) => ({
       clip: { fps: 24, height: 480, numFrames: 402, video_name: 'long.mp4', width: 832, ...clip },
       conditioning: 'video_audio' as const,
@@ -570,9 +570,15 @@ describe('compileVideoGraph — MiniMax H3 Ref2VA', () => {
         'minimax_h3_video_reference'
       ).start_frame;
 
-    // A user's own reference keeps an absolute start: their trim is a position,
-    // not a length, and re-anchoring it would drift with the estimate.
-    expect(startOf(linked({ endFrame: 400, startFrame: 260 }, false))).toBe(260);
+    // Both bounds convert together, flagged or not. Mixing an absolute start
+    // with a tail-relative end splits the window across two index spaces: the
+    // backend then extracts `length + (real - estimate)` frames, or -- on a
+    // window short enough for the error to swallow -- resolves the end BEFORE
+    // the start and fails the generation.
+    expect(startOf(linked({ endFrame: 400, startFrame: 260 }, false))).toBe(-142);
+    // The inversion that mixing produced: [398,399] of an estimated 402 emitted
+    // `398 / -3`, which against a real 400 is start 398, end 397.
+    expect(startOf(linked({ endFrame: 399, startFrame: 398 }, false))).toBe(-4);
     // A start at or inside the estimate's slop stays ABSOLUTE: the relative
     // form resolves to `startFrame + (real - estimate)`, and the backend
     // rejects a negative index rather than clamping, so an estimate that
@@ -584,7 +590,7 @@ describe('compileVideoGraph — MiniMax H3 Ref2VA', () => {
     expect(startOf(linked({ endFrame: 400, startFrame: 4 }))).toBe(-398);
     // A cutpoint far enough from the end that BOTH bounds keep the estimate.
     expect(startOf(linked({ endFrame: 300, startFrame: 160 }))).toBe(160);
-    // The tail case: end went negative, so the start follows it.
+    // The anchor's tail window: end went negative, so the start follows it.
     expect(startOf(linked({ endFrame: 400, startFrame: 260 }))).toBe(-142);
   });
 

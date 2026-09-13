@@ -31,6 +31,7 @@ const createHarness = () => {
     dispatch: (action: WorkbenchAction) => dispatched.push(action),
     invalidate: vi.fn(),
     stores,
+    updateCursor: vi.fn(),
     // Identity viewport: document and screen coordinates coincide, so the
     // polygon's close-on-first-vertex hit test is expressed in the same numbers.
     viewport: { documentToScreen: (p: { x: number; y: number }) => p },
@@ -124,8 +125,7 @@ describe('lassoTool: cancel + guards', () => {
     // These are all within 1px of each other → decimated away.
     move(tool, ctx, pointer(0.5, 0));
     move(tool, ctx, pointer(1, 0));
-    const preview = stores.lassoPreview.get();
-    expect(preview).toHaveLength(1);
+    expect(stores.lassoPreview.get()?.points).toHaveLength(1);
   });
 });
 
@@ -151,7 +151,7 @@ describe('lassoTool: polygon mode', () => {
     click(tool, ctx, 40, 40, 2000);
 
     expect(commits).toHaveLength(0);
-    expect(stores.lassoPreview.get()).toHaveLength(3);
+    expect(stores.lassoPreview.get()?.points).toHaveLength(3);
   });
 
   it('shows a rubber-band segment to the cursor between clicks', () => {
@@ -162,10 +162,13 @@ describe('lassoTool: polygon mode', () => {
     move(tool, ctx, pointer(30, 10));
 
     // The placed vertex plus the live cursor endpoint.
-    expect(stores.lassoPreview.get()).toEqual([
-      { x: 0, y: 0 },
-      { x: 30, y: 10 },
-    ]);
+    expect(stores.lassoPreview.get()).toEqual({
+      closeArmed: false,
+      closeRadiusPx: null,
+      cursor: { x: 30, y: 10 },
+      kind: 'polygon',
+      points: [{ x: 0, y: 0 }],
+    });
   });
 
   it('closes and commits on Enter', () => {
@@ -182,6 +185,45 @@ describe('lassoTool: polygon mode', () => {
     expect(stores.lassoPreview.get()).toBeNull();
   });
 
+  it('arms the close cue and pointer cursor while the cursor hovers the first vertex', () => {
+    const tool = createLassoTool();
+    const { ctx, stores } = createPolygonHarness();
+
+    click(tool, ctx, 0, 0, 0);
+    click(tool, ctx, 40, 0, 1000);
+    click(tool, ctx, 40, 40, 2000);
+    move(tool, ctx, pointer(30, 30));
+    expect(stores.lassoPreview.get()).toMatchObject({ closeArmed: false, kind: 'polygon' });
+    expect(tool.cursor?.(ctx)).toBe('crosshair');
+
+    move(tool, ctx, pointer(3, 2));
+    expect(stores.lassoPreview.get()).toMatchObject({ closeArmed: true, kind: 'polygon' });
+    expect(tool.cursor?.(ctx)).toBe('pointer');
+    expect(ctx.updateCursor).toHaveBeenCalled();
+  });
+
+  it('offers the close ring only once three vertices are placed', () => {
+    const tool = createLassoTool();
+    const { ctx, stores } = createPolygonHarness();
+
+    click(tool, ctx, 0, 0, 0);
+    click(tool, ctx, 40, 0, 1000);
+    expect(stores.lassoPreview.get()).toMatchObject({ closeRadiusPx: null });
+    click(tool, ctx, 40, 40, 2000);
+    expect(stores.lassoPreview.get()).toMatchObject({ closeRadiusPx: 8 });
+  });
+
+  it('commits nothing for a flat polygon (a double-click on the second vertex)', () => {
+    const tool = createLassoTool();
+    const { commits, ctx } = createPolygonHarness();
+
+    click(tool, ctx, 0, 0, 0);
+    click(tool, ctx, 40, 0, 1000);
+    click(tool, ctx, 40, 1, 1200);
+
+    expect(commits).toHaveLength(0);
+  });
+
   it('closes on a click landing on the first vertex', () => {
     const tool = createLassoTool();
     const { commits, ctx } = createPolygonHarness();
@@ -189,7 +231,7 @@ describe('lassoTool: polygon mode', () => {
     click(tool, ctx, 0, 0, 0);
     click(tool, ctx, 40, 0, 1000);
     click(tool, ctx, 40, 40, 2000);
-    // Within POLYGON_CLOSE_HIT_PX of the first vertex (identity viewport).
+    // Within the polyline close radius of the first vertex (identity viewport).
     click(tool, ctx, 3, 2, 3000);
 
     expect(commits).toHaveLength(1);
@@ -205,7 +247,7 @@ describe('lassoTool: polygon mode', () => {
     click(tool, ctx, 2, 0, 1000);
 
     expect(commits).toHaveLength(0);
-    expect(stores.lassoPreview.get()).toHaveLength(2);
+    expect(stores.lassoPreview.get()?.points).toHaveLength(2);
   });
 
   it('closes on a double-click', () => {
@@ -231,7 +273,7 @@ describe('lassoTool: polygon mode', () => {
     click(tool, ctx, 40, 40, 9000);
 
     expect(commits).toHaveLength(0);
-    expect(stores.lassoPreview.get()).toHaveLength(4);
+    expect(stores.lassoPreview.get()?.points).toHaveLength(4);
   });
 
   it('drops the session on Escape without committing', () => {
@@ -254,7 +296,7 @@ describe('lassoTool: polygon mode', () => {
     click(tool, ctx, 0, 0, 0);
     click(tool, ctx, 40, 0, 1000);
     tool.onDeactivate?.(ctx, { temporary: true });
-    expect(stores.lassoPreview.get()).toHaveLength(2);
+    expect(stores.lassoPreview.get()?.points).toHaveLength(2);
 
     tool.onActivate?.(ctx, { temporary: true });
     click(tool, ctx, 40, 40, 2000);

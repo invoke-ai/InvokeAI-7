@@ -1,5 +1,7 @@
 /**
- * The gradient tool: drag to set a gradient's ANGLE from the drag vector.
+ * The gradient tool: drag to place a gradient. A linear ramp runs from the
+ * press point (stop 0) to the release point (stop 1); a radial one is centered
+ * on the press point with the drag length as its radius.
  *
  * Interaction contract (CANVAS_PLAN Phase 6.1):
  * - **Pointer-down** (primary button) starts a gesture at the press point.
@@ -7,31 +9,37 @@
  *   preview (`stores.gradientPreview`, the drag vector) — it never dispatches.
  * - **Commit** (pointer-up after a real drag): exactly ONE commit.
  *   - A gradient layer is selected (unlocked + visible) → one `commitStructural`
- *     with `updateCanvasLayerSource` (new/old angle; kind + stops preserved).
- *   - Otherwise → create a new bbox-sized gradient layer (angle from the drag,
- *     kind + stops from the tool options, extent = the generation frame) via
- *     `addCanvasLayer`.
+ *     with `updateCanvasLayerSource` (new angle/center/span; kind + stops and
+ *     the extent preserved). The drag is read in the layer's local space, so a
+ *     moved/rotated/scaled gradient still lands where the pointer went.
+ *   - Otherwise → create a new bbox-sized gradient layer (placement from the
+ *     drag, kind + stops from the tool options, extent = the generation frame)
+ *     via `addCanvasLayer`.
  *   - A selected gradient layer that is locked/hidden is a no-op (don't silently
  *     spawn a new layer over it), mirroring the paint tool's locked-target rule.
  * - **Cancel** (Esc / pointercancel): drops the preview, no dispatch.
  *
- * Gradient layers are content-sized via the contract's explicit `width`/`height`
- * extent — set at creation (bbox-sized) and preserved across angle edits — so
- * only the ANGLE is derived from the drag, not a bounding box. The selection
- * mask does NOT constrain gradient layers (parametric, not pixels).
+ * The selection mask does NOT constrain gradient layers (parametric, not pixels).
  *
  * Zero React, zero import-time side effects.
  */
 
-import type { CanvasLayerSourceContract, CanvasRasterLayerContractV2 } from '@workbench/canvas-engine/contracts';
+import type {
+  CanvasLayerBaseContract,
+  CanvasLayerSourceContract,
+  CanvasRasterLayerContractV2,
+} from '@workbench/canvas-engine/contracts';
 import type { CanvasProjectMutation } from '@workbench/canvas-engine/mutationContracts';
 import type { Vec2 } from '@workbench/canvas-engine/types';
 
 import { lookupDocumentLeaf } from '@workbench/canvas-engine/document-model/documentModel';
 import { getDocumentLeaves } from '@workbench/canvas-engine/document/documentIndex';
 import { isLeafEditable } from '@workbench/canvas-engine/document/layerEligibility';
+import { applyToPoint, invert } from '@workbench/canvas-engine/math/mat2d';
 
 import type { Tool, ToolContext } from './tool';
+
+import { layerMatrix } from './moveHitTest';
 
 /** Bit for the primary (usually left) mouse button in `PointerEvent.buttons`. */
 const PRIMARY_BUTTON = 1;
@@ -40,14 +48,41 @@ const PRIMARY_BUTTON = 1;
 export const GRADIENT_DRAG_THRESHOLD_PX = 3;
 
 interface GestureState {
+  /** What the drag will place: the selected gradient's kind, else the tool option. */
+  kind: 'linear' | 'radial';
   startDoc: Vec2;
   startScreen: Vec2;
   moved: boolean;
 }
 
 /** Degrees of the vector from `start` to `end` (0° = left→right). */
-export const angleFromDrag = (start: Vec2, end: Vec2): number =>
+const angleFromDrag = (start: Vec2, end: Vec2): number =>
   (Math.atan2(end.y - start.y, end.x - start.x) * 180) / Math.PI;
+
+/**
+ * The placement a drag from `start` to `end` (layer-local px) gives a gradient:
+ * a linear ramp is centered on the drag's midpoint and as long as the drag; a
+ * radial one is centered on the press point with the drag length as radius.
+ */
+export const placementFromDrag = (
+  kind: 'linear' | 'radial',
+  start: Vec2,
+  end: Vec2
+): { angle: number; center: Vec2; span: number } => ({
+  angle: angleFromDrag(start, end),
+  center: kind === 'radial' ? start : { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 },
+  span: Math.max(1, Math.hypot(end.x - start.x, end.y - start.y)),
+});
+
+/** Maps a document-space drag into a layer's local space; null when the transform is degenerate. */
+const toLayerLocal = (
+  transform: CanvasLayerBaseContract['transform'],
+  start: Vec2,
+  end: Vec2
+): [start: Vec2, end: Vec2] | null => {
+  const inverse = invert(layerMatrix(transform));
+  return inverse ? [applyToPoint(inverse, start), applyToPoint(inverse, end)] : null;
+};
 
 /** Creates a fresh gradient tool with its own gesture state. */
 export const createGradientTool = (): Tool => {
@@ -79,10 +114,16 @@ export const createGradientTool = (): Tool => {
       if (state || (input.buttons & PRIMARY_BUTTON) === 0) {
         return;
       }
-      if (!ctx.getDocument()) {
+      const doc = ctx.getDocument();
+      if (!doc) {
         return;
       }
-      state = { moved: false, startDoc: input.documentPoint, startScreen: input.screenPoint };
+      const selected = doc.selectedLayerId ? lookupDocumentLeaf(doc, doc.selectedLayerId)?.layer : null;
+      const kind =
+        selected?.type === 'raster' && selected.source.type === 'gradient'
+          ? selected.source.kind
+          : ctx.stores.gradientOptions.get().kind;
+      state = { kind, moved: false, startDoc: input.documentPoint, startScreen: input.screenPoint };
     },
     onPointerMove: (ctx, input) => {
       if (!state) {
@@ -96,7 +137,7 @@ export const createGradientTool = (): Tool => {
         }
         state.moved = true;
       }
-      ctx.stores.gradientPreview.set({ end: input.documentPoint, start: state.startDoc });
+      ctx.stores.gradientPreview.set({ end: input.documentPoint, kind: state.kind, start: state.startDoc });
       ctx.invalidate({ overlay: true });
     },
     onPointerUp: (ctx, input) => {
@@ -116,27 +157,22 @@ export const createGradientTool = (): Tool => {
         clearPreview(ctx);
         return;
       }
-      const angle = angleFromDrag(current.startDoc, input.documentPoint);
       const leaf = doc.selectedLayerId ? lookupDocumentLeaf(doc, doc.selectedLayerId) : null;
       const selected = leaf?.layer;
 
       if (leaf && selected && selected.type === 'raster' && selected.source.type === 'gradient') {
         // Edit the selected gradient layer — unless it's locked/disabled (no-op).
-        if (!isLeafEditable(leaf)) {
+        const local = isLeafEditable(leaf)
+          ? toLayerLocal(selected.transform, current.startDoc, input.documentPoint)
+          : null;
+        if (!local) {
           clearPreview(ctx);
           return;
         }
         const old = selected.source;
-        // A radial gradient's rendering ignores `angle` entirely — dragging on
-        // one would only ever change that inert field, producing a commit with
-        // zero visual effect and a useless history entry. Skip it.
-        if (old.kind === 'radial') {
-          clearPreview(ctx);
-          return;
-        }
         const forward: CanvasProjectMutation = {
           id: selected.id,
-          source: { ...old, angle },
+          source: { ...old, ...placementFromDrag(old.kind, ...local) },
           type: 'updateCanvasLayerSource',
         };
         const inverse: CanvasProjectMutation = { id: selected.id, source: old, type: 'updateCanvasLayerSource' };
@@ -145,10 +181,9 @@ export const createGradientTool = (): Tool => {
         return;
       }
 
-      // Create a new bbox-sized gradient layer. The document rect is retired, so
-      // creation covers the generation frame (bbox): the extent is the bbox size,
-      // positioned at the bbox origin via the layer transform. Angle-drag edits on
-      // an existing gradient preserve its extent (the `...old` spread above).
+      // Create a new bbox-sized gradient layer: the extent is the bbox size,
+      // positioned at the bbox origin via the layer transform, so the drag maps
+      // to layer space by that offset alone.
       const options = ctx.stores.gradientOptions.get();
       // The built-in FG→BG preset resolves the pair now; custom stops are
       // explicit and independent of later pair edits.
@@ -161,8 +196,13 @@ export const createGradientTool = (): Tool => {
             ]
           : options.stops.map((stop) => ({ ...stop }));
       const layerId = ctx.createLayerId();
+      const origin = { x: doc.bbox.x, y: doc.bbox.y };
       const source: CanvasLayerSourceContract = {
-        angle,
+        ...placementFromDrag(
+          options.kind,
+          { x: current.startDoc.x - origin.x, y: current.startDoc.y - origin.y },
+          { x: input.documentPoint.x - origin.x, y: input.documentPoint.y - origin.y }
+        ),
         height: doc.bbox.height,
         kind: options.kind,
         stops,

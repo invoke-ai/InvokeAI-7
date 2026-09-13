@@ -25,6 +25,7 @@ if TYPE_CHECKING:
     from invokeai.app.services.download import DownloadQueueServiceBase
     from invokeai.app.services.events.events_base import EventServiceBase
     from invokeai.app.services.external_generation.external_generation_base import ExternalGenerationServiceBase
+    from invokeai.app.services.fonts.fonts_default import FontService
     from invokeai.app.services.gallery.gallery_base import GalleryServiceABC
     from invokeai.app.services.image_files.image_files_base import ImageFileStorageBase
     from invokeai.app.services.image_index.image_index_base import ImageIndexServiceBase
@@ -109,6 +110,7 @@ class InvocationServices:
         image_index: "ImageIndexServiceBase",
         image_moves: "ImageMoveService | None" = None,
         progress_previews: "ProgressPreviewsBase | None" = None,
+        fonts: "FontService | None" = None,
     ):
         self.board_images = board_images
         self.board_image_records = board_image_records
@@ -157,3 +159,4 @@ class InvocationServices:
         self.gallery = gallery
         self.image_index_records = image_index_records
         self.image_index = image_index
+        self.fonts = fonts

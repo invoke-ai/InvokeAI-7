@@ -27,6 +27,12 @@ import { useTranslation } from 'react-i18next';
 
 import { PreviewCompareDropZone } from './PreviewCompareDropZone';
 import { FittedFrame, PreviewStage } from './PreviewStage';
+import {
+  consumeVideoSpanPlaybackRequest,
+  getVideoSpanPlaybackRequest,
+  isVideoSpanPlaybackFresh,
+  subscribeVideoSpanPlaybackRequests,
+} from './spanPlaybackRequest';
 import { usePreviewLoupe, type PreviewLoupeControls } from './usePreviewLoupe';
 
 export type PreviewMediaSource =
@@ -415,6 +421,143 @@ const PreviewVideo = ({
     return isCurrent() ? { ok: true } : { ok: false, reason: 'stale' };
   }, [isItemCurrent, source.itemKey]);
   const isCopyAvailable = useCallback(() => isVideoFrameCopyAvailable(videoRef.current), []);
+  // Span playback: the Video panel's play buttons ask Preview to loop exactly what a
+  // trim selected, so the window can be watched and heard before a generation is spent
+  // on it. The span lives in refs rather than state — nothing in the frame renders
+  // differently while it loops, and re-rendering on each wrap would only fight the
+  // player.
+  const spanRef = useRef<VideoSpan | null>(null);
+  // A span that arrived before the element could act on it, with the deadline it must not
+  // outlive: the request channel checks freshness once, at consume time, so a span parked
+  // here through a failed load or a hidden keep-alive would otherwise replay unmuted
+  // minutes later when the user pressed Retry.
+  const parkedSpanRef = useRef<{ expiresAt: number; span: VideoSpan } | null>(null);
+  const spanFrameRef = useRef<number | null>(null);
+  const seekWithinSpan = useCallback((video: HTMLVideoElement, time: number) => {
+    try {
+      video.currentTime = time;
+    } catch {
+      // Some browsers throw while the seekable range is still empty; the watch retries on
+      // its next tick.
+    }
+  }, []);
+  const stopSpanWatch = useCallback(() => {
+    if (spanFrameRef.current !== null) {
+      cancelAnimationFrame(spanFrameRef.current);
+      spanFrameRef.current = null;
+    }
+  }, []);
+  // `timeupdate` fires about four times a second, which overruns a two-second selection by
+  // an eighth of it; a frame loop wraps within a frame while the tab is visible.
+  // `timeupdate` stays as the backstop for a backgrounded tab, where
+  // `requestAnimationFrame` does not run at all.
+  const enforceSpan = useCallback(() => {
+    const span = spanRef.current;
+    const video = videoRef.current;
+
+    if (!span || !video || video.paused || video.currentTime < span.endSeconds) {
+      return;
+    }
+
+    seekWithinSpan(video, span.startSeconds);
+  }, [seekWithinSpan]);
+  const startSpanWatch = useCallback(() => {
+    if (spanRef.current === null || spanFrameRef.current !== null) {
+      return;
+    }
+
+    const tick = (): void => {
+      spanFrameRef.current = null;
+      enforceSpan();
+
+      if (spanRef.current !== null && videoRef.current?.paused === false) {
+        spanFrameRef.current = requestAnimationFrame(tick);
+      }
+    };
+
+    spanFrameRef.current = requestAnimationFrame(tick);
+  }, [enforceSpan]);
+  const playSpan = useCallback(
+    (span: VideoSpan, expiresAt?: number) => {
+      const video = videoRef.current;
+
+      // Before metadata there is no duration to clamp against and the element drops the
+      // seek outright; below, the element is gone entirely because a hidden keep-alive
+      // boundary detached the ref. Both are picked back up — by `loadedmetadata`, and by
+      // the mount effect when the view comes back.
+      if (!video || video.readyState < HTMLMediaElement.HAVE_METADATA) {
+        // The deadline belongs to the gesture, not to this attempt: minting a fresh one on
+        // every re-park would let hide/show cycles on a clip that never loads extend it
+        // indefinitely, which is the one thing the deadline exists to stop.
+        parkedSpanRef.current = { expiresAt: expiresAt ?? Date.now() + PARKED_SPAN_TTL_MS, span };
+        return;
+      }
+
+      parkedSpanRef.current = null;
+      const duration = Number.isFinite(video.duration) ? video.duration : null;
+      const endSeconds = duration === null ? span.endSeconds : Math.min(span.endSeconds, duration);
+      const startSeconds = Math.max(0, Math.min(span.startSeconds, endSeconds));
+
+      // Arm on any window with room to play. The test is emptiness, NOT a minimum width:
+      // the panel's own floor is two frames (`MIN_VIDEO_TRIM_FRAMES`), which is 33ms at
+      // 60fps and less above that, and those tight selections are exactly the ones the two
+      // still bounds convey least. A window the clamp collapsed — a clip whose real
+      // duration falls short of the frame count the panel estimated, or a foreign record
+      // with inverted bounds — has nowhere to wrap to, so it plays without a loop.
+      spanRef.current = endSeconds > startSeconds ? { endSeconds, startSeconds } : null;
+      seekWithinSpan(video, startSeconds);
+      // Autoplay policy can refuse an unmuted play(). That leaves the clip parked on the
+      // first selected frame with the native controls live and the loop still armed, so
+      // pressing play there plays the selection rather than the whole clip.
+      void video.play().catch(() => {});
+      // play() resolves asynchronously, so the element can still be paused here and the
+      // watch would stop after one frame; `onPlay` arms it for that case. Both paths are
+      // needed — a span arriving mid-playback fires no `play` event.
+      startSpanWatch();
+    },
+    [seekWithinSpan, startSpanWatch]
+  );
+  // What retires a loop is the playhead LEAVING the window, not who moved it. Asking where
+  // it landed rather than marking our own seeks is what makes this survive the orderings a
+  // marker cannot: a seek to where the playhead already sits fires no event at all (the
+  // Initial Video's trim starts at frame 0, so that is the first press), and the
+  // first-frame nudge's own seek can be delivered after a span has armed. A scrub that
+  // stays inside the window is one the loop would have honoured anyway.
+  const handleSpanSeeking = useCallback(() => {
+    const span = spanRef.current;
+    const video = videoRef.current;
+
+    if (!video) {
+      return;
+    }
+
+    if (
+      span &&
+      video.currentTime >= span.startSeconds - SPAN_SEEK_TOLERANCE_SECONDS &&
+      video.currentTime <= span.endSeconds
+    ) {
+      return;
+    }
+
+    // The user took the playhead somewhere the loop was not going. They own it from here.
+    spanRef.current = null;
+    parkedSpanRef.current = null;
+    stopSpanWatch();
+  }, [stopSpanWatch]);
+  // A trim can end on the clip's final frame, where the playhead reaches the window's end
+  // only as the media ends: `pause` stops the watch and `enforceSpan` bails on a paused
+  // element, so whether the last `timeupdate` wrapped first was down to the browser.
+  const handleSpanEnded = useCallback(() => {
+    const span = spanRef.current;
+    const video = videoRef.current;
+
+    if (!span || !video) {
+      return;
+    }
+
+    seekWithinSpan(video, span.startSeconds);
+    void video.play().catch(() => {});
+  }, [seekWithinSpan]);
   // Playback must not outlive this view being on screen. A widget the shell
   // keeps mounted behind a layout switch is hidden with `display: none`, which
   // does not stop media — the clip would keep running, with audio, behind a
@@ -422,10 +565,48 @@ const PreviewVideo = ({
   // torn down whenever the subtree stops being shown, whether that is a real
   // unmount or a hidden keep-alive boundary, so pausing here covers both without
   // this component needing to know which one happened.
+  //
+  // The span subscription rides along: this element is keyed by `source.itemKey`, so
+  // the key it filters requests by is fixed for the mount, and a request published
+  // while Preview was closed is waiting to be read on the first pass.
   useMountEffect(() => {
     const video = videoRef.current;
+    const itemKey = source.itemKey;
+    const consumeSpanRequest = (): void => {
+      const request = getVideoSpanPlaybackRequest();
+
+      if (!request || request.itemKey !== itemKey) {
+        return;
+      }
+
+      // Retired whether or not it is still honourable, so a request the user has moved on
+      // from cannot wait around for the next player that shows this clip.
+      consumeVideoSpanPlaybackRequest(request.token);
+
+      if (isVideoSpanPlaybackFresh(request.requestedAt)) {
+        playSpan({ endSeconds: request.endSeconds, startSeconds: request.startSeconds });
+      }
+    };
+    // A span parked while the element was detached — the view was hidden mid-load — has
+    // no second `loadedmetadata` coming once the clip finished loading behind the hidden
+    // boundary, so coming back on screen is the only chance left to honour it.
+    const parked = parkedSpanRef.current;
+
+    if (parked) {
+      parkedSpanRef.current = null;
+
+      if (Date.now() <= parked.expiresAt) {
+        playSpan(parked.span, parked.expiresAt);
+      }
+    }
+
+    consumeSpanRequest();
+
+    const unsubscribe = subscribeVideoSpanPlaybackRequests(consumeSpanRequest);
 
     return () => {
+      unsubscribe();
+      stopSpanWatch();
       video?.pause();
     };
   });
@@ -503,10 +684,36 @@ const PreviewVideo = ({
   // that refires `loadedmetadata` on this element, and it has already reset the position to 0
   // and `paused` to true by the time the handler runs. The `currentTime` clause is
   // belt-and-braces for an engine that does not reset it.
-  const handleFirstFrameSeek = useCallback(() => {
+  const handleLoadedMetadata = useCallback(() => {
     const video = videoRef.current;
+    const parked = parkedSpanRef.current;
 
-    if (!video || !video.paused || video.currentTime > 0) {
+    parkedSpanRef.current = null;
+
+    // A span the element could not act on yet, honoured only while the gesture behind it
+    // is still fresh. Its own seek is the sharper version of the nudge below — it lands on
+    // a frame the user asked for, and clears the show-poster flag the same way.
+    if (parked && Date.now() <= parked.expiresAt) {
+      playSpan(parked.span, parked.expiresAt);
+      return;
+    }
+
+    if (!video) {
+      return;
+    }
+
+    // `load()` — protected-media recovery, or the failure overlay's Retry — rewinds the
+    // clip and refires this event with the loop still armed. Putting the playhead back
+    // inside the window is what keeps it scoped, and skipping the NUDGE below is what
+    // keeps the loop at all: that seek is unmarked, so `seeking` reads it as the user
+    // taking the playhead back and retires the span outright. Playback stays paused,
+    // exactly as `load()` left it — a recovery is not a reason to start audio.
+    if (spanRef.current) {
+      seekWithinSpan(video, spanRef.current.startSeconds);
+      return;
+    }
+
+    if (!video.paused || video.currentTime > 0) {
       return;
     }
 
@@ -515,7 +722,7 @@ const PreviewVideo = ({
     } catch {
       // Some browsers throw if the seekable range is not populated yet; the poster stays up.
     }
-  }, []);
+  }, [playSpan, seekWithinSpan]);
   const handleRetry = useCallback(() => {
     const video = videoRef.current;
 
@@ -590,10 +797,15 @@ const PreviewVideo = ({
           onEmptied={publishCopyAvailability}
           onError={handleVideoError}
           onLoadedData={publishCopyAvailability}
-          onLoadedMetadata={handleFirstFrameSeek}
+          onEnded={handleSpanEnded}
+          onLoadedMetadata={handleLoadedMetadata}
+          onPause={stopSpanWatch}
+          onPlay={startSpanWatch}
           onPlaying={publishCopyAvailability}
           onResize={publishCopyAvailability}
           onSeeked={publishCopyAvailability}
+          onSeeking={handleSpanSeeking}
+          onTimeUpdate={enforceSpan}
           onWaiting={publishCopyAvailability}
         />
         {hasFailed ? (
@@ -668,6 +880,22 @@ const encodeCanvasPng = (canvas: HTMLCanvasElement): Promise<Blob | null> =>
 
 const isCanvasSecurityError = (error: unknown): boolean =>
   error instanceof DOMException && error.name === 'SecurityError';
+
+/** A trimmed window of a clip, in seconds, as the Video panel's play buttons request it. */
+interface VideoSpan {
+  endSeconds: number;
+  startSeconds: number;
+}
+
+/**
+ * How far below a window's start the playhead may land and still count as inside it.
+ * Engines snap a seek to a decodable point, so a wrap does not land on the exact second
+ * asked for, and reading its own wrap as the user leaving would retire the loop instantly.
+ */
+const SPAN_SEEK_TOLERANCE_SECONDS = 0.05;
+
+/** How long a span waits for an element that could not act on it yet. */
+const PARKED_SPAN_TTL_MS = 15_000;
 
 // Far enough from zero for browsers to treat it as a real seek, small enough that playback
 // still starts on frame 0 at any sane frame rate.

@@ -143,7 +143,7 @@ export const GenerateModelCard = ({
 
       {selectedModel ? (
         <HStack gap="2" justify="space-between">
-          <Text color="fg.subtle" fontSize="2xs" minW="0">
+          <Text color="fg.muted" fontSize="2xs" minW="0">
             {features.join(' · ')}
           </Text>
           {overrideCount > 0 ? (
@@ -153,7 +153,7 @@ export const GenerateModelCard = ({
           ) : null}
         </HStack>
       ) : isLoadingModels ? (
-        <Text color="fg.subtle" fontSize="2xs">
+        <Text color="fg.muted" fontSize="2xs">
           {t('widgets.generate.loadingModels')}
         </Text>
       ) : loadError ? (
@@ -170,7 +170,7 @@ export const GenerateModelCard = ({
           </Button>
         </Stack>
       ) : (
-        <Text color="fg.subtle" fontSize="2xs">
+        <Text color="fg.muted" fontSize="2xs">
           {t('widgets.generate.chooseModelToStart')}
         </Text>
       )}

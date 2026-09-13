@@ -131,6 +131,31 @@ describe('loadCanvasState', () => {
     expect(kinds).toEqual(['triangle', 'star']);
   });
 
+  it('round-trips a placed gradient without rounding its anchor, and refuses a zero span', () => {
+    const gradient = (span: number) => ({
+      ...createEmptyPaintLayer('Gradient', 'gradient'),
+      source: {
+        angle: 30,
+        center: { x: 12.5, y: 7 },
+        height: 64,
+        kind: 'radial',
+        span,
+        stops: [
+          { color: '#000000ff', offset: 0 },
+          { color: '#00000000', offset: 1 },
+        ],
+        type: 'gradient',
+        width: 64,
+      },
+    });
+    const loaded = load(withNodes([gradient(40)])).document.stacks.raster[0];
+    expect(loaded?.type === 'raster' ? loaded.source : null).toMatchObject({ center: { x: 12.5, y: 7 }, span: 40 });
+    expect(refusal(withNodes([gradient(0)]))).toMatchObject({
+      diagnostics: [{ message: expect.stringContaining('span'), path: 'document.stacks.raster[0]' }],
+      status: 'invalid',
+    });
+  });
+
   it('round-trips group adjustments in the raster stack, strips them from overlay groups, and drops a malformed group stack', () => {
     const stack = [{ brightness: 0.1, contrast: 0, id: 'ga1', isEnabled: true, type: 'brightness-contrast' }];
     const rasterGroup = {
@@ -460,7 +485,7 @@ describe('loadCanvasState', () => {
   });
 
   it.each([
-    ['a future outer version', { ...createEmptyCanvasState(), version: 4 }, 'state', 4],
+    ['a future outer version', { ...createEmptyCanvasState(), version: 5 }, 'state', 5],
     ['an older outer version', { ...createEmptyCanvasState(), version: 2 }, 'state', 2],
     ['a legacy version', { ...createEmptyCanvasState(), version: 1 }, 'state', 1],
     [
@@ -473,10 +498,10 @@ describe('loadCanvasState', () => {
       'a snapshot of another version',
       {
         ...createEmptyCanvasState(),
-        snapshots: [{ createdAt: 'now', document: { ...createEmptyCanvasDocument(), version: 4 }, id: 'f', name: 'F' }],
+        snapshots: [{ createdAt: 'now', document: { ...createEmptyCanvasDocument(), version: 5 }, id: 'f', name: 'F' }],
       },
       'snapshot',
-      4,
+      5,
     ],
   ])('refuses %s before parsing anything', (_label, raw, scope, version) => {
     expect(refusal(raw)).toEqual({ raw, scope, status: 'unsupported-version', version });
@@ -514,6 +539,80 @@ describe('loadCanvasState', () => {
       scope: 'document',
       status: 'invalid',
     });
+  });
+
+  it('reads a v3 canvas and keeps the compatibility floor when no v4 typography is present', () => {
+    const current = createEmptyCanvasState();
+    const legacy = {
+      ...current,
+      document: { ...current.document, version: 3 as const },
+      version: 3 as const,
+    };
+
+    expect(load(legacy)).toEqual(legacy);
+  });
+
+  it('adopts v4 when a v3 canvas contains custom-font typography', () => {
+    const current = createEmptyCanvasState();
+    const textLayer = {
+      ...createEmptyPaintLayer('Text', 'text'),
+      source: {
+        align: 'left',
+        color: '#fff',
+        content: 'hello',
+        fontFamily: 'Example',
+        fontRef: { contentHash: 'a'.repeat(64), family: 'Example', id: 'font-1', label: 'Example Regular' },
+        fontSize: 24,
+        fontStyle: 'italic' as const,
+        fontVariations: { wght: 650 },
+        fontWeight: 650,
+        lineHeight: 1.2,
+        type: 'text' as const,
+      },
+    };
+    const legacy = {
+      ...current,
+      document: {
+        ...current.document,
+        stacks: { ...current.document.stacks, raster: [textLayer] },
+        version: 3 as const,
+      },
+      version: 3 as const,
+    };
+
+    const loaded = load(legacy);
+    expect(loaded.version).toBe(4);
+    expect(loaded.document.version).toBe(4);
+    expect(loaded.document.stacks.raster[0]).toMatchObject({ source: textLayer.source });
+  });
+
+  it('refuses a custom-font reference whose content hash is not a lowercase SHA-256', () => {
+    const current = createEmptyCanvasState();
+    const textLayer = {
+      ...createEmptyPaintLayer('Text', 'text'),
+      source: {
+        align: 'left',
+        color: '#fff',
+        content: 'hello',
+        fontFamily: 'Example',
+        fontRef: { contentHash: 'hash-a', family: 'Example', id: 'font-1', label: 'Example Regular' },
+        fontSize: 24,
+        fontWeight: 400,
+        lineHeight: 1.2,
+        type: 'text' as const,
+      },
+    };
+    const legacy = {
+      ...current,
+      document: {
+        ...current.document,
+        stacks: { ...current.document.stacks, raster: [textLayer] },
+        version: 3 as const,
+      },
+      version: 3 as const,
+    };
+
+    expect(refusal(legacy)).toMatchObject({ scope: 'document', status: 'invalid' });
   });
 
   it('passes a valid state through normalized, keeping every persisted field', () => {

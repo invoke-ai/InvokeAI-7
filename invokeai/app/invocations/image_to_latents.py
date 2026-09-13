@@ -14,7 +14,6 @@ from diffusers.models.autoencoders.autoencoder_kl import AutoencoderKL
 from diffusers.models.autoencoders.autoencoder_tiny import AutoencoderTiny
 
 from invokeai.app.invocations.baseinvocation import BaseInvocation, invocation
-from invokeai.app.invocations.constants import LATENT_SCALE_FACTOR
 from invokeai.app.invocations.fields import (
     FieldDescriptions,
     ImageField,
@@ -121,7 +120,6 @@ class ImageToLatentsInvocation(BaseInvocation):
                 tiling_context = patch_vae_tiling_params(
                     vae,
                     tile_sample_min_size=tile_size,
-                    tile_latent_min_size=tile_size // LATENT_SCALE_FACTOR,
                     tile_overlap_factor=0.25,
                 )
 

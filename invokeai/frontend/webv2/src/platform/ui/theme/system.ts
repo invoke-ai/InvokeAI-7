@@ -92,6 +92,26 @@ const ref = (step: NeutralStep): string => `{colors.neutral.${step}}`;
 const stepRef = (darkStep: NeutralStep, lightStep: NeutralStep): TokenValue =>
   colorToken((theme) => ref(theme.colorScheme === 'light' ? lightStep : darkStep));
 
+/**
+ * The high-contrast boost only differs by color scheme, so two conditions
+ * cover every theme: ramp-step references resolve per theme on their own.
+ * Unrelated to Chakra's built-in `_highContrast` (`forced-colors`); these key
+ * off the app preference.
+ */
+const withHighContrast = (token: TokenValue, darkStep: NeutralStep, lightStep: NeutralStep): TokenValue => {
+  token.value._highContrastDark = ref(darkStep);
+  token.value._highContrastLight = ref(lightStep);
+  return token;
+};
+
+/** A ramp-step token with a stronger step pair under high contrast. */
+const contrastStepRef = (
+  darkStep: NeutralStep,
+  lightStep: NeutralStep,
+  highDarkStep: NeutralStep,
+  highLightStep: NeutralStep
+): TokenValue => withHighContrast(stepRef(darkStep, lightStep), highDarkStep, highLightStep);
+
 const STEPS: NeutralStep[] = [50, 100, 200, 300, 400, 500, 600, 700, 800, 900, 950];
 
 /** The default panel surface of a theme — `bg.subtle`'s step. Used as the floor for tints. */
@@ -148,20 +168,21 @@ const semanticColors = {
   'bg.success': mix(success, 14, surface),
   'bg.warning': mix(warning, 14, surface),
 
-  // Foreground.
+  // Foreground. Muted/subtle text carries the contrast burden: under high
+  // contrast they climb toward `fg` while staying a visible rank below it.
   fg: stepRef(50, 950),
-  'fg.muted': stepRef(300, 700),
-  'fg.subtle': stepRef(400, 500),
+  'fg.muted': contrastStepRef(300, 700, 200, 800),
+  'fg.subtle': contrastStepRef(400, 500, 300, 700),
   'fg.grid': colorToken((theme) => theme.colors.grid),
   'fg.error': colorToken(danger),
   'fg.success': colorToken(success),
   'fg.warning': colorToken(warning),
 
   // Borders.
-  border: stepRef(600, 300),
-  'border.subtle': stepRef(600, 300),
-  'border.muted': stepRef(600, 300),
-  'border.emphasized': stepRef(500, 400),
+  border: contrastStepRef(600, 300, 300, 500),
+  'border.subtle': contrastStepRef(600, 300, 300, 500),
+  'border.muted': contrastStepRef(600, 300, 300, 500),
+  'border.emphasized': contrastStepRef(500, 400, 200, 600),
   'border.error': colorToken(danger),
   'border.image': colorToken((theme) => (theme.colorScheme === 'light' ? 'oklch(0 0 0 / 0.1)' : 'oklch(1 0 0 / 0.1)')),
 
@@ -182,13 +203,17 @@ const semanticColors = {
     fg: grayToken((theme) => (theme.colorScheme === 'light' ? theme.colors.neutral[950] : theme.colors.neutral[50])),
     subtle: grayToken((theme) => theme.colors.fill),
     muted: grayToken((theme) => theme.colors.control),
-    emphasized: grayToken((theme) =>
-      theme.colorScheme === 'light' ? theme.colors.neutral[400] : theme.colors.neutral[500]
+    emphasized: withHighContrast(
+      grayToken((theme) => (theme.colorScheme === 'light' ? theme.colors.neutral[400] : theme.colors.neutral[500])),
+      300,
+      600
     ),
     solid: grayToken((theme) => (theme.colorScheme === 'light' ? theme.colors.neutral[950] : theme.colors.neutral[50])),
     focusRing: grayToken(accentSolid),
-    border: grayToken((theme) =>
-      theme.colorScheme === 'light' ? theme.colors.neutral[400] : theme.colors.neutral[500]
+    border: withHighContrast(
+      grayToken((theme) => (theme.colorScheme === 'light' ? theme.colors.neutral[400] : theme.colors.neutral[500])),
+      300,
+      600
     ),
     /**
      * Interaction-fill base for the default palette: fg pulled toward the
@@ -244,12 +269,21 @@ const semanticColors = {
 const themeConditions = Object.fromEntries(
   NON_DEFAULT_THEMES.map((theme) => [conditionName(theme.id), `:root[data-theme=${theme.id}]`])
 );
+// The attribute pair outranks the plain `[data-theme]` conditions; light
+// themes are enumerated so a future light theme cannot fall into the dark arm.
+const lightThemeSelectors = THEMES.filter((theme) => theme.colorScheme === 'light')
+  .map((theme) => `[data-theme=${theme.id}]`)
+  .join(', ');
+const highContrastConditions = {
+  highContrastDark: `:root[data-high-contrast=true]:not(${lightThemeSelectors})`,
+  highContrastLight: `:root[data-high-contrast=true]:is(${lightThemeSelectors})`,
+};
 
 const motionDurationToken = (base: string): TokenValue => ({ value: { base, _reduceMotion: '1ms' } });
 const motionAnimationToken = (base: string): TokenValue => ({ value: { base, _reduceMotion: 'none' } });
 
 const config = defineConfig({
-  conditions: { ...themeConditions, reduceMotion: ':root[data-reduce-motion=true]' },
+  conditions: { ...themeConditions, ...highContrastConditions, reduceMotion: ':root[data-reduce-motion=true]' },
   globalCss: {
     'html, body, #root': {
       height: '100%',

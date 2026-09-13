@@ -1,31 +1,17 @@
 import { Alert, Code, HStack, Icon, Stack, Text } from '@chakra-ui/react';
 import {
   detectKnownBrowserIssues,
-  type KnownBrowserIssue,
+  type DetectedBrowserIssue,
   type KnownBrowserIssueWorkaround,
 } from '@platform/browser/knownBrowserIssues';
-import { useMountEffect } from '@platform/react/useMountEffect';
 import { IconButton, toaster } from '@platform/ui';
 import { CopyIcon } from 'lucide-react';
 import { useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 export const KnownBrowserIssuesAlert = () => {
-  const [issues, setIssues] = useState<readonly KnownBrowserIssue[]>([]);
-
-  useMountEffect(() => {
-    let isMounted = true;
-
-    void detectKnownBrowserIssues().then((detectedIssues) => {
-      if (isMounted) {
-        setIssues(detectedIssues);
-      }
-    });
-
-    return () => {
-      isMounted = false;
-    };
-  });
+  // The probe is cheap and its result is fixed for the page's lifetime, so it runs once per mount.
+  const [issues] = useState(() => detectKnownBrowserIssues());
 
   if (issues.length === 0) {
     return null;
@@ -40,7 +26,7 @@ export const KnownBrowserIssuesAlert = () => {
   );
 };
 
-const BrowserIssueAlert = ({ issue }: { issue: KnownBrowserIssue }) => {
+const BrowserIssueAlert = ({ issue }: { issue: DetectedBrowserIssue }) => {
   const { t } = useTranslation();
 
   return (

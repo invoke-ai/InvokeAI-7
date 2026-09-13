@@ -22,7 +22,7 @@ import { DropZone } from '@platform/ui/DropZone';
 import { MiddleTruncate } from '@platform/ui/MiddleTruncate';
 import { useQuery } from '@tanstack/react-query';
 import { ChevronDownIcon, ImagePlusIcon, RefreshCwIcon, UploadIcon, XIcon } from 'lucide-react';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import type { GalleryPickerAccept } from './galleryPicker';
@@ -72,7 +72,9 @@ const getThumbnailUrl = (value: GalleryMediaSlotValue): string =>
  * A single-item media field: click opens the gallery picker, a gallery drag
  * can be dropped on it, and a file can be uploaded from its action row. Owns
  * the async resolve/upload work and its busy and error states; the consumer
- * only sees `onChange` with a full item (or null when cleared).
+ * only sees `onChange` with a full item (or null when cleared). A consumer
+ * that stores the file itself takes it through `onUploadFile` instead of the
+ * gallery, and can show its own `thumbnail` for a value the gallery lacks.
  */
 export const GalleryMediaSlot = ({
   accept,
@@ -80,9 +82,11 @@ export const GalleryMediaSlot = ({
   disabledReason,
   dropId,
   labels: labelOverrides,
-  uploadBoardId,
+  thumbnail,
+  uploadBoardId = 'none',
   value,
   onChange,
+  onUploadFile,
 }: {
   accept: GalleryPickerAccept;
   disabled?: boolean;
@@ -91,10 +95,14 @@ export const GalleryMediaSlot = ({
   /** Unique droppable id; sibling slots must not share one. */
   dropId: string;
   labels?: Partial<GalleryMediaSlotLabels>;
+  /** Replaces the gallery thumbnail of `value`, for media the gallery does not hold. */
+  thumbnail?: ReactNode;
   /** Where a file uploaded from the action row lands; a getter is read when the upload starts. */
-  uploadBoardId: string | (() => string);
+  uploadBoardId?: string | (() => string);
   value: GalleryMediaSlotValue | null;
   onChange: (item: GalleryItem | null) => void;
+  /** Takes an uploaded file directly instead of sending it to the gallery. */
+  onUploadFile?: (file: File) => void;
 }) => {
   const { t } = useTranslation();
   const { notifications } = useGalleryUi();
@@ -185,6 +193,10 @@ export const GalleryMediaSlot = ({
         );
         return;
       }
+      if (onUploadFile) {
+        onUploadFile(file);
+        return;
+      }
 
       setIsBusy(true);
       void uploadFiles([file])
@@ -199,7 +211,7 @@ export const GalleryMediaSlot = ({
         })
         .finally(() => setIsBusy(false));
     },
-    [accept, onChange, t, uploadFiles]
+    [accept, onChange, onUploadFile, t, uploadFiles]
   );
   const { inputProps: uploadInputProps, openPicker: openUploadPicker } = useGalleryUploadInput(
     handleUpload,
@@ -238,16 +250,18 @@ export const GalleryMediaSlot = ({
             {value ? (
               <HStack align="stretch" gap="3" h="20" p="2">
                 <Box bg="blackAlpha.300" boxSize="16" flexShrink="0" overflow="hidden" rounded="sm">
-                  <Image
-                    alt=""
-                    boxSize="full"
-                    objectFit="contain"
-                    outline="1px solid"
-                    outlineColor="border.image"
-                    outlineOffset="-1px"
-                    rounded="sm"
-                    src={getThumbnailUrl(value)}
-                  />
+                  {thumbnail ?? (
+                    <Image
+                      alt=""
+                      boxSize="full"
+                      objectFit="contain"
+                      outline="1px solid"
+                      outlineColor="border.image"
+                      outlineOffset="-1px"
+                      rounded="sm"
+                      src={getThumbnailUrl(value)}
+                    />
+                  )}
                 </Box>
                 <Stack align="start" flex="1" gap="1" justify="center" minW="0">
                   <MiddleTruncate color="fg" fontSize="xs" fontWeight="semibold" text={value.name} />
@@ -256,7 +270,7 @@ export const GalleryMediaSlot = ({
                       {value.width} × {value.height}
                     </Text>
                   ) : null}
-                  <HStack color="fg.subtle" gap="1">
+                  <HStack color="fg.muted" gap="1">
                     {isBusy ? <Spinner size="xs" /> : <Icon as={RefreshCwIcon} boxSize="2.5" />}
                     <Text fontSize="2xs">
                       {disabled && disabledReason
@@ -279,7 +293,7 @@ export const GalleryMediaSlot = ({
                     <Icon as={ChevronDownIcon} boxSize="3" color="fg.subtle" />
                   </HStack>
                 )}
-                <Text color="fg.subtle" fontSize="2xs" textAlign="center">
+                <Text color="fg.muted" fontSize="2xs" textAlign="center">
                   {disabled && disabledReason
                     ? disabledReason
                     : isBusy

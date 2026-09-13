@@ -137,6 +137,9 @@ const manyLayers = (count: number): CanvasNodeContract[] =>
 
 let dispatchExternal: (mutation: CanvasProjectMutation) => void = () => undefined;
 const thumbnailRequests = vi.fn();
+const exportBakedLayerBlob = vi.fn(() =>
+  Promise.resolve({ blob: new Blob(['png'], { type: 'image/png' }), status: 'ok' as const })
+);
 const refusalChecks = vi.fn();
 const revealRequests = vi.fn();
 
@@ -179,7 +182,7 @@ const Harness = ({ initialNodes }: { initialNodes: CanvasNodeContract[] }) => {
             };
           },
         },
-        exports: { hasExportableLayerContent: () => false },
+        exports: { exportBakedLayerBlob: exportBakedLayerBlob, hasExportableLayerContent: () => false },
         interaction: { get: () => false },
         layers: {
           commitPrepared: (_label: string, edit: PreparedDocumentEdit) => {
@@ -388,6 +391,19 @@ describe('LayersTree keyboard and accessibility', () => {
     paint('bottom', 'Bottom'),
   ];
 
+  it('copies the focused layer to the clipboard on ctrl+c', async () => {
+    await renderTree(nested());
+    const write = vi.spyOn(navigator.clipboard, 'write').mockResolvedValue();
+    try {
+      treeitem('Top').focus();
+      await act(() => userEvent.keyboard('{Control>}c{/Control}'));
+      await expect.poll(() => write.mock.calls.length).toBe(1);
+      expect(exportBakedLayerBlob).toHaveBeenCalledWith('top', { includeDisabled: true });
+    } finally {
+      write.mockRestore();
+    }
+  });
+
   it('exposes one tab stop across every control and full tree semantics', async () => {
     await renderTree(nested());
     expect(tabStops()).toHaveLength(1);
@@ -470,6 +486,24 @@ describe('LayersTree selection, surfaces and structure', () => {
     expect(treeitem('Third')).toHaveAttribute('aria-current', 'true');
     await act(() => treeitem('First').dispatchEvent(new MouseEvent('click', { bubbles: true, shiftKey: true })));
     expect(output('selected-layers')).toBe('first,second,third');
+  });
+
+  it('deletes the focused row with Delete and the selection with Backspace, keeping focus in the tree', async () => {
+    await renderTree(trio());
+    treeitem('Second').focus();
+    await act(() => userEvent.keyboard('{Delete}'));
+    expect(output('layer-order')).toBe('first,third');
+    expect(document.activeElement).toBe(treeitem('Third'));
+
+    // The last row falls back to the row above it.
+    treeitem('Third').focus();
+    await act(() => userEvent.keyboard('{Delete}'));
+    expect(output('layer-order')).toBe('first');
+    expect(document.activeElement).toBe(treeitem('First'));
+
+    await act(() => userEvent.click(treeitem('First')));
+    await act(() => userEvent.keyboard('{Backspace}'));
+    expect(output('layer-order')).toBe('');
   });
 
   it('keeps the visibility dot isolated from row selection', async () => {

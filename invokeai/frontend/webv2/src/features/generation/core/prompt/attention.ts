@@ -1,4 +1,4 @@
-import type { PromptAstNode, PromptAttention, PromptFunctionArg, PromptRange } from './ast';
+import type { PromptAstNode, PromptAttention, PromptRange } from './ast';
 
 import { parsePrompt, serializePromptWithSelection } from './ast';
 
@@ -10,532 +10,320 @@ export interface PromptAttentionAdjustment {
   selectionEnd: number;
 }
 
-const ATTENTION_FACTOR = 1.1;
-const NUMERIC_STEP = 0.1;
-const WEIGHT_EPSILON = 0.001;
-const FACTOR_EPSILON = 0.005;
-const GENERATED_RANGE: PromptRange = { start: 0, end: 0 };
+type LeafNode = Exclude<PromptAstNode, { type: 'group' }>;
 
-type PromptFunctionNode = Extract<PromptAstNode, { type: 'prompt_function' }>;
-type LeafNode = Exclude<PromptAstNode, { type: 'group' | 'prompt_function' }>;
-
-interface WeightedLeaf {
-  text: string;
-  type: LeafNode['type'];
-  weight: number;
-  range: PromptRange;
-  parentRange?: PromptRange;
-  hasExplicitAttention: boolean;
-  usesNumericAttention: boolean;
-  isSelected: boolean;
+interface Weight {
+  value: number;
+  /** Exact symbolic steps avoid logarithms, rounding drift and tolerance-based regrouping. */
+  steps: number | null;
+  explicit: boolean;
 }
 
-type Region =
-  | { type: 'normal'; nodes: PromptAstNode[]; range: PromptRange }
-  | { type: 'prompt_function'; node: PromptFunctionNode };
+interface WeightedLeaf {
+  node: LeafNode;
+  weight: Weight;
+  selected: boolean;
+}
 
-const roundWeight = (weight: number): number => Number(weight.toFixed(4));
+const NEUTRAL: Weight = { value: 1, steps: 0, explicit: false };
+const GENERATED_RANGE: PromptRange = { start: 0, end: 0 };
+const roundWeight = (weight: number): number => Number(weight.toPrecision(15));
+const symbolicValue = (steps: number): number => (steps >= 0 ? 1.1 ** steps : 0.9 ** -steps);
 
-const isNeutralWeight = (weight: number): boolean => Math.abs(weight - 1) < WEIGHT_EPSILON;
-
-const parseAttention = (attention: PromptAttention): number => {
-  if (typeof attention === 'number') {
-    return attention;
+const combineWeights = (parent: Weight, child: Weight): Weight => {
+  if (!parent.explicit) {
+    return child;
   }
-
-  if (attention.startsWith('+')) {
-    return ATTENTION_FACTOR ** attention.length;
+  if (!child.explicit) {
+    return parent;
   }
-
-  if (attention.startsWith('-')) {
-    return ATTENTION_FACTOR ** -attention.length;
-  }
-
-  const numeric = Number(attention);
-
-  return Number.isNaN(numeric) ? 1 : numeric;
-};
-
-const getSymbolicStepCount = (weight: number): number | null => {
-  if (weight <= 0) {
-    return null;
-  }
-
-  if (isNeutralWeight(weight)) {
-    return 0;
-  }
-
-  const steps = Math.round(Math.log(weight) / Math.log(ATTENTION_FACTOR));
-
-  if (steps === 0) {
-    return null;
-  }
-
-  return Math.abs(ATTENTION_FACTOR ** steps - weight) < FACTOR_EPSILON ? steps : null;
-};
-
-const addSymbolicAttention = (current: PromptAttention | undefined, next: '+' | '-'): PromptAttention | undefined => {
-  if (current === undefined) {
-    return next;
-  }
-
-  if (typeof current === 'number') {
-    return next === '+' ? roundWeight(current * ATTENTION_FACTOR) : roundWeight(current / ATTENTION_FACTOR);
-  }
-
-  const cancels = (current.startsWith('+') && next === '-') || (current.startsWith('-') && next === '+');
-
-  if (!cancels) {
-    return `${current}${next}`;
-  }
-
-  const remaining = current.slice(1);
-
-  return remaining ? remaining : undefined;
-};
-
-const clipRange = (selectionStart: number, selectionEnd: number, range: PromptRange): PromptRange | null => {
-  if (selectionStart === selectionEnd) {
-    return selectionStart >= range.start && selectionStart <= range.end
-      ? { start: selectionStart, end: selectionEnd }
+  // Opposite symbolic signs multiply in Compel (1.1 * 0.9 = 0.99); they do not cancel.
+  const combinedSteps =
+    parent.steps !== null &&
+    child.steps !== null &&
+    (parent.steps === 0 || child.steps === 0 || Math.sign(parent.steps) === Math.sign(child.steps))
+      ? parent.steps + child.steps
       : null;
-  }
-
-  const start = Math.max(selectionStart, range.start);
-  const end = Math.min(selectionEnd, range.end);
-
-  return start < end ? { start, end } : null;
-};
-
-const rangesOverlap = (selectionStart: number, selectionEnd: number, range: PromptRange): boolean => {
-  if (selectionStart === selectionEnd) {
-    return range.start <= selectionStart && range.end >= selectionStart;
-  }
-
-  return range.start < selectionEnd && range.end > selectionStart;
-};
-
-const extractRegions = (nodes: PromptAstNode[]): Region[] => {
-  const regions: Region[] = [];
-  let normalNodes: PromptAstNode[] = [];
-
-  const flushNormalNodes = () => {
-    const first = normalNodes[0];
-    const last = normalNodes.at(-1);
-
-    if (!first || !last) {
-      return;
-    }
-
-    regions.push({ type: 'normal', nodes: normalNodes, range: { start: first.range.start, end: last.range.end } });
-    normalNodes = [];
-  };
-
-  for (const node of nodes) {
-    if (node.type === 'prompt_function') {
-      flushNormalNodes();
-      regions.push({ type: 'prompt_function', node });
-    } else {
-      normalNodes.push(node);
-    }
-  }
-
-  flushNormalNodes();
-
-  return regions;
-};
-
-const flattenNodes = (
-  nodes: PromptAstNode[],
-  inheritedWeight = 1,
-  parentRange?: PromptRange,
-  inheritedNumericAttention = false
-): WeightedLeaf[] => {
-  const leaves: WeightedLeaf[] = [];
-
-  for (const node of nodes) {
-    let weight = inheritedWeight;
-    let usesNumericAttention = inheritedNumericAttention;
-
-    if ((node.type === 'word' || node.type === 'group') && node.attention !== undefined) {
-      weight *= parseAttention(node.attention);
-      usesNumericAttention = typeof node.attention === 'number';
-    }
-
-    if (node.type === 'group') {
-      leaves.push(...flattenNodes(node.children, weight, node.range, usesNumericAttention));
-      continue;
-    }
-
-    if (node.type === 'prompt_function') {
-      continue;
-    }
-
-    leaves.push({
-      hasExplicitAttention: node.type === 'word' && node.attention !== undefined,
-      isSelected: false,
-      parentRange,
-      range: node.range,
-      text: node.type === 'word' ? node.text : node.value,
-      type: node.type,
-      usesNumericAttention,
-      weight,
-    });
-  }
-
-  return leaves;
-};
-
-const selectLeaves = (leaves: WeightedLeaf[], selectionStart: number, selectionEnd: number): WeightedLeaf[] => {
-  const selected = leaves.filter((leaf) => {
-    if (!rangesOverlap(selectionStart, selectionEnd, leaf.range)) {
-      return false;
-    }
-
-    if (!leaf.parentRange) {
-      return true;
-    }
-
-    const parentContainsSelection = leaf.parentRange.start <= selectionStart && leaf.parentRange.end >= selectionEnd;
-    const selectionCoversParent = selectionStart <= leaf.parentRange.start && selectionEnd >= leaf.parentRange.end;
-
-    return parentContainsSelection || selectionCoversParent || !leaf.hasExplicitAttention;
-  });
-
-  if (selectionStart !== selectionEnd || selected.length < 2) {
-    return selected;
-  }
-
-  const contentLeaves = selected.filter((leaf) => leaf.type === 'word' || leaf.type === 'embedding');
-
-  return contentLeaves.length > 0 ? contentLeaves : selected;
-};
-
-const findSelectedGroup = (
-  nodes: PromptAstNode[],
-  selectionStart: number,
-  selectionEnd: number
-): Extract<PromptAstNode, { type: 'group' }> | null => {
-  for (const node of nodes) {
-    if (node.type !== 'group') {
-      continue;
-    }
-
-    const childGroup = findSelectedGroup(node.children, selectionStart, selectionEnd);
-
-    if (childGroup) {
-      return childGroup;
-    }
-
-    if (rangesOverlap(selectionStart, selectionEnd, node.range)) {
-      return node;
-    }
-  }
-
-  return null;
-};
-
-const applyWeightStep = (leaves: WeightedLeaf[], direction: PromptAttentionDirection): void => {
-  for (const leaf of leaves) {
-    if (leaf.usesNumericAttention) {
-      leaf.weight = roundWeight(leaf.weight + (direction === 'increment' ? NUMERIC_STEP : -NUMERIC_STEP));
-    } else {
-      leaf.weight = roundWeight(leaf.weight * (direction === 'increment' ? ATTENTION_FACTOR : 1 / ATTENTION_FACTOR));
-    }
-  }
-};
-
-const createLeafNode = (leaf: WeightedLeaf): PromptAstNode => {
-  const isSelection = leaf.isSelected || undefined;
-
-  switch (leaf.type) {
-    case 'word':
-      return { type: 'word', text: leaf.text, range: leaf.range, isSelection };
-    case 'whitespace':
-      return { type: 'whitespace', value: leaf.text, range: leaf.range, isSelection };
-    case 'punct':
-      return { type: 'punct', value: leaf.text, range: leaf.range, isSelection };
-    case 'embedding':
-      return { type: 'embedding', value: leaf.text, range: leaf.range, isSelection };
-    case 'escaped_paren':
-      return { type: 'escaped_paren', value: leaf.text as '(' | ')', range: leaf.range, isSelection };
-  }
-};
-
-const findRunEnd = (leaves: WeightedLeaf[], start: number, predicate: (leaf: WeightedLeaf) => boolean): number => {
-  let end = start;
-
-  while (end < leaves.length) {
-    const leaf = leaves[end];
-
-    if (!leaf) {
-      break;
-    }
-
-    if (predicate(leaf)) {
-      end++;
-      continue;
-    }
-
-    if (leaf.type !== 'whitespace') {
-      break;
-    }
-
-    let nextContent = end + 1;
-
-    while (leaves[nextContent]?.type === 'whitespace') {
-      nextContent++;
-    }
-
-    if (!leaves[nextContent] || !predicate(leaves[nextContent])) {
-      break;
-    }
-
-    end = nextContent;
-  }
-
-  return end;
-};
-
-const trimWhitespaceRun = (leaves: WeightedLeaf[], start: number, end: number): PromptRange => {
-  let trimmedStart = start;
-  let trimmedEnd = end;
-
-  while (trimmedStart < trimmedEnd && leaves[trimmedStart]?.type === 'whitespace') {
-    trimmedStart++;
-  }
-
-  while (trimmedEnd > trimmedStart && leaves[trimmedEnd - 1]?.type === 'whitespace') {
-    trimmedEnd--;
-  }
-
-  return { start: trimmedStart, end: trimmedEnd };
-};
-
-const pushLeaves = (nodes: PromptAstNode[], leaves: WeightedLeaf[], start: number, end: number): void => {
-  for (let index = start; index < end; index++) {
-    const leaf = leaves[index];
-
-    if (leaf) {
-      nodes.push(createLeafNode(leaf));
-    }
-  }
-};
-
-const selectedAll = (leaves: WeightedLeaf[]): boolean => leaves.length > 0 && leaves.every((leaf) => leaf.isSelected);
-
-const createSymbolicRunNode = (leaves: WeightedLeaf[], sign: '+' | '-'): PromptAstNode | null => {
-  const factor = sign === '+' ? ATTENTION_FACTOR : 1 / ATTENTION_FACTOR;
-  const children = groupWeightedLeaves(leaves.map((leaf) => ({ ...leaf, weight: leaf.weight / factor })));
-
-  if (children.length === 0) {
-    return null;
-  }
-
-  const isSelection = selectedAll(leaves) || undefined;
-
-  if (children.length === 1) {
-    const child = children[0];
-
-    if (child?.type === 'word' || child?.type === 'group') {
-      return { ...child, attention: addSymbolicAttention(child.attention, sign), isSelection };
-    }
-  }
-
-  return { type: 'group', attention: sign, children, range: GENERATED_RANGE, isSelection };
-};
-
-const createNumericRunNode = (leaves: WeightedLeaf[], weight: number): PromptAstNode | null => {
-  const children = groupWeightedLeaves(leaves.map((leaf) => ({ ...leaf, weight: 1 })));
-
-  if (children.length === 0) {
-    return null;
-  }
-
   return {
-    type: 'group',
-    attention: roundWeight(weight),
-    children,
-    range: GENERATED_RANGE,
-    isSelection: selectedAll(leaves) || undefined,
+    value: combinedSteps === null ? roundWeight(parent.value * child.value) : symbolicValue(combinedSteps),
+    steps: combinedSteps,
+    explicit: parent.explicit || child.explicit,
   };
+};
+
+const inheritWeight = (parent: Weight, attention: PromptAttention | undefined): Weight => {
+  if (attention === undefined) {
+    return parent;
+  }
+  const steps = typeof attention === 'number' ? null : attention.startsWith('+') ? attention.length : -attention.length;
+  return combineWeights(parent, {
+    value: typeof attention === 'number' ? attention : symbolicValue(steps!),
+    steps,
+    explicit: true,
+  });
+};
+
+const overlaps = (selection: PromptRange, range: PromptRange): boolean =>
+  selection.start === selection.end
+    ? range.start <= selection.start && range.end >= selection.start
+    : range.start < selection.end && range.end > selection.start;
+
+/** A selection of a group's delimiters/weight targets that group's contents. */
+const resolveSelection = (nodes: PromptAstNode[], selection: PromptRange): PromptRange => {
+  for (const node of nodes) {
+    if (node.type !== 'group' || !overlaps(selection, node.range)) {
+      continue;
+    }
+    const first = node.children[0];
+    const last = node.children.at(-1);
+    if (!first || !last) {
+      continue;
+    }
+    if (
+      selection.start >= node.range.start &&
+      selection.end <= node.range.end &&
+      (selection.start === selection.end
+        ? selection.end < first.range.start || selection.start > last.range.end
+        : selection.end <= first.range.start || selection.start >= last.range.end)
+    ) {
+      return { start: first.range.start, end: last.range.end };
+    }
+    const childSelection = resolveSelection(node.children, selection);
+    if (childSelection !== selection) {
+      return childSelection;
+    }
+  }
+  return selection;
+};
+
+const flattenNodes = (nodes: PromptAstNode[], leaves: WeightedLeaf[], weight = NEUTRAL): void => {
+  for (const node of nodes) {
+    const inherited = node.type === 'group' || node.type === 'word' ? inheritWeight(weight, node.attention) : weight;
+    if (node.type === 'group') {
+      flattenNodes(node.children, leaves, inherited);
+    } else {
+      const previous = leaves.at(-1);
+      // Compel separates fragments at parentheses even without literal whitespace.
+      // Keep that word boundary when the delimiters disappear during regrouping.
+      if (previous?.node.type === 'word' && node.type === 'word' && previous.node.range.end < node.range.start) {
+        leaves.push({
+          node: { type: 'whitespace', value: ' ', range: { start: previous.node.range.end, end: node.range.start } },
+          weight: NEUTRAL,
+          selected: false,
+        });
+      }
+      leaves.push({ node, weight: inherited, selected: false });
+    }
+  }
+};
+
+const selectLeaves = (leaves: WeightedLeaf[], selection: PromptRange): void => {
+  if (selection.start !== selection.end) {
+    for (const leaf of leaves) {
+      leaf.selected = overlaps(selection, leaf.node.range);
+    }
+    return;
+  }
+  // At a token boundary prefer content over punctuation/whitespace, then the token
+  // starting at the caret. A collapsed selection must never edit both neighbours.
+  let best: WeightedLeaf | undefined;
+  let bestRank = -1;
+  for (const leaf of leaves) {
+    if (!overlaps(selection, leaf.node.range)) {
+      continue;
+    }
+    const content = leaf.node.type === 'word' || leaf.node.type === 'embedding' || leaf.node.type === 'prompt_function';
+    const rank = (content ? 2 : 0) + (leaf.node.range.start === selection.start ? 1 : 0);
+    if (rank > bestRank) {
+      best = leaf;
+      bestRank = rank;
+    }
+  }
+  if (best) {
+    best.selected = true;
+  }
+};
+
+const stepWeight = (weight: Weight, direction: PromptAttentionDirection, preferNumeric: boolean): Weight => {
+  const delta = direction === 'increment' ? 1 : -1;
+  if (weight.steps === null || (preferNumeric && !weight.explicit)) {
+    return { value: roundWeight(weight.value + delta * 0.1), steps: null, explicit: true };
+  }
+  const steps = weight.steps + delta;
+  return { value: symbolicValue(steps), steps, explicit: true };
+};
+
+const leafNode = (leaf: WeightedLeaf): PromptAstNode => {
+  const isSelection = leaf.selected || undefined;
+  return leaf.node.type === 'word'
+    ? { ...leaf.node, attention: undefined, isSelection }
+    : { ...leaf.node, isSelection };
+};
+
+const sameWeight = (a: Weight, b: Weight): boolean => {
+  if (a.steps !== null && b.steps !== null) {
+    return a.steps === b.steps;
+  }
+  return a.value === b.value || roundWeight(a.value) === roundWeight(b.value);
+};
+
+/** Equal numeric and symbolic neighbours must merge in either document order. */
+const unifyEqualWeights = (leaves: WeightedLeaf[]): void => {
+  let start = 0;
+  while (start < leaves.length) {
+    const first = leaves[start]!;
+    if (first.node.type === 'whitespace') {
+      start++;
+      continue;
+    }
+    let end = start + 1;
+    let numeric = first.weight.steps === null;
+    while (end < leaves.length) {
+      const leaf = leaves[end]!;
+      if (leaf.node.type !== 'whitespace') {
+        if (!sameWeight(first.weight, leaf.weight)) {
+          break;
+        }
+        numeric ||= leaf.weight.steps === null;
+      }
+      end++;
+    }
+    if (numeric) {
+      for (let index = start; index < end; index++) {
+        const leaf = leaves[index]!;
+        if (leaf.node.type !== 'whitespace') {
+          leaf.weight = { ...leaf.weight, steps: null };
+        }
+      }
+    }
+    start = end;
+  }
+};
+
+const wrapRun = (children: PromptAstNode[], attention: PromptAttention, selected: boolean): PromptAstNode => {
+  const child = children.length === 1 ? children[0] : undefined;
+  if (typeof attention === 'string' && (child?.type === 'word' || child?.type === 'group')) {
+    return { ...child, attention, isSelection: selected || undefined };
+  }
+  return { type: 'group', attention, children, range: GENERATED_RANGE, isSelection: selected || undefined };
 };
 
 const groupWeightedLeaves = (leaves: WeightedLeaf[]): PromptAstNode[] => {
   const nodes: PromptAstNode[] = [];
   let index = 0;
-
   while (index < leaves.length) {
-    const leaf = leaves[index];
-
-    if (!leaf) {
-      break;
-    }
-
-    const stepCount = getSymbolicStepCount(leaf.weight);
-
-    if (stepCount !== null && stepCount !== 0 && !leaf.usesNumericAttention) {
-      const isPositive = stepCount > 0;
-      const sign = isPositive ? '+' : '-';
-      const runEnd = findRunEnd(leaves, index, (candidate) => {
-        if (candidate.usesNumericAttention) {
-          return false;
-        }
-
-        const candidateSteps = getSymbolicStepCount(candidate.weight);
-
-        return candidateSteps !== null && (isPositive ? candidateSteps > 0 : candidateSteps < 0);
-      });
-      const trimmed = trimWhitespaceRun(leaves, index, runEnd);
-
-      pushLeaves(nodes, leaves, index, trimmed.start);
-
-      const runNode = createSymbolicRunNode(leaves.slice(trimmed.start, trimmed.end), sign);
-
-      if (runNode) {
-        nodes.push(runNode);
-      }
-
-      pushLeaves(nodes, leaves, trimmed.end, runEnd);
-      index = runEnd;
-      continue;
-    }
-
-    if (isNeutralWeight(leaf.weight)) {
-      nodes.push(createLeafNode(leaf));
+    const first = leaves[index]!;
+    if (first.node.type === 'whitespace' || first.weight.value === 1) {
+      nodes.push(leafNode(first));
       index++;
       continue;
     }
-
-    const runWeight = leaf.weight;
-    const runEnd = findRunEnd(leaves, index, (candidate) => Math.abs(candidate.weight - runWeight) < WEIGHT_EPSILON);
-    const trimmed = trimWhitespaceRun(leaves, index, runEnd);
-
-    pushLeaves(nodes, leaves, index, trimmed.start);
-
-    const runNode = createNumericRunNode(leaves.slice(trimmed.start, trimmed.end), runWeight);
-
-    if (runNode) {
-      nodes.push(runNode);
+    const symbolic = first.weight.steps !== null;
+    const sign = Math.sign(first.weight.steps ?? 0);
+    let commonSteps = first.weight.steps ?? 0;
+    let end = index + 1;
+    let contentEnd = end;
+    while (end < leaves.length) {
+      const leaf = leaves[end]!;
+      if (leaf.node.type !== 'whitespace') {
+        if (
+          symbolic
+            ? leaf.weight.steps === null || Math.sign(leaf.weight.steps) !== sign
+            : !sameWeight(first.weight, leaf.weight)
+        ) {
+          break;
+        }
+        if (symbolic) {
+          commonSteps = sign * Math.min(Math.abs(commonSteps), Math.abs(leaf.weight.steps!));
+        }
+        contentEnd = end + 1;
+      }
+      end++;
     }
-
-    pushLeaves(nodes, leaves, trimmed.end, runEnd);
-    index = runEnd;
+    const run = leaves.slice(index, contentEnd);
+    const children = symbolic
+      ? groupWeightedLeaves(
+          run.map((leaf) => {
+            const steps = leaf.node.type === 'whitespace' ? 0 : leaf.weight.steps! - commonSteps;
+            return { ...leaf, weight: { ...leaf.weight, steps, value: symbolicValue(steps) } };
+          })
+        )
+      : run.map(leafNode);
+    const attention = symbolic ? (sign > 0 ? '+' : '-').repeat(Math.abs(commonSteps)) : first.weight.value;
+    nodes.push(
+      wrapRun(
+        children,
+        attention,
+        run.every((leaf) => leaf.selected)
+      )
+    );
+    index = contentEnd;
   }
-
   return nodes;
 };
 
 const adjustNodes = (
   nodes: PromptAstNode[],
-  selectionStart: number,
-  selectionEnd: number,
+  selection: PromptRange,
   direction: PromptAttentionDirection,
-  preferNumericAttentionStyle: boolean
+  preferNumeric: boolean,
+  inherited = NEUTRAL
 ): { nodes: PromptAstNode[]; modified: boolean } => {
-  const leaves = flattenNodes(nodes);
-  let selectedLeaves = selectLeaves(leaves, selectionStart, selectionEnd);
-
-  if (selectedLeaves.length === 0) {
-    const group = findSelectedGroup(nodes, selectionStart, selectionEnd);
-
-    if (group) {
-      selectedLeaves = leaves.filter(
-        (leaf) => leaf.range.start >= group.range.start && leaf.range.end <= group.range.end
-      );
+  const target = resolveSelection(nodes, selection);
+  const leaves: WeightedLeaf[] = [];
+  flattenNodes(nodes, leaves);
+  selectLeaves(leaves, target);
+  let modified = false;
+  for (const leaf of leaves) {
+    if (!Number.isFinite(leaf.weight.value)) {
+      throw new TypeError('Non-finite prompt attention');
     }
+    if (!leaf.selected) {
+      continue;
+    }
+    if (leaf.node.type === 'prompt_function') {
+      const context = combineWeights(inherited, leaf.weight);
+      let functionModified = false;
+      const promptArgs = leaf.node.promptArgs.map((arg) => {
+        if (!overlaps(target, arg.contentRange)) {
+          return arg;
+        }
+        const result = adjustNodes(arg.nodes, target, direction, preferNumeric, context);
+        functionModified ||= result.modified;
+        return result.modified ? { ...arg, nodes: result.nodes } : arg;
+      });
+      leaf.node = functionModified ? { ...leaf.node, promptArgs } : leaf.node;
+      leaf.selected = false;
+      modified ||= functionModified;
+      continue;
+    }
+    if (leaf.node.type === 'whitespace') {
+      continue;
+    }
+    if (inherited.value === 0) {
+      leaf.selected = false;
+      continue;
+    }
+    const stepped = stepWeight(combineWeights(inherited, leaf.weight), direction, preferNumeric);
+    const relativeSteps = stepped.steps !== null && inherited.steps !== null ? stepped.steps - inherited.steps : null;
+    const canUseSymbolic =
+      relativeSteps !== null &&
+      (relativeSteps === 0 || inherited.steps === 0 || Math.sign(relativeSteps) === Math.sign(inherited.steps!));
+    leaf.weight = {
+      value: canUseSymbolic ? symbolicValue(relativeSteps) : roundWeight(stepped.value / inherited.value),
+      steps: canUseSymbolic ? relativeSteps : null,
+      explicit: true,
+    };
+    if (!Number.isFinite(leaf.weight.value)) {
+      throw new TypeError('Non-finite prompt attention');
+    }
+    modified = true;
   }
-
-  if (selectedLeaves.length === 0) {
+  if (!modified) {
     return { nodes, modified: false };
   }
-
-  for (const leaf of selectedLeaves) {
-    leaf.isSelected = true;
-
-    if (preferNumericAttentionStyle && !leaf.hasExplicitAttention) {
-      leaf.usesNumericAttention = true;
-    }
-  }
-
-  applyWeightStep(selectedLeaves, direction);
-
+  unifyEqualWeights(leaves);
   return { nodes: groupWeightedLeaves(leaves), modified: true };
-};
-
-const adjustPromptFunction = (
-  node: PromptFunctionNode,
-  selectionStart: number,
-  selectionEnd: number,
-  direction: PromptAttentionDirection,
-  preferNumericAttentionStyle: boolean
-): { node: PromptFunctionNode; modified: boolean } => {
-  let modified = false;
-  const promptArgs: PromptFunctionArg[] = node.promptArgs.map((arg) => {
-    const clipped = clipRange(selectionStart, selectionEnd, arg.contentRange);
-
-    if (!clipped) {
-      return arg;
-    }
-
-    const result = adjustNodes(arg.nodes, clipped.start, clipped.end, direction, preferNumericAttentionStyle);
-
-    if (!result.modified) {
-      return arg;
-    }
-
-    modified = true;
-    return { ...arg, nodes: result.nodes };
-  });
-
-  return modified ? { node: { ...node, promptArgs }, modified: true } : { node, modified: false };
-};
-
-const adjustPromptAttentionUnchecked = (
-  prompt: string,
-  selectionStart: number,
-  selectionEnd: number,
-  direction: PromptAttentionDirection,
-  preferNumericAttentionStyle = false
-): PromptAttentionAdjustment => {
-  const nodes = parsePrompt(prompt);
-  const nextNodes: PromptAstNode[] = [];
-  let modified = false;
-
-  for (const region of extractRegions(nodes)) {
-    if (region.type === 'normal') {
-      const clipped = clipRange(selectionStart, selectionEnd, region.range);
-
-      if (!clipped) {
-        nextNodes.push(...region.nodes);
-        continue;
-      }
-
-      const result = adjustNodes(region.nodes, clipped.start, clipped.end, direction, preferNumericAttentionStyle);
-      modified = modified || result.modified;
-      nextNodes.push(...result.nodes);
-      continue;
-    }
-
-    const clipped = clipRange(selectionStart, selectionEnd, region.node.range);
-
-    if (!clipped) {
-      nextNodes.push(region.node);
-      continue;
-    }
-
-    const result = adjustPromptFunction(
-      region.node,
-      clipped.start,
-      clipped.end,
-      direction,
-      preferNumericAttentionStyle
-    );
-    modified = modified || result.modified;
-    nextNodes.push(result.node);
-  }
-
-  return modified ? serializePromptWithSelection(nextNodes) : { prompt, selectionStart, selectionEnd };
 };
 
 export const adjustPromptAttention = (
@@ -545,9 +333,16 @@ export const adjustPromptAttention = (
   direction: PromptAttentionDirection,
   preferNumericAttentionStyle = false
 ): PromptAttentionAdjustment => {
+  const unchanged = { prompt, selectionStart, selectionEnd };
   try {
-    return adjustPromptAttentionUnchecked(prompt, selectionStart, selectionEnd, direction, preferNumericAttentionStyle);
+    const selection = {
+      start: Math.max(0, Math.min(prompt.length, selectionStart, selectionEnd)),
+      end: Math.min(prompt.length, Math.max(0, selectionStart, selectionEnd)),
+    };
+    const result = adjustNodes(parsePrompt(prompt), selection, direction, preferNumericAttentionStyle);
+    return result.modified ? serializePromptWithSelection(result.nodes, prompt) : unchanged;
   } catch {
-    return { prompt, selectionStart, selectionEnd };
+    // Prompts are edited while incomplete, and pathological nesting must not break typing.
+    return unchanged;
   }
 };

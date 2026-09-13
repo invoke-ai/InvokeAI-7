@@ -69,8 +69,8 @@ export const isPatchApplied = (node: CanvasNodeContract, patch: CanvasLayerBaseP
 
 /**
  * Whether every field named by `config` already holds its value; nested
- * partials compare field by field, and a `null` config value asserts the
- * field's ABSENCE — the reducer deletes the key for it.
+ * partials compare field by field, and a `null` config value asserts the field
+ * is cleared: absent (the reducer deletes mask modifiers) or stored as null (prompts).
  */
 export const isConfigApplied = (node: CanvasNodeContract, config: CanvasLayerConfigPatch): boolean => {
   if (node.type !== config.layerType) {
@@ -83,7 +83,7 @@ export const isConfigApplied = (node: CanvasNodeContract, config: CanvasLayerCon
     }
     const current = target[key];
     if (value === null) {
-      return current === undefined;
+      return current === undefined || current === null;
     }
     return isRecord(value) && isRecord(current) && (key === 'adapter' || key === 'mask')
       ? Object.entries(value).every(([field, expected]) => sameValue(current[field], expected))

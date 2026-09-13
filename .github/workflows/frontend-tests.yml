@@ -30,6 +30,15 @@ on:
         type: boolean
         default: true
 
+# One run per pull request: a new push cancels the superseded run. The PR number is used rather
+# than the head branch, which two forks can share. Pushes to main and merge groups fall back to
+# the run id and never cancel each other. The group names the workflow literally
+# because `github.workflow` is the caller's name inside a reusable workflow, and release.yml calls
+# several of these at once.
+concurrency:
+  group: frontend-tests-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
 jobs:
   frontend-tests:
     runs-on: ubuntu-latest
@@ -52,6 +61,8 @@ jobs:
         with:
           files_yaml: |
             frontend:
+              - '.github/workflows/frontend-tests.yml'
+              - '.github/actions/install-frontend-deps/**'
               - 'invokeai/frontend/web/**'
 
       - name: install dependencies
@@ -65,7 +76,7 @@ jobs:
 
   frontend-webv2-tests:
     runs-on: ubuntu-latest
-    timeout-minutes: 15 # Includes browser suites, performance sampling, and project-file journeys.
+    timeout-minutes: 20 # Includes browser suites, performance sampling, and project-file journeys.
     defaults:
       run:
         working-directory: invokeai/frontend/webv2
@@ -80,6 +91,7 @@ jobs:
           files_yaml: |
             webv2:
               - '.github/workflows/frontend-tests.yml'
+              - '.github/actions/install-frontend-deps/**'
               - 'invokeai/frontend/webv2/**'
 
       - name: install dependencies
@@ -90,7 +102,7 @@ jobs:
 
       - name: install Chromium
         if: ${{ steps.changed-files.outputs.webv2_any_changed == 'true' || inputs.always_run == true }}
-        run: 'pnpm exec playwright install chromium'
+        run: 'pnpm exec playwright install --with-deps chromium'
         shell: bash
 
       - name: architecture completion gates

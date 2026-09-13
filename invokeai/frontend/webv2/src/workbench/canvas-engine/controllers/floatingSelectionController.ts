@@ -228,20 +228,34 @@ export class FloatingSelectionController {
     this.deps.markDirty(float.layerId);
     this.deps.invalidateLayer(float.layerId);
 
-    if (!this.deps.history.isApplying()) {
-      this.deps.history.push(
-        createImagePatchEntry({
-          after,
-          apply: this.deps.applyImagePatch,
-          before,
-          label: 'Move selection',
-          layerId: float.layerId,
-          rect: patchRect,
-        })
-      );
-    }
-
+    // The ants travel with the pixels inside the same step, so one undo puts
+    // both back; the raw selection records nothing of its own here.
+    const selectionBefore = this.deps.selection.snapshot();
     this.moveSelectionWithFloat(layer, matrix, float);
+    const selectionAfter = this.deps.selection.snapshot();
+
+    if (!this.deps.history.isApplying()) {
+      const patch = createImagePatchEntry({
+        after,
+        apply: this.deps.applyImagePatch,
+        before,
+        label: 'Move selection',
+        layerId: float.layerId,
+        rect: patchRect,
+      });
+      this.deps.history.push({
+        bytes: patch.bytes + (selectionBefore.alpha?.byteLength ?? 0) + (selectionAfter.alpha?.byteLength ?? 0),
+        label: patch.label,
+        redo: () => {
+          patch.redo();
+          this.deps.selection.restore(selectionAfter);
+        },
+        undo: () => {
+          patch.undo();
+          this.deps.selection.restore(selectionBefore);
+        },
+      });
+    }
   }
 
   /**

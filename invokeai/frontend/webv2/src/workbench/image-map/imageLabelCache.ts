@@ -1,3 +1,6 @@
+import type { GalleryItemRef } from '@features/gallery/contracts';
+
+import { toGalleryItemKey } from '@features/gallery/contracts';
 import {
   captureAccountScope,
   isAccountScopeCurrent,
@@ -10,10 +13,10 @@ import type { ImageMapImageLabels } from './api';
 import { fetchImageMapImageLabels } from './api';
 
 /**
- * Image-name → vocabulary-labels cache for map hover cards. Labels derive from
- * the image's stored embedding, which never changes, and the labeling
+ * Item-key → vocabulary-labels cache for map hover cards. Labels derive from
+ * the item's stored embedding, which never changes, and the labeling
  * vocabulary, which does: an admin can edit the supplementary term list. So
- * results (including "no labels for this image") are cached until a
+ * results (including "no labels for this item") are cached until a
  * vocabulary rebuild lands, at which point `clearImageLabels` drops them.
  */
 const labels = new Map<string, ImageMapImageLabels | null>();
@@ -56,16 +59,17 @@ export const clearImageLabels = (): void => {
   unavailableUntil = 0;
 };
 
-export const getImageLabels = (imageName: string): Promise<ImageMapImageLabels | null> => {
-  // Checked before the cooldown: labels already fetched for this image stay
+export const getImageLabels = (item: GalleryItemRef): Promise<ImageMapImageLabels | null> => {
+  const key = toGalleryItemKey(item);
+  // Checked before the cooldown: labels already fetched for this item stay
   // available even while a server-wide 409 is being backed off.
-  const cached = labels.get(imageName);
+  const cached = labels.get(key);
 
   if (cached !== undefined) {
     return Promise.resolve(cached);
   }
 
-  const pending = inflight.get(imageName);
+  const pending = inflight.get(key);
 
   if (pending) {
     return pending;
@@ -76,12 +80,12 @@ export const getImageLabels = (imageName: string): Promise<ImageMapImageLabels |
   }
 
   const owner = captureAccountScope();
-  const request = fetchImageMapImageLabels(imageName)
+  const request = fetchImageMapImageLabels(item)
     .then((result): ImageMapImageLabels | null => {
       // A resolution that raced an account switch must not seed the next
       // account's cache.
       if (isAccountScopeCurrent(owner)) {
-        labels.set(imageName, result);
+        labels.set(key, result);
       }
 
       return result;
@@ -94,28 +98,28 @@ export const getImageLabels = (imageName: string): Promise<ImageMapImageLabels |
       if (error instanceof ApiError && (error.status === 409 || error.status >= 500)) {
         // Server-wide and possibly temporary: a 409 means the vocabulary may
         // still be building, a 5xx that the backend is unwell. Back off rather
-        // than cache anything per image — but back off, because this is driven
+        // than cache anything per item — but back off, because this is driven
         // by pointer movement, and a deterministic failure would otherwise
         // refire several times a second for the rest of the session.
         unavailableUntil = Date.now() + UNAVAILABLE_COOLDOWN_MS;
       } else if (error instanceof ApiError && (error.status === 403 || error.status === 404)) {
-        // The only definitive per-image answers: not indexed, or not visible
+        // The only definitive per-item answers: not indexed, or not visible
         // to this account. Nothing about this session can change either.
-        labels.set(imageName, null);
+        labels.set(key, null);
       }
 
       // Everything else (5xx, 429, a dropped connection) is transient and is
-      // deliberately not cached: the next hover of this image retries.
+      // deliberately not cached: the next hover of this item retries.
       return null;
     })
     .finally(() => {
       // Release only this request's claim; an account switch already cleared
       // the in-flight map.
-      if (inflight.get(imageName) === request) {
-        inflight.delete(imageName);
+      if (inflight.get(key) === request) {
+        inflight.delete(key);
       }
     });
-  inflight.set(imageName, request);
+  inflight.set(key, request);
 
   return request;
 };

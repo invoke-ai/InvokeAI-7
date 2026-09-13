@@ -13,11 +13,12 @@ const GROUP_HEADER_HOVER = { color: 'fg' } as const;
 /**
  * One settings row of a tool property form: a fixed label column, a flexible
  * control cell, and a fixed trailing cell. Grid, not wrapping flex — a slider
- * and its number field are one row at every pane width.
+ * and its number field are one row at every pane width. No label leaves the
+ * column empty so a continuation row lines up under the row above.
  */
-export const PropertyControlRow = ({ children, label }: { children: ReactNode; label: string }) => (
+export const PropertyControlRow = ({ children, label }: { children: ReactNode; label?: string }) => (
   <Grid alignItems="center" columnGap="2" gridTemplateColumns="4.5rem minmax(0, 1fr) auto" minH="7" w="full">
-    <Text color="fg.muted" fontSize="xs" minW="0" truncate>
+    <Text color="fg.muted" fontSize="xs" minW="0" title={label} truncate>
       {label}
     </Text>
     {children}

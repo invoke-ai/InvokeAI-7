@@ -60,12 +60,7 @@ const useShapeEditor = (engine: ToolFormProps['engine']) => {
     },
     (a, b) => a?.id === b?.id && a?.name === b?.name && a?.source === b?.source
   );
-  // Polygon shapes (no tool kind) display as rect; every parametric kind passes through.
-  const kind: ShapeKind = selected
-    ? selected.source.kind === 'polygon'
-      ? 'rect'
-      : selected.source.kind
-    : options.kind;
+  const kind: ShapeKind = selected ? selected.source.kind : options.kind;
   const fill = selected ? selected.source.fill : options.fillEnabled ? pair.foreground : null;
   const stroke = selected ? selected.source.stroke : options.strokeEnabled ? pair.background : null;
   const strokeWidth = selected ? selected.source.strokeWidth : options.strokeWidth;
@@ -75,7 +70,9 @@ const useShapeEditor = (engine: ToolFormProps['engine']) => {
       if (!selected) {
         return;
       }
-      const after: ShapeSource = { ...selected.source, ...patch };
+      // Vertices belong to polygons only; a box kind never carries stale ones.
+      const { points, ...merged } = { ...selected.source, ...patch };
+      const after: ShapeSource = merged.kind === 'polygon' ? { ...merged, points } : merged;
       commitPrepared(t('widgets.canvas.toolOptions.shapeEdit'), (model) =>
         model.prepare({ id: selected.id, source: after, type: 'patch-source' })
       );
@@ -91,10 +88,14 @@ const useShapeEditor = (engine: ToolFormProps['engine']) => {
   const setKind = useCallback(
     (next: ShapeKind) => {
       setOptions({ kind: next });
-      commitSource({ kind: next });
+      // Creation-only kinds never rewrite a selected layer; a box kind drops a polygon's points.
+      if (next !== 'freehand' && next !== 'polygon') {
+        commitSource({ kind: next });
+      }
     },
     [commitSource, setOptions]
   );
+  const setTarget = useCallback((next: ShapeToolOptions['target']) => setOptions({ target: next }), [setOptions]);
   const previewStrokeWidth = useCallback((value: number) => setOptions({ strokeWidth: value }), [setOptions]);
   const setStrokeWidth = useCallback(
     (value: number) => {
@@ -144,7 +145,10 @@ const useShapeEditor = (engine: ToolFormProps['engine']) => {
   return {
     fill,
     kind,
+    selectedIsPolygon: selected?.source.kind === 'polygon',
     selectedName: selected?.name ?? null,
+    setTarget,
+    target: options.target,
     setFillColor,
     setFillEnabled,
     setKind,
@@ -154,6 +158,7 @@ const useShapeEditor = (engine: ToolFormProps['engine']) => {
     setStrokeWidth,
     stroke,
     strokeWidth,
+    toolKind: options.kind,
   };
 };
 
@@ -161,12 +166,29 @@ const ShapeSettings = ({ engine }: ToolFormProps) => {
   const { t } = useTranslation();
   const editor = useShapeEditor(engine);
   const sampleColor = useColorSampler(engine);
+  // A selected layer shows its own kind and can only switch among the box
+  // kinds (a box has no vertices to become a polygon; a polygon switched to a
+  // box drops its points). Polygon and freehand are creation gestures, offered
+  // while nothing is selected.
   const kindOptions = useMemo(
     () => [
       { label: t('widgets.canvas.toolOptions.shapeRect'), value: 'rect' as const },
       { label: t('widgets.canvas.toolOptions.shapeEllipse'), value: 'ellipse' as const },
       { label: t('widgets.canvas.toolOptions.shapeTriangle'), value: 'triangle' as const },
       { label: t('widgets.canvas.toolOptions.shapeStar'), value: 'star' as const },
+      ...(editor.selectedName === null || editor.selectedIsPolygon
+        ? [{ label: t('widgets.canvas.toolOptions.shapePolygon'), value: 'polygon' as const }]
+        : []),
+      ...(editor.selectedName === null
+        ? [{ label: t('widgets.canvas.toolOptions.shapeFreehand'), value: 'freehand' as const }]
+        : []),
+    ],
+    [editor.selectedIsPolygon, editor.selectedName, t]
+  );
+  const targetOptions = useMemo(
+    () => [
+      { label: t('widgets.canvas.toolOptions.shapeTargetSelected'), value: 'selected' as const },
+      { label: t('widgets.canvas.toolOptions.shapeTargetNew'), value: 'new' as const },
     ],
     [t]
   );
@@ -191,6 +213,14 @@ const ShapeSettings = ({ engine }: ToolFormProps) => {
         value={editor.kind}
         onValueChange={editor.setKind}
       />
+      {editor.selectedName === null ? (
+        <PropertySegmentedRow
+          label={t('widgets.canvas.toolOptions.shapeTarget')}
+          options={targetOptions}
+          value={editor.target}
+          onValueChange={editor.setTarget}
+        />
+      ) : null}
       {/* The chip stays enabled-looking but inert when the slot is off; the toggle owns enablement. */}
       <PropertyControlRow label={t('widgets.canvas.toolOptions.shapeFill')}>
         <ColorPicker
@@ -245,7 +275,13 @@ const ShapeSettings = ({ engine }: ToolFormProps) => {
         />
       </PropertyControlRow>
       <Text color="fg.muted" fontSize="2xs">
-        {t('widgets.canvas.toolOptions.shapeHint')}
+        {t(
+          editor.toolKind === 'polygon'
+            ? 'widgets.canvas.toolOptions.shapePolygonHint'
+            : editor.toolKind === 'freehand'
+              ? 'widgets.canvas.toolOptions.shapeFreehandHint'
+              : 'widgets.canvas.toolOptions.shapeHint'
+        )}
       </Text>
     </>
   );

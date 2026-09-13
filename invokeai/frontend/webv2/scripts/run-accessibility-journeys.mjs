@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
 import { resolve } from 'node:path';
 import process from 'node:process';
 import { chromium } from 'playwright';
@@ -7,6 +6,7 @@ import { chromium } from 'playwright';
 import { assertNoAxeViolations } from './accessibility/axe.mjs';
 import { MOCK_BACKEND_REPRESENTATIVE_VIDEO_NAME } from './mock-backend-fixtures.mjs';
 import { startMockBackend } from './mock-backend.mjs';
+import { killPreview, spawnPreview } from './preview-server.mjs';
 
 const root = resolve(import.meta.dirname, '..');
 const port = Number(process.env.INVOKEAI_ACCESSIBILITY_PORT ?? 4178);
@@ -41,6 +41,29 @@ const waitForPreview = async () => {
 const waitForSettledDocument = async (page) => {
   await page.evaluate(async () => {
     await document.fonts.ready;
+    // Every audit below reads rendered appearance, and a surface still animating in composites
+    // its text over whatever is behind it -- a dialog caught mid fade-in audits as a contrast
+    // failure its palette does not have. Two frames do not cover a 200ms fade, so wait on the
+    // animations themselves. Mirrors `settleAnimations` in
+    // `src/platform/browser/settleAnimations.testing.ts`, re-expressed here because this body is
+    // serialised into the page and cannot import it; the two must change together.
+    await Promise.allSettled(
+      document
+        .getAnimations({ subtree: true })
+        .filter((animation) => {
+          const timing = animation.effect?.getComputedTiming();
+          const duration = typeof timing?.duration === 'number' ? timing.duration : 0;
+
+          // A spinner, a shimmering skeleton, or a paused animation never finishes.
+          return (
+            timing?.iterations !== Infinity &&
+            Number.isFinite(duration) &&
+            animation.playbackRate !== 0 &&
+            animation.playState !== 'paused'
+          );
+        })
+        .map((animation) => animation.finished)
+    );
     await new Promise((resolveFrame) => {
       requestAnimationFrame(() => requestAnimationFrame(resolveFrame));
     });
@@ -156,6 +179,14 @@ const surfaces = [
     ready: waitForProjects,
   },
   {
+    id: 'launchpad-fonts-empty',
+    path: '/#/fonts',
+    ready: async (page) => {
+      await page.getByRole('textbox', { exact: true, name: 'Search fonts' }).waitFor();
+      await page.getByText('No fonts available', { exact: true }).waitFor();
+    },
+  },
+  {
     id: 'launchpad-models-representative',
     path: '/#/models',
     ready: waitForModels,
@@ -193,6 +224,8 @@ const surfaces = [
       await waitForWorkbench(page);
       await selectLayoutPreset(page, 'Compose', 'Preview');
       await selectCenterView(page, 'Preview', 'Gallery');
+      // The default project board is empty; scan the populated fixture gallery.
+      await centerRegion(page).getByRole('button').filter({ hasText: 'Uncategorized' }).click();
       await centerRegion(page).getByRole('list', { exact: true, name: 'Gallery items' }).waitFor();
     },
   },
@@ -268,13 +301,18 @@ const runKeyboardJourney = async (browser) => {
     await waitForHome(page);
 
     const projectsTab = page.getByRole('tab', { exact: true, name: 'Projects' });
+    const fontsTab = page.getByRole('tab', { exact: true, name: 'Fonts' });
     const modelsTab = page.getByRole('tab', { exact: true, name: 'Models' });
 
     // The rail is grouped, but it is still one tablist: arrowing off the last
     // Workspace tab has to land on the first Manage tab, skipping the headings.
     await projectsTab.focus();
     await projectsTab.press('ArrowDown');
-    await expectFocused(modelsTab, 'ArrowDown should move focus from Projects to Models.');
+    await expectFocused(fontsTab, 'ArrowDown should move focus from Projects to Fonts.');
+    assert.match(page.url(), /#\/fonts$/);
+    assert.equal(await fontsTab.getAttribute('aria-selected'), 'true');
+    await fontsTab.press('ArrowDown');
+    await expectFocused(modelsTab, 'ArrowDown should move focus from Fonts to Models.');
     await waitForModels(page);
     assert.match(page.url(), /#\/models$/);
     assert.equal(await modelsTab.getAttribute('aria-selected'), 'true');
@@ -308,20 +346,21 @@ const runKeyboardJourney = async (browser) => {
     await previewTrigger.focus();
     await previewTrigger.press('Enter');
 
+    // Compose keeps Preview and Gallery as its center views; Canvas lives under "Add to center".
     const previewItem = page.getByRole('menuitemradio', { exact: true, name: 'Preview' });
-    const canvasItem = page.getByRole('menuitemradio', { exact: true, name: 'Canvas' });
+    const galleryItem = page.getByRole('menuitemradio', { exact: true, name: 'Gallery' });
     const centerViewMenu = page.getByRole('menu');
 
-    await canvasItem.waitFor();
+    await galleryItem.waitFor();
     assert.equal(await previewItem.getAttribute('aria-checked'), 'true');
     await expectFocused(centerViewMenu, 'Opening the center view menu should focus its composite.');
     assert.equal(await centerViewMenu.getAttribute('aria-activedescendant'), await previewItem.getAttribute('id'));
     await centerViewMenu.press('ArrowDown');
-    assert.equal(await centerViewMenu.getAttribute('aria-activedescendant'), await canvasItem.getAttribute('id'));
+    assert.equal(await centerViewMenu.getAttribute('aria-activedescendant'), await galleryItem.getAttribute('id'));
     await centerViewMenu.press('Enter');
-    const canvasTrigger = centerViewTrigger(page, 'Canvas');
-    await canvasTrigger.waitFor();
-    await expectFocused(canvasTrigger, 'Selecting a center view should restore focus to the view selector.');
+    const galleryTrigger = centerViewTrigger(page, 'Gallery');
+    await galleryTrigger.waitFor();
+    await expectFocused(galleryTrigger, 'Selecting a center view should restore focus to the view selector.');
 
     if (pageErrors.length > 0) {
       throw new AggregateError(pageErrors, 'keyboard-critical-journey raised uncaught browser errors.');
@@ -392,7 +431,7 @@ const runTopbarMenuJourney = async (browser) => {
   try {
     await waitForWorkbench(page);
 
-    const leftWidgetRail = page.getByRole('navigation', { exact: true, name: 'Left widget visibility' });
+    const leftWidgetRail = page.getByRole('navigation', { exact: true, name: 'Create widget visibility' });
     const upscaleWidget = leftWidgetRail.getByRole('button', { exact: true, name: 'Upscale' });
     await upscaleWidget.click({ button: 'right' });
     await page.getByRole('menuitem', { exact: true, name: 'Remove Upscale' }).click();
@@ -600,6 +639,7 @@ const runVideoPreviewJourney = async (browser) => {
     await selectLayoutPreset(page, 'Compose', 'Preview');
 
     const rightPanel = page.getByRole('complementary', { exact: true, name: 'right widget panel' });
+    await rightPanel.getByRole('button').filter({ hasText: 'Uncategorized' }).click();
     const gallery = rightPanel.getByRole('list', { exact: true, name: 'Gallery items' });
     const selectVideo = rightPanel.getByRole('button', {
       exact: true,
@@ -712,6 +752,7 @@ const runKeepAliveStateJourney = async (browser) => {
     await selectLayoutPreset(page, 'Compose', 'Preview');
 
     const rightPanel = page.getByRole('complementary', { exact: true, name: 'right widget panel' });
+    await rightPanel.getByRole('button').filter({ hasText: 'Uncategorized' }).click();
     const galleryItems = rightPanel.getByRole('list', { exact: true, name: 'Gallery items' });
     await galleryItems.waitFor();
 
@@ -881,17 +922,78 @@ const runLayersPanesJourney = async (browser) => {
   }
 };
 
-const mockBackend = await startMockBackend(backendPort, { profile: 'representative' });
-const preview = spawn(
-  'pnpm',
-  ['exec', 'vite', 'preview', '--host', '127.0.0.1', '--port', String(port), '--strictPort'],
-  {
-    cwd: root,
-    detached: true,
-    env: { ...process.env, INVOKEAI_DEV_BACKEND: backendOrigin },
-    stdio: ['ignore', 'pipe', 'pipe'],
+const SETTINGS_DIALOG_SCOPE = { include: ['[data-scope="dialog"][data-part="content"]'] };
+
+const runSettingsJourney = async (browser) => {
+  const { context, page, pageErrors } = await openRepresentativePage(browser, representativeProjectPath);
+  const id = 'workbench-settings';
+
+  try {
+    await waitForWorkbench(page);
+    const gear = page.getByRole('button', { exact: true, name: 'Gallery settings' });
+    await gear.click();
+    await page.getByRole('button', { exact: true, name: 'All Gallery settings…' }).click();
+    const dialog = page.getByRole('dialog', { name: /^Settings:/ });
+    await dialog.waitFor();
+    const navigation = dialog.getByRole('navigation', { exact: true, name: 'Settings' });
+    const sectionNames = await navigation.getByRole('button').allTextContents();
+    assert.equal(
+      sectionNames.length,
+      14,
+      'All application, project, widget, and system sections must be discoverable.'
+    );
+    for (const name of sectionNames) {
+      await navigation.getByRole('button', { exact: true, name }).click();
+      await page.getByRole('dialog', { exact: true, name: `Settings: ${name}` }).waitFor();
+      await page.waitForLoadState('networkidle');
+      await waitForSettledDocument(page);
+      // Certify the settings surface; representative surface scans retain page-wide workbench coverage.
+      await assertNoAxeViolations(page, `${id}:${name}`, SETTINGS_DIALOG_SCOPE);
+    }
+
+    const search = dialog.getByRole('textbox', { exact: true, name: 'Search settings…' });
+    await search.focus();
+    await search.pressSequentially('numeric attention');
+    const numericAttention = dialog.getByRole('checkbox', { exact: true, name: 'Prefer numeric attention style' });
+    await numericAttention.waitFor();
+    await expectFocused(search, 'Filtering settings should keep keyboard focus in search.');
+    await numericAttention.focus();
+    await numericAttention.press('Space');
+    assert.equal(await numericAttention.isChecked(), true);
+    await waitForSettledDocument(page);
+    await assertNoAxeViolations(page, `${id}:search`, SETTINGS_DIALOG_SCOPE);
+    await dialog.getByRole('button', { exact: true, name: 'Show in section' }).click();
+    await expectFocused(numericAttention, 'Revealing a setting should focus its control.');
+    await page.keyboard.press('Escape');
+    await dialog.waitFor({ state: 'hidden' });
+    await expectFocused(gear, 'Closing settings should return focus to its widget gear.');
+
+    await gear.press('Enter');
+    const popover = page.locator('[data-scope="popover"][data-part="content"][data-state="open"]');
+    await popover.waitFor();
+    await waitForSettledDocument(page);
+    // Quick settings are nonmodal; scan their popup independently of the workbench behind it.
+    await assertNoAxeViolations(page, `${id}:quick`, { include: ['[data-scope="popover"][data-part="content"]'] });
+    await page.keyboard.press('Escape');
+    await popover.waitFor({ state: 'hidden' });
+    await expectFocused(gear, 'Closing quick settings should restore focus to its widget gear.');
+
+    if (pageErrors.length > 0) {
+      throw new AggregateError(pageErrors, `${id} raised uncaught browser errors.`);
+    }
+    return { id, status: 'passed' };
+  } finally {
+    await context.close();
   }
-);
+};
+
+const mockBackend = await startMockBackend(backendPort, { profile: 'representative' });
+const preview = spawnPreview({
+  cwd: root,
+  env: { ...process.env, INVOKEAI_DEV_BACKEND: backendOrigin },
+  port,
+  stdio: ['ignore', 'pipe', 'pipe'],
+});
 let previewError = '';
 let browser = null;
 
@@ -926,6 +1028,9 @@ try {
   if (!requestedJourney || requestedJourney === 'workbench-layers-panes') {
     reports.push(await runLayersPanesJourney(browser));
   }
+  if (!requestedJourney || requestedJourney === 'workbench-settings') {
+    reports.push(await runSettingsJourney(browser));
+  }
   if (reports.length === 0) {
     throw new Error(`Unknown accessibility journey ${JSON.stringify(requestedJourney)}.`);
   }
@@ -939,7 +1044,7 @@ try {
 
   if (preview.pid) {
     try {
-      process.kill(-preview.pid, 'SIGTERM');
+      killPreview(preview.pid, 'SIGTERM');
     } catch {
       // Preview may already have exited after a startup failure.
     }
