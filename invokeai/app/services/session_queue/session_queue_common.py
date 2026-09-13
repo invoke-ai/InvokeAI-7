@@ -8,6 +8,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    PrivateAttr,
     StrictStr,
     TypeAdapter,
     field_validator,
@@ -16,6 +17,10 @@ from pydantic import (
 from pydantic_core import to_jsonable_python
 
 from invokeai.app.invocations.fields import ImageField, VideoField
+from invokeai.app.services.shared.execution_state_migration import (
+    CURRENT_EXECUTION_STATE_VERSION,
+    load_execution_state,
+)
 from invokeai.app.services.shared.graph import Graph, GraphExecutionState, NodeNotFoundError
 from invokeai.app.services.workflow_records.workflow_records_common import (
     WorkflowWithoutID,
@@ -218,13 +223,10 @@ def get_field_values(queue_item_dict: dict) -> Optional[list[NodeFieldValue]]:
     return NodeFieldValueValidator.validate_json(field_values_raw) if field_values_raw is not None else None
 
 
-GraphExecutionStateValidator = TypeAdapter(GraphExecutionState)
-
-
 def get_session(queue_item_dict: dict) -> GraphExecutionState:
     session_raw = queue_item_dict.get("session", "{}")
-    session = GraphExecutionStateValidator.validate_json(session_raw, strict=False)
-    return session
+    session_payload = json.loads(session_raw) if isinstance(session_raw, str) else session_raw
+    return load_execution_state(session_payload)
 
 
 def get_workflow(queue_item_dict: dict) -> Optional[WorkflowWithoutID]:
@@ -244,6 +246,8 @@ class FieldIdentifier(BaseModel):
 
 class SessionQueueItem(BaseModel):
     """Session queue item without the full graph. Used for serialization."""
+
+    _snapshot_readable: bool = PrivateAttr(default=True)
 
     item_id: int = Field(description="The identifier of the session queue item")
     status: QUEUE_ITEM_STATUS = Field(default="pending", description="The status of this queue item")
@@ -365,7 +369,12 @@ class SessionQueueItemSummary(BaseModel):
 
     @classmethod
     def queue_item_summary_from_dict(cls, queue_item_dict: dict) -> "SessionQueueItemSummary":
-        queue_item_dict["field_values"] = get_field_values(queue_item_dict)
+        try:
+            queue_item_dict["field_values"] = get_field_values(queue_item_dict)
+        except (TypeError, ValueError):
+            # Summaries intentionally omit the runtime session and must remain usable when a
+            # queue row contains an unreadable optional field-values payload.
+            queue_item_dict["field_values"] = None
         return cls(**queue_item_dict)
 
 
@@ -610,6 +619,7 @@ def create_session_nfv_tuples(batch: Batch, maximum: int) -> Generator[tuple[str
     # We must provide a Graph object when creating the "dummy" session dict, but we don't actually use it. It will be
     # overwritten for each session by the mutated graph_as_dict.
     session_dict = GraphExecutionState(graph=Graph()).model_dump(warnings=False, exclude_none=True)
+    session_dict["execution_state_version"] = CURRENT_EXECUTION_STATE_VERSION
 
     # Now we can create a generator that yields the session_id, session_json, and field_values_json for each session.
     count = 0

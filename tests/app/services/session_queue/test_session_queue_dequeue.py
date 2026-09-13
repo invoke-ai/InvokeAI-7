@@ -8,13 +8,16 @@ import pytest
 from pydantic_core import to_jsonable_python
 
 from invokeai.app.services.config.config_default import InvokeAIAppConfig
+from invokeai.app.services.events.events_common import QueueItemsRetriedEvent
 from invokeai.app.services.invoker import Invoker
 from invokeai.app.services.session_queue.session_queue_sqlite import (
     AFFINITY_MAX_LOOKAHEAD,
     ROUND_ROBIN_DEQUEUE_QUERY,
     SqliteSessionQueue,
 )
+from invokeai.app.services.shared.execution_state_migration import CURRENT_EXECUTION_STATE_VERSION
 from invokeai.app.services.shared.graph import Graph, GraphExecutionState
+from tests.test_nodes import TestEventService
 
 _EMPTY_SESSION_JSON = json.dumps(to_jsonable_python(GraphExecutionState(graph=Graph()).model_dump()))
 
@@ -42,6 +45,12 @@ def session_queue_round_robin(mock_invoker: Invoker) -> SqliteSessionQueue:
     queue = SqliteSessionQueue(db=db)
     queue.start(mock_invoker)
     return queue
+
+
+@pytest.fixture
+def event_bus(mock_invoker: Invoker) -> TestEventService:
+    assert isinstance(mock_invoker.services.events, TestEventService)
+    return mock_invoker.services.events
 
 
 def _insert_queue_item(
@@ -124,6 +133,160 @@ def test_fifo_priority_respected(session_queue_fifo: SqliteSessionQueue) -> None
 def test_fifo_returns_none_when_empty(session_queue_fifo: SqliteSessionQueue) -> None:
     """FIFO: dequeue returns None when the queue is empty."""
     assert session_queue_fifo.dequeue() is None
+
+
+def test_fifo_quarantines_future_snapshot_and_dequeues_later_work(
+    session_queue_fifo: SqliteSessionQueue,
+) -> None:
+    future_session = json.loads(_EMPTY_SESSION_JSON)
+    future_session["execution_state_version"] = CURRENT_EXECUTION_STATE_VERSION + 1
+    future_item_id = _insert_queue_item(
+        session_queue_fifo,
+        "default",
+        "future-user",
+        session_json=json.dumps(future_session),
+    )
+    valid_item_id = _insert_queue_item(session_queue_fifo, "default", "valid-user")
+
+    dequeued = session_queue_fifo.dequeue()
+
+    assert dequeued is not None
+    assert dequeued.item_id == valid_item_id
+    with session_queue_fifo._db.transaction() as cursor:
+        cursor.execute(
+            "SELECT status, error_type, error_message FROM session_queue WHERE item_id = ?",
+            (future_item_id,),
+        )
+        status, error_type, error_message = cursor.fetchone()
+    assert status == "failed"
+    assert error_type == "UnsupportedExecutionStateVersionError"
+    assert "newer than supported" in error_message
+
+
+@pytest.mark.parametrize(
+    "session_json",
+    [
+        "{not valid json",
+        json.dumps({"execution_state_version": "invalid", "graph": {}}),
+        json.dumps({"execution_state_version": CURRENT_EXECUTION_STATE_VERSION, "graph": "invalid"}),
+    ],
+)
+def test_fifo_quarantines_unreadable_snapshot_and_dequeues_later_work(
+    session_queue_fifo: SqliteSessionQueue,
+    session_json: str,
+) -> None:
+    bad_item_id = _insert_queue_item(session_queue_fifo, "default", "bad-user", session_json=session_json)
+    valid_item_id = _insert_queue_item(session_queue_fifo, "default", "valid-user")
+
+    dequeued = session_queue_fifo.dequeue()
+
+    assert dequeued is not None
+    assert dequeued.item_id == valid_item_id
+    with session_queue_fifo._db.transaction() as cursor:
+        cursor.execute("SELECT status, error_message FROM session_queue WHERE item_id = ?", (bad_item_id,))
+        status, error_message = cursor.fetchone()
+    assert status == "failed"
+    assert "Unable to load execution state" in error_message
+
+
+def test_affinity_quarantines_unreadable_snapshot_and_dequeues_valid_work(
+    session_queue_round_robin: SqliteSessionQueue,
+) -> None:
+    _install_fake_cache(session_queue_round_robin._SqliteSessionQueue__invoker, "cuda:0", {_WARM_MODEL_KEY})
+    cold_id = _insert_queue_item(session_queue_round_robin, "default", "user_a")
+    future_session = json.loads(_session_with_model_key(_WARM_MODEL_KEY))
+    future_session["execution_state_version"] = CURRENT_EXECUTION_STATE_VERSION + 1
+    future_id = _insert_queue_item(
+        session_queue_round_robin,
+        "default",
+        "user_a",
+        session_json=json.dumps(future_session),
+    )
+
+    dequeued = session_queue_round_robin.dequeue(device="cuda:0")
+
+    assert dequeued is not None
+    assert dequeued.item_id == cold_id
+    with session_queue_round_robin._db.transaction() as cursor:
+        cursor.execute("SELECT status FROM session_queue WHERE item_id = ?", (future_id,))
+        assert cursor.fetchone()[0] == "failed"
+
+
+def test_unreadable_snapshot_is_safe_for_detail_list_and_retry(
+    session_queue_fifo: SqliteSessionQueue,
+) -> None:
+    future_session = json.loads(_EMPTY_SESSION_JSON)
+    future_session["execution_state_version"] = CURRENT_EXECUTION_STATE_VERSION + 1
+    bad_id = _insert_queue_item(
+        session_queue_fifo,
+        "default",
+        "bad-user",
+        session_json=json.dumps(future_session),
+    )
+    valid_id = _insert_queue_item(session_queue_fifo, "default", "valid-user")
+
+    dequeued = session_queue_fifo.dequeue()
+    assert dequeued is not None
+    assert dequeued.item_id == valid_id
+
+    detail = session_queue_fifo.get_queue_item(bad_id)
+    listed = next(item for item in session_queue_fifo.list_all_queue_items("default") if item.item_id == bad_id)
+    retry_result = session_queue_fifo.retry_items_by_id("default", [bad_id])
+
+    assert detail.status == "failed"
+    assert detail.error_type == "UnsupportedExecutionStateVersionError"
+    assert detail.session.graph.nodes == {}
+    assert listed.status == "failed"
+    assert retry_result.retried_item_ids == []
+
+
+def test_unreadable_field_values_are_safe_for_summary(
+    session_queue_fifo: SqliteSessionQueue,
+) -> None:
+    item_id = _insert_queue_item(session_queue_fifo, "default", "summary-user")
+    with session_queue_fifo._db.transaction() as cursor:
+        cursor.execute(
+            "UPDATE session_queue SET field_values = ? WHERE item_id = ?",
+            ("{not valid json", item_id),
+        )
+
+    summaries = session_queue_fifo.get_queue_item_summaries_by_ids("default", [item_id])
+
+    assert len(summaries) == 1
+    assert summaries[0].item_id == item_id
+    assert summaries[0].user_id == "summary-user"
+    assert summaries[0].field_values is None
+
+
+def test_unreadable_child_retries_readable_root(
+    session_queue_fifo: SqliteSessionQueue, event_bus: TestEventService
+) -> None:
+    root_id = _insert_queue_item(session_queue_fifo, "default", "workflow-user")
+    future_session = json.loads(_EMPTY_SESSION_JSON)
+    future_session["execution_state_version"] = CURRENT_EXECUTION_STATE_VERSION + 1
+    child_id = _insert_queue_item(
+        session_queue_fifo,
+        "default",
+        "workflow-user",
+        session_json=json.dumps(future_session),
+    )
+    with session_queue_fifo._db.transaction() as cursor:
+        cursor.execute(
+            "UPDATE session_queue SET status = 'failed' WHERE item_id = ?",
+            (root_id,),
+        )
+        cursor.execute(
+            "UPDATE session_queue SET status = 'failed', root_item_id = ? WHERE item_id = ?",
+            (root_id, child_id),
+        )
+
+    retry_result = session_queue_fifo.retry_items_by_id("default", [child_id])
+
+    assert retry_result.retried_item_ids == [root_id]
+    retry_events = [event for event in event_bus.events if isinstance(event, QueueItemsRetriedEvent)]
+    assert len(retry_events) == 1
+    assert retry_events[0].retried_item_ids == [root_id]
+    assert retry_events[0].user_ids == ["workflow-user"]
 
 
 # ---------------------------------------------------------------------------

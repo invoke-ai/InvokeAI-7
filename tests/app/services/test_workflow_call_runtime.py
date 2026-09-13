@@ -27,6 +27,10 @@ def test_workflow_call_queue_lifecycle_resumes_parent_from_completed_child(monke
     workflow_call_tests.test_workflow_call_queue_lifecycle_resumes_parent_from_completed_child(monkeypatch)
 
 
+def test_resume_waiting_workflow_call_applies_parent_output_to_execution_ledger(monkeypatch) -> None:
+    workflow_call_tests.test_resume_waiting_workflow_call_applies_parent_output_to_execution_ledger(monkeypatch)
+
+
 def test_run_preserves_canceled_child_workflow_chain_without_failing_parent(monkeypatch) -> None:
     workflow_call_tests.test_run_preserves_canceled_child_workflow_chain_without_failing_parent(monkeypatch)
 

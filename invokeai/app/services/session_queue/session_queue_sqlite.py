@@ -44,7 +44,10 @@ from invokeai.app.services.session_queue.session_queue_common import (
     prepare_values_to_insert,
     uuid_string,
 )
-from invokeai.app.services.shared.graph import GraphExecutionState
+from invokeai.app.services.shared.execution_state_migration import (
+    dump_execution_state,
+)
+from invokeai.app.services.shared.graph import Graph, GraphExecutionState
 from invokeai.app.services.shared.pagination import CursorPaginatedResults
 from invokeai.app.services.shared.sqlite.sqlite_common import SQLiteDirection
 from invokeai.app.services.shared.sqlite.sqlite_database import SqliteDatabase
@@ -577,20 +580,67 @@ class SqliteSessionQueue(SessionQueueBase):
         # if the item was concurrently moved to a terminal state (e.g. canceled), so we only need
         # to guard against two dequeues racing for the same pending row.
         with self._dequeue_lock:
-            with self._db.transaction() as cursor:
-                cursor.execute(query)
-                result = cast(Union[sqlite3.Row, None], cursor.fetchone())
-            if result is None:
-                return None
-            queue_item = SessionQueueItem.queue_item_from_dict(dict(result))
-            queue_item = self._apply_device_affinity(queue_item, resident_model_keys)
-            # Record the claiming worker's device so the UI can label the item by GPU. Passing the
-            # item we already materialized lets _set_queue_item_status patch it in place instead of
-            # re-reading (and re-parsing the session graph of) the row we just read.
-            queue_item = self._set_queue_item_status(
-                item_id=queue_item.item_id, status="in_progress", device=device, queue_item=queue_item
-            )
-        return queue_item
+            while True:
+                with self._db.transaction() as cursor:
+                    cursor.execute(query)
+                    result = cast(Union[sqlite3.Row, None], cursor.fetchone())
+                if result is None:
+                    return None
+                raw_result = dict(result)
+                queue_item, readable = self._hydrate_queue_item(raw_result, quarantine=True)
+                if not readable:
+                    continue
+                queue_item = self._apply_device_affinity(queue_item, resident_model_keys)
+                # Record the claiming worker's device so the UI can label the item by GPU. Passing the
+                # item we already materialized lets _set_queue_item_status patch it in place instead of
+                # re-reading (and re-parsing the session graph of) the row we just read.
+                queue_item = self._set_queue_item_status(
+                    item_id=queue_item.item_id, status="in_progress", device=device, queue_item=queue_item
+                )
+                return queue_item
+
+    @staticmethod
+    def _make_unreadable_queue_item(raw_queue_item: dict[str, Any], error: Exception) -> SessionQueueItem:
+        """Build a metadata-preserving placeholder for an unreadable runtime snapshot."""
+        placeholder = SessionQueueItem.model_construct(**raw_queue_item)
+        if placeholder.status not in ("pending", "in_progress", "waiting", "completed", "failed", "canceled"):
+            placeholder.status = "failed"
+        placeholder.session = GraphExecutionState(graph=Graph())
+        placeholder.workflow = None
+        placeholder.field_values = None
+        placeholder._snapshot_readable = False
+        message = f"Unable to load execution state: {error}"
+        placeholder.error_type = type(error).__name__
+        placeholder.error_message = message
+        placeholder.error_traceback = message
+        return placeholder
+
+    def _hydrate_queue_item(self, raw_queue_item: dict[str, Any], *, quarantine: bool) -> tuple[SessionQueueItem, bool]:
+        """Hydrate one queue row without letting an unreadable snapshot break queue access."""
+        try:
+            return SessionQueueItem.queue_item_from_dict(raw_queue_item), True
+        except (TypeError, ValueError) as exc:
+            if quarantine:
+                return self._quarantine_unreadable_queue_item(raw_queue_item, exc), False
+            return self._make_unreadable_queue_item(raw_queue_item, exc), False
+
+    def _quarantine_unreadable_queue_item(self, raw_queue_item: dict[str, Any], error: Exception) -> SessionQueueItem:
+        """Fail a pending row whose runtime snapshot is newer than this worker can read.
+
+        The real session cannot be hydrated, so use a minimal in-memory placeholder only for the
+        status transition/event. The persisted session remains untouched for postmortem recovery.
+        """
+
+        placeholder = self._make_unreadable_queue_item(raw_queue_item, error)
+        placeholder.status = "pending"
+        return self._set_queue_item_status(
+            item_id=placeholder.item_id,
+            status="failed",
+            error_type=placeholder.error_type,
+            error_message=placeholder.error_message,
+            error_traceback=placeholder.error_traceback,
+            queue_item=placeholder,
+        )
 
     def _apply_device_affinity(self, candidate: SessionQueueItem, resident_keys: set[str]) -> SessionQueueItem:
         """Swap the fairness-chosen candidate for a nearby same-user, same-priority pending item
@@ -639,7 +689,8 @@ class SqliteSessionQueue(SessionQueueBase):
             # No warm-model item for this user (or the candidate already is one) — keep the
             # fairness-chosen candidate.
             return candidate
-        return SessionQueueItem.queue_item_from_dict(row_dict)
+        queue_item, readable = self._hydrate_queue_item(row_dict, quarantine=True)
+        return queue_item if readable else candidate
 
     def _get_device_resident_model_keys(self, device: Optional[str]) -> set[str]:
         """Best-effort lookup of the model keys currently cached for the given generation device."""
@@ -684,7 +735,7 @@ class SqliteSessionQueue(SessionQueueBase):
             result = cast(Union[sqlite3.Row, None], cursor.fetchone())
         if result is None:
             return None
-        return SessionQueueItem.queue_item_from_dict(dict(result))
+        return self._hydrate_queue_item(dict(result), quarantine=False)[0]
 
     def get_current(self, queue_id: str, origin_prefix: Optional[str] = None) -> Optional[SessionQueueItem]:
         with self._db.transaction() as cursor:
@@ -712,7 +763,7 @@ class SqliteSessionQueue(SessionQueueBase):
             result = cast(Union[sqlite3.Row, None], cursor.fetchone())
         if result is None:
             return None
-        return SessionQueueItem.queue_item_from_dict(dict(result))
+        return self._hydrate_queue_item(dict(result), quarantine=False)[0]
 
     def _set_queue_item_status(
         self,
@@ -1398,7 +1449,7 @@ class SqliteSessionQueue(SessionQueueBase):
         self._emit_queue_items_canceled(queue_id, canceled_item_ids_by_user)
         return CancelAllExceptCurrentResult(canceled=count)
 
-    def get_queue_item(self, item_id: int) -> SessionQueueItem:
+    def _get_queue_item_with_load_status(self, item_id: int) -> tuple[SessionQueueItem, bool]:
         with self._db.transaction() as cursor:
             cursor.execute(
                 """--sql
@@ -1415,13 +1466,16 @@ class SqliteSessionQueue(SessionQueueBase):
             result = cast(Union[sqlite3.Row, None], cursor.fetchone())
         if result is None:
             raise SessionQueueItemNotFoundError(f"No queue item with id {item_id}")
-        return SessionQueueItem.queue_item_from_dict(dict(result))
+        return self._hydrate_queue_item(dict(result), quarantine=False)
+
+    def get_queue_item(self, item_id: int) -> SessionQueueItem:
+        return self._get_queue_item_with_load_status(item_id)[0]
 
     def save_queue_item_session(self, item_id: int, session: GraphExecutionState) -> None:
         with self._db.transaction() as cursor:
             # Use exclude_none so we don't end up with a bunch of nulls in the graph - this can cause validation errors
             # when the graph is loaded. Persisted sessions are used to resume execution across queue boundaries.
-            session_json = session.model_dump_json(warnings=False, exclude_none=True)
+            session_json = json.dumps(dump_execution_state(session), default=to_jsonable_python)
             cursor.execute(
                 """--sql
                 UPDATE session_queue
@@ -1447,7 +1501,7 @@ class SqliteSessionQueue(SessionQueueBase):
         if workflow_call_execution is None:
             raise ValueError("Parent queue item is missing active workflow call execution metadata.")
 
-        session_json = child_session.model_dump_json(warnings=False, exclude_none=True)
+        session_json = json.dumps(dump_execution_state(child_session), default=to_jsonable_python)
         field_values_json = json.dumps(field_values, default=to_jsonable_python) if field_values is not None else None
         root_item_id = parent_queue_item.root_item_id or parent_queue_item.item_id
 
@@ -1594,7 +1648,7 @@ class SqliteSessionQueue(SessionQueueBase):
             params.append(limit + 1)
             cursor_.execute(query, params)
             results = cast(list[sqlite3.Row], cursor_.fetchall())
-        items = [SessionQueueItem.queue_item_from_dict(dict(result)) for result in results]
+        items = [self._hydrate_queue_item(dict(result), quarantine=False)[0] for result in results]
         has_more = False
         if len(items) > limit:
             # remove the extra item
@@ -1634,7 +1688,7 @@ class SqliteSessionQueue(SessionQueueBase):
                 """
             cursor.execute(query, params)
             results = cast(list[sqlite3.Row], cursor.fetchall())
-        items = [SessionQueueItem.queue_item_from_dict(dict(result)) for result in results]
+        items = [self._hydrate_queue_item(dict(result), quarantine=False)[0] for result in results]
         return items
 
     def get_queue_item_ids(
@@ -1916,6 +1970,8 @@ class SqliteSessionQueue(SessionQueueBase):
                 seen_root_item_ids.add(root_item_id)
 
                 root_queue_item = self.get_queue_item(root_item_id)
+                if not root_queue_item._snapshot_readable:
+                    continue
                 if root_queue_item.status not in ("failed", "canceled"):
                     continue
 
@@ -1934,7 +1990,7 @@ class SqliteSessionQueue(SessionQueueBase):
                     else None
                 )
                 cloned_session = GraphExecutionState(graph=root_queue_item.session.graph)
-                cloned_session_json = cloned_session.model_dump_json(warnings=False, exclude_none=True)
+                cloned_session_json = json.dumps(dump_execution_state(cloned_session), default=to_jsonable_python)
 
                 retried_from_item_id = (
                     root_queue_item.retried_from_item_id

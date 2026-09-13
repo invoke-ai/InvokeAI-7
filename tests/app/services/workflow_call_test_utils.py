@@ -15,6 +15,7 @@ from invokeai.app.invocations.workflow_return import (
     WorkflowReturnInvocation,
     WorkflowReturnOutput,
 )
+from invokeai.app.services.invocation_cache.invocation_cache_memory import MemoryInvocationCache
 from invokeai.app.services.progress_previews.progress_previews_default import MemoryProgressPreviews
 from invokeai.app.services.session_processor.session_processor_default import (
     DefaultSessionProcessor,
@@ -25,6 +26,7 @@ from invokeai.app.services.session_processor.workflow_call_runtime import (
     WorkflowCallQueueLifecycle,
 )
 from invokeai.app.services.session_queue.session_queue_common import SessionQueueItemNotFoundError
+from invokeai.app.services.shared.execution_effects import ExecutionEffectsRecorder, ExecutionInterface
 from invokeai.app.services.shared.graph import Graph, GraphExecutionState, WorkflowCallFrame
 from invokeai.app.services.workflow_records.workflow_records_common import WorkflowCategory
 from tests.dangerously_run_function_in_subprocess import dangerously_run_function_in_subprocess
@@ -833,6 +835,13 @@ def _build_workflow_runner(monkeypatch: pytest.MonkeyPatch, session_queue=None):
         lambda data, services, is_canceled: SimpleNamespace(
             _services=services,
             _data=data,
+            execution_effects=(
+                execution_effects := ExecutionEffectsRecorder(
+                    source_node_id=data.invocation.id,
+                    frame_path=data.execution_frame,
+                )
+            ),
+            execution=ExecutionInterface(execution_effects),
             images=SimpleNamespace(get_dto=services.images.get_dto),
             boards=SimpleNamespace(
                 get_all_image_names_for_board=services.board_images.get_all_board_image_names_for_board
@@ -853,6 +862,7 @@ def _build_workflow_runner(monkeypatch: pytest.MonkeyPatch, session_queue=None):
                 "events": events,
                 "logger": _DummyLogger(),
                 "configuration": _DummyConfig(),
+                "invocation_cache": MemoryInvocationCache(max_cache_size=0),
                 "workflow_records": workflow_records,
                 "users": _DummyUsers(),
                 "board_images": _DummyBoardImages(),
@@ -866,13 +876,28 @@ def _build_workflow_runner(monkeypatch: pytest.MonkeyPatch, session_queue=None):
 
 
 def _build_queue_item(invocation: BaseInvocation):
+    class Session:
+        prepared_source_mapping = {invocation.id: invocation.id}
+
+        @staticmethod
+        def get_execution_ref(node_id: str, *, effect_count: int | None = None):
+            return SimpleNamespace(frame=SimpleNamespace(iteration_path=()))
+
+        @staticmethod
+        def apply(execution_ref, output, effects=None, *, effect_count: int | None = None):
+            return []
+
+        @staticmethod
+        def set_node_error(node_id: str, error: str) -> None:
+            pass
+
     return type(
         "QueueItem",
         (),
         {
             "item_id": 1,
             "session_id": "test-session",
-            "session": type("Session", (), {"prepared_source_mapping": {invocation.id: invocation.id}})(),
+            "session": Session(),
         },
     )()
 
@@ -1136,6 +1161,9 @@ class _WorkflowCallBoundarySession:
     def complete(self, node_id: str, output) -> None:
         self.completed.append((node_id, output))
 
+    def get_execution_ref(self, node_id: str, *, effect_count: int | None = None):
+        return SimpleNamespace(frame=SimpleNamespace(iteration_path=()))
+
     def is_waiting_on_workflow_call(self) -> bool:
         return self.waiting is not None
 
@@ -1160,6 +1188,7 @@ def test_run_node_does_not_swallow_sigint_in_subprocess() -> None:
         import time
         from contextlib import contextmanager
         from threading import Event
+        from types import SimpleNamespace
 
         import invokeai.app.services.session_processor.session_processor_default as session_processor_default
         from invokeai.app.invocations.baseinvocation import (
@@ -1227,13 +1256,29 @@ def test_run_node_does_not_swallow_sigint_in_subprocess() -> None:
         )
 
         invocation = SigIntDuringNodeInvocation(id="node")
+
+        class Session:
+            prepared_source_mapping = {invocation.id: invocation.id}
+
+            @staticmethod
+            def get_execution_ref(node_id: str, *, effect_count: int | None = None):
+                return SimpleNamespace(frame=SimpleNamespace(iteration_path=()))
+
+            @staticmethod
+            def apply(execution_ref, output, effects=None, *, effect_count: int | None = None):
+                return []
+
+            @staticmethod
+            def set_node_error(node_id: str, error: str) -> None:
+                pass
+
         queue_item = type(
             "QueueItem",
             (),
             {
                 "item_id": 1,
                 "session_id": "test-session",
-                "session": type("Session", (), {"prepared_source_mapping": {invocation.id: invocation.id}})(),
+                "session": Session(),
             },
         )()
 
@@ -1544,6 +1589,53 @@ def test_workflow_call_queue_lifecycle_resumes_parent_from_completed_child(
     ]
     assert len(parent_outputs) == 1
     assert parent_outputs[0].values == {"result": [3]}
+    prepared_call_node_id = next(
+        exec_node_id
+        for exec_node_id, source_node_id in session.prepared_source_mapping.items()
+        if source_node_id == "call-node"
+    )
+    parent_ref = session.execution_refs[prepared_call_node_id]
+    assert session.execution_tokens[f"{parent_ref.reference_id}:values"].value == {"result": [3]}
+    assert session.execution_effects[parent_ref.reference_id] == []
+
+
+def test_resume_waiting_workflow_call_applies_parent_output_to_execution_ledger(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner, events, _workflow_records = _build_workflow_runner(monkeypatch)
+    lifecycle = WorkflowCallQueueLifecycle(runner)
+
+    parent_graph = Graph()
+    parent_graph.add_node(CallSavedWorkflowInvocation(id="call-node", workflow_id="workflow-a"))
+    parent_session = GraphExecutionState(graph=parent_graph)
+    parent_invocation = parent_session.next()
+    assert isinstance(parent_invocation, CallSavedWorkflowInvocation)
+    parent_session.begin_waiting_on_workflow_call(
+        parent_session.build_workflow_call_frame(parent_invocation.id, "workflow-a")
+    )
+
+    child_graph = Graph()
+    child_graph.add_node(WorkflowReturnInvocation(id="return"))
+    child_session = GraphExecutionState(graph=child_graph)
+    return_invocation = child_session.next()
+    assert isinstance(return_invocation, WorkflowReturnInvocation)
+    child_output = WorkflowReturnOutput(values={"result": 3})
+    child_session.complete(return_invocation.id, child_output)
+    parent_session.attach_waiting_workflow_call_child_session(child_session)
+
+    queue_item = SimpleNamespace(
+        item_id=1,
+        session=parent_session,
+        session_id=parent_session.id,
+    )
+    lifecycle.resume_waiting_workflow_call(queue_item)
+
+    assert not parent_session.is_waiting_on_workflow_call()
+    assert parent_session.results[parent_invocation.id] == child_output
+    parent_ref = parent_session.execution_refs[parent_invocation.id]
+    assert parent_session.execution_tokens[f"{parent_ref.reference_id}:values"].value == {"result": 3}
+    assert parent_session.execution_effects[parent_ref.reference_id] == []
+    assert [invocation.get_type() for invocation, _queue_item, _output in events.completed] == ["call_saved_workflow"]
 
 
 def test_run_queue_item_tolerates_queue_item_deleted_mid_run(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1872,6 +1964,13 @@ def test_run_completes_call_saved_workflow_and_runs_downstream_nodes(
     downstream_outputs = [
         output for invocation, _queue_item, output in events.completed if invocation.get_type() == "if"
     ]
+    downstream_if_node_id = next(
+        exec_node_id
+        for exec_node_id, source_node_id in session.prepared_source_mapping.items()
+        if source_node_id == "downstream-if"
+    )
+    downstream_if_ref = session.execution_refs[downstream_if_node_id]
+    assert session.execution_effects[downstream_if_ref.reference_id]
     assert len(parent_outputs) == 1
     assert parent_outputs[0].values == {"result": [3]}
     assert len(downstream_outputs) == 1

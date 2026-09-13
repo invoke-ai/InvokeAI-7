@@ -19,6 +19,19 @@ The long-term feature goal is:
 This document records the current state, the target architecture, and the execution contract needed to continue
 development later.
 
+The execution-engine refactoring does not change the callable node, saved-workflow, or queue interaction contract.
+Generated API schemas may be regenerated when backend runtime metadata becomes visible in a response, but existing
+fields, requiredness, statuses, events, and client behavior remain compatible. Frontend application behavior is outside
+this execution-engine slice. No code under `invokeai/frontend/...` may be changed by this refactoring; the existing
+frontend/backend external interface is frozen.
+
+The internal generic boundary is implemented in
+`invokeai.app.services.shared.execution_engine`. It provides frame-scoped
+gates, ordered streams, continuations, and capability-bound child dependency
+records. These records are used as adapters around the existing queue and
+materialization paths; they do not add frontend handles, queue statuses, event
+payloads, or author-time graph fields.
+
 ## Implementation Priority
 
 Favor the architecturally correct design over the fastest implementation path.
@@ -49,6 +62,16 @@ Implemented already in the branch:
   compatible types.
 - Incompatible or no-longer-exposed inbound edges are removed in the editor.
 - Backend validation exists for `workflow_id` existence and access rights.
+
+The branch also contains the additive execution-effects seam:
+
+- the runner invokes `invoke_internal_with_effects()` and applies its result through `GraphExecutionState.apply()`;
+- stable execution references, frames, output tokens, and accepted effects are persisted with the runtime state;
+- `emit` and `close_stream` are dispatchable by default;
+- lifecycle recording for `spawn`, `await`, and `fail` is capability-gated and returns a validated child handle where
+  applicable; queue mutation remains in the queue adapter;
+- saved workflow calls continue through `WorkflowCallCoordinator` and `WorkflowCallQueueLifecycle`, with a generic
+  child dependency record validating their relationship and aggregation.
 
 Implemented runtime scaffolding:
 
@@ -170,8 +193,10 @@ What is still not implemented:
   with a clear domain error
 - broader child-workflow compatibility coverage still needs to be expanded from real unsupported shapes rather than
   trying to interpret every frontend-only workflow representation through the current graph-builder path
-- the current workflow-call queue lifecycle is still implemented through dedicated workflow-call runtime classes rather
-  than a fully generalized parent/child scheduler model
+- the queue lifecycle remains implemented by dedicated workflow-call runtime classes, but each waiting call also
+  registers an internal `ChildDependencyRecord` with an engine-issued capability. The record validates exact parent
+  identity, ordered all-of aggregation, resource limits, and idempotent child terminal events before the existing queue
+  adapter resumes, fails, or cancels the parent
 
 Conclusion:
 
@@ -273,7 +298,8 @@ Desired semantics:
 - child workflow finishes or fails
 - parent resumes only if child execution succeeds
 
-This implies the queue/session/runtime layer needs an explicit parent-child execution relationship.
+The queue/session/runtime layer now implements an explicit parent-child execution relationship through runtime state,
+durable queue metadata, and queue-visible child rows.
 
 Current limitation:
 
@@ -284,14 +310,14 @@ Current limitation:
   generator node
 - connected batch child inputs produced by ordinary non-generator upstream nodes are still not supported and should fail
   early with a clear unsupported-feature error
-- the current queue-visible child execution path still relies on `WorkflowCallCoordinator` to resume or fail parents
-  directly rather than a more general queue scheduler abstraction
-- the current implementation is still an intermediate architecture step, but it is now materially closer to the intended
-  durable parent/child model than the earlier inline-runner path
+- the current queue-visible child execution path still relies on `WorkflowCallCoordinator` and
+  `WorkflowCallQueueLifecycle` to resume or fail parents; the generic child record supplies the identity and
+  aggregation boundary without changing the public queue contract
 
 ### 4a. Queue Lifecycle Contract
 
-The current queue-visible implementation uses the following lifecycle contract:
+The current queue-visible implementation uses the following lifecycle contract. The generic child record is an internal
+validation and aggregation seam; it does not add queue columns, statuses, events, or frontend handles.
 
 - root or parent queue items may enter `waiting` while suspended on a child workflow call
 - child workflow executions are represented as real queue rows with explicit parent/child relationship metadata
@@ -793,7 +819,8 @@ Still needed in later increments:
 
 - focused coverage for any newly supported batch or generator shape when its contract changes
 - possible migration from dedicated workflow-call queue lifecycle handling to a more general scheduler or
-  queue-lifecycle model only if another feature needs reusable dependent queue items
+  queue-lifecycle model only if another feature needs reusable dependent queue items; the generic record is now the
+  safe internal seam for that migration
 
 ## Recommended Immediate Next Step
 

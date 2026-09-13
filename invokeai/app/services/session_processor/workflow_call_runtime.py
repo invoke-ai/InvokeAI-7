@@ -158,6 +158,13 @@ class WorkflowCallQueueLifecycle:
 
         return output
 
+    @staticmethod
+    def _apply_workflow_call_output(
+        queue_item: SessionQueueItem, invocation: CallSavedWorkflowInvocation, output: WorkflowReturnOutput
+    ) -> None:
+        execution_ref = queue_item.session.get_execution_ref(invocation.id)
+        queue_item.session.apply(execution_ref, output)
+
     def resume_waiting_workflow_call(self, queue_item: SessionQueueItem) -> None:
         invocation = self.get_waiting_workflow_call_invocation(queue_item)
         child_session = queue_item.session.waiting_workflow_call_child_session
@@ -165,7 +172,7 @@ class WorkflowCallQueueLifecycle:
             raise ValueError("Execution state is waiting on a workflow call but has no attached child session.")
         output = self.get_child_workflow_return_output(child_session)
         queue_item.session.end_waiting_on_workflow_call(status="completed")
-        queue_item.session.complete(invocation.id, output)
+        self._apply_workflow_call_output(queue_item, invocation, output)
         self._session_runner._on_after_run_node(invocation, queue_item, output)
 
     def fail_waiting_workflow_call(self, queue_item: SessionQueueItem, error_message: str) -> None:
@@ -195,11 +202,21 @@ class WorkflowCallQueueLifecycle:
             return
         try:
             output = self.get_child_workflow_return_output(child_queue_item.session)
+            generic_update = parent_queue_item.session.record_generic_child_completion(
+                child_queue_item.item_id, output.values
+            )
             should_resume_parent, aggregated_values = (
                 parent_queue_item.session.record_waiting_workflow_call_child_completion(
                     child_queue_item.item_id, output.values
                 )
             )
+            if generic_update is not None and generic_update.status == "completed":
+                generic_values = {
+                    key: values[0] if len(values) == 1 else values
+                    for key, values in generic_update.aggregated_outputs.items()
+                }
+                if generic_values != aggregated_values:
+                    raise ValueError("Generic child aggregation disagrees with workflow-call aggregation.")
         except Exception as e:
             workflow_call_execution = parent_queue_item.session.waiting_workflow_call_execution
             if workflow_call_execution is not None:
@@ -226,7 +243,7 @@ class WorkflowCallQueueLifecycle:
         waiting_invocation = self.get_waiting_workflow_call_invocation(parent_queue_item)
         parent_queue_item.session.end_waiting_on_workflow_call(status="completed")
         parent_output = WorkflowReturnOutput(values=aggregated_values)
-        parent_queue_item.session.complete(waiting_invocation.id, parent_output)
+        self._apply_workflow_call_output(parent_queue_item, waiting_invocation, parent_output)
         self._session_runner._on_after_run_node(waiting_invocation, parent_queue_item, parent_output)
         self._session_runner._services.session_queue.save_queue_item_session(
             parent_queue_item.item_id, parent_queue_item.session
@@ -249,15 +266,16 @@ class WorkflowCallQueueLifecycle:
         waiting_frame = parent_queue_item.session.waiting_workflow_call
         if waiting_frame is None:
             raise ValueError("Parent queue item is missing workflow call waiting state.")
+        child_error_message = getattr(child_queue_item, "error_message", None) or (
+            f"The selected saved workflow '{waiting_frame.workflow_id}' failed during child execution."
+        )
         workflow_call_execution = parent_queue_item.session.waiting_workflow_call_execution
         if workflow_call_execution is not None:
+            parent_queue_item.session.fail_generic_child(child_queue_item.item_id, child_error_message)
             self._session_runner._services.session_queue.cancel_workflow_call_children(
                 workflow_call_execution.id,
                 exclude_item_ids={child_queue_item.item_id},
             )
-        child_error_message = getattr(child_queue_item, "error_message", None) or (
-            f"The selected saved workflow '{waiting_frame.workflow_id}' failed during child execution."
-        )
         self.fail_waiting_workflow_call(parent_queue_item, child_error_message)
         try:
             parent_queue_item = self._session_runner._services.session_queue.get_queue_item(parent_queue_item.item_id)
@@ -270,6 +288,7 @@ class WorkflowCallQueueLifecycle:
         parent_queue_item = self._get_parent_queue_item(child_queue_item)
         if parent_queue_item is None or parent_queue_item.status == "canceled":
             return
+        parent_queue_item.session.cancel_generic_child(child_queue_item.item_id, "child canceled")
         self._session_runner._services.session_queue.cancel_queue_item(parent_queue_item.item_id)
 
     def run_queue_item(self, queue_item: SessionQueueItem) -> None:

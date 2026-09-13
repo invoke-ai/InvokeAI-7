@@ -187,7 +187,9 @@ Collect.collection -> ForReturn.output
 
 The outer loop waits for the inner `Iterate` and `Collect` to finish, then returns one collection for that outer item.
 Other arrangements, such as multiple internal `Iterate` nodes or an independent external `Iterate` feeding a `For` body,
-are not supported.
+are not supported as user-facing workflow shapes. The backend has a bounded
+two-branch execution-planner case for an internal body-mediated fan-in, but
+that implementation detail does not expand the supported workflow contract.
 
 ## Nested For Loops
 
