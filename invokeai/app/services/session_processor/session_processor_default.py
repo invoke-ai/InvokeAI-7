@@ -214,11 +214,9 @@ class DefaultSessionRunner(SessionRunnerBase):
             # use the cancel event to check if the session is canceled.
             session_finished = queue_item.session.is_complete()
             already_terminal = self._is_canceled() or queue_item.status in ["failed", "canceled", "completed"]
-            if session_finished or already_terminal:
-                # Last pass, so the check at the top will not run again — which leaves the
-                # node that just ran, the only node of a one-node graph, as the one node
-                # nothing re-checks. A revocation committed while it executed would
-                # otherwise let the item be recorded as completed.
+            if session_finished:
+                # Re-check ownership after the final node. The next pass still lets the scheduler
+                # materialize any downstream node that became ready while finalizing a loop.
                 #
                 # Deliberately narrow, because after a node the balance is the reverse of
                 # what it is before one: there is no execution left to refuse, only a
@@ -229,7 +227,12 @@ class DefaultSessionRunner(SessionRunnerBase):
                 # A suspended workflow call is not `is_complete()`, so it is untouched here
                 # and re-checked when the parent resumes.
                 if session_finished and not already_terminal and not queue_item.session.has_error():
-                    self._cancel_if_owner_revoked(queue_item, unreadable_is_active=True)
+                    if self._cancel_if_owner_revoked(queue_item, unreadable_is_active=True):
+                        break
+                if not already_terminal:
+                    continue
+
+            if already_terminal:
                 break
 
     def _cancel_if_owner_revoked(self, queue_item: SessionQueueItem, *, unreadable_is_active: bool = False) -> bool:
@@ -257,10 +260,54 @@ class DefaultSessionRunner(SessionRunnerBase):
             with self._services.performance_statistics.collect_stats(invocation, queue_item.session_id):
                 self._on_before_run_node(invocation, queue_item)
 
+                execution_ref = queue_item.session.get_execution_ref(invocation.id)
+                child_capability = None
+                workflow_inputs = None
+                workflow_authorizer = None
+                if isinstance(invocation, CallSavedWorkflowInvocation):
+                    if not hasattr(queue_item.session, "build_child_execution_capability"):
+                        data = InvocationContextData(
+                            invocation=invocation,
+                            source_invocation_id=queue_item.session.prepared_source_mapping[invocation.id],
+                            queue_item=queue_item,
+                            execution_frame=execution_ref.frame.iteration_path,
+                            execution_state_id=execution_ref.state_id,
+                            execution_frame_id=execution_ref.frame.frame_id,
+                            execution_workflow_call_depth=execution_ref.frame.workflow_call_depth,
+                        )
+                        context = build_invocation_context(
+                            data=data,
+                            services=self._services,
+                            is_canceled=self._is_canceled,
+                        )
+                        workflow_record = invocation.validate_selected_workflow(context)
+                        self.workflow_call_coordinator.begin_workflow_call_boundary(
+                            invocation, queue_item, workflow_record
+                        )
+                        return
+                    child_capability = queue_item.session.build_child_execution_capability(
+                        execution_ref,
+                        authorization_context={"user_id": queue_item.user_id},
+                    )
+                    workflow_inputs = self.workflow_call_coordinator._collect_call_saved_workflow_inputs(
+                        invocation, queue_item
+                    )
+                if isinstance(invocation, CallSavedWorkflowInvocation):
+
+                    def workflow_authorizer(_workflow_id: str):
+                        return invocation.validate_selected_workflow(context)
+
                 data = InvocationContextData(
                     invocation=invocation,
                     source_invocation_id=queue_item.session.prepared_source_mapping[invocation.id],
                     queue_item=queue_item,
+                    execution_frame=execution_ref.frame.iteration_path,
+                    execution_state_id=execution_ref.state_id,
+                    execution_frame_id=execution_ref.frame.frame_id,
+                    execution_workflow_call_depth=execution_ref.frame.workflow_call_depth,
+                    execution_child_capability=child_capability,
+                    execution_workflow_authorizer=workflow_authorizer,
+                    execution_workflow_inputs=workflow_inputs,
                 )
                 context = build_invocation_context(
                     data=data,
@@ -268,19 +315,53 @@ class DefaultSessionRunner(SessionRunnerBase):
                     is_canceled=self._is_canceled,
                 )
 
-                if isinstance(invocation, CallSavedWorkflowInvocation):
+                # Retain the queue boundary for compatibility contexts that cannot record lifecycle effects.
+                if isinstance(invocation, CallSavedWorkflowInvocation) and not getattr(
+                    context.execution_effects, "allow_lifecycle_effects", False
+                ):
                     workflow_record = invocation.validate_selected_workflow(context)
                     self.workflow_call_coordinator.begin_workflow_call_boundary(invocation, queue_item, workflow_record)
                     return
 
                 # Invoke the node, optionally on a borrowed idle GPU (text encoders only).
                 with self._maybe_offload_to_idle_gpu(invocation):
-                    output = invocation.invoke_internal(context=context, services=self._services)
+                    run_result = invocation.invoke_internal_with_effects(context=context, services=self._services)
+                output = run_result.output
                 control_collection = None
                 if self._on_after_run_node_callbacks and isinstance(invocation, (IterateInvocation, CollectInvocation)):
                     control_collection = invocation.collection
                 # Save output and history
-                finalized_outputs = queue_item.session.complete(invocation.id, output)
+                execution_ref = queue_item.session.get_execution_ref(
+                    invocation.id, effect_count=len(run_result.effects)
+                )
+                finalized_outputs = queue_item.session.apply(execution_ref, run_result)
+
+                if isinstance(invocation, CallSavedWorkflowInvocation):
+                    failure_effect = next(
+                        (effect for effect in run_result.effects if getattr(effect, "kind", None) == "fail"),
+                        None,
+                    )
+                    if failure_effect is not None:
+                        error_message = str(getattr(failure_effect, "message", ""))
+                        error_type = getattr(failure_effect, "error_type", None) or "ValueError"
+                        error_traceback = getattr(failure_effect, "error_traceback", None) or error_message
+                        self._on_node_error(
+                            invocation=invocation,
+                            queue_item=queue_item,
+                            error_type=error_type,
+                            error_message=error_message,
+                            error_traceback=error_traceback,
+                        )
+                        return
+
+                    workflow_record = invocation.validate_selected_workflow(context)
+                    self._dispatch_workflow_call_effects(
+                        invocation=invocation,
+                        queue_item=queue_item,
+                        workflow_record=workflow_record,
+                        effects=run_result.effects,
+                    )
+                    return
 
                 if control_collection is not None:
                     invocation.collection = control_collection
@@ -318,6 +399,29 @@ class DefaultSessionRunner(SessionRunnerBase):
                 error_message=error_message,
                 error_traceback=error_traceback,
             )
+
+    def _dispatch_workflow_call_effects(
+        self,
+        *,
+        invocation: CallSavedWorkflowInvocation,
+        queue_item: SessionQueueItem,
+        workflow_record,
+        effects,
+    ) -> None:
+        """Pass lifecycle intent through queue adapter, retaining old boundary fallback."""
+
+        hook = getattr(self.workflow_call_queue_lifecycle, "apply_execution_effects", None)
+        if hook is None:
+            hook = getattr(self.workflow_call_coordinator, "apply_execution_effects", None)
+        if hook is not None:
+            hook(
+                invocation=invocation,
+                queue_item=queue_item,
+                workflow_record=workflow_record,
+                effects=effects,
+            )
+            return
+        self.workflow_call_coordinator.begin_workflow_call_boundary(invocation, queue_item, workflow_record)
 
     @contextmanager
     def _maybe_offload_to_idle_gpu(self, invocation: BaseInvocation) -> Iterator[None]:
@@ -515,6 +619,10 @@ class DefaultSessionRunner(SessionRunnerBase):
         )
         self._services.logger.error(error_traceback)
 
+        # Keep the live session for the invocation error event. Terminal queue persistence may clean up prepared
+        # execution mappings, but the event still needs the source id for the invocation that failed.
+        event_queue_item = queue_item
+
         # Fail the queue item
         queue_item = self._services.session_queue.set_queue_item_session(queue_item.item_id, queue_item.session)
         queue_item = self._services.session_queue.fail_queue_item(
@@ -523,7 +631,7 @@ class DefaultSessionRunner(SessionRunnerBase):
 
         # Send error event
         self._services.events.emit_invocation_error(
-            queue_item=queue_item,
+            queue_item=event_queue_item,
             invocation=invocation,
             error_type=error_type,
             error_message=error_message,
