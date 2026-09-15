@@ -174,9 +174,11 @@ def apply_monkeypatches() -> None:
     # from_single_file) invoke torch.cuda.empty_cache directly, convoying a busy peer GPU on
     # multi-GPU installs. Wrap the torch entry point so every Python caller inherits the
     # skip-while-a-peer-generates policy.
-    from invokeai.backend.util.devices import install_peer_aware_empty_cache
+    from invokeai.backend.util.devices import install_cuda_stream_capture_shim, install_peer_aware_empty_cache
 
     install_peer_aware_empty_cache()
+    # NVIDIA's Windows ARM64 torch crashes in torch.cuda.is_current_stream_capturing() without a device.
+    install_cuda_stream_capture_shim()
 
     # ROCm's fused SDPA kernels return wrong output for heads wider than 256 (the VAE mid-block
     # attention), turning decodes into noise or black images. Route those calls to the math kernel.
