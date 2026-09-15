@@ -36,10 +36,15 @@ from invokeai.app.services.users.users_default import UserService
 from invokeai.app.services.video_records.video_records_sqlite import SqliteVideoRecordStorage
 from invokeai.app.services.wildcard_records.wildcard_records_sqlite import SqliteWildcardRecordsStorage
 from invokeai.app.services.workflow_records.workflow_records_sqlite import SqliteWorkflowRecordsStorage
+from invokeai.backend.util.devices import install_cuda_stream_capture_shim
 from invokeai.backend.util.logging import InvokeAILogger
 from tests.backend.model_manager.model_manager_fixtures import *  # noqa: F403
 from tests.fixtures.sqlite_database import create_mock_sqlite_database  # noqa: F401
 from tests.test_nodes import TestEventService
+
+# The app installs this from apply_monkeypatches(); the suite runs real transformers forwards on the CPU, so on a
+# CUDA torch build without a device (NVIDIA's Windows ARM64 build on a GPU-less runner) it needs the same shim.
+install_cuda_stream_capture_shim()
 
 
 @pytest.fixture(autouse=True)
