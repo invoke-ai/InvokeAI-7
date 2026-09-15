@@ -236,9 +236,12 @@ def test_umap_missing_falls_back_to_pca(monkeypatch) -> None:
     from invokeai.app.services.image_index import projection
 
     monkeypatch.setitem(sys.modules, "umap", None)
-    monkeypatch.setattr(projection, "_umap_unavailable_logged", False)
-    embeddings = _blobs()
-    coords = compute_umap(embeddings)
+    projection._umap_class.cache_clear()
+    try:
+        embeddings = _blobs()
+        coords = compute_umap(embeddings)
+    finally:
+        projection._umap_class.cache_clear()
     assert coords.shape == (embeddings.shape[0], 2)
     assert coords.dtype == np.float32
     assert np.isfinite(coords).all()

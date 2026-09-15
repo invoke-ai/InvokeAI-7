@@ -3,11 +3,15 @@
 # GitHub release. `pyproject.toml` resolves those three packages on Windows ARM64 from that page (the
 # `invoke-win-arm64-wheels` index), and the manual-install docs pass the same page to `--find-links`.
 #
-# Runs on dispatch, and on pull requests that change this workflow or its scripts (a workflow only becomes
-# dispatchable once it is on the default branch, and a change to the build recipe is exactly when a rebuild is
-# wanted). Run it before re-locking: the lockfile records the asset URLs and hashes. Bumping a version here
-# means bumping the matching `; sys_platform == 'win32' and platform_machine == 'ARM64'` pins in
-# pyproject.toml and, unless the tag changes, re-uploading over the old assets (`--clobber`).
+# Pull requests that change this workflow or its scripts build the wheels (a workflow only becomes dispatchable
+# once it is on the default branch, and a change to the recipe is exactly when a build should be proven) but
+# never publish them: the builds are not byte-reproducible, and the lockfile pins the published assets by hash,
+# so re-uploading over a tag would break every ARM64 install and `uv lock --locked` until the next re-lock.
+# Publishing is a deliberate act: dispatch the workflow with a NEW release tag, then bump the tag in
+# pyproject.toml's `invoke-win-arm64-wheels` index together with the matching `; sys_platform == 'win32' and
+# platform_machine == 'ARM64'` pins and re-lock. Tags are immutable in practice: every tagged Invoke release
+# locks the assets of the tag its pyproject named, so overwriting a tag breaks those releases' installs.
+# `--clobber` below only lets an interrupted upload of the same build be completed.
 name: build-win-arm64-wheels
 
 on:
@@ -34,6 +38,11 @@ on:
         type: string
         default: 0.13.0
 
+# Two runs must not race on the same release tag.
+concurrency:
+  group: build-win-arm64-wheels-${{ inputs.release_tag || github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: false
+
 env:
   # Keep in step with python-tests.yml and uv-lock-checks.yml.
   UV_VERSION: '0.11.28'
@@ -48,8 +57,8 @@ jobs:
   opencv:
     name: opencv-contrib-python
     runs-on: windows-11-arm
-    # A full contrib build on the 4-vCPU runner is a multi-hour job.
-    timeout-minutes: 300
+    # A full contrib build took 16 minutes on the 4-vCPU runner; the margin covers a cold CMake dependency fetch.
+    timeout-minutes: 90
     steps:
       - name: checkout
         uses: actions/checkout@v6
@@ -72,7 +81,8 @@ jobs:
         shell: pwsh
         env:
           ENABLE_CONTRIB: '1'
-          # -DPYTHON3_LIMITED_API=ON: one abi3 wheel for every CPython 3.x, as upstream ships.
+          # -DPYTHON3_LIMITED_API=ON: what upstream builds with. (The wheel still comes out tagged cp312, which is
+          #   fine: 3.12 is the only supported interpreter on Windows ARM64.)
           # -DWITH_FFMPEG=OFF: OpenCV's ffmpeg wrapper DLL exists only for x86/x64; cv2.VideoCapture keeps the
           #   Media Foundation backend, and the app decodes through imageio first anyway.
           # -DBUILD_opencv_rgbd=OFF: rgbd links the x86 intrinsic _tzcnt_u32 on ARM64 (opencv_contrib#3767).
@@ -160,6 +170,8 @@ jobs:
           if-no-files-found: error
 
   publish:
+    # Dispatch only, see the header: a pull_request build must never overwrite assets the lockfile pins by hash.
+    if: ${{ github.event_name == 'workflow_dispatch' }}
     needs: [opencv, rust-wheels]
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -185,6 +197,23 @@ jobs:
           python3 scripts/win_arm64_wheels/make_flat_index.py --repo "$GITHUB_REPOSITORY" --tag "$RELEASE_TAG" dist/*.whl > dist/index.html
           cat dist/index.html
 
+      - name: setup uv
+        uses: astral-sh/setup-uv@v8.1.0
+        with:
+          version: ${{ env.UV_VERSION }}
+
+      - name: verify the wheels resolve before anything is published
+        # The same wheel selection uv applies to the published page, run against the local directory first, so a bad
+        # build never replaces good assets.
+        run: |
+          for whl in dist/*.whl; do
+            name=$(basename "$whl"); pkg=${name%%-*}; rest=${name#*-}; ver=${rest%%-*}
+            echo "${pkg//_/-}==${ver}" >> reqs.txt
+          done
+          cat reqs.txt
+          uv pip compile reqs.txt --no-build --no-deps --python-version 3.12 --python-platform aarch64-pc-windows-msvc \
+            --find-links dist/
+
       - name: upload release assets
         run: |
           if ! gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
@@ -194,20 +223,10 @@ jobs:
           fi
           gh release upload "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --clobber dist/*.whl dist/index.html
 
-      - name: setup uv
-        uses: astral-sh/setup-uv@v8.1.0
-        with:
-          version: ${{ env.UV_VERSION }}
-
       - name: verify the page resolves like the lock and the docs use it
         # Cross-platform resolution against the published page, exactly as `uv lock` (flat index) and
         # `uv pip install --find-links` (manual install) consume it. `--no-build` fails if any pin would
         # need an sdist, i.e. if a wheel is missing from the page or the page is not being served as HTML.
         run: |
-          for whl in dist/*.whl; do
-            name=$(basename "$whl"); pkg=${name%%-*}; rest=${name#*-}; ver=${rest%%-*}
-            echo "${pkg//_/-}==${ver}" >> reqs.txt
-          done
-          cat reqs.txt
           uv pip compile reqs.txt --no-build --no-deps --python-version 3.12 --python-platform aarch64-pc-windows-msvc \
             --find-links "https://github.com/$GITHUB_REPOSITORY/releases/download/$RELEASE_TAG/index.html"

@@ -12,18 +12,30 @@ point count shrinks, so any fixed eps that works for a dense thousand-image
 map labels a small gallery as all noise.
 """
 
+import functools
 import hashlib
 import json
 import logging
 import warnings
-from typing import Optional
+from typing import Any, Optional
 
 import numpy as np
 
 from invokeai.app.services.image_index.image_index_common import EMBEDDING_DTYPE, IndexedItem
 
 logger = logging.getLogger(__name__)
-_umap_unavailable_logged = False
+
+
+@functools.cache
+def _umap_class() -> Optional[type[Any]]:
+    """umap-learn's UMAP, or None (logged once) where it is not installed."""
+    try:
+        from umap import UMAP
+    except ImportError:
+        logger.warning("umap-learn is not installed; the image map falls back to a PCA projection.")
+        return None
+    return UMAP
+
 
 DEFAULT_CLUSTER_EPS = 0.2
 DEFAULT_CLUSTER_MIN_SAMPLES = 10
@@ -67,7 +79,6 @@ def compute_umap(embeddings: np.ndarray, seed: int = DEFAULT_UMAP_SEED) -> np.nd
     its Python), every size takes the PCA projection instead, so the map stays
     usable — less structured, but deterministic and dependency-free.
     """
-    global _umap_unavailable_logged
     if embeddings.shape[0] == 0:
         return np.empty((0, 2), dtype=EMBEDDING_DTYPE)
     if embeddings.shape[0] == 1:
@@ -75,12 +86,8 @@ def compute_umap(embeddings: np.ndarray, seed: int = DEFAULT_UMAP_SEED) -> np.nd
     if embeddings.shape[0] <= 3:
         return _pca_projection(embeddings)
 
-    try:
-        from umap import UMAP
-    except ImportError:
-        if not _umap_unavailable_logged:
-            logger.warning("umap-learn is not installed; the image map falls back to a PCA projection.")
-            _umap_unavailable_logged = True
+    UMAP = _umap_class()
+    if UMAP is None:
         return _pca_projection(embeddings)
 
     with warnings.catch_warnings():

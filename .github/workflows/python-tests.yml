@@ -139,7 +139,9 @@ jobs:
         uses: astral-sh/setup-uv@v8.1.0
         with:
           version: '0.11.28'  # When updating this, make sure the version in launcher's package.json gets updated too.
-          enable-cache: true
+          # The ARM64 lane's torch wheel unpacks to several GB of binaries; cached per lock hash it would crowd the
+          # other lanes out of the repository's cache, and re-downloading it costs a couple of minutes.
+          enable-cache: ${{ matrix.platform != 'windows-arm64' }}
           python-version: ${{ matrix.uv-python || matrix.python-version }}
 
       - name: prepare the ARM64 runner

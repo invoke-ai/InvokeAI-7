@@ -61,7 +61,7 @@ try:
 
     AUTOCAST_MODULE_TYPE_MAPPING[InvokeLinear8bitLt] = CustomInvokeLinear8bitLt
     AUTOCAST_MODULE_TYPE_MAPPING[InvokeLinearNF4] = CustomInvokeLinearNF4
-except Exception:  # bnb may import and then fail loading its native library (RuntimeError/OSError)
+except (ImportError, OSError, RuntimeError):  # bnb may import and then fail loading its native library
     pass
 
 

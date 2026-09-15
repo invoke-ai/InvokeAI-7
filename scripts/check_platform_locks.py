@@ -50,7 +50,9 @@ class Platform:
     python_versions: tuple[str, ...] | None = None
     # torch/torchvision must resolve from this registry (None: any registry with acceptable wheels).
     torch_registry: str | None = None
-    # Also check torch/torchvision with no extra selected, and walk the whole closure for wheel availability.
+    # Also check torch/torchvision with no extra selected (platforms whose torch does not come from an extra).
+    check_no_extra: bool = False
+    # Walk the whole closure for wheel availability.
     check_closure: bool = False
     # Packages allowed to be sdist-only in the closure (pure Python, built without a compiler).
     sdist_allowlist: frozenset[str] = field(default_factory=frozenset)
@@ -86,6 +88,7 @@ PLATFORMS: dict[str, Platform] = {
         # The only supported interpreter there: PyWavelets and PyYAML ship win_arm64 wheels for 3.12+ only.
         python_versions=("3.12",),
         torch_registry=NVIDIA_WIN_ARM64_REGISTRY,
+        check_no_extra=True,
         check_closure=True,
         # imageio-ffmpeg's wheels exist only to carry an ffmpeg binary; the sdist builds a pure wheel and
         # the app uses the ffmpeg on PATH.
@@ -163,17 +166,24 @@ class Lock:
         return candidates if len(candidates) == 1 else []
 
 
+def universes(
+    root: dict[str, Any], keys: dict[str, str], include_no_extra: bool
+) -> list[tuple[str, str | None, list[dict[str, Any]]]]:
+    """(label, uv extra marker token, dependency edges) for each resolution universe to check."""
+    base = root.get("dependencies", [])
+    result: list[tuple[str, str | None, list[dict[str, Any]]]] = []
+    if include_no_extra:
+        result.append(("no extra", None, base))
+    result += [(extra, keys[extra], base + root.get("optional-dependencies", {}).get(extra, [])) for extra in keys]
+    return result
+
+
 def check_torch(
     lock: Lock, root: dict[str, Any], platform: Platform, python_versions: list[str], keys: dict[str, str]
 ) -> list[str]:
     """torch/torchvision resolve, per extra (and with no extra where the platform asks), from acceptable wheels."""
     problems: list[str] = []
-    universes: list[tuple[str, str | None, list[dict[str, Any]]]] = [
-        (extra, keys[extra], root.get("optional-dependencies", {}).get(extra, [])) for extra in keys
-    ]
-    if platform.check_closure:
-        universes.insert(0, ("no extra", None, root.get("dependencies", [])))
-    for label, key, deps in universes:
+    for label, key, deps in universes(root, keys, include_no_extra=platform.check_no_extra):
         for name in REQUIRED:
             for python_version in python_versions:
                 env = env_for(platform, python_version, extra=key)
@@ -207,6 +217,9 @@ def walk_closure(
 ) -> dict[tuple[str, Any, str], dict[str, Any]]:
     """Every lock package reachable from `edges` in environment `env`, keyed by (name, version, source)."""
     seen: dict[tuple[str, Any, str], dict[str, Any]] = {}
+    # A package's extras are walked per (package, extra), independently of whether the package itself was
+    # already reached through a plain edge -- `P` and then `P[x]` must still enqueue `x`'s dependencies.
+    seen_extras: set[tuple[tuple[str, Any, str], str]] = set()
     pending = list(edges)
     while pending:
         dep = pending.pop()
@@ -214,12 +227,13 @@ def walk_closure(
             continue
         for package in lock.resolve(dep):
             ident = (package["name"], package.get("version"), str(package.get("source")))
-            if ident in seen:
-                continue
-            seen[ident] = package
-            pending += package.get("dependencies", [])
+            if ident not in seen:
+                seen[ident] = package
+                pending += package.get("dependencies", [])
             for extra in dep.get("extra", []):
-                pending += package.get("optional-dependencies", {}).get(extra, [])
+                if (ident, extra) not in seen_extras:
+                    seen_extras.add((ident, extra))
+                    pending += package.get("optional-dependencies", {}).get(extra, [])
     return seen
 
 
@@ -228,10 +242,7 @@ def check_closure(
 ) -> list[str]:
     """Every package reachable on the platform (any single extra, or none) ships an installable wheel."""
     problems: list[str] = []
-    base = root.get("dependencies", [])
-    universes: list[tuple[str, str | None, list[dict[str, Any]]]] = [("no extra", None, base)]
-    universes += [(extra, keys[extra], base + root["optional-dependencies"][extra]) for extra in keys]
-    for label, key, deps in universes:
+    for label, key, deps in universes(root, keys, include_no_extra=True):
         seen = walk_closure(lock, deps, env_for(platform, python_version, extra=key))
         missing = [
             f"{name}=={version} from {(p.get('source') or {}).get('registry', '?')}"
