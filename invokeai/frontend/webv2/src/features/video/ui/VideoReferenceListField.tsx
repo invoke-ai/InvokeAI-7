@@ -10,7 +10,7 @@ import type { ChangeEvent } from 'react';
 
 import { Badge, Box, createListCollection, HStack, Icon, Image, Input, Spinner, Stack, Text } from '@chakra-ui/react';
 import { useDndContext, useDndMonitor, useDroppable } from '@dnd-kit/core';
-import { galleryItems, galleryTransfers, toGalleryItemKey } from '@features/gallery';
+import { galleryItems, galleryTransfers, getGalleryUploadAccept, toGalleryItemKey } from '@features/gallery';
 import { FindInGalleryThumbnailButton } from '@features/gallery/mediaSlot';
 import { GalleryPickerPopover } from '@features/gallery/picker';
 import { galleryImageUrls, galleryVideoUrls, isGalleryItemDragData } from '@features/gallery/utility';
@@ -56,38 +56,11 @@ import { useVideoUiActions } from './VideoUiContext';
  */
 
 const DROP_ID = 'video-reference-list';
-const IMAGE_UPLOAD_ACCEPT = 'image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp';
+const IMAGE_UPLOAD_ACCEPT = getGalleryUploadAccept(['image']);
 // One upload button for both media kinds: an uploaded audio file becomes a waveform video,
 // so it occupies a VIDEO reference slot and shares that cap -- a separate audio button would
-// grey out with this one. The wildcards cover the ordinary case; the explicit extensions
-// (mirroring the upload route's accepted lists) are what match a file whose type the OS
-// could not map, which the browser then offers as octet-stream.
-const MEDIA_UPLOAD_ACCEPT = [
-  'video/*',
-  'audio/*',
-  '.mp4',
-  '.mov',
-  '.m4v',
-  '.webm',
-  '.mkv',
-  '.avi',
-  '.mpg',
-  '.mpeg',
-  '.3gp',
-  '.wmv',
-  '.asf',
-  '.mp3',
-  '.m4a',
-  '.aac',
-  '.wav',
-  '.flac',
-  '.ogg',
-  '.oga',
-  '.opus',
-  '.aiff',
-  '.aif',
-  '.wma',
-].join(',');
+// grey out with this one. The gallery's video accept list is exactly that set, audio included.
+const MEDIA_UPLOAD_ACCEPT = getGalleryUploadAccept(['video']);
 const DROP_ZONE_FOCUS_PROPS = {
   outlineColor: 'accent.focusRing',
   outlineOffset: '2px',

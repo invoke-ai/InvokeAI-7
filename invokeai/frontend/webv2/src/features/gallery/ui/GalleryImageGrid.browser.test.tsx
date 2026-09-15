@@ -250,6 +250,7 @@ const actionMocks = {
   setStarredOnly: vi.fn(),
   toggleItemInSelection: vi.fn(),
   updateSettings: vi.fn(),
+  uploadFiles: vi.fn(),
 };
 const imageActionMocks = {
   deleteItems: vi.fn(),
@@ -297,7 +298,7 @@ const createActions = (): GalleryActions =>
     toggleImageInSelection: actionMocks.toggleItemInSelection,
     toggleItemInSelection: actionMocks.toggleItemInSelection,
     updateSettings: actionMocks.updateSettings,
-    uploadFiles: vi.fn(),
+    uploadFiles: actionMocks.uploadFiles,
   }) as unknown as GalleryActions;
 
 type CanonicalContextTarget = {
@@ -1077,6 +1078,33 @@ describe('GalleryImageGrid upload drop zone', () => {
     await interact(() => target?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })));
 
     expect(clickSpy).toHaveBeenCalledOnce();
+  });
+
+  it('offers every container and audio format the upload route ingests', async () => {
+    await renderGallery(createGallery({ items: [], pendingPlaceholders: [] }));
+
+    const accept = host?.querySelector<HTMLInputElement>('input[type="file"]')?.accept.split(',');
+
+    // The gallery once offered video/mp4 alone, so the OS picker greyed out every clip
+    // and audio file the server ingests. Parity with the video panel's reference upload.
+    expect(accept).toEqual(expect.arrayContaining(['image/png', 'video/*', 'audio/*', '.mov', '.mkv', '.mp3', '.wav']));
+  });
+
+  // Not a fix for the accept-list bug -- the drop path never consulted `accept` and already
+  // forwarded every format. This pins that: the handler must stay a pass-through, because
+  // filtering here by the picker's list would re-hide exactly what the picker just stopped
+  // hiding, and the classifier downstream is the single place that decides.
+  it('hands a dropped audio file to the upload action', async () => {
+    await renderGallery(createGallery({ items: [], pendingPlaceholders: [] }));
+
+    const dropTarget = host?.querySelector('[role="button"]');
+    const dataTransfer = new DataTransfer();
+    const song = new File(['audio'], 'song.mp3', { type: 'audio/mpeg' });
+
+    dataTransfer.items.add(song);
+    await interact(() => dropTarget?.dispatchEvent(new DragEvent('drop', { bubbles: true, dataTransfer })));
+
+    expect(actionMocks.uploadFiles).toHaveBeenCalledWith([song]);
   });
 
   it('keeps the no-match message for a search with no results instead of the upload target', async () => {

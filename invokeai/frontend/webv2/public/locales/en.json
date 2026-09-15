@@ -3611,7 +3611,7 @@
       "downloadBoardWithOmission_other": "Download Board ({{count}} videos omitted)",
       "downloadReady": "Download ready",
       "downloadSelection": "Download selection",
-      "dropMediaToUploadToBoard": "Drop images or videos to upload to {{name}}",
+      "dropMediaToUploadToBoard": "Drop images, videos, or audio to upload to {{name}}",
       "emptyBoardUploadHint": "Drop media here or click to upload",
       "exportProjectFromBoard": "Export project (.invk)",
       "expandStarredItems": "Expand starred items",

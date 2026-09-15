@@ -171,3 +171,125 @@ export const formatGalleryVideoDuration = (durationSeconds: number): string => {
   const hours = Math.floor(totalMinutes / 60);
   return `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
 };
+
+/**
+ * The media formats a gallery upload accepts, and the two things every upload surface needs
+ * from them: the file input's `accept` list and the kind a picked or dropped file uploads as.
+ *
+ * Both derive from one table so a picker cannot offer less than the upload route takes — the
+ * `accept` list and the classifier drifting apart is what left the gallery picker MP4-only
+ * while the video panel's reference picker took every format the server ingests.
+ *
+ * It lives here rather than in a module of its own on purpose: every upload surface is in the
+ * editor's initial graph, and a separate module is shared across enough chunk boundaries that
+ * Rolldown emits it standalone — an extra initial request, which the architecture budget pins
+ * exactly and refuses at any size. `items.ts` is already in that graph's `gallery-state` chunk.
+ */
+
+/**
+ * Accepted for each kind in the browser's own terms. The server normalizes every accepted
+ * upload to H.264 MP4 at ingest — foreign containers/codecs (.mov, HEVC, …) are remuxed or
+ * transcoded and audio files are wrapped into waveform videos — so audio uploads as 'video'.
+ *
+ * Video and audio use wildcards, which the server backs with its own prefix check. Images do
+ * not: the image route takes anything PIL can open and re-encodes it, but offering only the
+ * three formats the app round-trips losslessly is a deliberate (and unchanged) narrowing. The
+ * extension lists mirror the video upload route's and are the fallback for a file whose type
+ * the OS could not map, which the browser then offers as application/octet-stream.
+ */
+const GALLERY_UPLOAD_FORMATS: Record<GalleryItemKind, { extensions: readonly string[]; mimes: readonly string[] }> = {
+  image: {
+    extensions: ['.png', '.jpg', '.jpeg', '.webp'],
+    mimes: ['image/png', 'image/jpeg', 'image/webp'],
+  },
+  video: {
+    extensions: [
+      '.mp4',
+      '.mov',
+      '.m4v',
+      '.webm',
+      '.mkv',
+      '.avi',
+      '.mpg',
+      '.mpeg',
+      '.3gp',
+      '.wmv',
+      '.asf',
+      '.mp3',
+      '.m4a',
+      '.aac',
+      '.wav',
+      '.flac',
+      '.ogg',
+      '.oga',
+      '.opus',
+      '.aiff',
+      '.aif',
+      '.wma',
+    ],
+    mimes: ['video/*', 'audio/*'],
+  },
+};
+
+const GALLERY_UPLOAD_ENTRIES = (Object.keys(GALLERY_UPLOAD_FORMATS) as GalleryItemKind[]).flatMap((kind) =>
+  [...GALLERY_UPLOAD_FORMATS[kind].mimes, ...GALLERY_UPLOAD_FORMATS[kind].extensions].map(
+    (value) => [value, kind] as const
+  )
+);
+
+const isWildcard = (mime: string): boolean => mime.endsWith('/*');
+
+/** Exact MIME matches, for types no wildcard covers. */
+const GALLERY_UPLOAD_KIND_BY_MIME = new Map<string, GalleryItemKind>([
+  ...GALLERY_UPLOAD_ENTRIES.filter(([value]) => value.includes('/') && !isWildcard(value)),
+  // The legacy alias some Windows tools emit; the image route accepts it, but no picker
+  // needs to advertise it, so it is classified without being offered.
+  ['image/jpg', 'image'],
+]);
+
+/**
+ * Wildcard prefixes, derived from the table's own `*`-suffixed MIMEs rather than restated, so a
+ * kind that gains a wildcard cannot be offered in `accept` while the classifier still rejects
+ * it. These mirror `ACCEPTED_*_MIME_PREFIXES` on the upload routes.
+ */
+const GALLERY_UPLOAD_KIND_BY_MIME_PREFIX = GALLERY_UPLOAD_ENTRIES.filter(([value]) => isWildcard(value)).map(
+  ([mime, kind]) => [mime.slice(0, -1), kind] as const
+);
+
+// Matched with `endsWith`, never keyed, so a pair list rather than a Map.
+const GALLERY_UPLOAD_KIND_BY_EXTENSION = GALLERY_UPLOAD_ENTRIES.filter(([value]) => value.startsWith('.'));
+
+/**
+ * The file input `accept` list for the given kinds. Advisory only — every browser offers an
+ * "All files" escape hatch, so callers still classify what comes back.
+ */
+export const getGalleryUploadAccept = (kinds: readonly GalleryItemKind[]): string =>
+  kinds
+    .flatMap((kind) => [...GALLERY_UPLOAD_FORMATS[kind].mimes, ...GALLERY_UPLOAD_FORMATS[kind].extensions])
+    .join(',');
+
+/** Which upload route a picked file belongs to, or null when no route takes it. */
+export const classifyGalleryUpload = (file: Pick<File, 'name' | 'type'>): { kind: GalleryItemKind } | null => {
+  const mimeType = file.type.toLowerCase();
+  const mimeKind = GALLERY_UPLOAD_KIND_BY_MIME.get(mimeType);
+
+  if (mimeKind) {
+    return { kind: mimeKind };
+  }
+
+  for (const [prefix, kind] of GALLERY_UPLOAD_KIND_BY_MIME_PREFIX) {
+    if (mimeType.startsWith(prefix)) {
+      return { kind };
+    }
+  }
+
+  const lowerName = file.name.toLowerCase();
+
+  for (const [extension, kind] of GALLERY_UPLOAD_KIND_BY_EXTENSION) {
+    if (lowerName.endsWith(extension)) {
+      return { kind };
+    }
+  }
+
+  return null;
+};

@@ -2,13 +2,12 @@ import type { GalleryItem } from '@features/gallery/core/items';
 import type { GalleryBoard, GalleryView } from '@features/gallery/core/types';
 
 import { getGalleryBoardLabel } from '@features/gallery/core/boardLabels';
-import { compareGalleryItems, legacyGeneratedImageToGalleryItem } from '@features/gallery/core/items';
 import {
   classifyGalleryUpload,
-  isDateBoardId,
-  uploadGalleryImage,
-  uploadGalleryVideo,
-} from '@features/gallery/data/backend';
+  compareGalleryItems,
+  legacyGeneratedImageToGalleryItem,
+} from '@features/gallery/core/items';
+import { isDateBoardId, uploadGalleryImage, uploadGalleryVideo } from '@features/gallery/data/backend';
 import { invalidateGallery } from '@features/gallery/data/queryCache';
 import {
   assertAccountScopeCurrent,
