@@ -169,6 +169,16 @@ export interface VideoSettings {
   h3TransformerModel: MainModelConfig | null;
   /** Optional single-file MiniMax H3 Qwen3-VL text-encoder override. */
   h3TextEncoderModel: ModelIdentifierConfig | null;
+  /**
+   * MiniMax H3 hybrid: with a Ref2VA transformer selected, an FL2VA checkpoint
+   * that supplies every weight except the AdaLN modulation projections from
+   * `h3HybridStartBlock` onward, which stay Ref2VA's — FL2VA's output quality
+   * with the references still routed. The loader loads this base; the
+   * selected Ref2VA main rides the overlay node.
+   */
+  h3HybridBaseModel: MainModelConfig | null;
+  /** First transformer block (0-49) whose AdaLN projection stays Ref2VA's under the hybrid. */
+  h3HybridStartBlock: number;
 }
 
 export interface VideoWidgetValues extends VideoSettings {

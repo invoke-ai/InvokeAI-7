@@ -151,6 +151,35 @@ describe('syncVideoWidgetValuesWithModels', () => {
     expect(synced.vae).toBeNull();
   });
 
+  it('keeps a hybrid quality base while its slot accepts it, drops it once the resolved model has no such slot', () => {
+    const ref2va: MainModelConfig = { ...h3Model('checkpoint', 'h3-ref2va'), pruned: true, variant: 'ref2va' };
+    const fl2vaBase: MainModelConfig = { ...h3Model('checkpoint', 'h3-fl2va-base'), pruned: true };
+    const install = h3Model();
+    const values = {
+      ...createDefaultVideoWidgetValues([ref2va, fl2vaBase, install]),
+      componentSourceModel: install,
+      h3HybridBaseModel: fl2vaBase,
+      h3HybridStartBlock: 30,
+      model: ref2va,
+      modelKey: ref2va.key,
+    };
+
+    // Same object back: the base is installed and still passes the Ref2VA main's slot filter.
+    expect(syncVideoWidgetValuesWithModels(values, [ref2va, fl2vaBase, install])).toBe(values);
+
+    // The base uninstalled: the slot value goes, the block setting is plain state and stays.
+    const baseGone = syncVideoWidgetValuesWithModels(values, [ref2va, install]);
+
+    expect(baseGone.h3HybridBaseModel).toBeNull();
+    expect(baseGone.h3HybridStartBlock).toBe(30);
+
+    // The Ref2VA main uninstalled: the resolved FL2VA main offers no hybrid slot.
+    const mainGone = syncVideoWidgetValuesWithModels(values, [fl2vaBase, install]);
+
+    expect(mainGone.model?.key).toBe(fl2vaBase.key);
+    expect(mainGone.h3HybridBaseModel).toBeNull();
+  });
+
   it('snaps family constraints when it auto-picks a different-family model', () => {
     // Wan-shaped stored values (frames 81, fps 16, 720p) with no surviving
     // model, in a catalog whose only supported main is MiniMax H3: without the

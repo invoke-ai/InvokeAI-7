@@ -18,7 +18,7 @@ import { getCompatibleDiffusersComponentSource } from '@features/generation/sett
 
 import type { VideoGenerationMode, VideoReferenceItem, VideoSettings, VideoSourceClip } from './types';
 
-import { resolveVideoMode } from './settings';
+import { MINIMAX_H3_HYBRID_BLOCK_RANGE, resolveVideoMode } from './settings';
 import { getVideoDimensions, getVideoModelPolicy, getVideoValidationReasons } from './videoPolicies';
 
 /**
@@ -506,21 +506,49 @@ const buildMiniMaxH3VideoGraph = (settings: VideoSettings, model: MainModelConfi
     throw new Error('A single-file MiniMax H3 transformer needs a Diffusers install selected under Model Components.');
   }
 
+  // The hybrid: the loader loads the FL2VA base, and the selected Ref2VA
+  // main rides the overlay node, which swaps its AdaLN projections in from
+  // the start block through the last and stamps the result a Ref2VA
+  // transformer. The policy only offers the slot on a Ref2VA checkpoint main;
+  // the guard keeps a stale value from silently loading the wrong file.
+  const hybridBase = isSingleFileMain && model.variant === 'ref2va' ? settings.h3HybridBaseModel : null;
+
   const graph: BackendGraphContract = { edges: [], id: createId('minimax_h3_video_graph'), nodes: {} };
   const { positivePrompt, seed } = addPromptAndSeedNodes(graph);
   const modelLoader = addNode(graph, {
     id: 'model_loader',
     model: componentSource ?? model,
     text_encoder_model: settings.h3TextEncoderModel ?? undefined,
-    transformer_model: isSingleFileMain ? model : undefined,
+    transformer_model: isSingleFileMain ? (hybridBase ?? model) : undefined,
     type: 'minimax_h3_model_loader',
   });
+  let transformerSource: BackendInvocationContract = modelLoader;
+
+  if (hybridBase) {
+    const hybridOverlay = addNode(graph, {
+      end_block: MINIMAX_H3_HYBRID_BLOCK_RANGE.max,
+      id: 'hybrid_overlay',
+      include_final_layer: false,
+      overlay_model: model,
+      start_block: settings.h3HybridStartBlock,
+      type: 'minimax_h3_hybrid_overlay',
+    });
+
+    addEdge(graph, modelLoader, 'transformer', hybridOverlay, 'transformer');
+    transformerSource = hybridOverlay;
+  }
+
   const activeLoras = getActiveCompatibleLoras(settings, model);
-  const transformerSource = activeLoras.length
-    ? addTransformerLoraCollectionLoader(graph, activeLoras, 'minimax_h3_lora_collection_loader', modelLoader, [
-        'transformer',
-      ])
-    : modelLoader;
+
+  if (activeLoras.length) {
+    transformerSource = addTransformerLoraCollectionLoader(
+      graph,
+      activeLoras,
+      'minimax_h3_lora_collection_loader',
+      transformerSource,
+      ['transformer']
+    );
+  }
 
   // The canvas and the keyframes must match across text encoder, frame
   // conditioning, and denoise — the same literals (and, in extend mode, the
@@ -636,6 +664,9 @@ const buildMiniMaxH3VideoGraph = (settings: VideoSettings, model: MainModelConfi
     extras: {
       ...(componentSource ? { minimax_h3_component_source: componentSource } : {}),
       ...(settings.h3TextEncoderModel ? { minimax_h3_text_encoder_model: settings.h3TextEncoderModel } : {}),
+      ...(hybridBase
+        ? { minimax_h3_hybrid_base_model: hybridBase, minimax_h3_hybrid_start_block: settings.h3HybridStartBlock }
+        : {}),
       ...(mode === 'reference'
         ? {
             minimax_h3_references: settings.references.map((reference) =>

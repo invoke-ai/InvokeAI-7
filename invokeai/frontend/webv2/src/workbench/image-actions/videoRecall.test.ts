@@ -509,6 +509,124 @@ describe('model-position recall shapes', () => {
     expect(result?.values).toMatchObject({ acceleratorEnabled: true, acceleratorLoraKeys: [ref2vTurbo.key] });
   });
 
+  it('recalls the hybrid quality base together with its start block, never the block alone', () => {
+    const fl2vaBase: MainModelConfig = {
+      base: 'minimax-h3',
+      format: 'checkpoint',
+      key: 'h3-fl2va-ckpt',
+      name: 'MiniMax H3 FL2VA Transformer (int8, pruned)',
+      type: 'main',
+      variant: 'fl2va',
+    };
+    const metadata = {
+      generation_mode: 'minimax_h3_ref2v',
+      minimax_h3_component_source: { key: install.key },
+      minimax_h3_hybrid_base_model: { key: fl2vaBase.key },
+      minimax_h3_hybrid_start_block: 30,
+      minimax_h3_references: [{ detail: 'max', image_name: 'ref.png', kind: 'image' }],
+      model: { key: checkpoint.key },
+      num_frames: 124,
+    };
+    const result = buildVideoRecallSettings({ currentValues, kind: 'all', metadata, models: [...catalog, fl2vaBase] });
+
+    expect(result?.fields).toContain('components');
+    expect(result?.values.model?.key).toBe(checkpoint.key);
+    expect(result?.values.h3HybridBaseModel?.key).toBe(fl2vaBase.key);
+    expect(result?.values.h3HybridStartBlock).toBe(30);
+
+    // With the base uninstalled, the block stays at the panel's value: a start block only
+    // means something for the base it was recorded with.
+    const gone = buildVideoRecallSettings({ currentValues, kind: 'all', metadata, models: catalog });
+
+    expect(gone?.values.h3HybridBaseModel).toBeNull();
+    expect(gone?.values.h3HybridStartBlock).toBe(currentValues.h3HybridStartBlock);
+
+    // A base the panel already holds does not stand in for the uninstalled recorded one: the
+    // recall reproduces the run, which cannot run that hybrid any more. Base Y's block 30 must
+    // not land on base X either.
+    const otherBase: MainModelConfig = { ...fl2vaBase, key: 'h3-fl2va-other', name: 'Another FL2VA' };
+    const holding = { ...currentValues, h3HybridBaseModel: otherBase, h3HybridStartBlock: 12 };
+    const onto = buildVideoRecallSettings({
+      currentValues: holding,
+      kind: 'all',
+      metadata,
+      models: [...catalog, otherBase],
+    });
+
+    expect(onto?.fields).toContain('components');
+    expect(onto?.values.h3HybridBaseModel).toBeNull();
+    expect(onto?.values.h3HybridStartBlock).toBe(12);
+  });
+
+  it.each(['all', 'remix'] as const)(
+    'clears the hybrid quality base on a %s recall of a run recorded without it',
+    (kind) => {
+      const fl2vaBase: MainModelConfig = {
+        base: 'minimax-h3',
+        format: 'checkpoint',
+        key: 'h3-fl2va-ckpt',
+        name: 'MiniMax H3 FL2VA Transformer (int8, pruned)',
+        type: 'main',
+        variant: 'fl2va',
+      };
+      // No component source recorded either, so the cleared base is the only component change.
+      const metadata = {
+        generation_mode: 'minimax_h3_ref2v',
+        minimax_h3_references: [{ detail: 'max', image_name: 'ref.png', kind: 'image' }],
+        model: { key: checkpoint.key },
+        num_frames: 124,
+      };
+      const holding = { ...currentValues, h3HybridBaseModel: fl2vaBase, h3HybridStartBlock: 12 };
+      const result = buildVideoRecallSettings({
+        currentValues: holding,
+        kind,
+        metadata,
+        models: [...catalog, fl2vaBase],
+      });
+
+      expect(result?.fields).toContain('components');
+      expect(result?.values.model?.key).toBe(checkpoint.key);
+      expect(result?.values.h3HybridBaseModel).toBeNull();
+      // The block is hidden without a base and only means something with one; it is left alone.
+      expect(result?.values.h3HybridStartBlock).toBe(12);
+
+      // A panel without a base has nothing to clear, and the toast must not claim a component change.
+      const bare = buildVideoRecallSettings({ currentValues, kind, metadata, models: [...catalog, fl2vaBase] });
+
+      expect(bare?.values.h3HybridBaseModel).toBeNull();
+      expect(bare?.fields).not.toContain('components');
+
+      // A recall that moves the panel to a main without the hybrid slot drops the base in the
+      // model transition; that is still this recall clearing it, so the toast says so.
+      const toFl2va = buildVideoRecallSettings({
+        currentValues: holding,
+        kind,
+        metadata: {
+          ...metadata,
+          generation_mode: 'minimax_h3_t2v',
+          minimax_h3_references: undefined,
+          model: { key: fl2vaBase.key },
+        },
+        models: [...catalog, fl2vaBase],
+      });
+
+      expect(toFl2va?.values.model?.key).toBe(fl2vaBase.key);
+      expect(toFl2va?.values.h3HybridBaseModel).toBeNull();
+      expect(toFl2va?.fields).toContain('components');
+
+      // A seed recall never reaches the components: the held base survives it.
+      const seedOnly = buildVideoRecallSettings({
+        currentValues: holding,
+        kind: 'seed',
+        metadata: { ...metadata, seed: 7 },
+        models: [...catalog, fl2vaBase],
+      });
+
+      expect(seedOnly?.fields).toEqual(['seed']);
+      expect(seedOnly?.values.h3HybridBaseModel).toEqual(fl2vaBase);
+    }
+  );
+
   it('recalls the recorded component source for a checkpoint-main recording', () => {
     const result = buildVideoRecallSettings({
       currentValues,

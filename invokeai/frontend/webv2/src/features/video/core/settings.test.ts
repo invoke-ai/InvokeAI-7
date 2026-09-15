@@ -126,6 +126,18 @@ describe('normalizeVideoSettings', () => {
     expect(normalized?.positivePrompt).toBe('a dog');
   });
 
+  it('heals the hybrid start block to the recommended default and clamps it to the block range', () => {
+    const { h3HybridStartBlock: _predatesHybrid, ...legacy } = createSettings();
+
+    expect(normalizeVideoSettings(legacy)?.h3HybridStartBlock).toBe(25);
+    expect(normalizeVideoSettings({ ...legacy, h3HybridStartBlock: 120 })?.h3HybridStartBlock).toBe(49);
+    expect(normalizeVideoSettings({ ...legacy, h3HybridStartBlock: -3 })?.h3HybridStartBlock).toBe(0);
+    expect(normalizeVideoSettings({ ...legacy, h3HybridStartBlock: 12.6 })?.h3HybridStartBlock).toBe(13);
+    expect(
+      normalizeVideoSettings({ ...legacy, h3HybridBaseModel: { key: 'not-a-main' } })?.h3HybridBaseModel
+    ).toBeNull();
+  });
+
   it('drops malformed media values instead of failing wholesale', () => {
     const normalized = normalizeVideoSettings({
       ...createSettings(),

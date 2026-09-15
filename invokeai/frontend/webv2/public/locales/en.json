@@ -3861,6 +3861,8 @@
       "noLoras": "No concepts added. Compatible LoRAs adjust style and motion.",
       "removeLora": "Remove {{name}}",
       "selectComponent": "Select a component model…",
+      "hybridStartBlock": "Ref2VA AdaLN from block",
+      "hybridStartBlockHelp": "Blocks from here through 49 keep this Ref2VA model’s AdaLN projections; earlier blocks use the FL2VA base. Lower values follow references more closely at more of Ref2VA’s quality cost; 25 is the recommended balance.",
       "acceleratorBroken": "Accelerator turned off",
       "acceleratorBrokenDescription": "One of its LoRAs was removed or disabled, so steps and CFG were restored to the model's defaults.",
       "acceleratorSwitched": "{{label}} now running on a different LoRA",

@@ -30,6 +30,7 @@ export {
   isVideoSourceClip,
   isVideoTargetResolution,
   isVideoWidgetValues,
+  MINIMAX_H3_HYBRID_BLOCK_RANGE,
   MINIMAX_H3_TARGET_RESOLUTIONS,
   normalizeVideoSettings,
   normalizeVideoWidgetValues,

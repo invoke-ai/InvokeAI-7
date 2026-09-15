@@ -12,6 +12,7 @@ import { GenerationSettingsSection } from '@features/generation/components';
 import { isMainModelConfig, isModelIdentifierConfig, isVaeModelConfig } from '@features/generation/settings';
 import { useModelsSelector } from '@features/models';
 import { ModelSelect } from '@features/models/react';
+import { MINIMAX_H3_HYBRID_BLOCK_RANGE } from '@features/video/core/settings';
 import {
   getVideoComponentSectionPolicy,
   getVideoModelSelectionResult,
@@ -19,7 +20,8 @@ import {
 } from '@features/video/core/videoPolicies';
 import { Field } from '@platform/ui';
 import { Button } from '@platform/ui/Button';
-import { memo, useCallback, useMemo } from 'react';
+import { SliderNumberField } from '@platform/ui/SliderNumberField';
+import { Fragment, memo, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
 /**
@@ -84,6 +86,35 @@ const ComponentSlotRow = memo(function ComponentSlotRow({
         placeholder={t('widgets.video.selectComponent')}
         size="xs"
         value={value?.key ?? null}
+        onChange={handleChange}
+      />
+    </Field>
+  );
+});
+
+/**
+ * The MiniMax H3 hybrid's one tuning knob, shown under its base slot once a
+ * base is picked: blocks from here through the last keep the Ref2VA AdaLN
+ * projections, earlier blocks take the FL2VA base's.
+ */
+const HybridStartBlockRow = memo(function HybridStartBlockRow({
+  onPatch,
+  value,
+}: {
+  onPatch: (patch: Partial<VideoWidgetValues>) => void;
+  value: number;
+}) {
+  const { t } = useTranslation();
+  const handleChange = useCallback((h3HybridStartBlock: number) => onPatch({ h3HybridStartBlock }), [onPatch]);
+
+  return (
+    <Field helpText={t('widgets.video.hybridStartBlockHelp')} label={t('widgets.video.hybridStartBlock')}>
+      <SliderNumberField
+        ariaLabel={t('widgets.video.hybridStartBlock')}
+        max={MINIMAX_H3_HYBRID_BLOCK_RANGE.max}
+        min={MINIMAX_H3_HYBRID_BLOCK_RANGE.min}
+        step={1}
+        value={value}
         onChange={handleChange}
       />
     </Field>
@@ -199,13 +230,17 @@ export const VideoComponentsSection = memo(function VideoComponentsSection({
     >
       <Stack gap="3" p="2">
         {policy.slots.map((slot) => (
-          <ComponentSlotRow
-            key={slot.key}
-            ctx={ctx}
-            slot={slot}
-            value={values[slot.key as VideoComponentValueKey]}
-            onPatch={onPatch}
-          />
+          <Fragment key={slot.key}>
+            <ComponentSlotRow
+              ctx={ctx}
+              slot={slot}
+              value={values[slot.key as VideoComponentValueKey]}
+              onPatch={onPatch}
+            />
+            {slot.key === 'h3HybridBaseModel' && values.h3HybridBaseModel ? (
+              <HybridStartBlockRow value={values.h3HybridStartBlock} onPatch={onPatch} />
+            ) : null}
+          </Fragment>
         ))}
         <WanExpertWiringNotice values={values} onPatch={onPatch} />
       </Stack>

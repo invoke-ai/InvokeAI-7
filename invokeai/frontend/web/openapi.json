@@ -39613,6 +39613,9 @@
                   "$ref": "#/components/schemas/MiniMaxH3FrameConditioningInvocation"
                 },
                 {
+                  "$ref": "#/components/schemas/MiniMaxH3HybridOverlayInvocation"
+                },
+                {
                   "$ref": "#/components/schemas/MiniMaxH3IdealDimensionsInvocation"
                 },
                 {
@@ -40256,6 +40259,9 @@
                 },
                 {
                   "$ref": "#/components/schemas/MiniMaxH3FrameConditioningOutput"
+                },
+                {
+                  "$ref": "#/components/schemas/MiniMaxH3HybridOverlayOutput"
                 },
                 {
                   "$ref": "#/components/schemas/MiniMaxH3LoRACollectionLoaderOutput"
@@ -48776,6 +48782,9 @@
                 "$ref": "#/components/schemas/MiniMaxH3FrameConditioningInvocation"
               },
               {
+                "$ref": "#/components/schemas/MiniMaxH3HybridOverlayInvocation"
+              },
+              {
                 "$ref": "#/components/schemas/MiniMaxH3IdealDimensionsInvocation"
               },
               {
@@ -49376,6 +49385,9 @@
               },
               {
                 "$ref": "#/components/schemas/MiniMaxH3FrameConditioningOutput"
+              },
+              {
+                "$ref": "#/components/schemas/MiniMaxH3HybridOverlayOutput"
               },
               {
                 "$ref": "#/components/schemas/MiniMaxH3LoRACollectionLoaderOutput"
@@ -50233,6 +50245,9 @@
               },
               {
                 "$ref": "#/components/schemas/MiniMaxH3FrameConditioningInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/MiniMaxH3HybridOverlayInvocation"
               },
               {
                 "$ref": "#/components/schemas/MiniMaxH3IdealDimensionsInvocation"
@@ -51266,6 +51281,9 @@
           "minimax_h3_frame_conditioning": {
             "$ref": "#/components/schemas/MiniMaxH3FrameConditioningOutput"
           },
+          "minimax_h3_hybrid_overlay": {
+            "$ref": "#/components/schemas/MiniMaxH3HybridOverlayOutput"
+          },
           "minimax_h3_ideal_dimensions": {
             "$ref": "#/components/schemas/IdealSizeOutput"
           },
@@ -51825,6 +51843,7 @@
           "metadata_to_vae",
           "minimax_h3_denoise",
           "minimax_h3_frame_conditioning",
+          "minimax_h3_hybrid_overlay",
           "minimax_h3_ideal_dimensions",
           "minimax_h3_image_reference",
           "minimax_h3_latents_to_image",
@@ -52648,6 +52667,9 @@
               },
               {
                 "$ref": "#/components/schemas/MiniMaxH3FrameConditioningInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/MiniMaxH3HybridOverlayInvocation"
               },
               {
                 "$ref": "#/components/schemas/MiniMaxH3IdealDimensionsInvocation"
@@ -53785,6 +53807,9 @@
               },
               {
                 "$ref": "#/components/schemas/MiniMaxH3FrameConditioningInvocation"
+              },
+              {
+                "$ref": "#/components/schemas/MiniMaxH3HybridOverlayInvocation"
               },
               {
                 "$ref": "#/components/schemas/MiniMaxH3IdealDimensionsInvocation"
@@ -72564,6 +72589,33 @@
           "$ref": "#/components/schemas/VAEOutput"
         }
       },
+      "MiniMaxH3AdaLNOverlayField": {
+        "description": "Hybrid AdaLN overlay for MiniMax H3: the AdaLN modulation projections of a second task\ntransformer (typically Ref2VA) swapped onto the loaded transformer (typically FL2VA) at\ndenoise time, for an inclusive block range and optionally the final layer.",
+        "properties": {
+          "overlay": {
+            "$ref": "#/components/schemas/ModelIdentifierField",
+            "description": "The single-file H3 transformer the AdaLN projections come from."
+          },
+          "start_block": {
+            "description": "First transformer block (inclusive) whose AdaLN projection is overlaid.",
+            "title": "Start Block",
+            "type": "integer"
+          },
+          "end_block": {
+            "description": "Last transformer block (inclusive) whose AdaLN projection is overlaid.",
+            "title": "End Block",
+            "type": "integer"
+          },
+          "include_final_layer": {
+            "description": "Whether the final-layer AdaLN projection is overlaid too.",
+            "title": "Include Final Layer",
+            "type": "boolean"
+          }
+        },
+        "required": ["overlay", "start_block", "end_block", "include_final_layer"],
+        "title": "MiniMaxH3AdaLNOverlayField",
+        "type": "object"
+      },
       "MiniMaxH3ConditioningField": {
         "description": "A MiniMax H3 conditioning primitive value.\n\nH3 conditioning is the layer-50 Qwen3-VL hidden state plus the per-row modality tags the\npacked-sequence layout is built from (vision-block rows are tagged as video).",
         "properties": {
@@ -73104,6 +73156,145 @@
         },
         "required": ["output_meta", "frame_conditioning", "type", "type"],
         "title": "MiniMaxH3FrameConditioningOutput",
+        "type": "object"
+      },
+      "MiniMaxH3HybridOverlayInvocation": {
+        "category": "model",
+        "class": "invocation",
+        "classification": "prototype",
+        "description": "Overlay the AdaLN modulation projections of a second MiniMax H3 task transformer onto the\nloaded one, blending the two shipped checkpoints.\n\nFL2VA has the better output quality; Ref2VA understands references but carries a training\ndefect. The two differ almost only in their per-block AdaLN projections, so running FL2VA\nwith Ref2VA's AdaLN projections for the upper blocks keeps FL2VA's quality while restoring\nreference conditioning. Load the FL2VA transformer in the model loader, select the Ref2VA\ncheckpoint here; the result counts as a Ref2VA transformer and takes reference conditioning.",
+        "node_pack": "invokeai",
+        "properties": {
+          "id": {
+            "description": "The id of this instance of an invocation. Must be unique among all instances of invocations.",
+            "field_kind": "node_attribute",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_intermediate": {
+            "default": false,
+            "description": "Whether or not this is an intermediate invocation.",
+            "field_kind": "node_attribute",
+            "input": "direct",
+            "orig_required": true,
+            "title": "Is Intermediate",
+            "type": "boolean",
+            "ui_hidden": false,
+            "ui_type": "IsIntermediate"
+          },
+          "use_cache": {
+            "default": true,
+            "description": "Whether or not to use the cache",
+            "field_kind": "node_attribute",
+            "title": "Use Cache",
+            "type": "boolean"
+          },
+          "transformer": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MiniMaxH3TransformerField"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The base transformer (FL2VA for the recommended hybrid).",
+            "field_kind": "input",
+            "input": "connection",
+            "orig_required": true,
+            "title": "Transformer"
+          },
+          "overlay_model": {
+            "$ref": "#/components/schemas/ModelIdentifierField",
+            "description": "Single-file MiniMax H3 transformer whose AdaLN projections are overlaid (Ref2VA for the recommended hybrid). Must match the base transformer's kind: both AdaLN-pruned, or both full.",
+            "field_kind": "input",
+            "input": "direct",
+            "orig_required": true,
+            "title": "Overlay Model",
+            "ui_model_base": ["minimax-h3"],
+            "ui_model_format": ["checkpoint"],
+            "ui_model_type": ["main"]
+          },
+          "start_block": {
+            "default": 25,
+            "description": "First transformer block (inclusive, 0-49) whose AdaLN projection comes from the overlay. Lower values hand more of the model to the overlay: stronger reference adherence, more of its quality loss. 25 is the recommended balance.",
+            "field_kind": "input",
+            "input": "any",
+            "maximum": 49,
+            "minimum": 0,
+            "orig_default": 25,
+            "orig_required": false,
+            "title": "Start Block",
+            "type": "integer"
+          },
+          "end_block": {
+            "default": 49,
+            "description": "Last transformer block (inclusive, 0-49) whose AdaLN projection comes from the overlay.",
+            "field_kind": "input",
+            "input": "any",
+            "maximum": 49,
+            "minimum": 0,
+            "orig_default": 49,
+            "orig_required": false,
+            "title": "End Block",
+            "type": "integer"
+          },
+          "include_final_layer": {
+            "default": false,
+            "description": "Also take the final-layer AdaLN projection from the overlay. It is the single most divergent tensor between the two checkpoints, so this maximizes reference behaviour at a visible quality cost.",
+            "field_kind": "input",
+            "input": "any",
+            "orig_default": false,
+            "orig_required": false,
+            "title": "Include Final Layer",
+            "type": "boolean"
+          },
+          "type": {
+            "const": "minimax_h3_hybrid_overlay",
+            "default": "minimax_h3_hybrid_overlay",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": ["overlay_model", "type", "id"],
+        "tags": ["model", "minimax", "video"],
+        "title": "Hybrid AdaLN Overlay - MiniMax H3",
+        "type": "object",
+        "version": "1.0.0",
+        "output": {
+          "$ref": "#/components/schemas/MiniMaxH3HybridOverlayOutput"
+        }
+      },
+      "MiniMaxH3HybridOverlayOutput": {
+        "class": "output",
+        "description": "MiniMax H3 hybrid AdaLN overlay output.",
+        "properties": {
+          "transformer": {
+            "$ref": "#/components/schemas/MiniMaxH3TransformerField",
+            "description": "Transformer",
+            "field_kind": "output",
+            "title": "MiniMax H3 Transformer",
+            "ui_hidden": false
+          },
+          "overlay_model": {
+            "$ref": "#/components/schemas/ModelIdentifierField",
+            "description": "The transformer checkpoint whose AdaLN projections were overlaid.",
+            "field_kind": "output",
+            "title": "Overlay Model",
+            "ui_hidden": false
+          },
+          "type": {
+            "const": "minimax_h3_hybrid_overlay_output",
+            "default": "minimax_h3_hybrid_overlay_output",
+            "field_kind": "node_attribute",
+            "title": "type",
+            "type": "string"
+          }
+        },
+        "required": ["output_meta", "transformer", "overlay_model", "type", "type"],
+        "title": "MiniMaxH3HybridOverlayOutput",
         "type": "object"
       },
       "MiniMaxH3IdealDimensionsInvocation": {
@@ -74584,6 +74775,18 @@
             "default": null,
             "description": "The task variant of the loaded transformer ('fl2va' / 'ref2va'), stamped by the model loader so the denoise node can reject a task/conditioning mismatch.",
             "title": "Variant"
+          },
+          "adaln_overlay": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MiniMaxH3AdaLNOverlayField"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Hybrid AdaLN overlay applied on top of the transformer at denoise time, if any."
           }
         },
         "required": ["transformer"],

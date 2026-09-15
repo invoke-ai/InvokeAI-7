@@ -17,6 +17,7 @@ import {
   getVideoTargetResolutionOptions,
   isSupportedVideoModel,
   isValidVideoNumFrames,
+  MINIMAX_H3_HYBRID_BLOCK_RANGE,
   snapVideoNumFrames,
 } from '@features/video';
 import { SEED_MAX } from '@platform/core/seed';
@@ -231,6 +232,7 @@ const VIDEO_COMPONENT_METADATA_KEYS = [
   ['minimax_h3_transformer_model', 'h3TransformerModel'],
   ['minimax_h3_component_source', 'componentSourceModel'],
   ['minimax_h3_text_encoder_model', 'h3TextEncoderModel'],
+  ['minimax_h3_hybrid_base_model', 'h3HybridBaseModel'],
 ] as const;
 
 /**
@@ -532,6 +534,7 @@ export const buildVideoRecallSettings = ({
   // Components recall FIRST: the accelerator derivation below resolves the H3 task off the
   // recalled transformer override, so `values` must already hold it.
   let componentsRecalled = false;
+  let hybridBaseRecalled = false;
 
   for (const [metadataKey, valuesKey] of VIDEO_COMPONENT_METADATA_KEYS) {
     const recordedKey = getMetadataModelKey(metadata, metadataKey);
@@ -545,7 +548,36 @@ export const buildVideoRecallSettings = ({
     if (installed) {
       values = { ...values, [valuesKey]: installed };
       componentsRecalled = true;
+      hybridBaseRecalled ||= valuesKey === 'h3HybridBaseModel';
     }
+  }
+
+  // The hybrid base reproduces the recorded run exactly: it comes back when
+  // the run recorded a still-installed one, and is CLEARED otherwise — a run
+  // without the hybrid (or one whose base is gone) must not keep the panel's
+  // base, which would misrepresent the run. The required components (source
+  // install, text encoder) keep the panel's pick on absence instead: they are
+  // what makes the main runnable, not a record of the run. Reported against
+  // the ORIGINAL panel state, like media: a base the model transition above
+  // already dropped was still cleared by this recall.
+  if (!hybridBaseRecalled) {
+    if (values.h3HybridBaseModel) {
+      values = { ...values, h3HybridBaseModel: null };
+    }
+    componentsRecalled ||= currentValues.h3HybridBaseModel !== null;
+  }
+
+  // The hybrid's start block belongs to the recorded base: it only comes back
+  // with it, never onto a base the panel happened to hold already.
+  const hybridStartBlock = getInteger(metadata, 'minimax_h3_hybrid_start_block');
+
+  if (
+    hybridBaseRecalled &&
+    hybridStartBlock !== null &&
+    hybridStartBlock >= MINIMAX_H3_HYBRID_BLOCK_RANGE.min &&
+    hybridStartBlock <= MINIMAX_H3_HYBRID_BLOCK_RANGE.max
+  ) {
+    values = { ...values, h3HybridStartBlock: hybridStartBlock };
   }
 
   if (componentsRecalled) {

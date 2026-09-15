@@ -180,6 +180,7 @@ export const syncVideoWidgetValuesWithModels = (
     ...base,
     ...accelerator,
     componentSourceModel: syncComponent('componentSourceModel', base.componentSourceModel),
+    h3HybridBaseModel: syncComponent('h3HybridBaseModel', base.h3HybridBaseModel),
     h3TextEncoderModel: syncComponent('h3TextEncoderModel', base.h3TextEncoderModel),
     h3TransformerModel: syncComponent('h3TransformerModel', base.h3TransformerModel),
     loras,
@@ -209,6 +210,7 @@ export const syncVideoWidgetValuesWithModels = (
     next.componentSourceModel === values.componentSourceModel &&
     next.h3TransformerModel === values.h3TransformerModel &&
     next.h3TextEncoderModel === values.h3TextEncoderModel &&
+    next.h3HybridBaseModel === values.h3HybridBaseModel &&
     next.references === values.references &&
     next.loras.length === values.loras.length &&
     next.loras.every((lora, index) => lora.model === values.loras[index]?.model);

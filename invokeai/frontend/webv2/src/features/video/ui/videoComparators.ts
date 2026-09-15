@@ -59,6 +59,8 @@ export const areVideoValuesEqual = (left: VideoWidgetValues, right: VideoWidgetV
     stableStringify(left.wanLowNoiseModel) === stableStringify(right.wanLowNoiseModel) &&
     stableStringify(left.componentSourceModel) === stableStringify(right.componentSourceModel) &&
     stableStringify(left.h3TransformerModel) === stableStringify(right.h3TransformerModel) &&
-    stableStringify(left.h3TextEncoderModel) === stableStringify(right.h3TextEncoderModel)
+    stableStringify(left.h3TextEncoderModel) === stableStringify(right.h3TextEncoderModel) &&
+    stableStringify(left.h3HybridBaseModel) === stableStringify(right.h3HybridBaseModel) &&
+    left.h3HybridStartBlock === right.h3HybridStartBlock
   );
 };

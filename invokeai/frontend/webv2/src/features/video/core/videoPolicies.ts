@@ -41,6 +41,7 @@ import {
   applyReferenceExtendSourceVideo,
   applyReferenceExtendNumFrames,
   MIN_VIDEO_TRIM_FRAMES,
+  MINIMAX_H3_HYBRID_BLOCK_RANGE,
   resolveVideoMode,
   VIDEO_ASPECT_RATIO_IDS,
 } from './settings';
@@ -945,7 +946,8 @@ export type VideoComponentValueKey =
   | 'wanLowNoiseModel'
   | 'componentSourceModel'
   | 'h3TransformerModel'
-  | 'h3TextEncoderModel';
+  | 'h3TextEncoderModel'
+  | 'h3HybridBaseModel';
 
 export interface VideoComponentPolicyContext {
   model: MainModelConfig;
@@ -972,6 +974,7 @@ export interface VideoComponentSectionPolicy {
 
 const VIDEO_COMPONENT_SETTING_LABELS: Record<VideoComponentValueKey, string> = {
   componentSourceModel: 'Component source',
+  h3HybridBaseModel: 'Hybrid quality base',
   h3TextEncoderModel: 'Text encoder (single file)',
   h3TransformerModel: 'Transformer (single file)',
   vae: 'VAE',
@@ -1182,8 +1185,39 @@ export const getVideoComponentSectionPolicy = (
       required: (ctx) => !isH3TextEncoderSatisfied(ctx),
       valueKind: 'component',
     },
+    // The hybrid is a Ref2VA-only option: an FL2VA checkpoint stands in for
+    // every weight but the AdaLN projections, whose task-defining half stays
+    // the selected Ref2VA main's. Offered on the Ref2VA selection so the
+    // panel's reference mode (decided by the top model) is unaffected. Listed
+    // last: optional tuning sits below the slots the panel needs to run.
+    ...(model.variant === 'ref2va'
+      ? [
+          {
+            filter: isH3HybridBaseCandidate,
+            helpText:
+              'Optional: an FL2VA transformer to run with this Ref2VA model’s AdaLN projections (the per-block time-conditioning layers) from the chosen block onward — FL2VA’s output quality, references still routed. Same file kind as the model (pruned with pruned).',
+            key: 'h3HybridBaseModel',
+            label: 'Hybrid quality base (FL2VA)',
+            modelTypes: ['main'],
+            valueKind: 'main',
+          } satisfies VideoComponentSlotPolicy,
+        ]
+      : []),
   ]);
 };
+
+// The overlay node refuses a pruned/full mismatch (the AdaLN projections have
+// different shapes), so the slot lists only same-kind FL2VA checkpoints; a
+// config without the flag (open union) stays allowed, the backend decides.
+const isH3HybridBaseCandidate = (candidate: ModelConfig, ctx: VideoComponentPolicyContext): boolean =>
+  candidate.type === 'main' &&
+  candidate.base === 'minimax-h3' &&
+  candidate.format === 'checkpoint' &&
+  candidate.variant === 'fl2va' &&
+  candidate.key !== ctx.model.key &&
+  (typeof candidate.pruned !== 'boolean' ||
+    typeof ctx.model.pruned !== 'boolean' ||
+    candidate.pruned === ctx.model.pruned);
 
 /** The H3 Diffusers install a checkpoint main draws its components from, if a valid one is selected. */
 const getH3ComponentSource = (ctx: VideoComponentPolicyContext): MainModelConfig | null => {
@@ -1207,6 +1241,7 @@ const getVideoComponentPolicyContext = (
   model,
   selectedComponents: {
     componentSourceModel: settings.componentSourceModel,
+    h3HybridBaseModel: settings.h3HybridBaseModel,
     h3TextEncoderModel: settings.h3TextEncoderModel,
     h3TransformerModel: settings.h3TransformerModel,
     vae: settings.vae,
@@ -1314,6 +1349,8 @@ export const getDefaultVideoSettings = (
       model && model.base === 'minimax-h3' && model.format === 'checkpoint' ? findH3ComponentSource(models) : null,
     firstFrameImage: null,
     fps: config.fps.defaultValue,
+    h3HybridBaseModel: null,
+    h3HybridStartBlock: MINIMAX_H3_HYBRID_BLOCK_RANGE.defaultStart,
     h3TextEncoderModel: null,
     h3TransformerModel: null,
     lastFrameImage: null,
@@ -1370,6 +1407,8 @@ export const getVideoSettingsWithModelDefaults = (
     cfgScaleLowNoise: modelDefaults.cfgScaleLowNoise,
     componentSourceModel: modelDefaults.componentSourceModel,
     fps: modelDefaults.fps,
+    h3HybridBaseModel: modelDefaults.h3HybridBaseModel,
+    h3HybridStartBlock: modelDefaults.h3HybridStartBlock,
     h3TextEncoderModel: modelDefaults.h3TextEncoderModel,
     h3TransformerModel: modelDefaults.h3TransformerModel,
     loras: [
