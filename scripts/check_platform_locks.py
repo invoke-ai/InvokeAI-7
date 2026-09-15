@@ -54,6 +54,8 @@ class Platform:
     check_no_extra: bool = False
     # Walk the whole closure for wheel availability.
     check_closure: bool = False
+    # Non-conflicting extras whose closure is walked too (what the platform's CI lane installs).
+    closure_extras: tuple[str, ...] = ()
     # Packages allowed to be sdist-only in the closure (pure Python, built without a compiler).
     sdist_allowlist: frozenset[str] = field(default_factory=frozenset)
 
@@ -90,9 +92,10 @@ PLATFORMS: dict[str, Platform] = {
         torch_registry=NVIDIA_WIN_ARM64_REGISTRY,
         check_no_extra=True,
         check_closure=True,
+        closure_extras=("test",),
         # imageio-ffmpeg's wheels exist only to carry an ffmpeg binary; the sdist builds a pure wheel and
-        # the app uses the ffmpeg on PATH.
-        sdist_allowlist=frozenset({"imageio-ffmpeg"}),
+        # the app uses the ffmpeg on PATH. requests-testadapter (test extra) is a pure-Python sdist.
+        sdist_allowlist=frozenset({"imageio-ffmpeg", "requests-testadapter"}),
     ),
 }
 
@@ -214,9 +217,11 @@ def check_torch(
 
 def walk_closure(
     lock: Lock, edges: list[dict[str, Any]], env: dict[str, str]
-) -> dict[tuple[str, Any, str], dict[str, Any]]:
-    """Every lock package reachable from `edges` in environment `env`, keyed by (name, version, source)."""
+) -> tuple[dict[tuple[str, Any, str], dict[str, Any]], list[str]]:
+    """Every lock package reachable from `edges` in environment `env`, keyed by (name, version, source), plus
+    the edges that name no package in the lock (a corrupt lock would otherwise shrink the closure silently)."""
     seen: dict[tuple[str, Any, str], dict[str, Any]] = {}
+    unresolved: list[str] = []
     # A package's extras are walked per (package, extra), independently of whether the package itself was
     # already reached through a plain edge -- `P` and then `P[x]` must still enqueue `x`'s dependencies.
     seen_extras: set[tuple[tuple[str, Any, str], str]] = set()
@@ -225,7 +230,10 @@ def walk_closure(
         dep = pending.pop()
         if not matches(dep.get("marker"), env):
             continue
-        for package in lock.resolve(dep):
+        packages = lock.resolve(dep)
+        if not packages:
+            unresolved.append(f"{dep['name']}=={dep.get('version', '?')}")
+        for package in packages:
             ident = (package["name"], package.get("version"), str(package.get("source")))
             if ident not in seen:
                 seen[ident] = package
@@ -234,7 +242,7 @@ def walk_closure(
                 if (ident, extra) not in seen_extras:
                     seen_extras.add((ident, extra))
                     pending += package.get("optional-dependencies", {}).get(extra, [])
-    return seen
+    return seen, unresolved
 
 
 def check_closure(
@@ -242,8 +250,14 @@ def check_closure(
 ) -> list[str]:
     """Every package reachable on the platform (any single extra, or none) ships an installable wheel."""
     problems: list[str] = []
-    for label, key, deps in universes(root, keys, include_no_extra=True):
-        seen = walk_closure(lock, deps, env_for(platform, python_version, extra=key))
+    base = root.get("dependencies", [])
+    checked = universes(root, keys, include_no_extra=True)
+    checked += [
+        (extra, None, base + root.get("optional-dependencies", {}).get(extra, [])) for extra in platform.closure_extras
+    ]
+    for label, key, deps in checked:
+        seen, unresolved = walk_closure(lock, deps, env_for(platform, python_version, extra=key))
+        problems += [f"  [{label}] py{python_version}: dependency {edge} is not in uv.lock" for edge in unresolved]
         missing = [
             f"{name}=={version} from {(p.get('source') or {}).get('registry', '?')}"
             for (name, version, _), p in sorted(seen.items())

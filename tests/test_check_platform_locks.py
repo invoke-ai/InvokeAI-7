@@ -89,6 +89,8 @@ def make_lock(
     win_arm_torch_tag: str = "cp312-cp312-win_arm64",
     aarch64_torchvision_tag: str = "cp312-cp312-manylinux_2_28_aarch64",
     closure_tag: str = "cp312-abi3-win_arm64",
+    test_extra_tag: str = "cp312-cp312-win_arm64",
+    unresolved_edge: bool = False,
     transitive_tag: str = "cp312-cp312-win_arm64",
     extra_dep_tag: str = "cp312-cp312-win_arm64",
     sdist_only: str | None = None,
@@ -133,6 +135,11 @@ cuda = [
 cpu = [
 {chr(10).join("    " + d + "," for d in base_torch)}
 ]
+test = [
+    {dep("pytest-timeout")},
+{("    " + dep("ghost", "9.9", PYPI) + ",") if unresolved_edge else ""}
+]
+{package("pytest-timeout", "2.4.0", PYPI, [wheel("pytest_timeout", "2.4.0", test_extra_tag, PYPI)])}
 {package("numpy", "2.3.5", PYPI, [wheel("numpy", "2.3.5", "cp312-cp312-win_arm64", PYPI), wheel("numpy", "2.3.5", "cp312-cp312-manylinux_2_28_aarch64", PYPI)])}
 {package("python-jose", "3.5.0", PYPI, [wheel("python_jose", "3.5.0", "py3-none-any", PYPI)], deps=[dep("rsa")])}
 {package("rsa", "4.9", PYPI, [wheel("rsa", "4.9", transitive_tag, PYPI)])}
@@ -192,6 +199,16 @@ def test_win_arm64_package_reached_through_an_extra_without_arm64_wheel_fails(tm
     """`imageio[ffmpeg]`-style edges add the extra's dependencies to the closure, also when the same package was
     already reached through a plain edge (the fixture lists both, plain edge walked first)."""
     assert run(tmp_path, make_lock(extra_dep_tag="cp312-cp312-win_amd64"), "win_arm64") == 1
+
+
+def test_win_arm64_test_extra_closure_is_checked(tmp_path: Path):
+    """The CI lane installs `--extra test`, so a test-only dependency without an ARM64 wheel breaks it."""
+    assert run(tmp_path, make_lock(test_extra_tag="cp312-cp312-win_amd64"), "win_arm64") == 1
+
+
+def test_win_arm64_edge_naming_no_lock_package_fails(tmp_path: Path):
+    """An edge the lock cannot resolve must be reported, not dropped from the closure."""
+    assert run(tmp_path, make_lock(unresolved_edge=True), "win_arm64") == 1
 
 
 def test_win_arm64_sdist_only_package_fails_unless_allow_listed(tmp_path: Path):
