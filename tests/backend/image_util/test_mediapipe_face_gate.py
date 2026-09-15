@@ -27,12 +27,30 @@ def _image() -> Image.Image:
     return Image.fromarray(np.zeros((64, 64, 3), dtype=np.uint8))
 
 
-def test_detect_faces_reports_missing_mediapipe(no_mediapipe):
-    with pytest.raises(RuntimeError, match="MediaPipe is not available"):
+def _as_windows_arm64(monkeypatch) -> None:
+    from invokeai.backend.image_util import mediapipe_face
+
+    monkeypatch.setattr(mediapipe_face.sys, "platform", "win32")
+    monkeypatch.setattr(mediapipe_face.platform, "machine", lambda: "ARM64")
+
+
+def test_detect_faces_names_the_platform_on_windows_arm64(no_mediapipe, monkeypatch):
+    _as_windows_arm64(monkeypatch)
+    with pytest.raises(RuntimeError) as excinfo:
         detect_faces(_image())
+    assert str(excinfo.value) == MEDIAPIPE_UNAVAILABLE_MESSAGE
 
 
-def test_face_box_mask_reports_missing_mediapipe(no_mediapipe):
+def test_face_box_mask_names_the_platform_on_windows_arm64(no_mediapipe, monkeypatch):
+    _as_windows_arm64(monkeypatch)
     with pytest.raises(RuntimeError) as excinfo:
         generate_face_box_mask(context=None, minimum_confidence=0.5, x_offset=0, y_offset=0, pil_image=_image())  # type: ignore[arg-type]
     assert str(excinfo.value) == MEDIAPIPE_UNAVAILABLE_MESSAGE
+
+
+def test_import_failure_elsewhere_carries_the_original_error(no_mediapipe):
+    # On platforms that do have mediapipe, an import failure is a broken install, not the platform: the
+    # user must see the real cause rather than the Windows ARM64 explanation.
+    with pytest.raises(RuntimeError, match=r"MediaPipe failed to import.*mediapipe") as excinfo:
+        detect_faces(_image())
+    assert "Windows ARM64" not in str(excinfo.value)

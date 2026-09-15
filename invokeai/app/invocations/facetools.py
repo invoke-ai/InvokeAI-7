@@ -19,7 +19,7 @@ from invokeai.app.invocations.fields import ImageField, InputField, OutputField,
 from invokeai.app.invocations.primitives import ImageOutput
 from invokeai.app.services.image_records.image_records_common import ImageCategory
 from invokeai.app.services.shared.invocation_context import InvocationContext
-from invokeai.backend.image_util.mediapipe_face import MEDIAPIPE_UNAVAILABLE_MESSAGE
+from invokeai.backend.image_util.mediapipe_face import mediapipe_import_error
 
 
 @invocation_output("face_mask_output")
@@ -199,7 +199,7 @@ def generate_face_box_mask(
     try:
         from mediapipe.python.solutions.face_mesh import FaceMesh  # type: ignore[import]
     except ImportError as e:
-        raise RuntimeError(MEDIAPIPE_UNAVAILABLE_MESSAGE) from e
+        raise mediapipe_import_error(e) from e
 
     face_mesh = FaceMesh(
         max_num_faces=999,
