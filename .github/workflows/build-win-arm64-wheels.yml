@@ -3,12 +3,18 @@
 # GitHub release. `pyproject.toml` resolves those three packages on Windows ARM64 from that page (the
 # `invoke-win-arm64-wheels` index), and the manual-install docs pass the same page to `--find-links`.
 #
-# Run it once per wheel bump, before re-locking: the lockfile records the asset URLs and hashes. Bumping a
-# version here means bumping the matching `; sys_platform == 'win32' and platform_machine == 'ARM64'`
-# pins in pyproject.toml and, unless the tag changes, re-uploading over the old assets (`--clobber`).
+# Runs on dispatch, and on pull requests that change this workflow or its scripts (a workflow only becomes
+# dispatchable once it is on the default branch, and a change to the build recipe is exactly when a rebuild is
+# wanted). Run it before re-locking: the lockfile records the asset URLs and hashes. Bumping a version here
+# means bumping the matching `; sys_platform == 'win32' and platform_machine == 'ARM64'` pins in
+# pyproject.toml and, unless the tag changes, re-uploading over the old assets (`--clobber`).
 name: build-win-arm64-wheels
 
 on:
+  pull_request:
+    paths:
+      - '.github/workflows/build-win-arm64-wheels.yml'
+      - 'scripts/win_arm64_wheels/**'
   workflow_dispatch:
     inputs:
       release_tag:
@@ -31,6 +37,9 @@ on:
 env:
   # Keep in step with python-tests.yml and uv-lock-checks.yml.
   UV_VERSION: '0.11.28'
+  # Dispatch inputs, with the same defaults for pull_request runs.
+  RELEASE_TAG: ${{ inputs.release_tag || 'win-arm64-wheels-v1' }}
+  OPENCV_PYTHON_REF: ${{ inputs.opencv_python_ref || '86' }}
   # uv installs an x86_64 CPython on Windows ARM64 unless the request names the architecture. The
   # wheels must be built by, and are smoke-tested with, the native interpreter.
   PYTHON_REQUEST: cpython-3.12-windows-aarch64-none
@@ -56,7 +65,7 @@ jobs:
       - name: fetch opencv-python
         shell: pwsh
         run: |
-          git clone --recursive --depth 1 --branch ${{ inputs.opencv_python_ref }} https://github.com/opencv/opencv-python.git
+          git clone --recursive --depth 1 --branch $env:OPENCV_PYTHON_REF https://github.com/opencv/opencv-python.git
           uv run --no-project --python $env:PYTHON_REQUEST python scripts/win_arm64_wheels/patch_opencv_setup.py opencv-python/setup.py
 
       - name: build wheel
@@ -103,10 +112,10 @@ jobs:
       matrix:
         include:
           - package: blake3
-            version: ${{ inputs.blake3_version }}
+            version: ${{ inputs.blake3_version || '1.0.9' }}
             import: blake3
           - package: tiktoken
-            version: ${{ inputs.tiktoken_version }}
+            version: ${{ inputs.tiktoken_version || '0.13.0' }}
             import: tiktoken
     steps:
       - name: setup uv
@@ -155,7 +164,6 @@ jobs:
       contents: write
     env:
       GH_TOKEN: ${{ github.token }}
-      RELEASE_TAG: ${{ inputs.release_tag }}
     steps:
       - name: checkout
         uses: actions/checkout@v6
