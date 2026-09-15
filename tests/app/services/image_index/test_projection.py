@@ -1,12 +1,14 @@
 """Tests for the pure projection/clustering functions (UMAP, DBSCAN, scope hashing)."""
 
 import json
+import sys
 
 import numpy as np
 
 from invokeai.app.services.image_index.image_index_common import IndexedItem
 from invokeai.app.services.image_index.projection import (
     DEFAULT_CLUSTER_EPS,
+    _pca_projection,
     adaptive_cluster_eps,
     compute_clusters,
     compute_umap,
@@ -228,3 +230,21 @@ def _blob_coords() -> np.ndarray:
     return np.concatenate([rng.standard_normal((20, 2)) * 0.1 + offset for offset in ([0, 0], [5, 5])]).astype(
         np.float32
     )
+
+
+def test_umap_missing_falls_back_to_pca(monkeypatch) -> None:
+    """Without umap-learn (Windows ARM64 has no numba wheel), every gallery size still gets a map."""
+    from invokeai.app.services.image_index import projection
+
+    monkeypatch.setitem(sys.modules, "umap", None)
+    monkeypatch.setattr(projection, "_umap_unavailable_logged", False)
+    embeddings = _blobs()
+    coords = compute_umap(embeddings)
+    assert coords.shape == (embeddings.shape[0], 2)
+    assert coords.dtype == np.float32
+    assert np.isfinite(coords).all()
+    # The fallback is the deterministic PCA projection, and it must still separate the blobs.
+    assert np.array_equal(coords, _pca_projection(embeddings))
+    span = np.ptp(coords, axis=0).max()
+    labels = compute_clusters(coords, eps=span * 0.05, min_samples=10)
+    assert len({label for label in labels if label != -1}) >= 2

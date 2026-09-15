@@ -1,5 +1,6 @@
 import logging
 import mimetypes
+import platform
 import socket
 from pathlib import Path
 
@@ -16,6 +17,22 @@ def find_open_port(port: int) -> int:
             return find_open_port(port=port + 1)
         else:
             return port
+
+
+def describe_torch_build() -> str:
+    """One line naming the torch build and host platform, for the startup log.
+
+    Out-of-tree torch builds (NVIDIA's `+cu134` wheels for Windows on ARM64) and ROCm builds all report
+    `device.type == "cuda"`, so the device line alone does not say what is actually running; a bug
+    report needs the version string, the accelerator API and the CPU architecture.
+    """
+    if torch.version.hip is not None:
+        accelerator = f"HIP {torch.version.hip}"
+    elif torch.version.cuda is not None:
+        accelerator = f"CUDA {torch.version.cuda}"
+    else:
+        accelerator = "no CUDA/HIP"
+    return f"torch {torch.__version__} ({accelerator}) on {platform.system()} {platform.machine()}"
 
 
 def check_cudnn(logger: logging.Logger) -> None:

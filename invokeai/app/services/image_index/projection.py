@@ -14,12 +14,16 @@ map labels a small gallery as all noise.
 
 import hashlib
 import json
+import logging
 import warnings
 from typing import Optional
 
 import numpy as np
 
 from invokeai.app.services.image_index.image_index_common import EMBEDDING_DTYPE, IndexedItem
+
+logger = logging.getLogger(__name__)
+_umap_unavailable_logged = False
 
 DEFAULT_CLUSTER_EPS = 0.2
 DEFAULT_CLUSTER_MIN_SAMPLES = 10
@@ -40,6 +44,16 @@ def projection_params(seed: int = DEFAULT_UMAP_SEED, n_points: int = 0) -> str:
     )
 
 
+def _pca_projection(embeddings: np.ndarray) -> np.ndarray:
+    """Deterministic (N, 2) projection onto the two leading principal components."""
+    centered = embeddings.astype(np.float64) - embeddings.mean(axis=0)
+    _, _, vt = np.linalg.svd(centered, full_matrices=False)
+    coords = centered @ vt[:2].T
+    if coords.shape[1] < 2:
+        coords = np.pad(coords, ((0, 0), (0, 2 - coords.shape[1])))
+    return coords.astype(EMBEDDING_DTYPE)
+
+
 def compute_umap(embeddings: np.ndarray, seed: int = DEFAULT_UMAP_SEED) -> np.ndarray:
     """Project an (N, D) embedding matrix to (N, 2) with UMAP.
 
@@ -48,20 +62,26 @@ def compute_umap(embeddings: np.ndarray, seed: int = DEFAULT_UMAP_SEED) -> np.nd
     cannot fit them (n_neighbors must exceed 1, and spectral initialization
     needs fewer components than points). Raises on UMAP failure — the caller
     decides what a failed fit means for its cache.
+
+    Where umap-learn is not installed (Windows ARM64: numba ships no wheel for
+    its Python), every size takes the PCA projection instead, so the map stays
+    usable — less structured, but deterministic and dependency-free.
     """
+    global _umap_unavailable_logged
     if embeddings.shape[0] == 0:
         return np.empty((0, 2), dtype=EMBEDDING_DTYPE)
     if embeddings.shape[0] == 1:
         return np.zeros((1, 2), dtype=EMBEDDING_DTYPE)
     if embeddings.shape[0] <= 3:
-        centered = embeddings.astype(np.float64) - embeddings.mean(axis=0)
-        _, _, vt = np.linalg.svd(centered, full_matrices=False)
-        coords = centered @ vt[:2].T
-        if coords.shape[1] < 2:
-            coords = np.pad(coords, ((0, 0), (0, 2 - coords.shape[1])))
-        return coords.astype(EMBEDDING_DTYPE)
+        return _pca_projection(embeddings)
 
-    from umap import UMAP
+    try:
+        from umap import UMAP
+    except ImportError:
+        if not _umap_unavailable_logged:
+            logger.warning("umap-learn is not installed; the image map falls back to a PCA projection.")
+            _umap_unavailable_logged = True
+        return _pca_projection(embeddings)
 
     with warnings.catch_warnings():
         # UMAP warns about TBB versions and small-N spectral fallbacks; both

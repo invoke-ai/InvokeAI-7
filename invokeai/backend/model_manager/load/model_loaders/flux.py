@@ -118,7 +118,7 @@ try:
     from invokeai.backend.quantization.bnb_nf4 import quantize_model_nf4
 
     bnb_available = True
-except ImportError:
+except Exception:  # bnb may import and then fail loading its native library (RuntimeError/OSError)
     bnb_available = False
 
 app_config = get_config()
