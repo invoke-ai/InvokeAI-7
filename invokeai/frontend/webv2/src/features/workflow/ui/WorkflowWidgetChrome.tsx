@@ -1,7 +1,7 @@
 import type { InvocationTemplate, XYPosition } from '@features/workflow/contracts';
 
 import { Box, HStack, Icon, Menu, Text } from '@chakra-ui/react';
-import { updateLibraryWorkflow } from '@features/workflow/queries';
+import { invalidateWorkflowLibraryCache, updateLibraryWorkflow } from '@features/workflow/queries';
 import { useProjectGraphCommands } from '@features/workflow/ui/useProjectGraphCommands';
 import {
   buildConnectorNode,
@@ -298,6 +298,8 @@ export const WorkflowDialogHost = () => {
         const owner = captureAccountScope();
         await updateLibraryWorkflow(workflowId, serialized, owner.signal);
         assertAccountScopeCurrent(owner);
+        // The library dialog serves cached payloads and pages; a save changes both.
+        invalidateWorkflowLibraryCache();
       },
     });
 

@@ -30,6 +30,8 @@ vi.mock('./editor/AddNodeDialog', () => ({ AddNodeDialog: () => null }));
 vi.mock('./library/WorkflowLibraryDialog', () => ({ WorkflowLibraryDialog: () => null }));
 vi.mock('./PendingLibraryWorkflowLoader', () => ({ PendingLibraryWorkflowLoader: () => null }));
 
+import { onWorkflowLibraryCacheInvalidated } from '@features/workflow/queries';
+
 const { updateLibraryWorkflowMock } = vi.hoisted(() => ({ updateLibraryWorkflowMock: vi.fn() }));
 
 vi.mock('@features/workflow/queries', async (importOriginal) => ({
@@ -89,6 +91,9 @@ describe('WorkflowDialogHost library autosave under StrictMode', () => {
   });
 
   it('still autosaves a bound workflow after a graph edit', async () => {
+    const cacheInvalidated = vi.fn();
+    const stopListening = onWorkflowLibraryCacheInvalidated(cacheInvalidated);
+
     const boundGraph = { ...createProjectGraph('workflow-1'), libraryWorkflowId: 'library-workflow-1' };
     const project = createMutablePort({
       galleryValues: {},
@@ -160,6 +165,9 @@ describe('WorkflowDialogHost library autosave under StrictMode', () => {
       expect.objectContaining({ name: 'Edited name' }),
       expect.any(AbortSignal)
     );
+    // The library dialog must not keep serving the pre-save payload.
+    expect(cacheInvalidated).toHaveBeenCalledTimes(1);
+    stopListening();
   });
 
   /**
