@@ -7,7 +7,6 @@ import {
   zoomAtPoint as calculateZoomAtPoint,
   type PanZoomPoint,
 } from '@workbench/panZoom';
-/* eslint-disable react/react-compiler */
 import { useCallback, useRef, useState, type MouseEvent, type PointerEvent as ReactPointerEvent } from 'react';
 
 import { capturePointer, releasePointer, trackPointerDown } from './loupeGestures';
@@ -83,6 +82,7 @@ export const useCompareLoupe = ({
   const pointersRef = useRef(new Map<number, PanZoomPoint>());
   const pinchRef = useRef<PinchGesture | null>(null);
   const naturalWidthRef = useRef(naturalWidth);
+  // eslint-disable-next-line react/refs
   naturalWidthRef.current = naturalWidth;
   const [isZoomed, setIsZoomed] = useState(false);
 

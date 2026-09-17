@@ -35,6 +35,7 @@ export interface QueueServerItemDTO {
 }
 
 export interface QueueImageDTO {
+  board_id: string | null;
   created_at: string;
   height: number;
   image_name: string;

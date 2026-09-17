@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 
 import type { GeneratePromptBatchPlanInput } from './promptBatch';
 
-import { buildGeneratePromptBatchPlan } from './promptBatch';
+import { buildGeneratePromptBatchPlan, generateSeedSequence } from './promptBatch';
+
+const SEED_MAX = 4_294_967_295;
 
 const baseInput = (overrides: Partial<GeneratePromptBatchPlanInput> = {}): GeneratePromptBatchPlanInput => ({
   batchCount: 1,
@@ -13,14 +15,21 @@ const baseInput = (overrides: Partial<GeneratePromptBatchPlanInput> = {}): Gener
   seed: 100,
   seedBehaviour: 'per-iteration',
   seedNodeId: 'seed',
-  shouldRandomizeSeed: false,
+  seedStep: 0,
   ...overrides,
+});
+
+describe('generateSeedSequence', () => {
+  it('wraps over the inclusive seed range in either direction', () => {
+    expect(generateSeedSequence(SEED_MAX - 1, 3)).toEqual([SEED_MAX - 1, SEED_MAX, 0]);
+    expect(generateSeedSequence(1, 3, -1)).toEqual([1, 0, SEED_MAX]);
+  });
 });
 
 describe('buildGeneratePromptBatchPlan with a single prompt', () => {
   // These two pin the pre-dynamic-prompts payload built by `enqueueGenerate`.
-  it('matches the fixed-seed payload: one datum each, runs carries the batch count', () => {
-    const plan = buildGeneratePromptBatchPlan(baseInput({ batchCount: 3, shouldRandomizeSeed: false }));
+  it('matches the held-seed payload: one datum each, runs carries the batch count', () => {
+    const plan = buildGeneratePromptBatchPlan(baseInput({ batchCount: 3, seedStep: 0 }));
 
     expect(plan.data).toEqual([
       [
@@ -33,8 +42,8 @@ describe('buildGeneratePromptBatchPlan with a single prompt', () => {
     expect(plan.expectedImageCount).toBe(3);
   });
 
-  it('matches the randomized-seed payload: a seed sequence zipped with repeated prompts', () => {
-    const plan = buildGeneratePromptBatchPlan(baseInput({ batchCount: 3, shouldRandomizeSeed: true }));
+  it('matches the stepping-seed payload: a seed sequence zipped with repeated prompts', () => {
+    const plan = buildGeneratePromptBatchPlan(baseInput({ batchCount: 3, seedStep: 1 }));
 
     expect(plan.data).toEqual([
       [
@@ -45,6 +54,13 @@ describe('buildGeneratePromptBatchPlan with a single prompt', () => {
     ]);
     expect(plan.runs).toBe(1);
     expect(plan.expectedImageCount).toBe(3);
+  });
+
+  it('counts down for a decrementing seed', () => {
+    const plan = buildGeneratePromptBatchPlan(baseInput({ batchCount: 3, seedStep: -1 }));
+
+    expect(plan.data[0][0].items).toEqual([100, 99, 98]);
+    expect(plan.runs).toBe(1);
   });
 
   it('ignores the seed behaviour, which only has meaning across a prompt set', () => {
@@ -60,7 +76,7 @@ describe('buildGeneratePromptBatchPlan with several prompts', () => {
 
   it('per-iteration keeps seeds in their own dimension so a seed spans the prompt set', () => {
     const plan = buildGeneratePromptBatchPlan(
-      baseInput({ batchCount: 2, prompts, shouldRandomizeSeed: true, seedBehaviour: 'per-iteration' })
+      baseInput({ batchCount: 2, prompts, seedBehaviour: 'per-iteration', seedStep: 1 })
     );
 
     expect(plan.data).toEqual([
@@ -74,9 +90,9 @@ describe('buildGeneratePromptBatchPlan with several prompts', () => {
     expect(plan.expectedImageCount).toBe(6);
   });
 
-  it('per-iteration with a fixed seed leans on runs for the iterations', () => {
+  it('per-iteration with a held seed leans on runs for the iterations', () => {
     const plan = buildGeneratePromptBatchPlan(
-      baseInput({ batchCount: 2, prompts, shouldRandomizeSeed: false, seedBehaviour: 'per-iteration' })
+      baseInput({ batchCount: 2, prompts, seedBehaviour: 'per-iteration', seedStep: 0 })
     );
 
     expect(plan.data[0]).toEqual([{ field_name: 'value', items: [100], node_path: 'seed' }]);
@@ -84,9 +100,9 @@ describe('buildGeneratePromptBatchPlan with several prompts', () => {
     expect(plan.expectedImageCount).toBe(6);
   });
 
-  it('per-image gives every generated image its own seed', () => {
+  it('per-image gives every generated image its own seed while the seed steps', () => {
     const plan = buildGeneratePromptBatchPlan(
-      baseInput({ batchCount: 2, prompts, shouldRandomizeSeed: false, seedBehaviour: 'per-image' })
+      baseInput({ batchCount: 2, prompts, seedBehaviour: 'per-image', seedStep: 1 })
     );
 
     expect(plan.data).toEqual([
@@ -100,24 +116,42 @@ describe('buildGeneratePromptBatchPlan with several prompts', () => {
     expect(plan.expectedImageCount).toBe(6);
   });
 
+  it('per-image with a held seed still uses that one seed for every image', () => {
+    const plan = buildGeneratePromptBatchPlan(
+      baseInput({ batchCount: 2, prompts, seedBehaviour: 'per-image', seedStep: 0 })
+    );
+
+    expect(plan.data[0]).toEqual([{ field_name: 'value', items: [100], node_path: 'seed' }]);
+    expect(plan.runs).toBe(2);
+    expect(plan.expectedImageCount).toBe(6);
+  });
+
   it('keeps every zipped group the same length, as the backend requires', () => {
     for (const seedBehaviour of ['per-iteration', 'per-image'] as const) {
-      const plan = buildGeneratePromptBatchPlan(baseInput({ batchCount: 4, prompts, seedBehaviour }));
+      for (const seedStep of [-1, 0, 1] as const) {
+        const plan = buildGeneratePromptBatchPlan(baseInput({ batchCount: 4, prompts, seedBehaviour, seedStep }));
 
-      for (const group of plan.data) {
-        const lengths = new Set(group.map((datum) => datum.items.length));
+        for (const group of plan.data) {
+          const lengths = new Set(group.map((datum) => datum.items.length));
 
-        expect(lengths.size).toBe(1);
+          expect(lengths.size).toBe(1);
+        }
       }
     }
   });
 
-  it('wraps seeds at the 32-bit ceiling', () => {
+  it('wraps seeds past the inclusive 32-bit ceiling', () => {
     const plan = buildGeneratePromptBatchPlan(
-      baseInput({ batchCount: 1, prompts: ['a', 'b', 'c'], seed: 4_294_967_294, seedBehaviour: 'per-image' })
+      baseInput({
+        batchCount: 1,
+        prompts: ['a', 'b', 'c'],
+        seed: SEED_MAX - 1,
+        seedBehaviour: 'per-image',
+        seedStep: 1,
+      })
     );
 
-    expect(plan.data[0][0].items).toEqual([4_294_967_294, 0, 1]);
+    expect(plan.data[0][0].items).toEqual([SEED_MAX - 1, SEED_MAX, 0]);
   });
 
   it('falls back to an empty prompt rather than emitting an empty batch', () => {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { isAbsoluteModelPath, modelPathSchema, resolveModelAbsolutePath } from './schemas';
+import { isAbsoluteModelPath, mainDefaultSettingsSchema, modelPathSchema, resolveModelAbsolutePath } from './schemas';
 
 describe('isAbsoluteModelPath', () => {
   it.each([
@@ -46,5 +46,43 @@ describe('resolveModelAbsolutePath', () => {
       '/home/user/model.safetensors'
     );
     expect(resolveModelAbsolutePath('sdxl/model.safetensors', null)).toBe('sdxl/model.safetensors');
+  });
+});
+
+describe('mainDefaultSettingsSchema', () => {
+  it('accepts the guidance this app itself stores for FLUX.1 Fill', () => {
+    // `defs/flux.py` declares `guidance=30.0` for the dev_fill variant, so a newly identified
+    // FLUX Fill model carries it. The ceiling here used to be 20, which meant opening such a
+    // model and saving any field was refused with a message about a value the user never typed.
+    const result = mainDefaultSettingsSchema.safeParse({
+      cfgRescaleMultiplier: null,
+      cfgScale: 1,
+      guidance: 30,
+      height: 1024,
+      scheduler: 'euler',
+      steps: 50,
+      vae: null,
+      vaePrecision: null,
+      width: 1024,
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it('still rejects a guidance below what the record allows', () => {
+    // `MainModelDefaultSettings.guidance` is `ge=1`; the floor is the record's, not invented.
+    const result = mainDefaultSettingsSchema.safeParse({
+      cfgRescaleMultiplier: null,
+      cfgScale: 1,
+      guidance: 0,
+      height: 1024,
+      scheduler: null,
+      steps: 50,
+      vae: null,
+      vaePrecision: null,
+      width: 1024,
+    });
+
+    expect(result.success).toBe(false);
   });
 });

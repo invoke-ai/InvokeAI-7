@@ -1,3 +1,4 @@
+import { SEED_MODES } from '@platform/core/seed';
 import { z } from 'zod';
 
 import type {
@@ -20,10 +21,15 @@ import { createWorkflowForm, createWorkflowId } from './document';
 
 const zXYPosition = z.object({ x: z.number().catch(0), y: z.number().catch(0) }).catch({ x: 0, y: 0 });
 
+// `seedMode` is this workbench's extension of the field instance. The legacy
+// editor parses instances through a stripping schema, so a workflow it re-saves
+// comes back without the key — every seed reads as fixed again, which is the
+// legacy behaviour rather than a corrupted value.
 const zFieldInstance = z.object({
   description: z.string().optional().catch(undefined),
   label: z.string().catch(''),
   name: z.string(),
+  seedMode: z.enum(SEED_MODES).optional().catch(undefined),
   value: z.unknown().optional(),
 });
 
@@ -98,10 +104,20 @@ const zFormElement = z.discriminatedUnion('type', [
     type: z.literal('container'),
   }),
   z.object({
-    data: z.looseObject({
-      fieldIdentifier: zFieldIdentifier,
-      showDescription: z.boolean().catch(false),
-    }),
+    data: z
+      .looseObject({
+        fieldIdentifier: zFieldIdentifier,
+        showDescription: z.boolean().catch(false),
+        showShuffle: z.boolean().optional(),
+        // The legacy editor keeps its per-element settings (component, bounds, shuffle) here; they
+        // are carried through untouched so a workflow saved from webv2 still opens the same there.
+        settings: z.looseObject({ showShuffle: z.boolean().optional() }).optional(),
+      })
+      .transform(({ settings, showShuffle, ...data }) => ({
+        ...data,
+        ...(settings ? { settings } : {}),
+        showShuffle: showShuffle ?? settings?.showShuffle ?? false,
+      })),
     id: z.string(),
     parentId: z.string().optional(),
     type: z.literal('node-field'),
@@ -192,7 +208,7 @@ const parseForm = (
     if (root?.type === 'container') {
       for (const fieldIdentifier of exposedFields) {
         const element: WorkflowFormElement = {
-          data: { fieldIdentifier, showDescription: false },
+          data: { fieldIdentifier, showDescription: false, showShuffle: false },
           id: createWorkflowId('node-field'),
           parentId: root.id,
           type: 'node-field',
@@ -281,6 +297,7 @@ export const parseWorkflowJson = (raw: unknown): ParsedWorkflow => {
         description: instance.description,
         label: instance.label,
         name: instance.name || name,
+        ...(instance.seedMode === undefined ? {} : { seedMode: instance.seedMode }),
         value: instance.value,
       };
     }

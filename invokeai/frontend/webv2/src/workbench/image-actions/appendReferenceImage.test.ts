@@ -1,6 +1,7 @@
 import type { MainModelConfig } from '@features/generation/contracts';
 import type { ModelConfig } from '@features/models';
 
+import { seedArchitectureCapabilities } from '@features/generation/core/architectureCapabilities.testing';
 import { getDefaultGenerateSettings, getMaxReferenceImages } from '@features/generation/settings';
 import { describe, expect, it } from 'vitest';
 
@@ -24,6 +25,8 @@ const generateValuesFor = (referenceImages: unknown[] = []): Record<string, unkn
   modelKey: sd1Model.key,
   referenceImages,
 });
+
+seedArchitectureCapabilities();
 
 describe('appendReferenceImage', () => {
   it('appends a reference image built from the flat upload result', () => {

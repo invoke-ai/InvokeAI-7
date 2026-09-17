@@ -1,4 +1,4 @@
-import type { GalleryVideoItem } from '@features/gallery';
+import type { GalleryItemRef, GalleryVideoItem } from '@features/gallery';
 import type { VideoWidgetValues } from '@features/video/core/types';
 import type { ReactNode } from 'react';
 
@@ -9,6 +9,13 @@ import { createContext, use, useMemo } from 'react';
  * may not import workbench), not a test seam; no second adapter is expected.
  */
 export interface VideoUiAdapter {
+  /**
+   * Locate one of the panel's conditioning media in the Gallery grid and put it
+   * in front of the user: the Gallery and Preview widgets come on screen and
+   * the grid lands on the item's board, page, and cell. The panel's thumbnails
+   * are the only handle the user has on media picked long ago.
+   */
+  findInGallery(ref: GalleryItemRef): void;
   /**
    * The board a file upload from the video panel should land on — the gallery's
    * currently selected board. A callback rather than a value so upload handlers
@@ -21,19 +28,50 @@ export interface VideoUiAdapter {
    * panel's play buttons let a trim be judged before it is generated against.
    * Selecting the item is part of the gesture: Preview shows the gallery
    * selection, and the panel has no other way to put a clip in front of it.
+   *
+   * Returns the request's token, which `videoSpanPlayback` reports under once
+   * the player has the loop running; `null` when Preview could not be raised
+   * and nothing was asked of it.
    */
-  playVideoSpanInPreview(span: { endSeconds: number; item: GalleryVideoItem; startSeconds: number }): void;
+  playVideoSpanInPreview(span: { endSeconds: number; item: GalleryVideoItem; startSeconds: number }): number | null;
   projectId: string;
   rawValues: Record<string, unknown>;
   reportError(message: string): void;
   showPromptSyntaxHighlighting: boolean;
   touchGalleryImages(): void;
+  /** What Preview is doing with the last span it was asked to play, for the button that asked. */
+  videoSpanPlayback: VideoSpanPlaybackPort;
+}
+
+/**
+ * The player's side of a span request: reported under the request's token, so a button
+ * can tell its own loop from a sibling card's, and gone (`null`) once nothing is armed —
+ * the user scrubbed out of the window, a newer request took over, or the player left the
+ * screen. `isPlaying` tracks the element itself, so a native pause shows in the panel
+ * too; `pause` stops the element and leaves the loop armed, so a native play resumes the
+ * selection rather than the whole clip.
+ */
+export interface VideoSpanPlaybackState {
+  isPlaying: boolean;
+  pause(): void;
+  token: number;
+}
+
+export interface VideoSpanPlaybackPort {
+  getState(): VideoSpanPlaybackState | null;
+  subscribe(listener: () => void): () => void;
 }
 
 /** The adapter's callbacks, which are stable for the lifetime of a project. */
 export type VideoUiActions = Pick<
   VideoUiAdapter,
-  'getUploadBoardId' | 'patchValues' | 'playVideoSpanInPreview' | 'reportError' | 'touchGalleryImages'
+  | 'findInGallery'
+  | 'getUploadBoardId'
+  | 'patchValues'
+  | 'playVideoSpanInPreview'
+  | 'reportError'
+  | 'touchGalleryImages'
+  | 'videoSpanPlayback'
 >;
 
 const VideoUiContext = createContext<VideoUiAdapter | null>(null);
@@ -46,10 +84,34 @@ const VideoUiContext = createContext<VideoUiAdapter | null>(null);
 const VideoUiActionsContext = createContext<VideoUiActions | null>(null);
 
 export const VideoUiProvider = ({ adapter, children }: { adapter: VideoUiAdapter; children: ReactNode }) => {
-  const { getUploadBoardId, patchValues, playVideoSpanInPreview, reportError, touchGalleryImages } = adapter;
+  const {
+    findInGallery,
+    getUploadBoardId,
+    patchValues,
+    playVideoSpanInPreview,
+    reportError,
+    touchGalleryImages,
+    videoSpanPlayback,
+  } = adapter;
   const actions = useMemo<VideoUiActions>(
-    () => ({ getUploadBoardId, patchValues, playVideoSpanInPreview, reportError, touchGalleryImages }),
-    [getUploadBoardId, patchValues, playVideoSpanInPreview, reportError, touchGalleryImages]
+    () => ({
+      findInGallery,
+      getUploadBoardId,
+      patchValues,
+      playVideoSpanInPreview,
+      reportError,
+      touchGalleryImages,
+      videoSpanPlayback,
+    }),
+    [
+      findInGallery,
+      getUploadBoardId,
+      patchValues,
+      playVideoSpanInPreview,
+      reportError,
+      touchGalleryImages,
+      videoSpanPlayback,
+    ]
   );
 
   return (

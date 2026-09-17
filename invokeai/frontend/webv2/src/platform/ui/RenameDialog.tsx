@@ -11,6 +11,7 @@ import { Field } from './Field';
  * caller's message (usually a toast) can be acted on.
  */
 export const RenameDialog = ({
+  finalFocusEl,
   initialName,
   isOpen,
   label = 'Project name',
@@ -20,6 +21,7 @@ export const RenameDialog = ({
   submitUnchanged = false,
   title = 'Rename project',
 }: {
+  finalFocusEl?: () => HTMLElement | null;
   initialName: string;
   isOpen: boolean;
   label?: string;
@@ -74,7 +76,14 @@ export const RenameDialog = ({
   );
 
   return (
-    <Dialog.Root lazyMount open={isOpen} size="xs" unmountOnExit onOpenChange={handleOpenChange}>
+    <Dialog.Root
+      lazyMount
+      finalFocusEl={finalFocusEl}
+      open={isOpen}
+      size="xs"
+      unmountOnExit
+      onOpenChange={handleOpenChange}
+    >
       <Portal>
         <Dialog.Backdrop />
         <Dialog.Positioner>

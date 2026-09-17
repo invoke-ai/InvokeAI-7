@@ -17,7 +17,7 @@ import {
 } from '@features/generation/core/settings';
 import { Field, IconButton, Tooltip } from '@platform/ui';
 import { MiddleTruncate } from '@platform/ui/MiddleTruncate';
-import { SliderNumberField } from '@platform/ui/SliderNumberField';
+import { ScrubberField } from '@platform/ui/ScrubberField';
 import { Trash2Icon } from 'lucide-react';
 import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -26,6 +26,7 @@ import type { GenerateSettingsUpdate } from './generateDebounce';
 
 import { useRegisterGenerateDraftFlusher } from './generateDraftRegistry';
 import { GenerationModelSelect as ModelSelect, useGenerationUi } from './GenerationUiContext';
+import { GenerateFieldContextMenu } from './shared/GenerateFieldContextMenu';
 import { GenerateToggleSwitch } from './shared/GenerateToggleSwitch';
 import { useDebouncedDraftValue } from './useDebouncedDraftValue';
 
@@ -38,12 +39,7 @@ interface GenerateConceptsContentProps {
   onCommitImmediate: (patch: Partial<GenerateSettings>) => void;
 }
 
-const LORA_WEIGHT_MARKS = [
-  { label: '-1', value: -1 },
-  { label: '0', value: 0 },
-  { label: '1', value: 1 },
-  { label: '2', value: 2 },
-];
+const LORA_WEIGHT_MARKS = [-1, 0, 1, 2];
 const LORA_WEIGHT_DEBOUNCE_MS = 250;
 
 const isCompatibleLora = (lora: GenerateLora, selectedModel: GenerateModelConfig | undefined): boolean =>
@@ -235,20 +231,26 @@ const LoraRow = ({
         </HStack>
       </HStack>
 
-      <SliderNumberField
-        ariaLabel={t('widgets.generate.conceptWeight', { name: lora.model.name })}
-        defaultValue={defaultWeight}
-        disabled={!isActive}
-        marks={LORA_WEIGHT_MARKS}
-        max={DEFAULT_LORA_WEIGHT_CONFIG.sliderMax}
-        min={DEFAULT_LORA_WEIGHT_CONFIG.sliderMin}
-        numberInputMax={DEFAULT_LORA_WEIGHT_CONFIG.numberInputMax}
-        numberInputMin={DEFAULT_LORA_WEIGHT_CONFIG.numberInputMin}
-        resetLabel={t('widgets.generate.useConceptDefaultWeight')}
-        step={DEFAULT_LORA_WEIGHT_CONFIG.coarseStep}
-        value={draftWeight}
-        onChange={setWeight}
-      />
+      <GenerateFieldContextMenu
+        copyValue={() => String(draftWeight)}
+        isAtDefault={draftWeight === defaultWeight}
+        onReset={() => setWeight(defaultWeight)}
+        resetLabel={t('widgets.generate.resetToConceptDefault')}
+      >
+        <ScrubberField
+          defaultValue={defaultWeight}
+          disabled={!isActive}
+          inputMax={DEFAULT_LORA_WEIGHT_CONFIG.numberInputMax}
+          inputMin={DEFAULT_LORA_WEIGHT_CONFIG.numberInputMin}
+          label={t('widgets.generate.weight')}
+          marks={LORA_WEIGHT_MARKS}
+          max={DEFAULT_LORA_WEIGHT_CONFIG.sliderMax}
+          min={DEFAULT_LORA_WEIGHT_CONFIG.sliderMin}
+          step={DEFAULT_LORA_WEIGHT_CONFIG.coarseStep}
+          value={draftWeight}
+          onChange={setWeight}
+        />
+      </GenerateFieldContextMenu>
     </Stack>
   );
 };

@@ -80,7 +80,9 @@ const growToOptimalArea = (size: CanvasSize, optimal: number, grid: number): Can
 };
 
 export const resolveCanvasProcessingSize = (
-  model: Pick<GenerateModelConfig, 'base' | 'type'>,
+  // The variant participates: Wan TI2V-5B snaps to 32 where A14B snaps to 16, and a caller that
+  // dropped it would show one processing size while the graph compiles another.
+  model: Pick<GenerateModelConfig, 'base' | 'type'> & { variant?: unknown },
   pidMode: PidMode,
   bbox: CanvasSize,
   scaling: CanvasScalingSettings | undefined

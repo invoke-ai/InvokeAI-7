@@ -8,6 +8,7 @@ import type {
 import type { CSSProperties } from 'react';
 
 import { Box, HStack, Icon, Stack, Text } from '@chakra-ui/react';
+import { FindInGalleryButton } from '@features/gallery/mediaSlot';
 import { getEffectiveReferenceImage } from '@features/generation/core/referenceImage';
 import { getReferenceImageUrls } from '@features/generation/data/referenceImageUrls';
 import { GenerationModelSelect as ModelSelect } from '@features/generation/ui/GenerationUiContext';
@@ -48,6 +49,7 @@ interface ReferenceImageCardProps {
   index: number;
   referenceImage: GenerateReferenceImage;
   selectedModel: GenerateModelConfig | undefined;
+  onFindInGallery: (imageName: string) => void;
   onMove: (id: string, direction: -1 | 1) => void;
   onPatch: (id: string, patch: Partial<GenerateReferenceImage>) => void;
   onRemove: (id: string) => void;
@@ -57,6 +59,7 @@ interface ReferenceImageCardProps {
 const ReferenceImageCardBase = ({
   count,
   index,
+  onFindInGallery,
   onMove,
   onPatch,
   onRemove,
@@ -224,6 +227,7 @@ const ReferenceImageCardBase = ({
             disabled={!isEnabled}
             image={config.image}
             onCrop={handleCrop}
+            onFindInGallery={onFindInGallery}
             onUseSize={onUseSize}
           />
           <Stack flex="1" gap="2" minW="0">
@@ -362,11 +366,13 @@ const ReferenceImageThumbnail = ({
   disabled,
   image,
   onCrop,
+  onFindInGallery,
   onUseSize,
 }: {
   disabled: boolean;
   image: GenerateReferenceImageAsset | null;
   onCrop: (image: GenerateReferenceImageAsset) => void;
+  onFindInGallery: (imageName: string) => void;
   onUseSize: (image: GenerateReferenceImageAsset) => void;
 }) => {
   const { t } = useTranslation();
@@ -383,18 +389,31 @@ const ReferenceImageThumbnail = ({
     }
   }, [image, onUseSize]);
 
+  // The ORIGINAL, not the effective image: a crop is uploaded as an
+  // intermediate, so the derivative this thumbnail shows has no cell in the
+  // grid to land on.
+  const originalImageName = image?.original.image.image_name;
+  const handleFindInGallery = useCallback(() => {
+    if (originalImageName !== undefined) {
+      onFindInGallery(originalImageName);
+    }
+  }, [onFindInGallery, originalImageName]);
+
   return (
     <>
+      {/* 24 rather than 20: the action row now holds three controls, and three
+          `2xs` buttons plus their gaps overflowed an 80px tile — `overflow:
+          hidden` then clipped the outer two and, with them, their focus ring. */}
       <Box
         bg="bg.muted"
         borderWidth="1px"
         css={THUMBNAIL_ACTIONS_CSS}
         flexShrink="0"
-        h="20"
+        h="24"
         overflow="hidden"
         position="relative"
         rounded="md"
-        w="20"
+        w="24"
       >
         {effectiveImage && urls ? (
           <img alt={effectiveImage.image_name} draggable={false} src={urls.thumbnailUrl} style={COVER_IMG_STYLE} />
@@ -417,6 +436,9 @@ const ReferenceImageThumbnail = ({
             style={OVERLAY_GRADIENT_STYLE}
             transition="opacity var(--wb-motion-duration-fast)"
           >
+            {/* Leads the row: locating the source is what you do BEFORE
+                deciding to crop it or take its size. */}
+            <FindInGalleryButton name={originalImageName} variant="ghost" onFind={handleFindInGallery} />
             <Tooltip content={t('common.crop')}>
               <IconButton
                 aria-label={t('common.crop')}

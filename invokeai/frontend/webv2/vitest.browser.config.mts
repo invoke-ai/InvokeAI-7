@@ -8,7 +8,7 @@ export default mergeConfig(
   viteConfig,
   defineConfig({
     define: {
-      __CANVAS_GOLDEN_UPDATE__: JSON.stringify(process.env.CANVAS_GOLDEN_UPDATE === '1'),
+      __CANVAS_GOLDEN_UPDATE__: process.env.CANVAS_GOLDEN_UPDATE === '1',
     },
     // Dependencies reached by browser tests must be prebundled into the initial
     // graph. Late optimization reloads invalidate active Vitest suites, and

@@ -1,5 +1,6 @@
 import type { BackendGraphContract, BackendInvocationContract } from '@features/generation/core/contracts';
 
+import { getArchitectureFeatures } from '@features/generation/core/architectureCapabilities';
 import { addEdge, addNode } from '@features/generation/core/graphBuilder';
 
 /** The deterministic denoise node id every canvas base graph uses. */
@@ -29,29 +30,57 @@ export interface RegionalGuidanceSupport {
 }
 
 /**
- * Mirrors the backend: `compel` / `sdxl_compel_prompt` + `denoise_latents` mask both
- * prompt polarities; FLUX / FLUX.2 / Krea-2 / Z-Image / Anima denoisers mask positive
- * conditioning only (Z-Image and Anima accept negative lists but discard their masks,
- * so a "regional" negative there would silently act globally and is rejected instead).
+ * The graph half of the support matrix: what a region's reference images become, and what to call
+ * the base. Whether a region's negative is masked is the backend's answer (`regional_negative`), not
+ * this table's -- see {@link getRegionalGuidanceSupport}.
  */
-const REGIONAL_GUIDANCE_SUPPORT: Record<RegionalGuidanceBase, RegionalGuidanceSupport> = {
-  'sd-1': { autoNegative: true, label: 'SD 1.x', negativePrompt: true, referenceImages: 'ip_adapter' },
-  'sd-2': { autoNegative: true, label: 'SD 2.x', negativePrompt: true, referenceImages: 'ip_adapter' },
-  sdxl: { autoNegative: true, label: 'SDXL', negativePrompt: true, referenceImages: 'ip_adapter' },
-  flux: { autoNegative: false, label: 'FLUX', negativePrompt: false, referenceImages: 'flux_redux' },
-  flux2: { autoNegative: false, label: 'FLUX.2', negativePrompt: false, referenceImages: null },
-  'krea-2': { autoNegative: false, label: 'Krea-2', negativePrompt: false, referenceImages: null },
-  'z-image': { autoNegative: false, label: 'Z-Image', negativePrompt: false, referenceImages: null },
-  anima: { autoNegative: false, label: 'Anima', negativePrompt: false, referenceImages: null },
+const REGIONAL_GUIDANCE_SUPPORT: Record<
+  RegionalGuidanceBase,
+  Pick<RegionalGuidanceSupport, 'label' | 'referenceImages'>
+> = {
+  'sd-1': { label: 'SD 1.x', referenceImages: 'ip_adapter' },
+  'sd-2': { label: 'SD 2.x', referenceImages: 'ip_adapter' },
+  sdxl: { label: 'SDXL', referenceImages: 'ip_adapter' },
+  flux: { label: 'FLUX', referenceImages: 'flux_redux' },
+  flux2: { label: 'FLUX.2', referenceImages: null },
+  'krea-2': { label: 'Krea-2', referenceImages: null },
+  'z-image': { label: 'Z-Image', referenceImages: null },
+  anima: { label: 'Anima', referenceImages: null },
 };
 
-/** True when `base` supports regional guidance at all. */
+/**
+ * True when `base` supports regional guidance at all.
+ *
+ * The narrowing to `RegionalGuidanceBase` stays: everything below this point dispatches on the
+ * literal to pick node types and field names, and that is graph knowledge the backend has no say
+ * in. Only the *answer* comes from the capability table now.
+ */
 export const isRegionalGuidanceSupportedForBase = (base: string): base is RegionalGuidanceBase =>
-  Object.hasOwn(REGIONAL_GUIDANCE_SUPPORT, base);
+  // Both halves, or the predicate is unsound: it narrows to the key set of the matrix below, while
+  // the backend's answer is what decides. A base the backend newly declares supported but that has
+  // no row here would satisfy the old check, and `REGIONAL_GUIDANCE_SUPPORT[base]` would then hand
+  // back `undefined` typed as a support object. Requiring the row keeps the type honest and makes
+  // the drift a missing feature rather than a crash.
+  (getArchitectureFeatures(base)?.supports_regional_guidance ?? false) && base in REGIONAL_GUIDANCE_SUPPORT;
 
-/** The per-base support matrix, or `null` for a base with no regional path. */
-export const getRegionalGuidanceSupport = (base: string | null): RegionalGuidanceSupport | null =>
-  base !== null && isRegionalGuidanceSupportedForBase(base) ? REGIONAL_GUIDANCE_SUPPORT[base] : null;
+/**
+ * What a base's regions honour, or `null` for a base with no regional path.
+ *
+ * Negatives come from the capability table: the SD family's `compel` path masks both polarities,
+ * while the FLUX / FLUX.2 / Krea-2 / Z-Image / Anima denoisers mask positive conditioning only --
+ * Z-Image and Anima accept a negative list but discard its masks, so a "regional" negative there
+ * would act globally. Auto-negative re-encodes the positive prompt as a masked negative, so it needs
+ * the same path. The rest of the row is graph knowledge the backend has no say in.
+ */
+export const getRegionalGuidanceSupport = (base: string | null): RegionalGuidanceSupport | null => {
+  if (base === null || !isRegionalGuidanceSupportedForBase(base)) {
+    return null;
+  }
+
+  const negative = getArchitectureFeatures(base)?.regional_negative ?? false;
+
+  return { ...REGIONAL_GUIDANCE_SUPPORT[base], autoNegative: negative, negativePrompt: negative };
+};
 
 /** A resolved reference-image (component) model identifier — the backend model field shape. */
 export interface RegionalReferenceModel {
@@ -247,7 +276,10 @@ export const addRegionalGuidance = (graph: BackendGraphContract, options: AddReg
     throw new Error('addRegionalGuidance: base graph is missing the positive conditioning collector.');
   }
   const negCondCollect = graph.nodes[NEG_COND_COLLECT_ID] ?? null;
-  const support = REGIONAL_GUIDANCE_SUPPORT[base];
+  const support = getRegionalGuidanceSupport(base);
+  if (!support) {
+    throw new Error(`addRegionalGuidance: ${base} has no regional guidance path.`);
+  }
 
   let ipAdapterCollector: BackendInvocationContract | null = null;
   let fluxReduxCollector: BackendInvocationContract | null = null;

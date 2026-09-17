@@ -1,19 +1,14 @@
-import type { GalleryView } from '@features/gallery';
 import type { GalleryItemKey, GalleryItemRef } from '@features/gallery/contracts';
-import type { GalleryItemsFilter } from '@features/gallery/queries';
-import type { QueryClient } from '@tanstack/react-query';
 
 import { galleryItems, toGalleryItemKey } from '@features/gallery';
-import { getGallerySettings, registerImageCluster, requestGalleryItemReveal } from '@features/gallery/contracts';
 import {
-  GALLERY_MAX_ROWS,
-  GALLERY_PAGE_SIZE,
-  galleryBoardsOptions,
-  galleryItemNamesOptions,
-  galleryItemsInfiniteOptions,
-} from '@features/gallery/queries';
+  claimGalleryNavigationSequence,
+  isGalleryNavigationCurrent,
+  registerImageCluster,
+  requestGalleryItemReveal,
+} from '@features/gallery/contracts';
 import { useQueryClient } from '@tanstack/react-query';
-import { getProjectWidgetValues } from '@workbench/widgetState';
+import { revealGalleryItem } from '@workbench/image-actions/revealGalleryItem';
 import { useWorkbenchCommands, useWorkbenchQueries } from '@workbench/WorkbenchContext';
 import { useCallback, useMemo } from 'react';
 
@@ -25,56 +20,11 @@ export interface MapSelectionActions {
 }
 
 /**
- * Module-scoped, deliberately: the thing being guarded — the gallery selection —
- * is global, so the counter has to be too. A `useRef` is per-mount, which leaves
- * a hole whenever the widget unmounts with a hydrate in flight (switching the
- * right-panel tab away and back): the abandoned closure compares against its own
- * dead ref, still passes, and overwrites the newer mount's selection.
- */
-let selectionSequence = 0;
-
-/**
- * Extends the infinite window until it covers `pagesNeeded` pages. This must
- * NOT be a plain prefetch: the mounted gallery keeps the query fresh, and
- * `fetchQuery` returns fresh cache without honoring the `pages` option — the
- * reveal has to force the fetch (staleTime 0) or the window never grows. Two
- * passes because a concurrent fetch already in flight (a second rapid click)
- * absorbs the call without extending; the retry runs after it settles.
- */
-const ensureGalleryPagesLoaded = async (
-  queryClient: QueryClient,
-  listingFilter: GalleryItemsFilter,
-  pagesNeeded: number
-): Promise<void> => {
-  const options = galleryItemsInfiniteOptions(listingFilter, { kind: 'infinite' });
-
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    const data = queryClient.getQueryData<{ pages: unknown[] }>(options.queryKey);
-
-    if ((data?.pages.length ?? 0) >= pagesNeeded) {
-      return;
-    }
-
-    await queryClient.fetchInfiniteQuery({ ...options, pages: pagesNeeded, staleTime: 0 });
-  }
-};
-
-/**
- * Turns map clicks into gallery navigation. The map knows an item's kind and
- * name; the selection contract wants a full gallery item, so each is hydrated
- * through the by-ref resolver — always fresh, since a cached DTO's star/board
- * state can drift, and kind-aware, since a point can be a video. ONE monotonic
- * sequence spans both selection kinds, so rapid clicks always resolve to the
- * latest click regardless of which mode each went through; a slow fetch can
- * never overwrite a newer selection. Preview follows the gallery selection on
- * its own.
- *
- * A single click is a full reveal: the gallery lands on the item's board and
- * view, any search or similarity filter is cleared (the item may not match
- * it), and the item's position in the board's ordering is looked up so the
- * grid can reach it — the page is selected in paginated mode, and in infinite
- * mode the pages down to it are loaded. The grid scrolls to the newly selected
- * item on its own once it is in the loaded window.
+ * Turns map clicks into gallery navigation. A single click is a full reveal,
+ * which `revealGalleryItem` owns; the map raises no widget of its own, since it
+ * sits beside the grid it is scrolling. The sequence guard those reveals claim
+ * spans BOTH selection kinds, so rapid clicks always resolve to the latest
+ * click regardless of which mode each went through.
  *
  * A cluster click instead behaves like a search: the cluster's members (in
  * proximity order from the clicked point) become the gallery's list via a
@@ -85,158 +35,31 @@ export const useMapSelection = (): MapSelectionActions => {
   const commands = useWorkbenchCommands();
   const queries = useWorkbenchQueries();
   const queryClient = useQueryClient();
-
   const selectItem = useCallback(
     (ref: GalleryItemRef) => {
-      const sequence = ++selectionSequence;
+      const ticket = { projectId: queries.getSnapshot().activeProject.id, sequence: claimGalleryNavigationSequence() };
 
-      galleryItems
-        .resolve(ref)
-        .then(async (image) => {
-          if (sequence !== selectionSequence) {
-            return;
-          }
-
-          const getGalleryValues = () => getProjectWidgetValues(queries.getSnapshot().activeProject, 'gallery');
-          const settings = getGallerySettings(getGalleryValues());
-          const targetView: GalleryView = image.category === 'general' ? 'images' : 'assets';
-          // The board listing the gallery will show once the reveal below has
-          // cleared any search: identical filter shape, so the name list (and
-          // the prefetched pages) land in the cache the gallery reads.
-          // The grid partitions on the flag: a starred image is revealed in
-          // the starred-only listing, an unstarred one in the plain listing.
-          const wantsStarredOnly = image.starred === true;
-          const listingFilter = {
-            boardId: image.boardId,
-            galleryView: targetView,
-            orderDir: settings.imageOrderDir,
-            searchTerm: '',
-            starred: wantsStarredOnly,
-          };
-          // The image's position within its board's ordering, which is what
-          // lets the gallery land on the right page rather than page 0. A
-          // failure here only costs the scroll, not the selection. The boards
-          // list rides along because the gallery falls back to Uncategorized
-          // when the target board is not listable (archived with "show
-          // archived" off) — landing on the hidden board's page number there
-          // would jump to an unrelated page of the wrong board.
-          let boardIndex: number | null = null;
-
-          try {
-            const boardsPromise = queryClient
-              .fetchQuery(
-                galleryBoardsOptions({
-                  includeArchived: settings.showArchivedBoards,
-                  includeDateBoards: settings.showDateBoards,
-                  orderBy: settings.boardOrderBy,
-                  orderDir: settings.boardOrderDir,
-                })
-              )
-              // Unknown beats blocked: without the boards list the reveal
-              // proceeds as if the board were listable.
-              .catch(() => null);
-            const names = await queryClient.fetchQuery(galleryItemNamesOptions(listingFilter));
-            const boards = await boardsPromise;
-            const index = names.items.findIndex((item) => item.kind === ref.kind && item.name === ref.name);
-            const isBoardListable =
-              image.boardId === 'none' ||
-              boards === null ||
-              boards.length === 0 ||
-              boards.some((board) => board.id === image.boardId);
-
-            boardIndex = index >= 0 && isBoardListable ? index : null;
-          } catch {
-            boardIndex = null;
-          }
-
-          if (sequence !== selectionSequence) {
-            return;
-          }
-
-          const values = getGalleryValues();
-          const settingsNow = getGallerySettings(values);
-
-          // The listing's ordering may have changed while the name list was
-          // in flight (sort direction); the computed index describes the old
-          // ordering, so the page landing is dropped.
-          if (settingsNow.imageOrderDir !== settings.imageOrderDir) {
-            boardIndex = null;
-          }
-
-          const currentView: GalleryView = values.galleryView === 'assets' ? 'assets' : 'images';
-          const hasSearch = typeof values.searchTerm === 'string' && values.searchTerm !== '';
-
-          // Filters would hide the listing the index was computed against
-          // (the image may not match them), so the reveal clears them and sets
-          // the starred filter to the image's own side of the partition.
-          if (
-            hasSearch ||
-            (values.starredOnly === true) !== wantsStarredOnly ||
-            (values.semanticImageQuery !== null && values.semanticImageQuery !== undefined)
-          ) {
-            commands.widgets.patchValues('gallery', {
-              searchTerm: '',
-              semanticImageQuery: null,
-              starredOnly: wantsStarredOnly,
-            });
-          }
-
-          if (currentView !== targetView) {
-            commands.gallery.setView(targetView);
-          }
-
-          // Select the image's board before the image. The map spans every
-          // accessible board, but `selectGalleryItem` stamps the navigation
-          // query from whatever list the gallery is CURRENTLY showing — a
-          // cross-board click without this left Preview's next/prev with no
-          // cursor. Mirrors the command palette's reveal-in-gallery.
-          commands.gallery.selectBoard(image.boardId);
-
-          const page = boardIndex !== null ? Math.floor(boardIndex / GALLERY_PAGE_SIZE) : null;
-
-          if (page !== null && settingsNow.paginationMode === 'paginated') {
-            commands.gallery.setPage(page);
-          }
-
-          if (boardIndex !== null && page !== null && settingsNow.paginationMode === 'infinite') {
-            if (boardIndex < GALLERY_MAX_ROWS) {
-              // Within the base window's reach: load every page down to the
-              // image so the grid can scroll to it. Fire and forget — the
-              // selection must not wait on page hydration, and the grid's
-              // pending reveal settles whenever the item appears.
-              void ensureGalleryPagesLoaded(queryClient, listingFilter, page + 1).catch(() => {});
-            } else {
-              // Deeper than the base window can ever load: anchor the
-              // infinite window at the image's page instead (the mounted
-              // gallery query fetches it on its own). Any board, search, or
-              // view change resets the anchor back to the top.
-              commands.gallery.setPage(page);
-            }
-          }
-
-          commands.gallery.selectItem(image, undefined, page ?? undefined);
-          requestGalleryItemReveal(toGalleryItemKey(ref));
-        })
-        .catch(() => {
-          // A click on a just-deleted item, or a blip mid-backend-restart,
-          // simply leaves the selection unchanged.
-        });
+      void revealGalleryItem({ commands, queries, queryClient }, ref, ticket).catch(() => {
+        // A click on a just-deleted point, or a blip mid-backend-restart, simply
+        // leaves the selection unchanged. The map sits beside the grid and has
+        // moved nothing, so there is nothing to explain.
+      });
     },
     [commands, queries, queryClient]
   );
 
   const selectCluster = useCallback(
     (primaryItem: GalleryItemRef, itemKeys: GalleryItemKey[], label: string) => {
-      const sequence = ++selectionSequence;
+      const sequence = claimGalleryNavigationSequence();
 
       galleryItems
         .resolve(primaryItem)
         .then((image) => {
-          if (sequence !== selectionSequence) {
+          if (!isGalleryNavigationCurrent(sequence)) {
             return;
           }
 
-          // Same reason as `selectItem` above: the selection stamps the
+          // Same reason as a single-item reveal: the selection stamps the
           // navigation query from the board the gallery is showing, so land
           // on the primary item's board first to keep that query coherent.
           commands.gallery.selectBoard(image.boardId);

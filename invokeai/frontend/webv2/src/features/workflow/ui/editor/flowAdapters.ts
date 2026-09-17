@@ -184,6 +184,8 @@ export const toFlowNodes = (
   return document.nodes.map((documentNode): WorkflowFlowNode => {
     const previous = previousById.get(documentNode.id);
     const selected = previous?.selected ?? false;
+    // Rebuilt nodes keep their measured size so xyflow does not treat them as unmeasured (0x0) until remeasured.
+    const measured = previous?.measured;
 
     if (documentNode.type === 'invocation') {
       const connectedSourceHandles = connectedSourcesByNode.get(documentNode.id) ?? EMPTY_NAMES;
@@ -215,6 +217,7 @@ export const toFlowNodes = (
           template,
         },
         id: documentNode.id,
+        measured,
         position: documentNode.position,
         selected,
         type: 'invocation' as const,
@@ -229,6 +232,7 @@ export const toFlowNodes = (
       return {
         data: { documentNode },
         id: documentNode.id,
+        measured,
         position: documentNode.position,
         selected,
         type: 'notes' as const,
@@ -255,6 +259,7 @@ export const toFlowNodes = (
       return {
         data: { documentNode, inputFieldType, outputFieldType },
         id: documentNode.id,
+        measured,
         position: documentNode.position,
         selected,
         type: 'connector' as const,
@@ -268,6 +273,7 @@ export const toFlowNodes = (
     return {
       data: { documentNode },
       id: documentNode.id,
+      measured,
       position: documentNode.position,
       selected,
       type: 'current_image' as const,

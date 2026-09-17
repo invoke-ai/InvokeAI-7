@@ -1,5 +1,6 @@
 import type { ComponentModelConfig, GenerateModelConfig, VaeModelConfig } from '@features/generation/contracts';
 
+import { seedArchitectureCapabilities } from '@features/generation/core/architectureCapabilities.testing';
 import {
   getDefaultGenerateSettings,
   getMaxReferenceImages,
@@ -44,6 +45,8 @@ const currentFor = (model: ComponentModelConfig, overrides: Record<string, unkno
 const build = (currentValues: ReturnType<typeof currentFor>, parameters: Record<string, unknown>) =>
   buildRecallParametersSettings({ currentValues, models, parameters, supportedModels, vaeModels });
 
+seedArchitectureCapabilities();
+
 describe('buildRecallParametersSettings', () => {
   it('applies prompts, seed, size and sampler parameters to the current values', () => {
     const result = build(currentFor(sdxl), {
@@ -72,7 +75,7 @@ describe('buildRecallParametersSettings', () => {
         scheduler: 'euler',
         seamlessXAxis: true,
         seed: 42,
-        shouldRandomizeSeed: false,
+        seedMode: 'fixed',
         steps: 30,
         width: 1024,
       })
@@ -157,7 +160,7 @@ describe('buildRecallParametersSettings', () => {
       positivePrompt: 'keep me?',
       referenceImages: [{ ...existingReference, config: { ...existingReference.config, model: sdxlIpAdapter } }],
       seed: 7,
-      shouldRandomizeSeed: false,
+      seedMode: 'fixed',
       steps: 50,
       width: 1536,
     });
@@ -181,7 +184,7 @@ describe('buildRecallParametersSettings', () => {
         loras: [],
         positivePrompt: '',
         referenceImages: [],
-        shouldRandomizeSeed: true,
+        seedMode: 'random',
         steps: defaults.steps,
         width: defaults.width,
       })

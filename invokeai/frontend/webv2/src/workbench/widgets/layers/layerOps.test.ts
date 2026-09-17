@@ -4,6 +4,7 @@ import type {
   CanvasRasterLayerContractV2,
 } from '@workbench/canvas-engine/contracts';
 
+import { seedArchitectureCapabilities } from '@features/generation/core/architectureCapabilities.testing';
 import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -45,6 +46,8 @@ import {
   nextRegionalGuidanceFillColor,
   REGIONAL_GUIDANCE_FILL_COLORS,
 } from './layerOps';
+
+seedArchitectureCapabilities();
 
 const paintLayer = (id: string, patch: Partial<CanvasRasterLayerContractV2> = {}): CanvasLayerContract => ({
   ...createEmptyPaintLayer(id, id),

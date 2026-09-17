@@ -40,10 +40,6 @@ void i18n.use(initReactI18next).init({
             seamlessTiling: 'Seamless tiling',
             tileX: 'Tile X',
             tileY: 'Tile Y',
-            useModelDefault: 'Use model default',
-            useModelDefaultCfgRescale: 'Use model default CFG rescale',
-            useModelDefaultVae: 'Use bundled VAE',
-            useModelDefaultVaePrecision: 'Use model default precision',
             usingBundledVae: 'Using bundled VAE',
             vae: 'VAE',
             vaePrecision: 'VAE precision',
@@ -100,6 +96,14 @@ const switchByLabel = (label: string): HTMLElement | null =>
     (element) => element.textContent === label
   ) ?? null;
 
+/** The scrubber's slider is named by `aria-labelledby`, so resolve it through the label element. */
+const sliderByLabel = (label: string): Element | null =>
+  [...(host?.querySelectorAll<HTMLElement>('[role="slider"]') ?? [])].find((slider) => {
+    const labelId = slider.getAttribute('aria-labelledby');
+
+    return labelId !== null && host?.querySelector(`#${CSS.escape(labelId)}`)?.textContent === label;
+  }) ?? null;
+
 afterEach(async () => {
   await settle(() => root?.unmount());
   host?.remove();
@@ -115,7 +119,7 @@ describe('GenerateAdvancedFields HiDiffusion controls', () => {
 
     expect(main).not.toBeNull();
     expect(rauNet?.querySelector<HTMLInputElement>('input')?.disabled).toBe(true);
-    expect(host?.querySelector<HTMLInputElement>('input[aria-label="HiDiffusion: T1 Ratio"]')?.disabled).toBe(true);
+    expect(sliderByLabel('HiDiffusion: T1 Ratio')?.getAttribute('aria-disabled')).toBe('true');
 
     await settle(() => main?.querySelector<HTMLElement>('[data-part="control"]')?.click());
     expect(onCommit).toHaveBeenCalledWith({ hiDiffusionEnabled: true });

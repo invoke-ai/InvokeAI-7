@@ -116,6 +116,9 @@ describe('LayoutPresetManagerDialogBody', () => {
 
   it('reorders presets from a focused row handle with the keyboard', async () => {
     await renderManager();
+    // The dialog places its initial focus asynchronously after mount; focusing
+    // the handle before that lands would be undone by it.
+    await expect.poll(() => document.querySelector('[role="dialog"]')?.contains(document.activeElement)).toBe(true);
     const handle = dragHandle('Custom');
     expect(handle).not.toBeNull();
     handle!.focus();

@@ -65,6 +65,20 @@ describe('resolveVideoMode', () => {
 });
 
 describe('normalizeVideoSettings', () => {
+  it('reads the seed mode saved before modes existed from the random toggle', () => {
+    const legacy = { ...createSettings({}), seedMode: undefined };
+
+    expect(normalizeVideoSettings({ ...legacy, shouldRandomizeSeed: false })?.seedMode).toBe('fixed');
+    expect(normalizeVideoSettings({ ...legacy, shouldRandomizeSeed: true })?.seedMode).toBe('random');
+    expect(normalizeVideoSettings({ ...legacy, seedMode: 'increment', shouldRandomizeSeed: false })?.seedMode).toBe(
+      'increment'
+    );
+    expect(normalizeVideoSettings(legacy)?.seedMode).toBe('random');
+    // A record whose mode normalize has to invent is not canonical, so nothing may reuse it raw.
+    expect(isVideoSettings({ ...legacy, shouldRandomizeSeed: true })).toBe(false);
+    expect(isVideoSettings(legacy)).toBe(false);
+  });
+
   it('round-trips canonical settings', () => {
     const settings = createSettings({ firstFrameImage: FIRST_FRAME, positivePrompt: 'a cat' });
     const normalized = normalizeVideoSettings(settings);
@@ -97,7 +111,7 @@ describe('normalizeVideoSettings', () => {
       numFrames: 81,
       positivePrompt: 'a dog',
       seed: 123,
-      shouldRandomizeSeed: false,
+      seedMode: 'fixed',
       steps: 40,
     };
     const normalized = normalizeVideoSettings(legacy);
@@ -110,6 +124,18 @@ describe('normalizeVideoSettings', () => {
     expect(normalized?.loras).toEqual([]);
     expect(normalized?.acceleratorEnabled).toBe(false);
     expect(normalized?.positivePrompt).toBe('a dog');
+  });
+
+  it('heals the hybrid start block to the recommended default and clamps it to the block range', () => {
+    const { h3HybridStartBlock: _predatesHybrid, ...legacy } = createSettings();
+
+    expect(normalizeVideoSettings(legacy)?.h3HybridStartBlock).toBe(25);
+    expect(normalizeVideoSettings({ ...legacy, h3HybridStartBlock: 120 })?.h3HybridStartBlock).toBe(49);
+    expect(normalizeVideoSettings({ ...legacy, h3HybridStartBlock: -3 })?.h3HybridStartBlock).toBe(0);
+    expect(normalizeVideoSettings({ ...legacy, h3HybridStartBlock: 12.6 })?.h3HybridStartBlock).toBe(13);
+    expect(
+      normalizeVideoSettings({ ...legacy, h3HybridBaseModel: { key: 'not-a-main' } })?.h3HybridBaseModel
+    ).toBeNull();
   });
 
   it('drops malformed media values instead of failing wholesale', () => {

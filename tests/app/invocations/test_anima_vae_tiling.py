@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, patch
 import torch
 from diffusers.models.autoencoders import AutoencoderKLWan
 
-from invokeai.app.invocations.anima_latents_to_image import (
+from invokeai.app.invocations.vae.anima_latents_to_image import (
     ANIMA_VAE_TILE_SIZE,
     ANIMA_VAE_TILE_STRIDE,
     AnimaLatentsToImageInvocation,
@@ -21,18 +21,17 @@ from invokeai.backend.util.devices import TorchDevice
 
 
 def _build_tiny_vae() -> AutoencoderKLWan:
-    """The smallest Wan VAE that still decodes: 2 latent channels, 2x spatial, 3 output channels."""
+    """The smallest Wan VAE the node accepts: the Qwen-Image geometry (16 latent channels, 8x spatial,
+    unpatchified) at minimal width."""
     return AutoencoderKLWan(
         base_dim=2,
-        z_dim=2,
-        dim_mult=[1, 1],
+        z_dim=16,
+        dim_mult=[1, 1, 1, 1],
         num_res_blocks=1,
         attn_scales=[],
-        temperal_downsample=[True],
-        latents_mean=[0.0, 0.0],
-        latents_std=[1.0, 1.0],
-        scale_factor_temporal=2,
-        scale_factor_spatial=2,
+        temperal_downsample=[False, True, True],
+        latents_mean=[0.0] * 16,
+        latents_std=[1.0] * 16,
     ).eval()
 
 
@@ -62,8 +61,8 @@ def _build_context(vae: AutoencoderKLWan, latents: torch.Tensor):
     context.tensors.load.return_value = latents
     image_dto = MagicMock()
     image_dto.image_name = "test.png"
-    image_dto.width = latents.shape[-1] * 2
-    image_dto.height = latents.shape[-2] * 2
+    image_dto.width = latents.shape[-1] * 8
+    image_dto.height = latents.shape[-2] * 8
     context.images.save.return_value = image_dto
     return context
 
@@ -84,7 +83,7 @@ def test_the_oom_retry_does_not_leave_the_shared_vae_tiled():
     """
     vae = _build_tiny_vae()
     before = _tiling_state(vae)
-    context = _build_context(vae, torch.zeros(1, 2, 8, 8))
+    context = _build_context(vae, torch.zeros(1, 16, 8, 8))
 
     real_decode = vae.decode
     attempts: list[bool] = []
@@ -110,7 +109,7 @@ def test_a_tiled_decode_applies_the_calibrated_geometry_and_restores_it():
     decode has to run at that geometry -- and hand the cached module back unchanged."""
     vae = _build_tiny_vae()
     before = _tiling_state(vae)
-    context = _build_context(vae, torch.zeros(1, 2, 8, 8))
+    context = _build_context(vae, torch.zeros(1, 16, 8, 8))
 
     real_decode = vae.decode
     during: list[tuple] = []

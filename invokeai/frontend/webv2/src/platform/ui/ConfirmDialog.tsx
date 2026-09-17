@@ -1,4 +1,3 @@
-/* eslint-disable react/react-compiler */
 import { Dialog, Portal, Stack, Text } from '@chakra-ui/react';
 import { useCallback, useRef, useState, type ReactNode } from 'react';
 

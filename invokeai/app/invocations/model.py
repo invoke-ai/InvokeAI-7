@@ -183,6 +183,17 @@ class MiniMaxH3TextEncoderField(BaseModel):
     text_encoder: ModelIdentifierField = Field(description="Info to load text_encoder submodel")
 
 
+class MiniMaxH3AdaLNOverlayField(BaseModel):
+    """Hybrid AdaLN overlay for MiniMax H3: the AdaLN modulation projections of a second task
+    transformer (typically Ref2VA) swapped onto the loaded transformer (typically FL2VA) at
+    denoise time, for an inclusive block range and optionally the final layer."""
+
+    overlay: ModelIdentifierField = Field(description="The single-file H3 transformer the AdaLN projections come from.")
+    start_block: int = Field(description="First transformer block (inclusive) whose AdaLN projection is overlaid.")
+    end_block: int = Field(description="Last transformer block (inclusive) whose AdaLN projection is overlaid.")
+    include_final_layer: bool = Field(description="Whether the final-layer AdaLN projection is overlaid too.")
+
+
 class MiniMaxH3TransformerField(BaseModel):
     """Transformer field for MiniMax H3 models (FL2VA or Ref2VA)."""
 
@@ -192,6 +203,10 @@ class MiniMaxH3TransformerField(BaseModel):
         default=None,
         description="The task variant of the loaded transformer ('fl2va' / 'ref2va'), stamped by the model "
         "loader so the denoise node can reject a task/conditioning mismatch.",
+    )
+    adaln_overlay: Optional[MiniMaxH3AdaLNOverlayField] = Field(
+        default=None,
+        description="Hybrid AdaLN overlay applied on top of the transformer at denoise time, if any.",
     )
 
 

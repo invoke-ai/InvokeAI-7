@@ -1,69 +1,26 @@
-import type {
-  GalleryItemKind,
-  GalleryItemKey,
-  GalleryOrderDir,
-  GalleryQueuePlaceholder,
-  GalleryView,
-} from '@features/gallery/contracts';
+import type { GalleryItemKey } from '@features/gallery/contracts';
 
-import { getGalleryPlaceholderInsertionIndex, toGalleryItemKey } from '@features/gallery/contracts';
-
-/**
- * Pure navigation model for the preview widget's left/right stepping.
- *
- * The sequence is the current board's completed images plus, at most, the one
- * placeholder that is actively generating, placed where the gallery grid would
- * show it. Gallery selection and the live-follow preference remain the sources
- * of truth; the cursor is re-resolved from them on every render, never stored.
- */
+import { toGalleryItemKey } from '@features/gallery/contracts';
 
 interface NavigableItem {
-  kind: GalleryItemKind;
+  kind: 'image' | 'video';
   name: string;
 }
+export type PreviewNavigationItem<TItem extends NavigableItem> = { kind: 'item'; item: TItem };
 
-export type PreviewNavigationItem<TItem extends NavigableItem> =
-  | { kind: 'item'; item: TItem }
-  | { kind: 'placeholder'; placeholder: GalleryQueuePlaceholder };
-
+/** Saved-image navigation never assigns a live session to a board. */
 export const getPreviewNavigationSequence = <TItem extends NavigableItem>({
-  activePlaceholder,
-  boardId,
   boardImages,
-  galleryView,
-  imageOrderDir,
 }: {
-  /** The live slot from getGalleryGenerationSequence, or null. */
-  activePlaceholder: GalleryQueuePlaceholder | null;
-  /** The board backing boardImages — the selected item's own board. */
-  boardId: string;
-  /** Board items in the gallery's display order. */
   boardImages: TItem[];
-  galleryView: GalleryView;
-  imageOrderDir: GalleryOrderDir;
-}): PreviewNavigationItem<TItem>[] => {
-  const items: PreviewNavigationItem<TItem>[] = boardImages.map((item) => ({ item, kind: 'item' }));
-  const includePlaceholder =
-    activePlaceholder !== null && galleryView === 'images' && activePlaceholder.boardId === boardId;
-
-  if (!includePlaceholder) {
-    return items;
-  }
-
-  items.splice(getGalleryPlaceholderInsertionIndex(boardImages.length, imageOrderDir), 0, {
-    kind: 'placeholder',
-    placeholder: activePlaceholder,
-  });
-
-  return items;
-};
+}): PreviewNavigationItem<TItem>[] => boardImages.map((item) => ({ kind: 'item', item }));
 
 export const getPreviewNavigationCursor = <TItem extends NavigableItem>(
   sequence: PreviewNavigationItem<TItem>[],
   { isFollowingLive, selectedItemKey }: { isFollowingLive: boolean; selectedItemKey: GalleryItemKey | null }
 ): number => {
   if (isFollowingLive) {
-    return sequence.findIndex((item) => item.kind === 'placeholder');
+    return -1;
   }
 
   if (selectedItemKey === null) {

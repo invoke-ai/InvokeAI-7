@@ -1,8 +1,11 @@
 import type { GenerateModelConfig } from '@features/generation/core/types';
 
+import { seedArchitectureCapabilities } from '@features/generation/core/architectureCapabilities.testing';
 import { describe, expect, it } from 'vitest';
 
 import { resolveCanvasProcessingSize } from './canvasProcessingSize';
+
+seedArchitectureCapabilities();
 
 const sd1 = { base: 'sd-1', type: 'main' } as GenerateModelConfig;
 const sdxl = { base: 'sdxl', type: 'main' } as GenerateModelConfig;
@@ -79,5 +82,21 @@ describe('resolveCanvasProcessingSize', () => {
         { height: null, method: 'manual', width: 777 }
       )
     ).toEqual({ height: 304, width: 776 });
+  });
+
+  it('snaps on the grid the model variant declares, not the one its base declares', () => {
+    // Wan TI2V-5B takes multiples of 32 where A14B takes 16. 720 is on the one grid and not the
+    // other, so a caller that drops the variant shows a size the graph then re-snaps.
+    const bbox = { height: 720, width: 1280 };
+    const a14b = { base: 'wan', type: 'main' } as GenerateModelConfig;
+    const ti2v = { base: 'wan', type: 'main', variant: 'ti2v_5b' } as GenerateModelConfig;
+
+    expect(resolveCanvasProcessingSize(a14b, 'off', bbox, undefined)).toEqual(bbox);
+
+    const size = resolveCanvasProcessingSize(ti2v, 'off', bbox, undefined);
+
+    expect(size.width).toBe(1280);
+    expect(size.height % 32).toBe(0);
+    expect(size.height).not.toBe(720);
   });
 });

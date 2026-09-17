@@ -491,6 +491,10 @@ describe('Multi-session live preview tiles', () => {
   const placeholder = {
     backendItemId: 1,
     boardId: 'none',
+    label: 'Generate',
+    sourceId: 'generate' as const,
+    itemCount: 1,
+    state: 'running' as const,
     height: 512,
     id: 'queue-1:0',
     itemIndex: 0,
@@ -557,3 +561,7 @@ describe('Multi-session live preview tiles', () => {
     expect(captionInsideFrame).toBeNull();
   });
 });
+
+vi.mock('./livePreviewFollow', () => ({
+  useLivePreviewFollow: () => ({ sessions: [], pinnedSessionId: null, pin: vi.fn(), showAll: vi.fn() }),
+}));

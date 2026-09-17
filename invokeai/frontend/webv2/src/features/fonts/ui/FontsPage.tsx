@@ -338,6 +338,7 @@ const FontLibrary = () => {
   );
   const query = useQuery(fontsQueryOptions(params));
   const fonts = query.data?.items ?? [];
+  // eslint-disable-next-line react/incompatible-library -- TanStack Virtual exposes imperative functions that the compiler cannot memoize safely.
   const virtualizer = useVirtualizer({
     count: fonts.length,
     estimateSize: () => FONT_ROW_HEIGHT,

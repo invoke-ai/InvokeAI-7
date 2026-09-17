@@ -1,4 +1,3 @@
-/* eslint-disable react/react-compiler */
 import type {
   ComponentProps,
   KeyboardEvent as ReactKeyboardEvent,

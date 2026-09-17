@@ -1,7 +1,6 @@
 import type { WidgetViewProps } from '@workbench/widgetContracts';
 
 import { Box, HStack, Icon } from '@chakra-ui/react';
-import { useProgressImage } from '@features/queue/react';
 import { IconButton, ToggleIconButton, Tooltip } from '@platform/ui';
 import { useInvocationState } from '@workbench/shell/topbar/useInvocationState';
 import { getProjectWidgetValues } from '@workbench/widgetState';
@@ -10,6 +9,7 @@ import { GalleryThumbnailsIcon, HourglassIcon, SparklesIcon } from 'lucide-react
 import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { useLivePreviewFollow } from './livePreviewFollow';
 import { PreviewActionStrip } from './PreviewActionStrip';
 import { usePreviewHeaderContext } from './previewHeaderStore';
 import { getPreviewFilmstripVisible } from './previewSettings';
@@ -28,8 +28,9 @@ import { getPreviewFilmstripVisible } from './previewSettings';
  */
 export const PreviewHeaderActions = ({ region, runtime }: WidgetViewProps) => {
   const { t } = useTranslation();
+  const livePreview = useLivePreviewFollow();
   const showProgressImagesInViewer = useActiveProjectSelector((project) => project.settings.showProgressImagesInViewer);
-  const hasProgressImage = useProgressImage() !== null;
+  const hasProgressImage = livePreview.sessions.length > 0;
   const { actionItem, actions, copyCurrentVideoFrame, isVideoFrameCopyAvailable, openItemMenu, openVideoDetails } =
     usePreviewHeaderContext();
   const isFilmstripVisible = useActiveProjectSelector((project) =>
@@ -40,10 +41,10 @@ export const PreviewHeaderActions = ({ region, runtime }: WidgetViewProps) => {
     ? t('widgets.preview.hideInProgressDiffusion')
     : t('widgets.preview.showInProgressDiffusion');
   const filmstripLabel = isFilmstripVisible ? t('widgets.preview.hideFilmstrip') : t('widgets.preview.showFilmstrip');
-  const toggleProgressImages = useCallback(
-    () => account.updateProjectPreferences({ showProgressImagesInViewer: !showProgressImagesInViewer }),
-    [account, showProgressImagesInViewer]
-  );
+  const toggleProgressImages = useCallback(() => {
+    livePreview.showAll();
+    account.updateProjectPreferences({ showProgressImagesInViewer: !showProgressImagesInViewer });
+  }, [account, livePreview, showProgressImagesInViewer]);
   const toggleFilmstrip = useCallback(
     () => widgets.patchValues('preview', { filmstripVisible: !isFilmstripVisible }),
     [isFilmstripVisible, widgets]

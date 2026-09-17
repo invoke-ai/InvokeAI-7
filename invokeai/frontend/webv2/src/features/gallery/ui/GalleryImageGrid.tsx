@@ -35,8 +35,9 @@ import {
   getGalleryColumnCount,
   getGalleryGridRowHeightPx,
   getGalleryGridRowIndexForItem,
+  getGalleryProgressLayout,
 } from './galleryGridLayout';
-import { GalleryQueuePlaceholderCell } from './GalleryQueuePlaceholderCell';
+import { GalleryProgressSection } from './GalleryProgressSection';
 import { GalleryThumbnailCell } from './GalleryThumbnail';
 import { useGalleryUi } from './GalleryUiContext';
 import { useGalleryWidget } from './GalleryWidgetContext';
@@ -154,19 +155,13 @@ const GalleryStarredSectionHeader = ({
 export const GalleryImageGrid = () => {
   const { t } = useTranslation();
   const { actions, gallery, isWindowTruncated, itemActions, region, starredStrip } = useGalleryWidget();
-  const { account, antialiasProgressImages, gallery: galleryCommands, ImageContextMenu } = useGalleryUi();
+  const { gallery: galleryCommands, ImageContextMenu, liveFollowEnabled, progressSessions } = useGalleryUi();
   const [isDropActive, setIsDropActive] = useState(false);
   const [viewportWidth, setViewportWidth] = useState(() => viewportWidthCache.get(region) ?? 0);
   const dragDepthRef = useRef(0);
   const viewportRef = useRef<HTMLDivElement | null>(null);
-  const {
-    imageDensityPercent,
-    imageOrderDir,
-    paginationMode,
-    showImageDimensions,
-    starredSectionCollapsed,
-    thumbnailFit,
-  } = gallery.settings;
+  const { imageDensityPercent, paginationMode, showImageDimensions, starredSectionCollapsed, thumbnailFit } =
+    gallery.settings;
   const isStarredOpen = !starredSectionCollapsed;
 
   const {
@@ -182,16 +177,15 @@ export const GalleryImageGrid = () => {
   } = useGalleryGridSelection();
 
   const columnCount = getGalleryColumnCount({ imageDensityPercent, widthPx: viewportWidth });
-  const isFollowingLive = gallery.currentItem?.kind === 'placeholder';
-  const isComparisonActive = gallery.isComparisonActive;
+  const isFollowingLive = liveFollowEnabled && progressSessions.some((session) => session.state !== 'queued');
+  const isComparisonActive = gallery.isComparisonActive && !isFollowingLive;
   const selectedBoard = gallery.boards.find((board) => board.id === gallery.selectedBoardId);
   const selectedBoardName = selectedBoard
     ? getGalleryBoardLabel(selectedBoard, t)
     : t('widgets.gallery.selectedBoardFallback');
   // The listing is unstarred-only, so a board whose items are all starred
   // still has the strip to show.
-  const isEmpty =
-    gallery.items.length === 0 && gallery.pendingPlaceholders.length === 0 && starredStrip.items.length === 0;
+  const isEmpty = gallery.items.length === 0 && starredStrip.items.length === 0;
   const hasActiveSearch = gallery.searchTerm.trim() !== '';
   const isVirtualBoard = isDateBoardId(gallery.selectedBoardId);
 
@@ -199,22 +193,12 @@ export const GalleryImageGrid = () => {
     () =>
       buildGalleryGridRows({
         columnCount,
-        imageOrderDir,
         isStarredOpen,
         items: gallery.items,
-        pendingPlaceholders: gallery.pendingPlaceholders,
         starredItems: starredStrip.items,
         starredTotal: starredStrip.total,
       }),
-    [
-      columnCount,
-      gallery.items,
-      gallery.pendingPlaceholders,
-      imageOrderDir,
-      isStarredOpen,
-      starredStrip.items,
-      starredStrip.total,
-    ]
+    [columnCount, gallery.items, isStarredOpen, starredStrip.items, starredStrip.total]
   );
   const navigation = useMemo(
     () =>
@@ -241,8 +225,17 @@ export const GalleryImageGrid = () => {
   const getRowKey = useCallback((index: number) => rows[index]?.key ?? index, [rows]);
   const getScrollElement = useCallback(() => viewportRef.current, []);
 
+  const progressLayout = getGalleryProgressLayout({
+    columns: columnCount,
+    tileSize: cellSizePx,
+    sessionCount: progressSessions.length,
+    visible: gallery.settings.showPendingItems,
+    collapsed: gallery.settings.progressSectionCollapsed,
+  });
+  const progressHeight = progressLayout.height;
   const virtualizer = useVirtualizer({
     count: rowCount,
+    scrollMargin: progressHeight,
     estimateSize: estimateRowSize,
     getItemKey: getRowKey,
     getScrollElement,
@@ -386,7 +379,7 @@ export const GalleryImageGrid = () => {
   // layout effect keeps the stale frame from ever reaching the screen.
   useLayoutEffect(() => {
     measureVirtualizer();
-  }, [rowHeightPx, rows]);
+  }, [rowHeightPx, rows, progressHeight]);
 
   const virtualRows = virtualizer.virtualItems;
   const lastVisibleRowIndex = virtualRows[virtualRows.length - 1]?.index ?? 0;
@@ -452,10 +445,6 @@ export const GalleryImageGrid = () => {
     [openUploadPicker]
   );
 
-  const handleShowProgressImages = useCallback(() => {
-    account.enableLiveFollow();
-  }, [account]);
-
   const handleToggleStarredSection = useCallback(
     () => actions.updateSettings({ starredSectionCollapsed: isStarredOpen }),
     [actions, isStarredOpen]
@@ -483,198 +472,187 @@ export const GalleryImageGrid = () => {
   const anchoredWindowFirstItem = gallery.anchoredWindowPage * GALLERY_PAGE_SIZE + 1;
 
   return (
-    <Box
-      ref={syncRangeInteractionContext}
-      flex="1"
-      h="full"
-      maxW="full"
-      minH="0"
-      minW="0"
-      position="relative"
-      w="full"
-      onDragEnter={handleDragEnter}
-      onDragLeave={handleDragLeave}
-      onDragOver={handleDragOver}
-      onDrop={handleDrop}
-    >
-      {gallery.anchoredWindowPage > 0 ? (
-        <Flex align="center" bg="bg.panel" gap="2" justify="space-between" px="2" py="1">
-          <Text color="fg.muted" fontSize="2xs" truncate>
-            {t('widgets.gallery.windowAnchored', { index: anchoredWindowFirstItem })}
-          </Text>
-          <Button flexShrink={0} size="2xs" variant="ghost" onClick={handleReturnToBoardTop}>
-            {t('widgets.gallery.backToBoardTop')}
-          </Button>
-        </Flex>
-      ) : null}
-      {isEmpty ? (
-        gallery.isLoading || hasActiveSearch || isVirtualBoard || gallery.starredOnly ? (
-          <Flex align="center" color="fg.muted" h="full" justify="center" minH="8rem">
-            <Text fontSize="xs">
-              {gallery.isLoading
-                ? t('widgets.gallery.loadingBackendGallery')
-                : gallery.starredOnly && gallery.semanticImageQuery === null
-                  ? t('widgets.gallery.noStarredItemsMatch')
-                  : t('widgets.gallery.noImagesMatch')}
+    <Stack flex="1" gap="0" h="full" minH="0" minW="0" w="full">
+      <Box
+        ref={syncRangeInteractionContext}
+        flex="1"
+        h="full"
+        maxW="full"
+        minH="0"
+        minW="0"
+        position="relative"
+        w="full"
+        onDragEnter={handleDragEnter}
+        onDragLeave={handleDragLeave}
+        onDragOver={handleDragOver}
+        onDrop={handleDrop}
+      >
+        {gallery.anchoredWindowPage > 0 ? (
+          <Flex align="center" bg="bg.panel" gap="2" justify="space-between" px="2" py="1">
+            <Text color="fg.muted" fontSize="2xs" truncate>
+              {t('widgets.gallery.windowAnchored', { index: anchoredWindowFirstItem })}
             </Text>
+            <Button flexShrink={0} size="2xs" variant="ghost" onClick={handleReturnToBoardTop}>
+              {t('widgets.gallery.backToBoardTop')}
+            </Button>
           </Flex>
-        ) : (
-          <Flex align="stretch" h="full" minH="8rem" p="2">
-            <input {...uploadInputProps} />
-            <DropZone
-              alignItems="center"
-              display="flex"
-              flex="1"
-              fontSize="xs"
-              isOver={isDropActive}
-              justifyContent="center"
-              role="button"
-              tabIndex={0}
-              onClick={openUploadPicker}
-              onKeyDown={handleUploadKeyDown}
-            >
-              <Stack align="center" gap="1">
-                <Icon as={UploadIcon} boxSize="4" color="fg.subtle" />
-                <Text color="fg.muted">{t('widgets.gallery.emptyBoardUploadHint')}</Text>
-              </Stack>
-            </DropZone>
-          </Flex>
-        )
-      ) : (
+        ) : null}
         <ScrollArea.Root h="full" minH="0" size="xs" variant="hover" w="full">
           <ScrollArea.Viewport ref={viewportRef} h="full" outline="none" w="full">
-            <ScrollArea.Content>
-              <Box h={`${virtualizer.totalSize}px`} position="relative" w="full">
-                {virtualRows.map((virtualRow) => {
-                  const row = rows[virtualRow.index];
+            <ScrollArea.Content display="flex" flexDirection="column" minH="full">
+              <GalleryProgressSection layout={progressLayout} getScrollElement={getScrollElement} />
+              {isEmpty ? (
+                gallery.isLoading || hasActiveSearch || isVirtualBoard || gallery.starredOnly ? (
+                  <Flex align="center" color="fg.muted" flex="1" justify="center" minH="8rem">
+                    <Text fontSize="xs">
+                      {gallery.isLoading
+                        ? t('widgets.gallery.loadingBackendGallery')
+                        : gallery.starredOnly && gallery.semanticImageQuery === null
+                          ? t('widgets.gallery.noStarredItemsMatch')
+                          : t('widgets.gallery.noImagesMatch')}
+                    </Text>
+                  </Flex>
+                ) : (
+                  <Flex align="stretch" flex="1" minH="8rem" p="2">
+                    <input {...uploadInputProps} />
+                    <DropZone
+                      alignItems="center"
+                      display="flex"
+                      flex="1"
+                      fontSize="xs"
+                      isOver={isDropActive}
+                      justifyContent="center"
+                      role="button"
+                      tabIndex={0}
+                      onClick={openUploadPicker}
+                      onKeyDown={handleUploadKeyDown}
+                    >
+                      <Stack align="center" gap="1">
+                        <Icon as={UploadIcon} boxSize="4" color="fg.subtle" />
+                        <Text color="fg.muted">{t('widgets.gallery.emptyBoardUploadHint')}</Text>
+                      </Stack>
+                    </DropZone>
+                  </Flex>
+                )
+              ) : (
+                <>
+                  <Box h={`${virtualizer.totalSize}px`} position="relative" w="full">
+                    {virtualRows.map((virtualRow) => {
+                      const row = rows[virtualRow.index];
 
-                  if (row?.kind === 'starred-header') {
-                    return (
-                      <GalleryStarredSectionHeader
-                        key={virtualRow.key}
-                        isOpen={isStarredOpen}
-                        offsetPx={virtualRow.start}
-                        shownCount={row.shownCount}
-                        total={row.total}
-                        onShowAll={handleShowAllStarred}
-                        onToggle={handleToggleStarredSection}
-                      />
-                    );
-                  }
+                      if (row?.kind === 'starred-header') {
+                        return (
+                          <GalleryStarredSectionHeader
+                            key={virtualRow.key}
+                            isOpen={isStarredOpen}
+                            offsetPx={virtualRow.start - progressHeight}
+                            shownCount={row.shownCount}
+                            total={row.total}
+                            onShowAll={handleShowAllStarred}
+                            onToggle={handleToggleStarredSection}
+                          />
+                        );
+                      }
 
-                  return row?.kind === 'starred-gap' && row.withSeparator ? (
-                    <Flex
-                      key={virtualRow.key}
-                      aria-hidden="true"
-                      data-gallery-starred-separator
-                      align="center"
-                      h={`${GALLERY_STARRED_SEPARATOR_HEIGHT_PX}px`}
-                      left="0"
-                      // The starred row above already carries its trailing grid
-                      // gap; centering over the remaining height keeps the rule
-                      // equidistant from both thumbnail edges.
-                      pb={`${GALLERY_GRID_GAP_PX}px`}
+                      return row?.kind === 'starred-gap' && row.withSeparator ? (
+                        <Flex
+                          key={virtualRow.key}
+                          aria-hidden="true"
+                          data-gallery-starred-separator
+                          align="center"
+                          h={`${GALLERY_STARRED_SEPARATOR_HEIGHT_PX}px`}
+                          left="0"
+                          // The starred row above already carries its trailing grid
+                          // gap; centering over the remaining height keeps the rule
+                          // equidistant from both thumbnail edges.
+                          pb={`${GALLERY_GRID_GAP_PX}px`}
+                          position="absolute"
+                          top="0"
+                          transform={`translateY(${virtualRow.start - progressHeight}px)`}
+                          w="full"
+                        >
+                          <Box bg="border.subtle" h="1px" w="full" />
+                        </Flex>
+                      ) : null;
+                    })}
+                    <Box
+                      aria-label={t('widgets.gallery.itemsAriaLabel')}
+                      h="full"
+                      inset="0"
                       position="absolute"
-                      top="0"
-                      transform={`translateY(${virtualRow.start}px)`}
+                      role="list"
                       w="full"
                     >
-                      <Box bg="border.subtle" h="1px" w="full" />
+                      {virtualRows.map((virtualRow) => {
+                        const row = rows[virtualRow.index];
+
+                        if (!row || row.kind === 'starred-gap' || row.kind === 'starred-header') {
+                          return null;
+                        }
+
+                        return (
+                          <Box
+                            key={virtualRow.key}
+                            data-gallery-section={row.section}
+                            display="grid"
+                            gap={`${GALLERY_GRID_GAP_PX}px`}
+                            gridTemplateColumns={`repeat(${columnCount}, minmax(0, 1fr))`}
+                            left="0"
+                            position="absolute"
+                            role="presentation"
+                            top="0"
+                            transform={`translateY(${virtualRow.start - progressHeight}px)`}
+                            w="full"
+                          >
+                            {row.cells.map((cell) => {
+                              const itemKey = toGalleryItemKey(cell.item);
+
+                              return (
+                                <GalleryThumbnailCell
+                                  key={itemKey}
+                                  alwaysShowDimensions={showImageDimensions}
+                                  dragScope={region}
+                                  compareRole={
+                                    isComparisonActive && itemKey === gallery.selectedItemKey
+                                      ? t('widgets.preview.viewing')
+                                      : isComparisonActive && itemKey === gallery.compareImageKey
+                                        ? t('widgets.preview.compare')
+                                        : null
+                                  }
+                                  fit={thumbnailFit}
+                                  getDragItems={getDragItems}
+                                  isPrimary={!isFollowingLive && itemKey === gallery.selectedItemKey}
+                                  isSelected={!isFollowingLive && selectedItemKeys.has(itemKey)}
+                                  item={cell.item}
+                                  onClick={handleThumbnailClick}
+                                  onContextMenu={handleThumbnailContextMenu}
+                                  onToggleStarred={handleToggleStarred}
+                                />
+                              );
+                            })}
+                          </Box>
+                        );
+                      })}
+                    </Box>
+                  </Box>
+                  {paginationMode === 'infinite' && gallery.isLoading && gallery.items.length > 0 && (
+                    <Flex align="center" justify="center" py="2">
+                      <Spinner color="fg.subtle" size="xs" />
                     </Flex>
-                  ) : null;
-                })}
-                <Box
-                  aria-label={t('widgets.gallery.itemsAriaLabel')}
-                  h="full"
-                  inset="0"
-                  position="absolute"
-                  role="list"
-                  w="full"
-                >
-                  {virtualRows.map((virtualRow) => {
-                    const row = rows[virtualRow.index];
-
-                    if (!row || row.kind === 'starred-gap' || row.kind === 'starred-header') {
-                      return null;
-                    }
-
-                    return (
-                      <Box
-                        key={virtualRow.key}
-                        data-gallery-section={row.section}
-                        display="grid"
-                        gap={`${GALLERY_GRID_GAP_PX}px`}
-                        gridTemplateColumns={`repeat(${columnCount}, minmax(0, 1fr))`}
-                        left="0"
-                        position="absolute"
-                        role="presentation"
-                        top="0"
-                        transform={`translateY(${virtualRow.start}px)`}
-                        w="full"
-                      >
-                        {row.cells.map((cell) => {
-                          if (cell.kind === 'placeholder') {
-                            return (
-                              <GalleryQueuePlaceholderCell
-                                key={cell.placeholder.id}
-                                antialiasProgressImages={antialiasProgressImages}
-                                fit={thumbnailFit}
-                                isSelected={
-                                  gallery.currentItem?.kind === 'placeholder' &&
-                                  gallery.currentItem.placeholder.id === cell.placeholder.id
-                                }
-                                placeholder={cell.placeholder}
-                                onClick={handleShowProgressImages}
-                              />
-                            );
-                          }
-
-                          const itemKey = toGalleryItemKey(cell.item);
-
-                          return (
-                            <GalleryThumbnailCell
-                              key={itemKey}
-                              alwaysShowDimensions={showImageDimensions}
-                              dragScope={region}
-                              compareRole={
-                                isComparisonActive && itemKey === gallery.selectedItemKey
-                                  ? t('widgets.preview.viewing')
-                                  : isComparisonActive && itemKey === gallery.compareImageKey
-                                    ? t('widgets.preview.compare')
-                                    : null
-                              }
-                              fit={thumbnailFit}
-                              getDragItems={getDragItems}
-                              isPrimary={!isFollowingLive && itemKey === gallery.selectedItemKey}
-                              isSelected={!isFollowingLive && selectedItemKeys.has(itemKey)}
-                              item={cell.item}
-                              onClick={handleThumbnailClick}
-                              onContextMenu={handleThumbnailContextMenu}
-                              onToggleStarred={handleToggleStarred}
-                            />
-                          );
-                        })}
-                      </Box>
-                    );
-                  })}
-                </Box>
-              </Box>
-              {paginationMode === 'infinite' && gallery.isLoading && gallery.items.length > 0 && (
-                <Flex align="center" justify="center" py="2">
-                  <Spinner color="fg.subtle" size="xs" />
-                </Flex>
-              )}
-              {paginationMode === 'infinite' && !gallery.isLoading && isWindowTruncated && (
-                <Flex align="center" justify="center" py="3">
-                  <Text color="fg.subtle" fontSize="xs" textAlign="center">
-                    {gallery.anchoredWindowPage > 0
-                      ? t('widgets.gallery.windowLimitFrom', {
-                          count: gallery.items.length,
-                          index: anchoredWindowFirstItem,
-                        })
-                      : t('widgets.gallery.windowLimit', { count: gallery.items.length })}
-                  </Text>
-                </Flex>
+                  )}
+                  {paginationMode === 'infinite' && !gallery.isLoading && isWindowTruncated && (
+                    <Flex align="center" justify="center" py="3">
+                      <Text color="fg.subtle" fontSize="xs" textAlign="center">
+                        {gallery.anchoredWindowPage > 0
+                          ? t('widgets.gallery.windowLimitFrom', {
+                              count: gallery.items.length,
+                              index: anchoredWindowFirstItem,
+                            })
+                          : t('widgets.gallery.windowLimit', { count: gallery.items.length })}
+                      </Text>
+                    </Flex>
+                  )}
+                </>
               )}
             </ScrollArea.Content>
           </ScrollArea.Viewport>
@@ -682,28 +660,28 @@ export const GalleryImageGrid = () => {
             <ScrollArea.Thumb />
           </ScrollArea.Scrollbar>
         </ScrollArea.Root>
-      )}
-      {isDropActive && (
-        <DropZone
-          alignItems="center"
-          display="flex"
-          flexDirection="column"
-          gap="2"
-          inset="0"
-          isOver
-          justifyContent="center"
-          pointerEvents="none"
-          position="absolute"
-          variant="overlay"
-          zIndex="1"
-        >
-          <UploadIcon size="20" />
-          <Text fontSize="xs" fontWeight="600">
-            {t('widgets.gallery.dropMediaToUploadToBoard', { name: selectedBoardName })}
-          </Text>
-        </DropZone>
-      )}
-      <ImageContextMenu boards={gallery.boards} target={activeContextMenuTarget} onClose={handleCloseContextMenu} />
-    </Box>
+        {isDropActive && (
+          <DropZone
+            alignItems="center"
+            display="flex"
+            flexDirection="column"
+            gap="2"
+            inset="0"
+            isOver
+            justifyContent="center"
+            pointerEvents="none"
+            position="absolute"
+            variant="overlay"
+            zIndex="1"
+          >
+            <UploadIcon size="20" />
+            <Text fontSize="xs" fontWeight="600">
+              {t('widgets.gallery.dropMediaToUploadToBoard', { name: selectedBoardName })}
+            </Text>
+          </DropZone>
+        )}
+        <ImageContextMenu boards={gallery.boards} target={activeContextMenuTarget} onClose={handleCloseContextMenu} />
+      </Box>
+    </Stack>
   );
 };

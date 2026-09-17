@@ -9,7 +9,7 @@ import type {
  * Client-side ports of the backend's video canvas math, so the panel can show
  * and validate the exact dimensions a graph will run at without extra nodes:
  *
- * - Wan: `_scale_and_snap` in `invokeai/app/invocations/wan_ideal_dimensions.py`
+ * - Wan: `_scale_and_snap` in `invokeai/app/invocations/wan/wan_ideal_dimensions.py`
  *   ("nearest" rounding — the node default; the other modes are workflow-only).
  * - MiniMax H3: `resolve_canvas_size` in `invokeai/backend/minimax_h3/packing.py`
  *   and `resolve_lowres_canvas_size` in `invokeai/backend/minimax_h3/presets.py`.

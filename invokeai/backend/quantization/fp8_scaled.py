@@ -367,6 +367,26 @@ def _usable_input_scale(scale: torch.Tensor | None) -> torch.Tensor | None:
 _MX_SCALE_DTYPES = (torch.uint8,)
 
 
+def _reject_unparsed_scales(sd: Mapping[str, Any]) -> None:
+    """Refuse a scale spelling this module does not parse when it sits beside an fp8 weight.
+
+    Loaders ignore unexpected keys (logged at DEBUG), so a leftover ``.weight_scale_inv``-style
+    key would otherwise let its weight load unscaled and generate noise instead of failing here.
+    """
+    unparsed = sorted(
+        key
+        for key in sd
+        if isinstance(key, str)
+        and "scale" in key.rsplit(".", 1)[-1]
+        and getattr(sd.get(f"{key.rsplit('.', 1)[0]}.weight"), "dtype", None) in FP8_WEIGHT_DTYPES
+    )
+    if unparsed:
+        raise NotImplementedError(
+            f"Unsupported fp8 scale layout: {unparsed[:8]}{' ...' if len(unparsed) > 8 else ''}. InvokeAI reads "
+            f"{WEIGHT_SCALE_SUFFIXES + INPUT_SCALE_SUFFIXES}; use the scaled-fp8 or bf16 build of this checkpoint."
+        )
+
+
 def _reject_mx_scale(path: str) -> None:
     raise NotImplementedError(
         f"'{path}' carries an MXFP8 (OCP Microscaling) block scale, which InvokeAI cannot decode "
@@ -480,6 +500,7 @@ def extract_fp8_scaled_layers(
     for key in list(sd.keys()):
         if isinstance(key, str) and (key in STRAY_METADATA_KEYS or "comfy_quant" in key):
             del sd[key]
+    _reject_unparsed_scales(sd)
 
     layers: dict[str, Fp8ScaledLayer] = {}
     for path, scale in weight_scales.items():

@@ -3,7 +3,7 @@ import type { KeyboardEvent, RefObject } from 'react';
 
 import { Box, HStack, Icon, Stack, Text } from '@chakra-ui/react';
 import { getGalleryBoardLabel } from '@features/gallery/core/boardLabels';
-import { toGalleryItemKey } from '@features/gallery/core/items';
+import { getGalleryUploadAccept, toGalleryItemKey } from '@features/gallery/core/items';
 import { BoardCover, BoardCoverIcon } from '@features/gallery/ui/GalleryBoardCover';
 import { getGalleryBoardGroups } from '@features/gallery/ui/galleryBoardGroups';
 import { GallerySearchHelp } from '@features/gallery/ui/GalleryItemSearch';
@@ -13,7 +13,7 @@ import { useGalleryUi } from '@features/gallery/ui/GalleryUiContext';
 import { getGalleryUploadTargetLabel } from '@features/gallery/ui/GalleryUploadButton';
 import { GalleryViewSegmentTabs } from '@features/gallery/ui/GalleryViewTabs';
 import { useGalleryUploadAction } from '@features/gallery/ui/useGalleryUploadAction';
-import { getGalleryUploadAccept, useGalleryUploadInput } from '@features/gallery/ui/useGalleryUploadInput';
+import { useGalleryUploadInput } from '@features/gallery/ui/useGalleryUploadInput';
 import { Button, CloseButton, IconButton } from '@platform/ui/Button';
 import { MiddleTruncate } from '@platform/ui/MiddleTruncate';
 import { segmentTabsPanelId, segmentTabsTabId } from '@platform/ui/SegmentTabs';
@@ -82,9 +82,9 @@ export const GalleryPickerView = ({
   // search loads; skeletons only ever show before anything has loaded.
   const [lastItems, setLastItems] = useState<GalleryItem[] | null>(null);
 
-  // eslint-disable-next-line react/react-compiler
+  // eslint-disable-next-line react/refs
   selectionRef.current = selection;
-  // eslint-disable-next-line react/react-compiler
+  // eslint-disable-next-line react/refs
   loadMoreRef.current = data.loadMore;
 
   if (data.items !== null && data.items !== lastItems) {

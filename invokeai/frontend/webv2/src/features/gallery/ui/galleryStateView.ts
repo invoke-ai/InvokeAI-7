@@ -1,5 +1,4 @@
 import type { GalleryBoard, GalleryImage, GalleryOrderDir, GalleryView } from '@features/gallery/core/types';
-import type { QueueItem } from '@features/queue/contracts';
 
 import {
   legacyGeneratedImageToGalleryItem,
@@ -7,7 +6,6 @@ import {
   type GalleryItem,
   type GalleryItemKey,
 } from '@features/gallery/core/items';
-import { GALLERY_PAGE_SIZE } from '@features/gallery/core/paging';
 import { getBoundedRecentImages } from '@features/gallery/core/recentImages';
 import {
   getPersistedSelectedGalleryItemKeys,
@@ -19,7 +17,6 @@ import {
   type GallerySemanticReference,
 } from '@features/gallery/core/semanticImageQuery';
 import { getGallerySettings, type GallerySettings } from '@features/gallery/core/settings';
-import { getQueueItemSnapshotBatchCount, getQueueItemSnapshotDimensions } from '@features/queue/contracts';
 
 /**
  * Stand-in shown before any board has loaded. `name` is intentionally empty:
@@ -38,41 +35,6 @@ const UNCATEGORIZED_BOARD: GalleryBoard = {
   videoCount: 0,
 };
 
-/**
- * A grid cell standing in for an image that an in-flight queue item will
- * deliver to the currently viewed board once generation completes.
- */
-export interface GalleryQueuePlaceholder {
-  boardId: string;
-  id: string;
-  queueItemId: string;
-  itemIndex: number;
-  width: number;
-  height: number;
-  /**
-   * The backend queue item id, once the slot has been claimed by one — null while the
-   * submission is still local-only. Progress keyed by *local* id cannot distinguish
-   * two slots of the same batch running on two GPUs, so surfaces that need per-session
-   * facts (which GPU is rendering this tile) resolve them through this id.
-   */
-  backendItemId: number | null;
-}
-
-export interface GalleryLiveTarget {
-  queueItemId: string;
-  itemIndex: number;
-}
-
-export interface GalleryGenerationSequence {
-  chronologicalSlots: GalleryQueuePlaceholder[];
-  liveSlot: GalleryQueuePlaceholder | null;
-}
-
-export type GalleryCurrentItem =
-  | { kind: 'item'; itemKey: GalleryItemKey }
-  | { kind: 'placeholder'; placeholder: GalleryQueuePlaceholder }
-  | null;
-
 export interface GalleryStateView {
   /**
    * Page the infinite window starts at, when a reveal has anchored it
@@ -83,7 +45,6 @@ export interface GalleryStateView {
   anchoredWindowPage: number;
   boards: GalleryBoard[];
   compareImageKey: GalleryItemKey | null;
-  currentItem: GalleryCurrentItem;
   galleryView: GalleryView;
   /** A compare image is set and differs from the visible image selection. */
   isComparisonActive: boolean;
@@ -91,7 +52,6 @@ export interface GalleryStateView {
   isLoading: boolean;
   /** The grid's current page in paginated mode; the window anchor otherwise. */
   page: number;
-  pendingPlaceholders: GalleryQueuePlaceholder[];
   projectBoardId: string | null;
   /**
    * The selection's stamped paginated page, when the stamp names the listing
@@ -108,125 +68,6 @@ export interface GalleryStateView {
   /** The listing is restricted to starred items. */
   starredOnly: boolean;
 }
-
-interface SortableGalleryQueueSlot {
-  backendItemId: number | null;
-  placeholder: GalleryQueuePlaceholder;
-  submittedAt: string;
-}
-
-// Newest-first placeholders land at the top; oldest-first listings take them at the end.
-export const getGalleryPlaceholderInsertionIndex = (itemCount: number, imageOrderDir: GalleryOrderDir): number =>
-  imageOrderDir === 'DESC' ? 0 : itemCount;
-
-export const getGalleryGenerationSequence = (
-  queueItems: QueueItem[],
-  liveTarget: GalleryLiveTarget | null
-): GalleryGenerationSequence => {
-  const sortableSlots: SortableGalleryQueueSlot[] = [];
-
-  for (const item of queueItems) {
-    if ((item.status !== 'pending' && item.status !== 'running') || item.snapshot.destination !== 'gallery') {
-      continue;
-    }
-
-    const boardId = item.snapshot.galleryBoardId ?? 'none';
-    const { width, height } = getQueueItemSnapshotDimensions(item, { height: 1024, width: 1024 });
-    const completedBackendItemIds = new Set(item.completedBackendItemIds ?? []);
-    const cancelledBackendItemIds = new Set(item.cancelledBackendItemIds ?? []);
-    const slotCount = item.backendItemIds?.length ?? getQueueItemSnapshotBatchCount(item);
-
-    for (let index = 0; index < slotCount; index += 1) {
-      const backendItemId = item.backendItemIds?.[index] ?? null;
-
-      if (
-        backendItemId !== null &&
-        (completedBackendItemIds.has(backendItemId) || cancelledBackendItemIds.has(backendItemId))
-      ) {
-        continue;
-      }
-
-      sortableSlots.push({
-        backendItemId,
-        placeholder: {
-          backendItemId,
-          boardId,
-          height,
-          id: `${item.id}:${index}`,
-          itemIndex: index + 1,
-          queueItemId: item.id,
-          width,
-        },
-        submittedAt: item.snapshot.submittedAt,
-      });
-    }
-  }
-
-  sortableSlots.sort((a, b) => {
-    if (a.backendItemId !== null && b.backendItemId !== null) {
-      return a.backendItemId - b.backendItemId;
-    }
-
-    if (a.backendItemId !== null) {
-      return -1;
-    }
-
-    if (b.backendItemId !== null) {
-      return 1;
-    }
-
-    return (
-      a.submittedAt.localeCompare(b.submittedAt) ||
-      a.placeholder.queueItemId.localeCompare(b.placeholder.queueItemId) ||
-      a.placeholder.itemIndex - b.placeholder.itemIndex
-    );
-  });
-
-  const chronologicalSlots = sortableSlots.map(({ placeholder }) => placeholder);
-  const liveSlot = liveTarget
-    ? (chronologicalSlots.find(
-        (slot) => slot.queueItemId === liveTarget.queueItemId && slot.itemIndex === liveTarget.itemIndex
-      ) ?? null)
-    : null;
-
-  return { chronologicalSlots, liveSlot };
-};
-
-/**
- * The slots for every concurrently-running session, in chronological order.
- *
- * Multi-GPU runs one session per GPU, so more than one slot can be live at once.
- * Ordering comes from `chronologicalSlots` (sorted by backend item id) rather than
- * from the order the targets happened to start reporting, so tiles keep a stable
- * left-to-right position for as long as they run.
- */
-export const getGalleryLiveSlots = (
-  chronologicalSlots: GalleryQueuePlaceholder[],
-  liveTargets: readonly GalleryLiveTarget[]
-): GalleryQueuePlaceholder[] =>
-  liveTargets.length === 0
-    ? []
-    : chronologicalSlots.filter((slot) =>
-        liveTargets.some((target) => target.queueItemId === slot.queueItemId && target.itemIndex === slot.itemIndex)
-      );
-
-export const getGalleryCurrentItem = ({
-  activePlaceholder,
-  isComparisonActive,
-  liveFollowEnabled,
-  selectedItemKey,
-}: {
-  activePlaceholder: GalleryQueuePlaceholder | null;
-  isComparisonActive: boolean;
-  liveFollowEnabled: boolean;
-  selectedItemKey: GalleryItemKey | null;
-}): GalleryCurrentItem => {
-  if (liveFollowEnabled && !isComparisonActive && activePlaceholder) {
-    return { kind: 'placeholder', placeholder: activePlaceholder };
-  }
-
-  return selectedItemKey ? { itemKey: selectedItemKey, kind: 'item' } : null;
-};
 
 export const getGalleryView = (values: Record<string, unknown>): GalleryView =>
   values.galleryView === 'assets' ? 'assets' : 'images';
@@ -349,50 +190,11 @@ export const getGalleryCompareImage = (values: Record<string, unknown>): Gallery
     selectedImageName: null,
   });
 
-const getVisibleGalleryQueuePlaceholders = (
-  chronologicalSlots: GalleryQueuePlaceholder[],
-  {
-    galleryView,
-    imageOrderDir,
-    searchTerm,
-    selectedBoardId,
-  }: { galleryView: GalleryView; imageOrderDir: GalleryOrderDir; searchTerm: string; selectedBoardId: string }
-): GalleryQueuePlaceholder[] => {
-  if (galleryView !== 'images' || searchTerm.trim() !== '') {
-    return [];
-  }
-
-  const placeholders = chronologicalSlots.filter((placeholder) => placeholder.boardId === selectedBoardId);
-
-  return imageOrderDir === 'DESC' ? [...placeholders].reverse() : placeholders;
-};
-
-/**
- * Whether this page/window can show where a NEW image lands (placeholders
- * render only there): page 0 for newest-first and the unanchored infinite
- * window; the row-`total` page for oldest-first — deliberately nonexistent
- * when the last page is exactly full, and unknowable without a total.
- */
-const isGalleryWindowAtIncomingItemLanding = (
-  settings: GallerySettings,
-  page: number,
-  totalImages: number | null
-): boolean => {
-  if (settings.paginationMode === 'infinite' || settings.imageOrderDir === 'DESC') {
-    return page === 0;
-  }
-
-  return totalImages !== null && page === Math.floor(totalImages / GALLERY_PAGE_SIZE);
-};
-
 export const getGalleryStateView = (
   values: Record<string, unknown>,
   backendBoards: GalleryBoard[],
   backendItems: GalleryItem[] | null,
-  isLoading: boolean,
-  queueItems: QueueItem[] = [],
-  liveFollowEnabled = false,
-  liveTarget: GalleryLiveTarget | null = null
+  isLoading: boolean
 ): GalleryStateView => {
   const localItems = getBoundedRecentImages(values.recentImages).map(legacyGeneratedImageToGalleryItem);
   const items = backendItems ?? (isLoading ? [] : localItems);
@@ -430,32 +232,9 @@ export const getGalleryStateView = (
     visibleSelectedItemKey?.startsWith('image:') === true &&
     compareImageKey !== null &&
     compareImageKey !== visibleSelectedItemKey;
-  const generationSequence = getGalleryGenerationSequence(queueItems, liveTarget);
-  // A ranked similarity result has no chronological insertion point, so
-  // pending placeholders (which stand in for images-to-come) are hidden while
-  // a semantic query is active — exactly as they are for a text search, and
-  // for the starred-only filter, which a fresh generation never matches.
   const semanticImageQuery = getGallerySemanticImageQuery(values);
   const page = getGalleryPage(values);
   const isAnchoredInfiniteWindow = settings.paginationMode === 'infinite' && page > 0;
-  const showsIncomingItemLanding = isGalleryWindowAtIncomingItemLanding(settings, page, getGalleryTotalImages(values));
-  const visibleActivePlaceholder =
-    settings.showPendingItems &&
-    galleryView === 'images' &&
-    searchTerm.trim() === '' &&
-    semanticImageQuery === null &&
-    !starredOnly &&
-    showsIncomingItemLanding
-      ? generationSequence.liveSlot?.boardId === selectedBoardId
-        ? generationSequence.liveSlot
-        : null
-      : null;
-  const currentItem = getGalleryCurrentItem({
-    activePlaceholder: visibleActivePlaceholder,
-    isComparisonActive,
-    liveFollowEnabled,
-    selectedItemKey: visibleSelectedItemKey,
-  });
   const selectedImageQuery = getGallerySelectedImageQuery(values);
   const revealTargetPage =
     settings.paginationMode === 'paginated' &&
@@ -476,21 +255,11 @@ export const getGalleryStateView = (
     anchoredWindowPage: isAnchoredInfiniteWindow ? page : 0,
     boards,
     compareImageKey,
-    currentItem,
     galleryView,
     isComparisonActive,
     items,
     isLoading,
     page,
-    pendingPlaceholders:
-      settings.showPendingItems && semanticImageQuery === null && !starredOnly && showsIncomingItemLanding
-        ? getVisibleGalleryQueuePlaceholders(generationSequence.chronologicalSlots, {
-            galleryView,
-            imageOrderDir: settings.imageOrderDir,
-            searchTerm,
-            selectedBoardId,
-          })
-        : [],
     projectBoardId: getGalleryProjectBoardId(values),
     revealTargetPage,
     searchTerm,

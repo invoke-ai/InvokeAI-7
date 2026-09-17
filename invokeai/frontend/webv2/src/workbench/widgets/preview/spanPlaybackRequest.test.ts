@@ -1,11 +1,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  clearVideoSpanPlaybackState,
   consumeVideoSpanPlaybackRequest,
   getVideoSpanPlaybackRequest,
+  getVideoSpanPlaybackState,
   isVideoSpanPlaybackFresh,
+  publishVideoSpanPlaybackState,
   requestVideoSpanPlayback,
   subscribeVideoSpanPlaybackRequests,
+  subscribeVideoSpanPlaybackState,
   VIDEO_SPAN_PLAYBACK_TTL_MS,
 } from './spanPlaybackRequest';
 
@@ -14,6 +18,12 @@ const retireOutstandingRequest = (): void => {
 
   if (request) {
     consumeVideoSpanPlaybackRequest(request.token);
+  }
+
+  const state = getVideoSpanPlaybackState();
+
+  if (state) {
+    clearVideoSpanPlaybackState(state.token);
   }
 };
 
@@ -41,7 +51,8 @@ describe('video span playback requests', () => {
     expect(second?.token).not.toBe(first?.token);
 
     unsubscribe();
-    requestVideoSpanPlayback(span);
+    // The publisher gets the token back: it is what the player's report is matched on.
+    expect(requestVideoSpanPlayback(span)).toBe(getVideoSpanPlaybackRequest()?.token);
     expect(listener).toHaveBeenCalledTimes(2);
   });
 
@@ -71,5 +82,47 @@ describe('video span playback requests', () => {
     vi.setSystemTime(Date.now() + VIDEO_SPAN_PLAYBACK_TTL_MS + 1);
 
     expect(isVideoSpanPlaybackFresh(request?.requestedAt ?? 0)).toBe(false);
+  });
+});
+
+describe('video span playback state', () => {
+  it('reports one loop at a time and tells subscribers only about changes', () => {
+    const listener = vi.fn();
+    const unsubscribe = subscribeVideoSpanPlaybackState(listener);
+    const pause = vi.fn();
+
+    publishVideoSpanPlaybackState({ isPlaying: true, pause, token: 1 });
+    expect(getVideoSpanPlaybackState()).toMatchObject({ isPlaying: true, token: 1 });
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    // The player republishes from every play/pause handler and from the request itself;
+    // a report identical to the one standing is not a change a subscriber should render.
+    publishVideoSpanPlaybackState({ isPlaying: true, pause, token: 1 });
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    publishVideoSpanPlaybackState({ isPlaying: false, pause, token: 1 });
+    expect(getVideoSpanPlaybackState()?.isPlaying).toBe(false);
+    expect(listener).toHaveBeenCalledTimes(2);
+
+    // A newer loop replaces the report outright: two cannot be on screen at once.
+    publishVideoSpanPlaybackState({ isPlaying: true, pause, token: 2 });
+    expect(getVideoSpanPlaybackState()?.token).toBe(2);
+
+    unsubscribe();
+    clearVideoSpanPlaybackState(2);
+    expect(getVideoSpanPlaybackState()).toBeNull();
+    expect(listener).toHaveBeenCalledTimes(3);
+  });
+
+  it('retires only the loop the caller was reporting on', () => {
+    const pause = vi.fn();
+
+    publishVideoSpanPlaybackState({ isPlaying: true, pause, token: 1 });
+    publishVideoSpanPlaybackState({ isPlaying: true, pause, token: 2 });
+    // A player unmounting late — the hidden keep-alive of a clip a newer request has
+    // already replaced — must not take the live loop's report down with it.
+    clearVideoSpanPlaybackState(1);
+
+    expect(getVideoSpanPlaybackState()?.token).toBe(2);
   });
 });

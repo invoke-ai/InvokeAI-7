@@ -1,9 +1,7 @@
-import type { NumberInput as ChakraNumberInput, SliderValueChangeDetails } from '@chakra-ui/react';
-
-import { Badge, Flex, NumberInput } from '@chakra-ui/react';
+import { Badge, Box } from '@chakra-ui/react';
 import { GenerationSettingsSection } from '@features/generation/components';
 import { useDebouncedDraftValue, useRegisterGenerateDraftFlusher } from '@features/generation/react';
-import { Slider } from '@platform/ui';
+import { ScrubberField } from '@platform/ui/ScrubberField';
 import {
   CANVAS_DENOISING_STRENGTH_KEY,
   clampCanvasDenoisingStrength,
@@ -56,9 +54,6 @@ export const GenerateDenoisingStrength = () => {
 
   useRegisterGenerateDraftFlusher(flushDraftValue);
 
-  const strengthAriaLabel = useMemo(() => [t('widgets.generate.denoisingStrength')], [t]);
-  const strengthSliderValue = useMemo(() => [draftStrength], [draftStrength]);
-  const strengthNumberValue = useMemo(() => draftStrength.toFixed(2), [draftStrength]);
   const badges = useMemo(
     () => (
       <>
@@ -69,25 +64,6 @@ export const GenerateDenoisingStrength = () => {
     [draftStrength]
   );
 
-  const onSliderChange = useCallback(
-    ({ value }: SliderValueChangeDetails) => {
-      const next = value[0];
-      if (next !== undefined && Number.isFinite(next)) {
-        setStrength(next);
-      }
-    },
-    [setStrength]
-  );
-
-  const onNumberChange = useCallback(
-    ({ valueAsNumber }: ChakraNumberInput.ValueChangeDetails) => {
-      if (Number.isFinite(valueAsNumber)) {
-        setStrength(valueAsNumber);
-      }
-    },
-    [setStrength]
-  );
-
   return (
     <GenerationSettingsSection
       badges={badges}
@@ -95,34 +71,17 @@ export const GenerateDenoisingStrength = () => {
       label={t('widgets.generate.denoisingStrength')}
       sectionId="canvas-denoising"
     >
-      <Flex align="center" direction="row" gap="2" p="2">
-        <Slider
-          aria-label={strengthAriaLabel}
-          flex="1"
+      <Box p="2">
+        <ScrubberField
           formatValue={formatStrengthPercent}
+          label={t('widgets.generate.strength')}
           max={MAX_CANVAS_DENOISING_STRENGTH}
           min={MIN_CANVAS_DENOISING_STRENGTH}
-          minW="0"
-          ms="2"
-          size="sm"
           step={0.01}
-          value={strengthSliderValue}
-          withThumbTooltip
-          onValueChange={onSliderChange}
+          value={draftStrength}
+          onChange={setStrength}
         />
-        <NumberInput.Root
-          max={MAX_CANVAS_DENOISING_STRENGTH}
-          min={MIN_CANVAS_DENOISING_STRENGTH}
-          size="xs"
-          step={0.05}
-          value={strengthNumberValue}
-          w="20"
-          onValueChange={onNumberChange}
-        >
-          <NumberInput.Control />
-          <NumberInput.Input aria-label={t('widgets.generate.denoisingStrength')} />
-        </NumberInput.Root>
-      </Flex>
+      </Box>
     </GenerationSettingsSection>
   );
 };

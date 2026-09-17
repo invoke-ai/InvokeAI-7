@@ -34,6 +34,8 @@ const MENU_POSITIONING = { placement: 'bottom-start' } as const;
 const SWITCH_CHECKED = { bg: 'accent.solid' } as const;
 
 export interface DynamicPromptsFieldConfig extends DynamicPromptsConfig {
+  /** A fixed seed applies to every image, so per-image sharing has nothing left to decide. */
+  isSeedFixed: boolean;
   onChange: (patch: Partial<DynamicPromptsConfig>) => void;
 }
 
@@ -63,6 +65,7 @@ export const DynamicPromptsPanel = ({
   const modeLabelledBy = `${modeFieldId}-label ${modeTriggerId}`;
   const modeMenuIds = useMemo(() => ({ trigger: modeTriggerId }), [modeTriggerId]);
   const seedSwitchIds = useMemo(() => ({ hiddenInput: seedSwitchId, label: `${seedSwitchId}-label` }), [seedSwitchId]);
+  const seedHeldNoteId = `${seedSwitchId}-held`;
   const visiblePrompts = expansion.prompts.slice(0, MAX_PREVIEW_ROWS);
   const hiddenPromptCount = expansion.prompts.length - visiblePrompts.length;
 
@@ -189,11 +192,12 @@ export const DynamicPromptsPanel = ({
 
       <Switch.Root
         checked={config.seedBehaviour === 'per-image'}
+        disabled={config.isSeedFixed}
         ids={seedSwitchIds}
         size="sm"
         onCheckedChange={handleSeedBehaviourChange}
       >
-        <Switch.HiddenInput />
+        <Switch.HiddenInput aria-describedby={config.isSeedFixed ? seedHeldNoteId : undefined} />
         <Switch.Control _checked={SWITCH_CHECKED}>
           <Switch.Thumb />
         </Switch.Control>
@@ -201,6 +205,11 @@ export const DynamicPromptsPanel = ({
           {t('widgets.generate.dynamicPrompts.newSeedPerImage')}
         </Switch.Label>
       </Switch.Root>
+      {config.isSeedFixed ? (
+        <Text color="fg.subtle" fontSize="2xs" id={seedHeldNoteId} mt="-1">
+          {t('widgets.generate.dynamicPrompts.seedHeldForEveryImage')}
+        </Text>
+      ) : null}
 
       {expansion.isError ? (
         <Text color="fg.error" fontSize="2xs">

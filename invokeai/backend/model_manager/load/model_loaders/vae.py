@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Optional
 
 import accelerate
+import torch
 from diffusers.models.autoencoders.autoencoder_kl import AutoencoderKL
 
 from invokeai.backend.model_manager.configs.factory import AnyModelConfig
@@ -26,6 +27,7 @@ from invokeai.backend.model_manager.taxonomy import (
 )
 from invokeai.backend.quantization.sdnq.detection import is_sdnq_folder
 from invokeai.backend.quantization.sdnq.loaders import raise_on_incomplete_sdnq_load, sdnq_sd_loader
+from invokeai.backend.util.state_dict_loading import load_state_dict_ignoring_extras
 
 
 def _is_sdnq_vae_folder(path: Path) -> bool:
@@ -35,6 +37,63 @@ def _is_sdnq_vae_folder(path: Path) -> bool:
     sharded or markerless export is recognized the same way identification recognizes it.
     """
     return is_sdnq_folder(path)
+
+
+_QWEN_IMAGE_LAYOUT_MARKER = "decoder.conv_in.weight"
+"""Present only in the diffusers export of the Qwen-Image VAE."""
+
+_WAN_LAYOUT_MARKER = "decoder.middle.0.residual.0.gamma"
+"""Present only in the original Wan-family layout.
+
+The same key diffusers' own `infer_diffusers_model_type` keys the Wan VAE off, so a file carrying
+it is one `convert_wan_vae_to_diffusers` knows how to read.
+"""
+
+
+def _checkpoint_keys(path: str | Path) -> set[str]:
+    """The tensor names in a single-file checkpoint, without reading its tensors.
+
+    Layout is decided before anything is loaded, so the file is read once, by whichever branch
+    actually needs the tensors. Safetensors answer from the header; a pickled checkpoint is unpickled
+    onto the meta device, which skips its storages.
+    """
+    if Path(path).suffix != ".safetensors":
+        return set(_unwrap_state_dict(torch.load(path, map_location="meta", weights_only=True)))
+
+    from safetensors import safe_open
+
+    with safe_open(path, framework="pt", device="cpu") as f:
+        return set(f.keys())
+
+
+def _read_checkpoint(path: str | Path) -> dict[str, torch.Tensor]:
+    """Every tensor in a single-file checkpoint, whichever format it was saved in.
+
+    Identification reads pickled checkpoints (`.pt`, `.pth`, `.ckpt`, `.bin`) as well as safetensors,
+    so a loader that reads only safetensors fails on a VAE that installed cleanly. `weights_only`
+    refuses anything in the pickle but tensors and plain containers.
+    """
+    if Path(path).suffix == ".safetensors":
+        from safetensors.torch import load_file
+
+        return load_file(path)
+
+    return _unwrap_state_dict(torch.load(path, map_location="cpu", weights_only=True))
+
+
+def _unwrap_state_dict(checkpoint: dict) -> dict:
+    """Training checkpoints nest the weights under `state_dict`, and identification unwraps them too."""
+    return checkpoint.get("state_dict", checkpoint)
+
+
+def _wan_family_dtype(requested: torch.dtype) -> torch.dtype:
+    """The precision a Wan-family VAE runs in: the configured one, except float16.
+
+    float16 is unstable on this autoencoder and is what `precision: auto` resolves to on CUDA, so it is
+    raised to bfloat16. A float32 request is kept -- casting it down would round the weights for the
+    lifetime of the cached model.
+    """
+    return torch.bfloat16 if requested == torch.float16 else requested
 
 
 # Architectural defaults for the Wan 2.2-VAE (TI2V-5B). Verbatim from the
@@ -176,15 +235,10 @@ class VAELoader(GenericDiffusersLoader):
         submodel_type: Optional[SubModelType] = None,
     ) -> AnyModel:
         if isinstance(config, VAE_Checkpoint_Anima_Config):
-            from diffusers.models.autoencoders import AutoencoderKLWan
-
-            from invokeai.backend.wan.rocm_causal_conv3d import patch_wan_causal_conv3d_for_rocm
-
-            patch_wan_causal_conv3d_for_rocm()
-            return AutoencoderKLWan.from_single_file(
-                config.path,
-                torch_dtype=self._torch_dtype,
-            )
+            # `VAE_Checkpoint_Anima_Config` matches on the original Wan-family layout, which is what
+            # `_load_wan_family_vae` reads -- the same checkpoint the community `qwen-image`
+            # redistribution carries.
+            return self._load_wan_family_vae(config.path)
         elif isinstance(config, VAE_Checkpoint_Wan_Config):
             return self._load_wan_vae(config)
         elif isinstance(config, VAE_Diffusers_Wan_Config):
@@ -206,7 +260,7 @@ class VAELoader(GenericDiffusersLoader):
         return super()._load_model(config, submodel_type)
 
     def _load_wan_vae(self, config: VAE_Checkpoint_Wan_Config) -> AnyModel:
-        """Load a Wan 2.2 VAE from a single safetensors file.
+        """Load a Wan 2.2 VAE from a single-file checkpoint.
 
         Picks the correct ``AutoencoderKLWan`` config based on ``z_dim``. The Wan
         ecosystem ships two distinct VAE architectures:
@@ -222,23 +276,22 @@ class VAELoader(GenericDiffusersLoader):
         from the TI2V-5B VAE checkpoint won't load (channel and shape mismatches
         throughout the encoder + decoder).
 
-        Forces bfloat16 (same as ``WanDiffusersModel`` and ``_load_wan_vae_diffusers``) —
-        fp16 is unstable on the Wan VAE, and the default ``precision: auto`` resolves to
-        float16 on CUDA.
+        Reads the same formats and follows the same precision policy as `_load_wan_family_vae`: a
+        16-channel file registered under ``wan`` is the VAE Anima also accepts, and must not behave
+        differently for the base it was probed as.
         """
         import accelerate
-        import torch
         from diffusers.models.autoencoders.autoencoder_kl_wan import AutoencoderKLWan
-        from safetensors.torch import load_file
 
         from invokeai.backend.wan.rocm_causal_conv3d import patch_wan_causal_conv3d_for_rocm
 
         patch_wan_causal_conv3d_for_rocm()
-        sd = load_file(config.path)
+        dtype = _wan_family_dtype(self._torch_dtype)
+        sd = _read_checkpoint(config.path)
 
         for k in list(sd.keys()):
             if sd[k].is_floating_point():
-                sd[k] = sd[k].to(torch.bfloat16)
+                sd[k] = sd[k].to(dtype)
 
         new_sd_size = sum(t.nelement() * t.element_size() for t in sd.values())
         self._ram_cache.make_room(new_sd_size)
@@ -247,7 +300,7 @@ class VAELoader(GenericDiffusersLoader):
         with accelerate.init_empty_weights():
             model = AutoencoderKLWan(**init_kwargs)
 
-        model.load_state_dict(sd, strict=True, assign=True)
+        load_state_dict_ignoring_extras(model, sd, source="Wan VAE checkpoint", assign=True)
         model.eval()
         return model
 
@@ -261,10 +314,8 @@ class VAELoader(GenericDiffusersLoader):
         the model loader invocation since that's how cached entries are keyed.
         Loading ``AutoencoderKLWan`` directly here sidesteps the submodel check.
 
-        Forces bfloat16 (same as ``WanDiffusersModel``) — fp16 is unstable on the
-        Wan VAE.
+        Runs in the configured precision except float16 -- see `_wan_family_dtype`.
         """
-        import torch
         from diffusers.models.autoencoders.autoencoder_kl_wan import AutoencoderKLWan
 
         from invokeai.backend.wan.rocm_causal_conv3d import patch_wan_causal_conv3d_for_rocm
@@ -272,29 +323,96 @@ class VAELoader(GenericDiffusersLoader):
         patch_wan_causal_conv3d_for_rocm()
         return AutoencoderKLWan.from_pretrained(
             config.path,
-            torch_dtype=torch.bfloat16,
+            torch_dtype=_wan_family_dtype(self._torch_dtype),
             local_files_only=True,
         )
 
-    def _load_qwen_image_vae(self, config: VAE_Checkpoint_QwenImage_Config) -> AnyModel:
-        """Load a Qwen Image VAE from a single safetensors file.
+    def _load_wan_family_vae(self, path: str) -> AnyModel:
+        """Load the 16-channel Wan 2.1 VAE from a single file in its original (non-diffusers) layout.
 
-        The Qwen Image VAE checkpoint is expected to be in the diffusers state-dict
-        layout (i.e. the same keys as `vae/diffusion_pytorch_model.safetensors` from
-        the Qwen-Image repo). `AutoencoderKLQwenImage` does not register a single-file
-        conversion in diffusers, so we instantiate the model with default config and
-        load the state dict directly.
+        Two registrations reach this: `VAE_Checkpoint_Anima_Config`, and the community `qwen-image`
+        redistribution of the same 194-tensor checkpoint.
+
+        Converts and constructs rather than calling `AutoencoderKLWan.from_single_file`, which would
+        fetch `Wan-AI/Wan2.1-T2V-14B-Diffusers::vae/config.json` over HTTP at load time and then
+        load non-strictly. The fetched config is a strict subset of diffusers' `AutoencoderKLWan`
+        defaults with identical values, so `z_dim=16` builds the same 194-tensor module.
+
+        A key the conversion did not produce is the failure that matters: `from_single_file` leaves
+        that parameter on the meta device and the model only fails at the first decode, so it is
+        checked here instead. Keys the module has no use for are not an error -- a redistribution
+        may carry extras -- but they are worth a line in the log.
+
+        Reads safetensors and pickled checkpoints alike, and runs in the configured precision except
+        float16, which is unstable on the Wan VAE -- see `_wan_family_dtype`.
+        """
+        import accelerate
+        from diffusers.loaders.single_file_utils import convert_wan_vae_to_diffusers
+        from diffusers.models.autoencoders import AutoencoderKLWan
+
+        from invokeai.backend.wan.rocm_causal_conv3d import patch_wan_causal_conv3d_for_rocm
+
+        patch_wan_causal_conv3d_for_rocm()
+
+        dtype = _wan_family_dtype(self._torch_dtype)
+        sd = convert_wan_vae_to_diffusers(_read_checkpoint(path))
+        for k in list(sd.keys()):
+            if sd[k].is_floating_point():
+                sd[k] = sd[k].to(dtype)
+
+        self._ram_cache.make_room(sum(t.nelement() * t.element_size() for t in sd.values()))
+
+        with accelerate.init_empty_weights():
+            model = AutoencoderKLWan(z_dim=16)
+
+        missing, unexpected = model.load_state_dict(sd, strict=False, assign=True)
+        if missing:
+            raise ValueError(
+                f"{path} does not convert to a complete Wan 2.1 VAE: {len(missing)} tensors are "
+                f"missing, starting with {sorted(missing)[:5]}."
+            )
+        if unexpected:
+            self._logger.warning(f"{path} carries {len(unexpected)} tensors the Wan 2.1 VAE does not use.")
+
+        model.eval()
+        return model
+
+    def _load_qwen_image_vae(self, config: VAE_Checkpoint_QwenImage_Config) -> AnyModel:
+        """Load a Qwen Image VAE from a single-file checkpoint.
+
+        Two layouts reach this method, and each is recognised by a key it must carry. Files exported
+        from the Qwen-Image repo carry the diffusers state-dict keys and are loaded directly,
+        because `AutoencoderKLQwenImage` registers no single-file conversion in diffusers. Community
+        redistributions carry the original Wan-family layout, which needs converting; loading those
+        into `AutoencoderKLQwenImage` with `strict=True` failed with 194 missing keys, which made a
+        VAE unusable purely because of the base it happened to be probed as.
+
+        Both tests are positive. "Not the diffusers layout, therefore Wan" sent anything else --
+        a truncated download, an unrelated autoencoder -- into a conversion that silently produces
+        nothing the module recognises, where identification's own `strict=True` used to raise.
         """
         import accelerate
         from diffusers.models.autoencoders.autoencoder_kl_qwenimage import AutoencoderKLQwenImage
-        from safetensors.torch import load_file
 
-        sd = load_file(config.path)
+        keys = _checkpoint_keys(config.path)
 
-        if self._torch_dtype is not None:
-            for k in list(sd.keys()):
-                if sd[k].is_floating_point():
-                    sd[k] = sd[k].to(self._torch_dtype)
+        if _WAN_LAYOUT_MARKER in keys:
+            return self._load_wan_family_vae(config.path)
+
+        if _QWEN_IMAGE_LAYOUT_MARKER not in keys:
+            raise ValueError(
+                f"{config.path} is not a Qwen-Image VAE in either known layout: it carries neither "
+                f"`{_QWEN_IMAGE_LAYOUT_MARKER}` (the diffusers export) nor `{_WAN_LAYOUT_MARKER}` "
+                f"(the original Wan-family layout)."
+            )
+
+        sd = _read_checkpoint(config.path)
+
+        # The same autoencoder as the Wan-family layout above, so the same precision policy.
+        dtype = _wan_family_dtype(self._torch_dtype)
+        for k in list(sd.keys()):
+            if sd[k].is_floating_point():
+                sd[k] = sd[k].to(dtype)
 
         new_sd_size = sum(t.nelement() * t.element_size() for t in sd.values())
         self._ram_cache.make_room(new_sd_size)
@@ -302,7 +420,7 @@ class VAELoader(GenericDiffusersLoader):
         with accelerate.init_empty_weights():
             model = AutoencoderKLQwenImage()
 
-        model.load_state_dict(sd, strict=True, assign=True)
+        load_state_dict_ignoring_extras(model, sd, source="Qwen-Image VAE checkpoint", assign=True)
         model.eval()
         return model
 

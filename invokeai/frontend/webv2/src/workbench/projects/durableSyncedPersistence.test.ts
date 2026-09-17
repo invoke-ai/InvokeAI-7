@@ -173,6 +173,34 @@ beforeEach(() => {
 });
 
 describe('durable project persistence', () => {
+  it('activates a requested new project and restores it after saving and reloading', async () => {
+    const owner = captureAccountScope();
+    const api = createApi();
+    const previous = createDraftProject([]);
+    api.records.set(previous.id, toRecord(previous));
+    let session: WorkbenchSessionBlob = {
+      account: createInitialWorkbenchState().account,
+      activeProjectId: previous.id,
+      openProjectIds: [previous.id],
+    };
+    vi.mocked(api.loadSession).mockImplementation(() => Promise.resolve(session));
+    vi.mocked(api.saveSession).mockImplementation((state) => {
+      session = {
+        account: state.account,
+        activeProjectId: state.activeProjectId,
+        openProjectIds: state.projects.map((project) => project.id),
+      };
+      return Promise.resolve();
+    });
+    const service = createService(owner, api);
+    const loaded = await service.loadWorkbench({ createNew: true });
+    const created = loaded.state.projects.find((project) => project.id !== previous.id)!;
+    expect(loaded.state.activeProjectId).toBe(created.id);
+    await service.saveWorkbench(loaded.state);
+    const reloaded = await createService(owner, api).loadWorkbench();
+    expect(reloaded.state.activeProjectId).toBe(created.id);
+  });
+
   it('refuses to retarget a project while it has active queue runs', async () => {
     const owner = captureAccountScope();
     const api = createApi();

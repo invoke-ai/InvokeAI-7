@@ -10,7 +10,9 @@ describe('firstPartyHotkeyCatalog', () => {
     // save, and alt+1..4) + `app.openSettings` (mod+,) + `gallery.toggleStarredOnly`
     // (webv2 starred-only listing filter, unbound) + the two unbound canvas
     // gallery saves (`canvas.saveToGallery`, `canvas.saveBboxToGallery`).
+    // `app.togglePreview` (z) replaces the legacy `viewer.toggleViewer`.
     expect(firstPartyHotkeyCatalog).toHaveLength(104);
+    expect(firstPartyHotkeyCatalog.map((hotkey) => hotkey.id)).toContain('app.togglePreview');
     expect(firstPartyHotkeyCatalog.map((hotkey) => hotkey.id)).toContain('app.invoke');
     expect(firstPartyHotkeyCatalog.map((hotkey) => hotkey.id)).toContain('app.openCommandPalette');
     expect(firstPartyHotkeyCatalog.map((hotkey) => hotkey.id)).toContain('canvas.mergeDown');

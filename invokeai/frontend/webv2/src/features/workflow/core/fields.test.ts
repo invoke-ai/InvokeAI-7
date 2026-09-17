@@ -9,6 +9,8 @@ import {
   isModelFieldType,
   isWorkflowFieldValueValid,
   toLoraFieldCollectionList,
+  getRandomWorkflowFieldValue,
+  isShuffleableField,
 } from './fields';
 
 const single = (name: string): FieldType => ({ batch: false, cardinality: 'SINGLE', name });
@@ -44,11 +46,19 @@ const input = (overrides: Partial<FieldInputTemplate> = {}): FieldInputTemplate 
 });
 
 describe('workflow field validation', () => {
-  it('flags empty required direct values and ignores optional fields', () => {
-    expect(getWorkflowFieldInvalidReason({ isConnected: false, template: input(), value: '' })).toBe('Required value.');
+  it('flags missing required direct values and ignores optional fields', () => {
+    expect(getWorkflowFieldInvalidReason({ isConnected: false, template: input(), value: undefined })).toBe(
+      'Required value.'
+    );
     expect(getWorkflowFieldInvalidReason({ isConnected: false, template: input({ required: false }), value: '' })).toBe(
       null
     );
+  });
+
+  it('accepts an empty string as a required string value', () => {
+    expect(getWorkflowFieldInvalidReason({ isConnected: false, template: input(), value: '' })).toBe(null);
+    expect(isWorkflowFieldValueValid(input(), '')).toBe(true);
+    expect(isWorkflowFieldValueValid(input({ options: ['a'], type: single('EnumField') }), '')).toBe(false);
   });
 
   it('treats connected required fields as valid', () => {
@@ -103,13 +113,28 @@ describe('workflow field validation', () => {
     expect(isWorkflowFieldValueValid(input({ type: single('VideoField') }), {})).toBe(false);
   });
 
-  it('keeps COLLECTION media values on the generic non-null check (persisted arrays stay valid)', () => {
+  it('validates image collections as lists of image refs and keeps video collections on the non-null check', () => {
     const videos = input({ type: { batch: false, cardinality: 'COLLECTION', name: 'VideoField' } });
     const images = input({ type: { batch: false, cardinality: 'COLLECTION', name: 'ImageField' } });
 
     expect(isWorkflowFieldValueValid(videos, [{ video_name: 'a.mp4' }, { video_name: 'b.mp4' }])).toBe(true);
     expect(isWorkflowFieldValueValid(videos, undefined)).toBe(false);
     expect(isWorkflowFieldValueValid(images, [{ image_name: 'a.png' }])).toBe(true);
+    expect(isWorkflowFieldValueValid(images, [])).toBe(true);
+    expect(isWorkflowFieldValueValid(images, [{ image_name: '' }])).toBe(false);
+    expect(isWorkflowFieldValueValid(images, { image_name: 'a.png' })).toBe(false);
+  });
+
+  it('exposes image collections as direct inputs but keeps other collections connection-only', () => {
+    expect(isDirectInputField(input({ type: { batch: false, cardinality: 'COLLECTION', name: 'ImageField' } }))).toBe(
+      true
+    );
+    expect(isDirectInputField(input({ type: { batch: false, cardinality: 'COLLECTION', name: 'VideoField' } }))).toBe(
+      false
+    );
+    expect(isDirectInputField(input({ type: { batch: false, cardinality: 'COLLECTION', name: 'StringField' } }))).toBe(
+      false
+    );
   });
 
   it('accepts a LoRA collection as a list, a bare entry, or an empty list', () => {
@@ -179,5 +204,51 @@ describe('workflow field type helpers', () => {
     expect(isModelFieldType(single('UNetField'))).toBe(true);
     expect(isModelFieldType(single('CLIPField'))).toBe(true);
     expect(isModelFieldType(single('ImageField'))).toBe(false);
+  });
+});
+
+describe('getRandomWorkflowFieldValue', () => {
+  it('stays inside the template bounds and snaps to the step', () => {
+    const template = input({ maximum: 10, minimum: 2, multipleOf: 2, type: single('IntegerField') });
+
+    expect(getRandomWorkflowFieldValue(template, () => 0)).toBe(2);
+    expect(getRandomWorkflowFieldValue(template, () => 0.999)).toBe(10);
+    expect(getRandomWorkflowFieldValue(template, () => 0.55)).toBe(6);
+
+    const odd = input({ maximum: 9, minimum: 0, multipleOf: 2, type: single('IntegerField') });
+
+    expect(getRandomWorkflowFieldValue(odd, () => 0.999)).toBe(8);
+
+    const decimal = input({ maximum: 1, minimum: 0, multipleOf: 0.1, type: single('FloatField') });
+
+    expect(getRandomWorkflowFieldValue(decimal, () => 0.3)).toBe(0.3);
+  });
+
+  it('respects exclusive bounds for integers and keeps floats unrounded', () => {
+    const integer = input({ exclusiveMaximum: 5, exclusiveMinimum: 0, type: single('IntegerField') });
+
+    expect(getRandomWorkflowFieldValue(integer, () => 0)).toBe(1);
+    expect(getRandomWorkflowFieldValue(integer, () => 0.999)).toBe(4);
+
+    const float = input({ maximum: 1, minimum: 0, type: single('FloatField') });
+
+    expect(getRandomWorkflowFieldValue(float, () => 0.25)).toBe(0.25);
+
+    const steppedExclusive = input({
+      exclusiveMaximum: 1,
+      exclusiveMinimum: 0,
+      multipleOf: 0.5,
+      type: single('FloatField'),
+    });
+
+    expect(getRandomWorkflowFieldValue(steppedExclusive, () => 0)).toBe(0.5);
+    expect(getRandomWorkflowFieldValue(steppedExclusive, () => 0.999)).toBe(0.5);
+  });
+
+  it('shuffles only direct numeric fields', () => {
+    expect(isShuffleableField(input({ type: single('IntegerField') }))).toBe(true);
+    expect(isShuffleableField(input({ type: single('FloatField') }))).toBe(true);
+    expect(isShuffleableField(input({ input: 'connection', type: single('IntegerField') }))).toBe(false);
+    expect(isShuffleableField(input())).toBe(false);
   });
 });

@@ -1,6 +1,7 @@
 import type { GenerateLora, VaeModelConfig } from '@features/generation/contracts';
 import type { ModelConfig } from '@features/models';
 
+import { seedArchitectureCapabilities } from '@features/generation/core/architectureCapabilities.testing';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -12,6 +13,9 @@ import {
   syncUpscaleWidgetValuesWithModels,
   UPSCALE_PRESETS,
 } from './settings';
+
+// VAE compatibility is served by the backend now, and the accessor fails closed without it.
+seedArchitectureCapabilities();
 
 const model = (key: string, type: string, base: string, name = key): ModelConfig => ({
   base,
@@ -44,7 +48,7 @@ describe('upscale settings', () => {
       positivePromptHeightPx: 96,
       scale: 4,
       scheduler: 'kdpm_2',
-      shouldRandomizeSeed: true,
+      seedMode: 'random',
       steps: 30,
       structure: 0,
       tileOverlap: 128,
@@ -56,6 +60,15 @@ describe('upscale settings', () => {
       conservative: { creativity: -5, structure: 5 },
       creative: { creativity: 5, structure: -2 },
     });
+  });
+
+  it('reads the seed mode saved before modes existed from the random toggle', () => {
+    expect(normalizeUpscaleWidgetValues({ shouldRandomizeSeed: false })?.seedMode).toBe('fixed');
+    expect(normalizeUpscaleWidgetValues({ shouldRandomizeSeed: true })?.seedMode).toBe('random');
+    expect(normalizeUpscaleWidgetValues({ seedMode: 'decrement', shouldRandomizeSeed: true })?.seedMode).toBe(
+      'decrement'
+    );
+    expect(normalizeUpscaleWidgetValues({})?.seedMode).toBe('random');
   });
 
   it('normalizes partial persisted values and calculates multiple-of-eight output dimensions', () => {

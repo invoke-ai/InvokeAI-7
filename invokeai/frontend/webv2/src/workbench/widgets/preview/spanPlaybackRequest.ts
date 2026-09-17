@@ -14,6 +14,11 @@ import type { GalleryItemKey } from '@features/gallery';
  * The timestamp bounds it. The publisher raises Preview before publishing, so a player
  * mounts promptly; a request read long afterwards belongs to a gesture the user has moved
  * on from, and honouring it would start unmuted audio out of nowhere.
+ *
+ * The return channel is the playback STATE below: the player that honoured a request
+ * reports, under that request's token, whether the window is running and how to stop it,
+ * so the button that made the request can show a pause control for as long as — and only
+ * as long as — its own loop is the one on screen.
  */
 
 export interface VideoSpanPlaybackRequest {
@@ -38,14 +43,17 @@ const notifyListeners = (): void => {
   }
 };
 
+/** Publishes a request and returns its token, the handle playback state is reported under. */
 export const requestVideoSpanPlayback = (span: {
   endSeconds: number;
   itemKey: GalleryItemKey;
   startSeconds: number;
-}): void => {
+}): number => {
   nextToken += 1;
   currentRequest = { ...span, requestedAt: Date.now(), token: nextToken };
   notifyListeners();
+
+  return nextToken;
 };
 
 export const getVideoSpanPlaybackRequest = (): VideoSpanPlaybackRequest | null => currentRequest;
@@ -69,5 +77,67 @@ export const subscribeVideoSpanPlaybackRequests = (listener: () => void): (() =>
 
   return () => {
     listeners.delete(listener);
+  };
+};
+
+/**
+ * What the player is doing with the request it last honoured. `null` between loops: before
+ * any request has been acted on, once the user takes the playhead out of the window, and
+ * whenever the player leaves the screen.
+ *
+ * `isPlaying` follows the element's own `play`/`pause` events rather than the request, so
+ * a pause from the native controls — or an autoplay refusal — shows in the panel as
+ * faithfully as one from the panel's button, and a native play resumes it. `pause` leaves
+ * the loop armed for the same reason the autoplay case does: the native play control then
+ * resumes the selection, not the whole clip.
+ */
+export interface VideoSpanPlaybackState {
+  isPlaying: boolean;
+  pause: () => void;
+  token: number;
+}
+
+let currentState: VideoSpanPlaybackState | null = null;
+
+const stateListeners = new Set<() => void>();
+
+const notifyStateListeners = (): void => {
+  for (const listener of stateListeners) {
+    listener();
+  }
+};
+
+/** The player's report. Replaces whatever stood before: one loop is on screen at a time. */
+export const publishVideoSpanPlaybackState = (state: VideoSpanPlaybackState): void => {
+  if (
+    currentState !== null &&
+    currentState.token === state.token &&
+    currentState.isPlaying === state.isPlaying &&
+    currentState.pause === state.pause
+  ) {
+    return;
+  }
+
+  currentState = state;
+  notifyStateListeners();
+};
+
+/** Retires `token`'s state. A report from a newer loop is left alone. */
+export const clearVideoSpanPlaybackState = (token: number): void => {
+  if (currentState?.token !== token) {
+    return;
+  }
+
+  currentState = null;
+  notifyStateListeners();
+};
+
+export const getVideoSpanPlaybackState = (): VideoSpanPlaybackState | null => currentState;
+
+export const subscribeVideoSpanPlaybackState = (listener: () => void): (() => void) => {
+  stateListeners.add(listener);
+
+  return () => {
+    stateListeners.delete(listener);
   };
 };

@@ -12,7 +12,7 @@ const WidgetHost = ({ widget }: { widget: ReturnType<typeof getWidgetHosts>[numb
   // stable across renders; the false positive disappears the moment the
   // value is read through a property access instead of being the call's
   // direct result, which is what the sibling `WidgetRenderer` slots do.
-  // eslint-disable-next-line react/react-compiler
+  // eslint-disable-next-line react/static-components
   return <Host />;
 };
 

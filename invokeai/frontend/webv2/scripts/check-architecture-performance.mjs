@@ -1,13 +1,21 @@
 import assert from 'node:assert/strict';
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
+import { resolve } from 'node:path';
 
 import { analyzeSource, closeSourceAnalysis, primeSourceAnalysis } from '#architecture/source-analysis';
 
 import {
+  applyBuildReference,
+  BUDGET_REMEDY,
   BUILD_METRIC_KEYS,
+  BUILD_REFERENCE_FILE,
   checkRouteBudget,
+  createBuildReference,
+  isBudgetFailure,
+  loadPerformanceReference,
   measureRouteBuild,
+  PERFORMANCE_REFERENCE_DIR_VARIABLE,
+  PERFORMANCE_REFERENCE_LABEL_VARIABLE,
   validateArchitectureBaseline,
   validateChunkSourceManifest,
 } from './performance-budgets.mjs';
@@ -22,6 +30,9 @@ const chunkSourceManifest = validateChunkSourceManifest(
 );
 const readAsset = async (file) => new Uint8Array(await readFile(resolve(root, 'dist', file)));
 const updateBaseline = process.argv.includes('--update-baseline');
+const referenceDir = process.env[PERFORMANCE_REFERENCE_DIR_VARIABLE] || null;
+const referenceLabel = process.env[PERFORMANCE_REFERENCE_LABEL_VARIABLE] || null;
+const artifactDir = resolve(root, 'artifacts/architecture-performance');
 
 const assetCache = new Map();
 for (const chunk of Object.values(manifest)) {
@@ -32,38 +43,15 @@ for (const chunk of Object.values(manifest)) {
   }
 }
 
-const getLegacyOwnedLimit = (budget, measurement) => {
-  if (
-    typeof budget.baselineOwnedRawBytes !== 'number' ||
-    typeof budget.maxGrowthPercent !== 'number' ||
-    typeof budget.maxGrowthRawBytes !== 'number'
-  ) {
-    return measurement.ownedRawBytes;
-  }
-
-  return Math.max(
-    measurement.ownedRawBytes,
-    budget.baselineOwnedRawBytes +
-      Math.min(budget.maxGrowthRawBytes, Math.floor(budget.baselineOwnedRawBytes * budget.maxGrowthPercent))
-  );
-};
-
-const createLimits = (measurement, legacyBudget) =>
-  Object.fromEntries(
-    BUILD_METRIC_KEYS.map((key) => {
-      if (key === 'ownedRawBytes') {
-        return [key, getLegacyOwnedLimit(legacyBudget, measurement)];
-      }
-      if (key === 'requestCount' || key === 'scriptRequestCount') {
-        return [key, measurement[key]];
-      }
-      return [key, Math.ceil(measurement[key] * 1.01)];
-    })
-  );
-
 const routeEntries = Object.entries(baselineInput.build);
 const measurements = routeEntries.map(([routeId, budget]) =>
   measureRouteBuild(manifest, chunkSourceManifest, routeId, budget.source, (file) => assetCache.get(file))
+);
+// Written before any check so a failing main still records what it measured for the next PR.
+await mkdir(artifactDir, { recursive: true });
+await writeFile(
+  resolve(artifactDir, BUILD_REFERENCE_FILE),
+  `${JSON.stringify(createBuildReference(measurements), null, 2)}\n`
 );
 
 let baseline;
@@ -78,7 +66,6 @@ if (updateBaseline) {
             ...Object.fromEntries(BUILD_METRIC_KEYS.map((key) => [key, measurement[key]])),
             sourceOwners: measurement.sourceOwners,
           },
-          limits: createLimits(measurement, previousBudget),
           owner: previousBudget.owner,
           remediationTicket: previousBudget.remediationTicket,
           source: previousBudget.source,
@@ -103,9 +90,33 @@ if (updateBaseline) {
   baseline = validateArchitectureBaseline(baselineInput);
 }
 
-const failures = measurements.flatMap((measurement) =>
-  checkRouteBudget(measurement, baseline.build[measurement.routeId])
+const referenceName = referenceLabel ? `base-branch reference ${referenceLabel}` : 'base-branch reference';
+let reference = null;
+let referenceReason = null;
+if (referenceDir && !updateBaseline) {
+  const loaded = await loadPerformanceReference({
+    directory: referenceDir,
+    fileName: BUILD_REFERENCE_FILE,
+    kind: 'build',
+    metricKeys: BUILD_METRIC_KEYS,
+    root,
+  });
+  referenceReason = loaded.reason;
+  reference = loaded.reason ? null : loaded.reference;
+}
+const { build: budgets, uncovered: uncoveredRoutes } = applyBuildReference(baseline.build, reference);
+process.stdout.write(
+  reference
+    ? `Byte budgets: allowance over the higher of ${referenceName} captured ${reference.capturedAt} and committed measurements, bounded by the committed hard ceiling.\n`
+    : referenceReason
+      ? `Byte budgets: against committed baseline captured ${baseline.capturedAt}; ${referenceName} was recorded with ${referenceReason} and cannot be applied.\n`
+      : `Byte budgets: against committed baseline captured ${baseline.capturedAt}.\n`
 );
+if (uncoveredRoutes.length > 0) {
+  process.stdout.write(`Routes absent from the reference use the committed baseline: ${uncoveredRoutes.join(', ')}.\n`);
+}
+
+const failures = measurements.flatMap((measurement) => checkRouteBudget(measurement, budgets[measurement.routeId]));
 const launchpad = measurements.find((measurement) => measurement.routeId === 'launchpad');
 const editor = measurements.find((measurement) => measurement.routeId === 'editor');
 // Shared settings metadata must not turn Launchpad overlays into editor boot paths.
@@ -216,11 +227,29 @@ try {
     }
   }
 
-  const reportPath = resolve(root, 'artifacts/architecture-performance/build-report.json');
-  await mkdir(dirname(reportPath), { recursive: true });
+  const reportPath = resolve(artifactDir, 'build-report.json');
   await writeFile(
     reportPath,
-    `${JSON.stringify({ baselineCapturedAt: baseline.capturedAt, failures, importerCounts: Object.fromEntries(importerCounts), measurements }, null, 2)}\n`
+    `${JSON.stringify(
+      {
+        baselineCapturedAt: baseline.capturedAt,
+        capturedAt: new Date().toISOString(),
+        failures,
+        importerCounts: Object.fromEntries(importerCounts),
+        measurements,
+        reference: referenceDir
+          ? {
+              applied: reference !== null,
+              capturedAt: reference?.capturedAt ?? null,
+              label: referenceLabel,
+              reason: referenceReason,
+              uncoveredRoutes,
+            }
+          : null,
+      },
+      null,
+      2
+    )}\n`
   );
 
   if (failures.length > 0) {
@@ -231,6 +260,7 @@ try {
             `${failure.message} Owner: ${failure.owner}. Remediation: ${failure.remediationTicket}. Route: ${failure.routeId}.`
         )
         .join('\n')
+        .concat(failures.some((failure) => isBudgetFailure(failure.message)) ? `\n${BUDGET_REMEDY}` : '')
     );
   }
 

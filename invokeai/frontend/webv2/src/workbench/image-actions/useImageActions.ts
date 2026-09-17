@@ -26,6 +26,7 @@ import {
   patchGalleryItemCaches,
 } from '@features/gallery/queries';
 import { flushGenerateDrafts, setPendingPromptTemplateDraft } from '@features/generation/react';
+import { getArchitectureCapabilitiesSnapshot, subscribeArchitectureCapabilities } from '@features/generation/runtime';
 import { getMaxReferenceImages, isVaeModelConfig, isSupportedGenerateModel } from '@features/generation/settings';
 import { ensureModelsLoaded, useModelsSelector } from '@features/models';
 import { downloadBlob } from '@platform/browser/downloadBlob';
@@ -35,6 +36,7 @@ import {
   captureAccountScope,
   isAccountScopeCurrent,
 } from '@platform/state/accountLifecycle';
+import { useExternalStoreSelector } from '@platform/state/selectors';
 import { useQueryClient } from '@tanstack/react-query';
 import {
   createCanvasFromImages,
@@ -47,7 +49,7 @@ import { useWorkbenchPreferenceSelector } from '@workbench/settings/store';
 import { useOpenWorkbenchWidget } from '@workbench/useOpenWorkbenchWidget';
 import { getProjectWidgetValues } from '@workbench/widgetState';
 import { useWorkbenchCommands, useWorkbenchQueries } from '@workbench/WorkbenchContext';
-import { useMemo } from 'react';
+import { useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import type { RequestDeletionConfirmation } from './useDeletionConfirmation';
@@ -157,9 +159,20 @@ export const useImageActions = ({
   const models = useModelsSelector((snapshot) => snapshot.models);
   const supportedModels = useMemo(() => models.filter(isSupportedGenerateModel), [models]);
   const vaeModels = useMemo(() => models.filter(isVaeModelConfig).map((model) => model as VaeModelConfig), [models]);
-  const currentGenerateValues = useMemo(() => {
-    return getCurrentGenerateValues({ generateValues, supportedModels });
-  }, [generateValues, supportedModels]);
+  // Both read architecture policy, so they are read inside the capability store's selector: memoised
+  // on the project alone they would keep the answer given before the table arrived.
+  const { canUseAsReferenceImage, currentGenerateValues } = useExternalStoreSelector(
+    subscribeArchitectureCapabilities,
+    getArchitectureCapabilitiesSnapshot,
+    useCallback(() => {
+      const values = getCurrentGenerateValues({ generateValues, supportedModels });
+
+      return {
+        canUseAsReferenceImage: Boolean(values && values.referenceImages.length < getMaxReferenceImages(values.model)),
+        currentGenerateValues: values,
+      };
+    }, [generateValues, supportedModels])
+  );
 
   useMountEffect(() => {
     void ensureModelsLoaded();
@@ -906,6 +919,7 @@ export const useImageActions = ({
           kind,
           models,
           projectId,
+          t,
         });
 
         if (isAccountScopeCurrent(owner) && didRecall && (!projectId || queries.isActiveProject(projectId))) {
@@ -1000,10 +1014,7 @@ export const useImageActions = ({
           imageNames.map((name) => ({ kind: 'image', name })),
           starred
         ),
-      canUseAsReferenceImage: Boolean(
-        currentGenerateValues &&
-        currentGenerateValues.referenceImages.length < getMaxReferenceImages(currentGenerateValues.model)
-      ),
+      canUseAsReferenceImage,
       useAsReferenceImage: (image) => {
         const result = appendReferenceImage({ generateValues: getLatestGenerateValues(), image, models });
 
@@ -1017,6 +1028,7 @@ export const useImageActions = ({
     };
   }, [
     boards,
+    canUseAsReferenceImage,
     confirmImageDeletion,
     currentGenerateValues,
     commands,

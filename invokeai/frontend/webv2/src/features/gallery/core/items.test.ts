@@ -4,7 +4,9 @@ import type { GalleryImage, GeneratedImageContract } from './types';
 
 import {
   assertNeverGalleryItem,
+  classifyGalleryUpload,
   compareGalleryItems,
+  getGalleryUploadAccept,
   formatGalleryVideoDuration,
   galleryImageItemToGalleryImage,
   isGalleryImageItem,
@@ -240,5 +242,90 @@ describe('gallery item ordering', () => {
     const sorted = [image, video].sort((a, b) => compareGalleryItems(a, b, { orderDir: 'DESC' }));
 
     expect(sorted.map((item) => item.kind)).toEqual(['video', 'image']);
+  });
+});
+
+describe('classifyGalleryUpload', () => {
+  it.each([
+    ['image/png', 'photo.bin', 'image'],
+    ['image/jpeg', 'photo.bin', 'image'],
+    ['image/jpg', 'photo.bin', 'image'],
+    ['image/webp', 'photo.bin', 'image'],
+    ['video/mp4', 'clip.bin', 'video'],
+    ['video/quicktime', 'clip.bin', 'video'],
+    ['video/webm', 'clip.webm', 'video'],
+    ['audio/mpeg', 'song.bin', 'video'],
+    ['audio/wav', 'memo.bin', 'video'],
+    ['', 'photo.PNG', 'image'],
+    ['', 'clip.MOV', 'video'],
+    ['', 'memo.m4a', 'video'],
+    ['application/octet-stream', 'photo.jpeg', 'image'],
+    ['application/octet-stream', 'song.mp3', 'video'],
+    ['binary/octet-stream', 'clip.MP4', 'video'],
+    ['application/octet-stream', 'clip.wmv', 'video'],
+    ['application/octet-stream', 'song.WMA', 'video'],
+    ['application/pdf', 'photo.png', 'image'],
+  ] as const)('classifies MIME %s and name %s as %s', (type, name, kind) => {
+    expect(classifyGalleryUpload(new File(['media'], name, { type }))).toEqual({ kind });
+  });
+
+  it.each([
+    ['application/pdf', 'document.pdf'],
+    ['', 'archive.zip'],
+    ['image/gif', 'animation.gif'],
+  ] as const)('rejects unsupported MIME %s and name %s', (type, name) => {
+    expect(classifyGalleryUpload(new File(['media'], name, { type }))).toBeNull();
+  });
+
+  it('uses a supported MIME before a conflicting extension', () => {
+    expect(classifyGalleryUpload(new File(['media'], 'looks-like-video.mp4', { type: 'image/png' }))).toEqual({
+      kind: 'image',
+    });
+  });
+});
+
+describe('getGalleryUploadAccept', () => {
+  // Spelled out rather than derived, and deliberately not sampled: this list is the
+  // frontend's copy of ACCEPTED_VIDEO_EXTENSIONS + ACCEPTED_AUDIO_EXTENSIONS in
+  // invokeai/app/api/routers/videos.py, and the picker greying out a file the route would
+  // have taken is the bug this exists to catch. A "trim to the common formats" edit must
+  // fail here, so an arrayContaining sample will not do.
+  it('offers every container and audio format the video upload route ingests', () => {
+    expect(getGalleryUploadAccept(['video']).split(',')).toEqual([
+      'video/*',
+      'audio/*',
+      '.mp4',
+      '.mov',
+      '.m4v',
+      '.webm',
+      '.mkv',
+      '.avi',
+      '.mpg',
+      '.mpeg',
+      '.3gp',
+      '.wmv',
+      '.asf',
+      '.mp3',
+      '.m4a',
+      '.aac',
+      '.wav',
+      '.flac',
+      '.ogg',
+      '.oga',
+      '.opus',
+      '.aiff',
+      '.aif',
+      '.wma',
+    ]);
+  });
+
+  it('keeps images to the three formats the app stores without re-encoding', () => {
+    expect(getGalleryUploadAccept(['image'])).toBe('image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp');
+  });
+
+  it('concatenates the kinds it is given, so a mixed picker offers both', () => {
+    expect(getGalleryUploadAccept(['image', 'video'])).toBe(
+      `${getGalleryUploadAccept(['image'])},${getGalleryUploadAccept(['video'])}`
+    );
   });
 });

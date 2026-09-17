@@ -7,11 +7,13 @@ import type {
 } from '@features/generation/contracts';
 import type { ModelConfig } from '@features/models';
 import type { WorkbenchCommands } from '@workbench/workbenchStore';
+import type { TFunction } from 'i18next';
 
 import { galleryImages } from '@features/gallery';
 import {
   getDefaultGenerateSettings,
   getEffectiveReferenceImage,
+  hasArchitectureCapabilities,
   isSupportedGenerateModel,
   isVaeModelConfig,
   normalizeGenerateWidgetValues,
@@ -28,6 +30,7 @@ import {
   buildImageRecallSettings,
   getImageRecallMessage,
   getImageRecallTitle,
+  isImageRecallKindAvailable,
   type ImageRecallKind,
 } from './imageRecall';
 
@@ -90,6 +93,12 @@ export const filterAvailableReferenceImages = async (
   });
 };
 
+/** Why `getCurrentGenerateValues` answered null: no supported model, or no table to initialise from. */
+export const getMissingGenerateValuesMessage = (t: TFunction): string =>
+  hasArchitectureCapabilities()
+    ? t('widgets.generate.selectSupportedModelFirst')
+    : t('widgets.generate.capabilitiesUnavailableForSetup');
+
 export const getCurrentGenerateValues = ({
   generateValues,
   supportedModels,
@@ -101,6 +110,11 @@ export const getCurrentGenerateValues = ({
 
   if (normalizedValues) {
     return normalizedValues;
+  }
+
+  // A first set of values is synthesised from architecture policy, and every caller persists it.
+  if (!hasArchitectureCapabilities()) {
+    return null;
   }
 
   const fallbackModelKey = typeof generateValues.modelKey === 'string' ? generateValues.modelKey : null;
@@ -125,6 +139,7 @@ export const executeImageRecall = async ({
   models,
   owner: callerOwner,
   projectId,
+  t,
 }: {
   commands: Pick<WorkbenchCommands, 'generation' | 'notifications'>;
   generateValues: Record<string, unknown>;
@@ -135,6 +150,7 @@ export const executeImageRecall = async ({
   /** Caller-captured identity lifetime; direct synchronous callers may omit it. */
   owner?: AccountScope;
   projectId?: string;
+  t: TFunction;
 }): Promise<boolean> => {
   const owner = callerOwner ?? captureAccountScope();
   if (!isAccountScopeCurrent(owner)) {
@@ -152,7 +168,16 @@ export const executeImageRecall = async ({
     if (!currentGenerateValues) {
       commands.notifications.add({
         kind: 'info',
-        message: 'Select a supported Generate model first.',
+        message: getMissingGenerateValuesMessage(t),
+        title: 'Cannot recall image data',
+      });
+      return false;
+    }
+
+    if (!isImageRecallKindAvailable(kind)) {
+      commands.notifications.add({
+        kind: 'info',
+        message: t('widgets.generate.capabilitiesUnavailableForRecall'),
         title: 'Cannot recall image data',
       });
       return false;

@@ -1,6 +1,5 @@
 import type { GalleryImageItem, GalleryItem, GalleryItemKey, GalleryView } from '@features/gallery';
 import type {
-  GalleryQueuePlaceholder,
   GalleryItemsPage,
   GallerySemanticReference,
   getGallerySelectedImageQuery,
@@ -133,9 +132,6 @@ export interface PreviewNavigationState {
 }
 
 export const usePreviewNavigation = ({
-  activePlaceholder,
-  enableLiveFollow,
-  imageOrderDir,
   isComparing,
   localItems,
   queueItems,
@@ -148,16 +144,10 @@ export const usePreviewNavigation = ({
   semanticQuery,
   shouldFollowLive,
 }: {
-  /** The live slot from getGalleryGenerationSequence, or null. */
-  activePlaceholder: GalleryQueuePlaceholder | null;
-  /** Turns the live-follow preference back on (stepping onto the placeholder). */
-  enableLiveFollow: () => void;
   /** The page the gallery grid is on; a ranked list mirrors it (see below). */
   galleryPage: number;
   /** The gallery's own pagination mode, likewise mirrored by a ranked list. */
   galleryPaginationMode: 'infinite' | 'paginated';
-  /** The gallery's own sort settings, used while following live. */
-  imageOrderDir: 'ASC' | 'DESC';
   isComparing: boolean;
   /** Recent local generations, already normalized to gallery items. */
   localItems: GalleryImageItem[];
@@ -175,27 +165,17 @@ export const usePreviewNavigation = ({
     () => parseDateTokens(selectedImageQuery.searchTerm),
     [selectedImageQuery.searchTerm]
   );
-  const navigationBoardId =
-    shouldFollowLive && activePlaceholder ? activePlaceholder.boardId : selectedImageQuery.boardId;
-  const navigationGalleryView = shouldFollowLive ? 'images' : selectedImageQuery.galleryView;
-  const navigationOrderDir = shouldFollowLive ? imageOrderDir : selectedImageQuery.imageOrderDir;
-  // The grid partitions starred items into its strip, so Preview walks the
-  // list the selected item belongs to: the starred one for a starred item or
-  // under the starred filter, the unstarred listing otherwise. Following live
-  // means watching the board a (never starred) result lands in, so the
-  // filter is dropped for that mode as the search is.
-  const navigationStarredOnly = !shouldFollowLive && (selectedImageQuery.starredOnly || selectedItem?.starred === true);
-  // Read from the gallery's CURRENT search, not from a copy stamped onto the
-  // selection: the chip is a view mode, and Preview has to follow it the
-  // moment it is set or cleared or it walks a list that is no longer on
-  // screen. Following live means watching the board a generation is landing
-  // in, which no ranked result set describes, so the search is dropped for
-  // that mode exactly as the board's own search term is.
-  const navigationSemanticQuery = shouldFollowLive ? null : semanticQuery;
+  const navigationBoardId = selectedImageQuery.boardId;
+  const navigationGalleryView = selectedImageQuery.galleryView;
+  const navigationOrderDir = selectedImageQuery.imageOrderDir;
+  // Navigate the saved selection's listing even while live progress overlays it.
+  const navigationStarredOnly = selectedImageQuery.starredOnly || selectedItem?.starred === true;
+  // A ranked filmstrip follows the gallery's current search.
+  const navigationSemanticQuery = semanticQuery;
   const navigationSemanticKey = gallerySemanticReferenceKey(navigationSemanticQuery);
-  const hasNavigationContext = shouldFollowLive || hasSelectedItem;
+  const hasNavigationContext = hasSelectedItem;
   const navigationContextKey = `${shouldFollowLive}:${selectedItemKey ?? ''}:${navigationBoardId}:${navigationGalleryView}:${navigationOrderDir}:${selectedImageQuery.paginationMode}:${selectedImageQuery.page}:${selectedImageQuery.searchTerm}:${navigationStarredOnly}:${navigationSemanticKey}`;
-  const navigationQueryKey = `${shouldFollowLive}:${navigationBoardId}:${navigationGalleryView}:${navigationOrderDir}:${selectedImageQuery.paginationMode}:${selectedImageQuery.searchTerm}:${navigationStarredOnly}:${navigationSemanticKey}`;
+  const navigationQueryKey = `${navigationBoardId}:${navigationGalleryView}:${navigationOrderDir}:${selectedImageQuery.paginationMode}:${selectedImageQuery.searchTerm}:${navigationStarredOnly}:${navigationSemanticKey}`;
 
   // Lets a boundary fetch that resolves after the user has moved on compare the
   // context it started in against the one now on screen, and drop its stale
@@ -244,7 +224,7 @@ export const usePreviewNavigation = ({
         ? selectedImageQuery.page
         : navigationAnchor.page
       : selectedImageQuery.page;
-  const isPaginatedWindow = !shouldFollowLive && selectedImageQuery.paginationMode === 'paginated';
+  const isPaginatedWindow = selectedImageQuery.paginationMode === 'paginated';
   // A selection deeper than the base window's reach (a deep reveal from the
   // image map) anchors navigation at its own page — walking from offset 0
   // could never arrive at the cursor. Such a window is a slice from the
@@ -254,7 +234,6 @@ export const usePreviewNavigation = ({
   // anchor must stay where the selection was made, and the exclusions below
   // that hinge on "is this window mid-board?" are all derived from it.
   const deepAnchorOffset =
-    !shouldFollowLive &&
     !isPaginatedWindow &&
     navigationSemanticQuery === null &&
     navigationAnchorPage * GALLERY_PAGE_SIZE >= GALLERY_MAX_ROWS
@@ -267,9 +246,8 @@ export const usePreviewNavigation = ({
   // shorter than the board, on an empty one whose only member is the anchored
   // selection, leaving both arrows with nowhere to step. Setting a search also
   // resets the grid's page, which the stamped record never sees.
-  const navigationWindow = shouldFollowLive
-    ? ({ kind: 'infinite' } as const)
-    : navigationSemanticQuery !== null
+  const navigationWindow =
+    navigationSemanticQuery !== null
       ? galleryPaginationMode === 'paginated'
         ? ({ kind: 'anchor', offset: galleryPage * GALLERY_PAGE_SIZE } as const)
         : // In infinite mode the grid's page IS its window offset, so mirroring
@@ -292,11 +270,11 @@ export const usePreviewNavigation = ({
     ...galleryItemsInfiniteOptions(
       {
         boardId: navigationBoardId,
-        createdFrom: shouldFollowLive ? undefined : selectedImageSearch.range?.from,
-        createdTo: shouldFollowLive ? undefined : selectedImageSearch.range?.to,
+        createdFrom: selectedImageSearch.range?.from,
+        createdTo: selectedImageSearch.range?.to,
         galleryView: navigationGalleryView,
         orderDir: navigationOrderDir,
-        searchTerm: shouldFollowLive ? '' : selectedImageSearch.text,
+        searchTerm: selectedImageSearch.text,
         ...(navigationSemanticQuery ? { semanticQuery: navigationSemanticQuery } : {}),
         // The grid partitions: the listing is unstarred-only unless the
         // selection was made under the starred filter.
@@ -379,17 +357,14 @@ export const usePreviewNavigation = ({
     // top is not theirs to join; the grid draws the same line for its own
     // window. There, only in-flight work and the selection merge.
     const hasActiveSearch =
-      navigationStarredOnly ||
-      (!shouldFollowLive && (selectedImageSearch.text.trim() !== '' || selectedImageSearch.range !== undefined));
+      navigationStarredOnly || selectedImageSearch.text.trim() !== '' || selectedImageSearch.range !== undefined;
 
     if (!hasActiveSearch && !isPaginatedWindow && deepAnchorOffset === 0) {
       return localItems;
     }
 
     const refreshingSelectedSourceId =
-      !shouldFollowLive && isFetchingBoardItems && selectedItem?.kind === 'image'
-        ? selectedItem.sourceQueueItemId
-        : null;
+      isFetchingBoardItems && selectedItem?.kind === 'image' ? selectedItem.sourceQueueItemId : null;
 
     return localItems.filter(
       (item) =>
@@ -405,7 +380,6 @@ export const usePreviewNavigation = ({
     optimisticQueueItemIds,
     selectedImageSearch,
     selectedItem,
-    shouldFollowLive,
   ]);
   const localBoardItems = useMemo(
     () =>
@@ -418,16 +392,12 @@ export const usePreviewNavigation = ({
     [navigationBoardId, navigationGalleryView, navigationLocalItems, navigationOrderDir]
   );
   const previewLocalBoardItems = useMemo(() => {
-    if (
-      shouldFollowLive ||
-      !selectedItem ||
-      localBoardItems.some((item) => toGalleryItemKey(item) === selectedItemKey)
-    ) {
+    if (!selectedItem || localBoardItems.some((item) => toGalleryItemKey(item) === selectedItemKey)) {
       return localBoardItems;
     }
 
     return [selectedItem, ...localBoardItems];
-  }, [localBoardItems, selectedItem, selectedItemKey, shouldFollowLive]);
+  }, [localBoardItems, selectedItem, selectedItemKey]);
   const backendBoardItems = useMemo(() => flattenPreviewItems(boardItemsData), [boardItemsData]);
   // Recents belong to a board listing; a ranked list gets only the selection,
   // and only as the cursor anchor described in mergePreviewBoardItems.
@@ -446,37 +416,17 @@ export const usePreviewNavigation = ({
     [backendBoardItems, hasNavigationContext, navigationOrderDir, navigationSemanticQuery, previewMergeItems]
   );
   const isLoadingBoard = hasNavigationContext && isFetchingBoardItems;
-  const navigationSequence = useMemo(
-    () =>
-      getPreviewNavigationSequence({
-        // A ranked result set has no chronological insertion point, so the
-        // generating placeholder is left out — matching the gallery grid,
-        // which hides pending items while a similarity search is active.
-        activePlaceholder: navigationSemanticQuery ? null : activePlaceholder,
-        boardId: navigationBoardId,
-        boardImages: boardItems,
-        galleryView: navigationGalleryView,
-        imageOrderDir: navigationOrderDir,
-      }),
-    [
-      activePlaceholder,
-      boardItems,
-      navigationBoardId,
-      navigationGalleryView,
-      navigationOrderDir,
-      navigationSemanticQuery,
-    ]
-  );
+  const navigationSequence = useMemo(() => getPreviewNavigationSequence({ boardImages: boardItems }), [boardItems]);
   const navigationCursor = getPreviewNavigationCursor(navigationSequence, {
     isFollowingLive: shouldFollowLive,
     selectedItemKey,
   });
 
   // One navigation action shared by the arrow keys and the footer buttons.
-  // Compare mode stays inert and never exposes the placeholder.
+  // Comparison and live following never step through saved images.
   const navigate = useCallback(
     (offset: -1 | 1) => {
-      if (isComparing) {
+      if (isComparing || shouldFollowLive) {
         return;
       }
 
@@ -496,11 +446,7 @@ export const usePreviewNavigation = ({
           return;
         }
 
-        if (target.kind === 'item') {
-          selectPreviewItem(target.item);
-        } else {
-          enableLiveFollow();
-        }
+        selectPreviewItem(target.item);
         return;
       }
 
@@ -519,16 +465,7 @@ export const usePreviewNavigation = ({
         const nextBoardItems = mergePreviewBoardItems(nextBackendBoardItems, previewMergeItems, navigationOrderDir, {
           isRanked: navigationSemanticQuery !== null,
         });
-        const nextNavigationSequence = getPreviewNavigationSequence({
-          // Same exclusion as the render path: a ranked list has no
-          // chronological slot for the generating placeholder, and inserting
-          // one here would step onto a tile the sequence never showed.
-          activePlaceholder: navigationSemanticQuery ? null : activePlaceholder,
-          boardId: navigationBoardId,
-          boardImages: nextBoardItems,
-          galleryView: navigationGalleryView,
-          imageOrderDir: navigationOrderDir,
-        });
+        const nextNavigationSequence = getPreviewNavigationSequence({ boardImages: nextBoardItems });
         const nextNavigationCursor = getPreviewNavigationCursor(nextNavigationSequence, {
           isFollowingLive: shouldFollowLive,
           selectedItemKey,
@@ -540,15 +477,11 @@ export const usePreviewNavigation = ({
           // render closed over, and a lookup there would read it as an item
           // the window does not hold.
           stampSelection(nextTarget.item, result.data);
-        } else if (nextTarget?.kind === 'placeholder') {
-          enableLiveFollow();
         }
       });
     },
     [
-      activePlaceholder,
       backendBoardItems,
-      enableLiveFollow,
       fetchNextBoardItemsPage,
       fetchPreviousBoardItemsPage,
       hasNextBoardItemsPage,
@@ -556,10 +489,8 @@ export const usePreviewNavigation = ({
       isComparing,
       isFetchingNextBoardItemsPage,
       isFetchingPreviousBoardItemsPage,
-      navigationBoardId,
       navigationContextKey,
       navigationCursor,
-      navigationGalleryView,
       navigationOrderDir,
       navigationSemanticQuery,
       navigationSequence,
@@ -581,7 +512,7 @@ export const usePreviewNavigation = ({
         return;
       }
 
-      if (isComparing) {
+      if (isComparing || shouldFollowLive) {
         return;
       }
 
@@ -591,7 +522,7 @@ export const usePreviewNavigation = ({
       event.stopPropagation();
       navigate(event.key === 'ArrowLeft' ? -1 : 1);
     },
-    [isComparing, navigate]
+    [isComparing, navigate, shouldFollowLive]
   );
 
   // Warm the browser cache for the sequence neighbors so arrow-key navigation

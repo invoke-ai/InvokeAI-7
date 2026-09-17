@@ -4,7 +4,7 @@ stats.html
 artifacts/
 
 # vitest browser-mode failure artifacts
-.vitest-attachments
+.vitest/
 __screenshots__/
 
 # planning scratch, never committed

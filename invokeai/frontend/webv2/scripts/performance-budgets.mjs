@@ -1,3 +1,5 @@
+import { readFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
 import { brotliCompressSync, constants, gzipSync } from 'node:zlib';
 
 export const BUILD_METRIC_KEYS = [
@@ -157,6 +159,246 @@ export const validateChunkSourceManifest = (value) => {
   return value;
 };
 
+/**
+ * A route's ceiling is derived from a baseline measurement rather than committed alongside it, so
+ * the recorded file states only what was measured and a re-record touches one number per metric.
+ *
+ * Two bounds apply and the lower wins:
+ *
+ * - The allowance, `max(1%, 4 KB)` over the higher of the reference and committed measurement.
+ *   Re-recording the committed baseline deliberately accepts growth such as a dependency upgrade,
+ *   even before the base branch contains it. Previously recorded higher sizes stay allowed until
+ *   a downward re-record protects the savings. Neither allowance term works alone: 1% of
+ *   2 KB of CSS is 22 bytes, and a flat floor is meaningless against a 3 MB route.
+ * - The hard ceiling, `max(10%, 32 KB)` over the *committed* baseline. In CI the allowance is taken
+ *   over at least the base branch's own measurement, which moves with every merge. Without this
+ *   second bound, allowance-sized pull requests could compound without limit. The ceiling keeps
+ *   the committed file the outer bound a person has
+ *   reviewed, and a deliberate downward re-record takes effect on the next pull request.
+ *
+ * Request counts are capped exactly by both: an extra initial request is structural, not growth.
+ */
+export const GROWTH_ALLOWANCE_PERCENT = 0.01;
+export const GROWTH_ALLOWANCE_FLOOR_BYTES = 4096;
+export const HARD_CEILING_PERCENT = 0.1;
+export const HARD_CEILING_FLOOR_BYTES = 32768;
+
+const EXACT_METRIC_KEYS = new Set(['requestCount', 'scriptRequestCount']);
+
+const allowanceOver = (value, percent, floor) => value + Math.max(Math.ceil(value * percent), floor);
+
+export const deriveLimit = (key, baselineValue, committedValue = baselineValue) => {
+  if (EXACT_METRIC_KEYS.has(key)) {
+    return Math.min(baselineValue, committedValue);
+  }
+  return Math.min(
+    allowanceOver(Math.max(baselineValue, committedValue), GROWTH_ALLOWANCE_PERCENT, GROWTH_ALLOWANCE_FLOOR_BYTES),
+    allowanceOver(committedValue, HARD_CEILING_PERCENT, HARD_CEILING_FLOOR_BYTES)
+  );
+};
+
+export const deriveLimits = (baseline, keys, committed = baseline) =>
+  Object.fromEntries(keys.map((key) => [key, deriveLimit(key, baseline[key], committed[key])]));
+
+/**
+ * The base branch's own measurements, handed to a pull-request run by CI so the byte budgets are
+ * judged against growth main has accepted since the committed baseline was captured, while a
+ * higher committed baseline can explicitly accept new growth in the pull request. `sourceOwners`
+ * and every structural rule still come from the committed baseline, which is the deliberate record
+ * and is meant to keep failing until someone updates it.
+ *
+ * Each gate writes its reference file next to its report, before it checks anything, so a failing
+ * main still records what it measured. The file is deliberately small and versioned: it is read by
+ * a *different* commit's copy of these scripts, so a version or metric-set mismatch is an expected
+ * event that falls back to the committed baseline with the reason logged, not a wiring fault.
+ * A set directory that lacks the file, or a file that carries no other integer `schemaVersion` and
+ * is not this shape, is a wiring fault and fails with the variable and path named.
+ *
+ * Unset locally and on pushes to main. There the committed baseline is the reference, so a main
+ * that has outgrown the allowance since its last capture fails, which is the signal that a
+ * deliberate re-record is due, rather than its ceiling ratcheting up unreviewed.
+ */
+export const PERFORMANCE_REFERENCE_DIR_VARIABLE = 'WEBV2_PERF_REFERENCE_DIR';
+/** Whatever CI wants the reference called in logs and reports -- the cache key it restored. */
+export const PERFORMANCE_REFERENCE_LABEL_VARIABLE = 'WEBV2_PERF_REFERENCE_LABEL';
+export const PERFORMANCE_REFERENCE_SCHEMA_VERSION = 1;
+export const BUILD_REFERENCE_FILE = 'build-reference.json';
+export const BROWSER_REFERENCE_FILE = 'browser-reference.json';
+
+export const BUDGET_REMEDY =
+  'Inspect the added route assets in the performance reports. Byte limits use the normal allowance over the higher ' +
+  'of the reference and committed measurement, capped by the hard ceiling over the committed baseline. For reviewed, ' +
+  'intended byte growth, re-record with `pnpm run test:performance:build:update-baseline` and ' +
+  '`pnpm run test:performance:browser:update-baseline`. Re-record reductions too, to protect the savings. ' +
+  'Request counts have no allowance: their limit remains the lower of the reference and committed counts.';
+
+const projectMetrics = (source, keys) => Object.fromEntries(keys.map((key) => [key, source[key]]));
+
+export const createBuildReference = (measurements) => ({
+  capturedAt: new Date().toISOString(),
+  kind: 'build',
+  metricKeys: [...BUILD_METRIC_KEYS],
+  routes: Object.fromEntries(
+    measurements.map((measurement) => [measurement.routeId, projectMetrics(measurement, BUILD_METRIC_KEYS)])
+  ),
+  schemaVersion: PERFORMANCE_REFERENCE_SCHEMA_VERSION,
+});
+
+export const createBrowserReference = (routeReports) => ({
+  capturedAt: new Date().toISOString(),
+  kind: 'browser',
+  metricKeys: [...BROWSER_RESOURCE_METRIC_KEYS],
+  routes: Object.fromEntries(
+    routeReports.map((route) => [
+      `${route.id}:${route.stateProfile}`,
+      {
+        activatedResources: projectMetrics(route.activatedResources, BROWSER_RESOURCE_METRIC_KEYS),
+        resources: projectMetrics(route.resources, BROWSER_RESOURCE_METRIC_KEYS),
+      },
+    ])
+  ),
+  schemaVersion: PERFORMANCE_REFERENCE_SCHEMA_VERSION,
+});
+
+/** Structural shape only; version and metric-set drift are judged separately, since they fall back. */
+export const validatePerformanceReference = (value, path) => {
+  assertExactKeys(value, ['capturedAt', 'kind', 'metricKeys', 'routes', 'schemaVersion'], path);
+  assertNonEmptyString(value.capturedAt, `${path}.capturedAt`);
+  if (value.kind !== 'build' && value.kind !== 'browser') {
+    throw new TypeError(`${path}.kind must be "build" or "browser".`);
+  }
+  if (!Array.isArray(value.metricKeys) || value.metricKeys.some((key) => typeof key !== 'string')) {
+    throw new TypeError(`${path}.metricKeys must be an array of strings.`);
+  }
+  assertPlainObject(value.routes, `${path}.routes`);
+  if (!Number.isInteger(value.schemaVersion)) {
+    throw new TypeError(`${path}.schemaVersion must be an integer.`);
+  }
+  return value;
+};
+
+/** Why this reference cannot be applied by this copy of the scripts, or null when it can. */
+export const referenceIncompatibility = (reference, kind, metricKeys) => {
+  if (reference.schemaVersion !== PERFORMANCE_REFERENCE_SCHEMA_VERSION) {
+    return `schemaVersion ${String(reference.schemaVersion)} (this checkout writes ${String(PERFORMANCE_REFERENCE_SCHEMA_VERSION)})`;
+  }
+  if (reference.kind !== kind) {
+    return `kind "${reference.kind}" (expected "${kind}")`;
+  }
+  if (JSON.stringify(reference.metricKeys) !== JSON.stringify(metricKeys)) {
+    return `metric set ${JSON.stringify(reference.metricKeys)} (this checkout measures ${JSON.stringify(metricKeys)})`;
+  }
+  return null;
+};
+
+/**
+ * Reads the reference CI restored. Any problem short of an expected version or metric-set drift
+ * is thrown with the variable and path named, so a broken restore never passes as "no reference".
+ */
+export const loadPerformanceReference = async ({ directory, fileName, kind, metricKeys, root }) => {
+  const path = resolve(root, directory, fileName);
+  let raw;
+  try {
+    raw = await readFile(path, 'utf8');
+  } catch (error) {
+    throw new Error(
+      `${PERFORMANCE_REFERENCE_DIR_VARIABLE} is set to "${directory}" but ${path} could not be read: ${error.message}`
+    );
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    throw new Error(`${path} is not valid JSON: ${error.message}`);
+  }
+  // Judged before the shape is validated: a reference from a checkout with a different schema
+  // version may legitimately have a different shape, and that is the drift the fallback is for.
+  // Only an integer version that differs is drift; a file with no version at all was never
+  // written by any checkout and stays a wiring fault.
+  const version = parsed?.schemaVersion;
+  if (Number.isInteger(version) && version !== PERFORMANCE_REFERENCE_SCHEMA_VERSION) {
+    return {
+      reason: `schemaVersion ${String(version)} (this checkout writes ${String(PERFORMANCE_REFERENCE_SCHEMA_VERSION)})`,
+      reference: null,
+    };
+  }
+  const reference = validatePerformanceReference(parsed, `performance reference ${fileName}`);
+
+  return { reason: referenceIncompatibility(reference, kind, metricKeys), reference };
+};
+
+/**
+ * Whether a failure line is a byte or request budget being exceeded, as opposed to a source-owner
+ * graph or importer-count change. Only the former is answered by re-recording a baseline; for an
+ * owner-graph leak that advice would erase the very signal the pin exists to give.
+ */
+export const isBudgetFailure = (message) => / reached \d+ .*\(limit /.test(message);
+
+/**
+ * Committed route budgets with their byte baselines replaced by the reference's, keeping the
+ * committed numbers alongside for the hard ceiling and for failure messages. Routes the reference
+ * does not cover keep the committed baseline and are reported so the log can say so.
+ */
+export const applyBuildReference = (build, reference) => {
+  if (!reference) {
+    return { build, uncovered: [] };
+  }
+  const uncovered = [];
+  const applied = Object.fromEntries(
+    Object.entries(build).map(([routeId, budget]) => {
+      const metrics = reference.routes[routeId];
+      if (!metrics) {
+        uncovered.push(routeId);
+        return [routeId, budget];
+      }
+      // A malformed route must fail here: an undefined metric would derive a NaN ceiling, and
+      // every comparison against NaN is false, which would wave the whole route through.
+      validateMetricObject(metrics, BUILD_METRIC_KEYS, `reference build route ${routeId}`);
+
+      return [
+        routeId,
+        {
+          ...budget,
+          baseline: { ...budget.baseline, ...metrics },
+          committed: projectMetrics(budget.baseline, BUILD_METRIC_KEYS),
+        },
+      ];
+    })
+  );
+
+  return { build: applied, uncovered };
+};
+
+/** The browser-gate counterpart of `applyBuildReference`. */
+export const applyBrowserReference = (routes, reference) => {
+  if (!reference) {
+    return { routes, uncovered: [] };
+  }
+  const uncovered = [];
+  const applied = routes.map((expected) => {
+    const key = `${expected.id}:${expected.stateProfile}`;
+    const entry = reference.routes[key];
+    if (!entry) {
+      uncovered.push(key);
+      return expected;
+    }
+    const path = `reference browser route ${key}`;
+    assertExactKeys(entry, ['activatedResources', 'resources'], path);
+    validateMetricObject(entry.resources, BROWSER_RESOURCE_METRIC_KEYS, `${path}.resources`);
+    validateMetricObject(entry.activatedResources, BROWSER_RESOURCE_METRIC_KEYS, `${path}.activatedResources`);
+
+    return {
+      ...expected,
+      activatedResourceBaseline: entry.activatedResources,
+      committedActivatedResourceBaseline: expected.activatedResourceBaseline,
+      committedResourceBaseline: expected.resourceBaseline,
+      resourceBaseline: entry.resources,
+    };
+  });
+
+  return { routes: applied, uncovered };
+};
+
 export const validateArchitectureBaseline = (value) => {
   assertExactKeys(
     value,
@@ -173,7 +415,7 @@ export const validateArchitectureBaseline = (value) => {
 
   for (const [routeId, budget] of Object.entries(value.build)) {
     const path = `architecture baseline.build.${routeId}`;
-    assertExactKeys(budget, ['baseline', 'limits', 'owner', 'remediationTicket', 'source'], path);
+    assertExactKeys(budget, ['baseline', 'owner', 'remediationTicket', 'source'], path);
     assertNonEmptyString(budget.source, `${path}.source`);
     assertNonEmptyString(budget.owner, `${path}.owner`);
     assertNonEmptyString(budget.remediationTicket, `${path}.remediationTicket`);
@@ -184,12 +426,6 @@ export const validateArchitectureBaseline = (value) => {
       `${path}.baseline metrics`
     );
     assertStringArray(budget.baseline.sourceOwners, `${path}.baseline.sourceOwners`);
-    validateMetricObject(budget.limits, BUILD_METRIC_KEYS, `${path}.limits`);
-    for (const key of BUILD_METRIC_KEYS) {
-      if (budget.limits[key] < budget.baseline[key]) {
-        throw new Error(`${path}.limits.${key} cannot be below its captured baseline.`);
-      }
-    }
   }
 
   assertExactKeys(
@@ -229,7 +465,6 @@ const validateBrowserRoute = (route, path) => {
     [
       'domContentLoadedMedianMs',
       'activatedResourceBaseline',
-      'activatedResourceLimits',
       'id',
       'layoutAckMedianMs',
       'layoutReturnSwitchMedianMs',
@@ -241,7 +476,6 @@ const validateBrowserRoute = (route, path) => {
       'readyMark',
       'remediationTicket',
       'resourceBaseline',
-      'resourceLimits',
       'routeReadyMedianMs',
       'scriptSourceOwnerSet',
       'stateProfile',
@@ -268,19 +502,7 @@ const validateBrowserRoute = (route, path) => {
     BROWSER_RESOURCE_METRIC_KEYS,
     `${path}.activatedResourceBaseline`
   );
-  validateMetricObject(route.activatedResourceLimits, BROWSER_RESOURCE_METRIC_KEYS, `${path}.activatedResourceLimits`);
-  for (const key of BROWSER_RESOURCE_METRIC_KEYS) {
-    if (route.activatedResourceLimits[key] < route.activatedResourceBaseline[key]) {
-      throw new Error(`${path}.activatedResourceLimits.${key} cannot be below its captured baseline.`);
-    }
-  }
   validateMetricObject(route.resourceBaseline, BROWSER_RESOURCE_METRIC_KEYS, `${path}.resourceBaseline`);
-  validateMetricObject(route.resourceLimits, BROWSER_RESOURCE_METRIC_KEYS, `${path}.resourceLimits`);
-  for (const key of BROWSER_RESOURCE_METRIC_KEYS) {
-    if (route.resourceLimits[key] < route.resourceBaseline[key]) {
-      throw new Error(`${path}.resourceLimits.${key} cannot be below its captured baseline.`);
-    }
-  }
   assertNonEmptyString(route.scriptSourceOwnerSet, `${path}.scriptSourceOwnerSet`);
 };
 
@@ -535,18 +757,23 @@ const diffSortedValues = (expected, actual) => ({
 
 export const checkRouteBudget = (measurement, budget) => {
   const failures = [];
+  const committed = budget.committed ?? budget.baseline;
+  const limits = deriveLimits(budget.baseline, BUILD_METRIC_KEYS, committed);
 
   for (const key of BUILD_METRIC_KEYS) {
-    if (measurement[key] > budget.limits[key]) {
+    if (measurement[key] > limits[key]) {
+      const origin = budget.committed
+        ? `reference ${String(budget.baseline[key])}, committed ${String(committed[key])}`
+        : `captured ${String(budget.baseline[key])}`;
       failures.push(
         createFailure(
           measurement,
           budget,
           `${measurement.routeId} ${METRIC_LABELS[key]} reached ${String(measurement[key])} bytes/requests (limit ${String(
-            budget.limits[key]
-          )}, captured ${String(budget.baseline[key])}).`,
+            limits[key]
+          )}, ${origin}).`,
           measurement[key],
-          budget.limits[key]
+          limits[key]
         )
       );
     }
@@ -614,20 +841,35 @@ export const summarizeBrowserResources = (resources) => {
 export const checkBrowserRouteBudget = (route, expected, timingPolicy, expectedScriptSourceOwners) => {
   const failures = [];
   const label = `${route.id}/${route.stateProfile}`;
+  const committedResources = expected.committedResourceBaseline ?? expected.resourceBaseline;
+  const committedActivated = expected.committedActivatedResourceBaseline ?? expected.activatedResourceBaseline;
+  const resourceLimits = deriveLimits(expected.resourceBaseline, BROWSER_RESOURCE_METRIC_KEYS, committedResources);
+  const activatedResourceLimits = deriveLimits(
+    expected.activatedResourceBaseline,
+    BROWSER_RESOURCE_METRIC_KEYS,
+    committedActivated
+  );
+  const origin = (baselineValue, committedValue) =>
+    expected.committedResourceBaseline
+      ? `reference ${String(baselineValue)}, committed ${String(committedValue)}`
+      : `captured ${String(baselineValue)}`;
 
   for (const key of BROWSER_RESOURCE_METRIC_KEYS) {
-    if (route.resources[key] > expected.resourceLimits[key]) {
+    if (route.resources[key] > resourceLimits[key]) {
       failures.push(
-        `${label} ${key} reached ${String(route.resources[key])} (limit ${String(expected.resourceLimits[key])}, owner ${
-          route.owner
-        }, remediation ${route.remediationTicket}).`
+        `${label} ${key} reached ${String(route.resources[key])} (limit ${String(resourceLimits[key])}, ${origin(
+          expected.resourceBaseline[key],
+          committedResources[key]
+        )}, owner ${route.owner}, remediation ${route.remediationTicket}).`
       );
     }
-    if (route.activatedResources[key] > expected.activatedResourceLimits[key]) {
+    if (route.activatedResources[key] > activatedResourceLimits[key]) {
       failures.push(
         `${label} activated ${key} reached ${String(route.activatedResources[key])} (limit ${String(
-          expected.activatedResourceLimits[key]
-        )}, owner ${route.owner}, remediation ${route.remediationTicket}).`
+          activatedResourceLimits[key]
+        )}, ${origin(expected.activatedResourceBaseline[key], committedActivated[key])}, owner ${route.owner}, remediation ${
+          route.remediationTicket
+        }).`
       );
     }
   }

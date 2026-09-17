@@ -1,6 +1,7 @@
 import type { ModelConfig } from '@features/models';
 import type { CanvasControlLayerContract } from '@workbench/canvas-engine/api';
 
+import { seedArchitectureCapabilities } from '@features/generation/core/architectureCapabilities.testing';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -42,6 +43,8 @@ const controlLayer = (
 
 const sdxl = { base: 'sdxl' };
 const models = [model('sdxl-control', 'sdxl', 'controlnet'), model('sd1-control', 'sd-1', 'controlnet')];
+
+seedArchitectureCapabilities();
 
 describe('hasControlLayerContent', () => {
   it('matches the pipeline content gate', () => {

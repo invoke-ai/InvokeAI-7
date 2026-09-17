@@ -1,6 +1,7 @@
 import type { ProviderComponent } from '@platform/react/composeProviders';
 
 import { composeProviders } from '@platform/react/composeProviders';
+import { LivePreviewFollowProvider } from '@workbench/widgets/preview/livePreviewFollow';
 
 import { GalleryUiAdapterProvider } from './GalleryUiAdapter';
 import { GenerationUiAdapterProvider } from './GenerationUiAdapter';
@@ -11,6 +12,7 @@ import { VideoUiAdapterProvider } from './VideoUiAdapter';
 import { WorkflowUiAdapterProvider } from './WorkflowUiAdapter';
 
 export const workbenchUiPortProviders: ReadonlyArray<ProviderComponent> = [
+  LivePreviewFollowProvider,
   ModelsUiAdapterProvider,
   QueueUiAdapterProvider,
   GalleryUiAdapterProvider,

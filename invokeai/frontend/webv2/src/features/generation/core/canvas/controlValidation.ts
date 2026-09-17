@@ -1,6 +1,12 @@
+import {
+  getArchitectureFeatures,
+  hasArchitectureCapabilities,
+} from '@features/generation/core/architectureCapabilities';
+
 export type ControlAdapterKind = 'controlnet' | 't2i_adapter' | 'control_lora' | 'z_image_control';
 
 export type ControlValidationReason =
+  | 'capabilities_unavailable'
   | 'missing_model'
   | 'unsupported_adapter'
   | 'incompatible_base'
@@ -10,18 +16,15 @@ export type ControlValidationReason =
   | 'z_image_control_limit'
   | 'flux_fill_control_lora';
 
-export const isControlKindSupportedForBase = (base: string, kind: ControlAdapterKind): boolean => {
-  if (kind === 'controlnet') {
-    return base === 'sd-1' || base === 'sdxl' || base === 'flux';
-  }
-  if (kind === 't2i_adapter') {
-    return base === 'sd-1' || base === 'sdxl';
-  }
-  if (kind === 'z_image_control') {
-    return base === 'z-image';
-  }
-  return base === 'flux';
-};
+/**
+ * Which control adapters an architecture accepts, as the backend declares it.
+ *
+ * Only the base-to-kinds mapping comes from there. The limit rules further down -- one control
+ * LoRA, one Z-Image control, and FLUX Fill rejecting control LoRAs entirely -- have no column in
+ * the capability table and stay here.
+ */
+export const isControlKindSupportedForBase = (base: string, kind: ControlAdapterKind): boolean =>
+  getArchitectureFeatures(base)?.control_kinds.includes(kind) ?? false;
 
 export const getControlValidationReason = (params: {
   adapterModel: { base: string; type: string } | null;
@@ -48,6 +51,11 @@ export const getControlValidationReason = (params: {
   }
   if (!adapterModel) {
     return 'missing_model';
+  }
+  // Without the table every kind reads as unsupported. Report that the answer is not in yet rather
+  // than calling a valid adapter unsupported.
+  if (!hasArchitectureCapabilities()) {
+    return 'capabilities_unavailable';
   }
   if (!isControlKindSupportedForBase(mainBase, kind)) {
     return 'unsupported_adapter';

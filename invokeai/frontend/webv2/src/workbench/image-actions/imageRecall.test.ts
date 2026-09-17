@@ -6,9 +6,17 @@ import type {
   VaeModelConfig,
 } from '@features/generation/contracts';
 
-import { describe, expect, it } from 'vitest';
+import {
+  resetArchitectureCapabilities,
+  setArchitectureCapabilities,
+} from '@features/generation/core/architectureCapabilities';
+import {
+  architectureCapabilitiesFixture,
+  seedArchitectureCapabilities,
+} from '@features/generation/core/architectureCapabilities.testing';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { buildImageRecallSettings, getImageRecallCapabilities } from './imageRecall';
+import { buildImageRecallSettings, getImageRecallCapabilities, type ImageRecallKind } from './imageRecall';
 
 const sdxlModel: MainModelConfig = { base: 'sdxl', key: 'sdxl-model', name: 'SDXL', type: 'main' };
 const sd1Model: MainModelConfig = { base: 'sd-1', key: 'sd1-model', name: 'SD 1.5', type: 'main' };
@@ -96,7 +104,7 @@ const createValues = (overrides: Partial<GenerateWidgetValues> = {}): GenerateWi
   seamlessXAxis: false,
   seamlessYAxis: false,
   seed: 123,
-  shouldRandomizeSeed: true,
+  seedMode: 'random',
   steps: 30,
   t5EncoderModel: null,
   vae: null,
@@ -132,6 +140,8 @@ const metadata = {
   vae: { key: vaeModel.key },
   width: 513,
 };
+
+seedArchitectureCapabilities();
 
 describe('image recall', () => {
   it.each(['all', 'remix', 'prompts'] as const)(
@@ -210,7 +220,7 @@ describe('image recall', () => {
       scheduler: 'euler',
       seamlessXAxis: true,
       seed: 42,
-      shouldRandomizeSeed: false,
+      seedMode: 'fixed',
       steps: 25,
       width: 512,
     });
@@ -426,7 +436,7 @@ describe('image recall', () => {
 
   it('remixes without changing the current seed state', () => {
     const result = buildImageRecallSettings({
-      currentValues: createValues({ seed: 999, shouldRandomizeSeed: false }),
+      currentValues: createValues({ seed: 999, seedMode: 'fixed' }),
       image,
       kind: 'remix',
       metadata,
@@ -436,7 +446,7 @@ describe('image recall', () => {
     });
 
     expect(result?.values.seed).toBe(999);
-    expect(result?.values.shouldRandomizeSeed).toBe(false);
+    expect(result?.values.seedMode).toBe('fixed');
     expect(result?.values.positivePrompt).toBe('a recalled prompt');
     expect(result?.fields).not.toContain('seed');
   });
@@ -505,6 +515,98 @@ describe('image recall', () => {
     expect(result?.values.width).toBe(512);
     expect(result?.values.height).toBe(768);
     expect(result?.values.aspectRatioId).toBe('2:3');
+  });
+
+  it('recalls the size for an external generator, which has no architecture row to wait for', () => {
+    // The fail-closed rule below is for architectures the backend describes. An external provider
+    // never gets a row, so treating it the same way lost its dimension recall for good.
+    const externalModel = {
+      base: 'external',
+      capabilities: { modes: ['txt2img'], supports_seed: true },
+      format: 'external_api',
+      key: 'external-model',
+      name: 'OpenAI Image',
+      provider_id: 'openai',
+      type: 'external_image_generator',
+    } as GenerateWidgetValues['model'];
+    const recall = () =>
+      buildImageRecallSettings({
+        currentValues: createValues({ model: externalModel, modelKey: externalModel.key }),
+        image,
+        kind: 'dimensions',
+        metadata: null,
+        models: [],
+        supportedModels: [],
+        vaeModels: [],
+      });
+
+    expect(recall()?.values).toMatchObject({ height: 768, width: 512 });
+
+    resetArchitectureCapabilities();
+    try {
+      expect(recall()?.values).toMatchObject({ height: 768, width: 512 });
+    } finally {
+      setArchitectureCapabilities(architectureCapabilitiesFixture);
+    }
+  });
+
+  describe('before the capability table arrives', () => {
+    // Recalled dimensions are snapped to the architecture's grid and then persisted into the
+    // project. With no table every base reads as grid 8, so a 16- or 32-grid project would
+    // store a size its own denoise node rejects -- and nothing re-derives it afterwards.
+    beforeEach(() => {
+      resetArchitectureCapabilities();
+    });
+
+    afterEach(() => {
+      setArchitectureCapabilities(architectureCapabilitiesFixture);
+    });
+
+    it('recalls no size from the image rather than one snapped to the fallback grid', () => {
+      const result = buildImageRecallSettings({
+        currentValues: createValues(),
+        image,
+        kind: 'dimensions',
+        metadata: null,
+        models: [],
+        supportedModels: [],
+        vaeModels: [],
+      });
+
+      // Without the fix this is ['size'] with the width snapped to the fallback grid 8.
+      expect(result?.fields ?? []).not.toContain('size');
+    });
+
+    it('withholds Recall All and Remix but keeps prompts and seed', () => {
+      const metadata = { height: 768, model: { key: sdxlModel.key }, positive_prompt: 'a cat', seed: 7, width: 512 };
+      const recall = (kind: ImageRecallKind) =>
+        buildImageRecallSettings({
+          currentValues: createValues(),
+          image,
+          kind,
+          metadata,
+          models: [],
+          supportedModels: [sdxlModel],
+          vaeModels: [],
+        });
+
+      // Recall All used to apply the model's fallback defaults and skip the size, and the project kept
+      // that result after the table arrived.
+      expect(recall('all')).toBeNull();
+      expect(recall('remix')).toBeNull();
+      expect(recall('prompts')?.fields).toEqual(['prompts']);
+      expect(recall('seed')?.fields).toEqual(['seed']);
+      expect(
+        getImageRecallCapabilities({
+          currentValues: createValues(),
+          image,
+          metadata,
+          models: [],
+          supportedModels: [sdxlModel],
+          vaeModels: [],
+        })
+      ).toMatchObject({ all: false, clipSkip: false, prompts: true, remix: false, seed: true });
+    });
   });
 
   it('only enables standalone CLIP skip when the current model supports it', () => {

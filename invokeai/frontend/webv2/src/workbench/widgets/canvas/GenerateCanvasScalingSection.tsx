@@ -13,7 +13,9 @@ import type { Project } from '@workbench/projectContracts';
 import { Badge, createListCollection, HStack, NumberInput, Stack, Text } from '@chakra-ui/react';
 import { resolveCanvasProcessingSize } from '@features/generation/canvasProcessingSize';
 import { GenerationSettingsSection } from '@features/generation/components';
+import { getArchitectureCapabilitiesSnapshot, subscribeArchitectureCapabilities } from '@features/generation/runtime';
 import { clampDimension, getGenerationDimensions } from '@features/generation/settings';
+import { useExternalStoreSelector } from '@platform/state/selectors';
 import { Field, Select } from '@platform/ui';
 import {
   CANVAS_SCALE_METHODS,
@@ -29,28 +31,39 @@ const SELECT_POSITIONING = { placement: 'bottom-start', sameWidth: true } as con
 
 const selectCanvasValues = (project: Project): Record<string, unknown> => getProjectWidgetValues(project, 'canvas');
 
-/** The generate model's base/type and PiD mode decide the grid and optimal area the policy works in. */
+/**
+ * The generate model's base, type and variant, and the PiD mode, decide the grid and optimal area the
+ * policy works in -- the same model `compileCanvasGraph` compiles with, variant included, or the size
+ * shown here is not the size that is generated.
+ */
 const selectProcessingContext = (project: Project) => {
   const generate = getProjectWidgetValues(project, 'generate') as {
-    model?: { base?: string; type?: string } | null;
+    model?: { base?: string; type?: string; variant?: unknown } | null;
     pidMode?: PidMode;
   };
   const model = generate.model;
   return {
     bbox: project.canvas.document.bbox,
-    model: model && typeof model.base === 'string' ? { base: model.base, type: model.type ?? 'main' } : null,
+    model:
+      model && typeof model.base === 'string'
+        ? {
+            base: model.base,
+            type: model.type ?? 'main',
+            variant: typeof model.variant === 'string' ? model.variant : null,
+          }
+        : null,
     pidMode: generate.pidMode ?? 'off',
   };
 };
 
-const processingContextEqual = (
-  a: ReturnType<typeof selectProcessingContext>,
-  b: ReturnType<typeof selectProcessingContext>
-): boolean =>
+type ProcessingContext = ReturnType<typeof selectProcessingContext>;
+
+const processingContextEqual = (a: ProcessingContext, b: ProcessingContext): boolean =>
   a.bbox.width === b.bbox.width &&
   a.bbox.height === b.bbox.height &&
   a.model?.base === b.model?.base &&
   a.model?.type === b.model?.type &&
+  a.model?.variant === b.model?.variant &&
   a.pidMode === b.pidMode;
 
 export const GenerateCanvasScalingSection = () => {
@@ -59,11 +72,19 @@ export const GenerateCanvasScalingSection = () => {
   const values = useActiveProjectSelector(selectCanvasValues);
   const scaling = useMemo(() => readCanvasScaling(values), [values]);
   const context = useActiveProjectSelector(selectProcessingContext, processingContextEqual);
-  const model = context.model as Parameters<typeof resolveCanvasProcessingSize>[0] | null;
-  const dimensions = getGenerationDimensions(model ?? undefined, context.pidMode);
-  const processingSize = useMemo(
-    () => (model ? resolveCanvasProcessingSize(model, context.pidMode, context.bbox, scaling) : null),
-    [context, model, scaling]
+  // Both answer from the capability table, so they are read inside the store's selector: to React
+  // Compiler a bare call is a pure function of `context` and `scaling`, and would keep the fallback
+  // grid 8 / optimal 1024 it answered before the table arrived.
+  const { dimensions, processingSize } = useExternalStoreSelector(
+    subscribeArchitectureCapabilities,
+    getArchitectureCapabilitiesSnapshot,
+    useCallback(() => {
+      const model = context.model as Parameters<typeof resolveCanvasProcessingSize>[0] | null;
+      return {
+        dimensions: getGenerationDimensions(model ?? undefined, context.pidMode),
+        processingSize: model ? resolveCanvasProcessingSize(model, context.pidMode, context.bbox, scaling) : null,
+      };
+    }, [context, scaling])
   );
   const resizes =
     processingSize !== null &&

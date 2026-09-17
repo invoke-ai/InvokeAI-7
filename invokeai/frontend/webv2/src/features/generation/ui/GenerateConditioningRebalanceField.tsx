@@ -20,8 +20,8 @@ import { ConfirmDialog } from '@platform/ui/ConfirmDialog';
 import { Field } from '@platform/ui/Field';
 import { MenuContent } from '@platform/ui/Menu';
 import { RenameDialog } from '@platform/ui/RenameDialog';
+import { ScrubberField } from '@platform/ui/ScrubberField';
 import { Select } from '@platform/ui/Select';
-import { SliderNumberField } from '@platform/ui/SliderNumberField';
 import { Tooltip } from '@platform/ui/Tooltip';
 import { MoreHorizontalIcon, RotateCcwIcon } from 'lucide-react';
 import { useCallback, useId, useMemo, useState } from 'react';
@@ -30,6 +30,7 @@ import { useTranslation } from 'react-i18next';
 import { useGenerationUi } from './GenerationUiContext';
 import { ConditioningRebalanceBars } from './shared/ConditioningRebalanceBars';
 import { ConditioningRebalanceSparkline } from './shared/ConditioningRebalanceSparkline';
+import { GenerateFieldContextMenu } from './shared/GenerateFieldContextMenu';
 
 /** The gain slider's practical range. Typed values may go to the legacy schema's bound. */
 const GAIN_SLIDER_MAX = 10;
@@ -310,19 +311,23 @@ export const GenerateConditioningRebalanceField = ({
               </HStack>
             </Stack>
 
-            <Field label={t('widgets.generate.krea2RebalanceGain')}>
-              <SliderNumberField
-                ariaLabel={t('widgets.generate.krea2RebalanceGain')}
+            <GenerateFieldContextMenu
+              copyValue={() => String(settings.krea2RebalanceMultiplier)}
+              isAtDefault={settings.krea2RebalanceMultiplier === DEFAULT_KREA2_REBALANCE_MULTIPLIER}
+              onReset={() => onCommit({ krea2RebalanceMultiplier: DEFAULT_KREA2_REBALANCE_MULTIPLIER })}
+              resetLabel={t('widgets.generate.resetToDefault')}
+            >
+              <ScrubberField
                 defaultValue={DEFAULT_KREA2_REBALANCE_MULTIPLIER}
+                inputMax={GAIN_INPUT_MAX}
+                label={t('widgets.generate.krea2RebalanceGain')}
                 max={GAIN_SLIDER_MAX}
                 min={0}
-                numberInputMax={GAIN_INPUT_MAX}
-                resetLabel={t('widgets.generate.krea2RebalanceGainReset')}
                 step={0.1}
                 value={settings.krea2RebalanceMultiplier}
                 onChange={(multiplier) => onCommit({ krea2RebalanceMultiplier: multiplier })}
               />
-            </Field>
+            </GenerateFieldContextMenu>
 
             <Field
               error={

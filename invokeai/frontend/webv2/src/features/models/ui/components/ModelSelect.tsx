@@ -1,4 +1,4 @@
-/* eslint-disable react/react-compiler, react-perf/jsx-no-new-object-as-prop, react-perf/jsx-no-new-function-as-prop, react-perf/jsx-no-jsx-as-prop */
+/* eslint-disable react-perf/jsx-no-new-object-as-prop, react-perf/jsx-no-new-function-as-prop, react-perf/jsx-no-jsx-as-prop */
 import type { ModelConfig, ModelTaxonomyType } from '@features/models/core/types';
 import type { PickerGroup, PickerOptionState } from '@platform/ui/Picker';
 
@@ -47,6 +47,7 @@ const useLazyRelatedModelKeys = (modelKey: string | null): readonly string[] | n
 
   useEffect(() => {
     if (modelKey === null) {
+      // eslint-disable-next-line react/set-state-in-effect
       setRelatedKeys(null);
       return;
     }

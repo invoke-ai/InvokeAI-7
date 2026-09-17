@@ -1,14 +1,20 @@
 import type { ComponentModelConfig, VaeModelConfig } from '@features/generation/contracts';
 import type { WorkbenchCommands } from '@workbench/workbenchStore';
+import type { TFunction } from 'i18next';
 
 import { getEffectiveReferenceImage, isSupportedGenerateModel, isVaeModelConfig } from '@features/generation/settings';
 import { assertAccountScopeCurrent, isAccountScopeCurrent, type AccountScope } from '@platform/state/accountLifecycle';
 
-import { filterAvailableReferenceImages, getCurrentGenerateValues } from './executeImageRecall';
+import {
+  filterAvailableReferenceImages,
+  getCurrentGenerateValues,
+  getMissingGenerateValuesMessage,
+} from './executeImageRecall';
 import {
   buildRecallParametersSettings,
   getRecallParametersMessage,
   getRecallParametersSkipMessage,
+  isRecallParametersAvailable,
   type RecallParametersResult,
 } from './recallParameters';
 
@@ -70,6 +76,7 @@ export const executeRecallParameters = async ({
   owner,
   parameters,
   projectId,
+  t,
 }: {
   commands: Pick<WorkbenchCommands, 'generation' | 'notifications'>;
   getGenerateValues: () => Record<string, unknown> | null;
@@ -77,6 +84,7 @@ export const executeRecallParameters = async ({
   owner: AccountScope;
   parameters: Record<string, unknown>;
   projectId: string;
+  t: TFunction;
 }): Promise<boolean> => {
   if (!isAccountScopeCurrent(owner)) {
     return false;
@@ -97,7 +105,16 @@ export const executeRecallParameters = async ({
     if (!currentValues) {
       commands.notifications.add({
         kind: 'info',
-        message: 'Select a supported Generate model first.',
+        message: getMissingGenerateValuesMessage(t),
+        title: 'Cannot apply recalled parameters',
+      });
+      return false;
+    }
+
+    if (!isRecallParametersAvailable(parameters)) {
+      commands.notifications.add({
+        kind: 'info',
+        message: t('widgets.generate.capabilitiesUnavailableForRecall'),
         title: 'Cannot apply recalled parameters',
       });
       return false;

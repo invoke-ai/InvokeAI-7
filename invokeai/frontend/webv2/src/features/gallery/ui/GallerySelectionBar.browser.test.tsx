@@ -78,7 +78,6 @@ const createGallery = (overrides: Partial<GalleryStateView> = {}): GalleryStateV
       createBoard({ id: 'by_date:2026-07-30', kind: 'date', name: '30 July' }),
     ],
     compareImageKey: null,
-    currentItem: null,
     galleryView: 'images',
     isLoading: false,
     items: [createItem('a.png', false), createItem('b.png', true)],

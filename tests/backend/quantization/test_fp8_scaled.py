@@ -75,6 +75,19 @@ class TestExtract:
         assert extract_fp8_scaled_layers(sd) == {}
         assert "lin.weight_scale" not in sd
 
+    def test_unparsed_scale_beside_fp8_weight_is_refused(self):
+        """Loaders now drop unexpected keys at DEBUG, so a scale spelling the extractor does not read
+        must fail here instead of letting the weight load unscaled."""
+        q, scale = _fp8_weight(32, 16)
+        sd = {"lin.weight": q, "lin.weight_scale_inv": scale}
+        with pytest.raises(NotImplementedError, match="lin.weight_scale_inv"):
+            extract_fp8_scaled_layers(sd)
+
+    def test_scale_like_key_beside_non_fp8_weight_is_not_a_scale(self):
+        sd = {"norm.weight": torch.ones(16, dtype=torch.bfloat16), "norm.scale_shift": torch.ones(16)}
+        assert extract_fp8_scaled_layers(sd) == {}
+        assert "norm.scale_shift" in sd
+
     def test_strips_stray_marker_keys(self):
         q, scale = _fp8_weight(32, 16)
         sd = {

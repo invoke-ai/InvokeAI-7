@@ -1,6 +1,14 @@
 import type { GalleryImage, GalleryItem, GalleryItemKey, GalleryItemRef } from '@features/gallery';
 import type { CreateCanvasFromImagesResult } from '@workbench/canvas-operations/api';
 
+import {
+  resetArchitectureCapabilities,
+  setArchitectureCapabilities,
+} from '@features/generation/core/architectureCapabilities';
+import {
+  architectureCapabilitiesFixture,
+  seedArchitectureCapabilities,
+} from '@features/generation/core/architectureCapabilities.testing';
 import { accountLifecycle } from '@platform/state/accountLifecycle';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, createRef, type Ref, useImperativeHandle } from 'react';
@@ -236,7 +244,7 @@ const Probe = ({ modelKey = 'sd-1-model', ref }: { modelKey?: string; ref: Ref<I
   return null;
 };
 
-beforeEach(async () => {
+beforeEach(() => {
   vi.clearAllMocks();
   preferences.confirmImageDeletion = false;
   mocks.requestDeletionConfirmation.mockImplementation(
@@ -250,6 +258,13 @@ beforeEach(async () => {
   });
   accountLifecycle.activate('user-a');
   currentItemActionContext = null;
+});
+
+// After the account switch, which drops the table, and before the mount, so the Probe renders
+// with it present and is unmounted before it is dropped again; the order keeps both inside `act`.
+seedArchitectureCapabilities();
+
+beforeEach(async () => {
   host = document.createElement('div');
   document.body.append(host);
   root = createRoot(host);
@@ -314,6 +329,17 @@ describe('new canvas from images', () => {
       title: 'widgets.canvas.import.staleProject',
     });
     expect(mocks.openWorkbenchWidget).not.toHaveBeenCalled();
+  });
+});
+
+describe('reference image availability and the capability table', () => {
+  it('re-answers when the table lands without the project or the models changing', async () => {
+    await act(() => resetArchitectureCapabilities());
+    expect(actionsRef.current!.canUseAsReferenceImage).toBe(false);
+
+    // Nothing else re-renders the host: the same project values and the same model list.
+    await act(() => setArchitectureCapabilities(architectureCapabilitiesFixture));
+    expect(actionsRef.current!.canUseAsReferenceImage).toBe(true);
   });
 });
 
@@ -1270,7 +1296,8 @@ describe('primary successor after confirmed deletion', () => {
 
     const deletion = getItemActions().deleteItems([{ kind: 'image', name: primary.name }]);
     await vi.waitFor(() => expect(mocks.resolveItem).toHaveBeenCalledOnce());
-    accountLifecycle.activate('user-b');
+    // The switch drops the capability table, which the hook now subscribes to.
+    await act(() => accountLifecycle.activate('user-b'));
     resolveItem(successor);
     await act(() => deletion);
 

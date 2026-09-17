@@ -439,3 +439,6 @@ export const useInvocationTemplatesSelector = store.useSelector;
 
 /** Imperative read for the workbench reducer and route validation. */
 export const getInvocationTemplatesSnapshot = (): InvocationTemplatesSnapshot => store.getSnapshot();
+
+/** For readers that combine this store with another one; a single-store reader uses the selector. */
+export const subscribeInvocationTemplates = store.subscribe;

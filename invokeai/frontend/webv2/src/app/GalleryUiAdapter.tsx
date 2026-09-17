@@ -2,11 +2,11 @@ import type { GalleryUiAdapter } from '@features/gallery/react';
 import type { ReactNode } from 'react';
 
 import { GalleryUiProvider } from '@features/gallery/react';
-import { useActiveProgressTarget } from '@features/queue/react';
 import { useMountEffect } from '@platform/react/useMountEffect';
 import { captureAccountScope, isAccountScopeCurrent } from '@platform/state/accountLifecycle';
 import { useExportLibraryProject } from '@workbench/projects/useProjectFileActions';
 import { useOpenWorkbenchWidget } from '@workbench/useOpenWorkbenchWidget';
+import { useLivePreviewFollow } from '@workbench/widgets/preview/livePreviewFollow';
 import { getProjectWidgetInstance } from '@workbench/widgetState';
 import { useActiveProjectSelector, useWorkbenchCommands, useWorkbenchQueries } from '@workbench/WorkbenchContext';
 import { lazy, useMemo } from 'react';
@@ -25,24 +25,16 @@ const GalleryImageContextMenu = lazy(() =>
  * the Workbench aggregate. No second adapter is expected.
  */
 export const GalleryUiAdapterProvider = ({ children }: { children: ReactNode }) => {
-  const {
-    projectId,
-    projectName,
-    galleryValues,
-    generateValues,
-    queueItems,
-    antialiasProgressImages,
-    liveFollowEnabled,
-  } = useActiveProjectSelector((project) => ({
-    projectId: project.id,
-    projectName: project.name,
-    galleryValues: getProjectWidgetInstance(project, 'gallery')?.state?.values ?? EMPTY_WIDGET_VALUES,
-    generateValues: getProjectWidgetInstance(project, 'generate')?.state?.values ?? EMPTY_WIDGET_VALUES,
-    queueItems: project.queue.items,
-    antialiasProgressImages: project.settings.antialiasProgressImages,
-    liveFollowEnabled: project.settings.showProgressImagesInViewer,
-  }));
-  const liveProgressTarget = useActiveProgressTarget();
+  const { projectId, projectName, galleryValues, generateValues, antialiasProgressImages, liveFollowEnabled } =
+    useActiveProjectSelector((project) => ({
+      projectId: project.id,
+      projectName: project.name,
+      galleryValues: getProjectWidgetInstance(project, 'gallery')?.state?.values ?? EMPTY_WIDGET_VALUES,
+      generateValues: getProjectWidgetInstance(project, 'generate')?.state?.values ?? EMPTY_WIDGET_VALUES,
+      antialiasProgressImages: project.settings.antialiasProgressImages,
+      liveFollowEnabled: project.settings.showProgressImagesInViewer,
+    }));
+  const livePreview = useLivePreviewFollow();
   const { account, gallery, notifications, widgets } = useWorkbenchCommands();
   const queries = useWorkbenchQueries();
   const accountScope = captureAccountScope();
@@ -57,9 +49,6 @@ export const GalleryUiAdapterProvider = ({ children }: { children: ReactNode }) 
   });
   const adapter = useMemo<GalleryUiAdapter>(
     () => ({
-      account: {
-        enableLiveFollow: () => account.updateProjectPreferences({ showProgressImagesInViewer: true }),
-      },
       antialiasProgressImages,
       exportProject,
       gallery: {
@@ -75,11 +64,19 @@ export const GalleryUiAdapterProvider = ({ children }: { children: ReactNode }) 
       ItemActionsProvider: GalleryItemActionsAdapter,
       ImageContextMenu: GalleryImageContextMenu,
       liveFollowEnabled,
-      liveProgressTarget,
+      progressSessions: livePreview.gallerySessions,
+      pinnedProgressSessionId: livePreview.pinnedSessionId,
+      followProgressSession: (sessionId) => {
+        if (!isAccountScopeCurrent(accountScope) || !queries.isActiveProject(projectId)) {
+          return;
+        }
+        account.updateProjectPreferences({ showProgressImagesInViewer: true });
+        livePreview.pin(sessionId);
+        openWorkbenchWidget('preview');
+      },
       notifications,
       projectId,
       projectName,
-      queueItems,
       widgets: {
         openGallery: () => openWorkbenchWidget('gallery').ok,
         patchGalleryValues: (values) => widgets.patchValues('gallery', values),
@@ -94,12 +91,11 @@ export const GalleryUiAdapterProvider = ({ children }: { children: ReactNode }) 
       galleryValues,
       generateValues,
       liveFollowEnabled,
-      liveProgressTarget,
+      livePreview,
       notifications,
       openWorkbenchWidget,
       projectId,
       projectName,
-      queueItems,
       queries,
       widgets,
     ]

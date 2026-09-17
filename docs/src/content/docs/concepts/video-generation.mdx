@@ -1,7 +1,7 @@
 ---
 title: Video Generation
 description: Generate short videos — with audio on MiniMax H3 — from the Video panel. Covers the panel's controls, the Wan 2.2 and MiniMax H3 model families, and how to make longer videos.
-lastUpdated: 2026-08-22
+lastUpdated: 2026-09-16
 ---
 
 import { Card, CardGrid, Steps } from '@astrojs/starlight/components';
@@ -9,7 +9,7 @@ import { Card, CardGrid, Steps } from '@astrojs/starlight/components';
 InvokeAI generates short MP4 clips from a text prompt, one or two images, an existing video — or combinations of those — using two local model families:
 
 * **Wan 2.2** — the Alibaba Wan-AI family: three transformer variants covering text-to-video, image-to-video, first-to-last-frame interpolation, and video extension, with a 4-step **Lightning** fast path.
-* **MiniMax H3** — a single "FL2VA" (first/last-frame-to-video-plus-audio) model that covers every conditioning mode *and* generates a synchronized stereo soundtrack, with a 6-step **Turbo** fast path.
+* **MiniMax H3** — two task transformers, **FL2VA** (first/last-frame-to-video-plus-audio) and **Ref2VA** (reference-to-video-plus-audio), that between them cover every conditioning mode *and* generate a synchronized stereo soundtrack, with a **Turbo** fast path. A [hybrid](#the-hybrid-fl2va-quality-with-ref2va-conditioning) runs the two together.
 
 The easiest way to use either is the **Video panel** described on this page — no node graph required. The [bundled video workflows](/features/video-workflows/) expose the same pipelines in the workflow editor for graph-level control.
 
@@ -118,7 +118,7 @@ What appears here depends on the model:
 
 * **Wan single-file (GGUF/checkpoint) mains** need their supporting pieces: either a **Component Source** (any Diffusers Wan install, which supplies the text encoder and VAE) or a standalone **VAE** and **Wan T5 Encoder**. A14B mains also get a **Transformer (Low Noise)** slot for the second expert — without it, the high-noise expert runs the whole schedule.
 * **Wan Diffusers mains** bundle everything; the section stays collapsed.
-* **MiniMax H3** mains are the Diffusers components install; the two optional slots override the **transformer** and **text encoder** with single-file builds — this is how the starter bundle's int8 repacks are wired in.
+* **MiniMax H3** single-file transformer mains need **Model components** — a Diffusers H3 install that supplies the tokenizer, processor, and VAEs — plus a single-file **Text encoder** when that install carries no text-encoder weights (the starter bundle's does not). A **Ref2VA** main also offers the optional **Hybrid quality base (FL2VA)** slot and, once a base is picked, a **Ref2VA AdaLN from block** slider — see [the hybrid](#the-hybrid-fl2va-quality-with-ref2va-conditioning).
 
 If a Wan A14B pairing looks mis-wired — for example a low-noise-tagged file in the main slot — the panel shows a **non-blocking advisory** beneath the slots with a one-click **Swap experts** action. The tags come from a filename heuristic and your explicit wiring always wins, so deliberate cross-wiring still runs (the backend logs the same warning at generation time).
 
@@ -126,7 +126,7 @@ If a Wan A14B pairing looks mis-wired — for example a low-noise-tagged file in
 
 ### Recalling parameters
 
-Video generations record their parameters as metadata. Select a video in the gallery and use **Recall parameters** (in the viewer's header or the context menu) to load its prompt, model, dimensions, frames, LoRAs, and conditioning back into the Video panel — the same round-trip the image panel offers. Media that no longer exists is cleared rather than silently substituted.
+Video generations record their parameters as metadata. Select a video in the gallery and use **Recall parameters** (in the viewer's header or the context menu) to load its prompt, model, dimensions, frames, LoRAs, and conditioning back into the Video panel — the same round-trip the image panel offers. Media that no longer exists is cleared rather than silently substituted. The MiniMax H3 hybrid is part of the record too: recalling a hybrid video restores its base and start block, and recalling a video made without the hybrid clears the slot.
 
 ---
 
@@ -180,7 +180,7 @@ The bundles are independent; installing both totals ~56 GB (shared components ar
 
 MiniMax H3 ships as two task transformers that share every other component. **FL2VA** — *first/last-frame to video with audio* — covers text-to-video, first frame, last frame, both, and extend. **Ref2VA** — *reference to video with audio* — conditions a new clip on **reference media**: up to 3 videos and 9 images, in an order you choose (order changes the result). Every generation from either includes a **jointly generated stereo soundtrack**, muxed into the MP4 as AAC.
 
-The panel switches task by transformer: select the Ref2VA single-file transformer in **Model Components** and the conditioning sections become the ordered **References** list; select the FL2VA transformer to get the five frame/extend modes back. A video reference can contribute its image track, its soundtrack, or both — soundtrack-only references must be paired with at least one visual reference. Image references default to a high-detail 2048 px encoding ("Max"); the "Match generation size" option is several times faster at some fidelity cost.
+The panel switches task by transformer: select the Ref2VA single-file transformer as the **Model** and the conditioning sections become the ordered **References** list; select the FL2VA transformer to get the five frame/extend modes back. A video reference can contribute its image track, its soundtrack, or both — soundtrack-only references must be paired with at least one visual reference. Image references default to a high-detail 2048 px encoding ("Max"); the "Match generation size" option is several times faster at some fidelity cost.
 
 What makes it different from Wan in practice:
 
@@ -190,12 +190,28 @@ What makes it different from Wan in practice:
 * **Turbo fast path** — step-distillation LoRAs render in ~6–8 steps instead of ~50. The panel's Turbo toggle defaults on when one is installed (6 steps).
 * **Conditioning text encoder** is a truncated **Qwen3-VL-32B** — a vision-language model, which is why H3 follows detailed scene descriptions well.
 
+#### The hybrid: FL2VA quality with Ref2VA conditioning
+
+The two transformers are not equal. FL2VA produces the cleaner output; Ref2VA is the only one that takes references, but a known training defect degrades what it generates — video and audio artifacts that FL2VA does not show. A tensor-by-tensor comparison of the two checkpoints shows they differ almost only in their per-block **AdaLN modulation projections** — the small time-conditioning layers that tell each block how far along the denoise it is. Attention, MLPs, and output heads are near-identical.
+
+The **hybrid** exploits that: it runs the FL2VA transformer with Ref2VA's AdaLN projections swapped in for the upper part of the network. References still route (the task is decided by those projections), while everything else keeps FL2VA's quality.
+
+To use it:
+
+1. Select the **Ref2VA** transformer as the **Model**, as for any reference generation.
+2. Under **Model Components**, pick the FL2VA transformer in **Hybrid quality base (FL2VA)**. The slot lists only files of the same kind as the model — pruned with pruned, full with full — because the projections have different shapes otherwise.
+3. Leave **Ref2VA AdaLN from block** at its default of **25** to start. H3 has 50 blocks (0–49); blocks from the chosen one through 49 keep Ref2VA's projections, earlier blocks use FL2VA's. Lower values follow the references more closely at more of Ref2VA's quality cost; higher values are cleaner but weaker on adherence.
+
+Nothing is merged or written to disk: at generation time the loader loads the FL2VA base and the selected AdaLN tensors are read from the Ref2VA file and swapped in for the duration of the run. On the pruned starter repacks that costs about 40 MB of RAM; full-size pairs cost far more (roughly 520 MB per selected block). The **Turbo** toggle keys off the model, so it picks the Ref2VA Turbo LoRA (8 steps with the LightX2V release); the FL2VA Turbo can be added by hand under **Concepts** as an experiment, since neither distillation saw the hybrid's mixed path. Your own LoRAs apply on top of the hybrid as usual.
+
+The hybrid is an experiment adopted from the community — see the acknowledgements below. Early renders with the defaults were free of the artifacts Ref2VA alone produced, but judge it on your own results rather than treating it as a fixed improvement.
+
 #### Installing MiniMax H3
 
 The **MiniMax H3** starter bundle (~85 GB) installs the working set:
 
-* **MiniMax H3 Components** (~11 GB) — the Diffusers-format main: tokenizer, processor, and the video + audio VAEs. **This is the model you select in the Video panel.**
-* **MiniMax H3 FL2VA Transformer (int8, pruned)** and **MiniMax H3 Ref2VA Transformer (int8, pruned)** (~21 GB each) plus **MiniMax H3 Text Encoder (int8)** (~27 GB) — single-file builds that slot into the panel's **Model Components** overrides (the bundled templates and the panel wire them the same way). The transformer you pick decides the task: FL2VA for the frame/extend modes, Ref2VA for reference conditioning.
+* **MiniMax H3 FL2VA Transformer (int8, pruned)** and **MiniMax H3 Ref2VA Transformer (int8, pruned)** (~21 GB each) — single-file transformer builds. **One of these is the model you select in the Video panel**, and the one you pick decides the task: FL2VA for the frame/extend modes, Ref2VA for reference conditioning (with FL2VA optionally in the hybrid base slot).
+* **MiniMax H3 Components** (~11 GB) — the Diffusers-format install of the tokenizer, processor, and video + audio VAEs, which goes in the panel's **Model components** slot — plus **MiniMax H3 Text Encoder (int8)** (~27 GB), the single-file build for its **Text encoder** slot (the Components install carries no text-encoder weights). The bundled templates wire them the same way.
 * **MiniMax H3 Turbo LoRA**, **MiniMax H3 LightX2V Turbo LoRA**, and **MiniMax H3 LightX2V Ref2V Turbo LoRA** — independent step-distillation LoRAs; the Turbo toggle picks the one matching the selected task (the Ref2V build is trained against the Ref2VA transformer only). The earlier 4-step *MiniMax H3 Ref2V Turbo LoRA* (v0.1) is no longer a starter: it pans the camera rightward whenever a video reference is used. If you still have it installed, the toggle prefers the LightX2V release once that is installed too.
 
 Reference conditioning adds rows to every denoising step roughly linearly: a few references typically cost ~1–2 GiB of extra activation memory, but a full-detail 2048×2048 image reference alone adds ~4096 rows (about 1 GiB), and three full-length video references can triple the packed sequence. Prefer "Match generation size" for image references and trimmed clips for video references on smaller cards.
@@ -285,4 +301,4 @@ Almost always a **VAE mismatch** (16-ch vs 48-ch on Wan) or a scheduler override
 
 ## Acknowledgements
 
-Wan 2.2 model family by the Alibaba Wan-AI team; Lightning distillation LoRAs by [lightx2v](https://huggingface.co/lightx2v/Wan2.2-Lightning); GGUF quantizations by [QuantStack](https://huggingface.co/QuantStack). MiniMax H3 by [MiniMax AI](https://huggingface.co/MiniMaxAI/MiniMax-H3); int8 single-file repacks by [Comfy-Org](https://huggingface.co/Comfy-Org/MiniMax-H3); Turbo distillation LoRAs by [larryvrh](https://huggingface.co/larryvrh/MiniMax-H3-Turbo-Lora) and [LightX2V](https://huggingface.co/lightx2v/Minimax-h3-Turbo).
+Wan 2.2 model family by the Alibaba Wan-AI team; Lightning distillation LoRAs by [lightx2v](https://huggingface.co/lightx2v/Wan2.2-Lightning); GGUF quantizations by [QuantStack](https://huggingface.co/QuantStack). MiniMax H3 by [MiniMax AI](https://huggingface.co/MiniMaxAI/MiniMax-H3); int8 single-file repacks by [Comfy-Org](https://huggingface.co/Comfy-Org/MiniMax-H3); Turbo distillation LoRAs by [larryvrh](https://huggingface.co/larryvrh/MiniMax-H3-Turbo-Lora) and [LightX2V](https://huggingface.co/lightx2v/Minimax-h3-Turbo). The FL2VA/Ref2VA hybrid follows the per-tensor analysis and reference implementation in [scottmudge/ComfyUI_MinimaxH3HybridLoader](https://github.com/scottmudge/ComfyUI_MinimaxH3HybridLoader).

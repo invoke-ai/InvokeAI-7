@@ -355,6 +355,21 @@ export const inputShellInteraction = {
   _hover: { ...formControlInteraction._hover, _focusWithin: formControlFocused },
 };
 
+/**
+ * `formControlInteraction` for `platform/ui/ScrubberField`: the frame is the
+ * pointer target and clicks focus an inner layer programmatically, so the
+ * accent border keys on keyboard focus (`:focus-visible`) or the inline editor,
+ * never on a plain click, which shows the dragging state instead.
+ */
+export const scrubberInteraction = {
+  ...formControlInteraction,
+  '&:has(:focus-visible), &[data-editing]': formControlFocused,
+  _hover: {
+    ...formControlInteraction._hover,
+    '&:has(:focus-visible), &[data-editing]': formControlFocused,
+  },
+};
+
 export const inputRecipe = defineRecipe({
   ...chakraRecipes.input,
   variants: {

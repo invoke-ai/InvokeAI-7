@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 import torch
 
-from invokeai.app.invocations.flux_vae_decode import FluxVaeDecodeInvocation
+from invokeai.app.invocations.vae.flux_vae_decode import FluxVaeDecodeInvocation
 from invokeai.backend.flux.modules.autoencoder import DEFAULT_TILE_SAMPLE_MIN_SIZE
 from invokeai.backend.flux.modules.autoencoder import AutoEncoder as FluxAutoEncoder
 
@@ -70,7 +70,7 @@ class TestForceTiledDecode:
     def test_the_reservation_matches_the_decode_that_will_run(self, force_tiled_decode, expected_tile_size):
         """A tiled decode reserved for a single pass is the OOM the retry exists to avoid, and an
         untiled decode reserved for a tile evicts models it did not need to."""
-        path = "invokeai.app.invocations.flux_vae_decode.estimate_vae_working_memory_flux"
+        path = "invokeai.app.invocations.vae.flux_vae_decode.estimate_vae_working_memory_flux"
         _, _, context = _build_decode_mocks(
             torch.zeros(1, 16, 64, 64), torch.zeros(1, 3, 512, 512), force_tiled_decode=force_tiled_decode
         )

@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 
 import torch
 
-from invokeai.app.invocations.anima_text_encoder import AnimaTextEncoderInvocation
+from invokeai.app.invocations.text_encoder.anima_text_encoder import AnimaTextEncoderInvocation
 
 
 class FakeQwen3Encoder(torch.nn.Module):
@@ -64,7 +64,7 @@ class FakeLoadedModel:
 
 
 def _run_encode(monkeypatch, compute_device: torch.device) -> FakeQwen3Encoder:
-    module_path = "invokeai.app.invocations.anima_text_encoder"
+    module_path = "invokeai.app.invocations.text_encoder.anima_text_encoder"
     text_encoder = FakeQwen3Encoder()
     tokenizer = FakeQwen3Tokenizer()
 

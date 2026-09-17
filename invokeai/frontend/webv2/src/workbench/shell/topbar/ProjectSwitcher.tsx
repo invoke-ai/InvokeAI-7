@@ -37,7 +37,7 @@ import {
   Trash2Icon,
   XIcon,
 } from 'lucide-react';
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { projectSwitcherStore, setProjectSwitcherOpen } from './projectSwitcherStore';
@@ -59,6 +59,8 @@ export const ProjectSwitcher = () => {
   const { closeProject, deleteProject, openProject } = useProjectActions();
   const startExport = useExportOpenProject();
   const openWorkbenchWidget = useOpenWorkbenchWidget();
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const returnFocus = useCallback(() => triggerRef.current, []);
   const [renameTarget, setRenameTarget] = useState<{ id: string; name: string } | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
   const [isOpenDialogVisible, setIsOpenDialogVisible] = useState(false);
@@ -175,6 +177,7 @@ export const ProjectSwitcher = () => {
             under the control. The label already names it. */}
         <Menu.Trigger asChild>
           <Button
+            ref={triggerRef}
             aria-label={t('topbar.projectSwitcher.trigger', { name: activeProjectName })}
             size="sm"
             variant="ghost"
@@ -258,17 +261,16 @@ export const ProjectSwitcher = () => {
         </Portal>
       </Menu.Root>
 
-      {renameTarget ? (
-        <RenameDialog
-          initialName={renameTarget.name}
-          isOpen
-          label={t('projects.renameProjectNameLabel')}
-          submitLabel={t('common.rename')}
-          title={t('projects.renameProject')}
-          onClose={closeRenameDialog}
-          onSubmit={renameProject}
-        />
-      ) : null}
+      <RenameDialog
+        finalFocusEl={returnFocus}
+        initialName={renameTarget?.name ?? ''}
+        isOpen={renameTarget !== null}
+        label={t('projects.renameProjectNameLabel')}
+        submitLabel={t('common.rename')}
+        title={t('projects.renameProject')}
+        onClose={closeRenameDialog}
+        onSubmit={renameProject}
+      />
       <ConfirmDialog
         body={`${t('projects.deleteProjectTabBody', { name: deleteTarget?.name ?? '' })} ${t('projects.deleteProjectBoardNote')}`}
         confirmLabel={t('projects.deleteProject')}

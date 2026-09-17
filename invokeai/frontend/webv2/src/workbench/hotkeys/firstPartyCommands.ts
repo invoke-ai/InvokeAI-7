@@ -24,11 +24,13 @@ import { toggleCommandPalette } from '@workbench/palette/paletteStore';
 import { openWorkbenchSettings } from '@workbench/settings/settingsDialogStore';
 import { getWorkbenchPreferences } from '@workbench/settings/store';
 import { openProjectSwitcher } from '@workbench/shell/topbar/projectSwitcherStore';
-import { openWidgetPlacement } from '@workbench/widgetPlacementCommands';
+import { openWidgetPlacement, toggleCenterPreview } from '@workbench/widgetPlacementCommands';
+import { getWidgetPlacementProject } from '@workbench/widgetPlacementMeta';
 import { getWidgetsForRegion } from '@workbench/widgetRegistry';
 import { getProjectWidgetValues } from '@workbench/widgetState';
 import { useWorkbenchCommands, useWorkbenchExtensions, useWorkbenchQueries } from '@workbench/WorkbenchContext';
 import { resolvePanelToggle } from '@workbench/workbenchState';
+import { useTranslation } from 'react-i18next';
 
 const layoutPresetCommands = builtInLayoutPresetDescriptors.map(({ hotkeyId, preset }) => ({
   id: `app.${hotkeyId}`,
@@ -70,6 +72,7 @@ export const FIRST_PARTY_APP_COMMAND_IDS = [
   'app.toggleRightPanel',
   'app.resetPanelLayout',
   'app.togglePanels',
+  'app.togglePreview',
 ] as const;
 
 export const FIRST_PARTY_IMAGE_RECALL_COMMAND_IDS = Object.keys(imageRecallCommands);
@@ -86,6 +89,7 @@ export const useRegisterFirstPartyCommands = () => {
   const { commands: commandApi } = useWorkbenchExtensions();
   const queries = useWorkbenchQueries();
   const queryClient = useQueryClient();
+  const { t } = useTranslation();
   const { layout, notifications, queue, widgets } = commands;
   useInvocationTemplatesSelector((snapshot) => snapshot.status);
 
@@ -132,6 +136,7 @@ export const useRegisterFirstPartyCommands = () => {
         models: getAvailableModels() ?? [],
         owner,
         projectId: activeProject.id,
+        t,
       });
 
       assertAccountScopeCurrent(owner);
@@ -359,6 +364,16 @@ export const useRegisterFirstPartyCommands = () => {
         },
         id: 'app.togglePanels',
         title: 'Toggle panels',
+      }),
+      commandApi.register({
+        handler: () =>
+          toggleCenterPreview({
+            getWidgetsForRegion,
+            project: getWidgetPlacementProject(queries.getSnapshot().activeProject),
+            widgets,
+          }),
+        id: 'app.togglePreview',
+        title: 'Toggle preview in center',
       }),
       ...Object.entries(imageRecallCommands).map(([id, kind]) =>
         commandApi.register({ handler: () => recallSelectedImage(kind), id, title: id })

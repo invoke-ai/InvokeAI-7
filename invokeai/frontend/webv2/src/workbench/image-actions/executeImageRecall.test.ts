@@ -1,6 +1,8 @@
 import type { GalleryImage } from '@features/gallery';
+import type { GenerateModelConfig } from '@features/generation/contracts';
 import type { ModelConfig } from '@features/models';
 import type { WorkbenchCommands } from '@workbench/workbenchStore';
+import type { TFunction } from 'i18next';
 
 import { accountLifecycle } from '@platform/state/accountLifecycle';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -14,7 +16,16 @@ const galleryApi = vi.hoisted(() => ({
 
 vi.mock('@features/gallery', () => galleryApi);
 
-import { executeImageRecall } from './executeImageRecall';
+import {
+  resetArchitectureCapabilities,
+  setArchitectureCapabilities,
+} from '@features/generation/core/architectureCapabilities';
+import {
+  architectureCapabilitiesFixture,
+  seedArchitectureCapabilities,
+} from '@features/generation/core/architectureCapabilities.testing';
+
+import { executeImageRecall, getCurrentGenerateValues } from './executeImageRecall';
 
 const model = {
   base: 'sdxl',
@@ -42,6 +53,8 @@ const image: GalleryImage = {
   width: 512,
 };
 
+const t = ((key: string) => key) as unknown as TFunction;
+
 const createCommands = () => {
   const add = vi.fn();
   const setSettings = vi.fn();
@@ -52,6 +65,8 @@ const createCommands = () => {
 
   return { add, commands, setSettings };
 };
+
+seedArchitectureCapabilities();
 
 describe('executeImageRecall', () => {
   beforeEach(() => {
@@ -67,6 +82,7 @@ describe('executeImageRecall', () => {
 
     await expect(
       executeImageRecall({
+        t,
         commands,
         generateValues: { modelKey: model.key },
         image,
@@ -84,11 +100,77 @@ describe('executeImageRecall', () => {
     expect(add).toHaveBeenCalledWith(expect.objectContaining({ kind: 'success', title: 'Recalled remix settings' }));
   });
 
+  it('persists no remix until model capabilities load, and says why', async () => {
+    const { add, commands, setSettings } = createCommands();
+    // Initialised while the table is present, so only the recall itself is gated.
+    const generateValues = getCurrentGenerateValues({
+      generateValues: { modelKey: model.key },
+      supportedModels: [model as GenerateModelConfig],
+    });
+
+    resetArchitectureCapabilities();
+    try {
+      await expect(
+        executeImageRecall({
+          t,
+          commands,
+          generateValues: generateValues as unknown as Record<string, unknown>,
+          image,
+          kind: 'remix',
+          models: [model],
+          projectId: 'project-1',
+        })
+      ).resolves.toBe(false);
+    } finally {
+      setArchitectureCapabilities(architectureCapabilitiesFixture);
+    }
+
+    expect(galleryApi.galleryImages.metadata).not.toHaveBeenCalled();
+    expect(setSettings).not.toHaveBeenCalled();
+    expect(add).toHaveBeenCalledWith({
+      kind: 'info',
+      message: 'widgets.generate.capabilitiesUnavailableForRecall',
+      title: 'Cannot recall image data',
+    });
+  });
+
+  it('does not initialise a fresh project from fallback defaults for a prompt recall during an outage', async () => {
+    const { add, commands, setSettings } = createCommands();
+
+    galleryApi.galleryImages.metadata.mockResolvedValue({ positive_prompt: 'recalled prompt' });
+
+    resetArchitectureCapabilities();
+    try {
+      await expect(
+        executeImageRecall({
+          t,
+          commands,
+          // Never initialised: nothing but a model key, so the values would be synthesised.
+          generateValues: { modelKey: model.key },
+          image,
+          kind: 'prompts',
+          models: [model],
+          projectId: 'project-1',
+        })
+      ).resolves.toBe(false);
+    } finally {
+      setArchitectureCapabilities(architectureCapabilitiesFixture);
+    }
+
+    expect(setSettings).not.toHaveBeenCalled();
+    expect(add).toHaveBeenCalledWith({
+      kind: 'info',
+      message: 'widgets.generate.capabilitiesUnavailableForSetup',
+      title: 'Cannot recall image data',
+    });
+  });
+
   it('uses the freshest Generate values when recalling image dimensions', async () => {
     const { commands, setSettings } = createCommands();
 
     await expect(
       executeImageRecall({
+        t,
         commands,
         generateValues: { modelKey: model.key, positivePrompt: 'stale prompt' },
         getGenerateValues: () => ({ modelKey: model.key, positivePrompt: 'fresh prompt' }),
@@ -132,6 +214,7 @@ describe('executeImageRecall', () => {
 
     await expect(
       executeImageRecall({
+        t,
         commands,
         generateValues: { modelKey: model.key },
         image: recallImage,
@@ -164,6 +247,7 @@ describe('executeImageRecall', () => {
       })
     );
     const oldRecall = executeImageRecall({
+      t,
       commands: oldCommands.commands,
       generateValues: { modelKey: model.key },
       image,
@@ -179,6 +263,7 @@ describe('executeImageRecall', () => {
     galleryApi.galleryImages.metadata.mockResolvedValueOnce({ positive_prompt: 'user b' });
     await expect(
       executeImageRecall({
+        t,
         commands: newCommands.commands,
         generateValues: { modelKey: model.key },
         image,
@@ -207,6 +292,7 @@ describe('executeImageRecall', () => {
 
     await expect(
       executeImageRecall({
+        t,
         commands: oldCommands.commands,
         generateValues: { modelKey: model.key },
         image,

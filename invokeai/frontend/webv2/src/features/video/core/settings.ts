@@ -13,6 +13,7 @@ import {
   MIN_POSITIVE_PROMPT_HEIGHT_PX,
   sanitizeBatchCount,
 } from '@features/generation/settings';
+import { isSeedMode } from '@platform/core/seed';
 
 import type {
   MiniMaxH3TargetResolution,
@@ -37,6 +38,14 @@ const hasFiniteNumber = (record: Record<string, unknown>, key: string): boolean 
 
 const getClampedNumber = (record: Record<string, unknown>, key: string, min: number, max: number, fallback: number) =>
   hasFiniteNumber(record, key) ? Math.min(Math.max(record[key] as number, min), max) : fallback;
+
+/**
+ * The MiniMax H3 hybrid's block range: the released transformers have 50 DiT
+ * blocks (0-49). The default start hands the upper half's AdaLN projections
+ * to Ref2VA — the reference implementation's recommended quality/adherence
+ * balance; blocks from the start through 49 are always overlaid.
+ */
+export const MINIMAX_H3_HYBRID_BLOCK_RANGE = { defaultStart: 25, max: 49, min: 0 } as const;
 
 export const VIDEO_ASPECT_RATIO_IDS: readonly VideoAspectRatioId[] = [
   '21:9',
@@ -405,6 +414,16 @@ export const normalizeVideoSettings = (values: unknown): VideoSettings | null =>
     cfgScaleLowNoise: hasFiniteNumber(values, 'cfgScaleLowNoise') ? (values.cfgScaleLowNoise as number) : null,
     firstFrameImage,
     fps: hasFiniteNumber(values, 'fps') ? (values.fps as number) : SETTINGS_FALLBACKS.fps,
+    h3HybridBaseModel: isMainModelConfig(values.h3HybridBaseModel) ? values.h3HybridBaseModel : null,
+    h3HybridStartBlock: Math.round(
+      getClampedNumber(
+        values,
+        'h3HybridStartBlock',
+        MINIMAX_H3_HYBRID_BLOCK_RANGE.min,
+        MINIMAX_H3_HYBRID_BLOCK_RANGE.max,
+        MINIMAX_H3_HYBRID_BLOCK_RANGE.defaultStart
+      )
+    ),
     h3TextEncoderModel: isModelIdentifierConfig(values.h3TextEncoderModel) ? values.h3TextEncoderModel : null,
     h3TransformerModel: isMainModelConfig(values.h3TransformerModel) ? values.h3TransformerModel : null,
     acceleratorEnabled,
@@ -432,7 +451,12 @@ export const normalizeVideoSettings = (values: unknown): VideoSettings | null =>
     ),
     references,
     seed: hasFiniteNumber(values, 'seed') ? (values.seed as number) : 0,
-    shouldRandomizeSeed: typeof values.shouldRandomizeSeed === 'boolean' ? values.shouldRandomizeSeed : true,
+    // Values saved before seed modes carry the random toggle instead.
+    seedMode: isSeedMode(values.seedMode)
+      ? values.seedMode
+      : typeof values.shouldRandomizeSeed === 'boolean' && !values.shouldRandomizeSeed
+        ? 'fixed'
+        : 'random',
     sourceVideo,
     steps: hasFiniteNumber(values, 'steps') ? (values.steps as number) : SETTINGS_FALLBACKS.steps,
     targetResolution: isVideoTargetResolution(values.targetResolution)
@@ -454,6 +478,7 @@ export const isVideoSettings = (values: unknown): values is VideoSettings => {
 
   // Strict only over the keys normalize would have to invent.
   return (
+    isSeedMode(values.seedMode) &&
     isVideoAspectRatioId(values.aspectRatioId) &&
     isVideoTargetResolution(values.targetResolution) &&
     typeof values.negativePromptEnabled === 'boolean' &&
@@ -484,7 +509,9 @@ export const isVideoSettings = (values: unknown): values is VideoSettings => {
     (values.wanLowNoiseModel === null || isMainModelConfig(values.wanLowNoiseModel)) &&
     (values.componentSourceModel === null || isMainModelConfig(values.componentSourceModel)) &&
     (values.h3TransformerModel === null || isMainModelConfig(values.h3TransformerModel)) &&
-    (values.h3TextEncoderModel === null || isModelIdentifierConfig(values.h3TextEncoderModel))
+    (values.h3TextEncoderModel === null || isModelIdentifierConfig(values.h3TextEncoderModel)) &&
+    (values.h3HybridBaseModel === null || isMainModelConfig(values.h3HybridBaseModel)) &&
+    hasFiniteNumber(values, 'h3HybridStartBlock')
   );
 };
 
@@ -513,6 +540,7 @@ export const cloneVideoWidgetValues = (values: VideoWidgetValues): VideoWidgetVa
   acceleratorLoraKeys: [...values.acceleratorLoraKeys],
   componentSourceModel: values.componentSourceModel ? { ...values.componentSourceModel } : null,
   firstFrameImage: values.firstFrameImage ? { ...values.firstFrameImage } : null,
+  h3HybridBaseModel: values.h3HybridBaseModel ? { ...values.h3HybridBaseModel } : null,
   h3TextEncoderModel: values.h3TextEncoderModel ? { ...values.h3TextEncoderModel } : null,
   h3TransformerModel: values.h3TransformerModel ? { ...values.h3TransformerModel } : null,
   lastFrameImage: values.lastFrameImage ? { ...values.lastFrameImage } : null,

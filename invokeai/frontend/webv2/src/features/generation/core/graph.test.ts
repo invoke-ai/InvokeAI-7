@@ -1,3 +1,4 @@
+import { seedArchitectureCapabilities } from '@features/generation/core/architectureCapabilities.testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type {
@@ -10,7 +11,7 @@ import type {
 } from './types';
 
 import { getDefaultGenerateSettings, isSupportedGenerateModel } from './baseGenerationPolicies';
-import { compileGenerateGraph, generateSeedSequence, resolveGenerateSeed } from './graph';
+import { compileGenerateGraph, resolveGenerateSeed } from './graph';
 
 const sd1Model: MainModelConfig = { base: 'sd-1', key: 'sd1-model', name: 'SD 1.5', type: 'main' };
 const sd2Model: MainModelConfig = { base: 'sd-2', key: 'sd2-model', name: 'SD 2', type: 'main' };
@@ -137,7 +138,7 @@ const qwen3Encoder: ComponentModelConfig = {
 const createSettings = (model: GenerateModelConfig, overrides: Partial<GenerateSettings> = {}): GenerateSettings => ({
   ...getDefaultGenerateSettings(model),
   seed: 1,
-  shouldRandomizeSeed: false,
+  seedMode: 'fixed',
   ...overrides,
 });
 
@@ -157,6 +158,8 @@ const getNodeByType = (graph: ReturnType<typeof compile>, type: string) =>
 afterEach(() => {
   vi.restoreAllMocks();
 });
+
+seedArchitectureCapabilities();
 
 describe('compileGenerateGraph', () => {
   it('recognizes the legacy-supported generate model families', () => {
@@ -317,6 +320,44 @@ describe('compileGenerateGraph', () => {
 
     expect(mismatched.nodes.vae_loader).toBeUndefined();
     expect(getEdge(mismatched, 'canvas_output', 'vae')?.source.node_id).toBe('model_loader');
+  });
+
+  it('keeps an SD3 VAE override its picker would hide out of the graph', () => {
+    // The slot is optional, so validation never looks at it and the picker only hides a stale
+    // selection. The builder used to send whatever was stored -- a FLUX VAE left over from a model
+    // switch reached `sd3_model_loader`.
+    const graph = compile(sd3Model, { vae: fluxVae });
+
+    expect(graph.nodes.model_loader?.vae_model).toBeUndefined();
+    expect(compile(sd3Model, { vae: { ...fluxVae, base: 'sd-3', key: 'sd3-vae' } }).nodes.model_loader).toMatchObject({
+      vae_model: { key: 'sd3-vae' },
+    });
+  });
+
+  it('sends the Qwen Image loader every VAE its picker offers', () => {
+    // Regression: the picker read the served row, which lists Qwen-Image VAEs installed under
+    // `anima`, while the builder filtered to base `qwen-image`. A checkpoint model then failed to
+    // compile, and a Diffusers model silently dropped the override the user had selected.
+    const animaRegisteredVae: VaeModelConfig = {
+      base: 'anima',
+      key: 'anima-qwen-vae',
+      name: 'Qwen VAE (installed for Anima)',
+      type: 'vae',
+    };
+    const qwenVlEncoder: ComponentModelConfig = {
+      base: 'any',
+      key: 'qwen-vl',
+      name: 'Qwen VL',
+      type: 'qwen_vl_encoder',
+    };
+    const qwenImageCheckpoint: MainModelConfig = { ...qwenImageModel, format: 'checkpoint', key: 'qwen-checkpoint' };
+
+    expect(
+      compile(qwenImageCheckpoint, { qwenVLEncoderModel: qwenVlEncoder, vae: animaRegisteredVae }).nodes.model_loader
+    ).toMatchObject({ vae_model: animaRegisteredVae });
+    expect(compile(qwenImageModel, { vae: animaRegisteredVae }).nodes.model_loader).toMatchObject({
+      vae_model: animaRegisteredVae,
+    });
   });
 
   it('routes SD LoRAs through the UNet and CLIP conditioning chain', () => {
@@ -692,22 +733,18 @@ describe('compileGenerateGraph', () => {
 });
 
 describe('generate seeds', () => {
-  it('keeps an explicit seed when randomization is disabled', () => {
-    const settings = createSettings(sdxlModel, { seed: 123, shouldRandomizeSeed: false });
-
-    expect(resolveGenerateSeed(settings)).toBe(123);
+  it('keeps the entered seed in every mode but random', () => {
+    expect(resolveGenerateSeed(createSettings(sdxlModel, { seed: 123, seedMode: 'fixed' }))).toBe(123);
+    expect(resolveGenerateSeed(createSettings(sdxlModel, { seed: 123, seedMode: 'increment' }))).toBe(123);
+    expect(resolveGenerateSeed(createSettings(sdxlModel, { seed: 123, seedMode: 'decrement' }))).toBe(123);
   });
 
-  it('resolves a random seed when randomization is enabled', () => {
+  it('draws a fresh seed in random mode', () => {
     vi.spyOn(Math, 'random').mockReturnValue(0.5);
 
-    const settings = createSettings(sdxlModel, { seed: 123, shouldRandomizeSeed: true });
+    const settings = createSettings(sdxlModel, { seed: 123, seedMode: 'random' });
 
     expect(resolveGenerateSeed(settings)).toBe(2147483647);
-  });
-
-  it('builds the legacy-style sequential seed batch starting from the resolved seed', () => {
-    expect(generateSeedSequence(10, 4)).toEqual([10, 11, 12, 13]);
   });
 });
 
@@ -931,6 +968,49 @@ describe('Krea-2, Ideogram 4 and Wan graphs', () => {
     expect(getEdge(graph, 'denoise_latents', 'transformer')?.source.node_id).toBe(loader?.id);
     // The Wan encoder is fed straight from the model loader — Wan LoRAs do not touch it.
     expect(getEdge(graph, 'pos_cond', 'wan_t5_encoder')?.source.node_id).toBe('model_loader');
+  });
+});
+
+describe('ERNIE-Image graphs', () => {
+  const ernieModel: MainModelConfig = {
+    base: 'ernie-image',
+    format: 'diffusers',
+    key: 'ernie-image',
+    name: 'ERNIE-Image',
+    type: 'main',
+  };
+
+  it('encodes the negative prompt only while CFG is on', () => {
+    // `negative_conditioning` is required when guidance_scale != 1 and unused otherwise, and the
+    // coverage suite only ever compiles at the base default of 4 — so the CFG-off branch is
+    // compiled nowhere else. ERNIE-Image-Turbo ships `guidance=1.0`, which is how a user gets there.
+    const withCfg = compile(ernieModel, { cfgScale: 4 });
+
+    expect(withCfg.nodes.neg_cond?.type).toBe('ernie_image_text_encoder');
+    expect(getEdge(withCfg, 'neg_cond', 'text_encoder')?.source.node_id).toBe('model_loader');
+    expect(getEdge(withCfg, 'neg_cond', 'prompt')?.source.node_id).toBe('negative_prompt');
+    expect(getEdge(withCfg, 'denoise_latents', 'negative_conditioning')?.source.node_id).toBe('neg_cond');
+    expect(withCfg.nodes.denoise_latents?.guidance_scale).toBe(4);
+
+    const withoutCfg = compile(ernieModel, { cfgScale: 1 });
+
+    expect(withoutCfg.nodes.neg_cond).toBeUndefined();
+    expect(getEdge(withoutCfg, 'denoise_latents', 'negative_conditioning')).toBeUndefined();
+    expect(withoutCfg.nodes.denoise_latents?.guidance_scale).toBe(1);
+  });
+
+  it('builds the rest of the graph out of the one bundled pipeline', () => {
+    const graph = compile(ernieModel, { scheduler: 'dpmpp_2m' });
+
+    expect(graph.nodes.canvas_output?.type).toBe('ernie_image_vae_decode');
+    expect(getEdge(graph, 'canvas_output', 'vae')?.source.node_id).toBe('model_loader');
+    expect(getEdge(graph, 'denoise_latents', 'transformer')?.source.node_id).toBe('model_loader');
+    // The loader can hold a prompt enhancer resident, which cannot be idle-offloaded; Generate
+    // never surfaces it, so the graph has to keep asking for it to stay unloaded.
+    expect(graph.nodes.model_loader?.use_prompt_enhancer).toBe(false);
+    // The node's scheduler is a euler/heun/lcm Literal, so a standard-set value left over from
+    // another model has to be coerced before it reaches the graph.
+    expect(graph.nodes.denoise_latents?.scheduler).toBe('euler');
   });
 });
 

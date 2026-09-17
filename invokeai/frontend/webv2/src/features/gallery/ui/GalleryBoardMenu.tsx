@@ -1,4 +1,3 @@
-/* eslint-disable react/react-compiler */
 import type { GalleryBoard } from '@features/gallery/core/types';
 
 import { Dialog, HStack, Icon, Input, Menu, Portal, Stack, Text } from '@chakra-ui/react';
@@ -36,6 +35,7 @@ export const GalleryBoardMenu = ({
   const [renameValue, setRenameValue] = useState('');
   const targetRef = useRef(target);
 
+  // eslint-disable-next-line react/refs
   targetRef.current = target;
 
   const board = target?.board ?? null;

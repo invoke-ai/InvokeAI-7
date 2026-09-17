@@ -171,6 +171,20 @@ describe('dependency policy rules', () => {
     expect(checkDependency('features/queue/core/policy.ts', '@platform/state/selectorCore')).toEqual([]);
   });
 
+  it('treats test-support modules as non-production and keeps production out of them', () => {
+    expect(isProductionSourcePath('features/generation/core/architectureCapabilities.testing.ts')).toBe(false);
+    expect(isProductionSourcePath('platform/ui/Button.type-test.tsx')).toBe(false);
+    expect(isProductionSourcePath('features/generation/ui/GenerateWidgetView.browser.test.tsx')).toBe(false);
+    expect(isProductionSourcePath('features/generation/core/architectureCapabilities.ts')).toBe(true);
+    // The helper imports a test runner and a 1000-row fixture, and Core is bundled by every route.
+    expect(
+      checkDependency('features/generation/ui/GenerateWidgetView.tsx', '../core/architectureCapabilities.testing')
+    ).toContainEqual(expect.objectContaining({ rule: 'test-support-isolation' }));
+    expect(checkDependency('features/generation/core/settings.test.ts', './architectureCapabilities.testing')).toEqual(
+      []
+    );
+  });
+
   it('rejects the retired global Workbench contract hub', () => {
     expect(checkDependency('workbench/shell/View.tsx', '@workbench/types')).toContainEqual(
       expect.objectContaining({ rule: 'retired-contract-hub' })

@@ -1,5 +1,6 @@
 import type { SocketHub } from '@platform/transport/socketHub';
 import type { WorkbenchCommands, WorkbenchQueries } from '@workbench/workbenchStore';
+import type { TFunction } from 'i18next';
 
 import { describe, expect, it, vi } from 'vitest';
 
@@ -58,6 +59,7 @@ const createDeps = () => {
       getSnapshot: () => ({ activeProject: active }),
     } as unknown as Pick<WorkbenchQueries, 'getProject' | 'getSnapshot'>,
     received,
+    t: ((key: string) => key) as unknown as TFunction,
     reportError,
   };
 };

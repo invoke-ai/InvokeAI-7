@@ -18,7 +18,6 @@ vi.mock('@platform/transport/http', () => ({
 
 import {
   addImagesToGalleryBoard,
-  classifyGalleryUpload,
   deleteGalleryBoard,
   deleteGalleryImages,
   downloadGalleryArchive,
@@ -808,45 +807,6 @@ describe('deleteGalleryImages partial failures', () => {
   it('skips the request entirely for an empty selection', async () => {
     await expect(deleteGalleryImages([])).resolves.toEqual({ deletedImageNames: [], failedImageNames: [] });
     expect(mocks.apiFetchJson).not.toHaveBeenCalled();
-  });
-});
-
-describe('classifyGalleryUpload', () => {
-  it.each([
-    ['image/png', 'photo.bin', 'image'],
-    ['image/jpeg', 'photo.bin', 'image'],
-    ['image/jpg', 'photo.bin', 'image'],
-    ['image/webp', 'photo.bin', 'image'],
-    ['video/mp4', 'clip.bin', 'video'],
-    ['video/quicktime', 'clip.bin', 'video'],
-    ['video/webm', 'clip.webm', 'video'],
-    ['audio/mpeg', 'song.bin', 'video'],
-    ['audio/wav', 'memo.bin', 'video'],
-    ['', 'photo.PNG', 'image'],
-    ['', 'clip.MOV', 'video'],
-    ['', 'memo.m4a', 'video'],
-    ['application/octet-stream', 'photo.jpeg', 'image'],
-    ['application/octet-stream', 'song.mp3', 'video'],
-    ['binary/octet-stream', 'clip.MP4', 'video'],
-    ['application/octet-stream', 'clip.wmv', 'video'],
-    ['application/octet-stream', 'song.WMA', 'video'],
-    ['application/pdf', 'photo.png', 'image'],
-  ] as const)('classifies MIME %s and name %s as %s', (type, name, kind) => {
-    expect(classifyGalleryUpload(new File(['media'], name, { type }))).toEqual({ kind });
-  });
-
-  it.each([
-    ['application/pdf', 'document.pdf'],
-    ['', 'archive.zip'],
-    ['image/gif', 'animation.gif'],
-  ] as const)('rejects unsupported MIME %s and name %s', (type, name) => {
-    expect(classifyGalleryUpload(new File(['media'], name, { type }))).toBeNull();
-  });
-
-  it('uses a supported MIME before a conflicting extension', () => {
-    expect(classifyGalleryUpload(new File(['media'], 'looks-like-video.mp4', { type: 'image/png' }))).toEqual({
-      kind: 'image',
-    });
   });
 });
 

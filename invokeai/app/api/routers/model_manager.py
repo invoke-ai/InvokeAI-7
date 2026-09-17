@@ -35,6 +35,7 @@ from invokeai.app.services.model_records import (
 from invokeai.app.services.orphaned_models import CONVERSION_SCRATCH_DIRNAME, OrphanedModelInfo
 from invokeai.app.services.shared.sqlite.sqlite_common import SQLiteDirection
 from invokeai.app.util.suppress_output import SuppressOutput
+from invokeai.backend.architectures import ArchitectureCapabilities, architecture_capabilities
 from invokeai.backend.model_manager.configs.external_api import ExternalApiModelConfig
 from invokeai.backend.model_manager.configs.factory import AnyModelConfig, ModelConfigFactory
 from invokeai.backend.model_manager.configs.main import (
@@ -227,6 +228,30 @@ example_model_input = {
 ##############################################################################
 # ROUTES
 ##############################################################################
+
+
+@model_manager_router.get(
+    "/capabilities",
+    operation_id="list_architecture_capabilities",
+    responses={200: {"description": "What each model architecture supports"}},
+)
+def list_architecture_capabilities(current_user: CurrentUserOrDefault) -> list[ArchitectureCapabilities]:
+    """What each model architecture can generate, and which generation features it supports.
+
+    A static table, the same for every install and every user, derived from what the architectures
+    declare under `invokeai/backend/architectures/defs/`. Fetch it once and join it against model
+    records locally: look up `(base, variant)`, fall back to `(base, null)`.
+
+    Deliberately not a field on the model records themselves — it is the same for every model of an
+    architecture, and putting it there would add these fields to all 115 config schemas.
+
+    Authenticated like every other route here even though the response holds nothing user-specific:
+    the allowlist for public routes is short and deliberate, and this is not a reason to lengthen it.
+
+    Declared `def`, not `async def`: it awaits nothing, so FastAPI runs it in a threadpool instead of
+    on the event loop. See docs/contributing/blocking-work-in-api-routes.
+    """
+    return architecture_capabilities()
 
 
 @model_manager_router.get(

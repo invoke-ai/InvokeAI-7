@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { mkdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import process from 'node:process';
 import { chromium } from 'playwright';
@@ -236,6 +237,20 @@ const surfaces = [
       await waitForWorkbench(page);
       await selectLayoutPreset(page, 'Automate', 'Workflow');
       await page.getByText('Fixture Node 001', { exact: true }).waitFor();
+      // The fixture starts at y=0, under the floating editor toolbar. Pan the
+      // graph into view before measuring its targets, just as a user would.
+      const pane = await page.locator('.react-flow__pane').boundingBox();
+      assert.ok(pane);
+      const x = pane.x + pane.width / 2;
+      const y = pane.y + 160;
+      await page.mouse.move(x, y);
+      await page.mouse.down();
+      await page.mouse.move(x, y + 64, { steps: 4 });
+      await page.mouse.up();
+      await page
+        .locator('[data-id="fixture-workflow-node-001"]')
+        .getByRole('button', { name: 'Collapse node' })
+        .click({ trial: true });
     },
   },
 ];
@@ -253,6 +268,12 @@ const runAxeSurface = async (browser, surface) => {
     }
 
     return { id: surface.id, status: 'passed' };
+  } catch (error) {
+    const artifactDir = resolve(root, 'artifacts/accessibility');
+    await mkdir(artifactDir, { recursive: true })
+      .then(() => page.screenshot({ path: resolve(artifactDir, `${surface.id}.png`) }))
+      .catch(() => undefined);
+    throw error;
   } finally {
     await context.close();
   }
@@ -431,6 +452,13 @@ const runTopbarMenuJourney = async (browser) => {
   try {
     await waitForWorkbench(page);
 
+    // The fixture routes from Workflow, but Compose does not place that widget. Open it before
+    // auditing a present source, then return to Preview for the missing-source checks below.
+    await centerViewTrigger(page, 'Preview').click();
+    await page.getByRole('menuitem', { exact: true, name: 'Workflow' }).click();
+    await centerViewTrigger(page, 'Workflow').waitFor();
+    await selectCenterView(page, 'Workflow', 'Preview');
+
     const leftWidgetRail = page.getByRole('navigation', { exact: true, name: 'Create widget visibility' });
     const upscaleWidget = leftWidgetRail.getByRole('button', { exact: true, name: 'Upscale' });
     await upscaleWidget.click({ button: 'right' });
@@ -504,7 +532,7 @@ const runTopbarMenuJourney = async (browser) => {
     await page.getByRole('button', { exact: true, name: 'Open menu' }).click();
     const appMenu = page.getByRole('menu', { exact: true, name: 'Open menu' });
     const commandPaletteItem = page.getByRole('menuitem', { name: /^Command palette/ });
-    const settingsItem = page.getByRole('menuitem', { exact: true, name: 'Settings' });
+    const settingsItem = appMenu.getByRole('menuitem', { name: /^Settings(?: \(.+\))?$/ });
     const documentationItem = page.getByRole('menuitem', { exact: true, name: 'Documentation' });
     const discordItem = page.getByRole('menuitem', { exact: true, name: 'Discord' });
     await commandPaletteItem.waitFor();
@@ -758,8 +786,10 @@ const runKeepAliveStateJourney = async (browser) => {
 
     // The preview filmstrip only renders once an item is selected — with
     // nothing selected the centre view is a "No gallery selection" empty
-    // state, filmstrip included.
+    // state, filmstrip included. Use the unstarred listing: the starred strip's
+    // smaller navigation list fits without overflowing at this viewport.
     await galleryItems
+      .locator('[data-gallery-section="regular"]')
       .getByRole('button', { name: /for preview$/ })
       .first()
       .click();
@@ -932,6 +962,10 @@ const runSettingsJourney = async (browser) => {
     await waitForWorkbench(page);
     const gear = page.getByRole('button', { exact: true, name: 'Gallery settings' });
     await gear.click();
+    // The lazy quick-settings body moves the footer when it arrives. Wait for
+    // its controls before clicking the footer so pointer-down/up hit one target.
+    await page.getByRole('slider', { exact: true, name: 'Image size' }).waitFor();
+    await waitForSettledDocument(page);
     await page.getByRole('button', { exact: true, name: 'All Gallery settings…' }).click();
     const dialog = page.getByRole('dialog', { name: /^Settings:/ });
     await dialog.waitFor();

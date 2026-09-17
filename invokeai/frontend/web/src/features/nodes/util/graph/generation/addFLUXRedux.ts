@@ -44,7 +44,7 @@ export const addFLUXReduxes = ({ entities, g, collector, model }: AddFLUXReduxAr
  * - downsampling_function: the function used to downsample the image. Defaults to 'area'. Dunno about how it affects the image.
  * - weight: 0 to 1. the conditioning is multiplied by the square of this value. 1 means no change.
  *
- * See invokeai/app/invocations/flux_redux.py for more details.
+ * See invokeai/app/invocations/flux/flux_redux.py for more details.
  */
 export const IMAGE_INFLUENCE_TO_SETTINGS: Record<
   FLUXReduxImageInfluence,

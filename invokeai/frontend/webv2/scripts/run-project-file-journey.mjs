@@ -219,7 +219,7 @@ const importArchive = async ({ archivePath, browser, contexts, errors, phase }) 
 
   await page.getByRole('button', { exact: true, name: 'Import…' }).click();
   await (await chooserPromise).setFiles(archivePath);
-  await page.waitForURL(/#\/app\?project=/);
+  await page.waitForURL(/#\/app$/);
   await page.getByRole('main', { exact: true, name: sourceProjectName }).waitFor();
 
   return { context, page };
@@ -338,7 +338,8 @@ const runRoundTrip = async ({ backend, browser, contexts, errors, tempDirectory 
   assert.notEqual(summary.project_id, sourceProjectId);
   // The project's board is the server's to mint; the archived one meant nothing here.
   assert.notEqual(summary.board_id, PROJECT_FILE_BOARD_ID);
-  assert.equal(importPage.url().includes(`project=${encodeURIComponent(summary.project_id)}`), true);
+  await importPage.getByRole('main', { exact: true, name: summary.name }).waitFor();
+  assert.equal(new URL(importPage.url()).hash, '#/app');
 
   const imported = await fetchJson(`/api/v1/projects/${encodeURIComponent(summary.project_id)}`);
   const importedBoard = await getBoardSnapshot(summary.project_id);

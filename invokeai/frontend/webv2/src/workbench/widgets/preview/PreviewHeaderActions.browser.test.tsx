@@ -189,3 +189,7 @@ describe('preview floating Invoke control', () => {
     expect(executeCommand).not.toHaveBeenCalled();
   });
 });
+
+vi.mock('./livePreviewFollow', () => ({
+  useLivePreviewFollow: () => ({ sessions: [], pinnedSessionId: null, pin: vi.fn(), showAll: vi.fn() }),
+}));

@@ -1,6 +1,9 @@
+import { seedArchitectureCapabilities } from '@features/generation/core/architectureCapabilities.testing';
 import { describe, expect, it } from 'vitest';
 
 import { ADD_LAYER_MENU, isAddLayerItemAvailable, stackAddItemId } from './addLayerMenu';
+
+seedArchitectureCapabilities();
 
 describe('ADD_LAYER_MENU', () => {
   it('splits into the legacy Regional / Layers groups in order', () => {

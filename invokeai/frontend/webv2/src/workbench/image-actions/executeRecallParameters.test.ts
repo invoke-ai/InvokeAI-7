@@ -1,5 +1,6 @@
-import type { ComponentModelConfig } from '@features/generation/contracts';
+import type { ComponentModelConfig, GenerateModelConfig } from '@features/generation/contracts';
 import type { WorkbenchCommands } from '@workbench/workbenchStore';
+import type { TFunction } from 'i18next';
 
 import { accountLifecycle, captureAccountScope, type AccountScope } from '@platform/state/accountLifecycle';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -13,9 +14,31 @@ const galleryApi = vi.hoisted(() => ({
 
 vi.mock('@features/gallery', () => galleryApi);
 
+import {
+  resetArchitectureCapabilities,
+  setArchitectureCapabilities,
+} from '@features/generation/core/architectureCapabilities';
+import {
+  architectureCapabilitiesFixture,
+  seedArchitectureCapabilities,
+} from '@features/generation/core/architectureCapabilities.testing';
+
+import { getCurrentGenerateValues } from './executeImageRecall';
 import { executeRecallParameters } from './executeRecallParameters';
 
 const sdxl = { base: 'sdxl', hash: 'h', key: 'sdxl-main', name: 'SDXL', type: 'main' } as ComponentModelConfig;
+const sd1 = { base: 'sd-1', hash: 'h1', key: 'sd1-main', name: 'SD 1', type: 'main' } as ComponentModelConfig;
+const t = ((key: string) => key) as unknown as TFunction;
+
+/** Runs `fn` with the capability table absent, the way a failed boot fetch leaves it. */
+const withoutCapabilities = async <T>(fn: () => Promise<T>): Promise<T> => {
+  resetArchitectureCapabilities();
+  try {
+    return await fn();
+  } finally {
+    setArchitectureCapabilities(architectureCapabilitiesFixture);
+  }
+};
 const galleryImage = (imageName: string) => ({ height: 512, imageName, width: 512 });
 const image = (imageName: string) => ({ height: 512, image_name: imageName, width: 512 });
 const existingReference = {
@@ -66,7 +89,10 @@ const run = (
     owner: owner ?? captureAccountScope(),
     parameters,
     projectId: 'project-1',
+    t,
   });
+
+seedArchitectureCapabilities();
 
 describe('executeRecallParameters', () => {
   beforeEach(() => {
@@ -112,6 +138,72 @@ describe('executeRecallParameters', () => {
         title: 'No recalled parameters applied',
       })
     );
+  });
+
+  describe('while the capability table is absent', () => {
+    // Initialised while the table is present, so the project already holds SDXL's real values.
+    const initialised = () =>
+      getCurrentGenerateValues({
+        generateValues: { modelKey: sdxl.key },
+        supportedModels: [sdxl as unknown as GenerateModelConfig],
+      }) as unknown as Record<string, unknown> & { height: number; width: number };
+
+    it('applies no model switch, and says why', async () => {
+      const { add, commands, setSettings } = createCommands();
+      const generateValues = initialised();
+
+      await expect(
+        withoutCapabilities(() => run(commands, { model: sd1.key }, { generateValues, models: [sdxl, sd1] }))
+      ).resolves.toBe(false);
+
+      expect(setSettings).not.toHaveBeenCalled();
+      expect(add).toHaveBeenCalledWith({
+        kind: 'info',
+        message: 'widgets.generate.capabilitiesUnavailableForRecall',
+        title: 'Cannot apply recalled parameters',
+      });
+    });
+
+    it('withholds a dimension reset, which would restore the fallback canvas', async () => {
+      const { commands, setSettings } = createCommands();
+      const generateValues = initialised();
+
+      await expect(withoutCapabilities(() => run(commands, { width: null }, { generateValues }))).resolves.toBe(false);
+
+      expect(setSettings).not.toHaveBeenCalled();
+    });
+
+    it('still applies prompts and seed, which read no policy', async () => {
+      const { commands, setSettings } = createCommands();
+      const generateValues = initialised();
+
+      await expect(
+        withoutCapabilities(() => run(commands, { positive_prompt: 'a cat', seed: 7 }, { generateValues }))
+      ).resolves.toBe(true);
+
+      expect(setSettings).toHaveBeenCalledWith(
+        expect.objectContaining({
+          height: generateValues.height,
+          positivePrompt: 'a cat',
+          seed: 7,
+          width: generateValues.width,
+        }),
+        'project-1'
+      );
+    });
+
+    it('does not initialise a fresh project from fallback defaults', async () => {
+      const { add, commands, setSettings } = createCommands();
+
+      await expect(withoutCapabilities(() => run(commands, { positive_prompt: 'a cat' }))).resolves.toBe(false);
+
+      expect(setSettings).not.toHaveBeenCalled();
+      expect(add).toHaveBeenCalledWith({
+        kind: 'info',
+        message: 'widgets.generate.capabilitiesUnavailableForSetup',
+        title: 'Cannot apply recalled parameters',
+      });
+    });
   });
 
   it('asks for a supported model when the project has none selected', async () => {

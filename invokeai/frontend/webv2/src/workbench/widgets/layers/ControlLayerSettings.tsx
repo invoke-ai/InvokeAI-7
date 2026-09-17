@@ -3,6 +3,7 @@ import type {
   SelectValueChangeDetails,
   SliderValueChangeDetails,
 } from '@chakra-ui/react';
+import type { ArchitectureCapabilitiesSnapshot } from '@features/generation/runtime';
 import type {
   CanvasControlAdapterContract,
   CanvasControlLayerContract,
@@ -18,12 +19,19 @@ import {
   isControlKindSupportedForBase,
   type ControlAdapterKind,
 } from '@features/generation/graph';
+import {
+  ensureArchitectureCapabilitiesLoaded,
+  getArchitectureCapabilitiesSnapshot,
+  subscribeArchitectureCapabilities,
+} from '@features/generation/runtime';
 import { useModelsSelector } from '@features/models';
-import { Field, Select, Slider } from '@platform/ui';
+import { focusFirstOperable } from '@platform/react/focusIfUnclaimed';
+import { useExternalStoreSelector } from '@platform/state/selectors';
+import { Button, Field, Select, Slider } from '@platform/ui';
 import { lookupDocumentLeaf } from '@workbench/canvas-engine/api';
 import { getCanvasOperations, resolveDefaultFilterForModel } from '@workbench/canvas-operations/api';
 import { usePreparedCommit } from '@workbench/widgets/canvas/useStructuralCommit';
-import { useCallback, useMemo, useRef } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { getCompatibleControlModels } from './controlModelOptions';
@@ -33,6 +41,8 @@ import { runLayerFilterOperation } from './layerPropertiesOperation';
 import { useSelectedMainModel } from './useSelectedMainModel';
 
 const SELECT_POSITIONING = { placement: 'bottom-end', sameWidth: true } as const;
+
+const selectCapabilitiesStatus = (snapshot: ArchitectureCapabilitiesSnapshot) => snapshot.status;
 
 const CONTROL_ADAPTER_KINDS: readonly ControlAdapterKind[] = [
   'controlnet',
@@ -107,14 +117,48 @@ export const ControlLayerSettings = ({ engine, layer, onOperationStarted }: Cont
     [commitPrepared, layer.id]
   );
 
+  const capabilitiesStatus = useExternalStoreSelector(
+    subscribeArchitectureCapabilities,
+    getArchitectureCapabilitiesSnapshot,
+    selectCapabilitiesStatus
+  );
+  const [hasRequestedCapabilitiesRetry, setHasRequestedCapabilitiesRetry] = useState(false);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const retryCapabilities = useCallback(() => {
+    if (hasRequestedCapabilitiesRetry && capabilitiesStatus === 'loading') {
+      return;
+    }
+    setHasRequestedCapabilitiesRetry(true);
+    // The request belongs to this retry; a later reload started elsewhere is not this panel's retry.
+    void ensureArchitectureCapabilitiesLoaded().then(() => setHasRequestedCapabilitiesRetry(false));
+  }, [capabilitiesStatus, hasRequestedCapabilitiesRetry]);
+  // A load that lands unmounts the failure surface, and with it the retry button a keyboard user may
+  // be on. The ref's cleanup runs while the surface is still in the document, so focus is handed to
+  // the panel the load filled in before it can fall to <body>.
+  const handOverFocusOnLoad = useCallback((surface: HTMLDivElement | null) => {
+    if (!surface) {
+      return undefined;
+    }
+    return () => {
+      if (surface.contains(document.activeElement) && getArchitectureCapabilitiesSnapshot().status === 'loaded') {
+        focusFirstOperable(rootRef.current);
+      }
+    };
+  }, []);
   // Adapter kinds supported by the selected base. Z-Image Control is only shown
-  // when a compatible Z-Image main model is selected.
-  const kindOptions = useMemo(
-    () =>
-      CONTROL_ADAPTER_KINDS.filter((kind) =>
-        base ? isControlKindSupportedForBase(base, kind) : kind !== 'z_image_control'
-      ),
-    [base]
+  // when a compatible Z-Image main model is selected. Read inside the store's
+  // selector: the answer comes from the capability table, and a call memoised on
+  // `base` alone keeps the empty list it gave before a retried load succeeded.
+  const kindOptions = useExternalStoreSelector(
+    subscribeArchitectureCapabilities,
+    getArchitectureCapabilitiesSnapshot,
+    useCallback(
+      () =>
+        CONTROL_ADAPTER_KINDS.filter((kind) =>
+          base ? isControlKindSupportedForBase(base, kind) : kind !== 'z_image_control'
+        ),
+      [base]
+    )
   );
   const kindCollection = useMemo(
     () =>
@@ -313,25 +357,51 @@ export const ControlLayerSettings = ({ engine, layer, onOperationStarted }: Cont
   const contributing = engine
     ? (lookupDocumentLeaf(engine.document.model()?.document, layer.id)?.contributionEnabled ?? false)
     : layer.isEnabled;
-  const validationReason =
-    contributing && mainModel
-      ? getControlValidationReason({
-          adapterModel: adapterModel ? { base: adapterModel.base, type: adapterModel.type } : null,
-          beginEndStepPct: adapter.beginEndStepPct,
-          controlLoraIndex: Math.max(0, controlLoraIndex),
-          kind: adapter.kind,
-          mainBase: mainModel.base,
-          mainVariant: mainModel.variant ?? undefined,
-          weight: adapter.weight,
-          zImageControlIndex: Math.max(0, zImageControlIndex),
-        })
-      : null;
+  // Same reason as `kindOptions`: validation asks the capability table whether the kind is supported.
+  const validationReason = useExternalStoreSelector(
+    subscribeArchitectureCapabilities,
+    getArchitectureCapabilitiesSnapshot,
+    useCallback(
+      () =>
+        contributing && mainModel
+          ? getControlValidationReason({
+              adapterModel: adapterModel ? { base: adapterModel.base, type: adapterModel.type } : null,
+              beginEndStepPct: adapter.beginEndStepPct,
+              controlLoraIndex: Math.max(0, controlLoraIndex),
+              kind: adapter.kind,
+              mainBase: mainModel.base,
+              mainVariant: mainModel.variant ?? undefined,
+              weight: adapter.weight,
+              zImageControlIndex: Math.max(0, zImageControlIndex),
+            })
+          : null,
+      [
+        adapter.beginEndStepPct,
+        adapter.kind,
+        adapter.weight,
+        adapterModel,
+        contributing,
+        controlLoraIndex,
+        mainModel,
+        zImageControlIndex,
+      ]
+    )
+  );
   // Content-dependent problems only matter once the layer has pixels, but a
-  // missing model deserves the warning even on a fresh empty layer.
+  // missing model deserves the warning even on a fresh empty layer. A missing
+  // capability table is not a problem with this layer and is shown on its own.
+  const capabilitiesUnavailable = validationReason === 'capabilities_unavailable';
+  // The click flips the status to `loading` synchronously; keeping the failure surface mounted for the
+  // retry it started keeps the button, and the user's focus, in place.
+  const isRetryingCapabilities = hasRequestedCapabilitiesRetry && capabilitiesStatus === 'loading';
+  const showCapabilitiesFailure = capabilitiesUnavailable && (capabilitiesStatus === 'error' || isRetryingCapabilities);
   const visibleValidationReason =
-    validationReason && (hasContent || validationReason === 'missing_model') ? validationReason : null;
+    validationReason && !capabilitiesUnavailable && (hasContent || validationReason === 'missing_model')
+      ? validationReason
+      : null;
+
   return (
-    <Stack gap="2">
+    <Stack ref={rootRef} gap="2">
       <HStack gap="2">
         <Field flex="1" label={t('widgets.layers.control.kind')} minW="0">
           <Select
@@ -436,6 +506,28 @@ export const ControlLayerSettings = ({ engine, layer, onOperationStarted }: Cont
       {visibleValidationReason ? (
         <Text color="fg.warning" fontSize="2xs" role="alert">
           {t(`widgets.layers.control.validation.${visibleValidationReason}`)}
+        </Text>
+      ) : null}
+      {showCapabilitiesFailure ? (
+        <HStack ref={handOverFocusOnLoad} aria-busy={isRetryingCapabilities} gap="2" role="alert">
+          <Text color="fg.warning" flex="1" fontSize="2xs">
+            {t('widgets.layers.control.capabilitiesLoadFailed')}
+          </Text>
+          {/* `aria-disabled` rather than `disabled`: a disabled button drops the focus it holds. */}
+          <Button
+            aria-busy={isRetryingCapabilities}
+            aria-disabled={isRetryingCapabilities}
+            size="xs"
+            variant="outline"
+            onClick={retryCapabilities}
+          >
+            {t('common.retry')}
+          </Button>
+        </HStack>
+      ) : null}
+      {capabilitiesUnavailable && !showCapabilitiesFailure ? (
+        <Text color="fg.muted" fontSize="2xs" role="status">
+          {t('widgets.layers.control.capabilitiesLoading')}
         </Text>
       ) : null}
     </Stack>

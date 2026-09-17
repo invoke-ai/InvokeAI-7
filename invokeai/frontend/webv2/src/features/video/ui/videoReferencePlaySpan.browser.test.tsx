@@ -5,14 +5,14 @@ import { ChakraProvider } from '@chakra-ui/react';
 import { DndContext } from '@dnd-kit/core';
 import { system } from '@theme/system';
 import i18next from 'i18next';
-import { act, useCallback, useState, type ReactNode } from 'react';
+import { act, useCallback, useEffect, useState, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { I18nextProvider, initReactI18next } from 'react-i18next';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { VideoReferenceListField } from './VideoReferenceListField';
 import { VideoSourceClipField } from './VideoSourceClipField';
-import { VideoUiProvider, type VideoUiAdapter } from './VideoUiContext';
+import { VideoUiProvider, type VideoSpanPlaybackState, type VideoUiAdapter } from './VideoUiContext';
 
 /**
  * The trim rows show two still frames, which cannot say what is between them — and for an
@@ -42,6 +42,7 @@ await i18n.use(initReactI18next).init({
             chooseReference: 'Choose from Gallery',
             moveReferenceDown: 'Move reference down',
             moveReferenceUp: 'Move reference up',
+            pauseSelection: 'Pause selection in Preview',
             playSelection: 'Play selection in Preview',
             referenceConditioningVideo: 'Video only',
             referenceConditioningVideoAudio: 'Video + audio',
@@ -71,8 +72,24 @@ let host: HTMLDivElement;
 let root: Root;
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const playVideoSpanInPreview = vi.fn();
+const playVideoSpanInPreview = vi.fn<VideoUiAdapter['playVideoSpanInPreview']>();
 const reportError = vi.fn();
+
+/** A stand-in for the Preview player's report, driven by the test. */
+let playbackState: VideoSpanPlaybackState | null = null;
+const playbackListeners = new Set<() => void>();
+const reportPlayback = (state: VideoSpanPlaybackState | null): void => {
+  playbackState = state;
+
+  for (const listener of playbackListeners) {
+    listener();
+  }
+};
+const pausePlayback = vi.fn(() => {
+  if (playbackState) {
+    reportPlayback({ ...playbackState, isPlaying: false });
+  }
+});
 
 const adapter = {
   getUploadBoardId: () => 'none',
@@ -80,6 +97,14 @@ const adapter = {
   playVideoSpanInPreview,
   reportError,
   touchGalleryImages: vi.fn(),
+  videoSpanPlayback: {
+    getState: () => playbackState,
+    subscribe: (listener: () => void) => {
+      playbackListeners.add(listener);
+
+      return () => playbackListeners.delete(listener);
+    },
+  },
 } as unknown as VideoUiAdapter;
 
 const galleryVideoItem = {
@@ -133,6 +158,36 @@ const InitialVideoHarness = ({ disabled }: { disabled: boolean }) => {
   return <VideoSourceClipField disabled={disabled} sourceVideo={source} onChange={setSource} />;
 };
 
+/** The reference list with its trim reachable from the test, as a slider drag would move it. */
+let retrim: ((update: Partial<VideoSourceClip>) => void) | null = null;
+
+const RetrimmableHarness = () => {
+  const [references, setReferences] = useState<VideoReferenceItem[]>([videoReference()]);
+  const handleChange = useCallback((update: (current: VideoReferenceItem[]) => VideoReferenceItem[]) => {
+    setReferences((current) => update(current));
+  }, []);
+
+  useEffect(() => {
+    retrim = (update) => {
+      setReferences((current) =>
+        current.map((reference) =>
+          reference.kind === 'video' ? { ...reference, clip: { ...reference.clip, ...update } } : reference
+        )
+      );
+    };
+  }, []);
+
+  return (
+    <VideoReferenceListField
+      maxImages={9}
+      maxVideos={3}
+      references={references}
+      targetArea={null}
+      onChange={handleChange}
+    />
+  );
+};
+
 const renderTree = async (element: ReactNode): Promise<void> => {
   await act(() =>
     root.render(
@@ -153,6 +208,10 @@ const playButtons = (): HTMLButtonElement[] => [
   ...document.querySelectorAll<HTMLButtonElement>('button[aria-label="Play selection in Preview"]'),
 ];
 
+const pauseButtons = (): HTMLButtonElement[] => [
+  ...document.querySelectorAll<HTMLButtonElement>('button[aria-label="Pause selection in Preview"]'),
+];
+
 const deferred = <T,>() => {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((resolvePromise) => {
@@ -171,8 +230,11 @@ const press = async (button: HTMLButtonElement): Promise<void> => {
 
 beforeEach(() => {
   galleryMocks.resolve.mockReset().mockResolvedValue(galleryVideoItem);
-  playVideoSpanInPreview.mockReset();
+  playVideoSpanInPreview.mockReset().mockReturnValue(7);
   reportError.mockReset();
+  pausePlayback.mockClear();
+  playbackState = null;
+  retrim = null;
   host = document.createElement('div');
   document.body.append(host);
   root = createRoot(host);
@@ -252,6 +314,100 @@ describe('video reference span playback', () => {
 
     expect(playVideoSpanInPreview).toHaveBeenCalledTimes(1);
     expect(button?.getAttribute('aria-disabled')).toBe('false');
+  });
+
+  it('turns into a pause control only for the loop it started, and stops it', async () => {
+    await render([videoReference(), videoReference({ startFrame: 0, endFrame: 15 })]);
+    const [first, second] = playButtons();
+
+    // The player reporting on somebody else's request — a loop the sibling card started,
+    // or one from before this session — is not this button's to stop.
+    await act(() => reportPlayback({ isPlaying: true, pause: pausePlayback, token: 3 }));
+    expect(pauseButtons()).toHaveLength(0);
+
+    await press(first!);
+    expect(playVideoSpanInPreview).toHaveBeenCalledTimes(1);
+
+    // Preview has the loop running: this card offers to stop it, its sibling still to play.
+    await act(() => reportPlayback({ isPlaying: true, pause: pausePlayback, token: 7 }));
+    expect(pauseButtons()).toEqual([first]);
+    expect(playButtons()).toEqual([second]);
+
+    await press(first!);
+
+    // A stop, not another request: the clip pauses where it is.
+    expect(pausePlayback).toHaveBeenCalledTimes(1);
+    expect(playVideoSpanInPreview).toHaveBeenCalledTimes(1);
+    expect(galleryMocks.resolve).toHaveBeenCalledTimes(1);
+    expect(pauseButtons()).toHaveLength(0);
+    expect(playButtons()).toEqual([first, second]);
+  });
+
+  it('plays the trim as it now stands when pressed again after a pause', async () => {
+    await renderTree(<RetrimmableHarness />);
+    const [button] = playButtons();
+
+    await press(button!);
+    await act(() => reportPlayback({ isPlaying: true, pause: pausePlayback, token: 7 }));
+    await press(button!);
+    expect(pausePlayback).toHaveBeenCalledTimes(1);
+
+    // The user moved the window while it sat paused. The next press is a fresh request for
+    // the window the rows now show — from its start — not a resume of the old one.
+    playVideoSpanInPreview.mockReturnValue(8);
+    await act(() => retrim?.({ endFrame: 79, startFrame: 64 }));
+    await press(button!);
+
+    expect(playVideoSpanInPreview).toHaveBeenCalledTimes(2);
+    expect(playVideoSpanInPreview).toHaveBeenLastCalledWith({ endSeconds: 5, item: galleryVideoItem, startSeconds: 4 });
+
+    // And it is the new request's report the button now answers to.
+    await act(() => reportPlayback({ isPlaying: true, pause: pausePlayback, token: 7 }));
+    expect(pauseButtons()).toHaveLength(0);
+    await act(() => reportPlayback({ isPlaying: true, pause: pausePlayback, token: 8 }));
+    expect(pauseButtons()).toEqual([button]);
+  });
+
+  it('keeps its paused loop when a fresh press is refused', async () => {
+    await render([videoReference()]);
+    const [button] = playButtons();
+
+    await press(button!);
+    await act(() => reportPlayback({ isPlaying: true, pause: pausePlayback, token: 7 }));
+    await press(button!);
+    expect(pauseButtons()).toHaveLength(0);
+
+    // Preview could not be raised for the re-press (no center view after a layout change):
+    // nothing was asked of the player, whose loop is still armed under the first request.
+    // A native play resumes that loop, and it is still this button's to stop.
+    playVideoSpanInPreview.mockReturnValueOnce(null);
+    await press(button!);
+    expect(playVideoSpanInPreview).toHaveBeenCalledTimes(2);
+
+    await act(() => reportPlayback({ isPlaying: true, pause: pausePlayback, token: 7 }));
+    expect(pauseButtons()).toEqual([button]);
+  });
+
+  it('follows the player when the loop is stopped or lost elsewhere', async () => {
+    await render([videoReference()]);
+    const [button] = playButtons();
+
+    await press(button!);
+    await act(() => reportPlayback({ isPlaying: true, pause: pausePlayback, token: 7 }));
+    expect(pauseButtons()).toEqual([button]);
+
+    // A pause from the native controls shows here too: the selection is not playing.
+    await act(() => reportPlayback({ isPlaying: false, pause: pausePlayback, token: 7 }));
+    expect(pauseButtons()).toHaveLength(0);
+
+    // A native play resumes it, and this is still the loop that button started.
+    await act(() => reportPlayback({ isPlaying: true, pause: pausePlayback, token: 7 }));
+    expect(pauseButtons()).toEqual([button]);
+
+    // The user scrubbed out, or Preview closed: nothing left to stop.
+    await act(() => reportPlayback(null));
+    expect(pauseButtons()).toHaveLength(0);
+    expect(playButtons()).toEqual([button]);
   });
 
   it('reports a failed lookup instead of leaving the control stuck', async () => {

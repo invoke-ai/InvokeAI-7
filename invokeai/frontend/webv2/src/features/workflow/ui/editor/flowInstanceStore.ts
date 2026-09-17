@@ -1,4 +1,8 @@
+import type { XYPosition } from '@features/workflow/contracts';
 import type { ReactFlowInstance } from '@xyflow/react';
+
+import { registerAccountOwnedResource } from '@platform/state/accountLifecycle';
+import { createExternalStore } from '@platform/state/externalStore';
 
 import type { WorkflowFlowEdge, WorkflowFlowNode } from './flowAdapters';
 
@@ -24,3 +28,33 @@ export const releaseWorkflowFlowInstance = (instance: WorkflowFlowInstance): voi
 };
 
 export const getWorkflowFlowInstance = (): WorkflowFlowInstance | null => flowInstance;
+
+export interface WorkflowFitViewTarget {
+  id: string;
+  position: XYPosition;
+}
+
+export interface WorkflowFitViewRequestSnapshot {
+  /** A pending request to fit the graph once exactly these nodes are mounted and measured (e.g. after a load). */
+  request: { nodes: readonly WorkflowFitViewTarget[]; token: number } | null;
+}
+
+/** Lives here rather than in the selection store so the library load paths stay out of the editor's startup graph. */
+export const workflowFitViewRequestStore = createExternalStore<WorkflowFitViewRequestSnapshot>({ request: null });
+
+registerAccountOwnedResource({
+  clear: () => workflowFitViewRequestStore.setSnapshot({ request: null }),
+  name: 'workflow-fit-view-request',
+});
+
+export const requestWorkflowFitView = (nodes: readonly WorkflowFitViewTarget[]): void => {
+  const previousToken = workflowFitViewRequestStore.getSnapshot().request?.token ?? 0;
+
+  workflowFitViewRequestStore.setSnapshot({
+    request: { nodes: nodes.map(({ id, position }) => ({ id, position })), token: previousToken + 1 },
+  });
+};
+
+export const clearWorkflowFitViewRequest = (): void => {
+  workflowFitViewRequestStore.setSnapshot({ request: null });
+};

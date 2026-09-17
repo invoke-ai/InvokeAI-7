@@ -11,7 +11,7 @@ from unittest.mock import MagicMock
 import pytest
 import torch
 
-from invokeai.app.invocations.minimax_h3_latents_to_video import decode_video_latents
+from invokeai.app.invocations.vae.minimax_h3_latents_to_video import decode_video_latents
 from invokeai.app.services.session_processor.session_processor_common import CanceledException
 from invokeai.backend.minimax_h3.autoencoder_kl_minimax_h3 import AutoencoderKLMiniMaxH3
 

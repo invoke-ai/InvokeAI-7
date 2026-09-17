@@ -1,5 +1,5 @@
+/* eslint-disable react/refs, react/immutability */
 import type { GalleryItemKey, GalleryItemRef } from '@features/gallery';
-/* eslint-disable react/react-compiler */
 import type { StreamingImageSource } from '@platform/ui/streaming-image/streamingImageSource';
 
 import { Badge, Flex, Text } from '@chakra-ui/react';
@@ -28,9 +28,11 @@ import { useTranslation } from 'react-i18next';
 import { PreviewCompareDropZone } from './PreviewCompareDropZone';
 import { FittedFrame, PreviewStage } from './PreviewStage';
 import {
+  clearVideoSpanPlaybackState,
   consumeVideoSpanPlaybackRequest,
   getVideoSpanPlaybackRequest,
   isVideoSpanPlaybackFresh,
+  publishVideoSpanPlaybackState,
   subscribeVideoSpanPlaybackRequests,
 } from './spanPlaybackRequest';
 import { usePreviewLoupe, type PreviewLoupeControls } from './usePreviewLoupe';
@@ -431,8 +433,13 @@ const PreviewVideo = ({
   // outlive: the request channel checks freshness once, at consume time, so a span parked
   // here through a failed load or a hidden keep-alive would otherwise replay unmuted
   // minutes later when the user pressed Retry.
-  const parkedSpanRef = useRef<{ expiresAt: number; span: VideoSpan } | null>(null);
+  const parkedSpanRef = useRef<{ expiresAt: number; span: VideoSpan; token: number } | null>(null);
   const spanFrameRef = useRef<number | null>(null);
+  // The request behind the loop on screen, reported back so the button that made it can
+  // offer to stop it. Outlives a pause (the loop stays armed, so a native play resumes the
+  // selection under the same request) and a hide (same reason); retired only when the user
+  // takes the playhead out of the window or a newer request replaces it.
+  const spanTokenRef = useRef<number | null>(null);
   const seekWithinSpan = useCallback((video: HTMLVideoElement, time: number) => {
     try {
       video.currentTime = time;
@@ -445,6 +452,31 @@ const PreviewVideo = ({
     if (spanFrameRef.current !== null) {
       cancelAnimationFrame(spanFrameRef.current);
       spanFrameRef.current = null;
+    }
+  }, []);
+  const pauseSpanPlayback = useCallback(() => {
+    videoRef.current?.pause();
+  }, []);
+  // Reported from the element's own play/pause transitions, never from the request: what
+  // the panel shows as running has to be what is actually running, whichever control —
+  // ours, the native bar, or an autoplay refusal — last changed it.
+  const publishSpanState = useCallback(() => {
+    const token = spanTokenRef.current;
+    const video = videoRef.current;
+
+    if (token === null || !video) {
+      return;
+    }
+
+    publishVideoSpanPlaybackState({ isPlaying: !video.paused, pause: pauseSpanPlayback, token });
+  }, [pauseSpanPlayback]);
+  const retireSpanToken = useCallback(() => {
+    const token = spanTokenRef.current;
+
+    spanTokenRef.current = null;
+
+    if (token !== null) {
+      clearVideoSpanPlaybackState(token);
     }
   }, []);
   // `timeupdate` fires about four times a second, which overruns a two-second selection by
@@ -478,7 +510,7 @@ const PreviewVideo = ({
     spanFrameRef.current = requestAnimationFrame(tick);
   }, [enforceSpan]);
   const playSpan = useCallback(
-    (span: VideoSpan, expiresAt?: number) => {
+    (span: VideoSpan, token: number, expiresAt?: number) => {
       const video = videoRef.current;
 
       // Before metadata there is no duration to clamp against and the element drops the
@@ -489,7 +521,7 @@ const PreviewVideo = ({
         // The deadline belongs to the gesture, not to this attempt: minting a fresh one on
         // every re-park would let hide/show cycles on a clip that never loads extend it
         // indefinitely, which is the one thing the deadline exists to stop.
-        parkedSpanRef.current = { expiresAt: expiresAt ?? Date.now() + PARKED_SPAN_TTL_MS, span };
+        parkedSpanRef.current = { expiresAt: expiresAt ?? Date.now() + PARKED_SPAN_TTL_MS, span, token };
         return;
       }
 
@@ -505,6 +537,16 @@ const PreviewVideo = ({
       // duration falls short of the frame count the panel estimated, or a foreign record
       // with inverted bounds — has nowhere to wrap to, so it plays without a loop.
       spanRef.current = endSeconds > startSeconds ? { endSeconds, startSeconds } : null;
+      // A newer request supersedes the loop before it, whatever that one was doing: its
+      // button reverts to play, and this one's takes over. Only a loop is reported — a
+      // collapsed window plays once with nothing armed, and a stop for it would stop
+      // nothing the button promised.
+      retireSpanToken();
+
+      if (spanRef.current !== null) {
+        spanTokenRef.current = token;
+      }
+
       seekWithinSpan(video, startSeconds);
       // Autoplay policy can refuse an unmuted play(). That leaves the clip parked on the
       // first selected frame with the native controls live and the loop still armed, so
@@ -512,10 +554,12 @@ const PreviewVideo = ({
       void video.play().catch(() => {});
       // play() resolves asynchronously, so the element can still be paused here and the
       // watch would stop after one frame; `onPlay` arms it for that case. Both paths are
-      // needed — a span arriving mid-playback fires no `play` event.
+      // needed — a span arriving mid-playback fires no `play` event, and the same event
+      // gap is why the state is published here as well as from the handlers.
       startSpanWatch();
+      publishSpanState();
     },
-    [seekWithinSpan, startSpanWatch]
+    [publishSpanState, retireSpanToken, seekWithinSpan, startSpanWatch]
   );
   // What retires a loop is the playhead LEAVING the window, not who moved it. Asking where
   // it landed rather than marking our own seeks is what makes this survive the orderings a
@@ -539,11 +583,29 @@ const PreviewVideo = ({
       return;
     }
 
-    // The user took the playhead somewhere the loop was not going. They own it from here.
+    // The user took the playhead somewhere the loop was not going. They own it from here,
+    // and the panel's button goes back to offering the selection rather than a stop.
     spanRef.current = null;
     parkedSpanRef.current = null;
     stopSpanWatch();
-  }, [stopSpanWatch]);
+    retireSpanToken();
+  }, [retireSpanToken, stopSpanWatch]);
+  const handlePlay = useCallback(() => {
+    startSpanWatch();
+    publishSpanState();
+  }, [publishSpanState, startSpanWatch]);
+  const handlePause = useCallback(() => {
+    stopSpanWatch();
+    publishSpanState();
+  }, [publishSpanState, stopSpanWatch]);
+  // `load()` — protected-media recovery, or the failure overlay's Retry — flips the element
+  // to paused WITHOUT firing `pause`; `emptied` is the event it does fire. Left unreported,
+  // the panel would go on offering a stop for a loop that is no longer running, and the
+  // stop itself would be a no-op: pausing a paused element fires nothing either.
+  const handleEmptied = useCallback(() => {
+    publishCopyAvailability();
+    publishSpanState();
+  }, [publishCopyAvailability, publishSpanState]);
   // A trim can end on the clip's final frame, where the playhead reaches the window's end
   // only as the media ends: `pause` stops the watch and `enforceSpan` bails on a paused
   // element, so whether the last `timeupdate` wrapped first was down to the browser.
@@ -557,7 +619,12 @@ const PreviewVideo = ({
 
     seekWithinSpan(video, span.startSeconds);
     void video.play().catch(() => {});
-  }, [seekWithinSpan]);
+    // The `pause` that precedes `ended` has just reported the loop stopped; `play()` has
+    // already flipped the element back, so say so now rather than a task later when the
+    // `play` event lands — the gap is a paint, and the panel's icon would blink on every
+    // wrap of a window that ends on the clip's last frame.
+    publishSpanState();
+  }, [publishSpanState, seekWithinSpan]);
   // Playback must not outlive this view being on screen. A widget the shell
   // keeps mounted behind a layout switch is hidden with `display: none`, which
   // does not stop media — the clip would keep running, with audio, behind a
@@ -584,7 +651,7 @@ const PreviewVideo = ({
       consumeVideoSpanPlaybackRequest(request.token);
 
       if (isVideoSpanPlaybackFresh(request.requestedAt)) {
-        playSpan({ endSeconds: request.endSeconds, startSeconds: request.startSeconds });
+        playSpan({ endSeconds: request.endSeconds, startSeconds: request.startSeconds }, request.token);
       }
     };
     // A span parked while the element was detached — the view was hidden mid-load — has
@@ -596,7 +663,7 @@ const PreviewVideo = ({
       parkedSpanRef.current = null;
 
       if (Date.now() <= parked.expiresAt) {
-        playSpan(parked.span, parked.expiresAt);
+        playSpan(parked.span, parked.token, parked.expiresAt);
       }
     }
 
@@ -608,6 +675,14 @@ const PreviewVideo = ({
       unsubscribe();
       stopSpanWatch();
       video?.pause();
+      // Nothing is on screen to stop, so the panel must not offer to. The token itself
+      // stays: the loop is still armed, and a native play after a re-show resumes it
+      // under the request it belongs to.
+      const token = spanTokenRef.current;
+
+      if (token !== null) {
+        clearVideoSpanPlaybackState(token);
+      }
     };
   });
   useImperativeHandle(
@@ -694,7 +769,7 @@ const PreviewVideo = ({
     // is still fresh. Its own seek is the sharper version of the nudge below — it lands on
     // a frame the user asked for, and clears the show-poster flag the same way.
     if (parked && Date.now() <= parked.expiresAt) {
-      playSpan(parked.span, parked.expiresAt);
+      playSpan(parked.span, parked.token, parked.expiresAt);
       return;
     }
 
@@ -794,13 +869,13 @@ const PreviewVideo = ({
           src={source.src}
           style={VIDEO_STYLE}
           onCanPlay={publishCopyAvailability}
-          onEmptied={publishCopyAvailability}
+          onEmptied={handleEmptied}
           onError={handleVideoError}
           onLoadedData={publishCopyAvailability}
           onEnded={handleSpanEnded}
           onLoadedMetadata={handleLoadedMetadata}
-          onPause={stopSpanWatch}
-          onPlay={startSpanWatch}
+          onPause={handlePause}
+          onPlay={handlePlay}
           onPlaying={publishCopyAvailability}
           onResize={publishCopyAvailability}
           onSeeked={publishCopyAvailability}

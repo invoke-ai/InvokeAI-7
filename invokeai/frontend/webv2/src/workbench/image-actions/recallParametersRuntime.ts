@@ -1,5 +1,6 @@
 import type { SocketHub } from '@platform/transport/socketHub';
 import type { WorkbenchCommands, WorkbenchQueries } from '@workbench/workbenchStore';
+import type { TFunction } from 'i18next';
 
 import { ensureModelsLoaded, getModelsSnapshot } from '@features/models';
 import { captureAccountScope, isAccountScopeCurrent } from '@platform/state/accountLifecycle';
@@ -35,6 +36,7 @@ export const createRecallParametersRuntime = ({
   hub,
   queries,
   replay = [],
+  t,
 }: {
   commands: Pick<WorkbenchCommands, 'generation' | 'notifications'>;
   /**
@@ -46,6 +48,8 @@ export const createRecallParametersRuntime = ({
   hub: Pick<SocketHub, 'on'>;
   queries: Pick<WorkbenchQueries, 'getProject' | 'getSnapshot'>;
   replay?: readonly PendingRecallEvent[];
+  /** Resolves against the current language at call time; captured once, at attach. */
+  t: TFunction;
 }): RecallParametersRuntime => {
   let disposed = false;
   let chain: Promise<void> = Promise.resolve();
@@ -94,6 +98,7 @@ export const createRecallParametersRuntime = ({
 
         await executeRecallParameters({
           commands,
+          t,
           getGenerateValues: () => {
             const project = queries.getProject(projectId);
             return project ? getProjectWidgetValues(project, 'generate') : null;

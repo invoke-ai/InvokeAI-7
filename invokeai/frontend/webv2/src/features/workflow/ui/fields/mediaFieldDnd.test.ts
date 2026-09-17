@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { getWorkflowMediaFieldDropId, getWorkflowMediaFieldDropItem } from './mediaFieldDnd';
+import {
+  getWorkflowMediaFieldDropId,
+  getWorkflowMediaFieldDropItem,
+  getWorkflowMediaFieldDropItems,
+} from './mediaFieldDnd';
 
 const drag = (items: { kind: string; name: string }[]) => ({ items, kind: 'gallery-item' });
 
@@ -43,5 +47,35 @@ describe('getWorkflowMediaFieldDropItem', () => {
 describe('getWorkflowMediaFieldDropId', () => {
   it('namespaces ids so they cannot collide with other droppables', () => {
     expect(getWorkflowMediaFieldDropId('node-1-video:r1')).toBe('workflow-media-field:node-1-video:r1');
+  });
+});
+
+describe('getWorkflowMediaFieldDropItems', () => {
+  it('returns every dragged item of the kind, in drag order', () => {
+    expect(
+      getWorkflowMediaFieldDropItems(
+        drag([
+          { kind: 'image', name: 'a.png' },
+          { kind: 'image', name: 'b.png' },
+        ]),
+        'image'
+      )
+    ).toEqual([
+      { kind: 'image', name: 'a.png' },
+      { kind: 'image', name: 'b.png' },
+    ]);
+  });
+
+  it('rejects mixed-kind drags and non-gallery payloads', () => {
+    expect(
+      getWorkflowMediaFieldDropItems(
+        drag([
+          { kind: 'image', name: 'a.png' },
+          { kind: 'video', name: 'b.mp4' },
+        ]),
+        'image'
+      )
+    ).toEqual([]);
+    expect(getWorkflowMediaFieldDropItems({ kind: 'gallery-board' }, 'image')).toEqual([]);
   });
 });

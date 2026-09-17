@@ -47,6 +47,7 @@ let root: Root | null = null;
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const onUseSize = vi.fn();
+const onFindInGallery = vi.fn();
 const onPatch = vi.fn();
 const onRemove = vi.fn();
 
@@ -75,6 +76,7 @@ const Stack = ({ ids }: { ids: string[] }) => {
           index={index}
           referenceImage={referenceImage}
           selectedModel={undefined}
+          onFindInGallery={onFindInGallery}
           onMove={handleMove}
           onPatch={onPatch}
           onRemove={onRemove}

@@ -7,6 +7,7 @@ import type { CommitGeneratedImageResult, LayerExportGuard } from '@workbench/ca
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  reserveLayerWorkflowSeeds,
   runLayerWorkflow,
   type LayerWorkflowDestination,
   type RunLayerWorkflowDeps,
@@ -41,6 +42,7 @@ const image: GalleryImage = {
 const createDeps = () => {
   const order: string[] = [];
   const deps: RunLayerWorkflowDeps = {
+    advanceSeeds: vi.fn(() => order.push('advance-seeds')),
     appendStaging: vi.fn(() => order.push('append-staging')),
     buildGraph: vi.fn(() => {
       order.push('build-graph');
@@ -63,6 +65,10 @@ const createDeps = () => {
     makeDurable: vi.fn(() => {
       order.push('make-durable');
       return Promise.resolve();
+    }),
+    reserveSeeds: vi.fn(() => {
+      order.push('reserve-seeds');
+      return { seedAdvances: [], seeds: [] };
     }),
     runGraph: vi.fn<RunLayerWorkflowDeps['runGraph']>(() => {
       order.push('run-graph');
@@ -97,7 +103,132 @@ const createOptions = (
   templatesSnapshot,
 });
 
+describe('reserveLayerWorkflowSeeds', () => {
+  const seedTemplate = {
+    category: 'noise',
+    classification: 'stable',
+    description: '',
+    inputs: {
+      seed: {
+        default: 0,
+        description: '',
+        exclusiveMaximum: null,
+        exclusiveMinimum: null,
+        fieldKind: 'input',
+        input: 'any',
+        maximum: 4_294_967_295,
+        minimum: 0,
+        multipleOf: null,
+        name: 'seed',
+        options: null,
+        required: false,
+        title: 'Seed',
+        type: { batch: false, cardinality: 'SINGLE', name: 'IntegerField' },
+        uiChoiceLabels: null,
+        uiComponent: null,
+        uiHidden: false,
+        uiModelBase: null,
+        uiModelFormat: null,
+        uiModelType: null,
+        uiOrder: null,
+      },
+    },
+    nodePack: 'invokeai',
+    outputs: {},
+    outputType: 'noise_output',
+    tags: [],
+    title: 'Noise',
+    type: 'noise',
+    useCache: true,
+    version: '1.0.0',
+  };
+  const seededDocument = {
+    ...document,
+    edges: [],
+    nodes: [
+      {
+        data: {
+          inputs: { seed: { label: '', name: 'seed', seedMode: 'increment', value: 42 } },
+          isIntermediate: true,
+          isOpen: true,
+          label: '',
+          nodePack: 'invokeai',
+          notes: '',
+          type: 'noise',
+          useCache: true,
+          version: '1.0.0',
+        },
+        id: 'noise-1',
+        position: { x: 0, y: 0 },
+        type: 'invocation',
+      },
+    ],
+  } as ProjectGraphState;
+
+  it('plans one run: the authored seed goes into the graph and the field moves on by one', () => {
+    expect(
+      reserveLayerWorkflowSeeds(seededDocument, {
+        error: null,
+        status: 'loaded',
+        templates: { noise: seedTemplate },
+      } as InvocationTemplatesSnapshot)
+    ).toEqual({
+      seedAdvances: [{ fieldName: 'seed', fromSeed: 42, nodeId: 'noise-1', seedMode: 'increment', toSeed: 43 }],
+      seeds: [{ fieldName: 'seed', nodeId: 'noise-1', seed: 42, seedStep: 1 }],
+    });
+  });
+
+  it('reserves nothing while node definitions are not loaded', () => {
+    expect(reserveLayerWorkflowSeeds(seededDocument, { error: null, status: 'loading', templates: {} })).toEqual({
+      seedAdvances: [],
+      seeds: [],
+    });
+  });
+});
+
 describe('runLayerWorkflow', () => {
+  it('reserves seeds only once the layer is exported and uploaded, in the same turn as the graph build', async () => {
+    const { deps, order } = createDeps();
+    const seeds = [{ fieldName: 'seed', nodeId: 'noise-1', seed: 42, seedStep: 1 as const }];
+    const seedAdvances = [
+      { fieldName: 'seed', fromSeed: 42, nodeId: 'noise-1', seedMode: 'increment' as const, toSeed: 43 },
+    ];
+    vi.mocked(deps.reserveSeeds).mockImplementation(() => {
+      order.push('reserve-seeds');
+      return { seedAdvances, seeds };
+    });
+    vi.mocked(deps.runGraph).mockImplementation(() => {
+      order.push('run-graph');
+      return Promise.reject(new Error('run failed'));
+    });
+
+    // A failure after the reservation has consumed the seed, like a cancelled queue item.
+    expect(await runLayerWorkflow(createOptions('gallery', deps))).toMatchObject({ stage: 'graph', status: 'failed' });
+    expect(order.slice(0, 5)).toEqual(['export', 'upload', 'reserve-seeds', 'advance-seeds', 'build-graph']);
+    expect(deps.advanceSeeds).toHaveBeenCalledWith(seedAdvances);
+    expect(deps.buildGraph).toHaveBeenCalledWith(expect.objectContaining({ seeds }));
+  });
+
+  it('consumes no seed when the layer cannot be exported', async () => {
+    const { deps } = createDeps();
+    vi.mocked(deps.exportLayer).mockResolvedValue({ status: 'locked' } as never);
+
+    expect(await runLayerWorkflow(createOptions('gallery', deps))).toMatchObject({ status: 'locked' });
+    expect(deps.reserveSeeds).not.toHaveBeenCalled();
+    expect(deps.advanceSeeds).not.toHaveBeenCalled();
+  });
+
+  it('skips the advance when nothing steps', async () => {
+    const { deps } = createDeps();
+    const seeds = [{ fieldName: 'seed', nodeId: 'noise-1', seed: 42, seedStep: 1 as const }];
+    vi.mocked(deps.reserveSeeds).mockReturnValue({ seedAdvances: [], seeds });
+
+    await runLayerWorkflow(createOptions('gallery', deps));
+
+    expect(deps.buildGraph).toHaveBeenCalledWith(expect.objectContaining({ seeds }));
+    expect(deps.advanceSeeds).not.toHaveBeenCalled();
+  });
+
   it('runs the captured output to Gallery and refreshes the captured project', async () => {
     const { deps, order } = createDeps();
 
@@ -109,6 +240,7 @@ describe('runLayerWorkflow', () => {
     expect(order).toEqual([
       'export',
       'upload',
+      'reserve-seeds',
       'build-graph',
       'run-graph',
       'get-image',
@@ -120,6 +252,7 @@ describe('runLayerWorkflow', () => {
       imageName: 'layer-input.png',
       input,
       output,
+      seeds: [],
       templatesSnapshot,
     });
     expect(deps.touchGallery).toHaveBeenCalledWith('project-1');
@@ -137,6 +270,7 @@ describe('runLayerWorkflow', () => {
     expect(order).toEqual([
       'export',
       'upload',
+      'reserve-seeds',
       'build-graph',
       'run-graph',
       'get-image',
@@ -164,6 +298,7 @@ describe('runLayerWorkflow', () => {
     expect(order).toEqual([
       'export',
       'upload',
+      'reserve-seeds',
       'build-graph',
       'run-graph',
       'get-image',

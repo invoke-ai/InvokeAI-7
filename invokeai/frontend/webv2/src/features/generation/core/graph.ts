@@ -5,6 +5,8 @@ import type {
   ResultDestination,
 } from '@features/generation/core/contracts';
 
+import { SEED_MAX } from '@platform/core/seed';
+
 import type {
   CompiledGenerateGraph,
   ComponentModelConfig,
@@ -28,14 +30,12 @@ import {
 import {
   getCompatibleDiffusersComponentSource,
   isAnimaQwen3Encoder,
-  isAnimaVae,
   isBundledMainForBase,
   isFlux2MistralEncoder,
   isFlux2Qwen3EncoderForModel,
   isNonAnimaQwen3Encoder,
   isSelfContainedSDNQFlux1Pipeline,
-  isKrea2Vae,
-  isVaeForBases,
+  isVaeCompatibleWithGenerateModel,
 } from './componentCompatibility';
 import {
   addEdge,
@@ -49,15 +49,15 @@ import {
 import { addKrea2ConditioningEnhancers } from './krea2Conditioning';
 import { addPidDecode, getPidDenoiseSize, getPidMetadata, shouldUsePidDecode } from './pidGraph';
 import { getEffectiveReferenceImage } from './referenceImage';
-import { SEED_MAX } from './settings';
 
 const getCompatibleComponentSource = (
   settings: GenerateSettings,
   model: MainModelConfig
 ): MainModelConfig | undefined => getCompatibleDiffusersComponentSource(model, settings.componentSourceModel);
 
-const getCompatibleVae = (settings: GenerateSettings, bases: readonly string[]) =>
-  settings.vae && isVaeForBases(bases)(settings.vae) ? settings.vae : null;
+// The picker's rule, not a copy of it: a base list here once dropped a VAE the picker offered.
+const getCompatibleVae = (settings: GenerateSettings, model: MainModelConfig) =>
+  settings.vae && isVaeCompatibleWithGenerateModel(model, settings.vae) ? settings.vae : null;
 
 const toImageField = (image: GenerateReferenceImageAsset) => ({
   image_name: getEffectiveReferenceImage(image).image_name,
@@ -350,10 +350,10 @@ const buildSDGraph = (
     type: 'denoise_latents',
   });
   // A VAE override only applies when it matches the main model's architecture.
-  const vaeLoader =
-    settings.vae && settings.vae.base === model.base
-      ? addNode(graph, { id: 'vae_loader', type: 'vae_loader', vae_model: settings.vae })
-      : null;
+  const vaeOverride = getCompatibleVae(settings, model);
+  const vaeLoader = vaeOverride
+    ? addNode(graph, { id: 'vae_loader', type: 'vae_loader', vae_model: vaeOverride })
+    : null;
   const seamless =
     settings.seamlessXAxis || settings.seamlessYAxis
       ? addNode(graph, {
@@ -542,6 +542,7 @@ const buildSD3Graph = (
   projectSettings: GenerationProjectSettings
 ): BackendGraphContract => {
   const graph: BackendGraphContract = { edges: [], id: createId('sd3_graph'), nodes: {} };
+  const vaeModel = getCompatibleVae(settings, model);
   const { negativePrompt, positivePrompt, seed } = addPromptAndSeedNodes(graph);
   const modelLoader = addNode(graph, {
     clip_g_model: settings.clipGEmbedModel ?? undefined,
@@ -550,7 +551,7 @@ const buildSD3Graph = (
     model,
     t5_encoder_model: settings.t5EncoderModel ?? undefined,
     type: 'sd3_model_loader',
-    vae_model: settings.vae ?? undefined,
+    vae_model: vaeModel ?? undefined,
   });
   const posCond = addNode(graph, { id: 'pos_cond', type: 'sd3_text_encoder' });
   const negCond = addNode(graph, { id: 'neg_cond', type: 'sd3_text_encoder' });
@@ -591,7 +592,7 @@ const buildSD3Graph = (
   addEdge(graph, seed, 'value', denoise, 'seed');
   addMetadata(graph, output, settings, model, 'sd3_txt2img', projectSettings, {
     scheduler: undefined,
-    vae: settings.vae ?? undefined,
+    vae: vaeModel ?? undefined,
     ...(shouldUsePidDecode(settings, model.base) ? getPidMetadata(settings) : {}),
   });
 
@@ -613,7 +614,7 @@ const buildFluxGraph = (
   const hasBundledComponents = isSelfContainedSDNQFlux1Pipeline(model);
   const t5EncoderModel = hasBundledComponents ? null : requireComponent(settings.t5EncoderModel, 'T5 Encoder');
   const clipEmbedModel = hasBundledComponents ? null : requireComponent(settings.clipEmbedModel, 'CLIP Embed');
-  const vaeModel = hasBundledComponents ? null : requireComponent(getCompatibleVae(settings, ['flux']), 'FLUX VAE');
+  const vaeModel = hasBundledComponents ? null : requireComponent(getCompatibleVae(settings, model), 'FLUX VAE');
   const scheduler = coerceSchedulerForGraph(model, settings.scheduler);
   const activeLoras = getActiveCompatibleLoras(settings, model);
   const modelLoader = addNode(graph, {
@@ -702,7 +703,7 @@ const buildFlux2Graph = (
       ? settings.qwen3EncoderModel
       : null;
   const encoderModel = isDev ? mistralEncoderModel : qwen3EncoderModel;
-  const vaeModel = getCompatibleVae(settings, ['flux2']);
+  const vaeModel = getCompatibleVae(settings, model);
 
   if (!hasBundledComponents && (!vaeModel || !encoderModel)) {
     throw new Error(
@@ -837,6 +838,61 @@ const buildCogView4Graph = (
   return graph;
 };
 
+const buildErnieImageGraph = (
+  settings: GenerateSettings,
+  model: MainModelConfig,
+  outputIsIntermediate: boolean,
+  projectSettings: GenerationProjectSettings
+): BackendGraphContract => {
+  // No component slots: ernie_image_model_loader reads the transformer, VAE, text encoder and
+  // optional prompt enhancer out of one diffusers pipeline directory, so there is nothing for the
+  // user to supply separately and nothing to validate here.
+  const graph: BackendGraphContract = { edges: [], id: createId('ernie_image_graph'), nodes: {} };
+  const { negativePrompt, positivePrompt, seed } = addPromptAndSeedNodes(graph);
+  const scheduler = coerceSchedulerForGraph(model, settings.scheduler);
+  const useCfg = settings.cfgScale > 1;
+  const modelLoader = addNode(graph, {
+    id: 'model_loader',
+    model,
+    type: 'ernie_image_model_loader',
+    // The enhancer is a separate node with its own prompt rewriting and cannot be idle-offloaded;
+    // Generate does not surface it, so the loader is told not to hold it resident.
+    use_prompt_enhancer: false,
+  });
+  const posCond = addNode(graph, { id: 'pos_cond', type: 'ernie_image_text_encoder' });
+  const negCond = useCfg ? addNode(graph, { id: 'neg_cond', type: 'ernie_image_text_encoder' }) : null;
+  const denoise = addNode(graph, {
+    denoising_end: 1,
+    denoising_start: 0,
+    guidance_scale: settings.cfgScale,
+    height: settings.height,
+    id: 'denoise_latents',
+    scheduler,
+    steps: settings.steps,
+    type: 'ernie_image_denoise',
+    width: settings.width,
+  });
+  const output = addImageOutputNode(graph, 'ernie_image_vae_decode', outputIsIntermediate);
+
+  addEdge(graph, modelLoader, 'transformer', denoise, 'transformer');
+  addEdge(graph, modelLoader, 'text_encoder', posCond, 'text_encoder');
+  addEdge(graph, modelLoader, 'vae', output, 'vae');
+  addEdge(graph, positivePrompt, 'value', posCond, 'prompt');
+  addEdge(graph, posCond, 'conditioning', denoise, 'positive_conditioning');
+
+  if (negCond) {
+    addEdge(graph, modelLoader, 'text_encoder', negCond, 'text_encoder');
+    addEdge(graph, negativePrompt, 'value', negCond, 'prompt');
+    addEdge(graph, negCond, 'conditioning', denoise, 'negative_conditioning');
+  }
+
+  addEdge(graph, seed, 'value', denoise, 'seed');
+  addEdge(graph, denoise, 'latents', output, 'latents');
+  addMetadata(graph, output, settings, model, 'ernie_image_txt2img', projectSettings);
+
+  return graph;
+};
+
 const buildQwenImageGraph = (
   settings: GenerateSettings,
   model: MainModelConfig,
@@ -845,7 +901,7 @@ const buildQwenImageGraph = (
 ): BackendGraphContract => {
   const sourceModel = getCompatibleComponentSource(settings, model);
   const hasBundledComponents = model.format === 'diffusers' || sourceModel;
-  const vaeModel = getCompatibleVae(settings, ['qwen-image']);
+  const vaeModel = getCompatibleVae(settings, model);
 
   if (!hasBundledComponents && (!vaeModel || !settings.qwenVLEncoderModel)) {
     throw new Error(
@@ -971,7 +1027,7 @@ const buildZImageGraph = (
     settings.qwen3EncoderModel && isNonAnimaQwen3Encoder(settings.qwen3EncoderModel)
       ? settings.qwen3EncoderModel
       : null;
-  const vaeModel = getCompatibleVae(settings, ['flux']);
+  const vaeModel = getCompatibleVae(settings, model);
 
   if (!sourceModel && (!vaeModel || !qwen3EncoderModel)) {
     throw new Error('Z-Image models require a VAE and Qwen3 Encoder, or a Diffusers component source.');
@@ -1056,7 +1112,7 @@ const buildAnimaGraph = (
   outputIsIntermediate: boolean,
   projectSettings: GenerationProjectSettings
 ): BackendGraphContract => {
-  const vaeModel = requireComponent(settings.vae && isAnimaVae(settings.vae) ? settings.vae : null, 'Anima VAE');
+  const vaeModel = requireComponent(getCompatibleVae(settings, model), 'Anima VAE');
   const qwen3EncoderModel = requireComponent(
     settings.qwen3EncoderModel && isAnimaQwen3Encoder(settings.qwen3EncoderModel) ? settings.qwen3EncoderModel : null,
     'Qwen3 Encoder'
@@ -1131,10 +1187,7 @@ const buildKrea2Graph = (
   // or GGUF) bundles neither VAE nor encoder, so both must be selected. A diffusers model
   // carries them, and the loader extracts them when these are omitted.
   const isDiffusers = model.format === 'diffusers';
-  // Same base set as the picker (`isKrea2Vae`) and the backend loader: a Qwen-Image VAE
-  // installed under the `anima` base is still the VAE Krea-2 wants. Narrowing it here would
-  // silently drop a VAE the user had legitimately selected.
-  const vaeModel = settings.vae && isKrea2Vae(settings.vae) ? settings.vae : null;
+  const vaeModel = getCompatibleVae(settings, model);
   const qwen3VlEncoderModel = settings.qwen3VLEncoderModel;
 
   if (!isDiffusers) {
@@ -1271,7 +1324,7 @@ const buildWanGraph = (
   // A GGUF Wan main carries only the transformer, so the VAE and UMT5-XXL encoder come from
   // standalone models or a Diffusers component source.
   const sourceModel = getDiffusersSource(settings, model);
-  const vaeModel = getCompatibleVae(settings, ['wan']);
+  const vaeModel = getCompatibleVae(settings, model);
   const wanT5EncoderModel = settings.wanT5EncoderModel;
 
   if (!sourceModel && (!vaeModel || !wanT5EncoderModel)) {
@@ -1408,6 +1461,7 @@ export const GRAPH_BUILDERS = {
   flux: buildFluxGraph,
   flux2: buildFlux2Graph,
   cogview4: buildCogView4Graph,
+  'ernie-image': buildErnieImageGraph,
   'qwen-image': buildQwenImageGraph,
   'z-image': buildZImageGraph,
   'ideogram-4': buildIdeogram4Graph,
@@ -1457,15 +1511,4 @@ export const compileGenerateGraph = (
 };
 
 export const resolveGenerateSeed = (settings: GenerateSettings): number =>
-  settings.shouldRandomizeSeed ? Math.floor(Math.random() * SEED_MAX) : settings.seed;
-
-export const generateSeedSequence = (start: number, count: number): number[] => {
-  const seedCount = Math.max(1, Math.round(count));
-  const seeds: number[] = [];
-
-  for (let index = 0; index < seedCount; index += 1) {
-    seeds.push((start + index) % SEED_MAX);
-  }
-
-  return seeds;
-};
+  settings.seedMode === 'random' ? Math.floor(Math.random() * SEED_MAX) : settings.seed;

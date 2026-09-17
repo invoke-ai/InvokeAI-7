@@ -211,7 +211,9 @@ describe('authenticated route account lifecycle', () => {
     sessionStore.setSnapshot(signedInSession(1));
     const { router } = await import('./router');
 
-    await router.load();
+    // The provider drives this load. It installs the router's transition hook
+    // and leaves it in place on unmount, so a pre-render `router.load()` on the
+    // router the previous test rendered would wait for a commit that never comes.
     host = document.createElement('div');
     document.body.append(host);
     root = createRoot(host);
@@ -219,9 +221,9 @@ describe('authenticated route account lifecycle', () => {
       root?.render(<RouterProvider router={router} />);
     });
 
+    await expect.poll(() => host?.querySelector('[data-testid="authenticated-runtime"]')).not.toBeNull();
     const initialPath = router.state.location.pathname;
     const initialRuntime = host.querySelector<HTMLElement>('[data-testid="authenticated-runtime"]');
-    expect(initialRuntime).not.toBeNull();
 
     await act(() => {
       sessionStore.setSnapshot(signedInSession(2));

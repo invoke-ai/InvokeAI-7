@@ -24,6 +24,7 @@ import {
   getMaxReferenceImages,
   getModelDefaultVae,
   getSettingsWithModelDefaults,
+  hasArchitectureCapabilities,
   hasModelDefaultVae,
   isLoraCompatibleWithModel,
   isLoraModelConfig,
@@ -96,6 +97,23 @@ export const isRecallParametersUpdatedEvent = (payload: unknown): payload is Rec
 
 /** Backend graphs that feed `cfgScale` to a `guidance` input, so the API's `guidance` names the same knob. */
 const GUIDANCE_BASES = new Set(['flux', 'flux2', 'qwen-image', 'z-image']);
+
+/** Applied without reading architecture policy; every other handled key is snapped, coerced or defaulted by it. */
+const POLICY_FREE_KEYS = new Set([
+  'append',
+  'guidance',
+  'loras',
+  'negative_prompt',
+  'positive_prompt',
+  'seamless_x',
+  'seamless_y',
+  'seed',
+]);
+
+/** Whether a payload can be applied now: without the table, only policy-free keys may be. */
+export const isRecallParametersAvailable = (parameters: Record<string, unknown>): boolean =>
+  hasArchitectureCapabilities() ||
+  Object.keys(parameters).every((key) => POLICY_FREE_KEYS.has(key) || !HANDLED_KEYS.has(key));
 
 const HANDLED_KEYS = new Set([
   'append',
@@ -265,9 +283,9 @@ export const buildRecallParametersSettings = ({
     'seed',
     () => {
       const seed = getSeed(parameters);
-      return seed === null ? null : { seed, shouldRandomizeSeed: false };
+      return seed === null ? null : { seed, seedMode: 'fixed' };
     },
-    () => ({ shouldRandomizeSeed: true })
+    () => ({ seedMode: 'random' })
   );
   applyField(
     'steps',

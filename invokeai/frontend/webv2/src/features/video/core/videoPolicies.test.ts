@@ -1,5 +1,6 @@
 import type { GenerationModelCatalogItem, MainModelConfig } from '@features/generation/contracts';
 
+import { architectureCapabilitiesFixture } from '@features/generation/core/architectureCapabilities.testing';
 import { describe, expect, it } from 'vitest';
 
 import type { VideoSettings } from './types';
@@ -697,6 +698,46 @@ describe('component section policy', () => {
     expect(getVideoComponentSectionPolicy(full, settingsFor(full)).defaultOpen).toBe(false);
   });
 
+  it('offers the hybrid quality base only on a Ref2VA checkpoint main, listing same-kind FL2VA checkpoints', () => {
+    const ref2va: MainModelConfig = { ...h3Model('checkpoint', 'h3-ref2va'), pruned: true, variant: 'ref2va' };
+    const settings = settingsFor(ref2va);
+    const policy = getVideoComponentSectionPolicy(ref2va, settings);
+
+    // Last: optional tuning sits below the slots the panel needs to run.
+    expect(policy.slots.map((slot) => slot.key)).toEqual([
+      'componentSourceModel',
+      'h3TextEncoderModel',
+      'h3HybridBaseModel',
+    ]);
+
+    const slot = policy.slots.find((candidate) => candidate.key === 'h3HybridBaseModel');
+    const ctx = { model: ref2va, selectedComponents: settings, settings };
+
+    // Optional: the panel is complete without it.
+    expect(slot?.required).toBeUndefined();
+    expect(
+      getVideoValidationReasons(ref2va, settingsFor(ref2va, { componentSourceModel: h3Model() }))
+    ).not.toContainEqual(expect.stringContaining('Hybrid'));
+
+    // The overlay node refuses a pruned/full mismatch, so the slot lists only same-kind FL2VA
+    // checkpoints — and never the selected main, a Ref2VA file, or a Diffusers install.
+    expect(slot?.filter?.({ ...h3Model('checkpoint', 'fl2va-pruned'), pruned: true }, ctx)).toBe(true);
+    expect(slot?.filter?.(h3Model('checkpoint', 'fl2va-kind-unknown'), ctx)).toBe(true);
+    expect(slot?.filter?.({ ...h3Model('checkpoint', 'fl2va-full'), pruned: false }, ctx)).toBe(false);
+    expect(slot?.filter?.({ ...h3Model('checkpoint', 'other-ref2va'), pruned: true, variant: 'ref2va' }, ctx)).toBe(
+      false
+    );
+    expect(slot?.filter?.(ref2va, ctx)).toBe(false);
+    expect(slot?.filter?.(h3Model('diffusers'), ctx)).toBe(false);
+
+    // An FL2VA main has nothing to hybridize.
+    const fl2va = h3Model('checkpoint');
+
+    expect(getVideoComponentSectionPolicy(fl2va, settingsFor(fl2va)).slots.map((slot) => slot.key)).not.toContain(
+      'h3HybridBaseModel'
+    );
+  });
+
   it('steers a legacy components-only H3 main at top toward the checkpoint-as-model shape', () => {
     const componentsOnly = { ...h3Model(), components_only: true };
 
@@ -773,6 +814,29 @@ describe('component section policy', () => {
     // Configs without the field (open union) stay allowed on both.
     expect(forA14b.slot?.filter?.(vaeUnknown, forA14b.ctx)).toBe(true);
     expect(forTi2v.slot?.filter?.(vaeUnknown, forTi2v.ctx)).toBe(true);
+  });
+
+  it('agrees with the served Wan rows on which VAE width each variant takes', () => {
+    // The rule is written out rather than read from the table, because this surface syncs its stored
+    // VAE before the table arrives. This keeps the copy honest: a Wan variant or VAE width added to
+    // the backend changes the served rows, and fails here until the rule follows.
+    const wanRows = architectureCapabilitiesFixture.filter((row) => row.base === 'wan');
+
+    expect(wanRows.map((row) => row.variant)).toContain('ti2v_5b');
+
+    for (const row of wanRows) {
+      const model = wanModel(row.variant ?? 'i2v_a14b');
+      const settings = settingsFor(model);
+      const ctx = { model, selectedComponents: settings, settings };
+      const slot = getVideoComponentSectionPolicy(model, settings).slots.find((s) => s.key === 'vae');
+
+      for (const width of [16, 48]) {
+        const vae = { base: 'wan', key: `vae${width}`, latent_channels: width, name: `Wan VAE ${width}`, type: 'vae' };
+        const served = row.vae?.accepted.some((entry) => entry.base === 'wan' && entry.latent_channels === width);
+
+        expect(slot?.filter?.(vae, ctx), `${row.variant ?? 'base row'}, ${width} channels`).toBe(served ?? false);
+      }
+    }
   });
 
   it('a cross-family component source covers the encoder but not the VAE', () => {
@@ -859,6 +923,28 @@ describe('getVideoModelSelectionResult', () => {
     expect(result.settings.lastFrameImage).toBeNull();
     expect(result.clearedLabels).toContain('First frame');
     expect(result.clearedLabels).toContain('Last frame');
+  });
+
+  it('drops the hybrid quality base when the new main is not a Ref2VA checkpoint, keeps it across Ref2VA files', () => {
+    const ref2va: MainModelConfig = { ...h3Model('checkpoint', 'h3-ref2va'), pruned: true, variant: 'ref2va' };
+    const fl2vaBase: MainModelConfig = { ...h3Model('checkpoint', 'h3-fl2va-base'), pruned: true };
+    const from = settingsFor(ref2va, {
+      componentSourceModel: h3Model(),
+      h3HybridBaseModel: fl2vaBase,
+      h3HybridStartBlock: 30,
+    });
+
+    const toFl2va = getVideoModelSelectionResult({ currentSettings: from, model: h3Model('checkpoint'), models: [] });
+
+    expect(toFl2va.settings.h3HybridBaseModel).toBeNull();
+    expect(toFl2va.clearedLabels).toContain('Hybrid quality base');
+
+    const otherRef2va: MainModelConfig = { ...ref2va, key: 'h3-ref2va-2' };
+    const toRef2va = getVideoModelSelectionResult({ currentSettings: from, model: otherRef2va, models: [] });
+
+    expect(toRef2va.settings.h3HybridBaseModel).toEqual(fl2vaBase);
+    expect(toRef2va.settings.h3HybridStartBlock).toBe(30);
+    expect(toRef2va.clearedLabels).not.toContain('Hybrid quality base');
   });
 
   it('keeps a first+last pair on a model with FLF2V, but drops the last frame on TI2V-5B', () => {

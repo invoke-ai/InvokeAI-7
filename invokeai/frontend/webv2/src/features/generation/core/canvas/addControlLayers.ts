@@ -236,6 +236,9 @@ export const getControlValidationReasonMessage = (reason: ControlValidationReaso
   if (reason === 'missing_model') {
     return `Control layer "${layerName}" has no control model selected.`;
   }
+  if (reason === 'capabilities_unavailable') {
+    return `Control layer "${layerName}" cannot be checked until model capabilities have loaded.`;
+  }
   if (reason === 'unsupported_adapter') {
     return `Control layer "${layerName}" is not supported for the selected base model.`;
   }

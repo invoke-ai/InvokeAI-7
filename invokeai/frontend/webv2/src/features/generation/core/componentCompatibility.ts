@@ -1,9 +1,13 @@
 import type { ComponentModelConfig, GenerateModelConfig, VaeModelConfig } from './types';
 
+import { getArchitectureCapabilityRow } from './architectureCapabilities';
+
 export type GenerateComponentCandidate = {
   base: string;
   format?: string;
   key?: string;
+  /** VAE latent width. Only `wan` ships more than one, and its two are different decoders. */
+  latent_channels?: number | null;
   submodels?: Record<string, unknown> | null;
   type: string;
   variant?: unknown;
@@ -59,11 +63,6 @@ export const isDiffusersMainForBase =
   (base: string): GenerateComponentFilter =>
   (model) =>
     model.type === 'main' && model.base === base && model.format === 'diffusers';
-
-export const isVaeForBases =
-  (bases: readonly string[]): GenerateComponentFilter =>
-  (model) =>
-    model.type === 'vae' && bases.length > 0 && bases.includes(model.base);
 
 export const isClipVariant =
   (variant: string): GenerateComponentFilter =>
@@ -139,34 +138,59 @@ export const getCompatibleDiffusersComponentSource = <T extends GenerateComponen
 ): T | undefined =>
   source && isCompatibleDiffusersComponentSourceForModel(selectedModel, source) ? source : undefined;
 
-export const isAnimaVae = isVaeForBases(['anima', 'qwen-image', 'flux']);
+/**
+ * Whether an architecture's decode accepts this VAE, as the backend declares it.
+ *
+ * The single reader of `vae.accepted` from the served capability table — the same `VaeFacet` the
+ * loaders and `accepts_vae()` read in `architectures/defs/<base>.py`. Which VAE families a base can
+ * decode used to be hand-written here as a `switch` over literal base lists, and that copy drifted:
+ * it offered Anima a FLUX VAE, which decodes a WAN21_16 latent in FLUX's basis and returns a
+ * magenta smear rather than an error (6.10 dB PSNR, measured).
+ *
+ * Fail closed, like `resolveGenerateWidgetValues` and `getGenerationValidationReasons`: with no
+ * table, or no row for this base, nothing is offered. Choosing a VAE the graph then rejects is
+ * worse than an empty picker that fills in as soon as the table lands.
+ */
+const acceptsVae = (base: string, model: GenerateComponentCandidate, variant?: unknown): boolean => {
+  if (model.type !== 'vae') {
+    return false;
+  }
+
+  // With the variant: Wan A14B and TI2V-5B decode with different VAEs, and only the variant row says so.
+  const row = getArchitectureCapabilityRow(base, variant);
+
+  if (!row) {
+    return false;
+  }
+
+  // A null `vae` block is the backend saying "its own base, no constraints" — what `accepts_vae`
+  // answers for an architecture that declares no facet. It is a declaration, not a missing one.
+  if (!row.vae) {
+    return model.base === base;
+  }
+
+  return row.vae.accepted.some(
+    (accepted) =>
+      accepted.base === model.base &&
+      (accepted.latent_channels === null || model.latent_channels === accepted.latent_channels)
+  );
+};
+
+export const isVaeAcceptedByBase =
+  (base: string, variant?: unknown): GenerateComponentFilter =>
+  (model) =>
+    acceptsVae(base, model, variant);
 
 /**
- * Krea-2 decodes with the Qwen-Image VAE (16-channel), which is why its graph reuses
- * `qwen_image_l2i`. `anima` is accepted alongside `qwen-image` because the same physical VAE
- * is registered under either base depending on which family it was installed for — matching
- * `krea2_model_loader`'s own `ui_model_base=[QwenImage, Anima]`. Restricting this to
- * `qwen-image` hides a working VAE that the backend would have accepted.
+ * The one VAE rule for a Generate model. The component picker and its validation filter with
+ * `isVaeAcceptedByBase(model.base, model.variant)` and the graph builder with this, so a VAE the user can select is
+ * always one the graph sends -- the served row decides for both, including cross-base families such
+ * as a Qwen-Image VAE installed under `anima`.
  */
-export const isKrea2Vae = isVaeForBases(['qwen-image', 'anima']);
-
 export const isVaeCompatibleWithGenerateModel = (model: GenerateModelConfig, vae: VaeModelConfig): boolean => {
   if (model.type === 'external_image_generator') {
     return false;
   }
 
-  switch (model.base) {
-    case 'anima':
-      return isAnimaVae(vae);
-    case 'z-image':
-      return isVaeForBases(['flux'])(vae);
-    case 'qwen-image':
-      return isVaeForBases(['qwen-image'])(vae);
-    case 'krea-2':
-      return isKrea2Vae(vae);
-    case 'flux2':
-      return isVaeForBases(['flux2'])(vae);
-    default:
-      return vae.type === 'vae' && vae.base === model.base;
-  }
+  return acceptsVae(model.base, vae, model.variant);
 };

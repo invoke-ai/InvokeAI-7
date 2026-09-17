@@ -5,7 +5,7 @@ import { useWorkbenchPreferenceSelector } from '@workbench/settings/store';
 import { useWorkbenchSelector } from '@workbench/WorkbenchContext';
 import { useEffect, useRef } from 'react';
 
-import { shouldToastNotification } from './toastPolicy';
+import { getToastKey, shouldToastNotification } from './toastPolicy';
 
 const notificationToastType: Record<WorkbenchNotificationKind, 'error' | 'info' | 'success'> = {
   error: 'error',
@@ -20,16 +20,18 @@ export const WorkbenchNotificationToaster = () => {
 
   useEffect(() => {
     if (toastedNotificationIdsRef.current === null) {
-      toastedNotificationIdsRef.current = new Set(notifications.map((notification) => notification.id));
+      toastedNotificationIdsRef.current = new Set(notifications.map(getToastKey));
       return;
     }
 
     for (const notification of [...notifications].reverse()) {
-      if (toastedNotificationIdsRef.current.has(notification.id)) {
+      const toastKey = getToastKey(notification);
+
+      if (toastedNotificationIdsRef.current.has(toastKey)) {
         continue;
       }
 
-      toastedNotificationIdsRef.current.add(notification.id);
+      toastedNotificationIdsRef.current.add(toastKey);
 
       if (!shouldToastNotification(notification, { notifyOnEnqueue })) {
         continue;

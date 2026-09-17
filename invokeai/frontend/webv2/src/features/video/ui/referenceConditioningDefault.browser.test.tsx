@@ -57,14 +57,16 @@ const videoItem = (mediaOrigin?: string): GalleryVideoItem => ({
 });
 
 const adapter = {
+  findInGallery: () => undefined,
   getUploadBoardId: () => 'none',
   patchValues: (_values: Partial<VideoWidgetValues>) => undefined,
-  playVideoSpanInPreview: () => undefined,
+  playVideoSpanInPreview: () => null,
   projectId: 'project-1',
   rawValues: {},
   reportError: () => undefined,
   showPromptSyntaxHighlighting: false,
   touchGalleryImages: () => undefined,
+  videoSpanPlayback: { getState: () => null, subscribe: () => () => undefined },
 };
 
 const NO_REFERENCES: VideoReferenceItem[] = [];

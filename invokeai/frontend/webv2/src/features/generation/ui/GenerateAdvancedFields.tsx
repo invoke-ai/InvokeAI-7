@@ -13,12 +13,13 @@ import {
 } from '@features/generation/core/settings';
 import { Field, Select } from '@platform/ui';
 import { ModelDefaultButton } from '@platform/ui/ModelDefaultButton';
-import { SliderNumberField } from '@platform/ui/SliderNumberField';
+import { ScrubberField } from '@platform/ui/ScrubberField';
 import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { GenerationModelSelect as ModelSelect } from './GenerationUiContext';
 import { GenerateCollapsibleSection } from './shared/GenerateCollapsibleSection';
+import { GenerateFieldContextMenu } from './shared/GenerateFieldContextMenu';
 import { GenerateToggleSwitch } from './shared/GenerateToggleSwitch';
 
 interface GenerateAdvancedFieldsProps {
@@ -176,32 +177,44 @@ export const GenerateAdvancedFields = ({
       {policy.clipSkipMax || policy.cfgRescaleVisible ? (
         <Stack gap="2" p="2">
           {policy.clipSkipMax ? (
-            <Field hint="clipSkip" label={t('widgets.generate.clipSkip')}>
-              <SliderNumberField
-                ariaLabel={t('widgets.generate.clipSkip')}
+            <GenerateFieldContextMenu
+              copyValue={() => String(settings.clipSkip)}
+              isAtDefault={modelDefaults !== null && settings.clipSkip === modelDefaults.clipSkip}
+              onReset={modelDefaults ? () => onCommit({ clipSkip: modelDefaults.clipSkip }) : undefined}
+            >
+              <ScrubberField
                 defaultValue={modelDefaults?.clipSkip}
+                hint="clipSkip"
+                label={t('widgets.generate.clipSkip')}
                 max={clipSkipMax}
                 min={0}
-                resetLabel={t('widgets.generate.useModelDefault')}
                 step={1}
                 value={settings.clipSkip}
                 onChange={updateNumber('clipSkip', 0, clipSkipMax)}
               />
-            </Field>
+            </GenerateFieldContextMenu>
           ) : null}
           {policy.cfgRescaleVisible ? (
-            <Field hint="cfgRescale" label={t('widgets.generate.cfgRescale')}>
-              <SliderNumberField
-                ariaLabel={t('widgets.generate.cfgRescale')}
+            <GenerateFieldContextMenu
+              copyValue={() => String(settings.cfgRescaleMultiplier)}
+              isAtDefault={
+                modelDefaults !== null && settings.cfgRescaleMultiplier === modelDefaults.cfgRescaleMultiplier
+              }
+              onReset={
+                modelDefaults ? () => onCommit({ cfgRescaleMultiplier: modelDefaults.cfgRescaleMultiplier }) : undefined
+              }
+            >
+              <ScrubberField
                 defaultValue={modelDefaults?.cfgRescaleMultiplier}
+                hint="cfgRescale"
+                label={t('widgets.generate.cfgRescale')}
                 max={0.99}
                 min={0}
-                resetLabel={t('widgets.generate.useModelDefaultCfgRescale')}
                 step={0.05}
                 value={settings.cfgRescaleMultiplier}
                 onChange={updateNumber('cfgRescaleMultiplier', 0, 0.99)}
               />
-            </Field>
+            </GenerateFieldContextMenu>
           ) : null}
         </Stack>
       ) : null}
@@ -233,32 +246,40 @@ export const GenerateAdvancedFields = ({
               />
             </Field>
           </HStack>
-          <Field hint="hidiffusionT1Ratio" label={t('widgets.generate.hiDiffusionT1Ratio')}>
-            <SliderNumberField
-              ariaLabel={t('widgets.generate.hiDiffusionT1Ratio')}
+          <GenerateFieldContextMenu
+            copyValue={() => String(settings.hiDiffusionT1Ratio)}
+            isAtDefault={settings.hiDiffusionT1Ratio === DEFAULT_HIDIFFUSION_T1_RATIO}
+            onReset={() => onCommit({ hiDiffusionT1Ratio: DEFAULT_HIDIFFUSION_T1_RATIO })}
+          >
+            <ScrubberField
               defaultValue={DEFAULT_HIDIFFUSION_T1_RATIO}
               disabled={!settings.hiDiffusionEnabled}
+              hint="hidiffusionT1Ratio"
+              label={t('widgets.generate.hiDiffusionT1Ratio')}
               max={MAX_HIDIFFUSION_RATIO}
               min={MIN_HIDIFFUSION_T1_RATIO}
-              resetLabel={t('widgets.generate.useModelDefault')}
               step={0.05}
               value={settings.hiDiffusionT1Ratio}
               onChange={updateNumber('hiDiffusionT1Ratio', MIN_HIDIFFUSION_T1_RATIO, MAX_HIDIFFUSION_RATIO)}
             />
-          </Field>
-          <Field hint="hidiffusionT2Ratio" label={t('widgets.generate.hiDiffusionT2Ratio')}>
-            <SliderNumberField
-              ariaLabel={t('widgets.generate.hiDiffusionT2Ratio')}
+          </GenerateFieldContextMenu>
+          <GenerateFieldContextMenu
+            copyValue={() => String(settings.hiDiffusionT2Ratio)}
+            isAtDefault={settings.hiDiffusionT2Ratio === DEFAULT_HIDIFFUSION_T2_RATIO}
+            onReset={() => onCommit({ hiDiffusionT2Ratio: DEFAULT_HIDIFFUSION_T2_RATIO })}
+          >
+            <ScrubberField
               defaultValue={DEFAULT_HIDIFFUSION_T2_RATIO}
               disabled={!settings.hiDiffusionEnabled}
+              hint="hidiffusionT2Ratio"
+              label={t('widgets.generate.hiDiffusionT2Ratio')}
               max={MAX_HIDIFFUSION_RATIO}
               min={0}
-              resetLabel={t('widgets.generate.useModelDefault')}
               step={0.05}
               value={settings.hiDiffusionT2Ratio}
               onChange={updateNumber('hiDiffusionT2Ratio', 0, MAX_HIDIFFUSION_RATIO)}
             />
-          </Field>
+          </GenerateFieldContextMenu>
         </Stack>
       ) : null}
 
@@ -273,8 +294,8 @@ export const GenerateAdvancedFields = ({
       ) : null}
 
       {policy.pidVisible ? (
-        <HStack alignItems="flex-start" gap="2" p="2">
-          <Field flex="2" hint="pidMode" label={t('widgets.generate.pid')} helpText={pidHelpText}>
+        <Stack gap="2" p="2">
+          <Field hint="pidMode" label={t('widgets.generate.pid')} helpText={pidHelpText}>
             <Select
               aria-label={t('widgets.generate.pid')}
               collection={pidModeCollection}
@@ -292,18 +313,16 @@ export const GenerateAdvancedFields = ({
             />
           </Field>
           {settings.pidMode === 'off' ? null : (
-            <Field flex="1" label={t('widgets.generate.pidSteps')}>
-              <SliderNumberField
-                ariaLabel={t('widgets.generate.pidSteps')}
-                min={MIN_PID_STEPS}
-                max={MAX_PID_STEPS}
-                step={1}
-                value={settings.pidSteps}
-                onChange={(value) => onCommit({ pidSteps: value })}
-              />
-            </Field>
+            <ScrubberField
+              label={t('widgets.generate.pidSteps')}
+              max={MAX_PID_STEPS}
+              min={MIN_PID_STEPS}
+              step={1}
+              value={settings.pidSteps}
+              onChange={(value) => onCommit({ pidSteps: value })}
+            />
           )}
-        </HStack>
+        </Stack>
       ) : null}
 
       {policy.seamlessVisible ? (

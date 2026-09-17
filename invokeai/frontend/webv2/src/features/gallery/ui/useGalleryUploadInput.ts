@@ -1,18 +1,8 @@
-import type { GalleryItemKind } from '@features/gallery/core/items';
-
+import { getGalleryUploadAccept } from '@features/gallery/core/items';
 import { useCallback, useRef, type ChangeEvent } from 'react';
 
-const UPLOAD_ACCEPT_BY_KIND: Record<GalleryItemKind, string> = {
-  image: 'image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp',
-  video: 'video/mp4,.mp4',
-};
-
-/** The file input `accept` list for the given kinds. */
-export const getGalleryUploadAccept = (kinds: readonly GalleryItemKind[]): string =>
-  kinds.map((kind) => UPLOAD_ACCEPT_BY_KIND[kind]).join(',');
-
-export const ACCEPTED_UPLOAD_EXTENSIONS = getGalleryUploadAccept(['image', 'video']);
-export const UPLOAD_INPUT_STYLE = { display: 'none' } as const;
+const ACCEPTED_UPLOAD_EXTENSIONS = getGalleryUploadAccept(['image', 'video']);
+const UPLOAD_INPUT_STYLE = { display: 'none' } as const;
 
 /** The hidden-input picker every gallery upload trigger shares: change extracts files, resets the input (so re-picking the same file fires), and forwards. */
 export const useGalleryUploadInput = (

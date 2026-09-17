@@ -18,6 +18,7 @@ import {
 import { createUuid } from '@platform/browser/randomUuid';
 import { useMountEffect } from '@platform/react/useMountEffect';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useFindGalleryItem } from '@workbench/image-actions/useFindGalleryItem';
 import {
   getWorkbenchPreferences,
   patchWorkbenchPreferences,
@@ -26,7 +27,7 @@ import {
 import { useNotify } from '@workbench/useNotify';
 import { getProjectWidgetValues } from '@workbench/widgetState';
 import { useActiveProjectSelector, useWorkbenchCommands } from '@workbench/WorkbenchContext';
-import { lazy, useMemo } from 'react';
+import { lazy, useCallback, useMemo } from 'react';
 
 export const getGenerationSelectedGalleryImage = getSelectedGalleryImageFromValues;
 
@@ -142,12 +143,22 @@ export const GenerationUiAdapterProvider = ({ children }: { children: ReactNode 
   const session = useAuthSession();
   const queryClient = useQueryClient();
   const notify = useNotify();
+  const findGalleryItem = useFindGalleryItem();
+  // Hoisted out of the group: the group's identity turns over on every gallery
+  // selection change, and the reference-image cards are memoized against
+  // exactly that — a fresh handler per selection would re-render the whole
+  // stack, model pickers and all, on every click in the grid.
+  const findImage = useCallback<GenerationUiAdapter['gallery']['findImage']>(
+    (imageName) => findGalleryItem({ kind: 'image', name: imageName }),
+    [findGalleryItem]
+  );
   const galleryGroup = useMemo<GenerationUiAdapter['gallery']>(
     () => ({
+      findImage,
       selectedImage: selectedGalleryImage,
       touchImages: () => void invalidateGallery(queryClient),
     }),
-    [queryClient, selectedGalleryImage]
+    [findImage, queryClient, selectedGalleryImage]
   );
   const modelsGroup = useMemo<GenerationUiAdapter['models']>(
     () => ({

@@ -6,10 +6,10 @@ import PIL.Image
 import torch
 from diffusers.models.autoencoders import AutoencoderKLWan
 
-from invokeai.app.invocations.wan_image_to_latents import WanImageToLatentsInvocation
-from invokeai.app.invocations.wan_latents_to_image import WanLatentsToImageInvocation
-from invokeai.app.invocations.wan_latents_to_video import WanLatentsToVideoInvocation
-from invokeai.app.invocations.wan_ref_image_encoder import WanRefImageEncoderInvocation
+from invokeai.app.invocations.vae.wan_image_to_latents import WanImageToLatentsInvocation
+from invokeai.app.invocations.vae.wan_latents_to_image import WanLatentsToImageInvocation
+from invokeai.app.invocations.vae.wan_latents_to_video import WanLatentsToVideoInvocation
+from invokeai.app.invocations.wan.wan_ref_image_encoder import WanRefImageEncoderInvocation
 from invokeai.backend.util.devices import TorchDevice
 from invokeai.backend.util.vae_working_memory import estimate_vae_working_memory_wan
 
@@ -136,7 +136,9 @@ class TestWanInvocationsRequestWorkingMemory:
         mock_context.models.load.return_value = vae_info
         mock_context.tensors.load.return_value = torch.zeros(1, 16, 64, 64)
 
-        with patch("invokeai.app.invocations.wan_latents_to_image.estimate_vae_working_memory_wan") as mock_estimate:
+        with patch(
+            "invokeai.app.invocations.vae.wan_latents_to_image.estimate_vae_working_memory_wan"
+        ) as mock_estimate:
             mock_estimate.return_value = 1234
             invocation = WanLatentsToImageInvocation.model_construct(
                 latents=MagicMock(latents_name="l"), vae=MagicMock(vae=MagicMock())
@@ -159,7 +161,9 @@ class TestWanInvocationsRequestWorkingMemory:
         mock_context.models.load.return_value = vae_info
         mock_context.tensors.load.return_value = torch.zeros(1, 48, 32, 32)
 
-        with patch("invokeai.app.invocations.wan_latents_to_image.estimate_vae_working_memory_wan") as mock_estimate:
+        with patch(
+            "invokeai.app.invocations.vae.wan_latents_to_image.estimate_vae_working_memory_wan"
+        ) as mock_estimate:
             mock_estimate.return_value = 1
             invocation = WanLatentsToImageInvocation.model_construct(
                 latents=MagicMock(latents_name="l"), vae=MagicMock(vae=MagicMock())
@@ -176,7 +180,9 @@ class TestWanInvocationsRequestWorkingMemory:
         vae = _mock_wan_vae()
         vae_info = _mock_vae_info(vae)
 
-        with patch("invokeai.app.invocations.wan_image_to_latents.estimate_vae_working_memory_wan") as mock_estimate:
+        with patch(
+            "invokeai.app.invocations.vae.wan_image_to_latents.estimate_vae_working_memory_wan"
+        ) as mock_estimate:
             mock_estimate.return_value = 4321
             try:
                 WanImageToLatentsInvocation.vae_encode(vae_info, torch.zeros(1, 3, 512, 512))
@@ -196,9 +202,11 @@ class TestWanInvocationsRequestWorkingMemory:
         mock_context.tensors.save.return_value = "t"
 
         with (
-            patch("invokeai.app.invocations.wan_ref_image_encoder.estimate_vae_working_memory_wan") as mock_estimate,
             patch(
-                "invokeai.app.invocations.wan_ref_image_encoder.encode_reference_image_to_condition",
+                "invokeai.app.invocations.wan.wan_ref_image_encoder.estimate_vae_working_memory_wan"
+            ) as mock_estimate,
+            patch(
+                "invokeai.app.invocations.wan.wan_ref_image_encoder.encode_reference_image_to_condition",
                 return_value=torch.zeros(1, 20, 1, 4, 4),
             ),
         ):
@@ -230,7 +238,9 @@ class TestWanInvocationsRequestWorkingMemory:
         vae_info = _mock_vae_info(vae)
         mock_context = self._video_context(vae_info)
 
-        with patch("invokeai.app.invocations.wan_latents_to_video.estimate_vae_working_memory_wan") as mock_estimate:
+        with patch(
+            "invokeai.app.invocations.vae.wan_latents_to_video.estimate_vae_working_memory_wan"
+        ) as mock_estimate:
             mock_estimate.return_value = 5678
             invocation = WanLatentsToVideoInvocation.model_construct(
                 latents=MagicMock(latents_name="l"), vae=MagicMock(vae=MagicMock()), fps=16
@@ -261,15 +271,15 @@ class TestWanInvocationsRequestWorkingMemory:
 
         with (
             patch(
-                "invokeai.app.invocations.wan_latents_to_video.estimate_vae_working_memory_wan",
+                "invokeai.app.invocations.vae.wan_latents_to_video.estimate_vae_working_memory_wan",
                 return_value=5678,
             ) as mock_estimate,
             patch(
-                "invokeai.app.invocations.wan_latents_to_video.iter_wan_vae_decode_chunks",
+                "invokeai.app.invocations.vae.wan_latents_to_video.iter_wan_vae_decode_chunks",
                 return_value=iter(chunks),
             ) as mock_decode_chunks,
-            patch("invokeai.app.invocations.wan_latents_to_video.make_mp4_writer", return_value=writer),
-            patch("invokeai.app.invocations.wan_latents_to_video.VideoOutput.build", return_value=expected_output),
+            patch("invokeai.app.invocations.vae.wan_latents_to_video.make_mp4_writer", return_value=writer),
+            patch("invokeai.app.invocations.vae.wan_latents_to_video.VideoOutput.build", return_value=expected_output),
             patch.object(TorchDevice, "choose_torch_device", return_value=torch.device("cpu")),
             patch.object(TorchDevice, "empty_cache"),
         ):
@@ -293,7 +303,7 @@ class TestWanInvocationsRequestWorkingMemory:
 
         with (
             patch(
-                "invokeai.app.invocations.wan_latents_to_video.estimate_vae_working_memory_wan",
+                "invokeai.app.invocations.vae.wan_latents_to_video.estimate_vae_working_memory_wan",
                 side_effect=[100 * 2**30, 4 * 2**30],
             ) as mock_estimate,
             patch.object(TorchDevice, "choose_torch_device", return_value=torch.device("cuda")),
@@ -322,7 +332,7 @@ class TestWanInvocationsRequestWorkingMemory:
 
         with (
             patch(
-                "invokeai.app.invocations.wan_latents_to_video.estimate_vae_working_memory_wan",
+                "invokeai.app.invocations.vae.wan_latents_to_video.estimate_vae_working_memory_wan",
                 return_value=100 * 2**30,
             ) as mock_estimate,
             patch.object(TorchDevice, "choose_torch_device", return_value=torch.device("cuda")),

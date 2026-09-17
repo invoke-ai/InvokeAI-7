@@ -4,6 +4,7 @@ import type {
   CanvasRasterLayerContractV2,
 } from '@workbench/canvas-engine/contracts';
 
+import { seedArchitectureCapabilities } from '@features/generation/core/architectureCapabilities.testing';
 import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -23,6 +24,8 @@ import {
   createInpaintMaskLayer,
   createRegionalGuidanceLayer,
 } from './layerOps';
+
+seedArchitectureCapabilities();
 
 const englishCatalogModules = import.meta.glob('../../../../public/locales/en.json', {
   eager: true,

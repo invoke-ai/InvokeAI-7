@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from invokeai.app.invocations.model import ModelIdentifierField
-from invokeai.app.invocations.wan_model_loader import WanModelLoaderInvocation
+from invokeai.app.invocations.wan.wan_model_loader import WanModelLoaderInvocation
 from invokeai.backend.model_manager.taxonomy import BaseModelType, ModelFormat, ModelType, WanVariantType
 
 
@@ -387,6 +387,16 @@ def test_loader_rejects_forged_non_wan_vae_identifier() -> None:
                 base=BaseModelType.StableDiffusionXL,
                 type=ModelType.Main,
             ),
+        )
+
+
+@pytest.mark.parametrize("vae_base", [BaseModelType.Flux, BaseModelType.StableDiffusion3])
+def test_loader_rejects_a_standalone_vae_of_another_family(vae_base: BaseModelType) -> None:
+    """A 16-channel VAE record that is not Wan's must not pass on its channel count alone."""
+    with pytest.raises(ValueError, match="16-channel Wan 2.1 VAE"):
+        _invoke(
+            _config("main", WanVariantType.T2V_A14B, "high"),
+            vae_config=SimpleNamespace(name="other", latent_channels=16, base=vae_base, type=ModelType.VAE),
         )
 
 

@@ -1,4 +1,4 @@
-import type { ProjectGraphState, XYPosition } from '@features/workflow/contracts';
+import type { ProjectGraphState, WorkflowEdge as WorkflowDocumentEdge, XYPosition } from '@features/workflow/contracts';
 import type { WorkflowPerfSource, WorkflowRuntimeApi } from '@features/workflow/ui/contracts';
 
 import { Box, Flex, HStack, Spinner, Stack, Text } from '@chakra-ui/react';
@@ -37,6 +37,8 @@ import {
   type Connection,
   type EdgeChange,
   type EdgeTypes,
+  type FinalConnectionState,
+  type HandleType,
   type IsValidConnection,
   type NodeChange,
   type NodeTypes,
@@ -107,10 +109,27 @@ const edgeTypes: EdgeTypes = {
  * document change (undo, import, field edits), while transient view state
  * (selection, in-flight drags, the active tool) lives in local component state.
  */
-/** Snap spacing matches the background dot grid. */
-const SNAP_GRID: [number, number] = [24, 24];
+// 25px matches v6 so workflows aligned there stay on the grid here.
+const GRID_SIZE = 25;
+const SNAP_GRID: [number, number] = [GRID_SIZE, GRID_SIZE];
 
 const DELETE_KEY_CODES = ['Backspace', 'Delete'];
+const RECONNECT_DISCONNECT_DISTANCE_PX = 5;
+
+const toDocumentEdge = (connection: Connection): WorkflowDocumentEdge | null =>
+  connection.sourceHandle && connection.targetHandle
+    ? {
+        id: createWorkflowId('edge'),
+        source: connection.source,
+        sourceHandle: connection.sourceHandle,
+        target: connection.target,
+        targetHandle: connection.targetHandle,
+        type:
+          connection.sourceHandle === LOOP_LINKAGE_FIELD && connection.targetHandle === LOOP_LINKAGE_FIELD
+            ? 'loop_linkage'
+            : 'default',
+      }
+    : null;
 
 const DEFAULT_EDGE_OPTIONS = { style: { strokeWidth: 2 } };
 // A fresh graph starts clear of the floating toolbar in the left gutter, so
@@ -702,6 +721,9 @@ const WorkflowFlow = ({ runtime }: { runtime: WorkflowRuntimeApi }) => {
     [editGraph]
   );
 
+  // The edge whose end is being dragged; it must not count against its own reconnection.
+  const reconnectingEdgeRef = useRef<{ edgeId: string; didReconnect: boolean; startPosition: XYPosition } | null>(null);
+
   const isValidConnection: IsValidConnection<WorkflowFlowEdge> = useCallback(
     (connection) => {
       if (!connection.sourceHandle || !connection.targetHandle) {
@@ -713,6 +735,11 @@ const WorkflowFlow = ({ runtime }: { runtime: WorkflowRuntimeApi }) => {
         return true;
       }
 
+      const reconnectingEdgeId = reconnectingEdgeRef.current?.edgeId;
+      const document = reconnectingEdgeId
+        ? { edges: projectGraph.edges.filter((edge) => edge.id !== reconnectingEdgeId), nodes: projectGraph.nodes }
+        : projectGraph;
+
       return (
         validateConnection(
           {
@@ -721,7 +748,7 @@ const WorkflowFlow = ({ runtime }: { runtime: WorkflowRuntimeApi }) => {
             targetHandle: connection.targetHandle,
             targetNodeId: connection.target,
           },
-          projectGraph,
+          document,
           templates
         ) === null
       );
@@ -731,30 +758,80 @@ const WorkflowFlow = ({ runtime }: { runtime: WorkflowRuntimeApi }) => {
 
   const onConnect = useCallback(
     (connection: Connection) => {
-      if (!connection.sourceHandle || !connection.targetHandle) {
+      const edge = toDocumentEdge(connection);
+
+      if (edge) {
+        editGraph({ edge, type: 'addEdge' });
+      }
+    },
+    [editGraph]
+  );
+
+  const onReconnectStart = useCallback((event: ReactMouseEvent, edge: WorkflowFlowEdge) => {
+    reconnectingEdgeRef.current = {
+      didReconnect: false,
+      edgeId: edge.id,
+      startPosition: { x: event.clientX, y: event.clientY },
+    };
+  }, []);
+
+  const onReconnect = useCallback(
+    (oldEdge: WorkflowFlowEdge, connection: Connection) => {
+      const edge = toDocumentEdge(connection);
+
+      if (!edge) {
         return;
       }
 
-      editGraph({
-        edge: {
-          id: createWorkflowId('edge'),
-          source: connection.source,
-          sourceHandle: connection.sourceHandle,
-          target: connection.target,
-          targetHandle: connection.targetHandle,
-          type:
-            connection.sourceHandle === LOOP_LINKAGE_FIELD && connection.targetHandle === LOOP_LINKAGE_FIELD
-              ? 'loop_linkage'
-              : 'default',
-        },
-        type: 'addEdge',
-      });
+      if (reconnectingEdgeRef.current?.edgeId === oldEdge.id) {
+        reconnectingEdgeRef.current.didReconnect = true;
+      }
+
+      const isSameConnection =
+        oldEdge.source === edge.source &&
+        oldEdge.sourceHandle === edge.sourceHandle &&
+        oldEdge.target === edge.target &&
+        oldEdge.targetHandle === edge.targetHandle;
+
+      if (!isSameConnection) {
+        editGraph({ edge, edgeId: oldEdge.id, type: 'reconnectEdge' });
+      }
+    },
+    [editGraph]
+  );
+
+  const onReconnectEnd = useCallback(
+    (event: MouseEvent | TouchEvent, edge: WorkflowFlowEdge, _handleType: HandleType, state: FinalConnectionState) => {
+      const reconnecting = reconnectingEdgeRef.current;
+
+      reconnectingEdgeRef.current = null;
+
+      if (!reconnecting || reconnecting.edgeId !== edge.id || reconnecting.didReconnect || state.toHandle) {
+        return;
+      }
+
+      // Dragging an end away and dropping it on empty canvas disconnects; a plain click, or a
+      // drop on a handle that rejected the connection, leaves the edge alone.
+      const position = getEventClientPosition(event);
+      const didMove =
+        position !== null &&
+        Math.hypot(position.x - reconnecting.startPosition.x, position.y - reconnecting.startPosition.y) >
+          RECONNECT_DISCONNECT_DISTANCE_PX;
+
+      if (didMove) {
+        editGraph({ edgeIds: [edge.id], type: 'removeEdges' });
+      }
     },
     [editGraph]
   );
 
   const onConnectEnd = useCallback<OnConnectEnd>(
     (event, connectionState) => {
+      // xyflow also raises connect-end for a reconnect drag; that gesture is settled by onReconnectEnd.
+      if (reconnectingEdgeRef.current) {
+        return;
+      }
+
       if (!flowInstance || !(event.target instanceof Element) || !event.target.closest('.react-flow__pane')) {
         return;
       }
@@ -1066,6 +1143,9 @@ const WorkflowFlow = ({ runtime }: { runtime: WorkflowRuntimeApi }) => {
         style={flowStyle}
         onConnect={onConnect}
         onConnectEnd={onConnectEnd}
+        onReconnect={onReconnect}
+        onReconnectEnd={onReconnectEnd}
+        onReconnectStart={onReconnectStart}
         onEdgeClick={onEdgeClick}
         onEdgesChange={onEdgesChange}
         onInit={onFlowInit}
@@ -1081,7 +1161,7 @@ const WorkflowFlow = ({ runtime }: { runtime: WorkflowRuntimeApi }) => {
         <Background
           bgColor="var(--xy-background-color)"
           color="var(--wb-flow-grid)"
-          gap={24}
+          gap={GRID_SIZE}
           id={`workflow-grid-${backgroundId}`}
           size={1.5}
           variant={BackgroundVariant.Dots}

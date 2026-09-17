@@ -9,12 +9,15 @@ import { requestGalleryItemReveal } from '@features/gallery/contracts';
 import { QueryClient, QueryClientProvider, type InfiniteData } from '@tanstack/react-query';
 import { system } from '@theme/system';
 import i18next from 'i18next';
-import { act } from 'react';
+import { act, useCallback } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { I18nextProvider, initReactI18next } from 'react-i18next';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { LivePreviewFollowProvider, useLivePreviewFollow } from './livePreviewFollow';
+
 const queueItem: QueueItem = {
+  backendItemIds: [1],
   cancellable: true,
   id: 'queue-item-live',
   snapshot: {
@@ -91,6 +94,7 @@ const mocks = vi.hoisted(() => {
       widgets: { patchValues: vi.fn() },
     },
     project: {
+      id: 'project-1',
       queue: { items: [] as unknown[] },
       settings: { antialiasProgressImages: false, showProgressImagesInViewer: false },
       widgetInstances: {
@@ -122,7 +126,7 @@ const mocks = vi.hoisted(() => {
     },
     recentImages,
     bridgeProgressImage: null as unknown,
-    runningProgressTargets: undefined as unknown[] | undefined,
+    runningProgressTargets: undefined as { queueItemId: string; itemIndex: number }[] | undefined,
     slotProgressImage: undefined as unknown,
     useActiveProgressTarget: vi.fn(() => null as unknown),
     useProgressImage: vi.fn(() => null as unknown),
@@ -140,7 +144,7 @@ vi.mock('@workbench/WorkbenchContext', () => ({
 }));
 
 const mockProgressTargets = () => {
-  const target = mocks.useActiveProgressTarget();
+  const target = mocks.useActiveProgressTarget() as { queueItemId: string; itemIndex: number } | null;
 
   return target ? [target] : [];
 };
@@ -149,7 +153,12 @@ vi.mock('@features/queue/react', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   useActiveProgressTarget: () => mocks.useActiveProgressTarget(),
   useActiveProgressTargets: () => mocks.runningProgressTargets ?? mockProgressTargets(),
-  useFollowedProgressTargets: () => mockProgressTargets(),
+  useFollowedProgressTargets: () =>
+    [...(mocks.runningProgressTargets ?? []), ...mockProgressTargets()].filter(
+      (target, index, all) =>
+        all.findIndex((other) => other.queueItemId === target.queueItemId && other.itemIndex === target.itemIndex) ===
+        index
+    ),
   useProgressImage: () => mocks.useProgressImage(),
   useQueueItemBridgeProgressImage: () => mocks.bridgeProgressImage,
   // The slot's own frame: derived from the "latest" mock by target unless a test overrides it.
@@ -259,7 +268,7 @@ await i18n.use(initReactI18next).init({
   resources: {
     en: {
       translation: {
-        common: { countOfTotal: '{{count}} of {{total}}' },
+        common: { countOfTotal: '{{count}} of {{total}}', generating: 'Generating' },
         widgets: {
           preview: {
             framesPerSecond: '{{count}} fps',
@@ -309,6 +318,15 @@ let root: Root | null = null;
 let queryClient: QueryClient | null = null;
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
+let followControls: ReturnType<typeof useLivePreviewFollow>;
+const FollowProbe = () => {
+  const controls = useLivePreviewFollow();
+  const ref = useCallback(() => {
+    followControls = controls;
+  }, [controls]);
+  return <span ref={ref} />;
+};
+
 const renderTree = async (client: QueryClient) => {
   await act(async () => {
     root?.render(
@@ -316,7 +334,10 @@ const renderTree = async (client: QueryClient) => {
         <ChakraProvider value={system}>
           <QueryClientProvider client={client}>
             <DndContext>
-              <PreviewWidgetView instance={instance} manifest={manifest} region="center" runtime={runtime} />
+              <LivePreviewFollowProvider>
+                <FollowProbe />
+                <PreviewWidgetView instance={instance} manifest={manifest} region="center" runtime={runtime} />
+              </LivePreviewFollowProvider>
             </DndContext>
           </QueryClientProvider>
         </ChakraProvider>
@@ -1420,7 +1441,7 @@ describe('preview keyboard navigation boundary', () => {
     );
   });
 
-  it('enables live-follow when stepping onto the active placeholder', async () => {
+  it('does not insert live sessions into saved-image navigation', async () => {
     mocks.project.queue.items = [queueItem];
     mocks.useActiveProgressTarget.mockReturnValue({ itemIndex: 1, queueItemId: 'queue-item-live' });
     mocks.useProgressImage.mockReturnValue({
@@ -1431,18 +1452,12 @@ describe('preview keyboard navigation boundary', () => {
     });
 
     await render();
-    // Descending order: the live placeholder occupies the newest position, so
-    // ArrowLeft from the newest image steps onto it.
     await pressArrow('ArrowLeft');
-
-    expect(mocks.commands.account.updateProjectPreferences).toHaveBeenCalledTimes(1);
-    expect(mocks.commands.account.updateProjectPreferences).toHaveBeenCalledWith({
-      showProgressImagesInViewer: true,
-    });
+    expect(mocks.commands.account.updateProjectPreferences).not.toHaveBeenCalled();
     expect(mocks.commands.gallery.selectItem).not.toHaveBeenCalled();
   });
 
-  it('keeps arrow navigation working while following live', async () => {
+  it('disables saved-image arrow navigation while following live', async () => {
     mocks.project.queue.items = [{ ...queueItem, backendItemIds: [1, 2, 3], completedBackendItemIds: [1, 2] }];
     mocks.project.settings.showProgressImagesInViewer = true;
     mocks.project.widgetInstances.gallery.state.values.recentImages = mocks.recentImages.map((image) => ({
@@ -1458,17 +1473,8 @@ describe('preview keyboard navigation boundary', () => {
     });
 
     await render();
-    // While following live the cursor sits on the placeholder; ArrowRight
-    // steps back onto the newest completed image.
     await pressArrow('ArrowRight');
-
-    expect(mocks.commands.gallery.selectItem).toHaveBeenCalledTimes(1);
-    expect(mocks.commands.gallery.selectItem).toHaveBeenCalledWith(
-      expect.objectContaining({ kind: 'image', name: 'newest' }),
-      undefined,
-      expect.any(Number),
-      true
-    );
+    expect(mocks.commands.gallery.selectItem).not.toHaveBeenCalled();
   });
 
   it('renders the live frame with the standard media chrome: footer up, no badge, item border', async () => {
@@ -1484,17 +1490,15 @@ describe('preview keyboard navigation boundary', () => {
 
     await render();
 
-    // The footer island is up during the live render, fed by queue data: the
-    // slot's requested output size, and working prev/next.
+    // Live status reports the requested size without suggesting board navigation.
     expect(host?.textContent).toContain('64 × 64');
-    expect(host?.querySelector('button[aria-label="Next item in board"]')).not.toBeNull();
-    // No progress badge over the frame — the image is styled exactly like a
-    // finished item, so completion changes pixels, not chrome.
-    expect(host?.textContent).not.toContain('Generating');
+    expect(host?.querySelector('button[aria-label="Next item in board"]')).toBeNull();
+    expect(host?.textContent).toContain('Generating');
+    expect(host?.textContent).not.toContain('0 items');
     expect(host?.querySelector<HTMLImageElement>('img[src^="data:image/png"]')).not.toBeNull();
   });
 
-  it('uses the active placeholder board while following live, even before an image frame arrives', async () => {
+  it('keeps board navigation in its saved-image context while another board generates', async () => {
     const liveBoardImage = {
       ...mocks.project.widgetInstances.gallery.state.values.recentImages[0],
       boardId: 'board-live',
@@ -1512,12 +1516,8 @@ describe('preview keyboard navigation boundary', () => {
     await render();
     await pressArrow('ArrowRight');
 
-    expect(mocks.commands.gallery.selectItem).toHaveBeenCalledWith(
-      expect.objectContaining({ boardId: 'board-live', kind: 'image', name: 'live-board-image' }),
-      undefined,
-      expect.any(Number),
-      true
-    );
+    expect(mocks.commands.gallery.selectItem).not.toHaveBeenCalled();
+    expect(mocks.galleryItemFilters.every((filter) => filter.boardId !== 'board-live')).toBe(true);
   });
 
   it('keeps following a completed slot while its result is still routing', async () => {
@@ -1599,6 +1599,47 @@ describe('preview keyboard navigation boundary', () => {
     expect(host?.querySelector<HTMLImageElement>('img[src="data:image/png;base64,slot-one"]')).toBeNull();
   });
 
+  it('pins one concurrent session, returns to overview, and continues after the pinned session settles', async () => {
+    mocks.project.queue.items = [{ ...queueItem, backendItemIds: [1, 2] }];
+    mocks.project.settings.showProgressImagesInViewer = true;
+    mocks.runningProgressTargets = [
+      { queueItemId: queueItem.id, itemIndex: 1 },
+      { queueItemId: queueItem.id, itemIndex: 2 },
+    ];
+    mocks.slotProgressImage = { dataUrl: 'data:image/png;base64,live', width: 64, height: 64 };
+    await render();
+    expect(host?.querySelectorAll('img[src^="data:image/png"]')).toHaveLength(2);
+    await act(() => followControls.pin('queue-item-live:2'));
+    expect(host?.querySelectorAll('img[src^="data:image/png"]')).toHaveLength(1);
+    expect(followControls.pinnedSessionId).toBe('queue-item-live:2');
+    await act(() => followControls.showAll());
+    expect(host?.querySelectorAll('img[src^="data:image/png"]')).toHaveLength(2);
+    await act(() => followControls.pin('queue-item-live:2'));
+    mocks.runningProgressTargets = [{ queueItemId: queueItem.id, itemIndex: 1 }];
+    await rerender();
+    expect(followControls.pinnedSessionId).toBeNull();
+    expect(host?.querySelectorAll('img[src^="data:image/png"]')).toHaveLength(1);
+  });
+
+  it('keeps live previews available during similarity search and temporary comparison override', async () => {
+    mocks.project.queue.items = [queueItem];
+    mocks.project.settings.showProgressImagesInViewer = true;
+    mocks.runningProgressTargets = [{ queueItemId: queueItem.id, itemIndex: 1 }];
+    mocks.slotProgressImage = { dataUrl: 'data:image/png;base64,live', width: 64, height: 64 };
+    const values = mocks.project.widgetInstances.gallery.state.values as Record<string, unknown>;
+    values.semanticImageQuery = { kind: 'text', query: 'blue sky' };
+    values.compareImage = mocks.recentImages[1];
+    await render();
+    expect(host?.querySelectorAll('img[src^="data:image/png"]')).toHaveLength(1);
+    await act(() => followControls.pin('queue-item-live:1'));
+    mocks.project.id = 'project-2';
+    mocks.project.queue.items = [];
+    await rerender();
+    expect(followControls.pinnedSessionId).toBeNull();
+    expect(followControls.sessions).toEqual([]);
+    mocks.project.id = 'project-1';
+  });
+
   it('orders local images oldest-first when the gallery is ascending', async () => {
     (mocks.project.widgetInstances.gallery.state.values as Record<string, unknown>).imageOrderDir = 'ASC';
 
@@ -1613,6 +1654,34 @@ describe('preview keyboard navigation boundary', () => {
     );
   });
 
+  it('restores comparison after live activity ends and allows comparison with live preference enabled while idle', async () => {
+    const values = mocks.project.widgetInstances.gallery.state.values as Record<string, unknown>;
+    values.compareImage = mocks.recentImages[1];
+    mocks.project.settings.showProgressImagesInViewer = true;
+    await render();
+    expect(host!.textContent).toContain('widgets.preview.exitCompare');
+    mocks.project.queue.items = [queueItem];
+    mocks.runningProgressTargets = [{ queueItemId: queueItem.id, itemIndex: 1 }];
+    await rerender();
+    expect(host!.textContent).not.toContain('widgets.preview.exitCompare');
+    mocks.runningProgressTargets = [];
+    mocks.project.queue.items = [];
+    await rerender();
+    expect(host!.textContent).toContain('widgets.preview.exitCompare');
+  });
+  it('keeps pinned live controls and footer inside the widget without saved-image arrows or zero count', async () => {
+    mocks.project.queue.items = [queueItem];
+    mocks.project.settings.showProgressImagesInViewer = true;
+    mocks.runningProgressTargets = [{ queueItemId: queueItem.id, itemIndex: 1 }];
+    await render();
+    await act(() => followControls.pin('queue-item-live:1'));
+    const boundary = host!.querySelector<HTMLElement>('[role="region"]')!;
+    expect(boundary.getBoundingClientRect().bottom).toBeLessThanOrEqual(host!.getBoundingClientRect().bottom);
+    expect(host!.querySelector('button[aria-label="Next item in board"]')).toBeNull();
+    expect(host!.querySelector('button[aria-label="Previous item in board"]')).toBeNull();
+    expect(host!.textContent).not.toContain('0 items');
+    expect(host!.textContent).toContain('Generating');
+  });
   it('does not consume arrow keys in comparison mode', async () => {
     (mocks.project.widgetInstances.gallery.state.values as Record<string, unknown>).compareImage = {
       ...mocks.project.widgetInstances.gallery.state.values.recentImages[1],

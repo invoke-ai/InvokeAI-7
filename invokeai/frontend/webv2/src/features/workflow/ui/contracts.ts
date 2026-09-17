@@ -62,6 +62,8 @@ export interface WorkflowNodeExecutionState {
   progress: number | null;
   progressMessage: string | null;
   outputImageUrl: string | null;
+  /** The most recent invocation result of the current run. */
+  latestOutput: unknown;
   error: string | null;
 }
 

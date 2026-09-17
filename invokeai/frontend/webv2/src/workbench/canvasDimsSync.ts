@@ -18,7 +18,10 @@
  *   side (if any) to write, given the current bbox, the current committed
  *   generate dims, the snapping grid, and the last-synced snapshot.
  * - {@link createCanvasDimsSync}: a thin `store.subscribe` wiring that feeds the
- *   reconcile from workbench state and dispatches the resulting action.
+ *   reconcile from workbench state and dispatches the resulting action. It also
+ *   subscribes to the architecture capability table, because the grid is
+ *   generation policy that arrives over the network rather than workbench state,
+ *   and both directions of this sync are persisted.
  *
  * Loop safety: the reconcile short-circuits to `none` whenever the bbox and dims
  * already agree, so applying either direction is a fixed point. The wiring also
@@ -35,11 +38,12 @@ import type { AspectRatioId } from '@features/generation/contracts';
 import type { CanvasDocumentContractV3 } from '@workbench/canvas-engine/api';
 import type { WorkbenchState } from '@workbench/projectContracts';
 
+import { subscribeArchitectureCapabilities } from '@features/generation/runtime';
 import { clampDimension, deriveAspectRatioId } from '@features/generation/settings';
 
 import type { WorkbenchCommands } from './workbenchStore';
 
-import { gridSizeForModelBase } from './widgets/canvas/bboxGrid';
+import { resolveModelGrid } from './widgets/canvas/bboxGrid';
 import { getProjectWidgetValues } from './widgetState';
 
 type Bbox = CanvasDocumentContractV3['bbox'];
@@ -175,6 +179,15 @@ const readModelBase = (values: Record<string, unknown>): string | null => {
     : null;
 };
 
+// The grid is variant-dependent -- Wan TI2V-5B enforces 32 where A14B enforces 16 -- and this
+// path persists what it reconciles, so it has to ask with the variant.
+const readModelVariant = (values: Record<string, unknown>): string | null => {
+  const model = values.model;
+  return model && typeof model === 'object' && typeof (model as { variant?: unknown }).variant === 'string'
+    ? (model as { variant: string }).variant
+    : null;
+};
+
 /**
  * Wire the bbox <-> generate-dims reconcile onto a workbench store. Subscribes
  * immediately; dispatches `patchGenerateSettings` / `setCanvasBbox` as the
@@ -224,7 +237,17 @@ export const createCanvasDimsSync = (store: CanvasDimsSyncStore): CanvasDimsSync
     }
 
     const bbox = project.canvas.document.bbox;
-    const grid = gridSizeForModelBase(readModelBase(generateValues));
+    const grid = resolveModelGrid(readModelBase(generateValues), readModelVariant(generateValues));
+
+    // Nothing is written until the backend has answered for this architecture. Both writes below
+    // are `patchSettings` / `setCanvasBbox` on the project, so reconciling against a fallback grid
+    // would *persist* an off-grid width/height for a base whose denoise node rejects it -- and the
+    // capability subscription below is what brings this listener back once the answer lands.
+    if (grid === null) {
+      prev = null;
+      return;
+    }
+
     const result = reconcileCanvasDims({ bbox, dims: { height, width }, grid, prev });
     const projectId = project.id;
 
@@ -261,10 +284,19 @@ export const createCanvasDimsSync = (store: CanvasDimsSyncStore): CanvasDimsSync
     }
   };
 
-  const unsubscribe = store.subscribe(handleChange);
+  const unsubscribeStore = store.subscribe(handleChange);
+  // The grid is generation policy, not workbench state, and it arrives over the network after this
+  // runtime is constructed. A project that is already consistent produces no workbench-store change
+  // when the table lands, so without this the gate above would never be re-entered.
+  const unsubscribeCapabilities = subscribeArchitectureCapabilities(handleChange);
 
   // Seed from the current state so an already-canvas project reconciles on mount.
   handleChange();
 
-  return { dispose: unsubscribe };
+  return {
+    dispose: () => {
+      unsubscribeStore();
+      unsubscribeCapabilities();
+    },
+  };
 };

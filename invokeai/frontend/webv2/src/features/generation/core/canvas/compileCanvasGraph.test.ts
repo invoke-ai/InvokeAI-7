@@ -7,6 +7,7 @@ import type {
   VaeModelConfig,
 } from '@features/generation/core/types';
 
+import { seedArchitectureCapabilities } from '@features/generation/core/architectureCapabilities.testing';
 import { getDefaultGenerateSettings } from '@features/generation/core/baseGenerationPolicies';
 import { describe, expect, it } from 'vitest';
 
@@ -84,7 +85,7 @@ const PROJECT_SETTINGS: GenerationProjectSettings = { useCpuNoise: true };
 const settingsFor = (model: GenerateModelConfig, overrides: Partial<GenerateSettings> = {}): GenerateSettings => ({
   ...getDefaultGenerateSettings(model),
   seed: 1,
-  shouldRandomizeSeed: false,
+  seedMode: 'fixed',
   ...overrides,
 });
 
@@ -265,6 +266,8 @@ const BASE_CASES: BaseCase[] = [
     optimizedDenoising: false,
   },
 ];
+
+seedArchitectureCapabilities();
 
 describe('compileCanvasGraph', () => {
   describe('txt2img per base', () => {

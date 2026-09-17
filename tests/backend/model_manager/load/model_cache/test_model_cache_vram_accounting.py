@@ -154,3 +154,36 @@ def test_reclaimable_credit_withheld_under_expandable_segments(monkeypatch: pyte
     monkeypatch.delenv("PYTORCH_CUDA_ALLOC_CONF")
     # With no allocator config the credit path is active again (>= 0 by construction).
     assert cache._get_reclaimable_allocator_bytes() >= 0
+
+
+def test_physical_availability_shares_the_reclaimable_credit_policy(monkeypatch: pytest.MonkeyPatch):
+    """`_get_physical_vram_available` (out-of-cache loads, `make_room_in_vram`) must budget from the
+    same device measurement as `lock()`: ignoring the cache cap, but still crediting the allocator
+    reserve only through `_get_reclaimable_allocator_bytes` — never the raw reserved-minus-allocated
+    figure, which over-reports under expandable segments."""
+    cache = ModelCache(
+        execution_device_working_mem_gb=1.0,
+        enable_partial_loading=True,
+        keep_ram_copy_of_weights=True,
+        execution_device="cpu",
+        storage_device="cpu",
+        logger=MagicMock(),
+        shared_cpu_weights=None,
+        max_vram_cache_size_gb=1.0,
+    )
+    cache._execution_device = torch.device("cuda")  # policy only; every VRAM query below is patched out
+    monkeypatch.setattr(torch.cuda, "mem_get_info", lambda device: (4 * GB, 24 * GB))
+    monkeypatch.setattr(torch.cuda, "memory_allocated", lambda device: 2 * GB)
+    monkeypatch.setattr(torch.cuda, "memory_reserved", lambda device: 5 * GB)
+    monkeypatch.setattr(torch.cuda, "memory_stats", lambda device: {"inactive_split_bytes.all.current": GB})
+    monkeypatch.delenv("PYTORCH_CUDA_ALLOC_CONF", raising=False)
+    monkeypatch.delenv("PYTORCH_ALLOC_CONF", raising=False)
+    monkeypatch.delenv("PYTORCH_HIP_ALLOC_CONF", raising=False)
+
+    # The cap governs the cache's own budget (1 GB cap - 1 GB working - 2 GB in use)...
+    assert cache._get_vram_available(None) == -2 * GB
+    # ...but not an out-of-cache load: 4 GB free + (5 - 2 - 1 inactive-split) GB reclaimable - 1 GB working.
+    assert cache._get_physical_vram_available() == 5 * GB
+
+    monkeypatch.setenv("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+    assert cache._get_physical_vram_available() == 3 * GB

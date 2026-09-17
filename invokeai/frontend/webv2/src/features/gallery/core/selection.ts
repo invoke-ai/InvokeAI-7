@@ -174,3 +174,26 @@ export const subscribeGalleryRevealRequests = (listener: () => void): (() => voi
     listeners.delete(listener);
   };
 };
+
+/*
+ * Navigation ordering. A reveal resolves its item over the network before it
+ * touches anything, so two gestures in flight can land out of order; the newer
+ * one must win. The counter is module-scoped for the same reason the reveal
+ * channel above is: the thing it guards — the gallery selection — is global, so
+ * a per-mount ref leaves a hole whenever a caller unmounts with a hydrate in
+ * flight (switching the right-panel tab away and back), where the abandoned
+ * closure compares against its own dead ref, passes, and overwrites the newer
+ * mount's selection. One counter spans every surface that navigates the grid.
+ *
+ * It lives here rather than beside the reveal that uses it because that module
+ * is loaded on demand, and a caller which defers it still has to take its place
+ * in the ordering at the moment of the press.
+ */
+
+let navigationSequence = 0;
+
+/** Claims this navigation's place in the global ordering; every later claim supersedes it. */
+export const claimGalleryNavigationSequence = (): number => ++navigationSequence;
+
+/** False once a newer navigation has been claimed, which is when a slow hydrate must stand down. */
+export const isGalleryNavigationCurrent = (sequence: number): boolean => sequence === navigationSequence;

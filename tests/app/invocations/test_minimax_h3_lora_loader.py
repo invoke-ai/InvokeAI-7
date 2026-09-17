@@ -12,7 +12,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from invokeai.app.invocations.minimax_h3_lora_loader import (
+from invokeai.app.invocations.minimax_h3.minimax_h3_lora_loader import (
     MiniMaxH3LoRACollectionLoader,
     MiniMaxH3LoRACollectionLoaderOutput,
     MiniMaxH3LoRALoaderInvocation,

@@ -15,6 +15,7 @@ import type { WorkbenchState } from '@workbench/projectContracts';
 import type { WorkbenchAction } from '@workbench/workbenchState.testing';
 import type { WorkbenchCommands } from '@workbench/workbenchStore';
 
+import { seedArchitectureCapabilities } from '@features/generation/core/architectureCapabilities.testing';
 import { getDefaultGenerateSettings } from '@features/generation/settings';
 import { getDocumentLeaves } from '@workbench/canvas-engine/api';
 import { stacksFrom } from '@workbench/canvas-engine/document-model/documentFixtures.testStub';
@@ -85,7 +86,7 @@ const generateValuesFor = (model: GenerateModelConfig): Record<string, unknown> 
   modelKey: model.key,
   positivePrompt: 'a canvas prompt',
   seed: 7,
-  shouldRandomizeSeed: false,
+  seedMode: 'fixed',
 });
 
 const rasterLayer = (id: string, size = 64): CanvasRasterLayerContractV2 => ({
@@ -329,6 +330,8 @@ const controlLayer = (
   withTransparencyEffect: true,
 });
 
+seedArchitectureCapabilities();
+
 describe('prepareCanvasInvocation generation-device boundary', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -437,7 +440,7 @@ describe('runCanvasInvocation', () => {
       negativePrompt: 'low quality',
       positivePrompt: 'a resolved canvas prompt',
       seed: 123,
-      shouldRandomizeSeed: false,
+      seedMode: 'fixed',
     };
 
     await runCanvasInvocation(harness.deps);
@@ -452,7 +455,7 @@ describe('runCanvasInvocation', () => {
         negativePrompt: 'low quality',
         positivePrompt: 'a resolved canvas prompt',
         seed: 123,
-        shouldRandomizeSeed: false,
+        seedMode: 'fixed',
       },
     });
   });

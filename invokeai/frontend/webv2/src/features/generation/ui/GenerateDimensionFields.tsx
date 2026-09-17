@@ -1,24 +1,24 @@
-/* eslint-disable react/react-compiler, react-perf/jsx-no-new-object-as-prop, react-perf/jsx-no-new-function-as-prop, react-perf/jsx-no-new-array-as-prop, react-perf/jsx-no-jsx-as-prop */
+/* eslint-disable react-perf/jsx-no-new-object-as-prop, react-perf/jsx-no-new-function-as-prop, react-perf/jsx-no-new-array-as-prop, react-perf/jsx-no-jsx-as-prop */
 import type { AspectRatioId, GenerateModelConfig, GenerateSettings } from '@features/generation/core/types';
 
-import { Badge, Box, HStack, Icon, InputGroup, NumberInput, Stack, Text } from '@chakra-ui/react';
+import { Badge, Box, HStack, Icon, Stack, Text } from '@chakra-ui/react';
 import { getDefaultGenerateSettings, getGenerationDimensions } from '@features/generation/core/baseGenerationPolicies';
 import {
   ASPECT_RATIO_MAP,
   calculateNewSize,
   clampDimension,
+  deriveAspectRatioId,
   MAX_DIMENSION,
   MIN_DIMENSION,
 } from '@features/generation/core/settings';
 import { Button, IconButton, Tooltip } from '@platform/ui';
-import { MODEL_DEFAULT_END_ELEMENT_PROPS, ModelDefaultButton } from '@platform/ui/ModelDefaultButton';
-import { ArrowLeftRightIcon, LockIcon, RulerDimensionLineIcon } from 'lucide-react';
+import { ScrubberField } from '@platform/ui/ScrubberField';
+import { ArrowLeftRightIcon, LockIcon } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { useGenerationUi } from './GenerationUiContext';
-import { AspectRatioChips } from './shared/AspectRatioChips';
-import { AspectRatioLockButton } from './shared/AspectRatioSelect';
+import { AspectRatioLockButton, AspectRatioSelect } from './shared/AspectRatioSelect';
 import { GenerateCollapsibleSection } from './shared/GenerateCollapsibleSection';
 import { GenerateFieldContextMenu } from './shared/GenerateFieldContextMenu';
 
@@ -40,6 +40,43 @@ const getActiveRatio = (settings: GenerateSettings): number =>
       : 1;
 
 const PREVIEW_STAGE_PX = 108;
+/** The scrub range covers everyday sizes; typing still reaches `MAX_DIMENSION`. */
+const DIMENSION_SLIDER_MAX = 2048;
+/** Vertical gap between the width and height rows; the lock bracket's geometry assumes it. */
+const DIMENSION_ROW_GAP = '2';
+
+/**
+ * One continuous line leaves the width row, runs behind the lock, and returns
+ * to the height row: the coupling is drawn, and it lights up with the button
+ * when locked. Geometry assumes `xs` rows (28px), an 8px row gap, a 4px column
+ * gap, and the `2xs` button (24px).
+ */
+const LOCK_BRACKET_PATH = 'M0 14H12a4 4 0 0 1 4 4v28a4 4 0 0 1-4 4H0';
+const LOCK_BRACKET_CSS = {
+  alignItems: 'center',
+  alignSelf: 'stretch',
+  display: 'flex',
+  flexShrink: 0,
+  justifyContent: 'center',
+  position: 'relative',
+  w: '6',
+  '& [data-part="bracket"]': {
+    fill: 'none',
+    h: '64px',
+    insetInlineStart: '-4px',
+    pointerEvents: 'none',
+    position: 'absolute',
+    stroke: 'border',
+    strokeWidth: '1px',
+    top: 0,
+    transitionDuration: 'var(--wb-motion-duration-fast)',
+    transitionProperty: 'stroke',
+    w: '28px',
+  },
+  '&[data-locked] [data-part="bracket"]': { stroke: 'accent.solid' },
+};
+/** Same width as the lock column so the swap lines up under the lock. */
+const SWAP_COLUMN_CSS = { display: 'flex', flexShrink: 0, justifyContent: 'center', w: '6' };
 const PREVIEW_PAD_PX = 10;
 
 const clampToRange = (value: number): number => Math.min(MAX_DIMENSION, Math.max(MIN_DIMENSION, value));
@@ -261,6 +298,7 @@ export const GenerateDimensionFields = ({
 
     if (settings.width === draftDimensions.width && settings.height === draftDimensions.height) {
       pendingDimensionsRef.current = null;
+      // eslint-disable-next-line react/set-state-in-effect
       setDraftDimensions(null);
       return;
     }
@@ -287,50 +325,8 @@ export const GenerateDimensionFields = ({
       : { height: nextValue, width: shouldSnap ? clampDimension(nextValue * ratio, dimensionGrid) : nextValue * ratio };
   };
 
-  const setDimension =
-    (key: 'height' | 'width') =>
-    ({ valueAsNumber }: NumberInput.ValueChangeDetails) => {
-      const value = valueAsNumber;
-
-      if (!Number.isFinite(value) || value <= 0) {
-        return;
-      }
-
-      setDraftDimensions(getNextDimensions(key, value, false));
-    };
-
-  const commitDimension =
-    (key: 'height' | 'width') =>
-    ({ valueAsNumber }: NumberInput.ValueChangeDetails) => {
-      const value = valueAsNumber;
-
-      if (!Number.isFinite(value) || value <= 0) {
-        return;
-      }
-
-      const dimensions = getNextDimensions(key, value, true);
-
-      setDraftDimensions(dimensions);
-      commitDimensions(dimensions);
-    };
-
-  const snapDimension = (key: 'height' | 'width') => () => {
-    const snapped = clampDimension(displayDimensions[key], dimensionGrid);
-
-    if (snapped !== displayDimensions[key]) {
-      const dimensions = getNextDimensions(key, snapped, true);
-
-      setDraftDimensions(dimensions);
-      commitDimensions(dimensions);
-    }
-  };
-
-  const setDimensionToModelDefault = (key: 'height' | 'width') => {
-    if (!modelDefaults) {
-      return;
-    }
-
-    const dimensions = getNextDimensions(key, modelDefaults[key], true);
+  const commitDimension = (key: 'height' | 'width') => (value: number) => {
+    const dimensions = getNextDimensions(key, value, true);
 
     setDraftDimensions(dimensions);
     commitDimensions(dimensions);
@@ -363,14 +359,26 @@ export const GenerateDimensionFields = ({
     });
   };
 
+  // The lock shows whether the ratio is held at all, preset or captured, so a
+  // chosen preset reads as locked and unlocking always returns to Free. Locking
+  // captures the current ratio, named by its preset when it matches one.
   const toggleLock = () => {
+    if (isRatioConstrained) {
+      commitSettings({
+        aspectRatioId: 'Free',
+        aspectRatioIsLocked: false,
+        aspectRatioValue: dimensionRatio,
+        ...displayDimensions,
+      });
+      return;
+    }
+
+    const id = deriveAspectRatioId(displayDimensions.width, displayDimensions.height);
+
     commitSettings({
-      aspectRatioIsLocked: !settings.aspectRatioIsLocked,
-      // Locking in Free mode captures the current ratio so further edits preserve it.
-      aspectRatioValue:
-        !settings.aspectRatioIsLocked && settings.aspectRatioId === 'Free' && displayDimensions.height > 0
-          ? displayDimensions.width / displayDimensions.height
-          : settings.aspectRatioValue,
+      aspectRatioId: id,
+      aspectRatioIsLocked: true,
+      aspectRatioValue: id === 'Free' ? dimensionRatio : ASPECT_RATIO_MAP[id].ratio,
       ...displayDimensions,
     });
   };
@@ -415,7 +423,7 @@ export const GenerateDimensionFields = ({
       <Badge size="xs">
         {displayDimensions.width}x{displayDimensions.height}
       </Badge>
-      {settings.aspectRatioIsLocked && (
+      {isRatioConstrained && (
         <Badge size="xs">
           <Icon as={LockIcon} boxSize="3" />
         </Badge>
@@ -423,43 +431,21 @@ export const GenerateDimensionFields = ({
     </>
   );
 
-  const dimensionInput = (key: 'height' | 'width') => (
-    <NumberInput.Root
-      size="xs"
-      allowMouseWheel
-      flex="1"
-      max={MAX_DIMENSION}
+  // The model's optimal side is the stop worth landing on; the recommended
+  // size for the live ratio is what "Set optimal size" would produce.
+  const dimensionField = (key: 'height' | 'width') => (
+    <ScrubberField
+      defaultValue={modelDefaults?.[key]}
+      hint={key}
+      inputMax={MAX_DIMENSION}
+      label={key === 'width' ? t('widgets.generate.width') : t('widgets.generate.height')}
+      marks={[dimensions.optimal, recommendedDimensions[key]]}
+      max={DIMENSION_SLIDER_MAX}
       min={MIN_DIMENSION}
-      value={String(displayDimensions[key])}
       step={dimensionGrid}
-      onBlur={snapDimension(key)}
-      onValueCommit={commitDimension(key)}
-      onValueChange={setDimension(key)}
-    >
-      <InputGroup
-        endElement={
-          modelDefaults && displayDimensions[key] !== modelDefaults[key] ? (
-            <ModelDefaultButton
-              label={
-                key === 'width'
-                  ? t('widgets.generate.useModelDefaultWidth')
-                  : t('widgets.generate.useModelDefaultHeight')
-              }
-              onClick={() => setDimensionToModelDefault(key)}
-            />
-          ) : undefined
-        }
-        endElementProps={MODEL_DEFAULT_END_ELEMENT_PROPS}
-        startElementProps={{ pointerEvents: 'auto' }}
-        startElement={
-          <NumberInput.Scrubber>
-            <Icon as={RulerDimensionLineIcon} boxSize="3" rotate={key === 'height' ? '90' : undefined} />
-          </NumberInput.Scrubber>
-        }
-      >
-        <NumberInput.Input aria-label={key === 'width' ? t('widgets.generate.width') : t('widgets.generate.height')} />
-      </InputGroup>
-    </NumberInput.Root>
+      value={displayDimensions[key]}
+      onChange={commitDimension(key)}
+    />
   );
 
   return (
@@ -485,30 +471,38 @@ export const GenerateDimensionFields = ({
               }
             >
               <HStack alignItems="center" gap="1">
-                {dimensionInput('width')}
-                <AspectRatioLockButton isLocked={settings.aspectRatioIsLocked} onToggle={toggleLock} />
-                {dimensionInput('height')}
+                <Stack flex="1" gap={DIMENSION_ROW_GAP} minW="0">
+                  {dimensionField('width')}
+                  {dimensionField('height')}
+                </Stack>
+                <Box css={LOCK_BRACKET_CSS} data-locked={isRatioConstrained ? '' : undefined}>
+                  <svg aria-hidden="true" data-part="bracket" viewBox="0 0 28 64">
+                    <path d={LOCK_BRACKET_PATH} />
+                  </svg>
+                  <AspectRatioLockButton isLocked={isRatioConstrained} size="2xs" onToggle={toggleLock} />
+                </Box>
               </HStack>
             </GenerateFieldContextMenu>
-            {/* Every preset stays visible in the run beneath the values it
-                reshapes — nothing hides behind an overflow menu. */}
-            <HStack alignItems="flex-start" gap="1">
-              <AspectRatioChips
+            {/* The preset row mirrors the dimension rows: the select fills the value
+                column and the swap sits in the lock's column beneath it. */}
+            <HStack alignItems="center" gap="1">
+              <AspectRatioSelect
                 fallbackRatio={dimensionRatio}
                 value={settings.aspectRatioId}
                 onChange={setAspectRatioId}
               />
-              <Tooltip content={t('widgets.generate.swapWidthAndHeight')}>
-                <IconButton
-                  aria-label={t('widgets.generate.swapWidthAndHeight')}
-                  flexShrink="0"
-                  size="2xs"
-                  variant="outline"
-                  onClick={swapDimensions}
-                >
-                  <ArrowLeftRightIcon />
-                </IconButton>
-              </Tooltip>
+              <Box css={SWAP_COLUMN_CSS}>
+                <Tooltip content={t('widgets.generate.swapWidthAndHeight')}>
+                  <IconButton
+                    aria-label={t('widgets.generate.swapWidthAndHeight')}
+                    size="2xs"
+                    variant="outline"
+                    onClick={swapDimensions}
+                  >
+                    <ArrowLeftRightIcon />
+                  </IconButton>
+                </Tooltip>
+              </Box>
             </HStack>
             <HStack gap="2" justify="space-between" minH="5" mt="auto">
               <Text color="fg.muted" fontSize="2xs">

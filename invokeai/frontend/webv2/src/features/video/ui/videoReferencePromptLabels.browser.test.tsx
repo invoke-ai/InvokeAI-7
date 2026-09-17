@@ -66,6 +66,7 @@ const adapter = {
   playVideoSpanInPreview: vi.fn(),
   reportError: vi.fn(),
   touchGalleryImages: vi.fn(),
+  videoSpanPlayback: { getState: () => null, subscribe: () => () => undefined },
 } as unknown as VideoUiAdapter;
 
 const imageReference = (name: string): VideoReferenceItem => ({

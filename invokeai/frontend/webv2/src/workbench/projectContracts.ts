@@ -93,7 +93,8 @@ export interface BackendConnectionState {
 export type WorkbenchNotificationKind = 'error' | 'success' | 'info';
 
 /** Machine categories for toast policy. Absent category = always toast. */
-export type WorkbenchNotificationCategory = 'enqueue';
+/** `run-outcome`: a queue item the user submitted failed or was cancelled. */
+export type WorkbenchNotificationCategory = 'enqueue' | 'run-outcome';
 
 export interface WorkbenchNotification {
   id: string;

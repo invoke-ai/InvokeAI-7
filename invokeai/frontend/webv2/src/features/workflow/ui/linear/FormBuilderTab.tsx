@@ -26,16 +26,31 @@ import {
   type WorkflowForm,
   type WorkflowFormElement,
 } from '@features/workflow/contracts';
+import { isSeedInputField } from '@features/workflow/graph';
 import { useInvocationTemplatesSelector, type InvocationTemplatesSnapshot } from '@features/workflow/react';
 import { requestNodeSelection, workflowSelectionStore } from '@features/workflow/ui/editor/selectionStore';
 import { FieldDescriptionPopover } from '@features/workflow/ui/fields/FieldDescriptionPopover';
 import { getWorkflowNodeChromeProps } from '@features/workflow/ui/nodeChrome';
 import { useProjectGraphCommands } from '@features/workflow/ui/useProjectGraphCommands';
 import { useWorkflowHostCommands } from '@features/workflow/ui/WorkflowUiContext';
-import { getFormChildren, getResolvedWorkflowEdges, getWorkflowFieldInvalidReason } from '@features/workflow/utility';
+import {
+  getFormChildren,
+  getResolvedWorkflowEdges,
+  getWorkflowFieldInvalidReason,
+  isShuffleableField,
+} from '@features/workflow/utility';
 import { Button, DropZone, IconButton } from '@platform/ui';
 import { MenuContent } from '@platform/ui/Menu';
-import { Columns2Icon, CrosshairIcon, GripVerticalIcon, InfoIcon, PlusIcon, Rows2Icon, XIcon } from 'lucide-react';
+import {
+  Columns2Icon,
+  CrosshairIcon,
+  DicesIcon,
+  GripVerticalIcon,
+  InfoIcon,
+  PlusIcon,
+  Rows2Icon,
+  XIcon,
+} from 'lucide-react';
 import {
   createContext,
   memo,
@@ -301,6 +316,38 @@ const ContainerDropZoneBase = ({ container, isEmpty }: { container: ContainerFor
 const ContainerDropZone = memo(ContainerDropZoneBase);
 
 /** The shared description popover, bound through the form element. */
+/** Seed fields own a dice already; other numeric fields opt into one per form element. */
+const ShuffleToggleAction = ({
+  element,
+  projectGraph,
+}: {
+  element: NodeFieldFormElement;
+  projectGraph: ProjectGraphState;
+}) => {
+  const { editGraph } = useProjectGraphCommands();
+  const { template } = useNodeFieldBinding(element, projectGraph);
+
+  if (!template || !isShuffleableField(template) || isSeedInputField(template)) {
+    return null;
+  }
+
+  const { showShuffle } = element.data;
+
+  return (
+    <IconButton
+      aria-label="Show shuffle button"
+      aria-pressed={showShuffle}
+      color={showShuffle ? 'accent.solid' : undefined}
+      size="2xs"
+      title={showShuffle ? 'Hide shuffle button' : 'Show shuffle button'}
+      variant="ghost"
+      onClick={() => editGraph({ elementId: element.id, showShuffle: !showShuffle, type: 'setNodeFieldShowShuffle' })}
+    >
+      <Icon as={DicesIcon} boxSize="3" />
+    </IconButton>
+  );
+};
+
 const FieldDescriptionAction = ({
   element,
   projectGraph,
@@ -397,8 +444,10 @@ const BuilderElementBase = ({
                 <Icon as={CrosshairIcon} boxSize="3" />
               </IconButton>
               <FieldDescriptionAction element={element} projectGraph={projectGraph} />
+              <ShuffleToggleAction element={element} projectGraph={projectGraph} />
               <IconButton
-                aria-label="Toggle description"
+                aria-label="Show field description"
+                aria-pressed={element.data.showDescription}
                 color={element.data.showDescription ? 'accent.solid' : undefined}
                 size="2xs"
                 title={element.data.showDescription ? 'Hide field description' : 'Show field description'}

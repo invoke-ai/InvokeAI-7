@@ -294,6 +294,21 @@ describe('buildSettingsEntries', () => {
   });
 });
 
+describe('searchPaletteRows', () => {
+  it('returns every matching entry rather than the first ten', () => {
+    const entries: PaletteEntry[] = Array.from({ length: 12 }, (_, index) => ({
+      group: 'App',
+      id: `portrait-${String(index)}`,
+      isPersistentRecent: false,
+      run: () => undefined,
+      title: `Portrait ${String(index)}`,
+    }));
+    const rows = searchPaletteRows(entries, 'portrait', []);
+
+    expect(rows.filter((row) => row.kind === 'entry')).toHaveLength(12);
+  });
+});
+
 describe('buildStageEntries', () => {
   it('turns options into keep-open rows that apply then pop', () => {
     const apply = vi.fn();

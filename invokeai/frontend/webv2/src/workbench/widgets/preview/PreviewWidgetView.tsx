@@ -1,5 +1,5 @@
 import type { SystemStyleObject } from '@chakra-ui/react';
-import type { QueueItem } from '@features/queue/contracts';
+import type { QueueActiveSession, QueueItem } from '@features/queue/contracts';
 import type { WidgetViewProps } from '@workbench/widgetContracts';
 
 import { Box, Flex, SimpleGrid, Stack, Text } from '@chakra-ui/react';
@@ -15,8 +15,6 @@ import {
 } from '@features/gallery';
 import {
   getGalleryCompareImage,
-  getGalleryGenerationSequence,
-  getGalleryLiveSlots,
   getGalleryPage,
   getGallerySelectedImageQuery,
   getGallerySemanticImageQuery,
@@ -30,7 +28,6 @@ import {
   requestGalleryItemReveal,
   toGalleryItemKey,
   toGalleryItemRef,
-  type GalleryQueuePlaceholder,
 } from '@features/gallery/contracts';
 import { galleryBoardsOptions } from '@features/gallery/queries';
 import { createGenerateFormValuesSelector } from '@features/generation/react';
@@ -38,13 +35,12 @@ import { getDeterminateProgressPercent } from '@features/queue/contracts';
 import { useDeviceLabel } from '@features/queue/devices';
 import {
   consumeQueueItemSwapProgressImage,
-  useActiveProgressTargets,
-  useFollowedProgressTargets,
   useItemProgress,
   useQueueItemBridgeProgressImage,
   useQueueItemProgressImage,
   useQueueItemSwapProgressImage,
 } from '@features/queue/react';
+import { Button } from '@platform/ui';
 import {
   imageUrlToStreamingSource,
   progressImageToStreamingSource,
@@ -73,6 +69,7 @@ import { useTranslation } from 'react-i18next';
 
 import type { PreviewLoupeControls } from './usePreviewLoupe';
 
+import { useLivePreviewFollow } from './livePreviewFollow';
 import { PreviewCompare } from './PreviewCompare';
 import { resolvePreviewCompareDrop } from './previewCompareDnd';
 import { usePreviewDensity, type PreviewDensity } from './previewDensity';
@@ -194,9 +191,8 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
   const { antialiasProgressImages, showProgressImagesInViewer } = useActiveProjectSelector(
     (project) => project.settings
   );
-  const runningProgressTargets = useActiveProgressTargets();
-  const followedProgressTargets = useFollowedProgressTargets();
-  const { account, gallery, notifications, widgets } = useWorkbenchCommands();
+  const livePreview = useLivePreviewFollow();
+  const { gallery, notifications, widgets } = useWorkbenchCommands();
   const queries = useWorkbenchQueries();
   const { density, rootRef } = usePreviewDensity(region);
   const recentImages = galleryValues.recentImages;
@@ -206,7 +202,6 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
   const comparisonMode = getPreviewComparisonMode(previewValues);
   const displayBoardId = selectedItem?.boardId ?? 'none';
   const hasSelectedItem = selectedItem !== null;
-  const { imageOrderDir } = getGallerySettings(galleryValues);
   const selectedImageQuery = getGallerySelectedImageQuery(galleryValues);
   // The gallery's live similarity search: when one is active the grid shows a
   // ranked result set, and navigation has to walk that same list. Memoized on
@@ -218,41 +213,30 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
     [galleryValues.semanticImageQuery]
   );
   const selectedItemKey = selectedItem ? toGalleryItemKey(selectedItem) : null;
+  const liveGalleryPlaceholders = useMemo(
+    () => livePreview.sessions.filter((session) => session.state === 'running'),
+    [livePreview.sessions]
+  );
+  const pinnedSession = livePreview.sessions.find((session) => session.id === livePreview.pinnedSessionId);
+  const activeGalleryPlaceholder = pinnedSession ?? liveGalleryPlaceholders[0] ?? livePreview.sessions[0] ?? null;
+  const shouldFollowLive = showProgressImagesInViewer && activeGalleryPlaceholder !== null;
   const isComparing =
+    !shouldFollowLive &&
     selectedItem?.kind === 'image' &&
     compareImage !== null &&
     toGalleryItemKey({ kind: 'image', name: compareImage.imageName }) !== selectedItemKey;
-  const generationSequence = useMemo(() => getGalleryGenerationSequence(queueItems, null), [queueItems]);
-  // Multi-GPU runs one session per GPU, so several slots can be live at once. One
-  // live slot keeps the existing single-frame preview; two or more are tiled.
-  // Running slots only: a slot settling after completion must not turn a
-  // single-GPU batch into a two-tile grid at every item boundary.
-  const liveGalleryPlaceholders = useMemo(
-    () => getGalleryLiveSlots(generationSequence.chronologicalSlots, runningProgressTargets),
-    [generationSequence.chronologicalSlots, runningProgressTargets]
-  );
-  // The slot to follow: the oldest running one, else the oldest settling one. A
-  // completed slot stays followed until its result routing lands, and routing
-  // removes its placeholder first — so the followed set is filtered against the
-  // placeholders that exist rather than trusting a single target that may have
-  // just vanished. That routing window is where Preview used to fall back onto
-  // the previous selection before the finished image was selected. A running
-  // slot wins over a settling one so a concurrent session's live stream is
-  // never hidden behind a static frame.
-  const activeGalleryPlaceholder = useMemo(
-    () =>
-      liveGalleryPlaceholders[0] ??
-      getGalleryLiveSlots(generationSequence.chronologicalSlots, followedProgressTargets)[0] ??
-      null,
-    [followedProgressTargets, generationSequence.chronologicalSlots, liveGalleryPlaceholders]
-  );
-  // Not while a similarity search is active: the grid hides pending items
-  // there entirely, so following the generation would put Preview on a tile
-  // the grid is not showing and, worse, hand the arrows the board listing
-  // while the grid shows a ranking.
-  const shouldFollowLive =
-    showProgressImagesInViewer && activeGalleryPlaceholder !== null && !isComparing && gallerySemanticQuery === null;
   const { t } = useTranslation();
+  const navigationBoundaryRef = useRef<HTMLDivElement | null>(null);
+  const overviewButtonRef = useCallback((element: HTMLButtonElement | null) => {
+    if (!element) {
+      return;
+    }
+    return () => {
+      if (document.activeElement === element) {
+        queueMicrotask(() => navigationBoundaryRef.current?.focus({ preventScroll: true }));
+      }
+    };
+  }, []);
   const loupeControlsRef = useRef<PreviewLoupeControls | null>(null);
   const videoControllerRef = useRef<PreviewVideoFrameController | null>(null);
   const [copyAvailableItemKey, setCopyAvailableItemKey] = useState<GalleryItemKey | null>(null);
@@ -269,10 +253,6 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
     t('widgets.gallery.unknownBoard')
   );
 
-  const enableLiveFollow = useCallback(
-    () => account.updateProjectPreferences({ showProgressImagesInViewer: true }),
-    [account]
-  );
   const selectGalleryItemAtPage = useCallback(
     (item: GalleryItem, selectionPage: number) => {
       gallery.selectItem(item, undefined, selectionPage, true);
@@ -292,9 +272,6 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
     navigationSequence,
     selectPreviewItem,
   } = usePreviewNavigation({
-    activePlaceholder: activeGalleryPlaceholder,
-    enableLiveFollow,
-    imageOrderDir,
     isComparing,
     localItems,
     queueItems,
@@ -543,11 +520,6 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
   useEffect(() => () => previewHeaderStore.clear(), []);
 
   const executeViewerHotkey = useEffectEvent((commandId: string) => {
-    if (commandId === 'viewer.toggleViewer') {
-      runtime.workbench.closeWidgetInstance(runtime.instanceId);
-      return;
-    }
-
     if (commandId === 'viewer.swapImages' && selectedItem?.kind === 'image' && compareImage) {
       swapCompareImages();
       return;
@@ -575,7 +547,6 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
 
   useEffect(() => {
     const hotkeys = [
-      ['viewer.toggleViewer', t('widgets.preview.commands.togglePreview'), ['z']],
       ['viewer.deleteImage', t('widgets.preview.commands.deletePreviewImage'), ['delete', 'backspace']],
       ['viewer.toggleFilmstrip', t('widgets.preview.commands.toggleFilmstrip'), ['t']],
       ...(selectedItem?.kind === 'image'
@@ -612,6 +583,7 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
           between the live, selected, and compare branches, so arrow
           navigation keeps working across them. */}
       <Stack
+        ref={navigationBoundaryRef}
         aria-label={t('widgets.labels.preview')}
         gap="0"
         h="full"
@@ -622,19 +594,31 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
         w="full"
         onKeyDown={handleNavigationKeyDown}
       >
-        {shouldFollowLive && liveGalleryPlaceholders.length > 1 ? (
+        {shouldFollowLive && pinnedSession ? (
+          <Button
+            ref={overviewButtonRef}
+            alignSelf="start"
+            flexShrink={0}
+            size="2xs"
+            variant="ghost"
+            onClick={livePreview.showAll}
+          >
+            {t('widgets.preview.showAllActivePreviews')}
+          </Button>
+        ) : null}
+        {shouldFollowLive && !pinnedSession && liveGalleryPlaceholders.length > 1 ? (
           <LivePreviewTiles
             placeholders={liveGalleryPlaceholders}
             shouldAntialiasProgressImage={antialiasProgressImages}
           />
         ) : shouldFollowLive && activeGalleryPlaceholder ? (
           <LivePreview
-            boardItemCount={navigationSequence.length}
+            boardItemCount={0}
             density={density}
             filmstripItems={isFilmstripVisible && density !== 'minimal' ? boardItems : null}
             isLoadingBoard={isLoadingBoard}
             placeholder={activeGalleryPlaceholder}
-            selectedIndex={navigationCursor}
+            selectedIndex={-1}
             shouldAntialiasProgressImage={antialiasProgressImages}
             onNext={selectNextItem}
             onPrevious={selectPreviousItem}
@@ -920,8 +904,8 @@ const SelectedMediaPreview = ({
  * The single-session live preview: the denoise stream rendered exactly like a
  * finished item — same scaffold, same frame chrome, no badge — so the moment
  * generation completes, only the pixels change. The footer stays up
- * throughout, fed by queue data: the slot's position in the same navigation
- * sequence the arrow keys walk, and its requested output size.
+ * throughout, showing generation status and requested output dimensions.
+ * Saved-image navigation remains in the filmstrip.
  */
 const LivePreview = ({
   boardItemCount,
@@ -939,7 +923,7 @@ const LivePreview = ({
   density: PreviewDensity;
   filmstripItems: GalleryItem[] | null;
   isLoadingBoard: boolean;
-  placeholder: GalleryQueuePlaceholder;
+  placeholder: QueueActiveSession;
   selectedIndex: number;
   shouldAntialiasProgressImage: boolean;
   onNext: () => void;
@@ -1016,7 +1000,7 @@ export const LivePreviewTile = ({
   placeholder,
   shouldAntialiasProgressImage,
 }: {
-  placeholder: GalleryQueuePlaceholder;
+  placeholder: QueueActiveSession;
   shouldAntialiasProgressImage: boolean;
 }) => {
   const { t } = useTranslation();
@@ -1076,7 +1060,7 @@ export const LivePreviewTiles = ({
   placeholders,
   shouldAntialiasProgressImage,
 }: {
-  placeholders: GalleryQueuePlaceholder[];
+  placeholders: QueueActiveSession[];
   shouldAntialiasProgressImage: boolean;
 }) => (
   <SimpleGrid gap="2" h="full" minH="0" columns={placeholders.length > 2 ? 2 : placeholders.length}>

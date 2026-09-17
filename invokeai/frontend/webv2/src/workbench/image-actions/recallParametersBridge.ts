@@ -1,5 +1,6 @@
 import type { SocketHub } from '@platform/transport/socketHub';
 import type { WorkbenchCommands, WorkbenchQueries } from '@workbench/workbenchStore';
+import type { TFunction } from 'i18next';
 
 import type {
   createRecallParametersRuntime,
@@ -24,12 +25,14 @@ export const attachRecallParametersRuntime = ({
   hub,
   load = () => import('./recallParametersRuntime'),
   queries,
+  t,
 }: {
   commands: Pick<WorkbenchCommands, 'generation' | 'notifications'>;
   getSessionUserId?: () => string | null;
   hub: Pick<SocketHub, 'on'>;
   load?: () => Promise<RecallParametersRuntimeModule>;
   queries: Pick<WorkbenchQueries, 'getProject' | 'getSnapshot'>;
+  t: TFunction;
 }): RecallParametersRuntime => {
   let disposed = false;
   let loading: Promise<void> | null = null;
@@ -54,6 +57,7 @@ export const attachRecallParametersRuntime = ({
           hub,
           queries,
           replay: pending.splice(0),
+          t,
         });
       })
       .catch((error: unknown) => {

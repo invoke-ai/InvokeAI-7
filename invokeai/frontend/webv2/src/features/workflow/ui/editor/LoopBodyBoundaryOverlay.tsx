@@ -2,30 +2,81 @@ import type { WorkflowEdge, WorkflowNode } from '@features/workflow/contracts';
 
 import { Box, Text } from '@chakra-ui/react';
 import { getForLoopBodyBoundaries, type LoopBodyBoundaryStatus } from '@features/workflow/utility';
-import { useReactFlow, ViewportPortal } from '@xyflow/react';
-import { memo, useMemo } from 'react';
+import { type ReactFlowState, useStore, ViewportPortal } from '@xyflow/react';
+import { memo, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import type { WorkflowFlowEdge, WorkflowFlowNode } from './flowAdapters';
-
 const BOUNDARY_PADDING = 24;
+
+interface BoundaryRect {
+  height: number;
+  width: number;
+  x: number;
+  y: number;
+}
 
 const getStatusColor = (status: LoopBodyBoundaryStatus) =>
   status === 'complete'
     ? { border: 'border.success', text: 'fg.success' }
     : { border: 'border.warning', text: 'fg.warning' };
 
+/** Bounds of the measured body nodes from xyflow's live lookup, so drags and remeasures update the box. */
+const getMeasuredBounds = (nodeLookup: ReactFlowState['nodeLookup'], nodeIds: string[]): BoundaryRect | null => {
+  let x = Infinity;
+  let y = Infinity;
+  let x2 = -Infinity;
+  let y2 = -Infinity;
+
+  for (const nodeId of nodeIds) {
+    const node = nodeLookup.get(nodeId);
+    const width = node?.measured.width;
+    const height = node?.measured.height;
+
+    if (!node || !width || !height) {
+      continue;
+    }
+
+    const { x: nodeX, y: nodeY } = node.internals.positionAbsolute;
+
+    x = Math.min(x, nodeX);
+    y = Math.min(y, nodeY);
+    x2 = Math.max(x2, nodeX + width);
+    y2 = Math.max(y2, nodeY + height);
+  }
+
+  return x2 > x && y2 > y ? { height: y2 - y, width: x2 - x, x, y } : null;
+};
+
+const areSameRects = (a: (BoundaryRect | null)[], b: (BoundaryRect | null)[]): boolean =>
+  a.length === b.length &&
+  a.every((rect, i) => {
+    const other = b[i] ?? null;
+
+    return rect === other
+      ? true
+      : rect !== null &&
+          other !== null &&
+          rect.x === other.x &&
+          rect.y === other.y &&
+          rect.width === other.width &&
+          rect.height === other.height;
+  });
+
 export const LoopBodyBoundaryOverlay = ({ nodes, edges }: { nodes: WorkflowNode[]; edges: WorkflowEdge[] }) => {
   const { t } = useTranslation();
-  const { getNodesBounds } = useReactFlow<WorkflowFlowNode, WorkflowFlowEdge>();
   const boundaries = useMemo(() => getForLoopBodyBoundaries(nodes, edges), [edges, nodes]);
+  const selectBounds = useCallback(
+    (state: ReactFlowState) => boundaries.map((boundary) => getMeasuredBounds(state.nodeLookup, boundary.bodyNodeIds)),
+    [boundaries]
+  );
+  const boundsByIndex = useStore(selectBounds, areSameRects);
 
   return (
     <ViewportPortal>
-      {boundaries.map((boundary) => {
-        const bounds = getNodesBounds(boundary.bodyNodeIds);
+      {boundaries.map((boundary, index) => {
+        const bounds = boundsByIndex[index];
 
-        if (bounds.width <= 0 || bounds.height <= 0) {
+        if (!bounds) {
           return null;
         }
 

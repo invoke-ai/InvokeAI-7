@@ -2,7 +2,7 @@ import type { QueueGenerationMeta } from '@features/queue/contracts';
 import type { ImageRecallCapabilities, ImageRecallKind } from '@workbench/image-actions';
 
 import { createGenerateFormValuesSelector } from '@features/generation/react';
-import { isSupportedGenerateModel } from '@features/generation/settings';
+import { hasArchitectureCapabilities, isSupportedGenerateModel } from '@features/generation/settings';
 import { ensureModelsLoaded, useModelsSelector } from '@features/models';
 import { useMountEffect } from '@platform/react/useMountEffect';
 import {
@@ -68,12 +68,15 @@ export const useQueueItemRecall = (
       const plan = planQueueRecall(kind, { current, isVideoItem, meta, snapshot: localGenerateValues, videoSnapshot });
 
       if (!plan) {
-        notify.info(
-          getImageRecallTitle(kind),
-          // The Generate copy names a missing Generate model, which is not why
-          // a video recall would come back empty.
-          t(isVideoItem ? 'widgets.queue.recallUnavailableForItem' : 'widgets.queue.recallUnavailable')
-        );
+        // The Generate copy names a missing Generate model, which is not why a video recall
+        // would come back empty -- nor why a fresh project cannot be initialised without the
+        // capability table.
+        const reason = isVideoItem
+          ? 'widgets.queue.recallUnavailableForItem'
+          : !current && !hasArchitectureCapabilities()
+            ? 'widgets.queue.recallUnavailableCapabilities'
+            : 'widgets.queue.recallUnavailable';
+        notify.info(getImageRecallTitle(kind), t(reason));
         return;
       }
 

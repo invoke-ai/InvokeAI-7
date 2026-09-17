@@ -1,7 +1,13 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { GenerateWidgetValues, MainModelConfig } from './types';
 
+import capabilitiesFixture from './__fixtures__/architectureCapabilities.json';
+import {
+  type ArchitectureCapabilitiesRow,
+  resetArchitectureCapabilities,
+  setArchitectureCapabilities,
+} from './architectureCapabilities';
 import { getDefaultGenerateSettings } from './baseGenerationPolicies';
 import { resolveGenerateWidgetValues } from './resolveGenerateWidgetValues';
 
@@ -17,7 +23,7 @@ const createValues = (model: MainModelConfig, overrides: Partial<GenerateWidgetV
   ...getDefaultGenerateSettings(model),
   model,
   seed: 1,
-  shouldRandomizeSeed: false,
+  seedMode: 'fixed',
   ...overrides,
 });
 
@@ -25,6 +31,14 @@ const applySystemPatch = (
   storedValues: Record<string, unknown>,
   systemPatch: Partial<GenerateWidgetValues>
 ): Record<string, unknown> => ({ ...storedValues, ...systemPatch });
+
+// The resolver fails closed without the backend's architecture table, so seed the registry with the
+// same fixture the backend pins. Reset afterwards so registry state cannot leak between files.
+beforeEach(() => {
+  setArchitectureCapabilities(capabilitiesFixture as ArchitectureCapabilitiesRow[]);
+});
+
+afterEach(resetArchitectureCapabilities);
 
 describe('resolveGenerateWidgetValues', () => {
   it('returns null when the catalog has no supported generation model', () => {
@@ -156,6 +170,17 @@ describe('resolveGenerateWidgetValues', () => {
     expect(result?.systemPatch?.componentSourceModel).toBe(source);
   });
 
+  it('maps the random toggle saved before seed modes instead of reusing the record as-is', () => {
+    // Reused as-is, the record reaches the seed menu with no mode and the icon lookup throws.
+    const model = createModel('model');
+    const { seedMode: _, ...legacy } = createValues(model);
+    const storedValues = { ...legacy, shouldRandomizeSeed: true };
+    const result = resolveGenerateWidgetValues({ models: [model], storedValues });
+
+    expect(result?.values.seedMode).toBe('random');
+    expect(result?.systemPatch?.seedMode).toBe('random');
+  });
+
   it('repairs stale template view mode through canonical normalization', () => {
     const model = createModel('model');
     const storedValues = { ...createValues(model), promptTemplate: null, promptTemplateViewMode: true };
@@ -186,5 +211,44 @@ describe('resolveGenerateWidgetValues', () => {
 
     expect(second?.values).toEqual(first?.values);
     expect(second?.systemPatch).toBeNull();
+  });
+});
+
+describe('without the backend capability table', () => {
+  it('resolves nothing rather than falling back to generic defaults', () => {
+    // Its `systemPatch` is persisted into the project, so a fallback grid or step count would be
+    // written to disk. Returning null is already how "no usable models" is signalled, and every
+    // caller handles it.
+    resetArchitectureCapabilities();
+
+    const model: MainModelConfig = { base: 'sdxl', key: 'model', name: 'model', type: 'main' };
+
+    expect(resolveGenerateWidgetValues({ models: [model], storedValues: {} })).toBeNull();
+  });
+});
+
+describe('resolveGenerateWidgetValues and an architecture the table omits', () => {
+  const rows = capabilitiesFixture as ArchitectureCapabilitiesRow[];
+
+  it('will not select a model whose architecture the backend did not describe', () => {
+    // The resolver's patch is persisted. Selecting a model with no row would write the fallback's
+    // grid, optimal size, step count and scheduler into the project file -- the same reason the
+    // whole resolver waits for the table in the first place, one level finer.
+    setArchitectureCapabilities(rows.filter((row) => row.base !== 'cogview4'));
+
+    expect(
+      resolveGenerateWidgetValues({ models: [createModel('cogview', { base: 'cogview4' })], storedValues: undefined })
+    ).toBeNull();
+  });
+
+  it('falls back to a described model rather than blocking the whole catalog', () => {
+    setArchitectureCapabilities(rows.filter((row) => row.base !== 'cogview4'));
+
+    const resolved = resolveGenerateWidgetValues({
+      models: [createModel('cogview', { base: 'cogview4' }), createModel('sdxl-model')],
+      storedValues: { modelKey: 'cogview' },
+    });
+
+    expect(resolved?.values.modelKey).toBe('sdxl-model');
   });
 });

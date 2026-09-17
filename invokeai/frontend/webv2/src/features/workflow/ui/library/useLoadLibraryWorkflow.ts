@@ -1,6 +1,7 @@
 import type { WorkflowLibraryListItem } from '@features/workflow/queries';
 
 import { getLibraryWorkflowCached, touchLibraryWorkflowOpenedAt } from '@features/workflow/queries';
+import { requestWorkflowFitView } from '@features/workflow/ui/editor/flowInstanceStore';
 import { useProjectGraphCommands } from '@features/workflow/ui/useProjectGraphCommands';
 import { useWorkflowNotifications } from '@features/workflow/ui/WorkflowUiContext';
 import { parseWorkflowJson, serializeWorkflowJson } from '@features/workflow/utility';
@@ -65,6 +66,7 @@ export const useLoadLibraryWorkflow = (onLoaded: () => void): LoadLibraryWorkflo
 
         assertAccountScopeCurrent(owner);
         replace(document, t('workflowLibrary.loadedLabel', { name: item.name }));
+        requestWorkflowFitView(document.nodes);
         // The freshly-loaded graph is already in sync with the library record
         // it came from — mark it synced so the autosaver does not immediately
         // queue a redundant (echo) save the moment the graph reference changes.

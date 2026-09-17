@@ -100,11 +100,14 @@ export const PreviewFooter = ({
   selectedIndex: number;
 }) => {
   const { i18n, t } = useTranslation();
-  const positionLabel = isLoadingBoard
-    ? t('widgets.preview.loadingBoard')
-    : selectedIndex === -1
-      ? t('widgets.preview.itemCount', { count: boardItemCount })
-      : t('common.countOfTotal', { count: selectedIndex + 1, total: boardItemCount });
+  const positionLabel =
+    media.kind === 'live'
+      ? t('common.generating')
+      : isLoadingBoard
+        ? t('widgets.preview.loadingBoard')
+        : selectedIndex === -1
+          ? t('widgets.preview.itemCount', { count: boardItemCount })
+          : t('common.countOfTotal', { count: selectedIndex + 1, total: boardItemCount });
   const item = media.kind === 'item' ? media.item : null;
   const fps =
     item?.kind === 'video' && item.fps !== undefined
@@ -131,26 +134,28 @@ export const PreviewFooter = ({
               : ''}
           </Text>
         </HStack>
-        <HStack flexShrink={0} gap="1">
-          <Button
-            aria-label={t('widgets.preview.previousItemInBoard')}
-            disabled={selectedIndex <= 0}
-            size="2xs"
-            variant="outline"
-            onClick={onPrevious}
-          >
-            <ChevronLeftIcon />
-          </Button>
-          <Button
-            aria-label={t('widgets.preview.nextItemInBoard')}
-            disabled={selectedIndex === -1 || selectedIndex >= boardItemCount - 1}
-            size="2xs"
-            variant="outline"
-            onClick={onNext}
-          >
-            <ChevronRightIcon />
-          </Button>
-        </HStack>
+        {media.kind === 'item' ? (
+          <HStack flexShrink={0} gap="1">
+            <Button
+              aria-label={t('widgets.preview.previousItemInBoard')}
+              disabled={selectedIndex <= 0}
+              size="2xs"
+              variant="outline"
+              onClick={onPrevious}
+            >
+              <ChevronLeftIcon />
+            </Button>
+            <Button
+              aria-label={t('widgets.preview.nextItemInBoard')}
+              disabled={selectedIndex === -1 || selectedIndex >= boardItemCount - 1}
+              size="2xs"
+              variant="outline"
+              onClick={onNext}
+            >
+              <ChevronRightIcon />
+            </Button>
+          </HStack>
+        ) : null}
       </HStack>
       {media.kind === 'item' ? (
         <PreviewMetadataPanel

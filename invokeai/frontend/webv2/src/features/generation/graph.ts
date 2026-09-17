@@ -29,6 +29,7 @@ export { getControlLayerRejectionReason, getControlValidationReasonMessage } fro
 export {
   getRegionalGuidanceRejectionReason,
   getRegionalGuidanceSupport,
+  isRegionalGuidanceSupportedForBase,
   type RegionalGuidanceInput,
   type RegionalReferenceImageInput,
 } from './core/canvas/addRegionalGuidance';

@@ -4,6 +4,14 @@ import type { QueueGenerationMeta } from '@features/queue/contracts';
 import type { ImageRecallKind } from '@workbench/image-actions';
 import type * as WorkbenchContextModule from '@workbench/WorkbenchContext';
 
+import {
+  resetArchitectureCapabilities,
+  setArchitectureCapabilities,
+} from '@features/generation/core/architectureCapabilities';
+import {
+  architectureCapabilitiesFixture,
+  seedArchitectureCapabilities,
+} from '@features/generation/core/architectureCapabilities.testing';
 import { createDefaultVideoWidgetValues } from '@features/video';
 import { act, createRef, type Ref, useImperativeHandle } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -42,11 +50,13 @@ vi.mock('@workbench/useNotify', () => ({
 vi.mock('@workbench/useOpenWorkbenchWidget', () => ({ useOpenWorkbenchWidget: () => mocks.openWidget }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 
+seedArchitectureCapabilities();
+
 const NO_META: QueueGenerationMeta = {};
 const generateSnapshot = {
   positivePrompt: 'snapshot prompt',
   seed: 7,
-  shouldRandomizeSeed: false,
+  seedMode: 'fixed',
 } as GenerateWidgetValues;
 
 type Handle = ReturnType<typeof useQueueItemRecall>;
@@ -118,5 +128,19 @@ describe('useQueueItemRecall', () => {
 
     expect(mocks.setSettings).not.toHaveBeenCalled();
     expect(mocks.notifyInfo).toHaveBeenCalledWith(expect.any(String), 'widgets.queue.recallUnavailable');
+  });
+
+  it('names the missing capability table, not a missing model, while the table is absent', async () => {
+    await render(null, { positivePrompt: 'session prompt' });
+
+    await act(() => resetArchitectureCapabilities());
+    try {
+      await recall('seed');
+    } finally {
+      await act(() => setArchitectureCapabilities(architectureCapabilitiesFixture));
+    }
+
+    expect(mocks.setSettings).not.toHaveBeenCalled();
+    expect(mocks.notifyInfo).toHaveBeenCalledWith(expect.any(String), 'widgets.queue.recallUnavailableCapabilities');
   });
 });

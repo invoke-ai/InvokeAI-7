@@ -6,7 +6,7 @@ import pytest
 import torch
 from diffusers.models.autoencoders.autoencoder_kl import AutoencoderKL
 
-from invokeai.app.invocations.z_image_latents_to_image import ZImageLatentsToImageInvocation
+from invokeai.app.invocations.vae.z_image_latents_to_image import ZImageLatentsToImageInvocation
 from invokeai.backend.flux.modules.autoencoder import DEFAULT_TILE_SAMPLE_MIN_SIZE, MIN_TILE_SAMPLE_SIZE
 from invokeai.backend.flux.modules.autoencoder import AutoEncoder as FluxAutoEncoder
 from invokeai.backend.util.vae_working_memory import estimate_vae_working_memory_flux
@@ -221,7 +221,7 @@ class TestTilingIsWired:
 
     @pytest.mark.parametrize("tiled,expected_tile_size", [(False, None), (True, 0)])
     def test_the_estimate_is_tile_bounded_only_when_tiling(self, tiled, expected_tile_size):
-        path = "invokeai.app.invocations.z_image_latents_to_image.estimate_vae_working_memory_flux"
+        path = "invokeai.app.invocations.vae.z_image_latents_to_image.estimate_vae_working_memory_flux"
         _, _, context = _build_decode_mocks(torch.zeros(1, 16, 64, 64), torch.zeros(1, 3, 512, 512))
         with patch(path, return_value=1024) as estimate:
             _build_invocation(tiled=tiled).invoke(context)

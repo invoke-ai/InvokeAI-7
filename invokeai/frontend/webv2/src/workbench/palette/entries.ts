@@ -194,6 +194,7 @@ const APP_COMMAND_GROUPS: Record<string, string> = {
   'app.selectWorkflowsTab': 'Navigation',
   'app.toggleLeftPanel': 'Layout',
   'app.togglePanels': 'Layout',
+  'app.togglePreview': 'Layout',
   'app.toggleRightPanel': 'Layout',
 };
 
@@ -538,6 +539,8 @@ export const searchPaletteRows = (
 
   const results = fuzzysort.go(trimmed, searchable, {
     keys: [(entry) => entry.title, (entry) => entry.keywords ?? '', (entry) => entry.subtitle ?? ''],
+    // fuzzysort 4 caps results at 10 unless told otherwise; 0 lifts the cap.
+    limit: 0,
     scoreFn: (result) => Math.max(result[0]?.score ?? 0, (result[1]?.score ?? 0) * 0.9, (result[2]?.score ?? 0) * 0.5),
     threshold: MATCH_THRESHOLD,
   });

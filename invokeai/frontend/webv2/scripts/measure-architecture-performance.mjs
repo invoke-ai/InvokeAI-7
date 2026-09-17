@@ -6,13 +6,21 @@ import { chromium } from 'playwright';
 import { startMockBackend } from './mock-backend.mjs';
 import {
   BROWSER_RESOURCE_METRIC_KEYS,
+  applyBrowserReference,
+  BROWSER_REFERENCE_FILE,
+  BUDGET_REMEDY,
   checkBrowserRouteBudget,
+  createBrowserReference,
+  isBudgetFailure,
+  loadPerformanceReference,
   createBrowserSamplePlan,
   summarizeBrowserResources,
   validateBrowserBaseline,
   validateChunkSourceManifest,
   waitForRequiredRequests,
   waitForStableRequests,
+  PERFORMANCE_REFERENCE_DIR_VARIABLE,
+  PERFORMANCE_REFERENCE_LABEL_VARIABLE,
 } from './performance-budgets.mjs';
 import { killPreview, spawnPreview } from './preview-server.mjs';
 import { getWidgetId } from './widget-sources.mjs';
@@ -56,6 +64,8 @@ const origin = `http://127.0.0.1:${String(port)}`;
 const backendPort = Number(process.env.INVOKEAI_PERFORMANCE_BACKEND_PORT ?? 4177);
 const backendOrigin = `http://127.0.0.1:${String(backendPort)}`;
 const updateBaseline = process.argv.includes('--update-baseline');
+const referenceDir = process.env[PERFORMANCE_REFERENCE_DIR_VARIABLE] || null;
+const referenceLabel = process.env[PERFORMANCE_REFERENCE_LABEL_VARIABLE] || null;
 
 const median = (values) => {
   const sorted = [...values].sort((left, right) => left - right);
@@ -227,16 +237,6 @@ const createSourceOwnerSets = (routes) => {
 
   return { routeSetIds, sets };
 };
-
-const createResourceLimits = (resources) =>
-  Object.fromEntries(
-    BROWSER_RESOURCE_METRIC_KEYS.map((key) => {
-      if (key === 'requestCount' || key === 'scriptRequestCount') {
-        return [key, resources[key]];
-      }
-      return [key, Math.ceil(resources[key] * 1.01)];
-    })
-  );
 
 const getMaximumResourceSummary = (samples, key) =>
   Object.fromEntries(
@@ -728,16 +728,44 @@ try {
     });
   }
 
+  // Written before any check so a failing main still records what it measured for the next PR.
+  await mkdir(dirname(artifactPath), { recursive: true });
+  await writeFile(
+    resolve(dirname(artifactPath), BROWSER_REFERENCE_FILE),
+    `${JSON.stringify(createBrowserReference(routeReports), null, 2)}\n`
+  );
+
+  const referenceName = referenceLabel ? `base-branch reference ${referenceLabel}` : 'base-branch reference';
+  let reference = null;
+  let referenceReason = null;
+  if (referenceDir && !updateBaseline) {
+    const loaded = await loadPerformanceReference({
+      directory: referenceDir,
+      fileName: BROWSER_REFERENCE_FILE,
+      kind: 'browser',
+      metricKeys: BROWSER_RESOURCE_METRIC_KEYS,
+      root,
+    });
+    referenceReason = loaded.reason;
+    reference = loaded.reason ? null : loaded.reference;
+  }
+
   const report = {
     browserExecutable: chromium.executablePath(),
     capturedAt: new Date().toISOString(),
+    reference: referenceDir
+      ? {
+          applied: reference !== null,
+          capturedAt: reference?.capturedAt ?? null,
+          label: referenceLabel,
+          reason: referenceReason,
+          uncoveredRoutes: [],
+        }
+      : null,
     routes: routeReports,
     sampling: sampleConfig,
     schemaVersion: 2,
   };
-  await mkdir(dirname(artifactPath), { recursive: true });
-  await writeFile(artifactPath, `${JSON.stringify(report, null, 2)}\n`);
-
   if (updateBaseline) {
     const previousBaseline = JSON.parse(await readFile(baselinePath, 'utf8'));
     const sourceOwnerSets = createSourceOwnerSets(routeReports);
@@ -746,7 +774,6 @@ try {
       capturedAt: new Date().toISOString().slice(0, 10),
       routes: routeReports.map((route) => ({
         activatedResourceBaseline: route.activatedResources,
-        activatedResourceLimits: createResourceLimits(route.activatedResources),
         domContentLoadedMedianMs: route.domContentLoadedMedianMs,
         id: route.id,
         layoutAckMedianMs: route.layoutAckMedianMs,
@@ -759,7 +786,6 @@ try {
         readyMark: route.readyMark,
         remediationTicket: route.remediationTicket,
         resourceBaseline: route.resources,
-        resourceLimits: createResourceLimits(route.resources),
         routeReadyMedianMs: route.routeReadyMedianMs,
         scriptSourceOwnerSet: sourceOwnerSets.routeSetIds.get(`${route.id}:${route.stateProfile}`),
         stateProfile: route.stateProfile,
@@ -784,8 +810,26 @@ try {
     };
     validateBrowserBaseline(baseline, fixtures);
     await writeFile(baselinePath, `${JSON.stringify(baseline, null, 2)}\n`);
+    await writeFile(artifactPath, `${JSON.stringify(report, null, 2)}\n`);
   } else {
     const baseline = validateBrowserBaseline(JSON.parse(await readFile(baselinePath, 'utf8')), fixtures);
+    const { routes: expectedRoutes, uncovered: uncoveredRoutes } = applyBrowserReference(baseline.routes, reference);
+    if (report.reference) {
+      report.reference.uncoveredRoutes = uncoveredRoutes;
+    }
+    await writeFile(artifactPath, `${JSON.stringify(report, null, 2)}\n`);
+    process.stdout.write(
+      reference
+        ? `Resource budgets: byte allowance over the higher of ${referenceName} captured ${reference.capturedAt} and committed measurements, bounded by the committed hard ceiling; request counts use the lower measurement.\n`
+        : referenceReason
+          ? `Resource budgets: against committed baseline captured ${baseline.capturedAt}; ${referenceName} was recorded with ${referenceReason} and cannot be applied.\n`
+          : `Resource budgets: against committed baseline captured ${baseline.capturedAt}.\n`
+    );
+    if (uncoveredRoutes.length > 0) {
+      process.stdout.write(
+        `Routes absent from the reference use the committed baseline: ${uncoveredRoutes.join(', ')}.\n`
+      );
+    }
     const failures = [];
     if (JSON.stringify(baseline.sampling) !== JSON.stringify(sampleConfig)) {
       failures.push(
@@ -795,7 +839,7 @@ try {
       );
     }
     for (const route of routeReports) {
-      const expected = baseline.routes.find(
+      const expected = expectedRoutes.find(
         (candidate) => candidate.id === route.id && candidate.stateProfile === route.stateProfile
       );
       if (!expected) {
@@ -822,7 +866,7 @@ try {
       }
     }
     if (failures.length > 0) {
-      throw new Error(failures.join('\n'));
+      throw new Error(`${failures.join('\n')}${failures.some(isBudgetFailure) ? `\n${BUDGET_REMEDY}` : ''}`);
     }
   }
 

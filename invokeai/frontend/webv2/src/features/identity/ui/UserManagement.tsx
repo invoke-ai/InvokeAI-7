@@ -1,4 +1,3 @@
-/* eslint-disable react/react-compiler */
 import { Avatar, Badge, Box, Center, Flex, HStack, Spinner, Stack, Switch, Table, Text } from '@chakra-ui/react';
 import { deleteUser, listUsers, updateUser, type UserDTO } from '@features/identity/data/api';
 import { useAuthSession } from '@features/identity/session';
@@ -66,6 +65,7 @@ const UsersDirectory = ({ currentUserId }: { currentUserId: string }) => {
   }, [t]);
 
   useEffect(() => {
+    // eslint-disable-next-line react/set-state-in-effect
     void refresh();
   }, [refresh]);
 

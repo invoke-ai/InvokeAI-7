@@ -338,10 +338,13 @@ def estimate_vae_working_memory_flux2(
 def estimate_vae_working_memory_anima(
     operation: Literal["encode", "decode"],
     image_tensor: torch.Tensor,
-    vae: AutoencoderKLWan,
+    vae: AutoencoderKLWan | AutoencoderKLQwenImage,
     tile_size: int | None,
 ) -> int:
     """Estimate the working memory required to encode or decode with the Wan 2.1 VAE (Anima).
+
+    Anima reaches that VAE as either class: AutoencoderKLWan (original layout) or AutoencoderKLQwenImage
+    (the diffusers-layout Qwen-Image export), which run the same network on the same weights.
 
     The Wan VAE uses 3D convolutions and needs noticeably more working memory per output
     pixel than the 2D VAEs estimated above. Calibrated empirically on a 1024x1024 fp16

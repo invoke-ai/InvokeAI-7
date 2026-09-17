@@ -30,6 +30,7 @@ export {
   isVideoSourceClip,
   isVideoTargetResolution,
   isVideoWidgetValues,
+  MINIMAX_H3_HYBRID_BLOCK_RANGE,
   MINIMAX_H3_TARGET_RESOLUTIONS,
   normalizeVideoSettings,
   normalizeVideoWidgetValues,
@@ -105,4 +106,11 @@ export {
   resolveVideoSeed,
   syncVideoWidgetValuesWithModels,
 } from './core/widgetValues';
-export { VideoUiProvider, useVideoUi, useVideoUiActions, type VideoUiAdapter } from './ui/VideoUiContext';
+export {
+  VideoUiProvider,
+  useVideoUi,
+  useVideoUiActions,
+  type VideoSpanPlaybackPort,
+  type VideoSpanPlaybackState,
+  type VideoUiAdapter,
+} from './ui/VideoUiContext';

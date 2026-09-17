@@ -36,6 +36,7 @@ from invokeai.backend.quantization.fp8_scaled import (
 )
 from invokeai.backend.util.devices import TorchDevice
 from invokeai.backend.util.logging import InvokeAILogger
+from invokeai.backend.util.state_dict_loading import log_unexpected_keys, reject_incomplete_load
 
 logger = InvokeAILogger.get_logger(__name__)
 
@@ -226,17 +227,13 @@ class AnimaCheckpointModel(ModelLoader):
         kept = cast_state_dict(sd, model_dtype, keep_fp8=keep_fp8, model=model, skip_patterns=skip_patterns)
 
         load_result = model.load_state_dict(sd, assign=True, strict=False)
-        if load_result.unexpected_keys:
-            raise RuntimeError(
-                f"Checkpoint contains {len(load_result.unexpected_keys)} unexpected keys. "
-                f"This may indicate a corrupted or incompatible checkpoint. "
-                f"First 5 unexpected keys: {load_result.unexpected_keys[:5]}"
-            )
-        if load_result.missing_keys:
-            logger.warning(
-                f"Checkpoint is missing {len(load_result.missing_keys)} keys "
-                f"(expected for inv_freq buffers). First 5: {load_result.missing_keys[:5]}"
-            )
+        log_unexpected_keys("Anima transformer checkpoint", load_result.unexpected_keys)
+        # `missing_keys` alone cannot police completeness here: AnimaTransformer's only three buffers
+        # are registered `persistent=False`, so they never appear in it (the old warning claiming
+        # otherwise was misleading). Sweep for tensors the checkpoint left on the meta device instead
+        # — that is the failure worth catching, and it is what the removed unexpected-key
+        # `RuntimeError` was really standing in for.
+        reject_incomplete_load(model, what="Anima transformer checkpoint")
 
         # Without this the `fp8_storage` toggle is shown for Anima models but does nothing. The
         # state dict was cast to a single `model_dtype` above, so the layerwise cast has one

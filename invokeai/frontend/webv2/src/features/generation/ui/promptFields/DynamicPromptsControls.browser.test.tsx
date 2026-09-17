@@ -43,7 +43,7 @@ const BASE_CONFIG: DynamicPromptsConfig = {
  * Renders with real state, so a control that reflects its own value (a segmented
  * control does) can actually be toggled back and forth.
  */
-const render = async (onChange: (patch: Partial<DynamicPromptsConfig>) => void = vi.fn()) => {
+const render = async (onChange: (patch: Partial<DynamicPromptsConfig>) => void = vi.fn(), isSeedFixed = false) => {
   host = document.createElement('div');
   document.body.append(host);
   root = createRoot(host);
@@ -58,6 +58,7 @@ const render = async (onChange: (patch: Partial<DynamicPromptsConfig>) => void =
             batchCount={2}
             config={{
               ...config,
+              isSeedFixed,
               onChange: (patch) => {
                 onChange(patch);
                 config = { ...config, ...patch };
@@ -110,6 +111,27 @@ afterEach(async () => {
 });
 
 describe('dynamic prompts popover controls', () => {
+  it('retires the seed sharing switch while the seed is held fixed', async () => {
+    const onChange = vi.fn();
+
+    await render(onChange, true);
+    await openPopover();
+
+    const seedSwitch = document.querySelector<HTMLElement>('[data-scope="switch"][data-part="root"]')!;
+    const hiddenInput = seedSwitch.querySelector<HTMLInputElement>('input')!;
+    const explanation = document.getElementById(hiddenInput.getAttribute('aria-describedby') ?? '');
+
+    expect(hiddenInput.disabled).toBe(true);
+    // No i18n instance here, so the key itself is the rendered text.
+    expect(explanation?.textContent).toBe('widgets.generate.dynamicPrompts.seedHeldForEveryImage');
+
+    // A retired switch ignores the label click that normally toggles it.
+    await act(() => seedSwitch.querySelector<HTMLElement>('[data-part="label"]')?.click());
+
+    expect(onChange).not.toHaveBeenCalled();
+    expect(pageErrors).toEqual([]);
+  });
+
   it('switches seed behaviour without tearing down the widget', async () => {
     // Regression: a Chakra Select here threw `r.options is not iterable` from
     // syncSelectElement as the popover opened, taking the Generate widget down

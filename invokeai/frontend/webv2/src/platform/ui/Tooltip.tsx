@@ -1,4 +1,3 @@
-/* eslint-disable react/react-compiler */
 import { Tooltip as ChakraTooltip, Portal } from '@chakra-ui/react';
 import {
   cloneElement,
@@ -120,6 +119,7 @@ export const Tooltip = (props: TooltipProps) => {
     hasTriggerPassthrough && isValidElement<TooltipChildProps>(children)
       ? cloneElement(children as ReactElement<TooltipChildProps>, {
           ...mergedTriggerProps,
+          // eslint-disable-next-line react/refs
           ref: composeRefs(children.props.ref, explicitTriggerRef, ref),
         })
       : children;

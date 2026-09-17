@@ -7,6 +7,7 @@ import { system } from '@theme/system';
 import { act, useCallback, useMemo } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { userEvent } from 'vitest/browser';
 
 vi.mock('./useProjectCardActions', () => ({
   useProjectCardActions: () => ({
@@ -35,7 +36,14 @@ const { ProjectActionsMenuProvider, useProjectActionsMenu, useProjectActionsMenu
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const makeSummary = (id: string): ProjectSummary =>
-  ({ coverUrl: undefined, id, name: `Project ${id}`, schemaVersion: 1, updatedAt: 0 }) as unknown as ProjectSummary;
+  ({
+    coverUrl: undefined,
+    id,
+    name: `Project ${id}`,
+    minimumCanvasSchemaVersion: 3,
+    schemaVersion: 1,
+    updatedAt: 0,
+  }) as unknown as ProjectSummary;
 
 const NOOP_TOGGLE_PIN = () => {};
 
@@ -112,6 +120,28 @@ const openMenus = () => document.querySelectorAll('[role="menu"][data-state="ope
 const dotsButton = (id: string) => document.querySelector(`button[aria-label="actions ${id}"]`)!;
 
 describe('ProjectActionsMenuHost', () => {
+  it('opens rename from a real pointer selection', async () => {
+    host = document.createElement('div');
+    document.body.append(host);
+    root = createRoot(host);
+    await act(() =>
+      root?.render(
+        <ChakraProvider value={system}>
+          <ProjectActionsMenuProvider>
+            <Card id="one" />
+          </ProjectActionsMenuProvider>
+        </ChakraProvider>
+      )
+    );
+    await act(() => userEvent.click(dotsButton('one')));
+    const item = document.querySelector<HTMLElement>('[role="menuitem"][data-value="rename"]')!;
+    await act(() => userEvent.click(item));
+    await vi.waitFor(() => {
+      expect(document.querySelector('[role="dialog"][data-state="open"]')).not.toBeNull();
+      expect(document.querySelector<HTMLInputElement>('input[name="renameValue"]')?.value).toBe('Project one');
+    });
+  });
+
   it('moves the one menu across cards instead of racing sibling layers', async () => {
     // Per-card menus died here: zag's dismissable stack treats a layer mounted
     // above another as nested, so the second card's menu was dismissed along
