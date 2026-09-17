@@ -1,7 +1,9 @@
 /* oxlint-disable react-perf/jsx-no-new-array-as-prop, react-perf/jsx-no-new-object-as-prop */
 import type { GalleryItem, GalleryItemRef } from '@features/gallery/contracts';
 import type { GalleryItemsFilter } from '@features/gallery/data/queries';
+import type { QueueProgressSession } from '@features/queue/contracts';
 import type { StreamingImageSource } from '@platform/ui/streaming-image/streamingImageSource';
+import type * as VirtualModule from 'react-hook-tanstack-virtual';
 
 import { Box, ChakraProvider } from '@chakra-ui/react';
 import {
@@ -31,7 +33,7 @@ import { act, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { I18nextProvider, initReactI18next } from 'react-i18next';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { userEvent } from 'vitest/browser';
+import { page, userEvent } from 'vitest/browser';
 
 import type { GalleryStateView } from './galleryStateView';
 import type { GalleryActions, GalleryStarredStrip, GalleryWidgetContextValue } from './GalleryWidgetContext';
@@ -42,6 +44,8 @@ import { GalleryWidgetContext } from './GalleryWidgetContext';
 import { EMPTY_GALLERY_STARRED_STRIP } from './useGalleryStarredStrip';
 
 const mocks = vi.hoisted(() => ({
+  itemProgress: null as { percentage: number; message: string } | null,
+  progressFrame: null as { dataUrl: string; width: number; height: number } | null,
   fetchNames: vi.fn(),
   measure: vi.fn(),
   scrollToIndex: vi.fn(),
@@ -65,35 +69,45 @@ vi.mock('@features/gallery/data/queries', async (importOriginal) => ({
   }),
 }));
 
-vi.mock('react-hook-tanstack-virtual', () => ({
-  useVirtualizer: (options: {
-    count: number;
-    estimateSize: (index: number) => number;
-    getScrollElement: () => Element | null;
-    overscan: number;
-  }) => {
-    mocks.virtualizerOptions.push(options);
-    const sizes = Array.from({ length: options.count }, (_, index) => options.estimateSize(index));
-    const starts = sizes.map((_, index) => sizes.slice(0, index).reduce((total, size) => total + size, 0));
+vi.mock('react-hook-tanstack-virtual', async (importOriginal) => {
+  const actual = await importOriginal<typeof VirtualModule>();
+  return {
+    useVirtualizer: (options: {
+      count: number;
+      horizontal?: boolean;
+      scrollMargin?: number;
+      estimateSize: (index: number) => number;
+      getScrollElement: () => Element | null;
+      overscan: number;
+    }) => {
+      if (options.overscan === 2) {
+        return actual.useVirtualizer(options);
+      }
+      mocks.virtualizerOptions.push(options);
+      const sizes = Array.from({ length: options.count }, (_, index) => options.estimateSize(index));
+      const starts = sizes.map(
+        (_, index) => (options.scrollMargin ?? 0) + sizes.slice(0, index).reduce((total, size) => total + size, 0)
+      );
 
-    return {
-      measure: mocks.measure,
-      scrollToIndex: mocks.scrollToIndex,
-      totalSize: sizes.reduce((total, size) => total + size, 0),
-      virtualItems: Array.from({ length: options.count }, (_, index) => ({
-        end: (starts[index] ?? 0) + (sizes[index] ?? 0),
-        index,
-        key: index,
-        size: sizes[index] ?? 0,
-        start: starts[index] ?? 0,
-      })),
-    };
-  },
-}));
+      return {
+        measure: mocks.measure,
+        scrollToIndex: mocks.scrollToIndex,
+        totalSize: sizes.reduce((total, size) => total + size, 0),
+        virtualItems: Array.from({ length: options.count }, (_, index) => ({
+          end: (starts[index] ?? 0) + (sizes[index] ?? 0),
+          index,
+          key: index,
+          size: sizes[index] ?? 0,
+          start: starts[index] ?? 0,
+        })),
+      };
+    },
+  };
+});
 
 vi.mock('@features/queue/react', () => ({
-  useQueueItemProgress: () => null,
-  useQueueItemProgressImage: () => null,
+  useItemProgress: () => mocks.itemProgress,
+  useQueueItemProgressImage: () => mocks.progressFrame,
 }));
 
 const i18n = createInstance();
@@ -107,6 +121,12 @@ void i18n.use(initReactI18next).init({
         common: { generating: 'Generating' },
         widgets: {
           gallery: {
+            inProgress: 'In progress',
+            progressShared: 'Active gallery runs across all boards',
+            progressPreparing: 'Preparing',
+            progressQueued: 'Queued',
+            progressSettling: 'Finishing',
+            progressSession: '{{name}} · {{index}} of {{total}}',
             commands: {
               clearSelection: 'Clear selection',
               deleteSelection: 'Delete selection',
@@ -222,13 +242,11 @@ const createGallery = (overrides: Partial<GalleryStateView> = {}): GalleryStateV
     anchoredWindowPage: 0,
     boards: [board],
     compareImageKey: null,
-    currentItem: { itemKey: 'image:first.png', kind: 'item' },
     galleryView: 'images',
     isComparisonActive: false,
     isLoading: false,
     items,
     page: 0,
-    pendingPlaceholders: [],
     revealTargetPage: null,
     projectBoardId: null,
     searchTerm: '',
@@ -320,11 +338,10 @@ const ContextMenuProbe = ({ target }: { target: CanonicalContextTarget }) => (
 );
 const NoopProvider = ({ children }: { children: ReactNode }) => children;
 
-const createAdapter = (): GalleryUiAdapter =>
+const createAdapter = (progressSessions: QueueProgressSession[]): GalleryUiAdapter =>
   ({
     ItemActionsProvider: NoopProvider,
     ImageContextMenu: ContextMenuProbe,
-    account: { enableLiveFollow: noop },
     antialiasProgressImages: false,
     gallery: {
       clearSelection: noop,
@@ -344,12 +361,13 @@ const createAdapter = (): GalleryUiAdapter =>
     },
     galleryValues: {},
     generateValues: {},
-    liveFollowEnabled: false,
-    liveProgressTarget: null,
+    liveFollowEnabled: currentLiveFollowEnabled,
+    progressSessions,
+    pinnedProgressSessionId: null,
+    followProgressSession,
     notifications: { add: noop, reportError: noop },
     projectId: 'project-1',
     projectName: 'Project',
-    queueItems: [],
     widgets: { openGallery: () => true, patchGalleryValues: noop },
   }) as unknown as GalleryUiAdapter;
 
@@ -357,6 +375,9 @@ let host: HTMLDivElement | null = null;
 let root: Root | null = null;
 let queryClient: QueryClient | null = null;
 let currentGallery = createGallery();
+let currentLiveFollowEnabled = false;
+let currentProgressSessions: QueueProgressSession[] = [];
+const followProgressSession = vi.fn();
 let currentStrip: GalleryStarredStrip = EMPTY_GALLERY_STARRED_STRIP;
 let onDragStart = vi.fn();
 
@@ -378,10 +399,12 @@ const Harness = ({
   background = 'bg',
   coMountPreviewSources = false,
   gallery,
+  progressSessions,
 }: {
   background?: 'bg' | 'bg.panel';
   coMountPreviewSources?: boolean;
   gallery: GalleryStateView;
+  progressSessions: QueueProgressSession[];
 }) => {
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
@@ -404,7 +427,7 @@ const Harness = ({
     <I18nextProvider i18n={i18n}>
       <ChakraProvider value={system}>
         <QueryClientProvider client={queryClient!}>
-          <GalleryUiProvider adapter={createAdapter()}>
+          <GalleryUiProvider adapter={createAdapter(progressSessions)}>
             <GalleryWidgetContext value={contextValue}>
               <DndContext sensors={sensors}>
                 <DragMonitor />
@@ -454,7 +477,14 @@ const renderGallery = async (
 ) => {
   currentGallery = gallery;
   await interact(() =>
-    root?.render(<Harness background={background} coMountPreviewSources={coMountPreviewSources} gallery={gallery} />)
+    root?.render(
+      <Harness
+        progressSessions={currentProgressSessions}
+        background={background}
+        coMountPreviewSources={coMountPreviewSources}
+        gallery={gallery}
+      />
+    )
   );
 };
 
@@ -487,6 +517,10 @@ beforeEach(() => {
   vi.clearAllMocks();
   registeredCommands.clear();
   currentGallery = createGallery();
+  mocks.itemProgress = null;
+  currentProgressSessions = [];
+  currentLiveFollowEnabled = false;
+  mocks.progressFrame = null;
   currentStrip = EMPTY_GALLERY_STARRED_STRIP;
   queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   host = document.createElement('div');
@@ -658,7 +692,7 @@ describe('GalleryImageGrid mixed item cells', () => {
 
   it('keeps showing the strip when every item on the board is starred', async () => {
     setStrip([starred]);
-    await renderGallery(createGallery({ items: [], pendingPlaceholders: [], settings: DENSE_SETTINGS }));
+    await renderGallery(createGallery({ items: [], settings: DENSE_SETTINGS }));
 
     expect(getButton('Collapse starred items')).not.toBeNull();
     expect(host?.querySelector('button[aria-label="Select starred.png for preview"]')).not.toBeNull();
@@ -1061,7 +1095,7 @@ describe('GalleryImageGrid upload drop zone', () => {
   });
 
   it('turns a true-empty, non-searching, non-virtual board into a click/drop upload target', async () => {
-    await renderGallery(createGallery({ items: [], pendingPlaceholders: [] }));
+    await renderGallery(createGallery({ items: [] }));
 
     const target = host?.querySelector<HTMLElement>('[role="button"]');
     const input = host?.querySelector<HTMLInputElement>('input[type="file"]');
@@ -1080,7 +1114,7 @@ describe('GalleryImageGrid upload drop zone', () => {
   });
 
   it('keeps the no-match message for a search with no results instead of the upload target', async () => {
-    await renderGallery(createGallery({ items: [], pendingPlaceholders: [], searchTerm: 'nope' }));
+    await renderGallery(createGallery({ items: [], searchTerm: 'nope' }));
 
     expect(host?.textContent).toContain('No items');
     expect(host?.querySelector('[role="button"]')).toBeNull();
@@ -1091,7 +1125,6 @@ describe('GalleryImageGrid upload drop zone', () => {
       createGallery({
         boards: [{ ...board, id: 'by_date:2026-07-30', kind: 'date' }],
         items: [],
-        pendingPlaceholders: [],
         selectedBoardId: 'by_date:2026-07-30',
       })
     );
@@ -1099,23 +1132,23 @@ describe('GalleryImageGrid upload drop zone', () => {
     expect(host?.textContent).toContain('No items');
     expect(host?.querySelector('[role="button"]')).toBeNull();
   });
+});
 
+describe('GalleryImageGrid reveal requests', () => {
   it('reports the starred empty state instead of the upload target under the starred-only listing', async () => {
-    await renderGallery(createGallery({ items: [], pendingPlaceholders: [], starredOnly: true }));
+    await renderGallery(createGallery({ items: [], starredOnly: true }));
 
     expect(host?.textContent).toContain('No starred items');
     expect(host?.querySelector('[role="button"]')).toBeNull();
   });
 
   it('keeps the loading message while an empty board is still loading', async () => {
-    await renderGallery(createGallery({ isLoading: true, items: [], pendingPlaceholders: [] }));
+    await renderGallery(createGallery({ isLoading: true, items: [] }));
 
     expect(host?.textContent).toContain('Loading gallery');
     expect(host?.querySelector('[role="button"]')).toBeNull();
   });
-});
 
-describe('GalleryImageGrid reveal requests', () => {
   it('never scrolls on selection changes alone', async () => {
     // The selection also changes when a finished generation auto-selects its
     // image; scrolling on that would yank the grid out from under a browsing
@@ -1360,5 +1393,225 @@ describe('GalleryImageGrid virtualization', () => {
     expect(options?.overscan).toBe(4);
     expect(options?.estimateSize(0)).toBe(options?.estimateSize(0));
     expect(host?.querySelector('[role="listitem"]')).toHaveStyle({ aspectRatio: '1 / 1' });
+  });
+});
+
+describe('shared gallery progress section', () => {
+  const session: QueueProgressSession = {
+    id: 'run:1',
+    queueItemId: 'run',
+    itemIndex: 1,
+    backendItemId: 10,
+    label: 'Workflow A',
+    sourceId: 'workflow',
+    width: 512,
+    height: 768,
+    itemCount: 1,
+    state: 'running',
+  };
+  it('stays visible above empty and filtered boards and follows the clicked session', async () => {
+    currentProgressSessions = [session];
+    for (const boardState of [
+      { selectedBoardId: 'board-other', items: [] },
+      { searchTerm: 'unmatched', items: [] },
+      { starredOnly: true, items: [] },
+      { galleryView: 'assets' as const, items: [], isLoading: true },
+      { page: 5, anchoredWindowPage: 5 },
+    ]) {
+      await renderGallery(createGallery(boardState));
+      expect(host?.querySelector('button[title^="Workflow A ·"]')).not.toBeNull();
+    }
+    await click(host!.querySelector<HTMLButtonElement>('button[title^="Workflow A ·"]')!);
+    expect(followProgressSession).toHaveBeenCalledWith('run:1');
+    expect(host?.querySelectorAll('[role="listitem"]')).toHaveLength(currentGallery.items.length);
+  });
+  it('keeps the saved image selected while the queue only contains waiting slots', async () => {
+    currentLiveFollowEnabled = true;
+    currentProgressSessions = [{ ...session, state: 'queued' }];
+    await renderGallery();
+    const image = host!.querySelector<HTMLButtonElement>('[role="listitem"] button[aria-current="true"]');
+    expect(image).not.toBeNull();
+    expect(image!.getAttribute('aria-pressed')).toBe('true');
+  });
+  it('bounds mounted tiles for large batches and unmounts them when collapsed', async () => {
+    currentProgressSessions = Array.from({ length: 1000 }, (_, index) => ({
+      ...session,
+      id: `run:${index + 1}`,
+      itemCount: 1000,
+      itemIndex: index + 1,
+      state: 'queued',
+    }));
+    await renderGallery();
+    const tiles = () => host!.querySelectorAll('[aria-label="In progress"] button[aria-pressed]');
+    await expect.poll(() => tiles().length).toBeGreaterThan(0);
+    expect(tiles().length).toBeLessThan(60);
+    const contentId = host!.querySelector('[data-progress-disclosure]')!.getAttribute('aria-controls')!;
+    const viewport = document.getElementById(contentId)!.closest<HTMLElement>('[data-part="viewport"]')!;
+    await act(() => {
+      viewport.scrollTop = viewport.scrollHeight;
+    });
+    await expect
+      .poll(() => host!.querySelector('button[aria-label="Workflow A · 1000 of 1000 · Queued"]'))
+      .not.toBeNull();
+    expect(tiles().length).toBeLessThan(60);
+    await renderGallery(createGallery({ settings: { ...DENSE_SETTINGS, progressSectionCollapsed: true } }));
+    expect(tiles()).toHaveLength(0);
+  });
+  it('keeps surviving tile nodes and focus through resizing, reflow and earlier completion', async () => {
+    mocks.progressFrame = {
+      dataUrl: 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="64" height="64"/%3E',
+      width: 64,
+      height: 64,
+    };
+    currentProgressSessions = Array.from({ length: 6 }, (_, index) => ({
+      ...session,
+      id: `run:${index + 1}`,
+      itemIndex: index + 1,
+      label: `Slot ${index + 1}`,
+    }));
+    await renderGallery();
+    const tile = host!.querySelector<HTMLButtonElement>('button[title^="Slot 4 ·"]')!;
+    const image = tile.querySelector('img');
+    expect(image).not.toBeNull();
+    tile.focus();
+    host!.style.width = '520px';
+    await renderGallery(createGallery({ settings: { ...DENSE_SETTINGS, imageDensityPercent: 100 } }));
+    expect(host!.querySelector('button[title^="Slot 4 ·"]')).toBe(tile);
+    expect(tile.querySelector('img')).toBe(image);
+    expect(document.activeElement).toBe(tile);
+    currentProgressSessions = currentProgressSessions.slice(1);
+    await renderGallery();
+    expect(host!.querySelector('button[title^="Slot 4 ·"]')).toBe(tile);
+    expect(tile.querySelector('img')).toBe(image);
+    expect(document.activeElement).toBe(tile);
+  });
+  it('shows per-session progress and distinct queued and finishing indicators without captions', async () => {
+    mocks.itemProgress = { percentage: 0.42, message: 'Denoising' };
+    currentProgressSessions = [
+      session,
+      { ...session, id: 'run:2', state: 'queued' },
+      { ...session, id: 'run:3', state: 'settling' },
+    ];
+    await renderGallery();
+    const region = host!.querySelector('[aria-label="In progress"]')!;
+    expect(region.querySelector('[role="progressbar"]')?.getAttribute('aria-valuenow')).toBe('42');
+    expect(region.querySelector('svg[aria-label="Queued"]')).not.toBeNull();
+    expect(region.querySelector('svg[aria-label="Finishing"]')).not.toBeNull();
+    const finishing = region.querySelector<HTMLButtonElement>('button[aria-label$="Finishing"]')!;
+    finishing.focus();
+    await click(finishing);
+    expect(followProgressSession).not.toHaveBeenCalled();
+    expect(finishing.getAttribute('aria-disabled')).toBe('true');
+  });
+  it('updates tile spacing when density changes without changing the batch', async () => {
+    currentProgressSessions = [session, { ...session, id: 'run:2', itemIndex: 2 }];
+    for (const imageDensityPercent of [100, 0, 100]) {
+      await renderGallery(createGallery({ settings: { ...DENSE_SETTINGS, imageDensityPercent } }));
+      await expect.poll(() => host!.querySelectorAll('[aria-label="In progress"] button[aria-pressed]').length).toBe(2);
+      const tiles = host!.querySelectorAll<HTMLElement>('[aria-label="In progress"] button[aria-pressed]');
+      expect(tiles[1]!.getBoundingClientRect().left - tiles[0]!.getBoundingClientRect().right).toBeCloseTo(4, 0);
+    }
+  });
+  it('shows all three batch tiles while only the first is executing', async () => {
+    host!.style.width = '320px';
+    currentProgressSessions = [
+      { ...session, itemCount: 3 },
+      { ...session, id: 'run:2', itemIndex: 2, itemCount: 3, backendItemId: 11, state: 'queued' },
+      { ...session, id: 'run:3', itemIndex: 3, itemCount: 3, backendItemId: 12, state: 'queued' },
+    ];
+    await renderGallery();
+    const tiles = host!.querySelectorAll<HTMLButtonElement>('[aria-label="In progress"] button[aria-pressed]');
+    expect(tiles).toHaveLength(3);
+    expect(tiles[2]!.getBoundingClientRect().top).toBeGreaterThan(tiles[0]!.getBoundingClientRect().top);
+    expect(tiles[2]!.getBoundingClientRect().left).toBeCloseTo(tiles[0]!.getBoundingClientRect().left, 0);
+    expect(tiles[0]!.disabled).toBe(false);
+    for (const tile of [tiles[1]!, tiles[2]!]) {
+      expect(tile.getAttribute('aria-disabled')).toBe('true');
+      expect(tile.disabled).toBe(false);
+      expect(tile.textContent).toBe('');
+      expect(tile.getAttribute('aria-label')).toContain('Queued');
+    }
+  });
+  it('restores focus to the current image ahead of an earlier starred thumbnail', async () => {
+    currentProgressSessions = [session];
+    currentLiveFollowEnabled = true;
+    setStrip([createItem('image', 'starred.png', { starred: true })]);
+    const gallery = createGallery({ selectedItemKey: 'image:last.png', selectedItemKeys: ['image:last.png'] });
+    await renderGallery(gallery);
+    host!.querySelector<HTMLButtonElement>('button[title^="Workflow A ·"]')!.focus();
+    currentProgressSessions = [];
+    await renderGallery(gallery);
+    const current = host!.querySelector('button[aria-current="true"]');
+    expect(current).not.toBeNull();
+    expect(current).not.toBe(host!.querySelector('[role="listitem"] button'));
+    expect(document.activeElement).toBe(current);
+  });
+  it('tabs through running previews and skips queued and settling tiles', async () => {
+    currentProgressSessions = [
+      { ...session, id: 'run:2', state: 'queued' },
+      session,
+      { ...session, id: 'run:3', state: 'settling' },
+    ];
+    await renderGallery();
+    host!.querySelector<HTMLButtonElement>('[data-progress-disclosure]')!.focus();
+    await act(() => userEvent.tab());
+    expect(document.activeElement).toBe(host!.querySelector('button[aria-label$="Preparing"]'));
+    await act(() => userEvent.tab());
+    expect(document.activeElement?.closest('[role="listitem"]')).not.toBeNull();
+    for (const tile of host!.querySelectorAll<HTMLButtonElement>(
+      '[aria-label="In progress"] button[aria-disabled="true"]'
+    )) {
+      expect(tile.tabIndex).toBe(-1);
+    }
+  });
+  it('collapses independently and restores focus when the last session disappears', async () => {
+    currentProgressSessions = [session];
+    await renderGallery();
+    await click(host!.querySelector<HTMLButtonElement>('[data-progress-disclosure]')!);
+    expect(actionMocks.updateSettings).toHaveBeenCalledWith({ progressSectionCollapsed: true });
+    await renderGallery(createGallery({ settings: { ...DENSE_SETTINGS, progressSectionCollapsed: true } }));
+    expect(host?.querySelector('[data-progress-disclosure]')?.getAttribute('aria-expanded')).toBe('false');
+    await renderGallery(createGallery());
+    host!.querySelector<HTMLButtonElement>('button[title^="Workflow A ·"]')!.focus();
+    currentProgressSessions = [];
+    mocks.progressFrame = null;
+    await renderGallery();
+    expect(host?.querySelector('[data-progress-disclosure]')).toBeNull();
+    expect(host?.querySelector('[aria-label="In progress"]')).toBeNull();
+    expect(document.activeElement?.closest('[role="listitem"]')).not.toBeNull();
+  });
+  it('keeps concurrent progress separate from starred and saved items at narrow widths', async () => {
+    await page.viewport(760, 580);
+    const imageUrl = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="128" height="96"><rect width="128" height="96" fill="#587074"/><path d="M0 96L50 25L85 60L105 35L128 96" fill="#b7cbc8"/></svg>')}`;
+    const items = ['Image A', 'Image B', 'Image C'].map((name) =>
+      createItem('image', name, { fullUrl: imageUrl, thumbnailUrl: imageUrl })
+    );
+    mocks.progressFrame = { dataUrl: imageUrl, width: 128, height: 96 };
+    currentProgressSessions = [
+      session,
+      { ...session, id: 'run:2', itemIndex: 2, backendItemId: 11, label: 'Workflow B' },
+      { ...session, id: 'run:3', backendItemId: 12, label: 'A workflow with a long descriptive name' },
+    ];
+    setStrip([createItem('image', 'Starred image', { starred: true, fullUrl: imageUrl, thumbnailUrl: imageUrl })]);
+    host!.style.width = '320px';
+    await renderGallery(createGallery({ items }));
+    expect(host!.scrollWidth).toBeLessThanOrEqual(host!.clientWidth);
+    expect(host!.querySelectorAll('[aria-label="In progress"] button[aria-pressed]')).toHaveLength(3);
+    for (const tile of host!.querySelectorAll<HTMLElement>('[aria-label="In progress"] button[aria-pressed]')) {
+      expect(tile.textContent).toBe('');
+      expect(tile.getBoundingClientRect().height).toBeCloseTo(tile.getBoundingClientRect().width, 0);
+      expect(tile.getAttribute('aria-label')).toContain('Preparing');
+    }
+    await page.screenshot({ path: '../../../../artifacts/gallery-progress/narrow.png' });
+    host!.style.width = '600px';
+    await renderGallery(createGallery({ items }));
+    await page.screenshot({ path: '../../../../artifacts/gallery-progress/wide.png' });
+  });
+
+  it('honors the existing hidden preference without changing board images', async () => {
+    currentProgressSessions = [session];
+    await renderGallery(createGallery({ settings: { ...DENSE_SETTINGS, showPendingItems: false } }));
+    expect(host?.querySelector('[data-progress-disclosure]')).toBeNull();
+    expect(host?.querySelectorAll('[role="listitem"]')).toHaveLength(currentGallery.items.length);
   });
 });

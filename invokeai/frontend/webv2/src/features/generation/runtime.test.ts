@@ -47,7 +47,7 @@ const createValues = (model: MainModelConfig, overrides: Partial<GenerateWidgetV
   ...getDefaultGenerateSettings(model),
   model,
   seed: 1,
-  shouldRandomizeSeed: false,
+  seedMode: 'fixed',
   ...overrides,
 });
 

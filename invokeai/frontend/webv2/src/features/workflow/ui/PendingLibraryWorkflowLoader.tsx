@@ -1,4 +1,5 @@
 import { getLibraryWorkflow, touchLibraryWorkflowOpenedAt } from '@features/workflow/data/api';
+import { requestWorkflowFitView } from '@features/workflow/ui/editor/flowInstanceStore';
 import { useProjectGraphCommands } from '@features/workflow/ui/useProjectGraphCommands';
 import { useWorkflowNotifications } from '@features/workflow/ui/WorkflowUiContext';
 import { parseWorkflowJson, serializeWorkflowJson } from '@features/workflow/utility';
@@ -37,6 +38,7 @@ export const PendingLibraryWorkflowLoader = () => {
         const name = typeof raw.name === 'string' && raw.name.length > 0 ? raw.name : 'workflow';
 
         replace(document, t('commandPalette.workflowLoad.loaded', { name }));
+        requestWorkflowFitView(document.nodes);
         // Same reasoning as the library dialog's load path: the graph just
         // loaded is already in sync with the library record it came from, so
         // mark it synced before the autosaver's graph-changed effect sees it.

@@ -34,6 +34,12 @@ export const EXACT: GoldenTolerance = { maxChannelDelta: 0, maxDifferingPixels: 
 export const INTERPOLATED: GoldenTolerance = { maxChannelDelta: 16, maxDifferingPixels: 64 };
 
 const GOLDEN_DIR = 'src/workbench/canvas-engine/render/golden/__golden__';
+
+// A string define such as "false" is truthy and would silently turn every run
+// into a baseline rewrite (Vitest 5 browser mode injects strings verbatim).
+if (typeof __CANVAS_GOLDEN_UPDATE__ !== 'boolean') {
+  throw new TypeError(`__CANVAS_GOLDEN_UPDATE__ must be a boolean define, got ${typeof __CANVAS_GOLDEN_UPDATE__}.`);
+}
 export const ARTIFACT_DIR = 'src/workbench/canvas-engine/render/golden/__screenshots__/golden';
 const DEFAULT_BACKGROUND = '#101010';
 

@@ -1,4 +1,12 @@
 import { seedArchitectureCapabilities } from '@features/generation/core/architectureCapabilities.testing';
+import {
+  getSeedSequenceLength,
+  getSeedStep,
+  isSeedMode,
+  planSeedSubmission,
+  SEED_MAX,
+  wrapSeed,
+} from '@platform/core/seed';
 import { describe, expect, it } from 'vitest';
 
 import type {
@@ -46,6 +54,48 @@ const legacyStoredValues = {
 seedArchitectureCapabilities();
 
 describe('normalizeGenerateSettings', () => {
+  it('reads the seed mode saved before modes existed from the random toggle', () => {
+    expect(normalizeGenerateSettings(legacyStoredValues)?.seedMode).toBe('fixed');
+    expect(normalizeGenerateSettings({ ...legacyStoredValues, shouldRandomizeSeed: true })?.seedMode).toBe('random');
+    // A saved mode wins over a stale toggle left behind by a partial patch.
+    expect(
+      normalizeGenerateSettings({ ...legacyStoredValues, seedMode: 'decrement', shouldRandomizeSeed: true })?.seedMode
+    ).toBe('decrement');
+    expect(
+      normalizeGenerateSettings({ ...legacyStoredValues, seedMode: 'bogus', shouldRandomizeSeed: true })?.seedMode
+    ).toBe('random');
+  });
+
+  it('rejects values that name neither a seed mode nor the random toggle', () => {
+    const { shouldRandomizeSeed: _, ...withoutSeedPolicy } = legacyStoredValues;
+
+    expect(normalizeGenerateSettings(withoutSeedPolicy)).toBeNull();
+  });
+
+  it('never lets the strict guard pass a record whose seed mode still needs inventing', () => {
+    // Stored values that pass the guard are reused as-is by the widget resolver, so a legacy
+    // record with only the random toggle would reach the seed menu with `seedMode` undefined.
+    const normalized = normalizeGenerateSettings(legacyStoredValues);
+
+    expect(normalized && isGenerateSettings(normalized)).toBe(true);
+    const { seedMode: _, ...withoutSeedMode } = normalized as NonNullable<typeof normalized>;
+
+    expect(isGenerateSettings({ ...withoutSeedMode, shouldRandomizeSeed: true })).toBe(false);
+    expect(isGenerateSettings({ ...withoutSeedMode, seedMode: 'bogus', shouldRandomizeSeed: true })).toBe(false);
+  });
+
+  it('treats any key normalize would fill in or repair as non-canonical, not only the seed mode', () => {
+    // Saved before PiD existed, or with a ratio outside the range normalize clamps to.
+    const normalized = normalizeGenerateSettings(legacyStoredValues) as NonNullable<
+      ReturnType<typeof normalizeGenerateSettings>
+    >;
+    const { pidMode: _, ...withoutPidMode } = normalized;
+
+    expect(isGenerateSettings(withoutPidMode)).toBe(false);
+    expect(isGenerateSettings({ ...normalized, hiDiffusionT1Ratio: 99 })).toBe(false);
+    expect(normalizeGenerateSettings(withoutPidMode)?.pidMode).toBe(normalized.pidMode);
+  });
+
   it('enforces template view mode only when a valid template remains', () => {
     const validTemplate = {
       id: 'template-1',
@@ -452,5 +502,105 @@ describe('dimension helpers', () => {
     expect(getGenerationDimensions({ base: 'qwen-image', type: 'main' }).grid).toBe(16);
     expect(getGenerationDimensions({ base: 'cogview4', type: 'main' }).grid).toBe(32);
     expect(clampDimension(888, getGenerationDimensions({ base: 'flux2', type: 'main' }).grid)).toBe(896);
+  });
+});
+
+describe('seed modes', () => {
+  it('recognizes only the four modes', () => {
+    expect(isSeedMode('random')).toBe(true);
+    expect(isSeedMode('decrement')).toBe(true);
+    expect(isSeedMode('shuffle')).toBe(false);
+    expect(isSeedMode(true)).toBe(false);
+  });
+
+  it('steps forward for random, since a random start still runs consecutive seeds', () => {
+    expect(getSeedStep('random')).toBe(1);
+    expect(getSeedStep('increment')).toBe(1);
+    expect(getSeedStep('fixed')).toBe(0);
+    expect(getSeedStep('decrement')).toBe(-1);
+  });
+
+  it('wraps over the inclusive seed range in both directions', () => {
+    expect(wrapSeed(SEED_MAX)).toBe(SEED_MAX);
+    expect(wrapSeed(SEED_MAX + 1)).toBe(0);
+    expect(wrapSeed(-1)).toBe(SEED_MAX);
+    expect(wrapSeed(-2)).toBe(SEED_MAX - 1);
+  });
+});
+
+describe('getSeedSequenceLength', () => {
+  it('uses one seed for the whole fixed submission, whatever its shape', () => {
+    expect(
+      getSeedSequenceLength({ batchCount: 3, promptCount: 2, seedBehaviour: 'per-image', seedMode: 'fixed' })
+    ).toBe(1);
+  });
+
+  it('takes one entry per iteration unless every image of a prompt set gets its own', () => {
+    expect(
+      getSeedSequenceLength({ batchCount: 3, promptCount: 1, seedBehaviour: 'per-image', seedMode: 'increment' })
+    ).toBe(3);
+    expect(
+      getSeedSequenceLength({ batchCount: 3, promptCount: 2, seedBehaviour: 'per-iteration', seedMode: 'increment' })
+    ).toBe(3);
+    expect(
+      getSeedSequenceLength({ batchCount: 3, promptCount: 2, seedBehaviour: 'per-image', seedMode: 'random' })
+    ).toBe(6);
+  });
+});
+
+describe('planSeedSubmission', () => {
+  const plan = (seedMode: Parameters<typeof planSeedSubmission>[0]['seedMode'], startSeed = 42, batchCount = 3) =>
+    planSeedSubmission({ batchCount, promptCount: 1, seedBehaviour: 'per-iteration', seedMode, startSeed });
+
+  it('advances the editable seed past the batch only in the stepping modes', () => {
+    expect(plan('increment')).toEqual({
+      lastSeed: 44,
+      nextSeed: 45,
+      seedMode: 'increment',
+      sequenceLength: 3,
+      startSeed: 42,
+      step: 1,
+    });
+    expect(plan('decrement')).toEqual({
+      lastSeed: 40,
+      nextSeed: 39,
+      seedMode: 'decrement',
+      sequenceLength: 3,
+      startSeed: 42,
+      step: -1,
+    });
+    expect(plan('fixed')).toEqual({
+      lastSeed: 42,
+      nextSeed: null,
+      seedMode: 'fixed',
+      sequenceLength: 1,
+      startSeed: 42,
+      step: 0,
+    });
+    expect(plan('random')).toEqual({
+      lastSeed: 44,
+      nextSeed: null,
+      seedMode: 'random',
+      sequenceLength: 3,
+      startSeed: 42,
+      step: 1,
+    });
+  });
+
+  it('wraps the next seed at either end of the range', () => {
+    expect(plan('increment', SEED_MAX - 1, 2)).toMatchObject({ lastSeed: SEED_MAX, nextSeed: 0 });
+    expect(plan('decrement', 1, 2)).toMatchObject({ lastSeed: 0, nextSeed: SEED_MAX });
+  });
+
+  it('advances by every seed a prompt set consumes', () => {
+    expect(
+      planSeedSubmission({
+        batchCount: 2,
+        promptCount: 2,
+        seedBehaviour: 'per-image',
+        seedMode: 'increment',
+        startSeed: 42,
+      })
+    ).toMatchObject({ lastSeed: 45, nextSeed: 46, sequenceLength: 4 });
   });
 });

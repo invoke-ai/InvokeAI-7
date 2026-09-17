@@ -1,4 +1,4 @@
-import type { GalleryVideoItem } from '@features/gallery';
+import type { GalleryItemRef, GalleryVideoItem } from '@features/gallery';
 import type { VideoWidgetValues } from '@features/video/core/types';
 import type { ReactNode } from 'react';
 
@@ -9,6 +9,13 @@ import { createContext, use, useMemo } from 'react';
  * may not import workbench), not a test seam; no second adapter is expected.
  */
 export interface VideoUiAdapter {
+  /**
+   * Locate one of the panel's conditioning media in the Gallery grid and put it
+   * in front of the user: the Gallery and Preview widgets come on screen and
+   * the grid lands on the item's board, page, and cell. The panel's thumbnails
+   * are the only handle the user has on media picked long ago.
+   */
+  findInGallery(ref: GalleryItemRef): void;
   /**
    * The board a file upload from the video panel should land on — the gallery's
    * currently selected board. A callback rather than a value so upload handlers
@@ -58,6 +65,7 @@ export interface VideoSpanPlaybackPort {
 /** The adapter's callbacks, which are stable for the lifetime of a project. */
 export type VideoUiActions = Pick<
   VideoUiAdapter,
+  | 'findInGallery'
   | 'getUploadBoardId'
   | 'patchValues'
   | 'playVideoSpanInPreview'
@@ -76,10 +84,18 @@ const VideoUiContext = createContext<VideoUiAdapter | null>(null);
 const VideoUiActionsContext = createContext<VideoUiActions | null>(null);
 
 export const VideoUiProvider = ({ adapter, children }: { adapter: VideoUiAdapter; children: ReactNode }) => {
-  const { getUploadBoardId, patchValues, playVideoSpanInPreview, reportError, touchGalleryImages, videoSpanPlayback } =
-    adapter;
+  const {
+    findInGallery,
+    getUploadBoardId,
+    patchValues,
+    playVideoSpanInPreview,
+    reportError,
+    touchGalleryImages,
+    videoSpanPlayback,
+  } = adapter;
   const actions = useMemo<VideoUiActions>(
     () => ({
+      findInGallery,
       getUploadBoardId,
       patchValues,
       playVideoSpanInPreview,
@@ -87,7 +103,15 @@ export const VideoUiProvider = ({ adapter, children }: { adapter: VideoUiAdapter
       touchGalleryImages,
       videoSpanPlayback,
     }),
-    [getUploadBoardId, patchValues, playVideoSpanInPreview, reportError, touchGalleryImages, videoSpanPlayback]
+    [
+      findInGallery,
+      getUploadBoardId,
+      patchValues,
+      playVideoSpanInPreview,
+      reportError,
+      touchGalleryImages,
+      videoSpanPlayback,
+    ]
   );
 
   return (

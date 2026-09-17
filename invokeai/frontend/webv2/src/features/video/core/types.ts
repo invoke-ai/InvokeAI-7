@@ -5,6 +5,7 @@ import type {
   ModelIdentifierConfig,
   VaeModelConfig,
 } from '@features/generation/contracts';
+import type { SeedMode } from '@platform/core/seed';
 
 /**
  * How a video generation is conditioned. There is no explicit mode selector:
@@ -144,7 +145,7 @@ export interface VideoSettings {
    */
   acceleratorLoraKeys: string[];
   seed: number;
-  shouldRandomizeSeed: boolean;
+  seedMode: SeedMode;
   loras: GenerateLora[];
   /** Optional VAE override; null uses the VAE bundled with the main model or component source. */
   vae: VaeModelConfig | null;

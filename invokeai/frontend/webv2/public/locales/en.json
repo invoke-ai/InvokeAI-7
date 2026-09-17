@@ -185,6 +185,9 @@
       "saturationValue": "Saturation and value",
       "saturationValueText": "Saturation {{saturation}}%, value {{value}}%"
     },
+    "scrubber": {
+      "editValue": "Edit {{label}}"
+    },
     "configure": "Configure",
     "copy": "Copy",
     "crop": "Crop",
@@ -251,7 +254,24 @@
     "view": "View",
     "viewJson": "View JSON",
     "widgetViewUnavailable": "Widget view unavailable.",
-    "loading": "Loading…"
+    "loading": "Loading…",
+    "seedMode": {
+      "label": "Seed mode",
+      "random": "Random",
+      "randomDescription": "Choose a fresh starting seed for each submission.",
+      "fixed": "Fixed",
+      "fixedDescription": "Reuse the entered seed.",
+      "increment": "Increment",
+      "incrementDescription": "Use successive seeds, increasing by 1.",
+      "decrement": "Decrement",
+      "decrementDescription": "Use successive seeds, decreasing by 1."
+    },
+    "newSeed": "New seed",
+    "shuffle": "Shuffle",
+    "seedNextBatch": "Next batch: {{seed}}",
+    "seedNextBatchRange": "Next batch: {{first}} → {{last}}",
+    "decreaseValue": "Decrease value",
+    "increaseValue": "Increase value"
   },
   "app": {
     "name": "Invoke AI",
@@ -752,13 +772,6 @@
       "paragraphs": [
         "The aspect ratio of the dimensions of the image generated.",
         "An image size (in number of pixels) equivalent to 512x512 is recommended for SD1.5 models and a size equivalent to 1024x1024 is recommended for SDXL models."
-      ]
-    },
-    "batchCount": {
-      "heading": "Iterations",
-      "paragraphs": [
-        "The number of images to generate.",
-        "If Dynamic Prompts is enabled, each of the prompts will be generated this many times."
       ]
     },
     "cfgRescale": {
@@ -1407,6 +1420,8 @@
     "nodeType": "Type: {{type}}",
     "nodeVersion": "Version: {{version}}",
     "nodeClassification": "Classification: {{classification}}",
+    "seedModeTooltip": "Applies between queued runs of the workflow; a loop inside one run reuses that run's seed.",
+    "providedByConnection": "Provided by connection.",
     "iterationOutputs": "Iteration outputs",
     "finalOutputs": "Final outputs",
     "forLoopValidationFailed": "For loop validation failed",
@@ -1424,7 +1439,11 @@
     "forLoopLinkageInvalid": "Loop linkage must connect a For to its ForReturn",
     "forLoopLinkageDuplicate": "A For and ForReturn can each belong to only one loop",
     "forReturnOwnership": "Each ForReturn must belong to exactly one For",
+    "executionCompleted": "Completed",
+    "executionFailed": "Failed",
     "forLoopBodyBoundary": "For loop body",
+    "imageCollectionCount_one": "{{count}} image",
+    "imageCollectionCount_other": "{{count}} images",
     "forLoopBodyBoundaryStatus": {
       "missing_linkage": "missing loop linkage",
       "invalid_linkage": "invalid loop linkage",
@@ -2019,6 +2038,7 @@
       "deletePresetNamed": "Delete preset {{name}}",
       "deletePromptHistoryItem": "Delete prompt history item",
       "denoisingStrength": "Denoising strength",
+      "strength": "Strength",
       "disableConcept": "Disable {{name}}",
       "disableReferenceImage": "Disable reference image",
       "dropImageToPrompt": "Describe this image",
@@ -2062,6 +2082,7 @@
         "resizeWildcardValues": "Resize wildcard values",
         "mode": "Mode",
         "newSeedPerImage": "New seed for every image",
+        "seedHeldForEveryImage": "A fixed seed is used for every image.",
         "import": "Import",
         "export": "Export",
         "exportAsYaml": "As YAML",
@@ -2130,7 +2151,6 @@
       "krea2RebalanceAxisDeep": "deep",
       "krea2RebalanceAxisShallow": "shallow",
       "krea2RebalanceGain": "Gain",
-      "krea2RebalanceGainReset": "Reset gain",
       "krea2RebalanceHelp": "Scales conditioning toward the prompt before denoising.",
       "krea2RebalancePreset": "Rebalance preset",
       "krea2RebalancePresetActions": "Preset actions",
@@ -2172,7 +2192,6 @@
       "negativePrompt": "Negative prompt",
       "negativePromptAdd": "Negative prompt…",
       "negativePromptHide": "Turn off negative prompt",
-      "newSeed": "New seed",
       "noMatchingPrompts": "No matching prompts.",
       "noMatchingTriggers": "No matching triggers.",
       "noPromptHistoryYet": "No prompt history yet.",
@@ -2195,9 +2214,12 @@
       "promptHistoryEntries": "Prompt history entries",
       "promptHistoryKeyboardHelp": "Alt+Up/Down switches between prompts while focused.",
       "recentSeeds": "Recent seeds",
+      "seedSummary": "{{mode}} · {{seed}}",
       "renamePresetNamed": "Rename preset {{name}}",
       "renamePresetTitle": "Rename preset",
       "resetToModelDefault": "Reset to model default",
+      "resetToConceptDefault": "Reset to concept default",
+      "resetToDefault": "Reset to default",
       "retry": "Retry",
       "savePresetAction": "Save",
       "savePresetTitle": "Save preset",
@@ -2289,8 +2311,6 @@
         "loading": "Loading templates…"
       },
       "promptTriggerOptions": "Prompt trigger options",
-      "random": "Random",
-      "randomEachRun": "Random each run",
       "readyWithIterations_one": "Ready · {{count}} iteration",
       "readyWithIterations_other": "Ready · {{count}} iterations",
       "referenceImage": "Reference Image",
@@ -2332,16 +2352,9 @@
       "templatesButton": "Templates",
       "unlockAspectRatio": "Unlock aspect ratio",
       "upload": "Upload",
-      "useConceptDefaultWeight": "Use concept default weight",
-      "useModelDefault": "Use model default",
-      "useModelDefaultCfgRescale": "Use model default CFG rescale",
-      "useModelDefaultField": "Use model default {{field}}",
-      "useModelDefaultHeight": "Use model default height",
       "useModelDefaultScheduler": "Use model default scheduler",
-      "useModelDefaultSteps": "Use model default steps",
       "useModelDefaultVae": "Use model default VAE",
       "useModelDefaultVaePrecision": "Use model default VAE precision",
-      "useModelDefaultWidth": "Use model default width",
       "usePrompt": "Use prompt",
       "useSeed": "Use seed {{seed}}",
       "useSize": "Use size",
@@ -2368,7 +2381,6 @@
     "upscale": {
       "addLora": "LoRAs",
       "advanced": "Advanced",
-      "batchCount": "Batch count",
       "bundledVae": "Bundled VAE",
       "cfgScale": "CFG scale",
       "clipSkip": "CLIP skip",
@@ -2408,7 +2420,6 @@
       },
       "presetsLabel": "Treatment preset",
       "prompts": "Prompts",
-      "random": "Random",
       "ready": "Ready",
       "readyDescription": "The upscale graph is ready to queue.",
       "removeLora": "Remove {{name}}",
@@ -2422,7 +2433,6 @@
       "selectTileControlNet": "Select a Tile or Union ControlNet…",
       "settingsAdjusted": "Adjusted incompatible settings",
       "shared": "Shared",
-      "shuffleSeed": "Shuffle seed",
       "sharedPromptDescription": "This is the project prompt shared with Generate. For upscaling, describe medium, texture, and style rather than new scene content.",
       "sourceAndTreatment": "Source & treatment",
       "spandrelModel": "Spandrel model",
@@ -2469,7 +2479,6 @@
         "nextComparisonMode": "Next comparison mode",
         "swapComparisonImages": "Swap comparison images",
         "toggleFilmstrip": "Toggle filmstrip",
-        "togglePreview": "Toggle preview",
         "zoomToActual": "Zoom preview to 100%",
         "zoomToFit": "Zoom preview to fit"
       },
@@ -2523,7 +2532,8 @@
       "videoRetry": "Retry",
       "viewing": "Viewing",
       "workflow": "Workflow",
-      "workflowJsonLabel": "Video workflow JSON"
+      "workflowJsonLabel": "Video workflow JSON",
+      "showAllActivePreviews": "Show all active previews"
     },
     "queue": {
       "allScopedItemsRequested": "All scoped queue items were requested.",
@@ -3611,6 +3621,8 @@
       "exportProjectFromBoard": "Export project (.invk)",
       "expandStarredItems": "Expand starred items",
       "filterAndSortBoards": "Filter & sort boards",
+      "findInGallery": "Find in Gallery",
+      "findNamedInGallery": "Find {{name}} in Gallery",
       "generationProgress": "Generation progress",
       "generationProgressPercent": "Generation {{percentage}}%",
       "imageCount_one": "{{count}} image",
@@ -3728,7 +3740,7 @@
       "settings": "Gallery settings",
       "settingsGridSize": "Grid Size",
       "settingsThumbnails": "Thumbnails",
-      "showPendingItems": "Show pending items",
+      "showPendingItems": "Show in-progress section",
       "sortBoardsAscending": "Sort boards ascending",
       "sortBoardsBy": "Sort by",
       "sortBoardsDescending": "Sort boards descending",
@@ -3767,7 +3779,13 @@
       "backToBoardTop": "Back to top",
       "windowLimit": "Showing the first {{count}} items. Narrow the search or switch to Pages to reach the rest.",
       "windowLimitFrom": "Showing {{count}} items from item {{index}}. Narrow the search or switch to Pages to reach the rest.",
-      "boardOrder": "Board order"
+      "boardOrder": "Board order",
+      "inProgress": "In progress",
+      "progressSession": "{{name}} · {{index}} of {{total}}",
+      "progressQueued": "Queued",
+      "progressPreparing": "Preparing",
+      "progressSettling": "Finishing",
+      "progressShared": "Active gallery runs across all boards"
     },
     "queueStatus": {
       "idle": "Queue idle",
@@ -3803,13 +3821,11 @@
       "framesDuration": "{{seconds}} s at the current frame rate",
       "mainModel": "Model",
       "modelRequired": "Select a Wan 2.2 or MiniMax H3 model.",
-      "randomizeSeed": "Random",
       "render": "Render",
       "seed": "Seed",
       "selectModel": "Select a video model…",
       "settingsAdjusted": "Settings adjusted",
       "settingsAdjustedDescription": "Adjusted for the selected model: {{labels}}.",
-      "shuffleSeed": "New random seed",
       "steps": "Steps",
       "swapAspectRatio": "Swap orientation",
       "targetResolution": "Target Resolution",

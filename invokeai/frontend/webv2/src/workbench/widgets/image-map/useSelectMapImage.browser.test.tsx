@@ -3,6 +3,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
+  activeProjectId: 'project-1',
   /** Simulated page count of the cached infinite window; null = no cache. */
   cachedPageCount: null as number | null,
   fetchBoards: vi.fn(),
@@ -25,7 +26,10 @@ vi.mock('@features/gallery', () => ({
   toGalleryItemKey: (ref: { kind: string; name: string }) => `${ref.kind}:${ref.name}`,
 }));
 
-vi.mock('@features/gallery/contracts', () => ({
+vi.mock('@features/gallery/contracts', async (importOriginal) => ({
+  // The navigation sequence is real: the staleness guarantees below are exactly
+  // what it implements, and a stubbed counter would assert nothing.
+  ...(await importOriginal<Record<string, unknown>>()),
   getGallerySettings: () => mocks.settings,
   registerImageCluster: mocks.registerImageCluster,
   requestGalleryItemReveal: mocks.requestReveal,
@@ -68,7 +72,10 @@ vi.mock('@workbench/WorkbenchContext', () => ({
     },
     widgets: { patchValues: mocks.patchValues },
   }),
-  useWorkbenchQueries: () => ({ getSnapshot: () => ({ activeProject: { id: 'project-1' } }) }),
+  useWorkbenchQueries: () => ({
+    getSnapshot: () => ({ activeProject: { id: mocks.activeProjectId } }),
+    isActiveProject: (projectId: string) => projectId === mocks.activeProjectId,
+  }),
 }));
 
 import { useMapSelection } from './useSelectMapImage';
@@ -147,6 +154,7 @@ const namesWithImageAt = (imageName: string, index: number) => ({
 });
 
 beforeEach(() => {
+  mocks.activeProjectId = 'project-1';
   mocks.cachedPageCount = null;
   mocks.galleryValues = {};
   mocks.settings = { imageOrderDir: 'DESC', paginationMode: 'paginated' };
@@ -661,6 +669,28 @@ describe('useMapSelection', () => {
     });
 
     expect(mocks.selectItem.mock.calls.map((call) => call[0].name)).toEqual(['fresh.png']);
+  });
+
+  it('drops a reveal whose hydrate landed after the user switched projects', async () => {
+    // The reveal writes a board, a page, a filter reset and a selection. The
+    // sequence guard does not cover this: nothing newer was clicked, so a
+    // reveal in flight across a project switch would land every one of those
+    // writes in the project the user just arrived at.
+    const inFlight = deferred<{ boardId: string; category: string; kind: string; name: string }>();
+
+    mocks.resolve.mockReturnValueOnce(inFlight.promise);
+    await mount();
+
+    await flush(() => handle.click?.({ kind: 'image', name: 'left-behind.png' }));
+    mocks.activeProjectId = 'project-2';
+
+    await flush(() =>
+      inFlight.resolve({ boardId: 'board-a', category: 'general', kind: 'image', name: 'left-behind.png' })
+    );
+
+    expect(mocks.selectBoard).not.toHaveBeenCalled();
+    expect(mocks.selectItem).not.toHaveBeenCalled();
+    expect(mocks.patchValues).not.toHaveBeenCalled();
   });
 
   it('leaves the selection alone when hydrate fails or the item is gone', async () => {

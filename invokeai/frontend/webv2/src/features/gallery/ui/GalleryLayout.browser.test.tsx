@@ -11,6 +11,7 @@ import { system } from '@theme/system';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { page } from 'vitest/browser';
 
 import type { GalleryStateView } from './galleryStateView';
 import type { GalleryWidgetContextValue } from './GalleryWidgetContext';
@@ -21,7 +22,7 @@ import { GalleryWidgetContext } from './GalleryWidgetContext';
 import { EMPTY_GALLERY_STARRED_STRIP } from './useGalleryStarredStrip';
 
 vi.mock('@features/queue/react', () => ({
-  useQueueItemProgress: () => null,
+  useItemProgress: () => null,
   useQueueItemProgressImage: () => null,
 }));
 
@@ -55,7 +56,9 @@ const createItem = (name: string) => ({
   kind: 'image' as const,
   name,
   starred: false,
-  thumbnailUrl: `/thumb/${name}`,
+  thumbnailUrl: `data:image/svg+xml,${encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><rect width="64" height="64" fill="#547c83"/></svg>'
+  )}`,
   width: 64,
 });
 
@@ -63,7 +66,6 @@ const createGallery = (overrides: Partial<GalleryStateView> = {}) =>
   ({
     boards: [board],
     compareImageKey: null,
-    currentItem: null,
     galleryView: 'images',
     isLoading: false,
     items: [createItem('a.png'), createItem('b.png')],
@@ -126,7 +128,10 @@ const contextBase = {
 
 const adapter = {
   ImageContextMenu: () => null,
-  account: { enableLiveFollow: vi.fn() },
+  progressSessions: [],
+  pinnedProgressSessionId: null,
+  liveFollowEnabled: false,
+  followProgressSession: vi.fn(),
   antialiasProgressImages: false,
   widgets: { openGallery: vi.fn(() => true), patchGalleryValues: vi.fn() },
 } as unknown as GalleryUiAdapter;
@@ -157,6 +162,7 @@ const renderLayout = async (Layout: typeof GalleryStackedLayout | typeof Gallery
 beforeEach(() => {
   vi.clearAllMocks();
   setGallery(gallery);
+  adapter.progressSessions = [];
   host = document.createElement('div');
   host.style.cssText = 'height:600px;left:0;position:fixed;top:0;width:900px;';
   document.body.append(host);
@@ -173,6 +179,79 @@ afterEach(async () => {
 });
 
 describe('gallery layout shells', () => {
+  it('wraps progress into matching gallery columns inside the same vertical viewport', async () => {
+    host!.style.width = '560px';
+    adapter.progressSessions = Array.from({ length: 4 }, (_, index) => ({
+      id: `batch:${index + 1}`,
+      queueItemId: 'batch',
+      backendItemId: index + 1,
+      itemIndex: index + 1,
+      itemCount: 4,
+      label: 'Batch',
+      sourceId: 'workflow',
+      width: 512,
+      height: 512,
+      state: 'queued',
+    }));
+    setGallery(
+      createGallery({ settings: { ...DEFAULT_GALLERY_SETTINGS, boardPanelCollapsed: true, imageDensityPercent: 0 } })
+    );
+    await renderLayout(GalleryStackedLayout);
+    const panel = host!.querySelector<HTMLElement>('[role="tabpanel"]')!;
+    await expect.poll(() => panel.querySelectorAll('[role="region"] button[aria-pressed]').length).toBe(4);
+    const tiles = panel.querySelectorAll<HTMLElement>('[role="region"] button[aria-pressed]');
+    const saved = panel.querySelector<HTMLElement>('[role="listitem"]')!;
+    const viewport = panel.querySelector<HTMLElement>('[data-part="viewport"]')!;
+    expect(panel.querySelectorAll('[data-part="viewport"]')).toHaveLength(1);
+    expect(viewport.contains(tiles[0]!)).toBe(true);
+    expect(tiles[0]!.getBoundingClientRect().width).toBeCloseTo(saved.getBoundingClientRect().width, 0);
+    expect(tiles[3]!.getBoundingClientRect().top).toBeGreaterThan(tiles[0]!.getBoundingClientRect().top);
+    expect(saved.getBoundingClientRect().top).toBeGreaterThanOrEqual(tiles[3]!.getBoundingClientRect().bottom);
+    expect(viewport.scrollWidth).toBe(viewport.clientWidth);
+    setGallery(
+      createGallery({
+        settings: {
+          ...DEFAULT_GALLERY_SETTINGS,
+          boardPanelCollapsed: true,
+          imageDensityPercent: 0,
+          progressSectionCollapsed: true,
+        },
+      })
+    );
+    await renderLayout(GalleryStackedLayout);
+    expect(panel.querySelector('[role="region"] button[aria-pressed]')).toBeNull();
+    expect(saved.getBoundingClientRect().top - viewport.getBoundingClientRect().top).toBeCloseTo(24, 0);
+  });
+
+  it.each(['images', 'assets'] as const)(
+    'fills the stacked %s panel with media or its empty upload picker',
+    async (galleryView) => {
+      await page.viewport(760, 680);
+      host!.style.width = '560px';
+      for (const items of [[createItem('visible.png')], []]) {
+        setGallery(
+          createGallery({ galleryView, items, settings: { ...DEFAULT_GALLERY_SETTINGS, boardPanelCollapsed: true } })
+        );
+        await renderLayout(GalleryStackedLayout);
+        const panel = host!.querySelector<HTMLElement>('[role="tabpanel"]')!;
+        const grid = panel.firstElementChild as HTMLElement;
+        expect(grid.getBoundingClientRect().width).toBeCloseTo(panel.getBoundingClientRect().width, 0);
+        if (items.length) {
+          await expect.poll(() => panel.querySelector('[role="listitem"]')).not.toBeNull();
+          const viewport = panel.querySelector<HTMLElement>('[data-part="viewport"]')!;
+          expect(viewport.clientWidth).toBeGreaterThan(500);
+          expect(viewport.clientHeight).toBeGreaterThan(100);
+        } else {
+          const picker = panel.querySelector<HTMLElement>('[role="button"]')!;
+          expect(picker.getBoundingClientRect().width).toBeGreaterThan(panel.clientWidth - 24);
+        }
+        await page.screenshot({
+          path: `../../../../artifacts/gallery-progress/stacked-${galleryView}-${items.length ? 'media' : 'empty'}.png`,
+        });
+      }
+    }
+  );
+
   it('keeps the center gallery scroll area above the selection actions', async () => {
     const items = Array.from({ length: 80 }, (_, index) => createItem(`image-${index}.png`));
 

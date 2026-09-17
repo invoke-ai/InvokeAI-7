@@ -1,11 +1,9 @@
 import type { GalleryImageItem, GalleryItem, GalleryItemKey, GalleryItemRef } from '@features/gallery/contracts';
 import type { GallerySettings } from '@features/gallery/core/settings';
 import type { GalleryBoard, GalleryBoardDeletionResult, GalleryImage, GalleryView } from '@features/gallery/core/types';
-import type { QueueItem } from '@features/queue/contracts';
+import type { QueueProgressSession } from '@features/queue/contracts';
 
 import { createContext, use, type ComponentType, type ReactNode } from 'react';
-
-import type { GalleryLiveTarget } from './galleryStateView';
 
 export interface GalleryItemActions {
   deleteItems(items: GalleryItemRef[]): Promise<void>;
@@ -98,7 +96,6 @@ export interface GalleryWidgetProps {
 export interface GalleryUiAdapter {
   ItemActionsProvider: ComponentType<GalleryItemActionsOptions & { children: ReactNode }>;
   ImageContextMenu: ComponentType<GalleryItemContextMenuProps>;
-  account: { enableLiveFollow(): void };
   antialiasProgressImages: boolean;
   gallery: GalleryCommandsPort;
   galleryValues: Record<string, unknown>;
@@ -111,9 +108,10 @@ export interface GalleryUiAdapter {
    * board because a board menu can offer this for any project's board, not only the open one.
    */
   exportProject(projectId: string, projectName: string): void;
-  queueItems: QueueItem[];
+  progressSessions: QueueProgressSession[];
+  pinnedProgressSessionId: string | null;
+  followProgressSession(sessionId: string): void;
   liveFollowEnabled: boolean;
-  liveProgressTarget: GalleryLiveTarget | null;
   widgets: {
     /** Open (or reveal) the Gallery widget; false when no region can host it. */
     openGallery(): boolean;

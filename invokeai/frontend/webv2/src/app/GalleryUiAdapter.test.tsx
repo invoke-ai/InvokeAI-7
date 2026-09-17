@@ -20,7 +20,15 @@ vi.mock('@features/gallery/react', () => ({
     return children;
   },
 }));
-vi.mock('@features/queue/react', () => ({ useActiveProgressTarget: () => null }));
+vi.mock('@workbench/widgets/preview/livePreviewFollow', () => ({
+  useLivePreviewFollow: () => ({
+    sessions: [],
+    gallerySessions: [],
+    pinnedSessionId: null,
+    pin: vi.fn(),
+    showAll: vi.fn(),
+  }),
+}));
 vi.mock('@workbench/projects/useProjectFileActions', () => ({ useExportLibraryProject: () => noop }));
 vi.mock('@workbench/useOpenWorkbenchWidget', () => ({ useOpenWorkbenchWidget: () => noop }));
 vi.mock('@workbench/WorkbenchContext', () => ({

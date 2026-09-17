@@ -1,5 +1,5 @@
+/* eslint-disable react/refs, react/immutability */
 import type { GalleryItemKey, GalleryItemRef } from '@features/gallery';
-/* eslint-disable react/react-compiler */
 import type { StreamingImageSource } from '@platform/ui/streaming-image/streamingImageSource';
 
 import { Badge, Flex, Text } from '@chakra-ui/react';

@@ -107,7 +107,7 @@ if (referenceDir && !updateBaseline) {
 const { build: budgets, uncovered: uncoveredRoutes } = applyBuildReference(baseline.build, reference);
 process.stdout.write(
   reference
-    ? `Byte budgets: delta against ${referenceName} captured ${reference.capturedAt}.\n`
+    ? `Byte budgets: allowance over the higher of ${referenceName} captured ${reference.capturedAt} and committed measurements, bounded by the committed hard ceiling.\n`
     : referenceReason
       ? `Byte budgets: against committed baseline captured ${baseline.capturedAt}; ${referenceName} was recorded with ${referenceReason} and cannot be applied.\n`
       : `Byte budgets: against committed baseline captured ${baseline.capturedAt}.\n`

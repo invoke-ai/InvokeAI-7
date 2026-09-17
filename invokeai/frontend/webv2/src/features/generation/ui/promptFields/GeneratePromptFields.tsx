@@ -126,6 +126,7 @@ export const GeneratePromptFields = ({
   const dynamicPrompts = useMemo(
     () => ({
       combinatorial: settings.dynamicPromptsCombinatorial,
+      isSeedFixed: settings.seedMode === 'fixed',
       maxPrompts: settings.dynamicPromptsMaxPrompts,
       onChange: handleDynamicPromptsChange,
       sampleSeed: settings.dynamicPromptsSampleSeed,
@@ -137,6 +138,7 @@ export const GeneratePromptFields = ({
       settings.dynamicPromptsMaxPrompts,
       settings.dynamicPromptsSampleSeed,
       settings.dynamicPromptsSeedBehaviour,
+      settings.seedMode,
     ]
   );
 

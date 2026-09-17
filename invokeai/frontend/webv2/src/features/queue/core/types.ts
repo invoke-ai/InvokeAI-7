@@ -1,4 +1,6 @@
-import type { QueuePromptSeedBehaviour } from '@features/queue/core/promptBatch';
+import type { QueuePromptSeedBehaviour, QueueSeedStep, QueueWorkflowSeed } from '@features/queue/core/promptBatch';
+
+export type { QueueSeedStep, QueueWorkflowSeed };
 
 export interface QueueBackendInvocation {
   id: string;
@@ -32,7 +34,7 @@ export interface QueueGraphSnapshot {
   label: string;
 }
 
-export interface QueueEnqueueWorkflowRequest {
+interface QueueEnqueueRequestBase {
   batchCount: number;
   destination: QueueResultDestination;
   graph: QueueBackendGraph;
@@ -40,7 +42,12 @@ export interface QueueEnqueueWorkflowRequest {
   sourceQueueItemId: string;
 }
 
-export interface QueueEnqueueGenerateRequest extends QueueEnqueueWorkflowRequest {
+export interface QueueEnqueueWorkflowRequest extends QueueEnqueueRequestBase {
+  /** The seed inputs that vary between the `batchCount` runs; the graph carries each one's first seed. */
+  seeds?: QueueWorkflowSeed[];
+}
+
+export interface QueueEnqueueGenerateRequest extends QueueEnqueueRequestBase {
   negativePrompt: string;
   negativePromptNodeId: string;
   positivePrompt: string;
@@ -53,7 +60,12 @@ export interface QueueEnqueueGenerateRequest extends QueueEnqueueWorkflowRequest
   seed: number;
   seedBehaviour?: QueuePromptSeedBehaviour;
   seedNodeId: string;
-  shouldRandomizeSeed: boolean;
+  seedStep: QueueSeedStep;
+  /**
+   * Set only when replaying an item queued before seed modes: its `seedStep` is
+   * the mapped random toggle, and the expansion follows that version's rules.
+   */
+  legacySeedPlan?: true;
 }
 
 export interface QueueEnqueueResult {
@@ -69,6 +81,8 @@ export type QueueCompiledSubmission =
       batchCount: number;
       graph: QueueBackendGraph;
       kind: 'workflow';
+      /** The seed inputs that vary between runs, expanded into one zipped batch group at send time. */
+      seeds?: QueueWorkflowSeed[];
       /**
        * The library record this run's workflow was loaded from, when the project
        * graph is bound to one. Stamped at compile time so a completed run can be
@@ -89,7 +103,8 @@ export type QueueCompiledSubmission =
       seed: number;
       seedBehaviour?: QueuePromptSeedBehaviour;
       seedNodeId: string;
-      shouldRandomizeSeed: boolean;
+      /** Items compiled before seed modes carry `shouldRandomizeSeed` instead; the runtime maps it on read. */
+      seedStep: QueueSeedStep;
     }
   | { error: string; kind: 'invalid' };
 
@@ -104,6 +119,8 @@ export interface QueueBackendItem {
 }
 
 export interface QueueResultImage {
+  /** Board the backend saved the image to (a node's explicit board); unset when uncategorized. */
+  boardId?: string;
   /** Backend creation timestamp; `queuedAt` is the submission instant. */
   createdAt?: string;
   height: number;

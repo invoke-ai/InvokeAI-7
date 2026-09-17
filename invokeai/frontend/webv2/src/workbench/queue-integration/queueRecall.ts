@@ -22,7 +22,7 @@ export const getQueueRecallCapabilities = (
   dimensions: snapshot !== null,
   prompts: snapshot !== null || meta.positivePrompt !== undefined,
   remix: snapshot !== null,
-  seed: meta.seed !== undefined || (snapshot !== null && !snapshot.shouldRandomizeSeed),
+  seed: meta.seed !== undefined || (snapshot !== null && snapshot.seedMode !== 'random'),
 });
 
 export const getVideoQueueRecallCapabilities = (
@@ -34,7 +34,7 @@ export const getVideoQueueRecallCapabilities = (
   dimensions: false,
   prompts: snapshot !== null || meta.positivePrompt !== undefined,
   remix: snapshot !== null,
-  seed: meta.seed !== undefined || (snapshot !== null && !snapshot.shouldRandomizeSeed),
+  seed: meta.seed !== undefined || (snapshot !== null && snapshot.seedMode !== 'random'),
 });
 
 export const buildQueueRecallValues = (
@@ -54,7 +54,7 @@ export const buildQueueRecallValues = (
   }
 
   if (kind === 'remix') {
-    return snapshot ? { ...snapshot, shouldRandomizeSeed: true } : null;
+    return snapshot ? { ...snapshot, seedMode: 'random' } : null;
   }
 
   if (!current) {
@@ -92,9 +92,9 @@ export const buildQueueRecallValues = (
   if (kind === 'seed') {
     // The session's seed is what actually ran (randomized submissions store a
     // placeholder in the snapshot), so it wins.
-    const seed = meta.seed ?? (snapshot && !snapshot.shouldRandomizeSeed ? snapshot.seed : undefined);
+    const seed = meta.seed ?? (snapshot && snapshot.seedMode !== 'random' ? snapshot.seed : undefined);
 
-    return seed === undefined ? null : { ...current, seed, shouldRandomizeSeed: false };
+    return seed === undefined ? null : { ...current, seed, seedMode: 'fixed' };
   }
 
   if (kind === 'dimensions') {
@@ -123,7 +123,7 @@ export const buildVideoQueueRecallPatch = (
       return null;
     }
     const values = cloneVideoWidgetValues(snapshot);
-    return kind === 'remix' ? { ...values, shouldRandomizeSeed: true } : values;
+    return kind === 'remix' ? { ...values, seedMode: 'random' } : values;
   }
   if (kind === 'prompts') {
     if (snapshot) {
@@ -154,8 +154,8 @@ export const buildVideoQueueRecallPatch = (
   }
 
   if (kind === 'seed') {
-    const seed = meta.seed ?? (snapshot && !snapshot.shouldRandomizeSeed ? snapshot.seed : undefined);
-    return seed === undefined ? null : { seed, shouldRandomizeSeed: false };
+    const seed = meta.seed ?? (snapshot && snapshot.seedMode !== 'random' ? snapshot.seed : undefined);
+    return seed === undefined ? null : { seed, seedMode: 'fixed' };
   }
 
   return null;

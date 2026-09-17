@@ -130,6 +130,15 @@ describe('flowAdapters identity preservation', () => {
     expect(second[1]).not.toBe(first[1]);
   });
 
+  it('keeps the measured size when a node is rebuilt after a document change', () => {
+    const doc = createDoc();
+    const first = toFlowNodes(doc).map((node) => ({ ...node, measured: { height: 120, width: 288 } }));
+    const movedNodeB = { ...doc.nodes[1]!, position: { x: 50, y: 50 } };
+    const second = toFlowNodes({ ...doc, nodes: [doc.nodes[0]!, movedNodeB] }, first as typeof first);
+
+    expect(second[1]?.measured).toEqual({ height: 120, width: 288 });
+  });
+
   it('recomputes a node when its incoming connections change', () => {
     const doc = createDoc();
     const first = toFlowNodes(doc);
@@ -163,7 +172,7 @@ describe('flowAdapters identity preservation', () => {
         elements: {
           ...doc.form.elements,
           'field-1': {
-            data: { fieldIdentifier: { fieldName: 'a', nodeId: 'b' }, showDescription: false },
+            data: { fieldIdentifier: { fieldName: 'a', nodeId: 'b' }, showDescription: false, showShuffle: false },
             id: 'field-1',
             parentId: doc.form.rootElementId,
             type: 'node-field' as const,

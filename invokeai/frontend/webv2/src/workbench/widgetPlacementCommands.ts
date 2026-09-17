@@ -8,6 +8,8 @@ import type {
 } from '@workbench/widgetContracts';
 
 import { flushWorkbenchDrafts } from '@platform/react/draftRegistry';
+import { registerAccountOwnedResource } from '@platform/state/accountLifecycle';
+import { createExternalStore } from '@platform/state/externalStore';
 
 import type { WidgetDragEndResolution } from './widgetDnd';
 import type { WidgetPlacementMeta } from './widgetRegionViewModel';
@@ -208,4 +210,94 @@ export const dispatchWidgetDragEndPlacement = ({
   }
 
   return { ok: true, region: resolution.toRegion };
+};
+
+const PREVIEW_TYPE_ID = 'preview';
+
+/** The center view each project showed before the preview was swapped in; session-lived. */
+const returnStore = createExternalStore<{ byProject: Record<string, WidgetInstanceId> }>({ byProject: {} });
+
+registerAccountOwnedResource({
+  clear: () => returnStore.setSnapshot({ byProject: {} }),
+  name: 'center-preview-toggle',
+});
+
+export interface CenterPreviewToggleState {
+  isPreviewActive: boolean;
+  previewInstanceId: WidgetInstanceId | null;
+  returnInstanceId: WidgetInstanceId | null;
+}
+
+export const getCenterPreviewToggleState = (project: WidgetPlacementProject): CenterPreviewToggleState => {
+  const center = project.widgetRegions.center;
+  const previewInstanceId =
+    center.instanceIds.find((id) => project.widgetInstances[id]?.typeId === PREVIEW_TYPE_ID) ?? null;
+  const isPreviewActive = previewInstanceId !== null && center.activeInstanceId === previewInstanceId;
+  const remembered = project.projectId ? returnStore.getSnapshot().byProject[project.projectId] : undefined;
+  const returnInstanceId =
+    remembered && remembered !== previewInstanceId && center.instanceIds.includes(remembered)
+      ? remembered
+      : (center.instanceIds.find((id) => id !== previewInstanceId) ?? null);
+
+  return { isPreviewActive, previewInstanceId, returnInstanceId };
+};
+
+const rememberReturnView = (project: WidgetPlacementProject): void => {
+  if (!project.projectId) {
+    return;
+  }
+
+  const { byProject } = returnStore.getSnapshot();
+
+  returnStore.setSnapshot({
+    byProject: { ...byProject, [project.projectId]: project.widgetRegions.center.activeInstanceId },
+  });
+};
+
+/**
+ * Swaps the preview into the center and back to the view it replaced. One preview instance can
+ * sit in the center and a rail at once, so a rail actively showing it moves to its neighbour first.
+ */
+export const toggleCenterPreview = ({
+  getWidgetsForRegion,
+  project,
+  widgets,
+}: {
+  getWidgetsForRegion: (region: WidgetRegion) => RegisteredWidget[];
+  project: WidgetPlacementProject;
+  widgets: WorkbenchWidgetCommands;
+}): boolean => {
+  const { isPreviewActive, previewInstanceId, returnInstanceId } = getCenterPreviewToggleState(project);
+
+  if (isPreviewActive) {
+    return (
+      returnInstanceId !== null &&
+      revealWidgetPlacement({ instanceId: returnInstanceId, project, region: 'center', widgets }).ok
+    );
+  }
+
+  rememberReturnView(project);
+
+  for (const [region, state] of Object.entries(project.widgetRegions) as [
+    WidgetRegion,
+    { activeInstanceId: string; instanceIds: string[] },
+  ][]) {
+    if (region === 'center' || state.activeInstanceId !== previewInstanceId) {
+      continue;
+    }
+
+    const neighbour = state.instanceIds.find((id) => id !== previewInstanceId);
+
+    if (neighbour) {
+      widgets.select({ projectId: project.projectId, region, widgetId: neighbour });
+    }
+  }
+
+  return openWidgetPlacement({
+    getWidgetsForRegion,
+    options: { preferredRegions: ['center'], requireCenterView: true },
+    projectId: project.projectId,
+    typeId: PREVIEW_TYPE_ID,
+    widgets,
+  }).ok;
 };

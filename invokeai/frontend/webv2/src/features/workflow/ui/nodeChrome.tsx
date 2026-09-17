@@ -5,7 +5,7 @@ import type { CSSProperties, ReactNode } from 'react';
 import { Box, Icon } from '@chakra-ui/react';
 import { getFieldTypeColor, isModelFieldType } from '@features/workflow/utility';
 import { Tooltip } from '@platform/ui';
-import { InfoIcon } from 'lucide-react';
+import { CircleAlertIcon, CircleCheckIcon, InfoIcon } from 'lucide-react';
 
 /**
  * The single source of the workflow-node visual language. Every surface that
@@ -32,28 +32,43 @@ export const WORKFLOW_NODE_DENSITY = {
   rowPaddingY: '0.5',
 } as const;
 
-export const getWorkflowNodeChromeProps = ({
-  invalid = false,
-  running = false,
-  selected,
-}: {
+/** How the node's last invocation ended, once it is no longer running. */
+export type WorkflowNodeOutcome = 'completed' | 'failed';
+
+export interface WorkflowNodeChromeState {
   invalid?: boolean;
+  outcome?: WorkflowNodeOutcome | null;
   running?: boolean;
   selected: boolean;
-}): BoxProps => ({
-  borderColor: invalid ? 'red.solid' : running ? 'brand.solid' : 'border.emphasized',
+}
+
+const getNodeBorderColor = ({ invalid, outcome, running }: WorkflowNodeChromeState): string => {
+  if (invalid) {
+    return 'red.solid';
+  }
+  if (running) {
+    return 'brand.solid';
+  }
+  if (outcome === 'completed') {
+    return 'fg.success';
+  }
+  if (outcome === 'failed') {
+    return 'border.error';
+  }
+
+  return 'border.emphasized';
+};
+
+export const getWorkflowNodeChromeProps = (state: WorkflowNodeChromeState): BoxProps => ({
+  borderColor: getNodeBorderColor(state),
   borderWidth: '1px',
-  shadow: selected ? NODE_SELECTED_RING : running ? NODE_RUNNING_RING : 'sm',
+  shadow: state.selected ? NODE_SELECTED_RING : state.running ? NODE_RUNNING_RING : 'sm',
   transition: 'border-color var(--wb-motion-duration-fast) ease, box-shadow var(--wb-motion-duration-fast) ease',
-  _hover: selected ? undefined : { shadow: NODE_HOVER_RING },
+  _hover: state.selected ? undefined : { shadow: NODE_HOVER_RING },
 });
 
 /** The node surface itself: chrome plus background, radius, and base type size. */
-export const getWorkflowNodeShellProps = (state: {
-  invalid?: boolean;
-  running?: boolean;
-  selected: boolean;
-}): BoxProps => ({
+export const getWorkflowNodeShellProps = (state: WorkflowNodeChromeState): BoxProps => ({
   bg: 'bg',
   fontSize: 'xs',
   rounded: 'lg',
@@ -155,3 +170,33 @@ export const WorkflowNodeInfoIcon = ({ content, label }: { content: ReactNode; l
     <Icon aria-label={label} as={InfoIcon} boxSize="3.5" color="fg.subtle" />
   </Tooltip>
 );
+
+/** Header mark for a node whose invocation finished; the failure tooltip carries the backend message. */
+export const WorkflowNodeOutcomeIcon = ({
+  error,
+  label,
+  outcome,
+}: {
+  error?: string | null;
+  label: string;
+  outcome: WorkflowNodeOutcome;
+}) => {
+  const icon = (
+    <Icon
+      aria-label={label}
+      as={outcome === 'completed' ? CircleCheckIcon : CircleAlertIcon}
+      boxSize="3.5"
+      color={outcome === 'completed' ? 'fg.success' : 'fg.error'}
+      flexShrink={0}
+      role="img"
+    />
+  );
+
+  return outcome === 'failed' ? (
+    <Tooltip content={error || label} positioning={INFO_TOOLTIP_POSITIONING} showArrow>
+      {icon}
+    </Tooltip>
+  ) : (
+    icon
+  );
+};

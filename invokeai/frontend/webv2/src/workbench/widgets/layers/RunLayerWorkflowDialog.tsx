@@ -32,6 +32,7 @@ import { useTranslation } from 'react-i18next';
 
 import { createLayerActionSession } from './layerActionSession';
 import {
+  reserveLayerWorkflowSeeds,
   runLayerWorkflow,
   type LayerWorkflowDestination,
   type LayerWorkflowFailureStage,
@@ -194,7 +195,7 @@ export const RunLayerWorkflowDialog = ({
 }: RunLayerWorkflowDialogProps) => {
   const { t } = useTranslation();
   const notify = useNotify();
-  const { canvas } = useWorkbenchCommands();
+  const { canvas, workflows } = useWorkbenchCommands();
   const queryClient = useQueryClient();
   const projectId = useActiveProjectSelector((project) => project.id);
   const [session] = useState(createLayerActionSession);
@@ -333,13 +334,26 @@ export const RunLayerWorkflowDialog = ({
       selection,
       session,
       t,
+      workflows,
     }),
-    [availability, canvas, close, engine, layerId, notify, projectId, queryClient, selection, session, t]
+    [availability, canvas, close, engine, layerId, notify, projectId, queryClient, selection, session, t, workflows]
   );
 
   const run = useCallback(async (): Promise<void> => {
-    const { availability, canvas, close, engine, layerId, notify, projectId, queryClient, selection, session, t } =
-      runContext;
+    const {
+      availability,
+      canvas,
+      close,
+      engine,
+      layerId,
+      notify,
+      projectId,
+      queryClient,
+      selection,
+      session,
+      t,
+      workflows,
+    } = runContext;
     const { input, output } = selection;
 
     if (!engine || !input || !output) {
@@ -361,6 +375,7 @@ export const RunLayerWorkflowDialog = ({
       const operations = getCanvasOperations(engine);
       const result = await runLayerWorkflow({
         deps: {
+          advanceSeeds: (advances) => workflows.editGraph({ advances, type: 'advanceSeedFields' }),
           appendStaging: (targetProjectId, candidate) =>
             canvas.appendStagingCandidate({ candidate, projectId: targetProjectId }),
           buildGraph: buildLayerWorkflowGraph,
@@ -370,6 +385,7 @@ export const RunLayerWorkflowDialog = ({
           getImage: galleryImages.resolve,
           isGuardCurrent: (guard) => engine.exports.isLayerExportGuardCurrent(guard),
           makeDurable: galleryDurability.makeCanvasAsset,
+          reserveSeeds: () => reserveLayerWorkflowSeeds(availability.document, availability.templatesSnapshot),
           runGraph: (options) => runUtilityGraph({ ...options, hub: socketHub }),
           saveToGallery: galleryDurability.save,
           touchGallery: () => {

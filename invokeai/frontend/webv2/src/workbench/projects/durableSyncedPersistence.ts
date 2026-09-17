@@ -2269,11 +2269,13 @@ export const createDurableSyncedWorkbenchPersistence = (
           pendingProjectIds.add(projects.at(-1)!.id);
           hasPending = true;
         }
-        const requestedActive = options?.openProjectId
-          ? options.openProjectId
-          : sessionBlob?.activeProjectId
-            ? (loadRetargets.get(sessionBlob.activeProjectId) ?? sessionBlob.activeProjectId)
-            : undefined;
+        const requestedActive = options?.createNew
+          ? projects.at(-1)!.id
+          : options?.openProjectId
+            ? options.openProjectId
+            : sessionBlob?.activeProjectId
+              ? (loadRetargets.get(sessionBlob.activeProjectId) ?? sessionBlob.activeProjectId)
+              : undefined;
         const activeProjectId = projects.some((project) => project.id === requestedActive)
           ? requestedActive!
           : projects[0]!.id;

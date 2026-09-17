@@ -203,7 +203,7 @@ const satisfiedSettingsFor = (base: SupportedGenerateBase, shape: ModelShape) =>
       ...getDefaultGenerateSettings(model),
       positivePrompt: 'a test prompt',
       seed: 1,
-      shouldRandomizeSeed: false,
+      seedMode: 'fixed',
     }),
   };
 };

@@ -2,8 +2,6 @@ import type { GalleryImageItem } from '@features/gallery/core/items';
 
 import { describe, expect, it } from 'vitest';
 
-import type { GalleryQueuePlaceholder } from './galleryStateView';
-
 import {
   buildGalleryGridNavigation,
   buildGalleryGridRows,
@@ -32,34 +30,18 @@ const createImageItem = (name: string, starred = false): GalleryImageItem => ({
   width: 512,
 });
 
-const createPlaceholder = (id: string): GalleryQueuePlaceholder => ({
-  backendItemId: null,
-  boardId: 'none',
-  height: 1024,
-  id,
-  itemIndex: 0,
-  queueItemId: `queue-${id}`,
-  width: 1024,
-});
-
 const buildRows = (overrides: Partial<Parameters<typeof buildGalleryGridRows>[0]> = {}) =>
   buildGalleryGridRows({
     columnCount: 2,
-    imageOrderDir: 'DESC',
     isStarredOpen: true,
     items: [],
-    pendingPlaceholders: [],
     starredItems: [],
     starredTotal: 0,
     ...overrides,
   });
 
 const cellNames = (rows: ReturnType<typeof buildRows>): string[][] =>
-  rows.flatMap((row) =>
-    row.kind === 'cells'
-      ? [row.cells.map((cell) => (cell.kind === 'item' ? cell.item.name : `placeholder:${cell.placeholder.id}`))]
-      : []
-  );
+  rows.flatMap((row) => (row.kind === 'cells' ? [row.cells.map((cell) => cell.item.name)] : []));
 
 describe('getGalleryColumnCountForCell', () => {
   it('rounds to the nearest whole cell and clamps to the caller bounds', () => {
@@ -198,30 +180,6 @@ describe('buildGalleryGridRows', () => {
       rows.filter((row) => row.kind === 'cells' && row.section === 'regular').map((row) => row.key);
 
     expect(regularKeys(buildRows({ ...input, isStarredOpen: false }))).toEqual(regularKeys(buildRows(input)));
-  });
-
-  it('gives every row a unique key across the header, strip, gap, placeholder, and listing rows', () => {
-    const starred = createImageItem('starred-1', true);
-    const rows = buildRows({
-      items: [createImageItem('regular-1'), createImageItem('regular-2')],
-      pendingPlaceholders: [createPlaceholder('slot-1')],
-      starredItems: [starred],
-      starredTotal: 1,
-    });
-    const keys = rows.map((row) => row.key);
-
-    expect(new Set(keys).size).toBe(keys.length);
-  });
-
-  it('slots placeholders ahead of regular items for newest-first ordering and after them otherwise', () => {
-    const items = [createImageItem('regular-1')];
-    const pendingPlaceholders = [createPlaceholder('slot-1')];
-
-    const newestFirst = buildRows({ items, pendingPlaceholders });
-    expect(newestFirst[0]?.kind === 'cells' && newestFirst[0].cells[0]?.kind).toBe('placeholder');
-
-    const oldestFirst = buildRows({ imageOrderDir: 'ASC', items, pendingPlaceholders });
-    expect(oldestFirst[0]?.kind === 'cells' && oldestFirst[0].cells[0]?.kind).toBe('item');
   });
 
   it('numbers cells continuously from the strip into the listing, matching the navigation list', () => {

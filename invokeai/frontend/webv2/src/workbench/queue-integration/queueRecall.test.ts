@@ -22,14 +22,14 @@ const makeValues = (overrides: Partial<GenerateWidgetValues> = {}): GenerateWidg
     negativePromptEnabled: false,
     positivePrompt: 'current prompt',
     seed: 1,
-    shouldRandomizeSeed: true,
+    seedMode: 'random',
     width: 1024,
     ...overrides,
   }) as GenerateWidgetValues;
 
 describe('getQueueRecallCapabilities', () => {
   it('grants everything for local snapshots', () => {
-    expect(getQueueRecallCapabilities(makeValues({ shouldRandomizeSeed: false }), {})).toEqual({
+    expect(getQueueRecallCapabilities(makeValues({ seedMode: 'fixed' }), {})).toEqual({
       all: true,
       clipSkip: true,
       dimensions: true,
@@ -51,7 +51,7 @@ describe('getQueueRecallCapabilities', () => {
   });
 
   it('withholds seed for randomized local submissions without session meta', () => {
-    expect(getQueueRecallCapabilities(makeValues({ shouldRandomizeSeed: true }), {}).seed).toBe(false);
+    expect(getQueueRecallCapabilities(makeValues({ seedMode: 'random' }), {}).seed).toBe(false);
   });
 });
 
@@ -59,12 +59,12 @@ describe('buildQueueRecallValues', () => {
   const current = makeValues();
 
   it('recalls all as the exact snapshot and remix with a randomized seed', () => {
-    const snapshot = makeValues({ positivePrompt: 'snap', shouldRandomizeSeed: false });
+    const snapshot = makeValues({ positivePrompt: 'snap', seedMode: 'fixed' });
 
     expect(buildQueueRecallValues('all', { current, meta: {}, snapshot })).toBe(snapshot);
     expect(buildQueueRecallValues('remix', { current, meta: {}, snapshot })).toEqual({
       ...snapshot,
-      shouldRandomizeSeed: true,
+      seedMode: 'random',
     });
   });
 
@@ -128,17 +128,17 @@ describe('buildQueueRecallValues', () => {
   });
 
   it('prefers the executed session seed and pins randomization off', () => {
-    const snapshot = makeValues({ seed: 7, shouldRandomizeSeed: false });
+    const snapshot = makeValues({ seed: 7, seedMode: 'fixed' });
 
     expect(buildQueueRecallValues('seed', { current, meta: { seed: 42 }, snapshot })).toEqual({
       ...current,
       seed: 42,
-      shouldRandomizeSeed: false,
+      seedMode: 'fixed',
     });
     expect(buildQueueRecallValues('seed', { current, meta: {}, snapshot })).toEqual({
       ...current,
       seed: 7,
-      shouldRandomizeSeed: false,
+      seedMode: 'fixed',
     });
     expect(buildQueueRecallValues('seed', { current, meta: {}, snapshot: null })).toBeNull();
   });
@@ -170,7 +170,7 @@ describe('buildVideoQueueRecallPatch', () => {
       ...createDefaultVideoWidgetValues(),
       positivePrompt: 'snapshot prompt',
       seed: 123,
-      shouldRandomizeSeed: false,
+      seedMode: 'fixed' as const,
     };
     expect(getVideoQueueRecallCapabilities(snapshot, {})).toEqual({
       all: true,
@@ -183,11 +183,11 @@ describe('buildVideoQueueRecallPatch', () => {
     expect(
       planQueueRecall('all', { current: null, isVideoItem: true, meta: {}, snapshot: null, videoSnapshot: snapshot })
     ).toEqual({ target: 'video', patch: snapshot });
-    expect(buildVideoQueueRecallPatch('remix', {}, snapshot)).toEqual({ ...snapshot, shouldRandomizeSeed: true });
-    expect(snapshot.shouldRandomizeSeed).toBe(false);
+    expect(buildVideoQueueRecallPatch('remix', {}, snapshot)).toEqual({ ...snapshot, seedMode: 'random' });
+    expect(snapshot.seedMode).toBe('fixed');
     expect(buildVideoQueueRecallPatch('seed', { seed: 456 }, snapshot)).toEqual({
       seed: 456,
-      shouldRandomizeSeed: false,
+      seedMode: 'fixed',
     });
   });
 
@@ -207,7 +207,7 @@ describe('buildVideoQueueRecallPatch', () => {
   });
 
   it('patches the executed seed and stops it being re-randomised', () => {
-    expect(buildVideoQueueRecallPatch('seed', { seed: 4321 })).toEqual({ seed: 4321, shouldRandomizeSeed: false });
+    expect(buildVideoQueueRecallPatch('seed', { seed: 4321 })).toEqual({ seed: 4321, seedMode: 'fixed' });
   });
 
   it('returns null when the meta carries nothing for the verb', () => {
@@ -237,7 +237,7 @@ describe('planQueueRecall', () => {
       target: 'video',
     });
     expect(planQueueRecall('seed', { current, isVideoItem: true, meta, snapshot: null })).toEqual({
-      patch: { seed: 4321, shouldRandomizeSeed: false },
+      patch: { seed: 4321, seedMode: 'fixed' },
       target: 'video',
     });
   });

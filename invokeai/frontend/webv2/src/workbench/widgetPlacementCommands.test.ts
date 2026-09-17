@@ -8,7 +8,14 @@ import type { WorkbenchAction } from './workbenchState.testing';
 import type { WorkbenchWidgetCommands } from './workbenchStore';
 
 import { createWidgetImplementationResource } from './widgetImplementationResource';
-import { closeWidgetPlacement, openWidgetPlacement, revealWidgetPlacement } from './widgetPlacementCommands';
+import {
+  closeWidgetPlacement,
+  getCenterPreviewToggleState,
+  openWidgetPlacement,
+  revealWidgetPlacement,
+  toggleCenterPreview,
+} from './widgetPlacementCommands';
+import { getWidgetPlacementProject } from './widgetPlacementMeta';
 import { createInitialWorkbenchState, workbenchReducer } from './workbenchState.testing';
 
 const TestIcon = () => null;
@@ -258,5 +265,67 @@ describe('widget placement commands', () => {
 
     expect(rightRegion.instanceIds).not.toContain('layers');
     expect(rightRegion.activeInstanceId).toBe('gallery');
+  });
+});
+
+const previewRegistry = createRegistry({ center: [createWidget({ id: 'preview', label: 'Preview' })] });
+
+const createPreviewToggleHarness = () => {
+  let state = workbenchReducer(createInitialWorkbenchState(), { presetId: 'automate', type: 'applyPreset' });
+  const dispatch = (action: WorkbenchAction): void => {
+    state = workbenchReducer(state, action);
+  };
+  const widgets = {
+    open: (options) => dispatch({ ...options, type: 'openRegionWidget' }),
+    select: (options) => dispatch({ ...options, type: 'selectRegionWidget' }),
+  } as WorkbenchWidgetCommands;
+  const toggle = () =>
+    toggleCenterPreview({
+      getWidgetsForRegion: previewRegistry,
+      project: getWidgetPlacementProject(getActiveProject(state)),
+      widgets,
+    });
+
+  return { getRegions: () => getActiveProject(state).widgetRegions, select: widgets.select, toggle };
+};
+
+describe('toggleCenterPreview', () => {
+  it('swaps the preview into the center and back to the view it replaced', () => {
+    const { getRegions, toggle } = createPreviewToggleHarness();
+
+    expect(getRegions().center.activeInstanceId).toBe('workflow:center');
+    expect(toggle()).toBe(true);
+    expect(getRegions().center.activeInstanceId).toBe('preview');
+    expect(toggle()).toBe(true);
+    expect(getRegions().center.activeInstanceId).toBe('workflow:center');
+  });
+
+  it('moves a rail actively showing the same preview instance to its neighbour first', () => {
+    const { getRegions, select, toggle } = createPreviewToggleHarness();
+
+    select({ region: 'right', widgetId: 'preview' });
+    expect(getRegions().right.activeInstanceId).toBe('preview');
+
+    toggle();
+
+    expect(getRegions().center.activeInstanceId).toBe('preview');
+    expect(getRegions().right.activeInstanceId).toBe('queue');
+  });
+
+  it('falls back to another center view when nothing was remembered', () => {
+    const { getRegions } = createPreviewToggleHarness();
+    const project = {
+      projectId: 'other-project',
+      widgetInstances: {
+        canvas: { id: 'canvas', typeId: 'canvas' },
+        preview: { id: 'preview', typeId: 'preview' },
+      },
+      widgetRegions: {
+        ...getRegions(),
+        center: { activeInstanceId: 'preview', instanceIds: ['canvas', 'preview'] },
+      },
+    };
+
+    expect(getCenterPreviewToggleState(project)).toMatchObject({ isPreviewActive: true, returnInstanceId: 'canvas' });
   });
 });

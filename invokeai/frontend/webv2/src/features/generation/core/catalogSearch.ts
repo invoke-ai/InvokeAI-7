@@ -46,7 +46,8 @@ export const searchCatalog = <T extends { name: string }>(
     return [...items];
   }
 
-  const nameMatches = fuzzysort.go(trimmed, items, { key: 'name', threshold: NAME_MATCH_THRESHOLD });
+  // fuzzysort 4 caps results at 10 unless told otherwise; 0 lifts the cap.
+  const nameMatches = fuzzysort.go(trimmed, items, { key: 'name', limit: 0, threshold: NAME_MATCH_THRESHOLD });
   const named = new Set<T>();
   const results: T[] = [];
 

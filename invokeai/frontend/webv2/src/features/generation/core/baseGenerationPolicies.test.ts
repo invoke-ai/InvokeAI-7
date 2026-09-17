@@ -46,7 +46,7 @@ const createModel = (base: string, overrides: Partial<MainModelConfig> = {}): Ma
 const createSettings = (model: GenerateModelConfig, overrides: Partial<GenerateSettings> = {}): GenerateSettings => ({
   ...getDefaultGenerateSettings(model),
   seed: 1,
-  shouldRandomizeSeed: false,
+  seedMode: 'fixed',
   ...overrides,
 });
 
@@ -612,7 +612,7 @@ describe('component policies', () => {
       negativePrompt: 'blurry',
       positivePrompt: 'a lighthouse',
       seed: 1234,
-      shouldRandomizeSeed: false,
+      seedMode: 'fixed',
       vae: sdxlVae,
     });
 
@@ -624,7 +624,7 @@ describe('component policies', () => {
       negativePrompt: 'blurry',
       positivePrompt: 'a lighthouse',
       seed: 1234,
-      shouldRandomizeSeed: false,
+      seedMode: 'fixed',
       vae: sdxlVae,
     });
     expect(result.clearedLabels).toEqual([]);

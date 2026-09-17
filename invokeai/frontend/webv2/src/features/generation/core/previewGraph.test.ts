@@ -35,7 +35,7 @@ const storedValues = createGenerateValues({
   height: 1024,
   loras: [loraA, loraB],
   seed: 123,
-  shouldRandomizeSeed: true,
+  seedMode: 'random',
   steps: 28,
   width: 1024,
 });

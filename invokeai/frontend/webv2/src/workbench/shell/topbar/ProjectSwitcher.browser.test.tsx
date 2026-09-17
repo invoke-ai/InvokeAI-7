@@ -1,9 +1,8 @@
-import type * as chakraUiModule from '@chakra-ui/react';
 import type { Project } from '@workbench/projectContracts';
 
 import { ChakraProvider } from '@chakra-ui/react';
 import { system } from '@theme/system';
-import { act, type ReactNode } from 'react';
+import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { userEvent } from 'vitest/browser';
@@ -47,35 +46,6 @@ const harness = vi.hoisted(() => {
   };
 });
 
-vi.mock('@chakra-ui/react', async (importOriginal) => {
-  const actual = await importOriginal<typeof chakraUiModule>();
-  const Container = ({ children }: { children?: ReactNode }): ReactNode => children ?? null;
-  const Item = ({ children, onClick }: { children?: ReactNode; onClick?: () => void }) => (
-    <button role="menuitem" onClick={onClick}>
-      {children}
-    </button>
-  );
-
-  return {
-    ...actual,
-    Menu: {
-      ...actual.Menu,
-      Item,
-      ItemGroup: Container,
-      ItemGroupLabel: Container,
-      ItemIndicator: Container,
-      ItemText: Container,
-      Positioner: Container,
-      RadioItem: Item,
-      RadioItemGroup: Container,
-      Root: Container,
-      Separator: () => null,
-      Trigger: Container,
-    },
-    Portal: Container,
-  };
-});
-
 vi.mock('@features/generation/react', () => ({ flushGenerateDrafts: harness.flushGenerateDrafts }));
 vi.mock('@features/models', () => ({ useModelLoads: () => [] }));
 vi.mock('@features/queue/contracts', () => ({
@@ -83,10 +53,6 @@ vi.mock('@features/queue/contracts', () => ({
 }));
 vi.mock('@features/queue/react', () => ({ useQueueItemProgress: () => null }));
 vi.mock('@platform/ui/ConfirmDialog', () => ({ ConfirmDialog: () => null }));
-vi.mock('@platform/ui/Menu', () => ({
-  MenuContent: ({ children }: { children?: ReactNode }): ReactNode => children ?? null,
-}));
-vi.mock('@platform/ui/RenameDialog', () => ({ RenameDialog: () => null }));
 vi.mock('@workbench/components/QueueProgressIndicator', () => ({ QueueCircularProgress: () => null }));
 vi.mock('@workbench/launchpad/formatRelativeTime', () => ({ formatRelativeTime: () => '' }));
 vi.mock('@workbench/projects/components', () => ({ OpenProjectDialog: () => null }));
@@ -154,7 +120,32 @@ afterEach(async () => {
   root = null;
 });
 
-describe('ProjectSwitcher export', () => {
+describe('ProjectSwitcher', () => {
+  it('keeps the rename dialog open after selecting Rename', async () => {
+    let renameItem: HTMLElement | undefined;
+    await vi.waitFor(() => {
+      renameItem = document.querySelector<HTMLElement>('[role="menuitem"][data-value="rename-project"]') ?? undefined;
+      expect(renameItem).toBeDefined();
+    });
+    await act(() => userEvent.click(renameItem!));
+    await vi.waitFor(() => {
+      expect(document.querySelector('[role="dialog"][data-state="open"]')).not.toBeNull();
+      expect(document.querySelector<HTMLInputElement>('input[name="renameValue"]')?.value).toBe('Prompt project');
+    });
+    await act(() => userEvent.keyboard('{Escape}'));
+    await vi.waitFor(() => {
+      expect(document.activeElement).toBe(
+        document.querySelector('button[aria-label="topbar.projectSwitcher.trigger"]')
+      );
+    });
+    await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
+    await act(() => userEvent.keyboard('{Enter}'));
+    await vi.waitFor(() => expect(document.querySelector('[role="menu"][data-state="open"]')).not.toBeNull());
+    await act(() => document.querySelector<HTMLElement>('[role="menuitem"][data-value="rename-project"]')?.focus());
+    await act(() => userEvent.keyboard('{Enter}'));
+    await vi.waitFor(() => expect(document.querySelector('[role="dialog"][data-state="open"]')).not.toBeNull());
+  });
+
   it('flushes an immediate debounced prompt edit before reading and exporting the project', async () => {
     let exportItem: HTMLElement | undefined;
 

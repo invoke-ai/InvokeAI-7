@@ -87,7 +87,7 @@ const createRequest = (overrides: Partial<QueueEnqueueGenerateRequest> = {}): Qu
   projectId: 'project-1',
   seed: 10,
   seedNodeId: 'seed',
-  shouldRandomizeSeed: false,
+  seedStep: 0,
   sourceQueueItemId: 'local-1',
   ...overrides,
 });
@@ -128,10 +128,10 @@ describe('enqueueGenerate', () => {
     });
   });
 
-  it('keeps a fixed seed for every run when randomization is disabled', async () => {
+  it('keeps a held seed for every run', async () => {
     const { enqueueGenerate } = await import('./submissionApi');
 
-    await enqueueGenerate(createRequest({ shouldRandomizeSeed: false }));
+    await enqueueGenerate(createRequest({ seedStep: 0 }));
 
     const body = getSubmittedBody();
 
@@ -143,10 +143,10 @@ describe('enqueueGenerate', () => {
     ]);
   });
 
-  it('expands seeds per batch item only when randomization is enabled', async () => {
+  it('expands seeds per batch item when the seed steps', async () => {
     const { enqueueGenerate } = await import('./submissionApi');
 
-    await enqueueGenerate(createRequest({ shouldRandomizeSeed: true }));
+    await enqueueGenerate(createRequest({ seedStep: 1 }));
 
     const body = getSubmittedBody();
 
@@ -182,7 +182,7 @@ describe('enqueueGenerate', () => {
           positivePrompt: 'a {red|green} cat',
           positivePrompts: ['a red cat', 'a green cat'],
           seedBehaviour: 'per-iteration',
-          shouldRandomizeSeed: true,
+          seedStep: 1,
         })
       );
 
@@ -206,7 +206,7 @@ describe('enqueueGenerate', () => {
       expect(getSubmittedBody().batch.data[0][1].items).toEqual(['a red cat']);
     });
 
-    it('gives every image its own seed under per-image behaviour', async () => {
+    it('gives every image its own seed under per-image behaviour while the seed steps', async () => {
       const { enqueueGenerate } = await import('./submissionApi');
 
       await enqueueGenerate(
@@ -214,6 +214,7 @@ describe('enqueueGenerate', () => {
           batchCount: 2,
           positivePrompts: ['a red cat', 'a green cat'],
           seedBehaviour: 'per-image',
+          seedStep: 1,
         })
       );
 
@@ -230,6 +231,65 @@ describe('enqueueGenerate', () => {
 
       expect(getSubmittedBody().batch.data[0][1].items).toEqual(['a fjord at dawn']);
     });
+  });
+});
+
+describe('enqueueGenerate legacy replays', () => {
+  beforeEach(() => {
+    mocks.apiFetchJson.mockReset();
+    mocks.apiFetchJson.mockResolvedValue({
+      batch: { batch_id: 'batch-1' },
+      enqueued: 1,
+      item_ids: [1],
+      requested: 1,
+    });
+  });
+
+  it('replays a pinned two-prompt per-image batch with the seeds that version stepped', async () => {
+    const { enqueueGenerate } = await import('./submissionApi');
+
+    await enqueueGenerate(
+      createRequest({
+        batchCount: 2,
+        legacySeedPlan: true,
+        positivePrompts: ['a', 'b'],
+        seed: 42,
+        seedBehaviour: 'per-image',
+        seedStep: 0,
+      })
+    );
+
+    // Before seed modes, sharing disabled always stepped, toggle or not: one zipped group
+    // with a seed per image and the prompt list repeated per iteration.
+    expect(getSubmittedBody().batch.data).toEqual([
+      [
+        { field_name: 'value', items: [42, 43, 44, 45], node_path: 'seed' },
+        { field_name: 'value', items: ['a', 'b', 'a', 'b'], node_path: 'positive_prompt' },
+        {
+          field_name: 'value',
+          items: ['low quality', 'low quality', 'low quality', 'low quality'],
+          node_path: 'negative_prompt',
+        },
+      ],
+    ]);
+    expect(getSubmittedBody().batch.runs).toBe(1);
+  });
+
+  it('wraps a legacy sequence one short of the range, as that version did', async () => {
+    const { enqueueGenerate } = await import('./submissionApi');
+
+    await enqueueGenerate(createRequest({ batchCount: 2, legacySeedPlan: true, seed: 4_294_967_294, seedStep: 1 }));
+
+    expect(getSubmittedBody().batch.data[0]?.[0]?.items).toEqual([4_294_967_294, 0]);
+  });
+
+  it('holds a pinned single-prompt batch across its runs', async () => {
+    const { enqueueGenerate } = await import('./submissionApi');
+
+    await enqueueGenerate(createRequest({ batchCount: 3, legacySeedPlan: true, seed: 42, seedStep: 0 }));
+
+    expect(getSubmittedBody().batch.data[0]?.[0]?.items).toEqual([42]);
+    expect(getSubmittedBody().batch.runs).toBe(3);
   });
 });
 
@@ -275,6 +335,35 @@ describe('enqueueWorkflow', () => {
     expect(getSubmittedBody().batch.runs).toBe(2);
     expect(getSubmittedBody().batch.idempotency_key).toBe('webv2:project-1:local-1');
     expect(getSubmittedBody().batch.batch_id).toBeUndefined();
+  });
+
+  it('expands recorded seeds into one zipped group and never redraws them', async () => {
+    const { enqueueWorkflow } = await import('./submissionApi');
+    const seeds = [
+      { fieldName: 'seed', nodeId: 'noise-a', seed: 1, seedStep: 1 as const },
+      { fieldName: 'seed', nodeId: 'noise-b', seed: 4_294_967_295, seedStep: -1 as const },
+    ];
+
+    await enqueueWorkflow(createWorkflowRequest({ batchCount: 3, seeds }));
+
+    expect(getSubmittedBody().batch).toMatchObject({
+      data: [
+        [
+          { field_name: 'seed', items: [1, 2, 3], node_path: 'noise-a' },
+          { field_name: 'seed', items: [4_294_967_295, 4_294_967_294, 4_294_967_293], node_path: 'noise-b' },
+        ],
+      ],
+      runs: 1,
+    });
+
+    // A single run already carries its seed in the graph; a seedless batch repeats the graph.
+    for (const request of [createWorkflowRequest({ batchCount: 1, seeds }), createWorkflowRequest({ batchCount: 2 })]) {
+      mocks.apiFetchJson.mockClear();
+      await enqueueWorkflow(request);
+
+      expect(getSubmittedBody().batch).not.toHaveProperty('data');
+      expect(getSubmittedBody().batch.runs).toBe(request.batchCount);
+    }
   });
 
   it('does not cap workflow runs', async () => {

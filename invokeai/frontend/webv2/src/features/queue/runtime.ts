@@ -10,7 +10,12 @@ import type {
 import type { BackendConnectionStatus } from '@platform/transport/types';
 
 import { collectGraphInputMediaNames } from '@features/queue/core/graphInputMedia';
-import { isQueuePromptSeedBehaviour, MAX_QUEUE_BATCH_ITEMS } from '@features/queue/core/promptBatch';
+import {
+  isQueuePromptSeedBehaviour,
+  isQueueSeedStep,
+  isQueueWorkflowSeed,
+  MAX_QUEUE_BATCH_ITEMS,
+} from '@features/queue/core/promptBatch';
 import { shouldSubmitPendingQueueItem } from '@features/queue/core/submissionRules';
 import { progressImageStore } from '@features/queue/data/progressImageStore';
 import {
@@ -118,6 +123,39 @@ const getQueueItemCompiledGraph = (queueItem: QueueItem): unknown => {
   return submission && typeof submission === 'object' && 'graph' in submission ? submission.graph : undefined;
 };
 
+/**
+ * Items queued before seed modes recorded the random toggle instead of a step;
+ * the mapped step plus `legacySeedPlan` lets the send path expand them with that
+ * version's rules, so recovery replays the seeds exactly as they were planned.
+ */
+const readSubmissionSeedStep = (submission: { seedStep?: unknown; shouldRandomizeSeed?: unknown }) =>
+  isQueueSeedStep(submission.seedStep)
+    ? submission.seedStep
+    : typeof submission.shouldRandomizeSeed === 'boolean'
+      ? submission.shouldRandomizeSeed
+        ? 1
+        : 0
+      : null;
+
+/** Every recorded seed must name a distinct field on a node the graph still has, in the seed range, stepping ±1. */
+const areQueueWorkflowSeedsValid = (seeds: unknown, graph: { nodes?: Record<string, unknown> }): boolean => {
+  if (!Array.isArray(seeds)) {
+    return false;
+  }
+
+  const targets = new Set<string>();
+
+  return seeds.every((seed) => {
+    if (!isQueueWorkflowSeed(seed) || !graph.nodes || !(seed.nodeId in graph.nodes)) {
+      return false;
+    }
+
+    const target = `${seed.nodeId}:${seed.fieldName}`;
+
+    return targets.has(target) ? false : (targets.add(target), true);
+  });
+};
+
 export const createQueueItemBackendSubmission = (
   project: Pick<QueueHistoryProject, 'id'>,
   queueItem: QueueItem
@@ -153,6 +191,8 @@ export const createQueueItemBackendSubmission = (
   }
 
   if (submission.kind === 'generate') {
+    const seedStep = readSubmissionSeedStep(submission);
+
     if (
       typeof submission.negativePrompt !== 'string' ||
       typeof submission.negativePromptNodeId !== 'string' ||
@@ -161,7 +201,7 @@ export const createQueueItemBackendSubmission = (
       typeof submission.seed !== 'number' ||
       !Number.isFinite(submission.seed) ||
       typeof submission.seedNodeId !== 'string' ||
-      typeof submission.shouldRandomizeSeed !== 'boolean' ||
+      seedStep === null ||
       (submission.positivePrompts !== undefined &&
         (!Array.isArray(submission.positivePrompts) ||
           submission.positivePrompts.some((prompt) => typeof prompt !== 'string'))) ||
@@ -169,16 +209,26 @@ export const createQueueItemBackendSubmission = (
     ) {
       return { error: 'Queue item has malformed generate submission metadata.', kind: 'invalid' };
     }
-    const { kind: _, ...compiled } = submission;
+    const {
+      kind: _,
+      shouldRandomizeSeed: _legacyToggle,
+      ...compiled
+    } = submission as typeof submission & { shouldRandomizeSeed?: unknown };
     return {
       kind: 'generate',
       request: {
         ...compiled,
         destination: queueItem.snapshot.destination,
+        ...(isQueueSeedStep(submission.seedStep) ? {} : { legacySeedPlan: true as const }),
         projectId: project.id,
+        seedStep,
         sourceQueueItemId: queueItem.id,
       },
     };
+  }
+
+  if (submission.seeds !== undefined && !areQueueWorkflowSeedsValid(submission.seeds, submission.graph)) {
+    return { error: 'Queue item has malformed workflow seed metadata.', kind: 'invalid' };
   }
 
   // `libraryWorkflowId` is provenance for the completed-run sink, not something
@@ -728,14 +778,16 @@ export const createQueueRuntime = ({
       scheduleResultReadFlush();
     });
 
-  const addImagesToDestination = async (queueItem: QueueItem, imageNames: string[]): Promise<void> => {
+  // An image a node saved to its own board stays there; only unassigned images land on the active board.
+  const addImagesToDestination = async (queueItem: QueueItem, images: QueueResultImage[]): Promise<void> => {
     if (!isActive() || queueItem.snapshot.destination !== 'gallery') {
       return;
     }
 
     const boardId = queueItem.snapshot.galleryBoardId;
+    const imageNames = images.filter((image) => !image.boardId).map((image) => image.imageName);
 
-    if (boardId && boardId !== 'none') {
+    if (boardId && boardId !== 'none' && imageNames.length > 0) {
       await destinations.addImagesToGalleryBoard(boardId, imageNames);
     }
   };
@@ -824,10 +876,7 @@ export const createQueueRuntime = ({
       ? producedImages.filter((image) => !image.isIntermediate)
       : producedImages;
 
-    await addImagesToDestination(
-      queueItem,
-      images.map((image) => image.imageName)
-    );
+    await addImagesToDestination(queueItem, images);
 
     return images;
   };

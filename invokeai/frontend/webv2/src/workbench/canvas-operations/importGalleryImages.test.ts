@@ -129,7 +129,7 @@ const setModel = (project: Project, base: GenerateWidgetValues['model']['base'])
     seamlessXAxis: false,
     seamlessYAxis: false,
     seed: 1,
-    shouldRandomizeSeed: true,
+    seedMode: 'random',
     steps: 30,
     t5EncoderModel: null,
     vae: null,

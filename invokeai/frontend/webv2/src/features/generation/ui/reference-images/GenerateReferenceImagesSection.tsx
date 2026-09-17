@@ -339,6 +339,7 @@ export const GenerateReferenceImagesContent = ({
               index={index}
               referenceImage={referenceImage}
               selectedModel={selectedModel}
+              onFindInGallery={gallery.findImage}
               onMove={handleMoveReferenceImage}
               onPatch={patchReferenceImage}
               onRemove={removeReferenceImage}

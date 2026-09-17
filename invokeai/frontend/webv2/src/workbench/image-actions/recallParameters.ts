@@ -283,9 +283,9 @@ export const buildRecallParametersSettings = ({
     'seed',
     () => {
       const seed = getSeed(parameters);
-      return seed === null ? null : { seed, shouldRandomizeSeed: false };
+      return seed === null ? null : { seed, seedMode: 'fixed' };
     },
-    () => ({ shouldRandomizeSeed: true })
+    () => ({ seedMode: 'random' })
   );
   applyField(
     'steps',

@@ -231,9 +231,9 @@ describe('getVideoWidgetValidationReasons', () => {
 
 describe('resolveVideoSeed', () => {
   it('keeps a fixed seed and randomizes otherwise', () => {
-    expect(resolveVideoSeed({ seed: 42, shouldRandomizeSeed: false })).toBe(42);
+    expect(resolveVideoSeed({ seed: 42, seedMode: 'fixed' })).toBe(42);
 
-    const randomized = resolveVideoSeed({ seed: 42, shouldRandomizeSeed: true });
+    const randomized = resolveVideoSeed({ seed: 42, seedMode: 'random' });
 
     expect(Number.isInteger(randomized)).toBe(true);
     expect(randomized).toBeGreaterThanOrEqual(0);

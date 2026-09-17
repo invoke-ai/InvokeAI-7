@@ -820,7 +820,7 @@ try {
     await writeFile(artifactPath, `${JSON.stringify(report, null, 2)}\n`);
     process.stdout.write(
       reference
-        ? `Resource budgets: delta against ${referenceName} captured ${reference.capturedAt}.\n`
+        ? `Resource budgets: byte allowance over the higher of ${referenceName} captured ${reference.capturedAt} and committed measurements, bounded by the committed hard ceiling; request counts use the lower measurement.\n`
         : referenceReason
           ? `Resource budgets: against committed baseline captured ${baseline.capturedAt}; ${referenceName} was recorded with ${referenceReason} and cannot be applied.\n`
           : `Resource budgets: against committed baseline captured ${baseline.capturedAt}.\n`

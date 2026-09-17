@@ -1,14 +1,18 @@
+import { isSeedMode, planSeedSubmission, SEED_MAX, type SeedMode, wrapSeed } from '@platform/core/seed';
+
 import type { CompiledWorkflowGraph, WorkflowBackendGraph } from './graphContracts';
 import type {
   FieldInputTemplate,
   InvocationTemplates,
   InvocationTemplatesSnapshot,
   ProjectGraphState,
+  WorkflowFieldInstance,
   WorkflowInvocationNode,
+  WorkflowSeedFieldAdvance,
 } from './types';
 
 import { createWorkflowId } from './document';
-import { getWorkflowFieldInvalidReason } from './fields';
+import { getWorkflowFieldInvalidReason, isDirectInputField } from './fields';
 import {
   createForLoopValidationReason,
   ForLoopGraphValidationError,
@@ -43,8 +47,10 @@ export const isExecutableInvocationType = (type: string): boolean => !UNSUPPORTE
 const getExecutableNodes = (document: ProjectGraphState): WorkflowInvocationNode[] =>
   document.nodes.filter(isInvocationNode);
 
+const isMissingValue = (value: unknown): boolean => value === undefined || value === null;
+
 const isEmptyValue = (value: unknown): boolean =>
-  value === undefined || value === null || (typeof value === 'string' && value.trim() === '');
+  isMissingValue(value) || (typeof value === 'string' && value.trim() === '');
 
 const getNodeDisplayName = (node: WorkflowInvocationNode, templates: InvocationTemplates): string =>
   node.data.label || templates[node.data.type]?.title || node.data.type;
@@ -132,7 +138,7 @@ export const getProjectGraphReadiness = (
         value: node.data.inputs[inputTemplate.name]?.value,
       });
 
-      if (inputTemplate.required && isEmptyValue(node.data.inputs[inputTemplate.name]?.value)) {
+      if (inputTemplate.required && isMissingValue(node.data.inputs[inputTemplate.name]?.value)) {
         reasons.push(`"${getNodeDisplayName(node, templates)}" is missing required input "${inputTemplate.title}".`);
       } else if (invalidReason) {
         reasons.push(`"${getNodeDisplayName(node, templates)}" has invalid input "${inputTemplate.title}".`);
@@ -265,5 +271,168 @@ export const compileProjectGraph = (
     })),
     updatedAt: new Date().toISOString(),
     version: 1,
+  };
+};
+
+/**
+ * The inputs that carry a seed mode: the scalar integer a node declares as `seed`
+ * over the full seed range. Read from the template alone, so an editable label
+ * cannot turn an ordinary integer into a seed, and a provider's own-range `seed`
+ * keeps its plain control instead of wrapping at a bound it never had.
+ *
+ * Seed policy lives here rather than in `fields.ts` because it is the one place
+ * the workflow core depends on the platform seed arithmetic at runtime: the
+ * shared field/document helpers stay in the lighter utility chunk every overlay loads.
+ */
+export const isSeedInputField = (template: FieldInputTemplate): boolean =>
+  template.name === 'seed' &&
+  template.type.name === 'IntegerField' &&
+  template.type.cardinality === 'SINGLE' &&
+  // The modes walk and wrap over 0…SEED_MAX in steps of one, so the template has to
+  // accept every value on that walk; a tighter range or step keeps its plain control.
+  template.maximum === SEED_MAX &&
+  (template.minimum === null || template.minimum <= 0) &&
+  template.exclusiveMinimum === null &&
+  template.exclusiveMaximum === null &&
+  (template.multipleOf === null || template.multipleOf === 1) &&
+  isDirectInputField(template);
+
+export const getWorkflowFieldSeedMode = (instance: Pick<WorkflowFieldInstance, 'seedMode'> | undefined): SeedMode =>
+  isSeedMode(instance?.seedMode) ? instance.seedMode : 'fixed';
+
+/** One seed input that varies between runs: the seed the first run uses and the direction of the rest. */
+export interface WorkflowSeedAssignment {
+  fieldName: string;
+  nodeId: string;
+  seed: number;
+  seedStep: -1 | 1;
+}
+
+export interface WorkflowSeedPlan {
+  /** Every unconnected seed input in a varying mode, with its first seed; fixed inputs are absent. */
+  seeds: WorkflowSeedAssignment[];
+  /** Stepping-mode fields to move once the submission is reserved. */
+  seedAdvances: WorkflowSeedFieldAdvance[];
+}
+
+/**
+ * Decides every seed input's start for a submission of `batchCount` runs. Seeds
+ * vary per queued run, not per iteration of a loop inside a run. A random input
+ * draws its start here and the runs step consecutively from it, like Generate's
+ * random mode, while the entered seed stays in reserve; a stepping input counts
+ * from the authored seed and reports where the field goes afterwards. Expansion
+ * into per-run values happens at send time from these starts, never redrawing.
+ */
+export const planWorkflowSeeds = (
+  document: ProjectGraphState,
+  templates: InvocationTemplates,
+  batchCount: number
+): WorkflowSeedPlan => {
+  const connectedInputs = new Set(
+    getCanonicalWorkflowEdges(document).map((edge) => `${edge.destination.node_id}:${edge.destination.field}`)
+  );
+  const seeds: WorkflowSeedAssignment[] = [];
+  const seedAdvances: WorkflowSeedFieldAdvance[] = [];
+
+  for (const node of getExecutableNodes(document)) {
+    const template = templates[node.data.type];
+
+    if (!template) {
+      continue;
+    }
+
+    for (const inputTemplate of Object.values(template.inputs)) {
+      if (!isSeedInputField(inputTemplate) || connectedInputs.has(`${node.id}:${inputTemplate.name}`)) {
+        continue;
+      }
+
+      const instance = node.data.inputs[inputTemplate.name];
+      const seedMode = getWorkflowFieldSeedMode(instance);
+
+      if (seedMode === 'fixed') {
+        continue;
+      }
+
+      const authoredSeed =
+        typeof instance?.value === 'number'
+          ? instance.value
+          : typeof inputTemplate.default === 'number'
+            ? inputTemplate.default
+            : 0;
+      const startSeed = seedMode === 'random' ? Math.floor(Math.random() * SEED_MAX) : wrapSeed(authoredSeed);
+      const plan = planSeedSubmission({
+        batchCount,
+        promptCount: 1,
+        seedBehaviour: 'per-iteration',
+        seedMode,
+        startSeed,
+      });
+
+      seeds.push({
+        fieldName: inputTemplate.name,
+        nodeId: node.id,
+        seed: startSeed,
+        seedStep: seedMode === 'decrement' ? -1 : 1,
+      });
+
+      if (plan.nextSeed !== null) {
+        seedAdvances.push({
+          fieldName: inputTemplate.name,
+          ...(typeof instance?.value === 'number' ? { fromSeed: instance.value } : {}),
+          nodeId: node.id,
+          seedMode,
+          toSeed: plan.nextSeed,
+        });
+      }
+    }
+  }
+
+  return { seedAdvances, seeds };
+};
+
+/** Writes each planned first seed into the compiled graph, so a single run needs no batch data. */
+export const applyWorkflowSeeds = (
+  graph: CompiledWorkflowGraph,
+  seeds: readonly WorkflowSeedAssignment[]
+): CompiledWorkflowGraph => {
+  for (const { fieldName, nodeId, seed } of seeds) {
+    const backendNode = graph.backendGraph.nodes[nodeId];
+    const node = graph.nodes.find((candidate) => candidate.id === nodeId);
+
+    if (backendNode) {
+      backendNode[fieldName] = seed;
+    }
+
+    if (node) {
+      node.inputs[fieldName] = seed;
+    }
+  }
+
+  return graph;
+};
+
+export interface WorkflowSubmissionPlan extends WorkflowSeedPlan {
+  /** Runs the submission produces. */
+  batchCount: number;
+  graph: CompiledWorkflowGraph;
+}
+
+export interface WorkflowSubmissionPlanOptions {
+  /** Runs per submission; already sanitized to a positive integer by the caller. */
+  batchCount: number;
+}
+
+/** Compiles the document with every planned first seed in place and reports the seeds that vary. */
+export const planWorkflowSubmission = (
+  document: ProjectGraphState,
+  templates: InvocationTemplates,
+  { batchCount }: WorkflowSubmissionPlanOptions
+): WorkflowSubmissionPlan => {
+  const seedPlan = planWorkflowSeeds(document, templates, batchCount);
+
+  return {
+    ...seedPlan,
+    batchCount,
+    graph: applyWorkflowSeeds(compileProjectGraph(document, templates), seedPlan.seeds),
   };
 };

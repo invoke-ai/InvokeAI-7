@@ -40,3 +40,57 @@ export const getOutputFieldRows = (fieldNames: OutputFieldNamesByScope): OutputF
 
   return rows;
 };
+
+const OUTPUT_VALUE_MAX_LENGTH = 40;
+const NAMED_OBJECT_KEYS = ['image_name', 'video_name', 'latents_name', 'tensor_name', 'name', 'key', 'board_id'];
+
+/** Compact label for one output field's runtime value; `null` when the result carries no such field. */
+export const formatOutputFieldValue = (result: unknown, fieldName: string): { full: string; short: string } | null => {
+  if (typeof result !== 'object' || result === null || !(fieldName in result)) {
+    return null;
+  }
+
+  const value = (result as Record<string, unknown>)[fieldName];
+  const full = formatOutputValue(value);
+
+  return {
+    full,
+    short: full.length > OUTPUT_VALUE_MAX_LENGTH ? `${full.slice(0, OUTPUT_VALUE_MAX_LENGTH - 1)}…` : full,
+  };
+};
+
+const formatOutputValue = (value: unknown): string => {
+  if (value === null || value === undefined) {
+    return '—';
+  }
+
+  if (typeof value === 'number') {
+    return Number.isInteger(value) ? String(value) : String(Number(value.toFixed(4)));
+  }
+
+  if (typeof value === 'string' || typeof value === 'boolean') {
+    return String(value);
+  }
+
+  if (Array.isArray(value)) {
+    return `${value.length} item${value.length === 1 ? '' : 's'}`;
+  }
+
+  if (typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+
+    for (const key of NAMED_OBJECT_KEYS) {
+      if (typeof record[key] === 'string') {
+        return record[key];
+      }
+    }
+
+    if (['r', 'g', 'b', 'a'].every((channel) => typeof record[channel] === 'number')) {
+      return `rgba(${record.r}, ${record.g}, ${record.b}, ${record.a})`;
+    }
+
+    return `{${Object.keys(record).length} fields}`;
+  }
+
+  return String(value);
+};

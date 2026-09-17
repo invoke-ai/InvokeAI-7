@@ -243,7 +243,6 @@ export interface CommandPaletteRowsHandle {
   scrollToIndex: (index: number) => void;
 }
 
-// eslint-disable-next-line react/react-compiler -- TanStack Virtual exposes imperative functions that the compiler cannot memoize safely.
 export const CommandPaletteRows = ({
   activeRowId,
   isBusy,
@@ -267,6 +266,7 @@ export const CommandPaletteRows = ({
   );
   const getRowKey = useCallback((index: number) => rows[index]?.id ?? index, [rows]);
   const getScrollElement = useCallback(() => scrollElement, [scrollElement]);
+  // eslint-disable-next-line react/incompatible-library -- TanStack Virtual exposes imperative functions that the compiler cannot memoize safely.
   const virtualizer = useVirtualizer({
     count: rows.length,
     estimateSize: estimateRowSize,

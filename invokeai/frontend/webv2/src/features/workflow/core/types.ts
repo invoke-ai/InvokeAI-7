@@ -9,6 +9,8 @@
  * editor, the workflow library backend, and this workbench.
  */
 
+import type { SeedMode } from '@platform/core/seed';
+
 export type FieldCardinality = 'SINGLE' | 'COLLECTION' | 'SINGLE_OR_COLLECTION';
 
 export interface FieldType {
@@ -87,7 +89,23 @@ export interface WorkflowFieldInstance {
   label: string;
   /** User override of the template's field description (shown in the Linear UI). */
   description?: string;
+  /**
+   * How a seed input (`isSeedInputField`) moves between queued runs. Absent means
+   * fixed: what every document authored before seed modes did, and what a legacy
+   * reader hands back after stripping the key.
+   */
+  seedMode?: SeedMode;
   value?: unknown;
+}
+
+/** One seed input's move after a submission; applied only while the field still holds `fromSeed` under `seedMode`. */
+export interface WorkflowSeedFieldAdvance {
+  fieldName: string;
+  /** The value the field held when planned; absent when it was empty and the sequence started from the template default. */
+  fromSeed?: number;
+  nodeId: string;
+  seedMode: SeedMode;
+  toSeed: number;
 }
 
 export interface WorkflowInvocationNodeData {
@@ -175,6 +193,10 @@ export interface NodeFieldFormElement {
   data: {
     fieldIdentifier: FieldIdentifier;
     showDescription: boolean;
+    /** Shows a randomize button beside numeric fields in the linear view. */
+    showShuffle: boolean;
+    /** The legacy editor's per-element settings, preserved verbatim; `showShuffle` is mirrored into it. */
+    settings?: Record<string, unknown>;
   };
 }
 

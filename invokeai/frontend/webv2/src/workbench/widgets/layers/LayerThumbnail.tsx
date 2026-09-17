@@ -68,8 +68,6 @@ const LayerThumbnailContent = ({
     },
     // `version` is a deliberate identity trigger: a repaint bumps it, giving the
     // callback a new identity so React re-runs it and re-blits the cache.
-    // react-compiler can't model that implicit use, so it is suppressed here.
-    // eslint-disable-next-line react/react-compiler
     [engine, layer.id, status, version]
   );
 

@@ -44,7 +44,7 @@ describe('progressImageStore held frames', () => {
     expect(getQueueItemSwapProgressImage('queue-1', 'result.png')).toBeNull();
   });
 
-  it('paints the swap frame only over the images its backend item delivered', () => {
+  it('bridges only to the last selected output of a multi-output workflow', () => {
     // Item 3 of a batch finishing must not put its denoise frame over item 1's
     // image when the user clicks that one, nor over anything before routing
     // has said which images the frame belongs to.
@@ -55,7 +55,7 @@ describe('progressImageStore held frames', () => {
 
     progressImageStore.bindSwapImages('queue-1', ['image-3.png', 'image-3-control.png']);
 
-    expect(getQueueItemSwapProgressImage('queue-1', 'image-3.png')).toEqual(frame('third'));
+    expect(getQueueItemSwapProgressImage('queue-1', 'image-3.png')).toBeNull();
     expect(getQueueItemSwapProgressImage('queue-1', 'image-3-control.png')).toEqual(frame('third'));
     expect(getQueueItemSwapProgressImage('queue-1', 'image-1.png')).toBeNull();
 

@@ -7,7 +7,12 @@ import type {
   QueueResultVideoOptions,
 } from '@features/queue/core/types';
 
-import { buildGeneratePromptBatchPlan, sanitizeBatchCount } from '@features/queue/core/promptBatch';
+import {
+  buildGeneratePromptBatchPlan,
+  buildLegacyGeneratePromptBatchPlan,
+  buildWorkflowSeedBatchPlan,
+  sanitizeBatchCount,
+} from '@features/queue/core/promptBatch';
 import { mapWithConcurrency } from '@platform/core/concurrency';
 import { assertAccountScopeCurrent, captureAccountScope } from '@platform/state/accountLifecycle';
 import { normalizeServerTimestamp } from '@platform/time/serverTimestamp';
@@ -71,7 +76,7 @@ const mapEnqueueResult = (value: unknown, isReceipt = false): QueueEnqueueResult
 };
 
 export const enqueueGenerate = async (request: QueueEnqueueGenerateRequest): Promise<QueueEnqueueResult> => {
-  const plan = buildGeneratePromptBatchPlan({
+  const planInput = {
     batchCount: sanitizeBatchCount(request.batchCount),
     negativePrompt: request.negativePrompt,
     negativePromptNodeId: request.negativePromptNodeId,
@@ -80,7 +85,10 @@ export const enqueueGenerate = async (request: QueueEnqueueGenerateRequest): Pro
     seed: request.seed,
     seedBehaviour: request.seedBehaviour ?? 'per-iteration',
     seedNodeId: request.seedNodeId,
-    shouldRandomizeSeed: request.shouldRandomizeSeed,
+  };
+  const plan = (request.legacySeedPlan ? buildLegacyGeneratePromptBatchPlan : buildGeneratePromptBatchPlan)({
+    ...planInput,
+    seedStep: request.seedStep,
   });
   const result = await apiFetchJson<unknown>('/api/v1/queue/default/enqueue_batch', {
     body: JSON.stringify({
@@ -102,15 +110,17 @@ export const enqueueGenerate = async (request: QueueEnqueueGenerateRequest): Pro
 };
 
 export const enqueueWorkflow = async (request: QueueEnqueueWorkflowRequest): Promise<QueueEnqueueResult> => {
+  const plan = buildWorkflowSeedBatchPlan({ batchCount: request.batchCount, seeds: request.seeds });
   const result = await apiFetchJson<unknown>('/api/v1/queue/default/enqueue_batch', {
     body: JSON.stringify({
       batch: {
+        ...(plan.data ? { data: plan.data } : {}),
         destination: request.destination,
         graph: request.graph,
         idempotency_key: getQueueIdempotencyKey(request.projectId, request.sourceQueueItemId),
         project_id: request.projectId,
         origin: buildQueueItemOrigin(request.sourceQueueItemId, request.projectId),
-        runs: sanitizeBatchCount(request.batchCount),
+        runs: plan.runs,
       },
       prepend: false,
     }),
@@ -177,6 +187,7 @@ const getResultImage = async (
     const image = await apiFetchJson<QueueImageDTO>(`/api/v1/images/i/${encodeURIComponent(imageName)}`, { signal });
 
     return {
+      ...(image.board_id ? { boardId: image.board_id } : {}),
       createdAt: normalizeServerTimestamp(image.created_at),
       height: image.height,
       imageName: image.image_name,

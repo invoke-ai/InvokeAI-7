@@ -44,7 +44,7 @@ type PresetDialogState = { mode: 'save' } | { mode: 'rename'; preset: GeneratePr
  * "These settings are still this preset" must ignore what applying a preset
  * does not write (`getGenerateFormCommitPatch` drops `batchCount`) and what is
  * presentation or volatile: prompt-box heights, the template view mode, and
- * the seed while it randomizes.
+ * the seed unless it is held fixed — random draws it, stepping moves it.
  */
 const getPresetComparisonKey = (settings: GenerateSettings): string => {
   const comparable: Record<string, unknown> = { ...settings };
@@ -54,7 +54,7 @@ const getPresetComparisonKey = (settings: GenerateSettings): string => {
   delete comparable.positivePromptHeightPx;
   delete comparable.promptTemplateViewMode;
 
-  if (settings.shouldRandomizeSeed) {
+  if (settings.seedMode !== 'fixed') {
     delete comparable.seed;
   }
 

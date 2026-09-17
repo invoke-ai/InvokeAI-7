@@ -11,7 +11,7 @@ import type {
 } from './types';
 
 import { getDefaultGenerateSettings, isSupportedGenerateModel } from './baseGenerationPolicies';
-import { compileGenerateGraph, generateSeedSequence, resolveGenerateSeed } from './graph';
+import { compileGenerateGraph, resolveGenerateSeed } from './graph';
 
 const sd1Model: MainModelConfig = { base: 'sd-1', key: 'sd1-model', name: 'SD 1.5', type: 'main' };
 const sd2Model: MainModelConfig = { base: 'sd-2', key: 'sd2-model', name: 'SD 2', type: 'main' };
@@ -138,7 +138,7 @@ const qwen3Encoder: ComponentModelConfig = {
 const createSettings = (model: GenerateModelConfig, overrides: Partial<GenerateSettings> = {}): GenerateSettings => ({
   ...getDefaultGenerateSettings(model),
   seed: 1,
-  shouldRandomizeSeed: false,
+  seedMode: 'fixed',
   ...overrides,
 });
 
@@ -733,22 +733,18 @@ describe('compileGenerateGraph', () => {
 });
 
 describe('generate seeds', () => {
-  it('keeps an explicit seed when randomization is disabled', () => {
-    const settings = createSettings(sdxlModel, { seed: 123, shouldRandomizeSeed: false });
-
-    expect(resolveGenerateSeed(settings)).toBe(123);
+  it('keeps the entered seed in every mode but random', () => {
+    expect(resolveGenerateSeed(createSettings(sdxlModel, { seed: 123, seedMode: 'fixed' }))).toBe(123);
+    expect(resolveGenerateSeed(createSettings(sdxlModel, { seed: 123, seedMode: 'increment' }))).toBe(123);
+    expect(resolveGenerateSeed(createSettings(sdxlModel, { seed: 123, seedMode: 'decrement' }))).toBe(123);
   });
 
-  it('resolves a random seed when randomization is enabled', () => {
+  it('draws a fresh seed in random mode', () => {
     vi.spyOn(Math, 'random').mockReturnValue(0.5);
 
-    const settings = createSettings(sdxlModel, { seed: 123, shouldRandomizeSeed: true });
+    const settings = createSettings(sdxlModel, { seed: 123, seedMode: 'random' });
 
     expect(resolveGenerateSeed(settings)).toBe(2147483647);
-  });
-
-  it('builds the legacy-style sequential seed batch starting from the resolved seed', () => {
-    expect(generateSeedSequence(10, 4)).toEqual([10, 11, 12, 13]);
   });
 });
 

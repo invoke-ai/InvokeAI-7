@@ -1,4 +1,3 @@
-/* eslint-disable react/react-compiler */
 import type { GenerationModelCatalogItem as ModelConfig, PromptHistoryItem } from '@features/generation/contracts';
 import type { PromptTemplateSnapshot } from '@features/generation/core/promptTemplates';
 import type { GenerateLora, GenerateModelConfig } from '@features/generation/core/types';
@@ -425,6 +424,7 @@ const ExpandPromptButton = ({
   const effectiveSystemPromptId = resolveSelectedSystemPromptId(systemPrompts.prompts, selectedSystemPromptId);
   const selectedSystemPrompt = systemPrompts.prompts.find((prompt) => prompt.id === effectiveSystemPromptId);
 
+  // eslint-disable-next-line react/refs
   activeProjectIdRef.current = activeProjectId;
 
   useMountEffect(() => {
@@ -583,6 +583,7 @@ const ImageToPromptButton = ({
   const droppedImageName = droppedImage.image?.imageName ?? null;
   const clearDroppedImage = droppedImage.onClear;
 
+  // eslint-disable-next-line react/refs
   activeProjectIdRef.current = activeProjectId;
 
   useMountEffect(() => {
@@ -595,6 +596,7 @@ const ImageToPromptButton = ({
   // dropped twice still reads as two separate gestures.
   useEffect(() => {
     if (droppedImageName !== null) {
+      // eslint-disable-next-line react/set-state-in-effect
       setIsOpen(true);
     }
   }, [droppedImageName]);

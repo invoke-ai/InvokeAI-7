@@ -22,6 +22,7 @@ export type {
   QueueProcessorReadModel,
   QueueQueryScope,
   QueueReadModel,
+  QueueSeedStep,
   QueueSourceId,
   QueueStatusReadModel,
   QueueSubmissionPresentation,
@@ -74,3 +75,12 @@ export {
   type InvocationStartedEvent,
   type QueueItemStatusChangedEvent,
 } from './data/events';
+
+export {
+  getQueueActiveSessions,
+  getQueueProgressSessions,
+  isGalleryProgressItem,
+  type QueueActiveSession,
+  type QueueProgressSession,
+} from './core/activeSessions';
+export type { QueueItemProgressTarget } from './core/types';

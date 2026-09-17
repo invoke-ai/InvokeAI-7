@@ -84,7 +84,7 @@ const STORED_VALUES = {
   positivePrompt: 'a saved prompt',
   scheduler: 'euler',
   seed: 7,
-  shouldRandomizeSeed: false,
+  seedMode: 'fixed',
   steps: 30,
   width: 1024,
 };

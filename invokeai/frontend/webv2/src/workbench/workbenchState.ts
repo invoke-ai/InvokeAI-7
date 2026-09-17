@@ -2,6 +2,7 @@ import type { GenerateWidgetValues } from '@features/generation/contracts';
 import type { ModelConfig } from '@features/models';
 import type { QueueCompiledSubmission, QueueHistoryItemStatus } from '@features/queue/contracts';
 import type { ProjectGraphState } from '@features/workflow/contracts';
+import type { WorkflowSubmissionPlan } from '@features/workflow/graph';
 import type {
   CanvasDocumentContractV3,
   CanvasPlacementContract,
@@ -51,7 +52,6 @@ import type {
 
 import {
   getBoundedRecentImages,
-  getGalleryPage,
   getPersistedSelectedGalleryItemKeys,
   stripInfiniteWindowAnchor,
   stripUnresolvableGallerySearch,
@@ -69,6 +69,7 @@ import {
   type GallerySettings,
   type GeneratedImageContract,
 } from '@features/gallery/contracts';
+import { planSeedSubmission } from '@platform/core/seed';
 import { WIDGET_REGIONS } from '@workbench/layoutContracts';
 import { prependProjectEvent, PROJECT_EVENT_LIMIT } from '@workbench/projectEvents';
 
@@ -92,6 +93,8 @@ import { gateProjectCanvases } from './projectCanvasGate';
 import { normalizeRestoredQueueItem } from './queue-integration/queueRunRestoration';
 import { getProjectWidgetValues } from './widgetState';
 export { nextLayerName } from './canvasProjectMutations';
+import type { ProjectPromptDraftPatch } from '@features/generation/settings';
+
 import { compileGenerateGraph, resolveGenerateSeed } from '@features/generation/graph';
 import {
   addPromptHistoryItem,
@@ -105,7 +108,6 @@ import {
   migrateProjectPromptDraft,
   normalizeGenerateSettings,
   normalizeGenerateWidgetValues,
-  type ProjectPromptDraftPatch,
   removePromptHistoryItem,
   sanitizeBatchCount,
   syncGenerateWidgetValuesWithModels,
@@ -133,7 +135,7 @@ import {
   syncVideoWidgetValuesWithModels,
   type VideoWidgetValues,
 } from '@features/video';
-import { compileProjectGraph } from '@features/workflow/graph';
+import { planWorkflowSubmission } from '@features/workflow/graph';
 import { getInvocationTemplatesSnapshot } from '@features/workflow/react';
 import {
   cloneProjectGraph,
@@ -1181,7 +1183,7 @@ const createWidgetStates = (): WidgetStateMap => ({
   queue: { id: 'queue', label: 'Queue', values: {}, version: 1 },
   'server-status': { id: 'server-status', label: 'Server Status', values: {}, version: 1 },
   users: { id: 'users', label: 'Users', values: {}, version: 1 },
-  workflow: { graphId: 'workflow-graph', id: 'workflow', label: 'Workflow', values: {}, version: 1 },
+  workflow: { graphId: 'workflow-graph', id: 'workflow', label: 'Workflow', values: { batchCount: 1 }, version: 1 },
   upscale: { graphId: 'upscale-graph', id: 'upscale', label: 'Upscale', values: {}, version: 1 },
   video: { graphId: 'video-graph', id: 'video', label: 'Video', values: {}, version: 1 },
 });
@@ -1675,6 +1677,24 @@ const assembleWorkbenchProject = (
         state: { ...upscaleInstance.state, values: clearedLegacyUpscaleValues },
       };
     }
+  }
+
+  // Workflow runs used to borrow Generate's iteration count. A project saved before the
+  // widget owned one has no key; carry the count over once so it keeps the runs it
+  // effectively had. A fresh project starts with the widget's own default, so it never migrates.
+  const workflowInstance = widgetInstances.workflow;
+
+  if (workflowInstance && typeof workflowInstance.state.values.batchCount !== 'number') {
+    widgetInstances.workflow = {
+      ...workflowInstance,
+      state: {
+        ...workflowInstance.state,
+        values: {
+          ...workflowInstance.state.values,
+          batchCount: sanitizeBatchCount(generateInstance?.state.values.batchCount),
+        },
+      },
+    };
   }
 
   if (leftRegion.instanceIds.includes('upscale') && !widgetInstances.upscale) {
@@ -2430,7 +2450,11 @@ const compileInvocationSnapshot = (
   project: Project,
   route: InvocationRoute,
   models?: readonly ModelConfig[]
-): { graph: GraphContract; widgetStates: WidgetStateMap } | null => {
+): {
+  graph: GraphContract;
+  widgetStates: WidgetStateMap;
+  workflow?: Omit<WorkflowSubmissionPlan, 'graph'>;
+} | null => {
   const widgetStates = getWidgetStatesSnapshot(project.widgetInstances);
   const randDevice = resolveRandDeviceMetadata(project.settings.useCpuNoise, getGenerationDevicesSnapshot().options);
 
@@ -2443,7 +2467,11 @@ const compileInvocationSnapshot = (
       return null;
     }
 
-    return { graph: compileProjectGraph(project.projectGraph, templatesSnapshot.templates), widgetStates };
+    const { graph, ...workflow } = planWorkflowSubmission(project.projectGraph, templatesSnapshot.templates, {
+      batchCount: sanitizeBatchCount(widgetStates.workflow?.values.batchCount),
+    });
+
+    return { graph, widgetStates, workflow };
   }
 
   if (route.sourceId === 'upscale') {
@@ -2964,22 +2992,8 @@ const updateGalleryWithResultImages = (project: Project, images: GeneratedImageC
   const nextSelectedItem = nextSelectedImage ? legacyGeneratedImageToGalleryItem(nextSelectedImage) : undefined;
   const nextSelectedItemKey = nextSelectedItem ? toGalleryItemKey(nextSelectedItem) : undefined;
   const gallerySettings = getGallerySettings(galleryValues);
-  // A deep reveal from the image map anchors the infinite window mid-board.
-  // New images land at the TOP of that board's listing, which such a window
-  // never covers — and an anchored window also suppresses the recents overlay
-  // and the queue placeholders. Release the anchor when an incoming image
-  // belongs to the board being viewed, or the user would never see their own
-  // generation appear. Scoped to that board: an anchor on some other board's
-  // listing has nothing to do with this result.
-  const viewedBoardId = typeof galleryValues.selectedBoardId === 'string' ? galleryValues.selectedBoardId : 'none';
-  const releasesWindowAnchor =
-    gallerySettings.paginationMode === 'infinite' &&
-    getGalleryPage(galleryValues) > 0 &&
-    newImages.some((image) => image.boardId === viewedBoardId);
-
   return updateProjectWidgetValues(project, 'gallery', () => ({
     ...galleryValues,
-    ...(releasesWindowAnchor ? { galleryPage: 0 } : {}),
     recentImages: getBoundedRecentImages([...newImages, ...previousImages]),
     selectedImage: nextSelectedItem ?? galleryValues.selectedImage,
     selectedImageName: nextSelectedItemKey ?? galleryValues.selectedImageName,
@@ -3091,6 +3105,8 @@ const enqueueCompiledSnapshot = (
     graph: GraphContract;
     positivePrompts?: string[];
     widgetStates: WidgetStateMap;
+    /** The workflow route's seed plan: batch data, run count, and the fields to advance. */
+    workflow?: Omit<WorkflowSubmissionPlan, 'graph'>;
   },
   backendSupportsCancellation: boolean,
   canvasSnapshot?: CanvasStateContractV3
@@ -3148,21 +3164,37 @@ const enqueueCompiledSnapshot = (
   const expandedSeedBehaviour = expandedPositivePrompts
     ? (canvasGenerateSettings ?? generateSettings)?.dynamicPromptsSeedBehaviour
     : undefined;
+  // The seed was resolved when the graph compiled (random modes drew it then),
+  // so `seed` is this submission's start. The plan fixes how the batch steps
+  // from it and where the editable seed goes next; a submission that fails or
+  // is cancelled later keeps its seeds — the sequence only ever moves forward.
+  const seedPlan = sourceGenerateSettings
+    ? planSeedSubmission({
+        batchCount: sourceGenerateSettings.batchCount,
+        promptCount: expandedPositivePrompts?.length ?? 1,
+        seedBehaviour: expandedSeedBehaviour ?? 'per-iteration',
+        seedMode: sourceGenerateSettings.seedMode,
+        startSeed: sourceGenerateSettings.seed,
+      })
+    : null;
   const backendSubmission: QueueCompiledSubmission = !backendGraph
     ? { error: `${route.sourceId} queue item is missing a compiled backend graph.`, kind: 'invalid' }
     : route.sourceId === 'workflow'
-      ? {
-          batchCount: sanitizeBatchCount(widgetStates.generate?.values.batchCount),
-          graph: backendGraph,
-          kind: 'workflow',
-          // Provenance for the completed-run capture: a run submitted from a
-          // library-bound graph knows which record to stamp, even after the
-          // editor has moved on to another workflow. An unbound graph stamps
-          // nothing, so an ad-hoc workflow never writes to the library.
-          ...(project.projectGraph.libraryWorkflowId
-            ? { libraryWorkflowId: project.projectGraph.libraryWorkflowId }
-            : {}),
-        }
+      ? !compiled.workflow
+        ? { error: 'workflow queue item is missing its seed plan.', kind: 'invalid' }
+        : {
+            batchCount: compiled.workflow.batchCount,
+            ...(compiled.workflow.seeds.length ? { seeds: compiled.workflow.seeds } : {}),
+            graph: backendGraph,
+            kind: 'workflow',
+            // Provenance for the completed-run capture: a run submitted from a
+            // library-bound graph knows which record to stamp, even after the
+            // editor has moved on to another workflow. An unbound graph stamps
+            // nothing, so an ad-hoc workflow never writes to the library.
+            ...(project.projectGraph.libraryWorkflowId
+              ? { libraryWorkflowId: project.projectGraph.libraryWorkflowId }
+              : {}),
+          }
       : sourceGenerateSettings && effectivePrompts
         ? {
             batchCount: sourceGenerateSettings.batchCount,
@@ -3179,7 +3211,7 @@ const enqueueCompiledSnapshot = (
             seed: sourceGenerateSettings.seed,
             ...(expandedSeedBehaviour ? { seedBehaviour: expandedSeedBehaviour } : {}),
             seedNodeId: generate?.seedNodeId ?? 'seed',
-            shouldRandomizeSeed: sourceGenerateSettings.shouldRandomizeSeed,
+            seedStep: seedPlan?.step ?? 0,
           }
         : { error: `${route.sourceId} queue item is missing source submission metadata.`, kind: 'invalid' };
   const selectedGalleryBoardId = widgetStates.gallery?.values.selectedBoardId;
@@ -3252,8 +3284,30 @@ const enqueueCompiledSnapshot = (
     status: 'pending',
   };
 
+  // A stepping mode hands the next seed to the editable settings in the same
+  // transition that queues the batch, so submissions queued back to back
+  // continue the sequence. The canvas compiles outside the reducer, so its plan
+  // may be stale by the time it lands: only settings still at the submitted
+  // seed and mode are advanced; an edit made meanwhile is the user's, and stays.
+  const advancedProject =
+    seedPlan !== null && seedPlan.nextSeed !== null
+      ? updateProjectWidgetValues(project, route.sourceId === 'canvas' ? 'generate' : route.sourceId, (values) =>
+          values.seed === seedPlan.startSeed && values.seedMode === seedPlan.seedMode
+            ? { ...values, seed: seedPlan.nextSeed }
+            : values
+        )
+      : compiled.workflow && compiled.workflow.seedAdvances.length > 0
+        ? {
+            ...project,
+            projectGraph: projectGraphReducer(project.projectGraph, {
+              advances: compiled.workflow.seedAdvances,
+              type: 'advanceSeedFields',
+            }),
+          }
+        : project;
+
   return {
-    ...project,
+    ...advancedProject,
     events: prependProjectEvent(project.events, {
       createdAt: submittedAt,
       id: createId('event'),
@@ -4300,6 +4354,7 @@ export const __workbenchReducerInternal = (
       return addNotification(
         nextState,
         createNotification({
+          category: 'run-outcome',
           kind: action.status === 'failed' ? 'error' : 'info',
           message: action.error ?? `Queue item ${action.queueItemId} ${action.status}.`,
           projectId: action.projectId,

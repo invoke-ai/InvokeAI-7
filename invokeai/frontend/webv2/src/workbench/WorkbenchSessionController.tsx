@@ -53,6 +53,9 @@ const HydratedSessionController = ({ search }: { search: WorkbenchSearch }) => {
     if (projectIds.includes(requestedProjectId)) {
       flushGenerateDrafts();
       commands.projects.switchTo(requestedProjectId);
+      // The link is a one-time open request. Keeping it would override later
+      // project selections (including a new project) on reload.
+      void navigate({ replace: true, search: {}, to: '/app' });
       return;
     }
 
@@ -65,6 +68,7 @@ const HydratedSessionController = ({ search }: { search: WorkbenchSearch }) => {
       if (result.status === 'loaded') {
         flushGenerateDrafts();
         commands.projects.open(result.project);
+        void navigate({ replace: true, search: {}, to: '/app' });
       } else if (result.status === 'refused') {
         commands.notifications.add({ kind: 'error', ...describeRefusedProject(result.refused, t) });
       } else {

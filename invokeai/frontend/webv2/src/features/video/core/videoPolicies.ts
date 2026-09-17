@@ -12,8 +12,8 @@ import {
   isLoraCompatibleWithModel,
   isLoraModelConfig,
   isWanLoraTargetingMain,
-  SEED_MAX,
 } from '@features/generation/settings';
+import { SEED_MAX } from '@platform/core/seed';
 
 import type { VideoAspectRatioId, VideoGenerationMode, VideoSettings, VideoTargetResolution } from './types';
 
@@ -1327,7 +1327,7 @@ export const getDefaultVideoSettings = (
     positivePromptHeightPx: 96,
     references: [],
     seed: Math.floor(Math.random() * SEED_MAX),
-    shouldRandomizeSeed: true,
+    seedMode: 'random',
     sourceVideo: null,
     steps: config.defaults.steps,
     targetResolution: config.defaults.targetResolution,

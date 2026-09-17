@@ -99,7 +99,7 @@ export const AspectRatioSelect = ({
 
 export interface AspectRatioLockButtonProps {
   isLocked: boolean;
-  size?: ControlSize;
+  size?: '2xs' | ControlSize;
   onToggle: () => void;
 }
 

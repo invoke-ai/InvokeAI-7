@@ -9,20 +9,20 @@ import type { ModelConfig } from '@features/models';
 
 import {
   DEFAULT_NEGATIVE_PROMPT_HEIGHT_PX,
-  sanitizeBatchCount,
   DEFAULT_POSITIVE_PROMPT_HEIGHT_PX,
   isLoraCompatibleWithModel,
   isLoraModelConfig,
   isMainModelConfig,
   isModelIdentifierConfig,
-  isVaeModelConfig,
   isVaeCompatibleWithGenerateModel,
+  isVaeModelConfig,
   MAX_NEGATIVE_PROMPT_HEIGHT_PX,
   MAX_POSITIVE_PROMPT_HEIGHT_PX,
   MIN_NEGATIVE_PROMPT_HEIGHT_PX,
   MIN_POSITIVE_PROMPT_HEIGHT_PX,
-  SEED_MAX,
+  sanitizeBatchCount,
 } from '@features/generation/settings';
+import { isSeedMode, SEED_MAX } from '@platform/core/seed';
 
 import type { SpandrelModelConfig, TileControlNetModelConfig, UpscaleWidgetValues } from './types';
 
@@ -117,7 +117,7 @@ export const createDefaultUpscaleWidgetValues = (models: readonly ModelConfig[] 
     scale: 4,
     scheduler: 'kdpm_2',
     seed: 0,
-    shouldRandomizeSeed: true,
+    seedMode: 'random',
     steps: 30,
     structure: 0,
     tileControlnetModel: models.find((candidate) => isTileControlNetCandidate(candidate, model)) ?? null,
@@ -173,8 +173,14 @@ export const normalizeUpscaleWidgetValues = (value: unknown): UpscaleWidgetValue
     scale: isFiniteNumber(value.scale) ? value.scale : defaults.scale,
     scheduler: typeof value.scheduler === 'string' ? value.scheduler : defaults.scheduler,
     seed: isFiniteNumber(value.seed) ? value.seed : defaults.seed,
-    shouldRandomizeSeed:
-      typeof value.shouldRandomizeSeed === 'boolean' ? value.shouldRandomizeSeed : defaults.shouldRandomizeSeed,
+    // Values saved before seed modes carry the random toggle instead.
+    seedMode: isSeedMode(value.seedMode)
+      ? value.seedMode
+      : typeof value.shouldRandomizeSeed === 'boolean'
+        ? value.shouldRandomizeSeed
+          ? 'random'
+          : 'fixed'
+        : defaults.seedMode,
     steps: isFiniteNumber(value.steps) ? value.steps : defaults.steps,
     structure: isFiniteNumber(value.structure) ? value.structure : defaults.structure,
     tileControlnetModel: isTileControlNetModelConfig(value.tileControlnetModel) ? value.tileControlnetModel : null,
@@ -347,6 +353,6 @@ export const clearDeletedUpscaleInput = (
   values.inputImage && deletedImageNames.has(values.inputImage.image_name) ? { ...values, inputImage: null } : values;
 
 export const resolveUpscaleSeed = (values: UpscaleWidgetValues): number =>
-  values.shouldRandomizeSeed ? Math.floor(Math.random() * SEED_MAX) : values.seed;
+  values.seedMode === 'random' ? Math.floor(Math.random() * SEED_MAX) : values.seed;
 
 export const cloneUpscaleWidgetValues = (values: UpscaleWidgetValues): UpscaleWidgetValues => structuredClone(values);

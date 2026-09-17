@@ -1,6 +1,7 @@
 import type { BackendGraphContract, GraphContract } from '@features/generation/core/contracts';
 import type { DynamicPromptsSeedBehaviour } from '@features/generation/core/dynamicPrompts';
 import type { PromptTemplateSnapshot } from '@features/generation/core/promptTemplates';
+import type { SeedMode } from '@platform/core/seed';
 
 export type ModelIdentifierConfig = {
   key: string;
@@ -198,7 +199,7 @@ export interface GenerateSettings {
   hiDiffusionT1Ratio: number;
   hiDiffusionT2Ratio: number;
   seed: number;
-  shouldRandomizeSeed: boolean;
+  seedMode: SeedMode;
   seamlessXAxis: boolean;
   seamlessYAxis: boolean;
   /** Optional VAE override; null uses the VAE bundled with the main model. */

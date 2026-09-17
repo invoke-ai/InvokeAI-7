@@ -1,8 +1,9 @@
-import type { GalleryVideoItem } from '@features/gallery';
+import type { GalleryItemRef, GalleryVideoItem } from '@features/gallery';
 import type { VideoUiAdapter } from '@features/video';
 import type { OpenWorkbenchWidgetResult } from '@workbench/useOpenWorkbenchWidget';
 import type { ReactNode } from 'react';
 
+import { claimGalleryNavigationSequence } from '@features/gallery/contracts';
 import { getGalleryRevealRequest } from '@features/gallery/core/selection';
 import {
   clearVideoSpanPlaybackState,
@@ -32,6 +33,12 @@ let activeProjectId: string;
 
 const openWorkbenchWidget = vi.fn(() => openResult);
 const selectItem = vi.fn();
+const reportError = vi.fn();
+const revealGalleryItem = vi.fn(
+  (_context: unknown, _ref: GalleryItemRef, _ticket: { projectId: string; sequence: number }) => Promise.resolve()
+);
+/** The regions the project's single gallery instance occupies. */
+let galleryRegions: string[] = ['right'];
 
 vi.mock('@features/video', () => ({
   VideoUiProvider: ({ adapter: next, children }: { adapter: VideoUiAdapter; children: ReactNode }) => {
@@ -40,6 +47,9 @@ vi.mock('@features/video', () => ({
   },
 }));
 vi.mock('@features/gallery/queries', () => ({ invalidateGallery: vi.fn() }));
+// What a landed reveal does to the grid belongs to `useSelectMapImage.browser.test.tsx`;
+// this file is about which gestures move the user's selection at all.
+vi.mock('@workbench/image-actions/revealGalleryItem', () => ({ revealGalleryItem }));
 vi.mock('@tanstack/react-query', () => ({ useQueryClient: () => ({}) }));
 vi.mock('@workbench/settings/store', () => ({ useWorkbenchPreferenceSelector: () => false }));
 vi.mock('@workbench/useOpenWorkbenchWidget', () => ({ useOpenWorkbenchWidget: () => openWorkbenchWidget }));
@@ -48,8 +58,23 @@ vi.mock('@workbench/WorkbenchContext', () => ({
     selector({ id: activeProjectId, widgetInstances: {} }),
   useWorkbenchCommands: () => ({
     gallery: { selectItem },
-    notifications: { reportError: vi.fn() },
+    notifications: { reportError },
     widgets: { patchValues: vi.fn() },
+  }),
+  useWorkbenchQueries: () => ({
+    isActiveProject: (projectId: string) => projectId === activeProjectId,
+    getSnapshot: () => ({
+      activeProject: {
+        id: activeProjectId,
+        widgetInstances: { 'gallery-1': { typeId: 'gallery' } },
+        widgetRegions: Object.fromEntries(
+          (['left', 'right', 'bottom', 'center'] as const).map((region) => [
+            region,
+            { instanceIds: galleryRegions.includes(region) ? ['gallery-1'] : [] },
+          ])
+        ),
+      },
+    }),
   }),
 }));
 
@@ -69,6 +94,9 @@ beforeEach(async () => {
   activeProjectId = 'project-1';
   openWorkbenchWidget.mockClear();
   selectItem.mockClear();
+  revealGalleryItem.mockClear();
+  reportError.mockClear();
+  galleryRegions = ['right'];
   host = document.createElement('div');
   document.body.append(host);
   root = createRoot(host);
@@ -101,6 +129,85 @@ describe('videoSpanPlayback', () => {
 
     unsubscribe();
     clearVideoSpanPlaybackState(41);
+  });
+});
+
+describe('findInGallery', () => {
+  it('raises the grid where it already lives, not where the manifest would place it', async () => {
+    act(() => adapter.findInGallery({ kind: 'video', name: 'clip.mp4' }));
+
+    // Unlike a play press, a find IS a request to rearrange the workspace: the
+    // panel is the far side of the app from the grid, and a selection the user
+    // cannot see is not a find. But an unqualified open resolves to `center`
+    // off the manifest and the reducer ADOPTS the existing instance there
+    // without vacating the right panel, listing one grid in two regions.
+    // Preview goes first so the grid wins a region they might share.
+    expect(openWorkbenchWidget.mock.calls).toEqual([
+      ['preview', { preferredRegions: ['center'], requireCenterView: true }],
+      ['gallery', { preferredRegions: ['right'] }],
+    ]);
+
+    await vi.waitFor(() => expect(revealGalleryItem).toHaveBeenCalledTimes(1));
+
+    expect(revealGalleryItem.mock.calls[0]?.[1]).toEqual({ kind: 'video', name: 'clip.mp4' });
+  });
+
+  it('falls back to default placement when the project has no grid at all', async () => {
+    galleryRegions = [];
+    await renderAdapter();
+
+    act(() => adapter.findInGallery({ kind: 'image', name: 'still.png' }));
+
+    expect(openWorkbenchWidget.mock.calls.at(-1)).toEqual(['gallery', undefined]);
+  });
+
+  it('describes the press, not the moment its chunk lands', async () => {
+    // The reveal module is fetched lazily; the image map's, statically imported
+    // inside an already-loaded chunk, claims synchronously. A ticket minted
+    // after the import would let a map click made AFTER this press supersede
+    // it, and would fence the reveal to whichever project the user had reached
+    // by then — the exact write the fence exists to stop.
+    const before = claimGalleryNavigationSequence();
+
+    act(() => adapter.findInGallery({ kind: 'image', name: 'still.png' }));
+
+    const afterPress = claimGalleryNavigationSequence();
+
+    activeProjectId = 'project-2';
+    await renderAdapter();
+
+    await vi.waitFor(() => expect(revealGalleryItem).toHaveBeenCalledTimes(1));
+
+    expect(revealGalleryItem.mock.calls[0]?.[2]).toEqual({ projectId: 'project-1', sequence: before + 1 });
+    expect(afterPress).toBe(before + 2);
+  });
+
+  it('tells the user when the media cannot be revealed', async () => {
+    revealGalleryItem.mockReturnValueOnce(Promise.reject(new Error('Image not found')));
+
+    act(() => adapter.findInGallery({ kind: 'image', name: 'deleted.png' }));
+
+    // The widgets are already raised by then, so a silent failure leaves a
+    // rearranged workspace and no account of why the grid did not move.
+    await vi.waitFor(() =>
+      expect(reportError).toHaveBeenCalledWith({
+        area: 'find-in-gallery',
+        message: 'Image not found',
+        namespace: 'gallery',
+      })
+    );
+  });
+
+  it('says nothing about a failed gesture the user has already moved past', async () => {
+    revealGalleryItem.mockReturnValueOnce(Promise.reject(new Error('Image not found')));
+
+    act(() => adapter.findInGallery({ kind: 'image', name: 'deleted.png' }));
+    // Any later navigation supersedes it — here, a second press.
+    act(() => adapter.findInGallery({ kind: 'image', name: 'other.png' }));
+
+    await vi.waitFor(() => expect(revealGalleryItem).toHaveBeenCalledTimes(2));
+
+    expect(reportError).not.toHaveBeenCalled();
   });
 });
 

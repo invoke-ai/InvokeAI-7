@@ -45,7 +45,7 @@ const buildGenerateSummaryRows = (settings: GenerateWidgetValues, t: TFunction):
     {
       id: 'seed',
       label: t('graphPreview.seed'),
-      value: settings.shouldRandomizeSeed ? t('graphPreview.seedRandomValue') : String(settings.seed),
+      value: settings.seedMode === 'random' ? t('graphPreview.seedRandomValue') : String(settings.seed),
     },
   ];
 };
@@ -107,7 +107,7 @@ const buildGenerateSource = (
   }
 
   const { settings } = result;
-  const isSeedRandomized = settings.shouldRandomizeSeed;
+  const isSeedRandomized = settings.seedMode === 'random';
   const notices: GraphPreviewNotice[] = isSeedRandomized
     ? [{ id: 'seed-random', message: t('graphPreview.seedRandomized'), nodeId: 'seed' }]
     : [];

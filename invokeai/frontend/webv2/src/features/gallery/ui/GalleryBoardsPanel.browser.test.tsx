@@ -73,7 +73,6 @@ const createGallery = (settings: Partial<GallerySettings> = {}): GalleryStateVie
     anchoredWindowPage: 0,
     boards,
     compareImageKey: null,
-    currentItem: null,
     galleryView: 'images',
     isComparisonActive: false,
     isLoading: false,

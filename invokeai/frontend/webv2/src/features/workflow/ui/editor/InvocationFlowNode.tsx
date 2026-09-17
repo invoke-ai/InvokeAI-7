@@ -3,6 +3,7 @@ import type { FieldInputTemplate, FieldOutputTemplate, WorkflowInvocationNode } 
 import type { WorkflowNodeExecutionState as NodeExecutionState } from '@features/workflow/ui/contracts';
 
 import { Box, Checkbox, Field, Flex, HStack, Icon, IconButton, Image, Input, Stack, Text } from '@chakra-ui/react';
+import { getWorkflowFieldSeedMode, isSeedInputField } from '@features/workflow/graph';
 import { FieldDescriptionPopover } from '@features/workflow/ui/fields/FieldDescriptionPopover';
 import { WorkflowFieldInput } from '@features/workflow/ui/fields/WorkflowFieldInput';
 import {
@@ -12,11 +13,14 @@ import {
   getWorkflowNodeShellProps,
   WORKFLOW_NODE_DENSITY,
   WorkflowNodeInfoIcon,
+  WorkflowNodeOutcomeIcon,
+  type WorkflowNodeOutcome,
 } from '@features/workflow/ui/nodeChrome';
 import { useProjectGraphCommands } from '@features/workflow/ui/useProjectGraphCommands';
 import { useWorkflowNodeExecutionState } from '@features/workflow/ui/WorkflowUiContext';
 import {
   cloneWorkflowFieldDefault,
+  formatOutputFieldValue,
   getFieldTypeLabel,
   getOutputFieldNamesByScope,
   getOutputFieldRows,
@@ -62,25 +66,48 @@ const hasMissingRequiredInputs = (
       }) !== null
   );
 
+const getExecutionOutcome = (execution: NodeExecutionState | null): WorkflowNodeOutcome | null =>
+  execution?.status === 'completed' || execution?.status === 'failed' ? execution.status : null;
+
 const NodeShell = ({
   hasMissingRequiredInput,
   children,
   isMissing,
   isRunning,
+  outcome,
   selected,
 }: {
   hasMissingRequiredInput?: boolean;
   children: React.ReactNode;
   isMissing?: boolean;
   isRunning?: boolean;
+  outcome?: WorkflowNodeOutcome | null;
   selected: boolean;
 }) => {
   const isInvalid = isMissing || hasMissingRequiredInput;
 
   return (
-    <Box w={NODE_WIDTH} {...getWorkflowNodeShellProps({ invalid: isInvalid, running: isRunning, selected })}>
+    <Box w={NODE_WIDTH} {...getWorkflowNodeShellProps({ invalid: isInvalid, outcome, running: isRunning, selected })}>
       {children}
     </Box>
+  );
+};
+
+/** The header's completed/failed mark, named for screen readers and tooltipped with the failure. */
+const NodeOutcomeIcon = ({ execution }: { execution: NodeExecutionState | null }) => {
+  const { t } = useTranslation();
+  const outcome = getExecutionOutcome(execution);
+
+  if (!outcome) {
+    return null;
+  }
+
+  return (
+    <WorkflowNodeOutcomeIcon
+      error={execution?.error}
+      label={outcome === 'completed' ? t('nodes.executionCompleted') : t('nodes.executionFailed')}
+      outcome={outcome}
+    />
   );
 };
 
@@ -287,6 +314,17 @@ const NodeFooter = ({ canUseCache, node }: { canUseCache: boolean; node: Workflo
   );
 };
 
+/** The upstream node owns the seed now; the local mode waits for a disconnect. A leaf so only this row subscribes to i18n. */
+const ProvidedByConnectionNote = () => {
+  const { t } = useTranslation();
+
+  return (
+    <Text color="fg.subtle" fontSize="2xs" mt="0.5">
+      {t('nodes.providedByConnection')}
+    </Text>
+  );
+};
+
 const InputFieldRow = ({
   isConnected,
   isExposed,
@@ -428,13 +466,19 @@ const InputFieldRow = ({
               id={`${node.id}-${template.name}-value`}
               invalid={isInvalid}
               nodeId={node.id}
+              seedMode={getWorkflowFieldSeedMode(instance)}
               template={template}
               value={instance?.value}
               onChange={(value) =>
                 editGraph({ fieldName: template.name, nodeId: node.id, type: 'setFieldValue', value })
               }
+              onSeedModeChange={(seedMode) =>
+                editGraph({ fieldName: template.name, nodeId: node.id, seedMode, type: 'setFieldSeedMode' })
+              }
             />
           </Box>
+        ) : isConnected && isSeedInputField(template) ? (
+          <ProvidedByConnectionNote />
         ) : null}
         {invalidReason ? <Field.ErrorText fontSize="2xs">{invalidReason}</Field.ErrorText> : null}
       </Field.Root>
@@ -442,8 +486,17 @@ const InputFieldRow = ({
   );
 };
 
-const OutputFieldRow = ({ isSkeleton, template }: { isSkeleton: boolean; template: FieldOutputTemplate }) => {
+const OutputFieldRow = ({
+  isSkeleton,
+  latestResult,
+  template,
+}: {
+  isSkeleton: boolean;
+  latestResult: unknown;
+  template: FieldOutputTemplate;
+}) => {
   const handleTooltip = getHandleTypeTooltip(template.type);
+  const value = latestResult === undefined ? null : formatOutputFieldValue(latestResult, template.name);
 
   return (
     <Box px={WORKFLOW_NODE_DENSITY.rowPaddingX} py={WORKFLOW_NODE_DENSITY.rowPaddingY}>
@@ -461,19 +514,36 @@ const OutputFieldRow = ({ isSkeleton, template }: { isSkeleton: boolean; templat
             <SkeletonBar w="40%" />
           </Flex>
         ) : (
-          <Box textAlign="end">
-            <Tooltip content={<OutputFieldTooltip template={template} />} positioning={{ placement: 'top-end' }}>
-              <MiddleTruncate
-                as="span"
-                color="fg.muted"
-                fontSize="2xs"
-                justifyContent="flex-end"
-                lineHeight="shorter"
-                maxW="full"
-                text={template.title}
-              />
-            </Tooltip>
-          </Box>
+          <HStack gap="1.5" justify="flex-end" minW="0" w="full">
+            {value ? (
+              <Tooltip content={value.full} positioning={{ placement: 'top-end' }}>
+                <Text
+                  color="fg.subtle"
+                  fontSize="2xs"
+                  lineHeight="shorter"
+                  minW="0"
+                  overflow="hidden"
+                  textOverflow="ellipsis"
+                  whiteSpace="nowrap"
+                >
+                  {value.short}
+                </Text>
+              </Tooltip>
+            ) : null}
+            <Box flexShrink={0} maxW={value ? '60%' : 'full'} textAlign="end">
+              <Tooltip content={<OutputFieldTooltip template={template} />} positioning={{ placement: 'top-end' }}>
+                <MiddleTruncate
+                  as="span"
+                  color="fg.muted"
+                  fontSize="2xs"
+                  justifyContent="flex-end"
+                  lineHeight="shorter"
+                  maxW="full"
+                  text={template.title}
+                />
+              </Tooltip>
+            </Box>
+          </HStack>
         )}
       </Flex>
     </Box>
@@ -569,14 +639,22 @@ const CompactNodeBody = ({ inputCount, outputCount }: { inputCount: number; outp
 const CompactInvocationNode = ({ data, selected }: NodeProps<InvocationFlowNodeType>) => {
   const node = data.documentNode;
   const templateView = data.template;
+  const execution = useWorkflowNodeExecutionState(node.id);
   const inputTemplates = templateView?.inputTemplates ?? [];
   const outputTemplates = templateView?.outputTemplates ?? [];
   const title = node.data.label || templateView?.template.title || node.data.type;
 
   return (
-    <NodeShell isMissing={!templateView} selected={selected ?? false}>
+    <NodeShell
+      isMissing={!templateView}
+      isRunning={execution?.status === 'running'}
+      outcome={getExecutionOutcome(execution)}
+      selected={selected ?? false}
+    >
       <Flex {...getWorkflowNodeHeaderProps()}>
         <MiddleTruncate fontSize="sm" fontWeight="700" minW="0" text={title} />
+        <Box flex="1" />
+        <NodeOutcomeIcon execution={execution} />
       </Flex>
       {templateView ? (
         <CompactNodeBody inputCount={inputTemplates.length} outputCount={outputTemplates.length} />
@@ -631,9 +709,15 @@ const ExpandedInvocationNode = ({ data, selected }: NodeProps<InvocationFlowNode
   const isCompact = data.isCompact && !selected;
   const withFooter = !isZoomedOut && templateView.isExecutable && templateView.hasImageOutput;
   const withOutputPreview = Boolean(execution?.outputImageUrl);
+  const latestResult = execution?.latestOutput;
 
   return (
-    <NodeShell hasMissingRequiredInput={isMissingRequiredInput} isRunning={isRunning} selected={selected ?? false}>
+    <NodeShell
+      hasMissingRequiredInput={isMissingRequiredInput}
+      isRunning={isRunning}
+      outcome={getExecutionOutcome(execution)}
+      selected={selected ?? false}
+    >
       {/* The collapse chevron carries its own hit padding, so the header pulls its start padding in. */}
       <Flex {...getWorkflowNodeHeaderProps({ roundedBottom: !isOpen })} gap="1" ps="1">
         <IconButton
@@ -651,6 +735,7 @@ const ExpandedInvocationNode = ({ data, selected }: NodeProps<InvocationFlowNode
           <>
             <NodeTitle node={node} title={node.data.label || template.title} />
             <Box flex="1" />
+            <NodeOutcomeIcon execution={execution} />
             <NodeInfoIcon node={node} template={template} />
           </>
         )}
@@ -670,6 +755,7 @@ const ExpandedInvocationNode = ({ data, selected }: NodeProps<InvocationFlowNode
               <OutputFieldRow
                 key={row.fieldName}
                 isSkeleton={isZoomedOut}
+                latestResult={latestResult}
                 template={outputTemplatesByName.get(row.fieldName) as FieldOutputTemplate}
               />
             )

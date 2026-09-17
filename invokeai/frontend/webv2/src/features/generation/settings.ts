@@ -31,7 +31,6 @@ export {
   normalizeGenerateSettings,
   normalizeGenerateWidgetValues,
   normalizeReferenceImages,
-  SEED_MAX,
   syncGenerateWidgetValuesWithModels,
 } from './core/settings';
 export {

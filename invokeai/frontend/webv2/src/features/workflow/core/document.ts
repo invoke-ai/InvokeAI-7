@@ -1,7 +1,10 @@
+import type { SeedMode } from '@platform/core/seed';
+
 import type {
   ContainerFormElement,
   FieldIdentifier,
   InvocationTemplate,
+  NodeFieldFormElement,
   ProjectGraphState,
   WorkflowCurrentImageNode,
   WorkflowConnectorNode,
@@ -13,6 +16,7 @@ import type {
   WorkflowMetadata,
   WorkflowNode,
   WorkflowNotesNode,
+  WorkflowSeedFieldAdvance,
   XYPosition,
 } from './types';
 
@@ -297,7 +301,12 @@ export type ProjectGraphAction =
   | { type: 'setFieldValue'; nodeId: string; fieldName: string; value: unknown }
   | { type: 'setFieldLabel'; nodeId: string; fieldName: string; label: string }
   | { type: 'setFieldDescription'; nodeId: string; fieldName: string; description: string }
+  | { type: 'setFieldSeedMode'; nodeId: string; fieldName: string; seedMode: SeedMode }
+  /** Moves stepping-mode seeds past a queued submission; each field is fenced on the value and mode it was planned from. */
+  | { type: 'advanceSeedFields'; advances: readonly WorkflowSeedFieldAdvance[] }
   | { type: 'addEdge'; edge: WorkflowEdge }
+  /** Replaces `edgeId` with `edge` as one undoable step (dragging an edge end to a new handle). */
+  | { type: 'reconnectEdge'; edgeId: string; edge: WorkflowEdge }
   | { type: 'removeEdges'; edgeIds: string[] }
   | { type: 'exposeField'; fieldIdentifier: FieldIdentifier }
   | { type: 'unexposeField'; fieldIdentifier: FieldIdentifier }
@@ -312,11 +321,13 @@ export type ProjectGraphAction =
     }
   | { type: 'setFormElementContent'; elementId: string; content: string }
   | { type: 'setNodeFieldShowDescription'; elementId: string; showDescription: boolean }
+  | { type: 'setNodeFieldShowShuffle'; elementId: string; showShuffle: boolean }
   | { type: 'setContainerLayout'; elementId: string; layout: 'row' | 'column' }
   | { type: 'setMetadata'; patch: Partial<WorkflowMetadata> };
 
 const undoLabels: Partial<Record<ProjectGraphAction['type'], string>> = {
   addEdge: 'Connect workflow fields',
+  reconnectEdge: 'Reconnect workflow fields',
   addFormElement: 'Edit workflow form',
   addGraphElements: 'Paste workflow nodes',
   addNode: 'Add workflow node',
@@ -329,6 +340,7 @@ const undoLabels: Partial<Record<ProjectGraphAction['type'], string>> = {
   removeNodes: 'Delete workflow nodes',
   setContainerLayout: 'Edit workflow form',
   setNodeFieldShowDescription: 'Edit workflow form',
+  setNodeFieldShowShuffle: 'Edit workflow form',
   unexposeField: 'Remove workflow field from form',
 };
 
@@ -364,6 +376,26 @@ const setFieldInstance = (
       data: { ...node.data, inputs: { ...node.data.inputs, [fieldName]: getInstance(instance) } },
     };
   });
+
+const patchNodeFieldElement = (
+  document: ProjectGraphState,
+  elementId: string,
+  patch: Partial<Omit<NodeFieldFormElement['data'], 'fieldIdentifier'>>
+): ProjectGraphState => {
+  const element = document.form.elements[elementId];
+
+  if (!element || element.type !== 'node-field') {
+    return document;
+  }
+
+  return {
+    ...document,
+    form: {
+      ...document.form,
+      elements: { ...document.form.elements, [element.id]: { ...element, data: { ...element.data, ...patch } } },
+    },
+  };
+};
 
 const addEdgeToDocument = (document: ProjectGraphState, edge: WorkflowEdge): ProjectGraphState => {
   // A non-collect input holds at most one connection; connecting replaces it.
@@ -524,8 +556,42 @@ const applyProjectGraphAction = (document: ProjectGraphState, action: ProjectGra
         description: action.description || undefined,
       }));
     }
+    case 'setFieldSeedMode': {
+      // Fixed is the absent default, so choosing it leaves the instance exactly as
+      // pre-seed-mode documents (and legacy readers) write it.
+      return setFieldInstance(document, action.nodeId, action.fieldName, (instance) => {
+        const { seedMode: _, ...withoutSeedMode } = instance;
+        return action.seedMode === 'fixed' ? withoutSeedMode : { ...instance, seedMode: action.seedMode };
+      });
+    }
+    case 'advanceSeedFields': {
+      return action.advances.reduce((next, advance) => {
+        const node = next.nodes.find((candidate) => candidate.id === advance.nodeId);
+        const instance = node && isInvocationNode(node) ? node.data.inputs[advance.fieldName] : undefined;
+
+        return instance &&
+          instance.value === advance.fromSeed &&
+          // An absent mode is fixed, which never plans an advance, so a bare compare is the whole fence.
+          (instance.seedMode ?? 'fixed') === advance.seedMode
+          ? setFieldInstance(next, advance.nodeId, advance.fieldName, (current) => ({
+              ...current,
+              value: advance.toSeed,
+            }))
+          : next;
+      }, document);
+    }
     case 'addEdge': {
       return addEdgeToDocument(document, action.edge);
+    }
+    case 'reconnectEdge': {
+      if (!document.edges.some((edge) => edge.id === action.edgeId)) {
+        return document;
+      }
+
+      return addEdgeToDocument(
+        { ...document, edges: document.edges.filter((edge) => edge.id !== action.edgeId) },
+        action.edge
+      );
     }
     case 'removeEdges': {
       const removedEdgeIds = new Set(action.edgeIds);
@@ -544,7 +610,7 @@ const applyProjectGraphAction = (document: ProjectGraphState, action: ProjectGra
       return {
         ...document,
         form: appendToRoot(document.form, {
-          data: { fieldIdentifier: { ...action.fieldIdentifier }, showDescription: false },
+          data: { fieldIdentifier: { ...action.fieldIdentifier }, showDescription: false, showShuffle: false },
           id: createWorkflowId('node-field'),
           type: 'node-field',
         }),
@@ -627,22 +693,16 @@ const applyProjectGraphAction = (document: ProjectGraphState, action: ProjectGra
       };
     }
     case 'setNodeFieldShowDescription': {
-      const element = document.form.elements[action.elementId];
+      return patchNodeFieldElement(document, action.elementId, { showDescription: action.showDescription });
+    }
+    case 'setNodeFieldShowShuffle': {
+      const settings = document.form.elements[action.elementId];
+      const legacySettings = settings?.type === 'node-field' ? settings.data.settings : undefined;
 
-      if (!element || element.type !== 'node-field') {
-        return document;
-      }
-
-      return {
-        ...document,
-        form: {
-          ...document.form,
-          elements: {
-            ...document.form.elements,
-            [element.id]: { ...element, data: { ...element.data, showDescription: action.showDescription } },
-          },
-        },
-      };
+      return patchNodeFieldElement(document, action.elementId, {
+        showShuffle: action.showShuffle,
+        ...(legacySettings ? { settings: { ...legacySettings, showShuffle: action.showShuffle } } : {}),
+      });
     }
     case 'setMetadata': {
       return { ...document, ...action.patch };

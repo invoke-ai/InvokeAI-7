@@ -76,12 +76,9 @@ export const GalleryWidgetView = ({ presentation, region, runtime }: GalleryWidg
     gallery: galleryCommands,
     galleryValues,
     generateValues,
-    liveFollowEnabled,
-    liveProgressTarget,
     notifications,
     projectId,
     projectName,
-    queueItems,
     ItemActionsProvider,
   } = useGalleryUi();
   const galleryView = getGalleryView(galleryValues);
@@ -125,17 +122,8 @@ export const GalleryWidgetView = ({ presentation, region, runtime }: GalleryWidg
 
   const { loadMore, selectedBoardId, total } = data;
   const gallery = useMemo(
-    () =>
-      getGalleryStateView(
-        galleryValues,
-        data.boards,
-        data.items,
-        data.isLoadingItems,
-        queueItems,
-        liveFollowEnabled,
-        liveProgressTarget
-      ),
-    [data.boards, data.isLoadingItems, data.items, galleryValues, liveFollowEnabled, liveProgressTarget, queueItems]
+    () => getGalleryStateView(galleryValues, data.boards, data.items, data.isLoadingItems),
+    [data.boards, data.isLoadingItems, data.items, galleryValues]
   );
   // No strip under a ranked result (no starred filter applies), under the
   // starred-only listing (it would repeat the grid), or in a window anchored
@@ -167,7 +155,7 @@ export const GalleryWidgetView = ({ presentation, region, runtime }: GalleryWidg
   // This ref is a live read port for an in-flight deletion. An effect would
   // leave a commit-sized stale window, while the action must compare against
   // the exact filter and selection from the latest render.
-  // eslint-disable-next-line react/react-compiler
+  // eslint-disable-next-line react/refs
   itemActionContextRef.current = {
     filterIdentity: itemActionFilterIdentity,
     items: gallery.items,
@@ -177,7 +165,7 @@ export const GalleryWidgetView = ({ presentation, region, runtime }: GalleryWidg
   // This is the matching live read port for in-flight uploads. The upload
   // target is captured at launch, while completion visibility must use the
   // board and view from the latest render.
-  // eslint-disable-next-line react/react-compiler
+  // eslint-disable-next-line react/refs
   galleryLocationRef.current = { galleryView, selectedBoardId };
 
   const getItemActionContext = useCallback(() => itemActionContextRef.current, []);

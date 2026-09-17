@@ -13,6 +13,7 @@ import {
   MIN_POSITIVE_PROMPT_HEIGHT_PX,
   sanitizeBatchCount,
 } from '@features/generation/settings';
+import { isSeedMode } from '@platform/core/seed';
 
 import type {
   MiniMaxH3TargetResolution,
@@ -432,7 +433,12 @@ export const normalizeVideoSettings = (values: unknown): VideoSettings | null =>
     ),
     references,
     seed: hasFiniteNumber(values, 'seed') ? (values.seed as number) : 0,
-    shouldRandomizeSeed: typeof values.shouldRandomizeSeed === 'boolean' ? values.shouldRandomizeSeed : true,
+    // Values saved before seed modes carry the random toggle instead.
+    seedMode: isSeedMode(values.seedMode)
+      ? values.seedMode
+      : typeof values.shouldRandomizeSeed === 'boolean' && !values.shouldRandomizeSeed
+        ? 'fixed'
+        : 'random',
     sourceVideo,
     steps: hasFiniteNumber(values, 'steps') ? (values.steps as number) : SETTINGS_FALLBACKS.steps,
     targetResolution: isVideoTargetResolution(values.targetResolution)
@@ -454,6 +460,7 @@ export const isVideoSettings = (values: unknown): values is VideoSettings => {
 
   // Strict only over the keys normalize would have to invent.
   return (
+    isSeedMode(values.seedMode) &&
     isVideoAspectRatioId(values.aspectRatioId) &&
     isVideoTargetResolution(values.targetResolution) &&
     typeof values.negativePromptEnabled === 'boolean' &&

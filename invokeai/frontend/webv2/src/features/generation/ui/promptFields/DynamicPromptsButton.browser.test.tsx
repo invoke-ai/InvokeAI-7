@@ -1,4 +1,4 @@
-import type { DynamicPromptsConfig } from '@features/generation/core/dynamicPrompts';
+import type { DynamicPromptsFieldConfig } from '@features/generation/ui/promptFields/DynamicPromptsPanel';
 
 import { ChakraProvider } from '@chakra-ui/react';
 import { DynamicPromptsButton } from '@features/generation/ui/promptFields/DynamicPromptsButton';
@@ -26,8 +26,9 @@ let host: HTMLDivElement | null = null;
 let root: Root | null = null;
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const config: DynamicPromptsConfig & { onChange: () => void } = {
+const config: DynamicPromptsFieldConfig = {
   combinatorial: true,
+  isSeedFixed: false,
   maxPrompts: 100,
   onChange: vi.fn(),
   sampleSeed: 0,

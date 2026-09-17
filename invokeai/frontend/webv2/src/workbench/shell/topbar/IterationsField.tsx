@@ -1,6 +1,7 @@
 import { NumberInput } from '@chakra-ui/react';
 import { MIN_BATCH_COUNT } from '@features/generation/settings';
 import { Tooltip } from '@platform/ui/Tooltip';
+import { getProjectWidgetValues } from '@workbench/widgetState';
 import { useActiveProjectSelector, useWorkbenchCommands } from '@workbench/WorkbenchContext';
 import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -19,10 +20,10 @@ export const IterationsField = () => {
   const { batchCount, sourceId } = useActiveProjectSelector(
     (project) => {
       const sourceId = project.invocation.sourceId;
-      const typeId = sourceId === 'upscale' ? 'upscale' : sourceId === 'video' ? 'video' : 'generate';
-      const instance = Object.values(project.widgetInstances).find((candidate) => candidate.typeId === typeId);
+      const typeId = sourceId === 'upscale' || sourceId === 'video' || sourceId === 'workflow' ? sourceId : 'generate';
 
-      return { batchCount: getBatchCount(instance?.state.values ?? {}), sourceId };
+      // The same resolution the patch command writes through, so reader and writer agree on the instance.
+      return { batchCount: getBatchCount(getProjectWidgetValues(project, typeId)), sourceId };
     },
     (left, right) => left.batchCount === right.batchCount && left.sourceId === right.sourceId
   );
@@ -33,7 +34,7 @@ export const IterationsField = () => {
         return;
       }
 
-      if (sourceId === 'upscale' || sourceId === 'video') {
+      if (sourceId === 'upscale' || sourceId === 'video' || sourceId === 'workflow') {
         widgets.patchValues(sourceId, { batchCount: valueAsNumber });
       } else {
         generation.setBatchCount(valueAsNumber);

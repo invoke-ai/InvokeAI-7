@@ -200,14 +200,14 @@ describe('buildVideoRecallSettings', () => {
     const result = buildVideoRecallSettings({ currentValues, kind: 'seed', metadata: wanMetadata(), models: catalog });
 
     expect(result?.fields).toEqual(['seed']);
-    expect(result?.values).toMatchObject({ seed: 1234, shouldRandomizeSeed: false });
+    expect(result?.values).toMatchObject({ seed: 1234, seedMode: 'fixed' });
   });
 
   it('remix recalls everything except the seed', () => {
     const result = buildVideoRecallSettings({ currentValues, kind: 'remix', metadata: wanMetadata(), models: catalog });
 
     expect(result?.fields).not.toContain('seed');
-    expect(result?.values.shouldRandomizeSeed).toBe(currentValues.shouldRandomizeSeed);
+    expect(result?.values.seedMode).toBe(currentValues.seedMode);
     expect(result?.fields).toEqual(expect.arrayContaining(['model', 'frames', 'steps', 'cfg', 'size']));
   });
 

@@ -93,7 +93,7 @@ it('keeps a named modal through loading, failure, retry, and closing before rest
   expect(isHotkeyModalLayerActive()).toBe(true);
 
   await act(() => initialLoad.reject(new Error('Settings chunk unavailable')));
-  await expect.element(page.getByRole('alert')).toHaveTextContent(i18n.t('settingsDialog.loadFailed'));
+  await expect.element(page.getByRole('alert')).toMatchTextContent(i18n.t('settingsDialog.loadFailed'));
   await expect.element(page.getByRole('dialog', { name: 'Settings', exact: true })).toBeVisible();
   const retry = page.getByRole('button', { name: i18n.t('common.retry'), exact: true });
   await expect.element(retry).toBeEnabled();

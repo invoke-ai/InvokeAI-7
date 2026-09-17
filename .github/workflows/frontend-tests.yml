@@ -76,7 +76,7 @@ jobs:
 
   frontend-webv2-tests:
     runs-on: ubuntu-latest
-    timeout-minutes: 20 # Includes browser suites, performance sampling, and project-file journeys.
+    timeout-minutes: 20 # Includes browser suites, performance sampling, project files, and accessibility.
     defaults:
       run:
         working-directory: invokeai/frontend/webv2
@@ -105,11 +105,12 @@ jobs:
         run: 'pnpm exec playwright install --with-deps chromium'
         shell: bash
 
-      # A pull request into main, or a merge group, is judged as a delta against the base branch's
+      # A pull request into main, or a merge group, is compared with the base branch's
       # own measurements, restored from the cache every push to main fills below: the exact base
       # commit when it has an entry, otherwise the most recent main entry (a main job that failed or
       # is still running leaves no hole). Anything else compares against the committed baseline. The
-      # gate logs which it used, and the restored key is passed through so reports can name it.
+      # gate also honors deliberately re-recorded byte baselines. It logs which reference it used,
+      # and the restored key is passed through so reports can name it.
       - name: restore performance reference
         id: perf-ref
         if: ${{ (steps.changed-files.outputs.webv2_any_changed == 'true' || inputs.always_run == true) && ((github.event_name == 'pull_request' && github.base_ref == 'main') || (github.event_name == 'merge_group' && github.event.merge_group.base_ref == 'refs/heads/main')) }}
@@ -124,9 +125,9 @@ jobs:
         run: 'echo "::warning::No performance reference was restored; byte budgets are compared against the committed baseline."'
         shell: bash
 
-      - name: architecture completion gates
+      - name: release completion gates
         if: ${{ steps.changed-files.outputs.webv2_any_changed == 'true' || inputs.always_run == true }}
-        run: 'pnpm check:architecture'
+        run: 'pnpm check:release'
         shell: bash
         env:
           WEBV2_PERF_REFERENCE_DIR: ${{ steps.perf-ref.outputs.cache-matched-key != '' && 'artifacts/perf-reference' || '' }}
@@ -166,4 +167,5 @@ jobs:
           path: |
             invokeai/frontend/webv2/artifacts/architecture
             invokeai/frontend/webv2/artifacts/architecture-performance
+            invokeai/frontend/webv2/artifacts/accessibility
           if-no-files-found: ignore

@@ -38,6 +38,7 @@ export interface GallerySettings {
    */
   showOtherProjectBoards: boolean;
   showPendingItems: boolean;
+  progressSectionCollapsed: boolean;
   /** Disclosure of the starred strip at the top of the grid. */
   starredSectionCollapsed: boolean;
   thumbnailFit: GalleryThumbnailFit;
@@ -58,6 +59,7 @@ export const DEFAULT_GALLERY_SETTINGS: GallerySettings = {
   showImageDimensions: false,
   showOtherProjectBoards: false,
   showPendingItems: true,
+  progressSectionCollapsed: false,
   starredSectionCollapsed: false,
   thumbnailFit: 'square',
 };
@@ -130,6 +132,7 @@ export const getGallerySettings = (values: Record<string, unknown>): GallerySett
       typeof values.showPendingItems === 'boolean'
         ? values.showPendingItems
         : DEFAULT_GALLERY_SETTINGS.showPendingItems,
+    progressSectionCollapsed: values.progressSectionCollapsed === true,
     starredSectionCollapsed:
       typeof values.starredSectionCollapsed === 'boolean'
         ? values.starredSectionCollapsed

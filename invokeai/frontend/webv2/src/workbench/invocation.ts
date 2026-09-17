@@ -95,6 +95,7 @@ export interface InvocationRouteInput {
   generateValues: Record<string, unknown>;
   upscaleValues: Record<string, unknown>;
   videoValues: Record<string, unknown>;
+  workflowValues: Record<string, unknown>;
   invocation: InvocationRoute;
   mountedWidgetIds: readonly WidgetId[];
   projectGraph: ProjectGraphState;
@@ -139,6 +140,7 @@ export const getInvocationRouteInput = (project: Project): InvocationRouteInput 
   generateValues: getProjectWidgetValues(project, 'generate'),
   upscaleValues: getProjectWidgetValues(project, 'upscale'),
   videoValues: getProjectWidgetValues(project, 'video'),
+  workflowValues: getProjectWidgetValues(project, 'workflow'),
   invocation: project.invocation,
   mountedWidgetIds: getMountedWidgetIds(project),
   projectGraph: project.projectGraph,
@@ -152,6 +154,7 @@ export const areInvocationRouteInputsEqual = (left: InvocationRouteInput, right:
   left.generateValues === right.generateValues &&
   left.upscaleValues === right.upscaleValues &&
   left.videoValues === right.videoValues &&
+  left.workflowValues === right.workflowValues &&
   left.canvasBbox.width === right.canvasBbox.width &&
   left.canvasBbox.height === right.canvasBbox.height &&
   left.canvasLayers === right.canvasLayers &&

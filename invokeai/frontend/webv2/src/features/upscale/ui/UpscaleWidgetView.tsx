@@ -3,27 +3,15 @@ import type { ProjectPromptDraftPatch } from '@features/generation/settings';
 import type { ModelConfig, ModelTaxonomyType } from '@features/models';
 import type { UpscaleWidgetValues } from '@features/upscale/core/types';
 
+import { Badge, createListCollection, DataList, SegmentGroup, SimpleGrid, Stack, Text } from '@chakra-ui/react';
+import { GenerationSettingsSection, SeedField } from '@features/generation/components';
 import {
-  Badge,
-  createListCollection,
-  DataList,
-  HStack,
-  NumberInput,
-  SegmentGroup,
-  SimpleGrid,
-  Stack,
-  Switch,
-  Text,
-} from '@chakra-ui/react';
-import { GenerationSettingsSection } from '@features/generation/components';
-import {
-  SCHEDULER_OPTIONS,
   getDefaultLoraWeight,
   isLoraCompatibleWithModel,
   isLoraModelConfig,
   isMainModelConfig,
   isVaeModelConfig,
-  SEED_MAX,
+  SCHEDULER_OPTIONS,
 } from '@features/generation/settings';
 import { ensureModelsLoaded, useModelsSelector } from '@features/models';
 import { ModelSelect } from '@features/models/react';
@@ -47,12 +35,12 @@ import {
   UPSCALE_TILE_SIZE_MAX,
   UPSCALE_TILE_SIZE_MIN,
 } from '@features/upscale/core/settings';
+import { SEED_MAX } from '@platform/core/seed';
 import { useMountEffect } from '@platform/react/useMountEffect';
-import { Combobox, Field, IconButton, Select, Tooltip } from '@platform/ui';
-import { SliderNumberField } from '@platform/ui/SliderNumberField';
+import { Combobox, Field, Select, Tooltip } from '@platform/ui';
+import { ScrubberField } from '@platform/ui/ScrubberField';
 import { toaster } from '@platform/ui/toaster';
-import { DicesIcon } from 'lucide-react';
-import { memo, useCallback, useId, useMemo } from 'react';
+import { memo, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { areInputImagesEquivalent, valuesAreEqual } from './upscaleComparators';
@@ -92,9 +80,10 @@ const STRUCTURE_MARKS = [UPSCALE_STRUCTURE_MIN, 0, UPSCALE_STRUCTURE_MAX];
 const TILE_SIZE_MARKS = [UPSCALE_TILE_SIZE_MIN, 1024, UPSCALE_TILE_SIZE_MAX];
 const TILE_OVERLAP_MARKS = [UPSCALE_TILE_OVERLAP_MIN, 128, 256, UPSCALE_TILE_OVERLAP_MAX];
 
-const GENERATION_GRID_COLUMNS = { base: 2, md: 3 };
+/** Scrub ranges cover everyday values; typing still reaches the validated bounds. */
+const STEPS_SLIDER_MAX = 100;
+const CFG_SLIDER_MAX = 20;
 const ADVANCED_GRID_COLUMNS = { base: 1, md: 2 };
-const SWITCH_CHECKED_PROPS = { bg: 'accent.solid' };
 const PRESET_ENTRIES = Object.entries(UPSCALE_PRESETS);
 
 const isSelectableMainModel = (model: ModelConfig): boolean => isSupportedUpscaleMainModel(model);
@@ -284,13 +273,6 @@ export const UpscaleWidgetView = () => {
     [t, values]
   );
   const patch = useCallback((next: Partial<UpscaleWidgetValues>) => patchValues(next), [patchValues]);
-  // Chakra's `Field.Root` hands its single `ids.control` to EVERY control
-  // inside it, and the seed Field holds the NumberInput, the shuffle button
-  // and this switch. Without an id of its own the switch's hidden input
-  // collides with the seed input, so the `<label>` Switch.Root renders points
-  // at the seed field and clicking the toggle only moved focus.
-  const seedSwitchId = useId();
-  const seedSwitchIds = useMemo(() => ({ hiddenInput: `${seedSwitchId}-randomize-seed` }), [seedSwitchId]);
   const patchPromptDraft = useCallback((next: ProjectPromptDraftPatch) => patchDraft(next), [patchDraft]);
 
   useMountEffect(() => {
@@ -378,24 +360,15 @@ export const UpscaleWidgetView = () => {
   // `onChange={(x) => patch({ x })}` props would defeat every `memo` below.
   const set = useMemo(
     () => ({
-      batchCount: ({ valueAsNumber }: NumberInput.ValueChangeDetails) =>
-        Number.isFinite(valueAsNumber) && patch({ batchCount: valueAsNumber }),
-      cfgScale: ({ valueAsNumber }: NumberInput.ValueChangeDetails) =>
-        Number.isFinite(valueAsNumber) && patch({ cfgScale: valueAsNumber }),
-      clipSkip: ({ valueAsNumber }: NumberInput.ValueChangeDetails) =>
-        Number.isFinite(valueAsNumber) && patch({ clipSkip: valueAsNumber }),
+      cfgScale: (cfgScale: number) => patch({ cfgScale }),
+      clipSkip: (clipSkip: number) => patch({ clipSkip }),
       creativity: (creativity: number) => patch({ creativity }),
       inputImage: (inputImage: UpscaleWidgetValues['inputImage']) => patch({ inputImage }),
-      randomizeSeed: (details: { checked: boolean }) => patch({ shouldRandomizeSeed: details.checked }),
       scale: (scale: number) => patch({ scale }),
       scheduler: (scheduler: string) => patch({ scheduler }),
-      seed: ({ valueAsNumber }: NumberInput.ValueChangeDetails) =>
-        Number.isFinite(valueAsNumber) && patch({ seed: valueAsNumber }),
-      shuffleSeed: () => patch({ seed: Math.floor(Math.random() * SEED_MAX) }),
       spandrelModel: (model: ModelConfig | null) =>
         patch({ upscaleModel: isSpandrelModelConfig(model) ? model : null }),
-      steps: ({ valueAsNumber }: NumberInput.ValueChangeDetails) =>
-        Number.isFinite(valueAsNumber) && patch({ steps: valueAsNumber }),
+      steps: (steps: number) => patch({ steps }),
       structure: (structure: number) => patch({ structure }),
       tileOverlap: (tileOverlap: number) => patch({ tileOverlap }),
       tileSize: (tileSize: number) => patch({ tileSize }),
@@ -469,24 +442,19 @@ export const UpscaleWidgetView = () => {
               onChange={set.spandrelModel}
             />
           </Field>
-          <Field
+          <ScrubberField
             error={errors.scale}
+            formatValue={formatScale}
             helpText={t('widgets.upscale.scaleHelp')}
             hint="upscaleScale"
             label={t('widgets.upscale.scale')}
-          >
-            <SliderNumberField
-              ariaLabel={t('widgets.upscale.scale')}
-              formatValue={formatScale}
-              marks={SCALE_MARKS}
-              max={UPSCALE_SCALE_MAX}
-              min={UPSCALE_SCALE_MIN}
-              showStepper
-              step={0.5}
-              value={values.scale}
-              onChange={set.scale}
-            />
-          </Field>
+            marks={SCALE_MARKS}
+            max={UPSCALE_SCALE_MAX}
+            min={UPSCALE_SCALE_MIN}
+            step={0.5}
+            value={values.scale}
+            onChange={set.scale}
+          />
           <SegmentGroup.Root
             aria-label={t('widgets.upscale.presetsLabel')}
             size="xs"
@@ -514,40 +482,30 @@ export const UpscaleWidgetView = () => {
               );
             })}
           </SegmentGroup.Root>
-          <Field
+          <ScrubberField
             error={errors.creativity}
             helpText={t('widgets.upscale.creativityHelp')}
             hint="creativity"
             label={t('widgets.upscale.creativity')}
-          >
-            <SliderNumberField
-              ariaLabel={t('widgets.upscale.creativity')}
-              marks={CREATIVITY_MARKS}
-              max={UPSCALE_CREATIVITY_MAX}
-              min={UPSCALE_CREATIVITY_MIN}
-              showStepper
-              step={1}
-              value={values.creativity}
-              onChange={set.creativity}
-            />
-          </Field>
-          <Field
+            marks={CREATIVITY_MARKS}
+            max={UPSCALE_CREATIVITY_MAX}
+            min={UPSCALE_CREATIVITY_MIN}
+            step={1}
+            value={values.creativity}
+            onChange={set.creativity}
+          />
+          <ScrubberField
             error={errors.structure}
             helpText={t('widgets.upscale.structureHelp')}
             hint="structure"
             label={t('widgets.upscale.structure')}
-          >
-            <SliderNumberField
-              ariaLabel={t('widgets.upscale.structure')}
-              marks={STRUCTURE_MARKS}
-              max={UPSCALE_STRUCTURE_MAX}
-              min={UPSCALE_STRUCTURE_MIN}
-              showStepper
-              step={1}
-              value={values.structure}
-              onChange={set.structure}
-            />
-          </Field>
+            marks={STRUCTURE_MARKS}
+            max={UPSCALE_STRUCTURE_MAX}
+            min={UPSCALE_STRUCTURE_MIN}
+            step={1}
+            value={values.structure}
+            onChange={set.structure}
+          />
         </Stack>
       </GenerationSettingsSection>
 
@@ -582,33 +540,29 @@ export const UpscaleWidgetView = () => {
               onChange={selectMainModel}
             />
           </Field>
-          <SimpleGrid columns={GENERATION_GRID_COLUMNS} gap="2">
-            <Field error={errors.steps} hint="steps" label={t('widgets.upscale.steps')}>
-              <NumberInput.Root max={1000} min={1} size="xs" value={String(values.steps)} onValueChange={set.steps}>
-                <NumberInput.Control />
-                <NumberInput.Input fontVariantNumeric="tabular-nums" />
-              </NumberInput.Root>
-            </Field>
-            <Field error={errors.cfgScale} hint="cfgScale" label={t('widgets.upscale.cfgScale')}>
-              <NumberInput.Root
-                max={100}
-                min={0}
-                size="xs"
-                step={0.5}
-                value={String(values.cfgScale)}
-                onValueChange={set.cfgScale}
-              >
-                <NumberInput.Control />
-                <NumberInput.Input fontVariantNumeric="tabular-nums" />
-              </NumberInput.Root>
-            </Field>
-            <Field hint="batchCount" label={t('widgets.upscale.batchCount')}>
-              <NumberInput.Root min={1} size="xs" value={String(values.batchCount)} onValueChange={set.batchCount}>
-                <NumberInput.Control />
-                <NumberInput.Input fontVariantNumeric="tabular-nums" />
-              </NumberInput.Root>
-            </Field>
-          </SimpleGrid>
+          {/* Iterations live in the top bar's invoke cluster, which edits this widget's batch count directly. */}
+          <ScrubberField
+            error={errors.steps}
+            hint="steps"
+            inputMax={1000}
+            label={t('widgets.upscale.steps')}
+            max={STEPS_SLIDER_MAX}
+            min={1}
+            step={1}
+            value={values.steps}
+            onChange={set.steps}
+          />
+          <ScrubberField
+            error={errors.cfgScale}
+            hint="cfgScale"
+            inputMax={100}
+            label={t('widgets.upscale.cfgScale')}
+            max={CFG_SLIDER_MAX}
+            min={0}
+            step={0.5}
+            value={values.cfgScale}
+            onChange={set.cfgScale}
+          />
           <Field hint="scheduler" label={t('widgets.upscale.scheduler')}>
             <Combobox
               aria-label={t('widgets.upscale.scheduler')}
@@ -618,48 +572,14 @@ export const UpscaleWidgetView = () => {
               onValueChange={set.scheduler}
             />
           </Field>
-          <Field
-            error={values.shouldRandomizeSeed ? undefined : errors.seed}
-            hint="seed"
+          <SeedField
+            batchCount={values.batchCount}
+            error={errors.seed}
             label={t('widgets.upscale.seed')}
-          >
-            <HStack gap="2">
-              <NumberInput.Root
-                disabled={values.shouldRandomizeSeed}
-                max={SEED_MAX}
-                min={0}
-                size="xs"
-                value={String(values.seed)}
-                w="full"
-                onValueChange={set.seed}
-              >
-                <NumberInput.Input fontVariantNumeric="tabular-nums" />
-              </NumberInput.Root>
-              <Tooltip content={t('widgets.upscale.shuffleSeed')}>
-                <IconButton
-                  aria-label={t('widgets.upscale.shuffleSeed')}
-                  disabled={values.shouldRandomizeSeed}
-                  size="xs"
-                  variant="outline"
-                  onClick={set.shuffleSeed}
-                >
-                  <DicesIcon />
-                </IconButton>
-              </Tooltip>
-              <Switch.Root
-                checked={values.shouldRandomizeSeed}
-                ids={seedSwitchIds}
-                size="sm"
-                onCheckedChange={set.randomizeSeed}
-              >
-                <Switch.HiddenInput />
-                <Switch.Control _checked={SWITCH_CHECKED_PROPS}>
-                  <Switch.Thumb />
-                </Switch.Control>
-                <Switch.Label fontSize="xs">{t('widgets.upscale.random')}</Switch.Label>
-              </Switch.Root>
-            </HStack>
-          </Field>
+            seed={values.seed}
+            seedMode={values.seedMode}
+            onCommit={patch}
+          />
           <Field hint="concepts" label={t('widgets.upscale.addLora')}>
             <ModelSelect
               excludeKeys={selectedLoraKeys}
@@ -695,40 +615,30 @@ export const UpscaleWidgetView = () => {
               onChange={setTileControlNet}
             />
           </Field>
-          <Field
+          <ScrubberField
             error={errors.tileSize}
             helpText={t('widgets.upscale.tileSizeHelp')}
             hint="tileSize"
             label={t('widgets.upscale.tileSize')}
-          >
-            <SliderNumberField
-              ariaLabel={t('widgets.upscale.tileSize')}
-              marks={TILE_SIZE_MARKS}
-              max={UPSCALE_TILE_SIZE_MAX}
-              min={UPSCALE_TILE_SIZE_MIN}
-              showStepper
-              step={64}
-              value={values.tileSize}
-              onChange={set.tileSize}
-            />
-          </Field>
-          <Field
+            marks={TILE_SIZE_MARKS}
+            max={UPSCALE_TILE_SIZE_MAX}
+            min={UPSCALE_TILE_SIZE_MIN}
+            step={64}
+            value={values.tileSize}
+            onChange={set.tileSize}
+          />
+          <ScrubberField
             error={errors.tileOverlap}
             helpText={t('widgets.upscale.tileOverlapHelp')}
             hint="tileOverlap"
             label={t('widgets.upscale.tileOverlap')}
-          >
-            <SliderNumberField
-              ariaLabel={t('widgets.upscale.tileOverlap')}
-              marks={TILE_OVERLAP_MARKS}
-              max={UPSCALE_TILE_OVERLAP_MAX}
-              min={UPSCALE_TILE_OVERLAP_MIN}
-              showStepper
-              step={8}
-              value={values.tileOverlap}
-              onChange={set.tileOverlap}
-            />
-          </Field>
+            marks={TILE_OVERLAP_MARKS}
+            max={UPSCALE_TILE_OVERLAP_MAX}
+            min={UPSCALE_TILE_OVERLAP_MIN}
+            step={8}
+            value={values.tileOverlap}
+            onChange={set.tileOverlap}
+          />
           <SimpleGrid columns={ADVANCED_GRID_COLUMNS} gap="2">
             <Field
               hint="vae"
@@ -756,12 +666,15 @@ export const UpscaleWidgetView = () => {
             </Field>
           </SimpleGrid>
           {values.model?.base === 'sd-1' ? (
-            <Field hint="clipSkip" label={t('widgets.upscale.clipSkip')}>
-              <NumberInput.Root max={12} min={0} size="xs" value={String(values.clipSkip)} onValueChange={set.clipSkip}>
-                <NumberInput.Control />
-                <NumberInput.Input fontVariantNumeric="tabular-nums" />
-              </NumberInput.Root>
-            </Field>
+            <ScrubberField
+              hint="clipSkip"
+              label={t('widgets.upscale.clipSkip')}
+              max={12}
+              min={0}
+              step={1}
+              value={values.clipSkip}
+              onChange={set.clipSkip}
+            />
           ) : null}
         </Stack>
       </GenerationSettingsSection>

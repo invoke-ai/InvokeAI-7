@@ -125,6 +125,64 @@ describe('workflow JSON round-trip', () => {
 });
 
 describe('parseWorkflowJson tolerance', () => {
+  it('reads the legacy per-element shuffle setting and keeps the settings bag for the legacy editor', () => {
+    const { document, warnings } = parseWorkflowJson({
+      edges: [],
+      form: {
+        elements: {
+          root: { data: { children: ['f1'], layout: 'column' }, id: 'root', type: 'container' },
+          f1: {
+            data: {
+              fieldIdentifier: { fieldName: 'steps', nodeId: 'n1' },
+              settings: { component: 'number-input', showShuffle: true },
+            },
+            id: 'f1',
+            parentId: 'root',
+            type: 'node-field',
+          },
+        },
+        rootElementId: 'root',
+      },
+      name: 'Legacy Shuffle',
+      nodes: [
+        {
+          data: { id: 'n1', inputs: { steps: { label: '', name: 'steps', value: 20 } }, type: 'noise' },
+          id: 'n1',
+          position: { x: 0, y: 0 },
+          type: 'invocation',
+        },
+      ],
+      version: '1.0.0',
+    });
+
+    expect(warnings).toEqual([]);
+
+    const field = document.form.elements.f1;
+
+    expect(field?.type === 'node-field' && field.data).toEqual({
+      fieldIdentifier: { fieldName: 'steps', nodeId: 'n1' },
+      settings: { component: 'number-input', showShuffle: true },
+      showDescription: false,
+      showShuffle: true,
+    });
+
+    const toggled = projectGraphReducer(document, {
+      elementId: 'f1',
+      showShuffle: false,
+      type: 'setNodeFieldShowShuffle',
+    });
+    const toggledField = toggled.form.elements.f1;
+    const serialized = serializeWorkflowJson(toggled) as { form: { elements: Record<string, { data: unknown }> } };
+
+    expect(toggledField?.type === 'node-field' && toggledField.data.settings).toEqual({
+      component: 'number-input',
+      showShuffle: false,
+    });
+    expect(serialized.form.elements.f1?.data).toMatchObject({
+      settings: { component: 'number-input', showShuffle: false },
+    });
+  });
+
   it('migrates pre-form exposedFields into form elements', () => {
     const { document, warnings } = parseWorkflowJson({
       edges: [],
@@ -239,5 +297,40 @@ describe('parseWorkflowJson tolerance', () => {
 
     expect(warnings).toEqual([]);
     expect(document.form.elements[document.form.rootElementId]?.type).toBe('container');
+  });
+});
+
+describe('seed modes in workflow JSON', () => {
+  it('round-trips a stepping mode and reads its absence as unset', () => {
+    const node = buildInvocationNode(template, { x: 0, y: 0 });
+    let doc = createProjectGraph('seed-json');
+
+    doc = projectGraphReducer(doc, { node, type: 'addNode' });
+    doc = projectGraphReducer(doc, {
+      fieldName: 'prompt',
+      nodeId: node.id,
+      seedMode: 'increment',
+      type: 'setFieldSeedMode',
+    });
+
+    const serialized = serializeWorkflowJson(doc);
+    const parsed = parseWorkflowJson(serialized).document.nodes[0];
+
+    expect(parsed?.type === 'invocation' && parsed.data.inputs.prompt).toMatchObject({ seedMode: 'increment' });
+
+    // Fixed is the absent key, which is also what a legacy reader hands back after stripping it.
+    const fixed = serializeWorkflowJson(
+      projectGraphReducer(doc, { fieldName: 'prompt', nodeId: node.id, seedMode: 'fixed', type: 'setFieldSeedMode' })
+    ).nodes as Array<{ data: { inputs: { prompt: { seedMode?: unknown } } } }>;
+
+    expect(fixed[0]?.data.inputs.prompt).not.toHaveProperty('seedMode');
+
+    const nodes = serialized.nodes as Array<{ data: { inputs: { prompt: { seedMode?: unknown } } } }>;
+
+    (nodes[0] as NonNullable<(typeof nodes)[number]>).data.inputs.prompt.seedMode = 'shuffle';
+
+    const degraded = parseWorkflowJson(serialized).document.nodes[0];
+
+    expect(degraded?.type === 'invocation' && degraded.data.inputs.prompt).not.toHaveProperty('seedMode');
   });
 });

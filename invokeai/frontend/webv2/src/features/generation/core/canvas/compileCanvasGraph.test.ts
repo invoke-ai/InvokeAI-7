@@ -85,7 +85,7 @@ const PROJECT_SETTINGS: GenerationProjectSettings = { useCpuNoise: true };
 const settingsFor = (model: GenerateModelConfig, overrides: Partial<GenerateSettings> = {}): GenerateSettings => ({
   ...getDefaultGenerateSettings(model),
   seed: 1,
-  shouldRandomizeSeed: false,
+  seedMode: 'fixed',
   ...overrides,
 });
 

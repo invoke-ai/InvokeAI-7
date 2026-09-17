@@ -5,6 +5,7 @@ import { toGalleryItemKey } from '@features/gallery/contracts';
 import { invalidateGallery } from '@features/gallery/queries';
 import { VideoUiProvider } from '@features/video';
 import { useQueryClient } from '@tanstack/react-query';
+import { useFindGalleryItem } from '@workbench/image-actions/useFindGalleryItem';
 import { useWorkbenchPreferenceSelector } from '@workbench/settings/store';
 import { useOpenWorkbenchWidget } from '@workbench/useOpenWorkbenchWidget';
 import {
@@ -103,9 +104,11 @@ export const VideoUiAdapterProvider = ({ children }: { children: ReactNode }) =>
     [commands, openWorkbenchWidget, projectId]
   );
   const getUploadBoardId = useCallback(() => uploadBoardIdRef.current, []);
+  const findInGallery = useFindGalleryItem();
   const adapter = useMemo<VideoUiAdapter>(
     () => ({
       ...project,
+      findInGallery,
       getUploadBoardId,
       patchValues,
       playVideoSpanInPreview,
@@ -115,6 +118,7 @@ export const VideoUiAdapterProvider = ({ children }: { children: ReactNode }) =>
       videoSpanPlayback: VIDEO_SPAN_PLAYBACK_PORT,
     }),
     [
+      findInGallery,
       getUploadBoardId,
       patchValues,
       playVideoSpanInPreview,

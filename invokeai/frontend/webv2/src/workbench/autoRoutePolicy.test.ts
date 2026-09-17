@@ -161,6 +161,7 @@ describe('Workflow edit classification', () => {
       'addGraphElements',
       'addNode',
       'addNodeAndEdge',
+      'reconnectEdge',
       'removeEdges',
       'removeNodes',
       'setFieldValue',

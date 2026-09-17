@@ -8,7 +8,6 @@ import {
   generatedImageToReferenceImage,
   getEffectiveReferenceImage,
   getReferenceImageCropBoxPct,
-  isCanonicalCroppableImage,
   normalizeCroppableImage,
   resolveReferenceImageCrop,
 } from './referenceImage';
@@ -30,7 +29,6 @@ describe('reference images', () => {
   });
 
   it('migrates pre-crop legacy and former flat webv2 assets', () => {
-    expect(isCanonicalCroppableImage(original)).toBe(false);
     expect(normalizeCroppableImage(original)).toEqual({ original: { image: original } });
     expect(
       normalizeCroppableImage({
@@ -43,12 +41,6 @@ describe('reference images', () => {
         width: 640,
       })
     ).toEqual({ original: { image: { height: 512, image_name: 'webv2.png', width: 640 } } });
-    expect(isCanonicalCroppableImage({ original: { image: original } })).toBe(true);
-    expect(
-      isCanonicalCroppableImage({
-        original: { image: { height: 768, imageName: 'not-canonical.png', width: 1024 } },
-      })
-    ).toBe(false);
   });
 
   it('converts gallery results to uncropped canonical assets', () => {

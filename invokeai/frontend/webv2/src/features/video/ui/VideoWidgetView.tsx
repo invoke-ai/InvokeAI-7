@@ -2,9 +2,9 @@ import type { ImageWithDims } from '@features/generation/contracts';
 import type { ModelConfig, ModelTaxonomyType } from '@features/models';
 import type { VideoReferenceItem, VideoSourceClip, VideoWidgetValues } from '@features/video/core/types';
 
-import { createListCollection, HStack, NumberInput, Stack, Switch, Text } from '@chakra-ui/react';
-import { GenerationSettingsSection } from '@features/generation/components';
-import { isMainModelConfig, sanitizeBatchCount, SEED_MAX } from '@features/generation/settings';
+import { createListCollection, HStack, Stack, Switch, Text } from '@chakra-ui/react';
+import { GenerationSettingsSection, SeedField } from '@features/generation/components';
+import { isMainModelConfig, sanitizeBatchCount } from '@features/generation/settings';
 import { ensureModelsLoaded, useModelsSelector } from '@features/models';
 import { ModelSelect } from '@features/models/react';
 import { getVideoDurationSeconds, invertVideoAspectRatioId } from '@features/video/core/dimensions';
@@ -29,10 +29,10 @@ import { createDefaultVideoWidgetValues, syncVideoWidgetValuesWithModels } from 
 import { useMountEffect } from '@platform/react/useMountEffect';
 import { Field, IconButton, Select } from '@platform/ui';
 import { Button } from '@platform/ui/Button';
-import { SliderNumberField } from '@platform/ui/SliderNumberField';
+import { ScrubberField } from '@platform/ui/ScrubberField';
 import { toaster } from '@platform/ui/toaster';
-import { ArrowLeftRightIcon, DicesIcon } from 'lucide-react';
-import { useCallback, useEffect, useId, useMemo, useRef } from 'react';
+import { ArrowLeftRightIcon } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { areVideoValuesEqual } from './videoComparators';
@@ -187,14 +187,6 @@ export const VideoWidgetView = () => {
     };
   }, [projectId, values.references]);
 
-  // Chakra's `Field.Root` hands its single `ids.control` to EVERY control
-  // inside it, and this Field holds three. Without an id of its own the
-  // switch's hidden input collides with the seed NumberInput, so the
-  // `<label>` Switch.Root renders points at the seed field: clicking the
-  // toggle focused the seed input and never toggled anything.
-  const seedSwitchId = useId();
-  const seedSwitchIds = useMemo(() => ({ hiddenInput: `${seedSwitchId}-randomize-seed` }), [seedSwitchId]);
-
   useMountEffect(() => {
     void ensureModelsLoaded();
   });
@@ -260,10 +252,6 @@ export const VideoWidgetView = () => {
       cfgScale: (cfgScale: number) => patch({ cfgScale }),
       cfgScaleLowNoise: (cfgScaleLowNoise: number) => patch({ cfgScaleLowNoise }),
       fps: (fps: number) => patch({ fps }),
-      randomizeSeed: (details: { checked: boolean }) => patch({ shouldRandomizeSeed: details.checked }),
-      seed: ({ valueAsNumber }: NumberInput.ValueChangeDetails) =>
-        Number.isFinite(valueAsNumber) && patch({ seed: valueAsNumber }),
-      shuffleSeed: () => patch({ seed: Math.floor(Math.random() * SEED_MAX) }),
       steps: (steps: number) => patch({ steps }),
       targetResolution: ({ value }: { value: string[] }) => {
         const targetResolution = toTargetResolution(value[0]);
@@ -647,32 +635,27 @@ export const VideoWidgetView = () => {
               onValueChange={set.targetResolution}
             />
           </Field>
-          <Field helpText={durationText} label={t('widgets.video.frames')}>
-            <SliderNumberField
-              ariaLabel={t('widgets.video.frames')}
-              max={framesSlider.max}
-              min={framesSlider.min}
-              step={framesSlider.step}
-              value={values.numFrames}
-              onChange={setNumFrames}
-            />
-          </Field>
+          <ScrubberField
+            helpText={durationText}
+            label={t('widgets.video.frames')}
+            max={framesSlider.max}
+            min={framesSlider.min}
+            step={framesSlider.step}
+            value={values.numFrames}
+            onChange={setNumFrames}
+          />
           {policy.ui.fpsVisible ? (
-            <Field
+            <ScrubberField
+              disabled={fpsLockedForExtend}
               helpText={fpsLockedForExtend ? t('widgets.video.fpsExtendLocked') : undefined}
+              inputMax={policy.fps.max}
               label={t('widgets.video.fps')}
-            >
-              <SliderNumberField
-                ariaLabel={t('widgets.video.fps')}
-                disabled={fpsLockedForExtend}
-                max={60}
-                min={policy.fps.min}
-                numberInputMax={policy.fps.max}
-                step={1}
-                value={values.fps}
-                onChange={set.fps}
-              />
-            </Field>
+              max={60}
+              min={policy.fps.min}
+              step={1}
+              value={values.fps}
+              onChange={set.fps}
+            />
           ) : (
             <Text color="fg.muted" fontSize="2xs">
               {t('widgets.video.fixedFps', { fps: policy.fps.defaultValue })}
@@ -700,86 +683,47 @@ export const VideoWidgetView = () => {
               </Switch.Root>
             </Field>
           ) : null}
-          <Field hint="steps" label={t('widgets.video.steps')}>
-            <SliderNumberField
-              ariaLabel={t('widgets.video.steps')}
-              max={100}
-              min={policy.minSteps}
-              numberInputMax={500}
-              step={1}
-              value={values.steps}
-              onChange={set.steps}
-            />
-          </Field>
+          <ScrubberField
+            hint="steps"
+            inputMax={500}
+            label={t('widgets.video.steps')}
+            max={100}
+            min={policy.minSteps}
+            step={1}
+            value={values.steps}
+            onChange={set.steps}
+          />
           {policy.ui.cfgVisible ? (
-            <Field hint="cfgScale" label={t('widgets.video.cfg')}>
-              <SliderNumberField
-                ariaLabel={t('widgets.video.cfg')}
-                max={15}
-                min={1}
-                numberInputMax={100}
-                step={0.1}
-                value={values.cfgScale}
-                onChange={set.cfgScale}
-              />
-            </Field>
+            <ScrubberField
+              hint="cfgScale"
+              inputMax={100}
+              label={t('widgets.video.cfg')}
+              max={15}
+              min={1}
+              step={0.1}
+              value={values.cfgScale}
+              onChange={set.cfgScale}
+            />
           ) : null}
           {policy.ui.cfgLowNoiseVisible ? (
-            <Field helpText={t('widgets.video.cfgLowNoiseHelp')} label={t('widgets.video.cfgLowNoise')}>
-              <SliderNumberField
-                ariaLabel={t('widgets.video.cfgLowNoise')}
-                max={15}
-                min={0}
-                numberInputMax={100}
-                step={0.1}
-                value={values.cfgScaleLowNoise ?? values.cfgScale}
-                onChange={set.cfgScaleLowNoise}
-              />
-            </Field>
+            <ScrubberField
+              helpText={t('widgets.video.cfgLowNoiseHelp')}
+              inputMax={100}
+              label={t('widgets.video.cfgLowNoise')}
+              max={15}
+              min={0}
+              step={0.1}
+              value={values.cfgScaleLowNoise ?? values.cfgScale}
+              onChange={set.cfgScaleLowNoise}
+            />
           ) : null}
-          <Field hint="seed" label={t('widgets.video.seed')}>
-            <HStack gap="2">
-              <NumberInput.Root
-                disabled={values.shouldRandomizeSeed}
-                flex="1"
-                max={SEED_MAX}
-                min={0}
-                size="xs"
-                step={1}
-                value={String(values.seed)}
-                onValueChange={set.seed}
-              >
-                <NumberInput.Input aria-label={t('widgets.video.seed')} />
-              </NumberInput.Root>
-              <IconButton
-                aria-label={t('widgets.video.shuffleSeed')}
-                disabled={values.shouldRandomizeSeed}
-                size="xs"
-                variant="ghost"
-                onClick={set.shuffleSeed}
-              >
-                <DicesIcon />
-              </IconButton>
-              <HStack gap="1">
-                <Switch.Root
-                  checked={values.shouldRandomizeSeed}
-                  ids={seedSwitchIds}
-                  size="sm"
-                  onCheckedChange={set.randomizeSeed}
-                >
-                  <Switch.HiddenInput />
-                  <Switch.Control _checked={SWITCH_CHECKED_PROPS}>
-                    <Switch.Thumb />
-                  </Switch.Control>
-                  {/* Inside Switch.Root, so the words are part of the control
-                      (they were an inert sibling <Text> before). */}
-                  <Switch.Label color="fg.muted" fontSize="2xs">
-                    {t('widgets.video.randomizeSeed')}
-                  </Switch.Label>
-                </Switch.Root>
-              </HStack>
-            </HStack>
-          </Field>
+          <SeedField
+            batchCount={values.batchCount}
+            label={t('widgets.video.seed')}
+            seed={values.seed}
+            seedMode={values.seedMode}
+            onCommit={patch}
+          />
         </Stack>
       </GenerationSettingsSection>
 

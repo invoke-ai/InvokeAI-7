@@ -31,7 +31,6 @@ await i18n.use(initReactI18next).init({
             krea2RebalanceAxisDeep: 'deep',
             krea2RebalanceAxisShallow: 'shallow',
             krea2RebalanceGain: 'Gain',
-            krea2RebalanceGainReset: 'Reset gain',
             krea2RebalanceHelp: 'Scales conditioning toward the prompt before denoising.',
             krea2RebalancePreset: 'Rebalance preset',
             krea2RebalancePresetActions: 'Preset actions',

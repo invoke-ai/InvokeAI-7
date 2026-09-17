@@ -97,7 +97,18 @@ const settleUntil = async (isSettled: () => boolean, description: string, timeou
 const pickQuickItem = async (label: string): Promise<void> => {
   const target = document.querySelector<HTMLElement>(`[aria-label="${label}"]`);
   expect(target).not.toBeNull();
-  await interact(() => target!.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerType: 'mouse' })));
+  // zag only treats a move as a real hover when the pointer position changes,
+  // so approach the item's center from one pixel away instead of a static point.
+  const rect = target!.getBoundingClientRect();
+  const clientX = rect.left + rect.width / 2;
+  const clientY = rect.top + rect.height / 2;
+  await interact(() => {
+    for (const x of [clientX - 1, clientX]) {
+      target!.dispatchEvent(
+        new PointerEvent('pointermove', { bubbles: true, clientX: x, clientY, pointerType: 'mouse' })
+      );
+    }
+  });
   // zag applies `data-highlighted` asynchronously and ignores a click on an unhighlighted item, so
   // a fixed wait here silently dropped the click whenever the machine needed longer than it --
   // the action mock simply recorded no call, and only under CI load.

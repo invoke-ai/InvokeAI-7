@@ -1,4 +1,6 @@
 export interface GeneratedImageContract {
+  /** Board the backend saved the image to, when known. */
+  boardId?: string;
   /** Backend creation timestamp, when known; `queuedAt` is the (earlier)
    * submission instant, so ordering must prefer this field. */
   createdAt?: string;

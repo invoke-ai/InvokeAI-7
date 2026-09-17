@@ -28,6 +28,12 @@ describe('searchCatalog', () => {
     expect(searchCatalog([dogs, colours], 'adg', getBody)).toEqual([dogs]);
   });
 
+  it('returns every name match rather than the first ten', () => {
+    const items = Array.from({ length: 12 }, (_, index) => record(`portrait ${String(index)}`, 'body'));
+
+    expect(searchCatalog(items, 'portrait', getBody)).toHaveLength(12);
+  });
+
   it('ranks name matches above prose matches', () => {
     const byProse = record('animals', 'red panda');
     const byName = record('red', 'crimson');

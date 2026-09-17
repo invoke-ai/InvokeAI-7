@@ -71,7 +71,22 @@ vi.mock('@features/queue/devices', async (importOriginal) => {
   };
 });
 
+const workflowTemplatesMock = vi.hoisted(() => ({
+  snapshot: { error: null, status: 'idle', templates: {} } as {
+    error: string | null;
+    status: 'idle' | 'loading' | 'loaded' | 'error';
+    templates: Record<string, unknown>;
+  },
+}));
+
+vi.mock('@features/workflow/react', async (importOriginal) => {
+  const original = (await importOriginal()) as Record<string, unknown>;
+
+  return { ...original, getInvocationTemplatesSnapshot: () => workflowTemplatesMock.snapshot };
+});
+
 afterEach(() => {
+  workflowTemplatesMock.snapshot = { error: null, status: 'idle', templates: {} };
   generationDeviceMock.options = [];
 });
 
@@ -238,7 +253,7 @@ const createGenerateValues = (overrides: Partial<GenerateWidgetValues> = {}): Ge
   seamlessXAxis: false,
   seamlessYAxis: false,
   seed: 123,
-  shouldRandomizeSeed: false,
+  seedMode: 'fixed',
   steps: 30,
   t5EncoderModel: null,
   vae: null,
@@ -458,7 +473,7 @@ describe('generation-device orchestration metadata', () => {
       ...createDefaultUpscaleWidgetValues(models),
       inputImage: { height: 64, image_name: 'input.png', width: 64 },
       seed: 1,
-      shouldRandomizeSeed: false,
+      seedMode: 'fixed',
     };
     let state = workbenchReducer(createInitialWorkbenchState(), {
       settings: { useCpuNoise: false },
@@ -951,6 +966,39 @@ describe('adopting a project from another realm', () => {
     expect(normalized.events).toEqual([]);
     expect('graphHistory' in normalized).toBe(false);
     expect(normalized.queue.items).toEqual([]);
+  });
+
+  it('carries the iteration count workflow runs borrowed from Generate over to the workflow widget once', () => {
+    const workflowValuesOf = (candidate: Project) => getProjectWidgetValues(candidate, 'workflow');
+    const withoutWorkflowCount = (candidate: Project): Project => {
+      const { batchCount: _, ...values } = workflowValuesOf(candidate);
+      const instance = candidate.widgetInstances.workflow!;
+
+      return {
+        ...candidate,
+        widgetInstances: {
+          ...candidate.widgetInstances,
+          workflow: { ...instance, state: { ...instance.state, values } },
+        },
+      };
+    };
+    let state = workbenchReducer(createInitialWorkbenchState(), {
+      type: 'patchWidgetValues',
+      values: { batchCount: 4 },
+      widgetId: 'generate',
+    });
+    const fresh = getActiveProject(state);
+
+    state = workbenchReducer(state, { type: 'patchWidgetValues', values: { batchCount: 2 }, widgetId: 'workflow' });
+    const owned = getActiveProject(state);
+
+    // A fresh project owns its default from the start, so Generate's count never reaches it, reload after reload.
+    expect(workflowValuesOf(fresh).batchCount).toBe(1);
+    expect(workflowValuesOf(normalizeWorkbenchProject(fresh)).batchCount).toBe(1);
+    // A project saved before the widget owned a count keeps the runs it effectively had.
+    expect(workflowValuesOf(normalizeWorkbenchProject(withoutWorkflowCount(fresh))).batchCount).toBe(4);
+    // A count the workflow already owns is never overwritten by Generate's.
+    expect(workflowValuesOf(normalizeWorkbenchProject(owned)).batchCount).toBe(2);
   });
 
   it('preserves and caps session events during live normalization', () => {
@@ -2249,7 +2297,7 @@ describe('workbenchReducer Phase 5 generation flow', () => {
   });
 
   it('keeps submitted Generate snapshots immutable after later settings changes', () => {
-    let state = submitGenerate(primeGenerate(undefined, { positivePrompt: 'first prompt', shouldRandomizeSeed: true }));
+    let state = submitGenerate(primeGenerate(undefined, { positivePrompt: 'first prompt', seedMode: 'random' }));
     const firstQueueItem = getActiveProject(state).queue.items[0];
 
     expect(firstQueueItem).toBeDefined();
@@ -2262,7 +2310,7 @@ describe('workbenchReducer Phase 5 generation flow', () => {
     const secondValues = secondQueueItem?.snapshot.recall?.generateValues as GenerateWidgetValues;
 
     expect(firstValues.positivePrompt).toBe('first prompt');
-    expect(firstValues.shouldRandomizeSeed).toBe(true);
+    expect(firstValues.seedMode).toBe('random');
     expect(typeof firstValues.seed).toBe('number');
     expect(secondValues.positivePrompt).toBe('second prompt');
     expect(secondValues.seed).toBe(999);
@@ -3085,7 +3133,7 @@ describe('workbenchReducer Phase 5 generation flow', () => {
           negativePromptNodeId: 'negative_prompt',
           positivePromptNodeId: 'positive_prompt',
           seedNodeId: 'seed',
-          values: createGenerateValues({ positivePrompt: 'canvas prompt', seed: 101, shouldRandomizeSeed: false }),
+          values: createGenerateValues({ positivePrompt: 'canvas prompt', seed: 101, seedMode: 'fixed' }),
         },
         graph,
         projectId: otherProjectId,
@@ -3263,6 +3311,356 @@ describe('workbenchReducer Phase 5 generation flow', () => {
 
       expect(getActiveProject(state).queue.items[0]?.snapshot.backendSubmission).toMatchObject({
         positivePrompts: ['a cat, red tint', 'a cat, green tint'],
+      });
+    });
+  });
+
+  describe('workflow seed modes on the compiled submission', () => {
+    const SEED_MAX = 4_294_967_295;
+    const seedTemplate = {
+      category: 'noise',
+      classification: 'stable',
+      description: '',
+      inputs: {
+        seed: {
+          default: 0,
+          description: '',
+          exclusiveMaximum: null,
+          exclusiveMinimum: null,
+          fieldKind: 'input',
+          input: 'any',
+          maximum: SEED_MAX,
+          minimum: 0,
+          multipleOf: null,
+          name: 'seed',
+          options: null,
+          required: false,
+          title: 'Seed',
+          type: { batch: false, cardinality: 'SINGLE', name: 'IntegerField' },
+          uiChoiceLabels: null,
+          uiComponent: null,
+          uiHidden: false,
+          uiModelBase: null,
+          uiModelFormat: null,
+          uiModelType: null,
+          uiOrder: null,
+        },
+      },
+      nodePack: 'invokeai',
+      outputs: {},
+      outputType: 'noise_output',
+      tags: [],
+      title: 'Noise',
+      type: 'noise',
+      useCache: true,
+      version: '1.0.0',
+    };
+    const primeWorkflow = (seed: number, seedMode: 'random' | 'fixed' | 'increment' | 'decrement', batchCount = 3) => {
+      workflowTemplatesMock.snapshot = { error: null, status: 'loaded', templates: { noise: seedTemplate } };
+
+      // The Automate preset mounts the Workflow widget, which the route requires.
+      let state = workbenchReducer(createInitialWorkbenchState(), { presetId: 'automate', type: 'applyPreset' });
+
+      state = workbenchReducer(state, { type: 'patchWidgetValues', values: { batchCount }, widgetId: 'workflow' });
+      state = workbenchReducer(state, {
+        action: {
+          node: {
+            data: {
+              inputs: { seed: { label: '', name: 'seed', seedMode, value: seed } },
+              isIntermediate: true,
+              isOpen: true,
+              label: '',
+              nodePack: 'invokeai',
+              notes: '',
+              type: 'noise',
+              useCache: true,
+              version: '1.0.0',
+            },
+            id: 'noise-1',
+            position: { x: 0, y: 0 },
+            type: 'invocation',
+          },
+          type: 'addNode',
+        },
+        type: 'applyProjectGraphAction',
+      });
+
+      return state;
+    };
+    const submitWorkflow = (state: WorkbenchState) =>
+      workbenchReducer(state, {
+        backendSupportsCancellation: true,
+        route: { destination: 'gallery', destinationLocked: false, sourceId: 'workflow', sourceLocked: false },
+        type: 'submitResolvedInvocationSnapshot',
+      });
+    const readSubmission = (state: WorkbenchState, index = 0) =>
+      getActiveProject(state).queue.items[index]?.snapshot.backendSubmission;
+    const readNodeSeed = (state: WorkbenchState) => {
+      const node = getActiveProject(state).projectGraph.nodes[0];
+
+      return node?.type === 'invocation' ? node.data.inputs.seed?.value : undefined;
+    };
+
+    it('zips a stepping seed into the batch, advances the node, and continues on the next submission', () => {
+      let state = submitWorkflow(primeWorkflow(42, 'increment'));
+
+      expect(readSubmission(state)).toMatchObject({
+        batchCount: 3,
+        kind: 'workflow',
+        seeds: [{ fieldName: 'seed', nodeId: 'noise-1', seed: 42, seedStep: 1 }],
+      });
+      expect(readSubmission(state)).toMatchObject({ graph: { nodes: { 'noise-1': { seed: 42 } } } });
+      expect(getActiveProject(state).queue.items[0]?.snapshot.presentation.batchCount).toBe(3);
+      expect(readNodeSeed(state)).toBe(45);
+
+      state = submitWorkflow(state);
+
+      expect(readSubmission(state)).toMatchObject({ seeds: [{ seed: 45 }] });
+      expect(readSubmission(state, 1)).toMatchObject({ seeds: [{ seed: 42 }] });
+      expect(readNodeSeed(state)).toBe(48);
+    });
+
+    it('holds a fixed seed as a graph constant and repeats the graph for every run', () => {
+      // Generate's own iteration count no longer leaks into workflow runs.
+      const state = submitWorkflow(
+        workbenchReducer(primeWorkflow(42, 'fixed'), {
+          type: 'patchWidgetValues',
+          values: { batchCount: 5 },
+          widgetId: 'generate',
+        })
+      );
+      const submission = readSubmission(state);
+
+      expect(submission).toMatchObject({ batchCount: 3, kind: 'workflow' });
+      expect(submission).not.toHaveProperty('seeds');
+      expect(submission?.kind === 'workflow' && submission.graph.nodes['noise-1']?.seed).toBe(42);
+      expect(readNodeSeed(state)).toBe(42);
+    });
+
+    it('draws a random start for the batch and preserves the entered seed', () => {
+      const random = vi.spyOn(Math, 'random').mockReturnValue(0.25);
+
+      try {
+        const state = submitWorkflow(primeWorkflow(42, 'random', 2));
+        const start = Math.floor(0.25 * SEED_MAX);
+
+        expect(readSubmission(state)).toMatchObject({
+          graph: { nodes: { 'noise-1': { seed: start } } },
+          seeds: [{ seed: start, seedStep: 1 }],
+        });
+        expect(readNodeSeed(state)).toBe(42);
+      } finally {
+        random.mockRestore();
+      }
+    });
+
+    it('does not move the seed when the route is not ready to submit', () => {
+      const state = primeWorkflow(42, 'increment');
+
+      workflowTemplatesMock.snapshot = { error: null, status: 'loading', templates: {} };
+
+      const next = submitWorkflow(state);
+
+      expect(getActiveProject(next).queue.items).toEqual([]);
+      expect(readNodeSeed(next)).toBe(42);
+    });
+  });
+
+  describe('seed modes on the compiled submission', () => {
+    const SEED_MAX = 4_294_967_295;
+    const readSeed = (state: WorkbenchState) => getProjectWidgetValues(getActiveProject(state), 'generate').seed;
+    const readSubmission = (state: WorkbenchState) =>
+      getActiveProject(state).queue.items[0]?.snapshot.backendSubmission;
+    const submitWithPrompts = (state: WorkbenchState, positivePrompts?: string[]) =>
+      workbenchReducer(state, {
+        backendSupportsCancellation: true,
+        positivePrompts,
+        route: { destination: 'gallery', destinationLocked: false, sourceId: 'generate', sourceLocked: false },
+        type: 'submitResolvedInvocationSnapshot',
+      });
+
+    it('increment queues consecutive seeds and leaves the editable seed after the batch', () => {
+      let state = submitGenerate(primeGenerate(undefined, { batchCount: 3, seed: 42, seedMode: 'increment' }));
+
+      expect(readSubmission(state)).toMatchObject({ batchCount: 3, seed: 42, seedStep: 1 });
+      expect(readSeed(state)).toBe(45);
+
+      // Queued back to back, the next submission continues where the last one ended.
+      state = submitGenerate(state);
+
+      expect(readSubmission(state)).toMatchObject({ seed: 45, seedStep: 1 });
+      expect(readSeed(state)).toBe(48);
+      expect(getActiveProject(state).queue.items[1]?.snapshot.backendSubmission).toMatchObject({ seed: 42 });
+    });
+
+    it('decrement counts down and wraps below zero onto the top of the range', () => {
+      const state = submitGenerate(primeGenerate(undefined, { batchCount: 2, seed: 1, seedMode: 'decrement' }));
+
+      expect(readSubmission(state)).toMatchObject({ seed: 1, seedStep: -1 });
+      expect(readSeed(state)).toBe(SEED_MAX);
+    });
+
+    it('fixed holds the seed for the batch and does not move it', () => {
+      const state = submitGenerate(primeGenerate(undefined, { batchCount: 3, seed: 42, seedMode: 'fixed' }));
+
+      expect(readSubmission(state)).toMatchObject({ seed: 42, seedStep: 0 });
+      expect(readSeed(state)).toBe(42);
+    });
+
+    it('random draws the start seed for the batch and preserves the entered one', () => {
+      const random = vi.spyOn(Math, 'random').mockReturnValue(0.25);
+
+      try {
+        const state = submitGenerate(primeGenerate(undefined, { batchCount: 2, seed: 42, seedMode: 'random' }));
+
+        expect(readSubmission(state)).toMatchObject({ seed: Math.floor(0.25 * SEED_MAX), seedStep: 1 });
+        expect(readSeed(state)).toBe(42);
+      } finally {
+        random.mockRestore();
+      }
+    });
+
+    it('advances by every seed a prompt set consumes', () => {
+      const perIteration = submitWithPrompts(
+        primeGenerate(undefined, {
+          batchCount: 2,
+          dynamicPromptsSeedBehaviour: 'per-iteration',
+          positivePrompt: 'a {red|green} cat',
+          seed: 42,
+          seedMode: 'increment',
+        }),
+        ['a red cat', 'a green cat']
+      );
+      const perImage = submitWithPrompts(
+        primeGenerate(undefined, {
+          batchCount: 2,
+          dynamicPromptsSeedBehaviour: 'per-image',
+          positivePrompt: 'a {red|green} cat',
+          seed: 42,
+          seedMode: 'increment',
+        }),
+        ['a red cat', 'a green cat']
+      );
+
+      expect(readSeed(perIteration)).toBe(44);
+      expect(readSeed(perImage)).toBe(46);
+    });
+
+    it('does not consume seeds when the submission is rejected', () => {
+      const state = primeGenerate(undefined, { seed: 42, seedMode: 'increment', steps: Number.NaN });
+      const next = submitGenerate(state);
+
+      expect(getActiveProject(next).queue.items).toEqual([]);
+      expect(readSeed(next)).toBe(42);
+    });
+
+    it('advances Upscale and Video seeds through the same boundary', () => {
+      const upscaleModels = [
+        createUpscaleModel('main', 'main', 'sd-1'),
+        createUpscaleModel('spandrel', 'spandrel_image_to_image', 'any'),
+        createUpscaleModel('tile', 'controlnet', 'sd-1', 'Tile ControlNet'),
+      ];
+      let state = workbenchReducer(createInitialWorkbenchState(), {
+        type: 'patchWidgetValues',
+        values: {
+          ...createDefaultUpscaleWidgetValues(upscaleModels),
+          batchCount: 2,
+          inputImage: { height: 64, image_name: 'input.png', width: 64 },
+          seed: 10,
+          seedMode: 'increment',
+        },
+        widgetId: 'upscale',
+      });
+
+      state = workbenchReducer(state, {
+        backendSupportsCancellation: true,
+        models: upscaleModels,
+        route: { destination: 'gallery', destinationLocked: false, sourceId: 'upscale', sourceLocked: false },
+        type: 'submitResolvedInvocationSnapshot',
+      });
+
+      expect(readSubmission(state)).toMatchObject({ batchCount: 2, seed: 10, seedStep: 1 });
+      expect(getProjectWidgetValues(getActiveProject(state), 'upscale').seed).toBe(12);
+      // Generate's own seed is not the one that moved.
+      expect(getProjectWidgetValues(getActiveProject(state), 'generate').seed).not.toBe(12);
+
+      const wanModel: ModelConfig = {
+        base: 'wan',
+        file_size: 1,
+        format: 'diffusers',
+        hash: 'wan-t2v-hash',
+        key: 'wan-t2v_a14b-diffusers',
+        name: 'Wan 2.2 t2v_a14b',
+        path: 'wan-t2v_a14b-diffusers',
+        source: 'wan-t2v_a14b-diffusers',
+        source_type: 'path',
+        type: 'main',
+        variant: 't2v_a14b',
+      };
+      state = workbenchReducer(createInitialWorkbenchState(), {
+        region: 'left',
+        type: 'toggleRegionWidget',
+        widgetId: 'video',
+      });
+      state = workbenchReducer(state, {
+        type: 'patchWidgetValues',
+        values: { batchCount: 3, model: wanModel, positivePrompt: 'a fox running', seed: 7, seedMode: 'decrement' },
+        widgetId: 'video',
+      });
+      state = workbenchReducer(state, { sourceId: 'video', type: 'setInvocationSource' });
+      state = workbenchReducer(state, { destination: 'gallery', type: 'setInvocationDestination' });
+      state = workbenchReducer(state, {
+        backendSupportsCancellation: true,
+        models: [wanModel],
+        type: 'submitInvocationSnapshot',
+      });
+
+      expect(readSubmission(state)).toMatchObject({ batchCount: 3, seed: 7, seedStep: -1 });
+      expect(getProjectWidgetValues(getActiveProject(state), 'video').seed).toBe(4);
+    });
+
+    describe('from the canvas, which compiles outside the reducer', () => {
+      const submitCanvas = (state: WorkbenchState, values: GenerateWidgetValues) =>
+        workbenchReducer(state, {
+          backendSupportsCancellation: true,
+          canvas: structuredClone(getActiveProject(state).canvas),
+          destination: 'canvas',
+          generate: {
+            negativePromptNodeId: 'negative_prompt',
+            positivePromptNodeId: 'positive_prompt',
+            seedNodeId: 'seed',
+            values,
+          },
+          graph: {
+            backendGraph: { edges: [], id: 'canvas-backend-graph', nodes: {} },
+            edges: [],
+            id: 'canvas-graph',
+            label: 'Canvas',
+            nodes: [],
+            updatedAt: '2026-06-09T00:00:00.000Z',
+            version: 1,
+          },
+          projectId: state.activeProjectId,
+          type: 'submitCanvasInvocationSnapshot',
+        });
+
+      it('advances the settings the snapshot was compiled from', () => {
+        const values = createGenerateValues({ batchCount: 2, seed: 10, seedMode: 'increment' });
+        const state = submitCanvas(primeGenerate(undefined, values), values);
+
+        expect(readSubmission(state)).toMatchObject({ seed: 10, seedStep: 1 });
+        expect(readSeed(state)).toBe(12);
+      });
+
+      it('leaves settings the user changed while the canvas was compiling', () => {
+        const compiled = createGenerateValues({ batchCount: 2, seed: 10, seedMode: 'increment' });
+        const seedEdited = submitCanvas(primeGenerate(undefined, { ...compiled, seed: 500 }), compiled);
+        const modeEdited = submitCanvas(primeGenerate(undefined, { ...compiled, seedMode: 'fixed' }), compiled);
+
+        expect(readSubmission(seedEdited)).toMatchObject({ seed: 10, seedStep: 1 });
+        expect(readSeed(seedEdited)).toBe(500);
+        expect(readSubmission(modeEdited)).toMatchObject({ seed: 10, seedStep: 1 });
+        expect(readSeed(modeEdited)).toBe(10);
       });
     });
   });
@@ -3593,12 +3991,7 @@ describe('workbenchReducer Phase 5 generation flow', () => {
     expect(getProjectWidgetValues(getActiveProject(state), 'gallery').galleryPage).toBe(0);
   });
 
-  it('releases a mid-board infinite window anchor when a result lands on the viewed board', () => {
-    // A deep reveal from the image map anchors the infinite window mid-board.
-    // New images land at the TOP of that listing, which the anchored window
-    // never covers — and an anchored window also suppresses the recents
-    // overlay and the queue placeholders, so without releasing the anchor the
-    // user would never see their own generation appear.
+  it('preserves the browsed window when a result lands on the viewed board', () => {
     let state = primeGenerate();
 
     state = workbenchReducer(state, { destination: 'gallery', type: 'setInvocationDestination' });
@@ -3617,7 +4010,7 @@ describe('workbenchReducer Phase 5 generation flow', () => {
       type: 'routeQueueItemResults',
     });
 
-    expect(getProjectWidgetValues(getActiveProject(state), 'gallery').galleryPage).toBe(0);
+    expect(getProjectWidgetValues(getActiveProject(state), 'gallery').galleryPage).toBe(11);
   });
 
   it('leaves the window anchor alone when the result lands on a board that is not being viewed', () => {
@@ -3666,6 +4059,29 @@ describe('workbenchReducer Phase 5 generation flow', () => {
       kind: 'image',
       name: image.imageName,
     });
+  });
+
+  it('keeps the board a result image was saved to instead of the run destination board', () => {
+    let state = primeGenerate();
+
+    state = workbenchReducer(state, { boardId: 'board-1', type: 'selectGalleryBoard' });
+    state = workbenchReducer(state, { destination: 'gallery', type: 'setInvocationDestination' });
+    state = submitGenerate(state);
+
+    const project = getActiveProject(state);
+    const queueItem = project.queue.items[0];
+    const image = { ...createImage('node-board-image.png', queueItem.id), boardId: 'board-b' };
+    state = workbenchReducer(state, {
+      images: [image],
+      projectId: project.id,
+      queueItemId: queueItem.id,
+      type: 'routeQueueItemResults',
+    });
+
+    const galleryValues = getProjectWidgetValues(getActiveProject(state), 'gallery');
+
+    expect((galleryValues.recentImages as Array<{ boardId: string }>)[0]?.boardId).toBe('board-b');
+    expect(galleryValues.selectedImage).toMatchObject({ boardId: 'board-b', name: image.imageName });
   });
 
   it('appends Gallery destination results for local fallback while backend owns boards', () => {
@@ -6259,7 +6675,7 @@ describe('workbenchReducer canvas staging auto-switch + canvas submission', () =
     negativePromptNodeId: 'negative_prompt',
     positivePromptNodeId: 'positive_prompt',
     seedNodeId: 'seed',
-    values: createGenerateValues({ positivePrompt: 'canvas prompt', seed: 101, shouldRandomizeSeed: false }),
+    values: createGenerateValues({ positivePrompt: 'canvas prompt', seed: 101, seedMode: 'fixed' }),
   });
 
   const submitCanvasGeneration = (state: WorkbenchState): { queueItemId: string; state: WorkbenchState } => {
@@ -6348,7 +6764,7 @@ describe('workbenchReducer canvas staging auto-switch + canvas submission', () =
           negativePrompt: 'avoid blur',
           positivePrompt: 'inpaint prompt',
           seed: 42,
-          shouldRandomizeSeed: false,
+          seedMode: 'fixed',
         }),
       },
       graph,
@@ -6365,7 +6781,7 @@ describe('workbenchReducer canvas staging auto-switch + canvas submission', () =
       negativePrompt: 'avoid blur',
       positivePrompt: 'inpaint prompt',
       seed: 42,
-      shouldRandomizeSeed: false,
+      seedMode: 'fixed',
     });
     expect(queueItem?.snapshot).not.toHaveProperty('generate');
     expect(queueItem?.snapshot).not.toHaveProperty('widgetStates');
@@ -6379,7 +6795,7 @@ describe('workbenchReducer canvas staging auto-switch + canvas submission', () =
       positivePromptNodeId: 'positive_prompt',
       seed: 42,
       seedNodeId: 'seed',
-      shouldRandomizeSeed: false,
+      seedStep: 0,
     });
     expect(queueItem?.snapshot.resultNodeIds).toEqual(['canvas_output']);
     expect(getActiveProject(state).invocation.sourceId).toBe('canvas');

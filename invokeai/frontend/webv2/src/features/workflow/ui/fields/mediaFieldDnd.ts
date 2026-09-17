@@ -14,6 +14,15 @@ export interface WorkflowMediaDropItem {
 
 export const getWorkflowMediaFieldDropId = (fieldKey: string): string => `workflow-media-field:${fieldKey}`;
 
+/** Every dragged gallery item of `kind`; empty when the drag carries anything else. */
+export const getWorkflowMediaFieldDropItems = (
+  activeData: unknown,
+  kind: WorkflowMediaKind
+): WorkflowMediaDropItem[] =>
+  isGalleryItemDragData(activeData) && activeData.items.every((item) => item.kind === kind)
+    ? activeData.items.map((item) => ({ kind, name: item.name }))
+    : [];
+
 /**
  * Resolves a gallery drag payload to the single item a media field can accept,
  * or null. Multi-item drags are rejected outright: a single-value field
@@ -24,11 +33,7 @@ export const getWorkflowMediaFieldDropItem = (
   activeData: unknown,
   kind: WorkflowMediaKind
 ): WorkflowMediaDropItem | null => {
-  if (!isGalleryItemDragData(activeData) || activeData.items.length !== 1) {
-    return null;
-  }
+  const items = getWorkflowMediaFieldDropItems(activeData, kind);
 
-  const item = activeData.items[0];
-
-  return item && item.kind === kind ? { kind: item.kind, name: item.name } : null;
+  return items.length === 1 ? (items[0] ?? null) : null;
 };

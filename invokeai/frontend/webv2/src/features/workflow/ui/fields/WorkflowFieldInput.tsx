@@ -1,6 +1,7 @@
 import type { ModelConfig, ModelTaxonomyType } from '@features/models/react';
 import type { FieldInputTemplate } from '@features/workflow/contracts';
 import type { LoraFieldCollectionEntry } from '@features/workflow/utility';
+import type { SeedInputPatch } from '@platform/ui/SeedInput';
 
 import {
   Badge,
@@ -12,6 +13,7 @@ import {
   Image,
   Input,
   NumberInput,
+  SimpleGrid,
   Stack,
   Switch,
   Text,
@@ -26,15 +28,17 @@ import {
   type GalleryBoard,
   type GalleryItem,
 } from '@features/gallery';
-import { getSelectedGalleryImageFromValues } from '@features/gallery/contracts';
-import { GalleryPickerPopover } from '@features/gallery/picker';
+import { getSelectedGalleryImageFromValues, toGalleryItemKey } from '@features/gallery/contracts';
+import { GalleryPickerPopover, type GalleryPickerSelection } from '@features/gallery/picker';
 import { invalidateGallery } from '@features/gallery/queries';
 import { galleryImageUrls, galleryVideoUrls } from '@features/gallery/utility';
-import { DEFAULT_LORA_WEIGHT_CONFIG, SCHEDULER_OPTIONS } from '@features/generation/settings';
+import { DEFAULT_LORA_WEIGHT_CONFIG, sanitizeBatchCount, SCHEDULER_OPTIONS } from '@features/generation/settings';
 import { isInvocationNode } from '@features/workflow/contracts';
+import { isSeedInputField } from '@features/workflow/graph';
 import {
   getWorkflowMediaFieldDropId,
   getWorkflowMediaFieldDropItem,
+  getWorkflowMediaFieldDropItems,
   type WorkflowMediaKind,
 } from '@features/workflow/ui/fields/mediaFieldDnd';
 import { useWorkflowProjectSelector, useWorkflowUi } from '@features/workflow/ui/WorkflowUiContext';
@@ -43,6 +47,8 @@ import {
   isLoraFieldCollectionEntry,
   toLoraFieldCollectionList,
 } from '@features/workflow/utility';
+import { planSeedSubmission, type SeedMode, wrapSeed } from '@platform/core/seed';
+import { useMountEffect } from '@platform/react/useMountEffect';
 import {
   assertAccountScopeCurrent,
   captureAccountScope,
@@ -65,9 +71,21 @@ import {
   Tooltip,
 } from '@platform/ui';
 import { MiddleTruncate } from '@platform/ui/MiddleTruncate';
+import { SeedInput } from '@platform/ui/SeedInput';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { FilmIcon, ImageIcon, Trash2Icon } from 'lucide-react';
-import { lazy, Suspense, useCallback, useEffect, useId, useMemo, useRef, useState, type ChangeEvent } from 'react';
+import { FilmIcon, ImageIcon, ImagePlusIcon, Trash2Icon, XIcon } from 'lucide-react';
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type MouseEvent,
+} from 'react';
 import { useTranslation } from 'react-i18next';
 
 const ModelSelect = lazy(() => import('@features/models/react').then((module) => ({ default: module.ModelSelect })));
@@ -93,6 +111,9 @@ export interface WorkflowFieldInputProps {
   template: FieldInputTemplate;
   value: unknown;
   onChange: (value: unknown) => void;
+  /** The instance's seed mode; read only for seed inputs (`isSeedInputField`), which render the mode menu. */
+  seedMode?: SeedMode;
+  onSeedModeChange?: (seedMode: SeedMode) => void;
 }
 
 const invalidProps = (invalid: boolean | undefined) => (invalid ? { 'aria-invalid': true } : {});
@@ -154,6 +175,9 @@ const StringInput = ({ id, invalid, onChange, template, value }: WorkflowFieldIn
   );
 };
 
+/** A double-click anywhere in the box selects the whole value, not just the word under the pointer. */
+const selectInputText = (event: MouseEvent<HTMLInputElement>) => event.currentTarget.select();
+
 const NumericInput = ({ id, invalid, onChange, template, value }: WorkflowFieldInputProps) => {
   const isInteger = template.type.name === 'IntegerField';
   const numericValue = typeof value === 'number' && Number.isFinite(value) ? value : '';
@@ -184,6 +208,66 @@ const NumericInput = ({ id, invalid, onChange, template, value }: WorkflowFieldI
       w="full"
       {...invalidProps(invalid)}
       onChange={onInputChange}
+      onDoubleClick={selectInputText}
+    />
+  );
+};
+
+/**
+ * The shared seed control under a workflow row. The workflow owns the value
+ * and its run count, so the stepping preview is planned here from the
+ * workflow's own iterations; an empty field runs from the template default,
+ * as the plan does. `nokey` keeps xyflow's node key handling out of the row
+ * and the portaled menu: arrows would nudge the node and Backspace delete it.
+ */
+const WorkflowSeedInput = ({
+  id,
+  invalid,
+  onChange,
+  onSeedModeChange,
+  seedMode,
+  template,
+  value,
+}: WorkflowFieldInputProps & { onSeedModeChange: (seedMode: SeedMode) => void; seedMode: SeedMode }) => {
+  const { t } = useTranslation();
+  const batchCount = useWorkflowProjectSelector((project) => sanitizeBatchCount(project.workflowValues.batchCount));
+  const seed = typeof value === 'number' ? value : undefined;
+  const authoredSeed = seed ?? (typeof template.default === 'number' ? template.default : 0);
+  const plan =
+    seedMode === 'increment' || seedMode === 'decrement'
+      ? planSeedSubmission({
+          batchCount,
+          promptCount: 1,
+          seedBehaviour: 'per-iteration',
+          seedMode,
+          startSeed: wrapSeed(authoredSeed),
+        })
+      : null;
+  const onCommit = useCallback(
+    (patch: SeedInputPatch) => {
+      if (patch.seed !== undefined) {
+        onChange(patch.seed);
+      }
+
+      if (patch.seedMode !== undefined) {
+        onSeedModeChange(patch.seedMode);
+      }
+    },
+    [onChange, onSeedModeChange]
+  );
+
+  return (
+    <SeedInput
+      ariaLabel={template.title}
+      className="nodrag nokey"
+      contentClassName="nokey"
+      description={t('nodes.seedModeTooltip')}
+      id={id ? `${id}-number-input` : undefined}
+      invalid={invalid}
+      plan={plan}
+      seed={seed}
+      seedMode={seedMode}
+      onCommit={onCommit}
     />
   );
 };
@@ -192,20 +276,20 @@ const SWITCH_CHECKED_PROPS = { bg: 'accent.solid' };
 
 const BooleanInput = ({ id, invalid, onChange, template, value }: WorkflowFieldInputProps) => {
   const onCheckedChange = useCallback((event: { checked: boolean }) => onChange(event.checked), [onChange]);
+  // The host id goes through zag's id map: the root is a `<label for>` pointing at zag's hidden-input
+  // id, so an `id` set on the element itself would leave the label pointing at nothing (an inert switch).
+  const switchIds = useMemo(() => (id ? { hiddenInput: `${id}-switch-input` } : undefined), [id]);
 
   return (
     <Switch.Root
       checked={value === true}
       className="nodrag"
+      ids={switchIds}
       invalid={invalid}
       size="sm"
       onCheckedChange={onCheckedChange}
     >
-      <Switch.HiddenInput
-        aria-label={template.title}
-        id={id ? `${id}-switch-input` : undefined}
-        {...invalidProps(invalid)}
-      />
+      <Switch.HiddenInput aria-label={template.title} {...invalidProps(invalid)} />
       <Switch.Control _checked={SWITCH_CHECKED_PROPS}>
         <Switch.Thumb />
       </Switch.Control>
@@ -458,6 +542,339 @@ const VIDEO_ONLY = ['video'] as const;
 const MEDIA_INPUT_FOCUS_PROPS = { outline: '2px solid {colors.accent.focusRing}', outlineOffset: '2px' } as const;
 
 /**
+ * Upload: file picker -> gallery upload -> adopt the uploaded items. The
+ * adoption is pinned to this widget instance AND the project it started in:
+ * `onUploaded` dispatches into the *active* project, so a completion arriving
+ * after a project switch (or after this node was deleted, which unmounts the
+ * widget) must not be applied - the upload itself still succeeded, so the
+ * gallery is refreshed and the user is pointed there instead.
+ */
+const useMediaUpload = ({
+  kind,
+  multiple = false,
+  onUploaded,
+}: {
+  kind: WorkflowMediaKind;
+  multiple?: boolean;
+  onUploaded: (names: string[]) => void;
+}) => {
+  const config = MEDIA_FIELD_CONFIG[kind];
+  const uploadBoardId = useWorkflowProjectSelector((project) =>
+    typeof project.galleryValues.selectedBoardId === 'string' ? project.galleryValues.selectedBoardId : 'none'
+  );
+  const { project } = useWorkflowUi();
+  const queryClient = useQueryClient();
+  const isMountedRef = useRef(true);
+
+  useMountEffect(() => () => {
+    isMountedRef.current = false;
+  });
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [isUploading, setIsUploading] = useState(false);
+  const onUploadClick = useCallback(() => fileInputRef.current?.click(), []);
+  const onFileChange = useCallback(
+    (event: ChangeEvent<HTMLInputElement>) => {
+      const files = Array.from(event.currentTarget.files ?? []).slice(0, multiple ? undefined : 1);
+
+      // Reset so picking the same file again re-fires the change event.
+      event.currentTarget.value = '';
+
+      if (files.length === 0) {
+        return;
+      }
+
+      // `accept` on the input is advisory only ("All Files" bypasses it); an
+      // unknown type (empty string) is left for the server to judge.
+      if (files.some((file) => file.type && !file.type.startsWith(`${kind}/`))) {
+        toaster.create({
+          title: `Please choose ${multiple ? `${config.noun} files` : `a ${config.noun} file`}`,
+          type: 'error',
+        });
+
+        return;
+      }
+
+      const owner = captureAccountScope();
+      const projectId = project.getSnapshot().id;
+
+      setIsUploading(true);
+      void (async () => {
+        const names: string[] = [];
+        const failedFiles: string[] = [];
+
+        // Each file lands or fails on its own; what landed is adopted either way.
+        for (const file of files) {
+          try {
+            names.push(
+              kind === 'image'
+                ? (await galleryTransfers.upload(file, uploadBoardId, { signal: owner.signal })).imageName
+                : (await galleryTransfers.uploadVideo(file, uploadBoardId, { signal: owner.signal })).name
+            );
+          } catch {
+            if (!isAccountScopeCurrent(owner)) {
+              return;
+            }
+
+            failedFiles.push(file.name);
+          }
+        }
+
+        if (!isAccountScopeCurrent(owner)) {
+          return;
+        }
+
+        if (names.length > 0) {
+          void invalidateGallery(queryClient, owner);
+
+          if (isMountedRef.current && project.getSnapshot().id === projectId) {
+            onUploaded(names);
+          } else {
+            toaster.create({
+              description: `The workflow changed while ${names.join(', ')} uploaded - find it in the gallery.`,
+              title: 'Upload finished',
+              type: 'info',
+            });
+          }
+        }
+
+        if (failedFiles.length > 0) {
+          toaster.create({
+            description: failedFiles.join(', '),
+            title: `Failed to upload ${failedFiles.length === 1 ? config.noun : `${failedFiles.length} ${config.noun}s`}`,
+            type: 'error',
+          });
+        }
+
+        if (isMountedRef.current) {
+          setIsUploading(false);
+        }
+      })();
+    },
+    [config.noun, kind, multiple, onUploaded, project, queryClient, uploadBoardId]
+  );
+
+  return { fileInputRef, isUploading, onFileChange, onUploadClick };
+};
+
+const getImageCollectionNames = (value: unknown): string[] =>
+  Array.isArray(value)
+    ? [
+        ...new Set(
+          value.flatMap((item) =>
+            typeof (item as Record<string, unknown> | null)?.image_name === 'string'
+              ? [(item as { image_name: string }).image_name]
+              : []
+          )
+        ),
+      ]
+    : [];
+
+const IMAGE_COLLECTION_REMOVE_PROPS = { opacity: 1 } as const;
+
+const ImageCollectionTile = ({
+  index,
+  name,
+  onRemove,
+}: {
+  index: number;
+  name: string;
+  onRemove: (index: number) => void;
+}) => {
+  const onRemoveClick = useCallback(() => onRemove(index), [index, onRemove]);
+
+  return (
+    <Box aspectRatio="1" bg="bg.subtle" className="group" position="relative" rounded="xs">
+      <Image
+        alt=""
+        h="full"
+        objectFit="cover"
+        rounded="xs"
+        src={MEDIA_FIELD_CONFIG.image.getThumbnailUrl(name)}
+        title={name}
+        w="full"
+      />
+      <IconButton
+        aria-label={`Remove ${name}`}
+        bg="bg.panel"
+        insetInlineEnd="0.5"
+        opacity={0}
+        position="absolute"
+        size="2xs"
+        top="0.5"
+        transition="opacity var(--wb-motion-duration-fast) ease"
+        variant="subtle"
+        _focusVisible={IMAGE_COLLECTION_REMOVE_PROPS}
+        _groupHover={IMAGE_COLLECTION_REMOVE_PROPS}
+        onClick={onRemoveClick}
+      >
+        <Icon as={XIcon} boxSize="3" />
+      </IconButton>
+    </Box>
+  );
+};
+
+/**
+ * Direct input for `ImageField` collections (Image Collection primitive, Image
+ * Batch): a thumbnail grid with per-item removal, a multi-select gallery
+ * picker, a multi-item gallery drop target, and multi-file upload.
+ */
+const ImageCollectionInput = ({ id, invalid, nodeId, onChange, template, value }: WorkflowFieldInputProps) => {
+  const { t } = useTranslation();
+  const { project } = useWorkflowUi();
+  const names = useMemo(() => getImageCollectionNames(value), [value]);
+  const invalidAriaProps = useMemo(() => (invalid ? { 'aria-invalid': true } : {}), [invalid]);
+  // An upload finishing later appends to the field as it stands then, read from the document, not
+  // to the list this render saw.
+  const appendNames = useCallback(
+    (added: string[]) => {
+      const node = project.getSnapshot().projectGraph.nodes.find((candidate) => candidate.id === nodeId);
+      const current = getImageCollectionNames(
+        node && isInvocationNode(node) ? node.data.inputs[template.name]?.value : value
+      );
+      const next = [...current, ...added.filter((name) => !current.includes(name))];
+
+      if (next.length !== current.length) {
+        onChange(next.map((image_name) => ({ image_name })));
+      }
+    },
+    [nodeId, onChange, project, template.name, value]
+  );
+  const removeAt = useCallback(
+    (index: number) => onChange(names.filter((_, i) => i !== index).map((image_name) => ({ image_name }))),
+    [names, onChange]
+  );
+  const onClearClick = useCallback(() => onChange([]), [onChange]);
+
+  const instanceId = useId();
+  const dropId = getWorkflowMediaFieldDropId(`${id ?? 'field'}:${instanceId}`);
+  const { active } = useDndContext();
+  const acceptsActiveDrag = getWorkflowMediaFieldDropItems(active?.data.current, 'image').length > 0;
+  const { isOver, setNodeRef } = useDroppable({ disabled: !acceptsActiveDrag, id: dropId });
+  const onDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      if (event.over?.id === dropId) {
+        appendNames(getWorkflowMediaFieldDropItems(event.active.data.current, 'image').map((item) => item.name));
+      }
+    },
+    [appendNames, dropId]
+  );
+
+  useDndMonitor({ onDragEnd });
+
+  const { fileInputRef, isUploading, onFileChange, onUploadClick } = useMediaUpload({
+    kind: 'image',
+    multiple: true,
+    onUploaded: appendNames,
+  });
+  const pickerSelection = useMemo<GalleryPickerSelection>(
+    () => ({
+      addedKeys: new Set(names.map((name) => toGalleryItemKey({ kind: 'image', name }))),
+      mode: 'multiple',
+      remaining: {},
+    }),
+    [names]
+  );
+  const onPick = useCallback((item: GalleryItem) => appendNames([item.name]), [appendNames]);
+  const pickerLabel = t('widgets.gallery.picker.chooseImage');
+
+  return (
+    <Box position="relative" w="full" {...invalidAriaProps}>
+      <Box
+        ref={setNodeRef}
+        boxShadow={invalid ? '0 0 0 1px {colors.red.solid}' : undefined}
+        className="nodrag"
+        position="relative"
+        rounded="sm"
+        w="full"
+      >
+        {names.length > 0 ? (
+          <SimpleGrid
+            borderWidth="1px"
+            className="nowheel"
+            columns={3}
+            gap="1"
+            maxH="48"
+            overflowY="auto"
+            p="1"
+            rounded="sm"
+          >
+            {names.map((name, index) => (
+              <ImageCollectionTile key={name} index={index} name={name} onRemove={removeAt} />
+            ))}
+          </SimpleGrid>
+        ) : (
+          // The empty state keeps the drop target tall enough to hit and doubles as the picker trigger.
+          <GalleryPickerPopover accept={IMAGE_ONLY} label={pickerLabel} selection={pickerSelection} onPick={onPick}>
+            <chakra.button
+              aria-label={pickerLabel}
+              className="nodrag"
+              display="block"
+              h="20"
+              type="button"
+              w="full"
+              _focusVisible={MEDIA_INPUT_FOCUS_PROPS}
+            >
+              <Flex
+                alignItems="center"
+                borderStyle="dashed"
+                borderWidth="1px"
+                direction="column"
+                gap="1"
+                h="full"
+                justifyContent="center"
+                rounded="sm"
+                transition="border-color var(--wb-motion-duration-fast) ease"
+                w="full"
+                _hover={MEDIA_INPUT_HOVER_PROPS}
+              >
+                <Text as="span" color="fg" fontSize="xs" fontWeight="600">
+                  {pickerLabel}
+                </Text>
+                <Text as="span" color="fg.subtle" fontSize="2xs">
+                  {t('widgets.gallery.picker.dropHint')}
+                </Text>
+              </Flex>
+            </chakra.button>
+          </GalleryPickerPopover>
+        )}
+        <DropTargetOverlay isActive={acceptsActiveDrag} isOver={isOver} label="Drop images" />
+      </Box>
+      <HStack gap="1.5" mt="1" w="full">
+        <GalleryPickerPopover accept={IMAGE_ONLY} label={pickerLabel} selection={pickerSelection} onPick={onPick}>
+          <Button className="nodrag" size="2xs" variant="outline">
+            <Icon as={ImagePlusIcon} boxSize="3" />
+            {t('common.add')}
+          </Button>
+        </GalleryPickerPopover>
+        <Button className="nodrag" disabled={isUploading} size="2xs" variant="outline" onClick={onUploadClick}>
+          {isUploading ? 'Uploading…' : 'Upload'}
+        </Button>
+        {names.length > 0 ? (
+          <Button className="nodrag" size="2xs" variant="ghost" onClick={onClearClick}>
+            Clear
+          </Button>
+        ) : null}
+        {names.length > 0 ? (
+          <Text color="fg.subtle" fontSize="2xs" ms="auto">
+            {t('nodes.imageCollectionCount', { count: names.length })}
+          </Text>
+        ) : null}
+        <input
+          ref={fileInputRef}
+          accept={MEDIA_FIELD_CONFIG.image.fileAccept}
+          aria-label="Upload image files"
+          multiple
+          style={HIDDEN_FILE_INPUT_STYLE}
+          type="file"
+          onChange={onFileChange}
+        />
+      </HStack>
+    </Box>
+  );
+};
+
+/**
  * Direct input for `ImageField` / `VideoField`: shows the current item with a
  * thumbnail, opens the gallery picker, accepts a single-item gallery drag
  * onto the row, and uploads a local file to the gallery's selected board.
@@ -465,9 +882,6 @@ const MEDIA_INPUT_FOCUS_PROPS = { outline: '2px solid {colors.accent.focusRing}'
 const MediaInput = ({ id, invalid, kind, onChange, value }: WorkflowFieldInputProps & { kind: WorkflowMediaKind }) => {
   const { t } = useTranslation();
   const config = MEDIA_FIELD_CONFIG[kind];
-  const uploadBoardId = useWorkflowProjectSelector((project) =>
-    typeof project.galleryValues.selectedBoardId === 'string' ? project.galleryValues.selectedBoardId : 'none'
-  );
   const mediaName =
     typeof (value as Record<string, unknown> | null | undefined)?.[config.nameKey] === 'string'
       ? ((value as Record<string, string>)[config.nameKey] ?? null)
@@ -499,81 +913,11 @@ const MediaInput = ({ id, invalid, kind, onChange, value }: WorkflowFieldInputPr
 
   useDndMonitor({ onDragEnd });
 
-  // Upload: file picker -> gallery upload -> adopt the uploaded item. The
-  // adoption is pinned to this widget instance AND the project it started in:
-  // `onChange` dispatches into the *active* project, so a completion arriving
-  // after a project switch (or after this node was deleted, which unmounts the
-  // widget) must not be applied - the upload itself still succeeded, so the
-  // gallery is refreshed and the user is pointed there instead.
-  const { project } = useWorkflowUi();
-  const queryClient = useQueryClient();
-  const isMountedRef = useRef(true);
-
-  useEffect(
-    () => () => {
-      isMountedRef.current = false;
-    },
-    []
+  const onUploaded = useCallback(
+    (names: string[]) => onChange({ [config.nameKey]: names[0] }),
+    [config.nameKey, onChange]
   );
-
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const [isUploading, setIsUploading] = useState(false);
-  const onUploadClick = useCallback(() => fileInputRef.current?.click(), []);
-  const onFileChange = useCallback(
-    (event: ChangeEvent<HTMLInputElement>) => {
-      const file = event.currentTarget.files?.[0];
-
-      // Reset so picking the same file again re-fires the change event.
-      event.currentTarget.value = '';
-
-      if (!file) {
-        return;
-      }
-
-      // `accept` on the input is advisory only ("All Files" bypasses it); an
-      // unknown type (empty string) is left for the server to judge.
-      if (file.type && !file.type.startsWith(`${kind}/`)) {
-        toaster.create({ title: `Please choose a ${config.noun} file`, type: 'error' });
-
-        return;
-      }
-
-      const owner = captureAccountScope();
-      const projectId = project.getSnapshot().id;
-
-      setIsUploading(true);
-      void (async () => {
-        try {
-          const name =
-            kind === 'image'
-              ? (await galleryTransfers.upload(file, uploadBoardId, { signal: owner.signal })).imageName
-              : (await galleryTransfers.uploadVideo(file, uploadBoardId, { signal: owner.signal })).name;
-
-          assertAccountScopeCurrent(owner);
-          void invalidateGallery(queryClient, owner);
-
-          if (isMountedRef.current && project.getSnapshot().id === projectId) {
-            onChange({ [config.nameKey]: name });
-          } else {
-            toaster.create({
-              description: `The workflow changed while ${name} uploaded - find it in the gallery.`,
-              title: 'Upload finished',
-              type: 'info',
-            });
-          }
-        } catch {
-          if (isAccountScopeCurrent(owner)) {
-            toaster.create({ title: `Failed to upload ${config.noun}`, type: 'error' });
-          }
-        } finally {
-          if (isAccountScopeCurrent(owner) && isMountedRef.current) {
-            setIsUploading(false);
-          }
-        }
-      })();
-    },
-    [config.nameKey, config.noun, kind, onChange, project, queryClient, uploadBoardId]
-  );
+  const { fileInputRef, isUploading, onFileChange, onUploadClick } = useMediaUpload({ kind, onUploaded });
 
   const onPick = useCallback(
     (item: GalleryItem) => onChange({ [config.nameKey]: item.name }),
@@ -1140,15 +1484,11 @@ const CONNECTION_ONLY_FALLBACK = (
 );
 
 export const WorkflowFieldInput = (props: WorkflowFieldInputProps) => {
-  // COLLECTION media fields (e.g. Concatenate Videos' list input) hold arrays;
-  // the single-value media widget would write a bare object into them. The
-  // node editor never shows a control for COLLECTION fields, but linear-form
-  // elements migrated from legacy `exposedFields` can reach here directly.
-  if (
-    (props.template.type.name === 'ImageField' || props.template.type.name === 'VideoField') &&
-    props.template.type.cardinality === 'COLLECTION'
-  ) {
-    return CONNECTION_ONLY_FALLBACK;
+  // COLLECTION fields hold arrays; only image lists have a list widget. Other
+  // collections stay connection-only even when a migrated linear-form element
+  // points at them, since the single-value widget would write a bare value.
+  if (props.template.type.cardinality === 'COLLECTION') {
+    return props.template.type.name === 'ImageField' ? <ImageCollectionInput {...props} /> : CONNECTION_ONLY_FALLBACK;
   }
 
   switch (props.template.type.name) {
@@ -1157,6 +1497,16 @@ export const WorkflowFieldInput = (props: WorkflowFieldInputProps) => {
     case 'IntegerField':
       if (props.template.uiComponent === 'video-frame-index' && props.template.type.cardinality === 'SINGLE') {
         return <VideoFrameIndexInput {...props} />;
+      }
+
+      if (props.onSeedModeChange && isSeedInputField(props.template)) {
+        return (
+          <WorkflowSeedInput
+            {...props}
+            onSeedModeChange={props.onSeedModeChange}
+            seedMode={props.seedMode ?? 'fixed'}
+          />
+        );
       }
 
       return <NumericInput {...props} />;

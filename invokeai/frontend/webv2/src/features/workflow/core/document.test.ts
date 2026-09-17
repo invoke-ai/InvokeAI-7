@@ -169,6 +169,18 @@ describe('projectGraphReducer', () => {
     expect(next.edges[0]?.id).toBe('edge-replacement');
   });
 
+  it('reconnecting an edge replaces it in one step and ignores unknown edges', () => {
+    const { doc, nodeAId, nodeBId } = createDocWithNodes();
+    const original = createEdge(nodeAId, nodeBId);
+    const withEdge = projectGraphReducer(doc, { edge: original, type: 'addEdge' });
+    const moved = { ...createEdge(nodeAId, nodeBId), id: 'edge-moved', targetHandle: 'b' };
+
+    const next = projectGraphReducer(withEdge, { edge: moved, edgeId: original.id, type: 'reconnectEdge' });
+
+    expect(next.edges).toEqual([moved]);
+    expect(projectGraphReducer(withEdge, { edge: moved, edgeId: 'missing', type: 'reconnectEdge' })).toBe(withEdge);
+  });
+
   it('sets field values without disturbing other inputs', () => {
     const { doc, nodeAId } = createDocWithNodes();
     const next = projectGraphReducer(doc, { fieldName: 'a', nodeId: nodeAId, type: 'setFieldValue', value: 42 });
@@ -293,6 +305,16 @@ describe('projectGraphReducer', () => {
     const updatedField = next.form.elements[field?.id ?? ''];
 
     expect(updatedField?.type === 'node-field' && updatedField.data.showDescription).toBe(true);
+
+    next = projectGraphReducer(next, {
+      elementId: field?.id ?? '',
+      showShuffle: true,
+      type: 'setNodeFieldShowShuffle',
+    });
+
+    const shuffledField = next.form.elements[field?.id ?? ''];
+
+    expect(shuffledField?.type === 'node-field' && shuffledField.data.showShuffle).toBe(true);
   });
 
   it('updates metadata via patch', () => {
@@ -318,5 +340,72 @@ describe('normalizeProjectGraph', () => {
     expect(normalized.id).toBe('legacy-id');
     expect(normalized.nodes).toEqual([]);
     expect(normalized.form.elements[normalized.form.rootElementId]?.type).toBe('container');
+  });
+});
+
+describe('seed modes', () => {
+  it('stores a mode on the instance and clears it again for fixed, the absent default', () => {
+    const { doc, nodeAId } = createDocWithNodes();
+    const stepping = projectGraphReducer(doc, {
+      fieldName: 'a',
+      nodeId: nodeAId,
+      seedMode: 'increment',
+      type: 'setFieldSeedMode',
+    });
+
+    expect(stepping.nodes[0]).toMatchObject({ data: { inputs: { a: { seedMode: 'increment', value: 1 } } } });
+
+    const fixed = projectGraphReducer(stepping, {
+      fieldName: 'a',
+      nodeId: nodeAId,
+      seedMode: 'fixed',
+      type: 'setFieldSeedMode',
+    });
+
+    expect(fixed.nodes[0]?.type === 'invocation' && fixed.nodes[0].data.inputs.a).not.toHaveProperty('seedMode');
+  });
+
+  it('advances only fields still holding the planned value under the planned mode', () => {
+    const { doc, nodeAId, nodeBId } = createDocWithNodes();
+    let next = projectGraphReducer(doc, {
+      fieldName: 'a',
+      nodeId: nodeAId,
+      seedMode: 'increment',
+      type: 'setFieldSeedMode',
+    });
+    next = projectGraphReducer(next, {
+      fieldName: 'a',
+      nodeId: nodeBId,
+      seedMode: 'increment',
+      type: 'setFieldSeedMode',
+    });
+    // B was edited after the plan was captured, so its advance is stale.
+    next = projectGraphReducer(next, { fieldName: 'a', nodeId: nodeBId, type: 'setFieldValue', value: 50 });
+
+    const advanced = projectGraphReducer(next, {
+      advances: [
+        { fieldName: 'a', fromSeed: 1, nodeId: nodeAId, seedMode: 'increment', toSeed: 4 },
+        { fieldName: 'a', fromSeed: 1, nodeId: nodeBId, seedMode: 'increment', toSeed: 4 },
+        { fieldName: 'a', fromSeed: 4, nodeId: 'missing', seedMode: 'increment', toSeed: 5 },
+      ],
+      type: 'advanceSeedFields',
+    });
+
+    expect(advanced.nodes[0]).toMatchObject({ data: { inputs: { a: { seedMode: 'increment', value: 4 } } } });
+    expect(advanced.nodes[1]).toMatchObject({ data: { inputs: { a: { seedMode: 'increment', value: 50 } } } });
+
+    // A mode switched since the plan keeps the value the user now expects to hold.
+    const refixed = projectGraphReducer(next, {
+      fieldName: 'a',
+      nodeId: nodeAId,
+      seedMode: 'fixed',
+      type: 'setFieldSeedMode',
+    });
+    const held = projectGraphReducer(refixed, {
+      advances: [{ fieldName: 'a', fromSeed: 1, nodeId: nodeAId, seedMode: 'increment', toSeed: 4 }],
+      type: 'advanceSeedFields',
+    });
+
+    expect(held).toBe(refixed);
   });
 });

@@ -15,6 +15,7 @@ import {
   SUPPORTED_GENERATE_BASES,
   type SupportedGenerateBase,
 } from '@features/generation/core/supportedBases';
+import { SEED_MAX } from '@platform/core/seed';
 
 import type {
   GenerateModelConfig,
@@ -75,7 +76,6 @@ import {
   MAX_DIMENSION,
   MIN_DIMENSION,
   normalizeGenerateSettings,
-  SEED_MAX,
 } from './settings';
 
 // Generation policy registry keyed by model base. Display identity stays in @features/models;
@@ -590,7 +590,7 @@ export const getDefaultGenerateSettings = (model?: GenerateModelConfig): Generat
     seamlessXAxis: false,
     seamlessYAxis: false,
     seed: Math.floor(Math.random() * SEED_MAX),
-    shouldRandomizeSeed: true,
+    seedMode: 'random',
     steps: defaults.steps,
     t5EncoderModel: null,
     vae: null,

@@ -58,6 +58,12 @@ export interface GenerationUiAdapter {
     canManageSharedSystemPrompts: boolean;
   };
   gallery: {
+    /**
+     * Locate one image in the Gallery grid and put it in front of the user:
+     * the Gallery and Preview widgets come on screen and the grid lands on the
+     * image's board, page, and cell.
+     */
+    findImage(imageName: string): void;
     selectedImage: GenerationSelectedImage | null;
     touchImages(): void;
   };

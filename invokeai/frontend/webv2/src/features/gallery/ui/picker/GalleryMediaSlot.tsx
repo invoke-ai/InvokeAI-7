@@ -7,6 +7,7 @@ import { classifyGalleryUpload, getGalleryItemByRef } from '@features/gallery/da
 import { getGalleryImageThumbnailUrl } from '@features/gallery/data/imageUrls';
 import { galleryBoardsOptions } from '@features/gallery/data/queries';
 import { getGalleryVideoThumbnailUrl } from '@features/gallery/data/videoUrls';
+import { FindInGalleryThumbnailButton } from '@features/gallery/ui/FindInGalleryButton';
 import { isGalleryItemDragData, useGalleryItemDroppable } from '@features/gallery/ui/galleryDnd';
 import { useGalleryUi } from '@features/gallery/ui/GalleryUiContext';
 import { useGalleryUploadAction } from '@features/gallery/ui/useGalleryUploadAction';
@@ -86,6 +87,7 @@ export const GalleryMediaSlot = ({
   uploadBoardId = 'none',
   value,
   onChange,
+  onFind,
   onUploadFile,
 }: {
   accept: GalleryPickerAccept;
@@ -101,6 +103,12 @@ export const GalleryMediaSlot = ({
   uploadBoardId?: string | (() => string);
   value: GalleryMediaSlotValue | null;
   onChange: (item: GalleryItem | null) => void;
+  /**
+   * Reveals the current value in the Gallery grid. Given, the thumbnail carries
+   * a find badge on hover; omitted, it stays a plain preview — a slot holding
+   * media the gallery does not own has nothing to reveal.
+   */
+  onFind?: () => void;
   /** Takes an uploaded file directly instead of sending it to the gallery. */
   onUploadFile?: (file: File) => void;
 }) => {
@@ -228,7 +236,7 @@ export const GalleryMediaSlot = ({
 
   return (
     <Stack gap="2">
-      <Box ref={setNodeRef} position="relative">
+      <Box ref={setNodeRef} className="group" position="relative">
         <GalleryPickerPopover accept={accept} label={labels.choose} onPick={handlePick}>
           <DropZone
             as="button"
@@ -304,6 +312,19 @@ export const GalleryMediaSlot = ({
             )}
           </DropZone>
         </GalleryPickerPopover>
+        {value && onFind ? (
+          /* A sibling of the slot's face, not a child of it: that face is a
+             <button>, which may not contain another. The row repeats the value
+             row's own box metrics — its height, padding, and tile size — so the
+             badge lands on the thumbnail's corner without measuring anything.
+             It rides a pixel high, by the face's border; nothing a corner badge
+             can show. */
+          <HStack gap="3" h="20" insetInline="0" p="2" pointerEvents="none" position="absolute" top="0">
+            <Box boxSize="16" flexShrink="0" position="relative">
+              <FindInGalleryThumbnailButton name={value.name} onFind={onFind} />
+            </Box>
+          </HStack>
+        ) : null}
         <DropTargetOverlay isActive={acceptsActiveDrag} isOver={isOver} label={labels.drop} />
       </Box>
       <HStack justify="end">

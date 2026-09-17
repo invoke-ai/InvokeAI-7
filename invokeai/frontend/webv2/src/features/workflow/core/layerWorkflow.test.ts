@@ -351,6 +351,37 @@ describe('buildLayerWorkflowGraph', () => {
     expect(Object.values(built.graph.nodes).every((graphNode) => graphNode.is_intermediate === true)).toBe(true);
   });
 
+  it('writes reserved seeds into the built graph without touching the document', () => {
+    const seededTemplate = template(
+      'seeded',
+      {
+        image: input('image', { input: 'direct', required: true, title: 'Layer image' }),
+        seed: input('seed', {
+          default: 0,
+          maximum: 4_294_967_295,
+          minimum: 0,
+          type: { batch: false, cardinality: 'SINGLE', name: 'IntegerField' },
+        }),
+      },
+      { result: output('result', { title: 'Result image' }) }
+    );
+    const seeded = node('seeded', seededTemplate);
+    seeded.data.inputs.seed = { label: '', name: 'seed', seedMode: 'increment', value: 42 };
+    const doc = document([seeded]);
+    const before = structuredClone(doc);
+    const built = buildLayerWorkflowGraph({
+      document: doc,
+      imageName: 'layer.png',
+      input: binding('seeded', 'image'),
+      output: binding('seeded', 'result'),
+      seeds: [{ fieldName: 'seed', nodeId: 'seeded', seed: 900, seedStep: 1 }],
+      templatesSnapshot: loaded({ seeded: seededTemplate }),
+    });
+
+    expect(built.graph.nodes.seeded).toMatchObject({ seed: 900 });
+    expect(doc).toEqual(before);
+  });
+
   it('externally satisfies only the selected connection input and appends collision-safe source and capture nodes', () => {
     const sinkTemplate = template('sink', {
       image: input('image', { input: 'connection', required: true, title: 'Layer image' }),

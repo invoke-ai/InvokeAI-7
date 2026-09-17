@@ -5,6 +5,8 @@ import type {
   ResultDestination,
 } from '@features/generation/core/contracts';
 
+import { SEED_MAX } from '@platform/core/seed';
+
 import type {
   CompiledGenerateGraph,
   ComponentModelConfig,
@@ -47,7 +49,6 @@ import {
 import { addKrea2ConditioningEnhancers } from './krea2Conditioning';
 import { addPidDecode, getPidDenoiseSize, getPidMetadata, shouldUsePidDecode } from './pidGraph';
 import { getEffectiveReferenceImage } from './referenceImage';
-import { SEED_MAX } from './settings';
 
 const getCompatibleComponentSource = (
   settings: GenerateSettings,
@@ -1510,15 +1511,4 @@ export const compileGenerateGraph = (
 };
 
 export const resolveGenerateSeed = (settings: GenerateSettings): number =>
-  settings.shouldRandomizeSeed ? Math.floor(Math.random() * SEED_MAX) : settings.seed;
-
-export const generateSeedSequence = (start: number, count: number): number[] => {
-  const seedCount = Math.max(1, Math.round(count));
-  const seeds: number[] = [];
-
-  for (let index = 0; index < seedCount; index += 1) {
-    seeds.push((start + index) % SEED_MAX);
-  }
-
-  return seeds;
-};
+  settings.seedMode === 'random' ? Math.floor(Math.random() * SEED_MAX) : settings.seed;

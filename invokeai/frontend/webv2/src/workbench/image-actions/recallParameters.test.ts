@@ -75,7 +75,7 @@ describe('buildRecallParametersSettings', () => {
         scheduler: 'euler',
         seamlessXAxis: true,
         seed: 42,
-        shouldRandomizeSeed: false,
+        seedMode: 'fixed',
         steps: 30,
         width: 1024,
       })
@@ -160,7 +160,7 @@ describe('buildRecallParametersSettings', () => {
       positivePrompt: 'keep me?',
       referenceImages: [{ ...existingReference, config: { ...existingReference.config, model: sdxlIpAdapter } }],
       seed: 7,
-      shouldRandomizeSeed: false,
+      seedMode: 'fixed',
       steps: 50,
       width: 1536,
     });
@@ -184,7 +184,7 @@ describe('buildRecallParametersSettings', () => {
         loras: [],
         positivePrompt: '',
         referenceImages: [],
-        shouldRandomizeSeed: true,
+        seedMode: 'random',
         steps: defaults.steps,
         width: defaults.width,
       })

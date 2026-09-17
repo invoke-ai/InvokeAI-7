@@ -82,9 +82,9 @@ export const GalleryPickerView = ({
   // search loads; skeletons only ever show before anything has loaded.
   const [lastItems, setLastItems] = useState<GalleryItem[] | null>(null);
 
-  // eslint-disable-next-line react/react-compiler
+  // eslint-disable-next-line react/refs
   selectionRef.current = selection;
-  // eslint-disable-next-line react/react-compiler
+  // eslint-disable-next-line react/refs
   loadMoreRef.current = data.loadMore;
 
   if (data.items !== null && data.items !== lastItems) {

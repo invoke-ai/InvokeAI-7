@@ -150,7 +150,9 @@ export const progressImageStore = {
     const entry = swapFrames.get(queueItemId);
 
     if (entry) {
-      swapFrames.set(queueItemId, { image: entry.image, imageNames });
+      // A workflow may save unrelated images in several boards. One preview
+      // bridges only to the latest output selected by result routing while it decodes.
+      swapFrames.set(queueItemId, { image: entry.image, imageNames: imageNames.slice(-1) });
     }
   },
   /** Forget a queue item's held frames: its run is gone (detached or canceled). */

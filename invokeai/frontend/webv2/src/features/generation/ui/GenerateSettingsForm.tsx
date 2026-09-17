@@ -1,5 +1,4 @@
 import type { GenerationModelCatalogItem as ModelConfig } from '@features/generation/contracts';
-/* eslint-disable react/react-compiler */
 import type { GenerateModelConfig, GenerateSettings, LoraModelConfig } from '@features/generation/core/types';
 
 import { Stack } from '@chakra-ui/react';
@@ -60,7 +59,9 @@ export const GenerateSettingsForm = ({
   const onCommitSettingsRef = useRef(onCommitSettings);
   const onPatchSettingsRef = useRef(onPatchSettings);
 
+  // eslint-disable-next-line react/refs
   onCommitSettingsRef.current = onCommitSettings;
+  // eslint-disable-next-line react/refs
   onPatchSettingsRef.current = onPatchSettings;
 
   const setDraft = (nextSettings: GenerateSettings) => {

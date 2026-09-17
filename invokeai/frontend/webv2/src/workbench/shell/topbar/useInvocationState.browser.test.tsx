@@ -95,7 +95,15 @@ const buildGenerateProject = (): Project => {
 let host: HTMLDivElement | null = null;
 let root: Root | null = null;
 
-const Probe = (): ReactNode => <span data-testid="reasons">{useInvocationState().blockingReasons.join(' | ')}</span>;
+const Probe = (): ReactNode => {
+  const state = useInvocationState();
+
+  return (
+    <span data-batch-count={state.batchCount} data-testid="reasons">
+      {state.blockingReasons.join(' | ')}
+    </span>
+  );
+};
 
 const renderProbe = async (project: Project) => {
   harness.project = project;
@@ -154,5 +162,15 @@ describe('useInvocationState and the workflow node templates', () => {
     });
 
     expect(blockingReasons()).not.toContain('Node definitions are still loading.');
+  });
+
+  it("reports the workflow widget's own iteration count for a workflow route", async () => {
+    setArchitectureCapabilities(architectureCapabilitiesFixture);
+    let state = workbenchReducer(createInitialWorkbenchState(), { sourceId: 'workflow', type: 'setInvocationSource' });
+    state = workbenchReducer(state, { type: 'patchWidgetValues', values: { batchCount: 5 }, widgetId: 'generate' });
+    state = workbenchReducer(state, { type: 'patchWidgetValues', values: { batchCount: 3 }, widgetId: 'workflow' });
+    await renderProbe(activeProject(state));
+
+    expect(host?.querySelector('[data-testid="reasons"]')?.getAttribute('data-batch-count')).toBe('3');
   });
 });

@@ -56,7 +56,7 @@ const NO_META: QueueGenerationMeta = {};
 const generateSnapshot = {
   positivePrompt: 'snapshot prompt',
   seed: 7,
-  shouldRandomizeSeed: false,
+  seedMode: 'fixed',
 } as GenerateWidgetValues;
 
 type Handle = ReturnType<typeof useQueueItemRecall>;

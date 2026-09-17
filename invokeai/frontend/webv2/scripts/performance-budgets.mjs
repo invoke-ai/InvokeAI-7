@@ -165,15 +165,15 @@ export const validateChunkSourceManifest = (value) => {
  *
  * Two bounds apply and the lower wins:
  *
- * - The allowance, `max(1%, 4 KB)` over the baseline being compared against. Neither term works
- *   alone: 1% of 2 KB of CSS is 22 bytes, and a flat floor is meaningless against a 3 MB route. It
- *   is deliberately loose, because what catches an architectural regression is `sourceOwners`,
- *   pinned exactly, which fails on a module entering a route's initial graph even at zero bytes;
- *   the byte budgets only need to catch gross size changes.
+ * - The allowance, `max(1%, 4 KB)` over the higher of the reference and committed measurement.
+ *   Re-recording the committed baseline deliberately accepts growth such as a dependency upgrade,
+ *   even before the base branch contains it. Previously recorded higher sizes stay allowed until
+ *   a downward re-record protects the savings. Neither allowance term works alone: 1% of
+ *   2 KB of CSS is 22 bytes, and a flat floor is meaningless against a 3 MB route.
  * - The hard ceiling, `max(10%, 32 KB)` over the *committed* baseline. In CI the allowance is taken
- *   over the base branch's own measurement, which moves with every merge; without a second bound
- *   the committed file would have no effect before a merge and allowance-sized pull requests could
- *   compound without limit. The ceiling keeps the committed file the outer bound a person has
+ *   over at least the base branch's own measurement, which moves with every merge. Without this
+ *   second bound, allowance-sized pull requests could compound without limit. The ceiling keeps
+ *   the committed file the outer bound a person has
  *   reviewed, and a deliberate downward re-record takes effect on the next pull request.
  *
  * Request counts are capped exactly by both: an extra initial request is structural, not growth.
@@ -192,7 +192,7 @@ export const deriveLimit = (key, baselineValue, committedValue = baselineValue) 
     return Math.min(baselineValue, committedValue);
   }
   return Math.min(
-    allowanceOver(baselineValue, GROWTH_ALLOWANCE_PERCENT, GROWTH_ALLOWANCE_FLOOR_BYTES),
+    allowanceOver(Math.max(baselineValue, committedValue), GROWTH_ALLOWANCE_PERCENT, GROWTH_ALLOWANCE_FLOOR_BYTES),
     allowanceOver(committedValue, HARD_CEILING_PERCENT, HARD_CEILING_FLOOR_BYTES)
   );
 };
@@ -202,10 +202,10 @@ export const deriveLimits = (baseline, keys, committed = baseline) =>
 
 /**
  * The base branch's own measurements, handed to a pull-request run by CI so the byte budgets are
- * judged as a delta: the pull request answers for what it adds, not for growth main has accepted
- * since the committed baseline was captured. `sourceOwners` and every structural rule still come
- * from the committed baseline, which is the deliberate record and is meant to keep failing until
- * someone updates it.
+ * judged against growth main has accepted since the committed baseline was captured, while a
+ * higher committed baseline can explicitly accept new growth in the pull request. `sourceOwners`
+ * and every structural rule still come from the committed baseline, which is the deliberate record
+ * and is meant to keep failing until someone updates it.
  *
  * Each gate writes its reference file next to its report, before it checks anything, so a failing
  * main still records what it measured. The file is deliberately small and versioned: it is read by
@@ -226,11 +226,11 @@ export const BUILD_REFERENCE_FILE = 'build-reference.json';
 export const BROWSER_REFERENCE_FILE = 'browser-reference.json';
 
 export const BUDGET_REMEDY =
-  'If this growth is intended, re-record the committed baselines with `pnpm run test:performance:build:update-baseline` ' +
-  'and `pnpm run test:performance:browser:update-baseline`. A byte limit shown with `reference ..., committed ...` is the ' +
-  'lower of the allowance over the base branch and the hard ceiling over the committed baseline; one shown with ' +
-  '`captured ...` was compared against the committed baseline directly. Request counts have no allowance: their limit ' +
-  'is the lower of the two counts.';
+  'Inspect the added route assets in the performance reports. Byte limits use the normal allowance over the higher ' +
+  'of the reference and committed measurement, capped by the hard ceiling over the committed baseline. For reviewed, ' +
+  'intended byte growth, re-record with `pnpm run test:performance:build:update-baseline` and ' +
+  '`pnpm run test:performance:browser:update-baseline`. Re-record reductions too, to protect the savings. ' +
+  'Request counts have no allowance: their limit remains the lower of the reference and committed counts.';
 
 const projectMetrics = (source, keys) => Object.fromEntries(keys.map((key) => [key, source[key]]));
 

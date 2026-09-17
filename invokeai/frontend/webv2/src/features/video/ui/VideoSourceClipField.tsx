@@ -2,7 +2,7 @@ import type { DragEndEvent } from '@dnd-kit/core';
 import type { VideoSourceClip } from '@features/video/core/types';
 import type { ChangeEvent } from 'react';
 
-import { Box, HStack, Icon, Input, Spinner, Stack, Text } from '@chakra-ui/react';
+import { HStack, Icon, Input, Spinner, Stack, Text } from '@chakra-ui/react';
 import { useDndContext, useDndMonitor, useDroppable } from '@dnd-kit/core';
 import { galleryItems, galleryTransfers, type GalleryItem } from '@features/gallery';
 import { GalleryPickerPopover } from '@features/gallery/picker';
@@ -18,7 +18,7 @@ import { Button } from '@platform/ui/Button';
 import { DropTargetOverlay } from '@platform/ui/DropTargetOverlay';
 import { DropZone } from '@platform/ui/DropZone';
 import { MiddleTruncate } from '@platform/ui/MiddleTruncate';
-import { SliderNumberField } from '@platform/ui/SliderNumberField';
+import { ScrubberField } from '@platform/ui/ScrubberField';
 import { ChevronDownIcon, FilmIcon, UploadIcon, XIcon } from 'lucide-react';
 import { memo, useCallback, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -78,7 +78,7 @@ export const VideoSourceClipField = memo(
     sourceVideo: VideoSourceClip | null;
   }) {
     const { t } = useTranslation();
-    const { getUploadBoardId, reportError, touchGalleryImages } = useVideoUiActions();
+    const { findInGallery, getUploadBoardId, reportError, touchGalleryImages } = useVideoUiActions();
     const fileInputRef = useRef<HTMLInputElement | null>(null);
     const [isLoading, setIsLoading] = useState(false);
     const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -230,6 +230,15 @@ export const VideoSourceClipField = memo(
     );
 
     const previewSrc = sourceVideo ? galleryVideoUrls.full(sourceVideo.video_name) : null;
+    // Offered from the START bound only: both thumbs are frames of one gallery
+    // record, so badging each would be two controls with one destination and
+    // one name for a screen reader to tell apart.
+    const videoName = sourceVideo?.video_name;
+    const findClipInGallery = useCallback(() => {
+      if (videoName !== undefined) {
+        findInGallery({ kind: 'video', name: videoName });
+      }
+    }, [findInGallery, videoName]);
 
     return (
       <Stack gap="2">
@@ -321,20 +330,19 @@ export const VideoSourceClipField = memo(
                       fps={sourceVideo.fps}
                       frame={sourceVideo.startFrame}
                       label={t('widgets.video.trimStartShort')}
+                      name={sourceVideo.video_name}
                       src={previewSrc}
+                      onFindInGallery={findClipInGallery}
                     />
-                    <Box flex="1" minW="0">
-                      <SliderNumberField
-                        ariaLabel={t('widgets.video.trimStart')}
-                        disabled={disabled}
-                        max={maxFrameIndex}
-                        min={0}
-                        showStepper
-                        step={1}
-                        value={sourceVideo.startFrame}
-                        onChange={setStartFrame}
-                      />
-                    </Box>
+                    <ScrubberField
+                      disabled={disabled}
+                      label={t('widgets.video.trimStart')}
+                      max={maxFrameIndex}
+                      min={0}
+                      step={1}
+                      value={sourceVideo.startFrame}
+                      onChange={setStartFrame}
+                    />
                   </HStack>
                   <HStack gap="2">
                     <TrimBoundThumb
@@ -343,18 +351,15 @@ export const VideoSourceClipField = memo(
                       label={t('widgets.video.trimEndShort')}
                       src={previewSrc}
                     />
-                    <Box flex="1" minW="0">
-                      <SliderNumberField
-                        ariaLabel={t('widgets.video.trimEnd')}
-                        disabled={disabled}
-                        max={maxFrameIndex}
-                        min={0}
-                        showStepper
-                        step={1}
-                        value={sourceVideo.endFrame}
-                        onChange={setEndFrame}
-                      />
-                    </Box>
+                    <ScrubberField
+                      disabled={disabled}
+                      label={t('widgets.video.trimEnd')}
+                      max={maxFrameIndex}
+                      min={0}
+                      step={1}
+                      value={sourceVideo.endFrame}
+                      onChange={setEndFrame}
+                    />
                   </HStack>
                 </Stack>
               </HStack>

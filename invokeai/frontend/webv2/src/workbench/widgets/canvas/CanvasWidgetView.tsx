@@ -304,7 +304,7 @@ export const CanvasWidgetView = ({ runtime }: WidgetViewProps) => {
     return () => engine?.tools.setInteractionLocked(false);
   }, [engine, isInteractionLocked]);
 
-  /* eslint-disable react/react-compiler -- imperative engine payload is mutable by design */
+  /* eslint-disable react/preserve-manual-memoization -- imperative engine payload is mutable by design */
   const commitSelectedStagedImage = useCallback(
     (continueStaging: boolean) => {
       if (selectedSlot?.kind === 'candidate') {
@@ -317,9 +317,9 @@ export const CanvasWidgetView = ({ runtime }: WidgetViewProps) => {
     },
     [engine, selectedSlot, stagingArea.selectedImageIndex]
   );
+  /* eslint-enable react/preserve-manual-memoization */
   const acceptStagedImage = useCallback(() => commitSelectedStagedImage(false), [commitSelectedStagedImage]);
   const saveStagedImageAndContinue = useCallback(() => commitSelectedStagedImage(true), [commitSelectedStagedImage]);
-  /* eslint-enable react/react-compiler */
   const cancelQueueItem = useCallback((queueItemId: string) => queue.cancel(undefined, queueItemId), [queue]);
   const cycleStagedImage = useCallback(
     (direction: -1 | 1) => canvasDispatch({ direction, type: 'cycleStagedImage' }),

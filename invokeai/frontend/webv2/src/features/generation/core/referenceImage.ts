@@ -101,14 +101,6 @@ export const normalizeCroppableImage = (value: unknown): CroppableImageWithDims 
   return { ...(crop ? { crop } : {}), original: { image: original } };
 };
 
-/** True only for the canonical nested representation, not accepted migration inputs. */
-export const isCanonicalCroppableImage = (value: unknown): value is CroppableImageWithDims =>
-  isRecord(value) &&
-  isRecord(value.original) &&
-  isImageWithDims(value.original.image) &&
-  (value.crop === undefined ||
-    (isRecord(value.crop) && isImageWithDims(value.crop.image) && normalizeCrop(value.crop) !== undefined));
-
 export type ReferenceImageCropBoxPct = { height: number; width: number; x: number; y: number };
 
 export const FULL_REFERENCE_IMAGE_CROP_BOX: ReferenceImageCropBoxPct = {

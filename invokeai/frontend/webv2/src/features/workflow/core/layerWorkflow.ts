@@ -8,7 +8,7 @@ import type {
   WorkflowInvocationNode,
 } from './types';
 
-import { compileProjectGraph, getProjectGraphReadiness } from './buildGraph';
+import { compileProjectGraph, getProjectGraphReadiness, type WorkflowSeedAssignment } from './buildGraph';
 import { getResolvedWorkflowEdgesIndexed } from './connectors';
 import { createWorkflowGraphIndex } from './graphIndex';
 import { isInvocationNode } from './types';
@@ -39,6 +39,8 @@ export interface BuildLayerWorkflowGraphOptions {
   input: WorkflowImageBinding;
   output: WorkflowImageBinding;
   imageName: string;
+  /** Seeds the caller reserved for this run (`planWorkflowSeeds`); each replaces its field's authored value. */
+  seeds?: readonly WorkflowSeedAssignment[];
 }
 
 export interface BuiltLayerWorkflowGraph {
@@ -209,6 +211,18 @@ export const buildLayerWorkflowGraph = (options: BuildLayerWorkflowGraphOptions)
 
   const templates = templatesSnapshot.templates;
   const cloned = structuredClone(document);
+
+  for (const seed of options.seeds ?? []) {
+    const seededNode = cloned.nodes.find(
+      (candidate): candidate is WorkflowInvocationNode => candidate.id === seed.nodeId && isInvocationNode(candidate)
+    );
+    const instance = seededNode?.data.inputs[seed.fieldName];
+
+    if (seededNode && instance) {
+      seededNode.data.inputs[seed.fieldName] = { ...instance, value: seed.seed };
+    }
+  }
+
   const availableInput = getAvailableBinding(getLayerWorkflowInputs(cloned, templates), input);
 
   if (!availableInput) {

@@ -1,24 +1,15 @@
 /* oxlint-disable react-perf/jsx-no-new-object-as-prop, react-perf/jsx-no-new-function-as-prop, react-perf/jsx-no-new-array-as-prop, react-perf/jsx-no-jsx-as-prop */
 import type { GenerateModelConfig, GenerateSettings, Ideogram4SamplerPreset } from '@features/generation/core/types';
 
-import {
-  Badge,
-  Box,
-  createListCollection,
-  HStack,
-  Image,
-  Input,
-  InputGroup,
-  NumberInput,
-  Stack,
-  Text,
-} from '@chakra-ui/react';
+import { Badge, Box, createListCollection, HStack, Image, Input, Stack, Text } from '@chakra-ui/react';
 import {
   getDefaultGenerateSettings,
   getGenerationModelPolicy,
   getGuidanceBoundReason,
 } from '@features/generation/core/baseGenerationPolicies';
+import { getEffectivePrompts } from '@features/generation/core/promptTemplates';
 import {
+  getDynamicPromptsConfig,
   IDEOGRAM4_GUIDANCE_MAX,
   IDEOGRAM4_GUIDANCE_MIN,
   IDEOGRAM4_MU_MAX,
@@ -27,16 +18,14 @@ import {
   IDEOGRAM4_STEPS_MAX,
   IDEOGRAM4_STEPS_MIN,
   MAX_KREA2_SEED_VARIANCE_STRENGTH,
-  SEED_MAX,
 } from '@features/generation/core/settings';
-import { IconButton } from '@platform/ui/Button';
 import { Combobox } from '@platform/ui/Combobox';
 import { Field } from '@platform/ui/Field';
 import { ModelDefaultButton } from '@platform/ui/ModelDefaultButton';
+import { ScrubberField } from '@platform/ui/ScrubberField';
 import { Select } from '@platform/ui/Select';
 import { SliderNumberField } from '@platform/ui/SliderNumberField';
 import { Tooltip } from '@platform/ui/Tooltip';
-import { DicesIcon, ShuffleIcon } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { GenerateConditioningRebalanceField } from './GenerateConditioningRebalanceField';
@@ -44,8 +33,11 @@ import { useGenerationUi } from './GenerationUiContext';
 import { GenerateCollapsibleSection } from './shared/GenerateCollapsibleSection';
 import { GenerateFieldContextMenu } from './shared/GenerateFieldContextMenu';
 import { GenerateToggleSwitch } from './shared/GenerateToggleSwitch';
+import { SeedField as SharedSeedField } from './shared/SeedField';
+import { useDynamicPrompts } from './useDynamicPrompts';
 
 const STEPS_SLIDER_MAX = 100;
+const formatPercent = (value: number): string => `${value}%`;
 
 /** The guidance/CFG slider's practical range — a UI choice about the track, not a rule. FLUX Fill
  *  recommends 30, which is off the track but a real value, so the number input keeps its own looser
@@ -57,8 +49,6 @@ const STEPS_SLIDER_MAX = 100;
  *  either way: 0 for most, 1 for the samplers whose node is `ge=1`. */
 const GUIDANCE_SLIDER_MAX = 10;
 const GUIDANCE_INPUT_MAX = 100;
-
-const SEED_END_ELEMENT_PROPS = { pointerEvents: 'auto', pr: '0.5' } as const;
 
 interface GenerateRenderSectionProps {
   settings: GenerateSettings;
@@ -232,27 +222,23 @@ const Krea2SeedVarianceFields = ({ onCommit, settings }: Pick<GenerateRenderSect
       </Field>
       {settings.krea2SeedVarianceEnabled ? (
         <>
-          <Field label={t('widgets.generate.krea2SeedVarianceStrength')}>
-            <SliderNumberField
-              ariaLabel={t('widgets.generate.krea2SeedVarianceStrength')}
-              max={MAX_KREA2_SEED_VARIANCE_STRENGTH}
-              min={0}
-              step={0.05}
-              value={settings.krea2SeedVarianceStrength}
-              onChange={(value) => onCommit({ krea2SeedVarianceStrength: value })}
-            />
-          </Field>
-          <Field label={t('widgets.generate.krea2SeedVarianceRandomize')}>
-            <SliderNumberField
-              ariaLabel={t('widgets.generate.krea2SeedVarianceRandomize')}
-              formatValue={(value) => `${value}%`}
-              max={100}
-              min={0}
-              step={1}
-              value={settings.krea2SeedVarianceRandomizePercent}
-              onChange={(value) => onCommit({ krea2SeedVarianceRandomizePercent: value })}
-            />
-          </Field>
+          <ScrubberField
+            label={t('widgets.generate.krea2SeedVarianceStrength')}
+            max={MAX_KREA2_SEED_VARIANCE_STRENGTH}
+            min={0}
+            step={0.05}
+            value={settings.krea2SeedVarianceStrength}
+            onChange={(value) => onCommit({ krea2SeedVarianceStrength: value })}
+          />
+          <ScrubberField
+            formatValue={formatPercent}
+            label={t('widgets.generate.krea2SeedVarianceRandomize')}
+            max={100}
+            min={0}
+            step={1}
+            value={settings.krea2SeedVarianceRandomizePercent}
+            onChange={(value) => onCommit({ krea2SeedVarianceRandomizePercent: value })}
+          />
         </>
       ) : null}
     </>
@@ -260,97 +246,56 @@ const Krea2SeedVarianceFields = ({ onCommit, settings }: Pick<GenerateRenderSect
 };
 
 /**
- * One seed field with the shuffle-new-seed action inside it, and a random
- * toggle beside it: pressed means every queued run draws a fresh seed and the
- * pinned value goes quiet. `shouldRandomizeSeed` persists unchanged underneath.
+ * The shared seed row, with the executed seeds of recent runs underneath —
+ * each behind its result, so a seed stops being a magic number and becomes
+ * "that image's recipe". Clicking one pins it, switching to fixed mode.
  */
 const SeedField = ({ onCommit, settings }: Pick<GenerateRenderSectionProps, 'onCommit' | 'settings'>) => {
   const { t } = useTranslation();
   const { seedHistory } = useGenerationUi().queueInsights;
-  const randomLabel = t('widgets.generate.randomEachRun');
+  // The same query the topbar observes, so a prompt set counts its seeds the
+  // way the batch will without a second expansion request or cache entry.
+  const expansion = useDynamicPrompts(getEffectivePrompts(settings).positivePrompt, getDynamicPromptsConfig(settings));
 
   return (
-    <Field hint="seed" label={t('common.seed')}>
-      <Stack gap="1" w="full">
-        <HStack gap="1">
-          <NumberInput.Root
-            disabled={settings.shouldRandomizeSeed}
-            max={SEED_MAX}
-            min={0}
-            size="xs"
-            value={String(settings.seed)}
-            w="full"
-            onValueChange={({ valueAsNumber }) => {
-              if (Number.isFinite(valueAsNumber)) {
-                onCommit({ seed: valueAsNumber });
-              }
-            }}
-          >
-            <InputGroup
-              endElement={
-                <IconButton
-                  aria-label={t('widgets.generate.newSeed')}
-                  color="fg.muted"
-                  disabled={settings.shouldRandomizeSeed}
-                  size="2xs"
-                  title={t('widgets.generate.newSeed')}
-                  variant="ghost"
-                  onClick={() => onCommit({ seed: Math.floor(Math.random() * SEED_MAX) })}
-                >
-                  <DicesIcon />
-                </IconButton>
-              }
-              endElementProps={SEED_END_ELEMENT_PROPS}
-            >
-              <NumberInput.Input aria-label={t('common.seed')} />
-            </InputGroup>
-          </NumberInput.Root>
-          <Tooltip content={randomLabel}>
-            <IconButton
-              aria-label={randomLabel}
-              aria-pressed={settings.shouldRandomizeSeed}
-              flexShrink="0"
-              size="xs"
-              variant={settings.shouldRandomizeSeed ? 'solid' : 'outline'}
-              onClick={() => onCommit({ shouldRandomizeSeed: !settings.shouldRandomizeSeed })}
-            >
-              <ShuffleIcon />
-            </IconButton>
-          </Tooltip>
+    <SharedSeedField
+      batchCount={settings.batchCount}
+      label={t('common.seed')}
+      promptCount={expansion.prompts.length}
+      seed={settings.seed}
+      seedBehaviour={settings.dynamicPromptsSeedBehaviour}
+      seedMode={settings.seedMode}
+      onCommit={onCommit}
+    >
+      {seedHistory.length > 0 ? (
+        <HStack gap="1" pt="0.5">
+          <Text color="fg.subtle" fontSize="2xs">
+            {t('widgets.generate.recentSeeds')}
+          </Text>
+          {seedHistory.map((item) => (
+            <Tooltip key={item.seed} content={t('widgets.generate.useSeed', { seed: item.seed })}>
+              <Box
+                aria-label={t('widgets.generate.useSeed', { seed: item.seed })}
+                as="button"
+                bg="bg.emphasized"
+                borderColor={
+                  settings.seedMode !== 'random' && settings.seed === item.seed ? 'accent.solid' : 'border.subtle'
+                }
+                borderWidth="1px"
+                boxSize="5"
+                overflow="hidden"
+                rounded="3px"
+                onClick={() => onCommit({ seed: item.seed, seedMode: 'fixed' })}
+              >
+                {item.thumbnailUrl ? (
+                  <Image alt="" boxSize="full" draggable={false} objectFit="cover" src={item.thumbnailUrl} />
+                ) : null}
+              </Box>
+            </Tooltip>
+          ))}
         </HStack>
-        {/* The executed seeds of recent runs, each behind its result — a seed
-            stops being a magic number and becomes "that image's recipe".
-            Clicking one pins it, switching to fixed mode if needed. */}
-        {seedHistory.length > 0 ? (
-          <HStack gap="1" pt="0.5">
-            <Text color="fg.subtle" fontSize="2xs">
-              {t('widgets.generate.recentSeeds')}
-            </Text>
-            {seedHistory.map((item) => (
-              <Tooltip key={item.seed} content={t('widgets.generate.useSeed', { seed: item.seed })}>
-                <Box
-                  aria-label={t('widgets.generate.useSeed', { seed: item.seed })}
-                  as="button"
-                  bg="bg.emphasized"
-                  borderColor={
-                    !settings.shouldRandomizeSeed && settings.seed === item.seed ? 'accent.solid' : 'border.subtle'
-                  }
-                  borderWidth="1px"
-                  boxSize="5"
-                  overflow="hidden"
-                  rounded="3px"
-                  onClick={() => onCommit({ seed: item.seed, shouldRandomizeSeed: false })}
-                >
-                  {item.thumbnailUrl ? (
-                    <Image alt="" boxSize="full" draggable={false} objectFit="cover" src={item.thumbnailUrl} />
-                  ) : null}
-                </Box>
-              </Tooltip>
-            ))}
-          </HStack>
-        ) : null}
-      </Stack>
-    </Field>
+      ) : null}
+    </SharedSeedField>
   );
 };
 
@@ -395,7 +340,16 @@ export const GenerateRenderSection = ({
         {settings.steps} · {policy.ui.guidanceLabel} {settings.cfgScale}
       </Badge>
       {policy.ui.seedVisible ? (
-        <Badge size="xs">{settings.shouldRandomizeSeed ? t('widgets.generate.random') : settings.seed}</Badge>
+        <Badge size="xs">
+          {settings.seedMode === 'random'
+            ? t('common.seedMode.random')
+            : settings.seedMode === 'fixed'
+              ? settings.seed
+              : t('widgets.generate.seedSummary', {
+                  mode: t(`common.seedMode.${settings.seedMode}`),
+                  seed: settings.seed,
+                })}
+        </Badge>
       ) : null}
     </>
   );
@@ -413,40 +367,37 @@ export const GenerateRenderSection = ({
           isAtDefault={modelDefaults !== null && settings.steps === modelDefaults.steps}
           onReset={modelDefaults ? () => onCommit({ steps: modelDefaults.steps }) : undefined}
         >
-          <Field hint="steps" label={t('widgets.generate.steps')}>
-            <SliderNumberField
-              ariaLabel={t('widgets.generate.steps')}
-              defaultValue={modelDefaults?.steps}
-              marks={modelDefaults ? [modelDefaults.steps] : undefined}
-              max={STEPS_SLIDER_MAX}
-              min={1}
-              numberInputMax={Number.MAX_SAFE_INTEGER}
-              resetLabel={t('widgets.generate.useModelDefaultSteps')}
-              step={1}
-              value={settings.steps}
-              onChange={(steps) => commitNumber('steps', steps)}
-            />
-          </Field>
+          <ScrubberField
+            defaultValue={modelDefaults?.steps}
+            hint="steps"
+            inputMax={Number.MAX_SAFE_INTEGER}
+            label={t('widgets.generate.steps')}
+            marks={modelDefaults ? [modelDefaults.steps] : undefined}
+            max={STEPS_SLIDER_MAX}
+            min={1}
+            step={1}
+            value={settings.steps}
+            onChange={(steps) => commitNumber('steps', steps)}
+          />
         </GenerateFieldContextMenu>
         <GenerateFieldContextMenu
           copyValue={() => String(settings.cfgScale)}
           isAtDefault={modelDefaults !== null && settings.cfgScale === modelDefaults.cfgScale}
           onReset={modelDefaults ? () => onCommit({ cfgScale: modelDefaults.cfgScale }) : undefined}
         >
-          <Field error={guidanceError} hint="guidance" label={policy.ui.guidanceLabel}>
-            <SliderNumberField
-              ariaLabel={policy.ui.guidanceLabel}
-              defaultValue={modelDefaults?.cfgScale}
-              marks={modelDefaults ? [modelDefaults.cfgScale] : undefined}
-              max={guidanceSliderMax}
-              min={policy.ui.guidanceMin}
-              numberInputMax={guidanceInputMax}
-              resetLabel={t('widgets.generate.useModelDefaultField', { field: policy.ui.guidanceLabel })}
-              step={0.5}
-              value={settings.cfgScale}
-              onChange={(cfgScale) => commitNumber('cfgScale', cfgScale)}
-            />
-          </Field>
+          <ScrubberField
+            defaultValue={modelDefaults?.cfgScale}
+            error={guidanceError}
+            hint="guidance"
+            inputMax={guidanceInputMax}
+            label={policy.ui.guidanceLabel}
+            marks={modelDefaults ? [modelDefaults.cfgScale] : undefined}
+            max={guidanceSliderMax}
+            min={policy.ui.guidanceMin}
+            step={0.5}
+            value={settings.cfgScale}
+            onChange={(cfgScale) => commitNumber('cfgScale', cfgScale)}
+          />
         </GenerateFieldContextMenu>
         {familyBase === 'krea-2' ? (
           <GenerateConditioningRebalanceField

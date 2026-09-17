@@ -579,6 +579,24 @@ describe('hard ceiling over the committed baseline', () => {
 describe('base-branch reference', () => {
   const buildReference = (measurements) => createBuildReference(measurements);
 
+  it('accepts re-recorded dependency growth while still rejecting additional growth and requests', () => {
+    const previous = createSyntheticBuild(100_000);
+    const reference = buildReference([previous]);
+    const recorded = { ...previous, ownedRawBytes: 20_000 };
+    const actual = { ...recorded, ownedRawBytes: 20_064 };
+    const original = applyBuildReference(createArchitectureBaseline(previous).build, reference).build.launchpad;
+
+    assert.ok(checkRouteBudget(actual, original).some((failure) => failure.message.includes('owned JavaScript')));
+
+    const updated = applyBuildReference(createArchitectureBaseline(recorded).build, reference).build.launchpad;
+    assert.deepEqual(checkRouteBudget(actual, updated), []);
+    assert.match(checkRouteBudget({ ...actual, ownedRawBytes: 30_000 }, updated)[0].message, /owned JavaScript/);
+    assert.match(
+      checkRouteBudget({ ...actual, requestCount: actual.requestCount + 1 }, updated)[0].message,
+      /initial asset requests/
+    );
+  });
+
   it('judges bytes against the reference while the committed source-owner pin still fails a leak', () => {
     // The committed baseline is stale by 20 KB of growth that main has already accepted. Against
     // it the pull request would fail for main's drift; against the reference it answers only for
@@ -704,6 +722,35 @@ describe('base-branch reference, browser gate', () => {
   });
   const check = (route, expected, baseline) =>
     checkBrowserRouteBudget(route, expected, baseline.timingPolicy, route.scriptSourceOwners);
+
+  for (const [baselineKey, resourceKey] of [
+    ['resourceBaseline', 'resources'],
+    ['activatedResourceBaseline', 'activatedResources'],
+  ]) {
+    it(`accepts a reviewed ${resourceKey} increase without opening the budget to further growth`, () => {
+      const baseline = createBrowserBaseline();
+      const [previous] = baseline.routes;
+      const reference = createBrowserReference([routeFor(previous)]);
+      const recorded = {
+        ...previous,
+        [baselineKey]: { ...previous[baselineKey], scriptRawBytes: 20_000 },
+      };
+      const actual = routeFor(recorded, {
+        [resourceKey]: { ...recorded[baselineKey], scriptRawBytes: 20_064 },
+      });
+
+      assert.ok(check(actual, previous, baseline).some((failure) => failure.includes('scriptRawBytes')));
+
+      const {
+        routes: [updated],
+      } = applyBrowserReference([recorded], reference);
+      assert.deepEqual(check(actual, updated, baseline), []);
+      assert.match(
+        check({ ...actual, [resourceKey]: { ...actual[resourceKey], scriptRawBytes: 30_000 } }, updated, baseline)[0],
+        /scriptRawBytes/
+      );
+    });
+  }
 
   it('passes growth within the allowance and fails growth beyond it, through the gate itself', () => {
     const baseline = createBrowserBaseline();

@@ -65,6 +65,20 @@ describe('resolveVideoMode', () => {
 });
 
 describe('normalizeVideoSettings', () => {
+  it('reads the seed mode saved before modes existed from the random toggle', () => {
+    const legacy = { ...createSettings({}), seedMode: undefined };
+
+    expect(normalizeVideoSettings({ ...legacy, shouldRandomizeSeed: false })?.seedMode).toBe('fixed');
+    expect(normalizeVideoSettings({ ...legacy, shouldRandomizeSeed: true })?.seedMode).toBe('random');
+    expect(normalizeVideoSettings({ ...legacy, seedMode: 'increment', shouldRandomizeSeed: false })?.seedMode).toBe(
+      'increment'
+    );
+    expect(normalizeVideoSettings(legacy)?.seedMode).toBe('random');
+    // A record whose mode normalize has to invent is not canonical, so nothing may reuse it raw.
+    expect(isVideoSettings({ ...legacy, shouldRandomizeSeed: true })).toBe(false);
+    expect(isVideoSettings(legacy)).toBe(false);
+  });
+
   it('round-trips canonical settings', () => {
     const settings = createSettings({ firstFrameImage: FIRST_FRAME, positivePrompt: 'a cat' });
     const normalized = normalizeVideoSettings(settings);
@@ -97,7 +111,7 @@ describe('normalizeVideoSettings', () => {
       numFrames: 81,
       positivePrompt: 'a dog',
       seed: 123,
-      shouldRandomizeSeed: false,
+      seedMode: 'fixed',
       steps: 40,
     };
     const normalized = normalizeVideoSettings(legacy);

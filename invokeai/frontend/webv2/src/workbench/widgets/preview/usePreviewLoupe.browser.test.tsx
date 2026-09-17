@@ -1,4 +1,4 @@
-/* eslint-disable react/react-compiler */
+/* eslint-disable react/refs */
 import { WHEEL_ZOOM_STEP } from '@workbench/panZoom';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';

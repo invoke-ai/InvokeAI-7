@@ -47,7 +47,7 @@ export const areVideoValuesEqual = (left: VideoWidgetValues, right: VideoWidgetV
     left.acceleratorEnabled === right.acceleratorEnabled &&
     stableStringify(left.acceleratorLoraKeys) === stableStringify(right.acceleratorLoraKeys) &&
     left.seed === right.seed &&
-    left.shouldRandomizeSeed === right.shouldRandomizeSeed &&
+    left.seedMode === right.seedMode &&
     left.batchCount === right.batchCount &&
     areVideoLorasEquivalent(left.loras, right.loras) &&
     stableStringify(left.firstFrameImage) === stableStringify(right.firstFrameImage) &&

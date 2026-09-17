@@ -139,7 +139,9 @@ export const useInvocationState = (): InvocationState => {
       ? routeInput.upscaleValues
       : invocation.sourceId === 'video'
         ? routeInput.videoValues
-        : routeInput.generateValues;
+        : invocation.sourceId === 'workflow'
+          ? routeInput.workflowValues
+          : routeInput.generateValues;
 
   const promptExpansion = useDynamicPrompts(
     readEffectivePositivePrompt(routeInput.generateValues),

@@ -19,6 +19,9 @@ import { browserNodesDataPort } from './transport';
 
 export type NodeExecutionStatus = 'running' | 'completed' | 'failed';
 
+/** How the queue item that was running these nodes ended. */
+export type NodeExecutionOutcome = 'completed' | 'failed' | 'canceled';
+
 export interface NodeExecutionState {
   status: NodeExecutionStatus;
   /** 0..1, or null while indeterminate. Only meaningful while running. */
@@ -26,6 +29,8 @@ export interface NodeExecutionState {
   progressMessage: string | null;
   /** Thumbnail of the node's most recent image output, when it produced one. */
   outputImageUrl: string | null;
+  /** The node's most recent invocation result in the current run (a loop body runs many times). */
+  latestOutput: unknown;
   error: string | null;
 }
 
@@ -57,6 +62,7 @@ export const nodeExecutionStore = {
       outputImageUrl: imageName
         ? browserNodesDataPort.buildUrl(`/api/v1/images/i/${encodeURIComponent(imageName)}/thumbnail`)
         : (previous?.outputImageUrl ?? null),
+      latestOutput: event.result,
       progress: null,
       progressMessage: null,
       status: 'completed',
@@ -68,6 +74,7 @@ export const nodeExecutionStore = {
     stateByNodeId.set(event.invocation_source_id, {
       error: event.error_message,
       outputImageUrl: previous?.outputImageUrl ?? null,
+      latestOutput: previous?.latestOutput ?? null,
       progress: null,
       progressMessage: null,
       status: 'failed',
@@ -79,16 +86,28 @@ export const nodeExecutionStore = {
     stateByNodeId.set(nodeId, {
       error: null,
       outputImageUrl: previous?.outputImageUrl ?? null,
+      latestOutput: previous?.latestOutput ?? null,
       progress: percentage,
       progressMessage: message,
       status: 'running',
     });
   },
-  /** A queue item reached a terminal state: nothing can still be running. */
-  settleRunning(): void {
-    for (const [nodeId, state] of stateByNodeId.entries()) {
-      if (state.status === 'running') {
+  /**
+   * The queue item running these nodes reached a terminal state: a node still marked running
+   * finished with it, or never will (its failure/cancel event was lost or never sent).
+   */
+  settleRunning(nodeIds: Iterable<string>, outcome: NodeExecutionOutcome): void {
+    for (const nodeId of nodeIds) {
+      const state = stateByNodeId.get(nodeId);
+
+      if (state?.status !== 'running') {
+        continue;
+      }
+
+      if (outcome === 'completed') {
         stateByNodeId.set(nodeId, { ...state, progress: null, progressMessage: null, status: 'completed' });
+      } else {
+        stateByNodeId.delete(nodeId);
       }
     }
   },
@@ -98,6 +117,7 @@ export const nodeExecutionStore = {
     stateByNodeId.set(event.invocation_source_id, {
       error: null,
       outputImageUrl: previous?.outputImageUrl ?? null,
+      latestOutput: previous?.latestOutput ?? null,
       progress: null,
       progressMessage: null,
       status: 'running',
@@ -111,7 +131,7 @@ export interface NodeExecutionSink {
   failed(event: NodeInvocationErrorEvent): void;
   get(nodeId: string): NodeExecutionState | null;
   progress(nodeId: string, percentage: number | null, message: string): void;
-  settleRunning(): void;
+  settleRunning(nodeIds: Iterable<string>, outcome: NodeExecutionOutcome): void;
   started(event: NodeInvocationStartedEvent): void;
   subscribe(nodeId: string, listener: () => void): () => void;
 }

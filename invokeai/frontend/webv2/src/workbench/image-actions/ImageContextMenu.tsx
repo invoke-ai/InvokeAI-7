@@ -1,6 +1,5 @@
 import type { GalleryBoard, GalleryImage, GalleryItem, GalleryItemKey, GalleryItemRef } from '@features/gallery';
 import type { GalleryItemContextMenuTarget } from '@features/gallery/react';
-/* eslint-disable react/react-compiler */
 import type { GalleryCanvasImportDestination } from '@workbench/canvas-operations/api';
 
 import { HStack, Icon, Menu, Portal, ScrollArea, Text } from '@chakra-ui/react';
@@ -231,6 +230,7 @@ const GalleryItemContextMenuContent = ({
   const itemRef = target.itemRefs[0] ?? null;
   const isBulk = target.itemRefs.length > 1;
 
+  // eslint-disable-next-line react/refs
   targetRef.current = target;
 
   const positioning = useMemo(
@@ -594,6 +594,7 @@ const ImageContextMenuContent = ({
   const targetRef = useRef(target);
   const imageRef = useRef<GalleryImage | null>(null);
 
+  // eslint-disable-next-line react/refs
   targetRef.current = target;
 
   const isBulk = images.length > 1;
@@ -601,6 +602,7 @@ const ImageContextMenuContent = ({
   const recallRequestKey = getImageContextMenuRecallRequestKey(image, isBulk);
   const getImageRecallCapabilities = actions.getImageRecallCapabilities;
 
+  // eslint-disable-next-line react/refs
   imageRef.current = image;
 
   useEffect(() => {
@@ -843,6 +845,7 @@ const useSelectForCompareHandler = (actions: ImageActions, image: GalleryImage) 
   useCallback(() => actions.selectForCompare(image), [actions, image]);
 
 const useUseAsReferenceImageHandler = (actions: ImageActions, image: GalleryImage) =>
+  // eslint-disable-next-line react/hooks -- `useAsReferenceImage` is a plain action method; the compiler reads its name as a hook.
   useCallback(() => actions.useAsReferenceImage(image), [actions, image]);
 
 const OpenInNewTabQuickMenuItem = ({ image }: { image: GalleryImage }) => {

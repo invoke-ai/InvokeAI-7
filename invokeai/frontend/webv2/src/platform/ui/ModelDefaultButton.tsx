@@ -5,13 +5,6 @@ import { RotateCcwIcon } from 'lucide-react';
 import { useCallback } from 'react';
 
 /**
- * `InputGroup endElementProps` for fields hosting this button: interactive,
- * and padded for an icon button rather than Chakra's text-glyph default
- * (`px: 3`), which floats the button too far off the field's end edge.
- */
-export const MODEL_DEFAULT_END_ELEMENT_PROPS = { pointerEvents: 'auto', px: '1' } as const;
-
-/**
  * Reset-to-default affordance. Callers render it only while the value
  * differs from the default, so its presence itself signals "modified". No
  * fallback label: every call site knows what it's resetting and says so.

@@ -26,7 +26,6 @@ const SUPPORT_CONCEPTS = 'https://support.invoke.ai/support/solutions/articles/1
  */
 export const FEATURE_HINTS = {
   aspectRatio: {},
-  batchCount: { href: 'https://support.invoke.ai/support/solutions/articles/151000159073' },
   cfgRescale: { href: SUPPORT_ADVANCED_SETTINGS },
   cfgScale: { href: 'https://www.youtube.com/watch?v=1OeHEJrsTpI' },
   clipSkip: { href: SUPPORT_ADVANCED_SETTINGS },

@@ -37,7 +37,7 @@ const createSettings = (overrides: Partial<GenerateSettings> = {}): GenerateSett
     seamlessXAxis: false,
     seamlessYAxis: false,
     seed: 123,
-    shouldRandomizeSeed: false,
+    seedMode: 'fixed',
     steps: 30,
     t5EncoderModel: null,
     vae: null,

@@ -104,7 +104,7 @@ const createValues = (overrides: Partial<GenerateWidgetValues> = {}): GenerateWi
   seamlessXAxis: false,
   seamlessYAxis: false,
   seed: 123,
-  shouldRandomizeSeed: true,
+  seedMode: 'random',
   steps: 30,
   t5EncoderModel: null,
   vae: null,
@@ -220,7 +220,7 @@ describe('image recall', () => {
       scheduler: 'euler',
       seamlessXAxis: true,
       seed: 42,
-      shouldRandomizeSeed: false,
+      seedMode: 'fixed',
       steps: 25,
       width: 512,
     });
@@ -436,7 +436,7 @@ describe('image recall', () => {
 
   it('remixes without changing the current seed state', () => {
     const result = buildImageRecallSettings({
-      currentValues: createValues({ seed: 999, shouldRandomizeSeed: false }),
+      currentValues: createValues({ seed: 999, seedMode: 'fixed' }),
       image,
       kind: 'remix',
       metadata,
@@ -446,7 +446,7 @@ describe('image recall', () => {
     });
 
     expect(result?.values.seed).toBe(999);
-    expect(result?.values.shouldRandomizeSeed).toBe(false);
+    expect(result?.values.seedMode).toBe('fixed');
     expect(result?.values.positivePrompt).toBe('a recalled prompt');
     expect(result?.fields).not.toContain('seed');
   });

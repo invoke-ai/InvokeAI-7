@@ -13,6 +13,8 @@ interface GenerateFieldContextMenuProps {
   /** Disables the reset entry; the menu still opens for Copy value. */
   isAtDefault?: boolean;
   onReset?: () => void;
+  /** Reset entry text; defaults to "Reset to model default". */
+  resetLabel?: string;
 }
 
 /**
@@ -25,6 +27,7 @@ export const GenerateFieldContextMenu = ({
   copyValue,
   isAtDefault = false,
   onReset,
+  resetLabel,
 }: GenerateFieldContextMenuProps) => {
   const { t } = useTranslation();
   const [point, setPoint] = useState<{ x: number; y: number } | null>(null);
@@ -55,7 +58,7 @@ export const GenerateFieldContextMenu = ({
             <MenuContent>
               {onReset ? (
                 <Menu.Item disabled={isAtDefault} value="reset" onClick={onReset}>
-                  {t('widgets.generate.resetToModelDefault')}
+                  {resetLabel ?? t('widgets.generate.resetToModelDefault')}
                 </Menu.Item>
               ) : null}
               <Menu.Item value="copy" onClick={() => void navigator.clipboard.writeText(copyValue())}>

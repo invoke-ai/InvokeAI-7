@@ -1,4 +1,5 @@
 import { Badge, Box } from '@chakra-ui/react';
+import { FindInGalleryThumbnailButton } from '@features/gallery/mediaSlot';
 import { memo, useEffect, useRef } from 'react';
 
 /**
@@ -26,12 +27,18 @@ export const TrimBoundThumb = memo(function TrimBoundThumb({
   fps,
   frame,
   label,
+  name,
   src,
+  onFindInGallery,
 }: {
   fps: number;
   frame: number;
   label: string;
+  /** The clip's file name, which names the find control among its siblings. */
+  name?: string;
   src: string;
+  /** Reveals the clip these bounds are cut from; omitted, the thumb is display only. */
+  onFindInGallery?: () => void;
 }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
@@ -59,11 +66,21 @@ export const TrimBoundThumb = memo(function TrimBoundThumb({
   }, [fps, frame, src]);
 
   return (
-    <Box bg="blackAlpha.300" flexShrink={0} h="14" overflow="hidden" position="relative" rounded="sm" w="20">
+    <Box
+      bg="blackAlpha.300"
+      className="group"
+      flexShrink={0}
+      h="14"
+      overflow="hidden"
+      position="relative"
+      rounded="sm"
+      w="20"
+    >
       <video key={src} ref={videoRef} muted preload="metadata" src={src} style={PREVIEW_VIDEO_STYLE} />
       <Badge bottom="0.5" insetInlineStart="0.5" pointerEvents="none" position="absolute" size="xs" variant="solid">
         {label}
       </Badge>
+      {onFindInGallery ? <FindInGalleryThumbnailButton name={name} onFind={onFindInGallery} /> : null}
     </Box>
   );
 });

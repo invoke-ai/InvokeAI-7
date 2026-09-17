@@ -86,7 +86,7 @@ const generateValuesFor = (model: GenerateModelConfig): Record<string, unknown> 
   modelKey: model.key,
   positivePrompt: 'a canvas prompt',
   seed: 7,
-  shouldRandomizeSeed: false,
+  seedMode: 'fixed',
 });
 
 const rasterLayer = (id: string, size = 64): CanvasRasterLayerContractV2 => ({
@@ -440,7 +440,7 @@ describe('runCanvasInvocation', () => {
       negativePrompt: 'low quality',
       positivePrompt: 'a resolved canvas prompt',
       seed: 123,
-      shouldRandomizeSeed: false,
+      seedMode: 'fixed',
     };
 
     await runCanvasInvocation(harness.deps);
@@ -455,7 +455,7 @@ describe('runCanvasInvocation', () => {
         negativePrompt: 'low quality',
         positivePrompt: 'a resolved canvas prompt',
         seed: 123,
-        shouldRandomizeSeed: false,
+        seedMode: 'fixed',
       },
     });
   });
