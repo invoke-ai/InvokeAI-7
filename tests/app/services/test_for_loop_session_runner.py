@@ -8,8 +8,10 @@ from invokeai.app.invocations.baseinvocation import BaseInvocation, BaseInvocati
 from invokeai.app.invocations.fields import InputField, OutputField
 from invokeai.app.invocations.loops import ForInvocation, ForInvocationOutput, ForReturnInvocation, LoopState
 from invokeai.app.invocations.primitives import BooleanOutput
+from invokeai.app.services.invocation_cache.invocation_cache_memory import MemoryInvocationCache
 from invokeai.app.services.progress_previews.progress_previews_default import MemoryProgressPreviews
 from invokeai.app.services.session_processor.session_processor_default import DefaultSessionRunner
+from invokeai.app.services.shared.execution_effects import ExecutionEffectsRecorder, ExecutionInterface
 from invokeai.app.services.shared.graph import CollectInvocation, Graph, GraphExecutionState, IterateInvocation
 from invokeai.app.services.shared.invocation_context import InvocationContext
 from tests.app.services.workflow_call_test_utils import (
@@ -158,7 +160,16 @@ def _build_runner(
 ) -> tuple[DefaultSessionRunner, Event, _DummySessionQueue, _DummyEvents]:
     monkeypatch.setattr(
         "invokeai.app.services.session_processor.session_processor_default.build_invocation_context",
-        lambda data, services, is_canceled: None,
+        lambda data, services, is_canceled: (
+            effects := ExecutionEffectsRecorder(
+                source_node_id=data.invocation.id,
+                frame_path=data.execution_frame,
+                state_id=data.execution_state_id,
+                frame_id=data.execution_frame_id,
+                workflow_call_depth=data.execution_workflow_call_depth,
+            )
+        )
+        and SimpleNamespace(execution_effects=effects, execution=ExecutionInterface(effects)),
     )
 
     cancel_event = Event()
@@ -173,6 +184,7 @@ def _build_runner(
             logger=_DummyLogger(),
             configuration=_DummyConfig(),
             session_queue=session_queue,
+            invocation_cache=MemoryInvocationCache(max_cache_size=0),
         ),
         cancel_event=cancel_event,
     )

@@ -1,6 +1,7 @@
 """Tests for workflow-call relationship metadata on session_queue items."""
 
 import uuid
+from threading import Barrier, Thread
 
 import pytest
 
@@ -91,6 +92,22 @@ def _insert_queue_item(
             ),
         )
         return cursor.lastrowid
+
+
+def _build_waiting_workflow_call_parent(
+    session_queue: SqliteSessionQueue, child_count: int
+) -> tuple[int, GraphExecutionState, list[GraphExecutionState]]:
+    graph = Graph()
+    graph.add_node(CallSavedWorkflowInvocation(id="call-node", workflow_id="workflow-a"))
+    parent_session = GraphExecutionState(graph=graph)
+    invocation = parent_session.next()
+    assert isinstance(invocation, CallSavedWorkflowInvocation)
+    frame = parent_session.build_workflow_call_frame(invocation.id, invocation.workflow_id)
+    parent_session.begin_waiting_on_workflow_call(frame)
+    child_sessions = [parent_session.create_child_workflow_execution_state(Graph(), frame) for _ in range(child_count)]
+    parent_session.attach_waiting_workflow_call_child_sessions(child_sessions)
+    parent_item_id = _insert_queue_item(session_queue, session=parent_session, status="in_progress")
+    return parent_item_id, parent_session, child_sessions
 
 
 def test_get_queue_item_round_trips_workflow_call_metadata(session_queue: SqliteSessionQueue) -> None:
@@ -249,6 +266,87 @@ def test_enqueue_workflow_call_child_persists_pending_child_queue_item(session_q
     assert child_queue_item.root_item_id == parent_item_id
     assert child_queue_item.workflow_call_depth == 1
     assert child_queue_item.session_id == child_session.id
+
+
+def test_enqueue_workflow_call_children_publishes_parent_state_before_children(
+    session_queue: SqliteSessionQueue,
+) -> None:
+    parent_item_id, _parent_session, child_sessions = _build_waiting_workflow_call_parent(session_queue, child_count=2)
+
+    child_queue_items = session_queue.enqueue_workflow_call_children(
+        parent_queue_item=session_queue.get_queue_item(parent_item_id),
+        child_sessions=[(child_session, None) for child_session in child_sessions],
+    )
+
+    parent_queue_item = session_queue.get_queue_item(parent_item_id)
+    assert parent_queue_item.status == "waiting"
+    assert parent_queue_item.session.waiting_workflow_call_execution is not None
+    assert parent_queue_item.session.waiting_workflow_call_execution.child_item_ids == [
+        child_queue_item.item_id for child_queue_item in child_queue_items
+    ]
+    assert [
+        session_queue.get_queue_item(child_queue_item.item_id).status for child_queue_item in child_queue_items
+    ] == [
+        "pending",
+        "pending",
+    ]
+
+    assert [session_queue.dequeue().item_id for _ in child_queue_items] == [
+        child_queue_item.item_id for child_queue_item in child_queue_items
+    ]
+
+
+def test_concurrent_workflow_call_child_completions_preserve_both_siblings(
+    session_queue: SqliteSessionQueue,
+) -> None:
+    parent_item_id, _parent_session, child_sessions = _build_waiting_workflow_call_parent(session_queue, child_count=2)
+    child_queue_items = session_queue.enqueue_workflow_call_children(
+        parent_queue_item=session_queue.get_queue_item(parent_item_id),
+        child_sessions=[(child_session, None) for child_session in child_sessions],
+    )
+    for child_queue_item in child_queue_items:
+        session_queue.complete_queue_item(child_queue_item.item_id)
+
+    barrier = Barrier(len(child_queue_items))
+    completions = []
+    errors = []
+
+    def record_completion(child_item_id: int, value: int) -> None:
+        try:
+            barrier.wait()
+            completions.append(
+                session_queue.record_workflow_call_child_completion(
+                    parent_item_id=parent_item_id,
+                    child_item_id=child_item_id,
+                    output_values={"result": value},
+                )
+            )
+        except BaseException as error:
+            errors.append(error)
+
+    threads = [
+        Thread(target=record_completion, args=(child_queue_item.item_id, index))
+        for index, child_queue_item in enumerate(child_queue_items, start=1)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert errors == []
+    assert len(completions) == len(child_queue_items)
+    assert sum(completion is not None and completion.should_resume for completion in completions) == 1
+
+    parent_queue_item = session_queue.get_queue_item(parent_item_id)
+    execution = parent_queue_item.session.waiting_workflow_call_execution
+    assert execution is not None
+    assert set(execution.completed_child_item_ids) == {
+        child_queue_item.item_id for child_queue_item in child_queue_items
+    }
+    assert execution.child_outputs == {
+        child_queue_items[0].item_id: {"result": 1},
+        child_queue_items[1].item_id: {"result": 2},
+    }
 
 
 def test_enqueue_workflow_call_child_rejects_full_pending_queue(session_queue: SqliteSessionQueue) -> None:

@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from typing import Any, Coroutine, Optional
 
 from invokeai.app.services.session_queue.session_queue_common import (
@@ -28,6 +29,13 @@ from invokeai.app.services.session_queue.session_queue_common import (
 from invokeai.app.services.shared.graph import GraphExecutionState
 from invokeai.app.services.shared.pagination import CursorPaginatedResults
 from invokeai.app.services.shared.sqlite.sqlite_common import SQLiteDirection
+
+
+@dataclass(frozen=True)
+class WorkflowCallChildCompletion:
+    parent_queue_item: SessionQueueItem
+    should_resume: bool
+    aggregated_values: dict[str, Any]
 
 
 class SessionQueueBase(ABC):
@@ -263,6 +271,22 @@ class SessionQueueBase(ABC):
     @abstractmethod
     def save_queue_item_session(self, item_id: int, session: GraphExecutionState) -> None:
         """Persists a queue item's session without loading and returning the full queue item."""
+        pass
+
+    @abstractmethod
+    def record_workflow_call_child_completion(
+        self, parent_item_id: int, child_item_id: int, output_values: dict[str, Any]
+    ) -> WorkflowCallChildCompletion | None:
+        """Records one child completion against the latest parent session atomically."""
+        pass
+
+    @abstractmethod
+    def enqueue_workflow_call_children(
+        self,
+        parent_queue_item: SessionQueueItem,
+        child_sessions: list[tuple[GraphExecutionState, list[NodeFieldValue] | None]],
+    ) -> list[SessionQueueItem]:
+        """Enqueues child executions and publishes the complete waiting parent state atomically."""
         pass
 
     @abstractmethod
