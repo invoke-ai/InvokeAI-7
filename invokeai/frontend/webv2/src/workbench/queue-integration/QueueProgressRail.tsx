@@ -3,13 +3,15 @@ import type { CSSProperties } from 'react';
 
 import { Box } from '@chakra-ui/react';
 import { useModelLoads } from '@features/models';
+import { getRemoteProgressIdentity, getRemoteSyntheticBackendItemId } from '@features/queue';
 import {
   getProgressRailModel,
   getProgressRailSegmentValue,
   getQueueSummary,
+  isOpenQueueItem,
   selectProjectProgressItemIds,
 } from '@features/queue/contracts';
-import { useActiveProgressItemIds, useItemProgress } from '@features/queue/react';
+import { useActiveProgressItemIds, useActiveProgressTargets, useItemProgress } from '@features/queue/react';
 import { useActiveProjectSelector, useWorkbenchSelector } from '@workbench/WorkbenchContext';
 import { useMemo } from 'react';
 
@@ -32,11 +34,33 @@ export const QueueProgressRail = ({ css }: { css: SystemStyleObject }) => {
   const isConnected = useWorkbenchSelector((snapshot) => snapshot.backendConnection.status === 'connected');
   const isLoadingModels = useModelLoads().length > 0;
   const activeItemIds = useActiveProgressItemIds();
+  const activeProgressTargets = useActiveProgressTargets();
 
-  const sessionItemIds = useMemo(
-    () => selectProjectProgressItemIds(queueItems, activeItemIds),
-    [activeItemIds, queueItems]
-  );
+  const sessionItemIds = useMemo(() => {
+    const nativeItemIds = selectProjectProgressItemIds(queueItems, activeItemIds);
+    const openLocalQueueItemIds = new Set(
+      queueItems.filter((item) => isOpenQueueItem(item)).map((item) => item.id)
+    );
+    const activeItemIdSet = new Set(activeItemIds);
+    const remoteItemIds: number[] = [];
+
+    for (const target of activeProgressTargets) {
+      const identity = getRemoteProgressIdentity(target);
+
+      if (!identity || !openLocalQueueItemIds.has(identity.localQueueItemId)) {
+        continue;
+      }
+
+      const syntheticItemId = getRemoteSyntheticBackendItemId(identity.localQueueItemId, identity.slot);
+
+      if (activeItemIdSet.has(syntheticItemId)) {
+        remoteItemIds.push(syntheticItemId);
+      }
+    }
+
+    // Native/local sessions stay first, followed by remote workers in slot order.
+    return [...nativeItemIds, ...new Set(remoteItemIds)];
+  }, [activeItemIds, activeProgressTargets, queueItems]);
 
   const model = getProgressRailModel({
     hasOpenWork: getQueueSummary(queueItems).total > 0,

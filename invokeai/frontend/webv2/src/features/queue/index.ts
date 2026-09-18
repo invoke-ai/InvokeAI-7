@@ -67,4 +67,8 @@ export {
 } from './publicApi';
 export type { QueueRunLockPort } from './runtime';
 export { hasPendingWorkflowQueueItem } from './ui/queueViewModel';
-export { getRemoteProgressSlot } from './core/remoteProgress';
+export {
+  getRemoteProgressIdentity,
+  getRemoteProgressSlot,
+  getRemoteSyntheticBackendItemId,
+} from './core/remoteProgress';
