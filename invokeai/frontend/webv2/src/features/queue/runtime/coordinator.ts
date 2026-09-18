@@ -11,6 +11,11 @@ import type {
 import type { BackendConnectionStatus } from '@platform/transport/types';
 
 import {
+  getRemoteProgressTarget,
+  getRemoteSyntheticBackendItemId,
+  parseRemoteProgressMessage,
+} from '@features/queue/core/remoteProgress';
+import {
   activeProgressTargetStore,
   type ActiveProgressTargetSink,
 } from '@features/queue/data/activeProgressTargetStore';
@@ -25,6 +30,7 @@ import {
   type QueueItemStatusChangedEvent,
   type QueueItemsCanceledEvent,
 } from '@features/queue/data/events';
+import { itemProgressStore } from '@features/queue/data/itemProgressStore';
 import {
   progressImageStore,
   type ProgressImageSink,
@@ -741,12 +747,40 @@ export const createQueueCoordinator = (
       return;
     }
 
+    const remote = parseRemoteProgressMessage(event.message);
+    if (remote) {
+      const target = getRemoteProgressTarget(remote.queueItemId, remote.slot);
+      const syntheticBackendItemId = getRemoteSyntheticBackendItemId(remote.queueItemId, remote.slot);
+      if (remote.state !== 'running') {
+        activeProgressTarget.clear(target);
+        progressImage.clear(target);
+        itemProgressStore.clear(syntheticBackendItemId);
+        if (remote.state === 'completed') {
+          scheduleGalleryRefresh();
+        }
+        return;
+      }
+      activeProgressTarget.set(target);
+      const image = event.image?.dataURL
+        ? { dataUrl: event.image.dataURL, height: event.image.height, width: event.image.width }
+        : undefined;
+      if (image) {
+        progressImage.set(image, target);
+      }
+      itemProgressStore.set(syntheticBackendItemId, {
+        message: remote.message,
+        percentage: event.percentage,
+        ...(image ? { image } : {}),
+        device: null,
+      });
+      return;
+    }
+
     const wait = waits.get(event.item_id);
 
     if (!wait) {
       return;
     }
-
     if (event.image?.dataURL && isStaleFrame(event)) {
       return;
     }
@@ -756,13 +790,11 @@ export const createQueueCoordinator = (
 
     const target = getProgressImageTarget(wait.localQueueItemId, event.item_id);
     activeProgressTarget.set(target);
-
     if (event.image?.dataURL) {
       progressImage.set({ dataUrl: event.image.dataURL, height: event.image.height, width: event.image.width }, target);
     }
 
     const state = runProgress.get(wait.localQueueItemId);
-
     if (state) {
       state.activeBackendItemId = event.item_id;
       state.message = event.message;

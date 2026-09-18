@@ -31,6 +31,7 @@ import {
 } from '@features/gallery/contracts';
 import { galleryBoardsOptions } from '@features/gallery/queries';
 import { createGenerateFormValuesSelector } from '@features/generation/react';
+import { getRemoteProgressSlot } from '@features/queue';
 import { getDeterminateProgressPercent } from '@features/queue/contracts';
 import { useDeviceLabel } from '@features/queue/devices';
 import {
@@ -1009,6 +1010,7 @@ export const LivePreviewTile = ({
   // be running on two GPUs, and the local-keyed store holds one entry for both.
   const itemProgress = useItemProgress(placeholder.backendItemId);
   const deviceLabel = useDeviceLabel(itemProgress?.device);
+  const remoteSlot = getRemoteProgressSlot(placeholder);
   const previewImage = useStreamingImageSource({
     liveImage: progressImageToStreamingSource(progressImage),
   });
@@ -1028,7 +1030,13 @@ export const LivePreviewTile = ({
   // Device identity and progress read from the footer, not from a badge over
   // the image: a tile is the same media card as any other preview surface, and
   // the one thing that must never differ between them is the frame itself.
-  const tileDeviceLabel = deviceLabel ? t('widgets.queue.device.shortLabel', { index: deviceLabel.index }) : null;
+  // InvokeAI Remote Worker v0.9.0
+  const tileDeviceLabel =
+    remoteSlot !== null
+      ? `Remote ${remoteSlot}`
+      : deviceLabel
+        ? t('widgets.queue.device.shortLabel', { index: deviceLabel.index })
+        : null;
 
   return (
     <PreviewMediaScaffold>
