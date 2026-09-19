@@ -12,6 +12,7 @@ from diffusers.models.autoencoders.autoencoder_kl_qwenimage import AutoencoderKL
 from invokeai.app.invocations.constants import LATENT_SCALE_FACTOR
 from invokeai.app.invocations.vae.anima_image_to_latents import AnimaImageToLatentsInvocation
 from invokeai.app.invocations.vae.anima_latents_to_image import (
+    ANIMA_PRETILE_VRAM_FRACTION,
     ANIMA_VAE_TILE_SIZE,
     ANIMA_VAE_TILE_STRIDE,
     AnimaLatentsToImageInvocation,
@@ -23,6 +24,8 @@ from invokeai.backend.util.vae_working_memory import estimate_vae_working_memory
 # The two classes the Wan 2.1 VAE loads as: the original-layout file as AutoencoderKLWan, the
 # diffusers-layout Qwen-Image export as AutoencoderKLQwenImage.
 WAN21_VAE_LAYOUTS = [AutoencoderKLWan, AutoencoderKLQwenImage]
+
+_L2I = "invokeai.app.invocations.vae.anima_latents_to_image"
 
 
 def _mock_vae(vae_class: type = AutoencoderKLWan, dtype: torch.dtype = torch.float16) -> MagicMock:
@@ -324,6 +327,31 @@ class TestAnimaLatentsToImageOomFallback:
         # Called once for the full-decode estimate (tiling decision) and once for the actual request.
         assert mock_estimate.call_count == 2
         vae_info.model_on_device.assert_called_once_with(working_mem_bytes=expected_memory)
+
+
+class TestAnimaPretiling:
+    @pytest.mark.parametrize("auto", [True, False], ids=["auto-tiled-decode-on", "auto-tiled-decode-off"])
+    def test_a_decode_too_large_for_its_gpu_is_tiled_up_front_unless_switched_off(self, auto):
+        """Anima asks with its own, lower fraction (measured on 8GB cards) about the VAE's own device."""
+        decoded = torch.zeros(1, 3, 1, 64, 64)
+        vae, vae_info, context = _build_decode_mocks(latents=torch.zeros(1, 16, 32, 32), decoded=decoded)
+        context.config.get.return_value.auto_tiled_decode = auto
+        full = estimate_vae_working_memory_anima(
+            operation="decode", image_tensor=torch.zeros(1, 16, 32, 32), vae=vae, tile_size=None
+        )
+
+        with (
+            patch.object(TorchDevice, "choose_torch_device", return_value=torch.device("cpu")),
+            patch(f"{_L2I}.should_pretile_vae_decode", return_value=True) as pretile,
+        ):
+            _build_l2i_invocation().invoke(context)
+
+        if auto:
+            pretile.assert_called_once_with(vae_info.compute_device, full, ANIMA_PRETILE_VRAM_FRACTION)
+            vae.enable_tiling.assert_called_once()
+        else:
+            pretile.assert_not_called()
+            vae.enable_tiling.assert_not_called()
 
 
 class TestAnimaImageToLatentsEncode:

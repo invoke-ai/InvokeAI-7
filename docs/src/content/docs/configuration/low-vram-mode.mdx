@@ -163,7 +163,7 @@ device_working_mem_gb: 4
 
 Turning latents into the final image (the VAE decode) needs working memory that grows with the image's pixel count. When an untiled decode would claim most of the GPU's memory, Invoke decodes in tiles instead, for the FLUX.1, Z-Image, Qwen-Image, Krea-2, Anima and Wan decodes. A tiled decode is not pixel-identical to an untiled one, so this only kicks in for images too large for the card: for Z-Image on a 16GB GPU, for example, from about 1850x1850 on Nvidia and from about 1500x1500 on AMD, whose convolution library needs more memory. Anima tiles a little earlier, because its untiled decode pushes the Anima model itself out of VRAM on 8GB cards.
 
-To always decode untiled unless you ask for tiling, turn it off:
+To always decode untiled unless you ask for tiling, turn it off. A decode too large for the card then runs out of memory: the FLUX.1, Z-Image and Anima decodes retry in tiles, the others fail, and on Windows the driver may move the decode into system memory and run it very slowly instead.
 
 ```yaml
 auto_tiled_decode: false
@@ -228,7 +228,7 @@ Invoke does not officially support ROCm on Windows (see the [System Requirements
 - The model cache plans against the video-memory budget Windows grants Invoke, not against the card's total VRAM.
 - The PyTorch allocator defaults to `expandable_segments:True` (see [PyTorch CUDA allocator config](#pytorch-cuda-allocator-config)), so fragmented VRAM does not force allocations out.
 - Decodes too large for the card are tiled before they start (see [Tiled VAE decoding](#tiled-vae-decoding)); waiting for an out-of-memory error does not work there, because none comes.
-- When a generation ends with part of Invoke's GPU memory in system memory, the log says so. Other programs using the same GPU, like games or browsers, can push Invoke's memory out as well. Close them, or restart Invoke to get the memory back into VRAM.
+- When part of Invoke's GPU memory stays in system memory across two generations, the log says so. Other programs using the same GPU, like games or browsers, can push Invoke's memory out as well; close them. If it keeps happening, lower the image size, set `max_cache_vram_gb` lower or `device_working_mem_gb` higher, and restart Invoke to get the memory back into VRAM.
 
 ## Troubleshooting
 

@@ -21,7 +21,6 @@ from invokeai.backend.util.devices import TorchDevice
 from invokeai.backend.util.oom import is_oom_error
 from invokeai.backend.util.vae_tiling_scope import scoped_vae_tiling
 from invokeai.backend.util.vae_working_memory import (
-    VAE_PRETILE_VRAM_FRACTION,
     estimate_vae_working_memory_flux,
     should_pretile_vae_decode,
 )
@@ -56,8 +55,22 @@ class FluxVaeDecodeInvocation(BaseInvocation, WithMetadata, WithBoard):
         use_tiling = config.force_tiled_decode
         tile_size = 0 if use_tiling else None
 
-        # Only estimate working memory for BFL AutoEncoder (diffusers VAE handles this internally)
-        if isinstance(vae_info.model, AutoEncoder):
+        # Priced for either class, as in the Z-Image decode: a diffusers-layout FLUX VAE runs the same network, and a
+        # decode with nothing reserved is one Windows pages into system memory rather than failing.
+        estimated_working_memory = estimate_vae_working_memory_flux(
+            operation="decode",
+            image_tensor=latents,
+            vae=vae_info.model,
+            tile_size=tile_size,
+            device=vae_info.compute_device,
+        )
+        if (
+            not use_tiling
+            and config.auto_tiled_decode
+            and should_pretile_vae_decode(vae_info.compute_device, estimated_working_memory)
+        ):
+            use_tiling = True
+            tile_size = 0
             estimated_working_memory = estimate_vae_working_memory_flux(
                 operation="decode",
                 image_tensor=latents,
@@ -65,24 +78,6 @@ class FluxVaeDecodeInvocation(BaseInvocation, WithMetadata, WithBoard):
                 tile_size=tile_size,
                 device=vae_info.compute_device,
             )
-            if (
-                not use_tiling
-                and config.auto_tiled_decode
-                and should_pretile_vae_decode(
-                    vae_info.compute_device, estimated_working_memory, VAE_PRETILE_VRAM_FRACTION
-                )
-            ):
-                use_tiling = True
-                tile_size = 0
-                estimated_working_memory = estimate_vae_working_memory_flux(
-                    operation="decode",
-                    image_tensor=latents,
-                    vae=vae_info.model,
-                    tile_size=tile_size,
-                    device=vae_info.compute_device,
-                )
-        else:
-            estimated_working_memory = 0
 
         with vae_info.model_on_device(working_mem_bytes=estimated_working_memory) as (_, vae):
             assert isinstance(vae, (AutoEncoder, AutoencoderKL))

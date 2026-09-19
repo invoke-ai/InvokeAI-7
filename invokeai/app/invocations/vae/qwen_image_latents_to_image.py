@@ -23,7 +23,6 @@ from invokeai.backend.util.qwen_image_vae import (
     resolve_qwen_image_vae_tile_size,
 )
 from invokeai.backend.util.vae_working_memory import (
-    VAE_PRETILE_VRAM_FRACTION,
     estimate_vae_working_memory_qwen_image,
     should_pretile_vae_decode,
 )
@@ -80,7 +79,7 @@ class QwenImageLatentsToImageInvocation(BaseInvocation, WithMetadata, WithBoard)
         if (
             not tiled
             and config.auto_tiled_decode
-            and should_pretile_vae_decode(vae_info.compute_device, estimated_working_memory, VAE_PRETILE_VRAM_FRACTION)
+            and should_pretile_vae_decode(vae_info.compute_device, estimated_working_memory)
         ):
             effective_tile_size = resolve_qwen_image_vae_tile_size(self.tile_size)
             estimated_working_memory = estimate_vae_working_memory_qwen_image(

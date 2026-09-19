@@ -24,7 +24,6 @@ from invokeai.backend.util.devices import TorchDevice
 from invokeai.backend.util.oom import is_oom_error
 from invokeai.backend.util.vae_tiling_scope import scoped_vae_tiling
 from invokeai.backend.util.vae_working_memory import (
-    VAE_PRETILE_VRAM_FRACTION,
     estimate_vae_working_memory_flux,
     should_pretile_vae_decode,
 )
@@ -78,7 +77,7 @@ class ZImageLatentsToImageInvocation(BaseInvocation, WithMetadata, WithBoard):
         if (
             not use_tiling
             and config.auto_tiled_decode
-            and should_pretile_vae_decode(vae_info.compute_device, estimated_working_memory, VAE_PRETILE_VRAM_FRACTION)
+            and should_pretile_vae_decode(vae_info.compute_device, estimated_working_memory)
         ):
             use_tiling = True
             estimated_working_memory = estimate_vae_working_memory_flux(

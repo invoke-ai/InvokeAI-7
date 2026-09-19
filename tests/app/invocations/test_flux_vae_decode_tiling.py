@@ -9,16 +9,18 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 import torch
+from diffusers.models.autoencoders.autoencoder_kl import AutoencoderKL
 
 from invokeai.app.invocations.vae.flux_vae_decode import FluxVaeDecodeInvocation
 from invokeai.backend.flux.modules.autoencoder import DEFAULT_TILE_SAMPLE_MIN_SIZE
 from invokeai.backend.flux.modules.autoencoder import AutoEncoder as FluxAutoEncoder
-from invokeai.backend.util.vae_working_memory import VAE_PRETILE_VRAM_FRACTION
 
 
-def _build_decode_mocks(latents: torch.Tensor, decoded: torch.Tensor, force_tiled_decode: bool = False):
+def _build_decode_mocks(
+    latents: torch.Tensor, decoded: torch.Tensor, force_tiled_decode: bool = False, vae_class: type = FluxAutoEncoder
+):
     """Wire FluxVaeDecodeInvocation.invoke to run end-to-end on CPU against a mocked FLUX VAE."""
-    vae = MagicMock(spec=FluxAutoEncoder)
+    vae = MagicMock(spec=vae_class)
     # A fresh iterator per call: the decode path reads `parameters()` after the estimator already
     # has, and a single stored iterator would be exhausted by then.
     vae.parameters.side_effect = lambda: iter([torch.zeros(1, dtype=torch.float16)])
@@ -91,13 +93,28 @@ class TestForceTiledDecode:
             _build_invocation().invoke(context)
 
         if auto:
-            pretile.assert_called_once_with(vae_info.compute_device, 20 * 2**30, VAE_PRETILE_VRAM_FRACTION)
+            pretile.assert_called_once_with(vae_info.compute_device, 20 * 2**30)
             assert estimate.call_args.kwargs["tile_size"] == 0
             vae_info.model_on_device.assert_called_once_with(working_mem_bytes=2 * 2**30)
             vae.enable_tiling.assert_called_once_with(tile_sample_min_size=DEFAULT_TILE_SAMPLE_MIN_SIZE)
         else:
             pretile.assert_not_called()
             vae.disable_tiling.assert_called_once()
+
+
+class TestDiffusersLayoutVae:
+    def test_a_diffusers_layout_flux_vae_reserves_its_working_memory(self):
+        """It runs the same network; a decode with nothing reserved is the one Windows pages instead of failing."""
+        vae, vae_info, context = _build_decode_mocks(
+            torch.zeros(1, 16, 64, 64), torch.zeros(1, 3, 512, 512), vae_class=AutoencoderKL
+        )
+        vae.config = MagicMock(scaling_factor=0.3611, shift_factor=0.1159)
+        vae.decode.return_value = (torch.zeros(1, 3, 512, 512),)
+
+        _build_invocation().invoke(context)
+
+        (reservation,) = vae_info.model_on_device.call_args.kwargs.values()
+        assert reservation > 0
 
 
 class TestOomFallback:

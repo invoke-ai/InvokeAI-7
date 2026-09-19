@@ -14,7 +14,7 @@ from invokeai.backend.util.qwen_image_vae import (
     QWEN_IMAGE_VAE_DEFAULT_TILE_SIZE,
     patch_qwen_image_vae_tiling,
 )
-from invokeai.backend.util.vae_working_memory import VAE_PRETILE_VRAM_FRACTION, estimate_vae_working_memory_qwen_image
+from invokeai.backend.util.vae_working_memory import estimate_vae_working_memory_qwen_image
 
 
 class TestQwenImageWorkingMemoryEstimate:
@@ -447,7 +447,7 @@ class TestQwenImageWorkingMemory:
                 invocation.invoke(mock_context)
 
         if auto:
-            pretile.assert_called_once_with(mock_vae_info.compute_device, 20 * 2**30, VAE_PRETILE_VRAM_FRACTION)
+            pretile.assert_called_once_with(mock_vae_info.compute_device, 20 * 2**30)
             assert estimate.call_args.kwargs["tile_size"] == QWEN_IMAGE_VAE_DEFAULT_TILE_SIZE
             mock_vae_info.model_on_device.assert_called_once_with(working_mem_bytes=2 * 2**30)
             mock_vae.enable_tiling.assert_called_once()

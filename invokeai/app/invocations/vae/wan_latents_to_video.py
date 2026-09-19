@@ -36,7 +36,6 @@ from invokeai.app.util.video_encoding import make_mp4_writer
 from invokeai.backend.model_manager.load.model_cache.utils import get_effective_device
 from invokeai.backend.util.devices import TorchDevice
 from invokeai.backend.util.vae_working_memory import (
-    VAE_PRETILE_VRAM_FRACTION,
     estimate_vae_working_memory_wan,
     should_pretile_vae_decode,
 )
@@ -137,7 +136,7 @@ class WanLatentsToVideoInvocation(BaseInvocation, WithMetadata, WithBoard):
         # budget for the tiled working set instead. (A cpu_only VAE runs in system RAM,
         # where the working set is not the constraint; the helper never tiles off-GPU.)
         use_tiling = context.config.get().auto_tiled_decode and should_pretile_vae_decode(
-            vae_info.compute_device, estimated_working_memory, VAE_PRETILE_VRAM_FRACTION
+            vae_info.compute_device, estimated_working_memory
         )
         if use_tiling:
             tile_size = int(getattr(vae_info.model, "tile_sample_min_height", 256))

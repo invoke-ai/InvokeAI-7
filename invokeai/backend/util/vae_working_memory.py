@@ -19,7 +19,9 @@ from invokeai.backend.util.logging import InvokeAILogger
 VAE_PRETILE_VRAM_FRACTION = 0.9
 
 
-def should_pretile_vae_decode(device: torch.device, full_decode_bytes: int, vram_fraction: float) -> bool:
+def should_pretile_vae_decode(
+    device: torch.device, full_decode_bytes: int, vram_fraction: float = VAE_PRETILE_VRAM_FRACTION
+) -> bool:
     """Whether a decode should be tiled up front because its untiled working memory would claim more than
     ``vram_fraction`` of ``device``'s memory.
 
@@ -36,10 +38,9 @@ def should_pretile_vae_decode(device: torch.device, full_decode_bytes: int, vram
         return False
     if full_decode_bytes <= vram_fraction * total_bytes:
         return False
-    InvokeAILogger.get_logger(__name__).info(
+    InvokeAILogger.get_logger(__name__).debug(
         f"Decoding in tiles: an untiled decode would need ~{full_decode_bytes / 2**30:.1f} GiB of working memory, more "
-        f"than {vram_fraction:.0%} of the GPU's {total_bytes / 2**30:.1f} GiB. Set auto_tiled_decode to false to "
-        "decode untiled."
+        f"than {vram_fraction:.0%} of the GPU's {total_bytes / 2**30:.1f} GiB."
     )
     return True
 

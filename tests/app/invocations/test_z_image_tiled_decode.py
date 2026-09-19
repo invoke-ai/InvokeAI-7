@@ -9,7 +9,7 @@ from diffusers.models.autoencoders.autoencoder_kl import AutoencoderKL
 from invokeai.app.invocations.vae.z_image_latents_to_image import ZImageLatentsToImageInvocation
 from invokeai.backend.flux.modules.autoencoder import DEFAULT_TILE_SAMPLE_MIN_SIZE, MIN_TILE_SAMPLE_SIZE
 from invokeai.backend.flux.modules.autoencoder import AutoEncoder as FluxAutoEncoder
-from invokeai.backend.util.vae_working_memory import VAE_PRETILE_VRAM_FRACTION, estimate_vae_working_memory_flux
+from invokeai.backend.util.vae_working_memory import estimate_vae_working_memory_flux
 
 
 def _mock_flux_vae(element_size_bytes: int = 2) -> MagicMock:
@@ -263,7 +263,7 @@ class TestTilingIsWired:
             _build_invocation().invoke(context)
 
         if auto:
-            pretile.assert_called_once_with(vae_info.compute_device, 20 * 2**30, VAE_PRETILE_VRAM_FRACTION)
+            pretile.assert_called_once_with(vae_info.compute_device, 20 * 2**30)
             assert estimate.call_args.kwargs["tile_size"] == 0
             vae_info.model_on_device.assert_called_once_with(working_mem_bytes=2 * 2**30)
             vae.enable_tiling.assert_called_once_with(tile_sample_min_size=DEFAULT_TILE_SAMPLE_MIN_SIZE)
