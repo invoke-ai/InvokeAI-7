@@ -1,7 +1,61 @@
+import os
+import sys
+from unittest.mock import MagicMock
+
 import pytest
 import torch
 
+import invokeai.app.util.torch_cuda_allocator as torch_cuda_allocator
+from invokeai.app.util.torch_cuda_allocator import ROCM_WINDOWS_ALLOC_CONF, apply_rocm_windows_allocator_default
 from tests.dangerously_run_function_in_subprocess import dangerously_run_function_in_subprocess
+
+_ALLOCATOR_ENV_VARS = ("PYTORCH_ALLOC_CONF", "PYTORCH_CUDA_ALLOC_CONF", "PYTORCH_HIP_ALLOC_CONF")
+
+
+@pytest.fixture
+def rocm_windows(monkeypatch: pytest.MonkeyPatch):
+    """A Windows ROCm install with no allocator configuration in the environment."""
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(torch_cuda_allocator, "_installed_torch_version", lambda: "2.12.0+rocm7.14.1")
+    for var in _ALLOCATOR_ENV_VARS:
+        monkeypatch.delenv(var, raising=False)
+    return monkeypatch
+
+
+class TestRocmWindowsAllocatorDefault:
+    def test_defaults_to_expandable_segments(self, rocm_windows):
+        logger = MagicMock()
+
+        apply_rocm_windows_allocator_default(logger)
+
+        assert os.environ["PYTORCH_CUDA_ALLOC_CONF"] == ROCM_WINDOWS_ALLOC_CONF
+        logger.info.assert_called_once()
+
+    @pytest.mark.parametrize("var", _ALLOCATOR_ENV_VARS)
+    def test_any_existing_allocator_configuration_wins(self, rocm_windows, var):
+        rocm_windows.setenv(var, "expandable_segments:False")
+
+        apply_rocm_windows_allocator_default(MagicMock())
+
+        assert os.environ[var] == "expandable_segments:False"
+        if var != "PYTORCH_CUDA_ALLOC_CONF":
+            assert "PYTORCH_CUDA_ALLOC_CONF" not in os.environ
+
+    @pytest.mark.parametrize(
+        ("platform", "version"),
+        [("linux", "2.13.0+rocm7.2"), ("win32", "2.7.1+cu128"), ("win32", "2.7.1"), ("win32", None)],
+        ids=["linux-rocm", "windows-cuda", "windows-cpu", "no-torch-metadata"],
+    )
+    def test_other_installs_are_left_alone(self, rocm_windows, platform, version):
+        rocm_windows.setattr(sys, "platform", platform)
+        rocm_windows.setattr(torch_cuda_allocator, "_installed_torch_version", lambda: version)
+        logger = MagicMock()
+
+        apply_rocm_windows_allocator_default(logger)
+
+        assert "PYTORCH_CUDA_ALLOC_CONF" not in os.environ
+        logger.info.assert_not_called()
+
 
 # These tests are a bit fiddly, because the depend on the import behaviour of torch. They use subprocesses to isolate
 # the import behaviour of torch, and then check that the function behaves as expected. We have to hack in some logging

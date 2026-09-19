@@ -84,6 +84,8 @@ The PyTorch CUDA allocator's behavior can be configured using the `pytorch_cuda_
 pytorch_cuda_alloc_conf: "backend:cudaMallocAsync"
 ```
 
+When the setting is left unset, PyTorch's defaults apply, with one exception: with a ROCm build of PyTorch on Windows, Invoke uses `expandable_segments:True`. There, Windows does not fail an allocation it cannot fit into contiguous VRAM. It moves the allocation into much slower system memory instead, and fragmented VRAM makes that happen even when enough VRAM is free. Setting `pytorch_cuda_alloc_conf` yourself, or any of the `PYTORCH_ALLOC_CONF` / `PYTORCH_CUDA_ALLOC_CONF` / `PYTORCH_HIP_ALLOC_CONF` environment variables, replaces this default.
+
 A more complete explanation of the available configuration options is [here](https://pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf).
 
 ### Dynamic RAM and VRAM cache sizes
