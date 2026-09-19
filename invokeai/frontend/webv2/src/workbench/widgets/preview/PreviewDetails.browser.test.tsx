@@ -98,6 +98,7 @@ const ALL_RECALL_CAPABILITIES: ImageRecallCapabilities = {
   prompts: true,
   remix: true,
   seed: true,
+  workflow: true,
 };
 const NO_RECALL_CAPABILITIES: ImageRecallCapabilities = {
   all: false,
@@ -106,6 +107,7 @@ const NO_RECALL_CAPABILITIES: ImageRecallCapabilities = {
   prompts: false,
   remix: false,
   seed: false,
+  workflow: false,
 };
 
 const i18n = createInstance();

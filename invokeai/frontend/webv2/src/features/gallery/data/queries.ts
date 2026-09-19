@@ -23,6 +23,7 @@ import {
 
 import {
   type GalleryItemNames,
+  fetchImageIndexAvailability,
   hydrateGalleryDateBoardItemPage,
   isDateBoardId,
   listGalleryBoards,
@@ -196,6 +197,7 @@ export const galleryKeys = {
   itemNamesForAccount: (owner: AccountScope) => [...galleryKeys.itemNamesRoot(), getAccountKey(owner)] as const,
   itemNames: (owner: AccountScope, filter: CanonicalGalleryItemsFilter) =>
     [...galleryKeys.itemNamesForAccount(owner), filter] as const,
+  imageIndexAvailability: (owner: AccountScope) => [...galleryKeys.all, 'image-index', getAccountKey(owner)] as const,
 };
 
 const galleryItemNamesOptionsForOwner = (owner: AccountScope, filter: CanonicalGalleryItemsFilter) =>
@@ -335,6 +337,36 @@ export const fetchGalleryItemsRange = async (
   signal.throwIfAborted();
 
   return result.items.length <= limit ? result : { ...result, items: result.items.slice(0, limit) };
+};
+
+/**
+ * Polled only while the answer is "not yet": a missing model that the server
+ * re-checks for on its own, or a status call that failed outright. A settled
+ * answer is re-read only when a fresh consumer mounts after the stale time,
+ * so a model removed mid-session is noticed on the next layout change
+ * without the field polling a ready index for the whole session.
+ */
+export const IMAGE_INDEX_UNAVAILABLE_POLL_MS = 30_000;
+const IMAGE_INDEX_STALE_MS = 5 * 60_000;
+
+export const imageIndexAvailabilityOptions = () => {
+  const owner = captureAccountScope();
+
+  return queryOptions({
+    queryFn: async ({ signal }) => {
+      const availability = await fetchImageIndexAvailability(AbortSignal.any([signal, owner.signal]));
+
+      assertAccountScopeCurrent(owner);
+
+      return availability;
+    },
+    queryKey: galleryKeys.imageIndexAvailability(owner),
+    refetchInterval: (query) =>
+      query.state.status === 'error' || query.state.data?.state === 'model_missing'
+        ? IMAGE_INDEX_UNAVAILABLE_POLL_MS
+        : false,
+    staleTime: IMAGE_INDEX_STALE_MS,
+  });
 };
 
 export const galleryBoardsOptions = (query: GalleryBoardsQuery = {}) => {

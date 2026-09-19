@@ -23,6 +23,7 @@ export const getQueueRecallCapabilities = (
   prompts: snapshot !== null || meta.positivePrompt !== undefined,
   remix: snapshot !== null,
   seed: meta.seed !== undefined || (snapshot !== null && snapshot.seedMode !== 'random'),
+  workflow: false,
 });
 
 export const getVideoQueueRecallCapabilities = (
@@ -35,6 +36,7 @@ export const getVideoQueueRecallCapabilities = (
   prompts: snapshot !== null || meta.positivePrompt !== undefined,
   remix: snapshot !== null,
   seed: meta.seed !== undefined || (snapshot !== null && snapshot.seedMode !== 'random'),
+  workflow: false,
 });
 
 export const buildQueueRecallValues = (

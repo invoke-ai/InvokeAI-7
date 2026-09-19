@@ -1,6 +1,6 @@
 import { Box, Flex, HStack, Spacer, Stack } from '@chakra-ui/react';
 import { GALLERY_BOARD_PANEL_MAX_WIDTH_PX, GALLERY_BOARD_PANEL_MIN_WIDTH_PX } from '@features/gallery/core/settings';
-import { segmentTabsPanelId, segmentTabsTabId } from '@platform/ui';
+import { segmentTabsPanelId, segmentTabsTabId } from '@platform/ui/SegmentTabs';
 import { useCallback, useId, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 

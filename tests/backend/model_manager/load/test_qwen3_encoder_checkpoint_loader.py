@@ -29,8 +29,9 @@ from invokeai.backend.model_manager.configs.qwen3_encoder import Qwen3Encoder_Ch
 from invokeai.backend.model_manager.load.model_loaders import z_image
 from invokeai.backend.model_manager.load.model_loaders.z_image import Qwen3EncoderCheckpointLoader
 from invokeai.backend.model_manager.taxonomy import Qwen3VariantType
-from invokeai.backend.quantization.int8_convrot import Int8ConvrotLinear, build_regular_hadamard
+from invokeai.backend.quantization.int8_convrot import Int8ConvrotLinear
 from invokeai.backend.quantization.nvfp4 import NVFP4Linear
+from tests.fixtures.quantized_payloads import comfy_quant_marker, nvfp4_signed_tensors, quantize_convrot
 
 # Not a known Qwen3 size, so the loader reads the head counts off the projections at its fixed head_dim of 128:
 # a one-head model.
@@ -49,21 +50,11 @@ NVFP4_PROJECTIONS = {
 }
 
 
-def _marker_blob(marker: dict) -> torch.Tensor:
-    return torch.frombuffer(bytearray(json.dumps(marker).encode("utf-8")), dtype=torch.uint8)
-
-
 def _nvfp4_layer(path: str, positive: torch.Tensor, evidence: str) -> dict[str, torch.Tensor]:
-    """Codes 2 and 10 are +1.0 and -1.0; with a block scale of 2 and a global scale of 0.25 the weight is +-0.5."""
-    rows, columns = positive.shape
-    codes = torch.where(positive, 2, 10).to(torch.uint8)
-    layer = {
-        f"{path}.weight": (codes[:, 0::2] << 4) | codes[:, 1::2],
-        f"{path}.weight_scale": torch.full((rows, columns // 16), 2.0).to(torch.float8_e4m3fn),
-        f"{path}.weight_scale_2": torch.tensor(0.25),
-    }
+    """`evidence` picks the transport: the per-tensor marker, or the header entry the caller writes."""
+    layer, _ = nvfp4_signed_tensors(path, positive)
     if evidence == "marker":
-        layer[f"{path}.comfy_quant"] = _marker_blob({"format": "nvfp4"})
+        layer[f"{path}.comfy_quant"] = comfy_quant_marker({"format": "nvfp4"})
     return layer
 
 
@@ -82,7 +73,7 @@ def _write_checkpoint(tmp_path: Path, evidence: str) -> tuple[Path, dict[str, to
     fp8_values = torch.randint(-8, 9, (HIDDEN, HIDDEN)).float()
     tensors["model.layers.0.self_attn.v_proj.weight"] = fp8_values.to(torch.float8_e4m3fn)
     tensors["model.layers.0.self_attn.v_proj.weight_scale"] = torch.tensor(0.5)
-    tensors["model.layers.0.self_attn.v_proj.comfy_quant"] = _marker_blob({"format": "float8_e4m3fn"})
+    tensors["model.layers.0.self_attn.v_proj.comfy_quant"] = comfy_quant_marker({"format": "float8_e4m3fn"})
     dense["model.layers.0.self_attn.v_proj.weight"] = fp8_values * 0.5
 
     for key, tensor in {
@@ -182,24 +173,6 @@ _INT8_GROUP = 64
 _INT8_MARKER = {"format": "int8_tensorwise", "convrot": True, "convrot_groupsize": _INT8_GROUP}
 
 
-def _quantize_convrot(weight: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Mirror of comfy-quants: rotate along the input dim, then per-output-channel int8.
-
-    Returns the codes, the scale, and the weight the loader has to reconstruct -- which is the
-    *dequantized* one, not the original: rounding to 127 levels is lossy, and comparing against the
-    original would be comparing against something no correct loader produces.
-    """
-    out_features, in_features = weight.shape
-    hadamard = build_regular_hadamard(_INT8_GROUP, dtype=weight.dtype)
-    rotated = (weight.view(out_features, in_features // _INT8_GROUP, _INT8_GROUP) @ hadamard.T).view(
-        out_features, in_features
-    )
-    scale = rotated.abs().amax(dim=1, keepdim=True) / 127.0
-    codes = torch.clamp(torch.round(rotated / scale), -128, 127).to(torch.int8)
-    restored = (codes.float() * scale).view(out_features, in_features // _INT8_GROUP, _INT8_GROUP) @ hadamard
-    return codes, scale.float(), restored.view(out_features, in_features)
-
-
 def _write_int8_checkpoint(tmp_path: Path) -> tuple[Path, dict[str, torch.Tensor]]:
     """The int8 layout: codes, a per-output-row scale, a marker. Norms and embeddings stay dense,
     exactly as the 8B repack ships them."""
@@ -209,10 +182,10 @@ def _write_int8_checkpoint(tmp_path: Path) -> tuple[Path, dict[str, torch.Tensor
     projections = {**NVFP4_PROJECTIONS, "self_attn.v_proj": (HIDDEN, HIDDEN)}
     for name, shape in projections.items():
         path = f"model.layers.0.{name}"
-        codes, scale, restored = _quantize_convrot(torch.randn(shape) * 0.05)
+        codes, scale, restored = quantize_convrot(torch.randn(shape) * 0.05, group_size=_INT8_GROUP)
         tensors[f"{path}.weight"] = codes
         tensors[f"{path}.weight_scale"] = scale
-        tensors[f"{path}.comfy_quant"] = _marker_blob(_INT8_MARKER)
+        tensors[f"{path}.comfy_quant"] = comfy_quant_marker(_INT8_MARKER)
         # W8A8 activation scales. This path dequantizes the weight and computes in the compute
         # dtype, so there is nothing to apply them to; one Qwen3-VL repack ships 337 of them.
         tensors[f"{path}.input_scale"] = torch.ones(shape[1])

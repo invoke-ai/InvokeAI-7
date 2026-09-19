@@ -45,6 +45,7 @@ from invokeai.backend.quantization.fp8_scaled import (
     parse_quantization_metadata,
     predict_cast_state_dict_size,
     read_safetensors_metadata,
+    reject_quantized_side_channel,
     should_keep_fp8_weights,
     split_fp8_scaled_layers,
     warn_on_unattached_scales,
@@ -53,6 +54,7 @@ from invokeai.backend.quantization.int8_convrot import (
     drop_unconsumed_quantization_sidecars,
     extract_int8_convrot_markers,
     install_int8_convrot_layers,
+    reject_int8_layers_a_plain_fold_cannot_decode,
     reject_unmarked_int8_weights,
 )
 from invokeai.backend.util.devices import TorchDevice
@@ -141,17 +143,40 @@ class Ideogram4DiffusersModel(ModelLoader):
             is_bnb4bit_state_dict,
             is_fp8_state_dict,
             load_fp8_state_dict,
+            reject_scale_spellings_this_path_drops,
             swap_linears_to_fp8,
         )
-        from invokeai.backend.quantization.bnb_nf4 import quantize_model_nf4
 
         target_device = TorchDevice.choose_torch_device()
         compute_dtype = TorchDevice.choose_bfloat16_safe_dtype(target_device)
 
         sd = _load_local_state_dict(folder, "diffusion_pytorch_model")
+
+        # Both refusals ahead of the reservation: `make_room` evicts to make space, so a refusal
+        # below it would flush other resident models for a load that cannot finish. Neither can fire
+        # on the nf4 build -- its sidecars are `.absmax` and `.quant_state.*`, and its weights are
+        # uint8 rather than int8.
+        #
+        # int8 first, for the reason `Ideogram4CheckpointModel._load_model` gives at its own probe:
+        # an int8 layer ships a `.weight_scale` too, and `is_fp8_state_dict` is satisfied by that
+        # suffix alone. Taken for this path's private fp8, a rotated weight gets the scale and never
+        # the inverse rotation -- `Fp8Linear.forward` is `weight * weight_scale.unsqueeze(1)`, a fold
+        # deferred to forward.
+        #
+        # What the guard lets through is an *unrotated* marked int8 build, where the scale is the
+        # whole decode. Not free even so: `Fp8Linear` stores in e4m3, so the codes are requantized on
+        # the way in (1.9% mean weight error, measured). No such build is published for this layout;
+        # if one appears, that requantization is the thing to fix, not this refusal.
+        reject_int8_layers_a_plain_fold_cannot_decode(sd, f"Ideogram 4 transformer {folder.name}")
+        reject_scale_spellings_this_path_drops(sd, f"Ideogram 4 transformer {folder.name}")
+
         self._ram_cache.make_room(sum(t.nelement() * t.element_size() for t in sd.values()))
 
         if is_bnb4bit_state_dict(sd):
+            # Here rather than at the top: bitsandbytes is not installed on macOS, and importing it
+            # up front failed every load through this method there, fp8 and unquantized included.
+            from invokeai.backend.quantization.bnb_nf4 import quantize_model_nf4
+
             # nf4: build the model with InvokeLinearNF4 layers (compress_statistics=False, matching
             # the on-disk single-quant format), then load the prequantized state dict. The model
             # stays on CPU/meta until the cache moves it to the GPU.
@@ -183,9 +208,9 @@ class Ideogram4DiffusersModel(ModelLoader):
         from invokeai.backend.ideogram4.quantized_loading import (
             FP8_TEXT_ENCODER_CONFIG_FLAG,
             load_fp8_state_dict,
+            reject_scale_spellings_this_path_drops,
             swap_linears_to_fp8,
         )
-        from invokeai.backend.quantization.bnb_nf4 import quantize_model_nf4
 
         encoder_path = model_path / "text_encoder"
         target_device = TorchDevice.choose_torch_device()
@@ -203,9 +228,24 @@ class Ideogram4DiffusersModel(ModelLoader):
             cfg.quantization_config = None
 
         sd = _load_local_state_dict(encoder_path, "model")
+
+        # Ahead of the reservation, which evicts other resident models to make space: a refusal below
+        # it would flush the cache for a load that cannot finish.
+        keeps_fp8 = bool(raw_cfg.get(FP8_TEXT_ENCODER_CONFIG_FLAG, False))
+        if keeps_fp8:
+            # The fp8 branch reads one spelling of the scale and would drop the other silently.
+            reject_scale_spellings_this_path_drops(sd, f"Ideogram 4 text encoder {encoder_path.name}")
+        else:
+            # Everything without the flag goes to `load_state_dict(assign=True, strict=False)` below,
+            # which would make the fp8 codes the parameters themselves and report the orphaned scale
+            # at DEBUG. InvokeAI is the only producer that writes the flag, so a third-party fp8
+            # repack of this encoder arrives here rather than in the branch above. The nf4 build is
+            # unaffected: its sidecars are `.absmax` and `.quant_state.*`, which name no scale.
+            reject_quantized_side_channel(sd, f"Ideogram 4 text encoder {encoder_path.name}")
+
         self._ram_cache.make_room(sum(t.nelement() * t.element_size() for t in sd.values()))
 
-        if raw_cfg.get(FP8_TEXT_ENCODER_CONFIG_FLAG, False):
+        if keeps_fp8:
             # Weight-only fp8 (e4m3): build the empty architecture, swap the quantized Linears for
             # Fp8Linear (gated on a saved per-row scale), then load. Mirrors the transformer fp8 branch;
             # runs on any device. strict=False tolerates the tied embed weights transformers resolves
@@ -224,6 +264,9 @@ class Ideogram4DiffusersModel(ModelLoader):
         with accelerate.init_empty_weights():
             model = AutoModel.from_config(cfg)
             if is_bnb_nf4:
+                # Only this branch needs bitsandbytes, which macOS does not have; see the transformer.
+                from invokeai.backend.quantization.bnb_nf4 import quantize_model_nf4
+
                 model = quantize_model_nf4(model, modules_to_not_convert=set(), compute_dtype=compute_dtype)
 
         _, unexpected = model.load_state_dict(sd, strict=False, assign=True)
@@ -248,6 +291,11 @@ class Ideogram4DiffusersModel(ModelLoader):
         model_dtype = TorchDevice.choose_bfloat16_safe_dtype(target_device)
 
         sd = load_file(model_path / "vae" / "diffusion_pytorch_model.safetensors")
+        # No quantized layout reaches this decoder, and the load below drops what it does not
+        # recognise: `load_state_dict_ignoring_extras` reports extras and copies on, so an fp8 conv
+        # weight would be cast into a float32 parameter with its scale discarded. On the file's own
+        # key names rather than the converted ones, so a rename cannot carry a scale out of sight.
+        reject_quantized_side_channel(sd, f"Ideogram 4 VAE {model_path.name}")
         sd = convert_diffusers_state_dict(sd)
         ae = AutoEncoder(AutoEncoderParams())
         load_state_dict_ignoring_extras(ae, sd, source="Ideogram 4 VAE")

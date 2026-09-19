@@ -4,7 +4,7 @@ import {
   GALLERY_BOARD_PANEL_MIN_HEIGHT_PX,
   GALLERY_MIN_GRID_HEIGHT_PX,
 } from '@features/gallery/core/settings';
-import { segmentTabsPanelId, segmentTabsTabId } from '@platform/ui';
+import { segmentTabsPanelId, segmentTabsTabId } from '@platform/ui/SegmentTabs';
 import { useCallback, useId, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 

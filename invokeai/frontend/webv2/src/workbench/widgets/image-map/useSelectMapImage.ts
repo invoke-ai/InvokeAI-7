@@ -73,6 +73,7 @@ export const useMapSelection = (): MapSelectionActions => {
             galleryPage: 0,
             searchTerm: '',
             semanticImageQuery: { clusterId, kind: 'cluster', label },
+            semanticSearchText: null,
           });
           // The clicked item is the proximity ordering's first entry, so it
           // is selected at the top of the cluster view; Preview follows. The

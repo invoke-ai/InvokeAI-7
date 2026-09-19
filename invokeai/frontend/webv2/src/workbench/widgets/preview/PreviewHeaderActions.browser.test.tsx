@@ -18,12 +18,10 @@ void i18n.use(initReactI18next).init({
   resources: {
     en: {
       translation: {
-        topbar: { invoke: { unavailable: 'Invoke unavailable: {{reason}}', unrunnable: 'Unrunnable' } },
         widgets: {
           preview: {
             hideFilmstrip: 'Hide filmstrip',
             hideInProgressDiffusion: 'Hide in-progress diffusion',
-            invoke: 'Invoke',
             showFilmstrip: 'Show filmstrip',
             showInProgressDiffusion: 'Show in-progress diffusion',
           },
@@ -36,13 +34,6 @@ void i18n.use(initReactI18next).init({
 const state = vi.hoisted(() => ({ filmstripVisible: true, showProgressImagesInViewer: true }));
 const patchValues = vi.hoisted(() => vi.fn());
 const updateProjectPreferences = vi.hoisted(() => vi.fn());
-const executeCommand = vi.hoisted(() => vi.fn(() => Promise.resolve()));
-const invocationState = vi.hoisted(() => ({ blockingReasons: [] as string[], isPreparing: false, isValid: true }));
-
-vi.mock('@workbench/shell/topbar/useInvocationState', () => ({
-  useInvocationState: () => invocationState,
-}));
-
 vi.mock('@features/queue/react', () => ({ useProgressImage: () => null }));
 
 vi.mock('./previewHeaderStore', () => ({
@@ -90,9 +81,7 @@ const render = async (region: WidgetViewProps['region'] = 'center') => {
     root?.render(
       <I18nextProvider i18n={i18n}>
         <ChakraProvider value={system}>
-          <PreviewHeaderActions
-            {...({ region, runtime: { commands: { execute: executeCommand } } } as unknown as WidgetViewProps)}
-          />
+          <PreviewHeaderActions {...({ region, runtime: {} } as unknown as WidgetViewProps)} />
         </ChakraProvider>
       </I18nextProvider>
     );
@@ -107,10 +96,6 @@ beforeEach(() => {
   state.showProgressImagesInViewer = true;
   patchValues.mockClear();
   updateProjectPreferences.mockClear();
-  executeCommand.mockClear();
-  invocationState.blockingReasons = [];
-  invocationState.isPreparing = false;
-  invocationState.isValid = true;
 });
 
 afterEach(async () => {
@@ -147,46 +132,6 @@ describe('preview header toggles', () => {
 
     await settle(() => button('Hide in-progress diffusion').click());
     expect(updateProjectPreferences).toHaveBeenCalledWith({ showProgressImagesInViewer: false });
-  });
-});
-
-describe('preview floating Invoke control', () => {
-  it('is offered only while the widget floats', async () => {
-    await render('center');
-    expect(host?.querySelector('button[aria-label="Invoke"]')).toBeNull();
-
-    await settle(() => root?.unmount());
-    host?.remove();
-
-    await render('right');
-    expect(host?.querySelector('button[aria-label="Invoke"]')).toBeNull();
-
-    await settle(() => root?.unmount());
-    host?.remove();
-
-    await render('floating');
-    expect(host?.querySelector('button[aria-label="Invoke"]')).not.toBeNull();
-  });
-
-  it('runs the app-level Invoke command, the same path as the topbar button', async () => {
-    await render('floating');
-
-    await settle(() => button('Invoke').click());
-
-    expect(executeCommand).toHaveBeenCalledWith('app.invoke');
-  });
-
-  it('dims, names the blocking reason, and refuses the click when Invoke cannot run', async () => {
-    invocationState.isValid = false;
-    invocationState.blockingReasons = ['The backend is disconnected.'];
-    await render('floating');
-
-    const control = button('Invoke unavailable: The backend is disconnected.');
-    expect(control.getAttribute('aria-disabled')).toBe('true');
-
-    await settle(() => control.click());
-
-    expect(executeCommand).not.toHaveBeenCalled();
   });
 });
 

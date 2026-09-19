@@ -1,25 +1,27 @@
-/* eslint-disable react-perf/jsx-no-jsx-as-prop, react-perf/jsx-no-new-array-as-prop, react-perf/jsx-no-new-function-as-prop, react-perf/jsx-no-new-object-as-prop */
-import { HStack, Icon, Input, Tag, Text, Wrap } from '@chakra-ui/react';
+/* eslint-disable react-perf/jsx-no-new-function-as-prop */
+import { TagsInput, Text } from '@chakra-ui/react';
 import { triggerPhraseSchema } from '@features/models/core/schemas';
 import { updateModel } from '@features/models/data/api';
 import { replaceModelInStore } from '@features/models/data/modelsStore';
 import { useScopedAction } from '@platform/react/useScopedAction';
 import { assertAccountScopeCurrent } from '@platform/state/accountLifecycle';
-import { Button, Field } from '@platform/ui';
-import { PlusIcon } from 'lucide-react';
+import { Field } from '@platform/ui/Field';
 import { memo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 interface TriggerPhrasesEditorState {
-  draft: string;
   error: string | null;
-  isSaving: boolean;
   modelKey: string;
+  /** The phrases prop this local value was derived from; a new prop replaces the value. */
+  phrases: readonly string[];
+  value: string[];
 }
 
 /**
- * Tag-style editor for a model's trigger phrases. Each add/remove persists
- * immediately — there is no separate save step for phrases.
+ * Tag editor for a model's trigger phrases: type + Enter adds, Backspace or
+ * the tag's control removes, double-click (or Enter on a highlighted tag)
+ * edits in place. Every change persists immediately — there is no separate
+ * save step — and a failed save puts the list back as it was.
  */
 export const TriggerPhrasesEditor = ({
   modelKey,
@@ -32,127 +34,89 @@ export const TriggerPhrasesEditor = ({
 }) => {
   const { t } = useTranslation();
   const [editor, setEditor] = useState<TriggerPhrasesEditorState>(() => ({
-    draft: '',
     error: null,
-    isSaving: false,
     modelKey,
+    phrases,
+    value: [...phrases],
   }));
-  const isEditorCurrent = editor.modelKey === modelKey;
-  const draft = isEditorCurrent ? editor.draft : '';
-  const error = isEditorCurrent ? editor.error : null;
-  const isSaving = isEditorCurrent ? editor.isSaving : false;
-  // The saving flag lives in the modelKey-scoped editor state (so it resets on
-  // model switch); the hook's own isBusy is unused, only its scope plumbing.
-  const { run } = useScopedAction();
+  // Render-phase adjustment (not an effect): a new prop list — another model,
+  // or a save that landed — replaces the local value wholesale.
+  if (editor.modelKey !== modelKey || editor.phrases !== phrases) {
+    setEditor({ error: null, modelKey, phrases, value: [...phrases] });
+  }
+  const { error, value } = editor;
+  const { isBusy: isSaving, run } = useScopedAction();
 
-  const persist = async (nextPhrases: string[]): Promise<boolean> => {
-    setEditor((current) => ({
-      draft: current.modelKey === modelKey ? current.draft : '',
-      error: current.modelKey === modelKey ? current.error : null,
-      isSaving: true,
-      modelKey,
-    }));
-
-    const stopSaving = () =>
-      setEditor((current) => (current.modelKey === modelKey ? { ...current, isSaving: false } : current));
-    let saved = false;
-
-    await run(
+  const persist = (nextPhrases: string[]) => {
+    setEditor({ error: null, modelKey, phrases, value: nextPhrases });
+    void run(
       async (owner) => {
         const updated = await updateModel(modelKey, { trigger_phrases: nextPhrases }, owner.signal);
 
         assertAccountScopeCurrent(owner);
         replaceModelInStore(updated);
-        saved = true;
-        stopSaving();
       },
       (_message, persistError) => {
         onError(persistError instanceof Error ? persistError.message : t('models.failedToUpdateTriggerPhrases'));
-        stopSaving();
+        setEditor({ error: null, modelKey, phrases, value: [...phrases] });
       }
     );
-
-    return saved;
-  };
-
-  const addPhrase = async () => {
-    const parsed = triggerPhraseSchema.safeParse(draft);
-
-    if (!parsed.success) {
-      setEditor({
-        draft,
-        error: parsed.error.issues[0]?.message ?? t('models.invalidTriggerPhrase'),
-        isSaving,
-        modelKey,
-      });
-      return;
-    }
-
-    if (phrases.some((phrase) => phrase.toLowerCase() === parsed.data.toLowerCase())) {
-      setEditor({ draft, error: t('models.triggerPhraseDuplicate'), isSaving, modelKey });
-      return;
-    }
-
-    setEditor({ draft, error: null, isSaving, modelKey });
-
-    // Clear the draft only once it is saved, so a failure never eats the text.
-    if (await persist([...phrases, parsed.data])) {
-      setEditor((current) => (current.modelKey === modelKey ? { ...current, draft: '' } : current));
-    }
   };
 
   return (
     <Field error={error} helpText={t('models.triggerPhrasesHelp')} label={t('models.triggerPhrases')}>
-      <HStack gap="1.5">
-        <Input
-          aria-invalid={error ? true : undefined}
-          placeholder={t('models.addTriggerPhrase')}
-          size="xs"
-          value={draft}
-          onChange={(event) => {
-            setEditor({ draft: event.currentTarget.value, error: null, isSaving, modelKey });
-          }}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter') {
-              event.preventDefault();
-              void addPhrase();
+      <TagsInput.Root
+        blurBehavior="add"
+        disabled={isSaving}
+        editable
+        size="sm"
+        validate={({ inputValue, value: current }) => {
+          const parsed = triggerPhraseSchema.safeParse(inputValue);
+
+          if (!parsed.success) {
+            setEditor({
+              error: parsed.error.issues[0]?.message ?? t('models.invalidTriggerPhrase'),
+              modelKey,
+              phrases,
+              value,
+            });
+            return false;
+          }
+
+          if (current.some((phrase) => phrase.toLowerCase() === parsed.data.toLowerCase())) {
+            setEditor({ error: t('models.triggerPhraseDuplicate'), modelKey, phrases, value });
+            return false;
+          }
+
+          return true;
+        }}
+        value={value}
+        w="full"
+        onValueChange={({ value: next }) => persist(next)}
+      >
+        <TagsInput.Control>
+          <TagsInput.Context>
+            {(api) =>
+              api.value.map((phrase, index) => (
+                <TagsInput.Item key={`${phrase}:${index}`} index={index} value={phrase}>
+                  <TagsInput.ItemPreview>
+                    <TagsInput.ItemText>{phrase}</TagsInput.ItemText>
+                    <TagsInput.ItemDeleteTrigger aria-label={t('models.removeTriggerPhrase', { phrase })} />
+                  </TagsInput.ItemPreview>
+                  <TagsInput.ItemInput />
+                </TagsInput.Item>
+              ))
             }
-          }}
-        />
-        <Button
-          disabled={draft.trim().length === 0}
-          loading={isSaving}
-          size="xs"
-          variant="outline"
-          onClick={() => {
-            void addPhrase();
-          }}
-        >
-          <Icon as={PlusIcon} boxSize="3.5" />
-          {t('common.add')}
-        </Button>
-      </HStack>
-      {phrases.length > 0 ? (
-        <Wrap gap="1">
-          {phrases.map((phrase) => (
-            <Tag.Root key={phrase} size="sm" variant="surface">
-              <Tag.Label>{phrase}</Tag.Label>
-              <Tag.EndElement>
-                <Tag.CloseTrigger
-                  aria-label={t('models.removeTriggerPhrase', { phrase })}
-                  onClick={() => {
-                    void persist(phrases.filter((existing) => existing !== phrase));
-                  }}
-                />
-              </Tag.EndElement>
-            </Tag.Root>
-          ))}
-        </Wrap>
-      ) : (
+          </TagsInput.Context>
+          <TagsInput.Input aria-label={t('models.triggerPhrases')} placeholder={t('models.addTriggerPhrase')} />
+        </TagsInput.Control>
+        <TagsInput.HiddenInput />
+      </TagsInput.Root>
+      {value.length === 0 ? (
         <Text color="fg.subtle" fontSize="2xs">
           {t('models.noTriggerPhrasesYet')}
         </Text>
-      )}
+      ) : null}
     </Field>
   );
 };

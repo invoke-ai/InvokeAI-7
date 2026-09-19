@@ -91,6 +91,7 @@ from invokeai.backend.quantization.fp8_scaled import (
     can_stay_quantized,
     cast_state_dict,
     dequantize_fp8_scaled,
+    expand_weight_scale,
     extract_comfy_quant_hints,
     extract_fp8_scaled_layers,
     full_precision_hints_respected,
@@ -99,6 +100,7 @@ from invokeai.backend.quantization.fp8_scaled import (
     parse_quantization_metadata,
     predict_cast_state_dict_size,
     read_safetensors_metadata,
+    reject_quantized_side_channel,
     split_fp8_scaled_layers,
     strip_layer_path_prefix,
     warn_on_unattached_scales,
@@ -213,6 +215,7 @@ class Flux2VAELoader(ModelLoader):
 
         # Load state dict manually since from_single_file may not support AutoencoderKLFlux2 yet
         sd = load_file(model_path)
+        reject_quantized_side_channel(sd, f"FLUX.2 VAE checkpoint {model_path.name}")
 
         # Convert BFL format to diffusers format if needed
         # BFL format uses: encoder.down., decoder.up., decoder.mid.block_1, decoder.mid.attn_1, decoder.norm_out
@@ -1245,9 +1248,12 @@ class Flux2CheckpointModel(ModelLoader):
                 dequantize_fp8_scaled(converted_sd, fp8_layers, torch.bfloat16)
                 fp8_layers = {}
 
-            # Safety net for scale layouts the shared extractor does not model (block-wise scales
-            # whose shape has to be expanded to the weight's). It is a no-op on every checkpoint
-            # measured so far, because extraction has already taken the scales it understood.
+            # Reached only for the raw-fp8 conversion and the metadata strip. Its scale fold cannot
+            # fire here: `extract_fp8_scaled_layers` above takes every scale key it is shown, by
+            # suffix, whatever the layout — so no weight/scale pair survives this far. Moving this
+            # call above that one would make the fold live again, which is what
+            # `test_flux2_int8_convrot_loader.py::test_the_extraction_runs_before_the_fold_safety_net`
+            # is there to catch.
             converted_sd = self._dequantize_fp8_weights(converted_sd, keep_fp8=keep_fp8)
 
         # Detect architecture from checkpoint keys
@@ -1435,34 +1441,25 @@ class Flux2CheckpointModel(ModelLoader):
         superset: `cast_state_dict` re-applies the same predicate later *with* the model and casts
         whatever turns out not to be an ``nn.Linear`` weight.
         """
-        # Check for ComfyUI-style scale factors. Both spellings are folded here, because the
-        # metadata strip below removes both — reading only `.weight_scale` meant a `.scale_weight`
-        # checkpoint had its scales deleted without ever being applied, leaving every quantized
-        # weight off by 1/weight_scale with nothing logged.
+        # Both spellings are folded here, because the metadata strip below removes both — reading
+        # only `.weight_scale` meant a `.scale_weight` checkpoint had its scales deleted without ever
+        # being applied, leaving every quantized weight off by 1/weight_scale with nothing logged.
+        #
+        # At the one call site this cannot fire: `extract_fp8_scaled_layers` runs first and takes
+        # every scale it is shown, so nothing with a pair reaches here. It stays as the safety net
+        # the call site calls it, but folds through the shared expansion now — the local copy that
+        # used to stand here got a per-output-channel scale wrong in the same way the Wan and
+        # Qwen-Image path did, and an unreachable branch carrying a live defect is the worst of both.
         for weight_key, scale_key in list(iter_weight_scale_pairs(sd)):
-            weight = sd[weight_key]
-            scale = sd[scale_key]
+            weight = sd[weight_key].float()
+            scale = sd[scale_key].float()
 
-            # Dequantize: convert FP8 to float and multiply by scale
-            # Note: Float8 types require .float() instead of .to(torch.float32)
-            weight_float = weight.float()
-            scale = scale.float()
-
-            # Handle block-wise quantization where scale may have different shape
-            if scale.dim() > 0 and scale.shape != weight_float.shape and scale.numel() > 1:
-                for dim in range(len(weight_float.shape)):
-                    if dim < len(scale.shape) and scale.shape[dim] != weight_float.shape[dim]:
-                        block_size = weight_float.shape[dim] // scale.shape[dim]
-                        if block_size > 1:
-                            scale = scale.repeat_interleave(block_size, dim=dim)
-
-            # Do the multiply in float32 for precision, but store bf16 (FLUX.2's compute dtype)
-            # immediately so the *whole* model is never materialized in float32. Holding every
-            # dequantized weight as float32 here doubled RAM transiently (~36GB vs ~17GB for a 9B
-            # model) and was the dominant cold-load spike, especially with two GPUs. The result is
-            # identical to the previous code, which cast the same values to bf16 a few steps later.
-            sd[weight_key] = (weight_float * scale).to(torch.bfloat16)
-            del weight_float
+            # Multiply in float32 for precision, but store bf16 (FLUX.2's compute dtype) immediately
+            # so the *whole* model is never materialized in float32. Holding every dequantized weight
+            # as float32 here doubled RAM transiently (~36GB vs ~17GB for a 9B model) and was the
+            # dominant cold-load spike, especially with two GPUs.
+            sd[weight_key] = (weight * expand_weight_scale(weight, scale, weight_key)).to(torch.bfloat16)
+            del weight
 
         # Filter out scale metadata keys and other FP8 metadata
         keys_to_remove = [k for k in sd.keys() if is_scale_metadata_key(k)]

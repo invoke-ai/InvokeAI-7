@@ -29,6 +29,7 @@ from invokeai.backend.quantization.fp8_scaled import (
     parse_quantization_metadata,
     predict_cast_state_dict_size,
     read_safetensors_metadata,
+    reject_quantized_side_channel,
     split_fp8_scaled_layers,
     strip_layer_path_prefix,
     warn_on_unattached_scales,
@@ -286,6 +287,7 @@ class AnimaControlNetLLLiteModel(ModelLoader):
         model_path = Path(config.path)
 
         sd = load_file(model_path)
+        reject_quantized_side_channel(sd, f"Anima ControlNet checkpoint {model_path.name}")
         with safe_open(model_path, framework="pt", device="cpu") as f:
             metadata = f.metadata()
 

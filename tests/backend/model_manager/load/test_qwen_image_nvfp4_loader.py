@@ -13,6 +13,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+import safetensors.torch
 import torch
 
 from invokeai.backend.model_manager.configs.main import Main_Checkpoint_QwenImage_Config
@@ -26,22 +27,18 @@ from invokeai.backend.model_manager.load.model_loaders.qwen_image import (
     QwenVLEncoderCheckpointLoader,
 )
 from invokeai.backend.quantization.nvfp4 import NVFP4Linear
+from tests.fixtures.loader_seams import Seam, prepare
+from tests.fixtures.quantized_payloads import comfy_quant_marker, nvfp4_signed_tensors, quantize_convrot
 
 COMPUTE_DTYPE = torch.bfloat16
 
 
 def _nvfp4_tensors(path: str, shape: tuple[int, int]) -> tuple[dict[str, torch.Tensor], torch.Tensor]:
-    """Codes 2 and 10 are +1.0 and -1.0; with a block scale of 2 and a global scale of 0.25 the weight is +-0.5. Comfy
-    ships an activation scale beside each layer, which the loader has no use for."""
-    positive = torch.randint(0, 2, shape, dtype=torch.bool)
-    codes = torch.where(positive, 2, 10).to(torch.uint8)
-    tensors = {
-        f"{path}.weight": (codes[:, 0::2] << 4) | codes[:, 1::2],
-        f"{path}.weight_scale": torch.full((shape[0], shape[1] // 16), 2.0).to(torch.float8_e4m3fn),
-        f"{path}.weight_scale_2": torch.tensor(0.25),
-        f"{path}.input_scale": torch.tensor(1.0),
-    }
-    return tensors, torch.where(positive, 0.5, -0.5)
+    """Comfy ships an activation scale beside each layer, which the loader has no use for -- so it has
+    to be dropped rather than reach `load_state_dict`, and it is here for that reason alone."""
+    tensors, expected = nvfp4_signed_tensors(path, torch.randint(0, 2, shape, dtype=torch.bool))
+    tensors[f"{path}.input_scale"] = torch.tensor(1.0)
+    return tensors, expected
 
 
 def _packed_bytes(rows: int, columns: int) -> int:
@@ -49,7 +46,7 @@ def _packed_bytes(rows: int, columns: int) -> int:
 
 
 def _marker(fmt: str) -> torch.Tensor:
-    return torch.frombuffer(bytearray(json.dumps({"format": fmt}).encode("utf-8")), dtype=torch.uint8).clone()
+    return comfy_quant_marker({"format": fmt})
 
 
 def _patch_common(monkeypatch: pytest.MonkeyPatch, state_dict: dict, metadata: dict) -> list[bool]:
@@ -273,3 +270,41 @@ def test_the_encoder_keeps_marker_named_nvfp4_layers_packed_under_their_transfor
     packed = 2 * _packed_bytes(128, 64)
     widened = 128 + (32 * 64 + 2) + (4 * 8 + 4)
     loader._ram_cache.make_room.assert_called_once_with(packed + widened * COMPUTE_DTYPE.itemsize + fp8_marker.numel())
+
+
+def test_an_int8_convrot_checkpoint_is_refused_before_the_cache_is_evicted(monkeypatch, tmp_path) -> None:
+    """This encoder has no int8 branch, and `int8_tensorwise` shares the fp8 key layout, so the fold
+    applied the scale and skipped the inverse rotation.
+
+    The refusal has to come before `make_room`, thirty lines further down, and before the config
+    fetch between them: reserving room for a load that cannot finish evicts whatever else the user
+    had resident, and the fetch reaches for the network to do it. That
+    ordering is the half that went missing once already -- the guard was reported as moved ahead of
+    the reservation while the call was not in the tree at all, and nothing here would have noticed.
+    """
+    payload = quantize_convrot(torch.randn(64, 256), group_size=64)
+    state_dict = {
+        "model.layers.0.self_attn.q_proj.weight": payload.codes,
+        "model.layers.0.self_attn.q_proj.weight_scale": payload.scale,
+        "model.layers.0.self_attn.q_proj.comfy_quant": comfy_quant_marker(
+            {"format": "int8_tensorwise", "convrot": True, "convrot_groupsize": 64}
+        ),
+    }
+    checkpoint = tmp_path / "qwen_2.5_vl_7b_int8_convrot.safetensors"
+    checkpoint.touch()
+    seam = Seam(
+        loader=QwenVLEncoderCheckpointLoader,
+        module=qwen_image,
+        entry="_load_text_encoder_from_singlefile",
+        # The loader imports `load_file` inside the method, so the name it resolves is the package's.
+        load_file_host=safetensors.torch,
+        patches_device=True,
+        sets_torch_dtype=False,
+        casts_fp8_storage=False,
+    )
+    run = prepare(seam, monkeypatch, state_dict=state_dict, metadata=None)
+
+    with pytest.raises(ValueError, match="quantized with convrot"):
+        run.load(QwenVLEncoder_Checkpoint_Config.model_construct(path=str(checkpoint)))
+
+    assert run.reserved == []

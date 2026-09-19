@@ -7,6 +7,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 const HOLD_OPEN_MS = 350;
 const TOOLTIP_POSITIONING = { placement: 'right' } as const;
+/** The flyout opens sideways, so a subtool's tooltip goes below it rather than over the next subtool. */
+const SUBTOOL_TOOLTIP_POSITIONING = { placement: 'bottom' } as const;
 
 export interface ToolFlyoutItem {
   id: string;
@@ -297,7 +299,7 @@ const FlyoutItem = ({
 }) => {
   const onClick = useCallback(() => onSelect(item.id), [item.id, onSelect]);
   return (
-    <Tooltip content={item.label} positioning={TOOLTIP_POSITIONING}>
+    <Tooltip content={item.label} positioning={SUBTOOL_TOOLTIP_POSITIONING}>
       <IconButton
         aria-checked={checked}
         aria-label={item.label}

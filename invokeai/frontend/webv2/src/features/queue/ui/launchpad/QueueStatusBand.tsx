@@ -1,8 +1,8 @@
-import { Flex, Icon, Text } from '@chakra-ui/react';
+import { Flex, Icon, Spinner, Text } from '@chakra-ui/react';
 import { queueBackend } from '@features/queue/data/httpRealtimeQueueBackend';
 import { queueReadModelOptions } from '@features/queue/data/queries';
 import { useQuery } from '@tanstack/react-query';
-import { LoaderCircleIcon } from 'lucide-react';
+import { HourglassIcon } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 /**
@@ -60,7 +60,13 @@ export const QueueStatusBand = () => {
       py="2"
       rounded="lg"
     >
-      <Icon aria-hidden as={LoaderCircleIcon} boxSize="3.5" color="fg.muted" />
+      {/* A real spinner while something runs; a static glyph for a queue that
+          is only waiting, so the band does not claim activity it cannot show. */}
+      {inProgress > 0 ? (
+        <Spinner color="fg.muted" size="xs" />
+      ) : (
+        <Icon aria-hidden as={HourglassIcon} boxSize="3.5" color="fg.muted" />
+      )}
       <Text fontSize="xs" fontWeight="600">
         {t('launchpad.home.queue.summary', { inProgress, pending })}
       </Text>

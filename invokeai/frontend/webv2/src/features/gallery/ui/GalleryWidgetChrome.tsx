@@ -12,7 +12,7 @@ import { useTranslation } from 'react-i18next';
 import type { GalleryWidgetProps } from './GalleryUiContext';
 
 import { BoardCover, BoardCoverIcon } from './GalleryBoardCover';
-import { getGallerySelectedBoardId } from './galleryStateView';
+import { getGalleryProjectBoardId, getGallerySelectedBoardId } from './galleryStateView';
 import { useGalleryUi } from './GalleryUiContext';
 
 type GalleryChromeProps = { region: GalleryWidgetProps['region'] };
@@ -43,9 +43,17 @@ const useGalleryChromeBoards = () => {
 
 export const GalleryWidgetLabel = ({ region }: GalleryChromeProps) => {
   const { t } = useTranslation();
-  const { boards, gallery, selectedBoardId, settings } = useGalleryChromeBoards();
+  const { projectName } = useGalleryUi();
+  const { boards, gallery, galleryValues, selectedBoardId, settings } = useGalleryChromeBoards();
   const selectedBoard = boards.find((board) => board.id === selectedBoardId);
-  const boardName = selectedBoard ? getGalleryBoardLabel(selectedBoard, t) : t('widgets.gallery.selectedBoardFallback');
+  // The project board renames with its project server-side, but the fetched
+  // list lags a rename; the live project name is authoritative (as in the
+  // boards panel), so the header follows a rename at once.
+  const boardName = !selectedBoard
+    ? t('widgets.gallery.selectedBoardFallback')
+    : selectedBoard.id === getGalleryProjectBoardId(galleryValues)
+      ? projectName
+      : getGalleryBoardLabel(selectedBoard, t);
   const isCollapsed = settings.boardPanelCollapsed;
 
   const toggleBoards = useCallback(

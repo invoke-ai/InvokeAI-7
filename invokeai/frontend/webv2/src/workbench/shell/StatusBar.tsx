@@ -370,18 +370,21 @@ const CompactBottomWidget = ({
               display="flex"
               flexDirection="column"
               maxH="min(28rem, var(--available-height))"
-              overflow="hidden"
               p="0"
               w="26rem"
             >
-              {item.instance ? (
-                <WidgetRendererById
-                  instanceId={item.id}
-                  widget={item.widget}
-                  presentation="expanded"
-                  region="popover"
-                />
-              ) : null}
+              {/* Clipping lives one level down: `overflow: hidden` on the
+                  content itself would cut off the anchor arrow. */}
+              <Box display="flex" flex="1" flexDirection="column" minH="0" overflow="hidden" rounded="inherit">
+                {item.instance ? (
+                  <WidgetRendererById
+                    instanceId={item.id}
+                    widget={item.widget}
+                    presentation="expanded"
+                    region="popover"
+                  />
+                ) : null}
+              </Box>
             </PopoverContent>
           </Popover.Positioner>
         </Portal>

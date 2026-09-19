@@ -45,7 +45,6 @@ await i18n.use(initReactI18next).init({
           },
           video: {
             playSelection: 'Play selection in Preview',
-            removeClip: 'Remove clip',
             trim: 'Trim',
             trimEnd: 'Trim end',
             trimEndShort: 'End',

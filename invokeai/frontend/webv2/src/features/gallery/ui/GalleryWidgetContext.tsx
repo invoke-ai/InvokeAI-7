@@ -32,8 +32,16 @@ export interface GalleryActions {
   setSearchTerm: (searchTerm: string) => void;
   /** Restricts (or releases) the listing to starred items; resets the page like a search. */
   setStarredOnly: (starredOnly: boolean) => void;
+  /** Clears the search field: its text, any ranking, and semantic mode. */
+  clearSearch: () => void;
+  /** Applies the semantic field's text as the ranking; a no-op once the field has moved on. */
+  commitSemanticSearch: (text: string) => void;
   /** Sets (or clears) the image-similarity query shown as a chip in the search field. */
   setSemanticImageQuery: (reference: GallerySemanticReference | null) => void;
+  /** Switches the search field between metadata and semantic search, keeping its text. */
+  setSemanticSearchMode: (enabled: boolean) => void;
+  /** The semantic field's live text, ahead of the debounced commit. */
+  setSemanticSearchText: (text: string) => void;
   setView: (galleryView: GalleryView) => void;
   toggleItemInSelection: (item: GalleryItem, nextPrimaryItem: GalleryItem | null) => void;
   updateSettings: (settings: Partial<GallerySettings>) => void;

@@ -28,6 +28,8 @@ import {
   galleryItemsInfiniteOptions,
   galleryStarredStripOptions,
   getGalleryItemListQueries,
+  IMAGE_INDEX_UNAVAILABLE_POLL_MS,
+  imageIndexAvailabilityOptions,
   getGalleryItemsFilterFromKey,
   isGalleryStarredStripQueryKey,
   canonicalizeGalleryItemsFilter,
@@ -484,6 +486,28 @@ describe('canonicalizeGalleryItemsFilter under a semantic query', () => {
 
     expect(unfiltered).not.toHaveProperty('starred');
     expect(starredOnly).toEqual({ ...unfiltered, starred: true });
+  });
+});
+
+describe('imageIndexAvailabilityOptions', () => {
+  const pollFor = (state: { status: 'error' | 'success'; data?: { modelName: string | null; state: string } }) => {
+    const { refetchInterval } = imageIndexAvailabilityOptions();
+
+    return typeof refetchInterval === 'function'
+      ? refetchInterval({ state } as unknown as Parameters<typeof refetchInterval>[0])
+      : refetchInterval;
+  };
+
+  it('polls only while the answer can still change on its own', () => {
+    // A model the server keeps re-checking for, or a call that failed, are
+    // worth asking again; a settled answer is not, so a ready index does not
+    // cost a status call every half minute for the whole session.
+    expect(pollFor({ data: { modelName: 'clip', state: 'model_missing' }, status: 'success' })).toBe(
+      IMAGE_INDEX_UNAVAILABLE_POLL_MS
+    );
+    expect(pollFor({ status: 'error' })).toBe(IMAGE_INDEX_UNAVAILABLE_POLL_MS);
+    expect(pollFor({ data: { modelName: null, state: 'ready' }, status: 'success' })).toBe(false);
+    expect(pollFor({ data: { modelName: null, state: 'disabled' }, status: 'success' })).toBe(false);
   });
 });
 

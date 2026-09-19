@@ -184,6 +184,26 @@ describe('saveCanvasToGallery', () => {
     expect(harness.uploadImage.mock.calls[0]?.[1]?.boardId).toBe(expectedBoardId);
   });
 
+  it.each([
+    ['no board is selected', undefined],
+    ['a date bucket is selected', 'by_date:2026-07-15'],
+  ])('saves to the project board when %s', async (_case, selectedBoardId) => {
+    const harness = createHarness();
+    const project = createProject();
+    const gallery = getProjectWidgetInstance(project, 'gallery')!;
+
+    gallery.state.values = { ...gallery.state.values, projectBoardId: 'project-board', selectedBoardId };
+
+    await saveCanvasToGallery({
+      engine: harness.engine,
+      project,
+      region: 'canvas',
+      uploadImage: harness.uploadImage,
+    });
+
+    expect(harness.uploadImage.mock.calls[0]?.[1]?.boardId).toBe('project-board');
+  });
+
   it('omits disabled negative prompts and unsupported models from metadata', async () => {
     const unsupportedModel: GenerateModelConfig = {
       base: 'unsupported',

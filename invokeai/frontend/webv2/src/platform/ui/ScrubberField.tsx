@@ -191,8 +191,9 @@ const isSameExtents = (a: TextExtents | null, b: TextExtents): boolean =>
 
 /**
  * One-row numeric parameter: label left, value right, the whole frame is the
- * track. Pointer down anywhere but the value scrubs (Shift: fine, Alt: stops
- * only); the value is a button that swaps in a text editor; arrows step
+ * track. Dragging anywhere but the value scrubs relative to the current value
+ * — a press alone never moves it (Shift: fine, Alt: stops only); the value is
+ * a button that swaps in a text editor; arrows step
  * (Shift/PageUp/PageDown: ×10, Home/End: bounds); double-click or
  * Backspace/Delete restores `defaultValue`. Owns its label, hint, and help or
  * error line, so it replaces a `Field` + slider pairing outright. Debouncing
@@ -356,15 +357,15 @@ export const ScrubberField = ({
       const rect = root.getBoundingClientRect();
       const trackLeft = rect.left + TRACK_INSET_PX;
       const trackWidth = Math.max(1, rect.width - TRACK_INSET_PX * 2);
-      const valueAt = (clientX: number): number => min + clamp((clientX - trackLeft) / trackWidth, 0, 1) * range;
+      // Unclamped, so a press left of the thumb can still be dragged past the track's end to max.
+      const valueAt = (clientX: number): number => min + ((clientX - trackLeft) / trackWidth) * range;
       const session = new AbortController();
       let latest = value;
       let isPendingTouch = event.pointerType === 'touch';
-      // Once Shift enters a gesture it stays relative (re-anchored on each ratio
-      // change), so neither pressing nor releasing Shift mid-drag jumps.
-      let anchor: { clientX: number; ratio: number; value: number } | null = event.shiftKey
-        ? { clientX: event.clientX, ratio: FINE_DRAG_RATIO, value }
-        : null;
+      // A gesture is relative to the value it started from, wherever the press
+      // lands (like a native iOS slider): re-anchoring on each ratio change means
+      // neither pressing nor releasing Shift mid-drag jumps.
+      let anchor = { clientX: event.clientX, ratio: event.shiftKey ? FINE_DRAG_RATIO : 1, value };
 
       pointerSessionRef.current = session;
       setIsDragging(true);
@@ -380,19 +381,13 @@ export const ScrubberField = ({
 
       type PointerSample = { altKey: boolean; clientX: number; pointerId: number; shiftKey: boolean };
       const resolve = (pointer: PointerSample): number => {
-        let raw: number;
+        const ratio = pointer.shiftKey ? FINE_DRAG_RATIO : 1;
 
-        if (pointer.shiftKey || anchor) {
-          const ratio = pointer.shiftKey ? FINE_DRAG_RATIO : 1;
-
-          if (anchor?.ratio !== ratio) {
-            anchor = { clientX: pointer.clientX, ratio, value: latest };
-          }
-
-          raw = anchor.value + (valueAt(pointer.clientX) - valueAt(anchor.clientX)) * ratio;
-        } else {
-          raw = valueAt(pointer.clientX);
+        if (anchor.ratio !== ratio) {
+          anchor = { clientX: pointer.clientX, ratio, value: latest };
         }
+
+        const raw = anchor.value + (valueAt(pointer.clientX) - valueAt(anchor.clientX)) * ratio;
 
         return pointer.altKey && markValues?.length ? nearestMark(raw, markValues) : snapToStep(raw);
       };
@@ -427,11 +422,6 @@ export const ScrubberField = ({
         pointerSessionRef.current = null;
         setIsDragging(false);
       };
-
-      // A fine gesture starts from the current value, never from the press position.
-      if (!event.shiftKey) {
-        apply(event);
-      }
 
       window.addEventListener('pointermove', apply, { signal: session.signal });
       window.addEventListener('pointerup', end, { signal: session.signal });

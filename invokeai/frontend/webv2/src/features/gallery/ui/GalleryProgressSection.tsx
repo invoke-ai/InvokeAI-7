@@ -126,7 +126,7 @@ const GalleryProgressGrid = ({
   getScrollElement(): HTMLDivElement | null;
   pinnedSessionId: string | null;
   liveFollowEnabled: boolean;
-  onFollow(id: string): void;
+  onFollow(id: string, options: { revealPreview: boolean }): void;
   restoreFocus(): void;
 }) => {
   const { columns, tileSize, headerHeight, paddingBottom, rowCount, rowHeight } = layout;
@@ -181,7 +181,7 @@ const GalleryProgressTile = ({
   size: number;
   fit: GalleryThumbnailFit;
   selected: boolean;
-  onFollow(id: string): void;
+  onFollow(id: string, options: { revealPreview: boolean }): void;
   restoreFocus(): void;
 }) => {
   const { t } = useTranslation();
@@ -207,7 +207,7 @@ const GalleryProgressTile = ({
           : progress?.message || t('widgets.gallery.progressPreparing');
   const follow = useCallback(() => {
     if (session.state === 'running') {
-      onFollow(session.id);
+      onFollow(session.id, { revealPreview: true });
     }
   }, [onFollow, session.id, session.state]);
   const buttonRef = useCallback(

@@ -1,12 +1,11 @@
 import type { GalleryItem, GalleryItemRef } from '@features/gallery/core/items';
+import type { GalleryNavigationDirection, GalleryNavigationEntry } from '@features/gallery/core/selection';
 
-import { shouldStarSelection, toGalleryItemKey, toGalleryItemRef } from '@features/gallery/core/items';
+import { shouldStarSelection, toGalleryItemRef } from '@features/gallery/core/items';
+import { getGalleryNavigationStep } from '@features/gallery/core/selection';
 import { useEffect, useEffectEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import type { GalleryGridNavDirection, GalleryGridNavigation } from './galleryGridLayout';
-
-import { getGalleryGridNavigationStep } from './galleryGridLayout';
 import { useGalleryUi } from './GalleryUiContext';
 import { useGalleryWidget } from './GalleryWidgetContext';
 
@@ -24,7 +23,7 @@ const GALLERY_HOTKEYS = [
   ['gallery.deleteSelection', 'widgets.gallery.commands.deleteSelection', null, ['delete', 'backspace']],
   ['gallery.starImage', 'widgets.gallery.commands.toggleStarImage', null, ['.']],
   ['gallery.toggleStarredOnly', 'widgets.gallery.commands.toggleStarredOnly', null, []],
-] as const satisfies readonly (readonly [string, string, GalleryGridNavDirection | null, readonly string[]])[];
+] as const satisfies readonly (readonly [string, string, GalleryNavigationDirection | null, readonly string[]])[];
 
 /**
  * Registers the grid's commands and their default keys.
@@ -36,36 +35,39 @@ const GALLERY_HOTKEYS = [
 export const useGalleryGridHotkeys = ({
   actionSelectionRefs,
   columnCount,
+  cursorKey,
   loadedItems,
-  navigation,
-  scrollToItemIndex,
+  navigationSections,
+  scrollToEntry,
 }: {
   actionSelectionRefs: GalleryItemRef[];
   columnCount: number;
+  /** Where the arrow keys step from: the followed session, else the selected item. */
+  cursorKey: string | null;
   /** Everything on hand for star-state lookups, strip included. */
   loadedItems: readonly GalleryItem[];
-  /** The arrow-key index space: shown strip cells, then the listing. */
-  navigation: GalleryGridNavigation;
-  scrollToItemIndex: (itemIndex: number) => void;
+  /** The arrow-key sections in visual order: in progress, the starred strip, the listing. */
+  navigationSections: readonly (readonly GalleryNavigationEntry[])[];
+  scrollToEntry: (entry: GalleryNavigationEntry) => void;
 }) => {
   const { t } = useTranslation();
   const { actions, gallery, itemActions, runtime } = useGalleryWidget();
-  const { gallery: galleryCommands } = useGalleryUi();
+  const { followProgressSession, gallery: galleryCommands } = useGalleryUi();
 
-  const navigate = useEffectEvent((direction: GalleryGridNavDirection) => {
-    if (navigation.items.length === 0) {
+  const navigate = useEffectEvent((direction: GalleryNavigationDirection) => {
+    const entry = getGalleryNavigationStep(navigationSections, cursorKey, direction, columnCount);
+
+    if (!entry) {
       return;
     }
 
-    const selectedIndex = navigation.items.findIndex((item) => toGalleryItemKey(item) === gallery.selectedItemKey);
-    const nextIndex =
-      selectedIndex === -1 ? 0 : getGalleryGridNavigationStep(navigation, columnCount, selectedIndex, direction);
-    const nextItem = navigation.items[nextIndex];
-
-    if (nextItem && (nextIndex !== selectedIndex || selectedIndex === -1)) {
-      actions.selectItem(nextItem);
-      scrollToItemIndex(nextIndex);
+    if (entry.kind === 'session') {
+      followProgressSession(entry.id, { revealPreview: false });
+    } else {
+      actions.selectItem(entry.item);
     }
+
+    scrollToEntry(entry);
   });
 
   const executeGalleryHotkey = useEffectEvent((commandId: string) => {

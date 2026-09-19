@@ -53,6 +53,7 @@ export const DEFAULT_PROJECT_SETTINGS: ProjectSettings = {
 };
 
 export const DEFAULT_PREFERENCES: WorkbenchPreferences = {
+  alphaNoticeAcknowledged: false,
   autoSwitchInvocationRoute: true,
   confirmImageDeletion: true,
   customHotkeys: {},
@@ -345,6 +346,10 @@ export const normalizeWorkbenchPreferences = (preferences?: WorkbenchPreferences
         : DEFAULT_PREFERENCES.queueJobsScope,
   highContrast:
     typeof preferences?.highContrast === 'boolean' ? preferences.highContrast : DEFAULT_PREFERENCES.highContrast,
+  alphaNoticeAcknowledged:
+    typeof preferences?.alphaNoticeAcknowledged === 'boolean'
+      ? preferences.alphaNoticeAcknowledged
+      : DEFAULT_PREFERENCES.alphaNoticeAcknowledged,
   reduceMotion:
     typeof preferences?.reduceMotion === 'boolean' ? preferences.reduceMotion : DEFAULT_PREFERENCES.reduceMotion,
   showFocusRegionHighlight:

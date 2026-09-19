@@ -1,11 +1,11 @@
-import type { LibraryWorkflowLoadRequest } from './workflowUiStore';
+import type { WorkflowLoadRequest, WorkflowLoadSource } from './workflowUiStore';
 
-import { clearPendingLibraryWorkflowLoad, workflowUiStore } from './workflowUiStore';
+import { clearPendingWorkflowLoad, workflowUiStore } from './workflowUiStore';
 
-export interface PendingLibraryWorkflowLoadRuntimeDeps {
+export interface PendingWorkflowLoadRuntimeDeps {
   clearRequest: (requestId: number) => void;
-  getRequest: () => LibraryWorkflowLoadRequest | null;
-  load: (workflowId: string) => Promise<void>;
+  getRequest: () => WorkflowLoadRequest | null;
+  load: (source: WorkflowLoadSource) => Promise<void>;
   subscribe: (listener: () => void) => () => void;
 }
 
@@ -14,7 +14,7 @@ export interface PendingLibraryWorkflowLoadRuntimeDeps {
  * is in flight, and compare-and-clear prevents an old completion from
  * consuming that newer request.
  */
-export const startPendingLibraryWorkflowLoadRuntime = (deps: PendingLibraryWorkflowLoadRuntimeDeps): (() => void) => {
+export const startPendingWorkflowLoadRuntime = (deps: PendingWorkflowLoadRuntimeDeps): (() => void) => {
   let isRunning = true;
   let inFlight = false;
 
@@ -27,7 +27,7 @@ export const startPendingLibraryWorkflowLoadRuntime = (deps: PendingLibraryWorkf
 
     inFlight = true;
     void deps
-      .load(request.workflowId)
+      .load(request.source)
       .catch(() => undefined)
       .finally(() => {
         if (!isRunning) {
@@ -49,10 +49,10 @@ export const startPendingLibraryWorkflowLoadRuntime = (deps: PendingLibraryWorkf
   };
 };
 
-export const startWorkflowUiPendingLoadRuntime = (load: (workflowId: string) => Promise<void>): (() => void) =>
-  startPendingLibraryWorkflowLoadRuntime({
-    clearRequest: clearPendingLibraryWorkflowLoad,
-    getRequest: () => workflowUiStore.getSnapshot().pendingLibraryWorkflowLoad,
+export const startWorkflowUiPendingLoadRuntime = (load: (source: WorkflowLoadSource) => Promise<void>): (() => void) =>
+  startPendingWorkflowLoadRuntime({
+    clearRequest: clearPendingWorkflowLoad,
+    getRequest: () => workflowUiStore.getSnapshot().pendingWorkflowLoad,
     load,
     subscribe: workflowUiStore.subscribe,
   });

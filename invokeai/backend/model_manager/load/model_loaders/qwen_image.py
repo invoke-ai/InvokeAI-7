@@ -46,6 +46,7 @@ from invokeai.backend.quantization.fp8_scaled import (
 )
 from invokeai.backend.quantization.gguf.ggml_tensor import GGMLTensor
 from invokeai.backend.quantization.gguf.loaders import gguf_sd_loader
+from invokeai.backend.quantization.int8_convrot import reject_int8_layers_a_plain_fold_cannot_decode
 from invokeai.backend.quantization.nvfp4 import install_nvfp4_layers, pop_nvfp4_layers, predict_nvfp4_install_size
 from invokeai.backend.util.devices import TorchDevice
 from invokeai.backend.util.state_dict_loading import load_state_dict_ignoring_extras, log_unexpected_keys
@@ -473,6 +474,11 @@ class QwenVLEncoderCheckpointLoader(ModelLoader):
             sd, header_layers=parse_quantization_metadata(read_safetensors_metadata(model_path, logger))
         )
 
+        # Ahead of the config fetch and the reservation below, rather than where the fold reaches it:
+        # a load that cannot finish should not go to the network first, nor evict the cache for room
+        # it will never use.
+        reject_int8_layers_a_plain_fold_cannot_decode(sd, "Qwen2.5-VL encoder checkpoint")
+
         # Fetch the architecture config from HuggingFace (small, ~5KB).
         # Offline fallback: tries cache first, downloads only if missing.
         try:
@@ -511,7 +517,7 @@ class QwenVLEncoderCheckpointLoader(ModelLoader):
         # Dequantize ComfyUI-style fp8 weights, then strip the now-unused quantization
         # metadata (`scale_input` is the activation scale ComfyUI's fp8 matmul kernels
         # use at runtime — we run the encoder in bf16 after dequantization).
-        dequantized_count = _dequantize_comfyui_fp8(sd, model_dtype)
+        dequantized_count = _dequantize_comfyui_fp8(sd, model_dtype, "Qwen2.5-VL encoder checkpoint")
         if dequantized_count > 0:
             logger.info(f"Dequantized {dequantized_count} ComfyUI-quantized weights")
         _strip_quantization_metadata(sd)

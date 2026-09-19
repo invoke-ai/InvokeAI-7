@@ -84,6 +84,7 @@ const createGallery = (settings: Partial<GallerySettings> = {}): GalleryStateVie
     searchTerm: '',
     selectedBoardId: 'dogs',
     semanticImageQuery: null,
+    semanticSearchText: null,
     selectedItemKey: null,
     selectedItemKeys: [],
     settings: { ...DEFAULT_GALLERY_SETTINGS, showArchivedBoards: true, showDateBoards: true, ...settings },

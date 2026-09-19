@@ -140,14 +140,28 @@ export const groupModelsByType = (models: ModelConfig[]): ModelGroup[] => {
 };
 
 /** Candidate, sort, and grouping rules shared by every model picker instance. */
+const isModelPickerCandidate = (
+  model: ModelConfig,
+  allowedTypes: ReadonlySet<string>,
+  options: Pick<ModelPickerOptions, 'excludeKeys' | 'filter'>
+): boolean =>
+  allowedTypes.has(model.type) &&
+  !options.excludeKeys?.has(model.key) &&
+  (options.filter ? options.filter(model) : true);
+
+/** Whether the picker would list anything at all — the base filter aside, which only narrows a non-empty list. */
+export const hasModelPickerCandidates = (
+  models: readonly ModelConfig[],
+  options: Pick<ModelPickerOptions, 'excludeKeys' | 'filter' | 'modelTypes'>
+): boolean => {
+  const allowedTypes = new Set(options.modelTypes);
+
+  return models.some((model) => isModelPickerCandidate(model, allowedTypes, options));
+};
+
 export const getModelPickerGroups = (models: ModelConfig[], options: ModelPickerOptions): ModelPickerResult => {
   const allowedTypes = new Set(options.modelTypes);
-  const candidates = models.filter(
-    (model) =>
-      allowedTypes.has(model.type) &&
-      !options.excludeKeys?.has(model.key) &&
-      (options.filter ? options.filter(model) : true)
-  );
+  const candidates = models.filter((model) => isModelPickerCandidate(model, allowedTypes, options));
   // Chips are derived from candidates — before the base filter — so the chip
   // row stays stable while the user toggles chips.
   const availableBases = collectBasesForDisplay(candidates);

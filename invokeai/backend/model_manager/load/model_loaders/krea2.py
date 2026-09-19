@@ -128,6 +128,11 @@ def _remap_native_layer_paths(layer_names: Any) -> dict[str, str]:
     scales are extracted after the state dict has been renamed. Rather than restating the rename
     rules - which would drift - each name is pushed through the real converter as a lone
     ``<name>.weight`` entry and the resulting key is read back.
+
+    That assumes the module stores its parameter as ``weight``, which is true of every Linear and so
+    of every nvfp4 layer, the one caller left -- and false of Krea-2's norms (``scale``) and
+    modulation tables (``lin``). A caller that also has norms to place reads the conversion's own
+    ``key_map`` instead of probing it; see the fp8 branch of ``_load_from_singlefile``.
     """
     import torch
 
@@ -458,10 +463,24 @@ class Krea2CheckpointModel(ModelLoader):
                 # (e.g. `last.linear.weight_scale`) would be left behind at its old path while the
                 # weight moves — and then silently dropped, leaving the weight unscaled.
                 detached = detach_layer_sidechannel(sd)
-                sd = _convert_krea2_native_to_diffusers(sd)
-                # The metadata and the detached scales still name layers natively; rename both the same
-                # way or the per-layer flags (notably full_precision_matrix_mult) match nothing.
-                path_map = _remap_native_layer_paths({*detached, *layer_hints})
+                key_map = {}
+                sd = _convert_krea2_native_to_diffusers(sd, key_map=key_map)
+                # The metadata and the detached scales still name layers natively; rename both the way
+                # the conversion just renamed their weights, or the scales are orphaned and the per-layer
+                # flags (notably full_precision_matrix_mult) match nothing. Read from what the converter
+                # did rather than inferred by probing it: a native norm stores its parameter as `scale`,
+                # so `blocks.0.prenorm.scale` became `transformer_blocks.0.norm1.weight`, and a probe of
+                # `blocks.0.prenorm.weight` matches no norm rule at all.
+                #
+                # Only a destination ending in `.weight` names a module a scale can hang on.
+                # `blocks.0.mod.lin` became `transformer_blocks.0.scale_shift_table`, whose stem is a real
+                # module; mapping it would reattach the scale there, count it as placed, and let
+                # extraction drop it in silence. Left unmapped, it is reported below instead.
+                path_map = {
+                    native.rsplit(".", 1)[0]: converted[: -len(".weight")]
+                    for native, converted in key_map.items()
+                    if "." in native and converted.endswith(".weight")
+                }
                 orphaned = reattach_layer_sidechannel(sd, detached, path_map)
                 if orphaned:
                     # INFO, not DEBUG: a dropped scale leaves its weight off by 1/weight_scale with no

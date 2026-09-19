@@ -4,7 +4,7 @@ import type { PickerGroup, PickerOptionState } from '@platform/ui/Picker';
 
 import { Badge, Box, HStack, Icon, Image, Popover, Portal, Spacer, Stack, Text } from '@chakra-ui/react';
 import { getModelBaseColorPalette, getModelBaseLabel, getModelBaseLongLabel } from '@features/models/core/baseIdentity';
-import { getModelPickerGroups } from '@features/models/core/library';
+import { getModelPickerGroups, hasModelPickerCandidates } from '@features/models/core/library';
 import { formatBytes, getModelTypeLabel, getModelTypePluralLabel } from '@features/models/core/taxonomy';
 import { getModelImageUrl } from '@features/models/data/api';
 import { ensureModelsLoaded, useModelsSelector } from '@features/models/data/modelsStore';
@@ -119,7 +119,7 @@ export const ModelSelect = ({
   const loadError = useModelsSelector((snapshot) => snapshot.error);
   const loadStatus = useModelsSelector((snapshot) => snapshot.status);
   const [isOpen, setIsOpen] = useState(false);
-  const [lastDisabled, setLastDisabled] = useState(disabled);
+  const [lastDisabled, setLastDisabled] = useState(Boolean(disabled));
 
   const pickerId = id ?? `models:${modelTypes.join('+')}`;
   const isCompact = useModelsUiSelector((snapshot) => snapshot.pickerCompactViews[pickerId] ?? false);
@@ -139,10 +139,19 @@ export const ModelSelect = ({
     void ensureModelsLoaded();
   });
 
-  if (disabled !== lastDisabled) {
-    setLastDisabled(disabled);
+  // Nothing to offer once the library is known: the trigger disables and says
+  // so, rather than opening an empty list. A stale selection stays clearable.
+  const hasCandidates = useMemo(
+    () => loadStatus !== 'loaded' || hasModelPickerCandidates(models, { excludeKeys, filter, modelTypes }),
+    [excludeKeys, filter, loadStatus, modelTypes, models]
+  );
+  const isEmpty = !hasCandidates && !value;
+  const isInert = disabled || isEmpty;
 
-    if (disabled) {
+  if (isInert !== lastDisabled) {
+    setLastDisabled(isInert);
+
+    if (isInert) {
       setIsOpen(false);
     }
   }
@@ -224,7 +233,7 @@ export const ModelSelect = ({
           strategy: 'fixed',
         }}
         onOpenChange={(event) => {
-          if (disabled) {
+          if (isInert) {
             setIsOpen(false);
             return;
           }
@@ -240,7 +249,7 @@ export const ModelSelect = ({
               className={className}
               borderColor={invalid ? undefined : isOpen ? 'accent.solid' : 'border'}
               colorPalette={invalid ? 'red' : 'gray'}
-              disabled={disabled}
+              disabled={isInert}
               justifyContent="space-between"
               minW="0"
               pe={canClear ? '7' : '2'}
@@ -259,10 +268,12 @@ export const ModelSelect = ({
                 <ModelButtonContent model={selectedModel} />
               ) : (
                 <Text as="span" color="fg.muted" fontSize="xs" minW="0" truncate>
-                  {placeholder ?? t('models.scopeSelect', { scope: scopeLabel })}
+                  {isEmpty
+                    ? t('models.scopeNoCompatibleInstalled', { scope: scopeLabel })
+                    : (placeholder ?? t('models.scopeSelect', { scope: scopeLabel }))}
                 </Text>
               )}
-              {canClear ? null : <Icon as={ChevronDownIcon} boxSize="3" flexShrink={0} />}
+              {canClear || isEmpty ? null : <Icon as={ChevronDownIcon} boxSize="3" flexShrink={0} />}
             </Button>
           </Popover.Trigger>
           {canClear ? (

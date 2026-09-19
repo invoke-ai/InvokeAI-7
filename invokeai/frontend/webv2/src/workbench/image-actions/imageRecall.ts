@@ -38,6 +38,8 @@ export interface ImageRecallCapabilities {
   seed: boolean;
   dimensions: boolean;
   clipSkip: boolean;
+  /** The image embeds the workflow that made it, so it can be loaded into the editor. */
+  workflow: boolean;
 }
 
 export const EMPTY_IMAGE_RECALL_CAPABILITIES: ImageRecallCapabilities = {
@@ -47,6 +49,7 @@ export const EMPTY_IMAGE_RECALL_CAPABILITIES: ImageRecallCapabilities = {
   prompts: false,
   remix: false,
   seed: false,
+  workflow: false,
 };
 
 type RecalledField =
@@ -533,6 +536,7 @@ export const getImageRecallCapabilities = ({
     prompts: hasPrompts,
     remix: hasNonSeedMetadata && isImageRecallKindAvailable('remix'),
     seed: hasSeed,
+    workflow: image.hasWorkflow === true,
   };
 };
 

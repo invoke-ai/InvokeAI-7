@@ -25,6 +25,7 @@ from invokeai.backend.model_manager.taxonomy import (
     ModelType,
     SubModelType,
 )
+from invokeai.backend.quantization.fp8_scaled import reject_quantized_side_channel
 from invokeai.backend.quantization.sdnq.detection import is_sdnq_folder
 from invokeai.backend.quantization.sdnq.loaders import raise_on_incomplete_sdnq_load, sdnq_sd_loader
 from invokeai.backend.util.state_dict_loading import load_state_dict_ignoring_extras
@@ -288,6 +289,7 @@ class VAELoader(GenericDiffusersLoader):
         patch_wan_causal_conv3d_for_rocm()
         dtype = _wan_family_dtype(self._torch_dtype)
         sd = _read_checkpoint(config.path)
+        reject_quantized_side_channel(sd, f"Wan VAE checkpoint {Path(config.path).name}")
 
         for k in list(sd.keys()):
             if sd[k].is_floating_point():
@@ -355,7 +357,9 @@ class VAELoader(GenericDiffusersLoader):
         patch_wan_causal_conv3d_for_rocm()
 
         dtype = _wan_family_dtype(self._torch_dtype)
-        sd = convert_wan_vae_to_diffusers(_read_checkpoint(path))
+        sd = _read_checkpoint(path)
+        reject_quantized_side_channel(sd, f"Wan VAE checkpoint {Path(path).name}")
+        sd = convert_wan_vae_to_diffusers(sd)
         for k in list(sd.keys()):
             if sd[k].is_floating_point():
                 sd[k] = sd[k].to(dtype)
@@ -407,6 +411,7 @@ class VAELoader(GenericDiffusersLoader):
             )
 
         sd = _read_checkpoint(config.path)
+        reject_quantized_side_channel(sd, f"Qwen-Image VAE checkpoint {Path(config.path).name}")
 
         # The same autoencoder as the Wan-family layout above, so the same precision policy.
         dtype = _wan_family_dtype(self._torch_dtype)

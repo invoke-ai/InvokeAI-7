@@ -49,6 +49,7 @@ from invokeai.backend.quantization.fp8_scaled import (
     INPUT_SCALE_SUFFIXES,
     WEIGHT_SCALE_SUFFIXES,
     is_castable_float,
+    iter_weight_scale_pairs,
 )
 
 CONVROT_GROUP_SIZE = 256
@@ -320,6 +321,67 @@ def extract_int8_convrot_markers(sd: dict[str, Any]) -> dict[str, dict[str, Any]
         markers[key[: -len(COMFY_QUANT_SUFFIX)]] = marker
         del sd[key]
     return markers
+
+
+def reject_int8_layers_a_plain_fold_cannot_decode(sd: Mapping[str, Any], what: str = "This checkpoint") -> None:
+    """Refuse an ``int8_tensorwise`` layer to a fold that only multiplies the scale in.
+
+    ``int8_tensorwise`` and ComfyUI's scaled fp8 share a key layout — a ``.weight`` beside a
+    ``.weight_scale`` — so a loader with no int8 branch folds one as if it were the other. The scale
+    even goes down the right axis, which is what makes this quiet: the result has the weight's
+    shape, its dtype and roughly its magnitude. What is missing is the inverse Hadamard rotation
+    ``convrot`` applies along the input dim. Measured on a 64x256 layer, the folded weight
+    correlates with the one the checkpoint encodes at **0.07**, against 0.9999 for the real decode.
+
+    Only the rotated case is refused. With ``convrot`` off, ``codes * scale`` *is* the whole decode
+    — bit-identical to :class:`Int8ConvrotLinear` with ``convrot=False``, checked — so where a fold
+    actually runs, such a build folds to the right weight and must keep doing so. (It does not
+    follow that it loads: the Mistral encoder keeps fp8 rather than folding on any CUDA device, and
+    there an unrotated int8 weight is left untouched and dies later in ``load_state_dict``. That is
+    how it behaved before this check and is not what this check is about.) An int8 weight with no
+    marker is refused too: nothing says whether it was rotated, and every published build marks
+    every one of its int8 weights.
+
+    Read from the *per-tensor* marker only. The safetensors header names formats as well, but no
+    observed header entry carries ``convrot`` or the group size (see ``flux.py``, where the
+    per-layer marker wins for that reason), so a header entry is not evidence that a layer is safe
+    to fold — consulting one
+    would let a header-named rotated build straight through. Every caller here still has the markers
+    in ``sd``: the two folds run before anything pops them, and the Mistral seam checks ahead of
+    ``extract_fp8_scaled_layers`` for the same reason.
+
+    Narrower than :func:`reject_unmarked_int8_weights` in two ways, because it runs before a model
+    exists: it sees only int8 weights that have a scale beside them, and it cannot skip weights the
+    model will discard. A merged file bundling an int8 submodel a non-strict load would drop is
+    therefore refused rather than ignored.
+    """
+    rotated: list[str] = []
+    unmarked: list[str] = []
+    for weight_key, _scale_key in iter_weight_scale_pairs(sd):
+        weight = sd[weight_key]
+        if getattr(weight, "dtype", None) is not torch.int8:
+            continue
+        path = weight_key[: -len(".weight")]
+        blob = sd.get(f"{path}{COMFY_QUANT_SUFFIX}")
+        marker = parse_comfy_quant_marker(blob) if blob is not None else None
+        if not marker or marker.get("format") != INT8_TENSORWISE_FORMAT:
+            unmarked.append(path)
+        elif marker.get("convrot"):
+            rotated.append(path)
+
+    if rotated:
+        raise ValueError(
+            f"{what} carries {len(rotated)} int8_tensorwise layer(s) quantized with convrot (e.g. "
+            f"{', '.join(sorted(rotated)[:3])}), and this loader has no int8 branch. Folding the scale in "
+            "without the inverse rotation produces a weight of the right shape that bears no relation to the "
+            "one stored. Use the fp8 or bf16 build of this checkpoint."
+        )
+    if unmarked:
+        raise ValueError(
+            f"{what} carries {len(unmarked)} int8 weight(s) with no int8_tensorwise marker (e.g. "
+            f"{', '.join(sorted(unmarked)[:3])}), so nothing says whether they were rotated. Refusing rather "
+            "than guessing: read unrotated, a rotated weight loads cleanly and generates noise."
+        )
 
 
 def check_int8_scale_layout(path: str, weight: torch.Tensor, scale: torch.Tensor) -> None:

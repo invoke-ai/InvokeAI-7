@@ -638,8 +638,9 @@ describe('workbench widget region defaults', () => {
       'gallery',
       'queue',
     ]);
+    // Edit folds the editors into Layers and Video keeps a still-free rail.
     for (const preset of layoutPresets) {
-      if (preset.id !== 'edit') {
+      if (preset.id !== 'edit' && preset.id !== 'video') {
         expect(preset.snapshot.widgetRegions.right.instanceIds).toContain('image-map');
       }
     }
@@ -4730,6 +4731,117 @@ describe('workbenchReducer Phase 5 generation flow', () => {
     expect(queueItem.snapshot.galleryBoardId).toBe('backend-board-id');
   });
 
+  it('sends gallery submissions to the project board until a board is picked', () => {
+    let state = createInitialWorkbenchState();
+
+    state = workbenchReducer(state, {
+      boardId: 'project-board',
+      projectId: getActiveProject(state).id,
+      type: 'setGalleryProjectBoardId',
+    });
+    state = workbenchReducer(state, { destination: 'gallery', type: 'setInvocationDestination' });
+    state = primeGenerate(state);
+    state = submitGenerate(state);
+
+    expect(getActiveProject(state).queue.items[0]?.snapshot.galleryBoardId).toBe('project-board');
+  });
+
+  it('folds a stream of workflow field edits into one undo step and starts another after a pause', () => {
+    vi.useFakeTimers({ now: new Date('2026-06-10T00:00:00.000Z') });
+
+    try {
+      let state = createInitialWorkbenchState();
+      const setValue = (fieldName: string, value: number) =>
+        workbenchReducer(state, {
+          action: { fieldName, nodeId: 'node-1', type: 'setFieldValue', value },
+          type: 'applyProjectGraphAction',
+        });
+      const fieldValue = (fieldName: string) => {
+        const node = getActiveProject(state).projectGraph.nodes[0];
+
+        return node?.type === 'invocation' ? node.data.inputs[fieldName]?.value : undefined;
+      };
+      const past = () => getActiveProject(state).undoRedo.past;
+
+      state = workbenchReducer(state, {
+        action: {
+          node: {
+            data: {
+              inputs: {},
+              isIntermediate: true,
+              isOpen: true,
+              label: '',
+              nodePack: 'invokeai',
+              notes: '',
+              type: 'add',
+              useCache: true,
+              version: '1.0.0',
+            },
+            id: 'node-1',
+            position: { x: 0, y: 0 },
+            type: 'invocation',
+          },
+          type: 'addNode',
+        },
+        type: 'applyProjectGraphAction',
+      });
+      const stepsAfterAdd = past().length;
+
+      // Keystrokes a second apart keep one edit going: the window slides with each keystroke.
+      state = setValue('a', 1);
+      vi.setSystemTime(new Date('2026-06-10T00:00:01.000Z'));
+      state = setValue('a', 12);
+      vi.setSystemTime(new Date('2026-06-10T00:00:02.000Z'));
+      state = setValue('a', 123);
+
+      expect(past()).toHaveLength(stepsAfterAdd + 1);
+      expect(past().at(-1)?.label).toBe('Edit workflow field value');
+
+      // A pause, or another field, opens a new step.
+      vi.setSystemTime(new Date('2026-06-10T00:00:05.000Z'));
+      state = setValue('a', 3);
+      state = setValue('b', 7);
+
+      expect(past()).toHaveLength(stepsAfterAdd + 3);
+
+      state = workbenchReducer(state, { type: 'undoProjectChange' });
+      expect(fieldValue('b')).toBeUndefined();
+      expect(fieldValue('a')).toBe(3);
+
+      state = workbenchReducer(state, { type: 'undoProjectChange' });
+      expect(fieldValue('a')).toBe(123);
+
+      state = workbenchReducer(state, { type: 'undoProjectChange' });
+      expect(fieldValue('a')).toBeUndefined();
+
+      // Redo brings the whole burst back at once, and a fresh edit after it starts its own step.
+      state = workbenchReducer(state, { type: 'redoProjectChange' });
+      expect(fieldValue('a')).toBe(123);
+
+      state = setValue('a', 4);
+      expect(past()).toHaveLength(stepsAfterAdd + 2);
+      expect(getActiveProject(state).undoRedo.future).toHaveLength(0);
+
+      // An undo inside the window ends the burst: the step the user undid back to stays its own step.
+      state = setValue('b', 8);
+      state = workbenchReducer(state, { type: 'undoProjectChange' });
+      state = setValue('a', 5);
+
+      expect(past()).toHaveLength(stepsAfterAdd + 3);
+      state = workbenchReducer(state, { type: 'undoProjectChange' });
+      expect(fieldValue('a')).toBe(4);
+
+      // Node moves are not history: dragging a node around leaves the steps alone.
+      state = workbenchReducer(state, {
+        action: { nodeId: 'node-1', position: { x: 10, y: 10 }, type: 'setNodePosition' },
+        type: 'applyProjectGraphAction',
+      });
+      expect(past()).toHaveLength(stepsAfterAdd + 2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('stores full selected gallery image data for Preview widget', () => {
     let state = createInitialWorkbenchState();
     const image = createGalleryImageItem('backend-selected.png');
@@ -4740,6 +4852,163 @@ describe('workbenchReducer Phase 5 generation flow', () => {
       'image:backend-selected.png'
     );
     expect(getProjectWidgetValues(getActiveProject(state), 'gallery').selectedImage).toEqual(image);
+  });
+  describe('gallery semantic search mode', () => {
+    const galleryValues = (state: WorkbenchState) => getProjectWidgetValues(getActiveProject(state), 'gallery');
+
+    it('entering carries the text across and ranks it at once; leaving carries it back', () => {
+      // The sparkle changes what the words mean, not whether they are there.
+      // A click is deliberate, so entering applies the ranking immediately
+      // rather than waiting for a typing pause; leaving drops the ranking
+      // because metadata search has its own listing.
+      let state = createInitialWorkbenchState();
+
+      state = workbenchReducer(state, { searchTerm: ' sunset ', type: 'setGallerySearchTerm' });
+      state = workbenchReducer(state, { page: 3, type: 'setGalleryPage' });
+      state = workbenchReducer(state, { enabled: true, type: 'setGallerySemanticSearchMode' });
+
+      expect(galleryValues(state)).toMatchObject({
+        galleryPage: 0,
+        searchTerm: '',
+        semanticImageQuery: { kind: 'text', query: 'sunset' },
+        semanticSearchText: ' sunset ',
+      });
+
+      state = workbenchReducer(state, { page: 2, type: 'setGalleryPage' });
+      state = workbenchReducer(state, { enabled: false, type: 'setGallerySemanticSearchMode' });
+
+      expect(galleryValues(state)).toMatchObject({
+        galleryPage: 0,
+        searchTerm: ' sunset ',
+        semanticImageQuery: null,
+        semanticSearchText: null,
+      });
+    });
+
+    it('entering with an empty field ranks nothing, and re-entering changes nothing', () => {
+      let state = createInitialWorkbenchState();
+
+      state = workbenchReducer(state, { enabled: true, type: 'setGallerySemanticSearchMode' });
+
+      expect(galleryValues(state)).toMatchObject({ semanticImageQuery: null, semanticSearchText: '' });
+      expect(workbenchReducer(state, { enabled: true, type: 'setGallerySemanticSearchMode' })).toBe(state);
+
+      const initial = createInitialWorkbenchState();
+
+      expect(workbenchReducer(initial, { enabled: false, type: 'setGallerySemanticSearchMode' })).toBe(initial);
+    });
+
+    it('commits only the text the field still holds', () => {
+      // Commits arrive on a timer. One scheduled against text that has since
+      // been edited, or a field that has since been cleared, must not apply.
+      let state = createInitialWorkbenchState();
+
+      state = workbenchReducer(state, { enabled: true, type: 'setGallerySemanticSearchMode' });
+      state = workbenchReducer(state, { text: 'sun', type: 'setGallerySemanticSearchText' });
+      state = workbenchReducer(state, { page: 2, type: 'setGalleryPage' });
+
+      expect(galleryValues(state).semanticSearchText).toBe('sun');
+      expect(workbenchReducer(state, { text: 'su', type: 'commitGallerySemanticSearch' })).toBe(state);
+
+      state = workbenchReducer(state, { text: 'sun', type: 'commitGallerySemanticSearch' });
+
+      expect(galleryValues(state)).toMatchObject({
+        galleryPage: 0,
+        semanticImageQuery: { kind: 'text', query: 'sun' },
+        semanticSearchText: 'sun',
+      });
+
+      // Blank text is no ranking; a whitespace edit is not a new ranking and
+      // so leaves the page where the user has paged to.
+      state = workbenchReducer(state, { page: 4, type: 'setGalleryPage' });
+      state = workbenchReducer(state, { text: 'sun ', type: 'setGallerySemanticSearchText' });
+
+      const paged = state;
+
+      state = workbenchReducer(state, { text: 'sun ', type: 'commitGallerySemanticSearch' });
+
+      expect(state).toBe(paged);
+
+      state = workbenchReducer(state, { text: '  ', type: 'setGallerySemanticSearchText' });
+      state = workbenchReducer(state, { text: '  ', type: 'commitGallerySemanticSearch' });
+
+      expect(galleryValues(state)).toMatchObject({
+        galleryPage: 0,
+        semanticImageQuery: null,
+        semanticSearchText: '  ',
+      });
+    });
+
+    it('ignores text edits and late commits once semantic mode is left', () => {
+      let state = createInitialWorkbenchState();
+
+      expect(workbenchReducer(state, { text: 'sun', type: 'setGallerySemanticSearchText' })).toBe(state);
+
+      state = workbenchReducer(state, { enabled: true, type: 'setGallerySemanticSearchMode' });
+      state = workbenchReducer(state, { text: 'sun', type: 'setGallerySemanticSearchText' });
+      state = workbenchReducer(state, { enabled: false, type: 'setGallerySemanticSearchMode' });
+
+      expect(workbenchReducer(state, { text: 'sun', type: 'commitGallerySemanticSearch' })).toBe(state);
+      expect(galleryValues(state)).toMatchObject({
+        searchTerm: 'sun',
+        semanticImageQuery: null,
+        semanticSearchText: null,
+      });
+    });
+
+    it('clears text, ranking and mode together; clearing an empty field changes nothing', () => {
+      let state = createInitialWorkbenchState();
+
+      state = workbenchReducer(state, { searchTerm: 'sunset', type: 'setGallerySearchTerm' });
+      state = workbenchReducer(state, { enabled: true, type: 'setGallerySemanticSearchMode' });
+      state = workbenchReducer(state, { page: 2, type: 'setGalleryPage' });
+      state = workbenchReducer(state, { type: 'clearGallerySearch' });
+
+      expect(galleryValues(state)).toMatchObject({
+        galleryPage: 0,
+        searchTerm: '',
+        semanticImageQuery: null,
+        semanticSearchText: null,
+      });
+      expect(workbenchReducer(state, { type: 'clearGallerySearch' })).toBe(state);
+
+      state = workbenchReducer(state, { searchTerm: 'plain', type: 'setGallerySearchTerm' });
+      state = workbenchReducer(state, { type: 'clearGallerySearch' });
+
+      expect(galleryValues(state).searchTerm).toBe('');
+    });
+
+    it('leaves semantic mode with the ranking on a board move or a tab switch, not on a re-click', () => {
+      let state = createInitialWorkbenchState();
+
+      state = workbenchReducer(state, { boardId: 'board-a', type: 'selectGalleryBoard' });
+      state = workbenchReducer(state, { searchTerm: 'sunset', type: 'setGallerySearchTerm' });
+      state = workbenchReducer(state, { enabled: true, type: 'setGallerySemanticSearchMode' });
+      state = workbenchReducer(state, { boardId: 'board-a', type: 'selectGalleryBoard' });
+
+      expect(galleryValues(state)).toMatchObject({
+        semanticImageQuery: { kind: 'text', query: 'sunset' },
+        semanticSearchText: 'sunset',
+      });
+
+      state = workbenchReducer(state, { boardId: 'board-b', type: 'selectGalleryBoard' });
+
+      expect(galleryValues(state)).toMatchObject({
+        searchTerm: '',
+        semanticImageQuery: null,
+        semanticSearchText: null,
+      });
+
+      state = workbenchReducer(state, { enabled: true, type: 'setGallerySemanticSearchMode' });
+      state = workbenchReducer(state, { text: 'beach', type: 'setGallerySemanticSearchText' });
+      state = workbenchReducer(state, { galleryView: 'images', type: 'setGalleryView' });
+
+      expect(galleryValues(state).semanticSearchText).toBe('beach');
+
+      state = workbenchReducer(state, { galleryView: 'assets', type: 'setGalleryView' });
+
+      expect(galleryValues(state)).toMatchObject({ semanticImageQuery: null, semanticSearchText: null });
+    });
   });
 });
 

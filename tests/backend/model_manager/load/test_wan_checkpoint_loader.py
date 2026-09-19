@@ -20,6 +20,7 @@ from invokeai.backend.model_manager.load.model_loaders.wan import (
     _build_wan_transformer_config,
 )
 from invokeai.backend.model_manager.taxonomy import SubModelType, WanVariantType
+from tests.fixtures.quantized_payloads import comfy_quant_marker, nvfp4_signed_tensors, quantize_convrot
 
 # A structurally faithful but tiny Wan transformer. attention_head_dim must stay
 # at 128 — the loader derives num_attention_heads as inner_dim // 128, matching
@@ -178,6 +179,52 @@ class TestEndToEnd:
         # 0.5 * 4.0, materialised at the compute dtype.
         assert loaded[target].dtype == torch.bfloat16
         assert torch.allclose(loaded[target].float(), torch.full_like(loaded[target].float(), 2.0))
+
+    def test_an_int8_convrot_checkpoint_is_refused_rather_than_folded_unrotated(self, tmp_path: Path) -> None:
+        """Wan has no int8 branch, and `int8_tensorwise` shares the fp8 key layout, so the fold used
+        to apply the scale and skip the inverse rotation. That produces a weight of the right shape,
+        dtype and magnitude bearing no relation to the stored one -- a model that loads and
+        generates noise. `test_int8_through_the_fp8_fold.py` measures how little relation; how
+        little depends on the rotation width, so the number is kept where the geometry is fixed.
+        Pinned at the loader as well, because Wan is one of the two that reach the shared fold.
+        """
+        reference = _tiny_model()
+        sd = {k: v.clone() for k, v in reference.state_dict().items()}
+
+        target = "blocks.0.attn1.to_q.weight"
+        payload = quantize_convrot(sd[target].float(), group_size=64)
+        sd[target] = payload.codes
+        sd["blocks.0.attn1.to_q.weight_scale"] = payload.scale
+        sd["blocks.0.attn1.to_q.comfy_quant"] = comfy_quant_marker(
+            {"format": "int8_tensorwise", "convrot": True, "convrot_groupsize": 64}
+        )
+        path = tmp_path / "Wan2.2-A14B-HighNoise-int8_convrot.safetensors"
+        save_file(sd, path)
+
+        message = r"Wan checkpoint Wan2\.2-A14B-HighNoise-int8_convrot\.safetensors.*quantized with convrot"
+        with pytest.raises(ValueError, match=message):
+            _load(path)
+
+    def test_an_nvfp4_checkpoint_is_refused_rather_than_folded_over_its_packed_codes(self, tmp_path: Path) -> None:
+        """Wan reads scaled fp8 but never calls `pop_nvfp4_layers`, and the shared fold has no dtype
+        gate, so an nvfp4 layer was multiplied by its block-scale grid and logged as dequantized.
+        The load then died on the width -- "size mismatch [128, 64] vs [128, 128]" -- which names
+        neither the scheme nor the remedy, after a line claiming success. Pinned at the loader
+        because that is where the misleading sequence was visible.
+        """
+        reference = _tiny_model()
+        sd = {k: v.clone() for k, v in reference.state_dict().items()}
+
+        target = "blocks.0.attn1.to_q"
+        rows, columns = sd[f"{target}.weight"].shape
+        packed, _ = nvfp4_signed_tensors(target, torch.randint(0, 2, (rows, columns), dtype=torch.bool))
+        sd.update(packed)
+        path = tmp_path / "Wan2.2-A14B-HighNoise-nvfp4.safetensors"
+        save_file(sd, path)
+
+        message = r"Wan checkpoint Wan2\.2-A14B-HighNoise-nvfp4\.safetensors.*does not support nvfp4"
+        with pytest.raises(ValueError, match=message):
+            _load(path)
 
     def test_scale_bookkeeping_never_reaches_the_model(self, tmp_path: Path) -> None:
         """``load_state_dict(strict=False)`` silently ignores unexpected keys, so

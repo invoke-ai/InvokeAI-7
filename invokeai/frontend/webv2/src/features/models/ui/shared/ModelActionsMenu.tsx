@@ -5,8 +5,8 @@ import type { ReactNode } from 'react';
 import { Icon, Menu } from '@chakra-ui/react';
 import { isConvertibleToDiffusers } from '@features/models/core/baseIdentity';
 import { useModelActions } from '@features/models/ui/detail/useModelActions';
-import { HuggingFaceIcon } from '@platform/ui/BrandIcon';
 import { ConfirmDialog } from '@platform/ui/ConfirmDialog';
+import { HuggingFaceIcon } from '@platform/ui/VendoredIcon';
 import { RefreshCcwIcon, Trash2Icon } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 

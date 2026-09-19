@@ -6,11 +6,16 @@ import type {
 } from '@features/workflow/contracts';
 import type { ChangeEvent } from 'react';
 
-import { Flex, HStack, Stack, Text, Textarea } from '@chakra-ui/react';
+import { Flex, HStack, Image, Stack, Text, Textarea } from '@chakra-ui/react';
 import { useInvocationTemplatesSelector } from '@features/workflow/react';
 import { workflowSelectionStore } from '@features/workflow/ui/editor/selectionStore';
 import { useProjectGraphCommands } from '@features/workflow/ui/useProjectGraphCommands';
-import { useWorkflowHostCommands, useWorkflowProjectSelector } from '@features/workflow/ui/WorkflowUiContext';
+import {
+  useWorkflowHostCommands,
+  useWorkflowNodeExecutionState,
+  useWorkflowProjectSelector,
+} from '@features/workflow/ui/WorkflowUiContext';
+import { formatOutputFieldValue } from '@features/workflow/utility';
 import { JsonPreview, Scrollable, Tabs } from '@platform/ui';
 import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -77,23 +82,73 @@ const DetailsTab = ({ node, template }: { node: WorkflowInvocationNode; template
   );
 };
 
-const OutputsTab = ({ template }: { template: InvocationTemplate | undefined }) => {
+/**
+ * What the node produced the last time it ran in this session: each declared
+ * output's value from the latest result, the image it saved (if any), and the
+ * raw result for anything the summary does not show.
+ */
+const OutputsTab = ({ nodeId, template }: { nodeId: string; template: InvocationTemplate | undefined }) => {
   const { t } = useTranslation();
+  const execution = useWorkflowNodeExecutionState(nodeId);
+  const outputs = template ? Object.values(template.outputs) : [];
+
+  if (!execution) {
+    return (
+      <Stack gap="2">
+        <Text color="fg.subtle" fontSize="2xs">
+          {t('widgets.workflow.noRunRecorded')}
+        </Text>
+        {outputs.length > 0 ? (
+          <Stack gap="1">
+            <Text color="fg.subtle" fontSize="2xs">
+              {t('widgets.workflow.declaredOutputs')}
+            </Text>
+            {outputs.map((output) => (
+              <DetailRow key={output.name} label={output.title} value={output.type.name} />
+            ))}
+          </Stack>
+        ) : null}
+      </Stack>
+    );
+  }
+
+  // The store keeps the previous run's result while a node runs or fails;
+  // showing it under a "Running…" or "Failed" line would pass it off as this run's.
+  const hasResult =
+    execution.status === 'completed' && execution.latestOutput !== null && execution.latestOutput !== undefined;
 
   return (
     <Stack gap="2">
-      <Text color="fg.subtle" fontSize="2xs">
-        {t('widgets.workflow.runOutputsNotRecorded')}
-      </Text>
-      {template ? (
-        <Stack gap="1">
-          <Text color="fg.subtle" fontSize="2xs">
-            {t('widgets.workflow.declaredOutputs')}
-          </Text>
-          {Object.values(template.outputs).map((output) => (
-            <DetailRow key={output.name} label={output.title} value={output.type.name} />
+      <DetailRow
+        label={t('widgets.workflow.status')}
+        value={
+          execution.status === 'failed' && execution.error
+            ? `${t('widgets.workflow.runStatus.failed')} — ${execution.error}`
+            : t(`widgets.workflow.runStatus.${execution.status}`)
+        }
+      />
+      {execution.status === 'completed' && execution.outputImageUrl ? (
+        <Image
+          alt={t('widgets.workflow.outputImage')}
+          bg="bg.muted"
+          h="10rem"
+          objectFit="contain"
+          rounded="sm"
+          src={execution.outputImageUrl}
+          w="full"
+        />
+      ) : null}
+      {hasResult ? (
+        <>
+          {outputs.map((output) => (
+            <DetailRow
+              key={output.name}
+              label={output.title}
+              value={formatOutputFieldValue(execution.latestOutput, output.name)?.full ?? '—'}
+            />
           ))}
-        </Stack>
+          <JsonBlock label={t('widgets.workflow.latestOutput')} value={execution.latestOutput} />
+        </>
       ) : null}
     </Stack>
   );
@@ -124,7 +179,7 @@ const InspectorBody = ({ node, tab }: { node: WorkflowNode; tab: InspectorTab })
     case 'details':
       return <DetailsTab node={node} template={template} />;
     case 'outputs':
-      return <OutputsTab template={template} />;
+      return <OutputsTab nodeId={node.id} template={template} />;
     case 'data':
       return <JsonBlock label={t('widgets.workflow.nodeData')} value={node.data} />;
     case 'template':

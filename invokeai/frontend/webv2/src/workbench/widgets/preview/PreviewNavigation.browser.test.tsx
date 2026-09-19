@@ -112,6 +112,8 @@ const mocks = vi.hoisted(() => {
       },
     },
     galleryItemFilters: [] as Array<{ boardId: string; starred?: boolean }>,
+    galleryStripFetches: [] as Array<{ boardId: string; starred?: boolean }>,
+    galleryStripItems: [] as Array<GalleryImageItem | GalleryVideoItem>,
     galleryItemPageOffsets: [] as number[],
     galleryItemWindowOffsets: [] as number[],
     galleryItemPages: [] as GalleryItemsPage[],
@@ -179,6 +181,15 @@ vi.mock('@features/gallery/queries', () => ({
   flattenGalleryItemsData: (data: InfiniteData<GalleryItemsPage, number> | undefined) =>
     data?.pages.flatMap((page) => page.items) ?? [],
   galleryBoardsOptions: () => ({ queryFn: () => [], queryKey: ['test-boards'], staleTime: Infinity }),
+  galleryStarredStripOptions: (query: { boardId: string; starred?: boolean }) => ({
+    queryFn: () => {
+      mocks.galleryStripFetches.push(query);
+
+      return Promise.resolve({ items: mocks.galleryStripItems, total: mocks.galleryStripItems.length });
+    },
+    queryKey: ['test-strip', query.boardId, mocks.galleryStripItems.map((item) => item.name).join(',')],
+    staleTime: Infinity,
+  }),
   galleryItemsInfiniteOptions: (
     query: { boardId: string; orderDir?: 'ASC' | 'DESC'; starred?: boolean },
     window: { kind: 'anchor' | 'infinite' | 'page'; offset?: number } = { kind: 'infinite' }
@@ -476,6 +487,7 @@ beforeEach(() => {
   delete (mocks.project.widgetInstances.gallery.state.values as Record<string, unknown>).paginationMode;
   delete (mocks.project.widgetInstances.gallery.state.values as Record<string, unknown>).semanticImageQuery;
   delete (mocks.project.widgetInstances.gallery.state.values as Record<string, unknown>).selectedImageQuery;
+  delete (mocks.project.widgetInstances.gallery.state.values as Record<string, unknown>).starredOnly;
   mocks.project.widgetInstances.gallery.state.values.recentImages = mocks.recentImages;
   mocks.project.widgetInstances.gallery.state.values.selectedImage = {
     ...mocks.recentImages[0],
@@ -483,6 +495,8 @@ beforeEach(() => {
   };
   mocks.project.widgetInstances.gallery.state.values.selectedImageName = 'newest';
   mocks.galleryItemFilters.length = 0;
+  mocks.galleryStripFetches.length = 0;
+  mocks.galleryStripItems = [];
   mocks.galleryItemPageOffsets.length = 0;
   mocks.galleryItemWindowOffsets.length = 0;
   mocks.imageActionOptions = null;
@@ -523,50 +537,108 @@ afterEach(async () => {
 });
 
 describe('preview keyboard navigation boundary', () => {
-  it('walks the unstarred listing the grid shows by default, and the starred one for a starred selection', async () => {
+  it('walks the starred strip into the unstarred listing and back, as the grid lays them out', async () => {
+    const starredTop = { ...createImageItem('starred-top', '2026-07-23T00:00:00.000Z'), starred: true };
+    const starredNext = { ...createImageItem('starred-next', '2026-07-22T00:00:00.000Z'), starred: true };
+
+    mocks.galleryStripItems = [starredTop, starredNext];
+    setGalleryValues({
+      selectedImage: { ...legacyImage('starred-next', '2026-07-22T00:00:00.000Z'), starred: true },
+      selectedImageName: 'starred-next',
+    });
     await render();
 
+    // The listing stays the unstarred one; the strip supplies the starred neighbors.
     expect(mocks.galleryItemFilters.length).toBeGreaterThan(0);
     expect(mocks.galleryItemFilters.every((query) => query.starred === false)).toBe(true);
+    await expect.poll(() => host?.textContent).toContain('2 of 4');
+    expect(mocks.galleryStripFetches.length).toBeGreaterThan(0);
 
-    // A starred item lives in the grid's strip, so its neighbors are the
-    // other starred items, whatever listing the grid was showing.
-    mocks.galleryItemFilters.length = 0;
+    await pressArrow('ArrowRight');
+    expect(mocks.commands.gallery.selectItem).toHaveBeenLastCalledWith(
+      expect.objectContaining({ name: 'newest' }),
+      undefined,
+      expect.any(Number),
+      true
+    );
+    await pressArrow('ArrowLeft');
+    expect(mocks.commands.gallery.selectItem).toHaveBeenLastCalledWith(
+      expect.objectContaining({ name: 'starred-top' }),
+      undefined,
+      expect.any(Number),
+      true
+    );
+
+    // Back from the listing's first item, left lands on the strip's last.
+    setGalleryValues({ selectedImage: legacyImage('newest', '2026-07-21T00:00:00.000Z'), selectedImageName: 'newest' });
+    await render();
+    await pressArrow('ArrowLeft');
+    expect(mocks.commands.gallery.selectItem).toHaveBeenLastCalledWith(
+      expect.objectContaining({ name: 'starred-next' }),
+      undefined,
+      expect.any(Number),
+      true
+    );
+  });
+
+  it('shows an item just starred once, in the strip, until the listing refetch drops it', async () => {
+    const justStarred = { ...createImageItem('newest', '2026-07-21T00:00:00.000Z'), starred: true };
+
+    mocks.galleryStripItems = [justStarred];
     setGalleryValues({
-      recentImages: mocks.recentImages.map((image) =>
-        image.imageName === 'newest' ? { ...image, starred: true } : image
-      ),
-      selectedImage: { ...legacyImage('newest', '2026-07-23T00:00:00.000Z'), starred: true },
+      recentImages: [],
+      selectedImage: { ...legacyImage('newest', '2026-07-21T00:00:00.000Z'), starred: true },
       selectedImageName: 'newest',
     });
     await render();
 
-    expect(mocks.galleryItemFilters.length).toBeGreaterThan(0);
-    expect(mocks.galleryItemFilters.every((query) => query.starred === true)).toBe(true);
+    await expect.poll(() => host?.textContent).toContain('1 of 2');
+    await pressArrow('ArrowRight');
+    expect(mocks.commands.gallery.selectItem).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ name: 'oldest' }),
+      undefined,
+      expect.any(Number),
+      true
+    );
   });
 
-  it('anchors a strip selection at the top of the starred listing, not at the grid page it was stamped with', async () => {
-    // Paginated mode, grid on page 2: the stamp says page 2 of the unstarred
-    // listing, but the clicked strip item sits at the top of the starred one.
-    const starredItem = { ...createImageItem('starred-top', '2026-07-23T00:00:00.000Z'), starred: true };
-    const starredNext = { ...createImageItem('starred-next', '2026-07-22T00:00:00.000Z'), starred: true };
+  it('keeps a starred selection beyond the strip reachable, and drops the strip under the starred filter', async () => {
+    const starredTop = { ...createImageItem('starred-top', '2026-07-23T00:00:00.000Z'), starred: true };
+    const starredDeep = { ...createImageItem('starred-deep', '2026-07-01T00:00:00.000Z'), starred: true };
 
+    mocks.galleryStripItems = [starredTop];
     setGalleryValues({
-      galleryPage: 2,
-      paginationMode: 'paginated',
       recentImages: [],
-      selectedImage: { ...legacyImage('starred-top', '2026-07-23T00:00:00.000Z'), starred: true },
-      selectedImageName: 'starred-top',
-      selectedImageQuery: { ...deepQuery, page: 2, paginationMode: 'paginated' },
+      selectedImage: { ...legacyImage('starred-deep', '2026-07-01T00:00:00.000Z'), starred: true },
+      selectedImageName: 'starred-deep',
     });
-    mocks.galleryItemPages = [{ items: [starredItem, starredNext], total: 2 }];
-
     await render();
-    await pressArrow('ArrowRight');
+    await pressArrow('ArrowLeft');
+    expect(mocks.commands.gallery.selectItem).toHaveBeenLastCalledWith(
+      expect.objectContaining({ name: 'starred-top' }),
+      undefined,
+      expect.any(Number),
+      true
+    );
 
-    expect(mocks.galleryItemWindowOffsets.every((offset) => offset === 0)).toBe(true);
-    expect(mocks.commands.gallery.selectItem).toHaveBeenCalledWith(
-      expect.objectContaining({ name: 'starred-next' }),
+    mocks.commands.gallery.selectItem.mockClear();
+    mocks.galleryItemFilters.length = 0;
+    mocks.galleryStripFetches.length = 0;
+    mocks.galleryItemPages = [{ items: [starredTop, starredDeep], total: 2 }];
+    setGalleryValues({
+      recentImages: [],
+      selectedImage: { ...legacyImage('starred-deep', '2026-07-01T00:00:00.000Z'), starred: true },
+      selectedImageName: 'starred-deep',
+      selectedImageQuery: { ...deepQuery, page: 0, starredOnly: true },
+      starredOnly: true,
+    });
+    await render();
+    await expect.poll(() => host?.textContent).toContain('2 of 2');
+    expect(mocks.galleryStripFetches).toHaveLength(0);
+    expect(mocks.galleryItemFilters.every((query) => query.starred === true)).toBe(true);
+    await pressArrow('ArrowLeft');
+    expect(mocks.commands.gallery.selectItem).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ name: 'starred-top' }),
       undefined,
       expect.any(Number),
       true
@@ -1441,7 +1513,7 @@ describe('preview keyboard navigation boundary', () => {
     );
   });
 
-  it('does not insert live sessions into saved-image navigation', async () => {
+  it('steps left off the first saved item onto the running session, following it', async () => {
     mocks.project.queue.items = [queueItem];
     mocks.useActiveProgressTarget.mockReturnValue({ itemIndex: 1, queueItemId: 'queue-item-live' });
     mocks.useProgressImage.mockReturnValue({
@@ -1450,14 +1522,26 @@ describe('preview keyboard navigation boundary', () => {
       target: { itemIndex: 1, queueItemId: 'queue-item-live' },
       width: 64,
     });
+    mocks.commands.account.updateProjectPreferences.mockImplementationOnce((settings: object) => {
+      Object.assign(mocks.project.settings, settings);
+    });
 
     await render();
-    await pressArrow('ArrowLeft');
+    // Right has saved neighbors; only the leftmost step reaches the session.
+    await pressArrow('ArrowRight');
     expect(mocks.commands.account.updateProjectPreferences).not.toHaveBeenCalled();
-    expect(mocks.commands.gallery.selectItem).not.toHaveBeenCalled();
+    setGalleryValues({ selectedImage: legacyImage('newest', '2026-07-21T00:00:00.000Z'), selectedImageName: 'newest' });
+    await render();
+    await pressArrow('ArrowLeft');
+    expect(mocks.commands.account.updateProjectPreferences).toHaveBeenCalledExactlyOnceWith({
+      showProgressImagesInViewer: true,
+    });
+    await rerender();
+    expect(followControls.pinnedSessionId).toBe('queue-item-live:1');
+    expect(mocks.commands.gallery.selectItem).toHaveBeenCalledTimes(1);
   });
 
-  it('disables saved-image arrow navigation while following live', async () => {
+  it('steps right off the followed session onto the first saved item, and never onto waiting slots', async () => {
     mocks.project.queue.items = [{ ...queueItem, backendItemIds: [1, 2, 3], completedBackendItemIds: [1, 2] }];
     mocks.project.settings.showProgressImagesInViewer = true;
     mocks.project.widgetInstances.gallery.state.values.recentImages = mocks.recentImages.map((image) => ({
@@ -1473,8 +1557,15 @@ describe('preview keyboard navigation boundary', () => {
     });
 
     await render();
-    await pressArrow('ArrowRight');
+    await pressArrow('ArrowLeft');
     expect(mocks.commands.gallery.selectItem).not.toHaveBeenCalled();
+    await pressArrow('ArrowRight');
+    expect(mocks.commands.gallery.selectItem).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ name: 'newest' }),
+      undefined,
+      expect.any(Number),
+      true
+    );
   });
 
   it('renders the live frame with the standard media chrome: footer up, no badge, item border', async () => {
@@ -1514,9 +1605,15 @@ describe('preview keyboard navigation boundary', () => {
     mocks.useActiveProgressTarget.mockReturnValue({ itemIndex: 1, queueItemId: 'queue-item-live' });
 
     await render();
+    // Stepping off the live session lands in the SAVED selection's listing, not the generating board's.
     await pressArrow('ArrowRight');
 
-    expect(mocks.commands.gallery.selectItem).not.toHaveBeenCalled();
+    expect(mocks.commands.gallery.selectItem).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ boardId: 'none', name: 'newest' }),
+      undefined,
+      expect.any(Number),
+      true
+    );
     expect(mocks.galleryItemFilters.every((filter) => filter.boardId !== 'board-live')).toBe(true);
   });
 

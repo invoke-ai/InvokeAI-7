@@ -1,3 +1,5 @@
+import type { Project } from '@workbench/projectContracts';
+
 import { Flex, HStack, Text, VisuallyHidden } from '@chakra-ui/react';
 import {
   DndContext,
@@ -11,6 +13,7 @@ import {
 import { restrictToWindowEdges } from '@dnd-kit/modifiers';
 import { sortableKeyboardCoordinates } from '@dnd-kit/sortable';
 import { GalleryDragCursor } from '@features/gallery/utility';
+import { flushWorkbenchDrafts } from '@platform/react/draftRegistry';
 import { useMountEffect } from '@platform/react/useMountEffect';
 import { FocusRegionProvider } from '@workbench/focusRegions';
 import { WidgetIcon } from '@workbench/iconResolver';
@@ -68,6 +71,7 @@ const DND_MODIFIERS = [restrictToWindowEdges];
  * widgetCollisionDetection, not by shrinking zones.
  */
 const DND_AUTO_SCROLL = { acceleration: 5 };
+const EMPTY_FLOATING: NonNullable<Project['floatingWidgets']> = {};
 
 export const WorkbenchShell = () => {
   const { notifications, widgets } = useWorkbenchCommands();
@@ -76,6 +80,7 @@ export const WorkbenchShell = () => {
   const projectName = useActiveProjectSelector((project) => project.name);
   const leftRegion = useActiveProjectSelector((project) => project.widgetRegions.left);
   const rightRegion = useActiveProjectSelector((project) => project.widgetRegions.right);
+  const floatingWidgets = useActiveProjectSelector((project) => project.floatingWidgets ?? EMPTY_FLOATING);
   const placementProject = useActiveProjectSelector(getWidgetPlacementProject, areWidgetPlacementProjectsEqual);
   const sensors = useSensors(
     // `PrimaryMouseSensor`/`HoldToDragSensor` replace the stock `PointerSensor`:
@@ -94,24 +99,26 @@ export const WorkbenchShell = () => {
   const leftRegionViewModel = useMemo(
     () =>
       createWidgetRegionViewModelFromState({
+        floatingWidgets,
         region: 'left',
         regionState: leftRegion,
         widgetInstances: placementProject.widgetInstances,
         widgets: getWidgetsForRegion('left'),
         getWidgetLabel,
       }),
-    [getWidgetLabel, leftRegion, placementProject.widgetInstances]
+    [floatingWidgets, getWidgetLabel, leftRegion, placementProject.widgetInstances]
   );
   const rightRegionViewModel = useMemo(
     () =>
       createWidgetRegionViewModelFromState({
+        floatingWidgets,
         region: 'right',
         regionState: rightRegion,
         widgetInstances: placementProject.widgetInstances,
         widgets: getWidgetsForRegion('right'),
         getWidgetLabel,
       }),
-    [getWidgetLabel, placementProject.widgetInstances, rightRegion]
+    [floatingWidgets, getWidgetLabel, placementProject.widgetInstances, rightRegion]
   );
   const leftMenuItems = useMemo(() => getWidgetRegionItems(leftRegionViewModel), [leftRegionViewModel]);
   const rightMenuItems = useMemo(() => getWidgetRegionItems(rightRegionViewModel), [rightRegionViewModel]);
@@ -192,46 +199,69 @@ export const WorkbenchShell = () => {
     [placementProject, widgets]
   );
   const handleDragCancel = useCallback(() => setActiveDrag(null), []);
+  // A floating slot's click is the rail-side dock control, the mirror of the
+  // window's own; the drafts flush for the same reason that control's does.
   const handleSelect = useCallback(
-    (region: WidgetBarGroup['region'], instanceId: string) =>
-      revealWidgetPlacement({ instanceId, project: placementProject, region, widgets }),
-    [placementProject, widgets]
+    (region: WidgetBarGroup['region'], instanceId: string) => {
+      if (floatingWidgets[instanceId]) {
+        flushWorkbenchDrafts();
+        widgets.dockFloating(instanceId);
+
+        return;
+      }
+
+      revealWidgetPlacement({ instanceId, project: placementProject, region, widgets });
+    },
+    [floatingWidgets, placementProject, widgets]
+  );
+  // Removing a floating slot closes the window outright — never dock-then-
+  // toggle, which would pop the panel open and retarget the route on the way.
+  const closeFloating = useCallback(
+    (instanceId: string) => {
+      flushWorkbenchDrafts();
+      widgets.closeFloating(instanceId);
+    },
+    [widgets]
   );
   const handleToggleLeft = useCallback(
     (item: (typeof leftMenuItems)[number]) =>
-      item.isEnabled
-        ? closeWidgetPlacement({
-            widgets,
-            getWidgetById,
-            instanceId: item.id,
-            project: placementProject,
-            region: 'left',
-          })
-        : openWidgetPlacement({
-            widgets,
-            getWidgetsForRegion,
-            options: { createNew: item.allowMultiple, preferredRegions: ['left'] },
-            typeId: item.typeId,
-          }),
-    [placementProject, widgets]
+      item.isEnabled && item.isFloating
+        ? closeFloating(item.id)
+        : item.isEnabled
+          ? closeWidgetPlacement({
+              widgets,
+              getWidgetById,
+              instanceId: item.id,
+              project: placementProject,
+              region: 'left',
+            })
+          : openWidgetPlacement({
+              widgets,
+              getWidgetsForRegion,
+              options: { createNew: item.allowMultiple, preferredRegions: ['left'] },
+              typeId: item.typeId,
+            }),
+    [closeFloating, placementProject, widgets]
   );
   const handleToggleRight = useCallback(
     (item: (typeof rightMenuItems)[number]) =>
-      item.isEnabled
-        ? closeWidgetPlacement({
-            widgets,
-            getWidgetById,
-            instanceId: item.id,
-            project: placementProject,
-            region: 'right',
-          })
-        : openWidgetPlacement({
-            widgets,
-            getWidgetsForRegion,
-            options: { createNew: item.allowMultiple, preferredRegions: ['right'] },
-            typeId: item.typeId,
-          }),
-    [placementProject, widgets]
+      item.isEnabled && item.isFloating
+        ? closeFloating(item.id)
+        : item.isEnabled
+          ? closeWidgetPlacement({
+              widgets,
+              getWidgetById,
+              instanceId: item.id,
+              project: placementProject,
+              region: 'right',
+            })
+          : openWidgetPlacement({
+              widgets,
+              getWidgetsForRegion,
+              options: { createNew: item.allowMultiple, preferredRegions: ['right'] },
+              typeId: item.typeId,
+            }),
+    [closeFloating, placementProject, widgets]
   );
   const leftRailGroups = useMemo(
     () => [

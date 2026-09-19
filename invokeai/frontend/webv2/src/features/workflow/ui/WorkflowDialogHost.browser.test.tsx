@@ -28,7 +28,7 @@ const deferred = <T,>() => {
 // them out so this stays a focused wiring-layer test.
 vi.mock('./editor/AddNodeDialog', () => ({ AddNodeDialog: () => null }));
 vi.mock('./library/WorkflowLibraryDialog', () => ({ WorkflowLibraryDialog: () => null }));
-vi.mock('./PendingLibraryWorkflowLoader', () => ({ PendingLibraryWorkflowLoader: () => null }));
+vi.mock('./PendingLibraryWorkflowLoader', () => ({ PendingWorkflowLoader: () => null }));
 
 import { onWorkflowLibraryCacheInvalidated } from '@features/workflow/queries';
 

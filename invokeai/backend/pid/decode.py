@@ -339,13 +339,16 @@ def load_pid_decoder(state_dict: dict[Any, Tensor], backbone: BaseModelType) -> 
     # through `load_state_dict`'s own copy.
     int8_markers = extract_int8_convrot_markers(state_dict)
     reject_unmarked_int8_weights(state_dict, int8_markers, "PiD")
+    # Outside the branch, like the check above it and for the same reason. A scale from another
+    # scheme would have its weight copied into a float32 parameter unscaled -- off by
+    # `1/weight_scale` -- and the orphaned key would vanish into the `strict=False` load below,
+    # reported at DEBUG. Inside the branch this only covered a *mixed* repack; a checkpoint that is
+    # purely scaled fp8 has no int8 marker at all, so it never reached the check that exists for it.
+    reject_foreign_quantization_scales(state_dict, int8_markers, "PiD", net)
     if int8_markers:
         # The rest of `install_int8_convrot_layers` does not apply here -- this path has no model
         # cache to reserve against, and `load_state_dict` copies into float32 parameters rather than
-        # casting the dict -- but this check does: an fp8 scale from a mixed repack would otherwise
-        # have its weight copied in unscaled, off by `1/weight_scale`, and the orphan would vanish
-        # into the `strict=False` load below.
-        reject_foreign_quantization_scales(state_dict, int8_markers, "PiD", net)
+        # casting the dict.
         swap_in_int8_linears(
             net, state_dict, split_int8_convrot_layers(state_dict, int8_markers, torch.float32, model=net)
         )

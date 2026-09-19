@@ -10,21 +10,21 @@ loader that ignored the rotation would produce a weight that loads cleanly and g
 """
 
 import json
-from types import SimpleNamespace
-from unittest.mock import MagicMock
 
 import pytest
 import torch
 
 from invokeai.backend.flux.model import FluxParams
 from invokeai.backend.model_manager.configs.main import Main_Checkpoint_FLUX_Config
+from invokeai.backend.model_manager.load.model_loaders import flux
 from invokeai.backend.model_manager.load.model_loaders.flux import FluxCheckpointModel
 from invokeai.backend.model_manager.taxonomy import FluxVariantType
 from invokeai.backend.quantization.int8_convrot import (
     CONVROT_GROUP_SIZE,
     Int8ConvrotLinear,
-    build_regular_hadamard,
 )
+from tests.fixtures.loader_seams import Seam, prepare
+from tests.fixtures.quantized_payloads import comfy_quant_marker, quantize_convrot, quantize_scaled_fp8
 
 # As the file carries it: rotated along the input dim, per-output-channel scales.
 MARKER = {"format": "int8_tensorwise", "per_row": True, "convrot": True, "convrot_groupsize": CONVROT_GROUP_SIZE}
@@ -61,21 +61,6 @@ QUANTIZED = (
 )
 
 
-def _marker_blob(marker: dict) -> torch.Tensor:
-    return torch.frombuffer(bytearray(json.dumps(marker).encode("utf-8")), dtype=torch.uint8).clone()
-
-
-def _quantize_convrot(weight: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-    """Mirror of comfy-quants: rotate along the input dim, then per-output-channel int8."""
-    out_features, in_features = weight.shape
-    hadamard = build_regular_hadamard(CONVROT_GROUP_SIZE, dtype=weight.dtype)
-    rotated = (weight.view(out_features, in_features // CONVROT_GROUP_SIZE, CONVROT_GROUP_SIZE) @ hadamard.T).view(
-        out_features, in_features
-    )
-    scale = rotated.abs().amax(dim=1, keepdim=True) / 127.0
-    return torch.clamp(torch.round(rotated / scale), -128, 127).to(torch.int8), scale.to(torch.float32)
-
-
 # Stored fp32 rather than bf16, because a repack that mixes precisions in its dense remainder is
 # what makes `cast_unquantized` observable at all: `load_state_dict(assign=True)` assigns storage
 # dtypes straight through, so without the cast this layer lands as fp32 inside a bf16 model -- and
@@ -103,46 +88,47 @@ def _checkpoint(marker: dict | None = MARKER) -> tuple[dict[str, torch.Tensor], 
         key = f"{path}.weight"
         weight = state_dict[key].float()
         originals[path] = weight
-        state_dict[key], state_dict[f"{path}.weight_scale"] = _quantize_convrot(weight)
+        payload = quantize_convrot(weight)
+        state_dict[key], state_dict[f"{path}.weight_scale"] = payload.codes, payload.scale
         if marker is not None:
-            state_dict[f"{path}.comfy_quant"] = _marker_blob(marker)
+            state_dict[f"{path}.comfy_quant"] = comfy_quant_marker(marker)
     return state_dict, originals
 
 
-def _driver(monkeypatch, tmp_path, state_dict: dict, trace: dict | None = None, header: dict | None = None):
-    """Drive the loader with the cache recorded rather than stubbed out."""
-    import invokeai.backend.model_manager.load.model_loaders.flux as module
+SEAM = Seam(
+    loader=FluxCheckpointModel,
+    module=flux,
+    compute_dtype=torch.bfloat16,
+    # `_load_from_singlefile` never reaches the FP8 Storage pass, and the tests that do reach it
+    # through `_load_model` install their own counter. Nothing here would read this stub, and a
+    # stub nothing reads is one more thing to keep true.
+    casts_fp8_storage=False,
+)
 
-    recorded = trace if trace is not None else {}
-    recorded.setdefault("reserved", None)
 
+def _driver(monkeypatch, tmp_path, state_dict: dict, header: dict | None = None):
     checkpoint = tmp_path / "flux1-dev-int8-convrot.safetensors"
     checkpoint.touch()
     config = Main_Checkpoint_FLUX_Config.model_construct(
         path=str(checkpoint), name="flux1-dev-int8", variant=FluxVariantType.Dev
     )
 
-    loader = object.__new__(FluxCheckpointModel)
-    loader._ram_cache = SimpleNamespace(make_room=lambda reserved: recorded.__setitem__("reserved", reserved))
-    loader._logger = MagicMock()
-    loader._torch_device = torch.device("cpu")
-    loader._torch_dtype = torch.bfloat16
+    def geometry(patch):
+        patch.setattr(flux, "get_flux_transformers_params", lambda _variant: TINY)
+        # Both spellings of the same decision: the module-level helper, and the loader method that
+        # supersedes it once FP8 Storage counts as a consumer too. `raising=False` tolerates the
+        # module symbol being gone.
+        patch.setattr(flux, "should_keep_fp8_weights", lambda _device: False, raising=False)
 
-    monkeypatch.setattr(module, "load_file", lambda _path: state_dict)
-    # Both spellings of the same decision: the module-level helper, and the loader method that
-    # supersedes it once FP8 Storage counts as a consumer too. Setting both keeps this fixture
-    # working either way -- an instance attribute shadows the method when it exists, and
-    # `raising=False` tolerates the module symbol being gone.
-    monkeypatch.setattr(module, "should_keep_fp8_weights", lambda _device: False, raising=False)
-    loader._keep_fp8_weights = lambda _config, _submodel=None: False
-    monkeypatch.setattr(module, "read_safetensors_metadata", lambda _path, _logger: header)
-    monkeypatch.setattr(module, "get_flux_transformers_params", lambda _variant: TINY)
-    return loader, config
+    run = prepare(SEAM, monkeypatch, state_dict=state_dict, metadata=header, geometry=geometry)
+    # An instance attribute shadows the method, which is what keeps this working either way.
+    run.loader._keep_fp8_weights = lambda _config, _submodel=None: False
+    return run, config
 
 
-def _load(monkeypatch, tmp_path, state_dict, trace: dict | None = None, header: dict | None = None):
-    loader, config = _driver(monkeypatch, tmp_path, state_dict, trace, header)
-    return loader._load_from_singlefile(config)
+def _load(monkeypatch, tmp_path, state_dict, header: dict | None = None):
+    run, config = _driver(monkeypatch, tmp_path, state_dict, header)
+    return run.load(config), run
 
 
 def test_an_int8_checkpoint_stays_int8_and_un_rotates(monkeypatch, tmp_path) -> None:
@@ -155,7 +141,7 @@ def test_an_int8_checkpoint_stays_int8_and_un_rotates(monkeypatch, tmp_path) -> 
     """
     state_dict, originals = _checkpoint()
 
-    model = _load(monkeypatch, tmp_path, state_dict)
+    model, _ = _load(monkeypatch, tmp_path, state_dict)
 
     for path in QUANTIZED:
         layer = model.get_submodule(path)
@@ -179,7 +165,7 @@ def test_the_biases_of_the_quantized_layers_survive(monkeypatch, tmp_path) -> No
     expected = {path: state_dict[f"{path}.bias"].clone() for path in QUANTIZED if f"{path}.bias" in state_dict}
     assert expected, "fixture carries no biases on the quantized layers"
 
-    model = _load(monkeypatch, tmp_path, state_dict)
+    model, _ = _load(monkeypatch, tmp_path, state_dict)
 
     for path, bias in expected.items():
         assert torch.equal(model.get_submodule(path).bias.to(bias.dtype), bias), path
@@ -192,9 +178,8 @@ def test_the_reservation_charges_each_payload_its_stored_width(monkeypatch, tmp_
     """
     state_dict, _ = _checkpoint()
     before_load = {key: value.clone() for key, value in state_dict.items()}
-    trace: dict = {}
 
-    _load(monkeypatch, tmp_path, state_dict, trace)
+    _, run = _load(monkeypatch, tmp_path, state_dict)
 
     # One byte per code; its per-output-channel scale stays at the fp32 it is pinned at; the marker
     # and the activation scale are dropped before the load and charged nothing; everything else
@@ -207,7 +192,7 @@ def test_the_reservation_charges_each_payload_its_stored_width(monkeypatch, tmp_
             continue
         expected += tensor.nelement() * (tensor.element_size() if key in pinned else torch.bfloat16.itemsize)
 
-    assert trace["reserved"] == expected
+    assert run.reserved[-1] == expected
 
 
 def test_an_int8_weight_without_a_marker_is_refused(monkeypatch, tmp_path) -> None:
@@ -227,7 +212,7 @@ def test_a_checkpoint_that_declares_int8_only_in_its_header_still_loads(monkeypa
     state_dict, originals = _checkpoint(marker=None)
     header = {"_quantization_metadata": json.dumps({"layers": dict.fromkeys(QUANTIZED, MARKER)})}
 
-    model = _load(monkeypatch, tmp_path, state_dict, header=header)
+    model, _ = _load(monkeypatch, tmp_path, state_dict, header=header)
 
     for path in QUANTIZED:
         layer = model.get_submodule(path)
@@ -252,7 +237,7 @@ def test_a_per_layer_marker_wins_over_the_header(monkeypatch, tmp_path) -> None:
         state_dict[f"{path}.weight_scale"] = scale.to(torch.float32)
     header = {"_quantization_metadata": json.dumps({"layers": dict.fromkeys(QUANTIZED, MARKER)})}
 
-    model = _load(monkeypatch, tmp_path, state_dict, header=header)
+    model, _ = _load(monkeypatch, tmp_path, state_dict, header=header)
 
     assert model.get_submodule(QUANTIZED[0]).convrot is False
 
@@ -270,7 +255,7 @@ def test_a_header_that_names_a_layer_this_file_does_not_quantize_is_ignored(monk
         state_dict[f"{path}.weight"] = originals[path].to(torch.bfloat16)
     header = {"_quantization_metadata": json.dumps({"layers": dict.fromkeys(QUANTIZED, MARKER)})}
 
-    model = _load(monkeypatch, tmp_path, state_dict, header=header)
+    model, _ = _load(monkeypatch, tmp_path, state_dict, header=header)
 
     assert not any(isinstance(module, Int8ConvrotLinear) for module in model.modules())
 
@@ -285,7 +270,7 @@ def test_an_int8_weight_the_transformer_does_not_consume_is_tolerated(monkeypatc
     state_dict, _ = _checkpoint()
     state_dict["text_encoders.t5xxl.block.0.attn.q.weight"] = torch.zeros(8, 8, dtype=torch.int8)
 
-    model = _load(monkeypatch, tmp_path, state_dict)
+    model, _ = _load(monkeypatch, tmp_path, state_dict)
 
     assert isinstance(model.get_submodule(QUANTIZED[0]), Int8ConvrotLinear)
 
@@ -294,10 +279,9 @@ def test_a_file_mixing_int8_with_scaled_fp8_is_refused(monkeypatch, tmp_path) ->
     """Inside the int8 branch the fp8 pipeline is skipped entirely, so an fp8 layer that came along
     would be cast to bf16 without its scale -- off by `1/weight_scale`, with nothing logged."""
     state_dict, _ = _checkpoint()
-    weight = state_dict["double_blocks.0.img_attn.proj.weight"].float()
-    scale = weight.abs().max() / 448.0
-    state_dict["double_blocks.0.img_attn.proj.weight"] = (weight / scale).to(torch.float8_e4m3fn)
-    state_dict["double_blocks.0.img_attn.proj.weight_scale"] = scale.to(torch.float32)
+    fp8 = quantize_scaled_fp8(state_dict["double_blocks.0.img_attn.proj.weight"].float())
+    state_dict["double_blocks.0.img_attn.proj.weight"] = fp8.codes
+    state_dict["double_blocks.0.img_attn.proj.weight_scale"] = fp8.scale
 
     with pytest.raises(ValueError, match="mixing int8_tensorwise with scaled fp8"):
         _load(monkeypatch, tmp_path, state_dict)
@@ -311,7 +295,7 @@ def test_a_plain_checkpoint_still_takes_the_fp8_path(monkeypatch, tmp_path) -> N
         del state_dict[f"{path}.weight_scale"]
         state_dict[f"{path}.weight"] = originals[path].to(torch.bfloat16)
 
-    model = _load(monkeypatch, tmp_path, state_dict)
+    model, _ = _load(monkeypatch, tmp_path, state_dict)
 
     assert not any(isinstance(module, Int8ConvrotLinear) for module in model.modules())
     for path in QUANTIZED:
@@ -327,7 +311,7 @@ def test_the_dense_remainder_is_cast_to_the_compute_dtype(monkeypatch, tmp_path)
     state_dict, _ = _checkpoint()
     assert state_dict[STORED_FP32].dtype is torch.float32, "fixture no longer exercises the cast"
 
-    model = _load(monkeypatch, tmp_path, state_dict)
+    model, _ = _load(monkeypatch, tmp_path, state_dict)
 
     assert model.img_in.weight.dtype is torch.bfloat16
 
@@ -343,10 +327,11 @@ def test_the_fp8_storage_pass_is_not_offered_an_int8_model(monkeypatch, tmp_path
 
     state_dict, _ = _checkpoint()
     calls: list[str] = []
-    loader, config = _driver(monkeypatch, tmp_path, state_dict)
-    loader._apply_fp8_layerwise_casting = lambda model, *_args: calls.append("cast") or model
+    run, config = _driver(monkeypatch, tmp_path, state_dict)
+    run.loader._apply_fp8_layerwise_casting = lambda model, *_args: calls.append("cast") or model
 
-    model = loader._load_model(config, SubModelType.Transformer)
+    # `_load_model`, not the seam's `_load_from_singlefile`: the FP8 Storage pass sits one level up.
+    model = run.loader._load_model(config, SubModelType.Transformer)
 
     assert calls == []
     assert any(isinstance(module, Int8ConvrotLinear) for module in model.modules())
@@ -363,10 +348,57 @@ def test_a_dense_checkpoint_still_reaches_the_fp8_storage_pass(monkeypatch, tmp_
         del state_dict[f"{path}.weight_scale"]
         state_dict[f"{path}.weight"] = originals[path].to(torch.bfloat16)
     calls: list[str] = []
-    loader, config = _driver(monkeypatch, tmp_path, state_dict)
-    loader._apply_fp8_layerwise_casting = lambda model, *_args: calls.append("cast") or model
+    run, config = _driver(monkeypatch, tmp_path, state_dict)
+    run.loader._apply_fp8_layerwise_casting = lambda model, *_args: calls.append("cast") or model
 
-    model = loader._load_model(config, SubModelType.Transformer)
+    # `_load_model`, not the seam's `_load_from_singlefile`: the FP8 Storage pass sits one level up.
+    model = run.loader._load_model(config, SubModelType.Transformer)
 
     assert calls == ["cast"]
     assert not any(isinstance(module, Int8ConvrotLinear) for module in model.modules())
+
+
+def test_a_prefixed_checkpoint_is_refused_by_name_rather_than_loaded_without_its_hints(monkeypatch, tmp_path) -> None:
+    """Why the header hints and the state dict cannot fall out of step on a checkpoint that loads.
+
+    The hints are re-keyed into the stripped namespace unconditionally; the state dict is converted
+    only when the bundle probe fires, and that probe looks for one key under `model.diffusion_model.`
+    alone. So a `diffusion_model.`- or `net.`-prefixed file would keep its prefix while its hints
+    lost theirs -- the header below names the prefixed layers, which is exactly the shape that would
+    desync -- and every `full_precision_matrix_mult` would name nothing.
+
+    It cannot bite, and the reason is upstream of this loader: `_validate_is_flux` admits a file only
+    if `double_blocks.0.img_attn.norm.key_norm.scale` is present bare or under
+    `model.diffusion_model.`, so a file in any other namespace never becomes a FLUX config at all.
+    The loader's probe therefore cannot be narrower than what reaches it. Pinned here because the two
+    refusals below are what a reader of this loader can see; the identification gate is not.
+    """
+    state_dict, _ = _checkpoint()
+    prefixed = {f"diffusion_model.{key}": value for key, value in state_dict.items()}
+    header = {"_quantization_metadata": json.dumps({"layers": {f"diffusion_model.{p}": MARKER for p in QUANTIZED}})}
+
+    with pytest.raises(ValueError, match="keys need a conversion this loader did not apply"):
+        _load(monkeypatch, tmp_path, prefixed, header=header)
+
+
+def test_a_prefixed_dense_checkpoint_is_refused_for_want_of_every_parameter(monkeypatch, tmp_path) -> None:
+    """The same file with no int8 install to catch it first. Either refusal alone is enough -- they
+    are redundant, not each other's only line of defence -- and both are pinned because either is
+    the kind of check a later change relaxes.
+
+    What neither sees, and what would make the desync live, is a *new* state-dict prefix stripper on
+    this path for a prefix `TRANSFORMER_KEY_PREFIXES` does not know.
+    """
+    state_dict, originals = _checkpoint(marker=None)
+    for path in QUANTIZED:
+        del state_dict[f"{path}.weight_scale"]
+        state_dict[f"{path}.weight"] = originals[path].to(torch.bfloat16)
+    prefixed = {f"diffusion_model.{key}": value for key, value in state_dict.items()}
+    header = {
+        "_quantization_metadata": json.dumps(
+            {"layers": {f"diffusion_model.{p}": {"full_precision_matrix_mult": True} for p in QUANTIZED}}
+        )
+    }
+
+    with pytest.raises(RuntimeError, match=r"missing \d+ parameter\(s\) that the model requires"):
+        _load(monkeypatch, tmp_path, prefixed, header=header)

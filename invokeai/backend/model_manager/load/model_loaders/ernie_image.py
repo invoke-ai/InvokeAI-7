@@ -20,6 +20,7 @@ from invokeai.backend.model_manager.taxonomy import (
     ModelType,
     SubModelType,
 )
+from invokeai.backend.quantization.fp8_scaled import reject_quantized_side_channel
 from invokeai.backend.util.devices import TorchDevice
 
 # The geometry of the released ERNIE-Image transformer, from the pipeline's `transformer/config.json`.
@@ -113,6 +114,7 @@ class ErnieImageCheckpointModel(ModelLoader):
         model_dtype = TorchDevice.choose_bfloat16_safe_dtype(target_device)
 
         sd = safetensors.torch.load_file(Path(config.path))
+        reject_quantized_side_channel(sd, f"ERNIE-Image checkpoint {Path(config.path).name}")
         self._ram_cache.make_room(sum(t.nelement() * model_dtype.itemsize for t in sd.values()))
         for key in sd:
             sd[key] = sd[key].to(model_dtype)

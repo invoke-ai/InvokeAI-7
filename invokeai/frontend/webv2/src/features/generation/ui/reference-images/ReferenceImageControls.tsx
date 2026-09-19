@@ -6,20 +6,12 @@ import type {
   IPAdapterMethod,
 } from '@features/generation/core/types';
 import type { FeatureHintId } from '@platform/ui/hints';
-import type { KeyboardEvent, ReactNode } from 'react';
+import type { ReactNode } from 'react';
 
-import {
-  Collapsible,
-  createListCollection,
-  Flex,
-  HStack,
-  NumberInput,
-  SegmentGroup,
-  Stack,
-  Text,
-} from '@chakra-ui/react';
+import { Collapsible, createListCollection, HStack, SegmentGroup, Stack, Text } from '@chakra-ui/react';
 import { Field, Select, Slider } from '@platform/ui';
 import { FeatureHint } from '@platform/ui/hints';
+import { ScrubberField } from '@platform/ui/ScrubberField';
 import { ChevronRightIcon } from 'lucide-react';
 import { useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -73,11 +65,9 @@ const renderStyleVariantItem = (option: StyleVariantOption) => (
   </Stack>
 );
 
-const WEIGHT_MARKS = [
-  { label: '0', value: 0 },
-  { label: '1', value: 1 },
-  { label: '2', value: 2 },
-];
+/** The default weight is the one stop a drag can snap to; the track ends stand in for 0 and 2. */
+const WEIGHT_MARKS = [0, 1, 2];
+const DEFAULT_WEIGHT = 1;
 
 const BEGIN_END_MARKS = [
   { label: '0%', value: 0 },
@@ -130,11 +120,8 @@ export const IPAdapterControls = ({
   onChange: (config: GenerateReferenceImageConfig) => void;
 }) => {
   const { t } = useTranslation();
-  const [draftWeight, setDraftWeight] = useState<number | null>(null);
   const [draftBeginEndStepPct, setDraftBeginEndStepPct] = useState<[number, number] | null>(null);
   const mode = getReferenceMode(config.method);
-  const weight = draftWeight ?? config.weight;
-  const sliderWeight = Math.max(0, weight);
   const beginEndStepPct = draftBeginEndStepPct ?? config.beginEndStepPct;
   const styleVariantCollection = useMemo(
     () =>
@@ -152,16 +139,10 @@ export const IPAdapterControls = ({
     [config.method]
   );
 
-  const commitWeight = useCallback(
-    (nextWeight: number) => {
-      setDraftWeight(null);
-
-      if (nextWeight !== config.weight) {
-        onChange({ ...config, weight: nextWeight });
-      }
-    },
-    [config, onChange]
-  );
+  // No "unchanged" guard: a drag keeps the handler it started with, so `config.weight`
+  // here is the press value and a drag back to it must still commit. The scrubber
+  // already dedupes per step.
+  const handleWeightChange = useCallback((weight: number) => onChange({ ...config, weight }), [config, onChange]);
 
   const commitBeginEndStepPct = useCallback(
     (nextBeginEndStepPct: [number, number]) => {
@@ -204,38 +185,6 @@ export const IPAdapterControls = ({
     [config, onChange]
   );
 
-  const handleWeightInputChange = useCallback(({ valueAsNumber }: NumberInput.ValueChangeDetails) => {
-    if (Number.isFinite(valueAsNumber)) {
-      setDraftWeight(valueAsNumber);
-    }
-  }, []);
-
-  const handleWeightInputBlur = useCallback(() => commitWeight(weight), [commitWeight, weight]);
-
-  const handleWeightInputKeyDown = useCallback(
-    (event: KeyboardEvent<HTMLInputElement>) => {
-      if (event.key === 'Enter') {
-        commitWeight(weight);
-      }
-    },
-    [commitWeight, weight]
-  );
-
-  const handleWeightSliderChange = useCallback(({ value }: SliderValueChangeDetails) => {
-    if (Number.isFinite(value[0])) {
-      setDraftWeight(value[0] as number);
-    }
-  }, []);
-
-  const handleWeightSliderChangeEnd = useCallback(
-    ({ value }: SliderValueChangeDetails) => {
-      if (Number.isFinite(value[0])) {
-        commitWeight(value[0] as number);
-      }
-    },
-    [commitWeight]
-  );
-
   const handleStepsChange = useCallback(({ value }: SliderValueChangeDetails) => {
     const begin = value[0];
     const end = value[1];
@@ -257,8 +206,6 @@ export const IPAdapterControls = ({
     [commitBeginEndStepPct]
   );
 
-  const weightSliderValue = useMemo(() => [sliderWeight], [sliderWeight]);
-  const weightAriaLabel = useMemo(() => [t('widgets.generate.weight')], [t]);
   const stepsAriaLabel = useMemo(() => [t('widgets.generate.activeSteps'), t('widgets.generate.activeSteps')], [t]);
 
   return (
@@ -276,50 +223,20 @@ export const IPAdapterControls = ({
         </SegmentGroup.Root>
       </Stack>
 
-      <Field
-        align="center"
+      <ScrubberField
+        defaultValue={DEFAULT_WEIGHT}
         disabled={disabled}
-        gap="3"
+        formatValue={formatWeight}
         hint="referenceImageWeight"
+        inputMin={-1}
         label={t('widgets.generate.weight')}
-        orientation="horizontal"
-      >
-        <Flex align="center" gap="3">
-          <Slider
-            aria-label={weightAriaLabel}
-            formatValue={formatWeight}
-            marks={WEIGHT_MARKS}
-            max={2}
-            min={0}
-            disabled={disabled}
-            size="sm"
-            step={0.05}
-            value={weightSliderValue}
-            onValueChange={handleWeightSliderChange}
-            onValueChangeEnd={handleWeightSliderChangeEnd}
-            w="full"
-          />
-
-          <NumberInput.Root
-            disabled={disabled}
-            max={2}
-            min={-1}
-            size="xs"
-            step={0.05}
-            value={String(weight)}
-            w="20"
-            onValueChange={handleWeightInputChange}
-          >
-            <NumberInput.Control />
-            <NumberInput.Input
-              aria-label={t('widgets.generate.weight')}
-              fontSize="xs"
-              onBlur={handleWeightInputBlur}
-              onKeyDown={handleWeightInputKeyDown}
-            />
-          </NumberInput.Root>
-        </Flex>
-      </Field>
+        marks={WEIGHT_MARKS}
+        max={2}
+        min={0}
+        step={0.05}
+        value={config.weight}
+        onChange={handleWeightChange}
+      />
 
       <Collapsible.Root>
         <Collapsible.Trigger

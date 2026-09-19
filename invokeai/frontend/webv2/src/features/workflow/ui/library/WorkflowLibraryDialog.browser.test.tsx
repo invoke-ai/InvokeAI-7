@@ -15,6 +15,7 @@ import { system } from '@theme/system';
 import { act, StrictMode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { userEvent } from 'vitest/browser';
 // A plain static import of the (mocked) module the dialog `lazy()`-loads, so
 // its dynamic `import()` resolves against an already-loaded module record
 // instead of paying a first-time compile cost mid-test — that cost is what
@@ -658,6 +659,51 @@ describe('WorkflowLibraryDialog', () => {
 
     expect(detail()?.dataset.workflowDetail).toBe('wf-landscape');
     expect(detail()?.textContent).toContain('Landscape Pass');
+  });
+
+  it('opens the rail actions for a card from a right-click and runs them', async () => {
+    await openWith(LOADED_SNAPSHOT);
+
+    await act(() =>
+      card('wf-landscape')?.dispatchEvent(
+        new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 120, clientY: 80 })
+      )
+    );
+
+    // The right-click selects the card, so the rail (which owns the actions) shows it.
+    expect(document.querySelector<HTMLElement>('[data-workflow-detail]')?.dataset.workflowDetail).toBe('wf-landscape');
+
+    const open = () => document.querySelector<HTMLElement>('[data-workflow-context-menu] [data-menu-item="open"]');
+
+    await vi.waitFor(() => expect(open()).not.toBeNull());
+    await act(() => open()?.click());
+
+    expect(loader.load).toHaveBeenCalledWith(LANDSCAPE.item);
+  });
+
+  it('closes the card context menu on Escape and hands focus back to the card', async () => {
+    await openWith(LOADED_SNAPSHOT);
+
+    // A keyboard-raised menu reports no pointer position.
+    await act(() =>
+      card('wf-landscape')?.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }))
+    );
+
+    const menu = () => document.querySelector<HTMLElement>('[data-workflow-context-menu]');
+
+    // The positioner places the menu a frame after it mounts; anchored inside the card, not at the viewport corner.
+    await vi.waitFor(() =>
+      expect(menu()?.getBoundingClientRect().left ?? 0).toBeGreaterThan(
+        card('wf-landscape')!.getBoundingClientRect().left
+      )
+    );
+
+    await act(async () => {
+      await userEvent.keyboard('{Escape}');
+    });
+
+    await vi.waitFor(() => expect(menu()).toBeNull());
+    await vi.waitFor(() => expect(document.activeElement).toBe(card('wf-landscape')));
   });
 
   it('opens the selected workflow from the rail, the keyboard-reachable path', async () => {

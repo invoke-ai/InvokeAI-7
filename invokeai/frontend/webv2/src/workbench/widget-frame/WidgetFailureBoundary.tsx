@@ -7,11 +7,12 @@ import type {
 
 import { Box, Code, Flex, HStack, ScrollArea, Stack, Text, useRecipe } from '@chakra-ui/react';
 import { Button } from '@platform/ui/Button';
+import { toaster } from '@platform/ui/toaster';
 import { useScrollAreaPhantomHeal } from '@platform/ui/useScrollAreaPhantomHeal';
 import { chipRecipe } from '@theme/recipes';
 import { resolveWidgetInstanceLabel } from '@workbench/widgetLabels';
 import { TriangleAlertIcon } from 'lucide-react';
-import { Component, type ErrorInfo, type ReactNode, useRef } from 'react';
+import { Component, type ErrorInfo, type ReactNode, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { WidgetPanelFrame, WidgetTooltipFrame } from './WidgetFrames';
@@ -40,7 +41,7 @@ interface WidgetFailureBoundaryState {
 
 interface WidgetFailureFallbackProps extends Omit<WidgetFailureBoundaryProps, 'children' | 'resetKey' | 'onRetry'> {
   details: string;
-  onCopy: () => void;
+  onCopy: () => Promise<void>;
   onRetry: () => void;
 }
 
@@ -53,13 +54,23 @@ const WidgetFailureCard = ({
 }: {
   details: string;
   label: string;
-  onCopy: () => void;
+  onCopy: () => Promise<void>;
   onRetry: () => void;
 }) => {
   const { t } = useTranslation();
   const viewportRef = useRef<HTMLDivElement | null>(null);
 
   useScrollAreaPhantomHeal(viewportRef);
+  // The card has no other feedback channel: without a toast the click is
+  // indistinguishable from one that silently failed.
+  const copy = useCallback(
+    () =>
+      onCopy().then(
+        () => toaster.create({ duration: 2500, title: t('widgets.failure.copiedError'), type: 'success' }),
+        () => toaster.create({ title: t('widgets.failure.copyErrorFailed'), type: 'error' })
+      ),
+    [onCopy, t]
+  );
 
   return (
     <Stack bg="bg.muted" borderColor="border.error" borderWidth="1px" gap="2" p="3" rounded="md">
@@ -86,7 +97,7 @@ const WidgetFailureCard = ({
         <Button alignSelf="start" size="2xs" variant="outline" onClick={onRetry}>
           {t('widgets.failure.retry')}
         </Button>
-        <Button alignSelf="start" size="2xs" variant="outline" onClick={onCopy}>
+        <Button alignSelf="start" size="2xs" variant="outline" onClick={copy}>
           {t('widgets.failure.copyError')}
         </Button>
       </Stack>
@@ -210,12 +221,12 @@ export class WidgetFailureBoundary extends Component<WidgetFailureBoundaryProps,
     this.setState({ details: undefined, error: undefined, resetKey: this.props.resetKey });
   };
 
-  private handleCopyError = () => {
+  private handleCopyError = (): Promise<void> => {
     const { details, error } = this.state;
 
-    if (error) {
-      void navigator.clipboard?.writeText(details ?? error.message);
-    }
+    return error && navigator.clipboard
+      ? navigator.clipboard.writeText(details ?? error.message)
+      : Promise.reject(new Error('clipboard unavailable'));
   };
 
   static getDerivedStateFromProps(

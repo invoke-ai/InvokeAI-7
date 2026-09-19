@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   getBoardCounts,
+  getGalleryDestinationBoardId,
   getGallerySelectedBoardId,
   getGallerySelectedImageQuery,
   getGallerySemanticImageQuery,
@@ -282,6 +283,16 @@ describe('gallery state view', () => {
     expect(gallery.selectedItemKeys).toEqual(['image:selected.png']);
   });
 
+  it('treats a selection in the starred strip as visible, though the listing does not hold it', () => {
+    const starred = { ...createImageItem('starred.png'), starred: true };
+    const values = { selectedImageName: 'image:starred.png' };
+
+    expect(getGalleryStateView(values, boards, [createImageItem('regular.png')], false).selectedItemKey).toBeNull();
+    expect(
+      getGalleryStateView(values, boards, [createImageItem('regular.png')], false, [starred]).selectedItemKey
+    ).toBe('image:starred.png');
+  });
+
   it('projects same-name images and videos independently by qualified key', () => {
     const image = createImageItem('shared');
     const video = createVideoItem('shared');
@@ -329,5 +340,20 @@ describe('gallery state view', () => {
     );
     expect(ranked.semanticImageQuery).toEqual({ imageName: 'ref.png', kind: 'image' });
     expect(getGalleryStateView({ selectedBoardId: 'board-1' }, boards, [], false).semanticImageQuery).toBeNull();
+  });
+});
+
+describe('getGalleryDestinationBoardId', () => {
+  it('sends results to the picked board, keeping an explicit Uncategorized choice', () => {
+    expect(getGalleryDestinationBoardId({ projectBoardId: 'project', selectedBoardId: 'picked' })).toBe('picked');
+    expect(getGalleryDestinationBoardId({ projectBoardId: 'project', selectedBoardId: 'none' })).toBe('none');
+  });
+
+  it('falls back to the project board when nothing is picked or a date bucket is', () => {
+    expect(getGalleryDestinationBoardId({ projectBoardId: 'project' })).toBe('project');
+    expect(getGalleryDestinationBoardId({ projectBoardId: 'project', selectedBoardId: 'by_date:2026-07-15' })).toBe(
+      'project'
+    );
+    expect(getGalleryDestinationBoardId({})).toBeNull();
   });
 });

@@ -64,6 +64,10 @@ export interface GalleryCommandsPort {
   setPageInfo(totalImages: number): void;
   setSearchTerm(searchTerm: string): void;
   setStarredOnly(starredOnly: boolean): void;
+  setSemanticSearchMode(enabled: boolean): void;
+  setSemanticSearchText(text: string): void;
+  commitSemanticSearch(text: string): void;
+  clearSearch(): void;
   setView(view: GalleryView): void;
   toggleItemSelection(item: GalleryItem, nextPrimaryItem: GalleryItem | null): void;
   updateSettings(settings: Partial<GallerySettings>): void;
@@ -110,7 +114,10 @@ export interface GalleryUiAdapter {
   exportProject(projectId: string, projectName: string): void;
   progressSessions: QueueProgressSession[];
   pinnedProgressSessionId: string | null;
-  followProgressSession(sessionId: string): void;
+  /** The session Preview is showing while it follows live; null otherwise. The arrow keys step from it. */
+  followedProgressSessionId: string | null;
+  /** Follow `sessionId` live; a tile click also reveals Preview, an arrow step must not move the layout. */
+  followProgressSession(sessionId: string, options: { revealPreview: boolean }): void;
   liveFollowEnabled: boolean;
   widgets: {
     /** Open (or reveal) the Gallery widget; false when no region can host it. */

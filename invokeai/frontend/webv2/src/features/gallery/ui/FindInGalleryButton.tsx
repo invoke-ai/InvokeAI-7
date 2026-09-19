@@ -2,13 +2,13 @@ import type { IconButtonProps } from '@platform/ui/Button';
 
 import { IconButton } from '@platform/ui/Button';
 import { Tooltip } from '@platform/ui/Tooltip';
-import { ImageIcon } from 'lucide-react';
+import { CrosshairIcon } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 /**
  * "Find in gallery", for the panels that condition on media they did not pick
- * from the grid they are looking at. The mark is the Gallery widget's own rail
- * icon at control scale, so the badge names its destination.
+ * from the grid they are looking at. The mark is the same crosshair the
+ * workflow form's pinned fields use to locate their node: "take me to it".
  *
  * Presentation is the caller's: this owns the icon, the accessible name, and
  * the tooltip, which are what must not drift between the four thumbnails that
@@ -37,7 +37,7 @@ export const FindInGalleryButton = ({ name, onFind, ...buttonProps }: FindInGall
   return (
     <Tooltip content={label}>
       <IconButton aria-label={label} size="2xs" {...buttonProps} onClick={onFind}>
-        <ImageIcon />
+        <CrosshairIcon />
       </IconButton>
     </Tooltip>
   );

@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from invokeai.backend.model_manager.search import ModelSearch
+from invokeai.backend.model_manager.search import ModelSearch, ModelSearchCancelled
 
 
 @pytest.fixture
@@ -160,3 +160,22 @@ def test_model_search_handles_modular_diffusers_model_dirs(model_search: tuple[M
     found = search.search(tmp_path)
 
     assert found == {modular_dir}
+
+
+def test_model_search_stops_when_asked(tmp_path: Path):
+    """A stop request abandons the walk at the next directory instead of finishing the tree."""
+    visited: list[Path] = []
+    for index in range(4):
+        folder = tmp_path / f"folder{index}"
+        folder.mkdir()
+        (folder / "model.safetensors").write_text("")
+
+    def stop_after_first_model() -> bool:
+        return len(visited) > 0
+
+    search = ModelSearch(should_stop=stop_after_first_model, on_model_found=lambda path: visited.append(path) or True)
+
+    with pytest.raises(ModelSearchCancelled):
+        search.search(tmp_path)
+
+    assert len(visited) == 1

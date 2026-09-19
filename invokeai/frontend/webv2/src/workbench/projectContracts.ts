@@ -120,6 +120,10 @@ export interface UndoRedoEntry {
   createdAt: string;
   label: string;
   project: ProjectUndoSnapshot;
+  /** Edits that arrive as a stream (typing, dragging) share a key so they fold into one step. */
+  mergeKey?: string;
+  /** When the entry last absorbed a same-key edit; the merge window runs from here. */
+  mergedAt?: string;
 }
 
 /**

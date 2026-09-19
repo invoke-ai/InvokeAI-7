@@ -102,6 +102,9 @@ export const WorkflowLibraryDialog = ({
   // what keeps the lazy dialog mounted) is only released once the transition
   // has finished.
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
+  // A right-click selects the card so the rail (which owns the actions) shows
+  // that workflow, then the rail opens its menu at the pointer.
+  const [contextMenuPoint, setContextMenuPoint] = useState<{ x: number; y: number } | null>(null);
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const closeDialog = useCallback(() => {
@@ -109,6 +112,7 @@ export const WorkflowLibraryDialog = ({
     // is nothing left to animate against, so this drops the mount outright.
     setPreviewEntry(null);
     setIsPreviewOpen(false);
+    setContextMenuPoint(null);
     onOpenChange(false);
   }, [onOpenChange]);
   const { load, loadPhase } = useLoadLibraryWorkflow(closeDialog);
@@ -210,7 +214,26 @@ export const WorkflowLibraryDialog = ({
 
   // The deleted row is gone from the next refresh; dropping the selection lets
   // the head of the list take over, the same way a filter change does.
-  const handleDeleted = useCallback(() => setSelectedWorkflowId(null), []);
+  const handleDeleted = useCallback(() => {
+    setSelectedWorkflowId(null);
+    setContextMenuPoint(null);
+  }, []);
+  const handleCardContextMenu = useCallback(
+    (workflowId: string, point: { x: number; y: number }) => {
+      setSelectedWorkflowId(workflowId);
+
+      // An open menu does not follow a new anchor: close it and reopen it at the
+      // new point once that close has rendered, as a native menu relocates.
+      if (contextMenuPoint) {
+        setContextMenuPoint(null);
+        requestAnimationFrame(() => setContextMenuPoint(point));
+      } else {
+        setContextMenuPoint(point);
+      }
+    },
+    [contextMenuPoint]
+  );
+  const closeContextMenu = useCallback(() => setContextMenuPoint(null), []);
 
   return (
     <>
@@ -295,12 +318,15 @@ export const WorkflowLibraryDialog = ({
                   missingCounts={missingCounts}
                   selectedWorkflowId={activeWorkflowId}
                   status={status}
+                  onContextMenu={handleCardContextMenu}
                   onOpen={handleOpenWorkflow}
                   onSelect={setSelectedWorkflowId}
                 />
                 <WorkflowLibraryDetailPanel
+                  contextMenuPoint={contextMenuPoint}
                   entry={activeEntry}
                   onClose={closeDialog}
+                  onContextMenuClose={closeContextMenu}
                   onDeleted={handleDeleted}
                   onDuplicated={setSelectedWorkflowId}
                   onOpen={handleOpenItem}

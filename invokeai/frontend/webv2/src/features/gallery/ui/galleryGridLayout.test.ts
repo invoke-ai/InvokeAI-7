@@ -3,17 +3,17 @@ import type { GalleryImageItem } from '@features/gallery/core/items';
 import { describe, expect, it } from 'vitest';
 
 import {
-  buildGalleryGridNavigation,
   buildGalleryGridRows,
-  getGalleryGridNavigationStep,
   GALLERY_GRID_GAP_PX,
+  GALLERY_PINNED_FOOTER_PX,
   GALLERY_STARRED_HEADER_HEIGHT_PX,
-  GALLERY_STARRED_SEPARATOR_HEIGHT_PX,
   getGalleryCellSizePx,
   getGalleryColumnCount,
   getGalleryColumnCountForCell,
-  getGalleryGridRowHeightPx,
-  getGalleryGridRowIndexForItem,
+  getGalleryGridRowIndexForItemKey,
+  getGalleryPinnedHeightPx,
+  getGalleryStarredLayout,
+  getGalleryStarredStripItems,
 } from './galleryGridLayout';
 
 const createImageItem = (name: string, starred = false): GalleryImageItem => ({
@@ -30,18 +30,7 @@ const createImageItem = (name: string, starred = false): GalleryImageItem => ({
   width: 512,
 });
 
-const buildRows = (overrides: Partial<Parameters<typeof buildGalleryGridRows>[0]> = {}) =>
-  buildGalleryGridRows({
-    columnCount: 2,
-    isStarredOpen: true,
-    items: [],
-    starredItems: [],
-    starredTotal: 0,
-    ...overrides,
-  });
-
-const cellNames = (rows: ReturnType<typeof buildRows>): string[][] =>
-  rows.flatMap((row) => (row.kind === 'cells' ? [row.cells.map((cell) => cell.item.name)] : []));
+const buildRows = (items: GalleryImageItem[]) => buildGalleryGridRows(items, 2);
 
 describe('getGalleryColumnCountForCell', () => {
   it('rounds to the nearest whole cell and clamps to the caller bounds', () => {
@@ -83,8 +72,18 @@ describe('getGalleryColumnCount', () => {
 
   it('clamps to a usable range at both extremes', () => {
     expect(getGalleryColumnCount({ imageDensityPercent: 100, widthPx: 40 })).toBe(2);
-    expect(getGalleryColumnCount({ imageDensityPercent: 100, widthPx: 8000 })).toBe(12);
-    expect(getGalleryColumnCount({ imageDensityPercent: 0, widthPx: 8000 })).toBe(12);
+    expect(getGalleryColumnCount({ imageDensityPercent: 100, widthPx: 8000 })).toBe(48);
+    expect(getGalleryColumnCount({ imageDensityPercent: 0, widthPx: 8000 })).toBe(42);
+  });
+
+  it('keeps density effective in a wide placement instead of pinning it at a column cap', () => {
+    // A bottom panel around 1100px wide: every density step must still change the count.
+    const counts = [0, 25, 50, 75, 100].map((percent) =>
+      getGalleryColumnCount({ imageDensityPercent: percent, widthPx: 1100 })
+    );
+
+    expect(counts).toEqual([...counts].sort((a, b) => a - b));
+    expect(new Set(counts).size).toBe(counts.length);
   });
 
   it('ignores out-of-range density instead of producing a nonsense count', () => {
@@ -116,166 +115,45 @@ describe('getGalleryCellSizePx', () => {
 });
 
 describe('buildGalleryGridRows', () => {
-  it('chunks plain items into rows of the column count with no section chrome', () => {
-    const rows = buildRows({ items: ['a', 'b', 'c'].map((name) => createImageItem(name)) });
+  it('chunks the listing into rows of the column count, keyed by their leading cell', () => {
+    const rows = buildRows(['a', 'b', 'c'].map((name) => createImageItem(name)));
 
-    expect(rows.map((row) => row.kind)).toEqual(['cells', 'cells']);
-    expect(rows[0]?.kind === 'cells' && rows[0].cells.length).toBe(2);
-    expect(rows[1]?.kind === 'cells' && rows[1].cells.length).toBe(1);
+    expect(rows.map((row) => row.cells.map((cell) => cell.name))).toEqual([['a', 'b'], ['c']]);
+    expect(rows.map((row) => row.key)).toEqual(['regular:image:a', 'regular:image:c']);
   });
 
-  it('puts the starred strip in a header-led section above the unstarred listing', () => {
-    const starred = createImageItem('starred-1', true);
-    const rows = buildRows({
-      items: [createImageItem('regular-1'), createImageItem('regular-2')],
-      starredItems: [starred],
-      starredTotal: 1,
-    });
-
-    expect(rows.map((row) => row.kind)).toEqual(['starred-header', 'cells', 'starred-gap', 'cells']);
-    expect(rows[0]?.kind === 'starred-header' && rows[0]).toMatchObject({ shownCount: 1, total: 1 });
-    expect(rows[1]?.kind === 'cells' && rows[1].section).toBe('starred');
-    expect(rows[2]?.kind === 'starred-gap' && rows[2].withSeparator).toBe(true);
-    expect(rows[3]?.kind === 'cells' && rows[3].section).toBe('regular');
-    expect(cellNames(rows)).toEqual([['starred-1'], ['regular-1', 'regular-2']]);
-  });
-
-  it('caps the strip at three rows of the current column count and reports the backend total', () => {
+  it('caps the strip at three rows of the current column count', () => {
     const starredItems = Array.from({ length: 7 }, (_, index) => createImageItem(`starred-${index}`, true));
-    const rows = buildRows({ starredItems, starredTotal: 9 });
 
-    expect(rows[0]?.kind === 'starred-header' && rows[0]).toMatchObject({ shownCount: 6, total: 9 });
-    expect(rows.filter((row) => row.kind === 'cells' && row.section === 'starred')).toHaveLength(3);
-    expect(cellNames(rows).flat()).not.toContain('starred-6');
-  });
-
-  it('renders no chrome when the strip is empty', () => {
-    const rows = buildRows({ items: [createImageItem('starred-1', true)], starredItems: [], starredTotal: 0 });
-
-    expect(rows.map((row) => row.kind)).toEqual(['cells']);
-  });
-
-  it('keeps the header but drops the starred rows and the separator while collapsed', () => {
-    const starred = createImageItem('starred-1', true);
-    const rows = buildRows({
-      isStarredOpen: false,
-      items: [createImageItem('regular-1')],
-      starredItems: [starred],
-      starredTotal: 1,
-    });
-
-    expect(rows.map((row) => row.kind)).toEqual(['starred-header', 'starred-gap', 'cells']);
-    expect(rows[0]?.kind === 'starred-header' && rows[0]).toMatchObject({ shownCount: 0, total: 1 });
-    expect(rows[1]?.kind === 'starred-gap' && rows[1].withSeparator).toBe(false);
-  });
-
-  it('keeps regular row keys stable across a starred collapse so their cells are not recreated', () => {
-    const starred = createImageItem('starred-1', true);
-    const input = {
-      items: [createImageItem('regular-1'), createImageItem('regular-2')],
-      starredItems: [starred],
-      starredTotal: 1,
-    };
-    const regularKeys = (rows: ReturnType<typeof buildRows>) =>
-      rows.filter((row) => row.kind === 'cells' && row.section === 'regular').map((row) => row.key);
-
-    expect(regularKeys(buildRows({ ...input, isStarredOpen: false }))).toEqual(regularKeys(buildRows(input)));
-  });
-
-  it('numbers cells continuously from the strip into the listing, matching the navigation list', () => {
-    const starred = createImageItem('starred-1', true);
-    const input = {
-      columnCount: 2,
-      items: [createImageItem('regular-1'), createImageItem('regular-2')],
-      starredItems: [starred, createImageItem('starred-2', true)],
-    };
-    const openRows = buildRows({ ...input, starredTotal: 2 });
-    const openNavigation = buildGalleryGridNavigation({ ...input, isStarredOpen: true });
-    const indices = (rows: ReturnType<typeof buildRows>) =>
-      rows.flatMap((row) =>
-        row.kind === 'cells' ? row.cells.map((cell) => (cell.kind === 'item' ? cell.itemIndex : -1)) : []
-      );
-
-    expect(indices(openRows)).toEqual([0, 1, 2, 3]);
-    expect(openNavigation.items.map((item) => item.name)).toEqual(['starred-1', 'starred-2', 'regular-1', 'regular-2']);
-    expect(openNavigation.regularStart).toBe(2);
-
-    const collapsedNavigation = buildGalleryGridNavigation({ ...input, isStarredOpen: false });
-    expect(indices(buildRows({ ...input, isStarredOpen: false, starredTotal: 2 }))).toEqual([0, 1]);
-    expect(collapsedNavigation).toEqual({ items: input.items, regularStart: 0 });
+    expect(getGalleryStarredStripItems(starredItems, 2).map((item) => item.name)).not.toContain('starred-6');
+    expect(getGalleryStarredStripItems(starredItems, 2)).toHaveLength(6);
   });
 });
 
-describe('getGalleryGridNavigationStep', () => {
-  // Five starred items at three columns: a full strip row plus a partial one
-  // above four listing items.
-  const navigation = buildGalleryGridNavigation({
-    columnCount: 3,
-    isStarredOpen: true,
-    items: ['r0', 'r1', 'r2', 'r3'].map((name) => createImageItem(name)),
-    starredItems: ['s0', 's1', 's2', 's3', 's4'].map((name) => createImageItem(name, true)),
-  });
-  const step = (from: number, direction: 'down' | 'left' | 'right' | 'up') =>
-    getGalleryGridNavigationStep(navigation, 3, from, direction);
+describe('pinned sections layout', () => {
+  it('sizes the starred strip by its disclosure row plus its open rows', () => {
+    const open = getGalleryStarredLayout({ collapsed: false, columns: 2, shownCount: 3, tileSize: 96 });
+    const collapsed = getGalleryStarredLayout({ collapsed: true, columns: 2, shownCount: 3, tileSize: 96 });
 
-  it('keeps the column when stepping down across the seam past a partial strip row', () => {
-    // s4 sits alone on the strip's second row (column 1); the cell below it is r1.
-    expect(step(4, 'down')).toBe(5 + 1);
-    // s1 (row 0, column 1) steps onto s4 (row 1, column 1).
-    expect(step(1, 'down')).toBe(4);
-    // s2 (row 0, column 2) has no cell below in the partial row; it lands on the row's last cell.
-    expect(step(2, 'down')).toBe(4);
+    expect(open.rowCount).toBe(2);
+    expect(open.height).toBe(GALLERY_STARRED_HEADER_HEIGHT_PX + 2 * (96 + GALLERY_GRID_GAP_PX));
+    expect(collapsed.height).toBe(GALLERY_STARRED_HEADER_HEIGHT_PX);
+    expect(getGalleryStarredLayout({ collapsed: false, columns: 2, shownCount: 0, tileSize: 96 }).height).toBe(0);
   });
 
-  it('keeps the column when stepping up into the strip', () => {
-    // r2 (listing row 0, column 2) goes to the strip's last row, clamped to its last cell s4.
-    expect(step(5 + 2, 'up')).toBe(4);
-    // r0 (column 0) goes to s3.
-    expect(step(5, 'up')).toBe(3);
-  });
-
-  it('walks the flat sequence left and right and stays put at the edges', () => {
-    expect(step(4, 'right')).toBe(5);
-    expect(step(5, 'left')).toBe(4);
-    expect(step(0, 'left')).toBe(0);
-    expect(step(0, 'up')).toBe(0);
-    expect(step(8, 'right')).toBe(8);
-    expect(step(8, 'down')).toBe(8);
-    expect(step(5, 'down')).toBe(8);
+  it('closes the pinned block with its footer only when something is pinned', () => {
+    expect(getGalleryPinnedHeightPx(0, 0)).toBe(0);
+    expect(getGalleryPinnedHeightPx(40, 0)).toBe(40 + GALLERY_PINNED_FOOTER_PX);
+    expect(getGalleryPinnedHeightPx(40, 124)).toBe(164 + GALLERY_PINNED_FOOTER_PX);
   });
 });
 
-describe('getGalleryGridRowHeightPx', () => {
-  it('sizes chrome rows by their own constants and cell rows by the shared row height', () => {
-    const starred = createImageItem('starred-1', true);
-    const items = { items: [createImageItem('regular-1')], starredItems: [starred], starredTotal: 1 };
+describe('getGalleryGridRowIndexForItemKey', () => {
+  it('finds the listing row holding an item; a strip item has no row', () => {
+    const items = [createImageItem('regular-1'), createImageItem('regular-2'), createImageItem('regular-3')];
 
-    expect(buildRows(items).map((row) => getGalleryGridRowHeightPx(row, 100))).toEqual([
-      GALLERY_STARRED_HEADER_HEIGHT_PX,
-      100,
-      GALLERY_STARRED_SEPARATOR_HEIGHT_PX,
-      100,
-    ]);
-    expect(buildRows({ ...items, isStarredOpen: false }).map((row) => getGalleryGridRowHeightPx(row, 100))).toEqual([
-      GALLERY_STARRED_HEADER_HEIGHT_PX,
-      GALLERY_GRID_GAP_PX,
-      100,
-    ]);
-  });
-});
-
-describe('getGalleryGridRowIndexForItem', () => {
-  it('finds the row holding a navigation index, across sections', () => {
-    const starred = createImageItem('starred-1', true);
-    const rows = buildRows({
-      items: [createImageItem('regular-1'), createImageItem('regular-2'), createImageItem('regular-3')],
-      starredItems: [starred],
-      starredTotal: 1,
-    });
-
-    expect(getGalleryGridRowIndexForItem(rows, 0)).toBe(1);
-    expect(getGalleryGridRowIndexForItem(rows, 1)).toBe(3);
-    expect(getGalleryGridRowIndexForItem(rows, 3)).toBe(4);
-    expect(getGalleryGridRowIndexForItem(rows, 99)).toBe(-1);
+    expect(getGalleryGridRowIndexForItemKey(items, 'image:starred-1', 2)).toBe(-1);
+    expect(getGalleryGridRowIndexForItemKey(items, 'image:regular-1', 2)).toBe(0);
+    expect(getGalleryGridRowIndexForItemKey(items, 'image:regular-3', 2)).toBe(1);
   });
 });

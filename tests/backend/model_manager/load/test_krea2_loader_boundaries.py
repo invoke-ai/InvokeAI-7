@@ -696,3 +696,133 @@ def test_each_qwen3_vl_variant_names_its_own_hugging_face_repo() -> None:
 
     assert loader._hf_repo(SimpleNamespace(variant=Qwen3VLVariantType.Qwen3VL_4B)) == "Qwen/Qwen3-VL-4B-Instruct"
     assert loader._hf_repo(SimpleNamespace(variant=Qwen3VLVariantType.Qwen3VL_8B)) == "Qwen/Qwen3-VL-8B-Instruct"
+
+
+class _TinyNativeKrea2Block(torch.nn.Module):
+    def __init__(self, width: int) -> None:
+        super().__init__()
+        # The diffusers names the native `prenorm.scale` and `attn.wq.weight` convert to.
+        self.norm1 = torch.nn.Module()
+        self.norm1.weight = torch.nn.Parameter(torch.empty(width))
+        self.attn = torch.nn.Module()
+        self.attn.to_q = torch.nn.Linear(width, width, bias=False)
+        # Where the native `blocks.0.mod.lin` lands, reshaped `(6H,)` to `(6, H)`.
+        self.scale_shift_table = torch.nn.Parameter(torch.empty(6, width))
+
+
+class _TinyNativeKrea2(torch.nn.Module):
+    WIDTH = 8
+
+    def __init__(self, **_kwargs) -> None:
+        super().__init__()
+        # Where the native `first.weight` / `first.bias` land: a Linear *with* a bias, which the
+        # in-block projections are not.
+        self.img_in = torch.nn.Linear(self.WIDTH, self.WIDTH, bias=True)
+        self.transformer_blocks = torch.nn.ModuleList([_TinyNativeKrea2Block(self.WIDTH)])
+
+
+def _native_fp8_driver(monkeypatch, tmp_path, state_dict):
+    import diffusers
+    import safetensors.torch
+
+    from invokeai.backend.model_manager.load.model_loaders import krea2
+    from tests.fixtures.loader_seams import Seam, prepare
+
+    checkpoint = tmp_path / "krea2_fp8_scaled_everything.safetensors"
+    checkpoint.touch()
+    config = Main_Checkpoint_Krea2_Config.model_construct(
+        path=str(checkpoint), variant=Krea2VariantType.Turbo, fp8_storage=None
+    )
+    seam = Seam(loader=Krea2CheckpointModel, module=krea2, load_file_host=safetensors.torch, patches_device=True)
+    run = prepare(
+        seam,
+        monkeypatch,
+        state_dict=state_dict,
+        metadata=None,
+        geometry=lambda patch: patch.setattr(diffusers, "Krea2Transformer2DModel", _TinyNativeKrea2, raising=False),
+    )
+    return run, config
+
+
+def _native_block(width: int) -> dict[str, torch.Tensor]:
+    """The dense remainder of one native block, so every module the tiny model declares is filled."""
+    return {
+        "first.bias": torch.zeros(width),
+        "first.weight": torch.zeros(width, width),
+        "blocks.0.prenorm.scale": torch.ones(width),
+        "blocks.0.attn.wq.weight": torch.zeros(width, width),
+        "blocks.0.mod.lin": torch.zeros(6 * width),
+    }
+
+
+def test_a_quantized_norm_keeps_its_scale_through_the_native_rename(monkeypatch, tmp_path) -> None:
+    """A native Krea-2 norm stores its parameter as `scale`, not `weight`, and the converter sends
+    `blocks.0.prenorm.scale` to `transformer_blocks.0.norm1.weight`. The side channel is detached
+    before that rename and reattached after it -- at the destination a probe inferred by pushing
+    `blocks.0.prenorm.weight` through the converter. That matches no norm rule and comes back as
+    `transformer_blocks.0.prenorm`. No such module; the scale was reported orphaned at INFO and
+    dropped, and the norm loaded as its raw fp8 codes (measured: 320 where the file encodes 0.997).
+
+    `reattach_layer_sidechannel`'s own docstring names the producer: one that "quantizes everything"
+    writes `<path>.scale` for a norm. The destination *is* a `.weight` after the rename, so extraction
+    pairs it correctly once the scale lands there. The mapping now comes from the conversion's own
+    `key_map`, which records where each tensor actually went.
+
+    Two controls, because a mapping built per tensor can go wrong per module: a Linear without a bias,
+    and one with -- `first.bias` sorts before `first.weight`, as safetensors serves them, and only
+    the weight names a module a scale can hang on.
+    """
+    from tests.fixtures.quantized_payloads import quantize_scaled_fp8
+
+    width = _TinyNativeKrea2.WIDTH
+    torch.manual_seed(0)
+    norm_payload = quantize_scaled_fp8(torch.rand(width) + 0.5)
+    linear_payload = quantize_scaled_fp8(torch.randn(width, width))
+    biased_payload = quantize_scaled_fp8(torch.randn(width, width))
+    state_dict = {
+        **_native_block(width),
+        "first.weight": biased_payload.codes,
+        "first.weight_scale": biased_payload.scale,
+        "blocks.0.prenorm.scale": norm_payload.codes,
+        "blocks.0.prenorm.weight_scale": norm_payload.scale,
+        "blocks.0.attn.wq.weight": linear_payload.codes,
+        "blocks.0.attn.wq.weight_scale": linear_payload.scale,
+    }
+    assert state_dict["blocks.0.prenorm.scale"].dtype is torch.float8_e4m3fn
+    run, config = _native_fp8_driver(monkeypatch, tmp_path, state_dict)
+
+    model = run.load(config)
+
+    block = model.transformer_blocks[0]
+    # The controls: Linears, whose parameter *is* named `weight`, with and without a bias beside it.
+    assert torch.allclose(block.attn.to_q.weight.float(), linear_payload.dequantized, atol=1e-5)
+    assert torch.allclose(model.img_in.weight.float(), biased_payload.dequantized, atol=1e-5)
+    # The norm, measured against the value the file encodes rather than the raw codes it carries.
+    assert torch.allclose(block.norm1.weight.float(), norm_payload.dequantized, atol=1e-5), (
+        f"norm loaded as {block.norm1.weight.float()[:3].tolist()}, "
+        f"file encodes {norm_payload.dequantized[:3].tolist()}"
+    )
+
+
+def test_a_scale_on_a_reshaped_table_is_reported_rather_than_silently_absorbed(monkeypatch, tmp_path) -> None:
+    """`blocks.0.mod.lin` becomes `transformer_blocks.0.scale_shift_table`: a reshaped table with no
+    `.weight` to pair a scale with. It must get *no* destination, so the loader reports the loss.
+    Taking the stem of whatever key the converter produced would give `transformer_blocks.0` -- a real
+    module -- so the scale would be reattached there, counted as placed, and then dropped by
+    extraction without a word. Measured: that is what a looser mapping does. The report is the only
+    honest outcome available.
+
+    This guards the `.weight`-only rule rather than reproducing the defect the norm cell covers: the
+    old probe orphaned this module too, for a different reason.
+    """
+    from tests.fixtures.quantized_payloads import quantize_scaled_fp8
+
+    width = _TinyNativeKrea2.WIDTH
+    table = quantize_scaled_fp8(torch.rand(6 * width))
+    state_dict = {**_native_block(width), "blocks.0.mod.lin": table.codes, "blocks.0.mod.weight_scale": table.scale}
+    run, config = _native_fp8_driver(monkeypatch, tmp_path, state_dict)
+
+    run.load(config)
+
+    reports = [call.args[0] for call in run.loader._logger.info.call_args_list if "side-channel" in call.args[0]]
+    assert reports and "blocks.0.mod" in reports[0], f"the lost scale was not reported: {reports}"

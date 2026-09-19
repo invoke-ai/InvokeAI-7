@@ -32,6 +32,8 @@ vi.mock('@workbench/widgets/preview/livePreviewFollow', () => ({
     sessions: [],
     gallerySessions: [],
     pinnedSessionId: null,
+    followedSessionId: null,
+    follow: vi.fn(),
     pin: vi.fn(),
     showAll: vi.fn(),
   }),

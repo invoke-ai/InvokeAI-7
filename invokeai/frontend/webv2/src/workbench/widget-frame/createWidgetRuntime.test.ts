@@ -54,6 +54,7 @@ const createDispatch = () => {
 
   const widgets: WorkbenchWidgetCommands = {
     dockFloating: (instanceId) => dispatch({ instanceId, type: 'dockFloatingWidget' }),
+    closeFloating: (instanceId) => dispatch({ instanceId, type: 'closeFloatingWidget' }),
     float: (instanceId, region) =>
       dispatch(region ? { instanceId, region, type: 'floatWidget' } : { instanceId, type: 'floatWidget' }),
     focusFloating: (instanceId) => dispatch({ instanceId, type: 'focusFloatingWidget' }),

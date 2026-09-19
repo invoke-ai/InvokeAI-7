@@ -18,6 +18,8 @@ import { TopbarShortcutKeys } from './TopbarShortcutKeys';
 import { useTopbarShortcutBinding } from './useTopbarShortcut';
 
 const TOOLTIP_CONTENT_PROPS = { p: '0' };
+/** The hint inherits the button's text color; its frame is that color, faded. */
+const SHORTCUT_BORDER = 'color-mix(in oklab, currentColor 40%, transparent)';
 
 type ProgressCircleRootProps = ComponentProps<typeof ProgressCircle.Root>;
 // The `3xs` size (14px/2px, defined in platform/ui/theme/recipes.ts) is a repo
@@ -126,7 +128,7 @@ export const InvokeButton = ({ state }: { state: InvocationState }) => {
         </Box>
         {t('topbar.invoke.invoke')}
         {shortcutParts ? (
-          <Kbd css={HIDE_BELOW_HINT_WIDTH} variant="outline" color="bg" size="sm">
+          <Kbd css={HIDE_BELOW_HINT_WIDTH} variant="outline" borderColor={SHORTCUT_BORDER} color="inherit" size="sm">
             <TopbarShortcutKeys parts={shortcutParts} />
           </Kbd>
         ) : null}

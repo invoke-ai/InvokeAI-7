@@ -21,6 +21,7 @@ from invokeai.backend.model_manager.load.model_loaders.krea2 import Krea2Checkpo
 from invokeai.backend.model_manager.taxonomy import Krea2VariantType
 from invokeai.backend.quantization.int8_convrot import CONVROT_GROUP_SIZE, Int8ConvrotLinear
 from invokeai.backend.quantization.nvfp4 import NVFP4Linear
+from tests.fixtures.quantized_payloads import comfy_quant_marker, nvfp4_signed_tensors
 
 COMPUTE_DTYPE = torch.bfloat16
 
@@ -64,15 +65,7 @@ class _TinyKrea2(torch.nn.Module):
 
 
 def _nvfp4_tensors(path: str, shape: tuple[int, int]) -> tuple[dict[str, torch.Tensor], torch.Tensor]:
-    """Codes 2 and 10 are +1.0 and -1.0; with a block scale of 2 and a global scale of 0.25 the weight is +-0.5."""
-    positive = torch.randint(0, 2, shape, dtype=torch.bool)
-    codes = torch.where(positive, 2, 10).to(torch.uint8)
-    tensors = {
-        f"{path}.weight": (codes[:, 0::2] << 4) | codes[:, 1::2],
-        f"{path}.weight_scale": torch.full((shape[0], shape[1] // 16), 2.0).to(torch.float8_e4m3fn),
-        f"{path}.weight_scale_2": torch.tensor(0.25),
-    }
-    return tensors, torch.where(positive, 0.5, -0.5)
+    return nvfp4_signed_tensors(path, torch.randint(0, 2, shape, dtype=torch.bool))
 
 
 def _packed_bytes(rows: int, columns: int) -> int:
@@ -108,12 +101,9 @@ def loaded(request, monkeypatch: pytest.MonkeyPatch, tmp_path) -> SimpleNamespac
     if request.param == "dense":
         state_dict["blocks.0.attn.wk.weight"] = torch.randn(128, CONVROT_GROUP_SIZE)
     else:
-        marker = json.dumps({"format": "int8_tensorwise", "convrot": False})
         state_dict["blocks.0.attn.wk.weight"] = torch.randint(-127, 128, (128, CONVROT_GROUP_SIZE), dtype=torch.int8)
         state_dict["blocks.0.attn.wk.weight_scale"] = torch.ones(128, 1)
-        state_dict["blocks.0.attn.wk.comfy_quant"] = torch.frombuffer(
-            bytearray(marker.encode("utf-8")), dtype=torch.uint8
-        ).clone()
+        state_dict["blocks.0.attn.wk.comfy_quant"] = comfy_quant_marker({"format": "int8_tensorwise", "convrot": False})
     dense = {
         name: state_dict[name] for name in ("tmlp.0.bias", "first.weight", "first.bias", "blocks.0.attn.wk.weight")
     }

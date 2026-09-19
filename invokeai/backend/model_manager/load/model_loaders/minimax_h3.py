@@ -22,8 +22,9 @@ The two ``MiniMaxH3Scheduler`` instances (video shift 12.0, audio shift 3.0) are
 directly by the denoise invocation - they are stateless configs, not loaded weights.
 """
 
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import torch
 
@@ -43,6 +44,60 @@ from invokeai.backend.model_manager.taxonomy import (
 )
 from invokeai.backend.model_manager.util.qwen3_vl import normalize_qwen3vl_rope_config
 from invokeai.backend.util.devices import TorchDevice
+
+
+def _reject_formats_declared_in_the_header(model_path: Path, what: str, logger: Any) -> None:
+    """Refuse a quantization format this loader cannot read, from the header alone.
+
+    Before the tensor read, which is ~20 GiB for the transformer and ~25 GiB for the encoder. Both
+    header transports are read, because which one a file uses depends on the tool that produced it,
+    not on the format: a per-tensor ``.comfy_quant`` marker, or an entry in ``_quantization_metadata``.
+    FLUX.2's Comfy-Org fp8 build uses only the second, and reading only the first let a file of that
+    shape through to the converter, which died in the fused-qkv split with a bare ``IndexError`` that
+    named neither fp8 nor the format.
+
+    The two are read with different strictness on purpose. A per-tensor marker exists only to declare
+    a scheme, so one without a readable ``format`` is refused as unreadable, as it always was. A header
+    entry can carry per-layer flags and nothing else -- ``full_precision_matrix_mult`` alone is a
+    well-formed entry -- so one without a ``format`` declares nothing and is skipped; refusing it would
+    turn away a valid int8 build for a hint this loader does not even read. An entry that is not a
+    mapping at all is refused as unreadable rather than left to raise ``AttributeError``.
+    """
+    from invokeai.backend.quantization.fp8_scaled import parse_quantization_metadata, read_safetensors_metadata
+    from invokeai.backend.quantization.int8_convrot import INT8_TENSORWISE_FORMAT, read_comfy_quant_markers
+
+    declared = [marker.get("format") for marker in read_comfy_quant_markers(model_path).values()]
+    for entry in parse_quantization_metadata(read_safetensors_metadata(model_path, logger)).values():
+        if not isinstance(entry, Mapping):
+            declared.append(None)
+        elif "format" in entry:
+            declared.append(entry["format"])
+    unsupported = sorted({str(fmt or "unreadable") for fmt in declared if fmt != INT8_TENSORWISE_FORMAT})
+    if unsupported:
+        raise ValueError(
+            f"Unsupported quantization format(s) {unsupported} in {what} {model_path.name}. "
+            "Only unquantized and Comfy 'int8_tensorwise' (int8/int8-convrot) single files are supported."
+        )
+
+
+def _reject_float8_weights(sd: dict[str, Any], what: str, model_path: Path) -> None:
+    """Refuse float8 weights that nothing in the header declared.
+
+    The older ComfyUI scaled-fp8 shape declares itself nowhere -- fp8 codes and a ``weight_scale``
+    beside them, no marker, no header entry -- so the header gate cannot see it. Refused here, after
+    the read but before the converter, which is where it otherwise failed: in the qkv split on a
+    per-tensor scale, or at ``load_state_dict`` on an orphaned scale reported as an "unexpected key".
+    Keyed on the dtype rather than on a scale key, so a raw fp8 file with no scale is named too
+    instead of loading fp8 parameters that fail at the first matmul.
+    """
+    from invokeai.backend.quantization.fp8_scaled import FP8_WEIGHT_DTYPES
+
+    carried = sorted(key for key, value in sd.items() if getattr(value, "dtype", None) in FP8_WEIGHT_DTYPES)
+    if carried:
+        raise ValueError(
+            f"{what} {model_path.name} carries {len(carried)} float8 weight(s) (e.g. {', '.join(carried[:3])}). "
+            "Only unquantized and Comfy 'int8_tensorwise' (int8/int8-convrot) single files are supported."
+        )
 
 
 def _raise_if_no_weight_shards(submodel_path: Path, submodel_label: str) -> None:
@@ -190,7 +245,6 @@ class MiniMaxH3CheckpointModel(ModelLoader):
         )
         from invokeai.backend.quantization.int8_convrot import (
             INT8_TENSORWISE_FORMAT,
-            read_comfy_quant_markers,
             swap_in_int8_linears,
         )
 
@@ -200,22 +254,9 @@ class MiniMaxH3CheckpointModel(ModelLoader):
         # the vendored attention classes); see contiguous_attention for the measurements.
         patch_minimax_h3_attention_contiguous_qkv()
 
-        # Reject unsupported quantization formats from the header alone, before committing to
-        # the ~20 GiB tensor read (the fp8_scaled repacks share this key layout).
-        unsupported = sorted(
-            {
-                str(marker.get("format") or "unreadable")
-                for marker in read_comfy_quant_markers(model_path).values()
-                if marker.get("format") != INT8_TENSORWISE_FORMAT
-            }
-        )
-        if unsupported:
-            raise ValueError(
-                f"Unsupported quantization format(s) {unsupported} in MiniMax H3 checkpoint {model_path.name}. "
-                "Only unquantized and Comfy 'int8_tensorwise' (int8/int8-convrot) single files are supported."
-            )
-
+        _reject_formats_declared_in_the_header(model_path, "MiniMax H3 checkpoint", self._logger)
         sd = load_file(model_path)
+        _reject_float8_weights(sd, "MiniMax H3 checkpoint", model_path)
         rope_freq_dim = sd["rope.inv_freq"].shape[0] if "rope.inv_freq" in sd else 16
         sd, quant_markers = convert_minimax_h3_checkpoint_to_diffusers(sd)
 
@@ -334,29 +375,14 @@ class MiniMaxH3TextEncoderCheckpointModel(ModelLoader):
         )
         from invokeai.backend.quantization.int8_convrot import (
             INT8_TENSORWISE_FORMAT,
-            read_comfy_quant_markers,
             swap_in_int8_linears,
         )
 
         model_path = Path(config.path)
 
-        # Reject unsupported quantization formats from the header alone, before the ~25 GiB
-        # tensor read (the nvfp4_awq repacks share this key layout).
-        unsupported = sorted(
-            {
-                str(marker.get("format") or "unreadable")
-                for marker in read_comfy_quant_markers(model_path).values()
-                if marker.get("format") != INT8_TENSORWISE_FORMAT
-            }
-        )
-        if unsupported:
-            raise ValueError(
-                f"Unsupported quantization format(s) {unsupported} in MiniMax H3 text encoder "
-                f"{model_path.name}. Only unquantized and Comfy 'int8_tensorwise' (int8/int8-convrot) "
-                "single files are supported."
-            )
-
+        _reject_formats_declared_in_the_header(model_path, "MiniMax H3 text encoder", self._logger)
         sd = load_file(model_path)
+        _reject_float8_weights(sd, "MiniMax H3 text encoder", model_path)
         sd, quant_markers = convert_minimax_h3_text_encoder_checkpoint(sd)
 
         self._ram_cache.make_room(sum(t.nelement() * t.element_size() for t in sd.values()))

@@ -419,7 +419,6 @@ export const toFlowEdges = (
     const animated = isConnectedToSelectedNode && !reduceMotion ? true : undefined;
     const className = isConnectedToSelectedNode ? SELECTED_NODE_EDGE_CLASS : undefined;
     const style = isConnectedToSelectedNode ? SELECTED_NODE_EDGE_STYLE : undefined;
-    const zIndex = isConnectedToSelectedNode ? 1000 : undefined;
 
     if (
       previous &&
@@ -431,8 +430,7 @@ export const toFlowEdges = (
       previous.animated === animated &&
       previous.className === className &&
       isSameEdgeData(previous.data, data) &&
-      previous.style === style &&
-      previous.zIndex === zIndex
+      previous.style === style
     ) {
       return previous;
     }
@@ -449,7 +447,6 @@ export const toFlowEdges = (
       target: edge.target,
       targetHandle: edge.targetHandle,
       type: flowType,
-      zIndex,
     };
   });
 };

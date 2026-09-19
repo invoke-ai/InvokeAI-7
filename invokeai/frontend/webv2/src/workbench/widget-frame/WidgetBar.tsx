@@ -133,7 +133,10 @@ const RailGroup = ({
   separated: boolean;
   side: 'left' | 'right';
 }) => {
-  const sortableInstanceIds = useMemo(() => group.railItems.map((item) => item.id), [group.railItems]);
+  const sortableInstanceIds = useMemo(
+    () => group.railItems.filter((item) => !item.isFloating).map((item) => item.id),
+    [group.railItems]
+  );
   const select = useCallback(
     (instanceId: WidgetInstanceId) => onSelect(group.region, instanceId),
     [group.region, onSelect]
@@ -198,6 +201,13 @@ export const WIDGET_ITEM_SX: SystemStyleObject = {
     bg: 'bg.emphasized',
     color: 'brand.fg',
   },
+  // A floating slot reads as a placeholder for the window: outlined, not filled.
+  '&[data-floating]': {
+    outline: '1px dashed',
+    outlineColor: 'border.emphasized',
+    outlineOffset: '-1px',
+    color: 'fg.subtle',
+  },
   _disabled: WIDGET_SLOT_DISABLED_PROPS,
 };
 
@@ -216,7 +226,12 @@ const WidgetSlot = ({
   region: WidgetRegion;
   tooltipPlacement: 'left' | 'right';
 }) => {
-  const tooltipLabel = item.failureMessage ? `${item.label}: ${item.failureMessage}` : item.label;
+  const { t } = useTranslation();
+  const tooltipLabel = item.isFloating
+    ? t('widgets.floating.railSlot', { label: item.label })
+    : item.failureMessage
+      ? `${item.label}: ${item.failureMessage}`
+      : item.label;
   const isDisabled = item.status === 'disabled';
   const positioning = useMemo(() => ({ placement: tooltipPlacement }) as const, [tooltipPlacement]);
 
@@ -230,7 +245,7 @@ const WidgetSlot = ({
   const handleContextMenu = useCallback((event: MouseEvent) => onContextMenu(item, event), [item, onContextMenu]);
 
   const { dragHandleProps, setNodeRef, style } = useWidgetSortable({
-    disabled: isDisabled,
+    disabled: isDisabled || item.isFloating === true,
     instanceId: item.id,
     region,
     typeId: item.typeId,
@@ -242,11 +257,12 @@ const WidgetSlot = ({
         <Row
           {...dragHandleProps}
           css={WIDGET_ITEM_SX}
-          aria-label={item.label}
+          aria-label={tooltipLabel}
           aria-disabled={isDisabled}
           aria-pressed={isActive}
           as="button"
           data-disabled={isDisabled ? '' : undefined}
+          data-floating={item.isFloating ? '' : undefined}
           tabIndex={isDisabled ? -1 : undefined}
           {...intentPreloadProps}
           onClick={handleClick}

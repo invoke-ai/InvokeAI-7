@@ -1,4 +1,4 @@
-import type { WidgetRegion, WidgetRegionState } from '@workbench/layoutContracts';
+import type { FloatingWidgetState, WidgetRegion, WidgetRegionState } from '@workbench/layoutContracts';
 import type {
   NormalizedWidgetManifest,
   RegisteredWidget,
@@ -32,11 +32,17 @@ export interface PlacedWidgetRegionItem<
 > extends BaseWidgetRegionItem {
   instance: Instance;
   isEnabled: true;
+  /** Detached into a floating window; the rail keeps its slot, at the position it docks back to. */
+  isFloating?: true;
 }
+
+/** Only the placement half of a window: the slot this region keeps for it. */
+export type FloatingWidgetPlacement = Pick<FloatingWidgetState, 'returnIndex' | 'returnRegion'>;
 
 export interface AvailableWidgetTypeItem extends BaseWidgetRegionItem {
   instance?: undefined;
   isEnabled: false;
+  isFloating?: undefined;
 }
 
 export type WidgetRegionItem<Instance extends WidgetPlacementInstanceMeta = WidgetInstanceContract> =
@@ -51,8 +57,38 @@ export interface WidgetRegionViewModel<Instance extends WidgetPlacementInstanceM
   sortableInstanceIds: WidgetInstanceId[];
 }
 
+/**
+ * A floated widget leaves its region's `instanceIds`, but the rail still shows
+ * its slot — at the index it docks back to — so the window stays one click
+ * from the strip it came from. Ascending by index keeps later insertions from
+ * displacing earlier ones.
+ */
+const withFloatingSlots = (
+  instanceIds: WidgetInstanceId[],
+  region: WidgetRegion,
+  floatingWidgets: Record<WidgetInstanceId, FloatingWidgetPlacement> | undefined
+): { instanceId: WidgetInstanceId; isFloating: boolean }[] => {
+  const slots = instanceIds.map((instanceId) => ({ instanceId, isFloating: false }));
+
+  if (!floatingWidgets) {
+    return slots;
+  }
+
+  const floating = (Object.entries(floatingWidgets) as [WidgetInstanceId, FloatingWidgetPlacement][])
+    .filter(([instanceId, state]) => state.returnRegion === region && !instanceIds.includes(instanceId))
+    .map(([instanceId, state]) => ({ index: state.returnIndex ?? Number.POSITIVE_INFINITY, instanceId }))
+    .sort((left, right) => left.index - right.index);
+
+  for (const { index, instanceId } of floating) {
+    slots.splice(Math.min(Math.max(0, Math.floor(index)), slots.length), 0, { instanceId, isFloating: true });
+  }
+
+  return slots;
+};
+
 export const createWidgetRegionViewModel = <Instance extends WidgetPlacementInstanceMeta>({
   activeInstanceId,
+  floatingWidgets,
   instanceIds,
   region,
   widgetInstances,
@@ -60,6 +96,8 @@ export const createWidgetRegionViewModel = <Instance extends WidgetPlacementInst
   getWidgetLabel = (manifest) => (typeof manifest.label === 'string' ? manifest.label : manifest.id),
 }: {
   activeInstanceId?: WidgetInstanceId;
+  /** Windows floated out of regions; those returning here keep a rail slot. */
+  floatingWidgets?: Record<WidgetInstanceId, FloatingWidgetPlacement>;
   instanceIds: WidgetInstanceId[];
   region: WidgetRegion;
   widgetInstances: Record<string, Instance>;
@@ -67,29 +105,32 @@ export const createWidgetRegionViewModel = <Instance extends WidgetPlacementInst
   getWidgetLabel?: (manifest: NormalizedWidgetManifest) => string;
 }): WidgetRegionViewModel<Instance> => {
   const widgetsByType = new Map(widgets.map((widget) => [widget.manifest.id, widget]));
-  const placedItems = instanceIds.flatMap((instanceId): PlacedWidgetRegionItem<Instance>[] => {
-    const instance = widgetInstances[instanceId];
-    const widget = instance ? widgetsByType.get(instance.typeId) : undefined;
+  const placedItems = withFloatingSlots(instanceIds, region, floatingWidgets).flatMap(
+    ({ instanceId, isFloating }): PlacedWidgetRegionItem<Instance>[] => {
+      const instance = widgetInstances[instanceId];
+      const widget = instance ? widgetsByType.get(instance.typeId) : undefined;
 
-    if (!instance || !widget) {
-      return [];
+      if (!instance || !widget) {
+        return [];
+      }
+
+      return [
+        {
+          failureMessage: widget.failure?.message,
+          allowMultiple: widget.manifest.allowMultiple,
+          icon: widget.manifest.icon,
+          id: instance.id,
+          instance,
+          isEnabled: true,
+          ...(isFloating ? { isFloating: true } : {}),
+          label: instance.title ?? getWidgetLabel(widget.manifest),
+          status: widget.status,
+          typeId: instance.typeId,
+          widget,
+        },
+      ];
     }
-
-    return [
-      {
-        failureMessage: widget.failure?.message,
-        allowMultiple: widget.manifest.allowMultiple,
-        icon: widget.manifest.icon,
-        id: instance.id,
-        instance,
-        isEnabled: true,
-        label: instance.title ?? getWidgetLabel(widget.manifest),
-        status: widget.status,
-        typeId: instance.typeId,
-        widget,
-      },
-    ];
-  });
+  );
   const placedTypeIds = new Set(placedItems.map((item) => item.typeId));
   const availableItems: AvailableWidgetTypeItem[] = widgets
     .filter((widget) => widget.manifest.allowMultiple || !placedTypeIds.has(widget.manifest.id))
@@ -111,17 +152,21 @@ export const createWidgetRegionViewModel = <Instance extends WidgetPlacementInst
     availableItems,
     placedItems,
     region,
-    sortableInstanceIds: placedItems.map((item) => item.id),
+    // A floating slot is a pointer to the window, not a tab: it neither drags nor
+    // gives the strip a drop index, so it stays out of the sortable list.
+    sortableInstanceIds: placedItems.filter((item) => !item.isFloating).map((item) => item.id),
   };
 };
 
 export const createWidgetRegionViewModelFromState = <Instance extends WidgetPlacementInstanceMeta>({
+  floatingWidgets,
   region,
   regionState,
   widgetInstances,
   widgets,
   getWidgetLabel,
 }: {
+  floatingWidgets?: Record<WidgetInstanceId, FloatingWidgetPlacement>;
   region: WidgetRegion;
   regionState: WidgetRegionState;
   widgetInstances: Record<string, Instance>;
@@ -130,6 +175,7 @@ export const createWidgetRegionViewModelFromState = <Instance extends WidgetPlac
 }): WidgetRegionViewModel<Instance> =>
   createWidgetRegionViewModel({
     activeInstanceId: regionState.activeInstanceId,
+    floatingWidgets,
     getWidgetLabel,
     instanceIds: regionState.instanceIds,
     region,

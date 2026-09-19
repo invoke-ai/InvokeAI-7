@@ -721,6 +721,7 @@ const SingleImageMenuItems = ({
   const handleSelectForCompare = useSelectForCompareHandler(actions, image);
   const handleSavePromptAsTemplate = useCallback(() => void actions.savePromptAsTemplate(image), [actions, image]);
   const handleUseAsReferenceImage = useUseAsReferenceImageHandler(actions, image);
+  const handleLoadWorkflow = useCallback(() => void actions.loadImageWorkflow(image), [actions, image]);
   const { generation, widgets } = useWorkbenchCommands();
   const openWidget = useOpenWorkbenchWidget();
   const handleSendToUpscale = useCallback(() => {
@@ -752,7 +753,13 @@ const SingleImageMenuItems = ({
         <ToggleStarQuickMenuItem actions={actions} image={image} />
       </HStack>
       <Menu.Separator borderColor="border.subtle" />
-      <ContextMenuItem disabled icon={WorkflowIcon} label="Load Workflow" value="load-workflow" />
+      <ContextMenuItem
+        disabled={isLoadingRecallCapabilities || !recallCapabilities.workflow}
+        icon={WorkflowIcon}
+        label="Load Workflow"
+        value="load-workflow"
+        onClick={handleLoadWorkflow}
+      />
       <ContextSubMenu icon={AsteriskIcon} label="Recall Metadata">
         <ContextMenuItem
           disabled={isLoadingRecallCapabilities || !recallCapabilities.all}

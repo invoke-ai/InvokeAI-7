@@ -7,7 +7,7 @@ import { Scrollable } from '@platform/ui';
 import { useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { WorkflowLibraryCard } from './WorkflowLibraryCard';
+import { WorkflowLibraryCard, type WorkflowLibraryCardProps } from './WorkflowLibraryCard';
 
 /**
  * The scrolling card grid. Paging is server side and append-only: reaching the
@@ -27,6 +27,7 @@ export interface WorkflowLibraryGridProps {
   missingCounts?: ReadonlyMap<string, number>;
   selectedWorkflowId: string | null;
   status: WorkflowLibraryBrowseSnapshot['status'];
+  onContextMenu: WorkflowLibraryCardProps['onContextMenu'];
   onOpen: (workflowId: string) => void;
   onSelect: (workflowId: string) => void;
 }
@@ -54,6 +55,7 @@ export const WorkflowLibraryGrid = ({
   entries,
   error,
   missingCounts = NO_MISSING_COUNTS,
+  onContextMenu,
   onOpen,
   onSelect,
   selectedWorkflowId,
@@ -109,6 +111,7 @@ export const WorkflowLibraryGrid = ({
                 entry={entry}
                 isSelected={entry.item.workflow_id === selectedWorkflowId}
                 missingCount={missingCounts.get(entry.item.workflow_id) ?? 0}
+                onContextMenu={onContextMenu}
                 onOpen={onOpen}
                 onSelect={onSelect}
               />

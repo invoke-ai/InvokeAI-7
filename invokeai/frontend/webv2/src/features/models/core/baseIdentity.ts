@@ -7,7 +7,24 @@ import type { ModelBase, ModelConfig } from './types';
 export const toTitleCase = (value: string): string =>
   value.replaceAll(/[_-]+/g, ' ').replace(/\w\S*/g, (word) => word.charAt(0).toUpperCase() + word.slice(1));
 
-export type ModelBaseColorPalette = 'blue' | 'cyan' | 'gray' | 'green' | 'orange' | 'pink' | 'purple' | 'red' | 'teal';
+export type ModelBaseColorPalette =
+  | 'blue'
+  | 'coral'
+  | 'cyan'
+  | 'gold'
+  | 'gray'
+  | 'green'
+  | 'ice'
+  | 'lavender'
+  | 'orange'
+  | 'periwinkle'
+  | 'pink'
+  | 'purple'
+  | 'red'
+  | 'sage'
+  | 'silver'
+  | 'steel'
+  | 'teal';
 
 export interface ModelBaseInfo {
   base: ModelBase;
@@ -32,7 +49,7 @@ export const MODEL_BASES = {
     base: 'sd-2',
     label: 'SD 2.x',
     longLabel: 'Stable Diffusion 2.x',
-    colorPalette: 'teal',
+    colorPalette: 'sage',
     supportsDiffusersConversion: true,
   },
   sdxl: {
@@ -46,7 +63,7 @@ export const MODEL_BASES = {
     base: 'sdxl-refiner',
     label: 'SDXL Refiner',
     longLabel: 'Stable Diffusion XL Refiner',
-    colorPalette: 'blue',
+    colorPalette: 'steel',
   },
   'sd-3': {
     base: 'sd-3',
@@ -62,7 +79,7 @@ export const MODEL_BASES = {
   flux2: {
     base: 'flux2',
     label: 'FLUX.2',
-    colorPalette: 'cyan',
+    colorPalette: 'ice',
   },
   cogview4: {
     base: 'cogview4',
@@ -82,17 +99,17 @@ export const MODEL_BASES = {
   'z-image': {
     base: 'z-image',
     label: 'Z-Image',
-    colorPalette: 'orange',
+    colorPalette: 'gold',
   },
   'ideogram-4': {
     base: 'ideogram-4',
     label: 'Ideogram 4',
-    colorPalette: 'pink',
+    colorPalette: 'lavender',
   },
   'krea-2': {
     base: 'krea-2',
     label: 'Krea-2',
-    colorPalette: 'pink',
+    colorPalette: 'silver',
   },
   anima: {
     base: 'anima',
@@ -102,13 +119,13 @@ export const MODEL_BASES = {
   wan: {
     base: 'wan',
     label: 'Wan 2.2',
-    colorPalette: 'cyan',
+    colorPalette: 'periwinkle',
     description: 'Video architecture used for image generation at a single frame.',
   },
   'minimax-h3': {
     base: 'minimax-h3',
     label: 'MiniMax H3',
-    colorPalette: 'orange',
+    colorPalette: 'coral',
     description: 'Video architecture that generates video with synchronized audio.',
   },
   any: {

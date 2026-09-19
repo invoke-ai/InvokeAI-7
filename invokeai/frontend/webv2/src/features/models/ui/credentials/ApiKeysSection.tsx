@@ -18,7 +18,7 @@ import {
 } from '@platform/state/accountLifecycle';
 import { getApiErrorMessage } from '@platform/transport/http';
 import { Button } from '@platform/ui';
-import { HuggingFaceIcon } from '@platform/ui/BrandIcon';
+import { HuggingFaceIcon } from '@platform/ui/VendoredIcon';
 import { HexagonIcon } from 'lucide-react';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';

@@ -49,6 +49,7 @@ const createActions = (deleteItems: ImageActions['deleteItems']): ImageActions =
   downloadImage: vi.fn(() => Promise.resolve()),
   downloadImages: vi.fn(() => Promise.resolve()),
   getImageRecallCapabilities: vi.fn(() => Promise.resolve(EMPTY_IMAGE_RECALL_CAPABILITIES)),
+  loadImageWorkflow: vi.fn(() => Promise.resolve()),
   moveItemsToBoard: vi.fn(() => Promise.resolve()),
   moveImagesToBoard: vi.fn(() => Promise.resolve()),
   openItemInNewTab: vi.fn(),
@@ -213,6 +214,32 @@ describe('ImageContextMenu deletion delegation', () => {
 
     expect(deleteItems).toHaveBeenCalledExactlyOnceWith([{ kind: 'image', name: 'single.png' }]);
     expect(getOpenAlertDialog()).toBeNull();
+  });
+});
+
+describe('ImageContextMenu load workflow', () => {
+  it('enables Load Workflow once the image is known to embed one and hands the image to the action', async () => {
+    const actions = createActions(vi.fn());
+    actions.getImageRecallCapabilities = vi.fn(() =>
+      Promise.resolve({ ...EMPTY_IMAGE_RECALL_CAPABILITIES, workflow: true })
+    );
+    await renderMenu(actions, [image('made-by-workflow.png')]);
+
+    await vi.waitFor(() => expect(getMenuItem('Load Workflow').getAttribute('aria-disabled')).not.toBe('true'));
+    await interact(() => getMenuItem('Load Workflow').click());
+
+    expect(actions.loadImageWorkflow).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ imageName: 'made-by-workflow.png' })
+    );
+  });
+
+  it('keeps Load Workflow disabled for an image without one', async () => {
+    const actions = createActions(vi.fn());
+    await renderMenu(actions, [image('plain.png')]);
+
+    await vi.waitFor(() => expect(actions.getImageRecallCapabilities).toHaveBeenCalled());
+    expect(getMenuItem('Load Workflow').getAttribute('aria-disabled')).toBe('true');
+    expect(actions.loadImageWorkflow).not.toHaveBeenCalled();
   });
 });
 

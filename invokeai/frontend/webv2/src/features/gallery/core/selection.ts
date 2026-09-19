@@ -197,3 +197,91 @@ export const claimGalleryNavigationSequence = (): number => ++navigationSequence
 
 /** False once a newer navigation has been claimed, which is when a slow hydrate must stand down. */
 export const isGalleryNavigationCurrent = (sequence: number): boolean => sequence === navigationSequence;
+
+/*
+ * Sectioned navigation. The gallery lays out three sections in one visual
+ * order — the in-progress tiles, the starred strip, the listing — and Preview
+ * walks the same order, so one sequence model serves both: left/right walk the
+ * flat order across the seams, up/down keep the column across them. The cursor
+ * is a key: a followed session's, or the selected item's.
+ */
+
+export type GalleryNavigationEntry =
+  | { kind: 'item'; item: GalleryItem }
+  | { kind: 'session'; id: string; navigable: boolean };
+
+export type GalleryNavigationDirection = 'down' | 'left' | 'right' | 'up';
+
+export const getGallerySessionNavigationKey = (sessionId: string): string => `session:${sessionId}`;
+
+const getGalleryNavigationEntryKey = (entry: GalleryNavigationEntry): string =>
+  entry.kind === 'item' ? toGalleryItemKey(entry.item) : getGallerySessionNavigationKey(entry.id);
+
+const isNavigable = (entry: GalleryNavigationEntry | undefined): entry is GalleryNavigationEntry =>
+  entry !== undefined && (entry.kind === 'item' || entry.navigable);
+
+/**
+ * The entry an arrow key lands on, or null when there is nowhere to go. Each
+ * section chunks its own rows, so a vertical step across a seam keeps its
+ * column instead of drifting by the previous section's partial last row; a
+ * row whose landing cell is not navigable yields its nearest navigable cell,
+ * and a row with none is skipped. Without a cursor, any key lands on the
+ * first navigable entry.
+ */
+export const getGalleryNavigationStep = (
+  sections: readonly (readonly GalleryNavigationEntry[])[],
+  cursorKey: string | null,
+  direction: GalleryNavigationDirection,
+  columnCount = 1
+): GalleryNavigationEntry | null => {
+  const entries = sections.flat();
+  const index =
+    cursorKey === null ? -1 : entries.findIndex((entry) => getGalleryNavigationEntryKey(entry) === cursorKey);
+
+  if (index === -1) {
+    return entries.find(isNavigable) ?? null;
+  }
+
+  if (direction === 'left' || direction === 'right') {
+    const step = direction === 'right' ? 1 : -1;
+
+    for (let candidate = index + step; candidate >= 0 && candidate < entries.length; candidate += step) {
+      if (isNavigable(entries[candidate])) {
+        return entries[candidate]!;
+      }
+    }
+
+    return null;
+  }
+
+  const rows: { length: number; start: number }[] = [];
+  let sectionStart = 0;
+
+  for (const section of sections) {
+    for (let offset = 0; offset < section.length; offset += columnCount) {
+      rows.push({ length: Math.min(columnCount, section.length - offset), start: sectionStart + offset });
+    }
+
+    sectionStart += section.length;
+  }
+
+  const rowIndex = rows.findIndex((row) => index >= row.start && index < row.start + row.length);
+  const column = index - rows[rowIndex]!.start;
+  const step = direction === 'down' ? 1 : -1;
+
+  for (let target = rowIndex + step; target >= 0 && target < rows.length; target += step) {
+    const row = rows[target]!;
+    const landing = Math.min(column, row.length - 1);
+
+    // Nearest navigable cell of the row by column distance, the left one on a tie.
+    for (let distance = 0; distance < row.length; distance += 1) {
+      for (const candidate of [landing - distance, landing + distance]) {
+        if (candidate >= 0 && candidate < row.length && isNavigable(entries[row.start + candidate])) {
+          return entries[row.start + candidate]!;
+        }
+      }
+    }
+  }
+
+  return null;
+};

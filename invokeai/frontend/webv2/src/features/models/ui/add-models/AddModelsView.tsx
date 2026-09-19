@@ -2,7 +2,7 @@
 import type { ModelRecordChanges, StarterModel } from '@features/models/core/types';
 import type { ElementType } from 'react';
 
-import { Box, Flex, HStack, Icon, Input, InputGroup, Stack, Text } from '@chakra-ui/react';
+import { Box, Flex, HStack, Icon, Input, InputGroup, Spinner, Stack, Text } from '@chakra-ui/react';
 import { collectBases, collectTypes } from '@features/models/core/library';
 import {
   DEFAULT_STARTER_MODEL_FILTERS,
@@ -34,9 +34,9 @@ import {
 } from '@platform/state/accountLifecycle';
 import { getApiErrorMessage } from '@platform/transport/http';
 import { Button, Scrollable, Tooltip } from '@platform/ui';
-import { HuggingFaceIcon } from '@platform/ui/BrandIcon';
+import { HuggingFaceIcon } from '@platform/ui/VendoredIcon';
 import { DownloadIcon, FileIcon, FolderIcon, FolderSearchIcon, LinkIcon, SearchIcon } from 'lucide-react';
-import { useDeferredValue, useMemo, useState } from 'react';
+import { useDeferredValue, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { AccessTokenPopover } from './AccessTokenPopover';
@@ -100,6 +100,7 @@ export const AddModelsView = () => {
   const [fp8Storage, setFp8Storage] = useState(false);
   const { isBusy: isPulling, run: runPull } = useScopedAction();
   const { isBusy: isScanning, run: runScan } = useScopedAction();
+  const scanAbortRef = useRef<AbortController | null>(null);
   const [installingBundle, setInstallingBundle] = useState<string | null>(null);
   const providerConfigs = useExternalProvidersSelector((snapshot) => snapshot.configs);
   const configuredExternalProviders = useMemo<ReadonlySet<string>>(
@@ -291,17 +292,37 @@ export const AddModelsView = () => {
     );
   };
 
+  // Stop aborts the request; the server watches for the disconnect and
+  // abandons its directory walk, so a wrong folder does not keep crawling.
   const handleScan = async () => {
+    // Enter in the field reaches here while the button reads Stop; a second
+    // scan must not replace the controller the running one is wired to.
+    if (scanAbortRef.current) {
+      return;
+    }
+
     await runScan(
       async (owner) => {
-        const results = await scanFolderForModels(trimmed, owner.signal);
+        const abort = new AbortController();
 
-        assertAccountScopeCurrent(owner);
-        updateModelsUi({ scan: { path: trimmed, results } });
+        scanAbortRef.current = abort;
+        try {
+          const results = await scanFolderForModels(trimmed, AbortSignal.any([owner.signal, abort.signal]));
+
+          assertAccountScopeCurrent(owner);
+          updateModelsUi({ scan: { path: trimmed, results } });
+        } finally {
+          scanAbortRef.current = null;
+        }
       },
-      (message) => notify.error(t('models.scanFailed'), message)
+      (message, error) => {
+        if (!(error instanceof DOMException && error.name === 'AbortError')) {
+          notify.error(t('models.scanFailed'), message);
+        }
+      }
     );
   };
+  const handleStopScan = () => scanAbortRef.current?.abort();
 
   return (
     <Flex direction="column" h="full" minH="0">
@@ -338,9 +359,14 @@ export const AddModelsView = () => {
             />
           ) : null}
 
-          {canScan ? (
+          {canScan && isScanning ? (
+            <Button size="sm" variant="outline" onClick={handleStopScan}>
+              <Spinner size="xs" />
+              {t('models.stopScan')}
+            </Button>
+          ) : canScan ? (
             <Tooltip content={t('models.scanFolderTooltip')}>
-              <Button loading={isScanning} size="sm" variant="solid" onClick={() => void handleScan()}>
+              <Button size="sm" variant="solid" onClick={() => void handleScan()}>
                 <Icon as={FolderSearchIcon} boxSize="3.5" />
                 {t('models.scan')}
               </Button>

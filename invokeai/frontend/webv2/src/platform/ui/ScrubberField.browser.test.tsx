@@ -86,17 +86,18 @@ describe('ScrubberField', () => {
     expect(valueButton()?.getAttribute('aria-label')).toBe('Edit Steps');
   });
 
-  it('jumps to the pressed position, then follows the drag snapped to the step', async () => {
+  it('scrubs relative to the current value from wherever the press lands, snapped to the step', async () => {
     const { frame, onChange } = await mount({ step: 5 });
 
+    // Like a native iOS slider: pressing away from the thumb does not move it there.
     await pointer(frame, 'pointerdown', { clientX: trackX(frame, 0.5) });
 
-    expect(onChange).toHaveBeenLastCalledWith(50);
+    expect(onChange).not.toHaveBeenCalled();
     expect(frame.hasAttribute('data-dragging')).toBe(true);
 
     await pointer(window, 'pointermove', { clientX: trackX(frame, 0.73) });
 
-    expect(onChange).toHaveBeenLastCalledWith(75);
+    expect(onChange).toHaveBeenLastCalledWith(55);
 
     await pointer(window, 'pointermove', { clientX: trackX(frame, 2) });
 
@@ -109,6 +110,23 @@ describe('ScrubberField', () => {
     await pointer(window, 'pointermove', { clientX: trackX(frame, 0) });
 
     expect(onChange).toHaveBeenLastCalledWith(100);
+  });
+
+  it('reaches either bound from a press on the far side of the thumb', async () => {
+    const { frame, onChange } = await mount();
+
+    // Right of the thumb: the value is not capped by where the press landed.
+    await pointer(frame, 'pointerdown', { clientX: trackX(frame, 0.9) });
+    await pointer(window, 'pointermove', { clientX: trackX(frame, 1.7) });
+
+    expect(onChange).toHaveBeenLastCalledWith(100);
+    await pointer(window, 'pointerup', { clientX: trackX(frame, 1.7) });
+
+    await pointer(frame, 'pointerdown', { clientX: trackX(frame, 0.1) });
+    await pointer(window, 'pointermove', { clientX: trackX(frame, -0.5) });
+
+    expect(onChange).toHaveBeenLastCalledWith(0);
+    await pointer(window, 'pointerup', { clientX: trackX(frame, -0.5) });
   });
 
   it('scrubs relative to the current value at a tenth of the sensitivity while Shift is held', async () => {
@@ -128,7 +146,8 @@ describe('ScrubberField', () => {
   it('snaps to the nearest stop while Alt is held', async () => {
     const { frame, onChange } = await mount({ marks: [0, 20, 50, 100] });
 
-    await pointer(frame, 'pointerdown', { altKey: true, clientX: trackX(frame, 0.62) });
+    await pointer(frame, 'pointerdown', { altKey: true, clientX: trackX(frame, 0.3) });
+    await pointer(window, 'pointermove', { altKey: true, clientX: trackX(frame, 0.45) });
 
     expect(onChange).toHaveBeenLastCalledWith(50);
 
@@ -143,7 +162,8 @@ describe('ScrubberField', () => {
     // gesture would otherwise snap straight off the track's end.
     const { frame, onChange } = await mount({ defaultValue: 30, marks: [50], max: 10, value: 5 });
 
-    await pointer(frame, 'pointerdown', { altKey: true, clientX: trackX(frame, 0.9) });
+    await pointer(frame, 'pointerdown', { altKey: true, clientX: trackX(frame, 0.5) });
+    await pointer(window, 'pointermove', { altKey: true, clientX: trackX(frame, 0.9) });
 
     expect(onChange).toHaveBeenLastCalledWith(9);
     await pointer(window, 'pointerup', { clientX: trackX(frame, 0.9) });
@@ -287,19 +307,16 @@ describe('ScrubberField', () => {
     const { frame, onChange } = await mount();
 
     await pointer(frame, 'pointerdown', { clientX: trackX(frame, 0.5), pointerId: 1 });
-
-    expect(onChange).toHaveBeenLastCalledWith(50);
-
     await pointer(window, 'pointermove', { clientX: trackX(frame, 0.8), pointerId: 2 });
     await pointer(window, 'pointerup', { clientX: trackX(frame, 0.8), pointerId: 2 });
 
-    expect(onChange).toHaveBeenLastCalledWith(50);
+    expect(onChange).not.toHaveBeenCalled();
     expect(frame.hasAttribute('data-dragging')).toBe(true);
 
     await pointer(window, 'pointermove', { clientX: trackX(frame, 0.6), pointerId: 1 });
     await pointer(window, 'pointerup', { clientX: trackX(frame, 0.6), pointerId: 1 });
 
-    expect(onChange).toHaveBeenLastCalledWith(60);
+    expect(onChange).toHaveBeenLastCalledWith(40);
     expect(frame.hasAttribute('data-dragging')).toBe(false);
   });
 
@@ -389,19 +406,20 @@ describe('ScrubberField', () => {
     const { frame, onChange } = await mount();
 
     await pointer(frame, 'pointerdown', { clientX: trackX(frame, 0.5) });
+    await pointer(window, 'pointermove', { clientX: trackX(frame, 0.6) });
 
-    expect(onChange).toHaveBeenLastCalledWith(50);
+    expect(onChange).toHaveBeenLastCalledWith(40);
 
-    await pointer(window, 'pointermove', { clientX: trackX(frame, 0.5), shiftKey: true });
     await pointer(window, 'pointermove', { clientX: trackX(frame, 0.6), shiftKey: true });
+    await pointer(window, 'pointermove', { clientX: trackX(frame, 0.7), shiftKey: true });
 
-    expect(onChange).toHaveBeenLastCalledWith(51);
+    expect(onChange).toHaveBeenLastCalledWith(41);
 
     // Releasing Shift re-anchors at full sensitivity rather than jumping to the pointer.
-    await pointer(window, 'pointermove', { clientX: trackX(frame, 0.6) });
     await pointer(window, 'pointermove', { clientX: trackX(frame, 0.7) });
+    await pointer(window, 'pointermove', { clientX: trackX(frame, 0.8) });
 
-    expect(onChange).toHaveBeenLastCalledWith(61);
+    expect(onChange).toHaveBeenLastCalledWith(51);
     await pointer(window, 'pointercancel', {});
 
     expect(frame.hasAttribute('data-dragging')).toBe(false);
@@ -417,7 +435,7 @@ describe('ScrubberField', () => {
 
     await pointer(window, 'pointermove', { clientX: trackX(frame, 0.7), pointerType: 'touch' });
 
-    expect(onChange).toHaveBeenLastCalledWith(70);
+    expect(onChange).toHaveBeenLastCalledWith(50);
     await pointer(window, 'pointerup', { pointerType: 'touch' });
   });
 

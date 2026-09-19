@@ -79,6 +79,10 @@ export const popoverSlotRecipe = defineSlotRecipe({
       borderWidth: '1px',
       boxShadow: 'lg',
       color: 'fg',
+      // The same drop-in motion as menus: Chakra's scale-fade reads as a
+      // dialog, and its `fast` open lags behind the click on a busy workbench.
+      _open: { animationStyle: 'slide-fade-in', animationDuration: 'faster' },
+      _closed: { animationStyle: 'slide-fade-out', animationDuration: 'faster' },
     },
     arrowTip: {
       ...chakraSlotRecipes.popover.base?.arrowTip,
@@ -217,6 +221,15 @@ export const buttonRecipe = defineRecipe({
       plain: {
         ...chakraRecipes.button.variants?.variant?.plain,
         _hover: { bg: 'colorPalette.hoverTint/10' },
+      },
+      // Chakra's subtle fill (`colorPalette.subtle`) is a step off the panel
+      // surface, so a tinted button read as flat; the translucent tint keeps
+      // the palette's hue legible on every surface.
+      subtle: {
+        ...chakraRecipes.button.variants?.variant?.subtle,
+        bg: 'colorPalette.hoverTint/22',
+        _hover: { bg: 'colorPalette.hoverTint/32' },
+        _expanded: { bg: 'colorPalette.hoverTint/32' },
       },
     },
   } as unknown as typeof chakraRecipes.button.variants,

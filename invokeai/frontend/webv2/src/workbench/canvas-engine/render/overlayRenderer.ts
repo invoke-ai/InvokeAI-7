@@ -29,8 +29,10 @@ export const MIN_GRID_SPACING_PX = 8;
 
 const BBOX_COLOR = '#3b82f6';
 const BBOX_DASH: readonly number[] = [4, 4];
-/** The bbox-overlay dim fill (legacy `CanvasBboxToolModule` overlayRect parity). */
-const BBOX_OVERLAY_FILL = 'hsl(220 12% 10% / 0.8)';
+/** The bbox-overlay dim fill when no theme surround color has been fed in. */
+const BBOX_OVERLAY_FILL = 'hsl(220 12% 10%)';
+/** The shade is the surround color at this opacity: the dimmed area reads as "outside the document". */
+const BBOX_OVERLAY_ALPHA = 0.8;
 const GRID_COLOR = 'rgba(128, 128, 128, 0.25)';
 const CURSOR_DARK = '#000000';
 const CURSOR_LIGHT = '#ffffff';
@@ -73,6 +75,8 @@ export interface OverlayState {
   showBbox?: boolean;
   /** Whether to dim everything outside the bbox (the legacy "bbox overlay" shade). */
   bboxOverlay?: boolean;
+  /** Opaque CSS color for that shade — the theme's canvas surround, resolved by the widget. */
+  bboxOverlayColor?: string;
   /** Whether to draw the rule-of-thirds guides inside the bbox. */
   ruleOfThirds?: boolean;
   /** Whether to draw the grid. */
@@ -504,10 +508,10 @@ const drawSamGeometry = (ctx: Ctx, state: OverlayState): void => {
 };
 
 /**
- * Draws the bbox overlay shade: a translucent dark fill over the ENTIRE viewport
+ * Draws the bbox overlay shade: a translucent fill over the ENTIRE viewport
  * with the bbox region punched out (even-odd fill rule — the two nested rect paths
- * cancel inside the bbox), dimming everything outside the generation frame. Fill
- * color matches legacy `CanvasBboxToolModule`'s overlayRect.
+ * cancel inside the bbox), dimming everything outside the generation frame. The
+ * opacity rides `globalAlpha` so the theme color needs no string surgery.
  */
 const drawBboxOverlayShade = (ctx: Ctx, state: OverlayState, target: RasterSurface): void => {
   if (!state.bboxOverlay) {
@@ -515,7 +519,8 @@ const drawBboxOverlayShade = (ctx: Ctx, state: OverlayState, target: RasterSurfa
   }
   const bboxScreen = transformBounds(state.view, state.bbox);
   ctx.save();
-  ctx.fillStyle = BBOX_OVERLAY_FILL;
+  ctx.globalAlpha = BBOX_OVERLAY_ALPHA;
+  ctx.fillStyle = state.bboxOverlayColor ?? BBOX_OVERLAY_FILL;
   ctx.beginPath();
   ctx.rect(0, 0, target.width, target.height);
   ctx.rect(bboxScreen.x, bboxScreen.y, bboxScreen.width, bboxScreen.height);

@@ -17,6 +17,7 @@ import { GalleryBoardDragMonitor } from './GalleryBoardDragMonitor';
 import { mergeGalleryLoadedItems } from './galleryGridLayout';
 import { GalleryLayout } from './GalleryLayout';
 import {
+  getGalleryAnchoredWindowPage,
   getGalleryPage,
   getGalleryProjectBoardId,
   getGalleryRawSelectedBoardId,
@@ -121,17 +122,17 @@ export const GalleryWidgetView = ({ presentation, region, runtime }: GalleryWidg
   }, [notifications, semanticError]);
 
   const { loadMore, selectedBoardId, total } = data;
-  const gallery = useMemo(
-    () => getGalleryStateView(galleryValues, data.boards, data.items, data.isLoadingItems),
-    [data.boards, data.isLoadingItems, data.items, galleryValues]
-  );
   // No strip under a ranked result (no starred filter applies), under the
   // starred-only listing (it would repeat the grid), or in a window anchored
   // mid-board (the banner promises a slice, not the top of the board).
   const starredStrip = useGalleryStarredStrip({
-    enabled: semanticQuery === null && !starredOnly && gallery.anchoredWindowPage === 0,
+    enabled: semanticQuery === null && !starredOnly && getGalleryAnchoredWindowPage(galleryValues) === 0,
     filter: data.filter,
   });
+  const gallery = useMemo(
+    () => getGalleryStateView(galleryValues, data.boards, data.items, data.isLoadingItems, starredStrip.items),
+    [data.boards, data.isLoadingItems, data.items, galleryValues, starredStrip.items]
+  );
   const loadedItems = useMemo(
     () => mergeGalleryLoadedItems(starredStrip.items, gallery.items),
     [gallery.items, starredStrip.items]

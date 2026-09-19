@@ -1,14 +1,20 @@
-import type { GalleryItem } from '@features/gallery/core/items';
+import type { GalleryItem, GalleryItemKey } from '@features/gallery/core/items';
 
 import { toGalleryItemKey } from '@features/gallery/core/items';
 
 export const GALLERY_GRID_GAP_PX = 4;
+/** The disclosure row of a pinned section (in progress, starred). */
 export const GALLERY_STARRED_HEADER_HEIGHT_PX = 24;
-/** The gap row grows to hold a hairline rule while the starred section is open. */
-export const GALLERY_STARRED_SEPARATOR_HEIGHT_PX = 13;
+/** The pinned block's hairline rule plus the margin that separates it from the listing. */
+export const GALLERY_PINNED_FOOTER_PX = 9;
 
 const GALLERY_MIN_COLUMN_COUNT = 2;
-const GALLERY_MAX_COLUMN_COUNT = 12;
+/**
+ * High enough that the minimum cell size, not this cap, bounds a wide
+ * placement: at 12 the bottom panel ignored the density slider below ~92px
+ * cells, while the side panel kept shrinking.
+ */
+const GALLERY_MAX_COLUMN_COUNT = 48;
 
 /** Cell size the density slider interpolates between: 0% is largest, 100% smallest. */
 const GALLERY_MAX_CELL_PX = 192;
@@ -61,45 +67,15 @@ export const getGalleryColumnCount = ({
 export const getGalleryCellSizePx = ({ columnCount, widthPx }: { columnCount: number; widthPx: number }): number =>
   widthPx > 0 ? Math.max(1, (widthPx - GALLERY_GRID_GAP_PX * (columnCount - 1)) / columnCount) : 96;
 
-export type GalleryGridCell = { kind: 'item'; item: GalleryItem; itemIndex: number };
-
 export type GalleryGridSection = 'regular' | 'starred';
 
-export type GalleryGridRow =
-  | { cells: GalleryGridCell[]; key: string; kind: 'cells'; section: GalleryGridSection }
-  | { key: string; kind: 'starred-gap'; withSeparator: boolean }
-  | { key: string; kind: 'starred-header'; shownCount: number; total: number };
+export type GalleryGridRow = { cells: GalleryItem[]; key: string; kind: 'cells'; section: GalleryGridSection };
 
 /** The starred strip shows at most this many rows at the current column count. */
 const GALLERY_STARRED_STRIP_MAX_ROWS = 3;
 
-const getGalleryStarredStripItems = (starredItems: readonly GalleryItem[], columnCount: number): GalleryItem[] =>
+export const getGalleryStarredStripItems = (starredItems: readonly GalleryItem[], columnCount: number): GalleryItem[] =>
   starredItems.slice(0, GALLERY_STARRED_STRIP_MAX_ROWS * columnCount);
-
-/**
- * The keyboard and scroll index space: the shown strip cells first, then the
- * listing. The grid is unstarred-only, so no item occurs twice.
- */
-export interface GalleryGridNavigation {
-  items: GalleryItem[];
-  regularStart: number;
-}
-
-export const buildGalleryGridNavigation = ({
-  columnCount,
-  isStarredOpen,
-  items,
-  starredItems,
-}: {
-  columnCount: number;
-  isStarredOpen: boolean;
-  items: readonly GalleryItem[];
-  starredItems: readonly GalleryItem[];
-}): GalleryGridNavigation => {
-  const stripItems = isStarredOpen ? getGalleryStarredStripItems(starredItems, columnCount) : [];
-
-  return { items: [...stripItems, ...items], regularStart: stripItems.length };
-};
 
 /**
  * Every item the grid has on hand — strip first, then the listing. The two
@@ -118,56 +94,14 @@ export const mergeGalleryLoadedItems = (
   return [...starredItems, ...items.filter((item) => !seen.has(toGalleryItemKey(item)))];
 };
 
-export type GalleryGridNavDirection = 'down' | 'left' | 'right' | 'up';
-
-/**
- * The next navigation index for an arrow key. Left/right walk the flat
- * sequence; up/down move by visual row, and each section chunks its own rows,
- * so a step across the seam keeps its column instead of drifting by the
- * strip's partial last row. Clamped within each section's rows and to the
- * ends of the sequence; a move that has nowhere to go returns `fromIndex`.
- */
-export const getGalleryGridNavigationStep = (
-  { items, regularStart }: GalleryGridNavigation,
-  columnCount: number,
-  fromIndex: number,
-  direction: GalleryGridNavDirection
-): number => {
-  const lastIndex = items.length - 1;
-
-  if (direction === 'left' || direction === 'right') {
-    return Math.min(lastIndex, Math.max(0, fromIndex + (direction === 'right' ? 1 : -1)));
-  }
-
-  const stripRowCount = Math.ceil(regularStart / columnCount);
-  const listingCount = items.length - regularStart;
-  const listingRowCount = Math.ceil(listingCount / columnCount);
-  const sectionIndex = fromIndex < regularStart ? fromIndex : fromIndex - regularStart;
-  const row = (fromIndex < regularStart ? 0 : stripRowCount) + Math.floor(sectionIndex / columnCount);
-  const column = sectionIndex % columnCount;
-  const targetRow = row + (direction === 'down' ? 1 : -1);
-
-  if (targetRow < 0 || targetRow >= stripRowCount + listingRowCount) {
-    return fromIndex;
-  }
-
-  if (targetRow < stripRowCount) {
-    return Math.min(regularStart - 1, targetRow * columnCount + column);
-  }
-
-  return Math.min(lastIndex, regularStart + (targetRow - stripRowCount) * columnCount + column);
-};
-
-const getGalleryGridCellKey = (cell: GalleryGridCell): string => toGalleryItemKey(cell.item);
-
 /**
  * Rows are keyed by their leading cell rather than their index so that
- * structural changes above a row (collapsing the starred section, a
- * placeholder resolving) move the row without recreating it: the virtualizer
- * and React both track the row by key, so its thumbnails keep their DOM.
+ * structural changes above a row (a placeholder resolving, the strip
+ * changing) move the row without recreating it: the virtualizer and React
+ * both track the row by key, so its thumbnails keep their DOM.
  */
-const chunkGalleryCellsIntoRows = (
-  cells: GalleryGridCell[],
+export const chunkGalleryCellsIntoRows = (
+  cells: readonly GalleryItem[],
   columnCount: number,
   section: GalleryGridSection
 ): GalleryGridRow[] => {
@@ -178,7 +112,7 @@ const chunkGalleryCellsIntoRows = (
 
     rows.push({
       cells: rowCells,
-      key: `${section}:${getGalleryGridCellKey(rowCells[0]!)}`,
+      key: `${section}:${toGalleryItemKey(rowCells[0]!)}`,
       kind: 'cells',
       section,
     });
@@ -188,71 +122,23 @@ const chunkGalleryCellsIntoRows = (
 };
 
 /**
- * The grid's row model in one pure pass: the bounded starred strip gets a
- * disclosure section above the listing, the listing chunks in order, and
- * only saved items participate in navigation. Cell indices follow
- * `buildGalleryGridNavigation`.
+ * The listing's row model in one pure pass. The starred strip is pinned above
+ * the virtualized listing (see `getGalleryStarredLayout`), so only the listing
+ * chunks into rows.
  */
-export const buildGalleryGridRows = ({
-  columnCount,
-  isStarredOpen,
-  items,
-  starredItems,
-  starredTotal,
-}: {
-  columnCount: number;
-  isStarredOpen: boolean;
-  items: readonly GalleryItem[];
-  starredItems: readonly GalleryItem[];
-  starredTotal: number;
-}): GalleryGridRow[] => {
-  const stripItems = getGalleryStarredStripItems(starredItems, columnCount);
-  const shownCount = isStarredOpen ? stripItems.length : 0;
-  const starredCells: GalleryGridCell[] = stripItems.map((item, itemIndex) => ({ item, itemIndex, kind: 'item' }));
-  const regularItemCells: GalleryGridCell[] = items.map((item, index) => ({
-    item,
-    itemIndex: shownCount + index,
-    kind: 'item',
-  }));
-  const regularCells = regularItemCells;
-  const rows: GalleryGridRow[] = [];
+export const buildGalleryGridRows = (items: readonly GalleryItem[], columnCount: number): GalleryGridRow[] =>
+  chunkGalleryCellsIntoRows(items, columnCount, 'regular');
 
-  if (stripItems.length > 0) {
-    rows.push({ key: 'starred-header', kind: 'starred-header', shownCount, total: starredTotal });
+/** The listing row holding `itemKey`; -1 for an item the listing does not hold (a strip item). */
+export const getGalleryGridRowIndexForItemKey = (
+  items: readonly GalleryItem[],
+  itemKey: GalleryItemKey,
+  columnCount: number
+): number => {
+  const index = items.findIndex((item) => toGalleryItemKey(item) === itemKey);
 
-    if (isStarredOpen) {
-      rows.push(...chunkGalleryCellsIntoRows(starredCells, columnCount, 'starred'));
-    }
-
-    if (regularCells.length > 0) {
-      // A visible rule only while the starred cells are showing; collapsed, the
-      // header already separates the sections.
-      rows.push({ key: 'starred-gap', kind: 'starred-gap', withSeparator: isStarredOpen });
-    }
-  }
-
-  rows.push(...chunkGalleryCellsIntoRows(regularCells, columnCount, 'regular'));
-
-  return rows;
+  return index < 0 ? -1 : Math.floor(index / columnCount);
 };
-
-/** `cellRowHeightPx` is the thumbnail row height including its trailing gap. */
-export const getGalleryGridRowHeightPx = (row: GalleryGridRow, cellRowHeightPx: number): number => {
-  if (row.kind === 'starred-header') {
-    return GALLERY_STARRED_HEADER_HEIGHT_PX;
-  }
-
-  if (row.kind === 'starred-gap') {
-    return row.withSeparator ? GALLERY_STARRED_SEPARATOR_HEIGHT_PX : GALLERY_GRID_GAP_PX;
-  }
-
-  return cellRowHeightPx;
-};
-
-export const getGalleryGridRowIndexForItem = (rows: GalleryGridRow[], itemIndex: number): number =>
-  rows.findIndex(
-    (row) => row.kind === 'cells' && row.cells.some((cell) => cell.kind === 'item' && cell.itemIndex === itemIndex)
-  );
 
 export const getGalleryProgressLayout = ({
   columns,
@@ -282,3 +168,32 @@ export const getGalleryProgressLayout = ({
   };
 };
 export type GalleryProgressLayout = ReturnType<typeof getGalleryProgressLayout>;
+
+/** The pinned starred strip: its disclosure row plus, while open, its bounded rows. */
+export const getGalleryStarredLayout = ({
+  columns,
+  tileSize,
+  shownCount,
+  collapsed,
+}: {
+  columns: number;
+  tileSize: number;
+  shownCount: number;
+  collapsed: boolean;
+}) => {
+  const rowCount = Math.ceil(shownCount / columns);
+  const rowHeight = tileSize + GALLERY_GRID_GAP_PX;
+
+  return {
+    rowCount,
+    rowHeight,
+    height: shownCount > 0 ? GALLERY_STARRED_HEADER_HEIGHT_PX + (collapsed ? 0 : rowCount * rowHeight) : 0,
+  };
+};
+
+/**
+ * In progress and starred share one pinned block above the listing, closed by
+ * a rule and a margin; the virtualizer's scroll margin is the block's height.
+ */
+export const getGalleryPinnedHeightPx = (progressHeight: number, starredHeight: number): number =>
+  progressHeight + starredHeight > 0 ? progressHeight + starredHeight + GALLERY_PINNED_FOOTER_PX : 0;

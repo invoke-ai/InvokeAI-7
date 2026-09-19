@@ -508,7 +508,7 @@ class WanCheckpointModel(ModelLoader):
         sd = _strip_comfyui_prefix(sd)
         _drop_benign_extra_keys(sd, "Wan checkpoint", logger)
 
-        dequantized = _dequantize_comfyui_fp8(sd, model_dtype)
+        dequantized = _dequantize_comfyui_fp8(sd, model_dtype, f"Wan checkpoint {model_path.name}")
         if dequantized > 0:
             logger.info(f"Dequantized {dequantized} ComfyUI-quantized weights")
         # Drop the scale tensors themselves — they've been folded into the weights

@@ -96,6 +96,19 @@ export const formatHotkeyForPlatform = (hotkey: string): string[] =>
     .filter(Boolean)
     .map((part) => (IS_MAC_OS ? part.replace('mod', 'cmd').replace('alt', 'option') : part.replace('mod', 'ctrl')));
 
+/** Inputs that take no typed text: a switch or checkbox owning focus has no native undo/shortcut to protect. */
+const NON_TEXT_INPUT_TYPES = new Set([
+  'button',
+  'checkbox',
+  'color',
+  'file',
+  'image',
+  'radio',
+  'range',
+  'reset',
+  'submit',
+]);
+
 export const isEditableHotkeyTarget = (target: EventTarget | null): boolean => {
   if (typeof HTMLElement === 'undefined') {
     return false;
@@ -105,5 +118,10 @@ export const isEditableHotkeyTarget = (target: EventTarget | null): boolean => {
     return false;
   }
 
-  return Boolean(target.closest('input, textarea, select, [contenteditable="true"]'));
+  const editable = target.closest('input, textarea, select, [contenteditable="true"]');
+
+  return (
+    editable !== null &&
+    !(editable.tagName === 'INPUT' && NON_TEXT_INPUT_TYPES.has((editable as HTMLInputElement).type))
+  );
 };

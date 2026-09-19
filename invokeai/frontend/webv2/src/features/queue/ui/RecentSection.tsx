@@ -1,5 +1,6 @@
 import { Stack, Text } from '@chakra-ui/react';
 import { useMountEffect } from '@platform/react/useMountEffect';
+import { segmentTabsPanelId, segmentTabsTabId } from '@platform/ui';
 import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -7,6 +8,7 @@ import type { QueueFilterId } from './queueFilters';
 
 import { useCurrentBatchItems, useQueueLoadState, useRecentItems } from './queueDataStore';
 import { matchesFilter } from './queueFilters';
+import { QUEUE_FILTER_TABS_ID } from './QueueFilterTabs';
 import { QueueItemRow } from './QueueItemRow';
 import { clearPendingQueueItemReveal, type QueueItemRevealRequest } from './queueUiStore';
 import { SectionHeader } from './SectionHeader';
@@ -40,7 +42,12 @@ export const RecentSection = ({
     !items.some((item) => item.id === revealRequest.itemId);
 
   return (
-    <Stack gap="2">
+    <Stack
+      aria-labelledby={segmentTabsTabId(QUEUE_FILTER_TABS_ID, filter)}
+      gap="2"
+      id={segmentTabsPanelId(QUEUE_FILTER_TABS_ID)}
+      role="tabpanel"
+    >
       {cannotReveal && revealRequest ? (
         <UnavailableRevealConsumer key={revealRequest.requestId} request={revealRequest} />
       ) : null}

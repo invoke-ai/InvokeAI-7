@@ -95,12 +95,26 @@ const buildGenerateSource = (
   models: readonly ModelConfig[] | undefined,
   t: TFunction
 ): GraphPreviewSourceWithoutDestination => {
-  const result = compileGeneratePreviewGraph({
-    destination: project.invocation.destination,
-    models: models ?? [],
-    storedValues: getProjectWidgetValues(project, 'generate'),
-    useCpuNoise: project.settings.useCpuNoise,
-  });
+  let result: ReturnType<typeof compileGeneratePreviewGraph>;
+
+  // A compile that throws (a model policy the stored values violate, a graph
+  // builder edge case) is a reason the preview shows, not a render error that
+  // takes the widget's chrome down with it.
+  try {
+    result = compileGeneratePreviewGraph({
+      destination: project.invocation.destination,
+      models: models ?? [],
+      storedValues: getProjectWidgetValues(project, 'generate'),
+      useCpuNoise: project.settings.useCpuNoise,
+    });
+  } catch (error) {
+    return {
+      ...EMPTY_SOURCE_BASE,
+      graph: null,
+      invalidReasons: [error instanceof Error ? error.message : String(error)],
+      isLive: true,
+    };
+  }
 
   if (result.status === 'invalid') {
     return { ...EMPTY_SOURCE_BASE, graph: null, invalidReasons: result.reasons, isLive: true };

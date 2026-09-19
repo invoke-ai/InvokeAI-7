@@ -34,7 +34,7 @@ describe('MODEL_BASES', () => {
     });
     expect(getModelBaseInfo('sd-2')).toMatchObject({
       label: 'SD 2.x',
-      colorPalette: 'teal',
+      colorPalette: 'sage',
       supportsDiffusersConversion: true,
     });
     expect(getModelBaseInfo('sdxl')).toMatchObject({
@@ -42,9 +42,9 @@ describe('MODEL_BASES', () => {
       colorPalette: 'blue',
       supportsDiffusersConversion: true,
     });
-    expect(getModelBaseInfo('flux2')).toMatchObject({ label: 'FLUX.2', colorPalette: 'cyan' });
+    expect(getModelBaseInfo('flux2')).toMatchObject({ label: 'FLUX.2', colorPalette: 'ice' });
     expect(getModelBaseInfo('qwen-image')).toMatchObject({ label: 'Qwen Image', colorPalette: 'cyan' });
-    expect(getModelBaseInfo('minimax-h3')).toMatchObject({ label: 'MiniMax H3', colorPalette: 'orange' });
+    expect(getModelBaseInfo('minimax-h3')).toMatchObject({ label: 'MiniMax H3', colorPalette: 'coral' });
     expect(isConvertibleToDiffusers(createModel({ base: 'sdxl', format: 'checkpoint', type: 'main' }))).toBe(true);
     expect(isConvertibleToDiffusers(createModel({ base: 'flux', format: 'checkpoint', type: 'main' }))).toBe(false);
   });

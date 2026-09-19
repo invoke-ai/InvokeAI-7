@@ -1,8 +1,8 @@
-import type { ComponentProps, ReactNode, RefObject } from 'react';
+import type { ComponentProps, ReactNode, Ref } from 'react';
 
-import { ScrollArea } from '@chakra-ui/react';
+import { mergeRefs, ScrollArea } from '@chakra-ui/react';
 import { usePreservedScrollOffset } from '@platform/react/usePreservedScrollOffset';
-import { useRef } from 'react';
+import { useCallback, useRef } from 'react';
 
 import { useScrollAreaPhantomHeal } from './useScrollAreaPhantomHeal';
 
@@ -45,13 +45,24 @@ export const Scrollable = ({
   orientation?: 'horizontal' | 'vertical';
   /** Extra props for the scrolling viewport itself, e.g. scroll/focus handlers. */
   viewportProps?: ScrollAreaViewportProps;
-  /** The scrolling element itself — what a virtualizer needs to observe. */
-  viewportRef?: RefObject<HTMLDivElement | null>;
+  /**
+   * The scrolling element itself — what a virtualizer needs to observe. A
+   * callback ref is attached alongside the internal one, for mount-time work
+   * such as restoring a remembered offset.
+   */
+  viewportRef?: Ref<HTMLDivElement | null>;
 }) => {
   const fallbackViewportRef = useRef<HTMLDivElement | null>(null);
-  // One ref, shared with the caller when it wants one, so nothing has to merge
-  // or reassign refs during render.
-  const resolvedViewportRef = viewportRef ?? fallbackViewportRef;
+  // One object ref, shared with the caller when it hands one in, so nothing
+  // has to merge or reassign refs during render.
+  const resolvedViewportRef = viewportRef && typeof viewportRef !== 'function' ? viewportRef : fallbackViewportRef;
+  const viewportCallback = typeof viewportRef === 'function' ? viewportRef : undefined;
+  // A callback ref is composed with the object ref the hooks observe; the
+  // composition only runs when React attaches the element, never in render.
+  const attachViewport = useCallback(
+    (element: HTMLDivElement | null) => mergeRefs(fallbackViewportRef, viewportCallback)(element),
+    [viewportCallback]
+  );
 
   // The shell keeps widgets mounted across layout switches, and a scroll
   // container that stops being rendered loses its offset outright.
@@ -67,7 +78,7 @@ export const Scrollable = ({
         role={label ? 'region' : undefined}
         w="full"
         {...viewportProps}
-        ref={resolvedViewportRef}
+        ref={viewportCallback ? attachViewport : resolvedViewportRef}
       >
         <ScrollArea.Content
           style={orientation === 'horizontal' ? undefined : VERTICAL_CONTENT_STYLE}

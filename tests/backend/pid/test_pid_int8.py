@@ -124,6 +124,27 @@ def test_an_int8_checkpoint_keeps_its_block_linears_int8_and_decodes_like_the_de
     torch.testing.assert_close(_forward(net), _forward(reference))
 
 
+def test_a_purely_scaled_fp8_checkpoint_is_refused_too(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The same check, on a file with no int8 marker anywhere.
+
+    It used to live inside `if int8_markers:`, so it only ever saw a *mixed* repack. A checkpoint
+    that is scaled fp8 throughout produces no int8 markers at all -- `extract_int8_convrot_markers`
+    takes only `int8_tensorwise`, and the unmarked-weight check filters on the int8 dtype -- so it
+    walked past both gates and had its fp8 codes copied straight into the float32 parameters, off by
+    `1/weight_scale`, with the orphaned scales reported only at DEBUG.
+    """
+    torch.manual_seed(0)
+    state_dict, _ = _int8_checkpoint(_tiny_net())
+    net = _tiny_net()
+    for name in _quantized_layers(net):
+        state_dict.pop(f"{name}.comfy_quant", None)
+        state_dict[f"{name}.weight"] = state_dict[f"{name}.weight"].float().to(torch.float8_e4m3fn)
+    monkeypatch.setattr(pid_decode_module, "build_pid_net", lambda backbone, version: net)
+
+    with pytest.raises(ValueError, match=r"\.weight_scale"):
+        load_pid_decoder(state_dict, BaseModelType.Flux)
+
+
 def test_a_scale_from_another_scheme_is_refused_rather_than_loaded_unscaled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -55,7 +55,11 @@ import {
   getPersistedSelectedGalleryItemKeys,
   stripInfiniteWindowAnchor,
   stripUnresolvableGallerySearch,
+  gallerySemanticReferenceKey,
   getGallerySettings,
+  parseGallerySemanticReference,
+  toGallerySemanticTextReference,
+  getGalleryDestinationBoardId,
   getSelectedGalleryItemFromValues,
   legacyGeneratedImageToGalleryItem,
   normalizeGalleryImage,
@@ -140,7 +144,7 @@ import { getInvocationTemplatesSnapshot } from '@features/workflow/react';
 import {
   cloneProjectGraph,
   createProjectGraph,
-  getProjectGraphUndoLabel,
+  getProjectGraphUndoEntry,
   normalizeProjectGraph,
   projectGraphReducer,
   type ProjectGraphAction,
@@ -251,6 +255,7 @@ type WorkbenchReducerAction =
       region?: WidgetRegion;
     }
   | { type: 'dockFloatingWidget'; instanceId: WidgetInstanceId }
+  | { type: 'closeFloatingWidget'; instanceId: WidgetInstanceId }
   | {
       type: 'setFloatingWidgetGeometry';
       instanceId: WidgetInstanceId;
@@ -369,6 +374,14 @@ type WorkbenchReducerAction =
   | { type: 'clearGallerySelection'; projectId?: string }
   | { type: 'setGalleryView'; galleryView: 'images' | 'assets'; projectId?: string }
   | { type: 'setGallerySearchTerm'; searchTerm: string; projectId?: string }
+  /** Toggles the search field between metadata search and semantic search, carrying its text across. */
+  | { type: 'setGallerySemanticSearchMode'; enabled: boolean; projectId?: string }
+  /** The semantic field's live text; the ranking follows only on commit. */
+  | { type: 'setGallerySemanticSearchText'; text: string; projectId?: string }
+  /** Applies the semantic text as the ranking, if it is still what the field holds. */
+  | { type: 'commitGallerySemanticSearch'; text: string; projectId?: string }
+  /** The field's clear button: drops the text, the ranking, and semantic mode together. */
+  | { type: 'clearGallerySearch'; projectId?: string }
   | { type: 'setGalleryStarredOnly'; starredOnly: boolean; projectId?: string }
   | { type: 'updateGallerySettings'; settings: Partial<GallerySettings>; projectId?: string }
   | { type: 'setGalleryPage'; page: number; projectId?: string }
@@ -439,6 +452,8 @@ type WorkbenchReducerAction =
   | { type: 'recordNotice'; kind: WorkbenchNotificationKind; title: string; message?: string };
 
 const HISTORY_LIMIT = 40;
+/** A pause this long between same-key edits (typing, dragging) starts a new undo step. */
+const UNDO_MERGE_WINDOW_MS = 1500;
 const NOTIFICATION_LIMIT = 100;
 // Side panels host real widget UIs (gallery grid, generate form); below
 // ~350px their toolbars and grids collapse into unusable slivers, so that is
@@ -1153,21 +1168,50 @@ const restoreUndoSnapshot = (project: Project, snapshot: ProjectUndoSnapshot): P
   widgetRegions: cloneWidgetRegions(snapshot.widgetRegions),
 });
 
-const pushUndo = (project: Project, label: string, projectGraph?: ProjectGraphState): Project => ({
-  ...project,
-  undoRedo: {
-    future: [],
-    past: [
-      ...project.undoRedo.past,
-      {
-        createdAt: now(),
-        id: createId('undo'),
-        label,
-        project: createUndoSnapshot(project, projectGraph),
+/**
+ * Records the project as it is *before* an edit. A `mergeKey` folds a stream
+ * of edits (each keystroke in a field, each move of a drag) into the entry
+ * that opened the stream while they keep arriving within the merge window,
+ * so one undo reverts the whole burst.
+ */
+const pushUndo = (project: Project, label: string, projectGraph?: ProjectGraphState, mergeKey?: string): Project => {
+  const previous = project.undoRedo.past.at(-1);
+  const timestamp = now();
+
+  // An undo in between (`future` non-empty) ends the burst: the state the user
+  // just stood on must stay reachable as its own step.
+  if (
+    mergeKey &&
+    previous?.mergeKey === mergeKey &&
+    project.undoRedo.future.length === 0 &&
+    Date.parse(timestamp) - Date.parse(previous.mergedAt ?? previous.createdAt) <= UNDO_MERGE_WINDOW_MS
+  ) {
+    return {
+      ...project,
+      undoRedo: {
+        future: [],
+        past: [...project.undoRedo.past.slice(0, -1), { ...previous, mergedAt: timestamp }],
       },
-    ].slice(-HISTORY_LIMIT),
-  },
-});
+    };
+  }
+
+  return {
+    ...project,
+    undoRedo: {
+      future: [],
+      past: [
+        ...project.undoRedo.past,
+        {
+          createdAt: timestamp,
+          id: createId('undo'),
+          label,
+          ...(mergeKey ? { mergeKey } : {}),
+          project: createUndoSnapshot(project, projectGraph),
+        },
+      ].slice(-HISTORY_LIMIT),
+    },
+  };
+};
 
 const createWidgetStates = (): WidgetStateMap => ({
   'autosave-status': { id: 'autosave-status', label: 'Autosave', values: {}, version: 1 },
@@ -2828,7 +2872,9 @@ const reconcileDeletedGalleryBoard = (
       ...values,
       // Same rule as `selectGalleryBoard`: the view is moving to another
       // board, so a ranking shown against the old one goes with it.
-      ...(selectedBoardWasDeleted ? { galleryPage: 0, selectedBoardId: 'none', semanticImageQuery: null } : {}),
+      ...(selectedBoardWasDeleted
+        ? { galleryPage: 0, selectedBoardId: 'none', semanticImageQuery: null, semanticSearchText: null }
+        : {}),
       ...(projectBoardWasDeleted ? { projectBoardId: null } : {}),
     };
   });
@@ -3214,7 +3260,7 @@ const enqueueCompiledSnapshot = (
             seedStep: seedPlan?.step ?? 0,
           }
         : { error: `${route.sourceId} queue item is missing source submission metadata.`, kind: 'invalid' };
-  const selectedGalleryBoardId = widgetStates.gallery?.values.selectedBoardId;
+  const galleryBoardId = getGalleryDestinationBoardId(widgetStates.gallery?.values ?? {});
   const generatePresentationSettings = normalizeGenerateSettings(widgetStates.generate?.values);
   const videoPresentationDimensions =
     route.sourceId === 'video' && videoSettings?.model ? getVideoDimensions(videoSettings.model, videoSettings) : null;
@@ -3255,7 +3301,7 @@ const enqueueCompiledSnapshot = (
       },
       destination: route.destination,
       filterIntermediateResults: route.sourceId === 'workflow',
-      galleryBoardId: typeof selectedGalleryBoardId === 'string' ? selectedGalleryBoardId : null,
+      galleryBoardId,
       graph: { id: graph.id, label: graph.label },
       presentation: {
         // Placeholder sizing only: superseded by the backend's real item ids as
@@ -3955,6 +4001,19 @@ export const __workbenchReducerInternal = (
         );
       });
     }
+    case 'closeFloatingWidget': {
+      // The window is the instance's only placement, so closing it is one
+      // change: the entry goes, nothing docks, and no surface is revealed.
+      return updateActiveProject(state, (project) => {
+        if (!project.floatingWidgets?.[action.instanceId]) {
+          return project;
+        }
+
+        const { [action.instanceId]: _closed, ...remaining } = project.floatingWidgets;
+
+        return { ...project, floatingWidgets: Object.keys(remaining).length > 0 ? remaining : undefined };
+      });
+    }
     case 'setFloatingWidgetGeometry': {
       return updateActiveProject(state, (project) => {
         const floating = project.floatingWidgets?.[action.instanceId];
@@ -4240,8 +4299,10 @@ export const __workbenchReducerInternal = (
         const routedProject = isHighConfidenceGraphEdit(action.action)
           ? applyAutoRouteForEdit(project, 'workflow', context)
           : project;
-        const undoLabel = getProjectGraphUndoLabel(action.action);
-        const nextProject = undoLabel ? pushUndo(routedProject, undoLabel) : routedProject;
+        const undoEntry = getProjectGraphUndoEntry(action.action);
+        const nextProject = undoEntry
+          ? pushUndo(routedProject, undoEntry.label, undefined, undoEntry.mergeKey)
+          : routedProject;
         const updated = { ...nextProject, projectGraph };
 
         return updated;
@@ -4647,7 +4708,8 @@ export const __workbenchReducerInternal = (
           // so it is not a view OF any board: moving to one asks for that
           // board's listing, and leaving the ranking up would answer with the
           // same results under a new board name. Dismissed exactly as the
-          // chip's own clear does it — the query alone. The positions on the
+          // chip's own clear does it — the query alone — and the semantic
+          // field leaves with its ranking, text and all. The positions on the
           // selection are NOT rewritten here: a selection made before the
           // search carries a real board page that the search never touched,
           // and zeroing it would cost Preview the cursor it still has.
@@ -4656,7 +4718,7 @@ export const __workbenchReducerInternal = (
           // a change of view, and a text or image reference survives a reload,
           // so treating that click as a dismissal would erase persisted state
           // (and autosave the loss) on what reads as a no-op.
-          ...(values.selectedBoardId !== action.boardId ? { semanticImageQuery: null } : {}),
+          ...(values.selectedBoardId !== action.boardId ? { semanticImageQuery: null, semanticSearchText: null } : {}),
         }),
         action.projectId
       );
@@ -4683,7 +4745,7 @@ export const __workbenchReducerInternal = (
           // `galleryView` reads as Images, so re-clicking the tab already
           // shown must stay the no-op it is today.
           ...((values.galleryView === 'assets' ? 'assets' : 'images') !== action.galleryView
-            ? { semanticImageQuery: null }
+            ? { semanticImageQuery: null, semanticSearchText: null }
             : {}),
         }),
         action.projectId
@@ -4708,6 +4770,90 @@ export const __workbenchReducerInternal = (
           galleryPage: 0,
           starredOnly: action.starredOnly,
         }),
+        action.projectId
+      );
+    }
+    case 'setGallerySemanticSearchMode': {
+      return updateGalleryValues(
+        state,
+        (values) => {
+          const semanticText = typeof values.semanticSearchText === 'string' ? values.semanticSearchText : null;
+
+          if (action.enabled === (semanticText !== null)) {
+            return values;
+          }
+
+          // The text moves between the two interpretations rather than being
+          // lost: the sparkle only changes what the words mean. Entering
+          // applies them at once — a click is a deliberate act, not a
+          // keystroke to debounce — while leaving drops the ranking, since
+          // metadata search has its own listing.
+          if (action.enabled) {
+            const text = typeof values.searchTerm === 'string' ? values.searchTerm : '';
+
+            return {
+              ...values,
+              galleryPage: 0,
+              searchTerm: '',
+              semanticImageQuery: toGallerySemanticTextReference(text),
+              semanticSearchText: text,
+            };
+          }
+
+          return {
+            ...values,
+            galleryPage: 0,
+            searchTerm: semanticText,
+            semanticImageQuery: null,
+            semanticSearchText: null,
+          };
+        },
+        action.projectId
+      );
+    }
+    case 'setGallerySemanticSearchText': {
+      return updateGalleryValues(
+        state,
+        (values) =>
+          typeof values.semanticSearchText === 'string' ? { ...values, semanticSearchText: action.text } : values,
+        action.projectId
+      );
+    }
+    case 'commitGallerySemanticSearch': {
+      return updateGalleryValues(
+        state,
+        (values) => {
+          // A commit arrives on a timer, after whatever it was scheduled
+          // against may have gone: the field emptied, the mode left, the board
+          // moved. Applying only what the field still holds makes every late
+          // timer harmless without the field having to track them.
+          if (values.semanticSearchText !== action.text) {
+            return values;
+          }
+
+          const reference = toGallerySemanticTextReference(action.text);
+
+          if (
+            gallerySemanticReferenceKey(reference) ===
+            gallerySemanticReferenceKey(parseGallerySemanticReference(values.semanticImageQuery))
+          ) {
+            return values;
+          }
+
+          return { ...values, galleryPage: 0, semanticImageQuery: reference };
+        },
+        action.projectId
+      );
+    }
+    case 'clearGallerySearch': {
+      return updateGalleryValues(
+        state,
+        (values) =>
+          values.searchTerm === '' &&
+          (values.semanticImageQuery === null || values.semanticImageQuery === undefined) &&
+          (values.semanticSearchText === null || values.semanticSearchText === undefined)
+            ? values
+            : { ...values, galleryPage: 0, searchTerm: '', semanticImageQuery: null, semanticSearchText: null },
         action.projectId
       );
     }

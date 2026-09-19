@@ -8,11 +8,10 @@ import type {
   GenerateSettings,
 } from '@features/generation/core/types';
 import type { GenerateSettingsUpdate } from '@features/generation/ui/generateDebounce';
-import type { ChangeEvent } from 'react';
 
-import { HStack, Icon, Input, Stack, Text } from '@chakra-ui/react';
+import { HStack, Icon, Stack, Text } from '@chakra-ui/react';
 import { useDndMonitor } from '@dnd-kit/core';
-import { galleryImages, galleryTransfers, toGalleryItemKey } from '@features/gallery';
+import { galleryImages, toGalleryItemKey } from '@features/gallery';
 import { GalleryPickerPopover } from '@features/gallery/picker';
 import { isGalleryImageDragData, useGalleryImageDroppable } from '@features/gallery/utility';
 import {
@@ -25,14 +24,9 @@ import {
 import { generatedImageToReferenceImage, getEffectiveReferenceImage } from '@features/generation/core/referenceImage';
 import { clampDimension, deriveAspectRatioId, moveReferenceImage } from '@features/generation/core/settings';
 import { useGenerationUi } from '@features/generation/ui/GenerationUiContext';
-import {
-  assertAccountScopeCurrent,
-  captureAccountScope,
-  isAccountScopeCurrent,
-} from '@platform/state/accountLifecycle';
 import { Button, DropTargetOverlay, DropZone } from '@platform/ui';
-import { ChevronDownIcon, ImagePlusIcon, UploadIcon } from 'lucide-react';
-import { useCallback, useMemo, useRef } from 'react';
+import { ChevronDownIcon, ImagePlusIcon } from 'lucide-react';
+import { useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { ReferenceImageCard } from './ReferenceImageCard';
@@ -60,8 +54,7 @@ export const GenerateReferenceImagesContent = ({
   settings,
 }: GenerateReferenceImagesContentProps) => {
   const { t } = useTranslation();
-  const { gallery, notifications } = useGenerationUi();
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const { gallery } = useGenerationUi();
   const referenceImages = settings.referenceImages;
   const isSupported = isReferenceImageSupported(selectedModel);
   const maxReferenceImages = getMaxReferenceImages(selectedModel);
@@ -191,53 +184,6 @@ export const GenerateReferenceImagesContent = ({
     [onCommitImmediate, selectedModel]
   );
 
-  const uploadFiles = useCallback(
-    async (files: File[]) => {
-      if (!canAdd || files.length === 0) {
-        return;
-      }
-
-      const owner = captureAccountScope();
-
-      try {
-        const uploaded = await Promise.all(
-          files
-            .slice(0, maxReferenceImages - referenceImageCount)
-            .map((file) => galleryTransfers.upload(file, 'none', { signal: owner.signal }))
-        );
-
-        assertAccountScopeCurrent(owner);
-        appendReferenceImages(uploaded.map(generatedImageToReferenceImage));
-        gallery.touchImages();
-      } catch (error) {
-        if (!isAccountScopeCurrent(owner)) {
-          return;
-        }
-
-        notifications.reportError({
-          area: 'reference-images',
-          message: error instanceof Error ? error.message : String(error),
-          namespace: 'generation',
-        });
-      }
-    },
-    [appendReferenceImages, canAdd, gallery, maxReferenceImages, notifications, referenceImageCount]
-  );
-
-  const handleUploadZoneClick = useCallback(() => {
-    if (canAdd) {
-      fileInputRef.current?.click();
-    }
-  }, [canAdd]);
-
-  const handleFileInputChange = useCallback(
-    (event: ChangeEvent<HTMLInputElement>) => {
-      void uploadFiles(Array.from(event.currentTarget.files ?? []));
-      event.currentTarget.value = '';
-    },
-    [uploadFiles]
-  );
-
   const addGalleryImages = async (imageNames: string[]) => {
     if (!canAdd || imageNames.length === 0) {
       return;
@@ -323,12 +269,6 @@ export const GenerateReferenceImagesContent = ({
           </Text>
         </DropZone>
       </GalleryPickerPopover>
-      <HStack justify="end">
-        <Button disabled={!canAdd} size="xs" variant="ghost" onClick={handleUploadZoneClick}>
-          <Icon as={UploadIcon} boxSize="3" />
-          {t('widgets.gallery.picker.upload')}
-        </Button>
-      </HStack>
 
       {referenceImageCount > 0 ? (
         <Stack gap="2">
@@ -348,8 +288,6 @@ export const GenerateReferenceImagesContent = ({
           ))}
         </Stack>
       ) : null}
-
-      <Input ref={fileInputRef} accept="image/*" display="none" multiple type="file" onChange={handleFileInputChange} />
     </Stack>
   );
 };

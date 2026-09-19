@@ -44,15 +44,18 @@ const partitionByGroup = <T,>(
   return runs;
 };
 
+/** Fits the anchor's available space with the same headroom the settings selects use. */
+const DEFAULT_ITEMS_MAX_H = 'min(20rem, calc(var(--available-height) - 0.5rem))';
+
 export interface SelectProps<T extends CollectionItem> extends Omit<SelectRootProps<T>, 'children'> {
   contentProps?: SelectContentProps;
   /**
-   * Caps the open menu's height and scrolls the items inside a Scrollable.
-   * The machine's own content-element scrolling is replaced by a
-   * `scrollToIndexFn` targeting the Scrollable viewport, so keyboard
-   * highlight, typeahead, and the open-reveal keep working.
+   * Caps the open menu's height; the items scroll inside a Scrollable. The
+   * machine's own content-element scrolling is replaced by a `scrollToIndexFn`
+   * targeting the Scrollable viewport, so keyboard highlight, typeahead, and
+   * the open-reveal keep working. `null` restores the machine's plain overflow.
    */
-  itemsMaxH?: string;
+  itemsMaxH?: string | null;
   /**
    * Renders labelled item groups: consecutive items with the same group key
    * share one header. Items must already be ordered by group.
@@ -79,7 +82,7 @@ export const Select = <T extends CollectionItem>({
   getItemKey = getDefaultItemKey,
   groupBy,
   indicatorGroupProps,
-  itemsMaxH,
+  itemsMaxH = DEFAULT_ITEMS_MAX_H,
   itemIndicator = true,
   portalled = true,
   positionerProps,
@@ -100,7 +103,18 @@ export const Select = <T extends CollectionItem>({
     options?.[index]?.scrollIntoView({ block: 'nearest' });
   }, []);
   return (
-    <ChakraSelect.Root collection={collection} scrollToIndexFn={itemsMaxH ? scrollToIndexFn : undefined} {...rootProps}>
+    // The items (and their Scrollable's scroll-area machine) mount only while
+    // open: a widget carries many selects at rest, and the machine's observers
+    // are per instance.
+    <ChakraSelect.Root
+      collection={collection}
+      lazyMount
+      scrollToIndexFn={itemsMaxH ? scrollToIndexFn : undefined}
+      unmountOnExit
+      {...rootProps}
+      // An empty list is nothing to choose from: the trigger disables instead of opening a blank menu.
+      disabled={rootProps.disabled || collection.items.length === 0}
+    >
       {/* A real (visually hidden) Label part: the machine's trigger always points
         its aria-labelledby at this id, so a bare aria-label must materialize it —
         left on the Root it lands on a div, which ARIA prohibits. */}
@@ -117,7 +131,7 @@ export const Select = <T extends CollectionItem>({
       <Portal disabled={!portalled}>
         <ChakraSelect.Positioner {...positionerProps}>
           <ChakraSelect.Content {...contentProps}>
-            <SelectItems ref={itemsRef} maxH={itemsMaxH}>
+            <SelectItems ref={itemsRef} maxH={itemsMaxH ?? undefined}>
               {groupBy
                 ? partitionByGroup(collection.items, groupBy).map(({ group, items, startIndex }) => (
                     <ChakraSelect.ItemGroup key={group}>

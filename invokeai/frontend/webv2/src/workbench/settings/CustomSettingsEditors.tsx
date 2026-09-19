@@ -240,9 +240,10 @@ const CustomSettingField = ({ field }: SettingFieldProps) => {
       editor = <GenerationDevicesSettings />;
       break;
     case 'hotkeys':
-      // The hotkey editor owns its heading and needs a bounded viewport for its virtual list.
+      // The hotkey editor owns its heading; its virtual list takes the height
+      // the dialog hands a `fill` entry (see `isFillSettingsEntry`).
       return (
-        <Box h="32rem" maxH="calc(100dvh - 15rem)" minH="16rem">
+        <Box display="flex" flex="1" flexDirection="column" minH="0">
           <HotkeysSettingsSection />
         </Box>
       );

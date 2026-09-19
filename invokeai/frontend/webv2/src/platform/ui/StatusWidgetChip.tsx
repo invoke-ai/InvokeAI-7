@@ -23,6 +23,22 @@ const PROGRESS_FILL_SX: SystemStyleObject = {
   transition: 'width var(--wb-motion-duration-fast) linear',
 };
 
+/**
+ * Indeterminate: a band sweeping the track, so "working, no percent yet"
+ * (model load, graph prep) reads as activity instead of a stuck bar. Under
+ * reduce-motion the band does not run at all; the quiet fill carries the state.
+ */
+const PROGRESS_SWEEP_SX: SystemStyleObject = {
+  ':root[data-reduce-motion="true"] &': { animationName: 'none' },
+  animationDuration: '1.4s',
+  animationIterationCount: 'infinite',
+  animationName: 'wb-status-sweep',
+  animationTimingFunction: 'ease-in-out',
+  bg: 'accent.solid',
+  height: 'full',
+  width: '33%',
+};
+
 export const StatusWidgetChip = ({
   children,
   icon,
@@ -42,12 +58,15 @@ export const StatusWidgetChip = ({
       <Icon as={icon} boxSize="3" />
       <Text whiteSpace="nowrap">{children}</Text>
       {progress ? (
-        <Box aria-hidden="true" css={PROGRESS_TRACK_SX}>
-          <Box
-            css={PROGRESS_FILL_SX}
-            opacity={progress.value === null ? 0.35 : 1}
-            width={`${(progress.value ?? 1) * 100}%`}
-          />
+        <Box aria-hidden="true" css={PROGRESS_TRACK_SX} overflow="hidden">
+          {progress.value === null ? (
+            <>
+              <Box css={PROGRESS_FILL_SX} opacity={0.35} position="absolute" width="full" />
+              <Box css={PROGRESS_SWEEP_SX} position="absolute" />
+            </>
+          ) : (
+            <Box css={PROGRESS_FILL_SX} width={`${progress.value * 100}%`} />
+          )}
         </Box>
       ) : null}
     </HStack>

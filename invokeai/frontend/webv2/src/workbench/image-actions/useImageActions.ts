@@ -56,7 +56,7 @@ import type { RequestDeletionConfirmation } from './useDeletionConfirmation';
 
 import { appendReferenceImage } from './appendReferenceImage';
 import { recordCanvasImportError } from './canvasImportError';
-import { executeImageRecall, getCurrentGenerateValues } from './executeImageRecall';
+import { executeImageRecall, executeLoadImageWorkflow, getCurrentGenerateValues } from './executeImageRecall';
 import { executeVideoRecall } from './executeVideoRecall';
 import {
   captureGalleryWidgetKeyValues,
@@ -100,6 +100,8 @@ export interface ImageActions extends GalleryItemActions {
   downloadImage: (image: GalleryImage) => Promise<void>;
   downloadImages: (imageNames: string[]) => Promise<void>;
   getImageRecallCapabilities: (image: GalleryImage, signal?: AbortSignal) => Promise<ImageRecallCapabilities>;
+  /** Replaces the project graph with the workflow embedded in the image and opens the editor on it. */
+  loadImageWorkflow: (image: GalleryImage) => Promise<void>;
   /** Recall availability for a gallery video, from its recorded core_metadata. */
   getVideoRecallCapabilities: (item: GalleryVideoItem, signal?: AbortSignal) => Promise<VideoRecallCapabilities>;
   moveImagesToBoard: (imageNames: string[], boardId: string) => Promise<void>;
@@ -820,17 +822,29 @@ export const useImageActions = ({
       downloadImages: (imageNames) => downloadItems(imageNames.map((name) => ({ kind: 'image', name }))),
       getImageRecallCapabilities: async (image, signal) => {
         const owner = captureAccountScope();
+        const requestSignal = signal ? AbortSignal.any([signal, owner.signal]) : owner.signal;
+        // Grid listings do not say whether an image embeds a workflow; images that
+        // came through the record endpoints already do.
+        const hasWorkflow =
+          image.hasWorkflow !== undefined
+            ? Promise.resolve(image.hasWorkflow)
+            : galleryImages
+                .resolve(image.imageName, requestSignal)
+                .then((record) => record.hasWorkflow === true)
+                .catch(() => false);
 
         if (!currentGenerateValues) {
-          return EMPTY_IMAGE_RECALL_CAPABILITIES;
+          return { ...EMPTY_IMAGE_RECALL_CAPABILITIES, workflow: await hasWorkflow };
         }
 
         try {
-          const requestSignal = signal ? AbortSignal.any([signal, owner.signal]) : owner.signal;
-          const metadata = await galleryImages.metadata(image.imageName, requestSignal);
+          const [metadata, workflow] = await Promise.all([
+            galleryImages.metadata(image.imageName, requestSignal),
+            hasWorkflow,
+          ]);
 
           assertAccountScopeCurrent(owner);
-          return deriveImageRecallCapabilities(image, metadata);
+          return deriveImageRecallCapabilities({ ...image, hasWorkflow: workflow }, metadata);
         } catch {
           if (!isAccountScopeCurrent(owner)) {
             return EMPTY_IMAGE_RECALL_CAPABILITIES;
@@ -840,9 +854,19 @@ export const useImageActions = ({
             ...EMPTY_IMAGE_RECALL_CAPABILITIES,
             dimensions:
               Number.isFinite(image.width) && image.width >= 64 && Number.isFinite(image.height) && image.height >= 64,
+            workflow: await hasWorkflow,
           };
         }
       },
+      loadImageWorkflow: (image) =>
+        executeLoadImageWorkflow({
+          image,
+          isProjectActive: () => !projectId || queries.isActiveProject(projectId),
+          notifications,
+          openWorkflowEditor: () =>
+            openWorkbenchWidget('workflow', { preferredRegions: ['center'], requireCenterView: true }).ok,
+          t,
+        }),
       getVideoRecallCapabilities: async (item, signal) => {
         const owner = captureAccountScope();
 

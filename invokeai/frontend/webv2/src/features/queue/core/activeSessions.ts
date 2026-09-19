@@ -49,6 +49,20 @@ export const getQueueActiveSessions = (
   return sessions.sort((left, right) => left.backendItemId - right.backendItemId);
 };
 
+/**
+ * The session the live preview shows and the gallery highlights: the pinned
+ * one, else the first running, else the first still settling; queued work is
+ * never followed.
+ */
+export const getFollowedProgressSession = <T extends { id: string; state: QueueProgressSession['state'] }>(
+  sessions: readonly T[],
+  pinnedSessionId: string | null
+): T | null =>
+  sessions.find((session) => session.id === pinnedSessionId) ??
+  sessions.find((session) => session.state === 'running') ??
+  sessions.find((session) => session.state === 'settling') ??
+  null;
+
 /** A tile per unfinished batch slot, including work waiting to start. */
 export type QueueProgressSession = Omit<QueueActiveSession, 'backendItemId' | 'state'> & {
   backendItemId: number | null;

@@ -16,6 +16,7 @@ import { page } from 'vitest/browser';
 import type { GalleryStateView } from './galleryStateView';
 import type { GalleryWidgetContextValue } from './GalleryWidgetContext';
 
+import { GALLERY_PINNED_FOOTER_PX, GALLERY_STARRED_HEADER_HEIGHT_PX } from './galleryGridLayout';
 import { GalleryStackedLayout } from './GalleryStackedLayout';
 import { GalleryWideLayout } from './GalleryWideLayout';
 import { GalleryWidgetContext } from './GalleryWidgetContext';
@@ -130,6 +131,7 @@ const adapter = {
   ImageContextMenu: () => null,
   progressSessions: [],
   pinnedProgressSessionId: null,
+  followedProgressSessionId: null,
   liveFollowEnabled: false,
   followProgressSession: vi.fn(),
   antialiasProgressImages: false,
@@ -220,7 +222,11 @@ describe('gallery layout shells', () => {
     );
     await renderLayout(GalleryStackedLayout);
     expect(panel.querySelector('[role="region"] button[aria-pressed]')).toBeNull();
-    expect(saved.getBoundingClientRect().top - viewport.getBoundingClientRect().top).toBeCloseTo(24, 0);
+    // The collapsed disclosure row, then the pinned block's rule and margin.
+    expect(saved.getBoundingClientRect().top - viewport.getBoundingClientRect().top).toBeCloseTo(
+      GALLERY_STARRED_HEADER_HEIGHT_PX + GALLERY_PINNED_FOOTER_PX,
+      0
+    );
   });
 
   it.each(['images', 'assets'] as const)(

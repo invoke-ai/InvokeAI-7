@@ -1,7 +1,7 @@
 import type { VideoUiAdapter } from '@features/video';
 import type { ReactNode } from 'react';
 
-import { toGalleryItemKey } from '@features/gallery/contracts';
+import { getGalleryDestinationBoardId, toGalleryItemKey } from '@features/gallery/contracts';
 import { invalidateGallery } from '@features/gallery/queries';
 import { VideoUiProvider } from '@features/video';
 import { useQueryClient } from '@tanstack/react-query';
@@ -40,15 +40,11 @@ export const VideoUiAdapterProvider = ({ children }: { children: ReactNode }) =>
   const showPromptSyntaxHighlighting = useWorkbenchPreferenceSelector(
     (preferences) => preferences.showPromptSyntaxHighlighting
   );
-  // Uploads from the video panel land on the gallery's currently selected board. This
-  // deliberately reads the RAW selectedBoardId — the same value the queue snapshots as
-  // galleryBoardId for generation results — so uploads and generations land on the same
-  // board, rather than replicating the gallery view's display-side fallbacks.
-  const uploadBoardId = useActiveProjectSelector((activeProject) => {
-    const selectedBoardId = getProjectWidgetValues(activeProject, 'gallery').selectedBoardId;
-
-    return typeof selectedBoardId === 'string' ? selectedBoardId : 'none';
-  });
+  // Uploads from the video panel land where generation results do — the same
+  // destination the queue snapshots as galleryBoardId.
+  const uploadBoardId = useActiveProjectSelector(
+    (activeProject) => getGalleryDestinationBoardId(getProjectWidgetValues(activeProject, 'gallery')) ?? 'none'
+  );
   // Ref-backed so the port's actions keep their stable-for-the-project identity: a
   // board click must not re-render every useVideoUiActions consumer in the panel.
   const uploadBoardIdRef = useRef(uploadBoardId);

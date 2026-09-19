@@ -24,6 +24,7 @@ import {
   getGalleryImageByName,
   getGalleryImagesByNames,
   getGalleryVideoMetadata,
+  getGalleryImageWorkflow,
   getGalleryVideoWorkflow,
   imageMakeCanvasAssetChanges,
   imageMakeDurableChanges,
@@ -168,6 +169,7 @@ describe('getGalleryImageByName', () => {
     mocks.apiFetchJson.mockResolvedValue({
       board_id: 'board-1',
       created_at: '2026-07-09T12:00:00.000Z',
+      has_workflow: true,
       height: 360,
       image_category: 'general',
       image_name: 'folder/workflow result.png',
@@ -181,6 +183,7 @@ describe('getGalleryImageByName', () => {
     await expect(getGalleryImageByName('folder/workflow result.png', controller.signal)).resolves.toEqual({
       boardId: 'board-1',
       createdAt: '2026-07-09T12:00:00.000Z',
+      hasWorkflow: true,
       height: 360,
       imageCategory: 'general',
       imageName: 'folder/workflow result.png',
@@ -193,6 +196,18 @@ describe('getGalleryImageByName', () => {
     });
     expect(mocks.apiFetchJson).toHaveBeenCalledWith('/api/v1/images/i/folder%2Fworkflow%20result.png', {
       signal: controller.signal,
+    });
+  });
+
+  it('reads the embedded workflow of an image, encoded like the record lookup', async () => {
+    mocks.apiFetchJson.mockResolvedValue({ graph: null, workflow: '{"nodes":[]}' });
+
+    await expect(getGalleryImageWorkflow('folder/workflow result.png')).resolves.toEqual({
+      graph: null,
+      workflow: '{"nodes":[]}',
+    });
+    expect(mocks.apiFetchJson).toHaveBeenCalledWith('/api/v1/images/i/folder%2Fworkflow%20result.png/workflow', {
+      signal: undefined,
     });
   });
 

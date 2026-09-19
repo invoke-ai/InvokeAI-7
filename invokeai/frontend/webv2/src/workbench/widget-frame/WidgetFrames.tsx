@@ -311,9 +311,10 @@ export const WidgetFloatButton = ({
 }) => {
   const { t } = useTranslation();
   const { widgets } = useWorkbenchCommands();
-  // A dialog or popover's chrome never floats; anything else is a dockable
-  // layout region, which is also the dock-back target.
-  const dockableRegion = isWidgetRegion(region) ? region : undefined;
+  // A dialog or popover's chrome never floats, and neither does the center:
+  // its views are the work surface, and a window over an emptied surface is a
+  // view the rails cannot reach. Panels are the dock-back target.
+  const dockableRegion = isWidgetRegion(region) && region !== 'center' ? region : undefined;
   // Floating unmounts the docked subtree; the draft registry's cleanup only
   // deregisters the flusher, so an uncommitted edit is lost without this. The
   // region rides along: one instance may be placed in several regions (the
@@ -328,10 +329,7 @@ export const WidgetFloatButton = ({
     widgets.float(instanceId, dockableRegion);
   }, [dockableRegion, instanceId, widgets]);
   // Floating is offered only from dockable regions; the floating window's own
-  // chrome carries the dock control. Even the last center *view* may float:
-  // the emptied surface falls back to the center's fallback view, and the
-  // window's dock control restores it — only the destructive placements
-  // (`closeWidgetPlacement`, `toggleRegionWidget`) still refuse that.
+  // chrome carries the dock control.
   const canFloat = Boolean(manifest.allowFloating) && dockableRegion !== undefined;
 
   if (!canFloat) {

@@ -339,13 +339,61 @@ const undoLabels: Partial<Record<ProjectGraphAction['type'], string>> = {
   removeFormElement: 'Edit workflow form',
   removeNodes: 'Delete workflow nodes',
   setContainerLayout: 'Edit workflow form',
+  setFieldDescription: 'Edit workflow field description',
+  setFieldLabel: 'Rename workflow field',
+  setFieldSeedMode: 'Change workflow seed mode',
+  setFieldValue: 'Edit workflow field value',
+  setFormElementContent: 'Edit workflow form',
+  setMetadata: 'Edit workflow details',
   setNodeFieldShowDescription: 'Edit workflow form',
   setNodeFieldShowShuffle: 'Edit workflow form',
+  setNodeIsIntermediate: 'Change workflow node output saving',
+  setNodeLabel: 'Rename workflow node',
+  setNodeNotes: 'Edit workflow node notes',
+  setNodeUseCache: 'Change workflow node caching',
   unexposeField: 'Remove workflow field from form',
 };
 
-/** Returns the project-undo label for an action, or null when the edit should not create an undo entry. */
-export const getProjectGraphUndoLabel = (action: ProjectGraphAction): string | null => undoLabels[action.type] ?? null;
+export interface ProjectGraphUndoEntry {
+  label: string;
+  /** Present for edits that arrive as a stream (typing, dragging): consecutive edits with one key fold into one undo step. */
+  mergeKey?: string;
+}
+
+const getUndoMergeKey = (action: ProjectGraphAction): string | undefined => {
+  switch (action.type) {
+    case 'setFieldDescription':
+    case 'setFieldLabel':
+      return `${action.type}:${action.nodeId}:${action.fieldName}`;
+    case 'setFieldValue':
+      // Typed text and dragged numbers stream; a pick (model, board, switch) is one step of its own.
+      return typeof action.value === 'string' || typeof action.value === 'number'
+        ? `${action.type}:${action.nodeId}:${action.fieldName}`
+        : undefined;
+    case 'setNodeLabel':
+    case 'setNodeNotes':
+      return `${action.type}:${action.nodeId}`;
+    case 'setFormElementContent':
+      return `${action.type}:${action.elementId}`;
+    case 'setMetadata':
+      return `${action.type}:${Object.keys(action.patch).sort().join(',')}`;
+    default:
+      return undefined;
+  }
+};
+
+/** The undo entry an action earns, or null when the edit should not create one (positions, disclosure state, seed advances). */
+export const getProjectGraphUndoEntry = (action: ProjectGraphAction): ProjectGraphUndoEntry | null => {
+  const label = undoLabels[action.type];
+
+  if (!label) {
+    return null;
+  }
+
+  const mergeKey = getUndoMergeKey(action);
+
+  return mergeKey ? { label, mergeKey } : { label };
+};
 
 const updateNode = (
   document: ProjectGraphState,

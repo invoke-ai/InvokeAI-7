@@ -11,11 +11,12 @@ import { Icon, Menu, Portal, Text } from '@chakra-ui/react';
 import { flushWorkbenchDrafts } from '@platform/react/draftRegistry';
 import { IconButton } from '@platform/ui/Button';
 import { MenuContent } from '@platform/ui/Menu';
+import { toaster } from '@platform/ui/toaster';
 import { createGraphBearingSurface } from '@workbench/graphSurfaces';
 import { resolveWidgetLabel } from '@workbench/widgetLabels';
 import { useActiveProjectSelector, useWorkbenchCommands } from '@workbench/WorkbenchContext';
 import { GitBranchIcon, MoreHorizontalIcon, TargetIcon } from 'lucide-react';
-import { lazy, Suspense, useCallback, useMemo, useState } from 'react';
+import { Component, lazy, Suspense, useCallback, useMemo, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 
 /**
@@ -30,6 +31,32 @@ import { useTranslation } from 'react-i18next';
  */
 
 const GraphPreviewHost = lazy(() => import('./GraphPreviewHost'));
+
+/**
+ * The preview is a dialog over the widget, not part of it: a throw inside it
+ * (a failed chunk load, a compile edge case that escaped the source) surfaces
+ * as a toast and drops the dialog, instead of climbing to the widget's
+ * failure boundary and replacing the whole widget with a failure card. An
+ * error unmounts the host, so the next open starts a fresh boundary.
+ */
+class GraphPreviewBoundary extends Component<
+  { children: ReactNode; onError: (error: Error) => void },
+  { hasFailed: boolean }
+> {
+  state = { hasFailed: false };
+
+  static getDerivedStateFromError(): { hasFailed: boolean } {
+    return { hasFailed: true };
+  }
+
+  componentDidCatch(error: Error) {
+    this.props.onError(error);
+  }
+
+  render() {
+    return this.state.hasFailed ? null : this.props.children;
+  }
+}
 
 const MENU_POSITIONING = { placement: 'bottom-end' } as const;
 const DISABLED_PROPS = { opacity: 0.4 };
@@ -111,6 +138,14 @@ export const WidgetActionsMenu = ({
       setIsPreviewMounted(false);
     }
   }, [isPreviewOpen]);
+  const handlePreviewError = useCallback(
+    (error: Error) => {
+      toaster.create({ description: error.message, title: t('widgets.graph.previewFailed'), type: 'error' });
+      setIsPreviewOpen(false);
+      setIsPreviewMounted(false);
+    },
+    [t]
+  );
 
   if (!surface && !HeaderMenu) {
     return null;
@@ -137,14 +172,16 @@ export const WidgetActionsMenu = ({
         </Portal>
       </Menu.Root>
       {surface && isPreviewMounted ? (
-        <Suspense fallback={null}>
-          <GraphPreviewHost
-            isOpen={isPreviewOpen}
-            surface={surface}
-            onExitComplete={handlePreviewExitComplete}
-            onOpenChange={setIsPreviewOpen}
-          />
-        </Suspense>
+        <GraphPreviewBoundary onError={handlePreviewError}>
+          <Suspense fallback={null}>
+            <GraphPreviewHost
+              isOpen={isPreviewOpen}
+              surface={surface}
+              onExitComplete={handlePreviewExitComplete}
+              onOpenChange={setIsPreviewOpen}
+            />
+          </Suspense>
+        </GraphPreviewBoundary>
       ) : null}
     </>
   );

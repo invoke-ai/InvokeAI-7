@@ -137,6 +137,8 @@ export const createOverlayFrame = (deps: CreateOverlayFrameDeps): OverlayFrame =
         bbox: bboxPreview ?? doc.bbox,
         bboxHandles: activeTool === 'bbox',
         bboxOverlay: stores.bboxOverlay.get(),
+        // The checker's darker square is the theme's canvas surround (`bg.inset`).
+        bboxOverlayColor: stores.checkerColors.get().a,
         cursor: deps.getOverlayCursor(),
         gradientPreview: stores.gradientPreview.get(),
         // The grid spans the whole viewport at the bbox snap size when the

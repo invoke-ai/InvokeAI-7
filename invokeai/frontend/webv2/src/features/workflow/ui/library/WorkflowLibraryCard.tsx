@@ -4,7 +4,7 @@ import { Badge, Box, Flex, HStack, Icon, Image, Skeleton, Stack, Text } from '@c
 import { getModelBaseLabel } from '@features/models';
 import { MiddleTruncate } from '@platform/ui/MiddleTruncate';
 import { ImageOffIcon } from 'lucide-react';
-import { useCallback, useState } from 'react';
+import { useCallback, useState, type MouseEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 
 /**
@@ -14,9 +14,10 @@ import { useTranslation } from 'react-i18next';
  * run it.
  *
  * A single click selects (the right rail follows the selection); a double
- * click opens. Enrichment fills the footer in asynchronously per entry, so
- * the strip reserves its height from the first paint and never reflows the
- * grid as counts arrive.
+ * click opens; a right click selects and asks for the rail's actions at the
+ * pointer. Enrichment fills the footer in asynchronously per entry, so the
+ * strip reserves its height from the first paint and never reflows the grid
+ * as counts arrive.
  */
 
 const CARD_HOVER = { bg: 'bg.muted', borderColor: 'border.emphasized' } as const;
@@ -25,11 +26,15 @@ const CARD_TRANSITION =
   'border-color var(--wb-motion-duration-medium) ease, background var(--wb-motion-duration-medium) ease';
 const THUMBNAIL_ASPECT_RATIO = 3 / 2;
 
+/** The card's DOM id, which the rail's context menu names as its trigger so it nests under the dialog's layer. */
+export const getWorkflowLibraryCardId = (workflowId: string): string => `workflow-library-card-${workflowId}`;
+
 export interface WorkflowLibraryCardProps {
   entry: WorkflowLibraryEntry;
   isSelected: boolean;
   /** Models this workflow needs that are not installed; 0 hides the badge. */
   missingCount: number;
+  onContextMenu: (workflowId: string, point: { x: number; y: number }) => void;
   onOpen: (workflowId: string) => void;
   onSelect: (workflowId: string) => void;
 }
@@ -38,6 +43,7 @@ export const WorkflowLibraryCard = ({
   entry,
   isSelected,
   missingCount,
+  onContextMenu,
   onOpen,
   onSelect,
 }: WorkflowLibraryCardProps) => {
@@ -48,6 +54,22 @@ export const WorkflowLibraryCard = ({
 
   const handleSelect = useCallback(() => onSelect(workflowId), [onSelect, workflowId]);
   const handleOpen = useCallback(() => onOpen(workflowId), [onOpen, workflowId]);
+  const handleContextMenu = useCallback(
+    (event: MouseEvent<HTMLElement>) => {
+      event.preventDefault();
+
+      // A keyboard-raised menu (Shift+F10, the Menu key) carries no pointer
+      // position; anchor it inside the card instead of at the viewport corner.
+      const rect = event.currentTarget.getBoundingClientRect();
+      const fromKeyboard = event.clientX === 0 && event.clientY === 0;
+
+      onContextMenu(
+        workflowId,
+        fromKeyboard ? { x: rect.left + 16, y: rect.top + 16 } : { x: event.clientX, y: event.clientY }
+      );
+    },
+    [onContextMenu, workflowId]
+  );
   const handleThumbnailError = useCallback(() => setHasThumbnailFailed(true), []);
 
   // A broken <img> reads worse than the glyph, so a load failure falls back to
@@ -63,6 +85,7 @@ export const WorkflowLibraryCard = ({
       borderColor={isSelected ? 'accent.solid' : 'border.subtle'}
       borderWidth="1px"
       data-workflow-card={workflowId}
+      id={getWorkflowLibraryCardId(workflowId)}
       minW="0"
       overflow="hidden"
       rounded="lg"
@@ -72,6 +95,7 @@ export const WorkflowLibraryCard = ({
       _focusVisible={CARD_FOCUS_VISIBLE}
       _hover={CARD_HOVER}
       onClick={handleSelect}
+      onContextMenu={handleContextMenu}
       onDoubleClick={handleOpen}
     >
       <Box aspectRatio={THUMBNAIL_ASPECT_RATIO} bg="bg.muted" overflow="hidden" w="full">

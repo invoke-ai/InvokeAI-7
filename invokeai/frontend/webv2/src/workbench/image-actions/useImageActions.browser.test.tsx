@@ -37,7 +37,12 @@ const mocks = vi.hoisted(() => ({
   gallerySelectItem: vi.fn(),
   gallerySetItemMultiSelection: vi.fn(),
   imageMetadata: vi.fn(),
+  imageResolve: vi.fn((..._args: unknown[]): Promise<unknown> => Promise.reject(new Error('no record'))),
   imageResolveMany: vi.fn((..._args: unknown[]) => Promise.resolve([])),
+  imageWorkflow: vi.fn((..._args: unknown[]): Promise<{ graph: string | null; workflow: string | null }> =>
+    Promise.resolve({ graph: null, workflow: null })
+  ),
+  requestWorkflowDocumentLoad: vi.fn(),
   videoMetadata: vi.fn((..._args: unknown[]) => Promise.resolve(null)),
   invalidateGallery: vi.fn(),
   invalidateGalleryItems: vi.fn(),
@@ -46,7 +51,10 @@ const mocks = vi.hoisted(() => ({
   itemSetStarred: vi.fn(),
   notificationsAdd: vi.fn(),
   onImagesDeleted: vi.fn(),
-  openWorkbenchWidget: vi.fn(),
+  openWorkbenchWidget: vi.fn((..._args: unknown[]): { ok: boolean; reason?: string; region?: string } => ({
+    ok: true,
+    region: 'center',
+  })),
   patchGalleryItemCaches: vi.fn((..._args: unknown[]) => vi.fn()),
   removeFromBoard: vi.fn(),
   reportError: vi.fn(),
@@ -59,7 +67,9 @@ const preferences = vi.hoisted(() => ({ confirmImageDeletion: false }));
 vi.mock('@features/gallery', () => ({
   galleryImages: {
     metadata: (...args: unknown[]) => mocks.imageMetadata(...args),
+    resolve: (...args: unknown[]) => mocks.imageResolve(...args),
     resolveMany: (...args: unknown[]) => mocks.imageResolveMany(...args),
+    workflow: (...args: unknown[]) => mocks.imageWorkflow(...args),
   },
   galleryItemOrganization: {
     delete: (...args: unknown[]) => mocks.itemDelete(...args),
@@ -83,6 +93,10 @@ vi.mock('@features/gallery', () => ({
   }),
   toGalleryItemKey: ({ kind, name }: { kind: string; name: string }) => `${kind}:${name}`,
   toGalleryItemRef: ({ kind, name }: { kind: 'image' | 'video'; name: string }) => ({ kind, name }),
+}));
+
+vi.mock('@features/workflow/react', () => ({
+  requestWorkflowDocumentLoad: (...args: unknown[]) => mocks.requestWorkflowDocumentLoad(...args),
 }));
 
 vi.mock('@features/gallery/queries', () => ({
@@ -173,6 +187,9 @@ vi.mock('react-i18next', () => ({
       }
       if (key === 'widgets.gallery.itemActions.move.success') {
         return `Moved to ${String(values?.board)}`;
+      }
+      if (key === 'widgets.gallery.itemActions.loadWorkflow.loadedLabel') {
+        return `${key}:${String(values?.name)}`;
       }
 
       return key;
@@ -414,6 +431,85 @@ describe('image recall capability cancellation', () => {
     await act(async () => {
       await result;
     });
+  });
+});
+
+describe('load workflow from image', () => {
+  const image: GalleryImage = {
+    boardId: 'none',
+    height: 512,
+    imageCategory: 'general',
+    imageName: 'made-by-workflow.png',
+    imageUrl: '/full/made-by-workflow.png',
+    queuedAt: '2026-07-30T00:00:00.000Z',
+    sourceQueueItemId: 'queue-workflow',
+    starred: false,
+    thumbnailUrl: '/thumb/made-by-workflow.png',
+    width: 512,
+  };
+
+  it('offers the action only once the image record says a workflow is embedded', async () => {
+    mocks.imageMetadata.mockResolvedValue(null);
+    mocks.imageResolve.mockResolvedValueOnce({ ...image, hasWorkflow: true });
+
+    await expect(actionsRef.current?.getImageRecallCapabilities(image)).resolves.toMatchObject({ workflow: true });
+
+    mocks.imageResolve.mockResolvedValueOnce({ ...image, hasWorkflow: false });
+
+    await expect(actionsRef.current?.getImageRecallCapabilities(image)).resolves.toMatchObject({ workflow: false });
+
+    // An image that came through a record endpoint already knows; no second round trip.
+    mocks.imageResolve.mockClear();
+    await expect(
+      actionsRef.current?.getImageRecallCapabilities({ ...image, hasWorkflow: true })
+    ).resolves.toMatchObject({ workflow: true });
+    expect(mocks.imageResolve).not.toHaveBeenCalled();
+  });
+
+  it('reports, instead of queueing a load for a later editor, when the workflow widget cannot open', async () => {
+    mocks.imageWorkflow.mockResolvedValueOnce({ graph: null, workflow: JSON.stringify({ nodes: [] }) });
+    mocks.openWorkbenchWidget.mockReturnValueOnce({ ok: false, reason: 'unavailable' });
+
+    await act(async () => {
+      await actionsRef.current?.loadImageWorkflow(image);
+    });
+
+    expect(mocks.requestWorkflowDocumentLoad).not.toHaveBeenCalled();
+    expect(mocks.notificationsAdd).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'error', title: 'widgets.gallery.itemActions.loadWorkflow.failed' })
+    );
+  });
+
+  it('hands the embedded workflow to the editor and opens it', async () => {
+    mocks.imageWorkflow.mockResolvedValueOnce({
+      graph: null,
+      workflow: JSON.stringify({ name: 'Embedded', nodes: [] }),
+    });
+
+    await act(async () => {
+      await actionsRef.current?.loadImageWorkflow(image);
+    });
+
+    expect(mocks.openWorkbenchWidget).toHaveBeenCalledWith('workflow', {
+      preferredRegions: ['center'],
+      requireCenterView: true,
+    });
+    expect(mocks.requestWorkflowDocumentLoad).toHaveBeenCalledWith(
+      { name: 'Embedded', nodes: [] },
+      'widgets.gallery.itemActions.loadWorkflow.loadedLabel:Embedded'
+    );
+  });
+
+  it('says so, and leaves the editor alone, when the image embeds no workflow', async () => {
+    await act(async () => {
+      await actionsRef.current?.loadImageWorkflow(image);
+    });
+
+    expect(mocks.requestWorkflowDocumentLoad).not.toHaveBeenCalled();
+    expect(mocks.openWorkbenchWidget).not.toHaveBeenCalled();
+    expect(mocks.notificationsAdd).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'info', title: 'widgets.gallery.itemActions.loadWorkflow.missing' })
+    );
   });
 });
 

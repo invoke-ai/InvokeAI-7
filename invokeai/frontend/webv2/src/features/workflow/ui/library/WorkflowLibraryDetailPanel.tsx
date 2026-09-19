@@ -38,6 +38,7 @@ import { useCallback, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { formatRelativeTime } from './relativeTime';
+import { getWorkflowLibraryCardId } from './WorkflowLibraryCard';
 import {
   resolveEntryRequirements,
   useModelRequirementDeps,
@@ -61,9 +62,12 @@ const THUMBNAIL_ASPECT_RATIO = 3 / 2;
 const INSTALL_HOVER = { opacity: 0.85 } as const;
 
 export interface WorkflowLibraryDetailPanelProps {
+  /** Where a card's right-click asked for the actions menu; null while it is closed. */
+  contextMenuPoint: { x: number; y: number } | null;
   entry: WorkflowLibraryEntry | null;
   /** The shell closes the library when a fork takes the user to a new project. */
   onClose: () => void;
+  onContextMenuClose: () => void;
   onDeleted: () => void;
   /** Carries the copy's id so the shell can select it once the list refreshes. */
   onDuplicated: (workflowId: string) => void;
@@ -71,11 +75,25 @@ export interface WorkflowLibraryDetailPanelProps {
   onPreview: (entry: WorkflowLibraryEntry) => void;
 }
 
+/** A right-click on another card moves the menu there (its own handler re-anchors it) rather than dismissing it. */
+const keepOpenForCardRightClick = (event: { detail: { originalEvent: Event }; preventDefault(): void }) => {
+  const original = event.detail.originalEvent;
+
+  if (original instanceof PointerEvent && original.button === 2 && isCardTarget(original.target)) {
+    event.preventDefault();
+  }
+};
+
+const isCardTarget = (target: EventTarget | null): boolean =>
+  target instanceof Element && target.closest('[data-workflow-card]') !== null;
+
 const toFileSlug = (name: string): string => name.trim().replaceAll(/\s+/g, '-').toLowerCase() || 'workflow';
 
 export const WorkflowLibraryDetailPanel = ({
+  contextMenuPoint,
   entry,
   onClose,
+  onContextMenuClose,
   onDeleted,
   onDuplicated,
   onOpen,
@@ -270,6 +288,27 @@ export const WorkflowLibraryDetailPanel = ({
   const openDeleteConfirm = useCallback(() => setIsDeleteConfirmOpen(true), []);
   const closeDeleteConfirm = useCallback(() => setIsDeleteConfirmOpen(false), []);
 
+  const contextMenuPositioning = useMemo(
+    () => ({
+      getAnchorRect: () =>
+        contextMenuPoint ? { height: 1, width: 1, x: contextMenuPoint.x, y: contextMenuPoint.y } : null,
+      placement: 'bottom-start' as const,
+    }),
+    [contextMenuPoint]
+  );
+  const handleContextMenuOpenChange = useCallback(
+    (event: { open: boolean }) => {
+      if (!event.open) {
+        onContextMenuClose();
+      }
+    },
+    [onContextMenuClose]
+  );
+  const contextMenuIds = useMemo(
+    () => (entry ? { trigger: getWorkflowLibraryCardId(entry.item.workflow_id) } : undefined),
+    [entry]
+  );
+
   const confirmDelete = useCallback(async () => {
     if (!entry) {
       return;
@@ -307,6 +346,52 @@ export const WorkflowLibraryDetailPanel = ({
     : showThumbnail
       ? t('workflowLibrary.sampleOutput')
       : null;
+
+  // One item set behind both the rail's overflow button and a card's right-click.
+  const actionItems = (
+    <>
+      <MenuActionItem
+        hint={t('workflowLibrary.openHint')}
+        icon={WorkflowIcon}
+        label={t('workflowLibrary.open')}
+        value="open"
+        onSelect={handleOpen}
+      />
+      <MenuActionItem
+        hint={t('workflowLibrary.duplicateHint')}
+        icon={CopyIcon}
+        isDisabled={isDuplicatePending}
+        label={t('workflowLibrary.duplicate')}
+        value="duplicate"
+        onSelect={handleDuplicate}
+      />
+      <MenuActionItem
+        hint={t('workflowLibrary.forkIntoProjectHint')}
+        icon={GitForkIcon}
+        label={t('workflowLibrary.forkIntoProject')}
+        value="fork-into-project"
+        onSelect={handleFork}
+      />
+      <MenuActionItem
+        hint={t('workflowLibrary.downloadJsonHint')}
+        icon={DownloadIcon}
+        label={t('workflowLibrary.downloadJson')}
+        value="download-json"
+        onSelect={handleDownload}
+      />
+      {item.category === 'user' ? (
+        // Bundled defaults are not the account's to delete.
+        <MenuActionItem
+          hint={t('workflowLibrary.deleteHint')}
+          icon={Trash2Icon}
+          label={t('workflowLibrary.delete')}
+          tone="danger"
+          value="delete"
+          onSelect={openDeleteConfirm}
+        />
+      ) : null}
+    </>
+  );
 
   return (
     <Stack
@@ -412,48 +497,7 @@ export const WorkflowLibraryDetailPanel = ({
             </Menu.Trigger>
             <Portal>
               <Menu.Positioner>
-                <MenuContent minW="16rem">
-                  <MenuActionItem
-                    hint={t('workflowLibrary.openHint')}
-                    icon={WorkflowIcon}
-                    label={t('workflowLibrary.open')}
-                    value="open"
-                    onSelect={handleOpen}
-                  />
-                  <MenuActionItem
-                    hint={t('workflowLibrary.duplicateHint')}
-                    icon={CopyIcon}
-                    isDisabled={isDuplicatePending}
-                    label={t('workflowLibrary.duplicate')}
-                    value="duplicate"
-                    onSelect={handleDuplicate}
-                  />
-                  <MenuActionItem
-                    hint={t('workflowLibrary.forkIntoProjectHint')}
-                    icon={GitForkIcon}
-                    label={t('workflowLibrary.forkIntoProject')}
-                    value="fork-into-project"
-                    onSelect={handleFork}
-                  />
-                  <MenuActionItem
-                    hint={t('workflowLibrary.downloadJsonHint')}
-                    icon={DownloadIcon}
-                    label={t('workflowLibrary.downloadJson')}
-                    value="download-json"
-                    onSelect={handleDownload}
-                  />
-                  {item.category === 'user' ? (
-                    // Bundled defaults are not the account's to delete.
-                    <MenuActionItem
-                      hint={t('workflowLibrary.deleteHint')}
-                      icon={Trash2Icon}
-                      label={t('workflowLibrary.delete')}
-                      tone="danger"
-                      value="delete"
-                      onSelect={openDeleteConfirm}
-                    />
-                  ) : null}
-                </MenuContent>
+                <MenuContent minW="16rem">{actionItems}</MenuContent>
               </Menu.Positioner>
             </Portal>
           </Menu.Root>
@@ -463,6 +507,24 @@ export const WorkflowLibraryDetailPanel = ({
           {t('workflowLibrary.previewGraph')}
         </Button>
       </Stack>
+
+      {/* Naming the card as the trigger makes this a nested layer of the dialog: the
+          dialog's focus trap then lets the menu keep focus, and closing returns it to the card. */}
+      <Menu.Root
+        ids={contextMenuIds}
+        open={contextMenuPoint !== null}
+        positioning={contextMenuPositioning}
+        onOpenChange={handleContextMenuOpenChange}
+        onPointerDownOutside={keepOpenForCardRightClick}
+      >
+        <Portal>
+          <Menu.Positioner>
+            <MenuContent data-workflow-context-menu minW="16rem">
+              {actionItems}
+            </MenuContent>
+          </Menu.Positioner>
+        </Portal>
+      </Menu.Root>
 
       <ConfirmDialog
         body={t('workflowLibrary.deleteConfirmBody', { name })}

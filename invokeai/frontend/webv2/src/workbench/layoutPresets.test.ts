@@ -130,11 +130,9 @@ describe('built-in layout preset descriptors', () => {
         active: { bottom: 'gallery:bottom', center: 'preview', left: 'video', right: 'gallery' },
         bottom: ['server-status', 'queue-status', 'gallery:bottom', 'notifications', 'autosave-status'],
         center: ['preview'],
-        // Video leads the rail; Generate and Upscale stay behind it so a still
-        // can be set up without leaving the arrangement.
-        left: ['video', 'generate', 'upscale'],
+        left: ['video', 'upscale'],
         panels: { isBottomOpen: false, isLeftOpen: true, isRightOpen: true },
-        right: ['gallery', 'image-map', 'queue'],
+        right: ['gallery', 'queue'],
       },
     });
   });

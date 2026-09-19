@@ -6,8 +6,6 @@ part a loader can get wrong without anything raising — every failure below wou
 surface as a model that loads cleanly and generates noise.
 """
 
-import json
-
 import pytest
 import torch
 from safetensors.torch import save_file
@@ -27,12 +25,9 @@ from invokeai.backend.quantization.int8_convrot import (
     split_int8_convrot_layers,
     swap_in_int8_linears,
 )
+from tests.fixtures.quantized_payloads import comfy_quant_marker
 
 MARKER = {"format": "int8_tensorwise", "convrot": True, "convrot_groupsize": CONVROT_GROUP_SIZE}
-
-
-def _marker_blob(marker: dict) -> torch.Tensor:
-    return torch.frombuffer(bytearray(json.dumps(marker).encode("utf-8")), dtype=torch.uint8)
 
 
 class TestWhichLayersAreClaimed:
@@ -40,7 +35,7 @@ class TestWhichLayersAreClaimed:
         sd = {
             "blocks.0.attn.wq.weight": torch.zeros(4, CONVROT_GROUP_SIZE, dtype=torch.int8),
             "blocks.0.attn.wq.weight_scale": torch.ones(4, 1),
-            "blocks.0.attn.wq.comfy_quant": _marker_blob(MARKER),
+            "blocks.0.attn.wq.comfy_quant": comfy_quant_marker(MARKER),
         }
         markers = extract_int8_convrot_markers(sd)
 
@@ -53,7 +48,7 @@ class TestWhichLayersAreClaimed:
         sd = {
             "layer.weight": torch.zeros(4, 4, dtype=torch.float8_e4m3fn),
             "layer.weight_scale": torch.ones(1),
-            "layer.comfy_quant": _marker_blob({"format": "float8_e4m3fn"}),
+            "layer.comfy_quant": comfy_quant_marker({"format": "float8_e4m3fn"}),
         }
         assert extract_int8_convrot_markers(sd) == {}
         assert "layer.comfy_quant" in sd
@@ -66,7 +61,7 @@ class TestWhichLayersAreClaimed:
             "txtfusion.0.weight": torch.zeros(8, 8, dtype=torch.bfloat16),
             "blocks.0.attn.wq.weight": torch.zeros(4, CONVROT_GROUP_SIZE, dtype=torch.int8),
             "blocks.0.attn.wq.weight_scale": torch.ones(4, 1),
-            "blocks.0.attn.wq.comfy_quant": _marker_blob(MARKER),
+            "blocks.0.attn.wq.comfy_quant": comfy_quant_marker(MARKER),
         }
         assert set(extract_int8_convrot_markers(sd)) == {"blocks.0.attn.wq"}
 
@@ -78,7 +73,7 @@ class TestWhichLayersAreClaimed:
     def test_the_group_size_travels_with_each_marker(self) -> None:
         """Every marker in the Krea-2 build says 256, but the flag is per tensor and another
         producer may vary it, so it is read rather than assumed."""
-        sd = {"layer.comfy_quant": _marker_blob({"format": "int8_tensorwise", "convrot_groupsize": 64})}
+        sd = {"layer.comfy_quant": comfy_quant_marker({"format": "int8_tensorwise", "convrot_groupsize": 64})}
         assert extract_int8_convrot_markers(sd)["layer"]["convrot_groupsize"] == 64
 
 
@@ -331,7 +326,7 @@ class TestTheKeysTheOrphanCheckAndTheSidecarDropActOn:
         sd = {
             "blocks.0.input_scaler.weight": torch.ones(4, 4),
             "blocks.0.attn.input_scale": torch.ones(1),
-            "blocks.0.attn.comfy_quant": _marker_blob({"format": "float8_e4m3fn"}),
+            "blocks.0.attn.comfy_quant": comfy_quant_marker({"format": "float8_e4m3fn"}),
         }
 
         assert set(drop_unconsumed_quantization_sidecars(sd)) == {"blocks.0.input_scaler.weight"}

@@ -146,6 +146,38 @@ const accentSolid: Compute = (theme) => theme.colors.accent.solid;
 /** The neutral ramp, emitted as `neutral.50…neutral.950`, one value per theme. */
 const neutralRamp = Object.fromEntries(STEPS.map((step) => [step, colorToken((theme) => theme.colors.neutral[step])]));
 
+// Additional categorical hues. Seeds are dark-theme foregrounds; light themes
+// darken them for text, and every fill derives from the same hue and surface.
+const categoricalPalettes = Object.fromEntries(
+  Object.entries({
+    coral: '#ff8e80',
+    gold: '#f6d365',
+    ice: '#b3e5fc',
+    lavender: '#bd9fff',
+    periwinkle: '#a5b4fc',
+    sage: '#a3b18a',
+    silver: '#d4d4d5',
+    steel: '#94aec9',
+  }).map(([name, seed]) => {
+    const fg: Compute = (theme) =>
+      theme.colorScheme === 'light' ? `color-mix(in oklab, ${seed} 40%, ${theme.colors.neutral[950]})` : seed;
+    return [
+      name,
+      {
+        fg: colorToken(fg),
+        solid: colorToken(fg),
+        contrast: stepRef(950, 50),
+        subtle: mix(fg, 12, surface),
+        muted: mix(fg, 24, surface),
+        emphasized: mix(fg, 36, surface),
+        border: colorToken(fg),
+        focusRing: colorToken(fg),
+        hoverTint: colorToken(fg),
+      },
+    ];
+  })
+);
+
 /**
  * The semantic-token contract. Backgrounds/foregrounds/borders reference ramp
  * steps (`stepRef`); the four off-ramp neutrals and the status/identity hues read
@@ -153,6 +185,7 @@ const neutralRamp = Object.fromEntries(STEPS.map((step) => [step, colorToken((th
  * verbatim so built-ins inherit the theme for free.
  */
 const semanticColors = {
+  ...categoricalPalettes,
   neutral: neutralRamp,
 
   // Surface ladder. Light panels are whiter than the app bg, so the light steps
@@ -343,6 +376,13 @@ const config = defineConfig({
     },
   },
   theme: {
+    keyframes: {
+      // A band crossing an indeterminate progress track (StatusWidgetChip).
+      'wb-status-sweep': {
+        from: { transform: 'translateX(-100%)' },
+        to: { transform: 'translateX(300%)' },
+      },
+    },
     tokens: {
       // Pro-app convention: controls keep the default arrow cursor; pointer is
       // reserved for links. Overrides Chakra's `button`/`switch` pointer tokens.

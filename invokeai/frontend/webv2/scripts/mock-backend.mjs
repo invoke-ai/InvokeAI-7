@@ -100,7 +100,9 @@ const createState = (profile) => {
 
   return {
     boards: new Map(fixture.boards.map((board) => [board.board_id, clone(board)])),
-    clientState: new Map(),
+    // An existing account: the one-time alpha notice was dismissed already, so
+    // journeys and verification scripts land on the page, not a modal.
+    clientState: new Map([['webv2:workbench-settings', JSON.stringify({ alphaNoticeAcknowledged: true })]]),
     images: new Map(fixture.images.map((image) => [image.image_name, clone(image)])),
     models: new Map(fixture.models.map((model) => [model.key, clone(model)])),
     mutationClock: 0,
@@ -1446,6 +1448,15 @@ export const startMockBackend = async (port, { profile = 'empty' } = {}) => {
         const imageName = decodeURIComponent(imageAssetMatch[1]);
 
         return state.images.has(imageName) ? writePng(response) : json(404, { detail: 'Image not found' });
+      }
+
+      const imageWorkflowMatch = /^\/api\/v1\/images\/i\/([^/]+)\/workflow$/.exec(path);
+      if (method === 'GET' && imageWorkflowMatch) {
+        const image = state.images.get(decodeURIComponent(imageWorkflowMatch[1]));
+
+        return image
+          ? json(200, { graph: image.graph ?? null, workflow: image.workflow ?? null })
+          : json(404, { detail: 'Image not found' });
       }
 
       const imageMetadataMatch = /^\/api\/v1\/images\/i\/([^/]+)\/metadata$/.exec(path);

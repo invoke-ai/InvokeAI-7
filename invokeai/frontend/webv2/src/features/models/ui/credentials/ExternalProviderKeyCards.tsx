@@ -18,7 +18,7 @@ import { useScopedAction } from '@platform/react/useScopedAction';
 import { assertAccountScopeCurrent, type AccountScope } from '@platform/state/accountLifecycle';
 import { getApiErrorMessage } from '@platform/transport/http';
 import { Button } from '@platform/ui';
-import { AlibabaCloudIcon, ByteDanceIcon, GoogleGeminiIcon } from '@platform/ui/BrandIcon';
+import { AlibabaCloudIcon, ByteDanceIcon, GoogleGeminiIcon } from '@platform/ui/VendoredIcon';
 import { BotIcon, HexagonIcon } from 'lucide-react';
 import { useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';

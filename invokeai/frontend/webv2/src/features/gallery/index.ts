@@ -46,10 +46,10 @@ import {
   getGalleryImageByName,
   getGalleryImageMetadata,
   getGalleryImagesByNames,
+  getGalleryImageWorkflow,
   getGalleryItemByRef,
   getGalleryVideoMetadata,
   getGalleryVideoWorkflow,
-  isDateBoardId,
   isInvalidGalleryBoardDestination,
   listGalleryBoards,
   makeImageCanvasAsset,
@@ -72,6 +72,7 @@ export const galleryImages = {
   metadata: getGalleryImageMetadata,
   resolve: getGalleryImageByName,
   resolveMany: getGalleryImagesByNames,
+  workflow: getGalleryImageWorkflow,
 } as const;
 
 /** Resolve either media kind while keeping the legacy image port strictly image-only. */
@@ -250,8 +251,6 @@ export const galleryItemOrganization = {
 export const galleryDestinations = {
   list: listGalleryBoards,
 } as const;
-
-export const isGalleryVirtualBoard = isDateBoardId;
 
 /**
  * Whether a board id can actually receive item attachments. Virtual destinations

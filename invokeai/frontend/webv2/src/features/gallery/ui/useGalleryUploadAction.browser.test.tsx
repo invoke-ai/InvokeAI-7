@@ -80,6 +80,10 @@ const adapter: GalleryUiAdapter = {
     setPageInfo: noop,
     setSearchTerm: noop,
     setStarredOnly: noop,
+    setSemanticSearchMode: noop,
+    setSemanticSearchText: noop,
+    commitSemanticSearch: noop,
+    clearSearch: noop,
     setView: noop,
     toggleItemSelection: noop,
     updateSettings: noop,
@@ -89,6 +93,7 @@ const adapter: GalleryUiAdapter = {
   liveFollowEnabled: false,
   progressSessions: [],
   pinnedProgressSessionId: null,
+  followedProgressSessionId: null,
   followProgressSession: vi.fn(),
   notifications: {
     add: (...args: unknown[]) => mocks.notificationsAdd(...args),

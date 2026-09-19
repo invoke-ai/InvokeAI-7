@@ -19,8 +19,9 @@ import { sortableKeyboardCoordinates } from '@dnd-kit/sortable';
 import { requestGalleryItemReveal } from '@features/gallery/core/selection';
 import { getGallerySettings } from '@features/gallery/core/settings';
 import { GalleryUiProvider, type GalleryUiAdapter } from '@features/gallery/react';
-import { GALLERY_STARRED_SEPARATOR_HEIGHT_PX } from '@features/gallery/ui/galleryGridLayout';
+import { GALLERY_PINNED_FOOTER_PX } from '@features/gallery/ui/galleryGridLayout';
 import { isGalleryImageDragData } from '@features/gallery/utility';
+import { getFollowedProgressSession } from '@features/queue/contracts';
 import { parseDateTokens } from '@platform/search/dateTokens';
 import { accountLifecycle } from '@platform/state/accountLifecycle';
 import { getContrastRatio } from '@platform/ui/theme/contrastRatio.testing';
@@ -254,6 +255,7 @@ const createGallery = (overrides: Partial<GalleryStateView> = {}): GalleryStateV
     selectedItemKey: 'image:first.png',
     selectedItemKeys: ['image:first.png'],
     semanticImageQuery: null,
+    semanticSearchText: null,
     settings: { ...getGallerySettings({ paginationMode: 'paginated' }), imageDensityPercent: 0 },
     starredOnly: false,
     ...overrides,
@@ -339,7 +341,12 @@ const ContextMenuProbe = ({ target }: { target: CanonicalContextTarget }) => (
 );
 const NoopProvider = ({ children }: { children: ReactNode }) => children;
 
-const createAdapter = (progressSessions: QueueProgressSession[]): GalleryUiAdapter =>
+// Live-follow state travels as arguments so the compiler's memoization sees it change.
+const createAdapter = (
+  progressSessions: QueueProgressSession[],
+  liveFollowEnabled: boolean,
+  pinnedProgressSessionId: string | null
+): GalleryUiAdapter =>
   ({
     ItemActionsProvider: NoopProvider,
     ImageContextMenu: ContextMenuProbe,
@@ -362,9 +369,12 @@ const createAdapter = (progressSessions: QueueProgressSession[]): GalleryUiAdapt
     },
     galleryValues: {},
     generateValues: {},
-    liveFollowEnabled: currentLiveFollowEnabled,
+    liveFollowEnabled,
     progressSessions,
-    pinnedProgressSessionId: null,
+    pinnedProgressSessionId,
+    followedProgressSessionId: liveFollowEnabled
+      ? (getFollowedProgressSession(progressSessions, pinnedProgressSessionId)?.id ?? null)
+      : null,
     followProgressSession,
     notifications: { add: noop, reportError: noop },
     projectId: 'project-1',
@@ -377,6 +387,7 @@ let root: Root | null = null;
 let queryClient: QueryClient | null = null;
 let currentGallery = createGallery();
 let currentLiveFollowEnabled = false;
+let currentPinnedSessionId: string | null = null;
 let currentProgressSessions: QueueProgressSession[] = [];
 const followProgressSession = vi.fn();
 let currentStrip: GalleryStarredStrip = EMPTY_GALLERY_STARRED_STRIP;
@@ -400,11 +411,15 @@ const Harness = ({
   background = 'bg',
   coMountPreviewSources = false,
   gallery,
+  liveFollowEnabled,
+  pinnedSessionId,
   progressSessions,
 }: {
   background?: 'bg' | 'bg.panel';
   coMountPreviewSources?: boolean;
   gallery: GalleryStateView;
+  liveFollowEnabled: boolean;
+  pinnedSessionId: string | null;
   progressSessions: QueueProgressSession[];
 }) => {
   const sensors = useSensors(
@@ -428,7 +443,7 @@ const Harness = ({
     <I18nextProvider i18n={i18n}>
       <ChakraProvider value={system}>
         <QueryClientProvider client={queryClient!}>
-          <GalleryUiProvider adapter={createAdapter(progressSessions)}>
+          <GalleryUiProvider adapter={createAdapter(progressSessions, liveFollowEnabled, pinnedSessionId)}>
             <GalleryWidgetContext value={contextValue}>
               <DndContext sensors={sensors}>
                 <DragMonitor />
@@ -484,6 +499,8 @@ const renderGallery = async (
         background={background}
         coMountPreviewSources={coMountPreviewSources}
         gallery={gallery}
+        liveFollowEnabled={currentLiveFollowEnabled}
+        pinnedSessionId={currentPinnedSessionId}
       />
     )
   );
@@ -521,6 +538,7 @@ beforeEach(() => {
   mocks.itemProgress = null;
   currentProgressSessions = [];
   currentLiveFollowEnabled = false;
+  currentPinnedSessionId = null;
   mocks.progressFrame = null;
   currentStrip = EMPTY_GALLERY_STARRED_STRIP;
   queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -617,21 +635,23 @@ describe('GalleryImageGrid mixed item cells', () => {
     expect(getButton('Show all starred items').getBoundingClientRect().height).toBeLessThanOrEqual(24);
   });
 
-  it('keeps the starred label and grid together before a dedicated trailing gap', async () => {
+  it('pins the strip in a ruled block above the listing, open or collapsed', async () => {
     setStrip([starred]);
     const gallery = createGallery({ items: [createItem('image', 'regular.png')], settings: DENSE_SETTINGS });
     await renderGallery(gallery);
 
-    const listRect = host?.querySelector('[role="list"]')?.getBoundingClientRect();
+    const pinned = host!.querySelector<HTMLElement>('[data-gallery-pinned]')!;
+    const listingTop = () => host!.querySelector('[data-gallery-section="regular"]')!.getBoundingClientRect().top;
     const headerRect = getButton('Collapse starred items').parentElement?.getBoundingClientRect();
     const starredRect = getButton('Select starred.png for preview').getBoundingClientRect();
-    const regularRect = getButton('Select regular.png for preview').getBoundingClientRect();
 
-    expect((headerRect?.top ?? 0) - (listRect?.top ?? 0)).toBeCloseTo(0, 0);
+    expect(pinned.contains(getButton('Collapse starred items'))).toBe(true);
+    expect(pinned.contains(getButton('Select starred.png for preview'))).toBe(true);
+    expect(pinned.contains(getButton('Select regular.png for preview'))).toBe(false);
     expect(starredRect.top - (headerRect?.bottom ?? 0)).toBeLessThan(4);
-    // The trailing gap holds a hairline separator while the section is open.
-    expect(regularRect.top - starredRect.bottom).toBeCloseTo(8 + GALLERY_STARRED_SEPARATOR_HEIGHT_PX, 0);
-    expect(host?.querySelector('[data-gallery-starred-separator]')).not.toBeNull();
+    // The block closes with a rule and a margin; the listing starts after them.
+    expect(getComputedStyle(pinned).borderBottomWidth).toBe('1px');
+    expect(listingTop() - pinned.getBoundingClientRect().bottom).toBeCloseTo(GALLERY_PINNED_FOOTER_PX - 1, 0);
 
     // The disclosure is a persisted setting, so collapsing goes through the
     // owner and comes back as the next render's settings.
@@ -639,14 +659,11 @@ describe('GalleryImageGrid mixed item cells', () => {
     expect(actionMocks.updateSettings).toHaveBeenCalledExactlyOnceWith({ starredSectionCollapsed: true });
     await renderGallery({ ...gallery, settings: { ...DENSE_SETTINGS, starredSectionCollapsed: true } });
 
+    const collapsedPinned = host!.querySelector<HTMLElement>('[data-gallery-pinned]')!;
     const collapsedHeaderRect = getButton('Expand starred items').parentElement?.getBoundingClientRect();
-    const collapsedRegularRect = getButton('Select regular.png for preview').getBoundingClientRect();
-    const collapsedSectionGap = collapsedRegularRect.top - (collapsedHeaderRect?.bottom ?? 0);
 
-    expect((collapsedHeaderRect?.top ?? 0) - (listRect?.top ?? 0)).toBeCloseTo(0, 0);
-    expect(collapsedSectionGap).toBeGreaterThanOrEqual(4);
-    expect(collapsedSectionGap).toBeLessThan(8);
-    expect(host?.querySelector('[data-gallery-starred-separator]')).toBeNull();
+    expect(collapsedPinned.getBoundingClientRect().bottom - (collapsedHeaderRect?.bottom ?? 0)).toBeCloseTo(1, 0);
+    expect(listingTop() - collapsedPinned.getBoundingClientRect().bottom).toBeCloseTo(GALLERY_PINNED_FOOTER_PX - 1, 0);
   });
 
   it('collapses only the strip cells, keeps the count, and omits the disclosure when the strip is empty', async () => {
@@ -689,6 +706,22 @@ describe('GalleryImageGrid mixed item cells', () => {
 
     expect(host?.querySelector('button[aria-label="Collapse starred items"]')).toBeNull();
     expect(sectionOrder()).toEqual(['regular']);
+  });
+
+  it('reads a ranking that matched nothing as a search result, not an empty board', async () => {
+    setStrip([]);
+    await renderGallery(
+      createGallery({
+        items: [],
+        searchTerm: '',
+        semanticImageQuery: { kind: 'text', query: 'sunset' },
+        semanticSearchText: 'sunset',
+        settings: DENSE_SETTINGS,
+      })
+    );
+
+    expect(host?.textContent).toContain('No items');
+    expect(host?.textContent).not.toContain('Drop media');
   });
 
   it('keeps showing the strip when every item on the board is starred', async () => {
@@ -1257,10 +1290,14 @@ describe('GalleryImageGrid reveal requests', () => {
     // reveal here would silently drop it.
     expect(mocks.scrollToIndex).not.toHaveBeenCalled();
 
+    const viewport = host!.querySelector<HTMLElement>('[data-part="viewport"]')!;
+    const scrollTo = vi.spyOn(viewport, 'scrollTo');
+
     await renderGallery({ ...gallery, settings: DENSE_SETTINGS });
-    expect(mocks.scrollToIndex).toHaveBeenCalledTimes(1);
-    // Row 0 is the header; the strip row is next.
-    expect(mocks.scrollToIndex).toHaveBeenCalledWith(1);
+    // The strip is pinned above the listing, so the reveal scrolls to the top
+    // of the viewport rather than to a listing row.
+    expect(mocks.scrollToIndex).not.toHaveBeenCalled();
+    expect(scrollTo).toHaveBeenCalledExactlyOnceWith({ top: 0 });
   });
 
   /** A persisted off-page selection of deep.png with page-zero content loaded. */
@@ -1450,8 +1487,101 @@ describe('shared gallery progress section', () => {
       expect(host?.querySelector('button[title^="Workflow A ·"]')).not.toBeNull();
     }
     await click(host!.querySelector<HTMLButtonElement>('button[title^="Workflow A ·"]')!);
-    expect(followProgressSession).toHaveBeenCalledWith('run:1');
+    expect(followProgressSession).toHaveBeenCalledWith('run:1', { revealPreview: true });
     expect(host?.querySelectorAll('[role="listitem"]')).toHaveLength(currentGallery.items.length);
+  });
+  it('steps the arrow keys between the followed tile, the strip and the listing as one sequence', async () => {
+    const starred = createItem('image', 'starred.png', { starred: true });
+    const regular = createItem('image', 'regular.png');
+    currentProgressSessions = [session, { ...session, id: 'run:2', itemIndex: 2, backendItemId: 11 }];
+    currentLiveFollowEnabled = true;
+    currentPinnedSessionId = 'run:2';
+    setStrip([starred]);
+    // A saved selection is still there while following live; the followed tile is the cursor, not it.
+    await renderGallery(
+      createGallery({ items: [regular], selectedItemKey: 'image:regular.png', selectedItemKeys: ['image:regular.png'] })
+    );
+
+    // Down from the second tile lands on the strip's only cell; right steps off the tiles into it too.
+    registeredCommands.get('gallery.galleryNavDown')?.();
+    expect(actionMocks.selectItem).toHaveBeenLastCalledWith(starred);
+    registeredCommands.get('gallery.galleryNavRight')?.();
+    expect(actionMocks.selectItem).toHaveBeenLastCalledWith(starred);
+    registeredCommands.get('gallery.galleryNavLeft')?.();
+    expect(followProgressSession).toHaveBeenLastCalledWith('run:1', { revealPreview: false });
+
+    // From the strip, up and left follow a tile again; down and right reach the listing.
+    currentLiveFollowEnabled = false;
+    currentPinnedSessionId = null;
+    await renderGallery(
+      createGallery({ items: [regular], selectedItemKey: 'image:starred.png', selectedItemKeys: ['image:starred.png'] })
+    );
+    registeredCommands.get('gallery.galleryNavUp')?.();
+    expect(followProgressSession).toHaveBeenLastCalledWith('run:1', { revealPreview: false });
+    registeredCommands.get('gallery.galleryNavLeft')?.();
+    expect(followProgressSession).toHaveBeenLastCalledWith('run:2', { revealPreview: false });
+    registeredCommands.get('gallery.galleryNavDown')?.();
+    expect(actionMocks.selectItem).toHaveBeenLastCalledWith(regular);
+    registeredCommands.get('gallery.galleryNavRight')?.();
+    expect(actionMocks.selectItem).toHaveBeenLastCalledWith(regular);
+    expect(followProgressSession).toHaveBeenCalledTimes(3);
+  });
+  it('skips waiting tiles, which cannot be followed, and steps past a collapsed section', async () => {
+    const starred = createItem('image', 'starred.png', { starred: true });
+    currentProgressSessions = [
+      session,
+      { ...session, id: 'run:2', itemIndex: 2, backendItemId: null, state: 'queued' },
+    ];
+    currentLiveFollowEnabled = true;
+    setStrip([starred]);
+    await renderGallery(createGallery({ selectedItemKey: null, selectedItemKeys: [] }));
+
+    registeredCommands.get('gallery.galleryNavRight')?.();
+    expect(actionMocks.selectItem).toHaveBeenLastCalledWith(starred);
+    expect(followProgressSession).not.toHaveBeenCalled();
+
+    // A collapsed in-progress section shows no tiles, so the strip is the top of the sequence.
+    currentLiveFollowEnabled = false;
+    await renderGallery(
+      createGallery({
+        selectedItemKey: 'image:starred.png',
+        selectedItemKeys: ['image:starred.png'],
+        settings: { ...getGallerySettings({}), progressSectionCollapsed: true },
+      })
+    );
+    registeredCommands.get('gallery.galleryNavLeft')?.();
+    expect(followProgressSession).not.toHaveBeenCalled();
+    expect(actionMocks.selectItem).toHaveBeenCalledTimes(1);
+  });
+  it('steps out of a starred selection the strip does not show instead of resetting', async () => {
+    const shown = Array.from({ length: 12 }, (_, index) =>
+      createItem('image', `starred-${index}.png`, { starred: true })
+    );
+    const hidden = createItem('image', 'starred-hidden.png', { starred: true });
+    const regular = createItem('image', 'regular.png');
+    setStrip([...shown, hidden], 13);
+    await renderGallery(
+      createGallery({
+        items: [regular],
+        selectedItemKey: 'image:starred-hidden.png',
+        selectedItemKeys: ['image:starred-hidden.png'],
+        settings: DENSE_SETTINGS,
+      })
+    );
+    const shownCount = host!.querySelectorAll('[data-gallery-section="starred"] [role="listitem"]').length;
+    expect(shownCount).toBeLessThan(13);
+
+    registeredCommands.get('gallery.galleryNavRight')?.();
+    expect(actionMocks.selectItem).toHaveBeenLastCalledWith(regular);
+    registeredCommands.get('gallery.galleryNavLeft')?.();
+    expect(actionMocks.selectItem).toHaveBeenLastCalledWith(shown[shownCount - 1]);
+
+    // Under a collapsed disclosure the whole strip is hidden; the selection still steps into the listing.
+    await renderGallery({ ...currentGallery, settings: { ...DENSE_SETTINGS, starredSectionCollapsed: true } });
+    registeredCommands.get('gallery.galleryNavRight')?.();
+    expect(actionMocks.selectItem).toHaveBeenLastCalledWith(regular);
+    registeredCommands.get('gallery.galleryNavLeft')?.();
+    expect(actionMocks.selectItem).toHaveBeenCalledTimes(3);
   });
   it('keeps the saved image selected while the queue only contains waiting slots', async () => {
     currentLiveFollowEnabled = true;

@@ -189,9 +189,7 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
   const queueItems = useActiveProjectSelector((project) => project.queue.items);
   const previewValues = useActiveProjectSelector((project) => getProjectWidgetValues(project, 'preview'));
   const generateValues = useWidgetValuesSelector('generate', selectGenerateRecallValues);
-  const { antialiasProgressImages, showProgressImagesInViewer } = useActiveProjectSelector(
-    (project) => project.settings
-  );
+  const { antialiasProgressImages } = useActiveProjectSelector((project) => project.settings);
   const livePreview = useLivePreviewFollow();
   const { gallery, notifications, widgets } = useWorkbenchCommands();
   const queries = useWorkbenchQueries();
@@ -219,8 +217,9 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
     [livePreview.sessions]
   );
   const pinnedSession = livePreview.sessions.find((session) => session.id === livePreview.pinnedSessionId);
-  const activeGalleryPlaceholder = pinnedSession ?? liveGalleryPlaceholders[0] ?? livePreview.sessions[0] ?? null;
-  const shouldFollowLive = showProgressImagesInViewer && activeGalleryPlaceholder !== null;
+  const activeGalleryPlaceholder =
+    livePreview.sessions.find((session) => session.id === livePreview.followedSessionId) ?? null;
+  const shouldFollowLive = activeGalleryPlaceholder !== null;
   const isComparing =
     !shouldFollowLive &&
     selectedItem?.kind === 'image' &&
@@ -270,11 +269,13 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
     navigate,
     navigationCursor,
     navigationQueryKey,
-    navigationSequence,
     selectPreviewItem,
   } = usePreviewNavigation({
+    followedSessionId: activeGalleryPlaceholder?.id ?? null,
+    followSession: livePreview.follow,
     isComparing,
     localItems,
+    progressSessions: livePreview.gallerySessions,
     queueItems,
     selectGalleryItem: selectGalleryItemAtPage,
     selectedImageQuery,
@@ -283,7 +284,6 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
     galleryPaginationMode: getGallerySettings(galleryValues).paginationMode,
     selectedItemKey,
     semanticQuery: gallerySemanticQuery,
-    shouldFollowLive,
   });
 
   const [contextMenuTarget, setContextMenuTarget] = useState<ImageContextMenuTarget | null>(null);
@@ -600,6 +600,10 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
             ref={overviewButtonRef}
             alignSelf="start"
             flexShrink={0}
+            // Clears the centre region's floating header islands, which
+            // otherwise sit on top of the first row of the widget body.
+            ms="2"
+            mt="var(--wb-center-chrome-inset, 0px)"
             size="2xs"
             variant="ghost"
             onClick={livePreview.showAll}
@@ -641,7 +645,7 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
               <SelectedImagePreview
                 actionImage={actionImage}
                 actions={imageActions}
-                boardItemCount={navigationSequence.length}
+                boardItemCount={boardItems.length}
                 density={density}
                 filmstripItems={isFilmstripVisible && density !== 'minimal' ? boardItems : null}
                 isItemCurrent={isItemCurrent}
@@ -661,7 +665,7 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
               <SelectedVideoPreview
                 actionImage={null}
                 actions={imageActions}
-                boardItemCount={navigationSequence.length}
+                boardItemCount={boardItems.length}
                 density={density}
                 filmstripItems={isFilmstripVisible && density !== 'minimal' ? boardItems : null}
                 isItemCurrent={isItemCurrent}

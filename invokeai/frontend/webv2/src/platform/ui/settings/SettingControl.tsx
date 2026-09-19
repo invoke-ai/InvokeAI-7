@@ -125,13 +125,12 @@ export const SettingControl = ({ field, surface, value, onChange, disabled, isMo
           collection={collection}
           value={selectValue}
           disabled={disabled}
-          size="sm"
+          size={surface === 'quick' ? 'xs' : 'sm'}
           w={surface === 'quick' ? 'full' : DIALOG_CONTROL_WIDTH}
           flexShrink={0}
           portalled={false}
           // Fixed positioning escapes scrolling/clipped surfaces; staying inline preserves modal focus and ARIA.
           positioning={SELECT_POSITIONING}
-          itemsMaxH="min(18rem, calc(var(--available-height) - 0.5rem))"
           onValueChange={handleSelectChange}
         />
       ) : field.kind === 'slider' ? (

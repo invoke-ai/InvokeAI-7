@@ -174,7 +174,9 @@ export const revealGalleryItem = (
     }
 
     const currentView: GalleryView = values.galleryView === 'assets' ? 'assets' : 'images';
-    const hasSearch = typeof values.searchTerm === 'string' && values.searchTerm !== '';
+    const hasSearch =
+      (typeof values.searchTerm === 'string' && values.searchTerm !== '') ||
+      typeof values.semanticSearchText === 'string';
 
     // Filters would hide the listing the index was computed against
     // (the image may not match them), so the reveal clears them and sets
@@ -187,6 +189,7 @@ export const revealGalleryItem = (
       commands.widgets.patchValues('gallery', {
         searchTerm: '',
         semanticImageQuery: null,
+        semanticSearchText: null,
         starredOnly: wantsStarredOnly,
       });
     }

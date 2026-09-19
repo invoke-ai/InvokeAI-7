@@ -19,7 +19,7 @@ import type {
   GalleryView,
 } from '@features/gallery/core/types';
 
-import { parseGalleryItemKey } from '@features/gallery/core/items';
+import { DATE_BOARD_ID_PREFIX, isDateBoardId, parseGalleryItemKey } from '@features/gallery/core/items';
 import { getExternalImageFile, getImageCluster } from '@features/gallery/core/semanticImageQuery';
 import { isTimestampInRange } from '@platform/search/dateTokens';
 import {
@@ -67,10 +67,9 @@ interface BackendBoardDTO {
  * unassigned images (board_id 'none'); 'date' is a read-only virtual board
  * grouping images by creation date (id 'by_date:YYYY-MM-DD').
  */
-const DATE_BOARD_ID_PREFIX = 'by_date:';
 export const ALL_READABLE_BOARDS_ID = 'all';
 
-export const isDateBoardId = (boardId: string): boolean => boardId.startsWith(DATE_BOARD_ID_PREFIX);
+export { isDateBoardId };
 
 const getDateFromBoardId = (boardId: string): string => boardId.slice(DATE_BOARD_ID_PREFIX.length);
 
@@ -88,6 +87,7 @@ interface BackendImageDTO {
   is_intermediate: boolean;
   starred?: boolean;
   board_id?: string | null;
+  has_workflow?: boolean;
 }
 
 export interface BackendGalleryItemDTO {
@@ -236,6 +236,7 @@ const getGalleryVideoTotal = async ({
 const mapImage = (image: BackendImageDTO): GalleryImage => ({
   boardId: image.board_id ?? 'none',
   createdAt: image.created_at,
+  hasWorkflow: image.has_workflow,
   height: image.height,
   imageCategory: image.image_category,
   imageName: image.image_name,
@@ -498,13 +499,17 @@ export const getGalleryVideoMetadata = async (
   return body && typeof body === 'object' && !Array.isArray(body) ? (body as Record<string, unknown>) : null;
 };
 
-export interface GalleryVideoWorkflow {
+/** The workflow and graph a piece of media embeds, each as stringified JSON, when it has them. */
+export interface GalleryMediaWorkflow {
   graph: string | null;
   workflow: string | null;
 }
 
-export const getGalleryVideoWorkflow = (videoName: string, signal?: AbortSignal): Promise<GalleryVideoWorkflow> =>
-  apiFetchJson<GalleryVideoWorkflow>(`/api/v1/videos/i/${encodeURIComponent(videoName)}/workflow`, { signal });
+export const getGalleryVideoWorkflow = (videoName: string, signal?: AbortSignal): Promise<GalleryMediaWorkflow> =>
+  apiFetchJson<GalleryMediaWorkflow>(`/api/v1/videos/i/${encodeURIComponent(videoName)}/workflow`, { signal });
+
+export const getGalleryImageWorkflow = (imageName: string, signal?: AbortSignal): Promise<GalleryMediaWorkflow> =>
+  apiFetchJson<GalleryMediaWorkflow>(`/api/v1/images/i/${encodeURIComponent(imageName)}/workflow`, { signal });
 
 interface PaletteDateBoardImageNames {
   imageNames: string[];
@@ -843,6 +848,40 @@ export const searchGallerySemantic = async (
   );
 
   return toSemanticResults(await apiFetchJson<SemanticSearchBody>(`/api/v1/image_map/search?${params}`, { signal }));
+};
+
+/**
+ * Whether the server can rank a text query: not configured at all, configured
+ * but without its embedding model, or ready.
+ */
+export interface ImageIndexAvailability {
+  state: 'disabled' | 'model_missing' | 'ready';
+  /** The configured embedding model's name; set only while it is missing. */
+  modelName: string | null;
+}
+
+interface ImageIndexStatusBody {
+  enabled: boolean;
+  model_name?: string | null;
+}
+
+/**
+ * Read from the map's status endpoint, whose `enabled` is "the index has its
+ * model": text search needs exactly that and the stored embeddings, and never
+ * the map's projection, so the projection half of the response is not read.
+ * `model_name` is set only when indexing is configured and the model is
+ * missing, which is what separates that case from a disabled index.
+ */
+export const fetchImageIndexAvailability = async (signal: AbortSignal): Promise<ImageIndexAvailability> => {
+  const body = await apiFetchJson<ImageIndexStatusBody>('/api/v1/image_map/status', { signal });
+
+  if (body.enabled) {
+    return { modelName: null, state: 'ready' };
+  }
+
+  return body.model_name
+    ? { modelName: body.model_name, state: 'model_missing' }
+    : { modelName: null, state: 'disabled' };
 };
 
 /**

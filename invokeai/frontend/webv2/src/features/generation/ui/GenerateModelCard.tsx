@@ -1,17 +1,13 @@
 /* oxlint-disable react-perf/jsx-no-new-function-as-prop, react-perf/jsx-no-jsx-as-prop */
 import type { GenerationModelCatalogItem as ModelConfig } from '@features/generation/contracts';
-import type { GenerateModelConfig, GenerateSettings, VaeModelConfig } from '@features/generation/core/types';
+import type { GenerateModelConfig, GenerateSettings } from '@features/generation/core/types';
 
-import { Badge, HStack, Stack, Text } from '@chakra-ui/react';
+import { Stack, Text } from '@chakra-ui/react';
 import {
   getGenerateModelSelectionResult,
-  getGenerationDimensions,
-  getMaxReferenceImages,
-  getPromptPolicy,
   isGenerateModelSelectable,
-  isReferenceImageSupported,
 } from '@features/generation/core/baseGenerationPolicies';
-import { isGenerateModelConfig, isVaeModelConfig } from '@features/generation/core/settings';
+import { isGenerateModelConfig } from '@features/generation/core/settings';
 import { Button } from '@platform/ui/Button';
 import { ConfirmDialog } from '@platform/ui/ConfirmDialog';
 import { Field } from '@platform/ui/Field';
@@ -19,7 +15,6 @@ import { useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { GenerationModelSelect as ModelSelect, useGenerationUi } from './GenerationUiContext';
-import { countModelDefaultOverrides, getModelDefaultSettings } from './shared/modelDefaultSettings';
 
 const MAIN_MODEL_TYPES = ['main', 'external_image_generator'];
 
@@ -57,44 +52,6 @@ export const GenerateModelCard = ({
   // model is held; the transition is recomputed against live settings on
   // confirm, and the labels shown come from a preview run of the same move.
   const [pendingSwitchModel, setPendingSwitchModel] = useState<GenerateModelConfig | null>(null);
-
-  const vaeModels = useMemo(
-    () => models.filter((model): model is ModelConfig & VaeModelConfig => isVaeModelConfig(model)),
-    [models]
-  );
-
-  const overrideCount = useMemo(() => {
-    if (!selectedModel) {
-      return 0;
-    }
-
-    return countModelDefaultOverrides(settings, getModelDefaultSettings(settings, selectedModel, vaeModels));
-  }, [selectedModel, settings, vaeModels]);
-
-  /** What the model offers, in one quiet line: native size, then capabilities. */
-  const features = useMemo(() => {
-    if (!selectedModel) {
-      return [];
-    }
-
-    const entries: string[] = [
-      t('widgets.generate.nativePx', { size: getGenerationDimensions(selectedModel).optimal }),
-    ];
-
-    if (getPromptPolicy(selectedModel, settings).negativeVisible) {
-      entries.push(t('widgets.generate.negativePrompt'));
-    }
-
-    if (isReferenceImageSupported(selectedModel)) {
-      entries.push(t('widgets.generate.referencesMax', { count: getMaxReferenceImages(selectedModel) }));
-    }
-
-    if (selectedModel.type !== 'external_image_generator') {
-      entries.push(t('widgets.generate.concepts'));
-    }
-
-    return entries;
-  }, [selectedModel, settings, t]);
 
   const pendingSwitchClearedLabels = useMemo(() => {
     if (!pendingSwitchModel) {
@@ -141,18 +98,7 @@ export const GenerateModelCard = ({
         />
       </Field>
 
-      {selectedModel ? (
-        <HStack gap="2" justify="space-between">
-          <Text color="fg.muted" fontSize="2xs" minW="0">
-            {features.join(' · ')}
-          </Text>
-          {overrideCount > 0 ? (
-            <Badge flexShrink="0" size="xs" variant="surface">
-              {t('widgets.generate.overridesCount', { count: overrideCount })}
-            </Badge>
-          ) : null}
-        </HStack>
-      ) : isLoadingModels ? (
+      {selectedModel ? null : isLoadingModels ? (
         <Text color="fg.muted" fontSize="2xs">
           {t('widgets.generate.loadingModels')}
         </Text>
@@ -169,11 +115,7 @@ export const GenerateModelCard = ({
             {t('widgets.generate.openModelManager')}
           </Button>
         </Stack>
-      ) : (
-        <Text color="fg.muted" fontSize="2xs">
-          {t('widgets.generate.chooseModelToStart')}
-        </Text>
-      )}
+      ) : null}
 
       <ConfirmDialog
         body={

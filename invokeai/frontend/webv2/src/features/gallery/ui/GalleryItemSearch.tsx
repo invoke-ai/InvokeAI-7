@@ -2,20 +2,32 @@ import type { GallerySemanticReference } from '@features/gallery/core/semanticIm
 
 import { Box, Code, HStack, Icon, Popover, Portal, Stack, Text } from '@chakra-ui/react';
 import { semanticReferenceFromDataTransfer } from '@features/gallery/core/semanticImageQuery';
+import { imageIndexAvailabilityOptions } from '@features/gallery/data/queries';
+import { useMountEffect } from '@platform/react/useMountEffect';
 import { describeDateRange, findInvalidDateToken, formatIsoDate, parseDateTokens } from '@platform/search/dateTokens';
-import { CloseButton, IconButton } from '@platform/ui/Button';
+import { CloseButton, IconButton, ToggleIconButton } from '@platform/ui/Button';
 import { InputShell } from '@platform/ui/InputShell';
 import { PopoverContent } from '@platform/ui/Popover';
+import { useQuery } from '@tanstack/react-query';
 import { CircleHelpIcon, ImageIcon, MapIcon, SparklesIcon } from 'lucide-react';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { flushSync } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 
 import { GALLERY_SEMANTIC_SEARCH_DROP_ID, useGalleryImageDroppable } from './galleryDnd';
 import { GallerySearchField } from './GallerySearchField';
+import { useGalleryUi } from './GalleryUiContext';
 import { useGalleryWidget } from './GalleryWidgetContext';
 
-const SEARCH_DATE_HINT_ID = 'gallery-search-date-hint';
+const SEARCH_HINT_ID = 'gallery-search-hint';
 const HELP_POSITIONING = { placement: 'bottom-end' } as const;
+
+/**
+ * Typing pause before the semantic text becomes the ranking. Each commit is a
+ * server-side embedding plus a full re-rank, so keystrokes must coalesce; a
+ * pause this short still reads as "live" rather than as a submit.
+ */
+export const SEMANTIC_SEARCH_COMMIT_DEBOUNCE_MS = 300;
 
 /** The `key:value` forms `parseDateTokens` accepts, as shown in the help popover. */
 const DATE_TOKEN_EXAMPLES = [
@@ -67,20 +79,101 @@ const getSemanticReferenceName = (reference: GallerySemanticReference): string =
 export const GalleryItemSearch = () => {
   const { i18n, t } = useTranslation();
   const { actions, gallery } = useGalleryWidget();
+  const { notifications } = useGalleryUi();
+  const { data: indexAvailability } = useQuery(imageIndexAvailabilityOptions());
+  const isSemanticMode = gallery.semanticSearchText !== null;
+  const semanticText = gallery.semanticSearchText ?? '';
+  // Offered whenever indexing is configured, model or index present or not:
+  // the field is where a user finds out the feature exists, and the hint
+  // below it says what is still missing. The toggle also stays reachable
+  // for a persisted semantic field on an install without indexing, so the
+  // mode can always be left.
+  const isIndexConfigured = indexAvailability !== undefined && indexAvailability.state !== 'disabled';
+  const showSemanticToggle = isIndexConfigured || isSemanticMode;
 
-  const handleClearSearch = useCallback(() => actions.setSearchTerm(''), [actions]);
-  const handleClearSemantic = useCallback(() => actions.setSemanticImageQuery(null), [actions]);
-
-  // Date tokens are metadata-search grammar; a semantic query is free text,
-  // so the whole field content is taken verbatim.
-  const semanticQueryText = gallery.searchTerm.trim();
-  const handleSemanticSearch = useCallback(() => {
-    const query = semanticQueryText;
-
-    if (query) {
-      actions.setSemanticImageQuery({ kind: 'text', query });
+  // The commit trails typing on a timer that belongs to this render tree; a
+  // timer that outlives the field is cleared, and one that outlives its text
+  // is refused by the reducer.
+  const inputRef = useRef<HTMLInputElement>(null);
+  const commitTimerRef = useRef<number | null>(null);
+  const cancelPendingCommit = useCallback(() => {
+    if (commitTimerRef.current !== null) {
+      window.clearTimeout(commitTimerRef.current);
+      commitTimerRef.current = null;
     }
-  }, [actions, semanticQueryText]);
+  }, []);
+
+  useMountEffect(() => cancelPendingCommit);
+
+  const handleChange = useCallback(
+    (value: string) => {
+      if (!isSemanticMode) {
+        actions.setSearchTerm(value);
+        return;
+      }
+
+      actions.setSemanticSearchText(value);
+      cancelPendingCommit();
+      // The ranking always follows the text, model or no model: a search the
+      // server cannot run is reported by the listing's own error channel,
+      // beside the hint that says why, and there is no text left behind to
+      // reconcile once the model arrives.
+      commitTimerRef.current = window.setTimeout(() => {
+        commitTimerRef.current = null;
+        actions.commitSemanticSearch(value);
+      }, SEMANTIC_SEARCH_COMMIT_DEBOUNCE_MS);
+    },
+    [actions, cancelPendingCommit, isSemanticMode]
+  );
+
+  // Enter is the explicit form of the same commit: no reason to keep waiting.
+  const handleKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLInputElement>) => {
+      if (!isSemanticMode || event.key !== 'Enter' || event.nativeEvent.isComposing) {
+        return;
+      }
+
+      event.preventDefault();
+      cancelPendingCommit();
+      actions.commitSemanticSearch(event.currentTarget.value);
+    },
+    [actions, cancelPendingCommit, isSemanticMode]
+  );
+
+  const handleToggleSemanticMode = useCallback(
+    (enabled: boolean) => {
+      cancelPendingCommit();
+      // Rendered before focus moves, so the field is announced under its
+      // semantic name — a name that changes on an already-focused element is
+      // not read out again.
+      flushSync(() => actions.setSemanticSearchMode(enabled));
+
+      if (!enabled) {
+        return;
+      }
+
+      // The next keystrokes are what the toggle was for.
+      inputRef.current?.focus();
+
+      // The sparkle is offered without the model on purpose, so this click is
+      // where a user learns what the feature needs: the hint under the field
+      // stays while the mode does, the toast says what to do about it.
+      if (indexAvailability?.state === 'model_missing') {
+        notifications.add({
+          kind: 'info',
+          message: t('widgets.gallery.semanticSearchInstallModel', { model: indexAvailability.modelName ?? '' }),
+          title: t('widgets.gallery.semanticSearchModelMissingTitle'),
+        });
+      }
+    },
+    [actions, cancelPendingCommit, indexAvailability, notifications, t]
+  );
+
+  const handleClearSearch = useCallback(() => {
+    cancelPendingCommit();
+    actions.clearSearch();
+  }, [actions, cancelPendingCommit]);
+  const handleClearSemantic = useCallback(() => actions.setSemanticImageQuery(null), [actions]);
 
   // In-app drags (dnd-kit) resolve through GalleryBoardDragMonitor; this hook
   // only registers the drop target and reports hover for the highlight.
@@ -136,11 +229,24 @@ export const GalleryItemSearch = () => {
   // case still needs words — and it is positioned out of flow. As a sibling it
   // grew the field's row and knocked the wide header out of vertical centre.
   const invalidHint = useMemo(() => {
+    if (isSemanticMode) {
+      return null;
+    }
+
     const parse = parseDateTokens(gallery.searchTerm);
     const invalid = findInvalidDateToken(gallery.searchTerm, parse);
 
     return invalid ? t('widgets.gallery.dateFilterInvalid', { value: invalid.raw }) : null;
-  }, [gallery.searchTerm, t]);
+  }, [gallery.searchTerm, isSemanticMode, t]);
+
+  // The same out-of-flow slot explains a semantic field the server cannot
+  // answer, before the first search fails.
+  const semanticHint =
+    isSemanticMode && indexAvailability?.state === 'model_missing'
+      ? t('widgets.gallery.semanticSearchModelMissing', { model: indexAvailability.modelName ?? '' })
+      : null;
+
+  const hint = invalidHint ?? semanticHint;
 
   // The chips show which text is a filter, not what it resolved to, so the
   // resolved range stays available to assistive tech.
@@ -169,28 +275,40 @@ export const GalleryItemSearch = () => {
     }
   }, [gallery.searchTerm, i18n.language, t]);
 
+  // One name in both states — the pressed state says which — and the tooltip
+  // names the action a click takes.
+  const semanticToggle = useMemo(
+    () =>
+      showSemanticToggle ? (
+        <ToggleIconButton
+          checked={isSemanticMode}
+          color={isSemanticMode ? 'fg.warning' : 'fg.muted'}
+          icon={SparklesIcon}
+          label={t('widgets.gallery.semanticSearchAriaLabel')}
+          tooltip={isSemanticMode ? t('widgets.gallery.exitSemanticSearch') : t('widgets.gallery.searchSemantically')}
+          variant="ghost"
+          onCheckedChange={handleToggleSemanticMode}
+        />
+      ) : null,
+    [handleToggleSemanticMode, isSemanticMode, showSemanticToggle, t]
+  );
+
   const endElement = useMemo(
     () => (
       <HStack flexShrink={0} gap="0">
-        {semanticQueryText ? (
-          <IconButton
-            aria-label={t('widgets.gallery.searchSemantically')}
-            color="fg.muted"
+        {semanticToggle}
+        {isSemanticMode || gallery.searchTerm ? (
+          <CloseButton
+            aria-label={isSemanticMode ? t('widgets.gallery.clearSemanticSearch') : t('common.clearSearch')}
             size="2xs"
-            title={t('widgets.gallery.searchSemantically')}
-            variant="ghost"
-            onClick={handleSemanticSearch}
-          >
-            <Icon as={SparklesIcon} boxSize="3.5" />
-          </IconButton>
+            onClick={handleClearSearch}
+          />
         ) : null}
-        {gallery.searchTerm ? (
-          <CloseButton aria-label={t('common.clearSearch')} size="2xs" onClick={handleClearSearch} />
-        ) : null}
-        <GallerySearchHelp />
+        {/* The help documents metadata grammar, which a semantic description has none of. */}
+        {isSemanticMode ? null : <GallerySearchHelp />}
       </HStack>
     ),
-    [gallery.searchTerm, handleClearSearch, handleSemanticSearch, semanticQueryText, t]
+    [gallery.searchTerm, handleClearSearch, isSemanticMode, semanticToggle, t]
   );
 
   return (
@@ -206,24 +324,42 @@ export const GalleryItemSearch = () => {
       onDragOver={handleNativeDragOver}
       onDrop={handleNativeDrop}
     >
-      {gallery.semanticImageQuery ? (
-        <GallerySemanticChip reference={gallery.semanticImageQuery} onClear={handleClearSemantic} />
+      {/* In semantic mode the field IS the text query; a chip stands for a
+          reference the field cannot type (an image, a file, a cluster), and
+          every path that sets one leaves semantic mode. A text chip is only a
+          project saved before the mode existed. The toggle stays beside the
+          chip: pressing it there trades the reference for a typed query. */}
+      {!isSemanticMode && gallery.semanticImageQuery ? (
+        <GallerySemanticChip
+          reference={gallery.semanticImageQuery}
+          toggle={semanticToggle}
+          onClear={handleClearSemantic}
+        />
       ) : (
         <GallerySearchField
-          ariaLabel={t('widgets.gallery.searchImagesAriaLabel')}
-          describedById={invalidHint ? SEARCH_DATE_HINT_ID : undefined}
+          ref={inputRef}
+          ariaLabel={
+            isSemanticMode ? t('widgets.gallery.semanticSearchAriaLabel') : t('widgets.gallery.searchImagesAriaLabel')
+          }
+          describedById={hint ? SEARCH_HINT_ID : undefined}
           endElement={endElement}
           isInvalid={invalidHint !== null}
-          placeholder={t('widgets.gallery.searchImagesPlaceholder')}
-          value={gallery.searchTerm}
-          onChange={actions.setSearchTerm}
+          mode={isSemanticMode ? 'semantic' : 'metadata'}
+          placeholder={
+            isSemanticMode
+              ? t('widgets.gallery.semanticSearchPlaceholder')
+              : t('widgets.gallery.searchImagesPlaceholder')
+          }
+          value={isSemanticMode ? semanticText : gallery.searchTerm}
+          onChange={handleChange}
+          onKeyDown={handleKeyDown}
         />
       )}
-      {invalidHint ? (
+      {hint ? (
         <Text
-          color="fg.error"
+          color={invalidHint ? 'fg.error' : 'fg.warning'}
           fontSize="2xs"
-          id={SEARCH_DATE_HINT_ID}
+          id={SEARCH_HINT_ID}
           insetInlineStart="0"
           // Out of flow and inert: it must never shift the header row, nor
           // swallow clicks meant for the grid it now floats over.
@@ -232,7 +368,7 @@ export const GalleryItemSearch = () => {
           role="status"
           top="100%"
         >
-          {invalidHint}
+          {hint}
         </Text>
       ) : null}
       {appliedRange ? (
@@ -249,26 +385,37 @@ export const GalleryItemSearch = () => {
  * reference — rendered in place of the search input. Clearing it restores
  * metadata search.
  */
-const GallerySemanticChip = ({ onClear, reference }: { onClear: () => void; reference: GallerySemanticReference }) => {
+const GallerySemanticChip = ({
+  onClear,
+  reference,
+  toggle,
+}: {
+  onClear: () => void;
+  reference: GallerySemanticReference;
+  toggle: ReactNode;
+}) => {
   const { t } = useTranslation();
   const isText = reference.kind === 'text';
   const isCluster = reference.kind === 'cluster';
   const name = getSemanticReferenceName(reference) || t('widgets.gallery.semanticWebImage');
-  const clearButton = useMemo(
+  const endElement = useMemo(
     () => (
-      <CloseButton
-        aria-label={
-          isText
-            ? t('widgets.gallery.clearSemanticSearch')
-            : isCluster
-              ? t('widgets.gallery.clearClusterSearch')
-              : t('widgets.gallery.clearImageSearch')
-        }
-        size="2xs"
-        onClick={onClear}
-      />
+      <HStack flexShrink={0} gap="0">
+        {toggle}
+        <CloseButton
+          aria-label={
+            isText
+              ? t('widgets.gallery.clearSemanticSearch')
+              : isCluster
+                ? t('widgets.gallery.clearClusterSearch')
+                : t('widgets.gallery.clearImageSearch')
+          }
+          size="2xs"
+          onClick={onClear}
+        />
+      </HStack>
     ),
-    [isCluster, isText, onClear, t]
+    [isCluster, isText, onClear, t, toggle]
   );
   const kindIcon = useMemo(
     () => (
@@ -283,7 +430,7 @@ const GallerySemanticChip = ({ onClear, reference }: { onClear: () => void; refe
   );
 
   return (
-    <InputShell endElement={clearButton} startElement={kindIcon} title={getSemanticReferenceTitle(reference)}>
+    <InputShell endElement={endElement} startElement={kindIcon} title={getSemanticReferenceTitle(reference)}>
       <Text color="fg.muted" flex="1" fontSize="xs" minW="0" truncate>
         {isText
           ? t('widgets.gallery.semanticTextSearch', { name })

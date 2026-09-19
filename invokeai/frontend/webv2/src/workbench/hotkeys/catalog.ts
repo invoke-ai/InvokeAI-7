@@ -98,6 +98,7 @@ const implemented = new Set([
   'gallery.toggleStarredOnly',
   'viewer.nextComparisonMode',
   'viewer.deleteImage',
+  'viewer.loadWorkflow',
   'viewer.recallAll',
   'viewer.recallPrompts',
   'viewer.recallSeed',

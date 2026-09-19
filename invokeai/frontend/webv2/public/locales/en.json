@@ -1,4 +1,11 @@
 {
+  "alphaNotice": {
+    "body": "This is an alpha build of the new Invoke interface. Expect rough edges, missing features, and behavior that changes between releases.",
+    "dismiss": "Got it",
+    "reportLink": "file an issue on GitHub",
+    "reportPrefix": "When something breaks or looks wrong, please",
+    "title": "Alpha build"
+  },
   "commandPalette": {
     "title": "Command palette",
     "buttonLabel": "Command palette",
@@ -1313,6 +1320,7 @@
     "saveDefaults": "Save Defaults",
     "scan": "Scan",
     "scanFailed": "Scan failed",
+    "stopScan": "Stop",
     "scanFolderTooltip": "Scan this folder for model files",
     "scanSummary_one": "{{count}} file in {{path}} · {{notInstalled}} not installed",
     "scanSummary_other": "{{count}} files in {{path}} · {{notInstalled}} not installed",
@@ -1443,6 +1451,8 @@
     "forReturnOwnership": "Each ForReturn must belong to exactly one For",
     "executionCompleted": "Completed",
     "executionFailed": "Failed",
+    "latestOutput": "Latest output",
+    "latestOutputImage": "Latest output of this node",
     "forLoopBodyBoundary": "For loop body",
     "imageCollectionCount_one": "{{count}} image",
     "imageCollectionCount_other": "{{count}} images",
@@ -1852,7 +1862,9 @@
     "centerViewsAdd": "Add To Center",
     "failure": {
       "compactLabel": "{{label}} failed — select to retry",
+      "copiedError": "Error details copied",
       "copyError": "Copy Error",
+      "copyErrorFailed": "Could not copy the error details",
       "retry": "Retry",
       "title": "{{label}} failed"
     },
@@ -1861,10 +1873,11 @@
       "floatWindow": "Float Window",
       "maximize": "Maximize",
       "move": "Move {{label}} window",
+      "railSlot": "{{label}} (floating — click to dock)",
       "resize": "Resize window",
       "restore": "Restore",
-      "shade": "Shade",
-      "unshade": "Unshade"
+      "shade": "Collapse",
+      "unshade": "Expand"
     },
     "loadingLabel": "Loading {{label}}",
     "moveToLeftSide": "Move to left side",
@@ -2000,7 +2013,6 @@
       "capabilitiesUnavailableForRecall": "Model capabilities are not loaded, so settings that depend on the model cannot be applied yet. Prompts and seed can. If loading failed, retry from the Generate panel.",
       "capabilitiesUnavailableForSetup": "Model capabilities are not loaded, so this project cannot be set up for Generate yet. If loading failed, retry from the Generate panel.",
       "cfgRescale": "CFG rescale",
-      "chooseModelToStart": "Choose a model to start",
       "clearPromptTemplate": "Stop using this template",
       "clearReferenceImages": "Remove all",
       "clipSkip": "CLIP skip",
@@ -2190,7 +2202,6 @@
       "moveReferenceImageDown": "Move reference image down",
       "moveReferenceImageUp": "Move reference image up",
       "moreRatios": "More aspect ratios",
-      "nativePx": "{{size}} px native",
       "negativePrompt": "Negative prompt",
       "negativePromptAdd": "Negative prompt…",
       "negativePromptHide": "Turn off negative prompt",
@@ -2319,7 +2330,6 @@
       "referenceImageModel": "Reference image model",
       "referenceImages": "Reference images",
       "referenceImagesUnsupported": "Reference images are not supported by the selected model.",
-      "referencesMax": "References ×{{count}}",
       "removeConcept": "Remove concept",
       "removeConceptNamed": "Remove {{name}}",
       "removeReferenceImage": "Remove reference image",
@@ -2457,6 +2467,7 @@
     },
     "graph": {
       "setSource": "Set Source",
+      "previewFailed": "Could not open the graph preview",
       "viewGraph": "View Graph"
     },
     "project": {
@@ -2506,7 +2517,6 @@
       "hideInProgressDiffusion": "Hide in-progress diffusion",
       "imageCount_one": "{{count}} image",
       "imageCount_other": "{{count}} images",
-      "invoke": "Invoke",
       "itemCount_one": "{{count}} item",
       "itemCount_other": "{{count}} items",
       "loadingBoard": "Loading board",
@@ -2787,7 +2797,7 @@
         "generating": "Generating…",
         "moreAcceptOptions": "More accept options",
         "recall": "Recall settings",
-        "saveAsDisabledLayer": "Save & Continue",
+        "saveAsDisabledLayer": "Keep as Hidden Layer",
         "saveError": "Couldn't save to gallery",
         "saveToGallery": "Save to gallery",
         "saved": "Saved to gallery",
@@ -2960,7 +2970,15 @@
       "panelContent": "Workflow panel content",
       "panelMode": "Workflow panel mode",
       "resizeNodeInspector": "Resize node inspector",
-      "runOutputsNotRecorded": "Run outputs are not recorded per node yet; results currently route to the Gallery or Canvas. This tab will show the node's outputs from its most recent run once run records land.",
+      "latestOutput": "Latest output",
+      "noRunRecorded": "This node has not run in this session.",
+      "outputImage": "Output image",
+      "runStatus": {
+        "completed": "Completed",
+        "failed": "Failed",
+        "running": "Running…"
+      },
+      "status": "Status",
       "newWorkflowWithEllipsis": "New workflow…",
       "saveToLibrary": "Save to library",
       "selectNodeToInspect": "Select a node in the Workflow editor to inspect it.",
@@ -3585,6 +3603,7 @@
       "clearClusterSearch": "Clear cluster filter",
       "clearImageSearch": "Clear image similarity search",
       "clearSemanticSearch": "Clear semantic search",
+      "exitSemanticSearch": "Exit semantic search",
       "createBoard": "Create board",
       "createBoardNamed": "Create board \"{{name}}\"",
       "collapseStarredItems": "Collapse starred items",
@@ -3633,6 +3652,12 @@
       "imageSort": "Image Sort",
       "infinite": "Infinite",
       "itemActions": {
+        "loadWorkflow": {
+          "editorUnavailable": "The Workflow editor is not available in this layout.",
+          "failed": "Could not load the image's workflow",
+          "loadedLabel": "Loaded “{{name}}” from image",
+          "missing": "This image has no workflow embedded."
+        },
         "delete": {
           "failure_one": "Could not delete {{count}} item.",
           "failure_other": "Could not delete {{count}} items.",
@@ -3712,7 +3737,6 @@
         "unsupportedImage": "Images can't be used here",
         "unsupportedVideo": "Videos can't be used here",
         "upload": "Upload",
-        "uploadFailed": "The upload didn't go through. Check the notifications for details.",
         "windowLimit": "Showing the first {{count}} items. Narrow the search to reach the rest.",
         "working": "Working…"
       },
@@ -3733,6 +3757,11 @@
       "semanticCluster": "Cluster: {{name}}",
       "semanticSimilarTo": "Similar to {{name}}",
       "semanticTextSearch": "Semantic search: {{name}}",
+      "semanticSearchAriaLabel": "Semantic search",
+      "semanticSearchInstallModel": "Install the “{{model}}” model to build the image index and enable semantic search.",
+      "semanticSearchModelMissing": "Semantic search needs the embedding model “{{model}}”, which is not installed.",
+      "semanticSearchModelMissingTitle": "Embedding model not installed",
+      "semanticSearchPlaceholder": "Describe what to find…",
       "semanticWebImage": "web image",
       "selectImageForPreview": "Select {{name}} for preview",
       "selectionActions": "Selection actions",
@@ -3850,7 +3879,6 @@
       "lastFrameHelp": "Optional: the video ends on this image (interpolates from the first frame).",
       "pauseSelection": "Pause selection in Preview",
       "playSelection": "Play selection in Preview",
-      "removeClip": "Remove video",
       "sampleLength": "Sample Length (Frames)",
       "sampleLengthWithSeconds": "Sample Length · {{seconds}}s",
       "trim": "Trim",
@@ -3859,9 +3887,7 @@
       "trimHelp": "The kept range of the source clip. The extension continues from the end frame.",
       "trimStart": "Start Frame",
       "trimStartShort": "Start",
-      "unsupportedVideoFile": "Please choose a video file.",
       "uploadImageReference": "Upload image",
-      "uploadingClip": "Uploading video…",
       "clearStaleMedia": "Clear",
       "staleFirstFrame": "A first frame is set, but this model does not support starting from one.",
       "staleLastFrame": "A last frame is set, but this model does not support ending on one.",

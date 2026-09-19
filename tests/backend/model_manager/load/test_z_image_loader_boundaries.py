@@ -7,33 +7,29 @@ reaches the module.
 """
 
 import json
-from types import SimpleNamespace
-from unittest.mock import MagicMock
 
+import diffusers
 import pytest
 import torch
+from safetensors import torch as safetensors_torch
 
 from invokeai.backend.model_manager.configs.default_settings import MainModelDefaultSettings
 from invokeai.backend.model_manager.configs.main import Main_Checkpoint_ZImage_Config
 from invokeai.backend.model_manager.load import load_default
+from invokeai.backend.model_manager.load.model_loaders import z_image
 from invokeai.backend.model_manager.load.model_loaders.z_image import ZImageCheckpointModel
-from invokeai.backend.quantization.int8_convrot import CONVROT_GROUP_SIZE, Int8ConvrotLinear, build_regular_hadamard
+from invokeai.backend.quantization.int8_convrot import CONVROT_GROUP_SIZE, Int8ConvrotLinear
 from invokeai.backend.quantization.nvfp4 import NVFP4Linear
+from tests.fixtures.loader_seams import Seam, prepare
+from tests.fixtures.quantized_payloads import (
+    comfy_quant_marker,
+    nvfp4_codes,
+    nvfp4_tensors,
+    quantize_convrot,
+    quantize_scaled_fp8,
+)
 
 MARKER = {"format": "int8_tensorwise", "convrot": True, "convrot_groupsize": CONVROT_GROUP_SIZE}
-
-
-def _marker_blob(marker: dict) -> torch.Tensor:
-    return torch.frombuffer(bytearray(json.dumps(marker).encode("utf-8")), dtype=torch.uint8)
-
-
-def _quantize_convrot(weight: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-    """Mirror of comfy-quants: rotate along the input dim, then per-output-channel int8."""
-    out_f, in_f = weight.shape
-    h = build_regular_hadamard(CONVROT_GROUP_SIZE, dtype=weight.dtype)
-    rotated = (weight.view(out_f, in_f // CONVROT_GROUP_SIZE, CONVROT_GROUP_SIZE) @ h.T).view(out_f, in_f)
-    scale = rotated.abs().amax(dim=1, keepdim=True) / 127.0
-    return torch.clamp(torch.round(rotated / scale), -128, 127).to(torch.int8), scale.to(torch.float32)
 
 
 class _TinyBlock(torch.nn.Module):
@@ -51,32 +47,25 @@ class _TinyZImage(torch.nn.Module):
         self.layers = torch.nn.ModuleList([_TinyBlock()])
 
 
-def _driver(monkeypatch, tmp_path, state_dict: dict) -> tuple[ZImageCheckpointModel, Main_Checkpoint_ZImage_Config]:
-    import diffusers
-    from safetensors import torch as safetensors_torch
+SEAM = Seam(
+    loader=ZImageCheckpointModel,
+    module=z_image,
+    # The loader calls `safetensors.torch.load_file` through the package, so patching the name on
+    # its own module would patch nothing and let it read the empty file the config points at.
+    load_file_host=safetensors_torch,
+    patches_device=True,
+)
 
+
+def _driver(monkeypatch, tmp_path, state_dict: dict, model_class=None):
     checkpoint = tmp_path / "z_image_int8_convrot.safetensors"
     checkpoint.touch()
     config = Main_Checkpoint_ZImage_Config.model_construct(path=str(checkpoint), name="z-image")
 
-    loader = object.__new__(ZImageCheckpointModel)
-    loader._ram_cache = SimpleNamespace(make_room=MagicMock())
-    loader._logger = MagicMock()
-    loader._torch_device = torch.device("cpu")
-    loader._torch_dtype = torch.float32
-    loader._apply_fp8_layerwise_casting = lambda model, _config, _submodel: model
+    def geometry(patch):
+        patch.setattr(diffusers, "ZImageTransformer2DModel", model_class or _TinyZImage, raising=False)
 
-    monkeypatch.setattr(diffusers, "ZImageTransformer2DModel", _TinyZImage, raising=False)
-    monkeypatch.setattr(safetensors_torch, "load_file", lambda _path: state_dict)
-    monkeypatch.setattr(
-        "invokeai.backend.model_manager.load.model_loaders.z_image.TorchDevice.choose_torch_device",
-        lambda: torch.device("cpu"),
-    )
-    monkeypatch.setattr(
-        "invokeai.backend.model_manager.load.model_loaders.z_image.TorchDevice.choose_bfloat16_safe_dtype",
-        lambda _device: torch.float32,
-    )
-    return loader, config
+    return prepare(SEAM, monkeypatch, state_dict=state_dict, geometry=geometry), config
 
 
 class _TinyMixedZImage(torch.nn.Module):
@@ -93,39 +82,37 @@ def test_a_mixed_int8_and_scaled_fp8_checkpoint_is_refused(monkeypatch, tmp_path
     load. Z-Image made exactly that mistake: it ran every other step of the int8 install and not
     this check, and the result was a model that loaded cleanly and generated noise.
     """
-    import diffusers
 
     torch.manual_seed(0)
-    quantized, scale = _quantize_convrot(torch.randn(4, CONVROT_GROUP_SIZE))
+    quantized, scale, _restored = quantize_convrot(torch.randn(4, CONVROT_GROUP_SIZE))
     state_dict = {
         "layers.0.proj.weight": quantized,
         "layers.0.proj.weight_scale": scale,
-        "layers.0.proj.comfy_quant": _marker_blob(MARKER),
+        "layers.0.proj.comfy_quant": comfy_quant_marker(MARKER),
         "layers.1.proj.weight": torch.zeros(4, CONVROT_GROUP_SIZE, dtype=torch.float8_e4m3fn),
         "layers.1.proj.weight_scale": torch.ones(()),
     }
-    loader, config = _driver(monkeypatch, tmp_path, state_dict)
-    monkeypatch.setattr(diffusers, "ZImageTransformer2DModel", _TinyMixedZImage, raising=False)
+    run, config = _driver(monkeypatch, tmp_path, state_dict, model_class=_TinyMixedZImage)
 
     with pytest.raises(ValueError, match=r"layers\.1\.proj\.weight_scale"):
-        loader._load_from_singlefile(config)
+        run.load(config)
 
     # Refused before the cache was asked to evict anything for a load that cannot finish.
-    loader._ram_cache.make_room.assert_not_called()
+    assert not run.reserved
 
 
 def test_an_int8_checkpoint_loads_int8_resident_and_un_rotated(monkeypatch, tmp_path) -> None:
     torch.manual_seed(0)
     original = torch.randn(4, CONVROT_GROUP_SIZE)
-    quantized, scale = _quantize_convrot(original)
+    quantized, scale, _restored = quantize_convrot(original)
     state_dict = {
         "layers.0.proj.weight": quantized,
         "layers.0.proj.weight_scale": scale,
-        "layers.0.proj.comfy_quant": _marker_blob(MARKER),
+        "layers.0.proj.comfy_quant": comfy_quant_marker(MARKER),
     }
-    loader, config = _driver(monkeypatch, tmp_path, state_dict)
+    run, config = _driver(monkeypatch, tmp_path, state_dict)
 
-    model = loader._load_from_singlefile(config)
+    model = run.load(config)
 
     # Resident, not decoded: that is what keeps a 5.8 GB checkpoint at 5.8 GB.
     assert isinstance(model.layers[0].proj, Int8ConvrotLinear)
@@ -139,24 +126,60 @@ def test_an_int8_checkpoint_loads_int8_resident_and_un_rotated(monkeypatch, tmp_
     assert torch.corrcoef(torch.stack([rotated, original.flatten()]))[0, 1].abs() < 0.2
 
 
-def test_an_int8_weight_without_a_marker_is_refused(monkeypatch, tmp_path) -> None:
+@pytest.mark.parametrize("declared_in_header", [False, True], ids=["unmarked", "declared_in_header"])
+def test_an_int8_weight_without_a_per_tensor_marker_is_refused(monkeypatch, tmp_path, declared_in_header) -> None:
     """A quantized weight the loader does not recognise would be handed to a float Linear and only
-    fail at forward time, if at all. Refuse at load, and say which layers."""
+    fail at forward time, if at all. Refuse at load, and say which layers.
+
+    The header case records a deliberate asymmetry. ComfyUI writes the per-layer flags in either of
+    two places, and this loader reads only the per-tensor markers for int8 -- the header is consulted
+    for fp8 and nvfp4 hints alone. FLUX.1 (`flux.py:806-822`) and FLUX.2 (`:1204-1221`) merge both;
+    Z-Image, its Qwen3 encoder, Krea-2, Krea-2's Qwen3-VL encoder, Ideogram 4 and the PiD decoder
+    refuse; MiniMax H3's transformer and its Qwen3-VL encoder have no such check at all, so a
+    header-only build dies later in `load_state_dict` on the int8 dtype without naming the scheme.
+
+    Refusing is the *conservative* side, and that is the reason to keep it -- not the survey that
+    first motivated this cell. No header entry observed says whether the weight was rotated: across
+    every checkpoint on this machine, each `int8_tensorwise` header entry reads
+    `{"format": "int8_tensorwise"}` and nothing more, while Ideogram 4's per-tensor markers read
+    `{"format": "int8_tensorwise", "convrot": true, "convrot_groupsize": 256}`. Merging the header
+    here would therefore build `Int8ConvrotLinear(convrot=False)` over a rotated weight, which loads
+    and generates noise. Nothing stops a producer writing `convrot` into the header -- the parser
+    passes each entry through verbatim, and nvfp4 entries do carry extra keys -- so this is what has
+    been observed, not a property of the format. FLUX gets away with merging because the per-tensor
+    marker wins where both are present, and the one build that writes int8 header entries
+    (`flux-2-klein-9b-int8-convrot`) is unrotated in both channels.
+
+    What is not a reason: "the transport is chosen per format". That was the first version of this
+    docstring and it is false. `flux-2-klein-9b-fp8` is header-only fp8 while `ideogram4_fp8_scaled`
+    is marker-only fp8 -- same format, different transport -- and `flux-2-klein-9b-int8-convrot`
+    writes int8 entries in *both*. The transport follows the producing tool.
+    """
     torch.manual_seed(1)
-    quantized, scale = _quantize_convrot(torch.randn(4, CONVROT_GROUP_SIZE))
+    quantized, scale, _restored = quantize_convrot(torch.randn(4, CONVROT_GROUP_SIZE))
     state_dict = {"layers.0.proj.weight": quantized, "layers.0.proj.weight_scale": scale}
-    loader, config = _driver(monkeypatch, tmp_path, state_dict)
+    run, config = _driver(monkeypatch, tmp_path, state_dict)
+    if declared_in_header:
+        monkeypatch.setattr(
+            z_image,
+            "read_safetensors_metadata",
+            # Bare on purpose: the damaging shape is a header entry that says the format and not
+            # the rotation, which is every int8 header entry observed.
+            lambda _path, _logger: {
+                "_quantization_metadata": json.dumps({"layers": {"layers.0.proj": {"format": "int8_tensorwise"}}})
+            },
+        )
 
     with pytest.raises(ValueError, match=r"int8 weight\(s\) with no `comfy_quant` marker"):
-        loader._load_from_singlefile(config)
+        run.load(config)
 
 
 def test_an_unquantized_checkpoint_is_unaffected(monkeypatch, tmp_path) -> None:
     torch.manual_seed(2)
     weight = torch.randn(4, CONVROT_GROUP_SIZE)
-    loader, config = _driver(monkeypatch, tmp_path, {"layers.0.proj.weight": weight})
+    run, config = _driver(monkeypatch, tmp_path, {"layers.0.proj.weight": weight})
 
-    model = loader._load_from_singlefile(config)
+    model = run.load(config)
 
     assert isinstance(model.layers[0].proj, torch.nn.Linear)
     assert not isinstance(model.layers[0].proj, Int8ConvrotLinear)
@@ -190,22 +213,19 @@ def test_a_precision_sensitive_layer_is_not_left_int8(monkeypatch, tmp_path) -> 
     torch.manual_seed(3)
     sensitive = torch.randn(4, CONVROT_GROUP_SIZE)
     ordinary = torch.randn(4, CONVROT_GROUP_SIZE)
-    sensitive_q, sensitive_scale = _quantize_convrot(sensitive)
-    ordinary_q, ordinary_scale = _quantize_convrot(ordinary)
+    sensitive_q, sensitive_scale, _ = quantize_convrot(sensitive)
+    ordinary_q, ordinary_scale, _ = quantize_convrot(ordinary)
     state_dict = {
         "t_embedder.mlp.0.weight": sensitive_q,
         "t_embedder.mlp.0.weight_scale": sensitive_scale,
-        "t_embedder.mlp.0.comfy_quant": _marker_blob(MARKER),
+        "t_embedder.mlp.0.comfy_quant": comfy_quant_marker(MARKER),
         "layers.0.proj.weight": ordinary_q,
         "layers.0.proj.weight_scale": ordinary_scale,
-        "layers.0.proj.comfy_quant": _marker_blob(MARKER),
+        "layers.0.proj.comfy_quant": comfy_quant_marker(MARKER),
     }
-    loader, config = _driver(monkeypatch, tmp_path, state_dict)
-    import diffusers
+    run, config = _driver(monkeypatch, tmp_path, state_dict, model_class=_TinyZImageWithTimestepEmbedder)
 
-    monkeypatch.setattr(diffusers, "ZImageTransformer2DModel", _TinyZImageWithTimestepEmbedder, raising=False)
-
-    model = loader._load_from_singlefile(config)
+    model = run.load(config)
 
     embedder_linear = model.t_embedder.mlp[0]
     assert not isinstance(embedder_linear, Int8ConvrotLinear)
@@ -219,7 +239,7 @@ def test_a_precision_sensitive_layer_is_not_left_int8(monkeypatch, tmp_path) -> 
     assert model.layers[0].proj.weight.dtype is torch.int8
 
     # And the reservation covers the widened layer at its post-split width, not at one byte.
-    (reserved,), _ = loader._ram_cache.make_room.call_args
+    reserved = run.reserved[-1]
     assert reserved >= sensitive.nelement() * 4 + ordinary_q.nelement()
 
 
@@ -260,15 +280,10 @@ class _TinyNativeZImage(torch.nn.Module):
 def _nvfp4_layer(
     path: str, positive: torch.Tensor, tile_row_scales: list[float], global_scale: float
 ) -> dict[str, torch.Tensor]:
-    """One layer as Comfy stores it. Codes 2 and 10 decode to +1.0 and -1.0, so the expected weight needs no
-    E2M1 table, and a block scale constant over each 128-row tile row reads the same tiled as row by row."""
-    codes = torch.where(positive, 2, 10).to(torch.uint8)
-    scales = torch.tensor(tile_row_scales).repeat_interleave(128).unsqueeze(1).repeat(1, positive.shape[1] // 16)
-    return {
-        f"{path}.weight": (codes[:, 0::2] << 4) | codes[:, 1::2],
-        f"{path}.weight_scale": scales.to(torch.float8_e4m3fn),
-        f"{path}.weight_scale_2": torch.tensor(global_scale),
-    }
+    """A block scale constant over each 128-row tile row, which reads the same tiled as row by row --
+    so the split under test can be checked without the de-swizzle being part of the expectation."""
+    grid = torch.tensor(tile_row_scales).repeat_interleave(128).unsqueeze(1).repeat(1, positive.shape[1] // 16)
+    return nvfp4_tensors(path, nvfp4_codes(positive), block_scale=grid, global_scale=global_scale)
 
 
 def test_an_nvfp4_checkpoint_loads_packed_with_its_qkv_split_on_tile_rows(monkeypatch, tmp_path) -> None:
@@ -302,10 +317,7 @@ def test_an_nvfp4_checkpoint_loads_packed_with_its_qkv_split_on_tile_rows(monkey
             "text_encoders.qwen3.layers.0.mlp.up_proj",
         )
     }
-    loader, config = _driver(monkeypatch, tmp_path, state_dict)
-    import diffusers
-
-    monkeypatch.setattr(diffusers, "ZImageTransformer2DModel", _TinyNativeZImage, raising=False)
+    run, config = _driver(monkeypatch, tmp_path, state_dict, model_class=_TinyNativeZImage)
     monkeypatch.setattr(
         "invokeai.backend.model_manager.load.model_loaders.z_image.read_safetensors_metadata",
         lambda _path, _logger: {"_quantization_metadata": json.dumps({"layers": header})},
@@ -316,7 +328,7 @@ def test_an_nvfp4_checkpoint_loads_packed_with_its_qkv_split_on_tile_rows(monkey
         lambda _device: torch.bfloat16,
     )
 
-    model = loader._load_from_singlefile(config)
+    model = run.load(config)
 
     bf16 = torch.bfloat16
     x = torch.randn(3, 64, dtype=bf16)
@@ -343,8 +355,8 @@ def test_an_nvfp4_checkpoint_loads_packed_with_its_qkv_split_on_tile_rows(monkey
     # which would ask for about 45 KB more.
     packed = (384 + 128) * 32 + (384 + 128) * 4
     dense = 128 * 64 * 2 + 128 * 2 + 4 * 4 * 2
-    loader._ram_cache.make_room.assert_called_once()
-    (reserved,), _ = loader._ram_cache.make_room.call_args
+    assert len(run.reserved) == 1
+    reserved = run.reserved[0]
     assert packed + dense <= reserved < packed + dense + 1024
 
 
@@ -358,11 +370,10 @@ def test_a_scaled_fp8_checkpoint_stays_packed_when_storage_is_on(monkeypatch, tm
     """
     torch.manual_seed(3)
     original = torch.randn(4, CONVROT_GROUP_SIZE)
-    scale = (original.abs().max() / 448.0).to(torch.float32)
-    packed = (original / scale).to(torch.float8_e4m3fn)
-    state_dict = {"layers.0.proj.weight": packed, "layers.0.proj.weight_scale": scale}
+    fp8 = quantize_scaled_fp8(original)
+    state_dict = {"layers.0.proj.weight": fp8.codes, "layers.0.proj.weight_scale": fp8.scale}
 
-    loader, driver_config = _driver(monkeypatch, tmp_path, state_dict)
+    run, driver_config = _driver(monkeypatch, tmp_path, state_dict)
     config = Main_Checkpoint_ZImage_Config.model_construct(
         path=driver_config.path,
         name="z-image",
@@ -372,7 +383,7 @@ def test_a_scaled_fp8_checkpoint_stays_packed_when_storage_is_on(monkeypatch, tm
     monkeypatch.setattr(load_default, "should_keep_fp8_weights", lambda _device: False)
     monkeypatch.setattr(load_default, "_device_supports_fp8_storage", lambda _device, _logger=None: True)
 
-    model = loader._load_from_singlefile(config)
+    model = run.load(config)
 
     proj = model.layers[0].proj
     assert proj.weight.dtype is torch.float8_e4m3fn, "folded back to a float dtype"

@@ -7,8 +7,8 @@ import type {
 
 import { Box } from '@chakra-ui/react';
 import { Toolbar, ToolbarButton } from '@platform/ui/Toolbar';
+import { GradientIcon } from '@platform/ui/VendoredIcon';
 import {
-  BlendIcon,
   BrushIcon,
   CircleIcon,
   EraserIcon,
@@ -25,7 +25,7 @@ import {
   TriangleIcon,
   TypeIcon,
 } from 'lucide-react';
-import { useCallback, useEffect, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, type ElementType } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { isCanvasToolEnabled } from './canvasInteractionLock';
@@ -37,7 +37,7 @@ type ToolStripEngine = CanvasCoreStoreCapability & { readonly tools: CanvasToolC
 
 interface ToolStripButtonProps {
   engine: ToolStripEngine;
-  icon: typeof HandIcon;
+  icon: ElementType;
   isInteractionLocked: boolean;
   label: string;
   toolId: ToolId;
@@ -231,7 +231,7 @@ const ToolStripRoot = ({
         <ShapeFamilyButton engine={engine} isInteractionLocked={isInteractionLocked} />
         <ToolStripButton
           engine={engine}
-          icon={BlendIcon}
+          icon={GradientIcon}
           isInteractionLocked={isInteractionLocked}
           label={t('widgets.canvas.tools.gradient')}
           toolId="gradient"

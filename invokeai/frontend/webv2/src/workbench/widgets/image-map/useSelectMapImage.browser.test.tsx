@@ -421,6 +421,7 @@ describe('useMapSelection', () => {
       expect(mocks.patchValues).toHaveBeenCalledWith('gallery', {
         searchTerm: '',
         semanticImageQuery: null,
+        semanticSearchText: null,
         starredOnly: false,
       });
     });
@@ -442,7 +443,25 @@ describe('useMapSelection', () => {
       expect(mocks.patchValues).toHaveBeenCalledWith('gallery', {
         searchTerm: '',
         semanticImageQuery: null,
+        semanticSearchText: null,
         starredOnly: true,
+      });
+    });
+
+    it('leaves a semantic field, even an empty one, before revealing', async () => {
+      // Semantic mode is a listing of its own even with nothing typed yet:
+      // the reveal targets the board listing, so the field returns to it.
+      mocks.galleryValues = { searchTerm: '', semanticImageQuery: null, semanticSearchText: '' };
+      mocks.resolve.mockResolvedValue({ boardId: 'board-a', category: 'general', kind: 'image', name: 'a.png' });
+      await mount();
+
+      await flush(() => handle.click?.({ kind: 'image', name: 'a.png' }));
+
+      expect(mocks.patchValues).toHaveBeenCalledWith('gallery', {
+        searchTerm: '',
+        semanticImageQuery: null,
+        semanticSearchText: null,
+        starredOnly: false,
       });
     });
 
@@ -532,6 +551,7 @@ describe('useMapSelection', () => {
         galleryPage: 0,
         searchTerm: '',
         semanticImageQuery: { clusterId: 'cluster-key-1', kind: 'cluster', label: 'beaches' },
+        semanticSearchText: null,
       });
       expect(mocks.selectItem).toHaveBeenCalledTimes(1);
       expect(mocks.selectItem.mock.calls[0]?.[0]).toEqual({

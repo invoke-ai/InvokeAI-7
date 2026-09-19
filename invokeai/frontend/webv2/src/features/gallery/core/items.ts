@@ -286,3 +286,8 @@ export const classifyGalleryUpload = (file: Pick<File, 'name' | 'type'>): { kind
 
   return null;
 };
+
+/** Virtual "by date" boards (`by_date:<YYYY-MM-DD>`) list items but can never receive them. */
+export const DATE_BOARD_ID_PREFIX = 'by_date:';
+
+export const isDateBoardId = (boardId: string): boolean => boardId.startsWith(DATE_BOARD_ID_PREFIX);

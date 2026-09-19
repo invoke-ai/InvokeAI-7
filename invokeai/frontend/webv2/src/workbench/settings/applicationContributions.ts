@@ -14,12 +14,18 @@ const preference = (id: string, label: string, keywords?: string): SettingDefini
   kind: 'boolean',
   scope: 'preference',
 });
-const custom = (id: string, label: string, scope: SettingDefinition['scope'] = 'preference'): SettingDefinition => ({
+const custom = (
+  id: string,
+  label: string,
+  scope: SettingDefinition['scope'] = 'preference',
+  options: { fill?: boolean } = {}
+): SettingDefinition => ({
   id,
   label: text(`${id}.label`, label),
   description: text(`${id}.description`),
   kind: 'custom',
   scope,
+  ...options,
 });
 const section = (id: string, label: string, fields: readonly SettingDefinition[]): SettingsContribution => ({
   id,
@@ -49,7 +55,9 @@ export const behaviorSettings = section('behavior', 'Behavior', [
   preference('preferNumericAttentionStyle', 'Prefer numeric attention style', 'generate prompt editor'),
   preference('showPromptSyntaxHighlighting', 'Highlight prompt syntax', 'generate prompt editor'),
 ]);
-export const hotkeysSettings = section('hotkeys', 'Keyboard shortcuts', [custom('hotkeys', 'Keyboard shortcuts')]);
+export const hotkeysSettings = section('hotkeys', 'Keyboard shortcuts', [
+  custom('hotkeys', 'Keyboard shortcuts', 'preference', { fill: true }),
+]);
 export const projectSettings = section('project', 'Project', [
   {
     ...preference('useCpuNoise', 'Use CPU noise'),

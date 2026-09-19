@@ -36,6 +36,7 @@ describe('getQueueRecallCapabilities', () => {
       prompts: true,
       remix: true,
       seed: true,
+      workflow: false,
     });
   });
 
@@ -47,6 +48,7 @@ describe('getQueueRecallCapabilities', () => {
       prompts: true,
       remix: false,
       seed: true,
+      workflow: false,
     });
   });
 
@@ -179,6 +181,7 @@ describe('buildVideoQueueRecallPatch', () => {
       seed: true,
       dimensions: false,
       clipSkip: false,
+      workflow: false,
     });
     expect(
       planQueueRecall('all', { current: null, isVideoItem: true, meta: {}, snapshot: null, videoSnapshot: snapshot })

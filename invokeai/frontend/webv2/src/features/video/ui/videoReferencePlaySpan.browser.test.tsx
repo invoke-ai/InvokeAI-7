@@ -1,8 +1,10 @@
 import type { GalleryVideoItem } from '@features/gallery';
+import type { GalleryUiAdapter } from '@features/gallery/react';
 import type { VideoReferenceItem, VideoSourceClip } from '@features/video/core/types';
 
 import { ChakraProvider } from '@chakra-ui/react';
 import { DndContext } from '@dnd-kit/core';
+import { GalleryUiProvider } from '@features/gallery/react';
 import { system } from '@theme/system';
 import i18next from 'i18next';
 import { act, useCallback, useEffect, useState, type ReactNode } from 'react';
@@ -52,7 +54,6 @@ await i18n.use(initReactI18next).init({
             referencesHelp: 'help',
             removeReference: 'Remove reference',
             sampleLength: 'Sample Length',
-            removeClip: 'Remove video',
             trim: 'Trim',
             trimEnd: 'End Frame',
             trimEndShort: 'End',
@@ -188,14 +189,25 @@ const RetrimmableHarness = () => {
   );
 };
 
+// The source clip field is built on the gallery media slot, which reads the
+// gallery UI port for its picker and error reporting.
+const galleryAdapter = {
+  gallery: { selectBoard: vi.fn(), selectItem: vi.fn(), setView: vi.fn() },
+  galleryValues: {},
+  notifications: { add: vi.fn(), reportError: vi.fn() },
+  widgets: { openGallery: () => true, patchGalleryValues: vi.fn() },
+} as unknown as GalleryUiAdapter;
+
 const renderTree = async (element: ReactNode): Promise<void> => {
   await act(() =>
     root.render(
       <I18nextProvider i18n={i18n}>
         <ChakraProvider value={system}>
-          <DndContext>
-            <VideoUiProvider adapter={adapter}>{element}</VideoUiProvider>
-          </DndContext>
+          <GalleryUiProvider adapter={galleryAdapter}>
+            <DndContext>
+              <VideoUiProvider adapter={adapter}>{element}</VideoUiProvider>
+            </DndContext>
+          </GalleryUiProvider>
         </ChakraProvider>
       </I18nextProvider>
     )

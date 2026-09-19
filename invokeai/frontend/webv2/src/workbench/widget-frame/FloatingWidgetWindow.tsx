@@ -1,7 +1,7 @@
 import type { FloatingWidgetState } from '@workbench/layoutContracts';
 import type { WidgetInstanceId } from '@workbench/widgetContracts';
 
-import { Box, Flex, HStack, Icon, Text } from '@chakra-ui/react';
+import { Box, Flex, HStack, Icon, Separator, Text } from '@chakra-ui/react';
 import { flushWorkbenchDrafts } from '@platform/react/draftRegistry';
 import { IconButton } from '@platform/ui/Button';
 import { Tooltip } from '@platform/ui/Tooltip';
@@ -376,6 +376,7 @@ export const FloatingWidgetWindow = ({
               </Suspense>
             </FloatingChromeBoundary>
           ) : null}
+          {isEnabled && widget ? <Separator h="4" mx="0.5" orientation="vertical" /> : null}
           <Tooltip content={isShaded ? t('widgets.floating.unshade') : t('widgets.floating.shade')}>
             <IconButton
               aria-label={isShaded ? t('widgets.floating.unshade') : t('widgets.floating.shade')}

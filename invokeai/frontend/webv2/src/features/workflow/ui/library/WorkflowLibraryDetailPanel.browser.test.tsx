@@ -128,6 +128,8 @@ vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: translate }) }));
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
+const NOOP = () => {};
+
 // #region Fixtures
 
 const WAN_VAE_DEPENDENCY = {
@@ -282,8 +284,10 @@ describe('WorkflowLibraryDetailPanel', () => {
             <WorkflowUiProvider adapter={ADAPTER}>
               <WorkflowGraphPreviewProvider adapter={GRAPH_PREVIEW}>
                 <WorkflowLibraryDetailPanel
+                  contextMenuPoint={null}
                   entry={selected}
                   onClose={onClose}
+                  onContextMenuClose={NOOP}
                   onDeleted={onDeleted}
                   onDuplicated={onDuplicated}
                   onOpen={onOpen}

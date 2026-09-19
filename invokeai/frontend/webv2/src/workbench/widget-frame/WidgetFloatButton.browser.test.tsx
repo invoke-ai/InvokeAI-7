@@ -133,13 +133,11 @@ describe('WidgetFloatButton', () => {
     expect(await renderButton('right', false)).toBeNull();
   });
 
-  it('renders for the last enabled center view — the emptied surface falls back until it docks back', async () => {
-    expect(await renderButton('center')).not.toBeNull();
-  });
+  it('renders nothing for a center view, even one that is not the last', async () => {
+    expect(await renderButton('center')).toBeNull();
 
-  it('renders for a center view that is not the last one', async () => {
     floatMocks.centerInstanceIds = ['image-map-instance', 'canvas-instance'];
 
-    expect(await renderButton('center')).not.toBeNull();
+    expect(await renderButton('center')).toBeNull();
   });
 });

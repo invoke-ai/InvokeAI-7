@@ -157,9 +157,10 @@ export const NEUTRAL_KREA2_REBALANCE_WEIGHTS = Array.from({ length: KREA2_REBALA
 );
 
 /**
- * Only curves with a basis in the backend ship as built-ins: the node's own defaults and
- * a neutral pass. A named curve like "Detail" is a tuning claim, and nothing in this repo
- * measures one — users save their own instead.
+ * Built-ins are described by their shape, not by a tuning claim: the node's own
+ * defaults, a neutral pass, the default curve scaled toward or away from
+ * neutral, and curves that lean on the early or late taps. Nothing here
+ * measures a look — users save their own curves for that.
  */
 export const BUILTIN_REBALANCE_PRESETS: readonly RebalancePreset[] = [
   {
@@ -173,6 +174,30 @@ export const BUILTIN_REBALANCE_PRESETS: readonly RebalancePreset[] = [
     label: 'Neutral',
     multiplier: 1,
     weights: NEUTRAL_KREA2_REBALANCE_WEIGHTS,
+  },
+  {
+    id: 'subtle',
+    label: 'Subtle',
+    multiplier: DEFAULT_KREA2_REBALANCE_MULTIPLIER,
+    weights: '1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.75,3.0,1.05,2.5,1.0',
+  },
+  {
+    id: 'strong',
+    label: 'Strong',
+    multiplier: DEFAULT_KREA2_REBALANCE_MULTIPLIER,
+    weights: '1.0,1.0,1.0,1.0,1.0,1.0,1.0,3.75,7.5,1.15,6.0,1.0',
+  },
+  {
+    id: 'early',
+    label: 'Early layers',
+    multiplier: DEFAULT_KREA2_REBALANCE_MULTIPLIER,
+    weights: '4.0,3.0,2.0,1.5,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0',
+  },
+  {
+    id: 'late',
+    label: 'Late layers',
+    multiplier: DEFAULT_KREA2_REBALANCE_MULTIPLIER,
+    weights: '1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.5,2.0,3.0,4.0',
   },
 ];
 

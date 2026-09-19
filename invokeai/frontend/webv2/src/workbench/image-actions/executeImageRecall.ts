@@ -18,6 +18,7 @@ import {
   isVaeModelConfig,
   normalizeGenerateWidgetValues,
 } from '@features/generation/settings';
+import { requestWorkflowDocumentLoad } from '@features/workflow/react';
 import {
   assertAccountScopeCurrent,
   captureAccountScope,
@@ -33,6 +34,68 @@ import {
   isImageRecallKindAvailable,
   type ImageRecallKind,
 } from './imageRecall';
+
+/**
+ * Replaces the project graph with the workflow embedded in `image`. The editor's
+ * always-mounted chrome consumes the request, so `openWorkflowEditor` runs first to
+ * mount it in layouts that had it hidden; a `false` result means nowhere to load.
+ */
+export const executeLoadImageWorkflow = async ({
+  image,
+  isProjectActive,
+  notifications,
+  openWorkflowEditor,
+  t,
+}: {
+  image: GalleryImage;
+  /** Re-checked after the fetch: a store-resident request must not land on another project's editor. */
+  isProjectActive: () => boolean;
+  notifications: Pick<WorkbenchCommands['notifications'], 'add'>;
+  openWorkflowEditor: () => boolean;
+  t: TFunction;
+}): Promise<void> => {
+  const owner = captureAccountScope();
+
+  try {
+    const { workflow } = await galleryImages.workflow(image.imageName, owner.signal);
+
+    assertAccountScopeCurrent(owner);
+
+    if (!workflow) {
+      notifications.add({ kind: 'info', title: t('widgets.gallery.itemActions.loadWorkflow.missing') });
+      return;
+    }
+
+    if (!isProjectActive()) {
+      return;
+    }
+
+    if (!openWorkflowEditor()) {
+      throw new Error(t('widgets.gallery.itemActions.loadWorkflow.editorUnavailable'));
+    }
+
+    const raw: unknown = JSON.parse(workflow);
+    const name =
+      typeof raw === 'object' && raw !== null && typeof (raw as { name?: unknown }).name === 'string'
+        ? (raw as { name: string }).name
+        : '';
+
+    requestWorkflowDocumentLoad(
+      raw,
+      t('widgets.gallery.itemActions.loadWorkflow.loadedLabel', { name: name || image.imageName })
+    );
+  } catch (error) {
+    if (!isAccountScopeCurrent(owner)) {
+      return;
+    }
+
+    notifications.add({
+      kind: 'error',
+      message: toErrorMessage(error),
+      title: t('widgets.gallery.itemActions.loadWorkflow.failed'),
+    });
+  }
+};
 
 const imageMetadataRequests = new Map<string, { owner: AccountScope; promise: Promise<unknown> }>();
 

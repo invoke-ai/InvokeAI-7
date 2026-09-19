@@ -14,7 +14,7 @@ from tempfile import TemporaryDirectory
 from typing import Any, List, Optional, Type
 
 import huggingface_hub
-from fastapi import Body, Header, Path, Query, Response, UploadFile
+from fastapi import Body, Header, Path, Query, Request, Response, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.routing import APIRouter
 from PIL import Image
@@ -49,7 +49,7 @@ from invokeai.backend.model_manager.load.model_cache.model_cache import MODEL_LO
 from invokeai.backend.model_manager.metadata.fetch.huggingface import HuggingFaceMetadataFetch
 from invokeai.backend.model_manager.metadata.metadata_base import ModelMetadataWithFiles, UnknownMetadataException
 from invokeai.backend.model_manager.model_on_disk import ModelOnDisk
-from invokeai.backend.model_manager.search import ModelSearch
+from invokeai.backend.model_manager.search import ModelSearch, ModelSearchCancelled
 from invokeai.backend.model_manager.starter_models import (
     STARTER_BUNDLES,
     STARTER_MODELS,
@@ -473,7 +473,8 @@ class FoundModel(BaseModel):
     status_code=200,
     response_model=List[FoundModel],
 )
-def scan_for_models(
+async def scan_for_models(
+    request: Request,
     current_admin: AdminUserOrDefault,
     scan_path: str = Query(description="Directory path to search for models", default=None),
 ) -> List[FoundModel]:
@@ -492,27 +493,44 @@ def scan_for_models(
     if not path.is_dir():
         raise scan_failed
 
-    search = ModelSearch()
+    # The walk runs off the event loop and is polled against the request: a client that cancels the scan
+    # (or navigates away) disconnects, and the walk stops at the next directory instead of crawling on.
+    stop = threading.Event()
     try:
-        found_model_paths = search.search(path)
-        models_path = ApiDependencies.invoker.services.configuration.models_path
+        search = ModelSearch(should_stop=stop.is_set)
+        walk = asyncio.ensure_future(asyncio.to_thread(search.search, path))
+        # A cancelled handler never awaits the walk; retrieving its outcome keeps asyncio from logging it at GC.
+        walk.add_done_callback(lambda task: None if task.cancelled() else task.exception())
+        try:
+            while not walk.done():
+                if await request.is_disconnected():
+                    break
+                await asyncio.wait({walk}, timeout=0.25)
+        finally:
+            # Covers the disconnect branch and a cancelled handler alike: the thread must not keep crawling.
+            stop.set()
+        try:
+            found_model_paths = await walk
+        except ModelSearchCancelled:
+            return []
 
-        # If the search path includes the main models directory, we need to exclude core models from the list.
-        # TODO(MM2): Core models should be handled by the model manager so we can determine if they are installed
-        # without needing to crawl the filesystem.
-        core_models_path = pathlib.Path(models_path, "core").resolve()
-        non_core_model_paths = [p for p in found_model_paths if not p.is_relative_to(core_models_path)]
+        def classify_found_models() -> list[FoundModel]:
+            models_path = ApiDependencies.invoker.services.configuration.models_path
 
-        installed_models = ApiDependencies.invoker.services.model_manager.store.search_by_attr()
+            # If the search path includes the main models directory, we need to exclude core models from the list.
+            # TODO(MM2): Core models should be handled by the model manager so we can determine if they are installed
+            # without needing to crawl the filesystem.
+            core_models_path = pathlib.Path(models_path, "core").resolve()
+            non_core_model_paths = [p for p in found_model_paths if not p.is_relative_to(core_models_path)]
 
-        scan_results: list[FoundModel] = []
+            installed_models = ApiDependencies.invoker.services.model_manager.store.search_by_attr()
+            installed_paths = {str(models_path / m.path) for m in installed_models}
 
-        # Check if the model is installed by comparing paths, appending to the scan result.
-        for p in non_core_model_paths:
-            path = str(p)
-            is_installed = any(str(models_path / m.path) == path for m in installed_models)
-            found_model = FoundModel(path=path, is_installed=is_installed)
-            scan_results.append(found_model)
+            # Check if the model is installed by comparing paths.
+            return [FoundModel(path=str(p), is_installed=str(p) in installed_paths) for p in non_core_model_paths]
+
+        # The store query and the path comparison are blocking work; this handler is async only to watch the request.
+        scan_results = await asyncio.to_thread(classify_found_models)
     except Exception as e:
         ApiDependencies.invoker.services.logger.error(
             f"Error scanning '{scan_path}' for models: {type(e).__name__}: {e}"

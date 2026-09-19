@@ -77,6 +77,7 @@ export {
 } from './data/events';
 
 export {
+  getFollowedProgressSession,
   getQueueActiveSessions,
   getQueueProgressSessions,
   isGalleryProgressItem,

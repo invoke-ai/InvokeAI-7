@@ -55,6 +55,8 @@ export interface GalleryImage extends GeneratedImageContract {
   boardId: string;
   imageCategory: 'general' | 'control' | 'mask' | 'user' | 'other';
   starred: boolean;
+  /** Whether the image embeds the workflow that made it. Image records say; the mixed-media items listing does not, so grid images leave it unset. */
+  hasWorkflow?: boolean;
 }
 
 export type GalleryImageMetadata = Record<string, unknown>;

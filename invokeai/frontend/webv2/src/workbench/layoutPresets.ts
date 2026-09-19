@@ -253,16 +253,15 @@ export const builtInLayoutPresetDescriptors: BuiltInLayoutPresetDescriptor[] = [
         instanceIds: ['preview'],
         sizePx: 0,
       }),
-      // Video leads the rail, with the other two graph widgets behind it so a
-      // still can be set up without leaving the arrangement.
+      // Video leads the rail; Upscale stays behind it for finishing a still.
       left: createRegion({
         activeInstanceId: 'video',
-        instanceIds: ['video', 'generate', 'upscale'],
+        instanceIds: ['video', 'upscale'],
         sizePx: 450,
       }),
       right: createRegion({
         activeInstanceId: 'gallery',
-        instanceIds: ['gallery', 'image-map', 'queue'],
+        instanceIds: ['gallery', 'queue'],
         sizePx: 450,
       }),
     },

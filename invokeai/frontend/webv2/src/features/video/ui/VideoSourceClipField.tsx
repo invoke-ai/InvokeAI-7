@@ -1,26 +1,13 @@
-import type { DragEndEvent } from '@dnd-kit/core';
+import type { GalleryItem } from '@features/gallery';
 import type { VideoSourceClip } from '@features/video/core/types';
-import type { ChangeEvent } from 'react';
 
-import { HStack, Icon, Input, Spinner, Stack, Text } from '@chakra-ui/react';
-import { useDndContext, useDndMonitor, useDroppable } from '@dnd-kit/core';
-import { galleryItems, galleryTransfers, type GalleryItem } from '@features/gallery';
-import { GalleryPickerPopover } from '@features/gallery/picker';
-import { galleryVideoUrls, isGalleryItemDragData } from '@features/gallery/utility';
+import { HStack, Stack, Text } from '@chakra-ui/react';
+import { GalleryMediaSlot, type GalleryMediaSlotLabels, type GalleryMediaSlotValue } from '@features/gallery/mediaSlot';
+import { galleryVideoUrls } from '@features/gallery/utility';
 import { createVideoSourceClip } from '@features/video/core/settings';
-import {
-  assertAccountScopeCurrent,
-  captureAccountScope,
-  isAccountScopeCurrent,
-} from '@platform/state/accountLifecycle';
 import { Field } from '@platform/ui';
-import { Button } from '@platform/ui/Button';
-import { DropTargetOverlay } from '@platform/ui/DropTargetOverlay';
-import { DropZone } from '@platform/ui/DropZone';
-import { MiddleTruncate } from '@platform/ui/MiddleTruncate';
 import { ScrubberField } from '@platform/ui/ScrubberField';
-import { ChevronDownIcon, FilmIcon, UploadIcon, XIcon } from 'lucide-react';
-import { memo, useCallback, useRef, useState } from 'react';
+import { memo, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { PlayClipSpanButton } from './PlayClipSpanButton';
@@ -28,32 +15,13 @@ import { TrimBoundThumb } from './TrimBoundThumb';
 import { useVideoUiActions } from './VideoUiContext';
 
 /**
- * The clip to extend: gallery drop target, file upload, and the trim bounds —
- * one compact row per bound, the bound's live frame at left and its slider at
- * right (see TrimBoundThumb for the seek technique). The rows are the only
- * preview; the drop zone itself is a slim header with the clip's identity.
+ * The clip to extend: the shared media slot (picker, gallery drop, upload) and
+ * the trim bounds — one compact row per bound, the bound's live frame at left
+ * and its slider at right (see TrimBoundThumb for the seek technique).
  */
 
 const DROP_ID = 'video-source-clip';
 const VIDEO_ONLY = ['video'] as const;
-const DROP_ZONE_FOCUS_PROPS = {
-  outlineColor: 'accent.focusRing',
-  outlineOffset: '2px',
-  outlineStyle: 'solid',
-  outlineWidth: '2px',
-};
-const DROP_ZONE_DISABLED_PROPS = { cursor: 'not-allowed', opacity: 0.6 };
-const DROP_ZONE_HOVER_PROPS = { bg: 'bg.muted', color: 'fg' };
-
-const getSingleVideoDragName = (data: unknown): string | null => {
-  if (!isGalleryItemDragData(data) || data.items.length !== 1) {
-    return null;
-  }
-
-  const item = data.items[0];
-
-  return item?.kind === 'video' ? item.name : null;
-};
 
 const areSourceClipsEquivalent = (left: VideoSourceClip | null, right: VideoSourceClip | null): boolean =>
   (left === null && right === null) ||
@@ -78,123 +46,23 @@ export const VideoSourceClipField = memo(
     sourceVideo: VideoSourceClip | null;
   }) {
     const { t } = useTranslation();
-    const { findInGallery, getUploadBoardId, reportError, touchGalleryImages } = useVideoUiActions();
-    const fileInputRef = useRef<HTMLInputElement | null>(null);
-    const [isLoading, setIsLoading] = useState(false);
-    const [errorMessage, setErrorMessage] = useState<string | null>(null);
-    const isInert = disabled || isLoading;
-
-    const { active } = useDndContext();
-    const acceptsActiveDrag = !isInert && getSingleVideoDragName(active?.data.current) !== null;
-    const { isOver, setNodeRef } = useDroppable({ disabled: !acceptsActiveDrag, id: DROP_ID });
-
-    const adoptVideo = useCallback(
-      async (videoName: string) => {
-        setErrorMessage(null);
-        setIsLoading(true);
-
-        try {
-          const item = await galleryItems.resolve({ kind: 'video', name: videoName });
-
-          if (item?.kind === 'video') {
-            onChange(
-              createVideoSourceClip({
-                durationSeconds: item.durationSeconds,
-                fps: item.fps,
-                height: item.height,
-                name: item.name,
-                width: item.width,
-              })
-            );
-          }
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          setErrorMessage(message);
-          reportError(message);
-        } finally {
-          setIsLoading(false);
-        }
-      },
-      [onChange, reportError]
+    const { findInGallery } = useVideoUiActions();
+    const slotLabels = useMemo<Partial<GalleryMediaSlotLabels>>(
+      () => ({ drop: t('widgets.video.dropInitialVideo') }),
+      [t]
     );
-
-    const handleDragEnd = useCallback(
-      (event: DragEndEvent) => {
-        const videoName = getSingleVideoDragName(event.active.data.current);
-
-        if (!isInert && event.over?.id === DROP_ID && videoName) {
-          void adoptVideo(videoName);
-        }
-      },
-      [adoptVideo, isInert]
+    const slotValue = useMemo<GalleryMediaSlotValue | null>(
+      () =>
+        sourceVideo
+          ? { height: sourceVideo.height, kind: 'video', name: sourceVideo.video_name, width: sourceVideo.width }
+          : null,
+      [sourceVideo]
     );
-
-    useDndMonitor({ onDragEnd: handleDragEnd });
-
-    const uploadFile = useCallback(
-      async (file: File) => {
-        setErrorMessage(null);
-
-        // `accept` is advisory; an unknown type (empty string) is the server's call.
-        if (file.type && !file.type.startsWith('video/')) {
-          setErrorMessage(t('widgets.video.unsupportedVideoFile'));
-          reportError(t('widgets.video.unsupportedVideoFile'));
-          return;
-        }
-
-        const owner = captureAccountScope();
-        setIsLoading(true);
-
-        try {
-          const uploaded = await galleryTransfers.uploadVideo(file, getUploadBoardId(), { signal: owner.signal });
-
-          assertAccountScopeCurrent(owner);
-          onChange(
-            createVideoSourceClip({
-              durationSeconds: uploaded.durationSeconds,
-              fps: uploaded.fps,
-              height: uploaded.height,
-              name: uploaded.name,
-              width: uploaded.width,
-            })
-          );
-          touchGalleryImages();
-        } catch (error) {
-          if (!isAccountScopeCurrent(owner)) {
-            return;
-          }
-
-          const message = error instanceof Error ? error.message : String(error);
-          setErrorMessage(message);
-          reportError(message);
-        } finally {
-          setIsLoading(false);
-        }
-      },
-      [getUploadBoardId, onChange, reportError, t, touchGalleryImages]
-    );
-
-    const handleFileChange = useCallback(
-      (event: ChangeEvent<HTMLInputElement>) => {
-        const file = event.currentTarget.files?.[0];
-
-        if (file) {
-          void uploadFile(file);
-        }
-        event.currentTarget.value = '';
-      },
-      [uploadFile]
-    );
-    const handlePickFile = useCallback(() => {
-      if (!isInert) {
-        fileInputRef.current?.click();
-      }
-    }, [isInert]);
-    const handleClear = useCallback(() => onChange(null), [onChange]);
-    const handlePick = useCallback(
-      (item: GalleryItem) => {
-        if (item.kind === 'video') {
-          setErrorMessage(null);
+    const handleSlotChange = useCallback(
+      (item: GalleryItem | null) => {
+        if (item === null) {
+          onChange(null);
+        } else if (item.kind === 'video') {
           onChange(createVideoSourceClip(item));
         }
       },
@@ -242,74 +110,15 @@ export const VideoSourceClipField = memo(
 
     return (
       <Stack gap="2">
-        <GalleryPickerPopover
+        <GalleryMediaSlot
           accept={VIDEO_ONLY}
-          label={t(sourceVideo ? 'widgets.gallery.picker.replaceVideo' : 'widgets.gallery.picker.chooseVideo')}
-          onPick={handlePick}
-        >
-          <DropZone
-            ref={setNodeRef}
-            as="button"
-            aria-busy={isLoading}
-            aria-disabled={disabled}
-            aria-label={t(sourceVideo ? 'widgets.gallery.picker.replaceVideo' : 'widgets.gallery.picker.chooseVideo')}
-            cursor={disabled ? 'not-allowed' : undefined}
-            disabled={isInert}
-            isDisabled={isInert}
-            isOver={isOver}
-            minH="24"
-            overflow="hidden"
-            position="relative"
-            textAlign="start"
-            w="full"
-            _focusVisible={DROP_ZONE_FOCUS_PROPS}
-            _disabled={DROP_ZONE_DISABLED_PROPS}
-            _hover={isInert ? undefined : DROP_ZONE_HOVER_PROPS}
-            opacity={disabled ? 0.6 : undefined}
-          >
-            {sourceVideo && previewSrc ? (
-              <HStack gap="2" minW="0" p="2">
-                <FilmIcon aria-hidden="true" size={14} />
-                <MiddleTruncate color="fg" flex="1" fontSize="xs" fontWeight="semibold" text={sourceVideo.video_name} />
-                <Text color="fg.muted" flexShrink="0" fontSize="2xs" fontVariantNumeric="tabular-nums">
-                  {sourceVideo.width} × {sourceVideo.height} · {sourceVideo.fps} fps
-                </Text>
-              </HStack>
-            ) : (
-              <Stack align="center" color="fg.muted" gap="1.5" justify="center" minH="24" px="4">
-                {isLoading ? (
-                  <Spinner size="sm" />
-                ) : (
-                  <HStack color="fg" fontSize="xs" fontWeight="600" gap="1.5">
-                    <Icon as={FilmIcon} boxSize="4" />
-                    {t('widgets.gallery.picker.chooseVideo')}
-                    <Icon as={ChevronDownIcon} boxSize="3" color="fg.subtle" />
-                  </HStack>
-                )}
-                <Text color="fg.subtle" fontSize="2xs" textAlign="center">
-                  {disabled && disabledReason
-                    ? disabledReason
-                    : isLoading
-                      ? t('widgets.video.uploadingClip')
-                      : t('widgets.gallery.picker.dropHint')}
-                </Text>
-              </Stack>
-            )}
-            <DropTargetOverlay
-              isActive={acceptsActiveDrag}
-              isOver={isOver}
-              label={t('widgets.video.dropInitialVideo')}
-            />
-          </DropZone>
-        </GalleryPickerPopover>
-        {disabled ? null : (
-          <HStack justify="end">
-            <Button disabled={isLoading} size="xs" variant="ghost" onClick={handlePickFile}>
-              <Icon as={UploadIcon} boxSize="3" />
-              {t('widgets.gallery.picker.upload')}
-            </Button>
-          </HStack>
-        )}
+          disabled={disabled}
+          disabledReason={disabledReason}
+          dropId={DROP_ID}
+          labels={slotLabels}
+          value={slotValue}
+          onChange={handleSlotChange}
+        />
         {sourceVideo && previewSrc ? (
           <Stack gap="2">
             {/* The empty-state slot shows the reason when no clip is set; with
@@ -364,28 +173,8 @@ export const VideoSourceClipField = memo(
                 </Stack>
               </HStack>
             </Field>
-            <HStack justify="end">
-              <Button disabled={isLoading} size="xs" variant="ghost" onClick={handleClear}>
-                <XIcon aria-hidden="true" size="12" />
-                {t('widgets.video.removeClip')}
-              </Button>
-            </HStack>
           </Stack>
         ) : null}
-        {errorMessage ? (
-          <Text aria-live="polite" color="fg.error" fontSize="2xs" role="alert" textWrap="pretty">
-            {errorMessage}
-          </Text>
-        ) : null}
-        <Input
-          ref={fileInputRef}
-          accept="video/*"
-          aria-hidden="true"
-          display="none"
-          tabIndex={-1}
-          type="file"
-          onChange={handleFileChange}
-        />
       </Stack>
     );
   },

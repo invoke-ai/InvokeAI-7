@@ -20,13 +20,14 @@ export const QueueStatusWidgetView = ({ presentation }: WidgetViewProps) => {
   const summary = getQueueSummary(queueItems);
   const chip = getQueueStatusChip(summary, isPaused);
   const percent = getDeterminateProgressPercent(progress?.percentage);
-  const baseLabel =
+  const label =
     chip.labelKey === 'idle'
       ? t('widgets.queueStatus.idle')
       : t(`widgets.queueStatus.${chip.labelKey}`, { count: chip.count });
   // The count answers "how much is left"; the percent answers "how far into the
   // current one", which is the half the chip was missing.
-  const label = chip.tone === 'running' && percent !== null ? `${baseLabel} · ${percent}%` : baseLabel;
+  const showPercent = chip.tone === 'running' && percent !== null;
+  const detail = chip.tone === 'running' ? progress?.message.trim() : undefined;
 
   if (presentation === 'tooltip') {
     return (
@@ -35,8 +36,13 @@ export const QueueStatusWidgetView = ({ presentation }: WidgetViewProps) => {
           {t('widgets.labels.queueStatus')}
         </Text>
         <Text color="fg.subtle" fontSize="2xs">
-          {label}
+          {showPercent ? `${label} · ${percent}%` : label}
         </Text>
+        {detail ? (
+          <Text color="fg.subtle" fontSize="2xs">
+            {detail}
+          </Text>
+        ) : null}
       </Stack>
     );
   }
@@ -47,6 +53,13 @@ export const QueueStatusWidgetView = ({ presentation }: WidgetViewProps) => {
       progress={getQueueStatusProgress(chip, progress?.percentage)}
     >
       {label}
+      {/* Reserved, tabular digits: the chip must not reflow the status bar as
+          the percent ticks from 9 to 10 to 100. */}
+      {showPercent ? (
+        <Text as="span" display="inline-block" fontVariantNumeric="tabular-nums" minW="7ch" textAlign="end">
+          {` · ${percent}%`}
+        </Text>
+      ) : null}
     </StatusWidgetChip>
   );
 };

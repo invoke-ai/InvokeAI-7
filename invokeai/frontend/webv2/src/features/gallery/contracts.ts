@@ -42,6 +42,7 @@ export {
   stripSessionScopedGallerySearch,
   stripUnresolvableGallerySearch,
   registerImageCluster,
+  toGallerySemanticTextReference,
   type GallerySemanticReference,
 } from './core/semanticImageQuery';
 export {
@@ -53,6 +54,7 @@ export {
 } from './core/settings';
 export {
   getGalleryCompareImage,
+  getGalleryDestinationBoardId,
   getGalleryPage,
   getGallerySelectedImagePage,
   getGallerySelectedImageQuery,
@@ -62,9 +64,13 @@ export {
 export {
   claimGalleryNavigationSequence,
   getGalleryDeletionSuccessor,
+  getGalleryNavigationStep,
+  getGallerySessionNavigationKey,
   getPersistedSelectedGalleryItemKeys,
   getSelectedGalleryImageFromValues,
   getSelectedGalleryItemFromValues,
   isGalleryNavigationCurrent,
   requestGalleryItemReveal,
+  type GalleryNavigationDirection,
+  type GalleryNavigationEntry,
 } from './core/selection';

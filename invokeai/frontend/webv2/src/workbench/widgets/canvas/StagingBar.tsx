@@ -139,7 +139,9 @@ export const StagingBar = ({
   };
 
   return (
-    <Stack align="center" gap="2" w="full">
+    // The bar mounts when staging begins; a short slide-fade lands it instead
+    // of popping it in. Duration collapses under reduce-motion with the theme.
+    <Stack align="center" animationDuration="moderate" animationName="slide-from-bottom, fade-in" gap="2" w="full">
       {contextMenuTarget ? (
         <StagingItemContextMenu
           canAccept={canAccept}

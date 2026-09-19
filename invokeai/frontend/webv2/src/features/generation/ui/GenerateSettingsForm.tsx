@@ -1,7 +1,7 @@
 import type { GenerationModelCatalogItem as ModelConfig } from '@features/generation/contracts';
 import type { GenerateModelConfig, GenerateSettings, LoraModelConfig } from '@features/generation/core/types';
 
-import { Stack } from '@chakra-ui/react';
+import { Separator, Stack } from '@chakra-ui/react';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 
 import { GenerateAdvancedFields } from './GenerateAdvancedFields';
@@ -235,6 +235,9 @@ export const GenerateSettingsForm = ({
         supportedModels={supportedModels}
         onCommitSettings={commitSettingsImmediately}
       />
+
+      {/* The same hairline the collapsible sections draw between one another. */}
+      <Separator />
 
       <GeneratePromptFields
         projectId={projectId}

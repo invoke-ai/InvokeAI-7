@@ -6,6 +6,7 @@ import {
   buildInvocationNode,
   createProjectGraph,
   getFormChildren,
+  getProjectGraphUndoEntry,
   isFieldExposed,
   normalizeProjectGraph,
   projectGraphReducer,
@@ -407,5 +408,25 @@ describe('seed modes', () => {
     });
 
     expect(held).toBe(refixed);
+  });
+});
+
+describe('getProjectGraphUndoEntry', () => {
+  it('keys streamed edits per field so a burst folds into one step, and leaves moves out of history', () => {
+    expect(getProjectGraphUndoEntry({ fieldName: 'a', nodeId: 'n', type: 'setFieldValue', value: 1 })).toEqual({
+      label: 'Edit workflow field value',
+      mergeKey: 'setFieldValue:n:a',
+    });
+    expect(getProjectGraphUndoEntry({ fieldName: 'b', nodeId: 'n', type: 'setFieldValue', value: 1 })?.mergeKey).toBe(
+      'setFieldValue:n:b'
+    );
+    expect(getProjectGraphUndoEntry({ fieldName: 'a', nodeId: 'n', type: 'setFieldValue', value: true })).toEqual({
+      label: 'Edit workflow field value',
+    });
+    expect(getProjectGraphUndoEntry({ nodeId: 'n', type: 'setNodeUseCache', useCache: false })).toEqual({
+      label: 'Change workflow node caching',
+    });
+    expect(getProjectGraphUndoEntry({ nodeId: 'n', position: { x: 1, y: 1 }, type: 'setNodePosition' })).toBeNull();
+    expect(getProjectGraphUndoEntry({ isOpen: false, nodeId: 'n', type: 'setNodeIsOpen' })).toBeNull();
   });
 });

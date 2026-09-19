@@ -16,7 +16,7 @@ import {
 import { useNotify } from '@features/models/ui/useModelsNotify';
 import { areArraysEqual } from '@platform/state/selectors';
 import { Button, IconButton, MenuContent } from '@platform/ui';
-import { HuggingFaceIcon } from '@platform/ui/BrandIcon';
+import { HuggingFaceIcon } from '@platform/ui/VendoredIcon';
 import { ExternalLinkIcon, MoreHorizontalIcon, PencilIcon } from 'lucide-react';
 import { memo, useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';

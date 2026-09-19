@@ -40,7 +40,7 @@ import { registerLibraryGraphSyncedHandler, releaseLibraryGraphSyncedHandler } f
 import { useSaveWorkflowToLibrary } from './library/useSaveWorkflowToLibrary';
 import { WorkflowLibraryDialog } from './library/WorkflowLibraryDialog';
 import { setWorkflowLibrarySyncStatus, workflowLibrarySyncStore } from './library/workflowLibrarySyncStore';
-import { PendingLibraryWorkflowLoader } from './PendingLibraryWorkflowLoader';
+import { PendingWorkflowLoader } from './PendingLibraryWorkflowLoader';
 import { copyWorkflowJson, downloadWorkflowJson } from './workflowTransfer';
 import {
   useWorkflowHostCommands,
@@ -532,7 +532,7 @@ export const WorkflowDialogHost = () => {
         onOpenChange={setAddNodeOpen}
       />
       <WorkflowLibraryDialog isOpen={isLibraryOpen} onOpenChange={setWorkflowLibraryOpen} />
-      <PendingLibraryWorkflowLoader />
+      <PendingWorkflowLoader />
       <ConfirmDialog
         body="Replace the project graph with an empty workflow? You can undo this change during this session. Save the current workflow to the library first if you need a permanent copy."
         confirmLabel="New workflow"

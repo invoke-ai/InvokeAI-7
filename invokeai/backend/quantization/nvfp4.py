@@ -40,6 +40,7 @@ from typing import Any
 import torch
 import torch.nn.functional as F
 
+from invokeai.backend.quantization.block_scale_tiles import TILE_ROWS, check_tile_layout, unblock_scale_grid
 from invokeai.backend.quantization.dequantizing_linear import DequantizingLinear
 from invokeai.backend.quantization.fp8_scaled import COMFY_QUANT_SUFFIX, INPUT_SCALE_SUFFIXES, iter_weight_scale_pairs
 from invokeai.backend.quantization.int8_convrot import parse_comfy_quant_marker
@@ -52,10 +53,6 @@ PRE_QUANT_SCALE_SUFFIX = ".pre_quant_scale"
 
 # Everything a layer carries besides its weight.
 _SIDE_CHANNEL_SUFFIXES = (".weight_scale", WEIGHT_SCALE_2_SUFFIX, COMFY_QUANT_SUFFIX, *INPUT_SCALE_SUFFIXES)
-
-# cuBLAS block-scale tiles span 128 rows and 4 blocks.
-_TILE_ROWS = 128
-_TILE_BLOCKS = 4
 
 _E2M1_VALUES = torch.tensor([0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, -0.0, -0.5, -1.0, -1.5, -2.0, -3.0, -4.0, -6.0])
 # Both decoded elements of every possible byte, upper nibble first: one lookup per byte.
@@ -78,36 +75,6 @@ def _e4m3_values_on(device: torch.device) -> torch.Tensor:
     return _E4M3_BY_BYTE.to(device)
 
 
-def _check_tile_layout(rows: int, blocks: int) -> None:
-    if rows % _TILE_ROWS or blocks % _TILE_BLOCKS:
-        raise ValueError(
-            f"a {rows}x{blocks} block-scale grid is not in the cuBLAS tile layout: rows must be a multiple of "
-            f"{_TILE_ROWS} and blocks a multiple of {_TILE_BLOCKS}. Padded grids are not implemented."
-        )
-
-
-def unblock_scale_grid(scale: torch.Tensor) -> torch.Tensor:
-    """Reorder a block-scale grid from cuBLAS's tiled layout into row-major ``[rows, blocks]``.
-
-    cuBLAS and TensorRT take block-scale operands tiled: the grid is cut into tiles of 128 rows and 4
-    blocks, the tiles are stored in row-major order, and inside a tile the entries run over
-    ``row % 32``, then ``row // 32``, then the block. Producers write that layout into a tensor of the
-    row-major shape, so nothing about the shape gives it away. It is a permutation, and inverting it is
-    a reshape: stored ``(tile row, tile column, row % 32, row // 32, block)`` becomes
-    ``(tile row, row // 32, row % 32, tile column, block)``. Tile row ``r`` therefore occupies stored rows
-    ``[128 r, 128 (r + 1))``.
-
-    The MXFP8 scales ``fp8_scaled._reject_mx_scale`` refuses are stored reordered too; whether in these
-    tiles, with their 32-element blocks, has not been measured.
-    """
-    if scale.dim() != 2:
-        raise ValueError(f"expected a 2-D block-scale grid, got shape {tuple(scale.shape)}")
-    rows, blocks = scale.shape
-    _check_tile_layout(rows, blocks)
-    tiles = scale.reshape(rows // _TILE_ROWS, blocks // _TILE_BLOCKS, 32, 4, _TILE_BLOCKS)
-    return tiles.permute(0, 3, 2, 1, 4).reshape(rows, blocks)
-
-
 def _check_layout(weight: torch.Tensor | None, weight_scale: torch.Tensor | None, weight_scale_2: torch.Tensor) -> None:
     """Refuse checkpoint tensors this decode would misread. Reads dtypes and shapes only."""
     if weight is None or weight_scale is None:
@@ -127,7 +94,7 @@ def _check_layout(weight: torch.Tensor | None, weight_scale: torch.Tensor | None
             f"a {tuple(weight_scale.shape)} block scale does not describe a {tuple(weight.shape)} packed weight "
             f"({NVFP4_BLOCK_SIZE}-element blocks, two elements per byte)"
         )
-    _check_tile_layout(rows, blocks)
+    check_tile_layout(rows, blocks)
 
 
 def dequantize_nvfp4_weight(
@@ -295,6 +262,60 @@ def _find_nvfp4_layers(sd: Mapping[str, Any], header_layers: Mapping[str, Any] |
     return layers
 
 
+def reject_nvfp4_layers_a_plain_fold_cannot_decode(sd: Mapping[str, Any], what: str = "This checkpoint") -> None:
+    """Refuse an nvfp4 layer to a fold that only multiplies a scale into a weight.
+
+    **Wan** (`wan.py:511`) is the seam this exists for: it reads scaled fp8 and never calls
+    :func:`pop_nvfp4_layers`. The other caller of the shared fold, the Qwen2.5-VL encoder, *does*
+    pop first (`qwen_image.py:473`, forty-odd lines before its fold) and ships the packed layers, so
+    the guard is unreachable there — do not read it as evidence that encoder lacks nvfp4 support.
+
+    The fold has no dtype gate, by design, so it takes the layer: the block-scale grid carries one
+    entry per 16 logical elements and the weight packs two 4-bit codes per byte, so eight packed
+    columns fall to each grid entry and the shapes line up by accident. What comes out is the packed
+    bytes multiplied by the grid, at the compute dtype and half the logical width, reported in the
+    log as a dequantized weight.
+
+    Half the width is usually caught at ``load_state_dict`` — but not always, and that is the reason
+    to refuse rather than rely on it. Wan infers ``text_dim`` from ``shape[1]`` of
+    ``condition_embedder.text_embedder.linear_1`` (`wan.py:356`), which is the dimension the fold
+    halves: with that layer packed, the *architecture* is built to match the mangled weight and
+    nothing mismatches. The load then fails on the leftover ``weight_scale_2`` with a message about
+    Wan variants with extra conditioning branches — a diagnosis pointing somewhere else entirely.
+
+    Detection is the union of two structural tests: a ``weight_scale_2`` beside the weight, which is
+    what the decode keys on, and a packed ``uint8`` weight carrying a block scale without one, which
+    is the half-state :func:`_find_nvfp4_layers` refuses by name. Keying on the first alone would
+    miss the second, and the fold takes it just as readily.
+
+    Narrower than the decode in one way worth knowing: at the Wan seam a bundled nvfp4 text encoder
+    in an all-in-one file is removed by ``_drop_benign_extra_keys`` before the fold, so it is dropped
+    rather than refused.
+    """
+    named = {
+        key[: -len(WEIGHT_SCALE_2_SUFFIX)]
+        for key in sd
+        if isinstance(key, str)
+        and key.endswith(WEIGHT_SCALE_2_SUFFIX)
+        and f"{key[: -len(WEIGHT_SCALE_2_SUFFIX)]}.weight" in sd
+    }
+    # A packed weight with a block scale and no global one is the half-state `_find_nvfp4_layers`
+    # refuses by name. Keying on `weight_scale_2` alone would miss it, and the fold takes it just as
+    # readily -- so the detection here is the union, not the narrower test.
+    half = {
+        weight_key[: -len(".weight")]
+        for weight_key, _scale_key in iter_weight_scale_pairs(sd)
+        if getattr(sd.get(weight_key), "dtype", None) is torch.uint8
+    }
+    packed = sorted(named | half)
+    if packed:
+        raise ValueError(
+            f"{what} carries {len(packed)} nvfp4 layer(s) (e.g. {', '.join(packed[:3])}) and this loader does "
+            "not support nvfp4. Their weights are two 4-bit codes per byte, so folding a scale into them "
+            "produces a tensor of half the width the model needs. Use the fp8 or bf16 build of this checkpoint."
+        )
+
+
 def pop_nvfp4_layers(sd: dict[str, Any], header_layers: Mapping[str, Any] | None = None) -> dict[str, NVFP4Payload]:
     """Take every nvfp4 layer's packed tensors out of ``sd`` and drop the rest of its side channel.
 
@@ -324,9 +345,9 @@ def split_nvfp4_rows(path: str, payload: NVFP4Payload, parts: int) -> list[NVFP4
     That is refused rather than guessed. The global scale belongs to every part.
     """
     rows = payload.out_features
-    if rows % parts or (rows // parts) % _TILE_ROWS:
+    if rows % parts or (rows // parts) % TILE_ROWS:
         raise ValueError(
-            f"nvfp4 layer '{path}': its {rows} rows do not split into {parts} parts of whole {_TILE_ROWS}-row "
+            f"nvfp4 layer '{path}': its {rows} rows do not split into {parts} parts of whole {TILE_ROWS}-row "
             "scale tiles."
         )
     step = rows // parts

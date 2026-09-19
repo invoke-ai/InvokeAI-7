@@ -270,7 +270,7 @@ describe('StagingBar thumbnail strip', () => {
     await interact(() => trigger!.click());
 
     const menuItem = Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]')).find((item) =>
-      item.textContent?.includes('Save & Continue')
+      item.textContent?.includes('Keep as Hidden Layer')
     );
     expect(menuItem).toBeDefined();
     await interact(() => menuItem!.click());

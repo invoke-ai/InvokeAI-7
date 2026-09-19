@@ -2,17 +2,17 @@
   "build": {
     "launchpad": {
       "baseline": {
-        "brotliBytes": 883578,
+        "brotliBytes": 889734,
         "cssRawBytes": 2159,
         "fontRawBytes": 219480,
-        "gzipBytes": 882731,
+        "gzipBytes": 888487,
         "imageRawBytes": 156376,
-        "initialRawBytes": 2085140,
-        "largestAssetRawBytes": 754382,
+        "initialRawBytes": 2111810,
+        "largestAssetRawBytes": 778932,
         "otherAssetRawBytes": 0,
-        "ownedRawBytes": 80359,
-        "requestCount": 38,
-        "scriptRequestCount": 22,
+        "ownedRawBytes": 87580,
+        "requestCount": 37,
+        "scriptRequestCount": 21,
         "sourceOwners": [
           "package:@ark-ui/react",
           "package:@chakra-ui/react",
@@ -202,7 +202,6 @@
           "source:src/platform/transport/deploymentBase.ts",
           "source:src/platform/transport/http.ts",
           "source:src/platform/transport/socketHub.ts",
-          "source:src/platform/ui/BrandIcon.tsx",
           "source:src/platform/ui/Button.tsx",
           "source:src/platform/ui/ColorPicker.tsx",
           "source:src/platform/ui/Combobox.tsx",
@@ -235,6 +234,7 @@
           "source:src/platform/ui/ToggleDot.tsx",
           "source:src/platform/ui/Toolbar.tsx",
           "source:src/platform/ui/Tooltip.tsx",
+          "source:src/platform/ui/VendoredIcon.tsx",
           "source:src/platform/ui/color.ts",
           "source:src/platform/ui/colorPickerStore.ts",
           "source:src/platform/ui/colorPickerSync.ts",
@@ -318,17 +318,17 @@
     },
     "editor": {
       "baseline": {
-        "brotliBytes": 1207865,
+        "brotliBytes": 1216517,
         "cssRawBytes": 2159,
         "fontRawBytes": 219480,
-        "gzipBytes": 1201982,
+        "gzipBytes": 1210216,
         "imageRawBytes": 156376,
-        "initialRawBytes": 3074577,
-        "largestAssetRawBytes": 754382,
+        "initialRawBytes": 3109003,
+        "largestAssetRawBytes": 778932,
         "otherAssetRawBytes": 0,
-        "ownedRawBytes": 135048,
-        "requestCount": 88,
-        "scriptRequestCount": 72,
+        "ownedRawBytes": 139420,
+        "requestCount": 86,
+        "scriptRequestCount": 70,
         "sourceOwners": [
           "package:@ark-ui/react",
           "package:@chakra-ui/react",
@@ -702,7 +702,6 @@
           "source:src/platform/transport/deploymentBase.ts",
           "source:src/platform/transport/http.ts",
           "source:src/platform/transport/socketHub.ts",
-          "source:src/platform/ui/BrandIcon.tsx",
           "source:src/platform/ui/Button.tsx",
           "source:src/platform/ui/ColorPicker.tsx",
           "source:src/platform/ui/Combobox.tsx",
@@ -736,6 +735,7 @@
           "source:src/platform/ui/ToggleDot.tsx",
           "source:src/platform/ui/Toolbar.tsx",
           "source:src/platform/ui/Tooltip.tsx",
+          "source:src/platform/ui/VendoredIcon.tsx",
           "source:src/platform/ui/color.ts",
           "source:src/platform/ui/colorPickerStore.ts",
           "source:src/platform/ui/colorPickerSync.ts",
@@ -1028,7 +1028,7 @@
       "source": "src/app/WorkbenchApp.tsx"
     }
   },
-  "capturedAt": "2026-09-15",
+  "capturedAt": "2026-09-18",
   "developmentInvalidation": {
     "platformUiBarrel": {
       "specifier": "@platform/ui",

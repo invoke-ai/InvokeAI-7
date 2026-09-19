@@ -8,18 +8,18 @@ branches are exercised: the one that keeps fp8 pops every block scale, the one t
 
 import json
 from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import MagicMock
 
 import pytest
 import torch
-from safetensors.torch import save_file
+from safetensors.torch import load_file, save_file
 
 from invokeai.backend.model_manager.configs.mistral_encoder import MistralEncoder_Checkpoint_Config
 from invokeai.backend.model_manager.load.model_loaders import mistral_encoder
 from invokeai.backend.model_manager.load.model_loaders.mistral_encoder import MistralEncoderCheckpointLoader
 from invokeai.backend.model_manager.taxonomy import MistralVariantType
 from invokeai.backend.quantization.nvfp4 import NVFP4Linear, NVFP4Payload
+from tests.fixtures.loader_seams import Seam, prepare
+from tests.fixtures.quantized_payloads import comfy_quant_marker, quantize_convrot
 
 # The loader derives head counts as projection rows // 128: two query heads over one key/value head, so a config
 # that mixes up the two lookups, or falls back to the cow model's, cannot build this model. Dimensions are multiples
@@ -41,10 +41,6 @@ NVFP4_PROJECTIONS = {
     "mlp.down_proj": (HIDDEN, INTERMEDIATE),
 }
 FP8_PROJECTION = "self_attn.v_proj"
-
-
-def _marker_blob(marker: dict) -> torch.Tensor:
-    return torch.frombuffer(bytearray(json.dumps(marker).encode("utf-8")), dtype=torch.uint8)
 
 
 def _packed_bytes(rows: int, columns: int) -> int:
@@ -83,7 +79,7 @@ def _write_checkpoint(tmp_path: Path, evidence: str) -> tuple[Path, dict[str, to
         if evidence == "header":
             header[path] = {"format": "nvfp4"}
         else:
-            tensors[f"{path}.comfy_quant"] = _marker_blob({"format": "nvfp4"})
+            tensors[f"{path}.comfy_quant"] = comfy_quant_marker({"format": "nvfp4"})
         return torch.where(positive, 0.5, -0.5)
 
     for layer in range(LAYERS):
@@ -94,7 +90,7 @@ def _write_checkpoint(tmp_path: Path, evidence: str) -> tuple[Path, dict[str, to
         v_proj = f"{prefix}model.layers.{layer}.{FP8_PROJECTION}"
         tensors[f"{v_proj}.weight"] = fp8_values.to(torch.float8_e4m3fn)
         tensors[f"{v_proj}.weight_scale"] = torch.tensor(0.5)
-        tensors[f"{v_proj}.comfy_quant"] = _marker_blob({"format": "float8_e4m3fn"})
+        tensors[f"{v_proj}.comfy_quant"] = comfy_quant_marker({"format": "float8_e4m3fn"})
         fp8_dequantized[layer] = fp8_values * 0.5
 
         for norm in ("input_layernorm", "post_attention_layernorm"):
@@ -112,27 +108,31 @@ def _write_checkpoint(tmp_path: Path, evidence: str) -> tuple[Path, dict[str, to
     return checkpoint, expected, fp8_dequantized
 
 
-def _loader(monkeypatch: pytest.MonkeyPatch, keep_fp8: bool) -> tuple[MistralEncoderCheckpointLoader, list[str]]:
-    """The loader, and a log of the steps that widen weights, each recorded with whether room was made first."""
-    monkeypatch.setattr(mistral_encoder.TorchDevice, "choose_torch_device", lambda: torch.device("cpu"))
-    monkeypatch.setattr(mistral_encoder.TorchDevice, "choose_bfloat16_safe_dtype", lambda _device: COMPUTE_DTYPE)
-    monkeypatch.setattr(mistral_encoder, "should_keep_fp8_weights", lambda _device: keep_fp8)
-    loader = object.__new__(MistralEncoderCheckpointLoader)
-    loader._ram_cache = SimpleNamespace(make_room=MagicMock())
-    # Supplied because the loader reads it when it decides whether to keep fp8 weights packed:
-    # a fixture built with `object.__new__` has to provide every attribute that path touches.
-    loader._torch_device = torch.device("cpu")
+SEAM = Seam(
+    loader=MistralEncoderCheckpointLoader,
+    module=mistral_encoder,
+    entry="_load_text_encoder",
+    patches_device=True,
+    compute_dtype=COMPUTE_DTYPE,
+    # The loader takes its dtype from the device and has no FP8 Storage pass, so neither is supplied:
+    # an attribute a loader does not read is one a test must not make it look like it reads.
+    sets_torch_dtype=False,
+    casts_fp8_storage=False,
+)
 
-    widening: list[str] = []
-    for name in ("_drop_quantization_metadata", "split_fp8_scaled_layers"):
-        original = getattr(mistral_encoder, name)
+#: The two steps that widen weights. Room has to have been reserved before either runs.
+WIDENING = ("_drop_quantization_metadata", "split_fp8_scaled_layers")
 
-        def recording(*args, _name=name, _original=original, **kwargs):
-            widening.append(f"{_name}, reserved={loader._ram_cache.make_room.called}")
-            return _original(*args, **kwargs)
 
-        monkeypatch.setattr(mistral_encoder, name, recording)
-    return loader, widening
+def _fp8_matmul(available: bool):
+    """The encoder asks the device, not the model config, so this is the only input to the
+    keep-or-fold decision -- stubbing the decision itself would let a loader that stopped
+    asking stay green."""
+
+    def geometry(patch):
+        patch.setattr(mistral_encoder, "should_keep_fp8_weights", lambda _device: available)
+
+    return geometry
 
 
 def _config(checkpoint: Path) -> MistralEncoder_Checkpoint_Config:
@@ -148,9 +148,9 @@ def test_an_nvfp4_mixed_checkpoint_keeps_its_nvfp4_layers_packed_under_either_fp
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, keep_fp8: bool, evidence: str
 ) -> None:
     checkpoint, expected, fp8_dequantized = _write_checkpoint(tmp_path, evidence)
-    loader, widening = _loader(monkeypatch, keep_fp8)
+    run = prepare(SEAM, monkeypatch, geometry=_fp8_matmul(keep_fp8), observe=WIDENING)
 
-    model = loader._load_text_encoder(_config(checkpoint))
+    model = run.load(_config(checkpoint))
 
     assert len(model.layers) == LAYERS
     assert (model.config.num_attention_heads, model.config.num_key_value_heads) == (2, 1)
@@ -169,7 +169,7 @@ def test_an_nvfp4_mixed_checkpoint_keeps_its_nvfp4_layers_packed_under_either_fp
             assert torch.equal(v_proj.weight.float() * v_proj.weight_scale, weight)
         else:
             assert torch.equal(v_proj.weight, weight.to(COMPUTE_DTYPE))
-    assert all(step.endswith("reserved=True") for step in widening), widening
+    assert run.order and all(reserved for _step, reserved in run.order), run.order
 
     # One reservation for what the state dict ends up holding: the nvfp4 layers packed (the LM head not at all), the
     # fp8 weights at one byte where the keep branch holds them and at the compute dtype where they are dequantized,
@@ -183,23 +183,55 @@ def test_an_nvfp4_mixed_checkpoint_keeps_its_nvfp4_layers_packed_under_either_fp
         + full_precision_elements * COMPUTE_DTYPE.itemsize
         + 64  # tekken_model
     )
-    (reserved,), _ = loader._ram_cache.make_room.call_args
-    assert loader._ram_cache.make_room.call_count == 1
-    assert abs(reserved - expected_bytes) < 1024, (reserved, expected_bytes)
+    assert len(run.reserved) == 1
+    assert abs(run.reserved[0] - expected_bytes) < 1024, (run.reserved, expected_bytes)
+
+
+@pytest.mark.parametrize("keep_fp8", [False, True], ids=["fp8_folded", "fp8_kept"])
+def test_an_int8_convrot_layer_is_refused_rather_than_folded_unrotated(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, keep_fp8: bool
+) -> None:
+    """This encoder has no int8 branch, and `int8_tensorwise` shares the fp8 key layout, so the fold
+    applied the scale and skipped the inverse rotation -- a weight of the right shape and magnitude
+    that bears no relation to the stored one.
+
+    Both branches, because the first version of this guard only covered one. `keep_fp8` is
+    unconditionally true on CUDA, and that branch's `extract_fp8_scaled_layers` pops every scale key
+    -- discarding the ones whose weight is not float8 -- and deletes the markers with them. A check
+    downstream of it is a no-op on the device almost everyone loads on.
+    """
+    checkpoint, _, _ = _write_checkpoint(tmp_path, evidence="none")
+    tensors = load_file(checkpoint)
+    target = f"model.layers.0.{FP8_PROJECTION}"
+    payload = quantize_convrot(torch.randn(KV_ROWS, HIDDEN), group_size=64)
+    tensors[f"{target}.weight"] = payload.codes
+    tensors[f"{target}.weight_scale"] = payload.scale
+    tensors[f"{target}.comfy_quant"] = comfy_quant_marker(
+        {"format": "int8_tensorwise", "convrot": True, "convrot_groupsize": 64}
+    )
+    save_file(tensors, checkpoint)
+    run = prepare(SEAM, monkeypatch, geometry=_fp8_matmul(keep_fp8))
+
+    with pytest.raises(ValueError, match="quantized with convrot"):
+        run.load(_config(checkpoint))
+
+    # And before the cache was evicted for a load that cannot finish. The reservation sits fifty
+    # lines below the check; a guard placed after it would cost a 16 GiB encoder's worth of room.
+    assert run.reserved == []
 
 
 def test_a_checkpoint_without_nvfp4_layers_loads_as_before(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     checkpoint, expected, _ = _write_checkpoint(tmp_path, evidence="none")
-    loader, widening = _loader(monkeypatch, keep_fp8=False)
+    run = prepare(SEAM, monkeypatch, geometry=_fp8_matmul(False), observe=WIDENING)
 
-    model = loader._load_text_encoder(_config(checkpoint))
+    model = run.load(_config(checkpoint))
 
     for path, weight in expected.items():
         module = model.get_submodule(path)
         assert type(module) is torch.nn.Linear, path
         assert torch.equal(module.weight, weight.to(COMPUTE_DTYPE)), path
-    assert loader._ram_cache.make_room.call_count == 1
-    assert all(step.endswith("reserved=True") for step in widening), widening
+    assert len(run.reserved) == 1
+    assert run.order and all(reserved for _step, reserved in run.order), run.order
 
 
 def test_the_config_reads_layer_and_head_counts_through_packed_projections() -> None:

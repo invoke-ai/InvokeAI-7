@@ -139,6 +139,27 @@ describe('floatWidget', () => {
   });
 });
 
+describe('closeFloatingWidget', () => {
+  it('drops the window without docking, leaving the rail and its disclosure untouched', () => {
+    const floated = floatGallery();
+    const rightBefore = getActiveProject(floated).widgetRegions.right;
+    const state = workbenchReducer(floated, { instanceId: 'gallery', type: 'closeFloatingWidget' });
+    const project = getActiveProject(state);
+
+    expect(project.floatingWidgets).toBeUndefined();
+    expect(project.widgetRegions.right).toBe(rightBefore);
+    expect(getRegionsHolding(project, 'gallery')).toEqual([]);
+    // The instance survives for a later placement, as a closed tab's does.
+    expect(project.widgetInstances.gallery).toBeDefined();
+  });
+
+  it('is a no-op for an instance that is not floating', () => {
+    const state = createInitialWorkbenchState();
+
+    expect(workbenchReducer(state, { instanceId: 'gallery', type: 'closeFloatingWidget' })).toBe(state);
+  });
+});
+
 describe('dockFloatingWidget', () => {
   it('returns the instance to its origin region as the active widget', () => {
     const state = workbenchReducer(floatGallery(), { instanceId: 'gallery', type: 'dockFloatingWidget' });

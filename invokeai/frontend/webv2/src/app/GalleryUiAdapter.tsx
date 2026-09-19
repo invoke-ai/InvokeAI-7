@@ -35,7 +35,7 @@ export const GalleryUiAdapterProvider = ({ children }: { children: ReactNode }) 
       liveFollowEnabled: project.settings.showProgressImagesInViewer,
     }));
   const livePreview = useLivePreviewFollow();
-  const { account, gallery, notifications, widgets } = useWorkbenchCommands();
+  const { gallery, notifications, widgets } = useWorkbenchCommands();
   const queries = useWorkbenchQueries();
   const accountScope = captureAccountScope();
   const exportProject = useExportLibraryProject();
@@ -66,13 +66,15 @@ export const GalleryUiAdapterProvider = ({ children }: { children: ReactNode }) 
       liveFollowEnabled,
       progressSessions: livePreview.gallerySessions,
       pinnedProgressSessionId: livePreview.pinnedSessionId,
-      followProgressSession: (sessionId) => {
+      followedProgressSessionId: livePreview.followedSessionId,
+      followProgressSession: (sessionId, { revealPreview }) => {
         if (!isAccountScopeCurrent(accountScope) || !queries.isActiveProject(projectId)) {
           return;
         }
-        account.updateProjectPreferences({ showProgressImagesInViewer: true });
-        livePreview.pin(sessionId);
-        openWorkbenchWidget('preview');
+        livePreview.follow(sessionId);
+        if (revealPreview) {
+          openWorkbenchWidget('preview');
+        }
       },
       notifications,
       projectId,
@@ -83,7 +85,6 @@ export const GalleryUiAdapterProvider = ({ children }: { children: ReactNode }) 
       },
     }),
     [
-      account,
       accountScope,
       antialiasProgressImages,
       exportProject,

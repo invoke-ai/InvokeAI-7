@@ -1,8 +1,8 @@
 import { HStack, Icon, Link, Spinner, Stack, Text } from '@chakra-ui/react';
 import { useCapabilities } from '@features/identity';
 import { useMountEffect } from '@platform/react/useMountEffect';
-import { DiscordIcon, GithubIcon } from '@platform/ui/BrandIcon';
 import { JsonPreview } from '@platform/ui/JsonPreview';
+import { DiscordIcon, GithubIcon } from '@platform/ui/VendoredIcon';
 import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 

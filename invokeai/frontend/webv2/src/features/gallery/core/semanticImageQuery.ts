@@ -47,6 +47,16 @@ export const gallerySemanticReferenceKey = (reference: GallerySemanticReference 
   }
 };
 
+/**
+ * The reference a semantic-search field commits for its text: whitespace is
+ * not a query, so blank text reads as no search at all.
+ */
+export const toGallerySemanticTextReference = (text: string): GallerySemanticReference | null => {
+  const query = text.trim();
+
+  return query ? { kind: 'text', query } : null;
+};
+
 /** The label-free shape a reference contributes to query cache keys. */
 export const toGallerySemanticQuery = (reference: GallerySemanticReference): GallerySemanticQuery => {
   switch (reference.kind) {

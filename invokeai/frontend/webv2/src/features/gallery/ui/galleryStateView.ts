@@ -1,6 +1,7 @@
 import type { GalleryBoard, GalleryImage, GalleryOrderDir, GalleryView } from '@features/gallery/core/types';
 
 import {
+  isDateBoardId,
   legacyGeneratedImageToGalleryItem,
   toGalleryItemKey,
   type GalleryItem,
@@ -64,6 +65,8 @@ export interface GalleryStateView {
   selectedItemKeys: GalleryItemKey[];
   /** Active image-similarity query, rendered as a chip in place of the search text. */
   semanticImageQuery: GallerySemanticReference | null;
+  /** The semantic field's text while the field is in semantic mode; null in metadata mode. */
+  semanticSearchText: string | null;
   settings: GallerySettings;
   /** The listing is restricted to starred items. */
   starredOnly: boolean;
@@ -81,9 +84,26 @@ export const getGalleryStarredOnly = (values: Record<string, unknown>): boolean 
 export const getGallerySemanticImageQuery = (values: Record<string, unknown>): GallerySemanticReference | null =>
   parseGallerySemanticReference(values.semanticImageQuery);
 
+/** Semantic mode is the presence of its text: null means the field searches metadata. */
+export const getGallerySemanticSearchText = (values: Record<string, unknown>): string | null =>
+  typeof values.semanticSearchText === 'string' ? values.semanticSearchText : null;
+
 /** The saved board choice as persisted, before any resolution against loaded boards. */
 export const getGalleryRawSelectedBoardId = (values: Record<string, unknown>): string | null =>
   typeof values.selectedBoardId === 'string' ? values.selectedBoardId : null;
+
+/**
+ * Where new results and uploads land: the board the person picked, else the
+ * project's own board. A date bucket cannot hold items, so it defers to the
+ * project board too; an explicit Uncategorized (`'none'`) choice is kept.
+ */
+export const getGalleryDestinationBoardId = (values: Record<string, unknown>): string | null => {
+  const selectedBoardId = getGalleryRawSelectedBoardId(values);
+
+  return selectedBoardId !== null && !isDateBoardId(selectedBoardId)
+    ? selectedBoardId
+    : getGalleryProjectBoardId(values);
+};
 
 /**
  * Where new results land, resolved against the boards this install actually has.
@@ -190,11 +210,24 @@ export const getGalleryCompareImage = (values: Record<string, unknown>): Gallery
     selectedImageName: null,
   });
 
+/** The infinite window's anchor page; 0 whenever the window covers the top of the listing. */
+export const getGalleryAnchoredWindowPage = (values: Record<string, unknown>): number => {
+  const page = getGalleryPage(values);
+
+  return getGallerySettings(values).paginationMode === 'infinite' && page > 0 ? page : 0;
+};
+
+/**
+ * `starredStripItems` are the strip the grid pins above the listing: a
+ * starred selection lives there, never in the unstarred listing, and still
+ * counts as visible.
+ */
 export const getGalleryStateView = (
   values: Record<string, unknown>,
   backendBoards: GalleryBoard[],
   backendItems: GalleryItem[] | null,
-  isLoading: boolean
+  isLoading: boolean,
+  starredStripItems: readonly GalleryItem[] = []
 ): GalleryStateView => {
   const localItems = getBoundedRecentImages(values.recentImages).map(legacyGeneratedImageToGalleryItem);
   const items = backendItems ?? (isLoading ? [] : localItems);
@@ -205,8 +238,9 @@ export const getGalleryStateView = (
       : selectedItem
         ? toGalleryItemKey(selectedItem)
         : null;
+  const isVisible = (item: GalleryItem) => toGalleryItemKey(item) === persistedSelectedItemKey;
   const visibleSelectedItemKey =
-    persistedSelectedItemKey && items.some((item) => toGalleryItemKey(item) === persistedSelectedItemKey)
+    persistedSelectedItemKey && (items.some(isVisible) || starredStripItems.some(isVisible))
       ? persistedSelectedItemKey
       : null;
   const selectedItemKeys = getPersistedSelectedGalleryItemKeys(values);
@@ -234,7 +268,6 @@ export const getGalleryStateView = (
     compareImageKey !== visibleSelectedItemKey;
   const semanticImageQuery = getGallerySemanticImageQuery(values);
   const page = getGalleryPage(values);
-  const isAnchoredInfiniteWindow = settings.paginationMode === 'infinite' && page > 0;
   const selectedImageQuery = getGallerySelectedImageQuery(values);
   const revealTargetPage =
     settings.paginationMode === 'paginated' &&
@@ -252,7 +285,7 @@ export const getGalleryStateView = (
       : null;
 
   return {
-    anchoredWindowPage: isAnchoredInfiniteWindow ? page : 0,
+    anchoredWindowPage: getGalleryAnchoredWindowPage(values),
     boards,
     compareImageKey,
     galleryView,
@@ -270,6 +303,7 @@ export const getGalleryStateView = (
         ? [visibleSelectedItemKey, ...selectedItemKeys]
         : selectedItemKeys,
     semanticImageQuery,
+    semanticSearchText: getGallerySemanticSearchText(values),
     settings,
     starredOnly,
   };

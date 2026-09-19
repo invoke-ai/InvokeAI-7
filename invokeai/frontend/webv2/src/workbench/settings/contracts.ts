@@ -54,6 +54,8 @@ export interface StoredGeneratePreset {
 
 /** User-tunable appearance + behavior preferences surfaced in the Settings modal. */
 export interface WorkbenchPreferences {
+  /** The alpha-build notice was dismissed; shown once per account until then. */
+  alphaNoticeAcknowledged: boolean;
   themeId: WorkbenchThemeId;
   reduceMotion: boolean;
   showFocusRegionHighlight: boolean;

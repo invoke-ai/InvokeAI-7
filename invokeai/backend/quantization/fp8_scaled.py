@@ -24,6 +24,8 @@ from typing import Any, Iterable, Mapping
 
 import torch
 
+from invokeai.backend.quantization.block_scale_tiles import unblock_scale_grid
+
 FP8_DTYPE = torch.float8_e4m3fn
 
 # Every float8 dtype a checkpoint may store weights in. Scale *recovery* must cover all of them:
@@ -45,6 +47,18 @@ COMFY_QUANT_SUFFIX = ".comfy_quant"
 
 # Standalone marker keys some producers emit alongside the tensors. They carry no per-layer data.
 STRAY_METADATA_KEYS = ("scaled_fp8",)
+
+# OCP Microscaling. The weights are ordinary fp8; what differs is the scale, which is one E8M0
+# exponent per block of 32 elements, laid out in cuBLAS tiles. Producers name it in the marker.
+MXFP8_FORMAT = "mxfp8"
+# MX is 32 by definition, and both published builds say so. The width is still read off the shapes
+# and checked against this -- Krea-2's build declares no `block_size` at all, so for that file the
+# inferred width is the only number there is, and a grid implying another width is a producer this
+# decode has not seen rather than something to guess at.
+MXFP8_BLOCK_SIZE = 32
+# E8M0 is a bare biased exponent; 0xFF is reserved as NaN.
+_E8M0_BIAS = 127
+_E8M0_NAN = 0xFF
 
 
 @dataclass
@@ -313,6 +327,43 @@ def is_scale_metadata_key(key: Any) -> bool:
     )
 
 
+def reject_quantized_side_channel(sd: Mapping[str, Any], what: str) -> None:
+    """Refuse a checkpoint carrying a quantization side channel to a loader that handles none.
+
+    Several loaders read a state dict and hand it straight to the model. Where they load
+    non-strictly — the VAEs and the Z-Image ControlNet — a quantized file does not fail: it *loads*,
+    with the ``weight_scale`` dropped as an unexpected key. The worst shape builds its module under
+    ``init_empty_weights`` and calls ``load_state_dict(assign=True, strict=False)``, so the fp8
+    codes become the parameters with no cast to widen them; every weight is then off by
+    ``1/weight_scale`` — orders of magnitude — and the only trace is a DEBUG line.
+
+    Two callers load strictly (ERNIE-Image, the Anima LLLite adapter) and so already raise on the
+    orphaned key. There this buys a message that names the cause instead of a list of unexpected
+    tensors, and for ERNIE it refuses before a multi-gigabyte state dict has been reserved for and
+    cast.
+
+    Refusing is the honest outcome while no such build exists: the alternative is not "it works
+    slightly worse", it is a model that generates noise with nothing to point at. Supporting a
+    scheme here is a separate piece of work, and this error is what would announce that it is needed.
+
+    Scoped to the *side channel*. A raw fp8 checkpoint with no scale is out of scope because it
+    cannot fail quietly: a loader that casts handles e4m3 exactly, and one that does not — the
+    Z-Image ControlNet casts nowhere — installs fp8 parameters that raise at the first ``F.linear``
+    on the dtype mismatch against the activations ("expected m1 and m2 to have the same dtype").
+    """
+    carried = sorted(key for key in sd if is_scale_metadata_key(key))
+    if carried:
+        # Keyed on the side channel rather than on the weights' dtype, so the wording says what was
+        # actually seen: a dense weight beside a stray scale key trips this too, and telling a user
+        # their checkpoint "is quantized" when it merely carries the key would send them looking for
+        # a build that does not exist.
+        raise ValueError(
+            f"{what} carries a quantization side channel ({len(carried)} key(s), e.g. "
+            f"{', '.join(carried[:3])}) and this loader does not support quantized checkpoints: its weights "
+            "would be loaded without their scales applied. Use an unquantized build of this model."
+        )
+
+
 def _strip_scale_suffix(key: str) -> tuple[str, bool] | None:
     """Return ``(module path, is_input_scale)``, or None if ``key`` is not a scale key."""
     for suffix in WEIGHT_SCALE_SUFFIXES:
@@ -353,21 +404,11 @@ def _usable_input_scale(scale: torch.Tensor | None) -> torch.Tensor | None:
     return scale
 
 
-# OCP Microscaling (MXFP8) stores one E8M0 exponent per 32-element block. safetensors has no E8M0
-# dtype, so producers write the exponents as `uint8`.
-#
-# We refuse such checkpoints rather than guessing at them. Decoding the byte as `2**(v-127)` and
-# expanding it 32-wide is *not* sufficient, established against a real file: the MXFP8 and the
-# scaled-fp8 build of `krea2TurboOfficialComfy` share all 174 bf16 tensors bit-for-bit, so the
-# scaled build is an exact reference for the same weights -- and against it the decoded weights
-# reach a correlation of only 0.60, producing pure noise end to end. The measured per-block scale
-# has no monotonic relation to the byte (112 and 116 yield the same true scale), which points at a
-# swizzled scale layout rather than a wrong exponent bias. Supporting it means implementing that
-# de-swizzle, not adding a constant.
-#
-# Refusing is the point: with the block-wise expansion in place, such a file otherwise *loads* and
-# generates a garbage image with nothing in the log.
-_MX_SCALE_DTYPES = (torch.uint8,)
+# safetensors has no E8M0 dtype, so producers write the exponents as `uint8`; torch grew
+# `float8_e8m0fnu` later and another producer may use it, so both spellings are accepted. Neither
+# says anything on its own -- a `uint8` tensor beside an fp8 weight could be any producer's idea --
+# which is why `decode_mx_block_scales` requires the layer to be *named* mxfp8 as well.
+_MX_SCALE_DTYPES = tuple(dtype for dtype in (torch.uint8, getattr(torch, "float8_e8m0fnu", None)) if dtype is not None)
 
 
 def _reject_unparsed_scales(sd: Mapping[str, Any]) -> None:
@@ -390,12 +431,54 @@ def _reject_unparsed_scales(sd: Mapping[str, Any]) -> None:
         )
 
 
-def _reject_mx_scale(path: str) -> None:
-    raise NotImplementedError(
-        f"'{path}' carries an MXFP8 (OCP Microscaling) block scale, which InvokeAI cannot decode "
-        "yet: the exponents are stored in a swizzled layout. Use the scaled-fp8 or bf16 build of "
-        "this checkpoint instead. Loading it anyway would produce a noise image, not a warning."
-    )
+def decode_mx_block_scales(
+    path: str, weight: torch.Tensor, scale: torch.Tensor, hints: Mapping[str, Any]
+) -> torch.Tensor:
+    """Turn an MXFP8 exponent grid into an ordinary block-wise float scale.
+
+    Two things have to happen and both are silent when skipped. The grid is stored in cuBLAS tiles,
+    so read row by row it pairs blocks with the wrong rows -- that is what made an earlier attempt
+    at this decode reach a correlation of 0.60 against a reference build and generate noise. And the
+    bytes are E8M0 exponents, so the value is ``2**(v - 127)``, not the byte.
+
+    The layer must also *say* it is mxfp8, in a per-tensor ``comfy_quant`` marker or the
+    ``_quantization_metadata`` header -- both published builds do, one each way. A ``uint8`` tensor
+    beside an fp8 weight is otherwise just an unknown producer's convention, and guessing at it is
+    how this class of defect happens. The block width comes from the shapes rather than from the
+    marker, which only cross-checks it: Comfy-Org's Krea-2 build omits ``block_size`` entirely.
+
+    Returns the row-major ``[rows, blocks]`` grid, which ``expand_weight_scale`` widens like any
+    other block-wise scale. Block-wise scales never reach ``_scaled_mm`` (see
+    :func:`is_matmul_usable_scale`), so an MXFP8 layer is always folded -- which is also what the
+    hardware requires: block-scaled ``_scaled_mm`` needs Blackwell and torch >= 2.8.
+    """
+    if hints.get("format") != MXFP8_FORMAT:
+        raise NotImplementedError(
+            f"'{path}' has a {scale.dtype} weight_scale beside an fp8 weight, which looks like an MXFP8 "
+            "(OCP Microscaling) exponent grid, but no `comfy_quant` marker or `_quantization_metadata` entry "
+            f"names it '{MXFP8_FORMAT}'. Its layout is therefore unknown, and reading it as one would load "
+            "cleanly and generate noise. Use the scaled-fp8 or bf16 build of this checkpoint."
+        )
+    if scale.dim() != 2 or scale.shape[0] != weight.shape[0] or weight.dim() != 2:
+        raise ValueError(
+            f"'{path}': an MXFP8 scale must be a 2-D [rows, blocks] grid matching the weight's rows; got "
+            f"{tuple(scale.shape)} for a {tuple(weight.shape)} weight."
+        )
+    blocks = scale.shape[1]
+    block_size, remainder = divmod(weight.shape[1], blocks)
+    declared = hints.get("block_size", MXFP8_BLOCK_SIZE)
+    if remainder or declared != block_size:
+        raise ValueError(
+            f"'{path}': a {tuple(scale.shape)} grid does not describe a {tuple(weight.shape)} weight in blocks of "
+            f"{declared}."
+        )
+
+    exponents = unblock_scale_grid(scale.view(torch.uint8)).to(torch.int32)
+    if bool((exponents == _E8M0_NAN).any()):
+        # Reserved in OCP E8M0. Decoding it as an exponent would give 2**128; propagating NaN would
+        # poison the layer just as quietly. Neither published build contains one.
+        raise ValueError(f"'{path}': its MXFP8 scale grid contains the reserved E8M0 value 0x{_E8M0_NAN:02X} (NaN).")
+    return torch.exp2((exponents - _E8M0_BIAS).to(torch.float32))
 
 
 def _normalize_weight_scale(scale: torch.Tensor) -> torch.Tensor:
@@ -414,12 +497,29 @@ def _normalize_weight_scale(scale: torch.Tensor) -> torch.Tensor:
     return scale.flatten()
 
 
-def expand_weight_scale(weight: torch.Tensor, scale: torch.Tensor) -> torch.Tensor:
+def reject_undecoded_mx_scale(path: str, scale: Any) -> None:
+    """Refuse an MX exponent grid to anything that is about to multiply it as a number.
+
+    Only ``extract_fp8_scaled_layers`` decodes these (see :func:`decode_mx_block_scales`); several
+    loaders instead fold ``weight_scale`` into the weight directly, and there the bytes would be
+    used as linear multipliers -- values around 120-135 rather than ``2**(v-127)``, and paired with
+    the wrong rows besides. That loads cleanly and generates noise, which is the failure this whole
+    decode exists to prevent, arriving through the door it does not cover.
+    """
+    if getattr(scale, "dtype", None) in _MX_SCALE_DTYPES:
+        raise NotImplementedError(
+            f"'{path}' carries an MXFP8 (OCP Microscaling) exponent grid, and this loader folds weight scales "
+            "without decoding them. Its weights would be scaled by the raw exponent bytes and generate noise. "
+            "Use the scaled-fp8 or bf16 build of this checkpoint."
+        )
+
+
+def expand_weight_scale(weight: torch.Tensor, scale: torch.Tensor, path: str | None = None) -> torch.Tensor:
     """Broadcast ``scale`` to line up with ``weight`` for an elementwise multiply.
 
     Handles the three layouts producers emit:
 
-    - per-tensor (0-d / single element) — returned unchanged, broadcasting handles it;
+    - per-tensor (0-d / single element) — flattened to 0-d, broadcasting handles it;
     - per-output-channel (one entry per row) — reshaped to ``(rows, 1, ...)``;
     - block-wise (one entry per block along one or more dims) — each axis is
       ``repeat_interleave``d by that axis' block size.
@@ -428,20 +528,27 @@ def expand_weight_scale(weight: torch.Tensor, scale: torch.Tensor) -> torch.Tens
     a checkpoint using that layout fails to load outright. That is the layout ComfyUI's own
     dequantizer expands, and the FLUX.2 loader used to expand before this module centralized the
     logic.
+
+    ``path`` is the layer the scale belongs to, and only appears in the error. On a checkpoint with
+    a thousand Linears, "which one" is the whole of the diagnosis.
     """
+    reject_undecoded_mx_scale(path or "<weight_scale>", scale)
     if scale.numel() == 1:
-        return scale
+        # Flattened rather than returned as-is: a `(1, 1, 1)` scale on an `(out, in)` weight would
+        # otherwise broadcast back-aligned into a `(1, out, in)` product.
+        return scale.reshape(())
     if scale.dim() <= 1:
         if scale.numel() != weight.shape[0]:
             # A 1-D scale is per-output-channel by definition, so any other length means the file
             # does not describe this weight — most likely a block-wise scale flattened by the
             # producer, whose block structure is not recoverable from the tensor alone. Say so:
-            # left to broadcast, torch raises "size of tensor a (32) must match tensor b (7)" from
-            # inside the multiply, which names neither the layer nor the file.
+            # left to broadcast, torch raises "The size of tensor a (16) must match the size of
+            # tensor b (7)" from inside the multiply — the weight's *last* axis against the scale,
+            # naming neither the layer nor the axis the scale was supposed to describe.
             raise ValueError(
-                f"fp8 weight_scale has {scale.numel()} entries but the weight has {weight.shape[0]} output "
-                "channels; the scale is neither per-tensor nor per-output-channel and cannot be applied. "
-                "The checkpoint's quantization metadata appears to be malformed."
+                f"{f'{path}: ' if path else ''}fp8 weight_scale has {scale.numel()} entries but the weight has "
+                f"{weight.shape[0]} output channels; the scale is neither per-tensor nor per-output-channel and "
+                "cannot be applied. The checkpoint's quantization metadata appears to be malformed."
             )
         return scale.reshape(-1, *([1] * (weight.dim() - 1)))
     for dim in range(weight.dim()):
@@ -512,9 +619,9 @@ def extract_fp8_scaled_layers(
             # A scale without an fp8 weight means the weight was already dequantized (or the key
             # naming does not line up). Applying the scale later would corrupt it, so drop it.
             continue
-        if getattr(scale, "dtype", None) in _MX_SCALE_DTYPES:
-            _reject_mx_scale(path)
         hints = layer_meta.get(path, {})
+        if getattr(scale, "dtype", None) in _MX_SCALE_DTYPES:
+            scale = decode_mx_block_scales(path, weight, scale, hints)
         layers[path] = Fp8ScaledLayer(
             weight_scale=_normalize_weight_scale(scale),
             input_scale=_usable_input_scale(input_scales.get(path)),
@@ -540,7 +647,7 @@ def dequantize_fp8_scaled(
         if weight is None:
             continue
         weight = weight.float()
-        sd[key] = (weight * expand_weight_scale(weight, layer.weight_scale)).to(dtype)
+        sd[key] = (weight * expand_weight_scale(weight, layer.weight_scale, path)).to(dtype)
     return sd
 
 
