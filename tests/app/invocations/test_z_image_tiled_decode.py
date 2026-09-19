@@ -22,6 +22,37 @@ def _mock_flux_vae(element_size_bytes: int = 2) -> MagicMock:
 
 
 class TestFluxWorkingMemoryEstimate:
+    @pytest.fixture(autouse=True)
+    def _cudnn_column(self, monkeypatch):
+        """These pin the cuDNN-column arithmetic; on a ROCm machine the session device would select MIOpen's."""
+        import invokeai.backend.util.vae_working_memory as vwm
+
+        monkeypatch.setattr(vwm.TorchDevice, "choose_torch_device", classmethod(lambda cls: torch.device("cpu")))
+
+    @pytest.mark.parametrize(
+        ("hip", "operation", "constant"),
+        [(None, "decode", 2200), (None, "encode", 1100), ("7.14.0", "decode", 3600), ("7.14.0", "encode", 2750)],
+        ids=["cudnn-decode", "cudnn-encode", "miopen-decode", "miopen-encode"],
+    )
+    def test_the_convolution_backend_of_the_vaes_device_picks_the_constant(self, monkeypatch, hip, operation, constant):
+        """MIOpen's workspaces are larger than cuDNN's: measured 3451 decode / 2688 encode on an RX 9060 XT, the same
+        as the FLUX.2 VAE. A HIP build reports its GPU as "cuda", so the torch build decides, for the VAE's device."""
+        import invokeai.backend.util.vae_working_memory as vwm
+
+        monkeypatch.setattr(torch.version, "hip", hip)
+        monkeypatch.setattr(vwm, "_vae_mid_block_score_matrix_bytes", lambda *args, **kwargs: 0)
+        tensor = torch.zeros(1, 16, 64, 64) if operation == "decode" else torch.zeros(1, 3, 512, 512)
+
+        estimate = estimate_vae_working_memory_flux(
+            operation=operation, image_tensor=tensor, vae=_mock_flux_vae(), device=torch.device("cuda", 0)
+        )
+        on_cpu = estimate_vae_working_memory_flux(
+            operation=operation, image_tensor=tensor, vae=_mock_flux_vae(), device=torch.device("cpu")
+        )
+
+        assert estimate == 512 * 512 * 2 * constant
+        assert on_cpu == 512 * 512 * 2 * (2200 if operation == "decode" else 1100), "a cpu_only VAE runs on cuDNN terms"
+
     def test_the_default_reproduces_the_untiled_estimate(self):
         """Regression guard for the six call sites that pass no tile_size at all."""
         latents = torch.zeros(1, 16, 128, 128)

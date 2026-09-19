@@ -68,6 +68,7 @@ class ZImageLatentsToImageInvocation(BaseInvocation, WithMetadata, WithBoard):
             image_tensor=latents,
             vae=vae_info.model,
             tile_size=self.tile_size if use_tiling else None,
+            device=vae_info.compute_device,
         )
 
         # FLUX VAE doesn't support seamless, so only apply for AutoencoderKL

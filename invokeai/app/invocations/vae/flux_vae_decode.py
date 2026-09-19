@@ -54,7 +54,11 @@ class FluxVaeDecodeInvocation(BaseInvocation, WithMetadata, WithBoard):
         # Only estimate working memory for BFL AutoEncoder (diffusers VAE handles this internally)
         if isinstance(vae_info.model, AutoEncoder):
             estimated_working_memory = estimate_vae_working_memory_flux(
-                operation="decode", image_tensor=latents, vae=vae_info.model, tile_size=tile_size
+                operation="decode",
+                image_tensor=latents,
+                vae=vae_info.model,
+                tile_size=tile_size,
+                device=vae_info.compute_device,
             )
         else:
             estimated_working_memory = 0

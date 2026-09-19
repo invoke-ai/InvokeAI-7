@@ -44,7 +44,7 @@ class FluxVaeEncodeInvocation(BaseInvocation):
         # should be used for VAE encode sampling.
         assert isinstance(vae_info.model, AutoEncoder)
         estimated_working_memory = estimate_vae_working_memory_flux(
-            operation="encode", image_tensor=image_tensor, vae=vae_info.model
+            operation="encode", image_tensor=image_tensor, vae=vae_info.model, device=vae_info.compute_device
         )
         generator = torch.Generator(device=TorchDevice.choose_torch_device()).manual_seed(0)
         with vae_info.model_on_device(working_mem_bytes=estimated_working_memory) as (_, vae):
