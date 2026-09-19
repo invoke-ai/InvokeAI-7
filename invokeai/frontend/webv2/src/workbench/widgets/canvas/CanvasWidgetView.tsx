@@ -179,12 +179,6 @@ export const CanvasWidgetView = ({ runtime }: WidgetViewProps) => {
     getCanvasRemotePreviewSnapshot,
     getCanvasRemotePreviewSnapshot
   );
-  // Keep the L badge for generations that actually announced remote work,
-  // even if the user disables Remote Workers while a render is still running.
-  const distributedQueueItemIds = useMemo(
-    () => new Set(Object.values(remotePreviews).map((remote) => remote.queueItemId)),
-    [remotePreviews]
-  );
   const remotePreviewSlots = useMemo<CanvasStagingSlot[]>(() => {
     return Object.values(remotePreviews).flatMap((remote) => {
       const item = queueItems.find((entry) => entry.id === remote.queueItemId);
@@ -706,7 +700,6 @@ export const CanvasWidgetView = ({ runtime }: WidgetViewProps) => {
               <StagingBar
                 antialiasProgressImages={antialiasProgressImages}
                 areThumbnailsVisible={stagingArea.areThumbnailsVisible}
-                distributedQueueItemIds={distributedQueueItemIds}
                 autoSwitchMode={stagingArea.autoSwitchMode}
                 canAccept={interactionCapabilities.canAcceptStagedImage}
                 hasMultipleSlots={hasMultipleStagingSlots}

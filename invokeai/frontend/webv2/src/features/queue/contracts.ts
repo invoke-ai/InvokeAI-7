@@ -85,3 +85,4 @@ export {
   type QueueProgressSession,
 } from './core/activeSessions';
 export type { QueueItemProgressTarget } from './core/types';
+export { getRemoteProgressIdentity } from './core/remoteProgress';

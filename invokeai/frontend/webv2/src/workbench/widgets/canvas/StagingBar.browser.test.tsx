@@ -93,7 +93,6 @@ const renderStagingBar = async (
             <CanvasBottomOverlay.Root>
               <CanvasBottomOverlay.Staging>
                 <StagingBar
-                  distributedQueueItemIds={IRW_EMPTY_DISTRIBUTED_QUEUE_ITEM_IDS}
                   antialiasProgressImages={false}
                   areThumbnailsVisible
                   autoSwitchMode="off"
@@ -149,8 +148,6 @@ afterEach(async () => {
   host = null;
   root = null;
 });
-
-const IRW_EMPTY_DISTRIBUTED_QUEUE_ITEM_IDS: ReadonlySet<string> = new Set<string>();
 
 describe('StagingBar thumbnail strip', () => {
   it('keeps every thumbnail reachable by scrolling when many images are staged', async () => {

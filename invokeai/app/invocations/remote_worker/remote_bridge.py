@@ -402,10 +402,10 @@ def _bridge_worker(
         )
 
     try:
-        # Announce a Canvas worker immediately, before its first denoising frame.
-        # The local queue may finish first; this marker lets Canvas retain a
-        # separate live thumbnail until the final remote candidate is staged.
-        if result_destination == "canvas":
+        # Announce both Gallery and Canvas workers before their first denoising frame.
+        # Gallery can show a labelled queued placeholder while the remote waits.
+        # Canvas retains its separate live thumbnail until final staging.
+        if result_destination in {"canvas", "gallery"}:
             _emit_remote_progress(
                 services=services,
                 queue_item=queue_item,
