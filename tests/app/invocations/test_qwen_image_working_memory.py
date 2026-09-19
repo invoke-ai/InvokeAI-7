@@ -14,7 +14,7 @@ from invokeai.backend.util.qwen_image_vae import (
     QWEN_IMAGE_VAE_DEFAULT_TILE_SIZE,
     patch_qwen_image_vae_tiling,
 )
-from invokeai.backend.util.vae_working_memory import estimate_vae_working_memory_qwen_image
+from invokeai.backend.util.vae_working_memory import VAE_PRETILE_VRAM_FRACTION, estimate_vae_working_memory_qwen_image
 
 
 class TestQwenImageWorkingMemoryEstimate:
@@ -415,6 +415,46 @@ class TestQwenImageWorkingMemory:
 
         assert mock_estimate.call_args.kwargs["tile_size"] == QWEN_IMAGE_VAE_DEFAULT_TILE_SIZE
         mock_vae.enable_tiling.assert_called_once()
+
+    @pytest.mark.parametrize("auto", [True, False], ids=["auto-tiled-decode-on", "auto-tiled-decode-off"])
+    def test_a_decode_too_large_for_its_gpu_is_tiled_up_front_unless_switched_off(self, auto):
+        """Krea-2 decodes through this node, and it has no OOM retry at all: the estimate is the only trigger."""
+        module = "invokeai.app.invocations.vae.qwen_image_latents_to_image"
+        mock_vae, mock_vae_info = self._mock_vae_info()
+        mock_vae.decode.side_effect = RuntimeError("stop at decode")
+        mock_vae.config.z_dim = 16
+        mock_vae.config.latents_mean = [0.0] * 16
+        mock_vae.config.latents_std = [1.0] * 16
+
+        mock_context = MagicMock()
+        mock_context.models.load.return_value = mock_vae_info
+        mock_context.tensors.load.return_value = torch.zeros(1, 16, 1, 64, 64)
+        mock_context.config.get.return_value.force_tiled_decode = False
+        mock_context.config.get.return_value.auto_tiled_decode = auto
+
+        with (
+            patch(f"{module}.estimate_vae_working_memory_qwen_image", side_effect=[20 * 2**30, 2 * 2**30]) as estimate,
+            patch(f"{module}.should_pretile_vae_decode", return_value=True) as pretile,
+            patch(f"{module}.SeamlessExt.static_patch_model", return_value=nullcontext()),
+        ):
+            invocation = QwenImageLatentsToImageInvocation.model_construct(
+                latents=MagicMock(latents_name="test_latents"),
+                vae=MagicMock(vae=MagicMock(), seamless_axes=[]),
+                tiled=False,
+                tile_size=0,
+            )
+            with pytest.raises(RuntimeError, match="stop at decode"):
+                invocation.invoke(mock_context)
+
+        if auto:
+            pretile.assert_called_once_with(mock_vae_info.compute_device, 20 * 2**30, VAE_PRETILE_VRAM_FRACTION)
+            assert estimate.call_args.kwargs["tile_size"] == QWEN_IMAGE_VAE_DEFAULT_TILE_SIZE
+            mock_vae_info.model_on_device.assert_called_once_with(working_mem_bytes=2 * 2**30)
+            mock_vae.enable_tiling.assert_called_once()
+        else:
+            pretile.assert_not_called()
+            assert estimate.call_count == 1
+            mock_vae.enable_tiling.assert_not_called()
 
 
 class TestQwenImageVaeTiling:

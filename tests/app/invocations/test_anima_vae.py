@@ -1,7 +1,6 @@
 """Tests for the Anima VAE invocations: which VAEs they accept, working-memory estimation, the
 tiled-decode decision, and the tiled retry on out-of-memory."""
 
-import math
 from unittest.mock import MagicMock, patch
 
 import accelerate
@@ -95,21 +94,6 @@ class TestEstimateVaeWorkingMemoryAnima:
             operation="decode", image_tensor=latents, vae=_mock_vae(dtype=torch.float32), tile_size=None
         )
         assert fp32 == 2 * fp16
-
-
-class TestUseTiledDecode:
-    @pytest.mark.parametrize("device_type", ["cpu", "mps"])
-    def test_non_cuda_never_tiles(self, device_type):
-        assert AnimaLatentsToImageInvocation._use_tiled_decode(torch.device(device_type), 10**12) is False
-
-    def test_cuda_flips_at_70_percent_of_total_vram(self):
-        total_vram = 8 * 2**30
-        boundary = 0.7 * total_vram
-        device = torch.device("cuda")
-        with patch("torch.cuda.get_device_properties", return_value=MagicMock(total_memory=total_vram)) as mock_props:
-            assert AnimaLatentsToImageInvocation._use_tiled_decode(device, math.floor(boundary)) is False
-            assert AnimaLatentsToImageInvocation._use_tiled_decode(device, math.ceil(boundary) + 1) is True
-            mock_props.assert_called_with(device)
 
 
 def _build_decode_mocks(latents: torch.Tensor, decoded: torch.Tensor, vae_class: type = AutoencoderKLWan):
@@ -316,7 +300,7 @@ class TestAnimaLatentsToImageOomFallback:
 
         with (
             patch.object(TorchDevice, "choose_torch_device", return_value=torch.device("cpu")),
-            patch.object(AnimaLatentsToImageInvocation, "_use_tiled_decode", return_value=True),
+            patch("invokeai.app.invocations.vae.anima_latents_to_image.should_pretile_vae_decode", return_value=True),
         ):
             with pytest.raises(torch.cuda.OutOfMemoryError):
                 _build_l2i_invocation().invoke(context)

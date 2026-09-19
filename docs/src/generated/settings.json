@@ -727,6 +727,17 @@
     },
     {
       "category": "GENERATION",
+      "default": true,
+      "description": "Decode large images in tiles when an untiled decode's estimated working memory would take most of the GPU's memory (FLUX.1, Z-Image, Qwen-Image, Krea-2, Anima and Wan decodes). Turn off to decode untiled unless tiling is requested; the FLUX.1 and Z-Image decodes then still retry tiled after running out of memory.",
+      "env_var": "INVOKEAI_AUTO_TILED_DECODE",
+      "literal_values": [],
+      "name": "auto_tiled_decode",
+      "required": false,
+      "type": "<class 'bool'>",
+      "validation": {}
+    },
+    {
+      "category": "GENERATION",
       "default": 1,
       "description": "The compress_level setting of PIL.Image.save(), used for PNG encoding. All settings are lossless. 0 = no compression, 1 = fastest with slightly larger filesize, 9 = slowest with smallest filesize. 1 is typically the best setting.",
       "env_var": "INVOKEAI_PIL_COMPRESS_LEVEL",

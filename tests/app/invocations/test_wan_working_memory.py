@@ -299,6 +299,7 @@ class TestWanInvocationsRequestWorkingMemory:
     def test_latents_to_video_falls_back_to_tiling_when_estimate_exceeds_vram(self):
         vae = _mock_wan_vae()
         vae_info = _mock_vae_info(vae)
+        vae_info.compute_device = torch.device("cuda")
         mock_context = self._video_context(vae_info)
 
         with (

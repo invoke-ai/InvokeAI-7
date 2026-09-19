@@ -11,6 +11,38 @@ from invokeai.app.invocations.constants import LATENT_SCALE_FACTOR
 from invokeai.backend.flux.modules.autoencoder import AutoEncoder, resolve_tile_size
 from invokeai.backend.util.attention import sdpa_score_matrix_bytes
 from invokeai.backend.util.devices import TorchDevice
+from invokeai.backend.util.logging import InvokeAILogger
+
+# Share of the device's memory an untiled decode may claim before the decode nodes tile it up front (see
+# `should_pretile_vae_decode`). High enough that common resolutions on common cards stay untiled -- tiled output is
+# not pixel-identical -- and low enough that a decode no card of that size can hold is tiled before it starts.
+VAE_PRETILE_VRAM_FRACTION = 0.9
+
+
+def should_pretile_vae_decode(device: torch.device, full_decode_bytes: int, vram_fraction: float) -> bool:
+    """Whether a decode should be tiled up front because its untiled working memory would claim more than
+    ``vram_fraction`` of ``device``'s memory.
+
+    Waiting for an out-of-memory error does not work everywhere: on Windows, drivers page an allocation that does not
+    fit into system memory instead of failing it (always for ROCm, by default for NVIDIA's sysmem fallback), and the
+    decode just runs very slowly. ``device`` is where the VAE runs: a ``cpu_only`` VAE (and MPS, sharing system
+    memory) is never tiled on these grounds.
+    """
+    if device.type == "cuda":
+        total_bytes = torch.cuda.get_device_properties(device).total_memory
+    elif device.type == "xpu":
+        total_bytes = torch.xpu.get_device_properties(device).total_memory
+    else:
+        return False
+    if full_decode_bytes <= vram_fraction * total_bytes:
+        return False
+    InvokeAILogger.get_logger(__name__).info(
+        f"Decoding in tiles: an untiled decode would need ~{full_decode_bytes / 2**30:.1f} GiB of working memory, more "
+        f"than {vram_fraction:.0%} of the GPU's {total_bytes / 2**30:.1f} GiB. Set auto_tiled_decode to false to "
+        "decode untiled."
+    )
+    return True
+
 
 # The diffusers AutoencoderKL (SD1/SDXL, SD3, CogView4) and the FLUX.1 AutoEncoder run the same
 # mid-block self-attention as the FLUX.2 VAE: one head over the 512-channel width, on the

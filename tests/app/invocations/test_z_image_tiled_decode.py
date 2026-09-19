@@ -9,7 +9,7 @@ from diffusers.models.autoencoders.autoencoder_kl import AutoencoderKL
 from invokeai.app.invocations.vae.z_image_latents_to_image import ZImageLatentsToImageInvocation
 from invokeai.backend.flux.modules.autoencoder import DEFAULT_TILE_SAMPLE_MIN_SIZE, MIN_TILE_SAMPLE_SIZE
 from invokeai.backend.flux.modules.autoencoder import AutoEncoder as FluxAutoEncoder
-from invokeai.backend.util.vae_working_memory import estimate_vae_working_memory_flux
+from invokeai.backend.util.vae_working_memory import VAE_PRETILE_VRAM_FRACTION, estimate_vae_working_memory_flux
 
 
 def _mock_flux_vae(element_size_bytes: int = 2) -> MagicMock:
@@ -249,6 +249,39 @@ class TestTilingIsWired:
         vae, _, context = _build_decode_mocks(torch.zeros(1, 16, 64, 64), torch.zeros(1, 3, 512, 512))
         _build_invocation(tiled=True, tile_size=384).invoke(context)
         vae.enable_tiling.assert_called_once_with(tile_sample_min_size=384)
+
+    @pytest.mark.parametrize("auto", [True, False], ids=["auto-tiled-decode-on", "auto-tiled-decode-off"])
+    def test_a_decode_too_large_for_its_gpu_is_tiled_up_front_unless_switched_off(self, auto):
+        """Where the driver pages instead of raising an OOM, the retry below never fires: the estimate decides."""
+        module = "invokeai.app.invocations.vae.z_image_latents_to_image"
+        vae, vae_info, context = _build_decode_mocks(torch.zeros(1, 16, 64, 64), torch.zeros(1, 3, 512, 512))
+        context.config.get.return_value.auto_tiled_decode = auto
+        with (
+            patch(f"{module}.estimate_vae_working_memory_flux", side_effect=[20 * 2**30, 2 * 2**30]) as estimate,
+            patch(f"{module}.should_pretile_vae_decode", return_value=True) as pretile,
+        ):
+            _build_invocation().invoke(context)
+
+        if auto:
+            pretile.assert_called_once_with(vae_info.compute_device, 20 * 2**30, VAE_PRETILE_VRAM_FRACTION)
+            assert estimate.call_args.kwargs["tile_size"] == 0
+            vae_info.model_on_device.assert_called_once_with(working_mem_bytes=2 * 2**30)
+            vae.enable_tiling.assert_called_once_with(tile_sample_min_size=DEFAULT_TILE_SAMPLE_MIN_SIZE)
+        else:
+            pretile.assert_not_called()
+            assert estimate.call_count == 1
+            vae.disable_tiling.assert_called_once()
+
+    def test_requested_tiling_skips_the_untiled_estimate(self):
+        module = "invokeai.app.invocations.vae.z_image_latents_to_image"
+        _, _, context = _build_decode_mocks(torch.zeros(1, 16, 64, 64), torch.zeros(1, 3, 512, 512))
+        with (
+            patch(f"{module}.estimate_vae_working_memory_flux", return_value=2 * 2**30) as estimate,
+            patch(f"{module}.should_pretile_vae_decode") as pretile,
+        ):
+            _build_invocation(tiled=True).invoke(context)
+        assert estimate.call_count == 1
+        pretile.assert_not_called()
 
     @pytest.mark.parametrize("tiled,expected_tile_size", [(False, None), (True, 0)])
     def test_the_estimate_is_tile_bounded_only_when_tiling(self, tiled, expected_tile_size):
