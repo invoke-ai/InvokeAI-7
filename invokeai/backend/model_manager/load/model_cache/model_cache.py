@@ -2301,7 +2301,7 @@ class ModelCache:
 
         if self._execution_device.type == "cuda":
             vram_allocated = torch.cuda.memory_allocated(self._execution_device)
-            vram_free, _vram_total = torch.cuda.mem_get_info(self._execution_device)
+            vram_free, _vram_total = TorchDevice.cuda_mem_get_info(self._execution_device)
             # Blocks the caching allocator holds but is not using are just as available to this
             # process as driver-free memory: the allocator reuses them directly, and empty_cache()
             # returns whole unoccupied segments to the driver. mem_get_info() alone counts them as

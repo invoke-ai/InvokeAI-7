@@ -9,6 +9,7 @@ from deprecated import deprecated
 from invokeai.app.services.config.config_default import get_config
 from invokeai.backend.util.level_zero import xpu_device_is_integrated, xpu_memory_info
 from invokeai.backend.util.logging import InvokeAILogger
+from invokeai.backend.util.wddm import local_video_memory
 
 # legacy APIs
 TorchPrecisionNames = Literal["float32", "float16", "bfloat16"]
@@ -457,6 +458,22 @@ class TorchDevice:
             )
 
         return (max(total_bytes - reserved_bytes, 0), total_bytes)
+
+    @classmethod
+    def cuda_mem_get_info(cls, device: torch.device) -> tuple[int, int]:
+        """Return ``(free, total)`` VRAM in bytes for a CUDA or ROCm device.
+
+        ``torch.cuda.mem_get_info``, except that on a ROCm build under Windows the free figure is capped by what the
+        Windows video-memory budget still allows this process (`wddm.local_video_memory`). There, torch's figure is
+        the device total minus this process's own usage: it ignores other processes, and Windows pages allocations
+        into shared system memory well before it is exhausted instead of failing them.
+        """
+        free, total = torch.cuda.mem_get_info(device)
+        budget = local_video_memory(device)
+        if budget is not None:
+            budget_bytes, usage_bytes = budget
+            free = min(free, max(budget_bytes - usage_bytes, 0))
+        return free, total
 
     @classmethod
     def _to_dtype(cls, precision_name: TorchPrecisionNames) -> torch.dtype:

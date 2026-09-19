@@ -114,7 +114,8 @@ But, if your GPU has enough VRAM to hold models fully, you might get a perf boos
 max_cache_ram_gb: 28
 
 # The default max cache VRAM size is adjusted dynamically based on the amount of available VRAM (taking into
-# consideration the VRAM used by other processes).
+# consideration the VRAM used by other processes; with a ROCm build on Windows, the video-memory budget Windows grants
+# Invoke, beyond which it would move allocations into system memory).
 # You can override the default value by setting `max_cache_vram_gb`.
 # CAUTION: Most users should not manually set this value. See warning below.
 max_cache_vram_gb: 16

@@ -187,3 +187,27 @@ def test_physical_availability_shares_the_reclaimable_credit_policy(monkeypatch:
 
     monkeypatch.setenv("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
     assert cache._get_physical_vram_available() == 3 * GB
+
+
+def test_the_windows_video_memory_budget_caps_the_measured_free_vram(monkeypatch: pytest.MonkeyPatch):
+    """On Windows ROCm, torch reports the device total minus this process's usage. Windows pages allocations into
+    shared system memory once the process passes its video-memory budget, so the budget's headroom is what the cache
+    may plan with -- not the larger figure torch reports."""
+    cache = ModelCache(
+        execution_device_working_mem_gb=1.0,
+        enable_partial_loading=True,
+        keep_ram_copy_of_weights=True,
+        execution_device="cpu",
+        storage_device="cpu",
+        logger=MagicMock(),
+        shared_cpu_weights=None,
+    )
+    cache._execution_device = torch.device("cuda")  # policy only; every VRAM query below is patched out
+    monkeypatch.setattr(torch.cuda, "mem_get_info", lambda device: (12 * GB, 16 * GB))
+    monkeypatch.setattr(torch.cuda, "memory_allocated", lambda device: 2 * GB)
+    monkeypatch.setattr(torch.cuda, "memory_reserved", lambda device: 2 * GB)
+    monkeypatch.setattr(torch.cuda, "memory_stats", lambda device: {"inactive_split_bytes.all.current": 0})
+    monkeypatch.setattr("invokeai.backend.util.devices.local_video_memory", lambda device: (15 * GB, 7 * GB))
+
+    # 8 GB of budget headroom + 2 GB allocated - 1 GB working - 2 GB in use, not the 12 GB torch reports.
+    assert cache._get_vram_available(None) == 7 * GB
