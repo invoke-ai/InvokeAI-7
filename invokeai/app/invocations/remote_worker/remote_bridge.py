@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import threading
 import time
+from dataclasses import dataclass, field
 from typing import Any
 
 from invokeai.app.services.board_records.board_records_common import BoardVisibility
@@ -13,9 +14,153 @@ from .remote_client import RemoteConfig, RemoteInvokeClient, RemoteInvokeError
 
 
 _BRIDGE_LOCK = threading.Lock()
-_BRIDGE_TASKS: dict[int, threading.Thread] = {}
+
+
+@dataclass
+class _BridgeTask:
+    owner_id: str
+    local_queue_item_id: str
+    local_backend_item_id: int
+    source_origin: str
+    remote_url: str
+    remote_item_id: int
+    remote_queue_id: str
+    remote_slot: int
+    cancel_requested: threading.Event = field(default_factory=threading.Event)
+    import_lock: threading.Lock = field(default_factory=threading.Lock)
+    thread: threading.Thread | None = None
+
+
+class RemoteBridgeCancelled(Exception):
+    """The owner canceled the local generation and its dispatched remote work."""
+
+
+_BRIDGE_TASKS: dict[int, _BridgeTask] = {}
+# A cancel may race with the mirror invocation between remote enqueue and
+# bridge registration. Tombstones close that window without guessing item IDs.
+_CANCELLED_RUNS: dict[tuple[str, str], float] = {}
 _BRIDGE_SEQUENCE = 0
 _REMOTE_MESSAGE_PREFIX = "[[IRW_REMOTE|"
+
+
+def cancel_remote_bridges(*, user_id: str, local_queue_item_id: str) -> dict[str, int]:
+    """Cancel ONLY matching in-memory bridge jobs for the authenticated owner.
+
+    Signal all jobs before remote HTTP calls, so one slow worker cannot allow
+    another worker to import a result while cancellation is in progress.
+    """
+    with _BRIDGE_LOCK:
+        now = time.monotonic()
+        for key, since in list(_CANCELLED_RUNS.items()):
+            if now - since > 600:
+                _CANCELLED_RUNS.pop(key, None)
+        if len(_CANCELLED_RUNS) >= 256:
+            _CANCELLED_RUNS.pop(next(iter(_CANCELLED_RUNS)))
+        _CANCELLED_RUNS[(user_id, local_queue_item_id)] = now
+        tasks = [
+            task
+            for task in _BRIDGE_TASKS.values()
+            if task.owner_id == user_id and task.local_queue_item_id == local_queue_item_id
+        ]
+    for task in tasks:
+        with task.import_lock:
+            task.cancel_requested.set()
+
+    canceled = 0
+    already_finished = 0
+    failed = 0
+    for task in tasks:
+        client = _remote_client(task.remote_url, task.owner_id)
+        try:
+            client.cancel_queue_item(item_id=task.remote_item_id, queue_id=task.remote_queue_id)
+            canceled += 1
+        except Exception:
+            # A completion and cancellation can cross on the network. A finished
+            # item cannot consume more GPU, but its result must still be suppressed.
+            try:
+                item = client.get_item(item_id=task.remote_item_id, queue_id=task.remote_queue_id)
+                if str(item.get("status", "")).lower() in {"completed", "failed", "canceled", "cancelled"}:
+                    already_finished += 1
+                    continue
+            except Exception:
+                pass
+            failed += 1
+    return {"matched": len(tasks), "canceled": canceled, "already_finished": already_finished, "failed": failed}
+
+
+def cancel_remote_bridges_scoped(
+    *, user_id: str, origin_prefix: str | None, keep_current: bool, queue_service: Any
+) -> dict[str, int]:
+    """Cancel the owner's live remote bridges within the queue UI's origin scope.
+
+    Unlike looking up only pending/in-progress *local* queue items, this includes
+    remote jobs whose corresponding local queue item has already completed.
+    An except-current sweep preserves every in-progress item (multi-GPU), plus
+    waiting items, matching the native queue's conservative processor semantics.
+    """
+    with _BRIDGE_LOCK:
+        snapshot = [
+            task for task in _BRIDGE_TASKS.values()
+            if task.owner_id == user_id
+            and task.local_queue_item_id
+            and (origin_prefix is None or task.source_origin.startswith(origin_prefix))
+        ]
+
+    if keep_current:
+        protected: set[int] = set()
+        for task in snapshot:
+            if task.local_backend_item_id in protected:
+                continue
+            try:
+                item = queue_service.get_queue_item(task.local_backend_item_id)
+            except Exception:
+                # Fail closed if queue history is unavailable; don't risk
+                # canceling a worker whose local job is still current.
+                protected.add(task.local_backend_item_id)
+                continue
+            if item.status in {"in_progress", "waiting"}:
+                protected.add(task.local_backend_item_id)
+        snapshot = [task for task in snapshot if task.local_backend_item_id not in protected]
+
+    local_ids = {task.local_queue_item_id for task in snapshot}
+    if not local_ids:
+        return {"matched": 0, "canceled": 0, "already_finished": 0, "failed": 0}
+
+    # Signal every matching bridge before performing any slow remote HTTP call.
+    with _BRIDGE_LOCK:
+        now = time.monotonic()
+        for key, since in list(_CANCELLED_RUNS.items()):
+            if now - since > 600:
+                _CANCELLED_RUNS.pop(key, None)
+        for local_id in local_ids:
+            _CANCELLED_RUNS[(user_id, local_id)] = now
+        tasks = [
+            task for task in _BRIDGE_TASKS.values()
+            if task.owner_id == user_id
+            and task.local_queue_item_id in local_ids
+            and (origin_prefix is None or task.source_origin.startswith(origin_prefix))
+            and (not keep_current or task.local_backend_item_id not in protected)
+        ]
+    for task in tasks:
+        with task.import_lock:
+            task.cancel_requested.set()
+
+    canceled = already_finished = failed = 0
+    for task in tasks:
+        client = _remote_client(task.remote_url, task.owner_id)
+        try:
+            client.cancel_queue_item(item_id=task.remote_item_id, queue_id=task.remote_queue_id)
+            canceled += 1
+        except Exception:
+            try:
+                item = client.get_item(item_id=task.remote_item_id, queue_id=task.remote_queue_id)
+                if str(item.get("status", "")).lower() in {"completed", "failed", "canceled", "cancelled"}:
+                    already_finished += 1
+                    continue
+            except Exception:
+                pass
+            failed += 1
+    return {"matched": len(tasks), "canceled": canceled, "already_finished": already_finished, "failed": failed}
 
 
 def _remote_client(remote_url: str, user_id: str = "") -> RemoteInvokeClient:
@@ -166,6 +311,7 @@ def _import_completed_remote(
     local_board_id: str,
     result_destination: str,
     keep_remote_copies: bool,
+    task: _BridgeTask,
 ) -> list[Any]:
     all_remote_names = client.extract_image_names(completed_item, non_intermediate_only=False)
     remote_names = client.filter_gallery_image_names(all_remote_names)
@@ -179,21 +325,30 @@ def _import_completed_remote(
 
     imported: list[Any] = []
     for remote_name in remote_names:
+        if task.cancel_requested.is_set():
+            raise RemoteBridgeCancelled()
         image = client.download_image(remote_name)
-        dto = _save_local_image(
-            services=services,
-            queue_item=queue_item,
-            invocation=invocation,
-            image=image,
-            board_id=local_board_id,
-            result_destination=result_destination,
-        )
+        # Serialize the actual local save against the cancellation flag. Once
+        # Cancel is acknowledged, a late download cannot create a local image.
+        with task.import_lock:
+            if task.cancel_requested.is_set():
+                raise RemoteBridgeCancelled()
+            dto = _save_local_image(
+                services=services,
+                queue_item=queue_item,
+                invocation=invocation,
+                image=image,
+                board_id=local_board_id,
+                result_destination=result_destination,
+            )
         imported.append(dto)
         services.logger.info(
             f"Remote bridge: imported {remote_name} as {dto.image_name}"
             + (f" on board {local_board_id}" if local_board_id else "")
         )
 
+    if task.cancel_requested.is_set():
+        raise RemoteBridgeCancelled()
     # Only remove remote files after every requested gallery image was safely stored locally.
     if not keep_remote_copies:
         deleted = 0
@@ -227,6 +382,7 @@ def _bridge_worker(
     poll_interval_seconds: float,
     timeout_seconds: int,
     remote_slot: int,
+    task: _BridgeTask,
 ) -> None:
     client = _remote_client(remote_url, str(queue_item.user_id))
     local_queue_item_id = _webv2_queue_item_id(getattr(queue_item, "origin", None))
@@ -260,6 +416,8 @@ def _bridge_worker(
                 message=f"Remote {remote_slot} queued",
             )
         while True:
+            if task.cancel_requested.is_set():
+                raise RemoteBridgeCancelled()
             if time.monotonic() - started > float(timeout_seconds):
                 raise RemoteInvokeError(
                     f"Remote queue item {remote_item_id} timed out after {timeout_seconds:g} seconds"
@@ -280,6 +438,8 @@ def _bridge_worker(
                 time.sleep(max(0.25, float(poll_interval_seconds)))
                 continue
 
+            if task.cancel_requested.is_set():
+                raise RemoteBridgeCancelled()
             status = str(item.get("status", "")).lower()
             if status == "completed":
                 imported = _import_completed_remote(
@@ -291,7 +451,10 @@ def _bridge_worker(
                     local_board_id=local_board_id,
                     result_destination=result_destination,
                     keep_remote_copies=keep_remote_copies,
+                    task=task,
                 )
+                if task.cancel_requested.is_set():
+                    raise RemoteBridgeCancelled()
                 final_name = getattr(imported[-1], "image_name", "remote image") if imported else "remote image"
                 message = f"Remote {remote_slot} complete: {final_name}"
                 if result_destination == "canvas":
@@ -355,8 +518,20 @@ def _bridge_worker(
                     )
                     last_preview_signature = signature
 
-            time.sleep(max(0.25, float(poll_interval_seconds)))
+            if task.cancel_requested.wait(max(0.25, float(poll_interval_seconds))):
+                raise RemoteBridgeCancelled()
 
+    except RemoteBridgeCancelled:
+        services.logger.info(f"Remote bridge #{task_id}: cancelled by generation owner")
+        _emit_remote_progress(
+            services=services,
+            queue_item=queue_item,
+            invocation=invocation,
+            local_queue_item_id=local_queue_item_id,
+            remote_slot=remote_slot,
+            state="failed",
+            message=f"Remote {remote_slot} cancelled",
+        )
     except Exception as exc:
         services.logger.error(f"Remote bridge #{task_id}: {exc}")
         try:
@@ -397,6 +572,16 @@ def start_remote_bridge(
     task_id = _next_task_id()
     queue_item = _copy_model(local_queue_item)
     invocation = _copy_model(source_invocation)
+    task = _BridgeTask(
+        owner_id=str(queue_item.user_id),
+        local_queue_item_id=_webv2_queue_item_id(getattr(queue_item, "origin", None)),
+        local_backend_item_id=int(queue_item.item_id),
+        source_origin=str(getattr(queue_item, "origin", None) or ""),
+        remote_url=remote_url,
+        remote_item_id=int(remote_item_id),
+        remote_queue_id=remote_queue_id,
+        remote_slot=int(remote_slot),
+    )
 
     thread = threading.Thread(
         target=_bridge_worker,
@@ -414,11 +599,22 @@ def start_remote_bridge(
             "poll_interval_seconds": float(poll_interval_seconds),
             "timeout_seconds": int(timeout_seconds),
             "remote_slot": int(remote_slot),
+            "task": task,
         },
         name=f"invokeai-remote-bridge-{task_id}",
         daemon=True,
     )
+    task.thread = thread
     with _BRIDGE_LOCK:
-        _BRIDGE_TASKS[task_id] = thread
+        _BRIDGE_TASKS[task_id] = task
+        cancellation_time = _CANCELLED_RUNS.get((task.owner_id, task.local_queue_item_id))
+        canceled_while_registering = cancellation_time is not None and time.monotonic() - cancellation_time <= 600
+        if canceled_while_registering:
+            task.cancel_requested.set()
     thread.start()
+    if canceled_while_registering:
+        try:
+            _remote_client(remote_url, task.owner_id).cancel_queue_item(remote_item_id, remote_queue_id)
+        except Exception as exc:
+            services.logger.warning(f"Remote bridge #{task_id}: late-start cancellation failed: {exc}")
     return task_id

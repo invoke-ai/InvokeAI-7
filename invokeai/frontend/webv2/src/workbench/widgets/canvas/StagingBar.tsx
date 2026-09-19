@@ -52,6 +52,7 @@ const MENU_POSITIONING = { placement: 'top-end' } as const;
 interface StagingBarProps {
   antialiasProgressImages: boolean;
   areThumbnailsVisible: boolean;
+  distributedQueueItemIds: ReadonlySet<string>;
   autoSwitchMode: AutoSwitchMode;
   canAccept: boolean;
   hasMultipleSlots: boolean;
@@ -86,6 +87,7 @@ interface StagingBarProps {
 export const StagingBar = ({
   antialiasProgressImages,
   areThumbnailsVisible,
+  distributedQueueItemIds,
   autoSwitchMode,
   canAccept,
   hasMultipleSlots,
@@ -181,6 +183,7 @@ export const StagingBar = ({
                   <StagingThumbnail
                     key={slot.id}
                     antialiasProgressImages={antialiasProgressImages}
+                    showLocalBadge={distributedQueueItemIds.has(slot.queueItemId)}
                     index={index}
                     isSelected={index === selectedImageIndex}
                     slot={slot}
@@ -406,6 +409,7 @@ const AutoSwitchMenu = ({ mode, onSelect }: { mode: AutoSwitchMode; onSelect: (m
 
 const StagingThumbnail = ({
   antialiasProgressImages,
+  showLocalBadge,
   index,
   isSelected,
   slot,
@@ -414,6 +418,7 @@ const StagingThumbnail = ({
   onSelect,
 }: {
   antialiasProgressImages: boolean;
+  showLocalBadge: boolean;
   index: number;
   isSelected: boolean;
   slot: CanvasStagingSlot;
@@ -472,7 +477,7 @@ const StagingThumbnail = ({
       ) : (
         <StagingPlaceholderThumbnail antialiasProgressImages={antialiasProgressImages} slot={slot} />
       )}
-      {slot.kind === 'placeholder' ? (
+      {slot.kind === 'placeholder' && (remoteIdentity || showLocalBadge) ? (
         <Text
           bg="blackAlpha.700"
           color="white"

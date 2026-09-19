@@ -262,7 +262,7 @@ export const getCancelableCanvasStagingQueueItemId = (slot: CanvasStagingSlot | 
   if (slot?.kind !== 'placeholder') {
     return null;
   }
-  // The local queue cancel API cannot cancel a single remote-only bridge.
-  // Never pass the synthetic remote id to it or accidentally cancel Windows.
-  return getRemoteProgressIdentity(slot) ? null : slot.queueItemId;
+  // Remote placeholders belong to the originating local generation; the Canvas
+  // Cancel button cancels all work for that generation, not a synthetic ID.
+  return getRemoteProgressIdentity(slot)?.localQueueItemId ?? slot.queueItemId;
 };

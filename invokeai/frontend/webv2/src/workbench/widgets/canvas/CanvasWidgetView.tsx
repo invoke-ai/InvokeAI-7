@@ -6,6 +6,7 @@ import { useDndMonitor, type DragEndEvent } from '@dnd-kit/core';
 import { getRemoteProgressTarget, getRemoteSyntheticBackendItemId } from '@features/queue';
 import { useQueueItemProgressImage } from '@features/queue/react';
 import { useMountEffect } from '@platform/react/useMountEffect';
+import { apiFetchJson, getApiErrorMessage } from '@platform/transport/http';
 import { preloadCanvasInvocation } from '@workbench/activeInvocationSubmission';
 import { getCanvasImportNotice } from '@workbench/canvas-operations/api';
 import { getCanvasRemotePreviewSnapshot, subscribeCanvasRemotePreviews } from '@workbench/canvasRemotePreviews';
@@ -177,6 +178,12 @@ export const CanvasWidgetView = ({ runtime }: WidgetViewProps) => {
     subscribeCanvasRemotePreviews,
     getCanvasRemotePreviewSnapshot,
     getCanvasRemotePreviewSnapshot
+  );
+  // Keep the L badge for generations that actually announced remote work,
+  // even if the user disables Remote Workers while a render is still running.
+  const distributedQueueItemIds = useMemo(
+    () => new Set(Object.values(remotePreviews).map((remote) => remote.queueItemId)),
+    [remotePreviews]
   );
   const remotePreviewSlots = useMemo<CanvasStagingSlot[]>(() => {
     return Object.values(remotePreviews).flatMap((remote) => {
@@ -397,7 +404,44 @@ export const CanvasWidgetView = ({ runtime }: WidgetViewProps) => {
   /* eslint-enable react/preserve-manual-memoization */
   const acceptStagedImage = useCallback(() => commitSelectedStagedImage(false), [commitSelectedStagedImage]);
   const saveStagedImageAndContinue = useCallback(() => commitSelectedStagedImage(true), [commitSelectedStagedImage]);
-  const cancelQueueItem = useCallback((queueItemId: string) => queue.cancel(undefined, queueItemId), [queue]);
+  const cancelQueueItem = useCallback(
+    (queueItemId: string) => {
+      const item = queueItems.find((entry) => entry.id === queueItemId);
+      if (!item || item.snapshot.destination !== 'canvas') {
+        return;
+      }
+      // The local item may have already completed while R1 is still rendering.
+      if (item.status === 'pending' || item.status === 'running') {
+        queue.cancel(undefined, queueItemId);
+      }
+      // This authenticated endpoint locates only the signed-in user's remotes;
+      // it never accepts arbitrary worker URLs or backend item IDs.
+      void apiFetchJson<{ failed: number }>('/api/v1/remote_workers/cancel', {
+        body: JSON.stringify({ queue_item_id: queueItemId }),
+        headers: { 'Content-Type': 'application/json' },
+        method: 'PUT',
+      })
+        .then((result) => {
+          if (result.failed > 0) {
+            notifications.reportError({
+              area: 'queue-results',
+              message: `${result.failed} remote worker cancellation request(s) failed. Check the server log.`,
+              namespace: 'queue',
+              projectId,
+            });
+          }
+        })
+        .catch((error: unknown) => {
+          notifications.reportError({
+            area: 'queue-results',
+            message: getApiErrorMessage(error, 'Could not cancel the remote workers'),
+            namespace: 'queue',
+            projectId,
+          });
+        });
+    },
+    [notifications, projectId, queue, queueItems]
+  );
   const selectDisplaySlot = useCallback(
     (index: number) => {
       const slot = displaySlots[index];
@@ -662,6 +706,7 @@ export const CanvasWidgetView = ({ runtime }: WidgetViewProps) => {
               <StagingBar
                 antialiasProgressImages={antialiasProgressImages}
                 areThumbnailsVisible={stagingArea.areThumbnailsVisible}
+                distributedQueueItemIds={distributedQueueItemIds}
                 autoSwitchMode={stagingArea.autoSwitchMode}
                 canAccept={interactionCapabilities.canAcceptStagedImage}
                 hasMultipleSlots={hasMultipleStagingSlots}

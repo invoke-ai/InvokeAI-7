@@ -494,6 +494,11 @@ class RemoteInvokeClient:
             nodes[node_id] = remap(node)
         return messages
 
+    def cancel_queue_item(self, item_id: int | str, queue_id: str = "default") -> dict[str, Any]:
+        """Cancel only this remote queue item, with this client's saved user credentials."""
+        queue_path = urllib.parse.quote(queue_id, safe="")
+        return self._request_json("PUT", f"/api/v1/queue/{queue_path}/i/{int(item_id)}/cancel")
+
     def get_item(self, item_id: int | str, queue_id: str = "default") -> dict[str, Any]:
         return self._request_json("GET", f"/api/v1/queue/{urllib.parse.quote(queue_id)}/i/{int(item_id)}")
 
