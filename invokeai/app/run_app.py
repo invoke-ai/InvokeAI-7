@@ -83,11 +83,14 @@ def run_app() -> None:
     from invokeai.app.util.startup_utils import (
         apply_monkeypatches,
         check_cudnn,
+        describe_torch_build,
         enable_dev_reload,
         find_open_port,
         register_mime_types,
     )
     from invokeai.backend.krea2.attention import resolve_krea2_sdpa_backends
+
+    logger.info(describe_torch_build())
 
     # Find an open port, and modify the config accordingly.
     first_open_port = find_open_port(app_config.port)

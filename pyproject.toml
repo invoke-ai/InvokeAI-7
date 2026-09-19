@@ -34,22 +34,35 @@ classifiers = [
 dependencies = [
   # Core generation dependencies, pinned for reproducible builds.
   "accelerate",
-  "bitsandbytes; sys_platform!='darwin'",
+  "bitsandbytes; sys_platform!='darwin' and (sys_platform != 'win32' or platform_machine != 'ARM64')",
+  "bitsandbytes>=0.50.1; sys_platform == 'win32' and platform_machine == 'ARM64'",   # 0.50.1 added the CUDA 13.4 win_arm64 build for RTX Spark
   "compel>=2.4.0,<3",
   "diffusers[torch]==0.40.0",
   "gguf",
-  "mediapipe==0.10.14",                   # needed for "mediapipeface" controlnet model
+  # Not on Windows ARM64: the only win_arm64 mediapipe wheel (0.10.35+) is the Tasks-API build without the
+  # legacy `solutions` API the face preprocessor and Face Tools use; those nodes report the platform when run.
+  "mediapipe==0.10.14; (sys_platform != 'win32' or platform_machine != 'ARM64')",  # needed for "mediapipeface" controlnet model
   "mistral-common>=1.5.4,<2",             # canonical Tekken tokenizer for FLUX.2 [dev] Mistral encoder; the
                                           # loader depends on private surface (Tekkenizer internals) that
                                           # moves across majors, so cap below 2.x (validated against 1.11.6)
-  "numpy<2.0.0",
-  "onnx==1.16.1",
-  "onnxruntime==1.19.2",
-  "opencv-contrib-python",
-  "imageio[ffmpeg]>=2.37",                 # video encode (for Wan 2.2 T2V/I2V output); encode behavior (macro_block_size) is version-sensitive
+  "tiktoken==0.13.0; sys_platform == 'win32' and platform_machine == 'ARM64'",   # mistral-common dependency; self-built win_arm64 wheel (see invoke-win-arm64-wheels)
+  "numpy<2.0.0; (sys_platform != 'win32' or platform_machine != 'ARM64')",
+  "numpy>=2.3,<2.4; sys_platform == 'win32' and platform_machine == 'ARM64'",   # first win_arm64 wheels are 2.3; <2.4 is mistral-common's cap on 3.12
+  "onnx==1.16.1; (sys_platform != 'win32' or platform_machine != 'ARM64')",
+  "onnx>=1.18,<2; sys_platform == 'win32' and platform_machine == 'ARM64'",
+  "onnxruntime==1.19.2; (sys_platform != 'win32' or platform_machine != 'ARM64')",
+  "onnxruntime>=1.24.2; sys_platform == 'win32' and platform_machine == 'ARM64'",   # CPU execution provider only; no GPU build exists for win_arm64
+  "opencv-contrib-python; (sys_platform != 'win32' or platform_machine != 'ARM64')",
+  "opencv-contrib-python==4.11.0.86; sys_platform == 'win32' and platform_machine == 'ARM64'",   # self-built win_arm64 wheel (see invoke-win-arm64-wheels)
+  "imageio[ffmpeg]>=2.37; (sys_platform != 'win32' or platform_machine != 'ARM64')",  # video encode (for Wan 2.2 T2V/I2V output); encode behavior (macro_block_size) is version-sensitive
+  # imageio-ffmpeg's wheels exist only to bundle an ffmpeg binary, and there is none for win_arm64: the sdist builds a
+  # pure wheel and get_ffmpeg_exe() falls back to the ffmpeg on PATH (or IMAGEIO_FFMPEG_EXE).
+  "imageio>=2.37; sys_platform == 'win32' and platform_machine == 'ARM64'",
+  "imageio-ffmpeg>=0.6; sys_platform == 'win32' and platform_machine == 'ARM64'",
   "psutil>=6",                             # video decode worker process-tree termination
   "safetensors",
-  "sentencepiece==0.2.0",                 # 0.2.1 coredumps windows when loading t5 tokenizer
+  "sentencepiece==0.2.0; (sys_platform != 'win32' or platform_machine != 'ARM64')",  # 0.2.1 coredumps windows when loading t5 tokenizer
+  "sentencepiece>=0.2.2; sys_platform == 'win32' and platform_machine == 'ARM64'",   # first win_arm64 wheels are 0.2.1; 0.2.2 is the pybind11 rewrite (T5 load covered by the CI lane)
   "spandrel",
   # Loosely pinned, will respect requirement of `diffusers[torch]`. Split by platform: linux/win allow
   # >=2.10 so the rocm extra can use torch 2.13.0+rocm7.2, while macOS stays on 2.7.x — newer macOS torch
@@ -63,6 +76,10 @@ dependencies = [
   # AOTriton 0.12b also triples flash-attention throughput vs the 2.10.0+rocm7.1 pin.
   "torch>=2.7.0,<3.0; sys_platform != 'darwin'",
   "torch>=2.7.0,<2.8.0; sys_platform == 'darwin'",
+  # Windows on ARM64 (NVIDIA RTX Spark): NVIDIA's out-of-tree build is the only torch with win_arm64 wheels, so it is
+  # pinned here for every extra (see `torch-nvidia-win-arm64` below). The wheel bundles its CUDA 13.4 libraries.
+  "torch==2.14.0+cu134; sys_platform == 'win32' and platform_machine == 'ARM64'",
+  "torchvision==0.29.0+cu134; sys_platform == 'win32' and platform_machine == 'ARM64'",
   "torchsde",                             # diffusers needs this for SDE solvers, but it is not an explicit dep of diffusers
   "torchvision",
   "transformers>=5.5,<5.6",
@@ -84,27 +101,35 @@ dependencies = [
   "pydantic-settings",
   "pydantic",
   "python-socketio",
-  "uvicorn[standard]",
+  "uvicorn[standard]; (sys_platform != 'win32' or platform_machine != 'ARM64')",
+  # [standard] pulls httptools, which has no win_arm64 wheel; uvicorn falls back to h11. websockets and watchfiles
+  # are the parts of [standard] the app uses.
+  "uvicorn; sys_platform == 'win32' and platform_machine == 'ARM64'",
+  "websockets; sys_platform == 'win32' and platform_machine == 'ARM64'",
+  "watchfiles; sys_platform == 'win32' and platform_machine == 'ARM64'",
 
   # Auxiliary dependencies, pinned only if necessary.
-  "blake3",
-  "bcrypt<4.0.0",
+  "blake3; (sys_platform != 'win32' or platform_machine != 'ARM64')",
+  "blake3==1.0.9; sys_platform == 'win32' and platform_machine == 'ARM64'",   # self-built win_arm64 wheel (see invoke-win-arm64-wheels)
+  "bcrypt>=4.1",   # used directly (not via passlib, which is incompatible with bcrypt>=4.1 -- the first release with win_arm64 wheels)
   "Deprecated",
   "dnspython",
   "dynamicprompts",
   "einops",
   "email-validator>=2.0.0",
-  "fonttools[woff]",
-  "passlib[bcrypt]>=1.7.4",
+  "fonttools[woff]; (sys_platform != 'win32' or platform_machine != 'ARM64')",
+  "fonttools; sys_platform == 'win32' and platform_machine == 'ARM64'",   # [woff] needs brotli, which has no win_arm64 wheel; woff2 fonts are skipped there
   "picklescan",
   "pillow",
   "prompt-toolkit",
   "pypatchmatch",
   "python-jose[cryptography]>=3.3.0",
+  "cryptography>=46,<46.0.4; sys_platform == 'win32' and platform_machine == 'ARM64'",   # the only cryptography releases with win_arm64 wheels
   "python-multipart",
   "requests",
   "semver~=3.0.1",
-  "PyWavelets",
+  "PyWavelets; (sys_platform != 'win32' or platform_machine != 'ARM64') or python_version < '3.12'",
+  "PyWavelets>=1.10; sys_platform == 'win32' and platform_machine == 'ARM64' and python_version >= '3.12'",   # first win_arm64 wheels, 3.12+ only
 
   # Semantic image index (image map / semantic search).
   # numba is a umap-learn transitive, pinned to the range this stack has been
@@ -112,41 +137,51 @@ dependencies = [
   # 0.59 to at least 0.63 accepts the numpy 1.26.x resolved under numpy<2.0
   # above (0.62 widened its floor back to >=1.22). Raise the ceiling once a
   # newer numba has been run against the image map, not just resolved.
-  "umap-learn~=0.5.7",
+  # Not on Windows ARM64: numba/llvmlite ship win_arm64 wheels for Python 3.14 only. The image map falls back to a
+  # PCA projection there (see image_index/projection.py).
+  "umap-learn~=0.5.7; (sys_platform != 'win32' or platform_machine != 'ARM64')",
   "scikit-learn~=1.5",
-  "numba>=0.59,<0.62",
+  "numba>=0.59,<0.62; (sys_platform != 'win32' or platform_machine != 'ARM64')",
 ]
 
 [project.optional-dependencies]
 "xformers" = [
   # Core generation dependencies, pinned for reproducible builds.
-  "xformers>=0.0.28.post1; sys_platform!='darwin'",
+  "xformers>=0.0.28.post1; sys_platform!='darwin' and (sys_platform != 'win32' or platform_machine != 'ARM64')",
   # torch 2.4+cu carries its own triton dependency
 ]
 
 # The +cpu/+cu128/+rocm7.2 pins live on PyTorch's WHL indexes. torchvision has no
 # linux_aarch64 wheels there (torch does for +cpu/+cu128), so on linux_aarch64 these
 # pins are unsatisfiable and are gated behind a marker that excludes only that
-# platform; every other platform (Windows, macOS, Linux x86_64) is unaffected. On
+# platform; every other platform (Windows x64, macOS, Linux x86_64) is unaffected.
+# Windows ARM64 is excluded the same way: the indexes have no win_arm64 wheels, and
+# every extra falls back to NVIDIA's build there (see the base `torch` pin). On
 # linux_aarch64 the base `torch` / `torchvision` declarations resolve from PyPI
 # instead (CPU-only wheels — an aarch64 install requesting `cuda` gets CPU torch).
 # Since torch+cu128 aarch64 wheels DO exist on the index, real CUDA-on-aarch64
 # (e.g. Grace/GH200) is feasible later with a torchvision-specific workaround.
 "cpu" = [
-  "torch==2.7.1+cpu; sys_platform != 'linux' or platform_machine != 'aarch64'",
-  "torchvision==0.22.1+cpu; sys_platform != 'linux' or platform_machine != 'aarch64'",
+  "torch==2.7.1+cpu; (sys_platform != 'linux' or platform_machine != 'aarch64') and (sys_platform != 'win32' or platform_machine != 'ARM64')",
+  "torchvision==0.22.1+cpu; (sys_platform != 'linux' or platform_machine != 'aarch64') and (sys_platform != 'win32' or platform_machine != 'ARM64')",
   # linux_aarch64 fallback: same versions, resolved from PyPI. Without these
   # explicit entries the extra's conflict-universe would contain no torch at all
   # on aarch64 (uv partitions the base declarations into the no-extra universe).
   "torch==2.7.1; sys_platform == 'linux' and platform_machine == 'aarch64'",
   "torchvision==0.22.1; sys_platform == 'linux' and platform_machine == 'aarch64'",
+  # Windows ARM64 fallback, for the same reason: NVIDIA's build is the only torch there.
+  "torch==2.14.0+cu134; sys_platform == 'win32' and platform_machine == 'ARM64'",
+  "torchvision==0.29.0+cu134; sys_platform == 'win32' and platform_machine == 'ARM64'",
 ]
 "cuda" = [
-  "torch==2.7.1+cu128; sys_platform != 'linux' or platform_machine != 'aarch64'",
-  "torchvision==0.22.1+cu128; sys_platform != 'linux' or platform_machine != 'aarch64'",
+  "torch==2.7.1+cu128; (sys_platform != 'linux' or platform_machine != 'aarch64') and (sys_platform != 'win32' or platform_machine != 'ARM64')",
+  "torchvision==0.22.1+cu128; (sys_platform != 'linux' or platform_machine != 'aarch64') and (sys_platform != 'win32' or platform_machine != 'ARM64')",
   # linux_aarch64 fallback, see note under "cpu"
   "torch==2.7.1; sys_platform == 'linux' and platform_machine == 'aarch64'",
   "torchvision==0.22.1; sys_platform == 'linux' and platform_machine == 'aarch64'",
+  # Windows ARM64 fallback, see note under "cpu"
+  "torch==2.14.0+cu134; sys_platform == 'win32' and platform_machine == 'ARM64'",
+  "torchvision==0.29.0+cu134; sys_platform == 'win32' and platform_machine == 'ARM64'",
 ]
 "rocm" = [
   # ROCm wheels are x86_64-linux-only; gate by platform so macOS/win/linux-aarch64 resolution is unaffected.
@@ -159,9 +194,13 @@ dependencies = [
   # linux_aarch64 fallback, see note under "cpu"
   "torch==2.7.1; sys_platform == 'linux' and platform_machine == 'aarch64'",
   "torchvision==0.22.1; sys_platform == 'linux' and platform_machine == 'aarch64'",
+  # Windows ARM64 fallback, see note under "cpu"
+  "torch==2.14.0+cu134; sys_platform == 'win32' and platform_machine == 'ARM64'",
+  "torchvision==0.29.0+cu134; sys_platform == 'win32' and platform_machine == 'ARM64'",
 ]
 # Intel XPU (Arc / Battlemage) wheels are published only for linux-x86_64 and
-# windows-amd64 on PyTorch's WHL index. Gate the +xpu pins to those platforms; the
+# windows-amd64 on PyTorch's WHL index. Gate the +xpu pins to those platforms (the
+# Windows clause excludes ARM64 explicitly, since `sys_platform` alone is 'win32' there too); the
 # Intel oneAPI runtime libs (intel-sycl-rt, etc.) come in automatically as deps of
 # torch+xpu.
 # Pinned ahead of the cpu/cuda extras (2.7.1), as the rocm extra already is. Intel's XPU
@@ -169,11 +208,14 @@ dependencies = [
 # combinations where it previously raised, and the bundled oneAPI runtime ships with the wheel
 # (intel-sycl-rt), so upgrading torch upgrades the user-space runtime too.
 "xpu" = [
-  "torch==2.13.0+xpu; (sys_platform == 'linux' and platform_machine == 'x86_64') or sys_platform == 'win32'",
-  "torchvision==0.28.0+xpu; (sys_platform == 'linux' and platform_machine == 'x86_64') or sys_platform == 'win32'",
+  "torch==2.13.0+xpu; (sys_platform == 'linux' and platform_machine == 'x86_64') or (sys_platform == 'win32' and platform_machine != 'ARM64')",
+  "torchvision==0.28.0+xpu; (sys_platform == 'linux' and platform_machine == 'x86_64') or (sys_platform == 'win32' and platform_machine != 'ARM64')",
   # XPU triton (for torch.compile); the WHL index ships linux-x86_64 and win_amd64 wheels.
   # Renamed from pytorch-triton-xpu to triton-xpu upstream.
-  "triton-xpu==3.7.2; (sys_platform == 'linux' and platform_machine == 'x86_64') or sys_platform == 'win32'",
+  "triton-xpu==3.7.2; (sys_platform == 'linux' and platform_machine == 'x86_64') or (sys_platform == 'win32' and platform_machine != 'ARM64')",
+  # Windows ARM64 has no +xpu wheels either: NVIDIA's build, as everywhere else on that platform.
+  "torch==2.14.0+cu134; sys_platform == 'win32' and platform_machine == 'ARM64'",
+  "torchvision==0.29.0+cu134; sys_platform == 'win32' and platform_machine == 'ARM64'",
   # macOS / linux_aarch64 have no +xpu wheels: fall back to base torch so the extra's
   # conflict-universe always contains a torch. See note under "cpu". These stay on 2.7.1 to
   # match the other extras and the project's `torch<2.8.0` constraint on darwin -- only the
@@ -183,8 +225,9 @@ dependencies = [
 ]
 
 "onnx" = ["onnxruntime"]
-"onnx-cuda" = ["onnxruntime-gpu"]
-"onnx-directml" = ["onnxruntime-directml"]
+# Neither GPU build of onnxruntime has win_arm64 wheels; `required-environments` below rejects the extras there.
+"onnx-cuda" = ["onnxruntime-gpu; (sys_platform != 'win32' or platform_machine != 'ARM64')"]
+"onnx-directml" = ["onnxruntime-directml; (sys_platform != 'win32' or platform_machine != 'ARM64')"]
 "dist" = ["pip-tools", "pipdeptree", "twine"]
 "dev" = ["jurigged", "pudb", "snakeviz", "gprof2dot"]
 "test" = [
@@ -209,10 +252,17 @@ dependencies = [
 override-dependencies = ["opencv-python; sys_platform=='never'"]
 conflicts = [[{ extra = "cpu" }, { extra = "cuda" }, { extra = "rocm" }, { extra = "xpu" }]]
 index-strategy = "unsafe-best-match"
-# Restrict resolution to the platforms we support: x86_64/aarch64 Linux, Windows,
-# and macOS. (ROCm and the PyTorch WHL-index pins are x86_64-only; on aarch64
-# Linux torch/torchvision fall back to PyPI via the markers below.)
+# Restrict resolution to the platforms we support: x86_64/aarch64 Linux, Windows
+# (x64 and ARM64 -- both are `win32`), and macOS. (ROCm and the PyTorch WHL-index
+# pins are x86_64-only; on aarch64 Linux torch/torchvision fall back to PyPI and on
+# Windows ARM64 to NVIDIA's index via the markers below.)
 environments = ["sys_platform == 'win32' or sys_platform == 'darwin' or (sys_platform == 'linux' and (platform_machine == 'x86_64' or platform_machine == 'aarch64'))"]
+# Windows on ARM64 must stay installable: uv refuses to lock a wheel-only package that has no
+# win_arm64 wheel. It does not cover packages that also publish an sdist (uv would happily lock
+# one and the build would fail on the user's machine), which is why the `; sys_platform == 'win32'
+# and platform_machine == 'ARM64'` forks above pin ARM64-capable versions explicitly, and why
+# scripts/check_platform_locks.py walks the platform's whole closure for wheel availability.
+required-environments = ["sys_platform == 'win32' and platform_machine == 'ARM64'"]
 
 # compel, could you please not pull in all of Jupyter. (compel declares `notebook>=6.5.7` but does not
 # reference IPython/Jupyter anywhere in its code.) Dropping it takes ~65 packages out of the environment.
@@ -230,27 +280,36 @@ exclude-dependencies = ["notebook"]
 # Exclude linux_aarch64 from the PyTorch WHL indexes so that uv resolves torch /
 # torchvision from PyPI on that platform. The indexes DO carry aarch64 torch wheels
 # (+cpu/+cu128), but no aarch64 torchvision wheels, so the pinned pairs cannot
-# resolve there. All other platforms (Windows, macOS, Linux x86_64) are unaffected.
+# resolve there. Windows ARM64 is likewise excluded and routed, with or without an
+# extra, to NVIDIA's out-of-tree index. All other platforms (Windows x64, macOS,
+# Linux x86_64) are unaffected.
 torch = [
-  { index = "torch-cpu", extra = "cpu", marker = "sys_platform != 'linux' or platform_machine != 'aarch64'" },
-  { index = "torch-cuda", extra = "cuda", marker = "sys_platform != 'linux' or platform_machine != 'aarch64'" },
-  { index = "torch-rocm", extra = "rocm", marker = "sys_platform != 'linux' or platform_machine != 'aarch64'" },
-  { index = "torch-xpu", extra = "xpu", marker = "(sys_platform == 'linux' and platform_machine == 'x86_64') or sys_platform == 'win32'" },
+  { index = "torch-nvidia-win-arm64", marker = "sys_platform == 'win32' and platform_machine == 'ARM64'" },
+  { index = "torch-cpu", extra = "cpu", marker = "(sys_platform != 'linux' or platform_machine != 'aarch64') and (sys_platform != 'win32' or platform_machine != 'ARM64')" },
+  { index = "torch-cuda", extra = "cuda", marker = "(sys_platform != 'linux' or platform_machine != 'aarch64') and (sys_platform != 'win32' or platform_machine != 'ARM64')" },
+  { index = "torch-rocm", extra = "rocm", marker = "(sys_platform != 'linux' or platform_machine != 'aarch64') and (sys_platform != 'win32' or platform_machine != 'ARM64')" },
+  { index = "torch-xpu", extra = "xpu", marker = "(sys_platform == 'linux' and platform_machine == 'x86_64') or (sys_platform == 'win32' and platform_machine != 'ARM64')" },
   { index = "pypi", marker = "sys_platform == 'linux' and platform_machine == 'aarch64'" },
 ]
 torchvision = [
-  { index = "torch-cpu", extra = "cpu", marker = "sys_platform != 'linux' or platform_machine != 'aarch64'" },
-  { index = "torch-cuda", extra = "cuda", marker = "sys_platform != 'linux' or platform_machine != 'aarch64'" },
-  { index = "torch-rocm", extra = "rocm", marker = "sys_platform != 'linux' or platform_machine != 'aarch64'" },
-  { index = "torch-xpu", extra = "xpu", marker = "(sys_platform == 'linux' and platform_machine == 'x86_64') or sys_platform == 'win32'" },
+  { index = "torch-nvidia-win-arm64", marker = "sys_platform == 'win32' and platform_machine == 'ARM64'" },
+  { index = "torch-cpu", extra = "cpu", marker = "(sys_platform != 'linux' or platform_machine != 'aarch64') and (sys_platform != 'win32' or platform_machine != 'ARM64')" },
+  { index = "torch-cuda", extra = "cuda", marker = "(sys_platform != 'linux' or platform_machine != 'aarch64') and (sys_platform != 'win32' or platform_machine != 'ARM64')" },
+  { index = "torch-rocm", extra = "rocm", marker = "(sys_platform != 'linux' or platform_machine != 'aarch64') and (sys_platform != 'win32' or platform_machine != 'ARM64')" },
+  { index = "torch-xpu", extra = "xpu", marker = "(sys_platform == 'linux' and platform_machine == 'x86_64') or (sys_platform == 'win32' and platform_machine != 'ARM64')" },
   { index = "pypi", marker = "sys_platform == 'linux' and platform_machine == 'aarch64'" },
 ]
 triton-rocm = [
   { index = "torch-rocm", marker = "sys_platform == 'linux' and platform_machine != 'aarch64'" },
 ]
 triton-xpu = [
-  { index = "torch-xpu", marker = "(sys_platform == 'linux' and platform_machine == 'x86_64') or sys_platform == 'win32'" },
+  { index = "torch-xpu", marker = "(sys_platform == 'linux' and platform_machine == 'x86_64') or (sys_platform == 'win32' and platform_machine != 'ARM64')" },
 ]
+# Windows ARM64 wheels PyPI does not provide, built by .github/workflows/build-win-arm64-wheels.yml
+# and served from the release's index page. Elsewhere these resolve from PyPI as usual.
+opencv-contrib-python = [{ index = "invoke-win-arm64-wheels", marker = "sys_platform == 'win32' and platform_machine == 'ARM64'" }]
+blake3 = [{ index = "invoke-win-arm64-wheels", marker = "sys_platform == 'win32' and platform_machine == 'ARM64'" }]
+tiktoken = [{ index = "invoke-win-arm64-wheels", marker = "sys_platform == 'win32' and platform_machine == 'ARM64'" }]
 
 [[tool.uv.index]]
 name = "pypi"
@@ -274,6 +333,22 @@ explicit = true
 [[tool.uv.index]]
 name = "torch-xpu"
 url = "https://download.pytorch.org/whl/xpu"
+explicit = true
+
+# NVIDIA's out-of-tree PyTorch for Windows on ARM64 (RTX Spark): torch 2.14.0+cu134 and torchvision
+# 0.29.0+cu134, win_arm64 only. The torch wheel bundles cuBLAS, cuDNN, cuFFT and NVRTC (1.85 GB).
+[[tool.uv.index]]
+name = "torch-nvidia-win-arm64"
+url = "https://pypi.nvidia.com/nvtorch_oot/"
+explicit = true
+
+# A flat (find-links style) page listing this repo's self-built win_arm64 wheels, published as
+# release assets by .github/workflows/build-win-arm64-wheels.yml. Bump the tag together with the
+# ARM64 pins of the packages it serves.
+[[tool.uv.index]]
+name = "invoke-win-arm64-wheels"
+url = "https://github.com/invoke-ai/InvokeAI-7/releases/download/win-arm64-wheels-v1/index.html"
+format = "flat"
 explicit = true
 
 [project.scripts]
