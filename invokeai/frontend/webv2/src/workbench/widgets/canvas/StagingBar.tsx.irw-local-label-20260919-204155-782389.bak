@@ -484,7 +484,7 @@ const StagingThumbnail = ({
           rounded="sm"
           top="1"
         >
-          {remoteIdentity ? `R${remoteIdentity.slot}` : 'L'}
+          {remoteIdentity ? `R${remoteIdentity.slot}` : 'W'}
         </Text>
       ) : null}
       <Text

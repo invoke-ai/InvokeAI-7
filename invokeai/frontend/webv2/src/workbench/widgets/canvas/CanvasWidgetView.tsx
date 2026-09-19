@@ -3,11 +3,13 @@ import type { MouseEvent as ReactMouseEvent } from 'react';
 
 import { Box } from '@chakra-ui/react';
 import { useDndMonitor, type DragEndEvent } from '@dnd-kit/core';
+import { getRemoteProgressTarget, getRemoteSyntheticBackendItemId } from '@features/queue';
 import { useQueueItemProgressImage } from '@features/queue/react';
 import { useMountEffect } from '@platform/react/useMountEffect';
 import { preloadCanvasInvocation } from '@workbench/activeInvocationSubmission';
 import { getCanvasImportNotice } from '@workbench/canvas-operations/api';
-import { getCanvasStagingSlots } from '@workbench/canvasStagingView';
+import { getCanvasRemotePreviewSnapshot, subscribeCanvasRemotePreviews } from '@workbench/canvasRemotePreviews';
+import { getCanvasStagingSlots, type CanvasStagingSlot } from '@workbench/canvasStagingView';
 import { recordCanvasImportError } from '@workbench/image-actions/canvasImportError';
 import { readLayerPanelState } from '@workbench/layerPanelState';
 import { useWorkbenchSettingsSelector } from '@workbench/settings/store';
@@ -22,7 +24,17 @@ import {
   useWorkbenchCommands,
   useWorkbenchQueries,
 } from '@workbench/WorkbenchContext';
-import { lazy, Suspense, useCallback, useEffect, useEffectEvent, useLayoutEffect, useMemo, useState } from 'react';
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useEffectEvent,
+  useLayoutEffect,
+  useMemo,
+  useState,
+  useSyncExternalStore,
+} from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { useModelGridSize } from './bboxGrid';
@@ -160,12 +172,77 @@ export const CanvasWidgetView = ({ runtime }: WidgetViewProps) => {
     engine?.interaction.set('checkerColors', resolveCheckerColors());
   }, [engine, themeId]);
 
-  const stagingSlots = getCanvasStagingSlots(canvas, queueItems);
-  const selectedSlot = stagingSlots[stagingArea.selectedImageIndex];
+  const stagingSlots = useMemo(() => getCanvasStagingSlots(canvas, queueItems), [canvas, queueItems]);
+  const remotePreviews = useSyncExternalStore(
+    subscribeCanvasRemotePreviews,
+    getCanvasRemotePreviewSnapshot,
+    getCanvasRemotePreviewSnapshot
+  );
+  const remotePreviewSlots = useMemo<CanvasStagingSlot[]>(() => {
+    return Object.values(remotePreviews).flatMap((remote) => {
+      const item = queueItems.find((entry) => entry.id === remote.queueItemId);
+      if (
+        !item ||
+        item.snapshot.destination !== 'canvas' ||
+        item.status === 'cancelled' ||
+        item.snapshot.canvas.documentRevision !== canvas.documentRevision
+      ) {
+        return [];
+      }
+      const backendItemId = getRemoteSyntheticBackendItemId(remote.queueItemId, remote.slot);
+      if (
+        stagingArea.pendingImages.some(
+          (candidate) =>
+            candidate.sourceQueueItemId === remote.queueItemId && candidate.sourceBackendItemId === backendItemId
+        )
+      ) {
+        // The actual candidate now takes this thumbnail's place.
+        return [];
+      }
+      const target = getRemoteProgressTarget(remote.queueItemId, remote.slot);
+      const bbox = item.snapshot.canvas.document.bbox;
+      return [
+        {
+          id: `remote-placeholder:${remote.queueItemId}:${remote.slot}`,
+          itemIndex: target.itemIndex,
+          kind: 'placeholder' as const,
+          queueItemId: target.queueItemId,
+          width: bbox.width,
+          height: bbox.height,
+        },
+      ];
+    });
+  }, [canvas.documentRevision, queueItems, remotePreviews, stagingArea.pendingImages]);
+  // Temporary display slots never enter the persisted Canvas reducer.
+  const displaySlots = useMemo(() => [...stagingSlots, ...remotePreviewSlots], [stagingSlots, remotePreviewSlots]);
+  const [pinnedRemote, setPinnedRemote] = useState<{ id: string; queueItemId: string; slot: number } | null>(null);
+  const pinnedDisplayIndex = pinnedRemote ? displaySlots.findIndex((slot) => slot.id === pinnedRemote.id) : -1;
+  const selectedDisplayIndex = pinnedDisplayIndex !== -1 ? pinnedDisplayIndex : stagingArea.selectedImageIndex;
+  const selectedSlot = displaySlots[selectedDisplayIndex];
   const selectedCandidate = selectedSlot?.kind === 'candidate' ? selectedSlot.candidate : undefined;
   const selectedPlaceholder = selectedSlot?.kind === 'placeholder' ? selectedSlot : null;
-  const hasStagingSlots = stagingSlots.length > 0;
-  const hasMultipleStagingSlots = stagingSlots.length > 1;
+  const hasStagingSlots = displaySlots.length > 0;
+  const hasMultipleStagingSlots = displaySlots.length > 1;
+
+  // When a pinned remote finishes, its display placeholder disappears. Select
+  // the real staging candidate in the reducer; the display then follows that
+  // selection. Keep the pin as harmless transient state until the next click:
+  // resetting React state synchronously inside this effect fails oxlint.
+  useEffect(() => {
+    if (!pinnedRemote) {
+      return;
+    }
+    const finishedBackendId = getRemoteSyntheticBackendItemId(pinnedRemote.queueItemId, pinnedRemote.slot);
+    const candidateIndex = stagingSlots.findIndex(
+      (slot) =>
+        slot.kind === 'candidate' &&
+        slot.queueItemId === pinnedRemote.queueItemId &&
+        slot.candidate.sourceBackendItemId === finishedBackendId
+    );
+    if (candidateIndex !== -1 && candidateIndex !== stagingArea.selectedImageIndex) {
+      canvasDispatch({ imageIndex: candidateIndex, type: 'setStagedImageIndex' });
+    }
+  }, [canvasDispatch, pinnedRemote, stagingArea.selectedImageIndex, stagingSlots]);
   const isCanvasGenerationInFlight = queueItems.some(
     (item) =>
       item.snapshot.destination === 'canvas' &&
@@ -321,9 +398,39 @@ export const CanvasWidgetView = ({ runtime }: WidgetViewProps) => {
   const acceptStagedImage = useCallback(() => commitSelectedStagedImage(false), [commitSelectedStagedImage]);
   const saveStagedImageAndContinue = useCallback(() => commitSelectedStagedImage(true), [commitSelectedStagedImage]);
   const cancelQueueItem = useCallback((queueItemId: string) => queue.cancel(undefined, queueItemId), [queue]);
+  const selectDisplaySlot = useCallback(
+    (index: number) => {
+      const slot = displaySlots[index];
+      if (!slot) {
+        return;
+      }
+      // A manual thumbnail choice should remain pinned when another machine
+      // finishes, regardless of the previous Canvas auto-switch preference.
+      canvasDispatch({ mode: 'off', type: 'setCanvasStagingAutoSwitch' });
+      if (slot.kind === 'placeholder' && slot.id.startsWith('remote-placeholder:')) {
+        const remote = Object.values(remotePreviews).find(
+          (entry) => getRemoteProgressTarget(entry.queueItemId, entry.slot).queueItemId === slot.queueItemId
+        );
+        if (remote) {
+          setPinnedRemote({ id: slot.id, queueItemId: remote.queueItemId, slot: remote.slot });
+        }
+        return;
+      }
+      setPinnedRemote(null);
+      const actualIndex = stagingSlots.findIndex((entry) => entry.id === slot.id);
+      if (actualIndex !== -1) {
+        canvasDispatch({ imageIndex: actualIndex, type: 'setStagedImageIndex' });
+      }
+    },
+    [canvasDispatch, displaySlots, remotePreviews, stagingSlots]
+  );
   const cycleStagedImage = useCallback(
-    (direction: -1 | 1) => canvasDispatch({ direction, type: 'cycleStagedImage' }),
-    [canvasDispatch]
+    (direction: -1 | 1) => {
+      if (displaySlots.length > 0) {
+        selectDisplaySlot((selectedDisplayIndex + direction + displaySlots.length) % displaySlots.length);
+      }
+    },
+    [displaySlots.length, selectedDisplayIndex, selectDisplaySlot]
   );
   const discardAllStagedImages = useCallback(
     () => canvasDispatch({ type: 'discardAllStagedImages' }),
@@ -336,10 +443,6 @@ export const CanvasWidgetView = ({ runtime }: WidgetViewProps) => {
   const preloadStagedCandidate = useCallback(
     (imageName: string) => engine?.previews.preloadStagedPreview(imageName),
     [engine]
-  );
-  const selectStagedImage = useCallback(
-    (imageIndex: number) => canvasDispatch({ imageIndex, type: 'setStagedImageIndex' }),
-    [canvasDispatch]
   );
   const setStagingAutoSwitch = useCallback(
     (mode: 'off' | 'latest' | 'progress') => canvasDispatch({ mode, type: 'setCanvasStagingAutoSwitch' }),
@@ -369,7 +472,9 @@ export const CanvasWidgetView = ({ runtime }: WidgetViewProps) => {
     bboxHeight: document.bbox.height,
     bboxWidth: document.bbox.width,
     isGenerationInFlight: selectedPlaceholder !== null,
-    isVisible: stagingArea.isVisible,
+    // The local item may have settled (and hidden staging) while a remote
+    // bridge is still running. A selected remote live frame must stay visible.
+    isVisible: stagingArea.isVisible || selectedPlaceholder?.id.startsWith('remote-placeholder:') === true,
     progressImage,
     selectedImageName: selectedCandidate?.imageName ?? null,
     selectedPlacement: selectedCandidate?.placement ?? null,
@@ -560,19 +665,19 @@ export const CanvasWidgetView = ({ runtime }: WidgetViewProps) => {
                 autoSwitchMode={stagingArea.autoSwitchMode}
                 canAccept={interactionCapabilities.canAcceptStagedImage}
                 hasMultipleSlots={hasMultipleStagingSlots}
-                isGenerating={isCanvasGenerationInFlight}
+                isGenerating={isCanvasGenerationInFlight || remotePreviewSlots.length > 0}
                 isVisible={stagingArea.isVisible}
                 selectedCandidate={selectedCandidate}
-                selectedImageIndex={stagingArea.selectedImageIndex}
+                selectedImageIndex={selectedDisplayIndex}
                 selectedSlot={selectedSlot}
-                slots={stagingSlots}
+                slots={displaySlots}
                 onAccept={acceptStagedImage}
                 onCancelQueueItem={cancelQueueItem}
                 onCycle={cycleStagedImage}
                 onDiscardAll={discardAllStagedImages}
                 onDiscardSelected={discardSelectedStagedImage}
                 onPreloadCandidate={preloadStagedCandidate}
-                onSelectImage={selectStagedImage}
+                onSelectImage={selectDisplaySlot}
                 onSaveToLayerAndContinue={saveStagedImageAndContinue}
                 onSetAutoSwitch={setStagingAutoSwitch}
                 onToggleThumbnails={toggleStagingThumbnails}

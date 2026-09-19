@@ -1,8 +1,11 @@
 import type { WidgetViewProps } from '@workbench/widgetContracts';
 import type { ChangeEvent } from 'react';
 
-import { Badge, Box, HStack, Input, Stack, Switch, Text, Textarea } from '@chakra-ui/react';
+import { Badge, Box, Button, HStack, Input, Stack, Switch, Text, Textarea } from '@chakra-ui/react';
 import { getRemoteWorkerUrls, remoteWorkersStore, setRemoteWorkersSettings } from '@features/queue';
+import { captureAccountScope } from '@platform/state/accountLifecycle';
+import { apiFetchJson, getApiErrorMessage } from '@platform/transport/http';
+import { useCallback, useEffect, useState } from 'react';
 
 const handleEnabledChange = (details: { checked: boolean }): void => {
   setRemoteWorkersSettings({ enabled: details.checked });
@@ -24,10 +27,134 @@ const handleTransferHostChange = (event: ChangeEvent<HTMLInputElement>): void =>
   setRemoteWorkersSettings({ modelTransferHost: event.target.value });
 };
 
+interface CredentialStatus {
+  saved: boolean;
+  email: string | null;
+}
+
+/** The password never enters queue settings, localStorage, or the workflow graph. */
+const WorkerAuthRow = ({ url }: { url: string }) => {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [saved, setSaved] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState('');
+
+  useEffect(() => {
+    let active = true;
+    void apiFetchJson<CredentialStatus>(`/api/v1/remote_workers/credentials?url=${encodeURIComponent(url)}`)
+      .then((status) => {
+        if (!active) {
+          return;
+        }
+        setSaved(status.saved);
+        setEmail(status.email ?? '');
+        setMessage('');
+      })
+      .catch((error: unknown) => {
+        if (active) {
+          setMessage(getApiErrorMessage(error, 'Could not load saved login status'));
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [url]);
+
+  const handleEmailChange = useCallback((event: ChangeEvent<HTMLInputElement>) => {
+    setEmail(event.target.value);
+  }, []);
+  const handlePasswordChange = useCallback((event: ChangeEvent<HTMLInputElement>) => {
+    setPassword(event.target.value);
+  }, []);
+  const handleSave = useCallback(async () => {
+    setBusy(true);
+    setMessage('');
+    try {
+      const status = await apiFetchJson<CredentialStatus>('/api/v1/remote_workers/credentials', {
+        method: 'PUT',
+        body: JSON.stringify({ url, email, password, remember_me: true }),
+      });
+      setSaved(status.saved);
+      setEmail(status.email ?? '');
+      setPassword('');
+      setMessage('Login saved on this InvokeAI server.');
+    } catch (error) {
+      setMessage(getApiErrorMessage(error, 'Could not save worker login'));
+    } finally {
+      setBusy(false);
+    }
+  }, [url, email, password]);
+  const handleRemove = useCallback(async () => {
+    setBusy(true);
+    setMessage('');
+    try {
+      await apiFetchJson<CredentialStatus>(`/api/v1/remote_workers/credentials?url=${encodeURIComponent(url)}`, {
+        method: 'DELETE',
+      });
+      setSaved(false);
+      setEmail('');
+      setPassword('');
+      setMessage('Saved login removed.');
+    } catch (error) {
+      setMessage(getApiErrorMessage(error, 'Could not remove worker login'));
+    } finally {
+      setBusy(false);
+    }
+  }, [url]);
+
+  return (
+    <Box borderColor="border.subtle" borderWidth="1px" borderRadius="md" p="3">
+      <Stack gap="2">
+        <HStack justify="space-between" gap="2" flexWrap="wrap">
+          <Text fontFamily="mono" fontSize="xs" overflowWrap="anywhere">
+            {url}
+          </Text>
+          <Badge colorPalette={saved ? 'green' : 'gray'}>{saved ? 'Login saved' : 'No saved login'}</Badge>
+        </HStack>
+        <Input
+          autoComplete="off"
+          onChange={handleEmailChange}
+          placeholder="Remote InvokeAI email"
+          size="sm"
+          type="email"
+          value={email}
+        />
+        <Input
+          autoComplete="new-password"
+          onChange={handlePasswordChange}
+          placeholder={saved ? 'New password (to replace saved login)' : 'Remote InvokeAI password'}
+          size="sm"
+          type="password"
+          value={password}
+        />
+        <HStack gap="2">
+          <Button disabled={busy || !email.trim() || !password} onClick={handleSave} size="sm">
+            Save login
+          </Button>
+          <Button disabled={busy || !saved} onClick={handleRemove} size="sm" variant="outline">
+            Remove login
+          </Button>
+        </HStack>
+        {message ? (
+          <Text color="fg.muted" fontSize="xs">
+            {message}
+          </Text>
+        ) : null}
+      </Stack>
+    </Box>
+  );
+};
+
 /** Minimal first-pass control surface, not a live worker-monitoring dashboard. */
 export const RemoteWorkersWidgetView = (_props: WidgetViewProps) => {
   const settings = remoteWorkersStore.useSnapshot();
   const urls = getRemoteWorkerUrls(settings.workerUrls);
+  const accountId = captureAccountScope().accountId;
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const handleAdvancedChange = useCallback((details: { checked: boolean }) => {
+    setShowAdvanced(details.checked);
+  }, []);
   return (
     <Stack gap="4" p="3">
       <HStack justify="space-between">
@@ -39,11 +166,11 @@ export const RemoteWorkersWidgetView = (_props: WidgetViewProps) => {
         <Switch.Control>
           <Switch.Thumb />
         </Switch.Control>
-        <Switch.Label>Mirror new Gallery generations</Switch.Label>
+        <Switch.Label>Mirror InvokeAI generations</Switch.Label>
       </Switch.Root>
       <Text color="fg.muted" fontSize="xs">
-        Windows keeps rendering. Each enabled remote receives a variation with its own seed. This first test mirrors
-        Gallery submissions only; Canvas results stay local.
+        Windows keeps rendering. Each enabled remote receives a variation with its own seed. Results follow InvokeAI's
+        selected Gallery or Canvas destination.
       </Text>
       <Stack gap="1">
         <Text fontSize="sm" fontWeight="medium">
@@ -81,25 +208,49 @@ export const RemoteWorkersWidgetView = (_props: WidgetViewProps) => {
         </Switch.Control>
         <Switch.Label>Keep copies on remote workers</Switch.Label>
       </Switch.Root>
-      <Stack gap="1">
-        <Text fontSize="sm" fontWeight="medium">
-          Model transfer host (optional)
-        </Text>
-        <Input
-          fontFamily="mono"
-          onChange={handleTransferHostChange}
-          placeholder="Auto-detect Windows LAN IP"
-          size="sm"
-          value={settings.modelTransferHost}
-        />
-      </Stack>
+      {settings.autoTransferMissingModels ? (
+        <>
+          <Switch.Root checked={showAdvanced} onCheckedChange={handleAdvancedChange}>
+            <Switch.HiddenInput />
+            <Switch.Control>
+              <Switch.Thumb />
+            </Switch.Control>
+            <Switch.Label>Advanced model transfer settings</Switch.Label>
+          </Switch.Root>
+          {showAdvanced ? (
+            <Stack gap="1">
+              <Text fontSize="sm" fontWeight="medium">
+                Windows address for model transfers (optional)
+              </Text>
+              <Input
+                fontFamily="mono"
+                onChange={handleTransferHostChange}
+                placeholder="Auto-detect Windows LAN IP"
+                size="sm"
+                value={settings.modelTransferHost}
+              />
+            </Stack>
+          ) : null}
+        </>
+      ) : null}
       <Box borderColor="border.subtle" borderTopWidth="1px" pt="3">
-        <Text color="fg.muted" fontSize="xs">
-          Requires the invokeai-remote-worker node pack on this Windows InvokeAI. An existing manual Mirror node takes
-          precedence. The captured Gallery board is used for Board=Auto. URLs/settings are stored in this browser;
-          credentials are not stored here.
-        </Text>
+        <Stack gap="2">
+          <Text fontWeight="medium" fontSize="sm">
+            Worker authentication
+          </Text>
+          <Text color="fg.muted" fontSize="xs">
+            For workers with multi-user mode enabled, save that worker's InvokeAI email and password once. Passwords are
+            encrypted by the Windows backend and never stored in browser settings or workflows. Use HTTPS when
+            connecting across untrusted networks.
+          </Text>
+          {urls.map((url) => (
+            <WorkerAuthRow key={`${accountId}:${url}`} url={url} />
+          ))}
+        </Stack>
       </Box>
+      <Text color="fg.muted" fontSize="xs">
+        Gallery results use the board selected when you invoke. Canvas results become staging candidates you can accept.
+      </Text>
     </Stack>
   );
 };

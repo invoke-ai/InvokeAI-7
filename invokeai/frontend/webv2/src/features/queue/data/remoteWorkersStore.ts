@@ -1,6 +1,7 @@
+import { captureAccountScope, registerAccountOwnedResource } from '@platform/state/accountLifecycle';
 import { createExternalStore } from '@platform/state/externalStore';
 
-/** Browser-local v0.1 settings. URLs only: never put worker credentials or tokens here. */
+/** Account-owned browser settings. URLs only: never put credentials or tokens here. */
 export interface RemoteWorkersSettings {
   enabled: boolean;
   workerUrls: string;
@@ -9,7 +10,16 @@ export interface RemoteWorkersSettings {
   modelTransferHost: string;
 }
 
-const STORAGE_KEY = 'invokeai-v7:remote-workers:test-v1';
+const LEGACY_SINGLE_USER_KEY = 'invokeai-v7:remote-workers:test-v1';
+const ACCOUNT_STORAGE_KEY = 'invokeai-v7:remote-workers:v2';
+
+const getStorageKey = (): string | null => {
+  const owner = captureAccountScope();
+  if (!owner.accountId) {
+    return null;
+  }
+  return owner.accountId === 'single-user' ? LEGACY_SINGLE_USER_KEY : `${ACCOUNT_STORAGE_KEY}${owner.storageSuffix}`;
+};
 
 export const DEFAULT_REMOTE_WORKERS_SETTINGS: RemoteWorkersSettings = {
   enabled: false,
@@ -21,7 +31,8 @@ export const DEFAULT_REMOTE_WORKERS_SETTINGS: RemoteWorkersSettings = {
 
 const readSavedSettings = (): RemoteWorkersSettings => {
   try {
-    const saved = localStorage.getItem(STORAGE_KEY);
+    const key = getStorageKey();
+    const saved = key ? localStorage.getItem(key) : null;
     if (!saved) {
       return { ...DEFAULT_REMOTE_WORKERS_SETTINGS };
     }
@@ -45,13 +56,24 @@ const readSavedSettings = (): RemoteWorkersSettings => {
 
 export const remoteWorkersStore = createExternalStore<RemoteWorkersSettings>(readSavedSettings());
 
-export const getRemoteWorkersSettings = (): RemoteWorkersSettings => remoteWorkersStore.getSnapshot();
+// Invalidate the previous account's URLs and enabled state synchronously on logout/login.
+registerAccountOwnedResource({
+  name: 'remote-workers-browser-settings',
+  clear: () => remoteWorkersStore.setSnapshot(readSavedSettings()),
+});
+
+export const getRemoteWorkersSettings = (): RemoteWorkersSettings =>
+  captureAccountScope().accountId ? remoteWorkersStore.getSnapshot() : { ...DEFAULT_REMOTE_WORKERS_SETTINGS };
 
 export const setRemoteWorkersSettings = (patch: Partial<RemoteWorkersSettings>): void => {
+  const key = getStorageKey();
+  if (!key) {
+    return;
+  }
   const next = { ...remoteWorkersStore.getSnapshot(), ...patch };
   remoteWorkersStore.setSnapshot(next);
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+    localStorage.setItem(key, JSON.stringify(next));
   } catch {
     // Rendering must not depend on browser storage availability.
   }

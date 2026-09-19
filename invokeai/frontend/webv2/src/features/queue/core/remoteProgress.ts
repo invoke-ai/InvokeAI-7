@@ -10,6 +10,8 @@ export interface RemoteProgressEnvelope {
   slot: number;
   state: RemoteProgressState;
   message: string;
+  /** Returned Canvas candidate names, never passwords or remote tokens. */
+  imageNames?: string[];
 }
 
 export interface RemoteProgressIdentity {
@@ -29,11 +31,30 @@ export const parseRemoteProgressMessage = (message: string): RemoteProgressEnvel
   if (!Number.isInteger(slot) || slot < 1) {
     return null;
   }
+  const rawMessage = match[4] ?? '';
+  const trailer = / \[\[IRW_CANVAS_IMAGES\|(\[[^\r\n]*\])\]\]$/.exec(rawMessage);
+  let imageNames: string[] | undefined;
+  if (trailer) {
+    try {
+      const parsed: unknown = JSON.parse(trailer[1]!);
+      if (
+        Array.isArray(parsed) &&
+        parsed.length > 0 &&
+        parsed.length <= 128 &&
+        parsed.every((name) => typeof name === 'string' && name.length > 0 && name.length <= 255)
+      ) {
+        imageNames = parsed as string[];
+      }
+    } catch {
+      // Malformed completion metadata is not a remote image result.
+    }
+  }
   return {
     queueItemId: match[1]!,
     slot,
     state: match[3] as RemoteProgressState,
-    message: match[4] ?? '',
+    message: trailer ? rawMessage.slice(0, trailer.index) : rawMessage,
+    ...(imageNames ? { imageNames } : {}),
   };
 };
 
