@@ -8,8 +8,10 @@ system memory, silently and for as long as the allocation lives. What it will ke
 
 Measured on an RX 9060 XT (16 GB, torch 2.12+rocm7.14): alone, the budget is 15.09 of 15.92 GiB and paging starts
 once the committed local usage passes budget + 0.38 GiB; next to another GPU process, Windows lowers the budget within
-about a second. ``CurrentUsage`` is the committed usage, including bytes already paged out, so budget minus usage is
-what this process can still allocate before paging.
+about a second. What this process can still allocate before paging is the budget minus its live allocations -- the
+device total minus torch's free figure. Not minus ``CurrentUsage``: that also counts memory HIP keeps after a free and
+hands back to the next allocation (1-2 GiB measured, still held after ``empty_cache()``), so it would hide what an
+offload just freed.
 
 Whether Windows has actually paged this process out is not visible through D3DKMT (``CurrentUsage`` counts paged bytes
 as local); it is visible in the ``GPU Process Memory`` performance counters Task Manager shows, read here through PDH.
@@ -261,8 +263,8 @@ def _adapter_for(device: torch.device) -> Optional[tuple[ctypes.CDLL, _Adapter]]
     return None if adapter is None else (lib, adapter)
 
 
-def local_video_memory(device: torch.device) -> Optional[tuple[int, int]]:
-    """This process's WDDM budget and committed local usage on the device's adapter, as ``(budget, usage)`` in bytes.
+def video_memory_budget(device: torch.device) -> Optional[int]:
+    """This process's WDDM budget on the device's adapter, in bytes: what Windows keeps resident before paging.
 
     ``None`` off Windows ROCm, and whenever the driver cannot answer or answers something implausible.
     """
@@ -280,7 +282,7 @@ def local_video_memory(device: torch.device) -> Optional[tuple[int, int]]:
         return None
     if not 0 < info.Budget <= adapter.total_bytes:
         return None
-    return int(info.Budget), int(info.CurrentUsage)
+    return int(info.Budget)
 
 
 def _open_shared_usage_query(pdh: ctypes.CDLL) -> Optional[tuple[ctypes.c_void_p, ctypes.c_void_p]]:

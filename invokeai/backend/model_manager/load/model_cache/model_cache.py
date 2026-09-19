@@ -2552,6 +2552,10 @@ class ModelCache:
             f"Offloading unlocked models with goal of making room for {vram_bytes_required / MB:.2f}MB of VRAM."
         )
         vram_bytes_freed = 0
+        # Under expandable segments the measurement credits no allocator-held blocks, so an offload
+        # only shows up once empty_cache() unmaps its pages; without it every unlocked model would
+        # be unloaded by the full shortfall.
+        empty_cache_per_offload = _expandable_segments_enabled()
         # TODO(ryand): Give more thought to the offloading policy used here.
         cache_entries_increasing_size = sorted(self._cached_models.values(), key=lambda x: x.cached_model.total_bytes())
         for cache_entry in cache_entries_increasing_size:
@@ -2569,13 +2573,15 @@ class ModelCache:
                 self._logger.debug(
                     f"Unloaded {cache_entry.key} from VRAM to free {(cache_entry_bytes_freed / MB):.0f} MB."
                 )
+                if empty_cache_per_offload:
+                    TorchDevice.empty_cache()
             vram_bytes_freed += cache_entry_bytes_freed
 
         # Only pay for empty_cache() when something was actually offloaded. Paced VRAM moves run
         # this method once per pass, and on most passes there is nothing left to offload —
         # an unconditional empty_cache() would return the allocator's blocks to the driver
         # (and synchronize the device on ROCm) dozens of times per stream for no benefit.
-        if vram_bytes_freed > 0:
+        if vram_bytes_freed > 0 and not empty_cache_per_offload:
             TorchDevice.empty_cache()
         return vram_bytes_freed
 

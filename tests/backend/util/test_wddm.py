@@ -14,6 +14,7 @@ import pytest
 import torch
 
 from invokeai.backend.util import wddm
+from invokeai.backend.util.devices import TorchDevice
 
 GIB = 1024**3
 DEVICE = torch.device("cuda", 0)
@@ -67,10 +68,9 @@ class _FakePdh:
 class _FakeGdi32:
     """Adapters as (handle, bus, device); every thunk returns NTSTATUS 0 unless told otherwise."""
 
-    def __init__(self, adapters, budget=15 * GIB, usage=2 * GIB, query_status=0):
+    def __init__(self, adapters, budget=15 * GIB, query_status=0):
         self.adapters = adapters
         self.budget = budget
-        self.usage = usage
         self.query_status = query_status
         self.enum_calls = 0
         self.closed: list[int] = []
@@ -96,7 +96,7 @@ class _FakeGdi32:
 
     def D3DKMTQueryVideoMemoryInfo(self, ref):
         info = ref._obj
-        info.Budget, info.CurrentUsage = self.budget, self.usage
+        info.Budget = self.budget
         return self.query_status
 
     def D3DKMTCloseAdapter(self, ref):
@@ -122,20 +122,18 @@ def windows_rocm(monkeypatch: pytest.MonkeyPatch):
 
 
 def test_reads_the_budget_of_the_adapter_at_the_devices_pci_location(windows_rocm):
-    gdi32 = windows_rocm(
-        _FakeGdi32([(10, 7, 0), (20, OUR_BUS, OUR_DEVICE), (30, 0xFFFFFFFF, 0xFFFF)], budget=15 * GIB, usage=2 * GIB)
-    )
+    gdi32 = windows_rocm(_FakeGdi32([(10, 7, 0), (20, OUR_BUS, OUR_DEVICE), (30, 0xFFFFFFFF, 0xFFFF)], budget=15 * GIB))
 
-    assert wddm.local_video_memory(DEVICE) == (15 * GIB, 2 * GIB)
+    assert wddm.video_memory_budget(DEVICE) == 15 * GIB
     assert sorted(gdi32.closed) == [10, 30], "the other adapters' handles are closed, ours stays open"
 
 
 def test_resolves_the_adapter_once(windows_rocm):
     gdi32 = windows_rocm(_FakeGdi32([(20, OUR_BUS, OUR_DEVICE)]))
 
-    wddm.local_video_memory(DEVICE)
-    gdi32.usage = 5 * GIB
-    assert wddm.local_video_memory(DEVICE) == (15 * GIB, 5 * GIB)
+    wddm.video_memory_budget(DEVICE)
+    gdi32.budget = 12 * GIB  # another GPU process started
+    assert wddm.video_memory_budget(DEVICE) == 12 * GIB
     assert gdi32.enum_calls == 2, "one count call and one fill call, for the first query only"
 
 
@@ -159,7 +157,7 @@ def test_resolves_the_adapter_once(windows_rocm):
 def test_unknown_rather_than_guessed(windows_rocm, adapters, kwargs):
     gdi32 = windows_rocm(_FakeGdi32(adapters, **kwargs))
 
-    assert wddm.local_video_memory(DEVICE) is None
+    assert wddm.video_memory_budget(DEVICE) is None
     if len(adapters) == 2:
         assert sorted(gdi32.closed) == [20, 21], "an ambiguous match must not leak either handle"
 
@@ -177,12 +175,12 @@ def test_elsewhere_gdi32_is_never_touched(windows_rocm, monkeypatch, platform, h
     monkeypatch.setattr(sys, "platform", platform)
     monkeypatch.setattr(torch.version, "hip", hip)
 
-    assert wddm.local_video_memory(device) is None
+    assert wddm.video_memory_budget(device) is None
 
 
 def test_reset_closes_the_cached_handle(windows_rocm):
     gdi32 = windows_rocm(_FakeGdi32([(20, OUR_BUS, OUR_DEVICE)]))
-    wddm.local_video_memory(DEVICE)
+    wddm.video_memory_budget(DEVICE)
 
     wddm.reset_cache()
 
@@ -236,6 +234,10 @@ def test_structures_match_the_d3dkmt_layout():
     assert ctypes.sizeof(wddm._AdapterInfo) == 20
     assert wddm._QueryVideoMemoryInfo.Budget.offset == 16
     assert ctypes.sizeof(wddm._QueryVideoMemoryInfo) == 56
+    # PDH_FMT_COUNTERVALUE_ITEM_W on 64-bit: a name pointer, then the value whose 8-byte union follows a DWORD status.
+    assert wddm._PdhCounterValueItem.FmtValue.offset == 8
+    assert wddm._PdhCounterValue.largeValue.offset == 8
+    assert ctypes.sizeof(wddm._PdhCounterValueItem) == 24
 
 
 needs_windows_rocm = pytest.mark.skipif(
@@ -246,16 +248,38 @@ needs_windows_rocm = pytest.mark.skipif(
 
 @pytest.mark.slow
 @needs_windows_rocm
-def test_on_hardware_the_usage_follows_an_allocation():
+def test_on_hardware_freed_memory_counts_as_headroom_again():
+    """HIP keeps memory after a free and hands it to the next allocation; WDDM still counts it as this process's usage.
+    The capped free figure must recover anyway, or an offload the model cache just made would look like no progress."""
     wddm.reset_cache()
     device = torch.device("cuda", 0)
     torch.empty(1, device=device)
-    before = wddm.local_video_memory(device)
-    assert before is not None and before[0] > 0
+    torch.cuda.empty_cache()
+    assert wddm.video_memory_budget(device) is not None
+    before, _ = TorchDevice.cuda_mem_get_info(device)
 
-    block = torch.empty(256 * 2**20, dtype=torch.uint8, device=device).fill_(1)
+    block = torch.empty(2 * GIB, dtype=torch.uint8, device=device).fill_(1)
     torch.cuda.synchronize()
-    after = wddm.local_video_memory(device)
+    held, _ = TorchDevice.cuda_mem_get_info(device)
+    del block
+    torch.cuda.empty_cache()
+    after, _ = TorchDevice.cuda_mem_get_info(device)
 
-    assert after is not None
-    assert after[1] - before[1] >= 0.9 * block.numel()
+    assert before - held >= 1.9 * GIB
+    assert after >= before - 64 * 2**20
+
+
+@pytest.mark.slow
+@needs_windows_rocm
+def test_on_hardware_the_paged_amount_of_this_process_is_found():
+    """The warning depends on finding this process's instance under the name the code builds; if that is wrong,
+    `paged_bytes` quietly answers None forever."""
+    wddm.reset_cache()
+    device = torch.device("cuda", 0)
+    block = torch.empty(64 * 2**20, dtype=torch.uint8, device=device).fill_(1)
+    torch.cuda.synchronize()
+
+    paged = wddm.paged_bytes(device)
+
+    assert paged is not None and paged >= 0
+    del block
