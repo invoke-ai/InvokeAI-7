@@ -1,6 +1,7 @@
 import type { CanvasStagingCandidateContract, CanvasStateContractV3 } from '@workbench/canvas-engine/api';
 import type { WorkbenchQueueItem as QueueItem } from '@workbench/queueHistoryContracts';
 
+import { getRemoteProgressIdentity } from '@features/queue';
 import { getQueueItemSnapshotBatchCount, getQueueItemSnapshotDimensions } from '@features/queue/contracts';
 
 export interface CanvasQueuePlaceholderSlot {
@@ -257,5 +258,11 @@ export const getFirstCanvasPlaceholderSlotIndex = (
   queueItems: readonly QueueItem[]
 ): number => getCanvasStagingSlots(canvas, queueItems).findIndex((slot) => slot.kind === 'placeholder');
 
-export const getCancelableCanvasStagingQueueItemId = (slot: CanvasStagingSlot | undefined): string | null =>
-  slot?.kind === 'placeholder' ? slot.queueItemId : null;
+export const getCancelableCanvasStagingQueueItemId = (slot: CanvasStagingSlot | undefined): string | null => {
+  if (slot?.kind !== 'placeholder') {
+    return null;
+  }
+  // Remote placeholders belong to the originating local generation; the Canvas
+  // Cancel button cancels all work for that generation, not a synthetic ID.
+  return getRemoteProgressIdentity(slot)?.localQueueItemId ?? slot.queueItemId;
+};

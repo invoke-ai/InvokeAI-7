@@ -472,7 +472,7 @@ const StagingThumbnail = ({
       ) : (
         <StagingPlaceholderThumbnail antialiasProgressImages={antialiasProgressImages} slot={slot} />
       )}
-      {slot.kind === 'placeholder' && remoteIdentity ? (
+      {slot.kind === 'placeholder' ? (
         <Text
           bg="blackAlpha.700"
           color="white"
@@ -484,7 +484,7 @@ const StagingThumbnail = ({
           rounded="sm"
           top="1"
         >
-          {`R${remoteIdentity.slot}`}
+          {remoteIdentity ? `R${remoteIdentity.slot}` : 'W'}
         </Text>
       ) : null}
       <Text

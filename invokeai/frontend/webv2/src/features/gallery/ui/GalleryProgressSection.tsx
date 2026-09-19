@@ -1,8 +1,8 @@
 import type { GalleryThumbnailFit } from '@features/gallery/core/settings';
 import type { QueueProgressSession } from '@features/queue/contracts';
 
-import { Box, chakra, Icon, ProgressCircle, Skeleton, Text } from '@chakra-ui/react';
-import { getDeterminateProgressPercent } from '@features/queue/contracts';
+import { Badge, Box, chakra, Icon, ProgressCircle, Skeleton, Text } from '@chakra-ui/react';
+import { getDeterminateProgressPercent, getRemoteProgressIdentity } from '@features/queue/contracts';
 import { useItemProgress, useQueueItemProgressImage } from '@features/queue/react';
 import { StreamingImageFrame } from '@platform/ui/streaming-image/StreamingImageFrame';
 import { progressImageToStreamingSource } from '@platform/ui/streaming-image/streamingImageSource';
@@ -13,6 +13,7 @@ import { useTranslation } from 'react-i18next';
 
 import type { GalleryProgressLayout } from './galleryGridLayout';
 
+import { getGalleryWorkerLabels } from './galleryProgressWorkerLabels';
 import { useGalleryUi } from './GalleryUiContext';
 import { useGalleryWidget } from './GalleryWidgetContext';
 
@@ -130,6 +131,8 @@ const GalleryProgressGrid = ({
   restoreFocus(): void;
 }) => {
   const { columns, tileSize, headerHeight, paddingBottom, rowCount, rowHeight } = layout;
+  // IRW gallery worker badge v0.2.2.5: mark only remote sessions, not Local.
+  const workerLabels = getGalleryWorkerLabels(sessions);
   const estimateSize = useCallback(() => rowHeight, [rowHeight]);
   const virtualizer = useVirtualizer({
     count: rowCount,
@@ -155,6 +158,7 @@ const GalleryProgressGrid = ({
             >
               <GalleryProgressTile
                 session={session}
+                workerLabel={workerLabels.get(session.id) ?? null}
                 size={tileSize}
                 fit={fit}
                 selected={liveFollowEnabled && (pinnedSessionId === null || pinnedSessionId === session.id)}
@@ -171,6 +175,7 @@ const GalleryProgressGrid = ({
 
 const GalleryProgressTile = ({
   session,
+  workerLabel,
   size,
   fit,
   selected,
@@ -178,6 +183,7 @@ const GalleryProgressTile = ({
   restoreFocus,
 }: {
   session: QueueProgressSession;
+  workerLabel: string | null;
   size: number;
   fit: GalleryThumbnailFit;
   selected: boolean;
@@ -189,6 +195,9 @@ const GalleryProgressTile = ({
   const image = useQueueItemProgressImage(session.queueItemId, session.itemIndex);
   const progress = useItemProgress(session.backendItemId);
   const percentage = getDeterminateProgressPercent(progress?.percentage);
+  const remote = getRemoteProgressIdentity(session);
+  const isRemoteQueued = remote !== null && progress?.message === `Remote ${remote.slot} queued` && !image;
+  const isQueued = session.state === 'queued' || isRemoteQueued;
   const label =
     session.itemCount > 1
       ? t('widgets.gallery.progressSession', {
@@ -197,19 +206,18 @@ const GalleryProgressTile = ({
           total: session.itemCount,
         })
       : session.label;
-  const status =
-    session.state === 'queued'
-      ? t('widgets.gallery.progressQueued')
-      : session.state === 'settling'
-        ? t('widgets.gallery.progressSettling')
-        : percentage !== null
-          ? `${percentage}%`
-          : progress?.message || t('widgets.gallery.progressPreparing');
+  const status = isQueued
+    ? t('widgets.gallery.progressQueued')
+    : session.state === 'settling'
+      ? t('widgets.gallery.progressSettling')
+      : percentage !== null
+        ? `${percentage}%`
+        : progress?.message || t('widgets.gallery.progressPreparing');
   const follow = useCallback(() => {
-    if (session.state === 'running') {
+    if (session.state === 'running' && !isRemoteQueued) {
       onFollow(session.id, { revealPreview: true });
     }
-  }, [onFollow, session.id, session.state]);
+  }, [isRemoteQueued, onFollow, session.id, session.state]);
   const buttonRef = useCallback(
     (element: HTMLButtonElement | null) => {
       if (!element) {
@@ -229,18 +237,18 @@ const GalleryProgressTile = ({
       ref={buttonRef}
       type="button"
       focusVisibleRing="inside"
-      aria-label={`${label} · ${status}`}
-      aria-pressed={selected && session.state !== 'queued'}
-      aria-disabled={session.state !== 'running'}
-      tabIndex={session.state === 'running' ? 0 : -1}
-      borderColor={selected && session.state !== 'queued' ? 'accent.solid' : 'border.subtle'}
+      aria-label={`${workerLabel ? `${workerLabel} · ` : ''}${label} · ${status}`}
+      aria-pressed={selected && !isQueued}
+      aria-disabled={session.state !== 'running' || isRemoteQueued}
+      tabIndex={session.state === 'running' && !isRemoteQueued ? 0 : -1}
+      borderColor={selected && !isQueued ? 'accent.solid' : 'border.subtle'}
       borderWidth="1px"
       flexShrink={0}
       minW="0"
       overflow="hidden"
       rounded="md"
       textAlign="start"
-      title={`${label} · ${status}`}
+      title={`${workerLabel ? `${workerLabel} · ` : ''}${label} · ${status}`}
       position="relative"
       w={`${size}px`}
       onClick={follow}
@@ -252,8 +260,22 @@ const GalleryProgressTile = ({
         shouldAntialiasLiveImage={antialiasProgressImages}
         w="full"
       >
-        {session.state === 'queued' ? <Box bg="bg.subtle" h="full" w="full" /> : <Skeleton h="full" w="full" />}
+        {isQueued ? <Box bg="bg.subtle" h="full" w="full" /> : <Skeleton h="full" w="full" />}
       </StreamingImageFrame>
+      {workerLabel ? (
+        <Badge
+          position="absolute"
+          top="1"
+          insetInlineStart="1"
+          pointerEvents="none"
+          bg="bg/85"
+          size="xs"
+          variant="solid"
+          zIndex="1"
+        >
+          {workerLabel}
+        </Badge>
+      ) : null}
       <Box
         position="absolute"
         bottom="1"
@@ -264,7 +286,7 @@ const GalleryProgressTile = ({
         p="0.5"
         display="flex"
       >
-        {session.state === 'running' ? (
+        {session.state === 'running' && !isRemoteQueued ? (
           <ProgressCircle.Root aria-label={status} size="xs" value={percentage}>
             <ProgressCircle.Circle>
               <ProgressCircle.Track />
@@ -272,7 +294,7 @@ const GalleryProgressTile = ({
             </ProgressCircle.Circle>
           </ProgressCircle.Root>
         ) : (
-          <Icon as={session.state === 'queued' ? HourglassIcon : CheckIcon} boxSize="4" aria-label={status} />
+          <Icon as={isQueued ? HourglassIcon : CheckIcon} boxSize="4" aria-label={status} />
         )}
       </Box>
     </chakra.button>

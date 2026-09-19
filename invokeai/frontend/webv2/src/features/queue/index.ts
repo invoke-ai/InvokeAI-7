@@ -67,3 +67,12 @@ export {
 } from './publicApi';
 export type { QueueRunLockPort } from './runtime';
 export { hasPendingWorkflowQueueItem } from './ui/queueViewModel';
+export {
+  getRemoteProgressIdentity,
+  getRemoteProgressSlot,
+  getRemoteProgressTarget,
+  parseRemoteProgressMessage,
+  getRemoteSyntheticBackendItemId,
+  type RemoteProgressEnvelope,
+} from './core/remoteProgress';
+export { getRemoteWorkerUrls, remoteWorkersStore, setRemoteWorkersSettings } from './data/remoteWorkersStore';

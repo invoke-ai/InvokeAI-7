@@ -6,10 +6,10 @@ import { useModelLoads } from '@features/models';
 import {
   getProgressRailModel,
   getProgressRailSegmentValue,
+  getQueueActiveSessions,
   getQueueSummary,
-  selectProjectProgressItemIds,
 } from '@features/queue/contracts';
-import { useActiveProgressItemIds, useItemProgress } from '@features/queue/react';
+import { useActiveProgressTargets, useItemProgress } from '@features/queue/react';
 import { useActiveProjectSelector, useWorkbenchSelector } from '@workbench/WorkbenchContext';
 import { useMemo } from 'react';
 
@@ -31,11 +31,14 @@ export const QueueProgressRail = ({ css }: { css: SystemStyleObject }) => {
   const queueItems = useActiveProjectSelector((project) => project.queue.items);
   const isConnected = useWorkbenchSelector((snapshot) => snapshot.backendConnection.status === 'connected');
   const isLoadingModels = useModelLoads().length > 0;
-  const activeItemIds = useActiveProgressItemIds();
+  const activeProgressTargets = useActiveProgressTargets();
 
   const sessionItemIds = useMemo(
-    () => selectProjectProgressItemIds(queueItems, activeItemIds),
-    [activeItemIds, queueItems]
+    () =>
+      getQueueActiveSessions(queueItems, activeProgressTargets, activeProgressTargets).map(
+        (session) => session.backendItemId
+      ),
+    [activeProgressTargets, queueItems]
   );
 
   const model = getProgressRailModel({
