@@ -188,6 +188,13 @@ def _math_score_bytes(query: torch.Tensor, key: torch.Tensor) -> int:
     return batch * heads * query_len * key.shape[-2] * SDPA_MATH_BYTES_PER_SCORE_ELEMENT
 
 
+def _chunkable_kv(query: torch.Tensor, key: torch.Tensor, value: torch.Tensor) -> bool:
+    """Whether `_chunked_sdpa` slices K/V correctly: 4-D and of the query's batch. Other broadcasts that math SDPA
+    accepts (3-D K/V, a wider K/V batch) stay whole."""
+    batch = query.shape[0]
+    return key.dim() == value.dim() == 4 and key.shape[0] == value.shape[0] == batch
+
+
 def _materializes(
     query: torch.Tensor,
     key: torch.Tensor,
@@ -344,6 +351,7 @@ def install_rocm_sdpa_guard() -> None:
             and not args
             and not kwargs
             and _math_score_bytes(query, key) > SDPA_MATH_CHUNK_BYTES
+            and _chunkable_kv(query, key, value)
             and (wide_head or _materializes(query, key, value, attn_mask, scale, enable_gqa))
         )
         if wide_head:

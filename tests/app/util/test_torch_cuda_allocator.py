@@ -17,8 +17,12 @@ def rocm_windows(monkeypatch: pytest.MonkeyPatch):
     """A Windows ROCm install with no allocator configuration in the environment."""
     monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.setattr(torch_cuda_allocator, "_installed_torch_version", lambda: "2.12.0+rocm7.14.1")
+    monkeypatch.delitem(sys.modules, "torch")  # as at startup, before anything imports it
     for var in _ALLOCATOR_ENV_VARS:
-        monkeypatch.delenv(var, raising=False)
+        # setenv first so teardown also removes what the code under test sets: delenv on an absent
+        # variable records nothing to undo, and the leaked value would reach later tests' allocator.
+        monkeypatch.setenv(var, "")
+        monkeypatch.delenv(var)
     return monkeypatch
 
 
@@ -55,6 +59,17 @@ class TestRocmWindowsAllocatorDefault:
 
         assert "PYTORCH_CUDA_ALLOC_CONF" not in os.environ
         logger.info.assert_not_called()
+
+    def test_too_late_once_torch_is_imported(self, rocm_windows):
+        """The allocator reads the variable at import; setting it later would only mislead the model cache, which
+        parses it to decide whether allocator-held blocks count as free."""
+        rocm_windows.setitem(sys.modules, "torch", torch)
+        logger = MagicMock()
+
+        apply_rocm_windows_allocator_default(logger)
+
+        assert "PYTORCH_CUDA_ALLOC_CONF" not in os.environ
+        logger.warning.assert_called_once()
 
 
 # These tests are a bit fiddly, because the depend on the import behaviour of torch. They use subprocesses to isolate

@@ -36,6 +36,12 @@ def apply_rocm_windows_allocator_default(logger: logging.Logger) -> None:
     torch_version = _installed_torch_version()
     if torch_version is None or "+rocm" not in torch_version:
         return
+    if "torch" in sys.modules:
+        # Setting the variable now would change nothing but the model cache's reading of it.
+        logger.warning(
+            "ROCm on Windows: torch was imported before the allocator default could apply; leaving it unset."
+        )
+        return
     os.environ["PYTORCH_CUDA_ALLOC_CONF"] = ROCM_WINDOWS_ALLOC_CONF
     logger.info(
         f"ROCm on Windows: using the expandable-segments allocator (PYTORCH_CUDA_ALLOC_CONF={ROCM_WINDOWS_ALLOC_CONF}), "

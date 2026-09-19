@@ -559,7 +559,8 @@ class _SessionWorker:
         self.cancel_event = ThreadEvent()
         self.queue_item: Optional[SessionQueueItem] = None
         self.thread: Optional[Thread] = None
-        # Paged-out VRAM at the last warning; only this worker's thread reads or writes it.
+        # Paged-out VRAM at the previous session's end and at the last warning; only this worker's thread uses them.
+        self.paging_last_bytes = 0
         self.paging_warned_bytes = 0
 
     @property
@@ -849,14 +850,14 @@ class DefaultSessionProcessor(SessionProcessorBase):
             )
 
     def _warn_if_vram_paged(self, worker: _SessionWorker) -> None:
-        """Say so when Windows keeps part of this worker's GPU memory in shared system memory after a session.
+        """Say so when Windows keeps part of this worker's GPU memory in shared system memory across sessions.
 
         On a ROCm build under Windows an allocation that does not fit the video-memory budget, or finds no contiguous
         VRAM, is placed in system memory instead of failing -- and another program on the same GPU can push this
-        process's memory out the same way. It stays there, and every generation that touches it slows down, with
-        nothing else in the log to explain why. Warns once per episode: again only after it grew by the threshold,
-        and re-armed once it drops below it. Measured after the session's VRAM release, so the transient paging of a
-        weight upload is over. `paged_bytes` answers None everywhere else, which keeps this silent there.
+        process's memory out the same way. Every generation that touches it slows down, with nothing else in the log to
+        explain why. Only what was paged at the end of two consecutive sessions counts: an overflow at the end of a
+        decode can return to VRAM within seconds. Warns once per episode: again only after that grew by the threshold,
+        re-armed once a reading drops below it. `paged_bytes` answers None everywhere else, which keeps this silent.
         """
         try:
             paged = paged_bytes(worker.device or TorchDevice.choose_torch_device())
@@ -865,16 +866,19 @@ class DefaultSessionProcessor(SessionProcessorBase):
             return
         if paged is None:
             return
+        sustained = min(paged, worker.paging_last_bytes)
+        worker.paging_last_bytes = paged
         if paged < _VRAM_PAGING_WARNING_BYTES:
             worker.paging_warned_bytes = 0
             return
-        if paged < worker.paging_warned_bytes + _VRAM_PAGING_WARNING_BYTES:
+        if sustained < worker.paging_warned_bytes + _VRAM_PAGING_WARNING_BYTES:
             return
-        worker.paging_warned_bytes = paged
+        worker.paging_warned_bytes = sustained
         self._invoker.services.logger.warning(
-            f"Windows is keeping {paged / 2**30:.1f} GiB of Invoke's GPU memory on {worker.label} in shared system "
-            "memory, which makes generations much slower. Close other programs that use this GPU; if it persists, "
-            "restart Invoke to get the memory back into VRAM."
+            f"Windows kept {sustained / 2**30:.1f} GiB of Invoke's GPU memory on {worker.label} in shared system memory "
+            "after the last two generations, which makes them much slower. Close other programs that use this GPU. If "
+            "it keeps happening, lower the image size, set max_cache_vram_gb lower or device_working_mem_gb higher, "
+            "and restart Invoke to get the memory back into VRAM."
         )
 
     def resume(self) -> SessionProcessorStatus:

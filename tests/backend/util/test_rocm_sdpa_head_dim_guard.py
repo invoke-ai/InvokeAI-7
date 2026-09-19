@@ -237,6 +237,10 @@ class TestChunking:
             (6, 2, 3, {"enable_gqa": True}),
             (6, 2, 2, {"enable_gqa": True}),
             (4, 1, 2, {}),
+            (4, 4, 0.5, {"attn_mask": torch.rand(64, 48) > 0.3}),
+            (4, 4, 0.5, {"attn_mask": torch.randn(2, 1, 64, 48)}),
+            (4, 4, 0.5, {"attn_mask": torch.randn(2, 4, 64, 48)}),
+            (4, 4, 0.5, {"attn_mask": torch.rand(2, 1, 1, 48) > 0.2}),
         ],
         ids=[
             "bool-2d",
@@ -248,10 +252,14 @@ class TestChunking:
             "gqa-whole-groups",
             "gqa-group-over-budget",
             "kv-broadcast",
+            "rows-bool-2d",
+            "rows-additive-broadcast-heads",
+            "rows-additive-per-head",
+            "rows-bool-broadcast-rows",
         ],
     )
     def test_masks_scale_and_grouped_heads_keep_torchs_result(self, monkeypatch, heads, kv_heads, budget_heads, kwargs):
-        budget = budget_heads * 2 * 64 * 48 * BYTES
+        budget = int(budget_heads * 2 * 64 * 48 * BYTES)  # under one head, the query rows are split
         shapes = _install_chunking(monkeypatch, budget=budget)
         torch.manual_seed(2)
         q = torch.randn(2, heads, 64, 32)
@@ -262,6 +270,21 @@ class TestChunking:
         assert len(shapes) > 1, "the call must actually have been split"
         assert all(_scores(pair) <= budget for pair in shapes), "a chunk exceeded the budget"
         torch.testing.assert_close(out, TORCH_SDPA(q, k, v, **kwargs), atol=1e-5, rtol=1e-4)
+
+    @pytest.mark.parametrize(
+        ("q_shape", "kv_shape"),
+        [((2, 4, 64, 32), (4, 48, 32)), ((1, 4, 64, 32), (2, 4, 48, 32))],
+        ids=["3d-kv", "kv-wider-batch"],
+    )
+    def test_kv_broadcasts_the_chunks_cannot_slice_stay_whole(self, monkeypatch, q_shape, kv_shape):
+        shapes = _install_chunking(monkeypatch, budget=BYTES)
+        torch.manual_seed(3)
+        q, k, v = torch.randn(q_shape), torch.randn(kv_shape), torch.randn(kv_shape)
+
+        out = F.scaled_dot_product_attention(q, k, v)
+
+        assert len(shapes) == 1
+        torch.testing.assert_close(out, TORCH_SDPA(q, k, v))
 
     @pytest.mark.parametrize("kwargs", [{"is_causal": True}, {"dropout_p": 0.1}], ids=["causal", "dropout"])
     def test_causal_and_dropout_calls_stay_whole(self, monkeypatch, kwargs):
@@ -393,15 +416,18 @@ class TestOnRocmHardware:
         reference = attention._math_sdpa(q, k, v, None, 0.0, False, None, False).float()
         # The unguarded entry point, whether or not the guard is installed in this process.
         unguarded = getattr(F.scaled_dot_product_attention, "__wrapped__", F.scaled_dot_product_attention)
-        wrong = 0
+        wrong = ran = 0
         for backend in (SDPBackend.FLASH_ATTENTION, SDPBackend.EFFICIENT_ATTENTION):
             with sdpa_policy([backend]):
                 try:
                     out = unguarded(q, k, v).float()
                 except RuntimeError:
                     continue  # the backend refused the shape: not wrong, just absent
+            ran += 1
             err = (out - reference).abs().max().item() / reference.abs().max().item()
             wrong += int(not torch.isfinite(out).all() or err > 0.05)
+        if not ran:
+            pytest.skip("no fused kernel runs this shape on this build (e.g. gfx1200)")
         assert wrong > 0, "every fused kernel now agrees with math: the ROCm head-dim guard may be unnecessary"
 
     def test_the_guard_is_exact_under_allocation_churn(self, monkeypatch):

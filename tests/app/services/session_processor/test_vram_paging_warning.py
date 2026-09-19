@@ -1,7 +1,8 @@
 """The end-of-session warning when Windows keeps part of a worker's VRAM in shared system memory.
 
-It must speak once per episode (again only after the paged amount grew by the threshold, re-armed once it fell below
-it), say nothing where the answer is unknown, and never fail the worker.
+It must count only what stayed paged across two session ends, speak once per episode (again only after that grew by
+the threshold, re-armed once a reading fell below it), say nothing where the answer is unknown, and never fail the
+worker.
 """
 
 from types import SimpleNamespace
@@ -63,15 +64,28 @@ def test_warns_once_per_episode_and_again_only_after_growth(monkeypatch, process
     threshold = _VRAM_PAGING_WARNING_BYTES
     readings = [
         6 * MIB,  # an idle process
-        threshold + 100 * MIB,  # paged: warn
-        threshold + 300 * MIB,  # grew by less than the threshold since the warning
-        2 * threshold + 200 * MIB,  # grew by the threshold: warn again
+        threshold + 100 * MIB,  # paged, once so far
+        threshold + 300 * MIB,  # still paged: warn
+        2 * threshold + 400 * MIB,  # what stayed paged grew by less than the threshold since the warning
+        2 * threshold + 500 * MIB,  # grew by the threshold: warn again
         100 * MIB,  # recovered below the threshold: re-armed
+        threshold,
         threshold,  # a new episode: warn
     ]
 
-    assert _warned_after_each_session(monkeypatch, processor, readings) == [False, True, False, True, False, True]
+    warned = _warned_after_each_session(monkeypatch, processor, readings)
+
+    assert warned == [False, False, True, False, True, False, False, True]
     assert "cuda:0" in processor[1].warnings[0]
+    assert "0.6 GiB" in processor[1].warnings[0]  # what stayed paged (0.6), not the latest reading (0.8)
+
+
+def test_paging_that_clears_between_sessions_is_not_reported(monkeypatch, processor):
+    """A decode can overflow for a few seconds at the end of every session and then return to VRAM."""
+    paged, cleared = _VRAM_PAGING_WARNING_BYTES + 400 * MIB, 6 * MIB
+    readings = [paged, cleared, paged, cleared, paged]
+
+    assert _warned_after_each_session(monkeypatch, processor, readings) == [False] * 5
 
 
 def test_silent_where_the_answer_is_unknown(monkeypatch, processor):
@@ -90,3 +104,15 @@ def test_a_failing_counter_is_logged_at_debug_and_does_not_fail_the_worker(monke
 
     assert logger.warnings == []
     assert len(logger.debugs) == 1
+
+
+def test_the_worker_checks_after_each_session(monkeypatch):
+    from tests.app.services.session_processor.test_session_processor_cancel_guard import _run_guard_scenario
+
+    checked = []
+    monkeypatch.setattr(DefaultSessionProcessor, "_warn_if_vram_paged", lambda self, worker: checked.append(worker))
+
+    _canceled, run_items, worker = _run_guard_scenario(statuses=["in_progress"], set_cancel_event=False)
+
+    assert run_items == [42]
+    assert checked == [worker]
