@@ -169,8 +169,8 @@ export const RemoteWorkersWidgetView = (_props: WidgetViewProps) => {
         <Switch.Label>Mirror InvokeAI generations</Switch.Label>
       </Switch.Root>
       <Text color="fg.muted" fontSize="xs">
-        Windows keeps rendering. Each enabled remote receives a variation with its own seed. Results follow InvokeAI's
-        selected Gallery or Canvas destination.
+        The primary instance keeps rendering. Each enabled remote receives a variation with its own seed. Results follow
+        InvokeAI's selected Gallery or Canvas destination.
       </Text>
       <Stack gap="1">
         <Text fontSize="sm" fontWeight="medium">
@@ -220,12 +220,12 @@ export const RemoteWorkersWidgetView = (_props: WidgetViewProps) => {
           {showAdvanced ? (
             <Stack gap="1">
               <Text fontSize="sm" fontWeight="medium">
-                Windows address for model transfers (optional)
+                Primary host address for model transfers (optional)
               </Text>
               <Input
                 fontFamily="mono"
                 onChange={handleTransferHostChange}
-                placeholder="Auto-detect Windows LAN IP"
+                placeholder="Auto-detect primary host LAN IP"
                 size="sm"
                 value={settings.modelTransferHost}
               />
@@ -240,8 +240,8 @@ export const RemoteWorkersWidgetView = (_props: WidgetViewProps) => {
           </Text>
           <Text color="fg.muted" fontSize="xs">
             For workers with multi-user mode enabled, save that worker's InvokeAI email and password once. Passwords are
-            encrypted by the Windows backend and never stored in browser settings or workflows. Use HTTPS when
-            connecting across untrusted networks.
+            encrypted using Windows DPAPI on the primary instance and never stored in browser settings or workflows. Use
+            HTTPS when connecting across untrusted networks.
           </Text>
           {urls.map((url) => (
             <WorkerAuthRow key={`${accountId}:${url}`} url={url} />

@@ -459,15 +459,15 @@ def _strip_remote_board_assignments(graph: dict[str, Any]) -> list[str]:
     use_cache=False,
 )
 class RemoteMirrorBackgroundCollectInvocation(BaseInvocation):
-    """Queued on Windows by the mirror node. Waits for the remote render and imports its images."""
+    """Queued on the primary instance by the mirror node. Waits for the remote render and imports its images."""
 
     remote_url: str = InputField(description="Remote InvokeAI base URL")
     remote_item_id: int = InputField(ge=1, description="Remote queue item to collect")
     remote_queue_id: str = InputField(default="default", description="Remote queue ID")
-    local_board_id: str = InputField(default="", description="Original Windows board ID for imported remote images")
+    local_board_id: str = InputField(default="", description="Original local board ID for imported remote images")
     keep_remote_copies: bool = InputField(
         default=False,
-        description="Keep generated images on the remote worker after they have been imported into Windows.",
+        description="Keep generated images on the remote worker after they have been imported into the primary instance.",
     )
     poll_interval_seconds: float = InputField(default=0.75, ge=0.25, le=30.0)
     timeout_seconds: int = InputField(default=1800, ge=10, le=86400)
@@ -516,7 +516,7 @@ class RemoteMirrorBackgroundCollectInvocation(BaseInvocation):
             last_dto = dto
             imported_remote_names.append(remote_name)
             context.logger.info(
-                f"Mirror background collector: imported remote {remote_name} into Windows as {dto.image_name}" +
+                f"Mirror background collector: imported remote {remote_name} into the primary instance as {dto.image_name}" +
                 (f" on board {target_board_id}" if target_board_id else "")
             )
         if last_dto is None:
@@ -621,9 +621,9 @@ class RemoteMirrorCurrentWorkflowOutput(BaseInvocationOutput):
     use_cache=False,
 )
 class AAARemoteMirrorCurrentWorkflowInvocation(BaseInvocation):
-    """Mirror the *current executable Windows graph* to the remote InvokeAI worker.
+    """Mirror the *current executable local graph* to the remote InvokeAI worker.
 
-    Windows continues executing the current workflow normally. This node only clones
+    The primary instance continues executing the current workflow normally. This node only clones
     the current queue item's source graph, removes Remote Invoke helper nodes, remaps
     model identifiers for the remote installation, and enqueues that clone remotely.
     """
@@ -699,16 +699,16 @@ class AAARemoteMirrorCurrentWorkflowInvocation(BaseInvocation):
             local_queue_item = context._data.queue_item
             current_item = local_queue_item.model_dump(mode="json")
         except Exception as exc:
-            raise RemoteInvokeError("Could not read the current Windows InvokeAI queue item") from exc
+            raise RemoteInvokeError("Could not read the current local InvokeAI queue item") from exc
         if not isinstance(current_item, dict):
-            raise RemoteInvokeError("Windows InvokeAI did not expose a usable current queue item")
+            raise RemoteInvokeError("The primary InvokeAI instance did not expose a usable current queue item")
 
         session = current_item.get("session")
         if not isinstance(session, dict):
-            raise RemoteInvokeError("Current Windows queue item has no session object")
+            raise RemoteInvokeError("Current local queue item has no session object")
         source_graph = session.get("graph")
         if not isinstance(source_graph, dict) or not isinstance(source_graph.get("nodes"), dict):
-            raise RemoteInvokeError("Current Windows queue item has no usable session.graph")
+            raise RemoteInvokeError("Current local queue item has no usable session.graph")
 
         # Build a clean base clone once, then make one independent copy per remote.
         base_remote_graph = deepcopy(source_graph)
@@ -727,7 +727,7 @@ class AAARemoteMirrorCurrentWorkflowInvocation(BaseInvocation):
         if target_local_board_id.lower() == "none" or self.result_destination == "canvas":
             target_local_board_id = ""
         context.logger.info(
-            f"Mirror Current Workflow: captured Windows item {current_item.get('item_id')} with "
+            f"Mirror Current Workflow: captured local item {current_item.get('item_id')} with "
             f"{len(source_graph.get('nodes', {}))} source node(s); removed helper node(s): {removed or 'none'}"
         )
         if target_local_board_id:
@@ -820,7 +820,7 @@ class AAARemoteMirrorCurrentWorkflowInvocation(BaseInvocation):
             # v0.9.2 does not enqueue a local collector item. A long-lived bridge uses only
             # InvokeAI's application services (not InvocationContext wrappers), so it can stream
             # remote progress and import the final image immediately without waiting behind the
-            # remaining Windows queue.
+            # remaining local queue.
             bridge_task_id = start_remote_bridge(
                 services=context._services,
                 local_queue_item=local_queue_item,
@@ -861,7 +861,7 @@ class AAARemoteMirrorCurrentWorkflowInvocation(BaseInvocation):
         )
         context.logger.info(
             f"Mirror Current Workflow: queued {len(remote_item_ids)} remote worker job(s) with "
-            f"{len(nodes)} mirrored node(s) each; Windows current workflow continues normally"
+            f"{len(nodes)} mirrored node(s) each; the primary instance continues its current workflow normally"
         )
         return RemoteMirrorCurrentWorkflowOutput(
             ticket=ticket,
@@ -889,7 +889,7 @@ class AAARemoteMirrorCurrentWorkflowInvocation(BaseInvocation):
     use_cache=False,
 )
 class ZZZRemoteMirrorCollectInvocation(BaseInvocation):
-    """Wait for the remote mirror only after the normal Windows image has completed."""
+    """Wait for the remote mirror only after the normal local image has completed."""
 
     ticket: str = InputField(
         input=Input.Connection,
@@ -897,13 +897,13 @@ class ZZZRemoteMirrorCollectInvocation(BaseInvocation):
     )
     local_image: ImageField = InputField(
         input=Input.Connection,
-        description="Connect the normal Windows workflow's final image here. This is a synchronization dependency, not an upload.",
+        description="Connect the normal local workflow's final image here. This is a synchronization dependency, not an upload.",
     )
     poll_interval_seconds: float = InputField(
         default=0.75,
         ge=0.25,
         le=30.0,
-        description="How often to poll the remote queue after the Windows image is finished.",
+        description="How often to poll the remote queue after the local image is finished.",
     )
     timeout_seconds: int = InputField(
         default=1800,
@@ -930,7 +930,7 @@ class ZZZRemoteMirrorCollectInvocation(BaseInvocation):
 
         client = _remote_client(remote_url)
         context.logger.info(
-            f"Collect Mirrored Image: Windows image {self.local_image.image_name} is complete; "
+            f"Collect Mirrored Image: Local image {self.local_image.image_name} is complete; "
             f"waiting for remote item {remote_item_id}"
         )
         completed = client.wait_for_item(
@@ -948,7 +948,7 @@ class ZZZRemoteMirrorCollectInvocation(BaseInvocation):
             last_dto = dto
             imported_fields.append(ImageField(image_name=dto.image_name))
             context.logger.info(
-                f"Collect Mirrored Image: imported remote {remote_name} into Windows as {dto.image_name}"
+                f"Collect Mirrored Image: imported remote {remote_name} into the primary instance as {dto.image_name}"
             )
 
         if not imported_fields:
