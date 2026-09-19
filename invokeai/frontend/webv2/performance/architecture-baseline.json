@@ -2,12 +2,12 @@
   "build": {
     "launchpad": {
       "baseline": {
-        "brotliBytes": 889734,
+        "brotliBytes": 890088,
         "cssRawBytes": 2159,
         "fontRawBytes": 219480,
-        "gzipBytes": 888487,
+        "gzipBytes": 888921,
         "imageRawBytes": 156376,
-        "initialRawBytes": 2111810,
+        "initialRawBytes": 2112711,
         "largestAssetRawBytes": 778932,
         "otherAssetRawBytes": 0,
         "ownedRawBytes": 87580,
@@ -318,15 +318,15 @@
     },
     "editor": {
       "baseline": {
-        "brotliBytes": 1216517,
+        "brotliBytes": 1221807,
         "cssRawBytes": 2159,
         "fontRawBytes": 219480,
-        "gzipBytes": 1210216,
+        "gzipBytes": 1215778,
         "imageRawBytes": 156376,
-        "initialRawBytes": 3109003,
+        "initialRawBytes": 3128227,
         "largestAssetRawBytes": 778932,
         "otherAssetRawBytes": 0,
-        "ownedRawBytes": 139420,
+        "ownedRawBytes": 140321,
         "requestCount": 86,
         "scriptRequestCount": 70,
         "sourceOwners": [
@@ -652,6 +652,7 @@
           "source:src/features/video/index.ts",
           "source:src/features/video/ui/VideoUiContext.tsx",
           "source:src/features/workflow/core/buildGraph.ts",
+          "source:src/features/workflow/core/callSavedWorkflow.ts",
           "source:src/features/workflow/core/connectors.ts",
           "source:src/features/workflow/core/document.ts",
           "source:src/features/workflow/core/fields.ts",
@@ -663,6 +664,7 @@
           "source:src/features/workflow/data/api.ts",
           "source:src/features/workflow/data/libraryCache.ts",
           "source:src/features/workflow/data/runCapture.ts",
+          "source:src/features/workflow/data/savedWorkflowQueries.ts",
           "source:src/features/workflow/data/templates.ts",
           "source:src/features/workflow/queries.ts",
           "source:src/features/workflow/react.ts",
@@ -1028,7 +1030,7 @@
       "source": "src/app/WorkbenchApp.tsx"
     }
   },
-  "capturedAt": "2026-09-18",
+  "capturedAt": "2026-09-19",
   "developmentInvalidation": {
     "platformUiBarrel": {
       "specifier": "@platform/ui",

@@ -22,6 +22,7 @@ const STATEFUL_FIELD_TYPE_NAMES = new Set([
   'LoRAField',
   'ModelIdentifierField',
   'SchedulerField',
+  'SavedWorkflowField',
   'StringField',
   'VideoField',
 ]);
@@ -213,6 +214,7 @@ const isColorValueValid = (value: unknown): boolean => {
 
 export const isWorkflowFieldValueValid = (template: FieldInputTemplate, value: unknown): boolean => {
   switch (template.type.name) {
+    case 'SavedWorkflowField':
     case 'StringField':
       // An empty string is a legitimate string value (e.g. a blank negative prompt).
       return typeof value === 'string';
@@ -312,6 +314,7 @@ const FIELD_TYPE_COLORS: Record<string, string> = {
   LoRAField: '#e879f9',
   ModelIdentifierField: '#14b8a6',
   SchedulerField: '#3b82f6',
+  SavedWorkflowField: '#818cf8',
   StringField: '#facc15',
   UNetField: '#fca5a5',
   VAEField: '#2563eb',

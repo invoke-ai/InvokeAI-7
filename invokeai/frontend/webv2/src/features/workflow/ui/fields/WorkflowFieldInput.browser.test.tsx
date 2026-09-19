@@ -19,6 +19,13 @@ const uploadVideoMock = vi.fn();
 const resolveItemMock = vi.fn();
 
 const pickerState = vi.hoisted(() => ({ accept: null as readonly string[] | null }));
+const workflowApiMock = vi.hoisted(() => ({ apiFetch: vi.fn(), apiFetchJson: vi.fn() }));
+
+vi.mock('@platform/transport/http', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  apiFetch: workflowApiMock.apiFetch,
+  apiFetchJson: workflowApiMock.apiFetchJson,
+}));
 
 // The real picker needs the gallery data layer; the field's contract with it is
 // the accepted kinds it passes and the item it gets back.
@@ -140,6 +147,13 @@ const FRAME_INDEX_TEMPLATE = {
   uiComponent: 'video-frame-index',
 } as unknown as FieldInputTemplate;
 
+const SAVED_WORKFLOW_TEMPLATE = {
+  input: 'direct',
+  name: 'workflow_id',
+  title: 'Workflow',
+  type: { batch: false, cardinality: 'SINGLE', name: 'SavedWorkflowField' },
+} as unknown as FieldInputTemplate;
+
 const makeFrameNode = (videoValue: { video_name: string } | undefined) => ({
   data: {
     inputs: {
@@ -192,6 +206,8 @@ beforeEach(() => {
   uploadVideoMock.mockReset();
   resolveItemMock.mockReset();
   resolveItemMock.mockResolvedValue(SELECTED_GALLERY_VIDEO);
+  workflowApiMock.apiFetch.mockReset().mockResolvedValue(new Response());
+  workflowApiMock.apiFetchJson.mockReset();
   // Module-level capture: without this the next test's wait is satisfied by the previous test's
   // props and asserts against a picker that is no longer mounted.
   modelSelectState.props = null;
@@ -315,7 +331,109 @@ describe('WorkflowFieldInput textarea', () => {
   });
 });
 
+describe('WorkflowFieldInput saved workflows', () => {
+  it('displays dynamic workflow names and marks incompatible workflows disabled', async () => {
+    const onChange = vi.fn();
+    workflowApiMock.apiFetchJson.mockImplementation((path: string) => {
+      if (path.includes('is_public=true')) {
+        return Promise.resolve({
+          items: [
+            {
+              category: 'user',
+              call_saved_workflow_compatibility: { is_callable: true, message: null, reason: 'ok' },
+              description: '',
+              is_public: true,
+              name: 'Shared Dynamic Workflow',
+              workflow_id: 'shared-workflow',
+            },
+          ],
+          page: 0,
+          pages: 1,
+          total: 1,
+        });
+      }
+
+      return Promise.resolve({
+        items: [
+          {
+            category: 'default',
+            call_saved_workflow_compatibility: {
+              is_callable: false,
+              message: 'Missing workflow return node',
+              reason: 'missing_workflow_return',
+            },
+            description: '',
+            is_public: true,
+            name: 'Unsupported Dynamic Workflow',
+            workflow_id: 'unsupported-workflow',
+          },
+        ],
+        page: 0,
+        pages: 1,
+        total: 1,
+      });
+    });
+
+    await renderField(SAVED_WORKFLOW_TEMPLATE, '', onChange);
+    await vi.waitFor(() => expect(workflowApiMock.apiFetchJson).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() =>
+      expect(host.querySelector<HTMLInputElement>('input[role="combobox"]')?.placeholder).not.toBe('common.loading')
+    );
+    const input = host.querySelector<HTMLInputElement>('input[role="combobox"]');
+
+    if (!input) {
+      throw new Error('Saved workflow combobox not rendered');
+    }
+
+    await act(async () => {
+      await userEvent.click(input);
+    });
+
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain('Shared Dynamic Workflow');
+      expect(document.body.textContent).toContain('Unsupported Dynamic Workflow');
+    });
+
+    const unsupportedItem = Array.from(document.querySelectorAll('[data-scope="combobox"][data-part="item"]')).find(
+      (item) => item.textContent?.includes('Unsupported Dynamic Workflow')
+    );
+
+    expect(unsupportedItem?.hasAttribute('data-disabled')).toBe(true);
+
+    const sharedItem = Array.from(document.querySelectorAll('[data-scope="combobox"][data-part="item"]')).find((item) =>
+      item.textContent?.includes('Shared Dynamic Workflow')
+    );
+
+    if (!(sharedItem instanceof HTMLElement)) {
+      throw new Error('Shared workflow option not rendered');
+    }
+
+    await act(async () => {
+      await userEvent.click(sharedItem);
+    });
+
+    expect(onChange).toHaveBeenCalledWith('shared-workflow');
+  });
+});
+
 describe('WorkflowFieldInput media inputs', () => {
+  it('renders media controls when the host provides the workflow dnd context', async () => {
+    await act(() => {
+      root.render(
+        <ChakraProvider value={system}>
+          <QueryClientProvider client={queryClient}>
+            <DndContext>
+              <WorkflowFieldInput template={VIDEO_TEMPLATE} value={undefined} onChange={vi.fn()} />
+            </DndContext>
+          </QueryClientProvider>
+        </ChakraProvider>
+      );
+    });
+
+    expect(host.textContent).not.toContain('Connection only');
+    expect(findButton('widgets.gallery.picker.chooseVideo').disabled).toBe(false);
+  });
+
   it('renders a direct-input widget for VideoField instead of falling back to connection-only', async () => {
     await renderField(VIDEO_TEMPLATE, undefined, vi.fn());
 

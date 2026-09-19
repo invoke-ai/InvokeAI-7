@@ -1,6 +1,7 @@
 import { ChakraProvider } from '@chakra-ui/react';
 import { createProjectGraph } from '@features/workflow/utility';
 import { accountLifecycle } from '@platform/state/accountLifecycle';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { system } from '@theme/system';
 import { act, Profiler, StrictMode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -77,16 +78,19 @@ const createMutablePort = <Snapshot,>(initialSnapshot: Snapshot) => {
 describe('WorkflowDialogHost library autosave under StrictMode', () => {
   let host: HTMLDivElement;
   let root: Root;
+  let queryClient: QueryClient;
 
   beforeEach(() => {
     host = document.createElement('div');
     document.body.append(host);
+    queryClient = new QueryClient();
     updateLibraryWorkflowMock.mockReset();
     updateLibraryWorkflowMock.mockResolvedValue(undefined);
   });
 
   afterEach(async () => {
     await act(() => root.unmount());
+    queryClient.clear();
     host.remove();
   });
 
@@ -124,9 +128,11 @@ describe('WorkflowDialogHost library autosave under StrictMode', () => {
       root.render(
         <StrictMode>
           <ChakraProvider value={system}>
-            <WorkflowUiProvider adapter={adapter}>
-              <WorkflowDialogHost />
-            </WorkflowUiProvider>
+            <QueryClientProvider client={queryClient}>
+              <WorkflowUiProvider adapter={adapter}>
+                <WorkflowDialogHost />
+              </WorkflowUiProvider>
+            </QueryClientProvider>
           </ChakraProvider>
         </StrictMode>
       );
@@ -220,11 +226,13 @@ describe('WorkflowDialogHost library autosave under StrictMode', () => {
       root.render(
         <StrictMode>
           <ChakraProvider value={system}>
-            <WorkflowUiProvider adapter={adapter}>
-              <Profiler id="dialog-host" onRender={countRender}>
-                <WorkflowDialogHost />
-              </Profiler>
-            </WorkflowUiProvider>
+            <QueryClientProvider client={queryClient}>
+              <WorkflowUiProvider adapter={adapter}>
+                <Profiler id="dialog-host" onRender={countRender}>
+                  <WorkflowDialogHost />
+                </Profiler>
+              </WorkflowUiProvider>
+            </QueryClientProvider>
           </ChakraProvider>
         </StrictMode>
       );
@@ -297,9 +305,11 @@ describe('WorkflowDialogHost library autosave under StrictMode', () => {
       root.render(
         <StrictMode>
           <ChakraProvider value={system}>
-            <WorkflowUiProvider adapter={adapter}>
-              <WorkflowDialogHost />
-            </WorkflowUiProvider>
+            <QueryClientProvider client={queryClient}>
+              <WorkflowUiProvider adapter={adapter}>
+                <WorkflowDialogHost />
+              </WorkflowUiProvider>
+            </QueryClientProvider>
           </ChakraProvider>
         </StrictMode>
       );

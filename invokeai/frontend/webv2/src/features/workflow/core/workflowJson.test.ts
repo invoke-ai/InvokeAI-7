@@ -100,6 +100,22 @@ describe('workflow JSON round-trip', () => {
     expect(serialized).toHaveProperty('form');
   });
 
+  it('persists dynamic input templates needed to preserve Call Saved Workflow values', () => {
+    const node = buildInvocationNode(template, { x: 0, y: 0 });
+    node.data.dynamicInputTemplates = { runtime: template.inputs.prompt! };
+    let doc = createProjectGraph('runtime-fields');
+    doc = projectGraphReducer(doc, { node, type: 'addNode' });
+
+    const serialized = serializeWorkflowJson(doc) as {
+      nodes: Array<{ data: Record<string, unknown> }>;
+    };
+
+    expect(serialized.nodes[0]?.data).toHaveProperty('dynamicInputTemplates');
+    expect(parseWorkflowJson(serialized).document.nodes[0]).toMatchObject({
+      data: { dynamicInputTemplates: { runtime: template.inputs.prompt } },
+    });
+  });
+
   it('round-trips notes, current_image, and connector UI nodes', () => {
     let doc = createProjectGraph('ui-nodes');
 
@@ -208,6 +224,50 @@ describe('parseWorkflowJson tolerance', () => {
       fieldName: 'prompt',
       nodeId: 'n1',
     });
+  });
+
+  it('does not merge stale exposed fields into an existing stored form', () => {
+    const { document, warnings } = parseWorkflowJson({
+      edges: [],
+      exposedFields: [
+        { fieldName: 'prompt', nodeId: 'n1' },
+        { fieldName: 'other', nodeId: 'n1' },
+      ],
+      form: {
+        elements: {
+          root: { data: { children: ['f1'], layout: 'column' }, id: 'root', type: 'container' },
+          f1: {
+            data: { fieldIdentifier: { fieldName: 'prompt', nodeId: 'n1' } },
+            id: 'f1',
+            parentId: 'root',
+            type: 'node-field',
+          },
+        },
+        rootElementId: 'root',
+      },
+      nodes: [
+        {
+          data: {
+            id: 'n1',
+            inputs: {
+              other: { label: '', name: 'other', value: 'world' },
+              prompt: { label: '', name: 'prompt', value: 'hi' },
+            },
+            type: 'prompt',
+          },
+          id: 'n1',
+          position: { x: 0, y: 0 },
+          type: 'invocation',
+        },
+      ],
+    });
+
+    expect(warnings).toEqual([]);
+    expect(
+      getFormChildren(document.form).map(
+        (element) => element.type === 'node-field' && element.data.fieldIdentifier.fieldName
+      )
+    ).toEqual(['prompt']);
   });
 
   it('preserves connector nodes and edges', () => {

@@ -13,12 +13,21 @@ export interface WorkflowLibraryListItem {
   name: string;
   description: string;
   category: WorkflowLibraryCategory;
+  user_id?: string;
+  is_public?: boolean;
+  call_saved_workflow_compatibility?: WorkflowCallCompatibility | null;
   tags?: string | null;
   created_at?: string;
   updated_at?: string;
   opened_at?: string | null;
   last_run_at?: string | null;
   thumbnail_url?: string | null;
+}
+
+export interface WorkflowCallCompatibility {
+  is_callable: boolean;
+  reason: string;
+  message: string | null;
 }
 
 export interface WorkflowLibraryPage {
@@ -29,30 +38,50 @@ export interface WorkflowLibraryPage {
 }
 
 export interface ListWorkflowsParams {
-  category: WorkflowLibraryCategory;
+  category?: WorkflowLibraryCategory;
+  categories?: WorkflowLibraryCategory[];
   page: number;
   perPage?: number;
   query?: string;
   tags?: string[];
+  isPublic?: boolean;
+  callable?: boolean;
+  orderBy?: 'updated_at' | 'name';
+  direction?: 'ASC' | 'DESC';
   signal?: AbortSignal;
 }
 
 export const listLibraryWorkflows = ({
   category,
+  categories,
+  callable,
+  direction = 'DESC',
   page,
   perPage = 20,
   query,
   tags,
+  isPublic,
+  orderBy = 'updated_at',
   signal,
 }: ListWorkflowsParams): Promise<WorkflowLibraryPage> => {
   const params = new URLSearchParams({
-    direction: 'DESC',
-    order_by: 'updated_at',
+    direction,
+    order_by: orderBy,
     page: String(page),
     per_page: String(perPage),
   });
 
-  params.append('categories', category);
+  for (const workflowCategory of categories ?? (category ? [category] : [])) {
+    params.append('categories', workflowCategory);
+  }
+
+  if (isPublic !== undefined) {
+    params.set('is_public', String(isPublic));
+  }
+
+  if (callable !== undefined) {
+    params.set('callable', String(callable));
+  }
 
   if (query?.trim()) {
     params.set('query', query.trim());
@@ -65,20 +94,21 @@ export const listLibraryWorkflows = ({
   return apiFetchJson<WorkflowLibraryPage>(`/api/v1/workflows/?${params.toString()}`, { signal });
 };
 
-interface WorkflowRecordDTO {
+export interface WorkflowRecordDTO extends WorkflowLibraryListItem {
   workflow_id: string;
   name: string;
   workflow: Record<string, unknown>;
 }
+
+export const getLibraryWorkflowRecord = (workflowId: string, signal?: AbortSignal): Promise<WorkflowRecordDTO> =>
+  apiFetchJson<WorkflowRecordDTO>(`/api/v1/workflows/i/${encodeURIComponent(workflowId)}`, { signal });
 
 /** Returns the stored workflow JSON, with the record id stamped in. */
 export const getLibraryWorkflow = async (
   workflowId: string,
   signal?: AbortSignal
 ): Promise<Record<string, unknown>> => {
-  const record = await apiFetchJson<WorkflowRecordDTO>(`/api/v1/workflows/i/${encodeURIComponent(workflowId)}`, {
-    signal,
-  });
+  const record = await getLibraryWorkflowRecord(workflowId, signal);
 
   return { ...record.workflow, id: record.workflow_id };
 };

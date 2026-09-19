@@ -435,7 +435,10 @@ const resolveConnectorTargetsWithCache = (
         targets.push({
           fieldName: outboundEdge.targetHandle,
           nodeId: targetNode.id,
-          type: templates?.[targetNode.data.type]?.inputs[outboundEdge.targetHandle]?.type ?? null,
+          type:
+            targetNode.data.dynamicInputTemplates?.[outboundEdge.targetHandle]?.type ??
+            templates?.[targetNode.data.type]?.inputs[outboundEdge.targetHandle]?.type ??
+            null,
         });
         continue;
       }

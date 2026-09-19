@@ -121,6 +121,35 @@ describe('extractWorkflowModelRequirements', () => {
     ]);
   });
 
+  it('extracts model requirements from persisted dynamic input templates', () => {
+    const model = fieldInput('model', { required: true });
+    const templates: InvocationTemplates = {
+      call_saved_workflow: invocationTemplate('call_saved_workflow', {}),
+    };
+    const document = graphDocument([
+      {
+        ...invocationNode('call', 'call_saved_workflow', {
+          model: { base: 'sdxl', hash: 'hash-1', key: 'model-key-1', name: 'My Model', type: 'main' },
+        }),
+        data: {
+          ...invocationNode('call', 'call_saved_workflow').data,
+          dynamicInputTemplates: { model },
+          inputs: { model: { label: 'Model', name: 'model', value: { base: 'sdxl', key: 'model-key-1' } } },
+        },
+      },
+    ]);
+
+    const { requirements } = extractWorkflowModelRequirements(document, templates);
+
+    expect(requirements).toEqual([
+      {
+        identifier: { base: 'sdxl', key: 'model-key-1' },
+        kind: 'exact',
+        label: 'model-key-1',
+      },
+    ]);
+  });
+
   it('skips inputs that are fed by a connection', () => {
     const templates: InvocationTemplates = {
       main_model_loader: invocationTemplate('main_model_loader', {

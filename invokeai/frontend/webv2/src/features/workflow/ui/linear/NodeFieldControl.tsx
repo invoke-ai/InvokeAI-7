@@ -31,7 +31,9 @@ export const useNodeFieldBinding = (element: NodeFieldFormElement, projectGraph:
   const { fieldName, nodeId } = element.data.fieldIdentifier;
   const node = projectGraph.nodes.find((candidate) => candidate.id === nodeId);
   const invocationNode = node && isInvocationNode(node) ? node : null;
-  const template = invocationNode ? templates[invocationNode.data.type]?.inputs[fieldName] : undefined;
+  const template = invocationNode
+    ? (invocationNode.data.dynamicInputTemplates?.[fieldName] ?? templates[invocationNode.data.type]?.inputs[fieldName])
+    : undefined;
   const instance = invocationNode?.data.inputs[fieldName];
   const nodeContext = invocationNode
     ? invocationNode.data.label || templates[invocationNode.data.type]?.title || invocationNode.data.type

@@ -65,6 +65,10 @@ const CONTENT_VISIBILITY_ZOOM = 0.4;
 /** True while the viewport is zoomed out far enough that field content is unreadable noise. */
 const useIsZoomedOut = (): boolean => useStore((state) => state.transform[2] < CONTENT_VISIBILITY_ZOOM);
 
+/** The node-level loading hint is only useful while a selected child signature is being fetched. */
+export const shouldShowCallSavedWorkflowLoadingHint = (node: WorkflowInvocationNode): boolean =>
+  node.data.type === 'call_saved_workflow' && node.data.callSavedWorkflowStatus === 'loading';
+
 /** Static placeholder bar standing in for text/controls at far zoom. No animation — there may be hundreds. */
 const SkeletonBar = ({ h = '2', w }: { h?: string; w?: string }) => <Box bg="bg.emphasized" h={h} rounded="sm" w={w} />;
 
@@ -764,6 +768,7 @@ const CompactInvocationNode = ({ data, selected }: NodeProps<InvocationFlowNodeT
 };
 
 const ExpandedInvocationNode = ({ data, selected }: NodeProps<InvocationFlowNodeType>) => {
+  const { t } = useTranslation();
   const { editGraph } = useProjectGraphCommands();
   const isZoomedOut = useIsZoomedOut();
   const node = data.documentNode;
@@ -795,7 +800,7 @@ const ExpandedInvocationNode = ({ data, selected }: NodeProps<InvocationFlowNode
   const outputRows = getOutputFieldRows(getOutputFieldNamesByScope(outputTemplates));
   const isOpen = node.data.isOpen;
   const isRunning = execution?.status === 'running';
-  const isMissingRequiredInput = hasMissingRequiredInputs(node, Object.values(template.inputs), connectedFieldNames);
+  const isMissingRequiredInput = hasMissingRequiredInputs(node, inputTemplates, connectedFieldNames);
   const isCompact = data.isCompact && !selected;
   const withFooter = !isZoomedOut && templateView.isExecutable && templateView.hasImageOutput;
   const withOutputPreview = Boolean(execution?.outputImageUrl);
@@ -860,6 +865,11 @@ const ExpandedInvocationNode = ({ data, selected }: NodeProps<InvocationFlowNode
               template={inputTemplate}
             />
           ))}
+          {shouldShowCallSavedWorkflowLoadingHint(node) ? (
+            <Text color="fg.subtle" fontSize="2xs" px={WORKFLOW_NODE_DENSITY.rowPaddingX} py="1">
+              {t('nodes.savedWorkflowUpdating')}
+            </Text>
+          ) : null}
         </Box>
       ) : (
         <HiddenHandles inputTemplates={inputTemplates} outputTemplates={outputTemplates} />

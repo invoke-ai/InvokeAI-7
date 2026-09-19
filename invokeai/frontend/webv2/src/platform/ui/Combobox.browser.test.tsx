@@ -1,4 +1,4 @@
-/* oxlint-disable react-perf/jsx-no-new-function-as-prop */
+/* oxlint-disable react-perf/jsx-no-new-array-as-prop, react-perf/jsx-no-new-function-as-prop */
 import { ChakraProvider } from '@chakra-ui/react';
 import { system } from '@theme/system';
 import { createInstance } from 'i18next';
@@ -45,15 +45,28 @@ const interact = (action: () => void): Promise<void> =>
     });
   });
 
-const Harness = ({ disabled = false, onChange }: { disabled?: boolean; onChange: (value: string) => void }) => {
+const Harness = ({
+  disabled = false,
+  filterOptions = false,
+  onChange,
+}: {
+  disabled?: boolean;
+  filterOptions?: boolean;
+  onChange: (value: string) => void;
+}) => {
   const [value, setValue] = useState('euler_a');
+  const [search, setSearch] = useState('');
+  const visibleOptions = filterOptions
+    ? options.filter((option) => option.label.toLocaleLowerCase().includes(search.toLocaleLowerCase()))
+    : options;
 
   return (
     <Combobox
       aria-label="Scheduler"
       disabled={disabled}
-      options={options}
+      options={visibleOptions}
       value={value}
+      onInputValueChange={filterOptions ? setSearch : undefined}
       onValueChange={(nextValue) => {
         setValue(nextValue);
         onChange(nextValue);
@@ -62,7 +75,7 @@ const Harness = ({ disabled = false, onChange }: { disabled?: boolean; onChange:
   );
 };
 
-const renderCombobox = async (disabled = false) => {
+const renderCombobox = async (disabled = false, filterOptions = false) => {
   host = document.createElement('div');
   document.body.append(host);
   root = createRoot(host);
@@ -72,7 +85,7 @@ const renderCombobox = async (disabled = false) => {
     root?.render(
       <I18nextProvider i18n={i18n}>
         <ChakraProvider value={system}>
-          <Harness disabled={disabled} onChange={onChange} />
+          <Harness disabled={disabled} filterOptions={filterOptions} onChange={onChange} />
         </ChakraProvider>
       </I18nextProvider>
     );
@@ -132,6 +145,23 @@ describe('Combobox', () => {
     });
     expect(onChange).toHaveBeenLastCalledWith('euler_a');
     expect(input.value).toBe('Euler Ancestral');
+  });
+
+  it('clears the controlled search query when reopened', async () => {
+    const { input } = await renderCombobox(false, true);
+
+    await interact(() => input.click());
+    await setInputValue(input, 'DPM');
+    expect(document.querySelectorAll('[role="option"]')).toHaveLength(1);
+
+    await interact(() => {
+      input.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Escape' }));
+    });
+    expect(input.getAttribute('aria-expanded')).toBe('false');
+    await interact(() => input.click());
+
+    expect(input.value).toBe('');
+    expect(document.querySelectorAll('[role="option"]')).toHaveLength(options.length);
   });
 
   it('honors the disabled state', async () => {

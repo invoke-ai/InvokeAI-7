@@ -37,20 +37,22 @@ let root: Root | null = null;
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 /**
- * Returns the pointer to the viewport origin — where the harness below states
- * it starts.
+ * Returns the pointer to a stable, visible area in the upper-left of the
+ * viewport — where the harness below states it starts.
  *
  * That only holds for the first test. Once one has hovered the trigger the
  * cursor stays on it, so the next render mounts a fresh trigger underneath the
  * pointer and the card opens before the test asks for it. That surfaced as a
  * strict-mode violation, with `CLIP skip` matching both the trigger and the
  * already-open card's own heading and paragraph. The trigger is inset by
- * 120px, so the origin is reliably clear of it.
+ * 120px, so this area is reliably clear of it. Keep the target away from the
+ * viewport edge: Playwright can classify a 2px box at (0, 0) as outside the
+ * viewport after another browser test changes the viewport.
  */
 const parkPointer = async (): Promise<void> => {
   const parking = document.createElement('div');
 
-  parking.style.cssText = 'position:fixed;left:0;top:0;width:2px;height:2px;z-index:2147483647';
+  parking.style.cssText = 'position:fixed;left:8px;top:8px;width:64px;height:64px;z-index:2147483647';
   document.body.append(parking);
 
   await act(async () => {
@@ -86,9 +88,9 @@ const render = async (adapter: FeatureHintsAdapter) => {
         <I18nextProvider i18n={i18n}>
           <FeatureHintsProvider adapter={adapter}>
             {/*
-              Inset and shrink-wrapped on purpose: the mouse starts at the
-              viewport origin, so a full-width trigger at (0,0) would already
-              contain the pointer and `pointerenter` would never fire.
+              Inset and shrink-wrapped on purpose: the mouse starts in the
+              upper-left parking area, so a full-width trigger at (0,0) would
+              already contain the pointer and `pointerenter` would never fire.
             */}
             <FeatureHint hint="clipSkip">
               <Text display="inline-block" m="120px">

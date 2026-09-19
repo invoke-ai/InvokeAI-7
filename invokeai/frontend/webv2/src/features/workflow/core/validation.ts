@@ -271,7 +271,7 @@ const getTargetFieldType = (
   index: WorkflowGraphIndex = createWorkflowGraphIndex(document.nodes, document.edges)
 ): FieldType | null | undefined => {
   if (isInvocationNode(node)) {
-    const inputTemplate = templates[node.data.type]?.inputs[handle];
+    const inputTemplate = node.data.dynamicInputTemplates?.[handle] ?? templates[node.data.type]?.inputs[handle];
 
     return inputTemplate && inputTemplate.input !== 'direct' ? inputTemplate.type : undefined;
   }
@@ -584,7 +584,7 @@ export const validateConnection = (
 
   const targetTemplate = templates[targetNode.data.type];
   const sourceFieldType = getSourceFieldType(sourceNode, sourceHandle, document, templates, index);
-  const targetField = targetTemplate?.inputs[targetHandle];
+  const targetField = targetNode.data.dynamicInputTemplates?.[targetHandle] ?? targetTemplate?.inputs[targetHandle];
 
   if (sourceFieldType === undefined || !targetField) {
     return 'One of the fields has no known definition.';

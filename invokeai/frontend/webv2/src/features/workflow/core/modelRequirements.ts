@@ -247,7 +247,7 @@ export const extractWorkflowModelRequirements = (
       requirements.push({ identifier, kind: 'exact', label: identifier.name ?? identifier.key });
     };
 
-    for (const fieldTemplate of Object.values(template.inputs)) {
+    for (const fieldTemplate of Object.values({ ...template.inputs, ...node.data.dynamicInputTemplates })) {
       const isLoraCollection = fieldTemplate.type.name === 'LoRAField';
 
       if (!isModelFieldType(fieldTemplate.type) && !isLoraCollection) {

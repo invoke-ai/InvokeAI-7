@@ -34,6 +34,7 @@ import { useTranslation } from 'react-i18next';
 import type { WorkflowWidgetLabelProps, WorkflowWidgetViewProps } from './contracts';
 
 import { AddNodeDialog } from './editor/AddNodeDialog';
+import { CallSavedWorkflowSyncRuntime } from './editor/CallSavedWorkflowSyncRuntime';
 import { getWorkflowFlowInstance } from './editor/flowInstanceStore';
 import { createLibraryAutosaver, type LibrarySyncStatus } from './library/libraryAutosave';
 import { registerLibraryGraphSyncedHandler, releaseLibraryGraphSyncedHandler } from './library/librarySyncBridge';
@@ -521,6 +522,7 @@ export const WorkflowDialogHost = () => {
 
   return (
     <>
+      <CallSavedWorkflowSyncRuntime />
       <input ref={fileInputRef} accept=".json,application/json" hidden type="file" onChange={handleImportFile} />
       <AddNodeDialog
         connectionFilter={addNodeConnection}

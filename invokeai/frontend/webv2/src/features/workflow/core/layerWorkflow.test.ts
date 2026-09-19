@@ -200,6 +200,16 @@ describe('layer workflow binding discovery', () => {
     ]);
   });
 
+  it('finds persisted dynamic image inputs on Call Saved Workflow nodes', () => {
+    const callTemplate = template('call_saved_workflow');
+    const callNode = node('call', callTemplate);
+    callNode.data.dynamicInputTemplates = { image: input('image', { title: 'Child image' }) };
+
+    expect(getLayerWorkflowInputs(document([callNode]), { call_saved_workflow: callTemplate })).toEqual([
+      binding('call', 'image', 'call_saved_workflow → Child image'),
+    ]);
+  });
+
   it('finds only single non-batch image outputs and skips image primitive nodes', () => {
     const processorTemplate = template(
       'processor',

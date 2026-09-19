@@ -387,6 +387,22 @@ describe('getWorkflowTargetFieldType', () => {
     expect(getWorkflowTargetFieldType(document, templates, 'connector', 'in')).toBeNull();
   });
 
+  it('resolves a persisted dynamic input template when the static template lacks the field', () => {
+    const dynamicNode = makeNode('dynamic', 'number');
+    dynamicNode.data.dynamicInputTemplates = {
+      dynamic_value: { ...templates.number.inputs.value, name: 'dynamic_value' },
+    };
+
+    expect(
+      getWorkflowTargetFieldType(
+        { edges: [], nodes: [dynamicNode] },
+        { number: { ...templates.number, inputs: {} } },
+        'dynamic',
+        'dynamic_value'
+      )
+    ).toEqual(single('IntegerField'));
+  });
+
   it('rejects direct-only inputs', () => {
     const directTemplates: InvocationTemplates = {
       number: {

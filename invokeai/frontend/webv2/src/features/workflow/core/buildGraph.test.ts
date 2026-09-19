@@ -324,7 +324,7 @@ describe('compileProjectGraph', () => {
     ]);
   });
 
-  it('omits auto/none board sentinels and keeps explicit boards', () => {
+  it('preserves auto/none board sentinels and keeps explicit boards', () => {
     const { doc, sinkId } = buildDocument();
     const withAutoBoard = projectGraphReducer(doc, {
       fieldName: 'board',
@@ -333,7 +333,16 @@ describe('compileProjectGraph', () => {
       value: 'auto',
     });
 
-    expect(compileProjectGraph(withAutoBoard, templates).backendGraph?.nodes[sinkId]).not.toHaveProperty('board');
+    expect(compileProjectGraph(withAutoBoard, templates).backendGraph?.nodes[sinkId]).toMatchObject({ board: 'auto' });
+
+    const withNoneBoard = projectGraphReducer(doc, {
+      fieldName: 'board',
+      nodeId: sinkId,
+      type: 'setFieldValue',
+      value: 'none',
+    });
+
+    expect(compileProjectGraph(withNoneBoard, templates).backendGraph?.nodes[sinkId]).toMatchObject({ board: 'none' });
 
     const withExplicitBoard = projectGraphReducer(doc, {
       fieldName: 'board',
@@ -647,6 +656,19 @@ describe('planWorkflowSubmission', () => {
     expect(plan.graph.backendGraph.nodes[ids[0] as string]?.seed).toBe(42);
     expect(plan.graph.backendGraph.nodes[ids[2] as string]?.seed).toBe(5);
     expect(plan.graph.nodes.find((node) => node.id === ids[1])?.inputs.seed).toBe(100);
+  });
+
+  it('plans persisted dynamic seed fields', () => {
+    const dynamicTemplate = template('dynamic_node', {});
+    const node = buildInvocationNode(dynamicTemplate, { x: 0, y: 0 });
+    node.data.dynamicInputTemplates = { seed: seedInput };
+    node.data.inputs.seed = { label: 'Seed', name: 'seed', seedMode: 'increment', value: 42 };
+    const document = { ...createProjectGraph('dynamic-seed-plan'), nodes: [node] };
+
+    const plan = planWorkflowSubmission(document, { dynamic_node: dynamicTemplate }, { batchCount: 2 });
+
+    expect(plan.seeds).toEqual([{ fieldName: 'seed', nodeId: node.id, seed: 42, seedStep: 1 }]);
+    expect(plan.graph.backendGraph.nodes[node.id]?.seed).toBe(42);
   });
 
   it('wraps the authored seed and the advance over the inclusive seed range', () => {

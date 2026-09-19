@@ -566,7 +566,7 @@ const AddElementMenu = () => {
   );
 };
 
-const getInvalidNodeFieldElementIds = (
+export const getInvalidNodeFieldElementIds = (
   projectGraph: ProjectGraphState,
   templatesStatus: InvocationTemplatesSnapshot['status'],
   templates: InvocationTemplates
@@ -596,7 +596,7 @@ const getInvalidNodeFieldElementIds = (
       continue;
     }
 
-    const template = templates[node.data.type]?.inputs[fieldName];
+    const template = node.data.dynamicInputTemplates?.[fieldName] ?? templates[node.data.type]?.inputs[fieldName];
 
     if (!template) {
       invalidElementIds.add(element.id);

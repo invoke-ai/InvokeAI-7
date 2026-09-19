@@ -7,7 +7,7 @@ import type {
 
 import { Combobox as ChakraCombobox, createListCollection, Portal } from '@chakra-ui/react';
 import { CheckIcon, ChevronDownIcon } from 'lucide-react';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState, type UIEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 
 const COMBOBOX_POSITIONING = { placement: 'bottom-start', sameWidth: true } as const;
@@ -40,6 +40,8 @@ export interface ComboboxProps extends Omit<
   options: readonly ComboboxOption[];
   searchPlaceholder?: string;
   value: string | null;
+  onInputValueChange?: (value: string) => void;
+  onListScrollToBottom?: () => void;
   onValueChange: (value: string) => void;
 }
 
@@ -50,6 +52,8 @@ export const Combobox = ({
   noResultsText,
   onValueChange,
   options,
+  onInputValueChange,
+  onListScrollToBottom,
   searchPlaceholder,
   value,
   ...rootProps
@@ -81,15 +85,36 @@ export const Combobox = ({
       }),
     [filteredOptions]
   );
-  const handleOpenChange = useCallback((details: { open: boolean }) => {
-    setIsOpen(details.open);
-    setQuery('');
-  }, []);
-  const handleInputValueChange = useCallback((details: { inputValue: string; reason?: string }) => {
-    if (details.reason === 'input-change' || details.reason === 'clear-trigger') {
-      setQuery(details.inputValue);
-    }
-  }, []);
+  const handleOpenChange = useCallback(
+    (details: { open: boolean }) => {
+      setIsOpen(details.open);
+      setQuery('');
+
+      if (!details.open) {
+        onInputValueChange?.('');
+      }
+    },
+    [onInputValueChange]
+  );
+  const handleInputValueChange = useCallback(
+    (details: { inputValue: string; reason?: string }) => {
+      if (details.reason === 'input-change' || details.reason === 'clear-trigger') {
+        setQuery(details.inputValue);
+        onInputValueChange?.(details.inputValue);
+      }
+    },
+    [onInputValueChange]
+  );
+  const handleListScroll = useCallback(
+    (event: UIEvent<HTMLDivElement>) => {
+      const list = event.currentTarget;
+
+      if (list.scrollHeight - list.scrollTop - list.clientHeight <= 24) {
+        onListScrollToBottom?.();
+      }
+    },
+    [onListScrollToBottom]
+  );
   const handleValueChange = useCallback(
     (details: ComboboxValueChangeDetails<ComboboxOption>) => {
       const nextValue = details.value[0];
@@ -137,7 +162,12 @@ export const Combobox = ({
             {/* The list is its own scroll container (ark scrolls it to keep the
                 highlighted option in view); a thin always-visible scrollbar
                 makes the overflow legible instead of looking cut off. */}
-            <ChakraCombobox.List css={LIST_SCROLL_CSS} maxH="16rem" overflowY="auto">
+            <ChakraCombobox.List
+              css={LIST_SCROLL_CSS}
+              maxH="16rem"
+              overflowY="auto"
+              onScroll={onListScrollToBottom ? handleListScroll : undefined}
+            >
               {collection.items.map((item) => (
                 <ChakraCombobox.Item key={item.value} item={item}>
                   <ChakraCombobox.ItemText>{item.label}</ChakraCombobox.ItemText>

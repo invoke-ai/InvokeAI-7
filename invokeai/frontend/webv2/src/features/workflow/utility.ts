@@ -7,3 +7,4 @@ export * from './core/graphIndex';
 export * from './core/outputFields';
 export * from './core/validation';
 export * from './core/workflowJson';
+export * from './core/callSavedWorkflow';

@@ -2,6 +2,7 @@ import { SEED_MODES } from '@platform/core/seed';
 import { z } from 'zod';
 
 import type {
+  FieldInputTemplate,
   ProjectGraphState,
   WorkflowEdge,
   WorkflowFieldInstance,
@@ -81,6 +82,45 @@ const zConnectorNode = z.object({
 });
 
 const zAnyNode = z.union([zInvocationNode, zNotesNode, zCurrentImageNode, zConnectorNode]);
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const isPersistedFieldInputTemplate = (value: unknown): value is FieldInputTemplate => {
+  if (!isRecord(value) || !isRecord(value.type)) {
+    return false;
+  }
+
+  return (
+    typeof value.name === 'string' &&
+    typeof value.title === 'string' &&
+    typeof value.description === 'string' &&
+    typeof value.required === 'boolean' &&
+    (value.fieldKind === 'input' || value.fieldKind === 'internal') &&
+    (value.input === 'connection' || value.input === 'direct' || value.input === 'any') &&
+    typeof value.type.name === 'string' &&
+    (value.type.cardinality === 'SINGLE' ||
+      value.type.cardinality === 'COLLECTION' ||
+      value.type.cardinality === 'SINGLE_OR_COLLECTION') &&
+    typeof value.type.batch === 'boolean'
+  );
+};
+
+const parsePersistedDynamicInputTemplates = (value: unknown): Record<string, FieldInputTemplate> | undefined => {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const templates: Record<string, FieldInputTemplate> = {};
+
+  for (const [name, template] of Object.entries(value)) {
+    if (isPersistedFieldInputTemplate(template)) {
+      templates[name] = template;
+    }
+  }
+
+  return templates;
+};
 
 const zWorkflowEdge = z.object({
   id: z.string().catch(''),
@@ -302,8 +342,11 @@ export const parseWorkflowJson = (raw: unknown): ParsedWorkflow => {
       };
     }
 
+    const dynamicInputTemplates = parsePersistedDynamicInputTemplates(node.data.dynamicInputTemplates);
+
     nodes.push({
       data: {
+        ...(dynamicInputTemplates ? { dynamicInputTemplates } : {}),
         inputs,
         isIntermediate: node.data.isIntermediate,
         isOpen: node.data.isOpen,
@@ -313,6 +356,14 @@ export const parseWorkflowJson = (raw: unknown): ParsedWorkflow => {
         type: node.data.type,
         useCache: node.data.useCache,
         version: node.data.version,
+        ...(node.data.type === 'call_saved_workflow'
+          ? {
+              callSavedWorkflowStatus:
+                typeof inputs.workflow_id?.value === 'string' && inputs.workflow_id.value.trim()
+                  ? ('loading' as const)
+                  : ('ready' as const),
+            }
+          : {}),
       },
       id: node.id,
       position: node.position,
@@ -365,6 +416,17 @@ export const parseWorkflowJson = (raw: unknown): ParsedWorkflow => {
   return { document, warnings };
 };
 
+const serializeInvocationNode = (node: Extract<WorkflowNode, { type: 'invocation' }>) => {
+  const { callSavedWorkflowStatus: _callSavedWorkflowStatus, ...data } = structuredClone(node.data);
+
+  return {
+    data: { ...data, id: node.id },
+    id: node.id,
+    position: { ...node.position },
+    type: node.type,
+  };
+};
+
 /** Serializes the document to legacy WorkflowV3 JSON (loadable by the v6 editor and the library backend). */
 export const serializeWorkflowJson = (document: ProjectGraphState): Record<string, unknown> => ({
   author: document.author,
@@ -394,12 +456,7 @@ export const serializeWorkflowJson = (document: ProjectGraphState): Record<strin
             position: { ...node.position },
             type: node.type,
           }
-        : {
-            data: { ...structuredClone(node.data), id: node.id },
-            id: node.id,
-            position: { ...node.position },
-            type: node.type,
-          }
+        : serializeInvocationNode(node)
   ),
   notes: document.notes,
   tags: document.tags,

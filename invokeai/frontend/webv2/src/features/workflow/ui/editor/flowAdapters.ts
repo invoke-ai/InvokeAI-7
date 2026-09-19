@@ -95,6 +95,41 @@ const createInvocationNodeTemplateView = (template: InvocationTemplate): Invocat
   template,
 });
 
+const dynamicTemplateViewCache = new WeakMap<
+  InvocationTemplate,
+  WeakMap<NonNullable<WorkflowInvocationNode['data']['dynamicInputTemplates']>, InvocationNodeTemplateView>
+>();
+
+const getInvocationNodeTemplateView = (
+  template: InvocationNodeTemplateView,
+  dynamicInputTemplates: WorkflowInvocationNode['data']['dynamicInputTemplates']
+): InvocationNodeTemplateView => {
+  if (!dynamicInputTemplates || Object.keys(dynamicInputTemplates).length === 0) {
+    return template;
+  }
+
+  let cached = dynamicTemplateViewCache.get(template.template);
+
+  if (!cached) {
+    cached = new WeakMap();
+    dynamicTemplateViewCache.set(template.template, cached);
+  }
+
+  const existing = cached.get(dynamicInputTemplates);
+
+  if (existing) {
+    return existing;
+  }
+
+  const view = createInvocationNodeTemplateView({
+    ...template.template,
+    inputs: { ...template.template.inputs, ...dynamicInputTemplates },
+  });
+  cached.set(dynamicInputTemplates, view);
+
+  return view;
+};
+
 const templateViewCache = new WeakMap<InvocationTemplates, Map<string, InvocationNodeTemplateView>>();
 
 const getInvocationNodeTemplateViews = (
@@ -191,7 +226,10 @@ export const toFlowNodes = (
       const connectedSourceHandles = connectedSourcesByNode.get(documentNode.id) ?? EMPTY_NAMES;
       const connectedTargetHandles = connectedByNode.get(documentNode.id) ?? EMPTY_NAMES;
       const exposedFieldNames = exposedByNode.get(documentNode.id) ?? EMPTY_NAMES;
-      const template = templateViews.get(documentNode.data.type) ?? null;
+      const baseTemplate = templateViews.get(documentNode.data.type);
+      const template = baseTemplate
+        ? getInvocationNodeTemplateView(baseTemplate, documentNode.data.dynamicInputTemplates)
+        : null;
 
       if (
         previous?.type === 'invocation' &&
