@@ -1,11 +1,12 @@
-"""The Windows video-memory budget reader, against a scripted stand-in for the gdi32 kernel thunks.
+"""The Windows video-memory readers, against scripted stand-ins for the gdi32 kernel thunks and for PDH.
 
-The thunks are driven through the same ctypes structures the module passes, so struct layout, the two-call adapter
-enumeration, the PCI match and handle cleanup are exercised; only the kernel behind them is fake.
+The stand-ins are driven through the same ctypes structures the module passes, so struct layout, the two-call adapter
+enumeration, the PCI match, handle cleanup and the counter-instance naming are exercised; only the OS behind them is fake.
 """
 
 import ctypes
 import functools
+import os
 import sys
 from types import SimpleNamespace
 
@@ -17,6 +18,50 @@ from invokeai.backend.util import wddm
 GIB = 1024**3
 DEVICE = torch.device("cuda", 0)
 OUR_BUS, OUR_DEVICE = 3, 0
+
+
+def _luid_low(handle: int) -> int:
+    return 0x22A00 + handle
+
+
+class _FakePdh:
+    """A PDH that reports the given ``GPU Process Memory`` instances' shared usage."""
+
+    def __init__(self, instances: dict[str, int]):
+        self.instances = instances
+        self.counter_paths: list[str] = []
+        self.closed = 0
+        self._alive: list[object] = []
+
+    def PdhOpenQueryW(self, source, user_data, query_ref):
+        query_ref._obj.value = 1
+        return 0
+
+    def PdhAddEnglishCounterW(self, query, path, user_data, counter_ref):
+        self.counter_paths.append(path)
+        counter_ref._obj.value = 2
+        return 0
+
+    def PdhCollectQueryData(self, query):
+        return 0
+
+    def PdhGetFormattedCounterArrayW(self, counter, fmt, size_ref, count_ref, buffer):
+        count = len(self.instances)
+        if buffer is None:
+            size_ref._obj.value = ctypes.sizeof(wddm._PdhCounterValueItem) * count
+            count_ref._obj.value = count
+            return wddm._PDH_MORE_DATA
+        items = (wddm._PdhCounterValueItem * count).from_buffer(buffer)
+        for item, (name, value) in zip(items, self.instances.items(), strict=True):
+            item.szName = name
+            item.FmtValue.largeValue = value
+        self._alive.append(items)  # the name buffers live as long as the array object
+        count_ref._obj.value = count
+        return 0
+
+    def PdhCloseQuery(self, query):
+        self.closed += 1
+        return 0
 
 
 class _FakeGdi32:
@@ -38,6 +83,8 @@ class _FakeGdi32:
             return 0
         for i, (handle, _bus, _device) in enumerate(self.adapters):
             enum.pAdapters[i].hAdapter = handle
+            enum.pAdapters[i].AdapterLuid.LowPart = _luid_low(handle)
+            enum.pAdapters[i].AdapterLuid.HighPart = 0
         return 0
 
     def D3DKMTQueryAdapterInfo(self, ref):
@@ -140,6 +187,48 @@ def test_reset_closes_the_cached_handle(windows_rocm):
     wddm.reset_cache()
 
     assert gdi32.closed == [20]
+
+
+def _instance(pid: int, handle: int) -> str:
+    return f"pid_{pid}_luid_0x00000000_0x{_luid_low(handle):08X}_phys_0"
+
+
+def test_paged_bytes_reads_this_process_on_the_devices_adapter(windows_rocm, monkeypatch):
+    windows_rocm(_FakeGdi32([(10, 7, 0), (20, OUR_BUS, OUR_DEVICE)]))
+    me = os.getpid()
+    pdh = _FakePdh(
+        {
+            _instance(me, 10): 5 * GIB,  # this process, other adapter
+            _instance(me + 1, 20): 7 * GIB,  # another process, our adapter
+            _instance(me, 20): 3 * GIB,  # this process, our adapter (PDH may report upper-case hex)
+        }
+    )
+    monkeypatch.setattr(wddm, "_load_pdh", functools.lru_cache(maxsize=1)(lambda: pdh))
+
+    assert wddm.paged_bytes(DEVICE) == 3 * GIB
+    assert wddm.paged_bytes(DEVICE) == 3 * GIB
+    assert pdh.counter_paths == [r"\GPU Process Memory(*)\Shared Usage"], "one query, opened on first use"
+
+    wddm.reset_cache()
+    assert pdh.closed == 1
+
+
+def test_paged_bytes_is_unknown_before_this_process_used_the_adapter(windows_rocm, monkeypatch):
+    windows_rocm(_FakeGdi32([(20, OUR_BUS, OUR_DEVICE)]))
+    pdh = _FakePdh({_instance(os.getpid() + 1, 20): GIB})
+    monkeypatch.setattr(wddm, "_load_pdh", functools.lru_cache(maxsize=1)(lambda: pdh))
+
+    assert wddm.paged_bytes(DEVICE) is None
+
+
+def test_paged_bytes_elsewhere_never_touches_pdh(monkeypatch):
+    def loader():
+        raise AssertionError("pdh must not be loaded outside Windows ROCm")
+
+    monkeypatch.setattr(wddm, "_load_pdh", functools.lru_cache(maxsize=1)(loader))
+    monkeypatch.setattr(sys, "platform", "linux")
+
+    assert wddm.paged_bytes(DEVICE) is None
 
 
 def test_structures_match_the_d3dkmt_layout():

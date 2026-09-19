@@ -43,6 +43,11 @@ from invokeai.app.services.shared.invocation_context import InvocationContextDat
 from invokeai.app.util.profiler import Profiler
 from invokeai.backend.util.device_pool import GENERATION_DEVICE_POOL
 from invokeai.backend.util.devices import TorchDevice, disable_conv_benchmark_empty_cache
+from invokeai.backend.util.wddm import paged_bytes
+
+# Paged-out VRAM worth a warning. Weight uploads page a few hundred MB for an instant (0.25-0.36 GiB measured on an
+# RX 9060 XT), so the threshold sits above that; a session that ends with more than this paged has lost real VRAM.
+_VRAM_PAGING_WARNING_BYTES = 512 * 2**20
 
 # A failed owner lookup is retried before the item is refused, so that a transient error
 # — a busy-timeout on the shared SQLite connection under multi-GPU write contention, say —
@@ -554,6 +559,8 @@ class _SessionWorker:
         self.cancel_event = ThreadEvent()
         self.queue_item: Optional[SessionQueueItem] = None
         self.thread: Optional[Thread] = None
+        # Paged-out VRAM at the last warning; only this worker's thread reads or writes it.
+        self.paging_warned_bytes = 0
 
     @property
     def label(self) -> str:
@@ -841,6 +848,35 @@ class DefaultSessionProcessor(SessionProcessorBase):
                 f"Could not release cached VRAM after the session on {worker.label}", exc_info=True
             )
 
+    def _warn_if_vram_paged(self, worker: _SessionWorker) -> None:
+        """Say so when Windows keeps part of this worker's GPU memory in shared system memory after a session.
+
+        On a ROCm build under Windows an allocation that does not fit the video-memory budget, or finds no contiguous
+        VRAM, is placed in system memory instead of failing -- and another program on the same GPU can push this
+        process's memory out the same way. It stays there, and every generation that touches it slows down, with
+        nothing else in the log to explain why. Warns once per episode: again only after it grew by the threshold,
+        and re-armed once it drops below it. Measured after the session's VRAM release, so the transient paging of a
+        weight upload is over. `paged_bytes` answers None everywhere else, which keeps this silent there.
+        """
+        try:
+            paged = paged_bytes(worker.device or TorchDevice.choose_torch_device())
+        except Exception:
+            self._invoker.services.logger.debug(f"Could not read paged VRAM on {worker.label}", exc_info=True)
+            return
+        if paged is None:
+            return
+        if paged < _VRAM_PAGING_WARNING_BYTES:
+            worker.paging_warned_bytes = 0
+            return
+        if paged < worker.paging_warned_bytes + _VRAM_PAGING_WARNING_BYTES:
+            return
+        worker.paging_warned_bytes = paged
+        self._invoker.services.logger.warning(
+            f"Windows is keeping {paged / 2**30:.1f} GiB of Invoke's GPU memory on {worker.label} in shared system "
+            "memory, which makes generations much slower. Close other programs that use this GPU; if it persists, "
+            "restart Invoke to get the memory back into VRAM."
+        )
+
     def resume(self) -> SessionProcessorStatus:
         if not self._resume_event.is_set():
             self._resume_event.set()
@@ -1054,6 +1090,7 @@ class DefaultSessionProcessor(SessionProcessorBase):
                     finally:
                         GENERATION_DEVICE_POOL.release_session(worker.device)
                     self._release_vram_after_session(worker)
+                    self._warn_if_vram_paged(worker)
 
                 except Exception as e:
                     error_type = e.__class__.__name__

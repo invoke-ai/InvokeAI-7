@@ -204,6 +204,14 @@ It is strongly suggested to disable this feature:
   Unfortunately, the Nvidia implementation is not optimized for applications like Invoke and does more harm than good.
 :::
 
+### AMD GPUs on Windows (ROCm)
+
+Invoke does not officially support ROCm on Windows (see the [System Requirements](../../start-here/system-requirements)). If you run a ROCm build of PyTorch there anyway, Windows behaves as if the Nvidia sysmem fallback were always on: an allocation that does not fit is moved into much slower system memory instead of failing, and it stays there. Task Manager shows it as shared GPU memory. Invoke works around this where it can:
+
+- The model cache plans against the video-memory budget Windows grants Invoke, not against the card's total VRAM.
+- The PyTorch allocator defaults to `expandable_segments:True` (see [PyTorch CUDA allocator config](#pytorch-cuda-allocator-config)), so fragmented VRAM does not force allocations out.
+- When a generation ends with part of Invoke's GPU memory in system memory, the log says so. Other programs using the same GPU, like games or browsers, can push Invoke's memory out as well. Close them, or restart Invoke to get the memory back into VRAM.
+
 ## Troubleshooting
 
 ### Windows page file
