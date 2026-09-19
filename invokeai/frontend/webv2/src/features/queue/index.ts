@@ -72,3 +72,4 @@ export {
   getRemoteProgressSlot,
   getRemoteSyntheticBackendItemId,
 } from './core/remoteProgress';
+export { getRemoteWorkerUrls, remoteWorkersStore, setRemoteWorkersSettings } from './data/remoteWorkersStore';
