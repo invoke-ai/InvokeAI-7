@@ -38,3 +38,37 @@ def test_1024px_stays_untiled_on_an_8gb_card_and_1536px_tiles_on_16gb():
         assert not should_pretile_vae_decode(torch.device("cuda"), 1024 * 1024 * 2 * 2900, VAE_PRETILE_VRAM_FRACTION)
     with patch("torch.cuda.get_device_properties", return_value=MagicMock(total_memory=TOTAL)):
         assert should_pretile_vae_decode(torch.device("cuda"), 1536 * 1536 * 2 * 3600, VAE_PRETILE_VRAM_FRACTION)
+
+
+def test_the_pretile_gate_uses_the_memory_the_device_will_keep_resident(monkeypatch):
+    """The gate must measure against what the device keeps resident, not the card's nameplate total.
+
+    This is the platform the feature was written for: the docstring justifies up-front tiling with
+    "on Windows, drivers page an allocation that does not fit into system memory instead of failing
+    it (always for ROCm)". Windows pages once the process passes its WDDM budget, and another GPU
+    process lowers that budget within about a second -- which is exactly why this PR added
+    `TorchDevice.cuda_mem_get_info` to cap the model cache's free figure by `wddm.video_memory_budget`.
+    The tiling gate consults neither that budget nor free memory, only `total_memory`.
+
+    A 16 GiB card whose budget is down to 12.5 GiB pages a 13.3 GiB decode (FLUX.1 at 1408px on
+    MIOpen). No out-of-memory error is raised there, so the nodes' tiled retry never fires and the
+    generation just crawls. Measured against the card total the decode looks fine (13.3 < 14.4 GiB),
+    so it is not tiled.
+    """
+    total_bytes = 16 * 2**30
+    budget_bytes = int(12.5 * 2**30)
+    estimate = 1408 * 1408 * 2 * 3600  # 13.3 GiB: under 90% of the card, over the budget
+
+    monkeypatch.setattr("torch.cuda.get_device_properties", lambda device: MagicMock(total_memory=total_bytes))
+    # torch cannot see the shortfall: on Windows ROCm its free figure is the device total minus this
+    # process's own live allocations, and this process has allocated nothing yet.
+    monkeypatch.setattr("torch.cuda.mem_get_info", lambda device: (total_bytes, total_bytes))
+    # Patch both binding sites: `devices` imports the name directly, so a fix routing through
+    # `TorchDevice.cuda_mem_get_info` and one calling `wddm.video_memory_budget` are both covered.
+    monkeypatch.setattr("invokeai.backend.util.devices.video_memory_budget", lambda device: budget_bytes)
+    monkeypatch.setattr("invokeai.backend.util.wddm.video_memory_budget", lambda device: budget_bytes)
+
+    assert estimate < VAE_PRETILE_VRAM_FRACTION * total_bytes, "test shape must look fine against the card total"
+    assert estimate > budget_bytes, "test shape must exceed what Windows would keep resident"
+
+    assert should_pretile_vae_decode(torch.device("cuda", 0), estimate) is True

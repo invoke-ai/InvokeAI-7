@@ -457,6 +457,70 @@ class TestQwenImageWorkingMemory:
             mock_vae.enable_tiling.assert_not_called()
 
 
+# Peak reserved bytes per output pixel per element byte actually measured for the Qwen-Image VAE
+# decode on ROCm, from the per-point table in `estimate_vae_working_memory_qwen_image`. The shipped
+# constant is a flat 5500 -- "max observed + ~8% headroom" -- which is the right figure to *reserve*,
+# but the real curve is not flat, so it over-predicts the peak by up to 68%.
+MEASURED_ROCM_DECODE_CONSTANT = {512: 5132, 768: 4596, 1024: 4570, 1536: 3273, 1792: 3735, 2048: 4813}
+
+
+class TestPretilingDoesNotFireOnReservationHeadroom:
+    """A decode whose real peak fits the card must not be tiled.
+
+    Tiling is not pixel-identical, so it must be triggered by a decode that genuinely does not fit --
+    not by the headroom baked into a reservation constant. Over-reserving used to cost only cache
+    eviction; comparing that padded figure against a share of the card turns it into a silent output
+    change for images that would have decoded in a single pass.
+
+    Krea-2 decodes through this node too, and it has no out-of-memory retry, so the estimate is the
+    only trigger either way.
+    """
+
+    @pytest.mark.parametrize("px, total_gib", [(1536, 24), (1792, 32)])
+    def test_a_decode_whose_measured_peak_fits_the_card_is_not_tiled(self, px, total_gib, monkeypatch):
+        total_bytes = total_gib * 2**30
+        latents = torch.zeros(1, 16, 1, px // 8, px // 8)
+
+        # The constants are measured per backend, so pin it rather than inheriting the host's build.
+        monkeypatch.setattr(torch.version, "hip", "7.2.0")
+        monkeypatch.setattr("torch.cuda.get_device_properties", lambda device: MagicMock(total_memory=total_bytes))
+
+        # The measured table is fp16, and the estimator runs once here and once inside the node,
+        # so `parameters()` has to hand out a fresh iterator on every call.
+        mock_vae = MagicMock(spec=AutoencoderKLQwenImage)
+        mock_vae.parameters.side_effect = lambda: iter([torch.zeros(1, dtype=torch.float16)])
+        mock_vae_info = MagicMock()
+        mock_vae_info.model = mock_vae
+        mock_vae_info.compute_device = torch.device("cuda", 0)
+        # Stop the moment the decision has been made: everything after this would need a real GPU.
+        mock_vae_info.model_on_device.side_effect = RuntimeError("stop after the tiling decision")
+
+        untiled = estimate_vae_working_memory_qwen_image(
+            operation="decode", image_tensor=latents, vae=mock_vae, tile_size=None
+        )
+        measured_peak = px * px * 2 * MEASURED_ROCM_DECODE_CONSTANT[px]
+        assert measured_peak < 0.9 * total_bytes, "test shape must actually fit the card"
+
+        mock_context = MagicMock()
+        mock_context.models.load.return_value = mock_vae_info
+        mock_context.tensors.load.return_value = latents
+        mock_context.config.get.return_value.force_tiled_decode = False
+        mock_context.config.get.return_value.auto_tiled_decode = True
+
+        invocation = QwenImageLatentsToImageInvocation.model_construct(
+            latents=MagicMock(latents_name="test_latents"),
+            vae=MagicMock(vae=MagicMock(), seamless_axes=[]),
+            tiled=False,
+            tile_size=0,
+        )
+        with pytest.raises(RuntimeError, match="stop after the tiling decision"):
+            invocation.invoke(mock_context)
+
+        # A pre-tiled decode re-estimates against one tile, so the reservation shrinks. Reserving the
+        # full-frame figure is what "decoded in a single pass" looks like from here.
+        assert mock_vae_info.model_on_device.call_args.kwargs["working_mem_bytes"] == untiled
+
+
 class TestQwenImageVaeTiling:
     """Exercise the tiling parameters against a real (tiny, randomly initialised) Qwen-Image VAE.
 
