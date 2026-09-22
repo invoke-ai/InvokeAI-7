@@ -57,19 +57,39 @@ jobs:
             os: ubuntu-24.04
             extra-index-url: 'https://download.pytorch.org/whl/cpu'
             github-env: $GITHUB_ENV
+            # 4 vCPUs, 16GB. Measured 10.04GB summed across 4 workers.
+            pytest-workers: 'logical'
+            timeout-minutes: 30
           - platform: macos-default
             os: macOS-14
             github-env: $GITHUB_ENV
+            # 3 vCPUs but only 7GB, and this is the one runner whose `auto` device is a GPU:
+            # MPS buffers come out of that same 7GB. One worker per vCPU measured 6.70GB summed
+            # (the reporter in tests/conftest.py prints it), and the MPS allocator then could not
+            # satisfy a 256-byte buffer. Two workers puts that near 4.5GB, and the headroom is
+            # worth more than the figure suggests: the reporter counts only each worker's own
+            # RSS, while several test files spawn Python children that import invokeai and peak
+            # around 1.5GB apiece.
+            pytest-workers: '2'
+            timeout-minutes: 40
           - platform: windows-cpu
             os: windows-2022
             github-env: $env:GITHUB_ENV
+            # 4 vCPUs, 16GB. Measured 7.82GB summed across 4 workers.
+            pytest-workers: 'logical'
+            timeout-minutes: 30
     name: 'py${{ matrix.python-version }}: ${{ matrix.platform }}'
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30 # expected run time: 8-14 min, depending on platform and uv cache state
+    # Per platform: the macOS runner trades workers for memory below, so it needs longer.
+    # 8-14 min on the four-worker platforms, depending on the uv cache state. The macOS budget
+    # is extrapolated, not measured: 16 min at three workers scales to under 25 at two, since
+    # `OMP_NUM_THREADS: 1` leaves each of the two a full core of the runner's three.
+    timeout-minutes: ${{ matrix.timeout-minutes }}
     env:
       PIP_USE_PEP517: '1'
       # One compute thread per worker. Torch otherwise sizes its thread pools to the whole
-      # machine, so `-n logical` puts vCPUs^2 threads on a runner that fight for the same cores.
+      # machine, so a worker per vCPU puts vCPUs^2 threads on a runner that fight for the same
+      # cores. It is also what leaves each macOS worker a full core at the reduced count above.
       OMP_NUM_THREADS: '1'
       MKL_NUM_THREADS: '1'
 
@@ -136,5 +156,6 @@ jobs:
         if: ${{ steps.changed-files.outputs.python_any_changed == 'true' || inputs.always_run == true }}
         # `logical`, not `auto`: xdist's `auto` asks psutil for *physical* cores, which is half
         # the vCPUs a standard runner exposes. Much of the suite waits on timers and polls, so
-        # one worker per vCPU is the right level.
-        run: uv run --no-sync pytest -n logical --max-worker-restart=0
+        # one worker per vCPU is the right level wherever the runner's memory affords it -- see
+        # the per-platform worker counts above.
+        run: uv run --no-sync pytest -n ${{ matrix.pytest-workers }} --max-worker-restart=0
