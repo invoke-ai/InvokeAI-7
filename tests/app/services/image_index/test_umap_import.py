@@ -8,8 +8,12 @@ Not marked `slow`: measured at ~10s cold (numba JIT cache empty) and ~7s warm, w
 default selection can absorb.
 """
 
-import numba
 import numpy as np
+import pytest
+
+# Windows ARM64 has no numba wheel for its Python, so pyproject excludes the umap/numba stack there and
+# the image map takes compute_umap's PCA fallback; that path is covered by test_projection.py.
+numba = pytest.importorskip("numba", reason="umap-learn/numba are not installed on this platform")
 
 
 def test_numba_jit_is_active() -> None:

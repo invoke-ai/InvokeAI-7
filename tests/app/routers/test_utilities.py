@@ -244,6 +244,8 @@ def test_list_user_fonts_reads_real_woff2_file(
     fonts_dir = mock_invoker.services.configuration.fonts_path
     fonts_dir.mkdir(parents=True, exist_ok=True)
     source_font = Path(__file__).parents[3] / "invokeai" / "assets" / "fonts" / "inter" / "Inter-Regular.ttf"
+    # fontTools encodes woff2 through brotli, which has no Windows ARM64 wheel (the `woff` extra is dropped there).
+    pytest.importorskip("brotli", reason="woff2 encoding needs brotli, absent on this platform")
     font = TTFont(source_font)
     try:
         font.flavor = "woff2"

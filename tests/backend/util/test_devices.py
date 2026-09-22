@@ -893,3 +893,40 @@ def test_disable_conv_benchmark_empty_cache_flips_torch_flag():
         assert getter() is False
     finally:
         setter(original)
+
+
+class TestCudaStreamCaptureShim:
+    """NVIDIA's Windows ARM64 torch crashes in is_current_stream_capturing() without a device; the shim answers False
+    there and stays out of the way everywhere else."""
+
+    @staticmethod
+    def _cuda_build_without_device(monkeypatch) -> None:
+        monkeypatch.setattr(torch.version, "cuda", "13.4")
+        monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+        # Restore the original function after the test, whatever the shim did.
+        monkeypatch.setattr(torch.cuda, "is_current_stream_capturing", torch.cuda.is_current_stream_capturing)
+
+    def test_answers_false_without_a_device_and_installs_once(self, monkeypatch):
+        from invokeai.backend.util.devices import install_cuda_stream_capture_shim
+
+        self._cuda_build_without_device(monkeypatch)
+        install_cuda_stream_capture_shim()
+        shim = torch.cuda.is_current_stream_capturing
+        assert shim() is False
+        install_cuda_stream_capture_shim()
+        assert torch.cuda.is_current_stream_capturing is shim, "a second install must not wrap the shim"
+
+    def test_leaves_torch_alone_where_cuda_works_or_is_absent(self, monkeypatch):
+        from invokeai.backend.util.devices import install_cuda_stream_capture_shim
+
+        original = torch.cuda.is_current_stream_capturing
+        monkeypatch.setattr(torch.cuda, "is_current_stream_capturing", original)
+        monkeypatch.setattr(torch.version, "cuda", None)
+        monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+        install_cuda_stream_capture_shim()
+        assert torch.cuda.is_current_stream_capturing is original
+
+        monkeypatch.setattr(torch.version, "cuda", "13.4")
+        monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+        install_cuda_stream_capture_shim()
+        assert torch.cuda.is_current_stream_capturing is original

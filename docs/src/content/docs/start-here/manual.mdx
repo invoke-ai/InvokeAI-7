@@ -59,6 +59,16 @@ The following commands vary depending on the version of Invoke being installed a
 
       This command creates a portable virtual environment at `.venv` complete with a portable python 3.12. It doesn't matter if your system has no python installed, or has a different version - `uv` will handle everything.
 
+      :::note[Windows on ARM64 (RTX Spark)]
+        `uv` installs an x86_64 python on ARM64 Windows unless asked for the native build, and an x86_64 python cannot load the ARM64 torch. Request the native interpreter explicitly:
+
+        ```sh
+        uv venv --relocatable --prompt invoke --python cpython-3.12-windows-aarch64-none --python-preference only-managed .venv
+        ```
+
+        Use the same `--python cpython-3.12-windows-aarch64-none` in place of `--python 3.12` in the install commands below.
+      :::
+
   4. Activate the virtual environment:
 
       <Tabs syncKey="operatingSystem">
@@ -110,6 +120,13 @@ The following commands vary depending on the version of Invoke being installed a
               ```sh
               --torch-backend=xpu
               ```
+            </TabItem>
+            <TabItem label="Windows on ARM64 (RTX Spark)">
+              Do not use a torch backend. torch comes from NVIDIA's own index, and three packages that have no ARM64 build on PyPI (OpenCV, blake3, tiktoken) come from wheels Invoke publishes. Use these two options instead of `--torch-backend`:
+              ```sh
+              --index https://pypi.nvidia.com/nvtorch_oot/ --find-links https://github.com/invoke-ai/InvokeAI-7/releases/download/win-arm64-wheels-v1/index.html
+              ```
+              With or without an NVIDIA GPU: this is the only torch build for Windows ARM64. See the [system requirements](../system-requirements#windows-on-arm64-rtx-spark) for the platform's feature differences.
             </TabItem>
             <TabItem label="Other / no GPU">
               Do not use a torch backend.
@@ -170,6 +187,11 @@ The following commands vary depending on the version of Invoke being installed a
         <TabItem label="With torch backend">
           ```sh
           uv pip install <PACKAGE_SPECIFIER>==<VERSION> --python 3.12 --python-preference only-managed --torch-backend=<VERSION> --force-reinstall
+          ```
+        </TabItem>
+        <TabItem label="Windows on ARM64">
+          ```sh
+          uv pip install <PACKAGE_SPECIFIER>==<VERSION> --python cpython-3.12-windows-aarch64-none --python-preference only-managed --index https://pypi.nvidia.com/nvtorch_oot/ --find-links https://github.com/invoke-ai/InvokeAI-7/releases/download/win-arm64-wheels-v1/index.html --force-reinstall
           ```
         </TabItem>
 
