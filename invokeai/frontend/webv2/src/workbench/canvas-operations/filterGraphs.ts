@@ -53,12 +53,7 @@ export const buildFilterDefaults = (definition: FilterDefinition): Record<string
   return settings;
 };
 
-/**
- * The supported filters, in the legacy display order of the required set
- * (`features/controlLayers/store/filters.ts`), plus named presets that improve
- * discoverability. Params carry legacy defaults + ranges; a preset may project
- * its UI id to a different backend node type.
- */
+/** Preserve legacy filter order, defaults, and ranges; named presets may map to different backend node types. */
 export const CONTROL_FILTERS: readonly FilterDefinition[] = [
   {
     params: [
@@ -324,14 +319,8 @@ export interface FilterGraphResult {
 }
 
 /**
- * Builds the single-node filter graph for `filterType` over `imageName`. Throws
- * for an unknown filter type. Unknown / out-of-range settings fall back to the
- * filter's legacy defaults, so a malformed persisted `filter.settings` still
- * produces a valid graph. The output image is INTERMEDIATE (`is_intermediate:
- * true`): every preview click runs this graph, and an intermediate output stays
- * out of the gallery and is garbage-collected. Only on "Apply" does the caller
- * promote the chosen image to durable (`makeImageDurable`), so it survives as
- * the layer's new source without every preview littering the gallery.
+ * Reject unknown filter types; invalid settings use legacy defaults. Preview outputs are intermediate and
+ * collectible; Apply promotes the selected image to durable layer content.
  */
 export const buildFilterGraph = (
   filterType: string,
@@ -453,10 +442,8 @@ export const buildFilterGraph = (
     filterType !== 'img_blur' &&
     filterType !== 'spandrel_filter';
   if (canRestoreSourceAlpha) {
-    // Most control preprocessors convert RGBA to RGB. Transparent erased pixels
-    // then become black, producing an opaque black region (and false boundary
-    // edges). Composite over white before processing, then restore the source
-    // alpha so the processed control retains the user's erased holes.
+    // Process over white to avoid black erased areas and false edges from RGB conversion, then restore the source
+    // alpha.
     delete graph.nodes[FILTER_NODE_ID]!.image;
     graph.nodes.control_filter_background = {
       color: { a: 255, b: 255, g: 255, r: 255 },

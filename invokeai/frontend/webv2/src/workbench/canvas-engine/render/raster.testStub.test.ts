@@ -50,8 +50,7 @@ describe('createTestStubRasterBackend', () => {
   });
 
   it('readbackAlpha fills the alpha channel only, leaving RGB zeroed', () => {
-    // The contract anything inferring content FROM pixels depends on: a stub
-    // surface reports pixels only when the test declares that it has them.
+    // Pixel-derived decisions must reflect the content explicitly declared by the stub test.
     const backend = createTestStubRasterBackend({ readbackAlpha: 255 });
     const imageData = backend.createSurface(2, 2).ctx.getImageData(0, 0, 2, 2);
     const alphas = [...imageData.data].filter((_, index) => index % 4 === 3);

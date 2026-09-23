@@ -99,8 +99,7 @@ describe('renderOverlay', () => {
     const target = backend.createSurface(200, 200);
     renderOverlay(target, baseState());
     const strokeStyles = findSet(target.callLog, 'strokeStyle');
-    // With the document outline gone, the bbox is the only stroked chrome here:
-    // exactly one stroke color is applied.
+    // Only bbox chrome is stroked; there is no document outline.
     expect(strokeStyles).toEqual(['#3b82f6']);
   });
 

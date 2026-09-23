@@ -42,8 +42,7 @@ export const getCapabilities = (session: AuthSession): Capabilities => {
     // Matches the routers' `AdminUserOrDefault`: everyone qualifies in
     // single-user mode, only admins once multiuser is on.
     canManagePromptTemplates: isAdmin,
-    // The router lets an admin write any prompt; the UI offers it only for shared ones, so an
-    // admin never edits another user's private prompt by accident.
+    // Offer admin edits only for shared prompts to avoid accidental edits to another user's private content.
     canManageSharedSystemPrompts: isAdmin,
     canManageUsers: session.multiuserEnabled && session.user?.is_admin === true,
   };

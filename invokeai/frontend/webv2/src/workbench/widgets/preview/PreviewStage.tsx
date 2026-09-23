@@ -3,13 +3,8 @@ import type { Ref } from 'react';
 import { Box, Flex, type BoxProps, type FlexProps, type SystemStyleObject } from '@chakra-ui/react';
 
 /**
- * The chrome every preview surface shares, so the image, video, live, and empty
- * branches stop carrying their own copies:
- *
- * - `PreviewStage` — the dot-grid floor. Centres content, is the size container
- *   `getFittedFrameCss` measures against, and reserves top clearance for the
- *   centre region's floating islands.
- * - `FittedFrame` — the media card: aspect-fitted, bordered, shadowed.
+ * Share PreviewStage's fitted dot-grid surface and chrome clearance across media/live/empty states; FittedFrame
+ * supplies bordered, shadowed media geometry.
  */
 
 export const previewGridCss = {
@@ -35,26 +30,15 @@ export const getFittedFrameCss = (width: number, height: number): SystemStyleObj
 const CENTER_CHROME_INSET = 'var(--wb-center-chrome-inset, 0px)';
 
 /**
- * Top padding for a media stage: its own padding plus room for the islands.
- *
- * It belongs on the stage rather than on the widget root so the dot grid still
- * runs to every edge and passes *behind* the chrome — the same arrangement that
- * lets `paddingBottom` pass it behind the footer island. Because the stage is a
- * size container, `getFittedFrameCss` reads the shrunken content box and refits
- * the media with no further change.
+ * Reserve chrome clearance on the stage content box so fitting shrinks media while the dot grid continues behind
+ * chrome.
  */
 const getStagePaddingTop = (padding: string | undefined): string =>
   padding === undefined ? CENTER_CHROME_INSET : `calc(var(--chakra-spacing-${padding}) + ${CENTER_CHROME_INSET})`;
 
 /**
- * `fill="parent"` is the inset arrangement (`h="full"`, used where the stage IS
- * the widget body); `fill="flex"` is the framed one (`flex="1" minH="0"
- * overflow="hidden"`, used where overlays float over the stage's lower edge).
- *
- * Both fills are positioned: absolutely-placed stage children (zoom badge,
- * future overlays) anchor to the stage itself, never to whatever happens to
- * contain it. (The old inset copy was static; the difference is unobservable
- * at its call sites and the uniform rule is the one worth keeping.)
+ * Use parent fill for inset widget bodies and flex fill for framed stages. Both establish positioning for absolute
+ * overlay children.
  */
 export const PreviewStage = ({
   fill,

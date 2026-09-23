@@ -17,12 +17,7 @@ interface TriggerPhrasesEditorState {
   value: string[];
 }
 
-/**
- * Tag editor for a model's trigger phrases: type + Enter adds, Backspace or
- * the tag's control removes, double-click (or Enter on a highlighted tag)
- * edits in place. Every change persists immediately — there is no separate
- * save step — and a failed save puts the list back as it was.
- */
+/** Persist trigger-phrase edits immediately and restore the prior list on save failure. */
 export const TriggerPhrasesEditor = ({
   modelKey,
   onError,
@@ -39,8 +34,7 @@ export const TriggerPhrasesEditor = ({
     phrases,
     value: [...phrases],
   }));
-  // Render-phase adjustment (not an effect): a new prop list — another model,
-  // or a save that landed — replaces the local value wholesale.
+  // Replace local phrases during render when the prop list changes, including model switches and completed saves.
   if (editor.modelKey !== modelKey || editor.phrases !== phrases) {
     setEditor({ error: null, modelKey, phrases, value: [...phrases] });
   }

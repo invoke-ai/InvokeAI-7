@@ -12,11 +12,8 @@ import { userEvent } from 'vitest/browser';
 import { AddModelsView } from './AddModelsView';
 
 /**
- * The Add Models box is local state seeded once from the models UI store, so a
- * requirement link elsewhere in the app can open this view already searching —
- * without that search outliving the view the way account-scoped store state
- * would. This suite owns exactly that handover; everything else the view does
- * is stubbed out.
+ * Verify one-shot external search handover into local input state; the seed must not become account-lived
+ * filtering.
  */
 
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
@@ -131,8 +128,7 @@ describe('AddModelsView search seed', () => {
     await unmount();
     await mount();
 
-    // A tab switch used to reset the box, and still does: the seed was
-    // one-shot, not account-lived state that keeps filtering hours later.
+    // Unmount resets local search; consumed seeds must not reappear on later visits.
     expect(searchBox()?.value).toBe('');
 
     await unmount();

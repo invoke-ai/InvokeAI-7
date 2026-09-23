@@ -15,10 +15,7 @@ const AlphaNoticeDialog = lazy(() =>
   import('@workbench/shell/AlphaNoticeDialog').then((module) => ({ default: module.AlphaNoticeDialog }))
 );
 
-/**
- * The one-time alpha notice loads only for an account that has not dismissed
- * it: every other start pays neither the module nor a request for it.
- */
+/** Load the alpha notice only for accounts that have not dismissed it. */
 const AlphaNoticeGate = () => {
   const isDue = useWorkbenchSettingsSelector(
     (snapshot) => snapshot.status === 'ready' && !snapshot.preferences.alphaNoticeAcknowledged

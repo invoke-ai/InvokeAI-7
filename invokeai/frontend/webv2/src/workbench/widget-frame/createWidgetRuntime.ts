@@ -15,7 +15,7 @@ import type {
 import type { WidgetPlacementProject } from '@workbench/widgetPlacementCommands';
 import type { WorkbenchWidgetCommands } from '@workbench/workbenchStore';
 
-import { createProjectLogger } from '@workbench/diagnostics/logger';
+import { createLogger } from '@platform/logging/logger';
 import { isWidgetRegion as isKnownWidgetRegion } from '@workbench/layoutContracts';
 import { closeWidgetPlacement, openWidgetPlacement, revealWidgetPlacement } from '@workbench/widgetPlacementCommands';
 import { useWorkbenchExtensions, useWorkbenchInternalStore } from '@workbench/WorkbenchContext';
@@ -105,7 +105,13 @@ export const createWidgetRuntime = ({
     register: (menu) => extensions.menus.register({ ...menu, source }),
   } satisfies WidgetRuntimeApi['menus'];
   const diagnostics = {
-    logger: (namespace) => createProjectLogger(namespace, { ...source, kind: 'widget' }),
+    logger: (namespace) =>
+      createLogger({
+        area: instance.typeId,
+        namespace,
+        projectId: sourceProjectId,
+        widget: { instanceId: instance.id, region, typeId: instance.typeId },
+      }),
   } satisfies WidgetRuntimeApi['diagnostics'];
 
   return {

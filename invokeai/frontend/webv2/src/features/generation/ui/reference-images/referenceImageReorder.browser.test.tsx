@@ -11,13 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ReferenceImageCard } from './ReferenceImageCard';
 
-/**
- * The reference-image stack is ordered conditioning: the array order reaches
- * the graph as `reference_images`, so the arrows are the only way a user can
- * say "this one first". This mounts the real cards to pin the wiring the unit
- * test on `moveReferenceImage` cannot see — which arrow sends which direction,
- * and that the ends of the stack are disabled rather than silently inert.
- */
+/** Browser coverage verifies arrow wiring and disabled endpoints beyond pure reorder tests. */
 const i18n = i18next.createInstance();
 await i18n.use(initReactI18next).init({
   fallbackLng: 'en',
@@ -147,8 +141,7 @@ describe('reference image reorder arrows', () => {
   it('hands focus to the arrow that stays live when a move lands on an end', async () => {
     await renderStack(['first', 'second', 'third']);
 
-    // Walking the middle card to the top disables the button being activated,
-    // so without the handoff a keyboard user is dropped to <body>.
+    // Hand off keyboard focus when the activated endpoint arrow becomes disabled.
     const up = buttons('Move reference image up')[1];
 
     await act(() => up?.focus());

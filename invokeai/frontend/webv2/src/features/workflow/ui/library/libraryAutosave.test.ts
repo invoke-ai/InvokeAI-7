@@ -159,13 +159,10 @@ describe('createLibraryAutosaver', () => {
     h.autosaver.notifyGraphChanged();
 
     h.autosaver.dispose();
-    // The pending debounce timer was flushed into a chained rerun queued behind
-    // the in-flight save, so no new timer should remain.
     expect(h.manual.pendingCount()).toBe(0);
 
     resolveSave!();
-    // The in-flight promise is never cancelled by dispose; it settles, then the
-    // chained runSave() picks up the newer edit and saves it too.
+    // Disposal allows the in-flight write and its chained newer edit to finish.
     await vi.waitFor(() => expect(h.save).toHaveBeenCalledTimes(2));
     expect(h.save).toHaveBeenLastCalledWith('wf-1', { nodes: [2] });
   });
@@ -206,10 +203,7 @@ describe('createLibraryAutosaver', () => {
   });
 
   it('does not report saved while an edit made during the save is still unwritten', async () => {
-    // The dangerous direction: an older save's acknowledgement lands after a
-    // newer edit has already marked the graph dirty. Reporting 'saved' there
-    // tells someone their work is safe during the window in which it is not,
-    // and that is exactly when they close the tab.
+    // An old acknowledgement must not mark newer unsaved content saved.
     const h = createHarness();
     let resolveSave: () => void;
     const deferred = new Promise<void>((resolve) => {

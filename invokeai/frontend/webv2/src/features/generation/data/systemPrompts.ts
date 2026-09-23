@@ -75,8 +75,7 @@ export const createSystemPrompt = async (draft: SystemPromptDraft): Promise<Syst
 export const updateSystemPrompt = async (id: string, draft: SystemPromptDraft): Promise<SystemPromptRecord> =>
   mapSystemPrompt(
     await apiFetchJson<SystemPromptDTO>(`${SYSTEM_PROMPTS_BASE}/i/${encodeURIComponent(id)}`, {
-      // `max_tokens` is sent on every update, including as an explicit null: the backend reads a
-      // present-but-null as "clear the cap", and an omitted key as "leave it alone".
+      // Null clears max_tokens; omission preserves it.
       body: JSON.stringify({ content: draft.content, max_tokens: draft.maxTokens, name: draft.name }),
       method: 'PATCH',
     })

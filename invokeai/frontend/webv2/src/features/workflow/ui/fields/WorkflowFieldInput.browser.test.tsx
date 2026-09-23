@@ -28,8 +28,7 @@ vi.mock('@platform/transport/http', async (importOriginal) => ({
   apiFetchJson: workflowApiMock.apiFetchJson,
 }));
 
-// The real picker needs the gallery data layer; the field's contract with it is
-// the accepted kinds it passes and the item it gets back.
+// Stub Gallery transport while asserting accepted kinds and returned items at the field boundary.
 vi.mock('@features/gallery/picker', () => ({
   GalleryPickerPopover: ({
     accept,
@@ -66,8 +65,7 @@ const modelSelectState = vi.hoisted(() => ({
   },
 }));
 
-// The real picker pulls in the whole model library; the widget's contract with it is the props it
-// passes (scope, exclusions, base filter) and the model it gets back.
+// Stub model-library UI while asserting picker filters, exclusions, and selected models.
 vi.mock('@features/models/react', () => ({
   ModelSelect: (props: NonNullable<typeof modelSelectState.props>) => {
     modelSelectState.props = props;
@@ -255,9 +253,8 @@ const renderField = async (
 };
 
 /**
- * Real keystrokes, not a synthetic `input` event: the weight control is a zag-js number input that
- * ignores a value written straight onto the DOM node, and the defect being guarded against here is
- * specifically what happens between keystrokes.
+ * Use real keystrokes because the number-input state machine ignores direct DOM writes and the regression occurs
+ * between inputs.
  */
 const typeWeight = async (input: HTMLInputElement, keys: string) => {
   await act(async () => {
@@ -834,11 +831,7 @@ describe('WorkflowFieldInput media inputs', () => {
   });
 });
 
-/**
- * A parent that actually owns the value, the way the node editor does. The static `renderField`
- * harness never feeds a committed value back, which hides every defect that only shows up on the
- * re-render after a keystroke — the snap-back and the clamp-on-blur are exactly those.
- */
+/** Feed committed values back through an owning parent to expose keystroke rerenders and blur clamping. */
 const StatefulLoRAField = ({ initial, onCommit }: { initial: unknown; onCommit: (value: unknown) => void }) => {
   const [value, setValue] = useState(initial);
   const onChange = useCallback(
@@ -951,9 +944,7 @@ describe('WorkflowFieldInput LoRA collection', () => {
 
     const weight = host.querySelector<HTMLInputElement>('input')!;
 
-    // One keystroke at a time, because the defect lives between them: `<input type="number">`
-    // reports "" for a trailing ".", so the commit is dropped, the box is restored to "0", and the
-    // next keystroke lands as "05" = 5 — a 10x weight from a completely ordinary typing sequence.
+    // Test each keystroke so trailing-decimal drafts cannot reset to zero and turn 0.5 into 5.
     await typeWeight(weight, '0');
     await pressKey('.');
 
@@ -1059,9 +1050,7 @@ describe('WorkflowFieldInput seed inputs', () => {
     await renderField(SEED_TEMPLATE, 4_294_967_295, onChange, undefined, { onSeedModeChange, seedMode: 'fixed' });
 
     expect(seedInput()?.disabled).toBe(false);
-    // Without i18n the label is the long key, which stands in for a long translation: the
-    // trigger stays bounded and truncates, its accessible name stays whole, and the number
-    // input keeps a usable width beside it.
+    // Use untranslated long keys to verify truncation preserves accessible names and number-input width.
     expect(modeTrigger()?.getAttribute('aria-label')).toBe('common.seedMode.label: common.seedMode.fixed');
     expect(modeTrigger()?.getBoundingClientRect().width).toBeLessThanOrEqual(144);
     expect((seedInput() as HTMLInputElement).scrollWidth).toBeLessThanOrEqual(

@@ -536,9 +536,7 @@ describe('seed modes in workflow JSON', () => {
 });
 
 describe('field label overrides', () => {
-  // `serializeInvocationNode` writes `labelOverride` (it structuredClones the
-  // node data) but `parseWorkflowJson` rebuilds each instance from an explicit
-  // field list that omits it, so the flag is written and never read back.
+  // Round-trip labelOverride through explicit parsing as well as cloned serialization.
   it('round-trips an explicit label override', () => {
     const node = buildInvocationNode(template, { x: 0, y: 0 });
     let doc = createProjectGraph('label-override');

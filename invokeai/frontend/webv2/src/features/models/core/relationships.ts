@@ -1,28 +1,17 @@
 import type { ModelBase, ModelConfig, ModelTaxonomyType } from './types';
 
-/**
- * Compatibility rules for the bidirectional "related models" links. A link is
- * a curation hint ("this LoRA pairs well with this checkpoint"), so the rule
- * only permits pairs that can actually appear in one pipeline.
- */
+/** Related-model links are symmetric curation hints and permit only models usable in one pipeline. */
 
 /** The two fields the compatibility rule reads. */
 export type RelatableModel = Pick<ModelConfig, 'base' | 'type'>;
 
 /**
- * Bases that carry no architecture meaning. `any` is the backend's null value
- * for models with no base association (encoders, CLIP, Spandrel, ...), NOT a
- * universal-compatibility wildcard; `external` and `unknown` say nothing
- * about what a model pairs with.
+ * any denotes no base association, not universal compatibility; external and unknown convey no architecture
+ * compatibility.
  */
 export const NULL_BASES: ReadonlySet<string> = new Set(['any', 'external', 'unknown']);
 
-/**
- * Curated allowances: `any`-based helper types mapped to the concrete bases
- * whose pipelines actually consume them. Each entry cites the backend
- * invocation(s) that take the helper as an input — configs over- and
- * under-state real usage, so invocations are the source of truth here.
- */
+/** Cite consuming backend invocations for each any-based helper allowance; config metadata alone is insufficient. */
 export const NULL_BASE_ALLOWANCES: Readonly<Partial<Record<ModelTaxonomyType, ReadonlySet<ModelBase>>>> = {
   /** CLIP text encoders (flux_model_loader, sd3_model_loader). */
   clip_embed: new Set(['flux', 'sd-3']),
@@ -46,11 +35,7 @@ export const NULL_BASE_ALLOWANCES: Readonly<Partial<Record<ModelTaxonomyType, Re
   wan_t5_encoder: new Set(['wan']),
 };
 
-/**
- * Curated cross-base allowances for concrete-based helper types: helper base
- * mapped to the host bases whose pipelines consume it. Same sourcing rule as
- * `NULL_BASE_ALLOWANCES` — each entry cites the backend invocation(s).
- */
+/** Cross-base helper allowances cite consuming backend invocations, like NULL_BASE_ALLOWANCES. */
 export const CROSS_BASE_ALLOWANCES: Readonly<
   Partial<Record<ModelTaxonomyType, Readonly<Partial<Record<ModelBase, ReadonlySet<ModelBase>>>>>>
 > = {
@@ -71,10 +56,6 @@ export const CROSS_BASE_ALLOWANCES: Readonly<
   },
 };
 
-/**
- * Types offered when linking related models. The concrete-based helper types,
- * plus every `any`-based type with a curated allowance.
- */
 export const LINKABLE_TYPES: readonly ModelTaxonomyType[] = [
   'main',
   'lora',
@@ -93,11 +74,7 @@ const LINKABLE_TYPE_SET: ReadonlySet<ModelTaxonomyType> = new Set(LINKABLE_TYPES
 
 export const isLinkableType = (type: ModelTaxonomyType): boolean => LINKABLE_TYPE_SET.has(type);
 
-/**
- * Whether any candidate could ever be compatible with this model: a concrete
- * base, or an `any` base whose type has a curated allowance. `external` and
- * `unknown` subjects can never take new links.
- */
+/** Only concrete bases or explicitly allowed any-based helper types can receive new links. */
 export const hasLinkableBase = (model: RelatableModel): boolean =>
   !NULL_BASES.has(String(model.base)) || (model.base === 'any' && NULL_BASE_ALLOWANCES[model.type] !== undefined);
 
@@ -110,10 +87,8 @@ const isAllowedCrossBaseHelperFor = (helper: RelatableModel, host: RelatableMode
   CROSS_BASE_ALLOWANCES[helper.type]?.[helper.base]?.has(host.base) ?? false;
 
 /**
- * Symmetric base-compatibility for related-model links: concrete bases must
- * match exactly unless the helper's type has a curated cross-base allowance;
- * a null base never wildcards — an `any`-based model links only to concrete
- * bases its type has a curated allowance for.
+ * Match concrete bases unless a helper allowance permits crossing; any-based models require explicit concrete-host
+ * allowances.
  */
 export const isBaseCompatible = (a: RelatableModel, b: RelatableModel): boolean => {
   if (!NULL_BASES.has(String(a.base)) && !NULL_BASES.has(String(b.base))) {
@@ -123,13 +98,7 @@ export const isBaseCompatible = (a: RelatableModel, b: RelatableModel): boolean 
   return isAllowedHelperFor(a, b) || isAllowedHelperFor(b, a);
 };
 
-/**
- * Types that occupy exactly one slot in a pipeline, so linking two of them is
- * never a meaningful "used together" hint. Mirrors legacy's
- * `DISALLOWED_RELATIONSHIPS` self-pairs, extended to the single-slot helper
- * types made linkable since. Stackable types (lora, embedding, ip_adapter,
- * t2i_adapter) stay self-linkable.
- */
+/** Single-slot types cannot meaningfully link to their own type; stackable adapters, LoRAs, and embeddings can. */
 const SINGLETON_LINK_TYPES: ReadonlySet<ModelTaxonomyType> = new Set<ModelTaxonomyType>([
   'main',
   'vae',
@@ -147,6 +116,7 @@ const SINGLETON_LINK_TYPES: ReadonlySet<ModelTaxonomyType> = new Set<ModelTaxono
   'qwen3_vl_encoder',
   'mistral_encoder',
   'gemma2_encoder',
+  'gemma4_encoder',
 ]);
 
 /** The full candidate rule for the link picker: compatible bases, and no same-type pair of a single-slot type. */

@@ -803,8 +803,7 @@ describe('createDocumentModel', () => {
         status: 'wrong-type',
       });
 
-      // The reducer holds the invariant on its own: an unvalidated dispatch
-      // (a preview, a replay) cannot stamp a stack onto an overlay group.
+      // Even unvalidated preview/replay dispatches must reject adjustment stacks on overlay groups.
       const rawDispatch = applyCanvasProjectMutation(project, {
         config: { adjustments: stack, layerType: 'group' },
         id: 'OG',

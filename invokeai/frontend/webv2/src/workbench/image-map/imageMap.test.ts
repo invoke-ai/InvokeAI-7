@@ -52,11 +52,8 @@ const BACKEND_RESPONSE = {
   visible_hash: 'hash-1',
 };
 
-// A labels response stamped for some other projection, which the store must
-// discard. Tests that exercise the points/status flows answer labels requests
-// with this: a body without a `labels` key throws a TypeError in the api
-// mapping, which the store classifies as a network failure and retries —
-// arming a real-timer chain that outlives the test.
+// Return valid labels stamped for another projection to exercise discard. Malformed fixtures throw TypeError and
+// arm network retries beyond the test.
 const FOREIGN_LABELS_RESPONSE = { labels: {}, updated_at: 'another projection', visible_hash: 'another set' };
 
 const mockPointsWithForeignLabels = (): void => {
@@ -188,8 +185,7 @@ describe('image map store', () => {
         '0': { alternates: ['kittens', 'pets'], label: 'cats' },
       });
     });
-    // Stamped with the set they were clustered over, so a consumer can tell
-    // they still describe the drawn points.
+    // Fingerprint labels with their clustered visible set.
     expect(imageMapStore.getSnapshot().clusterLabelsHash).toBe(BACKEND_RESPONSE.visible_hash);
   });
 
@@ -211,10 +207,8 @@ describe('image map store', () => {
       expect(imageMapStore.getSnapshot().clusterLabelsHash).toBe(BACKEND_RESPONSE.visible_hash);
     });
 
-    // L2: a refresh over a drifted set, whose labels have not come back yet.
-    // DBSCAN may have renumbered every cluster, so the labels still in the
-    // store describe a clustering that is no longer drawn — the hash must say
-    // so for the whole window rather than only once new labels arrive.
+    // While new labels lag refreshed points, retain the old fingerprint so consumers reject potentially renumbered
+    // cluster labels.
     const drifted = { ...BACKEND_RESPONSE, visible_hash: 'hash-2' };
     mocks.apiFetchJson.mockImplementation((url: string) =>
       url.startsWith('/api/v1/image_map/cluster_labels') ? new Promise(() => {}) : Promise.resolve(drifted)
@@ -248,8 +242,7 @@ describe('image map store', () => {
         '/api/v1/image_map/cluster_labels?include_videos=true&eps=0.42'
       );
     });
-    // Flush the response handler: cluster ids from a different visible set
-    // must not be applied to the rendered map.
+    // Settle the handler and reject cluster ids from a different visible set.
     await new Promise((resolve) => {
       setTimeout(resolve, 0);
     });
@@ -450,10 +443,8 @@ describe('image map store', () => {
   });
 
   it('clears labels when the newest request fails outright', async () => {
-    // L1 lands labels; L2's request then fails with its sequence still
-    // current — the failure must wipe them rather than leave L1's clustering
-    // annotated over the newer point set. (L2's failure is a plain Error:
-    // non-retryable, so no timer is armed either.)
+    // Current-request failure clears older labels instead of annotating new points with stale clusters; plain
+    // Error avoids retry timers.
     mocks.apiFetchJson.mockImplementation((url: string) => {
       if (url.startsWith('/api/v1/image_map/cluster_labels')) {
         return Promise.resolve({
@@ -526,11 +517,8 @@ describe('image map store', () => {
   });
 
   it('collapses mid-flight refresh requests into one rerun', async () => {
-    // The socket runtime can call refresh while the first load is still in
-    // flight (projection-ready is admitted during 'loading'), and several
-    // events may land inside one fetch's window. Every caller must join the
-    // in-flight request, and exactly one rerun may follow — not one per
-    // caller, and never a parallel fetch.
+    // Concurrent refreshes join one in-flight fetch and coalesce into exactly one follow-up, including socket
+    // events during initial load.
     const pointsResolvers: Array<(value: typeof BACKEND_RESPONSE) => void> = [];
     mocks.apiFetchJson.mockImplementation((url: string) => {
       if (url.startsWith('/api/v1/image_map/points')) {
@@ -586,9 +574,6 @@ describe('image map store', () => {
     refreshImageMapPoints();
     await first;
 
-    // The rerun ran (a second points fetch) despite the first one failing,
-    // and it recovered the map. Without the queued rerun, pointsCall would
-    // sit at 1 and loadState at 'error'.
     await vi.waitFor(() => expect(pointsCall).toBe(2));
     await new Promise((resolve) => {
       setTimeout(resolve, 0);
@@ -622,8 +607,7 @@ describe('trace builders', () => {
     expect(trace.y).toEqual([2, 4]);
     // Keys, not bare names: a click has to know which namespace to resolve in.
     expect(trace.customdata).toEqual(['image:a.png', 'video:clip.mp4']);
-    // Kind gets the one channel colour and size do not already carry, so a
-    // clip is findable on the map without hovering every point.
+    // Marker shape exposes video kind independently of cluster color and size.
     expect(trace.marker.symbol).toEqual(['circle', 'diamond']);
     expect((trace.marker.color as string[])[0]).toBe(getClusterColor(0));
     // Noise points are dimmed relative to clustered points.
@@ -657,10 +641,7 @@ describe('trace builders', () => {
 
 describe('map layout stability', () => {
   it('pins uirevision to a constant so pan/zoom survives a data refresh', () => {
-    // The whole point of uirevision is that plotly keeps the user's viewport
-    // when the traces change. A value derived from the data (a point count, a
-    // hash, a timestamp) would compare unequal on every refresh and silently
-    // reset the view — which looks identical to "it works" in a static test.
+    // Stable uirevision preserves viewport across data refreshes; data-derived revisions would silently reset it.
     const first = buildMapLayout();
     const second = buildMapLayout();
 
@@ -704,8 +685,7 @@ describe('snapshot transitions', () => {
   });
 
   it('clears a render failure on a successful refresh so the plot can retry', () => {
-    // Without this the WebGL error is permanent for the session: the view stops
-    // mounting the plot, and nothing else ever resets renderError.
+    // Retry must clear renderError so a transient WebGL failure can remount the plot.
     imageMapStore.setSnapshot({
       clusterLabels: null,
       clusterLabelsHash: null,
@@ -836,9 +816,7 @@ describe('image index progress', () => {
   });
 
   it('re-reads the counts on every mount, not just the first load of the map', async () => {
-    // The widget is routinely reopened long after the first load — mid-
-    // backfill, with the worker parked and no event due — which is exactly
-    // when the panel has nothing else to show.
+    // Reopening mid-backfill must fetch counts even if the worker is paused and no event is due.
     mocks.apiFetchJson.mockImplementation((url: string) =>
       url.startsWith('/api/v1/image_map/status')
         ? Promise.resolve({ enabled: true, index: { embedded: 70, failed: 0, total: 100 } })
@@ -879,8 +857,7 @@ describe('image index progress', () => {
   });
 
   it('runs one status request at a time so an older response cannot land last', async () => {
-    // Concurrent requests resolve in no fixed order, and every mount, retry
-    // and reconnect asks for one.
+    // Mount, retry and reconnect requests must coalesce despite unordered completions.
     const resolvers: Array<(value: unknown) => void> = [];
     mocks.apiFetchJson.mockImplementation(
       () =>
@@ -895,8 +872,6 @@ describe('image index progress', () => {
 
     expect(resolvers).toHaveLength(1);
 
-    // ...and the claim is released once it settles, so the next caller is not
-    // locked out for the rest of the session.
     resolvers[0]?.({ enabled: true, index: { embedded: 40, failed: 0, total: 100 } });
     await vi.waitFor(() => expect(imageMapStore.getSnapshot().indexCounts).not.toBeNull());
 

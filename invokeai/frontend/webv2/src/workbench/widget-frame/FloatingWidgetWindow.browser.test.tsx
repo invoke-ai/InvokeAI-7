@@ -18,10 +18,8 @@ import { I18nextProvider, initReactI18next } from 'react-i18next';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
- * A floated widget renders bare inside this window, so its header controls
- * only exist here — the map's label and selection toggles used to disappear on
- * float. The window mounts widget actions and the shared settings gear, with
- * its own shade/maximize/dock controls replacing the frame's layout controls.
+ * Floating windows must retain widget actions and settings while substituting their own shade/maximize/dock
+ * controls.
  */
 
 const windowMocks = vi.hoisted(() => ({
@@ -69,8 +67,7 @@ vi.mock('./createWidgetRuntime', () => ({ useWidgetRuntime: () => ({}) }));
 
 import { FloatingWidgetWindow } from './FloatingWidgetWindow';
 
-// The floating slot includes settings, while the overflow menu belongs to the
-// full docked header cluster.
+// Floating chrome includes settings; overflow belongs to the docked header cluster.
 const manifest = {
   allowFloating: true,
   allowedRegions: ['center', 'left', 'right'],
@@ -161,8 +158,7 @@ const renderWindow = async (floatingState: FloatingWidgetState = state) => {
     );
     await implementationPromise;
   });
-  // The chrome slot suspends on the implementation chunk; one more flush lets
-  // the resolved actions paint before the assertions run.
+  // Flush the suspended chrome slot once more before asserting resolved actions.
   await act(async () => {
     await Promise.resolve();
   });
@@ -212,8 +208,6 @@ describe('FloatingWidgetWindow chrome', () => {
     const shade = host!.querySelector<HTMLButtonElement>('button[aria-label="Shade"]')!;
     const [actionRect, gearRect, shadeRect] = [action, gear, shade].map((button) => button.getBoundingClientRect());
 
-    // A block-level wrapper around the slot laid the gear out under the
-    // actions group — visibly a second row of chrome in the title bar.
     expect(gearRect.top).toBeLessThan(actionRect.bottom);
     expect(gearRect.bottom).toBeGreaterThan(actionRect.top);
     // Strip order: widget actions, then the gear, then the window's controls.
@@ -241,10 +235,7 @@ describe('FloatingWidgetWindow chrome', () => {
 
     await renderWindow();
 
-    // The chrome slot's `use()` rethrows the rejected load on every render.
-    // Nothing between this bar and the app root catches it, so the window has
-    // to contain it — dropping the widget's actions, keeping the dock control
-    // that is the only way back to the rail.
+    // Contain repeated rejected-resource throws in the title bar so the window's dock control survives.
     expect(host?.querySelector('button[aria-label="Toggle cluster labels"]')).toBeNull();
     expect(host?.querySelector<HTMLButtonElement>('button[aria-label="Dock to panel"]')).not.toBeNull();
   });

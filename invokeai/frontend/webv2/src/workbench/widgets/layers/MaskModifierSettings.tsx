@@ -10,12 +10,7 @@ import { useTranslation } from 'react-i18next';
 
 import { applyStructuralPreview } from './layerOps';
 
-/**
- * The dedicated Properties editor of a mask's noise or denoise-limit child
- * row — the view its tree sub-selection opens. Only the magnitude lives here;
- * the row's dot enables it and the row's menu removes it. Dragging previews
- * live and commits once on release.
- */
+/** Edit modifier magnitude here with one commit per gesture; tree rows own enabling and removal. */
 
 type MaskModifierKind = 'mask-noise' | 'mask-denoise';
 

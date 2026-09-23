@@ -117,8 +117,7 @@ describe('GenerateDimensionFields aspect ratio', () => {
   });
 
   it('shows the lock engaged while a preset is selected and unlocking returns to Free', async () => {
-    // A preset with the flag off is what a recalled image can leave behind; the ratio is still
-    // enforced, so the lock must say so rather than contradict the preset beside it.
+    // A preset implies ratio lock even when the stored flag is false.
     const onCommit = await render({
       aspectRatioId: '16:9',
       aspectRatioIsLocked: false,

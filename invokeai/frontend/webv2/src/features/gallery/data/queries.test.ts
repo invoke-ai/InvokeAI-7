@@ -242,9 +242,7 @@ describe('Gallery item query read model', () => {
   });
 
   it('anchors an infinite window at its offset, sharing the base key only at offset 0', async () => {
-    // A zero-offset window must keep the historical key so every existing
-    // consumer shares one cache entry; a deep window (a reveal past the base
-    // reach) is its own transient entry starting at its own page.
+    // Base windows retain shared historical keys; deep reveals receive distinct transient window entries.
     expect(galleryItemsInfiniteOptions(baseFilter, { kind: 'infinite', offset: 0 }).queryKey).toEqual(
       galleryItemsInfiniteOptions(baseFilter).queryKey
     );
@@ -278,11 +276,8 @@ describe('Gallery item query read model', () => {
   });
 
   it('never grows an anchored infinite window above its anchor, but still lets paginated anchors', () => {
-    // The grid shares the anchored entry and cannot request earlier pages
-    // itself, so a prepend would splice 60 items in above its viewport and
-    // shift the content under the user. Paginated consumers slice out the one
-    // page they want by pageParam, so prepending is invisible there — and
-    // Preview walks backwards through exactly that mechanism.
+    // Infinite windows must not prepend and shift the viewport. Paginated consumers select by pageParam, allowing
+    // Preview to load backward safely.
     const page: GalleryItemsPage = { items: [], total: 20_000 };
     const onePage = [page];
     const anchored = galleryItemsInfiniteOptions(baseFilter, { kind: 'infinite', offset: 6000 });
@@ -419,11 +414,8 @@ describe('canonicalizeGalleryItemsFilter under a semantic query', () => {
   const reference = { fileId: 'external-1-abc', kind: 'file', label: 'shot.png' } as const;
 
   it('ignores the controls a ranked result set does not answer to', () => {
-    // The semantic branch sends only the reference, so board, view, order,
-    // the starred filter and the date range change nothing about the response.
-    // While they stayed in the key, clicking a board minted a fresh key and
-    // re-ran the search — re-uploading the dropped blob, or making the server
-    // re-download a remote URL, to render byte-identical results.
+    // Semantic results depend only on the reference; unrelated filters must not repeat blob uploads or remote
+    // downloads.
     const base = canonicalizeGalleryItemsFilter({
       boardId: 'board-a',
       galleryView: 'images',
@@ -499,9 +491,7 @@ describe('imageIndexAvailabilityOptions', () => {
   };
 
   it('polls only while the answer can still change on its own', () => {
-    // A model the server keeps re-checking for, or a call that failed, are
-    // worth asking again; a settled answer is not, so a ready index does not
-    // cost a status call every half minute for the whole session.
+    // Retry missing-model and failed statuses; settled readiness must not poll for the whole session.
     expect(pollFor({ data: { modelName: 'clip', state: 'model_missing' }, status: 'success' })).toBe(
       IMAGE_INDEX_UNAVAILABLE_POLL_MS
     );

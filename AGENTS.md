@@ -2,13 +2,12 @@
 
 ## Communication
 
-- Speak plainly and matter-of-factly. Assume readers benefit from short, skimmable updates; avoid filler, ceremony, and repeated status summaries.
-- Ask only when a decision cannot be inferred safely from the repository or request. Continue authorized work without repeated permission requests.
-- Lead with outcomes, blockers, and concrete evidence. Distinguish verified results from assumptions and checks you could not run.
+- Give plain, concise updates led by outcomes, blockers, and evidence. Distinguish verified results, assumptions, and unavailable checks.
+- Ask only when a decision cannot be inferred safely from the repository or request; continue authorized work without repeated permission requests.
 
 ## Find the right owner
 
-Before editing, read the applicable `AGENTS.md` files along each target path, even when starting at the repository root. Scoped guidance adds to these rules. `CLAUDE.md` files only import their sibling `AGENTS.md`; keep policy canonical here.
+Before editing, read `AGENTS.md` along each target path; scoped rules supplement this file. Keep policy in `AGENTS.md`; `CLAUDE.md` files only import their sibling.
 
 | Area | Guidance and source of truth |
 | --- | --- |
@@ -20,67 +19,68 @@ Before editing, read the applicable `AGENTS.md` files along each target path, ev
 | CI and contribution tooling | [.github/AGENTS.md](.github/AGENTS.md) |
 | Documentation | `docs/README.md` and `docs/package.json`; keep documentation about the implemented product current |
 
-Ordinary frontend features and fixes target **webv2**. The backend serves it when launched with `--webv2`; a default launch still selects legacy web. Verify the build and launch target when investigating UI behavior. Legacy web still owns generated OpenAPI/type artifacts.
+Ordinary frontend work targets **webv2**, served with `--webv2`; default launches select legacy web. Verify build/launch targets for UI investigations. Legacy web owns generated OpenAPI/type artifacts.
 
 ## Engineering standard
 
-- Produce correct, functional, efficient, maintainable, DRY, production-quality code. Inspect implementations, callers, contracts, and existing tests before designing changes.
-- Define the observable outcome and relevant validation. For bugs, establish a reproduction or failing behavioral test where feasible, then address the root cause. Reconsider the design when narrow fixes keep accumulating.
-- Consider edge cases, failure modes, data lifecycle, and operational limits. Keep ownership explicit and concentrate behavior behind small interfaces.
-- Every function, abstraction, dependency, fallback, and test must earn its place. Avoid pass-through wrappers, speculative extensibility, redundant validation, unnecessary configuration, and one-use abstractions that hide no meaningful complexity.
-- Small adapters are useful when they translate contracts, isolate dependencies, or own a lifecycle. Extract shared behavior when it prevents drift or simplifies callers; do not abstract merely because code looks similar.
-- Remove code, tests, and scaffolding made obsolete by the change. Preserve unrelated work and avoid drive-by rewrites.
-- Comment only non-obvious intent, constraints, or trade-offs. Do not narrate code.
-- Tests should protect meaningful behavior and catch a plausible regression. Avoid trivial constant/type/re-export assertions, expected values recomputed by the implementation's algorithm, and mocks that only verify internal choreography.
-- Test through the interface that owns the behavior. Prefer real lightweight dependencies and isolated fixtures; use doubles for expensive or external systems. Choose regression coverage for value, not test counts.
-- Keep dependencies and lockfile changes intentional. Do not weaken assertions, gates, architecture policy, or performance budgets just to pass. Explain existing failures and verification limits.
-- Keep durable architecture/reference documentation aligned with implemented behavior. Installed skills are optional helpers, not prerequisites; adapt their principles to this repository's stack and interfaces. Do not import personal paths or generic skill ceremony into the workflow.
+- Inspect implementations, callers, contracts, and tests before designing changes. Define observable outcomes and validation; reproduce bugs where feasible, fix root causes, and reconsider designs that accumulate patches.
+- Keep ownership and interfaces clear. Account for edge cases, failures, data lifecycles, and operational limits.
+- Every function, dependency, fallback, and test must earn its place. Add abstractions to translate contracts, isolate dependencies, own lifecycles, prevent drift, or simplify callers; avoid pass-through wrappers, speculative extensibility, redundant validation/configuration, and abstractions justified only by similar-looking code.
+- Remove obsolete code, tests, and scaffolding; preserve unrelated work. Comment only non-obvious intent, constraints, or trade-offs.
+- Test meaningful behavior through its owning interface with independent expectations that catch plausible regressions. Avoid trivial constant/type/re-export assertions, incidental snapshots, duplicate coverage, and mock choreography. Prefer real lightweight dependencies and isolated fixtures; use doubles for expensive/external systems. Optimize test value, not count.
+- Keep dependency/lockfile changes intentional. Never weaken assertions, gates, architecture policy, or performance budgets to pass; explain existing failures and verification limits.
+- Keep architecture/reference docs aligned with implementation. Skills are optional helpers: adapt them to this stack without importing personal paths or generic ceremony.
 
 ## Performance and efficiency
 
-- Actively inspect the PR's affected hot paths and immediate callers for efficiency wins: repeated work, unnecessary renders/subscriptions, request waterfalls, excess queries, serialization/copies, unbounded collections, and retained resources.
-- For inference, consider device transfers, dtype conversions, peak memory, model/cache lifetimes, and unnecessary synchronization.
-- Implement clear, low-risk improvements within the PR's scope. Larger optimizations must directly serve its outcome; mention unrelated opportunities briefly without expanding the PR.
-- Measure nontrivial optimizations and performance claims using existing budgets, representative fixtures, query counts, profiling, or focused benchmarks. Report material before/after results and their limits.
-- Preserve correctness and clarity. Add caching, memoization, concurrency, or batching only with understood invalidation, lifetimes, ordering, and cost. Do not invent an optimization or benchmark to satisfy a checklist.
+- Inspect affected hot paths and immediate callers for repeated work, renders/subscriptions, waterfalls, queries, serialization/copies, unbounded collections, and retained resources.
+- Implement clear, low-risk improvements in scope; larger optimizations must serve the task. Briefly note unrelated opportunities without expanding scope.
+- Measure nontrivial optimizations and performance claims with existing budgets and representative fixtures, query counts, profiling, or focused benchmarks. Report material before/after results and limits.
+- Preserve correctness and clarity. Require understood invalidation, lifetimes, ordering, and cost for caching, memoization, concurrency, or batching. Do not invent optimizations or benchmarks for a checklist.
 
 ## Product quality
 
-InvokeAI is a polished professional creative product. Maintain a first-class desktop experience: deliberate layouts, responsive interactions, cohesive controls, accessibility, and performance. Complete loading, empty, error, and recovery states. Verify changed interactions in the browser; automated checks do not establish visual quality by themselves.
+Maintain a polished desktop experience: deliberate layouts, responsive interactions, cohesive accessible controls, and complete loading/empty/error/recovery states. Verify changed interactions in the browser; automated checks alone do not establish visual quality.
 
 ## Milestones and code review rules
 
-A milestone is one coherent, commit-ready unit of work. Before calling it commit-worthy:
+A milestone is one coherent, commit-ready unit. Run relevant checks and self-review every change. Choose review depth by the complete task's behavior, blast radius, and failure consequences—not file/line counts or directory alone. Do not split risky work to avoid review.
 
-1. Run relevant checks, then spawn three independent, read-only review subagents with distinct focuses: correctness/spec conformance; architecture/operational safety/performance/unnecessary complexity; and test value/gaps/product quality (including accessibility for UI changes).
-2. Give each reviewer the same fixed comparison base, acceptance criteria, and complete candidate changes, including staged, unstaged, and new files. Reviewers inspect independently and do not edit, commit, or recursively delegate reviews.
-3. Require concrete locations, impact, and a failure scenario or engineering cost. Material findings affect behavior, safety, maintainability, efficiency, or meaningful coverage; style preferences alone are not blockers.
-4. Resolve every material finding, add useful regression coverage, and rerun affected checks. Request final blocker-only review of the resulting candidate. Further edits invalidate the relevant review results.
-5. Do not call work commit-worthy with material findings or unexplained failing gates. Report what passed, what failed or was unavailable, and material remaining limitations.
+| Review depth | When to use it |
+| --- | --- |
+| **Self-review; no subagents** | Local, low-risk edits with straightforward verification: copy, docs, styling, or an input minimum without shared validation, persistence, or API contract changes. |
+| **One independent reviewer** | Substantive features, fixes, or refactors with bounded impact and no high-risk trigger. |
+| **Three independent reviewers** | Behavior changes affecting authentication/authorization, account isolation, persisted-data compatibility/migrations, destructive operations, concurrency/resource lifecycles, shared API compatibility, inference numerical/device/memory behavior, or substantial architecture across owners. |
 
-If the environment cannot spawn subagents, perform separate self-review passes with the same focuses and explicitly disclose that independent review was unavailable. Never represent self-review as independent review. Delegating implementation is optional; use it for independently useful tasks with clear ownership.
+Review focuses: correctness/spec conformance; architecture/operational safety/performance/unnecessary complexity; test value/gaps/product quality, including UI accessibility. One reviewer covers all; three divide them. User instructions override defaults. Select the tier without asking permission; briefly explain spawning. Required checks and browser verification apply at every tier.
+
+1. Review once per coherent candidate after checks. Supply the same fixed base, acceptance criteria, and complete task-owned diff (staged, unstaged, new files); identify unrelated changes. Use focused briefs and entry points, not full conversation inheritance.
+2. Reviewers inspect independently, including necessary callers/contracts. They are read-only: no edits, commits, or recursive delegation. Findings need locations, impact, and failure scenarios or engineering costs; style preferences alone are not blockers.
+3. Resolve all material findings, add useful regression coverage, and rerun affected checks. A clean review is final for an unchanged candidate. For subsequent edits, seek blocker-only follow-up from affected reviewers on changes and consequences. Broaden review and reassess the tier only when scope/risk materially changes.
+4. Do not declare readiness with material findings or unexplained failing gates. Report resolved findings, passed/failed/unavailable checks, and remaining limitations. PRs omit subagent counts, tiers, and process narration.
+
+If required independent review is unavailable, self-review the corresponding focuses and disclose this to the user; ordinary low-risk self-review needs no such disclaimer. Never label self-review independent. Implementation delegation is optional for independently useful tasks with clear ownership.
 
 ## Commands and environments
 
-- Use **pnpm 10**, never npm/yarn, for frontends and docs. Each package owns its lockfile. Use `pnpm -C <package> ...`; `.nvmrc` records the development Node version. Read the package scripts instead of assuming root Makefile frontend commands target webv2.
-- Use the existing Python environment and `uv.lock`. For a fresh test environment: `uv sync --locked --extra test`; do not replace a configured accelerator environment with a different backend as routine setup.
-- From the root: `uv tool run ruff@0.11.2 check <paths>` and `uv tool run ruff@0.11.2 format --check <paths>`. Python uses 120-column formatting and absolute imports. Respect configured vendored-code exclusions.
-- Run focused Python tests with `uv run --no-sync pytest <test-paths>`; the full CI suite is `uv run --no-sync pytest -n logical` (xdist; each file's tests stay on a single worker). Slow tests are excluded by default: `slow` is the lane for what needs a development machine -- real accelerator hardware, or a quiet one for timing -- and is run there with `-m slow`, not by CI.
-- `uv run --no-sync mypy scripts/invokeai-web.py` is an additional diagnostic using the current exclusions, not an enforced CI gate. Do not describe it as comprehensive type coverage.
-- Choose checks by changed behavior. Broaden to the milestone's required gates before review; do not repeatedly rerun unchanged checks without a reason.
-- Install local hooks with `uv run --no-sync pre-commit install` after test dependencies are available. Hook installation is local to each checkout and is not implied by committing the configuration.
+- Use **pnpm 10**, never npm/yarn, with package-owned lockfiles and `pnpm -C <package> ...`. Use `.nvmrc`'s Node version; consult package scripts, not root Makefile assumptions about webv2.
+- Preserve the existing Python/accelerator environment and `uv.lock`. Fresh test setup: `uv sync --locked --extra test`; do not routinely replace accelerator backends.
+- Root Python checks: `uv tool run ruff@0.11.2 check <paths>` and `uv tool run ruff@0.11.2 format --check <paths>`. Use 120-column formatting, absolute imports, and configured vendored-code exclusions.
+- Focused tests: `uv run --no-sync pytest <test-paths>`; full CI: `uv run --no-sync pytest -n logical`. Hardware/quiet-machine timing tests use `-m slow` on development machines; excluded by default and CI. See `tests/AGENTS.md` for isolation rules.
+- `-n logical` is sized for CI runners that own the machine. On a development box cap workers (`-n 4`, or plain `pytest`), set `OMP_NUM_THREADS` when a run must stay light, and do not start a suite while a generation is running.
+- `uv run --no-sync mypy scripts/invokeai-web.py` uses current exclusions; it is an optional diagnostic, not a CI gate or comprehensive type coverage.
+- Select checks by behavior; run required milestone gates before review. Repeat unchanged checks only for a reason.
+- After test dependencies are available, install hooks per checkout: `uv run --no-sync pre-commit install`. Committing configuration does not install hooks.
 
 ## Scratch files and repository hygiene
 
-- Never commit task plans, work logs, investigation notes, review transcripts, or handoffs, regardless of filename. Use `.scratch/agents/<task>/` if persistence is useful; creating these files is optional.
-- Durable documentation of implemented architecture, decisions, APIs, and setup belongs in version control. Do not turn scratch logs into permanent docs merely to bypass this rule.
-- Ignore rules keep recognized scratch/planning paths out of ordinary staging; they do not prevent force-adds or remove files already tracked by Git.
-- Inspect the staged diff and new files for planning material, including unexpected filenames. Never force-add planning artifacts or introduce `package-lock.json`/`yarn.lock`.
+- Never commit plans, work logs, investigation notes, review transcripts, or handoffs under any filename. Optional scratch belongs in `.scratch/agents/<task>/`; do not relabel it as durable docs.
+- Version durable documentation of implemented architecture, decisions, APIs, and setup.
+- Inspect staged diffs and new files for planning material. Ignore rules neither remove tracked files nor prevent force-adds. Never force-add planning artifacts or introduce `package-lock.json`/`yarn.lock`.
 
 ## Commits and pull requests
 
-- Commit readiness does not itself authorize committing or pushing. Follow the request's existing authorization; do not add an automatic commit/push step to each subtask.
-- Use Conventional Commits with the shortest descriptive, skimmable subject that states the outcome.
-- Follow the subject with one to three short, factual lines summarizing material changes; use bullets when useful. Omit implementation narration and details already clear from the subject.
-- Leave authorship to the configured Git author. Do not add agent attribution or co-author trailers.
-- Pull request descriptions follow `.github/pull_request_template.md`: keep its headings in order, fill every applicable section per its inline guidance, and omit only the sections the template marks as conditional. Tick a checklist item only when it is true for the PR.
+- Readiness does not authorize commits/pushes; follow existing user authorization without automatic per-subtask commits.
+- Use Conventional Commits: short outcome-focused subject, then one to three factual lines of material changes without repetition or process narration.
+- Use the configured Git author; no agent attribution or co-author trailers.
+- Follow `.github/pull_request_template.md`: ordered headings, all applicable sections and inline guidance, omit only conditional sections, and tick only true checklist items.

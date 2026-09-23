@@ -6,9 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { HoldToDragSensor, PrimaryMouseSensor } from './holdToDragSensor';
 
-// Small enough to exercise the gate with real timers; production uses 400ms/10px.
-// Gesture moves are 20px: comfortably past both the tolerance and the 6px
-// immediate-activation distance.
+// Use short real-timer gates; 20px moves exceed both tolerance and immediate activation distance.
 const HOLD_DELAY_MS = 120;
 const HOLD_TOLERANCE_PX = 10;
 
@@ -54,11 +52,7 @@ const mouse = (type: string, target: EventTarget, clientX: number, clientY: numb
   target.dispatchEvent(new MouseEvent(type, { bubbles: true, button, cancelable: true, clientX, clientY }));
 };
 
-/**
- * The draggable must live in a component INSIDE `DndContext`: React context
- * flows downward, so a `useDraggable` in the same component that renders the
- * provider would read dnd-kit's default internal context instead.
- */
+/** Mount useDraggable below DndContext so it receives the provider rather than default context. */
 const DraggableTile = ({ onClick, pannable }: { onClick: () => void; pannable: boolean }) => {
   const { listeners, setNodeRef } = useDraggable({ id: 'tile' });
 
@@ -165,12 +159,8 @@ describe('HoldToDragSensor touch gate', () => {
   });
 
   it('holds the browser pan off from arming onward, but not during the hold', async () => {
-    // The browser's own pan threshold can be tighter than the move tolerance
-    // (Android Chrome starts scrolling around 8px), so from arming onward the
-    // sensor must keep the pan from starting at all; during the hold the pan
-    // must stay available for the native scroll. The handler only reads
-    // `cancelable` and calls `preventDefault()`, so a plain cancelable event
-    // exercises the same path a real TouchEvent takes.
+    // After arming, prevent native pan before its threshold wins; during the hold preserve scrolling. A cancelable
+    // event covers the handler's preventDefault path.
     const { events, tile } = await renderHarness();
 
     const touchMove = () => {
@@ -201,8 +191,7 @@ describe('HoldToDragSensor touch gate', () => {
   });
 
   it('treats a motionless armed hold that lifts as an ordinary tap', async () => {
-    // The stock TouchSensor delay constraint activates on the timer alone, so a
-    // deliberate slow tap selected nothing and the trailing click was swallowed.
+    // A motionless hold must remain a tap; timer-only activation would swallow selection.
     const { events, tile } = await renderHarness();
 
     await interact(() => pointer('pointerdown', tile(), 150, 150));
@@ -239,9 +228,7 @@ describe('HoldToDragSensor touch gate', () => {
   });
 
   it('releases the gesture on pointercancel and accepts a new one', async () => {
-    // The browser claims the gesture (a native pan). A sensor that stops without
-    // ending the gesture leaves dnd-kit's activation guard set, which blocks
-    // every later drag on the context until reload.
+    // Native pan cancellation must end the gesture and clear dnd-kit's activation guard for later drags.
     const { events, tile } = await renderHarness();
 
     await interact(() => pointer('pointerdown', tile(), 150, 150));
@@ -288,8 +275,7 @@ describe('HoldToDragSensor touch gate', () => {
     await wait(HOLD_ELAPSED_MS);
     expect(tile().getAttribute('data-drag-armed')).toBe('true');
 
-    // Android's long-press menu (~500ms) outlasts the hold: menu intent, so the
-    // menu is allowed and the gate disarms instead of dragging over it.
+    // Allow long-press menus and disarm dragging when menu intent wins.
     const menuWhileArmed = new MouseEvent('contextmenu', { bubbles: true, cancelable: true });
     await interact(() => window.dispatchEvent(menuWhileArmed));
 
@@ -317,8 +303,7 @@ describe('HoldToDragSensor touch gate', () => {
   it('activates immediately by distance on a surface that cannot pan', async () => {
     const { events, tile } = await renderHarness({ pannable: false });
 
-    // No hold: `touch-action: none` means the browser can never pan, so there
-    // is nothing to arbitrate and a small movement starts the drag at once.
+    // touch-action:none needs no hold because native pan cannot compete.
     await interact(() => pointer('pointerdown', tile(), 150, 150));
     await interact(() => pointer('pointermove', document, 170, 150));
 
@@ -347,8 +332,7 @@ describe('PrimaryMouseSensor button guard', () => {
   it('starts drags for the primary button only', async () => {
     const { events, tile } = await renderHarness();
 
-    // Middle-click (and other aux buttons) must not pick the tile up: the stock
-    // MouseSensor only rejects the right button.
+    // Reject all auxiliary buttons; stock MouseSensor rejects only the right button.
     await interact(() => mouse('mousedown', tile(), 150, 150, 1));
     await interact(() => mouse('mousemove', document, 170, 150));
 

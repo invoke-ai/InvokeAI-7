@@ -46,29 +46,15 @@ const FLOATING_BASE_Z_INDEX = 800;
 const FLOATING_STEP_PX = 16;
 
 /**
- * The title bar is a drag handle first and a control strip second: a
- * `pointerdown` anywhere on it that is not inside a `<button>` starts a window
- * drag, and a double-click shades it. Widget-supplied chrome is arbitrary —
- * a switch, a slider, a menu trigger rendered as a div — so it is isolated
- * from both gestures rather than trusted to be a button.
+ * Isolate arbitrary widget controls from title-bar drag and double-click shade gestures; not every control is a
+ * button.
  */
 const stopChromeEvent = (event: ReactPointerEvent<HTMLDivElement> | ReactMouseEvent<HTMLDivElement>): void =>
   event.stopPropagation();
 
 /**
- * Drops the widget's title-bar chrome if it throws, keeping the window itself
- * alive. The chunk carrying a widget's implementation can fail to load — a
- * deploy replaced the hashed file, or the tab is offline — and the deferred
- * resource then hands `use()` the same rejected thenable on every render.
- * Inside the body that throw lands in `WidgetFailureBoundary`, which offers a
- * retry; up here there is no boundary between this bar and the app root, so an
- * unguarded throw would take the whole workbench down — and with it the dock
- * control that is a floated widget's only way back to the rail.
- *
- * Recovery is deliberately one-way: a retry from the body's failure card
- * reloads the implementation but does not reset this boundary, so the chrome
- * returns on the window's next mount. Chrome that stays missing is a far
- * cheaper failure than chrome that cannot be reached at all.
+ * Contain failed widget chrome so the window and dock control survive. Body retry does not reset this boundary;
+ * chrome returns on the next window mount.
  */
 class FloatingChromeBoundary extends Component<{ children: ReactNode }, { hasFailed: boolean }> {
   state = { hasFailed: false };
@@ -82,13 +68,6 @@ class FloatingChromeBoundary extends Component<{ children: ReactNode }, { hasFai
   }
 }
 
-/**
- * One detached widget window: fixed-position chrome with a draggable title
- * bar, a corner resize handle, shade/maximize/dock controls, and the standard
- * widget renderer as its body. Drag and resize use the same raw-pointer
- * pattern as the panel resize handles — transient local px state, one commit
- * to the reducer on release.
- */
 export const FloatingWidgetWindow = ({
   instanceId,
   stackRank,
@@ -120,9 +99,7 @@ export const FloatingWidgetWindow = ({
 
   const pointerSessionRef = useRef<AbortController | null>(null);
 
-  // A drag can outlive the window — docking from a command, an applied preset,
-  // or a project switch all unmount mid-gesture — and window-level listeners
-  // would then stay bound for the rest of the session.
+  // Dispose window listeners on unmount because docking, presets, or project switches can interrupt drags.
   useEffect(() => () => pointerSessionRef.current?.abort(), []);
 
   const beginPointerOperation = useCallback(
@@ -152,9 +129,7 @@ export const FloatingWidgetWindow = ({
       };
 
       const handlePointerMove = (moveEvent: PointerEvent) => {
-        // Releasing the button over another application swallows `pointerup`,
-        // and the window would then follow the cursor with nothing held. The
-        // first move that arrives with no button down ends the drag instead.
+        // End dragging on a move with no pressed button in case another application swallowed pointerup.
         if (moveEvent.buttons === 0) {
           handlePointerUp();
 
@@ -198,9 +173,7 @@ export const FloatingWidgetWindow = ({
     [beginPointerOperation]
   );
 
-  // Pointer gestures are not the only way to place a window: without these the
-  // keyboard can shade, maximize and dock a floated widget but never move or
-  // resize it. Stepping mirrors the panel resize handles in `WidgetFrames`.
+  // Provide keyboard move/resize alongside shade/maximize/dock, matching panel resize steps.
   const handleTitleKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLDivElement>) => {
       const step = event.shiftKey ? FLOATING_STEP_PX * 2 : FLOATING_STEP_PX;
@@ -212,11 +185,7 @@ export const FloatingWidgetWindow = ({
       };
       const offset = offsets[event.key];
 
-      // Only the bar itself moves the window. It hosts real controls — its own
-      // shade/maximize/dock buttons and the widget's header actions — and
-      // React sees their keystrokes bubble up here: without this, an arrow key
-      // pressed on a focused toggle moved the window 16px and wrote the new
-      // geometry to the reducer.
+      // Handle movement keys only on the bar itself; controls' bubbling arrows must not alter geometry.
       if (!offset || state.mode === 'maximized' || event.target !== event.currentTarget) {
         return;
       }
@@ -254,9 +223,7 @@ export const FloatingWidgetWindow = ({
   );
 
   const handleFocus = useCallback(() => widgets.focusFloating(instanceId), [instanceId, widgets]);
-  // Docking remounts the widget in its rail. The draft registry's cleanup only
-  // deregisters the flusher, so an uncommitted edit needs committing first —
-  // the same reason `closeWidgetPlacement` flushes before it unmounts.
+  // Flush drafts before docking remounts the widget; registry cleanup only removes flushers.
   const handleDock = useCallback(() => {
     flushWorkbenchDrafts();
     widgets.dockFloating(instanceId);
@@ -284,14 +251,7 @@ export const FloatingWidgetWindow = ({
     return null;
   }
 
-  // A floated widget that fails registration — or whose type has gone from the
-  // registry entirely in a later build — keeps its chrome. Rendering nothing
-  // would strand the instance: it is in no region, so the dock control in this
-  // title bar is the only way back to the rail, and to the docked failure card
-  // that owns the retry. This is why a `hidden` widget still shows a window
-  // here while `getWidgetsForRegion` keeps it out of the rails: a rail the
-  // widget is missing from is merely tidy, a window it is missing from is a
-  // widget the person cannot reach.
+  // Retain window chrome for missing or failed widgets so users can dock them back to the retry surface.
   const isEnabled = widget?.status === 'enabled';
   const label = widget ? resolveWidgetInstanceLabel(instance, widget.manifest, t) : (instance.title ?? instance.id);
   const geometry = dragGeometry ?? state;
@@ -320,15 +280,7 @@ export const FloatingWidgetWindow = ({
       rounded={isMaximized ? 'none' : 'md'}
       shadow="xl"
       zIndex={FLOATING_BASE_Z_INDEX + stackRank}
-      // The docked frames carry these and the hotkey runtime reads them to tell
-      // which widget a keystroke is for. Floating content renders bare — this
-      // window is its chrome — so without them `getHotkeyTargetWidget` found
-      // nothing and the runtime fell back to the last focused REGION's active
-      // widget: Delete pressed over a floating window ran the docked Gallery's
-      // delete-selection on whatever that had selected. `floating` is a legal
-      // contribution-source region and is what the runtime registers this
-      // widget's own contributions under, so its hotkeys now resolve as well —
-      // previously they could not fire at all.
+      // Mark floating widget identity and region so hotkeys target it rather than the last focused docked widget.
       data-hotkey-widget-instance-id={instanceId}
       data-hotkey-widget-region="floating"
       data-hotkey-widget-type-id={instance.typeId}
@@ -361,12 +313,10 @@ export const FloatingWidgetWindow = ({
           </Text>
         </HStack>
         <HStack flexShrink={0} gap="1">
-          {/* The widget's own header toggles: floated content renders bare, so
-              without this the docked header's controls would simply vanish on
-              float. Frame-level actions stay out — this bar carries its own.
-              The slot yields siblings (the widget's actions group and the
-              settings gear), so the wrapper is a row: as a block it stacked the
-              gear under the actions instead of continuing the strip. */}
+          {/*
+           * Render widget actions and settings in a row because floating content has no frame header; window
+           * controls already own layout actions.
+           */}
           {isEnabled && widget ? (
             <FloatingChromeBoundary>
               <Suspense fallback={null}>

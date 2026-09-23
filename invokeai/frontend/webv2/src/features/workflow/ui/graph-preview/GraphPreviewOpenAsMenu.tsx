@@ -29,13 +29,8 @@ interface GraphPreviewOpenAsMenuProps {
 }
 
 /**
- * The graph preview dialog's "Open as" menu — four ways to hand a
- * read-only preview graph off to something that keeps it: convert it into an
- * editable document and load it into the workflow editor, save it to the
- * workflow library without touching the active project, fork it into a fresh
- * project, or download the raw JSON. The trigger button lives in the dialog (it needs `@platform/ui`'s
- * `Button`); this file stays out of that import so it doesn't add to that
- * package's fan-in.
+ * Convert previews into editor/library/project documents or download raw JSON. Keep the trigger in the dialog to
+ * avoid another platform-barrel dependency.
  */
 export const GraphPreviewOpenAsMenu = ({
   children,

@@ -14,12 +14,6 @@ import { PlayClipSpanButton } from './PlayClipSpanButton';
 import { TrimBoundThumb } from './TrimBoundThumb';
 import { useVideoUiActions } from './VideoUiContext';
 
-/**
- * The clip to extend: the shared media slot (picker, gallery drop, upload) and
- * the trim bounds — one compact row per bound, the bound's live frame at left
- * and its slider at right (see TrimBoundThumb for the seek technique).
- */
-
 const DROP_ID = 'video-source-clip';
 const VIDEO_ONLY = ['video'] as const;
 
@@ -98,9 +92,7 @@ export const VideoSourceClipField = memo(
     );
 
     const previewSrc = sourceVideo ? galleryVideoUrls.full(sourceVideo.video_name) : null;
-    // Offered from the START bound only: both thumbs are frames of one gallery
-    // record, so badging each would be two controls with one destination and
-    // one name for a screen reader to tell apart.
+    // Both bounds reference one gallery record; expose one find control.
     const videoName = sourceVideo?.video_name;
     const findClipInGallery = useCallback(() => {
       if (videoName !== undefined) {
@@ -121,16 +113,13 @@ export const VideoSourceClipField = memo(
         />
         {sourceVideo && previewSrc ? (
           <Stack gap="2">
-            {/* The empty-state slot shows the reason when no clip is set; with
-                one set, the frozen trim sliders were the only symptom. */}
+            {/* Show the disabled reason even when a clip is already set. */}
             {disabled && disabledReason ? (
               <Text color="fg.muted" fontSize="2xs" textWrap="pretty">
                 {disabledReason}
               </Text>
             ) : null}
             <Field helpText={t('widgets.video.trimHelp')} label={t('widgets.video.trim')}>
-              {/* The play button leads both bound rows rather than sitting in one of
-                  them: it plays the range they bracket, not either edge. */}
               <HStack align="center" gap="2" w="full">
                 <PlayClipSpanButton clip={sourceVideo} />
                 <Stack flex="1" gap="1" minW="0">

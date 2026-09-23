@@ -7,16 +7,12 @@ import { I18nextProvider, initReactI18next } from 'react-i18next';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 /**
- * A store whose center region is replaced the way `applyLayoutPresetToProject`
- * replaces it: `instanceIds` is rewritten wholesale, so the outgoing widget is
- * no longer in the region at all. The widget instances are merged and survive,
- * which is what the keep-alive set resolves against.
+ * Model preset application by replacing region ids while preserving merged widget instances for keep-alive
+ * resolution.
  */
 const keepAliveMocks = vi.hoisted(() => {
   const icon = () => null;
-  // A settled deferred resource, the shape `use()` can read without
-  // suspending — the center view's icon resolves the implementation to decide
-  // whether to show a spinner, and these fixtures are always "already loaded".
+  // Use settled resources so center icons read synchronously without suspending.
   const loadedImplementation = () => {
     const promise: Promise<object> & { status?: string; value?: object } = Promise.resolve({});
 
@@ -253,8 +249,7 @@ describe('preset switch keep-alive', () => {
     const hiddenCanvas = centerWidget('canvas');
 
     expect(hiddenCanvas).not.toBeNull();
-    // `display: none` takes the subtree out of the accessibility tree, so it is
-    // unreachable by pointer hit-testing and by sequential focus navigation.
+    // display:none removes hidden views from accessibility, hit testing, and sequential focus.
     expect(hiddenCanvas?.getClientRects().length).toBe(0);
   });
 
@@ -269,8 +264,7 @@ describe('preset switch keep-alive', () => {
 
     await setRightInstanceId('preview');
 
-    // The right rail is now rendering this instance for real; a hidden centre
-    // copy would be the same instance mounted twice, one of them a ghost.
+    // A live rail placement must evict the hidden center copy to avoid mounting one instance twice.
     expect(centerWidget('preview')).toBeNull();
   });
 

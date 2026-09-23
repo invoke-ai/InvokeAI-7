@@ -1,14 +1,6 @@
 /**
- * Media names referenced by a compiled graph's node field values — the run's INPUTS
- * (keyframes, source videos, reference images).
- *
- * Settlement collects result media by walking every node output in the backend
- * session. A media primitive node echoes its input into `session.results` under the
- * same name (e.g. the first-frame keyframe of an image-to-video workflow), so without
- * this set the runtime would treat the user's source image as a generated result:
- * board-attach it and record it on every run. Generated outputs are always saved
- * server-side under fresh names, so a result name that appears in the compiled graph
- * can only be an input passthrough.
+ * Exclude compiled input media from results: primitive nodes echo inputs, while generated outputs receive fresh
+ * server names.
  */
 
 export interface GraphInputMediaNames {
@@ -16,11 +8,7 @@ export interface GraphInputMediaNames {
   videoNames: ReadonlySet<string>;
 }
 
-/**
- * Collect every `image_name` / `video_name` string reachable from the compiled
- * graph's nodes. `graph` is `unknown` because it comes from persisted snapshots;
- * anything malformed yields empty sets (previous routing behavior).
- */
+/** Collect image_name/video_name strings from compiled nodes; malformed persisted graphs yield empty sets. */
 export const collectGraphInputMediaNames = (graph: unknown): GraphInputMediaNames => {
   const imageNames = new Set<string>();
   const videoNames = new Set<string>();

@@ -526,10 +526,7 @@ const pointer = (type: string, target: EventTarget, clientX: number, clientY: nu
 };
 
 beforeEach(() => {
-  // The reveal channel is a module singleton, so a request from a previous
-  // test would otherwise be adopted by the next mount (grids deliberately
-  // honor a request that predates them). Drain it with one that can never
-  // match an item here.
+  // Drain singleton reveal intent with an unmatchable request so later tests cannot adopt it.
   requestGalleryItemReveal('image:__drained__');
   accountLifecycle.activate('grid-user');
   vi.clearAllMocks();
@@ -653,8 +650,6 @@ describe('GalleryImageGrid mixed item cells', () => {
     expect(getComputedStyle(pinned).borderBottomWidth).toBe('1px');
     expect(listingTop() - pinned.getBoundingClientRect().bottom).toBeCloseTo(GALLERY_PINNED_FOOTER_PX - 1, 0);
 
-    // The disclosure is a persisted setting, so collapsing goes through the
-    // owner and comes back as the next render's settings.
     await click(getButton('Collapse starred items'));
     expect(actionMocks.updateSettings).toHaveBeenCalledExactlyOnceWith({ starredSectionCollapsed: true });
     await renderGallery({ ...gallery, settings: { ...DENSE_SETTINGS, starredSectionCollapsed: true } });
@@ -1152,15 +1147,11 @@ describe('GalleryImageGrid upload drop zone', () => {
 
     const accept = host?.querySelector<HTMLInputElement>('input[type="file"]')?.accept.split(',');
 
-    // The gallery once offered video/mp4 alone, so the OS picker greyed out every clip
-    // and audio file the server ingests. Parity with the video panel's reference upload.
+    // Picker acceptance must include the video and audio formats supported by reference uploads.
     expect(accept).toEqual(expect.arrayContaining(['image/png', 'video/*', 'audio/*', '.mov', '.mkv', '.mp3', '.wav']));
   });
 
-  // Not a fix for the accept-list bug -- the drop path never consulted `accept` and already
-  // forwarded every format. This pins that: the handler must stay a pass-through, because
-  // filtering here by the picker's list would re-hide exactly what the picker just stopped
-  // hiding, and the classifier downstream is the single place that decides.
+  // Drops bypass the accept list; downstream classification alone decides media kind.
   it('hands a dropped audio file to the upload action', async () => {
     await renderGallery(createGallery({ items: [] }));
 
@@ -1211,9 +1202,8 @@ describe('GalleryImageGrid reveal requests', () => {
   });
 
   it('never scrolls on selection changes alone', async () => {
-    // The selection also changes when a finished generation auto-selects its
-    // image; scrolling on that would yank the grid out from under a browsing
-    // user. Only the explicit reveal channel may scroll.
+    // Only explicit reveal intent may scroll; generation-driven selection must preserve the user's browsing
+    // position.
     const gallery = createGallery();
 
     await renderGallery(gallery);
@@ -1254,10 +1244,7 @@ describe('GalleryImageGrid reveal requests', () => {
   });
 
   it('honors a reveal requested before this grid mounted, while its item is still selected', async () => {
-    // The gallery is frequently opened (or swapped between its stacked and
-    // wide layouts, which remounts the grid) in response to the very reveal
-    // that is outstanding, so a grid must not ignore a request just because
-    // it arrived before the mount.
+    // A grid mounted by a reveal must honor the request that preceded its mount.
     await interact(() => requestGalleryItemReveal('image:last.png'));
     expect(mocks.scrollToIndex).not.toHaveBeenCalled();
 
@@ -1416,15 +1403,12 @@ describe('GalleryImageGrid virtualization', () => {
 
     await renderGallery(gallery);
 
-    // Collapsing starred keeps the visible range identical, so without an
-    // explicit measure() the virtualizer would keep serving the expanded
-    // offsets — the new rows would paint below a stale starred-sized hole.
+    // Collapsing starred requires measurement even if visible indices stay unchanged, or stale offsets leave a
+    // gap.
     mocks.measure.mockClear();
     await renderGallery({ ...gallery, settings: { ...DENSE_SETTINGS, starredSectionCollapsed: true } });
     expect(mocks.measure).toHaveBeenCalled();
 
-    // Swapping the item list (e.g. the media/assets view switch) is the same
-    // structural change arriving through props.
     mocks.measure.mockClear();
     await renderGallery(createGallery({ items: [createItem('image', 'other.png')] }));
     expect(mocks.measure).toHaveBeenCalled();
@@ -1446,9 +1430,7 @@ describe('GalleryImageGrid virtualization', () => {
     );
     await vi.waitFor(() => expect(actionMocks.loadMore).toHaveBeenCalled());
 
-    // Columns follow the measured viewport width now, so pinning a row count
-    // would just re-encode the harness width. The invariant that matters is
-    // that the rows the virtualizer is asked for cover every cell exactly once.
+    // Assert every cell is covered once; measured viewport width determines row count.
     const renderedRows = host?.querySelectorAll('[role="list"] [role="presentation"]').length ?? 0;
     const renderedCells = host?.querySelectorAll('[role="listitem"]').length ?? 0;
 

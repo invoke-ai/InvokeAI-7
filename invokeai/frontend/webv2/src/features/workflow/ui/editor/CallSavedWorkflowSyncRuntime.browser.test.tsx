@@ -87,12 +87,8 @@ const settle = async (ms: number) => {
 };
 
 /**
- * A child workflow that cannot be fetched has to settle: every node naming it
- * ends at `error`, so the Invoke button can say why, and the requests stop.
- *
- * Regression: the retry bookkeeping is keyed by workflow id while the status it
- * drives is per node, so two nodes naming one failing id hand the shared flag
- * back and forth, and neither the requests nor the `loading` state ever stop.
+ * Shared failing child-workflow IDs must settle every node to error without ping-ponging retries or remaining
+ * loading forever.
  */
 describe('CallSavedWorkflowSyncRuntime with an unreachable child workflow', () => {
   let host: HTMLDivElement;
@@ -205,8 +201,7 @@ describe('CallSavedWorkflowSyncRuntime with an unreachable child workflow', () =
     await expectSettled(readGraph, ['error']);
   });
 
-  // The contrast that pins the cause: the same two nodes, but distinct ids, so
-  // the shared retry flag is never contended.
+  // Distinct workflow IDs isolate retry bookkeeping for otherwise identical nodes.
   it('settles two nodes naming different unreachable workflows', async () => {
     const { readGraph } = await mountWith([buildCallNode('call-1', 'missing-a'), buildCallNode('call-2', 'missing-b')]);
 
@@ -352,11 +347,8 @@ describe('CallSavedWorkflowSyncRuntime with an unreachable child workflow', () =
   });
 
   /**
-   * `savedWorkflowDetailQueryOptions` sets `gcTime: Infinity` and `retry: false`,
-   * so an errored cache entry never expires and is never revalidated on its own.
-   * Selecting that workflow again is an explicit user gesture and has to attempt
-   * the request, otherwise a blip poisons the id for the rest of the session and
-   * the node blocks Invoke with no way back.
+   * Explicit reselection must retry indefinitely cached failures because automatic retries and expiration are
+   * disabled.
    */
   const mockWorkflowThatRecoversAfterOneFailure = (workflowId: string) => {
     const attempts: string[] = [];

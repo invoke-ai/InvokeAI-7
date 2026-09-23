@@ -36,6 +36,9 @@ export const getOptimalDimension = (base?: BaseModelType | null, pidScale = 1): 
     case 'minimax-h3':
       // Native canvas has a 768px short edge (soft cap 768x1344).
       return 768;
+    case 'ltx-2':
+      // Declared canvas is 1280x704: a 704px short edge.
+      return 704;
     case 'sdxl':
     case 'flux':
     case 'flux2':
@@ -113,6 +116,10 @@ export const getGridSize = (base?: BaseModelType | null, pidScale = 1): number =
     case 'minimax-h3':
       // The H3 denoise node hard-validates width/height as multiples of 32
       // (16x VAE spatial compression x patch size 2).
+      gridSize = 32;
+      break;
+    case 'ltx-2':
+      // 32x VAE spatial compression at patch size 1.
       gridSize = 32;
       break;
     case 'flux':

@@ -16,11 +16,7 @@ import { isSupportedExportSource } from '@workbench/canvas-engine/layerExportGua
 
 const BYTES_PER_PIXEL = 4;
 
-/**
- * What a layer is expected to cost once rasterized, from its source rather than
- * from a raster pass. Reserved up front so a capture that cannot fit is refused
- * before any work is done; the real cost is topped up per layer afterwards.
- */
+/** Reserve source-estimated raster bytes before capture; top up with actual layer costs after rasterization. */
 const estimatedLayerBytes = (layer: CanvasLayerContract, document: CanvasDocumentContractV3): number => {
   const source = renderableSourceOf(layer);
   if (source?.type === 'image') {
@@ -68,25 +64,11 @@ export interface RasterSnapshotCapture {
 }
 
 /**
- * Takes point-in-time copies of the canvas for long-running background work —
- * PSD export, invocation composites — that must not see the document change
- * underneath it.
+ * Document snapshots clone structure and privately record canvas identity, raster epoch and lifecycle/document
+ * generations. WeakMap membership distinguishes foreign from stale snapshots.
  *
- * A document snapshot is a structural clone plus a private record of the engine
- * state it was cloned from: the canvas object identity, the raster content
- * epoch, the lifecycle generation, and the document generation. Currency is
- * that whole tuple, so an edit that produces an identical-looking document
- * still invalidates the snapshot. The record lives in a `WeakMap` keyed by the
- * snapshot, which is also how a foreign object is rejected as `'not-ready'`
- * rather than mistaken for a stale one.
- *
- * A raster snapshot then detaches real pixels. Because rasterizing is async and
- * one capture covers many layers, currency is re-checked before and after every
- * layer, and every guard captured along the way is re-checked once more before
- * the snapshot is published — a capture that raced an edit is discarded whole
- * rather than returning a mix of old and new pixels. Bytes are reserved up
- * front from a source-based estimate and topped up per layer when a rasterized
- * surface turns out larger, so a capture cannot overrun the budget mid-flight.
+ * Raster capture checks currency before/after every layer and all guards before publication, rejecting mixed
+ * revisions. Reserve estimated bytes upfront and top up larger actual surfaces before exceeding budget.
  */
 export const createRasterSnapshotCapture = (deps: CreateRasterSnapshotCaptureDeps): RasterSnapshotCapture => {
   const { isGuardCurrent, memory, syncMemoryBaselines } = deps;

@@ -11,22 +11,12 @@ type ScrollAreaContentProps = ComponentProps<typeof ScrollArea.Content>;
 type ScrollAreaViewportProps = ComponentProps<typeof ScrollArea.Viewport>;
 
 /**
- * zag pins `min-width: fit-content` *inline* on every scroll-area content box,
- * so the box grows to its content's min-content width. A horizontal strip wants
- * exactly that. In a vertical area it is a trap: one unbreakable string (a long
- * name, an unwrapped identifier) widens the content box past the viewport, the
- * area scrolls sideways — and since a vertical area renders no horizontal
- * scrollbar, the overflow is simply unreachable. Vertical areas override it back
- * to zero, so their content stretches to the viewport and truncation inside is
- * what gives. Only an inline style can beat an inline style.
+ * Override Zag's inline min-width in vertical areas; long unbroken content would otherwise create unreachable
+ * horizontal overflow.
  */
 const VERTICAL_CONTENT_STYLE = { minWidth: 0 } as const;
 
-/**
- * The workbench's standard scroll container: ScrollArea with hover-revealed
- * scrollbars and the content wrapper zag needs for correct thumb sizing.
- * Layout props (h, maxH, flex, ...) go to the root.
- */
+/** Layout props target the root; the content wrapper is required for Zag's thumb sizing. */
 export const Scrollable = ({
   children,
   contentProps,
@@ -45,27 +35,19 @@ export const Scrollable = ({
   orientation?: 'horizontal' | 'vertical';
   /** Extra props for the scrolling viewport itself, e.g. scroll/focus handlers. */
   viewportProps?: ScrollAreaViewportProps;
-  /**
-   * The scrolling element itself — what a virtualizer needs to observe. A
-   * callback ref is attached alongside the internal one, for mount-time work
-   * such as restoring a remembered offset.
-   */
+  /** Ref to the scrolling viewport; callback refs support mount-time offset restoration. */
   viewportRef?: Ref<HTMLDivElement | null>;
 }) => {
   const fallbackViewportRef = useRef<HTMLDivElement | null>(null);
-  // One object ref, shared with the caller when it hands one in, so nothing
-  // has to merge or reassign refs during render.
   const resolvedViewportRef = viewportRef && typeof viewportRef !== 'function' ? viewportRef : fallbackViewportRef;
   const viewportCallback = typeof viewportRef === 'function' ? viewportRef : undefined;
-  // A callback ref is composed with the object ref the hooks observe; the
-  // composition only runs when React attaches the element, never in render.
+  // Compose callback refs at attachment time, not during render.
   const attachViewport = useCallback(
     (element: HTMLDivElement | null) => mergeRefs(fallbackViewportRef, viewportCallback)(element),
     [viewportCallback]
   );
 
-  // The shell keeps widgets mounted across layout switches, and a scroll
-  // container that stops being rendered loses its offset outright.
+  // Hidden mounted widgets can lose scroll offsets; restore them when shown.
   usePreservedScrollOffset(resolvedViewportRef);
 
   useScrollAreaPhantomHeal(resolvedViewportRef);

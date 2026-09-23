@@ -31,15 +31,8 @@ export interface SelectObjectBridge {
 }
 
 /**
- * The engine's half of the Select Object (SAM) flow.
- *
- * Both halves are policy rather than wiring. The decode validates that what
- * came back actually matches the mask it was asked for — a SAM output whose
- * dimensions disagree with the preview rect would silently paint the wrong
- * region, so it fails loudly with a tagged error the application layer can
- * report. The start gate mirrors the refusal reasons the UI shows, and computes
- * the layer's document-space bounds so the caller does not have to re-derive
- * them from the transform.
+ * SAM bridge validates decoded dimensions against requested mask bounds and reports tagged errors. Start
+ * eligibility mirrors UI refusals and provides transformed document bounds.
  */
 export const createSelectObjectBridge = (deps: CreateSelectObjectBridgeDeps): SelectObjectBridge => ({
   decodeSelectObjectPreview: async (result, signal) => {

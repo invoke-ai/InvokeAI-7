@@ -1,28 +1,6 @@
 /**
- * Pure canvas generation-graph compiler.
- *
- * {@link compileCanvasGraph} builds the backend graph a canvas invoke submits by
- * grafting image-to-image plumbing onto the existing per-base txt2img builders
- * (`../graph.ts`). It is deliberately pure: no fetch, no engine imports, no
- * React. The executor (Task 16) has already composited + uploaded the bbox
- * source image and passes its name in; this module only shapes nodes/edges.
- *
- * ## Grafting strategy
- *
- * 1. Build the base txt2img graph via `GRAPH_BUILDERS[model.base]` with the
- *    canvas destination (`outputIsIntermediate = true`) and a settings copy whose
- *    width/height are snapped to the model's processing grid. The bbox remains
- *    the exact final canvas footprint; off-grid inputs are resized before
- *    processing and outputs are resized back before staging or saving.
- * 2. For `img2img`, add a base-appropriate image-to-latents encode node fed by
- *    the composite image + the graph's VAE source, wire its latents into
- *    `denoise_latents.latents`, and set `denoising_start = 1 - strength`.
- * 3. Update `core_metadata` (`generation_mode` → the `img2img` variant, plus
- *    `strength`).
- *
- * Every base in `GRAPH_BUILDERS` has a backend image-to-latents node, so all ten
- * families support img2img (see `CANVAS_I2L_NODE_TYPES`). External image
- * generators have no latent img2img path and are rejected for every canvas mode.
+ * Pure canvas compiler over uploaded inputs. Resize through the processing grid and restore the bbox; reject
+ * external models and unsupported encode modes.
  */
 
 import type { SupportedGenerateBase } from '@features/generation/core/baseGenerationPolicies';
@@ -46,12 +24,7 @@ import { addControlLayers } from './addControlLayers';
 import { addRegionalGuidance, isRegionalGuidanceSupportedForBase } from './addRegionalGuidance';
 import { type CanvasSize, resolveCanvasProcessingSize } from './canvasProcessingSize';
 
-/**
- * The backend image-to-latents (encode) node type per supported base. sd-1 /
- * sd-2 / sdxl share the SD `i2l` node. Evidence: `invokeai/app/invocations/`
- * and the legacy per-base builders under
- * `features/nodes/util/graph/generation/`.
- */
+/** Map bases to encode nodes; SD families share i2l. */
 const CANVAS_I2L_NODE_TYPES: Partial<Record<SupportedGenerateBase, string>> = {
   'sd-1': 'i2l',
   'sd-2': 'i2l',
@@ -66,24 +39,10 @@ const CANVAS_I2L_NODE_TYPES: Partial<Record<SupportedGenerateBase, string>> = {
   'krea-2': 'qwen_image_i2l',
   anima: 'anima_i2l',
   wan: 'wan_i2l',
-  // Ideogram 4 is deliberately absent: it ships no image-to-latents node, so canvas
-  // img2img/inpaint is impossible. requireI2lType turns the missing entry into an
-  // actionable "Canvas generation is not supported" error.
+  // Ideogram lacks an encode node; reject these modes with an actionable error.
 };
 
-/**
- * The `denoising_start` for a canvas img2img graft, mirroring legacy
- * `getDenoisingStartAndEnd` (web `graphBuilderUtils.ts`):
- * - sd-3 / flux / flux2 rescale strength with an exponent of 0.2 so the slider's
- *   full (0, 1] range is usable — without it nearly all perceptible change is
- *   crammed into strength > 0.9 (e.g. strength 0.75 → start 0.056, not 0.25).
- * - A FLUX Fill model (`flux` / `dev_fill`) always denoises fully (start = 0).
- * - Every other base stays linear (`start = 1 - strength`).
- *
- * Legacy gates the exponent on an `optimizedDenoisingEnabled` user setting that
- * defaults to `true`; webv2 exposes no such toggle, so the optimized curve is
- * always applied for the eligible bases.
- */
+/** SD-3, FLUX, and FLUX.2 use start = 1 - strength^0.2. FLUX Fill always starts at 0; other bases use 1 - strength. */
 const canvasDenoisingStart = (model: GenerateModelConfig, strength: number): number => {
   if (model.base === 'flux' && model.variant === 'dev_fill') {
     return 0;
@@ -108,10 +67,7 @@ const getCanvasValidationReasons = (input: CompileCanvasGraphInput): string[] =>
     return reasons;
   }
 
-  // PiD is wired for text-to-image only. Canvas compilation finds the VAE by looking for
-  // a `canvas_output.vae` edge and renames that node when compositing back; a PiD chain
-  // has neither, so without this guard the user would get an internal
-  // "could not resolve a VAE source" error instead of an actionable one.
+  // Reject canvas PiD because its graph lacks the expected VAE/decode seam.
   if (input.settings.pidMode !== 'off' && getIsPidSupportedBase(model.base)) {
     reasons.push('PiD decoding is not supported on the canvas yet. Turn PiD off to generate here.');
   }
@@ -170,11 +126,7 @@ const requireVaeSource = (graph: BackendGraphContract): { node: BackendInvocatio
   return source;
 };
 
-/**
- * Renames a node in place: moves its map key, updates its `id`, and rewires every
- * edge referencing the old id. Used to demote the base `canvas_output` decode to
- * an intermediate `canvas_l2i` so the composite-back node can claim `canvas_output`.
- */
+/** Rename every matching node ID and edge reference. */
 const renameNode = (graph: BackendGraphContract, oldId: string, newId: string): BackendInvocationContract => {
   const node = graph.nodes[oldId];
   if (!node) {
@@ -358,12 +310,7 @@ const addInfillNode = (
   }
 };
 
-/**
- * Shared inpaint/outpaint tail: gradient denoise mask → denoise, expand-with-fade,
- * and the final `canvas_output`. The output either retains transparency outside
- * the generated region or composites back over the source image, depending on
- * `outputOnlyMaskedRegions`.
- */
+/** outputOnlyMaskedRegions selects transparent output versus compositing with the original. */
 const graftMaskTail = (
   graph: BackendGraphContract,
   args: {
@@ -386,8 +333,7 @@ const graftMaskTail = (
   const { compositing, denoise, destination, i2lType, initialImageName, settings, vaeSource } = args;
   const needsResize = !sizesMatch(args.bbox, args.processingSize);
 
-  // Demote the base decode to an intermediate `canvas_l2i`; the final mask or
-  // composite node claims `canvas_output`.
+  // The final output owns canvas_output; the base decoder becomes intermediate.
   const l2i = renameNode(graph, 'canvas_output', 'canvas_l2i');
   l2i.is_intermediate = true;
 
@@ -463,10 +409,7 @@ const graftMaskTail = (
   addEdge(graph, generatedImageSource, 'image', output, compositing.outputOnlyMaskedRegions ? 'image' : 'layer_upper');
   addEdge(graph, outputMaskSource, 'image', output, 'mask');
 
-  // The base builder wired core_metadata → the decode's `metadata`; `renameNode`
-  // followed it onto the (now intermediate) canvas_l2i. Re-point it to the final
-  // output so the saved image carries generation metadata. Both possible output
-  // nodes are WithMetadata; board fields, when present, ride the same node.
+  // Move metadata to the final saved output after renaming.
   const metadataEdge = graph.edges.find(
     (edge) => edge.destination.node_id === 'canvas_l2i' && edge.destination.field === 'metadata'
   );
@@ -601,8 +544,8 @@ const graftOutpaint = (
     infill.image = { image_name: initialImageName };
   }
 
-  // Derive a mask from the initial image alpha (transparent → generate), combined
-  // with the inpaint mask when one exists.
+  // Derive the mask from image alpha (transparent means generate), combining an explicit inpaint mask when
+  // present.
   const alphaToMask = addNode(graph, {
     id: 'image_alpha_to_mask',
     image: { image_name: initialImageName },
@@ -665,11 +608,7 @@ const graftOutpaint = (
   setMetadataMode(graph, 'outpaint', strength);
 };
 
-/**
- * Compiles a canvas invoke into a backend graph. Throws a validation `Error`
- * (message = first offending reason) for unsupported models/modes or bad
- * geometry, mirroring `compileGenerateGraph`.
- */
+/** Throw the first validation reason. */
 export const compileCanvasGraph = (input: CompileCanvasGraphInput): CompiledCanvasGraph => {
   const { bbox, compositeImageName, destination, mode, model, projectSettings, strength } = input;
   const processingSize = resolveCanvasProcessingSize(model, input.settings.pidMode, bbox, input.scaling);
@@ -687,8 +626,7 @@ export const compileCanvasGraph = (input: CompileCanvasGraphInput): CompiledCanv
     throw new Error(`${model.name} does not support canvas generation.`);
   }
 
-  // Mirror compileGenerateGraph: only a `canvas` destination stages an
-  // intermediate output; `gallery` produces a durable image.
+  // Canvas outputs are intermediate; gallery outputs are durable.
   const outputIsIntermediate = destination === 'canvas';
   const runtimeProjectSettings = {
     ...projectSettings,
@@ -706,9 +644,7 @@ export const compileCanvasGraph = (input: CompileCanvasGraphInput): CompiledCanv
     graftOutpaint(backendGraph, input, compositing, processingSize);
   }
 
-  // Control layers apply in every mode (legacy allows control with all). The
-  // executor already composited + uploaded each layer separately and resolved
-  // its model; the caller passes only valid layers.
+  // Every mode accepts already-resolved, separately uploaded control inputs.
   if (input.controlLayers && input.controlLayers.length > 0) {
     addControlLayers(backendGraph, {
       base: model.base as SupportedGenerateBase,
@@ -717,9 +653,7 @@ export const compileCanvasGraph = (input: CompileCanvasGraphInput): CompiledCanv
     });
   }
 
-  // Regional guidance applies in every mode too. The executor already composited
-  // + uploaded each region's mask and resolved its reference-image models; it
-  // passes only regions valid for the base's regional-guidance support matrix.
+  // Regional masks and models must already be validated.
   if (input.regionalGuidance && input.regionalGuidance.length > 0 && isRegionalGuidanceSupportedForBase(model.base)) {
     addRegionalGuidance(backendGraph, {
       base: model.base,

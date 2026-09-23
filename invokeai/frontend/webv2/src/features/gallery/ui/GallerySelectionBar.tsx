@@ -16,11 +16,6 @@ import { useGalleryWidget } from './GalleryWidgetContext';
 
 const MOVE_MENU_POSITIONING = { placement: 'top-end' } as const;
 
-/**
- * Bulk actions for the current multi-selection. Until now these lived only in
- * the right-click menu, which made them invisible to anyone who did not think
- * to look for them.
- */
 export const GallerySelectionBar = () => {
   const { t } = useTranslation();
   const { gallery, itemActions, loadedItems } = useGalleryWidget();

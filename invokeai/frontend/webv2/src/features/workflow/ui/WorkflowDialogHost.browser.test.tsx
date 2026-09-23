@@ -26,9 +26,7 @@ const deferred = <T,>() => {
   return { promise, reject, resolve };
 };
 
-// The dialogs pull in heavy leaf UI (node search, the library browser, graph
-// previews) that is irrelevant to the autosave wiring under test here; stub
-// them out so this stays a focused wiring-layer test.
+// Stub heavy dialog leaves to isolate autosave wiring.
 vi.mock('./editor/AddNodeDialog', () => ({ AddNodeDialog: () => null }));
 vi.mock('./library/WorkflowLibraryDialog', () => ({ WorkflowLibraryDialog: () => null }));
 vi.mock('./PendingLibraryWorkflowLoader', () => ({ PendingWorkflowLoader: () => null }));
@@ -74,17 +72,8 @@ const createGraphWithDuplicateWorkflowReturns = (): ProjectGraphState => ({
 });
 
 /**
- * Regression coverage for the StrictMode autosaver-disposal bug: the
- * autosaver used to be created once via a `useState` initializer and
- * disposed in a separate effect's cleanup. React StrictMode's dev-only
- * mount→cleanup→mount simulation ran that cleanup without ever re-running
- * the initializer (state is preserved across the simulation, effects are
- * not), permanently disposing the one live instance — autosave then
- * silently no-oped for the rest of the session. The fix creates AND
- * disposes the autosaver within a single mount effect (held in a ref), so
- * the simulation produces a fresh, live instance instead. Mounting under a
- * real `<StrictMode>` here reproduces that simulation; a test that mounted
- * without it would not have caught the bug.
+ * Exercise real StrictMode cleanup/remount so autosaver creation and disposal share a lifecycle and cannot leave a
+ * permanently disposed instance.
  */
 describe('WorkflowDialogHost library autosave under StrictMode', () => {
   let host: HTMLDivElement;
@@ -151,9 +140,6 @@ describe('WorkflowDialogHost library autosave under StrictMode', () => {
 
     expect(updateLibraryWorkflowMock).not.toHaveBeenCalled();
 
-    // A graph edit on the already-bound project: a new object identity so the
-    // dialog host's graph-changed effect fires and schedules the debounced
-    // autosave.
     await act(() => {
       project.setSnapshot({
         ...project.port.getSnapshot(),
@@ -450,17 +436,7 @@ describe('WorkflowDialogHost library autosave under StrictMode', () => {
     expect(updateLibraryWorkflowMock).toHaveBeenCalledTimes(1);
   });
 
-  /**
-   * The host used to learn about graph edits through a selector
-   * (`useWorkflowProjectSelector`) feeding a change-detecting effect, which
-   * re-rendered this component on every graph edit just to notice the
-   * autosaver should be poked. Edits reach the project store through
-   * imperative commands, not through this component's own props or state, so
-   * there is nothing here that needs re-rendering to learn about them — a
-   * direct store subscription (held in the same mount effect that owns the
-   * autosaver) can notify the autosaver without forcing React back through
-   * this component's render.
-   */
+  /** Notify autosave through the project store subscription without rerendering the dialog host on graph edits. */
   it('schedules an autosave for graph edits made outside React renders', async () => {
     workflowLibrarySyncStore.setSnapshot({ status: 'idle' });
 
@@ -516,9 +492,7 @@ describe('WorkflowDialogHost library autosave under StrictMode', () => {
     // (StrictMode doubles it).
     renderCount = 0;
 
-    // Dispatch a graph edit straight through the project store — the same
-    // path an imperative command handler uses — rather than through a prop
-    // that would force this component to re-render.
+    // Dispatch directly through the store to test imperative edits without prop-driven rerenders.
     await act(() => {
       project.setSnapshot({
         ...project.port.getSnapshot(),
@@ -531,18 +505,8 @@ describe('WorkflowDialogHost library autosave under StrictMode', () => {
   });
 
   /**
-   * Account rotation (`accountLifecycle.activate`/`.invalidate`) aborts the
-   * signal a save started under and synchronously resets
-   * `workflowLibrarySyncStore` to 'idle' (it is an account-owned resource,
-   * cleared by `clearResources()` inside `rotateScope`) — but the aborted
-   * write's rejection lands a tick later, after that reset. A save's own
-   * `assertAccountScopeCurrent` throw (which turns a late resolution into a
-   * rejection so a stale write never gets treated as successful) is not
-   * enough by itself: `runSave()`'s `.catch` still calls `onStatus('error')`
-   * unconditionally, and without a scope guard on that callback the late
-   * write would land 'error' in the *next* account's store. Modeled on the
-   * account-rotation tests in `useScopedAction.browser.test.tsx`, which use
-   * the real `accountLifecycle` singleton directly.
+   * Fence status callbacks across account rotation: aborted saves reject after the new account's synchronous idle
+   * reset.
    */
   it('does not park a stale save error in the sync store after an account switch', async () => {
     const boundGraph = { ...createProjectGraph('workflow-1'), libraryWorkflowId: 'library-workflow-1' };
@@ -596,8 +560,6 @@ describe('WorkflowDialogHost library autosave under StrictMode', () => {
       });
     });
 
-    // Past the debounce: the save has started (captured the pre-switch
-    // account scope) and is now awaiting the still-pending request below.
     await act(
       () =>
         new Promise<void>((resolve) => {
@@ -608,18 +570,12 @@ describe('WorkflowDialogHost library autosave under StrictMode', () => {
     expect(updateLibraryWorkflowMock).toHaveBeenCalledTimes(1);
 
     try {
-      // Switch accounts mid-flight: aborts the pre-switch scope's signal and
-      // synchronously resets the sync store to 'idle' via clearResources().
       accountLifecycle.activate('workflow-dialog-host-test-account', ':user:workflow-dialog-host-test-account');
 
       expect(workflowLibrarySyncStore.getSnapshot().status).toBe('idle');
 
-      // The deferred request settles after the switch — the same lag as an
-      // in-flight fetch whose abort rejection arrives after the synchronous
-      // store reset. Resolving (rather than rejecting) exercises the path
-      // the review flagged: `assertAccountScopeCurrent` turns this into a
-      // rejection inside `save()`, so a stale write is never mistaken for a
-      // successful one.
+      // Resolve after rotation to exercise scope-check rejection without leaking an error status into the new
+      // account.
       await act(async () => {
         request.resolve();
         await request.promise.catch(() => undefined);

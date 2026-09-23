@@ -1,6 +1,3 @@
-/**
- * Published Queue query surface for shell consumers (e.g. the command
- * palette's queue search). Widget-internal data hooks stay private.
- */
+/** Expose shell-facing queue queries while keeping widget data hooks private. */
 export { getQueueReadModelOptions } from './publicApi';
 export { getQueueQueryScope, type QueueJobsScope } from './ui/queueScope';

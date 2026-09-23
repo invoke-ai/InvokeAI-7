@@ -50,8 +50,6 @@ describe('createDefaultVideoWidgetValues', () => {
   });
 
   it('picks a single-file MiniMax H3 checkpoint but never a components-only install', () => {
-    // The checkpoint is the model identity now; the components-only folder
-    // belongs in the Model Components slot, not the top selector.
     expect(createDefaultVideoWidgetValues([h3Model('checkpoint')]).model?.key).toBe(h3Model('checkpoint').key);
     expect(createDefaultVideoWidgetValues([{ ...h3Model(), components_only: true }]).model).toBeNull();
   });
@@ -67,9 +65,7 @@ describe('syncVideoWidgetValuesWithModels', () => {
   const model = wanModel('i2v_a14b', 'gguf_quantized');
 
   it('promotes a legacy transformer override to the top model slot', () => {
-    // Pre model-positions persisted shape: the Diffusers install at top, the
-    // single-file transformer in the override slot. The transformer is the
-    // model identity now; the install stays on as its component source.
+    // Migrate legacy transformer overrides to model identity and retain Diffusers components.
     const install = h3Model();
     const checkpoint = { ...h3Model('checkpoint', 'h3-ckpt'), name: 'MiniMax H3 Ref2VA (int8)', variant: 'ref2va' };
     const stored = {
@@ -89,9 +85,7 @@ describe('syncVideoWidgetValuesWithModels', () => {
   });
 
   it('keeps the installed Diffusers main when the legacy transformer override is uninstalled', () => {
-    // An uninstalled override must not evict the still-installed install from
-    // the top slot (which would auto-pick a different family): the install
-    // stays, and the dead override is dropped like any uninstalled component.
+    // A missing override must not displace a still-installed main or trigger a different-family fallback.
     const wan = wanModel('t2v_a14b');
     const install = h3Model();
     const checkpoint = { ...h3Model('checkpoint', 'h3-ckpt'), variant: 'ref2va' };
@@ -116,8 +110,7 @@ describe('syncVideoWidgetValuesWithModels', () => {
   });
 
   it('clears the accelerator flag when no video main is left installed', () => {
-    // `loras` empties out with the model, so a surviving flag would record keys
-    // that are not in the list — a record the persistence validator rejects.
+    // Clear accelerator keys with empty LoRAs so persisted state remains valid.
     const h3 = h3Model();
     const turbo = { base: 'minimax-h3', key: 'turbo', name: 'MiniMax H3 Turbo LoRA', type: 'lora' as const };
     const values = createDefaultVideoWidgetValues([h3, turbo as never]);
@@ -181,10 +174,7 @@ describe('syncVideoWidgetValuesWithModels', () => {
   });
 
   it('snaps family constraints when it auto-picks a different-family model', () => {
-    // Wan-shaped stored values (frames 81, fps 16, 720p) with no surviving
-    // model, in a catalog whose only supported main is MiniMax H3: without the
-    // selection transition the panel would be stuck at fps 16 with no FPS
-    // control to fix it.
+    // Auto-picked H3 must reconcile Wan sampling values, including fps with no H3 control to repair it.
     const stored = { ...createDefaultVideoWidgetValues([wanModel('t2v_a14b')]), model: null };
     const synced = syncVideoWidgetValuesWithModels(stored, [h3Model()]);
 
@@ -196,10 +186,7 @@ describe('syncVideoWidgetValuesWithModels', () => {
   });
 
   it('bootstraps the picked model’s family defaults (accelerator included) for a never-seeded store', () => {
-    // A fresh project's widget store is `{}`; healing yields model-agnostic
-    // fallbacks with NO modelKey. The selection transition must bootstrap the
-    // picked model's own defaults instead of preserving the fallbacks —
-    // otherwise a fresh H3 panel opens at 40 steps / CFG 5 with Turbo off.
+    // Fresh widgets use selected-model defaults, including acceleration, instead of generic healing fallbacks.
     const catalog = [h3Model(), lora('MiniMax H3 Turbo LoRA', 'minimax-h3', null)];
     const healed = normalizeVideoWidgetValues({})!;
     const synced = syncVideoWidgetValuesWithModels(healed, catalog);
@@ -209,8 +196,6 @@ describe('syncVideoWidgetValuesWithModels', () => {
     // onto the H3 grid (90), which is what the preserve path would produce.
     expect(synced).toMatchObject({ acceleratorEnabled: true, cfgScale: 1, fps: 24, numFrames: 124, steps: 6 });
 
-    // A pre-open seeded payload ("Send to Video") keeps its media through the
-    // same bootstrap.
     const seeded = normalizeVideoWidgetValues({
       firstFrameImage: { height: 480, image_name: 'seed.png', width: 832 },
     })!;
@@ -225,10 +210,8 @@ describe('syncVideoWidgetValuesWithModels', () => {
     const enabled = getAcceleratorToggleResult(createDefaultVideoWidgetValues([model]), model, catalog, true).settings;
     const values = { ...enabled, model };
 
-    // The pair vanishes from the catalog: entries drop, flag clears with them,
-    // and the sampling params Lightning wrote (steps 4 / CFG 1) are restored
-    // to the model's own defaults — clearing only the flag would leave a
-    // silent 4-step non-distilled setup.
+    // Losing accelerator LoRAs restores normal sampling as well as clearing intent; four-step nondistilled runs
+    // are invalid defaults.
     const synced = syncVideoWidgetValuesWithModels(values, [model]);
 
     expect(synced.loras).toEqual([]);
@@ -243,7 +226,7 @@ describe('getVideoWidgetValidationReasons', () => {
   it('requires a model first', () => {
     const values = { ...createDefaultVideoWidgetValues(), model: null };
 
-    expect(getVideoWidgetValidationReasons(values)).toEqual(['Video needs a Wan 2.2 or MiniMax H3 main model.']);
+    expect(getVideoWidgetValidationReasons(values)).toEqual(['Video needs a Wan 2.2, MiniMax H3 or LTX-2 main model.']);
   });
 
   it('passes through settings validation and availability checks', () => {

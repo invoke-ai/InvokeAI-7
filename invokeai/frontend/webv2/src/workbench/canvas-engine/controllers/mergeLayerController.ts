@@ -228,8 +228,7 @@ export class MergeLayerController {
       const context = pixels.ctx;
       context.setTransform(1, 0, 0, 1, 0, 0);
       context.clearRect(0, 0, rect.width, rect.height);
-      // Merged pixels must reproduce the screen; a per-leaf bake cannot under
-      // member opacity/blending.
+      // Composite the group to preserve member opacity and blending in merged pixels.
       const drawMerged = (
         target: RasterSurface['ctx'],
         from: number,

@@ -38,12 +38,8 @@ export const projectNeedsWorkflowHost = (project: WidgetHostProject): boolean =>
 const WidgetHost = ({ widget }: { widget: ReturnType<typeof getWidgetHosts>[number] }) => {
   const Host = use(widget.host!.load());
 
-  // react-compiler flags any JSX tag that is directly the value returned by
-  // `use()` as though it were freshly created each render. `Host` is the
-  // module's cached export, resolved once by the deferred resource and
-  // stable across renders; the false positive disappears the moment the
-  // value is read through a property access instead of being the call's
-  // direct result, which is what the sibling `WidgetRenderer` slots do.
+  // Host is the deferred resource's stable cached export; React Compiler misidentifies a direct use() result as a
+  // new component.
   // eslint-disable-next-line react/static-components
   return <Host />;
 };

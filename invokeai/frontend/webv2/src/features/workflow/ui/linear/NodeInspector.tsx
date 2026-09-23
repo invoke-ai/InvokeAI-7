@@ -20,12 +20,6 @@ import { JsonPreview, Scrollable, Tabs } from '@platform/ui';
 import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 
-/**
- * Edit-mode inspector for the editor's selected node, with the legacy tab
- * set: Details (summary + notes), Outputs, Data (raw node data), Template
- * (the node's backend definition). Sizing is owned by the panel's Splitter.
- */
-
 type InspectorTab = 'details' | 'outputs' | 'data' | 'template';
 
 const getInspectorTab = (values: Record<string, unknown>): InspectorTab =>
@@ -82,11 +76,6 @@ const DetailsTab = ({ node, template }: { node: WorkflowInvocationNode; template
   );
 };
 
-/**
- * What the node produced the last time it ran in this session: each declared
- * output's value from the latest result, the image it saved (if any), and the
- * raw result for anything the summary does not show.
- */
 const OutputsTab = ({ nodeId, template }: { nodeId: string; template: InvocationTemplate | undefined }) => {
   const { t } = useTranslation();
   const execution = useWorkflowNodeExecutionState(nodeId);

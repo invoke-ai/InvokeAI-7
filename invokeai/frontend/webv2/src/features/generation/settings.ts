@@ -1,8 +1,4 @@
-/**
- * Generation's React-free values/policy surface: settings normalization, base
- * policies, batch limits, prompt history, prompt drafts, and reference images.
- * Curated, caller-driven export list — add a symbol only when a consumer needs it.
- */
+/** Keep this public entry React-free. */
 export {
   ASPECT_RATIO_MAP,
   calculateNewSize,

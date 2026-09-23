@@ -1,8 +1,6 @@
 /**
- * Fail-closed public-surface registry. A feature absent from this map has NO
- * public modules; a top-level module absent from its list is private.
- * `index` is implicitly public for every registered feature.
- * To publish a new entry module, add it here and cover it in dependencyPolicy.test.ts.
+ * Unregistered features and unlisted modules are private; index is public for registered features. Cover new
+ * entries in dependencyPolicy.test.ts.
  */
 export const FEATURE_PUBLIC_INTERFACES: Readonly<Record<string, readonly string[]>> = {
   gallery: [

@@ -5,9 +5,8 @@ import { ArrowRightIcon, CopyIcon, FileDownIcon, PencilIcon, PinIcon, PinOffIcon
 import { useTranslation } from 'react-i18next';
 
 /**
- * The per-project action menu's content. Right-click and the overflow button
- * offer the same things in the same order everywhere; the single mounted
- * instance and its dialogs live in `ProjectActionsMenuHost`.
+ * Share action order between right-click and overflow menus; ProjectActionsMenuHost owns the single menu and
+ * dialogs.
  */
 export const ProjectActionsMenuBody = ({
   isCompatible,

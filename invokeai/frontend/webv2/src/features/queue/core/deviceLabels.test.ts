@@ -75,9 +75,7 @@ describe('getDeviceNameLabels', () => {
   });
 
   it('numbers by position in the full device set, so disabling a device does not renumber it', () => {
-    // The backend reports every installed CUDA device regardless of `generation_devices`, so
-    // cuda:2 stays #3 whether or not cuda:1 is enabled for generation. Numbering off a filtered
-    // list would silently promote cuda:2 to #2 and disagree with the backend's startup log.
+    // Device numbering follows all reported accelerators; disabling one must not renumber the others.
     const allDevices = [
       { device: 'cuda:0', name: 'RTX 5090' },
       { device: 'cuda:1', name: 'RTX 5090' },

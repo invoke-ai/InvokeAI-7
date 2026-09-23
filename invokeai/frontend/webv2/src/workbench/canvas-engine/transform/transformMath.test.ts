@@ -53,8 +53,7 @@ describe('localHandlePoint', () => {
   });
 
   it('honors an off-origin content rect (content-sized paint layers)', () => {
-    // A paint layer whose bitmap sits at offset (10, 20): every handle shifts
-    // by the origin — the frame must wrap the pixels, not [0,w]×[0,h].
+    // Off-origin paint at (10,20) shifts every handle to frame actual pixels.
     const offOrigin: TransformRect = { height: 40, width: 60, x: 10, y: 20 };
     expect(localHandlePoint(offOrigin, 'nw')).toEqual({ x: 10, y: 20 });
     expect(localHandlePoint(offOrigin, 'se')).toEqual({ x: 70, y: 60 });
@@ -91,9 +90,7 @@ describe('off-origin content rect (content-sized layers)', () => {
       transform: identity,
     });
     expect(corner).toEqual({ handle: 'se', kind: 'scale' });
-    // A point far from the shifted frame (outside its interior, handles, and
-    // rotate zones) is NOT a target, even though an (incorrect) origin-anchored
-    // frame would sit in that direction.
+    // Far points must not hit an incorrect origin-anchored frame.
     const stale = transformTargetAt({
       point: { x: -40, y: -40 },
       rect: offOrigin,
@@ -165,9 +162,7 @@ describe('transformTargetAt', () => {
   });
 
   it('hits the rotation nub above the top edge (drawn but previously not hit-testable)', () => {
-    // The nub tip sits `TRANSFORM_ROTATE_NUB_PX` above the top-edge midpoint —
-    // outside the frame polygon and away from every corner, so before the fix it
-    // fell through to `null` (misread by the tool as an off-frame press → reset).
+    // The visible rotation nub lies outside frame/corners and must not be misread as an off-frame reset.
     const target = transformTargetAt({
       point: nubTip(identity, rect, 1),
       rect,
@@ -481,8 +476,6 @@ describe('bakeMatrix', () => {
     const transform: LayerTransform = { rotation: Math.PI / 6, scaleX: 1.5, scaleY: 0.8, x: 12, y: 34 };
     const bake = bakeMatrix(transform);
     const direct = layerTransformMatrix(transform);
-    // For any local point, drawing the baked surface at identity reproduces the
-    // transformed point exactly.
     for (const q of [
       { x: 0, y: 0 },
       { x: 100, y: 0 },

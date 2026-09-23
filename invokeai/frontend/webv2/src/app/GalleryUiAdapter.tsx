@@ -20,10 +20,6 @@ const GalleryImageContextMenu = lazy(() =>
   import('./GalleryImageActionsBridge').then((module) => ({ default: module.GalleryImageContextMenu }))
 );
 
-/**
- * Production binding of Gallery's UI port: translates Gallery UI intents into
- * the Workbench aggregate. No second adapter is expected.
- */
 export const GalleryUiAdapterProvider = ({ children }: { children: ReactNode }) => {
   const { projectId, projectName, galleryValues, generateValues, antialiasProgressImages, liveFollowEnabled } =
     useActiveProjectSelector((project) => ({
@@ -40,10 +36,7 @@ export const GalleryUiAdapterProvider = ({ children }: { children: ReactNode }) 
   const accountScope = captureAccountScope();
   const exportProject = useExportLibraryProject();
   const openWorkbenchWidget = useOpenWorkbenchWidget();
-  // These are `lazy()` children of an adapter that only ever mounts in the
-  // editor, and the gallery widget needs them as soon as it renders a row.
-  // Left to Suspense they were fetched at ~476ms — a full round trip after the
-  // boot widget wave had already finished.
+  // Preload row dependencies here to avoid a second fetch wave after the gallery mounts.
   useMountEffect(() => {
     void import('./GalleryImageActionsBridge');
   });

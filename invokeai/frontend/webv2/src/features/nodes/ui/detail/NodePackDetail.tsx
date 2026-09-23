@@ -15,11 +15,8 @@ import { useTranslation } from 'react-i18next';
 import { NodePreviewCard } from './NodePreviewCard';
 
 /**
- * Detail pane for a selected pack: a metadata header with an uninstall action,
- * then a live preview of every node the pack contributes. Previews are built
- * from the invocation templates the backend parsed from its OpenAPI schema —
- * `pack.nodeTypes` are the exact invocation type keys, and a pack's nodes all
- * share `template.nodePack === pack.name`.
+ * Build previews from backend invocation templates; nodeTypes are invocation keys and nodePack identifies their
+ * owning pack.
  */
 export const NodePackDetail = ({ onUninstalled, pack }: { onUninstalled: () => void; pack: NodePackInfo }) => {
   const { t } = useTranslation();

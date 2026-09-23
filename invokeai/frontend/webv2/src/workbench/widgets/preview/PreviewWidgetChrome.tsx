@@ -7,11 +7,8 @@ import { useTranslation } from 'react-i18next';
 import { usePreviewHeaderContext } from './previewHeaderStore';
 
 /**
- * The preview widget's header label: `[board] / [image]` for the current
- * selection (published by the view via `previewHeaderStore`), falling back to
- * the static "Preview" title when nothing is selected — except in the center,
- * whose view trigger already names the widget (the gallery label does the
- * same).
+ * Show board/image context from previewHeaderStore, falling back to Preview except where the center trigger
+ * already names it.
  */
 export const PreviewWidgetLabel = ({ region }: WidgetLabelProps) => {
   const { t } = useTranslation();
@@ -29,9 +26,7 @@ export const PreviewWidgetLabel = ({ region }: WidgetLabelProps) => {
     );
   }
 
-  // `pe` because the frame's header row only pads to `2` and the label sits
-  // against the action cluster; a middle-truncated name otherwise ends flush
-  // with the first button.
+  // Pad the truncated label away from the first header action.
   return (
     <HStack flex="1" gap="1" minW="0" pe="2">
       <Text flexShrink={0} fontSize="xs" fontWeight="700">

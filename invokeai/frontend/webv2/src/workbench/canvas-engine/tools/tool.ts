@@ -1,16 +1,7 @@
 /**
- * The `Tool` seam: the engine routes normalized pointer/wheel input to whichever
- * tool is active. Tools are pure interaction handlers — they read the viewport
- * and mirrored document through the engine-provided {@link ToolContext} and
- * request re-renders via `invalidate`.
- *
- * Navigation tools (view) never dispatch and never touch pixels. Painting tools
- * (brush/eraser) reach the layer-cache surfaces and raster backend through the
- * same context, dispatch at most once per gesture (auto-creating a paint layer
- * on pointer-down when needed), and emit exactly one {@link StrokeCommittedEvent}
- * on commit — persistence/history are wired to that event downstream, not here.
- *
- * Zero React, zero import-time side effects.
+ * Tools handle normalized input through engine context and request rendering. Navigation changes only viewport.
+ * Painting may create a layer at gesture start, edits caches without move dispatch, and emits one {@link
+ * StrokeCommittedEvent} for downstream history/persistence.
  */
 
 import type { StructuralCommitResult } from '@workbench/canvas-engine/capabilities';
@@ -32,12 +23,7 @@ import type { LayerTransform } from '@workbench/canvas-engine/transform/transfor
 import type { PlacedSurface, PointerInput, PointerModifiers, Rect, ToolId, Vec2 } from '@workbench/canvas-engine/types';
 import type { Viewport } from '@workbench/canvas-engine/viewport';
 
-/**
- * Emitted once per completed brush/eraser gesture. Persistence (Task P2.2) and
- * history (Task P2.3) subscribe via `engine.tools.onStrokeCommitted`. `beforeImageData`
- * and `afterImageData` are both sized to `dirtyRect`, so an undo can restore the
- * pre-stroke pixels and a redo can re-apply the post-stroke pixels cheaply.
- */
+/** One completed-stroke event carries before/after images sized to dirtyRect for exact undo/redo and persistence. */
 export interface StrokeCommittedEvent {
   /** The layer that received the stroke. */
   layerId: string;
@@ -49,13 +35,7 @@ export interface StrokeCommittedEvent {
   afterImageData: ImageData;
   /** Which tool produced the stroke; a `shape` is one drawn as pixels onto a paint layer. */
   tool: 'brush' | 'eraser' | 'shape';
-  /**
-   * When the gesture auto-created its paint layer on pointer-down, the created
-   * layer contract (and where it was inserted). The engine composes this into
-   * the stroke's history entry so an undo removes BOTH the stroke and the
-   * now-empty auto-created layer (and a redo re-adds the layer + stroke).
-   * Absent for strokes painted into a pre-existing layer.
-   */
+  /** Optional auto-created layer and insertion placement let stroke history remove/recreate both layer and pixels. */
   createdLayer?: { layer: CanvasLayerContract; anchor: CanvasNodeInsertionAnchor };
 }
 
@@ -73,10 +53,8 @@ export interface PixelEditTransaction {
 }
 
 /**
- * A transient per-layer transform override the compositor/overlay read at render
- * time (a live drag preview that never touches the mirror). The move tool sets
- * only `x`/`y` (rotation/scale fall back to the committed transform); the
- * transform tool sets the full transform so a scale/rotate preview renders.
+ * Transient render-time transforms leave the mirror unchanged. Move sets position only; transform supplies full
+ * values.
  */
 export interface LayerTransformOverride {
   x: number;
@@ -100,27 +78,14 @@ export interface ToolContext {
   dispatch(action: CanvasProjectMutation): void;
   /** Where a layer the tool creates lands: above `aboveId` when it belongs to `stack`, else the stack top. */
   captureInsertionAnchor(stack: LayerStackKind, aboveId: string | null): CanvasNodeInsertionAnchor;
-  /**
-   * Records a structural document edit on the engine-owned canvas history:
-   * dispatches `forward` now, and an undo dispatches `inverse` / a redo
-   * re-dispatches `forward`. The move tool commits a layer nudge through this.
-   */
+  /** Applies forward structural action now and records inverse/forward replay in canvas history. */
   commitStructural(
     label: string,
     forward: CanvasProjectMutation,
     inverse: CanvasProjectMutation
   ): StructuralCommitResult;
-  /**
-   * Sets (or clears with `null`) a transient per-layer transform override the
-   * compositor and overlay read at render time — a live drag preview that never
-   * touches the mirror/document. Cleared on commit or cancel.
-   */
+  /** Set or clear transient compositor/overlay transforms without document mutation; clear on commit/cancel. */
   setLayerTransformOverride(layerId: string, override: LayerTransformOverride | null): void;
-  /**
-   * Begins a transform session on `layerId` (captures its committed transform,
-   * shows the live preview). Provided by the engine; the transform tool calls it
-   * on activate / when a layer is clicked. Absent in minimal test harnesses.
-   */
   beginTransformSession?(layerId: string): void;
   /** Prepares direct or materializing pixel editing for a selected control or raster-image layer. */
   beginPixelEdit?(layerId: string): PixelEditTransaction | null;
@@ -128,25 +93,13 @@ export interface ToolContext {
   requestLayerRasterization?(layerId: string): void;
   /** Updates the active transform session's live transform (drag or numeric edit). */
   updateTransformSession?(transform: LayerTransform): void;
-  /**
-   * Commits the active transform session: a param commit (image layers) or a
-   * pixel bake (paint layers), as ONE undoable entry. Then clears the session.
-   */
+  /** Commits image parameters or paint bake as one undo entry, then clears the session. */
   applyTransform?(): void;
   /** Cancels the active transform session (drops the preview, no dispatch). */
   cancelTransform?(): void;
-  /**
-   * Opens a CREATE-mode text-editing session at `docPoint` (no layer yet; the
-   * commit later dispatches one `addCanvasLayer`). Seeds style from the text
-   * options store. The text tool calls it on an empty-area click. Absent in
-   * minimal test harnesses.
-   */
+  /** Optional creation session at document point with tool defaults; no layer exists until one add commit. */
   openTextCreate?(docPoint: Vec2): void;
-  /**
-   * Opens an EDIT-mode text-editing session on an existing text layer (captures
-   * its committed source for the undo inverse). The text tool calls it when a
-   * click hits a text layer. Absent in minimal test harnesses.
-   */
+  /** Optional edit session captures the existing text source as exact undo baseline. */
   openTextEdit?(layerId: string): void;
   /** Cancels the active text-editing session (drops it, no dispatch). */
   cancelTextEdit?(): void;
@@ -165,12 +118,8 @@ export interface ToolContext {
   /** Sets (or clears) the brush cursor ring drawn on the overlay. */
   setOverlayCursor(cursor: OverlayCursor | null): void;
   /**
-   * Hands a sampled color to whoever claims it: a one-shot request made from
-   * outside the canvas (a color picker's eyedropper button) wins first, then
-   * the workbench's persistent router (which writes the active
-   * foreground/background target). Returns whether anyone took it; only then
-   * does the color-picker tool fall back to writing the brush color — the
-   * engine-standalone behavior. Absent in minimal test harnesses.
+   * Route samples to one-shot claim, then persistent workbench target. Return whether consumed; otherwise picker
+   * falls back to brush color. Optional in test harnesses.
    */
   resolveColorSample?(hex: string): boolean;
   /** Compositor providers that make sampling WYSIWYG; absent ⇒ raw cached pixels. */
@@ -184,43 +133,25 @@ export interface ToolContext {
   /** Drops the stashed sample (gesture cancel, fresh press) without settling the request. */
   discardColorSample?(): void;
   /**
-   * Re-evaluates the active tool's CSS cursor and applies it to the input
-   * element. A tool calls this when its `cursor(ctx)` result changes off a plain
-   * pointer-move (e.g. the bbox tool switching to a resize cursor while hovering a
-   * handle) — pointer-move does not otherwise refresh the cursor.
+   * Refresh the input element cursor when tool state changes; ordinary pointermove does not automatically
+   * reevaluate it.
    */
   updateCursor(): void;
   /** Emits a completed-stroke event to `engine.tools.onStrokeCommitted` subscribers. */
   emitStrokeCommitted(event: StrokeCommittedEvent): void;
   /** Bumps a layer's cache version (without marking it stale) after a direct paint, and recomposites. */
   notifyLayerPainted(layerId: string): void;
-  /**
-   * Commits a lasso path to the engine's transient selection (boolean op applied
-   * to the mask). Provided by the engine; the lasso tool calls it on pointer-up.
-   * Absent in minimal test harnesses.
-   */
   commitSelection?(commit: SelectionCommit): void;
   /**
-   * The current selection mask as a placed surface (alpha 255 inside) in document
-   * space — the mask is bounded to the selection extent, so its `rect` records
-   * where it sits. `null` when there is no selection. Painting tools read it ONCE
-   * on pointer-down to clip the stroke; a `null` result keeps the zero-overhead
-   * hot path. Absent in minimal test harnesses.
+   * Optional placed document-space selection mask; paint tools capture it once at pointerdown. Null avoids masking
+   * work.
    */
   getSelectionMask?(): PlacedSurface | null;
-  /**
-   * The document-space rectangle strokes may not paint outside, or `null` when
-   * unclipped. Painting tools read it ONCE on pointer-down, alongside the
-   * selection mask. Absent in minimal test harnesses.
-   */
+  /** Optional document-space stroke clip captured once at pointerdown; null means unclipped. */
   getStrokeClipRect?(): Rect | null;
   /** Updates visual SAM input for the active engine-owned Select Object session. */
   updateSamInput?(input: SamVisualInput): void;
-  /**
-   * Cuts the current selection's pixels out of `layerId` into a floating
-   * selection, returning whether anything was lifted. Absent in minimal test
-   * harnesses.
-   */
+  /** Optional lift of selected layer pixels into a float; returns whether any were lifted. */
   liftFloatingSelection?(layerId: string): boolean;
   /** The live floating selection, or `null`. */
   getFloatingSelection?(): FloatingSelection | null;
@@ -239,13 +170,7 @@ export interface ToolContext {
   isPointInSelection?(point: Vec2): boolean;
 }
 
-/**
- * Why a tool is being (de)activated, passed by the engine's `setTool` so a
- * session-bearing tool (transform) can tell a temporary modifier-hold switch
- * (space→view, alt→colorPicker; the pointer pipeline restores the prior tool
- * on release) apart from a REAL tool switch. A temp switch must not tear down
- * an in-progress session — only a real switch (or dispose) does.
- */
+/** Temporary modifier switches/restores preserve sessions; real switches or disposal tear them down. */
 export interface ToolActivationOptions {
   /** True for a pipeline modifier-hold switch (and its matching restore); absent/false for a real switch. */
   temporary?: boolean;
@@ -269,10 +194,8 @@ export interface Tool {
   /** The active gesture was cancelled (Esc, pointercancel, focus loss). */
   onPointerCancel?(ctx: ToolContext): void;
   /**
-   * A session-level key command routed from the pointer pipeline: Enter →
-   * `'apply'`, Escape → `'cancel'`. Tools with a multi-gesture session (transform)
-   * use it to commit/abort; other tools ignore it. Escape also runs the normal
-   * gesture cancel independently.
+   * Optional session commands from the pipeline; tools may apply/cancel while gesture cancellation remains
+   * separate.
    */
   onKeyCommand?(ctx: ToolContext, command: 'apply' | 'cancel'): void;
   /** Wheel over the canvas; `screenAnchor` is the CSS-pixel cursor position. */

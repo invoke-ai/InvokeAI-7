@@ -110,10 +110,7 @@ describe('getGalleryBoardGroups', () => {
     expect(groupsOf({ searchTerm: 'Uncategorized' }).canCreateFromSearch).toBe(false);
   });
 
-  /**
-   * The board is not in the list yet — it is still loading — but it exists, and offering to create
-   * one under its own name would be offering to make a second.
-   */
+  /** A loading project board still exists; its name must not offer duplicate creation. */
   it('treats the project board name as an exact match even before the board arrives', () => {
     expect(groupsOf({ searchTerm: 'Project' }).canCreateFromSearch).toBe(false);
   });

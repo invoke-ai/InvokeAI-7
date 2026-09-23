@@ -187,10 +187,6 @@ const FilterParamsSettings = ({ engine, isSurfaceInteractionLocked }: ToolFormPr
   );
 };
 
-/**
- * The operation's sticky footer: the status chip, Reset, Process (hidden while
- * auto-process owns it), Apply with its save-as menu, and Cancel.
- */
 const FilterFooter = ({ engine, isExternalInteractionLocked }: ToolFooterProps) => {
   const { t } = useTranslation();
   const session = useFilterSession(engine);

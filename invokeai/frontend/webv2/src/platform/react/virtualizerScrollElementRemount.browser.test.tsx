@@ -4,18 +4,8 @@ import { useVirtualizer } from 'react-hook-tanstack-virtual';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 /**
- * Regression test for the locally patched scroll-desync in
- * react-hook-tanstack-virtual / @tanstack/virtual-core.
- *
- * When a scroll element is swapped (a list passing through an empty loading
- * state remounts its container), virtual-core restores the cached offset onto
- * the new element via `scrollTo`. If the new content is too short for that
- * offset, the browser clamps the scroll WITHOUT firing a scroll event, and
- * nothing ever reads the element's real position back — the virtualizer keeps
- * serving the range computed at the stale offset, which renders no rows at
- * all. This is the gallery going blank after a semantic search or cluster
- * click until a manual scroll. The patch reconciles the cached offset with
- * the element's actual position whenever the scroll element changes.
+ * On scroll-element replacement, browsers can clamp restored offsets without an event. Verify the local
+ * virtualizer patch reconciles actual position instead of rendering a stale empty range.
  */
 
 const ROW_HEIGHT = 50;
@@ -98,14 +88,8 @@ afterEach(async () => {
 
 describe('useVirtualizer scroll element remount', () => {
   it('does not consume a programmatic scroll\u2019s pending intent while reconciling', async () => {
-    // virtual-core ignores an incoming scroll event when `isScrolling &&
-    // _intendedScrollOffset === null && offset === scrollOffset`. That guard
-    // exists so a PROGRAMMATIC scroll's own event still gets through, and it
-    // is armed by `_intendedScrollOffset` being non-null. If the
-    // reconciliation writes scrollOffset AND clears the intent, all three
-    // conditions hold, so every scrollToIndex swallows its own event and
-    // leaves `isScrolling` false and `scrollDirection` stale — which is what
-    // virtual-core steers dynamic re-measurement by.
+    // Retain programmatic scroll intent during reconciliation; clearing it suppresses the matching event and
+    // leaves scrolling state/direction stale.
     host = document.createElement('div');
     document.body.append(host);
     root = createRoot(host);
@@ -117,13 +101,8 @@ describe('useVirtualizer scroll element remount', () => {
       scrollOffset: number | null;
     };
 
-    // The state a programmatic scroll leaves behind: the element has moved,
-    // the intent is recorded, and the cached offset is still stale because no
-    // scroll event has been delivered yet. Model that pre-event boundary with
-    // an own scrollTop value instead of the native setter: Chromium is then
-    // unable to race the assertion by legitimately delivering the pending
-    // read-back event and consuming the intent before React's concurrent
-    // commit settles.
+    // Set an own scrollTop value to model pre-event state without Chromium racing the assertion by delivering a
+    // native scroll event.
     await act(() => {
       Object.defineProperty(scroller, 'scrollTop', {
         configurable: true,
@@ -153,8 +132,7 @@ describe('useVirtualizer scroll element remount', () => {
     await act(async () => {
       scroller!.scrollTop = 400 * ROW_HEIGHT;
       scroller!.dispatchEvent(new Event('scroll'));
-      // End the scroll like the browser would; the reconciliation deliberately
-      // stands down while a scroll is live.
+      // End the active scroll before testing reconciliation, which intentionally waits for idle.
       scroller!.dispatchEvent(new Event('scrollend'));
       await new Promise((resolve) => {
         setTimeout(resolve, 0);
@@ -162,16 +140,11 @@ describe('useVirtualizer scroll element remount', () => {
     });
     expect(renderedIndexes()).toContain(400);
 
-    // The container unmounts (a loading state) and remounts as a NEW element
-    // holding far fewer, unscrollable rows — a search-results swap. The
-    // core's offset restoration gets clamped to 0 by the browser with no
-    // scroll event; without the reconciliation patch the virtualizer keeps
-    // the stale deep offset and renders NO rows at all.
+    // Remount with unscrollable results so the browser clamps the old offset without an event.
     await render(1000, false);
     await render(3, true);
 
-    // The reconciliation notifies from a layout effect; the corrected render
-    // can land a scheduler tick later.
+    // Poll for the rerender scheduled by layout-effect reconciliation.
     await vi.waitFor(() => {
       expect(renderedIndexes()).toEqual([0, 1, 2]);
     });

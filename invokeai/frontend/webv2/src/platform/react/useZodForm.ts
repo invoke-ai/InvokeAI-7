@@ -2,11 +2,7 @@ import type { z } from 'zod';
 
 import { useCallback, useRef, useState } from 'react';
 
-/**
- * Minimal zod-backed form state. Validation runs on submit; editing a field
- * that shows an error clears that error immediately (optimistic — the next
- * submit re-validates), so users are not nagged mid-correction.
- */
+/** Validate on submit; editing clears that field's error without revalidating mid-entry. */
 
 export interface ZodFormField<Value> {
   value: Value;

@@ -18,11 +18,8 @@ import { getDestinationLabel } from '@workbench/invocation';
 import { getProjectWidgetValues } from '@workbench/widgetState';
 
 /**
- * Pure translation from the active project + surface into the preview
- * dialog's data. Kept side-effect free so it can run on every keystroke
- * (`GraphPreviewHost` recomputes it in a `useMemo`) without triggering any
- * loads itself — callers are responsible for ensuring models/templates are
- * fetched (`ensureModelsLoaded`, `ensureInvocationTemplatesLoaded`).
+ * Translate project/surface to preview data without effects; callers load models/templates before per-edit
+ * compilation.
  */
 export interface GraphPreviewSourceDeps {
   models: readonly ModelConfig[] | undefined;
@@ -97,9 +94,7 @@ const buildGenerateSource = (
 ): GraphPreviewSourceWithoutDestination => {
   let result: ReturnType<typeof compileGeneratePreviewGraph>;
 
-  // A compile that throws (a model policy the stored values violate, a graph
-  // builder edge case) is a reason the preview shows, not a render error that
-  // takes the widget's chrome down with it.
+  // Return compile failures as preview reasons instead of throwing through widget chrome.
   try {
     result = compileGeneratePreviewGraph({
       destination: project.invocation.destination,

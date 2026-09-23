@@ -6,12 +6,7 @@ import { createExternalStore } from '@platform/state/externalStore';
 
 import type { WorkflowFlowEdge, WorkflowFlowNode } from './flowAdapters';
 
-/**
- * Module-level handle to the mounted workflow editor's ReactFlow instance, so
- * surfaces outside the ReactFlowProvider (the widget frame's header actions)
- * can place inserted nodes at the current viewport center. Mirrors the legacy
- * editor's nanostore-held instance.
- */
+/** Expose the mounted flow instance to outside-provider actions that insert nodes at viewport center. */
 
 export type WorkflowFlowInstance = ReactFlowInstance<WorkflowFlowNode, WorkflowFlowEdge>;
 

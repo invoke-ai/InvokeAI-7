@@ -243,13 +243,7 @@ const getMaximumResourceSummary = (samples, key) =>
     BROWSER_RESOURCE_METRIC_KEYS.map((metric) => [metric, Math.max(...samples.map((sample) => sample[key][metric]))])
   );
 
-/**
- * Waits for the main thread to go quiet. A semantic-ready mark says the widget
- * mounted, not that the switch finished: the away switch leaves hundreds of
- * milliseconds of work behind it, and pressing the next tab straight into that
- * measures the tail of the previous switch as if it belonged to the next one.
- * Idle callbacks are the browser's own answer to "is anything still running".
- */
+/** Wait for main-thread idle between switches so the next sample excludes the previous switch's work. */
 const settleMainThread = (page) =>
   page.evaluate(
     () =>
@@ -268,17 +262,7 @@ const settleMainThread = (page) =>
       })
   );
 
-/**
- * Measures a *repeat* layout switch: away to a second preset, then back to the
- * fixture's own. Every other sample here gets a fresh context and page load and
- * presses a preset tab exactly once, so `layoutSwitchMs` can only ever describe
- * a cold, first switch. A return to a layout the session has already shown is
- * the switch keeping widgets mounted is supposed to make near-free, and nothing
- * else in this harness can see it.
- *
- * Runs after every resource, source-owner and timing figure has been captured,
- * so the detour cannot perturb them.
- */
+/** Measure a warm return switch after all other samples, without perturbing their resources or timings. */
 const measureLayoutReturnSwitch = async (page, fixture) => {
   if (!fixture.layoutReturnPreset) {
     return 0;
@@ -524,9 +508,7 @@ const runSample = async (browser, fixture, sample) => {
         (name) => document.querySelector('button[aria-label^="Switch project."]')?.textContent?.trim() !== name,
         originalProjectName
       );
-      // A new tab is server-backed on its first autosave. Let that response assign its board and
-      // reach a paint before timing the unrelated switch back; otherwise the sample randomly
-      // includes the reconciliation depending on where the 500 ms autosave lands.
+      // Wait for first autosave reconciliation and paint so layout-switch timing excludes board assignment.
       const newProjectSaveResponse = await newProjectSave;
       await newProjectSaveResponse.finished();
       await page.evaluate(
@@ -620,8 +602,7 @@ const runSample = async (browser, fixture, sample) => {
   }
 };
 
-// The measurement is hermetic: the preview proxy targets a disposable
-// in-memory mock backend, never a live InvokeAI instance with real data.
+// Use only the disposable mock backend for measurements.
 const mockBackend = await startMockBackend(backendPort);
 
 const preview = spawnPreview({

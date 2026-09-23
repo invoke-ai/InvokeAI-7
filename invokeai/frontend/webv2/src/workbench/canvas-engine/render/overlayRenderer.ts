@@ -1,15 +1,6 @@
 /**
- * Renders the interaction overlay — the second stacked canvas above the
- * composited document: bbox rectangle, an optional viewport-wide grid, and
- * the brush cursor ring. Everything is drawn in screen space (document points
- * projected through `view`) so strokes stay a constant pixel width regardless
- * of zoom. The canvas is an unbounded plane, so no document-bounds outline is
- * drawn.
- *
- * Marching ants and transform handles come later; the functions here are kept
- * small and composable so those can slot in. Every pixel operation flows
- * through the {@link RasterSurface} `ctx` seam. Zero React, zero import-time
- * side effects.
+ * Interaction overlays render in screen space through `view`, keeping strokes and handles constant-sized at any
+ * zoom. The unbounded plane has no document outline; all drawing uses {@link RasterSurface} contexts.
  */
 
 import type { ParametricShapeKind } from '@workbench/canvas-engine/contracts';
@@ -85,23 +76,14 @@ export interface OverlayState {
   gridSize?: number;
   /** Brush cursor ring, or `null`/absent to hide it. */
   cursor?: OverlayCursor | null;
-  /**
-   * A layer's rendered-bounds outline (the move tool's selection marquee): the
-   * four document-space corners, projected through `view` and stroked as a closed
-   * polygon. Absent/`null` to hide it.
-   */
+  /** Move outline uses four document-space content corners projected through view; null/absence hides it. */
   layerOutline?: readonly Vec2[] | null;
   /**
-   * The active transform-tool frame: the layer's rotated bounds, its eight scale
-   * handles, and the center/top-edge points for the rotation nub — all in
-   * document space, projected through `view`. Absent/`null` when no transform
-   * session is active.
+   * Document-space rotated transform bounds, eight handles and rotation-nub anchors; null/absence means no
+   * session.
    */
   transformFrame?: TransformFrameOverlay | null;
-  /**
-   * The in-progress lasso outline (document space): a freehand drag, or a
-   * polygon session with its placed vertices and close cue. Absent/`null` when idle.
-   */
+  /** Document-space freehand/polygon lasso preview with vertices and close cue; null/absence means idle. */
   lassoPreview?:
     | { kind: 'freehand'; points: readonly Vec2[] }
     | {
@@ -112,26 +94,13 @@ export interface OverlayState {
         closeArmed: boolean;
       }
     | null;
-  /**
-   * The committed selection's marching ants: the outline paths (document space)
-   * plus the animated dash phase. Absent/`null` when there is no selection.
-   */
+  /** Committed document-space selection paths and animated dash phase; absent without selection. */
   marchingAnts?: MarchingAntsRender | null;
-  /**
-   * The in-progress shape-tool drag (document-space rect + kind), drawn as a
-   * live outline while a shape is being created. Absent/`null` when idle.
-   */
+  /** Document-space shape creation preview; null/absence means idle. */
   shapePreview?: RectShapePreview | null;
-  /**
-   * The in-progress marquee-tool drag (document-space rect + kind), drawn as a
-   * live outline while a pixel selection is being dragged out. Absent/`null`
-   * when idle; the committed selection shows as marching ants instead.
-   */
+  /** Document-space marquee drag preview; committed selections instead use ants. */
   marqueePreview?: RectShapePreview | null;
-  /**
-   * The in-progress gradient-tool drag (document-space start/end): a linear
-   * ramp's vector, or a radial one's center and radius. Absent/`null` when idle.
-   */
+  /** Gradient drag start/end defines the linear vector or radial center/radius; absent when idle. */
   gradientPreview?: { kind: 'linear' | 'radial'; start: Vec2; end: Vec2 } | null;
   /** Dedicated Select Object mask preview, already colorized by the engine. */
   samPreview?: {
@@ -165,11 +134,8 @@ const strokeRectScreen = (ctx: Ctx, screenRect: Rect): void => {
 };
 
 /**
- * Draws grid lines across the entire viewport, in screen space, skipping when
- * too dense. The canvas is an unbounded plane, so the grid is not clipped to any
- * document rect: the visible screen rect is projected back into document space
- * (via the inverse view) and snapped out to whole grid cells so the lines tile
- * seamlessly while panning/zooming.
+ * Project viewport bounds into document space and snap outward to grid cells for seamless pan/zoom. Skip overly
+ * dense grids; never clip to document bounds.
  */
 const drawGrid = (ctx: Ctx, state: OverlayState, target: RasterSurface): void => {
   const gridSize = state.gridSize ?? 0;
@@ -270,10 +236,8 @@ const drawLayerOutline = (ctx: Ctx, state: OverlayState): void => {
 };
 
 /**
- * Draws the transform frame (rotated bounds polygon, eight scale handles, and a
- * rotation nub past the top edge) in screen space. Handles/nub stay a constant
- * pixel size; the nub direction follows the rotated frame (top-edge → away from
- * center), so it reads correctly at any layer rotation.
+ * Screen-space transform bounds and fixed-size handles. Rotation nub extends from the top edge away from center,
+ * following layer rotation.
  */
 const drawTransformFrame = (ctx: Ctx, state: OverlayState): void => {
   const frame = state.transformFrame;
@@ -299,8 +263,6 @@ const drawTransformFrame = (ctx: Ctx, state: OverlayState): void => {
   ctx.closePath();
   ctx.stroke();
 
-  // Rotation nub: from the top-edge midpoint, outward (away from center), a
-  // constant screen length; a small knob at the tip.
   const anchor = applyToPoint(view, frame.rotationAnchor);
   const center = applyToPoint(view, frame.center);
   const dx = anchor.x - center.x;
@@ -335,11 +297,7 @@ const LASSO_PREVIEW_DASH: readonly number[] = [4, 4];
 /** Screen-space half-size of a placed polygon vertex knob. */
 const LASSO_VERTEX_HALF_PX = 2;
 
-/**
- * Draws the in-progress lasso as a dashed screen-space outline. A polygon also
- * shows its placed vertices and, once it can close, a ring on the first one at
- * the close hit radius, filled while the cursor is inside it.
- */
+/** Dashed lasso preview; polygons add vertices and a first-vertex close-radius cue filled on hover. */
 const drawLassoPreview = (ctx: Ctx, state: OverlayState): void => {
   const preview = state.lassoPreview;
   if (!preview) {
@@ -390,11 +348,6 @@ const drawLassoPreview = (ctx: Ctx, state: OverlayState): void => {
   ctx.restore();
 };
 
-/**
- * Draws a rect-or-ellipse drag outline in screen space. Shared by the shape tool
- * (previewing the layer it will create) and the marquee tool (previewing the
- * region it will select) — the same dashed outline in both cases.
- */
 const drawRectShapePreview = (ctx: Ctx, state: OverlayState, preview: RectShapePreview | null | undefined): void => {
   if (!preview || preview.rect.width <= 0 || preview.rect.height <= 0) {
     return;
@@ -411,10 +364,6 @@ const drawRectShapePreview = (ctx: Ctx, state: OverlayState, preview: RectShapeP
   ctx.restore();
 };
 
-/**
- * Draws the gradient-tool drag in screen space: the vector with endpoint dots,
- * plus the circle a radial gradient will fill.
- */
 const drawGradientPreview = (ctx: Ctx, state: OverlayState): void => {
   const preview = state.gradientPreview;
   if (!preview) {
@@ -508,10 +457,8 @@ const drawSamGeometry = (ctx: Ctx, state: OverlayState): void => {
 };
 
 /**
- * Draws the bbox overlay shade: a translucent fill over the ENTIRE viewport
- * with the bbox region punched out (even-odd fill rule — the two nested rect paths
- * cancel inside the bbox), dimming everything outside the generation frame. The
- * opacity rides `globalAlpha` so the theme color needs no string surgery.
+ * Even-odd viewport/bbox fill shades outside the generation frame; globalAlpha controls opacity independently of
+ * theme color.
  */
 const drawBboxOverlayShade = (ctx: Ctx, state: OverlayState, target: RasterSurface): void => {
   if (!state.bboxOverlay) {
@@ -528,11 +475,6 @@ const drawBboxOverlayShade = (ctx: Ctx, state: OverlayState, target: RasterSurfa
   ctx.restore();
 };
 
-/**
- * Draws the rule-of-thirds guides: two vertical and two horizontal lines dividing
- * the bbox into thirds (screen space, solid, in the grid color). A composition aid
- * over the generation frame.
- */
 const drawRuleOfThirds = (ctx: Ctx, state: OverlayState): void => {
   if (!state.ruleOfThirds) {
     return;
@@ -583,11 +525,7 @@ export const renderOverlay = (target: RasterSurface, state: OverlayState): void 
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(0, 0, target.width, target.height);
 
-  // The document rect is retired as a visual boundary (unbounded plane), so no
-  // document outline is drawn. The bbox (generation frame) is the primary anchor.
-
-  // The bbox overlay shade first: it dims the composited document outside the
-  // bbox, and every piece of overlay chrome (grid, guides, frame) draws over it.
+  // Shade outside bbox first, then draw overlay chrome above it. The unbounded plane has no document outline.
   drawBboxOverlayShade(ctx, state, target);
 
   // Grid next (behind the bbox), spanning the whole viewport.
@@ -598,9 +536,7 @@ export const renderOverlay = (target: RasterSurface, state: OverlayState): void 
   // Rule-of-thirds guides sit inside the bbox, behind its frame.
   drawRuleOfThirds(ctx, state);
 
-  // Bbox (dashed, distinct color). Drawn as passive chrome unless the setting hides
-  // it (`showBbox === false`); the handles below still render for the bbox tool so
-  // the frame stays editable even when hidden.
+  // Passive bbox visibility is optional; active-tool handles remain editable even when hidden.
   if (state.showBbox ?? true) {
     ctx.strokeStyle = BBOX_COLOR;
     ctx.setLineDash([...BBOX_DASH]);

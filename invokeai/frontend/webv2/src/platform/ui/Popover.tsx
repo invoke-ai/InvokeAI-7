@@ -9,12 +9,7 @@ type PopoverContentProps = ComponentProps<typeof Popover.Content> & {
   showArrow?: boolean;
 };
 
-/**
- * Popover.Content with the anchor arrow baked in, closing with the tree that
- * opened it. Chrome (surface, stroke, shadow, arrow fill) comes from the
- * `popover` slot-recipe override in `theme/recipes.ts`, so consumers stay
- * consistent by construction.
- */
+/** Popover content closes with its owning widget; the theme recipe owns chrome. */
 export const PopoverContent = ({ children, showArrow = true, ...props }: PopoverContentProps) => {
   const popover = usePopoverContext();
   const stale = useRegisterWidgetOverlay(popover.open, popover.setOpen);

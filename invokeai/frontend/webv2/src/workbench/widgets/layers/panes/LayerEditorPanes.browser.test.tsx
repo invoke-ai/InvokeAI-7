@@ -437,8 +437,6 @@ describe('Properties pane', () => {
     const xField = page.getByRole('spinbutton', { exact: true, name: 'X' }).element();
     await act(() => engine!.tools.setTool('bbox'));
     await settle();
-    // Same DOM node: the shared Position group survives the switch, now
-    // editing the frame; the frame's Size and Aspect rows appear.
     expect(page.getByRole('spinbutton', { exact: true, name: 'X' }).element()).toBe(xField);
     await expect.element(page.getByRole('spinbutton', { exact: true, name: 'W' })).toBeVisible();
 
@@ -499,8 +497,6 @@ describe('Properties pane', () => {
     for (const tool of ['eraser', 'view', 'move', 'shape'] as const) {
       await act(() => engine!.tools.setTool(tool));
       await settle();
-      // Same node, same anchor: switching tools swaps rows inside the
-      // section but never unmounts or repositions the section itself.
       expect(host!.querySelector('[role="group"][aria-label="Tool"]')).toBe(section);
       const rect = section.getBoundingClientRect();
       expect(rect.left).toBe(left);

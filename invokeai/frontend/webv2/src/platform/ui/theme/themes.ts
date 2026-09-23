@@ -1,29 +1,11 @@
-export type WorkbenchThemeId = 'classic' | 'light' | 'osakaJade' | 'mono' | 'ultradark';
+export type WorkbenchThemeId = 'classic' | 'light' | 'osakaJade' | 'mono' | 'ultradark' | 'catppuccinMocha';
 
-/**
- * Steps of the neutral ramp. `50` is the lightest, `950` the darkest — the same
- * absolute orientation Chakra/Tailwind use, so the ramp can be aliased onto the
- * built-in `gray` palette without surprises.
- */
+/** Keep the ramp absolute: 50 lightest, 950 darkest, matching Chakra gray. */
 export type NeutralStep = 50 | 100 | 200 | 300 | 400 | 500 | 600 | 700 | 800 | 900 | 950;
 
 /**
- * One workbench theme, expressed as a small set of concrete OKLch values.
- *
- * The bulk of a theme is the `base` ramp — a single neutral scale from which the
- * semantic-token layer in `system.ts` derives every background, foreground, and
- * border (`bg → neutral.950` in dark mode, `fg → neutral.50`, …). Everything else is a
- * handful of seeds:
- *
- *   - `brand` / `accent` — the two identity hues (lime action, blue selection);
- *   - `danger` / `success` / `warning` — status intents;
- *   - `inset` / `fill` / `grid` / `control` — four neutrals whose *elevation rank*
- *     differs from theme to theme, so they cannot sit on a single shared ramp step
- *     (e.g. `inset` recesses below the app background in the light theme but lifts
- *     above it in the dark themes). They are kept as explicit per-theme values and
- *     consumed by name through `bg.inset`, `fg.grid`, `gray.subtle`, `bg.emphasized`.
- *
- * Adding a theme is therefore: author one ramp + the seeds. No component changes.
+ * Themes supply a neutral ramp and hue seeds; inset/fill/grid/control stay explicit because their elevation order
+ * varies by theme.
  */
 export interface ThemeColors {
   /** Neutral ramp, lightest (`50`) → darkest (`950`). Source of all bg/fg/border. */
@@ -57,9 +39,6 @@ export interface ThemeDefinition {
   colors: ThemeColors;
 }
 
-// The slate tint is deliberately even: chroma tracks the ramp smoothly
-// (0.014 → 0.026 → 0.014) instead of the old spike-at-400 curve, and the dark
-// end sits ~2.5% L lower so the chrome reads as slate, not washed graphite.
 const classic: ThemeColors = {
   neutral: {
     50: 'oklch(96% 0.006 264.5)',
@@ -80,16 +59,12 @@ const classic: ThemeColors = {
   success: 'oklch(79.8% 0.1132 141.63)',
   warning: 'oklch(76.62% 0.0612 62.9)',
   inset: 'oklch(18.8% 0.014 264.4)',
-  // Sits ~7% L above the neutral.800 surface like every other dark theme's
-  // fill; matching neutral.800 exactly made ghost hovers invisible on muted
-  // surfaces.
+  // Keep fill visibly above control surfaces so ghost hovers do not disappear.
   fill: 'oklch(36% 0.021 264.3)',
   grid: 'oklch(38.5% 0.022 264.3)',
   control: 'oklch(34% 0.02 264.3)',
 };
 
-// Cool blue-gray neutrals (hue 264, harmonizing with the blue accent): near-white
-// chrome floating on a soft-gray work floor, near-black cool text. Airy and clean.
 const light: ThemeColors = {
   neutral: {
     50: 'oklch(99.4% 0.002 264)',
@@ -115,8 +90,6 @@ const light: ThemeColors = {
   control: 'oklch(93.5% 0.005 264)',
 };
 
-// Jade rather than leaf: the ramp lives on the blue-green side (hue ~180)
-// like stone, with the leafier greens reserved for brand and success.
 const osakaJade: ThemeColors = {
   neutral: {
     50: 'oklch(92% 0.028 178)',
@@ -167,9 +140,6 @@ const mono: ThemeColors = {
   control: 'oklch(27.274% 0 0)',
 };
 
-// True-black floor with faintly cool text: the old light steps carried a
-// green-lime cast that clashed with everything but the brand mark; the ramp
-// now cools toward slate and lets brand lime and sky accent be the color.
 const ultradark: ThemeColors = {
   neutral: {
     50: 'oklch(89% 0.008 250)',
@@ -195,11 +165,34 @@ const ultradark: ThemeColors = {
   control: 'oklch(19% 0.004 250)',
 };
 
-/**
- * Theme registry. Order here is the display order in the Settings picker.
- * `THEMES` is the single source of truth consumed by both the token builder
- * and the settings UI.
- */
+// Catppuccin Mocha palette (https://catppuccin.com), converted from published sRGB; Mauve brand, Blue accent.
+const catppuccinMocha: ThemeColors = {
+  neutral: {
+    50: 'oklch(87.87% 0.0426 272.28)', // Text
+    100: 'oklch(81.68% 0.0403 272.86)', // Subtext1
+    200: 'oklch(75.1% 0.0396 273.93)', // Subtext0
+    300: 'oklch(68.65% 0.0374 274.73)', // Overlay2
+    400: 'oklch(61.76% 0.0367 276)', // Overlay1
+    500: 'oklch(47.65% 0.034 278.64)', // Surface2
+    600: 'oklch(40.37% 0.032 280.15)', // Surface1
+    700: 'oklch(32.4% 0.0319 281.98)', // Surface0
+    800: 'oklch(24.29% 0.0304 283.91)', // Base
+    900: 'oklch(21.55% 0.0254 284.06)', // Mantle
+    950: 'oklch(18.28% 0.0204 284.2)', // Crust
+  },
+  brand: { solid: 'oklch(78.71% 0.1187 304.77)', contrast: 'oklch(18.28% 0.0204 284.2)' }, // Mauve on Crust
+  accent: { solid: 'oklch(76.64% 0.1113 259.88)', contrast: 'oklch(18.28% 0.0204 284.2)' }, // Blue on Crust
+  danger: 'oklch(75.56% 0.1297 2.76)', // Red
+  success: 'oklch(85.77% 0.1092 142.72)', // Green
+  warning: 'oklch(82.37% 0.1015 52.63)', // Peach
+  inset: 'oklch(18.28% 0.0204 284.2)', // Crust
+  // Interpolate fill between Surface0 and Surface1 so hover and badges remain visible on controls.
+  fill: 'oklch(36.4% 0.0319 281.06)',
+  grid: 'oklch(40.37% 0.032 280.15)', // Surface1
+  control: 'oklch(32.4% 0.0319 281.98)', // Surface0
+};
+
+/** Registry order is Settings display order. */
 export const THEMES: ThemeDefinition[] = [
   {
     id: 'classic',
@@ -216,11 +209,11 @@ export const THEMES: ThemeDefinition[] = [
     colors: light,
   },
   {
-    id: 'osakaJade',
-    label: 'Osaka Jade',
-    description: 'Deep jade stone with a cool green accent.',
+    id: 'ultradark',
+    label: 'Ultra Dark',
+    description: 'Pure-black OLED surfaces for low-light rooms.',
     colorScheme: 'dark',
-    colors: osakaJade,
+    colors: ultradark,
   },
   {
     id: 'mono',
@@ -230,11 +223,18 @@ export const THEMES: ThemeDefinition[] = [
     colors: mono,
   },
   {
-    id: 'ultradark',
-    label: 'Ultra Dark',
-    description: 'Pure-black OLED surfaces for low-light rooms.',
+    id: 'osakaJade',
+    label: 'Osaka Jade',
+    description: 'Deep jade stone with a cool green accent.',
     colorScheme: 'dark',
-    colors: ultradark,
+    colors: osakaJade,
+  },
+  {
+    id: 'catppuccinMocha',
+    label: 'Catppuccin Mocha',
+    description: 'Soothing pastel accents on deep violet-gray surfaces.',
+    colorScheme: 'dark',
+    colors: catppuccinMocha,
   },
 ];
 
@@ -278,10 +278,6 @@ export const resolveWorkbenchThemeId = (value: unknown): WorkbenchThemeId | null
 const surfaceOf = (theme: ThemeDefinition): string =>
   theme.colorScheme === 'light' ? theme.colors.neutral[50] : theme.colors.neutral[900];
 
-/**
- * The four representative chips shown in the Settings appearance picker:
- * surface, control fill, brand, accent — a compact read of the theme's identity.
- */
 export const previewSwatches = (theme: ThemeDefinition): [string, string, string, string] => [
   surfaceOf(theme),
   theme.colors.control,

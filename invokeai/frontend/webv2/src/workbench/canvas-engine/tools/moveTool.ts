@@ -1,38 +1,11 @@
 /**
- * The move tool: drag to move the SELECTED layer group, or the selected PIXELS.
+ * Move targets panel selection, never stack hit tests. Dragging inside selection, or an existing float, moves
+ * pixels across multiple drags until commit/cancel; otherwise move eligible selected layers with a primary-layer
+ * fallback.
  *
- * Interaction contract:
- * - **The layers panel is the sole authority on which layer is active.** The move
- *   tool never hit-tests the stack to pick a target and never dispatches
- *   `setCanvasSelectedLayer`. Clicking canvas pixels that belong to some other
- *   layer does not steal the selection, and clicking empty space does not clear
- *   it — an editor where the pointer silently re-targets is the behaviour this
- *   contract exists to prevent.
- * - **Click** (press+release under the drag threshold): a no-op.
- * - **Drag inside a live selection** — or with a float already in flight —
- *   moves the selected PIXELS: the first such drag cuts them out of the selected
- *   layer into a floating selection that follows the pointer, leaving a hole.
- *   The float stays live across further drags until it is committed (Enter,
- *   deselect, tool switch — one undo entry for the whole move) or cancelled
- *   (Escape). This is the Photoshop feel: ants present and the press inside them
- *   moves pixels; otherwise the press moves the layer.
- * - **Drag anywhere else**: moves every panel-selected layer together, when all
- *   are enabled and unlocked. The document's `selectedLayerId` remains the
- *   primary target and a stale selection falls back to that layer alone.
- *   Pointer-move only sets transient transform overrides (live preview) — it
- *   never dispatches.
- * - **`shift`** constrains motion to the dominant axis, for both modes.
- * - **Snap**: with the snap-to-grid setting on, a LAYER drag lands its origin on
- *   the model grid (the one the overlay draws); hold **alt** to bypass. Moving
- *   PIXELS never snaps — a float's transform is layer-local, so document-space
- *   grid math would skew it on a rotated or scaled layer.
- * - **Commit** (pointer-up after a real layer move): one `commitStructural` with
- *   the new/old transform x/y. A zero-delta drag commits nothing. Moving a float
- *   commits nothing here — the float's own commit does that later.
- * - **Cancel** (Esc / pointercancel): drops the layer override or reverts the
- *   float to where this drag started. Neither dispatches.
- *
- * Zero React, zero import-time side effects.
+ * Shift locks the dominant axis. Layer movement uses the visible model grid unless Alt bypasses; local-space
+ * floats never snap. Preview only during drag; changed layer moves commit once, float history waits for its later
+ * bake. Cancel restores the drag start; clicks/zero movement do nothing.
  */
 
 import type { CanvasLayerContract } from '@workbench/canvas-engine/contracts';
@@ -94,10 +67,7 @@ export const createMoveTool = (): Tool => {
     state = null;
   };
 
-  /**
-   * The drag target is the document's selected layer, and nothing else — the
-   * press point plays no part in choosing it.
-   */
+  /** Target comes solely from document selection, regardless of press location. */
   const selectedDraggableLayers = (
     ctx: ToolContext
   ): { layers: readonly CanvasLayerContract[]; primaryId: string | null } => {
@@ -161,11 +131,7 @@ export const createMoveTool = (): Tool => {
       input.modifiers.shift
     );
 
-  /**
-   * Where a layer drag puts the layer's origin, snapped to the grid unless the
-   * setting is off or alt bypasses it. Shared by the live preview and the commit
-   * so the layer lands exactly where the drag showed it.
-   */
+  /** Share snapped layer-origin calculation between preview and commit; Alt or settings may bypass. */
   const nextLayerPosition = (
     ctx: ToolContext,
     origin: { x: number; y: number },
@@ -208,8 +174,7 @@ export const createMoveTool = (): Tool => {
       endGesture();
     },
     onKeyCommand: (ctx, command) => {
-      // Enter banks a float in place. Escape's abandon runs on the engine's own
-      // ladder (it must work whichever tool is active), so it is not handled here.
+      // Enter commits the float; engine Escape abandons it regardless of active tool.
       if (command === 'apply' && !state) {
         ctx.commitFloatingSelection?.();
       }
@@ -265,8 +230,7 @@ export const createMoveTool = (): Tool => {
         return;
       }
       if (current.mode.kind === 'float') {
-        // The float keeps the drag; it bakes later, as one entry for the whole
-        // move however many drags it took. Floats never snap — see the header.
+        // Retain float movement for one eventual history entry across drags; floats never snap.
         applyDelta(ctx, current, input);
         return;
       }
@@ -276,8 +240,7 @@ export const createMoveTool = (): Tool => {
       const effectiveDelta = { x: primaryNext.x - primary.origin.x, y: primaryNext.y - primary.origin.y };
 
       if (effectiveDelta.x === 0 && effectiveDelta.y === 0) {
-        // Nothing moved — either a zero-delta drag, or a drag whose snapped
-        // result landed back on the origin. Drop the preview, commit nothing.
+        // Drop zero-result previews, including movement snapped back to origin, without committing.
         for (const target of current.mode.targets) {
           ctx.setLayerTransformOverride(target.id, null);
         }

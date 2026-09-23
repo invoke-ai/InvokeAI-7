@@ -89,9 +89,8 @@ describe('GenerateCanvasScalingSection', () => {
     await render();
     expect(shownSize()).toEqual([1280, 720]);
 
-    // TI2V-5B takes multiples of 32; its base row says 16, on which 720 would still sit. The section
-    // used to drop the variant and to latch its first answer, and either kept showing 1280x720 while
-    // `compileCanvasGraph` generated at a different height.
+    // TI2V-5B requires grid 32 rather than its base's 16; preserve variant and capability updates so shown and
+    // compiled sizes agree.
     await act(() => {
       setArchitectureCapabilities(architectureCapabilitiesFixture);
     });

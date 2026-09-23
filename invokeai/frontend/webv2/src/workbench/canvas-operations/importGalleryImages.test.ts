@@ -627,9 +627,8 @@ describe('importGalleryImagesToCanvas', () => {
 
   it('does not upload an old account image after local preprocessing crosses an account switch', async () => {
     accountLifecycle.activate('user-a');
-    // Activating an account drops the capability table with the rest of the previous account's
-    // state; the app reloads it for the incoming one. Resized imports are refused without it, and
-    // this test is about the account fence, not that gate.
+    // Reseed capabilities after the account reset so this test reaches the account fence rather than the resize
+    // gate.
     setArchitectureCapabilities(architectureCapabilitiesFixture);
     const { project, state } = withProject();
     let resolveFetch: ((response: Response) => void) | undefined;
@@ -739,9 +738,7 @@ describe('importGalleryImagesToCanvas', () => {
 
 describe('importGalleryImagesToCanvas with a table that does not describe the architecture', () => {
   it('refuses a resized import rather than uploading at fallback dimensions for that model', async () => {
-    // A backend build that has no row for the project's architecture answers with the same fallback
-    // 1024 / grid 8 for that one model as a missing table does for all of them, and the upload is
-    // just as irreversible.
+    // A missing architecture row produces the same unsafe resize defaults as a missing table.
     const { project, state } = withProject((value) => setModel(value, 'sd-1'));
     const fetchImage = vi.fn<typeof fetch>();
     const uploadImage = vi.fn<typeof uploadCanvasImage>();
@@ -766,10 +763,8 @@ describe('importGalleryImagesToCanvas with a table that does not describe the ar
 
 describe('importGalleryImagesToCanvas before the capability table arrives', () => {
   it('refuses a resized import rather than uploading at fallback dimensions', async () => {
-    // The resize target is the model's native size and grid, and this is the one import path whose
-    // mistake cannot be taken back: the asset is uploaded and becomes a layer. With no table every
-    // architecture reads as 1024 / grid 8, so an SD-1 project would upload four times the area it
-    // asked for. Nothing re-derives it afterwards.
+    // Require native size/grid policy before the irreversible resize upload; fallback dimensions would persist the
+    // wrong asset.
     const { project, state } = withProject((value) => setModel(value, 'sd-1'));
     const fetchImage = vi.fn<typeof fetch>();
     const uploadImage = vi.fn<typeof uploadCanvasImage>();
@@ -786,8 +781,7 @@ describe('importGalleryImagesToCanvas before the capability table arrives', () =
       uploadImage,
     });
 
-    // Its own status, not 'blocked' -- that one tells the user to finish an operation they
-    // did not start, and gives them nothing to act on.
+    // Use a distinct status: blocked incorrectly asks the user to finish an operation.
     expect(result).toEqual({ status: 'capabilities-unavailable' });
     expect(fetchImage).not.toHaveBeenCalled();
     expect(uploadImage).not.toHaveBeenCalled();

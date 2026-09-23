@@ -12,7 +12,7 @@
 
 ## Review
 
-<!-- Summarize material findings resolved and the final blocker-only review result. For agent-assisted work, identify independent review focuses or disclose the self-review fallback. Do not attach review transcripts or work logs. -->
+<!-- Summarize material findings resolved and remaining risks or limitations. If there were no material findings, say so briefly. Omit subagent counts, review tiers, and review-process narration. Do not attach review transcripts or work logs. -->
 
 ## Compatibility / Rollout
 

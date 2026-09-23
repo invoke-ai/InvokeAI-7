@@ -624,8 +624,7 @@ describe('queueCoordinator', () => {
   });
 
   it('keeps the followed slot and its last frame across a connection drop', async () => {
-    // The run continues on the backend; the sweep reconciles its outcome. Wiping
-    // the frame here only ever produced a blank card until the next event.
+    // Keep the frame while disconnected; the backend continues and reconciliation finds its outcome.
     harness.coordinator.connect();
     await harness.coordinator.submitGenerate('local-1', generateRequest);
     harness.socket.fire('invocation_progress', {
@@ -642,8 +641,7 @@ describe('queueCoordinator', () => {
   });
 
   it('sweeps outstanding items when the tab becomes visible again', async () => {
-    // A hidden tab's socket is dropped by the server and socket.io reconnects on
-    // its own backoff; the visibility edge itself reconciles the outcome first.
+    // Visibility must reconcile immediately without waiting for socket reconnect backoff.
     const listeners = new Map<string, () => void>();
 
     vi.stubGlobal('document', {
@@ -884,8 +882,7 @@ describe('queueCoordinator', () => {
     expect(harness.callbacks.onBackendItemComplete).toHaveBeenCalledWith('local-1', 1);
     // Held before routing started, so the finished image can swap in over it.
     expect(harness.progressImage.hold).toHaveBeenCalledWith({ itemIndex: 1, queueItemId: 'local-1' });
-    // The slot stays followed (settling) rather than dropping Preview back onto
-    // the previous selection while the finished image is still two round trips away.
+    // Follow settling slots until finished-image routing completes instead of reverting to the old selection.
     expect(harness.activeProgressTarget.settle).toHaveBeenCalledWith({ itemIndex: 1, queueItemId: 'local-1' });
     expect(harness.activeProgressTarget.clear).not.toHaveBeenCalled();
     expect(harness.progressImage.clear).not.toHaveBeenCalled();
@@ -1160,8 +1157,6 @@ describe('queueCoordinator', () => {
 
     await harness.coordinator.submitGenerate('local-1', generateRequest);
 
-    // No slot is executing yet, so no active index is published — queued
-    // items must never present as live.
     expect(harness.progressEntries.get('local-1')).toEqual({
       activeItemIndex: undefined,
       completedItemCount: 0,
@@ -1188,8 +1183,7 @@ describe('queueCoordinator', () => {
 
     harness.socket.fire('queue_item_status_changed', createStatusEvent({ item_id: 1 }));
 
-    // Between slots the item is idle again: completion is tracked, but no
-    // active index until the next progress event arrives.
+    // Clear active slot index between items while preserving completion tracking.
     expect(harness.progressEntries.get('local-1')).toEqual({
       activeItemIndex: undefined,
       completedItemCount: 1,
@@ -1417,14 +1411,8 @@ describe('queueCoordinator', () => {
       expect(harness.api.listItems).not.toHaveBeenCalled();
     });
 
-    // Review fix (Task 38, finding 3): the prior "Risk-4" coverage only asserted
-    // the parse primitive (`parseQueueItemOrigin(utilityOrigin) === null`) in
-    // isolation. This drives the REAL `reconcile` path with a completed,
-    // result-carrying `webv2:util:<uuid>`-origin backend item mixed into a live
-    // `listItems` response, proving the coordinator itself — not just the
-    // helper it calls — never adopts it into a project queue item (which is the
-    // only way a utility item's images could ever reach `routeQueueItemResults`
-    // and land in canvas staging or the gallery).
+    // Exercise real reconciliation with a completed utility item to prove it cannot enter project adoption or
+    // result routing.
     it('never adopts a completed, result-carrying utility-origin item into a project queue item', async () => {
       harness.api.listItems.mockResolvedValue([
         createQueueBackendItem({
@@ -1437,10 +1425,7 @@ describe('queueCoordinator', () => {
 
       const outcomes = await harness.coordinator.reconcile([{ id: 'local-1', status: 'pending' }]);
 
-      // The utility item parses to no local queue item id, so it can never be
-      // bucketed under 'local-1' by origin: the pending project item finds no
-      // backend trace of its own and is asked to enqueue fresh — never
-      // "adopted" with the utility item's id, and never routed anywhere.
+      // Utility origins cannot satisfy a pending project's backend trace; enqueue that project item fresh.
       expect(outcomes.get('local-1')).toEqual({ kind: 'enqueue' });
       expect(harness.api.getResultImages).not.toHaveBeenCalled();
       expect(harness.api.getItem).not.toHaveBeenCalledWith(99);
@@ -1453,8 +1438,6 @@ describe('queueCoordinator', () => {
     await harness.coordinator.submitGenerate('local-1', generateRequest);
     const resultsPromise = harness.coordinator.waitForResults('local-1', '2026-06-10T00:00:00Z');
 
-    // The completion event was lost to a disconnect; the reconnect sweep
-    // re-checks every outstanding item.
     harness.api.getItem.mockResolvedValue(createQueueBackendItem({ id: 1, status: 'completed' }));
     harness.socket.fire('connect', undefined);
 

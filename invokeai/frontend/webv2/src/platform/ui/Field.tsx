@@ -6,11 +6,6 @@ import { FeatureHint } from '@platform/ui/hints';
 import { fieldLabelRecipe } from '@theme/recipes';
 import { useMemo } from 'react';
 
-/**
- * The shared, theme-aware uppercase field label. Backed by `fieldLabelRecipe` so
- * every form across the workbench renders an identical label without repeating
- * the same five style props inline.
- */
 export const FieldLabel = ({ children }: { children: ReactNode }) => {
   const recipe = useRecipe({ recipe: fieldLabelRecipe });
 
@@ -68,12 +63,8 @@ export const Field = ({
         : undefined,
     [id]
   );
-  // The hint wraps the label's *text*, never the `ChakraField.Label` itself:
-  // the hover-card trigger stamps its own `id` on whatever element it is given,
-  // which would clobber the id that every control's `aria-labelledby` points at
-  // and leave the control with no accessible name. A conditional render, not a
-  // conditional hook — `FeatureHint` owns the context read and returns its child
-  // untouched when hints are off.
+  // Wrap label text only: the hint trigger overwrites its child's ID and would break aria-labelledby on the label
+  // itself.
   const labelContent = (
     <ChakraField.Label css={recipe()}>
       {hint ? (

@@ -168,8 +168,7 @@ describe('getGalleryDeletionSuccessor', () => {
   });
 
   it('stays in the regular block when starred-first names lead the list', () => {
-    // Regression: the old earlier-first walk crossed the section boundary, so
-    // deleting the first regular item selected the LAST STARRED item.
+    // Deleting a section's first item must not select the preceding section's last starred item.
     const orderedRefs = [ref('starred-1'), ref('starred-2'), ref('regular-1'), ref('regular-2')];
 
     expect(selection.getGalleryDeletionSuccessor(orderedRefs, 'image:regular-1', keys('regular-1'))).toEqual(
@@ -191,9 +190,7 @@ describe('getGalleryNavigationStep', () => {
   const item = (name: string, starred = false): GalleryItem => ({ ...imageItem, name, starred });
   const session = (id: string, navigable = true) => ({ id, kind: 'session' as const, navigable });
   const entry = (name: string, starred = false) => ({ item: item(name, starred), kind: 'item' as const });
-  // Three columns: two in-progress rows (the second one a lone running tile
-  // beside nothing), a strip of five (a full row plus a partial one), then
-  // four listing items.
+  // Sections have partial rows: four in-progress, five starred, then four listing items across three columns.
   const sections = [
     [session('p0'), session('p1', false), session('p2'), session('p3')],
     ['s0', 's1', 's2', 's3', 's4'].map((name) => entry(name, true)),

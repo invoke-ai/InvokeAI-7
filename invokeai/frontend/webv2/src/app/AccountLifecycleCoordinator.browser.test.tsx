@@ -75,9 +75,7 @@ const sessionStore = vi.hoisted(() => {
 
 vi.mock('@features/identity', async () => {
   const React = await import('react');
-  // Modules outside this test's mock map (reached via other import specifiers)
-  // still bind real identity exports — spread them so the mock only overrides
-  // what the test drives instead of rotting on every new identity export.
+  // Preserve real identity exports; override only those driven by this test.
   const actual = await vi.importActual<typeof identityModule>('@features/identity');
 
   return {
@@ -211,9 +209,8 @@ describe('authenticated route account lifecycle', () => {
     sessionStore.setSnapshot(signedInSession(1));
     const { router } = await import('./router');
 
-    // The provider drives this load. It installs the router's transition hook
-    // and leaves it in place on unmount, so a pre-render `router.load()` on the
-    // router the previous test rendered would wait for a commit that never comes.
+    // Let RouterProvider load: a reused router's retained transition hook would wait forever for a pre-render
+    // commit.
     host = document.createElement('div');
     document.body.append(host);
     root = createRoot(host);

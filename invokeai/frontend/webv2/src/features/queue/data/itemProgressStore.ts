@@ -3,15 +3,8 @@ import { registerAccountOwnedResource } from '@platform/state/accountLifecycle';
 import { createExternalStore, createKeyedTransientStore } from '@platform/state/externalStore';
 
 /**
- * Live progress for in-flight queue items keyed by the backend `item_id`. The
- * sibling `progressStore` keys by the *local* submission id, which only exists
- * for items this client enqueued; the Queue widget shows the whole server queue,
- * so its NOW & NEXT card needs progress addressable by the backend id carried on
- * the socket's `invocation_started`/`invocation_progress` events.
- *
- * Being keyed by item id is also what makes multi-GPU work: with
- * `generation_devices` (default `auto`) the backend runs one session per GPU, so
- * several items report progress at once and each needs its own entry.
+ * Key progress by backend item ID for server-wide and concurrent GPU work; local submission IDs cannot identify
+ * other clients' items.
  */
 
 export interface ItemProgress {
@@ -26,14 +19,8 @@ export interface ItemProgress {
 const progressByItemId = createKeyedTransientStore<number, ItemProgress>();
 
 /**
- * The ids with live progress, ascending — a stable top-to-bottom order for stacked
- * progress bars and tiled previews (ascending item id is submission order).
- *
- * Deliberately separate from the keyed store: consumers subscribe to *which* items
- * are running here, and to a single item's progress via `useItemProgress`, so one
- * session's step does not re-render another session's tile. Maintained from the
- * mutation points below rather than derived from the keyed store, whose `entries()`
- * allocates a fresh array per call and so cannot serve as a cached snapshot.
+ * Keep a stable sorted ID snapshot separate from per-item progress so one session's steps do not rerender other
+ * tiles.
  */
 const activeItemIdsStore = createExternalStore<{ itemIds: number[] }>({ itemIds: [] });
 

@@ -53,6 +53,7 @@ import {
 } from './holdToDragSensor';
 import { WorkbenchNotificationToaster } from './notifications';
 import { LeftPanel, RightPanel } from './Panels';
+import { PasteMediaRuntime } from './PasteMediaRuntime';
 import { ProjectConflictBanner } from './ProjectConflictBanner';
 import { QueueRecoveryBanner } from './QueueRecoveryBanner';
 import { StatusBar } from './StatusBar';
@@ -61,14 +62,8 @@ import { TopBar } from './topbar';
 const DND_MODIFIERS = [restrictToWindowEdges];
 
 /**
- * Default 20% edge zones, at half the default scroll speed. The zones must
- * stay full-size: in the side layout the board list is under 250px tall, so
- * a narrower band excludes the first and last visible rows — the places an
- * image is actually held to scroll the list. Speed is halved because at
- * dnd-kit's default a list this small dumps its full range in under half a
- * second, far too fast to pick a row. Phantom off-screen targets triggering
- * scrolls from afar are prevented by the visibility check inside
- * widgetCollisionDetection, not by shrinking zones.
+ * Keep 20% edge zones for short board lists but halve scrolling speed. Collision visibility checks exclude
+ * offscreen targets rather than narrowing usable zones.
  */
 const DND_AUTO_SCROLL = { acceleration: 5 };
 const EMPTY_FLOATING: NonNullable<Project['floatingWidgets']> = {};
@@ -83,8 +78,6 @@ export const WorkbenchShell = () => {
   const floatingWidgets = useActiveProjectSelector((project) => project.floatingWidgets ?? EMPTY_FLOATING);
   const placementProject = useActiveProjectSelector(getWidgetPlacementProject, areWidgetPlacementProjectsEqual);
   const sensors = useSensors(
-    // `PrimaryMouseSensor`/`HoldToDragSensor` replace the stock `PointerSensor`:
-    // see holdToDragSensor.ts for why touch gestures need the hold gate.
     useSensor(PrimaryMouseSensor, { activationConstraint: { distance: 6 } }),
     useSensor(HoldToDragSensor, {
       activationConstraint: { delay: TOUCH_DRAG_HOLD_DELAY_MS, tolerance: TOUCH_DRAG_MOVE_TOLERANCE_PX },
@@ -199,8 +192,7 @@ export const WorkbenchShell = () => {
     [placementProject, widgets]
   );
   const handleDragCancel = useCallback(() => setActiveDrag(null), []);
-  // A floating slot's click is the rail-side dock control, the mirror of the
-  // window's own; the drafts flush for the same reason that control's does.
+  // Flush drafts before rail-side docking, as the window's dock control does.
   const handleSelect = useCallback(
     (region: WidgetBarGroup['region'], instanceId: string) => {
       if (floatingWidgets[instanceId]) {
@@ -308,9 +300,7 @@ export const WorkbenchShell = () => {
             <VisuallyHidden as="h1" id="workbench-project-heading">
               {projectName}
             </VisuallyHidden>
-            {/* Not a tab panel any more: the project tab strip became a
-                dropdown, so there is no tab list for this to belong to. It is
-                the project's content region, named by the heading above it. */}
+            {/* Use a named content region: the project switcher is no longer a tablist. */}
             <Flex
               aria-labelledby="workbench-project-heading"
               flex="1"
@@ -348,11 +338,11 @@ export const WorkbenchShell = () => {
         </Flex>
         <FloatingWidgetLayer />
         <GalleryDragCursor />
-        {/* The overlay renders whenever anything is being dragged, even with no
-            preview to show — and it is a fixed, full-size div over the dragged
-            element. Without this it swallows every pointer event aimed at what
-            is underneath, which is how a second finger meant for the preview's
-            pinch never reaches the preview. */}
+        <PasteMediaRuntime />
+        {/*
+         * Allow pointer events through the full-size drag overlay so another finger can reach Preview pinch
+         * handlers.
+         */}
         <DragOverlay style={DRAG_OVERLAY_STYLE}>
           {activeDrag ? <WidgetDragPreview activeDrag={activeDrag} /> : null}
         </DragOverlay>

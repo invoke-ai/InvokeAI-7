@@ -62,9 +62,7 @@ export const useSystemPrompts = ({ isEnabled = true }: { isEnabled?: boolean } =
 
   const update = useCallback(
     (prompt: SystemPromptRecord, draft: SystemPromptDraft) => {
-      // Mirrors the affordance so a mis-rendered edit control fails here rather than as a 403 --
-      // and so the one case the API would allow but this UI does not, another user's private
-      // prompt, cannot be reached from the client at all.
+      // Enforce UI privacy policy at mutation time even when admin API rights are broader.
       requireEditableSystemPrompt(prompt, authority);
       return runAndInvalidate(() => updateSystemPrompt(prompt.id, draft));
     },
@@ -77,8 +75,7 @@ export const useSystemPrompts = ({ isEnabled = true }: { isEnabled?: boolean } =
         createSystemPrompt({
           content: prompt.content,
           maxTokens: prompt.maxTokens,
-          // Taken from the list the viewer can see, which is the same list the new name has to
-          // be distinguishable in.
+          // Resolve duplicate names within the viewer's visible list.
           name: buildDuplicateName(
             prompt.name,
             classified.prompts.map((visible) => visible.name)

@@ -146,8 +146,7 @@ export const ResizableTextarea = ({
         <ScrollArea.Viewport asChild role="textbox">
           <Textarea ref={textareaRef} resize="none" {...textareaProps} />
         </ScrollArea.Viewport>
-        {/* zag skips scrollbar re-measurement entirely without a content element;
-            the textarea is the viewport, so park an empty one for its observer. */}
+        {/* Zag needs a content element to remeasure; the textarea itself is the viewport. */}
         <ScrollArea.Content h="0" minW="0" overflow="hidden" position="absolute" />
         <ScrollArea.Scrollbar>
           <ScrollArea.Thumb />

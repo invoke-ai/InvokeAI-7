@@ -17,11 +17,6 @@ interface GenerateFieldContextMenuProps {
   resetLabel?: string;
 }
 
-/**
- * Desktop-grade right-click on a model-governed field: Reset to model default
- * and Copy value, anchored at the pointer. Wraps the field without affecting
- * its layout; left-click behavior is untouched.
- */
 export const GenerateFieldContextMenu = ({
   children,
   copyValue,

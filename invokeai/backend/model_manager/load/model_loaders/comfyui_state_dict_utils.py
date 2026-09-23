@@ -21,24 +21,6 @@ from invokeai.backend.quantization.int8_convrot import reject_int8_layers_a_plai
 from invokeai.backend.quantization.nvfp4 import reject_nvfp4_layers_a_plain_fold_cannot_decode
 
 
-def _strip_comfyui_prefix(sd: dict) -> dict:
-    """Strip ComfyUI-style `model.diffusion_model.` / `diffusion_model.` prefixes from keys."""
-    prefix_to_strip = None
-    for prefix in ["model.diffusion_model.", "diffusion_model."]:
-        if any(k.startswith(prefix) for k in sd.keys() if isinstance(k, str)):
-            prefix_to_strip = prefix
-            break
-    if prefix_to_strip is None:
-        return sd
-    stripped: dict = {}
-    for key, value in sd.items():
-        if isinstance(key, str) and key.startswith(prefix_to_strip):
-            stripped[key[len(prefix_to_strip) :]] = value
-        else:
-            stripped[key] = value
-    return stripped
-
-
 def _dequantize_comfyui_fp8(sd: dict, compute_dtype: torch.dtype, what: str = "This checkpoint") -> int:
     """Dequantize ComfyUI-style fp8_scaled weights in-place. Returns count of dequantized tensors.
 

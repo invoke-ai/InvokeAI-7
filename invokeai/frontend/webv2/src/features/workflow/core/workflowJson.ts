@@ -14,18 +14,14 @@ import type {
 import { createWorkflowForm, createWorkflowId } from './document';
 
 /**
- * Import/export between the project graph document and the legacy WorkflowV3
- * JSON format — the format used by workflow files, image-embedded workflows,
- * and the backend workflow library. Parsing is tolerant: recoverable problems
- * (unknown elements and dangling edges) become warnings instead of failures.
+ * Round-trip legacy WorkflowV3 files, metadata, and library records; recover unknown elements and dangling edges
+ * as warnings.
  */
 
 const zXYPosition = z.object({ x: z.number().catch(0), y: z.number().catch(0) }).catch({ x: 0, y: 0 });
 
-// `seedMode` is this workbench's extension of the field instance. The legacy
-// editor parses instances through a stripping schema, so a workflow it re-saves
-// comes back without the key — every seed reads as fixed again, which is the
-// legacy behaviour rather than a corrupted value.
+// Legacy schemas strip seedMode; reimport then defaults to fixed rather than treating the missing extension as
+// corruption.
 const zFieldInstance = z.object({
   description: z.string().optional().catch(undefined),
   descriptionOverride: z.boolean().optional().catch(undefined),
@@ -476,10 +472,8 @@ export const hasMultipleWorkflowReturnNodes = (document: ProjectGraphState): boo
   document.nodes.filter((node) => node.type === 'invocation' && node.data.type === 'workflow_return').length > 1;
 
 /**
- * Serializes the queue/image-metadata projection of a document.
- * Runtime-only dynamic templates and current-image decorations must not
- * leak into the workflow embedded in a submission. Loop linkage remains
- * intact so webv2 can recall the workflow from generated images.
+ * Exclude runtime templates and current-image decorations from submitted workflow metadata while preserving
+ * recallable loop links.
  */
 export const serializeWorkflowJsonForSubmission = (document: ProjectGraphState): Record<string, unknown> => {
   const serialized = serializeWorkflowJson(document);

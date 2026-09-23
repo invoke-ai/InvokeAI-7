@@ -233,8 +233,6 @@ describe('feature public-interface registry', () => {
     expect(checkDependency('features/gallery/ui/View.tsx', '@features/queue/publicApi')).toMatchObject([
       { rule: 'feature-public-interface' },
     ]);
-    // Workbench resolves prompt expansion before submitting, so it reads
-    // Generation's prompt cache through the public entry module.
     expect(checkDependency('workbench/invocationSubmit.ts', '@features/generation/prompts')).toEqual([]);
     expect(checkDependency('app/GenerateWidgetSyncRuntime.tsx', '@features/generation/runtime')).toEqual([]);
     expect(checkDependency('workbench/widgets/canvas/invoke.ts', '@features/generation/canvasGraph')).toEqual([]);

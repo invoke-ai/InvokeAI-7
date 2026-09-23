@@ -36,9 +36,8 @@ import {
 } from './imageRecall';
 
 /**
- * Replaces the project graph with the workflow embedded in `image`. The editor's
- * always-mounted chrome consumes the request, so `openWorkflowEditor` runs first to
- * mount it in layouts that had it hidden; a `false` result means nowhere to load.
+ * Open the workflow editor before requesting replacement with the image's embedded graph; false means no editor
+ * can consume it.
  */
 export const executeLoadImageWorkflow = async ({
   image,

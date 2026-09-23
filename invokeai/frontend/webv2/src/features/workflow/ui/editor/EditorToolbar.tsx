@@ -15,14 +15,8 @@ import {
 import { useCallback, useId, useMemo } from 'react';
 
 /**
- * The editor's single tool strip, docked to the left edge and topped out
- * directly beneath the region's floating chrome islands: interaction tools on
- * top (legacy-toolbar style), viewport actions and the node-opacity slider
- * below.
- * - pan: dragging the pane moves the viewport (Shift-drag still box-selects)
- * - box-select: dragging the pane draws a selection rectangle (middle-mouse pans)
- * - lasso: dragging the pane draws a freeform selection
- * - eraser: clicking nodes or edges deletes them
+ * Pane drag follows the selected pan/box/lasso tool; eraser clicks delete. Shift selects while panning, and middle
+ * mouse pans during box selection.
  */
 export type EditorTool = 'pan' | 'box-select' | 'lasso' | 'eraser';
 
@@ -89,12 +83,10 @@ export const EditorToolbar = ({
         <Popover.Root ids={opacityIds} positioning={POPOVER_POSITIONING}>
           <Tooltip content="Node opacity" ids={opacityIds} positioning={TOOLTIP_POSITIONING}>
             <Popover.Trigger asChild>
-              {/* Matches what `ToolbarButton` renders rather than being one:
-                  `Popover.Trigger asChild` would clone that component's Tooltip
-                  wrapper instead of the button. Size is load bearing — `Toolbar`
-                  is a column Stack, so it stretches every sibling to the widest
-                  child, and one `sm` button here once widened the whole strip
-                  past the `xs` squares. */}
+              {/*
+               * Render a plain button because asChild would clone ToolbarButton's Tooltip wrapper. Match xs sizing
+               * so one child cannot stretch the column.
+               */}
               <IconButton
                 aria-label="Node opacity"
                 aria-pressed={nodeOpacity < 1}

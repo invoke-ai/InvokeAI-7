@@ -7,10 +7,8 @@ import {
 import { getLibraryWorkflow, listLibraryWorkflows, type ListWorkflowsParams, type WorkflowLibraryPage } from './api';
 
 /**
- * Session-lived cache in front of the workflow library API. The library
- * dialog opens instantly on cached pages and revalidates in the background;
- * any local mutation (save/delete) invalidates everything since it shifts
- * ordering and pagination.
+ * Serve cached library pages immediately and revalidate; local mutations invalidate ordering and pagination
+ * together.
  */
 
 const pageCache = new Map<string, WorkflowLibraryPage>();

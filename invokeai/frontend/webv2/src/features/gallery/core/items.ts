@@ -35,11 +35,7 @@ export interface GalleryVideoItem extends GalleryItemBase {
   durationSeconds: number;
   fps?: number;
   kind: 'video';
-  /**
-   * How the video entered the gallery, when the server marked it. `'audio_upload'` means an
-   * uploaded audio file the ingest converter wrapped into a rendered-waveform video — its
-   * frames are a picture of the sound, not footage.
-   */
+  /** `audio_upload` identifies audio converted into a waveform video rather than footage. */
   mediaOrigin?: string;
 }
 
@@ -91,12 +87,8 @@ export const assertNeverGalleryItem = (item: never): never => {
 const compareSqliteBinaryText = (a: string, b: string): number => (a === b ? 0 : a < b ? -1 : 1);
 
 /**
- * Chronological comparison across the two timestamp shapes the gallery mixes:
- * backend rows carry SQLite's `created_at` ("2026-08-29 13:01:20.649") while
- * overlaid recents carry the queue's `submittedAt` (ISO, "2026-08-29T02:28:40.566Z").
- * Comparing the raw strings reads the 'T' separator as later than every
- * space-separated time on the same day, so an older overlaid recent would sort
- * above every newer backend image (and below them, with ascending order).
+ * Normalize SQLite and ISO timestamps before comparing; their space/T separators otherwise misorder same-day
+ * items.
  */
 const compareCreatedAt = (a: string, b: string): number =>
   compareSqliteBinaryText(normalizeServerTimestamp(a), normalizeServerTimestamp(b));
@@ -172,30 +164,11 @@ export const formatGalleryVideoDuration = (durationSeconds: number): string => {
   return `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
 };
 
-/**
- * The media formats a gallery upload accepts, and the two things every upload surface needs
- * from them: the file input's `accept` list and the kind a picked or dropped file uploads as.
- *
- * Both derive from one table so a picker cannot offer less than the upload route takes — the
- * `accept` list and the classifier drifting apart is what left the gallery picker MP4-only
- * while the video panel's reference picker took every format the server ingests.
- *
- * It lives here rather than in a module of its own on purpose: every upload surface is in the
- * editor's initial graph, and a separate module is shared across enough chunk boundaries that
- * Rolldown emits it standalone — an extra initial request, which the architecture budget pins
- * exactly and refuses at any size. `items.ts` is already in that graph's `gallery-state` chunk.
- */
+/** Share upload acceptance and classification here to prevent drift without adding an initial bundle request. */
 
 /**
- * Accepted for each kind in the browser's own terms. The server normalizes every accepted
- * upload to H.264 MP4 at ingest — foreign containers/codecs (.mov, HEVC, …) are remuxed or
- * transcoded and audio files are wrapped into waveform videos — so audio uploads as 'video'.
- *
- * Video and audio use wildcards, which the server backs with its own prefix check. Images do
- * not: the image route takes anything PIL can open and re-encodes it, but offering only the
- * three formats the app round-trips losslessly is a deliberate (and unchanged) narrowing. The
- * extension lists mirror the video upload route's and are the fallback for a file whose type
- * the OS could not map, which the browser then offers as application/octet-stream.
+ * Audio uploads become waveform videos. Video/audio MIME wildcards mirror server checks; extensions cover unknown
+ * MIME types. Images deliberately offer only round-trippable formats.
  */
 const GALLERY_UPLOAD_FORMATS: Record<GalleryItemKind, { extensions: readonly string[]; mimes: readonly string[] }> = {
   image: {
@@ -232,11 +205,8 @@ const GALLERY_UPLOAD_FORMATS: Record<GalleryItemKind, { extensions: readonly str
 };
 
 /**
- * Ordered so a kind added later classifies after the existing ones. Kept as a literal
- * rather than `Object.keys`: everything at this module's top level must stay a plain
- * declaration the bundler can drop, or the barrels that re-export `items.ts` are retained
- * in the editor's initial chunks. That is also why nothing here is precomputed into a Map —
- * classification runs once per picked file, so a scan of ~30 entries costs nothing.
+ * Keep top-level declarations tree-shakeable; scanning the small format table avoids retaining this module's
+ * barrels.
  */
 const GALLERY_UPLOAD_KINDS = ['image', 'video'] as const;
 

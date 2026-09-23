@@ -112,9 +112,7 @@ describe('buildQueueRecallValues', () => {
     ).toBeNull();
   });
 
-  // A snapshot is the other story: it stores the prompt as *authored*, so the
-  // template that shaped it has to come back too. Recalling `a cat` and dropping
-  // `Cinematic` silently generated something other than the item recalled from.
+  // Snapshots store authored prompts, so recall must restore their template too.
   it('recalls the snapshot`s own template alongside its authored prompt', () => {
     const promptTemplate = { id: 't1', name: 'Cinematic', negativePrompt: '', positivePrompt: '{prompt}, cinematic' };
     const snapshot = makeValues({ positivePrompt: 'a cat', promptTemplate });

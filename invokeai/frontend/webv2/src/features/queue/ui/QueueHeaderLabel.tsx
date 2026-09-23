@@ -4,12 +4,7 @@ import { useTranslation } from 'react-i18next';
 
 import { useQueueCounts } from './queueDataStore';
 
-/**
- * The Queue widget's header title: "Queue" over a live "N generating · M waiting"
- * summary. Rendered as the manifest `label`, so it sits in the standard frame
- * header. Counts come straight from the server-wide status, with tabular
- * numerals so the summary doesn't jitter as items move through the queue.
- */
+/** Use server-wide queue counts and tabular numerals to avoid header jitter. */
 export const QueueHeaderLabel = () => {
   const { t } = useTranslation();
   const counts = useQueueCounts();

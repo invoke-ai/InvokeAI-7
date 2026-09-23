@@ -2,13 +2,7 @@ import type { ArchitectureCapabilitiesRow } from '@features/generation/core/arch
 
 import { apiFetchJson } from '@platform/transport/http';
 
-/**
- * The architecture capability table.
- *
- * A static list -- the same for every install and every user -- describing what each model
- * architecture supports. Lives under the model-manager router because that is where architectures
- * are addressed, but it is not model-record data: nothing here depends on what is installed.
- */
+/** The architecture table is static per backend build and independent of installed models. */
 const CAPABILITIES_PATH = '/api/v2/models/capabilities';
 
 export const getArchitectureCapabilities = (signal?: AbortSignal): Promise<ArchitectureCapabilitiesRow[]> =>

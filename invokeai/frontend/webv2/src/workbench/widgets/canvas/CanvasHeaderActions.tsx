@@ -73,16 +73,6 @@ const selectModelVariant = (project: Project): string | null => {
   return typeof values?.model?.variant === 'string' ? values.model.variant : null;
 };
 
-/**
- * Canvas widget header actions, in legacy toolbar order: the zoom-percent menu, a
- * reset-view (fit content to view) button, fit-bbox-to-layers / fit-bbox-to-masks,
- * undo / redo, save-to-gallery (canvas, with the bbox region in its menu), and a
- * new-session menu. Rendered in the widget frame's header slot; resolves the
- * shared engine like the layers header does, and renders nothing until it is
- * available.
- *
- * Excluded per product decision: the project (save/load) menu and the snapshot menu.
- */
 export const CanvasHeaderActions = ({ runtime }: WidgetViewProps) => {
   const engine = useCanvasEngine();
   return engine ? <CanvasHeaderActionsInner engine={engine} runtime={runtime} /> : null;
@@ -142,11 +132,8 @@ const CanvasHeaderActionsInner = ({
     [document, editingLocked, engine]
   );
 
-  // Commands (hotkey-assignable; catalog ids `canvas.fitBboxToLayers` /
-  // `canvas.fitBboxToMasks` / `canvas.saveToGallery` / `canvas.saveBboxToGallery` /
-  // `canvas.newSession`). `useEffectEvent` reads the latest fit rects / dialog
-  // opener without re-registering per document change. The new-session command
-  // routes through the SAME confirm dialog as the button.
+  // Register catalog commands once while useEffectEvent reads current fit rects/dialog openers; new-session uses
+  // the button's confirmation flow.
   const executeHeaderCommand = useEffectEvent((commandId: string) =>
     executeCanvasHeaderCommand(commandId, commandContext())
   );

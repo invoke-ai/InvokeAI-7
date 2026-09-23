@@ -38,11 +38,7 @@ const documentOf = (layers: readonly CanvasLayerContract[], selectedLayerId: str
     width: 64,
   }) as CanvasDocumentContractV3;
 
-/**
- * A recording engine double. Interaction state is a plain bag so tests can put
- * the engine into "has a pixel selection" or "already on the lasso tool" without
- * standing up the real store.
- */
+/** Use a recording engine with mutable interaction state for selection/tool scenarios without real stores. */
 const createEngine = (interaction: Partial<CanvasInteractionState> = {}) => {
   const state: Record<string, unknown> = {
     activeTool: 'brush',

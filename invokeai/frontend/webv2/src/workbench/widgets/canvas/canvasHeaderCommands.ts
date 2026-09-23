@@ -8,10 +8,7 @@ import type { CanvasGallerySaveRegion } from '@workbench/canvas-operations/api';
 
 import { createNewCanvasState } from '@workbench/canvasMigration';
 
-/**
- * The slice of the engine the header's actions drive. Structural rather than the
- * full handle, so this module stays React-free and testable with a plain double.
- */
+/** Use the header's structural engine subset to keep command tests React-free. */
 export interface CanvasHeaderCommandEngine {
   readonly document: Pick<CanvasDocumentCapability, 'replaceDocument'>;
   readonly layers: {
@@ -54,12 +51,7 @@ export const zoomAtViewportCentre = (engine: CanvasHeaderCommandEngine, value: n
   viewport.zoomAtPoint(value, { x: size.width / 2, y: size.height / 2 });
 };
 
-/**
- * Commits a fit-bbox as one undoable `setCanvasBbox` whose inverse restores the
- * current bbox — exactly how a manual bbox-tool edit commits. `refit` re-centres
- * the view afterward (legacy re-fits the stage after fit-to-layers, but not after
- * fit-to-masks). A null rect means nothing to fit to, and is a no-op.
- */
+/** Commit one undoable bbox change; optionally refit afterward. Null bounds are a no-op. */
 export const applyFitBbox = (ctx: CanvasHeaderCommandContext, rect: Rect | null, refit: boolean): void => {
   if (ctx.editingLocked || !rect) {
     return;
@@ -88,11 +80,7 @@ export const confirmNewCanvas = (ctx: NewCanvasContext): void => {
   ctx.engine.document.replaceDocument(createNewCanvasState(ctx.document.width, ctx.document.height).document);
 };
 
-/**
- * Routes a header command id. `canvas.newSession` deliberately opens the confirm
- * dialog rather than replacing directly, so the command and the button share one
- * destructive path.
- */
+/** Route new-session commands through the button's confirmation dialog. */
 export const executeCanvasHeaderCommand = (commandId: string, ctx: CanvasHeaderCommandContext): void => {
   if (commandId === 'canvas.fitBboxToLayers') {
     applyFitBbox(ctx, ctx.fitLayersRect, true);

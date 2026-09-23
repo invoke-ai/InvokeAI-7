@@ -1,12 +1,6 @@
 /**
- * How a selection gesture's boolean op is resolved.
- *
- * Every selection tool (lasso, marquee) offers the same choice: a persistent op
- * mode from its options bar, transiently overridden by modifiers held at commit
- * time. Keeping the resolution here means the tools agree by construction rather
- * than by convention, and neither has to import the other.
- *
- * Zero React, zero import-time side effects.
+ * Shared selection-op resolution: commit-time modifiers override persistent mode consistently across lasso and
+ * marquee.
  */
 
 import type { PointerModifiers, SelectionOp } from '@workbench/canvas-engine/types';

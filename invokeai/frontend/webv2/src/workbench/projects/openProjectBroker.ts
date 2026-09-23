@@ -2,13 +2,7 @@ import type { ProjectPushOutcome } from './projectFlush';
 
 import { type OpenProjectHandle, registerOpenProject, unregisterOpenProject } from './syncStore';
 
-/**
- * Publishes one {@link OpenProjectHandle} per open tab, for the life of the mounted editor.
- *
- * Derived from workbench state on every change rather than maintained by open and close call sites:
- * the registry decides whether the library mutates through the sync engine or over HTTP, so one
- * that disagreed with the tabs would put a write on the wrong side of that invariant.
- */
+/** Derive the broker from actual tabs so mutation routing cannot drift. */
 export interface OpenProjectBrokerDeps {
   /** Drop the tab. Called after the project is already gone from the server. */
   closeProject: (projectId: string) => void;
@@ -37,13 +31,7 @@ export const createOpenProjectBroker = (deps: OpenProjectBrokerDeps): OpenProjec
     deleteOnServer: () => deps.deleteProject(projectId),
     flush: () => deps.flushProject(projectId),
     markDeleted: () => deps.markProjectDeleted(projectId),
-    // Renaming through the reducer first is what keeps the open document and the server's copy
-    // telling the same story: the flush that follows carries the new name on the project's own
-    // revision chain, where a library PUT would have landed beside it and forced a conflict fork.
-    //
-    // The flush outcome is deliberately ignored. The rename is already in the reducer and on the
-    // local snapshot; a push that did not land is retried by the next save, and failing the rename
-    // because the network blipped would undo nothing and explain less.
+    // Rename through the reducer's revision chain; an unacknowledged flush remains recoverable.
     rename: async (name: string) => {
       deps.renameProject(projectId, name);
       await deps.flushProject(projectId);
@@ -51,13 +39,7 @@ export const createOpenProjectBroker = (deps: OpenProjectBrokerDeps): OpenProjec
     unmarkDeleted: () => deps.unmarkProjectDeleted(projectId),
   });
 
-  /**
-   * Publish the current open set, unregistering whatever is no longer in it.
-   *
-   * Registration is unconditional: the registry is cleared when the account changes, and a
-   * `published` set that believed otherwise would never re-register, silently sending every library
-   * mutation over HTTP for the rest of the mount. `published` records only what to *retract*.
-   */
+  /** Register unconditionally after account clears; published tracks only retraction. */
   const sync = (): void => {
     const openIds = new Set(deps.getOpenProjectIds());
 

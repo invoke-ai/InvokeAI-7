@@ -40,8 +40,7 @@ describe('image map thumbnail cache', () => {
       Promise.resolve({ durationSeconds: 2.5, kind: ref.kind, thumbnailUrl: `/thumbs/${ref.kind}/${ref.name}` })
     );
 
-    // The duration rides along for videos only: the hover card shows the same
-    // play badge the gallery tile does, and an image has none to show.
+    // Video duration drives the same play badge as gallery tiles; images omit it.
     await expect(getThumbnailUrl({ kind: 'video', name: 'clip' })).resolves.toEqual({
       durationSeconds: 2.5,
       url: '/thumbs/video/clip',
@@ -54,10 +53,7 @@ describe('image map thumbnail cache', () => {
   });
 
   it('remembers a definitive miss but retries a transient failure', async () => {
-    // Hovering is driven by pointer movement, so a deleted or hidden item has
-    // to be remembered — the by-names resolver this cache used to call
-    // returned an empty array for a miss, which was cached; the by-ref one
-    // throws, and the miss would otherwise be re-fetched on every dwell.
+    // Cache missing/deleted items despite resolver throws so pointer dwell does not repeatedly fetch them.
     mocks.resolve.mockRejectedValue(new ApiError('gone', 404));
 
     await expect(getThumbnailUrl({ kind: 'image', name: 'gone.png' })).resolves.toBeNull();

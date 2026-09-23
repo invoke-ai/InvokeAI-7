@@ -58,8 +58,7 @@ const getWidgetEnableMenuTriggerButton = (label: string, trigger: WidgetEnableMe
   return (
     <Flex
       align="center"
-      // The rail's strips stretch to stay full-width drop targets; the trigger
-      // is a lone fixed-size child and must center itself to line up with them.
+      // Center the fixed-size trigger within full-width rail drop targets.
       alignSelf={isBottom ? undefined : 'center'}
       aria-label={label}
       as="button"

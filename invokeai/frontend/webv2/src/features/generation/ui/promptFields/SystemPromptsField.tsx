@@ -10,9 +10,7 @@ import {
   SYSTEM_PROMPT_MAX_TOKENS_MIN,
 } from '@features/generation/core/systemPrompts';
 import { PANEL_HEADER_CONTROL_HEIGHT, PromptPanelHeader } from '@features/generation/ui/promptFields/PromptPanelHeader';
-// Imported by subpath rather than from the `@platform/ui` barrel, which is at its
-// direct-importer budget (a dev-invalidation limit) — depending on the components
-// actually used means this module only rebuilds when those change.
+// Use subpaths to respect the importer budget.
 import { getApiErrorMessage } from '@platform/transport/http';
 import { Button, IconButton } from '@platform/ui/Button';
 import { ConfirmDialog } from '@platform/ui/ConfirmDialog';
@@ -65,8 +63,7 @@ const SystemPromptRow = ({
     <HStack justify="space-between" px="1" py="0.5">
       <MiddleTruncate fontSize="xs" minW="0" text={prompt.name} />
       <HStack gap="0.5">
-        {/* Copying needs no rights over the source, so it is the one control every row has --
-            it is how someone adapts a prompt they cannot edit. */}
+        {/* Copying remains available without edit rights over the source. */}
         <Tooltip content={t('widgets.generate.systemPrompts.duplicate')}>
           <IconButton
             aria-label={t('widgets.generate.systemPrompts.duplicate')}
@@ -101,11 +98,6 @@ const SystemPromptRow = ({
   );
 };
 
-/**
- * The system-prompt control inside the Expand Prompt popover: a picker over the prompts this
- * account can see, and — behind the manage toggle — the list that creates, edits and deletes
- * them. Both live in one component because the popover shows exactly one of them at a time.
- */
 export const SystemPromptsField = ({ catalog, onSelect, selectedId }: SystemPromptsFieldProps) => {
   const { canEdit, prompts } = catalog;
   const { t } = useTranslation();
@@ -153,8 +145,7 @@ export const SystemPromptsField = ({ catalog, onSelect, selectedId }: SystemProm
 
     const maxTokens = parseMaxTokensInput(draft.maxTokens);
 
-    // Save is disabled while the field is invalid, so this only catches a submit that raced the
-    // keystroke that broke it.
+    // Validate on submit to cover races after the disabled-button render.
     if (maxTokens === 'invalid') {
       setError(
         t('widgets.generate.systemPrompts.maxTokensInvalid', {
@@ -175,8 +166,7 @@ export const SystemPromptsField = ({ catalog, onSelect, selectedId }: SystemProm
     try {
       saved = editorTarget.record ? await catalog.update(editorTarget.record, payload) : await catalog.create(payload);
     } catch (caught) {
-      // `ApiError.message` is the raw response body, so the backend's own explanation only
-      // reads properly once unwrapped. Reported in place — the popover has no toast surface.
+      // Unwrap errors inline; this popover has no toast surface.
       setError(getApiErrorMessage(caught, t('widgets.generate.systemPrompts.couldNotSave')));
       return;
     } finally {
@@ -227,8 +217,7 @@ export const SystemPromptsField = ({ catalog, onSelect, selectedId }: SystemProm
       setPendingDelete(null);
     }
 
-    // The selection resolves against the visible list on read, so a deleted prompt needs no
-    // corrective write here — but clearing it avoids one render with a dangling id.
+    // Clear selection to avoid a transient dangling ID even though reads have a fallback.
     if (selectedId === pendingDelete.id) {
       onSelect(null);
     }
@@ -253,8 +242,6 @@ export const SystemPromptsField = ({ catalog, onSelect, selectedId }: SystemProm
   const handleSelectChange = useCallback(({ value }: { value: string[] }) => onSelect(value[0] ?? null), [onSelect]);
 
   const isMaxTokensInvalid = parseMaxTokensInput(draft.maxTokens) === 'invalid';
-  // Reported under the field as it is typed rather than only on save, since an out-of-range
-  // cap is the one thing here the backend would reject with a bare 422.
   const maxTokensError = isMaxTokensInvalid
     ? t('widgets.generate.systemPrompts.maxTokensInvalid', {
         max: SYSTEM_PROMPT_MAX_TOKENS_MAX,
@@ -263,9 +250,7 @@ export const SystemPromptsField = ({ catalog, onSelect, selectedId }: SystemProm
     : null;
 
   const selectValue = useMemo(() => (selectedId ? [selectedId] : []), [selectedId]);
-  // The Select primitive renders `valueText` verbatim in the closed trigger, so
-  // it must carry the selected prompt's name — a static string would mask the
-  // selection ("None" while a prompt is active).
+  // Keep valueText tied to selection because Select renders overrides verbatim.
   const selectedName = useMemo(
     () => (selectedId ? (prompts.find((prompt) => prompt.id === selectedId)?.name ?? null) : null),
     [prompts, selectedId]
@@ -309,8 +294,7 @@ export const SystemPromptsField = ({ catalog, onSelect, selectedId }: SystemProm
         >
           <Input
             id={maxTokensFieldId}
-            // `inputMode` rather than `type="number"`: the spinner and the browser's own
-            // out-of-range handling would fight the empty-means-default reading of this field.
+            // Use inputMode instead of number input so empty-means-default drafts survive.
             inputMode="numeric"
             placeholder={String(SYSTEM_PROMPT_MAX_TOKENS_DEFAULT)}
             size="xs"

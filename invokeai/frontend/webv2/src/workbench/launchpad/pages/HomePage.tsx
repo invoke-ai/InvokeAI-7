@@ -1,7 +1,8 @@
 /* eslint-disable react-perf/jsx-no-jsx-as-prop */
+import type { SystemStyleObject } from '@chakra-ui/react';
 import type { ProjectRecordDTO } from '@workbench/projects/api';
 
-import { Skeleton, Stack, Text } from '@chakra-ui/react';
+import { Box, Skeleton, Stack, Text } from '@chakra-ui/react';
 import { useAuthSession, useCapabilities } from '@features/identity';
 import { LAUNCHPAD_READY_MARK, markSemanticReady } from '@platform/performance/semanticReady';
 import { useMountEffect } from '@platform/react/useMountEffect';
@@ -24,17 +25,14 @@ import { FileUpIcon } from 'lucide-react';
 import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 
-/**
- * The Launchpad's landing section: resume what you were doing, or start
- * something new.
- *
- * Home deliberately shows only a handful of recent projects — the full library
- * is its own section. What it adds over a file list is the first move: intent
- * tiles that open a draft already arranged for the kind of work you named.
- */
-
 const RECENT_PROJECT_COUNT = 4;
 const BROWSER_ISSUES_BANNER = <KnownBrowserIssuesAlert />;
+// Each section sits in its own wrapper so the hairline never restyles a bordered card, and wrappers left empty by a
+// panel that rendered nothing neither show nor earn a divider.
+const SECTION_DIVIDERS_SX: SystemStyleObject = {
+  '& > :empty': { display: 'none' },
+  '& > :not(:empty) ~ :not(:empty)': { borderTopColor: 'border.subtle', borderTopWidth: '1px', pt: '5' },
+};
 
 export const HomePage = () => {
   const session = useAuthSession();
@@ -86,46 +84,54 @@ export const HomePage = () => {
         </>
       }
       banner={BROWSER_ISSUES_BANNER}
-      description={t('launchpad.projectsSubtitle')}
       regionLabel={t('launchpad.sections.home')}
       title={greeting}
     >
-      {/* Ordered by how much it should interrupt: a missing model blocks
-          everything, a running job is worth knowing about, the rest is
-          browsing. Each renders nothing when it has nothing to say.
+      <Stack css={SECTION_DIVIDERS_SX} gap="5">
+        {/*
+         * Order panels by urgency. Gate model-panel mounting by capability because its catalog/install endpoints are
+         * admin-only; empty panels render nothing.
+         */}
+        {canManageModels ? (
+          <Box>
+            <LivePanel panel="models" />
+          </Box>
+        ) : null}
+        <Box>
+          <LivePanel panel="queue" />
+        </Box>
 
-          The models panel is capability-gated rather than merely hidden: every
-          endpoint it touches — catalog, starters, install — is admin-only, so
-          mounting it for a non-admin would mean a burst of unauthorized
-          requests on every visit to Home, and a call to action they could not
-          complete. */}
-      {canManageModels ? <LivePanel panel="models" /> : null}
-      <LivePanel panel="queue" />
+        <Box>
+          {isFirstLoad ? (
+            <Skeleton minH="24" rounded="lg" />
+          ) : mostRecent ? (
+            <ResumeCard
+              isPinned={pinnedIds.includes(mostRecent.id)}
+              summary={mostRecent}
+              onTogglePin={toggleProjectPinPreference}
+            />
+          ) : null}
+        </Box>
 
-      {isFirstLoad ? (
-        <Skeleton minH="24" rounded="lg" />
-      ) : mostRecent ? (
-        <ResumeCard
-          isPinned={pinnedIds.includes(mostRecent.id)}
-          summary={mostRecent}
-          onTogglePin={toggleProjectPinPreference}
-        />
-      ) : null}
+        <Stack gap="3">
+          <Text fontSize="xs" fontWeight="700">
+            {t('launchpad.home.intents.heading')}
+          </Text>
+          <IntentTiles />
+        </Stack>
 
-      <Stack gap="3">
-        <Text fontSize="xs" fontWeight="700">
-          {t('launchpad.home.intents.heading')}
-        </Text>
-        <IntentTiles />
+        <Box>
+          <RecentProjectsRow
+            pinnedIds={pinnedIds}
+            summaries={rest.slice(0, RECENT_PROJECT_COUNT)}
+            onTogglePin={toggleProjectPinPreference}
+          />
+        </Box>
+
+        <Box>
+          <LivePanel panel="outputs" />
+        </Box>
       </Stack>
-
-      <RecentProjectsRow
-        pinnedIds={pinnedIds}
-        summaries={rest.slice(0, RECENT_PROJECT_COUNT)}
-        onTogglePin={toggleProjectPinPreference}
-      />
-
-      <LivePanel panel="outputs" />
     </PageShell>
   );
 };

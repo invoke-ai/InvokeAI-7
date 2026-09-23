@@ -36,12 +36,7 @@ export interface AdjustedSurfaceCache {
 export const createAdjustedSurfaceCache = (
   backend: RasterBackend,
   cache: DerivedSurfaceCache = createDerivedSurfaceCache(),
-  /**
-   * Reports the surface-local region a layer's cache was written in since a
-   * given version — {@link LayerCacheStore.damageSince}. Omit it and every
-   * rebuild is wholesale, which is what callers without a layer cache (tests,
-   * one-off derivations) want.
-   */
+  /** Optional surface-local {@link LayerCacheStore.damageSince} lookup; callers without it rebuild whole surfaces. */
   layerDamageSince?: (layerId: string, version: number) => Rect | null
 ): AdjustedSurfaceCache => {
   /** The damaged region clamped to the surface, or `null` to rebuild in full. */
@@ -60,8 +55,6 @@ export const createAdjustedSurfaceCache = (
     adjustments: CanvasAdjustmentsContract | undefined
   ): RasterSurface | null => {
     if (isIdentityAdjustments(adjustments)) {
-      // Identity: nothing to cache — drop any stale slot and let the caller draw
-      // the original surface.
       cache.delete(layerId, 'adjustments');
       return null;
     }
@@ -77,13 +70,8 @@ export const createAdjustedSurfaceCache = (
         if (resized) {
           surface.resize(width, height);
         }
-        // Rebuilding this costs a full-surface readback plus a per-pixel JS pass
-        // — 35ms on a 2600x2100 layer, which is where a live stroke on an
-        // adjusted layer spends its entire frame. A stroke bumps the source
-        // version every tick, so the memo misses every frame; refreshing only
-        // the region the stroke actually wrote turns that into a fraction of the
-        // work. A resize invalidates the retained pixels, so it forces the full
-        // path regardless of what the trail says.
+        // Source versions change every stroke tick. Refresh only reported damage to avoid full-surface readback
+        // and adjustment work; resized surfaces always rebuild.
         const refresh =
           resized || reusableFromVersion === null ? null : damageSince(layerId, reusableFromVersion, width, height);
         const region = refresh ?? { height, width, x: 0, y: 0 };

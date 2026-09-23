@@ -16,12 +16,7 @@ import { VideoReferenceListField } from './VideoReferenceListField';
 import { VideoSourceClipField } from './VideoSourceClipField';
 import { VideoUiProvider, type VideoSpanPlaybackState, type VideoUiAdapter } from './VideoUiContext';
 
-/**
- * The trim rows show two still frames, which cannot say what is between them — and for an
- * audio reference, whose frames are a drawing of the sound, say nothing at all. The play
- * button is the panel's answer, and what it has to get right is the arithmetic: the trim
- * is inclusive frame indices, Preview wants seconds.
- */
+/** Playback converts inclusive frame bounds to seconds, including the full final frame. */
 
 const galleryMocks = vi.hoisted(() => ({ resolve: vi.fn() }));
 
@@ -189,8 +184,6 @@ const RetrimmableHarness = () => {
   );
 };
 
-// The source clip field is built on the gallery media slot, which reads the
-// gallery UI port for its picker and error reporting.
 const galleryAdapter = {
   gallery: { selectBoard: vi.fn(), selectItem: vi.fn(), setView: vi.fn() },
   galleryValues: {},
@@ -270,8 +263,7 @@ describe('video reference span playback', () => {
       { kind: 'video', name: 'clip.mp4' },
       expect.any(AbortSignal) as AbortSignal
     );
-    // Frames 32..47 inclusive at 16 fps: the window ends at the far edge of frame 47, so
-    // the last selected frame is played rather than cut short.
+    // Inclusive frames 32..47 end at the far edge of frame 47.
     expect(playVideoSpanInPreview).toHaveBeenCalledWith({
       endSeconds: 3,
       item: galleryVideoItem,
@@ -280,17 +272,13 @@ describe('video reference span playback', () => {
   });
 
   it('offers the control only where there is something to play', async () => {
-    // An image reference is already fully visible as its own thumbnail; there is no window
-    // to audition, so the control is absent rather than dead.
     await render([imageReference]);
 
     expect(playButtons()).toHaveLength(0);
   });
 
   it("plays the Initial Video clip's window, and stays live while the field is disabled", async () => {
-    // Playing changes nothing, so a clip the user can see is one they can audition — the
-    // field is disabled whenever a first-frame image or a full reference stack blocks
-    // EDITING it, and its trim rows stay on screen throughout.
+    // Editing gates must not prevent auditioning a visible clip.
     await renderTree(<InitialVideoHarness disabled />);
     const [button] = playButtons();
 
@@ -309,9 +297,7 @@ describe('video reference span playback', () => {
     button!.focus();
     await press(button!);
 
-    // aria-disabled, never the DOM's `disabled`: disabling a focused button blurs it to
-    // <body>, which would drop a keyboard user out of the card for the length of a
-    // network round trip.
+    // Native disabled would blur the focused button during the request; aria-disabled preserves focus.
     expect(button?.getAttribute('aria-disabled')).toBe('true');
     expect(button?.disabled).toBe(false);
     expect(document.activeElement).toBe(button);
@@ -332,8 +318,7 @@ describe('video reference span playback', () => {
     await render([videoReference(), videoReference({ startFrame: 0, endFrame: 15 })]);
     const [first, second] = playButtons();
 
-    // The player reporting on somebody else's request — a loop the sibling card started,
-    // or one from before this session — is not this button's to stop.
+    // Another request's playback token is not this button's to stop.
     await act(() => reportPlayback({ isPlaying: true, pause: pausePlayback, token: 3 }));
     expect(pauseButtons()).toHaveLength(0);
 
@@ -364,8 +349,7 @@ describe('video reference span playback', () => {
     await press(button!);
     expect(pausePlayback).toHaveBeenCalledTimes(1);
 
-    // The user moved the window while it sat paused. The next press is a fresh request for
-    // the window the rows now show — from its start — not a resume of the old one.
+    // A re-press starts the current trim, not the previously paused window.
     playVideoSpanInPreview.mockReturnValue(8);
     await act(() => retrim?.({ endFrame: 79, startFrame: 64 }));
     await press(button!);
@@ -389,9 +373,7 @@ describe('video reference span playback', () => {
     await press(button!);
     expect(pauseButtons()).toHaveLength(0);
 
-    // Preview could not be raised for the re-press (no center view after a layout change):
-    // nothing was asked of the player, whose loop is still armed under the first request.
-    // A native play resumes that loop, and it is still this button's to stop.
+    // Preview refusal leaves the first loop armed and owned by this button.
     playVideoSpanInPreview.mockReturnValueOnce(null);
     await press(button!);
     expect(playVideoSpanInPreview).toHaveBeenCalledTimes(2);

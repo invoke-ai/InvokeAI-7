@@ -7,10 +7,7 @@ import { getLineNumberGutterCh, PromptLineNumbers } from '@features/generation/u
 import { ResizableTextarea } from '@platform/ui';
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 const PROMPT_TEXTAREA_LINE_HEIGHT = '1.6';
-// Literal lengths rather than spacing tokens: the gutter offset is a `calc()`,
-// and Chakra's generated var name for a fractional token does not resolve inside
-// one, which silently invalidates the whole declaration. These are the `2.5` and
-// `2` spacing tokens.
+// Use literal lengths; fractional Chakra spacing variables fail inside calc.
 const PROMPT_TEXTAREA_PX = '0.625rem';
 const PROMPT_TEXTAREA_PY = '0.5rem';
 
@@ -26,23 +23,14 @@ const PROMPT_TEXTAREA_HIGHLIGHTED_CSS = {
 };
 
 interface PromptTextareaProps extends Omit<ResizableTextareaProps, 'underlay'> {
-  /**
-   * Annotate `{a|b}` syntax. Only surfaces whose prompt is batch-expanded set
-   * this — elsewhere the braces are literal text and colouring them would
-   * promise an expansion that never happens.
-   */
+  /** Enable dynamic highlighting only for prompts that actually expand syntax. */
   highlightDynamicPrompts?: boolean;
   /** Resolvable wildcard names; an unknown `__name__` is underlined as an error. */
   knownWildcards?: ReadonlySet<string>;
   showSyntaxHighlighting: boolean;
   /** Number logical lines in a leading gutter, the way an editor does. */
   showLineNumbers?: boolean;
-  /**
-   * `[before, authored, after]` from `getPromptTemplateChunks`. When set, the
-   * mirror dims the outer chunks so the template's own words read as context
-   * around the user's text. `value` must be the concatenation of the three, and
-   * the textarea is expected to be `readOnly` — this is a view, not an editor.
-   */
+  /** value must equal the concatenated chunks, and the input must be readOnly. */
   templateChunks?: [string, string, string] | null;
   value: string;
 }
@@ -78,8 +66,7 @@ export const PromptTextarea = ({
   const [scroll, setScroll] = useState({ left: 0, top: 0 });
   const [textareaClientWidth, setTextareaClientWidth] = useState<number | null>(null);
   const isWithinHighlightBudget = value.length > 0 && value.length <= MAX_HIGHLIGHTED_PROMPT_LENGTH;
-  // Template chunks are a legibility device, not a syntax preference, so they
-  // render whether or not highlighting is switched on.
+  // Template chunk emphasis is independent of the syntax-highlighting preference.
   const shouldHighlight = (showSyntaxHighlighting || templateChunks !== null) && isWithinHighlightBudget;
   const effectiveFontSize = fontSize ?? '0.82rem';
   const effectiveLineHeight = lineHeight ?? PROMPT_TEXTAREA_LINE_HEIGHT;

@@ -9,19 +9,14 @@ import {
 
 export { closeWidgetOverlays } from './widgetOverlayRegistry';
 
-/**
- * Marks a subtree as one widget's own: overlays opened inside it answer to
- * `closeWidgetOverlays`. Provided by the widget host.
- */
+/** Associates overlays with the widget host for closeWidgetOverlays. */
 export const WidgetOverlayOwnerContext = createContext(false);
 
 const subscribeToNothing = (): (() => void) => () => undefined;
 
 /**
- * Registers an overlay's content with the widget it lives in, for as long as
- * the content is mounted. Returns true while the overlay was told to close but
- * its library still reports it open — the content then renders nothing. A
- * widget shown again re-runs its effects, which is when the close is resent.
+ * Register while mounted; hide content synchronously after dismissal and resend the library close when a hidden
+ * widget returns.
  */
 export const useRegisterWidgetOverlay = (open: boolean, setOpen: (open: boolean) => void): boolean => {
   const ownedByWidget = useContext(WidgetOverlayOwnerContext);
@@ -36,8 +31,7 @@ export const useRegisterWidgetOverlay = (open: boolean, setOpen: (open: boolean)
     setOpening({ epoch: current, open });
   }
   const stale = ownedByWidget && open && opening.epoch !== current;
-  // Runs on mount and again when a hidden widget is shown; the registry is read
-  // live so a bump that happened while hidden counts too.
+  // Read the current dismissal epoch on remount so closes issued while hidden still apply.
   useMountEffect(() => {
     if (!ownedByWidget) {
       return;

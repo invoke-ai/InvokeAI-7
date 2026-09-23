@@ -10,21 +10,12 @@ export interface LayoutWidgetSource {
   widgetRegions: Record<string, { activeInstanceId: string; instanceIds: string[] }>;
 }
 
-/**
- * Regions in the order a boot reveals them, so callers that care about
- * priority get it for free and callers that do not are unaffected.
- */
+/** Order regions by boot reveal priority. */
 const REGION_ORDER = ['center', 'left', 'right', 'bottom'];
 
 /**
- * Every widget type a layout renders: each region's active instance, plus every
- * placed bottom instance — the status bar mounts all of its items as compact
- * widgets, not just the active one.
- *
- * Single definition on purpose. The boot preloader and the preset activation
- * gate previously disagreed: activation only awaited region actives, so a
- * switch never gated on four of the five bottom instances every built-in preset
- * places, and the atomic reveal the deadline buys was incomplete.
+ * Include every active region widget and all bottom widgets, since the status bar renders them all. Share this set
+ * between preload and activation gating.
  */
 export const getLayoutWidgetTypeIds = (layout: LayoutWidgetSource): WidgetTypeId[] => {
   const typeIds = new Set<WidgetTypeId>();

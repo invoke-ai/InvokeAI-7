@@ -1,21 +1,7 @@
 /**
- * Uploads canvas paint bitmaps to the backend as persistent, non-gallery
- * images. Paint layers reference their pixels by `imageName` (never by URL or
- * inline data), so the persisted workbench document — which autosaves to
- * localStorage (~5 MB) — stays ref-only and the pixels live server-side.
- *
- * `image_category='other'` is the canvas's private category: the backend lists
- * it in neither `IMAGE_CATEGORIES` nor `ASSETS_CATEGORIES`
- * (`image_records_common.py`), so it surfaces in neither gallery view nor in a
- * board's counts. That is what hides it — NOT `is_intermediate`, which is a
- * separate axis. `is_intermediate=false` is what keeps it durable, and every
- * image a layer points at must be durable or garbage collection would strand
- * the layer. Transient images no layer will reference (per-generation
- * composites) pass `isIntermediate: true` instead.
- *
- * The `fetch` seam is injectable so this runs in node tests without a DOM.
- * Auth + base-URL resolution mirror the shared HTTP client so uploads carry the
- * same bearer token as every other authenticated request. Zero React.
+ * Persist paint as imageName references. Category other hides pixels from gallery views; is_intermediate=false
+ * makes referenced pixels durable. Only unreferenced generation composites are intermediate. Uploads use the
+ * shared authentication and base-URL policy.
  */
 
 import type { CanvasImageUploadResult } from '@workbench/canvas-engine/document/imageUpload';
@@ -63,11 +49,6 @@ export class CanvasImageUploadError extends Error {
   }
 }
 
-/**
- * POSTs `blob` as a PNG to `/api/v1/images/upload` (multipart `file` field) and
- * returns the server-assigned image name and dimensions. Throws
- * {@link CanvasImageUploadError} on any non-success response.
- */
 export const uploadCanvasImage = async (
   blob: Blob,
   options: UploadCanvasImageOptions = {}

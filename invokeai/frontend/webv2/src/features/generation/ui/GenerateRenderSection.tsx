@@ -39,14 +39,10 @@ import { useDynamicPrompts } from './useDynamicPrompts';
 const STEPS_SLIDER_MAX = 100;
 const formatPercent = (value: number): string => `${value}%`;
 
-/** The guidance/CFG slider's practical range — a UI choice about the track, not a rule. FLUX Fill
- *  recommends 30, which is off the track but a real value, so the number input keeps its own looser
- *  bound; without it the field clamps the model's own default away the first time it is focused.
- *
- *  Where the architecture declares a ceiling (`policy.ui.guidanceMax`, e.g. `flux2_denoise.guidance`
- *  is `le=20`) that ceiling wins over this local cap, and where it declares none the local cap stays
- *  — `flux_denoise.guidance` genuinely has no upper bound. The floor comes from the architecture
- *  either way: 0 for most, 1 for the samplers whose node is `ge=1`. */
+/**
+ * Slider tracks are practical ranges, distinct from input/validation bounds; FLUX Fill's default 30 exceeds its
+ * track.
+ */
 const GUIDANCE_SLIDER_MAX = 10;
 const GUIDANCE_INPUT_MAX = 100;
 
@@ -57,10 +53,7 @@ interface GenerateRenderSectionProps {
   onCommitImmediate: (patch: Partial<GenerateSettings>) => void;
 }
 
-/**
- * Ideogram 4 presets fix a step count and guidance schedule. The labels carry the step count
- * because the backend's identifiers (`V4_QUALITY_48`) are otherwise opaque in a picker.
- */
+/** Labels expose step counts hidden in backend preset IDs. */
 const IDEOGRAM4_PRESET_LABELS: Record<Ideogram4SamplerPreset, string> = {
   V4_DEFAULT_20: 'Default (20 steps)',
   V4_QUALITY_48: 'Quality (48 steps)',
@@ -71,10 +64,6 @@ const IDEOGRAM4_PRESET_COLLECTION = createListCollection({
   items: IDEOGRAM4_SAMPLER_PRESETS.map((value) => ({ label: IDEOGRAM4_PRESET_LABELS[value], value })),
 });
 
-/**
- * Family-specific sampling parameters, co-located with the shared sampling
- * controls they modify rather than segregated into a "model family" bucket.
- */
 const Ideogram4SamplingFields = ({ onCommit, settings }: Pick<GenerateRenderSectionProps, 'onCommit' | 'settings'>) => {
   const { t } = useTranslation();
 
@@ -95,10 +84,7 @@ const Ideogram4SamplingFields = ({ onCommit, settings }: Pick<GenerateRenderSect
           }}
         />
       </Field>
-      {/*
-        Steps, guidance and mu override the preset. Null means "let the preset decide", so each
-        keeps its own enable switch rather than using a sentinel value in the slider's range.
-      */}
+      {/* Null inherits the preset; switches avoid numeric sentinels. */}
       <Field label={t('widgets.generate.ideogram4Steps')} helpText={t('widgets.generate.ideogram4PresetDerived')}>
         <GenerateToggleSwitch
           checked={settings.ideogram4Steps !== null}
@@ -174,10 +160,7 @@ const Ideogram4SamplingFields = ({ onCommit, settings }: Pick<GenerateRenderSect
   );
 };
 
-/**
- * A14B runs two experts across the schedule. Null reuses the main guidance for the
- * low-noise half, which is the backend's own default.
- */
+/** Null low-noise guidance inherits main guidance. */
 const WanLowNoiseGuidanceField = ({
   onCommit,
   settings,
@@ -245,16 +228,11 @@ const Krea2SeedVarianceFields = ({ onCommit, settings }: Pick<GenerateRenderSect
   );
 };
 
-/**
- * The shared seed row, with the executed seeds of recent runs underneath —
- * each behind its result, so a seed stops being a magic number and becomes
- * "that image's recipe". Clicking one pins it, switching to fixed mode.
- */
+/** Clicking an executed seed switches to fixed mode. */
 const SeedField = ({ onCommit, settings }: Pick<GenerateRenderSectionProps, 'onCommit' | 'settings'>) => {
   const { t } = useTranslation();
   const { seedHistory } = useGenerationUi().queueInsights;
-  // The same query the topbar observes, so a prompt set counts its seeds the
-  // way the batch will without a second expansion request or cache entry.
+  // Share expansion queries so seed counts match submission without duplicate fetches.
   const expansion = useDynamicPrompts(getEffectivePrompts(settings).positivePrompt, getDynamicPromptsConfig(settings));
 
   return (
@@ -299,11 +277,6 @@ const SeedField = ({ onCommit, settings }: Pick<GenerateRenderSectionProps, 'onC
   );
 };
 
-/**
- * Sampling and variation — split out of the model zone because how a model
- * samples is not which model it is. Family-specific parameters render beside
- * the shared control they modify.
- */
 export const GenerateRenderSection = ({
   onCommit,
   onCommitImmediate,
@@ -315,15 +288,10 @@ export const GenerateRenderSection = ({
   const policy = getGenerationModelPolicy(selectedModel, settings);
   const familyBase = selectedModel && selectedModel.type !== 'external_image_generator' ? selectedModel.base : null;
 
-  // The node's ceiling caps the number input where the architecture declares one; the slider's own
-  // track never grows past its practical range, but it does shrink if an architecture ever declares
-  // a ceiling below it -- and never below its own floor, since the bounds are served and can change
-  // without a frontend release.
+  // Cap both input and track at the architecture ceiling without crossing the floor.
   const guidanceInputMax = policy.ui.guidanceMax ?? GUIDANCE_INPUT_MAX;
   const guidanceSliderMax = Math.max(policy.ui.guidanceMin, Math.min(GUIDANCE_SLIDER_MAX, guidanceInputMax));
-  // A value the model switch did not clamp -- recalled from an image, or persisted before the
-  // architecture's bounds changed. Invoke is already disabled for it; without this the only cue is
-  // that button's tooltip, three collapsed sections away from the field holding the bad value.
+  // Validate recalled/persisted values inline because they bypass model-selection clamps.
   const guidanceError = selectedModel ? getGuidanceBoundReason(selectedModel, settings.cfgScale) : null;
 
   const commitNumber = (key: 'cfgScale' | 'steps', value: number) => {

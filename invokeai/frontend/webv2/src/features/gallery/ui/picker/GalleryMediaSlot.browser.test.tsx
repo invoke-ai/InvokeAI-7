@@ -336,13 +336,8 @@ describe('GalleryMediaSlot', () => {
 
     expect(find).not.toBeNull();
 
-    // Hidden until the slot is hovered or holds focus. A mouse hover cannot be
-    // synthesised, but both come from the same `.group` ancestor, so focus
-    // proves the wiring the badge depends on entirely.
-    //
-    // `pointer-events` rather than `opacity`: the reveal sets both under one
-    // selector, but only opacity is transitioned, so opacity answers for where
-    // the animation has got to rather than for whether the badge is revealed.
+    // Assert focus-based reveal via pointer-events; opacity transitions cannot reliably indicate whether the badge
+    // is revealed.
     expect(getComputedStyle(find!).pointerEvents).toBe('none');
     expect(getComputedStyle(find!).opacity).toBe('0');
 
@@ -352,9 +347,7 @@ describe('GalleryMediaSlot', () => {
 
     expect(getComputedStyle(find!).pointerEvents).toBe('auto');
 
-    // The badge is a SIBLING of the slot's face — the face is a <button> and
-    // may not contain one — so its position is hand-mirrored from the value
-    // row's box metrics. Nothing but this ties the two together.
+    // The badge must remain beside the button face; its copied box metrics must align it with the thumbnail.
     const tile = host?.querySelector('img')?.parentElement?.getBoundingClientRect();
     const badge = find!.getBoundingClientRect();
 
@@ -371,9 +364,7 @@ describe('GalleryMediaSlot', () => {
   it('leaves the badge off a slot with nothing to reveal', async () => {
     const value: GalleryMediaSlotValue = { height: 96, kind: 'image', name: 'chosen.png', width: 128 };
 
-    // A slot whose media the gallery does not own (the prompt-template editor
-    // holds its own upload) passes no `onFind`, and an empty slot has nothing
-    // to find — neither may show the badge.
+    // Empty slots and media outside the gallery must not expose reveal badges.
     await renderSlot({ value });
 
     expect(host?.querySelector('button[aria-label^="widgets.gallery.findNamedInGallery"]')).toBeNull();

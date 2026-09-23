@@ -148,11 +148,7 @@ const createPresetDescriptor = ({
   },
 });
 
-/**
- * The shipped presets. Each combines an arrangement with an editable default
- * route. The route is explicit preset data rather than something inferred from
- * whichever graph widgets happen to be placed in the layout.
- */
+/** Presets define arrangement and default route explicitly; placed graph widgets do not determine the route. */
 export const builtInLayoutPresetDescriptors: BuiltInLayoutPresetDescriptor[] = [
   createPresetDescriptor({
     centerViewId: 'preview',
@@ -171,12 +167,8 @@ export const builtInLayoutPresetDescriptors: BuiltInLayoutPresetDescriptor[] = [
         isCollapsed: true,
         sizePx: 180,
       }),
-      // Gallery stays a center view here: the retired `gallery` preset resolves
-      // to Compose because it was "Compose with the center view swapped" (see
-      // legacyLayoutPresetIds), so the swap has to stay reachable. Curating it
-      // out also made Gallery an *addable* widget instead of a placed one,
-      // which routed the switch through a menu that warms the Canvas chunk on
-      // intent — a chunk a gallery-only session must never download.
+      // Keep Gallery placed in Compose so migrated gallery presets remain reachable without the add-widget path
+      // warming Canvas.
       center: createRegion({
         activeInstanceId: 'preview',
         instanceIds: ['preview', 'gallery:center'],
@@ -223,9 +215,7 @@ export const builtInLayoutPresetDescriptors: BuiltInLayoutPresetDescriptor[] = [
       }),
       right: createRegion({
         activeInstanceId: 'layers',
-        // Preview docks behind Layers: the editors are Layers panes, but the
-        // preview is a floatable widget, and its float/dock pair and floated
-        // Invoke control are only reachable where it is actually placed.
+        // Place Preview behind Layers so its float/dock and floated Invoke controls remain reachable.
         instanceIds: ['layers', 'preview'],
         sizePx: 450,
       }),
@@ -306,11 +296,7 @@ export const layoutPresets: BuiltInLayoutPreset[] = builtInLayoutPresetDescripto
 
 export const defaultLayoutPreset = layoutPresets[0]!;
 
-/**
- * Preset ids persisted before the three-preset model. `gallery` had no successor
- * arrangement of its own — it was Compose with the center view swapped — so it
- * resolves there rather than becoming a fourth entry.
- */
+/** The historical gallery preset was a Compose center-view variant, so it maps to Compose. */
 const legacyLayoutPresetIds: Record<string, BuiltInLayoutPresetId> = {
   canvas: 'edit',
   'canvas-default': 'compose',
@@ -318,11 +304,7 @@ const legacyLayoutPresetIds: Record<string, BuiltInLayoutPresetId> = {
   workflow: 'automate',
 };
 
-/**
- * Rewrites a persisted preset id onto the current set. Custom preset ids pass
- * through untouched — they are resolved against the account's own list, and only
- * the built-in ids were ever renamed.
- */
+/** Remap historical built-in ids; account-defined custom ids pass through unchanged. */
 export const resolveLayoutPresetId = (presetId: string): string => legacyLayoutPresetIds[presetId] ?? presetId;
 
 export const getLayoutPreset = (presetId: string): BuiltInLayoutPreset =>

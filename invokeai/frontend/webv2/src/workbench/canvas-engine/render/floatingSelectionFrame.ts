@@ -16,14 +16,8 @@ export interface FloatingSelectionFrame {
 }
 
 /**
- * How a floating selection appears this frame, or `null` when there is nothing
- * floating (or its layer has gone).
- *
- * The composite and the overlay must agree exactly — the ants outline the same
- * pixels the compositor drew — so both are resolved from one call rather than
- * each deriving the transform for itself. `display` is preferred over `pixels`
- * for drawing because a layer with a display-only effect shows its adjusted
- * copy; only the bake ever touches the raw pixels.
+ * Resolve float drawing and ants together so transforms agree. Prefer display-effect pixels for drawing, raw
+ * pixels for baking; return null when no float/layer exists.
  */
 export const floatingSelectionFrame = (
   float: FloatingSelection | null,

@@ -121,6 +121,7 @@ export const zBaseModelType = z.enum([
   'anima',
   'wan',
   'minimax-h3',
+  'ltx-2',
   'unknown',
 ]);
 export type BaseModelType = z.infer<typeof zBaseModelType>;
@@ -164,6 +165,7 @@ export const zModelType = z.enum([
   'qwen3_vl_encoder',
   'wan_t5_encoder',
   'gemma2_encoder',
+  'gemma4_encoder',
   'clip_embed',
   'siglip',
   'flux_redux',
@@ -190,6 +192,10 @@ export const zSubModelType = z.enum([
   'vae_decoder',
   'vae_encoder',
   'audio_vae',
+  'vocoder',
+  'connectors',
+  'latent_upsampler',
+  'temporal_latent_upsampler',
   'scheduler',
   'safety_checker',
 ]);
@@ -209,6 +215,8 @@ export const zQwen3VariantType = z.enum(['qwen3_4b', 'qwen3_8b', 'qwen3_06b']);
 /** Qwen3-VL (vision-language) encoders: Krea-2 takes the 4B, Ideogram 4 the 8B. */
 const zQwen3VLVariantType = z.enum(['qwen3_vl_4b', 'qwen3_vl_8b']);
 const zMiniMaxH3VariantType = z.enum(['fl2va', 'ref2va']);
+/** LTX-2 transformers: the guided ('dev') and the step-distilled release of one architecture. */
+export const zLTX2VariantType = z.enum(['ltx2_dev', 'ltx2_distilled']);
 const zMistralVariantType = z.enum(['cow_mistral3_small', 'mistral3_24b', 'ministral3_3b']);
 const zPiDDecoderVariantType = z.enum(['res2k_sr4x', 'res2kto4k_sr4x']);
 export const zAnyModelVariant = z.union([
@@ -224,6 +232,7 @@ export const zAnyModelVariant = z.union([
   zQwen3VariantType,
   zQwen3VLVariantType,
   zMiniMaxH3VariantType,
+  zLTX2VariantType,
   zMistralVariantType,
   zPiDDecoderVariantType,
 ]);
@@ -245,6 +254,7 @@ export const zModelFormat = z.enum([
   'qwen3_vl_encoder',
   'wan_t5_encoder',
   'gemma2_encoder',
+  'gemma4_encoder',
   'bnb_quantized_int8b',
   'bnb_quantized_nf4b',
   'gguf_quantized',

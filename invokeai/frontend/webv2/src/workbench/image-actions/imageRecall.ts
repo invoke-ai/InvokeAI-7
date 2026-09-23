@@ -227,10 +227,8 @@ const getImageSize = (
   image: GalleryImage,
   model: GenerateModelConfig
 ): Pick<GenerateWidgetValues, 'height' | 'width'> | null => {
-  // Fail closed: recalled dimensions are snapped to the architecture's grid and then persisted
-  // into the project. Without the served table every base reads as grid 8, so a krea-2 or
-  // CogView 4 project would store a size its denoise node rejects. Recalling nothing is
-  // recoverable; storing the wrong size silently is not.
+  // Decline dimension recall without architecture policy; persisting fallback grid 8 can leave sizes the model
+  // rejects.
   const grid = getDimensionGrid(model.base, model.variant);
 
   if (grid === null) {
@@ -247,8 +245,7 @@ export const getMetadataSize = (
   metadata: unknown,
   model: GenerateModelConfig
 ): Partial<Pick<GenerateWidgetValues, 'height' | 'width'>> => {
-  // Same reason as getImageSize: an empty result means 'no size recalled', which the caller
-  // already handles, and the field list then does not claim a size was restored.
+  // Return no size and omit its field label when architecture policy is unavailable.
   const grid = getDimensionGrid(model.base, model.variant);
 
   if (grid === null) {
@@ -361,11 +358,7 @@ const getPromptPatch = (
 
 const hasPrompt = (metadata: unknown): boolean => Object.keys(getPromptPatch(metadata)).length > 0;
 
-/**
- * The prompts an image was generated with, for seeding a new prompt template.
- * These are the merged prompts — metadata records what the model was given — so
- * the template starts from the text that produced the image.
- */
+/** Seed templates from merged metadata prompts: these are the words the model received. */
 export const getMetadataPrompts = (metadata: unknown): { negativePrompt: string; positivePrompt: string } => ({
   negativePrompt: getNullableString(metadata, 'negative_prompt') ?? '',
   positivePrompt: getString(metadata, 'positive_prompt') ?? '',
@@ -382,13 +375,7 @@ const hasGenerationSettings = (metadata: unknown): boolean =>
   getBoolean(metadata, 'seamless_x') !== null ||
   getBoolean(metadata, 'seamless_y') !== null;
 
-/**
- * Krea-2's conditioning rebalance, as written by `buildKrea2Graph`.
- *
- * Gated on the recalled model's base because the settings keys are family-specific, and
- * validated because `krea2RebalanceWeights` is forwarded to the node verbatim — a
- * metadata blob is not a trusted source for a string the backend will parse.
- */
+/** Gate Krea-2 rebalance on model base and validate metadata before forwarding weights verbatim to the node parser. */
 const getMetadataKrea2Rebalance = (
   metadata: unknown,
   model: GenerateModelConfig | undefined
@@ -469,10 +456,8 @@ export const getSupportedClipSkip = (metadata: unknown, model: GenerateModelConf
 };
 
 /**
- * Recall All, Remix and CLIP skip read architecture policy -- model defaults, VAE and CLIP skip rules
- * -- and their result is persisted into the project, where it outlives the outage. Without the served
- * table they would be computed on fallbacks and stored. Prompts and seed are the image's own, and
- * a dimensions recall already declines per model when it has no grid to snap to.
+ * Require served policy for Recall All, Remix, and CLIP skip before persisting model defaults or compatibility
+ * choices. Prompts/seed are intrinsic; dimension recall gates its own grid.
  */
 export const isImageRecallKindAvailable = (kind: ImageRecallKind): boolean =>
   kind === 'prompts' || kind === 'seed' || kind === 'dimensions' || hasArchitectureCapabilities();

@@ -14,9 +14,7 @@ export const QueueStatusWidgetView = ({ presentation }: WidgetViewProps) => {
   const { t } = useTranslation();
   const { progress, queueItems } = useActiveQueueProgress();
   const isPaused = useIsProcessorPaused();
-  // The chip's remaining/total counts must hold steady as progress advances
-  // through a running batch's sub-images, so they come from a summary built
-  // without progress; only the percent label tracks live progress.
+  // Derive counts without progress so batch sub-image updates change percent only.
   const summary = getQueueSummary(queueItems);
   const chip = getQueueStatusChip(summary, isPaused);
   const percent = getDeterminateProgressPercent(progress?.percentage);
@@ -24,8 +22,6 @@ export const QueueStatusWidgetView = ({ presentation }: WidgetViewProps) => {
     chip.labelKey === 'idle'
       ? t('widgets.queueStatus.idle')
       : t(`widgets.queueStatus.${chip.labelKey}`, { count: chip.count });
-  // The count answers "how much is left"; the percent answers "how far into the
-  // current one", which is the half the chip was missing.
   const showPercent = chip.tone === 'running' && percent !== null;
   const detail = chip.tone === 'running' ? progress?.message.trim() : undefined;
 

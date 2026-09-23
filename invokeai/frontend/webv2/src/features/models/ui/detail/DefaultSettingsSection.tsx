@@ -16,12 +16,7 @@ import type { DefaultSettingsControl, DefaultSettingsModel } from './defaultSett
 
 import { getFieldsForModel, validateDefaults } from './defaultSettingsFields';
 
-/**
- * Per-model generation defaults ("use these settings when this model is
- * selected"). Every field is individually toggleable: off = inherit the app
- * default (stored as null). Field policy and validation live in
- * `defaultSettingsFields.ts`; this file only renders and saves.
- */
+/** Disabled defaults persist null to inherit app settings; defaultSettingsFields owns field policy and validation. */
 
 interface DefaultSettingsDraft {
   modelKey: string;

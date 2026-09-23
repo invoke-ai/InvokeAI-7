@@ -83,8 +83,7 @@ describe('prompt highlight segments', () => {
       expect(dynamicKindForText(`\${lens}`, `\${lens}`)).toBe('promptVariable');
     });
 
-    // The comment wins over the error the unknown wildcard would otherwise be:
-    // upstream strips the comment before it ever looks the name up.
+    // Strip comments before wildcard lookup.
     it('dims a comment over everything inside it', () => {
       const known = new Set(['colors']);
       const segments = buildPromptHighlightSegments('a cat # __nope__ {unclosed', {
@@ -106,8 +105,7 @@ describe('prompt highlight segments', () => {
 
       expect(kindWithCatalog('a __colors__ ball', '__colors__')).toBe('wildcard');
       expect(kindWithCatalog('a __nope__ ball', '__nope__')).toBe('error');
-      // A glob resolves against the catalog rather than being flagged for not
-      // being a name of its own.
+      // Resolve globs against catalog matches, not literal wildcard names.
       expect(kindWithCatalog('a __colo*__ ball', '__colo*__')).toBe('wildcard');
       expect(kindWithCatalog('a __nope/*__ ball', '__nope/*__')).toBe('error');
       // Without a catalog nothing is known to be missing, so neither is an error.
@@ -125,11 +123,7 @@ describe('prompt highlight segments', () => {
   });
 });
 
-// The annotation lookup used to filter and sort every annotation for every
-// token. Dynamic prompts made that bite: a variant-heavy prompt now carries an
-// annotation per brace, separator, weight, sampler, variable and wildcard, so
-// the annotation count became proportional to the token count. This ran to
-// 469ms on the prompt below, synchronously inside a render, on every keystroke.
+// A variant-heavy fixture exposes quadratic annotation lookup.
 describe('buildPromptHighlightSegments on a large prompt', () => {
   // eslint-disable-next-line no-template-curly-in-string -- `${v=1}` is dynamic-prompts syntax, not interpolation
   const prompt = '{a|b|c} __colours__ ${v=1} '.repeat(700);

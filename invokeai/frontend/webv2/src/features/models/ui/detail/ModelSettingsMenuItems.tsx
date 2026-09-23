@@ -17,12 +17,7 @@ import { DownloadIcon, UploadIcon } from 'lucide-react';
 import { useRef, type ChangeEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 
-/**
- * Export/import a model's user-editable settings as JSON (format shared with
- * the legacy frontend). Rendered inside the detail pane's overflow menu; the
- * full config is read from the store at action time so the menu itself only
- * needs a key.
- */
+/** Share the legacy JSON settings format; read full config at action time so menu props need only a model key. */
 export const ModelSettingsMenuItems = ({ modelKey }: { modelKey: string }) => {
   const { t } = useTranslation();
   const notify = useNotify();

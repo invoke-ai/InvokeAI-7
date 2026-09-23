@@ -23,11 +23,7 @@ const formatStrengthPercent = (value: number): string => `${Math.round(value * 1
 const selectCanvasStrength = (project: Parameters<typeof getProjectWidgetValues>[0]): number =>
   readCanvasDenoisingStrength(getProjectWidgetValues(project, 'canvas'));
 
-/**
- * The canvas denoising strength as its own Generate-form section: the one
- * img2img knob, persisted in the canvas widget's values and flushed with the
- * form's other drafts before an invocation.
- */
+/** Persist canvas denoising strength in widget values and flush its draft with the Generate form before invocation. */
 export const GenerateDenoisingStrength = () => {
   const { t } = useTranslation();
   const { widgets } = useWorkbenchCommands();

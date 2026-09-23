@@ -131,20 +131,8 @@ export const getGalleryDeletionSuccessor = (
 };
 
 /*
- * Reveal requests: an explicit "scroll this item into view" signal from
- * surfaces outside the grid (the image map's reveal). Deliberately NOT derived
- * from the selection, which also changes when a finished generation
- * auto-selects its image — scrolling on that yanked the grid out from under a
- * browsing user. A reveal is a deliberate gesture, so it gets its own channel,
- * and a token, so repeating the same gesture (re-clicking the same map point
- * after scrolling away) reveals again even though the selection is unchanged.
- *
- * Module-scoped rather than persisted: a reveal is an ephemeral intent for the
- * currently mounted grid, and persisting it would replay a stale scroll in the
- * next session. It lives here, beside the selection helpers it travels with,
- * rather than in a module of its own — a separate one becomes a separate chunk
- * and an extra request in the gallery widget's load, which the performance
- * budgets police.
+ * Explicit, tokenized reveals can repeat without selection changes. Keep them ephemeral to avoid replaying stale
+ * scrolls; colocating avoids another gallery chunk.
  */
 
 export interface GalleryRevealRequest {
@@ -176,18 +164,8 @@ export const subscribeGalleryRevealRequests = (listener: () => void): (() => voi
 };
 
 /*
- * Navigation ordering. A reveal resolves its item over the network before it
- * touches anything, so two gestures in flight can land out of order; the newer
- * one must win. The counter is module-scoped for the same reason the reveal
- * channel above is: the thing it guards — the gallery selection — is global, so
- * a per-mount ref leaves a hole whenever a caller unmounts with a hydrate in
- * flight (switching the right-panel tab away and back), where the abandoned
- * closure compares against its own dead ref, passes, and overwrites the newer
- * mount's selection. One counter spans every surface that navigates the grid.
- *
- * It lives here rather than beside the reveal that uses it because that module
- * is loaded on demand, and a caller which defers it still has to take its place
- * in the ordering at the moment of the press.
+ * Order navigation gestures across mounts and surfaces before async hydration; only the latest may update the
+ * shared selection.
  */
 
 let navigationSequence = 0;
@@ -199,11 +177,8 @@ export const claimGalleryNavigationSequence = (): number => ++navigationSequence
 export const isGalleryNavigationCurrent = (sequence: number): boolean => sequence === navigationSequence;
 
 /*
- * Sectioned navigation. The gallery lays out three sections in one visual
- * order — the in-progress tiles, the starred strip, the listing — and Preview
- * walks the same order, so one sequence model serves both: left/right walk the
- * flat order across the seams, up/down keep the column across them. The cursor
- * is a key: a followed session's, or the selected item's.
+ * Grid and Preview share section order; horizontal navigation crosses seams while vertical navigation preserves
+ * columns.
  */
 
 export type GalleryNavigationEntry =
@@ -221,12 +196,8 @@ const isNavigable = (entry: GalleryNavigationEntry | undefined): entry is Galler
   entry !== undefined && (entry.kind === 'item' || entry.navigable);
 
 /**
- * The entry an arrow key lands on, or null when there is nowhere to go. Each
- * section chunks its own rows, so a vertical step across a seam keeps its
- * column instead of drifting by the previous section's partial last row; a
- * row whose landing cell is not navigable yields its nearest navigable cell,
- * and a row with none is skipped. Without a cursor, any key lands on the
- * first navigable entry.
+ * Each section starts its own rows. Vertical navigation preserves columns, selects the nearest navigable cell, and
+ * skips empty rows; no cursor starts at the first entry.
  */
 export const getGalleryNavigationStep = (
   sections: readonly (readonly GalleryNavigationEntry[])[],

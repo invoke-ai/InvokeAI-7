@@ -1,37 +1,8 @@
 /**
- * Two-way sync between a project's canvas generation frame (`canvas.document.bbox`)
- * and its model-valid generate-widget processing dimensions (`width` / `height` /
- * `aspectRatioId`).
- *
- * Legacy-compatible geometry: the generation frame remains the exact final
- * canvas footprint, including off-grid sizes. Resizing the bbox (tool gesture,
- * the frame form, undo/redo) drives width/height snapped to the selected model's
- * hard processing grid; the canvas graph resizes inputs to that processing size
- * and the result back to the bbox. The optional "Scale before processing"
- * policy (`resolveCanvasProcessingSize`) applies only at submit and never
- * touches the dimensions synced here. Editing the generate dimensions (or picking an aspect preset)
- * still resizes the bbox in place (top-left anchored). Position-only bbox moves
- * never touch the dimensions.
- *
- * The module is two parts:
- * - {@link reconcileCanvasDims}: a pure, unit-tested reconcile that decides which
- *   side (if any) to write, given the current bbox, the current committed
- *   generate dims, the snapping grid, and the last-synced snapshot.
- * - {@link createCanvasDimsSync}: a thin `store.subscribe` wiring that feeds the
- *   reconcile from workbench state and dispatches the resulting action. It also
- *   subscribes to the architecture capability table, because the grid is
- *   generation policy that arrives over the network rather than workbench state,
- *   and both directions of this sync are persisted.
- *
- * Loop safety: the reconcile short-circuits to `none` whenever the bbox and dims
- * already agree, so applying either direction is a fixed point. The wiring also
- * updates its last-synced snapshot *before* dispatching and hard-guards against
- * re-entrant notifications, keeping the dispatch count per external change
- * bounded (at most one echo, which is itself a no-op).
- *
- * Only active while `project.invocation.sourceId === 'canvas'`; for every other
- * source the sync is inert and generate-dimension editing behaves exactly as it
- * does today. Zero React.
+ * Sync only for Canvas sources. Bbox edits retain the exact footprint and derive model-grid processing dimensions;
+ * Generate edits resize the bbox at its top-left. Position-only changes and submit-only scaling do not
+ * participate. Capability changes retrigger reconciliation; update the expected snapshot before dispatch and guard
+ * re-entry.
  */
 
 import type { AspectRatioId } from '@features/generation/contracts';
@@ -71,11 +42,8 @@ export interface CanvasDimsReconcileInput {
 export type CanvasDimsReconcileResult =
   | { kind: 'none' }
   /**
-   * Write a model-grid processing size onto the generate dims (bbox wins),
-   * retaining the exact bbox ratio in the aspect controls. Both aspect values
-   * are re-derived from the bbox unconditionally (even when the form's ratio is
-   * locked to a preset) so a locked preset does not veto the bbox, which remains
-   * authoritative.
+   * Bbox authority overrides locked aspect presets; derive both aspect values from the exact bbox while snapping
+   * processing dimensions.
    */
   | { kind: 'patch-dims'; width: number; height: number; aspectRatioId: AspectRatioId; aspectRatioValue: number }
   /** Resize the bbox to the (grid-snapped) generate dims, keeping its top-left position. */
@@ -101,15 +69,8 @@ const createSnapshot = (
 });
 
 /**
- * Decide which direction of the bbox <-> dims sync to apply.
- *
- * - No bbox (not in canvas mode) -> `none`.
- * - A grid-valid bbox and dims that already agree -> `none` (the primary loop guard).
- * - Otherwise the side that changed since `prev` wins; the bbox is authoritative
- *   when both (or neither, on first run) changed. Bbox -> dims writes the nearest
- *   model-grid processing size while preserving the exact bbox footprint and
- *   aspect. Dims -> bbox snaps to the grid and only emits when the snapped size
- *   actually differs from the live bbox.
+ * The changed side wins; bbox wins on first run or simultaneous changes. Write model-grid dimensions without
+ * changing its exact footprint, and skip already-consistent state.
  */
 export const reconcileCanvasDims = ({
   bbox,
@@ -179,8 +140,7 @@ const readModelBase = (values: Record<string, unknown>): string | null => {
     : null;
 };
 
-// The grid is variant-dependent -- Wan TI2V-5B enforces 32 where A14B enforces 16 -- and this
-// path persists what it reconciles, so it has to ask with the variant.
+// Use the model variant because its grid can differ and reconciled dimensions are persisted.
 const readModelVariant = (values: Record<string, unknown>): string | null => {
   const model = values.model;
   return model && typeof model === 'object' && typeof (model as { variant?: unknown }).variant === 'string'
@@ -188,20 +148,13 @@ const readModelVariant = (values: Record<string, unknown>): string | null => {
     : null;
 };
 
-/**
- * Wire the bbox <-> generate-dims reconcile onto a workbench store. Subscribes
- * immediately; dispatches `patchGenerateSettings` / `setCanvasBbox` as the
- * reconcile directs. Returns a handle whose `dispose` removes the subscription.
- */
 export const createCanvasDimsSync = (store: CanvasDimsSyncStore): CanvasDimsSync => {
   let prev: CanvasDimsSnapshot | null = null;
   let lastProjectId: string | null = null;
   let isSyncing = false;
 
   const handleChange = (): void => {
-    // A dispatch below re-enters this listener synchronously; the snapshot is
-    // already updated to the post-dispatch expectation, so the nested pass would
-    // be a no-op — skip it to keep the dispatch count strictly bounded.
+    // Dispatch synchronously re-enters this listener; skip the nested pass to bound writes.
     if (isSyncing) {
       return;
     }
@@ -220,8 +173,6 @@ export const createCanvasDimsSync = (store: CanvasDimsSyncStore): CanvasDimsSync
       prev = null;
     }
 
-    // Inert unless the project is invoking into the canvas: for every other
-    // source the generate dimensions behave exactly as they do today.
     if (project.invocation.sourceId !== 'canvas') {
       prev = null;
       return;
@@ -239,10 +190,8 @@ export const createCanvasDimsSync = (store: CanvasDimsSyncStore): CanvasDimsSync
     const bbox = project.canvas.document.bbox;
     const grid = resolveModelGrid(readModelBase(generateValues), readModelVariant(generateValues));
 
-    // Nothing is written until the backend has answered for this architecture. Both writes below
-    // are `patchSettings` / `setCanvasBbox` on the project, so reconciling against a fallback grid
-    // would *persist* an off-grid width/height for a base whose denoise node rejects it -- and the
-    // capability subscription below is what brings this listener back once the answer lands.
+    // Wait for backend capabilities before persisting dimensions; a fallback grid may be invalid for this
+    // architecture.
     if (grid === null) {
       prev = null;
       return;
@@ -285,9 +234,7 @@ export const createCanvasDimsSync = (store: CanvasDimsSyncStore): CanvasDimsSync
   };
 
   const unsubscribeStore = store.subscribe(handleChange);
-  // The grid is generation policy, not workbench state, and it arrives over the network after this
-  // runtime is constructed. A project that is already consistent produces no workbench-store change
-  // when the table lands, so without this the gate above would never be re-entered.
+  // Capability arrival may not change workbench state, so subscribe directly to retry the gated reconciliation.
   const unsubscribeCapabilities = subscribeArchitectureCapabilities(handleChange);
 
   // Seed from the current state so an already-canvas project reconciles on mount.

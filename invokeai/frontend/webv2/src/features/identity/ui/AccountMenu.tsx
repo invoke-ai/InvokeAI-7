@@ -11,20 +11,13 @@ import { ProfileDialog } from './ProfileDialog';
 const MENU_POSITIONING = { placement: 'bottom-end' } as const;
 const TRIGGER_HOVER = { bg: 'bg.subtle' } as const;
 
-/**
- * The signed-in user's avatar menu — account settings, user management, and
- * sign-out — shown on both the Launchpad and the workbench shell. Renders only
- * in a multi-user session; the settings gear is a separate control that each
- * surface's top bar places alongside it.
- */
+/** Show account actions only for multi-user sessions; each host places its separate settings control. */
 export const AccountMenu = () => {
   const { t } = useTranslation();
   const session = useAuthSession();
   const navigate = useNavigate();
   const [isProfileOpen, setIsProfileOpen] = useState(false);
 
-  // User management is a Launchpad page (`/users`), not a workbench widget —
-  // so this navigates there, working the same from Home and the editor.
   const openUserManagement = useCallback(() => {
     void navigate({ to: '/users' });
   }, [navigate]);

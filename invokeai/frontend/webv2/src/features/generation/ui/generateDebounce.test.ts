@@ -5,16 +5,7 @@ import { describe, expect, it } from 'vitest';
 
 import { applyGenerateSettingsUpdate, mergeGenerateSettingsUpdate } from './generateDebounce';
 
-/**
- * A pending update is an updater FUNCTION, and the form runs it twice: once
- * against the draft the user sees (`commit`), then again against the freshly
- * committed settings when the debounce flushes. That is what lets a pending
- * edit survive a concurrent external write — but it also means an updater has
- * to be pure. An updater that mints an id inside its own body produces a
- * DIFFERENT id on each run, so the entry the user is looking at is not the
- * entry that gets committed, and any later edit keyed to the rendered id is
- * silently dropped at flush.
- */
+/** Updaters run for both draft and flush; mint IDs outside them. */
 const buildSettings = (referenceImages: GenerateReferenceImage[] = []): GenerateSettings =>
   ({ referenceImages }) as unknown as GenerateSettings;
 
@@ -41,8 +32,7 @@ describe('pending generate settings updates', () => {
     expect(idsOf(draft)).toEqual(['a', 'minted-1']);
     expect(idsOf(committed)).toEqual(['a', 'minted-2']);
 
-    // The hazard this guards: a reorder queued behind that append is keyed to
-    // the id the CARD renders under, which no longer exists at flush time.
+    // The rendered ID must match the flushed ID for reordering to work.
     const chained = mergeGenerateSettingsUpdate(pending, (settings) => ({
       ...settings,
       referenceImages: [...moveReferenceImage(settings.referenceImages, 'minted-1', -1)],
@@ -63,8 +53,6 @@ describe('pending generate settings updates', () => {
       referenceImages: [...moveReferenceImage(settings.referenceImages, 'hoisted', -1)],
     }));
 
-    // Same chain, applied to draft and to the committed settings: both agree,
-    // and the queued reorder actually lands.
     expect(idsOf(applyGenerateSettingsUpdate(buildSettings([entry('a')]), chained))).toEqual(['hoisted', 'a']);
     expect(idsOf(applyGenerateSettingsUpdate(buildSettings([entry('a')]), chained))).toEqual(['hoisted', 'a']);
   });

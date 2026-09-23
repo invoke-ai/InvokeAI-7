@@ -23,7 +23,6 @@ from invokeai.backend.model_manager.load.model_loaders.krea2 import (
     _reject_incomplete_load,
     _remap_native_layer_paths,
     _remap_qwen3vl_singlefile_keys,
-    _strip_comfyui_prefix,
 )
 from invokeai.backend.quantization.fp8_scaled import (
     FP8_DTYPE,
@@ -61,25 +60,6 @@ class TestNormalizeQwen3vlRopeConfig:
     def test_accepts_config_without_a_text_config(self) -> None:
         config = SimpleNamespace()
         assert _normalize_qwen3vl_rope_config(config) is config
-
-
-class TestStripComfyuiPrefix:
-    @pytest.mark.parametrize("prefix", ["model.diffusion_model.", "diffusion_model."])
-    def test_strips_known_prefixes(self, prefix: str) -> None:
-        sd = {f"{prefix}blocks.0.weight": torch.zeros(1), f"{prefix}first.weight": torch.zeros(1)}
-        out = _strip_comfyui_prefix(sd)
-        assert set(out.keys()) == {"blocks.0.weight", "first.weight"}
-
-    def test_noop_when_no_prefix(self) -> None:
-        sd = {"blocks.0.weight": torch.zeros(1), "img_in.weight": torch.zeros(1)}
-        out = _strip_comfyui_prefix(sd)
-        assert set(out.keys()) == set(sd.keys())
-
-    def test_only_the_first_matching_prefix_is_used(self) -> None:
-        # "model.diffusion_model." is checked before "diffusion_model.", so both strip to the same tail.
-        sd = {"model.diffusion_model.blocks.0.weight": torch.zeros(1)}
-        out = _strip_comfyui_prefix(sd)
-        assert list(out.keys()) == ["blocks.0.weight"]
 
 
 class TestIsNativeKrea2Format:

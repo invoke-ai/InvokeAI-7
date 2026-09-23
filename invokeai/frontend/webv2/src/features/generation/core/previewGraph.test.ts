@@ -40,8 +40,7 @@ const storedValues = createGenerateValues({
   width: 1024,
 });
 
-// The resolver fails closed without the backend's architecture table, so seed the registry with the
-// same fixture the backend pins. Reset afterwards so registry state cannot leak between files.
+// Seed authoritative fixtures and clear the registry for test isolation.
 beforeEach(() => {
   setArchitectureCapabilities(capabilitiesFixture as ArchitectureCapabilitiesRow[]);
 });

@@ -35,6 +35,7 @@ from invokeai.backend.flux.model import Flux
 from invokeai.backend.flux.modules.autoencoder import AutoEncoder
 from invokeai.backend.flux.redux.flux_redux_model import FluxReduxModel
 from invokeai.backend.flux.util import get_flux_ae_params, get_flux_transformers_params
+from invokeai.backend.model_manager.checkpoint_prefix import CheckpointPrefix
 from invokeai.backend.model_manager.configs.base import Checkpoint_Config_Base, Diffusers_Config_Base
 from invokeai.backend.model_manager.configs.clip_embed import CLIPEmbed_Diffusers_Config_Base
 from invokeai.backend.model_manager.configs.controlnet import (
@@ -71,7 +72,6 @@ from invokeai.backend.model_manager.load.model_loader_registry import ModelLoade
 from invokeai.backend.model_manager.load.model_loaders.flux2_state_dict_utils import (
     convert_flux2_bfl_to_diffusers,
     convert_flux2_vae_bfl_to_diffusers,
-    remap_flux2_layer_paths,
 )
 from invokeai.backend.model_manager.load.model_loaders.generic_diffusers import GenericDiffusersLoader
 from invokeai.backend.model_manager.taxonomy import (
@@ -155,7 +155,7 @@ class FluxVAELoader(ModelLoader):
         # VAE is broken in float16, which mps defaults to
         if self._torch_dtype == torch.float16:
             try:
-                vae_dtype = torch.tensor([1.0], dtype=torch.bfloat16, device=self._torch_device).dtype
+                vae_dtype = torch.empty(0, dtype=torch.bfloat16, device=self._torch_device).dtype
             except TypeError:
                 vae_dtype = torch.float32
         else:
@@ -181,7 +181,7 @@ class Flux2VAEDiffusersLoader(ModelLoader):
         # VAE is broken in float16, which mps defaults to
         if self._torch_dtype == torch.float16:
             try:
-                vae_dtype = torch.tensor([1.0], dtype=torch.bfloat16, device=self._torch_device).dtype
+                vae_dtype = torch.empty(0, dtype=torch.bfloat16, device=self._torch_device).dtype
             except TypeError:
                 vae_dtype = torch.float32
         else:
@@ -281,7 +281,7 @@ class Flux2VAELoader(ModelLoader):
         # VAE is broken in float16, which mps defaults to
         if self._torch_dtype == torch.float16:
             try:
-                vae_dtype = torch.tensor([1.0], dtype=torch.bfloat16, device=self._torch_device).dtype
+                vae_dtype = torch.empty(0, dtype=torch.bfloat16, device=self._torch_device).dtype
             except TypeError:
                 vae_dtype = torch.float32
         else:
@@ -1172,17 +1172,7 @@ class Flux2CheckpointModel(ModelLoader):
 
         # Check if keys have ComfyUI-style prefix and strip if needed. This runs before anything
         # reads the quantization side-channel: the scales carry the same prefix as their weights.
-        prefix_to_strip = None
-        for prefix in ["model.diffusion_model.", "diffusion_model."]:
-            if any(k.startswith(prefix) for k in sd.keys() if isinstance(k, str)):
-                prefix_to_strip = prefix
-                break
-
-        if prefix_to_strip:
-            sd = {
-                (k[len(prefix_to_strip) :] if isinstance(k, str) and k.startswith(prefix_to_strip) else k): v
-                for k, v in sd.items()
-            }
+        sd = CheckpointPrefix.detect(sd).strip(sd)
 
         # Which of the two ComfyUI side channels this file carries is decided once, and int8 first:
         # an int8 layer ships a `.weight_scale` too, so probing for scales without ruling int8 out
@@ -1195,13 +1185,16 @@ class Flux2CheckpointModel(ModelLoader):
 
         int8_markers: dict[str, dict[str, Any]] = {}
         fp8_layers: dict[str, Fp8ScaledLayer] = {}
+        # Where each BFL module's weight lands, recorded by the conversion itself. Both branches
+        # re-key the header's per-layer entries with it; they differ only in when they convert.
+        flux2_modules: dict[str, list[str]] = {}
 
         if has_int8_weights:
             # The converter carries `.comfy_quant` and `.weight_scale` to wherever their weight
             # landed, so the markers are read *after* the rename and already name diffusers modules
             # -- including the three a fused `qkv` becomes, which each inherit the fused layer's
             # per-tensor scale and marker.
-            converted_sd = convert_flux2_bfl_to_diffusers(sd)
+            converted_sd = convert_flux2_bfl_to_diffusers(sd, module_map=flux2_modules)
             int8_markers = extract_int8_convrot_markers(converted_sd)
             # The header is the other place a repack declares its scheme, and for FLUX.2 that is
             # not hypothetical: Comfy-Org's own fp8 build of this model carries *no* per-layer
@@ -1216,7 +1209,7 @@ class Flux2CheckpointModel(ModelLoader):
                     parse_quantization_metadata(read_safetensors_metadata(model_path, self._logger))
                 ).items()
                 if marker.get("format") == INT8_TENSORWISE_FORMAT
-                for renamed in (remap_flux2_layer_paths([name]).get(name) or [name])
+                for renamed in (flux2_modules.get(name) or [name])
             }
             int8_markers = {**header_markers, **int8_markers}
         else:
@@ -1231,14 +1224,17 @@ class Flux2CheckpointModel(ModelLoader):
                 parse_quantization_metadata(read_safetensors_metadata(model_path, self._logger))
             )
             layer_hints = {**extract_comfy_quant_hints(sd), **header_hints}
-            path_map = remap_flux2_layer_paths(layer_hints.keys())
-            layer_hints = {
-                renamed: hints for name, hints in layer_hints.items() for renamed in (path_map.get(name) or [name])
-            }
 
             # Convert BFL format state dict to diffusers format. Scales and markers are carried to
-            # wherever their weight landed, including across the fused-qkv split.
-            converted_sd = convert_flux2_bfl_to_diffusers(sd)
+            # wherever their weight landed, including across the fused-qkv split. The conversion
+            # runs before the hints are re-keyed because it is what *knows* the mapping: a probe
+            # asked by name cannot see that a fused qkv whose rows are not divisible by three is
+            # left unsplit, and would fan a hint onto three modules that do not exist.
+            converted_sd = convert_flux2_bfl_to_diffusers(sd, module_map=flux2_modules)
+
+            layer_hints = {
+                renamed: hints for name, hints in layer_hints.items() for renamed in (flux2_modules.get(name) or [name])
+            }
 
             fp8_layers = extract_fp8_scaled_layers(converted_sd, layer_hints=layer_hints)
             if fp8_layers and not keep_fp8:
@@ -1694,17 +1690,7 @@ class Flux2GGUFCheckpointModel(ModelLoader):
         sd = gguf_sd_loader(model_path, compute_dtype=torch.bfloat16)
 
         # Check if keys have ComfyUI-style prefix and strip if needed
-        prefix_to_strip = None
-        for prefix in ["model.diffusion_model.", "diffusion_model."]:
-            if any(k.startswith(prefix) for k in sd.keys() if isinstance(k, str)):
-                prefix_to_strip = prefix
-                break
-
-        if prefix_to_strip:
-            sd = {
-                (k[len(prefix_to_strip) :] if isinstance(k, str) and k.startswith(prefix_to_strip) else k): v
-                for k, v in sd.items()
-            }
+        sd = CheckpointPrefix.detect(sd).strip(sd)
 
         # Convert BFL format state dict to diffusers format
         converted_sd = convert_flux2_bfl_to_diffusers(sd)

@@ -12,12 +12,7 @@ import type * as persistenceModule from './syncedPersistence';
 
 import { ProjectCreateAbsentError } from './api';
 
-/**
- * The `.invk` workflow end to end: export writes an archive that import reads
- * back, an imported project always lands under a fresh id so a file can never
- * overwrite an existing project, and a file that is not ours is refused before
- * anything reaches the server.
- */
+/** Verify fresh IDs, no overwrites, and format rejection before server mutation. */
 
 const api = vi.hoisted(() => ({
   createProjectSettled: vi.fn(),
@@ -53,9 +48,6 @@ const transport = vi.hoisted(() => ({
   deleteArchiveImages: vi.fn(() => Promise.resolve()),
   deleteArchiveVideos: vi.fn(() => Promise.resolve()),
   deleteStagingBoard: vi.fn(() => Promise.resolve()),
-  // `Uint8Array | null` up front: a fetcher that returns `null` is how the
-  // "server would not serve it" path is exercised, and inferring the narrower
-  // type here would make that untypeable at the call site.
   fetchImageBytes: vi.fn((imageName: string): Promise<Uint8Array | null> =>
     Promise.resolve(new TextEncoder().encode(`bytes:${imageName}`))
   ),
@@ -91,9 +83,7 @@ vi.mock('./covers', async (importOriginal) => ({
   recordProjectCover: covers.recordProjectCover,
 }));
 vi.mock('@platform/browser/downloadBlob', () => downloads);
-// Partial, so the module's pure predicates stay real. `isRequestCancellation` decides whether a
-// failure is this asset's or the whole operation's — a stub of it would let the tests agree with a
-// restore that mistook a cancelled import for three hundred dangling references.
+// Preserve real cancellation predicates so cancellation cannot masquerade as missing assets.
 vi.mock('./invk/assetTransport', async (importOriginal) => ({
   ...(await importOriginal<typeof assetTransportModule>()),
   ...transport,
@@ -170,8 +160,6 @@ const acceptCreate = (): void => {
 
 beforeEach(async () => {
   vi.resetModules();
-  // `resetAllMocks` restores the implementations the hoisted `vi.fn(impl)` factories declare, so
-  // the defaults do not need re-establishing here.
   vi.resetAllMocks();
 
   projectFile = await import('./projectFile');
@@ -186,12 +174,7 @@ describe('exportOpenProject', () => {
     expect(downloads.downloadBlob.mock.calls[0]![1]).toBe('My project.invk');
   });
 
-  /**
-   * The transport is mocked by module path, and every assertion below about what
-   * did *not* reach the server is vacuous if that path stops resolving. This one
-   * fails loudly instead: a document with a known image reference must reach the
-   * mock on the way out.
-   */
+  /** Include a positive transport probe so negative server-call assertions cannot pass vacuously. */
   it('reaches the server through the mocked transport', async () => {
     api.getProject.mockResolvedValue({
       data: {
@@ -285,12 +268,7 @@ describe('exportLibraryProject', () => {
     expect(manifest.minimumCanvasSchemaVersion).toBe(4);
   });
 
-  /**
-   * This is reachable from a project card and from the gallery board menu, both of which can be on
-   * screen while the editor holds that project — and the board most likely to be right-clicked is
-   * the open project's own. Reading the server record without flushing first hands someone a file
-   * missing everything since the last autosave.
-   */
+  /** Flush open projects before export to include unacknowledged edits. */
   it('flushes an open project before reading its record', async () => {
     const { registerOpenProject, unregisterOpenProject } = await import('./syncStore');
     const order: string[] = [];
@@ -328,12 +306,7 @@ describe('exportLibraryProject', () => {
     expect(order).toEqual(['flush', 'get']);
   });
 
-  /**
-   * The record read below is the last one the server *acknowledged*, which is precisely what the
-   * flush exists to move past. A flush that resolved without landing is therefore indistinguishable
-   * from one that worked: the archive gets built from stale bytes and downloaded under a success
-   * toast, silently missing everything since the last successful autosave.
-   */
+  /** Require an acknowledged flush before reading/exporting server bytes. */
   it('refuses to export a project whose flush never reached the server', async () => {
     const { registerOpenProject, unregisterOpenProject } = await import('./syncStore');
 
@@ -371,11 +344,7 @@ describe('exportLibraryProject', () => {
   });
 });
 
-/**
- * Both directions can half-succeed, and both used to compute exactly what was
- * lost and then discard it — so a project that shed forty layers looked like a
- * clean round trip. These pin the reporting all the way out to the caller.
- */
+/** Partial-loss outcomes must reach callers. */
 describe('what a transfer reports', () => {
   const projectWithImages = () => {
     const project = createDraftProject([]);
@@ -456,12 +425,7 @@ describe('what a transfer reports', () => {
   });
 });
 
-/**
- * The board half: an archive carries the project's board, and importing it gives that board's media
- * new identities on a staging board the create then claims. Nothing here may reuse a name the
- * destination already holds — `board_images` keys on the image name, so a reused name would move a
- * stranger's picture onto this project's board instead of copying it.
- */
+/** Copy imported board media to fresh identities; adopting existing names would move another board's media. */
 describe('importing a project board', () => {
   const boardProject = () => {
     const project = createDraftProject([]);
@@ -542,14 +506,9 @@ describe('importing a project board', () => {
     expect(uploadedBoardNames().sort()).toEqual(['shared.png', 'unreferenced.png']);
   });
 
-  /**
-   * The failure that must never bind to a stranger: on this server `shared.png` is taken, by the
-   * project this archive came from.
-   */
   it('forces an overlapping reference dangling when its board upload fails', async () => {
     acceptCreate();
-    // The destination has an image called `shared.png` — it is the source project's own. Falling
-    // back to that name would open the copy pointing at somebody else's picture.
+    // Failed copies must not reuse existing source-owned names.
     transport.findExistingImageNames.mockImplementation((names: readonly string[]) => Promise.resolve(new Set(names)));
     transport.uploadBoardImage.mockImplementation((_bytes: Uint8Array, fileName: string) =>
       fileName === 'shared.png'
@@ -672,12 +631,7 @@ describe('importProjectFile', () => {
     expect(createRequest.data.id).toBe(createRequest.project_id);
   });
 
-  /**
-   * Export strips installation state, so its own archives never carry it — but import must not
-   * rely on that. A legacy `.invokeproject.json`, a dev-build archive or a hand-edited one can all
-   * arrive with a stranger's gallery selection, and the collector skips those keys, so a restore
-   * can neither fetch what they point at nor report it as dangling.
-   */
+  /** Strip installation state on import too; skipped references cannot be remapped or reported. */
   it('strips a stranger’s gallery selection from a document it did not write', async () => {
     acceptCreate();
     const envelope = {

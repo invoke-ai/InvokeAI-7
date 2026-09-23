@@ -15,11 +15,7 @@ import { closeLayoutPresetAdmin, layoutPresetManagerStore } from './layoutPreset
 
 const EMPTY_LAYOUT_PRESETS: LayoutPreset[] = [];
 
-/**
- * Hosts the edit and delete dialogs shared by every preset-management surface.
- * The trigger only writes a preset id to the store, which avoids mounting a
- * second copy of these dialogs in both the strip and the manager.
- */
+/** Host shared preset dialogs once; triggers only select the preset id. */
 export const LayoutPresetAdminDialogs = () => {
   const { t } = useTranslation();
   const { layout } = useWorkbenchCommands();

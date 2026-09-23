@@ -10,32 +10,20 @@ import { ImageIndexProgressInline } from './ImageIndexProgress';
 
 const handleRefresh = () => {
   void refreshImageMapPoints();
-  // The counts too: this footer is the surface that shows them once the map
-  // exists, and counts left stale by a status event missed while offline are
-  // exactly what its refresh should be able to correct.
+  // Refresh counts too, recovering final status events missed while offline.
   refreshImageIndexStatus();
 };
 
-/**
- * Widget-chrome footer: point count, a stale hint while a recompute is
- * pending, embedding-index progress (admins only receive those events), and
- * a manual refresh.
- */
 export const ImageMapWidgetFooter = (_props: WidgetViewProps) => {
   const { data, indexCounts, indexUpdatedAt, loadState } = imageMapStore.useSnapshot();
 
-  // Only the states that actually show a map. `disabled`, `model_missing` and
-  // `empty` all carry data too, and each renders its own explanation — a
-  // "0 points" line with a Refresh button under "Image indexing is off" says
-  // nothing, and `computing` already offers its own "Check again".
+  // Show footer controls only with a rendered map; other data states own their explanations and retry controls.
   if (loadState === 'idle' || !data || data.state !== 'ready') {
     return null;
   }
 
   const indexing = isIndexing(indexCounts);
-  // Once the queue drains, images given up on are the only reason the index
-  // can settle short of `total` — without saying so the count simply stops
-  // below the total with nothing to explain it.
+  // Explain failed images when indexing drains below total.
   const skipped = indexCounts && indexCounts.pending === 0 && indexCounts.failed > 0;
 
   return (

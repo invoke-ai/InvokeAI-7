@@ -6,6 +6,7 @@ from typing import Optional
 
 import accelerate
 
+from invokeai.backend.model_manager.checkpoint_prefix import CheckpointPrefix
 from invokeai.backend.model_manager.configs.base import Checkpoint_Config_Base
 from invokeai.backend.model_manager.configs.controlnet import ControlNet_Checkpoint_Anima_Config
 from invokeai.backend.model_manager.configs.factory import AnyModelConfig
@@ -41,6 +42,13 @@ from invokeai.backend.util.state_dict_loading import log_unexpected_keys, reject
 logger = InvokeAILogger.get_logger(__name__)
 
 
+#: Anima's own wrapper namespaces. `net.` is the official packaging; the ComfyUI bundle uses the
+#: usual `model.diffusion_model.`. `diffusion_model.` is deliberately absent -- no Anima
+#: redistribution measured uses it, and `net.` is not stripped anywhere else because it is also the
+#: root module name of a PiD checkpoint.
+ANIMA_KEY_PREFIXES = ("model.diffusion_model.", "net.")
+
+
 def _strip_anima_bundle_prefix(sd: dict) -> dict:
     """Strip the transformer-key prefix from an Anima single-file checkpoint.
 
@@ -53,21 +61,7 @@ def _strip_anima_bundle_prefix(sd: dict) -> dict:
     checkpoints (VAE, text encoder) are dropped. If no known prefix is present, the
     state dict is returned unchanged.
     """
-    prefix_to_strip = None
-    for prefix in ["model.diffusion_model.", "net."]:
-        if any(k.startswith(prefix) for k in sd.keys() if isinstance(k, str)):
-            prefix_to_strip = prefix
-            break
-
-    if prefix_to_strip is None:
-        return sd
-
-    stripped_sd: dict = {}
-    for key, value in sd.items():
-        if isinstance(key, str) and key.startswith(prefix_to_strip):
-            stripped_sd[key[len(prefix_to_strip) :]] = value
-        # Skip non-transformer keys from bundled checkpoints (VAE, text encoder)
-    return stripped_sd
+    return CheckpointPrefix.detect(sd, ANIMA_KEY_PREFIXES).strip(sd, drop_foreign=True)
 
 
 # Checkpoint tensors that are not part of the transformer's in-memory state. Suffixes match

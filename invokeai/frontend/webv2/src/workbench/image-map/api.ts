@@ -13,12 +13,7 @@ export interface ImageMapPoint {
   y: number;
   /** The gallery item this point stands for; videos plot beside images. */
   item: GalleryItemRef;
-  /**
-   * `item`'s gallery key, derived once here. Every comparison the map makes —
-   * hit-testing a click, masking the selection, keying a hover — is against a
-   * key, and a 100k-point map re-scans on each wheel-zoom event, so deriving
-   * it per comparison would allocate a string per point per frame.
-   */
+  /** Cache gallery keys once to avoid per-point string allocation during large-map zoom and selection scans. */
   key: GalleryItemKey;
   /** DBSCAN cluster label; -1 means unclustered noise. */
   cluster: number;
@@ -60,11 +55,7 @@ interface BackendImageMapPointsResponse {
   updated_at: string | null;
 }
 
-/**
- * Opts this client into video items. The backend indexes videos either way and
- * serves them only to clients that resolve each item through the endpoint its
- * `kind` names — which this one does, so every map request asks for them.
- */
+/** Opt into videos because item-kind routing resolves both backend namespaces. */
 const INCLUDE_VIDEOS_PARAM = { include_videos: 'true' } as const;
 
 const mapPoints = (body: BackendImageMapPointsResponse): ImageMapPoints => ({
@@ -72,9 +63,7 @@ const mapPoints = (body: BackendImageMapPointsResponse): ImageMapPoints => ({
   modelName: body.model_name ?? null,
   pointCount: body.point_count,
   points: body.points.map((point) => {
-    // Only `video` names the other namespace; anything else is an image, so an
-    // unexpected value degrades to the kind that has always been on the map
-    // rather than producing an item no endpoint can resolve.
+    // Only explicit video uses its namespace; unknown kinds fall back to image resolution.
     const item: GalleryItemRef = { kind: point.kind === 'video' ? 'video' : 'image', name: point.image_name };
 
     return { cluster: point.cluster, item, key: toGalleryItemKey(item), x: point.x, y: point.y };
@@ -116,16 +105,9 @@ interface BackendImageMapStatusResponse {
   index?: { total: number; embedded: number; failed?: number } | null;
 }
 
-/**
- * Current index/projection status. Only the index counts are read here: the
- * projection half of the response duplicates what /points already carries, and
- * the counts are the one thing no other call returns.
- */
+/** Read index counts from status; projection details already come from points. */
 export const fetchImageMapStatus = async (): Promise<ImageMapStatus> => {
-  // Sent for consistency with the map's other calls: this reader keeps only
-  // `index` (which counts both kinds), but the response's projection half is
-  // kind-filtered by this flag, and a future reader of it should not have to
-  // discover that the call it inherited asked for a different map.
+  // Request the same video-inclusive map as other endpoints, including the unused projection portion.
   const body = await apiFetchJson<BackendImageMapStatusResponse>(
     `/api/v1/image_map/status?${new URLSearchParams(INCLUDE_VIDEOS_PARAM).toString()}`
   );

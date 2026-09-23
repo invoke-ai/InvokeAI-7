@@ -1,9 +1,6 @@
 import { QueryClient } from '@tanstack/react-query';
 
-/**
- * The application query cache. Feature modules own their keys and options;
- * non-React runtimes use this same client for precise realtime updates.
- */
+/** Features own keys/options; React and realtime runtimes share this client. */
 export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {

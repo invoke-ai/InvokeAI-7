@@ -205,8 +205,7 @@ const NodeTitle = ({ node, title }: { node: WorkflowInvocationNode; title: strin
       minW="0"
       text={title}
       title="Double-click to rename"
-      // Editing always starts from the displayed title: an unset label
-      // prefills with the template title rather than an empty input.
+      // Start editing from the displayed title, including the template fallback for unset labels.
       onDoubleClick={() => setDraftLabel(title)}
     />
   );

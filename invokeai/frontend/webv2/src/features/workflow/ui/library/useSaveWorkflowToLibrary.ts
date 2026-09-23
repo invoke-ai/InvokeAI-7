@@ -25,11 +25,8 @@ import { markLibraryGraphSynced } from './librarySyncBridge';
 import { setWorkflowLibrarySyncStatus } from './workflowLibrarySyncStore';
 
 /**
- * Saves the project graph to the backend workflow library — the chrome
- * header's one-click save for unbound graphs, and the graph preview's "save
- * this document as a new entry". A successful save also marks the autosaver's
- * baseline (`markLibraryGraphSynced`) so the freshly-saved content is not
- * immediately queued for another autosave pass.
+ * Save active graphs with a matching autosave baseline; arbitrary preview documents can be saved separately as new
+ * records.
  */
 export const useSaveWorkflowToLibrary = (): {
   saveDocumentAsNew: (document: ProjectGraphState) => Promise<string | null>;
@@ -69,13 +66,8 @@ export const useSaveWorkflowToLibrary = (): {
         bindLibraryWorkflow(workflowId);
         notify.success(t('workflowLibrary.saved'), t('workflowLibrary.savedCreatedBody', { name }));
 
-        // bindLibraryWorkflow dispatches synchronously, so the store already
-        // reflects the bound `libraryWorkflowId`. Re-serialize from that
-        // post-bind graph (rather than reusing the pre-bind `serialized`,
-        // which has no `id`) so the autosaver's synced baseline matches
-        // exactly what its own read() will produce next — otherwise the id
-        // key `serializeWorkflowJson` adds on bind reads as a dirty edit and
-        // triggers a redundant echo save on the next debounce.
+        // Serialize the synchronous post-bind snapshot so the baseline includes its new library ID and cannot
+        // trigger an echo save.
         syncedSerialized = serializeWorkflowJson(projectStore.getSnapshot().projectGraph);
       }
 
@@ -94,11 +86,7 @@ export const useSaveWorkflowToLibrary = (): {
     }
   }, [bindLibraryWorkflow, notify, projectGraph, projectStore, t]);
 
-  // Saves an arbitrary document — not necessarily the active project graph —
-  // as a new library entry. Used by "Open as → Save to workflow library" for
-  // a preview payload that may never have become the active project. Unlike
-  // `saveToLibrary`, this never binds the result to the project or marks the
-  // autosaver's synced baseline: the active project graph is left alone.
+  // Save arbitrary documents as new entries without binding the active project or updating its autosave baseline.
   const saveDocumentAsNew = useCallback(
     async (document: ProjectGraphState): Promise<string | null> => {
       const owner = captureAccountScope();

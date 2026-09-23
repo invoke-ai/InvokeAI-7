@@ -15,10 +15,6 @@ import {
   isControlKindSupportedForBase,
 } from './addControlLayers';
 
-// ---------------------------------------------------------------------------
-// Test helpers
-// ---------------------------------------------------------------------------
-
 interface TestGraph {
   id: string;
   nodes: Record<string, { id: string; type: string; [key: string]: unknown }>;
@@ -66,10 +62,6 @@ const run = (options: AddControlLayersOptions) => {
 const edgesTo = (graph: TestGraph, nodeId: string, field: string) =>
   graph.edges.filter((e) => e.destination.node_id === nodeId && e.destination.field === field);
 
-// ---------------------------------------------------------------------------
-// 1. isControlKindSupportedForBase full matrix
-// ---------------------------------------------------------------------------
-
 seedArchitectureCapabilities();
 
 describe('isControlKindSupportedForBase', () => {
@@ -96,19 +88,11 @@ describe('isControlKindSupportedForBase', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// CONTROL_DENOISE_NODE_ID sanity
-// ---------------------------------------------------------------------------
-
 describe('CONTROL_DENOISE_NODE_ID', () => {
   it('is the deterministic denoise node id', () => {
     expect(CONTROL_DENOISE_NODE_ID).toBe('denoise_latents');
   });
 });
-
-// ---------------------------------------------------------------------------
-// 2. controlnet on sd-1
-// ---------------------------------------------------------------------------
 
 describe('addControlLayers — controlnet on sd-1', () => {
   it('creates a controlnet node with exact fields and wires the collector to denoise.control', () => {
@@ -175,10 +159,6 @@ describe('addControlLayers — controlnet on sd-1', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// 3. controlnet on flux
-// ---------------------------------------------------------------------------
-
 describe('addControlLayers — controlnet on flux', () => {
   it('uses flux_controlnet type and omits control_mode entirely', () => {
     const m = model('flux');
@@ -207,10 +187,6 @@ describe('addControlLayers — controlnet on flux', () => {
     ).toBe(true);
   });
 });
-
-// ---------------------------------------------------------------------------
-// 4. t2i_adapter on sdxl
-// ---------------------------------------------------------------------------
 
 describe('addControlLayers — t2i_adapter on sdxl', () => {
   it('creates a t2i_adapter node with exact fields and wires collector to denoise.t2i_adapter', () => {
@@ -269,10 +245,6 @@ describe('addControlLayers — t2i_adapter on sdxl', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// 5. control_lora on flux
-// ---------------------------------------------------------------------------
-
 describe('addControlLayers — control_lora on flux', () => {
   it('creates a flux_control_lora_loader wired directly to denoise.control_lora with no collector', () => {
     const m = model('flux', 'control_lora');
@@ -305,10 +277,6 @@ describe('addControlLayers — control_lora on flux', () => {
     expect(Object.values(graph.nodes).some((n) => n.type === 'collect')).toBe(false);
   });
 });
-
-// ---------------------------------------------------------------------------
-// 6. control_lora limits: second skipped; dev_fill skips
-// ---------------------------------------------------------------------------
 
 describe('addControlLayers — control_lora limits', () => {
   it('rejects a second control_lora with the shared reason code', () => {
@@ -384,10 +352,6 @@ describe('addControlLayers — Z-Image control', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// 7. Two controlnet layers → distinct nodes, one shared collector
-// ---------------------------------------------------------------------------
-
 describe('addControlLayers — per-layer separation', () => {
   it('creates two distinct adapter nodes feeding one shared collector', () => {
     const graph = run({
@@ -415,10 +379,6 @@ describe('addControlLayers — per-layer separation', () => {
     expect(edgesTo(graph, 'denoise_latents', 'control')).toHaveLength(1);
   });
 });
-
-// ---------------------------------------------------------------------------
-// 8. Unsupported kind for base is silently skipped
-// ---------------------------------------------------------------------------
 
 describe('addControlLayers — unsupported kind rejected', () => {
   it('rejects a t2i_adapter layer on flux', () => {
@@ -451,10 +411,6 @@ describe('addControlLayers — unsupported kind rejected', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// 9. throws when denoise node missing
-// ---------------------------------------------------------------------------
-
 describe('addControlLayers — missing denoise node', () => {
   it('throws when the base graph has no denoise node', () => {
     const graph: TestGraph = { id: 'g', nodes: {}, edges: [] };
@@ -463,10 +419,6 @@ describe('addControlLayers — missing denoise node', () => {
     );
   });
 });
-
-// ---------------------------------------------------------------------------
-// 10. getControlLayerRejectionReason branches
-// ---------------------------------------------------------------------------
 
 describe('getControlLayerRejectionReason', () => {
   const validParams = {

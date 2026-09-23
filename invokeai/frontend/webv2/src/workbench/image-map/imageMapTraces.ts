@@ -7,10 +7,8 @@ import type { AxisRanges } from './imageMapViewport';
 import { getClusterColor } from './clusterPalette';
 
 /**
- * Pure trace/layout builders for the map, kept apart from the plotly host so
- * the math is testable without WebGL. Trace identity follows PhotoMapAI:
- * named traces in a fixed z-order, with "Current Image" always last so the
- * gold marker renders on top.
+ * Pure WebGL-independent trace builders follow PhotoMapAI's fixed named order, placing Current Image last so gold
+ * markers render above other traces.
  */
 
 export const ALL_POINTS_TRACE = 'All Points';
@@ -53,9 +51,7 @@ export const buildAllPointsTrace = (points: ImageMapPoint[]): ScatterTrace => ({
     color: points.map((point) => getClusterColor(point.cluster)),
     opacity: points.map((point) => (point.cluster < 0 ? NOISE_OPACITY : POINT_OPACITY)),
     size: 5,
-    // Videos are diamonds. Color already carries the cluster, so kind needs
-    // the one remaining channel: without it a clip is pixel-identical to an
-    // image and can only be found by hovering points one at a time.
+    // Diamonds identify videos independently of cluster color without requiring hover.
     symbol: points.map((point) => (point.item.kind === 'video' ? VIDEO_SYMBOL : IMAGE_SYMBOL)),
   },
   mode: 'markers',
@@ -65,11 +61,7 @@ export const buildAllPointsTrace = (points: ImageMapPoint[]): ScatterTrace => ({
   y: points.map((point) => point.y),
 });
 
-/**
- * The gallery's multi-selection (e.g. a cluster click), drawn larger with a
- * white outline over the base points. Empty when fewer than two items are
- * selected — a single selection is already marked by the gold target.
- */
+/** White-outlined enlarged multi-selection trace; fewer than two items need only the gold current target. */
 export const buildHighlightedPointsTrace = (
   points: ImageMapPoint[],
   selectedKeys: ReadonlySet<GalleryItemKey>
@@ -98,10 +90,7 @@ export const buildHighlightedPointsTrace = (
   };
 };
 
-/**
- * The gold target marking the current gallery image. Built empty here; a later
- * PR restyles it live as the selection changes.
- */
+/** Gold current-item target, populated by live selection restyles. */
 export const buildCurrentImageTrace = (): ScatterTrace => ({
   customdata: [],
   // 'skip' (not 'none') excludes the marker from hit-testing entirely, so
@@ -121,19 +110,13 @@ export const buildCurrentImageTrace = (): ScatterTrace => ({
   y: [],
 });
 
-// Theme-independent grid: visible but recessive on both light and dark
-// map backgrounds; the axis origin is slightly stronger for orientation.
+// Theme-independent grid with a stronger origin for orientation.
 const GRID_LINE_COLOR = 'rgba(128, 128, 128, 0.16)';
 const GRID_ZERO_COLOR = 'rgba(128, 128, 128, 0.32)';
 
 /**
- * The restyle payload for the highlight overlay: every per-point array the
- * trace carries, so the overlay can be updated in place.
- *
- * Derived from the trace rather than listed at the call site, because plotly
- * keeps whatever a restyle omits — so leaving one array behind means it is
- * indexed at the NEW point count, and scattergl dies inside its own marker
- * lookup rather than anywhere near the omission.
+ * Restyle every per-point array derived from the trace. Plotly retains omitted arrays, causing scattergl length
+ * mismatches after selection changes.
  */
 export const toHighlightRestyle = (trace: ScatterTrace): Record<string, unknown[]> => ({
   customdata: [trace.customdata],
@@ -156,9 +139,6 @@ export const buildMapLayout = (
   // Preserves the user's pan/zoom across Plotly.react data updates.
   uirevision: 'image-map',
   xaxis: {
-    // Unlabeled gridlines give the eye a frame of reference when the map is
-    // sparse. Mid-gray at low alpha reads on every theme background, like
-    // the rest of the map's fixed styling.
     gridcolor: GRID_LINE_COLOR,
     gridwidth: 1,
     range: initialRanges?.x,
@@ -196,15 +176,8 @@ export interface ClusterAnnotation {
 }
 
 /**
- * One text annotation per labeled cluster: centered horizontally on the
- * cluster but anchored just above its topmost point (a fixed pixel lift, so
- * zoom never lands the label on the points it names). White-on-dark pill
- * styling is theme-independent — it reads on every map background.
- * Pure so placement math is testable; plotly consumes the array via layout.
- *
- * Ordered by cluster size (largest first, cluster id as the tiebreak): array
- * order is the keep-priority for declutterAnnotations, so when two labels
- * collide the one naming more items survives.
+ * Place theme-independent cluster pills above topmost points with fixed-pixel clearance. Sort largest clusters
+ * first, then id, defining declutter priority.
  */
 export const buildClusterAnnotations = (
   points: ImageMapPoint[],
@@ -245,18 +218,12 @@ export const buildClusterAnnotations = (
     }));
 };
 
-// Label extent estimates for collision testing. Annotations render in an SVG
-// layer we cannot measure before drawing, so the pill's footprint is
-// approximated from its text length at the fixed 10px font.
+// Estimate SVG label collision width from fixed-10px text length because labels cannot be measured before drawing.
 const LABEL_CHAR_WIDTH_PX = 6;
 const LABEL_HEIGHT_PX = 18;
 /** Two labels closer than this (edge to edge) count as colliding. */
 const LABEL_GAP_PX = 4;
-/**
- * Half-extent of the gold current-image target: marker size 18 plus its 2px
- * outline, so the pixel it occupies reaches ~10px from the anchor. Rounded up
- * by one so a label never kisses the outline.
- */
+/** Marker half-extent includes its 18px size, 2px outline and one extra pixel of label clearance. */
 const MARKER_RADIUS_PX = 11;
 
 interface LabelRect {
@@ -273,11 +240,8 @@ const rectsCollide = (a: LabelRect, b: LabelRect): boolean =>
   a.bottom > b.top - LABEL_GAP_PX;
 
 /**
- * The gold target's footprint in screen pixels, or null when it is not on
- * screen. An off-view marker cannot be covered by anything, and reserving
- * space for it would evict labels that are off-view in the same direction —
- * invisible either way, but it would churn the applied annotation set on every
- * pan. The bounds test also rejects NaN coordinates by construction.
+ * Return onscreen marker footprint only; offscreen reservations churn invisible labels during panning. Bounds
+ * checks reject NaN too.
  */
 const markerRectFor = (
   markerPoint: { x: number; y: number },
@@ -306,18 +270,8 @@ const markerRectFor = (
 };
 
 /**
- * Zoomed far out, every cluster label converges on the same few pixels and
- * the map disappears under a pile of pills. Greedily keep labels in array
- * order (buildClusterAnnotations puts larger clusters first), dropping any
- * whose estimated pixel footprint collides with one already kept — fully
- * deterministic for a given annotation set and view. Zooming back in spreads
- * the anchors apart and the dropped labels reappear.
- *
- * `markerPoint` — the current gallery image, when it is on the map — outranks
- * every label. Plotly draws annotations in an SVG layer above the WebGL canvas
- * holding the scatter traces, so the gold target can never be stacked over a
- * pill it overlaps; dropping the pill instead is the only way to keep the
- * target visible where labels are dense.
+ * Greedily retain noncolliding labels in priority order. Current-image markers outrank labels because Plotly SVG
+ * annotations render above WebGL and cannot be stacked underneath the gold target.
  */
 export const declutterAnnotations = (
   annotations: ClusterAnnotation[],
@@ -356,14 +310,8 @@ export const declutterAnnotations = (
       continue;
     }
 
-    // This label owns the spot from here on, whether or not it gets drawn —
-    // deciding that BEFORE consulting the marker is what keeps the marker's
-    // effect local. Reserving first and testing second means a label the
-    // marker hides still holds its ground, so the next label in priority
-    // order cannot put a smaller cluster's name on the patch of map the
-    // marker was supposed to clear; and a label that lost its spot to a
-    // higher-priority label never reserves anything, so it cannot evict a
-    // third label the marker is nowhere near.
+    // Reserve a winning label's space before testing marker overlap, preventing lower-priority replacements in the
+    // cleared region. Labels already losing to another label reserve nothing.
     blockingRects.push(rect);
 
     if (markerRect !== null && rectsCollide(rect, markerRect)) {

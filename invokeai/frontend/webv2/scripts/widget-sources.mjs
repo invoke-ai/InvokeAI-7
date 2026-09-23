@@ -1,9 +1,6 @@
 /**
- * Single source of truth for the deferred first-party widget implementation
- * chunks. `check-architecture-performance.mjs` asserts every entry splits into
- * its own chunk and that no manifest source matching WIDGET_IMPLEMENTATION_PATTERN
- * is missing from this registry; `measure-architecture-performance.mjs` derives
- * stable `widget:<id>` script ids from it.
+ * Registry for deferred widget chunks; the architecture gate checks completeness and measurements derive
+ * widget:<id> identifiers.
  */
 export const WIDGET_IMPLEMENTATION_PATTERN = /^src\/workbench\/widgets\/([^/]+)\/implementation\.ts$/;
 

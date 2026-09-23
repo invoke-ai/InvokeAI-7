@@ -86,9 +86,8 @@ describe('gallery state view', () => {
   });
 
   /**
-   * A project arriving from another install — or one whose pre-migration board was rejected as
-   * ambiguous — names a destination that does not exist here. Its own board is a better answer
-   * than Uncategorized, which would quietly scatter the project's output.
+   * Missing imported destinations fall back to the project's board instead of scattering output into
+   * Uncategorized.
    */
   it('falls back to the project board before uncategorized', () => {
     const projectBoards = [...boards, { ...boards[1]!, id: 'project-board', name: 'My Project', projectId: 'p1' }];
@@ -111,10 +110,7 @@ describe('gallery state view', () => {
     expect(getGallerySelectedBoardId(values, boards)).toBe('none');
   });
 
-  /**
-   * Never having chosen a destination is not a choice of Uncategorized. A project saved before it
-   * owned a board should still work on its own board, where everything else it has made lives.
-   */
+  /** An absent saved destination is not an explicit choice of Uncategorized; use the project's board. */
   it('uses the project board when nothing was ever selected', () => {
     const projectBoards = [...boards, { ...boards[1]!, id: 'project-board', name: 'My Project', projectId: 'p1' }];
 

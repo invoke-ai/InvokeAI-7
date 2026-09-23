@@ -25,10 +25,8 @@ import { isInvocationNode } from './types';
 import { hasAnyCycle } from './validation';
 
 /**
- * Compiles the project graph document into the immutable, queue-facing
- * `GraphContract`. Ported from the legacy `buildNodesGraph`, with connector
- * resolution and without batch handling (batch/generator nodes are rejected by
- * readiness until batching lands).
+ * Compile documents to immutable queue GraphContract with connector resolution; readiness rejects unsupported
+ * batch/generator nodes.
  */
 
 /** Client-resolved batch/generator nodes from the legacy editor; executing them server-side is meaningless. */
@@ -325,14 +323,8 @@ export const compileProjectGraph = (
 };
 
 /**
- * The inputs that carry a seed mode: the scalar integer a node declares as `seed`
- * over the full seed range. Read from the template alone, so an editable label
- * cannot turn an ordinary integer into a seed, and a provider's own-range `seed`
- * keeps its plain control instead of wrapping at a bound it never had.
- *
- * Seed policy lives here rather than in `fields.ts` because it is the one place
- * the workflow core depends on the platform seed arithmetic at runtime: the
- * shared field/document helpers stay in the lighter utility chunk every overlay loads.
+ * Seed modes require a template-declared scalar seed with the full range. Keep seed arithmetic here so shared
+ * field utilities remain lightweight.
  */
 export const isSeedInputField = (template: FieldInputTemplate): boolean =>
   template.name === 'seed' &&
@@ -366,12 +358,8 @@ export interface WorkflowSeedPlan {
 }
 
 /**
- * Decides every seed input's start for a submission of `batchCount` runs. Seeds
- * vary per queued run, not per iteration of a loop inside a run. A random input
- * draws its start here and the runs step consecutively from it, like Generate's
- * random mode, while the entered seed stays in reserve; a stepping input counts
- * from the authored seed and reports where the field goes afterwards. Expansion
- * into per-run values happens at send time from these starts, never redrawing.
+ * Choose seed starts once per submission and expand runs deterministically at send time. Random preserves the
+ * entered seed; stepping reports the next authored value.
  */
 export const planWorkflowSeeds = (
   document: ProjectGraphState,

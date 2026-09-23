@@ -17,16 +17,8 @@ import { ProjectsPage } from './pages/ProjectsPage';
 import { ProjectActionsMenuProvider } from './projects/ProjectActionsMenuHost';
 
 /**
- * The landing surface at `/`: a full-height shell with a slim section rail and
- * a full-width page area — the editor equivalent of Photoshop's home screen.
- * Sections live as switchable pages (Projects, the model manager, and admin
- * user management) so the surface has room to grow without crowding any one of
- * them. It deliberately mounts none of the workbench providers or runtimes, so
- * it stays on the light side of the route-level code split; the heaviest page,
- * the model manager, lazy-loads its own chunk the first time it is opened.
- *
- * Sections carry a `group`, because where you work and what you administer are
- * not peers: a flat list gave "Users" the same standing as "Projects".
+ * Launchpad owns grouped home/admin pages without mounting workbench runtimes. Model management loads on demand
+ * across the route split.
  */
 
 type LaunchpadSectionId = 'home' | 'projects' | 'models' | 'nodes' | 'users' | 'fonts';

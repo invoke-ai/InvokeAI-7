@@ -18,7 +18,6 @@ import torch
 from invokeai.backend.model_manager.configs.main import Main_Checkpoint_Flux2_Config
 from invokeai.backend.model_manager.load.model_loaders import flux
 from invokeai.backend.model_manager.load.model_loaders.flux import Flux2CheckpointModel
-from invokeai.backend.model_manager.load.model_loaders.flux2_state_dict_utils import remap_flux2_layer_paths
 from invokeai.backend.model_manager.taxonomy import Flux2VariantType, SubModelType
 from invokeai.backend.quantization.fp8_scaled import iter_weight_scale_pairs
 from invokeai.backend.quantization.int8_convrot import Int8ConvrotLinear
@@ -114,7 +113,10 @@ def _expected_reservation() -> int:
     file needs; charging none lets the split's transient land on an unreserved cache.
     """
     int8_bytes = sum(out * inp for out, inp in QUANTIZED.values())
-    destinations = sum(len(paths) for paths in remap_flux2_layer_paths(QUANTIZED).values())
+    # How many modules the quantized layers become: one each, except the two fused qkv that become
+    # three. Counted here rather than read off the conversion, so that a wrong mapping shifts the
+    # measurement without shifting what it is measured against.
+    destinations = len(QUANTIZED) + 2 * 2
     scale_bytes = destinations * torch.float32.itemsize
     dense_bytes = sum(torch.Size(shape).numel() for shape in DENSE.values()) * torch.bfloat16.itemsize
     # Klein has no guidance embedder, so the loader fills one with zeros shaped like the timestep
@@ -440,3 +442,60 @@ def test_a_scaled_fp8_checkpoint_still_folds_its_scales(monkeypatch, tmp_path) -
         assert not hasattr(layer, "weight_scale"), path
         # fp8 keeps ~2 decimal digits, so this is a "the scale was applied" check, not a bit compare.
         assert torch.allclose(layer.weight.float(), source, rtol=0.1, atol=0.1 * source.abs().max())
+
+
+def test_a_comfyui_prefixed_checkpoint_loads_the_same_as_a_bare_one(monkeypatch, tmp_path) -> None:
+    """Not about int8 -- about the prefix strip this loader performs before it reads any side
+    channel, which was eight lines inline here and which no test noticed. A redistribution wrapping
+    every key in `model.diffusion_model.` passes the config probes and reaches this method; with the
+    strip gone, the markers and scales are read from keys the model does not have. Asserted against
+    the bare load, so the two cannot drift apart.
+    """
+    state_dict, _ = _checkpoint()
+    prefixed = {f"model.diffusion_model.{key}": value for key, value in state_dict.items()}
+
+    run, config = _driver(monkeypatch, tmp_path, prefixed)
+    from_prefixed = run.loader._load_model(config, SubModelType.Transformer).state_dict()
+    run, config = _driver(monkeypatch, tmp_path, state_dict)
+    from_bare = run.loader._load_model(config, SubModelType.Transformer).state_dict()
+
+    assert set(from_prefixed) == set(from_bare)
+    for key, value in from_bare.items():
+        assert torch.equal(from_prefixed[key].to(torch.float32), value.to(torch.float32)), key
+
+
+def test_a_header_hint_reaches_every_projection_the_fused_qkv_became(monkeypatch, tmp_path) -> None:
+    """`full_precision_matrix_mult` names a BFL layer; the modules it has to reach are the three a
+    fused qkv becomes. Un-renamed it matches nothing and is ignored in silence -- the layer then runs
+    on the fp8 tensor cores the producer measured as unsafe, with nothing logged.
+
+    This is the fp8 half of the header re-key. Its int8 twin is covered two cells up; this one was
+    the gap the mutation sweep found, and closing it costs one fixture that already existed.
+    """
+    from invokeai.backend.quantization import fp8_scaled
+
+    state_dict, _ = _scaled_fp8_checkpoint()
+    fused = next(path for path in QUANTIZED if path.endswith("img_attn.qkv"))
+    header = {
+        "_quantization_metadata": json.dumps(
+            {
+                "format_version": "1.0",
+                "layers": {
+                    path: {"format": "float8_e4m3fn", "full_precision_matrix_mult": path == fused} for path in QUANTIZED
+                },
+            }
+        )
+    }
+    # Process-wide, so set through monkeypatch rather than the setter: the flag must not leak to
+    # whichever test this worker runs next.
+    monkeypatch.setattr(fp8_scaled, "_full_precision_hints_override", True)
+
+    run, config = _driver(monkeypatch, tmp_path, state_dict, header)
+    # The scales only stay attached where something keeps the weights quantized.
+    run.loader._keep_fp8_weights = lambda _config, _submodel=None: True
+    model = run.load(config)
+
+    for projection in ("to_q", "to_k", "to_v"):
+        marked = model.get_submodule(f"transformer_blocks.0.attn.{projection}")
+        assert marked._fp8_full_precision_matmul is True, projection
+    assert model.get_submodule("transformer_blocks.0.attn.to_out.0")._fp8_full_precision_matmul is False

@@ -24,10 +24,8 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 /**
- * Credentials for every model source, as one uniform grid of key cards:
- * HuggingFace (server-stored, verified), Civitai (browser-local), and the
- * external image providers (server config). Each card shares the same
- * edit/display anatomy: icon, status, prefix-hinted input, save/clear.
+ * Credential cards share controls while preserving storage ownership: HuggingFace/providers on the server, Civitai
+ * in this browser.
  */
 export const ApiKeysSection = () => {
   const notify = useNotify();

@@ -1,3 +1,4 @@
+import re
 from contextlib import ExitStack
 from typing import Iterator
 
@@ -24,6 +25,7 @@ from invokeai.backend.model_manager.load.model_cache.utils import get_effective_
 from invokeai.backend.patches.layer_patcher import LayerPatcher, PatchSpec
 from invokeai.backend.patches.lora_conversions.krea2_lora_constants import KREA2_LORA_QWEN3VL_PREFIX
 from invokeai.backend.patches.model_patch_raw import ModelPatchRaw
+from invokeai.backend.quantization.dequantizing_linear import peak_dequant_transient_bytes, requires_sidecar_patching
 from invokeai.backend.stable_diffusion.diffusion.conditioning_data import (
     ConditioningFieldData,
     Krea2ConditioningInfo,
@@ -38,6 +40,15 @@ _KREA2_PREFIX = (
     "spatial relationships of the objects and background:<|im_end|>\n<|im_start|>user\n"
 )
 _KREA2_SUFFIX = "<|im_end|>\n<|im_start|>assistant\n"
+
+# The loader drops the Qwen3-VL visual tower: conditioning never executes it, so its weights would be
+# dead resident bytes. An adapter can still carry layers for it -- a Krea-2 LoRA's encoder keys are
+# whatever followed `text_encoder.`, and the converter does emit `lora_qwen3vl-visual.*` -- and those
+# layers now resolve to no module. Left to the patcher that is one "Failed to find module for LoRA
+# layer key" per layer per generation (~108 lines on the 4B, whose vision tower has 27 blocks),
+# reading as though the adapter were broken. It is not, and it never did anything: patching a module
+# that `forward` does not reach cannot change an image.
+_VISUAL_TOWER_LORA_LAYERS = re.compile(rf"^{re.escape(KREA2_LORA_QWEN3VL_PREFIX)}visual\.")
 
 
 @invocation(
@@ -83,6 +94,13 @@ class Krea2TextEncoderInvocation(BaseInvocation):
     def _encode(self, context: InvocationContext) -> tuple[torch.Tensor, torch.Tensor | None]:
         tokenizer_info = context.models.load(self.qwen3_vl_encoder.tokenizer)
         text_encoder_info = context.models.load(self.qwen3_vl_encoder.text_encoder)
+        text_encoder_format = context.models.get_config(self.qwen3_vl_encoder.text_encoder).format
+        # An nvfp4 build dequantizes each packed Linear per forward, a transient its resident size does
+        # not cover. Read from the unlocked model, before the lock the reservation applies to; zero for
+        # other builds.
+        dequant_bytes = peak_dequant_transient_bytes(
+            text_encoder_info.model, TorchDevice.choose_bfloat16_safe_dtype(text_encoder_info.compute_device)
+        )
 
         # diffusers tokenizes (prefix + prompt) and the assistant-turn suffix separately, then
         # concatenates - so the suffix always survives truncation. Building one string and truncating it
@@ -96,11 +114,21 @@ class Krea2TextEncoderInvocation(BaseInvocation):
 
         with ExitStack() as exit_stack:
             tokenizer = exit_stack.enter_context(tokenizer_info)
-            (cached_weights, text_encoder) = exit_stack.enter_context(text_encoder_info.model_on_device())
+            (cached_weights, text_encoder) = exit_stack.enter_context(
+                text_encoder_info.model_on_device(working_mem_bytes=dequant_bytes)
+            )
             device = get_effective_device(text_encoder)
 
             # Apply any Qwen3-VL text-encoder LoRA patches (smart/sidecar patching, fp8-aware). Without
             # this, the encoder portion of a Krea-2 LoRA would be silently ignored.
+            #
+            # `force_sidecar_patching` is not optional for a quantized encoder: the patcher does not
+            # detect quantization itself and expects the caller to say so. A GGML-quantized Linear
+            # reports `dtype=uint8` (so the fp8 check misses it) and a packed `nelement()`, so direct
+            # patching compares the LoRA against the packed byte count, drops every layer, and blames
+            # the LoRA in the warning. It is also VRAM-dependent: with the layers on CPU the patcher
+            # picks the sidecar anyway, so the same graph would silently produce different images
+            # under memory pressure.
             exit_stack.enter_context(
                 LayerPatcher.apply_smart_model_patches(
                     model=text_encoder,
@@ -108,6 +136,8 @@ class Krea2TextEncoderInvocation(BaseInvocation):
                     prefix=KREA2_LORA_QWEN3VL_PREFIX,
                     dtype=TorchDevice.choose_bfloat16_safe_dtype(device),
                     cached_weights=cached_weights,
+                    force_sidecar_patching=requires_sidecar_patching(text_encoder, text_encoder_format),
+                    suppress_warning_layers=_VISUAL_TOWER_LORA_LAYERS,
                 )
             )
 

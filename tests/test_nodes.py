@@ -97,6 +97,14 @@ class AnyTypeTestInvocation(BaseInvocation):
         return AnyTypeTestInvocationOutput(value=self.value)
 
 
+@invocation("test_marked_any", version="1.0.0")
+class MarkedAnyTypeTestInvocation(AnyTypeTestInvocation):
+    marker: str = InputField(default="")
+
+    def invoke(self, context: InvocationContext) -> AnyTypeTestInvocationOutput:
+        return AnyTypeTestInvocationOutput(value=f"{self.marker}{self.value}")
+
+
 @invocation("test_polymorphic", version="1.0.0")
 class PolymorphicStringTestInvocation(BaseInvocation):
     value: Union[str, list[str]] = InputField(default="")

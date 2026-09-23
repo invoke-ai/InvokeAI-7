@@ -59,9 +59,8 @@ export const isHeaderKey = (key: string): boolean => key.startsWith('header:');
 export const stackOfHeaderKey = (key: string): LayerStackKind => key.slice('header:'.length) as LayerStackKind;
 
 /**
- * The one flat list the panel virtualizes: a header per non-empty stack followed by its rendered
- * rows unless the stack is collapsed. `forceOpen` keeps a collapsed stack open while something
- * inside it must stay reachable, like a pending properties request.
+ * Flatten stack headers and visible rows for virtualization; forceOpen keeps pending targets reachable inside
+ * collapsed stacks.
  */
 export const flattenPanelRows = (
   stacks: LayerStackRowsByKind,
@@ -142,9 +141,8 @@ const positionsOf = (rows: readonly PanelRow[]): Map<string, number> => {
 };
 
 /**
- * The WAI-ARIA tree keyboard model over the flat list, headers included: vertical keys walk every
- * rendered item, Home/End jump, Right opens a stack or group or enters it, Left closes one or
- * climbs to the parent (a root node's parent is its stack header).
+ * Apply tree keyboard navigation across headers/rows: vertical/Home/End traversal, Right open/enter, Left
+ * close/parent.
  */
 export const navigateTree = (
   rows: readonly PanelRow[],

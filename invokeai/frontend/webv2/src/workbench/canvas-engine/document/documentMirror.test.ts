@@ -105,8 +105,7 @@ describe('createDocumentMirror: selection changes', () => {
   });
 
   it('reports a selection-only change without reporting a layer change', () => {
-    // A selection-only edit produces a new `document` object that reuses the
-    // `layers` array reference — none of the other callbacks can see it.
+    // Selection-only edits replace the document but reuse layers; other callbacks cannot detect them.
     const a = rasterLayer('a');
     const b = rasterLayer('b');
     const doc = makeDoc([a, b], { selectedLayerId: 'a' });
@@ -202,9 +201,7 @@ describe('createDocumentMirror', () => {
     const callbacks = spyCallbacks();
     createDocumentMirror(store, 'p1', callbacks);
 
-    // Replace only layer `a` (new object), keep `b` identity. A prop-only edit
-    // (like the reducer's `updateCanvasLayer`) keeps the `source` reference, so
-    // the id is reported as changed but NOT source-changed.
+    // Only `a` changes identity; preserved source references mean changed but not source-changed.
     const nextDoc: CanvasDocumentContractV3 = { ...doc, stacks: stacksFrom([{ ...a, opacity: 0.5 }, b]) };
     store.setState({ projects: [{ canvas: { ...canvas, document: nextDoc }, id: 'p1' }] });
 
@@ -222,9 +219,7 @@ describe('createDocumentMirror', () => {
     const callbacks = spyCallbacks();
     createDocumentMirror(store, 'p1', callbacks);
 
-    // Prop-only edit (opacity): spreading the prior layer preserves its `source`
-    // reference exactly as the reducer does, so the engine must NOT re-rasterize
-    // (which would clear an unflushed paint layer).
+    // Opacity changes preserve source identity; rerasterization would erase unflushed paint.
     const opacityEdit: CanvasDocumentContractV3 = { ...doc, stacks: stacksFrom([{ ...a, opacity: 0.5 }]) };
     store.setState({ projects: [{ canvas: { ...canvas, document: opacityEdit }, id: 'p1' }] });
     expect(callbacks.onLayersChanged).toHaveBeenLastCalledWith(['a'], []);

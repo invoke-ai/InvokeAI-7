@@ -1,10 +1,6 @@
 import { apiFetch, apiFetchJson } from '@platform/transport/http';
 
-/**
- * REST surface for the backend's multi-user endpoints (`/api/v1/auth`). Field
- * names mirror the backend DTOs verbatim; the session store and components own
- * any reshaping.
- */
+/** Keep auth transport DTO field names unchanged; session state and components own reshaping. */
 
 const AUTH_BASE = '/api/v1/auth';
 
@@ -73,13 +69,8 @@ export const logout = (): Promise<{ success: boolean }> =>
   apiFetchJson<{ success: boolean }>(`${AUTH_BASE}/logout`, { method: 'POST' });
 
 /**
- * Re-issues the HttpOnly cookie that authenticates `<img>` / `<video>` media requests.
- *
- * Login sets the cookie, but a session restored from stored-token state has a valid JWT and
- * no cookie — it may predate the cookie, or the cookie may have been cleared while the token
- * survived. Media elements cannot send an Authorization header, so such a session loads every
- * other API call fine while showing blank thumbnails. In single-user mode the backend returns
- * success without setting anything, so this is a safe no-op there.
+ * Restore the media cookie for stored-token sessions before elements load; they cannot send bearer headers.
+ * Single-user backends safely no-op.
  */
 export const refreshMediaCookie = (signal?: AbortSignal): Promise<{ success: boolean }> =>
   apiFetchJson<{ success: boolean }>(`${AUTH_BASE}/media-cookie`, { method: 'POST', signal });

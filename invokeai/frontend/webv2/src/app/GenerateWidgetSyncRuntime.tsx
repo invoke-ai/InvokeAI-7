@@ -43,8 +43,7 @@ export const GenerateWidgetSyncRuntime = () => {
       queryClient,
     });
 
-    // Kicked here, at app boot, so the gate's window is one round trip rather than "whenever the
-    // Generate panel is first opened".
+    // Fetch capabilities at boot so generation does not wait for the panel's first mount.
     void ensureArchitectureCapabilitiesLoaded();
     void ensureModelsLoaded();
     return () => runtime.dispose();

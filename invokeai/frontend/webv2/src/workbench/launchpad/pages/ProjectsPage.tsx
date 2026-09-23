@@ -22,13 +22,7 @@ import { FileUpIcon } from 'lucide-react';
 import { useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
-/**
- * The Launchpad's project library.
- *
- * Sort, layout, and pins persist through workbench preferences, so they follow
- * the account rather than the browser. The search term deliberately does not —
- * a filter you did not set is a filter you cannot find your way out of.
- */
+/** Persist sort, layout, and pins in account preferences; keep search transient to avoid restoring hidden filters. */
 
 export const ProjectsPage = () => {
   const navigate = useNavigate();
@@ -94,7 +88,6 @@ export const ProjectsPage = () => {
           />
         </Stack>
       }
-      description={t('projects.libraryDescription')}
       scroll="content"
       title={t('launchpad.sections.projects')}
     >

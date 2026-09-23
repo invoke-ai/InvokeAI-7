@@ -3,15 +3,9 @@ import type { RasterSurface } from '@workbench/canvas-engine/render/raster';
 import { commands } from 'vitest/browser';
 
 /**
- * Deterministic image goldens for the Chromium raster suite. A golden is a
- * reviewed PNG under `__golden__/` next to a JSON record of the browser and
- * raster configuration that produced it. Frames are normalised before
- * comparison: flattened over an opaque background so premultiplied alpha
- * cannot introduce rounding, then compared channel by channel.
- *
- * `pnpm run test:browser:update-goldens` rewrites baselines; a normal run only
- * compares and, on failure, writes expected/actual/diff PNGs under the
- * gitignored `__screenshots__/golden/` directory.
+ * Reviewed Chromium PNG goldens include raster/browser metadata. Flatten onto opaque backgrounds before channel
+ * comparison to avoid premultiplied-alpha rounding. Update only via the golden command; normal failures write
+ * ignored expected/actual/diff artifacts.
  */
 export interface GoldenTolerance {
   /** Largest per-channel difference a pixel may show before it counts as differing. */

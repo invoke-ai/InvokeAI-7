@@ -4,20 +4,8 @@ import { DEFAULT_THEME, THEMES_BY_ID } from '@theme/system';
 import { useWorkbenchSettingsSelector } from '@workbench/settings/store';
 import { useLayoutEffect } from 'react';
 
-/**
- * Applies the persisted appearance preferences to the document root.
- *
- * Theme switching is intentionally a DOM-attribute flip rather than a React
- * re-theme: the semantic-token conditions in `theme/system.ts` key off
- * `<html data-theme>`, so changing the attribute restyles the whole shell with
- * no component re-render. `data-reduce-motion` is read by global CSS motion
- * tokens. Renders nothing.
- */
-/**
- * Read by the pre-paint script in index.html. Dedicated hint keys (rather than
- * the workbench snapshot, which is per-user on multi-user backends) let first
- * paint apply last-used appearance without knowing who is signed in.
- */
+/** Root data attributes drive theme and motion CSS without React rerenders. */
+/** Pre-paint hints are account-independent because identity is unknown at first paint. */
 const THEME_HINT_STORAGE_KEY = 'invokeai:v7:webv2:theme';
 const REDUCE_MOTION_HINT_STORAGE_KEY = 'invokeai:v7:webv2:reduce-motion';
 const HIGH_CONTRAST_HINT_STORAGE_KEY = 'invokeai:v7:webv2:high-contrast';
@@ -51,8 +39,7 @@ export const ThemeController = () => {
     }),
     shallowEqual
   );
-  // Until the settings store has resolved, the pre-paint hint script owns the
-  // theme; applying the store's defaults here would flash and clobber it.
+  // Keep pre-paint hints until settings resolve; applying defaults would flash the theme.
   const hasResolved = status === 'ready' || status === 'error';
 
   useLayoutEffect(() => {

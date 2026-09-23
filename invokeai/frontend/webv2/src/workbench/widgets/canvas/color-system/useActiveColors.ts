@@ -1,9 +1,4 @@
-/**
- * React bindings for the active color pair. Every surface that shows or edits
- * the pair (the Color pane, the Properties chip mirror, the canvas hotkeys and
- * eyedropper routing) reads and writes the one persisted copy in the canvas
- * widget's project values through these hooks — no surface holds its own.
- */
+/** Share one persisted color pair across pane, properties, hotkeys, and eyedropper through these hooks. */
 
 import { getProjectWidgetValues } from '@workbench/widgetState';
 import { useActiveProjectSelector, useWorkbenchCommands, useWorkbenchQueries } from '@workbench/WorkbenchContext';

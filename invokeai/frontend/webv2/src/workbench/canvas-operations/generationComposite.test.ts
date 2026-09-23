@@ -155,10 +155,8 @@ interface HostOptions {
 }
 
 /**
- * Assembles a fake {@link GenerationCompositeHost} mirroring the widget invoke
- * harness: the raster test stub for surfaces, a counting uploader, a spy-able
- * release, and a per-call-unique hash so every distinct composite entry uploads
- * (plan-key dedupe still reuses across calls).
+ * Use raster stubs and unique per-call hashes so distinct entries upload while plan-key dedupe still reuses
+ * unchanged plans.
  */
 const makeHost = (document: CanvasDocumentContractV3, options: HostOptions = {}): HostHarness => {
   const stub = createTestStubRasterBackend();
@@ -310,8 +308,7 @@ describe('composeForGeneration', () => {
   });
 
   it('resolves txt2img from the bounds pre-pass: no base upload, detectMode never consulted, controls and regionals still composited', async () => {
-    // No raster layers → no content bounds → txt2img without executing the base
-    // plan; control + regional composites are mode-independent and still run.
+    // No raster bounds means txt2img without a base composite; control and regional composites still run.
     const harness = makeHost(makeDoc([controlLayer('control-a'), regionalLayer('region-a')]));
     const detectMode = vi.fn(() => 'img2img' as const);
 
@@ -418,8 +415,7 @@ describe('composeForGeneration', () => {
 
     const result = await compose(harness.host, { detectMode });
 
-    // Base upload, then the inpaint-mask upload, then (and only then) the mode
-    // strategy — the mask's coverage is one of its inputs.
+    // Upload the inpaint mask before mode detection because coverage determines the mode.
     expect(harness.events).toEqual(['upload:composite-1.png', 'upload:composite-2.png', 'detectMode']);
     expect(detectMode).toHaveBeenCalledWith(expect.objectContaining({ hasActiveInpaintMask: true }));
     expect(result.status).toBe('ok');
@@ -447,8 +443,7 @@ describe('composeForGeneration', () => {
     if (result.status !== 'ok') {
       return;
     }
-    // Base upload + the region-driven inpaint-mask upload; the mask composite
-    // read the raster layer's own surface — the mask IS the layer content.
+    // The region-driven inpaint mask uses the raster layer's own content alpha.
     expect(result.composites.mode).toBe('inpaint');
     expect(result.composites.maskImageName).toBe('composite-2.png');
     expect(harness.surfaceIds).toContain('base');
@@ -467,8 +462,7 @@ describe('composeForGeneration', () => {
   ])(
     'composites the noise mask only for inpaint/outpaint ($mode)',
     async ({ expectedMask, expectedNoise, expectedUploads, mode }) => {
-      // The inpaint mask defines a noiseLevel, so the plan carries a noise-mask
-      // entry — it must execute only when the resolved mode consumes it.
+      // Only modes consuming noise may execute the planned noise mask.
       const harness = makeHost(makeDoc([rasterLayer('base'), inpaintMaskLayer('mask', 0.5)]));
 
       const result = await compose(harness.host, { detectMode: () => mode });

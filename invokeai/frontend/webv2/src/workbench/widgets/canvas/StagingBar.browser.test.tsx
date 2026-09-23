@@ -155,9 +155,7 @@ describe('StagingBar thumbnail strip', () => {
     const bounds = viewport.getBoundingClientRect();
 
     expect(thumbnails).toHaveLength(24);
-    // The strip gets the full canvas widget to scroll within — not the width of
-    // the options bar beneath it, and never wider than the canvas itself (the
-    // overlay would silently clip the centered overflow at both edges).
+    // Constrain staging scroll width to the canvas, independent of the narrower options bar.
     expect(bounds.width).toBe(overlay.getBoundingClientRect().width);
     expect(bounds.width).toBeLessThanOrEqual(CANVAS_WIDTH);
     expect(viewport.scrollWidth).toBeGreaterThan(viewport.clientWidth);

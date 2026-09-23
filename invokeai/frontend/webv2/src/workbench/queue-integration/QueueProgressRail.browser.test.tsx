@@ -6,10 +6,8 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
- * The rail is shared between the top bar and the floating preview window, so
- * its show/hide rules are pinned here once: hidden with nothing in flight or
- * the backend away, a sweep while the running item has reported no step yet,
- * a determinate fill once it has.
+ * Share rail visibility/progress coverage across topbar and floating Preview: offline/idle hides, unstepped runs
+ * sweep, stepped runs fill.
  */
 
 const state = vi.hoisted(() => ({

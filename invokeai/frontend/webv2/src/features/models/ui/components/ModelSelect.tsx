@@ -36,12 +36,7 @@ const EMPTY_KEYS: ReadonlySet<string> = new Set();
 
 const getOptionId = (model: ModelConfig): string => model.key;
 
-/**
- * Related-model pinning for an open picker. The generation form mounts
- * pickers during the editor's initial paint, so the relationships store must
- * stay out of the eager graph (the architecture browser budget) — it is
- * imported on first open and subscribed to manually instead of via its hook.
- */
+/** Load and subscribe to relationships only when the picker opens to keep it outside the editor's initial graph. */
 const useLazyRelatedModelKeys = (modelKey: string | null): readonly string[] | null => {
   const [relatedKeys, setRelatedKeys] = useState<readonly string[] | null>(null);
 
@@ -139,8 +134,7 @@ export const ModelSelect = ({
     void ensureModelsLoaded();
   });
 
-  // Nothing to offer once the library is known: the trigger disables and says
-  // so, rather than opening an empty list. A stale selection stays clearable.
+  // Disable empty-library triggers after loading; preserve clearing for stale selections.
   const hasCandidates = useMemo(
     () => loadStatus !== 'loaded' || hasModelPickerCandidates(models, { excludeKeys, filter, modelTypes }),
     [excludeKeys, filter, loadStatus, modelTypes, models]

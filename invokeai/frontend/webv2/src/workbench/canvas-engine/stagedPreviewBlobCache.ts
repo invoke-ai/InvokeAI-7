@@ -31,9 +31,8 @@ export interface StagedPreviewBlobCacheOptions {
 }
 
 /**
- * Keeps compressed staged-result bytes warm without retaining decoded full-size
- * surfaces for every candidate. Background requests are bounded, while the
- * latest explicit `get()` preempts stale demand and promotes queued work.
+ * Caches compressed candidate bytes with bounded background demand. Latest explicit get preempts stale requests
+ * and promotes queued work without retaining all decoded surfaces.
  */
 export const createStagedPreviewBlobCache = (
   resolveImage: ImageResolver,

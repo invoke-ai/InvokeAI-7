@@ -22,9 +22,7 @@ const TOOLTIP_CONTENT_PROPS = { p: '0' };
 const SHORTCUT_BORDER = 'color-mix(in oklab, currentColor 40%, transparent)';
 
 type ProgressCircleRootProps = ComponentProps<typeof ProgressCircle.Root>;
-// The `3xs` size (14px/2px, defined in platform/ui/theme/recipes.ts) is a repo
-// extension the generated Chakra types don't know about yet; QueueProgressIndicator
-// casts through the same seam for its `2xs` extension.
+// Cast the repository's 3xs theme extension, which generated Chakra types do not yet include.
 const ICON_RING_SIZE = '3xs' as ProgressCircleRootProps['size'];
 
 const compactBlockingReason = (reason: string, noNodesLabel: string): string => {
@@ -38,18 +36,8 @@ const compactBlockingReason = (reason: string, noNodesLabel: string): string => 
 const plural = (count: number, noun: string): string => `${count} ${noun}${count === 1 ? '' : 's'}`;
 
 /**
- * The single Invoke action for the whole application.
- *
- * Its geometry, width, and enabled state never change while a batch runs —
- * Invoke queues further items on top of a running batch, so a button that
- * morphed into a progress bar would read as unavailable at exactly the
- * moment it is most useful. Only the icon slot's content may change: it
- * shows the queue's progress while a batch runs and the pointer is elsewhere
- * and the button does not hold keyboard focus, and reverts to the play glyph
- * on hover or on `:focus-visible` (not a plain click-focus, which would leave
- * a mouse-invoked batch stuck on the play glyph) so "queue more on top"
- * always reads as available. Aggregate progress otherwise belongs to the
- * queue group. (§5.1, contract §9.4.)
+ * Keep Invoke geometry and availability stable while work runs. Only the icon changes to progress; hover or
+ * keyboard focus-visible restores play to signal that more work can queue.
  */
 export const InvokeButton = ({ state }: { state: InvocationState }) => {
   const { t } = useTranslation();
@@ -68,9 +56,7 @@ export const InvokeButton = ({ state }: { state: InvocationState }) => {
   const handlePointerEnter = useCallback(() => setIsHovered(true), []);
   const handlePointerLeave = useCallback(() => setIsHovered(false), []);
   const [isFocused, setIsFocused] = useState(false);
-  // `focus`, unlike `:focus-visible`, fires on every mousedown too — gating on
-  // the pseudo-class keeps this keyboard-only so a mouse click mid-batch does
-  // not strand the icon on the play glyph until something else steals focus.
+  // Check focus-visible so mouse click-focus cannot pin the play icon throughout a batch.
   const handleFocus = useCallback((event: FocusEvent<HTMLButtonElement>) => {
     if (event.currentTarget.matches(':focus-visible')) {
       setIsFocused(true);

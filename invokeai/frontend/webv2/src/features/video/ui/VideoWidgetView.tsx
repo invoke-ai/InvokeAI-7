@@ -1,17 +1,29 @@
 import type { ImageWithDims } from '@features/generation/contracts';
 import type { ModelConfig, ModelTaxonomyType } from '@features/models';
-import type { VideoReferenceItem, VideoSourceClip, VideoWidgetValues } from '@features/video/core/types';
+import type {
+  VideoConditioningClip,
+  VideoReferenceItem,
+  VideoSourceClip,
+  VideoWidgetValues,
+} from '@features/video/core/types';
 
 import { createListCollection, HStack, Stack, Switch, Text } from '@chakra-ui/react';
 import { GenerationSettingsSection, SeedField } from '@features/generation/components';
 import { isMainModelConfig, sanitizeBatchCount } from '@features/generation/settings';
 import { ensureModelsLoaded, useModelsSelector } from '@features/models';
 import { ModelSelect } from '@features/models/react';
-import { getVideoDurationSeconds, invertVideoAspectRatioId } from '@features/video/core/dimensions';
+import {
+  getVideoDurationSeconds,
+  invertVideoAspectRatioId,
+  LTX2_EXTEND_CONTEXT_FRAMES,
+  LTX2_NUM_FRAMES_STEP,
+  snapLtx2FramesDown,
+} from '@features/video/core/dimensions';
 import {
   applyReferenceExtendSourceVideo,
   applyReferenceExtendNumFrames,
   canPlaceReferenceExtendAnchor,
+  isVideoTargetResolution,
   pinReferenceExtendAnchor,
   normalizeVideoWidgetValues,
   resolveVideoMode,
@@ -20,6 +32,7 @@ import {
 import {
   getAcceleratorLoraChangeResult,
   getAcceleratorToggleResult,
+  getEffectiveVideoTiming,
   getVideoDimensions,
   getVideoModelPolicy,
   getVideoModelSelectionResult,
@@ -38,18 +51,14 @@ import { useTranslation } from 'react-i18next';
 import { areVideoValuesEqual } from './videoComparators';
 import { VideoComponentsSection } from './VideoComponentsSection';
 import { VideoConceptsSection } from './VideoConceptsSection';
+import { VideoConditioningClipField } from './VideoConditioningClipField';
 import { VideoPromptFields } from './VideoFormFields';
 import { VideoFrameImageField } from './VideoFrameImageField';
 import { VideoReferenceListField } from './VideoReferenceListField';
 import { VideoSourceClipField } from './VideoSourceClipField';
 import { useVideoUi, useVideoUiActions } from './VideoUiContext';
 
-/**
- * Every prop identity in this file is stable by construction — module-scope
- * constants for literals, `useCallback`/`useMemo` for anything closing over
- * state, and `memo` on each section — matching the Upscale widget's contract:
- * the widget re-renders on every keystroke that patches project state.
- */
+/** Keep section props stable: project patches rerender this widget on every keystroke. */
 
 const MAIN_MODEL_TYPES: readonly ModelTaxonomyType[] = ['main'];
 const SWITCH_CHECKED_PROPS = { bg: 'accent.solid' };
@@ -59,21 +68,14 @@ const ASPECT_RATIO_COLLECTION = createListCollection({
 });
 
 const toTargetResolution = (value: string | undefined): VideoWidgetValues['targetResolution'] | null =>
-  value === '480p' || value === '720p' || value === '1080p' || value === '768 highres' || value === '768 lowres'
-    ? value
-    : null;
+  isVideoTargetResolution(value) ? value : null;
 
 const DURATION_FORMATTER = new Intl.NumberFormat(undefined, {
   maximumFractionDigits: 2,
   minimumFractionDigits: 1,
 });
 
-/**
- * A media value the current model cannot consume (persisted from another
- * model's session, or restored by an optimistic rollback) would otherwise
- * block invoke invisibly — its section is policy-hidden. This stub is the
- * visible affordance to clear it.
- */
+/** Expose clearing for unsupported media that would otherwise block invocation from a hidden section. */
 const StaleMediaStub = ({ label, onClear }: { label: string; onClear: () => void }) => {
   const { t } = useTranslation();
 
@@ -105,10 +107,7 @@ const VideoModelReconciler = ({
       return;
     }
 
-    // When the store fails normalization wholesale (first open: the topbar
-    // Iterations field may already have patched `batchCount` into an
-    // otherwise-empty widget store), seeding the defaults must not wipe that
-    // one pre-open edit.
+    // Preserve topbar batchCount edits when seeding an otherwise uninitialized widget.
     const batchCount = normalized ? values.batchCount : sanitizeBatchCount(rawValues.batchCount ?? values.batchCount);
 
     patchValues({ ...values, batchCount }, 'system');
@@ -123,9 +122,7 @@ export const VideoWidgetView = () => {
   const models = useModelsSelector((snapshot) => snapshot.models);
   const modelsStatus = useModelsSelector((snapshot) => snapshot.status);
   const { patchValues, projectId, rawValues } = selection;
-  // Normalizing and reconciling against the model list is the widget's most
-  // expensive derivation; it must not run on unrelated re-renders, and a fresh
-  // `values` identity would re-render every section below.
+  // Reconcile only when inputs change; it is expensive and fresh values rerender every section.
   const values = useMemo(() => {
     const normalized =
       normalizeVideoWidgetValues(rawValues) ?? createDefaultVideoWidgetValues(modelsStatus === 'loaded' ? models : []);
@@ -144,39 +141,21 @@ export const VideoWidgetView = () => {
   );
   const policy = useMemo(() => getVideoModelPolicy(values.model ?? undefined, values), [values]);
   const dimensions = useMemo(() => getVideoDimensions(values.model ?? undefined, values), [values]);
+  // What the run will actually use: a conditioning clip decides the length, and in the video role
+  // the frame rate too. The stored values stay put underneath, so clearing the clip restores them.
+  const timing = useMemo(() => getEffectiveVideoTiming(values.model ?? undefined, values), [values]);
   const durationSeconds = getVideoDurationSeconds(
-    values.numFrames,
+    timing.numFrames,
     // In extend mode the extension inherits the SOURCE clip's frame rate.
-    policy.fps.editable ? (values.sourceVideo?.fps ?? values.fps) : policy.fps.defaultValue
+    policy.fps.editable ? (values.sourceVideo?.fps ?? timing.fps) : policy.fps.defaultValue
   );
 
   const patch = useCallback((next: Partial<VideoWidgetValues>) => patchValues(next), [patchValues]);
 
-  // Always the newest normalized list. The reference field's add handlers
-  // `await` a gallery resolve before writing, and the Initial Video field and
-  // the Frames slider write references too — so an updater that resolved
-  // against a captured array would clobber whichever of those landed during
-  // the await, silently deleting the anchor or restoring a window the frame
-  // count had already re-derived.
-  // Synced in an effect rather than during render: this file's react-compiler
-  // rule forbids touching a ref while rendering, and a gallery resolve lands
-  // whole frames later, long after the commit.
-  // Keyed by PROJECT, and carrying a LIVENESS bit. The widget is reconciled,
-  // never remounted, across a project switch (the <Activity> key is the panel
-  // instance), while `patch` stays bound to the project its render belonged
-  // to — so a bare latest-list ref tracks whichever project is ACTIVE, and a
-  // gallery resolve landing after a switch would write the new project's
-  // reference list into the old project, wholesale. And a hidden <Activity>
-  // destroys effects while promise continuations keep running: the ref then
-  // freezes with the projectId still matching, so a same-project guard would
-  // happily replay a list the store has since rewritten (a gallery deletion
-  // sweep, say) — resurrecting swept references. `live` is true exactly while
-  // the sync effect is mounted, which is the only time the ref's contents can
-  // be trusted; a write finding it false or mismatched is dropped.
-  //
-  // "Fresh" here means effect-fresh, not instantaneous: two resolves landing
-  // in the same microtask drain still read the same pre-commit list. That
-  // window is inherent to reading through React state at all.
+  // Async writes must use the latest committed list for this project while the sync effect is live. Hidden
+  // Activity panels stop syncing, and old callbacks still target their original project; drop writes in either
+  // case to avoid restoring stale references. Two resolves in one microtask drain may still see the same
+  // pre-commit list.
   const referencesRef = useRef({ live: true, projectId, references: values.references });
 
   useEffect(() => {
@@ -238,8 +217,7 @@ export const VideoWidgetView = () => {
     [models, patch, policy.ui.accelerator?.label, t, values]
   );
 
-  // One setter per field, created once per `patch` identity: inline
-  // `onChange={(x) => patch({ x })}` props would defeat every `memo` below.
+  // Stable per-field setters preserve child memo boundaries.
   const set = useMemo(
     () => ({
       aspectRatio: ({ value }: { value: string[] }) => {
@@ -251,8 +229,16 @@ export const VideoWidgetView = () => {
       },
       cfgScale: (cfgScale: number) => patch({ cfgScale }),
       cfgScaleLowNoise: (cfgScaleLowNoise: number) => patch({ cfgScaleLowNoise }),
+      audioCfgScale: (audioCfgScale: number) => patch({ audioCfgScale }),
+      modalityScale: (modalityScale: number) => patch({ modalityScale }),
+      stgScale: (stgScale: number) => patch({ stgScale }),
       fps: (fps: number) => patch({ fps }),
       steps: (steps: number) => patch({ steps }),
+      // Snapped on the way out: the VAE encodes 8k + 1 frames and the node snaps a ragged request
+      // down silently, so an unsnapped value would leave the panel showing a number the run did
+      // not use. The scrubber's own step keeps dragging on-grid; this covers typed input.
+      ltx2ExtendContextFrames: (frames: number) =>
+        patch({ ltx2ExtendContextFrames: Math.max(1 + LTX2_NUM_FRAMES_STEP, snapLtx2FramesDown(frames)) }),
       targetResolution: ({ value }: { value: string[] }) => {
         const targetResolution = toTargetResolution(value[0]);
 
@@ -269,28 +255,33 @@ export const VideoWidgetView = () => {
     [patch, values.aspectRatioId]
   );
 
-  // The mutual exclusion lives in the setters: a first frame and an initial
-  // video are different ways to claim the same conditioning slot, so setting
-  // one clears the other. A last frame combines with either — with a first
-  // frame it interpolates (FLF2V); with a source video it is the destination
-  // the extension should land on. On a reference-extend panel the initial
-  // video and the references coexist — the setter keeps the linked tail
-  // reference in step with the clip and its cutpoints.
+  // First frame and initial video share one conditioning slot; last frame can accompany either. Reference
+  // extension also keeps the linked tail reference synchronized.
   const referenceExtend = Boolean(policy.references?.extend);
   const maxVideoReferences = policy.references?.maxVideos ?? 3;
   const setFirstFrame = useCallback(
     (firstFrameImage: ImageWithDims | null) =>
-      patch({ firstFrameImage, ...(firstFrameImage ? { sourceVideo: null } : {}) }),
+      patch({ firstFrameImage, ...(firstFrameImage ? { conditioningClip: null, sourceVideo: null } : {}) }),
     [patch]
   );
-  const setLastFrame = useCallback((lastFrameImage: ImageWithDims | null) => patch({ lastFrameImage }), [patch]);
-  // Not part of `set`: that object is memoized on `patch` alone so the field
-  // setters keep the children's `memo` intact, and this one has to track the
-  // reference list. The linked tail reference's window is budgeted against the
-  // generated frame count — the backend discards an ill-fitting window at its
-  // SEAM end — so the count and the window move together. The re-derive is
-  // idempotent: this fires once per keystroke of the Frames input, unclamped,
-  // so typing "345" arrives as 3, then 34, then 345.
+  const setLastFrame = useCallback(
+    (lastFrameImage: ImageWithDims | null) =>
+      patch({ lastFrameImage, ...(lastFrameImage ? { conditioningClip: null } : {}) }),
+    [patch]
+  );
+  // A conditioning clip claims a whole modality, so it excludes every other conditioning slot --
+  // and each of those clears it in turn. The role a dropped clip arrives in comes from the gallery
+  // record: an uploaded soundtrack has no picture to condition on.
+  const setConditioningClip = useCallback(
+    (conditioningClip: VideoConditioningClip | null) =>
+      patch({
+        conditioningClip,
+        ...(conditioningClip ? { firstFrameImage: null, lastFrameImage: null, references: [], sourceVideo: null } : {}),
+      }),
+    [patch]
+  );
+  // This setter tracks references separately from patch-only field setters. Rebudget the linked tail with frame
+  // count so backend truncation cannot discard its seam end; derivation must tolerate intermediate input values.
   const setNumFrames = useCallback(
     (numFrames: number) =>
       patch(
@@ -298,36 +289,21 @@ export const VideoWidgetView = () => {
           ? { numFrames, references: applyReferenceExtendNumFrames(referencesRef.current.references, numFrames) }
           : { numFrames }
       ),
-    // Reads the list through the ref so the Frames control keeps a stable
-    // prop identity: depending on `values.references` re-created this on every
-    // panel patch, re-rendering the slider against the file's stable-identity
-    // contract. Safe because the re-derive is idempotent in `numFrames`. The
-    // project guard is unreachable for this synchronous caller; it keeps the
-    // ref's contract uniform.
+    // Read committed references through the guarded ref to keep the Frames callback stable; rebudgeting is
+    // idempotent.
     [patch, projectId, referenceExtend]
   );
   const setSourceVideo = useCallback(
     (sourceVideo: VideoSourceClip | null) => {
       if (referenceExtend) {
-        // Same guard as `setReferences`: the clip field's adopt and upload
-        // paths call this after an await, and a captured list would clobber a
-        // reference added meanwhile. Dropped when the project moved on or the
-        // sync effect is unmounted — the ref is effect-fresh, not live, and
-        // only vouches for its contents while mounted.
         if (!referencesRef.current.live || referencesRef.current.projectId !== projectId) {
           return;
         }
         const current = referencesRef.current.references;
         const references = applyReferenceExtendSourceVideo(current, sourceVideo, maxVideoReferences, values.numFrames);
 
-        // Unchanged identity with a clip set means the video cap is full and
-        // no same-clip entry could be adopted. REFUSE the whole drop: patching
-        // the clip anyway produced an extension with no continuity anchor at
-        // all, behind nothing but a toast -- and the cap gate then froze the
-        // clip's trim sliders. (The gate cannot pre-empt this case: it can
-        // only ask about the clip currently set, and this drop is a different
-        // one.) Clearing is never refused -- removing the linked entry cannot
-        // overflow anything.
+        // Unchanged identity means no tail-reference slot is available: refuse the whole drop so the clip cannot
+        // be set without its continuity anchor. Clearing cannot overflow.
         if (sourceVideo && references === current) {
           toaster.create({
             description: t('widgets.video.referenceExtendCapFullDescription'),
@@ -337,33 +313,26 @@ export const VideoWidgetView = () => {
 
           return;
         }
-        patch({ references, sourceVideo, ...(sourceVideo ? { firstFrameImage: null } : {}) });
+        patch({
+          references,
+          sourceVideo,
+          ...(sourceVideo ? { conditioningClip: null, firstFrameImage: null } : {}),
+        });
         return;
       }
-      patch({ sourceVideo, ...(sourceVideo ? { firstFrameImage: null } : {}) });
+      patch({ sourceVideo, ...(sourceVideo ? { conditioningClip: null, firstFrameImage: null } : {}) });
     },
     [maxVideoReferences, patch, projectId, referenceExtend, t, values.numFrames]
   );
-  // The single choke point for every list edit the reference field makes — add,
-  // remove, retrim, reorder — so pinning the continuity anchor here covers all
-  // of them. Request order is rotary order and the generation continues from
-  // the LAST reference, so the anchor's position is derived, not user-set.
+  // Generation continues from the last reference; pin the continuity anchor after every list edit.
   const setReferences = useCallback(
     (update: (current: VideoReferenceItem[]) => VideoReferenceItem[]) => {
-      // A pending edit is DROPPED when the ref cannot vouch for the list:
-      // the project moved on (this callback's `patch` still targets the one
-      // it rendered for), or the sync effect is unmounted (a hidden panel's
-      // continuations would replay a frozen list over whatever the store has
-      // done since). Losing one add beats overwriting a list the user can see.
       if (!referencesRef.current.live || referencesRef.current.projectId !== projectId) {
         return;
       }
       const updated = update(referencesRef.current.references);
 
-      // Identity return means the updater declined (an apply-time cap check)
-      // or had nothing to do: patching anyway would still fire this spread's
-      // firstFrameImage/lastFrameImage clearing — a refused add erasing frame
-      // slots it never touched — and dirty the project with a no-op write.
+      // A declined/no-op updater must not reach the patch that clears frame slots and dirties the project.
       if (updated === referencesRef.current.references) {
         return;
       }
@@ -372,7 +341,12 @@ export const VideoWidgetView = () => {
       patch({
         references: next,
         ...(next.length > 0
-          ? { firstFrameImage: null, lastFrameImage: null, ...(referenceExtend ? {} : { sourceVideo: null }) }
+          ? {
+              conditioningClip: null,
+              firstFrameImage: null,
+              lastFrameImage: null,
+              ...(referenceExtend ? {} : { sourceVideo: null }),
+            }
           : {}),
       });
     },
@@ -381,13 +355,8 @@ export const VideoWidgetView = () => {
   const clearReferences = useCallback(() => patch({ references: [] }), [patch]);
   const setLoras = useCallback(
     (loras: VideoWidgetValues['loras']) => {
-      // While the fast path is on it follows the list: a different complete
-      // accelerator set in it re-anchors the toggle onto that set at its own
-      // step count, and losing the last one turns the toggle off and restores
-      // the model's own sampling defaults (the accelerator wrote steps/CFG).
-      // Either way the user's list edit stands, and either way they are told —
-      // a silent 6-step run with no distillation LoRA behind it just looks
-      // like a broken model. An off accelerator is never armed from here.
+      // While enabled, follow a replacement accelerator set or restore model sampling defaults if none remains.
+      // Preserve the edit and notify; never enable acceleration from a list edit.
       if (!values.model) {
         patch({ loras });
         return;
@@ -419,19 +388,43 @@ export const VideoWidgetView = () => {
   const clearFirstFrame = useCallback(() => patch({ firstFrameImage: null }), [patch]);
   const clearLastFrame = useCallback(() => patch({ lastFrameImage: null }), [patch]);
   const clearSourceVideo = useCallback(() => patch({ sourceVideo: null }), [patch]);
+  const clearConditioningClip = useCallback(() => patch({ conditioningClip: null }), [patch]);
 
   const targetResolutionCollection = useMemo(
     () => createListCollection({ items: policy.targetResolutions.map((option) => ({ ...option, value: option.id })) }),
     [policy.targetResolutions]
   );
+  // A two-stage preset generates at half the canvas it names, which the size line below does not
+  // say -- it reports the output size, which is the final one. Without this the whole signal that a
+  // preset costs two passes is the three words in its own label.
+  const twoStageHelpText = useMemo(() => {
+    const option = policy.targetResolutions.find((entry) => entry.id === values.targetResolution);
+
+    if (option?.stages !== 2 || !dimensions) {
+      return undefined;
+    }
+
+    return t('widgets.video.twoStageHelp', {
+      baseHeight: dimensions.height / 2,
+      baseWidth: dimensions.width / 2,
+      height: dimensions.height,
+      width: dimensions.width,
+    });
+  }, [dimensions, policy.targetResolutions, t, values.targetResolution]);
   const aspectRatioValue = useMemo(() => [values.aspectRatioId], [values.aspectRatioId]);
   const targetResolutionValue = useMemo(() => [values.targetResolution], [values.targetResolution]);
 
   const framesSlider = useMemo(
     () =>
       policy.frames.kind === 'grid'
-        ? { max: policy.frames.max, min: policy.frames.min, step: policy.frames.step }
+        ? {
+            inputMax: policy.frames.max,
+            max: policy.frames.sliderMax ?? policy.frames.max,
+            min: policy.frames.min,
+            step: policy.frames.step,
+          }
         : {
+            inputMax: policy.frames.choices[policy.frames.choices.length - 1] ?? 0,
             max: policy.frames.choices[policy.frames.choices.length - 1] ?? 0,
             min: policy.frames.choices[0] ?? 0,
             step:
@@ -440,32 +433,38 @@ export const VideoWidgetView = () => {
     [policy.frames]
   );
 
+  const hasAdvancedGuidance = policy.ui.audioCfgVisible || policy.ui.stgVisible || policy.ui.modalityVisible;
   const mode = resolveVideoMode(values);
   const supportsFirstFrame = policy.modes.includes('first-frame') || policy.modes.includes('first-last');
   const supportsLastFrame = policy.modes.includes('first-last') || policy.modes.includes('last-frame');
   const supportsExtend = policy.modes.includes('extend');
   const supportsReferences = policy.modes.includes('reference');
+  const supportsConditioningClip = policy.modes.includes('audio-to-video') || policy.modes.includes('video-to-audio');
   const supportsInitialVideo = supportsExtend || referenceExtend;
-  // Setting an Initial Video on a reference-extend panel has to place a linked
-  // tail reference, which needs a free video slot -- unless an existing entry
-  // can be adopted, which consumes none. Deferring to the same predicate the
-  // setter's refusal uses keeps the two from drifting: gating on the flag alone
-  // disabled the field after a recall, which restores references UNFLAGGED
-  // beside the source video, and `disabled` reaches the clip's trim sliders too
-  // -- so the cutpoint could not be moved on a clip that was legitimately set.
+  // Use the setter's capacity predicate: recalled unflagged references can be adopted without consuming a slot,
+  // and must not disable clip trimming.
   const initialVideoCapBlocked =
     referenceExtend &&
     !canPlaceReferenceExtendAnchor(values.references, values.sourceVideo?.video_name, maxVideoReferences);
-  const hasConditioningMedia = Boolean(values.firstFrameImage || values.lastFrameImage || values.sourceVideo);
+  // The aspect-ratio control is locked by media that pins the frame. A clip in the `audio` role
+  // does not: its picture is what gets generated, so the ratio is still the user's to choose.
+  const hasConditioningMedia = Boolean(
+    values.firstFrameImage || values.lastFrameImage || values.sourceVideo || values.conditioningClip?.role === 'video'
+  );
+  const otherMediaSet = Boolean(
+    values.firstFrameImage || values.lastFrameImage || values.sourceVideo || values.references.length > 0
+  );
+  const conditioningDerivedText = values.conditioningClip
+    ? t(
+        values.conditioningClip.role === 'audio'
+          ? 'widgets.video.conditioningDerivedAudio'
+          : 'widgets.video.conditioningDerivedVideo',
+        { fps: timing.fps, frames: timing.numFrames }
+      )
+    : undefined;
   const derivedSourceText = dimensions ? t(`widgets.video.dimensionSource.${dimensions.source}`) : undefined;
-  // Media pins the canvas to its own proportions, so the stored preset is not what the output will
-  // be: leaving it on the trigger of a disabled control states a ratio the render will not use. The
-  // preset itself is kept, not rewritten -- it is what the panel goes back to when the media is
-  // removed -- and the trigger names the source instead. Deliberately not the nearest standard
-  // preset: media rarely lands exactly on one, so that would swap one wrong ratio for another.
-  // Truncating, like the Generate panel's own aspect-ratio trigger: the slot clips its value text
-  // rather than wrapping it, so a phrase wider than the control ends mid-word in a docked panel
-  // instead of in an ellipsis.
+  // Media determines output proportions. Show its ratio source while disabled, preserving the saved preset for
+  // when media is removed.
   const dimensionSource = dimensions?.source;
   const derivedSourceValueText = useMemo(
     () =>
@@ -482,6 +481,7 @@ export const VideoWidgetView = () => {
       }`
     : t('widgets.video.derivedSizeUnavailable');
   const fpsLockedForExtend = policy.ui.fpsVisible && mode === 'extend';
+  const fpsLocked = fpsLockedForExtend || timing.fpsFromClip;
   const durationText =
     durationSeconds === null
       ? undefined
@@ -495,12 +495,6 @@ export const VideoWidgetView = () => {
         values={values}
       />
 
-      {/* Tier-1, like Generate's model card: which model you are running is the
-          choice every field below is conditioned on, so it sits above the
-          prompt rather than inside a collapsed section. */}
-      {/* `px` matches the inset the prompt block and every section body carry,
-          so the picker lines up with the fields below it — Generate's card can
-          skip it only because its neighbours sit flush too. */}
       <Stack gap="1" px="2" py="1">
         <Field
           error={values.model ? undefined : t('widgets.video.modelRequired')}
@@ -583,6 +577,9 @@ export const VideoWidgetView = () => {
       {!supportsReferences && values.references.length > 0 ? (
         <StaleMediaStub label={t('widgets.video.staleReferences')} onClear={clearReferences} />
       ) : null}
+      {!supportsConditioningClip && values.conditioningClip ? (
+        <StaleMediaStub label={t('widgets.video.staleConditioningClip')} onClear={clearConditioningClip} />
+      ) : null}
 
       {supportsReferences ? (
         <GenerationSettingsSection label={t('widgets.video.references')} sectionId="video-references" defaultOpen>
@@ -618,6 +615,42 @@ export const VideoWidgetView = () => {
               sourceVideo={values.sourceVideo}
               onChange={setSourceVideo}
             />
+            {policy.ui.extendContext ? (
+              <ScrubberField
+                defaultValue={LTX2_EXTEND_CONTEXT_FRAMES}
+                // The trade this control makes, which Frames alone does not show: the join consumes
+                // the context from both halves, so every frame held is a frame of new video given up.
+                helpText={t('widgets.video.extendContextHelp', {
+                  frames: policy.ui.extendContext.newFrames,
+                  seconds: (policy.ui.extendContext.newFrames / Math.max(1, values.fps)).toFixed(1),
+                })}
+                inputMax={policy.ui.extendContext.max}
+                label={t('widgets.video.extendContext')}
+                max={policy.ui.extendContext.max}
+                min={policy.ui.extendContext.min}
+                step={policy.ui.extendContext.step}
+                value={policy.ui.extendContext.value}
+                onChange={set.ltx2ExtendContextFrames}
+              />
+            ) : null}
+          </Stack>
+        </GenerationSettingsSection>
+      ) : null}
+
+      {supportsConditioningClip ? (
+        <GenerationSettingsSection
+          label={t('widgets.video.conditioningClip')}
+          sectionId="video-conditioning-clip"
+          defaultOpen={Boolean(values.conditioningClip)}
+        >
+          <Stack gap="3" p="2">
+            <VideoConditioningClipField
+              conditioningClip={values.conditioningClip}
+              derivedText={conditioningDerivedText}
+              disabled={otherMediaSet}
+              disabledReason={otherMediaSet ? t('widgets.video.conditioningClipBlocked') : undefined}
+              onChange={setConditioningClip}
+            />
           </Stack>
         </GenerationSettingsSection>
       ) : null}
@@ -646,7 +679,7 @@ export const VideoWidgetView = () => {
               </IconButton>
             </HStack>
           </Field>
-          <Field label={t('widgets.video.targetResolution')}>
+          <Field helpText={twoStageHelpText} label={t('widgets.video.targetResolution')}>
             <Select
               collection={targetResolutionCollection}
               size="xs"
@@ -655,24 +688,36 @@ export const VideoWidgetView = () => {
             />
           </Field>
           <ScrubberField
-            helpText={durationText}
+            disabled={timing.numFramesFromClip}
+            helpText={
+              timing.numFramesFromClip
+                ? `${t('widgets.video.framesFromClip')}${durationText ? ` ${durationText}` : ''}`
+                : durationText
+            }
+            inputMax={framesSlider.inputMax}
             label={t('widgets.video.frames')}
             max={framesSlider.max}
             min={framesSlider.min}
             step={framesSlider.step}
-            value={values.numFrames}
+            value={timing.numFrames}
             onChange={setNumFrames}
           />
           {policy.ui.fpsVisible ? (
             <ScrubberField
-              disabled={fpsLockedForExtend}
-              helpText={fpsLockedForExtend ? t('widgets.video.fpsExtendLocked') : undefined}
+              disabled={fpsLocked}
+              helpText={
+                timing.fpsFromClip
+                  ? t('widgets.video.fpsFromClip')
+                  : fpsLockedForExtend
+                    ? t('widgets.video.fpsExtendLocked')
+                    : undefined
+              }
               inputMax={policy.fps.max}
               label={t('widgets.video.fps')}
               max={60}
               min={policy.fps.min}
               step={1}
-              value={values.fps}
+              value={timing.fps}
               onChange={set.fps}
             />
           ) : (
@@ -702,16 +747,23 @@ export const VideoWidgetView = () => {
               </Switch.Root>
             </Field>
           ) : null}
-          <ScrubberField
-            hint="steps"
-            inputMax={500}
-            label={t('widgets.video.steps')}
-            max={100}
-            min={policy.minSteps}
-            step={1}
-            value={values.steps}
-            onChange={set.steps}
-          />
+          {policy.ui.stepsEditable ? (
+            <ScrubberField
+              defaultValue={policy.defaults.steps}
+              hint="steps"
+              inputMax={500}
+              label={t('widgets.video.steps')}
+              max={100}
+              min={policy.minSteps}
+              step={1}
+              value={values.steps}
+              onChange={set.steps}
+            />
+          ) : (
+            <Text color="fg.muted" fontSize="2xs">
+              {t('widgets.video.stepsFixed', { steps: policy.defaults.steps })}
+            </Text>
+          )}
           {policy.ui.cfgVisible ? (
             <ScrubberField
               hint="cfgScale"
@@ -730,7 +782,7 @@ export const VideoWidgetView = () => {
               inputMax={100}
               label={t('widgets.video.cfgLowNoise')}
               max={15}
-              min={0}
+              min={1}
               step={0.1}
               value={values.cfgScaleLowNoise ?? values.cfgScale}
               onChange={set.cfgScaleLowNoise}
@@ -745,6 +797,52 @@ export const VideoWidgetView = () => {
           />
         </Stack>
       </GenerationSettingsSection>
+
+      {hasAdvancedGuidance ? (
+        <GenerationSettingsSection label={t('widgets.video.advancedGuidance')} sectionId="video-guidance">
+          <Stack gap="3" p="2">
+            {policy.ui.audioCfgVisible ? (
+              <ScrubberField
+                defaultValue={policy.defaults.audioCfgScale ?? undefined}
+                helpText={t('widgets.video.audioCfgHelp')}
+                inputMax={100}
+                label={t('widgets.video.audioCfg')}
+                max={15}
+                min={1}
+                step={0.1}
+                value={values.audioCfgScale ?? policy.defaults.audioCfgScale ?? 1}
+                onChange={set.audioCfgScale}
+              />
+            ) : null}
+            {policy.ui.stgVisible ? (
+              <ScrubberField
+                defaultValue={policy.defaults.stgScale ?? undefined}
+                helpText={t('widgets.video.stgHelp')}
+                inputMax={10}
+                label={t('widgets.video.stg')}
+                max={3}
+                min={0}
+                step={0.1}
+                value={values.stgScale ?? policy.defaults.stgScale ?? 0}
+                onChange={set.stgScale}
+              />
+            ) : null}
+            {policy.ui.modalityVisible ? (
+              <ScrubberField
+                defaultValue={policy.defaults.modalityScale ?? undefined}
+                helpText={t('widgets.video.modalityHelp')}
+                inputMax={10}
+                label={t('widgets.video.modality')}
+                max={5}
+                min={1}
+                step={0.1}
+                value={values.modalityScale ?? policy.defaults.modalityScale ?? 1}
+                onChange={set.modalityScale}
+              />
+            ) : null}
+          </Stack>
+        </GenerationSettingsSection>
+      ) : null}
 
       <VideoConceptsSection loras={values.loras} model={values.model} onChangeLoras={setLoras} />
       <VideoComponentsSection values={values} onPatch={patch} />

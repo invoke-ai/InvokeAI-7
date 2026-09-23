@@ -178,8 +178,7 @@ describe('PreviewFrame native video arm', () => {
 
     await interact(() => video.dispatchEvent(new Event('loadedmetadata')));
 
-    // `preload="metadata"` alone leaves the 256px poster on screen, upscaled to the whole
-    // stage. The nudge makes the decoder paint frame 0 at the video's native resolution.
+    // The metadata nudge replaces the upscaled thumbnail poster with native-resolution frame zero.
     expect(position.get()).toBeGreaterThan(0);
     expect(position.get()).toBeLessThan(0.001);
     // The poster is still the placeholder for the moment before that frame lands, and the
@@ -190,9 +189,8 @@ describe('PreviewFrame native video arm', () => {
   it('leaves the playhead alone when the user started playback before metadata arrived', async () => {
     await renderVideo();
     const video = getVideo();
-    // The one interleaving where `loadedmetadata` observes a non-paused element: `load()`
-    // resets position and pause state before it fires, so a viewer mid-playback is already
-    // back at zero by then and there is no playhead left for the guard to protect.
+    // Only play-before-metadata leaves loadedmetadata unpaused; load() itself already resets playback and
+    // position.
     const position = stubPlaybackPosition(video, { paused: false });
 
     await interact(() => video.dispatchEvent(new Event('loadedmetadata')));
@@ -270,8 +268,7 @@ describe('PreviewFrame native video arm', () => {
 
     await interact(() => video.dispatchEvent(new Event('loadedmetadata')));
 
-    // Preview may have been closed the whole time. Starting audio now would come out of
-    // nowhere — but the request still has to be retired, not left to fire later.
+    // Retire stale requests without starting unexpected audio when Preview was closed.
     expect(playback.play).not.toHaveBeenCalled();
     expect(getVideoSpanPlaybackRequest()).toBeNull();
     expect(playback.getTime()).toBeLessThan(0.001);
@@ -304,9 +301,7 @@ describe('PreviewFrame native video arm', () => {
     await interact(() => video.dispatchEvent(new Event('loadedmetadata')));
     expect(playback.getTime()).toBe(2);
 
-    // `timeupdate` fires about four times a second and would overrun this window by an
-    // eighth of it; the frame loop is what keeps the wrap tight, and nothing else here
-    // exercises it.
+    // Exercise rAF wrapping; timeupdate alone overshoots short selections.
     await interact(() => playback.setTime(4.01));
     await act(async () => {
       await new Promise<void>((resolve) => {
@@ -344,9 +339,7 @@ describe('PreviewFrame native video arm', () => {
     await interact(() => video.dispatchEvent(new Event('loadedmetadata')));
     expect(playback.getTime()).toBe(8);
 
-    // The playhead reaches this window's end only as the media ends, where `pause` has
-    // already stopped the watch — without an `ended` handler whether it wrapped was down
-    // to which event the browser delivered first.
+    // Verify end-of-media wrapping independently of pause/timeupdate delivery order.
     const token = getVideoSpanPlaybackState()?.token;
     const reports: boolean[] = [];
     const unsubscribe = subscribeVideoSpanPlaybackState(() => {
@@ -357,9 +350,7 @@ describe('PreviewFrame native video arm', () => {
 
     expect(playback.getTime()).toBe(8);
     expect(playback.play).toHaveBeenCalledTimes(2);
-    // The wrap is reported as running again in the same task as the `pause` that preceded
-    // `ended`, not a paint later when the `play` event lands: the panel's pause icon must
-    // not blink on every loop of a window that ends on the clip's last frame.
+    // Report end-wrap playback synchronously so the panel icon does not blink each loop.
     expect(reports).toEqual([false, true]);
 
     await interact(() => undefined);
@@ -383,15 +374,12 @@ describe('PreviewFrame native video arm', () => {
     await interact(() => video.dispatchEvent(new Event('loadedmetadata')));
     expect(playback.getTime()).toBe(2);
 
-    // A cookie refresh mid-loop rewinds the clip and refires `loadedmetadata`. The
-    // first-frame poster nudge used to run there, and its unmarked seek read as the user
-    // taking the playhead back — the loop was abandoned and the clip sat on frame 0.
+    // Media reload must restore the loop instead of running the poster nudge and retiring it.
     await interact(() => video.dispatchEvent(new Event('error')));
     await interact(() => undefined);
 
-    // Back inside the window, and still paused, exactly as `load()` left it — and reported
-    // so: `load()` flips the element to paused without a `pause` event, so the panel's
-    // button would otherwise go on offering a stop that pauses a paused element (a no-op).
+    // Restore span position after load() while remaining paused and report that state despite the missing pause
+    // event.
     expect(playback.getTime()).toBe(2);
     expect(getVideoSpanPlaybackState()).toMatchObject({ isPlaying: false });
 
@@ -424,9 +412,7 @@ describe('PreviewFrame native video arm', () => {
   });
 
   it('still honours the user when a span seek fires no seeking event', async () => {
-    // The Initial Video's trim starts at frame 0, so the very first press seeks the
-    // playhead to where it already sits. A marker left standing there would swallow the
-    // user's next real scrub and haul them back into the window.
+    // A no-op seek at frame zero must not leave a marker that swallows the next real scrub.
     requestVideoSpanPlayback({ endSeconds: 4, itemKey: videoSource.itemKey, startSeconds: 0 });
     await renderVideo();
     const video = getVideo();
@@ -446,10 +432,7 @@ describe('PreviewFrame native video arm', () => {
   });
 
   it('loops a window as tight as the panel can make one', async () => {
-    // The panel's floor is two frames (`MIN_VIDEO_TRIM_FRAMES`), which at 60fps is 33ms —
-    // narrower than any width threshold worth writing down, and precisely the selection
-    // the two still bounds convey least. A width floor here silently played the whole
-    // remainder of the clip instead, with audio.
+    // Loop two-frame trims without an arbitrary duration floor.
     requestVideoSpanPlayback({ endSeconds: 2 + 2 / 60, itemKey: videoSource.itemKey, startSeconds: 2 });
     await renderVideo();
     const video = getVideo();
@@ -511,9 +494,7 @@ describe('PreviewFrame native video arm', () => {
     const video = getVideo();
     const playback = stubSpanPlayback(video);
 
-    // Nothing to report until the element has the loop running: before metadata the
-    // request is parked, and the panel's button must not offer to stop a loop that is not
-    // yet there.
+    // Do not report a stoppable loop while its request is parked before metadata.
     expect(getVideoSpanPlaybackState()).toBeNull();
 
     await interact(() => video.dispatchEvent(new Event('loadedmetadata')));
@@ -526,8 +507,6 @@ describe('PreviewFrame native video arm', () => {
     expect(playback.pauseSpy).toHaveBeenCalledTimes(1);
     expect(getVideoSpanPlaybackState()).toMatchObject({ isPlaying: false, token });
 
-    // ...so the native play control resumes the selection, under the same request, with
-    // the wrap still enforced.
     await interact(() => void video.play());
 
     expect(getVideoSpanPlaybackState()).toMatchObject({ isPlaying: true, token });
@@ -557,15 +536,12 @@ describe('PreviewFrame native video arm', () => {
     await interact(() => undefined);
     expect(getVideoSpanPlaybackState()).toMatchObject({ isPlaying: true, token: second });
 
-    // A press on another card (or the same one, after a trim change) replaces the loop; the
-    // earlier button's report goes with it.
+    // A newer span request retires the previous button's loop report.
     const third = requestVideoSpanPlayback({ endSeconds: 9, itemKey: videoSource.itemKey, startSeconds: 8 });
     await interact(() => undefined);
     expect(getVideoSpanPlaybackState()).toMatchObject({ isPlaying: true, token: third });
 
-    // Hidden behind a layout switch, the element is paused and nothing is on screen to
-    // stop, so nothing is offered. Shown again, the loop is still armed: a native play
-    // resumes it under the request it belongs to.
+    // Hiding pauses and clears running status; showing preserves armed identity for native play.
     await renderKeptVideo('hidden');
     expect(getVideoSpanPlaybackState()).toBeNull();
 
@@ -581,8 +557,7 @@ describe('PreviewFrame native video arm', () => {
     const video = getVideo();
     const playback = stubSpanPlayback(video, { duration: 6 });
 
-    // Inverted bounds after clamping: the clip plays once with no loop armed, and a pause
-    // control for it would promise to stop a selection that is not playing.
+    // Collapsed bounds play once without reporting an armed selection loop.
     await interact(() => requestVideoSpanPlayback({ endSeconds: 9, itemKey: videoSource.itemKey, startSeconds: 8 }));
 
     expect(playback.play).toHaveBeenCalledTimes(1);
@@ -1095,11 +1070,7 @@ const stubPlaybackPosition = (video: HTMLVideoElement, state: { paused?: boolean
   return { get: () => currentTime };
 };
 
-/**
- * A playable stand-in for the `data:` source, whose seekable range is empty: a real
- * `currentTime` assignment clamps back to 0, and `play()` on it never enters a playing
- * state, so neither the seek nor the loop would be observable against the element itself.
- */
+/** Use a playable stand-in because the data source's empty seekable range prevents observable seeks and playback. */
 const stubSpanPlayback = (
   video: HTMLVideoElement,
   { duration = 10, readyState = HTMLMediaElement.HAVE_METADATA }: { duration?: number; readyState?: number } = {}

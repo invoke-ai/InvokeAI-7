@@ -53,6 +53,9 @@ IDEAL_SIZE_AT_NODE_DEFAULTS: dict[BaseModelType, tuple[int, int]] = {
     BaseModelType.Flux2: (1360, 768),
     BaseModelType.Ideogram4: (1360, 768),
     BaseModelType.Krea2: (1360, 768),
+    # Declared 1248x704 (non-square, like H3): 878592 px at 1.7778 -> height sqrt(494208) = 703.0
+    # -> 703 -> 672 on the 32 grid; width 1249.9 -> 1249 -> 1248.
+    BaseModelType.LTX2: (1248, 672),
     # The one architecture whose declared default is not square (1344x768). Squaring its width
     # asked for 1.75x the area it was trained on and returned (1792, 992); taking both
     # dimensions as an area keeps it at its own scale. Every other row is unchanged by that,

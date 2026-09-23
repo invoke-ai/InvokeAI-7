@@ -73,8 +73,7 @@ describe('normalizeGenerateSettings', () => {
   });
 
   it('never lets the strict guard pass a record whose seed mode still needs inventing', () => {
-    // Stored values that pass the guard are reused as-is by the widget resolver, so a legacy
-    // record with only the random toggle would reach the seed menu with `seedMode` undefined.
+    // The normalized guard must cover every field because accepted records bypass normalization.
     const normalized = normalizeGenerateSettings(legacyStoredValues);
 
     expect(normalized && isGenerateSettings(normalized)).toBe(true);
@@ -481,14 +480,12 @@ describe('dimension helpers', () => {
     expect(idsOf(moveReferenceImage(referenceImages, 'c', -1))).toEqual(['a', 'c', 'b']);
     expect(idsOf(moveReferenceImage(referenceImages, 'a', 1))).toEqual(['b', 'a', 'c']);
 
-    // Order IS conditioning order, so a move must reorder and nothing else:
-    // entries keep their identity rather than being rebuilt.
+    // Reordering preserves item identities and changes conditioning order.
     const moved = moveReferenceImage(referenceImages, 'a', 1);
 
     expect(moved[1]).toBe(referenceImages[0]);
 
-    // Out-of-range moves and an unknown id return the SAME array, which is how
-    // the caller knows to skip the settings write entirely.
+    // Return the same array for no-ops so callers can skip persistence.
     expect(moveReferenceImage(referenceImages, 'a', -1)).toBe(referenceImages);
     expect(moveReferenceImage(referenceImages, 'c', 1)).toBe(referenceImages);
     expect(moveReferenceImage(referenceImages, 'missing', 1)).toBe(referenceImages);

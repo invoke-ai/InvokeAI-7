@@ -249,8 +249,8 @@ export class RasterController {
   }
 
   releaseBitmapIfUnreferenced(imageName: string): void {
-    // Decoded bitmaps are lease-owned and close automatically after the final
-    // rasterizer releases them. Retained for callers that also update tracking.
+    // Leases close decoded bitmaps after the final rasterizer releases them; this hook also supports tracking
+    // callers.
     void imageName;
   }
 

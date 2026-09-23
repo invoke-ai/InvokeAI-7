@@ -3,11 +3,6 @@ import type { ModelConfig, ModelTaxonomyType } from './types';
 import { getModelBaseLabel, KNOWN_MODEL_BASES } from './baseIdentity';
 import { getModelCategoryRank, getModelTypePluralLabel } from './taxonomy';
 
-/**
- * Pure filtering/grouping/sorting for the model library. Kept free of React so
- * the list views stay thin and this logic is unit-testable.
- */
-
 export type ModelSortField = 'default' | 'name' | 'base' | 'size' | 'format' | 'type' | 'path';
 
 export interface ModelLibraryFilters {
@@ -49,11 +44,7 @@ export interface ModelPickerOptions {
   relatedKeys?: ReadonlySet<string>;
 }
 
-/**
- * Picker list group: one per base. Type is deliberately NOT a grouping axis —
- * a cross-type picker would otherwise repeat "Main Models" above every base
- * section. Rows in a multi-type picker carry their own type badge instead.
- */
+/** Group by base; multi-type rows carry badges rather than repeated type section headings. */
 export interface ModelPickerGroup {
   key: string;
   base: string;
@@ -169,8 +160,6 @@ export const getModelPickerGroups = (models: ModelConfig[], options: ModelPicker
   // sibling picker's choice) must not filter everything out behind a hidden chip.
   const baseFilter = new Set(availableBases.filter((base) => options.baseFilter?.has(base)));
   const { relatedKeys } = options;
-  // Bases order the groups; within a group, related models lead, then category
-  // rank keeps main models above LoRAs in a cross-type picker, then name.
   const visibleModels = candidates
     .filter((model) => baseFilter.size === 0 || baseFilter.has(String(model.base)))
     .sort(
@@ -210,11 +199,7 @@ export const collectBases = (models: Pick<ModelConfig, 'base'>[]): string[] =>
 /** Bases that exist but carry no architecture meaning, sorted after the rest. */
 const DEPRIORITIZED_BASES: ReadonlySet<string> = new Set(['any', 'external', 'unknown']);
 
-/**
- * Distinct bases present, ordered for display: known bases follow the
- * registry order from `baseIdentity`, unknown bases come next, and the
- * meaningless `any`/`external`/`unknown` bases are pushed to the very end.
- */
+/** Order known bases by registry, then unfamiliar bases, with any/external/unknown last. */
 const KNOWN_BASE_RANKS = new Map<string, number>(KNOWN_MODEL_BASES.map((base, index) => [base, index]));
 
 /** Display rank for a base: registry order, unknown bases next, meaningless bases last. */

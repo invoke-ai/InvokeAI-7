@@ -1,10 +1,5 @@
 import type { GalleryItemKey } from './items';
 
-/**
- * Identity of a semantic gallery search: a text prompt, a gallery image, a
- * web image URL, a dropped file held in the external-image registry, or an
- * image-map cluster held in the cluster registry.
- */
 export type GallerySemanticQuery =
   | { kind: 'text'; query: string }
   | { kind: 'image'; imageName: string }
@@ -12,10 +7,6 @@ export type GallerySemanticQuery =
   | { kind: 'file'; fileId: string }
   | { kind: 'cluster'; clusterId: string };
 
-/**
- * A persisted semantic search: a text prompt, a gallery image, a web URL, a
- * dropped file, or an image-map cluster.
- */
 export type GallerySemanticReference =
   | { kind: 'text'; query: string }
   | { kind: 'image'; imageName: string }
@@ -47,10 +38,7 @@ export const gallerySemanticReferenceKey = (reference: GallerySemanticReference 
   }
 };
 
-/**
- * The reference a semantic-search field commits for its text: whitespace is
- * not a query, so blank text reads as no search at all.
- */
+/** Blank or whitespace-only text means no semantic search. */
 export const toGallerySemanticTextReference = (text: string): GallerySemanticReference | null => {
   const query = text.trim();
 
@@ -74,11 +62,8 @@ export const toGallerySemanticQuery = (reference: GallerySemanticReference): Gal
 };
 
 /*
- * In-memory registry for externally dropped reference images (OS file drops).
- * Blobs cannot live in persisted widget values, so the persisted value keeps a
- * registry key; a key that no longer resolves (e.g. after a reload) reads as a
- * cleared search. Only one external query is active at a time, so registering
- * a new file evicts the previous one.
+ * Persist only a registry key for dropped blobs. New files evict the previous entry; unresolved keys clear the
+ * search.
  */
 
 let nextId = 0;
@@ -101,16 +86,8 @@ export const registerExternalImageFile = (blob: Blob, label: string): string => 
 export const getExternalImageFile = (fileId: string): { blob: Blob; label: string } | null => files.get(fileId) ?? null;
 
 /*
- * In-memory registry for image-map cluster queries, mirroring the file
- * registry above: a cluster's member list (which can run to thousands of
- * items) cannot live in persisted widget values, so the persisted value keeps
- * a registry key, and a key that no longer resolves (e.g. after a reload)
- * reads as a cleared search. Only one cluster query is active at a time, so
- * registering a new cluster evicts the previous one.
- *
- * Members are item keys rather than bare names: a cluster on the map can hold
- * videos as well as images, and the gallery resolves each member through the
- * endpoint its kind names.
+ * Keep large cluster membership lists in memory under one persisted key. Members include media kinds; new
+ * registrations evict old ones and unresolved keys clear search.
  */
 
 let nextClusterId = 0;
@@ -119,9 +96,8 @@ const clusters = new Map<string, { itemKeys: GalleryItemKey[]; label: string }>(
 
 export const registerImageCluster = (itemKeys: GalleryItemKey[], label: string): string => {
   nextClusterId += 1;
-  // Same shape as file ids: the random token keeps a persisted id from a
-  // previous JS realm (another tab, a reload) from resolving to this realm's
-  // unrelated cluster.
+  // Per-realm random tokens prevent persisted keys from resolving to unrelated clusters after reload or in another
+  // tab.
   const clusterId = `cluster-${String(nextClusterId)}-${Math.random().toString(36).slice(2, 10)}`;
 
   clusters.clear();
@@ -134,11 +110,8 @@ export const getImageCluster = (clusterId: string): { itemKeys: GalleryItemKey[]
   clusters.get(clusterId) ?? null;
 
 /**
- * Drops deleted items from the registered cluster, in step with the gallery's
- * optimistic cache patch: the member list is client-owned, so without this the
- * cluster view's total (and its trailing page) would keep counting items that
- * no longer exist. Returns a rollback that puts back exactly the members THIS
- * call removed — a no-op once a different registration owns the slot.
+ * Prune deleted members from the client-owned cluster. Rollback restores only this call's removals and only while
+ * the same registration owns the slot.
  */
 export const pruneImageClusterMembers = (itemKeys: readonly GalleryItemKey[]): (() => void) => {
   const entry = [...clusters.entries()].at(0);
@@ -170,12 +143,7 @@ export const pruneImageClusterMembers = (itemKeys: readonly GalleryItemKey[]): (
       return;
     }
 
-    // Rebuilt from the pre-prune order rather than swapped back wholesale, so
-    // that a concurrent deletion's prune (or its rollback) landing in between
-    // survives: whatever this call did not remove keeps whatever state the
-    // other call left it in. Restoring the captured array instead would either
-    // resurrect that deletion's items or — guarded on identity — skip the
-    // restore entirely and strand a failed deletion's item outside the list.
+    // Restore only this call's removals in their original order, preserving concurrent prunes and rollbacks.
     const restored = new Set([...current.itemKeys, ...removedKeys]);
 
     clusters.set(clusterId, {
@@ -191,14 +159,8 @@ export const pruneImageClusterMembers = (itemKeys: readonly GalleryItemKey[]): (
  * in the registry as no search at all.
  */
 /**
- * A reference that only this session can resolve — a dropped file or an
- * image-map cluster.
- *
- * Both kinds name an entry in an in-memory registry, and their ids carry a
- * per-realm token, so a persisted one can never resolve again: a reload, or a
- * second tab, reads it as no search at all. Anything set against the ranking
- * it named — the page the footer was on, above all — describes a list that
- * will not exist there either.
+ * File and cluster references resolve only in their originating realm; positions within their rankings cannot
+ * survive reload or cross-tab restoration.
  */
 const isSessionScopedGallerySemanticReference = (value: unknown): boolean =>
   !!value &&
@@ -206,18 +168,8 @@ const isSessionScopedGallerySemanticReference = (value: unknown): boolean =>
   ((value as Record<string, unknown>).kind === 'file' || (value as Record<string, unknown>).kind === 'cluster');
 
 /**
- * The same values with every position that was set against a ranking the
- * caller's test rejects, or null when there is nothing to drop.
- *
- * While a similarity search is on screen the footer paginates the RANKING, so
- * the gallery's page and the page stamped on the selection are both indexes
- * into it. Left behind by a search that is gone, they are read as board pages
- * and answer with an unrelated slice. Only keys that are actually carrying a
- * position are rewritten: normalizing must not mint state that was never
- * stored.
- *
- * The test differs by caller, and the difference matters. See
- * `stripSessionScopedGallerySearch` and `stripUnresolvableGallerySearch`.
+ * Drop existing positions tied to rejected rankings so they cannot become unrelated board-page offsets. Do not
+ * create absent state.
  */
 const stripGallerySearchPositions = (
   values: Record<string, unknown>,
@@ -250,16 +202,8 @@ const stripGallerySearchPositions = (
 };
 
 /**
- * The same values with an infinite window's mid-board anchor dropped, or null
- * when there is none.
- *
- * In infinite mode `galleryPage` is not a page number but the anchor of a
- * mid-board window, set by a reveal from the image map. That is a "you are
- * here" for the session that made it: restored anywhere else it opens the
- * gallery stranded in the middle of a board, with no page control (the
- * footer's is paginated-only) and no way back to the top short of switching
- * boards. Paginated pages stay — there the value really is the page the user
- * was reading.
+ * Drop infinite-window anchors on restoration to avoid stranding users mid-board without pagination controls.
+ * Preserve actual paginated page numbers.
  */
 export const stripInfiniteWindowAnchor = (values: Record<string, unknown>): Record<string, unknown> | null =>
   values.paginationMode !== 'paginated' && typeof values.galleryPage === 'number' && values.galleryPage > 0
@@ -267,12 +211,8 @@ export const stripInfiniteWindowAnchor = (values: Record<string, unknown>): Reco
     : null;
 
 /**
- * For the SAVE path: drop what the realm reading this back will not have.
- *
- * A dropped file or an image-map cluster names an entry in an in-memory
- * registry, and its id carries a per-realm token, so it resolves here and
- * nowhere else — the test has to be what the value IS, not whether it works
- * right now, because right now it does.
+ * Saving strips all realm-scoped references, even those that currently resolve, because another realm cannot use
+ * them.
  */
 export const stripSessionScopedGallerySearch = (values: Record<string, unknown>): Record<string, unknown> | null =>
   stripGallerySearchPositions(
@@ -282,16 +222,7 @@ export const stripSessionScopedGallerySearch = (values: Record<string, unknown>)
       (value !== null && value !== undefined && parseGallerySemanticReference(value) === null)
   );
 
-/**
- * For the ADOPTION path: drop only what this realm cannot resolve.
- *
- * `normalizeWorkbenchProject` runs on projects that never left — closing and
- * reopening one, a conflict fork rescuing the live copy, an export re-imported
- * into the same session. There the registry entry is still live and the
- * ranking is still on screen, so asking what the value IS would delete the
- * search the user is looking at. Asking whether it resolves HERE answers both
- * cases with one test.
- */
+/** Adoption strips only unresolved references: same-session reopen, fork, or import can retain a live ranking. */
 export const stripUnresolvableGallerySearch = (values: Record<string, unknown>): Record<string, unknown> | null =>
   stripGallerySearchPositions(
     values,
@@ -320,8 +251,6 @@ export const parseGallerySemanticReference = (value: unknown): GallerySemanticRe
     }
 
     if (record.kind === 'file' && typeof record.fileId === 'string' && record.fileId) {
-      // Dropped files live in an in-memory registry; a persisted key that no
-      // longer resolves (e.g. after a reload) reads as no search at all.
       if (getExternalImageFile(record.fileId) === null) {
         return null;
       }
@@ -334,8 +263,6 @@ export const parseGallerySemanticReference = (value: unknown): GallerySemanticRe
     }
 
     if (record.kind === 'cluster' && typeof record.clusterId === 'string' && record.clusterId) {
-      // Cluster members live in an in-memory registry; a persisted key that
-      // no longer resolves (e.g. after a reload) reads as no search at all.
       const cluster = getImageCluster(record.clusterId);
 
       if (cluster === null) {
@@ -357,11 +284,8 @@ export const parseGallerySemanticReference = (value: unknown): GallerySemanticRe
 const APP_IMAGE_PATH = /\/api\/v\d+\/images\/i\/([^/]+)\//;
 
 /**
- * Interpret a native drop for image-similarity search. Files win over URLs;
- * a URL pointing at this app's own image endpoint becomes a by-name query
- * (dragging the preview image in must not round-trip through the server's
- * URL downloader — it would be refused as a private-address fetch); anything
- * else http(s) is searched as a web image. Returns null for unusable drops.
+ * Files take precedence over URLs. Resolve this app's image URLs by name to avoid private-address download
+ * rejection; other HTTP(S) URLs use web-image search.
  */
 export const semanticReferenceFromDataTransfer = (dataTransfer: {
   files: ArrayLike<File>;

@@ -33,12 +33,7 @@ export interface Project {
   projectGraph: ProjectGraphState;
   widgetInstances: Record<WidgetInstanceId, WidgetInstanceContract>;
   widgetRegions: Record<WidgetRegion, WidgetRegionState>;
-  /**
-   * Widget instances detached into floating windows. Optional and additive:
-   * projects persisted before this field existed hydrate with no floating
-   * windows. A floated instance is removed from its region's instanceIds
-   * while it floats.
-   */
+  /** Floating instances leave their region's instanceIds; absent in older projects means no floating windows. */
   floatingWidgets?: Record<WidgetInstanceId, FloatingWidgetState>;
   widgetGraphs: Partial<Record<WidgetTypeId, GraphContract>>;
   canvas: CanvasStateContractV3;
@@ -128,11 +123,7 @@ export interface UndoRedoEntry {
   mergedAt?: string;
 }
 
-/**
- * Project-level undo snapshot. Deliberately excludes `canvas`: the canvas
- * rendering engine owns its own pixel-patch history, so project undo/redo
- * passes the live `project.canvas` through untouched (see `restoreUndoSnapshot`).
- */
+/** Project undo preserves the live canvas; the engine owns pixel history. */
 export interface ProjectUndoSnapshot {
   layout: ProjectLayoutState;
   invocation: InvocationControllerState;

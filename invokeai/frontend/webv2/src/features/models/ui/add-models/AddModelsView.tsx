@@ -65,12 +65,6 @@ const SOURCE_KIND_ICONS: Record<string, ElementType> = {
  */
 const FP8_STORAGE_INSTALL_CONFIG: ModelRecordChanges = { default_settings: { fp8_storage: true } };
 
-/**
- * One box to add any model. The same field searches the curated starter
- * catalog and accepts a URL, local path, or HuggingFace repo to install
- * directly. Source-specific result panels live under `add-models/` so this file
- * stays focused on state and install orchestration.
- */
 export const AddModelsView = () => {
   const { t } = useTranslation();
   const notify = useNotify();
@@ -90,10 +84,8 @@ export const AddModelsView = () => {
       left.selectedBundleName === right.selectedBundleName
   );
 
-  // Local state, so the box empties when the view unmounts (a tab switch) — but
-  // seeded once from whatever asked to search here on the way in. The read is
-  // pure, because StrictMode double-invokes this initializer; the consuming
-  // clear is the mount effect below.
+  // Read the one-shot seed purely for StrictMode initialization; consume it after mount and keep subsequent input
+  // state local.
   const [query, setQuery] = useState(getAddModelsSeed);
   const [accessToken, setAccessToken] = useState('');
   const [inplace, setInplace] = useState(true);
@@ -139,15 +131,12 @@ export const AddModelsView = () => {
 
   const trimmed = query.trim();
   const deferredTrimmed = useDeferredValue(trimmed);
-  // A pull/scan results panel is showing: focus on the results and hide the
-  // browse-only chrome (bundles, filter menu, starter catalog).
   const hasResults = hfLookup !== null || scan !== null;
   const kind = useMemo(() => classifySource(trimmed), [trimmed]);
   const searchIcon = (kind.labelKey ? SOURCE_KIND_ICONS[kind.labelKey] : undefined) ?? SearchIcon;
   const token = accessToken.trim() === '' ? undefined : accessToken.trim();
   const installConfig = fp8Storage ? FP8_STORAGE_INSTALL_CONFIG : undefined;
-  // The primary action depends on the detected input: folders are scanned for
-  // models; files, URLs, and HF repos are pulled. Access tokens only apply to URLs.
+  // Folders scan; files, URLs, and repos install. Access tokens apply only to URLs.
   const canScan = kind.localKind === 'folder';
   const canPull = kind.isInstallable && !canScan;
 
@@ -212,9 +201,7 @@ export const AddModelsView = () => {
     }
   };
 
-  // Install-all from a results panel: silent per-model queueing with one
-  // summary toast, the same shape the bundle path uses — never a toast per
-  // file for a 40-file repo.
+  // Bulk installs queue silently and emit one summary notice rather than per-file toasts.
   const installAllSources = async (requests: InstallModelRequest[]) => {
     const owner = captureAccountScope();
     const queued = await installMany(requests);
@@ -254,8 +241,7 @@ export const AddModelsView = () => {
             return;
           }
 
-          // A single-file repo has nothing to choose from — install it directly,
-          // mirroring the diffusers path, instead of showing a one-row list.
+          // Install single-file repositories directly because no selection is needed.
           const [onlyUrl] = lookup.urls;
 
           if (lookup.urls.length === 1 && onlyUrl) {

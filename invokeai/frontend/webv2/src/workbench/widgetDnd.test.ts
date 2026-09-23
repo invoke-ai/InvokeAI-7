@@ -158,9 +158,7 @@ describe('bottom cluster drops', () => {
 
 describe('bottom cluster collisions', () => {
   it('a pointer over the spacer wins the end zone, not the nearest chip', () => {
-    // The spacer sits inside the strip's own region droppable, which used to
-    // shadow it into the nearest-chip fallback — the drop then landed beside
-    // a start chip and the gesture silently did nothing.
+    // The containing strip must not shadow the spacer into the nearest-chip fallback.
     const collisions = widgetCollisionDetection(
       createCollisionArgs({
         activeData: getWidgetInstanceDragData('bottom', 'server-status', 'server-status'),

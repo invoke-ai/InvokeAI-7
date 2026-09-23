@@ -104,10 +104,7 @@ export const FieldHeader = ({
   );
 };
 
-/**
- * Controls for `ip_adapter` reference image configs. `children` renders inside
- * the Advanced section (the card passes the model selector through here).
- */
+/** Render children inside Advanced. */
 export const IPAdapterControls = ({
   children,
   config,
@@ -139,9 +136,7 @@ export const IPAdapterControls = ({
     [config.method]
   );
 
-  // No "unchanged" guard: a drag keeps the handler it started with, so `config.weight`
-  // here is the press value and a drag back to it must still commit. The scrubber
-  // already dedupes per step.
+  // Do not compare against captured drag-start values; returning to the start still needs a commit.
   const handleWeightChange = useCallback((weight: number) => onChange({ ...config, weight }), [config, onChange]);
 
   const commitBeginEndStepPct = useCallback(

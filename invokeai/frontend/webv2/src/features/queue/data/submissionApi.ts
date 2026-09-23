@@ -254,9 +254,8 @@ const collectResultVideoNames = (queueItem: QueueServerItemDTO, options?: QueueR
 };
 
 /**
- * True when the video's DTO reports it as an intermediate. Fail-open on transport
- * errors: the caller's board attach is best-effort, and a wrongly-attached
- * intermediate is invisible in gallery listings (which filter intermediates).
+ * Treat transport errors as non-intermediate for best-effort attachment; gallery listings still hide actual
+ * intermediates.
  */
 const isIntermediateVideo = async (videoName: string, signal: AbortSignal): Promise<boolean> => {
   try {
@@ -275,12 +274,7 @@ const isIntermediateVideo = async (videoName: string, signal: AbortSignal): Prom
   }
 };
 
-/**
- * The names of the videos a completed backend item produced. The queue runtime only
- * routes them onto the destination board, so DTOs are hydrated solely when
- * `excludeIntermediate` needs the `is_intermediate` flag (the video analogue of the
- * image path's filterIntermediateResults).
- */
+/** Fetch result video names; hydrate DTOs only when filtering intermediates requires their flags. */
 export const getResultVideoNames = async (itemId: number, options?: QueueResultVideoOptions): Promise<string[]> => {
   const owner = captureAccountScope();
   const item = await getQueueItem(itemId, owner.signal);

@@ -3,11 +3,8 @@ import { createExternalStoreCore } from '@platform/state/externalStoreCore';
 import { useSyncExternalStore } from 'react';
 
 /**
- * Open/close state for the command palette, addressable from anywhere: the
- * top-bar buttons, the `app.openCommandPalette` command, and the Launchpad's
- * own mod+K binding all funnel through here. The dialog is hosted per surface
- * (WorkbenchCommandPalette in the editor, LaunchpadCommandPalette on the
- * launchpad) and subscribes to this store.
+ * Share palette visibility across topbar, editor command, and Launchpad shortcut; each surface hosts its own
+ * subscribed dialog.
  */
 
 export const commandPaletteStore = createExternalStoreCore<{ isOpen: boolean }>({ isOpen: false });

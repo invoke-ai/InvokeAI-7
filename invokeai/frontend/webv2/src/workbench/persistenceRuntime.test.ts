@@ -296,10 +296,8 @@ describe('Workbench persistence runtime', () => {
   });
 
   it('applies server outcomes from a save that went stale', async () => {
-    // A stale save is one whose *snapshot* moved on, which says nothing about what the server
-    // answered. The board id in a create response exists nowhere else, and the first save of a new
-    // draft is exactly the one an edit is most likely to overtake — so dropping it there leaves the
-    // project pointing at no board until the next reload.
+    // A stale snapshot can still receive the draft's only authoritative board id; preserve that create response
+    // despite intervening edits.
     const aggregate = createAggregate();
     const { persistence } = createPersistence(() => Promise.resolve(null));
     const first = deferred<WorkbenchSaveResult>();

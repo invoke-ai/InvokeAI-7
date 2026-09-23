@@ -42,12 +42,8 @@ const waitForPreview = async () => {
 const waitForSettledDocument = async (page) => {
   await page.evaluate(async () => {
     await document.fonts.ready;
-    // Every audit below reads rendered appearance, and a surface still animating in composites
-    // its text over whatever is behind it -- a dialog caught mid fade-in audits as a contrast
-    // failure its palette does not have. Two frames do not cover a 200ms fade, so wait on the
-    // animations themselves. Mirrors `settleAnimations` in
-    // `src/platform/browser/settleAnimations.testing.ts`, re-expressed here because this body is
-    // serialised into the page and cannot import it; the two must change together.
+    // Wait for animations to finish before contrast audits. Keep this serialized helper aligned with
+    // settleAnimations.testing.ts.
     await Promise.allSettled(
       document
         .getAnimations({ subtree: true })
@@ -105,12 +101,7 @@ const waitForHome = async (page) => {
   await page.getByText('Generate from text', { exact: true }).waitFor();
 };
 
-/**
- * `/projects` is the library itself, which is where the grid lives. The
- * heading is matched at level 2 because the shell also renders a visually
- * hidden level-1 heading naming the active section, which on this page is the
- * same word.
- */
+/** Use the level-2 library heading; the shell has a hidden level-1 heading with the same name. */
 const waitForProjects = async (page) => {
   await page.getByRole('heading', { exact: true, level: 2, name: 'Projects' }).waitFor();
   await page.getByRole('link', { exact: true, name: 'Open Fixture Project 001' }).waitFor();
@@ -135,18 +126,10 @@ const waitForWorkbench = async (page) => {
 
 const centerViewTrigger = (page, label) => page.getByRole('button', { exact: true, name: `Center view: ${label}` });
 
-/**
- * Presets are a segmented radio group, and they name an arrangement rather than
- * a widget — so the center view a preset lands on is passed explicitly instead
- * of being assumed to share its name.
- */
+/** Preset names need not match their center views; pass the expected view explicitly. */
 const selectLayoutPreset = async (page, preset, centerView) => {
-  // Anchored at both ends, because custom presets share the strip: a loose
-  // `^Edit` also matches a user's "Edit copy". The optional suffix is the drift
-  // marker the tab folds into its own accessible name.
-  //
-  // Scoped to the strip: the Automate layout's workflow panel has its own "Edit"
-  // tab, so an unscoped tab lookup is ambiguous the moment a journey visits it.
+  // Match the full preset name plus optional drift marker within the strip; custom presets and Workflow tabs can
+  // share prefixes.
   const name = new RegExp(`^${preset}(, unsaved changes)?$`);
   const strip = presetStrip(page);
   const selected = strip.getByRole('tab', { name, selected: true });
@@ -220,8 +203,6 @@ const surfaces = [
     id: 'workbench-gallery-representative',
     path: representativeProjectPath,
     ready: async (page) => {
-      // Gallery is a widget, not an arrangement, so it is reached through the
-      // center area's own picker rather than by loading a preset named after it.
       await waitForWorkbench(page);
       await selectLayoutPreset(page, 'Compose', 'Preview');
       await selectCenterView(page, 'Preview', 'Gallery');
@@ -237,8 +218,7 @@ const surfaces = [
       await waitForWorkbench(page);
       await selectLayoutPreset(page, 'Automate', 'Workflow');
       await page.getByText('Fixture Node 001', { exact: true }).waitFor();
-      // The fixture starts at y=0, under the floating editor toolbar. Pan the
-      // graph into view before measuring its targets, just as a user would.
+      // Pan the y=0 fixture clear of the floating toolbar before measuring targets.
       const pane = await page.locator('.react-flow__pane').boundingBox();
       assert.ok(pane);
       const x = pane.x + pane.width / 2;
@@ -279,12 +259,7 @@ const runAxeSurface = async (browser, surface) => {
   }
 };
 
-/**
- * Roving-tabindex and focus-restore moves land on a later task than the key
- * press that causes them, so sampling `document.activeElement` once races the
- * behaviour under test. Poll to a deadline instead: the assertion is unchanged
- * (focus must reach this element) but it no longer depends on scheduling.
- */
+/** Poll focus because roving tabindex and focus restoration run after the initiating key event. */
 const expectFocused = async (locator, message) => {
   const deadline = Date.now() + 5_000;
 
@@ -325,8 +300,7 @@ const runKeyboardJourney = async (browser) => {
     const fontsTab = page.getByRole('tab', { exact: true, name: 'Fonts' });
     const modelsTab = page.getByRole('tab', { exact: true, name: 'Models' });
 
-    // The rail is grouped, but it is still one tablist: arrowing off the last
-    // Workspace tab has to land on the first Manage tab, skipping the headings.
+    // Arrow navigation must cross rail groups while skipping headings.
     await projectsTab.focus();
     await projectsTab.press('ArrowDown');
     await expectFocused(fontsTab, 'ArrowDown should move focus from Projects to Fonts.');
@@ -360,8 +334,6 @@ const runKeyboardJourney = async (browser) => {
     await projectLink.press('Enter');
     await waitForWorkbench(page);
 
-    // The center view selector is a menu button: it opens on the keyboard,
-    // exposes each view as a radio item, and restores focus to itself on close.
     const previewTrigger = centerViewTrigger(page, 'Preview');
 
     await previewTrigger.focus();
@@ -452,8 +424,7 @@ const runTopbarMenuJourney = async (browser) => {
   try {
     await waitForWorkbench(page);
 
-    // The fixture routes from Workflow, but Compose does not place that widget. Open it before
-    // auditing a present source, then return to Preview for the missing-source checks below.
+    // Open Workflow first: the fixture routes from it, but Compose does not mount it by default.
     await centerViewTrigger(page, 'Preview').click();
     await page.getByRole('menuitem', { exact: true, name: 'Workflow' }).click();
     await centerViewTrigger(page, 'Workflow').waitFor();
@@ -661,8 +632,6 @@ const runVideoPreviewJourney = async (browser) => {
   const id = 'workbench-video-preview-representative';
 
   try {
-    // Compose puts the Gallery in the right rail and the Preview in the centre,
-    // so the video is picked on the right and plays in the middle.
     await waitForWorkbench(page);
     await selectLayoutPreset(page, 'Compose', 'Preview');
 
@@ -702,11 +671,18 @@ const runVideoPreviewJourney = async (browser) => {
     assert.equal(await video.getAttribute('playsinline'), '');
     assert.match((await video.getAttribute('poster')) ?? '', /fixture-video-001\.mp4\/thumbnail$/);
     assert.equal(await video.getAttribute('draggable'), null);
+
+    // Media details live in the floating header chrome's Details popover; audit the surface with it open.
+    const details = page
+      .locator('[data-hotkey-widget-region="center"][data-hotkey-widget-type-id="preview"]')
+      .getByRole('button', { exact: true, name: 'Details' });
+    await details.focus();
+    await expectFocused(details, 'The preview Details toggle must be keyboard focusable.');
+    await details.press('Enter');
     await page.getByText(/Duration 0:01/).waitFor();
     await waitForSettledDocument(page);
 
-    // Generated media has no caption track, so only this video-specific surface
-    // disables axe's caption rule. Every other release surface keeps it enabled.
+    // Generated media has no caption track, so only this video surface disables axe's caption rule.
     await assertNoAxeViolations(page, id, { rules: { 'video-caption': { enabled: false } } });
 
     if (pageErrors.length > 0) {
@@ -720,30 +696,16 @@ const runVideoPreviewJourney = async (browser) => {
 };
 
 /**
- * State, not nodes.
- *
- * The shell keeps widgets mounted across layout switches so returning to a
- * preset is cheap *and* lands where you left it. Node identity is the easy half
- * and the automated suites already cover it; the half that actually regressed is
- * the state those nodes carry. An unconditional `fitToView()` on surface attach
- * and a scroll container that stops being rendered both throw it away, and
- * neither is visible to a test that asserts the element is still there.
- *
- * Runs the real virtualized gallery and the real canvas engine, because that is
- * where the loss happens.
+ * Verify retained scroll and canvas state across layout switches; mounted-node identity alone cannot detect state
+ * loss.
  */
 const runKeepAliveStateJourney = async (browser) => {
   const { context, page, pageErrors } = await openRepresentativePage(browser, representativeProjectPath);
   const id = 'workbench-keep-alive-state';
 
   /**
-   * Every scroll offset in the panel, in DOM order, on both axes. Restricted
-   * to real scroll containers — an overflow-clipped label is technically
-   * taller than its box and would otherwise wander into the comparison as
-   * noise. Both `overflowX` and `overflowY` are checked: `Scrollable`
-   * installs `usePreservedScrollOffset` regardless of its own `orientation`
-   * prop, and a horizontal-only strip like the preview filmstrip would
-   * otherwise never be exercised here.
+   * Capture both axes of actual scroll containers; clipped text is not scroll state, and filmstrips may overflow
+   * only horizontally.
    */
   const SCROLLER_QUERY = `(element) => [...element.querySelectorAll('*')].filter((node) => {
     const style = getComputedStyle(node);
@@ -784,10 +746,7 @@ const runKeepAliveStateJourney = async (browser) => {
     const galleryItems = rightPanel.getByRole('list', { exact: true, name: 'Gallery items' });
     await galleryItems.waitFor();
 
-    // The preview filmstrip only renders once an item is selected — with
-    // nothing selected the centre view is a "No gallery selection" empty
-    // state, filmstrip included. Use the unstarred listing: the starred strip's
-    // smaller navigation list fits without overflowing at this viewport.
+    // Select an unstarred item so the filmstrip exists and has enough entries to overflow.
     await galleryItems
       .locator('[data-gallery-section="regular"]')
       .getByRole('button', { name: /for preview$/ })
@@ -802,15 +761,8 @@ const runKeepAliveStateJourney = async (browser) => {
       `The representative gallery must have scrollable boards and items; got ${JSON.stringify(scrolledOffsets)}.`
     );
 
-    // The preview filmstrip is a horizontal-only `Scrollable` living in the
-    // centre region, not either side panel. `usePreservedScrollOffset` is
-    // installed unconditionally inside `Scrollable` regardless of its
-    // `orientation`, so this is the one axis the panel assertions above never
-    // exercise. The filmstrip's items come from the widget's own board-scoped
-    // fetch, a separate round trip from the gallery panel's list, so it is
-    // not necessarily painted yet the instant the panel assertions above are —
-    // waiting for the overflow condition itself, rather than a fixed delay,
-    // is what actually pins that race rather than papering over it.
+    // Wait for filmstrip overflow: its board-scoped fetch completes independently of the gallery and exercises
+    // horizontal scroll retention.
     const centerPanel = centerRegion(page);
     await page.waitForFunction(
       () => {
@@ -888,11 +840,8 @@ const runKeepAliveStateJourney = async (browser) => {
 };
 
 /**
- * The layers panel's fixed panes: every pane block switches by pointer and by
- * keyboard (arrows rove, Enter selects — SegmentTabs is manual-activation),
- * tool switches reshape the Properties pane without losing it, and axe passes
- * with the non-default panes (Swatches/History/Overview) active — states the
- * static canvas surface never reaches.
+ * Exercise pane switching by pointer and keyboard, tool-dependent Properties, and accessibility of non-default
+ * panes.
  */
 const LAYERS_PANEL_SCOPE = { include: ['[data-hotkey-widget-type-id="layers"]'] };
 
@@ -921,10 +870,7 @@ const runLayersPanesJourney = async (browser) => {
     await page.getByRole('tabpanel', { exact: true, name: 'Swatches' }).waitFor();
 
     await waitForSettledDocument(page);
-    // Scoped to the layers widget: this journey certifies the panel's states;
-    // the page-wide sweep belongs to the canvas surface scan, and the left
-    // rail's lazily mounted generation sections would otherwise leak into the
-    // result nondeterministically depending on load timing.
+    // Scope this audit to Layers so unrelated lazy generation panels cannot change its result.
     await assertNoAxeViolations(page, 'workbench-layers-panes', LAYERS_PANEL_SCOPE);
 
     // Keyboard: arrows rove within the block's tablist, Enter activates.
@@ -937,8 +883,6 @@ const runLayersPanesJourney = async (browser) => {
     await page.getByRole('tabpanel', { exact: true, name: 'Transform' }).waitFor();
     assert.equal(await transformTab.getAttribute('aria-selected'), 'true');
 
-    // Second scan: the Transform pane's states are distinct from the first
-    // scan's Swatches/History/Overview set and must pass on their own.
     await waitForSettledDocument(page);
     await assertNoAxeViolations(page, 'workbench-layers-panes:transform', LAYERS_PANEL_SCOPE);
 
@@ -962,8 +906,7 @@ const runSettingsJourney = async (browser) => {
     await waitForWorkbench(page);
     const gear = page.getByRole('button', { exact: true, name: 'Gallery settings' });
     await gear.click();
-    // The lazy quick-settings body moves the footer when it arrives. Wait for
-    // its controls before clicking the footer so pointer-down/up hit one target.
+    // Wait for lazy settings controls; their arrival moves the footer's click target.
     await page.getByRole('slider', { exact: true, name: 'Image size' }).waitFor();
     await waitForSettledDocument(page);
     await page.getByRole('button', { exact: true, name: 'All Gallery settings…' }).click();

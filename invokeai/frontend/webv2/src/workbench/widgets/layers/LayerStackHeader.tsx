@@ -43,9 +43,8 @@ interface LayerStackHeaderProps {
 const stopPropagation = (event: { stopPropagation: () => void }): void => event.stopPropagation();
 
 /**
- * One stack's header: a level-one tree item that expands or collapses the stack, with the stack's
- * actions as pointer-only buttons inside it. The same actions reach the keyboard through the
- * stack menu (Shift+F10) so nothing here is a tab stop of its own.
+ * Stack headers own the roving tree stop; pointer-only action buttons remain keyboard-accessible through Shift+F10
+ * menus.
  */
 const LayerStackHeaderComponent = ({
   collapsed,
@@ -96,10 +95,8 @@ const LayerStackHeaderComponent = ({
   const hintId = STACK_HINTS[stack];
   const descriptionId = `layer-stack-hint-${stack}`;
   return (
-    // The informational popover triggers on the whole tree item, so it opens
-    // for the roving keyboard focus as well as hover; the persistent
-    // described-by span announces the gist without the card. The action
-    // buttons carry their own tooltips, so hovering them is excluded.
+    // Attach hints to tree-item focus/hover with persistent described-by text; exclude action buttons with their
+    // own tooltips.
     <FeatureHint hint={hintId}>
       <Box
         ref={element}

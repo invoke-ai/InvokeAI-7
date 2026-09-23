@@ -11,18 +11,8 @@ import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
 /**
- * The way back into the editor, driven by the saved session rather than the
- * URL.
- *
- * The button used to be unconditional, which meant a brand-new account was
- * offered "Back to project" with no project to go back to — and `/app` bounces
- * a definitely-empty session straight back here. So an empty open set hides
- * the control entirely.
- *
- * An *unknown* session (first run, a pre-split blob, an unreachable backend)
- * is not the same as an empty one: the store reports it as `null` and the
- * `/app` guard deliberately does not redirect on it. This mirrors that —
- * unknown still offers the plain way in and lets the editor sort it out.
+ * Hide editor re-entry only for a known-empty saved session. Unknown sessions retain entry so the editor can
+ * resolve them.
  */
 
 const MENU_POSITIONING = { placement: 'bottom-start' } as const;

@@ -18,12 +18,7 @@ export const fontsQueryOptions = (params: FontListParams = {}) =>
     staleTime: 30_000,
   });
 
-/**
- * A bounded transport page assembled as an infinite query for controls that
- * need to append catalog results. Every request remains offset based, so the
- * server never sends an unbounded response and callers can stop at the real
- * catalog total.
- */
+/** Infinite-query catalog pagination uses bounded offset requests and stops at the server total. */
 export const fontsInfiniteQueryOptions = (params: FontListParams = {}) => {
   const { offset: initialOffset = 0, ...filters } = params;
   const limit = params.limit ?? FONT_PAGE_SIZE;

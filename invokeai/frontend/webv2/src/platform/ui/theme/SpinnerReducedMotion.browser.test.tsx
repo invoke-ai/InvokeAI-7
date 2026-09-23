@@ -4,11 +4,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it } from 'vitest';
 
-/**
- * Reduce-motion kills every animation token, which froze spinners into a
- * static arc that reads as a broken icon. A loading spinner is essential
- * status (WCAG 2.3.3 exempts essential motion), so it slows instead.
- */
+/** Reduced motion slows status spinners instead of freezing them. */
 
 let host: HTMLDivElement | null = null;
 let root: Root | null = null;

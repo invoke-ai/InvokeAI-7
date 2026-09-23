@@ -19,11 +19,7 @@ import {
 } from '@features/gallery/core/semanticImageQuery';
 import { getGallerySettings, type GallerySettings } from '@features/gallery/core/settings';
 
-/**
- * Stand-in shown before any board has loaded. `name` is intentionally empty:
- * the UI labels uncategorized boards from `kind` through `getGalleryBoardLabel`,
- * so there is no English string to invent here.
- */
+/** Leave the placeholder name empty; getGalleryBoardLabel localizes it from kind. */
 const UNCATEGORIZED_BOARD: GalleryBoard = {
   archived: false,
   assetCount: 0,
@@ -38,10 +34,8 @@ const UNCATEGORIZED_BOARD: GalleryBoard = {
 
 export interface GalleryStateView {
   /**
-   * Page the infinite window starts at, when a reveal has anchored it
-   * mid-board; 0 whenever the window covers the top of the listing (always so
-   * in paginated mode). Non-zero means the grid cannot scroll above its first
-   * row, so the surface owes the user both an explanation and a way back.
+   * A nonzero infinite anchor prevents scrolling to earlier rows; the surface must explain it and provide a return
+   * to the top.
    */
   anchoredWindowPage: number;
   boards: GalleryBoard[];
@@ -93,9 +87,8 @@ export const getGalleryRawSelectedBoardId = (values: Record<string, unknown>): s
   typeof values.selectedBoardId === 'string' ? values.selectedBoardId : null;
 
 /**
- * Where new results and uploads land: the board the person picked, else the
- * project's own board. A date bucket cannot hold items, so it defers to the
- * project board too; an explicit Uncategorized (`'none'`) choice is kept.
+ * Use the chosen destination or project board; date buckets defer to the project, while explicit none remains
+ * Uncategorized.
  */
 export const getGalleryDestinationBoardId = (values: Record<string, unknown>): string | null => {
   const selectedBoardId = getGalleryRawSelectedBoardId(values);
@@ -106,14 +99,8 @@ export const getGalleryDestinationBoardId = (values: Record<string, unknown>): s
 };
 
 /**
- * Where new results land, resolved against the boards this install actually has.
- *
- * A saved selection survives whenever it still resolves, since it is a deliberate choice. When it
- * does not — a project from another install, or one whose pre-migration board was ambiguous — the
- * project's own board beats Uncategorized, which would quietly scatter that project's output. No
- * saved selection at all is the same case rather than a choice of Uncategorized.
- *
- * An empty board list means "still loading", not "no such board", so nothing resolves yet.
+ * Preserve valid destinations, otherwise use the project board. An empty board list means loading, so defer
+ * resolution.
  */
 export const resolveGallerySelectedBoardId = (
   { projectBoardId, selectedBoardId }: { projectBoardId: string | null; selectedBoardId: string | null },
@@ -217,11 +204,7 @@ export const getGalleryAnchoredWindowPage = (values: Record<string, unknown>): n
   return getGallerySettings(values).paginationMode === 'infinite' && page > 0 ? page : 0;
 };
 
-/**
- * `starredStripItems` are the strip the grid pins above the listing: a
- * starred selection lives there, never in the unstarred listing, and still
- * counts as visible.
- */
+/** Starred selections remain visible in the pinned strip rather than the unstarred listing. */
 export const getGalleryStateView = (
   values: Record<string, unknown>,
   backendBoards: GalleryBoard[],

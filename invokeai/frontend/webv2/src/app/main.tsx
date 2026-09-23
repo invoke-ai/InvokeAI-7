@@ -8,9 +8,11 @@ import { createRoot } from 'react-dom/client';
 
 import { configureAppAccountLifecycle } from './accountLifecycle';
 import { App } from './App';
+import { configureAppLogging } from './loggingRuntime';
 
-// Identity and HTTP ownership must be configured before any route starts work.
+// Identity, logging and HTTP ownership must be configured before any route starts work.
 configureAppAccountLifecycle();
+configureAppLogging();
 configureHttpAuth(identityTransportAuthAdapter);
 registerServiceWorker();
 

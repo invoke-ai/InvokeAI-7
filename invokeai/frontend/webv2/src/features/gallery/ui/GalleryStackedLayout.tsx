@@ -19,11 +19,6 @@ import { GalleryUploadButton } from './GalleryUploadButton';
 import { GalleryViewTabs } from './GalleryViewTabs';
 import { useGalleryWidget } from './GalleryWidgetContext';
 
-/**
- * Narrow arrangement: board panel above the items area. Pure arrangement —
- * every child here is the same component the wide shell renders. The board
- * panel's disclosure lives in the widget frame's header label, not here.
- */
 export const GalleryStackedLayout = () => {
   const { t } = useTranslation();
   const { actions, gallery } = useGalleryWidget();

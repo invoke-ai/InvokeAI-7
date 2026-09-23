@@ -2,11 +2,8 @@ import { registerAccountOwnedResource } from '@platform/state/accountLifecycle';
 import { createExternalStore } from '@platform/state/externalStore';
 
 /**
- * The Color pane's one non-pair target: a mask layer's tint, armed explicitly
- * from a compatible Layer property or the pane's own chip. Transient by
- * design — the tint itself is document state; this only names which layer the
- * pane is currently editing. Cleared whenever the armed layer stops being the
- * selected mask, so the pane falls back to the foreground/background target.
+ * Track the transient mask-tint editing target; clear it when it is no longer the selected mask. Tint itself
+ * remains document state.
  */
 export const maskTintTargetStore = createExternalStore<{ layerId: string | null }>({ layerId: null });
 

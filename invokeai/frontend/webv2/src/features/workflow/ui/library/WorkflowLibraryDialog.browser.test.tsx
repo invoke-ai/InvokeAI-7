@@ -16,19 +16,13 @@ import { act, StrictMode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { userEvent } from 'vitest/browser';
-// A plain static import of the (mocked) module the dialog `lazy()`-loads, so
-// its dynamic `import()` resolves against an already-loaded module record
-// instead of paying a first-time compile cost mid-test — that cost is what
-// made a cold run of the graph-preview wiring tests below flaky.
+// Warm the mocked lazy module to avoid first-compile timing variability in preview wiring tests.
 import '@features/workflow/ui/graph-preview/GraphPreviewDialog';
 
 import { WorkflowLibraryDialog } from './WorkflowLibraryDialog';
 
-// Task 8's graph preview wiring needs invocation templates loaded to compile
-// a library entry's document (`buildLibraryGraphPreviewSource`); this suite
-// never boots the real templates fetch, so it stubs the reactive snapshot
-// hook with one template — matching the node type `PREVIEW_DOCUMENT` (below)
-// uses — the same way `GraphPreviewDialog.browser.test.tsx` does.
+// Provide the fixture node's reactive template snapshot so preview compilation can run without backend schema
+// loading.
 const PREVIEW_NODE_TEMPLATE: InvocationTemplate = {
   category: 'test',
   classification: 'stable',
@@ -55,9 +49,7 @@ vi.mock('@features/workflow/react', async (importOriginal) => ({
   useInvocationTemplatesSnapshot: () => TEMPLATES_SNAPSHOT,
 }));
 
-// xyflow stays out of this shell test — the lazy-mounted `GraphPreviewDialog`
-// (Task 8) is replaced with a stub that surfaces exactly what the wiring is
-// responsible for: which graph got compiled, `hideInvoke`, and the close path.
+// Stub preview rendering while exposing compiled graph, hideInvoke, and close behavior owned by dialog wiring.
 vi.mock('@features/workflow/ui/graph-preview/GraphPreviewDialog', () => ({
   GraphPreviewDialog: ({
     graphId,
@@ -92,10 +84,7 @@ vi.mock('@features/workflow/ui/graph-preview/GraphPreviewDialog', () => ({
   ),
 }));
 
-// The browse store is Task 5's; this suite owns the *dialog*, so the store is
-// replaced by a real external store the test drives directly plus spies for
-// its four commands. Using a real store (not a stub hook) keeps the dialog's
-// subscription, selector equality, and re-render path under test.
+// Drive a real external browse store to retain subscription and selector behavior while spying on commands.
 const browse = vi.hoisted(() => ({
   ensureWorkflowLibraryBrowseLoaded: vi.fn(() => Promise.resolve()),
   // Assigned by the module factory below, which owns the store instance.
@@ -131,9 +120,7 @@ vi.mock('@features/workflow/data/libraryBrowseStore', async () => {
   };
 });
 
-// The load sequence (fetch → parse → replace → toasts) has its own behavior
-// contract; this suite only asserts the dialog *invokes* it and reflects its
-// phase in the busy overlay.
+// Test loader invocation and busy-state wiring here; load sequencing has separate coverage.
 const loader = vi.hoisted(() => ({
   load: vi.fn(() => Promise.resolve()),
   phase: { current: 'idle' as 'applying' | 'fetching' | 'idle' },
@@ -143,10 +130,7 @@ vi.mock('./useLoadLibraryWorkflow', () => ({
   useLoadLibraryWorkflow: () => ({ load: loader.load, loadPhase: loader.phase.current }),
 }));
 
-// The detail panel resolves every entry's requirements against the model
-// stores to feed the cards' missing-model badges. Those stores are the models
-// feature's; here they are fixed data so the badge under test comes from the
-// dialog's own wiring, not a live catalog.
+// Use fixed model-store data so missing-model badges test dialog wiring rather than live catalogs.
 const FLUX_STARTER: StarterModel = {
   base: 'flux',
   description: 'FLUX.1 dev',
@@ -167,9 +151,7 @@ vi.mock('@features/models', async (importOriginal) => ({
     selector({ response: { starter_models: [FLUX_STARTER] } }),
 }));
 
-// The real i18n client fetches en.json over HTTP, which this browser test
-// never boots. Stub `t` with the English strings this dialog renders (plus
-// the `_one`/`_other` plural forms) so assertions check real copy.
+// Provide English/plural strings without booting the HTTP-backed i18n client.
 const TRANSLATIONS: Record<string, string> = {
   'common.close': 'Close',
   'workflowLibrary.allTag': 'All',
@@ -216,8 +198,6 @@ vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: translate }) }));
 
 const EMPTY_DOCUMENT = createProjectGraph('library-fixture');
 
-// One `integer` node — matches `PREVIEW_NODE_TEMPLATE` above, so this is the
-// document the graph-preview wiring tests compile.
 const PREVIEW_DOCUMENT: ProjectGraphState = projectGraphReducer(createProjectGraph('preview-fixture'), {
   node: buildInvocationNode(PREVIEW_NODE_TEMPLATE, { x: 0, y: 0 }),
   type: 'addNode',
@@ -258,8 +238,7 @@ const PORTRAIT = entry('wf-portrait', 'Portrait Studio', readyEnrichment(12, 'sd
   tags: ['portrait'],
   thumbnailUrl: 'data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==',
 });
-// Its one requirement has no installed match but a starter that can fetch it,
-// so the grid should badge it as one model to install.
+// One absent requirement with a matching starter should show one model to install.
 const LANDSCAPE = entry(
   'wf-landscape',
   'Landscape Pass',
@@ -275,9 +254,6 @@ const UPSCALE = entry(
     tags: ['upscale'],
   }
 );
-// The graph-preview wiring's own fixture: a `'ready'` entry whose document
-// actually has a node, so the mocked preview dialog has a compiled graph to
-// show instead of an empty one.
 const PREVIEW_FIXTURE = entry(
   'wf-preview-fixture',
   'Preview Fixture',
@@ -308,8 +284,6 @@ const withSnapshot = (patch: Partial<WorkflowLibraryBrowseSnapshot>): WorkflowLi
   ...patch,
 });
 
-// The detail panel's ports. The dialog only has to compose them; their own
-// suites cover what they do.
 const UI_ADAPTER = {
   notifications: { error: vi.fn(), info: vi.fn(), success: vi.fn() },
 } as unknown as WorkflowUiAdapter;
@@ -320,14 +294,7 @@ describe('WorkflowLibraryDialog', () => {
   let root: Root;
   let onOpenChange: (isOpen: boolean) => void;
 
-  /**
-   * Chakra's `SegmentGroup` tracks its indicator rect from an observer that
-   * commits React state a task after the commit that armed it. Under
-   * `StrictMode`'s mount/unmount/remount that lands in the gap *between* two
-   * `act` calls, where React's act queue is null — which is what raised the
-   * "update ... was not wrapped in act(...)" warnings. Awaiting this **inside**
-   * the same `act` scope as the render keeps the queue open across that gap.
-   */
+  /** Await deferred SegmentGroup observer updates inside the render act scope, including StrictMode remounts. */
   const settleFrame = () =>
     new Promise<void>((resolve) => {
       setTimeout(resolve, 0);
@@ -363,23 +330,14 @@ describe('WorkflowLibraryDialog', () => {
       });
     });
 
-  /**
-   * The lazy-loaded preview dialog (Task 8) resolves its `import()` on its
-   * own schedule — a fixed `wait` is either too short (flaky) or padded
-   * (slow), and letting it resolve outside `act` is what raises "a suspended
-   * resource finished loading" warnings. Polling inside `act` keeps every
-   * check, and the eventual resolution, in the same act scope.
-   */
+  /** Poll lazy preview resolution inside act to avoid timing-dependent waits and suspended-resource warnings. */
   const waitForPreviewDialog = () =>
     act(async () => {
       await vi.waitFor(
         () => {
           expect(document.querySelector('[data-preview-dialog]')).not.toBeNull();
         },
-        // Padded past `vi.waitFor`'s default 1000ms: the static side-effect
-        // import above keeps the module warm, but the dynamic `import()`
-        // still costs a real (if now small) round trip through Vite's module
-        // graph before `Suspense` re-renders.
+        // Allow time for Vite's dynamic-import round trip even when the module is warm.
         { timeout: 2000 }
       );
     });
@@ -427,8 +385,7 @@ describe('WorkflowLibraryDialog', () => {
 
     await act(async () => {
       viewport?.dispatchEvent(new Event('scroll'));
-      // The ScrollArea machine reacts to the scroll a task later; see
-      // `settleFrame` for why that has to stay inside this `act` scope.
+      // Settle deferred ScrollArea reactions within the same act scope.
       await settleFrame();
     });
   };
@@ -585,8 +542,6 @@ describe('WorkflowLibraryDialog', () => {
 
     expect(card('wf-landscape')?.getAttribute('aria-pressed')).toBe('true');
 
-    // A filter change drops the selected row; selection falls back to the head
-    // of the new list rather than pointing at nothing.
     await act(() => browse.setSnapshot?.(withSnapshot({ entries: [SKETCH, UPSCALE] })));
 
     expect(card('wf-sketch')?.getAttribute('aria-pressed')).toBe('true');
@@ -619,10 +574,7 @@ describe('WorkflowLibraryDialog', () => {
   });
 
   it('shows the loading copy on the very first paint, before the store leaves idle', async () => {
-    // The pristine store: `ensureWorkflowLibraryBrowseLoaded` only flips the
-    // status to 'loading' from the open-time effect, so the first paint of a
-    // freshly-booted session renders against 'idle'. That must never read as
-    // "nothing matched".
+    // Initial idle state precedes loading and must not render as no matches.
     await openWith({
       entries: [],
       error: null,
@@ -718,8 +670,6 @@ describe('WorkflowLibraryDialog', () => {
   it('badges the cards with the models their workflows still need', async () => {
     await openWith(LOADED_SNAPSHOT);
 
-    // Resolved from the same model data the rail uses: the FLUX slot has no
-    // installed match but a starter that can fetch it.
     expect(card('wf-landscape')?.textContent).toContain('Install 1 model');
     expect(card('wf-portrait')?.textContent).not.toContain('Install');
   });
@@ -769,8 +719,7 @@ describe('WorkflowLibraryDialog', () => {
 
     await clickText('Close preview');
 
-    // Still mounted, now closed: unmounting here is what skipped the exit
-    // animation and made the preview vanish.
+    // Keep the closing preview mounted until its exit animation finishes.
     expect(document.querySelector('[data-preview-dialog]')?.getAttribute('data-preview-open')).toBe('false');
     expect(document.querySelector('[data-pending-preview]')).not.toBeNull();
 
@@ -808,16 +757,10 @@ describe('WorkflowLibraryDialog', () => {
 
     expect(document.querySelector('[data-preview-dialog]')).not.toBeNull();
 
-    // The dialog's own Close control is the only path that ever flips `isOpen`
-    // to `false` in the real app (`WorkflowWidgetChrome` only ever sets it
-    // back to `true`) — clicking it exercises the same reset the parent
-    // relies on. The isOpen round trip below then confirms the closed render
-    // drops the mount and the reopened one does not bring it back.
+    // Use the dialog's real Close path, then reopen through controlled props to verify reset and mount cleanup.
     const closeButton = document.querySelector<HTMLButtonElement>('button[aria-label="Close"]');
     expect(closeButton).not.toBeNull();
-    // Chakra's `Dialog` commits its close transition a task after the click
-    // (the same class of gap `settleFrame` exists for, above) — settle inside
-    // this `act` scope rather than a bare click.
+    // Settle deferred Dialog close transitions inside act.
     await act(async () => {
       closeButton?.click();
       await settleFrame();
@@ -870,8 +813,7 @@ describe('WorkflowLibraryDialog', () => {
     expect(railViewport).not.toBeNull();
     expect(railViewport?.scrollWidth).toBeLessThanOrEqual((railViewport?.clientWidth ?? 0) + 1);
 
-    // The rail is where the user decides whether to open a workflow, so the
-    // whole name is on screen — wrapped over several lines, never clipped.
+    // The detail rail must wrap the full workflow name without clipping.
     const heading = [...(detail?.querySelectorAll('p') ?? [])].find((element) => element.textContent === LONG_NAME);
     expect(heading, 'the full name should be rendered').not.toBeUndefined();
     expect(heading?.scrollWidth).toBeLessThanOrEqual((heading?.clientWidth ?? 0) + 1);

@@ -2,11 +2,7 @@ import type { ModelFileFormat, ModelTaxonomyType } from './types';
 
 import { toTitleCase } from './baseIdentity';
 
-/**
- * Display metadata for the model taxonomy. Open-union friendly: unknown bases,
- * types, and formats fall back to readable generic labels so a backend that
- * ships a new architecture never renders a blank or broken library.
- */
+/** Use readable fallback labels for unknown taxonomy values so new backend architectures remain usable. */
 
 interface CategoryDefinition {
   type: ModelTaxonomyType;
@@ -31,6 +27,7 @@ export const MODEL_CATEGORIES: CategoryDefinition[] = [
   { label: 'Qwen3 VL Encoder', pluralLabel: 'Qwen3 VL Encoders', type: 'qwen3_vl_encoder' },
   { label: 'Mistral Encoder', pluralLabel: 'Mistral Encoders', type: 'mistral_encoder' },
   { label: 'Gemma 2 Encoder', pluralLabel: 'Gemma 2 Encoders', type: 'gemma2_encoder' },
+  { label: 'Gemma 4 Encoder', pluralLabel: 'Gemma 4 Encoders', type: 'gemma4_encoder' },
   { label: 'PiD Decoder', pluralLabel: 'PiD Decoders', type: 'pid_decoder' },
   { label: 'CLIP Embed', pluralLabel: 'CLIP Embeds', type: 'clip_embed' },
   { label: 'CLIP Vision', pluralLabel: 'CLIP Visions', type: 'clip_vision' },
@@ -83,13 +80,7 @@ const FORMAT_LABELS: Record<string, string> = {
 
 export const getModelFormatLabel = (format: ModelFileFormat): string => FORMAT_LABELS[format] ?? toTitleCase(format);
 
-/**
- * Formats a user may assign in the edit form (repairing a mis-detected
- * model). `unknown` is not a repair target and `external_api` would misroute
- * a local model, mirroring the base select's `external` exclusion. The PATCH
- * re-validates through the config factory, so an invalid combination is
- * rejected server-side rather than silently accepted.
- */
+/** Exclude unknown/external_api as repair formats; the config factory validates remaining combinations server-side. */
 export const EDITABLE_MODEL_FORMATS: readonly string[] = Object.keys(FORMAT_LABELS).filter(
   (format) => format !== 'unknown' && format !== 'external_api'
 );
@@ -145,6 +136,8 @@ export const MODEL_VARIANT_LABELS: Record<string, string> = {
   res2k_sr4x: 'PiD 2K (4x SR)',
   res2kto4k_sr4x: 'PiD 4K (4x SR Upscale)',
   schnell: 'FLUX Schnell',
+  ltx2_dev: 'LTX-2 Dev',
+  ltx2_distilled: 'LTX-2 Distilled',
   t2v_a14b: 'Wan 2.2 T2V A14B',
   ti2v_5b: 'Wan 2.2 TI2V 5B',
   turbo: 'Z-Image Turbo',
@@ -159,6 +152,7 @@ const MAIN_VARIANTS_BY_BASE: Record<string, readonly string[]> = {
   flux: ['schnell', 'dev', 'dev_fill'],
   flux2: ['klein_4b', 'klein_4b_base', 'klein_9b', 'klein_9b_base', 'dev'],
   'krea-2': ['krea2_turbo', 'krea2_base'],
+  'ltx-2': ['ltx2_dev', 'ltx2_distilled'],
   'minimax-h3': ['fl2va', 'ref2va'],
   'qwen-image': ['generate', 'edit'],
   'sd-1': ['normal', 'inpaint'],
@@ -174,9 +168,7 @@ const VARIANTS_BY_TYPE: Record<string, readonly string[]> = {
   mistral_encoder: ['cow_mistral3_small', 'mistral3_24b', 'ministral3_3b'],
   pid_decoder: ['res2k_sr4x', 'res2kto4k_sr4x'],
   qwen3_encoder: ['qwen3_4b', 'qwen3_8b', 'qwen3_06b'],
-  // Required on the config, so the edit form must offer both: without an entry here it would show
-  // only "None" plus the current value, and saving "None" fails validation on the way into the
-  // database.
+  // Required variant configs need explicit choices; a fallback None would fail database validation.
   qwen3_vl_encoder: ['qwen3_vl_4b', 'qwen3_vl_8b'],
 };
 
@@ -194,9 +186,7 @@ export const getVariantOptionsFor = (base: string, type: string): readonly strin
   }
 
   if (type === 'qwen3_vl_encoder') {
-    // MiniMax H3's truncated Qwen3-VL-32B shares this model type under its own base and its config
-    // has no `variant` field at all, so offering the two sizes there would be offering a save that
-    // can only fail. The encoders that carry the field are base-agnostic components.
+    // Only base-agnostic encoders carry variant; MiniMax H3's same-type encoder does not support size selection.
     return base === 'any' ? (VARIANTS_BY_TYPE[type] ?? []) : [];
   }
 

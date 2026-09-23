@@ -25,11 +25,7 @@ const DOT_UNCHECKED_HOVER = { _before: { borderColor: 'fg.muted' } };
 
 const stopPropagation = (event: { stopPropagation: () => void }): void => event.stopPropagation();
 
-/**
- * The rows' leading active-toggle dot: solid when contributing, outlined in
- * accent when enabled but gated by an ancestor, plain when off. The wrapper
- * keeps clicks and focus off the tree item.
- */
+/** Show contributing, ancestor-gated, and off states distinctly; keep toggle clicks/focus off the tree item. */
 export const LayerActiveDot = ({
   checked,
   disabled,

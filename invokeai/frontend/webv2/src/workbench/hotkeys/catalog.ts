@@ -1,36 +1,10 @@
 import type { HotkeyCategory, HotkeyDefinition } from './types';
 
 /**
- * Intentional browser-default interception
- *
- * Every registered hotkey prevents default, but only entries with handlers
- * actually shadow a browser chord. Handlers come from two registries sharing
- * the same scope resolution: this catalog's `implemented` set, and the
- * extension-hotkey path (`CanvasWidgetView` registers the canvas's runtime
- * chords there with `allowInEditable: false`; several ids — X/D color pair,
- * undo/redo, delete, entity nav, mergeDown, transformSelected — exist in BOTH,
- * resolving at equal widget-scope priority). A catalog entry with no handler
- * anywhere (the mod+0…4 zoom chords) intercepts nothing.
- *
- * Chords that deliberately override a browser default, outside editable
- * fields (hotkeys skip editables unless listed in `editableAppHotkeys`):
- *
- * - mod+p (`app.openProjectSwitcher`) — print dialog;
- * - mod+k (`app.openCommandPalette`) — address-bar search;
- * - mod+, (`app.openSettings`) — browser settings, where the browser
- *   delivers the event to the page at all;
- * - mod+z / mod+shift+z / mod+y (canvas and workflow undo/redo) — native
- *   text undo;
- * - mod+a / mod+c / mod+v (canvas, workflow, gallery select/copy/paste) —
- *   the app's own selection/clipboard semantics replace the page's;
- * - canvas mod+e (merge down) — macOS "use selection for find" / address-bar
- *   search; mod+d (deselect) — bookmark; mod+shift+i (invert selection) —
- *   devtools where delivered; mod+t (transform) — browser-reserved in most
- *   builds, fires only where forwarded.
- *
- * Scoping bounds the blast radius: `app.*` chords are global, everything
- * else fires only while its widget owns focus (`categoryScopes`). Bare keys
- * ([ ] tool width, X/D, tool mnemonics) conflict with no browser default.
+ * Only registered handlers intercept chords; handlerless catalog entries do not. App chords are global, other
+ * chords require widget focus, and editable fields are excluded unless explicitly allowed. Overrides include
+ * print/search/settings, undo/redo, selection/clipboard, and Canvas merge/deselect/invert/transform;
+ * browser-reserved chords work only when delivered to the page.
  */
 
 const categoryScopes = {
@@ -116,12 +90,8 @@ const implemented = new Set([
 ]);
 
 /**
- * Hotkeys that must fire with the caret inside a text field or numeric input.
- *
- * The topbar's Invoke button is the only one that is always on screen (the
- * floating preview window carries a second one, but only while it floats), so
- * `app.invoke` and its variants are load-bearing: a prompt textarea that
- * swallows ⌘↵ leaves the user with no way to submit at all.
+ * Keep invocation shortcuts available inside text and numeric fields so prompt editing does not swallow
+ * submission.
  */
 const editableAppHotkeys = new Set([
   'app.focusPrompt',
@@ -181,14 +151,11 @@ export const OPEN_COMMAND_PALETTE_HOTKEY: HotkeyDefinition = {
 export const firstPartyHotkeyCatalog: HotkeyDefinition[] = [
   OPEN_COMMAND_PALETTE_HOTKEY,
   hotkey('app', 'invoke', ['mod+enter']),
-  // "Just this once, send it to the gallery" is the single most common reason
-  // to open the routing menu; this makes it a keystroke instead of a round trip
-  // through a popover, and it does not change the saved destination.
+  // Override the destination for one submission without changing the saved route.
   hotkey('app', 'invokeToOtherDestination', ['alt+mod+enter']),
   hotkey('app', 'invokeFront', ['mod+shift+enter']),
   hotkey('app', 'openProjectSwitcher', ['mod+p']),
-  // `mod` rather than a literal ctrl: this is ⌘, on macOS and ctrl+, elsewhere,
-  // which is the platform-standard settings shortcut on both.
+  // Use mod for the platform settings chord: Command on macOS, Control elsewhere.
   hotkey('app', 'openSettings', ['mod+,']),
   hotkey('app', 'saveLayoutPreset', []),
   hotkey('app', 'selectComposePreset', ['alt+1']),

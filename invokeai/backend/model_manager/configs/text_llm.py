@@ -7,6 +7,7 @@ from pydantic import Field
 from typing_extensions import Any
 
 from invokeai.backend.model_manager.configs.base import Config_Base, Diffusers_Config_Base
+from invokeai.backend.model_manager.configs.gemma4_encoder import is_ltx2_gemma4_encoder_folder
 from invokeai.backend.model_manager.configs.identification_utils import (
     NotAMatchError,
     common_config_paths,
@@ -60,6 +61,14 @@ class TextLLM_Diffusers_Config(Diffusers_Config_Base, Config_Base):
         ):
             raise NotAMatchError(
                 "architecture 'Gemma2ForCausalLM' (2304-dim Gemma-2-2b) is handled by the PiD encoder config, not TextLLM"
+            )
+
+        # Likewise defer to the LTX-2 Gemma-4 encoder config -- and only where it would actually
+        # claim the folder (the LTX single-file layout), so stock sharded Gemma-4-12B stays a TextLLM.
+        if not explicitly_requested_text_llm and is_ltx2_gemma4_encoder_folder(mod.path):
+            raise NotAMatchError(
+                f"architecture '{class_name}' in the LTX-2 single-file layout is handled by the LTX-2 Gemma-4 "
+                "encoder config, not TextLLM"
             )
 
         # Verify tokenizer files exist to avoid runtime failures

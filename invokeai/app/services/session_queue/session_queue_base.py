@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from typing import Any, Coroutine, Optional
 
 from invokeai.app.services.session_queue.session_queue_common import (
@@ -28,6 +29,13 @@ from invokeai.app.services.session_queue.session_queue_common import (
 from invokeai.app.services.shared.graph import GraphExecutionState
 from invokeai.app.services.shared.pagination import CursorPaginatedResults
 from invokeai.app.services.shared.sqlite.sqlite_common import SQLiteDirection
+
+
+@dataclass(frozen=True)
+class WorkflowCallChildCompletion:
+    parent_queue_item: SessionQueueItem
+    should_resume: bool
+    aggregated_values: dict[str, Any]
 
 
 class SessionQueueBase(ABC):
@@ -67,10 +75,18 @@ class SessionQueueBase(ABC):
         """Gets the currently-executing session queue item"""
         pass
 
+    def get_current_for_api(self, queue_id: str, origin_prefix: Optional[str] = None) -> Optional[SessionQueueItem]:
+        """Gets the current item in the response projection used by API reads."""
+        return self.get_current(queue_id=queue_id, origin_prefix=origin_prefix)
+
     @abstractmethod
     def get_next(self, queue_id: str, origin_prefix: Optional[str] = None) -> Optional[SessionQueueItem]:
         """Gets the next session queue item (does not dequeue it)"""
         pass
+
+    def get_next_for_api(self, queue_id: str, origin_prefix: Optional[str] = None) -> Optional[SessionQueueItem]:
+        """Gets the next item in the response projection used by API reads."""
+        return self.get_next(queue_id=queue_id, origin_prefix=origin_prefix)
 
     @abstractmethod
     def clear(self, queue_id: str, user_id: Optional[str] = None) -> ClearResult:
@@ -234,6 +250,14 @@ class SessionQueueBase(ABC):
         """Gets all queue items that match the given parameters"""
         pass
 
+    def list_all_queue_items_for_api(
+        self,
+        queue_id: str,
+        destination: Optional[str] = None,
+    ) -> list[SessionQueueItem]:
+        """Gets queue items for API serialization without changing the service read contract."""
+        return self.list_all_queue_items(queue_id=queue_id, destination=destination)
+
     @abstractmethod
     def get_queue_item_ids(
         self,
@@ -255,6 +279,10 @@ class SessionQueueBase(ABC):
         """Gets a session queue item by ID for a given queue"""
         pass
 
+    def get_queue_item_for_api(self, item_id: int) -> SessionQueueItem:
+        """Gets a queue item in the response projection used by API reads."""
+        return self.get_queue_item(item_id=item_id)
+
     @abstractmethod
     def set_queue_item_session(self, item_id: int, session: GraphExecutionState) -> SessionQueueItem:
         """Sets the session for a session queue item. Use this to update the session state."""
@@ -263,6 +291,22 @@ class SessionQueueBase(ABC):
     @abstractmethod
     def save_queue_item_session(self, item_id: int, session: GraphExecutionState) -> None:
         """Persists a queue item's session without loading and returning the full queue item."""
+        pass
+
+    @abstractmethod
+    def record_workflow_call_child_completion(
+        self, parent_item_id: int, child_item_id: int, output_values: dict[str, Any]
+    ) -> WorkflowCallChildCompletion | None:
+        """Records one child completion against the latest parent session atomically."""
+        pass
+
+    @abstractmethod
+    def enqueue_workflow_call_children(
+        self,
+        parent_queue_item: SessionQueueItem,
+        child_sessions: list[tuple[GraphExecutionState, list[NodeFieldValue] | None]],
+    ) -> list[SessionQueueItem]:
+        """Enqueues child executions and publishes the complete waiting parent state atomically."""
         pass
 
     @abstractmethod

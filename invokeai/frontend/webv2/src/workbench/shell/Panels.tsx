@@ -29,10 +29,8 @@ export const RightPanel = ({ instanceId }: { instanceId: WidgetInstanceId }) => 
 );
 
 /**
- * Keeps the panel widgets this session has already shown mounted behind the
- * active one, so switching a layout preset hides them rather than destroying
- * their scroll position, selection and virtualizer state. The remembered set is
- * independent of the region's `instanceIds`, which a preset replaces wholesale.
+ * Keep previously shown panels mounted to preserve scroll, selection, and virtualization across presets that
+ * replace region membership.
  */
 export const WidgetPanelSlot = ({ instanceId, region }: { instanceId: WidgetInstanceId; region: PanelRegion }) => {
   const projectId = useActiveProjectId();

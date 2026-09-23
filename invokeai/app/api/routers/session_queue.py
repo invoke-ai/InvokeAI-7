@@ -91,8 +91,15 @@ def strip_missing_image_results(
     image_cache: dict[str, bool] = {}
     video_cache: dict[str, bool] = {}
 
-    def is_media_field(item: object) -> bool:
-        return isinstance(item, (ImageField, VideoField))
+    def media_field(item: object) -> ImageField | VideoField | None:
+        if isinstance(item, (ImageField, VideoField)):
+            return item
+        if isinstance(item, dict):
+            if isinstance(item.get("image_name"), str):
+                return ImageField.model_validate(item)
+            if isinstance(item.get("video_name"), str):
+                return VideoField.model_validate(item)
+        return None
 
     def cached_exists(field: ImageField | VideoField) -> bool:
         if isinstance(field, VideoField):
@@ -104,24 +111,31 @@ def strip_missing_image_results(
         return image_cache[field.image_name]
 
     for node_id, output in queue_item.session.results.items():
-        image = getattr(output, "image", None)
-        if isinstance(image, ImageField) and not cached_exists(image):
+        image = output.get("image") if isinstance(output, dict) else getattr(output, "image", None)
+        image_field = media_field(image)
+        if isinstance(image_field, ImageField) and not cached_exists(image_field):
             did_filter = True
             continue
 
-        video = getattr(output, "video", None)
-        if isinstance(video, VideoField) and not cached_exists(video):
+        video = output.get("video") if isinstance(output, dict) else getattr(output, "video", None)
+        video_field = media_field(video)
+        if isinstance(video_field, VideoField) and not cached_exists(video_field):
             did_filter = True
             continue
 
-        collection = getattr(output, "collection", None)
-        if isinstance(collection, list) and any(is_media_field(item) for item in collection):
-            filtered_collection = [item for item in collection if not is_media_field(item) or cached_exists(item)]
+        collection = output.get("collection") if isinstance(output, dict) else getattr(output, "collection", None)
+        if isinstance(collection, list) and any(media_field(item) is not None for item in collection):
+            filtered_collection = [
+                item for item in collection if (field := media_field(item)) is None or cached_exists(field)
+            ]
             if len(filtered_collection) != len(collection):
                 did_filter = True
                 if len(filtered_collection) == 0:
                     continue
-                output = output.model_copy(update={"collection": filtered_collection})
+                if isinstance(output, dict):
+                    output = {**output, "collection": filtered_collection}
+                else:
+                    output = output.model_copy(update={"collection": filtered_collection})
 
         filtered_results[node_id] = output
 
@@ -136,7 +150,15 @@ def strip_missing_image_results(
 def _get_workflow_call_root_queue_item(queue_item: SessionQueueItem) -> SessionQueueItem:
     if queue_item.root_item_id is None:
         return queue_item
-    return ApiDependencies.invoker.services.session_queue.get_queue_item(queue_item.root_item_id)
+    return _get_queue_item_for_retry(queue_item.root_item_id)
+
+
+def _get_queue_item_for_retry(item_id: int) -> SessionQueueItem:
+    session_queue = ApiDependencies.invoker.services.session_queue
+    read_for_retry = getattr(session_queue, "_get_queue_item_for_retry", None)
+    if read_for_retry is not None:
+        return read_for_retry(item_id)
+    return session_queue.get_queue_item(item_id)
 
 
 # What a non-admin must not see on another user's queue item, and what each field is replaced
@@ -299,7 +321,7 @@ def list_all_queue_items(
 ) -> list[SessionQueueItem]:
     """Gets all queue items"""
     try:
-        items = ApiDependencies.invoker.services.session_queue.list_all_queue_items(
+        items = ApiDependencies.invoker.services.session_queue.list_all_queue_items_for_api(
             queue_id=queue_id,
             destination=destination,
         )
@@ -369,7 +391,7 @@ def get_queue_items_by_item_ids(
         queue_items: list[SessionQueueItem] = []
         for item_id in item_ids:
             try:
-                queue_item = session_queue_service.get_queue_item(item_id=item_id)
+                queue_item = session_queue_service.get_queue_item_for_api(item_id=item_id)
                 if queue_item.queue_id != queue_id:  # Auth protection for items from other queues
                     continue
                 # Sanitize item for non-admin users
@@ -655,7 +677,7 @@ def get_current_queue_item(
 ) -> Optional[SessionQueueItem]:
     """Gets the currently execution queue item"""
     try:
-        item = ApiDependencies.invoker.services.session_queue.get_current(queue_id, origin_prefix=origin_prefix)
+        item = ApiDependencies.invoker.services.session_queue.get_current_for_api(queue_id, origin_prefix=origin_prefix)
         if item is not None:
             item = sanitize_queue_item_for_user(item, current_user.user_id, current_user.is_admin)
         return item
@@ -701,7 +723,7 @@ def get_next_queue_item(
 ) -> Optional[SessionQueueItem]:
     """Gets the next queue item, without executing it"""
     try:
-        item = ApiDependencies.invoker.services.session_queue.get_next(queue_id, origin_prefix=origin_prefix)
+        item = ApiDependencies.invoker.services.session_queue.get_next_for_api(queue_id, origin_prefix=origin_prefix)
         if item is not None:
             item = sanitize_queue_item_for_user(item, current_user.user_id, current_user.is_admin)
         return item
@@ -778,7 +800,7 @@ def get_queue_item(
 ) -> SessionQueueItem:
     """Gets a queue item"""
     try:
-        queue_item = ApiDependencies.invoker.services.session_queue.get_queue_item(item_id=item_id)
+        queue_item = ApiDependencies.invoker.services.session_queue.get_queue_item_for_api(item_id=item_id)
         if queue_item.queue_id != queue_id:
             raise HTTPException(status_code=404, detail=f"Queue item with id {item_id} not found in queue {queue_id}")
         # Sanitize item for non-admin users

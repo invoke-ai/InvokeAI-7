@@ -29,7 +29,6 @@ import torch
 from diffusers.models.autoencoders.vae import DiagonalGaussianDistribution
 from PIL import Image, ImageOps
 
-from invokeai.backend.minimax_h3.audio_resample import resample_sinc
 from invokeai.backend.minimax_h3.autoencoder_kl_minimax_h3 import AutoencoderKLMiniMaxH3
 from invokeai.backend.minimax_h3.autoencoder_kl_minimax_h3_audio import AutoencoderKLMiniMaxH3Audio
 from invokeai.backend.minimax_h3.keyframe_conditioning import vae_encode_autocast
@@ -46,6 +45,7 @@ from invokeai.backend.minimax_h3.packing import (
     resolve_canvas_size,
 )
 from invokeai.backend.minimax_h3.sampling import MINIMAX_H3_PATCH_SIZE
+from invokeai.backend.util.audio_resample import resample_sinc
 
 # The audio VAE's sample rate (its config's `sampling_rate`; 800-sample hop -> 40 latents/s).
 # `encode_reference_audio` asserts the loaded VAE agrees.

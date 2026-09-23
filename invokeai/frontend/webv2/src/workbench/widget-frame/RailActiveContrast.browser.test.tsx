@@ -11,11 +11,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { WIDGET_ITEM_SX } from './WidgetBar';
 
 /**
- * The rail's active state is a neutral fill with the widget icon in
- * `brand.fg`. Two things can silently break it, so both are pinned here:
- * `brand.fg` reverting to the raw seed (1.20:1 on the light theme's panel —
- * invisible), and the active fill being swapped for a brand tint, which on the
- * light theme lands within 1.06:1 of the rail behind it.
+ * Verify brand icon contrast and neutral active fill; raw brand seed/tinted fills are nearly invisible on light
+ * rails.
  */
 
 const RAIL_ITEM_SX = WIDGET_ITEM_SX;

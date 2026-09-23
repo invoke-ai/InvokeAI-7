@@ -190,10 +190,7 @@ describe('PreviewFrame image drag', () => {
   });
 
   it('gives a second finger the pinch and abandons the drag it interrupted', async () => {
-    // On a touch screen a pinch starts as one finger on the image, which the
-    // pointer sensor has already taken as the start of a drag. The second
-    // finger has to take the gesture over outright: a drag left running would
-    // keep the image following finger one and drop it somewhere on release.
+    // A second touch must cancel image dragging before taking over pinch, avoiding an unintended drop on release.
     const onDrop = await renderHarness();
     const image = host!.querySelector<HTMLImageElement>('img[alt="preview.png"]')!;
     const frame = image.parentElement!;
@@ -219,10 +216,7 @@ describe('PreviewFrame image drag', () => {
   });
 
   it('does not offer its own compare target to the image it is showing', async () => {
-    // Dropping the previewed image back on the frame used to arm a comparison
-    // of the image with itself: invisible, because compare mode requires the
-    // two to differ, but it still paused live-follow and left a comparison
-    // primed to spring open on the next selection.
+    // Reject self-comparison drops so they cannot silently pause follow and arm a future comparison.
     const onDrop = await renderHarness();
     const image = host!.querySelector<HTMLImageElement>('img[alt="preview.png"]')!;
 
@@ -244,9 +238,7 @@ describe('PreviewFrame video drag', () => {
     const handle = host!.querySelector<HTMLElement>('[title="Drag video"]')!;
 
     expect(handle).not.toBeNull();
-    // Unfocusable by design: a focusable activator would let the shell's
-    // KeyboardSensor start an invisible Enter/Space drag that Tab then drops
-    // on the closest-center droppable.
+    // Unfocusable drag surfaces prevent invisible keyboard drags and accidental Tab drops.
     expect(handle.tabIndex).toBeLessThan(0);
     expect(handle.closest('button')).toBeNull();
     const rect = handle.getBoundingClientRect();

@@ -95,11 +95,7 @@ interface HarnessGallery {
   semanticSearchText: string | null;
 }
 
-/**
- * Stands in for the workbench store: the two text intents write back into
- * the values the field reads, so a controlled input behaves as it does in the
- * app, while every intent is still recorded on the spies.
- */
+/** Write text intents back into controlled values to model the workbench while recording calls. */
 const Harness = ({ initial }: { initial: Partial<HarnessGallery> }) => {
   const [gallery, setGallery] = useState<HarnessGallery>({
     searchTerm: '',

@@ -284,9 +284,10 @@ class TestWanDenoiseShapes:
         transformer = _ZeroTransformer()
         loaded = MagicMock()
         loaded.supports_partial_loading = True
-        cached_model = MagicMock()
-        cached_model.cur_vram_bytes.return_value = 5 * 2**30
-        loaded._cache_record.cached_model = cached_model
+        # `LoadedModel` exposes residency as a property, so a MagicMock must be given a real int
+        # here or the swapper's arithmetic compares against a mock.
+        loaded.resident_weight_bytes = 5 * 2**30
+        loaded.weight_bytes = 14 * 2**30
         device_context = MagicMock()
         device_context.__enter__.return_value = (None, transformer)
         loaded.model_on_device.return_value = device_context
@@ -314,7 +315,7 @@ class TestWanDenoiseShapes:
         transformer = _ZeroTransformer()
         loaded = MagicMock()
         loaded.supports_partial_loading = True
-        loaded._cache_record.cached_model.cur_vram_bytes.return_value = 2 * 2**30
+        loaded.resident_weight_bytes = 2 * 2**30
         device_context = MagicMock()
         device_context.__enter__.return_value = (None, transformer)
         loaded.model_on_device.return_value = device_context
@@ -342,7 +343,7 @@ class TestWanDenoiseShapes:
         transformer = _ZeroTransformer()
         loaded = MagicMock()
         loaded.supports_partial_loading = False
-        loaded._cache_record.cached_model.cur_vram_bytes.return_value = 5 * 2**30
+        loaded.resident_weight_bytes = 5 * 2**30
         device_context = MagicMock()
         device_context.__enter__.return_value = (None, transformer)
         loaded.model_on_device.return_value = device_context

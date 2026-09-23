@@ -25,12 +25,7 @@ export type PromptHighlightKind =
   | 'error';
 
 export interface PromptHighlightOptions {
-  /**
-   * Annotate dynamic prompting syntax. Only surfaces whose prompt is actually
-   * batch-expanded enable this — a `{a|b}` in a regional guidance or negative
-   * prompt is literal text, and colouring it would promise an expansion that
-   * never happens.
-   */
+  /** Enable dynamic highlighting only on surfaces that actually expand syntax. */
   dynamicPrompts?: boolean;
   /** Resolvable wildcard names; omitted leaves every `__name__` neutral. */
   knownWildcards?: ReadonlySet<string>;
@@ -49,8 +44,7 @@ interface HighlightAnnotation {
 }
 
 const ANNOTATION_PRIORITY = {
-  // A comment outranks even an error: the parser strips it before it sees the
-  // syntax inside, so nothing in there can be wrong.
+  // Comments outrank syntax errors because stripping precedes parsing.
   comment: 110,
   error: 100,
   promptVariableOperator: 46,
@@ -112,29 +106,13 @@ const tokenKind = (token: PromptToken): PromptHighlightKind => {
 const covers = (outer: PromptRange, inner: PromptRange): boolean =>
   outer.start <= inner.start && outer.end >= inner.end;
 
-/**
- * Walks the tokens and the annotations together, keeping only the annotations
- * that could still cover the token in hand.
- *
- * This replaced a `filter().sort()` over every annotation for every token. That
- * is quadratic, and dynamic-prompt highlighting made it bite: a prompt full of
- * `{a|b|c}` now produces an annotation per brace, separator, weight, range,
- * sampler, variable, operator, comment and wildcard, so the annotation count
- * grew to be proportional to the token count. At the 20 000-character ceiling
- * the highlighter allows, that was tens of milliseconds of blocked main thread
- * on every keystroke.
- *
- * Both inputs are in document order, and an annotation that ends before the
- * current token cannot reach any later one either, so it is dropped for good.
- * What is left is the nesting depth at that point, which is small.
- */
+/** Sweep in order and drop expired annotations to avoid rescanning them for every token. */
 const forEachTokenAnnotation = (
   tokens: readonly PromptToken[],
   annotations: readonly HighlightAnnotation[],
   visit: (token: PromptToken, annotation: HighlightAnnotation | undefined) => void
 ): void => {
-  // Ties are broken by the order the annotations were collected in, which the
-  // stable sort this replaced preserved by accident and callers may rely on.
+  // Break ties by collection order.
   const ordered = annotations
     .map((annotation, index) => ({ annotation, index }))
     .sort((left, right) => left.annotation.range.start - right.annotation.range.start || left.index - right.index);

@@ -152,9 +152,7 @@ describe('LayoutPresetStrip', () => {
     expect(store.getSnapshot().activeProject.layout.presetId).toBe('edit');
   });
 
-  // Desktop tab strips — Chrome, Firefox, VS Code — select a tab the moment it
-  // is pressed and reorder it from that same gesture. Reordering therefore
-  // activates the dragged tab, and does so on the press rather than the drop.
+  // Desktop tabs activate on press, including the press that begins reordering.
   it('selects a dragged tab on the press and reorders it in the same gesture', async () => {
     await renderStrip();
     await act(() => userEvent.click(presetTab('edit')!));

@@ -8,13 +8,6 @@ import { DiscordIcon, GithubIcon } from '@platform/ui/VendoredIcon';
 import { BookOpenTextIcon, ChevronRightIcon, ClapperboardIcon, CircleQuestionMarkIcon } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
-/**
- * Docs and community, pinned to the bottom of the Launchpad rail. This used to
- * be two outlined cards — the only card-styled objects on the surface, and
- * visually heavier than the section nav above them. One menu button says the
- * same thing without competing with the navigation for attention.
- */
-
 const MENU_POSITIONING = { placement: 'right-end' } as const;
 const GROUP_LABEL_PROPS = { color: 'fg.subtle', fontSize: '2xs', textTransform: 'uppercase' } as const;
 const TRIGGER_JUSTIFY = { justifyContent: 'space-between' } as const;

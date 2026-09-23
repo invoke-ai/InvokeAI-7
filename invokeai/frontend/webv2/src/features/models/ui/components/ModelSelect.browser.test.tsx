@@ -135,8 +135,7 @@ describe('ModelSelect loading states', () => {
   const optionTexts = (): string[] =>
     [...document.querySelectorAll('[role="option"]')].map((option) => option.textContent ?? '');
 
-  // The bug that prompted the rewrite: grouping by (type, base) printed "Main
-  // Models" above every base section of a cross-type picker.
+  // Cross-type pickers must not repeat Main Models headings for every base.
   it('groups a cross-type picker by base alone, with no type header', async () => {
     setModelsSnapshotForTests({ error: null, models: [model, loraModel], status: 'loaded' });
     await renderPicker({ id: 'test-cross-type', modelTypes: CROSS_TYPE_MODEL_TYPES });

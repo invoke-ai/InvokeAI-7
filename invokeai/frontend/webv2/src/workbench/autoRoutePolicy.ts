@@ -24,10 +24,8 @@ export const autoSwitchDestinations: Record<InvocationSourceId, ResultDestinatio
 };
 
 /**
- * Route after a high-confidence edit on `sourceId`; identity-preserving when
- * nothing changes. The destination remaps only on an actual source transition,
- * so repeated edits on the same surface never re-force a manually chosen
- * destination, and locks always win.
+ * Only source transitions remap the destination; repeated edits preserve manual destinations, locks, and no-op
+ * identity.
  */
 export const getRouteAfterHighConfidenceEdit = (
   invocation: InvocationRoute,
@@ -45,16 +43,10 @@ export const getRouteAfterHighConfidenceEdit = (
 export const getChangedValueKeys = (previous: Record<string, unknown>, patch: Record<string, unknown>): string[] =>
   Object.keys(patch).filter((key) => !Object.is(previous[key], patch[key]));
 
-// Named beside the interface they belong to rather than restated here, so a
-// field that is renamed or removed cannot leave a dead string behind. Which
-// fields are arrangement and which are intent is a fact about `GenerateSettings`
-// and reads as one there; this only asks the question.
+// Derive intent fields from GenerateSettings so renamed fields cannot leave stale policy keys.
 const GENERATE_UI_NOISE_KEYS: ReadonlySet<string> = new Set(Object.keys(GENERATE_UI_STATE_KEYS));
 
-// Its own list, and not a subset of the above: Upscale's values are a different
-// shape that happens to share a prompt box and a batch count. It has no aspect
-// lock and no templates, so naming those here would describe a widget that does
-// not exist.
+// Upscale owns a separate intent-field list because its settings contract differs from Generate's.
 const UPSCALE_UI_NOISE_KEYS: ReadonlySet<string> = new Set([
   'batchCount',
   'negativePromptHeightPx',

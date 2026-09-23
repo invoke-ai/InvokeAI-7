@@ -145,6 +145,15 @@ from invokeai.backend.model_manager.starter_models.krea_2 import (
     krea2_turbo_gguf_q8_0,
     krea2_turbo_nvfp4,
 )
+from invokeai.backend.model_manager.starter_models.ltx_2 import (
+    ltx2_5_components,
+    ltx2_5_dev_transformer_bf16,
+    ltx2_5_dev_transformer_int8,
+    ltx2_5_distilled_lora,
+    ltx2_5_distilled_transformer_int8,
+    ltx2_5_text_encoder_bf16,
+    ltx2_5_text_encoder_int8,
+)
 from invokeai.backend.model_manager.starter_models.minimax_h3 import (
     minimax_h3_components,
     minimax_h3_int8_text_encoder,
@@ -458,6 +467,13 @@ STARTER_MODELS: list[StarterModel] = [
     minimax_h3_turbo_lora,
     minimax_h3_lightx2v_turbo_lora,
     minimax_h3_lightx2v_ref2v_turbo_lora,
+    ltx2_5_dev_transformer_int8,
+    ltx2_5_distilled_transformer_int8,
+    ltx2_5_distilled_lora,
+    ltx2_5_dev_transformer_bf16,
+    ltx2_5_text_encoder_int8,
+    ltx2_5_text_encoder_bf16,
+    ltx2_5_components,
     gemini_flash_image,
     gemini_pro_image_preview,
     gemini_3_1_flash_image_preview,
@@ -647,6 +663,13 @@ minimax_h3_bundle: list[StarterModel] = [
     minimax_h3_lightx2v_ref2v_turbo_lora,
 ]
 
+ltx2_bundle: list[StarterModel] = [
+    ltx2_5_components,
+    ltx2_5_text_encoder_int8,
+    ltx2_5_dev_transformer_int8,
+    ltx2_5_distilled_transformer_int8,
+]
+
 STARTER_BUNDLES: dict[str, StarterModelBundle] = {
     BaseModelType.StableDiffusion1: StarterModelBundle(name="Stable Diffusion 1.5", models=sd1_bundle),
     BaseModelType.StableDiffusionXL: StarterModelBundle(name="SDXL", models=sdxl_bundle),
@@ -660,6 +683,7 @@ STARTER_BUNDLES: dict[str, StarterModelBundle] = {
     "wan_t2v": StarterModelBundle(name="Wan 2.2 Text-to-Video", models=wan_t2v_bundle),
     "wan_i2v": StarterModelBundle(name="Wan 2.2 Image-to-Video", models=wan_i2v_bundle),
     BaseModelType.MiniMaxH3: StarterModelBundle(name="MiniMax H3", models=minimax_h3_bundle),
+    BaseModelType.LTX2: StarterModelBundle(name="LTX-2.5", models=ltx2_bundle),
     BaseModelType.Ideogram4: StarterModelBundle(name="Ideogram 4", models=ideogram_bundle),
 }
 

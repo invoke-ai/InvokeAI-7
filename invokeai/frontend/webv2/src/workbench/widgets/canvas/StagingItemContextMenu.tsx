@@ -27,12 +27,7 @@ export interface StagingItemContextMenuTarget {
 /** A staged result carries no executed field values; the local submission snapshot is the source. */
 const NO_META: QueueGenerationMeta = {};
 
-/**
- * The executed prompts and seed of the backend item that produced a staged
- * result, from the project's queue read model (normally warm from the queue
- * widget). A randomized run's seed lives only there, so without it "Use Seed"
- * would stay disabled for the most common case.
- */
+/** Read executed prompts and seed from queue metadata; randomized seeds are unavailable from authored settings. */
 const useStagedCandidateMeta = (projectId: string, backendItemId: number | undefined): QueueGenerationMeta => {
   const scope = useMemo(() => ({ originPrefix: buildProjectQueueItemOriginPrefix(projectId) }), [projectId]);
   const select = useCallback(
@@ -45,11 +40,6 @@ const useStagedCandidateMeta = (projectId: string, backendItemId: number | undef
   return useQuery({ ...getQueueReadModelOptions(scope), enabled: backendItemId !== undefined, select }).data ?? NO_META;
 };
 
-/**
- * Right-click menu for a staged canvas result: recall its submission settings
- * into the Generate panel (the same verbs as gallery images and the queue's
- * Recent panel), or act on the candidate without hunting for the bar's buttons.
- */
 export const StagingItemContextMenu = ({
   canAccept,
   onAccept,

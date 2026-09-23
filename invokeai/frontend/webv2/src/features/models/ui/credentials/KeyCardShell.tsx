@@ -7,15 +7,6 @@ export interface KeyStatusBadge {
   palette: string;
 }
 
-/**
- * Shared chrome for credential cards: icon tile, title + status badge,
- * description, body.
- *
- * `isHighlighted` is how a card answers "this is the one you asked for" after
- * a jump from elsewhere. One neutral step — the stroke it already has, brought
- * up a stop — rather than a tint or a flash: the grid is a settings surface,
- * and the card still has to be readable while the user types a key into it.
- */
 export const KeyCardShell = ({
   children,
   description,

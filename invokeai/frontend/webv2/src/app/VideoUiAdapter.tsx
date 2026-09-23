@@ -17,12 +17,7 @@ import { getProjectWidgetValues } from '@workbench/widgetState';
 import { useActiveProjectSelector, useWorkbenchCommands } from '@workbench/WorkbenchContext';
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 
-/**
- * Production binding of Video's UI port: maps the video widget instance out of
- * the Workbench aggregate. No second adapter is expected. Video's prompt is one
- * of those widget values — it is not the project draft Generate and Upscale
- * share — so nothing but `rawValues` is joined here.
- */
+/** Video owns its prompt in widget values; do not join the draft shared by Generate/Upscale. */
 export const VideoUiAdapterProvider = ({ children }: { children: ReactNode }) => {
   const project = useActiveProjectSelector(
     (activeProject) => {
@@ -35,21 +30,17 @@ export const VideoUiAdapterProvider = ({ children }: { children: ReactNode }) =>
     },
     (left, right) => left.projectId === right.projectId && left.rawValues === right.rawValues
   );
-  // Syntax highlighting is a per-user preference, not a property of the
-  // project, so it is joined here rather than read off the document.
+  // Syntax highlighting is an account preference, not project data.
   const showPromptSyntaxHighlighting = useWorkbenchPreferenceSelector(
     (preferences) => preferences.showPromptSyntaxHighlighting
   );
-  // Uploads from the video panel land where generation results do — the same
-  // destination the queue snapshots as galleryBoardId.
+  // Use the queue's galleryBoardId destination for panel uploads too.
   const uploadBoardId = useActiveProjectSelector(
     (activeProject) => getGalleryDestinationBoardId(getProjectWidgetValues(activeProject, 'gallery')) ?? 'none'
   );
-  // Ref-backed so the port's actions keep their stable-for-the-project identity: a
-  // board click must not re-render every useVideoUiActions consumer in the panel.
+  // Read the current board through a ref so board selection does not recreate project actions.
   const uploadBoardIdRef = useRef(uploadBoardId);
-  // The live project, for callbacks that outlive the render that built them: a play press
-  // resolves its clip over the network and can land after a project switch.
+  // Async clip resolution can outlive a project switch; callbacks must check the live project.
   const activeProjectIdRef = useRef(project.projectId);
   useEffect(() => {
     uploadBoardIdRef.current = uploadBoardId;
@@ -57,9 +48,7 @@ export const VideoUiAdapterProvider = ({ children }: { children: ReactNode }) =>
   }, [project.projectId, uploadBoardId]);
   const commands = useWorkbenchCommands();
   const queryClient = useQueryClient();
-  // The port's callbacks are keyed to the project, not to its contents: rebuilding
-  // them whenever `rawValues` changes would hand every consumer new function
-  // identities on each keystroke, re-rendering memoized fields that did not change.
+  // Key actions by project, not values, to preserve callback identity while typing.
   const { projectId } = project;
   const patchValues = useCallback<VideoUiAdapter['patchValues']>(
     (values, origin) => commands.widgets.patchValues('video', values, projectId, origin),
@@ -71,20 +60,11 @@ export const VideoUiAdapterProvider = ({ children }: { children: ReactNode }) =>
   );
   const touchGalleryImages = useCallback(() => void invalidateGallery(queryClient), [queryClient]);
   const openWorkbenchWidget = useOpenWorkbenchWidget();
-  // Preview renders the gallery selection, so putting a reference clip in front of the user
-  // is the gallery's own "open in Preview" gesture: select the item, raise the widget into
-  // the center view. Deliberately WITHOUT that gesture's sibling reveal — auditioning a
-  // trim should not also scroll the gallery grid out from under a browsing user, and
-  // `openItemInPreview` does not reveal either.
-  //
-  // Raising Preview comes first so a refusal costs the user nothing: the selection is
-  // theirs, and moving it for a press that cannot play would be a change they did not ask
-  // for and cannot undo. The span request goes last, once the widget is on its way.
+  // Raise Preview before changing selection; refusal must leave selection untouched. Request the span last and do
+  // not reveal/scroll the gallery.
   const playVideoSpanInPreview = useCallback<VideoUiAdapter['playVideoSpanInPreview']>(
     ({ endSeconds, item, startSeconds }) => {
-      // The press resolved its gallery item over the network, and the user can have
-      // switched projects in that window. This callback still carries the project it was
-      // built for, so writing a selection now would land it in the project they left.
+      // Discard a resolved clip if its originating project is no longer active.
       if (activeProjectIdRef.current !== projectId) {
         return null;
       }
@@ -128,8 +108,7 @@ export const VideoUiAdapterProvider = ({ children }: { children: ReactNode }) =>
   return <VideoUiProvider adapter={adapter}>{children}</VideoUiProvider>;
 };
 
-// The player's report is module-scoped in the Preview widget, so the port is one constant
-// object: subscribing to it never re-renders on a project switch.
+// The module-scoped player report permits one stable port across project switches.
 const VIDEO_SPAN_PLAYBACK_PORT: VideoUiAdapter['videoSpanPlayback'] = {
   getState: getVideoSpanPlaybackState,
   subscribe: subscribeVideoSpanPlaybackState,

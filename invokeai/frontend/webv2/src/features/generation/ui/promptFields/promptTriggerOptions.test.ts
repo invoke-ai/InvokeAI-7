@@ -52,8 +52,7 @@ describe('getPromptTriggerOptions', () => {
 });
 
 describe('getInlineTriggerOptions', () => {
-  // `<` opens an embedding token and `__` a wildcard reference, so offering the
-  // other kind under either is offering something the user cannot have meant.
+  // The trigger restricts completion kind: < for embeddings, __ for wildcards.
   it('offers only wildcards for `__`', () => {
     expect(getInlineTriggerOptions(OPTIONS, '_', '').map((option) => option.label)).toEqual(['colours', 'moods']);
   });
@@ -74,8 +73,7 @@ describe('getInlineTriggerOptions', () => {
     expect(getInlineTriggerOptions(OPTIONS, '_', 'MO').map((option) => option.label)).toEqual(['moods']);
   });
 
-  // `__w` matching every wildcard on the strength of the word "Wildcards" is
-  // what folding the group into the query would do.
+  // Exclude group labels from matching so __w cannot match every entry under Wildcards.
   it('ignores the group name, unlike the browse search', () => {
     expect(getInlineTriggerOptions(OPTIONS, '_', 'wildcard')).toEqual([]);
     expect(filterPromptTriggerOptions(OPTIONS, 'wildcard')).toHaveLength(2);

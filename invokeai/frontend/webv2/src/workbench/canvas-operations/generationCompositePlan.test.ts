@@ -207,9 +207,7 @@ describe('planComposites — plan shape', () => {
   });
 
   it('excludes an empty (bitmap: null) paint layer so it cannot force outpaint', () => {
-    // An auto-created paint layer left blank (e.g. its stroke was undone) carries
-    // no pixels; including it would inject a doc-sized transparent rect that reads
-    // as outpaint. It must not appear among the base-raster contributors.
+    // Exclude blank paint layers: their transparent document-sized bounds would falsely imply outpaint.
     const doc = makeDoc([
       rasterLayer('img', { source: { image: imageRef('pic'), type: 'image' } }),
       rasterLayer('blank', { source: { bitmap: null, type: 'paint' } }),

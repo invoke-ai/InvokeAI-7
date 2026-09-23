@@ -285,8 +285,6 @@ await i18n.use(initReactI18next).init({
             framesPerSecond: '{{count}} fps',
             itemCount_one: '{{count}} item',
             itemCount_other: '{{count}} items',
-            nextItemInBoard: 'Next item in board',
-            previousItemInBoard: 'Previous item in board',
             videoDuration: 'Duration {{duration}}',
           },
         },
@@ -370,10 +368,7 @@ const render = async () => {
   await renderTree(client);
 };
 
-// Re-renders the mounted tree against the SAME query client, so cached pages
-// survive exactly as they do in production and a window change has to earn
-// its data. Widget values are read by identity, so callers hand the view a
-// fresh values object rather than mutating in place.
+// Rerender with the same query client to preserve real cache behavior; supply fresh widget-value identities.
 const rerender = async () => {
   if (!queryClient) {
     throw new Error('Expected render() to have created a query client.');
@@ -388,10 +383,8 @@ const setGalleryValues = (patch: Record<string, unknown>) => {
   state.values = { ...state.values, ...patch };
 };
 
-// Applies Preview's most recent selection to the gallery values the way the
-// real reducer would — item, key, and the stamped page — and re-renders. The
-// selection command is a mock, so without this a second arrow press would
-// still start from the item the first one left.
+// Apply mocked selection results back to Gallery values so subsequent navigation starts from the newly selected
+// item.
 const commitLastSelection = async () => {
   const lastCall = mocks.commands.gallery.selectItem.mock.lastCall as
     | [GalleryImageItem, unknown, number | undefined, boolean | undefined]
@@ -536,6 +529,10 @@ afterEach(async () => {
   root = null;
 });
 
+/** The filmstrip's current thumb: the one visible trace of where the navigation cursor sits. */
+const selectedThumb = (): string | null | undefined =>
+  host?.querySelector<HTMLButtonElement>('button[aria-current]')?.getAttribute('aria-label');
+
 describe('preview keyboard navigation boundary', () => {
   it('walks the starred strip into the unstarred listing and back, as the grid lays them out', async () => {
     const starredTop = { ...createImageItem('starred-top', '2026-07-23T00:00:00.000Z'), starred: true };
@@ -551,7 +548,7 @@ describe('preview keyboard navigation boundary', () => {
     // The listing stays the unstarred one; the strip supplies the starred neighbors.
     expect(mocks.galleryItemFilters.length).toBeGreaterThan(0);
     expect(mocks.galleryItemFilters.every((query) => query.starred === false)).toBe(true);
-    await expect.poll(() => host?.textContent).toContain('2 of 4');
+    await expect.poll(() => selectedThumb()).toBe('starred-next');
     expect(mocks.galleryStripFetches.length).toBeGreaterThan(0);
 
     await pressArrow('ArrowRight');
@@ -592,7 +589,7 @@ describe('preview keyboard navigation boundary', () => {
     });
     await render();
 
-    await expect.poll(() => host?.textContent).toContain('1 of 2');
+    await expect.poll(() => selectedThumb()).toBe('newest');
     await pressArrow('ArrowRight');
     expect(mocks.commands.gallery.selectItem).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ name: 'oldest' }),
@@ -633,7 +630,7 @@ describe('preview keyboard navigation boundary', () => {
       starredOnly: true,
     });
     await render();
-    await expect.poll(() => host?.textContent).toContain('2 of 2');
+    await expect.poll(() => selectedThumb()).toBe('starred-deep');
     expect(mocks.galleryStripFetches).toHaveLength(0);
     expect(mocks.galleryItemFilters.every((query) => query.starred === true)).toBe(true);
     await pressArrow('ArrowLeft');
@@ -674,10 +671,7 @@ describe('preview keyboard navigation boundary', () => {
   });
 
   it('keeps a just-completed batch navigable before the backend refetch lands', async () => {
-    // The batch finished and its queue item is already gone; the backend list
-    // (staleTime + coalesced invalidation) still only has the older image.
-    // recentImages is the bridge: every batch image must stay in the sequence,
-    // or ArrowRight from the newest skips the whole batch onto old images.
+    // Bridge completed batches through recentImages until stale backend listings catch up.
     mocks.project.queue.items = [];
     mocks.project.widgetInstances.gallery.state.values.recentImages = [
       {
@@ -725,9 +719,7 @@ describe('preview keyboard navigation boundary', () => {
   });
 
   it('walks the starred-only listing the selection was made in, and keeps recents out of it', async () => {
-    // The grid under the starred filter shows starred items only; Preview's
-    // arrows must step through that same list, and a fresh (unstarred)
-    // generation has no place in it.
+    // Preview must follow the starred listing and exclude new unstarred generations.
     const starredNewer = { ...createImageItem('starred-newer', '2026-07-20T00:00:02.000Z'), starred: true };
     const starredOlder = { ...createImageItem('starred-older', '2026-07-20T00:00:01.000Z'), starred: true };
 
@@ -758,10 +750,7 @@ describe('preview keyboard navigation boundary', () => {
   });
 
   it('keeps settled recents out of an infinite window anchored at a deep reveal', async () => {
-    // A deep reveal anchors Preview's window ~1800 rows down the board. Recents
-    // belong at the TOP of the listing: date-sorting them into a slice from
-    // the middle puts images in Preview that the grid is not showing, and
-    // stepping onto one files it under a board page it is nowhere near.
+    // Do not merge top-of-board recents into deep windows or stamp them with unrelated page positions.
     const deepNewer = createImageItem('deep-newer', '2026-07-20T00:00:02.000Z');
     const deepOlder = createImageItem('deep-older', '2026-07-20T00:00:01.000Z');
 
@@ -820,9 +809,7 @@ describe('preview keyboard navigation boundary', () => {
   });
 
   it('stamps the top of the listing on an in-flight image a deep window does not hold', async () => {
-    // In-flight work still merges into a deep window, and the window has no
-    // page for it. The page the preview opened on is 30 board pages from
-    // where the image will land, so it must not be what gets stamped.
+    // In-flight entries in a deep window must not inherit its unrelated board page.
     mocks.project.queue.items = [queueItem];
     setGalleryValues({
       galleryPage: 0,
@@ -845,9 +832,7 @@ describe('preview keyboard navigation boundary', () => {
   });
 
   it('stamps the top of the listing when the compare image is swapped in', async () => {
-    // The compare slot holds an arbitrary image the window may not contain.
-    // Reusing the deep page filed a top-of-board image under row 1800, and
-    // Preview then queried a slice its own selection was not in.
+    // Unknown comparison positions must not inherit a deep window's page.
     setGalleryValues({
       compareImage: legacyImage('compare-top', '2026-07-24T00:00:00.000Z'),
       galleryPage: 0,
@@ -877,12 +862,8 @@ describe('preview keyboard navigation boundary', () => {
   });
 
   it('holds a deep window still while the cursor walks across a page boundary and back', async () => {
-    // An anchored infinite window is one-way: it cannot grow upward past its
-    // anchor. So the anchor must stay where the selection was made, and every
-    // step — including one that lands on a page the boundary fetch has just
-    // added — stamps THAT anchor, not the row it landed on. Stamping the row
-    // re-keys the window at each boundary, discards the old entry, and makes
-    // everything the user just walked through unreachable.
+    // Preserve the original infinite-window anchor across boundary steps so earlier traversed pages remain
+    // reachable.
     const deepA = createImageItem('deep-a', '2026-07-20T00:00:04.000Z');
     const deepB = createImageItem('deep-b', '2026-07-20T00:00:03.000Z');
     const deepC = createImageItem('deep-c', '2026-07-20T00:00:02.000Z');
@@ -898,15 +879,11 @@ describe('preview keyboard navigation boundary', () => {
     mocks.galleryItemPages = deepBoardPages([deepA, deepB], [deepC, deepD]);
 
     await render();
-    // Across the boundary: the fetch adds page 31, and the item selected out
-    // of it is still stamped with the window's anchor.
     await pressArrow('ArrowRight');
     await commitLastSelection();
     // One more step inside the new page.
     await pressArrow('ArrowRight');
     await commitLastSelection();
-    // And back, twice: the second press crosses the boundary in the direction
-    // the window cannot grow, and must find page 30 still loaded.
     await pressArrow('ArrowLeft');
     await commitLastSelection();
     await pressArrow('ArrowLeft');
@@ -927,10 +904,8 @@ describe('preview keyboard navigation boundary', () => {
   });
 
   it('moves to the top of the listing when a selection is made there from outside Preview', async () => {
-    // Board, view, order, mode and search are unchanged, so the query identity
-    // is the same. A grid click on the newest image stamps the grid's page, 0,
-    // and Preview must follow it — held sticky, the anchor kept querying rows
-    // 1800+ for a selection at row 0.
+    // Follow newly stamped selection pages even when query identity is unchanged; a grid click can move a deep
+    // window back to zero.
     const topNewer = createImageItem('top-newer', '2026-07-22T00:00:02.000Z');
     const topOlder = createImageItem('top-older', '2026-07-22T00:00:01.000Z');
 
@@ -967,10 +942,7 @@ describe('preview keyboard navigation boundary', () => {
   });
 
   it('hands image actions a page that keeps a deletion successor in the deep window', async () => {
-    // A successor is chosen from Preview's own list. Selected without a page
-    // it is stamped with the GRID's page — 0 once a result has landed on the
-    // board or the project was reloaded — and lands outside the window it
-    // came from: forward arrow dead, back arrow a 1800-row teleport.
+    // Deletion successors from Preview need its own page context rather than the grid's unrelated page.
     const deepNewer = createImageItem('deep-newer', '2026-07-20T00:00:02.000Z');
     const deepOlder = createImageItem('deep-older', '2026-07-20T00:00:01.000Z');
 
@@ -993,9 +965,7 @@ describe('preview keyboard navigation boundary', () => {
   });
 
   it('swaps the compare image in and back out without losing the deep window', async () => {
-    // Swapping a top-of-board image in moves the window to the top, and the
-    // deep image goes into the compare slot. Swapping back must return to the
-    // window that image was navigated in, not guess at one.
+    // Remember comparison navigation context so swapping back restores the deep window.
     setGalleryValues({
       compareImage: legacyImage('compare-top', '2026-07-24T00:00:00.000Z'),
       galleryPage: 0,
@@ -1024,8 +994,6 @@ describe('preview keyboard navigation boundary', () => {
       true
     );
 
-    // Commit the swap as the reducer would: the top image is selected at page
-    // 0, and the deep image is now in the compare slot.
     await commitLastSelection();
     setGalleryValues({ compareImage: legacyImage('deep-newer', '2026-07-20T00:00:02.000Z') });
     await rerender();
@@ -1040,10 +1008,7 @@ describe('preview keyboard navigation boundary', () => {
   });
 
   it('does not restore a remembered page into a different listing', async () => {
-    // Between the swap and the swap back the user moved to another board.
-    // The remembered page named a window of the first board's listing;
-    // stamped into the second board's query it would anchor that listing
-    // 1800 rows down around an image that is not in it.
+    // Do not reuse a comparison page after changing to another board query.
     setGalleryValues({
       compareImage: legacyImage('compare-top', '2026-07-24T00:00:00.000Z'),
       galleryPage: 0,
@@ -1065,8 +1030,6 @@ describe('preview keyboard navigation boundary', () => {
 
     await swap();
     await commitLastSelection();
-    // The grid: another board, a click on one of its images. The compare slot
-    // survives that, still holding the deep image from the first board.
     setGalleryValues({
       compareImage: legacyImage('deep-newer', '2026-07-20T00:00:02.000Z'),
       selectedImage: { ...legacyImage('other-board-image', '2026-07-25T00:00:00.000Z'), boardId: 'board-b' },
@@ -1148,9 +1111,8 @@ describe('preview keyboard navigation boundary', () => {
   });
 
   it('does not restore a remembered page for an item since moved to another board', async () => {
-    // Moving the compare image re-boards it in place and leaves the selection's
-    // query alone, so the memo's key still matches. The page it remembers is a
-    // window of the OLD board's listing, which the item is no longer in.
+    // Invalidate remembered position when the comparison item moves boards, even if selection-query identity
+    // remains unchanged.
     setGalleryValues({
       compareImage: legacyImage('compare-top', '2026-07-24T00:00:00.000Z'),
       galleryPage: 0,
@@ -1390,11 +1352,8 @@ describe('preview keyboard navigation boundary', () => {
     };
     const galleryValues = mocks.project.widgetInstances.gallery.state.values as Record<string, unknown>;
 
-    // A deep reveal from the image map stamped board page 30 onto the
-    // selection; starting the similarity search reset the grid to page 0.
-    // Carrying that stale page onto a ranked pick strands it: the item picked
-    // out of a ranking is nowhere near board page 30, so clearing the chip
-    // would anchor navigation ~1800 rows from both the selection and the grid.
+    // Ranked picks must drop stale board-page positions so clearing similarity search cannot anchor far from
+    // selection.
     galleryValues.galleryPage = 0;
     galleryValues.paginationMode = 'infinite';
     galleryValues.recentImages = [];
@@ -1478,11 +1437,8 @@ describe('preview keyboard navigation boundary', () => {
       width: image.width,
     });
 
-    // In paginated mode the footer paginates the RANKING, so the grid's page
-    // is a rank page, not a board page — stamping it would send navigation to
-    // an unrelated board slice once the chip is cleared. Clearing resets the
-    // grid to board page 0, so that is what a ranked pick hands back: neither
-    // the grid's 1 nor the stale 30.
+    // Rank pages are not board pages; ranked picks return board page zero rather than the current ranking or stale
+    // selection page.
     galleryValues.galleryPage = 1;
     galleryValues.paginationMode = 'paginated';
     galleryValues.recentImages = [];
@@ -1582,10 +1538,6 @@ describe('preview keyboard navigation boundary', () => {
     await render();
 
     // Live status reports the requested size without suggesting board navigation.
-    expect(host?.textContent).toContain('64 × 64');
-    expect(host?.querySelector('button[aria-label="Next item in board"]')).toBeNull();
-    expect(host?.textContent).toContain('Generating');
-    expect(host?.textContent).not.toContain('0 items');
     expect(host?.querySelector<HTMLImageElement>('img[src^="data:image/png"]')).not.toBeNull();
   });
 
@@ -1618,10 +1570,8 @@ describe('preview keyboard navigation boundary', () => {
   });
 
   it('keeps following a completed slot while its result is still routing', async () => {
-    // Completed on the backend, image not in the gallery yet: the slot is
-    // followed (settling) but no longer running. Preview must keep the live
-    // frame up in the single-frame branch rather than fall back onto the
-    // previous selection — and must not tile it.
+    // Keep settling results in the single live frame after backend completion and before gallery arrival; do not
+    // tile them.
     mocks.project.queue.items = [queueItem];
     mocks.project.settings.showProgressImagesInViewer = true;
     mocks.useActiveProgressTarget.mockReturnValue({ itemIndex: 1, queueItemId: 'queue-item-live' });
@@ -1635,14 +1585,13 @@ describe('preview keyboard navigation boundary', () => {
 
     await render();
 
-    expect(host?.querySelectorAll<HTMLImageElement>('img[src^="data:image/png"]')).toHaveLength(1);
-    expect(host?.textContent).toContain('64 × 64');
+    expect(
+      host?.querySelectorAll<HTMLImageElement>('img[src^="data:image/png"]:not([data-preview-filmstrip] img)')
+    ).toHaveLength(1);
   });
 
   it("shows the followed slot's own frame even when the store-wide latest frame is gone", async () => {
-    // A quick image batch finished next to a long video render while the tab was
-    // hidden: releasing the batch's slot cleared the latest frame. The video slot
-    // still has its frame and must not render an empty card until its next step.
+    // Retain another live slot's frame when a neighboring batch releases its latest frame.
     mocks.project.queue.items = [queueItem];
     mocks.project.settings.showProgressImagesInViewer = true;
     mocks.useActiveProgressTarget.mockReturnValue({ itemIndex: 1, queueItemId: 'queue-item-live' });
@@ -1676,9 +1625,7 @@ describe('preview keyboard navigation boundary', () => {
   });
 
   it("bridges to the next slot of a batch with the previous slot's last frame", async () => {
-    // Slot 2 is live but has produced no frame yet (model load, text encoding);
-    // the latest frame still belongs to slot 1. Without the bridge this was an
-    // empty card between every two items of a batch.
+    // Bridge a newly followed frameless slot with the previous frame until its first progress arrives.
     mocks.project.queue.items = [{ ...queueItem, backendItemIds: [1, 2], completedBackendItemIds: [1] }];
     mocks.project.settings.showProgressImagesInViewer = true;
     mocks.useActiveProgressTarget.mockReturnValue({ itemIndex: 2, queueItemId: 'queue-item-live' });
@@ -1696,7 +1643,7 @@ describe('preview keyboard navigation boundary', () => {
     expect(host?.querySelector<HTMLImageElement>('img[src="data:image/png;base64,slot-one"]')).toBeNull();
   });
 
-  it('pins one concurrent session, returns to overview, and continues after the pinned session settles', async () => {
+  it('keeps every concurrent session in the filmstrip, follows the newest session, and pins on request', async () => {
     mocks.project.queue.items = [{ ...queueItem, backendItemIds: [1, 2] }];
     mocks.project.settings.showProgressImagesInViewer = true;
     mocks.runningProgressTargets = [
@@ -1705,17 +1652,43 @@ describe('preview keyboard navigation boundary', () => {
     ];
     mocks.slotProgressImage = { dataUrl: 'data:image/png;base64,live', width: 64, height: 64 };
     await render();
-    expect(host?.querySelectorAll('img[src^="data:image/png"]')).toHaveLength(2);
-    await act(() => followControls.pin('queue-item-live:2'));
-    expect(host?.querySelectorAll('img[src^="data:image/png"]')).toHaveLength(1);
-    expect(followControls.pinnedSessionId).toBe('queue-item-live:2');
+    const liveThumbs = () => [...host!.querySelectorAll<HTMLElement>('[data-preview-live-thumb]')];
+    const followedThumb = () =>
+      host!.querySelector<HTMLElement>('[data-preview-live-thumb][aria-current="true"]')?.dataset.previewLiveThumb;
+    // One stage, two thumbs: never a grid. The session that started last is on the stage.
+    expect(liveThumbs()).toHaveLength(2);
+    expect(host?.querySelectorAll('[data-preview-filmstrip] img[src^="data:image/png"]')).toHaveLength(2);
+    expect(followedThumb()).toBe('queue-item-live:2');
+
+    // Frames from other slots must not change the followed session.
+    mocks.useProgressImage.mockReturnValue({
+      dataUrl: 'data:image/png;base64,live',
+      height: 64,
+      target: { itemIndex: 1, queueItemId: queueItem.id },
+      width: 64,
+    });
+    await rerender();
+    expect(followedThumb()).toBe('queue-item-live:2');
+    expect(followControls.pinnedSessionId).toBeNull();
+
+    await act(() => followControls.pin('queue-item-live:1'));
+    expect(followedThumb()).toBe('queue-item-live:1');
+    expect(host!.querySelector('[data-preview-live-thumb="queue-item-live:1"]')?.getAttribute('aria-pressed')).toBe(
+      'true'
+    );
+    expect(host!.querySelector<HTMLElement>('[data-preview-live-pinned]')?.dataset.previewLiveThumb).toBe(
+      'queue-item-live:1'
+    );
     await act(() => followControls.showAll());
-    expect(host?.querySelectorAll('img[src^="data:image/png"]')).toHaveLength(2);
+    expect(followedThumb()).toBe('queue-item-live:2');
+    expect(host!.querySelector('[data-preview-live-pinned]')).toBeNull();
+
     await act(() => followControls.pin('queue-item-live:2'));
     mocks.runningProgressTargets = [{ queueItemId: queueItem.id, itemIndex: 1 }];
     await rerender();
+    // The pinned session settled, so the pin releases and the stage moves on.
     expect(followControls.pinnedSessionId).toBeNull();
-    expect(host?.querySelectorAll('img[src^="data:image/png"]')).toHaveLength(1);
+    expect(followedThumb()).toBe('queue-item-live:1');
   });
 
   it('keeps live previews available during similarity search and temporary comparison override', async () => {
@@ -1727,7 +1700,7 @@ describe('preview keyboard navigation boundary', () => {
     values.semanticImageQuery = { kind: 'text', query: 'blue sky' };
     values.compareImage = mocks.recentImages[1];
     await render();
-    expect(host?.querySelectorAll('img[src^="data:image/png"]')).toHaveLength(1);
+    expect(host?.querySelectorAll('img[src^="data:image/png"]:not([data-preview-filmstrip] img)')).toHaveLength(1);
     await act(() => followControls.pin('queue-item-live:1'));
     mocks.project.id = 'project-2';
     mocks.project.queue.items = [];
@@ -1774,10 +1747,6 @@ describe('preview keyboard navigation boundary', () => {
     await act(() => followControls.pin('queue-item-live:1'));
     const boundary = host!.querySelector<HTMLElement>('[role="region"]')!;
     expect(boundary.getBoundingClientRect().bottom).toBeLessThanOrEqual(host!.getBoundingClientRect().bottom);
-    expect(host!.querySelector('button[aria-label="Next item in board"]')).toBeNull();
-    expect(host!.querySelector('button[aria-label="Previous item in board"]')).toBeNull();
-    expect(host!.textContent).not.toContain('0 items');
-    expect(host!.textContent).toContain('Generating');
   });
   it('does not consume arrow keys in comparison mode', async () => {
     (mocks.project.widgetInstances.gallery.state.values as Record<string, unknown>).compareImage = {
@@ -1820,10 +1789,6 @@ describe('preview keyboard navigation boundary', () => {
     expect(video?.getAttribute('src')).toBe(sameNameVideo.fullUrl);
     expect(video?.getAttribute('poster')).toBe(sameNameVideo.thumbnailUrl);
     expect(filmstripPosters).toHaveLength(3);
-    expect(host?.textContent).toContain('2 of 3');
-    expect(host?.textContent).toContain('1920 × 1080');
-    expect(host?.textContent).toContain('Duration 1:06');
-    expect(host?.textContent).toContain('23.976 fps');
     expect(host?.textContent).not.toContain('Drop to compare');
 
     await pressArrow('ArrowLeft');

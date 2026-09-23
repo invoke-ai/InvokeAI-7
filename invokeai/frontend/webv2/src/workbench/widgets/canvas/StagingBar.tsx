@@ -74,13 +74,8 @@ interface StagingBarProps {
 }
 
 /**
- * The floating staging bar over the canvas: appears while a canvas generation
- * is in flight or staged candidates await a decision. It drives the reducer's
- * staging actions (cycle / accept / discard / auto-switch); the candidate and
- * live progress pixels themselves are drawn on the engine canvas via
- * `engine.previews.setStagedPreview` (wired in {@link CanvasWidgetView}). Rendered inside
- * the canvas's bottom-center floating group, stacked directly above the tool
- * options bar; positioning is the parent's job.
+ * Show staging controls for running or pending canvas results. {@link CanvasWidgetView} feeds pixels to
+ * engine.previews; the parent positions this bar above tool options.
  */
 export const StagingBar = ({
   antialiasProgressImages,
@@ -139,8 +134,6 @@ export const StagingBar = ({
   };
 
   return (
-    // The bar mounts when staging begins; a short slide-fade lands it instead
-    // of popping it in. Duration collapses under reduce-motion with the theme.
     <Stack align="center" animationDuration="moderate" animationName="slide-from-bottom, fade-in" gap="2" w="full">
       {contextMenuTarget ? (
         <StagingItemContextMenu
@@ -153,11 +146,8 @@ export const StagingBar = ({
         />
       ) : null}
       {hasSlots ? (
-        // The strip spans the whole canvas widget and scrolls within it: the
-        // overlay's staging slot stretches, so this width is definite and a long
-        // run of staged candidates can only ever scroll — never widen the
-        // floating bar group past the canvas, where the overlay would silently
-        // clip the centered overflow at both edges.
+        // Constrain thumbnail scrolling to canvas width so centered overflow cannot be clipped outside the
+        // surface.
         <ScrollArea.Root
           h={areThumbnailsVisible ? THUMBNAIL_STRIP_HEIGHT : '0'}
           opacity={areThumbnailsVisible ? 1 : 0}
@@ -421,8 +411,7 @@ const StagingThumbnail = ({
   onSelect: () => void;
 }) => {
   const { t } = useTranslation();
-  // Ref callbacks re-run when `isSelected` changes, so cycling with the arrows
-  // (or an auto-switch) drags the strip along without an effect.
+  // Selection-sensitive ref callbacks scroll the active thumbnail into view without an effect.
   const scrollIntoView = useCallback(
     (node: HTMLElement | null) => {
       if (node && isSelected) {

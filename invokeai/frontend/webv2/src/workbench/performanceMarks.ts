@@ -1,11 +1,13 @@
-import { canRecordDiagnosticTiming, recordDiagnosticTiming, type DiagnosticSource } from './diagnostics/logger';
+import type { LogSource } from '@platform/logging/contracts';
+
+import { canRecordTiming, recordTiming } from '@platform/logging/logger';
 
 const hasPerformanceApi = (): boolean => typeof performance !== 'undefined' && typeof performance.mark === 'function';
 
-const canMeasurePerf = (source?: DiagnosticSource): source is DiagnosticSource =>
-  hasPerformanceApi() && canRecordDiagnosticTiming(source);
+const canMeasurePerf = (source?: LogSource): source is LogSource =>
+  source !== undefined && hasPerformanceApi() && canRecordTiming();
 
-export const markWorkbenchPerf = (name: string, source?: DiagnosticSource): void => {
+export const markWorkbenchPerf = (name: string, source?: LogSource): void => {
   if (!canMeasurePerf(source)) {
     return;
   }
@@ -13,12 +15,7 @@ export const markWorkbenchPerf = (name: string, source?: DiagnosticSource): void
   performance.mark(name);
 };
 
-export const measureWorkbenchPerf = (
-  name: string,
-  startMark: string,
-  source?: DiagnosticSource,
-  endMark?: string
-): void => {
+export const measureWorkbenchPerf = (name: string, startMark: string, source?: LogSource, endMark?: string): void => {
   if (!canMeasurePerf(source)) {
     return;
   }
@@ -26,7 +23,7 @@ export const measureWorkbenchPerf = (
   try {
     const measure = endMark ? performance.measure(name, startMark, endMark) : performance.measure(name, startMark);
 
-    recordDiagnosticTiming(source, measure.name, measure.duration);
+    recordTiming(source, measure.name, measure.duration);
 
     performance.clearMeasures?.(name);
     performance.clearMarks?.(startMark);
@@ -38,7 +35,7 @@ export const measureWorkbenchPerf = (
   }
 };
 
-export const timeWorkbenchPerf = <T>(name: string, source: DiagnosticSource | undefined, callback: () => T): T => {
+export const timeWorkbenchPerf = <T>(name: string, source: LogSource | undefined, callback: () => T): T => {
   if (!canMeasurePerf(source)) {
     return callback();
   }

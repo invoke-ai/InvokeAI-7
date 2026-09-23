@@ -27,10 +27,7 @@ export interface CanvasNodeEntry {
   readonly ancestorsHidden: boolean;
 }
 
-/**
- * The per-forest index shared by the reducer, the mirror and the document model. It is keyed on
- * the `stacks` object, which the reducer preserves across selection, bbox and geometry-only edits.
- */
+/** Shared forest index keyed by `stacks`, whose identity survives selection, bbox and geometry-only edits. */
 export interface CanvasDocumentIndex {
   readonly stacks: CanvasStackForests;
   readonly byId: ReadonlyMap<string, CanvasNodeEntry>;
@@ -123,9 +120,8 @@ class LayeredEntryMap implements ReadonlyMap<string, CanvasNodeEntry> {
 }
 
 /**
- * An index that extends a source index by the entries a value edit replaced; the rest reads through.
- * Chains read through their predecessors; every ninth derivation flattens onto the plain root so
- * lookups stay bounded and nothing older than the root is retained.
+ * Value-edit overlay index with predecessor read-through. Every ninth derivation flattens onto the plain root to
+ * bound lookup depth and retention.
  */
 class DerivedIndex implements CanvasDocumentIndex {
   readonly byId: ReadonlyMap<string, CanvasNodeEntry>;
@@ -195,10 +191,7 @@ const derivationDepth = (index: CanvasDocumentIndex): number => {
   return depth;
 };
 
-/**
- * Folds a chain onto its plain root: one override layer holding the newest entry of every id the
- * chain touched. Once overrides cover too much of the root, a plain index is cheaper than the layer.
- */
+/** Flatten newest overrides onto the plain root; rebuild a plain index when override coverage becomes too large. */
 const flatten = (index: DerivedIndex): CanvasDocumentIndex => {
   const overrides = new Map<string, CanvasNodeEntry>();
   let leafChanged = false;
@@ -282,12 +275,9 @@ const flagsChanged = (previous: CanvasNodeContract, next: CanvasNodeContract): b
     (previous.isHidden === true) !== (next.isHidden === true));
 
 /**
- * Registers the index of `nextStacks` as a derivation of `previousStacks`' index after a value edit
- * that rewrote exactly the nodes in `changed` (and, through structural sharing, their ancestors).
- * Structure is untouched, so every entry keeps its place; only the replaced nodes, their ancestors,
- * and the subtree under a group whose flags changed get new entries. Everything else reads through
- * to the previous index, so the cost is the changed paths, never the document. Returns `null` when
- * no previous index exists or the edit was not a value edit, leaving the next lookup to build.
+ * Derives an index after value-only edits, replacing changed nodes, ancestors and descendants affected by group
+ * flags. Unchanged entries read through. Returns null without a prior index or when structure changed, deferring a
+ * full build.
  */
 export const deriveIndexForValueEdit = (
   previousStacks: CanvasStackForests,

@@ -24,11 +24,8 @@ export interface HoverPreview {
 }
 
 /**
- * Cluster identity for the hovered image, resolved from the CURRENT points.
- * Deliberately not captured at hover time: a hover survives a live refresh
- * (see `hoverPreview` below), and a refresh re-runs DBSCAN, which can renumber
- * every cluster. A frozen id would then be paired with the new clustering's
- * labels and color — a card describing a cluster the image is not in.
+ * Resolve hovered cluster identity from current points; live reclustering may renumber ids under a stationary
+ * pointer.
  */
 export interface HoverCluster {
   /** DBSCAN cluster of the hovered point; -1 means unclustered noise. */
@@ -51,16 +48,8 @@ const HoverTagsRow = ({ prefix, tags }: { prefix: string; tags: string[] }) => (
 );
 
 /**
- * The hover card: thumbnail, filename, cluster identity/size, and the top
- * cluster and item tags — PhotoMapAI's popup on the app's dropdown chrome,
- * with the cluster's palette color confined to a swatch dot. Its size depends
- * on async content (the thumbnail and the lazily fetched item tags), so it
- * renders invisibly, is measured, and is then placed beside the cursor —
- * flipped to the other side when it would leave the viewport. Parents key
- * this by item key so a new hover starts clean.
- *
- * A video's thumbnail is a still frame, so the card says which it is: without
- * the badge a clip is indistinguishable from an image until it is opened.
+ * Measure asynchronous hover-card content invisibly before cursor-relative placement and viewport flipping. Key by
+ * item for clean state and label video thumbnails explicitly.
  */
 export const MapHoverCard = ({
   preview,
@@ -76,10 +65,8 @@ export const MapHoverCard = ({
   const [imageLoaded, setImageLoaded] = useState(false);
   const [position, setPosition] = useState<{ left: number; top: number } | null>(null);
 
-  // Item tags are computed on demand (network round-trip on first hover of
-  // an item; session-cached after). The card renders without the row until
-  // they arrive. Keyed by the item's key rather than by an item object, which
-  // a refresh re-creates identical and would refetch.
+  // Fetch tags lazily by stable item key and use session caching; DTO refresh identity must not retrigger
+  // requests.
   const item = parseGalleryItemKey(preview.key);
 
   useEffect(() => {
@@ -166,8 +153,6 @@ export const MapHoverCard = ({
       </HStack>
       <HStack alignItems="flex-start" gap="1.5">
         {videoDuration !== null ? (
-          // The gallery's own video mark, so a clip reads the same on the map
-          // as it does in the grid this click will land on.
           <Badge display="flex" flexShrink={0} fontVariantNumeric="tabular-nums" gap="1" size="xs" variant="solid">
             <PlayIcon aria-hidden="true" fill="currentColor" />
             {videoDuration}

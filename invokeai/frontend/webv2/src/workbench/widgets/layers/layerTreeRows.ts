@@ -63,10 +63,8 @@ const filteredIds = (
 };
 
 /**
- * The rows of every stack for a document, the set of expanded groups, and an optional name filter.
- * Rows come from the seam's semantic nodes, so a row keeps its identity while its node, its place,
- * its effective state, its sibling position and its expansion are unchanged; memoized row
- * components skip unaffected rows. Every node is visited once.
+ * Project each node once and preserve row identity while semantic state/placement/expansion remain unchanged so
+ * unaffected rows skip renders.
  */
 export const buildLayerStackRows = (
   stacks: CanvasStackForests,

@@ -20,25 +20,13 @@ import { Component, lazy, Suspense, useCallback, useMemo, useState, type ReactNo
 import { useTranslation } from 'react-i18next';
 
 /**
- * The widget frame's shared header actions menu. It hosts the universal
- * graph-bearing actions (`Set Source`, `View Graph`) and any extra entries the
- * widget's manifest contributes via `headerMenu` — one menu per widget, so
- * widgets extend the frame instead of stacking their own menus and toolbars.
- *
- * Floating is not among them: it is a mode toggle, so it renders as its own
- * header icon ({@link WidgetFloatButton}) opposite the floating window's dock
- * control rather than as a menu item.
+ * Combine graph actions and manifest headerMenu contributions in one menu. Floating has its own {@link
+ * WidgetFloatButton} mode toggle.
  */
 
 const GraphPreviewHost = lazy(() => import('./GraphPreviewHost'));
 
-/**
- * The preview is a dialog over the widget, not part of it: a throw inside it
- * (a failed chunk load, a compile edge case that escaped the source) surfaces
- * as a toast and drops the dialog, instead of climbing to the widget's
- * failure boundary and replacing the whole widget with a failure card. An
- * error unmounts the host, so the next open starts a fresh boundary.
- */
+/** Contain preview errors as a toast and closed dialog, preserving the widget. Reopening creates a fresh boundary. */
 class GraphPreviewBoundary extends Component<
   { children: ReactNode; onError: (error: Error) => void },
   { hasFailed: boolean }
@@ -116,9 +104,7 @@ export const WidgetActionsMenu = ({
 }) => {
   const { t } = useTranslation();
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
-  // Mount outlives `isPreviewOpen`: dropping the host the moment the dialog
-  // closes cancels its exit transition, so the preview blinked out of
-  // existence. The host reports when the transition is done instead.
+  // Keep the host until exit transition completion to avoid abrupt dialog removal.
   const [isPreviewMounted, setIsPreviewMounted] = useState(false);
   const label = resolveWidgetLabel(manifest, t);
   const surface = useMemo(

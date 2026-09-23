@@ -220,10 +220,7 @@ describe('parseOpenApiToTemplates', () => {
   });
 
   it('keeps internal-kind metadata and board inputs, but drops node attributes', () => {
-    // `metadata` and `board` are the only two internal-kind properties in the schema, and
-    // both are real inputs. Without `metadata` a bundled workflow's Core Metadata edge has
-    // no handle to land on and is dropped on re-save; without `board` the seven bundled
-    // workflows that expose it get an error in place of a Linear-tab control.
+    // Keep internal metadata and board inputs so saved edges and exposed Linear controls survive template parsing.
     const saveVideo = templates.save_video;
 
     expect(Object.keys(saveVideo?.inputs ?? {}).sort()).toEqual(['board', 'latents', 'metadata']);
@@ -376,10 +373,7 @@ describe('parseFieldType', () => {
 });
 
 describe('integer Literal enum templates', () => {
-  // The backend types these fields as `Literal[256, 512]`, so the template
-  // default has to stay numeric: pydantic rejects the string "512" with
-  // `literal_error`. Both shapes below are taken from shipped schemas, and
-  // they reach the default through different branches.
+  // Preserve numeric Literal defaults; backend validation rejects equivalent numeric strings.
   it('keeps a numeric Literal default numeric', () => {
     const parsed = parseOpenApiToTemplates({
       components: {
@@ -413,10 +407,7 @@ describe('integer Literal enum templates', () => {
     expect(parsed.max_seq_len_invocation?.inputs.max_seq_len?.default).toBe(512);
   });
 
-  // `flux_text_encoder.t5_max_seq_len` is `Optional[Literal[256, 512]]` and
-  // required, so its schema default is null and the template falls back to the
-  // first option instead of the `String(property.default)` branch above. Legacy
-  // resolves the same fallback to a number.
+  // Required nullable numeric literals fall back to a numeric first option, matching legacy parsing.
   it('keeps a nullable Literal fallback default numeric', () => {
     const parsed = parseOpenApiToTemplates({
       components: {

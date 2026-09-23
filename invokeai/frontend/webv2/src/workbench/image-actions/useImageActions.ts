@@ -81,9 +81,8 @@ import {
 } from './videoRecall';
 
 /**
- * Image operations shared by every surface that shows backend images (gallery
- * grid, preview, image context menus). Mutations patch the shared Gallery cache
- * when possible and explicitly invalidate the affected server state.
+ * Share backend image mutations across surfaces; patch Gallery caches optimistically and invalidate affected
+ * server state.
  */
 export interface ImageActions extends GalleryItemActions {
   /** Whether the generate widget's current model can accept another reference image. */
@@ -210,11 +209,8 @@ export const useImageActions = ({
 
       return project ? getProjectWidgetValues(project, 'video') : {};
     };
-    // A deleted item can be visible only through widget values — the
-    // `recentImages` overlay, or upscale's locked input — which the cache patch
-    // cannot restore. Snapshot those fields across every open project (images
-    // aren't project-scoped), diffed before/after so the restore applies the
-    // shared compare-and-swap rule rather than clobbering concurrent writes.
+    // Snapshot deletion-sensitive widget values across all projects; cache rollback cannot restore them. Diff
+    // before/after values for conflict-safe restoration.
     const applyGalleryItemRemoval = (itemKeys: GalleryItemKey[]): GalleryWidgetKeySnapshotEntry[] => {
       const before = captureGalleryWidgetKeyValues(queries.getSnapshot().projects);
 
@@ -226,11 +222,8 @@ export const useImageActions = ({
       const patches = selectRestorableGalleryWidgetPatches(entries, queries.getSnapshot().projects);
 
       for (const patch of patches) {
-        // `patchWidgetValues` is documented "not undoable" (workbenchState.ts);
-        // this restore works around that by re-applying the exact prior values
-        // as a forward patch, guarded by the CAS check above. `origin: 'system'`
-        // keeps it from tripping the auto-route side effects a user-driven
-        // widget patch would trigger.
+        // Restore exact prior values as a CAS-guarded system patch; widget patches are not undoable, and
+        // user-origin patches would auto-route.
         commands.widgets.patchValues(patch.widgetId, patch.values, patch.projectId, 'system');
       }
     };
@@ -289,9 +282,7 @@ export const useImageActions = ({
         await applyConfirmed(result, owner.signal);
       } catch (caught: unknown) {
         error = caught;
-        // The whole mutation failed — nothing was confirmed, so the optimistic
-        // apply must not stand. The trailing invalidation cannot be relied on
-        // here: whatever killed the mutation (offline) usually kills it too.
+        // Roll back total failures immediately; an offline mutation often means invalidation also fails.
         if (isAccountScopeCurrent(owner)) {
           rollback?.();
         }
@@ -319,11 +310,8 @@ export const useImageActions = ({
       reportMutationOutcome(action, requested.length, result, boardId);
     };
     const deleteItemsConfirmed = (items: GalleryItemRef[]): Promise<void> => {
-      // Optimistic: items vanish immediately. Capture the action context first
-      // (successor selection reasons about the pre-removal list) and keep a
-      // snapshot rollback. A partial failure leans on the trailing invalidation
-      // to restore overlay entries; a total failure cannot, so the widget
-      // snapshot restores them directly.
+      // Capture successor context before optimistic removal. Partial failures reconcile via invalidation; total
+      // failures restore widget snapshots directly.
       const deletionContext = getItemActionContext?.() ?? null;
       let orderedRefs: GalleryItemRef[] | null = null;
       const isDeletionContextCurrent = (): boolean => {
@@ -343,10 +331,8 @@ export const useImageActions = ({
         kind: 'delete',
         result: { failed: [], succeeded: items },
       });
-      // `rollbackCaches` is invoked from two independent places below (the
-      // partial-failure branch inside `applyConfirmed`, and the total-failure
-      // `rollback`): guard so an `applyConfirmed` that throws after already
-      // rolling back a partial failure can't undo the cache patch twice.
+      // Guard cache rollback shared by partial/total failures so an exception after partial restoration cannot
+      // roll it back twice.
       let cachesRolledBack = false;
       const rollbackCachesOnce = () => {
         if (cachesRolledBack) {
@@ -356,11 +342,7 @@ export const useImageActions = ({
         cachesRolledBack = true;
         rollbackCaches();
       };
-      // Once `applyConfirmed` starts applying a backend-confirmed result (some
-      // items really were deleted), nothing after that point may trigger a
-      // full rollback even if it throws — `onImagesDeleted` is a caller-
-      // supplied callback invoked after confirmation and can throw for
-      // reasons that have nothing to do with the mutation itself.
+      // Once backend-confirmed deletion starts applying, later callback failures must not restore deleted items.
       let confirmedApplied = false;
       const galleryWidgetSnapshot = applyGalleryItemRemoval(items.map(toGalleryItemKey));
 
@@ -464,11 +446,8 @@ export const useImageActions = ({
         ? requestDeletionConfirmation(items, () => deleteItemsConfirmed(items))
         : deleteItemsConfirmed(items);
     const moveItemsToBoard = (items: GalleryItemRef[], boardId: string): Promise<void> => {
-      // Optimistic: items leave the board view immediately, so the failure path
-      // rolls back wholesale and re-applies the confirmed subset, with the
-      // trailing invalidation reconciling whatever the rollback skipped as
-      // conflicted. The cache only knows items a list query fetched, so prior
-      // boards also come from the store, cache winning where both know.
+      // On partial move failure, restore then reapply confirmed items. Capture prior boards from cache and store,
+      // preferring cache; invalidation reconciles conflicts.
       const previousBoardIds = new Map<GalleryItemKey, string>(
         [...collectGalleryStoreKnownItemFields(queries.getSnapshot().projects, items)].map(([key, fields]) => [
           key,
@@ -485,9 +464,7 @@ export const useImageActions = ({
         kind: 'move',
         result: { failed: [], succeeded: items },
       });
-      // See the delete path's `cachesRolledBack` note: `rollbackCaches` is
-      // reachable both from the partial-failure branch below and from the
-      // total-failure `rollback`, so guard against undoing it twice.
+      // Partial and total failure paths share rollback; guard against applying it twice.
       let cachesRolledBack = false;
       const rollbackCachesOnce = () => {
         if (cachesRolledBack) {
@@ -497,11 +474,8 @@ export const useImageActions = ({
         cachesRolledBack = true;
         rollbackCaches();
       };
-      // The cache rollback is CAS-guarded per query, but this store patch is a
-      // separate write: a second move that painted the item onto another board
-      // while the first request hung must not be clobbered back. Restore only
-      // items still on the board *this* move painted, grouped by prior board so
-      // each group is one patch.
+      // Restore store boards only while they still match this move's optimistic board; group by prior board to
+      // preserve concurrent moves.
       const restorePreviousBoardIds = () => {
         const currentStoreBoardIds = collectGalleryStoreKnownItemFields(queries.getSnapshot().projects, items);
         const safeKeys = new Set(
@@ -567,13 +541,8 @@ export const useImageActions = ({
       gallery.patchItems(keys, { starred });
     };
     const setItemsStarred = (items: GalleryItemRef[], starred: boolean): Promise<void> => {
-      // Optimistic: paint the whole selection and put back only what the
-      // backend refuses. The listing and the starred strip partition on the
-      // flag, so a star moves items between cache windows; the cache side is
-      // therefore a snapshot/restore pair with its own CAS, like delete and
-      // move. The store overlay is a value flip, so it captures each item's
-      // actual prior flag up front — a blanket invert would wrongly flip
-      // items that already matched.
+      // Cache star changes move items between listing partitions and need snapshot/CAS rollback. Store restoration
+      // uses each actual prior flag, never blanket inversion.
       const previousStarred = new Map<GalleryItemKey, boolean>(
         [...collectGalleryStoreKnownItemFields(queries.getSnapshot().projects, items)].map(([key, fields]) => [
           key,
@@ -616,9 +585,8 @@ export const useImageActions = ({
         },
         mutate: (signal) => galleryItemOrganization.setStarred(items, starred, signal),
         requested: items,
-        // Total failure: the cache restores its snapshot; the store restores
-        // each item's actual prior flag, leaving items with no known prior as
-        // painted, and only where the painted value is still what is there.
+        // Restore known prior flags only where this action's painted value remains; cache rollback restores its
+        // own snapshot.
         rollback: () => {
           rollbackCachesOnce();
 
@@ -891,8 +859,7 @@ export const useImageActions = ({
           projectId,
         });
 
-        // The value patch auto-routes the invoke source (media/settings are
-        // intent-bearing keys); surfacing the widget is the caller-side touch.
+        // The value patch auto-routes invocation; the caller reveals the widget.
         if (isAccountScopeCurrent(owner) && didRecall && (!projectId || queries.isActiveProject(projectId))) {
           openWorkbenchWidget('video', { preferredRegions: ['left'] });
         }
@@ -912,8 +879,6 @@ export const useImageActions = ({
             return;
           }
 
-          // The widget hosts the editor, so it has to be on screen for the
-          // handoff to be visible.
           openWorkbenchWidget('generate', { preferredRegions: ['left'] });
           setPendingPromptTemplateDraft({ negativePrompt, positivePrompt });
         } catch (error: unknown) {

@@ -41,9 +41,7 @@ describe('shouldPreventHotkeyDefault', () => {
   });
 
   it('prevents the browser default for a matched binding with no explicit preventDefault', () => {
-    // Regression: widget hotkeys (e.g. canvas `mod+d`) are registered without a
-    // `preventDefault` flag; a claimed binding must still swallow the browser
-    // default (mod+d used to open the bookmark dialog).
+    // Claimed widget bindings must prevent browser defaults even without an explicit preventDefault flag.
     expect(shouldPreventHotkeyDefault(createHotkey({}))).toBe(true);
   });
 

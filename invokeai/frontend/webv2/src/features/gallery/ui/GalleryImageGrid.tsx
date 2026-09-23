@@ -63,11 +63,7 @@ let lastPageFollowedRevealToken = 0;
 
 const dragEventContainsFiles = (event: DragEvent): boolean => Array.from(event.dataTransfer.types).includes('Files');
 
-/**
- * The disclosure row above the starred strip, styled to match board rows.
- * "Show all" appears only while the board holds more starred items than the
- * strip shows; it switches the listing to the starred-only filter.
- */
+/** Show all appears only when starred items exceed the strip and activates the starred-only listing. */
 const GalleryStarredSectionHeader = ({
   isOpen,
   onShowAll,
@@ -140,10 +136,8 @@ const GalleryStarredSectionHeader = ({
 };
 
 /**
- * The pinned starred strip: bounded (three rows at most), so it renders as
- * plain rows above the virtualized listing rather than inside it. Its cells
- * sit between the in-progress tiles and the listing in the arrow-key
- * sequence, so the keys cross both seams.
+ * Render the bounded starred strip outside virtualization while preserving its place in cross-section keyboard
+ * navigation.
  */
 const GalleryStarredSection = ({
   cells,
@@ -200,11 +194,7 @@ const GalleryStarredSection = ({
   );
 };
 
-/**
- * The virtualized thumbnail grid. Column count comes from the measured
- * viewport width, so the grid is layout-blind: both shells render it the same
- * way and it simply fills whatever box it is handed.
- */
+/** Measure viewport width for columns so both layouts share the same grid. */
 export const GalleryImageGrid = () => {
   const { t } = useTranslation();
   const { actions, gallery, isWindowTruncated, itemActions, region, starredStrip } = useGalleryWidget();
@@ -256,11 +246,8 @@ export const GalleryImageGrid = () => {
     () => getGalleryStarredStripItems(starredStrip.items, columnCount),
     [columnCount, starredStrip.items]
   );
-  // The arrow keys' sections in visual order; a collapsed section has no
-  // tiles to land on, so it contributes none. A starred selection the strip
-  // does not show (beyond its three rows, or under a collapsed disclosure)
-  // still belongs to the strip section, so the keys step out of it instead
-  // of resetting — Preview places such a selection the same way.
+  // Exclude collapsed tiles from navigation, but retain hidden starred selections' section identity so arrows can
+  // step out.
   const isProgressOpen = showPendingItems && !progressSectionCollapsed;
   const navigationSections = useMemo((): GalleryNavigationEntry[][] => {
     const shownStripItems = isStarredOpen ? starredCells : [];
@@ -321,8 +308,6 @@ export const GalleryImageGrid = () => {
     shownCount: starredCells.length,
     tileSize: cellSizePx,
   });
-  // In progress and starred share one pinned block above the listing; the
-  // virtualizer scrolls beneath it.
   const pinnedHeight = getGalleryPinnedHeightPx(progressLayout.height, starredLayout.height);
   const virtualizer = useVirtualizer({
     count: rowCount,
@@ -337,10 +322,8 @@ export const GalleryImageGrid = () => {
     virtualizer.measure();
   });
 
-  // Deliberately unmemoized: the hotkey hook only ever calls this from inside
-  // an effect event, which always sees the latest render's closure, so a stable
-  // identity would buy nothing and pinning the mutable virtualizer into a
-  // dependency array defeats the compiler's own memoization.
+  // The hotkey callback reads current state when invoked; stabilizing its identity adds no value and interferes
+  // with compiler memoization.
   /** Returns whether the item had somewhere to scroll to — a collapsed strip has none. */
   const scrollToItemKey = (itemKey: GalleryItemKey): boolean => {
     const rowIndex = getGalleryGridRowIndexForItemKey(gallery.items, itemKey, columnCount);
@@ -375,22 +358,11 @@ export const GalleryImageGrid = () => {
     scrollToEntry,
   });
 
-  // Reveals from outside the grid (the image map's click-to-reveal) must land
-  // in view. This listens to the explicit reveal channel, NOT the selection:
-  // the selection also changes when a finished generation auto-selects its
-  // image, and scrolling on that would yank the grid out from under a
-  // browsing user — while re-clicking the already-selected map point changes
-  // no selection at all yet must still reveal. A reveal whose page is still
-  // loading stays pending until the item materializes (each row-model change
-  // retries), and is dropped as soon as some other selection supersedes it.
+  // Only explicit reveals scroll. Retry while the item loads; retire the request when another selection supersedes
+  // it.
   const revealRequest = useSyncExternalStore(subscribeGalleryRevealRequests, getGalleryRevealRequest);
   const pendingRevealRef = useRef<GalleryRevealRequest | null>(null);
-  // Seeded below any real token so a grid that mounts AFTER the request still
-  // honors it: the gallery is often opened (or swapped between its stacked and
-  // wide layouts, which remounts this component) in response to the very
-  // reveal that is outstanding. Staleness is judged by the selection guard
-  // below rather than by age — a request whose item is no longer the selection
-  // retires without scrolling.
+  // Honor requests preceding mount; selection mismatch, rather than request age, determines staleness.
   const consumedRevealTokenRef = useRef(0);
   const settlePendingReveal = useEffectEvent(() => {
     const pending = pendingRevealRef.current;
@@ -432,8 +404,6 @@ export const GalleryImageGrid = () => {
     }
   });
 
-  // Re-run on every change to what can be scrolled to — a page landing, the
-  // strip opening — so a pending reveal settles as soon as its item can.
   useEffect(() => {
     if (revealRequest && revealRequest.token !== consumedRevealTokenRef.current) {
       consumedRevealTokenRef.current = revealRequest.token;
@@ -473,13 +443,8 @@ export const GalleryImageGrid = () => {
     return () => observer.disconnect();
   }, [isEmpty, region]);
 
-  // The virtualizer only recomputes offsets lazily and only notifies
-  // subscribers when the visible index range changes, so a row-model change
-  // that keeps the range identical — collapsing the starred section, items
-  // moving between sections, a view switch swapping the item list — would
-  // paint the new rows at the previous rows' offsets. measure() recomputes
-  // from the current estimates and notifies unconditionally; running it as a
-  // layout effect keeps the stale frame from ever reaching the screen.
+  // Measure before paint after row-model changes: unchanged visible indices otherwise leave stale offsets despite
+  // new row estimates.
   useLayoutEffect(() => {
     measureVirtualizer();
   }, [rowHeightPx, rows, pinnedHeight]);

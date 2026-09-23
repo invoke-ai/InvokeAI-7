@@ -1,33 +1,18 @@
-/**
- * Shared vocabulary for the source rasterizers.
- *
- * Type-only module (no runtime), so it can be imported by both the dispatch
- * (`rasterizeSource`) and the per-source rasterizers without any import
- * cycle. Zero React, zero side effects.
- */
-
 import type { CanvasLayerSourceContract } from '@workbench/canvas-engine/contracts';
 import type { DecodedBitmapPool } from '@workbench/canvas-engine/render/decodedBitmapPool';
 import type { LayerCacheStore } from '@workbench/canvas-engine/render/layerCache';
 import type { RasterBackend, RasterSurface } from '@workbench/canvas-engine/render/raster';
 import type { Rect } from '@workbench/canvas-engine/types';
 
-/**
- * Resolves a persisted image asset (referenced by name in the document) to a
- * `Blob` for decoding. The DOM implementation (deriving a URL and fetching)
- * ships with the React shell task; the engine only depends on this seam so it
- * stays node-testable.
- */
+/** Resolves persisted image names to decode blobs; application networking stays behind this injectable seam. */
 export type ImageResolver = (imageName: string, signal?: AbortSignal) => Promise<Blob>;
 
 /** A text source whose family may be replaced by an injected custom-font alias. */
 export type RasterizeTextSource = Extract<CanvasLayerSourceContract, { type: 'text' }>;
 
 /**
- * The result of rasterizing a source: the surface holding its pixels plus the
- * content `rect` those pixels occupy in the layer's LOCAL coordinate space. For
- * origin-anchored sources (image / shape / text / gradient) the rect origin is
- * `(0, 0)`; a `paint` source places its bitmap at the persisted `offset`.
+ * Pixels and their layer-local content rect. Image/shape/text/gradient start at zero; paint uses its persisted
+ * offset.
  */
 export interface RasterizeResult {
   surface: RasterSurface;

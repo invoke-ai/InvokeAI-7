@@ -4,11 +4,7 @@ import { useTranslation } from 'react-i18next';
 
 import { AuthScreen } from './AuthScreen';
 
-/**
- * Fail-closed authentication availability boundary. This deliberately lives
- * outside the workbench shell so no account-owned provider mounts before a
- * retry has resolved the backend's auth mode and principal.
- */
+/** Keep account-owned providers unmounted until auth mode and principal resolve successfully. */
 export const AuthUnavailableScreen = ({ onRetry }: { onRetry: () => Promise<void> | void }) => {
   const { t } = useTranslation();
   const handleRetry = useCallback(() => {

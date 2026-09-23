@@ -142,9 +142,7 @@ export const WidgetLoadingFallback = ({ instance, presentation, region, widget }
     );
   }
 
-  // The center region's chrome floats above the work surface and is owned by
-  // `CenterArea`, so a loading center view is just the recessed surface — no
-  // header row to paint and then collapse when the implementation resolves.
+  // CenterArea owns persistent chrome; the loading view only paints the recessed surface.
   if (region === 'center') {
     return (
       <Flex

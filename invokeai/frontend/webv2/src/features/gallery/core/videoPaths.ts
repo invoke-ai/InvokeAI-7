@@ -1,9 +1,6 @@
 /**
- * Backend-relative video media paths, mirroring {@link ./imagePaths}.
- *
- * Both routes authenticate with the path-scoped media cookie rather than a bearer header,
- * because `<video>` and `<img>` cannot set request headers. The full route additionally
- * serves HTTP Range requests, which the `<video>` element issues on its own for seeking.
+ * Media cookies authenticate video routes because elements cannot set bearer headers. The full route supports
+ * native Range requests for seeking.
  */
 
 export const getGalleryVideoThumbnailPath = (videoName: string): string =>

@@ -13,8 +13,7 @@ import {
   REBALANCE_PRESET_DEFAULT_ID,
   serializeRebalanceWeights,
 } from '@features/generation/core/conditioningRebalance';
-// Imported by subpath rather than from the `@platform/ui` barrel: the barrel is at its
-// direct-importer budget, so each call site here would otherwise cost against it.
+// Use subpath imports to stay within the direct-importer budget.
 import { IconButton } from '@platform/ui/Button';
 import { ConfirmDialog } from '@platform/ui/ConfirmDialog';
 import { Field } from '@platform/ui/Field';
@@ -58,14 +57,7 @@ interface GenerateConditioningRebalanceFieldProps {
   onCommitImmediate: (patch: Partial<GenerateSettings>) => void;
 }
 
-/**
- * Krea-2's per-tap conditioning gains.
- *
- * The twelve bars weight the twelve Qwen3-VL encoder layers stacked into the
- * conditioning, shallow (the prompt's literal wording) to deep (its meaning and
- * composition); Gain scales the result. Collapsed, the row is a switch and a preview of
- * the current curve.
- */
+/** Twelve elementwise encoder gains, ordered shallow to deep. */
 export const GenerateConditioningRebalanceField = ({
   onCommit,
   onCommitImmediate,
@@ -73,8 +65,7 @@ export const GenerateConditioningRebalanceField = ({
 }: GenerateConditioningRebalanceFieldProps) => {
   const { t } = useTranslation();
   const { rebalancePresets } = useGenerationUi();
-  // The switch shares the Field.Root with the controls below; an explicit id keeps its
-  // label bound to its own hidden input rather than the Field's control id.
+  // Give sibling switches explicit IDs inside a shared Field.
   const switchInputId = useId();
 
   const [previewWeights, setPreviewWeights] = useState<number[] | null>(null);
@@ -140,8 +131,7 @@ export const GenerateConditioningRebalanceField = ({
     (value: string) => {
       setWeightsDraft(value);
 
-      // Only a vector the backend would accept reaches the settings; the draft holds
-      // everything in between so the field does not fight the cursor.
+      // Commit only valid vectors; intermediate text stays in the draft.
       if (parseRebalanceWeights(value) !== null) {
         onCommitImmediate({ krea2RebalanceWeights: value });
       }

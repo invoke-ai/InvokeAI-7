@@ -5,12 +5,7 @@ import type { GenerateSettings, PidMode } from './types';
 import { addEdge, addNode, createId } from './graphBuilder';
 import { getIsPidActive, getPidGenerationSize } from './pid';
 
-/**
- * PiD decode wiring: replaces a base's VAE decode with the caption-conditioned 4x
- * super-resolution decode.
- *
- * The geometry rules live in `pid.ts`; this module only builds nodes and edges.
- */
+/** pid.ts owns geometry; this wiring replaces VAE decode with caption-conditioned 4× output. */
 
 /** The per-base PiD decode node types. One per base whose builder wires PiD. */
 export const PID_DECODE_NODE_TYPES = {
@@ -24,11 +19,7 @@ export const PID_DECODE_NODE_TYPES = {
 
 export type PidDecodeNodeType = (typeof PID_DECODE_NODE_TYPES)[keyof typeof PID_DECODE_NODE_TYPES];
 
-/**
- * Decode nodes that read scaling constants off the VAE at runtime, so the VAE must be
- * wired even though PiD replaces the decode. FLUX.1 and SD3 use fixed constants and
- * take no `vae` input.
- */
+/** Retain VAE edges for runtime scaling constants even though PiD replaces decode. */
 const PID_DECODE_NODES_WITH_VAE_INPUT: ReadonlySet<string> = new Set([
   'flux2_pid_decode',
   'qwen_image_pid_decode',
@@ -39,13 +30,7 @@ const PID_DECODE_NODES_WITH_VAE_INPUT: ReadonlySet<string> = new Set([
 export const getPidDecodeNodeType = (base: string | null | undefined): PidDecodeNodeType | null =>
   base && base in PID_DECODE_NODE_TYPES ? PID_DECODE_NODE_TYPES[base as keyof typeof PID_DECODE_NODE_TYPES] : null;
 
-/**
- * Whether this build should decode through PiD: the mode is on, the base supports it,
- * and both required models are selected.
- *
- * Readiness rejects a half-configured PiD before compilation, so a false here after
- * readiness has passed means PiD is genuinely off rather than broken.
- */
+/** Readiness must reject incomplete PiD first; false is safe only after that validation. */
 export const shouldUsePidDecode = (
   settings: Pick<GenerateSettings, 'pidMode' | 'pidDecoderModel' | 'gemma2EncoderModel'>,
   base: string | null | undefined
@@ -84,14 +69,7 @@ interface AddPidDecodeArg {
   outputIsIntermediate: boolean;
 }
 
-/**
- * Builds the PiD decode chain and returns the terminal image node.
- *
- * The terminal node is always `canvas_output`: result hydration looks the output up by
- * that exact id (`resultNodeIds: ['canvas_output']`). In fit mode that is the
- * downscaling `img_resize`; in native mode PiD's 4x output is the result, so the decode
- * node itself takes the id.
- */
+/** Result hydration requires canvas_output on the terminal node: resize for fit, decode for native. */
 export const addPidDecode = ({
   graph,
   settings,
@@ -121,8 +99,7 @@ export const addPidDecode = ({
     type: 'pid_decoder_loader',
   });
   const pidDecode = addNode(graph, {
-    // In native mode this node IS the output, so it claims the id and the caller's
-    // intermediate flag; in fit mode the resize downstream is the output.
+    // In fit mode, move output ownership from decode to resize and mark decode intermediate.
     id: isNative ? 'canvas_output' : createId('pid_decode'),
     is_intermediate: isNative ? outputIsIntermediate : true,
     num_inference_steps: settings.pidSteps,
@@ -144,8 +121,7 @@ export const addPidDecode = ({
     return pidDecode;
   }
 
-  // Fit mode: PiD decoded 4x, so downscale back to the requested size. Keeps the result
-  // exactly the size the user asked for, which is what makes it compositing-safe.
+  // Fit returns the exact requested dimensions after 4× decode.
   const resize = addNode(graph, {
     height: settings.height,
     id: 'canvas_output',

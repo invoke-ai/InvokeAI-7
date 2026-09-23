@@ -1404,6 +1404,7 @@
         "typePhraseHere": "Type phrase here",
         "t5Encoder": "T5 Encoder",
         "gemma2Encoder": "Gemma-2 Encoder",
+        "gemma4Encoder": "Gemma-4 Encoder",
         "pidDecoder": "PiD Decoder",
         "pidMode": "PiD Decode",
         "pidModeOff": "Off",

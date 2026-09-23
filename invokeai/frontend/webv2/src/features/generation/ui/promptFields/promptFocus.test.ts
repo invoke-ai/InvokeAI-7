@@ -71,9 +71,7 @@ describe('getActiveTriggerQuery', () => {
     expect(query('a __col our')).toBeNull();
   });
 
-  // Embedding names routinely have spaces in them — `bad hands 5`, `Negative
-  // Hand` — so ending the attempt at the first space put a whole class of them
-  // out of reach inline, even though the filter would have matched.
+  // Embedding names may contain spaces, such as <my embedding>.
   it('reads on through spaces inside an unclosed angle bracket', () => {
     expect(query('a photo of <bad hands')).toEqual({ key: '<', query: 'bad hands', range: { end: 21, start: 11 } });
   });

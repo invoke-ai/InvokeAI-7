@@ -171,12 +171,8 @@ export class LayerMutationController {
     if (!o.history.canRetain(historyBytes)) {
       return { status: 'over-budget' };
     }
-    // Durable layer sources are immutable, so their one prepared cache is used
-    // only for the initial insertion and can be reconstructed from the source
-    // on redo. Live paint/mask pixels that have not reached a durable source
-    // retain a separate immutable history capture and therefore need a second
-    // live cache. This makes the common path one full-size copy while keeping
-    // dirty pixels exact and every allocation inside the raster reservation.
+    // Immutable durable sources rebuild caches on redo, needing one insertion copy. Unpersisted paint/mask pixels
+    // need separate history and live copies; both remain within the raster reservation.
     const reservation = o.reserve(reserveBytes);
     if (reservation.status === 'over-budget') {
       return { status: 'over-budget' };

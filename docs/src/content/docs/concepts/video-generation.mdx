@@ -1,15 +1,16 @@
 ---
 title: Video Generation
-description: Generate short videos — with audio on MiniMax H3 — from the Video panel. Covers the panel's controls, the Wan 2.2 and MiniMax H3 model families, and how to make longer videos.
+description: Generate short videos — with audio on MiniMax H3 and LTX-2 — from the Video panel. Covers the panel's controls, the Wan 2.2, MiniMax H3 and LTX-2 model families, and how to make longer videos.
 lastUpdated: 2026-09-19
 ---
 
 import { Card, CardGrid, Steps } from '@astrojs/starlight/components';
 
-InvokeAI generates short MP4 clips from a text prompt, one or two images, an existing video — or combinations of those — using two local model families:
+InvokeAI generates short MP4 clips from a text prompt, one or two images, an existing video — or combinations of those — using three local model families:
 
 * **Wan 2.2** — the Alibaba Wan-AI family: three transformer variants covering text-to-video, image-to-video, first-to-last-frame interpolation, and video extension, with a 4-step **Lightning** fast path.
 * **MiniMax H3** — two task transformers, **FL2VA** (first/last-frame-to-video-plus-audio) and **Ref2VA** (reference-to-video-plus-audio), that between them cover every conditioning mode *and* generate a synchronized stereo soundtrack, with a **Turbo** fast path. A [hybrid](#the-hybrid-fl2va-quality-with-ref2va-conditioning) runs the two together.
+* **LTX-2** — Lightricks' 22B dual-stream transformer: text-to-video and image-to-video, each with a jointly generated stereo soundtrack, in a **Dev** build you steer with guidance and a **Distilled** build that renders in eight fixed steps.
 
 The easiest way to use either is the **Video panel** described on this page — no node graph required. The [bundled video workflows](/features/video-workflows/) expose the same pipelines in the workflow editor for graph-level control.
 
@@ -29,7 +30,7 @@ Open the **Video** entry in the editor's left rail (next to Generate and Upscale
 
 <Steps>
 
-1. **Install a video model.** Open the **Model Manager** and install a starter bundle: **Wan 2.2 Text-to-Video**, **Wan 2.2 Image-to-Video**, or **MiniMax H3**. See [the models](#the-models) below for what each contains and what fits your hardware.
+1. **Install a video model.** Open the **Model Manager** and install a starter bundle: **Wan 2.2 Text-to-Video**, **Wan 2.2 Image-to-Video**, **MiniMax H3**, or **LTX-2**. See [the models](#the-models) below for what each contains and what fits your hardware.
 
 2. **Open the Video panel** and pick your model in the **Model** section. The panel reshapes itself around the selection — sections and fields appear, disappear, and re-range to match what the model can actually do.
 
@@ -37,7 +38,7 @@ Open the **Video** entry in the editor's left rail (next to Generate and Upscale
 
 4. **Optionally add conditioning media** — a first frame, a last frame, or an initial video to extend (see below).
 
-5. **Press Invoke.** The MP4 lands in the gallery and plays in the viewer. On MiniMax H3 it arrives with a generated audio track.
+5. **Press Invoke.** The MP4 lands in the gallery and plays in the viewer. On MiniMax H3 and LTX-2 it arrives with a generated audio track.
 
 </Steps>
 
@@ -45,14 +46,14 @@ Open the **Video** entry in the editor's left rail (next to Generate and Upscale
 
 There is no mode switch. The panel infers what to generate from **which inputs you have filled in**, and each model family supports a different set of combinations:
 
-| Inputs you set | What runs | Wan T2V‑A14B | Wan I2V‑A14B | Wan TI2V‑5B | MiniMax H3 |
-|---|---|---|---|---|---|
-| Prompt only | Text to video | ✓ | — | ✓ | ✓ |
-| First Frame | Video starts on your image | — | ✓ | ✓ | ✓ |
-| Last Frame only | Video ends on your image | — | — | — | ✓ |
-| First + Last Frame | Interpolates between the two | — | ✓ | — | ✓ |
-| Initial Video | Extends the clip | — | ✓ | ✓ | ✓ |
-| Initial Video + Last Frame | Extends toward a destination image | — | ✓ | — | ✓ |
+| Inputs you set | What runs | Wan T2V‑A14B | Wan I2V‑A14B | Wan TI2V‑5B | MiniMax H3 | LTX-2 |
+|---|---|---|---|---|---|---|
+| Prompt only | Text to video | ✓ | — | ✓ | ✓ | ✓ |
+| First Frame | Video starts on your image | — | ✓ | ✓ | ✓ | ✓ |
+| Last Frame only | Video ends on your image | — | — | — | ✓ | — |
+| First + Last Frame | Interpolates between the two | — | ✓ | — | ✓ | — |
+| Initial Video | Extends the clip | — | ✓ | ✓ | ✓ | — |
+| Initial Video + Last Frame | Extends toward a destination image | — | ✓ | — | ✓ | — |
 
 If you pick a model that can't run the current combination, the Invoke button tells you exactly why instead of failing mid-run.
 
@@ -62,6 +63,7 @@ The prompt toolbar carries the same helpers as the image Generate panel — temp
 
 * **Wan** — used only when CFG is greater than 1 (the field says so). With the Lightning fast path on (CFG 1), it is ignored by the graph.
 * **MiniMax H3** — hidden entirely. H3 is guidance-distilled and has no CFG, so a negative prompt has nothing to act on.
+* **LTX-2** — offered on the Dev build, where it is pre-filled with the release's own default list of artifact terms, and hidden on the Distilled build, which runs no guidance. Turning CFG down to 1 on Dev drops it from the graph, and the 12B prompt encode it would have cost.
 
 ### Start & End Images
 
@@ -226,9 +228,56 @@ MiniMax H3 is distributed under the **MiniMax H3 Community License**, which rest
 
 ---
 
+### LTX-2
+
+LTX-2 is Lightricks' 22B **dual-stream** transformer: picture and soundtrack are generated *together*, by the same model, at every denoising step — not dubbed on afterwards. It ships in two builds that share every other component:
+
+* **Dev** — the guided build. It samples a 30-step schedule and exposes four guidance controls (see below).
+* **Distilled** — guidance-distilled to a fixed **eight-step** schedule. It runs one model evaluation per step where Dev runs up to four, which makes it roughly fifteen times cheaper per clip. Guidance has no effect on it, so the panel hides those controls and shows the step count as fixed.
+
+What to know in practice:
+
+* **Frames are 8·n + 1** (the video VAE encodes the first frame alone, then groups of eight): 9 to 481, default 121 — five seconds at the default 24 fps. The slider stops at 241; the field accepts more for a deliberate long render, but cost grows linearly with the frame count.
+* **Frame rate is yours to set** (1–60 fps). It changes the clip's duration, and with it how much audio is generated — the two streams share one clock.
+* **Canvas presets pin the short edge**, with the long edge following your aspect ratio: 512p, 704p (default) and 768p render in one pass and snap to a multiple of 32; 1024p and 1536p are [two-stage](#two-stage-presets) and snap to 64, because the first pass runs at half of them.
+* **Image-to-video re-compresses your frame** as a single H.264 frame before encoding it. That is deliberate: the model was trained on frames that had been through a video codec, and a pristine PNG is far enough out of that distribution that the clip visibly drifts away from it over the first second.
+* **The negative prompt** only reaches the model through classifier-free guidance, so it is available on Dev and hidden on Distilled. It is pre-filled with the release's own default, a long list of artifact and audio-defect terms.
+
+#### Advanced guidance (Dev only)
+
+Beyond the usual **CFG**, LTX-2 exposes three more terms in a collapsed **Advanced guidance** section. Each one costs an extra model evaluation per step, so turning one off is a real saving:
+
+* **Audio CFG** (default 7) — how hard the soundtrack follows the prompt. The release guides audio far harder than picture.
+* **STG** (default 1) — spatio-temporal guidance. Steers away from a pass with one attention block skipped, which sharpens motion. 0 turns it off.
+* **Modality guidance** (default 3) — steers away from a pass with the audio/video cross-attention disabled, tightening how well the two streams agree. 1 turns it off.
+
+#### Two-stage presets
+
+The **1024p** and **1536p** target resolutions are *two-stage*. LTX-2 generates at half the canvas, doubles the latent with a dedicated x2 upscaler, then runs a second, shorter denoise over it. The upscaler alone produces a soft latent; the refine pass is what resolves it, so the output is larger without going soft. The soundtrack skips the upscaler, having no spatial extent, but is carried through the second pass so the two streams stay on one trajectory.
+
+The refine pass is the expensive half: it runs at four times the base pass's token count. Dev evaluates the model four times per step, so a Dev refine step costs four times a Distilled one — which is why the Dev refine runs a smaller step budget than its base pass rather than the same one. Expect minutes for Distilled at 1024p and hours for Dev at 1536p.
+
+A first frame is anchored on both passes, encoded once at each canvas. The refine pass re-noises every frame including the first, so an anchor that was only applied to the base pass would not survive into the output.
+
+#### Installing LTX-2
+
+The **LTX-2** starter bundle installs the working set:
+
+* **LTX-2.5 Dev Transformer (int8)** and **LTX-2.5 Distilled Transformer (int8)** (~18 GiB each) — single-file transformer builds. **One of these is the model you select in the Video panel**, and which one you pick decides the schedule.
+* **LTX-2.5 Components** — the video VAE, audio VAE, vocoder, text connectors and the x2 latent upscaler, which go in the panel's **Model components** slot. The upscaler is what the two-stage presets need; a hand-assembled components folder without it fails when the refine pass begins, after the first pass has already run.
+* **LTX-2.5 Text Encoder (Gemma-4 12B, int8)** — the Lightricks-tuned Gemma-4 text tower, which goes in the **Gemma-4 encoder** slot. No LTX-2 model carries text-encoder weights, so this one is required rather than an override.
+
+LTX-2 does not condition on the last hidden state of its text encoder the way most models do: it stacks the hidden states of *every* Gemma layer and runs them through a separate connector model. That is why the encoder is a large, separate download.
+
+Measured on a 48 GB card at 1248×704×121 frames, the int8 Dev transformer is resident at ~18 GiB and the denoise working set peaks at ~2.8 GiB, with all four guidance passes running. The Distilled build at the same size needs the same memory and about a fifteenth of the time.
+
+---
+
 ## Making longer videos
 
-Both families are trained on short clips — Wan on 81 frames (~5 s), H3 on up to 345 (~14 s). Asking for more frames in one generation pushes the temporal positional encoding out of distribution and coherence degrades. The way to go longer is to **extend**: generate a clip, then continue it, repeatedly.
+Every family is trained on short clips — Wan on 81 frames (~5 s), H3 on up to 345 (~14 s), LTX-2 on 121 (~5 s at 24 fps). Asking for more frames in one generation pushes the temporal positional encoding out of distribution and coherence degrades. The way to go longer is to **extend**: generate a clip, then continue it, repeatedly.
+
+Extension is available on Wan and MiniMax H3. LTX-2 has no extend mode yet, so a longer LTX-2 clip means asking for more frames and accepting the drift.
 
 ### From the Video panel
 

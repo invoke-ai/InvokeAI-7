@@ -29,11 +29,8 @@ interface InpaintMaskSettingsProps {
 }
 
 /**
- * Per-layer settings for a selected inpaint mask: fill colour + style and an
- * in-place mask invert. Noise and denoise limit are NOT here — they live as
- * child rows in the Layers tree, each opening its own dedicated Properties
- * editor (`MaskModifierSettings`). Fill edits go through the canvas undo stack
- * as prepared `patch-config` edits; invert is an engine pixel op.
+ * Properties owns fill/style and invert; noise/denoise modifiers have tree-child editors. Fill uses undoable
+ * config patches, invert uses engine pixels.
  */
 export const InpaintMaskSettings = ({ engine, layer }: InpaintMaskSettingsProps) => {
   const { t } = useTranslation();

@@ -43,11 +43,7 @@ const ProjectLibraryRefresh = () => {
   return null;
 };
 
-/**
- * "Open project…" from the tab bar: the saved projects that are not already
- * open as tabs, plus import. Selecting one hydrates its document from the
- * library and opens it in place — no navigation, the editor stays mounted.
- */
+/** Exclude open tabs; hydrate in place to avoid remounting the editor. */
 export const OpenProjectDialog = ({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) => {
   const projectIds = useWorkbenchSelector((snapshot) => snapshot.projects.map((project) => project.id), areArraysEqual);
   const { projects } = useWorkbenchCommands();

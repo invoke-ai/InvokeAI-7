@@ -73,9 +73,8 @@ export const QueueRuntimeAdapter = () => {
             assertAccountScopeCurrent(owner);
             const { galleryItemOrganization, isGalleryBoardAttachable } = await import('@features/gallery');
 
-            // Virtual destinations (date buckets, `generated`/`assets`) cannot hold
-            // attachments: the transport no-ops for them, which would otherwise read
-            // back as every video failing. The image path ignores this the same way.
+            // Skip virtual destinations: attachment transport no-ops would otherwise be reported as video
+            // failures.
             if (!isGalleryBoardAttachable(boardId)) {
               return;
             }
@@ -87,9 +86,7 @@ export const QueueRuntimeAdapter = () => {
               owner.signal
             );
             assertAccountScopeCurrent(owner);
-            // The video transport confirms per item and never throws on non-fatal errors;
-            // surface unconfirmed refs so the queue runtime can record the failure instead
-            // of leaving the videos silently in Uncategorized (e.g. board deleted mid-run).
+            // Report unconfirmed video attachments; transport does not throw non-fatal failures.
             if (result.failed.length > 0) {
               throw new Error(
                 `${result.failed.length} of ${videoNames.length} video(s) could not be added to the board.`
@@ -153,8 +150,6 @@ export const QueueRuntimeAdapter = () => {
         locks: createQueueRunLockPort(owner.storageSuffix),
         modelLoads: modelLoadActivitySink,
         nodeExecution: nodeExecutionStore,
-        // Closes the loop on a library-bound run: its final output becomes the
-        // workflow's cover image and stamps `last_run_at` on the record.
         workflowRuns: createWorkflowRunCaptureSink(),
       });
       runtime.start();

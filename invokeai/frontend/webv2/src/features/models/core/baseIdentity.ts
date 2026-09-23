@@ -16,6 +16,7 @@ export type ModelBaseColorPalette =
   | 'green'
   | 'ice'
   | 'lavender'
+  | 'mint'
   | 'orange'
   | 'periwinkle'
   | 'pink'
@@ -126,6 +127,12 @@ export const MODEL_BASES = {
     base: 'minimax-h3',
     label: 'MiniMax H3',
     colorPalette: 'coral',
+    description: 'Video architecture that generates video with synchronized audio.',
+  },
+  'ltx-2': {
+    base: 'ltx-2',
+    label: 'LTX-2',
+    colorPalette: 'mint',
     description: 'Video architecture that generates video with synchronized audio.',
   },
   any: {

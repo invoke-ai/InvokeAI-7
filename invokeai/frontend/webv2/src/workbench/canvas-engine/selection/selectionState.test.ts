@@ -71,8 +71,7 @@ describe('selectionState: mask building from a path', () => {
   it('no longer clamps bounds to the document rect (infinite plane); the mask is bounded to the path', () => {
     const { selection } = createHarness();
     selection.commit({ bounds: rectBounds(-10, -10, 200, 200), op: 'replace', path: fakePath('p') });
-    // Content-sized: the selection bounds are the path's own bounds, not clamped
-    // to the document. The mask surface is placed at that (negative) origin.
+    // Selection masks use path bounds, including negative origins, without document clamping.
     expect(selection.bounds()).toEqual(rectBounds(-10, -10, 200, 200));
     expect(selection.mask()?.rect).toEqual(rectBounds(-10, -10, 200, 200));
   });

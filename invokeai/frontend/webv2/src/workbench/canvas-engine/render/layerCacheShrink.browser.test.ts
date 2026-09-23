@@ -5,10 +5,8 @@ import { createDomRasterBackend } from '@workbench/canvas-engine/render/raster';
 import { describe, expect, it } from 'vitest';
 
 /**
- * `shrinkToRect` crops by blitting the surviving window with a NEGATIVE
- * `resizePreserving` offset, letting `drawImage` clip the rest. A sign slip would
- * keep the wrong pixels; a no-op blit would lose the layer entirely. The node tests
- * assert the arguments — these assert the pixels.
+ * Real pixels verify shrink's negative copy offset and clipping; wrong signs retain the wrong region and failed
+ * blits lose content.
  */
 
 const START: Rect = { height: 200, width: 200, x: 100, y: 100 };

@@ -1,5 +1,4 @@
 import type { LaunchpadIntentId } from '@workbench/launchpad/intents';
-import type { BuiltInLayoutPresetId } from '@workbench/layoutContracts';
 import type { AccountState, WorkbenchState } from '@workbench/projectContracts';
 import type { QueueRunJournal } from '@workbench/queue-integration/queueRunJournal';
 import type { WorkbenchPreferences } from '@workbench/settings/contracts';
@@ -8,29 +7,15 @@ import type { ProjectDraftStore } from './draftStore';
 
 import { getClientStateValue, setClientStateValue } from './api';
 
-/**
- * The per-user session blob in the client-state KV: which projects are open as tabs and which is
- * active, plus a legacy account snapshot. Settings live in `settings.ts` so Home can load them
- * without mounting the workbench provider.
- *
- * An `undefined` `openProjectIds` means "unknown — open every project", which is what the versions
- * predating the library/session split did, so old sessions migrate without visible change.
- */
+/** Session tabs are separate from settings; legacy undefined openProjectIds means unknown/open-all. */
 
 export const SESSION_STATE_KEY = 'webv2:workbench-account';
 
-/**
- * Search params understood by the /app route: `project` deep-links a library
- * project into the session; `new` opens the editor with a fresh draft, and
- * `intent` or `preset` says how that draft should be arranged (see
- * `launchpad/intents`). `preset` names the arrangement outright and wins over
- * the one an intent implies.
- */
+/** project opens a library project; new creates a draft whose intent picks the arrangement and source. */
 export interface WorkbenchSearch {
   new?: true;
   project?: string;
   intent?: LaunchpadIntentId;
-  preset?: BuiltInLayoutPresetId;
 }
 
 export interface WorkbenchSessionBlob {
@@ -163,11 +148,7 @@ const listDurableRecoveryProjectIds = async (): Promise<DurableRecoveryProjectId
   }
 };
 
-/**
- * Take a deleted project out of the saved session, which the `/app` guard and the Launchpad's
- * "open" grouping read. Best-effort and silent: the deletion has already happened, and failing to
- * tidy up after it is not a reason to say the project was not deleted.
- */
+/** Session cleanup is best-effort after committed deletion and cannot change its verdict. */
 export const pruneSessionProject = async (projectId: string, signal?: AbortSignal): Promise<void> => {
   try {
     const blob = await fetchSessionBlob(signal);

@@ -14,11 +14,7 @@ import { useTranslation } from 'react-i18next';
 import { getGalleryItemDragData, getGalleryItemDragId } from './galleryDnd';
 import { GalleryTileFrame } from './GalleryTileFrame';
 
-/**
- * Desaturation is the touch drag cue: the tile while dragged, or while a
- * sustained hold has armed the drag gate (`data-drag-armed`, set by the
- * hold-to-drag sensor). The portalled preview carries the same filter.
- */
+/** Desaturate armed and active touch drags, including the portalled preview. */
 const THUMBNAIL_DRAG_CSS = { filter: 'saturate(0)' } as const;
 const THUMBNAIL_ARMED_CSS = { '&[data-drag-armed=true]': { filter: 'saturate(0)' } } as const;
 
@@ -79,10 +75,7 @@ const GalleryThumbnail = ({
     id: getGalleryItemDragId(toGalleryItemRef(item), 'gallery-grid', dragScope),
   });
 
-  // The preview is portalled from where the tile started rather than moved in
-  // place: the grid scrolls inside `overflow: hidden` and its virtual rows carry
-  // their own transform, so a moved tile is clipped as soon as it leaves the
-  // grid — which is most of the way to any board.
+  // Portal the drag preview to escape the grid's overflow clipping and transformed virtual rows.
   const tileRef = useRef<HTMLDivElement | null>(null);
   const [dragOrigin, setDragOrigin] = useState<DOMRect | null>(null);
 
@@ -174,11 +167,7 @@ const GalleryThumbnail = ({
       item={item}
       opacity={isDragging ? 0.4 : undefined}
       role="listitem"
-      // Pan, don't drag: `none` would hand every touch-drag to the drag
-      // sensor before the browser could scroll the grid. Allowing the pan
-      // lets a moving finger scroll (the hold-to-drag sensor releases the
-      // gesture when the browser claims it); dragging still works after a
-      // sustained hold.
+      // Allow touch panning; the hold sensor yields to scrolling and arms drag only after a sustained hold.
       touchAction="pan-y"
       onContextMenu={handleContextMenu}
     >
@@ -248,10 +237,7 @@ const GalleryThumbnail = ({
   );
 };
 
-/**
- * Resolves the drag payload per item so the grid can hand down one stable
- * callback rather than an array prop that changes identity every render.
- */
+/** Resolve payloads per item so the grid passes one stable callback rather than recreated arrays. */
 export const GalleryThumbnailCell = ({
   getDragItems,
   item,

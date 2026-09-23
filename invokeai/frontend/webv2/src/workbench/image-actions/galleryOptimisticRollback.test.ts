@@ -13,12 +13,8 @@ import {
 } from './galleryOptimisticRollback';
 
 /**
- * Reducer-level coverage for the delete-rollback widget-store restore
- * mechanism (Task 7 review finding #6): exercises the real `workbenchState`
- * reducer end to end, rather than a mocked store, so the capture/diff/select
- * functions are proven against the actual `removeGalleryItems` and
- * `patchWidgetValues` contracts instead of a hand-rolled stand-in that could
- * silently drift from them.
+ * Exercise deletion rollback against the real reducer so capture/diff/restore follows actual removal and
+ * widget-patch contracts.
  */
 
 const galleryItem: GalleryItem = {
@@ -56,9 +52,7 @@ const getProject = (state: WorkbenchState, projectId: string): Project => {
   return project as Project;
 };
 
-/** Seeds a fresh project with `a.png` selected, compared, in the recent-image
- *  overlay, and locked as the upscale widget's input — everything
- *  `removeGalleryItemsFromAllProjects` can touch. */
+/** Seed a.png in selection, comparison, recent images, and locked upscale input to cover every deletion target. */
 const seedProjectWithItem = (): { projectId: string; state: WorkbenchState } => {
   let state = createInitialWorkbenchState();
   const projectId = state.activeProjectId;
@@ -209,8 +203,6 @@ describe('gallery optimistic rollback against the real reducer', () => {
     const restored = applyRestorePatches(claimed, patches);
     const videoValues = getProjectWidgetValues(getProject(restored, projectId), 'video');
 
-    // Restoring the first frame would recreate the forbidden
-    // first-frame+initial-video pair; the restore loses.
     expect(videoValues.firstFrameImage).toBeNull();
     expect(videoValues.sourceVideo).toEqual(sourceClip);
     // Unrelated fields still restore normally.
@@ -218,9 +210,7 @@ describe('gallery optimistic rollback against the real reducer', () => {
   });
 
   it('restores swept references even when an initial video occupies the panel (reference-extend pair)', () => {
-    // sourceVideo <-> references is a LEGAL pair on a Ref2VA reference-extend
-    // panel; treating them as rivals made a failed deletion permanently drop
-    // the reference the sweep removed.
+    // Ref2VA sourceVideo and references may coexist; rollback must restore both after failed deletion.
     const seeded = seedProjectWithItem();
     const projectId = seeded.projectId;
     const sourceClip = {

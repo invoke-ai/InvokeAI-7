@@ -63,10 +63,7 @@ export interface QueueEnqueueGenerateRequest extends QueueEnqueueRequestBase {
   seedBehaviour?: QueuePromptSeedBehaviour;
   seedNodeId: string;
   seedStep: QueueSeedStep;
-  /**
-   * Set only when replaying an item queued before seed modes: its `seedStep` is
-   * the mapped random toggle, and the expansion follows that version's rules.
-   */
+  /** Legacy recovery maps the old random toggle to seedStep and preserves its expansion rules. */
   legacySeedPlan?: true;
 }
 
@@ -87,11 +84,7 @@ export type QueueCompiledSubmission =
       workflow?: Record<string, unknown>;
       /** The seed inputs that vary between runs, expanded into one zipped batch group at send time. */
       seeds?: QueueWorkflowSeed[];
-      /**
-       * The library record this run's workflow was loaded from, when the project
-       * graph is bound to one. Stamped at compile time so a completed run can be
-       * attributed back to the library record even after the editor moved on.
-       */
+      /** Capture the bound library ID at compile time so completion attribution survives later editor changes. */
       libraryWorkflowId?: string;
     }
   | {
@@ -146,11 +139,7 @@ export interface QueueWorkflowRunCompletedEvent {
   queueItemId: string;
 }
 
-/**
- * Optional observer for completed library-bound workflow runs. The Queue owns
- * neither the workflow library nor the gallery, so the App composition root
- * supplies the implementation; a missing sink simply disables the notification.
- */
+/** App injects optional completed-library-run capture; Queue owns neither library nor gallery. */
 export interface QueueWorkflowRunSink {
   onWorkflowRunCompleted(event: QueueWorkflowRunCompletedEvent): void;
 }
@@ -279,16 +268,8 @@ export interface QueueFeatureCommands {
   resumeProcessor(): Promise<void>;
 }
 
-/**
- * The queue feature's backend seam. It owns both command transport and realtime
- * events so runtimes never assemble HTTP calls and socket subscriptions.
- */
-/**
- * The backend's preview snapshot (`ProgressPreviewDTO`): the fields of an
- * `invocation_progress` socket event a preview consumer reads. The coordinator
- * feeds it through the same handler as the socket event, where the revision
- * gate drops anything the live stream already delivered.
- */
+/** Own command transport and realtime events together so runtimes do not assemble HTTP/socket plumbing. */
+/** Feed preview snapshots through the socket handler's revision gate to reject frames already delivered live. */
 export interface QueueProgressPreviewPayload {
   queue_id: string;
   item_id: number;

@@ -21,11 +21,6 @@ import { DicesIcon, RotateCcwIcon } from 'lucide-react';
 import { useCallback, useMemo, useState, type ChangeEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 
-/**
- * One exposed node field, shared by the Linear UI's view mode and the form
- * builder: label (optionally editable), optional description, and the live
- * input — or a note when the field is driven by a graph connection.
- */
 /** Resolves a form element's node, field instance, and input template against the document. */
 export const useNodeFieldBinding = (element: NodeFieldFormElement, projectGraph: ProjectGraphState) => {
   const templates = useInvocationTemplatesSelector((snapshot) => snapshot.templates);
@@ -59,9 +54,7 @@ export const NodeFieldControl = ({
     element,
     projectGraph
   );
-  // While the label input is focused it edits a draft seeded from the
-  // *displayed* label, so an unset override starts from the template title
-  // instead of an empty box.
+  // Seed focused label drafts from displayed text, including template fallback.
   const [draftLabel, setDraftLabel] = useState<string | null>(null);
 
   const isConnected = getResolvedWorkflowEdges(projectGraph.nodes, projectGraph.edges).some(

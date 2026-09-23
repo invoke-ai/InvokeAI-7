@@ -85,8 +85,6 @@ describe('ScanResults install badge lifecycle', () => {
     expect(host.textContent).toContain('models.install');
     expect(host.textContent).not.toContain('models.installing');
 
-    // The install POST resolved: the queued job (backend-shaped source) lands
-    // in the installs store.
     await act(async () => {
       addInstallJob(queuedJob);
       await Promise.resolve();

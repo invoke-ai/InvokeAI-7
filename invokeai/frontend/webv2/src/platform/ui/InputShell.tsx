@@ -28,13 +28,7 @@ const focusInnerInput = (event: PointerEvent<HTMLDivElement>) => {
   }
 };
 
-/**
- * The themed input's chrome for composite fields whose focusable element lives
- * inside the frame — a transparent input under a rendered mirror, a query
- * chip. Metrics and states match `<Input size="xs">`, keyed on focus-within so
- * the frame responds to the inner control; `aria-invalid` on the shell drives
- * the invalid border like the input's own.
- */
+/** Composite input chrome follows inner focus via focus-within; put aria-invalid on the shell for its error border. */
 export const InputShell = ({ children, endElement, ref, startElement, ...boxProps }: InputShellProps) => (
   <Box
     ref={ref}
@@ -48,8 +42,7 @@ export const InputShell = ({ children, endElement, ref, startElement, ...boxProp
     gap="1.5"
     h="7"
     minW="0"
-    // Trailing icon buttons carry their own inset; full end padding pushes
-    // them visibly further from the border than the leading glyph sits.
+    // Trailing buttons own their inset; omit duplicate end padding.
     pe={endElement ? '1' : '2'}
     ps="2"
     textStyle="xs"

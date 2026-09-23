@@ -126,8 +126,7 @@ export const createWorkbenchPersistenceRuntime = ({
       return;
     }
 
-    // Staleness is read before anything is applied, because applying is itself an edit: assigning
-    // a board dispatches through the reducer and bumps the generation this check compares against.
+    // Check staleness before applying board assignment, which itself advances the compared generation.
     const isStale = isStaleSave(revision, saveGeneration, requireCurrentRevision);
 
     // Board identity is a server fact and remains safe to apply when this save is stale.

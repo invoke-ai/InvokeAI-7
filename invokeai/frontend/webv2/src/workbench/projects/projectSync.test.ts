@@ -251,11 +251,7 @@ describe('renameProject', () => {
   });
 });
 
-/**
- * SQLite owns which board belongs to which project; the document only caches it. This is the one
- * place that writes that cache, so every path — hydration, create, import, duplicate, fork —
- * agrees on what "the project's board" means.
- */
+/** Synchronize the document's board cache from server-authoritative IDs. */
 describe('applyAuthoritativeProjectBoard', () => {
   const galleryDocument = (values: Record<string, unknown>): Record<string, unknown> => ({
     widgetInstances: {

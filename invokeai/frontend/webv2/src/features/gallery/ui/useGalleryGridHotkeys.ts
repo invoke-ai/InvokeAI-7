@@ -26,11 +26,8 @@ const GALLERY_HOTKEYS = [
 ] as const satisfies readonly (readonly [string, string, GalleryNavigationDirection | null, readonly string[]])[];
 
 /**
- * Registers the grid's commands and their default keys.
- *
- * Handlers run through `useEffectEvent` so registration depends only on the
- * runtime and the translator: re-registering every command on each selection
- * change would churn the palette and the hotkey map on every click.
+ * Read current handler state without re-registering commands on selection changes, avoiding palette and hotkey
+ * churn.
  */
 export const useGalleryGridHotkeys = ({
   actionSelectionRefs,

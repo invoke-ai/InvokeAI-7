@@ -1,17 +1,6 @@
 /**
- * The engine registry: one {@link CanvasEngine} per project, shared by the
- * canvas and layers widgets (and any other surface that needs the same live
- * document/pixels).
- *
- * Acquisition is reference-counted: `getOrCreateEngine` hands out (or creates)
- * the instance and bumps the count; `releaseEngine` drops it. When the count
- * reaches zero the engine is not disposed immediately — a grace-period timer
- * runs first, so a quick unmount/remount (route change, widget re-layout)
- * re-acquires the same warm instance instead of paying to rebuild it. A
- * re-acquire cancels the pending disposal. The timer is injectable so tests can
- * drive it deterministically.
- *
- * Zero React, zero import-time side effects.
+ * Share one engine per project through reference-counted leases. Delay disposal after the last release;
+ * reacquisition cancels it so quick remounts reuse the warm engine.
  */
 
 import type { CanvasEngine as PublicCanvasEngine } from '@workbench/canvas-engine/api';

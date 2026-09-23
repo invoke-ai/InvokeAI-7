@@ -2,12 +2,6 @@ import { describe, expect, it } from 'vitest';
 
 import { collectLiveAssetRefs, remapAssetRefs, selectCoverImageName, stripInstallationState } from './projectAssets';
 
-/**
- * The walker's contract, stated as documents rather than as paths: what an
- * archive must bundle, what it must leave behind, which kind each name is, and
- * what has to be rewritten when the server hands back a different name.
- */
-
 const imageRef = (imageName: string) => ({ height: 512, imageName, width: 512 });
 
 const imageLayer = (id: string, imageName: string) => ({
@@ -119,10 +113,7 @@ describe('collectLiveAssetRefs', () => {
     expect(refs.videos).toEqual(new Set());
   });
 
-  /**
-   * `VideoField { video_name }` reaches `projectGraph` through an imported
-   * workflow. It is a separate namespace from images and must not be conflated.
-   */
+  /** Video and image references have separate namespaces, even with identical names. */
   it('collects a graph node video as a video, never as an image', () => {
     const refs = collectLiveAssetRefs(
       projectDocument({
@@ -149,18 +140,8 @@ describe('collectLiveAssetRefs', () => {
     expect(refs.videos).toEqual(new Set(['clip.mp4']));
   });
 
-  /**
-   * The gallery selection is a pointer into per-install gallery content, not
-   * something the document renders, so neither kind is bundled. The second
-   * assertion is the regression guard: the exclusion is by key, so it survives
-   * `GalleryItem` spelling its name field the same way the canvas does.
-   */
-  /**
-   * `compareImage` is a `GeneratedImageContract`, so it carries `imageName` and would otherwise be
-   * collected. A comparison left open is not project content. The last row guards the exclusion
-   * against `selectedImage` starting to spell its name `imageName`, which no collector key matches
-   * today only by accident.
-   */
+  /** Exclude selection by parent key regardless of media-name spelling. */
+  /** Exclude compare/selection references independently of recognized imageName keys. */
   it.each([
     [
       'the selection, of either kind',
@@ -187,12 +168,7 @@ describe('collectLiveAssetRefs', () => {
   });
 });
 
-/**
- * Not bundling the selection is only half of leaving it behind. A reference
- * that is skipped by the collector but left in the document still travels —
- * broken, and invisible to the restore pass that would otherwise report it as
- * dangling.
- */
+/** Strip skipped selection references so unbundled names cannot travel broken and unreported. */
 describe('stripInstallationState', () => {
   it('drops every selection key at any depth', () => {
     const stripped = stripInstallationState({
@@ -233,10 +209,7 @@ describe('stripInstallationState', () => {
     });
   });
 
-  /**
-   * A board id means nothing on the machine a project arrives at, and the one
-   * naming the project's own board is a cache the server overwrites anyway.
-   */
+  /** Gallery board IDs are installation-specific; hydration replaces them with server-authoritative IDs. */
   it('drops the gallery board ids from both the current and legacy widget shapes', () => {
     const stripped = stripInstallationState({
       widgetInstances: {
@@ -254,11 +227,7 @@ describe('stripInstallationState', () => {
     expect(JSON.stringify(stripped)).toContain('galleryView');
   });
 
-  /**
-   * A URL is built around a media name and a server. The name is remapped by a transfer; the URL is
-   * not — so a cached one keeps resolving, to the *source* project's picture, on a document that no
-   * longer references that media at all.
-   */
+  /** Invalidate cached URLs when transfer changes names or server roots. */
   it('blanks the cached media URLs rather than dropping them', () => {
     const stripped = stripInstallationState({
       widgetInstances: {
@@ -289,18 +258,13 @@ describe('stripInstallationState', () => {
       ] as { state: { values: { recentImages: Record<string, unknown>[] } } }
     ).state.values.recentImages;
 
-    // Blanked, not removed: `getBoundedRecentImages` requires both to be strings and silently drops
-    // any entry missing one, so deleting the keys would discard the whole recents overlay.
+    // Preserve URL keys as blank strings so recents entries survive.
     expect(recent).toMatchObject({ imageName: 'recent.png', imageUrl: '', thumbnailUrl: '' });
     expect(Object.keys(recent!)).toContain('thumbnailUrl');
     expect(JSON.stringify(stripped)).not.toContain('source-install');
   });
 
-  /**
-   * Subtrees with nothing to change keep their identity. The last row matters most: only the
-   * gallery widget's own two keys are installation state, so a board named by a workflow node is an
-   * authored input that has to survive the round trip.
-   */
+  /** Preserve unchanged identity and authored workflow board inputs. */
   it.each([
     ['no selection', { canvas: { document: { stacks: { raster: [imageLayer('l1', 'a.png')] } } }, id: 'p1' }],
     [

@@ -17,12 +17,7 @@ export type AddNodeConnectionFilter =
       targetType: FieldType | null;
     };
 
-/**
- * Session-lived UI coordination for the workflow widget. Menu items live
- * inside the shared widget actions menu while their dialogs and the import
- * file input live in the always-mounted header actions — this store is the
- * bridge between the two.
- */
+/** Bridge transient menu actions to always-mounted workflow dialogs and file input through session UI state. */
 
 export interface WorkflowUiSnapshot {
   addNodeConnection: AddNodeConnectionFilter | null;

@@ -103,8 +103,6 @@ describe('wildcard import dialog', () => {
     expect(onConfirm).toHaveBeenCalledWith({ colours: 'skip', moods: 'replace' });
   });
 
-  // A count that said "3 imported" while quietly dropping the fourth would be
-  // the worst version of this dialog.
   it('names what it cannot import, and why', async () => {
     await renderDialog();
 

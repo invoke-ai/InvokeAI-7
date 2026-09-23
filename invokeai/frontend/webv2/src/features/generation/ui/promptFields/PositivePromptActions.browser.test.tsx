@@ -84,16 +84,13 @@ describe('PromptTriggerPopover', () => {
       throw new Error('prompt-trigger empty state did not render');
     }
 
-    // With nothing to search or scroll, the popover hugs its empty state: no
-    // disabled search input, no fixed-height list region holding space open.
     expect(document.querySelector('[aria-label="Prompt trigger options"]')).toBeNull();
     expect(document.querySelector('input')).toBeNull();
 
     const messageBounds = message.getBoundingClientRect();
     const actionBounds = action.getBoundingClientRect();
 
-    // The hover pill's edge is what reads as the button's edge, so the box —
-    // not the padded text — lines up with the copy.
+    // Measure the hover button box, not padded text, for alignment.
     expect(Math.abs(messageBounds.left - actionBounds.left)).toBeLessThanOrEqual(1);
     // One `2.5` stack step, the same rhythm as the image-to-prompt popover.
     expect(actionBounds.top - messageBounds.bottom).toBeLessThanOrEqual(12);

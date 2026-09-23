@@ -20,11 +20,7 @@ const readStored = (): SelectFamilyTool => {
   }
 };
 
-/**
- * Which selection tool the strip's Select family slot stands for right now —
- * the last one used, remembered per user, so the slot's plain click restores
- * the tool the user actually works with.
- */
+/** Remember the user's last selection subtool so a plain family-slot click restores it. */
 const store = createExternalStore<{ tool: SelectFamilyTool }>({ tool: readStored() });
 
 export const recordSelectFamilyTool = (tool: SelectFamilyTool): void => {

@@ -27,11 +27,7 @@ export const formatModelCacheBytes = (bytes: number | null | undefined): string 
   return `${unitIndex === 0 ? value : value.toFixed(1)} ${BYTE_UNITS[unitIndex]}`;
 };
 
-/**
- * RAM/VRAM model-cache statistics for the Queue widget's footer. Pull-based:
- * the backend exposes `GET /api/v2/models/stats` (no socket events for cache
- * stats), so we refresh on mount, after a model loads, and after a clear.
- */
+/** Cache statistics have no socket stream; refresh on mount, model load, and clear. */
 
 export interface ModelCacheStats {
   hits: number;

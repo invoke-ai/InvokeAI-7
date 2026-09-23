@@ -70,8 +70,7 @@ describe('custom node packs store', () => {
     await store.refreshCustomNodePacks();
     await store.refreshCustomNodePacks();
 
-    // Contract pinned for the maintenance menu's explicit-refresh surfacing:
-    // the stale list keeps rendering, the error waits in the snapshot.
+    // Retain loaded packs during refetch failure and expose the error in the snapshot.
     expect(store.getCustomNodesSnapshot()).toMatchObject({ error: 'outage', status: 'loaded' });
     expect(store.getCustomNodesSnapshot().nodePacks.map((candidate) => candidate.name)).toEqual(['pack-a']);
   });

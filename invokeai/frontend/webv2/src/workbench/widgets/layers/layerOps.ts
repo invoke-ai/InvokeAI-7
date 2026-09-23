@@ -1,8 +1,3 @@
-/**
- * Shared helpers for the layers panel: id minting, the paint-layer factory, the
- * blend-mode list, merge-down eligibility, and guarded live previews.
- */
-
 import type {
   CanvasAdjustmentEntry,
   CanvasBlendMode,
@@ -40,11 +35,8 @@ type RegionalGuidanceConfigPatch = {
   referenceImages?: CanvasRegionalGuidanceLayerContract['referenceImages'];
 };
 /**
- * Re-exported so existing imports of `isMergeableRasterLayer` from this module
- * keep working; the canonical definition lives in the engine's `document/sources`
- * (the single source of truth the engine's own `mergeLayerDown` guard uses too —
- * see the finding this fixed: the engine used to gate on the broader
- * `isRenderableLayer`, which let a mask merge-down corrupt data).
+ * Re-export the engine's canonical mergeability predicate so UI and engine exclude unsafe mask merges
+ * consistently.
  */
 export { isMergeableRasterLayer };
 
@@ -84,11 +76,7 @@ export const createEmptyPaintLayer = (name: string, id: string = createLayerId()
   type: 'raster',
 });
 
-/**
- * Legacy-default inpaint mask fill: a diagonal hatch (legacy's
- * `getInpaintMaskState` default `style: 'diagonal'`) in the first cycled mask
- * fill colour (legacy `rgb(224,117,117)`). Multiple inpaint masks are allowed.
- */
+/** Use the legacy diagonal inpaint hatch and first fill color; multiple masks are allowed. */
 export const DEFAULT_INPAINT_MASK_FILL = { color: '#e07575', style: 'diagonal' } as const;
 
 /** The next free "Inpaint Mask N" name given the existing layer names (N ≥ 1, first gap). */
@@ -142,11 +130,7 @@ export const createInpaintMaskLayer = (name: string, id: string = createLayerId(
   type: 'inpaint_mask',
 });
 
-/**
- * Legacy's regional-guidance mask fill palette (`DEFAULT_RG_MASK_FILL_COLORS`),
- * as hex. New regions cycle through these so overlapping regions stay visually
- * distinct.
- */
+/** Cycle legacy regional fill colors to distinguish overlaps. */
 export const REGIONAL_GUIDANCE_FILL_COLORS: readonly string[] = [
   '#799ddb',
   '#83d683',
@@ -158,13 +142,8 @@ export const REGIONAL_GUIDANCE_FILL_COLORS: readonly string[] = [
 ];
 
 /**
- * The next cycled regional-guidance fill colour, derived purely from the document
- * (the count of existing regional-guidance layers) rather than session-global
- * state. Legacy's cycler was seeded at index 0 and pre-incremented, so the first
- * new region (0 existing) gets index 1 (`#83d683`, green); each subsequent region
- * advances by one, wrapping modulo the palette length. Being a pure function of
- * the document, colours no longer depend on session history or leak across
- * projects.
+ * Derive colors from document region count with legacy pre-increment ordering: the first region uses palette index
+ * 1. Avoid session-global cross-project state.
  */
 export const nextRegionalGuidanceFillColor = (existingRegionalGuidanceCount: number): string =>
   REGIONAL_GUIDANCE_FILL_COLORS[(existingRegionalGuidanceCount + 1) % REGIONAL_GUIDANCE_FILL_COLORS.length];
@@ -188,13 +167,6 @@ export const nextRegionalGuidanceName = (existingNames: readonly string[]): stri
   return `Regional Guidance ${n}`;
 };
 
-/**
- * Builds an empty regional-guidance layer with legacy defaults: a solid fill in
- * the next cycled palette colour (derived from `existingRegionalGuidanceCount`,
- * the number of regional-guidance layers already in the document), opacity 0.5,
- * no prompts, autoNegative off, and no reference images (no mask bitmap yet — the
- * user paints the region).
- */
 export const createRegionalGuidanceLayer = (
   name: string,
   existingRegionalGuidanceCount: number,
@@ -276,13 +248,8 @@ export const createIdentityAdjustment = (type: CanvasAdjustmentEntry['type']): C
 };
 
 /**
- * A fresh regional reference image, minting the config kind the region's base can
- * actually consume: FLUX regions use FLUX Redux (the only kind resolved for FLUX
- * in `resolveRegionalReferenceImages`), everything else uses an IP-Adapter (legacy
- * `initialRegionalGuidanceIPAdapter`). The model is chosen by the user; the image
- * is assigned via drop/upload. Shared by the layer context menu's "Add reference
- * image" action and the header add-layer menu's "Regional Reference Image" item,
- * so both mint the same shape.
+ * Create shared regional-reference defaults: FLUX uses Redux, other bases IP-Adapter. Users choose models and
+ * assign images via drop/upload.
  */
 export const createRegionalReferenceImage = (
   base: string | null,
@@ -314,12 +281,6 @@ export const createRegionalReferenceImage = (
 export const canAddRegionalReferenceImage = (base: string | null): boolean =>
   base === null || Boolean(getRegionalGuidanceSupport(base)?.referenceImages);
 
-/**
- * Builds a regional-guidance layer pre-seeded with ONE empty reference image
- * (legacy's "regional guidance with a reference image" add-layer path). Identical
- * to `createRegionalGuidanceLayer` except the region starts with a single ref-image
- * slot the user then assigns a model + image to via the region's settings popover.
- */
 export const createRegionalGuidanceLayerWithRefImage = (
   name: string,
   existingRegionalGuidanceCount: number,
@@ -330,12 +291,6 @@ export const createRegionalGuidanceLayerWithRefImage = (
   referenceImages: [createRegionalReferenceImage(base)],
 });
 
-/**
- * The legacy-default control adapter for a freshly created control layer
- * (`features/controlLayers/store/util.ts` `initialControlNet`): a ControlNet with
- * weight 0.75, an active range of the first 75% of steps, `balanced` control mode,
- * and no model selected yet.
- */
 export { CONTROL_ADAPTER_DEFAULTS };
 
 export const CONTROL_WEIGHT_BOUNDS = {
@@ -367,12 +322,6 @@ export const nextControlLayerName = (existingNames: readonly string[]): string =
   return `Control Layer ${n}`;
 };
 
-/**
- * Builds an empty control layer with the legacy-default ControlNet adapter and
- * transparency effect ON (legacy `withTransparencyEffect: true`). No source /
- * filter yet — the user paints or drops an image, then optionally previews a
- * filter.
- */
 export const createControlLayer = (
   name: string,
   id: string = createLayerId(),
@@ -425,12 +374,7 @@ export const getRegionalGuidanceAutoNegativePatch = (
   layer: CanvasRegionalGuidanceLayerContract
 ): RegionalGuidanceConfigPatch => ({ autoNegative: !layer.autoNegative, layerType: 'regional_guidance' });
 
-/**
- * True when `layer` can be converted to a control layer (and vice-versa): only a
- * raster layer with a rasterizable image/paint source, or a control layer,
- * qualifies — parametric raster sources (shape/text/gradient) and mask layers do
- * not (legacy only offers raster↔control conversion for pixel-backed layers).
- */
+/** Allow raster/control conversion only for pixel-backed image/paint sources, excluding parametric and mask layers. */
 export const canConvertRasterControl = (layer: CanvasLayerContract): boolean => {
   if (layer.type === 'control') {
     return true;
@@ -609,10 +553,8 @@ export const copyRegionalGuidanceToInpaintMask = (
 });
 
 /**
- * Converts a raster layer to a control layer (default adapter, transparency on)
- * or a control layer back to a raster layer, preserving the pixel source, id,
- * name, transform, and base props. Returns `null` when the layer cannot convert
- * (parametric/mask sources) or already has the target type.
+ * Convert raster/control types while preserving source, identity, transform, and base properties; reject
+ * unsupported or unchanged targets.
  */
 export const convertRasterControlLayer = (
   layer: CanvasLayerContract,

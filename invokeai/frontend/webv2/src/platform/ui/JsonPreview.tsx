@@ -6,21 +6,20 @@ import { IconButton } from './Button';
 import { toaster } from './toaster';
 import { useScrollAreaPhantomHeal } from './useScrollAreaPhantomHeal';
 
-/**
- * The workbench's standard JSON preview: a monospace block with a copy button
- * that owns its scrolling in both axes — long strings scroll horizontally
- * instead of stretching the surrounding layout. Pass `value` to serialize, or
- * `text` when the JSON string already exists (an export payload that must be
- * copied byte-for-byte). Defaults to a bounded height; pass `maxH` (or wrap in
- * a flex parent and pass `maxH="100%"`) to control it.
- */
+/** Pass text for byte-preserving copy, or value to serialize. Owns both scroll axes; maxH controls the bound. */
 export const JsonPreview = ({
+  copyFailedLabel = 'Failed to copy JSON',
+  copyLabel = 'Copy JSON',
   h,
   label = 'JSON preview',
   maxH = '24rem',
   text,
   value,
 }: {
+  /** Localized failure toast title. */
+  copyFailedLabel?: string;
+  /** Localized accessible name for the copy control. */
+  copyLabel?: string;
   h?: string;
   /** Accessible name for the scroll viewport. */
   label?: string;
@@ -56,8 +55,8 @@ export const JsonPreview = ({
 
         copyResetTimerRef.current = setTimeout(() => setHasCopied(false), 1500);
       })
-      .catch(() => toaster.create({ title: 'Failed to copy JSON', type: 'error' }));
-  }, [json]);
+      .catch(() => toaster.create({ title: copyFailedLabel, type: 'error' }));
+  }, [copyFailedLabel, json]);
 
   return (
     <Box
@@ -74,12 +73,12 @@ export const JsonPreview = ({
       w="full"
     >
       <IconButton
-        aria-label="Copy JSON"
+        aria-label={copyLabel}
         bg="bg.muted"
         position="absolute"
         right="1.5"
         size="2xs"
-        title="Copy JSON"
+        title={copyLabel}
         top="1.5"
         variant="ghost"
         zIndex="1"

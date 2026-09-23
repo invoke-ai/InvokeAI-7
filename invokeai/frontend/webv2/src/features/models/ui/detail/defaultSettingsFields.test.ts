@@ -12,8 +12,7 @@ const fieldKeys = (candidate: Pick<ModelConfig, 'base' | 'type'>): string[] =>
 
 describe('supportsFp8Storage', () => {
   it('offers the toggle for main models', () => {
-    // Z-Image included: the backend casts it, and FP8 checkpoints get the setting when installed, so
-    // hiding the row would leave a setting nobody can see or turn off.
+    // Expose Z-Image FP8 defaults so installed settings can be inspected and disabled.
     for (const base of ['sdxl', 'flux', 'krea-2', 'qwen-image', 'wan', 'ideogram-4', 'z-image']) {
       expect(supportsFp8Storage(model(base, 'main'))).toBe(true);
     }

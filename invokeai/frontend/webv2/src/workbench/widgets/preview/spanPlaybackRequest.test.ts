@@ -95,8 +95,7 @@ describe('video span playback state', () => {
     expect(getVideoSpanPlaybackState()).toMatchObject({ isPlaying: true, token: 1 });
     expect(listener).toHaveBeenCalledTimes(1);
 
-    // The player republishes from every play/pause handler and from the request itself;
-    // a report identical to the one standing is not a change a subscriber should render.
+    // Deduplicate identical playback reports so repeated handlers do not rerender subscribers.
     publishVideoSpanPlaybackState({ isPlaying: true, pause, token: 1 });
     expect(listener).toHaveBeenCalledTimes(1);
 

@@ -185,9 +185,7 @@ export const Combobox = ({
       <Portal>
         <ChakraCombobox.Positioner>
           <ChakraCombobox.Content>
-            {/* The list is its own scroll container (ark scrolls it to keep the
-                highlighted option in view); a thin always-visible scrollbar
-                makes the overflow legible instead of looking cut off. */}
+            {/* Keep this as Ark's scroll container so keyboard highlight remains visible. */}
             <ChakraCombobox.List
               css={LIST_SCROLL_CSS}
               maxH="16rem"

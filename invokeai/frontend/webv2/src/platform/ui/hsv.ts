@@ -1,12 +1,4 @@
-/**
- * HSV math for the wheel-and-triangle color picker: RGB↔HSV conversion with
- * sticky hue/saturation for the hue-agnostic greys, and the hue-ring/triangle
- * geometry mapping. Pure functions, no React, no Chakra.
- *
- * The triangle follows the classic GIMP/Krita layout: it points at the hue on
- * the ring, with the pure hue, white, and black at its corners; a color's
- * position is the barycentric blend `hue·(s·v) + white·(v·(1−s)) + black·(1−v)`.
- */
+/** Preserve hue/saturation for achromatic colors. Triangle weights: hue=s·v, white=v·(1−s), black=1−v. */
 
 import type { RgbaColor } from './color';
 
@@ -89,12 +81,7 @@ export const hslToRgb = ({ h, l, s }: HslColor): RgbaColor => {
   return hsvToRgb({ h, s: v === 0 ? 0 : 2 * (1 - clamp01(l) / v), v });
 };
 
-/**
- * Parses a hex color into HSV, keeping the hue (and, at black, the saturation)
- * from `previous` when the parsed color cannot express them: hex is
- * hue-agnostic for greys, and without stickiness every grey would snap the
- * wheel's hue thumb back to red.
- */
+/** Preserve previous hue for greys and saturation at black; hex cannot encode them. */
 export const hexToHsv = (hex: string, previous?: HsvColor): HsvColor => {
   const parsed = rgbToHsv(parseHexColor(hex));
   if (!previous) {
@@ -142,11 +129,7 @@ export const hsvToTrianglePoint = (hsv: HsvColor, radius: number): Point => {
   };
 };
 
-/**
- * The `{s, v}` for a center-relative point, clamped into the hue's triangle:
- * barycentric weights are floored at zero and renormalized, so dragging
- * outside any edge slides along it instead of escaping.
- */
+/** Clamp outside points by flooring and renormalizing barycentric weights, keeping drags inside the triangle. */
 export const trianglePointToHsv = (point: Point, hue: number, radius: number): HsvColor => {
   const [hueCorner, whiteCorner, blackCorner] = triangleCorners(hue, radius);
   // Solve the barycentric weights for `point` against the three corners.

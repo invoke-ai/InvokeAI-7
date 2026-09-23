@@ -39,10 +39,7 @@ describe('Select', () => {
   });
 
   it('shows the selected label by default and lets a caller name the value instead', async () => {
-    // Callers that override the trigger text rely on omitting the prop falling back to the
-    // selection rather than rendering an empty trigger -- a Select whose value is still meaningful
-    // but whose display is not (a disabled control whose size comes from elsewhere, a preset list
-    // with no exact match) states something the selection alone cannot.
+    // An omitted trigger-text override must fall back to the selection, not an empty display.
     await act(() => {
       root.render(
         <ChakraProvider value={system}>

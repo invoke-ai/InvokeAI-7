@@ -1,12 +1,6 @@
 /**
- * What a push to the server actually achieved, as distinct from whether the call threw.
- *
- * Its own module rather than part of the sync engine: the caller that needs it, `library.ts`, is a
- * module the sync engine itself imports, so reaching back would be a cycle.
- *
- * A push swallows every failure because they are all recoverable — the document is cached and the
- * next save retries. But "recoverable" is not "done", and reading a project back after an
- * unacknowledged push is how an export ships someone's work minus the last ten minutes of it.
+ * Nonthrowing completion does not imply acknowledgement. This standalone outcome type avoids a library/sync
+ * dependency cycle.
  */
 
 /** The document the push was carrying, so a caller can compare it with what the engine recorded. */
@@ -30,10 +24,7 @@ export type ProjectSchemaRefusal =
 export type ProjectPushOutcome =
   /** The server holds exactly this document. */
   | ({ kind: 'acknowledged' } & ProjectPushOutcomeBase)
-  /**
-   * This project id no longer holds our document: it was deleted or overwritten elsewhere, and the
-   * local edits continue under a different id. Reading the id back would read a stranger's version.
-   */
+  /** After identity supersession, a server reread could return another document. */
   | ({ kind: 'superseded' } & ProjectPushOutcomeBase)
   /** A newer client raised the project's compatibility floor. Local bytes remain cached. */
   | ({ kind: 'schema-refused'; refusal: ProjectSchemaRefusal } & ProjectPushOutcomeBase)

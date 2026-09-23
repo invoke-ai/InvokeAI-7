@@ -7,14 +7,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ProjectsToolbar } from './ProjectsToolbar';
 
 /**
- * The layout control, which is a segmented radio group wearing two icons.
- *
- * Both assertions here exist because of a shape that looks right and is not.
- * `Tooltip.Trigger` is `asChild` and merges its own `data-state` onto whatever
- * it clones, so wrapping the *item* silently overwrites `data-state="checked"`
- * — the selected segment styles as unselected and the indicator measures 0×0.
- * Moving the tooltip onto the icon fixes that but puts it on an `<svg>`, which
- * cannot take focus, so the label goes hover-only. Both need to hold at once.
+ * Verify both selected styling and keyboard tooltips: asChild on the item overwrites checked data-state, while an
+ * icon-only trigger cannot receive focus.
  */
 
 let host: HTMLDivElement | null = null;
@@ -73,11 +67,7 @@ const waitUntil = async (predicate: () => boolean, description: string) => {
   throw new Error(`never became true: ${description}`);
 };
 
-/**
- * By position, not by label: these tests run without an i18next instance, so
- * `t()` returns its key. What matters here is the wiring, and the two segments
- * render in `PROJECTS_VIEW_IDS` order — grid, then list.
- */
+/** Select by PROJECTS_VIEW_IDS order because tests render untranslated keys. */
 const viewRadios = (container: HTMLElement): HTMLInputElement[] => {
   const radios = [...container.querySelectorAll<HTMLInputElement>('input[type="radio"]')];
 

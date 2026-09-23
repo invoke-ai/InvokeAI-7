@@ -14,18 +14,8 @@ import { useActiveProjectSelector, useWorkbenchSelector } from '@workbench/Workb
 import { useMemo } from 'react';
 
 /**
- * The generation progress rail: one accent-colored segment per running
- * session, sweeping while indeterminate, hidden while nothing is in flight or
- * the backend is away. The top bar pins it along its bottom edge
- * (`TopbarProgressRail`); the floating preview window pins it under its title
- * bar. Placement is the caller's — this component owns only the model and the
- * fills, so the two surfaces cannot drift on when they show or what they show.
- *
- * Sessions divide the width instead of stacking — a hairline cannot stack to
- * four GPUs without growing into the content or dropping below visibility.
- *
- * Not exposed to assistive tech: the queue cluster already owns a throttled
- * live region, and a second announcer would double the chatter.
+ * Share progress fills across hosts; callers own placement. Divide width among sessions, hide offline/idle, and
+ * leave announcements to the queue's throttled live region.
  */
 export const QueueProgressRail = ({ css }: { css: SystemStyleObject }) => {
   const queueItems = useActiveProjectSelector((project) => project.queue.items);
@@ -72,8 +62,6 @@ const DETERMINATE_SX: SystemStyleObject = {
   transition: 'width var(--wb-motion-duration-fast) linear',
 };
 
-// Reuses Chakra's built-in `position` keyframe, the same one its own
-// indeterminate Progress range animates on.
 const INDETERMINATE_SX: SystemStyleObject = {
   '--animate-from-x': '-45%',
   '--animate-to-x': '100%',
@@ -82,10 +70,7 @@ const INDETERMINATE_SX: SystemStyleObject = {
   insetBlock: 0,
   minWidth: '45%',
   position: 'absolute',
-  // With motion off there is no sweep to fall back on, so the segment becomes a
-  // quiet static fill: still "something is running", minus the movement. Spelled
-  // as a raw selector because the `_reduceMotion` condition this repo defines is
-  // only typed inside token values, not in style objects.
+  // Reduced motion uses a static fill; use the raw selector because _reduceMotion is typed only in token values.
   ':root[data-reduce-motion=true] &': {
     animation: 'none',
     backgroundImage: 'none',

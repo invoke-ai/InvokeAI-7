@@ -15,14 +15,7 @@ import { useCallback, useRef, type KeyboardEvent, type PointerEvent } from 'reac
 
 export const REBALANCE_TRACK_HEIGHT_PX = 80;
 
-/**
- * One continuous recessed track rather than twelve gapped wells.
- *
- * Twelve flexed columns divide a fluid width into fractional positions, so a 1px gap
- * between them lands mid-device-pixel and antialiases to a different apparent width in
- * every column — the separators visibly drift. Spacing the *fills* inside flush columns
- * puts every edge against the same background, so the bars read evenly at any width.
- */
+/** Fractional-pixel gaps make separators uneven; use a continuous track. */
 const TRACK_PROPS: SystemStyleObject = {
   bg: 'bg.subtle',
   borderRadius: 'md',
@@ -64,10 +57,7 @@ const getColumnIndex = (clientX: number, rect: DOMRect, count: number): number =
 const getWeightAt = (clientY: number, rect: DOMRect, scale: number): number =>
   rect.height <= 0 ? scale : weightFromTrackFraction((clientY - rect.top) / rect.height, scale);
 
-/**
- * Fills the columns a fast sweep skipped over, so the committed vector matches the
- * stroke the pointer actually drew rather than only its sample points.
- */
+/** Interpolate columns skipped by pointer sampling. */
 const strokeBetween = (
   weights: number[],
   fromIndex: number,
@@ -106,14 +96,7 @@ interface ConditioningRebalanceBarsProps {
   onCommit: (weights: number[]) => void;
 }
 
-/**
- * The twelve per-tap gains as draggable vertical bars.
- *
- * Pointer input is absolute — a bar jumps to wherever you point, and a horizontal sweep
- * paints across every column it passes, which is what makes drawing a curve feel direct.
- * The parent holds `onPreview`'s live vector so a drag renders without writing settings on
- * every move; `onCommit` fires once, on release.
- */
+/** Emit onPreview during interaction and one onCommit on release. */
 export const ConditioningRebalanceBars = ({
   activeIndex,
   disabled,
@@ -147,8 +130,7 @@ export const ConditioningRebalanceBars = ({
       isDraggingRef.current = true;
       onActiveIndexChange(lastIndex);
       onPreview([...working]);
-      // preventDefault above suppressed the implicit focus; without this a click
-      // would leave the bar unfocusable by the arrow keys that just edited it.
+      // Restore focus suppressed by preventDefault so keyboard editing remains available.
       barRefs.current[lastIndex]?.focus();
 
       const handlePointerMove = (moveEvent: globalThis.PointerEvent) => {
@@ -223,8 +205,7 @@ export const ConditioningRebalanceBars = ({
     }
   }, [onActiveIndexChange]);
 
-  // The track takes `css` rather than a spread: SystemStyleObject carries the CSS
-  // `direction` property, which collides with Flex's flex-direction prop of that name.
+  // CSS direction conflicts with Flex's direction prop.
   return (
     <Flex
       align="stretch"
@@ -274,15 +255,10 @@ export const ConditioningRebalanceBars = ({
           >
             <Box
               alignSelf="flex-end"
-              // Bars at or below neutral are holding the prompt rather than pushing it;
-              // the quieter fill is what makes that readable without a legend. `muted` is
-              // too close to the well to see at these heights, so the step is to
-              // `emphasized`.
               bg={weight > REBALANCE_NEUTRAL_WEIGHT ? 'accent.solid' : 'accent.emphasized'}
               borderRadius="xs"
               h={`${barFillFraction(weight, scale) * 100}%`}
-              // A zero tap keeps a stub so every slot stays visible and hittable now that
-              // the track no longer draws a well behind each one.
+              // Zero-value stubs must remain hittable without separate wells.
               minH="2px"
               w="full"
             />

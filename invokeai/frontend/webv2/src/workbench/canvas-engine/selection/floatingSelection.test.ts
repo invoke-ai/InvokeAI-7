@@ -129,10 +129,8 @@ describe('liftSelectedPixels', () => {
       layerMatrix: matrixOf({ rotation: Math.PI / 2 }),
       mask: placed({ height: 20, width: 10, x: 30, y: 40 }),
     });
-    // A quarter turn swaps the axes: document x becomes local -y and vice versa,
-    // so document [30,40]×[40,60] lands on local [40,60]×[-40,-30]. The region is
-    // rounded OUTWARD, so trig landing a hair off an integer may widen it by a
-    // pixel — harmless, since the stencil's alpha is zero out there.
+    // Quarter-turn mapping swaps axes into local [40,60]x[-40,-30]. Outward rounding may add a harmless
+    // transparent pixel at floating-point edges.
     const rect = lifted!.pixels.rect;
     expect(rect.x).toBe(40);
     expect(rect.width).toBe(20);

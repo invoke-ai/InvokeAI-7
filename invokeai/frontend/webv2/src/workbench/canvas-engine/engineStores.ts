@@ -1,14 +1,6 @@
 /**
- * Per-engine transient external stores.
- *
- * These are the narrow, imperative channels React subscribes to (in the widget
- * task) to observe engine-owned interaction state — active tool, zoom,
- * readiness, cursor, and per-layer thumbnail versions — without the engine ever
- * importing React. They follow Platform's React-free external-store core (a
- * listener channel plus a snapshot getter, `useSyncExternalStore`-compatible).
- * The React hooks live with the widget shell.
- *
- * Zero React, zero import-time side effects.
+ * Per-engine React-free external stores expose narrow interaction snapshots and subscriptions. Widget hooks adapt
+ * them to React without coupling the engine to UI.
  */
 
 import type {
@@ -42,10 +34,8 @@ export interface BrushOptions {
   /** Whether pen pressure modulates the stroke width. */
   pressureAffectsWidth: boolean;
   /**
-   * Whether pen pressure modulates the stroke's alpha along its length.
-   *
-   * Off by default: unlike width, it costs a full-region scratch refill per frame (see
-   * `strokeSession`), and it changes how a stroke reads rather than just its shape.
+   * Pressure-alpha is off by default: unlike width modulation it refills the full scratch region each frame and
+   * changes stroke appearance.
    */
   pressureAffectsOpacity: boolean;
 }
@@ -74,11 +64,6 @@ export const DEFAULT_LASSO_OPTIONS: LassoToolOptions = {
   shape: 'freehand',
 };
 
-/**
- * Marquee (selection) tool options: the shape the next drag traces, and the
- * boolean op it applies when no modifier overrides it. One tool covers both
- * shapes — see `tools/marqueeTool.ts`.
- */
 export interface MarqueeToolOptions {
   kind: 'rect' | 'ellipse';
   /** The op a committed marquee applies to the selection, when no modifier overrides it. */
@@ -98,10 +83,8 @@ export interface GradientStop {
 }
 
 /**
- * Shape tool options: the kind drawn on the next drag, plus whether the new
- * shape gets a fill and a stroke. The colors themselves come from the active
- * foreground/background pair at gesture start — there is no second global
- * shape color; a selected shape's explicit fill/stroke is document state.
+ * Next-shape kind and fill/stroke toggles. Colors come from foreground/background at gesture start; selected-shape
+ * colors belong to the document.
  */
 export type ShapeToolKind = ParametricShapeKind | 'polygon' | 'freehand';
 
@@ -131,11 +114,8 @@ export const DEFAULT_SHAPE_OPTIONS: ShapeToolOptions = {
 export const MAX_SHAPE_STROKE_WIDTH = 2000;
 
 /**
- * Gradient tool options: the kind, the linear angle (degrees), the preset, and
- * the explicit custom stops. The `pair` preset resolves the foreground →
- * background pair at gesture start; `custom` uses `stops` verbatim. The
- * minimal two-stop editor edits `stops[0]` (start) and the last stop (end);
- * a full multi-stop editor is a follow-up.
+ * Gradient kind, angle, preset and custom stops. Pair resolves foreground/background at gesture start; custom uses
+ * stops verbatim. The editor changes first and last stops.
  */
 export interface GradientToolOptions {
   kind: 'linear' | 'radial';
@@ -176,9 +156,8 @@ export const DEFAULT_GRADIENT_OPTIONS: GradientToolOptions = {
 };
 
 /**
- * The text style the text tool applies to a newly created layer (and edits
- * live). A new session's color comes from the active foreground at open; the
- * session's and a selected layer's color are document/session state.
+ * New-text defaults and live style. Initial color comes from foreground; active session and selected-layer colors
+ * are independently stored.
  */
 export interface TextToolOptions {
   fontFamily: string;
@@ -196,11 +175,6 @@ export interface TextToolOptions {
   align: 'left' | 'center' | 'right';
 }
 
-/**
- * A small curated font list offered by the text options bar. Values are CSS
- * `font-family` stacks so each falls back gracefully; keep it short this phase
- * (a full system-font enumeration is a follow-up).
- */
 export const TEXT_FONT_FAMILIES: readonly { label: string; value: string }[] = [
   { label: 'Inter', value: "'Inter Variable', Inter, sans-serif" },
   { label: 'Sans-serif', value: 'system-ui, sans-serif' },
@@ -277,11 +251,8 @@ export const DEFAULT_ERASER_OPTIONS: EraserOptions = {
 };
 
 /**
- * An active transform-tool session on one layer. Outlives individual pointer
- * gestures (drag handles, adjust numerics) until Apply or Cancel. `startTransform`
- * is the committed transform captured at session start (restored on Cancel /
- * used as the undo inverse); `transform` is the live, edited transform the
- * compositor previews and the options bar renders as numerics.
+ * Transform sessions span gestures until Apply/Cancel. `startTransform` is the committed undo/cancel baseline;
+ * `transform` drives preview and numeric controls.
  */
 export interface TransformSession {
   layerId: string;
@@ -290,23 +261,11 @@ export interface TransformSession {
 }
 
 /**
- * An active text-editing session. Set by the text tool; while it is active the
- * contenteditable portal (in `widgets/canvas`) shows the live text and the
- * compositor SKIPS the session's layer (edit mode) so the two don't double-draw.
+ * Text sessions suppress the edited layer while its portal renders. Create has no layer/start source until one add
+ * commit; edit keeps `startSource` as undo and no-change baseline for one source-update commit.
  *
- * Two modes:
- * - **create**: no layer exists yet (`layerId === null`, `startSource === null`).
- *   Commit dispatches ONE `addCanvasLayer` with the final content; cancel adds
- *   nothing. This keeps a new text layer to a single, cleanly-undoable commit.
- * - **edit**: an existing text layer is being re-edited. `startSource` is its
- *   committed source (the exact undo inverse / no-change baseline); `source` is
- *   the live, style-edited source. Commit dispatches ONE `updateCanvasLayerSource`.
- *
- * `source` carries the live style (font/size/weight/lineHeight/align/color) the
- * portal renders WYSIWYG and the options bar edits; `content` on it is only the
- * seed — the live typed content lives in the contenteditable DOM until commit.
- * `transform` positions/scales the portal (document→screen via the view matrix).
- * `id` increments per session so React can key (remount) the editable per open.
+ * `source` holds live styles but only seeded content; typing stays in the DOM until commit. `transform` places the
+ * portal, and incrementing `id` remounts it per session.
  */
 export interface TextEditSession {
   id: number;
@@ -348,11 +307,7 @@ const createScalarStore = <T>(initial: T, isEqual: (a: T, b: T) => boolean = Obj
   };
 };
 
-/**
- * A keyed numeric store with per-key subscription granularity, so a React
- * component watching one layer's thumbnail version only re-renders when that
- * layer changes. A global `subscribe` is also exposed for coarse observers.
- */
+/** Per-key subscriptions rerender only the affected thumbnail; global subscription supports coarse observers. */
 export interface KeyedVersionStore {
   get(key: string): number | undefined;
   set(key: string, value: number): void;
@@ -478,11 +433,7 @@ export interface EngineStores {
   rasterContentEpoch: ScalarStore<number>;
   /** Brush tool options (size / color / opacity / pressure). */
   brushOptions: ScalarStore<BrushOptions>;
-  /**
-   * The workbench's foreground/background pair, mirrored in for gesture-start
-   * reads (new shapes, text sessions, the gradient pair preset). One-way: the
-   * engine never writes it.
-   */
+  /** One-way foreground/background mirror for gesture-start reads; the engine never writes it. */
   colorPair: ScalarStore<ActiveColorPairState>;
   /** Eraser tool options (size / opacity). */
   eraserOptions: ScalarStore<EraserOptions>;
@@ -505,125 +456,53 @@ export interface EngineStores {
   /** Text tool options (font family / size / weight / line-height / align). */
   textOptions: ScalarStore<TextToolOptions>;
   /**
-   * The active text-editing session, or `null`. React reads it to render the
-   * contenteditable portal and enable the text options bar's live-restyle path;
-   * the engine reads it to skip the session layer in the composite. Cleared on
-   * commit, cancel, real tool switch, layer delete, or document replace.
+   * Text session drives the portal, live style controls and composite suppression. Commit, cancel, real tool
+   * switch, deletion or replacement clears it.
    */
   textEditSession: ScalarStore<TextEditSession | null>;
-  /**
-   * The live shape-tool drag preview (document-space rect + kind), or `null`
-   * when idle. The overlay renders the shape outline in place of a committed
-   * layer so the drag tracks without dispatching; cleared on commit/cancel.
-   */
+  /** Document-space shape preview replaces dispatch during drag; null when idle, cleared on commit/cancel. */
   shapePreview: ScalarStore<{ rect: Rect; kind: ParametricShapeKind } | null>;
-  /**
-   * The live gradient-tool drag preview: the drag vector's start/end points in
-   * document space. The overlay draws a linear ramp as the vector and a radial
-   * one as the circle it will fill. `null` when idle; cleared on commit/cancel.
-   */
+  /** Document-space gradient drag vector; overlay shows a linear ramp or radial circle. Cleared on commit/cancel. */
   gradientPreview: ScalarStore<GradientPreview | null>;
-  /**
-   * Whether a pixel selection currently exists. React reads it to enable the
-   * fill/erase/invert/deselect controls and the engine gates selection hotkeys
-   * and marching-ants animation off it. The engine writes it as the selection
-   * mask gains/loses content.
-   */
   hasSelection: ScalarStore<boolean>;
-  /**
-   * Whether pixels are currently in flight as a floating selection. React reads
-   * it to enable the transform bar's Apply/Cancel while a float is framed (there
-   * is no `transformSession` in that case — the float is the session).
-   */
+  /** Floating pixels enable Apply/Cancel without a separate transform session. */
   hasFloatingSelection: ScalarStore<boolean>;
   /** Core-only visual SAM interaction state; application session status remains outside the engine. */
   samInteraction: ScalarStore<SamInteractionState | null>;
   /**
-   * The in-progress lasso outline (document space), or `null` when idle. The
-   * overlay draws a freehand drag as a dashed outline; a polygon session also
-   * shows its placed vertices, the rubber band to the cursor, and whether the
-   * cursor sits on the first vertex (a click there closes). Cleared on
-   * commit/cancel. Like `bboxPreview`, a transient channel — no dispatch.
+   * Transient lasso overlay: freehand outline or polygon vertices, cursor band and close target. Cleared on
+   * commit/cancel without dispatch.
    */
   lassoPreview: ScalarStore<LassoPreview | null>;
-  /**
-   * The live marquee-tool drag outline (document-space rect + shape), or `null`
-   * when idle. Like `lassoPreview`, a transient overlay-only channel: the mask
-   * is untouched until the drag commits.
-   */
+  /** Transient marquee outline; the selection mask changes only on commit. */
   marqueePreview: ScalarStore<{ rect: Rect; kind: 'rect' | 'ellipse' } | null>;
-  /**
-   * Whether brush/eraser strokes are clipped to the generation frame (legacy
-   * "clip strokes to bbox"). Resolved once per gesture by the paint tool.
-   */
+  /** Legacy bbox stroke clipping, captured once per paint gesture. */
   clipToBbox: ScalarStore<boolean>;
   /** Model-dependent grid size (document px) the bbox snaps to. React feeds this from generate settings. */
   bboxGrid: ScalarStore<number>;
   /**
-   * The live bbox preview rect during a bbox-tool gesture (document space), or
-   * `null` when idle. The overlay renders this in place of the committed bbox so
-   * the frame tracks the drag without dispatching; cleared on commit/cancel.
+   * Document-space bbox preview replaces the committed overlay frame during drag without dispatch. Cleared on
+   * commit/cancel.
    */
   bboxPreview: ScalarStore<Rect | null>;
-  /**
-   * The active transform-tool session (layer id + start/live transform), or
-   * `null` when no session is open. React reads it to render the numeric options
-   * and enable Apply/Cancel; the engine drives the live preview from it. Cleared
-   * on Apply, Cancel, tool switch, or document replace.
-   */
+  /** Transform session supplies numeric controls, Apply/Cancel and live preview; null when closed. */
   transformSession: ScalarStore<TransformSession | null>;
-  /**
-   * Whether the transparency checkerboard is drawn behind transparent documents
-   * (default ON). Off shows the widget surface through the document instead. The
-   * compositor reads this each frame; the canvas settings menu toggles it.
-   */
+  /** Checkerboard defaults on; disabling reveals the widget surface through transparent document pixels. */
   checkerboard: ScalarStore<boolean>;
   /**
-   * The two square colors of the transparency checkerboard, resolved from Chakra
-   * semantic tokens in React and fed down (see `widgets/canvas/checkerColors.ts`).
-   * The engine rebuilds its cached checker tile and recomposites when these
-   * change (e.g. a theme/color-mode switch); {@link DEFAULT_CHECKER_COLORS} is the
-   * React-free fallback until the first feed.
+   * React supplies semantic checker colors; changes rebuild the tile and recompose. {@link DEFAULT_CHECKER_COLORS}
+   * supplies the React-free initial fallback.
    */
   checkerColors: ScalarStore<CheckerColors>;
-  /**
-   * Whether the document-space grid (at the bbox snap size) is drawn on the
-   * overlay (default OFF). The overlay reads this each frame; the canvas settings
-   * menu toggles it.
-   */
   showGrid: ScalarStore<boolean>;
-  /**
-   * Whether ctrl+wheel brush/eraser sizing is inverted (default OFF): normally
-   * wheel-up grows the size. The wheel handler reads this; the canvas settings
-   * menu toggles it. Purely an input preference — no render effect.
-   */
+  /** Inverts ctrl+wheel sizing; default wheel-up grows. Input-only preference. */
   invertBrushSizeScroll: ScalarStore<boolean>;
-  /**
-   * Whether the generation bbox (dashed frame) is drawn as passive overlay chrome
-   * (default ON). The overlay reads this each frame; the canvas settings popover
-   * toggles it. The bbox is still drawn (with its handles) while the bbox TOOL is
-   * active regardless, so it stays editable — this only hides the passive frame.
-   */
+  /** Passive bbox frame defaults on. The active bbox tool always draws its editable frame and handles. */
   showBbox: ScalarStore<boolean>;
-  /**
-   * Whether the bbox overlay shade is drawn (default OFF): a translucent dark
-   * fill over everything OUTSIDE the bbox, focusing attention on the generation
-   * region (legacy `CanvasBboxToolModule` overlayRect parity). Overlay-only —
-   * toggling never recomposites the document.
-   */
+  /** Optional shade outside the generation bbox. Overlay-only toggling never recomposites document pixels. */
   bboxOverlay: ScalarStore<boolean>;
-  /**
-   * Whether the rule-of-thirds composition guide (two vertical + two horizontal
-   * lines dividing the bbox into thirds) is drawn inside the bbox (default OFF).
-   * The overlay reads this each frame; the canvas settings popover toggles it.
-   */
   ruleOfThirds: ScalarStore<boolean>;
-  /**
-   * Whether bbox-tool moves/resizes snap to the model grid (default ON). The bbox
-   * tool reads this; the canvas settings popover toggles it, and the fit-bbox
-   * header actions honor it too. Holding Alt bypasses snapping independently.
-   * Purely an interaction preference — no render effect.
-   */
+  /** Bbox moves, resizes and fit actions use grid snapping by default; Alt bypasses it. Input-only preference. */
   snapToGrid: ScalarStore<boolean>;
   /** Whether an engine-owned operation currently excludes ordinary document edits. */
   documentEditingLocked: ScalarStore<boolean>;

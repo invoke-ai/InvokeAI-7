@@ -71,16 +71,7 @@ const interact = (action: () => void): Promise<void> =>
     });
   });
 
-/**
- * Waits until a transition has actually settled on `expected`, rather than
- * sleeping a fixed interval and asserting immediately after.
- *
- * A loaded CI runner can starve the compositor for longer than any constant
- * worth waiting for, and the failure mode is silent: the transition has not
- * advanced, so the assertion reads the value it started from and reports a
- * plausible-looking mismatch. Polling makes the wait as long as the machine
- * needs and no longer, and a timeout still fails loudly.
- */
+/** Poll until transitions settle; fixed waits can read pre-transition values under compositor starvation. */
 const waitForOpacity = (element: HTMLElement, expected: string, label = '', timeoutMs = 5000): Promise<void> =>
   act(async () => {
     const deadline = Date.now() + timeoutMs;
@@ -177,13 +168,7 @@ describe('PreviewCompare', () => {
     const frame = host!.querySelector<HTMLElement>('[aria-label*="Reveal comparison"]')!;
     const compareOverlay = host!.querySelector<HTMLImageElement>('img[alt="compare"]')?.parentElement as HTMLElement;
 
-    // The overlay reveals on focus OR hover OR touch press. The runner's
-    // cursor stays wherever the previous test left it, so a component that
-    // mounts underneath it gets a real `pointerenter` and stays revealed
-    // through blur. Clearing the hover synthetically keeps this test about
-    // focus, and keeps it independent of where the pointer happens to be.
-    // Waited for, not asserted outright: if the cursor had been resting on the
-    // frame, clearing it starts a fade that is still in flight right now.
+    // Clear incidental hover to isolate focus behavior, then wait for any resulting fade to settle.
     await clearMouseHover(frame);
     await waitForOpacity(compareOverlay, '0', 'initial');
     await interact(() => frame.focus());

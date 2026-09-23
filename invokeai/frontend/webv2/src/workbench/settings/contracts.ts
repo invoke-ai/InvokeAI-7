@@ -1,7 +1,7 @@
 import type { WorkbenchLanguage } from '@platform/i18n/languages';
+import type { LogLevel, LogNamespace } from '@platform/logging/contracts';
 import type { SettingsTarget } from '@platform/ui/settings/contracts';
 import type { WorkbenchThemeId } from '@theme/themes';
-import type { DeveloperLogLevel, DeveloperLogNamespace } from '@workbench/diagnostics/contracts';
 import type { ProjectSortId, ProjectsViewId } from '@workbench/launchpad/projects/projectLibraryView';
 
 export type { ProjectSortId, ProjectsViewId } from '@workbench/launchpad/projects/projectLibraryView';
@@ -9,30 +9,19 @@ export type { ProjectSortId, ProjectsViewId } from '@workbench/launchpad/project
 export type { WorkbenchLanguage } from '@platform/i18n/languages';
 
 /**
- * Settings that belong to the *project* and therefore travel inside its `.invk`
- * export. Anything describing how a person likes to work — as opposed to how
- * this document generates — belongs in {@link WorkbenchPreferences} instead, so
- * that opening someone else's project cannot rewrite your editor.
+ * Export document generation settings with the project; personal editor choices belong in {@link
+ * WorkbenchPreferences} so imports cannot overwrite them.
  */
 export interface ProjectSettings {
   useCpuNoise: boolean;
   antialiasProgressImages: boolean;
-  /**
-   * Not surfaced in the Settings dialog: the Preview widget's header owns this
-   * as a live toggle, and following a generation flips it implicitly. It is
-   * persisted per project because that is the lifetime the toggle expects.
-   */
+  /** Preview owns this live toggle; persist it per project rather than exposing it in Settings. */
   showProgressImagesInViewer: boolean;
 }
 
 /**
- * A saved conditioning-rebalance curve as it is persisted.
- *
- * Structurally the feature's `RebalancePreset`, declared here rather than imported:
- * these preferences load on the launchpad route, and a value import from
- * `@features/generation` would pull that feature's whole core into the initial bundle.
- * Settings stores the record; the generation feature owns what `weights` means and
- * re-validates it on read.
+ * Store the RebalancePreset shape locally to keep generation out of Launchpad's bundle. Generation owns and
+ * revalidates weights on read.
  */
 export interface StoredRebalancePreset {
   id: string;
@@ -73,8 +62,10 @@ export interface WorkbenchPreferences {
   /** Color prompt syntax in prompt fields; changes rendering only. */
   showPromptSyntaxHighlighting: boolean;
   developerLogEnabled: boolean;
-  developerLogLevel: DeveloperLogLevel;
-  developerLogNamespaces: DeveloperLogNamespace[];
+  developerLogLevel: LogLevel;
+  developerLogNamespaces: LogNamespace[];
+  /** Mirror recorded entries to the browser console; obeys the same recording filters. */
+  developerConsoleOutputEnabled: boolean;
   developerPerformanceTimingsEnabled: boolean;
   /** Always snap workflow nodes to the grid (Ctrl snaps temporarily when off). */
   workflowSnapToGrid: boolean;

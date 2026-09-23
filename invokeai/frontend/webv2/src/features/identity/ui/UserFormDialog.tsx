@@ -24,11 +24,7 @@ const getTargetKey = (target: UserFormTarget): string => (target.mode === 'edit'
 
 const SWITCH_CHECKED_STYLES = { bg: 'accent.solid' };
 
-/**
- * Create/edit user form for the users widget. The dialog root stays mounted
- * and is driven by `target` (null = closed); the inner form is keyed by the
- * target so each open starts from a fresh state.
- */
+/** Keep the dialog root mounted; key its form by target to reset state on each opening. */
 export const UserFormDialog = ({
   onClose,
   onSaved,

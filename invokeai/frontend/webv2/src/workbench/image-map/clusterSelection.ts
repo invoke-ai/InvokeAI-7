@@ -2,14 +2,7 @@ import type { GalleryItemKey } from '@features/gallery/contracts';
 
 import type { ImageMapPoint } from './api';
 
-/**
- * Cluster-click selection: everything in the clicked point's cluster,
- * ordered by distance from the clicked point (PhotoMapAI's proximity
- * ordering) so gallery multi-selection walks outward from the click.
- *
- * Members are item keys: a cluster groups by what the encoder saw, so a video
- * sits in the same cluster as the images that look like it.
- */
+/** Cluster clicks select image/video keys ordered outward by distance, following PhotoMapAI proximity ordering. */
 
 /** Selection size guard; DBSCAN can put most of a huge gallery in one cluster. */
 export const MAX_CLUSTER_SELECTION = 5000;

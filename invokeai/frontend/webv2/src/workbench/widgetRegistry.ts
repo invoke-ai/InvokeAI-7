@@ -95,10 +95,8 @@ export const registerFirstPartyWidgets = (): RegisteredWidget[] => registerWidge
 export const registeredWidgets = registerFirstPartyWidgets();
 
 /**
- * Admin-only widgets are offered only while an admin is signed in to a
- * multi-user backend. The imperative session read is safe here: the route
- * guard resolves the session before the workbench mounts, and a user change
- * remounts the workbench route.
+ * Admin widgets require a multi-user admin session; the route resolves session before mounting and remounts on
+ * user changes.
  */
 const isWidgetAvailable = (widget: RegisteredWidget): boolean => {
   if (!widget.manifest.requiresAdmin) {
@@ -136,13 +134,8 @@ export const warmWidgets = (typeIds: readonly WidgetTypeId[]): void => {
 };
 
 /**
- * Like {@link warmWidgets}, but resolves when the implementations are in hand.
- *
- * Callers that are about to make widgets appear use this to get the modules
- * BEFORE committing the state change, so the render never suspends. Suspending
- * is not free even when the chunk is already downloaded: showing a fallback
- * makes React withhold the resolved content for `FALLBACK_THROTTLE_MS` (300ms)
- * to avoid a flash, which measured as the entire cost of a layout switch.
+ * Await implementations before making widgets visible to avoid Suspense fallback throttling even for downloaded
+ * chunks.
  */
 export const loadWidgets = (typeIds: readonly WidgetTypeId[]): Promise<unknown> =>
   Promise.allSettled(

@@ -26,27 +26,11 @@ import {
 import { buildMissingMediaName, createTransferIssueLog, toMediaKey } from './transfer';
 
 /**
- * Putting a project's media on this server, for whichever direction needs it. Import and
- * duplication differ in exactly one step — where the bytes come from, {@link MediaMaterializer} —
- * and share everything around it.
- *
- * ### A failed board item must not resolve to a stranger
- *
- * An item both on the board and named by the document, whose materialization fails, must not keep
- * its old name: on the same server that name is already taken, by the *source* project's image, so
- * the project would open showing the right picture from the wrong owner. Failed items are forced
- * onto {@link buildMissingMediaName}, which resolves to nothing and renders as a missing layer.
- *
- * The placeholder is written for every failed item, because `remapAssetRefs` walks the whole
- * document. The live reference set — which skips history — decides only what is worth *reporting*:
- * a gallery recent that stops resolving is not something the person lost from this project.
+ * Shared materialization always remaps failed names away from existing media; loss reporting includes only live
+ * references.
  */
 
-/**
- * Degrade to `fallback`, except for cancellation. Starring is a flag and an existence probe only
- * spares an upload — neither is worth reaching the caller's rollback. Cancellation is the
- * exception because it makes *every* remaining call fail, which is not a half-restored project.
- */
+/** Ancillary/probe failures are best-effort; operation cancellation propagates. */
 const degradeUnlessCancelled =
   <T>(fallback: T) =>
   (error: unknown): T => {
@@ -78,10 +62,7 @@ export interface MaterializeResult {
   materialized: MaterializedMedia[];
 }
 
-/**
- * Make board media exist on `boardId`, however this direction gets its bytes. `onItemSettled` fires
- * once per descriptor, so progress moves through the part people actually wait for.
- */
+/** onItemSettled fires exactly once per descriptor. */
 export type MediaMaterializer = (
   items: readonly InvkBoardItem[],
   boardId: string,
@@ -174,12 +155,7 @@ interface RestoreKindAdapter {
   upload: (bytes: Uint8Array, name: string, signal?: AbortSignal) => Promise<string>;
 }
 
-/**
- * The cover, preferring an image the restore already put here — the same picture without a second
- * copy. Uploading the bundled entry unconditionally left one orphan per import, in the private
- * `'other'` category where nobody could find or delete it. The bytes are the fallback, for a cover
- * whose source image is dangling.
- */
+/** Reuse the restored cover source before uploading fallback bytes. */
 const resolveCoverImageName = async (input: {
   coverBytes: { bytes: Uint8Array; entryName: string } | null;
   coverSourceImageName: string | null;
@@ -211,17 +187,12 @@ const resolveCoverImageName = async (input: {
 
     return uploaded.imageName;
   } catch {
-    // A project with no cover shows the folder glyph, which is a state the library already
-    // renders. Not worth failing an import over.
+    // Cover failure is nonfatal; fall back to a missing cover.
     return null;
   }
 };
 
-/**
- * Restore a project's media and report what could not be carried. Nothing throws for a media
- * failure; the only rejections are the ones that end the operation — cancellation, an expired
- * account.
- */
+/** Per-media failures belong in the result; rejections end the whole operation. */
 export const restoreProjectMedia = async (
   input: RestoreProjectMediaInput,
   deps: RestoreProjectMediaDeps
@@ -239,11 +210,7 @@ export const restoreProjectMedia = async (
   const boardKeys = new Set(input.boardItems.map(toMediaKey));
   /** Descriptor position, so a placeholder name does not depend on the order failures happened in. */
   const descriptorIndexes = new Map(input.boardItems.map((item, index) => [toMediaKey(item), index]));
-  /**
-   * Descriptor position where it exists; counting past the descriptors otherwise. Collapsing
-   * position-less failures onto one index would merge two unrelated missing items into a single
-   * dangling reference.
-   */
+  /** Allocate unique placeholders even without descriptor positions. */
   let nextUnknownIndex = input.boardItems.length;
   const missingNameIndex = (key: string): number => {
     const index = descriptorIndexes.get(key);
@@ -258,19 +225,15 @@ export const restoreProjectMedia = async (
   };
   const starredKeys = new Set(input.boardItems.filter((item) => item.starred).map(toMediaKey));
 
-  // Document-only references are the ones the board does not own; those the board owns are
-  // restored as board media and their references follow the copy.
   const documentOnlyRefs = input.documentRefs.filter((ref) => !boardKeys.has(toMediaKey(ref)));
   const documentOnlyImages = documentOnlyRefs.filter((ref) => ref.kind === 'image').map((ref) => ref.name);
   const documentOnlyVideos = documentOnlyRefs.filter((ref) => ref.kind === 'video').map((ref) => ref.name);
 
-  // A board with no staging board to put it on cannot be materialized; every descriptor then falls
-  // through to the unsettled pass below, which is the honest reading of "the media did not arrive".
+  // Descriptors without a staging board still require explicit failure reporting.
   const stagingBoardId = input.boardItems.length === 0 ? null : input.boardId;
 
   let completed = 0;
-  // The document-only total is only known once the existence checks answer, so progress is reported
-  // against the worst case: every reference needing an upload. It can only finish early.
+  // Use the worst-case progress total until existence probes resolve.
   let total =
     (stagingBoardId === null ? 0 : input.boardItems.length) +
     documentOnlyRefs.length +
@@ -301,13 +264,8 @@ export const restoreProjectMedia = async (
     },
   };
 
-  // Started before the board upload, awaited after it: the probes need only the document's own
-  // references, and the board upload is the minutes-long part. An empty answer degrades safely —
-  // the check only skips redundant uploads, so failing it costs bandwidth, never correctness.
-  //
-  // `allSettled` is constructed here, not at the await: a promise started now and awaited after the
-  // upload would surface as an unhandled rejection if the upload threw first. Cancellation still
-  // ends the restore, re-thrown at the await below in its proper order.
+  // Run probes alongside uploads and attach allSettled immediately to prevent unhandled rejection. Propagate
+  // cancellation at the ordered await.
   const settledProbes = Promise.allSettled([
     documentOnlyImages.length === 0
       ? Promise.resolve(new Set<string>())
@@ -356,16 +314,13 @@ export const restoreProjectMedia = async (
     settledBoardKeys.add(key);
     issues.addBoardItemIssue(failure, failure.reason);
 
-    // Mapped unconditionally: `remapAssetRefs` rewrites the whole document while `documentKeys`
-    // covers only live references, so a name left unmapped survives in history — pointing, on this
-    // server, at the source project's own image.
+    // Remap all references, including history; reporting scans only live references.
     kindAdapters[failure.kind].mapping.set(
       failure.name,
       buildMissingMediaName(input.projectId, failure.kind, missingNameIndex(key))
     );
 
-    // Only the live references are *reported*. A gallery recent that no longer resolves is not
-    // something the person lost from this project, and counting it would inflate every report.
+    // Exclude recents/history from live loss counts.
     if (documentKeys.has(key)) {
       issues.addDocumentReferenceIssue(failure, failure.reason);
     }
@@ -375,16 +330,14 @@ export const restoreProjectMedia = async (
     failBoardItem(failure);
   }
 
-  // A descriptor reported neither way is a failure too: dropping it silently would leave its
-  // document reference on the old name.
+  // Treat unreported descriptors as failures with missing placeholders.
   for (const item of input.boardItems) {
     if (!settledBoardKeys.has(toMediaKey(item))) {
       failBoardItem({ kind: item.kind, name: item.name, reason: 'upload-failed' });
     }
   }
 
-  // A failed star costs a flag, not the media, so it must not reject: a rejection here reaches the
-  // caller's rollback and deletes every image just uploaded, over a flag.
+  // Star failure must not trigger rollback of successfully restored media.
   const [imageStars, videoStars] = await Promise.all([
     starRestoredImages(starTargets.image, deps.signal).catch(degradeUnlessCancelled({ failed: starTargets.image })),
     starRestoredVideos(starTargets.video, deps.signal).catch(degradeUnlessCancelled({ failed: starTargets.video })),
@@ -437,8 +390,7 @@ export const restoreProjectMedia = async (
     }
   }
 
-  // Deduplication and missing bytes both shrink the work; say so, or a restore that ends with
-  // nothing left to upload reports its last count against a total it will never reach.
+  // Reduce progress totals for deduplication and absent bytes.
   if (total !== plannedTotal) {
     deps.onProgress?.({ completed, total });
   }
@@ -447,8 +399,7 @@ export const restoreProjectMedia = async (
     const { kind, name } = item;
     const bytes = item.bytes;
 
-    // Dropped before the request, not after: the upload body holds its own reference, and this
-    // queue was why a large restore held every asset it had not sent yet.
+    // Release queued bytes before upload; the request body retains them.
     item.bytes = null;
 
     if (bytes === null) {
@@ -466,14 +417,12 @@ export const restoreProjectMedia = async (
         adapter.mapping.set(name, restoredName);
       }
     } catch (error) {
-      // Not a failure of this asset: cancellation makes every remaining upload fail too, and
-      // reporting them one by one would name hundreds of dangling references.
+      // Cancellation is one operation failure, not a missing-asset result for every queued item.
       if (isRequestCancellation(error)) {
         throw error;
       }
 
-      // A failed upload leaves the reference pointing at a name this server does not have — the
-      // same outcome as an asset the source never carried, and honest for the same reason.
+      // Failed uploads must remain unresolved rather than bind to unrelated existing media.
       issues.addDocumentReferenceIssue({ kind, name }, 'upload-failed');
     }
 
@@ -498,11 +447,8 @@ export const restoreProjectMedia = async (
 };
 
 /**
- * Run a restore's rollback, but only when the project it was staging certainly does not exist.
- * Three things must hold: the create did not already succeed; the failure *proves* absence, which
- * is what {@link ProjectCreateAbsentError} means and why the create goes through
- * `createProjectSettled`; and the account has not changed. An unknown outcome must never authorize
- * a deletion — uploads are recoverable clutter, a project stripped of its media is not.
+ * Rollback requires all three: creation did not succeed, ProjectCreateAbsentError proves absence through
+ * createProjectSettled, and the original account is still current. Unknown outcomes never authorize deletion.
  */
 export const rollbackUnlessProjectExists = async (
   error: unknown,
@@ -528,11 +474,7 @@ export interface RollbackRestoredMediaDeps {
   signal?: AbortSignal;
 }
 
-/**
- * Undo a restore whose project was never created — exactly the identities it made, then the board.
- * Best-effort throughout, so a failing cleanup cannot replace the actionable error. The board goes
- * last and without `include_images`; see {@link deleteStagingBoard}.
- */
+/** Best-effort cleanup deletes only ledger-owned resources, then the board without include_images. */
 export const rollbackRestoredMedia = async (
   ledger: RestoredMediaLedger,
   deps: RollbackRestoredMediaDeps = {}

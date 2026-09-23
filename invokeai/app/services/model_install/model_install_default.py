@@ -84,6 +84,26 @@ INSTALL_MARKER_FILENAME = ".invokeai_install.json"
 INSTALL_MARKER_VERSION = 1
 
 
+# Filesystems cap a single path component at 255 bytes. A source that lists many explicit files
+# (an LTX-2 component folder names eight) would otherwise produce a folder name that cannot be
+# created; the combined name is only a label, so it is shortened past this point with a count.
+_MAX_COMBINED_SUBFOLDER_NAME = 96
+
+
+def _combined_subfolder_name(subfolder_names: List[str]) -> str:
+    combined = "_".join(subfolder_names)
+    if len(combined) <= _MAX_COMBINED_SUBFOLDER_NAME:
+        return combined
+    kept: List[str] = []
+    for name in subfolder_names:
+        candidate = "_".join([*kept, name])
+        if kept and len(candidate) > _MAX_COMBINED_SUBFOLDER_NAME - 16:
+            break
+        kept.append(name)
+    remaining = len(subfolder_names) - len(kept)
+    return "_".join(kept) + (f"_and_{remaining}_more" if remaining else "")
+
+
 class ModelInstallService(ModelInstallServiceBase):
     """class for InvokeAI model installation."""
 
@@ -1408,7 +1428,7 @@ class ModelInstallService(ModelInstallServiceBase):
             subfolder_names = [
                 (sf.stem if sf.suffix else sf.name).replace("/", "_").replace("\\", "_") for sf in subfolders
             ]
-            combined_name = "_".join(subfolder_names)
+            combined_name = _combined_subfolder_name(subfolder_names)
             path_to_add = Path(f"{top}_{combined_name}")
 
             parts: List[RemoteModelFile] = []

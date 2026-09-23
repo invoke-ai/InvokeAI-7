@@ -2,18 +2,7 @@ import type { Project } from '@workbench/projectContracts';
 
 import { stripInfiniteWindowAnchor, stripSessionScopedGallerySearch } from '@features/gallery/contracts';
 
-/**
- * The project *document* codec: the wire and file shape of a project, and the
- * migrations that heal older ones. It deliberately knows nothing about the
- * Workbench reducer.
- *
- * Rehydrating a document into a live `Project` needs `loadWorkbenchProject`
- * from the aggregate state module, which transitively owns generation graphs,
- * widget state, and every policy the editor runs on. Keeping that step out of
- * this module is what lets the Launchpad read, write, and shape-check project
- * files without paying for the editor — see `deserializeProjectDocument` in
- * `./syncedPersistence` for the rehydrating half.
- */
+/** Keep document codecs reducer-free; load rehydration lazily. */
 
 export const PROJECT_DOCUMENT_SCHEMA_VERSION = 2;
 export const PROJECT_DOCUMENT_MAX_BYTES = 32 * 1024 * 1024;
@@ -145,20 +134,8 @@ const patchGalleryValues = (
 });
 
 /**
- * Write the server's board id into a project document's gallery state.
- *
- * The server owns the project-to-board relationship; `projectBoardId` in the document is only a
- * cache of it. Every path that learns the authoritative id — hydrating a record, creating a
- * project, importing one, duplicating one, forking a conflicted one — comes through here, so there
- * is one place that decides what "the project's board" means in a document.
- *
- * `selectBoard` distinguishes the two cases. A project the user is meeting for the first time
- * should also be *pointed* at its board; one being re-hydrated should keep whatever destination
- * the user last chose, which `getGallerySelectedBoardId` resolves separately.
- *
- * Both widget shapes are patched — the current `widgetInstances` map and the `widgetStates.gallery`
- * one older builds wrote — and a document with neither is returned untouched rather than having a
- * shape invented for it.
+ * Cache the server-authoritative board ID in either persisted widget shape. selectBoard selects it on first open;
+ * rehydration preserves the user's destination. Leave documents without gallery state untouched.
  */
 export const applyAuthoritativeProjectBoard = (
   projectDocument: Record<string, unknown>,
@@ -207,12 +184,7 @@ export const applyAuthoritativeProjectBoard = (
   return hasChanged ? next : projectDocument;
 };
 
-/**
- * The minimum a document must carry to be a project at all. A document that
- * fails this can never rehydrate, so callers that only need to reject junk
- * (an import picker, a file preview) can stop here instead of loading the
- * reducer to find out.
- */
+/** Reject invalid document formats without eagerly loading the reducer. */
 export const isProjectDocumentShape = (data: Record<string, unknown>): boolean =>
   typeof data.id === 'string' &&
   typeof data.name === 'string' &&

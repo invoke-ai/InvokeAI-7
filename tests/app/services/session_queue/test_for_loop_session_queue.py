@@ -167,6 +167,59 @@ def test_sqlite_queue_resumes_partial_stateful_for_loop(session_queue: SqliteSes
     assert final_item.session.results[after_state_id].value == "charlie"
 
 
+def test_sqlite_queue_round_trips_a_checkpoint_before_each_next_node(
+    session_queue: SqliteSessionQueue,
+) -> None:
+    """Every manually persisted node boundary must survive a process restart before the next node.
+
+    This isolates the SQLite checkpoint contract; processor save cadence is intentionally outside
+    this test because this test-only change does not alter the session processor.
+    """
+    item_id = _insert_session(session_queue, GraphExecutionState(graph=_stateful_for_graph()))
+
+    queue_item = session_queue.dequeue()
+    assert queue_item is not None
+    state = queue_item.session
+    completed_sources: list[str] = []
+
+    while (source_id := _execute_next(state)) is not None:
+        completed_sources.append(source_id)
+        session_queue.save_queue_item_session(item_id, state)
+        persisted = session_queue.get_queue_item(item_id).session
+
+        assert persisted.executed == state.executed
+        assert persisted.results.keys() == state.results.keys()
+        assert persisted.prepared_source_mapping == state.prepared_source_mapping
+        state = persisted
+
+    assert completed_sources == [
+        "for",
+        "state_set",
+        "return",
+        "for",
+        "state_set",
+        "return",
+        "for",
+        "state_set",
+        "return",
+        "after_collection",
+        "after_state",
+    ]
+    assert state.is_complete()
+    after_collection_id = next(
+        exec_id for exec_id, source_id in state.prepared_source_mapping.items() if source_id == "after_collection"
+    )
+    after_state_id = next(
+        exec_id for exec_id, source_id in state.prepared_source_mapping.items() if source_id == "after_state"
+    )
+    assert state.results[after_collection_id].value == ["alpha", "beta", "charlie"]
+    assert state.results[after_state_id].value == "charlie"
+    session_queue.set_queue_item_session(item_id, state)
+    final_item = session_queue.complete_queue_item(item_id)
+    assert final_item.status == "completed"
+    assert final_item.session.is_complete()
+
+
 def test_sqlite_queue_round_trips_empty_for_final_output(session_queue: SqliteSessionQueue) -> None:
     item_id = _insert_session(session_queue, GraphExecutionState(graph=_empty_for_graph()))
 

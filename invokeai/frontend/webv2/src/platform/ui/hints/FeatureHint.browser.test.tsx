@@ -36,17 +36,7 @@ let host: HTMLDivElement | null = null;
 let root: Root | null = null;
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-/**
- * Returns the pointer to the viewport origin — where the harness below states
- * it starts.
- *
- * That only holds for the first test. Once one has hovered the trigger the
- * cursor stays on it, so the next render mounts a fresh trigger underneath the
- * pointer and the card opens before the test asks for it. That surfaced as a
- * strict-mode violation, with `CLIP skip` matching both the trigger and the
- * already-open card's own heading and paragraph. The trigger is inset by
- * 120px, so the origin is reliably clear of it.
- */
+/** Reset the pointer before each test so a newly mounted trigger cannot open under the previous test's cursor. */
 const parkPointer = async (): Promise<void> => {
   const parking = document.createElement('div');
 
@@ -85,11 +75,7 @@ const render = async (adapter: FeatureHintsAdapter) => {
       <ChakraProvider value={system}>
         <I18nextProvider i18n={i18n}>
           <FeatureHintsProvider adapter={adapter}>
-            {/*
-              Inset and shrink-wrapped on purpose: the mouse starts at the
-              viewport origin, so a full-width trigger at (0,0) would already
-              contain the pointer and `pointerenter` would never fire.
-            */}
+            {/* Inset the trigger from the initial pointer position so entering it emits pointerenter. */}
             <FeatureHint hint="clipSkip">
               <Text display="inline-block" m="120px">
                 CLIP skip
@@ -108,16 +94,6 @@ const render = async (adapter: FeatureHintsAdapter) => {
 const cardText = (): string =>
   document.querySelector('[data-scope="hover-card"][data-part="content"]')?.textContent ?? '';
 
-/**
- * Waits for the hover card to actually open, rather than sleeping past its
- * open delay and hoping.
- *
- * The fixed 900ms wait this replaces was comfortably longer than the delay on
- * an idle machine and not always long enough on a loaded CI runner, where the
- * card had not opened yet and every assertion below read an empty string.
- * Polling takes as long as the machine needs and fails loudly if the card
- * never appears.
- */
 const waitForCard = async (timeoutMs = 5000): Promise<void> => {
   const deadline = Date.now() + timeoutMs;
 

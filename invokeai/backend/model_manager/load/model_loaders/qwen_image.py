@@ -4,6 +4,7 @@ from typing import Optional
 import accelerate
 import torch
 
+from invokeai.backend.model_manager.checkpoint_prefix import CheckpointPrefix
 from invokeai.backend.model_manager.configs.base import Checkpoint_Config_Base, Diffusers_Config_Base
 from invokeai.backend.model_manager.configs.factory import AnyModelConfig
 from invokeai.backend.model_manager.configs.main import (
@@ -18,7 +19,6 @@ from invokeai.backend.model_manager.load.load_default import ModelLoader, _model
 from invokeai.backend.model_manager.load.model_loader_registry import ModelLoaderRegistry
 from invokeai.backend.model_manager.load.model_loaders.comfyui_state_dict_utils import (
     _dequantize_comfyui_fp8,
-    _strip_comfyui_prefix,
     _strip_quantization_metadata,
 )
 from invokeai.backend.model_manager.load.model_loaders.generic_diffusers import GenericDiffusersLoader
@@ -227,7 +227,7 @@ class QwenImageGGUFCheckpointModel(ModelLoader):
         compute_dtype = TorchDevice.choose_bfloat16_safe_dtype(target_device)
 
         sd = gguf_sd_loader(model_path, compute_dtype=compute_dtype)
-        sd = _strip_comfyui_prefix(sd)
+        sd = CheckpointPrefix.detect(sd).strip(sd)
 
         is_edit = getattr(config, "variant", None) == QwenImageVariantType.Edit
         model_config = _build_qwen_image_transformer_config(sd, is_edit=is_edit)
@@ -282,7 +282,7 @@ class QwenImageCheckpointModel(ModelLoader):
         model_dtype = TorchDevice.choose_bfloat16_safe_dtype(target_device)
 
         sd = load_file(str(model_path))
-        sd = _strip_comfyui_prefix(sd)
+        sd = CheckpointPrefix.detect(sd).strip(sd)
 
         # Comfy's nvfp4 build keeps the image stream's attention and MLP in nvfp4, beside scaled fp8. Take those layers
         # out before the fold: `_dequantize_comfyui_fp8` multiplies every `.weight_scale` into its weight, nvfp4's

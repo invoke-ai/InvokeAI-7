@@ -15,11 +15,8 @@ import {
 } from './data/api';
 
 /**
- * Session-lived auth state shared by the router guards and shell chrome. When
- * multi-user is disabled on the backend, the resolved snapshot keeps the
- * entire auth surface — login screen, user menu, expiry handling — dormant.
- * Until that mode is known, `phase` keeps the otherwise conservative boolean
- * defaults from being interpreted as a single-user grant.
+ * Keep auth surfaces dormant in single-user mode; unresolved phase must never interpret conservative defaults as a
+ * grant.
  */
 export interface AuthSession {
   /** Remount key for every authenticated lifetime, including same-user logins. */
@@ -67,11 +64,7 @@ const getAccountLifecycle = (): IdentityAccountLifecycle => {
 
 export const useAuthSession = (): AuthSession => store.useSnapshot();
 
-/**
- * Imperative read for non-reactive callers (e.g. the widget registry). Safe
- * inside the workbench: the route guard resolves the session before mounting,
- * and a user change remounts the whole workbench route.
- */
+/** Workbench imperative reads follow route-guard resolution; changing users remounts the route. */
 export const getAuthSession = (): AuthSession => store.getSnapshot();
 
 /** Stable subscription for App-composed capability read ports. */
@@ -98,11 +91,7 @@ const activateResolvedAccount = (multiuserEnabled: boolean, user: UserDTO | null
     : getAccountLifecycle().invalidate().epoch;
 };
 
-/**
- * Suffix for localStorage keys holding user-owned state (projects, account
- * preferences, personal API keys — see the spec's State Ownership section).
- * Empty in single-user mode, so existing keys keep working unchanged.
- */
+/** Scope user-owned storage keys by account; single-user mode preserves existing unsuffixed keys. */
 export const getUserStorageScope = (): string => {
   const session = store.getSnapshot();
 
@@ -190,9 +179,8 @@ const resolveSession = async (): Promise<AuthSession> => {
   try {
     status = await getAuthStatus();
   } catch {
-    // A network failure says nothing about the backend's auth mode. Publishing
-    // an unavailable state keeps every authenticated route and storage owner
-    // unmounted while allowing a later route retry to resolve the session.
+    // Network failure cannot establish auth mode; keep routes and storage owners unmounted until a successful
+    // retry.
     return publishUnavailableSession();
   }
 
@@ -202,19 +190,15 @@ const resolveSession = async (): Promise<AuthSession> => {
   if (status.multiuser_enabled && !status.setup_required && browserIdentityTokenAdapter.get()) {
     try {
       user = await getCurrentUser();
-      // This branch is the restore-from-stored-token path, the one case that holds a valid JWT
-      // without the media cookie login would have set. Re-issue it before anything renders an
-      // <img>, or every thumbnail 401s. Awaited (a small POST) so the first paint already has
-      // the cookie, but never fatal: failing here leaves media broken, not the session.
+      // Await restored-session media cookies before rendering. Refresh failure breaks media but must not
+      // invalidate the authenticated session.
       await refreshMediaCookie().catch(() => undefined);
     } catch (error) {
       if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
         browserIdentityTokenAdapter.clear();
         sessionExpired = true;
       } else {
-        // The auth mode is known, but the principal is not. Treat this like a
-        // status outage instead of incorrectly presenting the user as signed
-        // out and making unscoped storage reachable.
+        // Unknown principal remains unavailable rather than signed out, preventing access to unscoped storage.
         return publishUnavailableSession();
       }
     }

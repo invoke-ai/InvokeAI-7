@@ -45,9 +45,7 @@ const CENTER_MENU_POSITIONING = { placement: 'bottom-start' } as const;
 const CENTER_PREFERRED_REGIONS = ['center'] as const;
 
 const CENTER_CHROME_INSET_STYLE = { '--wb-center-chrome-inset': '3rem' } as React.CSSProperties;
-// The work surface's floor. Side panels shrink to honour it (see
-// `WidgetPanelFrame`), so on a portrait tablet the center stays usable instead
-// of collapsing to nothing between two fixed-width panels.
+// Reserve a usable center width; side panels shrink to honor this floor.
 const CENTER_MIN_WIDTH = '20rem';
 
 export const CenterArea = () => {
@@ -347,15 +345,8 @@ const CenterViewMenu = ({
 };
 
 /**
- * The active center view's icon, showing a spinner while its implementation
- * chunk is still downloading.
- *
- * Panel widgets get this from their frame header; the center has no header —
- * `CenterArea` owns its chrome — so the identity slot in this trigger was the
- * one place a cold widget looked fully loaded while it was not. Suspense is
- * the mechanism because `DeferredResource` exposes a status but nothing to
- * subscribe to; the same `use()`/fallback pair already drives the chrome slots
- * in `WidgetRenderer`.
+ * Use Suspense for the center icon's loading state because DeferredResource has no subscription and center widgets
+ * lack frame headers.
  */
 const CenterViewIcon = ({ widget }: { widget: RegisteredWidget }) => {
   const fallback = useMemo(
@@ -409,13 +400,7 @@ const CenterViewMenuRow = ({
   );
 };
 
-/**
- * One kept center view. It resolves its own instance and widget rather than
- * taking a region view-model item: a kept instance is by definition no longer
- * in the region's item list, because applying a preset replaces `instanceIds`
- * wholesale. `applyLayoutPresetToProject` merges `widgetInstances`, so the
- * instance itself survives and can still be resolved here.
- */
+/** Resolve kept instances from widgetInstances: presets replace region membership but merge and preserve instances. */
 const KeptCenterViewSlot = ({ instanceId }: { instanceId: string }) => {
   const instance = useActiveProjectSelector(
     (project) => project.widgetInstances[instanceId],

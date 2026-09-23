@@ -29,11 +29,7 @@ import { createWorkbenchStore, type WorkbenchSnapshot, type WorkbenchInternalSto
 
 interface WorkbenchContextValue {
   activeProject: Project;
-  /**
-   * True once the persisted snapshot has been loaded (or found absent). Side
-   * effects that read or mutate the queue must wait for this, or they race the
-   * async hydration and act on state that is about to be replaced.
-   */
+  /** Queue side effects must wait for hydration to avoid acting on state about to be replaced. */
   hasHydrated: boolean;
 }
 
@@ -107,14 +103,10 @@ export const WorkbenchProvider = ({
       persistence,
       signal: owner.signal,
     });
-    // Published for the whole life of the mount, so a library surface rendered beside the editor
-    // mutates an open project through the sync engine rather than beside it.
+    // Publish throughout the mount so sibling library surfaces mutate open projects through the sync engine.
     const openProjectBroker = createOpenProjectBroker({
       closeProject: (projectId) => {
-        // The last tab is not this handle's business. `close` refuses it *and* raises "at least one
-        // project must remain open" — correct for someone closing a tab, wrong for a deletion,
-        // which is not asking to keep working here. Leaving the editor is the caller's job
-        // (`leaveEditorIfLast`), and it is already doing it.
+        // Skip close's last-tab refusal during deletion; leaveEditorIfLast owns leaving the editor.
         if (store.getSnapshot().projects.length > 1) {
           store.commands.projects.close(projectId);
         }
@@ -123,8 +115,7 @@ export const WorkbenchProvider = ({
       flushProject: (projectId) => {
         const project = store.getSnapshot().projects.find((candidate) => candidate.id === projectId);
 
-        // A project the editor no longer holds has nothing to push, and the id is by definition
-        // whatever the server last acknowledged for it.
+        // Unopened projects have no local edits; their ids reflect server acknowledgements.
         return project
           ? persistence.flushProjectToServer(project)
           : Promise.resolve<ProjectPushOutcome>({ documentJson: '', kind: 'acknowledged' });

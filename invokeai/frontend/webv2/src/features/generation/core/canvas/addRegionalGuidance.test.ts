@@ -192,10 +192,7 @@ describe('isRegionalGuidanceSupportedForBase', () => {
 });
 
 describe('the support matrix and the served capabilities', () => {
-  // isRegionalGuidanceSupportedForBase asserts `base is RegionalGuidanceBase` from the backend's
-  // answer, and getRegionalGuidanceSupport then indexes the matrix on that assertion. A base the
-  // backend declares supported but the matrix has no row for would hand callers an undefined typed
-  // as present -- so every served `true` must have a row.
+  // Every backend-supported regional base needs a local graph row.
   it('give every base the backend declares supported a row in the matrix', () => {
     const declaredSupported = architectureCapabilitiesFixture
       .filter((row) => row.features.supports_regional_guidance)
@@ -203,8 +200,7 @@ describe('the support matrix and the served capabilities', () => {
 
     expect(declaredSupported.length).toBeGreaterThan(0);
     for (const base of declaredSupported) {
-      // `toBeTruthy`, not `not.toBeNull`: a base with no row reaches this as `undefined`, which
-      // passes a null check and made this guard inert for exactly the drift it exists to catch.
+      // toBeTruthy also rejects undefined; not.toBeNull would miss it.
       expect(getRegionalGuidanceSupport(base), base).toBeTruthy();
     }
   });
@@ -250,8 +246,7 @@ describe('addRegionalGuidance — Z-Image / Anima', () => {
     expect(hasEdge(g, 'model_loader', 'qwen3_encoder', 'rg_pos_cond_r1', 'qwen3_encoder')).toBe(true);
     expect(hasEdge(g, 'rg_mask_to_tensor_r1', 'mask', 'rg_pos_cond_r1', 'mask')).toBe(true);
     expect(hasEdge(g, 'rg_pos_cond_r1', 'conditioning', 'pos_cond_collect', 'item')).toBe(true);
-    // The backend discards masks on negative conditioning for these bases, so nothing reaches the
-    // negative collector even though the graph has one.
+    // These backends discard negative masks even when a negative collector exists.
     expect(g.nodes.rg_neg_cond_r1).toBeUndefined();
     expect(g.nodes.rg_pos_cond_inverted_r1).toBeUndefined();
     expect(g.edges.some((e) => e.destination.node_id === 'neg_cond_collect')).toBe(false);

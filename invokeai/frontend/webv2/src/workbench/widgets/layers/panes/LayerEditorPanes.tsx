@@ -45,11 +45,8 @@ interface PaneBlockLabels {
 }
 
 /**
- * One fixed pane block of the Layers panel: a tab strip over a panel, with a
- * preferred height, a resize separator on its inner edge, and collapse down to
- * the strip. `edge` names which end of the panel the block is docked to — a
- * top block grows downward and a bottom block grows upward. The panes are part
- * of the panel, never movable widgets.
+ * Dock fixed pane blocks at either panel edge with preferred height, resize, and collapse-to-tabs; they are not
+ * movable widgets.
  */
 const LayerPaneBlock = ({
   activePane,
@@ -272,11 +269,6 @@ const EDITOR_PANES: ReadonlyArray<{ id: LayerEditorPaneId; labelKey: string }> =
   { id: 'overview', labelKey: 'widgets.labels.overview' },
 ];
 
-/**
- * The editor panes under the tree: the active tool's Properties, the selected
- * layer's Transform, and the document Overview, persisted through the widget's
- * project state.
- */
 export const LayerEditorPanes = ({
   layout,
   onLayoutChange,
@@ -340,11 +332,6 @@ const COLOR_PANES: ReadonlyArray<{ id: LayerColorPaneId; labelKey: string }> = [
   { id: 'swatches', labelKey: 'widgets.labels.swatches' },
 ];
 
-/**
- * The color panes above the tree: the project foreground/background pair with
- * its picker and channels, and the swatch shelves as a sibling tab — the
- * layers panel's persistent color workspace.
- */
 export const LayerColorPane = ({
   layout,
   onLayoutChange,

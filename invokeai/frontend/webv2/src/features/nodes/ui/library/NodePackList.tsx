@@ -15,12 +15,6 @@ import { useTranslation } from 'react-i18next';
 import { NodePackContextMenu, type NodePackContextMenuTarget } from './NodePackContextMenu';
 import { NodePackFilterMenu } from './NodePackFilterMenu';
 
-/**
- * Master list for the nodes manager: a search box over a scrollable column of
- * selectable pack rows. Mirrors the model library list — `Row` with the
- * `accent` active variant marks the open pack, and the search filters by name
- * or path.
- */
 export const NodePackList = ({
   activePackName,
   error,
@@ -166,8 +160,7 @@ const PackRow = ({
     <Icon as={BlocksIcon} boxSize="4" color={isActive ? 'accent.contrast' : 'fg.subtle'} flexShrink={0} />
     <MiddleTruncate fontSize="xs" fontWeight="600" maxW="full" text={pack.name} />
     {isProblemPack(pack) ? (
-      // Zero nodes is the strongest health signal the catalog carries: the
-      // pack's import failed or a reload/restart is pending.
+      // Zero registered nodes indicates import failure or pending reload/restart.
       <Tooltip content={problemHint}>
         <Badge colorPalette="orange" flexShrink={0} fontSize="2xs" ms="auto" variant="surface">
           {pack.nodeCount}

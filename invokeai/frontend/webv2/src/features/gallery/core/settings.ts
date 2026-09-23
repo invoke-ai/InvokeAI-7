@@ -31,11 +31,7 @@ export interface GallerySettings {
   showArchivedBoards: boolean;
   showDateBoards: boolean;
   showImageDimensions: boolean;
-  /**
-   * Boards owned by another project. They are readable and already labelled
-   * with a project badge; this hides them for anyone who wants the panel to
-   * be about the project they have open.
-   */
+  /** Hide readable, project-labelled boards belonging to other projects. */
   showOtherProjectBoards: boolean;
   showPendingItems: boolean;
   progressSectionCollapsed: boolean;

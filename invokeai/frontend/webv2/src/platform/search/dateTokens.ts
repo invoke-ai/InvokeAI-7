@@ -1,18 +1,6 @@
 /**
- * Closed grammar for date-filter search tokens: `from:`, `to:`, and `date:`
- * accepting ISO `YYYY-MM-DD` or the relative values `today`, `yesterday`, and
- * `Nd`/`Nw`/`Nm` (that many days/weeks/calendar-months ago — a single date,
- * not a span). Shared by the gallery search box and the command palette.
- *
- * Invalid token values are never silently dropped: they are reported in
- * `invalidTokens` AND left in `text`, so plain text search still runs over
- * them (this also keeps prompts that literally contain `from:something`
- * findable). Only valid tokens are stripped from `text`.
- *
- * All dates are calendar days. Relative values resolve against the user's
- * local calendar; the backend compares the resulting date-only strings
- * against UTC timestamps, so day boundaries are effectively UTC — the same
- * semantics as the `by_date:` virtual boards.
+ * from/to/date accept ISO days, today/yesterday, or Nd/Nw/Nm ago (one day, not a span). Keep invalid tokens in
+ * both text and invalidTokens. Relative dates use local calendar arithmetic; backend date boundaries are UTC.
  */
 
 export type DateTokenKey = 'from' | 'to' | 'date';
@@ -138,11 +126,7 @@ export const parseDateTokens = (query: string, now: Date = new Date()): DateToke
   };
 };
 
-/**
- * True when the timestamp's calendar day falls within the range (bounds
- * inclusive and optional). Works for both space- and T-separated ISO
- * timestamps; empty/absent timestamps fail closed.
- */
+/** Inclusive optional date bounds; accept space/T timestamps and reject absent timestamps. */
 export const isTimestampInRange = (isoTimestamp: string, range: DateRange): boolean => {
   const day = isoTimestamp.slice(0, 10);
 
@@ -181,10 +165,7 @@ export const completeTrailingDateToken = (query: string, value: string): string 
   return `${query.slice(0, trailing.start)}${trailing.key}:${value} `;
 };
 
-/**
- * True while `partialValue` could still become a valid value with more
- * typing — used to suppress invalid-token feedback during normal entry.
- */
+/** Suppress invalid-token feedback while the value can still become valid by typing. */
 export const isPossibleDatePrefix = (partialValue: string): boolean => {
   const lower = partialValue.toLowerCase();
 
@@ -200,11 +181,7 @@ export const isPossibleDatePrefix = (partialValue: string): boolean => {
   return /^\d{1,4}(-(\d{0,2}(-\d{0,2})?)?)?$/.test(lower) && lower.length <= 10;
 };
 
-/**
- * The first invalid token worth surfacing as feedback. A trailing token whose
- * value could still become valid with more typing (`from:`, `from:2026-`) is
- * normal entry, not an error, and is exempted.
- */
+/** Ignore a potentially valid trailing token while reporting the first other invalid token. */
 export const findInvalidDateToken = (query: string, parse: DateTokenParse): InvalidDateToken | undefined => {
   const trailing = matchTrailingDateToken(query);
 
@@ -219,11 +196,6 @@ export const findInvalidDateToken = (query: string, parse: DateTokenParse): Inva
   );
 };
 
-/**
- * The label shape an applied range should render as: a single day (both bounds
- * equal), a closed range, or an open-ended bound. Surfaces map each kind to
- * their own i18n copy.
- */
 export type DateRangeShape =
   | { kind: 'day'; date: string }
   | { kind: 'range'; from: string; to: string }
@@ -248,11 +220,7 @@ export const describeDateRange = (range: DateRange): DateRangeShape | null => {
   return null;
 };
 
-/**
- * Formats a YYYY-MM-DD string as a short local date ("Jul 14"). Builds the
- * Date from parts in local time — never via `new Date(isoString)`, which
- * would parse as UTC and shift the day in negative-offset timezones.
- */
+/** Construct local dates from parts; parsing YYYY-MM-DD as UTC would shift display in negative offsets. */
 export const formatIsoDate = (isoDate: string, locale?: string): string => {
   const parts = ISO_DATE_PATTERN.exec(isoDate);
 

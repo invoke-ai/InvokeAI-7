@@ -1,14 +1,6 @@
 /**
- * System-clipboard access for canvas pixel selections.
- *
- * The engine deliberately stops at `Blob` / `ImageData` — `canvas-engine` may
- * not reach `workbench/widgets`, and clipboard permissions are a DOM concern
- * either way. This module is the widget-side bridge: it reads an image off the
- * clipboard and decodes it to `ImageData` the engine can paste, and re-exports
- * the existing write helper so a canvas caller has one place to import from.
- *
- * Every dependency is injectable so the whole path is testable without a real
- * clipboard or canvas.
+ * Bridge clipboard images and engine Blob/ImageData on the widget side; inject dependencies for tests without real
+ * clipboard/canvas access.
  */
 
 export { copyBlobToClipboard } from '@workbench/widgets/layers/layerExportActions';

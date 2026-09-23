@@ -1,14 +1,8 @@
 import { lazy, Suspense } from 'react';
 
 /**
- * Places one live panel on Home.
- *
- * All three resolve from the same `import('./livePanels')` promise, so the
- * bundler emits a single dynamic chunk for the lot rather than one per panel —
- * but each still mounts wherever the page wants it. Every panel renders
- * nothing until it has something to report, so the fallback is `null`: a
- * skeleton for a band that will usually turn out to be empty is worse than
- * nothing appearing at all.
+ * Load all live panels from one shared chunk while mounting independently. Use a null fallback because empty
+ * panels render nothing.
  */
 
 const loadLivePanels = () => import('./livePanels');

@@ -1,17 +1,7 @@
 import type { GenerateLora } from '@features/generation/contracts';
 import type { UpscaleWidgetValues } from '@features/upscale/core/types';
 
-/**
- * Content comparators for the Upscale widget's memo boundaries.
- *
- * `values` is re-derived on every patch. Its members happen to be
- * identity-stable, but that is a property of the normalizer rather than a
- * contract, so these compare by content instead.
- *
- * Kept apart from the components that pass them to `memo` so they can be tested
- * directly: a comparator wrong in the permissive direction silently shows stale
- * data, which you cannot catch by looking at the screen.
- */
+/** Compare normalized values by content; permissive memo comparisons would silently retain stale UI. */
 
 export const areStringArraysEqual = (left: readonly string[], right: readonly string[]): boolean =>
   left === right || (left.length === right.length && left.every((value, index) => value === right[index]));
@@ -36,11 +26,8 @@ export const getModelTriggerPhrases = (model: UpscaleWidgetValues['model']): rea
 };
 
 /**
- * `key` alone is not enough: a catalog refresh swaps in a fresh config under
- * the same key, and the prompt editors consume per-config data (trigger
- * phrases, used both to populate the autocomplete and to label its group;
- * `base`, used to filter compatible embeddings). Identity short-circuits the
- * common case.
+ * Catalog refreshes can change trigger phrases or base under the same key; compare prompt-relevant metadata after
+ * identity checks.
  */
 export const areModelsEquivalent = (left: UpscaleWidgetValues['model'], right: UpscaleWidgetValues['model']): boolean =>
   left === right ||
@@ -62,10 +49,6 @@ export const areInputImagesEquivalent = (
     left.width === right.width &&
     left.height === right.height);
 
-/**
- * Whole-values equality for the model reconciler, which asks only "did
- * normalization change anything at all" — a question a deep structural compare
- * answers correctly and cheaply enough at that one call site.
- */
+/** Use structural equality to detect any normalization change at the reconciler boundary. */
 export const valuesAreEqual = (left: UpscaleWidgetValues, right: UpscaleWidgetValues): boolean =>
   JSON.stringify(left) === JSON.stringify(right);

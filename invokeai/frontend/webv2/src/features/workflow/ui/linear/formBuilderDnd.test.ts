@@ -12,13 +12,7 @@ import {
   resolveFormDrop,
 } from './formBuilderDnd';
 
-/**
- * root -> [fieldA, container1 -> [fieldB], fieldC]
- * Mirrors the shape `getFormChildren` walks: a root container element in
- * `form.elements` whose `data.children` list the top-level elements, each
- * carrying its own `parentId` back to its container (exactly what
- * `moveFormElementTo` maintains in `core/document.ts`).
- */
+/** root -> [fieldA, container1 -> [fieldB], fieldC] */
 const buildFormFixture = (): WorkflowForm => ({
   elements: {
     container1: {
@@ -94,11 +88,7 @@ describe('getFormDropEdge', () => {
   });
 });
 
-/**
- * root -> [container A -> [container B -> [fieldD], fieldC]]
- * Mirrors a nested-container layout the way the builder renders it: A's own
- * body holds both B (another container) and a plain field.
- */
+/** root -> [A -> [B -> [fieldD], fieldC]] */
 const buildNestedFormFixture = (): WorkflowForm => ({
   elements: {
     A: { data: { children: ['B', 'fieldC'], layout: 'column' }, id: 'A', parentId: 'root', type: 'container' },
@@ -136,12 +126,8 @@ describe('pickInnermostFormCollision', () => {
   });
 
   /**
-   * A container's own `into:X` dropzone is DOM-nested inside its own
-   * `edge:X` box (the whole card), so hovering the dropzone always matches
-   * both — not just when a *different*, deeper element's edge is involved.
-   * `into:X` (lands inside X) must win over `edge:X` (lands inside X's
-   * parent): dropping onto a container's own empty-state hint has to append
-   * into it, not reorder it as a sibling.
+   * A container's nested into target must beat its own edge target so empty-state drops append inside rather than
+   * reorder outside.
    */
   it('prefers a container over its own edge when both match the same element', () => {
     const collisions = [{ id: formEdgeDroppableId('A') }, { id: formIntoDroppableId('A') }];
@@ -151,12 +137,8 @@ describe('pickInnermostFormCollision', () => {
   });
 
   /**
-   * root -> [C, B -> [D]]. C and B are incomparable siblings (neither is an
-   * ancestor of the other); D is nested under B. A greedy "compare each new
-   * candidate only against the current winner" pass can get stuck on C: C
-   * isn't D's ancestor, so a pairwise check never promotes D once C already
-   * won. Depth is computed independently per candidate specifically to avoid
-   * this, so the deepest (`D`) must win regardless of arrival order.
+   * Compute depth independently so a deeper candidate wins even after incomparable siblings, regardless of
+   * collision order.
    */
   it('is order-independent for incomparable siblings plus a nested descendant', () => {
     const siblingForm: WorkflowForm = {

@@ -19,10 +19,8 @@ import { PanelModeToggle } from './WorkflowLinearPanel';
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-// The React Compiler auto-memoizes plain value computations, so a spy on a pure
-// helper a card renders through is not a reliable "did this render" probe — the
-// compiler can skip the call even when the component did run. Hooks can never be
-// skipped, so a passthrough spy on `useDroppable` is the reliable probe.
+// Probe renders through a passthrough hook spy; compiler memoization can skip pure helper calls independently of
+// component renders.
 vi.mock('@dnd-kit/core', async (importOriginal) => {
   const actual = await importOriginal<typeof DndKitCoreModule>();
 
@@ -93,12 +91,7 @@ describe('Workflow Linear panel mode toggle', () => {
   });
 });
 
-/**
- * Regression coverage for the native-DnD bug: a reparenting drop remounts the
- * card, so `dragend` (bound to the old node) never fired and every later drag
- * died. dnd-kit resolves in `onDragEnd` at the `DndContext` level, which fires
- * regardless of unmounts, so a second drag straight after must still work.
- */
+/** A second drag after reparenting verifies completion survives dragged-card remounts through DndContext ownership. */
 describe('Form builder drag and drop (dnd-kit)', () => {
   let host: HTMLDivElement;
   let root: Root;
@@ -225,11 +218,7 @@ describe('Form builder drag and drop (dnd-kit)', () => {
     await interact(() => pointer('pointerup', handle.ownerDocument, x, y + 1));
   };
 
-  /**
-   * Keyboard drag: `Space` lifts, arrows step 25px toward the target, `Space`
-   * drops. Ends with a net-zero nudge — the keyboard analogue of `dragTo`'s
-   * settle move, for the same one-tick remeasure lag.
-   */
+  /** Keyboard drag uses Space/arrows/Space and a net-zero settle nudge for delayed measurement. */
   const dragToWithKeyboard = async (sourceTitle: string, targetCenterY: number): Promise<void> => {
     const handle = titleBarFor(sourceTitle);
     const startRect = handle.getBoundingClientRect();
@@ -250,8 +239,6 @@ describe('Form builder drag and drop (dnd-kit)', () => {
     await interact(() => key(handle, direction));
     await interact(() => key(handle, opposite));
 
-    // Space drops, resolving the move through the same `onDragEnd` ->
-    // `moveFormElementTo` path the pointer drag uses.
     await interact(() => key(handle, 'Space'));
   };
 
@@ -269,17 +256,12 @@ describe('Form builder drag and drop (dnd-kit)', () => {
 
     await dragTo('Heading', dropZoneRect.left + dropZoneRect.width / 2, dropZoneRect.top + dropZoneRect.height / 2);
 
-    // The container's card content now holds the heading card, and the
-    // empty-state hint is gone.
     const containerContent = cardContentFor('Container (column)');
 
     expect(containerContent.textContent).toContain('Heading');
     expect(containerContent.textContent).not.toContain('Empty container');
 
-    // Drag 2: THE REGRESSION ASSERTION. "Divider" (still at the root) drops
-    // onto the now-nested "Heading" card's lower edge. Under the old native
-    // DnD implementation, drag 1's reparent remount lost `dragend` and left
-    // `draggingElementId` stuck — this second drag would never start.
+    // Immediately drag again after reparenting to catch lost completion state from the remounted source.
     const headingCardRect = titleBarFor('Heading').parentElement!.getBoundingClientRect();
 
     await dragTo('Divider', headingCardRect.left + headingCardRect.width / 2, headingCardRect.bottom - 2);
@@ -296,17 +278,7 @@ describe('Form builder drag and drop (dnd-kit)', () => {
     expect(opacities).not.toContain('0.4');
   });
 
-  /**
-   * Regression coverage for the "keyboard drag" finding: the drag handle
-   * spreads dnd-kit's `attributes` (`role="button"`, `tabIndex=0`), which
-   * promises "press space to lift, arrows to move" — a promise only true
-   * once a `KeyboardSensor` is registered alongside the `PointerSensor`.
-   * There's no pointer during a keyboard drag, so `KeyboardSensor` moves the
-   * dragged card's tracked rect by a fixed 25px step per arrow press
-   * (dnd-kit's `defaultKeyboardCoordinateGetter`) and collision detection
-   * falls through to `rectIntersection` (`pointerWithin` needs real pointer
-   * coordinates, which a keyboard drag never has).
-   */
+  /** Exercise KeyboardSensor and rectangle collision fallback; keyboard drags have no pointer coordinates. */
   it('moves a form element into a container with the keyboard', async () => {
     await renderHarness();
 
@@ -326,16 +298,7 @@ describe('Form builder drag and drop (dnd-kit)', () => {
     expect(containerContent.textContent).not.toContain('Empty container');
   });
 
-  /**
-   * Coverage for the keyboard *edge* path specifically: the "into a
-   * container" case above never reaches `getFormDropEdge`'s card-center
-   * fallback (`handleDragMove` returns early for `into` targets before
-   * `referenceY` is even computed) — a keyboard drag has no
-   * `pointerCoordinates`, so this is the only path that exercises the
-   * fallback dnd-kit needs for a real "arrows move the card" keyboard drag.
-   * Moves "Divider" (root sibling, after "Heading") up onto the upper
-   * quarter of "Heading"'s card, landing 'above' it and reordering it first.
-   */
+  /** Test keyboard edge targeting separately from container drops to exercise the translated-card-center fallback. */
   it('reorders a form element above a sibling with the keyboard', async () => {
     await renderHarness();
 
@@ -355,16 +318,8 @@ describe('Form builder drag and drop (dnd-kit)', () => {
   });
 
   /**
-   * Perf isolation for `BuilderDropTargetContext`: `dropTarget` (per-move
-   * churn) lives apart from `BuilderDndContext`'s `activeElementId`/`form`
-   * (drag start/end only), and `BuilderElement` is memoized on props that
-   * don't change mid-drag — so a move that never targets "Divider" should
-   * never re-invoke its `BuilderCard`. Probed via the `useDroppable`
-   * passthrough spy (mocked at module scope above): `BuilderCard` calls it
-   * exactly once per render with `formEdgeDroppableId(element.id)`, and hook
-   * calls (unlike plain helper calls) can't be optimized away by the React
-   * Compiler, so a call carrying "Divider"'s edge-droppable id is direct,
-   * compiler-proof evidence its `BuilderCard` re-rendered.
+   * Count untouched card hook calls during pointer moves to verify drop-target context isolation despite compiler
+   * memoization.
    */
   it('does not re-render an unrelated card on a drag-move that only changes the drop target', async () => {
     const initialGraph = buildInitialGraph();
@@ -373,10 +328,7 @@ describe('Form builder drag and drop (dnd-kit)', () => {
 
     await renderHarness(initialGraph);
 
-    // The empty-container hint's rect, captured *before* the drag starts —
-    // once a drag is active this card's `canDrop` flips true and its own
-    // text changes from "Empty container..." to "Drop here", so the text
-    // selector below would no longer match if read mid-drag.
+    // Capture the empty hint's rect before drag changes its text to Drop here.
     const emptyHint = [...host.querySelectorAll<HTMLElement>('*')].find(
       (element) => element.textContent === 'Empty container — drag elements here'
     );
@@ -392,24 +344,14 @@ describe('Form builder drag and drop (dnd-kit)', () => {
     const startX = startRect.left + startRect.width / 2;
     const startY = startRect.top + startRect.height / 2;
 
-    // Arm the `PointerSensor` (>4px activation constraint), then settle onto
-    // the container's drop zone the same way `dragTo` does (a same-target
-    // no-op nudge — `MeasuringStrategy.Always`'s remeasure lands one tick
-    // after the move that triggered it, so a single move can still report a
-    // stale `over`). This establishes a real `into` `dropTarget`; only the
-    // moves *after* this point, which don't change the logical target, are
-    // under test.
+    // Activate the sensor and settle delayed measurement before testing moves within one logical target.
     await interact(() => pointer('pointerdown', handle, startX, startY));
     await interact(() => pointer('pointermove', handle.ownerDocument, startX + 8, startY));
     await interact(() => pointer('pointermove', handle.ownerDocument, midX, midY));
     await interact(() => pointer('pointermove', handle.ownerDocument, midX, midY + 1));
     vi.mocked(useDroppable).mockClear();
 
-    // Two more moves inside the same drop zone: `over` (and therefore the
-    // *logical* `dropTarget`) doesn't change, but `handleDragMove` still
-    // calls `setDropTarget` with a fresh object every time `onDragMove`
-    // fires — that per-frame churn, not touching "Divider" at all, is
-    // exactly what's under test.
+    // Move within the same target to exercise per-frame state churn without changing the intended drop.
     await interact(() => pointer('pointermove', handle.ownerDocument, midX, midY + 2));
     await interact(() => pointer('pointermove', handle.ownerDocument, midX, midY + 3));
 

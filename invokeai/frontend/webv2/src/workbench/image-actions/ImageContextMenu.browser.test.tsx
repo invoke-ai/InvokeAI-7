@@ -110,9 +110,7 @@ const pickQuickItem = async (label: string): Promise<void> => {
       );
     }
   });
-  // zag applies `data-highlighted` asynchronously and ignores a click on an unhighlighted item, so
-  // a fixed wait here silently dropped the click whenever the machine needed longer than it --
-  // the action mock simply recorded no call, and only under CI load.
+  // Wait for Zag's asynchronous highlight before clicking; unhighlighted items ignore clicks.
   await settleUntil(() => target!.hasAttribute('data-highlighted'), `"${label}" to be highlighted`);
   await interact(() => target!.click());
 };
@@ -248,8 +246,7 @@ describe('ImageContextMenu starred state', () => {
     getComputedStyle(document.querySelector<HTMLElement>(`[aria-label="${label}"] svg`)!).fill;
 
   it('fills the star for a starred item and leaves it outlined otherwise', async () => {
-    // Lucide is stroke-only, so an unfilled star was the *only* thing shown for
-    // both states — the text label was carrying all of the meaning.
+    // Fill distinguishes starred state because Lucide outlines alone look identical.
     const unstarred = item('image', 'plain.png');
     await renderItemMenu(createActions(vi.fn()), {
       itemRefs: [{ kind: 'image', name: unstarred.name }],

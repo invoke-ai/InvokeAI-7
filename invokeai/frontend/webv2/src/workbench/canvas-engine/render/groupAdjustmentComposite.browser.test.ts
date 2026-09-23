@@ -94,11 +94,8 @@ describe('group adjustment composite', () => {
   });
 
   it('applies nested stacks inner-first', async () => {
-    // Inner group inverts mid-gray 25% red-over-white... keep it simple:
-    // inner invert turns white → black; outer gamma-2 keeps black at 0.
-    // Reversed order (gamma then invert) would give 255 − 255·sqrt(1) = 0 too,
-    // so use a mid value: member is 25% gray (64). invert → 191; gamma-2 on
-    // 191 → 255·sqrt(191/255) ≈ 221. Reversed: gamma-2(64) ≈ 128, invert → 127.
+    // Use gray 64 to distinguish nested order: invert then gamma-2 yields about 221; reversed order yields about
+    // 127.
     const document = docWith([
       groupContract('outer', [groupContract('inner', [raster('gray')], { adjustments: invertStack('ia') })], {
         adjustments: gammaStack('oa'),
@@ -146,9 +143,7 @@ describe('group adjustment composite', () => {
   });
 
   it('resolves sibling scopes nested inside a parent scope with correct member indexing', async () => {
-    // outer gamma-2 group holding: invert-group [a], plain b, invert-group [d].
-    // a=#404040 → invert 191 → outer gamma ≈221. b=#404040 → outer gamma ≈128.
-    // d covers nothing at centre (checked via left pixel below).
+    // Outer gamma-2 maps inverted `a` from 64 to about 221 and plain `b` to about 128; `d` does not cover center.
     const document = docWith([
       groupContract(
         'outer',
@@ -228,9 +223,7 @@ describe('group adjustment composite', () => {
   });
 
   it('applies group blend mode when the isolated composite lands, on screen and in export', async () => {
-    // Mid-gray group multiplied over a white base: 0x80 × 0xff = 0x80. A
-    // per-leaf multiply would be identical here, so also nest: outer normal
-    // group holding a multiply group proves the landing applies INSIDE parents.
+    // Nesting the multiply group proves its composite lands inside the parent, not only at the root.
     const document = docWith([groupContract('g', [raster('gray')], { blendMode: 'multiply' }), raster('under')]);
     const scene = sceneFor({ gray: '#808080', under: '#ffffff' });
     const exported = await renderRasterComposite(planBaseRasterComposite(document, BBOX), scene);
@@ -294,9 +287,7 @@ describe('group adjustment composite', () => {
   });
 
   it('holds two keys per group so alternating consumers (frame vs overview) stop rebuilding', () => {
-    // A transform session makes the frame composite session matrices while the
-    // overview composites the settled contract: two keys for one group, forever
-    // alternating. Two slots must absorb that; a third key still evicts.
+    // Frame/session and settled Overview matrices alternate two keys; two slots retain them, while a third evicts.
     const scene = sceneFor({ red: '#ff0000' });
     let builds = 0;
     const groupSurfaces = createGroupSurfaceCache({

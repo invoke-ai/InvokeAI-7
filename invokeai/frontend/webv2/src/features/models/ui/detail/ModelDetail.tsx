@@ -124,12 +124,7 @@ const selectCpuOnlyModel = (snapshot: ModelsSnapshot, modelKey: string): CpuOnly
 const areTriggerPhrasesModelsEqual = (left: TriggerPhrasesModel | null, right: TriggerPhrasesModel | null): boolean =>
   left?.key === right?.key && areArraysEqual(left?.trigger_phrases ?? [], right?.trigger_phrases ?? []);
 
-/**
- * Full detail pane for one model: identity (view/edit), per-model default
- * settings, related models, trigger phrases, and lifecycle actions (convert,
- * re-identify, delete). Mount keyed by model key so per-model form state never
- * leaks between models.
- */
+/** Mount keyed by model key so detail forms cannot leak state between models. */
 export const ModelDetail = ({ modelKey, onDeleted }: { modelKey: string; onDeleted: () => void }) => {
   const { t } = useTranslation();
   const model = useModelsSelector((snapshot) => selectModelShell(snapshot, modelKey));
@@ -410,8 +405,7 @@ const ModelAttributes = ({ isMissing, model }: { isMissing: boolean; model: Mode
   // Managed models store paths relative to the models directory; show the
   // resolved absolute path so it can be found on disk.
   const fullPath = resolveModelAbsolutePath(model.path, modelsDir);
-  // In-place installs (absolute paths) may be repointed after the file moves;
-  // a missing model gets the affordance too — that is exactly when it helps.
+  // Allow repointing absolute-path installs, including missing files.
   const canUpdatePath = isAbsoluteModelPath(model.path) || isMissing;
 
   const attributes: { action?: ReactNode; href?: string; label: string; value: string }[] = [
@@ -438,9 +432,7 @@ const ModelAttributes = ({ isMissing, model }: { isMissing: boolean; model: Mode
       label: t('models.source'),
       value: model.source,
     },
-    // The user-editable page link (e.g. a Civitai listing); only visible in
-    // the edit form until now. Old records may predate the http(s)
-    // validation, so unlinkable values still render as text.
+    // Render legacy non-HTTP(S) source links as text rather than unsafe anchors.
     ...(model.source_url
       ? [
           {

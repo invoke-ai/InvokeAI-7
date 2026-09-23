@@ -60,8 +60,6 @@ describe('panZoom', () => {
     );
 
     expect(next.zoom).toBe(2);
-    // The content point under the starting midpoint — (100, 50) at zoom 1 —
-    // ends up under the midpoint's new position.
     expect(next.zoom * 100 + next.pan.x).toBeCloseTo(140, 6);
     expect(next.zoom * 50 + next.pan.y).toBeCloseTo(60, 6);
   });
@@ -75,8 +73,7 @@ describe('panZoom', () => {
 
     expect(atLimit.zoom).toBe(8);
     expect(pastLimit.zoom).toBe(8);
-    // Spreading further cannot zoom past the limit, but the gesture is still a
-    // move: both agree on where the anchored content point was dragged to.
+    // Clamping zoom must still allow midpoint translation.
     expect(pastLimit.pan).toEqual(atLimit.pan);
     expect(pastLimit.zoom * 50 + pastLimit.pan.x).toBeCloseTo(180, 6);
   });

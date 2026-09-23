@@ -311,3 +311,45 @@ def test_an_int8_build_that_also_writes_the_header_still_loads(tmp_path) -> None
     model = _load(path)
 
     assert isinstance(_quantized_module(model), Int8ConvrotLinear)
+
+
+def test_a_per_tensor_marker_declaring_another_format_is_refused(tmp_path) -> None:
+    """The header gate's other half. Every refusal cell above goes through `_quantization_metadata`
+    or the float8 dtype check; nothing pinned the per-tensor route the gate was originally written
+    for, so a change loosening it -- it already skips header entries without a `format` -- would
+    reopen it unnoticed."""
+    path, _ = _write_checkpoint(tmp_path, marker={"format": "float8_e4m3fn"})
+
+    with pytest.raises(ValueError, match=r"float8_e4m3fn.*MiniMax H3 checkpoint"):
+        _load(path)
+
+
+def test_a_marker_the_converter_cannot_parse_is_refused_rather_than_defaulted(tmp_path) -> None:
+    """The two marker readers decode the same blob by different routes, and can disagree.
+
+    `read_comfy_quant_markers` decodes raw file bytes; `parse_comfy_quant_marker` goes through
+    `tensor.numpy()`, which returns `{}` for a dtype numpy has no equivalent for -- bfloat16 and the
+    float8s, while int8, float16 and float32 decode the same bytes fine. A marker stored as one of
+    those satisfies the header gate and reaches the swap empty -- and an empty marker is not refused
+    there, it is *defaulted*: `convrot` off and a 256-wide group. A
+    64-wide repack derotated with a 256-wide Hadamard loads and renders noise, measured at
+    correlation 0.14 to the true weight.
+
+    ComfyUI writes uint8, so this is hardening rather than a live defect -- which is exactly why it
+    needs a cell: the check reads as redundant with the header gate, and was briefly deleted as such.
+    """
+    torch.manual_seed(0)
+    sd = _tiny_remote_code_state_dict()
+    quantized, scale, _restored = quantize_convrot(sd[QUANTIZED_SOURCE_KEY], group_size=GROUP_SIZE)
+    sd[QUANTIZED_SOURCE_KEY] = quantized
+    sd["blocks.0.attn.out_proj.weight_scale"] = scale
+    marker = comfy_quant_marker({"format": "int8_tensorwise", "convrot": True, "convrot_groupsize": GROUP_SIZE}, pad=16)
+    if marker.numel() % 2:  # a byte view needs an even length to reinterpret as a 2-byte dtype
+        marker = torch.cat([marker, torch.zeros(1, dtype=torch.uint8)])
+    # Same bytes, a dtype `numpy()` refuses.
+    sd["blocks.0.attn.out_proj.comfy_quant"] = marker.view(torch.bfloat16)
+    path = tmp_path / "minimax_h3_int8_convrot_bf16_marker.safetensors"
+    save_file(sd, str(path))
+
+    with pytest.raises(ValueError, match="Unsupported comfy_quant format"):
+        _load(path)

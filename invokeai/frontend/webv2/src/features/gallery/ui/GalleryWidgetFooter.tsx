@@ -11,11 +11,7 @@ import { useGalleryUi } from './GalleryUiContext';
 
 const PAGINATION_ITEM_VARIANT = { _selected: 'outline', base: 'ghost' } as const;
 
-/**
- * Widget-chrome footer: page navigation for the gallery's paginated mode.
- * Reads everything from the gallery widget's persisted values so it stays
- * decoupled from the view's data fetching.
- */
+/** Read persisted widget values so footer pagination needs no separate fetch. */
 export const GalleryWidgetFooter = () => {
   const { t } = useTranslation();
   const { gallery, galleryValues } = useGalleryUi();

@@ -1,10 +1,6 @@
 /**
- * Inpaint mask engine behaviour: painting into a mask's alpha cache, persisting
- * the mask bitmap through the bitmap store, and the in-place mask invert.
- *
- * Isolated in its own file so it can `vi.mock` the canvas-image upload seam
- * (the engine's INTERNAL bitmap store uses it) without touching the rest of the
- * engine test suite.
+ * Mask painting, persistence and inversion tests. Isolated to mock the engine's internal image-upload seam without
+ * affecting other engine tests.
  */
 
 import type {
@@ -246,10 +242,6 @@ const pointerAt = (x: number, y: number, buttons = 1): Partial<PointerEvent> =>
     timeStamp: 0,
   }) as Partial<PointerEvent>;
 
-/**
- * `readbackAlpha` overrides the stub's opaque readback when a test needs to model
- * transparent pixels explicitly. See `StubRasterBackendOptions`.
- */
 const setupEngine = (doc: CanvasDocumentContractV3, options: { readbackAlpha?: number } = {}) => {
   const raf = createControllableRaf();
   vi.stubGlobal('requestAnimationFrame', raf.requestFrame);
@@ -391,12 +383,8 @@ describe('mask invert', () => {
     engine.lifecycle.dispose();
   });
 
-  // Regression: the invert domain used to come ONLY from `getSourceContentRect`,
-  // which reads the persisted `mask.bitmap` — stale/null until the debounced
-  // bitmap-store flush runs. A stroke painted moments earlier (already reflected
-  // in the live `layerCache`, not yet flushed to the contract) that extends past
-  // the document bbox was silently excluded from the invert, so its pixels never
-  // got flipped. The domain must union in the live cache rect too.
+  // Invert must include live cache bounds: unflushed strokes outside the bbox are absent from persisted
+  // `mask.bitmap` bounds.
   it('unions the live (unflushed) cache rect into the invert domain, covering an out-of-bbox stroke', () => {
     const raf = createControllableRaf();
     vi.stubGlobal('requestAnimationFrame', raf.requestFrame);
@@ -434,34 +422,23 @@ describe('mask invert', () => {
     raf.flush();
 
     engine.tools.setTool('brush');
-    // Paint well outside the document bbox (0,0,100,100 per `maskDoc`). The live
-    // cache grows to cover the stroke immediately; deliberately never call
-    // `flushPendingUploads()`, so the contract's `mask.bitmap` stays null and
-    // `getSourceContentRect` alone would report an empty content rect.
+    // Paint beyond the 100x100 bbox without flushing, leaving a grown live cache but null persisted bitmap.
     overlay.fire('pointerdown', pointerAt(150, 150));
     overlay.fire('pointermove', pointerAt(180, 180));
     overlay.fire('pointerup', pointerAt(180, 180, 0));
 
     expect(engine.layers.invertMask('mask1')).toBe(true);
 
-    // Growing the cache (both while painting and inside `invertMask` itself)
-    // reallocates a fresh backing surface each time its extent changes, so
-    // `surfaces` holds one entry per intermediate size, not one per layer. The
-    // invert's own read/write always lands on the LAST surface that gets a
-    // `putImageData` — the final, invert-sized surface — so pick that one
-    // rather than the first surface that happens to have a `getImageData`
-    // (which would be a stale, already-abandoned paint-time surface).
+    // Growth replaces backing surfaces. Inspect the last surface receiving `putImageData`, which owns the final
+    // invert extent.
     const putSurfaces = surfaces.filter((surface) => surface.callLog.some((entry) => entry.op === 'putImageData'));
     const maskCache = putSurfaces[putSurfaces.length - 1];
     expect(maskCache).toBeDefined();
     const getCalls = maskCache!.callLog.filter((entry) => entry.op === 'getImageData');
     expect(getCalls.length).toBeGreaterThan(0);
     const [sx, sy, sw, sh] = getCalls[getCalls.length - 1]!.args as [number, number, number, number];
-    // A domain of just the document bbox (0,0,100,100) — what `getSourceContentRect`
-    // alone would report, since `mask.bitmap` is still null pre-flush — would read
-    // a region that ends at x/y 100. Unioning in the live cache rect must grow the
-    // domain to also cover the stroke out at document (150,150)-(180,180), well
-    // past that 100 bound on both axes.
+    // The invert domain must cover the unflushed stroke at (150,150)-(180,180), beyond persisted/bbox bounds
+    // ending at 100.
     expect(sx + sw).toBeGreaterThan(110);
     expect(sy + sh).toBeGreaterThan(110);
 

@@ -16,10 +16,7 @@ import { page } from 'vitest/browser';
 
 import { GraphPreviewDialog } from './GraphPreviewDialog';
 
-// `downloadText`, the invocation templates snapshot, and the flow's `onInit`
-// instance stub all need to exist before `vi.mock` factories below run
-// (they're hoisted above the imports that would otherwise define them), so
-// they're built through `vi.hoisted`.
+// Create mock dependencies with vi.hoisted because factories run before ordinary imports.
 const { downloads, fitViewMock, TEMPLATES_SNAPSHOT, templatesSnapshotRef } = vi.hoisted(() => {
   const fieldInput = (name: string, defaultValue: unknown) => ({
     default: defaultValue,
@@ -77,22 +74,14 @@ const { downloads, fitViewMock, TEMPLATES_SNAPSHOT, templatesSnapshotRef } = vi.
 
   return {
     downloads: { downloadBlob: vi.fn(), downloadText: vi.fn() },
-    // `GraphPreviewFlow`'s mock (below) calls `onInit` with this so
-    // `handleFlowInit`'s pending-reveal consumption has a real `fitView` spy
-    // to assert against — asserting the dialog's own reveal logic runs to
-    // completion, not just that it doesn't crash.
+    // Provide an initialized flow spy to verify pending reveals actually call fitView.
     fitViewMock: vi.fn(() => Promise.resolve(true)),
     TEMPLATES_SNAPSHOT: templatesSnapshot,
-    // Mutable so a single test can point `useInvocationTemplatesSnapshot` at
-    // a non-loaded status without a per-test `vi.mock` factory.
     templatesSnapshotRef: { current: templatesSnapshot },
   };
 });
 
-// xyflow stays out of this shell test — the flow pane's own rendering is
-// covered elsewhere (`GraphPreviewFlow`'s own tests). It still calls `onInit`
-// with a stub instance so `GraphPreviewDialog`'s pending-reveal handoff
-// (`selectAndReveal` → `handleFlowInit`) has something real to run against.
+// Stub flow rendering but retain onInit to exercise the dialog's pending-reveal handoff.
 vi.mock('./GraphPreviewFlow', () => ({
   GraphPreviewFlow: ({ onInit }: { onInit?: (instance: { fitView: typeof fitViewMock }) => void }) => {
     onInit?.({ fitView: fitViewMock });
@@ -105,21 +94,13 @@ vi.mock('./GraphPreviewFlow', () => ({
 
 vi.mock('@platform/browser/downloadBlob', () => downloads);
 
-// The "Open as" menu (`GraphPreviewOpenAsMenu`) reads the invocation
-// templates snapshot through the reactive hook, not the plain getter, so its
-// disabled state can update live if the menu opens while templates are still
-// loading — this stubs that hook (and the getter, for symmetry) with a
-// pre-loaded snapshot covering the fixture graph's node types.
+// Stub reactive templates so Open as disabled state follows the same loading contract as production.
 vi.mock('@features/workflow/react', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   getInvocationTemplatesSnapshot: () => templatesSnapshotRef.current,
   useInvocationTemplatesSnapshot: () => templatesSnapshotRef.current,
 }));
 
-// "Save to workflow library" goes through `useSaveWorkflowToLibrary`
-// (Task 8), which calls the backend through this barrel — stub the one
-// function that path reaches, same mock shape as
-// `useSaveWorkflowToLibrary.browser.test.tsx`.
 const { createLibraryWorkflowMock } = vi.hoisted(() => ({
   createLibraryWorkflowMock: vi.fn(),
 }));
@@ -129,10 +110,7 @@ vi.mock('@features/workflow/queries', async (importOriginal) => ({
   createLibraryWorkflow: createLibraryWorkflowMock,
 }));
 
-// The real client fetches en.json over HTTP (`platform/i18n/client.ts`), which
-// this browser test never boots. Stub `t` with the subset of English strings
-// this dialog renders, so assertions check real copy instead of raw dotted
-// keys — the repo-wide convention for `react-i18next` in browser tests.
+// Supply rendered English strings without starting the HTTP-backed i18n client.
 const TRANSLATIONS: Record<string, string> = {
   'common.close': 'Close',
   'common.json': 'JSON',
@@ -256,9 +234,7 @@ const INVALID_SOURCE: GraphPreviewSourceState = {
   summaryRows: [],
 };
 
-// A single node of a type absent from `TEMPLATES_SNAPSHOT.templates` —
-// `previewGraphToDocument` skips it, so the converted document has zero
-// nodes and both "Open as" actions that convert to a document should bail.
+// An unknown-only graph converts to an empty document; document-opening actions must stop.
 const UNKNOWN_NODE_GRAPH: WorkflowPreviewGraph = {
   id: 'unknown-node-graph',
   nodes: [{ id: 'mystery', type: 'unknown_type', inputs: {} }],
@@ -306,12 +282,7 @@ const preferencesSnapshot = {
   workflowValidateConnections: true,
 };
 
-// A stable object per adapter instance — `useWorkflowProjectSelector`
-// (`useSaveWorkflowToLibrary`, called by `GraphPreviewOpenAsMenu`) runs this
-// through `useSyncExternalStoreWithSelector`'s shallow-equality check, which
-// would otherwise see a "changed" snapshot on every render (new object
-// identity, same content) and force an infinite re-render loop — the same
-// reason `preferencesSnapshot` above is hoisted rather than built inline.
+// Keep adapter snapshots stable so external-store subscribers cannot loop on fresh equivalent objects.
 const createProjectSnapshot = () => ({
   galleryValues: {},
   id: 'project-1',
@@ -449,9 +420,7 @@ describe('GraphPreviewDialog', () => {
     });
   };
 
-  // Opens the "Open as" menu. Chakra's `Menu.Content` is lazy-mounted and
-  // its open transition runs on a timer, so the click alone isn't enough —
-  // give the portal a beat to attach before querying for items.
+  // Wait for lazy menu portal mounting before querying items.
   const openAsMenu = async () => {
     await clickButtonWithText('Open as');
     await act(async () => {
@@ -475,10 +444,7 @@ describe('GraphPreviewDialog', () => {
     });
   };
 
-  // "Save to workflow library" fires off an async handler (`void
-  // saveToLibrary()`) that the click itself doesn't wait for — a macrotask
-  // tick drains the `await saveDocumentAsNew(document)` chain (serialize →
-  // `createLibraryWorkflow` → notify) before assertions run.
+  // Await the detached save handler's async chain before asserting serialization, creation, and notification.
   const flushAsync = () =>
     act(async () => {
       await new Promise<void>((resolve) => {
@@ -626,19 +592,12 @@ describe('GraphPreviewDialog', () => {
     expect(text).toContain('Set by');
     expect(text).toContain('Generate → Steps');
 
-    // The fixture's `denoise_latents` node has one incoming edge (from `seed`)
-    // and one outgoing edge (to `l2i`) — exercise both `getEdgesInLine` and
-    // the per-edge `edgesOut` lines, not just that the "Edges" heading renders.
+    // Exercise both incoming and outgoing edge details, not merely their heading.
     expect(text).toContain('Edges');
     expect(text).toContain('in · 1 inputs from seed');
     expect(text).toContain('out · latents → l2i');
 
-    // The flow wasn't mounted when the row was clicked (mode was still
-    // 'list'), so the reveal had to go through the pending-reveal path:
-    // `selectAndReveal` stashes the id, and the flow's remount (its `onInit`
-    // firing again) is what actually calls `fitView`. This is the case the
-    // stale-ref bug broke — before the fix, `flowInstanceRef` still pointed
-    // at the unmounted flow's instance and this fit never happened.
+    // List-mode reveal must wait for the remounted flow's onInit rather than use the destroyed previous instance.
     expect(fitViewMock).toHaveBeenCalledWith(expect.objectContaining({ nodes: [{ id: 'denoise_latents' }] }));
   });
 
@@ -652,9 +611,7 @@ describe('GraphPreviewDialog', () => {
     expect(text).toContain('seed');
     expect(text).toContain('regenerated each run');
 
-    // Mode was already 'graph' with the flow mounted, so this reveal takes
-    // the immediate branch — `fitView` runs straight off `flowInstanceRef`
-    // instead of waiting on a remount.
+    // Graph-mode reveal uses the already-mounted instance immediately.
     expect(fitViewMock).toHaveBeenCalledWith(expect.objectContaining({ nodes: [{ id: 'seed' }] }));
   });
 
@@ -676,10 +633,7 @@ describe('GraphPreviewDialog', () => {
     await clickButtonWithText('denoise_latents');
     expect(document.body.textContent ?? '').toContain('Resolved inputs');
 
-    // The footer Close button is the path `closeAndReset` resets `selectedNodeId`
-    // through. Re-render with `isOpen` false then true to simulate the parent
-    // obeying the `onOpenChange(false)` this just triggered and reopening —
-    // the same controlled-`open` round trip a real host does.
+    // Model the controlled close/reopen round trip to verify selection resets.
     await clickButtonWithText('Close');
     expect(onOpenChange).toHaveBeenCalledWith(false);
 
@@ -714,8 +668,6 @@ describe('GraphPreviewDialog', () => {
     expect(graphPreviewPort.openDocumentInNewProject).toHaveBeenCalledTimes(1);
     const [document_, label] = vi.mocked(graphPreviewPort.openDocumentInNewProject).mock.calls[0] ?? [];
     expect(document_?.nodes).toHaveLength(3);
-    // The fixture graph has no `label`, so this exercises the
-    // `graph.label ?? sourceLabel` fallback (`sourceLabel` is "Generate").
     expect(document_?.name).toBe('Generate');
     expect(label).toBe('Opened from graph preview');
     // Forking must not touch the current project's workflow.
@@ -731,8 +683,6 @@ describe('GraphPreviewDialog', () => {
 
     expect(downloads.downloadText).toHaveBeenCalledTimes(1);
     const [content, fileName, type] = vi.mocked(downloads.downloadText).mock.calls[0] ?? [];
-    // The fixture graph has no `backendGraph`, so this exercises the
-    // `graph.backendGraph ?? graph` fallback, not just the happy path.
     expect(content).toContain('"denoise_latents"');
     expect(fileName).toBe('graph.json');
     expect(type).toBe('application/json');
@@ -774,8 +724,6 @@ describe('GraphPreviewDialog', () => {
     await flushAsync();
 
     expect(createLibraryWorkflowMock).toHaveBeenCalledTimes(1);
-    // The fixture graph has no `label`, so this exercises the
-    // `graph.label ?? sourceLabel` fallback (`sourceLabel` is "Generate").
     const [serialized] = createLibraryWorkflowMock.mock.calls[0] ?? [];
     expect(serialized).toMatchObject({ name: 'Generate' });
     expect(workflowUiAdapter.notifications.success).toHaveBeenCalledWith('Saved to workflow library');
@@ -803,9 +751,7 @@ describe('GraphPreviewDialog', () => {
     await clickMenuItemWithText('Save to workflow library');
     await flushAsync();
 
-    // The fixture's only node is a type with no matching template, so
-    // `previewGraphToDocument` skips it and the converted document is empty —
-    // this must bail before ever reaching the backend save call.
+    // Reject conversion with no recognized nodes before backend save.
     expect(createLibraryWorkflowMock).not.toHaveBeenCalled();
     expect(workflowUiAdapter.notifications.error).toHaveBeenCalledWith('No saveable nodes in this graph.');
     expect(workflowUiAdapter.notifications.success).not.toHaveBeenCalled();

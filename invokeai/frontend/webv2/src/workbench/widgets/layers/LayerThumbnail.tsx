@@ -29,12 +29,7 @@ export type LayerThumbnailEngine = CanvasCoreStoreCapability & {
   readonly projectId: string;
 };
 
-/**
- * A layer's thumbnail: the engine's live cache pixels drawn onto a `<canvas>`,
- * redrawn whenever the layer's `thumbnailVersion` bumps. Falls back to the
- * persisted image thumbnail (for image-source layers) or a placeholder icon
- * when there is no engine / no cache yet.
- */
+/** Redraw live engine thumbnails by version; use persisted thumbnails or icons before cache availability. */
 const LayerThumbnailContent = ({
   engine,
   layer,
@@ -66,8 +61,7 @@ const LayerThumbnailContent = ({
         setFallbackStage('thumbnail');
       }
     },
-    // `version` is a deliberate identity trigger: a repaint bumps it, giving the
-    // callback a new identity so React re-runs it and re-blits the cache.
+    // Version changes intentionally replace the ref callback to re-blit repainted pixels.
     [engine, layer.id, status, version]
   );
 
@@ -128,10 +122,7 @@ const LayerThumbnailContent = ({
   );
 };
 
-/**
- * The keyed boundary resets local draw/fallback state when a row is reused for a
- * different project, layer, or persisted image. No effect-based reset is needed.
- */
+/** Key the boundary by project/layer/image to reset draw and fallback state on row reuse. */
 export const LayerThumbnail = ({
   engine,
   layer,

@@ -28,13 +28,7 @@ interface GenerateModelCardProps {
   onCommitSettings: (nextSettings: GenerateSettings) => void;
 }
 
-/**
- * The panel's tier-1 surface: the model choice, what that model offers, and
- * every model-availability state — loading, backend errors, and the empty
- * catalog — local to the choice that causes them. Readiness/validation is
- * deliberately absent here (the invocation controls own it), and the preset
- * library and reset-all live in the widget header.
- */
+/** This owner checks model availability; invocation readiness is validated elsewhere. */
 export const GenerateModelCard = ({
   isLoadingModels,
   loadError,
@@ -48,9 +42,7 @@ export const GenerateModelCard = ({
   const ui = useGenerationUi();
   const { openManager } = ui.models;
   const openManagerForMainModels = useCallback(() => openManager({ modelType: 'main' }), [openManager]);
-  // A switch that clears incompatible settings waits behind a confirm. Only the
-  // model is held; the transition is recomputed against live settings on
-  // confirm, and the labels shown come from a preview run of the same move.
+  // Retain only the selected model and recompute against live settings on confirmation.
   const [pendingSwitchModel, setPendingSwitchModel] = useState<GenerateModelConfig | null>(null);
 
   const pendingSwitchClearedLabels = useMemo(() => {

@@ -102,10 +102,6 @@ describe('built-in layout preset descriptors', () => {
           right: 'gallery',
         },
         bottom: ['server-status', 'queue-status', 'gallery:bottom', 'notifications', 'autosave-status'],
-        // Compose keeps Gallery as a center view: the retired `gallery` preset
-        // migrates here (see legacyLayoutPresetIds) precisely because it was
-        // "Compose with the center view swapped", so the swap has to remain
-        // available.
         center: ['preview', 'gallery:center'],
         left: ['generate', 'upscale'],
         panels: { isBottomOpen: false, isLeftOpen: true, isRightOpen: true },
@@ -122,8 +118,6 @@ describe('built-in layout preset descriptors', () => {
         center: ['canvas', 'preview'],
         left: ['generate', 'upscale'],
         panels: { isBottomOpen: false, isLeftOpen: true, isRightOpen: true },
-        // The editors are panes inside the Layers panel; the preview docks
-        // behind Layers so its float/dock surface stays reachable by default.
         right: ['layers', 'preview'],
       },
       video: {

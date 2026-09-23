@@ -7,12 +7,7 @@ import { useEffect, useState } from 'react';
 
 const PROGRESS_LABEL = 'Image indexing progress';
 
-/**
- * How often the age of the counts is re-read. The only thing it drives is a
- * minutes-scale "no progress" note, so this is deliberately coarse: the same
- * interval serves the panel and the footer, and neither announces a number
- * that moves every second.
- */
+/** Update age coarsely for minute-scale stall messages shared by panel and footer. */
 const TICK_MS = 5_000;
 
 /** How long the counts have been standing, re-read on a timer. */
@@ -41,14 +36,8 @@ interface ImageIndexProgressProps {
 }
 
 /**
- * Backfill progress for the embedding index, shown in place of the map while
- * there is nothing to draw yet. The counts are pushed by `image_index_status`
- * (admins only, which in single-user mode is everyone), so a non-admin sees
- * the plain "nothing to map yet" message instead of a bar that never moves.
- *
- * The wording stays away from "your images": the backend's counts aggregate
- * every user's gallery, so for an admin on a multi-user server this is the
- * server's backlog and not necessarily any of their own.
+ * Show server-wide embedding progress only to admins receiving status events; non-admins see the empty state
+ * instead of a frozen bar.
  */
 export const ImageIndexProgressPanel = ({
   counts,
@@ -93,18 +82,12 @@ export const ImageIndexProgressPanel = ({
         ) : null}
       </Stack>
       {error ? (
-        // `overflowWrap: anywhere` because the message is whatever the server
-        // said: a URL or a dotted identifier has no break opportunity, and a
-        // centered flex item sizes to min-content, so it would otherwise run
-        // off both edges of a widget clipped at 280px with no ellipsis.
+        // Wrap server URLs/identifiers anywhere to prevent min-content overflow in narrow panels.
         <Text color="fg.error" fontSize="xs" maxW="full" minW="0" mt="2" overflowWrap="anywhere" role="alert">
           {error}
         </Text>
       ) : null}
-      {/* The widget's only control in this state — the footer renders nothing
-          until the map itself is ready. It matters most when the counts are
-          wrong: a client that was offline for the run's final report sits on a
-          bar that will never move again, and this re-reads them. */}
+      {/* Refresh is the only control before map readiness and recovers counts missed while offline. */}
       <Button mt={error ? '0' : '2'} onClick={onRetry} size="xs" variant="outline">
         {error ? 'Retry' : 'Check again'}
       </Button>
@@ -113,20 +96,8 @@ export const ImageIndexProgressPanel = ({
 };
 
 /**
- * The same progress as a badge laid over the map itself.
- *
- * The panel above is only reachable when there is nothing to draw, so on a
- * gallery that already has a map — the case for every re-index, including the
- * automatic one after the embedding model changes — the view drew the old
- * points and said nothing at all about the work in flight. The footer's line
- * is 2xs chrome and renders only once `state === 'ready'`, so it is not that
- * signal either.
- *
- * Overlaid rather than substituted: the stale map is still worth using while
- * the new one is built, so this must not take the panel over. It also names
- * the labels, which disappear for the duration whenever the vocabulary
- * embeddings are being rebuilt (a model change, or a supplementary-vocabulary
- * edit) — that silence was the other half of the map looking broken.
+ * Overlay rebuild progress while the stale map remains usable; explain missing labels during vocabulary embedding
+ * rebuilds.
  */
 export const ImageIndexActivityBadge = ({ counts, updatedAt }: ImageIndexProgressProps) => {
   const progress = describeIndexProgress(counts, useCountsAge(updatedAt));
@@ -135,11 +106,7 @@ export const ImageIndexActivityBadge = ({ counts, updatedAt }: ImageIndexProgres
     : `Indexing ${progress.counts}. The map and its cluster labels update as images finish.`;
 
   return (
-    // The wrapper spans the plot so the badge can sit in its corner, and passes
-    // every pointer event through: the plot underneath is drag-panned and
-    // wheel-zoomed across its whole area, and a full-width transparent layer
-    // that swallowed those would cost more than the badge is worth. The badge
-    // itself takes its events back so the tooltip still opens.
+    // Pass plot-wide pointer events through the wrapper; only the badge intercepts them for its tooltip.
     <Box inset="0" pointerEvents="none" position="absolute" zIndex="1">
       <Tooltip content={label}>
         <HStack
@@ -174,21 +141,13 @@ export const ImageIndexActivityBadge = ({ counts, updatedAt }: ImageIndexProgres
   );
 };
 
-/**
- * The same progress in one line, for the widget footer once the map itself is
- * on screen: the bar is the glanceable part, the rest is one hover away rather
- * than competing with the point count for the width.
- */
 export const ImageIndexProgressInline = ({ counts, updatedAt }: ImageIndexProgressProps) => {
   const progress = describeIndexProgress(counts, useCountsAge(updatedAt));
   const label = progress.stale ? `Indexing ${progress.counts} · ${progress.stale}` : `Indexing ${progress.counts}`;
 
   return (
     <Tooltip content={label}>
-      {/* `minW="0"` and a truncating label, both of which the plain `<Text
-          truncate>` this replaced got for free: the footer resizes down to
-          280px and the counts can be six digits each, and without them the row
-          grows past the panel edge and slides under the refresh button. */}
+      {/* Use minW=0 and truncation so six-digit footer counts cannot cover refresh in narrow panels. */}
       <HStack gap="1.5" minW="0" overflow="hidden" title={label}>
         <Progress.Root flexShrink="0" max={100} size="xs" value={progress.percent} w="10">
           {/* The counts go in the name too: at the widget's minimum width the

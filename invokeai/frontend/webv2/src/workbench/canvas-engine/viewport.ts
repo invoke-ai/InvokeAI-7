@@ -1,30 +1,6 @@
 /**
- * The pan/zoom viewport: the single source of truth for how document space
- * maps to the on-screen canvas. It owns `{ pan, zoom }`, the CSS viewport
- * size, and the device-pixel ratio, and derives the document→screen
- * transform used by both the renderer (device pixels) and pointer routing
- * (CSS pixels).
- *
- * ## Coordinate convention
- *
- * - **Document space**: the canvas document's own pixel grid, unaffected by
- *   pan/zoom (a layer at document `(0,0)` is the top-left of the document).
- * - **Screen/CSS space**: CSS pixels relative to the canvas element's
- *   top-left. This is what `PointerEvent.clientX/Y` (minus the element rect)
- *   gives you. `pan` is stored in CSS pixels.
- * - **Device space**: the canvas backing store, `CSS × dpr`. The renderer
- *   draws here.
- *
- * The mappings are:
- * ```
- * screen = zoom * doc + pan            (CSS pixels)
- * device = dpr * screen = (zoom*dpr) * doc + dpr*pan
- * ```
- * so `viewMatrix(dpr)` is `scale(zoom*dpr)` followed by a `dpr*pan`
- * translation — i.e. `a = d = zoom*dpr`, `e = dpr*pan.x`, `f = dpr*pan.y`.
- *
- * Zero React, zero import-time side effects; DOM-free (operates on plain
- * numbers), so it runs unchanged in node tests.
+ * Viewport owns pan, zoom, CSS size and device-pixel ratio. CSS mapping is screen=zoom*document+pan; device
+ * mapping multiplies by DPR. Shared transforms keep renderer device pixels and pointer CSS coordinates aligned.
  */
 
 import type { Mat2d, Rect, Vec2 } from '@workbench/canvas-engine/types';
@@ -104,12 +80,8 @@ export const createViewport = (initial?: Partial<ViewState>): Viewport => {
   const documentToScreen = (p: Vec2): Vec2 => ({ x: zoom * p.x + pan.x, y: zoom * p.y + pan.y });
 
   /**
-   * Inverts the CSS view transform (`scale(zoom)` then `translate(pan)`)
-   * directly rather than through a general matrix inverse: the view is only ever
-   * a uniform scale plus a translation, so the inverse is one subtraction and
-   * one division. This runs once per coalesced
-   * pointer sample — a brush batch can carry dozens — which is enough for the
-   * matrix allocation to be worth skipping.
+   * Invert uniform CSS zoom/pan directly with subtraction/division, avoiding matrix allocation for every coalesced
+   * pointer sample.
    */
   const screenToDocument = (p: Vec2): Vec2 =>
     zoom === 0 ? { x: 0, y: 0 } : { x: (p.x - pan.x) / zoom, y: (p.y - pan.y) / zoom };

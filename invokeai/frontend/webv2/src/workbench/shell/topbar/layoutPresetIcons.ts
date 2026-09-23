@@ -40,15 +40,8 @@ import {
 } from 'lucide-react';
 
 /**
- * The icons a custom layout preset can be given.
- *
- * A curated set rather than all of Lucide: the picker is a glance-and-choose
- * grid, and a thousand icons would make it a search problem. These are chosen
- * to cover how people actually name a workspace — by its arrangement, by the
- * craft it supports, or by a plain marker when neither applies.
- *
- * Ids are persisted with the preset, so they are stable strings and must not be
- * renamed. Dropping an icon from this list is safe: unknown ids fall back.
+ * Persist stable icon ids; never rename them. The curated set supports quick selection, and removed/unknown ids
+ * fall back safely.
  */
 export interface LayoutPresetIconOption {
   id: string;

@@ -81,8 +81,7 @@ export const Picker = <T,>({
     [flatOptions, getIsOptionDisabled, getOptionId]
   );
 
-  // The active row must always exist in the current result set — a search that
-  // filters it away silently hands the highlight to the first remaining row.
+  // If filtering removes the active row, highlight the first remaining result.
   const resolvedActiveId =
     activeId && selectableIds.includes(activeId)
       ? activeId
@@ -111,8 +110,7 @@ export const Picker = <T,>({
 
   const handleSearchKeyDown = useCallback(
     (event: React.KeyboardEvent<HTMLInputElement>) => {
-      // The workbench hotkey runtime listens on the window; typing here is not
-      // a command sequence.
+      // Stop typing events before they reach the window command runtime.
       event.stopPropagation();
 
       if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
@@ -194,11 +192,7 @@ export const Picker = <T,>({
               ))}
           </ScrollArea.Content>
         </ScrollArea.Viewport>
-        {/*
-          Above the sticky group headers. They paint an opaque background at
-          z-index 1, which would otherwise chop the scrollbar into one segment
-          per group.
-        */}
+        {/* Keep the scrollbar above opaque sticky headers at z-index 1. */}
         <ScrollArea.Scrollbar zIndex="2">
           <ScrollArea.Thumb />
         </ScrollArea.Scrollbar>
@@ -233,9 +227,7 @@ const PickerGroupSection = <T,>({
   const railColor = group.colorPalette ? `${group.colorPalette}.solid` : 'border.emphasized';
   const countLabel = group.getCountLabel?.(group.options.length);
 
-  // `w`/`minW` are load-bearing: ScrollArea's content wrapper sizes to
-  // max-content, so without them a long model name widens the whole list and
-  // every group grows a horizontal scrollbar instead of truncating.
+  // Constrain width so max-content sizing cannot turn long names into horizontal overflow.
   return (
     <Box
       borderInlineStartColor={showHeader ? railColor : undefined}

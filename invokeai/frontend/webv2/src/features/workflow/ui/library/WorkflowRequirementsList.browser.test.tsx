@@ -9,13 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useWorkflowLibraryMissingCounts } from './WorkflowRequirementsList';
 
-/**
- * The browse store publishes a fresh `entries` array every time a *single*
- * workflow finishes enriching, with four workers running — so loading a page
- * of 20 re-runs this hook 20 times. Resolution is therefore cached per
- * enrichment object, and this suite is the proof: the real resolver is wrapped
- * in a spy, and the assertion is how many entries each publish re-resolves.
- */
+/** Count resolver calls across per-entry enrichment updates to verify unchanged rows reuse cached resolutions. */
 const resolveSpy = vi.hoisted(() => vi.fn());
 
 vi.mock('@features/workflow/core/modelRequirements', async (importOriginal) => {
@@ -128,9 +122,7 @@ describe('useWorkflowLibraryMissingCounts', () => {
 
     resolveSpy.mockClear();
 
-    // What the store publishes when one more workflow finishes parsing: a new
-    // array, a new entry object for the row that changed, and the untouched
-    // entry (and its enrichment) carried over by identity.
+    // Preserve unchanged entry/enrichment identities when another row completes.
     await render([stable, entry('wf-b', readyEnrichment())]);
 
     expect(resolveSpy).toHaveBeenCalledTimes(1);

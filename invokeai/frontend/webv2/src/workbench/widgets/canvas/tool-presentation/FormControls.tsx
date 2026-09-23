@@ -38,13 +38,8 @@ const START_ELEMENT_PROPS = { ...AFFIX_PROPS, fontWeight: 'medium', pointerEvent
 const END_ELEMENT_PROPS = { ...AFFIX_PROPS, pe: '1.5', pointerEvents: 'none' } as const;
 
 /**
- * A fixed-width numeric field with tabular figures whose prefix is a scrub
- * handle (drag sideways with the mouse to change the value by `step` per
- * pixel). In commit mode a draft survives typing and scrubbing; the owner
- * hears one value on blur, Enter or pointer-up, and only when something was
- * edited to a different string, so tabbing through fields never commits the
- * rounded display back over a precise value. Only the accepted value shows
- * afterwards, so a clamped commit never leaves the field disagreeing with its owner.
+ * Keep drafts through typing/scrubbing and commit once on blur, Enter, or release only after edits. Do not
+ * overwrite precise values by tabbing through rounded displays; show the accepted clamped result.
  */
 export const FormNumberField = ({
   'aria-label': ariaLabel,

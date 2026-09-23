@@ -160,23 +160,8 @@ export const validateChunkSourceManifest = (value) => {
 };
 
 /**
- * A route's ceiling is derived from a baseline measurement rather than committed alongside it, so
- * the recorded file states only what was measured and a re-record touches one number per metric.
- *
- * Two bounds apply and the lower wins:
- *
- * - The allowance, `max(1%, 4 KB)` over the higher of the reference and committed measurement.
- *   Re-recording the committed baseline deliberately accepts growth such as a dependency upgrade,
- *   even before the base branch contains it. Previously recorded higher sizes stay allowed until
- *   a downward re-record protects the savings. Neither allowance term works alone: 1% of
- *   2 KB of CSS is 22 bytes, and a flat floor is meaningless against a 3 MB route.
- * - The hard ceiling, `max(10%, 32 KB)` over the *committed* baseline. In CI the allowance is taken
- *   over at least the base branch's own measurement, which moves with every merge. Without this
- *   second bound, allowance-sized pull requests could compound without limit. The ceiling keeps
- *   the committed file the outer bound a person has
- *   reviewed, and a deliberate downward re-record takes effect on the next pull request.
- *
- * Request counts are capped exactly by both: an extra initial request is structural, not growth.
+ * Use the lower byte bound: b + max(b × 1%, 4 KB), where b = max(reference, committed), or committed +
+ * max(committed × 10%, 32 KB). The committed hard bound prevents cumulative growth; request counts remain exact.
  */
 export const GROWTH_ALLOWANCE_PERCENT = 0.01;
 export const GROWTH_ALLOWANCE_FLOOR_BYTES = 4096;
@@ -201,22 +186,9 @@ export const deriveLimits = (baseline, keys, committed = baseline) =>
   Object.fromEntries(keys.map((key) => [key, deriveLimit(key, baseline[key], committed[key])]));
 
 /**
- * The base branch's own measurements, handed to a pull-request run by CI so the byte budgets are
- * judged against growth main has accepted since the committed baseline was captured, while a
- * higher committed baseline can explicitly accept new growth in the pull request. `sourceOwners`
- * and every structural rule still come from the committed baseline, which is the deliberate record
- * and is meant to keep failing until someone updates it.
- *
- * Each gate writes its reference file next to its report, before it checks anything, so a failing
- * main still records what it measured. The file is deliberately small and versioned: it is read by
- * a *different* commit's copy of these scripts, so a version or metric-set mismatch is an expected
- * event that falls back to the committed baseline with the reason logged, not a wiring fault.
- * A set directory that lacks the file, or a file that carries no other integer `schemaVersion` and
- * is not this shape, is a wiring fault and fails with the variable and path named.
- *
- * Unset locally and on pushes to main. There the committed baseline is the reference, so a main
- * that has outgrown the allowance since its last capture fails, which is the signal that a
- * deliberate re-record is due, rather than its ceiling ratcheting up unreviewed.
+ * CI references carry measurements from the base branch; committed baselines still own structural rules and hard
+ * ceilings. Write references before checking. Version/metric drift falls back; missing or malformed configured
+ * references fail. Without a reference, use the committed baseline.
  */
 export const PERFORMANCE_REFERENCE_DIR_VARIABLE = 'WEBV2_PERF_REFERENCE_DIR';
 /** Whatever CI wants the reference called in logs and reports -- the cache key it restored. */
@@ -292,8 +264,8 @@ export const referenceIncompatibility = (reference, kind, metricKeys) => {
 };
 
 /**
- * Reads the reference CI restored. Any problem short of an expected version or metric-set drift
- * is thrown with the variable and path named, so a broken restore never passes as "no reference".
+ * Only expected version/metric drift may fall back; other reference errors fail with the configured variable and
+ * path.
  */
 export const loadPerformanceReference = async ({ directory, fileName, kind, metricKeys, root }) => {
   const path = resolve(root, directory, fileName);
@@ -311,10 +283,7 @@ export const loadPerformanceReference = async ({ directory, fileName, kind, metr
   } catch (error) {
     throw new Error(`${path} is not valid JSON: ${error.message}`);
   }
-  // Judged before the shape is validated: a reference from a checkout with a different schema
-  // version may legitimately have a different shape, and that is the drift the fallback is for.
-  // Only an integer version that differs is drift; a file with no version at all was never
-  // written by any checkout and stays a wiring fault.
+  // Check integer version drift before validating shape; a missing version is malformed, not drift.
   const version = parsed?.schemaVersion;
   if (Number.isInteger(version) && version !== PERFORMANCE_REFERENCE_SCHEMA_VERSION) {
     return {
@@ -327,17 +296,12 @@ export const loadPerformanceReference = async ({ directory, fileName, kind, metr
   return { reason: referenceIncompatibility(reference, kind, metricKeys), reference };
 };
 
-/**
- * Whether a failure line is a byte or request budget being exceeded, as opposed to a source-owner
- * graph or importer-count change. Only the former is answered by re-recording a baseline; for an
- * owner-graph leak that advice would erase the very signal the pin exists to give.
- */
+/** Suggest re-recording only for resource budgets; it must not hide structural graph regressions. */
 export const isBudgetFailure = (message) => / reached \d+ .*\(limit /.test(message);
 
 /**
- * Committed route budgets with their byte baselines replaced by the reference's, keeping the
- * committed numbers alongside for the hard ceiling and for failure messages. Routes the reference
- * does not cover keep the committed baseline and are reported so the log can say so.
+ * Apply reference byte measurements while retaining committed ceilings; report uncovered routes and use their
+ * committed baselines.
  */
 export const applyBuildReference = (build, reference) => {
   if (!reference) {
@@ -351,8 +315,7 @@ export const applyBuildReference = (build, reference) => {
         uncovered.push(routeId);
         return [routeId, budget];
       }
-      // A malformed route must fail here: an undefined metric would derive a NaN ceiling, and
-      // every comparison against NaN is false, which would wave the whole route through.
+      // Reject missing metrics before deriving ceilings: comparisons against NaN would silently pass.
       validateMetricObject(metrics, BUILD_METRIC_KEYS, `reference build route ${routeId}`);
 
       return [

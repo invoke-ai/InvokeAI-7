@@ -4,10 +4,7 @@ import type { ReactNode } from 'react';
 
 import { createContext, use, useMemo } from 'react';
 
-/**
- * Upscale's UI port. The context is a dependency-direction port (the feature
- * may not import workbench), not a test seam; no second adapter is expected.
- */
+/** This UI port preserves dependency direction: Upscale cannot import Workbench. */
 export interface UpscaleUiAdapter {
   patchPromptDraft(values: ProjectPromptDraftPatch): void;
   patchValues(values: Partial<UpscaleWidgetValues>, origin?: 'user' | 'system'): void;
@@ -22,12 +19,7 @@ export interface UpscaleUiAdapter {
 export type UpscaleUiActions = Pick<UpscaleUiAdapter, 'patchPromptDraft' | 'patchValues' | 'reportError'>;
 
 const UpscaleUiContext = createContext<UpscaleUiAdapter | null>(null);
-/**
- * Actions are published separately from the adapter because the adapter's
- * identity changes on every value patch (it carries `rawValues`). Components
- * that only need to *do* something — not read state — subscribe here and so are
- * not re-rendered by a keystroke elsewhere in the form.
- */
+/** Separate stable actions from value-bearing adapters so action-only consumers do not rerender on form keystrokes. */
 const UpscaleUiActionsContext = createContext<UpscaleUiActions | null>(null);
 
 export const UpscaleUiProvider = ({ adapter, children }: { adapter: UpscaleUiAdapter; children: ReactNode }) => {

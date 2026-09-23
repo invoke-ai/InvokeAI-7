@@ -1,11 +1,7 @@
 import { Progress, Stack, Text } from '@chakra-ui/react';
 import { useTranslation } from 'react-i18next';
 
-/**
- * Thin denoising progress bar with a "step 12/30 · 39%" caption. `percentage` is
- * 0..1 (null → indeterminate). The caption uses tabular numerals so the live
- * step count and percent don't shift the layout as they tick.
- */
+/** percentage is 0..1 or null for indeterminate; tabular captions prevent live progress from shifting layout. */
 export const QueueStepProgress = ({ message, percentage }: { message: string; percentage: number | null }) => {
   const { t } = useTranslation();
   const percentLabel = percentage !== null ? `${Math.round(percentage * 100)}%` : '';

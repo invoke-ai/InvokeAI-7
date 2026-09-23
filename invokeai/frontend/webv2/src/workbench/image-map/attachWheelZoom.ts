@@ -3,10 +3,8 @@ import type { AxisRanges } from './imageMapViewport';
 import { zoomFactorFromWheel, zoomRangesAroundFraction } from './imageMapViewport';
 
 /**
- * Custom wheel + two-finger-pinch zoom for the plotly map. Plotly's built-in
- * scrollZoom is deliberately off (long-standing Safari/trackpad issues —
- * PhotoMapAI replaced it the same way); single-finger drag still uses
- * plotly's native pan.
+ * Custom wheel/pinch zoom replaces Plotly scrollZoom for Safari/trackpad behavior, following PhotoMapAI.
+ * Single-touch pan remains native.
  */
 
 interface ZoomHost {
@@ -53,10 +51,8 @@ export const attachWheelZoom = (element: HTMLElement, host: ZoomHost): (() => vo
 
   let pinchDistance: number | null = null;
 
-  // Re-baselined on any transition INTO two touches, in either direction. A
-  // third finger landing mid-pinch suspends the gesture without clearing the
-  // baseline, so measuring against it after that finger lifts — with the other
-  // two moved meanwhile — would snap the viewport by an arbitrary factor.
+  // Rebaseline every transition into two touches; movement during a third-finger pause must not cause a zoom jump
+  // on resume.
   const handleTouchStart = (event: TouchEvent) => {
     if (event.touches.length === 2) {
       pinchDistance = touchDistance(event.touches);

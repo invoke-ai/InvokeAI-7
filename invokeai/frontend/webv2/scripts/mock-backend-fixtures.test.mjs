@@ -111,9 +111,8 @@ test('Fixture Project 002 carries the image and video references used by the pro
 });
 
 /**
- * The board path can only be proved end to end if the fixture contains the cases: an item that is
- * both board membership and a canvas reference, one that is only membership, each visible category,
- * the two kinds of media that must be excluded, and references that live outside the board.
+ * Cover board-only and referenced media, all visible categories, exclusions, and external references in the
+ * round-trip fixture.
  */
 test('Fixture Project 002 owns a board carrying every case the project-file journey exercises', () => {
   const fixture = createMockBackendFixture('representative');
@@ -134,8 +133,7 @@ test('Fixture Project 002 owns a board carrying every case the project-file jour
     PROJECT_FILE_BOARD_ID
   );
 
-  // The canvas draws with these, and no project owns them: on import they deduplicate against the
-  // destination, and on duplication they are not copied at all.
+  // External references deduplicate on import and remain shared on duplication.
   const layerNames = collectCanvasLeaves(project.data.canvas.document).map((layer) => layer.source.image.imageName);
 
   for (const name of PROJECT_FILE_BOARD.externalImages) {
@@ -185,8 +183,7 @@ test('the HTTP reset contract selects profiles explicitly and restores the start
 
     assert.deepEqual(generationDevices, [{ device: 'cpu', name: 'CPU' }]);
     assert.equal(images.items.length, 17);
-    // One of the thousand is an intermediate on Fixture Project 002's board, which every gallery
-    // listing hides — it exists so the project-file journey can prove it never travels.
+    // One of the 1,000 fixture images is intermediate and excluded from gallery/export counts.
     assert.equal(images.total, 999);
     assert.equal(itemIds.item_ids.length, 500);
     assert.equal(models.models.length, 100);
@@ -726,8 +723,6 @@ test('the image map serves videos only on request and keeps its two endpoints co
     const imagesOnly = await getJson(backend, '/api/v1/image_map/points');
     const withVideos = await getJson(backend, '/api/v1/image_map/points?include_videos=true');
 
-    // The opt-in gate, which is the contract the real backend enforces: a
-    // client that cannot render videos must not be sent any.
     assert.equal(
       imagesOnly.points.some((point) => point.kind === 'video'),
       false
@@ -741,16 +736,12 @@ test('the image map serves videos only on request and keeps its two endpoints co
     assert.equal(withVideos.point_count, withVideos.points.length);
     assert.equal(withVideos.points.length > imagesOnly.points.length, true);
 
-    // The client discards a label set whose projection or visible set differs
-    // from the points it is holding, so a mock that answers inconsistently
-    // silently shows an unlabelled map.
+    // Labels must match the points' projection and visible set or the client discards them.
     const labels = await getJson(backend, '/api/v1/image_map/cluster_labels?include_videos=true');
     assert.equal(labels.updated_at, withVideos.updated_at);
     assert.equal(labels.visible_hash, withVideos.visible_hash);
 
-    // Every point names a real item of the kind it claims. Deliberately a
-    // video whose name is in no image: the fixtures include a video named like
-    // an image, and the cross-namespace assertion below needs a genuine miss.
+    // Use a video name absent from images so the cross-namespace lookup genuinely misses.
     const imageNames = new Set(imagesOnly.points.map((point) => point.image_name));
     const video = withVideos.points.find((point) => point.kind === 'video' && !imageNames.has(point.image_name));
     assert.equal((await getJson(backend, `/api/v1/videos/i/${video.image_name}`)).video_name, video.image_name);

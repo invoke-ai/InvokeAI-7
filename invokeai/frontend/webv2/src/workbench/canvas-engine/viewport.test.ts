@@ -43,8 +43,7 @@ describe('createViewport', () => {
   });
 
   it('wheelZoom is continuous and does not snap to a preset', () => {
-    // Zoom used to be captured by a ~3% band around every preset, so a slow
-    // scroll stalled at each one; a small step must now actually move.
+    // Small zoom steps must move instead of sticking inside preset capture bands.
     const vp = createViewport({ pan: { x: 0, y: 0 }, zoom: 1 });
     const anchor: Vec2 = { x: 0, y: 0 };
 
@@ -54,8 +53,7 @@ describe('createViewport', () => {
   });
 
   it('wheelZoom crosses a preset instead of parking on it', () => {
-    // 0.99 sits inside the old ~3% capture band around 1, so a notch used to
-    // land exactly on the preset. It must now pass straight through.
+    // A step from 0.99 must pass through 1x without preset snapping.
     const vp = createViewport({ pan: { x: 0, y: 0 }, zoom: 0.99 });
 
     vp.wheelZoom(-100, { x: 0, y: 0 });

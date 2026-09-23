@@ -279,13 +279,8 @@ export const importGalleryImagesToCanvas = async (options: {
     let layerImages: readonly LayerImage[] = images;
     let failedImageNames: string[] = [];
     if (destination === 'control-resized') {
-      // The resize target is the model's native size and grid, and this is the one import path
-      // whose mistake is irreversible: the resized asset is uploaded to the server and becomes a
-      // layer. Without the table `getGenerationDimensions` answers 1024 / grid 8 for every
-      // architecture, so an SD-1 project would upload four times the area it asked for and a
-      // CogView 4 project an off-grid layer. Refuse instead, the way the Invoke gate does -- also
-      // when the table is there but has no row for the selected architecture, which is the same
-      // fallback answer for that one model.
+      // Refuse resize uploads without policy for the selected architecture: fallback size/grid would persist an
+      // incorrectly sized asset that cannot be re-derived later.
       const targetModel = normalizeGenerateWidgetValues(getProjectWidgetValues(project, 'generate'))?.model;
       if (
         getArchitectureCapabilitiesSnapshot().revision === 0 ||
@@ -344,8 +339,7 @@ export const importGalleryImagesToCanvas = async (options: {
         return { status: 'blocked' };
       }
     } else {
-      // No live editing session — a background project, or the active project
-      // with its canvas closed — so the import lands as ingestion.
+      // Without a live canvas session, import through ingestion.
       applyCanvasMutation(project.id, forward);
     }
     return { failedImageNames, layerIds: layers.map((layer) => layer.id), status: 'imported' };

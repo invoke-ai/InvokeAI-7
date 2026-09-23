@@ -108,8 +108,6 @@ describe('the prompt templates button', () => {
   });
 
   it('is a labeled primary at rest, swapping the label for the applied name', async () => {
-    // A labeled button rather than a bare icon: "Templates" until a template is
-    // applied, then the applied template's name in its place.
     await render(null);
     const restLabel = [...host!.querySelectorAll('span')].find(
       (span) => span.textContent === 'widgets.generate.templatesButton'

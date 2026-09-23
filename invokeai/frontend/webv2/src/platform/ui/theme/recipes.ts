@@ -1,12 +1,7 @@
 import { defineRecipe, defineSlotRecipe } from '@chakra-ui/react';
 import { recipes as chakraRecipes, slotRecipes as chakraSlotRecipes } from '@chakra-ui/react/theme';
 
-/**
- * Tooltip chrome: raised surface with a hairline stroke instead of inverted
- * fill. Extends Chakra's default recipe — replacing it wholesale would drop
- * the `arrow` slot's `--arrow-size`/`--arrow-background` vars, which renders
- * arrows at zero size (invisible).
- */
+/** Extend the tooltip recipe; replacing it drops arrow size/background variables. */
 export const tooltipSlotRecipe = defineSlotRecipe({
   ...chakraSlotRecipes.tooltip,
   base: {
@@ -30,16 +25,7 @@ export const tooltipSlotRecipe = defineSlotRecipe({
   },
 });
 
-/**
- * Feature hint cards. Same raised surface as the tooltip so the two read as one
- * family, one step wider for prose. Extends Chakra's default recipe: the arrow
- * slots derive `--arrow-background` from `--hovercard-bg`, so replacing the base
- * wholesale would render the arrow unfilled.
- *
- * The content owns its padding — cards must not add their own, or the two stack.
- * Chakra's `md` default (20px) reads as a dialog rather than an annotation, so
- * these default to `xs`.
- */
+/** Extend the hover-card recipe to preserve arrow variables. Content owns padding; callers must not duplicate it. */
 export const hoverCardSlotRecipe = defineSlotRecipe({
   ...chakraSlotRecipes.hoverCard,
   base: {
@@ -61,13 +47,7 @@ export const hoverCardSlotRecipe = defineSlotRecipe({
   defaultVariants: { size: 'xs' },
 });
 
-/**
- * Popover chrome: same raised surface as the tooltip/hover-card family, with
- * an arrow pointing at the anchor. Extends Chakra's default recipe so the
- * `arrow` slot keeps its `--arrow-size`/`--arrow-background` vars (which
- * derive from `--popover-bg`); replacing the base wholesale would render
- * arrows at zero size.
- */
+/** Extend the popover recipe to preserve arrow size/background variables. */
 export const popoverSlotRecipe = defineSlotRecipe({
   ...chakraSlotRecipes.popover,
   base: {
@@ -79,8 +59,6 @@ export const popoverSlotRecipe = defineSlotRecipe({
       borderWidth: '1px',
       boxShadow: 'lg',
       color: 'fg',
-      // The same drop-in motion as menus: Chakra's scale-fade reads as a
-      // dialog, and its `fast` open lags behind the click on a busy workbench.
       _open: { animationStyle: 'slide-fade-in', animationDuration: 'faster' },
       _closed: { animationStyle: 'slide-fade-out', animationDuration: 'faster' },
     },
@@ -127,8 +105,6 @@ export const tabsSlotRecipe = defineSlotRecipe({
         ...chakraSlotRecipes.tabs.variants?.variant?.line,
         trigger: {
           ...chakraSlotRecipes.tabs.variants?.variant?.line?.trigger,
-          // Rounded only at the top: the trigger's hover fill should read as
-          // rising from the underline, not as a floating pill.
           roundedTop: 'sm',
           _hover: {
             '&:not([data-selected])': { bg: 'bg.muted/60', color: 'fg' },
@@ -139,9 +115,7 @@ export const tabsSlotRecipe = defineSlotRecipe({
         ...chakraSlotRecipes.tabs.variants?.variant?.subtle,
         trigger: {
           ...chakraSlotRecipes.tabs.variants?.variant?.subtle?.trigger,
-          // The buttons' corner and translucent accent-leaning hover (see
-          // `SegmentTabs`): solid subtle fills vanish against muted chrome.
-          // Selected stays the stock accent fill — nav sidebars rely on it.
+          // Translucent hover stays visible on muted chrome; preserve selected accent fills for navigation.
           borderRadius: 'control',
           _hover: {
             '&:not([data-selected])': { bg: 'gray.hoverTint/10', color: 'fg' },
@@ -192,8 +166,7 @@ export const buttonRecipe = defineRecipe({
   },
   variants: {
     ...chakraRecipes.button.variants,
-    // One notch denser than Chakra's scale: `xs` lands on the segment-tab
-    // pill height, so the controls that share a row share a silhouette.
+    // Align xs button height with segment tabs.
     size: {
       ...chakraRecipes.button.variants?.size,
       xs: { ...chakraRecipes.button.variants?.size?.xs, h: '7', minW: '7' },
@@ -202,10 +175,7 @@ export const buttonRecipe = defineRecipe({
     },
     variant: {
       ...chakraRecipes.button.variants?.variant,
-      // Chakra's ghost/outline hover is the solid `subtle` fill, whose
-      // lightness collides with muted/control surfaces (invisible hover); a
-      // translucent `hoverTint` fill reads on every surface, leans toward the
-      // accent on the default palette, and keeps the tint of the others.
+      // Use translucent hover tint because solid subtle fills disappear on matching surfaces.
       ghost: {
         ...chakraRecipes.button.variants?.variant?.ghost,
         _hover: { bg: 'colorPalette.hoverTint/10' },
@@ -216,15 +186,12 @@ export const buttonRecipe = defineRecipe({
         _hover: { bg: 'colorPalette.hoverTint/10' },
         _expanded: { bg: 'colorPalette.hoverTint/10' },
       },
-      // Stock Chakra gives plain buttons no hover state at all; they take the
-      // same surface-proof fill as ghost.
+      // Give plain buttons the same visible hover fill as ghost buttons.
       plain: {
         ...chakraRecipes.button.variants?.variant?.plain,
         _hover: { bg: 'colorPalette.hoverTint/10' },
       },
-      // Chakra's subtle fill (`colorPalette.subtle`) is a step off the panel
-      // surface, so a tinted button read as flat; the translucent tint keeps
-      // the palette's hue legible on every surface.
+      // Use translucent tint so subtle buttons retain their palette hue across surfaces.
       subtle: {
         ...chakraRecipes.button.variants?.variant?.subtle,
         bg: 'colorPalette.hoverTint/22',
@@ -242,14 +209,12 @@ export const segmentGroupSlotRecipe = defineSlotRecipe({
     root: {
       ...chakraSlotRecipes.segmentGroup.base?.root,
       '--segment-radius': 'radii.sm',
-      // A neutral fill disappears against the lighter section surfaces these
-      // controls sit on, so the selection reads through the accent palette.
+      // Use accent selection because neutral fills disappear on lighter section surfaces.
       '--segment-indicator-bg': 'colors.accent.solid',
       '--segment-indicator-shadow': 'none',
       bg: 'transparent',
       borderColor: 'border.subtle',
-      // The buttons' shared corner outside, minus the 1px border inside — the
-      // sm segment radius already sits at that inner value.
+      // Inner radius subtracts the 1px border from the shared outer radius.
       borderRadius: 'control',
       borderWidth: '1px',
       boxShadow: 'none',
@@ -257,10 +222,8 @@ export const segmentGroupSlotRecipe = defineSlotRecipe({
     item: {
       ...chakraSlotRecipes.segmentGroup.base?.item,
       color: 'fg.muted',
-      // Items above the indicator by positive z-order rather than the base
-      // recipe's negative indicator: browsers paint both the same, but axe sorts
-      // a negative z-index beneath the page and measures the checked label's
-      // contrast against the panel instead of the indicator.
+      // Use positive z-order; axe can treat negative indicators as beneath the page and measure the wrong
+      // contrast.
       zIndex: 1,
       fontWeight: '500',
       transitionDuration: 'faster',
@@ -277,8 +240,7 @@ export const segmentGroupSlotRecipe = defineSlotRecipe({
     },
     indicator: {
       ...chakraSlotRecipes.segmentGroup.base?.indicator,
-      // Zag slides the indicator via inline `var(--transition-duration, 150ms)`;
-      // pointing the var at the motion-aware `fast` token collapses it under reduce motion.
+      // Bind Zag's inline transition variable to the motion-aware duration token.
       '--transition-duration': '{durations.fast}',
       shadow: 'none',
       zIndex: 0,
@@ -286,15 +248,10 @@ export const segmentGroupSlotRecipe = defineSlotRecipe({
   },
   variants: {
     ...chakraSlotRecipes.segmentGroup.variants,
-    // Item heights are the button height of the same size name minus the
-    // root's 1px border, so a segment group's outer box lands exactly on the
-    // buttons it sits beside — Chakra's defaults run one size-name small
-    // (their `xs` item is button-`2xs` height). Text styles mirror the
-    // button recipe's `xs` cap.
+    // Subtract root borders from same-size button heights so segment controls align with neighboring buttons.
     size: {
       ...chakraSlotRecipes.segmentGroup.variants?.size,
-      // Repo extension (like the button's own `2xs`): Chakra ships no
-      // segment-group `2xs`, so this borrows the `xs` item styles as its base.
+      // Chakra has no 2xs segment group; derive it from xs styles.
       '2xs': {
         item: {
           ...chakraSlotRecipes.segmentGroup.variants?.size?.xs?.item,
@@ -358,22 +315,14 @@ export const formControlInteraction = {
 
 const formControlOpen = { borderColor: 'accent.solid' };
 
-/**
- * `formControlInteraction` keyed on focus-within, for composite fields whose
- * focusable element lives inside the frame (see `platform/ui/InputShell`).
- */
+/** Use focus-within for composite fields such as InputShell. */
 export const inputShellInteraction = {
   ...formControlInteraction,
   _focusWithin: formControlFocused,
   _hover: { ...formControlInteraction._hover, _focusWithin: formControlFocused },
 };
 
-/**
- * `formControlInteraction` for `platform/ui/ScrubberField`: the frame is the
- * pointer target and clicks focus an inner layer programmatically, so the
- * accent border keys on keyboard focus (`:focus-visible`) or the inline editor,
- * never on a plain click, which shows the dragging state instead.
- */
+/** Scrubber borders follow keyboard/editor focus; pointer clicks use drag state instead. */
 export const scrubberInteraction = {
   ...formControlInteraction,
   '&:has(:focus-visible), &[data-editing]': formControlFocused,
@@ -387,8 +336,7 @@ export const inputRecipe = defineRecipe({
   ...chakraRecipes.input,
   variants: {
     ...chakraRecipes.input.variants,
-    // The same one-notch drop as the button scale, so same-named sizes share a
-    // row height (select/combobox/numberInput repeat it for their vars).
+    // Keep same-named input, select, combobox, and button sizes aligned.
     size: {
       ...chakraRecipes.input.variants?.size,
       xs: { ...chakraRecipes.input.variants?.size?.xs, '--input-height': 'sizes.7' },
@@ -480,8 +428,7 @@ export const dropdownContent = {
 
 export const dropdownItem = {
   borderRadius: 'l2',
-  // One `data-danger` attribute is the whole destructive treatment; every
-  // delete/uninstall/clear item opts in instead of restyling locally.
+  // Use data-danger for destructive menu items.
   '&[data-danger]': {
     color: 'fg.error',
     _highlighted: { bg: 'bg.error' },
@@ -535,10 +482,8 @@ export const menuSlotRecipe = defineSlotRecipe({
 
 export const selectSlotRecipe = defineSlotRecipe({
   ...chakraSlotRecipes.select,
-  // The outline variant carries its own `_expanded` (border.emphasized) which
-  // would override a base-level open style, so the accent open state lives on
-  // the variant too. The cast keeps defineSlotRecipe's variant inference
-  // anchored to Chakra's own map, which the spread-with-override loses.
+  // Override outline _expanded at variant level; base styles lose to it. Preserve Chakra's variant-map inference
+  // in the cast.
   variants: {
     ...chakraSlotRecipes.select.variants,
     size: {
@@ -656,12 +601,6 @@ export const comboboxSlotRecipe = defineSlotRecipe({
   },
 });
 
-/**
- * The one dialog look: compact tool windows on a single surface. Density and
- * chrome live here — a dialog file should carry structure, not styling.
- * Chakra's stock 24px gutters, `lg` title, and top placement all read as a
- * marketing modal rather than a desktop app's dialog.
- */
 export const dialogSlotRecipe = defineSlotRecipe({
   ...chakraSlotRecipes.dialog,
   base: {
@@ -714,12 +653,7 @@ export const dialogSlotRecipe = defineSlotRecipe({
   },
 });
 
-/**
- * Chakra hides a scrollbar only when NEITHER axis overflows
- * (`&:not([data-overflow-x], [data-overflow-y])`), so a vertical-only bar
- * sticks around — thumb clamped to its minimum size — whenever content merely
- * spills sideways (nowrap rows, wide JSON). Each bar answers for its own axis.
- */
+/** Check each scrollbar's own overflow axis; Chakra's combined guard leaves phantom thumbs on the other axis. */
 export const scrollAreaSlotRecipe = defineSlotRecipe({
   ...chakraSlotRecipes.scrollArea,
   base: {
@@ -746,13 +680,8 @@ export const sliderSlotRecipe = defineSlotRecipe({
   variants: {
     ...chakraSlotRecipes.slider.variants,
     size: {
-      // Chakra's thumb sizes are touch targets. With a mouse the track itself
-      // is the drag target, so fine-pointer devices get a much smaller thumb.
-      // `--slider-marker-center` must shrink with it: it is the marker group's
-      // top offset, (thumb - marker) / 2, keeping marks centered on the track.
-      // `--slider-marker-inset` is zeroed at every size: zag already offsets
-      // marks by half the thumb within the group, so any extra inset shifts
-      // the end marks off the thumb positions they label.
+      // Fine pointers use smaller thumbs. Update marker center with thumb size and zero marker inset because Zag
+      // already applies half-thumb offsets.
       lg: {
         root: {
           ...chakraSlotRecipes.slider.variants?.size?.lg?.root,
@@ -878,12 +807,8 @@ export const colorPickerSlotRecipe = defineSlotRecipe({
 });
 
 /**
- * Skeletons sweep a subtle highlight instead of pulsing. The gradient rests on
- * the same `bg.emphasized` surface the stock pulse used; the band is a small
- * fg lift so it stays quiet on every theme. The sweep runs linear: the stock
- * ease-in-out lingers at each end and rushes the middle, which reads as a
- * stutter. Reduce-motion is handled by the global `.chakra-skeleton`
- * animation kill in `system.ts`.
+ * Use a linear sweep to avoid endpoint pauses; system.ts disables skeleton motion and gradients under reduced
+ * motion.
  */
 export const skeletonRecipe = defineRecipe({
   ...chakraRecipes.skeleton,
@@ -942,8 +867,7 @@ export const rowRecipe = defineRecipe({
     textAlign: 'start',
     transition: 'background var(--wb-motion-duration-fast) ease, color var(--wb-motion-duration-fast) ease',
     w: 'full',
-    // A pointer hint, not a state: it stays under the `muted` (selected)
-    // variant's own `bg.muted` so hovering never reads as selecting.
+    // Keep hover below selected emphasis so pointing does not resemble selection.
     _hover: { bg: 'bg.muted/60' },
     _focusVisible: {
       outline: '2px solid',
@@ -1072,13 +996,7 @@ export const themeCardRecipe = defineSlotRecipe({
   defaultVariants: { selected: false },
 });
 
-/**
- * Hairline dividers between rows. Metadata lists carry values of very
- * different heights — a seed next to a wrapped prompt — and a bare row gap
- * stops reading as separation once values grow tall; the rule keeps each
- * label/value pair visually bound. `paddingTop` mirrors the 1.5-unit row gap
- * the metadata lists use, so the line sits centered between rows.
- */
+/** Separate variable-height metadata rows with centered dividers; keep padding aligned with the row gap. */
 export const dataListSlotRecipe = defineSlotRecipe({
   ...chakraSlotRecipes.dataList,
   base: {
@@ -1086,8 +1004,7 @@ export const dataListSlotRecipe = defineSlotRecipe({
     item: {
       ...chakraSlotRecipes.dataList.base?.item,
       '&:not(:first-child)': {
-        // `borderColor` + top-only width, like the chrome islands: the
-        // side-specific color property does not resolve the semantic token.
+        // Use borderColor plus top width; side-specific color does not resolve the semantic token.
         borderColor: 'border.subtle',
         borderTopWidth: '1px',
         paddingTop: '1.5',

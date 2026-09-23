@@ -22,24 +22,12 @@ import { WorkflowLibraryGrid } from './WorkflowLibraryGrid';
 import { WorkflowLibraryTagChips } from './WorkflowLibraryTagChips';
 import { useWorkflowLibraryMissingCounts } from './WorkflowRequirementsList';
 
-/**
- * xyflow (~174 KB) stays out of this dialog's own chunk: the preview dialog
- * is only ever needed once a card asks to preview it, so it is dynamic
- * `import()`ed here rather than statically imported like every other panel
- * in this file (mirrors `WidgetActionsMenu.tsx`'s `GraphPreviewHost`).
- */
+/** Load graph preview only on request to keep xyflow outside the library dialog's initial chunk. */
 const LazyGraphPreviewDialog = lazy(() =>
   import('@features/workflow/ui/graph-preview/GraphPreviewDialog').then((module) => ({
     default: module.GraphPreviewDialog,
   }))
 );
-
-/**
- * Backend workflow library browser. Filtering and paging are server side and
- * live in the browse store, so this shell owns exactly two pieces of state:
- * the raw text in the search box (debounced into the store) and which card is
- * selected. Everything else is read back out of the store.
- */
 
 const SEARCH_DEBOUNCE_MS = 300;
 
@@ -59,11 +47,8 @@ const selectBrowseView = (snapshot: WorkflowLibraryBrowseSnapshot) => ({
 });
 
 /**
- * Mounted only while the dialog is open, so its mount effect *is* the "dialog
- * opened" hook: it kicks the first page load and, on a fresh install with no
- * saved workflows, lands the user on the bundled defaults instead of an empty
- * "Yours". The switch is skipped if the user has already moved the filter
- * while the probe was in flight.
+ * On open, load the first page and choose defaults for empty accounts only if filters have not changed during the
+ * probe.
  */
 const WorkflowLibraryBrowseSession = () => {
   useMountEffect(() => {
@@ -91,25 +76,16 @@ export const WorkflowLibraryDialog = ({
   const templatesSnapshot = useInvocationTemplatesSnapshot();
   const [searchInput, setSearchInput] = useState('');
   const [selectedWorkflowId, setSelectedWorkflowId] = useState<string | null>(null);
-  // The record of which workflow the rail asked to preview — mounts the lazy
-  // preview dialog below while set. This dialog shell is never unmounted while
-  // the app is up (only its `isOpen` toggles), so every path that can close
-  // *this* dialog has to clear it too, or a stale preview would resurrect
-  // itself the next time the library opens.
+  // Clear pending preview entries on every library-close path because the persistent shell otherwise resurrects
+  // them on reopen.
   const [previewEntry, setPreviewEntry] = useState<WorkflowLibraryEntry | null>(null);
-  // Tracked separately from `previewEntry` so closing the preview can play its
-  // exit transition: `isPreviewOpen` goes false first, and the entry (which is
-  // what keeps the lazy dialog mounted) is only released once the transition
-  // has finished.
+  // Close before clearing previewEntry so the lazy dialog remains mounted through its exit transition.
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
-  // A right-click selects the card so the rail (which owns the actions) shows
-  // that workflow, then the rail opens its menu at the pointer.
   const [contextMenuPoint, setContextMenuPoint] = useState<{ x: number; y: number } | null>(null);
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const closeDialog = useCallback(() => {
-    // The library itself is leaving, and it takes the preview with it — there
-    // is nothing left to animate against, so this drops the mount outright.
+    // Closing the library removes its preview immediately; the parent surface is leaving too.
     setPreviewEntry(null);
     setIsPreviewOpen(false);
     setContextMenuPoint(null);
@@ -119,8 +95,7 @@ export const WorkflowLibraryDialog = ({
   const isLoadPending = loadPhase !== 'idle';
   const missingCounts = useWorkflowLibraryMissingCounts(entries);
 
-  // Selection is derived, not stored: a filter change or a deletion can retire
-  // the selected row, and the head of the list takes over without an effect.
+  // Derive a fallback selection when filtering/deletion removes the selected row.
   const activeWorkflowId = entries.some((entry) => entry.item.workflow_id === selectedWorkflowId)
     ? selectedWorkflowId
     : (entries[0]?.item.workflow_id ?? null);
@@ -161,10 +136,7 @@ export const WorkflowLibraryDialog = ({
     }
   }, [isPreviewOpen]);
 
-  // Only a `'ready'` enrichment carries the compiled document; the rail's
-  // Preview action is disabled for anything else, so this is a defensive
-  // fallback (a stale `previewEntry` from before a revalidation), not a path
-  // the UI can normally reach.
+  // Only ready enrichment has a document; guard stale preview entries after revalidation.
   const previewSource = useMemo(() => {
     if (!previewEntry || previewEntry.enrichment.status !== 'ready' || templatesSnapshot.status !== 'loaded') {
       return null;
@@ -182,8 +154,7 @@ export const WorkflowLibraryDialog = ({
       clearTimeout(searchTimerRef.current);
     }
 
-    // Deliberately not a `useEffect` cleanup: a debounce that fires after
-    // unmount only patches the store the next open would reload anyway.
+    // A post-unmount search debounce may update the browse store for the next opening.
     searchTimerRef.current = setTimeout(() => setWorkflowLibraryBrowseFilter({ search: value }), SEARCH_DEBOUNCE_MS);
   }, []);
 
@@ -212,8 +183,6 @@ export const WorkflowLibraryDialog = ({
 
   const handleOpenItem = useCallback((item: WorkflowLibraryListItem) => void load(item), [load]);
 
-  // The deleted row is gone from the next refresh; dropping the selection lets
-  // the head of the list take over, the same way a filter change does.
   const handleDeleted = useCallback(() => {
     setSelectedWorkflowId(null);
     setContextMenuPoint(null);
@@ -288,10 +257,7 @@ export const WorkflowLibraryDialog = ({
                         </SegmentGroup.Item>
                       ))}
                     </SegmentGroup.Root>
-                    {/* In the header row rather than the dialog's absolutely
-                        positioned corner: with a second header row of tag chips
-                        underneath, the corner placement floated the control
-                        across both bands instead of reading as part of either. */}
+
                     <Dialog.CloseTrigger asChild>
                       <CloseButton
                         disabled={isLoadPending}

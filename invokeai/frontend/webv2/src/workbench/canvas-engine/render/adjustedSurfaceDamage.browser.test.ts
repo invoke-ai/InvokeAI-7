@@ -1,15 +1,4 @@
-/**
- * The correctness guard for partially-refreshed adjusted surfaces.
- *
- * A live stroke bumps its layer's cache version every tick, which defeats the
- * adjusted-surface memo — so on an adjusted raster layer the surface was being
- * rebuilt from the whole layer every frame: a full readback plus a per-pixel JS
- * pass, 35 ms on a 2600×2100 layer. It now refreshes only the band the stroke
- * reported writing.
- *
- * That is only safe if a partial refresh is indistinguishable from a rebuild, so
- * these tests drive real canvases and compare the two pixel for pixel.
- */
+/** Real-canvas tests require damage-only adjusted-surface refreshes to match full rebuilds pixel for pixel. */
 
 import type { CanvasAdjustmentsContract } from '@workbench/canvas-engine/contracts';
 import type { Rect } from '@workbench/canvas-engine/types';
@@ -73,10 +62,6 @@ const worstDifference = (a: Uint8ClampedArray, b: Uint8ClampedArray): number => 
   return worst;
 };
 
-/**
- * Runs `steps` against two independent caches — one refreshing partially, one
- * always rebuilding — and returns both results.
- */
 const compare = (steps: { rect: Rect; color: string }[], reportDamage = true) => {
   const partial = setup(true);
   const wholesale = setup(false);
@@ -126,13 +111,8 @@ describe('partially-refreshed adjusted surfaces match a full rebuild', () => {
   });
 
   it('rebuilds in full when a later write does not report its damage', () => {
-    // The case that matters is MIXED: a reported write followed by an unreported
-    // one. Treating the unreported write as "nothing changed there" would refresh
-    // only the first band and leave the second one's pixels unadjusted, so this
-    // is what pins `damageSince` bailing out rather than skipping the step.
-    // Two writes have to follow the build for this to bite: one reported, one
-    // not. With only the unreported one there is nothing to refresh either way,
-    // so the bail-out and a "skip the unknown step" bug look identical.
+    // Reported then unreported writes must force a full refresh; skipping the unknown step leaves its pixels
+    // unadjusted. Both writes are needed to distinguish partial-refresh bugs.
     const partial = setup(true);
     const wholesale = setup(false);
     const built = { height: 60, width: 80, x: 40, y: 30 };

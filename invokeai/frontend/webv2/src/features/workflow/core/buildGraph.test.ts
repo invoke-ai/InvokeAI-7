@@ -844,9 +844,7 @@ describe('integer Literal enum values in the compiled graph', () => {
     },
   };
 
-  // End-to-end companion to the template test: whatever shape the template
-  // takes, the value that reaches the backend has to be the number the
-  // `Literal[256, 512]` annotation accepts.
+  // Compile template literals to backend-accepted numbers, not numeric strings.
   it('sends a numeric Literal enum value', () => {
     const parsedTemplates = parseOpenApiToTemplates(literalEnumSchema);
     const parsedTemplate = parsedTemplates.max_seq_len_invocation;
@@ -863,9 +861,7 @@ describe('integer Literal enum values in the compiled graph', () => {
     });
   });
 
-  // The default is only half the wire path: whatever the field widget offers
-  // has to compile to a number too, otherwise picking an option from the
-  // dropdown reintroduces the rejected string.
+  // Compile selected dropdown values numerically as well as defaults.
   it('sends a numeric value for the option the field widget offers', () => {
     const parsedTemplates = parseOpenApiToTemplates(literalEnumSchema);
     const parsedTemplate = parsedTemplates.max_seq_len_invocation;

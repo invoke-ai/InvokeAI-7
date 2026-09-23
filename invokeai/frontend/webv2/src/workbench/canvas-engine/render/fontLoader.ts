@@ -1,13 +1,6 @@
 /**
- * The Canvas-owned font boundary.
- *
- * Built-in CSS families continue to use the small `FontFaceSet` slice below.
- * The application can inject its account-scoped custom-font runtime without
- * making the Canvas engine import feature code. Custom sources are translated
- * into the runtime's stable reference plus their exact style, weight, and axis
- * coordinates; the runtime owns the browser-only family alias.
- *
- * Zero React, zero import-time side effects.
+ * Canvas font boundary: built-ins use FontFaceSet; injected account-scoped runtimes resolve custom refs with exact
+ * style, weight and axes while owning browser-only aliases.
  */
 
 import type { CanvasLayerSourceContract } from '@workbench/canvas-engine/contracts';
@@ -30,18 +23,13 @@ export interface CanvasFontReference {
   axes?: Readonly<Record<string, number>>;
 }
 
-/**
- * Application-owned custom-font runtime. It is intentionally structural so
- * Canvas stays below feature composition and remains usable in node tests.
- */
+/** Structural custom-font runtime keeps Canvas independent of feature composition and usable in node tests. */
 export interface CanvasFontRuntime {
   /** Ensures the exact static face/instance is loaded and returns its browser family alias. */
   ensure(reference: CanvasFontReference, signal?: AbortSignal): Promise<string>;
   /**
-   * Revalidates the exact face against the current account/catalog state before
-   * an exported or generated output is allowed to use it. Preview ensures may
-   * serve the browser registry cache; output checks must be able to reject a
-   * deleted or changed resource even when that cache still has an alias.
+   * Revalidate exact faces against current account/catalog state for outputs; cached preview aliases must not
+   * allow deleted or changed resources.
    */
   ensureForOutput(reference: CanvasFontReference, signal?: AbortSignal): Promise<string>;
   /** Keeps the loaded face registered while this engine has a live text consumer. */
@@ -216,10 +204,8 @@ export const createFontLoader = (api: FontLoadApi | CanvasFontRuntime | null): F
           const nextGeneration = api.getSnapshot?.().generation;
           const generationChanged = nextGeneration === undefined || nextGeneration !== runtimeSnapshotGeneration;
           runtimeSnapshotGeneration = nextGeneration ?? runtimeSnapshotGeneration;
-          // The runtime owns account lifecycle and may remove every registered
-          // face at once. A runtime without a generation API is treated as a
-          // coarse lifecycle boundary for compatibility; runtimes with a
-          // generation leave ordinary loading/ready notifications alone.
+          // Runtime generations distinguish account resets from ordinary font notifications. Without generation
+          // support, treat every notification as a coarse lifecycle boundary.
           if (generationChanged) {
             generation += 1;
             cancelPendingPreviews();
@@ -452,9 +438,7 @@ export const createFontLoader = (api: FontLoadApi | CanvasFontRuntime | null): F
           }
         },
         () => {
-          // A failed load leaves fallback pixels in place. An asynchronous
-          // raster job must not become an unhandled rejection solely because a
-          // face is missing; the UI can retry explicitly.
+          // Keep fallback pixels on load failure without unhandled raster-job rejection; the UI may retry.
         }
       );
     },

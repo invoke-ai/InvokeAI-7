@@ -11,13 +11,8 @@ export interface DerivedSurfaceRequest {
   paramsKey: string;
   source: RasterSurface;
   /**
-   * Builds the derived surface.
-   *
-   * `target` is the previous surface when it can be reused (same source), else
-   * `null`. `reusableFromVersion` is the source version `target` was built at,
-   * or `null` when there is nothing to refresh from — which is the signal that
-   * the build must be wholesale. Given both, an implementation may ask the
-   * layer cache what changed since that version and refresh only that region.
+   * Reuse `target` only for the same source. `reusableFromVersion` permits damage-based refresh; null requires a
+   * wholesale build.
    */
   create(target: RasterSurface | null, reusableFromVersion: number | null): RasterSurface;
 }

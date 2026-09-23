@@ -55,25 +55,9 @@ export const parseProjectFile = (text: string): Record<string, unknown> | null =
   }
 };
 
-/**
- * Export and import a project as an `.invk` archive. This module is the workflow; `./invk` is the
- * format.
- *
- * An imported document gets a fresh id, never the one in the file: two people exchanging a project
- * would otherwise collide the moment both saved.
- *
- * The ZIP codec and the workbench reducer are both `await import()`ed. The Launchpad offers Import
- * and Export on a route that never mounts the editor, and should not pay for either until someone
- * picks a file.
- */
+/** Imports receive fresh IDs; ZIP and reducer dependencies remain lazy. */
 
-/**
- * How far along a project file is.
- *
- * `bundling` and `restoring` count assets; `packing` is the single ZIP write at
- * the end, which has no unit worth counting and is reported so the caller can
- * stop showing a number that has stopped moving.
- */
+/** Asset-count phases exclude ZIP packing. */
 export interface ProjectFileProgress {
   completed: number;
   phase: 'bundling' | 'packing' | 'restoring' | 'restoring-fonts';
@@ -130,8 +114,7 @@ const exportProjectDocument = async (
 
   assertAccountScopeCurrent(owner);
 
-  // Enumerated before anything is planned, and fatal if it fails. An archive whose `board.json`
-  // silently said "empty" would be a lie the reader has no way to detect — worse than no archive.
+  // Board enumeration failure must abort export rather than describe a falsely empty board.
   const snapshot = await getProjectBoardSnapshot(projectId, owner.signal);
 
   assertAccountScopeCurrent(owner);
@@ -195,8 +178,7 @@ export const exportOpenProject = async (
 
   assertAccountScopeCurrent(owner);
 
-  // Preserve any higher compatibility floor already acknowledged by the server. Direct/offline
-  // exports fall back to what their live canvas demonstrably requires.
+  // Use the acknowledged server compatibility floor; offline fallback uses live canvas requirements.
   const record = getOpenProject(project.id) ? await readAcknowledgedProject(project.id, owner) : null;
   const minimumCanvasSchemaVersion = Math.max(
     getProjectCanvasSchemaRequirement(document),
@@ -206,14 +188,7 @@ export const exportOpenProject = async (
   return exportProjectDocument(project.name, project.id, document, minimumCanvasSchemaVersion, { ...options, owner });
 };
 
-/**
- * Import an `.invk` as a new server project: restore its media, rewrite every reference the server
- * renamed, then create the project — claiming its staging board in the same request. Throws
- * {@link InvkFormatError} so callers can translate the reason.
- *
- * Creating the project is the commit point; see {@link createStagingBoard}. A v2 archive or a
- * legacy JSON document stages no board, and the server gives the new project an empty one.
- */
+/** Project creation commits remapped/staged media. Archives without board entries receive a new empty server board. */
 export const importProjectFile = async (
   file: File,
   options: ProjectFileOptions = {}
@@ -239,14 +214,9 @@ export const importProjectFile = async (
     typeof projectDocument.name === 'string' && projectDocument.name.trim()
       ? projectDocument.name.trim()
       : 'Imported project';
-  // Stripped on the way in as well as on the way out, so the rule holds for documents this app did
-  // not write: a legacy `.invokeproject.json`, an archive from a dev build, a hand-edited one. A
-  // stranger's `selectedImage`/`compareImage` would otherwise arrive intact and unfixable — the
-  // collector skips those keys, so the restore can neither fetch them nor report them as dangling.
+  // Strip selection on import because skipped references cannot be restored or reported.
   const candidate = { ...stripInstallationState(projectDocument), id, name };
-  // Full validation rehydrates the document through the Workbench reducer, so
-  // it is loaded here rather than imported: the Launchpad should not carry the
-  // editor's aggregate state just to offer an Import button.
+  // Validate through the reducer lazily to keep editor aggregates out of Launchpad imports.
   const { deserializeProjectDocument } = await import('./syncedPersistence');
 
   assertAccountScopeCurrent(owner);
@@ -278,8 +248,7 @@ export const importProjectFile = async (
 
   assertAccountScopeCurrent(owner);
 
-  // Only an archive that actually carries board media needs somewhere to put it. An empty board is
-  // the server's to create, and staging one would be an unclaimed board to leak for no gain.
+  // Create staging boards only when media needs one.
   const stagingBoardId =
     archive?.boardSnapshot && archive.boardSnapshot.items.length > 0
       ? await (async () => {
@@ -367,8 +336,7 @@ export const importProjectFile = async (
     return {
       boardItemIssues: restored?.boardItemIssues ?? [],
       documentReferenceIssues: restored?.documentReferenceIssues ?? [],
-      // The board the server says it claimed, not the one we asked it to: a project meeting its
-      // owner for the first time is also pointed at its board, which is what `selectBoard` means.
+      // Bind the initial selection to the authoritative returned board ID, not the requested ID.
       record: {
         ...record,
         data: applyAuthoritativeProjectBoard(record.data, record.board_id, { selectBoard: true }),
@@ -383,8 +351,7 @@ export const importProjectFile = async (
         await restoreMedia.rollbackUnlessProjectExists(error, didCreateProject, owner, rollback);
       }
     }
-    // Reached through the lazily-loaded module, so a legacy JSON import still never pulls the
-    // restore engine into the graph — it has no media to undo.
+    // Media-free legacy JSON imports do not load restore rollback.
     if (ledger !== null && restoreMedia !== null) {
       const rollback = () => restoreMedia.rollbackRestoredMedia(ledger, { signal: owner.signal });
       if (!didAttemptProjectCreate && isAccountScopeCurrent(owner)) {

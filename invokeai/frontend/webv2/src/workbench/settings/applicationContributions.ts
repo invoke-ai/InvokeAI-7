@@ -122,8 +122,10 @@ export const developerSettings = section('developer', 'Developer', [
       label: text(`options.${value}`, value.charAt(0).toUpperCase() + value.slice(1)),
     })),
   },
+  preference('developerConsoleOutputEnabled', 'Mirror logs to the browser console', 'console devtools'),
   preference('developerPerformanceTimingsEnabled', 'Collect performance timings', 'diagnostics'),
   custom('developerLogNamespaces', 'Log namespaces'),
+  custom('developerLoggingReset', 'Reset logging defaults', 'preference'),
 ]);
 export const serverSettings = section('server', 'Server', [
   custom('generationDevices', 'Generation devices', 'server'),

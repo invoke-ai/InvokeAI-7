@@ -44,18 +44,9 @@ export interface NewRasterLayerControllerOptions {
 }
 
 /**
- * Creates raster layers out of loose pixels, undoably.
- *
- * Two callers want the same thing — Paste (pixels from the system clipboard)
- * and Layer via Copy (the selection's pixels lifted off the active layer) — so
- * they share one guarded insert rather than growing two near-identical
- * controllers. The transactional shape follows `ExtractMaskedAreaController`:
- * capture a permit, build the layer, `dispatchPrepared` with reducer AND mirror
- * postconditions, install the prepared cache, then push a failure-atomic history
- * entry whose redo re-runs the exact same apply.
- *
- * The new layer is inserted directly above the active one, which is where the
- * user is looking, and becomes the selection.
+ * Shared undoable insertion for Paste and Layer via Copy. Acquire a permit, verify reducer/mirror postconditions,
+ * install the prepared cache, then record failure-atomic history with the same redo path. Insert above and select
+ * the active layer's new sibling.
  */
 export class NewRasterLayerController {
   private disposed = false;
@@ -81,10 +72,8 @@ export class NewRasterLayerController {
     this.deps.endBurst();
 
     const layerId = this.deps.createLayerId();
-    // Pixels are placed by the layer SOURCE offset, not the transform, so the
-    // layer's own transform stays identity — the same shape a paint layer takes
-    // after a stroke, which keeps every later edit (move, transform, float) on
-    // the ordinary path.
+    // Place pixels with the source offset, leaving the transform at identity for ordinary move, transform and
+    // float handling.
     const layer: CanvasLayerContract = {
       blendMode: 'normal',
       id: layerId,
@@ -147,10 +136,7 @@ export class NewRasterLayerController {
     return { layerId, status: 'created' };
   }
 
-  /**
-   * Copies the selection's pixels off the active layer into a new layer above
-   * it, leaving the source untouched (Photoshop's "Layer via Copy").
-   */
+  /** Copies selected pixels into a new layer above the active layer without changing the source. */
   liftSelectionToLayer(name: string, label: string): NewRasterLayerResult {
     const document = this.deps.getDocument();
     const layer = getDocumentLayer(document, document?.selectedLayerId);

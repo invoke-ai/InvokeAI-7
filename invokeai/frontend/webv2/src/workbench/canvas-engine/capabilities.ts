@@ -55,12 +55,8 @@ export interface LayerExportGuard {
 }
 
 /**
- * Why a guarded layer mutation declined to touch the document: the transaction
- * outcomes a permit-guarded commit can hit (`busy` — another edit owns the
- * document or a gesture started mid-flight; `stale` — the guarded pixels no
- * longer match the live layer; `aborted` — the caller's signal fired) plus the
- * command refusals its target can raise. Structural commits use the
- * transaction-only {@link StructuralCommitResult}.
+ * Guarded mutations can decline as busy (another edit or gesture), stale (pixels changed), aborted (caller
+ * signal), or command-specific refusals. Structural commits use {@link StructuralCommitResult}.
  */
 export type GuardedMutationRefusal =
   | SubsetOf<CanvasTransactionOutcome, 'aborted' | 'busy' | 'stale'>
@@ -173,10 +169,9 @@ export interface CanvasDocumentCapability {
   captureSnapshot(): CanvasDocumentSnapshot | null;
   getDocument(): CanvasDocumentContractV3 | null;
   /**
-   * Counts every reducer document identity change, whatever its origin (user edits, previews,
-   * selection, system syncs). Unlike `documentGeneration` (raster invalidation) and the persisted
-   * `documentRevision` (wholesale swaps), it moves on each edit, so an edit prepared against a
-   * captured value can be refused as stale once anything else lands.
+   * Counts every reducer document identity change, including previews, selection and syncs, to reject stale
+   * prepared edits. Unlike raster `documentGeneration` or wholesale-swap `documentRevision`, it advances on each
+   * edit.
    */
   getEditRevision(): number;
   /** Where a new `stack` layer lands: above `aboveId` when it belongs to the stack, else the stack top. */
@@ -209,11 +204,7 @@ export interface CanvasPsdExportCapability {
 export interface CanvasViewportCapability {
   getViewport(): Viewport;
   fitToView(): void;
-  /**
-   * Fits the document into view only the first time this engine is shown.
-   * Surfaces attach on every re-show of a kept-alive widget; an unconditional
-   * fit there would discard the user's zoom and pan.
-   */
+  /** Fit only on first show; reattaching a kept-alive widget must preserve zoom and pan. */
   fitToViewOnFirstShow(): void;
   setBboxGrid(size: number): void;
 }
@@ -262,11 +253,6 @@ export interface CanvasExportCapability {
 
 export type { RasterCompositeExportRequest, RasterCompositeExportResult } from './exportRasterComposite';
 
-/**
- * The canvas mutation vocabulary. Declared under `canvas-engine` (see
- * `mutationContracts.ts`) and surfaced here so workbench callers reach it
- * through the public API instead of the engine importing upward for it.
- */
 export type {
   CanvasEditIntent,
   CanvasLayerBasePatch,
@@ -304,12 +290,7 @@ export interface CanvasSelectionCapability {
   getSelectionBounds(): Rect | null;
   getSelectionMaskRect(): Rect | null;
   invertSelection(): void;
-  /**
-   * Encodes the selection's pixels on the active layer as a PNG, or `null` when
-   * there is nothing to copy. The engine deliberately stops at the blob: writing
-   * to the system clipboard is a widget-layer concern (`canvas-engine` may not
-   * reach `workbench/widgets`).
-   */
+  /** Returns the active layer's selected pixels as PNG, or null if empty. The widget owns system clipboard writes. */
   exportSelectionBlob(): Promise<Blob | null>;
   /** Inserts decoded pixels as a new raster layer above the active one. */
   pasteImage(pixels: ImageData, center?: Vec2): NewRasterLayerResult;
@@ -428,9 +409,8 @@ export interface CanvasLifecycleCapability {
 export type CanvasEditCapability = CanvasEditGate;
 
 /**
- * The input to {@link CanvasEnginePreviewCapability.setGuardedFilterPreview}: a
- * persisted filter result (decoded via the engine's `imageResolver`) and the
- * document-space rect it occupies, tagged with the filter that produced it.
+ * Persisted filter result for {@link CanvasEnginePreviewCapability.setGuardedFilterPreview}, decoded by
+ * `imageResolver`, with its document-space rect and producing filter.
  */
 export interface FilterPreviewInput {
   imageName: string;
@@ -439,11 +419,8 @@ export interface FilterPreviewInput {
 }
 
 /**
- * Result of {@link CanvasEngineLayerCapability.mergeVisibleRasterLayers}: `'merged'` when a new
- * composite layer was inserted, `'not-ready'` when a contributor could not be
- * rasterized consistently, `'over-budget'` when safe raster allocation was
- * refused, `'busy'` when another edit owns the document, and `'nothing'` when
- * fewer than two eligible rasters have content.
+ * Merge result: inserted composite, inconsistent contributor raster, allocation refusal, edit contention, or fewer
+ * than two eligible nonempty rasters.
  */
 export type MergeVisibleResult =
   | 'merged'
@@ -510,18 +487,13 @@ export interface CanvasEngineToolCapability extends CanvasToolCapability {
   handleEscapePriority(options: { gestureWasActive: boolean }): void;
   onStrokeCommitted(listener: (event: StrokeCommittedEvent) => void): () => void;
   /**
-   * Arms the eyedropper for a single sample of the composited document,
-   * resolving with the picked `#rrggbb` or `null` if the user cancels (Escape,
-   * another tool, or the engine going away). Restores the previously active
-   * tool either way. Backs the color picker's eyedropper button.
+   * Samples the composite once as `#rrggbb`, or null on Escape, tool change or disposal. Restores the previous
+   * tool on either outcome.
    */
   requestColorSample(): Promise<string | null>;
   /**
-   * Installs the sink for eyedropper samples no one-shot request claims: the
-   * workbench routes them to the active foreground/background target. Without
-   * a router (or when it declines with false) the sample lands in the brush
-   * color option — the engine-standalone behavior. Returns a dispose that
-   * uninstalls only this router, so a stale cleanup cannot evict a newer one.
+   * Routes unclaimed eyedropper samples to the active color target, falling back to brush color if absent or
+   * declined. Disposal removes only this router, preserving newer registrations.
    */
   setColorSampleRouter(router: (hex: string) => boolean): () => void;
   setInteractionLocked(locked: boolean): void;
@@ -568,9 +540,8 @@ export interface CanvasEngineExportCapability extends CanvasExportCapability {
 
 export interface CanvasEnginePreviewCapability extends CanvasPreviewCapability {
   /**
-   * Draws a fit-to-`maxSizePx` composite of the whole document into `target`
-   * (sizing its backing store), for the Overview pane. Returns the drawn
-   * document rect, or null when no document is attached.
+   * Sizes `target` and draws the whole document fitted to `maxSizePx`. Returns its drawn rect, or null without a
+   * document.
    */
   drawDocumentOverview(target: HTMLCanvasElement, maxSizePx: number): Rect | null;
   preloadStagedPreview(imageName: string): void;
@@ -601,8 +572,6 @@ export interface CanvasEngine {
   readonly fonts: CanvasFontCapability;
 }
 
-// Public Canvas-owned value contracts. These remain serializable and contain
-// no engine implementation, mutable store, controller, or construction type.
 export type * from './contracts';
 export { CANVAS_COLOR_LABELS, CANVAS_MAX_NODE_COUNT, CANVAS_MAX_NODE_DEPTH } from './contracts';
 export type BooleanRasterOperation = 'intersect' | 'cutout' | 'cutaway' | 'exclude';

@@ -21,6 +21,7 @@ const UPDATED_BASES = new Set([
   'krea-2',
   'wan',
   'minimax-h3',
+  'ltx-2',
 ]);
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 

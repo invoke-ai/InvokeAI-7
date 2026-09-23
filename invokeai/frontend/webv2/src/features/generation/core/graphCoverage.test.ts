@@ -1,30 +1,4 @@
-/**
- * Every supported base compiles a graph — the systematic counterpart to `graph.test.ts`.
- *
- * `graph.test.ts` asserts *what* individual families wire up, one hand-written case at a time. That
- * leaves a base added to `SUPPORTED_GENERATE_BASES` and `GRAPH_BUILDERS` but never given a case silently
- * untested. This file instead iterates `SUPPORTED_GENERATE_BASES`, so a new architecture is covered
- * the moment it is registered, and asserts the properties that hold for *all* of them: the
- * component policy is satisfiable, the builder runs, and the resulting graph is structurally sound.
- *
- * It also checks the node types and fields each base emits against a committed fixture. That
- * fixture is the frontend half of a cross-stack contract — `tests/app/invocations/
- * test_frontend_graph_node_types.py` reads it and checks every type and field against the backend's
- * `InvocationRegistry`. A node moved between modules and accidentally renamed shows up there, which
- * no frontend-only assertion can see.
- *
- * Edges are only half of what a builder writes. The other half is what it sets *literally* on a
- * node — `use_prompt_enhancer: false`, a scheduler string, `denoising_start: 0` — which no edge
- * records. Those inputs are the ones nothing could check: the frontend never sees a backend schema,
- * so it cannot know that `ernie_image_denoise.scheduler` is a three-value `Literal`. Recording the
- * literal names *and* their values lets the Python half validate each against the field's real
- * annotation, turning a renamed input or an out-of-range scheduler into a test failure instead of
- * an enqueue-time error on a graph the user cannot edit.
- *
- * The snapshot file is written by this test and by nothing else — `.oxfmtrc.json` excludes it for
- * that reason. Letting the formatter reflow a generated file too would leave both in charge of the
- * same bytes, and `format:check` would fail on whichever layout the other one wrote last.
- */
+/** Cover every builder against backend-validated node/field/literal fixtures; tests own snapshot formatting. */
 
 import type { BackendGraphContract } from '@features/generation/core/contracts';
 
@@ -47,13 +21,7 @@ import {
 } from './baseGenerationPolicies';
 import { compileGenerateGraph, GRAPH_BUILDERS } from './graph';
 
-/**
- * Main-model shapes to compile per base.
- *
- * `diffusers` bundles its submodels, so the component slots go optional and the builder takes the
- * bundled path; a quantized single-file main carries only the transformer and forces the standalone
- * -component path. Both paths produce different graphs, so both are worth compiling.
- */
+/** Compile both bundled and standalone component paths. */
 interface ModelShape {
   label: string;
   overrides: Partial<MainModelConfig>;
@@ -64,19 +32,14 @@ const DEFAULT_SHAPES: readonly ModelShape[] = [
   { label: 'standalone-components', overrides: { format: 'gguf_quantized' } },
 ];
 
-/**
- * Bases whose builder needs more than a format to pick a path. Keys are checked against
- * `SUPPORTED_GENERATE_BASES` below, so a renamed or removed base cannot leave a stale entry here.
- */
+/** Check per-base shape overrides against supported bases. */
 const SHAPE_OVERRIDES: Partial<Record<SupportedGenerateBase, readonly ModelShape[]>> = {
-  // Ideogram 4 has no GGUF build: its standalone shape is Comfy-Org's single-file checkpoint, and
-  // the main model is always the conditional branch -- the other one fills a component slot.
+  // Ideogram's standalone fixture is a conditional checkpoint, not GGUF.
   'ideogram-4': [
     { label: 'diffusers', overrides: { format: 'diffusers' } },
     { label: 'standalone-components', overrides: { branch: 'conditional', format: 'checkpoint' } },
   ],
-  // The two FLUX.2 lines take different encoders: [dev] wants Mistral, Klein wants a Qwen3 whose
-  // variant is pinned to the Klein size by KLEIN_TO_QWEN3_VARIANT.
+  // FLUX.2 dev and Klein need distinct encoder variants.
   flux2: [
     { label: 'dev-diffusers', overrides: { format: 'diffusers', variant: 'dev' } },
     { label: 'dev-standalone', overrides: { format: 'gguf_quantized', variant: 'dev' } },
@@ -86,14 +49,7 @@ const SHAPE_OVERRIDES: Partial<Record<SupportedGenerateBase, readonly ModelShape
 
 const shapesForBase = (base: SupportedGenerateBase): readonly ModelShape[] => SHAPE_OVERRIDES[base] ?? DEFAULT_SHAPES;
 
-/**
- * Candidate components the slot filters get to choose from.
- *
- * Deliberately a search over a pool rather than a hand-written model per slot: the filters
- * (`isAnimaQwen3Encoder`, `isVaeAcceptedByBase`, `isFlux2Qwen3EncoderForModel`, ...) encode which base and
- * variant a component must carry, and duplicating that knowledge here would make the test agree
- * with itself instead of with the policy.
- */
+/** Search component candidates through policy rather than copy compatibility rules. */
 const CANDIDATE_BASES = ['any', ...SUPPORTED_GENERATE_BASES] as const;
 const CANDIDATE_VARIANTS = [
   undefined,
@@ -124,10 +80,7 @@ const candidatesForSlot = (slot: ComponentSlotPolicy): ModelIdentifierConfig[] =
           for (const branch of type === 'main' ? CANDIDATE_BRANCHES : [undefined]) {
             candidates.push({
               base,
-              // A component source is a main model, and only a bundled one can stand in for the
-              // slots it satisfies — `isDiffusersMainForBase` and `isBundledMainForBase` both
-              // demand it. A branch, on the other hand, only exists on a single file, and its
-              // slot's filter says so, so the two main-model slots need different formats.
+              // Distinguish bundled component sources from single-file branch formats.
               format: slot.valueKind === 'main' ? (branch ? 'checkpoint' : 'diffusers') : undefined,
               key: `${base}-${type}-${variant ?? 'novariant'}${latentChannels ? `-${latentChannels}` : ''}${branch ? `-${branch}` : ''}`,
               name: `${base} ${type} ${variant ?? ''} ${branch ?? ''}`.trim(),
@@ -150,8 +103,7 @@ const buildContext = (
   settings: GenerateSettings,
   slots: readonly ComponentSlotPolicy[]
 ): ComponentPolicyContext => {
-  // Derived from the slots rather than from a hand-kept key list: a new slot key is picked up here
-  // automatically, and a key that no slot uses cannot go stale.
+  // Derive keys from slots so new slots enter coverage automatically.
   const keys = new Set<GenerateComponentValueKey>(slots.map((slot) => slot.key));
   const selectedComponents = {} as ComponentPolicyContext['selectedComponents'];
 
@@ -162,12 +114,7 @@ const buildContext = (
   return { model, settings, selectedComponents };
 };
 
-/**
- * Fill every required component slot with something the slot's own filter accepts.
- *
- * Iterated to a fixpoint because slots are interdependent: selecting a component source can make
- * the VAE and encoder slots stop being required, so one pass is not enough to reach a stable answer.
- */
+/** Fill to a fixed point: selecting a component source can change required slots. */
 const satisfyRequiredComponents = (
   model: MainModelConfig,
   initial: GenerateSettings
@@ -230,9 +177,7 @@ const compileForShape = (
 ): { filled: GenerateComponentValueKey[]; graph: BackendGraphContract } => {
   const { filled, model, settings } = satisfiedSettingsFor(base, shape);
 
-  // Compiling an invalid selection throws the first reason, which makes for a poor failure message.
-  // Asserting here reports every unmet requirement at once, and doubles as the check that the
-  // base's component policy is satisfiable at all.
+  // Assert every requirement before compilation for complete diagnostics.
   expect(getGenerationValidationReasons(model, settings), `${base}/${shape.label} is not satisfiable`).toEqual([]);
 
   return { filled, graph: compileGenerateGraph(settings, model, 'gallery', { useCpuNoise: true }).backendGraph };
@@ -277,12 +222,7 @@ describe('generate graph coverage', () => {
   });
 
   it('sends every VAE the picker offers into the graph wherever a VAE is required', () => {
-    // The slots above are filled with their *first* accepted candidate, which is how a builder that
-    // re-filtered VAEs by its own base list -- dropping a Qwen-Image VAE installed under `anima` --
-    // passed this suite. One VAE per accepted (base, width) is enough to see every rule a row has.
-    //
-    // Deliberately one test iterating the cases rather than `it.each` over a pre-filtered list: which
-    // shapes require a VAE is answered by the capability table, and that is only seeded once tests run.
+    // Enumerate accepted VAE families at runtime after fixture seeding.
     const checked: string[] = [];
 
     for (const { base, shape } of cases) {
@@ -317,8 +257,7 @@ describe('generate graph coverage', () => {
       }
     }
 
-    // Guards against this test passing vacuously -- it did, while the list was computed before seeding.
-    // The cross-base rows must each have been exercised with a VAE from another base.
+    // Require nonempty cross-base coverage after runtime seeding.
     expect(checked).toEqual(
       expect.arrayContaining([
         'anima/standalone-components:qwen-image/undefined',
@@ -353,8 +292,7 @@ describe('generate graph coverage', () => {
         const { literals } = fieldsFor(node.type);
 
         for (const [field, value] of Object.entries(node)) {
-          // `id` and `type` address the node rather than feed it, and an undefined value is not
-          // serialized into the request at all — the builders use it to mean "leave the default".
+          // Node identity and undefined values are excluded from serialized input contracts.
           if (field === 'id' || field === 'type' || value === undefined) {
             continue;
           }
@@ -362,10 +300,7 @@ describe('generate graph coverage', () => {
           const values = literals.get(field) ?? new Map<string, unknown>();
           literals.set(field, values);
 
-          // Values are recorded for scalars only, so the name is always checked but the value is
-          // checked where checking it means something. The object-valued inputs are model
-          // identifiers and LoRA lists built from this file's synthetic fixtures, which carry no
-          // `hash`; validating those would assert something about the fixture, not the contract.
+          // Check scalar values, not only object names, for synthetic unhashed model fixtures.
           if (value === null || typeof value !== 'object') {
             values.set(JSON.stringify(value), value);
           }

@@ -1,10 +1,4 @@
-/**
- * Client-side mirror of the backend's install-source rules
- * (`invokeai/app/api/routers/custom_nodes.py`: `PACK_NAME_RE`,
- * `_extract_pack_name_from_source`, and the already-exists rejection), so a
- * doomed install is caught before the POST instead of surfacing as a failed
- * request.
- */
+/** Mirror custom_nodes.py source validation and duplicate-pack rejection to catch invalid installs before POST. */
 
 const PACK_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 

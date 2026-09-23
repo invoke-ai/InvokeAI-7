@@ -1,11 +1,6 @@
 import type { GenerateSettings } from './types';
 
-/**
- * Best-effort provenance for generate-compiled graphs: which Generate-panel
- * setting produced a node input. Keyed by the builders' fixed node ids
- * (graph.ts:313-328) — deliberately not exhaustive; unmapped fields simply
- * show no "Set by" entry in the preview inspector.
- */
+/** Best-effort provenance from fixed graph nodes; unmapped fields remain unavailable. */
 
 export interface GenerateProvenanceEntry {
   labelKey: string;

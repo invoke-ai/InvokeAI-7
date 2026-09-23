@@ -49,10 +49,7 @@ export interface ParseDynamicPromptsRequest {
 
 export interface ParseDynamicPromptsResponse {
   prompts: string[];
-  /**
-   * A soft failure. The route still returns usable prompts alongside a parse
-   * message or a "No values found for wildcard(s)" notice.
-   */
+  /** Soft expansion errors can still return usable prompts. */
   error?: string | null;
 }
 

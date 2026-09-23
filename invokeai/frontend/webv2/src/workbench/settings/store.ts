@@ -1,4 +1,4 @@
-import type { DeveloperLogLevel, DeveloperLogNamespace } from '@workbench/diagnostics/contracts';
+import type { LogLevel, LogNamespace } from '@platform/logging/contracts';
 import type {
   ProjectSettings,
   ProjectSortId,
@@ -10,6 +10,7 @@ import type {
 
 import { getUserStorageScope } from '@features/identity';
 import { normalizeWorkbenchLanguage } from '@platform/i18n/languages';
+import { isLogLevel, isLogNamespace, LOG_LEVELS, LOG_NAMESPACES } from '@platform/logging/contracts';
 import {
   assertAccountScopeCurrent,
   captureAccountScope,
@@ -29,22 +30,9 @@ const SETTINGS_BASE_STORAGE_KEY = 'invokeai:v7:webv2:settings';
 const LEGACY_WORKBENCH_BASE_STORAGE_KEY = 'invokeai:v7:webv2:workbench';
 const SETTINGS_CLIENT_STATE_KEY = 'webv2:workbench-settings';
 
-export const DEVELOPER_LOG_LEVELS: DeveloperLogLevel[] = ['trace', 'debug', 'info', 'warn', 'error', 'fatal'];
+export const DEVELOPER_LOG_LEVELS: readonly LogLevel[] = LOG_LEVELS;
 
-export const DEVELOPER_LOG_NAMESPACES: DeveloperLogNamespace[] = [
-  'canvas',
-  'canvas-workflow-integration',
-  'config',
-  'dnd',
-  'events',
-  'gallery',
-  'generation',
-  'metadata',
-  'models',
-  'system',
-  'queue',
-  'workflows',
-];
+export const DEVELOPER_LOG_NAMESPACES: readonly LogNamespace[] = LOG_NAMESPACES;
 
 export const DEFAULT_PROJECT_SETTINGS: ProjectSettings = {
   antialiasProgressImages: false,
@@ -57,9 +45,10 @@ export const DEFAULT_PREFERENCES: WorkbenchPreferences = {
   autoSwitchInvocationRoute: true,
   confirmImageDeletion: true,
   customHotkeys: {},
+  developerConsoleOutputEnabled: false,
   developerLogEnabled: true,
   developerLogLevel: 'warn',
-  developerLogNamespaces: ['system', 'queue', 'workflows'],
+  developerLogNamespaces: [...LOG_NAMESPACES],
   developerPerformanceTimingsEnabled: false,
   enableInformationalPopovers: true,
   enableModelDescriptions: true,
@@ -129,30 +118,25 @@ const getLegacyWorkbenchStorageKey = (storageSuffix = getUserStorageScope()): st
 const getSettingsScope = (storageSuffix = getUserStorageScope()): WorkbenchSettingsSnapshot['scope'] =>
   storageSuffix ? 'user' : 'global';
 
-const isDeveloperLogLevel = (value: unknown): value is DeveloperLogLevel =>
-  typeof value === 'string' && DEVELOPER_LOG_LEVELS.includes(value as DeveloperLogLevel);
+/** The pre-2026-09 default; installs that merely persisted it never chose a narrowed selection. */
+const LEGACY_DEFAULT_LOG_NAMESPACES: readonly LogNamespace[] = ['queue', 'system', 'workflows'];
 
-const normalizeDeveloperLogNamespaces = (values: unknown): DeveloperLogNamespace[] => {
+/** A user-narrowed selection stays narrowed, including namespaces added after it was saved; reset restores defaults. */
+const normalizeDeveloperLogNamespaces = (values: unknown): LogNamespace[] => {
   if (!Array.isArray(values)) {
     return [...DEFAULT_PREFERENCES.developerLogNamespaces];
   }
 
-  const enabled = new Set(
-    values.filter(
-      (value): value is DeveloperLogNamespace =>
-        typeof value === 'string' && DEVELOPER_LOG_NAMESPACES.includes(value as DeveloperLogNamespace)
-    )
-  );
+  const enabled = new Set(values.filter(isLogNamespace));
+  const selected = LOG_NAMESPACES.filter((namespace) => enabled.has(namespace));
+  const isLegacyDefault =
+    selected.length === LEGACY_DEFAULT_LOG_NAMESPACES.length &&
+    selected.every((namespace, index) => namespace === LEGACY_DEFAULT_LOG_NAMESPACES[index]);
 
-  return DEVELOPER_LOG_NAMESPACES.filter((namespace) => enabled.has(namespace));
+  return isLegacyDefault ? [...DEFAULT_PREFERENCES.developerLogNamespaces] : selected;
 };
 
-/**
- * Guards for the Launchpad library's view state. Deliberately local rather
- * than imported from the Launchpad: these settings load on every route, and a
- * value import would put launchpad view code in the editor's bundle too. The
- * types come from `contracts`, which is type-only and therefore free.
- */
+/** Keep view guards local so shared settings do not pull Launchpad code into the editor bundle. */
 const isProjectsViewId = (value: unknown): value is ProjectsViewId => value === 'grid' || value === 'list';
 
 const isProjectSortId = (value: unknown): value is ProjectSortId =>
@@ -191,10 +175,8 @@ const normalizeGenerateSectionsOpen = (values: unknown): Record<string, boolean>
 };
 
 /**
- * Shape-only: settings keeps the saved records intact and readable, and the generation
- * feature re-validates `weights` against the backend's grammar when it reads them
- * (`normalizeRebalancePresets`). Parsing here would mean importing that feature into the
- * launchpad bundle for no gain.
+ * Validate record shape here; generation validates weight grammar when reading, preserving Launchpad's bundle
+ * boundary.
  */
 const normalizeRebalancePresets = (values: unknown): StoredRebalancePreset[] => {
   if (!Array.isArray(values)) {
@@ -303,7 +285,11 @@ export const normalizeWorkbenchPreferences = (preferences?: WorkbenchPreferences
     typeof preferences?.developerLogEnabled === 'boolean'
       ? preferences.developerLogEnabled
       : DEFAULT_PREFERENCES.developerLogEnabled,
-  developerLogLevel: isDeveloperLogLevel(preferences?.developerLogLevel)
+  developerConsoleOutputEnabled:
+    typeof preferences?.developerConsoleOutputEnabled === 'boolean'
+      ? preferences.developerConsoleOutputEnabled
+      : DEFAULT_PREFERENCES.developerConsoleOutputEnabled,
+  developerLogLevel: isLogLevel(preferences?.developerLogLevel)
     ? preferences.developerLogLevel
     : DEFAULT_PREFERENCES.developerLogLevel,
   developerLogNamespaces: normalizeDeveloperLogNamespaces(preferences?.developerLogNamespaces),
@@ -533,8 +519,6 @@ const resolveSettings = async (
     return backendPreferences;
   }
 
-  // First contact for this account: adopt whatever the legacy locations
-  // hold and write the new backend key once.
   const preferences =
     (await loadLegacySessionPreferences(owner)) ??
     local?.preferences ??

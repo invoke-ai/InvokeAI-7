@@ -50,16 +50,11 @@ const DEFAULT_ITEMS_MAX_H = 'min(20rem, calc(var(--available-height) - 0.5rem))'
 export interface SelectProps<T extends CollectionItem> extends Omit<SelectRootProps<T>, 'children'> {
   contentProps?: SelectContentProps;
   /**
-   * Caps the open menu's height; the items scroll inside a Scrollable. The
-   * machine's own content-element scrolling is replaced by a `scrollToIndexFn`
-   * targeting the Scrollable viewport, so keyboard highlight, typeahead, and
-   * the open-reveal keep working. `null` restores the machine's plain overflow.
+   * Caps menu height and routes keyboard scrolling through Scrollable; null restores the machine's native
+   * overflow.
    */
   itemsMaxH?: string | null;
-  /**
-   * Renders labelled item groups: consecutive items with the same group key
-   * share one header. Items must already be ordered by group.
-   */
+  /** Only consecutive equal keys form a group; callers must order items by group. */
   groupBy?: (item: T) => string;
   /** The visible header for a group key; defaults to the key itself. */
   renderGroupLabel?: (group: string) => ReactNode;
@@ -93,9 +88,7 @@ export const Select = <T extends CollectionItem>({
   valueTextProps,
   ...rootProps
 }: SelectProps<T>) => {
-  // Inside a Field the machine adopts the field's label id, so rendering our
-  // own Label part there would duplicate that id; the field's visible label
-  // already names the trigger.
+  // Inside Field, reuse its label ID; rendering another Label would duplicate it.
   const field = useFieldContext();
   const itemsRef = useRef<HTMLDivElement>(null);
   const scrollToIndexFn = useCallback(({ index }: { index: number }) => {
@@ -103,9 +96,7 @@ export const Select = <T extends CollectionItem>({
     options?.[index]?.scrollIntoView({ block: 'nearest' });
   }, []);
   return (
-    // The items (and their Scrollable's scroll-area machine) mount only while
-    // open: a widget carries many selects at rest, and the machine's observers
-    // are per instance.
+    // Mount items only while open to avoid per-select scroll observers at rest.
     <ChakraSelect.Root
       collection={collection}
       lazyMount
@@ -115,9 +106,7 @@ export const Select = <T extends CollectionItem>({
       // An empty list is nothing to choose from: the trigger disables instead of opening a blank menu.
       disabled={rootProps.disabled || collection.items.length === 0}
     >
-      {/* A real (visually hidden) Label part: the machine's trigger always points
-        its aria-labelledby at this id, so a bare aria-label must materialize it —
-        left on the Root it lands on a div, which ARIA prohibits. */}
+      {/* Materialize the trigger's aria-labelledby target; aria-label on Root would name a generic div instead. */}
       {ariaLabel && !field ? <ChakraSelect.Label srOnly>{ariaLabel}</ChakraSelect.Label> : null}
       <ChakraSelect.HiddenSelect />
       <ChakraSelect.Control>

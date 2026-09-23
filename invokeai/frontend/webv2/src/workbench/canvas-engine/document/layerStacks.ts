@@ -43,10 +43,7 @@ export const getSiblingOrder = (
 const sameIds = (a: readonly string[], b: readonly string[]): boolean =>
   a.length === b.length && a.every((id, index) => id === b[index]);
 
-/**
- * Writes the command's order back into its parent's child list, leaving every other node untouched.
- * Returns `null` when the ids are not exactly the parent's children.
- */
+/** Reorders only the parent's children; rejects ids that do not exactly match them. */
 export const reorderSiblings = (
   stacks: CanvasStackForests,
   command: ReorderSiblingsCommand

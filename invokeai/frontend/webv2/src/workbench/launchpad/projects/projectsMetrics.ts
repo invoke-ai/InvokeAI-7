@@ -2,13 +2,7 @@ import { useCallback, useRef, useState } from 'react';
 
 import type { ProjectsViewId } from './projectLibraryView';
 
-/**
- * The grid's measurements, as numbers rather than CSS breakpoints.
- *
- * The virtualizer needs both before anything is laid out: how many cards share
- * a row, and how tall a row is. Measuring the container rather than the window
- * keeps both honest when the panel is resized instead of the browser.
- */
+/** Derive row height and column count from container width so virtualization also responds to panel resizing. */
 
 const MIN_CARD_WIDTH_PX = 240;
 const MAX_COLUMNS = 4;

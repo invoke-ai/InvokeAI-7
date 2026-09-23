@@ -64,11 +64,7 @@ describe('planInvkExport', () => {
     expect(planInvkExport(planInput).coverImageName).toBe('live-a.png');
   });
 
-  /**
-   * The selection was already excluded from bundling; this is the other half —
-   * it must not reach the archive at all, or the imported project opens
-   * pointing at images the receiving server has never had.
-   */
+  /** Strip selection references as well as excluding their bytes. */
   it('writes a document carrying no gallery selection', () => {
     const plan = planInvkExport({
       ...planInput,
@@ -190,8 +186,7 @@ describe('executeInvkExport', () => {
     const [blob] = download.mock.calls[0]! as [Blob];
     const entries = await readArchive(new Uint8Array(await blob.arrayBuffer()));
 
-    // `board.json` is written even for a project with no board contents: its absence would be
-    // indistinguishable from a v2 archive that never knew about boards.
+    // An explicit empty board entry differs from a legacy archive with no board entry.
     expect([...entries.keys()].sort()).toEqual(['board.json', 'manifest.json', 'project.json']);
     expect(JSON.parse(readEntryText(entries.get(INVK_MANIFEST_ENTRY)!)).cover).toBeUndefined();
   });
@@ -259,15 +254,7 @@ describe('executeInvkExport', () => {
     });
   });
 
-  /**
-   * A cancelled export must not look like a successful one. Every fetch fails
-   * when the signal aborts, so treating those as "the server would not serve
-   * it" would pack an archive holding nothing and download it.
-   */
-  /**
-   * Cancellation is the one failure that is not a skip, wherever it lands: skipping every asset
-   * would pack an archive of nothing and hand it over as a finished download.
-   */
+  /** Aborted fetches must fail export rather than produce an empty successful archive. */
   it.each([
     [
       'the fetches themselves abort',
@@ -359,8 +346,7 @@ describe('executeInvkExport', () => {
     };
     const secondBodyCancel = vi.fn(() => Promise.resolve());
     const secondGetReader = vi.fn(() => {
-      // With one budget per request, let the first response finish so the
-      // broken export resolves instead of hanging in this regression test.
+      // Complete the first response so a per-request budget bug fails instead of hanging.
       settleFirstRead({ done: true, value: undefined });
 
       return secondReader;
@@ -412,10 +398,7 @@ describe('executeInvkExport', () => {
   });
 });
 
-/**
- * Version 3's whole point: a project's board is part of the project. A result generated but never
- * placed on canvas is named nowhere in the document, so without `board.json` it simply vanishes.
- */
+/** board.json carries generated media absent from document references in the v2 archive. */
 describe('board membership', () => {
   const bytesFor = (name: string) => new Uint8Array([...name].map((character) => character.codePointAt(0)!));
   const boardItem = (name: string, overrides: Record<string, unknown> = {}) => ({

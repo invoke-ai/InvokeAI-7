@@ -1,21 +1,7 @@
 /**
- * A paint-edit history entry: a before/after pair of `ImageData` over a
- * LAYER-LOCAL rect, reversed by putting the pixels back into the layer's cache
- * surface. Layer-local coordinates are stable across cache growth/reallocation
- * (the cache's content rect origin can shift as strokes grow it), so an old
- * entry replays correctly no matter how the cache has been resized since.
- *
- * Painting (P2.1) commits a stroke as a {@link StrokeCommittedEvent} carrying the
- * `dirtyRect` plus `beforeImageData`/`afterImageData` (both sized to that rect).
- * This wraps that pair into a {@link HistoryEntry}: undo puts `before`, redo puts
- * `after`. The actual pixel write is delegated to an engine-provided
- * {@link ImagePatchApply} so this module stays free of the cache/backend/bitmap
- * store — it just owns the before/after bookkeeping and the byte accounting.
- *
- * Byte cost = both buffers' `byteLength`, which is what the history budget bounds.
- *
- * Zero React, zero DOM (ImageData is a plain data carrier here), zero import-time
- * side effects.
+ * Before/after pixel history uses layer-local rects, stable across cache growth and shifted origins. The
+ * engine-provided {@link ImagePatchApply} owns writes and persistence; this entry accounts for both buffers' byte
+ * lengths.
  */
 
 import type { Rect } from '@workbench/canvas-engine/types';
@@ -23,9 +9,8 @@ import type { Rect } from '@workbench/canvas-engine/types';
 import type { HistoryEntry } from './history';
 
 /**
- * Writes `pixels` into `layerId`'s cache at `rect`'s origin and propagates the
- * edit (invalidate/version bump + mark the layer dirty for persistence). Provided
- * by the engine; the entry never touches the cache or backend directly.
+ * Engine-owned pixel write at the layer-local rect, including invalidation/versioning and dirty persistence
+ * marking.
  */
 export type ImagePatchApply = (layerId: string, rect: Rect, pixels: ImageData) => void;
 

@@ -225,6 +225,32 @@ class MiniMaxH3ConditioningInfo:
 
 
 @dataclass
+class LTX2ConditioningInfo:
+    """LTX-2 text conditioning, already passed through the LTX-2 text connectors.
+
+    The Gemma-4 hidden states are stacked (all layers), normalised and projected per modality by the
+    connectors inside the text-encoder invocation, so the denoise node receives the two streams the
+    transformer's prompt cross-attention consumes and never touches the connectors itself.
+    """
+
+    video_embeds: torch.Tensor
+    """Video-branch prompt embeddings. Shape: (1, num_text_tokens, 4096)."""
+
+    audio_embeds: torch.Tensor
+    """Audio-branch prompt embeddings. Shape: (1, num_text_tokens, 2048)."""
+
+    attention_mask: torch.Tensor
+    """Binary token mask over the connector output (1 = attend). Shape: (1, num_text_tokens)."""
+
+    def to(self, device: torch.device | None = None, dtype: torch.dtype | None = None):
+        self.video_embeds = self.video_embeds.to(device=device, dtype=dtype)
+        self.audio_embeds = self.audio_embeds.to(device=device, dtype=dtype)
+        # The mask is structural; only the device moves.
+        self.attention_mask = self.attention_mask.to(device=device)
+        return self
+
+
+@dataclass
 class WanConditioningInfo:
     """Wan 2.2 text conditioning information from the UMT5-XXL encoder.
 
@@ -264,6 +290,7 @@ class ConditioningFieldData:
         | List[AnimaConditioningInfo]
         | List[WanConditioningInfo]
         | List[MiniMaxH3ConditioningInfo]
+        | List[LTX2ConditioningInfo]
     )
 
 

@@ -10,12 +10,6 @@ export const getEffectiveWorkflowFieldDescription = (
     ? (instance.description ?? '')
     : instance?.description || template?.description || '';
 
-/**
- * Field-kind helpers shared by the node editor and the Linear UI panel:
- * which field types render direct-input controls, and how handles/edges are
- * tinted by type so connections stay readable.
- */
-
 /** Field types with a direct-input widget. Everything else is connection-only. */
 const STATEFUL_FIELD_TYPE_NAMES = new Set([
   'BoardField',
@@ -25,8 +19,8 @@ const STATEFUL_FIELD_TYPE_NAMES = new Set([
   'FloatField',
   'ImageField',
   'IntegerField',
-  // The LoRA collection loaders take `LoRAField | list[LoRAField]`; the widget edits that list
-  // inline so a node can apply several LoRAs without a chain of Select LoRA / Collect nodes.
+  // Collection loaders accept scalar or list LoRA fields; edit lists inline without extra selector/collector
+  // nodes.
   'LoRAField',
   'ModelIdentifierField',
   'SchedulerField',
@@ -141,11 +135,7 @@ export interface LoraFieldCollectionEntry {
   weight: number;
 }
 
-/**
- * Every field of the identifier is required, because that is what the backend's own
- * `ModelIdentifierField` requires: a key-only entry renders as a nameless row and is rejected at
- * enqueue time with a 422 that names nothing useful, so it is better treated as unreadable here.
- */
+/** Require complete backend model identifiers; key-only entries cannot render meaningfully or enqueue successfully. */
 export const isLoraFieldCollectionEntry = (value: unknown): value is LoraFieldCollectionEntry => {
   if (typeof value !== 'object' || value === null) {
     return false;
@@ -161,13 +151,8 @@ export const isLoraFieldCollectionEntry = (value: unknown): value is LoraFieldCo
 };
 
 /**
- * The collection loaders accept `LoRAField | list[LoRAField]`, so a stored value may be a single
- * entry, a list, or absent. The widget always authors a list; normalizing on read keeps imported
- * workflows and hand-edited JSON rendering the same way.
- *
- * Items are returned as-is, including ones `isLoraFieldCollectionEntry` rejects. The widget writes
- * the list it is given straight back on the next edit, so discarding or blanking an unreadable item
- * here would let one click on an unrelated row silently destroy a hand-authored entry.
+ * Normalize absent/scalar/list values into lists without discarding unreadable entries, which subsequent edits
+ * must preserve.
  */
 export const toLoraFieldCollectionList = (value: unknown): unknown[] => {
   if (Array.isArray(value)) {

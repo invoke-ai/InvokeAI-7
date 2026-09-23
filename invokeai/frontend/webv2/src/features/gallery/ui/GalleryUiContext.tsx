@@ -18,12 +18,8 @@ export interface GalleryItemActions {
 export interface GalleryItemActionContext {
   filterIdentity: string;
   /**
-   * The page a selection of `item` should be stamped with, when the host
-   * navigates from a window of its own. A selection made without one is
-   * stamped with the gallery grid's page, which names the grid's window; a
-   * host walking a different window — Preview anchored deep in a board the
-   * grid shows from the top — would have its selection filed outside the
-   * window it came from, with nowhere for the arrow keys to go.
+   * Stamp selections with the host window's page; using the grid's unrelated page would break navigation from deep
+   * Preview windows.
    */
   getItemSelectionPage?(item: GalleryItem): number;
   items: GalleryItem[];
@@ -93,10 +89,7 @@ export interface GalleryWidgetProps {
   runtime: GalleryWidgetRuntime;
 }
 
-/**
- * Gallery's UI port. The context is a dependency-direction port (the feature
- * may not import workbench), not a test seam; no second adapter is expected.
- */
+/** This UI port preserves dependency direction: Gallery cannot import Workbench. */
 export interface GalleryUiAdapter {
   ItemActionsProvider: ComponentType<GalleryItemActionsOptions & { children: ReactNode }>;
   ImageContextMenu: ComponentType<GalleryItemContextMenuProps>;

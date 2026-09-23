@@ -3,13 +3,6 @@ import type { TFunction } from 'i18next';
 
 import { loraDefaultSettingsSchema, mainDefaultSettingsSchema } from '@features/models/core/schemas';
 
-/**
- * The pure policy behind per-model default settings: which model types get the
- * section, which fields each type shows, and how drafts validate. The section
- * component renders these specs; control descriptors here stay declarative so
- * this module needs no React.
- */
-
 export type DefaultSettingsModel = Pick<ModelConfig, 'base' | 'default_settings' | 'key' | 'type'>;
 
 const CONTROL_ADAPTER_TYPES = new Set(['controlnet', 't2i_adapter', 'control_lora']);
@@ -95,14 +88,8 @@ export interface FieldSpec {
 }
 
 /**
- * Stores model weights as fp8 on the compute device, trading a little quality for VRAM.
- *
- * No body control: `_should_use_fp8` only acts on `fp8_storage is True`, so an explicit `false`
- * and an absent value behave identically. The row's enable switch already covers the two states
- * that differ, and a second switch inside the card would imply a distinction that does not exist.
- *
- * The backend gates availability in `_should_use_fp8`; `supportsFp8Storage` mirrors those
- * exclusions so the toggle is never offered where it would be silently ignored.
+ * Only fp8_storage=true changes backend behavior; the row toggle covers it without a redundant body switch. Mirror
+ * backend exclusions.
  */
 const FP8_STORAGE_FIELD: FieldSpec = {
   defaultValue: true,
@@ -213,12 +200,7 @@ const CONTROL_ADAPTER_FIELDS: FieldSpec[] = [
   },
 ];
 
-/**
- * Mirrors the backend's `_should_use_fp8` exclusions:
- * - LoRA / ControlLoRA: patched into a base model rather than run as their own forward pass, so
- *   the casting hooks would never fire.
- * VAEs are excluded too, but they have no default-settings section at all.
- */
+/** Exclude LoRA/ControlLoRA: patched weights lack their own forward hooks. VAEs have no defaults section. */
 export const supportsFp8Storage = (model: Pick<ModelConfig, 'base' | 'type'>): boolean =>
   model.type === 'main' || model.type === 'controlnet' || model.type === 't2i_adapter';
 

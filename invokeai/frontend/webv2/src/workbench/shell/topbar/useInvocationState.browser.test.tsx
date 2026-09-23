@@ -134,8 +134,7 @@ describe('useInvocationState and the architecture capability table', () => {
       'Model capabilities are not available. Generation is blocked until they load; if this persists, retry from the Generate panel.'
     );
 
-    // The retry button in the Generate widget, succeeding. Nothing else about the project changes,
-    // so the route resolution has to be driven by the table's arrival alone.
+    // Capability arrival alone must recompute the route after retry succeeds.
     await act(() => {
       setArchitectureCapabilities(architectureCapabilitiesFixture);
     });
@@ -146,8 +145,7 @@ describe('useInvocationState and the architecture capability table', () => {
 
 describe('useInvocationState and the workflow node templates', () => {
   it('re-resolves a workflow route when the templates finish loading after the capability table', async () => {
-    // The capability table is already there, so its snapshot never changes again. A route cached on
-    // that snapshot alone kept "still loading" after the templates arrived.
+    // Template arrival must recompute the route even when the capability snapshot is unchanged.
     setArchitectureCapabilities(architectureCapabilitiesFixture);
     await renderProbe(
       activeProject(

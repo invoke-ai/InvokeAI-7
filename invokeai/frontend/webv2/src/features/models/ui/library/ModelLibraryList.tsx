@@ -25,13 +25,8 @@ const HEADER_ROW_HEIGHT_PX = 30;
 const MODEL_ROW_HEIGHT_PX = 56;
 
 /**
- * Virtualized, grouped model library. Group headers and model rows share one
- * flat virtualized list (smooth at thousands of models). The current group's
- * header is rendered as a pinned overlay above the scroll viewport — CSS
- * sticky positioning is unreliable inside ScrollArea's content wrapper — and
- * the virtual content lives in ScrollArea.Content so the scrollbar thumb is
- * measured correctly. Rows carry a thumbnail, a right-click action menu, and
- * bulk-select checkboxes.
+ * Virtualize headers and rows together; overlay the current header because ScrollArea wrappers break sticky
+ * positioning. Keep content inside ScrollArea.Content for scrollbar sizing.
  */
 export const ModelLibraryList = ({
   activeModelKey,
@@ -138,9 +133,7 @@ export const ModelLibraryList = ({
     );
   }
 
-  // The visible range, not `virtualItems[0]`: the virtual window starts
-  // `overscan` rows above the fold, which held the previous group's header
-  // pinned ~450px past its last row.
+  // Choose the header from visible indices, not overscan, which can retain the previous group past its end.
   const firstVisibleIndex = virtualizer.range?.startIndex ?? 0;
   const pinnedHeaderIndex = headerIndexes.reduce<number | null>(
     (pinnedIndex, index) => (firstVisibleIndex >= index ? index : pinnedIndex),
@@ -195,8 +188,7 @@ export const ModelLibraryList = ({
           <ScrollArea.Thumb />
         </ScrollArea.Scrollbar>
       </ScrollArea.Root>
-      {/* Pinned copy of the current group's header, above the viewport.
-          aria-hidden: it duplicates a header already in the list. */}
+      {/* Hide this duplicate pinned header from assistive technology. */}
       {pinnedRow?.kind === 'header' ? (
         <Box
           aria-hidden

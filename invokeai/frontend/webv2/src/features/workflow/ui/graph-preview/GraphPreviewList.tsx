@@ -40,13 +40,8 @@ const GraphPreviewListRow = ({ node, onSelect }: { node: PreviewListNode; onSele
 };
 
 /**
- * The preview dialog's "List" mode: every node as a full-width row, in
- * topological order, so a keyboard/screen-reader user can reach any node
- * without depending on the flow canvas. Selecting a row opens the same
- * inspector the flow's node click does (`GraphPreviewDialog.selectAndReveal`).
- *
- * Deliberately avoids `@platform/ui` — the barrel's fan-in budget is nearly
- * exhausted, and this component only needs plain Chakra primitives.
+ * Expose all nodes in topological rows for keyboard/screen-reader access to the shared inspector; plain Chakra
+ * avoids unnecessary platform-barrel fan-in.
  */
 export const GraphPreviewList = ({
   graph,
@@ -55,9 +50,7 @@ export const GraphPreviewList = ({
   graph: WorkflowPreviewGraph;
   onSelect: (nodeId: string) => void;
 }) => {
-  // Live sources (e.g. Generate) recompile on every keystroke — re-sorting and
-  // re-mapping the node list on every one of those renders (not just when the
-  // graph itself changes) would make leaving List mode open needlessly costly.
+  // Recompute sorted rows only when the graph changes, not on unrelated live-source renders.
   const orderedNodes = useMemo(() => {
     const nodesById = new Map(graph.nodes.map((node) => [node.id, node]));
     const order = getTopologicalOrder(

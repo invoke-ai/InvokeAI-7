@@ -59,11 +59,8 @@ import {
 } from './workflowUiStore';
 
 /**
- * The workflow widget's frame chrome. The label renders the `Workflow / [name]`
- * title, where the name is the library trigger; quick actions (add node,
- * library, save status) are header icon buttons; everything else contributes to the
- * shared widget actions menu via the manifest's `headerMenu`. Dialogs live here
- * (always mounted) and are driven through `workflowUiStore`.
+ * Keep dialogs mounted here and drive them through workflowUiStore; manifest slots contribute label, quick
+ * actions, and shared menu actions.
  */
 
 /** Icon + tooltip for each library sync status, shared by the sync control's error and non-error presentations. */
@@ -88,11 +85,8 @@ export const WorkflowWidgetLabel = ({ region }: WorkflowWidgetLabelProps) => {
     );
   }
 
-  // In the center the region's view selector already names the widget, so the
-  // label slot contributes only the `/ [name]` continuation. The name opens the
-  // library rather than editing in place: switching workflows is the thing
-  // reached for from a header, and renaming already lives in the details tab —
-  // an inline field here only invited stray keystrokes into the graph's name.
+  // Center chrome already names the widget; append only the library-opening workflow name and leave renaming in
+  // Details.
   const displayName = workflowName || t('widgets.workflow.untitled');
 
   return (
@@ -200,10 +194,7 @@ export const WorkflowHeaderActions = ({ region }: WorkflowWidgetViewProps) => {
           </IconButton>
         </Tooltip>
       ) : null}
-      {/* Center already reaches the library through the header label, which
-          names the current workflow; a second identical trigger beside it would
-          be pure duplication. Other regions render a plain `Workflow` label, so
-          they still need this. */}
+      {/* Center labels already open the library; other regions need this separate trigger. */}
       {region === 'center' ? null : (
         <Tooltip content={t('widgets.workflow.library')}>
           <IconButton
@@ -281,31 +272,8 @@ export const WorkflowDialogHost = () => {
     translationRef.current = t;
   }, [notify, t]);
 
-  // Library autosave: bound graphs save themselves back after edits settle.
-  //
-  // The autosaver is created AND disposed inside one mount effect, held in a
-  // ref. A `useState` initializer runs once per fiber while its disposal lived
-  // in a separate effect's cleanup, so StrictMode's mount→cleanup→mount
-  // simulation disposed the one live instance without recreating it — autosave
-  // silently no-oped for the rest of the session.
-  //
-  // `read()` pulls from `projectStore.getSnapshot()` rather than a
-  // component-owned ref, so it is current whenever the debounce or `flush()`
-  // calls it. The same effect subscribes to the store to poke the autosaver
-  // (skipping the initial snapshot, so loading is not an edit) — a plain
-  // subscription, since nothing here re-renders on graph edits.
-  //
-  // `hostScope` guards `onStatus`: account rotation aborts the in-flight
-  // save's signal and synchronously resets the (account-owned)
-  // `workflowLibrarySyncStore` back to 'idle', but the aborted write's
-  // rejection lands a tick later, after that reset. Without this guard,
-  // `runSave()`'s `.catch` would still write 'error' into the *next*
-  // account's store — `save()`'s own `assertAccountScopeCurrent` throw stops
-  // the write from being trusted, but does not by itself stop that throw's
-  // `onStatus('error')` from landing. `hostScope` is captured once per mount
-  // — safe because this host remounts every account epoch (keyed by
-  // `session.accountEpoch` above it in the tree), so a mount-captured scope
-  // never outlives the account it was captured for.
+  // Create/dispose autosave in one mount lifecycle for StrictMode. Subscribe/read directly from the project store;
+  // fence status callbacks by mount account scope to reject late-account errors.
   useEffect(() => {
     const hostScope = captureAccountScope();
     let autosaverActive = true;
@@ -321,8 +289,6 @@ export const WorkflowDialogHost = () => {
         return { libraryWorkflowId: graph.libraryWorkflowId, serialized: serializeWorkflowJson(graph) };
       },
       save: async (workflowId, serialized) => {
-        // Same scope discipline as the manual save paths: never let a
-        // debounced write land in the next account's library.
         assertAccountScopeCurrent(hostScope);
         const hasDuplicateWorkflowReturns = hasMultipleWorkflowReturnNodes(projectStore.getSnapshot().projectGraph);
 

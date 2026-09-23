@@ -3,11 +3,7 @@ import type { ReactNode } from 'react';
 import { Alert, Flex, Heading, Stack, Text } from '@chakra-ui/react';
 import { InvokeMark } from '@platform/ui/InvokeMark';
 
-/**
- * Centered scaffold shared by the login and first-run setup screens. These
- * render outside the workbench shell (and its providers), so they rely only on
- * semantic tokens.
- */
+/** Auth screens live outside workbench providers and rely only on semantic tokens. */
 export const AuthScreen = ({
   children,
   footer,

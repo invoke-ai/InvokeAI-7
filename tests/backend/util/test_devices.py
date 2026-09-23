@@ -278,6 +278,71 @@ def test_legacy_precision_name():
         assert "float32" == choose_precision(torch.device("cpu"))
 
 
+# ===== choose_bfloat16_safe_dtype (a dtype question, not a memory one) =====
+
+
+def _record_constructors(monkeypatch) -> list[dict]:
+    """Capture what the dtype probe asks the backend for, without changing the answer.
+
+    Stubs return a CPU tensor so a device the test machine does not have can still be asked
+    about. Covers the constructors a probe would plausibly use; a probe that asks some other
+    way records nothing, which the assertions treat as asking for nothing.
+    """
+    asked: list[dict] = []
+    real_empty = torch.empty
+
+    def stub(*args, **kwargs):
+        asked.append({"size": args[0] if args else None, "device": kwargs.get("device")})
+        return real_empty(0, dtype=kwargs.get("dtype"))
+
+    for name in ("empty", "zeros", "ones", "tensor"):
+        monkeypatch.setattr(torch, name, stub)
+    return asked
+
+
+def test_the_bfloat16_probe_asks_the_named_device_for_nothing(monkeypatch):
+    """Two properties at once, because each one alone is satisfiable by a broken probe: whatever
+    it asks for must be empty -- a real element is an allocation a full GPU can refuse, which is
+    how a dtype query once failed a run -- and it must be asked of the device in question, not of
+    whichever device is convenient."""
+    asked = _record_constructors(monkeypatch)
+    device = torch.device("cuda:0")
+
+    assert TorchDevice.choose_bfloat16_safe_dtype(device) is torch.bfloat16
+    assert all(request["size"] in (0, (), []) for request in asked)
+    assert all(request["device"] == device for request in asked)
+
+
+def test_an_unreachable_device_still_raises_rather_than_guessing(monkeypatch):
+    """A device that cannot be reached -- an out-of-range ordinal, a backend this build lacks --
+    is a broken configuration, not a dtype verdict. Answering it with a plausible dtype buries
+    the real error in whichever loader allocates first."""
+
+    def invalid_device(*args, **kwargs):
+        raise RuntimeError("CUDA error: invalid device ordinal")
+
+    monkeypatch.setattr(torch, "empty", invalid_device)
+
+    with pytest.raises(RuntimeError, match="invalid device ordinal"):
+        TorchDevice.choose_bfloat16_safe_dtype(torch.device("cuda:9"))
+
+
+@pytest.mark.parametrize(
+    ("device_name", "expected"),
+    [("cuda", torch.float16), ("mps", torch.float32), ("xpu", torch.float32)],
+)
+def test_a_backend_that_rejects_bfloat16_falls_back_by_device(monkeypatch, device_name, expected):
+    """A rejected dtype is a verdict, unlike a device that cannot answer, and the fallback is
+    half-width on CUDA but full-width everywhere else."""
+
+    def unsupported(*args, **kwargs):
+        raise TypeError("BFloat16 is not supported on this device")
+
+    monkeypatch.setattr(torch, "empty", unsupported)
+
+    assert TorchDevice.choose_bfloat16_safe_dtype(torch.device(device_name)) is expected
+
+
 # ===== choose_anima_inference_dtype (config.precision honoring) ============
 
 

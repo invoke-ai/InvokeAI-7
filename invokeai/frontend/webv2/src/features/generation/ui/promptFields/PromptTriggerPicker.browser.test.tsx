@@ -50,8 +50,7 @@ const render = async (isTemplateViewMode = false) => {
     root?.render(
       <QueryClientProvider client={new QueryClient()}>
         <ChakraProvider value={system}>
-          {/* The prompt box is a gallery-image drop target, so it lives inside
-              the shell's DndContext wherever it is really rendered. */}
+          {/* Match the prompt box's production drop-target environment with DndContext. */}
           <DndContext>
             <PositivePromptField
               heightPx={TEXTAREA_HEIGHT_PX}

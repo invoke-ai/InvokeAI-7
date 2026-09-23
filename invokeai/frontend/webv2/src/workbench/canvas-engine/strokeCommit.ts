@@ -31,12 +31,8 @@ export interface StrokeCommit {
 }
 
 /**
- * Turns a committed stroke into its durable consequences.
- *
- * A stroke that auto-created its own layer cannot be undone as a plain pixel
- * patch — undo has to remove the layer too — so those get a composed history
- * entry that pairs the layer mutation with the pixel write. Ordinary strokes
- * take the pixel-patch path.
+ * Ordinary strokes record pixel patches; auto-created layers need composed history that also removes/recreates the
+ * layer.
  */
 export const createStrokeCommit = (deps: CreateStrokeCommitDeps): StrokeCommit => {
   const { applyImagePatch, dispatchCanvasMutation, history, layerCache } = deps;
@@ -54,9 +50,7 @@ export const createStrokeCommit = (deps: CreateStrokeCommitDeps): StrokeCommit =
       label,
       redo: () => {
         dispatchCanvasMutation({ anchor: created.anchor, layer: created.layer, type: 'addCanvasLayer' });
-        // Re-create an EMPTY cache marked fresh so the async rasterize pass can't
-        // clobber the restored stroke; `applyImagePatch` grows it to the stroke's
-        // content bounds and writes the `after` pixels.
+        // Create a fresh empty cache to fence async rasterization before restoring stroke pixels and bounds.
         const entry = layerCache.getOrCreateRect(layerId, { height: 0, width: 0, x: 0, y: 0 });
         entry.stale = false;
         applyImagePatch(layerId, rect, afterImageData);
@@ -75,9 +69,7 @@ export const createStrokeCommit = (deps: CreateStrokeCommitDeps): StrokeCommit =
       // Persistence first: mark the layer dirty so a debounced upload fires even
       // when no external subscriber is attached.
       deps.markLayerDirty(event.layerId);
-      // Record the edit on the engine-owned history. Guarded against re-entrancy:
-      // an undo/redo replay routes pixels through `applyImagePatch`, not a fresh
-      // stroke, so this never fires during apply — the guard is belt-and-braces.
+      // Guard history recording during replay, which restores via image patches rather than fresh strokes.
       if (!history.isApplying()) {
         deps.commitPaintEdit();
         const label = strokeCommitLabel(event.tool);

@@ -8,17 +8,12 @@ import {
   withoutInstancesShownElsewhere,
 } from './useMountedInstanceIds';
 
-// `@testing-library/react` is not a dependency of this package, so the hook is
-// driven through a probe component the way the other browser suites here do.
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 let host: HTMLDivElement | null = null;
 let root: Root | null = null;
 
-/**
- * The value the probe last produced. Module scope keeps the probe prop-free, and
- * it is published from an effect so the probe stays render-pure.
- */
+/** Publish probe output from an effect to keep rendering pure and the probe prop-free. */
 const latest: { ids: string[] } = { ids: [] };
 
 const Probe = ({ activeId, limit, resetKey }: { activeId: string | undefined; limit?: number; resetKey: string }) => {
@@ -154,10 +149,7 @@ describe('instances shown elsewhere', () => {
       right: { activeInstanceId: 'layers', instanceIds: ['layers'] },
     };
 
-    // `floatWidget` hands the region off to a fallback, so `image-map` no
-    // longer appears as any region's active — only the floating map catches
-    // it, which is what keeps the region's kept copy from shadowing the
-    // floating window.
+    // Floating removes the regional active id; floating ids must also evict kept regional copies.
     expect(getActiveInstanceIdsOutside(widgetRegions, 'right', { 'image-map': {} })).toEqual(['canvas', 'image-map']);
   });
 });

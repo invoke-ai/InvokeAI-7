@@ -7,9 +7,7 @@ import { useModelsSelector } from '@features/models/data/modelsStore';
 const areMapsEqual = (left: ReadonlyMap<string, string>, right: ReadonlyMap<string, string>): boolean =>
   left.size === right.size && [...left].every(([source, key]) => right.get(source) === key);
 
-// Selectors run on every store notification for every subscriber; cache by the
-// inputs' identities so repeat notifications reuse one map (and pass equality
-// by reference instead of a member-by-member scan).
+// Cache by input identity so repeated store notifications reuse the same map across subscribers.
 let lastModels: ModelsSnapshot['models'] | null = null;
 let lastModelsDir: string | null = null;
 let lastSources: ReadonlyMap<string, string> = new Map<string, string>();
@@ -32,11 +30,8 @@ const selectInstalledSourceKeys = (snapshot: ModelsSnapshot): ReadonlyMap<string
 };
 
 /**
- * Every string under which a library model is reachable as an install source
- * — its recorded install source plus its resolved absolute file path — mapped
- * to that model's key. Source rows (folder scan, HuggingFace files) derive
- * "installed" from this live map and link to the model it names; a scan-time
- * snapshot would keep offering Install after the job finishes.
+ * Map both recorded install sources and resolved paths to live model keys; scan-time snapshots would keep offering
+ * Install after completion.
  */
 export const useInstalledSourceKeys = (): ReadonlyMap<string, string> =>
   useModelsSelector(selectInstalledSourceKeys, areMapsEqual);

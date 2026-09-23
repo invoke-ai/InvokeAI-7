@@ -13,8 +13,8 @@ export interface LayerSurfaceAnchor {
 }
 
 /**
- * Everything a row can ask for. One stable object per tree, so a row re-renders only when its
- * own view model or selection facts change; the tree owns every store subscription and commit.
+ * Share one stable command handle per tree; rows rerender for their own model/selection while the tree owns
+ * subscriptions and commits.
  */
 export interface LayerRowCommands {
   select(id: string, modifiers: LayerSelectionModifiers): void;

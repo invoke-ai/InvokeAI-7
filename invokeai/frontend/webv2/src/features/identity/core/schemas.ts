@@ -1,11 +1,6 @@
 import { z } from 'zod';
 
-/**
- * Form schemas for the auth surfaces. Password rules mirror the backend's
- * `validate_password_strength`: 8+ characters with an uppercase letter, a
- * lowercase letter, and a digit. When strict checking is off the backend
- * accepts any non-empty password, so the schemas relax to match.
- */
+/** Strict passwords mirror backend strength checks; relaxed mode accepts any nonempty password. */
 
 export type PasswordStrength = 'weak' | 'moderate' | 'strong';
 
@@ -91,11 +86,7 @@ export const createProfileSchema = (strict: boolean) =>
 
 export type ProfileFormValues = z.infer<ReturnType<typeof createProfileSchema>>;
 
-/**
- * One shape serves both admin user-form modes. Creating requires email and
- * password; editing ignores the email field and treats an empty password as
- * "leave unchanged".
- */
+/** Creation requires email/password; editing ignores email and treats an empty password as unchanged. */
 export const createUserFormSchema = (strict: boolean, requireCredentials: boolean) =>
   z.object({
     displayName: z.string(),

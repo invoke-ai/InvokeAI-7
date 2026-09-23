@@ -1,11 +1,4 @@
-/**
- * The list of architectures this build can generate images with.
- *
- * It used to be `Object.keys(BASE_GENERATION)`, so this assertion doubled as a check on that
- * table. With the policy data moving to the backend, the list stands on its own: it is the
- * frontend's half of the contract -- the architectures we have a graph builder for. The pin stays
- * because adding one must be a deliberate act that a reviewer sees.
- */
+/** Cover every supported graph builder explicitly. */
 
 import { describe, expect, it } from 'vitest';
 
@@ -32,8 +25,7 @@ describe('SUPPORTED_GENERATE_BASES', () => {
   });
 
   it('excludes architectures the backend serves but this build cannot generate with', () => {
-    // Both have capability rows on `/api/v2/models/capabilities`. Neither has an image graph
-    // builder: the refiner is a second pass over an SDXL latent, and MiniMax H3 is video-only.
+    // Refiner/video-only capability rows are not image graph support.
     expect(isSupportedGenerateBase('sdxl-refiner')).toBe(false);
     expect(isSupportedGenerateBase('minimax-h3')).toBe(false);
   });

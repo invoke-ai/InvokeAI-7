@@ -27,8 +27,7 @@ import { useCallback, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 const THUMBNAIL_SIZE = '7';
-// The rows sit on the popover's `bg.muted` surface, where the row recipe's
-// `bg.muted/60` hover is invisible — hover needs the next surface step.
+// Use a distinct hover fill on bg.muted surfaces.
 const TEMPLATE_ROW_HOVER_PROPS = { bg: 'bg.emphasized/60' };
 const TEMPLATE_THUMBNAIL_FALLBACK = (
   <Box
@@ -51,10 +50,7 @@ interface PromptTemplatesPanelProps {
   /** The applied template is no longer in the catalog — deleted elsewhere. */
   isActiveTemplateMissing: boolean;
   onApply: (template: PromptTemplateSnapshot | null) => void;
-  /**
-   * Stop applying the active template without dismissing the panel — for when it
-   * has just been deleted, which is not the same intent as choosing to clear it.
-   */
+  /** Detach a deleted active template without closing the manager. */
   onDetach: () => void;
   onEdit: (template: PromptTemplateRecord) => void;
   onCreate: () => void;
@@ -102,10 +98,7 @@ export const PromptTemplatesPanel = ({
   const clearActiveTemplate = useCallback(() => onApply(null), [onApply]);
   const closeDeleteDialog = useCallback(() => setPendingDelete(null), []);
 
-  /**
-   * The dialog closes either way, so a failure has nowhere inline to land — it
-   * goes to the notification centre like the other Generation errors.
-   */
+  /** Report errors through notifications because confirmation closes on failure. */
   const confirmDelete = useCallback(async () => {
     if (!pendingDelete) {
       return;
@@ -114,10 +107,7 @@ export const PromptTemplatesPanel = ({
     try {
       await catalog.remove(pendingDelete);
 
-      // Deleting the template that is applied would otherwise leave it silently
-      // shaping every prompt with no way to reach it. Detached rather than
-      // cleared: the user is in the middle of managing the list, and closing the
-      // panel out from under them is not what they asked for.
+      // Deleting the active template detaches it while keeping the manager open.
       if (activeTemplate?.id === pendingDelete.id) {
         onDetach();
       }
@@ -194,9 +184,7 @@ export const PromptTemplatesPanel = ({
               </Button>
             ) : null}
           </HStack>
-          {/* The list above cannot explain an absence, so this says it in
-              words: the template is gone but still shaping the prompt, and the
-              button beside it is how to stop that. */}
+
           {activeTemplate && isActiveTemplateMissing ? (
             <Text color="fg.subtle" fontSize="2xs">
               {t('widgets.generate.promptTemplates.appliedMissingHelp', { name: activeTemplate.name })}
@@ -217,11 +205,7 @@ export const PromptTemplatesPanel = ({
   );
 };
 
-/**
- * Bulk transfer, admin-only on the backend. Export streams CSV and import accepts
- * the CSV/JSON shapes the backend's parser documents. Both go through the
- * transport rather than an anchor download, which would carry no auth header.
- */
+/** Use authenticated transport for admin CSV/JSON transfers; ordinary anchors omit bearer headers. */
 const PromptTemplateTransferActions = ({ catalog }: { catalog: PromptTemplateCatalog }) => {
   const { t } = useTranslation();
   const { notifications } = useGenerationUi();
@@ -382,8 +366,6 @@ const TemplateRow = ({
   const handleApply = useCallback(() => onApply(toPromptTemplateSnapshot(template)), [onApply, template]);
   const handleEdit = useCallback(() => onEdit?.(template), [onEdit, template]);
   const handleDelete = useCallback(() => onDelete?.(template), [onDelete, template]);
-  // The prompt with its placeholder is the whole content of a template, so the
-  // row shows it rather than a name alone.
   const summary = template.positivePrompt || PROMPT_TEMPLATE_PLACEHOLDER;
 
   return (
@@ -410,8 +392,7 @@ const TemplateRow = ({
               {summary}
             </Text>
           </Stack>
-          {/* The applied marker: a check, not a filled row — the popover
-              surface stays quiet and the accent stays an accent. */}
+
           {isActive ? <Icon as={CheckIcon} boxSize="3.5" color="accent.fg" flexShrink={0} /> : null}
         </button>
       </Row>

@@ -9,6 +9,7 @@ import {
 } from '@features/gallery/core/items';
 import { isDateBoardId, uploadGalleryImage, uploadGalleryVideo } from '@features/gallery/data/backend';
 import { invalidateGallery } from '@features/gallery/data/queryCache';
+import { createLogger } from '@platform/logging/logger';
 import {
   assertAccountScopeCurrent,
   captureAccountScope,
@@ -24,6 +25,7 @@ import type { GalleryActions } from './GalleryWidgetContext';
 import { useGalleryUi } from './GalleryUiContext';
 
 const toErrorMessage = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+const uploadLogger = createLogger({ area: 'upload', namespace: 'gallery' });
 
 export const useGalleryUploadAction = ({
   boards,
@@ -120,14 +122,33 @@ export const useGalleryUploadAction = ({
         const uploadedVideos = videoResults.flatMap((result) => (result.status === 'fulfilled' ? [result.value] : []));
         const uploadedItems = [...uploadedImages, ...uploadedVideos];
         const failedCount = files.length - uploadedItems.length;
+        const firstRejection = [...imageResults, ...videoResults].find((result) => result.status === 'rejected');
+
+        // A total failure is reported once, by the notification path below.
+        if (uploadedItems.length > 0) {
+          uploadLogger[failedCount > 0 ? 'warn' : 'info']({
+            context: {
+              boardId: targetBoardId,
+              failed: failedCount,
+              images: uploadedImages.length,
+              requested: files.length,
+              videos: uploadedVideos.length,
+            },
+            error: firstRejection?.reason,
+            message:
+              failedCount > 0
+                ? `Uploaded ${uploadedItems.length} of ${files.length} files`
+                : `Uploaded ${uploadedItems.length} files`,
+            name: failedCount > 0 ? 'gallery.upload-partial' : 'gallery.upload-completed',
+          });
+        }
 
         if (uploadedItems.length === 0) {
           const fallback = t('widgets.gallery.uploadFailed', { failed: failedCount });
-          const firstFailure = [...imageResults, ...videoResults].find((result) => result.status === 'rejected');
 
           notifications.reportError({
             area: 'gallery-upload',
-            message: firstFailure ? getApiErrorMessage(firstFailure.reason, fallback) : fallback,
+            message: firstRejection ? getApiErrorMessage(firstRejection.reason, fallback) : fallback,
             namespace: 'gallery',
           });
           return [];

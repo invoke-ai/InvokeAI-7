@@ -47,19 +47,11 @@ import { PlayClipSpanButton } from './PlayClipSpanButton';
 import { TrimBoundThumb } from './TrimBoundThumb';
 import { useVideoUiActions } from './VideoUiContext';
 
-/**
- * The ordered Ref2VA reference list: one card per reference, badged with the labels the
- * structured prompt addresses it by (order is part of the request — a different order is a
- * different generation), one gallery drop target that accepts a single image or video,
- * per-kind file uploads, a per-video conditioning selector and trim, and a per-image detail
- * selector.
- */
+/** Reference order determines prompt labels and generation semantics. */
 
 const DROP_ID = 'video-reference-list';
 const IMAGE_UPLOAD_ACCEPT = getGalleryUploadAccept(['image']);
-// One upload button for both media kinds: an uploaded audio file becomes a waveform video,
-// so it occupies a VIDEO reference slot and shares that cap -- a separate audio button would
-// grey out with this one. The gallery's video accept list is exactly that set, audio included.
+// Audio uploads become waveform videos and consume the shared video-reference cap.
 const MEDIA_UPLOAD_ACCEPT = getGalleryUploadAccept(['video']);
 const DROP_ZONE_FOCUS_PROPS = {
   outlineColor: 'accent.focusRing',
@@ -104,12 +96,8 @@ const ReferenceCard = memo(function ReferenceCard({
   videoLabel,
 }: {
   /**
-   * The card's structured-prompt label numbers, flattened to scalars rather than passed as
-   * the object `referencePromptLabels` returns: they are derived from the WHOLE list, so an
-   * object would be a fresh prop on every card on every edit to any reference. `updateReference`
-   * keeps the identity of the entries it did not touch, which is what lets the other cards bail
-   * out of a trim drag entirely; a per-card object would re-render all twelve — each one a zag
-   * Select and two ScrubberFields — once per pointer step.
+   * Pass scalar labels: labels depend on the whole list, but fresh per-card objects would rerender every card on
+   * each trim step.
    */
   audioLabel: number | null;
   collections: ReferenceCollections;
@@ -132,11 +120,7 @@ const ReferenceCard = memo(function ReferenceCard({
   const moveDownRef = useRef<HTMLButtonElement>(null);
   const name = reference.kind === 'video' ? reference.clip.video_name : reference.image.image_name;
   const kind = reference.kind;
-  // Never gated on `disabled`, for the same reason the play button is not:
-  // locating the media changes nothing about the generation. Offered once per
-  // card — from the poster, or from the START bound of a clip: both bounds are
-  // frames of one gallery record, so badging each would be two controls with
-  // one destination and one name for a screen reader to tell apart.
+  // Finding media stays available while editing is disabled; expose one action per media record.
   const findReferenceInGallery = useCallback(() => findInGallery({ kind, name }), [findInGallery, kind, name]);
   const promptLabels = useMemo(
     () => formatReferencePromptLabels({ audio: audioLabel, picture: pictureLabel, video: videoLabel }),
@@ -151,8 +135,7 @@ const ReferenceCard = memo(function ReferenceCard({
       return collections.detail;
     }
 
-    // The anchor is not offered 'Audio only': it is the reference the extension continues
-    // FROM, and an audio-only one contributes no visual rows to continue from.
+    // The extension anchor needs visual rows, so Audio only is unavailable.
     return reference.fromSourceVideo === true ? collections.anchorConditioning : collections.conditioning;
   }, [collections, reference]);
   const handleSelect = useCallback(
@@ -170,22 +153,12 @@ const ReferenceCard = memo(function ReferenceCard({
     },
     [index, onUpdate, reference]
   );
-  // The trim is presented as a sliding sample window — start frame plus length — because
-  // what the user is choosing is "how much" (every reference frame costs denoise VRAM) and
-  // "from where". Storage stays startFrame/endFrame (the request contract); the window
-  // math (a start that reaches every frame, with the length pinned to what the clip can
-  // still supply) lives in core/settings.
-  //
-  // Touching either control on the extend anchor marks its window overridden, which stops
-  // the panel re-deriving it from the Initial Video's cutpoint and frame count. The
-  // derived window is only a default: Ref2VA has no frame-exact seam to protect, so where
-  // the anchor samples is the user's editorial call.
+  // Present start plus length while storing request bounds. Editing either control marks the anchor window
+  // overridden; derivation from the initial-video cutpoint is only a default.
   const handleStartFrame = useCallback(
     (rawStart: number) => {
       if (reference.kind === 'video') {
-        // Recording the length here as well as reading it is what makes a drag
-        // reversible: the first pointer step of the drag captures the pre-drag window's
-        // length, and every step after it slides that same length.
+        // Capture pre-drag length once so subsequent steps slide the same window reversibly.
         const sampleFrames = referenceSampleFrames(reference);
 
         onUpdate(index, {
@@ -211,9 +184,6 @@ const ReferenceCard = memo(function ReferenceCard({
     },
     [index, onUpdate, reference]
   );
-  // What this reference will actually cost, at the size the graph will encode it: the two
-  // detail settings differ by an order of magnitude in rows, and nothing else in the panel
-  // says so before the generation is queued.
   const imageCost = useMemo(
     () =>
       reference.kind === 'image'
@@ -221,23 +191,15 @@ const ReferenceCard = memo(function ReferenceCard({
         : null,
     [reference, targetArea]
   );
-  // The window's length, and the seconds it represents — the label carries the seconds
-  // because the control is how a user hits a target sample duration (reference frames cost
-  // denoise VRAM every step), while its unit has to stay frames to match the trim contract.
+  // Store frames for the trim contract; show seconds to make sample duration readable.
   const sampleFrames = reference.kind === 'video' ? reference.clip.endFrame - reference.clip.startFrame + 1 : 0;
   const sampleSeconds =
     reference.kind === 'video' && Number.isFinite(reference.clip.fps) && reference.clip.fps > 0
       ? (sampleFrames / reference.clip.fps).toFixed(1)
       : null;
-  // A move that lands on an end -- the top of the stack, or the slot above the
-  // pinned continuity anchor -- disables the very button that was just pressed,
-  // and a disabled element cannot hold focus, so a keyboard user is dropped to
-  // <body> mid-gesture. Which button that is depends on the anchor rule, so the
-  // handoff reacts to what actually came back disabled rather than predicting
-  // it. It is armed only when the arrow ALREADY holds focus, because pressing a
-  // button does not focus it in every browser (Safari, Firefox on macOS): a
-  // pointer press there runs this handler with the caret still in the prompt,
-  // and moving focus would haul the user out of what they were typing.
+  // Arm focus repair only if the arrow owns focus. Reordering can disable it; inspect the committed disabled state
+  // because the anchor rule determines the endpoint. Some browsers click without focusing, so never steal focus
+  // from the prompt.
   const pendingFocusRef = useRef<'down' | 'up' | null>(null);
   const handleMoveUp = useCallback(() => {
     const arrow = moveUpRef.current;
@@ -262,13 +224,8 @@ const ReferenceCard = memo(function ReferenceCard({
 
     const pressed = pending === 'up' ? moveUpRef.current : moveDownRef.current;
     const sibling = pending === 'up' ? moveDownRef.current : moveUpRef.current;
-    // Hand off only the focus this card is responsible for losing. Disabling a
-    // focused button blurs it to <body>, so that -- or focus still sitting on
-    // the arrow -- is the whole set of states worth repairing. Anywhere else and
-    // the user has moved on since, which happens whenever the write did not land
-    // in this commit: `setReferences` drops writes from a panel that is no
-    // longer live, and `memo` then keeps this card from rendering at all, so the
-    // arm survives to a later render that has nothing to do with the gesture.
+    // Repair only arrow/body focus: a dropped write can leave this arm until an unrelated render, after the user
+    // has focused elsewhere.
     const isOursToRestore = document.activeElement === document.body || document.activeElement === pressed;
 
     if (isOursToRestore && pressed?.disabled === true && sibling !== null && !sibling.disabled) {
@@ -278,13 +235,9 @@ const ReferenceCard = memo(function ReferenceCard({
   const handleRemove = useCallback(() => onRemove(index), [index, onRemove]);
 
   return (
-    /* Named after the labels the prompt uses, so the twelve identical Remove/Move/trim
-       controls a full list can hold announce which reference they belong to. */
+    /* Prompt labels disambiguate each card's repeated controls. */
     <Box aria-label={[...promptLabels, name].join(' ')} borderWidth="1px" p="2" role="group" rounded="md">
       <HStack align="start" gap="2">
-        {/* Leading the card, left of every thumbnail it shows: plays what the trim
-            below actually selected, which the two still bounds cannot convey — and for
-            an audio reference, whose frames are a drawing of the sound, nothing can. */}
         {reference.kind === 'video' ? <PlayClipSpanButton clip={reference.clip} /> : null}
         {reference.kind === 'image' ? (
           <Box
@@ -303,14 +256,7 @@ const ReferenceCard = memo(function ReferenceCard({
         ) : null}
         <Stack flex="1" gap="1" minW="0">
           <HStack gap="1">
-            {/* The names the prompt has to use for this reference, leading the row that
-                names it and standing in for the kind icon that used to sit here: the label
-                already says which kind it is, and for a waveform clip conditioning on its
-                soundtrack alone it says so more honestly than a film icon would. The number
-                is NOT the card's slot — the three modality counters advance independently —
-                so it goes beside the filename rather than in a gutter that would cost every
-                card a fixed 64px. Rendered verbatim, brackets and LTR order included,
-                because the badge is the token to type. */}
+            {/* Render prompt tokens verbatim in LTR order; modality counters differ from card positions. */}
             {promptLabels.map((label) => (
               <Badge key={label} dir="ltr" flexShrink={0} size="xs" userSelect="text" variant="solid">
                 {label}
@@ -339,12 +285,7 @@ const ReferenceCard = memo(function ReferenceCard({
               })}
             </Text>
           ) : null}
-          {/* One row per window edge: the live frame at left, its control at right. The
-              seeking thumbs replace the static gallery poster for video references — the
-              start-frame thumb is the card's visual identity. The second row's SLIDER is
-              the sample length (the quantity that costs VRAM); its THUMB still shows the
-              resulting end frame, badged with that frame number since the number field
-              beside it shows the length, not the frame. */}
+          {/* The second control edits length; its thumbnail shows the resulting end frame. */}
           {reference.kind === 'video' ? (
             <Stack gap="1">
               <HStack gap="2">
@@ -380,8 +321,6 @@ const ReferenceCard = memo(function ReferenceCard({
                       ? t('widgets.video.sampleLength')
                       : t('widgets.video.sampleLengthWithSeconds', { seconds: sampleSeconds })
                   }
-                  // The window grows forward from its start, so the ceiling is what the
-                  // clip has left from there — it falls as the start frame climbs.
                   max={Math.max(1, reference.clip.numFrames - reference.clip.startFrame)}
                   min={1}
                   step={1}
@@ -439,12 +378,7 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
   disabled?: boolean;
   maxImages: number;
   maxVideos: number;
-  /**
-   * Accepts an UPDATER, not a snapshot. The add handlers `await` a gallery
-   * resolve before writing, and the Initial Video field and Frames slider both
-   * write references too -- a captured array would clobber whichever of those
-   * landed during the await.
-   */
+  /** Accept an updater: gallery resolution awaits must not overwrite reference edits made meanwhile. */
   onChange: (update: (current: VideoReferenceItem[]) => VideoReferenceItem[]) => void;
   references: VideoReferenceItem[];
   /** The generation's pixel area, which sizes a 'match'-detail image reference. */
@@ -457,9 +391,7 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  // The continuity anchor is pinned last, so any move that would displace it is
-  // reverted the moment it is written -- the button fired a patch and the list
-  // came back unchanged. Present those as disabled rather than inert.
+  // Disable moves that would displace the pinned last anchor and therefore be reverted.
   const anchorIndex = references.findIndex(
     (reference) => reference.kind === 'video' && reference.fromSourceVideo === true
   );
@@ -513,11 +445,8 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
     (image: { height: number; name: string; width: number }) => {
       setErrorMessage(null);
 
-      // Re-check the cap against the LIVE list: the render-time gate can be
-      // stale by the time a drop resolves or an upload lands, and another
-      // writer (a second drop, the Initial Video placing its anchor) can fill
-      // the slots meanwhile. An over-cap write would survive to normalization,
-      // whose overflow rule then has to delete SOMETHING the user placed.
+      // Recheck live capacity after async resolution; normalization would otherwise discard an existing reference
+      // on overflow.
       let declined = false;
 
       onChange((current) => {
@@ -530,9 +459,7 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
         return [
           ...current,
           {
-            // Read off the LIVE list, beside the cap re-check: which default applies
-            // depends on whether an image reference is already placed, and another
-            // writer can have placed one while this add was in flight.
+            // Derive defaults from the live list because another image may have arrived during the await.
             detail: getDefaultReferenceImageDetail(current),
             image: { height: image.height, image_name: image.name, width: image.width },
             kind: 'image',
@@ -568,28 +495,18 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
   );
 
   const addVideoItem = useCallback(
-    // The conditioning is derived here, from the marker the gallery item carries: it tells a
-    // wrapped audio upload from footage without a second request, so every caller gets the
-    // right answer synchronously.
     (item: GalleryVideoItem) => {
-      // The marker is read here and NOT stored on the clip: a clip outlives the gallery
-      // record it came from (it is persisted in the project and re-uploaded under a fresh
-      // name on import, where the server does not re-derive the marker), so a copy on the
-      // clip would go stale, and nothing downstream should be tempted to trust it.
+      // Do not persist mediaOrigin on the clip: project import reuploads under a new name without rederiving it.
       const conditioning = getDefaultReferenceConditioning(item.mediaOrigin);
       const clip = createVideoSourceClip(item);
-      // Built outside the updater so the caller holds the same object the list does: it is
-      // the only durable handle on this entry once reordering moves it.
+      // Construct once so the caller retains the same entry identity through reorders.
       const entry: Extract<VideoReferenceItem, { kind: 'video' }> = {
-        // The window depends on the conditioning -- a short sample of footage, the whole
-        // clip of a soundtrack. (Neither is the extend-mode 2-frame-tail trim: references
-        // are truncated to the generated duration, not joined.)
+        // Footage defaults to a short sample; audio uses the whole clip. References are truncated, not
+        // crossfade-joined.
         clip: getDefaultReferenceClip(clip, conditioning),
         conditioning,
         kind: 'video',
       };
-      // Same live cap re-check as the image path -- the Initial Video's
-      // anchor is the writer that most easily fills the slots mid-await.
       let declined = false;
 
       setErrorMessage(null);
@@ -726,13 +643,8 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
   );
   const addPickedVideo = useCallback(
     (item: GalleryVideoItem) => {
-      // Fully synchronous, which the picker requires: it stays open and judges each click
-      // against the reference list as it stands, so an add that had not landed yet would
-      // leave the tile pickable (a second click would duplicate it), leave the remaining
-      // count stale, and let two picks land in whichever order their fetches finished --
-      // which for references is a different generation. This path used to add on the
-      // footage default and correct the card once a metadata fetch answered; the marker
-      // rides on the picked item, so there is nothing left to correct.
+      // Apply picks synchronously so subsequent clicks see current capacity and cannot duplicate or reorder
+      // pending selections.
       addVideoItem(item);
     },
     [addVideoItem]
@@ -760,26 +672,14 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
     },
     [onChange]
   );
-  // Identity for the list, and it must NOT contain the index: an index-bearing key
-  // changes for every card a reorder touches, so React unmounts and remounts them --
-  // reloading a video reference's seeking trim thumbnails and throwing away keyboard
-  // focus on the arrow just pressed. Media can legitimately appear twice (the same
-  // clip sampled over two different windows), so a bare name is not unique either; it
-  // is disambiguated by how many entries of the same kind and name precede it.
-  //
-  // That makes a card stable against every move EXCEPT a swap with its own twin,
-  // where the two occurrence numbers trade places and React swaps the props between
-  // the instances instead of moving one. Rendering stays correct; the cards simply do
-  // not travel. Giving twins independent identity needs a per-entry uid minted on add
-  // and carried through normalization, which the persisted reference shape has no
-  // room for today.
+  // Key by kind/name occurrence, not index, to preserve focus and video elements across moves. Identical twins
+  // reuse instances with swapped props; independent twin identity would require persisted per-entry IDs.
   const referenceKeys = useMemo(() => {
     const seen = new Map<string, number>();
 
     return references.map((reference) => {
       const name = reference.kind === 'video' ? reference.clip.video_name : reference.image.image_name;
-      // Kind is part of the identity, matching `toGalleryItemKey`: an image and a
-      // video are different references even where a backend gives them one name.
+      // Include kind because image and video names may collide.
       const identity = `${reference.kind}:${name}`;
       const occurrence = seen.get(identity) ?? 0;
 
@@ -876,8 +776,7 @@ export const VideoReferenceListField = memo(function VideoReferenceListField({
         </Text>
       ) : null}
       <Input accept={IMAGE_UPLOAD_ACCEPT} hidden ref={imageInputRef} type="file" onChange={handleImageFileChange} />
-      {/* Audio files upload too: the server wraps them into waveform videos, which is
-          how audio-only reference clips enter the pipeline. */}
+      {/* The server wraps audio uploads as waveform videos. */}
       <Input accept={MEDIA_UPLOAD_ACCEPT} hidden ref={videoInputRef} type="file" onChange={handleVideoFileChange} />
     </Stack>
   );

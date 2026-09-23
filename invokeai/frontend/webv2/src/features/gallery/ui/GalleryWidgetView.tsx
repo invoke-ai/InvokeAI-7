@@ -104,9 +104,7 @@ export const GalleryWidgetView = ({ presentation, region, runtime }: GalleryWidg
     starred: starredOnly,
   });
 
-  // A failed similarity search renders exactly like an empty one ("no images
-  // match"), so the failure must reach the user some other way. Scoped to
-  // semantic mode: the board listing kept its pre-existing quiet behavior.
+  // Report semantic failures separately so failed searches cannot masquerade as empty results.
   const semanticError = semanticQuery ? data.queryError : null;
 
   useEffect(() => {
@@ -153,9 +151,7 @@ export const GalleryWidgetView = ({ presentation, region, runtime }: GalleryWidg
   const itemActionContextRef = useRef<GalleryItemActionContext | null>(null);
   const galleryLocationRef = useRef({ galleryView, selectedBoardId });
 
-  // This ref is a live read port for an in-flight deletion. An effect would
-  // leave a commit-sized stale window, while the action must compare against
-  // the exact filter and selection from the latest render.
+  // In-flight deletion must read the latest rendered filter and selection without an effect-sized stale window.
   // eslint-disable-next-line react/refs
   itemActionContextRef.current = {
     filterIdentity: itemActionFilterIdentity,
@@ -163,9 +159,7 @@ export const GalleryWidgetView = ({ presentation, region, runtime }: GalleryWidg
     loadOrderedRefs: loadOrderedItemRefs,
     selectedItemKey: gallery.selectedItemKey,
   };
-  // This is the matching live read port for in-flight uploads. The upload
-  // target is captured at launch, while completion visibility must use the
-  // board and view from the latest render.
+  // Capture upload destination at launch; judge completion visibility against the latest rendered board and view.
   // eslint-disable-next-line react/refs
   galleryLocationRef.current = { galleryView, selectedBoardId };
 
@@ -179,16 +173,8 @@ export const GalleryWidgetView = ({ presentation, region, runtime }: GalleryWidg
     selectedBoardId,
   });
 
-  // Publish the backend total into widget values so the manifest footer can
-  // render page navigation without its own fetch, and clamp the page when the
-  // query shrinks (e.g. after deletions).
-  //
-  // The effect reacts only to this instance's fetched `total` — the published
-  // state (`knownTotalImages`) is read through a ref on purpose. Several
-  // gallery views can be mounted at once (e.g. the bottom status chip plus an
-  // expanded gallery), and if each instance re-published whenever the shared
-  // state disagreed with its own in-flight total, two instances mid-refetch
-  // would dispatch in a loop until React aborts with "maximum update depth".
+  // Publish fetched totals for footer pagination. React only to this instance's total; reacting to shared totals
+  // can make simultaneous views dispatch indefinitely.
   const publishGalleryTotal = useEffectEvent((nextTotal: number) => {
     const lastPublishedTotal = lastPublishedTotalRef.current;
 
@@ -207,12 +193,8 @@ export const GalleryWidgetView = ({ presentation, region, runtime }: GalleryWidg
     publishGalleryTotal(total);
   }, [total]);
 
-  // Runs in BOTH modes: `page` is the paginated page number and also the
-  // infinite window's anchor, so either way a page past the end of a shrunken
-  // listing renders an empty grid — which, with no search active, reads as an
-  // empty board (the upload dropzone) rather than as a stale position.
-  // Clamping to the last real page keeps the user near where they were and
-  // always shows something that exists.
+  // Clamp both paginated pages and infinite anchors after shrinkage so stale positions cannot appear as empty
+  // boards.
   useEffect(() => {
     if (total === null) {
       return;

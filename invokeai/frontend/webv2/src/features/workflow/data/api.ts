@@ -1,10 +1,6 @@
 import { apiFetch, apiFetchJson } from '@platform/transport/http';
 
-/**
- * Client for the backend workflow library (`/api/v1/workflows`). The library
- * stores legacy-format WorkflowV3 JSON, so payloads round-trip through
- * `workflowJson.ts` on their way in and out of the project graph document.
- */
+/** Round-trip library WorkflowV3 payloads through workflowJson when crossing the document boundary. */
 
 export type WorkflowLibraryCategory = 'user' | 'default';
 

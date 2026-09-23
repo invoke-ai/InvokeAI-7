@@ -1,17 +1,6 @@
-/**
- * Pure snapping/clamping helpers for zoom, grid, and aspect-ratio math.
- *
- * No classes, no mutation — every function returns a new value.
- */
-
 import type { Rect, Vec2 } from '@workbench/canvas-engine/types';
 
-/**
- * The zoom levels the HUD dropdown offers. Presets only — wheel zoom is
- * continuous and deliberately does NOT snap to these: a ~3% capture band around
- * every level meant a slow scroll stalled at each one and had to be pushed out,
- * which reads as the zoom sticking rather than as a helpful detent.
- */
+/** HUD presets only. Wheel zoom stays continuous because capture bands make slow scrolling stick at preset levels. */
 export const ZOOM_PRESETS: readonly number[] = [0.25, 0.33, 0.5, 0.67, 0.75, 1, 1.25, 1.5, 2, 3, 4, 5];
 
 /** Minimum allowed zoom, used by `clampZoom`. */
@@ -32,14 +21,8 @@ export const snapToGrid = (value: number, grid: number): number => {
 };
 
 /**
- * The snapped absolute position for a drag of `delta` away from `origin`.
- *
- * Snaps the RESULT, not the delta, so something that starts off-grid seats onto
- * the grid instead of carrying its misalignment along forever.
- *
- * Per axis, and only for axes the drag actually moved: an axis with a zero delta
- * (shift locked it, or the pointer simply never moved along it) is passed through
- * untouched rather than being pulled onto a grid line the user never crossed.
+ * Snap the resulting absolute position so off-grid origins align. Preserve axes with zero delta, avoiding
+ * unintended movement on locked axes.
  */
 export const snapMovedPoint = (origin: Vec2, delta: Vec2, grid: number): Vec2 => ({
   x: delta.x === 0 ? origin.x : snapToGrid(origin.x + delta.x, grid),
@@ -58,13 +41,7 @@ export const snapRectToGrid = (rect: Rect, grid: number): Rect => {
 /** The corner or center kept fixed when `constrainAspect` resizes a rect. */
 export type AspectAnchor = 'nw' | 'ne' | 'sw' | 'se' | 'center';
 
-/**
- * Resizes `rect` to match `aspect` (width / height), keeping the named
- * anchor point fixed. The rect's area is preserved as closely as possible
- * by scaling both dimensions from the current size to fit the target
- * aspect ratio (the dimension that would grow beyond the current bounding
- * box is chosen based on which axis needs less change).
- */
+/** Resizes to width/height aspect while keeping the named anchor fixed. */
 export const constrainAspect = (rect: Rect, aspect: number, anchor: AspectAnchor): Rect => {
   if (aspect <= 0 || rect.width <= 0 || rect.height <= 0) {
     return rect;

@@ -13,12 +13,8 @@ import {
 import type { WorkflowFlowInstance } from './flowInstanceStore';
 
 /**
- * Freeform lasso selection for the flow editor. xyflow has no core lasso (its
- * official one is a copy-in component), so this follows the same approach:
- * capture-phase pointer handlers on the flow wrapper stop the pane's own drag,
- * the path is hit-tested against node bounds in flow coordinates, and a
- * pointer-events-free SVG overlay draws the path. Partial mode: a node is
- * selected when any corner or its center falls inside the polygon.
+ * Capture pointer events before pane dragging; hit-test flow-coordinate node corners/centers against the lasso and
+ * draw a pointer-transparent overlay.
  */
 
 const MIN_POLYGON_POINTS = 3;

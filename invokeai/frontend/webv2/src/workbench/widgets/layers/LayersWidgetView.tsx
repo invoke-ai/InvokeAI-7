@@ -36,13 +36,6 @@ import { LayerColorPane, LayerEditorPanes } from './panes/LayerEditorPanes';
 import { useCanvasHistoryHotkeys } from './useCanvasHistoryHotkeys';
 import { useLayerSelectionCommands } from './useLayerSelectionCommands';
 
-/**
- * The layers panel: the Color pane at the top, then the flexible middle region tabbed between
- * the layers view (blend/opacity row, the virtualized tree of the four stacks, and the footer
- * action strip) and the edit history, with the editor panes (Properties, Transform, Overview)
- * at the bottom — the selected layer's other editors live in the Properties pane. Regions keep
- * their geometry; their controls disable instead of appearing and disappearing.
- */
 const TREE_TABS_ID_BASE = 'layer-tree';
 const TREE_TABS: ReadonlyArray<{ id: LayerTreeTabId; labelKey: string }> = [
   { id: 'layers', labelKey: 'widgets.labels.layers' },

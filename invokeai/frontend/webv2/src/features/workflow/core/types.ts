@@ -1,12 +1,6 @@
 /**
- * Workflow domain types.
- *
- * The project graph is a *document*: an editable node-and-edge workflow plus a
- * form describing its Linear UI. It compiles into the queue-facing
- * `GraphContract` only at invocation time, so queued snapshots stay immutable
- * while the document keeps evolving. The serialized shape stays compatible
- * with the legacy WorkflowV3 format so workflows round-trip between the v6
- * editor, the workflow library backend, and this workbench.
+ * Editable legacy-compatible workflow documents compile only at invocation time so queued GraphContract snapshots
+ * remain immutable.
  */
 
 import type { SeedMode } from '@platform/core/seed';
@@ -27,11 +21,7 @@ export interface FieldInputTemplate {
   description: string;
   type: FieldType;
   required: boolean;
-  /**
-   * `internal` marks a field the backend provides rather than the node author declaring it
-   * (`metadata`). It is a real, connectable input, but it is not part of the node's authored
-   * signature, so heuristics that pick "the" input for a node must skip it.
-   */
+  /** Internal inputs are backend-provided but connectable; skip them when guessing an authored primary input. */
   fieldKind: 'input' | 'internal';
   /** How the field receives data: only via edge, only direct value, or either. */
   input: 'connection' | 'direct' | 'any';
@@ -93,11 +83,7 @@ export interface WorkflowFieldInstance {
   description?: string;
   /** True when the description was explicitly changed by the user, including clearing it. */
   descriptionOverride?: boolean;
-  /**
-   * How a seed input (`isSeedInputField`) moves between queued runs. Absent means
-   * fixed: what every document authored before seed modes did, and what a legacy
-   * reader hands back after stripping the key.
-   */
+  /** Absent seedMode means fixed, including older documents and legacy readers that strip it. */
   seedMode?: SeedMode;
   value?: unknown;
 }

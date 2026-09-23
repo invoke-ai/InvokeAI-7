@@ -10,11 +10,8 @@ import { createKeyedTransientStore } from '@platform/state/externalStore';
 import { browserNodesDataPort } from './transport';
 
 /**
- * Ephemeral per-node execution state, keyed by the invocation's source node id
- * (the workflow editor's node id). Like the queue-item progress store, this is
- * high-frequency transient data that deliberately lives outside the workbench
- * reducer; the editor's nodes subscribe per id and only re-render when their
- * own node's state moves.
+ * Keep transient execution state outside the workbench reducer; subscribe per source node ID to isolate frequent
+ * renders.
  */
 
 export type NodeExecutionStatus = 'running' | 'completed' | 'failed';
@@ -92,10 +89,7 @@ export const nodeExecutionStore = {
       status: 'running',
     });
   },
-  /**
-   * The queue item running these nodes reached a terminal state: a node still marked running
-   * finished with it, or never will (its failure/cancel event was lost or never sent).
-   */
+  /** Terminal queue items end any remaining running node state, including missed failure/cancel events. */
   settleRunning(nodeIds: Iterable<string>, outcome: NodeExecutionOutcome): void {
     for (const nodeId of nodeIds) {
       const state = stateByNodeId.get(nodeId);

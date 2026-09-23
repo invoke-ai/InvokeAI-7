@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import type { VideoReferenceItem, VideoSettings } from './types';
+import type { VideoReferenceItem, VideoSettings, VideoWidgetValues } from './types';
 
 import { MINIMAX_H3_NUM_FRAMES_CHOICES } from './dimensions';
 import {
@@ -23,6 +23,7 @@ import {
   getDefaultReferenceConditioning,
   getDefaultReferenceImageDetail,
   isVideoSettings,
+  createVideoConditioningClip,
   isVideoSourceClip,
   normalizeVideoSettings,
   normalizeVideoWidgetValues,
@@ -45,6 +46,8 @@ const SOURCE_VIDEO = {
   width: 832,
 };
 
+const CONDITIONING_CLIP = { fps: 24, height: 704, numFrames: 96, video_name: 'conditioning.mp4', width: 1248 };
+
 const createSettings = (overrides: Partial<VideoSettings> = {}): VideoSettings => ({
   ...getDefaultVideoSettings(),
   ...overrides,
@@ -61,6 +64,44 @@ describe('resolveVideoMode', () => {
     expect(resolveVideoMode(createSettings({ sourceVideo: SOURCE_VIDEO }))).toBe('extend');
     // A last frame with a source video is still extend — it is the destination anchor.
     expect(resolveVideoMode(createSettings({ lastFrameImage: LAST_FRAME, sourceVideo: SOURCE_VIDEO }))).toBe('extend');
+  });
+
+  it("reads the conditioning clip's role as the mode, ahead of every frame and clip slot", () => {
+    expect(
+      resolveVideoMode(createSettings({ conditioningClip: { clip: CONDITIONING_CLIP, fpsKnown: true, role: 'audio' } }))
+    ).toBe('audio-to-video');
+    expect(
+      resolveVideoMode(createSettings({ conditioningClip: { clip: CONDITIONING_CLIP, fpsKnown: true, role: 'video' } }))
+    ).toBe('video-to-audio');
+    // Not reachable through the setters, but a recalled or stored record can hold both; the mode
+    // has to name the one that would actually run, which validation then refuses.
+    expect(
+      resolveVideoMode(
+        createSettings({
+          conditioningClip: { clip: CONDITIONING_CLIP, fpsKnown: true, role: 'audio' },
+          sourceVideo: SOURCE_VIDEO,
+        })
+      )
+    ).toBe('audio-to-video');
+  });
+});
+
+describe('createVideoConditioningClip', () => {
+  it('takes an uploaded soundtrack for its audio and anything else for its picture', () => {
+    const item = { durationSeconds: 4, fps: 24, height: 704, name: 'clip.mp4', width: 1248 };
+
+    // An `audio_upload` record is a bare soundtrack wrapped as a video: it has no picture to
+    // condition on, so the only role it can fill is the audio one.
+    expect(createVideoConditioningClip({ ...item, mediaOrigin: 'audio_upload' }).role).toBe('audio');
+    expect(createVideoConditioningClip(item).role).toBe('video');
+  });
+
+  it('carries no trim bounds, which the conditioning nodes would not honour', () => {
+    const clip = createVideoConditioningClip({ durationSeconds: 4, fps: 24, height: 704, name: 'c.mp4', width: 1248 });
+
+    expect(clip.clip).not.toHaveProperty('startFrame');
+    expect(clip.clip).not.toHaveProperty('endFrame');
+    expect(clip.clip).toEqual({ fps: 24, height: 704, numFrames: 96, video_name: 'c.mp4', width: 1248 });
   });
 });
 
@@ -87,11 +128,25 @@ describe('normalizeVideoSettings', () => {
     expect(isVideoSettings(settings)).toBe(true);
   });
 
+  it('folds a low-noise CFG below 1 back into reuse-primary', () => {
+    expect(normalizeVideoSettings({ ...createSettings(), cfgScaleLowNoise: 0.5 })?.cfgScaleLowNoise).toBeNull();
+    expect(normalizeVideoSettings({ ...createSettings(), cfgScaleLowNoise: 1 })?.cfgScaleLowNoise).toBe(1);
+  });
+
+  it('does not call a record with a garbage conditioning clip valid settings', () => {
+    // The guard's whole job is deciding whether a stored record can be used as-is; a slot it does
+    // not look at is a slot that reaches the graph builder unchecked.
+    const clip = { clip: CONDITIONING_CLIP, fpsKnown: true, role: 'audio' as const };
+
+    expect(isVideoSettings(createSettings({ conditioningClip: clip }))).toBe(true);
+    expect(isVideoSettings({ ...createSettings(), conditioningClip: { clip: CONDITIONING_CLIP } })).toBe(false);
+    expect(isVideoSettings({ ...createSettings(), conditioningClip: 'nonsense' })).toBe(false);
+  });
+
   it('rejects non-records but heals partial records field-by-field, upscale-style', () => {
     expect(normalizeVideoSettings(null)).toBeNull();
     expect(normalizeVideoSettings(7)).toBeNull();
-    // A seeded partial write ("Send to Video" on a never-opened widget) keeps
-    // its payload instead of being nulled and wiped by the reconciler.
+    // Preserve seeded partial Send to Video payloads through normalization and reconciliation.
     const seeded = normalizeVideoSettings({ firstFrameImage: FIRST_FRAME, sourceVideo: null });
 
     expect(seeded).not.toBeNull();
@@ -189,8 +244,7 @@ describe('normalizeVideoSettings', () => {
         loras: [lightningLora],
       })
     ).toBe(true);
-    // A recorded LoRA that is merely DISABLED also clears the flag: the graph
-    // skips disabled LoRAs, so the fast path would silently run without it.
+    // Disabled accelerator LoRAs also clear intent because graph compilation omits them.
     const disabledLightning = { ...lightningLora, isEnabled: false };
 
     expect(
@@ -250,8 +304,7 @@ describe('videoClipSpanSeconds', () => {
   });
 
   it('has no span to offer for a clip with no usable frame rate', () => {
-    // A persisted clip only has to hold a FINITE fps to hydrate, and a zero would put the
-    // whole clip behind a control that claims to play the selection.
+    // Finite persisted fps can still be zero; playback must reject unusable rates.
     expect(videoClipSpanSeconds({ ...SOURCE_VIDEO, fps: 0 })).toBeNull();
   });
 });
@@ -331,11 +384,7 @@ describe('getDefaultReferenceConditioning', () => {
 });
 
 describe('getDefaultReferenceClip', () => {
-  // A wrapped audio upload: the server renders it at AUDIO_WRAP_FPS (24), so
-  // DEFAULT_REFERENCE_SAMPLE_FRAMES lands at a little over 8 seconds of the track.
-  // Deliberately handed in with a narrow, offset window: were the helper to pass its clip
-  // through unchanged, the audio expectation below would still be satisfied by a fixture
-  // that already held the whole clip.
+  // Use a narrow offset fixture so audio defaulting must actively expand to the whole wrapped soundtrack.
   const wrappedAudio = {
     endFrame: 199,
     fps: 24,
@@ -368,8 +417,8 @@ describe('getDefaultReferenceClip', () => {
   });
 
   it('gives an audio-only reference the whole clip', () => {
-    // 3 minutes of audio, not the first 8 seconds of it: an audio reference is encoded as
-    // a soundtrack and no visual rows, and the window is what the generation gets to hear.
+    // Audio references need the full soundtrack window; they add no visual rows and must not default to eight
+    // seconds.
     expect(getDefaultReferenceClip(wrappedAudio, 'audio')).toEqual({
       ...wrappedAudio,
       endFrame: 4319,
@@ -436,6 +485,47 @@ describe('getDefaultReferenceImageDetail', () => {
   });
 });
 
+describe('normalizeVideoSettings — the conditioning clip', () => {
+  const clip = { clip: CONDITIONING_CLIP, fpsKnown: true, role: 'audio' as const };
+
+  it('drops a clip stored beside a slot that claims the same conditioning mask', () => {
+    // A rolled-back or hand-edited project can hold both. Keeping them would resolve to a mode
+    // whose graph silently ignores one of the two.
+    expect(
+      normalizeVideoSettings({ ...createSettings({ firstFrameImage: FIRST_FRAME }), conditioningClip: clip })
+        ?.conditioningClip
+    ).toBeNull();
+    expect(
+      normalizeVideoSettings({ ...createSettings({ sourceVideo: SOURCE_VIDEO }), conditioningClip: clip })
+        ?.conditioningClip
+    ).toBeNull();
+    expect(normalizeVideoSettings(createSettings({ conditioningClip: clip }))?.conditioningClip).toEqual(clip);
+  });
+
+  it('drops a malformed clip rather than passing it to the graph builder', () => {
+    for (const malformed of [
+      { clip: CONDITIONING_CLIP },
+      { clip: CONDITIONING_CLIP, fpsKnown: true, role: 'soundtrack' },
+      { clip: { video_name: 'c.mp4' }, fpsKnown: true, role: 'audio' },
+      { clip: CONDITIONING_CLIP, fpsKnown: 'yes', role: 'audio' },
+      'nonsense',
+    ]) {
+      expect(
+        normalizeVideoSettings({ ...createSettings(), conditioningClip: malformed } as unknown as VideoSettings)
+          ?.conditioningClip,
+        JSON.stringify(malformed)
+      ).toBeNull();
+    }
+  });
+
+  it('deep-copies the clip so a clone cannot alias the original', () => {
+    const cloned = cloneVideoWidgetValues(createSettings({ conditioningClip: clip }) as VideoWidgetValues);
+
+    expect(cloned.conditioningClip).toEqual(clip);
+    expect(cloned.conditioningClip?.clip).not.toBe(clip.clip);
+  });
+});
+
 describe('clearDeletedVideoMedia', () => {
   const withMedia = createSettings({
     firstFrameImage: FIRST_FRAME,
@@ -457,12 +547,21 @@ describe('clearDeletedVideoMedia', () => {
     const clipCleared = clearDeletedVideoMedia(withClip, new Set(), new Set(['clip.mp4']));
 
     expect(clipCleared.sourceVideo).toBeNull();
+
+    // A conditioning clip is a gallery video too: left behind, it would compile a graph naming
+    // a deleted record and fail at the conditioning node rather than in the panel.
+    const withConditioning = createSettings({
+      conditioningClip: { clip: CONDITIONING_CLIP, fpsKnown: true, role: 'audio' },
+    });
+
+    expect(
+      clearDeletedVideoMedia(withConditioning, new Set(), new Set(['conditioning.mp4'])).conditioningClip
+    ).toBeNull();
+    expect(clearDeletedVideoMedia(withConditioning, new Set(), new Set(['other.mp4']))).toBe(withConditioning);
   });
 
   it('clears a reference the exclusion masking would hide from a normalized snapshot', () => {
-    // A raw store can hold BOTH slots (a rollback race); normalization would
-    // mask the source video, so the sweep must run on the raw values or the
-    // masked reference dangles past the delete.
+    // Sweep raw slots before normalization can hide conflicting media references from deletion.
     const rawBoth = { ...createSettings({ firstFrameImage: FIRST_FRAME }), sourceVideo: SOURCE_VIDEO } as Record<
       string,
       unknown
@@ -478,9 +577,6 @@ describe('clearDeletedVideoMedia', () => {
     expect(clearDeletedVideoMedia(junk, new Set(['nonsense']), new Set())).toBe(junk);
   });
 });
-
-// ---------------------------------------------------------------------------
-// Ref2VA references
 
 const IMAGE_REFERENCE = {
   detail: 'max',
@@ -508,14 +604,11 @@ describe('references', () => {
 
     expect(normalized?.references).toEqual([IMAGE_REFERENCE]);
     expect(normalized?.firstFrameImage).toBeNull();
-    // References + source video is the Ref2VA reference-extend shape;
-    // validation rejects the pair on models that cannot consume it.
+    // Source plus references is valid only for models supporting reference extension.
     expect(normalized?.sourceVideo).toEqual(SOURCE_VIDEO);
   });
 
   it('normalization drops malformed entries and enforces the caps, preserving order', () => {
-    // Videos over the cap drop the NEWEST non-anchor entries — the surplus is
-    // whatever arrived last. See the over-cap tests below.
     const tooMany = [
       ...Array.from({ length: 4 }, (_, index) => ({
         ...VIDEO_REFERENCE,
@@ -548,9 +641,8 @@ describe('references', () => {
 
     expect(normalized?.references.map(named as never)).toEqual(['img', 'v0.mp4', 'v1.mp4', 'v2.mp4']);
 
-    // The race shape: an add slipped past the render-time cap gate while the
-    // Initial Video was placing its anchor. The surplus is the racing add (D),
-    // not the user's oldest reference (B) — a plain front-drop deleted B.
+    // Discard the racing newest addition rather than the user's oldest reference when anchor insertion exceeds the
+    // cap.
     const anchor = {
       ...VIDEO_REFERENCE,
       clip: { ...VIDEO_REFERENCE.clip, video_name: 'anchor.mp4' },
@@ -575,10 +667,7 @@ describe('references', () => {
   });
 
   it('normalization heals a panel saved with the anchor prepended', () => {
-    // The build before the anchor was pinned PREPENDED it, so those projects
-    // load with it at index 0. Normalization must move it last -- otherwise the
-    // generated frames continue from whatever reference follows it -- and it
-    // must do so BEFORE the cap trim, or the front-drop deletes the anchor.
+    // Heal legacy prepended anchors by pinning last before overflow trimming.
     const anchor = {
       ...VIDEO_REFERENCE,
       clip: { ...VIDEO_REFERENCE.clip, video_name: 'anchor.mp4' },
@@ -653,8 +742,7 @@ describe('referencePromptLabels', () => {
     conditioning,
   });
 
-  // The numbering the model is handed (`build_ref2va_presentation`): one counter per
-  // modality, advanced in attachment order, so no label number is the card's position.
+  // Mirror independent modality counters in backend attachment order; labels are not card positions.
   it('numbers each modality on its own counter', () => {
     expect(
       referencePromptLabels([
@@ -685,8 +773,7 @@ describe('referencePromptLabels', () => {
         ])
       );
 
-    // The same three references in two orders: the numbers follow the list, so the swap
-    // trades the two images' picture numbers and leaves the video's alone.
+    // Reordering images updates picture numbering without changing the video's modality counter.
     expect(numbered([first, withConditioning('video_audio'), second])).toEqual({
       'first.png': { audio: null, picture: 1, video: null },
       'ref.mp4': { audio: 1, picture: null, video: 1 },
@@ -733,10 +820,8 @@ describe('reference-extend anchor: audio-only references', () => {
   } as const;
 
   it('appends a real anchor beside an audio-only reference rather than consuming it', () => {
-    // Upload a soundtrack as a reference (it defaults to 'audio'), then extend that same
-    // clip. Adopting the audio entry would replace the user's window with the tail AND
-    // leave the seam with no visuals at all, since an 'audio' reference contributes no
-    // visual rows. Both references have a job; both survive.
+    // Keep the user's audio reference and append a visual anchor; adopting audio would overwrite its trim and
+    // provide no seam visuals.
     const linked = applyReferenceExtendSourceVideo([userAudio], source24, 3, FRAMES);
 
     expect(linked).toHaveLength(2);
@@ -756,8 +841,7 @@ describe('reference-extend anchor: audio-only references', () => {
     } as const;
     const linked = applyReferenceExtendSourceVideo([userAudio, userVideo], source24, 3, FRAMES);
 
-    // The audio entry is untouched, by identity; the video one becomes the anchor and
-    // keeps its deliberate 'video' choice.
+    // Preserve audio identity while the visual reference becomes the anchor.
     expect(linked).toHaveLength(2);
     expect(linked.find((entry) => entry === userAudio)).toBe(userAudio);
     expect(linked[linked.length - 1]).toMatchObject({
@@ -768,9 +852,7 @@ describe('reference-extend anchor: audio-only references', () => {
   });
 
   it('converts an already-flagged audio anchor, re-deriving its window in the same pass', () => {
-    // A record written before this rule can carry one. It is healed WHOLE: the conditioning
-    // becomes usable and the window becomes the tail, which is why the conversion lives
-    // here and not in normalization.
+    // Heal legacy anchors' conditioning and tail window together, outside normalization.
     const stale = {
       ...userAudio,
       clip: { ...userAudio.clip, endFrame: 72, startFrame: 0 },
@@ -786,9 +868,7 @@ describe('reference-extend anchor: audio-only references', () => {
   });
 
   it('converts an overridden audio anchor without disturbing the window the user picked', () => {
-    // Where the two rules meet. The ROLE still needs visual rows, so the conditioning is
-    // promoted — but the window is one the user chose FOR this anchor, not the arbitrary
-    // one a mis-flagged entry carries, so a cutpoint change leaves it intact.
+    // Promote anchor conditioning to include visuals while preserving a deliberate trim override.
     const overridden = {
       ...userAudio,
       clip: { ...userAudio.clip, endFrame: 219, startFrame: 100 },
@@ -806,10 +886,7 @@ describe('reference-extend anchor: audio-only references', () => {
   });
 
   it('normalization never flags an audio-only reference as the anchor', () => {
-    // The recall re-derive picks the anchor by clip name. Landing on an audio-only entry
-    // would flag a reference whose window is NOT the tail -- once its conditioning implied
-    // visuals, the generation would continue from the opening of the clip. It is left as
-    // the plain reference it is, and no anchor is claimed.
+    // Recall must not adopt audio-only same-name references as visual tail anchors.
     const normalized = normalizeVideoSettings(
       createSettings({ references: [IMAGE_REFERENCE, userAudio], sourceVideo: source24 })
     );
@@ -835,9 +912,7 @@ describe('reference-extend anchor: audio-only references', () => {
   });
 
   it('leaves an audio-only reference beside a real anchor completely alone', () => {
-    // The rule is about the anchor's ROLE, not about audio references. With a flagged
-    // anchor present the re-derive does not run at all, and the user's soundtrack keeps
-    // its conditioning, its window and its object identity across normalization.
+    // An existing anchor leaves unrelated audio conditioning, trim, and identity unchanged.
     const realAnchor = { ...userAudio, conditioning: 'video_audio' as const, fromSourceVideo: true } as const;
     const normalized = normalizeVideoSettings(
       createSettings({ references: [userAudio, realAnchor], sourceVideo: source24 })
@@ -859,20 +934,15 @@ describe('reference-extend linkage', () => {
   it('anchors on video + audio -- the role needs visual rows', () => {
     const [ordinary] = applyReferenceExtendSourceVideo([], source24, 3, FRAMES);
 
-    // Deliberately NOT derived from whether the clip is a wrapped audio upload. The anchor
-    // is what the generated frames continue from, an 'audio' reference emits no visual rows
-    // at all, and the all-audio validation does not fire when other references are visual --
-    // so the seam would go silently discontinuous. `anchorReferenceConditioning` promotes in
-    // the other direction. (The clip carries no marker at all, so this cannot regress by
-    // accident.)
+    // Anchors require visual conditioning regardless of upload origin; mixed references would otherwise bypass
+    // all-audio validation with a broken seam.
     expect(ordinary).toMatchObject({ conditioning: 'video_audio', fromSourceVideo: true });
   });
 
   it('derives the tail trim: the window ending at the cutpoint, clamped at 0', () => {
     expect(deriveReferenceExtendClip(source24, FRAMES)).toMatchObject({ endFrame: 400, startFrame: 260 });
-    // Shorter than the tail window: fall back to the largest ON-GRID budget the
-    // clip supports (80 frames -> 73) so the window still ENDS on the cutpoint.
-    // Starting at 0 kept the same 73 frames but stopped 7 short of the seam.
+    // Use the largest supported grid window ending at the cutpoint when the source is shorter than the target
+    // tail.
     expect(deriveReferenceExtendClip({ ...SOURCE_VIDEO, fps: 24 }, FRAMES)).toMatchObject({
       endFrame: 79,
       startFrame: 7,
@@ -880,9 +950,8 @@ describe('reference-extend linkage', () => {
   });
 
   it('budgets the window against the generated frame count', () => {
-    // `normalize_reference_video_frames` truncates a reference to the generated
-    // frame count keeping the FRONT, so a window longer than the generation
-    // loses its tail — the frames at the seam. It must never outrun the count.
+    // Limit reference length to generated frames because backend truncation preserves the front and would discard
+    // seam frames.
     expect(deriveReferenceExtendClip(source24, 124)).toMatchObject({ endFrame: 400, startFrame: 277 });
     expect(deriveReferenceExtendClip(source24, 90)).toMatchObject({ endFrame: 400, startFrame: 311 });
     // Above the tail window the budget stops binding: ~5s of lead-in is the cap.
@@ -890,11 +959,8 @@ describe('reference-extend linkage', () => {
   });
 
   it('lands the window ON the 17n+5 grid the backend keeps, at every source rate', () => {
-    // The real test of the window: run it through ALL THREE backend rules.
-    // `resample_video_frame_repeats` onto 24 fps, `frames[:num_frames]`, then
-    // `snap_reference_num_frames` DOWN to 17n+5 — every one of which cuts the
-    // seam end. Rounding the fps conversion DOWN satisfied the first two and
-    // failed the third, losing 17 frames at 23.976 fps at every frame count.
+    // Validate resampling, generated-length truncation, and 17n+5 snap-down together; floor rounding can lose a
+    // full grid interval at fractional fps.
     const resample = (n: number, fps: number) => Math.floor((n * 24) / fps + 0.5);
     const snapDown = (n: number) => Math.max(1, Math.floor((n - 5) / 17)) * 17 + 5;
 
@@ -910,11 +976,7 @@ describe('reference-extend linkage', () => {
   });
 
   it('a clip SHORTER than the window still ends its tail on the cutpoint', () => {
-    // The clamped branch used to take the whole clip, whose length is
-    // arbitrary: off the 17n+5 grid, so the snap-down cut the difference from
-    // the END. Nothing about it needs an inexact estimate — it was the common
-    // case for any source under ~5.9s at 24 fps, and the sweep above could not
-    // see it because it only runs a 402-frame clip.
+    // Short clips also need grid-aligned budgets; arbitrary whole-clip windows lose their tail during snap-down.
     const resample = (n: number, fps: number) => Math.floor((n * 24) / fps + 0.5);
     const snapDown = (n: number) => Math.max(1, Math.floor((n - 5) / 17)) * 17 + 5;
 
@@ -928,9 +990,7 @@ describe('reference-extend linkage', () => {
 
           const discarded = Math.min(resample(window, fps), numFrames) - kept;
 
-          // At most a single frame is trimmed off the seam end -- the source's
-          // own frame boundaries sometimes cannot land on the grid exactly (12
-          // fps cannot reach an odd 141 at all). The old clamp shed up to 16.
+          // Allow at most one seam frame lost to source-rate granularity, not a whole grid interval.
           expect({ discarded: discarded <= 1, fps, numFrames, total }).toEqual({
             discarded: true,
             fps,
@@ -948,16 +1008,14 @@ describe('reference-extend linkage', () => {
     // 141 frames of 24 fps material is 94 frames of a 16 fps clip — the same
     // 5.875s of wall time, which is what the tail window actually means.
     expect(deriveReferenceExtendClip(longSource, FRAMES)).toMatchObject({ endFrame: 400, startFrame: 307 });
-    // A clip whose probe recorded no usable rate falls back to a no-op
-    // conversion rather than collapsing to the 2-frame floor.
+    // Missing source rate must fall back without collapsing the sample to the two-frame floor.
     expect(deriveReferenceExtendClip({ ...longSource, fps: 0 }, FRAMES)).toMatchObject({ startFrame: 260 });
     expect(deriveReferenceExtendClip({ ...longSource, fps: -30 }, FRAMES)).toMatchObject({ startFrame: 260 });
   });
 
   it('appends a linked video+audio reference and re-derives it on cutpoint changes', () => {
-    // Appended, not prepended: request order is rotary order and the generated
-    // rows continue from the LAST reference block, so the continuity anchor
-    // has to be the final entry.
+    // Append the continuity anchor last because generated rotary positions continue from the final reference
+    // block.
     const added = applyReferenceExtendSourceVideo([IMAGE_REFERENCE], source24, 3, FRAMES);
 
     expect(added).toHaveLength(2);
@@ -969,8 +1027,6 @@ describe('reference-extend linkage', () => {
       kind: 'video',
     });
 
-    // The user tunes the conditioning, then moves the cutpoint: the trim
-    // re-derives, the position and conditioning survive.
     const tuned = added.map((entry, index) =>
       index === 1 && entry.kind === 'video' ? { ...entry, conditioning: 'video' as const } : entry
     );
@@ -985,9 +1041,7 @@ describe('reference-extend linkage', () => {
   });
 
   it('leaves an overridden anchor window alone across cutpoint and frame-count changes', () => {
-    // The fade-to-black case: the cutpoint keeps the fade in the Initial Video
-    // that gets concatenated, while the reference samples earlier material.
-    // Ref2VA has no frame-exact seam, so that choice is the user's to make.
+    // Allow sampling before a fade while concatenating through it; Ref2VA provides no frame-exact seam.
     const linked = applyReferenceExtendSourceVideo([IMAGE_REFERENCE], source24, 3, FRAMES);
     const overridden = linked.map((entry, index) =>
       index === 1 && entry.kind === 'video'
@@ -1039,11 +1093,8 @@ describe('reference-extend linkage', () => {
   });
 
   it('normalization re-establishes the linkage recall drops, and the invariants reach it', () => {
-    // `fromSourceVideo` never reaches metadata, so a recalled reference-extend
-    // panel arrives with its anchor UNFLAGGED beside the source video. Every
-    // invariant keys on the flag, so before this: not pinned (the model
-    // continued from whatever followed it), and not re-budgeted (a Frames
-    // change left the window overrunning -- 2s cut off the seam at 345 -> 90).
+    // Recall must restore the omitted anchor flag so pinning and generated-frame rebudgeting still protect the
+    // seam.
     const recalled = { ...VIDEO_REFERENCE, clip: { ...VIDEO_REFERENCE.clip, video_name: 'long.mp4' } };
     const normalized = normalizeVideoSettings(
       createSettings({ references: [recalled, IMAGE_REFERENCE], sourceVideo: source24 })
@@ -1083,11 +1134,7 @@ describe('reference-extend linkage', () => {
   });
 
   it('adopts the LAST same-name entry: the pin invariant records the anchor last', () => {
-    // Recorded metadata can hold a user's OWN reference to the source clip
-    // ahead of the anchor -- the pin forces the anchor last, so it is always
-    // the later same-name entry. A first-match flagged the user's reference:
-    // their trim got re-budgeted, the list reordered against the recording,
-    // and the true tail window sat unprotected at the seam.
+    // Adopt the last same-name reference; the earlier one can be the user's independently trimmed reference.
     const userRef = {
       ...VIDEO_REFERENCE,
       clip: { ...VIDEO_REFERENCE.clip, endFrame: 20, startFrame: 0, video_name: 'long.mp4' },
@@ -1102,10 +1149,7 @@ describe('reference-extend linkage', () => {
   });
 
   it('canonicalizes the flag to at most one entry and keeps normalization stable', () => {
-    // Two flagged entries (a corrupt or hand-merged record) used to oscillate:
-    // the pin moves the FIRST flagged entry last, swapping the pair on every
-    // pass -- and the overflow trim exempts every flagged entry, so an
-    // over-cap list of them could never come back under the cap.
+    // Canonicalize duplicate anchor flags to avoid normalization oscillation and unbounded exempt entries.
     const flaggedNamed = (video_name: string) => ({
       ...VIDEO_REFERENCE,
       clip: { ...VIDEO_REFERENCE.clip, video_name },
@@ -1120,8 +1164,6 @@ describe('reference-extend linkage', () => {
     expect(once?.references.at(-1)).toMatchObject({ clip: { video_name: 'b.mp4' }, fromSourceVideo: true });
     expect(twice?.references).toEqual(once?.references);
 
-    // All-flagged over the cap: the exemption can no longer make the surplus
-    // immortal -- the cap holds, and the surviving flag is the last one.
     const overCap = normalizeVideoSettings(
       createSettings({ references: ['a', 'b', 'c', 'd'].map((name) => flaggedNamed(`${name}.mp4`)) })
     );
@@ -1134,18 +1176,13 @@ describe('reference-extend linkage', () => {
   });
 
   it('an absurd probed frame rate falls back to 24 instead of hanging', () => {
-    // Past ~2^53 source frames, tailSourceFrames' adjustment loops cannot even
-    // step (tail + 1 === tail in floats) -- fps 1e17 froze the tab. Any rate
-    // no real container produces now takes the same fallback as a broken one.
+    // Reject unrealistic rates before floating-point increments stop advancing adjustment loops.
     expect(deriveReferenceExtendClip({ ...source24, fps: 1e17 }, 141)).toMatchObject({
       endFrame: 400,
       startFrame: 260,
     });
-    // Below the bound, a genuinely high-rate clip still gets its REAL window:
-    // 1200 fps needs 7025 source frames for 141 resampled ones. A 1000-fps
-    // bound sent this through the 24 fallback, and the backend -- which
-    // resamples at the rate it probes itself -- collapsed the 141-source-frame
-    // window to 3 frames and raised under text conditioning's 13-frame floor.
+    // Retain legitimate high-rate timing; an overly low fallback bound can reduce resampled context below backend
+    // minimums.
     const highRate = { ...source24, endFrame: 50000, fps: 1200, numFrames: 50001 };
 
     expect(deriveReferenceExtendClip(highRate, 141)).toMatchObject({ endFrame: 50000, startFrame: 42976 });
@@ -1153,11 +1190,7 @@ describe('reference-extend linkage', () => {
   });
 
   it('a demoted anchor loses its override, so re-setting the clip re-derives', () => {
-    // The corrupt-record shape the flag canonicalization exists to heal: two
-    // flagged entries for the same clip. The demoted one kept `trimOverridden`,
-    // and adopt-by-name then honoured that stale window on the next Initial
-    // Video set -- the help text's "clear and re-set to get the default back"
-    // silently did nothing.
+    // Clear override/sample intent when demoting duplicate anchors so later adoption can restore defaults.
     const overriddenNamed = (video_name: string) => ({
       ...VIDEO_REFERENCE,
       clip: { ...VIDEO_REFERENCE.clip, endFrame: 60, startFrame: 40, video_name },
@@ -1170,8 +1203,6 @@ describe('reference-extend linkage', () => {
 
     expect(healed?.references[0]).toMatchObject({ fromSourceVideo: false, trimOverridden: false });
 
-    // Setting that clip as the Initial Video adopts the demoted entry by name
-    // and must derive the default window, not resurrect the stale one.
     const adopted = applyReferenceExtendSourceVideo(healed!.references.slice(0, 1), source24, 3, FRAMES);
 
     expect(adopted[0]).toMatchObject({ clip: { endFrame: 400, startFrame: 260 }, fromSourceVideo: true });
@@ -1189,9 +1220,8 @@ describe('reference-extend linkage', () => {
   });
 
   it('prefers the flagged entry over an earlier same-name reference on a source swap', () => {
-    // User: linked ref for clip A, plus their OWN hand-trimmed reference for
-    // clip B sitting above it. Swapping the Initial Video to clip B must
-    // update the FLAGGED entry — not rewrite the user's B reference.
+    // Source replacement updates the flagged anchor without overwriting the user's separate reference to the new
+    // clip.
     const linkedA = applyReferenceExtendSourceVideo([], source24, 3, FRAMES)[0];
     const handTrimmedB = {
       ...VIDEO_REFERENCE,
@@ -1233,9 +1263,7 @@ describe('reference-extend linkage', () => {
   });
 
   it('applyReferenceExtendNumFrames does not ratchet: the window re-widens', () => {
-    // The Frames number input emits a value per keystroke, unclamped, so typing
-    // "345" arrives as 3, then 34, then 345. A shrink-only rule would pin the
-    // window at the 3-frame budget for the rest of the session.
+    // Rebudget in both directions because number-input keystrokes temporarily shrink frame counts.
     const linked = applyReferenceExtendSourceVideo([], source24, 3, 345);
     const typed = [3, 34, 345].reduce(applyReferenceExtendNumFrames, linked);
 
@@ -1247,11 +1275,7 @@ describe('reference-extend linkage', () => {
   });
 
   it('an updater applied after a concurrent write keeps both changes', () => {
-    // The reference field hands `setReferences` an UPDATER because its add
-    // handlers await a gallery resolve before writing. Modelled here: the
-    // handler captures the list, the Initial Video field places the anchor
-    // during the await, then the resolve lands. A captured-array write would
-    // drop the anchor entirely; an updater over live state keeps both.
+    // Apply async reference additions against live state so intervening source-anchor insertion survives.
     const captured: VideoReferenceItem[] = [];
     const add = (current: VideoReferenceItem[]): VideoReferenceItem[] => [...current, IMAGE_REFERENCE];
 
@@ -1272,10 +1296,8 @@ describe('reference-extend linkage', () => {
   });
 
   it('pins the continuity anchor last, whatever the add or drag order', () => {
-    // Request order is rotary order: the generated frames continue from the
-    // LAST reference block. An image added after the Initial Video would
-    // otherwise take a rotary slot between the initial video's tail and the
-    // first generated frame.
+    // Keep the source anchor last when adding images because generated rotary positions follow the last reference
+    // block.
     const linked = applyReferenceExtendSourceVideo([], source24, 3, FRAMES);
     const anchor = linked[0]!;
 
@@ -1370,9 +1392,7 @@ describe('reference sample window', () => {
     });
 
     it('moves an extend-anchor window off the cutpoint like any other', () => {
-      // Ref2VA has no frame-exact seam to hold, so the anchor's end is the
-      // user's to move -- a clip that fades to black at the cutpoint wants the
-      // fade concatenated but not conditioned on.
+      // Allow anchor windows away from the cutpoint; Ref2VA has no frame-exact seam to preserve.
       const next = slideReferenceSampleWindow(clip(180, 298), 100);
       expect([next.startFrame, next.endFrame]).toEqual([100, 218]);
     });
@@ -1393,10 +1413,8 @@ describe('reference sample window', () => {
     });
 
     it('a drag past the clip end comes back with its length intact', () => {
-      // A slider commits a value per pointer step, so the round trip is the
-      // test: without the recorded request each step would take its length from
-      // the already-clamped window it was handed, and one overshoot-and-back
-      // would leave a 200-frame sample at 1 frame.
+      // Preserve requested sample length through overshoot-and-return slider updates rather than repeatedly
+      // shrinking the effective window.
       let reference: Extract<VideoReferenceItem, { kind: 'video' }> = {
         clip: clip(0, 199),
         conditioning: 'video_audio',

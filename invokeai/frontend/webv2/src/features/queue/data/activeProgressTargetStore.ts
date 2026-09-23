@@ -4,22 +4,8 @@ import { registerAccountOwnedResource } from '@platform/state/accountLifecycle';
 import { createExternalStore } from '@platform/state/externalStore';
 
 /**
- * The slots currently reporting progress, plus the ones settling.
- *
- * A list rather than a single value because of multi-GPU: with `generation_devices`
- * (default `auto`) the backend runs one session per GPU, so a batch of four across
- * two GPUs has two slots live at once. Holding only the most recent target meant
- * concurrent sessions overwrote each other on every progress frame, and the preview
- * flipped between them several times a second.
- *
- * Order is the order sessions started, which keeps the single-target accessor below
- * stable for as long as that session runs.
- *
- * A *settling* slot is one whose backend item has completed but whose result has
- * not landed in the gallery yet — two HTTP round trips away. Single-slot surfaces
- * keep following it so the last denoise frame stays up until the finished image
- * can take over; multi-slot surfaces (the tile grid) stop counting it, or a
- * single-GPU batch would flash into a two-tile grid at every item boundary.
+ * Track concurrent slots in start order. Settling slots preserve the final frame until results land; multi-slot
+ * surfaces exclude them to avoid transient extra tiles.
  */
 export interface ActiveProgressTargetSink {
   clear(target?: QueueItemProgressTarget): void;
@@ -111,13 +97,8 @@ const selectFollowedTargets = ({
   settlingTargets.length === 0 ? targets : [...targets, ...settlingTargets];
 
 /**
- * The slot to follow where a surface can only show one.
- *
- * The oldest still-running slot rather than the most recent to report: following the
- * most recent is what made the preview flip between concurrent sessions. Behaviour is
- * identical to the previous single-value store whenever one session runs at a time,
- * which is every single-GPU install — except that a completed slot stays followed
- * until its result lands.
+ * Single-slot surfaces follow the oldest active or settling slot until its result lands, avoiding
+ * concurrent-session flicker.
  */
 export const useActiveProgressTarget = (): QueueItemProgressTarget | null =>
   store.useSelector((snapshot) => selectFollowedTargets(snapshot)[0] ?? null);

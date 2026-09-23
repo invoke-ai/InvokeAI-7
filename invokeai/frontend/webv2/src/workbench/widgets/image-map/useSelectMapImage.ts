@@ -20,16 +20,8 @@ export interface MapSelectionActions {
 }
 
 /**
- * Turns map clicks into gallery navigation. A single click is a full reveal,
- * which `revealGalleryItem` owns; the map raises no widget of its own, since it
- * sits beside the grid it is scrolling. The sequence guard those reveals claim
- * spans BOTH selection kinds, so rapid clicks always resolve to the latest
- * click regardless of which mode each went through.
- *
- * A cluster click instead behaves like a search: the cluster's members (in
- * proximity order from the clicked point) become the gallery's list via a
- * `cluster` semantic reference, with the clicked item — the list's first
- * entry — as the selection.
+ * Single clicks use shared gallery reveal without raising widgets. Cluster clicks populate a proximity-ordered
+ * semantic list. Both share gesture ordering so the latest click wins.
  */
 export const useMapSelection = (): MapSelectionActions => {
   const commands = useWorkbenchCommands();
@@ -63,10 +55,8 @@ export const useMapSelection = (): MapSelectionActions => {
           // navigation query from the board the gallery is showing, so land
           // on the primary item's board first to keep that query coherent.
           commands.gallery.selectBoard(image.boardId);
-          // The member list lives in an in-memory registry (it can run to
-          // thousands of items); the persisted value keeps only the key. The
-          // page reset and search-term clear mirror setSemanticImageQuery in
-          // the gallery's own actions.
+          // Keep large member lists in memory and persist only their key; reset page/search like gallery semantic
+          // queries.
           const clusterId = registerImageCluster(itemKeys, label);
 
           commands.widgets.patchValues('gallery', {
@@ -75,10 +65,8 @@ export const useMapSelection = (): MapSelectionActions => {
             semanticImageQuery: { clusterId, kind: 'cluster', label },
             semanticSearchText: null,
           });
-          // The clicked item is the proximity ordering's first entry, so it
-          // is selected at the top of the cluster view; Preview follows. The
-          // reveal brings the grid back to it even when this exact selection
-          // is already current (re-clicking the cluster after scrolling away).
+          // Select and reveal the proximity list's first item even if already selected, restoring scroll after a
+          // repeated click.
           commands.gallery.selectItem(image);
           requestGalleryItemReveal(toGalleryItemKey(primaryItem));
         })

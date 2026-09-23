@@ -123,8 +123,8 @@ export const createLargeFlatDocument = (
   );
 
 /**
- * `count` nodes cycling through every stack: every `fanout` leaves are wrapped in a group, and every
- * `fanout` groups in another, so the tree exercises depth and ancestor-effective state.
+ * Cycles `count` nodes through all stacks, grouping every `fanout` leaves and groups to exercise depth and
+ * inherited state.
  */
 export const createLargeTreeDocument = (
   count: number,

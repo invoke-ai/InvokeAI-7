@@ -212,9 +212,7 @@ describe('brush tool: stroke into an existing paint layer', () => {
     expect(event.tool).toBe('brush');
     expect(event.layerId).toBe('paint1');
 
-    // Dirty rect is integer and non-empty. Content-sized: it is the stroke's TRUE
-    // bounds (no document clamp), so it can extend past the document edges — a
-    // paint layer grows with its strokes.
+    // Dirty bounds remain integer and nonempty beyond document edges as paint content grows.
     const { dirtyRect } = event;
     expect(Number.isInteger(dirtyRect.x)).toBe(true);
     expect(Number.isInteger(dirtyRect.width)).toBe(true);
@@ -547,8 +545,7 @@ describe('mask strokes are forced opaque', () => {
   it('composites a mask stroke at globalAlpha 1 even when the brush opacity is 0.5', () => {
     const doc = makeDoc([inpaintMaskLayer('mask1')], 'mask1');
     const h = createHarness(doc);
-    // A half-opacity brush: on a raster layer this would land alpha ~128, but a
-    // mask is an all-or-nothing alpha stencil and must be forced fully opaque.
+    // Masks force full-alpha stencils even when brush opacity is one half.
     h.ctx.stores.brushOptions.set({ ...h.ctx.stores.brushOptions.get(), opacity: 0.5 });
     const brush = createBrushTool();
 

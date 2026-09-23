@@ -2,12 +2,7 @@ import { DEFAULT_NODE_PACK_FILTERS, type NodePackFilters } from '@features/nodes
 import { registerAccountOwnedResource } from '@platform/state/accountLifecycle';
 import { createExternalStore } from '@platform/state/externalStore';
 
-/**
- * Session-lived UI state for the Launchpad nodes manager. Keeping the active
- * detail tab, selected pack, search term, and in-progress install source in an
- * external store (the same pattern as the models UI store) means nothing
- * resets while the user navigates within the manager.
- */
+/** Keep manager UI state session-lived so tab navigation preserves selection, search, and pending install input. */
 
 export type NodesManagerTab = 'details' | 'add';
 
@@ -21,8 +16,7 @@ export interface NodesUiSnapshot {
 }
 
 const INITIAL_NODES_UI_SNAPSHOT: NodesUiSnapshot = {
-  // 'add' so a fresh install lands on the way to get node packs rather than
-  // the "select a pack" dead end (the models manager sets the same default).
+  // Default to Add so empty installs offer an actionable entry point.
   activeTab: 'add',
   activePackName: null,
   activityExpanded: false,

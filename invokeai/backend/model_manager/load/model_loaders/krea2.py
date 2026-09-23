@@ -1,17 +1,23 @@
 # Copyright (c) 2024, Lincoln D. Stein and the InvokeAI Development Team
 """Class for Krea-2 model loading in InvokeAI."""
 
+from abc import abstractmethod
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Generic, Optional, TypeVar
 
 import accelerate
+import torch
 from transformers import AutoConfig, AutoTokenizer
 
+from invokeai.backend.model_manager.checkpoint_prefix import CheckpointPrefix
 from invokeai.backend.model_manager.configs.base import Checkpoint_Config_Base, Diffusers_Config_Base
 from invokeai.backend.model_manager.configs.factory import AnyModelConfig
 from invokeai.backend.model_manager.configs.main import Main_Checkpoint_Krea2_Config, Main_GGUF_Krea2_Config
 from invokeai.backend.model_manager.configs.qwen3_vl_encoder import (
     Qwen3VLEncoder_Checkpoint_Config,
+    Qwen3VLEncoder_GGUF_Config,
     Qwen3VLEncoder_Qwen3VLEncoder_Config,
 )
 from invokeai.backend.model_manager.load.load_default import (
@@ -21,6 +27,7 @@ from invokeai.backend.model_manager.load.load_default import (
 )
 from invokeai.backend.model_manager.load.model_loader_registry import ModelLoaderRegistry
 from invokeai.backend.model_manager.load.model_loaders.generic_diffusers import GenericDiffusersLoader
+from invokeai.backend.model_manager.load.quantized_embedding import materialize_quantized_embedding
 from invokeai.backend.model_manager.taxonomy import (
     AnyModel,
     BaseModelType,
@@ -29,7 +36,13 @@ from invokeai.backend.model_manager.taxonomy import (
     Qwen3VLVariantType,
     SubModelType,
 )
-from invokeai.backend.model_manager.util.qwen3_vl import normalize_qwen3vl_rope_config
+from invokeai.backend.model_manager.util.llamacpp_keys import convert_llamacpp_decoder_keys
+from invokeai.backend.model_manager.util.qwen3_vl import (
+    drop_qwen3vl_visual_tower,
+    drop_qwen3vl_visual_tower_keys,
+    normalize_qwen3vl_rope_config,
+    qwen3vl_target_key,
+)
 from invokeai.backend.quantization.fp8_scaled import (
     INPUT_SCALE_SUFFIXES,
     attach_fp8_scales,
@@ -68,21 +81,6 @@ from invokeai.backend.util.state_dict_loading import load_state_dict_ignoring_ex
 # Kept as a module-level alias: this helper moved to model_manager.util.qwen3_vl so the MiniMax H3
 # loader can share it without importing across family loaders.
 _normalize_qwen3vl_rope_config = normalize_qwen3vl_rope_config
-
-
-def _strip_comfyui_prefix(sd: dict[str, Any]) -> dict[str, Any]:
-    """Strip ComfyUI-style ``model.diffusion_model.`` / ``diffusion_model.`` key prefixes if present."""
-    prefix_to_strip = None
-    for prefix in ("model.diffusion_model.", "diffusion_model."):
-        if any(isinstance(k, str) and k.startswith(prefix) for k in sd.keys()):
-            prefix_to_strip = prefix
-            break
-    if not prefix_to_strip:
-        return sd
-    return {
-        (k[len(prefix_to_strip) :] if isinstance(k, str) and k.startswith(prefix_to_strip) else k): v
-        for k, v in sd.items()
-    }
 
 
 def _to_plain_tensor(value: Any) -> Any:
@@ -134,8 +132,6 @@ def _remap_native_layer_paths(layer_names: Any) -> dict[str, str]:
     modulation tables (``lin``). A caller that also has norms to place reads the conversion's own
     ``key_map`` instead of probing it; see the fp8 branch of ``_load_from_singlefile``.
     """
-    import torch
-
     mapping: dict[str, str] = {}
     for name in layer_names:
         if not isinstance(name, str):
@@ -199,8 +195,6 @@ def _convert_krea2_native_to_diffusers(sd: dict[str, Any], *, key_map: dict[str,
     The original final-block ``last.down``/``last.up`` projections have no counterpart in the diffusers
     ``Krea2FinalLayer`` (a clean AdaLN + linear) and are dropped.
     """
-    import torch
-
     new_sd: dict[str, Any] = {}
     source_of: dict[Any, Any] = {}
     for key, value in sd.items():
@@ -361,6 +355,13 @@ class Krea2DiffusersModel(GenericDiffusersLoader):
             else:
                 raise e
 
+        if submodel_type is SubModelType.TextEncoder:
+            # The bundled encoder is the same Qwen3-VL as the standalone one, and this is the path a
+            # user gets by default: the loader node falls back to the pipeline's encoder whenever no
+            # standalone one is wired up, which is how the "Krea-2 Turbo" starter model is used.
+            # Without this, that install keeps the ~0.8 GiB the standalone install no longer pays.
+            drop_qwen3vl_visual_tower(result)
+
         result = self._apply_fp8_layerwise_casting(result, config, submodel_type)
         return result
 
@@ -409,7 +410,7 @@ class Krea2CheckpointModel(ModelLoader):
 
         sd = load_file(model_path)
         metadata = read_safetensors_metadata(model_path, self._logger)
-        sd = _strip_comfyui_prefix(sd)
+        sd = CheckpointPrefix.detect(sd).strip(sd)
         # Discard what the key conversion below would discard anyway, before anything is spent on
         # it. One repack quantizes `last.up` with a blockwise scale grid this decode does not
         # implement; refusing a tensor that is on its way to the bin would be an odd way to fail.
@@ -666,7 +667,7 @@ class Krea2GGUFCheckpointModel(ModelLoader):
 
         # GGMLTensor wrappers (kept on CPU; dequantized on-the-fly by the cache during inference).
         sd = gguf_sd_loader(model_path, compute_dtype=compute_dtype)
-        sd = _strip_comfyui_prefix(sd)
+        sd = CheckpointPrefix.detect(sd).strip(sd)
         # GGUF conversions use the native/ComfyUI compact key naming; remap to diffusers keys.
         if _is_native_krea2_format(sd):
             sd = _convert_krea2_native_to_diffusers(sd)
@@ -718,13 +719,18 @@ class Qwen3VLEncoderLoader(ModelLoader):
                 te_config = _normalize_qwen3vl_rope_config(
                     AutoConfig.from_pretrained(text_encoder_path, local_files_only=True)
                 )
-                return Qwen3VLModel.from_pretrained(
+                model = Qwen3VLModel.from_pretrained(
                     text_encoder_path,
                     config=te_config,
                     torch_dtype=model_dtype,
                     low_cpu_mem_usage=True,
                     local_files_only=True,
                 )
+                # After the load rather than before it: `from_pretrained` builds the module tree
+                # itself, so there is no point to intervene at. The tower's weights are therefore
+                # read and then freed -- resident size drops, load peak does not.
+                drop_qwen3vl_visual_tower(model)
+                return model
 
         raise ValueError(
             f"Only Tokenizer and TextEncoder submodels are supported. "
@@ -732,38 +738,25 @@ class Qwen3VLEncoderLoader(ModelLoader):
         )
 
 
-def _qwen3vl_target_key(key: str) -> str:
-    """Map one ComfyUI single-file Qwen3-VL key (or module path) to the transformers layout.
-
-    ComfyUI/native layout uses a single ``model.`` prefix for both towers; transformers splits them:
-    ``model.visual.*`` -> ``visual.*`` and ``model.<rest>`` (layers/embed_tokens/norm) -> ``language_model.<rest>``.
-
-    Shared by the state-dict remap and the fp8 layer-hint remap so the two cannot drift apart: a hint
-    keyed by a path the model does not have matches nothing and is silently ignored.
-    """
-    # Strip a leading "model." (some checkpoints prefix everything with it), then route by tower.
-    key = key[len("model.") :] if key.startswith("model.") else key
-    if key.startswith("visual.") or key.startswith("language_model."):
-        # Already the transformers layout (e.g. "model.language_model.*" / "model.visual.*").
-        return key
-    # Bare language-model keys (layers.* / embed_tokens / norm) belong under language_model.
-    return "language_model." + key
-
-
-def _remap_qwen3vl_singlefile_keys(sd: dict[str, Any], *, key_map: dict[str, str] | None = None) -> dict[str, Any]:
+def _remap_qwen3vl_singlefile_keys(
+    sd: dict[str, Any],
+    *,
+    key_map: dict[str, str] | None = None,
+    what: str = "Qwen3-VL encoder checkpoint",
+) -> dict[str, Any]:
     """Remap ComfyUI single-file Qwen3-VL keys to the transformers ``Qwen3VLModel`` layout.
 
     `key_map` records old key -> new key when given, which `resolve_quantized_module_paths` needs to
-    carry `comfy_quant` markers onto the module paths the model actually has.
+    carry `comfy_quant` markers onto the module paths the model actually has. `what` names the
+    container in a collision message, so a GGUF is not reported as a checkpoint.
     """
     out: dict[str, Any] = {}
     source_of: dict[Any, Any] = {}
-    what = "Qwen3-VL encoder checkpoint"
     for k, v in sd.items():
         if not isinstance(k, str):
             _put_unique_key(out, k, v, source=k, source_of=source_of, what=what)
             continue
-        new_key = _qwen3vl_target_key(k)
+        new_key = qwen3vl_target_key(k)
         _put_unique_key(out, new_key, v, source=k, source_of=source_of, what=what)
         if key_map is not None:
             key_map[k] = new_key
@@ -797,15 +790,23 @@ def _tokenizer_can_encode(tokenizer: Any) -> bool:
         return False
 
 
-@ModelLoaderRegistry.register(base=BaseModelType.Any, type=ModelType.Qwen3VLEncoder, format=ModelFormat.Checkpoint)
-class Qwen3VLEncoderCheckpointLoader(ModelLoader):
-    """Loads a single-file Qwen3-VL encoder checkpoint (e.g. ComfyUI ``qwen3vl_4b_bf16`` / ``_fp8_scaled``).
+_Qwen3VLSingleFileConfig = TypeVar(
+    "_Qwen3VLSingleFileConfig", Qwen3VLEncoder_Checkpoint_Config, Qwen3VLEncoder_GGUF_Config
+)
 
-    The checkpoint bundles the language model + visual tower but no config/tokenizer; those are pulled
-    from HuggingFace with offline-cache fallback, from the repo the config's recorded variant names --
-    the file itself says nothing about which Qwen3-VL it is beyond its shapes. ComfyUI 'scaled fp8'
-    weights are dequantized to the compute dtype on load.
+
+class _Qwen3VLEncoderSingleFileLoader(ModelLoader, Generic[_Qwen3VLSingleFileConfig]):
+    """Shared plumbing for the two single-file Qwen3-VL encoder loaders (safetensors and GGUF).
+
+    Neither container ships a config or tokenizer, so both take them from HuggingFace with
+    offline-cache fallback, from the repo the config's recorded variant names -- the file itself says
+    nothing about which Qwen3-VL it is beyond its shapes. Only the weight decoding differs, which is
+    what the subclasses supply.
     """
+
+    # Not a ClassVar: it is parameterized per subclass, which is what lets `_load_text_encoder`
+    # narrow its argument to that subclass's config without violating the base's signature.
+    CONFIG_CLASS: type[_Qwen3VLSingleFileConfig]
 
     HF_REPO_BY_VARIANT = {
         Qwen3VLVariantType.Qwen3VL_4B: "Qwen/Qwen3-VL-4B-Instruct",
@@ -817,8 +818,8 @@ class Qwen3VLEncoderCheckpointLoader(ModelLoader):
         config: AnyModelConfig,
         submodel_type: Optional[SubModelType] = None,
     ) -> AnyModel:
-        if not isinstance(config, Qwen3VLEncoder_Checkpoint_Config):
-            raise ValueError("Only Qwen3VLEncoder_Checkpoint_Config models are supported here.")
+        if not isinstance(config, self.CONFIG_CLASS):
+            raise ValueError(f"Only {self.CONFIG_CLASS.__name__} models are supported here.")
 
         match submodel_type:
             case SubModelType.Tokenizer:
@@ -831,10 +832,14 @@ class Qwen3VLEncoderCheckpointLoader(ModelLoader):
             f"Received: {submodel_type.value if submodel_type else 'None'}"
         )
 
-    def _hf_repo(self, config: Qwen3VLEncoder_Checkpoint_Config) -> str:
+    @abstractmethod
+    def _load_text_encoder(self, config: _Qwen3VLSingleFileConfig) -> AnyModel:
+        """Decode this container's weights into the Qwen3-VL module tree."""
+
+    def _hf_repo(self, config: _Qwen3VLSingleFileConfig) -> str:
         return self.HF_REPO_BY_VARIANT[config.variant]
 
-    def _load_tokenizer(self, config: Qwen3VLEncoder_Checkpoint_Config) -> AnyModel:
+    def _load_tokenizer(self, config: _Qwen3VLSingleFileConfig) -> AnyModel:
         repo = self._hf_repo(config)
         # A partial offline cache (e.g. config present but vocab/merges missing) raises something other
         # than OSError (e.g. TypeError) deep in the slow-tokenizer path, so catch broadly and re-fetch.
@@ -844,15 +849,47 @@ class Qwen3VLEncoderCheckpointLoader(ModelLoader):
             tokenizer = None
         if tokenizer is not None and _tokenizer_can_encode(tokenizer):
             return tokenizer
-        return AutoTokenizer.from_pretrained(repo, extra_special_tokens={})
+        with self._explaining_hf_failure(repo, "tokenizer"):
+            return AutoTokenizer.from_pretrained(repo, extra_special_tokens={})
 
-    def _load_hf_config(self, config: Qwen3VLEncoder_Checkpoint_Config) -> Any:
+    def _load_hf_config(self, config: _Qwen3VLSingleFileConfig) -> Any:
         repo = self._hf_repo(config)
         try:
             te_config = AutoConfig.from_pretrained(repo, local_files_only=True)
         except Exception:
-            te_config = AutoConfig.from_pretrained(repo)
+            with self._explaining_hf_failure(repo, "config"):
+                te_config = AutoConfig.from_pretrained(repo)
         return _normalize_qwen3vl_rope_config(te_config)
+
+    @contextmanager
+    def _explaining_hf_failure(self, repo: str, what: str) -> Iterator[None]:
+        """Say why a local single-file encoder is reaching for a HuggingFace repo it never installed.
+
+        Raw, the failure is a transformers ``OSError`` naming a repo the user did not choose, with
+        nothing connecting it to the encoder they did. Identification needs no network, so this is
+        also the first point at which an offline user learns the requirement exists.
+        """
+        try:
+            yield
+        except Exception as e:
+            raise RuntimeError(
+                f"Could not load the Qwen3-VL {what} from '{repo}'. A single-file Qwen3-VL encoder ships "
+                f"weights only, so its {what} is taken from that repository and cached on first use. "
+                "Connect once to populate the cache, or install the encoder in its directory form, which "
+                f"carries its own {what}."
+            ) from e
+
+
+@ModelLoaderRegistry.register(base=BaseModelType.Any, type=ModelType.Qwen3VLEncoder, format=ModelFormat.Checkpoint)
+class Qwen3VLEncoderCheckpointLoader(_Qwen3VLEncoderSingleFileLoader[Qwen3VLEncoder_Checkpoint_Config]):
+    """Loads a single-file Qwen3-VL encoder checkpoint (e.g. ComfyUI ``qwen3vl_4b_bf16`` / ``_fp8_scaled``).
+
+    The checkpoint bundles the language model + visual tower; the tower is dropped on the way in (see
+    ``drop_qwen3vl_visual_tower_keys``). ComfyUI 'scaled fp8' weights are dequantized to the compute
+    dtype on load.
+    """
+
+    CONFIG_CLASS = Qwen3VLEncoder_Checkpoint_Config
 
     def _load_text_encoder(self, config: Qwen3VLEncoder_Checkpoint_Config) -> AnyModel:
         import torch
@@ -864,6 +901,10 @@ class Qwen3VLEncoderCheckpointLoader(ModelLoader):
         model_dtype = TorchDevice.choose_bfloat16_safe_dtype(target_device)
 
         sd = load_file(str(model_path))
+        # Ahead of every pass that reads tensors, so the tower is never dequantized, cast, copied or
+        # reserved for. (The file *header* is still read below for quantization metadata, which can
+        # therefore still name visual layers; those hints match no surviving key and are ignored.)
+        sd = drop_qwen3vl_visual_tower_keys(sd)
         # Same one-or-the-other split as the transformer above, and here it also guards the fp8
         # *detection*: an int8 layer ships a `.weight_scale` too, so probing for scales without
         # ruling out int8 first would keep the encoder "fp8-resident" over weights that were never
@@ -899,10 +940,10 @@ class Qwen3VLEncoderCheckpointLoader(ModelLoader):
             # ".weight_scale" travels with its ".weight" and the recovered layer paths already match the
             # model's module paths — which is what attach_fp8_scales() resolves them against.
             sd = _remap_qwen3vl_singlefile_keys(sd)
-            layer_hints = {_qwen3vl_target_key(path): hints for path, hints in layer_hints.items()}
+            layer_hints = {qwen3vl_target_key(path): hints for path, hints in layer_hints.items()}
 
             # ComfyUI 'scaled fp8' (fp8 weight + .weight_scale). Only the language-model linears are
-            # quantized in the checkpoints seen so far; the visual tower stays bf16 either way.
+            # quantized in the checkpoints seen so far.
             fp8_layers = extract_fp8_scaled_layers(sd, layer_hints=layer_hints)
             source_is_fp8 = bool(fp8_layers) or any(
                 getattr(t, "dtype", None) in (torch.float8_e4m3fn, torch.float8_e5m2) for t in sd.values()
@@ -926,6 +967,9 @@ class Qwen3VLEncoderCheckpointLoader(ModelLoader):
         te_config = self._load_hf_config(config)
         with accelerate.init_empty_weights():
             model = Qwen3VLModel._from_config(te_config)
+        # Its weights were dropped from the state dict above, so the module has to go too -- left in
+        # place it would stay on the meta device and `_reject_incomplete_load` would rightly refuse.
+        drop_qwen3vl_visual_tower(model)
 
         if int8_markers:
             # `Qwen3VLModel` declares no precision-sensitive modules, but read them rather than
@@ -989,10 +1033,21 @@ class Qwen3VLEncoderCheckpointLoader(ModelLoader):
             # fp8->bf16 round trip on every forward.
             attached = attach_fp8_scales(model, fp8_layers)
             warn_on_unattached_scales(self._logger, f"Qwen3-VL encoder '{config.name}'", attached, fp8_layers)
-            # The checkpoint quantizes only the language-model linears; the visual tower ships bf16
-            # and would make the encoder ~0.4GB larger resident than the plain fp8_storage path. On a
-            # GPU already holding a ~12GB transformer that is enough to push the transformer into
-            # partial loading, so cast the rest to fp8 storage. Two exclusions:
+            # This pass was originally here to cast the bf16 visual tower, worth ~0.4GB resident. The
+            # tower is now dropped before the load, and on qwen3vl_4b_fp8_scaled -- where every Linear
+            # is already scaled -- what is left for it to cast is nothing: measured 0.000 GiB saved,
+            # conditioning identical (cosine 1.000000).
+            #
+            # It stays for two reasons that survive the tower, and one that is weaker than it looks.
+            # The weak one first: a build that scales only *some* of its Linears would still shrink --
+            # but this pass quantizes those to *unscaled* fp8, and per the `nn.Embedding` note below
+            # that costs real accuracy, so on such a build it is a trade, not a free win. The two that
+            # hold: this is the only call on this branch that records the real compute dtype via
+            # `set_fp8_compute_dtype`, without which `get_model_compute_dtype` falls back to scanning
+            # for a non-fp8 float parameter -- which happens to work only because the embedding is
+            # excluded here and stays bf16. And it installs the backstop that restores the compute
+            # dtype on Linears its skip list and the default one both name, which is the documented
+            # guard against those two lists ever overlapping. Two exclusions:
             #
             #  - anything carrying a `weight_scale`: those keep their scale and go through
             #    _scaled_mm; the cast hooks would upcast them without it, i.e. a wrong weight.
@@ -1009,9 +1064,9 @@ class Qwen3VLEncoderCheckpointLoader(ModelLoader):
                 or isinstance(module, torch.nn.Embedding),
             )
             self._logger.info(
-                f"Qwen3-VL encoder '{config.name}': kept {attached} scaled layer(s) quantized "
-                f"({self._fp8_kept_reason()}, storage=float8_e4m3fn, compute={model_dtype}); "
-                "remaining layers cast to fp8 storage."
+                f"Qwen3-VL encoder '{config.name}': visual tower dropped; kept {attached} scaled "
+                f"layer(s) quantized ({self._fp8_kept_reason()}, storage=float8_e4m3fn, "
+                f"compute={model_dtype})."
             )
             # The layerwise-casting path below exists to *produce* fp8 weights from full-precision
             # ones. These already are fp8, and its hooks would cast them to the compute dtype without
@@ -1031,5 +1086,61 @@ class Qwen3VLEncoderCheckpointLoader(ModelLoader):
                 f"FP8 layerwise casting enabled for Qwen3-VL encoder '{config.name}' "
                 f"(storage=float8_e4m3fn, compute={model_dtype})."
             )
+        else:
+            # Otherwise nothing above has said anything, and an encoder that just became ~0.8GiB
+            # smaller than its file should say why.
+            self._logger.info(f"Qwen3-VL encoder '{config.name}': visual tower dropped (never used for text).")
 
+        return model
+
+
+@ModelLoaderRegistry.register(base=BaseModelType.Any, type=ModelType.Qwen3VLEncoder, format=ModelFormat.GGUFQuantized)
+class Qwen3VLEncoderGGUFLoader(_Qwen3VLEncoderSingleFileLoader[Qwen3VLEncoder_GGUF_Config]):
+    """Loads a llama.cpp GGUF Qwen3-VL encoder (the language tower; the visual tower is a separate
+    ``mmproj-*.gguf`` this loader neither needs nor accepts).
+
+    The model is still built as a full ``Qwen3VLModel`` from the variant's HuggingFace config rather
+    than as a hand-configured ``Qwen3ForCausalLM``. That matters for correctness, not tidiness:
+    Qwen3-VL's language tower uses interleaved mRoPE with ``rope_theta`` 5e6 over a 262144-token
+    context, none of which is inferable from tensor shapes. Synthesizing a plain Qwen3 config instead
+    would silently substitute 1D RoPE at a different base -- a model that loads, runs, and conditions
+    wrongly. Building the real architecture also keeps this encoder byte-identical to the safetensors
+    one for both consumers, so neither the Krea-2 nor the Ideogram 4 invocation needs a GGUF branch.
+    """
+
+    CONFIG_CLASS = Qwen3VLEncoder_GGUF_Config
+
+    def _load_text_encoder(self, config: Qwen3VLEncoder_GGUF_Config) -> AnyModel:
+        from transformers import Qwen3VLModel
+
+        target_device = TorchDevice.choose_torch_device()
+        model_dtype = TorchDevice.choose_bfloat16_safe_dtype(target_device)
+
+        # Before the file is read, not after. This is the one step that can need the network, and
+        # `gguf_sd_loader` copies every tensor into RAM -- so resolving the config first turns a
+        # cold-offline failure from "read 2.5 GB, then raise" into an immediate one.
+        te_config = self._load_hf_config(config)
+
+        sd = gguf_sd_loader(Path(config.path), compute_dtype=model_dtype)
+        # Unconditional: identification requires the llama.cpp `token_embd.weight`, so this file is
+        # llama.cpp-named by construction. (The converter passes unrecognized keys through anyway.)
+        sd = convert_llamacpp_decoder_keys(sd)
+        # Reuse the single-file remap so both containers land on identical module paths.
+        sd = _remap_qwen3vl_singlefile_keys(sd, what="Qwen3-VL encoder GGUF")
+
+        with accelerate.init_empty_weights():
+            model = Qwen3VLModel._from_config(te_config)
+        # Nothing to load into it: llama.cpp keeps the visual tower in a companion mmproj file.
+        drop_qwen3vl_visual_tower(model)
+
+        load_state_dict_ignoring_extras(model, sd, source="Qwen3-VL encoder GGUF", assign=True, allow_missing=True)
+
+        materialize_quantized_embedding(model.language_model.embed_tokens, ram_cache=self._ram_cache)
+
+        _reject_incomplete_load(model, what="Qwen3-VL encoder GGUF")
+
+        self._logger.info(
+            f"Qwen3-VL encoder '{config.name}': loaded {config.variant.value} from GGUF "
+            f"(quantized weights kept, compute={model_dtype}); visual tower omitted."
+        )
         return model

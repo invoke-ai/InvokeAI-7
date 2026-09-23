@@ -11,21 +11,6 @@ import type { ProjectSortId, ProjectsViewId } from './projectLibraryView';
 
 import { isProjectsViewId, PROJECT_SORT_IDS, PROJECTS_VIEW_IDS } from './projectLibraryView';
 
-/**
- * Search, ordering, and layout for the project library.
- *
- * The row spans the page's measure rather than packing to the left: search
- * holds the left edge under the heading, and the controls sit on the right
- * edge under the header's buttons. That gives the top of the page two vertical
- * lines instead of one line and a drifting cluster.
- *
- * The layout choice is a `SegmentGroup`, not two adjacent icon buttons. Two
- * buttons where one happens to be highlighted read as two actions, one of
- * which is somehow active; a segmented control reads as one control with two
- * positions, which is what it is. It also inherits the design system's
- * concentric radii — `radii.sm` items inside a `radii.md` track.
- */
-
 const MENU_POSITIONING = { placement: 'bottom-end' } as const;
 const SEARCH_ICON = <Icon as={SearchIcon} boxSize="3.5" color="fg.subtle" />;
 
@@ -46,18 +31,8 @@ const VIEW_ICON: Record<ProjectsViewId, typeof LayoutGridIcon> = {
 };
 
 /**
- * One position of the layout control.
- *
- * The tooltip wraps the icon rather than the item, because `Tooltip.Trigger` is
- * `asChild` and merges its own `data-state` onto whatever it clones — on the
- * item that overwrites `data-state="checked"`, so the selected segment styles
- * as unselected and the indicator measures 0×0.
- *
- * An icon is not focusable, though, so hover alone would leave the label
- * unreachable by keyboard — the tooltip used to sit on an `IconButton`, which
- * was. The hidden radio *is* the focusable control here, so it drives the
- * tooltip open alongside pointer hover. Screen readers were never affected:
- * the radio carries the accessible name either way.
+ * Attach the tooltip to the icon to preserve the item's checked data-state; drive it from hidden-radio focus for
+ * keyboard access.
  */
 const ViewSegment = ({ id }: { id: ProjectsViewId }) => {
   const { t } = useTranslation();

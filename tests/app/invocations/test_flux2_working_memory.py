@@ -10,6 +10,7 @@ The `MEASURED_*` tables below are peak *reserved* memory measured on CUDA in bf1
 quantity, including allocator overhead). Every estimate must stay an upper bound on them.
 """
 
+from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -31,6 +32,7 @@ from invokeai.backend.util.attention import (
     SDPA_MATH_BYTES_PER_SCORE_ELEMENT,
     _diffusers_attention_dispatch,
     _torch_sdpa_materializes_score_matrix,
+    rocm_sdpa_uses_math_kernel,
     sdpa_score_matrix_bytes,
 )
 from invokeai.backend.util.vae_working_memory import (
@@ -401,12 +403,18 @@ class TestVaeConstantsFollowTheConvBackend:
                 operation="decode", image_tensor=latents, vae=v, device=torch.device("cuda")
             )
 
+        # `_IS_ROCM` is pinned because it is bound at import: on a real HIP build the head-dim
+        # guard short-circuits ahead of the probe patched here and charges a score matrix to both
+        # legs, leaving the ratio correct only while the cuDNN linear term still exceeds it -- 1%
+        # at this size. The column is this test's subject; the guard is the next test's.
         with (
+            patch("invokeai.backend.util.attention._IS_ROCM", False),
             patch("torch.version.hip", "7.1.25424"),
             patch("invokeai.backend.util.attention._torch_sdpa_materializes_score_matrix", return_value=False),
         ):
             rocm = estimate()
         with (
+            patch("invokeai.backend.util.attention._IS_ROCM", False),
             patch("torch.version.hip", None),
             patch("invokeai.backend.util.attention._torch_sdpa_materializes_score_matrix", return_value=False),
         ):
@@ -414,6 +422,45 @@ class TestVaeConstantsFollowTheConvBackend:
 
         assert rocm > cuda
         assert rocm / cuda == pytest.approx(3600 / 2200, rel=1e-3)
+
+    def test_a_rocm_build_composes_the_miopen_column_with_the_guard_score_matrix(self):
+        """The state every ROCm rig is actually in, driven through the estimator.
+
+        A HIP build takes the MIOpen column *and* the head-dim guard's score matrix -- the guard is
+        unconditional for this VAE's 512-wide head -- so `max` has to pick between two terms that
+        are both larger than the cuDNN pair. `TestVaeTermsDoNotAdd` checks the same two terms
+        against the constants table, which cannot see an estimator that stops combining them: a
+        plausible "the score matrix covers it anyway" refactor that drops back to the cuDNN column
+        whenever SDPA materializes under-reserves a 1024px decode by 1.6x and passes every other
+        test in this module.
+        """
+
+        def estimate(px):
+            vae = MagicMock(spec=AutoencoderKLFlux2)
+            vae.parameters.return_value = iter([torch.zeros(1, dtype=torch.bfloat16)])
+            return estimate_vae_working_memory_flux2(
+                operation="decode",
+                image_tensor=torch.zeros(1, 32, px // 8, px // 8),
+                vae=vae,
+                device=torch.device("cuda"),
+            )
+
+        with (
+            patch("torch.version.hip", "7.1.25424"),
+            patch("invokeai.backend.util.attention._IS_ROCM", True),
+            # Pinned against `INVOKE_ROCM_FUSED_SDPA_MAX_HEAD_DIM`, which a user can set high
+            # enough to disarm the guard; any threshold between the denoise's 128-wide head and
+            # this VAE's 512-wide one gives the shipped behavior.
+            patch("invokeai.backend.util.attention.ROCM_FUSED_SDPA_MAX_HEAD_DIM", 256),
+        ):
+            at_1024 = estimate(1024)
+            at_1536 = estimate(1536)
+
+        miopen = _FLUX2_VAE_SCALING_CONSTANTS["miopen"]["decode"]
+        assert at_1024 == 1024 * 1024 * 2 * miopen, "at 1024px the MIOpen linear term is the larger"
+        assert at_1024 >= 6.703 * GB, "and it still covers the measured W7900 peak it was fitted to"
+        assert at_1536 == 36864 * 36864 * SDPA_MATH_BYTES_PER_SCORE_ELEMENT, "at 1536px the score matrix is"
+        assert at_1536 > 1536 * 1536 * 2 * miopen
 
 
 class TestFlux2VaeBatchIsBudgeted:
@@ -470,13 +517,20 @@ class TestFlux2VaeBatchIsBudgeted:
     def test_the_score_matrix_scales_with_the_batch(self):
         """It is shaped (batch, heads, S, S), so where it is materialized at all it scales with the
         batch just as the linear term does -- and since both scale together, the larger of the two
-        stays the larger at every batch size."""
-        tokens = 128 * 128
+        stays the larger at every batch size.
+
+        Sized at 1536px deliberately. At 1024px the cuDNN linear term beats the score matrix by 1%,
+        so `max` returns the linear term at every batch size and the assertion holds even if the
+        score matrix stops scaling with the batch entirely -- which is a 35GB under-reservation for
+        a batched 1536px decode, the exact OOM this term exists to prevent.
+        """
+        tokens = 192 * 192
         score = tokens * tokens * SDPA_MATH_BYTES_PER_SCORE_ELEMENT
-        linear = self._decode_estimate(1)  # fused: the spatial term on its own
+        linear = self._decode_estimate(1, px=1536)  # fused: the spatial term on its own
+        assert score > linear, "the size is load-bearing: `max` must be returning the score matrix"
         with _materializing():
-            assert self._decode_estimate(1, device=MATERIALIZING) == max(linear, score)
-            assert self._decode_estimate(3, device=MATERIALIZING) == 3 * max(linear, score)
+            assert self._decode_estimate(1, px=1536, device=MATERIALIZING) == score
+            assert self._decode_estimate(3, px=1536, device=MATERIALIZING) == 3 * score
 
 
 class TestFlux2VaeInvocationsRequestWorkingMemory:
@@ -720,18 +774,45 @@ def _materializing_probe(device_type, device_index, dtype, head_dim, has_attn_ma
     return head_dim > 128 or has_attn_mask
 
 
-class _null:
-    def __enter__(self):
-        return self
+@contextmanager
+def _pinned_build():
+    """Hold the two build-dependent inputs the estimators read at their non-HIP values.
 
-    def __exit__(self, *args):
-        return False
+    `MATERIALIZING` below is a `cuda` device object used purely as a token for "SDPA builds the
+    score matrix here", but on a HIP build that same token carries two more decisions with it, and
+    both would make this module's verdict depend on the runner:
+
+    * `_flux2_vae_scaling_constant` selects the MIOpen convolution column, 1.6-2.5x the cuDNN one
+      every expectation guarded by this helper is written against -- so the VAE assertions would
+      pass on a CUDA runner and fail on a ROCm one.
+    * `rocm_sdpa_uses_math_kernel` short-circuits ahead of the probe below, on a threshold a user
+      can move with `INVOKE_ROCM_FUSED_SDPA_MAX_HEAD_DIM`. At the default it happens to agree with
+      `_materializing_probe`; at a lower one it charges a score matrix for the denoise's 128-wide
+      head that a CUDA runner never sees. `attention._IS_ROCM` is bound at import, so pinning
+      `torch.version.hip` alone does not reach it.
+
+    Both regimes below pin these, so they differ in the score-matrix term alone -- which is what
+    they are here to isolate. Which column a device really selects, and what the guard really does
+    on top of it, is `TestVaeConstantsFollowTheConvBackend`'s subject.
+    """
+    with (
+        patch("torch.version.hip", None),
+        patch("invokeai.backend.util.attention._IS_ROCM", False),
+    ):
+        yield
 
 
+@contextmanager
 def _materializing():
-    return patch(
-        "invokeai.backend.util.attention._torch_sdpa_materializes_score_matrix", side_effect=_materializing_probe
-    )
+    """`_pinned_build()` plus a synthetic probe, so SDPA reports that it materializes."""
+    with (
+        _pinned_build(),
+        patch(
+            "invokeai.backend.util.attention._torch_sdpa_materializes_score_matrix",
+            side_effect=_materializing_probe,
+        ),
+    ):
+        yield
 
 
 # Any CUDA device object works here: the probe is patched out, so nothing is allocated on it.
@@ -845,7 +926,7 @@ class TestVaeTermsDoNotAdd:
     def _estimate(self, px, device, materializing):
         vae = MagicMock(spec=AutoencoderKLFlux2)
         vae.parameters.return_value = iter([torch.zeros(1, dtype=torch.bfloat16)])
-        with _materializing() if materializing else _null():
+        with _materializing() if materializing else _pinned_build():
             return estimate_vae_working_memory_flux2(
                 operation="decode", image_tensor=torch.zeros(1, 32, px // 8, px // 8), vae=vae, device=device
             )
@@ -1025,9 +1106,12 @@ class TestSdpaBackendProbe:
         from torch.nn.attention import SDPBackend, sdpa_kernel
 
         def estimate():
-            return sdpa_score_matrix_bytes(
-                device=torch.device("cuda"), dtype=torch.bfloat16, num_heads=1, head_dim=128, seq_len=4096
-            )
+            # `_IS_ROCM` pinned off: torch's dispatch order is the subject here, and a user-lowered
+            # `INVOKE_ROCM_FUSED_SDPA_MAX_HEAD_DIM` would otherwise decide this before torch does.
+            with patch("invokeai.backend.util.attention._IS_ROCM", False):
+                return sdpa_score_matrix_bytes(
+                    device=torch.device("cuda"), dtype=torch.bfloat16, num_heads=1, head_dim=128, seq_len=4096
+                )
 
         assert estimate() == 0
         with sdpa_kernel(
@@ -1073,15 +1157,23 @@ class TestSdpaBackendProbe:
         vae_bytes = sdpa_score_matrix_bytes(
             device=torch.device("cuda"), dtype=torch.bfloat16, num_heads=1, head_dim=512, seq_len=16384
         )
-        masked_bytes = sdpa_score_matrix_bytes(
-            device=torch.device("cuda"),
-            dtype=torch.bfloat16,
-            num_heads=48,
-            head_dim=128,
-            seq_len=4608,
-            has_attn_mask=True,
-        )
-        assert vae_bytes == (0 if torch.version.hip is None else 16384 * 16384 * SDPA_MATH_BYTES_PER_SCORE_ELEMENT)
+        # The masked case is torch's own answer, so the guard is pinned out of the way rather than
+        # folded into the expectation below -- at the default threshold it does not reach a
+        # 128-wide head anyway, but the threshold is user-settable.
+        with patch("invokeai.backend.util.attention._IS_ROCM", False):
+            masked_bytes = sdpa_score_matrix_bytes(
+                device=torch.device("cuda"),
+                dtype=torch.bfloat16,
+                num_heads=48,
+                head_dim=128,
+                seq_len=4608,
+                has_attn_mask=True,
+            )
+        # Asked of the guard's own rule rather than of `torch.version.hip`: the threshold is
+        # user-settable, and a HIP build with the guard turned off is back to whatever its fused
+        # kernel does. `rocm_sdpa_uses_math_kernel` is the single rule the estimators share.
+        guard_forces_math = rocm_sdpa_uses_math_kernel("cuda", 512)
+        assert vae_bytes == (16384 * 16384 * SDPA_MATH_BYTES_PER_SCORE_ELEMENT if guard_forces_math else 0)
         materializes = _torch_sdpa_materializes_score_matrix(
             "cuda", torch.device("cuda").index, torch.bfloat16, 128, True
         )

@@ -22,13 +22,8 @@ export interface PendingRecallEvent {
 const toErrorMessage = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
 /**
- * Applies `POST /api/v1/recall` updates, delivered as `recall_parameters_updated`
- * socket events, to the project that was active when each event arrived.
- *
- * Events are applied strictly in arrival order: applying one awaits model and
- * image lookups, and an `append` that overlapped an in-flight replace must see
- * the replaced list rather than race it. `replay` events (buffered before this
- * runtime existed) go first.
+ * Apply socket recall events to their arrival-time project, strictly in order so append observes preceding
+ * replace. Buffered replay events run first.
  */
 export const createRecallParametersRuntime = ({
   commands,

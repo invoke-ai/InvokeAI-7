@@ -7,12 +7,7 @@ import {
   MAX_SUPPORTED_CANVAS_SCHEMA_VERSION,
 } from '@workbench/canvasSchemaVersion';
 
-/**
- * REST surface for server-side project persistence (`/api/v1/projects`) and
- * the per-user client-state KV (`/api/v1/client_state`) that holds the small
- * account-scoped workbench blob. Both work in single-user mode too — the
- * backend scopes them to the system user.
- */
+/** Project records and client state are scoped to the authenticated account. */
 
 const PROJECTS_BASE = '/api/v1/projects';
 const PROJECT_WRITE_MAX_ATTEMPTS = 9;
@@ -22,10 +17,7 @@ const CLIENT_STATE_BASE = '/api/v1/client_state/default';
 
 export interface ProjectSummaryDTO {
   project_id: string;
-  /**
-   * The project's private board. Authoritative: the `projectBoardId` in the project document is a
-   * cache the client overwrites from this on hydration, never the other way round.
-   */
+  /** The server's board ID is authoritative; the document stores only a cache. */
   board_id: string;
   name: string;
   revision: number;
@@ -40,10 +32,7 @@ export interface ProjectRecordDTO extends ProjectSummaryDTO {
 
 export interface ProjectCreateRequest {
   project_id?: string;
-  /**
-   * An existing unclaimed private board for the new project to adopt, renamed to match. Omit to
-   * have the server create one. This is what makes the create an import's single commit point.
-   */
+  /** Adopt and rename an unclaimed private board, or omit to create one atomically with the project. */
   board_id?: string;
   name: string;
   data: Record<string, unknown>;
@@ -209,12 +198,7 @@ export const deleteProject = async (projectId: string, signal?: AbortSignal): Pr
   await apiFetch(`${PROJECTS_BASE}/${encodeURIComponent(projectId)}`, { method: 'DELETE', signal });
 };
 
-/**
- * Everything on the project's board that the gallery would show — including results the document
- * never references, which is exactly what a project file has to carry to be the whole workspace
- * rather than only the canvas. Intermediates and the canvas's private `other` category are
- * excluded by the backend.
- */
+/** Includes unreferenced visible board media; excludes intermediate/other categories. */
 export const getProjectBoardSnapshot = (projectId: string, signal?: AbortSignal): Promise<ProjectBoardSnapshotDTO> =>
   apiFetchJson<ProjectBoardSnapshotDTO>(`${PROJECTS_BASE}/${encodeURIComponent(projectId)}/board-snapshot`, {
     signal,
@@ -308,12 +292,7 @@ export const getProjectWriteSizeRefusal = (error: unknown): ProjectWriteSizeRefu
   }
 };
 
-/**
- * A create that never reached the server, and is therefore safe to compensate for.
- *
- * Raised by {@link createProjectSettled} in place of the original rejection when it can prove the
- * project does not exist. Callers roll back on this and on nothing else.
- */
+/** Only confirmed project absence permits compensation. */
 export class ProjectCreateAbsentError extends Error {
   readonly cause: unknown;
 
@@ -325,20 +304,9 @@ export class ProjectCreateAbsentError extends Error {
 }
 
 /**
- * Create a project, resolving the one outcome a bare `POST` cannot report: a create that reached
- * the server but whose response did not reach us. Getting that wrong orphans a board's worth of
- * already-uploaded media, or *deletes* it out from under a project that does exist.
- *
- * A read cannot decide it — `GET` returns 404 while the create transaction is still committing,
- * exactly the window a dropped connection leaves open. A write can: SQLite has a single writer, so
- * a second `POST` cannot commit before the first finishes and its answer is about a settled
- * database.
- *
- * - `201` — the first attempt never landed and this one did.
- * - `409` — the retry ran to completion, so the follow-up `GET` races nothing: a record means the
- *   first create committed and is adopted; a 404 means something else holds the staging board.
- * - any other deterministic rejection — the server answered, and answered no.
- * - another transport failure — still unknown, and unknown must not authorize deletion.
+ * Settle ambiguous creates with a second POST: SQLite serializes writers, while GET 404 can race the initial
+ * commit. A 201 succeeds; after 409, GET distinguishes an existing project from a board conflict. Other
+ * deterministic rejections prove absence. Transport failure remains unknown and must never authorize deletion.
  */
 export const createProjectSettled = async (
   request: ProjectCreateRequest,
@@ -348,11 +316,7 @@ export const createProjectSettled = async (
   const body = serializeCreateProjectRequest(request);
   const writeBudget = createProjectWriteRetryBudget();
 
-  /**
-   * A 409 says the id or the board is spoken for, without saying by whom. Because the server has
-   * answered, nothing is mid-commit any more and reading the id is decisive: our own committed
-   * create, or somebody else's board.
-   */
+  /** The settled 409 makes this lookup decisive: an existing project committed; 404 means a board conflict. */
   const settleConflict = async (conflict: unknown): Promise<ProjectRecordDTO> => {
     if (projectId === undefined) {
       throw conflict;
@@ -386,8 +350,7 @@ export const createProjectSettled = async (
   } catch (error) {
     assertAccountScopeCurrent(owner);
 
-    // Without an id of our choosing there is nothing to retry idempotently: a second POST would
-    // mint a second project rather than collide with the first.
+    // The caller must choose the ID so retries are idempotent.
     if (projectId === undefined || !isIndeterminate(error)) {
       return classify(error);
     }
@@ -397,8 +360,7 @@ export const createProjectSettled = async (
     } catch (retryError) {
       assertAccountScopeCurrent(owner);
 
-      // Still no answer. Unknown must not authorize deletion, so the original failure stands and
-      // the uploads are left where they are: clutter is recoverable, a gutted project is not.
+      // An ambiguous retry must retain uploads; unknown never authorizes cleanup.
       if (isIndeterminate(retryError) || isProjectWriteBusyError(retryError)) {
         throw error;
       }

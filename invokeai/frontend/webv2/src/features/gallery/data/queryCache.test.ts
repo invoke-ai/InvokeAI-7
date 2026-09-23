@@ -198,10 +198,7 @@ describe('Gallery item cache patches', () => {
   });
 
   it('prunes a deleted video from the active cluster filter, and restores it on rollback', () => {
-    // The cluster's member list is client-owned, so nothing on the server can
-    // reconcile it: a video deletion that skipped the prune would leave the
-    // cluster view counting a clip that no longer exists, with a trailing page
-    // cell that can never hydrate.
+    // Prune deleted videos from client-owned cluster membership; server refetches cannot repair its count.
     const client = createClient();
     const clusterId = registerImageCluster(['image:kept.png', 'video:gone.mp4'], 'beaches');
 

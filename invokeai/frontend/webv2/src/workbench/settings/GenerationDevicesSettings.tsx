@@ -12,13 +12,7 @@ import { useMountEffect } from '@platform/react/useMountEffect';
 import { ModifiedSettingIndicator } from '@platform/ui/settings/ModifiedSettingIndicator';
 import { useCallback, useMemo, useState } from 'react';
 
-/**
- * Which accelerators the server uses for generation (`generation_devices`).
- *
- * Server-wide app config rather than a user preference, so it is admin-only and only
- * takes effect after a restart — both of which the copy states plainly instead of
- * pretending the change is live.
- */
+/** Generation devices are admin-only server configuration and take effect after restart. */
 export const GenerationDevicesSettings = () => {
   const { canManageAppConfig } = useCapabilities();
   const { error, loadState, options, setting } = useGenerationDevices();
@@ -154,10 +148,6 @@ export const GenerationDevicesSettings = () => {
   );
 };
 
-/**
- * One device's switch. Binds the device to the shared handler in its own scope so the
- * list does not create a fresh callback per row on every render.
- */
 const DeviceToggle = ({
   checked,
   device,

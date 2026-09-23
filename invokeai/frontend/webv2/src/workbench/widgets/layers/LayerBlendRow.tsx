@@ -40,11 +40,6 @@ export const selectBlendTarget = (project: {
 export const isLayerEditingDisabled = (layer: CanvasNodeContract | null, editingLocked: boolean): boolean =>
   !layer || editingLocked;
 
-/**
- * The fixed blend-mode + opacity row above the layer tree, Photoshop-style. It
- * edits the selected layer or raster-stack group and simply disables without
- * one — the row never appears or disappears.
- */
 export const LayerBlendRow = ({ engine }: { engine: LayerBlendRowEngine | null }) => {
   const layer = useActiveProjectSelector(selectBlendTarget);
   const editingLocked = useCanvasDocumentEditingLocked(engine);
@@ -126,17 +121,13 @@ const OpacityRow = ({
 }) => {
   const commitPrepared = usePreparedCommit(engine);
   const { t } = useTranslation();
-  // The uncommitted opacity edit: captured once per gesture. `before` is the
-  // pre-gesture value (the undo target); `latest` tracks the live value because
-  // React may not have re-rendered between the live dispatch and the commit
-  // trigger (both can fire inside one browser event), so `layer.opacity` from the
-  // render closure can be stale at commit time.
+  // Capture original opacity once and track latest writes outside render closures so same-event commits record
+  // current values.
   const pendingRef = useRef<{ id: string; before: number; latest: number } | null>(null);
   const disabled = isLayerEditingDisabled(layer, editingLocked);
   const opacityPercent = useMemo(() => String(Math.round((layer?.opacity ?? 1) * 100)), [layer?.opacity]);
 
-  // Records ONE history entry spanning the pending gesture (a spinner press,
-  // an arrow-key press, or a typed value committed via Enter/blur).
+  // Record one history entry per completed opacity gesture.
   const commitPending = useCallback(() => {
     const pending = pendingRef.current;
     pendingRef.current = null;
@@ -182,9 +173,7 @@ const OpacityRow = ({
     [commitPending, engine, layer]
   );
 
-  // Commit per completed interaction: each spinner click (fires on release, so a
-  // press-and-hold repeat is one gesture), each arrow/paging key release, Enter,
-  // and blur (typed values).
+  // Commit on spinner release, arrow/page-key release, Enter, or typed-value blur.
   const handleInputKeyUp = useCallback(
     (event: { key: string }) => {
       if (['ArrowDown', 'ArrowUp', 'End', 'Enter', 'Home', 'PageDown', 'PageUp'].includes(event.key)) {

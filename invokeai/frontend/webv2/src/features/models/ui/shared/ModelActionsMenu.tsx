@@ -11,12 +11,8 @@ import { RefreshCcwIcon, Trash2Icon } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 /**
- * The reidentify/convert/delete action set for one model, shared by the
- * library row context menu and the detail header menu so copy, icons, and
- * confirm semantics cannot drift. Items and dialog are separate components
- * because the dialog must outlive the menu (menus unmount their content on
- * close); the caller holds the pending state that bridges them, with the
- * target model captured so the confirm survives the source row disappearing.
+ * Keep confirmation dialogs outside menus so they survive menu closure; capture targets so disappearing source
+ * rows cannot change pending actions.
  */
 
 export type ModelActionsModel = Pick<ModelConfig, 'base' | 'format' | 'key' | 'name' | 'type'>;

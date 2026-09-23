@@ -48,7 +48,11 @@ def matches(marker: str | None, env: dict[str, str]) -> bool:
 
 
 def supported_python_versions(requires_python: str) -> list[str]:
-    """The `3.x` versions admitted by the lockfile's `requires-python` (e.g. ">=3.11, <3.13" -> 3.11, 3.12)."""
+    """The `3.x` versions admitted by the lockfile's `requires-python`.
+
+    The specifier may admit several versions - `">=3.10, <3.13"` yields 3.10, 3.11 and 3.12 -
+    even where the repo's own bound currently admits exactly one.
+    """
     spec = SpecifierSet(requires_python)
     return [f"3.{minor}" for minor in range(8, 30) if spec.contains(f"3.{minor}.0")]
 

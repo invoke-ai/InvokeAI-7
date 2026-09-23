@@ -42,10 +42,6 @@ interface GenerateReferenceImagesContentProps {
   onCommitImmediate: (patch: Partial<GenerateSettings>) => void;
 }
 
-/**
- * Reference-image conditioning, rendered inside the Guidance section (the
- * section chrome and combined badges live in `GenerateGuidanceSection`).
- */
 export const GenerateReferenceImagesContent = ({
   models,
   onCommit,
@@ -68,12 +64,7 @@ export const GenerateReferenceImagesContent = ({
 
   const appendReferenceImages = useCallback(
     (images: GenerateReferenceImageAsset[]) => {
-      // Ids are minted HERE rather than inside the updater. A pending updater
-      // is applied twice — once against the draft the user sees, then again
-      // against the freshly committed settings when the debounce flushes — so
-      // an id created inside it differs between the two. Any later edit keyed
-      // to the id the card renders under (a reorder, a patch) would then find
-      // nothing at flush and be silently dropped.
+      // Mint IDs outside replayed updaters so draft and flushed identities match.
       const ids = images.map(() => createReferenceImageId());
 
       onCommit((currentSettings) => {
@@ -121,9 +112,7 @@ export const GenerateReferenceImagesContent = ({
     [onCommit]
   );
 
-  // Card order is conditioning order, so a move is just a reorder of the
-  // settings array — the same gesture the video panel's reference stack uses.
-  // The updater form keeps it correct against a concurrent debounced commit.
+  // Use functional reorder updates to preserve concurrent debounced changes.
   const handleMoveReferenceImage = useCallback(
     (id: string, direction: -1 | 1) => {
       onCommit((currentSettings) => {
@@ -210,8 +199,7 @@ export const GenerateReferenceImagesContent = ({
     return null;
   }
 
-  // Leftover reference images on a model that cannot use them (e.g. a persisted
-  // project). No editable cards, no add paths — just the way out.
+  // Unsupported-model references remain read-only with removal as recovery.
   if (!isSupported) {
     return (
       <HStack gap="2" justify="space-between">
@@ -227,8 +215,6 @@ export const GenerateReferenceImagesContent = ({
 
   return (
     <Stack ref={setNodeRef} gap="2" position="relative">
-      {/* The droppable is this whole content block (drops land anywhere on
-          it), so the in-flight affordance covers the same rect. */}
       <DropTargetOverlay
         isActive={acceptsActiveDrag}
         isOver={isOver}

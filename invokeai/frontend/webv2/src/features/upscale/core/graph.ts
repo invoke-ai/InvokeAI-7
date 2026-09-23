@@ -49,8 +49,7 @@ const addUpscaleMetadata = (
     return;
   }
 
-  // getActiveCompatibleLoras reads only `loras`, so pass just that rather than fabricating a
-  // whole GenerateSettings whose other fields would be meaningless here.
+  // Pass only loras; fabricating unrelated GenerateSettings fields would obscure the helper's actual dependency.
   const activeLoras = getActiveCompatibleLoras({ loras: settings.loras }, settings.model);
   const metadata = addNode(graph, {
     cfg_scale: settings.cfgScale,

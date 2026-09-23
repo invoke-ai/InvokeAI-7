@@ -34,9 +34,7 @@ const buildCanvasSaveMetadata = (project: Project, rect: Rect): Record<string, u
     return dimensions;
   }
 
-  // The merged prompts, matching what a generated image's `core_metadata` records.
-  // A saved canvas is recalled through the same path, so the two must agree or
-  // recalling from a saved image would restore different text.
+  // Save merged prompts to match generated core_metadata and restore identical text on recall.
   const effectivePrompts = getEffectivePrompts(generateValues);
 
   return {

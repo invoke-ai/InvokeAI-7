@@ -13,10 +13,11 @@ import { createRoot, type Root } from 'react-dom/client';
 import { I18nextProvider, initReactI18next } from 'react-i18next';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { PreviewFooter } from './PreviewFooter';
+import { PreviewDetailsPopover } from './PreviewDetailsPopover';
 
 const galleryMocks = vi.hoisted(() => ({
   imageMetadata: vi.fn(),
+  imageWorkflow: vi.fn(),
   videoMetadata: vi.fn(),
   videoWorkflow: vi.fn(),
 }));
@@ -27,7 +28,11 @@ vi.mock('@features/gallery', async (importOriginal) => {
 
   return {
     ...actual,
-    galleryImages: { ...actual.galleryImages, metadata: galleryMocks.imageMetadata },
+    galleryImages: {
+      ...actual.galleryImages,
+      metadata: galleryMocks.imageMetadata,
+      workflow: galleryMocks.imageWorkflow,
+    },
     galleryVideos: {
       metadata: galleryMocks.videoMetadata,
       workflow: galleryMocks.videoWorkflow,
@@ -157,37 +162,28 @@ const interact = (action: () => void, delay = 100): Promise<void> =>
     });
   });
 
-const buildItemMedia = (item: GalleryImageItem | GalleryVideoItem) =>
-  ({
-    actionImage: item.kind === 'image' ? actionImage : null,
-    actions,
-    item,
-    kind: 'item',
-  }) as const;
+const POSITION = { boardItemCount: 2, isLoadingBoard: false, selectedIndex: 0 };
 
-const renderFooter = async ({
+const renderDetails = async ({
   isOpen,
   item,
 }: {
   isOpen: boolean;
   item: GalleryImageItem | GalleryVideoItem;
 }): Promise<void> => {
-  const media = buildItemMedia(item);
-
   await interact(() => {
     root?.render(
       <QueryClientProvider client={queryClient}>
         <I18nextProvider i18n={i18n}>
           <ChakraProvider value={system}>
-            <PreviewFooter
-              boardItemCount={2}
-              isLoadingBoard={false}
-              isMetadataOpen={isOpen}
-              media={media}
-              selectedIndex={0}
-              onNext={() => undefined}
-              onPrevious={() => undefined}
-              onToggleMetadata={() => undefined}
+            <PreviewDetailsPopover
+              actions={actions}
+              image={item.kind === 'image' ? actionImage : null}
+              isOpen={isOpen}
+              item={item}
+              position={POSITION}
+              stageElement={null}
+              onOpenChange={() => undefined}
             />
           </ChakraProvider>
         </I18nextProvider>
@@ -199,6 +195,7 @@ const renderFooter = async ({
 beforeEach(() => {
   identityMocks.accountEpoch = 7;
   galleryMocks.imageMetadata.mockReset().mockResolvedValue(null);
+  galleryMocks.imageWorkflow.mockReset().mockResolvedValue({ graph: null, workflow: null });
   galleryMocks.videoMetadata.mockReset().mockResolvedValue(null);
   galleryMocks.videoWorkflow.mockReset().mockResolvedValue({ graph: null, workflow: null });
   actions = {
@@ -224,11 +221,11 @@ afterEach(async () => {
 
 describe('Preview query-driven Details', () => {
   it('shows the video Details disclosure but starts no request while it is closed', async () => {
-    await renderFooter({ isOpen: false, item: videoItem });
+    await renderDetails({ isOpen: false, item: videoItem });
 
     expect(galleryMocks.videoMetadata).not.toHaveBeenCalled();
     expect(galleryMocks.videoWorkflow).not.toHaveBeenCalled();
-    expect(getButton('Details')).not.toBeNull();
+    expect(document.querySelector('button[aria-label="Details"]')).not.toBeNull();
   });
 
   it('keeps the disabled image recall skeleton mounted while Details is pending', async () => {
@@ -238,23 +235,24 @@ describe('Preview query-driven Details', () => {
       })
     );
 
-    await renderFooter({ isOpen: true, item: imageItem });
+    await renderDetails({ isOpen: true, item: imageItem });
 
-    expect(host?.textContent).toContain('Loading metadata');
-    expect(getButton('Recall All').disabled).toBe(true);
+    expect(document.body.textContent).toContain('Loading metadata');
   });
 
   it('aborts the sole image metadata transport on close without starting duplicate capability work', async () => {
     const metadata = deferred<null>();
     galleryMocks.imageMetadata.mockReturnValueOnce(metadata.promise);
 
-    await renderFooter({ isOpen: true, item: imageItem });
+    await renderDetails({ isOpen: true, item: imageItem });
 
     const metadataSignal = galleryMocks.imageMetadata.mock.calls[0]?.[1] as AbortSignal;
     expect(actions.getImageRecallCapabilities).not.toHaveBeenCalled();
 
-    await renderFooter({ isOpen: false, item: imageItem });
+    await renderDetails({ isOpen: false, item: imageItem });
 
+    // The popover's exit runs through zag outside act; settle it before asserting.
+    await interact(() => undefined, 600);
     expect(metadataSignal.aborted).toBe(true);
     await interact(() => {
       metadata.resolve(null);
@@ -267,7 +265,7 @@ describe('Preview query-driven Details', () => {
     galleryMocks.videoMetadata.mockReturnValueOnce(metadata.promise);
     galleryMocks.videoWorkflow.mockReturnValueOnce(workflow.promise);
 
-    await renderFooter({ isOpen: true, item: videoItem });
+    await renderDetails({ isOpen: true, item: videoItem });
 
     expect(galleryMocks.videoMetadata).toHaveBeenCalledOnce();
     expect(galleryMocks.videoWorkflow).toHaveBeenCalledOnce();
@@ -288,12 +286,14 @@ describe('Preview query-driven Details', () => {
     const workflow = deferred<{ graph: string | null; workflow: string | null }>();
     galleryMocks.videoMetadata.mockReturnValueOnce(metadata.promise);
     galleryMocks.videoWorkflow.mockReturnValueOnce(workflow.promise);
-    await renderFooter({ isOpen: true, item: videoItem });
+    await renderDetails({ isOpen: true, item: videoItem });
     const metadataSignal = galleryMocks.videoMetadata.mock.calls[0]?.[1] as AbortSignal;
     const workflowSignal = galleryMocks.videoWorkflow.mock.calls[0]?.[1] as AbortSignal;
 
-    await renderFooter({ isOpen: false, item: videoItem });
+    await renderDetails({ isOpen: false, item: videoItem });
 
+    // The popover's exit runs through zag outside act; settle it before asserting.
+    await interact(() => undefined, 600);
     expect(metadataSignal.aborted).toBe(true);
     expect(workflowSignal.aborted).toBe(true);
     expect(galleryMocks.videoMetadata).toHaveBeenCalledOnce();
@@ -311,7 +311,7 @@ describe('Preview query-driven Details', () => {
         ? oldWorkflow.promise
         : Promise.resolve({ graph: '{"marker":"new-graph"}', workflow: '{"marker":"new-workflow"}' })
     );
-    await renderFooter({ isOpen: true, item: videoItem });
+    await renderDetails({ isOpen: true, item: videoItem });
     const oldSignal = galleryMocks.videoMetadata.mock.calls[0]?.[1] as AbortSignal;
     const nextItem = {
       ...videoItem,
@@ -320,19 +320,19 @@ describe('Preview query-driven Details', () => {
       thumbnailUrl: '/thumbnails/next.webp',
     };
 
-    await renderFooter({ isOpen: true, item: nextItem });
+    await renderDetails({ isOpen: true, item: nextItem });
 
     expect(oldSignal.aborted).toBe(true);
     expect(galleryMocks.videoMetadata).toHaveBeenNthCalledWith(2, 'next.mp4', expect.any(AbortSignal));
     await act(async () => {
-      await vi.waitFor(() => expect(host?.textContent).toContain('new-item'));
+      await vi.waitFor(() => expect(document.body.textContent).toContain('new-item'));
     });
 
     await interact(() => {
       oldMetadata.resolve({ marker: 'stale-item' });
       oldWorkflow.resolve({ graph: '{"marker":"stale-graph"}', workflow: '{"marker":"stale-workflow"}' });
     });
-    expect(host?.textContent).not.toContain('stale-item');
+    expect(document.body.textContent).not.toContain('stale-item');
   });
 
   it('aborts and isolates stale account results behind the account epoch', async () => {
@@ -344,24 +344,26 @@ describe('Preview query-driven Details', () => {
     galleryMocks.videoWorkflow
       .mockReturnValueOnce(oldWorkflow.promise)
       .mockResolvedValueOnce({ graph: '{"epoch":8}', workflow: '{"epoch":8}' });
-    await renderFooter({ isOpen: true, item: videoItem });
+    await renderDetails({ isOpen: true, item: videoItem });
     const oldSignal = galleryMocks.videoMetadata.mock.calls[0]?.[1] as AbortSignal;
 
     identityMocks.accountEpoch = 8;
-    await renderFooter({ isOpen: true, item: videoItem });
+    await renderDetails({ isOpen: true, item: videoItem });
 
+    // The popover's exit runs through zag outside act; settle it before asserting.
+    await interact(() => undefined, 600);
     expect(oldSignal.aborted).toBe(true);
     expect(galleryMocks.videoMetadata).toHaveBeenCalledTimes(2);
     expect(queryClient.getQueryCache().find({ queryKey: ['preview', 'details', 8, 'video:clip.mp4'] })).toBeDefined();
     await act(async () => {
-      await vi.waitFor(() => expect(host?.textContent).toContain('new-account'));
+      await vi.waitFor(() => expect(document.body.textContent).toContain('new-account'));
     });
 
     await interact(() => {
       oldMetadata.resolve({ marker: 'stale-account' });
       oldWorkflow.resolve({ graph: '{"epoch":7}', workflow: '{"epoch":7}' });
     });
-    expect(host?.textContent).not.toContain('stale-account');
+    expect(document.body.textContent).not.toContain('stale-account');
   });
 
   it('renders raw Metadata, Workflow, and Graph JSON tabs without image recall controls', async () => {
@@ -371,21 +373,26 @@ describe('Preview query-driven Details', () => {
       workflow: '{"name":"Video workflow"}',
     });
 
-    await renderFooter({ isOpen: true, item: videoItem });
+    await renderDetails({ isOpen: true, item: videoItem });
 
     await act(async () => {
-      await vi.waitFor(() => expect(host?.textContent).toContain('"codec": "h264"'));
+      await vi.waitFor(() => expect(document.body.textContent).toContain('"codec": "h264"'));
     });
     expect(getButton('Metadata')).not.toBeNull();
     expect(getButton('Workflow')).not.toBeNull();
     expect(getButton('Graph')).not.toBeNull();
-    expect(host?.textContent).not.toContain('Recall All');
+    // Videos have no parsed rows, so no Details tab.
+    expect([...document.querySelectorAll('[role="tab"]')].map((tab) => tab.textContent)).toEqual([
+      'Metadata',
+      'Workflow',
+      'Graph',
+    ]);
 
     await interact(() => getButton('Workflow').click());
-    expect(host?.textContent).toContain('"name":"Video workflow"');
+    expect(document.body.textContent).toContain('"name":"Video workflow"');
     await interact(() => getButton('Graph').click());
-    expect(host?.textContent).toContain('"id":"video"');
-    expect(host?.querySelector('[aria-label="Video graph JSON"]')).not.toBeNull();
+    expect(document.body.textContent).toContain('"id":"video"');
+    expect(document.querySelector('[aria-label="Video graph JSON"]')).not.toBeNull();
   });
 
   it('keeps parsed image rows, source run, and recall controls while moving the fetch to Query', async () => {
@@ -395,18 +402,18 @@ describe('Preview query-driven Details', () => {
       seed: 42,
     });
 
-    await renderFooter({ isOpen: true, item: imageItem });
+    await renderDetails({ isOpen: true, item: imageItem });
 
     expect(galleryMocks.imageMetadata).toHaveBeenCalledWith('still.png', expect.any(AbortSignal));
     expect(queryClient.getQueryCache().find({ queryKey: ['preview', 'details', 7, 'image:still.png'] })).toBeDefined();
     await act(async () => {
-      await vi.waitFor(() => expect(host?.textContent).toContain('query-driven prompt'));
+      await vi.waitFor(() => expect(document.body.textContent).toContain('query-driven prompt'));
     });
-    expect(host?.textContent).toContain('Test Model');
-    expect(host?.textContent).toContain('queue-image');
+    expect(document.body.textContent).toContain('Test Model');
+    expect(document.body.textContent).toContain('queue-image');
 
-    await interact(() => getButton('Recall All').click());
-    expect(actions.recallImageData).toHaveBeenCalledWith(actionImage, 'all');
+    await interact(() => document.querySelector<HTMLButtonElement>('[aria-label="Use Prompt"]')?.click());
+    expect(actions.recallImageData).toHaveBeenCalledWith(actionImage, 'prompts');
   });
 
   it('recalls a single field from its metadata row', async () => {
@@ -416,22 +423,22 @@ describe('Preview query-driven Details', () => {
       seed: 42,
     });
 
-    await renderFooter({ isOpen: true, item: imageItem });
+    await renderDetails({ isOpen: true, item: imageItem });
     await act(async () => {
-      await vi.waitFor(() => expect(host?.textContent).toContain('row prompt'));
+      await vi.waitFor(() => expect(document.body.textContent).toContain('row prompt'));
     });
 
     // Only the row buttons carry aria-labels; the verb-row buttons are named
     // by their visible text, so the attribute selector is unambiguous.
-    const seedRecall = host?.querySelector<HTMLButtonElement>('[aria-label="Use Seed"]');
+    const seedRecall = document.querySelector<HTMLButtonElement>('[aria-label="Use Seed"]');
     expect(seedRecall).not.toBeNull();
-    expect(host?.querySelector('[aria-label="Use Prompt"]')).not.toBeNull();
+    expect(document.querySelector('[aria-label="Use Prompt"]')).not.toBeNull();
     // No size row was parsed, so no row carries the size verb even though the
     // capability itself is available.
-    expect(host?.querySelector('[aria-label="Use Size"]')).toBeNull();
+    expect(document.querySelector('[aria-label="Use Size"]')).toBeNull();
 
     // The model row has no single-field verb — copy stays its only action.
-    const modelRow = [...(host?.querySelectorAll('.chakra-data-list__item') ?? [])].find((row) =>
+    const modelRow = [...(document.querySelectorAll('.chakra-data-list__item') ?? [])].find((row) =>
       row.textContent?.includes('Test Model')
     );
     expect(modelRow?.querySelectorAll('button')).toHaveLength(1);
@@ -445,35 +452,35 @@ describe('Preview query-driven Details', () => {
     actions.deriveImageRecallCapabilities = vi.fn(() => NO_RECALL_CAPABILITIES);
     galleryMocks.imageMetadata.mockResolvedValueOnce({ seed: 42 });
 
-    await renderFooter({ isOpen: true, item: imageItem });
+    await renderDetails({ isOpen: true, item: imageItem });
     await act(async () => {
-      await vi.waitFor(() => expect(host?.textContent).toContain('42'));
+      await vi.waitFor(() => expect(document.body.textContent).toContain('42'));
     });
 
-    expect(host?.querySelector('[aria-label="Use Seed"]')).toBeNull();
+    expect(document.querySelector('[aria-label="Use Seed"]')).toBeNull();
   });
 
-  it('updates recall buttons when capability inputs change without refetching cached metadata', async () => {
+  it('updates row recall verbs when capability inputs change without refetching cached metadata', async () => {
     galleryMocks.imageMetadata.mockResolvedValueOnce({ positive_prompt: 'cached prompt' });
 
-    await renderFooter({ isOpen: true, item: imageItem });
+    await renderDetails({ isOpen: true, item: imageItem });
     await act(async () => {
-      await vi.waitFor(() => expect(getButton('Recall All').disabled).toBe(false));
+      await vi.waitFor(() => expect(document.querySelector('[aria-label="Use Prompt"]')).not.toBeNull());
     });
 
     actions = {
       ...actions,
       deriveImageRecallCapabilities: vi.fn(() => NO_RECALL_CAPABILITIES),
     } as unknown as ImageActions;
-    await renderFooter({ isOpen: true, item: imageItem });
+    await renderDetails({ isOpen: true, item: imageItem });
 
-    expect(getButton('Recall All').disabled).toBe(true);
+    expect(document.querySelector('[aria-label="Use Prompt"]')).toBeNull();
     expect(galleryMocks.imageMetadata).toHaveBeenCalledOnce();
   });
 });
 
 const getButton = (text: string): HTMLButtonElement => {
-  const button = Array.from((host ?? document).querySelectorAll<HTMLButtonElement>('button')).find(
+  const button = Array.from(document.querySelectorAll<HTMLButtonElement>('button')).find(
     (candidate) => candidate.textContent?.trim() === text
   );
 

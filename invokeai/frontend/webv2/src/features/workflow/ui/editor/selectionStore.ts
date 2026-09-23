@@ -2,10 +2,8 @@ import { registerAccountOwnedResource } from '@platform/state/accountLifecycle';
 import { createExternalStore } from '@platform/state/externalStore';
 
 /**
- * Session-lived editor selection, shared with surfaces outside the flow (the
- * node inspector, the form builder's zoom-to-node). The editor writes
- * `selectedNodeIds` from its selection events; other surfaces ask for a
- * selection via `requestNodeSelection`, which the editor applies and focuses.
+ * Share session selection outside the flow; editor events publish IDs while external requests ask the editor to
+ * select and focus.
  */
 
 export interface WorkflowSelectionSnapshot {

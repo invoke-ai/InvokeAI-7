@@ -10,13 +10,7 @@ type SliderNumberFieldProps = {
   min: number;
   max: number;
   step: number;
-  /**
-   * Reference points on the track. A mark outside `[min, max]` is dropped, not clamped: with
-   * `numberInputMin`/`Max` looser than the track, callers legitimately mark a value that has no
-   * position on it (a model default of 30 on a track that stops at 10), and a marker pinned to the
-   * bound would claim a default at a value that is not the default. `Slider` itself still paints
-   * whatever it is given.
-   */
+  /** Drop off-track marks instead of clamping: clamping would falsely label a bound as the default. */
   marks?: SliderMark[];
   /** Looser clamps for typed values (slider bounds apply otherwise). */
   numberInputMin?: number;
@@ -28,12 +22,8 @@ type SliderNumberFieldProps = {
 };
 
 /**
- * Slider + number input combo for numeric parameters. The slider covers the
- * practical range; the input accepts values beyond it when the numberInput
- * bounds are looser. Debouncing stays with the caller. Label, hint, and
- * validation messaging are the caller's job (compose with `Field`) — this
- * component only owns the slider/input pairing. Parameter rows in the
- * Generate/Upscale widgets use `ScrubberField` instead.
+ * Input bounds may exceed slider bounds. Callers own Field messaging and debouncing; parameter rows use
+ * ScrubberField.
  */
 export const SliderNumberField = memo(function SliderNumberField({
   ariaLabel,
@@ -50,9 +40,7 @@ export const SliderNumberField = memo(function SliderNumberField({
   value,
 }: SliderNumberFieldProps) {
   const sliderAriaLabel = useMemo(() => [ariaLabel], [ariaLabel]);
-  // Typed values may exceed the slider's own range (the number input has its own,
-  // looser bounds via numberInputMin/Max); the thumb clamps to stay on the track
-  // instead of rendering off it, while the input keeps showing the typed value.
+  // Clamp only the thumb; preserve typed values within the input's wider bounds.
   const sliderValue = useMemo(() => [Math.min(max, Math.max(min, value))], [max, min, value]);
   const placeableMarks = marks?.filter((mark) => {
     const markValue = typeof mark === 'number' ? mark : mark.value;

@@ -7,11 +7,8 @@ import { setLibraryWorkflowThumbnail, touchLibraryWorkflowLastRunAt } from './ap
 import { getLibraryWorkflowCached, invalidateWorkflowLibraryCache } from './libraryCache';
 
 /**
- * Turns a completed workflow run into the library record's cover image and
- * last-run stamp. The Queue reports the run; this module owns everything about
- * the library, and every step is best-effort — a capture that fails leaves the
- * record exactly as it was and never surfaces to the user, because the run it
- * decorates already succeeded.
+ * Best-effort capture decorates successful runs with cover/last-run metadata; failures stay silent and must not
+ * affect run success.
  */
 
 export interface RunCaptureDeps {
@@ -24,14 +21,8 @@ export interface RunCaptureDeps {
 }
 
 /**
- * Gallery owns image URLs, but importing its public surface statically would
- * drag the gallery UI (drag-and-drop included) into every bundle that composes
- * the queue runtime. The URL is needed once per completed run, so it is loaded
- * on demand instead.
- *
- * Plain `fetch` rather than the authenticated API helper: image media routes are
- * served against the path-scoped session cookie — the same credentials the
- * gallery's own `<img>` tags use to render this exact URL.
+ * Load gallery URL ownership lazily to avoid its UI dependencies in Queue bundles; fetch media with the existing
+ * path-scoped cookie.
  */
 const fetchThumbnailBlob = async (imageName: string, signal: AbortSignal): Promise<Blob> => {
   const { galleryImageUrls } = await import('@features/gallery/utility');
@@ -70,9 +61,7 @@ interface PendingCapture {
 
 export const createWorkflowRunCaptureSink = (overrides?: Partial<RunCaptureDeps>): QueueWorkflowRunSink => {
   const deps: RunCaptureDeps = { ...PRODUCTION_DEPS, ...overrides };
-  // One drain chain per library record. Two runs of the SAME workflow must not
-  // race their thumbnail uploads (the loser would win the record), while runs of
-  // different workflows are independent and proceed in parallel.
+  // Serialize captures per library record while allowing different workflows to upload independently.
   const draining = new Map<string, Promise<void>>();
   // At most one queued capture per record: while one is uploading, a newer run
   // supersedes any other run still waiting, because only the newest output
@@ -121,8 +110,7 @@ export const createWorkflowRunCaptureSink = (overrides?: Partial<RunCaptureDeps>
       try {
         await capture(next);
       } catch {
-        // Capture is decoration around an already-successful run: one failed
-        // record must not stop the next run from trying again.
+        // A failed capture must not prevent later completed runs from trying again.
       }
     }
 

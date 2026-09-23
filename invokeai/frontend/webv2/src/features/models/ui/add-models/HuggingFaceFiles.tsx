@@ -32,8 +32,6 @@ export const HuggingFaceFiles = ({
 }) => {
   const { t } = useTranslation();
   const { filter, filteredItems: filteredUrls, setFilter } = useSourceNameFilter(lookup.urls, urlOf);
-  // A model's recorded install source is the URL it was pulled from, so this
-  // marks rows Installed live once the library refresh lands.
   const installedSourceKeys = useInstalledSourceKeys();
 
   const installAll = () => {

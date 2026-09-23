@@ -332,10 +332,8 @@ class TestQwen3VLKeyRemap:
     def test_scale_keys_and_hint_paths_land_on_the_same_module(self):
         """attach_fp8_scales resolves hint paths against the *model*, so the state-dict remap and the
         hint remap must agree - otherwise every recovered scale silently matches nothing."""
-        from invokeai.backend.model_manager.load.model_loaders.krea2 import (
-            _qwen3vl_target_key,
-            _remap_qwen3vl_singlefile_keys,
-        )
+        from invokeai.backend.model_manager.load.model_loaders.krea2 import _remap_qwen3vl_singlefile_keys
+        from invokeai.backend.model_manager.util.qwen3_vl import qwen3vl_target_key as _qwen3vl_target_key
 
         q, scale = _fp8_weight(32, 16)
         sd = _remap_qwen3vl_singlefile_keys(

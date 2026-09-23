@@ -3,18 +3,8 @@ import type { ProjectAssetRefs } from '@workbench/projects/projectAssets';
 import type { InvkBoardItem, InvkMediaKind } from './board';
 
 /**
- * The vocabulary shared by export, import and duplication — and the one rule they all turn on.
- *
- * A project's media comes from two overlapping places, and what must happen differs by which:
- *
- * - **Board membership** must be *copied*. `board_images` has `PRIMARY KEY (image_name)`, so one
- *   image sits on exactly one board; reusing an existing name would *share* another project's
- *   media, and deleting either board would take it from both.
- * - **Document references** may be *reused*. They are pointers, not membership, so an image the
- *   destination already has satisfies them without a second copy.
- *
- * So an item that is *both* is restored as board media and its references rewritten to the copy.
- * When that copy fails the reference must not keep the old name — see {@link buildMissingMediaName}.
+ * Board media needs fresh ownership; document-only references may be reused. Shared references remap to the copy,
+ * and failed copies receive missing placeholders.
  */
 
 /** One item, in whichever namespace it belongs to. */
@@ -44,11 +34,7 @@ export interface InvkMediaIssue extends InvkMediaRef {
   reason: InvkMediaIssueReason;
 }
 
-/**
- * What a transfer could not carry, counted apart: a missing board item costs a result still
- * findable elsewhere, a missing document reference costs a layer in the canvas. An item that was
- * both appears in both arrays — it genuinely failed in both roles.
- */
+/** Report losses separately by role; an item may fail in both. */
 export interface ProjectTransferIssues {
   boardItemIssues: InvkMediaIssue[];
   documentReferenceIssues: InvkMediaIssue[];
@@ -93,11 +79,7 @@ export interface InvkTransferItem extends InvkMediaRef {
   boardItem: InvkBoardItem | null;
 }
 
-/**
- * Merge board membership and document references into one list, each item once. An item that is
- * both must be fetched or uploaded once, and the union is what lets one failure be reported
- * against both roles.
- */
+/** Materialize once while retaining both roles for loss reporting. */
 export const planMediaTransfer = (
   boardItems: readonly InvkBoardItem[],
   documentRefs: readonly InvkMediaRef[]
@@ -135,13 +117,6 @@ export const planMediaTransfer = (
   return [...byKey.values()].sort(compareMediaRefs);
 };
 
-/**
- * A name guaranteed not to resolve, for a document reference whose board media could not be
- * restored. Keeping the original would be worse: the destination may hold its own image under that
- * exact name — during a duplication it certainly does — so the project would open pointing at a
- * stranger's picture, plausibly and silently.
- *
- * Derived from the new project id, so it is stable within one import and unique across them.
- */
+/** Missing names are stable within an import and cannot resolve to existing source media. */
 export const buildMissingMediaName = (projectId: string, kind: InvkMediaKind, index: number): string =>
   `${projectId}-missing-${kind}-${index}`;

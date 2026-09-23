@@ -1,17 +1,14 @@
 import type * as workflowReactModule from '@features/workflow/react';
 import type { WorkbenchState } from '@workbench/projectContracts';
 
-// Feature-private document builders: the dependency policy exempts test files,
-// and hand-rolling a compilable graph literal here would only duplicate them.
+// Reuse feature-private graph builders under the test dependency exemption.
 import { buildInvocationNode, createProjectGraph, projectGraphReducer } from '@features/workflow/core/document';
 import { createInitialWorkbenchState, workbenchReducer } from '@workbench/workbenchState.testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
- * The workflow compile site stamps the project graph's library binding onto the
- * compiled submission, which is the only place a completed run can learn which
- * library record produced it. Templates are read imperatively by both the route
- * resolver and the compiler, so they are stubbed as loaded here.
+ * Submission captures the originating library binding; stub loaded templates for the imperative resolver and
+ * compiler.
  */
 
 const stringField = { batch: false, cardinality: 'SINGLE' as const, name: 'StringField' };
@@ -111,8 +108,6 @@ describe('library binding on the compiled workflow submission', () => {
     });
   });
 
-  // An ad-hoc workflow belongs to no library record, so a completed run of it
-  // must have nothing to write back to.
   it('leaves an unbound workflow run unstamped', () => {
     expect(submitWorkflow()?.snapshot.backendSubmission).not.toHaveProperty('libraryWorkflowId');
   });

@@ -17,9 +17,16 @@ import { HEADER_MIN_HEIGHT } from './layoutConstants';
 /** The tabbed detail pane: selected model, Add Models, API Keys, and queue footer. */
 export const DetailPane = () => {
   const { t } = useTranslation();
-  const { activeModelKey, activeTab } = useModelsUiSelector(
-    (snapshot) => ({ activeModelKey: snapshot.activeModelKey, activeTab: snapshot.activeTab }),
-    (left, right) => left.activeModelKey === right.activeModelKey && left.activeTab === right.activeTab
+  const { activeModelKey, activeTab, queueFillsPane } = useModelsUiSelector(
+    (snapshot) => ({
+      activeModelKey: snapshot.activeModelKey,
+      activeTab: snapshot.activeTab,
+      queueFillsPane: snapshot.queueExpanded && snapshot.queueMaximized,
+    }),
+    (left, right) =>
+      left.activeModelKey === right.activeModelKey &&
+      left.activeTab === right.activeTab &&
+      left.queueFillsPane === right.queueFillsPane
   );
   const detailLabel = useModelsSelector(
     (snapshot) => (activeModelKey ? snapshot.modelsByKey.get(activeModelKey)?.name : undefined) ?? t('models.details')
@@ -28,7 +35,7 @@ export const DetailPane = () => {
   return (
     <Flex direction="column" flex="1" minH="0" minW="0">
       <Tabs.Root
-        display="flex"
+        display={queueFillsPane ? 'none' : 'flex'}
         flex="1"
         flexDirection="column"
         minH="0"

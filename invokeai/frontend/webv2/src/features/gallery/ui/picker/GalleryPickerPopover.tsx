@@ -35,10 +35,7 @@ export interface GalleryPickerPopoverProps {
   onPick: (item: GalleryItem) => void;
 }
 
-/**
- * A compact gallery anchored to an image slot. The view mounts on open and
- * unmounts on close, so every open starts from the Gallery widget's scope.
- */
+/** Mount on open and unmount on close so each opening starts from the Gallery widget's scope. */
 export const GalleryPickerPopover = ({
   accept,
   children,

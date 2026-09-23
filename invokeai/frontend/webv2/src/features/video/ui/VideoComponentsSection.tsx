@@ -24,14 +24,6 @@ import { ScrubberField } from '@platform/ui/ScrubberField';
 import { Fragment, memo, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
-/**
- * Model Components for the Video panel — fully policy-driven, like the
- * generation panel's section: the component renders whatever slots the
- * capability matrix returns (Wan: component source / VAE / Wan T5 / low-noise
- * expert; MiniMax H3: the two single-file overrides), with each slot's
- * compatibility filter and requiredness coming from the policy.
- */
-
 const coerceSlotValue = (
   slot: VideoComponentSlotPolicy,
   candidate: ModelConfig | null
@@ -92,11 +84,7 @@ const ComponentSlotRow = memo(function ComponentSlotRow({
   );
 });
 
-/**
- * The MiniMax H3 hybrid's one tuning knob, shown under its base slot once a
- * base is picked: blocks from here through the last keep the Ref2VA AdaLN
- * projections, earlier blocks take the FL2VA base's.
- */
+/** Blocks at and above this index use Ref2VA AdaLN projections; earlier blocks use the FL2VA base. */
 const HybridStartBlockRow = memo(function HybridStartBlockRow({
   onPatch,
   value,
@@ -107,9 +95,7 @@ const HybridStartBlockRow = memo(function HybridStartBlockRow({
   const { t } = useTranslation();
   const handleChange = useCallback((h3HybridStartBlock: number) => onPatch({ h3HybridStartBlock }), [onPatch]);
 
-  // ScrubberField, like the panel's other sliders: SliderNumberField's only other
-  // user is the Generate widget, and importing it here too split it into a shared
-  // chunk — one more request on every editor route.
+  // Reuse ScrubberField to avoid adding a shared Generate-only control chunk to editor boot.
   return (
     <ScrubberField
       defaultValue={MINIMAX_H3_HYBRID_BLOCK_RANGE.defaultStart}
@@ -125,11 +111,8 @@ const HybridStartBlockRow = memo(function HybridStartBlockRow({
 });
 
 /**
- * Advisory badge for suspicious Wan A14B expert wiring (a low-tagged file in
- * the main slot, a high-tagged one in the low-noise slot). The tags are a
- * filename heuristic and explicit wiring stays authoritative — mirroring the
- * backend loader — so this never blocks; it offers a one-click swap instead,
- * keeping deliberate cross-wiring expressible.
+ * Expert tags are filename heuristics; explicit wiring remains authoritative, so warn and offer a swap without
+ * blocking.
  */
 // Spelled out rather than interpolated, so the translation-key scan can see
 // them and fail the build if a string goes missing.
@@ -149,17 +132,13 @@ const WanExpertWiringNotice = memo(function WanExpertWiringNotice({
 }) {
   const { t } = useTranslation();
   const models = useModelsSelector((snapshot) => snapshot.models);
-  // A selection transition computed against an unloaded catalog would judge
-  // the Lightning pair "not installed" and silently strip the accelerator.
+  // Wait for catalog authority before judging the accelerator pair installed.
   const modelsLoaded = useModelsSelector((snapshot) => snapshot.status) === 'loaded';
   const warning = useMemo(
     () => getWanExpertWiringWarning(values.model, values.wanLowNoiseModel),
     [values.model, values.wanLowNoiseModel]
   );
-  // Only offer the swap when exchanging roles actually clears the warning: a
-  // high+high or low+low pair would just re-warn about the other file. Both
-  // configs must also still exist in the catalog — "models loaded" alone
-  // would happily relocate a just-uninstalled config into the main slot.
+  // Offer only swaps that clear the warning and whose two configs still exist.
   const bothExpertsInstalled =
     Boolean(values.model && models.some((candidate) => candidate.key === values.model?.key)) &&
     Boolean(values.wanLowNoiseModel && models.some((candidate) => candidate.key === values.wanLowNoiseModel?.key));
@@ -177,8 +156,6 @@ const WanExpertWiringNotice = memo(function WanExpertWiringNotice({
       return;
     }
 
-    // Same variant and both single-file (the slot filter guarantees it), so
-    // the canonical transition is a same-family no-op apart from the swap.
     const result = getVideoModelSelectionResult({ currentSettings: values, model: nextMain, models });
 
     onPatch({ ...result.settings, model: nextMain, wanLowNoiseModel: previousMain });

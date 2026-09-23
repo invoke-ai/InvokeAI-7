@@ -671,10 +671,7 @@ describe('mixed gallery upload', () => {
 
 describe('setSemanticImageQuery', () => {
   it('applies the reference while resetting pagination and clearing the text term', () => {
-    // Paginated mode with the user on a later page: applying a semantic query
-    // replaces the result set, so the page must snap back to the first one
-    // (mirroring setGallerySearchTerm) and the term the chip replaces must not
-    // keep filtering invisibly.
+    // Replacing the ranking resets pagination and clears the hidden metadata term.
     actionsRef.current?.setSemanticImageQuery({ imageName: 'ref.png', kind: 'image' });
 
     expect(patchGalleryValues).toHaveBeenCalledOnce();

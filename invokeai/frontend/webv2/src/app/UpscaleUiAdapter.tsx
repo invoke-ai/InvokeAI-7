@@ -8,10 +8,6 @@ import { getProjectWidgetValues } from '@workbench/widgetState';
 import { useActiveProjectSelector, useWorkbenchCommands } from '@workbench/WorkbenchContext';
 import { useCallback, useMemo } from 'react';
 
-/**
- * Production binding of Upscale's UI port: maps the upscale widget instance
- * and prompt drafts out of the Workbench aggregate. No second adapter is expected.
- */
 export const UpscaleUiAdapterProvider = ({ children }: { children: ReactNode }) => {
   const project = useActiveProjectSelector(
     (activeProject) => {
@@ -28,15 +24,12 @@ export const UpscaleUiAdapterProvider = ({ children }: { children: ReactNode }) 
       areProjectPromptDraftsEqual(left.promptDraft, right.promptDraft) &&
       left.rawValues === right.rawValues
   );
-  // Syntax highlighting is a per-user preference, not a property of the
-  // project, so it is joined here rather than read off the document.
+  // Syntax highlighting is an account preference, not project data.
   const showPromptSyntaxHighlighting = useWorkbenchPreferenceSelector(
     (preferences) => preferences.showPromptSyntaxHighlighting
   );
   const commands = useWorkbenchCommands();
-  // The port's callbacks are keyed to the project, not to its contents: rebuilding
-  // them whenever `rawValues` changes would hand every consumer new function
-  // identities on each keystroke, re-rendering memoized fields that did not change.
+  // Key actions by project, not values, to preserve callback identity while typing.
   const { projectId } = project;
   const patchPromptDraft = useCallback<UpscaleUiAdapter['patchPromptDraft']>(
     (values) => commands.generation.patchPromptDraft(values, 'upscale', projectId),

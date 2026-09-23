@@ -1,21 +1,8 @@
 import type { PanZoomPoint } from '@workbench/panZoom';
 
-/**
- * Pointer bookkeeping shared by the preview's two loupes — the stage loupe and
- * the side-by-side comparison one. Both track every finger that is down so a
- * second one can turn a pan into a pinch; only the coordinate space they zoom
- * in differs.
- */
+/** Share pointer tracking between stage and comparison loupes; each uses its own zoom coordinate space. */
 
-/**
- * Records a pointer that just went down and reports the pair that should pinch,
- * once there is one.
- *
- * The first finger of a touch (and any mouse press) starts a fresh set: a
- * pointer whose release lands outside the surface is never seen going up, so
- * this is what stops a stale entry from pairing into a phantom pinch on the
- * next touch.
- */
+/** Reset on the first touch or mouse press to discard pointers whose releases were missed before arming a pinch. */
 export const trackPointerDown = (
   pointers: Map<number, PanZoomPoint>,
   event: { clientX: number; clientY: number; isPrimary: boolean; pointerId: number }
@@ -36,10 +23,8 @@ export const trackPointerDown = (
 };
 
 /**
- * Capture, tolerating a pointer that is already gone: the browser can queue a
- * `pointerdown` behind the release of another finger, and `setPointerCapture`
- * throws for a pointer that is no longer active. A gesture that misses its
- * capture still tracks — it only loses the fingers that wander off the surface.
+ * Tolerate capture failure for already-released pointers; uncaptured gestures still work while pointers remain on
+ * the surface.
  */
 export const capturePointer = (element: Element, pointerId: number): void => {
   try {

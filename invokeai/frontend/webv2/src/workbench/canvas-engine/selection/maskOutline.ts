@@ -1,11 +1,6 @@
 /**
- * Rectilinear boundary tracing for alpha masks.
- *
- * Converts a mask's alpha channel into closed pixel-edge contours so the
- * marching ants can stroke the mask's true outline instead of its bounding
- * rect. Outer boundaries wind clockwise (screen coordinates) and holes wind
- * counter-clockwise, so the emitted path also nonzero-fills to the same shape
- * it outlines.
+ * Traces alpha masks as pixel-edge contours: clockwise outer boundaries and counterclockwise holes in screen
+ * coordinates, preserving nonzero-fill shape.
  */
 
 interface MaskAlphaSource {

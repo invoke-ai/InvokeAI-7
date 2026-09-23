@@ -1,12 +1,7 @@
 import type { InvocationSourceId, ResultDestination } from './invocationContracts';
 import type { WidgetInstanceId, WidgetTypeId } from './widgetContracts';
 
-/**
- * The shipped layout presets. A preset names an *arrangement*, never a
- * widget — `edit` opens Canvas but is not "the Canvas view", and a preset may
- * have several graph widgets open at once. Source resolution is a separate
- * concern (see `graphWidgets.ts`).
- */
+/** Presets name arrangements, not invocation sources; graphWidgets owns source resolution. */
 export type BuiltInLayoutPresetId = 'compose' | 'edit' | 'automate' | 'video';
 
 export type LayoutPresetId = BuiltInLayoutPresetId | (string & {});
@@ -37,11 +32,7 @@ export interface FloatingWidgetState {
   mode: FloatingWidgetMode;
   /** The dockable region this window returns to when docked. */
   returnRegion: WidgetRegion;
-  /**
-   * Where it sat in that region's tab strip when it floated, so docking puts it
-   * back rather than appending. Optional: entries written before this existed,
-   * and any whose index cannot be trusted, dock to the end.
-   */
+  /** Original rail index for docking; absent or invalid indices append. */
   returnIndex?: number;
   /** Z-order within the floating layer; higher renders on top. */
   stackOrder: number;
@@ -73,11 +64,7 @@ export interface LayoutPresetSnapshot {
   layout: ProjectLayoutState;
   widgetInstances: Record<WidgetInstanceId, LayoutPresetWidgetInstanceSnapshot>;
   widgetRegions: Record<WidgetRegion, WidgetRegionState>;
-  /**
-   * Captured with widgetRegions: a floated instance is in no region, so a
-   * preset that recorded only the regions would drop it on the floor. Absent
-   * on presets saved before floating existed, which have no floating windows.
-   */
+  /** Capture windows with widgetRegions so floated instances survive presets; absent means none. */
   floatingWidgets?: Record<WidgetInstanceId, FloatingWidgetState>;
 }
 
@@ -96,20 +83,12 @@ export interface LayoutPreset {
   isBuiltIn?: boolean;
   /** Missing only on legacy or source-less custom presets. */
   defaultRoute?: LayoutPresetRoute;
-  /**
-   * Icon identifier, not a component: presets are persisted verbatim, so this
-   * has to survive a round trip through storage. Resolved against the picker's
-   * registry, which falls back for ids it no longer knows.
-   */
+  /** Persist an icon id, resolved through the picker registry with an unknown-id fallback. */
   iconId?: string;
   snapshot: LayoutPresetSnapshot;
 }
 
-/**
- * Per-account edits to a preset's saved arrangement, keyed by preset id. Built-in
- * preset bodies are code, so "Save changes" cannot mutate them in place; the
- * override is what the drift comparison and `Revert to saved layout` read.
- */
+/** Account overrides store edits to code-owned built-ins and drive both drift checks and revert. */
 export type LayoutPresetOverrides = Partial<Record<BuiltInLayoutPresetId, LayoutPresetSnapshot>>;
 
 /** Per-account edits to the default routes shipped with built-in presets. */

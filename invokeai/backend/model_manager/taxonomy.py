@@ -69,6 +69,9 @@ class BaseModelType(str, Enum):
     MiniMaxH3 = "minimax-h3"
     """Indicates the model is associated with the MiniMax H3 (Hailuo 3.0) omni-modal architecture, which
     generates video with jointly-denoised stereo audio."""
+    LTX2 = "ltx-2"
+    """Indicates the model is associated with the Lightricks LTX-2 family (LTX-2.5 in this version), a
+    dual-stream video+audio DiT conditioned by a Gemma text encoder through learned connectors."""
     Unknown = "unknown"
     """Indicates the model's base architecture is unknown."""
 
@@ -94,6 +97,7 @@ class ModelType(str, Enum):
     MistralEncoder = "mistral_encoder"
     WanT5Encoder = "wan_t5_encoder"
     Gemma2Encoder = "gemma2_encoder"
+    Gemma4Encoder = "gemma4_encoder"
     SpandrelImageToImage = "spandrel_image_to_image"
     SigLIP = "siglip"
     FluxRedux = "flux_redux"
@@ -124,6 +128,10 @@ class SubModelType(str, Enum):
     VAEDecoder = "vae_decoder"
     VAEEncoder = "vae_encoder"
     AudioVAE = "audio_vae"
+    Vocoder = "vocoder"
+    Connectors = "connectors"
+    LatentUpsampler = "latent_upsampler"
+    TemporalLatentUpsampler = "temporal_latent_upsampler"
     Scheduler = "scheduler"
     SafetyChecker = "safety_checker"
 
@@ -286,6 +294,21 @@ class MiniMaxH3VariantType(str, Enum):
     weights; supports only the reference task."""
 
 
+class LTX2VariantType(str, Enum):
+    """LTX-2 transformer variants. Dev and Distilled are key-for-key identical checkpoints of the same
+    architecture; the variant decides the sampling recipe (guided ~40-step schedule vs the fixed
+    8-sigma distilled schedule with CFG off), so it must travel with the model record.
+
+    Values carry the family prefix because variant values are globally unique across enums
+    (`FluxVariantType.Dev` already owns "dev")."""
+
+    Dev = "ltx2_dev"
+    """The guided model: CFG / STG / modality-isolation guidance over a shifted flow schedule."""
+
+    Distilled = "ltx2_distilled"
+    """The step-distilled model: fixed 8-sigma schedule, no guidance, no negative prompt."""
+
+
 class MistralVariantType(str, Enum):
     """Mistral text encoder variants used by FLUX.2 [dev] and ERNIE-Image."""
 
@@ -350,6 +373,7 @@ class ModelFormat(str, Enum):
     MistralEncoder = "mistral_encoder"
     WanT5Encoder = "wan_t5_encoder"
     Gemma2Encoder = "gemma2_encoder"
+    Gemma4Encoder = "gemma4_encoder"
     BnbQuantizedLlmInt8b = "bnb_quantized_int8b"
     BnbQuantizednf4b = "bnb_quantized_nf4b"
     GGUFQuantized = "gguf_quantized"
@@ -423,6 +447,7 @@ AnyVariant: TypeAlias = Union[
     Qwen3VLVariantType,
     Krea2VariantType,
     MiniMaxH3VariantType,
+    LTX2VariantType,
     MistralVariantType,
     PiDDecoderVariantType,
 ]
@@ -439,6 +464,7 @@ variant_type_adapter = TypeAdapter[
     | Qwen3VLVariantType
     | Krea2VariantType
     | MiniMaxH3VariantType
+    | LTX2VariantType
     | MistralVariantType
     | PiDDecoderVariantType
 ](
@@ -454,6 +480,7 @@ variant_type_adapter = TypeAdapter[
     | Qwen3VLVariantType
     | Krea2VariantType
     | MiniMaxH3VariantType
+    | LTX2VariantType
     | MistralVariantType
     | PiDDecoderVariantType
 )

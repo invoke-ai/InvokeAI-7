@@ -11,15 +11,11 @@ import type * as assetTransportModule from './assetTransport';
 import type * as duplicateProjectModule from './duplicateProject';
 
 /**
- * Duplication end to end, with the copy endpoints and the project API replaced.
- *
- * The rules it has to keep are import's rules, because it is import's engine: board media takes new
- * identities, the document follows them, a failed copy cannot leave a reference pointing at the
- * original's image, and a failure before the create undoes exactly what it made.
+ * Verify fresh board identities, remapped references, isolated copy failures, and exact rollback through mocked
+ * transport.
  */
 
-// `createProjectSettled` is the seam, not `createProject`: it is what decides whether a create that
-// went unanswered actually landed, and therefore whether the copies below may be deleted.
+// Mock settled creation because its verdict determines whether rollback is safe.
 const api = vi.hoisted(() => ({
   createProjectSettled: vi.fn(),
   getProject: vi.fn(),
@@ -47,9 +43,7 @@ vi.mock('@workbench/projects/api', async (importOriginal) => ({
   ...(await importOriginal<typeof apiModule>()),
   ...api,
 }));
-// Partial, so the module's constants and pure predicates stay real — a stub of
-// `isRequestCancellation` would let the tests agree with a duplication that mistook a
-// cancellation for a board's worth of individually failed copies.
+// Preserve real cancellation predicates in partial mocks.
 vi.mock('./assetTransport', async (importOriginal) => ({
   ...(await importOriginal<typeof assetTransportModule>()),
   ...transport,
@@ -119,8 +113,6 @@ const restoredLayerName = (): string =>
 
 beforeEach(async () => {
   vi.resetModules();
-  // Restores the hoisted `vi.fn(impl)` defaults; only `createProjectSettled`, which has none, is
-  // re-established below.
   vi.resetAllMocks();
 
   const account = await import('@platform/state/accountLifecycle');
@@ -128,8 +120,6 @@ beforeEach(async () => {
   account.accountLifecycle.activate('duplicate-user');
   owner = account.captureAccountScope();
 
-  // These two are hoisted as bare `vi.fn()` with no implementation, so unlike the rest they are
-  // not restored by the reset above.
   transport.copyImagesToBoard.mockImplementation((names: readonly string[]) => Promise.resolve(copiesOf(names)));
   transport.copyVideosToBoard.mockImplementation((names: readonly string[]) => Promise.resolve(copiesOf(names)));
   api.createProjectSettled.mockImplementation(
@@ -224,10 +214,7 @@ describe('duplicateProjectRecord', () => {
     expect(transport.copyImagesToBoard).toHaveBeenCalledWith([], 'staging-board', owner.signal);
   });
 
-  /**
-   * A reference to media outside the project's own board is a pointer, and both projects live on
-   * this one server, so the copy simply keeps pointing at it.
-   */
+  /** Same-server duplicates share external references. */
   it('reuses a document reference the board does not own, copying nothing', async () => {
     const record = sourceRecord({ futureImageInput: { image_name: 'external.png' } });
 
@@ -237,10 +224,7 @@ describe('duplicateProjectRecord', () => {
     expect((createdData().futureImageInput as { image_name: string }).image_name).toBe('external.png');
   });
 
-  /**
-   * The failure that must not bind to a stranger: on this server the original's `shared.png` is
-   * right there, and falling back to it would leave the copy quietly sharing the original's image.
-   */
+  /** A failed copy must never fall back to source-owned media. */
   it('forces a reference dangling when its board copy fails', async () => {
     transport.copyImagesToBoard.mockResolvedValue({ copied: [], failed: ['shared.png'] });
 
@@ -302,12 +286,7 @@ describe('duplicateProjectRecord', () => {
     expect(transport.deleteStagingBoard).toHaveBeenCalledWith('staging-board', owner.signal);
   });
 
-  /**
-   * The outcome that used to be decided by a `GET`, and decided wrongly: the read returns 404 while
-   * the create transaction is still committing, so the copies were deleted out from under a project
-   * that then appeared — with every reference in its document dangling. An unproven absence must
-   * leave the media alone.
-   */
+  /** Retain media for unproven create outcomes; GET 404 can race commit. */
   it('leaves the copies alone when a rejected create may already have landed', async () => {
     const failure = new Error('connection ended after create');
 

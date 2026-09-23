@@ -9,6 +9,7 @@ import {
   isExternalApiModelConfig,
   isFluxReduxModelConfig,
   isGemma2EncoderModelConfig,
+  isGemma4EncoderModelConfig,
   isIPAdapterModelConfig,
   isLLaVAModelConfig,
   isLoRAModelConfig,
@@ -110,6 +111,11 @@ const MODEL_CATEGORIES: Record<ModelCategoryType, ModelCategoryData> = {
     i18nKey: 'modelManager.gemma2Encoder',
     filter: isGemma2EncoderModelConfig,
   },
+  gemma4_encoder: {
+    category: 'gemma4_encoder',
+    i18nKey: 'modelManager.gemma4Encoder',
+    filter: isGemma4EncoderModelConfig,
+  },
   pid_decoder: {
     category: 'pid_decoder',
     i18nKey: 'modelManager.pidDecoder',
@@ -200,6 +206,7 @@ export const MODEL_BASE_TO_COLOR: Record<BaseModelType, string> = {
   anima: 'invokePurple',
   wan: 'cyan',
   'minimax-h3': 'yellow',
+  'ltx-2': 'teal',
   unknown: 'red',
 };
 
@@ -226,6 +233,7 @@ export const MODEL_TYPE_TO_LONG_NAME: Record<ModelType, string> = {
   qwen3_vl_encoder: 'Qwen3-VL Encoder',
   wan_t5_encoder: 'Wan T5 Encoder',
   gemma2_encoder: 'Gemma-2 Encoder',
+  gemma4_encoder: 'Gemma-4 Encoder',
   clip_embed: 'CLIP Embed',
   siglip: 'SigLIP',
   flux_redux: 'FLUX Redux',
@@ -258,6 +266,7 @@ export const MODEL_BASE_TO_LONG_NAME: Record<BaseModelType, string> = {
   anima: 'Anima',
   wan: 'Wan 2.2',
   'minimax-h3': 'MiniMax H3',
+  'ltx-2': 'LTX-2',
   unknown: 'Unknown',
 };
 
@@ -283,6 +292,7 @@ export const MODEL_BASE_TO_SHORT_NAME: Record<BaseModelType, string> = {
   anima: 'Anima',
   wan: 'Wan',
   'minimax-h3': 'MiniMax H3',
+  'ltx-2': 'LTX-2',
   unknown: 'Unknown',
 };
 
@@ -307,6 +317,8 @@ export const MODEL_VARIANT_TO_LONG_NAME: Record<AnyModelVariant, string> = {
   edit: 'Qwen Image Edit',
   fl2va: 'MiniMax H3 FL2VA',
   ref2va: 'MiniMax H3 Ref2VA',
+  ltx2_dev: 'LTX-2 Dev',
+  ltx2_distilled: 'LTX-2 Distilled',
   t2v_a14b: 'Wan 2.2 T2V A14B',
   i2v_a14b: 'Wan 2.2 I2V A14B',
   ti2v_5b: 'Wan 2.2 TI2V 5B',
@@ -342,6 +354,7 @@ export const MODEL_FORMAT_TO_LONG_NAME: Record<ModelFormat, string> = {
   qwen3_vl_encoder: 'Qwen3-VL Encoder',
   wan_t5_encoder: 'Wan T5 Encoder (UMT5-XXL)',
   gemma2_encoder: 'Gemma-2 Encoder',
+  gemma4_encoder: 'Gemma-4 Encoder',
   bnb_quantized_int8b: 'BNB Quantized (int8b)',
   bnb_quantized_nf4b: 'BNB Quantized (nf4b)',
   gguf_quantized: 'GGUF Quantized',

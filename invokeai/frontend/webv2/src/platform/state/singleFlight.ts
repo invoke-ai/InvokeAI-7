@@ -17,12 +17,8 @@ export interface TrailingSingleFlight {
 }
 
 /**
- * Single-flight dedupe for a store refresh that must not lose requests: a
- * refresh asked for while one is already in flight would otherwise be
- * absorbed by a request that was issued before the triggering change existed
- * (e.g. two install completions ~100ms apart). The trailing rerun re-executes
- * the task once after the current flight settles; its rejection is swallowed
- * because no caller is attached to it.
+ * Coalesce refreshes but rerun once for changes arriving mid-flight. No caller awaits the trailing run, so its
+ * rejection is swallowed.
  */
 export const createTrailingSingleFlight = (): TrailingSingleFlight => {
   let pending: Promise<void> | null = null;

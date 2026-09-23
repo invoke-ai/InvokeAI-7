@@ -11,13 +11,9 @@ vi.mock('@workbench/WorkbenchContext', () => ({
   useWidgetValuesSelector: () => false,
 }));
 
-// The real one pulls the ~1.5MB plotly chunk; the badge under test is its
-// sibling, not its child, so a stand-in is enough.
+// Stub the heavy Plotly sibling; this test owns the progress badge.
 vi.mock('./ImageMapPlot', () => ({ default: () => <div data-testid="plot" /> }));
 
-// The install link resolves the configured encoder against the starter
-// catalog and queues it; both come from the models feature, so the catalog is
-// pinned here and the queueing spied on.
 const models = vi.hoisted(() => {
   // A real subscribable store, like the one behind `useActiveInstallSources`:
   // putting the encoder into (and out of) an in-flight install has to re-render
@@ -335,10 +331,7 @@ describe('Image Map indexing activity', () => {
         </ChakraProvider>
       )
     );
-    // The plot is `lazy()`, so the first render in the file waits on the
-    // dynamic import and then on the re-render Suspense schedules once it
-    // resolves. Polled rather than flushed a fixed number of times: the badge
-    // has to be asserted against the resolved tree, not the fallback.
+    // Poll for the resolved lazy plot tree rather than assuming a fixed number of Suspense flushes.
     for (let attempt = 0; attempt < 50 && !host?.querySelector('[data-testid="plot"]'); attempt += 1) {
       await act(async () => {
         await new Promise((resolve) => {
@@ -349,10 +342,7 @@ describe('Image Map indexing activity', () => {
   };
 
   it('reports an index run over the map instead of drawing it silently', async () => {
-    // The has-points branch preempts the progress panel, which is right — a
-    // usable stale map beats a progress bar — but it used to do so with no
-    // sign that anything was happening, which is what a model-change re-index
-    // looks like from the panel: the old map, no labels, no explanation.
+    // Keep a usable stale map during reindexing but show progress so missing labels are explained.
     await renderMapWithCounts({ embedded: 1204, failed: 0, pending: 16846, total: 18050 });
 
     expect(host?.querySelector('[data-testid="plot"]')).not.toBeNull();

@@ -13,11 +13,8 @@ interface RecallParametersRuntimeModule {
 }
 
 /**
- * Keeps the recall runtime, and the gallery and model lookups it needs, out of
- * the editor's boot graph: the runtime module loads on the first recall event,
- * and events that arrive while it loads are handed over in order, each with the
- * project that was active when it arrived. A failed load is reported and the
- * next event retries it.
+ * Lazy-load recall on its first event; buffer events in arrival order with their original project. Report load
+ * failures and retry on the next event.
  */
 export const attachRecallParametersRuntime = ({
   commands,

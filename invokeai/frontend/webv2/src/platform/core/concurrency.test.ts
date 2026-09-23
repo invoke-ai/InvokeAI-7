@@ -73,9 +73,7 @@ describe('mapWithConcurrency', () => {
   });
 
   it('starts no further work after a mapper rejects', async () => {
-    // `Promise.all` stops *waiting* on a rejection; it does not stop the workers. Without an
-    // explicit stop, an export that has already failed goes on to issue one request per asset it
-    // had not reached yet.
+    // After rejection, stop scheduling remaining assets; Promise.all alone does not stop workers.
     const started: number[] = [];
 
     await expect(
@@ -112,8 +110,7 @@ describe('mapWithConcurrency', () => {
   });
 
   it('still runs the list when told a concurrency of zero', async () => {
-    // Spawning `min(0, length)` workers resolved immediately with an empty array, which reads as
-    // "nothing to do" rather than "nothing was done".
+    // Zero workers must not report successful processing of a nonempty list.
     const results = await mapWithConcurrency([1, 2, 3], 0, (item) => Promise.resolve(item * 2));
 
     expect(results).toEqual([2, 4, 6]);

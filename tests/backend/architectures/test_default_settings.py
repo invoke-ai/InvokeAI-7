@@ -17,6 +17,7 @@ from invokeai.backend.model_manager.taxonomy import (
     Flux2VariantType,
     FluxVariantType,
     Krea2VariantType,
+    LTX2VariantType,
     WanVariantType,
     ZImageVariantType,
 )
@@ -242,6 +243,14 @@ DEFAULT_SETTINGS_MATRIX: list[tuple[str, BaseModelType, AnyVariant | None, str |
         {"scheduler": "euler", "steps": 40, "cfg_scale": 4.0, **_SQUARE_1024},
     ),
     ("minimax-h3", BaseModelType.MiniMaxH3, None, None, {"steps": 50, "cfg_scale": 1.0, "width": 1344, "height": 768}),
+    ("ltx-2", BaseModelType.LTX2, None, None, {"steps": 30, "cfg_scale": 3.0, "width": 1248, "height": 704}),
+    (
+        "ltx-2-distilled",
+        BaseModelType.LTX2,
+        LTX2VariantType.Distilled,
+        None,
+        {"steps": 8, "cfg_scale": 1.0, "width": 1248, "height": 704},
+    ),
     ("anima", BaseModelType.Anima, None, None, {"scheduler": "euler", "steps": 35, "cfg_scale": 4.5, **_SQUARE_1024}),
 ]
 

@@ -4,14 +4,8 @@ import { getLayoutWidgetTypeIds } from './layoutWidgetSet';
 import { loadWidgets, warmWidgets } from './widgetRegistry';
 
 /**
- * How long a *cold* activation waits for widget implementations before
- * applying the preset anyway. A fully warm switch (every widget already in
- * memory) never consults this — it applies synchronously in the caller's own
- * task. This deadline only bounds how long the tab waits before revealing a
- * cold switch progressively; the tab has already acknowledged the press
- * either way. A cold or failing chunk stops gating the entire layout at this
- * deadline: the switch commits and the stragglers reveal progressively behind
- * their own per-widget fallbacks.
+ * Bound cold widget loading before applying the preset with per-widget fallbacks. Fully warm switches apply
+ * synchronously and never consult the deadline.
  */
 const APPLY_DEADLINE_MS = 250;
 
@@ -66,11 +60,8 @@ export const createLayoutPresetActivator = ({
       const projectId = getActiveProjectId();
       const requestId = ++latestRequestId;
 
-      // The common case — hover-preloaded, or a preset visited before. Awaiting
-      // here costs a microtask, which is enough to push the commit out of the
-      // click's own task and lose the frame on which the press was acknowledged.
-      // `requestId` is already bumped above, so a still-pending slow activation
-      // that lands after this one cannot overwrite it.
+      // Apply warm presets synchronously in the click task; the already-advanced request id fences older cold
+      // activations.
       if (isLoaded(preset)) {
         apply(preset.id);
 

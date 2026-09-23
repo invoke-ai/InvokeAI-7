@@ -1,25 +1,11 @@
 /**
- * Resolves the transparency checkerboard's two square colors from the live Chakra
- * theme so the infinite-canvas surround uses theme tokens (not hardcoded greys),
- * and re-resolves on theme / color-mode switches. The resolved colors are fed
- * one-directionally into the engine's `checkerColors` store (the same
- * settings→engine-store pattern as the boolean canvas settings); the engine stays
- * React-free and rebuilds its cached checker tile when the colors change.
- *
- * Resolution reads the *computed* backgroundColor of a hidden probe element set to
- * each semantic token's CSS custom property — the browser's ground truth for the
- * active `<html data-theme>`. Falls back to {@link DEFAULT_CHECKER_COLORS} when the
- * DOM is unavailable (node tests) or a token yields nothing usable.
+ * Resolve checker semantic tokens through computed probe colors and feed the engine one-way. Use {@link
+ * DEFAULT_CHECKER_COLORS} without DOM or usable tokens; changed colors rebuild its cached tile.
  */
 
 import { system } from '@theme/system';
 import { type CheckerColors, DEFAULT_CHECKER_COLORS } from '@workbench/canvas-engine/api';
 
-/**
- * The two Chakra semantic tokens used for the checker squares. `bg.subtle` and
- * `bg.emphasized` are two adjacent neutral surfaces, giving a low-contrast checker
- * that reads as "empty" in every theme (light and dark) without a bespoke pair.
- */
 export const CHECKER_TOKEN_A = 'bg.inset';
 export const CHECKER_TOKEN_B = 'bg.subtle';
 
@@ -40,11 +26,7 @@ export const isUsableColor = (value: string | null | undefined): value is string
 export const pickCheckerColor = (resolved: string | null | undefined, fallback: string): string =>
   isUsableColor(resolved) ? resolved : fallback;
 
-/**
- * Resolves both checker colors from the current theme. Safe to call anytime; in a
- * non-DOM environment (or before the theme is applied) it returns the fallback
- * pair so callers always get concrete colors.
- */
+/** Return concrete theme checker colors, falling back when DOM/theme values are unavailable. */
 export const resolveCheckerColors = (): CheckerColors => {
   if (typeof document === 'undefined' || typeof getComputedStyle !== 'function' || !document.body) {
     return { ...DEFAULT_CHECKER_COLORS };

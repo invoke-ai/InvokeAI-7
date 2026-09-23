@@ -27,14 +27,7 @@ const schemaUnsupported = (minimum, maximum) =>
 
 const clientMaximum = (value) => (Number.isInteger(value) && value >= 1 ? value : DEFAULT_CANVAS_SCHEMA_VERSION);
 
-/**
- * Disposable in-memory InvokeAI backend for browser release/performance tests.
- *
- * `empty` and `representative` are explicit workload profiles. A reset without
- * a profile restores the profile selected at server startup; callers may switch
- * deterministically with `POST /__reset?profile=representative`. No socket.io
- * server is provided, so realtime transport remains stably disconnected.
- */
+/** In-memory test backend; no Socket.IO. POST /__reset restores the startup profile unless ?profile= overrides it. */
 
 const FIXED_EPOCH_MS = Date.parse(MOCK_BACKEND_FIXED_EPOCH);
 const TINY_PNG = Buffer.from(
@@ -43,9 +36,7 @@ const TINY_PNG = Buffer.from(
 );
 const FIXTURE_VIDEO = readFileSync(resolve(import.meta.dirname, 'mock-assets/fixture-video.mp4'));
 const FIXTURE_VIDEO_POSTER = readFileSync(resolve(import.meta.dirname, 'mock-assets/fixture-video.webp'));
-// Served verbatim from the same file the backend pins in
-// `tests/backend/architectures/test_capabilities_fixture.py`, so the journey tests exercise the
-// payload the real route returns rather than a stand-in that can drift from it.
+// Share the backend-pinned capabilities fixture to keep journey payloads aligned with the real API.
 const ARCHITECTURE_CAPABILITIES = JSON.parse(
   readFileSync(
     resolve(import.meta.dirname, '../src/features/generation/core/__fixtures__/architectureCapabilities.json'),
@@ -53,14 +44,7 @@ const ARCHITECTURE_CAPABILITIES = JSON.parse(
   )
 );
 
-/**
- * Fault switches, orthogonal to the workload profiles.
- *
- * The Generate panel gates its entire form on `GET /api/v2/models/capabilities`, so its outage,
- * retry and recovery states are unreachable while that route always succeeds. `POST /__faults`
- * (`{"capabilities": "error" | "empty" | "ok"}`, also accepted as a query parameter) makes the
- * route fail for the rest of the session; `POST /__reset` clears the faults with the state.
- */
+/** POST /__faults sets capabilities to error, empty, or ok until POST /__reset; independent of workload profile. */
 const CAPABILITY_FAULTS = new Set(['ok', 'error', 'empty']);
 
 const createFaults = () => ({ capabilities: 'ok' });
@@ -69,11 +53,7 @@ const MOCK_USER_ID = 'fixture-user';
 
 const clone = (value) => structuredClone(value);
 
-/**
- * Two starter bundles, so the Launchpad's "no models installed" onboarding can
- * actually be exercised. An empty response renders no call to action at all,
- * which made the most important path on a fresh install unverifiable.
- */
+/** Starter bundles keep fresh-install onboarding reachable in journeys. */
 const STARTER_MODEL = {
   base: 'sd-1',
   description: 'Fixture starter model',
@@ -100,8 +80,7 @@ const createState = (profile) => {
 
   return {
     boards: new Map(fixture.boards.map((board) => [board.board_id, clone(board)])),
-    // An existing account: the one-time alpha notice was dismissed already, so
-    // journeys and verification scripts land on the page, not a modal.
+    // Dismiss the alpha notice so journeys start on the requested page.
     clientState: new Map([['webv2:workbench-settings', JSON.stringify({ alphaNoticeAcknowledged: true })]]),
     images: new Map(fixture.images.map((image) => [image.image_name, clone(image)])),
     models: new Map(fixture.models.map((model) => [model.key, clone(model)])),
@@ -120,15 +99,7 @@ const createState = (profile) => {
   };
 };
 
-/**
- * Put media back under names a fresh state does not have, without its projects or boards.
- *
- * A restore has to be provably free of name adoption: board media must take a new identity even
- * when the destination already holds an image with the archived name — on the same server it always
- * does, and reusing it would move a stranger's picture onto the restored board. Reset alone cannot
- * express that, because it clears everything, so the journey names the collisions it wants kept.
- * The media lands unboarded, exactly as media whose board was deleted would.
- */
+/** Seed unboarded name collisions to verify imports copy board media instead of adopting existing items. */
 const seedCollisionMedia = (state, names) => {
   const source = createMockBackendFixture('representative');
   const requested = new Set(names);
@@ -154,22 +125,10 @@ const timestamp = (state) => {
   return value;
 };
 
-/**
- * The projection's timestamp. Fixed, and deliberately NOT `timestamp(state)`:
- * that advances the fixture's mutation clock on every call, so the map's two
- * endpoints would answer with different `updated_at` values and the client
- * would discard every cluster-label response as belonging to another
- * projection — and it would drift the clock on plain GETs besides.
- */
+/** Keep both map endpoints on one fixed projection timestamp; timestamp(state) advances on every call. */
 const IMAGE_MAP_UPDATED_AT = '2026-01-01 00:00:00.000';
 
-/**
- * One map point per gallery item, at deterministic coordinates so the map is
- * comparable across runs. Cluster ids are assigned round-robin rather than
- * derived from position — nothing here runs DBSCAN, and the client only needs
- * ids that are stable and non-empty. Videos plot beside images, which is the
- * whole point of the kind field.
- */
+/** Use deterministic coordinates and round-robin cluster IDs; this fixture does not run clustering. */
 const imageMapPoints = (state, includeVideos) => {
   const items = [
     ...[...state.images.keys()].map((name) => ({ kind: 'image', name })),
@@ -268,8 +227,7 @@ const getOptionalBoolean = (url, name) => {
   return value === null ? undefined : value === 'true';
 };
 
-// `media_origin` is the one metadata key the DTO surfaces (the real server projects it out
-// of the metadata blob in SQL); the rest of a fixture's metadata stays behind /metadata.
+// Only media_origin belongs in the DTO; other metadata is served by /metadata.
 const toVideoDto = (video) => ({
   board_id: video.board_id,
   created_at: video.created_at,
@@ -476,10 +434,7 @@ const listVideos = (state, url) => {
 const projectIdForBoard = (state, boardId) =>
   [...state.projects.values()].find((project) => project.board_id === boardId)?.project_id ?? null;
 
-/**
- * Visible board membership, matching `GET /projects/{id}/board-snapshot`: intermediates and the
- * canvas's private `other` category are excluded, and the result is sorted by kind then name.
- */
+/** Match /board-snapshot visibility and ordering: exclude intermediate/other items, sort by kind then name. */
 const boardSnapshotItems = (state, boardId) => {
   const visible = (category) => ['general', 'control', 'mask', 'user'].includes(category);
   const items = [
@@ -750,11 +705,6 @@ export const startMockBackend = async (port, { profile = 'empty' } = {}) => {
         });
       }
 
-      // --- Image map -------------------------------------------------------
-      // Enough of the semantic map for the widget to render: every fixture
-      // item gets a point, laid out on a deterministic spiral so clusters are
-      // stable across runs. Videos are served only when the client asks for
-      // them, exactly as the backend does.
       if (method === 'GET' && path === '/api/v1/image_map/points') {
         const includeVideos = url.searchParams.get('include_videos') === 'true';
         const points = imageMapPoints(state, includeVideos);
@@ -773,8 +723,7 @@ export const startMockBackend = async (port, { profile = 'empty' } = {}) => {
       if (method === 'GET' && path === '/api/v1/image_map/cluster_labels') {
         return json(200, {
           labels: { 0: { alternates: ['sunset', 'coastline'], label: 'beaches' } },
-          // Same value and same kind filter as /points: the client compares
-          // both before it will use a label set.
+          // Labels must match /points on both projection timestamp and visible set.
           updated_at: IMAGE_MAP_UPDATED_AT,
           visible_hash: `visible-${String(url.searchParams.get('include_videos') === 'true')}`,
         });
@@ -785,9 +734,7 @@ export const startMockBackend = async (port, { profile = 'empty' } = {}) => {
         const isVideo = url.searchParams.get('kind') === 'video';
         const exists = isVideo ? state.videos.has(name) : state.images.has(name);
 
-        // 404 for an item this namespace does not hold, like the real route —
-        // which is what lets the label cache's definitive-miss path be
-        // exercised against the mock at all.
+        // Match the real route's 404 so tests can exercise definitive label-cache misses.
         if (!exists) {
           return json(404, { detail: 'This item has no stored embedding to label' });
         }
@@ -840,9 +787,7 @@ export const startMockBackend = async (port, { profile = 'empty' } = {}) => {
           const projectNumber = state.nextProjectNumber;
           const name = requested.name ?? `Project Name #${projectNumber}`;
 
-          // Creating a project either adopts the board it was given or makes one. Adopting is what
-          // lets an import upload its media before the project exists, so that creating the project
-          // is the import's single commit point.
+          // Adopting a prepopulated board makes project creation the import commit point.
           let boardId = requested.board_id ?? null;
           if (boardId === null) {
             boardId = `mock-project-board-${projectNumber}`;
@@ -1127,9 +1072,7 @@ export const startMockBackend = async (port, { profile = 'empty' } = {}) => {
         });
       }
 
-      // Dynamic prompt expansion. Enough of the `{a|b}` grammar for journeys to
-      // exercise the preview and the batch dimension; the real generator lives
-      // in the backend.
+      // Implements only the {a|b} subset needed by journeys.
       if (method === 'POST' && path === '/api/v1/utilities/dynamicprompts') {
         const requested = await readJsonBody(request);
         const prompt = typeof requested?.prompt === 'string' ? requested.prompt : '';
@@ -1372,8 +1315,7 @@ export const startMockBackend = async (port, { profile = 'empty' } = {}) => {
           const now = timestamp(state);
 
           state.nextImageNumber += 1;
-          // A genuinely new identity: `board_images` keys on the name, so a copy must own its own.
-          // Category and provenance travel; starring does not (callers use /images/star).
+          // Copies need a new board_images key; retain category/provenance, but set starring separately.
           state.images.set(imageName, {
             ...clone(source),
             board_id: boardId,

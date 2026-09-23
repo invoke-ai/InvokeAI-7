@@ -189,9 +189,8 @@ const replaceNodes = (
 };
 
 /**
- * Replaces every exact reference in a document while sharing untouched trees.
- * `targetAxes` is empty for a static face, so all source variation coordinates
- * are intentionally reset and included in the summary.
+ * Replaces exact font refs with structural sharing. Static targets have no axes, so reset and report all source
+ * variations.
  */
 export const replaceCanvasFontReferences = (
   document: CanvasDocumentContractV3,

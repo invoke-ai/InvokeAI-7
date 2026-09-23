@@ -5,11 +5,7 @@ import { describe, expect, it } from 'vitest';
 
 import { areVideoValuesEqual } from './videoComparators';
 
-/**
- * The comparator is a hand-maintained field list: a field left out of it makes
- * the widget judge an edit "unchanged" and skip the write. Each entry that has
- * shipped a bug this way earns a case here.
- */
+/** Missing comparator fields suppress edits; cover each independently editable value. */
 describe('areVideoValuesEqual', () => {
   const fl2vaBase: MainModelConfig = {
     base: 'minimax-h3',

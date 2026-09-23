@@ -1,13 +1,6 @@
 /**
- * Module-level bridge to the single mounted `WorkflowDialogHost`'s library
- * autosaver, mirroring `editor/flowInstanceStore.ts`'s pattern for surfaces
- * that need to reach a widget-scoped instance without threading it through
- * props or importing the chrome component (which would cycle back through
- * this directory). `WorkflowDialogHost` registers its autosaver's
- * `markSynced` in a mount effect; `WorkflowLibraryDialog`'s load path and
- * `useSaveWorkflowToLibrary` call `markLibraryGraphSynced` after a
- * load/save so the freshly-synced content is not immediately queued for
- * another autosave pass.
+ * Expose the mounted autosaver's markSynced without importing chrome; load/save paths use it to prevent immediate
+ * echo autosaves.
  */
 
 type MarkSyncedFn = (serialized: Record<string, unknown>) => void;

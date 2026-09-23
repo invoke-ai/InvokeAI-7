@@ -188,8 +188,7 @@ describe('isPossibleDatePrefix', () => {
 
 describe('formatIsoDate', () => {
   it('formats the calendar day itself regardless of timezone offset', () => {
-    // A UTC-based Date('2026-07-21') would render Jul 20 in negative offsets;
-    // parts-based construction must always yield the written day.
+    // Parts-based construction must preserve the written day in negative UTC offsets.
     expect(formatIsoDate('2026-07-21', 'en-US')).toBe('Jul 21');
     expect(formatIsoDate('2026-07-21', 'de-DE')).toBe('21. Juli');
   });

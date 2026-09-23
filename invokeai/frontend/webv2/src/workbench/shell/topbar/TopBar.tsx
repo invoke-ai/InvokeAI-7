@@ -10,16 +10,8 @@ import { ProjectSwitcher } from './ProjectSwitcher';
 import { TopbarProgressRail } from './TopbarProgressRail';
 
 /**
- * The workbench top bar.
- *
- * Three columns, not a flex row: the `1fr` sides keep the preset strip
- * geometrically centred whatever the project name's length, where flex would
- * shift it on every project switch — highly visible on an always-on-screen bar.
- * `minmax(0, 1fr)` so the left column truncates instead of widening the grid.
- *
- * Zones degrade from the left: labels, then the project name, before anything in
- * the invocation cluster gives way. The routing indicator and queue readout
- * never collapse at any width (§10).
+ * Use minmax(0,1fr) side columns to center presets independently of project-name width. Collapse left labels
+ * first; preserve route and queue indicators.
  */
 const TOPBAR_COLUMNS = 'minmax(0, 1fr) auto minmax(0, 1fr)';
 

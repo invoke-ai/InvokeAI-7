@@ -234,8 +234,7 @@ const zCanvasLayer = z.discriminatedUnion('type', [
   zLayerBase.extend({
     adapter: zControlAdapter,
     filter: zFilter.optional(),
-    // Display-only visibility; absent ⇒ not hidden, so older documents load
-    // unchanged. Only the three overlay types carry it — see `contracts.ts`.
+    // Missing display-only visibility means visible for older documents; only overlay types carry it.
     isHidden: z.boolean().optional(),
     source: zLayerSource,
     type: z.literal('control'),
@@ -317,11 +316,7 @@ export const createEmptyCanvasDocument = (
   version: 3,
 });
 
-/**
- * A brand-new project's default inpaint mask: one empty mask with the default diagonal-hatch fill
- * in the first cycled mask colour. Mirrors `createInpaintMaskLayer` in `widgets/layers/layerOps`,
- * duplicated so this pure module does not pull in the panel module graph.
- */
+/** Mirror the default inpaint mask without importing the Layers panel into this pure module. */
 const createInitialInpaintMaskLayer = (): CanvasInpaintMaskLayerContract => ({
   blendMode: 'normal',
   id: createMigrationId('layer'),
@@ -373,10 +368,6 @@ export const canvasDocumentRequiresFontSchemaV4 = (document: Pick<CanvasDocument
 const writableDocumentVersion = (declaredVersion: unknown, stacks: CanvasStackForests): 3 | 4 =>
   declaredVersion === 4 || canvasDocumentRequiresFontSchemaV4({ stacks }) ? 4 : 3;
 
-/**
- * Converts a `{x,y,width,height}` placement rect, plus the native size of the image it places,
- * into a layer `transform`. Used by the "accept staged image into a raster layer" reducer path.
- */
 export const placementToTransform = (
   placement: { x: number; y: number; width: number; height: number },
   imageWidth: number,
@@ -568,11 +559,8 @@ const parseNode = (value: unknown, path: string, depth: number, context: ParseCo
   if (context.stack === 'raster' || shell.data.isHidden === false) {
     delete shell.data.isHidden;
   }
-  // Adjustments, opacity and blend are the raster-stack mirror of the isHidden
-  // rule: overlay groups composite coverage, not color, so all three are
-  // meaningless there. Stripped SILENTLY, unlike isHidden: diagnostics are
-  // fatal to the whole parse, and rejecting a document over a meaningless
-  // property is worse than dropping it.
+  // Overlay groups carry coverage, not color. Drop raster-only properties silently because diagnostics reject the
+  // whole document.
   if (context.stack !== 'raster') {
     delete shell.data.adjustments;
     delete shell.data.blendMode;
@@ -748,9 +736,8 @@ const loadCanvasStateStep = (canvas: unknown): LoadStep<CanvasStateContractV3> =
 };
 
 /**
- * Version-checks persisted canvas state before anything is defaulted or parsed: an absent state is
- * a fresh empty canvas, the current version is validated strictly, every other declared version is
- * refused so its raw payload stays available for recovery.
+ * Check versions before defaulting: absent state is fresh, current state is validated, and other versions retain
+ * raw payloads for recovery.
  */
 export const loadCanvasState = (canvas: unknown): CanvasLoadResult<CanvasStateContractV3> => {
   const step = loadCanvasStateStep(canvas);

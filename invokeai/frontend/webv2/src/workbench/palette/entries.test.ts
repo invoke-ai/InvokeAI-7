@@ -23,13 +23,6 @@ import {
   resolveActivePaletteRow,
 } from './entries';
 
-/**
- * The palette's source aggregation and ranking contract: unimplemented and
- * hotkey-only commands never surface, widget commands follow layout presence,
- * settings rows read/write preferences, and the row list keeps its fixed
- * section order with fuzzy ranking inside each section.
- */
-
 const noop = () => undefined;
 const translations: Record<string, string> = {
   'commandPalette.actions.openInSettings': 'Open in Settings',

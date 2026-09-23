@@ -23,10 +23,6 @@ export const getQueueHeaderCancelState = ({
   itemLabel: 'widgets.queue.cancelCurrent',
 });
 
-/**
- * Cancel the current queue item from the manifest `headerActions` slot, so the
- * most common interruption action sits inline beside the actions menu.
- */
 export const QueueHeaderActions = () => {
   const { t } = useTranslation();
   const { canManageItem, isConnected, notify } = useQueueUi();

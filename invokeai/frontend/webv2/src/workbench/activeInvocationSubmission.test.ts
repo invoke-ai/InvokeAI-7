@@ -11,8 +11,7 @@ import { submitActiveInvocation, type ActiveInvocationSubmissionRuntime } from '
 import { isCanvasInvocationPreparing } from './canvasInvocationPreparation';
 import { createInitialWorkbenchState, workbenchReducer } from './workbenchState.testing';
 
-// Generation policy now fails closed without the capability table, and a submission cannot
-// happen before app boot has fetched it. Seeding it here is what the running app does.
+// Seed capabilities to match app boot; submission fails closed without them.
 seedArchitectureCapabilities();
 
 const owner = { signal: new AbortController().signal } as AccountScope;

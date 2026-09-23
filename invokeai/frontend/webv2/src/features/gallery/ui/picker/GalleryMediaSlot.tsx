@@ -67,13 +67,8 @@ const getThumbnailUrl = (value: GalleryMediaSlotValue): string =>
   value.kind === 'video' ? getGalleryVideoThumbnailUrl(value.name) : getGalleryImageThumbnailUrl(value.name);
 
 /**
- * A single-item media field: click opens the gallery picker (which carries the
- * gallery upload), and a gallery drag can be dropped on it. Owns the async
- * resolve work and its busy and error states; the consumer only sees
- * `onChange` with a full item (or null when cleared). A consumer that stores
- * the file itself — media the gallery does not hold — takes it through
- * `onUploadFile`, which adds a file action to the row, and can show its own
- * `thumbnail` for such a value.
+ * Own async resolution and report complete items through onChange. onUploadFile and custom thumbnails support
+ * media stored outside the gallery.
  */
 export const GalleryMediaSlot = ({
   accept,
@@ -98,11 +93,7 @@ export const GalleryMediaSlot = ({
   thumbnail?: ReactNode;
   value: GalleryMediaSlotValue | null;
   onChange: (item: GalleryItem | null) => void;
-  /**
-   * Reveals the current value in the Gallery grid. Given, the thumbnail carries
-   * a find badge on hover; omitted, it stays a plain preview — a slot holding
-   * media the gallery does not own has nothing to reveal.
-   */
+  /** Provide onFind only for gallery-owned media; it enables the thumbnail reveal badge. */
   onFind?: () => void;
   /** Takes a file the consumer stores itself; gallery-backed slots upload through the picker instead. */
   onUploadFile?: (file: File) => void;
@@ -291,12 +282,10 @@ export const GalleryMediaSlot = ({
           </DropZone>
         </GalleryPickerPopover>
         {value && onFind ? (
-          /* A sibling of the slot's face, not a child of it: that face is a
-             <button>, which may not contain another. The row repeats the value
-             row's own box metrics — its height, padding, and tile size — so the
-             badge lands on the thumbnail's corner without measuring anything.
-             It rides a pixel high, by the face's border; nothing a corner badge
-             can show. */
+          /*
+           * Keep the badge beside the button face to avoid nested buttons; matching row metrics align it without
+           * measurement.
+           */
           <HStack gap="3" h="20" insetInline="0" p="2" pointerEvents="none" position="absolute" top="0">
             <Box boxSize="16" flexShrink="0" position="relative">
               <FindInGalleryThumbnailButton name={value.name} onFind={onFind} />

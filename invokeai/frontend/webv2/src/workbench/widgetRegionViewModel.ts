@@ -58,10 +58,8 @@ export interface WidgetRegionViewModel<Instance extends WidgetPlacementInstanceM
 }
 
 /**
- * A floated widget leaves its region's `instanceIds`, but the rail still shows
- * its slot — at the index it docks back to — so the window stays one click
- * from the strip it came from. Ascending by index keeps later insertions from
- * displacing earlier ones.
+ * Keep floated widgets reachable from their original rail slots; insert by ascending dock index to preserve
+ * ordering.
  */
 const withFloatingSlots = (
   instanceIds: WidgetInstanceId[],

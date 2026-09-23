@@ -640,10 +640,8 @@ describe('Call Saved Workflow dynamic fields', () => {
 });
 
 describe('Call Saved Workflow labels across a reload', () => {
-  // Consequence of the dropped `labelOverride`: on a parent whose dynamic
-  // templates were never persisted, the first reconcile after a reload resets
-  // the user's label to the child's generated one, and the library autosaver
-  // then writes that loss back with no user action.
+  // Preserve labelOverride through reload so dynamic-template reconciliation and autosave cannot erase user
+  // labels.
   it('keeps a user label when a template-less parent is saved and reloaded', () => {
     const callNode = buildInvocationNode(callSavedWorkflowTemplate, { x: 0, y: 0 });
 

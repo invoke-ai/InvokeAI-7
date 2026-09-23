@@ -4,11 +4,7 @@ import type { GalleryWidgetProps } from './GalleryUiContext';
 
 type GalleryRegion = GalleryWidgetProps['region'];
 
-/**
- * The gallery's two arrangements of one component set. Only the two shell
- * components read it: every slot renders one way, so a size-dependent
- * difference must be expressible as "which shell puts this where".
- */
+/** Only shells interpret arrangement; shared slots must work in either placement. */
 const isRailRegion = (region: string): boolean => region === 'left' || region === 'right';
 
 export type GalleryLayoutMode = 'stacked' | 'wide';
@@ -16,12 +12,7 @@ export type GalleryLayoutMode = 'stacked' | 'wide';
 /** Below this the board column's ~240px leaves too little grid to scan. */
 export const GALLERY_WIDE_MIN_WIDTH_PX = 560;
 
-/**
- * Side panels are always stacked, whatever they measure: a docked inspector
- * keeps one arrangement so it does not reflow as the user drags its edge.
- * (Their maximum is 720px, so the threshold below is reachable there — the
- * branch is the reason they never take it, not the width.)
- */
+/** Keep docked side panels stacked across resizing to avoid layout switches while dragging their edge. */
 export const getGalleryLayout = ({
   region,
   widthPx,

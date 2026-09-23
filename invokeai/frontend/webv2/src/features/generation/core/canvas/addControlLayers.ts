@@ -1,24 +1,4 @@
-/**
- * Pure control-layer graph grafting (legacy parity).
- *
- * {@link addControlLayers} wires each enabled, valid control layer's uploaded
- * composite into a base-appropriate control adapter node, collects same-kind
- * nodes, and connects the collector (or, for Control LoRA, the node directly) to
- * the canvas graph's denoise node. It mutates the graph in place using the same
- * `addNode`/`addEdge` helpers the base builders use — no fetch, no engine, no
- * React. Node types + args mirror legacy
- * `features/nodes/util/graph/generation/addControlAdapters.ts`.
- *
- * Per-base + per-kind support (legacy `getControlLayerWarnings` + the graph
- * builders): controlnet on sd-1 / sdxl (`controlnet`) and flux (`flux_controlnet`);
- * t2i_adapter on sd-1 / sdxl; control_lora on flux only (single layer, and never
- * with a FLUX Fill main model); z_image_control on Z-Image only (single layer).
- * Everything else is rejected upstream.
- *
- * The executor composites each control layer SEPARATELY (never blended) and
- * passes its own uploaded image name in — so each adapter node references a
- * distinct control image, exactly like legacy.
- */
+/** Graft separately composited controls into the graph in place. */
 
 import type { SupportedGenerateBase } from '@features/generation/core/baseGenerationPolicies';
 import type { BackendGraphContract, BackendInvocationContract } from '@features/generation/core/contracts';
@@ -58,10 +38,7 @@ export interface ControlLayerGraphInput {
   controlMode: 'balanced' | 'more_prompt' | 'more_control' | 'unbalanced' | null;
 }
 
-/**
- * True when `base` supports control adapters of `kind` (legacy support matrix).
- * `controlMode` and adapter-model base compatibility are validated separately.
- */
+/** Kind support is separate from control-mode/model compatibility. */
 export { isControlKindSupportedForBase } from './controlValidation';
 
 /** Options for {@link addControlLayers}. */
@@ -77,15 +54,7 @@ export interface AddControlLayersOptions {
 /** Resolves the backend node type for a controlnet layer on `base`. */
 const controlNetNodeType = (base: string): string => (base === 'flux' ? 'flux_controlnet' : 'controlnet');
 
-/**
- * Grafts control layers onto a built canvas base graph. Revalidates support,
- * model compatibility, the Control LoRA limit, and FLUX Fill restrictions so a
- * caller cannot bypass the same shared validation used by invoke and UI. Wires:
- * - controlnet → `control_net_collector` (collect) → `denoise.control`;
- * - t2i_adapter → `t2i_adapter_collector` (collect) → `denoise.t2i_adapter`;
- * - control_lora → `denoise.control_lora` directly (FLUX, first layer only).
- * - z_image_control → `denoise.control` directly (Z-Image, first layer only).
- */
+/** Validate defensively through the shared policy before graph wiring. */
 export const addControlLayers = (graph: BackendGraphContract, options: AddControlLayersOptions): void => {
   const { base, layers, modelVariant } = options;
   const denoise = graph.nodes[CONTROL_DENOISE_NODE_ID];
@@ -181,15 +150,7 @@ export const addControlLayers = (graph: BackendGraphContract, options: AddContro
   }
 };
 
-/**
- * Returns the legacy-parity rejection reason for a control layer, or `null` when
- * it is valid for generation. Mirrors `getControlLayerWarnings`:
- * - no drawn/composited content → "no control";
- * - no adapter model selected → "no model";
- * - main base unsupported (sd-2 / sd-3 / anima / …) → "unsupported model";
- * - adapter model base ≠ main base → "incompatible base";
- * - FLUX Fill + Control LoRA → "incompatible".
- */
+/** Return null when valid, otherwise the rejection reason. */
 export const getControlLayerRejectionReason = (params: {
   layerName: string;
   hasContent: boolean;

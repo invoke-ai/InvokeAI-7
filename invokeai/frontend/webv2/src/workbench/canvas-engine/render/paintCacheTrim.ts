@@ -1,16 +1,7 @@
 /**
- * Trims a paint layer's raster cache back to the pixels it can actually show.
- *
- * The cache only ever grows (strokes chunk-pad their extent; the eraser grows it
- * too), and persistence bakes that extent into the layer's bitmap dimensions — which
- * is what the move outline, the transform frame and fit-to-content read. So a fully
- * erased layer kept a draggable rectangle around nothing.
- *
- * Runs from the debounced persistence flush, so its synchronous full-surface alpha
- * readback never touches the paint hot path. The readback is distinct from the
- * asynchronous PNG encode and its cost scales with the cache extent.
- *
- * Zero React, zero import-time side effects.
+ * Trim grown paint caches to visible alpha before persistence so erased padding does not become phantom layer
+ * bounds. Full-surface synchronous readback runs in debounced flush, outside the stroke hot path, and scales with
+ * cache extent.
  */
 
 import type { LayerCacheStore } from '@workbench/canvas-engine/render/layerCache';
@@ -31,10 +22,6 @@ export interface TrimPaintCacheDeps {
   readonly isLayerBusy: (layerId: string) => boolean;
 }
 
-/**
- * Shrinks `layerId`'s cache to its non-transparent bounds, or collapses it to a zero
- * rect when it has none.
- */
 export const trimPaintCacheToAlpha = (deps: TrimPaintCacheDeps, layerId: string): PaintCacheTrim => {
   // `peek`, not `get`: a persistence-side probe must not reorder the LRU.
   const entry = deps.layers.peek(layerId);

@@ -16,10 +16,6 @@ const pointer = (x: number, y: number, pressure = 0.5): PointerInput => ({
   timeStamp: 0,
 });
 
-/**
- * Paints `path` through a session, delivering it in batches of `batchSize`, and
- * returns the committed pixels plus the rect they cover.
- */
 const paint = (
   path: PointerInput[],
   batchSize: number,
@@ -64,11 +60,7 @@ const paint = (
   return { pixels: event.afterImageData.data, rect: event.dirtyRect };
 };
 
-/**
- * The largest per-channel difference attributable to premultiplied-alpha
- * rounding. Structural errors (a gap, a seam, a double-composite) are one to two
- * orders of magnitude above this.
- */
+/** Tolerance covers premultiplied-alpha rounding; gaps, seams and double composites exceed it substantially. */
 const ROUNDING_TOLERANCE = 6;
 
 const tapCoverage = (
@@ -191,21 +183,9 @@ const sweep = (): PointerInput[] => {
 };
 
 describe('incremental compositing produces the same coverage as recompositing everything', () => {
-  // The session restores and composites only the band where the outline moved,
-  // and grows its "before" snapshot from the strips the region gains. If either
-  // bound were too tight the stroke would come out with gaps, seams or doubled
-  // opacity.
-  //
-  // The assertion is about COVERAGE, not bit-equality. Whether a given edge
-  // pixel's antialiasing was laid down on this frame or three frames ago can
-  // shift it by a subpixel, so a handful of boundary pixels legitimately differ
-  // from a single-batch paint. What must not differ is the interior: any gap,
-  // seam or double-composite shows up as an opaque pixel disagreeing by far more
-  // than a rounding step, which is what these bounds catch.
-  //
-  // Calibrated by deliberately shrinking the band: 10px still passes (the vertex
-  // diff carries that much natural slack at these sample rates), 30px fails all
-  // four cases.
+  // Band updates and incremental before-snapshots must preserve interior coverage. Boundary antialiasing may
+  // differ by subpixels across batches; interior gaps or compounded opacity may not. Deliberately shrinking the
+  // band by 30px fails all four cases.
   const cases: { batchSize: number; label: string; opacity: number; size: number; thinning: number }[] = [
     { batchSize: 1, label: 'one sample per batch, opaque', opacity: 1, size: 220, thinning: 0 },
     { batchSize: 1, label: 'one sample per batch, semi-transparent', opacity: 0.4, size: 220, thinning: 0 },
@@ -221,8 +201,7 @@ describe('incremental compositing produces the same coverage as recompositing ev
     expect(incremental.rect).toEqual(wholesale.rect);
     expect(incremental.pixels.length).toBe(wholesale.pixels.length);
 
-    // Interior = a pixel both paints agree is essentially opaque. A gap or a
-    // double-composite lands here; antialiasing never does.
+    // Compare essentially opaque interior pixels to exclude antialiasing differences.
     let interiorDiffering = 0;
     let interiorWorst = 0;
     let edgeDiffering = 0;
@@ -244,11 +223,7 @@ describe('incremental compositing produces the same coverage as recompositing ev
       }
     }
     const total = incremental.pixels.length / 4;
-    // Interior pixels may drift by a rounding step — compositing at an opacity
-    // rounds premultiplied channels, and which frame did it changes nothing
-    // else. What this rules out is structural error, which is nowhere near this
-    // scale: an unpainted gap reads as a 255 difference and a double-composite
-    // at opacity 0.4 as ~100.
+    // Allow rounding-scale interior drift, not gaps or double-composite errors hundreds of channel steps larger.
     expect(interiorWorst).toBeLessThanOrEqual(ROUNDING_TOLERANCE);
     expect(interiorDiffering / total).toBeLessThan(0.001);
     // The antialiased boundary may land a subpixel differently, but only there.

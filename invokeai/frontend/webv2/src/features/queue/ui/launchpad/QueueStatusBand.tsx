@@ -6,29 +6,15 @@ import { HourglassIcon } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 /**
- * What the backend is doing right now, on the home screen.
- *
- * The Launchpad used to surface no application state at all — the home screen
- * of an image generator said nothing about whether anything was generating.
- * This is deliberately a single line: the Queue widget in the editor is where
- * the detail lives.
- *
- * Scoped to every job rather than the active project, because Home is not
- * inside a project.
- *
- * Reads `data/queries` directly rather than the feature's `publicApi`: that
- * module constructs the realtime runtime and coordinator at import time, so
- * going through it would pull the whole Queue runtime onto the home screen for
- * two numbers.
+ * Home shows server-wide activity outside project scope. Read queries directly to avoid loading Queue runtime for
+ * summary counts.
  */
 
 const ALL_JOBS_SCOPE = {} as const;
 
 /**
- * Socket-driven invalidation lives in the editor's Queue widget runtime, and
- * the query client has window-focus refetching turned off, so without this the
- * band would show whatever the counts were when Home first mounted and never
- * move again.
+ * Refresh Home counts here because editor realtime invalidation is unmounted and query focus refetching is
+ * disabled.
  */
 const QUEUE_POLL_INTERVAL_MS = 5_000;
 
@@ -60,8 +46,7 @@ export const QueueStatusBand = () => {
       py="2"
       rounded="lg"
     >
-      {/* A real spinner while something runs; a static glyph for a queue that
-          is only waiting, so the band does not claim activity it cannot show. */}
+      {/* Animate only running work; waiting-only queues use a static glyph. */}
       {inProgress > 0 ? (
         <Spinner color="fg.muted" size="xs" />
       ) : (

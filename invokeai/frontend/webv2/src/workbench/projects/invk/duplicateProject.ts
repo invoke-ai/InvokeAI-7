@@ -30,16 +30,7 @@ import {
 } from './restoreProjectMedia';
 import { toMediaRefs } from './transfer';
 
-/**
- * Duplicating a project: the same restore as import, with the bytes taking a shortcut.
- *
- * A copy must own its media outright (see `transfer.ts`), which makes this import's problem. Only
- * materialization differs, and it differs because both projects live on this one server: the copy
- * endpoints work in place, so a 2 GiB board costs no traffic instead of 4 GiB and 2N requests.
- *
- * Document-only references already exist here and are not the project's own board content, so the
- * shared engine's existence check finds them all and nothing is uploaded.
- */
+/** Copy board media server-side and reuse external reference identities. */
 
 export interface DuplicateProjectInput {
   /** The board's visible contents, enumerated for the source project. */
@@ -64,12 +55,8 @@ export interface DuplicateProjectResult extends ProjectTransferIssues {
 }
 
 /**
- * The duplication half of the materialization seam: one bounded request sequence per kind, pixels
- * staying put. Progress moves per item once the sequence answers — there is no finer event.
- *
- * A batch that does not answer at all is every name in it failing, not the duplication failing:
- * the route reports per-item failures so one bad source cannot cost the batch, and letting a
- * transport error do what the route refuses would give that away at the last step.
+ * Report each batch item's outcome and progress; cancellation aborts the operation rather than becoming a batch
+ * failure.
  */
 export const createCopyMediaMaterializer = (
   deps: { copyImages?: typeof copyImagesToBoard; copyVideos?: typeof copyVideosToBoard; signal?: AbortSignal } = {}
@@ -111,13 +98,7 @@ export const createCopyMediaMaterializer = (
   };
 };
 
-/**
- * Copy a project and everything its board holds, under identities the copy owns.
- *
- * The commit point is the same as an import's: the media is materialized onto an unclaimed staging
- * board, and creating the project claims it. A failure before that deletes exactly what this
- * duplication made and leaves the original untouched.
- */
+/** Project creation commits the staging board; precommit rollback deletes only ledger-owned resources. */
 export const duplicateProjectRecord = async (
   input: DuplicateProjectInput,
   deps: DuplicateProjectDeps = {}
@@ -128,8 +109,7 @@ export const duplicateProjectRecord = async (
 
   assertAccountScopeCurrent(owner);
 
-  // Canonicalized through the reducer with the new identity, exactly as an import is: the copy is a
-  // new project, not a second pointer at the original's board and gallery selection.
+  // Canonicalize with a fresh project identity and reset source board/selection state.
   const { deserializeProjectDocument } = await import('@workbench/projects/syncedPersistence');
 
   assertAccountScopeCurrent(owner);
@@ -161,8 +141,7 @@ export const duplicateProjectRecord = async (
       {
         boardId: stagingBoardId,
         boardItems,
-        // Nothing is bundled: every byte this project needs is already on this server, so a
-        // reference the copy cannot resolve is one the original could not resolve either.
+        // Same-server duplication needs no bundled bytes and inherits unresolved external references.
         coverBytes: null,
         coverSourceImageName: selectCoverImageName(canonicalDocument),
         documentRefs: toMediaRefs(collectLiveAssetRefs(canonicalDocument)),
@@ -170,9 +149,7 @@ export const duplicateProjectRecord = async (
         projectId: id,
       },
       {
-        // Both projects live on this server, so every document-only reference resolves here by
-        // definition — the check would ask the server whether it has media it just told us about.
-        // For videos that is one request per referenced video, against a certain answer.
+        // Reuse document-only names without existence probes; references may already be dangling.
         findExistingImageNames: (names) => Promise.resolve(new Set(names)),
         findExistingVideoNames: (names) => Promise.resolve(new Set(names)),
         materializeBoardMedia: createCopyMediaMaterializer({

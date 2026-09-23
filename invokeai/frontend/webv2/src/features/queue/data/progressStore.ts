@@ -4,12 +4,8 @@ import { registerAccountOwnedResource } from '@platform/state/accountLifecycle';
 import { createKeyedTransientStore } from '@platform/state/externalStore';
 
 /**
- * Ephemeral live-progress store for in-flight queue items, keyed by the local
- * queue item id. Progress is high-frequency transient data, so it deliberately
- * lives outside the workbench reducer: routing it through dispatch would
- * re-render every consumer of workbench state and churn autosave on each step
- * of every generation. Any widget can subscribe to a single item via
- * `useQueueItemProgress` and only re-renders when that item's progress moves.
+ * Store high-frequency progress outside workbench state to avoid global rerenders and autosave; subscribe per
+ * local item ID.
  */
 
 export interface QueueItemProgressSink {

@@ -24,10 +24,8 @@ export const ReloadNodesButton = () => {
         await refreshCustomNodePacks(owner);
         assertAccountScopeCurrent(owner);
 
-        // The store records refetch failures without dropping loaded packs,
-        // so the stale list keeps rendering; the reload's own toast must not
-        // celebrate over it. (Reload is the only refresh affordance — a
-        // separate "refresh list" action would just duplicate this one.)
+        // A retained stale list can hide refetch failure; reload must inspect the store error before announcing
+        // success.
         const { error: refreshError } = getCustomNodesSnapshot();
 
         if (refreshError !== null) {
@@ -36,10 +34,8 @@ export const ReloadNodesButton = () => {
           return;
         }
 
-        // The backend reports the outcome as prose (custom_nodes.py). Only
-        // its success phrasing earns a green toast; anything else — like
-        // "No custom nodes directory found." — surfaces as-is. Unknown
-        // statuses fail honest, never fail green.
+        // Only recognized backend success prose earns a success toast; surface unknown statuses without claiming
+        // success.
         if (status.startsWith('Custom nodes reloaded')) {
           notify.success(t('nodes.customNodesReloaded'));
         } else {

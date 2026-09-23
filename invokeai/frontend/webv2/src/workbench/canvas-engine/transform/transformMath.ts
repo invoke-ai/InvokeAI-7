@@ -1,20 +1,7 @@
 /**
- * Pure transform math for the transform tool: handle geometry, screen-space
- * hit-testing over a rotated/scaled layer, per-handle rotation-aware cursors, and
- * the scale-about-anchor / rotate / move transform derivations.
- *
- * A layer's raster cache holds unscaled pixels in the layer's LOCAL space; the
- * compositor draws it through `fromTRS(transform)` (translate·rotate·scale). The
- * transform tool edits that {@link LayerTransform}. All handle positions are
- * computed in LOCAL space, mapped to document space via the layer matrix, then
- * projected to SCREEN space by the caller-supplied `toScreen` so grab areas stay
- * a constant pixel size regardless of zoom (mirrors `bboxHitTest.ts`, generalized
- * to a rotated frame). Every derivation returns a fresh transform from a captured
- * `start` transform plus a pointer delta — negative scale (a flip past the anchor)
- * is allowed and kept correct; `|scale|` is clamped to {@link MIN_ABS_SCALE} so a
- * collapsed axis never produces a singular/NaN matrix.
- *
- * Zero React, zero DOM, zero import-time side effects.
+ * Pure transform geometry maps local content through TRS then screen projection for fixed-size hit regions. Derive
+ * fresh transforms from gesture-start values; allow negative-scale flips while clamping absolute scale to {@link
+ * MIN_ABS_SCALE} to avoid singular matrices.
  */
 
 import type { CanvasLayerBaseContract } from '@workbench/canvas-engine/contracts';
@@ -27,11 +14,8 @@ import { snapMovedPoint } from '@workbench/canvas-engine/math/snapping';
 export type LayerTransform = CanvasLayerBaseContract['transform'];
 
 /**
- * The layer's content rectangle in its LOCAL (untransformed) space — the extent
- * being transformed. Content-sized layers can sit off-origin (a paint layer's
- * persisted offset, negative for strokes up/left of the origin), so the frame,
- * handles, and scale/rotate anchors are all derived from this rect, never from
- * an assumed `[0,w]×[0,h]`.
+ * All frames and anchors derive from local content rects, including negative paint offsets, never assumed
+ * origin-zero bounds.
  */
 export interface TransformRect {
   x: number;
@@ -43,10 +27,6 @@ export interface TransformRect {
 /** The eight scale handles: four corners + four edge midpoints. */
 export type TransformHandle = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w';
 
-/**
- * What a pointer landed on over the transform frame: a scale handle, a corner
- * rotate zone (just outside a corner), or the interior (`'move'`).
- */
 export type TransformTarget =
   | { kind: 'scale'; handle: TransformHandle }
   | { kind: 'rotate'; handle: TransformHandle }
@@ -64,11 +44,7 @@ export const TRANSFORM_HANDLE_HIT_PX = 14;
 /** Radius (screen px) of a corner's rotate zone, measured from the corner outward. */
 export const TRANSFORM_ROTATE_ZONE_PX = 22;
 
-/**
- * Screen-px length of the rotation-indicator nub the overlay draws past the top
- * edge midpoint (the `'n'` handle), outward away from the center. Shared with the
- * overlay renderer so the drawn nub and its hit region stay in lock-step.
- */
+/** Screen-pixel rotation-nub length shared by drawing and hit testing. */
 export const TRANSFORM_ROTATE_NUB_PX = 18;
 
 /** Screen-px grab radius around the rotation nub/knob (the capsule half-width). */
@@ -207,11 +183,7 @@ export interface TransformHitTestParams {
   rotateNubHitPx?: number;
 }
 
-/**
- * What a screen-space `point` targets on the transform frame: a scale handle
- * (grab area first, corners before edges), a corner rotate zone (outside the
- * frame, near a corner), the interior (`'move'`), or `null`.
- */
+/** Hit priority: scale handles (corners before edges), rotation targets, interior move, then null. */
 export const transformTargetAt = (params: TransformHitTestParams): TransformTarget | null => {
   const { point, rect, toScreen, transform } = params;
   const half = (params.handleHitPx ?? TRANSFORM_HANDLE_HIT_PX) / 2;
@@ -230,13 +202,8 @@ export const transformTargetAt = (params: TransformHitTestParams): TransformTarg
     return { kind: 'move' };
   }
 
-  // Rotation nub: a capsule from the top-edge (`'n'`) midpoint outward (away
-  // from center) by `TRANSFORM_ROTATE_NUB_PX`, matching the drawn nub. Tested
-  // after the interior polygon (so an interior click stays a move) and before
-  // the corner rotate zones (disjoint regions — a top-middle nub vs corners).
-  // Without this, a click on the visible nub falls through to `null`, which the
-  // tool misreads as an off-frame press — re-opening the session (resetting its
-  // live transform) instead of starting a rotation.
+  // Test the outward top-edge nub after interior and before corner rotate zones. Missing this hit would
+  // reopen/reset the session instead of rotating.
   const anchorScreen = screenOf('n');
   const centerScreen = toScreen(applyToPoint(m, { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }));
   const outX = anchorScreen.x - centerScreen.x;
@@ -264,11 +231,8 @@ export const transformTargetAt = (params: TransformHitTestParams): TransformTarg
 const RESIZE_CURSORS = ['ew-resize', 'nesw-resize', 'ns-resize', 'nwse-resize'] as const;
 
 /**
- * The resize cursor for a scale handle, accounting for the layer's rotation:
- * the handle's outward normal is rotated/scaled by the layer matrix, then the
- * resulting screen-space angle is quantized to one of the four resize
- * orientations. (The view adds only a uniform scale — no rotation/flip — so the
- * document-space angle equals the screen-space angle.)
+ * Rotate/scale the handle normal and quantize its angle to four resize cursors. Uniform nonrotating viewport scale
+ * preserves the document angle.
  */
 export const resizeCursorForHandle = (transform: LayerTransform, handle: TransformHandle): string => {
   const m = layerTransformMatrix(transform);
@@ -299,12 +263,8 @@ export const constrainMoveDelta = (delta: Vec2, shift: boolean): Vec2 => {
 };
 
 /**
- * Translates `start` by a document-space pointer delta (shift = axis constrain).
- *
- * A positive `grid` snaps the RESULTING origin to that grid, per axis and only
- * for axes the drag moved — an axis that shift has locked carries a zero delta,
- * so it passes through exactly rather than being pulled onto a grid line.
- * `grid = 0` (the default) leaves the position untouched.
+ * Translate by document delta with optional axis lock. Snap only moved axes' resulting origins; grid zero disables
+ * snapping.
  */
 export const applyMove = (start: LayerTransform, deltaDoc: Vec2, shift: boolean, grid = 0): LayerTransform => ({
   ...start,
@@ -329,15 +289,8 @@ export interface ScaleParams {
 }
 
 /**
- * Scales `start` by dragging `handle`, anchored at the opposite handle (or the
- * center under `alt`). The grabbed handle tracks the pointer; edge handles scale
- * one axis, corners scale both (`shift` forces a uniform, aspect-preserving
- * factor). Dragging past the anchor flips the axis (negative scale), which is
- * kept correct; each axis is clamped to {@link MIN_ABS_SCALE}.
- *
- * `grid` snaps where the HANDLE lands in document space (the equivalent of the
- * legacy Konva `anchorDragBoundFunc`); the scale factors stay derived from that
- * snapped target rather than being rounded themselves, so the anchor never drifts.
+ * Scale about opposite handle or Alt center; edges affect one axis, Shift corners preserve aspect. Allow flips
+ * with minimum absolute scale. Snap the handle's document target, not scale factors, to preserve the anchor.
  */
 export const applyScale = (p: ScaleParams): LayerTransform => {
   const { alt, handle, rect, shift, start } = p;
@@ -403,11 +356,7 @@ export interface RotateParams {
   shift: boolean;
 }
 
-/**
- * Rotates `start` about the layer center by the angle the pointer sweeps around
- * that center since gesture start. `shift` snaps the resulting absolute rotation
- * to 15° increments. Scale is unchanged.
- */
+/** Rotate around center by pointer angle delta; Shift snaps absolute rotation to 15 degrees without changing scale. */
 export const applyRotate = (p: RotateParams): LayerTransform => {
   const { rect, start } = p;
   const m = layerTransformMatrix(start);
@@ -434,12 +383,8 @@ export const applyRotate = (p: RotateParams): LayerTransform => {
 };
 
 /**
- * The matrix that renders a layer's local (cache) pixels into a NEW document-space
- * surface so that the result, drawn at identity, reproduces the layer as if drawn
- * through `transform` — i.e. `fromTRS(transform)`. Used by the paint-layer bake:
- * old pixels are drawn through this matrix, the layer transform is then reset to
- * identity, and the composite is unchanged. Kept as a named helper so the bake
- * site reads intentionally and composes with `math/mat2d`.
+ * Bake matrix maps local pixels through TRS into document space, preserving appearance when the layer transform
+ * resets to identity.
  */
 export const bakeMatrix = (transform: LayerTransform): Mat2d => layerTransformMatrix(transform);
 

@@ -1,10 +1,4 @@
-/**
- * Pure zoom-menu helpers for the canvas HUD.
- *
- * The option set is derived from the engine's single source of truth for zoom
- * snap points (`ZOOM_PRESETS`), so the HUD and the viewport's wheel
- * snapping always agree. No React, no side effects — unit-testable in node.
- */
+/** Derive HUD zoom choices from engine ZOOM_PRESETS so menu and wheel snapping agree. */
 
 import { ZOOM_PRESETS } from '@workbench/canvas-engine/api';
 

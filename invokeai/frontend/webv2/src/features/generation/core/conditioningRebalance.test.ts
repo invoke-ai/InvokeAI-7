@@ -48,8 +48,7 @@ describe('parseRebalanceWeights', () => {
   });
 
   it('rejects hex, which Number() accepts but Python float() does not', () => {
-    // The string is forwarded verbatim to the node, so accepting it here would only
-    // move the failure to mid-generation.
+    // Reject malformed values before forwarding them verbatim to the backend.
     expect(parseRebalanceWeights('0x10,1,1,1,1,1,1,1,1,1,1,1')).toBeNull();
     expect(parseRebalanceWeights('0b11,1,1,1,1,1,1,1,1,1,1,1')).toBeNull();
     expect(parseRebalanceWeights('0o17,1,1,1,1,1,1,1,1,1,1,1')).toBeNull();

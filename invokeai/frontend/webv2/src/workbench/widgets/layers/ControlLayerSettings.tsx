@@ -71,14 +71,7 @@ interface ControlLayerSettingsProps {
   onOperationStarted(): void;
 }
 
-/**
- * Per-layer settings for a selected control layer (plan §1.3): adapter kind +
- * model, weight, begin/end step range, control mode (ControlNet only), the
- * transparency effect toggle, and a non-destructive filter section (type +
- * per-type settings + preview/apply/cancel). Adapter edits go through the canvas
- * undo stack (`updateCanvasLayerConfig`); the filter preview runs on the utility
- * queue and never mutates the document until "Apply".
- */
+/** Edit adapters through canvas undo; utility-queue filter previews leave the document untouched until Apply. */
 /** Contributing control leaves of one adapter kind with content, in generation order. */
 const contributingControlLayers = (
   engine: CanvasStructuralEngine & LayerFilterOperationEngine & { readonly document: CanvasDocumentCapability },
@@ -132,9 +125,7 @@ export const ControlLayerSettings = ({ engine, layer, onOperationStarted }: Cont
     // The request belongs to this retry; a later reload started elsewhere is not this panel's retry.
     void ensureArchitectureCapabilitiesLoaded().then(() => setHasRequestedCapabilitiesRetry(false));
   }, [capabilitiesStatus, hasRequestedCapabilitiesRetry]);
-  // A load that lands unmounts the failure surface, and with it the retry button a keyboard user may
-  // be on. The ref's cleanup runs while the surface is still in the document, so focus is handed to
-  // the panel the load filled in before it can fall to <body>.
+  // Transfer retry-button focus to the loaded panel during ref cleanup before removal can send it to body.
   const handOverFocusOnLoad = useCallback((surface: HTMLDivElement | null) => {
     if (!surface) {
       return undefined;
@@ -145,10 +136,8 @@ export const ControlLayerSettings = ({ engine, layer, onOperationStarted }: Cont
       }
     };
   }, []);
-  // Adapter kinds supported by the selected base. Z-Image Control is only shown
-  // when a compatible Z-Image main model is selected. Read inside the store's
-  // selector: the answer comes from the capability table, and a call memoised on
-  // `base` alone keeps the empty list it gave before a retried load succeeded.
+  // Read supported adapter kinds inside the capability selector so successful retries replace the pre-load empty
+  // list.
   const kindOptions = useExternalStoreSelector(
     subscribeArchitectureCapabilities,
     getArchitectureCapabilitiesSnapshot,

@@ -1,7 +1,7 @@
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, Optional, Union
 
 from dynamicprompts.wildcards import WildcardManager
 from PIL.Image import Image
@@ -18,6 +18,7 @@ from invokeai.app.services.images.images_common import ImageDTO
 from invokeai.app.services.invocation_services import InvocationServices
 from invokeai.app.services.model_records.model_records_base import UnknownModelException
 from invokeai.app.services.session_processor.session_processor_common import ProgressImage
+from invokeai.app.services.shared.execution_effects import ExecutionEffectsRecorder, ExecutionInterface
 from invokeai.app.services.shared.sqlite.sqlite_common import SQLiteDirection
 from invokeai.app.services.videos.videos_common import VideoDTO
 from invokeai.app.services.wildcard_records.wildcard_records_common import build_wildcard_manager
@@ -34,6 +35,7 @@ if TYPE_CHECKING:
     from invokeai.app.invocations.baseinvocation import BaseInvocation
     from invokeai.app.invocations.model import ModelIdentifierField
     from invokeai.app.services.session_queue.session_queue_common import SessionQueueItem
+    from invokeai.app.services.shared.execution_engine.child import ChildExecutionCapability
 
 """
 The InvocationContext provides access to various services and data about the current invocation.
@@ -66,12 +68,38 @@ class InvocationContextData:
     """The invocation that is being executed."""
     source_invocation_id: str
     """The ID of the invocation from which the currently executing invocation was prepared."""
+    execution_frame: tuple[int, ...] = ()
+    """The active prepared execution node's loop iteration path."""
+    execution_state_id: str | None = None
+    """The owning graph execution-state identity for effect ownership validation."""
+    execution_frame_id: str | None = None
+    """The durable frame identity for effect ownership validation."""
+    execution_workflow_call_depth: int = 0
+    """The active workflow-call depth for effect ownership validation."""
+    execution_child_capability: "ChildExecutionCapability | None" = None
+    """Engine-issued authority for lifecycle effects in this invocation frame."""
+    execution_workflow_authorizer: Callable[[str], Any] | None = None
+    """Engine-owned saved-workflow authorization callback, when enabled."""
+    execution_workflow_inputs: dict[str, Any] | None = None
+    """Resolved saved-workflow inputs supplied by the execution adapter."""
 
 
 class InvocationContextInterface:
     def __init__(self, services: InvocationServices, data: InvocationContextData) -> None:
         self._services = services
         self._data = data
+
+
+def _build_execution_effects(data: InvocationContextData) -> ExecutionEffectsRecorder:
+    return ExecutionEffectsRecorder(
+        source_node_id=getattr(data.invocation, "id", None) or data.source_invocation_id or "context",
+        frame_path=data.execution_frame,
+        state_id=data.execution_state_id,
+        frame_id=data.execution_frame_id,
+        workflow_call_depth=data.execution_workflow_call_depth,
+        allow_lifecycle_effects=data.execution_child_capability is not None,
+        child_capability=data.execution_child_capability,
+    )
 
 
 class BoardsInterface(InvocationContextInterface):
@@ -982,6 +1010,7 @@ class InvocationContext:
         wildcards: WildcardsInterface,
         data: InvocationContextData,
         services: InvocationServices,
+        execution_effects: Optional[ExecutionEffectsRecorder] = None,
     ) -> None:
         self.images = images
         """Methods to save, get and update images and their metadata."""
@@ -1007,12 +1036,23 @@ class InvocationContext:
         """An internal API providing access to data about the current queue item and invocation. You probably shouldn't use this. It may change without warning."""
         self._services = services
         """An internal API providing access to all application services. You probably shouldn't use this. It may change without warning."""
+        self.execution_effects = execution_effects or _build_execution_effects(data)
+        """Effects recorded during the current invocation run."""
+        self.effects = self.execution_effects
+        """Alias for :attr:`execution_effects`."""
+        self.execution = ExecutionInterface(
+            self.execution_effects,
+            authorize_workflow=data.execution_workflow_authorizer,
+        )
+        """Restricted execution-effect recorder facade."""
+        self._skip_invocation_cache = False
 
 
 def build_invocation_context(
     services: InvocationServices,
     data: InvocationContextData,
     is_canceled: Callable[[], bool],
+    execution_effects: Optional[ExecutionEffectsRecorder] = None,
 ) -> InvocationContext:
     """Builds the invocation context for a specific invocation execution.
 
@@ -1035,6 +1075,9 @@ def build_invocation_context(
     boards = BoardsInterface(services=services, data=data)
     wildcards = WildcardsInterface(services=services, data=data)
 
+    if execution_effects is None:
+        execution_effects = _build_execution_effects(data)
+
     ctx = InvocationContext(
         images=images,
         videos=videos,
@@ -1048,6 +1091,7 @@ def build_invocation_context(
         services=services,
         boards=boards,
         wildcards=wildcards,
+        execution_effects=execution_effects,
     )
 
     return ctx

@@ -8,12 +8,8 @@ import { memo, useCallback } from 'react';
 import { areVideoLorasEquivalent, areVideoModelsEquivalent } from './videoComparators';
 
 /**
- * The Video widget's prompt block. The prompt is Video's own widget value, not
- * the project draft Generate and Upscale share: a video prompt describes motion
- * over time and has nothing useful to say to an image model, so the two panels
- * hold independent text. Memoised against content: the widget re-derives
- * `values` on every patch and the prompt editors carry autocomplete state a
- * needless remount would disturb.
+ * Video prompts are independent of the shared image-generation draft. Compare content because patches recreate
+ * values and remounts would lose autocomplete state.
  */
 export const VideoPromptFields = memo(
   function VideoPromptFields({

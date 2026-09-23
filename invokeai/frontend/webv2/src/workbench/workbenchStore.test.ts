@@ -1,3 +1,5 @@
+import { DEFAULT_LOGGING_CONFIG } from '@platform/logging/contracts';
+import { configureLogging, getLogSnapshot, resetLogging } from '@platform/logging/logger';
 import { stackTopAnchor } from '@workbench/canvas-engine/document/insertionAnchors.testStub';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -5,7 +7,6 @@ import type { CanvasLayerContract } from './canvas-engine/contracts';
 import type { LayoutPreset, LayoutPresetRoute } from './layoutContracts';
 import type { WorkbenchInternalStore, WorkbenchSnapshot } from './workbenchStore';
 
-import { clearProjectDiagnostics, configureDiagnostics, getProjectDiagnostics } from './diagnostics/logger';
 import { publishLayerPanelSelection, readLayerPanelState, toggleLayerStackCollapsed } from './layerPanelState';
 import { areWidgetPlacementProjectsEqual, getWidgetPlacementProject } from './widgetPlacementMeta';
 import { getProjectWidgetValues } from './widgetState';
@@ -57,12 +58,8 @@ const watchSelector = <Selected>(
 
 describe('createWorkbenchStore', () => {
   beforeEach(() => {
-    configureDiagnostics({
-      enabled: true,
-      level: 'trace',
-      namespaces: ['system', 'queue'],
-      performanceTimingsEnabled: false,
-    });
+    resetLogging();
+    configureLogging({ ...DEFAULT_LOGGING_CONFIG, level: 'trace' });
   });
 
   it('exposes stable capability interfaces and initializes snapshot metadata', () => {
@@ -459,22 +456,58 @@ describe('createWorkbenchStore', () => {
     const store = createWorkbenchStore();
     const projectId = store.getSnapshot().activeProject.id;
 
-    clearProjectDiagnostics(projectId);
+    const error = new Error('socket closed');
+
     store.commands.notifications.reportError({
       area: 'queue-runtime',
+      context: { error, itemId: 'item-1' },
       message: 'Queue failed',
       namespace: 'queue',
     });
 
-    expect(getProjectDiagnostics(projectId)).toMatchObject([
+    expect(getLogSnapshot().entries).toMatchObject([
       {
+        context: { itemId: 'item-1' },
+        error: { message: 'socket closed', name: 'Error' },
         level: 'error',
         message: 'Queue failed',
+        name: 'queue.queue-runtime',
         namespace: 'queue',
-        source: { area: 'queue-runtime', kind: 'workbench', projectId },
+        source: { area: 'queue-runtime', namespace: 'queue', projectId },
       },
     ]);
-    expect(store.getSnapshot().notifications[0]?.title).toBe('Error');
+    expect(store.getSnapshot().notifications[0]).toMatchObject({
+      message: 'Queue failed: socket closed',
+      title: 'Error',
+    });
+  });
+
+  it('records autosave outcomes and queue item transitions with the history owner as the only reporter', () => {
+    const store = createWorkbenchStore();
+    const projectId = store.getSnapshot().activeProject.id;
+
+    store.internal.persistence.saveStarted();
+    store.internal.persistence.savePending('Autosave requires your attention.');
+    store.internal.persistence.saveFailed('Backend rejected the revision');
+    store.commands.queue.setStatus({ error: 'Out of memory', projectId, queueItemId: 'missing', status: 'failed' });
+
+    expect(getLogSnapshot().entries).toMatchObject([
+      {
+        context: { queueItemId: 'missing', reason: 'Out of memory', status: 'failed' },
+        level: 'error',
+        message: 'Queue item failed: Out of memory',
+        name: 'queue.item-failed',
+        source: { area: 'history', namespace: 'queue', projectId },
+      },
+      {
+        context: { reason: 'Backend rejected the revision' },
+        level: 'error',
+        name: 'persistence.autosave-failed',
+        source: { area: 'autosave', namespace: 'persistence', projectId },
+      },
+      { level: 'warn', name: 'persistence.autosave-pending' },
+      { level: 'debug', name: 'persistence.autosave-started' },
+    ]);
   });
 
   it('records accepted widget failures into diagnostics once', () => {
@@ -487,17 +520,17 @@ describe('createWorkbenchStore', () => {
       widgetId: 'workflow' as const,
     };
 
-    clearProjectDiagnostics(projectId);
     store.commands.notifications.recordWidgetFailure(failure);
     store.commands.notifications.recordWidgetFailure(failure);
 
-    expect(getProjectDiagnostics(projectId)).toMatchObject([
+    expect(getLogSnapshot().entries).toMatchObject([
       {
-        context: { widgetId: 'workflow' },
+        context: { details: 'Widget stack', widgetId: 'workflow' },
         level: 'error',
-        message: 'Widget stack',
+        message: 'Widget failed',
+        name: 'widget.registration-failed',
         namespace: 'system',
-        source: { area: 'widget-failure', kind: 'workbench', projectId },
+        source: { area: 'widget-failure', namespace: 'system', projectId },
       },
     ]);
   });

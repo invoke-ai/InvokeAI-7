@@ -102,8 +102,7 @@ afterEach(async () => {
 
 describe('preview frame chrome clearance', () => {
   it('drops the fitted media clear of the centre region chrome islands', async () => {
-    // The islands float over the work surface rather than reserving a row, so
-    // a height-constrained image used to run under them at fit zoom.
+    // Fit media below floating chrome even when height-constrained.
     await render(true);
 
     expect(mediaOffsetFromStageTop()).toBeGreaterThanOrEqual(CENTER_CHROME_INSET_PX);

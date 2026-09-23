@@ -8,13 +8,6 @@ import { useTranslation } from 'react-i18next';
 
 import { getBatchCount } from './useInvocationState';
 
-/**
- * How many times the current graph runs per Invoke.
- *
- * A plain `NumberInput` with its stepper — typing, arrow keys, and the wheel all
- * behave the way they do everywhere else in the app, because it is the same
- * control everywhere else in the app uses.
- */
 export const IterationsField = () => {
   const { t } = useTranslation();
   const { batchCount, sourceId } = useActiveProjectSelector(

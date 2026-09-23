@@ -1,24 +1,8 @@
 /**
- * The pointer pipeline: normalizes raw DOM pointer/key events into the engine's
- * {@link PointerInput} vocabulary and routes them to the active tool.
- *
- * Responsibilities lifted out of the engine so `engine.ts` stays lean:
- * - Pointer capture on down; `getCoalescedEvents()` batching on move (so fast
- *   strokes keep every intermediate sample); mouse pressure defaulted to 0.5.
- * - Middle-mouse pan (engine-level, tool-independent).
- * - Modifier/key-hold temporary tools: space → view, alt → colorPicker, hold C
- *   → bbox (quick-tap C still sticky-selects bbox). The prior tool is restored
- *   on release. Temp switches are suppressed mid-gesture, and are
- *   flagged `{ temporary: true }` on `setTool` so a session-bearing tool
- *   (transform) can tell them apart from a real switch and keep its session
- *   alive across the hold.
- * - Gesture cancellation: pointercancel and Esc route to the tool's
- *   `onPointerCancel`; secondary/extra buttons are ignored during a gesture.
- *
- * The pipeline reaches the DOM only through the injected `getInputElement`
- * (for pointer capture / element rect) and the events passed to its handlers, so
- * it is fully driveable by a fake harness in node tests. Zero React, zero
- * import-time side effects.
+ * Normalizes DOM events into tool input with capture, coalesced samples and default mouse pressure 0.5. Middle
+ * mouse pans independently. Space, Alt and held C temporarily select view, picker and bbox; release restores the
+ * tool, while quick C selects bbox persistently. Temporary switches preserve sessions and are blocked mid-gesture.
+ * Escape/pointercancel cancel; extra buttons are ignored mid-gesture. DOM access is injected.
  */
 
 import type { Tool, ToolContext } from '@workbench/canvas-engine/tools/tool';
@@ -43,31 +27,20 @@ export interface PointerPipelineDeps {
   getActiveToolId(): ToolId;
   getToolContext(): ToolContext;
   /**
-   * Switches the active tool. `opts.temporary` marks a modifier-hold switch
-   * (and its matching restore) so a session-bearing tool's `onActivate`/
-   * `onDeactivate` can preserve its session instead of tearing it down — see
-   * {@link beginTempTool} / {@link endTempTool}.
+   * Temporary modifier switches and restores preserve tool sessions; see {@link beginTempTool} and {@link
+   * endTempTool}.
    */
   setTool(id: ToolId, opts?: { temporary?: boolean }): void;
   hasTool(id: ToolId): boolean;
   updateCursor(): void;
   /**
-   * The engine's Escape priority, run AFTER the in-flight gesture is cancelled
-   * (and skipped in editable fields): cancel a transform session, else deselect.
-   * `gestureWasActive` tells it a drag just consumed this Escape, so it should
-   * cancel a session (session teardown is wanted mid-drag, matching the prior
-   * behavior) but NOT also deselect. Optional so minimal harnesses can omit it.
-   * See `engine.ts` `handleEscape`.
+   * Optional Escape handler after gesture cancellation, skipped in editable fields. `gestureWasActive` allows
+   * session teardown while preserving committed selection.
    */
   handleEscape?(opts: { gestureWasActive: boolean }): void;
   /**
-   * Called on a primary-button pointerdown BEFORE any gesture starts. Returns
-   * `true` if the engine consumed the press to commit an open modal session (a
-   * text-edit session), in which case the pipeline swallows the press entirely —
-   * no capture, no gesture, no tool routing — because the click's sole job was to
-   * close the session (the next press then starts a fresh interaction). Running
-   * before `gestureActive` is set is what lets the commit through the engine's
-   * mid-gesture guard. Optional so minimal harnesses can omit it.
+   * Optional primary-press hook before gesture activation. True consumes the press to commit a modal text session
+   * without capture or tool routing, avoiding mid-gesture commit guards.
    */
   maybeCommitModalSession?(): boolean;
 }
@@ -82,18 +55,11 @@ export interface PointerPipeline {
   onPointerLeave(): void;
   onKeyDown(event: KeyboardEvent): void;
   onKeyUp(event: KeyboardEvent): void;
-  /**
-   * True while a primary-button paint/drag gesture is mid-stroke (pointer down,
-   * not yet up/cancel). The engine consults this to no-op undo/redo during a
-   * live stroke, so a mid-gesture mod+z can't inject pixels under the session.
-   */
+  /** Primary gesture state blocks undo/redo from injecting pixels during live strokes. */
   isGestureActive(): boolean;
   /**
-   * Cancels an in-flight primary-button gesture the same way Esc/pointercancel
-   * do: releases pointer capture, runs the active tool's `onPointerCancel` (so it
-   * drops its own transient state), and refreshes the cursor. A no-op when no
-   * gesture is active. The engine calls this on a wholesale document replacement
-   * so a mid-drag swap can't commit against the outgoing document on pointer-up.
+   * Cancels capture/tool state and refreshes the cursor. Used on document replacement so a later release cannot
+   * commit stale drag state; idle calls do nothing.
    */
   cancelActiveGesture(): void;
   /** Replaces a matching tool id that a currently-held temporary tool would restore on release. */
@@ -110,11 +76,8 @@ const isBboxKey = (event: KeyboardEvent): boolean =>
   event.code === 'KeyC' && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey;
 
 /**
- * True when the key event targets an editable element (text input, textarea, or
- * a contenteditable node). The space/alt temp-tool holds are window-level, so
- * without this guard typing a space in a rename field would hijack the canvas
- * view tool. Duck-typed on `tagName`/`isContentEditable` so it stays node-safe
- * (no `instanceof HTMLElement`, which throws where those globals are absent).
+ * Editable targets retain their keys instead of activating temporary tools. Duck typing keeps this safe without
+ * HTMLElement globals.
  */
 const isEditableTarget = (target: EventTarget | null): boolean => {
   const el = target as { tagName?: unknown; isContentEditable?: unknown } | null;
@@ -296,13 +259,8 @@ export const createPointerPipeline = (deps: PointerPipelineDeps): PointerPipelin
     },
     onKeyDown: (event) => {
       if (event.key === 'Escape') {
-        // Cancel any active drag first, then run the engine's Escape priority
-        // (cancel a transform session, else deselect). The editable guard keeps
-        // Escape in a text field from tearing down a canvas session/selection the
-        // field isn't part of. A mid-drag Escape cancels the gesture here; the
-        // subsequent `handleEscape` still sees (and cancels) a transform session
-        // the reverted drag kept open, matching the prior gesture+session teardown,
-        // but skips deselect so a mid-lasso Escape drops only the in-progress path.
+        // Cancel the gesture before the engine Escape ladder. Editable fields keep Escape; gesture-consuming
+        // Escape may cancel a session but must preserve committed selection.
         const gestureWasActive = gestureActive;
         cancelGesture();
         if (!isEditableTarget(event.target)) {
@@ -310,9 +268,7 @@ export const createPointerPipeline = (deps: PointerPipelineDeps): PointerPipelin
         }
         return;
       }
-      // Never let space/alt temp-tool holds (or Enter apply) fire while the user is
-      // typing in an editable field (e.g. a layer rename input) — that key belongs
-      // to the field, not the canvas.
+      // Editable fields own temporary-tool and Enter keys.
       if (isEditableTarget(event.target)) {
         return;
       }
@@ -380,11 +336,8 @@ export const createPointerPipeline = (deps: PointerPipelineDeps): PointerPipelin
       if (event.button !== 0) {
         return;
       }
-      // A primary press while a text-edit session is open commits it (engine-side,
-      // reading the live portal content) and is swallowed — no gesture, no tool
-      // routing. This must precede `gestureActive = true` so the engine's
-      // mid-gesture commit guard cannot drop it. `preventDefault` avoids a stray
-      // focus/selection default now that the session has already been closed.
+      // Commit and consume modal text presses before gesture activation; prevent default focus/selection after
+      // closing the session.
       if (deps.maybeCommitModalSession?.()) {
         event.preventDefault();
         return;

@@ -65,10 +65,8 @@ export interface DocumentModelContext {
 }
 
 /**
- * The pure document seam over a v3 canvas document: lookup, tree facts, semantic leaves and
- * prepared edits, with no knowledge of the engine, the screen or the panel. The index is built once
- * per forest identity; a leaf keeps its identity while its layer object and ancestor-effective
- * state are unchanged. Ordering belongs to the returned sequences.
+ * Pure document lookup, tree facts, semantic leaves and prepared edits. Indexes cache by forest identity; leaves
+ * retain identity while layer and ancestor-effective state match. Returned sequences define ordering.
  */
 export interface CanvasDocumentModel {
   readonly document: CanvasDocumentContractV3;
@@ -1122,9 +1120,7 @@ export const createDocumentModel = (
           status: 'wrong-type',
         };
       }
-      // Opacity/blend apply to a group's isolated composite; overlay groups
-      // composite coverage, so the fields are meaningless there (the same rule
-      // as group adjustments).
+      // Opacity/blend describe isolated color composites, so they are invalid for coverage-only overlay groups.
       if ((command.patch.opacity !== undefined || command.patch.blendMode !== undefined) && entry.stack !== 'raster') {
         return { operation: 'blend an overlay-stack group', status: 'unsupported' };
       }

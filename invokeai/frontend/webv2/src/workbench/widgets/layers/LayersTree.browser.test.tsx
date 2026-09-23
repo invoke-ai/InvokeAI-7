@@ -613,12 +613,8 @@ describe('LayersTree selection, surfaces and structure', () => {
     });
     expect(scroller.scrollTop).toBeGreaterThan(0);
     await act(() => pointer('pointermove', document, start.x, rect.top + rect.height / 2));
-    // The move reaches the scroller through dnd-kit's rAF listener and the
-    // scroll loop itself is rAF-driven, so settle in frame time, not timer
-    // time: timers keep firing while rAF is starved under suite load, and a
-    // timer-based poll can declare "settled" before the queued frames flush.
-    // Ten consecutive frames with an unchanged scrollTop means both the move
-    // was delivered and the loop is parked.
+    // Wait for ten unchanged animation frames, not timers, because both dnd movement delivery and autoscroll are
+    // rAF-driven.
     const nextFrame = () =>
       new Promise<void>((resolve) => {
         requestAnimationFrame(() => resolve());

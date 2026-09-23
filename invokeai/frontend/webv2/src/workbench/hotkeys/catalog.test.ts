@@ -4,13 +4,6 @@ import { firstPartyHotkeyCatalog, OPEN_COMMAND_PALETTE_HOTKEY } from './catalog'
 
 describe('firstPartyHotkeyCatalog', () => {
   it('keeps legacy default hotkey parity', () => {
-    // 91 legacy-parity entries + `canvas.newSession` (webv2 new-canvas command,
-    // no default keys — Task 46) + `app.openCommandPalette` (webv2-only, mod+k)
-    // + the seven top-bar redesign commands (alt+mod+enter, mod+p, an unbound
-    // save, and alt+1..4) + `app.openSettings` (mod+,) + `gallery.toggleStarredOnly`
-    // (webv2 starred-only listing filter, unbound) + the two unbound canvas
-    // gallery saves (`canvas.saveToGallery`, `canvas.saveBboxToGallery`).
-    // `app.togglePreview` (z) replaces the legacy `viewer.toggleViewer`.
     expect(firstPartyHotkeyCatalog).toHaveLength(104);
     expect(firstPartyHotkeyCatalog.map((hotkey) => hotkey.id)).toContain('app.togglePreview');
     expect(firstPartyHotkeyCatalog.map((hotkey) => hotkey.id)).toContain('app.invoke');

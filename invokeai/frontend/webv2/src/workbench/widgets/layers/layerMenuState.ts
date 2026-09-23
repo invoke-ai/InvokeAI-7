@@ -1,12 +1,6 @@
 import type { CanvasLayerContextMenuTarget } from './LayerContextMenu';
 
-/**
- * Which layer the canvas right-click menu should render for.
- *
- * Opening a sibling dialog closes the menu, which nulls the live `target`. The
- * wrapper keeps a captured dialog target until that dialog closes so the shared
- * subtree remains mounted for rename and workflow actions.
- */
+/** Retain a captured layer target while sibling dialogs outlive the menu's cleared live target. */
 export type LayerMenuDialogKind = 'rename' | 'run-workflow';
 
 export interface LayerMenuDialogState {

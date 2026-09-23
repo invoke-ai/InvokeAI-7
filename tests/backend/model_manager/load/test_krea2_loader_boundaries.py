@@ -24,6 +24,22 @@ from invokeai.backend.model_manager.taxonomy import Krea2VariantType, Qwen3VLVar
 from invokeai.backend.quantization.int8_convrot import Int8ConvrotLinear
 
 
+class _TinyVisionTowerHost(torch.nn.Module):
+    """A model whose only relevant feature is that it has a tower to drop."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.visual = _TinyVisionTower()
+
+
+class _TinyVisionTower(torch.nn.Module):
+    """Stands in for `Qwen3VLModel.visual`, which the encoder loaders drop before loading."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.proj = torch.nn.Linear(2, 2, bias=False)
+
+
 class _TinyKrea2Transformer(torch.nn.Module):
     def __init__(self, **_kwargs) -> None:
         super().__init__()
@@ -248,6 +264,7 @@ def test_checkpoint_encoder_loader_decodes_int8_and_does_not_call_it_fp8(monkeyp
         def __init__(self) -> None:
             super().__init__()
             self.language_model = _TinyLanguageModel()
+            self.visual = _TinyVisionTower()
 
         @classmethod
         def _from_config(cls, _config):
@@ -297,7 +314,8 @@ def test_directory_encoder_loader_reaches_transformers_from_pretrained(monkeypat
     loader = object.__new__(Qwen3VLEncoderLoader)
     text_config = SimpleNamespace(rope_parameters={"rope_type": "default"}, rope_scaling=None)
     encoder_config = SimpleNamespace(text_config=text_config)
-    loaded_model = object()
+    # Carries a vision tower, because the loader drops it on what `from_pretrained` returns.
+    loaded_model = _TinyVisionTowerHost()
     from_pretrained = MagicMock(return_value=loaded_model)
 
     monkeypatch.setattr(
@@ -520,6 +538,10 @@ def test_the_encoder_names_itself_when_refusing_an_unmarked_int8_weight(monkeypa
     state_dict = {"model.layers.0.self_attn.q_proj.weight": torch.zeros(4, CONVROT_GROUP_SIZE, dtype=torch.int8)}
 
     class _TinyEncoder(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.visual = _TinyVisionTower()
+
         @classmethod
         def _from_config(cls, _config):
             return cls()
@@ -592,6 +614,7 @@ def test_a_merged_encoder_checkpoint_is_not_mistaken_for_a_mixed_format_one(
         def __init__(self) -> None:
             super().__init__()
             self.language_model = _TinyLanguageModel()
+            self.visual = _TinyVisionTower()
 
         @classmethod
         def _from_config(cls, _config):

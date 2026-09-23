@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 import legacyBaseline from './__fixtures__/legacyTokenBaseline.json';
-import { CONSUMER_TOKENS, resolveToken, THEMES, type TokenSystem } from './__tokenResolve';
+import { CONSUMER_TOKENS, resolveToken, THEME_SELECTORS, THEMES, type TokenSystem } from './__tokenResolve';
 import { progressCircleSlotRecipe } from './recipes';
 import { system } from './system';
+import { THEMES as THEME_DEFINITIONS } from './themes';
 
 const sys = system as unknown as TokenSystem;
 const STEPS = [50, 100, 200, 300, 400, 500, 600, 700, 800, 900, 950] as const;
@@ -17,9 +18,7 @@ const lightnessOf = (oklch: string): number => {
 };
 
 describe('color token contract — legacy-value gate', () => {
-  // Primary gate: every consumer token must resolve to the EXACT value it had
-  // before the ramp refactor. The baseline was captured from the previous system
-  // on the working tree before any change (see __fixtures__/legacyTokenBaseline.json).
+  // Pin semantic-token values against __fixtures__/legacyTokenBaseline.json.
   for (const theme of THEMES) {
     for (const token of CONSUMER_TOKENS) {
       it(`${theme}: ${token} is unchanged`, () => {
@@ -31,6 +30,10 @@ describe('color token contract — legacy-value gate', () => {
 });
 
 describe('ramp + mapping structure', () => {
+  it('resolves every registered theme (a theme missing from THEME_SELECTORS would skip the gate)', () => {
+    expect(Object.keys(THEME_SELECTORS)).toEqual(THEME_DEFINITIONS.map((theme) => theme.id));
+  });
+
   it('emits every neutral ramp step for every theme', () => {
     for (const theme of THEMES) {
       for (const step of STEPS) {
@@ -57,16 +60,14 @@ describe('ramp + mapping structure', () => {
 
   it('uses pure black/white low-opacity image outlines by color mode', () => {
     expect(resolveToken(sys, 'light', 'border.image')).toBe('oklch(0 0 0 / 0.1)');
-    for (const theme of ['classic', 'osakaJade', 'mono', 'ultradark']) {
+    for (const theme of ['classic', 'osakaJade', 'mono', 'ultradark', 'catppuccinMocha']) {
       expect(resolveToken(sys, theme, 'border.image')).toBe('oklch(1 0 0 / 0.1)');
     }
   });
 
   it('emits surface/text/border tokens via per-theme conditions only — never the leaky mode selectors', () => {
-    // Chakra's `_light` selector (`:root &, .light &`) matches under EVERY theme via its
-    // `:root &` arm. A surface token placed there leaks its light value into the dark
-    // themes (the classic-renders-light regression). These tokens must live ONLY in the
-    // base + `[data-theme=…]` selectors.
+    // Avoid Chakra _light for surfaces: its :root arm matches dark themes too. Use base and explicit data-theme
+    // selectors.
     const layer = sys.getTokenCss()['@layer tokens'];
     const LEAKY = [':root &, .light &', '.dark &, .dark .chakra-theme:not(.light) &'];
     const surfaceTokens = [
@@ -138,8 +139,7 @@ describe('native Chakra integration', () => {
   });
 
   it('leaves stock Chakra hue palettes untouched in Phase 1', () => {
-    // Phase 2 will theme these; for now they must remain Chakra defaults so model
-    // badges / destructive actions keep their stock colors.
+    // Stock Chakra palette values.
     expect(sys.tokens.getByName('colors.red.500')).toBeTruthy();
     expect(sys.tokens.getByName('colors.blue.500')).toBeTruthy();
     expect(sys.tokens.getByName('colors.purple.500')).toBeTruthy();
@@ -151,8 +151,7 @@ describe('brand palette derives from its two seeds (like accent)', () => {
     for (const theme of THEMES) {
       const solid = resolveToken(sys, theme, 'brand.solid');
       const surface = resolveToken(sys, theme, 'bg.subtle');
-      // `brand.fg` is the exception: it darkens on the light theme, where the
-      // seed measures 1.20:1 against the panel it would sit on.
+      // Darken brand.fg on light backgrounds to preserve contrast.
       expect(resolveToken(sys, theme, 'brand.fg')).toBe(
         theme === 'light' ? `color-mix(in oklab, ${solid} 50%, oklch(22.5% 0.013 264))` : solid
       );

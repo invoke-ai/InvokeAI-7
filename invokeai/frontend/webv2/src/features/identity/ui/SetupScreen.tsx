@@ -13,10 +13,6 @@ import { PasswordInput, PasswordStrengthMeter } from './PasswordInput';
 
 const INITIAL_VALUES: SetupFormValues = { confirmPassword: '', displayName: '', email: '', password: '' };
 
-/**
- * First-run screen for multi-user mode: creates the administrator account and
- * signs straight into it.
- */
 export const SetupScreen = () => {
   const { t } = useTranslation();
   const session = useAuthSession();

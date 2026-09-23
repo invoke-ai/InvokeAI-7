@@ -1,23 +1,15 @@
 import type {
+  Ltx2TargetResolution,
   MiniMaxH3TargetResolution,
   VideoAspectRatioId,
+  VideoConditioningClip,
   VideoReferenceImageDetail,
   WanTargetResolution,
 } from './types';
 
 /**
- * Client-side ports of the backend's video canvas math, so the panel can show
- * and validate the exact dimensions a graph will run at without extra nodes:
- *
- * - Wan: `_scale_and_snap` in `invokeai/app/invocations/wan/wan_ideal_dimensions.py`
- *   ("nearest" rounding — the node default; the other modes are workflow-only).
- * - MiniMax H3: `resolve_canvas_size` in `invokeai/backend/minimax_h3/packing.py`
- *   and `resolve_lowres_canvas_size` in `invokeai/backend/minimax_h3/presets.py`.
- * - Ref2VA image references: `resolve_reference_image_short_edge` and
- *   `normalize_reference_image` in `invokeai/backend/minimax_h3/reference_conditioning.py`.
- *
- * Where the backend raises, these return null: the panel falls back to defaults
- * and reports the problem through `getVideoValidationReasons` instead of throwing.
+ * Mirror Wan _scale_and_snap, the H3 and LTX-2 canvas resolvers, and reference-image normalization. Return null
+ * where backend math rejects input so panel validation can explain it.
  */
 
 export interface VideoDimensions {
@@ -25,9 +17,7 @@ export interface VideoDimensions {
   height: number;
 }
 
-// Python's round() (used by both backend implementations) is half-to-even;
-// Math.round is half-up. The ports must agree with the backend on exact .5
-// quotients (e.g. 720 / 32 = 22.5) or panel and workflow dims would differ.
+// Match Python half-to-even rounding; Math.round differs at exact .5 and would produce inconsistent canvas sizes.
 const roundHalfToEven = (value: number): number => {
   const floor = Math.floor(value);
   const diff = value - floor;
@@ -58,16 +48,8 @@ export const WAN_TARGET_RESOLUTION_PX: Record<WanTargetResolution, number> = {
 };
 
 /**
- * Scale a source W×H so its shorter side equals the preset's pixel count, then
- * snap each dimension to the Wan pixel grid (nearest). Only the ratio of the
- * inputs matters, so aspect-ratio parts (16, 9) work as well as real pixels.
- * Null when the inputs are non-positive or non-finite.
- *
- * Deliberate divergence from the backend node: `_scale_and_snap` rejects
- * sources whose RAW long side is under one grid cell, which would also reject
- * pure ratio parts like (16, 9) on the ×32 grid. Since only the ratio matters
- * and scaling happens before snapping, tiny-but-well-formed inputs are
- * accepted here — the scaled long side is always ≥ the target short side.
+ * Scale the ratio to the target short side and snap to Wan's grid. Unlike the backend raw-size guard, accept small
+ * positive ratio parts; reject nonfinite/nonpositive inputs.
  */
 export const scaleAndSnapWanDimensions = (
   width: number,
@@ -95,13 +77,8 @@ export const MINIMAX_H3_MIN_ASPECT_RATIO = 1 / 4;
 export const MINIMAX_H3_MAX_ASPECT_RATIO = 4;
 
 /**
- * The MiniMax H3 canvas for an aspect ratio. "768 highres" is the released
- * pipeline's policy: short edge 768, soft area cap of 768×1344, both axes then
- * rounded to the nearest multiple of 32 (so the final area may sit slightly
- * above the pre-rounding budget). "768 lowres" pins the LONG edge to 768
- * instead for cheaper preview renders. Only the ratio of the inputs matters.
- * Null when the inputs are degenerate or the ratio is outside H3's supported
- * 1:4 – 4:1 range.
+ * H3 highres uses a 768 short edge and soft 768x1344 area cap before 32-pixel rounding; lowres caps the long edge
+ * at 768. Reject ratios outside 1:4–4:1.
  */
 export const resolveMiniMaxH3Canvas = (
   width: number,
@@ -164,16 +141,8 @@ export const MINIMAX_H3_REFERENCE_IMAGE_SHORT_EDGE = 2048;
 export const MINIMAX_H3_ROW_PIXELS = 32 * 32;
 
 /**
- * A reference image's normalized size and the rows it contributes.
- *
- * Those rows join the packed sequence and are re-attended at EVERY denoising step, with
- * attention quadratic in the sequence length — which is the whole difference between the
- * two detail settings. `'max'` pins the short edge to 2048 no matter how small the
- * generation is; `'match'` scales the reference to the generation's pixel area (never
- * above the 2048 rule), typically an order of magnitude fewer rows.
- *
- * Null when the inputs are degenerate, or when `'match'` has no target area to match —
- * the panel then shows nothing rather than a wrong number.
+ * Reference rows participate in every denoise step. max uses a 2048 short edge; match uses capped generation area.
+ * Return null without valid geometry/target area.
  */
 export const resolveMiniMaxH3ReferenceImage = (
   width: number,
@@ -191,8 +160,6 @@ export const resolveMiniMaxH3ReferenceImage = (
     if (targetArea === null || !Number.isFinite(targetArea) || targetArea <= 0) {
       return null;
     }
-    // The backend rounds with Python's banker's rounding here, so `roundHalfToEven` is
-    // what keeps this estimate equal to the size the graph actually encodes.
     const matched = Math.max(
       MINIMAX_H3_CANVAS_MULTIPLE,
       roundHalfToEven(Math.min(width, height) * Math.sqrt(targetArea / (width * height)))
@@ -211,6 +178,186 @@ export const resolveMiniMaxH3ReferenceImage = (
   return { dimensions, rows: (dimensions.width * dimensions.height) / MINIMAX_H3_ROW_PIXELS };
 };
 
+export const LTX2_CANVAS_MULTIPLE = 32;
+
+/**
+ * A two-stage canvas is chosen on the doubled grid so that halving it -- which is what the base
+ * pass runs at, the x2 latent upscaler doubling a latent grid exactly -- still lands on the plain
+ * one. Mirrors `LTX2_TWO_STAGE_CANVAS_MULTIPLE` in `invokeai/backend/ltx2/constants.py`.
+ */
+export const LTX2_TWO_STAGE_CANVAS_MULTIPLE = LTX2_CANVAS_MULTIPLE * 2;
+
+/** Short-side pixel count for each LTX-2 preset ("p" names the short dimension). */
+export const LTX2_TARGET_RESOLUTION_PX: Record<Ltx2TargetResolution, number> = {
+  '512p': 512,
+  '704p': 704,
+  '768p': 768,
+  '1024p': 1024,
+  '1536p': 1536,
+};
+
+/** The presets that run a base pass and then a refine pass over an upscaled latent. */
+export const LTX2_TWO_STAGE_RESOLUTIONS: ReadonlySet<Ltx2TargetResolution> = new Set(['1024p', '1536p']);
+
+export const isLtx2TwoStage = (targetResolution: Ltx2TargetResolution): boolean =>
+  LTX2_TWO_STAGE_RESOLUTIONS.has(targetResolution);
+
+/**
+ * The LTX-2 canvas for an aspect ratio: the preset pins the SHORT edge, the long
+ * edge follows the source's ratio, and both axes snap to the VAE's 32-pixel grid.
+ * LTX-2 declares no aspect-ratio limit and no area cap, so only degenerate inputs
+ * return null. Only the ratio of the inputs matters.
+ */
+export const resolveLtx2Canvas = (
+  width: number,
+  height: number,
+  targetResolution: Ltx2TargetResolution
+): VideoDimensions | null => {
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+    return null;
+  }
+
+  const shortEdge = LTX2_TARGET_RESOLUTION_PX[targetResolution];
+  const multiple = isLtx2TwoStage(targetResolution) ? LTX2_TWO_STAGE_CANVAS_MULTIPLE : LTX2_CANVAS_MULTIPLE;
+  const ratio = width / height;
+  const raw =
+    ratio >= 1 ? { height: shortEdge, width: shortEdge * ratio } : { height: shortEdge / ratio, width: shortEdge };
+
+  return {
+    height: snapToMultiple(raw.height, multiple),
+    width: snapToMultiple(raw.width, multiple),
+  };
+};
+
+/**
+ * The two canvases a two-stage run uses: the base pass's, and the final one the refine pass
+ * produces. `base` is exactly half of `final` on both axes -- not a resize, but the x2 latent
+ * upscaler's doubling read backwards, which is why `resolveLtx2Canvas` puts a two-stage canvas on
+ * the 64 grid. Mirrors `base_canvas` in `invokeai/backend/ltx2/packing.py`.
+ *
+ * A single-stage preset returns the same canvas for both, so a caller can wire one shape.
+ */
+export const getLtx2StageCanvases = (
+  width: number,
+  height: number,
+  targetResolution: Ltx2TargetResolution
+): { base: VideoDimensions; final: VideoDimensions } | null => {
+  const final = resolveLtx2Canvas(width, height, targetResolution);
+
+  if (!final) {
+    return null;
+  }
+
+  if (!isLtx2TwoStage(targetResolution)) {
+    return { base: final, final };
+  }
+
+  return { base: { height: final.height / 2, width: final.width / 2 }, final };
+};
+
+// LTX-2's causal VAE encodes the first frame alone and then groups of 8, so
+// (n - 1) % 8 == 0. 121 frames is 5 s at the model's 24 fps default, the length
+// the released pipeline generates; the slider stops at 241 (10 s) because the
+// sequence length — and with it both time and VRAM — grows linearly past it,
+// while the field still accepts up to 481 for a deliberate long render.
+export const LTX2_NUM_FRAMES_MIN = 9;
+export const LTX2_NUM_FRAMES_MAX = 481;
+export const LTX2_NUM_FRAMES_SLIDER_MAX = 241;
+export const LTX2_NUM_FRAMES_STEP = 8;
+export const LTX2_NUM_FRAMES_DEFAULT = 121;
+
+/**
+ * A frame count snapped *down* onto LTX-2's 8n + 1 grid. Mirrors `snap_num_frames_down` in
+ * `invokeai/backend/ltx2/packing.py`: a clip supplies whatever it supplies, and the trailing
+ * frames past the last whole group are dropped rather than padded -- padding would invent
+ * picture, or silence, for the model to hold clean.
+ */
+export const snapLtx2FramesDown = (numFrames: number): number =>
+  Math.max(0, Math.floor((Math.floor(numFrames) - 1) / LTX2_NUM_FRAMES_STEP)) * LTX2_NUM_FRAMES_STEP + 1;
+
+/**
+ * The frame count a conditioning clip will produce, as the panel can predict it. The graph wires
+ * the conditioning node's own count into the denoise rather than trusting this, because the two
+ * can differ: an audio track need not be exactly as long as the picture it came with, and the
+ * gallery's frame count is itself duration x fps rounded.
+ *
+ * With the clip in the `audio` role the picture is generated at the panel's own frame rate, so
+ * `fps` decides how many frames the soundtrack covers. In the `video` role the clip's own frames
+ * are the generation, and `fps` is ignored.
+ */
+export const ltx2FramesForClip = (conditioning: VideoConditioningClip, fps: number): number => {
+  if (conditioning.role === 'video') {
+    return snapLtx2FramesDown(conditioning.clip.numFrames);
+  }
+
+  const seconds = conditioning.clip.fps > 0 ? conditioning.clip.numFrames / conditioning.clip.fps : 0;
+
+  return snapLtx2FramesDown(Math.trunc(seconds * fps));
+};
+
+/**
+ * Frames of the source an LTX-2 continuation opens with, held clean so the model can read the
+ * clip's motion rather than just its last still. Mirrors `LTX2_DEFAULT_EXTEND_CONTEXT_FRAMES` in
+ * `invokeai/app/invocations/ltx2/ltx2_extend_conditioning.py`, which is the node's own default.
+ */
+export const LTX2_EXTEND_CONTEXT_FRAMES = 17;
+
+/**
+ * What the join can afford to blend, in source pixels. `video_concat` buffers the crossfade at the
+ * FIRST input's native resolution -- the trimmed source, not the generation canvas -- and refuses
+ * anything over 512 MiB. Mirrors `MAX_TRANSITION_MEMORY_BYTES` and `_BLEND_WORKING_FRAMES` in
+ * `invokeai/app/invocations/video_concat.py`, whose estimate is
+ * `width * height * 3 * (transition_frames * 2 + 13)` for a crossfade.
+ *
+ * At LTX-2's 17-frame overlap that caps a source at ~3.8 megapixels: 2560x1440 fits with 3% to
+ * spare, 4K needs 1115 MiB and does not. Without this the refusal lands in the join, after both
+ * encodes, the transformer and the decode have already run, and neither remedy its message offers
+ * is reachable from the panel.
+ */
+export const ltx2ExtendJoinFitsInMemory = (width: number, height: number, contextFrames: number): boolean =>
+  width * height * 3 * (contextFrames * 2 + 13) <= 512 * 1024 * 1024;
+
+/**
+ * The widest context the join can blend for a given source, on the 8k + 1 grid.
+ *
+ * The memory ceiling is a property of the *source's* pixels, not the generation canvas, so it moves
+ * with the clip the user picked: a 2560x1440 source affords 17 frames with 3% to spare while a 4K
+ * one affords none. Exposed as a live bound rather than a fixed check because the control is now the
+ * user's to drag — without it they could set a value that is refused only at enqueue, after both
+ * encodes and the transformer have already run.
+ *
+ * Returns 0 when even the smallest usable context (9) does not fit, which is the panel's signal that
+ * this source cannot be extended at all.
+ */
+export const ltx2MaxExtendContextFrames = (width: number, height: number): number => {
+  for (
+    let frames = snapLtx2FramesDown(LTX2_NUM_FRAMES_MAX);
+    frames >= 1 + LTX2_NUM_FRAMES_STEP;
+    frames -= LTX2_NUM_FRAMES_STEP
+  ) {
+    if (ltx2ExtendJoinFitsInMemory(width, height, frames)) {
+      return frames;
+    }
+  }
+
+  return 0;
+};
+
+/**
+ * New material a continuation actually adds, in frames.
+ *
+ * The join emits `sum(inputs) - transition_frames * (n - 1)`, and the transition is the context, so
+ * with two clips the source keeps its own length and the generation contributes `numFrames - context`.
+ * Every frame of context is therefore a frame of new video given up — the trade the panel shows
+ * beside the control, because Frames alone does not reveal it.
+ */
+export const ltx2NewFramesForExtend = (numFrames: number, contextFrames: number): number =>
+  Math.max(0, numFrames - contextFrames);
+
+export const LTX2_FPS_MIN = 1;
+export const LTX2_FPS_MAX = 60;
+export const LTX2_FPS_DEFAULT = 24;
+
 /** The width/height parts of a preset ratio, for feeding the canvas resolvers. */
 export const getVideoAspectRatioParts = (id: VideoAspectRatioId): VideoDimensions => {
   const [width = 1, height = 1] = id.split(':').map(Number);
@@ -225,10 +372,8 @@ export const invertVideoAspectRatioId = (id: VideoAspectRatioId): VideoAspectRat
   return `${height}:${width}` as VideoAspectRatioId;
 };
 
-// Wan's VAE compresses 4 pixel frames into 1 latent frame, so (n - 1) % 4 == 0.
-// 81 frames (5 s at 16 fps) is the training default; the slider allows up to
-// twice that, but coherence degrades past 81 as temporal RoPE leaves its
-// training distribution — the docs recommend chaining extends instead.
+// Wan requires 4n+1 frames. The 81-frame training default supports best coherence; longer clips extend beyond the
+// trained temporal range.
 export const WAN_NUM_FRAMES_MIN = 5;
 export const WAN_NUM_FRAMES_MAX = 161;
 export const WAN_NUM_FRAMES_STEP = 4;
@@ -241,37 +386,56 @@ export const WAN_FPS_DEFAULT = 16;
 export const isValidWanNumFrames = (numFrames: number): boolean =>
   Number.isInteger(numFrames) && numFrames >= WAN_NUM_FRAMES_MIN && (numFrames - 1) % WAN_NUM_FRAMES_STEP === 0;
 
-export const snapWanNumFrames = (numFrames: number): number => {
+/** A frame count's grid, as the variant policies declare it. */
+export interface VideoFramesGrid {
+  min: number;
+  max: number;
+  step: number;
+  defaultValue: number;
+}
+
+/**
+ * The nearest frame count on a family's grid, clamped to its range. Ties round
+ * UP: a count halfway between two grid points is as close to either, and
+ * rounding a short request down toward the floor is the worse answer (it can
+ * collapse a clip to the minimum). Matches `snap_num_frames` in
+ * `invokeai/backend/ltx2/packing.py`.
+ */
+export const snapNumFramesToGrid = (grid: VideoFramesGrid, numFrames: number): number => {
   if (!Number.isFinite(numFrames)) {
-    return WAN_NUM_FRAMES_DEFAULT;
+    return grid.defaultValue;
   }
 
-  const clamped = Math.min(WAN_NUM_FRAMES_MAX, Math.max(WAN_NUM_FRAMES_MIN, numFrames));
+  const clamped = Math.min(grid.max, Math.max(grid.min, numFrames));
 
-  return Math.round((clamped - 1) / WAN_NUM_FRAMES_STEP) * WAN_NUM_FRAMES_STEP + 1;
+  return Math.floor((clamped - grid.min) / grid.step + 0.5) * grid.step + grid.min;
 };
 
 export const MINIMAX_H3_FPS = 24;
 
-// The 17n + 5 grid points the H3 video VAE can encode, from the accepted
-// 3.75 s floor to the 15 s ceiling. Mirrors MINIMAX_H3_VIDEO_FRAME_CHOICES in
-// invokeai/backend/minimax_h3/presets.py; the 5-frame still-image block is
-// deliberately absent — the panel generates video, not stills.
+// Mirror H3's 17n+5 video frame choices from presets.py; exclude the five-frame still-image block.
 export const MINIMAX_H3_NUM_FRAMES_CHOICES: readonly number[] = Array.from({ length: 16 }, (_, i) => 90 + i * 17);
 export const MINIMAX_H3_NUM_FRAMES_DEFAULT = 124;
 
 export const isValidMiniMaxH3NumFrames = (numFrames: number): boolean =>
   MINIMAX_H3_NUM_FRAMES_CHOICES.includes(numFrames);
 
-export const snapMiniMaxH3NumFrames = (numFrames: number): number => {
+/** A frame count's choice list, as the variant policies declare it. */
+export interface VideoFramesChoices {
+  choices: readonly number[];
+  defaultValue: number;
+}
+
+/** The nearest offered frame count; the first of two equally near ones wins. */
+export const snapNumFramesToChoices = (policy: VideoFramesChoices, numFrames: number): number => {
   if (!Number.isFinite(numFrames)) {
-    return MINIMAX_H3_NUM_FRAMES_DEFAULT;
+    return policy.defaultValue;
   }
 
-  let best = MINIMAX_H3_NUM_FRAMES_DEFAULT;
+  let best = policy.defaultValue;
   let bestDistance = Number.POSITIVE_INFINITY;
 
-  for (const choice of MINIMAX_H3_NUM_FRAMES_CHOICES) {
+  for (const choice of policy.choices) {
     const distance = Math.abs(choice - numFrames);
 
     if (distance < bestDistance) {
@@ -286,3 +450,23 @@ export const snapMiniMaxH3NumFrames = (numFrames: number): number => {
 /** Clip length in seconds; matches the backend's `n / fps` labeling. */
 export const getVideoDurationSeconds = (numFrames: number, fps: number): number | null =>
   Number.isFinite(numFrames) && Number.isFinite(fps) && fps > 0 && numFrames >= 0 ? numFrames / fps : null;
+
+/**
+ * The negative prompt LTX-2 was released with: a list of artifact and audio-defect tags its dev
+ * checkpoint guides against at CFG 3. Mirrors `LTX2_DEFAULT_NEGATIVE_PROMPT` in
+ * `invokeai/backend/ltx2/constants.py`, which is the text-encoder node's own default — the panel
+ * seeds it so a fresh LTX-2 panel runs the released recipe rather than steering against nothing.
+ */
+export const LTX2_DEFAULT_NEGATIVE_PROMPT =
+  'has_subtitles, has_blurbox, transition from black, transition to black, speech_ending_short, ' +
+  'blurry, out of focus, overexposed, underexposed, low contrast, washed out colors, excessive noise, ' +
+  'grainy texture, poor lighting, flickering, motion blur, distorted proportions, unnatural skin tones, ' +
+  'deformed facial features, asymmetrical face, missing facial features, extra limbs, disfigured hands, ' +
+  'wrong hand count, artifacts around text, inconsistent perspective, camera shake, incorrect depth of ' +
+  'field, background too sharp, background clutter, distracting reflections, harsh shadows, inconsistent ' +
+  'lighting direction, color banding, cartoonish rendering, 3D CGI look, unrealistic materials, uncanny ' +
+  'valley effect, incorrect ethnicity, wrong gender, exaggerated expressions, wrong gaze direction, ' +
+  'mismatched lip sync, silent or muted audio, distorted voice, robotic voice, echo, background noise, ' +
+  'off-sync audio, incorrect dialogue, added dialogue, repetitive speech, jittery movement, awkward ' +
+  'pauses, incorrect timing, unnatural transitions, inconsistent framing, tilted camera, flat lighting, ' +
+  'inconsistent tone, cinematic oversaturation, stylized filters, or AI artifacts.';

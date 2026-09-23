@@ -1,14 +1,6 @@
 /**
- * Canvas compositing settings for the generate widget.
- *
- * One of the Generate form's canvas-only sections (`GenerateCanvasSections`),
- * alongside the denoising strength. This section
- * holds the legacy canvas compositing controls — infill method,
- * coherence pass mode / edge size / min denoise, and mask blur — persisted
- * per-project in the canvas widget's own `state.values` (same store as
- * `denoisingStrength`), read back by `prepareCanvasInvocation` and threaded into
- * the pure graph compiler. Rendered only when the active invocation source is
- * the canvas (the generate widget is shared with the Generate tab).
+ * Expose canvas-only infill/coherence/mask controls in Generate. Persist them in canvas values for
+ * prepareCanvasInvocation and graph compilation.
  */
 
 import type { NumberInput as ChakraNumberInput, SelectValueChangeDetails } from '@chakra-ui/react';
@@ -32,8 +24,7 @@ import { useTranslation } from 'react-i18next';
 const INFILL_METHODS: readonly CanvasInfillMethod[] = ['patchmatch', 'lama', 'cv2', 'color', 'tile'];
 const COHERENCE_MODES: readonly CanvasCoherenceMode[] = ['Gaussian Blur', 'Box Blur', 'Staged'];
 
-// Full-width form fields: the menu hangs from the trigger's start edge at the
-// trigger's width — `bottom-end`/fit-content is for narrow inline selects.
+// Match full-width menus to the trigger width and start edge.
 const SELECT_POSITIONING = { placement: 'bottom-start', sameWidth: true } as const;
 
 const selectCanvasValues = (project: Parameters<typeof getProjectWidgetValues>[0]): Record<string, unknown> =>
@@ -125,8 +116,6 @@ export const GenerateCanvasCompositingSection = () => {
     [patch]
   );
 
-  // `infillColorValue` is already `{ r, g, b }` 0-255 plus a unit alpha, which
-  // is exactly the shape the platform color helpers speak.
   const infillColor = formatHexColor(settings.infillColorValue, { alpha: true });
 
   const handleInfillColorChange = useCallback(
@@ -145,8 +134,6 @@ export const GenerateCanvasCompositingSection = () => {
 
   const opt = (key: string) => t(`widgets.generate.compositingOptions.${key}`);
 
-  // The collapsed header carries the effective recipe — infill method and mask
-  // blur — so canvas fill reads as a one-line contextual summary until opened.
   const badges = (
     <>
       <Badge size="xs">{t(`widgets.generate.compositingOptions.infillMethods.${settings.infillMethod}`)}</Badge>

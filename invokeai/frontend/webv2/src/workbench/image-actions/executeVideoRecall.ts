@@ -7,6 +7,7 @@ import type { WorkbenchCommands } from '@workbench/workbenchStore';
 import { galleryImages, galleryItems, galleryVideos } from '@features/gallery';
 import {
   createDefaultVideoWidgetValues,
+  createVideoConditioningClip,
   createVideoSourceClip,
   getDefaultReferenceConditioning,
   getVideoModelPolicy,
@@ -118,9 +119,7 @@ export const executeVideoRecall = async ({
       return false;
     }
 
-    // Conditioning media re-hydrates against the gallery: the metadata records
-    // only names, and the panel needs dimensions/probe data — plus deleted
-    // media must drop rather than resurrect as broken references.
+    // Resolve media names against the gallery for dimensions/probe data and drop deleted references.
     if (result.fields.includes('media')) {
       let recalledMedia = false;
       const { firstFrameName, lastFrameName, sourceVideoName } = result.mediaNames;
@@ -149,6 +148,41 @@ export const executeVideoRecall = async ({
         recalledMedia = true;
       }
 
+      const { conditioningClip } = result.mediaNames;
+
+      if (conditioningClip) {
+        try {
+          const clipItem = await galleryItems.resolve({ kind: 'video', name: conditioningClip.name }, owner.signal);
+
+          assertAccountScopeCurrent(owner);
+          if (clipItem?.kind === 'video') {
+            // The recorded role, not the one a fresh drop would default to: the run held that
+            // modality clean, and the other role is a different generation entirely.
+            result.values = {
+              ...result.values,
+              conditioningClip: {
+                ...createVideoConditioningClip({
+                  durationSeconds: clipItem.durationSeconds,
+                  fps: clipItem.fps,
+                  height: clipItem.height,
+                  name: clipItem.name,
+                  width: clipItem.width,
+                }),
+                role: conditioningClip.role,
+              },
+              firstFrameImage: null,
+              lastFrameImage: null,
+              references: [],
+              sourceVideo: null,
+            };
+            recalledMedia = true;
+          }
+        } catch {
+          assertAccountScopeCurrent(owner);
+          // The clip is gone; the rest of the recall still applies.
+        }
+      }
+
       if (sourceVideoName) {
         try {
           const sourceItem = await galleryItems.resolve({ kind: 'video', name: sourceVideoName }, owner.signal);
@@ -162,9 +196,7 @@ export const executeVideoRecall = async ({
               name: sourceItem.name,
               width: sourceItem.width,
             });
-            // Restore the recorded trim, clamped to the fresh estimate (which
-            // can differ from the run's own) — the default trim would extend
-            // from a completely different frame than the run did.
+            // Restore recorded trim against the fresh estimate; default trim would select different frames.
             const trim = rebuiltClip.numFrames >= 2 ? result.mediaNames.sourceVideoTrim : null;
             const startFrame = trim
               ? Math.min(Math.max(trim.startFrame, 0), rebuiltClip.numFrames - 2)
@@ -187,9 +219,7 @@ export const executeVideoRecall = async ({
       }
 
       if (result.mediaNames.references.length > 0) {
-        // Ordered re-hydration: resolve every recorded reference against the gallery,
-        // dropping deleted media while PRESERVING the survivors' order (order is part of
-        // the request contract).
+        // Hydrate references in recorded order, dropping deleted media without reordering survivors.
         const imageNames = result.mediaNames.references
           .filter((reference): reference is typeof reference & { kind: 'image' } => reference.kind === 'image')
           .map((reference) => reference.name);
@@ -232,10 +262,8 @@ export const executeVideoRecall = async ({
             const endFrame = recorded.trim
               ? Math.min(Math.max(recorded.trim.endFrame, startFrame), clip.numFrames - 1)
               : clip.numFrames - 1;
-            // A recorded conditioning is what the run actually used, so it wins -- ALL THREE
-            // values of it, tested as a set. Only when the metadata recorded nothing usable
-            // does this fall back to the default the add path would pick, which for a
-            // wrapped audio upload is its soundtrack rather than a picture of its waveform.
+            // Any valid recorded conditioning wins; otherwise use add-path defaults, including soundtrack
+            // conditioning for wrapped audio.
             const conditioning = isVideoReferenceConditioning(recorded.conditioning)
               ? recorded.conditioning
               : getDefaultReferenceConditioning(item.mediaOrigin);
@@ -265,12 +293,8 @@ export const executeVideoRecall = async ({
         result.fields = result.fields.filter((field) => field !== 'media');
       }
 
-      // What survived hydration can imply a mode the effective model rejects
-      // — a deleted first frame leaves an interpolate recall holding only its
-      // last frame (no Wan mode), and an uninstalled recorded model leaves
-      // i2v media on whatever main the panel kept. Reconcile with the same
-      // rules the model-selection transition applies, so the recall never
-      // assembles an un-generatable panel behind a success toast.
+      // Reconcile hydrated media with the effective model's modes; deleted frames or unavailable models must not
+      // leave an ungeneratable panel.
       const effectiveModel = result.values.model;
 
       if (effectiveModel) {
@@ -329,14 +353,8 @@ export const executeVideoRecall = async ({
       return false;
     }
 
-    // Prompts are Video's own widget values now, not the draft Generate and
-    // Upscale share — but a prompts-only recall must still write ONLY the prompt
-    // keys. `result.values` is the panel re-snapshotted through
-    // `syncVideoWidgetValuesWithModels`, so writing it wholesale would push an
-    // unrelated model-family transition into the store behind a toast that says
-    // "prompts" (uninstall the recorded main, recall prompts, and the panel's
-    // frames/fps/resolution/LoRAs all reset). It would also widen the
-    // lost-update window against a concurrent recall still awaiting its media.
+    // Commit only prompt keys: resnapshotted values may contain an unrelated model-family transition and would
+    // widen the lost-update window for concurrent media recall.
     if (result.fields.every((field) => field === 'prompts')) {
       commands.widgets.patchValues(
         'video',

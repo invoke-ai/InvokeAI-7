@@ -7,14 +7,8 @@ import { useTranslation } from 'react-i18next';
 import { PREVIEW_COMPARE_DROP_DATA, PREVIEW_COMPARE_DROP_ID } from './previewCompareDnd';
 
 /**
- * A quiet drop ring over the preview frame, visible only while an all-image gallery-item
- * drag is in flight. Dropping arms the dragged image for comparison (resolved
- * by the widget shell's dnd monitor).
- *
- * The image already on screen is refused wherever it was dragged from — the
- * frame itself, the filmstrip, or the gallery grid — because comparing an image
- * with itself does nothing but pause live-follow. Only `items[0]` is tested,
- * since that is the item `resolvePreviewCompareDrop` would arm.
+ * Show comparison drop targets for image-only drags; reject the first item if already displayed so self-comparison
+ * cannot pause live-follow.
  */
 export const PreviewCompareDropZone = ({ currentImageName }: { currentImageName: string | null }) => {
   const { t } = useTranslation();

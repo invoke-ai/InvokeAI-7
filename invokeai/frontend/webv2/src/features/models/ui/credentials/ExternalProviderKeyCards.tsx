@@ -62,8 +62,7 @@ export const ExternalProviderKeyCards = ({ onError }: { onError: (title: string,
     );
   }
 
-  // A server with no external providers is a normal state, not a blank one.
-  // Nothing renders while loading — no flicker on the happy path.
+  // Show an explicit no-provider state after loading; suppress loading flicker.
   if (status === 'loaded' && (configs ?? []).length === 0) {
     return (
       <Text color="fg.subtle" fontSize="2xs">
@@ -118,11 +117,7 @@ const ExternalProviderKeyCard = ({
   title: string;
 }) => {
   const { t } = useTranslation();
-  // The request is consumed once; the outline it produces is local so it
-  // survives that clearing and stays up while the user works in the card.
-  // Its lifetime is the tab's — `DetailPane` renders the Keys body only while
-  // the tab is active, so leaving and returning lands on a quiet grid without
-  // anyone having to schedule the fade.
+  // Consume the reveal request once; keep the highlight local until the Keys tab unmounts.
   const [isRevealed, setIsRevealed] = useState(false);
   // A callback ref rather than an effect: the provider list loads async, so
   // the card can mount well after the request, and this fires exactly when the

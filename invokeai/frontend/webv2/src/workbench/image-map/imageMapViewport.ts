@@ -1,11 +1,5 @@
 import type { ImageMapPoint } from './api';
 
-/**
- * Pure viewport math for the image map: initial axis ranges, focal-point
- * zoom, and keep-the-marker-in-view recentering. Kept free of plotly/DOM so
- * every invariant is unit-testable.
- */
-
 export interface AxisRanges {
   x: [number, number];
   y: [number, number];
@@ -26,10 +20,7 @@ const quantile = (sorted: number[], q: number): number => {
   return sorted[lower] * (1 - weight) + sorted[upper] * weight;
 };
 
-/**
- * Initial view: the 1st..99th percentile of each axis (PhotoMapAI's choice —
- * a handful of outlier points must not dwarf the whole map), padded slightly.
- */
+/** Fit padded 1st–99th percentiles per axis, following PhotoMapAI to limit outlier influence. */
 export const computePercentileRanges = (
   points: ImageMapPoint[],
   lowerQ: number = 0.01,
@@ -54,10 +45,8 @@ export const computePercentileRanges = (
 };
 
 /**
- * Grow ranges minimally so `point` sits at least `padFraction` of the span
- * inside every edge. Used before the initial fit so the current-image marker
- * starts comfortably in view and the auto-recenter has no reason to shift
- * the freshly fitted map.
+ * Minimally expand ranges to keep the current marker inside padded edges before fitting, avoiding immediate
+ * recentering.
  */
 export const expandRangesToInclude = (
   ranges: AxisRanges,
@@ -74,12 +63,8 @@ export const expandRangesToInclude = (
 };
 
 /**
- * Expand ranges so the whole box stays visible in a plot whose axes are
- * constrained to equal unit scale (xaxis.scaleanchor = 'y'). Handing plotly
- * an over-constrained range pair makes it re-solve against the container's
- * aspect ratio, which can CROP one axis — silently zooming the first render
- * into a sliver of the map. Pre-expanding the narrower constraint instead
- * guarantees everything inside the box remains in view. Only ever expands.
+ * Expand ranges for equal-scale axes before handing them to Plotly; otherwise its aspect correction may crop one
+ * axis. Never shrink the requested box.
  */
 export const fitRangesToAspect = (ranges: AxisRanges, aspectRatio: number): AxisRanges => {
   if (!Number.isFinite(aspectRatio) || aspectRatio <= 0) {
@@ -112,9 +97,8 @@ const WHEEL_LINE_HEIGHT_PX = 16;
 const WHEEL_PAGE_HEIGHT_PX = 400;
 
 /**
- * Above this many pixels a ctrl+wheel came from a real wheel, not a trackpad
- * pinch: browsers report a pinch as ctrl+wheel too, but in small synthetic
- * steps, while one mouse notch is 100px (Chrome) or 3 lines (Firefox).
+ * Distinguish larger mouse-wheel deltas from small synthetic ctrl+wheel pinch steps; normalize Firefox line units
+ * first.
  */
 const PINCH_DELTA_LIMIT_PX = 40;
 
@@ -122,10 +106,8 @@ const PINCH_DELTA_LIMIT_PX = 40;
 const MAX_WHEEL_ZOOM_STEP = 1.25;
 
 /**
- * Wheel deltas do not arrive in the same unit everywhere. Firefox reports a
- * classic mouse wheel in LINES (deltaY ±3), so treating deltaY as pixels made
- * one notch a 0.3% zoom — and since the handler preventDefaults, the user got
- * neither zoom nor scroll.
+ * Normalize delta units: Firefox mouse wheels report lines, whose raw values would otherwise produce imperceptible
+ * zoom while native scrolling is prevented.
  */
 export const normalizeWheelDeltaY = (deltaY: number, deltaMode: number): number => {
   if (deltaMode === 1) {
@@ -145,8 +127,7 @@ export const zoomFactorFromWheel = (deltaY: number, deltaMode: number, isCtrlHel
   const isPinch = isCtrlHeld && Math.abs(pixels) < PINCH_DELTA_LIMIT_PX;
   const factor = Math.exp(pixels * (isPinch ? 0.01 : 0.001));
 
-  // The pinch gain applied to a mouse-sized delta would zoom 2.7x in one
-  // notch; clamping keeps every input device to a usable step.
+  // Clamp mouse-sized deltas so pinch gain cannot cause oversized zoom steps.
   return Math.min(Math.max(factor, 1 / MAX_WHEEL_ZOOM_STEP), MAX_WHEEL_ZOOM_STEP);
 };
 

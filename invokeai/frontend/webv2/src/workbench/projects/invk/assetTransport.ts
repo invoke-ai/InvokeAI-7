@@ -12,18 +12,7 @@ import type { InvkMediaCategory } from './board';
 import { INVK_MAX_ARCHIVE_BYTES } from './archive';
 import { InvkFormatError } from './format';
 
-/**
- * The asset half of a project file: pulling referenced bytes off the server on the way out, and
- * putting the missing ones back on the way in.
- *
- * Not reached through `canvas-operations/backend/canvasImages.ts`, which does the same upload:
- * importing is a Launchpad action on a route that never loads the editor, and it must not pull the
- * canvas graph behind it.
- *
- * Document references upload under category `'other'` — the canvas's private category, in neither
- * `IMAGE_CATEGORIES` nor `ASSETS_CATEGORIES` — because pixels a document points at are the
- * document, not gallery content. Board items upload under the category the archive recorded.
- */
+/** Launchpad-safe transport. Document references upload privately; board items retain their archived categories. */
 
 /** One budget for the whole transfer: a per-phase limit would multiply what it exists to bound. */
 export const INVK_TRANSFER_CONCURRENCY = 5;
@@ -35,13 +24,7 @@ const VIDEOS_BASE = '/api/v1/videos';
 /** The backend truncates board names at 300 characters; doing it here keeps the name we chose. */
 const MAX_BOARD_NAME_LENGTH = 300;
 
-/**
- * Whether a failure means "this work is over" rather than "this one asset could not be served".
- *
- * An aborted signal makes *every* asset unservable, and a skip-everything export writes an empty
- * archive and hands it over as a success. Distinguishable only where the request fails — by the
- * time the archive is packed the two look identical.
- */
+/** Cancellation aborts the operation rather than reporting remaining assets as missing. */
 export const isRequestCancellation = (error: unknown): boolean =>
   error instanceof HttpRequestIdentityExpiredError || (error instanceof Error && error.name === 'AbortError');
 
@@ -120,10 +103,7 @@ const getDeclaredContentLength = (response: Response): number | null => {
   return Number.isSafeInteger(byteLength) ? byteLength : Number.POSITIVE_INFINITY;
 };
 
-/**
- * A single export-scoped reader: every response streams through one fixed byte budget, so neither a
- * hostile response nor many small ones can materialize an oversized project in memory.
- */
+/** Share one streaming byte budget across all export responses. */
 export const createAssetResponseReader = (): AssetResponseReader => {
   type AssetStreamReader = ReadableStreamDefaultReader<Uint8Array>;
 
@@ -276,8 +256,7 @@ export const findExistingImageNames = async (
   imageNames: readonly string[],
   signal?: AbortSignal
 ): Promise<Set<string>> => {
-  // Through the same pool as everything else. Splitting the names was meant to stop one slow
-  // lookup stalling the check, which a sequential loop gives straight back.
+  // Use the shared bounded pool for existence checks; do not serialize chunks.
   const found = await mapWithConcurrency(
     toBatches(imageNames, EXISTENCE_BATCH_SIZE),
     INVK_TRANSFER_CONCURRENCY,
@@ -293,10 +272,7 @@ export const findExistingImageNames = async (
   return new Set(found.flat().map((dto) => dto.image_name));
 };
 
-/**
- * Which of `videoNames` the server already has. No bulk equivalent of `images_by_names` exists for
- * videos, so this asks per name; a 404 is the answer, not an error.
- */
+/** Videos need individual existence requests because no bulk endpoint exists; 404 means absent. */
 export const findExistingVideoNames = async (
   videoNames: readonly string[],
   signal?: AbortSignal
@@ -308,8 +284,7 @@ export const findExistingVideoNames = async (
       const response = await apiFetchRaw(`${VIDEOS_BASE}/i/${encodeURIComponent(videoName)}`, { signal });
 
       if (response.ok) {
-        // The DTO is not wanted, only its existence — but an unread body holds its connection open
-        // until it is collected, and this runs once per referenced video.
+        // Discard unused response bodies to release connections.
         await discardBody(response);
         return videoName;
       }
@@ -328,10 +303,7 @@ export const findExistingVideoNames = async (
   return new Set(found.filter((videoName): videoName is string => videoName !== null));
 };
 
-/**
- * Bytes for one asset, or `null` when the server will not serve it. A missing asset is not an export
- * failure: a project that exports every layer but one is far more use than one that refuses.
- */
+/** Null means unavailable; exports may complete with missing assets. */
 const fetchAsset = async (
   url: string,
   signal: AbortSignal | undefined,
@@ -403,13 +375,7 @@ export const createAssetExportTransport = () => {
   };
 };
 
-/**
- * Put bytes on the server. The returned name is authoritative and frequently differs from the one
- * asked for — the server names media itself — which is why every import ends with a remapping pass.
- *
- * A board upload's name is a genuinely new identity, always — see the `board_images` rule in
- * `transfer.ts`.
- */
+/** Use server-returned names. Board uploads must always receive fresh identities. */
 const uploadMedia = async <T>(
   base: string,
   query: Record<string, string>,
@@ -583,10 +549,7 @@ const copyMediaToBoard = async <Entry>({
   return result;
 };
 
-/**
- * Copy media onto a board without the bytes leaving the server. Carries category, origin and
- * embedded metadata; starring is not part of a copy, so callers star afterwards.
- */
+/** Server-side copies preserve metadata, category, and origin; starring is separate. */
 export const copyImagesToBoard = (
   imageNames: readonly string[],
   boardId: string,
@@ -621,10 +584,7 @@ export interface BulkStarResult {
   failed: string[];
 }
 
-/**
- * Failures are derived from the success list, not read from `failed_*`: only the video endpoint
- * reports failures, and a name it silently skipped appears in neither list.
- */
+/** Derive failures from missing successes because endpoint failure lists are incomplete. */
 const toBulkStarResult = (requested: readonly string[], starred: readonly string[]): BulkStarResult => {
   const succeeded = new Set(starred);
 
@@ -674,12 +634,7 @@ export const starVideos = async (videoNames: readonly string[], signal?: AbortSi
   return { failed };
 };
 
-/**
- * An unclaimed private board for a restore to upload into, which project creation then claims.
- *
- * This is what makes the create the commit point: the media is in place before the project exists,
- * so the create either claims the board and its contents or leaves nothing a person can see.
- */
+/** Atomically claiming the staging board is the project-create commit point. */
 export const createStagingBoard = async (boardName: string, signal?: AbortSignal): Promise<string> => {
   const query = new URLSearchParams({ board_name: boardName.slice(0, MAX_BOARD_NAME_LENGTH) });
   const dto = await apiFetchJson<{ board_id: string }>(`${BOARDS_BASE}/?${query.toString()}`, {
@@ -771,10 +726,7 @@ const VIDEO_MIME_BY_EXTENSION: Readonly<Record<string, string>> = {
   webm: 'video/webm',
 };
 
-/**
- * Best guess at a bundled entry's MIME type. The fallback is per kind because the endpoint checks
- * it: an unknown video extension falling back to `image/png` would be refused by `/videos/upload`.
- */
+/** Use a kind-specific MIME fallback so unknown video extensions remain video uploads. */
 export const mimeForEntryName = (entryName: string, kind: 'image' | 'video' = 'image'): string => {
   const extension = entryName.split('.').pop()?.toLowerCase() ?? '';
 

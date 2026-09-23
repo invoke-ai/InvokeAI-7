@@ -151,11 +151,7 @@ export const getImageContextMenuRecallRequestKey = (image: GalleryImage | null, 
   return `${image.imageName}:${image.width}:${image.height}`;
 };
 
-/**
- * Shared right-click menu for backend images, usable from any widget (gallery
- * grid, preview, ...). Anchored to the cursor through a virtual rect, so it
- * needs no trigger element — set `target` to open it.
- */
+/** Shared image context menu anchored to a cursor rect; setting target opens it without a trigger element. */
 export const ImageContextMenu = ({
   actions,
   boards,
@@ -319,8 +315,6 @@ const SingleItemMenuItems = ({
   const handleDelete = useCallback(() => onRequestDeletion([itemRef]), [itemRef, onRequestDeletion]);
   const { generation, widgets } = useWorkbenchCommands();
   const openWidget = useOpenWorkbenchWidget();
-  // Video recall availability, fetched from the item's recorded core_metadata
-  // when the menu opens on a video — the video twin of the image menu's flow.
   const [videoRecallCapabilities, setVideoRecallCapabilities] = useState<VideoRecallCapabilities>(
     EMPTY_VIDEO_RECALL_CAPABILITIES
   );
@@ -820,8 +814,7 @@ const SingleImageMenuItems = ({
         onClick={handleUseAsReferenceImage}
       />
       <ContextMenuItem
-        // Same signal "Use Prompt" reads, rather than staying enabled and
-        // raising a toast to say the image had no prompt after all.
+        // Use the same availability signal as Use Prompt to disable empty recall upfront.
         disabled={isLoadingRecallCapabilities || !recallCapabilities.prompts}
         icon={TypeIcon}
         label="Use as Prompt Template"

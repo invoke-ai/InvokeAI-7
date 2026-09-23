@@ -61,13 +61,7 @@ const getNextIconId = (currentIconId: string, key: string): string | null => {
   return layoutPresetIconIds[nextIndex] ?? null;
 };
 
-/**
- * Identity and default routing for a layout preset.
- *
- * Presets collapse to icon-only below 1280px, so the icon is not decoration.
- * The curated picker keeps the task focused on telling layouts apart at a
- * glance instead of turning it into an icon-library search.
- */
+/** Presets become icon-only below 1280px; a curated picker keeps them distinguishable without a full icon search. */
 export const LayoutPresetDialog = ({
   defaultRoute: initialDefaultRoute,
   iconId: initialIconId,
@@ -108,9 +102,7 @@ export const LayoutPresetDialog = ({
   const sourceValue = useMemo(() => (defaultRoute ? [defaultRoute.sourceId] : []), [defaultRoute]);
   const canSubmit = name.trim().length > 0 && (sourceOptions.length === 0 || defaultRoute !== undefined);
 
-  // Without this the focus trap lands on the header's close button, so opening
-  // the dialog and typing does nothing. `initialFocusEl` rather than `autoFocus`
-  // so the trap itself does the focusing, at the point it is ready to.
+  // Use trap-managed initialFocusEl so typing reaches the name after the dialog is ready.
   const initialFocusEl = useCallback(() => nameRef.current, []);
 
   const handleOpenChange = useCallback(

@@ -81,9 +81,7 @@ const observeBrowserErrors = (page, phase, errors) => {
     if (message.type() === 'error') {
       const location = message.location();
 
-      // Every release harness deliberately uses the HTTP-only mock backend, so
-      // Socket.IO's transport probe is expected to stay disconnected. Ignore
-      // only that browser-generated 404; application console errors still fail.
+      // The HTTP-only mock has no Socket.IO; ignore only its expected transport 404.
       if (
         location.url.includes('/ws/socket.io/') &&
         message.text().includes('the server responded with a status of 404')
@@ -91,8 +89,7 @@ const observeBrowserErrors = (page, phase, errors) => {
         return;
       }
 
-      // Video existence has no bulk endpoint. Import deliberately probes the
-      // archived name and treats this exact 404 as the signal to restore it.
+      // Import probes archived video names; this 404 triggers restoration.
       if (
         phase.endsWith('import') &&
         location.url &&
@@ -150,11 +147,7 @@ const waitForProjectCover = async (projectId, restoredImageNames) => {
   assert.fail(`The project cover index never mapped ${projectId} to a restored image.`);
 };
 
-/**
- * What Fixture Project 002's board holds, as the snapshot describes it: kind, category and
- * starring, with the names left out. Names are exactly what may not survive a transfer — every
- * board item gets a new identity — so the shape is the part that has to round-trip.
- */
+/** Compare membership attributes, excluding names because board media receives new identities on import. */
 const boardShape = (items) => items.map((item) => `${item.kind}:${item.category}:${String(item.starred)}`).sort();
 
 const EXPECTED_BOARD_SHAPE = [
@@ -226,15 +219,8 @@ const importArchive = async ({ archivePath, browser, contexts, errors, phase }) 
 };
 
 /**
- * The complete round trip: export a project *and its board*, restore it somewhere that has none of
- * its media, then duplicate the result.
- *
- * The rules under test are the ones that distinguish a project file from a folder of pictures.
- * Board media is copied, never adopted — the destination is deliberately seeded with images under
- * the archived names, and a restore that reused one would be pointing at somebody else's picture.
- * Document references outside the board are the opposite: an identity the destination already has
- * satisfies them, so it is reused rather than duplicated. And the things a board holds but no
- * gallery shows — intermediates and the canvas's private `other` category — never travel at all.
+ * Verify imports copy board media despite name collisions, reuse external references, and exclude
+ * intermediate/other items.
  */
 const runRoundTrip = async ({ backend, browser, contexts, errors, tempDirectory }) => {
   const sourceBoard = await getBoardSnapshot(sourceProjectId);
@@ -250,14 +236,10 @@ const runRoundTrip = async ({ backend, browser, contexts, errors, tempDirectory 
   await exportPage.goto(`${origin}${sourceProjectPath}`, { waitUntil: 'domcontentloaded' });
   await exportPage.getByRole('main', { exact: true, name: sourceProjectName }).waitFor();
 
-  // The board the server says this project owns is the one the gallery points at, without the
-  // document having to name it.
   const selectedBoardRow = exportPage.locator('button[aria-current="true"]').filter({ hasText: sourceProjectName });
 
   await selectedBoardRow.first().waitFor();
 
-  // A project's board offers the whole project as a file, alongside the media-only download that
-  // predates it. Both, because they are different things: one is the project, one is its pixels.
   await exportPage.getByRole('button', { exact: true, name: `Board actions for ${sourceProjectName}` }).click();
   await exportPage.getByRole('menuitem', { exact: true, name: 'Export project (.invk)' }).waitFor();
   await exportPage.getByRole('menuitem', { name: /^Download Board/ }).waitFor();
@@ -293,8 +275,7 @@ const runRoundTrip = async ({ backend, browser, contexts, errors, tempDirectory 
   assert.equal(archivedBoard.version, 1);
   assert.deepEqual(boardShape(archivedBoard.items), EXPECTED_BOARD_SHAPE);
   assert.deepEqual(archivedBoard.items.map((item) => item.name).sort(), [...ARCHIVED_BOARD_NAMES].sort());
-  // Board membership plus the canvas's own references, each carried once: five board items, three
-  // external images the document draws with, and one external video a workflow node names.
+  // Expect five board items plus three external images and one external video, deduplicated across references.
   assert.deepEqual(
     bundledImages.sort(),
     [...ARCHIVED_BOARD_NAMES.filter((name) => name.endsWith('.png')), ...PROJECT_FILE_BOARD.externalImages]
@@ -309,8 +290,7 @@ const runRoundTrip = async ({ backend, browser, contexts, errors, tempDirectory 
   assert.equal(entries[`images/${PROJECT_FILE_BOARD.intermediateImage}`], undefined);
   assert.equal(entries[`images/${PROJECT_FILE_BOARD.canvasOwnedImage}`], undefined);
 
-  // Two collisions survive the reset: one name the restore must *not* adopt because the board owns
-  // it, and one it *must* reuse because the document only points at it.
+  // Preserve two collisions: board-owned media must be copied; an external reference must be reused.
   const collide = [PROJECT_FILE_BOARD.referencedImage, PROJECT_FILE_BOARD.video, PROJECT_FILE_BOARD.externalImages[0]];
   const reset = await fetchJson(`/__reset?profile=empty&collide=${collide.map(encodeURIComponent).join(',')}`, {
     method: 'POST',
@@ -355,8 +335,6 @@ const runRoundTrip = async ({ backend, browser, contexts, errors, tempDirectory 
   const importedLayers = getLayerImageNames(imported);
   const [firstExternal, ...otherExternals] = PROJECT_FILE_BOARD.externalImages;
 
-  // The layer whose image the board owned follows the copy; the ones it did not keep pointing
-  // outside the board — the collided name is reused verbatim, the rest were uploaded.
   assert.equal(importedLayers.filter((name) => importedBoardNames.includes(name)).length, 1);
   assert.equal(importedLayers.includes(PROJECT_FILE_BOARD.referencedImage), false);
   assert.equal(importedLayers.includes(firstExternal), true, 'an existing identity must satisfy a reference');
@@ -372,8 +350,7 @@ const runRoundTrip = async ({ backend, browser, contexts, errors, tempDirectory 
   assert.notEqual(importedVideoName, MOCK_BACKEND_REPRESENTATIVE_VIDEO_NAME);
   assert.equal(importedVideoNames.has(importedVideoName), true);
 
-  // The media the destination already held under an archived name is untouched: still there, still
-  // on no board. A restore that had adopted it would have moved it onto the project's board.
+  // Adopting the collision would move it onto the restored board; assert it stays unboarded.
   const collidedVideo = importedVideos.items.find((video) => video.video_name === PROJECT_FILE_BOARD.video);
   const collidedImage = await fetchJson(`/api/v1/images/i/${encodeURIComponent(PROJECT_FILE_BOARD.referencedImage)}`);
 
@@ -415,11 +392,7 @@ const runRoundTrip = async ({ backend, browser, contexts, errors, tempDirectory 
   };
 };
 
-/**
- * Duplicating the imported project. The copy owns its board media outright — no name is shared with
- * the project it came from — while the references that live outside both boards are simply reused,
- * because both projects are on this one server.
- */
+/** Duplication copies board media but reuses external references on the same server. */
 const runDuplication = async ({ browser, contexts, errors, imported, importedBoardNames }) => {
   const context = await browser.newContext();
 
@@ -427,8 +400,7 @@ const runDuplication = async ({ browser, contexts, errors, imported, importedBoa
   const page = await context.newPage();
 
   observeBrowserErrors(page, 'duplicate', errors);
-  // Through Home rather than straight at the deep link: a cold context has to finish authenticating
-  // before the library will list anything, and landing on the settled shell is how a person arrives.
+  // Enter through Home so authentication settles before opening the library.
   await page.goto(`${origin}/#/`, { waitUntil: 'domcontentloaded' });
   await page.getByRole('heading', { exact: true, name: 'Welcome to Invoke' }).waitFor();
   await page.goto(`${origin}/#/projects`, { waitUntil: 'domcontentloaded' });
@@ -477,11 +449,7 @@ const runDuplication = async ({ browser, contexts, errors, imported, importedBoa
   assertNoBrowserErrors(errors);
 };
 
-/**
- * An archive missing some of its bytes. The two losses are counted apart because they cost
- * different things: a board item is a result still findable elsewhere, a document reference is a
- * hole in the canvas.
- */
+/** Count missing board media separately from missing document references. */
 const runMissingBinaryImport = async ({ browser, contexts, entries, errors, tempDirectory }) => {
   const damagedPath = await writeArchiveWithout(
     entries,
@@ -543,11 +511,6 @@ const getDefaultDependencies = () => ({
   waitForPreview: ({ getPreviewExit }) => waitForPreview(getPreviewExit),
 });
 
-/**
- * Owns the complete journey deadline and every disposable resource. Dependencies
- * are injectable so timeout and teardown behavior can be tested without
- * launching a browser or binding a port.
- */
 export const executeProjectFileJourney = async ({
   cleanupTimeoutMs: teardownLimitMs = cleanupTimeoutMs,
   dependencies: dependencyOverrides = {},

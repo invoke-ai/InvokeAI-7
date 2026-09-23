@@ -1,10 +1,5 @@
 import type { QueueItemStatus } from '@features/queue/core/types';
 
-/**
- * Presentation metadata for each backend queue status: the human label, the
- * Chakra `colorPalette` for badges, and the dot color used in list rows and the
- * NOW & NEXT card. One table so status styling stays consistent everywhere.
- */
 export interface QueueStatusMeta {
   labelKey: string;
   colorPalette: string;

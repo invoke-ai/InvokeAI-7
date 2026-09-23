@@ -29,12 +29,6 @@ import {
 import { getConnectorDeletionSpliceConnections } from './connectors';
 import { isInvocationNode, isNotesNode } from './types';
 
-/**
- * Pure operations on the project graph document. The workbench reducer
- * delegates all workflow edits to `projectGraphReducer` so the document logic
- * stays testable and `workbenchState.ts` only grows one action case.
- */
-
 const now = (): string => new Date().toISOString();
 
 export const createWorkflowId = (prefix: string): string =>
@@ -289,10 +283,6 @@ const removeNodeFieldElements = (form: WorkflowForm, removedNodeIds: Set<string>
   Object.values(form.elements)
     .filter((element) => element.type === 'node-field' && removedNodeIds.has(element.data.fieldIdentifier.nodeId))
     .reduce((nextForm, element) => removeFormElement(nextForm, element.id), form);
-
-// #endregion
-
-// #region Document reducer
 
 export type ProjectGraphAction =
   | { type: 'addNode'; node: WorkflowNode }
@@ -652,8 +642,7 @@ const applyProjectGraphAction = (document: ProjectGraphState, action: ProjectGra
       }));
     }
     case 'setFieldSeedMode': {
-      // Fixed is the absent default, so choosing it leaves the instance exactly as
-      // pre-seed-mode documents (and legacy readers) write it.
+      // Omit fixed mode to preserve legacy document shape and default behavior.
       return setFieldInstance(document, action.nodeId, action.fieldName, (instance) => {
         const { seedMode: _, ...withoutSeedMode } = instance;
         return action.seedMode === 'fixed' ? withoutSeedMode : { ...instance, seedMode: action.seedMode };

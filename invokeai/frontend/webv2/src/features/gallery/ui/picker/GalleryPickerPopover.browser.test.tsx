@@ -446,9 +446,8 @@ describe('GalleryPickerPopover', () => {
     expect(galleryCommands.selectBoard).not.toHaveBeenCalled();
   });
 
-  // The video-kind picker is the surface the widened accept list exists for: it is what the
-  // "Initial video" upload button opens. Asserted through a rendered picker because the
-  // narrowing that caused the bug lived in the view's `accept` wiring, not in the builder.
+  // Assert video acceptance through the rendered picker; the regression was view wiring rather than the
+  // accept-list builder.
   it('offers the full video and audio list on a video-kind picker', async () => {
     const { dialog } = await openPicker(
       <GalleryPickerPopover accept={['video']} label="Choose video" onPick={onPick}>

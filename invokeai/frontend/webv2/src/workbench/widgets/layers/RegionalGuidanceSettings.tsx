@@ -53,13 +53,8 @@ interface RegionalGuidanceSettingsProps {
 }
 
 /**
- * Per-layer settings for a selected regional-guidance region: a positive +
- * negative prompt, an Auto-Negative toggle, and the mask fill colour/style +
- * invert. Reference images are NOT listed here — they live as child rows in
- * the Layers tree, each opening its own dedicated Properties editor
- * (`ReferenceImageSettings`); the same policy applies to every future
- * layer modifier. Prompt/toggle/fill edits go through the canvas undo stack
- * as prepared `patch-config` edits; invert is an engine pixel op.
+ * Edit regional prompts/toggles/fill through undoable config patches and invert through engine pixels. Reference
+ * images have dedicated tree-child editors.
  */
 export const RegionalGuidanceSettings = ({ engine, layer }: RegionalGuidanceSettingsProps) => {
   const { t } = useTranslation();
@@ -74,15 +69,8 @@ export const RegionalGuidanceSettings = ({ engine, layer }: RegionalGuidanceSett
   const [negativePrompt, setNegativePrompt] = useState(layer.negativePrompt ?? '');
 
   const fill = layer.mask.fill;
-  // `getRegionalGuidanceSupport` answers from the capability table, which arrives over the network,
-  // and it is read here through the store's selector rather than called in the component body: the
-  // table is module state, so to React Compiler a bare call is a pure function of `base` and would
-  // be memoised for the panel's lifetime.
-  //
-  // Until the table arrives it answers `null` for *every* base, so "this model has no regional
-  // path" has to stay distinct from "nobody has said yet" -- otherwise a perfectly supported SD-1
-  // model is accused of being unsupported, permanently if the load failed, while the very controls
-  // the alert calls unavailable render right underneath it.
+  // Resolve support inside the capability selector to update memoized answers. Distinguish unavailable policy from
+  // unsupported models.
   const { hasCapabilities, support } = useExternalStoreSelector(
     subscribeArchitectureCapabilities,
     getArchitectureCapabilitiesSnapshot,
@@ -94,11 +82,8 @@ export const RegionalGuidanceSettings = ({ engine, layer }: RegionalGuidanceSett
       [base]
     )
   );
-  // Negative controls are hidden on bases whose backend ignores regional negatives -- asked as "is
-  // this the FLUX family?" before, which got krea-2 wrong: it rendered a regional negative prompt
-  // and an Auto-Negative switch that `addRegionalGuidance` then discarded. The values stay on the
-  // layer for other models. With no selected model, and until the table arrives, every control is
-  // offered.
+  // Hide negatives only when backend policy rejects them, retaining values for other models; offer controls while
+  // no model/policy is known.
   const showNegativeControls = !hasCapabilities || support?.negativePrompt !== false;
   const unsupportedModel = hasCapabilities && base !== null && support === null;
 

@@ -1,20 +1,11 @@
 /**
- * Alpha-derived content bounds for an RGBA pixel buffer — where a layer's visible
- * pixels actually are, as opposed to the geometric extent its cache grew to.
- *
- * ANY non-zero alpha counts as content (matching `selection/selectionState.ts`, not
- * the mask outline's solidity threshold): a higher threshold would silently discard
- * faint pixels the user painted.
- *
- * Zero React, zero import-time side effects.
+ * Bounds include every nonzero-alpha pixel, preserving faint content rather than applying the mask-outline
+ * solidity threshold.
  */
 
 import type { Rect } from '@workbench/canvas-engine/types';
 
-/**
- * An RGBA pixel buffer; only the alpha channel is read. `ImageData` satisfies this
- * structurally, so tests can pass a plain literal — no canvas required.
- */
+/** Structural RGBA buffer compatible with ImageData; only alpha is read. */
 export interface AlphaPixels {
   readonly data: Uint8ClampedArray;
   readonly height: number;

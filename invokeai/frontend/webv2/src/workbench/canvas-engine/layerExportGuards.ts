@@ -48,15 +48,9 @@ export interface LayerExportGuards {
 }
 
 /**
- * The engine's answer to "are this layer's cached pixels trustworthy right now?"
- *
- * Every async commit in the engine — filter, generation, SAM, merge, export —
- * captures a guard before it starts and re-checks it before it publishes. The
- * guard is deliberately identity-based: it holds the layer *object* the caller
- * saw, so any mutation that replaces the contract invalidates it even when the
- * id and the pixels are unchanged. Cache version, document generation and
- * project id cover the rest, and disposal or a torn-down canvas state
- * invalidates everything at once.
+ * Async pixel guards capture layer object identity, cache version, document generation and project id, then
+ * recheck before publication. Any replacement, disposal or teardown invalidates the guard, even if pixels look
+ * unchanged.
  */
 export const createLayerExportGuards = (deps: CreateLayerExportGuardsDeps): LayerExportGuards => {
   const { layerCache } = deps;

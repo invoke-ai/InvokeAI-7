@@ -9,12 +9,6 @@ import { useTranslation } from 'react-i18next';
 
 import { WorkflowLibraryCard, type WorkflowLibraryCardProps } from './WorkflowLibraryCard';
 
-/**
- * The scrolling card grid. Paging is server side and append-only: reaching the
- * bottom of the accumulated pages asks the browse store for the next one,
- * which no-ops once the last page has landed.
- */
-
 /** How close to the bottom (in viewports) counts as "fetch the next page". */
 const NEAR_BOTTOM_VIEWPORTS = 1.5;
 const GRID_TEMPLATE_COLUMNS = 'repeat(3, minmax(0, 1fr))';
@@ -95,9 +89,7 @@ export const WorkflowLibraryGrid = ({
 
   const visibleEntries = useMemo(() => dedupeByWorkflowId(entries), [entries]);
   const hasEntries = visibleEntries.length > 0;
-  // 'idle' is the store before anything has been asked of it. The dialog's
-  // open-time load flips it to 'loading', but only after this first paint —
-  // so an idle store is a load about to start, never "nothing matched".
+  // Idle precedes the first open-time load; render loading rather than an empty result.
   const isPending = status === 'idle' || status === 'loading';
 
   return (

@@ -60,14 +60,8 @@ export interface OverlayFrame {
 }
 
 /**
- * Projects engine state into the overlay renderer's descriptor.
- *
- * The overlay is chrome — bbox, grid, cursor ring, marching ants, tool
- * previews — and every part of it is derived, never owned. Keeping the
- * projection pure means the overlay's rules can be tested without a canvas:
- * which tool shows which affordance, that a live drag preview stands in for
- * committed state so the overlay tracks the gesture, and that a frame is
- * suppressed rather than drawn against stale geometry.
+ * Pure projection of engine state into overlay descriptors. Live previews replace committed geometry; stale frames
+ * are suppressed. The overlay owns no interaction state.
  */
 export const createOverlayFrame = (deps: CreateOverlayFrameDeps): OverlayFrame => {
   const { getActiveToolId, selection, stores, transformOverrides } = deps;
@@ -117,8 +111,7 @@ export const createOverlayFrame = (deps: CreateOverlayFrameDeps): OverlayFrame =
       return null;
     }
     const layer = lookupDocumentLayer(doc, session.layerId);
-    // The layer's LOCAL content rect (off-origin aware): the frame must wrap the
-    // pixels where the compositor draws them, not an assumed origin-anchored box.
+    // Frame actual local content bounds, including off-origin pixels.
     const rect = layer ? hittableLayerRect(layer, doc) : null;
     if (!rect) {
       return null;
@@ -129,8 +122,6 @@ export const createOverlayFrame = (deps: CreateOverlayFrameDeps): OverlayFrame =
   return {
     describe: (doc, view, floatFrame, samPreview) => {
       const activeTool = getActiveToolId();
-      // While the bbox tool drags, the transient preview stands in for the
-      // committed frame so the rect and its handles track the gesture.
       const bboxPreview = stores.bboxPreview.get();
       const samSession = stores.samInteraction.get();
       return {
@@ -141,13 +132,11 @@ export const createOverlayFrame = (deps: CreateOverlayFrameDeps): OverlayFrame =
         bboxOverlayColor: stores.checkerColors.get().a,
         cursor: deps.getOverlayCursor(),
         gradientPreview: stores.gradientPreview.get(),
-        // The grid spans the whole viewport at the bbox snap size when the
-        // setting is on; the document rect no longer bounds it.
+        // Grid spans the viewport at bbox snap size, independent of document bounds.
         gridSize: stores.bboxGrid.get(),
         lassoPreview: stores.lassoPreview.get(),
         layerOutline: moveOutlineCorners(doc),
-        // Ants advance via the animator's overlay-only ticks, and ride the
-        // float's matrix so they track lifted pixels rather than the layer.
+        // Overlay-only ants ticks use the float matrix to follow lifted pixels.
         marchingAnts: selection.hasSelection()
           ? { matrix: floatFrame?.ants ?? null, paths: selection.antsPaths(), phase: deps.getAntsPhase() }
           : null,

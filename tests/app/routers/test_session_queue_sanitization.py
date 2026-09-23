@@ -1,11 +1,15 @@
 """Tests for session queue item sanitization in multiuser mode."""
 
 from datetime import datetime
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
+from invokeai.app.api.routers import session_queue as session_queue_router
 from invokeai.app.api.routers.session_queue import sanitize_queue_item_for_user, strip_missing_image_results
 from invokeai.app.invocations.baseinvocation import BaseInvocation, BaseInvocationOutput, invocation, invocation_output
+from invokeai.app.invocations.collections import RangeInvocation
 from invokeai.app.invocations.fields import ImageField, InputField, OutputField, VideoField
 from invokeai.app.invocations.primitives import ImageCollectionOutput, ImageOutput, VideoOutput
 from invokeai.app.services.session_queue.session_queue_common import (
@@ -13,7 +17,15 @@ from invokeai.app.services.session_queue.session_queue_common import (
     SessionQueueItem,
     SessionQueueItemSummary,
 )
-from invokeai.app.services.shared.graph import Graph, GraphExecutionState
+from invokeai.app.services.shared.execution_state_migration import dump_execution_state, load_execution_state
+from invokeai.app.services.shared.graph import (
+    CollectInvocation,
+    Edge,
+    EdgeConnection,
+    Graph,
+    GraphExecutionState,
+    IterateInvocation,
+)
 from invokeai.app.services.shared.invocation_context import InvocationContext
 
 
@@ -230,6 +242,76 @@ def test_strip_missing_image_results_removes_deleted_single_image_output(sample_
     assert "missing_node" in sample_session_queue_item.session.results
 
 
+def test_queue_detail_and_list_routes_drop_deleted_image_results(
+    monkeypatch: pytest.MonkeyPatch, sample_session_queue_item: SessionQueueItem
+) -> None:
+    sample_session_queue_item.status = "completed"
+    sample_session_queue_item.session.results = {
+        "deleted_node": ImageOutput(image=ImageField(image_name="deleted.png"), width=64, height=64),
+        "kept_node": ImageOutput(image=ImageField(image_name="kept.png"), width=64, height=64),
+    }
+    queue_service = Mock()
+    queue_service.get_queue_item_for_api.return_value = sample_session_queue_item
+    queue_service.list_all_queue_items_for_api.return_value = [sample_session_queue_item]
+    monkeypatch.setattr(
+        session_queue_router.ApiDependencies,
+        "invoker",
+        SimpleNamespace(
+            services=SimpleNamespace(
+                session_queue=queue_service,
+                image_records=SimpleNamespace(exists=lambda name: name == "kept.png"),
+            )
+        ),
+        raising=False,
+    )
+    current_user = SimpleNamespace(user_id="user_123", is_admin=False)
+
+    detail = session_queue_router.get_queue_item(current_user=current_user, queue_id="default", item_id=1)
+    listed = session_queue_router.list_all_queue_items(current_user=current_user, queue_id="default")
+
+    assert detail.status == "completed"
+    assert set(detail.session.results) == {"kept_node"}
+    assert len(listed) == 1
+    assert listed[0].status == "completed"
+    assert set(listed[0].session.results) == {"kept_node"}
+    assert set(sample_session_queue_item.session.results) == {"deleted_node", "kept_node"}
+
+
+def test_strip_missing_image_results_deep_copies_rehydrated_iterate_runtime(sample_session_queue_item):
+    graph = Graph()
+    graph.add_node(RangeInvocation(id="range", start=0, stop=2, step=1))
+    graph.add_node(IterateInvocation(id="iterate"))
+    graph.add_node(CollectInvocation(id="collect"))
+    graph.add_edge(
+        Edge(
+            source=EdgeConnection(node_id="range", field="collection"),
+            destination=EdgeConnection(node_id="iterate", field="collection"),
+        )
+    )
+    graph.add_edge(
+        Edge(
+            source=EdgeConnection(node_id="iterate", field="item"),
+            destination=EdgeConnection(node_id="collect", field="item"),
+        )
+    )
+    state = GraphExecutionState(graph=graph)
+    range_node = state.next()
+    assert isinstance(range_node, RangeInvocation)
+    state.complete(range_node.id, range_node.invoke(Mock(InvocationContext)))
+    iterate_node = state.next()
+    assert isinstance(iterate_node, IterateInvocation)
+    state.complete(iterate_node.id, iterate_node.invoke(Mock(InvocationContext)))
+    restored = load_execution_state(dump_execution_state(state))
+    restored.results["missing_node"] = ImageOutput(image=ImageField(image_name="missing.png"), width=64, height=64)
+    queue_item = sample_session_queue_item.model_copy(update={"session": restored, "status": "completed"})
+
+    result = strip_missing_image_results(queue_item, image_exists=lambda _name: False)
+
+    assert "missing_node" not in result.session.results
+    assert len(result.session.results) == len(restored.results) - 1
+    assert queue_item.session.results["missing_node"].image.image_name == "missing.png"
+
+
 def test_strip_missing_image_results_filters_deleted_collection_items(sample_session_queue_item):
     sample_session_queue_item.session.results = {
         "collection_node": ImageCollectionOutput(
@@ -246,6 +328,18 @@ def test_strip_missing_image_results_filters_deleted_collection_items(sample_ses
         ImageField(image_name="missing.png"),
         ImageField(image_name="kept.png"),
     ]
+
+
+def test_strip_missing_image_results_handles_projected_dict_outputs(sample_session_queue_item):
+    sample_session_queue_item.session.results = {
+        "collection_node": {
+            "collection": [{"image_name": "missing.png"}, {"image_name": "kept.png"}],
+        }
+    }
+
+    result = strip_missing_image_results(sample_session_queue_item, image_exists=lambda name: name == "kept.png")
+
+    assert result.session.results["collection_node"]["collection"] == [{"image_name": "kept.png"}]
 
 
 def test_sanitize_preserves_device_for_owner_and_admin(sample_session_queue_item):

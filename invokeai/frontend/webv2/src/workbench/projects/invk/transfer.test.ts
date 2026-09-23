@@ -75,10 +75,7 @@ describe('planMediaTransfer', () => {
 });
 
 describe('createTransferIssueLog', () => {
-  /**
-   * The same failure can cost a board result and a canvas layer at once. Reporting it against both
-   * roles is not double-counting — it genuinely failed as both.
-   */
+  /** One failed asset can legitimately count in both roles. */
   it('records an overlapping failure against both roles and sorts the result', () => {
     const log = createTransferIssueLog();
 
@@ -101,11 +98,7 @@ describe('createTransferIssueLog', () => {
 });
 
 describe('buildMissingMediaName', () => {
-  /**
-   * A failed board copy must not leave the document pointing at the old name: the destination may
-   * well have its own media under it — on the same server, during a duplication, it certainly does
-   * — and the project would open showing a stranger's picture with nothing to indicate it is wrong.
-   */
+  /** Remap failed board references away from existing source names. */
   it('is stable within one project and distinct across projects, kinds and items', () => {
     expect(buildMissingMediaName('p1', 'image', 0)).toBe(buildMissingMediaName('p1', 'image', 0));
     expect(buildMissingMediaName('p1', 'image', 0)).not.toBe(buildMissingMediaName('p2', 'image', 0));

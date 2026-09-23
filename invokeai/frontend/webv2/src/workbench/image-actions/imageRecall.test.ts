@@ -519,8 +519,7 @@ describe('image recall', () => {
   });
 
   it('recalls the size for an external generator, which has no architecture row to wait for', () => {
-    // The fail-closed rule below is for architectures the backend describes. An external provider
-    // never gets a row, so treating it the same way lost its dimension recall for good.
+    // External providers have no capability row and must remain eligible for dimension recall.
     const externalModel = {
       base: 'external',
       capabilities: { modes: ['txt2img'], supports_seed: true },
@@ -552,9 +551,7 @@ describe('image recall', () => {
   });
 
   describe('before the capability table arrives', () => {
-    // Recalled dimensions are snapped to the architecture's grid and then persisted into the
-    // project. With no table every base reads as grid 8, so a 16- or 32-grid project would
-    // store a size its own denoise node rejects -- and nothing re-derives it afterwards.
+    // Require the model's grid before persisting recalled dimensions; fallback grid 8 can produce invalid sizes.
     beforeEach(() => {
       resetArchitectureCapabilities();
     });
@@ -591,8 +588,7 @@ describe('image recall', () => {
           vaeModels: [],
         });
 
-      // Recall All used to apply the model's fallback defaults and skip the size, and the project kept
-      // that result after the table arrived.
+      // Recall All must not persist fallback defaults while capabilities are unavailable.
       expect(recall('all')).toBeNull();
       expect(recall('remix')).toBeNull();
       expect(recall('prompts')?.fields).toEqual(['prompts']);

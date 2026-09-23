@@ -1,11 +1,6 @@
 import { apiFetch, apiFetchJson } from '@platform/transport/http';
 
-/**
- * REST client for `/api/v1/model_relationships`, kept separate from `api.ts`
- * so the lazily-loaded relationships store is a self-contained chunk: sharing
- * the models api module with the eager modelsStore would split that module
- * into an extra eagerly-fetched chunk (the initial-request budget).
- */
+/** Keep relationships transport independent so its lazy store does not create another eager shared API chunk. */
 
 const RELATIONSHIPS_BASE = '/api/v1/model_relationships';
 

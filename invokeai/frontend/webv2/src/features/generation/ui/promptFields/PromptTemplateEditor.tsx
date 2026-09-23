@@ -77,13 +77,7 @@ export const PromptTemplateEditor = ({
   const objectUrlRef = useRef<string | null>(null);
   const galleryFetchRef = useRef<AbortController | null>(null);
 
-  /**
-   * Swaps in a preview URL for a picked file, releasing the previous one.
-   *
-   * A blob URL pins the whole file for the document's lifetime, so re-picking
-   * ten images held on to all ten. Stored images are owned by the shared image
-   * resource; only local replacement previews are tracked here.
-   */
+  /** Revoke replaced local blob URLs; shared stored-image resources own their own lifetime. */
   const takeObjectUrl = useCallback((file: Blob | null): string | null => {
     if (objectUrlRef.current) {
       URL.revokeObjectURL(objectUrlRef.current);
@@ -131,18 +125,14 @@ export const PromptTemplateEditor = ({
         saved = await catalog.create(nextDraft);
       }
     } catch (caught) {
-      // `ApiError.message` is the raw response body, so the backend's own
-      // explanation only reads properly once it is unwrapped.
+      // Unwrap raw ApiError bodies for display.
       setError(getApiErrorMessage(caught, t('widgets.generate.promptTemplates.couldNotSave')));
       return;
     } finally {
       setIsSaving(false);
     }
 
-    // Deliberately outside the `try`. Handing the saved record back is the
-    // caller's business, and a failure there is not a failure to save — inside,
-    // it was reported as "could not save this template" about a template that
-    // had just been saved. It reaches the caller's own reporting instead.
+    // Run post-save callbacks outside save error handling so callback failure cannot misreport the save.
     onSaved(saved);
   }, [catalog, draft, onSaved, t, template, trimmedName]);
 
@@ -157,9 +147,7 @@ export const PromptTemplateEditor = ({
     []
   );
 
-  // The value has to be read before `setDraft`, not inside the updater: React
-  // nulls `currentTarget` once the handler returns, and an updater can run after
-  // that.
+  // Read currentTarget before deferred state updates; React clears it after dispatch.
   const updateDraftField = useCallback(
     (field: 'name' | 'negativePrompt' | 'positivePrompt', value: string) =>
       setDraft((current) => ({ ...current, [field]: value })),
@@ -182,9 +170,7 @@ export const PromptTemplateEditor = ({
     [takeObjectUrl]
   );
 
-  // A gallery pick fetches the full image so it is uploaded like a local file.
-  // Only the latest pick may land: a later local file, gallery pick, clear, or
-  // unmount aborts an in-flight fetch.
+  // Only the latest pick owns the result; abort on replacement, clear, or unmount.
   const handleGalleryPick = useCallback(
     (item: GalleryItem) => {
       const controller = abortGalleryFetch();
@@ -322,9 +308,7 @@ export const PromptTemplateEditor = ({
       </Field>
 
       <Field label={t('common.prompt')} labelEnd={insertPlaceholderControl}>
-        {/* `highlightDynamicPrompts` stays off here: `{prompt}` is a template
-            placeholder, and colouring it as a dynamic-prompt group would promise
-            an expansion that the merge consumes before one could happen. */}
+        {/* Exclude template placeholders from dynamic highlighting because merging consumes them first. */}
         <PromptTextarea
           aria-label={t('widgets.generate.promptTemplates.positivePrompt')}
           defaultHeightPx={80}

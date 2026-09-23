@@ -23,11 +23,7 @@ export const BOTTOM_OVERLAY_STACK_LAYOUT = {
   overflow: 'hidden',
 } satisfies StackProps;
 
-/**
- * The staging slot spans the canvas rather than hugging its content, so the
- * staged-thumbnail strip gets the whole widget width to scroll within while the
- * bars it contains stay centered.
- */
+/** Stretch staging to canvas width so thumbnails scroll while contained bars remain centered. */
 export const BOTTOM_STAGING_SLOT_LAYOUT = {
   flexShrink: '0',
   minW: '0',

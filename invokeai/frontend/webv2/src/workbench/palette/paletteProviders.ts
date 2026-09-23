@@ -23,12 +23,7 @@ import type { PaletteEntry, PaletteSearchProvider } from './entries';
 import { getPaletteContributionKey } from './contributionKey';
 import { getObjectIdentity } from './objectIdentity';
 
-/**
- * First-party entity providers behind the palette's scoped search. Each is a
- * plain factory taking the workbench callbacks it needs — the host component
- * owns the hooks. Extension `search` contributions adapt into the same
- * PaletteSearchProvider shape, so all sections aggregate identically.
- */
+/** Factories receive host-owned workbench callbacks; extension searches adapt to the same provider contract. */
 
 const PROVIDER_PAGE_SIZE = 8;
 
@@ -322,8 +317,7 @@ export const createImagesProvider = ({
       const boardNames = new Map(
         boards.map((board: GalleryBoard) => [board.id, getGalleryBoardLabel(board, t)] as const)
       );
-      // Images carry no prompt, so the creation date+time is the title; the time
-      // keeps same-day results (the common case for 20 recents) distinguishable.
+      // Use date and time to distinguish promptless images generated on the same day.
       return page.images.map<PaletteEntry>((image) => {
         const createdAt = new Date(normalizeServerTimestamp(image.createdAt ?? image.queuedAt));
 

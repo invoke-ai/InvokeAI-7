@@ -77,17 +77,19 @@ class FeaturesFacet(Facet):
     otherwise. Today only FLUX sets both (cfg_scale 1.0 meaning "off", guidance 3.5 meaning the
     distilled embedding)."""
 
-    guidance_min: float = 0.0
+    guidance_min: float = 1.0
     """Lowest value the guidance slider may offer.
 
-    Pinned to the `ge` of the node field the slider's value is actually sent as -- `guidance` for
-    the models whose `guidance_label` says so, `cfg_scale` or `guidance_scale` for the rest -- so a
-    test asserts the two agree and the UI cannot offer a number the graph will refuse. 0.0 is the
-    default because most denoise nodes constrain neither end, and a slider still starts somewhere.
+    1.0 means "no guidance" on every sampler, and nothing below it is a value a person picks on
+    purpose -- so 1.0 is the UI's floor everywhere, raised to the node field's `ge` where that is
+    higher. The node field is the one the slider's value is actually sent as: `guidance` for the
+    models whose `guidance_label` says so, `cfg_scale` or `guidance_scale` for the rest. A test
+    asserts the two agree, so the UI cannot offer a number the graph will refuse.
 
-    Anima, ERNIE-Image, Wan and Z-Image are the exceptions: their `guidance_scale` is `ge=1.0`,
-    1.0 meaning "off", with nothing below it. The UI offered 0 and 0.5 for them anyway, and
-    `graph.ts` forwarded the value unchanged into an enqueue that failed validation."""
+    Anima, ERNIE-Image, Wan and Z-Image enforce `ge=1.0` on the node itself; SD's `cfg_scale`
+    enforces the same floor through a validator the JSON schema cannot see. The UI used to offer 0
+    and 0.5 for all of them, and `graph.ts` forwarded the value unchanged into an enqueue that
+    failed validation."""
 
     guidance_max: float | None = None
     """Highest value the guidance slider may offer, or None where the node enforces no ceiling.

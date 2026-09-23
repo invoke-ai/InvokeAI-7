@@ -22,11 +22,7 @@ import { useGalleryWidget } from './GalleryWidgetContext';
 const SEARCH_HINT_ID = 'gallery-search-hint';
 const HELP_POSITIONING = { placement: 'bottom-end' } as const;
 
-/**
- * Typing pause before the semantic text becomes the ranking. Each commit is a
- * server-side embedding plus a full re-rank, so keystrokes must coalesce; a
- * pause this short still reads as "live" rather than as a submit.
- */
+/** Debounce typing because each semantic commit embeds and reranks on the server. */
 export const SEMANTIC_SEARCH_COMMIT_DEBOUNCE_MS = 300;
 
 /** The `key:value` forms `parseDateTokens` accepts, as shown in the help popover. */
@@ -83,11 +79,8 @@ export const GalleryItemSearch = () => {
   const { data: indexAvailability } = useQuery(imageIndexAvailabilityOptions());
   const isSemanticMode = gallery.semanticSearchText !== null;
   const semanticText = gallery.semanticSearchText ?? '';
-  // Offered whenever indexing is configured, model or index present or not:
-  // the field is where a user finds out the feature exists, and the hint
-  // below it says what is still missing. The toggle also stays reachable
-  // for a persisted semantic field on an install without indexing, so the
-  // mode can always be left.
+  // Offer semantic mode whenever indexing is configured; keep the toggle reachable for persisted mode so users can
+  // exit it.
   const isIndexConfigured = indexAvailability !== undefined && indexAvailability.state !== 'disabled';
   const showSemanticToggle = isIndexConfigured || isSemanticMode;
 
@@ -114,10 +107,8 @@ export const GalleryItemSearch = () => {
 
       actions.setSemanticSearchText(value);
       cancelPendingCommit();
-      // The ranking always follows the text, model or no model: a search the
-      // server cannot run is reported by the listing's own error channel,
-      // beside the hint that says why, and there is no text left behind to
-      // reconcile once the model arrives.
+      // Commit text even without the model; listing errors explain unavailable search without leaving deferred
+      // text to reconcile.
       commitTimerRef.current = window.setTimeout(() => {
         commitTimerRef.current = null;
         actions.commitSemanticSearch(value);
@@ -155,9 +146,7 @@ export const GalleryItemSearch = () => {
       // The next keystrokes are what the toggle was for.
       inputRef.current?.focus();
 
-      // The sparkle is offered without the model on purpose, so this click is
-      // where a user learns what the feature needs: the hint under the field
-      // stays while the mode does, the toast says what to do about it.
+      // Explain missing prerequisites on activation while retaining the inline hint for the active mode.
       if (indexAvailability?.state === 'model_missing') {
         notifications.add({
           kind: 'info',
@@ -181,8 +170,7 @@ export const GalleryItemSearch = () => {
     id: GALLERY_SEMANTIC_SEARCH_DROP_ID,
   });
 
-  // Native HTML5 drops reach here for anything dnd-kit does not manage: files
-  // from the OS and images dragged in from other pages (URL drags).
+  // Native drops handle OS files and external image URLs outside dnd-kit.
   const [isNativeDropOver, setIsNativeDropOver] = useState(false);
 
   const handleNativeDragOver = useCallback((event: React.DragEvent<HTMLDivElement>) => {
@@ -225,9 +213,7 @@ export const GalleryItemSearch = () => {
 
   const isDropTargetActive = isItemDragOver || isNativeDropOver;
 
-  // Valid tokens are legible as chips in the field itself, so only the failure
-  // case still needs words — and it is positioned out of flow. As a sibling it
-  // grew the field's row and knocked the wide header out of vertical centre.
+  // Position failure text outside flow so it cannot enlarge or misalign the search row.
   const invalidHint = useMemo(() => {
     if (isSemanticMode) {
       return null;
@@ -239,8 +225,6 @@ export const GalleryItemSearch = () => {
     return invalid ? t('widgets.gallery.dateFilterInvalid', { value: invalid.raw }) : null;
   }, [gallery.searchTerm, isSemanticMode, t]);
 
-  // The same out-of-flow slot explains a semantic field the server cannot
-  // answer, before the first search fails.
   const semanticHint =
     isSemanticMode && indexAvailability?.state === 'model_missing'
       ? t('widgets.gallery.semanticSearchModelMissing', { model: indexAvailability.modelName ?? '' })
@@ -324,11 +308,10 @@ export const GalleryItemSearch = () => {
       onDragOver={handleNativeDragOver}
       onDrop={handleNativeDrop}
     >
-      {/* In semantic mode the field IS the text query; a chip stands for a
-          reference the field cannot type (an image, a file, a cluster), and
-          every path that sets one leaves semantic mode. A text chip is only a
-          project saved before the mode existed. The toggle stays beside the
-          chip: pressing it there trades the reference for a typed query. */}
+      {/*
+       * Image/file/cluster chips replace semantic text mode. Legacy text chips remain readable; toggling switches
+       * a chip to typed search.
+       */}
       {!isSemanticMode && gallery.semanticImageQuery ? (
         <GallerySemanticChip
           reference={gallery.semanticImageQuery}
@@ -380,11 +363,7 @@ export const GalleryItemSearch = () => {
   );
 };
 
-/**
- * The active semantic query — a text prompt or an image-similarity
- * reference — rendered in place of the search input. Clearing it restores
- * metadata search.
- */
+/** Clearing the active semantic reference restores metadata search. */
 const GallerySemanticChip = ({
   onClear,
   reference,

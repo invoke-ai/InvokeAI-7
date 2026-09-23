@@ -9,27 +9,14 @@ export const GALLERY_STARRED_HEADER_HEIGHT_PX = 24;
 export const GALLERY_PINNED_FOOTER_PX = 9;
 
 const GALLERY_MIN_COLUMN_COUNT = 2;
-/**
- * High enough that the minimum cell size, not this cap, bounds a wide
- * placement: at 12 the bottom panel ignored the density slider below ~92px
- * cells, while the side panel kept shrinking.
- */
+/** Keep the column cap high enough that minimum cell size governs wide layouts at every density. */
 const GALLERY_MAX_COLUMN_COUNT = 48;
 
 /** Cell size the density slider interpolates between: 0% is largest, 100% smallest. */
 const GALLERY_MAX_CELL_PX = 192;
 const GALLERY_MIN_CELL_PX = 48;
 
-/**
- * Density picks a target thumbnail size, and the available width decides how
- * many of those fit.
- *
- * Keying off width rather than placement is what lets the two layouts share
- * one grid: at equal pixel width the same density produces the same columns
- * whether the gallery sits in a side panel or the center. The old
- * layout-keyed maximum meant 50% density meant ~90px cells stacked and ~200px
- * cells wide.
- */
+/** Density selects target cell size; measured width determines columns consistently across placements. */
 export const getGalleryTargetCellPx = (imageDensityPercent: number): number => {
   const percent = Math.min(100, Math.max(0, imageDensityPercent));
 
@@ -94,12 +81,7 @@ export const mergeGalleryLoadedItems = (
   return [...starredItems, ...items.filter((item) => !seen.has(toGalleryItemKey(item)))];
 };
 
-/**
- * Rows are keyed by their leading cell rather than their index so that
- * structural changes above a row (a placeholder resolving, the strip
- * changing) move the row without recreating it: the virtualizer and React
- * both track the row by key, so its thumbnails keep their DOM.
- */
+/** Key rows by their first cell so changes above them preserve thumbnail DOM identity. */
 export const chunkGalleryCellsIntoRows = (
   cells: readonly GalleryItem[],
   columnCount: number,
@@ -121,11 +103,7 @@ export const chunkGalleryCellsIntoRows = (
   return rows;
 };
 
-/**
- * The listing's row model in one pure pass. The starred strip is pinned above
- * the virtualized listing (see `getGalleryStarredLayout`), so only the listing
- * chunks into rows.
- */
+/** Only listing items form virtual rows; the starred strip remains pinned above them. */
 export const buildGalleryGridRows = (items: readonly GalleryItem[], columnCount: number): GalleryGridRow[] =>
   chunkGalleryCellsIntoRows(items, columnCount, 'regular');
 
@@ -191,9 +169,6 @@ export const getGalleryStarredLayout = ({
   };
 };
 
-/**
- * In progress and starred share one pinned block above the listing, closed by
- * a rule and a margin; the virtualizer's scroll margin is the block's height.
- */
+/** The shared in-progress/starred block height defines the virtualizer's scroll margin. */
 export const getGalleryPinnedHeightPx = (progressHeight: number, starredHeight: number): number =>
   progressHeight + starredHeight > 0 ? progressHeight + starredHeight + GALLERY_PINNED_FOOTER_PX : 0;

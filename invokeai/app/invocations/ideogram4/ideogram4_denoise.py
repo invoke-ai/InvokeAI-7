@@ -20,6 +20,7 @@ from invokeai.backend.ideogram4.modeling_ideogram4 import Ideogram4Transformer
 from invokeai.backend.ideogram4.sampler_configs import PRESETS
 from invokeai.backend.ideogram4.sampling_utils import PIXELS_PER_IMAGE_TOKEN, unpatchify_and_denormalize
 from invokeai.backend.ideogram4.transformer_pair import Ideogram4TransformerPair
+from invokeai.backend.model_manager.load.load_base import LoadedModel
 from invokeai.backend.model_manager.taxonomy import BaseModelType
 from invokeai.backend.quantization.dequantizing_linear import peak_dequant_transient_bytes
 from invokeai.backend.stable_diffusion.diffusion.conditioning_data import Ideogram4ConditioningInfo
@@ -29,6 +30,18 @@ from invokeai.backend.util.fp8 import get_model_compute_dtype
 # Named sampler presets bundle step count, guidance schedule (with polish tail), and the
 # logit-normal schedule mean/std. V4_QUALITY_48 is the reference default.
 IDEOGRAM4_SAMPLER_PRESETS = Literal["V4_QUALITY_48", "V4_DEFAULT_20", "V4_TURBO_12"]
+
+# The floor the derived residency target is clamped to, so a device short by more than a whole
+# branch still keeps a working set instead of streaming every layer of every step. The same 2 GiB
+# Wan holds its transformer to, and for the same reason.
+IDEOGRAM4_MIN_RESIDENT_SECOND_BRANCH_BYTES = 2 * 2**30
+
+# What the pair is asked to leave unclaimed for everything that is not this generation. On a
+# workstation the generation GPU usually also drives the display: measured 1.2-1.8 GiB held by the
+# desktop while idle here, and it spikes above that when a browser or the app's own UI repaints.
+# It is a term in the target, not a guarantee -- see `_second_branch_residency_target` for what the
+# reservation's own error does to it.
+IDEOGRAM4_LEAVE_FREE_FOR_THE_SYSTEM_BYTES = 3 * 2**30
 
 
 def _effective_guidance_schedule(
@@ -249,12 +262,13 @@ class Ideogram4DenoiseInvocation(BaseInvocation):
         files are two models and are locked simultaneously, because every step runs both and
         releasing one between steps would make the cache stream it back for the next.
 
-        Both locks get the *same* reservation even though the dequantization transient is per branch
-        and the two branches can be different builds. The cache computes free VRAM as
-        `capacity - working_mem - in_use` at each lock, and the second lock cannot claw space back
-        from the first, which is already locked: a first branch that reserved less has taken
-        headroom the second one still needs, and with the second branch already resident from an
-        earlier run there is nothing left to evict.
+        Both locks reserve the same *activation* headroom, even though the dequantization transient
+        is per branch and the two branches can be different builds. The cache recomputes what is
+        free at each lock and the second cannot claw space back from the first, which is already
+        locked: a first branch that reserved less has taken headroom the second one still needs,
+        and with the second branch already resident from an earlier run there is nothing left to
+        evict. The second lock is then given *more* than that, when the pair would otherwise fill
+        the device -- see `_second_branch_residency_target` for what is added and why.
 
         Taking the maximum up front costs reading `LoadedModel.model` -- documented as returning the
         model unlocked, and it is already constructed by then -- and loading the second branch into
@@ -295,13 +309,125 @@ class Ideogram4DenoiseInvocation(BaseInvocation):
             # locking it does not change what it is. The user-facing refusals are the two checks
             # further up, which is why they are `raise` and this is not.
             assert isinstance(primary, Ideogram4TransformerPair)
+            # A pipeline's pair is ONE cache record holding both branches, so the residency cap
+            # below does not apply to it: it has no second record to hold back, and bounding the
+            # single record would stream both branches instead of one. Such a build is also the
+            # smaller problem — `transformer_pair.py` notes its co-residency is what makes the nf4
+            # build fit in 24 GB in the first place.
             return primary.conditional, primary.unconditional
 
-        unconditional = stack.enter_context(unconditional_info.model_on_device(working_mem_bytes=reservation))[1]
+        # Told to the cache *before* the lock, so the branch settles near its target instead of
+        # loading whole and being pushed back. It lands near rather than on it: the cache budgets
+        # from `free + reclaimable-allocator-bytes - working_mem` and spends that on the weights the
+        # model is still *missing*, neither of which this arithmetic models. Measured on the
+        # reference card the lock overshoots by a steady 0.23 GiB, cold and warm alike, which the
+        # correction after the validation below takes off again.
+        target = self._second_branch_residency_target(context, conditional_info, unconditional_info, reservation)
+        second_reservation = reservation
+        if target is not None:
+            free_bytes, _total = torch.cuda.mem_get_info(unconditional_info.compute_device)
+            second_reservation = max(reservation, free_bytes - target)
+
+        unconditional = stack.enter_context(unconditional_info.model_on_device(working_mem_bytes=second_reservation))[1]
         for role, branch in (("Transformer", primary), ("Transformer (Unconditional)", unconditional)):
             if not isinstance(branch, Ideogram4Transformer):
                 raise ValueError(
                     f"'{role}' is a {type(branch).__name__}, not an Ideogram 4 transformer. Both inputs "
                     "must come from the Ideogram 4 model loader."
                 )
+        # After the cheap validation, so a mis-wired graph errors out instead of first paying an
+        # unload it will never use.
+        if target is not None:
+            self._hold_the_second_branch_to(context, unconditional_info, target)
         return primary, unconditional
+
+    @staticmethod
+    def _second_branch_residency_target(
+        context: InvocationContext,
+        first_branch: LoadedModel,
+        second_branch: LoadedModel,
+        reservation: int,
+    ) -> Optional[int]:
+        """How many of the unconditional branch's weight bytes may stay on the device, or None.
+
+        Ideogram 4 is the only node here that keeps two transformers resident, and the fp8 pair is
+        17.4 GiB. On a 24 GB card that plus the loop's reservation is the whole device: measured at
+        1024x1024, the two branches settled at 100% and 96.8% residency and the card peaked at 23288
+        of 24564 MiB, leaving nothing for whatever else owns the display. Nothing is wrong with the
+        cache's arithmetic -- `capacity - working_mem - in_use` is exactly what it promised -- the
+        pair simply does not leave room to be a good neighbour, so the node has to decide not to take
+        it all. Same purpose as Wan's expert swapper, which bounds its transformer's residency
+        through the reservation for the same reason.
+
+        The target is derived, not chosen: whatever is left once the system's share, the reservation
+        the cache will really apply, and the *other* branch are subtracted from the device. That
+        keeps the cost proportional to how badly the pair overflows, and it makes
+        `device_working_mem_gb` the knob for it -- raising the reserve lowers the target one for one,
+        with no second setting to discover. Measured on the reference card at 1024x1024, 8 steps:
+
+            uncapped                      38.2s, peak 23288 MiB, 1.2 GiB free
+            derived, reserve 5 GiB        35.8s, peak 22117 MiB, 2.4 GiB free (branch B at 84%)
+            derived, reserve 8 GiB        40.2s, peak 19009 MiB, 5.4 GiB free (branch B at 50%)
+
+        Stated plainly: at the default reserve this does *not* deliver the whole share the constant
+        below names. The reservation is an estimate of the loop's activations and measurably a low
+        one -- at 1024x1024 the non-weight bytes at peak were ~8 GiB against an estimate near 5 --
+        so the target it yields is correspondingly generous. The arithmetic is still the right shape
+        (more reserve, less residency, continuously), and the honest remedy for a machine that needs
+        more is the reserve, not a fudge factor hidden in this method.
+
+        Returns None when no cap is wanted or possible: a device that fits the pair with the
+        system's share to spare, a branch the cache holds whole (partial loading off, where a
+        partial unload would drop every weight instead), or a non-CUDA device.
+
+        Both branch sizes are read rather than doubling one of them. The loader lets an int8 branch
+        guide against an fp8 one, and `_estimate_working_memory` records the spread those builds
+        have -- 8.7, 8.9, or 17.3 GiB when an fp8 file is expanded -- so a pair can be lopsided
+        enough that doubling either side answers the wrong question.
+        """
+        device = second_branch.compute_device
+        if not second_branch.supports_partial_loading or device.type != "cuda":
+            return None
+        # An explicit `max_cache_vram_gb` makes the cache budget from that cap rather than from the
+        # device, so a target derived from physical memory describes a machine the cache is not
+        # using: the inflated reservation would be subtracted from the cap a second time and push
+        # the branch below the floor this method exists to hold. Such an install has already chosen
+        # how much VRAM the cache may take, which is this policy by another route.
+        if context.config.get().max_cache_vram_gb is not None:
+            return None
+        _free, total = torch.cuda.mem_get_info(device)
+        # The cache raises any reservation below its configured floor (`_get_vram_available`), so
+        # the node's own estimate is not what will be held free. Asking with the smaller number
+        # would clear the gate at low resolutions while the cache reserved more and the pair still
+        # took everything.
+        effective_reservation = max(reservation, int(context.config.get().device_working_mem_gb * 2**30))
+        room = total - IDEOGRAM4_LEAVE_FREE_FOR_THE_SYSTEM_BYTES - effective_reservation - first_branch.weight_bytes
+        if room >= second_branch.weight_bytes:
+            return None
+        return max(room, IDEOGRAM4_MIN_RESIDENT_SECOND_BRANCH_BYTES)
+
+    @staticmethod
+    def _hold_the_second_branch_to(context: InvocationContext, second_branch: LoadedModel, target: int) -> None:
+        """Correct the second branch down to `target` if its lock still settled above it.
+
+        The reservation handed to that lock is the primary lever and usually lands it there, but it
+        is computed from `mem_get_info` while the cache decides from its own accounting, and another
+        load can slip into a paced lock's gap. Without this the guarantee would be approximate; with
+        it the reservation saves the transfer and this only ever trims what is left over.
+
+        `keep_required_weights_in_vram` leaves behind the tensors a streamed forward cannot fetch
+        per layer, such as quantization scales.
+        """
+        excess = second_branch.resident_weight_bytes - target
+        if excess <= 0:
+            return
+        freed = second_branch.unload_from_vram(excess, keep_required_weights_in_vram=True)
+        # The cache moves the weights to RAM but does not return the blocks to the driver, so
+        # without this the bytes stay in torch's reserve -- invisible to the display, which is who
+        # the room was made for.
+        TorchDevice.empty_cache()
+        context.logger.info(
+            f"Ideogram 4: streamed {freed / 2**30:.2f} GiB of the unconditional branch to leave room "
+            f"for the rest of the system on {second_branch.compute_device}; this trades generation "
+            f"time for VRAM and does not happen on a card that fits both branches."
+        )

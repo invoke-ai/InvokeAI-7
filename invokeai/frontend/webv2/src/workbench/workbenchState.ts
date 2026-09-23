@@ -3,13 +3,13 @@ import type { ModelConfig } from '@features/models';
 import type { QueueCompiledSubmission, QueueHistoryItemStatus } from '@features/queue/contracts';
 import type { ProjectGraphState } from '@features/workflow/contracts';
 import type { WorkflowSubmissionPlan } from '@features/workflow/graph';
+import type { LogNamespace } from '@platform/logging/contracts';
 import type {
   CanvasDocumentContractV3,
   CanvasPlacementContract,
   CanvasStateContractV3,
   CanvasStagingCandidateContract,
 } from '@workbench/canvas-engine/api';
-import type { DeveloperLogNamespace } from '@workbench/diagnostics/contracts';
 import type { GraphContract } from '@workbench/graphContracts';
 import type { InvocationRoute, InvocationSourceId, ResultDestination } from '@workbench/invocationContracts';
 import type {
@@ -74,6 +74,7 @@ import {
   type GeneratedImageContract,
 } from '@features/gallery/contracts';
 import { planSeedSubmission } from '@platform/core/seed';
+import { describeError } from '@platform/logging/normalize';
 import { WIDGET_REGIONS } from '@workbench/layoutContracts';
 import { prependProjectEvent, PROJECT_EVENT_LIMIT } from '@workbench/projectEvents';
 
@@ -446,8 +447,9 @@ type WorkbenchReducerAction =
       type: 'recordError';
       message: string;
       area?: string;
-      context?: { error?: string; layerId?: string };
-      namespace?: DeveloperLogNamespace;
+      /** `error` may be a raw Error; notifications show its message and diagnostics keep its stack. */
+      context?: { error?: unknown; [key: string]: unknown };
+      namespace?: LogNamespace;
       projectId?: string;
     }
   | { type: 'setBackendConnectionStatus'; status: WorkbenchState['backendConnection']['status']; error?: string }
@@ -457,26 +459,14 @@ const HISTORY_LIMIT = 40;
 /** A pause this long between same-key edits (typing, dragging) starts a new undo step. */
 const UNDO_MERGE_WINDOW_MS = 1500;
 const NOTIFICATION_LIMIT = 100;
-// Side panels host real widget UIs (gallery grid, generate form); below
-// ~350px their toolbars and grids collapse into unusable slivers, so that is
-// the floor rather than a merely-rendered 180px. The ceiling exists for the
-// opposite reason: a panel is an inspector, and the work surface it sits
-// beside has to keep enough room to be the thing being worked on. Two maxed
-// side panels come to 1528px with their rails, so on a narrow laptop that is
-// a deliberate, self-inflicted squeeze rather than something a default can
-// walk into. The bottom strip is a status row, not a widget host, and keeps
-// its own bounds.
+// Side-panel bounds keep widget controls usable while reserving work-surface space. The bottom status strip has
+// separate bounds.
 const MIN_PANEL_SIZE_PX = 350;
 const MAX_PANEL_SIZE_PX = 720;
 const MIN_STATUS_PANEL_SIZE_PX = 96;
 const MAX_STATUS_PANEL_SIZE_PX = 420;
 
-/**
- * How far a resize drag must push past a region's floor before releasing means
- * "collapse to the rail" rather than "stop at the minimum". Wide enough that
- * running into the floor never collapses by accident, short enough to find
- * without being told it is there.
- */
+/** Overshoot required to collapse rather than stop at the minimum size. */
 const PANEL_COLLAPSE_OVERSHOOT_PX = 80;
 
 /** The resize bounds for a widget region — shared with the resize handles. */
@@ -492,20 +482,11 @@ export const getPanelSizeBounds = (region: WidgetRegion): { max: number; min: nu
 export const getPanelCollapseThreshold = (region: WidgetRegion): number =>
   getPanelSizeBounds(region).min - PANEL_COLLAPSE_OVERSHOOT_PX;
 
-/**
- * Whether a live drag should have the panel snapped shut, dockview-style: it
- * snaps at the overshoot threshold and reopens halfway back, so the boundary
- * has hysteresis instead of flapping a whole panel on one pixel.
- */
+/** Reopens halfway back from the collapse threshold to prevent boundary flicker. */
 export const shouldSnapPanelShut = (region: WidgetRegion, rawSizePx: number, isSnapped: boolean): boolean =>
   shouldSnapPanelShutAt(getPanelCollapseThreshold(region), rawSizePx, isSnapped);
 
-/**
- * `shouldSnapPanelShut` against an explicit threshold, for a panel the
- * viewport has squeezed below its floor: the overshoot is then measured from
- * the width actually on screen, so a drag on a 213px panel collapses it after
- * 80px instead of demanding the pointer travel to where the floor would be.
- */
+/** Measure overshoot from the rendered width when the viewport squeezes a panel below its minimum. */
 export const shouldSnapPanelShutAt = (thresholdPx: number, rawSizePx: number, isSnapped: boolean): boolean =>
   rawSizePx <= thresholdPx + (isSnapped ? PANEL_COLLAPSE_OVERSHOOT_PX / 2 : 0);
 
@@ -550,12 +531,8 @@ const createNotification = ({
 const addNotification = (state: WorkbenchState, notification: WorkbenchNotification): WorkbenchState => {
   const [newest, ...rest] = state.notifications;
 
-  // Coalesce an exact repeat of the newest ERROR notification into an
-  // occurrence bump on the SAME id, instead of stacking a new one — the
-  // toaster dedupes toasts by id, so a repeat then stops re-toasting for free
-  // (e.g. an ambient retry failing the same way every cycle). Restricted to
-  // errors: non-error kinds (e.g. "Invocation queued") are routine, repeat
-  // actions that must each surface their own toast.
+  // Reuse the newest matching error's id to suppress repeated toasts. Routine success notifications must still
+  // toast independently.
   if (
     newest &&
     newest.kind === 'error' &&
@@ -1164,10 +1141,7 @@ const cloneWidgetRegions = cloneLayoutPresetWidgetRegions;
 const cloneWidgetGraphs = (widgetGraphs: Project['widgetGraphs']): Project['widgetGraphs'] =>
   Object.fromEntries(Object.entries(widgetGraphs).map(([key, graph]) => [key, graph ? cloneGraph(graph) : graph]));
 
-// Canvas is intentionally absent from undo snapshots: the canvas rendering
-// engine owns its own pixel-patch history, so project-level undo/redo neither
-// snapshots nor restores canvas — `restoreUndoSnapshot` passes the live
-// `project.canvas` straight through via the `...project` spread.
+// Canvas pixel history belongs to the engine; project undo preserves the live canvas.
 const createUndoSnapshot = (
   project: Project,
   projectGraph = cloneProjectGraph(project.projectGraph)
@@ -1183,8 +1157,7 @@ const createUndoSnapshot = (
 
 const restoreUndoSnapshot = (project: Project, snapshot: ProjectUndoSnapshot): Project => ({
   ...project,
-  // Restored WITH widgetRegions — they are one placement fact, and restoring
-  // one without the other can double-render or orphan a floated instance.
+  // Restore floating windows with widgetRegions to avoid duplicate or orphaned placements.
   floatingWidgets: snapshot.floatingWidgets ? { ...snapshot.floatingWidgets } : undefined,
   invocation: { ...snapshot.invocation },
   layout: { ...snapshot.layout, panels: { ...snapshot.layout.panels } },
@@ -1194,12 +1167,7 @@ const restoreUndoSnapshot = (project: Project, snapshot: ProjectUndoSnapshot): P
   widgetRegions: cloneWidgetRegions(snapshot.widgetRegions),
 });
 
-/**
- * Records the project as it is *before* an edit. A `mergeKey` folds a stream
- * of edits (each keystroke in a field, each move of a drag) into the entry
- * that opened the stream while they keep arriving within the merge window,
- * so one undo reverts the whole burst.
- */
+/** Capture pre-edit state; edits sharing a mergeKey within the window undo as one burst. */
 const pushUndo = (project: Project, label: string, projectGraph?: ProjectGraphState, mergeKey?: string): Project => {
   const previous = project.undoRedo.past.at(-1);
   const timestamp = now();
@@ -1342,21 +1310,11 @@ const ensureLeftRegion = (leftRegion: WidgetRegionState | undefined): WidgetRegi
     }
   }
 
-  // The Video widget is deliberately absent from the non-video defaults now,
-  // so nothing backfills it any more; it lives in the Video preset and stays
-  // addable everywhere.
-
   return region;
 };
 
-// Every right rail this app has shipped as a default. A project persisted with
-// one of these exactly is an untouched default rather than a customization, so
-// it adopts the current curated rail wholesale.
-//
-// Adopting beats splicing the new widget in: the curated presets are the only
-// arrangements a rail can hold without reading as drifted, and a spliced rail
-// is by construction not one of them — it would show the unsaved-changes dot
-// and offer to revert a layout nobody edited.
+// Exact historical defaults adopt the current rail wholesale; splicing would incorrectly mark untouched layouts as
+// customized.
 const LEGACY_RIGHT_REGION_WIDGET_IDS: WidgetId[][] = [
   ['queue', 'gallery', 'layers'],
   // The rail as it shipped before the image map existed.
@@ -1383,13 +1341,7 @@ const ensureRightRegion = (rightRegion: WidgetRegionState | undefined): WidgetRe
   return rightRegion;
 };
 
-/**
- * Every Edit rail this app shipped as a default: the tabbed rail from while
- * the canvas editors were separate widgets, one unreleased build's variant
- * without Image Map, and the brief Layers-only rail that dropped the preview.
- * An untouched rail of any of those shapes adopts the shipped rail; a
- * customized rail stays the user's.
- */
+/** Exact historical Edit defaults adopt the current rail; customized rails remain unchanged. */
 const LEGACY_EDIT_RIGHT_REGION_WIDGET_IDS: ReadonlyArray<readonly WidgetInstanceId[]> = [
   ['layers', 'preview', 'gallery', 'image-map', 'queue'],
   ['layers', 'preview', 'gallery', 'queue'],
@@ -1425,16 +1377,8 @@ const withoutRetiredInstances = (
   };
 };
 
-// The shipped bottom-region default before 'queue-status' was added — a
-// persisted project whose bottom rail matches this exactly is still running
-// the pre-branch defaults, so it should pick up the new widget the same way
-// a fresh project would.
-//
-// A rail whose 'queue-status' was floated back out matches this shape too, so
-// the migration re-docks it on every load. That is left to
-// `reconcileFloatingWidgets`, which runs on this region's output and drops any
-// instance holding a floating window — the same contract the other rail
-// migrations here rely on.
+// Adopt queue-status for the historical bottom default. reconcileFloatingWidgets removes any instance already
+// hosted in a window.
 const LEGACY_DEFAULT_BOTTOM_REGION_WIDGET_IDS: readonly WidgetInstanceId[] = [
   'server-status',
   'gallery:bottom',
@@ -1485,15 +1429,12 @@ const ensureCenterRegion = (
   fallbackCenterViewId: CenterViewId
 ): WidgetRegionState => {
   const defaultCenterRegion = createWidgetRegions().center;
-  // A center with no region data at all adopts the default arrangement, but an
-  // explicitly emptied one is authoritative: the last view may be floating in a
-  // window (the surface falls back until its dock control returns it), and
-  // refilling it would inject views the project never placed.
+  // Missing region data adopts defaults; an explicitly empty center may have its last view floating and must stay
+  // empty.
   const instanceIds = centerRegion ? centerRegion.instanceIds : defaultCenterRegion.instanceIds;
   const activeInstanceId = centerRegion?.activeInstanceId ?? getCenterWidgetIdFromViewId(fallbackCenterViewId);
-  // A pointer that names none of the members is clamped — but an emptied
-  // center keeps its pointer, which names the instance now floating in a
-  // window; the boot preload reads it to have that window's chunk ready.
+  // An empty center retains the floated instance pointer for boot preloading; nonempty centers clamp invalid
+  // pointers.
   const normalizedActiveInstanceId = instanceIds.includes(activeInstanceId)
     ? activeInstanceId
     : (instanceIds[0] ?? activeInstanceId);
@@ -1517,14 +1458,7 @@ const isFloatingWidgetMode = (value: unknown): value is FloatingWidgetMode =>
 
 const isWidgetRegionId = (value: unknown): value is WidgetRegion => WIDGET_REGION_IDS.includes(value as WidgetRegion);
 
-/**
- * Put a docking widget back where it was, not on the end.
- *
- * The rail is an ordered tab strip, so appending turned float-then-dock — a
- * gesture that reads as undoing the float — into a permanent reordering, which
- * then registered as drift from the preset. The rail may have changed while the
- * window was open, so the remembered index is clamped rather than trusted.
- */
+/** Restore the pre-float tab index, clamped to the current rail, so float/dock does not reorder the layout. */
 const insertAtReturnIndex = (
   instanceIds: WidgetInstanceId[],
   instanceId: WidgetInstanceId,
@@ -1542,11 +1476,8 @@ const insertAtReturnIndex = (
 };
 
 /**
- * Persisted floating windows are an unsafe-cast boundary like every other
- * sub-shape here: an entry naming a region that does not exist crashes the
- * reducer the moment it is docked, and non-numeric geometry reaches the
- * window's fixed-position CSS. Anything malformed is dropped, so the widget
- * reappears docked rather than not at all.
+ * Drop malformed floating entries so widgets remain docked and invalid region names or geometry cannot reach
+ * reducers or CSS.
  */
 const normalizeFloatingWidgets = (
   value: unknown,
@@ -1584,9 +1515,7 @@ const normalizeFloatingWidgets = (
     floatingWidgets[instanceId] = {
       ...clampSizeToMinimum({ heightPx: state.heightPx, widthPx: state.widthPx, x: state.x, y: state.y }),
       mode: state.mode,
-      // Carried explicitly, like every other field: this rebuilds the entry
-      // rather than spreading it, so anything not named here is dropped. A
-      // nonsensical index is simply omitted — docking falls back to appending.
+      // Omit invalid docking indices; docking then appends.
       ...(isFiniteNumber(state.returnIndex) && state.returnIndex >= 0
         ? { returnIndex: Math.floor(state.returnIndex) }
         : {}),
@@ -1599,17 +1528,8 @@ const normalizeFloatingWidgets = (
 };
 
 /**
- * An instance renders either in a region or in a floating window, never both.
- *
- * The region migrations above rebuild a rail that reads as an untouched default
- * — and a rail missing a floated widget is exactly that shape — so on every
- * reload they hand back a widget the person had floated. Floating wins: it is
- * the deliberate act, while the region entry is the migration's guess.
- *
- * That holds for the center too, even when its last view is the one floating:
- * the surface falls back to the center's fallback view, and the window's dock
- * control is one click from restoring it. Only the destructive placements
- * (`toggleRegionWidget`, `closeWidgetPlacement`) still refuse to empty it.
+ * Floating placement wins over migrated rail defaults to prevent duplicate rendering, even when it leaves the
+ * center on its fallback view.
  */
 const reconcileFloatingWidgets = (
   widgetRegions: Record<WidgetRegion, WidgetRegionState>,
@@ -1684,11 +1604,8 @@ export const normalizeWorkbenchProject = (
   project: Project,
   options: {
     /**
-     * Whether the document is arriving from another realm (a server record,
-     * an import) rather than being kept by this one during a live retarget.
-     * An infinite window's mid-board anchor is a
-     * "you are here" for the session that revealed it: it is dropped from a
-     * document that arrives, and kept for one that stays.
+     * Drop session-only infinite-window anchors on imported/server documents; preserve them during live
+     * retargeting.
      */
     isArriving?: boolean;
   } = {}
@@ -1749,9 +1666,7 @@ const assembleWorkbenchProject = (
     }
   }
 
-  // Workflow runs used to borrow Generate's iteration count. A project saved before the
-  // widget owned one has no key; carry the count over once so it keeps the runs it
-  // effectively had. A fresh project starts with the widget's own default, so it never migrates.
+  // Legacy workflows inherit Generate's iteration count once; fresh workflows use their own default.
   const workflowInstance = widgetInstances.workflow;
 
   if (workflowInstance && typeof workflowInstance.state.values.batchCount !== 'number') {
@@ -1783,19 +1698,8 @@ const assembleWorkbenchProject = (
       continue;
     }
 
-    // A project can arrive here from a realm that never ran the session its
-    // values describe — the Open dialog, a deep link — where a search only
-    // that session could resolve, and the rank pages set against it, would be
-    // read as board positions. But this also runs on projects that never
-    // left: closing, reopening, or retargeting one. So the test is whether the reference resolves
-    // here, not what kind it is; the latter would delete the ranking the user
-    // is looking at.
-    // An infinite window's mid-board anchor goes the same way, for the same
-    // reason the save path drops it: it is a "you are here" for the session
-    // that revealed it. Adoption and the boot snapshot have to agree on this,
-    // because the sync baseline is taken from the adopted document while the
-    // store is hydrated from the snapshot — a project that has only been
-    // opened must serialize to its baseline, or the next autosave pushes it.
+    // Preserve only rankings resolvable in this session. Drop foreign infinite-window anchors consistently with
+    // serialization so hydration matches the sync baseline.
     const strippedSearchValues = stripUnresolvableGallerySearch(instance.state.values);
     const strippedValues = isArriving
       ? (stripInfiniteWindowAnchor(strippedSearchValues ?? instance.state.values) ?? strippedSearchValues)
@@ -1848,9 +1752,7 @@ const assembleWorkbenchProject = (
     canvas,
     events: isArriving ? [] : project.events.slice(0, PROJECT_EVENT_LIMIT),
     floatingWidgets: placement.floatingWidgets,
-    // Built-in preset ids were renamed for the three-preset model; a project
-    // saved under an old id must still resolve to the arrangement it names,
-    // otherwise every restored project reads as drifted from Compose.
+    // Resolve historical built-in preset ids to their current arrangements to avoid false layout drift.
     layout: { ...project.layout, presetId: resolveLayoutPresetId(project.layout.presetId) },
     projectGraph: normalizeProjectGraph(project.projectGraph),
     promptHistory: normalizePromptHistory((project as Partial<Project>).promptHistory),
@@ -1862,17 +1764,8 @@ const assembleWorkbenchProject = (
 };
 
 /**
- * Write the server's board id into a *hydrated* project's gallery state.
- *
- * Patching the document before rehydration is not enough on its own. A project saved by a build
- * that never opened its Gallery widget — or one whose document predates widget instances entirely —
- * has no gallery values for the patch to land in, and the instance the reducer creates during
- * normalization arrives afterwards, empty. Such a project would then show the placeholder board row
- * forever and route nothing at its own board, which is the one thing the server is authoritative
- * about.
- *
- * Applied after normalization, so the instance exists. A project whose layout has no gallery widget
- * at all is returned untouched: there is nothing to tell.
+ * Assign the server board after normalization creates missing gallery instances. Projects with no gallery layout
+ * remain unchanged.
  */
 export const withAuthoritativeProjectBoard = (project: Project, boardId: string): Project =>
   updateProjectWidgetValues(project, 'gallery', (values) =>
@@ -1921,11 +1814,7 @@ const getNextProjectIndex = (projects: Project[]): number => {
   return Math.max(0, ...usedIndices) + 1;
 };
 
-/**
- * A fresh, never-saved project. Ids carry entropy rather than an index so a
- * draft can never collide with a project that already exists on the server
- * (which an autosave would then silently overwrite).
- */
+/** Use collision-resistant ids so a draft autosave cannot overwrite an existing server project. */
 export const createDraftProject = (projects: Project[], account?: WorkbenchState['account']): Project =>
   createProject(
     getNextProjectIndex(projects),
@@ -1952,11 +1841,7 @@ const updateActiveProject = (state: WorkbenchState, getProject: (project: Projec
   return didChange ? { ...state, projects } : state;
 };
 
-/**
- * Which of `regions` a panel toggle should collapse or expand: empty ones are
- * left alone, so toggling never opens a panel with nothing in it (and never
- * writes drift into a preset that ships a region collapsed).
- */
+/** Ignore empty regions so toggling panels cannot open blank panels or alter preset collapse state. */
 export const resolvePanelToggle = (
   widgetRegions: Record<WidgetRegion, Pick<WidgetRegionState, 'instanceIds' | 'isCollapsed'>>,
   regions: readonly WidgetRegion[]
@@ -2022,10 +1907,7 @@ const openPanelForRegion = (layout: ProjectLayoutState, region: WidgetRegion): P
 });
 
 const cloneLayoutPresetSnapshot = (snapshot: LayoutPresetSnapshot): LayoutPresetSnapshot => {
-  // Every account preset is rebuilt through here on load, so a field missing
-  // from this clone is a field the preset silently loses on the next reload.
-  // A preset saved while the retired canvas editors were widgets still carries
-  // their instances; shedding them here keeps an applied preset drift-free.
+  // Strip retired editor instances when rebuilding account presets to keep applied layouts drift-free.
   const retired = new Set(
     Object.values(snapshot.widgetInstances)
       .filter((instance) => RETIRED_WIDGET_TYPE_IDS.has(instance.typeId))
@@ -2276,17 +2158,8 @@ const normalizeWorkbenchState = (state: WorkbenchState): WorkbenchState => {
   // (they live in the settings store now) and must not resurface here.
   const account = normalizeWorkbenchAccount(state.account);
   const restored = state.projects.map((project) => normalizeWorkbenchProject(project));
-  // An editor always holds a project: `closeProject` refuses the last tab, and a
-  // session with none is the Home screen, whose cache the load paths are meant to
-  // replace with a fresh draft before handing the state over. One path does not --
-  // when a project the canvas gate refused cannot be retained, the cached snapshot
-  // is returned verbatim, and that cache is projectless whenever the last tab was
-  // closed before the reload. Hydrating it leaves the store's active project
-  // undefined, and the first consumer to read it dereferences undefined rather than
-  // finding an empty editor: the boot widget hint, whose first access happens to be
-  // `widgetRegions`, before the shell renders anything. Seed the draft here, at the
-  // one point every load path passes through, so no snapshot can hydrate without a
-  // project regardless of which path produced it.
+  // Every hydrated editor needs an active project, including projectless cached snapshots returned after canvas
+  // recovery fails; seed a draft here for all load paths.
   const projects = restored.length > 0 ? restored : [createDraftProject([], account)];
   const activeProjectId = projects.some((project) => project.id === state.activeProjectId)
     ? state.activeProjectId
@@ -2357,13 +2230,8 @@ const applyLayoutPresetToProject = (project: Project, preset: LayoutPreset): Pro
       : createWidgetInstance(instance.typeId, instance.id);
   }
 
-  // A preset is a full placement reset, so the project's own floating windows
-  // go: keeping one would double-render whatever the preset docks. The
-  // preset's are restored in their place — a preset saved while a widget
-  // floated has it in no region, and dropping them both would leave the
-  // instance nowhere at all. Preset bodies reach us from account storage
-  // without passing through `normalizeWorkbenchProject`, so they are validated
-  // and reconciled here on the same terms as a persisted project.
+  // Presets replace all placements, including floating windows. Validate account-stored windows here because
+  // presets bypass normalizeWorkbenchProject.
   const placement = reconcileFloatingWidgets(
     cloneLayoutPresetWidgetRegions(snapshot.widgetRegions),
     normalizeFloatingWidgets(snapshot.floatingWidgets, widgetInstances)
@@ -2424,11 +2292,7 @@ const updateActiveInvocation = (
     };
   });
 
-/**
- * Applies the auto-switch route rule to a project after a high-confidence
- * edit. Deliberately no undo entry or event: the route change rides the
- * edit's own project update, matching the workflow auto-source precedent.
- */
+/** Auto-routing shares the triggering edit's update and creates no separate undo entry or event. */
 const applyAutoRouteForEdit = (
   project: Project,
   sourceId: InvocationSourceId,
@@ -2443,26 +2307,13 @@ const applyAutoRouteForEdit = (
   return invocation === project.invocation ? project : { ...project, invocation };
 };
 
-/**
- * The generate widget doubles as Canvas's parameter panel — canvas invocations
- * compile from generate values (prepareCanvasInvocation) and canvasDimsSync
- * mirrors generate dims onto the bbox — so generate edits never steal the
- * route from an active canvas source.
- */
+/** Generate also supplies Canvas parameters and dimensions, so its edits must not steal an active Canvas route. */
 const applyAutoRouteForGenerateEdit = (project: Project, context: WorkbenchReducerContext): Project =>
   project.invocation.sourceId === 'canvas' ? project : applyAutoRouteForEdit(project, 'generate', context);
 
 /**
- * Bringing a graph-bearing widget to the front is as strong a statement of
- * intent as editing one: someone who clicks the Video tab and presses Invoke
- * means the video parameters, not whichever surface they last touched. Reveal
- * therefore feeds the same policy as an edit, through the same preference and
- * lock gates, so the surface in front of you is the surface that runs.
- *
- * Non-graph widgets (gallery, layers, ...) resolve to no source and leave the
- * route alone, and generate keeps its canvas exception for the reason given
- * above -- the canvas parameter panel *is* the generate widget, so revealing it
- * must not steal the route from an active canvas source.
+ * Revealing a graph widget expresses invocation intent through the same lock/preference gates as editing; Generate
+ * retains the Canvas exception.
  */
 const applyAutoRouteForWidgetReveal = (
   project: Project,
@@ -2488,14 +2339,8 @@ const applyAutoRouteForRevealedInstance = (
 ): Project => applyAutoRouteForWidgetReveal(project, project.widgetInstances[instanceId]?.typeId, context);
 
 /**
- * Reveal for the paths where the front widget changes as a *consequence* of
- * something else — closing a tab, dragging one out of a rail, reordering — as
- * opposed to the paths where the gesture names the widget outright.
- *
- * Only an actual change of the visible front widget counts. Closing a
- * background tab leaves the same panel in front and must not re-target Invoke,
- * and a region that ends collapsed (or whose `activeInstanceId` is left
- * dangling by the last removal) has revealed nothing at all.
+ * Consequential tab changes route only when a different widget becomes visible; background closes, collapsed
+ * regions, and dangling pointers reveal nothing.
  */
 const applyAutoRouteForRegionFront = (
   project: Project,
@@ -2530,8 +2375,7 @@ const compileInvocationSnapshot = (
   const randDevice = resolveRandDeviceMetadata(project.settings.useCpuNoise, getGenerationDevicesSnapshot().options);
 
   if (route.sourceId === 'workflow') {
-    // Compiles the workflow document into an immutable snapshot. Templates are
-    // read imperatively; route validation already guaranteed they are loaded.
+    // Route validation guarantees templates are loaded before this imperative read.
     const templatesSnapshot = getInvocationTemplatesSnapshot();
 
     if (templatesSnapshot.status !== 'loaded') {
@@ -2864,9 +2708,8 @@ const removeGalleryItemsFromAllProjects = (
       return { ...clearDeletedUpscaleInput(values, removedImageNames) };
     });
 
-    // The sweep runs against the RAW slots: normalizing first would let a
-    // reference masked by the first-frame/initial-video exclusion survive the
-    // deletion and resurface later as a dangling media name.
+    // Sweep raw slots before normalization so mutually excluded media references cannot survive deletion and
+    // reappear later.
     const withoutVideoMedia = updateProjectWidgetValues(withoutUpscaleInput, 'video', (rawValues) =>
       clearDeletedVideoMedia(rawValues, removedImageNames, removedVideoNames)
     );
@@ -2903,8 +2746,6 @@ const reconcileDeletedGalleryBoard = (
 
     return {
       ...values,
-      // Same rule as `selectGalleryBoard`: the view is moving to another
-      // board, so a ranking shown against the old one goes with it.
       ...(selectedBoardWasDeleted
         ? { galleryPage: 0, selectedBoardId: 'none', semanticImageQuery: null, semanticSearchText: null }
         : {}),
@@ -2934,13 +2775,7 @@ const reconcileDeletedGalleryBoard = (
   return didChangeQueue ? { ...withBoardReferencesCleared, projects } : withBoardReferencesCleared;
 };
 
-/**
- * A deliberate selection pauses live-follow. It is also stamped, so that a
- * generation submitted AFTER the pick can still take the preview when it lands
- * while one that was already running when the user picked cannot; submitting
- * resumes live-follow (`shouldResumeLiveFollowOnSubmit`). An explicit toggle of
- * the setting speaks for every generation and lifts the stamp.
- */
+/** A deliberate selection pauses live-follow; only generations submitted after that selection may take the preview. */
 const updateGalleryValuesAndPauseLiveFollow = (
   state: WorkbenchState,
   getValues: (values: Record<string, unknown>) => Record<string, unknown>,
@@ -2963,19 +2798,11 @@ const getLiveFollowPausedAt = (project: Project): string | null => {
   return typeof pausedAt === 'string' ? pausedAt : null;
 };
 
-/**
- * Submitting new work is the counter-signal to a selection pause: the user
- * wants to watch what they just asked for. An explicit opt-out of live-follow
- * carries no pause stamp and is left alone.
- */
+/** Submission resumes selection-paused live-follow, but preserves an explicit opt-out. */
 const shouldResumeLiveFollowOnSubmit = (project: Project): boolean =>
   !project.settings.showProgressImagesInViewer && getLiveFollowPausedAt(project) !== null;
 
-/**
- * Whether a result may take the selection given the user's last deliberate
- * pick: only if its generation was submitted after that pick. The batch that
- * was running when the user picked stays out of the way.
- */
+/** Only generations submitted after the deliberate selection may replace it. */
 const isSubmittedAfterLiveFollowPause = (project: Project, image: GalleryImage | undefined): boolean => {
   const pausedAt = getLiveFollowPausedAt(project);
 
@@ -3149,13 +2976,8 @@ const routeQueueItemResults = (project: Project, queueItemId: string, images: Ge
     return updateGalleryWithResultImages(nextProject, images);
   }
 
-  // A canvas generation belongs to the canvas SESSION it was submitted against,
-  // identified by `documentRevision` (bumped only on wholesale swaps — new canvas,
-  // snapshot restore, project sync — never on ordinary edits, and captured in the
-  // queue item's canvas snapshot at submit time). If a fresh session started while
-  // this generation was in flight, its results belong to a document that no longer
-  // exists; routing them would resurrect staging on the brand-new canvas (F2). Keep
-  // the completed status, but drop the staged candidates.
+  // Stage results only into the submitted documentRevision; wholesale canvas swaps invalidate staging while
+  // preserving completion status.
   if (queueItem && queueItem.snapshot.canvas.documentRevision !== nextProject.canvas.documentRevision) {
     return nextProject;
   }
@@ -3171,11 +2993,7 @@ const routeQueueItemResults = (project: Project, queueItemId: string, images: Ge
   return stageCanvasResultImages(nextProject, queueItemId, images, sourceBackendItemIds, previousSelectedSlot);
 };
 
-/**
- * Enqueues an already-compiled graph snapshot. Shared by the route-validated
- * `submitInvocationSnapshot` and the canvas engine's `submitCanvasInvocationSnapshot`,
- * whose graph is compiled asynchronously outside the reducer.
- */
+/** Enqueue compiled snapshots from route validation or asynchronous canvas preparation. */
 const enqueueCompiledSnapshot = (
   project: Project,
   route: InvocationRoute,
@@ -3217,22 +3035,11 @@ const enqueueCompiledSnapshot = (
           : route.sourceId === 'video'
             ? videoSettings
             : null;
-  // The prompts that actually generate: the authored text wrapped by the active
-  // prompt template. Computed once here because this is the only place every
-  // Generate-shaped route converges — `generate` and `canvas` both land here, as
-  // do the topbar, hotkey and graph-preview submits. Upscale carries no template
-  // and merges to identity.
+  // Resolve template-merged prompts here, where Generate and Canvas submissions converge; Upscale merges to
+  // identity.
   const effectivePrompts = sourceGenerateSettings ? getEffectivePrompts(sourceGenerateSettings) : null;
-  // Dynamic prompting is a Generate setting, so only the routes compiled from
-  // GenerateSettings honour it; Upscale keeps its prompt literal. The caller has
-  // already expanded, so the queue item records the exact prompts it will submit.
-  //
-  // A one-prompt expansion counts: `a {red} cat` and a random sample of one both
-  // resolve to a single concrete prompt, and dropping it here would fall the
-  // submission back to the authored text — sending the literal `{…}` to the model.
-  //
-  // The gate reads the *merged* prompt: a template may introduce `{a|b}` that the
-  // authored prompt never had, and the caller expanded the merged text too.
+  // Record expansions for Generate routes even when only one prompt results. Inspect merged prompts because
+  // templates may introduce dynamic syntax.
   const expandedPositivePrompts =
     route.sourceId !== 'upscale' &&
     route.sourceId !== 'video' &&
@@ -3245,10 +3052,7 @@ const enqueueCompiledSnapshot = (
   const expandedSeedBehaviour = expandedPositivePrompts
     ? (canvasGenerateSettings ?? generateSettings)?.dynamicPromptsSeedBehaviour
     : undefined;
-  // The seed was resolved when the graph compiled (random modes drew it then),
-  // so `seed` is this submission's start. The plan fixes how the batch steps
-  // from it and where the editable seed goes next; a submission that fails or
-  // is cancelled later keeps its seeds — the sequence only ever moves forward.
+  // Compilation already reserved the starting seed; failures and cancellations do not roll the sequence back.
   const seedPlan = sourceGenerateSettings
     ? planSeedSubmission({
         batchCount: sourceGenerateSettings.batchCount,
@@ -3269,10 +3073,8 @@ const enqueueCompiledSnapshot = (
             graph: backendGraph,
             kind: 'workflow',
             ...(compiled.workflowJson ? { workflow: compiled.workflowJson } : {}),
-            // Provenance for the completed-run capture: a run submitted from a
-            // library-bound graph knows which record to stamp, even after the
-            // editor has moved on to another workflow. An unbound graph stamps
-            // nothing, so an ad-hoc workflow never writes to the library.
+            // Capture the library binding at submission so completion updates the originating workflow even after
+            // the editor changes.
             ...(project.projectGraph.libraryWorkflowId
               ? { libraryWorkflowId: project.projectGraph.libraryWorkflowId }
               : {}),
@@ -3282,9 +3084,7 @@ const enqueueCompiledSnapshot = (
             batchCount: sourceGenerateSettings.batchCount,
             graph: backendGraph,
             kind: 'generate',
-            // A disabled negative prompt stays empty, which also suppresses the
-            // template's negative side — switching the field off must not let a
-            // template put one back.
+            // Disabling the negative prompt also suppresses the template's negative side.
             negativePrompt: sourceGenerateSettings.negativePromptEnabled ? effectivePrompts.negativePrompt : '',
             negativePromptNodeId: generate?.negativePromptNodeId ?? 'negative_prompt',
             positivePrompt: effectivePrompts.positivePrompt,
@@ -3347,8 +3147,7 @@ const enqueueCompiledSnapshot = (
             ? 1
             : backendSubmission.batchCount * (expandedPositivePrompts?.length ?? 1),
         height: presentationDimensions.height,
-        // The merged prompt, so the queue row reads the same before and after the
-        // backend session arrives with its own (already merged) field values.
+        // Use merged prompts so queue text stays consistent when the backend session arrives.
         ...(effectivePrompts?.positivePrompt ? { positivePrompt: effectivePrompts.positivePrompt } : {}),
         width: presentationDimensions.width,
       },
@@ -3366,11 +3165,8 @@ const enqueueCompiledSnapshot = (
     status: 'pending',
   };
 
-  // A stepping mode hands the next seed to the editable settings in the same
-  // transition that queues the batch, so submissions queued back to back
-  // continue the sequence. The canvas compiles outside the reducer, so its plan
-  // may be stale by the time it lands: only settings still at the submitted
-  // seed and mode are advanced; an edit made meanwhile is the user's, and stays.
+  // Advance seeds atomically with enqueueing; for async Canvas submissions, preserve any settings edited since
+  // compilation.
   const advancedProject =
     seedPlan !== null && seedPlan.nextSeed !== null
       ? updateProjectWidgetValues(project, route.sourceId === 'canvas' ? 'generate' : route.sourceId, (values) =>
@@ -3473,8 +3269,6 @@ export const __workbenchReducerInternal = (
       return { ...state, activeProjectId: project.id, projects: [...state.projects, project] };
     }
     case 'openProject': {
-      // Hydrated from the library (Open dialog or a deep link). Opening an
-      // already-open project just focuses its tab.
       if (state.projects.some((project) => project.id === action.project.id)) {
         return { ...state, activeProjectId: action.project.id };
       }
@@ -3811,8 +3605,7 @@ export const __workbenchReducerInternal = (
               ...project.widgetInstances,
               [instanceId]: createWidgetInstance(action.widgetId, instanceId, action.initialValues),
             };
-        // Placing an instance into a region implicitly docks it: an instance
-        // must never render in a panel and a floating window at once.
+        // Placing an instance docks it to prevent simultaneous region/window rendering.
         const { [instanceId]: _floated, ...floatingWidgets } = project.floatingWidgets ?? {};
 
         return applyAutoRouteForWidgetReveal(
@@ -3840,9 +3633,7 @@ export const __workbenchReducerInternal = (
       return updateProjectById(state, action.projectId ?? state.activeProjectId, (project) => {
         const region = project.widgetRegions[action.region];
 
-        // Selecting a slot names the instance as the region's shown surface, so
-        // it docks: an instance must never render in a panel and a floating
-        // window at once — the same rule `openRegionWidget` enforces.
+        // Selecting a region slot docks the instance to prevent simultaneous region/window rendering.
         const { [action.widgetId]: _floated, ...floatingWidgets } = project.floatingWidgets ?? {};
 
         if (action.region === 'center') {
@@ -3860,10 +3651,7 @@ export const __workbenchReducerInternal = (
           );
         }
 
-        // Clicking the already-active tab toggles the rail's disclosure rather
-        // than switching tabs. Expanding it puts that panel back on screen and
-        // is a reveal like any other; collapsing it puts nothing in front, so
-        // the route stays exactly where it is.
+        // Expanding the active tab reveals its widget and may route; collapsing reveals nothing.
         if (region.activeInstanceId === action.widgetId) {
           const disclosed = {
             ...project,
@@ -3927,9 +3715,6 @@ export const __workbenchReducerInternal = (
           return project;
         }
 
-        // Closing the front tab promotes a new one, which is a reveal; closing
-        // a background tab changes nothing on screen and must leave the route
-        // alone. `applyAutoRouteForRegionFront` draws exactly that line.
         return applyAutoRouteForRegionFront(nextProject, previousRegion, action.region, context);
       });
     }
@@ -3939,12 +3724,8 @@ export const __workbenchReducerInternal = (
           return project;
         }
 
-        // One instance may be a member of several regions (the preview is
-        // placed in the center and a rail by default), so the region the float
-        // was asked from — the chrome whose button was clicked — decides where
-        // the window docks back to. The unhinted fallback takes the first
-        // member region in the region map's order, which persisted projects
-        // do not agree on.
+        // Use the clicked region as the dock-back origin for multi-region widgets; map order is not a stable
+        // origin.
         const findHost = (match: (regionId: WidgetRegion, region: WidgetRegionState) => boolean) =>
           (Object.entries(project.widgetRegions) as [WidgetRegion, WidgetRegionState][]).find(([regionId, region]) =>
             match(regionId, region)
@@ -3960,11 +3741,8 @@ export const __workbenchReducerInternal = (
 
         const [hostRegionId, hostRegion] = resolvedHostEntry;
 
-        // Floating may empty the center, unlike `toggleRegionWidget` and
-        // `closeWidgetPlacement`, which still refuse the same removal: those
-        // discard the view outright, while a float keeps it one dock click
-        // away, and the emptied surface falls back to the center's fallback
-        // view rather than standing blank.
+        // The reducer accepts center-origin floating and preserves its fallback; the UI float control only offers
+        // dockable panel origins.
         const instanceIds = hostRegion.instanceIds.filter((instanceId) => instanceId !== action.instanceId);
         const fallbackInstanceId = getNextInstanceId(hostRegion, action.instanceId);
         const floating: FloatingWidgetState = {
@@ -3988,10 +3766,7 @@ export const __workbenchReducerInternal = (
                     ? (fallbackInstanceId ?? emptiedActiveInstanceId(hostRegionId, hostRegion))
                     : hostRegion.activeInstanceId,
                 instanceIds,
-                // Floating the last widget out of a rail leaves nothing to show,
-                // so the rail collapses rather than standing open and empty —
-                // the same repair `toggleRegionWidget` makes. The center has no
-                // collapsed state; its fallback view carries the empty surface.
+                // Empty rails collapse; an empty center uses its fallback view.
                 isCollapsed: instanceIds.length === 0 && hostRegionId !== 'center' ? true : hostRegion.isCollapsed,
               },
             },
@@ -4038,8 +3813,6 @@ export const __workbenchReducerInternal = (
       });
     }
     case 'closeFloatingWidget': {
-      // The window is the instance's only placement, so closing it is one
-      // change: the entry goes, nothing docks, and no surface is revealed.
       return updateActiveProject(state, (project) => {
         if (!project.floatingWidgets?.[action.instanceId]) {
           return project;
@@ -4065,9 +3838,7 @@ export const __workbenchReducerInternal = (
           y: action.y,
         });
 
-        // A pointer-down/up on the title bar with no movement still commits the
-        // starting geometry. Without this the project is marked dirty — and
-        // autosaved — every time someone clicks the window chrome.
+        // Ignore unchanged geometry so clicking window chrome does not dirty or autosave the project.
         if (
           floating.heightPx === geometry.heightPx &&
           floating.widthPx === geometry.widthPx &&
@@ -4102,20 +3873,13 @@ export const __workbenchReducerInternal = (
         const floating = project.floatingWidgets?.[action.instanceId];
         const topOrder = nextStackOrder(project.floatingWidgets) - 1;
 
-        // `focusFloatingWidget` is bound to `onPointerDownCapture` on the window
-        // root, so it fires on every scroll, drag, and button press inside the
-        // window — not just on a raise. Routing therefore stays behind this
-        // shortcut: raising a window reveals it, but touching the window that
-        // is already on top reveals nothing and must not re-target Invoke or
-        // dirty the project.
+        // Pointer capture runs for every interaction inside the window; only raising it should re-route or dirty
+        // the project.
         if (!floating || floating.stackOrder === topOrder) {
           return project;
         }
 
-        // Renumbered to a compact 1..N rather than appended above the current
-        // top. `stackOrder` is persisted, so a counter that only ever climbs
-        // writes ever-larger numbers into the document for what is really a
-        // reordering of the same few windows.
+        // Compact persisted stackOrder to 1..N rather than growing it on every raise.
         const below = Object.entries(project.floatingWidgets ?? {})
           .filter(([instanceId]) => instanceId !== action.instanceId)
           .sort(([, left], [, right]) => left.stackOrder - right.stackOrder);
@@ -4161,8 +3925,7 @@ export const __workbenchReducerInternal = (
               },
             },
           },
-          // The dragged widget lands expanded and selected in the target
-          // region; the tab the source region promotes behind it did not move.
+          // The dragged widget is revealed in the target; the promoted source tab stays behind it.
           action.instanceId,
           context
         );
@@ -4705,9 +4468,7 @@ export const __workbenchReducerInternal = (
             selectedImageName: toGalleryItemKey(action.primaryItem),
             selectedImageNames: action.itemKeys,
             selectedImagePage,
-            // An explicit page comes from a host navigating its own window, and
-            // names a page of the query already on the selection — the same
-            // contract as `selectGalleryItem` with `preserveNavigationQuery`.
+            // An explicit host page belongs to the selection's query, matching preserveNavigationQuery.
             selectedImageQuery:
               hasSelectionPage && existingNavigationQuery
                 ? { ...existingNavigationQuery, page: selectedImagePage }
@@ -4740,20 +4501,8 @@ export const __workbenchReducerInternal = (
           galleryPage: 0,
           selectedBoardId: action.boardId,
           selectedImageNames: [],
-          // A similarity ranking answers with images from wherever they live,
-          // so it is not a view OF any board: moving to one asks for that
-          // board's listing, and leaving the ranking up would answer with the
-          // same results under a new board name. Dismissed exactly as the
-          // chip's own clear does it — the query alone — and the semantic
-          // field leaves with its ranking, text and all. The positions on the
-          // selection are NOT rewritten here: a selection made before the
-          // search carries a real board page that the search never touched,
-          // and zeroing it would cost Preview the cursor it still has.
-          //
-          // Only on an actual move. Re-picking the board already shown is not
-          // a change of view, and a text or image reference survives a reload,
-          // so treating that click as a dismissal would erase persisted state
-          // (and autosave the loss) on what reads as a no-op.
+          // Only actual board changes clear similarity ranking and semantic text. Preserve selection pages: they
+          // may still describe the pre-search board listing.
           ...(values.selectedBoardId !== action.boardId ? { semanticImageQuery: null, semanticSearchText: null } : {}),
         }),
         action.projectId
@@ -4774,12 +4523,7 @@ export const __workbenchReducerInternal = (
           galleryPage: 0,
           galleryView: action.galleryView,
           selectedImageNames: [],
-          // Same rule as `selectGalleryBoard`, and for the same reason: the
-          // Images/Assets tabs are two listings, and a ranking is a view of
-          // neither, so switching tabs asks for the listing rather than the
-          // same results relabelled. Only on an actual switch — an absent
-          // `galleryView` reads as Images, so re-clicking the tab already
-          // shown must stay the no-op it is today.
+          // Actual Images/Assets switches clear ranking; an absent galleryView already means Images.
           ...((values.galleryView === 'assets' ? 'assets' : 'images') !== action.galleryView
             ? { semanticImageQuery: null, semanticSearchText: null }
             : {}),
@@ -4819,11 +4563,8 @@ export const __workbenchReducerInternal = (
             return values;
           }
 
-          // The text moves between the two interpretations rather than being
-          // lost: the sparkle only changes what the words mean. Entering
-          // applies them at once — a click is a deliberate act, not a
-          // keystroke to debounce — while leaving drops the ranking, since
-          // metadata search has its own listing.
+          // Retain text across mode changes; entering semantic mode applies immediately, leaving clears its
+          // ranking.
           if (action.enabled) {
             const text = typeof values.searchTerm === 'string' ? values.searchTerm : '';
 
@@ -4859,10 +4600,7 @@ export const __workbenchReducerInternal = (
       return updateGalleryValues(
         state,
         (values) => {
-          // A commit arrives on a timer, after whatever it was scheduled
-          // against may have gone: the field emptied, the mode left, the board
-          // moved. Applying only what the field still holds makes every late
-          // timer harmless without the field having to track them.
+          // Apply delayed commits only when they still match the current field, mode, and board.
           if (values.semanticSearchText !== action.text) {
             return values;
           }
@@ -5283,7 +5021,7 @@ export const __workbenchReducerInternal = (
       );
     }
     case 'recordError': {
-      const detail = action.context?.error;
+      const detail = describeError(action.context?.error);
       return addNotification(
         state,
         createNotification({
@@ -5319,8 +5057,7 @@ export const __workbenchReducerInternal = (
     case 'setActiveProjectSettings': {
       return updateActiveProject(state, (project) => {
         const settings = normalizeProjectSettings({ ...project.settings, ...action.settings });
-        // An explicit live-follow choice speaks for every generation, so it also
-        // lifts the pause a deliberate selection stamped.
+        // Explicit live-follow clears any selection-imposed pause.
         const withoutPause =
           action.settings.showProgressImagesInViewer !== undefined && getLiveFollowPausedAt(project) !== null
             ? updateProjectWidgetValues(project, 'gallery', ({ liveFollowPausedAt: _pausedAt, ...values }) => values)

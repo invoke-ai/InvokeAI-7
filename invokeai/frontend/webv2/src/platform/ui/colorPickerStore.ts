@@ -12,15 +12,7 @@ const FORMAT_STORAGE_KEY = 'invokeai:v7:webv2:color-format';
 const MODE_STORAGE_KEY = 'invokeai:v7:webv2:color-picker-mode';
 const MAX_RECENTS = 12;
 
-/**
- * The workbench palette: neutrals plus the regional-guidance mask hues, so a
- * brush color and a mask fill picked from defaults read as one system.
- *
- * These values intentionally duplicate `REGIONAL_GUIDANCE_FILL_COLORS` in the
- * canvas engine. `platform/` may not import `workbench/` (`platform-independence`)
- * and the engine may not import back out (`canvas-engine-independence`), so a
- * shared constant would have to live in a third module owned by neither.
- */
+/** Keep defaults aligned with REGIONAL_GUIDANCE_FILL_COLORS; owner boundaries forbid importing the canvas constant. */
 export const DEFAULT_COLOR_SWATCHES: readonly string[] = [
   '#000000',
   '#ffffff',
@@ -39,11 +31,7 @@ const isColorPickerFormat = (value: unknown): value is ColorPickerFormat =>
 
 const isColorPickerMode = (value: unknown): value is ColorPickerMode => value === 'wheel' || value === 'box';
 
-/**
- * Reads a persisted string. Touching `localStorage` at all can throw
- * (SecurityError when storage is disabled), not just `getItem` — both stay
- * inside the guard.
- */
+/** Guard access to localStorage itself; the property getter can throw before getItem. */
 const readStored = (key: string): string | null => {
   if (typeof window === 'undefined') {
     return null;

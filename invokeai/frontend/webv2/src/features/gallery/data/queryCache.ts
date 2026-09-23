@@ -97,12 +97,7 @@ const mapPageItems = (
   };
 };
 
-/**
- * Whether a patch takes matching items out of a listing with this filter.
- * Ranked similarity windows are board-agnostic (a move never changes
- * membership); a starred-only listing — the strip, or the grid under the
- * starred filter — loses an item the moment it is unstarred.
- */
+/** Ranked windows ignore board moves; starred-only listings lose items immediately when unstarred. */
 const patchRemovesItems = (filter: CanonicalGalleryItemsFilter, patch: GalleryItemCachePatch): boolean => {
   if (patch.kind === 'delete') {
     return true;
@@ -246,11 +241,7 @@ export const patchGalleryItemCaches = (client: QueryClient, patch: GalleryItemCa
   };
 };
 
-/**
- * Reads the board each requested item currently sits on, from whichever list
- * cache holds it. Optimistic moves capture this before patching so a rejected
- * ref can be put back without waiting for the reconciling refetch.
- */
+/** Capture cached source boards before optimistic moves so rejected refs can be restored before refetch. */
 export const getGalleryItemBoardIdsFromCaches = (
   client: QueryClient,
   refs: readonly GalleryItemRef[]
@@ -278,10 +269,8 @@ export const getGalleryItemBoardIdsFromCaches = (
 };
 
 /**
- * Reads the starred flag each requested item currently has, from whichever
- * list cache holds it. Optimistic star/unstar captures this before patching
- * so a totally-failed batch can restore each item's actual prior flag rather
- * than blanket-inverting the whole request.
+ * Capture each cached starred flag before mutation; failed batches must restore actual prior values rather than
+ * invert the request.
  */
 export const getGalleryItemStarredFromCaches = (
   client: QueryClient,
@@ -493,9 +482,8 @@ const runGalleryInvalidation = async (
 
   const rebuiltQueryHashes = new Set<string>();
 
-  // An ACTIVE multi-page window swaps in one span read — collapsing it
-  // rearranges the rows under the user; unwatched windows just collapse to
-  // their pinned page and regrow on the next mount.
+  // Rebuild active windows in one span to preserve viewport rows; unobserved windows collapse to their pinned
+  // page.
   for (const query of getGalleryItemListQueries(client, owner)) {
     const data = query.state.data;
 
@@ -530,9 +518,8 @@ interface GalleryInvalidationState {
 const galleryInvalidations = new WeakMap<QueryClient, Map<string, GalleryInvalidationState>>();
 
 /**
- * Coalesces same-tick mutation/result bursts and performs at most one trailing
- * pass when another request arrives during an active invalidation. This avoids
- * repeatedly cancelling and restarting the same observed Gallery refetch.
+ * Coalesce same-tick invalidations with at most one trailing pass to avoid cancelling and restarting observed
+ * refetches.
  */
 const scheduleGalleryInvalidation = (
   client: QueryClient,

@@ -337,9 +337,8 @@ describe('flowAdapters identity preservation', () => {
 
     expect(highlighted[0]?.animated).toBe(true);
     expect(highlighted[0]?.className).toBe('workflow-selected-node-edge');
-    // xyflow already lifts these edges with `elevateEdgesOnSelect`; adding a z-index of our own
-    // stacked them above the selected node, where their 20px interaction path swallowed clicks
-    // on its controls.
+    // Let xyflow elevate selected edges; extra z-index lets wide interaction paths intercept selected-node
+    // controls.
     expect(highlighted[0]?.zIndex).toBeUndefined();
     expect(highlighted[0]?.style).toEqual({ strokeWidth: 2 });
     expect(toFlowEdges(doc, highlighted, 'default', new Set(['a']))[0]).toBe(highlighted[0]);

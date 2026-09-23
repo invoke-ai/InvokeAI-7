@@ -82,8 +82,7 @@ import {
   normalizeGenerateSettings,
 } from './settings';
 
-// Generation policy registry keyed by model base. Display identity stays in @features/models;
-// graph topology stays explicit in graph.ts.
+// Models owns display identity; graph.ts owns graph topology.
 
 export interface SchedulerOption {
   value: string;
@@ -219,23 +218,13 @@ const FALLBACK_GENERATION_CONFIG: BaseGenerationConfig = {
   schedulerSet: 'standard',
   schedulerAppliesToGraph: false,
   guidanceLabel: 'CFG',
-  // Deliberately the widest range, not the narrowest: without a table `getGenerationValidationReasons`
-  // already blocks generation outright, so tightening the control here would only clamp a persisted
-  // value the user legitimately had -- FLUX Fill's 30 -- away while the capabilities are still in flight.
-  guidance: { min: 0, max: null },
+  // Use permissive display bounds while generation is blocked so loading cannot clamp persisted values.
+  guidance: { min: 1, max: null },
   negativePrompt: { visible: true, usage: 'never' },
   ui: { sdVaeOverride: false, colorCompensation: false, vaePrecision: false, seamless: false, cfgRescale: false },
 };
 
-/**
- * What the backend says about this model's architecture.
- *
- * The variant matters: FLUX Schnell wants 4 steps where dev wants 28, and the endpoint answers per
- * variant where they differ. Falling back keeps UI selectors crash-safe for external generators and
- * for an architecture the backend does not know. It is not a licence to generate with fallback
- * policy: `isArchitectureDescribed` is what blocks invocation for a supported base the served table
- * omits, and `resolveGenerateWidgetValues` will not even select such a model.
- */
+/** Variant-first display fallbacks prevent crashes but do not establish invocation eligibility. */
 const getBaseGenerationConfig = (
   model: (Pick<GenerateModelConfig, 'base' | 'type'> & { variant?: unknown }) | undefined
 ): BaseGenerationConfig => {
@@ -246,34 +235,13 @@ const getBaseGenerationConfig = (
   return getArchitectureGenerationConfig(model.base, model.variant) ?? FALLBACK_GENERATION_CONFIG;
 };
 
-/**
- * The pixel grid generation dimensions must land on, or `null` if the backend has no row for this
- * architecture.
- *
- * Variant-dependent: Wan A14B enforces multiples of 16 on its denoise node, TI2V-5B multiples of
- * 32 in the reference-image encoder. Passing the variant is how the canvas offers a size that
- * survives enqueue; omitting it falls back to the architecture's own row.
- *
- * `null` rather than a default so callers keep owning their own "nothing selected" behaviour --
- * the canvas has a different sensible answer there than a generation graph does.
- *
- * External generators are the exception: the backend describes the architectures it runs, not a
- * provider's API, so no row will ever arrive for them. They keep the generic grid, as they did
- * before the table existed -- answering `null` would stop recall and the canvas size sync for good.
- */
+/** Use variant-aware grids; return null for undescribed local architectures. External providers use a generic grid. */
 export const getDimensionGrid = (base: string, variant?: unknown): number | null =>
   base === 'external'
     ? FALLBACK_GENERATION_CONFIG.dimensions.grid
     : (getArchitectureFeatures(base, variant)?.dimension_grid ?? null);
 
-/**
- * Whether the served table actually describes this model's architecture.
- *
- * `isSupportedGenerateModel` answers from a static list of bases webv2 can build a graph for, which
- * says nothing about whether the *backend* described that base in this build. Generating on a base
- * the table omits would silently use `FALLBACK_GENERATION_CONFIG` -- grid 8, 30 steps, CFG 7 -- for
- * an architecture whose denoise node may enforce something else entirely.
- */
+/** A served architecture row does not imply frontend graph support. */
 export const isArchitectureDescribed = (model: Pick<GenerateModelConfig, 'base' | 'type'>): boolean =>
   model.type === 'external_image_generator' || getArchitectureFeatures(model.base) !== undefined;
 
@@ -284,18 +252,9 @@ const getNumber = (value: number | null | undefined, fallback: number): number =
 const clampGuidance = (value: number, guidance: BaseGenerationConfig['guidance']): number =>
   Math.min(guidance.max ?? Number.POSITIVE_INFINITY, Math.max(guidance.min, value));
 
-/**
- * The dimension rules for a model, optionally adjusted for PiD.
- *
- * `pidMode` is optional so the many callers that only care about the model keep
- * working unchanged. In PiD native mode the requested size is the 4x decode target, so
- * the grid is multiplied by 4 (keeping requested / 4 on the model's own grid) and the
- * optimal side becomes PiD's 2048 rather than the model's 1024.
- */
+/** Native PiD uses model grid × 4 and a 2048 target optimum. */
 export const getGenerationDimensions = (
-  // `variant` participates: `getBaseGenerationConfig` prefers a variant row where the backend
-  // answers differently, and `optimalSide` comes from that row's default canvas. Optional because
-  // an architecture always has its own row; omitting it asks for the architecture's answer.
+  // Use the variant-specific optimum, or the base row when no variant is supplied.
   model: (Pick<GenerateModelConfig, 'base' | 'type'> & { variant?: unknown }) | undefined,
   pidMode: PidMode = 'off'
 ) => {
@@ -315,16 +274,7 @@ export const getGenerationDimensions = (
   };
 };
 
-/**
- * The value the single guidance slider takes from a model record.
- *
- * `MainModelDefaultSettings` carries `cfg_scale` and `guidance` as separate fields, but the UI has
- * one control -- `guidanceLabel` is the whole difference between them. Which field feeds it depends
- * on the label: a guidance-distilled model records `cfg_scale: 1.0` meaning "CFG off" *and* the
- * guidance value it actually samples with, so preferring `cfg_scale` reads the off-switch as the
- * setting. FLUX dev records `{cfg_scale: 1.0, guidance: 3.5}` and `buildFluxGraph` wires
- * `guidance: settings.cfgScale`, so the old order generated at guidance 1.0 instead of 3.5.
- */
+/** guidanceLabel selects between guidance and cfg_scale defaults. */
 const getRecordGuidanceValue = (
   defaults: GenerateDefaultSettings | undefined,
   guidanceLabel: GuidanceLabel
@@ -339,10 +289,7 @@ export const getGenerationDefaults = (model: GenerateModelConfig | undefined) =>
 
   return {
     cfgRescaleMultiplier: getNumber(defaults?.cfg_rescale_multiplier, 0),
-    // Clamped like `steps` below and like the canvas size in `getDefaultGenerateSettings`: the
-    // model record's CFG field is editable up to 200 for every main model, so a Guidance-labelled
-    // architecture with a ceiling can be handed a default it would reject. Unclamped, the reset
-    // affordance and "reset all to model defaults" would both restore a blocked value.
+    // Clamp editable model defaults so reset cannot restore blocked values.
     cfgScale: clampGuidance(
       getNumber(getRecordGuidanceValue(defaults, config.guidanceLabel), config.defaults.cfgScale),
       config.guidance
@@ -453,8 +400,7 @@ export const getGenerationUiPolicy = (
     sdVaeVisible: config.ui.sdVaeOverride,
     vaePrecisionVisible: config.ui.vaePrecision,
     seedVisible,
-    // Shown for any base with a PiD decode node, whether or not PiD is currently on, so
-    // it can be turned on without hunting for the control.
+    // Show PiD controls on supported bases even while PiD is disabled.
     pidVisible: getIsPidSupportedBase(model?.base),
   };
 };
@@ -466,20 +412,8 @@ export const isSupportedGenerateModel = <T extends { base: string; type: string 
   (model.type === 'external_image_generator' && model.base === 'external');
 
 /**
- * Whether a model can be picked as *the* model to generate with.
- *
- * Narrower than `isSupportedGenerateModel`, which answers whether Generate understands the base at
- * all: Ideogram 4's unconditional branch is a `main` model of a supported base and can never run on
- * its own -- it is the thing the conditional branch is guided against, and it fills a component
- * slot. Offering it in the main picker would let a user assemble a complete-looking selection that
- * the backend refuses at enqueue. (Wan's low-noise expert is deliberately not excluded here: it is
- * a second expert of a model that still generates without it.)
- *
- * Every path that *offers or picks* a model uses this one: the picker, the command palette, and the
- * resolver that chooses a default when a project has no usable stored model -- that last one being
- * the worst place to land on an unrunnable model, since the user never chose it. Paths that merely
- * *look up* a model already selected (recall, save, the presets popover) keep using
- * `isSupportedGenerateModel`; narrowing those would make an already-chosen model unrenderable.
+ * Exclude unconditional Ideogram branches from selection but retain lookup support. Wan's other expert can span
+ * the full schedule.
  */
 export const isGenerateModelSelectable = <T extends ModelConfig>(model: T): model is T & GenerateModelConfig =>
   isSupportedGenerateModel(model) && !isIdeogram4UnconditionalBranch(model);
@@ -763,14 +697,7 @@ const qwen3VlEncoderSlot = (helpText: string, filter: GenerateComponentFilter): 
     filter,
   });
 
-/**
- * PiD's decoder and caption encoder.
- *
- * Both are only *required* while PiD is on, but the slots are always offered for a
- * PiD-capable base so the models can be chosen before switching PiD on. The decoder is
- * filtered to the base whose checkpoints are valid for the selected model — Z-Image
- * shows FLUX decoders, since it shares FLUX's VAE and ships none of its own.
- */
+/** Expose PiD slots before enabling it; Z-Image uses FLUX's decoder. */
 const pidDecoderSlot = (): ComponentSlotPolicy =>
   slot({
     key: 'pidDecoderModel',
@@ -809,10 +736,7 @@ const wanT5EncoderSlot = (helpText: string): ComponentSlotPolicy =>
     filter: (candidate) => candidate.type === 'wan_t5_encoder',
   });
 
-/**
- * The second (low-noise) expert of a Wan A14B mixture-of-experts pair. Never required: the
- * loader falls back to running the high-noise expert across the whole schedule.
- */
+/** The low-noise expert is optional; the selected expert can span the full schedule. */
 const wanLowNoiseSlot = (helpText: string): ComponentSlotPolicy =>
   slot({
     key: 'wanLowNoiseModel',
@@ -823,10 +747,7 @@ const wanLowNoiseSlot = (helpText: string): ComponentSlotPolicy =>
     filter: (candidate) => candidate.type === 'main' && candidate.base === 'wan',
   });
 
-/**
- * Ideogram 4's second transformer. Unlike Wan's low-noise expert this is not optional where it
- * applies: both branches run at every step, so a single-file main cannot generate without it.
- */
+/** Standalone Ideogram models require the second branch. */
 const ideogram4UnconditionalSlot = (helpText: string): ComponentSlotPolicy =>
   slot({
     key: 'ideogram4UnconditionalModel',
@@ -1092,8 +1013,7 @@ const getBaseComponentSectionPolicy = (
         },
       ]);
     case 'krea-2':
-      // A non-diffusers Krea-2 (single-file checkpoint / GGUF) carries only the transformer, so
-      // both submodels must be selected. Diffusers models bundle them, hence optional there.
+      // Bundled Krea models supply components; standalone models need a separate encoder and VAE.
       return createPolicy(model.format !== 'diffusers', [
         {
           ...vaeSlot(
@@ -1110,8 +1030,7 @@ const getBaseComponentSectionPolicy = (
         },
       ]);
     case 'ernie-image':
-      // A single-file ERNIE-Image transformer carries only itself, so its encoder and VAE are
-      // selected here; a diffusers pipeline directory bundles both and the loader reads them out.
+      // Bundled ERNIE models supply components; standalone models need explicit components.
       return createPolicy(model.format !== 'diffusers', [
         {
           ...mistralEncoderSlot(
@@ -1131,8 +1050,7 @@ const getBaseComponentSectionPolicy = (
         },
       ]);
     case 'ideogram-4':
-      // Comfy-Org's single files hold one transformer branch each, so a checkpoint main needs the
-      // other branch, the Qwen3-VL 8B encoder and the VAE. A diffusers pipeline bundles all three.
+      // Standalone Ideogram needs the other branch, encoder, and VAE.
       return createPolicy(model.format !== 'diffusers', [
         {
           ...ideogram4UnconditionalSlot(
@@ -1162,8 +1080,7 @@ const getBaseComponentSectionPolicy = (
         },
       ]);
     case 'wan':
-      // A GGUF Wan main carries only the transformer; the VAE and UMT5-XXL encoder must come
-      // from standalone models or a Diffusers component source.
+      // GGUF Wan needs external component sources.
       return createPolicy(model.format !== 'diffusers', [
         componentSourceSlot(
           (candidate) => isDiffusersMainForBase('wan')(candidate),
@@ -1202,14 +1119,7 @@ const getBaseComponentSectionPolicy = (
   }
 };
 
-/**
- * The component slots for a model, plus PiD's two slots on any PiD-capable base.
- *
- * Appended in a wrapper rather than written into each base's case: PiD supports six
- * bases, one of which (SDXL) has no component case at all, and each existing case keeps
- * its own bespoke validation untouched this way. Only the PiD slots are validated here
- * — the inner policy validates its own.
- */
+/** Add and validate PiD slots; each base policy retains ownership of its other component validation. */
 export const getComponentSectionPolicy = (
   model: GenerateModelConfig | undefined,
   settings: GenerateSettings
@@ -1308,11 +1218,7 @@ const isFluxKontextModel = (model: GenerateModelConfig | undefined): model is Ma
     model.name.toLowerCase().includes('kontext')
   );
 
-/**
- * Whether the model can consume reference images at all. Kept strict so the UI
- * only offers reference images where `getGenerationValidationReasons` would
- * accept them (e.g. Qwen Image requires the `edit` variant).
- */
+/** Picker and validation must agree on compatibility, including required variants. */
 export const isReferenceImageSupported = (model: GenerateModelConfig | undefined): boolean => {
   if (!model) {
     return false;
@@ -1328,9 +1234,7 @@ export const isReferenceImageSupported = (model: GenerateModelConfig | undefined
     return false;
   }
 
-  // Qwen-Image accepts reference images only as the `edit` variant -- the one feature the backend
-  // qualifies by variant, which is why it says so on the architecture row rather than inventing a
-  // variant row for it.
+  // The backend declares which reference-image features require a specific variant.
   return (
     features.reference_images_require_variant === null || model.variant === features.reference_images_require_variant
   );
@@ -1430,10 +1334,8 @@ export const isReferenceImageCompatibleWithModel = (
 };
 
 /**
- * Reference images carried over to `model`: dropped entirely when the model
- * does not support reference images, and re-targeted to a default config for
- * the new model (keeping the image and enabled state) when incompatible.
- * Returns the input array untouched when nothing changes.
+ * Drop unsupported references; retarget incompatible ones while preserving image/enabled state. No changes return
+ * the same array.
  */
 export const getCompatibleReferenceImages = (
   referenceImages: GenerateReferenceImage[],
@@ -1512,11 +1414,7 @@ const getSettingsWithCompatibleModelSelections = (
     }
   }
 
-  // Beside CLIP skip, and for the same reason: the value carried over from the previous model can
-  // be outside what this one's denoise node accepts, and every model-selection entry point passes
-  // here. The cleared-label toast names it, so the move is reported rather than silent.
-  // `getGuidanceBoundReason` still guards the paths that do not transition through here -- a
-  // project reopened on a model whose bounds changed, metadata recall, settings written by API.
+  // Clamp and report during selection; validation remains the backstop for other write paths.
   const clampedGuidance = clampGuidance(nextSettings.cfgScale, getBaseGenerationConfig(model).guidance);
 
   if (clampedGuidance !== nextSettings.cfgScale) {
@@ -1565,11 +1463,7 @@ const getSettingsWithCompatibleModelSelections = (
   return { settings: nextSettings, clearedLabels };
 };
 
-/**
- * Canonical transition for every Generate model-selection entry point.
- * Normalizes persisted values, reconciles incompatible selections, and applies
- * automatic component-source policy before callers persist the result.
- */
+/** Normalize, reconcile, and apply component policy before persisting model selection. */
 export const getGenerateModelSelectionResult = ({
   currentValues,
   model,
@@ -1640,8 +1534,7 @@ export const getGenerationModelAvailabilityReasons = (
 
 const getDimensionValidationReasons = (model: GenerateModelConfig, settings: GenerateSettings): string[] => {
   const reasons: string[] = [];
-  // The PiD-adjusted grid: in native mode the requested size is the 4x target, so it must
-  // be a multiple of grid * 4 for requested / 4 to land on the model's own grid.
+  // Native target dimensions must be divisible by model grid × 4.
   const dimensions = getGenerationDimensions(model, settings.pidMode);
 
   if (!Number.isFinite(settings.width) || settings.width < dimensions.min || settings.width > dimensions.max) {
@@ -1659,13 +1552,7 @@ const getDimensionValidationReasons = (model: GenerateModelConfig, settings: Gen
   return reasons;
 };
 
-/**
- * PiD guards beyond "are the models selected", which the component slots already cover.
- *
- * PiD is only wired for text-to-image here, so a mode left on for an unsupported base is
- * reported rather than silently ignored — otherwise the user would get an ordinary decode
- * and wonder why the image is not 4x.
- */
+/** Reject unsupported PiD instead of silently using ordinary decode. */
 const getPidValidationReasons = (model: GenerateModelConfig, settings: GenerateSettings): string[] => {
   if (settings.pidMode === 'off') {
     return [];
@@ -1687,8 +1574,8 @@ const getPidValidationReasons = (model: GenerateModelConfig, settings: GenerateS
 const getReferenceImageValidationReasons = (model: GenerateModelConfig, settings: GenerateSettings): string[] => {
   const reasons: string[] = [];
   const enabled = settings.referenceImages.filter((referenceImage) => referenceImage.isEnabled);
-  // The limit the reference-image panel enforces, so validation cannot pass what the panel refuses.
-  // A model without reference images is reported per image below rather than as "at most 0".
+  // Use the shared reference limit, but report unsupported images individually rather than a misleading maximum of
+  // zero.
   const maxReferenceImages = getMaxReferenceImages(model);
 
   if (isReferenceImageSupported(model) && enabled.length > maxReferenceImages) {
@@ -1729,18 +1616,7 @@ const getReferenceImageValidationReasons = (model: GenerateModelConfig, settings
   return reasons;
 };
 
-/**
- * How this guidance value breaks the bound the denoise node behind it enforces, or `null`.
- *
- * Model selection already clamps, so this is the backstop for everything that does not transition
- * through it: a project reopened after its model's bounds changed, metadata recall (which carries
- * any `cfg_scale >= 1`), or settings written straight to the record. Without it the graph compiles
- * and the queue rejects it with a node-level error the user cannot act on -- `flux2_denoise.guidance`
- * is `le=20`, and FLUX Fill's recommended 30 is a value a project genuinely holds.
- *
- * Returned as one message rather than a list: the two bounds cannot both be broken, and the Generate
- * widget shows it on the field itself, where a list has nowhere to go.
- */
+/** Validate guidance for writes bypassing model selection; return null or one error message. */
 export const getGuidanceBoundReason = (
   model: Pick<GenerateModelConfig, 'base' | 'name' | 'type'> & { variant?: unknown },
   cfgScale: number
@@ -1758,15 +1634,11 @@ export const getGuidanceBoundReason = (
   return null;
 };
 
-/**
- * Rules that belong to one model family and have no home in the component-slot policies:
- * the slot machinery validates model selections, not scalar parameters or LoRA pairings.
- */
+/** Scalar/LoRA family rules are separate from component-slot validation. */
 const getModelFamilyValidationReasons = (model: MainModelConfig, settings: GenerateSettings): string[] => {
   const reasons: string[] = [];
 
-  // The rebalance weights are free text forwarded straight to the backend's _parse_weights().
-  // Catching a malformed string here beats failing mid-generation on a queued item.
+  // Parse raw rebalance strings before forwarding them to the backend.
   if (
     model.base === 'krea-2' &&
     settings.krea2RebalanceEnabled &&
@@ -1775,9 +1647,7 @@ const getModelFamilyValidationReasons = (model: MainModelConfig, settings: Gener
     reasons.push(`Krea-2 rebalance weights must be ${KREA2_REBALANCE_WEIGHT_COUNT} comma-separated numbers.`);
   }
 
-  // Each Ideogram 4 override is forwarded verbatim whenever it is set, and normalization only
-  // checks that a persisted value is finite -- a value stored before these controls were bounded
-  // survives a reload and fails `ideogram4_denoise` at enqueue.
+  // Finite persisted Ideogram overrides still need range validation.
   if (model.base === 'ideogram-4') {
     for (const [label, value, min, max] of [
       ['steps', settings.ideogram4Steps, IDEOGRAM4_STEPS_MIN, IDEOGRAM4_STEPS_MAX],
@@ -1791,8 +1661,7 @@ const getModelFamilyValidationReasons = (model: MainModelConfig, settings: Gener
     }
   }
 
-  // A14B and 5B Wan LoRAs are not interchangeable — the layer patcher fails on a tensor-shape
-  // mismatch. getActiveCompatibleLoras would silently drop a mismatched one, so say so instead.
+  // Report Wan LoRA family mismatches rather than silently drop selected LoRAs.
   if (model.base === 'wan') {
     for (const lora of settings.loras) {
       if (lora.isEnabled && !isWanLoraTargetingMain(lora.model.variant, model.variant)) {
@@ -1805,16 +1674,9 @@ const getModelFamilyValidationReasons = (model: MainModelConfig, settings: Gener
 };
 
 export const getGenerationValidationReasons = (model: GenerateModelConfig, settings: GenerateSettings): string[] => {
-  // Before anything else, and before the unsupported-model reason: without the capability table
-  // every answer below is the fallback's, not the architecture's -- a grid of 8 for a base that
-  // rejects anything but 16, and "no supported model" for a model that is perfectly supported.
-  // This is the one function all three compile paths share (graph.ts, compileCanvasGraph.ts,
-  // previewGraph.ts), so gating here is what makes the canvas and the topbar fail closed too,
-  // rather than only the Generate widget's own resolver.
+  // All compilers share this validator; check capabilities before model-specific policy.
   if (!hasArchitectureCapabilities()) {
-    // Deliberately not state-aware: `core` cannot reach the store that knows loading from
-    // failed. Saying "not yet" would be a promise this cannot keep -- after a failed fetch
-    // nothing re-kicks it except the Generate panel's retry, so name that instead.
+    // Keep core independent of the load-state store; failures direct callers to retry.
     return [
       'Model capabilities are not available. Generation is blocked until they load; if this persists, retry from the Generate panel.',
     ];
@@ -1824,9 +1686,7 @@ export const getGenerationValidationReasons = (model: GenerateModelConfig, setti
     return ['Generate needs a supported model before it can be invoked.'];
   }
 
-  // A loaded table is not the same as a described architecture: a base inside `SUPPORTED_GENERATE_BASES`
-  // that this backend build does not serve a row for would otherwise compile against the fallback
-  // config. Reference images already fail closed this way; so does everything else now.
+  // Reject supported bases missing from the loaded table rather than compile fallback policy.
   if (!isArchitectureDescribed(model)) {
     return [`The backend does not describe the ${model.base} architecture, so it cannot be generated with.`];
   }

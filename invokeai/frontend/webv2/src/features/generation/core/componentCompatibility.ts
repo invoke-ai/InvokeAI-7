@@ -77,12 +77,7 @@ export const isAnimaQwen3Encoder: GenerateComponentFilter = (model) =>
 export const isNonAnimaQwen3Encoder: GenerateComponentFilter = (model) =>
   model.type === 'qwen3_encoder' && model.variant !== 'qwen3_06b';
 
-/**
- * ERNIE-Image's encoder is recorded as a `mistral_encoder` too, but it is a different architecture
- * (Ministral 3B, hidden 3072) from the Mistral Small 3 encoders FLUX.2 was trained against. Offering
- * either one to the other family produces a shape error deep in denoise, so the variant separates
- * them on both sides.
- */
+/** Ministral and Mistral encoders require distinct variants. */
 const MINISTRAL_3B_VARIANT = 'ministral3_3b';
 
 export const isFlux2MistralEncoder: GenerateComponentFilter = (model) =>
@@ -91,21 +86,14 @@ export const isFlux2MistralEncoder: GenerateComponentFilter = (model) =>
 export const isErnieImageMistralEncoder: GenerateComponentFilter = (model) =>
   model.type === 'mistral_encoder' && model.variant === MINISTRAL_3B_VARIANT;
 
-/**
- * The two Qwen3-VL encoders install under one model type and are not interchangeable: Krea-2 needs
- * the 4B (hidden 2560), Ideogram 4 the 8B, whose 13 tapped layers make a 53248-wide feature vector.
- * Offering the wrong one produces a shape mismatch inside the first denoising step.
- */
+/** Krea's 4B encoder is incompatible with Ideogram's 8B encoder. */
 export const isKrea2Qwen3VlEncoder: GenerateComponentFilter = (model) =>
   model.type === 'qwen3_vl_encoder' && model.variant === 'qwen3_vl_4b';
 
 export const isIdeogram4Qwen3VlEncoder: GenerateComponentFilter = (model) =>
   model.type === 'qwen3_vl_encoder' && model.variant === 'qwen3_vl_8b';
 
-/**
- * Ideogram 4's unconditional branch. Only a single file can be one: a diffusers pipeline holds both
- * branches, and the conditional file is the one selected as the main model.
- */
+/** Exclude only single-file unconditional branches; Diffusers bundles both branches. */
 export const isIdeogram4UnconditionalBranch: GenerateComponentFilter = (model) =>
   model.type === 'main' &&
   model.base === 'ideogram-4' &&
@@ -173,19 +161,7 @@ export const getCompatibleDiffusersComponentSource = <T extends GenerateComponen
 ): T | undefined =>
   source && isCompatibleDiffusersComponentSourceForModel(selectedModel, source) ? source : undefined;
 
-/**
- * Whether an architecture's decode accepts this VAE, as the backend declares it.
- *
- * The single reader of `vae.accepted` from the served capability table — the same `VaeFacet` the
- * loaders and `accepts_vae()` read in `architectures/defs/<base>.py`. Which VAE families a base can
- * decode used to be hand-written here as a `switch` over literal base lists, and that copy drifted:
- * it offered Anima a FLUX VAE, which decodes a WAN21_16 latent in FLUX's basis and returns a
- * magenta smear rather than an error (6.10 dB PSNR, measured).
- *
- * Fail closed, like `resolveGenerateWidgetValues` and `getGenerationValidationReasons`: with no
- * table, or no row for this base, nothing is offered. Choosing a VAE the graph then rejects is
- * worse than an empty picker that fills in as soon as the table lands.
- */
+/** Backend rows own VAE compatibility; missing rows fail closed. */
 const acceptsVae = (base: string, model: GenerateComponentCandidate, variant?: unknown): boolean => {
   if (model.type !== 'vae') {
     return false;
@@ -216,12 +192,7 @@ export const isVaeAcceptedByBase =
   (model) =>
     acceptsVae(base, model, variant);
 
-/**
- * The one VAE rule for a Generate model. The component picker and its validation filter with
- * `isVaeAcceptedByBase(model.base, model.variant)` and the graph builder with this, so a VAE the user can select is
- * always one the graph sends -- the served row decides for both, including cross-base families such
- * as a Qwen-Image VAE installed under `anima`.
- */
+/** Picker, validator, and compiler share the served VAE rule. */
 export const isVaeCompatibleWithGenerateModel = (model: GenerateModelConfig, vae: VaeModelConfig): boolean => {
   if (model.type === 'external_image_generator') {
     return false;

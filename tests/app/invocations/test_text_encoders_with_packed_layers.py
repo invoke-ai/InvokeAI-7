@@ -114,3 +114,66 @@ def test_the_node_reserves_the_dequant_transient_and_patches_quantized_encoders_
 
     assert patching["force_sidecar_patching"] is sidecar
     assert bool(encoder.working_mem_bytes) is working_memory
+
+
+@pytest.mark.parametrize(
+    ("packed", "model_format", "sidecar", "working_memory"),
+    [
+        (True, ModelFormat.Checkpoint, True, True),
+        (False, ModelFormat.Checkpoint, False, False),
+        (False, ModelFormat.GGUFQuantized, True, False),
+    ],
+    ids=["nvfp4_checkpoint", "dense_checkpoint", "gguf"],
+)
+def test_the_krea2_node_reserves_the_dequant_transient_and_patches_quantized_encoders_as_sidecars(
+    monkeypatch: pytest.MonkeyPatch,
+    packed: bool,
+    model_format: ModelFormat,
+    sidecar: bool,
+    working_memory: bool,
+) -> None:
+    """Krea-2's Qwen3-VL encoder became loadable from GGUF, which makes this node's quantized path
+    reachable for the first time -- and its nvfp4 path was already reachable through the ComfyUI
+    single-file encoder.
+
+    A direct LoRA patch cannot write a packed weight: a GGMLTensor reports `dtype=uint8` (so the
+    patcher's fp8 check misses it) and a packed `nelement()`, so every encoder LoRA layer is dropped
+    over an apparent shape mismatch that blames the LoRA. It is also VRAM-dependent -- with the
+    layers left on CPU the patcher picks the sidecar anyway -- so the same graph would otherwise
+    produce different images under memory pressure.
+
+    Kept out of the table above because this node loads its tokenizer first and enters that handle
+    as a context manager, which the shared harness does not model.
+    """
+    from invokeai.app.invocations.text_encoder.krea2_text_encoder import Krea2TextEncoderInvocation
+
+    class _LoadedTokenizer:
+        def __enter__(self):
+            return MagicMock()
+
+        def __exit__(self, *_exc):
+            return False
+
+    encoder = _LoadedModel(_encoder(packed))
+    context = MagicMock()
+    # The node loads the tokenizer first, then the encoder.
+    context.models.load.side_effect = [_LoadedTokenizer(), encoder]
+    context.models.get_config.return_value = SimpleNamespace(format=model_format)
+    patching: dict = {}
+
+    def stop(**kwargs):
+        patching.update(kwargs)
+        raise _StopAtPatching
+
+    monkeypatch.setattr(LayerPatcher, "apply_smart_model_patches", stop)
+    node = Krea2TextEncoderInvocation.model_construct(
+        prompt="a prompt",
+        qwen3_vl_encoder=SimpleNamespace(text_encoder=SimpleNamespace(), tokenizer=SimpleNamespace(), loras=[]),
+        mask=None,
+    )
+
+    with pytest.raises(_StopAtPatching):
+        node._encode(context)
+
+    assert patching["force_sidecar_patching"] is sidecar
+    assert bool(encoder.working_mem_bytes) is working_memory

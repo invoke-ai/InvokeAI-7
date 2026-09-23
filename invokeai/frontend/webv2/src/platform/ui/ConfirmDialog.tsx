@@ -3,11 +3,7 @@ import { useCallback, useRef, useState, type ReactNode } from 'react';
 
 import { Button, CloseButton } from './Button';
 
-/**
- * Controlled confirmation dialog for consequential actions. The confirm
- * button shows a pending state while `onConfirm` runs; errors are left to the
- * caller (usually surfaced as a notification) and the dialog closes either way.
- */
+/** Closes after confirmation even on error; callers must report failures. */
 export const ConfirmDialog = ({
   body,
   confirmLabel,

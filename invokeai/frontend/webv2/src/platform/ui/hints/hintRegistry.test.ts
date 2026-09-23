@@ -2,16 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { FEATURE_HINTS } from './hintRegistry';
 
-/**
- * Keeps the registry and the `hints.*` catalog in step in BOTH directions. The
- * component builds its keys by template literal, so the generic
- * `translationKeys.test.ts` scanner cannot see them — a heading that never got
- * written would otherwise surface to users as the literal string
- * `hints.tileOverlap.heading`.
- *
- * The legacy frontend drifted exactly this way: 85 feature ids, 84 catalog
- * entries, and a `hrf` key that resolved to nothing.
- */
+/** Check registry/catalog parity both ways; generic static-key scanning misses interpolated hint keys. */
 
 const enModules = import.meta.glob('../../../../public/locales/en.json', { eager: true, import: 'default' });
 const en = Object.values(enModules)[0] as Record<string, unknown>;

@@ -73,13 +73,10 @@ export const GalleryPickerView = ({
   const [activeKey, setActiveKey] = useState<ActiveKeyState>(undefined);
   const [columnCount, setColumnCount] = useState(GALLERY_PICKER_MIN_COLUMNS);
   const [isUploading, setIsUploading] = useState(false);
-  // Live read ports: an upload resolves after an await and must judge capacity
-  // against the selection as it stands then; the sentinel observer wants one
-  // stable callback rather than a rebuild per fetched page.
+  // Async uploads need current selection capacity; the sentinel needs a stable callback across page fetches.
   const selectionRef = useRef(selection);
   const loadMoreRef = useRef(data.loadMore);
-  // The previous scope's items stay on screen, dimmed, while a new board or
-  // search loads; skeletons only ever show before anything has loaded.
+  // Keep prior items dimmed during scope changes; show skeletons only before the first result.
   const [lastItems, setLastItems] = useState<GalleryItem[] | null>(null);
 
   // eslint-disable-next-line react/refs

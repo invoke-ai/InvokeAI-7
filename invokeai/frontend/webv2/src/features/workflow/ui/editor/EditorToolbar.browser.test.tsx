@@ -41,14 +41,7 @@ const render = async (nodeOpacity: number) => {
   });
 };
 
-/**
- * The painted pixels, not the serialized colour string.
- *
- * One of these buttons resolves its fill straight from a token and the other
- * through a `color-mix()`, so Chrome reports the same grey as `oklch(l 0 0)` for
- * one and `oklab(l 0 0)` for the other. Rasterising both settles the question
- * the assertion is actually asking: do they fill the same?
- */
+/** Compare rasterized fills because equivalent token/color-mix colors serialize into different color spaces. */
 const paintedFill = (element: Element): string => {
   const canvas = document.createElement('canvas');
   const context = canvas.getContext('2d', { willReadFrequently: true })!;
@@ -75,19 +68,13 @@ afterEach(async () => {
 
 describe('editor toolbar', () => {
   it('keeps every button on one shared square toolbar box', async () => {
-    // The node-opacity button is hand-rolled rather than a ToolbarButton, so it
-    // never picked up the primitive's size. That is not a local defect: Toolbar
-    // is a column Stack, and its default stretch alignment let one `sm` button
-    // widen every sibling while they kept their height, turning the whole
-    // strip into rectangles wider than the canvas one.
+    // Match custom control sizing; one wider child stretches every button in the column toolbar.
     await render(1);
 
     expect(new Set(buttonBoxes())).toEqual(new Set(['28x28']));
   });
 
   it('states node opacity the way the tool buttons state themselves', async () => {
-    // Its "on" used to be a bespoke accent icon colour, while every other
-    // button in the strip fills. One control type, one vocabulary.
     await render(0.5);
     const opacity = host!.querySelector<HTMLButtonElement>('button[aria-label="Node opacity"]')!;
     const activeTool = host!.querySelector<HTMLButtonElement>(

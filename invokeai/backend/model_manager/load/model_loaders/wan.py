@@ -16,6 +16,7 @@ from typing import Any, Optional
 
 import torch
 
+from invokeai.backend.model_manager.checkpoint_prefix import CheckpointPrefix
 from invokeai.backend.model_manager.configs.base import Checkpoint_Config_Base, Diffusers_Config_Base
 from invokeai.backend.model_manager.configs.factory import AnyModelConfig
 from invokeai.backend.model_manager.configs.main import (
@@ -27,7 +28,6 @@ from invokeai.backend.model_manager.load.load_default import ModelLoader
 from invokeai.backend.model_manager.load.model_loader_registry import ModelLoaderRegistry
 from invokeai.backend.model_manager.load.model_loaders.comfyui_state_dict_utils import (
     _dequantize_comfyui_fp8,
-    _strip_comfyui_prefix,
     _strip_quantization_metadata,
 )
 from invokeai.backend.model_manager.load.model_loaders.generic_diffusers import GenericDiffusersLoader
@@ -427,12 +427,7 @@ class WanGGUFCheckpointModel(ModelLoader):
         sd = gguf_sd_loader(model_path, compute_dtype=compute_dtype)
 
         # Strip ComfyUI-style prefixes if present.
-        for prefix in ("model.diffusion_model.", "diffusion_model."):
-            if any(isinstance(k, str) and k.startswith(prefix) for k in sd.keys()):
-                sd = {
-                    (k[len(prefix) :] if isinstance(k, str) and k.startswith(prefix) else k): v for k, v in sd.items()
-                }
-                break
+        sd = CheckpointPrefix.detect(sd).strip(sd)
 
         _drop_benign_extra_keys(sd, "GGUF state dict", InvokeAILogger.get_logger(self.__class__.__name__))
 
@@ -505,7 +500,7 @@ class WanCheckpointModel(ModelLoader):
         model_dtype = TorchDevice.choose_bfloat16_safe_dtype(target_device)
 
         sd = load_file(str(model_path))
-        sd = _strip_comfyui_prefix(sd)
+        sd = CheckpointPrefix.detect(sd).strip(sd)
         _drop_benign_extra_keys(sd, "Wan checkpoint", logger)
 
         dequantized = _dequantize_comfyui_fp8(sd, model_dtype, f"Wan checkpoint {model_path.name}")

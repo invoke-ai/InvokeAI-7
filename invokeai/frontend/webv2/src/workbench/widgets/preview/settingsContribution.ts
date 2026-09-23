@@ -23,5 +23,7 @@ export const previewSettingsContribution: SettingsContribution = {
       ],
     },
   ],
+  // Both fit the gear's popover; the full dialog stays one click further.
+  quick: ['filmstripVisible', 'comparisonMode'],
   load: () => import('./settingsBindings'),
 };

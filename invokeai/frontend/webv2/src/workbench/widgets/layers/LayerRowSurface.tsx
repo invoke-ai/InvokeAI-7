@@ -5,11 +5,6 @@ import { Row } from '@platform/ui';
 
 const LAYER_ROW_BACKGROUND_TRANSITION = 'background min(40ms, var(--wb-motion-duration-fast)) ease-out';
 
-/**
- * The shared visual shell of every Layers-tree row — layer, group, and
- * projected child alike: one rhythm, one background transition, and the
- * arrow cursor of a tree item rather than the recipe's pointer.
- */
 export const LayerRowSurface = ({
   active,
   children,

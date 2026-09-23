@@ -17,8 +17,7 @@ const ALLOWED_HOSTS = process.env.INVOKEAI_DEV_HOSTS?.split(',')
   .filter(Boolean);
 const PROJECT_ROOT = fileURLToPath(new URL('.', import.meta.url));
 
-// Modules both routes fetch eagerly. Grouping keeps a module with two
-// consumers from being split into its own request on each route.
+// Group eager dependencies shared by both routes to avoid extra chunk requests.
 const ROUTE_SHARED_MODULES = [
   '/features/fonts/data/keys.ts',
   '/features/fonts/launchpad.tsx',
@@ -65,11 +64,7 @@ const ROUTE_SHARED_MODULES = [
   '/workbench/settings/SettingsDialogHost.tsx',
 ] as const;
 
-// Modules every editor boot fetches (topbar UI plus the realtime runtime the
-// widget hosts share), folded into one chunk so they cost bytes, not requests.
-// The generation runtime, capability store and prompt-attention modules are
-// imported by the app shell and by several lazy widget chunks; left to the
-// bundler, each set becomes its own request on every editor route.
+// Group dependencies shared by the editor shell and lazy widgets to reduce boot requests.
 const EDITOR_BOOT_SHARED_MODULES = [
   '/app/GalleryUiAdapter.tsx',
   '/features/gallery/picker.ts',
@@ -95,16 +90,13 @@ const EDITOR_BOOT_SHARED_MODULES = [
   '/features/generation/queries.ts',
   '/features/generation/runtime.ts',
   '/features/generation/ui/promptFields/promptAttentionHotkeys.ts',
-  // Shared by the Generate/Upscale/Video seed row and workflow seed inputs; left to rolldown it
-  // splits into a chunk every editor route would fetch separately.
   '/platform/ui/SeedInput.tsx',
   '/workbench/shell/topbar/LayoutPresetAdminDialogs.tsx',
   '/workbench/shell/topbar/LayoutPresetStrip.tsx',
   '/workbench/shell/topbar/ProjectSwitcher.tsx',
 ] as const;
 
-// Widget metadata shared by the registry, settings and palette; kept apart
-// from editor boot UI so Launchpad settings cannot pull in the editor.
+// Keep widget metadata separate so Launchpad settings cannot import editor boot UI.
 const WIDGET_METADATA_MODULES = [
   '/features/gallery/settingsContribution.ts',
   '/features/queue/widget.ts',
@@ -138,9 +130,7 @@ const GALLERY_STATE_MODULES = [
   '/features/queue/data/events.ts',
 ] as const;
 
-// The widget hosts the editor mounts once at boot, in one chunk instead of
-// one request per host. Small helpers shared by lazy widget chunks ride along:
-// every editor route loads this chunk, Launchpad never does.
+// Group boot-mounted widget hosts and their shared helpers; Launchpad must not load this chunk.
 const WIDGET_HOST_MODULES = [
   '/platform/react/focusIfUnclaimed.ts',
   '/features/queue/ui/QueueDataRuntime.tsx',
@@ -148,8 +138,7 @@ const WIDGET_HOST_MODULES = [
   '/workbench/widgets/image-map/ImageMapDataRuntime.tsx',
 ] as const;
 
-// Canvas and Layers already load these interaction/form modules together.
-// Keep their shared text-tool consumers from creating extra activation requests.
+// Group Canvas/Layer interaction dependencies to avoid extra text-tool activation requests.
 const CANVAS_LAYER_SHARED_MODULES = [
   '/features/workflow/core/layerWorkflow.ts',
   '/workbench/canvas-operations/react.ts',
@@ -246,8 +235,7 @@ const getLegacyChunkName = (id: string): string | null => {
 
 export default defineConfig({
   define: {
-    // A boolean, not a code string: Vitest 5 browser mode injects string
-    // values as string literals, and "false" is truthy.
+    // Use a boolean: Vitest browser mode treats string defines as truthy string literals.
     __CANVAS_GOLDEN_UPDATE__: false,
   },
   base: './',

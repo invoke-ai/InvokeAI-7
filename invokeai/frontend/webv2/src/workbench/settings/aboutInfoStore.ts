@@ -6,12 +6,7 @@ import {
 import { createExternalStore } from '@platform/state/externalStore';
 import { apiFetchJson, getApiErrorMessage } from '@platform/transport/http';
 
-/**
- * System information for the settings About section: the server's version and
- * its installed dependency versions (with the synthesized `CUDA` entry), plus
- * — for admins — the redacted runtime config, mirroring the legacy About
- * modal's blob. Pull-based: nothing here changes without a server restart.
- */
+/** Pull server/dependency versions and admin-only redacted runtime config; these change only after restart. */
 
 export interface AboutInfoSnapshot {
   /** The server's app version, or null while unknown. */

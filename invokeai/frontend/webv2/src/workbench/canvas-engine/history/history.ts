@@ -1,24 +1,7 @@
 /**
- * Engine-owned canvas history: a bounded undo/redo stack of opaque entries.
- *
- * Project-level undo (`pushUndo` in the reducer) deliberately no longer covers
- * the canvas (Phase 0) — pixels never cross the reducer boundary, so the reducer
- * can't cheaply snapshot them. Instead the canvas keeps its OWN history here,
- * living entirely inside the engine. Each {@link HistoryEntry} is a self-contained
- * undo/redo pair (a paint {@link createImagePatchEntry | pixel patch} or a
- * structural {@link createDocumentPatchEntry | document patch}) plus a byte cost
- * used to bound memory.
- *
- * Budgets (evict oldest beyond EITHER dimension):
- * - at most {@link HISTORY_MAX_ENTRIES} undo entries, and
- * - at most {@link HISTORY_BYTE_BUDGET} bytes across both stacks.
- *
- * Re-entrancy: while an entry's `undo`/`redo` runs, {@link History.isApplying}
- * is `true`. The engine's paint/apply paths check it and skip recording, and
- * `push` is a hard no-op during apply — so replaying an entry can never spawn a
- * new entry (which would corrupt the stacks).
- *
- * Zero React, zero DOM, zero import-time side effects.
+ * Engine-owned opaque undo/redo entries account for pixel and structural edits. Evict oldest entries beyond {@link
+ * HISTORY_MAX_ENTRIES} or {@link HISTORY_BYTE_BUDGET} across both stacks. During replay `isApplying` prevents
+ * recording and `push` is a no-op, avoiding recursive history.
  */
 
 /** Max number of undo entries retained before the oldest is evicted. */
@@ -64,10 +47,8 @@ export interface History {
   /** Records a new entry (clearing the redo stack) and enforces the budgets. No-op while applying. */
   push(entry: HistoryEntry): void;
   /**
-   * Replaces the most recent undo entry in place (adjusting the byte total),
-   * used to coalesce a rapid burst of same-target edits — e.g. arrow-key nudges —
-   * into a single reversible step. Falls back to {@link push} when the undo stack
-   * is empty. Clears the redo stack like `push`. No-op while applying.
+   * Replaces the latest undo entry for coalescing, adjusts bytes and clears redo. Falls back to {@link push} if
+   * empty; no-op during replay.
    */
   amendLast(entry: HistoryEntry): void;
   /** Reverts the most recent entry (moving it onto the redo stack). No-op when empty or already applying. */
@@ -174,8 +155,6 @@ export const createHistory = (opts: CreateHistoryOptions = {}): History => {
     undoStack.push(entry);
     undoBytes += entry.bytes;
     enforceBudgets();
-    // A push always clears redo and grows undo, so both booleans may have moved
-    // (canUndo→true on the first push, canRedo→false when redo was non-empty).
     notify();
   };
 
@@ -209,9 +188,8 @@ export const createHistory = (opts: CreateHistoryOptions = {}): History => {
       return;
     }
     if (!entry.replayFailureAtomic) {
-      // Legacy callbacks may mutate their domain before an observer throws.
-      // Move first so a retry cannot apply that mutation twice. If replay
-      // clears history, `clear()` owns the notification and the reset wins.
+      // Legacy replay may mutate before observer failure: move first to prevent duplicate retries. A replay-time
+      // clear owns reset and notification.
       undoStack.pop();
       undoBytes -= entry.bytes;
       redoStack.push(entry);
@@ -249,9 +227,7 @@ export const createHistory = (opts: CreateHistoryOptions = {}): History => {
     if (undoStack.at(-1) !== entry) {
       return;
     }
-    // Move the entry only after replay succeeds. A fallible callback (for
-    // example detached raster-cache preparation) may throw before applying
-    // anything; keeping the stacks and byte totals untouched makes retry exact.
+    // Fallible replay moves entries only after success, preserving stacks and byte totals for an exact retry.
     undoStack.pop();
     undoBytes -= entry.bytes;
     redoStack.push(entry);

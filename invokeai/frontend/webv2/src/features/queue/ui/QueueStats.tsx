@@ -3,11 +3,6 @@ import { useTranslation } from 'react-i18next';
 
 import { useQueueCounts } from './queueDataStore';
 
-/**
- * The four headline counts (done / failed / canceled / total) as a row of cards.
- * Numbers are tabular so they stay aligned as the queue churns; the failed count
- * turns danger-colored only when there's something to call out.
- */
 const QueueStatCard = ({ value, label, danger }: { value: number; label: string; danger?: boolean }) => (
   <Stat.Root size="sm" colorScheme={danger ? 'red' : undefined} gap="0">
     <Stat.Label fontSize="xs" order="2">

@@ -1,15 +1,6 @@
 /**
- * The one rule for undoing an optimistic write: restore a slot only if it still
- * holds exactly what this mutation painted there.
- *
- * Between the optimistic write and the server's rejection, anything may have
- * written to the same slot — a generation completing, a refetch landing, a
- * second mutation on the same item. Restoring unconditionally throws that newer
- * work away, and it fails silently.
- *
- * This lived in four places (twice in the gallery query cache, plus the widget-
- * value snapshot and the per-item rollback), each with a comment pointing at the
- * others. One wrong copy is data loss, so there is one copy.
+ * Roll back only if the slot still equals this mutation's optimistic value; unconditional restore would erase
+ * newer writes.
  */
 
 /** What a rollback needs to know about a slot: what was there, and what we put there. */
@@ -21,13 +12,7 @@ export interface CompareAndSwapEntry<Value> {
 }
 
 export interface CompareAndSwapOptions {
-  /**
-   * Treat a slot that reads `undefined` as revertible.
-   *
-   * Correct where `undefined` means "no local copy of this exists" rather than
-   * "someone cleared it" — a per-item lookup that simply misses, for instance.
-   * Wrong where `undefined` is a value another writer could have set.
-   */
+  /** Enable only when undefined means no local copy, never when another writer could deliberately clear the slot. */
   treatUnknownAsUnclaimed?: boolean;
 }
 

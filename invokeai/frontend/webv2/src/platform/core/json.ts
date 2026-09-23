@@ -7,13 +7,7 @@ const isJsonObject = (value: unknown): value is Record<string, unknown> => {
   return prototype === Object.prototype || prototype === null;
 };
 
-/**
- * Structural equality for JSON-safe values.
- *
- * Unknown inputs are accepted at integration boundaries. Distinct non-JSON
- * objects are unequal; the same value or object identity still follows
- * `Object.is`.
- */
+/** Compare JSON structurally; distinct non-JSON objects are unequal, while identical references follow Object.is. */
 export const areJsonValuesStructurallyEqual = (left: unknown, right: unknown): boolean => {
   if (Object.is(left, right)) {
     return true;

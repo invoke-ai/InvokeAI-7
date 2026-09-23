@@ -105,9 +105,6 @@ describe('workflow library page cache keying', () => {
 
     await cache.listLibraryWorkflowsCached(first);
 
-    // A single fetch populates the cache under a tag-order-normalized key, so a
-    // differently-ordered request for the same tag set reads the same entry
-    // synchronously without triggering another fetch.
     expect(api.listLibraryWorkflows).toHaveBeenCalledTimes(1);
     expect(cache.getCachedWorkflowPage(second)).not.toBeNull();
     expect(cache.getCachedWorkflowPage(second)).toBe(cache.getCachedWorkflowPage(first));

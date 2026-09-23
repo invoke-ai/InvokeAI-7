@@ -285,11 +285,8 @@ describe('classifyGalleryUpload', () => {
 });
 
 describe('getGalleryUploadAccept', () => {
-  // Spelled out rather than derived, and deliberately not sampled: this list is the
-  // frontend's copy of ACCEPTED_VIDEO_EXTENSIONS + ACCEPTED_AUDIO_EXTENSIONS in
-  // invokeai/app/api/routers/videos.py, and the picker greying out a file the route would
-  // have taken is the bug this exists to catch. A "trim to the common formats" edit must
-  // fail here, so an arrayContaining sample will not do.
+  // Assert every accepted video/audio extension from videos.py; sampled expectations would miss picker
+  // restrictions.
   it('offers every container and audio format the video upload route ingests', () => {
     expect(getGalleryUploadAccept(['video']).split(',')).toEqual([
       'video/*',

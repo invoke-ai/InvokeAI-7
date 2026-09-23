@@ -1,8 +1,5 @@
 /**
- * A structural history entry: a pair of reducer actions (forward + inverse)
- * dispatched to undo/redo a document-shape change. Unlike a pixel
- * {@link createImagePatchEntry | image patch}, it carries no bitmaps, so
- * structural edits share the engine-owned undo stack with paint edits at a
+ * Structural history stores forward/inverse reducer actions without bitmaps, sharing the pixel undo stack at
  * nominal byte cost.
  */
 

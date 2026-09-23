@@ -29,11 +29,7 @@ export interface RegionalGuidanceSupport {
   referenceImages: RegionalReferenceImageKind | null;
 }
 
-/**
- * The graph half of the support matrix: what a region's reference images become, and what to call
- * the base. Whether a region's negative is masked is the backend's answer (`regional_negative`), not
- * this table's -- see {@link getRegionalGuidanceSupport}.
- */
+/** Graph code owns node mapping; the backend owns regional-negative support. */
 const REGIONAL_GUIDANCE_SUPPORT: Record<
   RegionalGuidanceBase,
   Pick<RegionalGuidanceSupport, 'label' | 'referenceImages'>
@@ -48,30 +44,12 @@ const REGIONAL_GUIDANCE_SUPPORT: Record<
   anima: { label: 'Anima', referenceImages: null },
 };
 
-/**
- * True when `base` supports regional guidance at all.
- *
- * The narrowing to `RegionalGuidanceBase` stays: everything below this point dispatches on the
- * literal to pick node types and field names, and that is graph knowledge the backend has no say
- * in. Only the *answer* comes from the capability table now.
- */
+/** Frontend graph keys are narrower than backend capability answers. */
 export const isRegionalGuidanceSupportedForBase = (base: string): base is RegionalGuidanceBase =>
-  // Both halves, or the predicate is unsound: it narrows to the key set of the matrix below, while
-  // the backend's answer is what decides. A base the backend newly declares supported but that has
-  // no row here would satisfy the old check, and `REGIONAL_GUIDANCE_SUPPORT[base]` would then hand
-  // back `undefined` typed as a support object. Requiring the row keeps the type honest and makes
-  // the drift a missing feature rather than a crash.
+  // Require both backend support and a local graph row before narrowing the type.
   (getArchitectureFeatures(base)?.supports_regional_guidance ?? false) && base in REGIONAL_GUIDANCE_SUPPORT;
 
-/**
- * What a base's regions honour, or `null` for a base with no regional path.
- *
- * Negatives come from the capability table: the SD family's `compel` path masks both polarities,
- * while the FLUX / FLUX.2 / Krea-2 / Z-Image / Anima denoisers mask positive conditioning only --
- * Z-Image and Anima accept a negative list but discard its masks, so a "regional" negative there
- * would act globally. Auto-negative re-encodes the positive prompt as a masked negative, so it needs
- * the same path. The rest of the row is graph knowledge the backend has no say in.
- */
+/** Auto-negative requires negative-mask support. */
 export const getRegionalGuidanceSupport = (base: string | null): RegionalGuidanceSupport | null => {
   if (base === null || !isRegionalGuidanceSupportedForBase(base)) {
     return null;
@@ -167,11 +145,7 @@ const conditioningNodeType = (base: RegionalGuidanceBase, modelVariant?: string 
 const promptFields = (base: RegionalGuidanceBase): readonly string[] =>
   base === 'sdxl' ? ['prompt', 'style'] : ['prompt'];
 
-/**
- * The encoder-input fields to COPY from the global conditioning node onto a
- * regional one, so the region shares the same CLIP / T5 encoders (legacy copies
- * the CLIP/T5 edges verbatim). `mask` is wired separately, so it's excluded here.
- */
+/** Copy global encoder fields; wire masks separately. */
 const copyEncoderFields = (base: RegionalGuidanceBase, modelVariant?: string | null): readonly string[] => {
   switch (base) {
     case 'sdxl':
@@ -191,11 +165,6 @@ const copyEncoderFields = (base: RegionalGuidanceBase, modelVariant?: string | n
   }
 };
 
-/**
- * Copies every edge feeding `sourceNodeId`'s `fields` onto `target` (same source,
- * same field). Used to share the global conditioning node's CLIP/T5 encoder
- * inputs with a per-region conditioning node.
- */
 const copyEncoderEdges = (
   graph: BackendGraphContract,
   sourceNodeId: string,
@@ -252,19 +221,7 @@ const addRegionalConditioning = (
   return node;
 };
 
-/**
- * Grafts regional guidance onto a built canvas base graph. Assumes every input is
- * already validated for `base` (supported base, non-empty region, resolved
- * reference-image models) — use {@link getRegionalGuidanceRejectionReason} to
- * filter first. Wires, per enabled region:
- * - `alpha_mask_to_tensor` from the uploaded region mask;
- * - positive prompt → regional conditioning → `pos_cond_collect`;
- * - negative prompt → regional conditioning → `neg_cond_collect`;
- * - autoNegative → `invert_tensor_mask` + positive prompt re-encoded →
- *   `neg_cond_collect` (push the positive prompt away outside the region);
- * - reference images → mask-scoped `ip_adapter` (SD) / `flux_redux` (FLUX);
- * each gated by the base's {@link RegionalGuidanceSupport}.
- */
+/** Inputs must be prevalidated and gated by regional support. */
 export const addRegionalGuidance = (graph: BackendGraphContract, options: AddRegionalGuidanceOptions): void => {
   const { base, modelVariant, regions, transformRegionalPositiveConditioning } = options;
   const denoise = graph.nodes[DENOISE_NODE_ID];
@@ -320,8 +277,7 @@ export const addRegionalGuidance = (graph: BackendGraphContract, options: AddReg
       addEdge(graph, negCond, 'conditioning', negCondCollect, 'item');
     }
 
-    // autoNegative: re-encode the POSITIVE prompt over the INVERTED mask into the
-    // negative collector — pushes the region's prompt away everywhere outside it.
+    // Auto-negative encodes positive text over the inverted region mask.
     if (region.autoNegative && region.positivePrompt && support.autoNegative && negCondCollect) {
       const invert = addNode(graph, { id: `rg_invert_mask_${region.id}`, type: 'invert_tensor_mask' });
       addEdge(graph, maskToTensor, 'mask', invert, 'mask');
@@ -381,19 +337,8 @@ export const addRegionalGuidance = (graph: BackendGraphContract, options: AddReg
 };
 
 /**
- * Returns the rejection reason for a regional-guidance region, or `null` when it
- * can contribute to generation:
- * - a base with no regional path (sd-3 / cogview / …) → "unsupported model";
- * - no drawn mask content → "no region";
- * - nothing the base's {@link RegionalGuidanceSupport} honours → "empty".
- *
- * A negative prompt or reference images the base does not honour are simply not
- * submitted (the layer keeps them for other models); the region still
- * contributes whatever the base does honour. Auto-negative never decides on its
- * own: it only re-encodes an existing positive prompt.
- *
- * `referenceImageCount` counts references the caller has already resolved to a
- * usable image + model, matching how control layers work.
+ * Omit unsupported content without erasing stored values. Count resolved references; auto-negative requires
+ * positive text.
  */
 export const getRegionalGuidanceRejectionReason = (params: {
   layerName: string;

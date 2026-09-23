@@ -8,6 +8,7 @@ import accelerate
 import torch
 from transformers import AutoTokenizer, Qwen3ForCausalLM
 
+from invokeai.backend.model_manager.checkpoint_prefix import CheckpointPrefix
 from invokeai.backend.model_manager.configs.base import Checkpoint_Config_Base, Diffusers_Config_Base
 from invokeai.backend.model_manager.configs.controlnet import ControlNet_Checkpoint_ZImage_Config
 from invokeai.backend.model_manager.configs.factory import AnyModelConfig
@@ -31,12 +32,17 @@ from invokeai.backend.model_manager.load.load_default import (
 )
 from invokeai.backend.model_manager.load.model_loader_registry import ModelLoaderRegistry
 from invokeai.backend.model_manager.load.model_loaders.generic_diffusers import GenericDiffusersLoader
+from invokeai.backend.model_manager.load.quantized_embedding import materialize_quantized_embedding
 from invokeai.backend.model_manager.taxonomy import (
     AnyModel,
     BaseModelType,
     ModelFormat,
     ModelType,
     SubModelType,
+)
+from invokeai.backend.model_manager.util.llamacpp_keys import (
+    convert_llamacpp_decoder_keys,
+    is_llamacpp_decoder_state_dict,
 )
 from invokeai.backend.quantization.fp8_scaled import (
     QKV_SPLIT_SIDECHANNEL_SUFFIXES,
@@ -82,6 +88,12 @@ from invokeai.backend.util.state_dict_loading import load_state_dict_ignoring_ex
 
 def _remap_z_image_layer_paths(layer_names: Any) -> dict[str, list[str]]:
     """Map native Z-Image layer paths to their diffusers equivalents.
+
+    A probe, where FLUX.2's equivalent was replaced by the conversion's own record. The difference is
+    that this converter *raises* on a fused ``qkv`` whose rows are not divisible by three rather than
+    leaving the key alone, so a probe and the conversion cannot disagree about it -- and the second
+    caller below works on payloads popped out *before* the conversion, which no record of that
+    conversion could cover.
 
     ``_quantization_metadata`` names its layers in the checkpoint's own scheme, but the scales are
     extracted after the state dict has been renamed. Rather than restating the rename rules — which
@@ -279,7 +291,6 @@ class ZImageDiffusersModel(GenericDiffusersLoader):
         from transformers import Qwen3Config, Qwen3ForCausalLM
 
         from invokeai.backend.quantization.sdnq.loaders import sdnq_sd_loader
-        from invokeai.backend.quantization.sdnq.sdnq_tensor import SDNQTensor
         from invokeai.backend.util.logging import InvokeAILogger
 
         logger = InvokeAILogger.get_logger(self.__class__.__name__)
@@ -361,11 +372,7 @@ class ZImageDiffusersModel(GenericDiffusersLoader):
             "SDNQ Z-Image Qwen3 text encoder", missing, unexpected, allowed_missing={"lm_head.weight"}
         )
 
-        # Dequantize embed_tokens weight for embedding lookups
-        embed_tokens_weight = model.model.embed_tokens.weight
-        if isinstance(embed_tokens_weight, SDNQTensor):
-            dequantized = embed_tokens_weight.get_dequantized_tensor()
-            model.model.embed_tokens.weight = torch.nn.Parameter(dequantized, requires_grad=False)
+        if materialize_quantized_embedding(model.model.embed_tokens, ram_cache=self._ram_cache):
             logger.info("Dequantized embed_tokens weight for embedding lookups")
 
         # Handle tied weights
@@ -483,20 +490,7 @@ class ZImageCheckpointModel(ModelLoader):
 
         # Some Z-Image checkpoint files have keys prefixed with "diffusion_model." or
         # "model.diffusion_model." (ComfyUI-style format). Check if we need to strip this prefix.
-        prefix_to_strip = None
-        for prefix in ["model.diffusion_model.", "diffusion_model."]:
-            if any(k.startswith(prefix) for k in sd.keys() if isinstance(k, str)):
-                prefix_to_strip = prefix
-                break
-
-        if prefix_to_strip:
-            stripped_sd = {}
-            for key, value in sd.items():
-                if isinstance(key, str) and key.startswith(prefix_to_strip):
-                    stripped_sd[key[len(prefix_to_strip) :]] = value
-                else:
-                    stripped_sd[key] = value
-            sd = stripped_sd
+        sd = CheckpointPrefix.detect(sd).strip(sd)
 
         # Determine safe dtype based on target device capabilities
         target_device = TorchDevice.choose_torch_device()
@@ -774,20 +768,7 @@ class ZImageGGUFCheckpointModel(ModelLoader):
 
         # Some Z-Image GGUF models have keys prefixed with "diffusion_model." or
         # "model.diffusion_model." (ComfyUI-style format). Check if we need to strip this prefix.
-        prefix_to_strip = None
-        for prefix in ["model.diffusion_model.", "diffusion_model."]:
-            if any(k.startswith(prefix) for k in sd.keys() if isinstance(k, str)):
-                prefix_to_strip = prefix
-                break
-
-        if prefix_to_strip:
-            stripped_sd = {}
-            for key, value in sd.items():
-                if isinstance(key, str) and key.startswith(prefix_to_strip):
-                    stripped_sd[key[len(prefix_to_strip) :]] = value
-                else:
-                    stripped_sd[key] = value
-            sd = stripped_sd
+        sd = CheckpointPrefix.detect(sd).strip(sd)
 
         # Convert GGUF format keys to diffusers format
         sd = _convert_z_image_gguf_to_diffusers(sd)
@@ -908,20 +889,7 @@ class ZImageSDNQCheckpointModel(ModelLoader):
 
         # Some Z-Image SDNQ models may have keys prefixed with "diffusion_model." or
         # "model.diffusion_model." (ComfyUI-style format). Check if we need to strip this prefix.
-        prefix_to_strip = None
-        for prefix in ["model.diffusion_model.", "diffusion_model."]:
-            if any(k.startswith(prefix) for k in sd.keys() if isinstance(k, str)):
-                prefix_to_strip = prefix
-                break
-
-        if prefix_to_strip:
-            stripped_sd = {}
-            for key, value in sd.items():
-                if isinstance(key, str) and key.startswith(prefix_to_strip):
-                    stripped_sd[key[len(prefix_to_strip) :]] = value
-                else:
-                    stripped_sd[key] = value
-            sd = stripped_sd
+        sd = CheckpointPrefix.detect(sd).strip(sd)
 
         # Check if conversion is needed (original format vs diffusers format)
         needs_conversion = any(k.startswith("x_embedder.") for k in sd.keys() if isinstance(k, str))
@@ -1538,12 +1506,9 @@ class Qwen3EncoderGGUFLoader(ModelLoader):
         # via apply_custom_layers_to_model() and the partial loading cache
         sd = gguf_sd_loader(model_path, compute_dtype=compute_dtype)
 
-        # Check if this is llama.cpp format (blk.X.) or PyTorch format (model.layers.X.)
-        is_llamacpp_format = any(k.startswith("blk.") for k in sd.keys() if isinstance(k, str))
-
-        if is_llamacpp_format:
+        if is_llamacpp_decoder_state_dict(sd):
             logger.info("Detected llama.cpp GGUF format, converting keys to PyTorch format")
-            sd = self._convert_llamacpp_to_pytorch(sd)
+            sd = convert_llamacpp_decoder_keys(sd)
 
         # Determine Qwen model configuration from state dict
         # Count the number of layers by looking at layer keys
@@ -1642,14 +1607,7 @@ class Qwen3EncoderGGUFLoader(ModelLoader):
         # GGMLTensor wrappers will be dequantized on-the-fly during inference
         load_state_dict_ignoring_extras(model, sd, source="Qwen3 GGUF text encoder", assign=True, allow_missing=True)
 
-        # Dequantize embed_tokens weight - embedding lookups require indexed access
-        # which quantized GGMLTensors can't efficiently provide (no __torch_dispatch__ for embedding)
-        from invokeai.backend.quantization.gguf.ggml_tensor import GGMLTensor
-
-        embed_tokens_weight = model.model.embed_tokens.weight
-        if isinstance(embed_tokens_weight, GGMLTensor):
-            dequantized = embed_tokens_weight.get_dequantized_tensor()
-            model.model.embed_tokens.weight = torch.nn.Parameter(dequantized, requires_grad=False)
+        if materialize_quantized_embedding(model.model.embed_tokens, ram_cache=self._ram_cache):
             logger.info("Dequantized embed_tokens weight for embedding lookups")
 
         # Handle tied weights - llama.cpp GGUF doesn't include lm_head.weight when embeddings are tied
@@ -1700,84 +1658,6 @@ class Qwen3EncoderGGUFLoader(ModelLoader):
 
         return model
 
-    def _convert_llamacpp_to_pytorch(self, sd: dict[str, Any]) -> dict[str, Any]:
-        """Convert llama.cpp GGUF keys to PyTorch/HuggingFace format for Qwen models.
-
-        llama.cpp format:
-        - blk.X.attn_q.weight -> model.layers.X.self_attn.q_proj.weight
-        - blk.X.attn_k.weight -> model.layers.X.self_attn.k_proj.weight
-        - blk.X.attn_v.weight -> model.layers.X.self_attn.v_proj.weight
-        - blk.X.attn_output.weight -> model.layers.X.self_attn.o_proj.weight
-        - blk.X.attn_q_norm.weight -> model.layers.X.self_attn.q_norm.weight (Qwen3 QK norm)
-        - blk.X.attn_k_norm.weight -> model.layers.X.self_attn.k_norm.weight (Qwen3 QK norm)
-        - blk.X.ffn_gate.weight -> model.layers.X.mlp.gate_proj.weight
-        - blk.X.ffn_up.weight -> model.layers.X.mlp.up_proj.weight
-        - blk.X.ffn_down.weight -> model.layers.X.mlp.down_proj.weight
-        - blk.X.attn_norm.weight -> model.layers.X.input_layernorm.weight
-        - blk.X.ffn_norm.weight -> model.layers.X.post_attention_layernorm.weight
-        - token_embd.weight -> model.embed_tokens.weight
-        - output_norm.weight -> model.norm.weight
-        - output.weight -> lm_head.weight (if not tied)
-        """
-        import re
-
-        key_map = {
-            "attn_q": "self_attn.q_proj",
-            "attn_k": "self_attn.k_proj",
-            "attn_v": "self_attn.v_proj",
-            "attn_output": "self_attn.o_proj",
-            "attn_q_norm": "self_attn.q_norm",  # Qwen3 QK normalization
-            "attn_k_norm": "self_attn.k_norm",  # Qwen3 QK normalization
-            "ffn_gate": "mlp.gate_proj",
-            "ffn_up": "mlp.up_proj",
-            "ffn_down": "mlp.down_proj",
-            "attn_norm": "input_layernorm",
-            "ffn_norm": "post_attention_layernorm",
-        }
-
-        new_sd: dict[str, Any] = {}
-        blk_pattern = re.compile(r"^blk\.(\d+)\.(.+)$")
-
-        for key, value in sd.items():
-            if not isinstance(key, str):
-                new_sd[key] = value
-                continue
-
-            # Handle block layers
-            match = blk_pattern.match(key)
-            if match:
-                layer_idx = match.group(1)
-                rest = match.group(2)
-
-                # Split rest into component and suffix (e.g., "attn_q.weight" -> "attn_q", "weight")
-                parts = rest.split(".", 1)
-                component = parts[0]
-                suffix = parts[1] if len(parts) > 1 else ""
-
-                if component in key_map:
-                    new_component = key_map[component]
-                    new_key = f"model.layers.{layer_idx}.{new_component}"
-                    if suffix:
-                        new_key += f".{suffix}"
-                    new_sd[new_key] = value
-                else:
-                    # Unknown component, keep as-is with model.layers prefix
-                    new_sd[f"model.layers.{layer_idx}.{rest}"] = value
-                continue
-
-            # Handle non-block keys
-            if key == "token_embd.weight":
-                new_sd["model.embed_tokens.weight"] = value
-            elif key == "output_norm.weight":
-                new_sd["model.norm.weight"] = value
-            elif key == "output.weight":
-                new_sd["lm_head.weight"] = value
-            else:
-                # Keep other keys as-is
-                new_sd[key] = value
-
-        return new_sd
-
 
 @ModelLoaderRegistry.register(base=BaseModelType.Any, type=ModelType.Qwen3Encoder, format=ModelFormat.SDNQQuantized)
 class Qwen3EncoderSDNQLoader(ModelLoader):
@@ -1818,7 +1698,6 @@ class Qwen3EncoderSDNQLoader(ModelLoader):
     ) -> AnyModel:
         from transformers import Qwen3Config, Qwen3ForCausalLM
 
-        from invokeai.backend.quantization.sdnq.sdnq_tensor import SDNQTensor
         from invokeai.backend.util.logging import InvokeAILogger
 
         logger = InvokeAILogger.get_logger(self.__class__.__name__)
@@ -1912,11 +1791,7 @@ class Qwen3EncoderSDNQLoader(ModelLoader):
         missing, unexpected = model.load_state_dict(sd, strict=False, assign=True)
         raise_on_incomplete_sdnq_load("SDNQ Qwen3 encoder", missing, unexpected, allowed_missing={"lm_head.weight"})
 
-        # Dequantize embed_tokens weight - embedding lookups require indexed access
-        embed_tokens_weight = model.model.embed_tokens.weight
-        if isinstance(embed_tokens_weight, SDNQTensor):
-            dequantized = embed_tokens_weight.get_dequantized_tensor()
-            model.model.embed_tokens.weight = torch.nn.Parameter(dequantized, requires_grad=False)
+        if materialize_quantized_embedding(model.model.embed_tokens, ram_cache=self._ram_cache):
             logger.info("Dequantized embed_tokens weight for embedding lookups")
 
         # Handle tied weights

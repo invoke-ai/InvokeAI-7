@@ -3,9 +3,6 @@ import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react';
 import { Box, chakra, HStack, Text } from '@chakra-ui/react';
 import { Fragment, useCallback } from 'react';
 
-// Accent-tinted translucent fills, so the strip reads the same on the layer
-// panels and on popover/dialog surfaces that share the solid fills' color,
-// and sits in the menus' cool-tinted interaction family.
 const TAB_HOVER_PROPS = { bg: 'gray.hoverTint/8', color: 'fg' };
 const TAB_SHOWN_BG = 'gray.hoverTint/15';
 
@@ -39,15 +36,8 @@ const focusSibling = (event: ReactKeyboardEvent<HTMLElement>) => {
 };
 
 /**
- * The workbench's segment-style tab strip: a row of pill tabs over a panel the
- * caller owns. Ids follow one convention — tab `${idBase}-tab-${id}`, panel
- * `${idBase}-panel` — so the caller's `role="tabpanel"` region wires itself
- * with `id={segmentTabsPanelId(idBase)}` and
- * `aria-labelledby={segmentTabsTabId(idBase, activeId)}`. Clicking the active
- * tab calls `onSelect` again, which lets a collapsible block treat it as a
- * toggle; `showActivePanel={false}` keeps the active tab selected and focusable
- * while dropping the shown look (a collapsed block). `trailing` renders after
- * the tablist, outside it, for chevrons and action buttons.
+ * Wire caller-owned panels with segmentTabsPanelId/segmentTabsTabId. Active-tab clicks call onSelect again;
+ * showActivePanel=false retains selection. trailing sits outside the tablist.
  */
 export const SegmentTabs = <T extends string>({
   activeId,

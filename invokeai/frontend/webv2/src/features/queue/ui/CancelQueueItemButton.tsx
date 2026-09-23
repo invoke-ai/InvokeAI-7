@@ -13,10 +13,8 @@ import { refreshQueue } from './queueDataStore';
 import { useQueueUi } from './QueueUiContext';
 
 /**
- * Cancel a single queue item by its backend id. Works for any in-flight item
- * regardless of which client submitted it; the coordinator settles local items
- * off the resulting `queue_item_status_changed` event. `stopPropagation` keeps a
- * click from also toggling the row it sits in.
+ * Cancel by backend ID across clients; local coordination follows status events. Stop propagation to preserve row
+ * state.
  */
 export const CancelQueueItemButton = ({ itemId }: { itemId: number }) => {
   const { t } = useTranslation();

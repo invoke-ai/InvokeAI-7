@@ -45,17 +45,7 @@ import {
   WorkflowRequirementsList,
 } from './WorkflowRequirementsList';
 
-/**
- * The library's right rail: everything about the selected workflow that
- * decides whether to open it — sample output, description, tags, and the
- * models it needs — plus the one action that follows from that answer. When
- * models are missing the primary button installs them instead of opening a
- * workflow that would fail on its first run; everything rarer (duplicate,
- * fork, download, delete) lives behind the overflow menu.
- *
- * The panel updates in place across selection changes: no keys, no remounts,
- * so switching cards never flashes the rail.
- */
+/** Install missing models before offering Open; keep the detail rail mounted across selections to prevent flashing. */
 
 const DETAIL_RAIL_WIDTH = '18rem';
 const THUMBNAIL_ASPECT_RATIO = 3 / 2;
@@ -109,10 +99,7 @@ export const WorkflowLibraryDetailPanel = ({
   // thumbnail without an effect resetting the flag.
   const [failedThumbnailUrl, setFailedThumbnailUrl] = useState<string | null>(null);
   const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
-  // A duplicate is two round trips with nothing on screen between them, and a
-  // copy of a default lands in a category the user is not looking at — so the
-  // menu item has to hold itself closed until the copy exists, or an impatient
-  // second click mints a second copy.
+  // Guard duplicate creation until the copy exists, including copies landing outside the visible category.
   const [isDuplicatePending, setIsDuplicatePending] = useState(false);
   const isDuplicatePendingRef = useRef(false);
 
@@ -139,8 +126,7 @@ export const WorkflowLibraryDetailPanel = ({
 
   const handleThumbnailError = useCallback(() => setFailedThumbnailUrl(entry?.item.thumbnail_url ?? null), [entry]);
 
-  // Add Models is a different page, so the library has to get out of the way —
-  // the same handoff a fork into a new project makes.
+  // Close the library before navigating to Add Models.
   const handleFindModel = useCallback(
     (query: string) => {
       openAddModels(query);
@@ -187,11 +173,7 @@ export const WorkflowLibraryDetailPanel = ({
   }, [deps, installMany, notify, resolved, t]);
   const handleInstall = useCallback(() => void install(), [install]);
 
-  /**
-   * Copies the library *record* — not the project graph, and never the
-   * original — so a bundled default can be adapted without the editor ever
-   * loading it.
-   */
+  /** Duplicate the library record directly without loading or modifying the active project graph. */
   const duplicate = useCallback(async () => {
     if (!entry || isDuplicatePendingRef.current) {
       return;
@@ -320,8 +302,6 @@ export const WorkflowLibraryDetailPanel = ({
       await deleteLibraryWorkflow(entry.item.workflow_id, owner.signal);
 
       assertAccountScopeCurrent(owner);
-      // The invalidation refetches the visible pages; the shell only has to
-      // let go of the selection this row held.
       invalidateWorkflowLibraryCache();
       onDeleted();
     } catch (error) {
@@ -433,12 +413,10 @@ export const WorkflowLibraryDetailPanel = ({
             ) : null}
           </Stack>
 
-          {/* The one place the whole name has to be readable — the rail is what
-              the user consults before opening a workflow, so it wraps instead
-              of truncating. `anywhere` so a delimiter-free name breaks too;
-              containment is the wrap plus the scroll area's zeroed content
-              min-width, not a clamp. (Grid cards still truncate: there the name
-              is a glance, not the answer.) */}
+          {/*
+           * Wrap full names, including delimiter-free strings, in the detail rail; zero content min-width permits
+           * containment without truncation.
+           */}
           <Text fontSize="sm" fontWeight="600" minW="0" overflowWrap="anywhere">
             {name}
           </Text>
@@ -470,9 +448,6 @@ export const WorkflowLibraryDetailPanel = ({
       <Stack borderColor="border.subtle" borderTopWidth="1px" gap="2" p="2.5">
         <HStack gap="2" minW="0">
           {installableCount > 0 ? (
-            // The theme's warning tokens — same soft amber fill as the card's
-            // missing-model badge and the requirements list's "installable"
-            // rows, so the one signal reads the same everywhere it appears.
             <Button
               bg="bg.warning"
               color="fg.warning"

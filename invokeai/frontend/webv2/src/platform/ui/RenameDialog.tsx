@@ -4,12 +4,7 @@ import { useCallback, useState, type FormEvent } from 'react';
 import { Button, CloseButton } from './Button';
 import { Field } from './Field';
 
-/**
- * Controlled single-field rename dialog. `onSubmit` only fires for a
- * non-empty name that actually changed; it may be async, in which case the
- * submit button shows a pending state and errors keep the dialog open so the
- * caller's message (usually a toast) can be acted on.
- */
+/** Submit only changed, nonempty names; async failures keep the dialog open and callers surface the error. */
 export const RenameDialog = ({
   finalFocusEl,
   initialName,
@@ -49,8 +44,7 @@ export const RenameDialog = ({
         await onSubmit(name);
         onClose();
       } catch {
-        // The caller surfaced the failure (toast/notification); stay open so
-        // the name is not lost.
+        // Keep the entered name after failure; the caller reports the error.
       } finally {
         setIsPending(false);
       }

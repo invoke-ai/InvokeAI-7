@@ -44,9 +44,9 @@ The requirements below are rough guidelines for best performance. GPUs with less
   You don't need to do this if you are installing with the [Invoke Launcher](../installation).
 :::
 
-Invoke requires python `3.11` through `3.12`. If you don't already have one of these versions installed, we suggest installing `3.12`, as it will be supported for longer.
+Invoke requires python `3.12`. Newer versions, `3.13` included, are not supported yet.
 
-Check that your system has an up-to-date Python installed by running `python3 --version` in the terminal (Linux, macOS) or cmd/powershell (Windows).
+Check which version you have by running `python3 --version` in the terminal (Linux, macOS) or cmd/powershell (Windows).
 
 :::tip[Installing Python]{icon="seti:python"}
   <Tabs syncKey="operatingSystem">
@@ -60,7 +60,7 @@ Check that your system has an up-to-date Python installed by running `python3 --
     <TabItem label="MacOS" icon="apple">
       <Steps>
         1. Install python with [an official installer].
-        2. If model installs fail with a certificate error, you may need to run this command (changing the python version to match what you have installed): `/Applications/Python\ 3.11/Install\ Certificates.command`
+        2. If model installs fail with a certificate error, you may need to run this command: `/Applications/Python\ 3.12/Install\ Certificates.command`
         3. If you haven't already, you will need to install the XCode CLI Tools by running `xcode-select --install` in a terminal.
       </Steps>
     </TabItem>
@@ -173,6 +173,15 @@ If, after restarting the app, this doesn't improve your performance, either rest
   scores per call, Krea-2 almost 13 GB.
 :::
 
+:::note[Idle process pegging one CPU core]
+  After GPU work, ROCm's HSA runtime can leave its internal `AsyncEventsLoop` thread busy-spinning
+  on one CPU core indefinitely instead of blocking - a livelock in `libhsa-runtime64.so`, not an
+  Invoke bug (see [ROCm/ROCm#6522] and [ROCm/TheRock#7051]). It inflates `rocm-smi`'s GPU-busy%
+  reading too, so it can look like a stuck generation when the queue is actually idle. If you see
+  this, export `HSA_TOOLS_DISABLE_REGISTER=1` before launching Invoke; unset it only if you need
+  `rocprof`/ROCTracer-based kernel profiling, which this disables.
+:::
+
 Run `rocm-smi` on your system's command line verify that drivers and ROCm are installed. If this command fails, or doesn't report versions, you will need to install them.
 
 Go to the [ROCm Documentation] and carefully follow the instructions for your system to get everything installed.
@@ -196,3 +205,5 @@ An alternative to installing ROCm locally is to use a [ROCm docker container] to
 [Intel client GPU install guide]: https://dgpu-docs.intel.com/driver/client/overview.html
 [ROCm Documentation]: https://rocmdocs.amd.com
 [ROCm docker container]: https://rocmdocs.amd.com/en/latest/Deep_learning/Deep_learning.html#docker-containers
+[ROCm/ROCm#6522]: https://github.com/ROCm/ROCm/issues/6522
+[ROCm/TheRock#7051]: https://github.com/ROCm/TheRock/issues/7051

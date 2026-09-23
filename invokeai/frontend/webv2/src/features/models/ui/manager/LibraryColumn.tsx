@@ -56,12 +56,8 @@ export const LibraryColumn = () => {
   const hasSelection = selectedKeys.size > 0;
   const canSelectAll = models.length > 0;
   const deferredFilters = useDeferredValue(filters);
-  // The same filter logic the list renders with (deferred identically), so
-  // "Select all" matches exactly what the user sees (search, type/base,
-  // missing-only). Still gated on there being a selection: with none, the
-  // checkbox reads unchecked whatever the filter says, and the click path
-  // below filters on demand — so an empty selection costs nothing on every
-  // search keystroke.
+  // Match Select all to the list's deferred filters. Avoid filtering on every keystroke when nothing is selected;
+  // compute on click instead.
   const filteredKeys = useMemo(
     () =>
       hasSelection ? filterModels(models, deferredFilters, missingModelKeys).map((model) => model.key) : EMPTY_KEYS,
@@ -78,9 +74,7 @@ export const LibraryColumn = () => {
       return;
     }
 
-    // Filtered here rather than read from the memo: with nothing selected the
-    // memo is deliberately empty, and this is the one moment the full filtered
-    // set is actually needed.
+    // Compute on click because the selection memo intentionally stays empty with no selection.
     const keys = filterModels(models, filters, missingModelKeys).map((model) => model.key);
 
     // Union: selections made under a previous filter survive, so the delete
@@ -185,18 +179,11 @@ export const LibraryColumn = () => {
         onChange={(nextFilters) => updateModelsUi({ filters: nextFilters })}
       />
 
-      {/* Docked under the search rather than floating over the list: the
-          selection controls belong to the same block as the filter that
-          decides what "all" means, and a bar that appeared over the last two
-          rows hid the models it was about to act on. Always mounted so
-          starting a selection never shifts the list under the pointer. */}
+      {/* Keep controls mounted below search to prevent selection-induced layout shifts or obscured model rows. */}
       <HStack borderBottomWidth={1} flexShrink={0} gap="2" minH="8" px="3" py="1.5">
         <Checkbox.Root
           aria-label={t('models.selectAll')}
-          // A filter matching nothing must not read "all selected" — with a
-          // selection held entirely out of view, indeterminate is the honest
-          // state, and the click clears it (the only act left with nothing
-          // visible to add).
+          // No visible matches means indeterminate, not all selected; clicking clears the hidden selection.
           checked={hasSelection ? (hasUnselectedFiltered || filteredKeys.length === 0 ? 'indeterminate' : true) : false}
           colorPalette="accent"
           disabled={!canSelectAll}

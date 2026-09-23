@@ -28,8 +28,7 @@ describe('hasDynamicPromptSyntax', () => {
     expect(hasDynamicPromptSyntax('a __colou?__ __animals/[dc]ogs__ ball')).toBe(true);
   });
 
-  // A comment is only stripped by going through the expander, and upstream has
-  // no escape for `#`, so any prompt containing one has to take the trip.
+  // # requires backend expansion even without braces.
   it('detects a comment', () => {
     expect(hasDynamicPromptSyntax('a red ball # for now')).toBe(true);
     expect(hasDynamicPromptSyntax('a red ball \\# for now')).toBe(true);
@@ -38,8 +37,7 @@ describe('hasDynamicPromptSyntax', () => {
   it('ignores prompts with neither a variant nor a wildcard', () => {
     expect(hasDynamicPromptSyntax('a red ball')).toBe(false);
     expect(hasDynamicPromptSyntax('unclosed { brace')).toBe(false);
-    // Not a reference: a name may not start or end with an underscore, so this
-    // cannot round-trip through the `__` delimiters.
+    // Disallow leading/trailing underscores in wildcard names so delimiters round-trip.
     expect(hasDynamicPromptSyntax('snake__case word')).toBe(false);
   });
 });
@@ -176,8 +174,7 @@ describe('matchesKnownWildcard', () => {
   });
 
   it('anchors both ends, so the two cannot share characters', () => {
-    // `ab*ba` needs four characters; matching `ab` and `ba` onto the same `b`
-    // is what a naive prefix/suffix check gets wrong.
+    // Prefix and suffix cannot overlap: ab*ba requires at least four characters.
     expect(matchesKnownWildcard('ab*ba', new Set(['aba']))).toBe(false);
     expect(matchesKnownWildcard('ab*ba', new Set(['abba']))).toBe(true);
   });
@@ -189,9 +186,7 @@ describe('matchesKnownWildcard', () => {
     expect(matchesKnownWildcard('a**c', new Set(['abc']))).toBe(true);
   });
 
-  // Regression: translating the path to `^a.*.*.*…$` backtracks exponentially,
-  // and the path is whatever the user has typed so far. Twelve stars against one
-  // name used to take about a minute.
+  // Avoid regex backtracking on user-entered repeated stars.
   it('does not backtrack on a path full of stars', () => {
     const names = new Set(Array.from({ length: 50 }, (_, index) => `colours/warm-autumn-palette-${index}`));
     const started = performance.now();
@@ -202,9 +197,7 @@ describe('matchesKnownWildcard', () => {
 });
 
 describe('normalizeWildcardValues', () => {
-  // What the editor stores has to be what an export writes and a re-import
-  // reads back. Blank lines used to survive into the catalog and then vanish on
-  // the next round trip, so the two disagreed.
+  // Normalize ingress so storage, export, and reimport agree.
   it('drops blank lines and trims the rest', () => {
     expect(normalizeWildcardValues(['red', '', '  green  ', '   ', 'blue'])).toEqual(['red', 'green', 'blue']);
   });
@@ -213,9 +206,7 @@ describe('normalizeWildcardValues', () => {
     expect(normalizeWildcardValues(['red', 'green'])).toEqual(['red', 'green']);
   });
 
-  // Verified against dynamicprompts itself: a value of `poster #1` expands to
-  // `poster `, and `#ff0000 glow` expands to nothing. There is no escape for it,
-  // so a stored `#` is text that silently never reaches the model.
+  // # starts an unescapable comment, including inside a value such as red#blue.
   it('drops a comment, and the value that is nothing but one', () => {
     expect(normalizeWildcardValues(['poster #1', 'red # a colour', '#ff0000 glow', 'blue'])).toEqual([
       'poster',

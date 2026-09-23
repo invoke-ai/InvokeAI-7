@@ -8,16 +8,8 @@ import { useCallback, useState, type MouseEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 
 /**
- * One workflow in the library grid: a sample-output thumbnail over a footer
- * strip of the facts that decide whether this is the workflow you want — its
- * base architecture, its size, and how many models you'd have to install to
- * run it.
- *
- * A single click selects (the right rail follows the selection); a double
- * click opens; a right click selects and asks for the rail's actions at the
- * pointer. Enrichment fills the footer in asynchronously per entry, so the
- * strip reserves its height from the first paint and never reflows the grid
- * as counts arrive.
+ * Select on click, open on double-click, and select/context-menu on right-click. Reserve enrichment height so
+ * async facts cannot reflow the grid.
  */
 
 const CARD_HOVER = { bg: 'bg.muted', borderColor: 'border.emphasized' } as const;
@@ -72,8 +64,6 @@ export const WorkflowLibraryCard = ({
   );
   const handleThumbnailError = useCallback(() => setHasThumbnailFailed(true), []);
 
-  // A broken <img> reads worse than the glyph, so a load failure falls back to
-  // the same placeholder a workflow that has never run gets.
   const showThumbnail = Boolean(item.thumbnail_url) && !hasThumbnailFailed;
   const primaryBase = enrichment.status === 'ready' ? enrichment.requirements.primaryBase : null;
 
@@ -121,8 +111,7 @@ export const WorkflowLibraryCard = ({
         <MiddleTruncate fontSize="xs" fontWeight="600" minW="0" text={item.name || t('workflowLibrary.untitled')} />
         <HStack gap="1.5" h="4" minW="0">
           {enrichment.status === 'pending' ? (
-            // Enrichment in flight. An unreadable workflow ('error') gets no
-            // placeholder and no error styling — the facts simply stay absent.
+            // Show placeholders only while enriching; unreadable workflows leave facts absent.
             <Skeleton data-enrichment-placeholder h="3" rounded="sm" w="14" />
           ) : null}
           {primaryBase ? (
@@ -136,10 +125,6 @@ export const WorkflowLibraryCard = ({
             </Text>
           ) : null}
           {missingCount > 0 ? (
-            // Same amber as the detail panel's Install button and the
-            // requirements list's "installable" rows — the theme's warning
-            // tokens, not Chakra's stock orange, so it tracks every theme's
-            // own warning hue instead of a fixed one.
             <Badge bg="bg.warning" color="fg.warning" flexShrink={0} size="xs" variant="subtle">
               {t('workflowLibrary.installModels', { count: missingCount })}
             </Badge>

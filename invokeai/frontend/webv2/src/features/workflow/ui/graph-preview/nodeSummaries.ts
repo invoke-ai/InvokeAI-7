@@ -1,11 +1,6 @@
 import type { TFunction } from 'i18next';
 
-/**
- * One-line, type-specific summaries shown under a preview node's id (e.g.
- * "28 steps · cfg 4" for `denoise_latents`). Callers fall back to the generic
- * `id · N inputs` line when this returns `null` — most invocation types have
- * no bespoke summary.
- */
+/** Return null when no type-specific summary exists so callers use the generic node/input summary. */
 export const getNodeSubtitle = (
   node: { id: string; type: string; inputs: Record<string, unknown> },
   t: TFunction

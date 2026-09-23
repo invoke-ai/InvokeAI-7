@@ -3,15 +3,8 @@ import type { WorkbenchRegion } from '@workbench/widgetContracts';
 import { useCallback, useLayoutEffect, useRef, useState, type Ref } from 'react';
 
 /**
- * Single source of truth for the preview widget's responsive behavior. Every
- * zone component (frame, filmstrip, footer) branches on this value instead of
- * defining its own breakpoints, so side-panel ergonomics are tuned in one place.
- *
- * - `full`     — center region with room to breathe: full action strip,
- *                filmstrip, metadata rows, footer message line.
- * - `compact`  — side panels and narrow center: star + overflow menu,
- *                one-line summaries, no footer message line.
- * - `minimal`  — very narrow: frame + hairline progress + prev/next only.
+ * Share density across Preview zones: full exposes all controls, compact reduces actions/summaries, and minimal
+ * keeps frame, progress, and navigation.
  */
 const isRailRegion = (region: string): boolean => region === 'left' || region === 'right';
 
@@ -38,11 +31,7 @@ export const getPreviewDensity = ({
   return widthPx >= PREVIEW_FULL_MIN_WIDTH_PX ? 'full' : 'compact';
 };
 
-/**
- * Observes the widget root's width and returns the derived density. The
- * ResizeObserver lives in a ref callback (with cleanup) so there is no effect
- * to keep in sync; state only changes when the density bucket changes.
- */
+/** Observe root width with a cleaned-up ref callback; update state only when its density bucket changes. */
 export const usePreviewDensity = (
   region: WorkbenchRegion
 ): { density: PreviewDensity; rootRef: Ref<HTMLDivElement> } => {

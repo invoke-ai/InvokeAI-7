@@ -86,9 +86,7 @@ describe('attachImageMapDataRuntime', () => {
   it('leaves a failed canvas alone instead of remounting it once per event', () => {
     const detach = attachImageMapDataRuntime();
 
-    // The plot's WebGL init failed; the view is showing that, and every
-    // successful refresh would clear it and remount straight into the same
-    // failure — once per event for the length of a backfill.
+    // Refresh must not repeatedly clear a WebGL failure and remount the broken plot during backfill.
     imageMapStore.patchSnapshot({ loadState: 'loaded', renderError: 'The map failed to render.' });
     getHandler('image_map_projection_ready')({ user_id: 'u1' });
     getHandler('image_index_updated')({ user_id: 'u1' });
@@ -106,13 +104,8 @@ describe('attachImageMapDataRuntime', () => {
   it('does not queue a duplicate fetch for an event during the first load', () => {
     const detach = attachImageMapDataRuntime();
 
-    // `loading` used to pass the guard, so the event set `rerunRequested` and
-    // forced a second full point set the moment the first settled. The poke
-    // still must not pass: it fires at indexer quiescence, so a backfill
-    // running while the map first loads would double every fetch. The
-    // accepted trade: embedding enqueues no recompute, so a poke landing in
-    // the first-load window is the only announcement of that image — it stays
-    // off the map until the next event or a manual refresh.
+    // Ignore ordinary pokes during first loading to avoid duplicate full fetches; newly embedded items may wait
+    // for a later event/manual refresh.
     imageMapStore.patchSnapshot({ loadState: 'loading' });
     getHandler('image_index_updated')({ user_id: 'u1' });
 
@@ -124,12 +117,8 @@ describe('attachImageMapDataRuntime', () => {
     const detach = attachImageMapDataRuntime();
     const onReady = getHandler('image_map_projection_ready');
 
-    // A recompute can finish while the fetch it was enqueued by is still in
-    // flight: that fetch was served the projection the recompute replaced, and
-    // dropping the announcement strands the stale points (with labels the
-    // mismatch check keeps discarding) until some later event fires. The
-    // store's dedup turns this call into a single queued rerun, not a parallel
-    // fetch.
+    // Queue one rerun when recompute overtakes its triggering fetch so stale points and mismatched labels do not
+    // persist.
     imageMapStore.patchSnapshot({ loadState: 'loading' });
     onReady({ user_id: 'u1' });
 
@@ -185,9 +174,7 @@ describe('attachImageMapDataRuntime', () => {
     mocks.getAuthSession.mockReturnValue({ user: { user_id: 'me' } });
     imageMapStore.patchSnapshot({ loadState: 'loaded' });
 
-    // Admins receive every user's projection events, and an admin refetch
-    // usually finds its own all-images projection stale and enqueues another
-    // full recompute.
+    // Ignore other users' projection events; admin refetches can otherwise trigger repeated recomputes.
     onReady({ user_id: 'someone-else' });
     expect(mocks.refreshImageMapPoints).not.toHaveBeenCalled();
 
@@ -262,9 +249,7 @@ describe('attachImageMapDataRuntime', () => {
   it('does not refetch when it attaches to an already-connected socket', () => {
     imageMapStore.patchSnapshot({ loadState: 'loaded' });
 
-    // `onConnectionChange` replays the current status synchronously, and every
-    // Launchpad -> Editor navigation remounts this runtime; treating that
-    // replay as a reconnect refetched the whole point set on each entry.
+    // Treat synchronous connection replay as baseline, not reconnect, on editor remount.
     const detach = attachImageMapDataRuntime();
     const onConnection = mocks.onConnectionChange.mock.calls[0][0];
 

@@ -12,9 +12,7 @@ describe('isSlotUnclaimed', () => {
   });
 
   it('rejects an unknown slot unless the caller says unknown means absent', () => {
-    // By default `undefined` may be a value a newer writer set, so reverting
-    // over it would be the data loss the rule exists to prevent. Opting in
-    // still does not excuse a slot someone else actually claimed.
+    // Treat undefined as a newer write by default; opting in still cannot overwrite a claimed slot.
     expect(isSlotUnclaimed(undefined, 'painted')).toBe(false);
     expect(isSlotUnclaimed(undefined, 'painted', { treatUnknownAsUnclaimed: true })).toBe(true);
     expect(isSlotUnclaimed('newer', 'painted', { treatUnknownAsUnclaimed: true })).toBe(false);

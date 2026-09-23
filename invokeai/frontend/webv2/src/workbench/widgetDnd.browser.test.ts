@@ -28,8 +28,6 @@ describe('measureDroppableVisibleRect', () => {
   });
 
   it('collapses a droppable scrolled out of its container to zero height', () => {
-    // Mirrors a gallery board row below the fold: its client rect would
-    // otherwise extend past the list over whatever is rendered below.
     const root = mount(`
       <div id="scroller" style="height:100px;overflow-y:auto;width:200px;">
         <div style="height:120px;"></div>
@@ -65,8 +63,6 @@ describe('measureDroppableVisibleRect', () => {
   });
 
   it('clips against every overflow ancestor, not just the nearest', () => {
-    // The stacked gallery wraps the board panel in an overflow:hidden box
-    // that is itself shorter than the scroll area it contains.
     const root = mount(`
       <div style="height:60px;overflow:hidden;width:200px;">
         <div id="scroller" style="height:100px;overflow-y:auto;">
@@ -98,9 +94,8 @@ describe('measureDroppableVisibleRect', () => {
 });
 
 describe('widgetCollisionDetection pointer visibility', () => {
-  // dnd-kit measures droppable rects once at drag start and only shifts them
-  // by ancestor scroll deltas afterwards, so these tests hand the detection
-  // the stale drag-start rect while the live DOM says otherwise.
+  // dnd-kit shifts cached drag-start edges on scroll without remeasuring dimensions; test against the stale rect
+  // and live DOM.
   const createCollisionArgs = (options: {
     droppables: Array<{ id: string; node: HTMLElement; rect: ClientRect }>;
     pointerCoordinates: { x: number; y: number };

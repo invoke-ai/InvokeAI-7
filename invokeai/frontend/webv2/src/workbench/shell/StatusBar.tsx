@@ -46,19 +46,10 @@ interface BottomWidgetItem extends PlacedWidgetRegionItem<WidgetPlacementInstanc
 const BOTTOM_MENU_POSITIONING = { placement: 'top-end' } as const;
 const WIDGET_POPOVER_POSITIONING = { placement: 'top-end' } as const;
 const BOTTOM_MENU_TRIGGER = { kind: 'bottom' } as const;
-/**
- * Same ladder as the side rails (see `WidgetBar`): hover and active share one
- * fill, and the brand hue marks the open widget through its content colour,
- * because a brand tint of this bar is indistinguishable from it on the light
- * theme.
- */
+/** Use content color for active brand accents; background tint is indistinguishable on the light theme. */
 const COMPACT_ROW_HOVER_PROPS = { bg: 'bg.emphasized', color: 'fg' };
 
-/**
- * The per-cluster drop chrome: the rail overlay itself, sized to its
- * cluster. Two of these replace the strip-wide curtain, which hid the
- * right-side target behind itself.
- */
+/** Size drop overlays per cluster so one strip-wide curtain cannot cover the other target. */
 const ClusterDropRing = ({ dropState, isOver }: { dropState: WidgetRegionDropState; isOver: boolean }) => (
   <WidgetRegionDropOverlay dropState={dropState} isOver={isOver} left="-4px" right="-4px" zIndex={3} />
 );
@@ -122,10 +113,8 @@ export const StatusBar = ({ dropState }: { dropState: WidgetRegionDropState }) =
 
     return [{ ...item, isExpandable: isExpandableBottomItem(item), isPopover: isPopoverBottomItem(item) }];
   });
-  // The trailing cluster: placement stays in `instanceIds` order within each
-  // side, so drag-reorders keep working; only the render splits. Cluster
-  // membership moves via the context menu, by dropping onto the spacer, or by
-  // landing beside a widget of the other cluster (see `resolveWidgetDragEnd`).
+  // Preserve instance order within clusters; only rendering splits them. Context menus, spacer drops, or
+  // neighboring widgets move membership.
   const alignEndIds = useMemo(
     () => new Set(bottomRegion.alignEndInstanceIds ?? []),
     [bottomRegion.alignEndInstanceIds]
@@ -174,14 +163,10 @@ export const StatusBar = ({ dropState }: { dropState: WidgetRegionDropState }) =
     [widgets]
   );
   const isItemAlignedEnd = useCallback((item: WidgetEnableMenuItem) => alignEndIds.has(item.id), [alignEndIds]);
-  // The two-cluster drop chrome only lights for widget drags the region
-  // accepts; the shell's dropState already encodes allowedRegions.
   const dnd = useDndContext();
   const showDropChrome =
     dropState.isActive && dropState.isAllowed && isWidgetInstanceDragData(dnd.active?.data.current);
-  // Highlight rules mirror the rails exactly: the accent treatment fires
-  // only when the pointer is over the zone's own background, never over
-  // chips — a chip hover previews a reorder, not a zone drop.
+  // Accent only zone-background hover; chip hover previews reordering.
   const isOverStart = showDropChrome && String(dnd.over?.id ?? '') === getWidgetRegionDropId('bottom');
   const handleContextClose = useCallback(() => setEnableMenuTarget(null), []);
   const handleInstanceClose = useCallback(() => setInstanceMenuTarget(null), []);
@@ -353,8 +338,6 @@ const CompactBottomWidget = ({
   );
 
   if (item.isPopover) {
-    // VSCode-style notification center: the chip anchors a large dismissable
-    // popover instead of claiming the shared bottom panel.
     return (
       <Popover.Root
         lazyMount

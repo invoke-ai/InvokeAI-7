@@ -1,14 +1,4 @@
-/**
- * The one cache for prompt expansion. The preview popover and the Invoke tooltip
- * observe it through `useQuery`; the enqueue path reads it through
- * `resolveDynamicPrompts`. Because all three address the same key, invoking
- * normally costs no extra round trip, and invoking before the preview has
- * settled still enqueues the prompts the backend actually produces rather than a
- * stale list.
- *
- * Expansion is deterministic for a given request — combinatorial by
- * construction, and seeded when random — so entries never go stale on their own.
- */
+/** Share deterministic expansion queries and prevent stale results across consumers. */
 
 import type {
   ParseDynamicPromptsRequest,
@@ -53,15 +43,7 @@ export const dynamicPromptsQueryOptions = (request: ParseDynamicPromptsRequest) 
     });
   })();
 
-/**
- * Cache-first expansion for the enqueue path, which cannot render a loading state.
- *
- * `fetchQuery` rather than `ensureQueryData`: the latter returns whatever is in
- * the cache the moment it holds data, invalidated or not. Under `staleTime:
- * Infinity` that means an edited wildcard would keep serving its old expansion
- * to the submit path. `fetchQuery` consults staleness, which invalidation drives,
- * so an untouched entry still costs no round trip.
- */
+/** Use fetchQuery: ensureQueryData can return invalidated entries despite infinite staleTime. */
 export const resolveDynamicPrompts = (
   queryClient: QueryClient,
   request: ParseDynamicPromptsRequest

@@ -27,10 +27,8 @@ export interface MaskTintEditor {
 }
 
 /**
- * A gesture in flight: the layer and fill captured before the first preview
- * (the entry's undo target), the latest applied hex, and the settle timer.
- * Holding these in one ref keeps the eventual commit closure-safe — the
- * gesture can outlive re-renders, a disarm, and even the pane unmounting.
+ * Capture layer, original fill, latest color, and timer together so commits survive rerenders, disarming, and
+ * unmount.
  */
 interface TintGesture {
   layer: MaskLayer;
@@ -45,12 +43,8 @@ const configFor = (layer: MaskLayer, fill: CanvasMaskFillContract) =>
     : ({ layerType: 'regional_guidance', mask: { fill } } as const);
 
 /**
- * The armed mask-tint target as an editor, or `null` when no target is armed.
- * Watches the document: if the armed layer disappears, stops being a mask, or
- * stops being the selected layer, the target clears itself and the Color pane
- * returns to the foreground/background pair. A pending gesture always settles
- * into exactly one history entry — on the idle timer, on disarm, or on
- * unmount — so a preview can never outlive its commit.
+ * Clear invalid/unselected mask targets and return to pair editing. Settle each pending preview into exactly one
+ * history entry on idle, disarm, or unmount.
  */
 export const useMaskTintEditor = (engine: MaskTintEngine | null): MaskTintEditor | null => {
   const { t } = useTranslation();

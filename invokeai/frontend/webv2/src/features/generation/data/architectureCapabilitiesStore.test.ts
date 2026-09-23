@@ -14,8 +14,7 @@ describe('architecture capabilities store', () => {
   });
 
   it('fills the core registry rather than the snapshot', async () => {
-    // The rows have exactly one home: policy accessors read them synchronously from all over the
-    // app, including graph builders at enqueue time.
+    // The core registry is the sole synchronous table authority.
     api.getArchitectureCapabilities.mockResolvedValue(rows);
     const store = await import('./architectureCapabilitiesStore');
     const registry = await import('@features/generation/core/architectureCapabilities');
@@ -68,8 +67,7 @@ describe('architecture capabilities store', () => {
   });
 
   it('clears the registry as well as the snapshot when the account changes', async () => {
-    // The addition to the starters-store template: the rows live outside this store, so clearing
-    // only the snapshot would leave the previous account's table readable behind an idle status.
+    // Clear registry rows with store status so previous-account data cannot survive.
     api.getArchitectureCapabilities.mockResolvedValue(rows);
     const lifecycle = await import('@platform/state/accountLifecycle');
     const store = await import('./architectureCapabilitiesStore');
@@ -85,9 +83,7 @@ describe('architecture capabilities store', () => {
   });
 
   it('publishes the registry rather than its own request state', async () => {
-    // The subscription contract for every imperative policy reader. It has to follow the registry,
-    // not this store's fetch: `status` would miss a table that arrived by any other route, and a
-    // reader gated on it would keep answering from the fallback config.
+    // Subscribe to the registry, not fetch status, so every table writer notifies readers.
     api.getArchitectureCapabilities.mockResolvedValue(rows);
     const store = await import('./architectureCapabilitiesStore');
     const registry = await import('@features/generation/core/architectureCapabilities');
@@ -107,9 +103,7 @@ describe('architecture capabilities store', () => {
   });
 
   it('reloads the table for the account that replaces the one it was cleared for', async () => {
-    // The boot kick lives in a mount effect that does not re-run, and the long-lived subscribers
-    // (the bbox <-> dims sync, the topbar) never re-subscribe. Without this re-arm a table cleared
-    // on an account change would stay `idle` forever and every gate would stay closed.
+    // Rearm after account changes; boot effects and subscribers do not remount.
     api.getArchitectureCapabilities.mockResolvedValue(rows);
     const lifecycle = await import('@platform/state/accountLifecycle');
     const store = await import('./architectureCapabilitiesStore');

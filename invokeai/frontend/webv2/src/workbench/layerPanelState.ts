@@ -5,9 +5,8 @@ import { createExternalStore } from '@platform/state/externalStore';
 import { getDocumentIndex } from '@workbench/canvas-engine/api';
 
 /**
- * Transient Layers-panel state, kept per project and outside the document, its snapshots and
- * history. The primary selection stays `document.selectedLayerId`; `primaryId` mirrors the value
- * this state was built against so an external primary change collapses stale secondaries.
+ * Per-project transient selection stays outside persistence/history; primaryId detects external primary changes
+ * and clears stale secondaries.
  */
 
 export interface LayerPanelState {
@@ -198,11 +197,7 @@ export const setLayerPanelFilter = (projectId: string, primaryId: string | null,
   }
 };
 
-/**
- * Keeps a state valid after an external primary change, a project switch, or a node removal. A
- * primary that arrived from outside the panel (a hotkey, an undo, a new layer) is revealed: every
- * group above it expands so the row it names is on screen.
- */
+/** Reconcile external changes and removals; reveal an externally selected primary by expanding its ancestors. */
 export const reconcileLayerPanelState = (
   state: LayerPanelState,
   projectId: string,

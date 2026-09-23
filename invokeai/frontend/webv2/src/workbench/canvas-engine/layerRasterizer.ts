@@ -65,9 +65,8 @@ export interface CreateLayerRasterizerDeps {
 
 export interface LayerRasterizer {
   /**
-   * Starts — or joins — the rasterization of one layer, resolving with how it
-   * ended. Safe to call every frame: a job that already describes the same
-   * source, cache version and document generation is shared, not restarted.
+   * Starts or joins rasterization for the same source, cache version and document generation; repeated frame
+   * requests do not restart it.
    */
   getOrStartLayerRasterization(
     layer: CanvasLayerContract,
@@ -77,26 +76,10 @@ export interface LayerRasterizer {
 }
 
 /**
- * Rasterizes a layer's source into its cache.
- *
- * Rasterizing is slow and the document is live, so a job never draws straight
- * into the cache: pixels land in a scratch surface, and are copied across only
- * if the job still describes the world it started in — same source (compared by
- * value, since a reducer pass replaces objects wholesale), same cache version,
- * same document generation, same job still installed, engine not disposed. Any
- * of those moving means the result describes a layer that no longer exists in
- * that form, and it is dropped as `'stale'` rather than published over whatever
- * replaced it.
- *
- * The same check appears three times and is deliberately not shared. The
- * post-success one holds the cache entry it is about to write to, so it can
- * distinguish a deleted cache from a fresh one at version 0 — the two are
- * indistinguishable through `version()` alone. The font-load one runs before
- * any job is installed, so it has no job identity to compare.
- *
- * Text is the one source that can rasterize correctly and still be wrong: the
- * font may not have loaded yet. Rather than block, it rasterizes with whatever
- * is available and re-invalidates once the real font arrives.
+ * Rasterize into scratch, publishing only if source value, cache version, document generation, installed job and
+ * lifecycle still match. Post-success also checks cache-entry identity to distinguish recreation at version zero;
+ * font callbacks run before job installation. Text renders available fonts immediately and invalidates when the
+ * real face loads.
  */
 export const createLayerRasterizer = (deps: CreateLayerRasterizerDeps): LayerRasterizer => {
   const { jobs, layerCache } = deps;
@@ -233,8 +216,7 @@ export const createLayerRasterizer = (deps: CreateLayerRasterizerDeps): LayerRas
           layerCache.version(layer.id) !== version ||
           !areJsonValuesStructurallyEqual(renderableSourceOf(currentLayer), source)
         ) {
-          // The failure describes a layer that has already moved on; reporting it
-          // would surface an error about work nobody is waiting for.
+          // Discard failures from obsolete work rather than reporting errors for replaced layers.
           return 'stale';
         }
         deps.thumbnails.setStatus(layer.id, 'error');

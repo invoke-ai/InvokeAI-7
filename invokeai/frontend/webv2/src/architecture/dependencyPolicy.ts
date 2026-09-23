@@ -54,12 +54,7 @@ const normalizePath = (path: string): string => {
   return parts.join('/');
 };
 
-/**
- * Loads a whole corpus into the parser in one round trip. Call this before
- * sweeping a tree with {@link collectImportReferences} or {@link checkSource};
- * the entries must be the same `[fileName, source]` pairs the sweep passes, so
- * each later call is served from the already-loaded program.
- */
+/** Preload the exact [fileName, source] pairs before a sweep so subsequent checks reuse one parsed program. */
 export const primeImportSources = (entries: Iterable<readonly [string, string]>): void => {
   primeSourceAnalysis(entries, { jsx: true });
 };
@@ -186,17 +181,10 @@ const DOCUMENT_MODEL_DEPENDENCY_MODULES = [
   'workbench/canvas-engine/document/selectionRepair',
 ];
 
-/**
- * Test-support suffixes, matched with or without a file extension so the same predicate classifies
- * both a source path and a resolved (extensionless) import target.
- */
+/** Accept extensionless targets as well as source filenames. */
 const TEST_SUPPORT_SUFFIX = /\.(?:test|type-test|testing|stories)(?:\.[^.]+)?$/;
 
-/**
- * Production sources: everything the architecture rules scan. Tests, type tests, stories and the
- * `.testing` helpers they share are not -- those import test runners and fixtures, so a production
- * module reaching one pulls both into every bundle that route touches.
- */
+/** Exclude test support from production; importing it would pull runners and fixtures into application bundles. */
 export const isProductionSourcePath = (path: string): boolean => !TEST_SUPPORT_SUFFIX.test(path);
 
 /** The pure document model may only reach pure document facts, math, and contracts. */

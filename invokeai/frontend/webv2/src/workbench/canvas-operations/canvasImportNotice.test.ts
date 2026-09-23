@@ -51,8 +51,7 @@ describe('getCanvasImportNotice', () => {
   });
 
   it('tells a blocked import apart from one waiting on model capabilities', () => {
-    // Both are informational and both stop the import, but only one is something the user can
-    // act on. Sharing a message sent people looking for a canvas operation they never started.
+    // Distinguish capability unavailability from an operation the user can finish.
     expect(getCanvasImportNotice({ status: 'blocked' }).titleKey).toBe('widgets.canvas.import.blocked');
     expect(getCanvasImportNotice({ status: 'capabilities-unavailable' }).titleKey).toBe(
       'widgets.canvas.import.capabilitiesUnavailable'

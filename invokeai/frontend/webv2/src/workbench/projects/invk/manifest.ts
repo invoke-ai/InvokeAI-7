@@ -4,26 +4,8 @@ import { zInvkFontDependency } from './fonts';
 import { INVK_EXTENSION, INVK_VERSION, InvkFormatError } from './format';
 
 /**
- * The `.invk` manifest. The previous frontend's canvas project files are ZIPs with this same root
- * `manifest.json` and `images/` folder; that container is kept verbatim, and version 2 changes only
- * the payload.
- *
- * ```
- * <name>.invk
- * ├── manifest.json          this file's shape
- * ├── project.json           the project document
- * ├── board.json             the project board's visible contents
- * ├── cover.<ext>            optional preview; the entry name is recorded here
- * ├── images/<image_name>    bytes, named exactly as the server names them
- * └── videos/<video_name>    the same, for the other namespace
- * ```
- *
- * Parsed as a discriminated union rather than `z.literal(2)` so a refusal can name the version
- * precisely: "this is a canvas project from an earlier version" is actionable, a zod issue list is
- * not.
- *
- * Adding `board.json` did not bump the version — a version tells a reader what it may assume about
- * a file *someone else wrote*, and webv2 has not shipped. Readers treat the entry as optional.
+ * The v2 ZIP contains manifest.json, project.json, optional board.json and cover, and images/<name> or
+ * videos/<name>. Recognize v1 only to return a specific unsupported-version refusal.
  */
 
 const zManifestV1 = z.object({
@@ -57,10 +39,7 @@ const KNOWN_VERSIONS: ReadonlySet<number> = new Set([1, 2]);
 /** A manifest this app can read: the workbench project container. */
 export type InvkManifest = z.infer<typeof zManifestV2>;
 
-/**
- * Accepts a v2 manifest; throws {@link InvkFormatError} for anything else.
- * Never returns a v1 manifest — recognizing v1 exists only to name the refusal.
- */
+/** Accept v2; recognize v1 only for a named refusal. */
 export const parseInvkManifest = (data: unknown): InvkManifest => {
   const parsed = zManifest.safeParse(data);
 
@@ -71,9 +50,7 @@ export const parseInvkManifest = (data: unknown): InvkManifest => {
       throw new InvkFormatError('not-a-project');
     }
 
-    // A version this app has written is a version it can read, so a manifest that still fails to
-    // parse at one of them is damaged — a truncated name, a missing timestamp. Calling that
-    // "written by a newer version of Invoke" tells someone to go and upgrade over a broken file.
+    // Report malformed known versions as corrupt, not newer-version incompatible.
     throw new InvkFormatError(KNOWN_VERSIONS.has(version) ? 'damaged' : 'unsupported-version');
   }
 
@@ -106,11 +83,7 @@ export const buildInvkManifest = (input: {
   ...(input.sourceProjectId === undefined ? {} : { sourceProjectId: input.sourceProjectId }),
 });
 
-/**
- * File name for the download. Replaces what filesystems reject and drops
- * control/format characters, but leaves the rest of unicode alone — a project
- * named in a non-Latin script should not export as `project.invk`.
- */
+/** Remove forbidden/control characters while preserving other Unicode filename characters. */
 export const toInvkFileName = (projectName: string): string => {
   const trimmed = projectName
     .replaceAll(/["*/:<>?\\|]/gu, '_')

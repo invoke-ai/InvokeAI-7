@@ -72,8 +72,7 @@ const GalleryPickerTile = memo(function GalleryPickerTile({
       ? t(item.kind === 'video' ? 'widgets.gallery.picker.unsupportedVideo' : 'widgets.gallery.picker.unsupportedImage')
       : undefined;
 
-  // Ref callbacks re-run when `isActive` changes, so the keyboard highlight
-  // stays in view without an effect; pointer hover never moves it.
+  // Active-state ref callbacks reveal keyboard highlights; pointer hover must not scroll.
   const scrollIntoView = useCallback(
     (node: HTMLDivElement | null) => {
       if (node && isActive) {
@@ -131,10 +130,8 @@ const GalleryPickerTile = memo(function GalleryPickerTile({
 });
 
 /**
- * The picker's tile grid: the column count follows the measured width, one
- * delegated click serves every tile, and a sentinel at the end asks for the
- * next page. Not virtualized — the base infinite window bounds the rows and
- * lazy images keep the network idle until scrolled.
+ * The bounded infinite window limits nonvirtualized rows; lazy images defer requests and the sentinel loads
+ * further pages.
  */
 export const GalleryPickerGrid = ({
   activeKey,

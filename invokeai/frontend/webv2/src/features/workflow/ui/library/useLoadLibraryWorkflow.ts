@@ -16,13 +16,7 @@ import { useTranslation } from 'react-i18next';
 
 import { markLibraryGraphSynced } from './librarySyncBridge';
 
-/**
- * The library's "open this workflow into the project graph" sequence, shared
- * by every surface that can start it (the library grid's double-click and its
- * Open action). Two loads can never overlap — a second call while one is in
- * flight is dropped rather than queued, because the winner would silently
- * replace the graph the first one just applied.
- */
+/** Drop overlapping workflow-open requests; a queued second load would silently replace the first applied graph. */
 
 export type WorkflowLoadPhase = 'applying' | 'fetching' | 'idle';
 
@@ -67,9 +61,7 @@ export const useLoadLibraryWorkflow = (onLoaded: () => void): LoadLibraryWorkflo
         assertAccountScopeCurrent(owner);
         replace(document, t('workflowLibrary.loadedLabel', { name: item.name }));
         requestWorkflowFitView(document.nodes);
-        // The freshly-loaded graph is already in sync with the library record
-        // it came from — mark it synced so the autosaver does not immediately
-        // queue a redundant (echo) save the moment the graph reference changes.
+        // Mark loaded content synced before changed graph identity can schedule an echo save.
         markLibraryGraphSynced(serializeWorkflowJson(document));
 
         for (const warning of warnings) {

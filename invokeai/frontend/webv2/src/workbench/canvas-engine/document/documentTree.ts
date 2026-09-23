@@ -116,9 +116,8 @@ export const replaceChildren = (
 };
 
 /**
- * Rewrites every node named by `updates` in place, sharing every untouched node. Groups are
- * rebuilt only along the paths to a changed node; the same forests come back when nothing changed.
- * `changed` holds the nodes an update actually replaced, keyed by id.
+ * Rewrites named nodes with structural sharing along changed paths. Returns the same forests if unchanged;
+ * `changed` records replaced nodes by id.
  */
 export const updateNodesTracked = (
   stacks: CanvasStackForests,

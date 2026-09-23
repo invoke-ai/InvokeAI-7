@@ -88,10 +88,7 @@ describe('buildHighlightedPointsTrace', () => {
 
 describe('toHighlightRestyle', () => {
   it('carries every per-point array the highlight trace holds', () => {
-    // plotly keeps whatever a restyle omits, so an array left behind is then
-    // indexed at the new point count — which crashes inside scattergl's own
-    // marker lookup, nowhere near the omission. Selecting a cluster is what
-    // resizes this trace, so the failure lands on an ordinary click.
+    // Plotly retains omitted restyle arrays; stale lengths crash scattergl when cluster clicks resize the trace.
     const trace = buildHighlightedPointsTrace(POINTS, new Set(['image:a.png' as const, 'video:clip.mp4' as const]));
     const payload = toHighlightRestyle(trace);
 
@@ -103,8 +100,7 @@ describe('toHighlightRestyle', () => {
     for (const key of [...perPointKeys, 'customdata', 'x', 'y']) {
       expect(Object.keys(payload)).toContain(key);
     }
-    // Every entry is wrapped for the one trace it restyles, and describes the
-    // same points.
+    // Wrap every property for one trace and keep point arrays aligned.
     for (const value of Object.values(payload)) {
       expect(value).toHaveLength(1);
       expect(value[0]).toHaveLength(trace.x.length);
@@ -119,8 +115,7 @@ describe('buildClusterAnnotations', () => {
 
     expect(annotations).toHaveLength(1);
     const landscapes = annotations[0];
-    // Centered on the cluster's x centroid, anchored above its topmost point
-    // with a pixel lift so the label never covers the points it names.
+    // Anchor at cluster x-centroid above its top point with fixed-pixel clearance.
     expect(landscapes?.x).toBeCloseTo(4 / 3);
     expect(landscapes?.y).toBeCloseTo(5);
     expect(landscapes?.yanchor).toBe('bottom');
@@ -151,9 +146,7 @@ describe('buildClusterAnnotations', () => {
 });
 
 describe('declutterAnnotations', () => {
-  // Cluster 0: three points near the origin; cluster 1: one point at (10, 0).
-  // The small cluster's point deliberately comes first, so these tests fail
-  // if the size-priority ordering in buildClusterAnnotations regresses.
+  // Place the smaller cluster first to prove size priority overrides input order.
   const clusters = [
     point('far.png', 10, 0, 1),
     point('a.png', 0, 0, 0),
@@ -190,10 +183,8 @@ describe('declutterAnnotations', () => {
   });
 
   it('drops labels covering the current-image marker, which draws beneath them', () => {
-    // Zoomed in, both labels normally survive (see the first case). Putting the
-    // marker on the 'portraits' anchor at (10, 0) evicts that label instead:
-    // the gold target is on the WebGL canvas under plotly's annotation layer,
-    // so it cannot be stacked over a pill it overlaps.
+    // Hide the label overlapping the gold target: SVG annotations sit above WebGL markers and cannot be reordered
+    // below them.
     const ranges = { x: [-0.5, 10.5] as [number, number], y: [-4, 4] as [number, number] };
     const kept = declutterAnnotations(annotations, ranges, view.widthPx, view.heightPx, { x: 10, y: 0 });
     expect(kept.map((annotation) => annotation.text)).toEqual(['landscapes']);
@@ -203,19 +194,14 @@ describe('declutterAnnotations', () => {
     const ranges = { x: [-0.5, 10.5] as [number, number], y: [-4, 4] as [number, number] };
     const kept = declutterAnnotations(annotations, ranges, view.widthPx, view.heightPx, { x: 5, y: -3.5 });
     expect(kept.map((annotation) => annotation.text)).toEqual(['landscapes', 'portraits']);
-    // A null marker (nothing selected, or the selection is off the map) is the
-    // same as passing none at all.
     expect(declutterAnnotations(annotations, ranges, view.widthPx, view.heightPx, null)).toEqual(
       declutterAnnotations(annotations, ranges, view.widthPx, view.heightPx)
     );
   });
 
   it('does not hand the space it clears to a lower-priority label', () => {
-    // 'portraits' (1 point) anchors ~55px from 'landscapes' (3 points): inside
-    // the bigger label's footprint, outside the marker's clearance. Without the
-    // marker, 'landscapes' wins the spot and 'portraits' is dropped. Parking
-    // the marker on 'landscapes' must not promote 'portraits' into the very
-    // patch of map the marker was supposed to clear.
+    // A marker hiding the larger winning label must not promote a smaller overlapping label into the cleared
+    // region.
     const crowded = [
       point('a.png', 0, 0, 0),
       point('b.png', 1, 0, 0),
@@ -236,12 +222,7 @@ describe('declutterAnnotations', () => {
   });
 
   it('leaves labels the marker does not cover exactly as they were', () => {
-    // Three labels 50px apart: 'bbb' loses its spot to 'aaa' and is invisible
-    // with or without a marker, while 'ccc' clears 'aaa' and survives. Parking
-    // the marker on 'bbb' — whose 11px rect reaches neither neighbour — must
-    // change nothing: a label that never won a spot cannot reserve one, or
-    // selecting an image under an already-suppressed label would silently take
-    // out the cluster next door.
+    // An already-suppressed label reserves no space; placing a marker there must not evict neighboring labels.
     const row = [
       point('a1.png', 0, 0, 0),
       point('a2.png', 0, 0, 0),

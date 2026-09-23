@@ -156,8 +156,6 @@ const AppMenuGlyph = () => (
 
 const SearchMenuAction = () => {
   const { t } = useTranslation();
-  // Same formatter as every other shortcut hint in the top bar, so the two
-  // hinted actions in this row read alike (and macOS gets ⌘K, not "cmd+k").
   const shortcut = useTopbarShortcut(OPEN_COMMAND_PALETTE_HOTKEY.commandId);
   const label = shortcut ? t('commandPalette.buttonTooltip', { hotkey: shortcut }) : t('commandPalette.buttonLabel');
 
@@ -174,8 +172,6 @@ const SettingsMenuAction = ({ onClick }: { onClick: () => void }) => {
   return <AppMenuAction icon={SettingsIcon} label={label} value="settings" onClick={onClick} />;
 };
 
-// Sized like the 2xs icon buttons in widget headers; menu items default to a
-// much roomier padding than an icon-only action needs.
 const FOOTER_ITEM_PROPS = {
   alignItems: 'center',
   flex: '0 0 auto',

@@ -23,11 +23,7 @@ const PROGRESS_FILL_SX: SystemStyleObject = {
   transition: 'width var(--wb-motion-duration-fast) linear',
 };
 
-/**
- * Indeterminate: a band sweeping the track, so "working, no percent yet"
- * (model load, graph prep) reads as activity instead of a stuck bar. Under
- * reduce-motion the band does not run at all; the quiet fill carries the state.
- */
+/** Use a static fill under reduced motion; otherwise sweep the indeterminate band. */
 const PROGRESS_SWEEP_SX: SystemStyleObject = {
   ':root[data-reduce-motion="true"] &': { animationName: 'none' },
   animationDuration: '1.4s',

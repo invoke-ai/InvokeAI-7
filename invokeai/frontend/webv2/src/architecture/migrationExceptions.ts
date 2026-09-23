@@ -1,7 +1,4 @@
 import type { MigrationException } from './dependencyPolicy';
 
-/**
- * Temporary, owned migration debt. The completion gate requires this list to be
- * empty; entries may only point at an open architecture-wayfinder removal ticket.
- */
+/** Temporary exceptions require an open removal ticket; the completion gate requires none. */
 export const migrationExceptions: readonly MigrationException[] = [] as const;

@@ -115,12 +115,6 @@ const MODEL_SELECT_FALLBACK = (
 
 export const getWorkflowSelectedGalleryImage = getSelectedGalleryImageFromValues;
 
-/**
- * Direct-input controls for workflow fields, shared between the node editor
- * and the Linear UI panel. Renders by template field type; connection-only
- * and unsupported types fall through to a muted note.
- */
-
 export interface WorkflowFieldInputProps {
   id?: string;
   invalid?: boolean;
@@ -242,11 +236,8 @@ const NumericInput = ({ id, invalid, onChange, template, value }: WorkflowFieldI
 };
 
 /**
- * The shared seed control under a workflow row. The workflow owns the value
- * and its run count, so the stepping preview is planned here from the
- * workflow's own iterations; an empty field runs from the template default,
- * as the plan does. `nokey` keeps xyflow's node key handling out of the row
- * and the portaled menu: arrows would nudge the node and Backspace delete it.
+ * Plan stepping previews from workflow iterations and template defaults; nokey prevents node shortcuts inside the
+ * row and portalled menu.
  */
 const WorkflowSeedInput = ({
   id,
@@ -427,10 +418,7 @@ const ModelIdentifierInput = ({ id, invalid, onChange, template, value }: Workfl
     typeof (value as { key?: unknown } | null)?.key === 'string' ? (value as { key: string }).key : null;
   const modelTypes = (template.uiModelType ?? DEFAULT_MODEL_TYPES) as ModelTaxonomyType[];
   const allowedBases = template.uiModelBase;
-  // ui_model_format narrows further within a base/type — e.g. a loader's main-model field
-  // that accepts only diffusers-folder installs while its override fields take the
-  // single-file checkpoints. Offering the wrong format here would enqueue a graph that
-  // fails deep inside the model loader instead of at selection time.
+  // Filter by model format as well as base/type so loaders cannot receive unsupported component layouts.
   const allowedFormats = template.uiModelFormat;
   const filter = useCallback(
     (model: ModelConfig) =>
@@ -585,12 +573,8 @@ const VIDEO_ONLY = ['video'] as const;
 const MEDIA_INPUT_FOCUS_PROPS = { outline: '2px solid {colors.accent.focusRing}', outlineOffset: '2px' } as const;
 
 /**
- * Upload: file picker -> gallery upload -> adopt the uploaded items. The
- * adoption is pinned to this widget instance AND the project it started in:
- * `onUploaded` dispatches into the *active* project, so a completion arriving
- * after a project switch (or after this node was deleted, which unmounts the
- * widget) must not be applied - the upload itself still succeeded, so the
- * gallery is refreshed and the user is pointed there instead.
+ * Apply uploads only to their originating mounted widget/project. Late successes still refresh Gallery and direct
+ * users there instead of mutating another project.
  */
 const useMediaUpload = ({
   kind,
@@ -801,11 +785,6 @@ const MediaDropMonitor = ({
   return null;
 };
 
-/**
- * Direct input for `ImageField` collections (Image Collection primitive, Image
- * Batch): a thumbnail grid with per-item removal, a multi-select gallery
- * picker, a multi-item gallery drop target, and multi-file upload.
- */
 const ImageCollectionInput = ({ id, invalid, nodeId, onChange, template, value }: WorkflowFieldInputProps) => {
   const { t } = useTranslation();
   const { project } = useWorkflowUi();
@@ -951,11 +930,6 @@ const ImageCollectionInput = ({ id, invalid, nodeId, onChange, template, value }
   );
 };
 
-/**
- * Direct input for `ImageField` / `VideoField`: shows the current item with a
- * thumbnail, opens the gallery picker, accepts a single-item gallery drag
- * onto the row, and uploads a local file to the gallery's selected board.
- */
 const MediaInput = ({ id, invalid, kind, onChange, value }: WorkflowFieldInputProps & { kind: WorkflowMediaKind }) => {
   const { t } = useTranslation();
   const config = MEDIA_FIELD_CONFIG[kind];
@@ -965,9 +939,7 @@ const MediaInput = ({ id, invalid, kind, onChange, value }: WorkflowFieldInputPr
       : null;
   const invalidAriaProps = useMemo(() => (invalid ? { 'aria-invalid': true } : {}), [invalid]);
 
-  // dnd: the whole input row is a drop target for a single gallery item of the
-  // matching kind. The instance-unique suffix keeps ids distinct when the node
-  // editor and the Linear UI panel render the same field at once.
+  // Use instance-unique drop IDs because editor and Linear UI can render the same field simultaneously.
   const instanceId = useId();
   const dropId = getWorkflowMediaFieldDropId(`${id ?? 'field'}:${instanceId}`);
   const { active } = useDndContext();
@@ -985,15 +957,11 @@ const MediaInput = ({ id, invalid, kind, onChange, value }: WorkflowFieldInputPr
   );
   const onClearClick = useCallback(() => onChange(undefined), [onChange]);
 
-  // A stale value (media deleted since the workflow was saved) 404s the
-  // thumbnail; degrade to a media icon rather than the broken-image glyph. A
-  // new value retries.
+  // Replace failed stale thumbnails with media icons; retry when the value changes.
   const [failedThumbnail, setFailedThumbnail] = useState<string | null>(null);
   const onThumbnailError = useCallback(() => setFailedThumbnail(mediaName), [mediaName]);
 
-  // Resolve the item's details for the dimensions/duration badge (the legacy
-  // editor's widget shows the same). Best-effort: the preview works from the
-  // name alone, so a failed lookup just drops the badge.
+  // Resolve badge metadata best-effort; name-based preview remains usable if lookup fails.
   const { data: mediaItem } = useQuery({
     enabled: mediaName !== null && mediaName !== '',
     queryFn: ({ signal }) => galleryItems.resolve({ kind, name: mediaName ?? '' }, signal),
@@ -1142,15 +1110,8 @@ const MediaInput = ({ id, invalid, kind, onChange, value }: WorkflowFieldInputPr
 const COMPANION_VIDEO_FIELD_NAME = 'video';
 
 /**
- * Integer input for `ui_component=video-frame-index` fields (`frame_index` on
- * Frame from Video; `start_frame`/`end_frame` on Frame Range from Video): the
- * standard number input plus a live frame preview and a scrubber slider, all
- * writing the same field value. The preview is a muted `<video>` element
- * seeked to `frame / fps` — browsers display the frame natively without a
- * canvas roundtrip.
- *
- * Degrades to the plain number input (plus a hint) when the companion video
- * field is unset/connection-driven or the video has no probed frame rate.
+ * Share one frame value across input, scrubber, and native video preview. Fall back to plain input when the
+ * companion video/rate cannot resolve.
  */
 const VideoFrameIndexInput = (props: WorkflowFieldInputProps) => {
   const { nodeId, onChange, value } = props;
@@ -1192,9 +1153,8 @@ const VideoFrameIndexInput = (props: WorkflowFieldInputProps) => {
   const videoItem: GalleryItem | undefined = data;
   const video = videoItem && videoItem.kind === 'video' && videoItem.name === videoName ? videoItem : null;
 
-  // Frame count is the slider's upper bound. duration*fps can be off-by-one for
-  // VFR containers, but the slider is for visual scrubbing — the backend
-  // re-resolves indices against the authoritative decoder count at invoke time.
+  // Use estimated frame count only for scrubbing bounds; backend invocation resolves authoritative decoder
+  // indices.
   const fps = video?.fps ?? null;
   const frameCount =
     video && fps && video.durationSeconds > 0 ? Math.max(1, Math.round(video.durationSeconds * fps)) : null;
@@ -1256,9 +1216,7 @@ const FrameScrubber = ({
 }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
 
-  // Seek whenever the resolved index changes. The half-frame nudge lands the
-  // seek inside the frame's display window — some codecs decode the exact
-  // boundary as black on first paint without it.
+  // Seek inside each frame's display interval to avoid boundary decoding artifacts.
   useEffect(() => {
     const el = videoRef.current;
 
@@ -1327,12 +1285,7 @@ const FrameScrubber = ({
   );
 };
 
-/**
- * Workflow `ColorField` values carry alpha as a `[0, 255]` integer, unlike
- * every other color in the app (and unlike `RgbaColor`, whose alpha is a unit
- * float). The scaling stays local to this adapter rather than pushing a second
- * alpha convention into `@platform/ui`'s color helpers.
- */
+/** Convert workflow alpha integers 0–255 locally; platform RgbaColor uses unit alpha. */
 const toColorFieldValue = (color: string): Record<string, number> => {
   const { a, b, g, r } = parseHexColor(color);
 
@@ -1368,14 +1321,8 @@ const ColorInput = ({ invalid, onChange, value }: WorkflowFieldInputProps) => {
 const LORA_MODEL_TYPES: ModelTaxonomyType[] = ['lora'];
 
 /**
- * The `Apply LoRA Collection` loaders take `LoRAField | list[LoRAField]`. Rather than making the
- * user wire up one `Select LoRA` node per LoRA and collect them, this edits the list in place: pick
- * a LoRA from the model picker to append it, then tune each weight on its own row.
- *
- * Rows address entries by index, not by model key. The picker keeps the user from adding a
- * duplicate, but an imported workflow can already contain one, and a key-based edit would hit every
- * copy at once. Indexing also keeps entries this widget cannot read (`null` holes from
- * `normalizeLoraFieldCollectionValue`) in place instead of dropping them on the next edit.
+ * Edit LoRA collections by index so imported duplicate keys and unreadable entries remain independent and
+ * preserved.
  */
 const LoRACollectionInput = ({ id, invalid, onChange, template, value }: WorkflowFieldInputProps) => {
   // The raw list, unreadable items included — see `toLoraFieldCollectionList`.
@@ -1390,9 +1337,7 @@ const LoRACollectionInput = ({ id, invalid, onChange, template, value }: Workflo
     (model: ModelConfig) => (allowedBases ? allowedBases.includes(model.base) : true),
     [allowedBases]
   );
-  // An emptied list is written back as `undefined` rather than `[]`: it is the loaders' own default,
-  // so the node returns to "no LoRAs" instead of sitting on a value that is equal in effect but
-  // different from its default.
+  // Write emptied collections as undefined to restore the loaders' actual default.
   const commit = useCallback((next: unknown[]) => onChange(next.length === 0 ? undefined : next), [onChange]);
   const onAdd = useCallback(
     (model: ModelConfig | null) => {
@@ -1476,10 +1421,8 @@ const LoRACollectionRow = ({
   onWeightChange: (index: number, weight: number) => void;
 }) => {
   const label = entry ? entry.lora.name : 'Unreadable entry';
-  // The committed value is a number, so re-rendering from it alone would rewrite a half-typed
-  // "0." to "0" mid-keystroke and turn the next digit into "05" — a 10x wrong weight from a
-  // plausible typing sequence. The draft holds the raw text until the field is left; blur drops
-  // it so the row picks up the committed (and range-clamped) value again.
+  // Keep raw weight drafts through typing so trailing decimals survive numeric commits; blur returns to the
+  // clamped committed value.
   const [draft, setDraft] = useState<string | null>(null);
   const onRemoveClick = useCallback(() => onRemove(index), [index, onRemove]);
   const onValueChange = useCallback(

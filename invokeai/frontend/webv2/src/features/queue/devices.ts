@@ -1,11 +1,4 @@
-/**
- * Generation-device reads, kept out of the broad `queue/react` barrel.
- *
- * The device options come from a server app-config endpoint that only the settings
- * surface and the device labels need. Exporting them from `react` pulled the store into
- * the activation payload of every widget that imports that barrel (the gallery adapter
- * imports it for progress targets), which the architecture performance gate flags.
- */
+/** Keep device config outside queue/react so progress consumers do not load settings-only transport/store code. */
 export {
   getDeviceLabel,
   getDeviceNameLabels,

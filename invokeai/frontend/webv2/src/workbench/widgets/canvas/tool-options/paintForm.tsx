@@ -24,13 +24,7 @@ import {
 /** The eraser preview's neutral ink: it erases, so no project color applies. */
 const ERASER_PREVIEW_COLOR = '#9aa2b1';
 
-/**
- * The brush/eraser form pieces are SHARED components that read the active tool
- * from the engine, rather than per-tool closures: identical component types
- * under identical group ids keep the DOM alive across the brush↔eraser
- * switch, which is what makes the "stable geometry across related tools"
- * invariant hold in the form world.
- */
+/** Share components/group ids across brush and eraser so switching tools preserves form DOM and geometry. */
 const usePaintOptions = (engine: ToolFormProps['engine']) => {
   const activeTool = useCanvasActiveTool(engine);
   const brush = useBrushOptions(engine);

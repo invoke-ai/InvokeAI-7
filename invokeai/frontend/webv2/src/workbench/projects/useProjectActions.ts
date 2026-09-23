@@ -25,18 +25,8 @@ import { describeRefusedProject } from './projectLoadRefusal';
 const CLOSE_FLUSH_ATTEMPTS = 3;
 
 /**
- * Open, close, and delete for projects, shared by the top bar and the Project
- * panel so the semantics stay in one place:
- *
- * - Open switches to the project when the session already has it, and otherwise
- *   hydrates it from the server first. Callers name a project; whether it is
- *   already loaded is not their problem.
- *
- * - Close flushes the document, drops the tab, and keeps the project in the
- *   library. Closing the last tab persists the empty session and lands on
- *   Home — an editor with no documents is the Home screen.
- * - Delete removes the project from the server (the only path that does, for
- *   open projects) and then closes its tab.
+ * Open reuses or hydrates a project. Close flushes while preserving the server record; closing the last tab
+ * returns Home. Delete removes the server project.
  */
 export const useProjectActions = (): {
   closeProject: (project: Project) => void;

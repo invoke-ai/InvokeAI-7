@@ -102,8 +102,7 @@ export class PsdExportController {
         if (!this.deps.isDocumentSnapshotCurrent(documentSnapshot)) {
           return 'stale';
         }
-        // The raster tree as it stands, minus leaves with nothing captured; the planner derives
-        // effective visibility from the own flags, the same way Photoshop will.
+        // Omit uncaptured leaves; derive effective visibility from own flags as Photoshop does.
         let missing: string | null = null;
         // PSD cannot represent a group stack: bake enclosing stacks into each
         // leaf (own first, then innermost outward). Approximate under member

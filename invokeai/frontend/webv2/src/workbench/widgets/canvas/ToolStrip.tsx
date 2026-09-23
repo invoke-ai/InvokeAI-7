@@ -168,12 +168,7 @@ const SelectFamilyButton = ({
  */
 const TOOL_STRIP_TOP = 'var(--wb-center-chrome-inset, var(--chakra-spacing-2))';
 
-/**
- * The canvas's left-docked, vertical tool strip, topped out directly beneath
- * the region's floating chrome islands. Color-picker is intentionally absent —
- * it's alt-hold-only for now (see `canvas-engine/input/pointerPipeline.ts`),
- * not a sticky tool a user selects directly.
- */
+/** Keep color picking alt-hold-only rather than exposing it as a sticky tool. */
 const ToolStripRoot = ({
   engine,
   isInteractionLocked = false,

@@ -1,10 +1,4 @@
-/**
- * Workflow library tag helpers. The backend stores a record's tags as one
- * comma-separated string and reports per-tag counts as a plain map, so both
- * shapes need the same normalization everywhere they are rendered: split and
- * trim exactly like the record service does, and drop tags no workflow in the
- * current category carries.
- */
+/** Normalize comma-separated tags like the backend and omit tags absent from the current category. */
 
 export interface WorkflowTagCount {
   tag: string;
@@ -24,21 +18,8 @@ export const parseWorkflowTags = (tags: string | null | undefined): string[] => 
 };
 
 /**
- * Folds rows that differ only in casing into one chip. The backend reports one
- * row per *stored* casing, so a library where some workflows say `sdxl` and
- * others `SDXL` gets two rows for what is, to the user, one tag.
- *
- * The merged count is the **maximum** of the variants, never their sum: the
- * backend counts each requested tag with `tags LIKE '%tag%'`, and SQLite's LIKE
- * is case-insensitive, so every variant's count is *already* the full
- * case-insensitive total — the same workflows, counted once per casing. Summing
- * them showed "sdxl 4" over two workflows. Given those semantics the variants
- * are equal anyway; taking the max just refuses to be wrong if they ever drift.
- *
- * The label is the casing of the biggest contributing row, ties broken
- * lexicographically — and since equal counts are the normal case, that tiebreak
- * is what actually decides, which keeps the chip stable whatever order the
- * backend returned.
+ * Merge case variants using maximum count, not sum, because LIKE totals overlap. Choose largest-count casing,
+ * breaking ties lexicographically for stable labels.
  */
 export const mergeTagCountsByCase = (counts: readonly WorkflowTagCount[]): WorkflowTagCount[] => {
   const merged = new Map<string, WorkflowTagCount>();

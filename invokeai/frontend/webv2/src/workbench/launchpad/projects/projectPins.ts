@@ -4,17 +4,7 @@ import { getWorkbenchPreferences, patchWorkbenchPreferences } from '@workbench/s
 
 import { prunePinnedProjectIds, toggleProjectPin } from './projectLibraryView';
 
-/**
- * Pin writes, in one place.
- *
- * Pins live in account preferences, so they follow the user across devices —
- * which also means a stale id persists forever unless something removes it.
- * Home and the library both pin, and both now go through here rather than
- * each reimplementing the read-modify-write.
- *
- * Every write reads the live snapshot rather than a captured render value, so
- * two quick toggles cannot drop the first one.
- */
+/** Centralize account pin writes and read the live snapshot so rapid toggles do not overwrite each other. */
 
 export const toggleProjectPinPreference = (projectId: string): void => {
   const current = getWorkbenchPreferences().launchpadPinnedProjectIds;

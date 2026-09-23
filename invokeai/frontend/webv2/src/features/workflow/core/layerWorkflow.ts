@@ -199,11 +199,7 @@ const allocateNodeId = (graph: WorkflowBackendGraph, base: string): string => {
   return `${base}-${suffix}`;
 };
 
-/**
- * Builds a throwaway backend graph that feeds one workflow image input and
- * captures one workflow image output. The editable workflow document is never
- * mutated.
- */
+/** Compile a temporary input/output capture graph without mutating the editable document. */
 export const buildLayerWorkflowGraph = (options: BuildLayerWorkflowGraphOptions): BuiltLayerWorkflowGraph => {
   const { document, imageName, input, output, templatesSnapshot } = options;
 

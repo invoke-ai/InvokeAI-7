@@ -19,11 +19,6 @@ import {
   type WorkflowModelRequirement,
 } from './modelRequirements';
 
-/**
- * Fixture helpers mirror `graphToDocument.test.ts`: minimal templates and
- * documents built inline rather than mocking the module under test.
- */
-
 const fieldInput = (name: string, overrides: Partial<FieldInputTemplate> = {}): FieldInputTemplate => ({
   default: undefined,
   description: '',

@@ -3,19 +3,7 @@ import { createExternalStore } from '@platform/state/externalStore';
 
 import type { ProjectPushOutcome, ProjectSchemaRefusal } from './projectFlush';
 
-/**
- * The bridge between the project sync layer and everything outside the editor.
- * {@link ProjectSyncSnapshot} is a read-only window for shell surfaces; {@link OpenProjectHandle}
- * is the other direction.
- *
- * ### One invariant, replacing three races
- *
- * A project the workbench holds is mutated only through the sync engine; every other project over
- * HTTP. Unconditional GET-and-PUT meant renaming an open project forked it into a conflict copy,
- * duplicating one copied what the server last acknowledged rather than what was on screen, and
- * deleting one raced the autosave about to recreate it. Now that a board commits with its project's
- * name, a stray write renames the board too.
- */
+/** Only the sync engine mutates open projects; closed projects use HTTP. */
 
 export interface ProjectSyncInfo {
   /** Server revision the next save is based on; null = never reached the server. */
@@ -57,34 +45,17 @@ registerAccountOwnedResource({
   name: 'project-sync',
 });
 
-/**
- * What a mounted editor can do to a project it holds, for callers that are not the editor.
- *
- * Every method routes through the workbench reducer or the sync engine, so the project's document,
- * its revision chain and its board stay in step. The handle exists only while the project is open;
- * `getOpenProject` returning `null` is the signal to go over HTTP instead.
- */
+/** Registered handles own open-project revisions and board state for their lifetime; null permits HTTP fallback. */
 export interface OpenProjectHandle {
   /** Close the tab, after the project has been deleted on the server. */
   close: () => void;
   /** Delete through the sync engine's mutation queue so in-flight saves finish first. */
   deleteOnServer: () => Promise<void>;
-  /**
-   * Push the live document, and report whether the server actually took it.
-   *
-   * Deliberately an outcome rather than a rejection. A push that did not land is recoverable — the
-   * document is cached and the next save retries — so a rename or a closing tab is right to ignore
-   * it. A caller about to read the project back from the server is not: see `assertProjectFlushed`.
-   */
+  /** Flush returns an acknowledgement outcome; callers reading server bytes must assert success. */
   flush: () => Promise<ProjectPushOutcome>;
   /** Stop the autosave from recreating this project while it is being deleted. */
   markDeleted: () => void;
-  /**
-   * Undo {@link markDeleted} after a deletion that did not happen.
-   *
-   * Paired with it here rather than left to call sites, because a project left marked never
-   * autosaves again for the rest of the session — a silent, unrecoverable failure to notice.
-   */
+  /** Unmark failed deletes so autosave can resume. */
   unmarkDeleted: () => void;
   /** Rename through the reducer, then flush — so the project and its board rename together. */
   rename: (name: string) => Promise<void>;

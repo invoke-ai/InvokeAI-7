@@ -93,11 +93,7 @@ const ReferenceImageCardBase = ({
 
   const handleRemove = useCallback(() => onRemove(referenceImage.id), [onRemove, referenceImage.id]);
 
-  // A move that lands on either end disables the very button that was just
-  // activated, and a disabled element cannot hold focus — a keyboard user
-  // would be dropped to <body> on the last step of walking a card to the top.
-  // The card's DOM nodes survive the reorder (the list is keyed by id), so
-  // handing focus to the arrow that stays live keeps their place in the stack.
+  // Hand off focus when reordering disables the activated arrow.
   const handleMoveUp = useCallback(() => {
     onMove(referenceImage.id, -1);
 
@@ -161,8 +157,7 @@ const ReferenceImageCardBase = ({
         )}
 
         <HStack gap="0.5">
-          {/* Card order is conditioning order, so the stack is reordered in
-              place — the same arrow pair the video panel's references use. */}
+          {/* Array order is conditioning order. */}
           <Tooltip content={t('widgets.generate.moveReferenceImageUp')}>
             <IconButton
               ref={moveUpRef}
@@ -389,9 +384,7 @@ const ReferenceImageThumbnail = ({
     }
   }, [image, onUseSize]);
 
-  // The ORIGINAL, not the effective image: a crop is uploaded as an
-  // intermediate, so the derivative this thumbnail shows has no cell in the
-  // grid to land on.
+  // Reveal original media; crop intermediates have no gallery cell.
   const originalImageName = image?.original.image.image_name;
   const handleFindInGallery = useCallback(() => {
     if (originalImageName !== undefined) {
@@ -401,9 +394,7 @@ const ReferenceImageThumbnail = ({
 
   return (
     <>
-      {/* 24 rather than 20: the action row now holds three controls, and three
-          `2xs` buttons plus their gaps overflowed an 80px tile — `overflow:
-          hidden` then clipped the outer two and, with them, their focus ring. */}
+      {/* Reserve width for all three buttons and their focus rings. */}
       <Box
         bg="bg.muted"
         borderWidth="1px"
@@ -436,8 +427,6 @@ const ReferenceImageThumbnail = ({
             style={OVERLAY_GRADIENT_STYLE}
             transition="opacity var(--wb-motion-duration-fast)"
           >
-            {/* Leads the row: locating the source is what you do BEFORE
-                deciding to crop it or take its size. */}
             <FindInGalleryButton name={originalImageName} variant="ghost" onFind={handleFindInGallery} />
             <Tooltip content={t('common.crop')}>
               <IconButton

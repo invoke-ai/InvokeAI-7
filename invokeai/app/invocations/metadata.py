@@ -191,6 +191,13 @@ GENERATION_MODES = Literal[
     "wan_extend_video",
     "minimax_h3_t2v",
     "minimax_h3_i2v",
+    "ltx2_t2v",
+    "ltx2_i2v",
+    "ltx2_a2v",
+    "ltx2_v2a",
+    "ltx2_lf2v",
+    "ltx2_flf2v",
+    "ltx2_extend_video",
     "minimax_h3_lf2v",
     "minimax_h3_flf2v",
     "minimax_h3_extend_video",
@@ -226,7 +233,7 @@ CORE_METADATA_VERSION = "1.0.0"
     title="Core Metadata",
     tags=["metadata"],
     category="metadata",
-    version="2.6.0",
+    version="2.7.0",
     classification=Classification.Internal,
 )
 class CoreMetadataInvocation(BaseInvocation):
@@ -321,6 +328,11 @@ class CoreMetadataInvocation(BaseInvocation):
     source_video_end_frame: Optional[int] = InputField(
         default=None,
         description="The last frame (inclusive) of the source video that was kept",
+    )
+    ltx2_context_frames: Optional[int] = InputField(
+        default=None,
+        description="Frames of the source an LTX-2 continuation opened with, which the join then crossfaded "
+        "out of both halves",
     )
     fps: Optional[int] = InputField(
         default=None,

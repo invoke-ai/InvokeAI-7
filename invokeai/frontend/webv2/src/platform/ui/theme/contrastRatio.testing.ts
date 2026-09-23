@@ -1,14 +1,4 @@
-/**
- * WCAG contrast measurement for accessibility assertions in browser tests.
- *
- * Lives here rather than in each test because it is a fixed formula, not a
- * per-surface judgement: two copies of it can silently disagree about what a
- * ratio *is*, and a contrast test that measures wrong is worse than no test —
- * it reports the palette as accessible when it is not.
- *
- * Test-only. It resolves colours by painting them to a canvas, so it needs a
- * real browser and has no place in the app bundle.
- */
+/** Browser-only contrast helpers; resolve colors through canvas and keep out of production bundles. */
 
 /** Resolve any CSS colour — named, `oklch()`, `color-mix()` — to sRGB channels. */
 export const toRgb = (color: string): [number, number, number] => {
@@ -32,12 +22,7 @@ const getRelativeLuminance = ([red, green, blue]: [number, number, number]): num
   return 0.2126 * linearize(red) + 0.7152 * linearize(green) + 0.0722 * linearize(blue);
 };
 
-/**
- * Contrast of `foreground` at `alpha` composited over `background`.
- *
- * Opacity is applied by compositing rather than by scaling the ratio, because
- * a translucent foreground is read against the pixel it actually produces.
- */
+/** Composite alpha before measuring contrast; never scale the ratio itself. */
 export const getContrastRatio = (foreground: string, background: string, alpha: number): number => {
   const backgroundRgb = toRgb(background);
   const composited = toRgb(foreground).map((channel, index) =>
@@ -50,11 +35,7 @@ export const getContrastRatio = (foreground: string, background: string, alpha: 
   return (lighter! + 0.05) / (darker! + 0.05);
 };
 
-/**
- * The colour a translucent fill actually produces over an opaque surface.
- * Painted rather than parsed: `toRgb` reads raw channels and would report a
- * semi-transparent background as if it were opaque.
- */
+/** Paint translucent fills over the surface; raw channel parsing would ignore compositing. */
 export const compositeColors = (top: string, bottom: string): string => {
   const context = document.createElement('canvas').getContext('2d')!;
 

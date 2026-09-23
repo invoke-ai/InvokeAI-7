@@ -15,12 +15,7 @@ import {
 } from '@features/gallery/queries';
 import { getProjectWidgetValues } from '@workbench/widgetState';
 
-/**
- * What a reveal needs from the workbench. Passed in rather than read from hooks
- * so this module can be loaded on the press that needs it — the panels' find
- * badges are on the editor's initial route, and eagerly importing the gallery
- * item/transfer barrel from there cost two more initial script requests.
- */
+/** Inject workbench dependencies so reveal loads on demand without adding gallery transfer code to editor boot. */
 export interface GalleryRevealContext {
   commands: WorkbenchCommands;
   queries: WorkbenchQueries;
@@ -67,39 +62,17 @@ const ensureGalleryPagesLoaded = async (
 };
 
 /**
- * Lands the gallery on one item: its board and view, any search or similarity
- * filter cleared (the item may not match it), and its position in the board's
- * ordering looked up so the grid can reach it — the page is selected in
- * paginated mode, and in infinite mode the pages down to it are loaded. The
- * grid scrolls to the newly selected item on its own once it is in the loaded
- * window. Preview follows the gallery selection by itself.
- *
- * The caller knows an item's kind and name; the selection contract wants a full
- * gallery item, so each is hydrated through the by-ref resolver — always fresh,
- * since a cached DTO's star/board state can drift, and kind-aware, since the
- * item can be a video. A slow fetch can never overwrite a newer selection.
- *
- * This is navigation only: no widget is raised, because the caller that sits
- * beside the grid (the image map) must not rearrange the workspace to scroll it.
- * `useFindGalleryItem` is the panels' gesture, which does both.
- *
- * The `ticket` is minted by the CALLER, at the moment of the gesture, so a
- * caller that loads this module on demand is still ordered — and fenced to its
- * project — by when it was pressed rather than by when its chunk landed. The
- * returned promise rejects if the item cannot be hydrated — a click on a
- * just-deleted item, or a blip mid-backend-restart — leaving the selection
- * unchanged; what to say about that is the caller's, since only it knows whether
- * it has already rearranged the workspace on the user's behalf.
+ * Reveal a freshly resolved item in its board/view with filters cleared and its page loaded; selection drives grid
+ * scrolling and Preview. Do not raise widgets. Caller-minted gesture tickets fence project changes and later
+ * selections even across lazy loading. Hydration failures reject without changing selection; position failures
+ * only lose scrolling.
  */
 export const revealGalleryItem = (
   { commands, queries, queryClient }: GalleryRevealContext,
   ref: GalleryItemRef,
   { projectId, sequence }: GalleryRevealTicket
 ): Promise<void> => {
-  // The press belongs to the project it was made in. This resolves over the
-  // network, and a switch in that window would otherwise clear the INCOMING
-  // project's search and move its selection — the same fence the video panel's
-  // play button carries.
+  // Fence the network result to the gesture's project before clearing filters or selecting.
   const isCurrent = () => isGalleryNavigationCurrent(sequence) && queries.isActiveProject(projectId);
 
   return galleryItems.resolve(ref).then(async (image) => {
@@ -110,11 +83,7 @@ export const revealGalleryItem = (
     const getGalleryValues = () => getProjectWidgetValues(queries.getSnapshot().activeProject, 'gallery');
     const settings = getGallerySettings(getGalleryValues());
     const targetView: GalleryView = image.category === 'general' ? 'images' : 'assets';
-    // The board listing the gallery will show once the reveal below has
-    // cleared any search: identical filter shape, so the name list (and
-    // the prefetched pages) land in the cache the gallery reads.
-    // The grid partitions on the flag: a starred image is revealed in
-    // the starred-only listing, an unstarred one in the plain listing.
+    // Match the post-reveal listing filters and starred partition so prefetched pages enter the gallery's cache.
     const wantsStarredOnly = image.starred === true;
     const listingFilter = {
       boardId: image.boardId,
@@ -123,13 +92,8 @@ export const revealGalleryItem = (
       searchTerm: '',
       starred: wantsStarredOnly,
     };
-    // The image's position within its board's ordering, which is what
-    // lets the gallery land on the right page rather than page 0. A
-    // failure here only costs the scroll, not the selection. The boards
-    // list rides along because the gallery falls back to Uncategorized
-    // when the target board is not listable (archived with "show
-    // archived" off) — landing on the hidden board's page number there
-    // would jump to an unrelated page of the wrong board.
+    // Resolve position for paging, but preserve selection on failure. Check board visibility to avoid using a
+    // hidden board's page in Uncategorized.
     let boardIndex: number | null = null;
 
     try {
@@ -178,9 +142,7 @@ export const revealGalleryItem = (
       (typeof values.searchTerm === 'string' && values.searchTerm !== '') ||
       typeof values.semanticSearchText === 'string';
 
-    // Filters would hide the listing the index was computed against
-    // (the image may not match them), so the reveal clears them and sets
-    // the starred filter to the image's own side of the partition.
+    // Clear filters to match the indexed listing and select the item's starred partition.
     if (
       hasSearch ||
       (values.starredOnly === true) !== wantsStarredOnly ||
@@ -198,11 +160,8 @@ export const revealGalleryItem = (
       commands.gallery.setView(targetView);
     }
 
-    // Select the image's board before the image. A reveal spans every
-    // accessible board, but `selectGalleryItem` stamps the navigation
-    // query from whatever list the gallery is CURRENTLY showing — a
-    // cross-board reveal without this left Preview's next/prev with no
-    // cursor. Mirrors the command palette's reveal-in-gallery.
+    // Select the board before the item so its navigation query captures the destination listing for Preview
+    // next/previous.
     commands.gallery.selectBoard(image.boardId);
 
     const page = boardIndex !== null ? Math.floor(boardIndex / GALLERY_PAGE_SIZE) : null;
@@ -213,10 +172,8 @@ export const revealGalleryItem = (
 
     if (boardIndex !== null && page !== null && settingsNow.paginationMode === 'infinite') {
       if (boardIndex < GALLERY_MAX_ROWS) {
-        // Within the base window's reach: load every page down to the
-        // image so the grid can scroll to it. Fire and forget — the
-        // selection must not wait on page hydration, and the grid's
-        // pending reveal settles whenever the item appears.
+        // Load pages through the item without delaying selection; the grid completes its reveal when the item
+        // arrives.
         void ensureGalleryPagesLoaded(queryClient, listingFilter, page + 1).catch(() => {});
       } else {
         // Deeper than the base window can ever load: anchor the

@@ -20,12 +20,8 @@ export const getQueueStatusChip = (
 };
 
 /**
- * The chip's hairline, or `undefined` for no bar at all.
- *
- * Only the running tone gets one: an idle queue has nothing to fill, and a
- * paused one would show a bar that never moves, which reads as a hang. The
- * fill itself routes through `getDeterminateProgressFraction` — see that
- * function for why zero reads as indeterminate.
+ * Show a progress hairline only while running; paused bars look stalled. getDeterminateProgressFraction handles
+ * zero as indeterminate.
  */
 export const getQueueStatusProgress = (
   chip: QueueStatusChip,

@@ -4,11 +4,7 @@ import { Tooltip } from '@platform/ui/Tooltip';
 import { RotateCcwIcon } from 'lucide-react';
 import { useCallback } from 'react';
 
-/**
- * Reset-to-default affordance. Callers render it only while the value
- * differs from the default, so its presence itself signals "modified". No
- * fallback label: every call site knows what it's resetting and says so.
- */
+/** Render only for modified values and supply a specific reset label. */
 export const ModelDefaultButton = ({ label, onClick }: { label: string; onClick: () => void }) => {
   const handleClick = useCallback(
     (event: React.MouseEvent<HTMLButtonElement>) => {

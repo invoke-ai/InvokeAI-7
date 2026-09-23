@@ -440,8 +440,7 @@ describe('media cookie recovery on restore', () => {
 
     await session.ensureAuthSession();
 
-    // A restored session has a valid JWT but no media cookie, so every <img> would 401
-    // without this call. Login needs no equivalent — the backend sets the cookie there.
+    // Restored JWT sessions need a media cookie refresh; login already sets it.
     expect(api.refreshMediaCookie).toHaveBeenCalledTimes(1);
     expect(session.getAuthSession()).toMatchObject({ phase: 'ready', user });
   });

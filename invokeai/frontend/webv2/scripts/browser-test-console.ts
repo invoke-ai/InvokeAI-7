@@ -1,18 +1,7 @@
 /* eslint-disable no-console -- this module exists to intercept and re-emit console output */
 import { afterAll, beforeAll } from 'vitest';
 
-/**
- * Collapses React's "not wrapped in act(...)" warning in browser runs.
- *
- * The warning is ~10 lines of identical boilerplate and fires once per unwrapped update, so a full
- * run emitted over a thousand copies of the same text -- enough to bury the actual failure at the
- * bottom of a CI log. Nearly all of them come from third-party components whose resize-driven
- * state updates we do not control (Chakra's ScrollArea is the bulk of them), so the individual
- * copies carry no information a count does not.
- *
- * The signal is kept rather than silenced: every occurrence is counted per component and reported
- * once per test file. Anything that is not this specific warning passes through untouched.
- */
+/** Count React act warnings per component and report once per file; preserve every other console message unchanged. */
 const ACT_WARNING = 'was not wrapped in act(';
 const COMPONENT = /An update to (\S+)/;
 const PLACEHOLDER = /%[sdifoOc]/g;

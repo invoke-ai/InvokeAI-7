@@ -13,8 +13,7 @@ import { userEvent } from 'vitest/browser';
 const parseDynamicPrompts = vi.hoisted(() => vi.fn());
 
 vi.mock('@features/generation/data/promptUtilities', () => ({ parseDynamicPrompts }));
-// The wildcards tab reports delete failures through Generation's UI port, which
-// only the app composes.
+// Provide the Generation UI port for wildcard error reporting.
 vi.mock('@features/generation/ui/GenerationUiContext', async (importOriginal) => ({
   ...(await importOriginal<object>()),
   useGenerationUi: () => ({ notifications: { error: vi.fn(), info: vi.fn(), reportError: vi.fn() } }),
@@ -39,10 +38,7 @@ const BASE_CONFIG: DynamicPromptsConfig = {
   seedBehaviour: 'per-iteration',
 };
 
-/**
- * Renders with real state, so a control that reflects its own value (a segmented
- * control does) can actually be toggled back and forth.
- */
+/** Use stateful controlled values so toggles can round-trip. */
 const render = async (onChange: (patch: Partial<DynamicPromptsConfig>) => void = vi.fn(), isSeedFixed = false) => {
   host = document.createElement('div');
   document.body.append(host);
@@ -81,8 +77,7 @@ const openPopover = async () => {
   await act(async () => {
     await userEvent.click([...host!.querySelectorAll('button')].at(-1)!);
   });
-  // The popover opens with a scale transform, and getBoundingClientRect includes
-  // transforms — measuring before it settles reports every box ~5% short.
+  // Wait for scale animation before measuring geometry.
   await act(async () => {
     await new Promise((resolve) => {
       window.setTimeout(resolve, 300);
@@ -133,10 +128,7 @@ describe('dynamic prompts popover controls', () => {
   });
 
   it('switches seed behaviour without tearing down the widget', async () => {
-    // Regression: a Chakra Select here threw `r.options is not iterable` from
-    // syncSelectElement as the popover opened, taking the Generate widget down
-    // with it. The seed choice is a switch now, which has no hidden native
-    // select to sync.
+    // Cover hidden native-select synchronization failures.
     const onChange = vi.fn();
 
     await render(onChange);
@@ -158,9 +150,7 @@ describe('dynamic prompts popover controls', () => {
   });
 
   it('sends a click on the seed label to the switch, not the number input', async () => {
-    // Regression: Chakra derives the switch's label `for` from its own id
-    // counter, which collided with the number input beside it, so clicking the
-    // label focused Max prompts instead of toggling the switch.
+    // Clicking the label must toggle its own switch, not a sibling number input.
     const onChange = vi.fn();
 
     await render(onChange);
@@ -171,10 +161,7 @@ describe('dynamic prompts popover controls', () => {
     const hiddenInput = switchRoot.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
     const numberInput = document.querySelector<HTMLInputElement>('[data-scope="number-input"][data-part="input"]')!;
 
-    // Whether the generated ids actually collide depends on how many other
-    // controls rendered first, so this asserts the condition that caused it —
-    // two controls sharing an id — rather than relying on the ordering that
-    // happened to trip it in the app.
+    // Assert ID uniqueness directly, independently of prior render order.
     expect(hiddenInput.id).toBeTruthy();
     expect(hiddenInput.id).not.toBe(numberInput.id);
 
@@ -187,8 +174,7 @@ describe('dynamic prompts popover controls', () => {
   });
 
   it('keeps the settings row the same height in either mode', async () => {
-    // The shuffle button only applies to a random sample, so it is always
-    // rendered and merely hidden; switching modes must not reflow the row.
+    // Hidden shuffle still reserves space across modes.
     const onChange = vi.fn();
 
     await render(onChange);
@@ -201,8 +187,8 @@ describe('dynamic prompts popover controls', () => {
     await act(async () => {
       await userEvent.click(document.querySelector<HTMLElement>('[data-scope="menu"][data-part="trigger"]')!);
     });
-    // A dispatched click rather than userEvent: the menu animates open, and
-    // userEvent waits for the element to be "stable" before it will click.
+    // Dispatch clicks to test wiring without animation-stability waits; this does not test real pointer
+    // actionability.
     await act(async () => {
       ([...document.querySelectorAll('[data-scope="menu"][data-part="item"]')].at(-1) as HTMLElement).click();
       await Promise.resolve();
@@ -220,13 +206,10 @@ describe('dynamic prompts popover controls', () => {
     const numberInput = popover.querySelector<HTMLInputElement>('[data-scope="number-input"][data-part="input"]')!;
     const numberLabel = popover.querySelector<HTMLLabelElement>(`label[for="${numberInput.id}"]`);
 
-    // The visible label is wired to the input rather than a detached bit of
-    // text with an aria-label duplicating it.
     expect(numberLabel, 'number input should have an associated label').toBeTruthy();
     expect(numberInput.getAttribute('aria-label')).toBeNull();
 
-    // A <label for> cannot name a button, so the trigger is named by the field
-    // label plus its own value.
+    // The accessible name combines the field label and selected value.
     const trigger = popover.querySelector<HTMLElement>('[data-scope="menu"][data-part="trigger"]')!;
     const namedBy = (trigger.getAttribute('aria-labelledby') ?? '')
       .split(' ')
@@ -236,9 +219,7 @@ describe('dynamic prompts popover controls', () => {
   });
 
   it('anchors the mode menu to its trigger', async () => {
-    // Regression: setting an explicit id on the trigger left zag unable to find
-    // the element, so the positioner had nothing to anchor to and the menu
-    // rendered at the top-left of the screen.
+    // Supply IDs through Zag so popup anchoring resolves the trigger.
     await render();
     await openPopover();
 
@@ -278,8 +259,7 @@ describe('dynamic prompts popover controls', () => {
       await userEvent.click(tabButton('wildcards')!);
     });
 
-    // The summary badge and the "New wildcard" button sit in the same slot on
-    // either tab, so switching tabs must not change the header's shape.
+    // Header geometry must remain equal across tabs.
     expect(headerControl()).toBe(summaryHeight);
   });
 });

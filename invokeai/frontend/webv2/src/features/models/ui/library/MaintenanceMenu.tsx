@@ -11,10 +11,6 @@ import { BrushCleaningIcon, FolderSearchIcon, MoreHorizontalIcon, RefreshCcwIcon
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
-/**
- * Library maintenance: refresh, clean up orphaned model folders (files on disk
- * with no database record), and empty the in-memory model cache.
- */
 export const MaintenanceMenu = () => {
   const { t } = useTranslation();
   const notify = useNotify();

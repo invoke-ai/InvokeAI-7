@@ -13,11 +13,6 @@ import {
 } from 'lucide-react';
 import { useCallback, useMemo } from 'react';
 
-/**
- * Right-click utilities for the flow pane and nodes, anchored at the pointer.
- * The menu is fully controlled because each action needs editor-local context.
- */
-
 export interface NodeContextMenuState {
   kind: 'node';
   nodeId?: string;

@@ -50,9 +50,7 @@ afterEach(async () => {
 
 describe('prompt line numbers', () => {
   it('indents the text clear of the gutter so numbers never overlap it', async () => {
-    // Regression: the gutter offset was a calc() over a Chakra spacing var whose
-    // generated name does not resolve for fractional tokens, so the declaration
-    // was dropped and the numbers rendered on top of the first characters.
+    // Fractional Chakra spacing variables are invalid inside calc.
     await render('toyota+\nhonda\nacura--');
 
     const textarea = host!.querySelector('textarea')!;
@@ -83,8 +81,7 @@ describe('prompt line numbers', () => {
     const heights = gutterEntries().map((entry) => entry.getBoundingClientRect().height);
 
     expect(gutterEntries().map((entry) => entry.textContent)).toEqual(['1', '2', '3']);
-    // The wrapped line keeps a single number but occupies several rows, so its
-    // gutter entry has to be taller than its unwrapped neighbours.
+    // Wrapped lines need taller gutter entries but only one logical line number.
     expect(heights[1]).toBeGreaterThan(heights[0] * 2);
     expect(heights[2]).toBeCloseTo(heights[0], 1);
   });

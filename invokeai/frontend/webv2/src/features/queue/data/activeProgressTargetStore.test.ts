@@ -14,8 +14,7 @@ describe('activeProgressTargetStore', () => {
   });
 
   it('holds every concurrently-running target', () => {
-    // Multi-GPU runs one session per GPU, so a batch of two across two GPUs has two
-    // live slots. The previous single-value store dropped all but the latest.
+    // Keep one live slot per concurrent GPU session; a single value loses other sessions.
     activeProgressTargetStore.set(target('queue-1', 1));
     activeProgressTargetStore.set(target('queue-1', 2));
 
@@ -61,8 +60,7 @@ describe('activeProgressTargetStore', () => {
   });
 
   it('preserves start order so the followed target does not change while it runs', () => {
-    // The single-target accessor reads targets[0]. Following the most recent reporter
-    // instead is what made the preview flip between concurrent sessions.
+    // Follow the oldest slot consistently rather than whichever session reports most recently.
     activeProgressTargetStore.set(target('queue-1', 1));
     activeProgressTargetStore.set(target('queue-1', 2));
     activeProgressTargetStore.set(target('queue-1', 1));

@@ -167,6 +167,11 @@ def extract_comfy_quant_hints(sd: dict[str, Any]) -> dict[str, dict[str, Any]]:
 # Key prefixes redistributors wrap a transformer in. Loaders strip these off the state dict before
 # anything else, so `_quantization_metadata` — which is read from the file and still carries them —
 # has to be stripped the same way.
+#
+# Deliberately a superset of what any single loader strips, and deliberately not bound to the prefix
+# a loader detected: see `model_manager/checkpoint_prefix.py`, which records why the forgiving rule
+# is the one kept. Binding the two is the obvious-looking change, and it loses a hint that matches
+# today.
 TRANSFORMER_KEY_PREFIXES = ("model.diffusion_model.", "diffusion_model.", "net.")
 
 

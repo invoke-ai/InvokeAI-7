@@ -16,12 +16,7 @@ import { GroupSelectedNotice } from './GroupSelectedNotice';
 import { LayerSection } from './LayerSection';
 import { PropertiesSection } from './PropertiesSection';
 
-/**
- * Full editors for what the canvas is doing: the running operation first, then
- * the active tool's form. Reads and writes the engine's option stores and
- * document transactions through the same adapters the canvas registers; it
- * mirrors no state of its own.
- */
+/** Show active operation before tool forms; use existing engine stores/transactions without mirrored state. */
 export const PropertiesPane = () => {
   const { t } = useTranslation();
   const engine = useCanvasEngine();

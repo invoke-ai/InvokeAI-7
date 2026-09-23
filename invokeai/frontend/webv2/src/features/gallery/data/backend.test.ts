@@ -653,14 +653,11 @@ describe('imageMakeDurableChanges', () => {
 
 describe('imageMakeCanvasAssetChanges', () => {
   it('makes the image durable AND moves it out of the gallery images view', () => {
-    // A node's output is `general` — precisely what the Images view lists — so
-    // durability alone published every ControlNet preprocess into the gallery.
+    // Durability alone leaves node outputs in `general`, publishing preprocess results to Images.
     expect(imageMakeCanvasAssetChanges()).toEqual({ image_category: 'other', is_intermediate: false });
   });
 
   it('uses the same category the canvas uploads its own paint bitmaps under', () => {
-    // Layer pixels are layer pixels however they were produced; a filtered
-    // control map must not be classified differently from a painted one.
     expect(imageMakeCanvasAssetChanges().image_category).toBe('other');
   });
 
@@ -683,10 +680,7 @@ describe('gallery category queries', () => {
   };
 
   it('never asks the assets view for the canvas-owned category', async () => {
-    // The regression this guards: canvas paint bitmaps, composites and adopted
-    // filter results all upload as `other`. While `other` was an assets
-    // category, every brush stroke and every generation put an image in the
-    // user's Assets tab.
+    // Canvas-owned `other` images must stay out of Assets, including brush strokes and adopted filter results.
     expect(await categoriesFor('assets')).not.toContain('other');
   });
 

@@ -1,18 +1,7 @@
 /**
- * Canvas compositing settings — the infill / coherence / mask-blur knobs and
- * output-compositing policy used by canvas inpaint and outpaint invocations.
- *
- * Like {@link import('./canvasStrength').readCanvasDenoisingStrength}, these
- * values are persisted per-project inside the canvas widget's own state values
- * (`widgetInstances['canvas'].state.values`), so they survive reloads and are
- * consumed when the queue submission is compiled. The generate widget's compositing section owns the
- * numeric controls; the canvas settings menu owns the masked-only output flag.
- * `prepareCanvasInvocation` reads them together — defaulted + clamped — and
- * threads one generation-facing contract into the pure graph compiler.
- *
- * Defaults mirror the legacy params/canvas-settings slices: infill `lama`, mask
- * blur 16, coherence Gaussian Blur / edge 16 / min-denoise 0, and masked-only
- * output enabled. Pure data + a reader; no React, no engine.
+ * Persist canvas compositing policy per project. Generate owns numeric controls, Canvas settings owns masked-only
+ * output, and prepareCanvasInvocation supplies defaulted/clamped values to compilation. Defaults mirror legacy
+ * infill/coherence/mask behavior.
  */
 
 /** The infill methods the outpaint graph can request (legacy `zInfillMethod`). */
@@ -102,11 +91,7 @@ const readInfillColor = (value: unknown): CanvasInfillColor => {
   return { ...DEFAULT_CANVAS_COMPOSITING.infillColorValue };
 };
 
-/**
- * Reads the persisted canvas compositing settings from a widget's `state.values`,
- * applying legacy defaults for any missing/invalid field and clamping to valid
- * ranges. Always returns a fully-populated settings object.
- */
+/** Return complete compositing settings with legacy defaults for invalid/missing fields and valid-range clamping. */
 export const readCanvasCompositingSettings = (
   values: Record<string, unknown> | undefined
 ): CanvasCompositingSettings => {

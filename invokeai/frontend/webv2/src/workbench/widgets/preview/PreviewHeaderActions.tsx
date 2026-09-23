@@ -1,35 +1,42 @@
 import type { WidgetViewProps } from '@workbench/widgetContracts';
 
 import { Box, HStack } from '@chakra-ui/react';
+import { galleryImageItemToGalleryImage, isGalleryImageItem } from '@features/gallery/contracts';
 import { ToggleIconButton } from '@platform/ui';
 import { getProjectWidgetValues } from '@workbench/widgetState';
 import { useActiveProjectSelector, useWorkbenchCommands } from '@workbench/WorkbenchContext';
 import { GalleryThumbnailsIcon, HourglassIcon } from 'lucide-react';
-import { useCallback } from 'react';
+import { useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { useLivePreviewFollow } from './livePreviewFollow';
 import { PreviewActionStrip } from './PreviewActionStrip';
-import { usePreviewHeaderContext } from './previewHeaderStore';
-import { getPreviewFilmstripVisible } from './previewSettings';
+import { PreviewDetailsPopover } from './PreviewDetailsPopover';
+import { usePreviewHeaderContext, usePreviewStageContext, type PreviewZoomControls } from './previewHeaderStore';
+import { getPreviewFilmstripVisible, getPreviewMetadataOpen } from './previewSettings';
+import { PreviewZoomMenu } from './PreviewZoomMenu';
 
-/**
- * The preview widget's header actions: the image action strip for the current
- * selection (published by the view via `previewHeaderStore`) plus the
- * in-progress diffusion toggle. Actions live here — in the frame's standard
- * header slot — like every other widget, not in the widget body.
- */
+const Divider = () => <Box bg="border.subtle" flexShrink={0} h="4" w="1px" />;
+
 export const PreviewHeaderActions = ({ region }: WidgetViewProps) => {
   const { t } = useTranslation();
   const livePreview = useLivePreviewFollow();
   const showProgressImagesInViewer = useActiveProjectSelector((project) => project.settings.showProgressImagesInViewer);
   const hasProgressImage = livePreview.sessions.length > 0;
-  const { actionItem, actions, copyCurrentVideoFrame, isVideoFrameCopyAvailable, openItemMenu, openVideoDetails } =
+  const { actionItem, actions, copyCurrentVideoFrame, isVideoFrameCopyAvailable, openItemMenu, position, zoom } =
     usePreviewHeaderContext();
-  const isFilmstripVisible = useActiveProjectSelector((project) =>
-    getPreviewFilmstripVisible(getProjectWidgetValues(project, 'preview'))
+  const { stageElement, zoom: zoomReadout } = usePreviewStageContext();
+  const zoomControls = useMemo<PreviewZoomControls | null>(
+    () => (zoom && zoomReadout ? { ...zoom, ...zoomReadout } : null),
+    [zoom, zoomReadout]
   );
+  const { isDetailsOpen, isFilmstripVisible } = useActiveProjectSelector((project) => {
+    const values = getProjectWidgetValues(project, 'preview');
+
+    return { isDetailsOpen: getPreviewMetadataOpen(values), isFilmstripVisible: getPreviewFilmstripVisible(values) };
+  });
   const { account, widgets } = useWorkbenchCommands();
+  const isFull = region === 'center';
   const label = showProgressImagesInViewer
     ? t('widgets.preview.hideInProgressDiffusion')
     : t('widgets.preview.showInProgressDiffusion');
@@ -42,41 +49,60 @@ export const PreviewHeaderActions = ({ region }: WidgetViewProps) => {
     () => widgets.patchValues('preview', { filmstripVisible: !isFilmstripVisible }),
     [isFilmstripVisible, widgets]
   );
+  const setDetailsOpen = useCallback(
+    (open: boolean) => widgets.patchValues('preview', { metadataOpen: open }),
+    [widgets]
+  );
 
   return (
     <HStack gap="1">
+      {/* Compact chrome has no room for a readout at fit, but a zoomed image must
+          still say so and offer the way back. */}
+      {zoomControls && (isFull || zoomControls.isZoomed) ? (
+        <>
+          <PreviewZoomMenu zoom={zoomControls} />
+          <Divider />
+        </>
+      ) : null}
       {actionItem && actions ? (
         <>
           <PreviewActionStrip
             actions={actions}
-            density={region === 'center' ? 'full' : 'compact'}
+            density={isFull ? 'full' : 'compact'}
             isVideoFrameCopyAvailable={isVideoFrameCopyAvailable}
             item={actionItem}
             onCopyCurrentFrame={copyCurrentVideoFrame ?? undefined}
-            onOpenDetails={openVideoDetails ?? undefined}
             onOpenMenu={openItemMenu}
           />
-          <Box bg="border.subtle" flexShrink={0} h="4" w="1px" />
+          <Divider />
         </>
       ) : null}
-      {/* Both toggles go through `ToggleIconButton` so they read as one control
-          type: the filled variant carries "on", `aria-pressed` carries it for
-          assistive tech, and the label doubles as the tooltip. */}
+
+      <ToggleIconButton
+        checked={showProgressImagesInViewer}
+        icon={HourglassIcon}
+        label={label}
+        // Apply dimming after primitive props so idle-state styling survives.
+        opacity={hasProgressImage || showProgressImagesInViewer ? 1 : 0.7}
+        onCheckedChange={toggleProgressImages}
+      />
       <ToggleIconButton
         checked={isFilmstripVisible}
         icon={GalleryThumbnailsIcon}
         label={filmstripLabel}
         onCheckedChange={toggleFilmstrip}
       />
-      <ToggleIconButton
-        checked={showProgressImagesInViewer}
-        icon={HourglassIcon}
-        label={label}
-        // Dimmed while there is nothing in flight to show. Spread after the
-        // primitive's own props, so it survives.
-        opacity={hasProgressImage || showProgressImagesInViewer ? 1 : 0.7}
-        onCheckedChange={toggleProgressImages}
-      />
+      {actionItem && actions ? (
+        <PreviewDetailsPopover
+          actions={actions}
+          image={isGalleryImageItem(actionItem) ? galleryImageItemToGalleryImage(actionItem) : null}
+          isOpen={isDetailsOpen}
+          item={actionItem}
+          position={position}
+          stageElement={stageElement}
+          onOpenChange={setDetailsOpen}
+        />
+      ) : null}
     </HStack>
   );
 };

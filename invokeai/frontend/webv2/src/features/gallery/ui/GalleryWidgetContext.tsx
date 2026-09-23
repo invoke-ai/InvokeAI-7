@@ -10,10 +10,8 @@ import type { GalleryStateView } from './galleryStateView';
 import type { GalleryItemActions, GalleryWidgetProps, GalleryWidgetRuntime } from './GalleryUiContext';
 
 /**
- * Gallery-widget intents. The provider (GalleryWidgetView) is the only place
- * that knows whether an intent maps to a workbench dispatch, a backend call,
- * or both. Image-level operations (star, delete, move, ...) live in the shared
- * ImageActions contract instead so other widgets reuse them.
+ * The provider maps widget intents to workbench/backend actions; shared ImageActions owns cross-widget item
+ * operations.
  */
 export interface GalleryActions {
   archiveBoard: (boardId: string, archived: boolean) => Promise<void>;

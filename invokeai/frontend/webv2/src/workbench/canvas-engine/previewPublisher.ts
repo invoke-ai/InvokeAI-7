@@ -60,12 +60,7 @@ export interface PreviewPublisher {
   ): Promise<FilterPreviewOutcome>;
 }
 
-/**
- * Decodes a `data:` URL to a `Blob` without a DOM (`atob`/`Blob`/`Uint8Array`
- * are all node-safe), so the staged-progress decode path runs in vitest through
- * the injected raster backend just like the imageName path runs through the
- * injected resolver.
- */
+/** DOM-free data-URL decoding lets injected-backend progress previews run in node tests. */
 const dataUrlToBlob = (dataUrl: string): Blob => {
   const commaIndex = dataUrl.indexOf(',');
   const header = commaIndex >= 0 ? dataUrl.slice(0, commaIndex) : '';
@@ -83,16 +78,9 @@ const dataUrlToBlob = (dataUrl: string): Blob => {
 };
 
 /**
- * Publishes the two kinds of transient preview the engine draws over a layer:
- * the staged generation result and a filter's output.
- *
- * Both decode asynchronously, so both are token-guarded — a decode that
- * resolves after a newer set/clear must not paint. Filter previews carry the
- * extra requirement that the layer still exist and its export guard still be
- * current, re-checked *after* the decode as well as before, because the user
- * can edit the layer while the image is in flight. A dimension mismatch on a
- * typed filter is a hard error rather than a silent stale, since it means the
- * backend returned something that does not describe the region asked for.
+ * Staged and filter previews token-guard async decodes against newer sets/clears. Filters also recheck layer
+ * existence and export guards after decode. Typed-filter dimension mismatches are contract errors, not silent
+ * stale results.
  */
 export const createPreviewPublisher = (deps: CreatePreviewPublisherDeps): PreviewPublisher => {
   const { previews } = deps;
@@ -160,12 +148,8 @@ export const createPreviewPublisher = (deps: CreatePreviewPublisherDeps): Previe
   };
 
   /**
-   * Drops a layer's filter-preview state and bumps its token so an in-flight
-   * decode for it is discarded — even if the id is later reused (e.g. an undo
-   * that restores a deleted layer must not resurrect a stale decode result
-   * that resolves afterward). The token is bumped, never reset/deleted, so a
-   * later guarded preview for the same id can never collide with a
-   * still-in-flight decode's captured token.
+   * Drop preview state and increment, never delete/reset, its token so late decodes cannot revive previews after
+   * layer-id reuse.
    */
   const clearFilterPreview = (layerId: string): void => {
     if (previews.clearFilter(layerId)) {

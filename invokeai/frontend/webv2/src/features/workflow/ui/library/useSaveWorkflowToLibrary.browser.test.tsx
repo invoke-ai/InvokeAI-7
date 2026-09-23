@@ -62,19 +62,7 @@ const createMutablePort = <Snapshot,>(initialSnapshot: Snapshot) => {
   };
 };
 
-/**
- * Regression coverage for the create-path echo-autosave bug (`saveToLibrary`
- * on a graph with no `libraryWorkflowId` yet):
- * `bindLibraryWorkflow` synchronously adds `libraryWorkflowId` to the
- * stored project graph, but the hook used to mark the autosaver's baseline
- * with the JSON it had serialized *before* the bind — which
- * `serializeWorkflowJson` does not include `id` (added only once
- * `libraryWorkflowId` is set). The library autosaver's own `read()`
- * re-serializes the *current* (now-bound) graph, which does include `id`, so
- * the mismatch looked like a dirty edit and queued a redundant PUT of
- * otherwise-identical content on the next debounce. The fix re-serializes
- * from the post-bind store snapshot before marking synced.
- */
+/** Baseline newly created workflows from the post-bind graph, including its ID, to prevent a redundant autosave. */
 describe('useSaveWorkflowToLibrary bind-then-sync', () => {
   let host: HTMLDivElement;
   let root: Root;
@@ -156,10 +144,8 @@ describe('useSaveWorkflowToLibrary bind-then-sync', () => {
       expect(bindLibraryWorkflow).toHaveBeenCalledWith('library-workflow-99');
       expect(syncedCalls).toHaveLength(1);
 
-      // What the library autosaver's own read() would produce right now,
-      // from the bound store — the synced baseline must match this exactly
-      // (same content AND key order, since the autosaver dedupes on the
-      // stringified JSON) or the bind alone is read back as a dirty edit.
+      // Synced baseline must match current serialization content and key order because deduplication compares JSON
+      // strings.
       const expectedPostBindSerialized = serializeWorkflowJson(project.port.getSnapshot().projectGraph);
 
       expect(JSON.stringify(syncedCalls[0])).toBe(JSON.stringify(expectedPostBindSerialized));
@@ -170,12 +156,7 @@ describe('useSaveWorkflowToLibrary bind-then-sync', () => {
   });
 });
 
-/**
- * `saveDocumentAsNew` saves an arbitrary document (e.g. a preview payload
- * that never became the active project graph) to the library. Unlike
- * `saveToLibrary`, it must not bind the result to the project or mark the
- * autosaver's synced baseline — the active project graph is untouched.
- */
+/** Saving arbitrary preview documents must not bind or change the active project's autosave baseline. */
 describe('useSaveWorkflowToLibrary saveDocumentAsNew', () => {
   let host: HTMLDivElement;
   let root: Root;
@@ -259,8 +240,6 @@ describe('useSaveWorkflowToLibrary saveDocumentAsNew', () => {
     expect(createLibraryWorkflowMock.mock.calls[0]?.[0]).toStrictEqual(serializeWorkflowJson(document));
     expect(bindLibraryWorkflow).not.toHaveBeenCalled();
     expect(invalidateWorkflowLibraryCacheMock).toHaveBeenCalledTimes(1);
-    // The active project graph (a different document from the one saved)
-    // must be untouched: no libraryWorkflowId leaked onto it.
     expect(project.port.getSnapshot().projectGraph.libraryWorkflowId).toBeUndefined();
   });
 

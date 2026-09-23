@@ -32,10 +32,7 @@ export interface ResolveGenerateWidgetValuesInput {
 export interface ResolvedGenerateWidgetValues {
   /** Canonical values for rendering and user commits. */
   values: GenerateWidgetValues;
-  /**
-   * The complete canonical system-owned patch, or null at the fixed point.
-   * `batchCount` is deliberately omitted because the Workbench topbar owns it.
-   */
+  /** A fixed point returns null; batchCount belongs to the topbar and is excluded. */
   systemPatch: Partial<GenerateWidgetValues> | null;
 }
 
@@ -58,29 +55,18 @@ const createSystemPatch = (values: GenerateWidgetValues): Partial<GenerateWidget
   return systemPatch;
 };
 
-/**
- * Resolves persisted Generate widget state against backend-owned catalogs.
- *
- * This is the sole owner of default-model selection and denormalized snapshot
- * reconciliation. Applying `systemPatch` reaches a fixed point: the next call
- * returns the same canonical values with a null patch.
- */
+/** This resolver owns reconciliation; applying systemPatch must reach a fixed point. */
 export const resolveGenerateWidgetValues = ({
   models,
   promptTemplates,
   storedValues,
 }: ResolveGenerateWidgetValuesInput): ResolvedGenerateWidgetValues | null => {
-  // Fail closed until the backend's architecture table has arrived. Resolving without it would
-  // fall back to generic defaults -- and this resolver's `systemPatch` is *persisted* into the
-  // project, so a fallback grid or step count would be written to disk rather than merely shown.
+  // Gate reconciliation to prevent persisting fallback defaults.
   if (!hasArchitectureCapabilities()) {
     return null;
   }
 
-  // Described, not merely supported: `getDefaultGenerateSettings` below reads the architecture's
-  // grid, optimal size, steps and scheduler, and this resolver's patch is persisted. Selecting a
-  // base the served table omits would write `FALLBACK_GENERATION_CONFIG` into the project file --
-  // the same reason the whole resolver waits for the table in the first place.
+  // Require a described architecture before selecting defaults for persistence.
   const supportedModels = models.filter(isGenerateModelSelectable).filter(isArchitectureDescribed);
 
   if (supportedModels.length === 0) {

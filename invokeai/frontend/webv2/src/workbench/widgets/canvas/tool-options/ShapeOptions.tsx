@@ -37,12 +37,8 @@ interface SelectedShape {
 const FALLBACK_COLOR = '#000000';
 
 /**
- * Displayed values follow the selected shape layer, else the creation defaults
- * — kind/width/enablement from the tool options and colors from the active
- * pair (fill = foreground, stroke = background). A selected shape's edits
- * commit to the document (colors record one history entry on release); with
- * nothing selected the color chips edit the pair itself, so there is no second
- * global shape color.
+ * Edit selected shape content or tool defaults with pair colors. Color gestures commit once; without a selected
+ * shape they edit the shared pair.
  */
 const useShapeEditor = (engine: ToolFormProps['engine']) => {
   const { t } = useTranslation();

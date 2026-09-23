@@ -17,15 +17,6 @@ import { ArrowRightIcon, EllipsisVerticalIcon } from 'lucide-react';
 import { useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
-/**
- * The single most recently edited project, given more room than the rest.
- *
- * Returning users almost always want the thing they were last working on, and
- * making them find it in a grid of equals is the small tax the old home screen
- * charged on every visit. It is still a library project, so it carries the
- * same actions menu as the grid cards — on right-click and on the corner dots.
- */
-
 const CARD_HOVER = { bg: 'bg.muted', borderColor: 'border.emphasized' } as const;
 const LINK_STYLE = { cursor: 'default', inset: 0, position: 'absolute' } as const;
 const CARD_TRANSITION =

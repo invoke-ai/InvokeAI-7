@@ -1,18 +1,8 @@
 import type { SVGProps } from 'react';
 
 /**
- * Vendored icons: marks from Simple Icons (https://simpleicons.org, CC0-1.0)
- * and the odd glyph from another set, each recorded with its `origin`.
- *
- * Everything else is a Lucide icon; these are the exceptions, and there are a
- * handful of them. Both `react-icons` and the `simple-icons` package expose
- * their icons through a single ~5 MB barrel module with no per-icon entry
- * point, which the dev server transforms in full to hand back a few paths —
- * so the paths live here instead, as the data they are.
- *
- * To add or refresh one: copy the path data and viewBox from the source,
- * keeping the slug and title as the upstream name so a later refresh is a
- * straight lookup.
+ * Vendored paths avoid large icon barrels. Simple Icons paths are CC0-1.0 (https://simpleicons.org); other glyph
+ * sources are recorded in origin. Preserve upstream slug/title and viewBox for updates.
  */
 
 interface VendoredIconSource {
@@ -31,9 +21,7 @@ interface VendoredIconSource {
 const createVendoredIcon = ({ paths, title, viewBox = '0 0 24 24' }: VendoredIconSource) => {
   const VendoredIcon = ({ titleAccess, ...props }: SVGProps<SVGSVGElement> & { titleAccess?: boolean }) => (
     <svg
-      // Decorative by default: every current consumer pairs the mark with
-      // visible text, and a titled icon there is announced twice. Pass
-      // `titleAccess` when the icon stands alone.
+      // Decorative by default to avoid duplicate announcements; pass titleAccess for standalone icons.
       aria-hidden={titleAccess ? undefined : true}
       fill="currentColor"
       height="1em"

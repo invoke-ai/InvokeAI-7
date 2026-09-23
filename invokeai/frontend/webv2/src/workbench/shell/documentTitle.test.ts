@@ -38,8 +38,6 @@ describe('formatDocumentTitle', () => {
   });
 
   it('trails a running title with the short label, not the idle one', () => {
-    // The whole point of the split: the idle title names the product in full,
-    // and a running title spends that width on the numbers instead.
     const running = formatDocumentTitle({ current: 2, labels, percent: 42, total: 8 });
 
     expect(DOCUMENT_TITLE_PRODUCT.length).toBeLessThan(DOCUMENT_TITLE_BASE.length);

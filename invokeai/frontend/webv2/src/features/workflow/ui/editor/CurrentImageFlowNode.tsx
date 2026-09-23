@@ -14,12 +14,6 @@ import { memo } from 'react';
 
 import type { CurrentImageFlowNode as CurrentImageFlowNodeType } from './flowAdapters';
 
-/**
- * The legacy `current_image` UI node: a live monitor inside the graph. Shows
- * the in-flight denoising preview while a run executes, and the most recently
- * generated image otherwise.
- */
-
 const getLatestImage = (values: Record<string, unknown>): GeneratedImageContract | null => {
   const recentImages = Array.isArray(values.recentImages) ? (values.recentImages as GeneratedImageContract[]) : [];
 

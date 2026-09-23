@@ -1,11 +1,4 @@
-/**
- * Deterministic synthetic data for browser release and performance journeys.
- *
- * Keep this module free of browser and server dependencies: harnesses can
- * import the same builders to validate their workload without starting HTTP.
- * Every generated value is derived from an index and a fixed epoch, so resets
- * are byte-identical and checked-in baselines never depend on wall-clock time.
- */
+/** Keep builders dependency-free and derive fixtures from indices and a fixed epoch for repeatable baselines. */
 
 export const MOCK_BACKEND_PROFILE_NAMES = Object.freeze(['empty', 'representative']);
 
@@ -54,17 +47,8 @@ export const assertMockBackendProfileName = (value) => {
 };
 
 /**
- * What Fixture Project 002's own board holds, and what sits just outside it.
- *
- * The project-file journey is the only place the whole board path runs end to end, and it can only
- * prove the interesting rules if the fixture actually contains them: a result the canvas draws with
- * *and* the board owns (so a restore must copy it and rewrite the layer), a result the document
- * never mentions (which is the entire reason `.invk` carries a board at all), assets under each
- * visible category, media that must be excluded, and references that live outside the board and so
- * must be deduplicated rather than copied.
- *
- * Every name here is an existing fixture image reassigned to the project's board — the image count
- * is a pinned dimension of the representative profile, so this composition must not change it.
+ * Cover board-only/shared references, visible/excluded categories, and external references. Reassign existing
+ * images without changing the pinned image count.
  */
 export const PROJECT_FILE_BOARD = Object.freeze({
   /** Generated, on the board, and drawn by the canvas: the overlap case. */
@@ -220,8 +204,7 @@ const createVideos = () => [
     workflow: null,
   },
   {
-    // On Fixture Project 002's own board: videos are a separate namespace with their own copy and
-    // upload routes, so a project file that only ever carried images would prove half the path.
+    // Include board-owned video to exercise its separate copy/upload routes.
     board_id: 'fixture-project-board-02',
     created_at: timestampAt(5),
     duration: 1,
@@ -280,17 +263,9 @@ const createVideos = () => [
   },
 ];
 
-/**
- * The board a project owns. Every project has exactly one, and only project APIs may rename or
- * delete it — the generic board routes refuse a claimed board.
- */
+/** Only project APIs may rename/delete a project-owned board. */
 export const projectBoardId = (index) => `fixture-project-board-${ordinal(index, 2)}`;
 
-/**
- * The board owned by Fixture Project 002 — the project the project-file journey exports, imports
- * and duplicates. Declared here rather than inlined so the composition above and the journey's
- * assertions cannot drift from the project they describe.
- */
 export const PROJECT_FILE_BOARD_ID = projectBoardId(1);
 
 const buildBoard = (boardId, boardName, images, videos, createdAt) => {
@@ -553,11 +528,7 @@ const createProjectFileWorkflowNodes = () => {
   ];
 };
 
-/**
- * The canvas leaves of a v3 document, stacks in composition order, each forest in preorder. The
- * order mirrors `LAYER_STACK_ORDER` in `src/workbench/canvas-engine/contracts.ts`, which a plain
- * module cannot import; keep the two in step.
- */
+/** Match LAYER_STACK_ORDER and preorder within each forest; plain JS cannot import the TypeScript constant. */
 export const collectCanvasLeaves = (document) => {
   const leaves = [];
   const visit = (nodes) => {
@@ -575,10 +546,7 @@ export const collectCanvasLeaves = (document) => {
   return leaves;
 };
 
-/**
- * The representative raster forest: 64 leaves, of which 24 sit in three groups (one nested two
- * deep), so the tree exercises indentation, ancestor-effective state and folder export.
- */
+/** Use 64 leaves, including 24 in three groups with two-level nesting, to exercise forest behavior. */
 const createRasterForest = (layers) => {
   if (layers.length < 32) {
     return layers;

@@ -16,11 +16,8 @@ import { markLibraryGraphSynced } from './library/librarySyncBridge';
 import { startWorkflowUiPendingLoadRuntime } from './pendingLibraryWorkflowLoadRuntime';
 
 /**
- * Consumes pending workflow-load requests from surfaces that cannot reach the
- * graph context themselves: the command palette names a library record, an
- * image's context menu hands over the workflow it embeds. Either way the
- * document is parsed and replaces the project graph — the same load path as
- * WorkflowLibraryDialog, minus the dialog.
+ * Apply external library or embedded-workflow requests through the same parse-and-replace path as the library
+ * dialog.
  */
 export const PendingWorkflowLoader = () => {
   const { t } = useTranslation();
@@ -57,9 +54,7 @@ export const PendingWorkflowLoader = () => {
         requestWorkflowFitView(document.nodes);
 
         if (source.kind === 'library') {
-          // Same reasoning as the library dialog's load path: the graph just
-          // loaded is already in sync with the library record it came from, so
-          // mark it synced before the autosaver's graph-changed effect sees it.
+          // Mark freshly loaded library graphs synced before autosave observes them as edits.
           markLibraryGraphSynced(serializeWorkflowJson(document));
           void touchLibraryWorkflowOpenedAt(source.workflowId, owner.signal).catch(() => {
             // Recency bookkeeping only; loading already succeeded.

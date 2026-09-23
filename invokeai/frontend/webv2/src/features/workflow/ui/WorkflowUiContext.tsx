@@ -1,5 +1,6 @@
 import type { ForLoopValidationReason } from '@features/workflow/core/forLoops';
 import type { ProjectGraphState } from '@features/workflow/core/types';
+import type { WorkbenchThemeId } from '@theme/themes';
 import type { ReactNode } from 'react';
 
 import { useExternalStoreSelector, type EqualityFn } from '@platform/state/selectors';
@@ -15,7 +16,7 @@ import type {
 
 export interface WorkflowPreferences {
   reduceMotion: boolean;
-  themeId: 'classic' | 'light' | 'osakaJade' | 'mono' | 'ultradark';
+  themeId: WorkbenchThemeId;
   workflowEdgeStyle: 'curved' | 'square';
   workflowEdgesBehindNodes: boolean;
   workflowShowMinimap: boolean;
@@ -50,10 +51,7 @@ export interface WorkflowGraphPreviewPort {
   openDocumentInNewProject(document: ProjectGraphState, label: string): void; // fork a preview into a fresh project
 }
 
-/**
- * Workflow's UI port. The context is a dependency-direction port (the feature
- * may not import workbench), not a test seam; no second adapter is expected.
- */
+/** This UI port preserves dependency direction: Workflow cannot import Workbench. */
 export interface WorkflowUiAdapter {
   capabilities: WorkflowReadPort<WorkflowCapabilities>;
   preferences: WorkflowReadPort<WorkflowPreferences>;

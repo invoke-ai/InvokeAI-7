@@ -27,17 +27,13 @@ describe('gridSizeForModelBase', () => {
   });
 
   it('reads the 32px grid Wan TI2V-5B declares, from the table the backend really serves', () => {
-    // Against the committed fixture rather than a hand-built row: this is the one architecture
-    // whose grid is not a property of the base, and 1280x720 is the size that slips through a
-    // base-only lookup -- both multiples of 16, and 720 % 32 === 16.
+    // Use the committed variant fixture: 1280x720 passes base grid 16 but fails TI2V-5B grid 32.
     expect(gridSizeForModelBase('wan', 'ti2v_5b')).toBe(32);
     expect(gridSizeForModelBase('wan')).toBe(16);
     expect(720 % gridSizeForModelBase('wan', 'ti2v_5b')).not.toBe(0);
   });
 
   it('no longer offers 8px steps for architectures that reject them', () => {
-    // The drift this replaces: these three fell through to the default 8 here while their denoise
-    // nodes carry multiple_of=16, so the canvas offered sizes that failed at enqueue time.
     for (const base of ['krea-2', 'wan', 'ideogram-4']) {
       expect(gridSizeForModelBase(base)).toBe(16);
     }
@@ -52,9 +48,7 @@ describe('gridSizeForModelBase', () => {
 });
 
 describe('resolveModelGrid before the capability table arrives', () => {
-  // Deliberately unseeded. Every case above runs with the table present, which is the state the
-  // app reaches a round trip *after* boot -- and a project reopened before then is exactly where
-  // the grid used to latch at 8 for the session.
+  // Leave capabilities absent to reproduce reopening before the table arrives.
 
   it('reports the grid as unknown rather than as 8', () => {
     // The distinction a writer needs: 8 is a real answer for SDXL and a guess for Wan, and only
@@ -81,14 +75,8 @@ describe('resolveModelGrid before the capability table arrives', () => {
 });
 
 describe('the grid a variant declares', () => {
-  // Wan is the architecture whose grid is not a property of the base: A14B enforces multiples of
-  // 16 on its denoise node, TI2V-5B multiples of 32 in the reference-image encoder. The backend
-  // publishes that as a variant row; the canvas has to join on `(base, variant)` or it offers a
-  // size the run rejects after the model is already loaded -- 1280x720 is the obvious one, both
-  // multiples of 16, and 720 % 32 === 16.
-  //
-  // Seeded with a hand-built override rather than the committed fixture, so this states the rule
-  // rather than whatever number that fixture happens to carry.
+  // Override variant policy independently of fixtures: Wan grid depends on base plus variant, and 720 fails grid
+  // 32 despite passing 16.
   beforeEach(() => {
     setArchitectureCapabilities(
       architectureCapabilitiesFixture.map((row) =>

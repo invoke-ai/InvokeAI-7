@@ -46,11 +46,7 @@ export const getGalleryBoardDropId = (boardId: string): string => `gallery-board
 /** Droppable id for the search field: dropping a gallery image there searches by similarity. */
 export const GALLERY_SEMANTIC_SEARCH_DROP_ID = 'gallery-semantic-search-drop';
 
-/**
- * Resolves an item drag released over the search field to an image-similarity
- * reference. Semantic search is image-only, so a video-only drag resolves to
- * nothing rather than to a broken query.
- */
+/** Only image refs support similarity queries; video-only drags yield no query. */
 export const resolveGallerySemanticSearchDrop = (
   activeData: unknown,
   overId: unknown
@@ -94,19 +90,8 @@ export const isSingleGalleryVideoDragData = (value: unknown): value is GalleryIt
   isGalleryItemDragData(value) && value.items.length === 1 && value.items[0]?.kind === 'video';
 
 /**
- * A droppable that only participates while a drag matching `shields` is in
- * flight. `acceptsActiveDrag` is the "potential target" bit the drop
- * affordances render from (a drag the field's handler would consume exists
- * ANYWHERE — legacy dnd's `potential` state); `isOver` narrows it to
- * "hovering this target". `accepts` must match what the drop handler
- * actually consumes, or the affordance advertises a drop that would no-op.
- *
- * `shields` (default: `accepts`) keeps the droppable armed for a WIDER
- * payload family the handler merely ignores: a single-image field stays a
- * dead drop for multi-image drags, exactly as before the affordances —
- * disabling it instead would hand the release to whatever droppable sits
- * underneath (the collision pipeline is z-blind), e.g. a board row hidden
- * under a floated widget.
+ * accepts controls affordances; shields keeps wider ignored payloads as dead drops, preventing z-blind collision
+ * handling from dropping onto hidden targets underneath.
  */
 export const useGalleryItemDroppable = (
   accepts: (data: unknown) => boolean,

@@ -41,10 +41,7 @@ interface PositivePromptFieldProps {
   showSyntaxHighlighting: boolean;
   value: string;
   onChange: (value: string) => void;
-  /**
-   * Replace the authored prompt with already-merged text and drop the template in
-   * one commit. Absent on surfaces with no template concept.
-   */
+  /** Replace the prompt and remove its template atomically; omit this action on non-template surfaces. */
   onFlattenPromptTemplate?: (prompt: string) => void;
   /** Apply or clear the active template. Absent on surfaces with no templates. */
   onApplyPromptTemplate?: (template: PromptTemplateSnapshot | null) => void;
@@ -101,22 +98,10 @@ export const PositivePromptField = ({
     [commitDraftValue]
   );
 
-  // View mode keeps the same textarea rather than swapping in a preview
-  // component: `ResizableTextarea` reads its height once on mount, and the
-  // element is also what `focusPositivePrompt` and the attention hotkeys target,
-  // so unmounting it would reset the height and break both.
-  //
-  // Note the `&&`: view mode with no template applied leaves the prompt fully
-  // editable, so gating anything on the toggle alone silently disables it while
-  // the user is still typing.
+  // Preserve textarea identity for sizing/hotkeys; only an actual template makes it read-only.
   const isViewingMerged = isTemplateViewMode && promptTemplate !== null;
 
-  // View mode hides the authored prompt, and the actions that would rewrite it
-  // are out of reach there — so is the drop that opens one of them.
-  //
-  // Destructured rather than kept whole: passing `imageDrop.setNodeRef` straight
-  // to `ref` makes the compiler read the object it came from as a ref too, and
-  // every other field of it then counts as a ref access during render.
+  // Disable drops while merged view hides authored text. Destructure the ref to keep compiler analysis safe.
   const {
     droppedImage,
     isDragActive: isImageDragActive,
@@ -176,9 +161,7 @@ export const PositivePromptField = ({
     [commitPromptChange, draftValue]
   );
 
-  // Merged against the *draft*, not the committed value: the template lives in the
-  // store but the draft runs 250ms ahead of it, and reading the store here would
-  // leave the expansion count a debounce behind what the user is typing.
+  // Merge against the live draft so expansion counts do not lag behind debounce.
   const effectivePositivePrompt = useMemo(
     () => (promptTemplate ? applyPromptTemplate(promptTemplate.positivePrompt, draftValue) : draftValue),
     [draftValue, promptTemplate]
@@ -287,10 +270,7 @@ export const PositivePromptField = ({
           onKeyDown={handlePromptKeyDown}
           onResizeEnd={onResizeEnd}
         />
-        {/* Only while a compatible drag is in flight — a prompt box wearing a
-            permanent dashed border would read as an upload area, not a field.
-            `pointerEvents` stays off so the textarea underneath is unaffected;
-            dnd-kit hit-tests the wrapper's rect, not this overlay. */}
+        {/* Keep pointer events off; dnd-kit targets the wrapper. */}
         {isImageDragActive ? (
           <DropZone
             alignItems="center"

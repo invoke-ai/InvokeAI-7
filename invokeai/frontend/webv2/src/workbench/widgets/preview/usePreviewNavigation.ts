@@ -29,17 +29,9 @@ import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 /**
- * Everything behind the preview's left/right stepping, in one place: the board
- * items query, the local/backend merge, the sequence + cursor, the navigate
- * action with its boundary-page fetch, and the neighbor prefetch. The view
- * consumes the result.
- *
- * The sequence is the gallery's own order — the in-progress sessions, the
- * starred strip, then the listing — so the arrows cross the grid's seams the
- * same way. One divergence: Preview walks the whole bounded strip query,
- * while the grid shows up to three rows of it (a width it alone knows) and
- * folds the rest behind "Show all". Gallery selection and the live-follow
- * preference remain the sources of truth; nothing here stores a cursor.
+ * Own Preview query merging, cursor derivation, boundary fetches, and neighbor prefetch. Follow Gallery's
+ * session/starred/list order, but traverse the full bounded starred query beyond the grid's folded rows;
+ * selection/follow remain authoritative.
  */
 
 const EMPTY_PREVIEW_ITEMS: GalleryItem[] = [];
@@ -97,13 +89,8 @@ export const mergePreviewBoardItems = (
 ): GalleryItem[] => {
   const backendKeys = new Set(backendItems.map(toGalleryItemKey));
 
-  // Relevance order IS the list: re-sorting it by date would reorder what the
-  // user is looking at, and local generations are not members of a ranked
-  // result set at all (the gallery grid overlays none of them either). The
-  // caller still passes the SELECTED item, which is kept when the ranking does
-  // not contain it — a selection made outside the result set (an upload, an
-  // image-map click, stepping off the live tile) would otherwise leave the
-  // cursor pointing at nothing, which reads as both arrows going dead.
+  // Preserve ranking order and exclude local generations; retain out-of-ranking selection as a cursor anchor so
+  // arrows remain usable.
   if (isRanked) {
     const anchors = localItems.filter((item) => !backendKeys.has(toGalleryItemKey(item)));
 
@@ -193,23 +180,15 @@ export const usePreviewNavigation = ({
   const navigationContextKey = `${followedSessionId ?? ''}:${selectedItemKey ?? ''}:${navigationBoardId}:${navigationGalleryView}:${navigationOrderDir}:${selectedImageQuery.paginationMode}:${selectedImageQuery.page}:${selectedImageQuery.searchTerm}:${navigationStarredOnly}:${navigationSemanticKey}`;
   const navigationQueryKey = `${navigationBoardId}:${navigationGalleryView}:${navigationOrderDir}:${selectedImageQuery.paginationMode}:${selectedImageQuery.searchTerm}:${navigationStarredOnly}:${navigationSemanticKey}`;
 
-  // Lets a boundary fetch that resolves after the user has moved on compare the
-  // context it started in against the one now on screen, and drop its stale
-  // result. Written from a LAYOUT effect: layout effects run synchronously
-  // inside the commit, so no promise continuation can observe the new UI with
-  // the old key — a passive effect leaves a post-paint gap where exactly that
-  // interleaving happens. (Render-phase ref writes are rejected by the
-  // compiler, and an effect event cannot be called from a promise
-  // continuation.)
+  // Publish navigation context in layout effect so boundary-fetch continuations cannot observe new UI with a stale
+  // fence.
   const navigationContextKeyRef = useRef(navigationContextKey);
 
   useLayoutEffect(() => {
     navigationContextKeyRef.current = navigationContextKey;
   }, [navigationContextKey]);
 
-  // A paginated navigation stays anchored to the page the preview opened on,
-  // and re-anchors only when the underlying query identity changes. Derived
-  // state rather than a ref so the compiler can see the dependency.
+  // Keep paginated navigation anchored until query identity changes; expose the dependency as derived state.
   const [navigationAnchor, setNavigationAnchor] = useState({
     page: selectedImageQuery.page,
     queryKey: navigationQueryKey,
@@ -220,16 +199,8 @@ export const usePreviewNavigation = ({
     setNavigationAnchor({ page: selectedImageQuery.page, queryKey: navigationQueryKey });
   }
 
-  // Stickiness is a PAGINATED concern: stepping across pages stamps each
-  // item's own page, and the window must not move out from under the cursor
-  // when it does. An infinite anchor is read live. Preview's own steps never
-  // rewrite it — they stamp the window's anchor, see selectPreviewItem — so
-  // the only thing that changes it is a selection made elsewhere: a grid
-  // click, a reveal, a result arriving under live-follow. Each of those names
-  // the window that holds the new selection, and Preview has to move to it.
-  // Held sticky, the anchor outlived every one of them: a click on the newest
-  // image at the top of the board left Preview walking rows 1800+ for a
-  // selection at row 0.
+  // Only paginated anchors are sticky. Infinite steps preserve their anchor, while external selections must
+  // immediately reanchor the window.
   const navigationAnchorPage =
     selectedImageQuery.paginationMode === 'paginated'
       ? hasStaleNavigationAnchor
@@ -237,14 +208,8 @@ export const usePreviewNavigation = ({
         : navigationAnchor.page
       : selectedImageQuery.page;
   const isPaginatedWindow = selectedImageQuery.paginationMode === 'paginated';
-  // A selection deeper than the base window's reach (a deep reveal from the
-  // image map) anchors navigation at its own page — walking from offset 0
-  // could never arrive at the cursor. Such a window is a slice from the
-  // middle of the board, and it is one-way by design: it cannot grow upward
-  // past its anchor, because the grid shares the cache entry and rows spliced
-  // in above its viewport would shift the content under the user. So the
-  // anchor must stay where the selection was made, and the exclusions below
-  // that hinge on "is this window mid-board?" are all derived from it.
+  // Anchor deep navigation at the selection page. Shared infinite windows cannot grow upward without shifting grid
+  // content, so retain that anchor and derive mid-board exclusions from it.
   const deepAnchorOffset =
     !isPaginatedWindow &&
     navigationSemanticQuery === null &&
@@ -252,12 +217,7 @@ export const usePreviewNavigation = ({
       ? navigationAnchorPage * GALLERY_PAGE_SIZE
       : 0;
 
-  // A ranked list mirrors the GRID's paging instead of the stamped context.
-  // The stamped page indexes the board listing, and a board page applied to a
-  // ranking lands on an unrelated slice — or, past the end of a ranking that is
-  // shorter than the board, on an empty one whose only member is the anchored
-  // selection, leaving both arrows with nowhere to step. Setting a search also
-  // resets the grid's page, which the stamped record never sees.
+  // Rankings follow grid paging, not stamped board pages, which can address unrelated or empty ranking slices.
   const navigationWindow =
     navigationSemanticQuery !== null
       ? galleryPaginationMode === 'paginated'
@@ -296,10 +256,7 @@ export const usePreviewNavigation = ({
     enabled: hasNavigationContext,
   });
 
-  // The strip the grid pins above its unstarred listing — the same bounded
-  // query, so it is already cached whenever the gallery is open. As in the
-  // grid, no strip applies to a ranked result, to the starred-only listing,
-  // or to a window anchored mid-board.
+  // Share Gallery's bounded starred strip except for ranked, starred-only, or mid-board windows.
   const hasStrip =
     hasNavigationContext && !navigationStarredOnly && navigationSemanticQuery === null && deepAnchorOffset === 0;
   const { data: stripData } = useQuery({ ...galleryStarredStripOptions(listingFilter), enabled: hasStrip });
@@ -325,27 +282,8 @@ export const usePreviewNavigation = ({
         page.items.some((candidate) => toGalleryItemKey(candidate) === itemKey)
       );
       const pageParam = pageIndex === undefined || pageIndex < 0 ? undefined : data?.pageParams[pageIndex];
-      // `page` is stamped as a BOARD page and read as one everywhere else, so
-      // a ranked window's page params — offsets into the ranking — must not be
-      // written into it. Neither may the grid's own page: in paginated mode
-      // the footer paginates the RANKING, so that number is a rank page too.
-      // Carrying the page the preview opened on is no better — the item
-      // picked out of a ranking is nowhere near the board slice it names, and
-      // a deep one strands navigation there once the chip is cleared. What
-      // holds in both modes is the top of the listing: setting a search and
-      // clearing it both reset the grid to page 0, so that is the board
-      // context a ranked session hands back.
-      //
-      // In an INFINITE window the page is the anchor of the window that holds
-      // the item, which is what a grid click stamps too (the grid's own page,
-      // whatever row was clicked). Stamping the item's row instead rolls the
-      // window forward with the cursor: the anchor is read live, so each step
-      // past a page boundary re-keys the query at the new row, the old entry
-      // is discarded, and — a deep window being one-way — everything the user
-      // just walked through is unreachable. An item the window does not hold
-      // at all (a strip item, a recent the listing has not caught up with,
-      // the compare slot's image) is stamped at the top: that is where those
-      // live, and the base window's reach is the best guess for anything else.
+      // Stamp ranked picks with board page zero, never ranking offsets. Infinite picks retain their window anchor
+      // to preserve prior pages; items outside the window use the top-of-board context.
       return navigationSemanticQuery !== null
         ? 0
         : selectedImageQuery.paginationMode === 'paginated'
@@ -379,16 +317,8 @@ export const usePreviewNavigation = ({
     [queueItems]
   );
   const navigationLocalItems = useMemo(() => {
-    // recentImages bridges "generation finished" to "the backend list has the
-    // row"; dropping a completed batch during that window made arrow keys skip
-    // the images just generated. So local items stay unconditionally, except
-    // where the backend window is a *subset* of the board and dedupe cannot
-    // help: an active search or starred filter (backend-filtered, local items
-    // are not), and any window anchored mid-board — paginated, or the infinite window a deep
-    // reveal anchors — where settled recents would splice in permanently.
-    // Recents belong at the TOP of the listing, so a window nowhere near the
-    // top is not theirs to join; the grid draws the same line for its own
-    // window. There, only in-flight work and the selection merge.
+    // Keep recent results until listings catch up, except in filtered or mid-board windows where they do not
+    // belong. Those windows merge only in-flight work and selection.
     const hasActiveSearch =
       navigationStarredOnly || selectedImageSearch.text.trim() !== '' || selectedImageSearch.range !== undefined;
 
@@ -439,8 +369,7 @@ export const usePreviewNavigation = ({
     return [selectedItem, ...listingLocalItems];
   }, [hasStrip, localBoardItems, selectedItem, selectedItemKey]);
   const backendBoardItems = useMemo(() => flattenPreviewItems(boardItemsData), [boardItemsData]);
-  // Recents belong to a board listing; a ranked list gets only the selection,
-  // and only as the cursor anchor described in mergePreviewBoardItems.
+  // Rankings accept only selection as cursor anchor, never board recents.
   const previewMergeItems = useMemo(
     () =>
       navigationSemanticQuery === null ? previewLocalBoardItems : selectedItem ? [selectedItem] : EMPTY_PREVIEW_ITEMS,
@@ -481,8 +410,7 @@ export const usePreviewNavigation = ({
       ? -1
       : boardItems.findIndex((item) => toGalleryItemKey(item) === selectedItemKey);
 
-  // One navigation action shared by the arrow keys and the footer buttons.
-  // Comparison never steps through saved images.
+  // Share navigation between keyboard and footer; comparison does not step saved images.
   const navigate = useCallback(
     (offset: -1 | 1) => {
       if (isComparing) {
@@ -585,8 +513,7 @@ export const usePreviewNavigation = ({
     [isComparing, navigate]
   );
 
-  // Warm the browser cache for the sequence neighbors so arrow-key navigation
-  // swaps without a decode flash.
+  // Prefetch adjacent media to avoid decode flashes during navigation.
   const previousNeighbor = navigationCursor === -1 ? undefined : boardItems[navigationCursor - 1];
   const nextNeighbor = navigationCursor === -1 ? undefined : boardItems[navigationCursor + 1];
   const previousNeighborUrl = previousNeighbor?.kind === 'image' ? previousNeighbor.fullUrl : null;

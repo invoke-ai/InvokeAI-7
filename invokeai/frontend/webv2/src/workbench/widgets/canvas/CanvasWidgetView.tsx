@@ -67,12 +67,8 @@ const MissingFontsDialog = lazy(() =>
 );
 
 /**
- * The canvas widget shell. The engine owns pixels and interaction and renders
- * into {@link CanvasSurface}; this component only wires the reducer-backed
- * chrome around it — command/hotkey registration, the settings-store feed and
- * the floating staging bar. Tool and operation settings live in the
- * Properties widget; zoom / fit / settings in the widget header
- * ({@link CanvasHeaderActions}).
+ * Wire reducer chrome, commands, settings, and staging around the pixel/input engine. Properties owns tool
+ * settings; {@link CanvasHeaderActions} owns view controls.
  */
 export const CanvasWidgetView = ({ runtime }: WidgetViewProps) => {
   const { t } = useTranslation();
@@ -98,9 +94,7 @@ export const CanvasWidgetView = ({ runtime }: WidgetViewProps) => {
   const { isSaving, save: saveToGallery } = useCanvasGallerySave(engine);
   const { createFromBbox, isCreating } = useCreateFromBbox(engine);
 
-  // Canvas invocation stays code-split from the rest of the workbench, but the
-  // canvas being mounted is a strong intent signal. Warm it while the user edits
-  // instead of making the first Ctrl+Enter pay the chunk download/evaluation.
+  // Warm the split invocation chunk when Canvas mounts so the first submission need not download it.
   useMountEffect(preloadCanvasInvocation);
 
   // Right-click on the canvas surface targets the selected layer (the panel is
@@ -108,9 +102,8 @@ export const CanvasWidgetView = ({ runtime }: WidgetViewProps) => {
   // shared per-layer menu or the global menu at the pointer.
   const [contextMenuTarget, setContextMenuTarget] = useState<CanvasContextMenuTarget | null>(null);
   const closeContextMenu = useCallback(() => setContextMenuTarget(null), []);
-  // The bbox tool snaps to a model-dependent grid; the engine is model-agnostic, so read the
-  // active generate model and feed the grid size in. Two primitive selectors rather than one
-  // object, so the subscription compares by value.
+  // Feed model grid policy into the model-agnostic engine using primitive selectors for value-stable
+  // subscriptions.
   const modelBase = useActiveProjectSelector((project) => {
     const values = getProjectWidgetValues(project, 'generate') as { model?: { base?: unknown } } | undefined;
     return typeof values?.model?.base === 'string' ? values.model.base : null;
@@ -124,10 +117,7 @@ export const CanvasWidgetView = ({ runtime }: WidgetViewProps) => {
     engine?.viewport.setBboxGrid(bboxGrid);
   }, [bboxGrid, engine]);
 
-  // Canvas view settings (checkerboard / grid / invert-scroll) persist in the
-  // canvas widget's per-project values; the engine only reads its stores, so
-  // push the resolved values down whenever they change — same one-directional
-  // feed as the bbox grid above. The header settings menu writes the values.
+  // Feed persisted per-project view settings into engine stores; header controls write the widget values.
   const settings = useActiveProjectSelector(
     (project) => resolveCanvasSettings(getProjectWidgetValues(project, 'canvas')),
     canvasSettingsEqual
@@ -149,12 +139,8 @@ export const CanvasWidgetView = ({ runtime }: WidgetViewProps) => {
   // edits never re-render this shell; the commands feed the X/D hotkeys below.
   const colorCommands = useActiveColorCommands();
 
-  // The checkerboard fills the whole (unbounded) canvas, so its two square colors
-  // come from theme tokens rather than hardcoded greys. Resolve them from the live
-  // Chakra theme and feed them into the engine's checker-colors store; re-resolve
-  // whenever the theme (and thus color mode) changes. `themeId` flips
-  // `<html data-theme>` in ThemeController's layout effect, which runs before this
-  // passive effect in the same commit, so getComputedStyle reads the new theme.
+  // Resolve checker colors from live theme tokens after ThemeController updates data-theme, then feed the engine
+  // store.
   const themeId = useWorkbenchSettingsSelector((snapshot) => snapshot.preferences.themeId);
   useEffect(() => {
     engine?.interaction.set('checkerColors', resolveCheckerColors());
@@ -170,10 +156,7 @@ export const CanvasWidgetView = ({ runtime }: WidgetViewProps) => {
     (item) =>
       item.snapshot.destination === 'canvas' &&
       (item.status === 'pending' || item.status === 'running') &&
-      // Only this canvas SESSION's in-flight items: an item submitted before a
-      // wholesale swap (new canvas / snapshot restore) belongs to a document
-      // that no longer exists, so its denoise frames must not leak onto the
-      // fresh canvas (F2). `documentRevision` bumps only on those swaps.
+      // Show progress only for this documentRevision; wholesale session swaps invalidate earlier denoise frames.
       item.snapshot.canvas.documentRevision === canvas.documentRevision
   );
   const interactionCapabilities = getCanvasInteractionCapabilities({
@@ -186,12 +169,8 @@ export const CanvasWidgetView = ({ runtime }: WidgetViewProps) => {
   const isInteractionLocked = interactionCapabilities.isSurfaceInteractionLocked;
   const handleSurfaceContextMenu = useCallback(
     (event: ReactMouseEvent<HTMLDivElement>) => {
-      // Keep the native menu inside inline editors (the text tool's contenteditable
-      // overlay), consistent with the surface-focus INLINE_EDIT_SELECTOR.
-      //
-      // The menu targets the SELECTED layer, not the layer under the pointer, and
-      // never dispatches a selection — the layers panel is the sole authority on
-      // which layer is active.
+      // Preserve native menus in inline editors. Canvas context actions target the selected layer without changing
+      // selection.
       const resolution = resolveCanvasContextMenu({
         clientX: event.clientX,
         clientY: event.clientY,
@@ -247,11 +226,7 @@ export const CanvasWidgetView = ({ runtime }: WidgetViewProps) => {
     [canvasCommands, engine, notifications, queries, t]
   );
 
-  /**
-   * Copies the selection's pixels to the system clipboard, optionally cutting
-   * them. The engine produces the blob; the clipboard write is a widget concern
-   * (`canvas-engine` may not reach `workbench/widgets`).
-   */
+  /** The engine produces selected pixels; widget code owns system clipboard writes and optional cutting. */
   const copySelection = useEffectEvent((cut: boolean) => {
     const mountedEngine = engine;
     if (!mountedEngine) {
@@ -362,9 +337,6 @@ export const CanvasWidgetView = ({ runtime }: WidgetViewProps) => {
   );
   const progressImage = settings[CANVAS_SHOW_PROGRESS_KEY] ? selectedPlaceholderProgressImage : null;
 
-  // What the engine should draw as the staged preview: the live denoise-progress
-  // frame while generating, else the selected candidate, else nothing. The pure
-  // helper is unit-tested; the effect below drives the engine imperatively.
   const previewSource = selectStagedPreviewSource({
     bboxHeight: document.bbox.height,
     bboxWidth: document.bbox.width,
@@ -376,11 +348,8 @@ export const CanvasWidgetView = ({ runtime }: WidgetViewProps) => {
   });
   const previewKey = stagedPreviewKey(previewSource);
 
-  // Syncing an external imperative system (the engine's staged preview) with
-  // derived reducer/progress state is a genuine effect. `useEffectEvent` reads
-  // the latest source without making it a dependency, so the decoding
-  // `setStagedPreview` re-runs only when `previewKey` actually changes (which
-  // includes every new progress frame) — never on unrelated re-renders.
+  // Decode staged previews only when previewKey changes, including progress frames; read current source without
+  // retriggering on unrelated renders.
   const applyStagedPreview = useEffectEvent(() => {
     engine?.previews.setStagedPreview(previewSource);
   });
@@ -425,9 +394,7 @@ export const CanvasWidgetView = ({ runtime }: WidgetViewProps) => {
       ['canvas.resetSelected', t('widgets.canvas.commands.resetSelected'), ['shift+c']],
       ['canvas.undo', t('widgets.canvas.commands.undo'), ['mod+z']],
       ['canvas.redo', t('widgets.canvas.commands.redo'), ['mod+shift+z', 'mod+y']],
-      // Tool selection and brush/eraser size step. `allowInEditable: false` below
-      // keeps these single-letter/bracket keys from firing while the user is
-      // typing in a prompt/text field elsewhere in the workbench.
+      // Exclude editable targets so tool letters and size brackets do not intercept typing.
       ['canvas.tool.view', t('widgets.canvas.commands.selectViewTool'), ['h']],
       ['canvas.tool.move', t('widgets.canvas.commands.selectMoveTool'), ['v']],
       ['canvas.transformSelected', t('widgets.canvas.commands.selectTransformTool'), ['mod+t']],

@@ -12,11 +12,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { I18nextProvider, initReactI18next } from 'react-i18next';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-/**
- * The drag-to-collapse gesture against the *real* store, reducer and shell
- * gating — the unit tests either side of this one mock the command layer, so
- * between them they cannot catch a break in the wiring itself.
- */
+/** Exercise real store/reducer/shell wiring absent from command-mocked unit tests. */
 
 const storeRef = vi.hoisted(() => ({ current: null as WorkbenchInternalStore | null }));
 
@@ -102,9 +98,7 @@ beforeEach(() => {
   root = createRoot(host);
   storeRef.current = createWorkbenchStore();
 
-  // Presets ship the bottom strip closed *and* collapsed, and `setRegionCollapsed`
-  // deliberately does not touch `panels.isBottomOpen`. Open it the way the app
-  // does — by selecting its active widget from the status rail.
+  // Open the bottom strip through its active status widget; setRegionCollapsed does not set isBottomOpen.
   const bottom = storeRef.current.getSnapshot().activeProject.widgetRegions.bottom;
 
   storeRef.current.commands.widgets.select({

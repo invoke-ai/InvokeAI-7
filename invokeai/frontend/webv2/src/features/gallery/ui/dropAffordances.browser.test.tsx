@@ -21,10 +21,8 @@ import {
 import { GalleryDragCursor } from './GalleryDragCursor';
 
 /**
- * The drag-in-flight affordances: while a compatible gallery drag is active
- * ANYWHERE, a target advertises itself (overlay + label) and the body carries
- * the closed-hand cursor flag; incompatible payloads (wrong kind, multi-item
- * on a single-item target, non-gallery drags) advertise nothing.
+ * Advertise compatible drags anywhere in flight; incompatible kinds, counts, and non-gallery payloads expose no
+ * affordance.
  */
 
 let host: HTMLDivElement | null = null;
@@ -200,9 +198,7 @@ describe('drag-in-flight drop affordances', () => {
     // Still a gallery drag: the cursor flag applies even with no eligible target.
     expect(document.body.hasAttribute('data-gallery-drag')).toBe(true);
 
-    // Released over the frame target: the droppable stays armed (a dead drop,
-    // matching pre-affordance behavior) rather than disappearing from the
-    // collision candidates and handing the release to whatever is underneath.
+    // Keep ignored payloads as dead drops so release cannot fall through to an underlying target.
     await release(multiThumb, 280, 260);
 
     expect(onDragEnd).toHaveBeenCalled();

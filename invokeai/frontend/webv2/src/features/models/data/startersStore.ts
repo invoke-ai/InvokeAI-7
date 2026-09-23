@@ -11,11 +11,7 @@ import { getApiErrorMessage } from '@platform/transport/http';
 
 import { getStarterModels } from './api';
 
-/**
- * Cached starter-models catalog. The list is large and rarely changes, so it
- * is fetched once and served from memory on revisits; installs revalidate it
- * in the background (the `is_installed` flags shift) without blanking the UI.
- */
+/** Cache the large starter catalog across revisits; install refreshes update flags without blanking the UI. */
 
 export interface StartersSnapshot {
   response: StarterModelResponse | null;

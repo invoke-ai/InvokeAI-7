@@ -14,6 +14,7 @@ export { getGalleryBoardLabel, type GalleryBoardTranslate } from './core/boardLa
 export { normalizeGalleryImage } from './core/image';
 export {
   assertNeverGalleryItem,
+  classifyGalleryUpload,
   compareGalleryItems,
   formatGalleryVideoDuration,
   galleryImageItemToGalleryImage,
@@ -56,9 +57,11 @@ export {
   getGalleryCompareImage,
   getGalleryDestinationBoardId,
   getGalleryPage,
+  getGallerySelectedBoardId,
   getGallerySelectedImagePage,
   getGallerySelectedImageQuery,
   getGallerySemanticImageQuery,
+  getGalleryView,
   type GallerySelectedImageQuery,
 } from './ui/galleryStateView';
 export {

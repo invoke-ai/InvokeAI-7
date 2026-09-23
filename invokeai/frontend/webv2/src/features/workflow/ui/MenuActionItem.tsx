@@ -2,17 +2,7 @@ import type { ElementType } from 'react';
 
 import { Icon, Menu, Stack, Text } from '@chakra-ui/react';
 
-/**
- * The one menu-item composition every workflow dropdown renders through: a
- * leading glyph, a label, and — for menus whose choices need explaining — a
- * second hint line under it. The graph preview's "Open as" menu and the
- * library rail's overflow menu keep their own, distinct item *sets*; what they
- * share is this layout, which was hand-rolled twice and drifted (icon
- * alignment, padding, disabled opacity) between the two.
- *
- * A hint switches the row to two lines, so the icon top-aligns with the label
- * instead of floating centered against both.
- */
+/** Share workflow menu row geometry; optional hint lines top-align the icon with the primary label. */
 
 const DISABLED_ITEM = { opacity: 0.4 } as const;
 const SINGLE_LINE_LAYOUT = { alignItems: 'center', gap: '2.5', py: '1' } as const;

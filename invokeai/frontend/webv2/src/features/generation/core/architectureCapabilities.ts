@@ -1,18 +1,6 @@
 /**
- * What the backend says each architecture supports, and how it reaches generation policy.
- *
- * `GET /api/v2/models/capabilities` serves one row per architecture plus a row per variant that
- * answers differently -- the same table `invokeai/backend/architectures/defs/<base>.py` declares.
- * Adding an architecture to the backend should not mean editing a table here too.
- *
- * webv2 has no generated OpenAPI types, so the wire shape below is hand-written and unguarded by
- * the compiler. `tests/backend/architectures/test_capabilities_fixture.py` is what guards it: it
- * pins `__fixtures__/architectureCapabilities.json` against what the backend actually renders, and
- * that same fixture feeds these tests and the mock backend.
- *
- * This module is deliberately push-based. `feature-core-purity` forbids `core/` from importing
- * `data/` or transport, so the store calls `setArchitectureCapabilities` rather than being read
- * from here -- the same shape `configureHttpAuth` uses in `platform/transport/http.ts`.
+ * Backend architecture/variant rows are authoritative. Handwritten DTOs are fixture-pinned; push updates into this
+ * React-free registry.
  */
 
 import { createListenerChannel } from '@platform/state/externalStoreCore';
@@ -60,12 +48,7 @@ export interface ArchitectureCapabilitiesRow {
     cpu_only: boolean | null;
     fp8_storage: boolean | null;
   } | null;
-  /**
-   * Which VAEs this architecture's decode accepts beyond its own base, or null where it accepts
-   * only its own. `latent_channels` is null unless the base ships VAEs of more than one width;
-   * today only `wan` does, and its two are different decoders -- which is why the `ti2v_5b` row
-   * carries its own list.
-   */
+  /** Null restricts VAE compatibility to the model's own base; channel restrictions are optional. */
   vae: {
     accepted: { base: string; latent_channels: number | null }[];
   } | null;
@@ -76,26 +59,12 @@ const FALLBACK_CFG_SCALE = 7;
 const FALLBACK_SCHEDULER = 'euler_a';
 const FALLBACK_OPTIMAL_SIDE = 1024;
 
-/**
- * The value the single guidance slider takes.
- *
- * There is one control, labelled from `guidance_label`, and two fields behind it. A
- * guidance-distilled architecture records `cfg_scale: 1.0` meaning "CFG off" *and* the guidance it
- * samples with, so reading `cfg_scale` first would present the off-switch as the setting.
- */
+/** guidance_label selects the field; CFG-off markers are not guidance values. */
 const guidanceValue = (defaults: NonNullable<ArchitectureCapabilitiesRow['defaults']>, label: GuidanceLabel): number =>
   (label === 'Guidance' ? (defaults.guidance ?? defaults.cfg_scale) : (defaults.cfg_scale ?? defaults.guidance)) ??
   FALLBACK_CFG_SCALE;
 
-/**
- * The optimal canvas as a side length.
- *
- * `optimalSide` is squared back into an area by its consumers (`importGalleryImages` passes
- * `optimal ** 2` to `calculateNewSize`), so deriving it from the area rather than from `width`
- * alone survives an architecture whose default canvas is not square. Every architecture webv2
- * generates images with is square today; MiniMax H3 is 1344x768, which is why this is not just
- * `width`.
- */
+/** Derive optimal side from pixel area, including nonsquare defaults. */
 const optimalSide = (defaults: NonNullable<ArchitectureCapabilitiesRow['defaults']>): number => {
   const { width, height } = defaults;
   if (width && height) {
@@ -123,10 +92,8 @@ export const toBaseGenerationConfig = (row: ArchitectureCapabilitiesRow): BaseGe
     schedulerSet: features.scheduler_set ?? 'standard',
     schedulerAppliesToGraph: features.scheduler_applies_to_graph,
     guidanceLabel,
-    // `??` like every sibling here: a backend that predates these fields would otherwise put
-    // `undefined` into a `number`, and `Math.max(undefined, value)` is NaN -- a broken thumb rather
-    // than the unbounded control this had before the fields existed.
-    guidance: { min: features.guidance_min ?? 0, max: features.guidance_max ?? null },
+    // Nullish fallbacks support older backend fields without producing NaN bounds.
+    guidance: { min: features.guidance_min ?? 1, max: features.guidance_max ?? null },
     negativePrompt: features.negative_prompt,
     ui: {
       sdVaeOverride: features.sd_vae_override,
@@ -147,14 +114,7 @@ let byKey = new Map<string, ArchitectureCapabilitiesRow>();
 let configByKey = new Map<string, BaseGenerationConfig>();
 let revision = 0;
 
-/**
- * Fires whenever the table below is replaced or dropped.
- *
- * Everything here is synchronous module state, read during render and at enqueue time from all over
- * the app. Without a change signal a reader that answered before the table arrived keeps its
- * fallback answer for the rest of the session -- it has nothing to re-read on. `data/` mirrors this
- * into its snapshot, so React and non-React readers subscribe to one signal.
- */
+/** Synchronous readers observe the registry revision signal. */
 const channel = createListenerChannel();
 
 /** Subscribe to table replacements. Returns an unsubscribe function. */
@@ -165,10 +125,7 @@ export const getArchitectureCapabilitiesRevision = (): number => revision;
 
 /** Called by `data/` once the table has been fetched. */
 export const setArchitectureCapabilities = (next: readonly ArchitectureCapabilitiesRow[]): void => {
-  // Built into locals, then swapped in one step. Assigning `rows` first would publish a table that
-  // `hasArchitectureCapabilities` reports as present while the rows are still being mapped: a
-  // malformed row's throw would then leave every fail-closed gate open over an empty config map,
-  // so the widget would show the load error while the canvas and topbar used fallback policy.
+  // Validate and map before atomic publication; errors must not expose a loaded empty map.
   const nextByKey = new Map(next.map((row) => [key(row.base, row.variant), row]));
   // Memoised so policy accessors stay O(1) and hand back referentially stable objects.
   const nextConfigByKey = new Map(next.map((row) => [key(row.base, row.variant), toBaseGenerationConfig(row)]));
@@ -219,13 +176,7 @@ export const getArchitectureGenerationConfig = (base: string, variant?: unknown)
   return configByKey.get(key(base, null));
 };
 
-/**
- * The `features` block for an architecture, preferring a variant row where the backend serves one.
- *
- * Most flags repeat unchanged on every variant row, but not all: `dimension_grid` is 16 for Wan
- * A14B and 32 for TI2V-5B, and `guidance_min`/`guidance_max` sit in the same block. Callers that
- * know the variant should pass it; omitting it asks for the architecture's own row.
- */
+/** Look up the variant first; omitting it uses the base row. */
 export const getArchitectureFeatures = (
   base: string,
   variant?: unknown

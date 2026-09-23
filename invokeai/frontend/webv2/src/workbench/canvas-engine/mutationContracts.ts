@@ -1,9 +1,3 @@
-/**
- * The canvas document mutation vocabulary. Declared inside `canvas-engine` because the engine and
- * its controllers are its heaviest consumers; the reducer that interprets it lives in
- * `workbench/canvasProjectMutations.ts` and re-exports these types.
- */
-
 import type { ProjectEvent } from '@workbench/projectEventContracts';
 
 import type {

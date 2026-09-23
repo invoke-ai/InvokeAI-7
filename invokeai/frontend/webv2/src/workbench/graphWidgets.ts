@@ -51,12 +51,7 @@ export const graphWidgetSources: GraphWidgetSource[] = graphWidgetTypeIds
   }))
   .filter((source) => isInvocationSourceAvailable(source.sourceId));
 
-/**
- * Floated instances belong in both sets below: a widget in a window is on
- * screen and placed, just not in a rail. Reading only `widgetRegions` would
- * drop the first graph-bearing widget that opts into floating out of the
- * invoke-source list while it sits in plain view.
- */
+/** Floating graph widgets are both visible and placed, so include them in invocation-source discovery. */
 const addFloatingWidgetTypeIds = (project: Project, typeIds: Set<WidgetTypeId>): void => {
   for (const instanceId of Object.keys(project.floatingWidgets ?? {})) {
     const typeId = project.widgetInstances[instanceId]?.typeId;

@@ -8,11 +8,6 @@ import { useCallback } from 'react';
 
 import { NodeFieldControl } from './NodeFieldControl';
 
-/**
- * The Linear UI's view mode: the form rendered as clean, runnable controls —
- * field values stay editable, the form structure does not.
- */
-
 const ViewElement = ({ element, projectGraph }: { element: WorkflowFormElement; projectGraph: ProjectGraphState }) => {
   switch (element.type) {
     case 'container':

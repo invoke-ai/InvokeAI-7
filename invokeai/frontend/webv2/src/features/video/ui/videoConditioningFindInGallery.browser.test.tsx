@@ -16,14 +16,7 @@ import { VideoFrameImageField } from './VideoFrameImageField';
 import { VideoSourceClipField } from './VideoSourceClipField';
 import { VideoUiProvider, type VideoUiAdapter } from './VideoUiContext';
 
-/**
- * The two conditioning fields the Ref2VA reference list does not cover: the
- * keyframe slots, whose badge comes from the shared gallery media slot, and the
- * initial video, badged on its start bound alone because both trim thumbs are
- * frames of one clip. Both hand a kind+name to the port, and a video asked for
- * as an image resolves against the wrong endpoint and dies in a rejected
- * promise.
- */
+/** Conditioning slots must pass media kind with name; video names cannot resolve through the image endpoint. */
 const i18n = i18next.createInstance();
 await i18n.use(initReactI18next).init({
   fallbackLng: 'en',
@@ -142,8 +135,7 @@ describe('video conditioning find-in-gallery badges', () => {
   it('reveals the initial video as a video, once, from its start bound', async () => {
     await render(<VideoSourceClipField sourceVideo={CLIP} onChange={vi.fn()} />);
 
-    // The end bound shows the same clip, so a second badge there would be a
-    // second control with one destination — and one name to tell them apart.
+    // Both bounds reference one clip; expose one find control.
     const bounds = findButtons('source.mp4');
 
     expect(bounds).toHaveLength(1);

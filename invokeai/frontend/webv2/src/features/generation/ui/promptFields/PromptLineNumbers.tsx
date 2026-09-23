@@ -1,11 +1,4 @@
-/**
- * A line-number gutter for `PromptTextarea`.
- *
- * A textarea gives no way to ask where its soft wraps fall, so the heights come
- * from a hidden mirror that lays the same text out at the same width with the
- * same metrics. Numbering follows *logical* lines: a wrapped line keeps one
- * number and the gutter entry grows to match, the way an editor behaves.
- */
+/** A hidden mirror measures soft-wrap heights while numbering each logical line once. */
 
 import type { BoxProps } from '@chakra-ui/react';
 import type { CSSProperties } from 'react';
@@ -37,8 +30,6 @@ export const PromptLineNumbers = ({ metrics, value }: { metrics: PromptLineNumbe
   const [lineHeights, setLineHeights] = useState<number[]>([]);
   const lines = useMemo(() => value.split('\n'), [value]);
   const gutterWidth = `${getLineNumberGutterCh(lines.length)}ch`;
-  // The numbers occupy the same lane the text is indented by, so they end just
-  // short of where the first character starts.
   const gutterLaneWidth = `calc(${metrics.paddingInline} + ${gutterWidth})`;
 
   useLayoutEffect(() => {
@@ -75,8 +66,7 @@ export const PromptLineNumbers = ({ metrics, value }: { metrics: PromptLineNumbe
 
   return (
     <>
-      {/* Measured, never seen. `visibility: hidden` still participates in layout,
-          which is exactly what makes it measurable. */}
+      {/* visibility:hidden preserves measurable layout. */}
       <Box aria-hidden="true" inset="0" overflow="hidden" pointerEvents="none" position="absolute" visibility="hidden">
         <Box
           ref={mirrorRef}
@@ -96,8 +86,7 @@ export const PromptLineNumbers = ({ metrics, value }: { metrics: PromptLineNumbe
         </Box>
       </Box>
 
-      {/* The font metrics have to be on this box too: `ch` in its width resolves
-          against its own font size, not the numbers' inside it. */}
+      {/* ch units use the gutter container's own font metrics. */}
       <Box
         aria-hidden="true"
         bottom="0"

@@ -1,13 +1,3 @@
-/**
- * Rasterizes an `image` layer source: decodes the referenced asset to an
- * `ImageBitmap` (cached per image name in the store) and blits it onto a
- * surface sized to the bitmap.
- *
- * Decoding is async and goes entirely through injected seams (the resolver
- * for bytes, the backend for `createImageBitmap`), so it runs in node tests
- * with fakes. Zero React, zero import-time side effects.
- */
-
 import type { CanvasImageRef } from '@workbench/canvas-engine/contracts';
 import type { DecodedBitmapLease } from '@workbench/canvas-engine/render/decodedBitmapPool';
 import type { RasterSurface } from '@workbench/canvas-engine/render/raster';

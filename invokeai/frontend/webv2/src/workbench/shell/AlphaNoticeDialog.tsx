@@ -17,11 +17,7 @@ const AlphaNoticeModalLayer = () => {
   return null;
 };
 
-/**
- * One-time alpha disclaimer, shown once the account's preferences have loaded
- * so a fresh session does not flash it at someone who already dismissed it.
- * Dismissal is a preference, so it follows the account rather than the browser.
- */
+/** Wait for account preferences before showing the notice; dismissal follows the account. */
 export const AlphaNoticeDialog = () => {
   const { t } = useTranslation();
   const isOpen = useWorkbenchSettingsSelector(

@@ -7,12 +7,7 @@ import { getFieldTypeColor, isModelFieldType } from '@features/workflow/utility'
 import { Tooltip } from '@platform/ui';
 import { CircleAlertIcon, CircleCheckIcon, InfoIcon } from 'lucide-react';
 
-/**
- * The single source of the workflow-node visual language. Every surface that
- * draws a node — the editor's flow nodes, the node manager's static preview
- * cards, the form builder — styles it from here so the renderings cannot
- * drift apart.
- */
+/** Share node styling across editor, static previews, and form builder to prevent visual drift. */
 
 const NODE_HOVER_RING = '0 0 0 2px {colors.accent.solid/50}, {shadows.md}';
 const NODE_RUNNING_RING = '0 0 0 2px {colors.brand.solid/70}, 0 0 10px {colors.brand.solid/50}';
@@ -89,11 +84,7 @@ export const getWorkflowNodeHeaderProps = ({ roundedBottom = false }: { roundedB
   py: WORKFLOW_NODE_DENSITY.headerPaddingY,
 });
 
-/**
- * Field-row body. The header above supplies the divider, so the body draws no
- * top border. Inferred (not `BoxProps`) so it spreads into `Stack`/`Flex`
- * without tripping over the conflicting HTML `direction` prop types.
- */
+/** Header supplies the divider. Inferred styles avoid BoxProps direction conflicts when spread into Stack/Flex. */
 export const getWorkflowNodeBodyProps = ({ roundedBottom = true }: { roundedBottom?: boolean } = {}) => ({
   bg: WORKFLOW_NODE_SURFACE_TOKEN,
   borderBottomRadius: roundedBottom ? ('lg' as const) : ('none' as const),
@@ -117,13 +108,7 @@ const getHandleVisual = (type: FieldType) => ({
   isFilled: type.cardinality === 'SINGLE',
 });
 
-/**
- * Inline-CSS flavor for xyflow `<Handle>`s, which live outside Chakra's style
- * pipeline. xyflow's own `.react-flow__handle-left/right` CSS centers the
- * handle on its `left`/`right` coordinate via `translate(∓50%, -50%)`; the
- * diamond transform must restate that centering before rotating, so it needs
- * the side.
- */
+/** Inline handle diamonds must retain side-specific xyflow centering before rotation. */
 export const getWorkflowNodeHandleStyle = (type: FieldType, side: 'left' | 'right'): CSSProperties => {
   const visual = getHandleVisual(type);
 
@@ -138,11 +123,6 @@ export const getWorkflowNodeHandleStyle = (type: FieldType, side: 'left' | 'righ
   };
 };
 
-/**
- * Static stand-in for a connection handle in non-flow contexts (manager preview
- * cards): same size, tint, and shape rules as the editor handles, centered on
- * the node border.
- */
 export const WorkflowNodeHandleDot = ({ side, type }: { side: 'left' | 'right'; type: FieldType }) => {
   const visual = getHandleVisual(type);
 

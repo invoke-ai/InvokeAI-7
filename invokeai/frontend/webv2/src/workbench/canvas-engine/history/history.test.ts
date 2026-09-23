@@ -69,8 +69,6 @@ describe('createHistory: entry-count eviction', () => {
     for (let i = 0; i < HISTORY_MAX_ENTRIES + 1; i += 1) {
       history.push(makeEntry(`e${i}`, log));
     }
-    // Undo every retained entry: there should be exactly the cap, and the very
-    // first entry (e0) should have been evicted (never undone).
     let undos = 0;
     while (history.canUndo()) {
       history.undo();
@@ -173,9 +171,7 @@ describe('createHistory: amendLast', () => {
     const log: string[] = [];
     const history = createHistory({ byteBudget: 25 });
     history.push(makeEntry('a', log, 10));
-    history.push(makeEntry('b', log, 10)); // burst start
-
-    // Coalesce: replace 'b' with 'b2' (still one burst entry).
+    history.push(makeEntry('b', log, 10));
     history.amendLast(makeEntry('b2', log, 10));
 
     let undos = 0;
@@ -255,14 +251,10 @@ describe('createHistory: re-entrancy guard', () => {
     history.undo();
     expect(observed).toEqual([true]);
     expect(history.isApplying()).toBe(false);
-    // The sneaky push during undo was dropped: redo stack still holds only the
-    // reentrant entry, and no 'sneaky' entry is reachable.
     expect(history.canRedo()).toBe(true);
 
     history.redo();
     expect(observed).toEqual([true, true]);
-    // Still exactly one undoable entry (the reentrant one); the sneaky pushes
-    // never landed.
     let undos = 0;
     while (history.canUndo()) {
       history.undo();

@@ -13,13 +13,6 @@ import { NodeInspector } from './NodeInspector';
 import { WorkflowDetailsTab } from './WorkflowDetailsTab';
 import { WorkflowJsonTab } from './WorkflowJsonTab';
 
-/**
- * The workflow widget's side panel — the Linear UI. View mode runs the
- * project graph through its form; Edit mode opens the legacy-style tab set
- * (Form builder / Details / JSON) with the node inspector pinned below.
- * Panel mode, tab, and inspector height live in the widget's own state.
- */
-
 type PanelMode = 'view' | 'edit';
 type EditTab = 'form' | 'details' | 'json';
 type PanelModeItem = {
@@ -65,12 +58,8 @@ export const areWorkflowPanelStatesEqual = (left: WorkflowPanelState, right: Wor
   left.mode === right.mode && left.editTab === right.editTab && left.inspectorSizePct === right.inspectorSizePct;
 
 /**
- * View / Edit selection. These swap the whole panel body, so they are tabs
- * rather than a pressed-button pair: the tablist carries roving focus and
- * arrow-key selection for free, which the hand-rolled `aria-pressed` group it
- * replaced could not. The visible panels remain siblings because edit mode
- * drives its own splitter layout; hidden content nodes keep every generated
- * `aria-controls` relationship valid and describe what selecting the tab did.
+ * Use tabs for roving focus and arrow selection; hidden content nodes preserve aria-controls while edit panels
+ * retain their splitter layout.
  */
 export const PanelModeToggle = ({ mode, onChange }: { mode: PanelMode; onChange: (mode: PanelMode) => void }) => {
   const { t } = useTranslation();
@@ -80,8 +69,6 @@ export const PanelModeToggle = ({ mode, onChange }: { mode: PanelMode; onChange:
   );
 
   return (
-    // `mb="-1"` tucks the active-tab indicator onto the header's own bottom
-    // rule, the same trick the edit tabs use.
     <Tabs.Root mb="-1" size="sm" value={mode} variant="line" onValueChange={onValueChange}>
       <Tabs.List aria-label={t('widgets.workflow.panelMode')}>
         {PANEL_MODES.map(({ labelKey, icon, mode: itemMode }) => (

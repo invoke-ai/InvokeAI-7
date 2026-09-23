@@ -7,13 +7,6 @@ import {
 } from '@platform/ui/streaming-image/streamingImageSource';
 import { ImageOffIcon } from 'lucide-react';
 
-/**
- * Square result preview for a queue item. Falls back to a deterministic gradient
- * derived from the item id, so items without a (yet) resolvable image still read
- * as distinct tiles — and the real thumbnail cross-fades in once loaded. A
- * hairline inset outline (theme border token) gives the tile consistent edge
- * depth without picking up the surface color underneath.
- */
 const QUEUE_ITEM_THUMBNAIL_SX: SystemStyleObject = {
   boxShadow: 'inset 0 0 0 1px {colors.border.subtle}',
   display: 'flex',

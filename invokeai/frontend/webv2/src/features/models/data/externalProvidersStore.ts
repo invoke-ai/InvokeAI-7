@@ -14,12 +14,7 @@ import {
   type ExternalProviderConfig,
 } from './api';
 
-/**
- * Shared cache of external image-provider configs. One store keeps every
- * consumer consistent: saving a key on the Keys tab immediately flips the
- * Configure/Installed affordances in the add-models starter list, with no
- * remount or refetch.
- */
+/** Share provider config state so credential saves immediately update installation affordances. */
 
 export interface ExternalProvidersSnapshot {
   /** null = not fetched yet. */

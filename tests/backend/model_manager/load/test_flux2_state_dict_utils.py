@@ -205,3 +205,107 @@ class TestAdaLnSwapIsMirroredOntoTheScale:
 
         scale = next(v for k, v in converted.items() if k.endswith(".weight_scale"))
         assert scale.tolist() == [1, 2, 3, 4, 5, 6]
+
+
+def test_a_fused_qkv_the_converter_declines_to_split_keeps_its_scale() -> None:
+    """The side channel follows where the weight *went*, not where a probe says it would go.
+
+    `_flux2_malformed_for_chunk` leaves a fused qkv alone when its rows are not divisible by three,
+    so the weight stays on its BFL key. The probe that used to place the side channel always ran on
+    a 6-row tensor, so it answered "three destinations" regardless -- and a per-tensor scale was
+    duplicated onto three modules that do not exist while the fp8 weight kept none. Measured before
+    the fix: 3 scales pointing at nothing, 1 weight left unscaled.
+
+    Such a file is malformed and its load still fails, on the three projections now missing. What
+    this pins is that the conversion reports what it did rather than what it would have done.
+    """
+    base = "double_blocks.0.img_attn.qkv"
+    sd = {
+        f"{base}.weight": torch.zeros(7, 4).to(torch.float8_e4m3fn),
+        f"{base}.weight_scale": torch.tensor(2.0),
+    }
+
+    converted = convert_flux2_bfl_to_diffusers(dict(sd))
+
+    assert set(converted) == {f"{base}.weight", f"{base}.weight_scale"}
+
+
+def test_a_fused_qkv_that_is_split_still_carries_its_scale_to_all_three() -> None:
+    """The other half: the split case must keep working, or this fix trades one loss for another."""
+    base = "double_blocks.0.img_attn.qkv"
+    sd = {
+        f"{base}.weight": torch.zeros(6, 4).to(torch.float8_e4m3fn),
+        f"{base}.weight_scale": torch.tensor(2.0),
+    }
+
+    converted = convert_flux2_bfl_to_diffusers(dict(sd))
+
+    for projection in ("to_q", "to_k", "to_v"):
+        assert f"transformer_blocks.0.attn.{projection}.weight" in converted
+        assert converted[f"transformer_blocks.0.attn.{projection}.weight_scale"] == torch.tensor(2.0)
+
+
+def test_a_norm_stored_as_scale_keeps_its_side_channel() -> None:
+    """BFL stores a norm's parameter as `.scale`, and this converter accepts both spellings -- so the
+    module a side channel belongs to has to be read off whatever the source key was, not assumed to
+    be `<module>.weight`.
+
+    Nothing shipped with that assumption: the probe this placement replaces answered by name and
+    handled norms correctly. It is pinned because the first draft of the replacement did key the
+    lookup on `.weight`, which left the scale on the BFL path while the weight moved, for
+    `extract_fp8_scaled_layers` to drop without a word. The same assumption was the Krea-2 defect
+    fixed one round earlier, where the parameter is `scale` for a norm and `lin` for a table.
+    """
+    base = "double_blocks.0.img_attn.norm.query_norm"
+    sd = {f"{base}.scale": torch.zeros(4).to(torch.float8_e4m3fn), f"{base}.weight_scale": torch.tensor(2.0)}
+
+    converted = convert_flux2_bfl_to_diffusers(dict(sd))
+
+    assert set(converted) == {
+        "transformer_blocks.0.attn.norm_q.weight",
+        "transformer_blocks.0.attn.norm_q.weight_scale",
+    }
+
+
+def test_a_bias_beside_a_quantized_weight_does_not_become_a_second_destination() -> None:
+    """A module's side channel belongs to its *weight*. Read every destination as a module and a
+    `.bias` contributes one too -- and since this converter's block renames match on `.weight` (its
+    other rules rename `.scale` norms and five whole top-level keys), a bias falls through unchanged,
+    so the module appears to have gone two places at once. The side channel is
+    then taken for a split and `split_qkv_sidechannel` is handed two destinations for three chunks.
+
+    Today's FLUX.2 releases carry no biases, so this guards the rule rather than a shipped file --
+    the same rule, and the same near-miss, as the biased Linear in the Krea-2 slice.
+    """
+    base = "double_blocks.0.img_attn.proj"
+    sd = {
+        f"{base}.weight": torch.zeros(4, 4).to(torch.float8_e4m3fn),
+        f"{base}.bias": torch.zeros(4),
+        f"{base}.weight_scale": torch.tensor(2.0),
+    }
+
+    converted = convert_flux2_bfl_to_diffusers(dict(sd))
+
+    assert converted["transformer_blocks.0.attn.to_out.0.weight_scale"] == torch.tensor(2.0)
+
+
+def test_the_exported_module_map_reports_a_declined_split_as_one_module() -> None:
+    """What the header's hints and int8 markers are re-keyed with.
+
+    They name layers in the BFL scheme and have to follow the weights, and until now they followed a
+    probe: for a fused qkv whose rows are not divisible by three it answered "three modules" while
+    the converter left the weight where it was, so `full_precision_matrix_mult` and an int8 marker
+    were fanned onto three modules that do not exist. The map reports what happened instead.
+    """
+    split: dict[str, list[str]] = {}
+    convert_flux2_bfl_to_diffusers({"double_blocks.0.img_attn.qkv.weight": torch.zeros(6, 4)}, module_map=split)
+
+    declined: dict[str, list[str]] = {}
+    convert_flux2_bfl_to_diffusers({"double_blocks.0.img_attn.qkv.weight": torch.zeros(7, 4)}, module_map=declined)
+
+    assert split["double_blocks.0.img_attn.qkv"] == [
+        "transformer_blocks.0.attn.to_q",
+        "transformer_blocks.0.attn.to_k",
+        "transformer_blocks.0.attn.to_v",
+    ]
+    assert declined["double_blocks.0.img_attn.qkv"] == ["double_blocks.0.img_attn.qkv"]

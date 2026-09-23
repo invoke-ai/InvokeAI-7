@@ -338,9 +338,7 @@ describe('bbox tool: hover cursors', () => {
     expect(cursorAt(64, 16)).toBe('ns-resize'); // N edge midpoint
     expect(cursorAt(112, 64)).toBe('ew-resize'); // E edge midpoint
     expect(cursorAt(64, 64)).toBe('move'); // interior
-    expect(cursorAt(400, 400)).toBe('default'); // off the frame
-
-    // The tool asked the engine to re-apply the cursor as the hover target changed.
+    expect(cursorAt(400, 400)).toBe('default');
     expect(h.ctx.updateCursor).toHaveBeenCalled();
   });
 

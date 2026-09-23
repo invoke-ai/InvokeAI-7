@@ -30,16 +30,8 @@ import {
 } from '@features/workflow/utility';
 
 /**
- * Adapters between the project graph document and xyflow's node/edge state.
- * The document is the source of truth; xyflow state is rebuilt from it on
- * every document change, carrying over transient view state (selection).
- *
- * Rebuilds preserve object identity for unchanged nodes/edges so memoized
- * node components skip re-rendering (see React Flow's performance guidance) —
- * the document reducer already keeps untouched node identities stable.
- * Derived per-node facts the node components need (incoming connections,
- * Linear-UI exposure) are precomputed into `data` here, so node components
- * never subscribe to workbench state.
+ * Rebuild from document truth while preserving unchanged identities and selection. Precompute connection/exposure
+ * facts so nodes need no workbench subscriptions.
  */
 
 export type InvocationFlowNode = FlowNode<

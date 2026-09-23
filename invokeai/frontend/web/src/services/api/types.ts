@@ -123,6 +123,7 @@ export type QwenVLEncoderModelConfig = Extract<InternalAnyModelConfig, { type: '
 export type Qwen3VLEncoderModelConfig = Extract<InternalAnyModelConfig, { type: 'qwen3_vl_encoder' }>;
 export type WanT5EncoderModelConfig = Extract<InternalAnyModelConfig, { type: 'wan_t5_encoder' }>;
 type Gemma2EncoderModelConfig = Extract<InternalAnyModelConfig, { type: 'gemma2_encoder' }>;
+type Gemma4EncoderModelConfig = Extract<InternalAnyModelConfig, { type: 'gemma4_encoder' }>;
 type PiDDecoderModelConfig = Extract<InternalAnyModelConfig, { type: 'pid_decoder' }>;
 export type SpandrelImageToImageModelConfig = Extract<InternalAnyModelConfig, { type: 'spandrel_image_to_image' }>;
 export type CheckpointModelConfig = Extract<InternalAnyModelConfig, { type: 'main'; format: 'checkpoint' }>;
@@ -463,6 +464,10 @@ export const isWanT5EncoderModelConfig = (config: AnyModelConfig): config is Wan
 
 export const isGemma2EncoderModelConfig = (config: AnyModelConfig): config is Gemma2EncoderModelConfig => {
   return config.type === 'gemma2_encoder';
+};
+
+export const isGemma4EncoderModelConfig = (config: AnyModelConfig): config is Gemma4EncoderModelConfig => {
+  return config.type === 'gemma4_encoder';
 };
 
 export const isPiDDecoderModelConfig = (config: AnyModelConfig): config is PiDDecoderModelConfig => {

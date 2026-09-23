@@ -60,9 +60,7 @@ describe('SliderNumberField', () => {
     );
 
     const input = hosted.querySelector<HTMLInputElement>('input[aria-label="Steps"]');
-    // The thumb is also the tooltip trigger (`asChild`), so the tooltip's own
-    // `data-part`/`data-scope` win on the shared node — `role="slider"` is the
-    // stable selector, not `[data-part="thumb"]`.
+    // Select by role=slider; the shared tooltip trigger overwrites thumb data attributes.
     const thumb = hosted.querySelector('[role="slider"]');
 
     expect(input?.value).toBe('150');
@@ -70,10 +68,7 @@ describe('SliderNumberField', () => {
   });
 
   it('drops a mark the track cannot place instead of painting it past the end', async () => {
-    // Marks come from callers that also set a looser `numberInputMax` (a model default of 30 on a
-    // guidance track that stops at 10). The thumb clamps, but the marker was forwarded unclamped and
-    // painted off the track. Dropped rather than clamped: a marker sitting on the bound would label
-    // 10 as the default it is not. The number input still carries the real value.
+    // Drop out-of-range default marks without changing the input value or falsely marking a bound as default.
     const hosted = await mount(
       <SliderNumberField
         ariaLabel="Guidance"

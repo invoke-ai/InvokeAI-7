@@ -20,11 +20,7 @@ import { Panel } from '@platform/ui/Panel';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
-/**
- * Scan-and-delete flow for orphaned model folders (files on disk with no
- * database record). Partial failures keep the dialog open on a rescanned
- * remainder so the user can see which paths are left and retry.
- */
+/** Rescan after partial orphan deletion and keep the dialog open for retrying remaining paths. */
 export const OrphanedModelsDialog = ({ onClose }: { onClose: () => void }) => {
   const { t } = useTranslation();
   const notify = useNotify();
@@ -85,8 +81,6 @@ export const OrphanedModelsDialog = ({ onClose }: { onClose: () => void }) => {
               failed: errorCount,
             })
           );
-          // Keep the dialog open on the rescanned remainder so the user can
-          // see which paths are left and retry.
           const deleted = new Set(result.deleted);
 
           setSelectedPaths((current) => new Set([...current].filter((path) => !deleted.has(path))));

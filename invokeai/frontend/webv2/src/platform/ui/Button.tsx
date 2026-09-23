@@ -26,12 +26,7 @@ type IconButtonAccessibleName =
 
 export type IconButtonProps = Omit<ChakraIconButtonProps, 'aria-label' | 'aria-labelledby'> & IconButtonAccessibleName;
 
-/**
- * Workbench buttons. Solid buttons default to the blue `accent` palette; every
- * other variant stays on the neutral, theme-aware `gray` palette. Pass
- * `colorPalette` explicitly to override (e.g. `brand` for the global Invoke
- * action, `red` for destructive actions).
- */
+/** Solid defaults to accent; other variants to gray. Explicit colorPalette overrides both. */
 const defaultPalette = (variant: ButtonProps['variant']): ButtonProps['colorPalette'] =>
   variant === undefined || variant === 'solid' ? 'accent' : 'gray';
 
@@ -58,12 +53,7 @@ export interface ToggleIconButtonProps extends Omit<
   onCheckedChange: (checked: boolean) => void;
 }
 
-/**
- * A compact on/off control that states what it toggles. Prefer this over
- * {@link ToggleDot} wherever the setting is not self-evident from its
- * neighbours — the icon carries the meaning, `aria-pressed` carries the state,
- * and the filled variant makes "on" readable at a glance.
- */
+/** Use an icon toggle when nearby context cannot explain ToggleDot; aria-pressed carries state. */
 export const ToggleIconButton = ({
   checked,
   icon,

@@ -64,13 +64,8 @@ const MIRROR_CHIP_CSS = {
 } as const;
 
 /**
- * Search input that draws date tokens as chips. The mirror and the input share
- * one zero-padded cell, so they align by construction rather than by matching
- * padding; the input's own text is transparent and only its caret shows.
- *
- * In semantic mode the text is a free-form description, so no token is a chip,
- * and the frame is tinted so the mode reads at a glance — the tint holds
- * through hover and focus, which recolor only the border.
+ * Share a zero-padded cell to align date chips with transparent input text. Semantic descriptions remain plain
+ * text with persistent mode tint.
  */
 export const GallerySearchField = ({
   ariaLabel,

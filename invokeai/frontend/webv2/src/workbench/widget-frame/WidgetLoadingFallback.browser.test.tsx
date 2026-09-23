@@ -120,9 +120,8 @@ afterEach(async () => {
 });
 
 describe('WidgetLoadingFallback', () => {
-  // `CenterArea` owns the center region's chrome and keeps it mounted across
-  // the load, so the fallback paints no header of its own — a header here would
-  // appear and then collapse the moment the implementation resolved.
+  // CenterArea keeps chrome mounted during loading; fallback headers would disappear and shift layout on
+  // resolution.
   it('fills the center region with announced, chrome-free surface while the implementation loads', async () => {
     const { widget } = createTestWidget();
     await render(<WidgetLoadingFallback instance={instance} region="center" widget={widget} />);

@@ -47,6 +47,7 @@ from invokeai.backend.model_manager.load.load_default import (
     _model_declared_skip_patterns,
 )
 from invokeai.backend.model_manager.load.model_loader_registry import ModelLoaderRegistry
+from invokeai.backend.model_manager.load.quantized_embedding import materialize_quantized_embedding
 from invokeai.backend.model_manager.taxonomy import (
     AnyModel,
     BaseModelType,
@@ -54,6 +55,10 @@ from invokeai.backend.model_manager.taxonomy import (
     ModelFormat,
     ModelType,
     SubModelType,
+)
+from invokeai.backend.model_manager.util.llamacpp_keys import (
+    convert_llamacpp_decoder_keys,
+    is_llamacpp_decoder_state_dict,
 )
 from invokeai.backend.quantization.fp8_scaled import (
     TRANSFORMER_KEY_PREFIXES,
@@ -1398,11 +1403,11 @@ class MistralEncoderGGUFLoader(ModelLoader):
         if rope_theta is not None:
             logger.info(f"GGUF metadata: rope_theta={rope_theta}, max_position={max_pos}")
 
-        # llama.cpp stores layers as `blk.N.*`. Normalize to transformers' `model.layers.N.*` if needed.
-        is_llamacpp = any(isinstance(k, str) and k.startswith("blk.") for k in sd.keys())
-        if is_llamacpp:
+        # llama.cpp stores layers as `blk.N.*`. Normalize to transformers' `model.layers.N.*` if needed;
+        # `_strip_known_prefixes` and `_convert_for_bare_mistral_model` below adapt that to MistralModel.
+        if is_llamacpp_decoder_state_dict(sd):
             logger.info("Detected llama.cpp GGUF format, converting keys to transformers format")
-            sd = _convert_llamacpp_mistral_to_pytorch(sd)
+            sd = convert_llamacpp_decoder_keys(sd)
 
         sd = _strip_known_prefixes(sd)
 
@@ -1431,10 +1436,7 @@ class MistralEncoderGGUFLoader(ModelLoader):
                 f"Mistral encoder (GGUF): {len(missing)} keys missing from state dict (first 5: {missing[:5]})"
             )
 
-        # Embedding lookups require an indexable tensor — dequantize the GGMLTensor for embed_tokens.
-        embed_weight = model.embed_tokens.weight
-        if isinstance(embed_weight, GGMLTensor):
-            model.embed_tokens.weight = torch.nn.Parameter(embed_weight.get_dequantized_tensor(), requires_grad=False)
+        materialize_quantized_embedding(model.embed_tokens, ram_cache=self._ram_cache)
 
         _reinit_inv_freq(model, mistral_config, compute_dtype)
 
@@ -1443,42 +1445,3 @@ class MistralEncoderGGUFLoader(ModelLoader):
         _warn_if_40_layer_mistral(config.variant, logger)
 
         return model
-
-
-def _convert_llamacpp_mistral_to_pytorch(sd: dict[str, Any]) -> dict[str, Any]:
-    """Rename llama.cpp Mistral keys to the transformers layout."""
-    key_map = {
-        "token_embd.weight": "model.embed_tokens.weight",
-        "output_norm.weight": "model.norm.weight",
-        "output.weight": "lm_head.weight",
-    }
-    out: dict[str, Any] = {}
-    for key, value in sd.items():
-        if not isinstance(key, str):
-            out[key] = value
-            continue
-        if key in key_map:
-            out[key_map[key]] = value
-            continue
-        # Per-layer keys: `blk.N.<thing>` -> `model.layers.N.<thing>`
-        if key.startswith("blk."):
-            parts = key.split(".", 2)  # ["blk", "<N>", "<rest>"]
-            if len(parts) == 3:
-                rest = parts[2]
-                # Order matters: q_norm/k_norm must be checked BEFORE attn_q/attn_k
-                # so we don't rewrite "attn_q_norm" -> "self_attn.q_proj_norm".
-                rest = rest.replace("attn_q_norm.", "self_attn.q_norm.")
-                rest = rest.replace("attn_k_norm.", "self_attn.k_norm.")
-                rest = rest.replace("attn_q.", "self_attn.q_proj.")
-                rest = rest.replace("attn_k.", "self_attn.k_proj.")
-                rest = rest.replace("attn_v.", "self_attn.v_proj.")
-                rest = rest.replace("attn_output.", "self_attn.o_proj.")
-                rest = rest.replace("attn_norm.", "input_layernorm.")
-                rest = rest.replace("ffn_norm.", "post_attention_layernorm.")
-                rest = rest.replace("ffn_gate.", "mlp.gate_proj.")
-                rest = rest.replace("ffn_up.", "mlp.up_proj.")
-                rest = rest.replace("ffn_down.", "mlp.down_proj.")
-                out[f"model.layers.{parts[1]}.{rest}"] = value
-                continue
-        out[key] = value
-    return out

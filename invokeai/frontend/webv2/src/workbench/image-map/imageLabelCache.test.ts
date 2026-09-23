@@ -19,8 +19,7 @@ import { clearImageLabels, getImageLabels } from './imageLabelCache';
 describe('image map image-label cache', () => {
   beforeEach(() => {
     mocks.apiFetchJson.mockReset();
-    // Each activation owns a fresh cache: the previous test's entries (and
-    // any 409 latch) are account state and go with the account.
+    // Each activation gets account-owned cache/cooldown state, cleared on account transition.
     accountLifecycle.invalidate();
     accountLifecycle.activate('user-a');
   });
@@ -86,8 +85,7 @@ describe('image map image-label cache', () => {
     vi.useFakeTimers();
 
     try {
-      // A backend or proxy restart mid-sweep must not permanently blank the
-      // tags of every image the pointer crossed during the outage...
+      // Temporary outages must not cache empty tags permanently for hovered items.
       mocks.apiFetchJson.mockRejectedValue(new ApiError('bad gateway', 502));
       await expect(getImageLabels({ kind: 'image', name: 'a.png' })).resolves.toBeNull();
       await expect(getImageLabels({ kind: 'image', name: 'b.png' })).resolves.toBeNull();
@@ -141,9 +139,7 @@ describe('image map image-label cache', () => {
   });
 
   it('drops cached labels when a vocabulary rebuild lands', async () => {
-    // The phrases these are scored against are admin-editable, so a rebuild
-    // makes every cached answer stale — including a cooldown that was only
-    // ever waiting for that rebuild.
+    // Vocabulary rebuild invalidates all answers and the cooldown waiting for that rebuild.
     mocks.apiFetchJson.mockResolvedValue({ alternates: [], label: 'ship' });
     await getImageLabels({ kind: 'image', name: 'a.png' });
     expect(mocks.apiFetchJson).toHaveBeenCalledTimes(1);

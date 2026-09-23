@@ -21,8 +21,6 @@ const settle = (action: () => void): Promise<void> =>
 
 type Counts = { embedded: number; failed: number; pending: number; total: number };
 
-// Hoisted: an object or function literal in a JSX attribute is what
-// react-perf/jsx-no-new-*-as-prop forbids, tests included.
 const noop = () => {};
 const QUARTER: Counts = { embedded: 25, failed: 0, pending: 75, total: 100 };
 const PART_WAY: Counts = { embedded: 1204, failed: 0, pending: 3108, total: 4312 };
@@ -175,9 +173,7 @@ describe('ImageIndexProgressPanel', () => {
 
 describe('ImageIndexProgressInline', () => {
   it('stays inside a footer narrower than its content', async () => {
-    // The widget resizes down to 280px and the counts can be six digits each.
-    // `<Text truncate>` is what kept the line this replaced from pushing past
-    // the panel edge and under the refresh button.
+    // Keep six-digit counts inside a 280px panel without overlapping refresh.
     await mount(
       <div style={NARROW_HOST}>
         <ImageIndexProgressInline counts={SIX_DIGITS} updatedAt={Date.now()} />
@@ -219,8 +215,7 @@ describe('ImageIndexProgressInline', () => {
       '120px'
     );
 
-    // The bar is the glanceable half; letting the flex squash it would leave
-    // the row saying nothing at all.
+    // Prevent flex shrinking from erasing the glanceable progress bar.
     expect(host!.querySelector('[role="progressbar"]')!.getBoundingClientRect().width).toBeGreaterThanOrEqual(38);
   });
 });

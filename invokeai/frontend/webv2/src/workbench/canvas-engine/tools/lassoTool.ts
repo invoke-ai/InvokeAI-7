@@ -1,30 +1,8 @@
 /**
- * The lasso tool: freehand and polygonal pixel-selection.
- *
- * Both shapes commit the same thing — a closed polygon through
- * {@link ToolContext.commitSelection}, with the boolean op resolved by
- * {@link selectionOpFor} (shift = add, alt = subtract, shift+alt = intersect;
- * with none held, the persistent op mode from `lassoOptions`). Only the way the
- * points are gathered differs, so they share one tool rather than two:
- *
- * - **freehand** (`shape: 'freehand'`) — a primary-button DRAG accumulates
- *   document-space points, coalesced by the pipeline then distance-decimated
- *   here like the brush thins its input. Pointer-up closes and commits.
- * - **polygon** (`shape: 'polygon'`) — a click-to-place-vertex SESSION spanning
- *   many clicks. Each press appends a vertex; a rubber-band segment tracks the
- *   cursor. The session closes and commits on a double-click, on Enter, or on a
- *   click landing within the shared polyline close radius of the first
- *   vertex. Escape drops it.
- *
- * A live dashed preview of the in-progress path is published to the engine's
- * `lassoPreview` store (a transient channel — no dispatch, no reducer traffic).
- * The polygon session survives a temporary modifier-hold tool switch (space →
- * view, so the user can pan mid-polygon), the same way the transform session
- * does; a REAL tool switch drops it.
- *
- * Selection edits are transient interaction state: they are NOT dispatches and
- * NOT recorded on the engine's undo history (legacy parity — selection changes
- * aren't undoable). Zero React, zero import-time side effects.
+ * Freehand lasso gathers decimated drag points; polygon lasso spans clicks and closes on double-click, Enter or
+ * first-vertex proximity. Both commit through `commitSelection` with shared modifier/persistent-op resolution.
+ * Previews never dispatch. Temporary tool switches preserve polygon sessions; real switches cancel them. Selection
+ * history is owned by the engine wrapper.
  */
 
 import type { Vec2 } from '@workbench/canvas-engine/types';
@@ -130,9 +108,8 @@ export const createLassoTool = (): Tool => {
     usesAltKey: true,
     onDeactivate: (ctx, opts) => {
       if (opts?.temporary) {
-        // A modifier-hold switch (space → view to pan mid-polygon) must not
-        // discard the session; the pipeline suppresses temp switches mid-drag,
-        // so a freehand gesture cannot be interrupted here either.
+        // Temporary switches preserve polygon sessions for panning; mid-drag switches are already blocked by the
+        // pipeline.
         return;
       }
       reset();

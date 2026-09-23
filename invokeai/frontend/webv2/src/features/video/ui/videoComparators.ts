@@ -1,10 +1,6 @@
 import type { VideoWidgetValues } from '@features/video/core/types';
 
-/**
- * Content comparators for the widget's memo boundaries and the mount-time
- * reconciler. The widget re-derives `values` on every patch, so equality by
- * content — not identity — decides whether a write-back or re-render is due.
- */
+/** Patches recreate values, so memo and reconciliation boundaries compare content. */
 
 const stableStringify = (value: unknown): string => JSON.stringify(value ?? null);
 
@@ -44,6 +40,9 @@ export const areVideoValuesEqual = (left: VideoWidgetValues, right: VideoWidgetV
     left.steps === right.steps &&
     left.cfgScale === right.cfgScale &&
     left.cfgScaleLowNoise === right.cfgScaleLowNoise &&
+    left.audioCfgScale === right.audioCfgScale &&
+    left.stgScale === right.stgScale &&
+    left.modalityScale === right.modalityScale &&
     left.acceleratorEnabled === right.acceleratorEnabled &&
     stableStringify(left.acceleratorLoraKeys) === stableStringify(right.acceleratorLoraKeys) &&
     left.seed === right.seed &&
@@ -54,12 +53,14 @@ export const areVideoValuesEqual = (left: VideoWidgetValues, right: VideoWidgetV
     stableStringify(left.lastFrameImage) === stableStringify(right.lastFrameImage) &&
     stableStringify(left.references) === stableStringify(right.references) &&
     stableStringify(left.sourceVideo) === stableStringify(right.sourceVideo) &&
+    stableStringify(left.conditioningClip) === stableStringify(right.conditioningClip) &&
     stableStringify(left.vae) === stableStringify(right.vae) &&
     stableStringify(left.wanT5EncoderModel) === stableStringify(right.wanT5EncoderModel) &&
     stableStringify(left.wanLowNoiseModel) === stableStringify(right.wanLowNoiseModel) &&
     stableStringify(left.componentSourceModel) === stableStringify(right.componentSourceModel) &&
     stableStringify(left.h3TransformerModel) === stableStringify(right.h3TransformerModel) &&
     stableStringify(left.h3TextEncoderModel) === stableStringify(right.h3TextEncoderModel) &&
+    stableStringify(left.ltx2TextEncoderModel) === stableStringify(right.ltx2TextEncoderModel) &&
     stableStringify(left.h3HybridBaseModel) === stableStringify(right.h3HybridBaseModel) &&
     left.h3HybridStartBlock === right.h3HybridStartBlock
   );

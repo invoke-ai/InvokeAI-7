@@ -106,8 +106,7 @@ describe('getModelPickerGroups', () => {
     expect(result.groups.map((group) => group.base)).toEqual(['sd-1', 'sdxl']);
   });
 
-  // Type is not a grouping axis: a cross-type picker would otherwise repeat a
-  // "Main Models" header above every base section.
+  // Group by base alone so cross-type pickers do not repeat type headings.
   it('groups by base alone, in base display order', () => {
     const result = getModelPickerGroups(library, {
       modelTypes: ['main', 'lora', 'vae'],

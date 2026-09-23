@@ -3,19 +3,7 @@ import type { LucideIcon } from 'lucide-react';
 
 import { Columns2Icon, CrosshairIcon, HeadingIcon, MinusIcon, Rows2Icon, TextIcon } from 'lucide-react';
 
-/**
- * One name and one icon per form element kind.
- *
- * The builder shows an element's identity in three places — the card title bar,
- * the drag ghost, and the Add menu — and they were each spelling it out
- * separately, so the menu could offer "Container (column)" while the card it
- * produced called itself something else. Naming a kind is one fact; it belongs
- * in one table.
- *
- * Containers are keyed by layout rather than by type alone: a row and a column
- * are the two things a person is actually choosing between, so they carry
- * distinct names and distinct icons.
- */
+/** Share names/icons across cards, ghosts, and Add menus; row and column containers have distinct identities. */
 export type FormElementMetaKey = 'container-column' | 'container-row' | 'divider' | 'heading' | 'node-field' | 'text';
 
 export interface FormElementMeta {
@@ -32,13 +20,7 @@ export const FORM_ELEMENT_META: Record<FormElementMetaKey, FormElementMeta> = {
   text: { icon: TextIcon, label: 'Text' },
 };
 
-/**
- * The kinds the Add menu offers, in the order it offers them.
- *
- * `node-field` is absent by construction: a field enters a form by being
- * dragged off the node that owns it, so there is nothing for a menu entry to
- * create.
- */
+/** Exclude node-field from Add because fields enter forms by dragging from their owning nodes. */
 export const ADDABLE_FORM_ELEMENT_KEYS = [
   'heading',
   'text',

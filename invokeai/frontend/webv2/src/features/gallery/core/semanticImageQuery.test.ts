@@ -40,10 +40,8 @@ describe('image cluster registry', () => {
   });
 
   it('prunes a deleted video member, which is why the delete patch keys by kind', () => {
-    // Video deletions used to be filtered out of the prune, so a cluster kept
-    // counting a clip that no longer existed: the member list is client-owned,
-    // so no refetch reconciles it, and the trailing page holds a cell that can
-    // never hydrate.
+    // Video deletions must prune client-owned cluster members; refetching cannot repair their counts or trailing
+    // pages.
     const clusterId = registerImageCluster(['image:a.png', 'video:clip.mp4'], 'beaches');
 
     const rollback = pruneImageClusterMembers(['video:clip.mp4']);

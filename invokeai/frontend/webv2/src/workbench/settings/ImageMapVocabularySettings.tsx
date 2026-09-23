@@ -16,19 +16,10 @@ import { PlusIcon } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
-/**
- * How often the index counts are re-read while a rebuild is queued behind one.
- * Coarse on purpose: it only feeds a "waiting for indexing" line, and the
- * backend pushes `image_index_status` per batch anyway — this exists so the
- * line is right when the panel is opened mid-run with no event due.
- */
+/** Coarse polling fills gaps when opening mid-indexing before the next pushed status batch. */
 const INDEX_STATUS_POLL_MS = 5_000;
 
-/**
- * Normalize one draft entry the way the server will, so the chips a save adds
- * are exactly the chips that come back. Splitting on commas and newlines makes
- * a pasted list import in one keystroke.
- */
+/** Match server normalization; split pasted comma/newline lists into entries. */
 const parseDraft = (draft: string): string[] => {
   const seen = new Set<string>();
   const terms: string[] = [];
@@ -48,12 +39,8 @@ const parseDraft = (draft: string): string[] => {
 };
 
 /**
- * Editor for the supplementary cluster-label vocabulary. Each add/remove
- * persists immediately (the whole list is replaced server-side); after a save
- * the server rebuilds the label embeddings in the background, so the query
- * polls while that runs to keep the status line honest. Re-fetching an open
- * map's labels when the rebuild lands is NOT this component's job — the data
- * module's watcher does it, because the dialog may well be closed by then.
+ * Persist whole vocabulary lists immediately and poll rebuild status. The data watcher refreshes map labels even
+ * after this dialog closes.
  */
 export const ImageMapVocabularySettings = () => {
   const { t } = useTranslation();
@@ -67,9 +54,7 @@ export const ImageMapVocabularySettings = () => {
   const [inputError, setInputError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const { isBusy: isSaving, run } = useScopedAction();
-  // The rebuild runs on the index worker, which services it only once it has
-  // no images left to embed — so during a backfill the spinner can stand for
-  // as long as the backfill does. The counts turn that into a stated wait.
+  // Show indexing counts while vocabulary rebuild waits behind image embedding.
   const indexCounts = imageMapStore.useSelector((snapshot) => snapshot.indexCounts);
   const isBuilding = query.data?.state === 'building';
 
@@ -92,11 +77,8 @@ export const ImageMapVocabularySettings = () => {
         const updated = await updateImageMapVocab(nextTerms);
 
         assertAccountScopeCurrent(owner);
-        // Cancel first: a poll that was issued before the PUT can resolve
-        // after it, and TanStack Query would write that older list over the
-        // response — resurrecting a removed chip and, worse, overwriting
-        // 'building' with a stale 'ready' so the status line goes quiet while
-        // the server is still rebuilding.
+        // Cancel pre-save polls so stale responses cannot resurrect removed entries or replace building with
+        // ready.
         await queryClient.cancelQueries({ queryKey: imageMapVocabKeys.all });
         assertAccountScopeCurrent(owner);
         queryClient.setQueryData(imageMapVocabKeys.all, updated);
@@ -283,14 +265,8 @@ const VocabularyStatusLine = ({
   vocab: ImageMapVocab;
 }) => {
   const { t } = useTranslation();
-  // Embedding a handful of terms takes seconds; a wait longer than that means
-  // the rebuild is queued behind image indexing, not running slowly. Saying
-  // which is the difference between "working" and "hung".
-  //
-  // No age is passed, so no "no progress reported for N" note: that needs a
-  // clock ticking in render, which the compiler rightly refuses, and the whole
-  // stall treatment already exists on the map widget where the counts live. A
-  // stalled index shows up here as a number that stops moving.
+  // Explain that rebuild waits behind indexing. Omit age-based stall text here; the map owns the ticking stall
+  // display.
   const progress = isIndexing(indexCounts) ? describeIndexProgress(indexCounts) : null;
 
   return (

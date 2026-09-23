@@ -10,15 +10,8 @@ import { useWorkbenchCommands, useWorkbenchQueries } from '@workbench/WorkbenchC
 import { useCallback } from 'react';
 
 /**
- * Where to raise the grid, when it is already somewhere. `openWorkbenchWidget`
- * picks a region from the MANIFEST rather than from the layout, and the reducer
- * then adopts the existing instance into that region WITHOUT vacating the one
- * it came from — so an unqualified open lists one grid in two regions at once
- * and leaves it permanently in the centre tab strip. Naming the region it
- * already occupies keeps the open a raise.
- *
- * Centre is the last resort: it is Preview's home, and the two would contest
- * one slot. A project with no grid at all falls through to default placement.
+ * Raise the gallery in its existing region to avoid duplicate placement. Prefer rails over center, where Preview
+ * competes; absent grids use default placement.
  */
 const SIDE_REGIONS: readonly WidgetRegion[] = ['right', 'left', 'bottom', 'center'];
 
@@ -30,24 +23,8 @@ const getGalleryRegions = (project: Project): WidgetRegion[] =>
   );
 
 /**
- * "Find in gallery", as the Generate and Video panels offer it on the media
- * they are conditioning on: bring the Gallery and Preview widgets on screen,
- * then reveal the item in the grid. Unlike the image map's reveal this DOES
- * rearrange the workspace — the panels are the far side of the app from the
- * grid, and a selection the user cannot see is not a find.
- *
- * Preview is raised first so that the grid wins if the two share a region:
- * the gesture is named for the grid, and Preview follows the selection anyway
- * once it is on screen. Both are raised on the press itself, ahead of the
- * reveal, so the gesture reads as immediate; a widget no region can host is
- * simply skipped, and the reveal still runs.
- *
- * The reveal is fetched on the press. Loading it eagerly pulled the gallery
- * item/transfer barrel into the editor's initial graph, costing two more
- * initial script requests (measured against the request-count budgets), for a
- * control most sessions never touch. Its own sequence number is claimed HERE,
- * before the import, so a press still takes its place in the global ordering
- * at the moment it happened rather than whenever the chunk lands.
+ * Raise Preview then Gallery immediately so Gallery wins shared regions, then lazy-load reveal. Claim the gesture
+ * ticket before import to preserve press order and project fencing.
  */
 export const useFindGalleryItem = (): ((ref: GalleryItemRef) => void) => {
   const commands = useWorkbenchCommands();
@@ -73,16 +50,8 @@ export const useFindGalleryItem = (): ((ref: GalleryItemRef) => void) => {
       void import('@workbench/image-actions/revealGalleryItem')
         .then(({ revealGalleryItem }) => revealGalleryItem({ commands, queries, queryClient }, ref, ticket))
         .catch((error: unknown) => {
-          // Either the chunk 404'd (a tab left open across a redeploy) or the
-          // media is gone from the gallery — an ordinary state, since a
-          // reference outlives the image it was taken from. The widgets are
-          // already raised, so failing silently would leave the user with a
-          // rearranged workspace and no explanation for the grid not moving.
-          //
-          // Only for the gesture still in force: a press the user has since
-          // superseded, or left behind in another project, has no claim on
-          // their attention. The claim itself is not given back — a later press
-          // was a later intent, and it stands even though it could not be met.
+          // Report chunk or media failures only for the still-current gesture, since widgets already moved. Keep
+          // the failed gesture's claim so older intents cannot reclaim selection.
           if (!isGalleryNavigationCurrent(ticket.sequence) || !queries.isActiveProject(ticket.projectId)) {
             return;
           }

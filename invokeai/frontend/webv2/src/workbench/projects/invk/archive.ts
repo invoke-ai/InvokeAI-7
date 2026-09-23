@@ -1,30 +1,11 @@
 import { INVK_MIME_TYPE, InvkFormatError } from './format';
 
 /**
- * The ZIP seam. The only module that knows `.invk` is a ZIP, and the only one that imports fflate —
- * lazily, so a route that never opens a project file never pays for it.
- *
- * JSON entries are deflated, image entries stored: bitmaps are already PNG or WEBP, while the
- * document is repetitive JSON that compresses tenfold.
- *
- * ### Why the read guard lives in fflate's filter
- *
- * `unzip` is fully buffered — by the time it returns, every entry is already inflated in memory, so
- * a total measured there is a postmortem rather than a guard. The filter is consulted per entry
- * *before* inflation, using the central directory's declared size, which is the only place a
- * ceiling can actually stop a zip bomb.
- *
- * fflate allocates deflated entries from `originalSize` but stored entries from `size`. Stored
- * entries must declare those identically, so the filter rejects a mismatch before the copy.
+ * Lazy ZIP boundary: deflate JSON and store compressed media. Enforce declared-size budgets in the filter before
+ * buffered inflation. Stored entries require size === originalSize because fflate allocates them from size.
  */
 
-/**
- * Ceiling for a single archive, in either direction.
- *
- * Deliberately well under 4 GiB, where ZIP32's 32-bit sizes stop describing the file: fflate reads
- * zip64 records but `zip()` never emits them, so an archive at that boundary would be written
- * structurally invalid rather than rejected.
- */
+/** Stay below ZIP32 overflow; the writer does not emit zip64. */
 export const INVK_MAX_ARCHIVE_BYTES = 2 * 1024 * 1024 * 1024;
 
 /** Ceiling on entry count, which bounds the cost of building the entry map. */
@@ -100,9 +81,8 @@ export interface InvkExpansionBudget {
 }
 
 /**
- * The read-side ceiling, consulted during the walk. The refusal is *returned* rather than thrown
- * from `accept`: a throw inside fflate's walk unwinds through its decoder and arrives as a decode
- * failure, so the caller would be told the file was not a project when it was merely too big.
+ * Return size refusals instead of throwing inside the filter, which would misclassify oversized archives as
+ * corrupt.
  */
 export const createExpansionBudget = (): InvkExpansionBudget => {
   let entryCount = 0;
@@ -111,8 +91,7 @@ export const createExpansionBudget = (): InvkExpansionBudget => {
 
   return {
     accept: (file) => {
-      // Directory records carry nothing and only inflate the count toward the
-      // guard.
+      // Empty directory records do not consume the entry budget.
       if (file.name.endsWith('/')) {
         return false;
       }
@@ -137,12 +116,7 @@ export const createExpansionBudget = (): InvkExpansionBudget => {
   };
 };
 
-/**
- * Expand a ZIP into its entries. Anything that is not a readable ZIP surfaces as
- * `not-a-project` rather than an fflate error, because from the caller's side
- * "you picked the wrong file" and "this ZIP has a bad central directory" are the
- * same event.
- */
+/** Corrupt and non-ZIP inputs share the same typed refusal. */
 export const readArchive = async (bytes: Uint8Array): Promise<Map<string, Uint8Array>> => {
   if (bytes.byteLength > INVK_MAX_ARCHIVE_BYTES) {
     throw new InvkFormatError('too-large', `Project archive is ${bytes.byteLength} bytes.`);
@@ -151,10 +125,7 @@ export const readArchive = async (bytes: Uint8Array): Promise<Map<string, Uint8A
   const { unzip } = await import('fflate');
   const budget = createExpansionBudget();
   const expanded = await new Promise<Record<string, Uint8Array>>((resolve, reject) => {
-    // `unzip` reports most damage through the callback, but raises some of it — a central directory
-    // it cannot walk at all — synchronously. That throw rejects this promise with fflate's own error
-    // rather than the one this function promises to raise, so it is caught here too. Otherwise the
-    // guarantee holds for a truncated file and quietly fails for a corrupt one.
+    // Normalize both synchronous throws and asynchronous unzip errors.
     try {
       unzip(bytes, { filter: budget.accept }, (error, data) => {
         if (error) {

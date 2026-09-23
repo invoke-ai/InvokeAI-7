@@ -212,9 +212,7 @@ afterEach(async () => {
 });
 
 describe('WidgetRenderer loading identity transitions', () => {
-  // The center region and the right-rail docks have no header row of their own
-  // (`CenterArea` and the dock tab strips carry it), so the identity slot lives
-  // in the left and bottom panel frames.
+  // Center and right docks own separate chrome; identity slots belong in left/bottom panel frames.
   it('swaps spinner for icon without moving a renamed standard header', async () => {
     const { resolve, widget } = createDeferredWidget();
     await render(<WidgetRenderer instance={createInstance('Renamed widget')} region="left" widget={widget} />);

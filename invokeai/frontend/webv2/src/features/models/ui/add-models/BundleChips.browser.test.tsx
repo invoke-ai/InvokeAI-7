@@ -76,12 +76,8 @@ describe('BundleChips overflow', () => {
     // (a) the chip row overflows the viewport horizontally.
     expect(viewport!.scrollWidth).toBeGreaterThan(viewport!.clientWidth);
 
-    // (b) a horizontal scrollbar part is rendered (asserted above via the
-    // non-null query; also confirm zag hasn't hidden it via data attrs).
     expect(horizontalScrollbar!.getAttribute('data-orientation')).toBe('horizontal');
 
-    // (c) the trailing element is not part of the scrolling content — it
-    // lives outside the viewport entirely, so it never scrolls with the chips.
     expect(viewport!.contains(trailing)).toBe(false);
   });
 });

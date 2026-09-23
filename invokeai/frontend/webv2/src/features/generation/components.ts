@@ -1,8 +1,3 @@
-/**
- * Generation's reusable UI components: prompt fields, reference-image controls,
- * and the settings section shell shared with other widgets.
- * Curated, caller-driven export list — add a symbol only when a consumer needs it.
- */
 export {
   AspectRatioLockButton,
   AspectRatioSelect,

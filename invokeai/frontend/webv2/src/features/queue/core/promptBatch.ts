@@ -1,15 +1,6 @@
 /**
- * The seed/prompt matrix for a generate submission.
- *
- * A generate graph carries one `positive_prompt` string node, so submitting
- * several prompts is a batch dimension over that node rather than several
- * graphs. Backend batch semantics (see
- * `invokeai/app/services/session_queue/session_queue_common.py`): the outer list
- * is a cartesian PRODUCT of groups, and each inner group is ZIPPED, so all of
- * its items must have the same length.
- *
- * The prompt list arrives already expanded — Queue never talks to the expansion
- * route itself.
+ * Prompts arrive pre-expanded. Backend outer groups form a Cartesian product; entries within each group zip and
+ * require equal lengths.
  */
 
 import { SEED_MAX } from '@platform/core/seed';
@@ -52,11 +43,7 @@ export interface GeneratePromptBatchDatum extends QueueBatchDatum {
   field_name: 'value';
 }
 
-/**
- * One workflow seed input that varies between runs: its first seed and the
- * direction of the rest. Compact on purpose — the snapshot records the start
- * the plan drew, and the runs expand from it deterministically at send time.
- */
+/** Persist each workflow seed's start and step; expand deterministic runs at send time. */
 export interface QueueWorkflowSeed {
   fieldName: string;
   nodeId: string;
@@ -146,12 +133,8 @@ const generateLegacySeedSequence = (start: number, count: number): number[] =>
   Array.from({ length: sanitizeBatchCount(count) }, (_, index) => (start + index) % SEED_MAX);
 
 /**
- * The expansion items queued before seed modes were planned with, reproduced so
- * recovery replays them as recorded. Those items knew only a random toggle,
- * which the runtime maps to a step of 1 or 0: the toggle decided whether one
- * prompt (or per-iteration prompts) stepped or held, while several prompts with
- * sharing disabled always stepped per image, and the sequence wrapped at
- * `SEED_MAX` exclusive. New submissions never take this path.
+ * Recovery preserves legacy random-toggle seed rules, including exclusive SEED_MAX wrapping; new submissions never
+ * use this path.
  */
 export const buildLegacyGeneratePromptBatchPlan = ({
   batchCount,
@@ -205,18 +188,8 @@ export const buildLegacyGeneratePromptBatchPlan = ({
 };
 
 /**
- * With a single prompt this reproduces the pre-dynamic-prompts payload exactly,
- * which `promptBatch.test.ts` pins:
- * - stepping seed -> one zipped group of `batchCount` seeds and repeated
- *   prompts, `runs: 1`
- * - held seed -> one zipped group of length 1, `runs: batchCount`
- *
- * With several prompts the seed behaviour decides the shape, but only while the
- * seed steps — a held seed is the same for every image whatever the behaviour:
- * - `per-iteration` -> seeds become their own group, so the product is
- *   `iterations x prompts` and every prompt in an iteration shares its seed
- * - `per-image` -> one distinct sequential seed per image, zipped against the
- *   prompt list repeated `batchCount` times, `runs: 1`
+ * Held seeds reuse one value. Stepping per-iteration seeds form a product with prompts; per-image seeds zip with
+ * repeated prompts.
  */
 export const buildGeneratePromptBatchPlan = ({
   batchCount,

@@ -15,15 +15,8 @@ import { isWidgetRegion as isKnownWidgetRegion } from '@workbench/layoutContract
 const clipsOverflow = (value: string): boolean => value !== 'visible';
 
 /**
- * Measures a droppable's rect clipped by its overflow ancestors — the part
- * of it a user can actually see. A fully hidden droppable collapses to a
- * zero-size rect no pointer can be within.
- *
- * This must NOT be used as `measuring.droppable.measure`: dnd-kit measures
- * droppables once at drag start and only shifts the cached rect by ancestor
- * scroll deltas (width/height stay frozen), so a row hidden at drag start
- * would keep a zero-size rect even after auto-scroll reveals it. It is
- * evaluated live at collision time instead (see widgetCollisionDetection).
+ * Clip against live overflow ancestors at collision time, never in dnd-kit's cached droppable measurement: hidden
+ * rows must become hittable when scrolling reveals them.
  */
 export const measureDroppableVisibleRect = (element: HTMLElement): ClientRect => {
   const rect = { ...getClientRect(element) };
@@ -300,8 +293,7 @@ export const resolveWidgetDragEnd = (
     overData.kind === 'widget-instance'
       ? Math.max(0, overRegionState.instanceIds.indexOf(overData.instanceId))
       : overRegionState.instanceIds.length;
-  // Entering a region adopts the drop target's cluster; a remembered end
-  // alignment from an earlier placement is cleared when landing at the start.
+  // Adopt the target cluster; discard remembered end alignment when dropping at the start.
   const targetIsEnd =
     overData.kind === 'widget-region-end' ||
     (overData.kind === 'widget-instance' && (overRegionState.alignEndInstanceIds ?? []).includes(overData.instanceId));
@@ -319,15 +311,8 @@ export const resolveWidgetDragEnd = (
 };
 
 /**
- * Drops pointer collisions with droppables the pointer is not visibly over.
- *
- * The rects `pointerWithin` tested against are cached at drag start and never
- * re-clipped, so a droppable scrolled out of its container extends invisibly
- * across whatever is rendered below — a gallery board row below the fold
- * overlays the entire image grid, catching drags and racing the auto-scroller.
- * Re-checking the pointer against the live visible rect removes those phantom
- * hits while still letting a row that auto-scroll reveals mid-drag be hit the
- * moment it appears.
+ * Recheck cached pointer hits against live clipped rects so scrolled-out rows cannot intercept drops over
+ * neighboring content.
  */
 const dropOccludedPointerCollisions = (
   collisions: Collision[],
@@ -372,9 +357,7 @@ export const widgetCollisionDetection: CollisionDetection = (args) => {
     }
 
     if (isWidgetInstanceDragData(activeData)) {
-      // The trailing-cluster spacer sits inside its strip's own region
-      // droppable, which would otherwise shadow it into the nearest-chip
-      // fallback below; a direct pointer hit on it wins like a chip hit.
+      // Prefer a direct spacer hit over its containing region to preserve trailing-cluster drops.
       const endZoneCollisions = pointerCollisions.filter((collision) =>
         isWidgetRegionEndDropData(getCollisionData(args, collision.id))
       );

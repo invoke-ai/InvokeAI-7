@@ -13,10 +13,7 @@ import { QueueItemRow } from './QueueItemRow';
 import { clearPendingQueueItemReveal, type QueueItemRevealRequest } from './queueUiStore';
 import { SectionHeader } from './SectionHeader';
 
-/**
- * RECENT — the windowed queue history, filtered by the active tab. The running
- * and next items are excluded here since NOW & NEXT already shows them.
- */
+/** Exclude running and next items from recent history because NOW & NEXT already shows them. */
 export const RecentSection = ({
   filter,
   revealRequest = null,

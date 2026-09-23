@@ -180,8 +180,7 @@ describe('auto invocation route switching on widget reveal', () => {
     const region = getRegion(state, 'left');
 
     expect(region.instanceIds).toEqual([]);
-    // The route is left where it was rather than pointed at the emptied rail;
-    // route validation refuses an unmounted source separately.
+    // Leave the route unchanged; validation separately rejects an unmounted source.
     expect(region.instanceIds).not.toContain(getInvocation(state).sourceId);
   });
 
@@ -199,8 +198,6 @@ describe('auto invocation route switching on widget reveal', () => {
     const before = state;
     const beforeProject = getProject(state);
 
-    // The work surface refuses to give up its last view; the whole dispatch
-    // must therefore change nothing, including the invoke route.
     state = workbenchReducer(state, { region: 'center', type: 'toggleRegionWidget', widgetId: centerIds[0]! });
 
     expect(state).toBe(before);

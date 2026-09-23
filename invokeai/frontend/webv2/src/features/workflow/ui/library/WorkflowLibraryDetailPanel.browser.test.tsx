@@ -14,12 +14,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WorkflowLibraryDetailPanel } from './WorkflowLibraryDetailPanel';
 
 /**
- * The panel is the only surface that turns "what does this workflow need" into
- * an action, so the model stores it resolves against are replaced by mutable
- * fixtures: installed models, the starter catalog, and the set of sources
- * already installing. `getStarterModelInstallSources` stays real — the install
- * action's contract is that it hands the *catalog's* sources to `installMany`,
- * deduped across requirements.
+ * Use mutable catalog fixtures but real install-source expansion to verify deduplicated catalog sources reach
+ * installMany.
  */
 const models = vi.hoisted(() => ({
   activeInstallSources: { current: new Set<string>() },
@@ -322,10 +318,7 @@ describe('WorkflowLibraryDetailPanel', () => {
     const trigger = document.querySelector<HTMLElement>('[aria-label="More actions"]');
     expect(trigger).not.toBeNull();
 
-    // The trigger is a toggle: clicking it while the menu is already open
-    // (e.g. a caller re-asserts state after an in-flight action left the
-    // menu open, because a disabled item's click never reaches the menu
-    // machine) would close it instead of being the no-op callers expect.
+    // Check open state before clicking the toggle; repeating an open request would otherwise close it.
     if (trigger?.getAttribute('data-state') === 'open') {
       return;
     }
@@ -478,8 +471,6 @@ describe('WorkflowLibraryDetailPanel', () => {
     await renderPanel(IMAGE_TO_VIDEO);
 
     expect(requirementStatuses()).toEqual(['unresolvable', 'unresolvable', 'installed']);
-    // Nothing to install, so the panel keeps its Open action rather than
-    // offering an install that cannot run.
     expect(buttonWithText('Open')).not.toBeUndefined();
   });
 
@@ -553,8 +544,7 @@ describe('WorkflowLibraryDetailPanel', () => {
     expect(RAW_WORKFLOW.meta).toStrictEqual({ category: 'default', version: '3.0.0' });
     expect(queries.invalidateWorkflowLibraryCache).toHaveBeenCalledTimes(1);
     expect(onDuplicated).toHaveBeenCalledWith('wf-copy');
-    // From Browse, the copy lands in a category the user is not looking at, so
-    // the notice is the only confirmation there is.
+    // A copied default lands outside the current category, so notification confirms success.
     expect(NOTIFICATIONS.success).toHaveBeenCalledWith('Saved a copy under Yours');
   });
 
@@ -572,10 +562,7 @@ describe('WorkflowLibraryDetailPanel', () => {
 
     await clickMenuItem('duplicate');
 
-    // Nothing has changed on screen yet — the copy is two round trips away and
-    // lands in a category this view is not showing — so the menu item holds
-    // itself closed instead of letting an impatient second click mint a second
-    // copy.
+    // Guard duplicate creation while its two requests are pending and no visible result exists yet.
     await openMenu();
     expect(menuItem('duplicate')?.getAttribute('aria-disabled')).toBe('true');
 
@@ -632,9 +619,6 @@ describe('WorkflowLibraryDetailPanel', () => {
     await renderPanel(TEXT_TO_IMAGE);
 
     await openMenu();
-    // The overflow menu carries the same second-line hints as the graph
-    // preview's "Open as" menu — this is the one place that unification is
-    // asserted, rather than duplicating it under every item.
     expect(menuItem('delete')?.textContent).toContain('Removes it from your library');
 
     await clickMenuItem('delete');
@@ -690,8 +674,7 @@ describe('WorkflowLibraryDetailPanel', () => {
   it('links only the rows the account is missing, and takes them to Add Models', async () => {
     await renderPanel(IMAGE_TO_VIDEO);
 
-    // Two installable rows link; the installed VAE stays plain text — Add
-    // Models has nothing to offer for a model that is already here.
+    // Link missing installable models only; installed requirements have no Add Models action.
     expect(requirementStatuses()).toEqual(['installable', 'installable', 'installed']);
     expect(document.querySelectorAll('[data-requirement-link]')).toHaveLength(2);
     expect(requirementRows()[2]?.querySelector('[data-requirement-link]')).toBeNull();
@@ -713,8 +696,7 @@ describe('WorkflowLibraryDetailPanel', () => {
   });
 
   it('leaves a row that names nothing installable as plain text', async () => {
-    // Nothing installed and no catalog: the row is unresolvable, and a slot
-    // with neither base nor type has no query to offer either.
+    // Unresolved requirements without catalog matches or searchable slot hints remain plain text.
     models.installedModels.current = [];
     models.starterModels.current = [];
 

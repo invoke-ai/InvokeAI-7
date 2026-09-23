@@ -3,11 +3,7 @@ import { useNotify } from '@features/models/ui/useModelsNotify';
 import { useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 
-/**
- * Turns settled install outcomes (completed/failed/cancelled) into notifications,
- * while the model manager is mounted. Provider-free: `useNotify` falls back to
- * global toasts off-workbench. Mounted by `ModelInstallRuntime`.
- */
+/** ModelInstallRuntime announces settled installs; notifications also work outside workbench providers. */
 export const useInstallOutcomeToasts = (): void => {
   const { t } = useTranslation();
   const notify = useNotify();

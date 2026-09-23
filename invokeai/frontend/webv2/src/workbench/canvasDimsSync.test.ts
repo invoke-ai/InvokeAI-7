@@ -74,9 +74,7 @@ describe('reconcileCanvasDims (pure)', () => {
       prev: snapshot(1024, 1024, 1024, 1024),
     });
 
-    // 4:3 as an id, but the numeric ratio must agree so downstream constraint
-    // math (GenerateDimensionFields' getActiveRatio) uses the fresh ratio
-    // instead of a stale 1.0 left over from the previous (square) dims.
+    // Update the numeric ratio too; getActiveRatio prefers it over the aspect id.
     expect(result).toMatchObject({ aspectRatioId: '4:3', aspectRatioValue: 1024 / 768, kind: 'patch-dims' });
   });
 
@@ -285,10 +283,7 @@ describe('createCanvasDimsSync (wiring)', () => {
     expect(values.width).toBe(512);
     expect(values.height).toBe(768);
     expect(values.aspectRatioId).toBe('2:3');
-    // The numeric ratio must be re-derived alongside the id, or downstream
-    // constraint math (GenerateDimensionFields' getActiveRatio, which prefers
-    // aspectRatioValue whenever it is > 0) keeps constraining edits to the
-    // stale ratio from before the bbox drag.
+    // Re-derive numeric aspectRatioValue because downstream constraints prefer it over the id.
     expect(values.aspectRatioValue).toBeCloseTo(512 / 768);
     // Exactly one sync dispatch (the echo is a no-op, so no unbounded loop).
     expect(getSyncDispatches()).toBe(1);
@@ -340,8 +335,6 @@ describe('createCanvasDimsSync (wiring)', () => {
     const nextWidth = 800;
     const constrainedHeight = nextWidth / activeRatio;
 
-    // Before the fix this would divide by the stale ratio (1.0, from the
-    // original 1024x1024 dims) and yield the wrong height (800 instead of 600).
     expect(constrainedHeight).toBeCloseTo(600);
     sync.dispose();
   });
@@ -368,9 +361,7 @@ describe('createCanvasDimsSync (wiring)', () => {
     dispatchCanvas(store, { bbox: { height: 1024, width: 1024, x: 32, y: 48 }, type: 'setCanvasBbox' });
     const before = getSyncDispatches();
 
-    // 501 is not a multiple of the sdxl grid (8): dims -> bbox must snap it,
-    // then write the valid value back to the dimensions. The re-entrancy guard
-    // must keep those two bounded system writes from echoing indefinitely.
+    // Off-grid input requires a bbox snap and dimension echo; re-entry must keep those writes bounded.
     store.commands.generation.patchSettings({ width: 501 });
 
     const { bbox: nextBbox, values } = getActiveGenerate(store.getState());
@@ -488,8 +479,7 @@ describe('createCanvasDimsSync before the capability table arrives', () => {
   };
 
   it('reconciles an external generator at once, which will never get a row to wait for', () => {
-    // Holding off on `null` is right for an architecture the backend will describe. An external
-    // provider has no row coming, so waiting would leave its canvas sync off for the whole session.
+    // External providers never receive a capability row, so waiting would disable sync permanently.
     const externalModel = {
       base: 'external',
       capabilities: { modes: ['txt2img'], supports_seed: true },
@@ -517,9 +507,7 @@ describe('createCanvasDimsSync before the capability table arrives', () => {
   });
 
   it('writes nothing into the project while the architecture has no answer', () => {
-    // Reopening a saved canvas project: `prev` is null, so the bbox wins and the dims are patched
-    // and persisted. With no table the grid reads as 8, which is a real answer for SDXL and a guess
-    // for Wan -- and Wan's denoise node rejects anything but multiples of 16.
+    // First-run bbox reconciliation persists dimensions; guessing grid 8 is invalid for Wan's grid 16.
     const { getSyncDispatches, store, sync } = setupWanProject();
 
     expect(getSyncDispatches()).toBe(0);
@@ -528,9 +516,7 @@ describe('createCanvasDimsSync before the capability table arrives', () => {
   });
 
   it('reconciles as soon as the table lands, with no other change to the project', () => {
-    // The gap this closes: nothing else moves when the table arrives -- the widget's own resolver
-    // produces no patch for an already-consistent project -- so this listener has to hear about the
-    // table itself or the wrong dimensions stay persisted.
+    // Capability arrival alone must retrigger sync; an otherwise consistent project emits no workbench change.
     const { getSyncDispatches, store, sync } = setupWanProject();
 
     setArchitectureCapabilities(architectureCapabilitiesFixture);

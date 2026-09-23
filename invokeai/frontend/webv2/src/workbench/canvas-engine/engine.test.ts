@@ -141,8 +141,7 @@ const createCanvasEngine = ({
     reportError: reportError ?? (() => undefined),
   });
 
-// Records adjusted-surface cache access without exposing it on the engine. The
-// factory wraps the real implementation, preserving all behaviour.
+// Wraps the real adjusted cache to record access without exposing engine internals.
 const adjustedSurfaceCacheDeletes = vi.hoisted(() => [] as string[]);
 const adjustedSurfaceCacheGets = vi.hoisted(() => [] as string[]);
 const adjustedSurfaceCacheDeleteFaults = vi.hoisted(() => new Set<string>());
@@ -271,14 +270,8 @@ const createEngine = () => {
   return { doc, engine, unsubscribe };
 };
 
-// ---- Reactive store + render-loop harness -----------------------------
-//
-// The tests above never `attach()`, so the render loop (and thus
-// `ensureLayerCaches`) never runs. The tests below exercise the document
-// mirror wired into a live engine, so they need: a store that actually
-// notifies subscribers on change, a controllable `requestAnimationFrame`
-// pair to drive the (otherwise real) scheduler deterministically, and fake
-// canvases whose `getContext('2d')` returns a recording stub context.
+// Attached-engine tests use notifying stores, controlled animation frames and recording canvas contexts to
+// exercise the live document mirror and cache scheduler.
 
 /** A reactive fake store: `setDocument` notifies subscribers, unlike `createFakeStore` above. */
 const createReactiveStore = (
@@ -425,11 +418,8 @@ type RecordingRasterBackend = StubRasterBackend & {
 };
 
 /**
- * Stateful raster backend for publication-race tests. Every scratch/cache
- * surface gets a stable id, as do the fake bitmaps supplied by each test. This
- * lets a test distinguish a decode drawn into an isolated scratch surface from
- * a scratch surface published into the live cache without exposing cache
- * internals from the production engine.
+ * Stable scratch/cache and bitmap ids distinguish isolated rasterization from publication without exposing engine
+ * cache internals.
  */
 const createRecordingRasterBackend = (): RecordingRasterBackend => {
   const base = createTestStubRasterBackend();
@@ -792,9 +782,7 @@ describe('createCanvasEngine', () => {
     void engine.tools.requestColorSample().then((hex) => {
       settled = hex;
     });
-    // A press stashes a color; the cancel discards that stash (so a dead
-    // gesture's color can never ride a later release — see the tool tests)
-    // without settling the claim, leaving the eyedropper armed for a retry.
+    // Cancel drops the pressed color but keeps the one-shot claim armed for retry.
     overlay.fire('pointerdown', pointerAt(5, 5));
     overlay.fire('pointercancel', pointerAt(5, 5, { buttons: 0 }));
     await flushMicrotasks();
@@ -1180,10 +1168,8 @@ describe('createCanvasEngine', () => {
   });
 
   it('uploads per-generation composites through the intermediate seam, not the durable one', async () => {
-    // Both consumers once shared a single un-parameterised `uploadImage`, so
-    // every invocation's base/mask composite was stored as a permanent image.
-    // Nothing in the document ever points at a composite, so it must be
-    // reclaimable; only pixels a layer references may be durable.
+    // Generation composites have no document references and must be reclaimable; only layer-owned pixels require
+    // durable uploads.
     const doc = makeDoc();
     const { store } = createFakeStore(doc);
     const uploadImage = vi.fn(() => Promise.resolve({ height: 1, imageName: 'durable', width: 1 }));
@@ -2574,8 +2560,6 @@ describe('document mirror wiring: layer reorder', () => {
     const overlay = createFakeCanvas();
     engine.surface.attach(screen.element, overlay.element);
 
-    // Initial frame: dispatches (and, after a microtask flush, completes) the
-    // rasterize for both layers.
     raf.flush();
     await flushMicrotasks();
     raf.flush(); // the follow-up frame each rasterize's resolve scheduled
@@ -2591,8 +2575,7 @@ describe('document mirror wiring: layer reorder', () => {
     // No layer content changed, so nothing should be re-rasterized.
     expect(resolver).toHaveBeenCalledTimes(2);
 
-    // The compositor draws bottom-to-top; `a` (alpha 0.25) is now the bottom
-    // layer and `b` (alpha 0.75) the top, so alpha is applied in that order.
+    // Bottom-to-top compositing applies `a` at 0.25 before `b` at 0.75.
     const alphaOrder = screen.surface.callLog
       .filter((entry) => entry.op === 'set' && entry.args[0] === 'globalAlpha')
       .map((entry) => entry.args[1]);
@@ -2663,23 +2646,17 @@ describe('resize: synchronous composite (no flash/strobe on panel drag)', () => 
     const overlay = createFakeCanvas();
     engine.surface.attach(screen.element, overlay.element);
 
-    // Run the initial attach frame so the surface holds a composited frame, then
-    // isolate what the resize alone draws.
     raf.flush();
     screen.surface.callLog.length = 0;
 
-    // A single resize event (as a ResizeObserver fires mid panel-drag). Sizing a
-    // `<canvas>` backing store CLEARS it; the fix recomposites synchronously so the
-    // cleared surface is repainted before the browser paints (no blank frame).
-    // No `raf.flush()` follows — so any draw seen here happened IN-TASK.
+    // Resize clears the backing store; recomposition must happen in-task before paint. No animation-frame flush
+    // follows.
     engine.surface.resize(800, 600, 1);
 
     // Backing store was resized in the same call...
     expect(screen.element.width).toBe(800);
     expect(screen.element.height).toBe(600);
-    // ...and the composite ran SYNCHRONOUSLY (drew into the surface without a rAF
-    // flush). `compositeDocument` always clears the target, so a `clearRect` here
-    // proves the recomposite happened in-task rather than being deferred to rAF.
+    // A `clearRect` without an animation-frame flush proves synchronous recomposition.
     const composited = screen.surface.callLog.some((entry) => entry.op === 'clearRect');
     expect(composited).toBe(true);
 
@@ -2709,8 +2686,6 @@ describe('resize: synchronous composite (no flash/strobe on panel drag)', () => 
 
     // The synchronous composite ran...
     expect(screen.surface.callLog.some((entry) => entry.op === 'clearRect')).toBe(true);
-    // ...and setViewportSize's viewport-subscription `{ view: true }` invalidate was
-    // suppressed, so NO rAF frame is queued to recomposite the identical content.
     expect(raf.pendingCount()).toBe(0);
 
     // Draining any frame anyway must not produce a second composite.
@@ -2722,9 +2697,7 @@ describe('resize: synchronous composite (no flash/strobe on panel drag)', () => 
   });
 
   it('marks the composite dirty flag so the synchronous path is not gated out (T22)', () => {
-    // A resize must force a full recomposite even though no layer pixels changed:
-    // if it only marked `overlay`, the T22 `needsComposite` gate would skip the
-    // composite and the just-cleared screen surface would stay blank.
+    // Resize must force full recomposition even with unchanged pixels, or the cleared screen stays blank.
     const raf = createControllableRaf();
     vi.stubGlobal('requestAnimationFrame', raf.requestFrame);
     vi.stubGlobal('cancelAnimationFrame', raf.cancelFrame);
@@ -2777,19 +2750,14 @@ describe('ensureLayerCaches: edit-during-rasterize race', () => {
     const overlay = createFakeCanvas();
     engine.surface.attach(screen.element, overlay.element);
 
-    // Subscribe to thumbnail-version notifications for layer 'a' *before* either
-    // rasterize settles. A bare `.get()` check at the end can't distinguish
-    // "notified once, at the wrong time, with stale pixels on the surface" from
-    // "notified once, at the right time, with fresh pixels on the surface" --
-    // both leave the same final version number. Tracking call count/timing does.
+    // Subscribe before decodes settle: final version alone cannot distinguish notification with stale pixels from
+    // correctly timed publication.
     const thumbnailListener = vi.fn();
     const unsubscribe = engine.stores.thumbnailVersion.subscribeKey('a', thumbnailListener);
     const contentListener = vi.fn();
     const unsubscribeContent = engine.interaction.subscribe('rasterContentEpoch', contentListener);
     expect(engine.interaction.get('rasterContentEpoch')).toBe(0);
 
-    // Frame 1: dispatches the first rasterize for imageName 'a'; it stays in flight
-    // (the deferred is never auto-resolved).
     raf.flush();
     expect(resolver).toHaveBeenCalledTimes(1);
     expect(resolver).toHaveBeenNthCalledWith(1, 'a', expect.any(AbortSignal));
@@ -2797,8 +2765,6 @@ describe('ensureLayerCaches: edit-during-rasterize race', () => {
     // An edit lands mid-flight: same layer id, new object reference, new source.
     setDocument({ ...doc, stacks: stacksFrom([rasterLayer('a', { imageName: 'a-v2' })]) });
 
-    // A frame runs while the first rasterize is still in flight. The source no
-    // longer matches that job, so a fresh isolated job starts immediately.
     raf.flush();
     expect(resolver).toHaveBeenCalledTimes(2);
     expect(resolver).toHaveBeenNthCalledWith(2, 'a-v2', expect.any(AbortSignal));
@@ -2812,8 +2778,7 @@ describe('ensureLayerCaches: edit-during-rasterize race', () => {
     expect(contentListener).toHaveBeenCalledTimes(1);
     expect(engine.interaction.get('rasterContentEpoch')).toBe(1);
 
-    // The older decode resolves afterwards. It may finish its isolated scratch
-    // draw, but it must neither publish nor notify subscribers.
+    // The older decode may draw scratch pixels but must neither publish nor notify.
     deferreds.get('a')!.resolve(new Blob());
     await flushMicrotasks();
     raf.flush();
@@ -2826,14 +2791,6 @@ describe('ensureLayerCaches: edit-during-rasterize race', () => {
     engine.lifecycle.dispose();
   });
 });
-
-// ---- Engine-owned history (P2.3) --------------------------------------
-//
-// Drives a real brush stroke end-to-end through the engine (attach → dispatch
-// pointer events → commit) and asserts the history wiring: strokeCommitted pushes
-// an image patch, undo/redo write the before/after pixels back into the layer's
-// cache surface AND re-mark the layer dirty for persistence, and the canUndo /
-// canRedo stores track the stacks.
 
 const paintDoc = (): CanvasDocumentContractV3 => ({
   background: 'transparent',
@@ -3892,10 +3849,8 @@ describe('engine-owned history: stroke → undo → redo', () => {
     const dirtyAfterStroke = bitmapStore.markLayerDirty.mock.calls.length;
     expect(dirtyAfterStroke).toBeGreaterThanOrEqual(1);
 
-    // Undo: the layer's cache surface receives putImageData(before), and the layer
-    // is re-marked dirty (convergence path). Content-sized: the paint layer started
-    // empty and grew to exactly the stroke's dirty rect, so the cache-local origin
-    // equals the dirty-rect origin and the patch lands at surface (0, 0).
+    // Undo restores pre-stroke pixels and marks dirty. The content-sized cache starts at the dirty-rect origin, so
+    // restoration lands at (0,0).
     engine.history.undo();
     const undoPut = putImageDataCalls(surfaces).find((call) => call.image === event.beforeImageData);
     expect(undoPut).toBeDefined();
@@ -3917,10 +3872,8 @@ describe('engine-owned history: stroke → undo → redo', () => {
   });
 
   it('round-trips pixels exactly across a cache-growing stroke → undo → redo', () => {
-    // Integrated case: a multi-move stroke that GROWS the (initially empty) paint
-    // cache across several pointer batches, then undo/redo restore the exact
-    // before/after ImageData over the FULL grown extent. The piecewise pieces
-    // (growth, patch application) are covered elsewhere; this pins them together.
+    // Multiple pointer batches grow the cache; integrated undo/redo must restore exact pixels over the full grown
+    // extent.
     const raf = createControllableRaf();
     vi.stubGlobal('requestAnimationFrame', raf.requestFrame);
     vi.stubGlobal('cancelAnimationFrame', raf.cancelFrame);
@@ -3961,8 +3914,6 @@ describe('engine-owned history: stroke → undo → redo', () => {
     engine.surface.attach(screen.element, overlay.element);
     engine.tools.setTool('brush');
 
-    // Drag rightward across the document in several batches so the content-sized
-    // cache grows (and reallocates) as the stroke extends.
     overlay.fire('pointerdown', pointerAt(10, 50));
     overlay.fire('pointermove', pointerAt(30, 50));
     overlay.fire('pointermove', pointerAt(50, 50));
@@ -3972,17 +3923,13 @@ describe('engine-owned history: stroke → undo → redo', () => {
 
     expect(strokes).toHaveLength(1);
     const event = strokes[0]!;
-    // The stroke grew the cache well beyond a single dab: the dirty rect spans most
-    // of the drag width, and the captured before/after cover that full extent.
     expect(event.dirtyRect.width).toBeGreaterThan(60);
     expect(event.beforeImageData.width).toBe(event.dirtyRect.width);
     expect(event.beforeImageData.height).toBe(event.dirtyRect.height);
     expect(event.afterImageData.width).toBe(event.dirtyRect.width);
     expect(event.afterImageData.height).toBe(event.dirtyRect.height);
 
-    // Undo writes the EXACT pre-stroke ImageData back into the cache. The cache
-    // grew to exactly the (chunk-padded) dirty rect, so its local origin equals the
-    // dirty-rect origin and the patch lands at surface (0, 0).
+    // Undo restores exact pre-stroke pixels at (0,0), since cache and padded dirty rect share an origin.
     engine.history.undo();
     const undoPut = putImageDataCalls(surfaces).find((call) => call.image === event.beforeImageData);
     expect(undoPut).toBeDefined();
@@ -4078,10 +4025,8 @@ describe('engine-owned history: stroke → undo → redo', () => {
     overlay.fire('pointerup', pointerAt(40, 40, { buttons: 0 }));
     expect(engine.stores.canUndo.get()).toBe(true);
 
-    // A snapshot restore reuses the same dims AND layer ids (structuredClone), so
-    // only the bumped documentRevision distinguishes it from an ordinary edit. It
-    // must still clear history: a subsequent undo would otherwise put pre-restore
-    // pixels over the restored content.
+    // Only the revision bump distinguishes a restore reusing dimensions and ids; clear history to prevent undo
+    // overwriting restored pixels.
     setDocument(paintDoc(), 1);
     expect(engine.stores.canUndo.get()).toBe(false);
     expect(engine.stores.canRedo.get()).toBe(false);
@@ -4125,15 +4070,9 @@ describe('engine-owned history: stroke → undo → redo', () => {
     expect(resolver).toHaveBeenCalledTimes(1);
     expect(resolver).toHaveBeenNthCalledWith(1, 'src-v1', expect.any(AbortSignal));
 
-    // A revision bump that REUSES layer id 'a' with a DIFFERENT source: the
-    // mirror routes this through onDocumentReplaced (a full swap), which a
-    // reference diff alone could not tell from an ordinary edit. The engine must
-    // invalidate the surviving cache entry so it re-rasterizes the new source
-    // (a stale cache entry would keep rendering the v1 pixels).
+    // Whole-document replacement must invalidate reused-id caches when the source changes.
     setDocument({ ...docV1, stacks: stacksFrom([rasterLayer('a', { imageName: 'src-v2' })]) }, 1);
 
-    // Persistence bookkeeping for the outgoing document was dropped so a reused
-    // layer id can't have its next legit persistence dispatch suppressed.
     expect(bitmapStore.reset).toHaveBeenCalledTimes(1);
 
     // The invalidated cache re-rasterizes, this time from the v2 source.
@@ -4195,16 +4134,12 @@ describe('engine-owned history: undo/redo guarded during an active gesture', () 
     overlay.fire('pointerup', pointerAt(40, 40, { buttons: 0 }));
     expect(engine.stores.canUndo.get()).toBe(true);
 
-    // Start a SECOND stroke and leave it open (pointer down + move, no up).
-    // (The live session itself may draw, so snapshot the put count after it opens.)
+    // Leave the second stroke open; snapshot writes after its initial live drawing.
     overlay.fire('pointerdown', pointerAt(50, 50));
     overlay.fire('pointermove', pointerAt(60, 60));
     const putsMidGesture = putImageDataCalls(surfaces);
 
-    // Mid-gesture undo/redo must be no-ops: no history pop, and not a single
-    // additional putImageData. Comparing the whole log — rather than just its
-    // length, or scanning it for the first stroke's snapshot — keeps this honest
-    // whether or not the live session reuses one "before" snapshot across frames.
+    // Mid-gesture undo/redo must leave history and the entire pixel-write log unchanged.
     engine.history.undo();
     engine.history.redo();
     expect(engine.stores.canUndo.get()).toBe(true);
@@ -5100,7 +5035,10 @@ describe('requestLayerThumbnail', () => {
     expect(reportError).toHaveBeenCalledWith(
       expect.objectContaining({
         area: 'canvas-engine',
-        context: expect.objectContaining({ error: 'decode failed', layerId: 'a' }),
+        context: expect.objectContaining({
+          error: expect.objectContaining({ message: 'decode failed' }),
+          layerId: 'a',
+        }),
         message: 'Layer thumbnail rasterization failed',
         namespace: 'canvas',
         projectId: 'p1',
@@ -5218,9 +5156,7 @@ const twoPaintDoc = (): CanvasDocumentContractV3 => ({
       isLocked: false,
       name: 'upper',
       opacity: 0.5,
-      // Content-sized: a persisted bitmap gives the cache a non-empty content rect.
-      // The upper (40×40) sits fully within the below (60×60) in below-local space,
-      // so the merge union stays 60×60 and the warped upper transform is non-trivial.
+      // The transformed 40x40 upper layer lies inside the 60x60 lower layer, preserving the union extent.
       source: { bitmap: { height: 40, imageName: 'upper-bmp', width: 40 }, offset: { x: 0, y: 0 }, type: 'paint' },
       transform: { rotation: 0, scaleX: 1, scaleY: 1, x: 30, y: 40 },
       type: 'raster',
@@ -5283,8 +5219,7 @@ describe('mergeLayerDown', () => {
     const screen = createFakeCanvas();
     const overlay = createFakeCanvas();
     engine.surface.attach(screen.element, overlay.element);
-    // One frame builds both layer caches; await the async bitmap decode so both
-    // caches are READY (merge refuses stale/in-flight caches — finding 20).
+    // Await both decodes; merge requires ready caches.
     raf.flush();
     await flushMicrotasks();
     raf.flush();
@@ -5302,10 +5237,7 @@ describe('mergeLayerDown', () => {
       upperLayerId: 'upper',
     });
 
-    // A fresh union-sized surface was allocated for the merged pixels. Content-
-    // sized: below's rect {0,0,60,60} unioned with upper's rect warped into
-    // below-local space {20,20,40,40} is {0,0,60,60}, so the merged surface stays
-    // 60×60 with origin (0,0).
+    // Below-local union of {0,0,60,60} and {20,20,40,40} remains 60x60 at the origin.
     const merged = surfaces[surfacesBeforeMerge];
     expect(merged).toBeDefined();
     expect(merged!.width).toBe(60);
@@ -5415,10 +5347,8 @@ describe('mergeLayerDown', () => {
     }
   );
 
-  // A two-paint doc where exactly ONE layer is content-empty (bitmap: null → a 0×0
-  // cache surface). Merging must NOT `drawImage` the zero-dimension operand (which
-  // throws in browsers) but must still dispatch the collapse and composite the
-  // non-empty operand.
+  // Collapse the layers and composite the nonempty operand without drawing a zero-sized canvas, which browsers
+  // reject.
   const oneEmptyPaintDoc = (emptyId: 'upper' | 'below'): CanvasDocumentContractV3 => {
     const doc = twoPaintDoc();
     return {
@@ -5464,8 +5394,6 @@ describe('mergeLayerDown', () => {
       const screen = createFakeCanvas();
       const overlay = createFakeCanvas();
       engine.surface.attach(screen.element, overlay.element);
-      // Await the kept layer's bitmap decode so its cache is READY before merge
-      // (the empty operand needs no decode; merge refuses stale/in-flight caches).
       raf.flush();
       await flushMicrotasks();
       raf.flush();
@@ -5478,8 +5406,6 @@ describe('mergeLayerDown', () => {
         true
       );
 
-      // The merged surface only composites the NON-empty operand: exactly one
-      // drawImage, and it never draws a zero-dimension source canvas.
       const merged = surfaces[surfacesBeforeMerge];
       expect(merged).toBeDefined();
       const draws = merged!.callLog.filter((entry) => entry.op === 'drawImage');
@@ -5494,8 +5420,7 @@ describe('mergeLayerDown', () => {
     }
   );
 
-  // A both-empty pair must fold trivially (delete the upper, below stays empty)
-  // rather than silently no-op — otherwise merge-visible stalls on such a run (F4).
+  // Two empty layers must still collapse, allowing merge-visible to make progress.
   it('folds a both-empty pair trivially: dispatches the collapse and allocates no merged surface (F4)', async () => {
     const raf = createControllableRaf();
     vi.stubGlobal('requestAnimationFrame', raf.requestFrame);
@@ -5543,20 +5468,14 @@ describe('mergeLayerDown', () => {
     expect(dispatch.mock.calls.some((call) => (call[0] as EngineTestAction).type === 'mergeCanvasLayersDown')).toBe(
       true
     );
-    // No merged surface was allocated: a 0×0 union surface would throw, and there
-    // are no pixels to composite.
+    // No pixels require allocation; zero-sized union canvases would throw.
     expect(surfaces.length).toBe(surfacesBeforeMerge);
 
     engine.lifecycle.dispose();
   });
 
-  // Regression: `mergeLayerDown` used to gate on `isRenderableLayer`, which masks
-  // satisfy (a mask rasterizes to a stencil whenever enabled). That let a mask
-  // reach the merge path, whose reducer unconditionally produces a `type: 'raster'`
-  // result — merging a mask blitted its stencil into the layer below and/or
-  // clobbered a mask below into a raster layer, destroying its config, with no
-  // undo. The guard must reject a mask on EITHER side, mirroring the layers
-  // panel's `isMergeableRasterLayer`/`canMergeLayerDown` enablement exactly.
+  // Reject masks on either merge side, matching panel eligibility. The raster merge reducer would otherwise
+  // destroy mask configuration or blend stencils into color pixels.
   it.each([
     { label: 'mask above a raster layer', maskId: 'upper' as const },
     { label: 'a raster layer above a mask', maskId: 'below' as const },
@@ -5587,8 +5506,6 @@ describe('mergeLayerDown', () => {
     expect(dispatch.mock.calls.some((call) => (call[0] as EngineTestAction).type === 'mergeCanvasLayersDown')).toBe(
       false
     );
-    // Document unchanged: still two layers, each with its original type — no
-    // mask was blitted into, and no mask was clobbered into a raster layer.
     expect(getDocumentLeaves(engine.document.getDocument()!).map((l) => l.type)).toEqual(
       getDocumentLeaves(doc).map((l) => l.type)
     );
@@ -6119,9 +6036,8 @@ describe('extract masked canvas area', () => {
 // ---- mergeVisibleRasterLayers: guarded non-destructive composite ----
 
 /**
- * An EngineStore backed by the REAL workbench reducer, so the operation's
- * prepared stack mutation advances the document and mirror atomically — the
- * no-op mock store cannot exercise that transaction.
+ * Uses the real reducer so prepared mutations advance document and mirror atomically; a no-op store cannot
+ * exercise publication.
  */
 const createReducerBackedStore = (
   document: CanvasDocumentContractV3,
@@ -7538,11 +7454,8 @@ describe('mergeVisibleRasterLayers', () => {
     raf.flush();
     await flushMicrotasks();
     raf.flush();
-    // A reference-only copy would allocate both a visible cache and a
-    // rasterization scratch surface here, after the transaction reservation was
-    // gone. Prepared caches make this frame allocation-free.
-    // The frame may lazily create its single checkerboard tile, but it must not
-    // rebuild any of the already-prepared duplicate layer caches.
+    // Prepared duplicate caches must avoid frame-time cache/scratch allocation after the reservation expires. The
+    // checkerboard tile may still initialize lazily.
     expect(surfaces).toHaveLength(afterDuplicate + 1);
     expect(engine.stores.canUndo.get()).toBe(true);
     engine.lifecycle.dispose();
@@ -7944,15 +7857,12 @@ describe('rasterizeLayer (parametric → paint)', () => {
     if (convert?.type === 'convertCanvasLayer') {
       expect(convert.layer.type).toBe('raster');
       if (convert.layer.type === 'raster') {
-        // Content-sized: the shape (60×40) at transform (10,20) bakes to a paint
-        // layer whose bitmap sits at offset (10,20); the transform resets to identity.
+        // The 60x40 shape translated by (10,20) bakes with that source offset and an identity transform.
         expect(convert.layer.source).toEqual({ bitmap: null, offset: { x: 10, y: 20 }, type: 'paint' });
         expect(convert.layer.transform).toEqual({ rotation: 0, scaleX: 1, scaleY: 1, x: 0, y: 0 });
       }
     }
 
-    // A fresh CONTENT-sized surface (the transformed shape bounds, 60×40) was
-    // allocated and the parametric cache baked into it.
     const baked = surfaces[before];
     expect(baked).toBeDefined();
     expect(baked?.width).toBe(60);
@@ -7997,9 +7907,8 @@ describe('rasterizeLayer (parametric → paint)', () => {
   });
 
   it('redo re-bakes from params rather than pinning the doc-sized surface (byte-budget honesty)', () => {
-    // Regression: the history entry declared bytes:256 but captured the doc-sized
-    // `baked` surface in its redo closure, so repeated rasterizes could retain
-    // gigabytes invisible to HISTORY_BYTE_BUDGET. Redo must re-bake instead.
+    // Redo must rebake; capturing the full baked surface under a 256-byte history entry bypasses the history
+    // memory budget.
     const { engine, surfaces } = setup(shapeLayerDoc());
 
     expect(engine.layers.rasterizeLayer('shape1')).toBe(true);
@@ -8010,9 +7919,6 @@ describe('rasterizeLayer (parametric → paint)', () => {
     expect(surfaces.length).toBe(afterApply);
 
     engine.history.redo();
-    // Redo allocates FRESH surfaces: it re-baked from params (content-sized to the
-    // transformed shape bounds, 60×40) rather than reusing a surface pinned by the
-    // entry.
     expect(surfaces.length).toBeGreaterThan(afterApply);
     const rebaked = surfaces.at(-1);
     expect(rebaked?.width).toBe(60);
@@ -8051,23 +7957,9 @@ describe('rasterizeLayer (parametric → paint)', () => {
     paint.engine.lifecycle.dispose();
   });
 
-  // ---- rasterize → undo → bitmap-store flush: source-type guard --------
-  //
-  // Reviewer-flagged bug: rasterize bakes the shape to a paint layer and marks
-  // it dirty in the bitmap store; undo re-converts it back to the parametric
-  // shape. Nothing previously cleared the pending dirty mark, so the eventual
-  // debounced (or barrier) flush would encode the paint-cache surface — still
-  // populated, since a source swap doesn't clear it — and dispatch
-  // `updateCanvasLayerSource({ type: 'paint', ... })`, silently flipping the
-  // parametric layer back to paint with stale, wrong-extent pixels.
-  //
-  // These tests wire a REAL `createBitmapStore` (exercising the actual guard
-  // in `flushLayer`) through `opts.bitmapStore`, with test-controlled
-  // encode/upload stubs (no real network) and a `getLayerSurface` that always
-  // resolves — mirroring the bug precondition that a source swap does NOT
-  // clear the cache. `getLayerSource` reads the engine's own mirrored
-  // document, so it reflects the exact reducer round trip the test drives via
-  // `setDocument`.
+  // Rasterize then undo leaves a dirty mark and surviving cache, but persistence must not overwrite the restored
+  // parametric source. A real bitmap store reads the mirrored source with controlled encode/upload and an
+  // always-resolving cache surface.
   describe('rasterize → undo → bitmap-store flush (source-type guard)', () => {
     afterEach(() => {
       vi.useRealTimers();
@@ -8086,9 +7978,7 @@ describe('rasterizeLayer (parametric → paint)', () => {
       // real cache, whose surface a source swap does NOT clear (only marks stale).
       const fakeSurface = createTestStubRasterBackend().createSurface(10, 10);
 
-      // Forward-declared: `getLayerSource` closes over it, but is only ever
-      // CALLED once `engine` is assigned below (bitmap-store flushes never
-      // happen synchronously during construction).
+      // Flushes run after construction, so the source reader sees the assigned engine.
       let engine: ReturnType<typeof createCanvasEngine>;
       const bitmapStore = createBitmapStore({
         dispatch: createTestMutationPort(store, 'p1').dispatch,
@@ -8119,11 +8009,7 @@ describe('rasterizeLayer (parametric → paint)', () => {
       return { dispatch, encodeSurface, engine, raf, setDocument, uploadImage };
     };
 
-    /**
-     * Applies the most recently dispatched `convertCanvasLayer` action onto
-     * `doc`, simulating what the real reducer would do — `createReactiveStore`'s
-     * `dispatch` is a bare spy and does not mutate state on its own.
-     */
+    /** Applies the latest conversion to `doc`; the reactive store's dispatch spy does not update state itself. */
     const applyLastConvert = (doc: CanvasDocumentContractV3, dispatch: Mock): CanvasDocumentContractV3 => {
       const converts = convertCalls(dispatch);
       const last = converts.at(-1);
@@ -8137,11 +8023,8 @@ describe('rasterizeLayer (parametric → paint)', () => {
     };
 
     /**
-     * Rasterizes `shape1` (paint bake, dirty-marks the bitmap store), applies
-     * that conversion to the mirrored document, then undoes it and applies
-     * THAT conversion too — the full reducer round trip a live document would
-     * go through. Leaves the document back at its original parametric shape
-     * source, with the paint-bake dirty mark for `shape1` still pending.
+     * Drives rasterize and undo through mirrored conversions, restoring the parametric source while leaving the
+     * paint dirty mark pending.
      */
     const rasterizeThenUndo = () => {
       vi.useFakeTimers();
@@ -8199,15 +8082,8 @@ describe('rasterizeLayer (parametric → paint)', () => {
     });
 
     it('redo after rasterize → flush → undo re-dispatches the paint image ref (fix round 2: no permanent bitmap:null)', async () => {
-      // Reviewer round 2, data-loss finding: rasterize → flush (contract lands
-      // on img-x, and the store's `lastApplied` remembers img-x) → undo (back
-      // to shape) → redo (convertCanvasLayer resets to `paint {bitmap: null}`)
-      // → a further flush re-bakes IDENTICAL pixels, so the content-hash dedupe
-      // resolves back to img-x — but the old `lastApplied`-based redundant-
-      // dispatch skip treated that as "already applied" and swallowed the
-      // dispatch, permanently stranding the document on `bitmap: null`. This
-      // drives the FULL sequence (including the first flush landing for real)
-      // and asserts the second flush actually re-dispatches the ref.
+      // Rasterize/flush/undo/redo/flush reuses identical uploaded pixels, but must redispatch the ref into the
+      // reset null-bitmap source. Remembered `lastApplied` alone cannot determine current document state.
       vi.useFakeTimers();
       let doc = shapeLayerDoc();
       const { dispatch, engine, raf, setDocument, uploadImage } = setupWithRealBitmapStore(doc);
@@ -8225,8 +8101,6 @@ describe('rasterizeLayer (parametric → paint)', () => {
       const firstPersist = paintSourceDispatches(dispatch).at(-1);
       expect(firstPersist).toBeDefined();
       expect(firstPersist?.source).toMatchObject({ bitmap: { imageName: 'img-x' }, type: 'paint' });
-      // Apply the persisted ref onto the mirrored document, as the real reducer
-      // would — the document now genuinely points at img-x, not `bitmap: null`.
       doc = {
         ...doc,
         stacks: stacksFrom(
@@ -8244,8 +8118,7 @@ describe('rasterizeLayer (parametric → paint)', () => {
       setDocument(doc);
       raf.flush();
 
-      // Redo → paint bake again; the fresh conversion lands on `bitmap: null`
-      // (only the debounced flush fills in the persisted ref).
+      // Redo resets to paint with null bitmap until the next persistence flush.
       engine.history.redo();
       doc = applyLastConvert(doc, dispatch);
       setDocument(doc);
@@ -8253,10 +8126,7 @@ describe('rasterizeLayer (parametric → paint)', () => {
       const layerAfterRedo = getDocumentLeaves(engine.document.getDocument()!)[0] as CanvasRasterLayerContractV2;
       expect(layerAfterRedo.source).toEqual({ bitmap: null, offset: { x: 10, y: 20 }, type: 'paint' });
 
-      // Flush again: the re-baked pixels are identical, so the content hash
-      // dedupes back to img-x with NO new upload — but the ref must still be
-      // re-dispatched into the contract, since the document currently reads
-      // `bitmap: null`, not img-x.
+      // Identical pixels skip upload but must redispatch the ref because the document bitmap is null.
       await vi.advanceTimersByTimeAsync(1500);
       await engine.lifecycle.flushPendingUploads();
 
@@ -8512,8 +8382,6 @@ const imageSelectedDoc = (): CanvasDocumentContractV3 => ({
   background: 'transparent',
   bbox: { height: 100, width: 100, x: 0, y: 0 },
   height: 100,
-  // Selected layer is an image (not paintable) → a brush stroke auto-creates a
-  // fresh paint layer for the gesture.
   stacks: stacksFrom([rasterLayer('img')]),
   selectedLayerId: 'img',
   version: 3,
@@ -8582,8 +8450,6 @@ describe('engine-owned history: composed auto-create + stroke entry', () => {
     const putBefore = () => putImageDataCalls(surfaces).some((call) => call.image === strokes[0]!.beforeImageData);
     const beforeUndoPutBefore = putBefore();
 
-    // Undo: removes the auto-created layer, and does NOT restore pre-stroke pixels
-    // (the layer's cache is gone).
     engine.history.undo();
     const removeAfterUndo = dispatch.mock.calls
       .map((call) => call[0] as EngineTestAction)
@@ -8666,9 +8532,7 @@ describe('setStagedPreview', () => {
 
     // Two rapid selections; the second supersedes the first.
     engine.previews.setStagedPreview({ dataUrl: dataUrl('AAAA'), height: 10, width: 10 }); // decode #0
-    engine.previews.setStagedPreview({ dataUrl: dataUrl('BBBB'), height: 20, width: 20 }); // decode #1
-
-    // The newer decode resolves first and is drawn; a frame must have been scheduled.
+    engine.previews.setStagedPreview({ dataUrl: dataUrl('BBBB'), height: 20, width: 20 });
     bitmaps.resolveBitmap(1);
     await flushMicrotasks();
     expect(raf.pendingCount()).toBeGreaterThan(0);
@@ -8681,8 +8545,7 @@ describe('setStagedPreview', () => {
 
     const draws = stagedDraws(screen.surface);
     expect(draws.length).toBeGreaterThan(0);
-    // Every staged draw is the 20x20 candidate at the bbox origin; the 10x10
-    // stale decode never reaches the screen.
+    // Only the 20x20 candidate may reach the screen; the stale 10x10 decode must not publish.
     for (const args of draws) {
       expect(args.slice(1)).toEqual([0, 0, 20, 20]);
     }
@@ -9590,8 +9453,7 @@ describe('commitRasterFilterResult', () => {
       const uploaded = createDeferred<{ height: number; imageName: string; width: number }>();
       const uploadImage = vi.fn(() => uploaded.promise);
       const harness = await createRealBitmapStoreHarness(uploadImage);
-      // The harness creates live source paint to establish a guarded export;
-      // this test targets only persistence owned by the subsequently-created copy.
+      // Source paint establishes the guard; assertions isolate the new copy's persistence.
       harness.bitmapStore.discardLayer(harness.source.id);
       const copied = await harness.engine.layers.commitRasterFilterResult({
         guard: harness.exported.guard,
@@ -12242,11 +12104,8 @@ describe('guarded filter previews', () => {
   });
 
   /**
-   * A layer that can be added/removed from the document to drive the mirror's
-   * `onLayersChanged`/`onDocumentReplaced` callbacks, without itself consuming a
-   * `createImageBitmap` call — a `bitmap: null` paint source rasterizes
-   * synchronously (a clear), unlike an image source, so it can't shift the call
-   * ordering the pruning tests rely on to target a SPECIFIC filter-preview decode.
+   * Null-bitmap paint changes the mirror without asynchronous image decoding, preserving the preview-decode
+   * ordering under test.
    */
   const previewableLayer = (id: string): CanvasLayerContract => ({
     blendMode: 'normal',
@@ -13606,14 +13465,8 @@ describe('guarded filter previews', () => {
   });
 });
 
-// ---- C1: prop/transform edits must not wipe an unflushed paint layer -----
-//
-// A `bitmap: null` paint layer's strokes live ONLY in its raster cache until a
-// debounced upload persists them. The paint rasterizer clears the surface for a
-// null bitmap, so re-rasterizing such a layer WIPES the strokes. The engine must
-// therefore invalidate a layer's cache only when its SOURCE reference changed —
-// never for a prop/transform-only edit (opacity/blend/lock/rename/nudge), which
-// the compositor already applies at draw time.
+// Property and transform changes must preserve unflushed paint caches. Rerasterizing their null-bitmap source
+// would erase strokes; only source changes justify invalidation.
 
 /** Full-surface clears (`clearRect(0,0,w,h)`) recorded on a stub surface — the wipe signature. */
 const fullClearCount = (surface: StubRasterSurface): number =>
@@ -13621,11 +13474,8 @@ const fullClearCount = (surface: StubRasterSurface): number =>
 
 describe('document mirror wiring: prop vs source change (paint-pixel survival)', () => {
   /**
-   * Rasterizes the pre-existing `paint1` layer to completion (as real frames
-   * would before the user paints — the existing-layer paint path does NOT mark
-   * the cache non-stale itself), then draws one stroke into that non-stale cache.
-   * This reproduces the C1 state: real strokes living only in a cache that a
-   * spurious re-rasterize (of the `bitmap: null` source) would clear to blank.
+   * Complete initial rasterization before painting so the stroke resides in a valid cache that spurious
+   * null-source rasterization would erase.
    */
   const paintOneStroke = async () => {
     const raf = createControllableRaf();
@@ -13666,8 +13516,6 @@ describe('document mirror wiring: prop vs source change (paint-pixel survival)',
     engine.surface.attach(screen.element, overlay.element);
     engine.tools.setTool('brush');
 
-    // Initial rasterize of the (bitmap: null) paint layer → one full clear, then
-    // the cache settles non-stale (the `.then` fires on a microtask).
     raf.flush();
     await flushMicrotasks();
     raf.flush();
@@ -13894,13 +13742,10 @@ describe('document mirror wiring: prop vs source change (paint-pixel survival)',
   it('keeps an unflushed paint layer’s pixels on a transform/opacity-only change (no re-rasterize)', async () => {
     const { engine, paintCache, raf, resolver, setDocument } = await paintOneStroke();
 
-    // Baseline: the stroke composited into the cache (a drawImage). Exactly one
-    // full clear so far — the initial rasterize; the stroke never clears.
     expect(paintCache.callLog.some((entry) => entry.op === 'drawImage')).toBe(true);
     const clearsBefore = fullClearCount(paintCache);
 
-    // A prop-only edit that PRESERVES the source reference (exactly as the reducer
-    // does — it spreads `...layer`): opacity + a transform nudge.
+    // Opacity and nudge edits preserve source identity, matching reducer structural sharing.
     const doc = engine.document.getDocument()!;
     const layer = getDocumentLeaves(doc)[0]!;
     setDocument({
@@ -13911,8 +13756,6 @@ describe('document mirror wiring: prop vs source change (paint-pixel survival)',
     await flushMicrotasks();
     raf.flush();
 
-    // The cache was NOT re-rasterized: no new full clear, so the painted pixels
-    // survive. (A `bitmap: null` re-rasterize would clear the surface to blank.)
     expect(fullClearCount(paintCache)).toBe(clearsBefore);
     // No resolve/rasterize was even attempted for the paint layer.
     expect(resolver).not.toHaveBeenCalled();
@@ -14050,9 +13893,7 @@ describe('document mirror wiring: prop vs source change (paint-pixel survival)',
 
     await engine.lifecycle.flushPendingUploads();
 
-    // The flush barrier ran, and it operated on a cache that was never wiped: the
-    // surface still carries the stroke (drawImage) with no re-rasterize clear, so
-    // the bitmap store (which encodes this exact surface) persists real pixels.
+    // The barrier must encode the preserved stroke surface without an intervening rasterization clear.
     expect(bitmapStore.flushPendingUploads).toHaveBeenCalled();
     expect(fullClearCount(paintCache)).toBe(clearsBefore);
     expect(paintCache.callLog.some((entry) => entry.op === 'drawImage')).toBe(true);
@@ -14064,9 +13905,7 @@ describe('document mirror wiring: prop vs source change (paint-pixel survival)',
     const { engine, raf, resolver, setDocument } = await paintOneStroke();
     expect(resolver).not.toHaveBeenCalled();
 
-    // A genuine source swap (undo/import → a NEW paint source object with a
-    // persisted bitmap). isSelfEcho is false in the spy store, so this must
-    // invalidate and re-rasterize — which decodes the persisted image.
+    // A new persisted paint source is not a self-echo and must invalidate and decode.
     const doc = engine.document.getDocument()!;
     const layer = getDocumentLeaves(doc)[0] as CanvasRasterLayerContractV2;
     setDocument({
@@ -14192,8 +14031,7 @@ describe('hasExportableLayerContent', () => {
     const overlay = createInputCanvas();
     engine.surface.attach(createInputCanvas().element, overlay.element);
 
-    // Settle the initial empty paint/mask rasterization before drawing. A stroke
-    // then grows that current cache without updating the persisted contract.
+    // Settle initial rasterization before a stroke grows the cache beyond persisted bounds.
     raf.flush();
     await flushMicrotasks();
     raf.flush();
@@ -14467,8 +14305,7 @@ describe('gesture guard: nudge / commitStructural mid-stroke', () => {
     const overlay = createInputCanvas();
     const screen = createInputCanvas();
     engine.surface.attach(screen.element, overlay.element);
-    // Build both layer caches so a merge could otherwise succeed; await the async
-    // decode so both are READY (merge refuses stale/in-flight caches — finding 20).
+    // Await both cache decodes so readiness would otherwise permit merging.
     raf.flush();
     await flushMicrotasks();
     raf.flush();
@@ -14530,8 +14367,7 @@ describe('brush cursor ring: live size updates', () => {
     raf.flush();
     expect(raf.pendingCount()).toBe(0);
 
-    // The `[`/`]` path: a size step with NO pointer event must schedule a frame
-    // (the ring redraws at its last position with the new radius).
+    // Keyboard brush resizing must schedule a frame at the last pointer position.
     engine.tools.stepBrushSize(1);
     expect(raf.pendingCount()).toBeGreaterThan(0);
     raf.flush();
@@ -14662,14 +14498,8 @@ describe('doc-replace mid-gesture: cancels the active tool gesture', () => {
   });
 });
 
-// ---- Zoom-cost regressions: what must NOT scale with zoom ----------------
-//
-// The reported lag ("laggier the closer you zoom in") traced to the render loop
-// recompositing the whole document on EVERY invalidation — including overlay-only
-// hover frames, whose cost is otherwise constant. A full composite up-scales each
-// doc-sized layer surface to fill the screen, so its fill-rate grows with zoom.
-// These lock the two fixes: overlay-only frames skip the composite, and composites
-// disable image smoothing when zoomed in (crisp + no bilinear up-scale per frame).
+// Overlay-only frames must skip document compositing, whose fill cost grows with zoom. Zoomed composites disable
+// smoothing for crisp pixels without bilinear upscaling.
 
 describe('zoom-cost: overlay-only frames skip the document composite', () => {
   /** A fake canvas that can BOTH fire pointer events and expose its recording surface. */
@@ -14743,8 +14573,6 @@ describe('zoom-cost: overlay-only frames skip the document composite', () => {
     overlay.fire('pointermove', pointerAt(40, 40, { buttons: 0 }));
     raf.flush();
 
-    // The screen composite did NOT run: zero clears/fills/blits landed on it. This
-    // is the win — hover cost is now independent of zoom and document size.
     expect(compositeOps(screen.surface)).toHaveLength(0);
     // The overlay WAS redrawn: cleared, and the cursor ring arc drawn.
     expect(overlay.surface.callLog.some((e) => e.op === 'clearRect')).toBe(true);
@@ -14879,8 +14707,6 @@ describe('checker colors: fed-token tile rebuild', () => {
     expect(tiles).toHaveLength(1);
     expect(fillStyleSets(tiles[0]!)).toEqual([DEFAULT_CHECKER_COLORS.a, DEFAULT_CHECKER_COLORS.b]);
 
-    // Feed new (resolved-token) checker colors: the cached tile is dropped and
-    // rebuilt with the new colors on the next composite, which is forced to run.
     engine.stores.checkerColors.set({ a: '#010101', b: '#020202' });
     raf.flush();
     await flushMicrotasks();
@@ -14924,8 +14750,6 @@ describe('checker colors: fed-token tile rebuild', () => {
     await flushMicrotasks();
     expect(tiles).toHaveLength(1);
 
-    // Re-feeding the SAME colors is a no-op (the store's equality check drops it),
-    // so no invalidation and no tile rebuild.
     engine.stores.checkerColors.set({ ...DEFAULT_CHECKER_COLORS });
     raf.flush();
     await flushMicrotasks();
@@ -14962,15 +14786,13 @@ describe('fitToView: content ∪ bbox', () => {
 
     engine.viewport.fitToView();
 
-    // avail = 400 - 48*2 = 304; fitting the 100px bbox → 3.04. Fitting the 1000px
-    // doc rect would have been ~0.304 — the doc rect is no longer the fit target.
+    // The padded 304px viewport fits the 100px bbox at 3.04, not the 1000px document at 0.304.
     expect(engine.viewport.getViewport().getZoom()).toBeCloseTo(3.04, 2);
     engine.lifecycle.dispose();
   });
 
   it('unions a renderable layer that lies beyond the bbox into the fit', () => {
-    // A raster layer 100x100 translated to (900,900): content extends to 1000, far
-    // past the 100px bbox. Fitting content ∪ bbox spans 0..1000 → zoom ~0.304.
+    // Content at (900,900) extends the bbox union to 1000px, fitting at about 0.304.
     const layer: CanvasLayerContract = {
       blendMode: 'normal',
       id: 'a',
@@ -15079,9 +14901,6 @@ describe('transform session', () => {
   });
 
   it('parametric (text) layer Apply commits ONE param transform, stays type text, no bake; undo restores', () => {
-    // Regression: parametric layers (shape/gradient/text) could not be transformed
-    // — `applyTransform` only handled image sources. Phase 5 "param for parametric":
-    // the transform commits as a param edit and the source stays editable-forever.
     const textLayerDoc: CanvasDocumentContractV3 = {
       background: 'transparent',
       bbox: { height: 100, width: 100, x: 0, y: 0 },
@@ -15224,10 +15043,8 @@ describe('transform session', () => {
     vi.stubGlobal('requestAnimationFrame', raf.requestFrame);
     vi.stubGlobal('cancelAnimationFrame', raf.cancelFrame);
 
-    // A paint layer that already carries a non-identity transform, so undo restores
-    // a transform distinct from the post-bake identity. Content-sized: it needs a
-    // persisted bitmap so its cache is non-empty (an empty paint layer is not
-    // transformable).
+    // Persisted content makes the paint layer transformable; a nonidentity transform distinguishes undo from the
+    // baked identity.
     const movedPaint = paintDoc();
     const movedLayer = getDocumentLeaves(movedPaint)[0] as CanvasRasterLayerContractV2;
     movedLayer.source = {
@@ -15269,17 +15086,13 @@ describe('transform session', () => {
     dispatch.mockClear();
     engine.layers.applyTransform();
 
-    // A fresh CONTENT-sized surface (the transformed content bounds, 100×100 here)
-    // was allocated and drawn through the bake matrix. The 50×50 cache at scale 2 +
-    // offset (10,20) bakes to bounds {10,20,100,100}, so the surface is 100×100 and
-    // the bake transform's translation is shifted by the baked origin to (0,0).
+    // A 50x50 cache scaled by two at (10,20) bakes into a 100x100 surface; subtracting the baked origin leaves
+    // zero translation.
     const baked = surfaces[surfacesBeforeApply];
     expect(baked).toBeDefined();
     expect(baked!.width).toBe(100);
     expect(baked!.height).toBe(100);
     const setTransforms = baked!.callLog.filter((entry) => entry.op === 'setTransform');
-    // The non-identity setTransform carries the bake matrix scale (a=2, d=2), with
-    // its translation shifted into baked-local space (e=0, f=0).
     expect(
       setTransforms.some(
         (entry) => entry.args[0] === 2 && entry.args[3] === 2 && entry.args[4] === 0 && entry.args[5] === 0
@@ -15388,15 +15201,8 @@ describe('transform session', () => {
     engine.lifecycle.dispose();
   });
 
-  // ---- temp-tool switch (space/alt hold) must not discard the session ----
-  //
-  // The pointer pipeline flags a modifier-hold switch (and its matching
-  // restore) with `{ temporary: true }` on `setTool` (see
-  // `pointerPipeline.test.ts`, "temporary modifier tools"). These tests drive
-  // that same seam directly against the engine: the public `CanvasEngine`
-  // type narrows `setTool` to one argument, but the runtime function accepts
-  // the pipeline's second (`opts`) argument, so the cast below exercises the
-  // exact call the pipeline makes on a real space/alt hold and release.
+  // Drive the pipeline's `{ temporary: true }` tool-switch seam directly to verify modifier holds preserve
+  // sessions. The cast exposes its runtime second argument beyond the public one-argument type.
   describe('temp-tool switch (space/alt hold)', () => {
     it('preserves the session and its numeric edits, resuming after the hold ends', () => {
       const raf = createControllableRaf();
@@ -15431,8 +15237,6 @@ describe('transform session', () => {
 
       setTool('transform', { temporary: true }); // space up: resume
       expect(engine.stores.activeTool.get()).toBe('transform');
-      // Resuming does not reopen the session from the layer's committed
-      // transform, discarding the edit.
       expect(engine.stores.transformSession.get()?.transform).toEqual(edited);
 
       engine.lifecycle.dispose();
@@ -15489,17 +15293,11 @@ describe('transform session', () => {
       expect(engine.stores.transformSession.get()).not.toBeNull();
 
       const setTool = engine.tools.setTool as (id: ToolId, opts?: { temporary?: boolean }) => void;
-      setTool('view', { temporary: true }); // space down
-
-      // The session's layer is deleted while temp-switched away (e.g. via the
-      // layers panel) — the layer-change teardown cancels the session
-      // immediately, regardless of which tool is active.
+      setTool('view', { temporary: true }); // Deleting the session layer while temporarily switched away must cancel immediately.
       setDocument({ ...doc, stacks: stacksFrom([]) });
       expect(engine.stores.transformSession.get()).toBeNull();
 
-      setTool('transform', { temporary: true }); // space up: resume
-      // Resuming must not resurrect a session against the now layer-less
-      // document.
+      setTool('transform', { temporary: true });
       expect(engine.stores.transformSession.get()).toBeNull();
 
       engine.lifecycle.dispose();
@@ -16088,9 +15886,7 @@ describe('engine selection: fill / erase', () => {
   it('eraseSelection records one undoable edit (on existing content)', () => {
     const { engine } = makeEngine(paintDoc());
     engine.selection.selectAll();
-    // Content-sized: erase only affects EXISTING pixels, so give the layer content
-    // first (a fill grows the empty paint cache to the selection). Then erase records
-    // its own edit within that extent.
+    // Fill first to establish content; erasure may edit only existing cache extent.
     engine.selection.fillSelection();
     engine.selection.eraseSelection();
     expect(engine.stores.canUndo.get()).toBe(true);
@@ -16145,8 +15941,7 @@ describe('engine selection: fill / erase', () => {
 
   it('clearCaches flushes pending bitmap uploads before invalidating (unflushed strokes survive)', async () => {
     const { bitmapStore, engine } = makeEngine(paintDoc());
-    // The debug "Clear caches" action must persist any in-flight (debounced) paint
-    // upload before it drops the layer caches — otherwise an unflushed stroke is lost.
+    // Cache clearing must flush pending paint first to avoid losing unpersisted strokes.
     await engine.diagnostics.clearCaches();
     expect(bitmapStore.flushPendingUploads).toHaveBeenCalledTimes(1);
     engine.lifecycle.dispose();
@@ -16641,14 +16436,8 @@ describe('text edit session', () => {
     expect(engine.stores.textEditSession.get()).toBeNull();
   });
 
-  // ---- click-elsewhere-to-commit (pointerdown / Escape) ----
-  //
-  // Regression: `commitTextEdit` only fired on the portal's blur, but the pointer
-  // pipeline `preventDefault`s a canvas pointerdown (suppressing that blur), and
-  // the mid-gesture guard swallowed any blur that did land. The commit now runs
-  // engine-side on pointerdown (before a gesture starts), reading the live portal
-  // content via a registered reader; Escape cancels a defocused session via the
-  // engine's escape ladder. These drive that engine-side logic directly.
+  // Canvas pointerdown suppresses portal blur, so text commits read live portal content before starting the
+  // gesture. Escape cancels defocused sessions through the engine ladder.
 
   it('commitOpenTextSession reads the registered content reader and commits the create', () => {
     const { engine, layerActions } = makeEngine(paintDoc());
@@ -16719,8 +16508,7 @@ describe('text edit session', () => {
 });
 
 describe('canTargetLayerFromContextMenu (canvas right-click target)', () => {
-  // The menu acts on the document's SELECTED layer — the canvas never hit-tests
-  // to pick one, so this only reports whether an in-progress edit suppresses it.
+  // Menus target the selected layer; this checks edit-session suppression, not hit testing.
   const doc = (): CanvasDocumentContractV3 => ({
     background: 'transparent',
     bbox: { height: 100, width: 100, x: 0, y: 0 },

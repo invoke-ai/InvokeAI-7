@@ -2,12 +2,7 @@ import type { KnownGenerationModelBase as KnownModelBase } from '@features/gener
 
 import type { PidMode } from './types';
 
-/**
- * PiD (Pixel Diffusion Decoder) — NVIDIA's few-step pixel-diffusion decoder that
- * replaces the VAE decode with a caption-conditioned 4x super-resolution decode.
- *
- * Pure geometry and base-compatibility rules; the graph wiring lives in `graph.ts`.
- */
+/** Pure PiD geometry and compatibility; pidGraph.ts owns graph wiring. */
 
 /** PiD's fixed super-resolution factor. Every released checkpoint is 4x. */
 export const PID_SCALE = 4;
@@ -17,11 +12,7 @@ export const DEFAULT_PID_STEPS = 4;
 export const MIN_PID_STEPS = 1;
 export const MAX_PID_STEPS = 16;
 
-/**
- * PiD res2k decoders are trained 512 -> 2048. In native mode the user-facing
- * dimensions are the 4x target, so the optimal *target* side is 2048 regardless of the
- * main model's own optimum.
- */
+/** The decoder trains from 512 to 2048, making 2048 the native target optimum. */
 const PID_NATIVE_OPTIMAL_SIDE = 512 * PID_SCALE;
 
 export const PID_MODES: readonly PidMode[] = ['off', 'fit', 'native'];
@@ -29,19 +20,10 @@ export const PID_MODES: readonly PidMode[] = ['off', 'fit', 'native'];
 export const isPidMode = (value: unknown): value is PidMode =>
   typeof value === 'string' && (PID_MODES as readonly string[]).includes(value);
 
-/**
- * The generation scale the dimension helpers must account for: 4 in native mode (the
- * requested size is the 4x target), 1 otherwise.
- */
+/** Native PiD scales the target by 4; other modes use 1. */
 export const getPidScale = (mode: PidMode): number => (mode === 'native' ? PID_SCALE : 1);
 
-/**
- * The base whose PiD decoder checkpoints are valid for a given main-model base.
- *
- * Decoders are trained per backbone, so only a base-matching decoder may be used.
- * Z-Image is the exception: it shares FLUX.1's 16-channel VAE and ships no decoder of
- * its own, so it reuses the FLUX decoder. Returns null for bases with no PiD support.
- */
+/** Z-Image reuses FLUX's decoder; unsupported bases return null. */
 export const getPidDecoderBaseForMainBase = (base: string | null | undefined): KnownModelBase | null => {
   switch (base) {
     case 'z-image':
@@ -67,14 +49,7 @@ export const getIsPidActive = (mode: PidMode, base: string | null | undefined): 
 
 const roundDownToMultiple = (value: number, multiple: number): number => Math.floor(value / multiple) * multiple;
 
-/**
- * The resolution to actually denoise at.
- *
- * In native mode the requested size is the 4x target, so generation runs at size / 4,
- * floored onto the model's own grid. Callers snap the requested size to grid * 4 (see
- * `getGenerationDimensions`), so the division lands exactly on the grid; the floor and
- * the `max` only guard hand-entered values.
- */
+/** Divide native target dimensions by four and floor defensively to the model grid. */
 export const getPidGenerationSize = (
   requested: { width: number; height: number },
   mode: PidMode,
@@ -90,12 +65,7 @@ export const getPidGenerationSize = (
   };
 };
 
-/**
- * The dimension grid and optimal side to present for a PiD mode.
- *
- * Native multiplies the grid by 4 so that requested / 4 stays on the model grid, and
- * reports PiD's own 2048 target as optimal rather than the model's 1024.
- */
+/** Native PiD uses grid × 4 and target optimum 2048. */
 export const getPidDimensionOverrides = (
   mode: PidMode,
   base: string | null | undefined,

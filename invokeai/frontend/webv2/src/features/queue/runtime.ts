@@ -113,21 +113,13 @@ export const getQueueItemResultImageOptions = (queueItem: QueueItem): QueueResul
   return queueItem.snapshot.resultNodeIds ? { resultNodeIds: queueItem.snapshot.resultNodeIds } : undefined;
 };
 
-/**
- * The compiled backend graph this item submitted, or undefined for legacy/invalid
- * snapshots. Used to recognize input passthroughs among collected results — see
- * `collectGraphInputMediaNames`.
- */
+/** Read compiled graphs to identify input passthroughs; legacy or invalid snapshots may lack them. */
 const getQueueItemCompiledGraph = (queueItem: QueueItem): unknown => {
   const submission = (queueItem.snapshot as Partial<QueueItem['snapshot']>).backendSubmission;
   return submission && typeof submission === 'object' && 'graph' in submission ? submission.graph : undefined;
 };
 
-/**
- * Items queued before seed modes recorded the random toggle instead of a step;
- * the mapped step plus `legacySeedPlan` lets the send path expand them with that
- * version's rules, so recovery replays the seeds exactly as they were planned.
- */
+/** Recover legacy random-toggle submissions with their original seed expansion rules. */
 const readSubmissionSeedStep = (submission: { seedStep?: unknown; shouldRandomizeSeed?: unknown }) =>
   isQueueSeedStep(submission.seedStep)
     ? submission.seedStep
@@ -793,28 +785,16 @@ export const createQueueRuntime = ({
   };
 
   /**
-   * Land result videos on the destination board, like images. Videos are born
-   * unassigned server-side (the compiled graph carries no board unless a node
-   * sets one explicitly), so without this step every generated video sits in
-   * Uncategorized regardless of the active board. Only names are fetched — the
-   * gallery hydrates the video itself on its own refresh. Re-attaching a video
-   * that another settlement path already routed is a no-op server-side.
-   *
-   * Board attachment is cosmetic categorization: the run itself succeeded, so a
-   * failure here (transient fetch error, board deleted mid-run) is recorded as a
-   * queue-results error and NEVER thrown — throwing from the run-settlement path
-   * would mark a completed generation "failed" and skip recording its images.
+   * Attach generated videos to the destination board; repeat attachment is idempotent. Categorization failures are
+   * recorded but never turn successful generation into failure.
    */
   const addResultVideosToDestination = async (
     projectId: string,
     queueItem: QueueItem,
     backendItemIds: number[]
   ): Promise<void> => {
-    // Skip ids whose backend items were cancelled — their partial videos are not
-    // deliverable results (mirrors waitForResults filtering images to completed
-    // outcomes). The persisted set can miss a cancellation from the current
-    // session on the resumed path; the residual is a best-effort attach of an
-    // already-rendered video, not a correctness problem.
+    // Skip known cancelled backend items. Resumed cancellation records can be incomplete, so remaining attachments
+    // are best-effort.
     const deliverableItemIds = backendItemIds.filter(
       (backendItemId) => !queueItem.cancelledBackendItemIds?.includes(backendItemId)
     );
@@ -837,8 +817,7 @@ export const createQueueRuntime = ({
       const namesPerItem = await mapWithConcurrency(deliverableItemIds, QUEUE_RUNTIME_CONCURRENCY, (backendItemId) =>
         runResultRead(() => backend.getResultVideoNames(backendItemId, options))
       );
-      // A video primitive echoes the run's INPUT video into session.results (e.g. the
-      // source clip of an extend-video workflow) — exclude it like input images.
+      // Exclude video primitives' echoed input clips from generated results.
       const inputMedia = collectGraphInputMediaNames(getQueueItemCompiledGraph(queueItem));
       const videoNames = [...new Set(namesPerItem.flat())].filter((name) => !inputMedia.videoNames.has(name));
 
@@ -860,11 +839,8 @@ export const createQueueRuntime = ({
   };
 
   /**
-   * Drop input passthroughs and (when the item asks) intermediates, then land what
-   * remains on the item's destination. Session results include every node's output,
-   * so a media primitive echoes the run's INPUT image under its original name — e.g.
-   * the first-frame keyframe of an image-to-video workflow — and routing it would
-   * board-attach the user's source image on every run.
+   * Remove input passthroughs and requested intermediates before routing; echoed source media must not move boards
+   * on every run.
    */
   const deliverVisibleImages = async (
     queueItem: QueueItem,
@@ -882,14 +858,8 @@ export const createQueueRuntime = ({
   };
 
   /**
-   * Reports a settled run back to whoever owns the workflow library, so it can
-   * capture the output as the record's thumbnail and stamp its last-run time.
-   * Only runs compiled from a library-BOUND workflow carry an id, so an ad-hoc
-   * workflow (or any generate run) is never reported.
-   *
-   * Deliberately synchronous, unawaited, and swallowing: last-run capture is
-   * decoration hung off a completed run, and a sink that throws must not turn
-   * that run into a failure or skip its gallery refresh.
+   * Notify the optional library sink only for bound workflows. Capture is decoration: sink failure must not fail
+   * settlement or prevent gallery refresh.
    */
   const notifyWorkflowRunCompleted = (projectId: string, queueItem: QueueItem, images: QueueResultImage[]): void => {
     const submission = (queueItem.snapshot as Partial<QueueItem['snapshot']>).backendSubmission;
@@ -919,10 +889,8 @@ export const createQueueRuntime = ({
     coordinator: QueueCoordinator,
     projectId: string,
     queueItem: QueueItem,
-    // The store is immutable and `queueItem` is a pre-submission closure, so callers must
-    // pass the run's backend item ids explicitly (enqueue result / reconcile outcome /
-    // persisted ids) — reading queueItem.backendItemIds here would always see undefined
-    // on the fresh-submit and adopted paths.
+    // Pass actual backend IDs explicitly; the immutable pre-submit queueItem closure cannot contain newly assigned
+    // IDs.
     backendItemIds: number[],
     attempt: RunAttempt
   ): Promise<void> => {
@@ -946,9 +914,7 @@ export const createQueueRuntime = ({
       }
 
       const images = await deliverVisibleImages(queueItem, allImages);
-      // The live path also routes videos per backend item as each completes
-      // (routeBackendItemResults); this run-end pass is the retry/backstop and the only
-      // coverage for items completed in a previous session. Never throws.
+      // The run-end video pass retries live routing and covers earlier-session completions; it must never throw.
       await addResultVideosToDestination(projectId, queueItem, backendItemIds);
 
       if (!isAttemptCurrent(attempt)) {

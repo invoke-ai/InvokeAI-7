@@ -1,16 +1,7 @@
 /**
- * Composites a canvas document onto a target surface.
- *
- * Draws (in order): a clear + a viewport-filling checkerboard (the unbounded
- * plane's surround; omitted when the checkerboard is off), then each layer's
- * cached surface from bottom to top applying opacity / blend mode / transform,
- * and finally an optional staged-generation preview. Layers without a cache entry are
- * skipped — rasterization is the caller's job (see `rasterizers/` +
- * `layerCache.ts`); this module only draws what's already cached.
- *
- * Every pixel operation flows through the {@link RasterSurface} `ctx`, which
- * in tests is the recording stub, so composite order is assertable in node.
- * Zero React, zero import-time side effects.
+ * Draws cached content: clear/checkerboard across the viewport, bottom-first transformed layers with
+ * opacity/blend, then staged preview. Missing caches are skipped; callers own rasterization. RasterSurface
+ * contexts make ordering testable.
  */
 
 import type {
@@ -43,22 +34,11 @@ import { colorizeMask } from './maskFill';
 /** Screen-space size (px) of each checkerboard square for transparent backgrounds. */
 export const CHECKERBOARD_SQUARE_PX = 8;
 
-/**
- * CSS-zoom threshold at/above which image smoothing is disabled while
- * compositing. See {@link shouldSmoothAtZoom}.
- */
 export const SMOOTHING_MAX_ZOOM = 1;
 
 /**
- * Image-smoothing policy for compositing at a given CSS zoom.
- *
- * Smoothing is enabled only when the document is DOWN-scaled (`zoom < 1`) —
- * bilinear interpolation keeps a shrunk image clean. When zoomed IN
- * (`zoom >= 1`) the document is up-scaled to fill the screen; smoothing is
- * disabled so (a) pixels stay crisp when magnified — the behavior legacy pixel
- * editors adopt above ~1× — and (b) the browser skips the per-frame bilinear
- * interpolation of an ever-larger upscale, whose fill-rate cost is precisely
- * what grows with zoom. Nearest-neighbor upscaling is dramatically cheaper.
+ * Smooth only below 1x for clean downscaling. Magnification uses nearest-neighbor for crisp pixels without
+ * per-frame bilinear upscaling.
  */
 export const shouldSmoothAtZoom = (zoom: number): boolean => zoom < SMOOTHING_MAX_ZOOM;
 
@@ -70,21 +50,12 @@ export interface CheckerColors {
   b: string;
 }
 
-/**
- * Fallback checkerboard colors when no theme tokens have been fed to the engine
- * (node tests, first frame before React resolves the tokens). Deliberately DARK,
- * theme-appropriate greys (in the spirit of the legacy dark transparency pattern)
- * so the indicator reads as "empty" against the dark workbench surface. In the
- * app these are replaced by resolved Chakra semantic tokens (see
- * `widgets/canvas/checkerColors.ts`).
- */
+/** Dark checker fallback before React supplies semantic theme colors, and for DOM-free callers. */
 export const DEFAULT_CHECKER_COLORS: CheckerColors = { a: '#2a2a2a', b: '#363636' };
 
 /**
- * Fallback tint alpha for a mask-bearing layer drawn WITHOUT a backend (a bare
- * {@link compositeDocument} call in a minimal test): the mask coverage is blitted
- * and a translucent flat fill laid over it. The real path (with a backend)
- * colorizes the mask alpha via `source-in` at the layer opacity, matching legacy.
+ * Without a backend, approximate masks with coverage plus flat tint. Production uses source-in colorization at
+ * layer opacity.
  */
 export const MASK_TINT_ALPHA = 0.5;
 
@@ -100,102 +71,59 @@ export interface CompositeOptions {
   /** A staged generation candidate to draw at its placement (document space). */
   stagedPreview?: { surface: RasterSurface; rect: Rect; opacity?: number } | null;
   /**
-   * The cached checkerboard pattern tile (see {@link createCheckerboardTile}) to
-   * fill the ENTIRE viewport with (the canvas is an unbounded plane — the checker
-   * is the world, not a document backdrop). Omit or pass `null` to draw NO
-   * checkerboard (the "checkerboard off" state) — the cleared surface then shows
-   * the widget's themed `bg.inset` through it.
+   * Checker tile fills the unbounded viewport. Null/absence disables it, revealing themed widget background
+   * through the cleared surface.
    */
   checkerboardTile?: RasterSurface | null;
   /**
-   * Whether `imageSmoothingEnabled` is on for this composite's `drawImage`
-   * blits (layer caches + staged preview). Defaults to `true` (the browser
-   * default) so non-viewport callers are unaffected; the engine feeds
-   * {@link shouldSmoothAtZoom} so zoomed-in frames composite crisp and cheap.
+   * Smoothing defaults true for non-viewport callers; engine frames use {@link shouldSmoothAtZoom} for crisp
+   * magnification.
    */
   imageSmoothing?: boolean;
   /**
-   * The regions this composite must repaint, each in its layer's local space.
-   * When present, the clear, the checkerboard and every layer blit are clipped
-   * to their union on screen and the rest of the target keeps the previous
-   * frame — which is the difference between resampling a whole doc-sized layer
-   * to screen scale and resampling a few hundred pixels of it.
-   *
-   * `undefined` or `null` repaints the whole target, which is what every caller
-   * that cannot name its damage gets.
+   * Layer-local damage clips clear, checkerboard and layer draws to its screen union, retaining other pixels.
+   * Null/absence repaints the whole target.
    */
   damage?: LayerDamage[] | null;
   /**
-   * Transient per-layer transform overrides (a live move/transform preview): a
-   * layer with an entry here is drawn through the overridden transform instead of
-   * its committed one. `scaleX`/`scaleY`/`rotation` fall back to the committed
-   * transform when absent (the move tool overrides only `x`/`y`). The mirror stays
-   * untouched.
+   * Transient transforms override committed values without changing the mirror. Missing scale/rotation retain
+   * committed values, supporting position-only move previews.
    */
   transformOverrides?: ReadonlyMap<
     string,
     { x: number; y: number; scaleX?: number; scaleY?: number; rotation?: number }
   > | null;
-  /**
-   * A layer id to SKIP entirely (draw nothing for it). Used while a text-edit
-   * session is open: the contenteditable portal shows the layer's live text
-   * instead, so drawing its committed pixels underneath would double up. `null`
-   * (or absent) skips nothing.
-   */
+  /** Skip an edited text layer to avoid drawing beneath its live portal; null/absence skips nothing. */
   skipLayerId?: string | null;
   /**
-   * The raster backend, needed to colorize mask layers (an intermediate surface
-   * holds the alpha stencil while the fill is composited `source-in`). When
-   * absent, mask layers fall back to the flat-tint approximation
-   * ({@link MASK_TINT_ALPHA}); the engine always supplies it.
+   * Backend supplies mask source-in intermediates. Absence uses {@link MASK_TINT_ALPHA} approximation; production
+   * always supplies it.
    */
   backend?: RasterBackend | null;
-  /**
-   * Returns a cached repeat tile for a mask fill (style, colour), or `null` for a
-   * solid fill (drawn directly). The engine caches tiles by `style:color` (like
-   * the checkerboard). Absent ⇒ solid fills only.
-   */
+  /** Cached mask pattern by style/color; null means direct solid fill. Without a provider, only solid fills render. */
   maskPatternTile?: ((style: string, color: string) => RasterSurface | null) | null;
   /**
-   * Opt-in for the regenerate-region overlays (a raster layer's own alpha
-   * colorized above it while its region is enabled). STRICTLY display-time:
-   * only screen frames and the Overview pass it — a composite whose pixels are
-   * consumed (generation, extraction, color sampling, exports) must not, or the
-   * tint becomes real content.
+   * Display-only regenerate overlays for screen/Overview. Pixel-consuming composites must omit them or their tint
+   * becomes generated, sampled or exported content.
    */
   regionOverlays?: boolean;
   /**
-   * Transient per-layer content previews (a non-destructive control-filter
-   * preview): a layer with an entry here draws the preview surface at its returned
-   * layer-local output rect, through the layer transform, INSTEAD of
-   * its committed cache, so the document is untouched until the filter is applied.
-   * `null`/absent ⇒ no previews.
+   * Filter previews replace committed pixels at layer-local output bounds through the layer transform without
+   * document mutation. Null/absence means none.
    */
   layerPreviews?: ReadonlyMap<string, { surface: RasterSurface; rect: Rect }> | null;
-  /**
-   * Draws only this leaf and suppresses staged content and filter previews. A leaf the document
-   * would not draw (disabled or hidden) stays undrawn even while isolated.
-   */
+  /** Isolate one leaf and suppress staged/filter previews; disabled or hidden leaves remain undrawn. */
   isolationLayerId?: string | null;
   /**
-   * Returns a raster layer's ADJUSTED cache surface (brightness/contrast/
-   * saturation/curves applied), or `null` when the layer has identity (or no)
-   * adjustments — in which case the committed cache surface is drawn directly.
-   * The engine wires this to a memoizing {@link
-   * import('./adjustedSurfaceCache').AdjustedSurfaceCache} so the adjusted pixels
-   * are NOT recomputed each frame (see that module). Only consulted for raster
-   * layers; absent ⇒ adjustments are ignored (a bare test call draws raw pixels).
+   * Memoized adjusted raster surface, or null for raw pixels. Optional provider; without it adjustments are
+   * ignored. Cache versions prevent per-frame recomputation.
    */
   adjustedSurface?: ((layer: CanvasLayerContract, entry: LayerCacheEntry) => RasterSurface | null) | null;
   /** Shared memoized surfaces for mask and control display effects. */
   derivedSurfaces?: DerivedSurfaceCache | null;
   /**
-   * A live floating selection: pixels cut out of `layerId` and held in flight.
-   * They are drawn immediately ABOVE their own layer (the hole they left is
-   * already in that layer's cache), inheriting its opacity and blend mode, so
-   * the z-order is right by construction. `surface`/`rect` are LAYER-LOCAL, and
-   * `matrix` is the float's layer-local transform — both are composed with the
-   * layer's own matrix at draw time. `null`/absent ⇒ nothing in flight.
+   * Draw floating pixels immediately above their cut source layer with its opacity/blend. Surface, rect and float
+   * matrix are layer-local and compose with the layer transform.
    */
   floatingSelection?: { layerId: string; surface: RasterSurface; rect: Rect; matrix: Mat2d } | null;
   /** Optional deterministic render counters; omitted in the normal zero-overhead path. */
@@ -260,12 +188,7 @@ const isDefinitelyOffscreen = (
   return intersect(bounds, { height: target.height, width: target.width, x: 0, y: 0 }) === null;
 };
 
-/**
- * Builds a small, reusable two-tone checkerboard tile (a 2×2 grid of `squarePx`
- * cells) through the {@link RasterBackend} seam. The engine creates this ONCE and
- * feeds it back via {@link CompositeOptions.checkerboardTile}; each frame then
- * only `createPattern`s over it, so no per-cell fill loop runs per frame.
- */
+/** Build a reusable 2x2 checker tile through {@link RasterBackend}; frames use patterns instead of per-cell fills. */
 export const createCheckerboardTile = (
   backend: RasterBackend,
   colors: CheckerColors = DEFAULT_CHECKER_COLORS,
@@ -286,16 +209,8 @@ export const createCheckerboardTile = (
 };
 
 /**
- * Fills the ENTIRE viewport with the checkerboard pattern. The canvas is a
- * virtually infinite plane (like legacy): the checker IS the world surround, not
- * a document backdrop — the document rect is no longer a visual boundary, so the
- * contract's `background` field no longer renders. When no tile is provided the
- * checkerboard is off and the cleared surface shows the widget's `bg.inset`.
- *
- * The pattern is laid with the identity transform in place, anchoring its cells
- * to the screen (canvas) origin at a fixed pixel size — like legacy, which pins
- * the pattern to the stage — so it stays visually stable and never swims or
- * scales while panning/zooming.
+ * Fill the unbounded viewport, ignoring document background. Identity-transform placement fixes checker cell
+ * size/origin during pan and zoom. Without a tile, the cleared target reveals widget background.
  */
 const drawBackground = (ctx: Ctx, tile: RasterSurface | null, bounds: Rect): void => {
   if (!tile) {
@@ -311,18 +226,8 @@ const drawBackground = (ctx: Ctx, tile: RasterSurface | null, bounds: Rect): voi
 };
 
 /**
- * Resolves {@link CompositeOptions.damage} to the screen-space rect a frame may
- * confine itself to, or `null` for "repaint everything".
- *
- * Each region arrives in its layer's local space, so it is carried to the screen
- * through the same `view × layerMatrix` the layer itself is drawn with — which
- * keeps this correct for moved, scaled and rotated layers without the reporter
- * needing to know any of that. A region naming a layer that is no longer in the
- * document cannot be placed, so the frame falls back to a full repaint.
- *
- * The result is rounded outward and grown by a pixel: the layer blit is
- * antialiased at the seam, and a clip that lands mid-pixel would leave a hairline
- * of the previous frame behind.
+ * Transform local damage by view*layerMatrix into screen bounds. Missing layers force full repaint. Round outward
+ * and pad one pixel to cover antialiased seams.
  */
 const resolveDamage = (
   doc: CanvasDocumentContractV3,
@@ -372,13 +277,8 @@ const isMaskLayer = (
   layer.type === 'regional_guidance' || layer.type === 'inpaint_mask';
 
 /**
- * Draws a mask-bearing layer as a TINTED, TRANSLUCENT overlay. With a backend
- * available (the engine path) it colorizes the mask's alpha stencil with the
- * layer's fill colour/pattern (`source-in`) on an intermediate surface, then
- * blits that through the current (already transformed, `globalAlpha =
- * layer.opacity`) context — legacy's `source-in` compositing-rect technique.
- * Without a backend it falls back to blitting the coverage plus a flat
- * translucent fill.
+ * Colorize mask alpha with fill/pattern on a source-in intermediate, then draw with the current layer
+ * transform/opacity. Without a backend, approximate with coverage and flat tint.
  */
 const drawMaskLayer = (
   ctx: Ctx,
@@ -401,8 +301,7 @@ const drawMaskLayer = (
           sourceVersion,
         })
       : colorizeMask(opts.backend, surface, surface.width, surface.height, fill, tile);
-    // The outer loop already set globalAlpha = layer.opacity; blit the colorized
-    // overlay at the mask's local content origin.
+    // Draw at local content origin; the outer context already applies layer opacity.
     ctx.drawImage(colorized.canvas, origin.x, origin.y);
     return;
   }
@@ -413,11 +312,6 @@ const drawMaskLayer = (
   ctx.fillRect(origin.x, origin.y, surface.width, surface.height);
 };
 
-/**
- * Draws one cached layer through its transform, applying opacity/blend and any
- * transient transform override. Mask-bearing layers are colorized; everything
- * else is a straight blit of its content-sized cache surface.
- */
 const drawCachedLayer = (
   ctx: Ctx,
   leaf: SemanticLeaf,
@@ -438,9 +332,8 @@ const drawCachedLayer = (
   const origin = { x: entry.rect.x, y: entry.rect.y };
   const preview = isIsolated(opts) ? null : (opts.layerPreviews?.get(layer.id) ?? null);
   if (preview) {
-    // Non-destructive filter preview: draw the full backend output at its
-    // layer-local rect (through the already-applied layer transform), including
-    // the same display-only control transparency effect used after commit.
+    // Draw the full filter output at its local rect with the same control-transparency display effect as committed
+    // pixels.
     const displayPreview =
       layer.type === 'control' && layer.withTransparencyEffect && opts.backend
         ? opts.derivedSurfaces
@@ -465,8 +358,6 @@ const drawCachedLayer = (
   } else if (isMaskLayer(layer)) {
     drawMaskLayer(ctx, layer, entry.surface, entry.version, origin, opts);
   } else if (layer.type === 'control' && layer.withTransparencyEffect && opts.backend) {
-    // Display-only lightness→alpha effect (legacy `LightnessToAlphaFilter`): dark
-    // areas of the control map drop out so underlying content shows through.
     const effect = opts.derivedSurfaces
       ? opts.derivedSurfaces.get({
           create: (target) =>
@@ -480,12 +371,8 @@ const drawCachedLayer = (
       : renderControlTransparency(opts.backend, entry.surface, entry.surface.width, entry.surface.height);
     ctx.drawImage(effect.canvas, origin.x, origin.y);
   } else {
-    // Raster layers may carry non-destructive adjustments; the engine supplies a
-    // memoized adjusted surface. The memo is keyed on the layer's cache version,
-    // so it holds across idle frames but is deliberately missed on every tick of
-    // a live stroke — that is what makes the stroke visible through the
-    // adjustments. The miss refreshes only the written band. Fall back to the raw
-    // cache when there are no adjustments or no provider.
+    // Version-keyed adjusted surfaces refresh stroke damage on each cache write and reuse idle frames. Without
+    // adjustments/provider, draw raw cache pixels.
     const adjusted = layer.type === 'raster' && opts.adjustedSurface ? opts.adjustedSurface(layer, entry) : null;
     ctx.drawImage((adjusted ?? entry.surface).canvas, origin.x, origin.y);
   }
@@ -498,10 +385,8 @@ const drawCachedLayer = (
 };
 
 /**
- * Draws a raster layer's regenerate region: the layer's OWN content alpha,
- * colorized like an inpaint mask and laid directly above the layer through the
- * same (already applied) transform. The mask IS the layer — every stroke,
- * erase, and transform updates it live, with nothing separate to persist.
+ * Colorize the raster layer's own alpha above it as a regenerate overlay; strokes, erasure and transforms update
+ * coverage without separate pixel persistence.
  */
 const drawRegionCoverage = (
   ctx: Ctx,
@@ -562,10 +447,6 @@ const drawFloatingSelection = (
   ctx.restore();
 };
 
-/**
- * Composites `doc` onto `target`, using `caches` for each layer's pixels and
- * `view` as the document→screen transform.
- */
 export const compositeDocument = (
   target: RasterSurface,
   doc: CanvasDocumentContractV3,
@@ -578,20 +459,11 @@ export const compositeDocument = (
 
   ctx.save();
 
-  // Smoothing policy for all layer/staged `drawImage` blits below. Set once
-  // under the outer save (inner per-layer save/restore preserves it). Off when
-  // zoomed in keeps magnified pixels crisp and skips the costly bilinear upscale.
+  // Set smoothing once under the outer save; nested layer restores preserve it.
   ctx.imageSmoothingEnabled = opts.imageSmoothing ?? true;
 
-  // Clear the target in screen space, then lay the checkerboard across it — the
-  // canvas is an unbounded plane, so the checker is the world, not a document
-  // backdrop. With the checkerboard off the cleared surface shows the widget's
-  // themed `bg.inset` through it.
-  //
-  // When the frame declared its damage, both are confined to it and a clip keeps
-  // every layer blit below inside it too, so the untouched majority of the target
-  // simply keeps the previous frame's pixels. Damage that resolves to an empty
-  // rect means nothing visible changed: leave the target entirely alone.
+  // Clear and checker-fill the viewport, clipping all draws to declared damage. Unchanged pixels retain the
+  // previous frame; empty visible damage leaves the target untouched.
   identityTransform(ctx);
   const damageScreen = resolveDamage(doc, view, target, opts);
   if (damageScreen && isEmpty(damageScreen)) {
@@ -719,8 +591,7 @@ export const compositeDocument = (
     ctx.restore();
   }
 
-  // Staged generation preview over its bbox (document space), with a subtle
-  // dashed outline so the pending result reads distinctly from committed pixels.
+  // Draw staged preview in document space with a dashed outline distinguishing pending pixels.
   const staged = isIsolated(opts) ? null : opts.stagedPreview;
   if (staged) {
     ctx.save();

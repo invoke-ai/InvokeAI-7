@@ -23,10 +23,6 @@ vi.mock('react-i18next', () => {
   return { useTranslation: () => ({ t: (key: string) => messages[key] ?? key }) };
 });
 
-/**
- * The form has its own suite; what this view owns is the capability gate and the values it hands
- * down, so the stub reports exactly those two.
- */
 vi.mock('./GenerateSettingsForm', () => ({
   GenerateSettingsForm: ({
     selectedModel,
@@ -68,11 +64,7 @@ const STORED_MODEL: GenerationModelCatalogItem = {
   type: 'main',
 } as GenerationModelCatalogItem;
 
-/**
- * Catalog and stored values are pinned module constants on purpose: the project store hands the
- * view the same references on every render, which is what let a resolve attempted before the
- * capability table arrived stay cached after the retry that fixed it.
- */
+/** Stable fixture references preserve memoization across capability arrival. */
 const CATALOG: readonly GenerationModelCatalogItem[] = [OTHER_MODEL, STORED_MODEL];
 
 const STORED_VALUES = {

@@ -253,6 +253,40 @@ def test_the_other_spelling_is_refused_in_the_flagged_branch_too(
     assert run.reserved == []
 
 
+def test_a_qwen3_vl_text_encoder_loses_its_visual_tower(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The encoder Ideogram 4 actually ships is a Qwen3-VL, and `backend/ideogram4/text_encoding.py`
+    drives its `language_model` directly -- the vision tower is never executed. It is dropped here
+    both from the state dict, ahead of the reservation that is sized from it, and from the built
+    module, so nothing is left on the meta device.
+
+    The other encoder fixtures in this file are `model_type: "qwen3"`, which has no tower at all and
+    therefore only exercises the tolerated case.
+    """
+    from transformers import Qwen3VLModel
+
+    from tests.backend.model_manager.load.qwen3vl_gguf_fixture import tiny_qwen3vl_config
+
+    te_config = tiny_qwen3vl_config()
+    torch.manual_seed(0)
+    state_dict = {k: v.contiguous() for k, v in Qwen3VLModel(te_config).state_dict().items()}
+
+    encoder = tmp_path / "text_encoder"
+    encoder.mkdir(parents=True, exist_ok=True)
+    (encoder / "config.json").write_text(json.dumps(te_config.to_dict()), encoding="utf-8")
+    save_file(state_dict, encoder / "model.safetensors")
+
+    run = prepare(ENCODER_SEAM, monkeypatch)
+    model = run.load(tmp_path)
+
+    assert isinstance(model.visual, torch.nn.Identity)
+    assert not any(tensor.is_meta for tensor in model.state_dict().values())
+    assert any(name.startswith("language_model.layers.") for name, _ in model.named_parameters())
+    # Sized from the filtered dict, so the tower is not reserved for either.
+    language_bytes = sum(v.nelement() * v.element_size() for k, v in state_dict.items() if not k.startswith("visual."))
+    assert run.reserved and max(run.reserved) <= language_bytes
+    assert language_bytes < sum(v.nelement() * v.element_size() for v in state_dict.values())
+
+
 def test_a_dense_text_encoder_still_loads(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """The other half, and the only end-to-end coverage this branch has: an ordinary encoder is
     built, filled, and passes the meta-device check."""

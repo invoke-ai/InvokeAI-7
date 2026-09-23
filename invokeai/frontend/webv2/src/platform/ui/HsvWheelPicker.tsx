@@ -32,11 +32,8 @@ const clamp01 = (value: number): number => Math.min(1, Math.max(0, value));
 const THUMB_FOCUS_PROPS = { outline: '2px solid {colors.accent.solid}', outlineOffset: '2px' };
 
 /**
- * The wheel-and-triangle HSV picker: a conic hue ring around a barycentric
- * saturation/value triangle that points at the hue (the classic GIMP/Krita
- * layout). Both thumbs are keyboard sliders; drags report live through
- * `onChange` and settle through `onChangeEnd`. The triangle is painted
- * per-pixel on a canvas so its shading matches the exact math the thumbs use.
+ * Both HSV thumbs support keyboard input; drags emit onChange and finish with onChangeEnd. Canvas shading uses the
+ * same triangle math.
  */
 export const HsvWheelPicker = ({
   diameterPx = 192,
@@ -61,10 +58,7 @@ export const HsvWheelPicker = ({
 
   useEffect(() => () => drag.current?.abort(), []);
 
-  // Repaint the triangle only when the hue (or geometry) changes; saturation
-  // and value only move the thumb. The corner geometry is hoisted out of the
-  // pixel loop, and the bitmap is painted at device resolution so the triangle
-  // stays as crisp as the CSS ring beside it.
+  // Repaint at device resolution only for hue/geometry changes; saturation/value only move the thumb.
   useEffect(() => {
     const canvas = triangleCanvasRef.current;
     const ctx = canvas?.getContext('2d');
@@ -155,8 +149,7 @@ export const HsvWheelPicker = ({
       if (distance > radius) {
         return;
       }
-      // Each drag moves one axis: a hue drag keeps the s/v it started with and
-      // a triangle drag keeps its hue, so the other thumb never wanders.
+      // Freeze the other color axes during each drag.
       if (distance >= radius - ringWidth - TRIANGLE_INSET_PX / 2) {
         beginDrag(event, (p) => ({ ...value, h: wheelAngleToHue(pointToWheelAngle(p)) }));
       } else {

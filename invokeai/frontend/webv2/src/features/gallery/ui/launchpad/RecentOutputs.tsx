@@ -8,14 +8,7 @@ import { captureAccountScope, isAccountScopeCurrent } from '@platform/state/acco
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
-/**
- * The last few images this account produced, across every project.
- *
- * The gallery's own "recent images" is per-project widget state, so a
- * cross-project strip has to read the backend directly. It uses the same
- * cancellable read the command palette does, which is the entry point built
- * for exactly this kind of deferred cross-feature surface.
- */
+/** Read account-wide recent output directly from the backend; widget recents are project-scoped. */
 
 const OUTPUT_COUNT = 8;
 const GRID_COLUMNS = { base: 4, md: 8 } as const;

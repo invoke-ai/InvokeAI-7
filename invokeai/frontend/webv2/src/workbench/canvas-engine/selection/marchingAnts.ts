@@ -1,27 +1,7 @@
 /**
- * Marching ants: the animated dashed outline of a pixel selection.
- *
- * Two concerns live here:
- *
- * 1. {@link drawMarchingAnts} strokes the selection's committed path list onto
- *    the overlay surface as a two-tone (black/white) dashed outline. It draws in
- *    document space (paths are document-space `Path2D`s) via the shared `view`
- *    transform, scaling line width and dash by `1/scale` so the ants stay a
- *    constant pixel size at any zoom — the same screen-constant convention the
- *    rest of the overlay uses. The animated `lineDashOffset` (`phase`) makes the
- *    white dashes crawl.
- *
- * 2. {@link createAntsAnimator} drives the `phase` advance. It self-reschedules
- *    through an injected `requestFrame`/`cancelFrame` pair (the engine passes the
- *    global rAF, so it rides the same frame clock as the scheduler) and, throttled
- *    by an injected `now()` to ~a few fps (the legacy look, not 60fps), calls
- *    `onStep` — the engine advances the phase and requests an OVERLAY-ONLY
- *    invalidation there, so an ants tick never recomposites layers (Task-22 gate).
- *    It runs only while started (a selection exists AND the engine is attached)
- *    and cancels its pending frame on `stop`, so there are no timer leaks on
- *    detach/deselect/dispose.
- *
- * Zero React, zero import-time side effects.
+ * Draws black/white selection paths with zoom-compensated widths and dashes. A throttled injected frame loop
+ * advances phase through overlay-only invalidation; run only while selected and attached, and cancel pending
+ * frames on stop.
  */
 
 import type { RasterSurface } from '@workbench/canvas-engine/render/raster';
@@ -46,18 +26,12 @@ export interface MarchingAntsRender {
   /** Animated dash offset in screen pixels. */
   phase: number;
   /**
-   * An extra DOCUMENT-space transform to draw the outlines through, or absent
-   * for none. A live floating selection sets it so the ants track the pixels in
-   * flight without rebuilding the paths every frame; on commit the selection is
-   * re-placed for real and this goes back to absent.
+   * Optional document transform moves ants with live float pixels without rebuilding paths. Commit replaces
+   * selection geometry and removes the override.
    */
   matrix?: Mat2d | null;
 }
 
-/**
- * Strokes the selection outline(s) as animated two-tone marching ants, in
- * document space projected through `view`. A no-op with no paths.
- */
 export const drawMarchingAnts = (ctx: RasterSurface['ctx'], view: Mat2d, render: MarchingAntsRender): void => {
   if (render.paths.length === 0) {
     return;
@@ -116,11 +90,7 @@ export interface AntsAnimatorDeps {
   intervalMs?: number;
 }
 
-/**
- * Creates a self-rescheduling animation loop that fires `onStep` at most every
- * `intervalMs`. It reschedules on every frame while running (to keep polling the
- * clock) but only steps on the throttle boundary.
- */
+/** Polls the injected frame clock while running, firing `onStep` only at `intervalMs` boundaries. */
 export const createAntsAnimator = (deps: AntsAnimatorDeps): AntsAnimator => {
   const intervalMs = deps.intervalMs ?? ANTS_INTERVAL_MS;
   let running = false;

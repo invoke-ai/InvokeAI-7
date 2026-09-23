@@ -34,6 +34,10 @@ from invokeai.backend.model_manager.taxonomy import (
     ModelType,
     SubModelType,
 )
+from invokeai.backend.model_manager.util.qwen3_vl import (
+    drop_qwen3vl_visual_tower,
+    drop_qwen3vl_visual_tower_keys,
+)
 from invokeai.backend.quantization.fp8_scaled import (
     Fp8ScaledLayer,
     attach_fp8_scales,
@@ -228,6 +232,10 @@ class Ideogram4DiffusersModel(ModelLoader):
             cfg.quantization_config = None
 
         sd = _load_local_state_dict(encoder_path, "model")
+        # Ideogram 4 conditions on the Qwen3-VL language tower only -- `ideogram4/text_encoding.py`
+        # drives `text_encoder.language_model` directly and never calls `forward`, so the visual tower
+        # is never executed. Dropped before the reservation below, which is sized from this dict.
+        sd = drop_qwen3vl_visual_tower_keys(sd)
 
         # Ahead of the reservation, which evicts other resident models to make space: a refusal below
         # it would flush the cache for a load that cannot finish.
@@ -253,6 +261,9 @@ class Ideogram4DiffusersModel(ModelLoader):
             # assign=True fills the meta params directly.
             with accelerate.init_empty_weights():
                 model: torch.nn.Module = AutoModel.from_config(cfg)
+                # `required=False`: the architecture comes from the folder's config.json, so an
+                # encoder without a vision tower is a shape this loader may legitimately meet.
+                drop_qwen3vl_visual_tower(model, required=False)
                 swap_linears_to_fp8(model, sd, compute_dtype=compute_dtype)
             load_fp8_state_dict(model, sd, device=torch.device("cpu"), dtype=compute_dtype, assign=True, strict=False)
             _verify_encoder_fully_materialized(model, context="Ideogram 4 fp8 text encoder")
@@ -263,6 +274,7 @@ class Ideogram4DiffusersModel(ModelLoader):
 
         with accelerate.init_empty_weights():
             model = AutoModel.from_config(cfg)
+            drop_qwen3vl_visual_tower(model, required=False)  # see the fp8 branch above
             if is_bnb_nf4:
                 # Only this branch needs bitsandbytes, which macOS does not have; see the transformer.
                 from invokeai.backend.quantization.bnb_nf4 import quantize_model_nf4

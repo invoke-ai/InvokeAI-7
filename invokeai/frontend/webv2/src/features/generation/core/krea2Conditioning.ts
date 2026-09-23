@@ -13,10 +13,7 @@ type Krea2ConditioningSettings = Pick<
   | 'krea2SeedVarianceStrength'
 >;
 
-/**
- * Applies Krea-2's optional conditioning transforms in their required order.
- * `idPrefix` makes the same chain safe for any number of regional prompts.
- */
+/** Preserve transform order and unique prefixes for regional chains. */
 export const addKrea2ConditioningEnhancers = ({
   conditioning,
   graph,

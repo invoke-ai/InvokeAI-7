@@ -202,8 +202,7 @@ describe('LoRA collection values', () => {
   });
 
   it('preserves unreadable items verbatim so an edit cannot silently delete them', () => {
-    // The widget writes back the list it is given; dropping or blanking these here would make one
-    // click on an unrelated row destroy a hand-authored entry.
+    // Keep unreadable collection entries so editing another row cannot destroy hand-authored data.
     const items = [LORA_ENTRY, { lora: { key: 'ghost' }, weight: 1 }, null, 'lora'];
 
     expect(toLoraFieldCollectionList(items)).toEqual(items);

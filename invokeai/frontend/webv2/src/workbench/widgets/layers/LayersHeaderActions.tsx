@@ -36,13 +36,7 @@ const ADD_LAYER_ICONS: Record<AddLayerItemId, LucideIcon> = {
   regional_reference_image: ImagePlusIcon,
 };
 
-/**
- * The add-layer menu's content: legacy's two labelled groups — "Regional"
- * (inpaint mask / regional guidance / regional guidance + reference image) and
- * "Layers" (control / raster). Shared by the strip's "+" trigger and the empty
- * area's context menu; the per-item creation is delegated to `useAddLayer` so
- * every entry point agrees.
- */
+/** Share grouped add-layer choices between header and empty-area menus; useAddLayer owns creation. */
 const AddLayerMenuItems = () => {
   const { t } = useTranslation();
   const addLayer = useAddLayer();

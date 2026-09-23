@@ -1,11 +1,6 @@
 /**
- * Project event vocabulary, split out of `projectContracts.ts` as a leaf.
- *
- * `CanvasProjectMutation` (owned by `canvas-engine/mutationContracts.ts`) carries
- * a `ProjectEvent` on its staging commits. Keeping these two types in
- * `projectContracts.ts` would force the engine to import a module that imports
- * `canvas-engine/api` right back — the edge that closed the 16-module import
- * cycle. This module imports nothing, so both sides can depend on it freely.
+ * Keep ProjectEvent dependency-free: CanvasProjectMutation consumes it, while projectContracts imports
+ * canvas-engine/api.
  */
 
 export type ProjectEventType =

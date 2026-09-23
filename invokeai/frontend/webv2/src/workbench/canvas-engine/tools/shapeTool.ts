@@ -1,22 +1,8 @@
 /**
- * The shape tool. The box kinds (rect / ellipse / triangle / star) drag out a
- * rect; `polygon` places vertices click by click through the shared polyline
- * session; `freehand` traces a drag and closes it. A finished shape lands
- * either as pixels on the selected paint layer (one undoable stroke, clipped
- * to the selection and the bbox like a brush stroke) or, when the target is
- * `new` or the selection is not a paint layer, as its own parametric shape
- * layer. A locked, disabled or not-yet-rasterized paint layer refuses the
- * shape (a no-op, like the brush) rather than spawning a layer over it.
- *
- * Interaction contract:
- * - **Pointer-move** updates a transient overlay preview (the drag rect, or the
- *   polyline through `stores.lassoPreview`) — it never dispatches. Hold
- *   **shift** to constrain a drag to a square/circle.
- * - **Commit**: exactly one `commitStructural` (`addCanvasLayer`, undone by
- *   `removeCanvasLayers`) or one stroke event. A zero-area shape commits nothing.
- * - **Cancel** (Esc / pointercancel): drops the preview, no dispatch.
- *
- * Zero React, zero import-time side effects.
+ * Shapes use box drags, polygon clicks or closed freehand. Commit pixels to eligible selected paint with
+ * selection/bbox clipping, otherwise create a parametric layer. Locked/disabled/unready paint refuses. Shift
+ * constrains box aspect; previews/cancellation do not dispatch, and nonzero shapes produce one structural or
+ * stroke commit.
  */
 
 import type { CanvasLayerSourceContract, CanvasRasterLayerContractV2 } from '@workbench/canvas-engine/contracts';
@@ -148,11 +134,8 @@ export const createShapeTool = (): Tool => {
   };
 
   /**
-   * Draws the shape as pixels onto the selected paint layer, as one stroke
-   * event: the layer cache grows to the shape's layer-local bounds (clamped to
-   * the selection and bbox clips, so growth never escapes them), the shape is
-   * drawn through the layer's inverse transform, then clipped to the selection
-   * mask and the bbox exactly as a brush stroke is.
+   * One pixel-shape stroke grows local bounds within selection/bbox clips, draws through the layer inverse and
+   * applies the same masks as brush painting.
    */
   const commitPixels = (ctx: ToolContext, leaf: SemanticLeaf, placed: PlacedShape): PixelPlacement => {
     const layer = leaf.layer;
@@ -193,10 +176,8 @@ export const createShapeTool = (): Tool => {
     const sy = dirtyRect.y - entry.rect.y;
     const beforeImageData = surfaceCtx.getImageData(sx, sy, dirtyRect.width, dirtyRect.height);
 
-    // Draw into a scratch the size of the dirty rect (scratch origin = dirtyRect
-    // origin in layer space) so the clips and the transparency lock apply in
-    // one composite. Document → layer-local → scratch: the layer's inverse,
-    // then the scratch offset.
+    // Draw into dirty-rect-local scratch so clipping and transparency lock apply in one composite; map through
+    // layer inverse then scratch offset.
     const scratch = ctx.backend.createSurface(dirtyRect.width, dirtyRect.height);
     const draw = scratch.ctx;
     const { rect, source } = placed;

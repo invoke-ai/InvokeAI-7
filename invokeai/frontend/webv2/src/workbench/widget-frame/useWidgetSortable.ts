@@ -63,10 +63,7 @@ export const useWidgetSortable = ({
   return {
     dragHandleProps: { ...attributes, ...listeners },
     isDragging,
-    // Tabs and other semantic controls already own their role, state, and
-    // roving tab index. Keep dnd-kit's pointer/keyboard listeners and
-    // description without letting its generic "button" contract overwrite
-    // the host control's accessibility semantics.
+    // Preserve host roles, state, and roving tab indices while adding dnd listeners/descriptions.
     semanticDragHandleProps: {
       ...semanticAttributes,
       ...semanticListeners,
@@ -75,9 +72,7 @@ export const useWidgetSortable = ({
     setNodeRef: setSortableNodeRef,
     style: {
       transform: CSS.Transform.toString(transform),
-      // dnd-kit's inline transform transition replaces the CSS transition
-      // outright, which froze the chips' hover fills; compose the fill fade
-      // back in (motion-aware duration token).
+      // Compose fill fading with dnd-kit's inline transform transition.
       transition: [transition, WIDGET_FILL_TRANSITION].filter(Boolean).join(', '),
     },
   };

@@ -6,6 +6,8 @@ from typing import Any, Literal, Self
 import torch
 from pydantic import BaseModel, Field
 
+from invokeai.backend.ltx2 import checkpoint_layout as ltx2_layout
+from invokeai.backend.model_manager.checkpoint_prefix import COMFYUI_KEY_PREFIXES
 from invokeai.backend.model_manager.configs.base import (
     Checkpoint_Config_Base,
     Config_Base,
@@ -45,6 +47,7 @@ from invokeai.backend.model_manager.taxonomy import (
     Flux2VariantType,
     FluxVariantType,
     Krea2VariantType,
+    LTX2VariantType,
     MiniMaxH3VariantType,
     ModelFormat,
     ModelRepoVariant,
@@ -1797,6 +1800,194 @@ class Main_Checkpoint_MiniMaxH3_Config(Checkpoint_Config_Base, Main_Config_Base,
         return cls(**override_fields, variant=variant, pruned=pruned)
 
 
+# ---------------------------------------------------------------------------------------------
+# LTX-2
+# ---------------------------------------------------------------------------------------------
+
+LTX2_SUPPORTED_GENERATIONS = frozenset({"2.5"})
+"""The LTX-2 generations this version can run. 2.0/2.3 use a Gemma-3 encoder, bundled single files
+and different transformer switches; their files are recognised as LTX-2 and refused (an invalid
+match, so they are not registered as unknown models) rather than half-loaded."""
+
+
+def _ltx2_generation_from_keys(stripped_keys: set[str]) -> str | None:
+    """The generation a file's structure implies, for files whose header carries no version.
+
+    LTX-2.5 dropped the video feed-forward biases (2.0/2.3 keep them on both streams), and its video
+    VAE decoder gained a fourth upsampling stage (``up_blocks.8``; 2.0/2.3 stop at ``up_blocks.6``).
+    Either component identifies the generation on its own.
+    """
+    if "transformer_blocks.0.ff.net.0.proj.weight" in stripped_keys:
+        video_ff_bias = "transformer_blocks.0.ff.net.2.bias" in stripped_keys
+        audio_ff_bias = "transformer_blocks.0.audio_ff.net.2.bias" in stripped_keys
+        return "2.5" if (not video_ff_bias and audio_ff_bias) else None
+    for prefix in ("", "vae."):
+        if f"{prefix}decoder.up_blocks.0.res_blocks.0.conv1.conv.weight" in stripped_keys:
+            return "2.5" if f"{prefix}decoder.up_blocks.8.res_blocks.0.conv1.conv.weight" in stripped_keys else None
+    return None
+
+
+def _ltx2_generation_or_raise(mod: ModelOnDisk, path: Path, stripped_keys: set[str] | None) -> str:
+    """The generation a dating file belongs to: the header version when the file carries one, its
+    structure otherwise. An LTX-2 file of a generation this version cannot run is an *invalid* match:
+    recognised, and refused rather than registered as an unknown model."""
+    generation = ltx2_layout.generation_from_version(ltx2_layout.header_model_version(mod.metadata(path)))
+    if generation is None and stripped_keys is not None:
+        generation = _ltx2_generation_from_keys(stripped_keys)
+    if generation is None:
+        raise NotAMatchError(f"cannot tell which LTX-2 generation {path.name} belongs to")
+    if generation not in LTX2_SUPPORTED_GENERATIONS:
+        raise InvalidMatchError(
+            f"{path.name} is an LTX-{generation} file; only LTX-{'/'.join(sorted(LTX2_SUPPORTED_GENERATIONS))} "
+            "is supported in this version"
+        )
+    return generation
+
+
+class Main_Diffusers_LTX2_Config(Diffusers_Config_Base, Main_Config_Base, Config_Base):
+    """An LTX-2 folder of per-component single files in the official key layout.
+
+    This is how the ``DeepBeepMeep/LTX-2`` mirror distributes LTX-2.5: one safetensors per component
+    rather than a diffusers ``model_index.json`` tree. (The official ``Lightricks/LTX-2.5`` files use
+    the same layout for the VAEs, upsamplers and transformer, but keep the connectors inside the
+    transformer file and the text projection inside the text-encoder file; a folder of official files
+    therefore lacks a text-projection component in this version.) The folder is
+    the *component source* of a generation -- video VAE, audio VAE, vocoder, text projection, the two
+    text connectors and the latent upsamplers -- while the 22B transformer normally comes from a
+    single-file record selected in the model loader (bf16, int8-convrot or nvfp4). A folder that
+    also holds a transformer file is a full install.
+
+    ``components`` maps each role (see ``invokeai.backend.ltx2.checkpoint_layout``) to the file in the
+    folder that carries it, so the loader never re-classifies at generation time.
+    """
+
+    base: Literal[BaseModelType.LTX2] = Field(BaseModelType.LTX2)
+    variant: LTX2VariantType = Field()
+    generation: str = Field(description="The LTX-2 generation the folder's files belong to, e.g. '2.5'.")
+    components: dict[str, str] = Field(
+        default_factory=dict,
+        description="Component role -> weight file name inside the folder.",
+    )
+    components_only: bool = Field(
+        default=False,
+        description="Whether the folder holds only the shared components (VAEs, vocoder, connectors, "
+        "upsamplers) without a transformer - the transformer must then be supplied as a single-file "
+        "selection at generation time.",
+    )
+
+    @classmethod
+    def from_model_on_disk(cls, mod: ModelOnDisk, override_fields: dict[str, Any]) -> Self:
+        raise_if_not_dir(mod)
+        raise_for_override_fields(cls, override_fields)
+
+        if any((mod.path / name).exists() for name in ("model_index.json", "modular_model_index.json")):
+            # The diffusers-layout repos (`Lightricks/LTX-2.5-Diffusers`) are a different install shape
+            # this version does not load; leave them unclaimed rather than half-matched.
+            raise NotAMatchError("diffusers-layout LTX-2 folders are not supported in this version")
+
+        components: dict[str, str] = {}
+        generations: dict[str, str] = {}
+        for weight_file in sorted(p for p in mod.path.glob("*.safetensors") if p.is_file()):
+            state_dict = mod.load_state_dict(weight_file)
+            keys = {k for k in state_dict if isinstance(k, str)}
+            roles = ltx2_layout.classify_roles(state_dict, mod.metadata(weight_file))
+            if not roles:
+                continue
+            for role in roles:
+                # First file wins for a duplicated role; sorted order keeps the choice deterministic.
+                components.setdefault(role, weight_file.name)
+            if roles & {ltx2_layout.ROLE_TRANSFORMER, ltx2_layout.ROLE_VIDEO_VAE}:
+                # The transformer and the video VAE are the two components whose structure dates
+                # the release; every such file is dated so a mixed folder is caught here, not at
+                # the strict load of whichever file sorted first.
+                stripped = {ltx2_layout.strip_transformer_prefix(k) for k in keys}
+                generations[weight_file.name] = _ltx2_generation_or_raise(mod, weight_file, stripped)
+
+        # The audio track is what distinguishes LTX-2 from every other video family: a folder without
+        # both VAEs is not an LTX-2 component source, whatever else it holds.
+        if ltx2_layout.ROLE_VIDEO_VAE not in components or ltx2_layout.ROLE_AUDIO_VAE not in components:
+            if ltx2_layout.ROLE_DIFFUSION_VIDEO_VAE in components:
+                raise NotAMatchError(
+                    "folder holds no LTX-2 video VAE + audio VAE pair (its video VAE is the diffusion-decoder "
+                    "variant, which this version does not use - install the conv video VAE)"
+                )
+            raise NotAMatchError("folder holds no LTX-2 video VAE + audio VAE pair")
+        if not generations:
+            raise NotAMatchError("cannot tell which LTX-2 generation the folder's files belong to")
+        if len(set(generations.values())) > 1:
+            raise InvalidMatchError(
+                "folder mixes LTX-2 generations: "
+                + ", ".join(f"{name} is {gen}" for name, gen in sorted(generations.items()))
+            )
+        generation = override_fields.pop("generation", None) or next(iter(generations.values()))
+        components = override_fields.pop("components", None) or components
+
+        transformer_file = components.get(ltx2_layout.ROLE_TRANSFORMER)
+        components_only = override_fields.pop("components_only", None)
+        if components_only is None:
+            components_only = transformer_file is None
+
+        variant = override_fields.pop("variant", None)
+        if variant is None:
+            variant = (
+                LTX2VariantType.Distilled
+                if transformer_file is not None and ltx2_layout.is_distilled_filename(transformer_file)
+                else LTX2VariantType.Dev
+            )
+
+        repo_variant = override_fields.pop("repo_variant", None) or cls._get_repo_variant_or_raise(mod)
+        return cls(
+            **override_fields,
+            variant=LTX2VariantType(variant),
+            generation=generation,
+            components=components,
+            components_only=components_only,
+            repo_variant=repo_variant,
+        )
+
+
+class Main_Checkpoint_LTX2_Config(Checkpoint_Config_Base, Main_Config_Base, Config_Base):
+    """An LTX-2 single-file transformer (safetensors) in the official key layout.
+
+    Covers the bf16, Comfy ``int8_tensorwise``(+convrot) and ``nvfp4`` releases; the quantization
+    scheme is read from the file's own markers by the loader, not recorded here. The file may hold
+    only the transformer (the 2.5 releases) or bundle other components beside it (earlier
+    generations) -- either way everything else comes from an installed LTX-2 component folder.
+
+    Dev and Distilled transformers are key-for-key identical, so the FILENAME is the variant
+    classifier and ``variant`` is the user-correctable override for renamed files. A misclassified
+    variant runs but samples with the wrong recipe (guided schedule vs fixed distilled sigmas).
+    """
+
+    base: Literal[BaseModelType.LTX2] = Field(default=BaseModelType.LTX2)
+    format: Literal[ModelFormat.Checkpoint] = Field(default=ModelFormat.Checkpoint)
+    variant: LTX2VariantType = Field()
+    generation: str = Field(description="The LTX-2 generation the transformer belongs to, e.g. '2.5'.")
+
+    @classmethod
+    def from_model_on_disk(cls, mod: ModelOnDisk, override_fields: dict[str, Any]) -> Self:
+        raise_if_not_file(mod)
+        raise_for_override_fields(cls, override_fields)
+
+        if mod.path.suffix.lower() != ".safetensors":
+            raise NotAMatchError(f"expected a .safetensors file, got {mod.path.suffix or '(no suffix)'}")
+
+        state_dict = mod.load_state_dict()
+        keys = {k for k in state_dict if isinstance(k, str)}
+        if ltx2_layout.ROLE_TRANSFORMER not in ltx2_layout.classify_roles(state_dict, mod.metadata()):
+            raise NotAMatchError("state dict does not look like an LTX-2 transformer")
+        if _has_ggml_tensors(state_dict):
+            raise NotAMatchError("GGUF-quantized LTX-2 checkpoints are not supported yet")
+
+        generation = override_fields.pop("generation", None) or _ltx2_generation_or_raise(
+            mod, mod.path, {ltx2_layout.strip_transformer_prefix(k) for k in keys}
+        )
+        variant = override_fields.pop("variant", None) or (
+            LTX2VariantType.Distilled if ltx2_layout.is_distilled_filename(mod.path.name) else LTX2VariantType.Dev
+        )
+        return cls(**override_fields, variant=LTX2VariantType(variant), generation=generation)
+
+
 class Main_Checkpoint_Krea2_Config(Checkpoint_Config_Base, Main_Config_Base, Config_Base):
     """Model config for Krea-2 single-file checkpoint models (safetensors, etc)."""
 
@@ -1910,15 +2101,16 @@ class Main_Diffusers_QwenImage_Config(Diffusers_Config_Base, Main_Config_Base, C
         return QwenImageVariantType.Generate
 
 
-# ComfyUI single-file checkpoints prefix every transformer key with one of these.
-# The loaders strip them before instantiating the model (see `_strip_comfyui_prefix`
-# in the qwen_image loader); detection must strip them too so the two paths agree.
-_COMFYUI_KEY_PREFIXES = ("model.diffusion_model.", "diffusion_model.")
+# ComfyUI single-file checkpoints prefix every transformer key with one of these. The loaders strip
+# them before instantiating the model (`CheckpointPrefix`), and detection has to strip them too or
+# the two disagree: a file identification accepts, the loader then refuses with every key unexpected.
+# Shared rather than restated, which is what made them drift; the *operation* still differs, because
+# detection looks for evidence in individual names instead of normalising a whole file.
 
 
 def _strip_comfyui_key_prefix(key: str) -> str:
     """Strip a leading ComfyUI `model.diffusion_model.` / `diffusion_model.` prefix from a key."""
-    for prefix in _COMFYUI_KEY_PREFIXES:
+    for prefix in COMFYUI_KEY_PREFIXES:
         if key.startswith(prefix):
             return key[len(prefix) :]
     return key

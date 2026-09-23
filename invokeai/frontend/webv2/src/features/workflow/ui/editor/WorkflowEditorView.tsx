@@ -104,10 +104,8 @@ const edgeTypes: EdgeTypes = {
 };
 
 /**
- * The workflow center view: an xyflow editor over the project graph document.
- * The document is the source of truth — flow state is rebuilt from it on every
- * document change (undo, import, field edits), while transient view state
- * (selection, in-flight drags, the active tool) lives in local component state.
+ * The graph document owns durable flow data; preserve transient selection, drags, and tool state separately when
+ * rebuilding it.
  */
 // 25px matches v6 so workflows aligned there stay on the grid here.
 const GRID_SIZE = 25;
@@ -132,8 +130,7 @@ const toDocumentEdge = (connection: Connection): WorkflowDocumentEdge | null =>
     : null;
 
 const DEFAULT_EDGE_OPTIONS = { style: { strokeWidth: 2 } };
-// A fresh graph starts clear of the floating toolbar in the left gutter, so
-// its first column's node controls are not covered before the user pans.
+// Offset fresh graphs so the floating left toolbar does not cover their first column.
 const DEFAULT_VIEWPORT = { x: 56, y: 0, zoom: 1 } as const;
 
 interface WorkflowFlowModel {
@@ -282,11 +279,10 @@ const WorkflowFlow = ({ runtime }: { runtime: WorkflowRuntimeApi }) => {
   );
   const perfSource = useMemo<WorkflowPerfSource>(
     () => ({
-      instanceId: runtime.instanceId,
-      kind: 'widget',
+      area: 'editor',
+      namespace: 'workflows',
       projectId,
-      region: runtime.region,
-      typeId: runtime.typeId,
+      widget: { instanceId: runtime.instanceId, region: runtime.region, typeId: runtime.typeId },
     }),
     [projectId, runtime.instanceId, runtime.region, runtime.typeId]
   );
@@ -1198,9 +1194,6 @@ const WorkflowFlow = ({ runtime }: { runtime: WorkflowRuntimeApi }) => {
     </Box>
   );
 };
-
-// Graph readiness is reported on the Invoke control, which is where the user
-// acts on it. A second floating copy over the canvas said the same thing twice.
 
 export const WorkflowEditorView = ({ runtime }: { runtime: WorkflowRuntimeApi }) => {
   const flowIdentity = useWorkflowProjectSelector(

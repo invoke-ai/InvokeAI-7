@@ -101,16 +101,9 @@ const stopped = (
 };
 
 /**
- * A layer run is one run of the project graph, so its seeds follow the same
- * rules as a queued submission of one: a random input draws now, a stepping
- * input takes its authored seed. The runner plans once the layer has been
- * exported and uploaded, and applies `seedAdvances` to the project graph in the
- * same turn as the graph build — that is the reservation. The dialog's action
- * session serialises layer runs, so two runs take consecutive seeds; a refusal
- * before the build consumes nothing, a failure after it has. The project graph
- * is the owning document: the dialog runs it, not a library record, and the
- * reducer fences each advance on the value and mode the plan read, so an edit
- * made meanwhile wins.
+ * Reserve seeds after layer upload in the graph-build turn. Serialized runs advance consecutively; pre-build
+ * refusals consume none, later failures do. Apply advances to the project graph with value/mode fences so
+ * concurrent edits win.
  */
 export const reserveLayerWorkflowSeeds = (
   document: ProjectGraphState,
@@ -149,9 +142,8 @@ export const runLayerWorkflow = async (options: RunLayerWorkflowOptions): Promis
     }
 
     failureStage = 'graph';
-    // The layer is exported and uploaded, so the run will be submitted: reserve its seeds
-    // now, in the same turn as the graph build. A refusal above consumed nothing, like a
-    // queue route that fails validation; a failure below has, like a cancelled queue item.
+    // Reserve seeds with graph build after upload; earlier refusals consume none, later failures retain the
+    // reservation.
     const seedPlan = deps.reserveSeeds();
 
     if (seedPlan.seedAdvances.length > 0) {

@@ -1,15 +1,4 @@
-/**
- * Krea-2 conditioning rebalance: the per-tap weight vector, its presets, and the
- * geometry the bar editor drags against.
- *
- * Krea-2 stacks twelve Qwen3-VL hidden-state layers per token into
- * `prompt_embeds (B, seq, 12, hidden)`, and the backend node applies
- * `embeds * gains * multiplier` — a flat elementwise gain, not a frequency
- * decomposition. Weighting the shallow taps favours the prompt's literal wording;
- * weighting the deep taps favours its meaning and composition.
- *
- * Pure module: no React, no Chakra, no transport (see `src/architecture/dependencyPolicy.ts`).
- */
+/** Twelve elementwise gains, ordered from shallow to deep encoder taps. */
 
 /**
  * The encoder layers tapped into the conditioning, shallow to deep.
@@ -24,10 +13,7 @@ export const DEFAULT_KREA2_REBALANCE_WEIGHTS = '1.0,1.0,1.0,1.0,1.0,1.0,1.0,2.5,
 export const DEFAULT_KREA2_REBALANCE_MULTIPLIER = 4;
 
 export const REBALANCE_WEIGHT_MIN = 0;
-/**
- * The drag track's nominal ceiling. Values above it are still legal — the track
- * rescales to fit them (`getRebalanceBarScale`) rather than clipping the bars.
- */
+/** The nominal track ceiling does not cap legal weights; the display rescales automatically. */
 export const REBALANCE_WEIGHT_TRACK_MAX = 8;
 /** Weights read as "no change" here; the editor draws a rule at this level. */
 export const REBALANCE_NEUTRAL_WEIGHT = 1;
@@ -36,11 +22,7 @@ export const REBALANCE_NEUTRAL_WEIGHT = 1;
 const WEIGHT_QUANTUM = 10;
 export const REBALANCE_WEIGHT_STEP = 1 / WEIGHT_QUANTUM;
 
-/**
- * Accepts exactly what Python's `float()` accepts. `Number()` additionally parses
- * hex/binary/octal literals, so `0x10` would pass a `Number.isFinite` check here and
- * then fail inside the node's `_parse_weights()` mid-generation.
- */
+/** Accept signed decimal values with optional fraction/exponent; reject JS-only hex, binary, and octal syntax. */
 const DECIMAL_NUMBER_RE = /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/;
 
 /** Parses the stored comma string, or null when the backend would reject it. */
@@ -82,22 +64,14 @@ const formatWeight = (weight: number): string => {
 
 export const serializeRebalanceWeights = (weights: readonly number[]): string => weights.map(formatWeight).join(',');
 
-/**
- * Krea-2 rebalance weights are free text forwarded straight to the backend's
- * `_parse_weights()`. Validating here keeps an unparseable string from reaching a node
- * that would fail mid-generation.
- */
+/** Validate backend-compatible numeric syntax before forwarding raw weights. */
 export const isValidKrea2RebalanceWeights = (value: string): boolean => parseRebalanceWeights(value) !== null;
 
 const snapWeight = (weight: number): number => Math.round(weight * WEIGHT_QUANTUM) / WEIGHT_QUANTUM;
 
 const clampWeight = (weight: number, scale: number): number => Math.min(scale, Math.max(REBALANCE_WEIGHT_MIN, weight));
 
-/**
- * The track's full-scale value: the nominal ceiling, or the tallest weight when a preset
- * or typed value overshoots it. Rescaling beats clipping — a clipped bar reads as a
- * different value than it holds.
- */
+/** Scale to the larger of the nominal ceiling and actual maximum. */
 export const getRebalanceBarScale = (weights: readonly number[]): number =>
   weights.reduce((scale, weight) => Math.max(scale, weight), REBALANCE_WEIGHT_TRACK_MAX);
 
@@ -118,10 +92,7 @@ export const adjustRebalanceWeight = (weight: number, delta: number, scale: numb
 
 const SPARKLINE_INSET = 1;
 
-/**
- * An SVG path for the collapsed row's preview of the current curve. Rendered into a
- * `preserveAspectRatio="none"` viewBox, so the inset only keeps the stroke off the edges.
- */
+/** Inset the path so preserveAspectRatio=none does not clip its stroke. */
 export const getRebalanceSparklinePath = (weights: readonly number[], width: number, height: number): string => {
   if (weights.length === 0) {
     return '';
@@ -156,12 +127,7 @@ export const NEUTRAL_KREA2_REBALANCE_WEIGHTS = Array.from({ length: KREA2_REBALA
   ','
 );
 
-/**
- * Built-ins are described by their shape, not by a tuning claim: the node's own
- * defaults, a neutral pass, the default curve scaled toward or away from
- * neutral, and curves that lean on the early or late taps. Nothing here
- * measures a look — users save their own curves for that.
- */
+/** Preset labels describe curve shapes, not measured tuning outcomes. */
 export const BUILTIN_REBALANCE_PRESETS: readonly RebalancePreset[] = [
   {
     id: REBALANCE_PRESET_DEFAULT_ID,
@@ -222,10 +188,7 @@ export const isRebalancePreset = (value: unknown): value is RebalancePreset => {
   );
 };
 
-/**
- * Coerces the persisted array back into shape. Entries that no longer parse — or that
- * collide with a built-in id — are dropped rather than surfaced as broken pickers.
- */
+/** Discard invalid persisted curves and IDs colliding with built-ins. */
 export const normalizeRebalancePresets = (value: unknown): RebalancePreset[] => {
   if (!Array.isArray(value)) {
     return [];

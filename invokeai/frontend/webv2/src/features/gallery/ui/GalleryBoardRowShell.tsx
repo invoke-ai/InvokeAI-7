@@ -20,11 +20,7 @@ const SELECTED_CONTAINER_CSS: SystemStyleObject = {
   color: 'accent.contrast',
 } as const;
 
-/**
- * While a compatible drag targets the row, the container's own hover fill
- * stands down: it would paint over the accent drop tint the row draws behind
- * it, flashing it out right as the drag arrives.
- */
+/** Suppress hover fill during compatible drags so it cannot obscure the row's drop tint. */
 const DROP_TARGET_CONTAINER_CSS: SystemStyleObject = {
   ...ROW_CONTAINER_CSS,
   _hover: { bg: 'transparent' },
@@ -33,11 +29,7 @@ const DROP_TARGET_CONTAINER_CSS: SystemStyleObject = {
 /** The container owns the fill, so the button contributes only its focus ring. */
 const ROW_BUTTON_CSS = { _hover: { bg: 'transparent' }, bg: 'transparent' } as const;
 
-/**
- * The one row shape every board-panel entry uses. `actions` is a flex sibling
- * of the row button, never a child: nested buttons are invalid markup, and an
- * overlaid one carves the row's touch target into unhittable slivers.
- */
+/** Keep action buttons beside the row button to avoid invalid nesting and fragmented touch targets. */
 export const GalleryBoardRowShell = ({
   actions,
   ariaLabel,

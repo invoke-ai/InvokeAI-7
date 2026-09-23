@@ -4,15 +4,8 @@ import { ForLoopGraphValidationError } from '@features/workflow/core/forLoops';
 import { compileProjectGraph } from '@features/workflow/graph';
 
 /**
- * The graph preview dialog's data source for a library entry — the library
- * equivalent of `workbench/widget-frame/graphPreviewSource.ts`'s workflow
- * branch, minus the active project: a library entry previews its own saved
- * document, not the live project graph, so the result is never live and
- * carries no destination (the entry has not been opened into a project yet).
- *
- * `document`/`templates` come from a `'ready'` library enrichment, which only
- * exists once templates have loaded — so the try/catch below is defensive
- * (a malformed cached document), not an expected path.
+ * Preview the entry's saved document without active-project destination or live updates; catch malformed cached
+ * data despite ready enrichment.
  */
 export const buildLibraryGraphPreviewSource = (
   document: ProjectGraphState,
@@ -29,8 +22,6 @@ export const buildLibraryGraphPreviewSource = (
       isLive: false,
       notices: [],
       positionHints,
-      // No node-count row: the side panel's summary already opens with one, and
-      // adding it here rendered "Nodes" twice.
       summaryRows: [],
     };
   } catch (error) {

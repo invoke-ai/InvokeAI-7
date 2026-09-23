@@ -158,8 +158,7 @@ describe('ScrubberField', () => {
   });
 
   it('ignores stops beyond the track while Alt is held', async () => {
-    // A default past the track (FLUX Fill's guidance of 30 on a 0..10 track) is not a stop: an Alt
-    // gesture would otherwise snap straight off the track's end.
+    // Exclude out-of-range defaults from stops so Alt-drag cannot jump off-track.
     const { frame, onChange } = await mount({ defaultValue: 30, marks: [50], max: 10, value: 5 });
 
     await pointer(frame, 'pointerdown', { altKey: true, clientX: trackX(frame, 0.5) });

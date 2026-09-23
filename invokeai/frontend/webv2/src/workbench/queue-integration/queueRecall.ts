@@ -6,11 +6,8 @@ import type { ImageRecallCapabilities, ImageRecallKind } from '@workbench/image-
 import { cloneVideoWidgetValues } from '@features/video';
 
 /**
- * Snapshot/session-based recall for queue items, mirroring the image-metadata
- * recall semantics: partial kinds merge the recalled fields into the CURRENT
- * generate form values; `all`/`remix` replace them with the submission
- * snapshot. Items this client submitted carry the full snapshot; foreign items
- * still expose prompts + the actual executed seed via the session meta.
+ * Partial recall merges current values; all/remix restores the submission snapshot. Foreign items expose only
+ * session prompts and executed seed.
  */
 
 export const getQueueRecallCapabilities = (
@@ -75,15 +72,8 @@ export const buildQueueRecallValues = (
     return {
       ...current,
       positivePrompt,
-      // The two sources disagree about what they hold, so the template has to
-      // follow whichever one the prompt came from. A snapshot stores the text as
-      // authored, alongside the template that shaped it — recalling the text and
-      // dropping the template would quietly generate something else. The session
-      // metadata has no snapshot and carries the merged prompt outright, so
-      // there the current template has to go or it would wrap it a second time.
-      //
-      // Older recall snapshots may predate prompt templates and must not recall
-      // `undefined` into the current settings.
+      // Restore templates with authored snapshot prompts; clear templates for already-merged session prompts to
+      // avoid double wrapping. Older snapshots must not write undefined templates.
       promptTemplate: snapshot ? (snapshot.promptTemplate ?? null) : null,
       ...(negativePrompt !== undefined
         ? { negativePrompt, negativePromptEnabled: snapshot?.negativePromptEnabled ?? negativePrompt.length > 0 }
@@ -141,14 +131,8 @@ export const buildVideoQueueRecallPatch = (
 
     return {
       positivePrompt: meta.positivePrompt,
-      // Session meta cannot distinguish "no negative recorded" from "negative
-      // disabled, submitted as ''", so an absent or empty negative leaves the
-      // toggle exactly as the user has it rather than flipping it off. This
-      // matches the gallery-side video recall for Wan. MiniMax H3 differs:
-      // it never wires a negative into its metadata, so gallery recall sees
-      // nothing, while the batch still records the field and we recall it —
-      // harmless, since H3's panel hides the negative and the value restored
-      // is the one the panel already held.
+      // Absent/empty session negatives cannot identify disabled state, so preserve the toggle. H3 batch negatives
+      // may recall harmless hidden values absent from gallery metadata.
       ...(meta.negativePrompt !== undefined && meta.negativePrompt.length > 0
         ? { negativePrompt: meta.negativePrompt, negativePromptEnabled: true }
         : {}),
@@ -164,11 +148,8 @@ export const buildVideoQueueRecallPatch = (
 };
 
 /**
- * Which panel a queue-item recall targets, and what to write there. A
- * discriminated union rather than a caller-side `if`: the two panels take
- * different payloads (Video a partial patch, Generate a whole values object),
- * so a caller that forgets a branch fails to compile instead of silently
- * recalling into the wrong panel — which is exactly the bug this replaced.
+ * Discriminate Video patches from complete Generate values so callers must handle the correct destination
+ * contract.
  */
 export type QueueRecallPlan =
   | { target: 'generate'; values: GenerateWidgetValues }

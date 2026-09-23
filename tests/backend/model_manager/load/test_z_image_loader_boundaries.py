@@ -390,3 +390,23 @@ def test_a_scaled_fp8_checkpoint_stays_packed_when_storage_is_on(monkeypatch, tm
     assert getattr(proj, "weight_scale", None) is not None, "kept packed but without its scale"
     dequantized = (proj.weight.float() * proj.weight_scale).flatten()
     assert torch.corrcoef(torch.stack([dequantized, original.flatten()]))[0, 1] > 0.999
+
+
+def test_a_comfyui_prefixed_checkpoint_loads_the_same_as_a_bare_one(monkeypatch, tmp_path) -> None:
+    """The prefix strip used to be eight lines inline in this method, and nothing here noticed if it
+    went away: a redistribution wrapping every key in `model.diffusion_model.` is accepted by the
+    config probes, so it reaches this loader, and unstripped it hands the model a state dict in which
+    every key is unexpected. Asserted against the bare load rather than a key list, so the two cannot
+    drift apart."""
+    torch.manual_seed(0)
+    bare = {key: value.clone() for key, value in _TinyZImage().state_dict().items()}
+    prefixed = {f"model.diffusion_model.{key}": value for key, value in bare.items()}
+
+    run, config = _driver(monkeypatch, tmp_path, prefixed)
+    from_prefixed = run.load(config).state_dict()
+    run, config = _driver(monkeypatch, tmp_path, bare)
+    from_bare = run.load(config).state_dict()
+
+    assert set(from_prefixed) == set(from_bare)
+    for key, value in from_bare.items():
+        assert torch.equal(from_prefixed[key], value), key

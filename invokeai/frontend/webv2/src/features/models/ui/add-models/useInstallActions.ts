@@ -12,11 +12,8 @@ import { useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 /**
- * Shared install entry point: queues an install job, optimistically adds it to
- * the install store, and surfaces a notification. A saved Civitai API key is
- * attached automatically for civitai.com URLs unless the caller supplies an
- * explicit token. Bulk flows pass `silent` and emit one summary notice instead
- * of a toast per model; failures always notify.
+ * Attach saved Civitai tokens unless explicitly overridden. Bulk callers suppress success toasts and summarize;
+ * failures always notify.
  */
 export const useInstallActions = () => {
   const { t } = useTranslation();

@@ -309,11 +309,8 @@ const siblingKey = (stack: CanvasNodeInsertionAnchor['stack'], parentId: string 
   `${stack}\0${parentId ?? ''}`;
 
 /**
- * Applies every move with one removal pass, one index, and one rebuild. Anchors resolve on the
- * same ladder as {@link insertNodesAtAnchor}, against sibling lists that already hold the earlier
- * moves, so the result matches applying the moves one after another. Moves whose anchors name a
- * moving node, or whose blocks nest, take the sequential path, since only it can see the forest
- * between moves.
+ * Batch rebuilds must match sequential moves. Use the sequential path when anchors name moving nodes or blocks
+ * nest, because intermediate forests affect resolution.
  */
 const applyMoves = (stacks: CanvasStackForests, moves: readonly CanvasNodeMove[], projectId: string) => {
   if (moves.length === 0) {
@@ -882,9 +879,7 @@ export const applyCanvasProjectMutation = (project: Project, mutation: CanvasPro
       );
     case 'updateCanvasLayerConfigs':
       return updateCanvasDocument(project, (document) => {
-        // All-or-nothing, like setCanvasLayerPositions: a batch with any
-        // unresolvable target applies nothing (history replay must never
-        // half-apply an entry).
+        // Reject the whole batch if any target cannot resolve; history replay must be atomic.
         const applicable = mutation.updates.every((update) => isConfigTargetValid(document, update.id, update.config));
         if (!applicable) {
           return document;

@@ -81,14 +81,11 @@ export const WidgetPanelFrame = ({
   // Clamped at render, not just on commit, so a persisted size from before a
   // bounds change heals on screen immediately instead of on the next resize.
   const displaySizePx = clampPanelSize(region, drag?.sizePx ?? regionState.sizePx);
-  // Mid-drag past the threshold the panel snaps shut on screen, dockview-style;
-  // the store's collapse is only committed on release.
+  // Preview collapse mid-drag; commit store collapse only on release.
   const isSnappedShut = drag?.isSnappedShut ?? false;
   const renderSizePx = isSnappedShut ? 0 : displaySizePx;
-  // Side panels yield to a viewport that cannot hold them (see
-  // `panelSizeProps`), so the width on screen can sit below the stored one.
-  // The gesture, the keyboard floor and the separator's announced value all
-  // work from what is on screen; the store keeps the preferred size.
+  // Use rendered width for dragging, keyboard floors, and ARIA values when viewport constraints shrink stored
+  // preferences.
   const frameRef = useRef<HTMLDivElement | null>(null);
   const [measuredSizePx, setMeasuredSizePx] = useState<number | null>(null);
 
@@ -137,9 +134,7 @@ export const WidgetPanelFrame = ({
 
       let nextDrag: PanelResizeDrag = { isSnappedShut: false, sizePx: clampPanelSize(region, startSizePx) };
 
-      // Keeps the gesture alive when the pointer leaves the window, which is
-      // where it goes when dragging the bottom strip shut. Throws if the
-      // pointer is already gone; the window listeners still carry the drag.
+      // Capture keeps dragging across window edges; window listeners cover capture failures after pointer loss.
       try {
         event.currentTarget.setPointerCapture(event.pointerId);
       } catch {
@@ -210,9 +205,7 @@ export const WidgetPanelFrame = ({
 
       event.preventDefault();
 
-      // Keyboard parity with the drag: a further collapse-ward step at the
-      // floor collapses, instead of silently clamping forever. A squeezed
-      // panel is already below the floor on screen, so it collapses too.
+      // A collapse-ward keyboard step at or below the visible floor collapses the panel.
       if (sizeChange < 0 && visibleSizePx <= minPanelSizePx) {
         layout.setRegionCollapsed(region, true);
 
@@ -223,11 +216,8 @@ export const WidgetPanelFrame = ({
     },
     [commitSize, displaySizePx, isBottom, isLeft, layout, maxPanelSizePx, minPanelSizePx, region, visibleSizePx]
   );
-  // The stored size is a preference, not a guarantee: side panels yield
-  // (`flexShrink`) when the viewport cannot hold both of them plus the
-  // center's minimum — a portrait tablet — so the center never collapses and
-  // the opposite rail never gets pushed offscreen. The bottom panel keeps a
-  // hard height because the column has no minimum-width peer to protect.
+  // Treat side widths as preferences that shrink to protect center space and opposite rails; bottom height remains
+  // fixed.
   const panelSizeProps = useMemo(
     () =>
       isBottom
@@ -235,9 +225,7 @@ export const WidgetPanelFrame = ({
         : { flexShrink: 1, h: 'full', w: `${renderSizePx}px` },
     [renderSizePx, isBottom]
   );
-  // Inside the panel's box, never straddling its edge: the frame clips its
-  // overflow, so a handle hung outside loses that half and leaves a ~4px
-  // target sitting behind the border people actually aim at.
+  // Keep resize handles inside clipped panel bounds so their full hit target remains reachable.
   const resizeOrientationProps = useMemo(
     () => (isBottom ? { h: '2', left: '0', right: '0', top: '0' } : { bottom: '0', top: '0', w: '2' }),
     [isBottom]
@@ -293,13 +281,6 @@ export const WidgetPanelFrame = ({
   );
 };
 
-/**
- * The docked half of the float/dock pair: one icon in the widget's header
- * actions that detaches it into a floating window. Its opposite — the dock
- * control — sits in the same corner of `FloatingWidgetWindow`'s title bar, so
- * the mode is one click away either way instead of a menu item in one mode and
- * a button in the other.
- */
 export const WidgetFloatButton = ({
   instanceId,
   manifest,
@@ -311,15 +292,9 @@ export const WidgetFloatButton = ({
 }) => {
   const { t } = useTranslation();
   const { widgets } = useWorkbenchCommands();
-  // A dialog or popover's chrome never floats, and neither does the center:
-  // its views are the work surface, and a window over an emptied surface is a
-  // view the rails cannot reach. Panels are the dock-back target.
   const dockableRegion = isWidgetRegion(region) && region !== 'center' ? region : undefined;
-  // Floating unmounts the docked subtree; the draft registry's cleanup only
-  // deregisters the flusher, so an uncommitted edit is lost without this. The
-  // region rides along: one instance may be placed in several regions (the
-  // preview lives in the center and a rail), and the window docks back into
-  // the one whose button was clicked.
+  // Flush drafts before floating unmounts the docked view; preserve the clicked region as the multi-region
+  // instance's dock origin.
   const handleFloat = useCallback(() => {
     if (!dockableRegion) {
       return;
@@ -328,8 +303,6 @@ export const WidgetFloatButton = ({
     flushWorkbenchDrafts();
     widgets.float(instanceId, dockableRegion);
   }, [dockableRegion, instanceId, widgets]);
-  // Floating is offered only from dockable regions; the floating window's own
-  // chrome carries the dock control.
   const canFloat = Boolean(manifest.allowFloating) && dockableRegion !== undefined;
 
   if (!canFloat) {
@@ -351,13 +324,7 @@ export const WidgetFloatButton = ({
   );
 };
 
-/**
- * The trailing action cluster of a widget's chrome: the manifest's own
- * `headerActions`, the settings gear, the float control, and the shared
- * overflow menu. Panels render it inside {@link WidgetHeader}; the center
- * region renders it on its own, floating over the work surface, so it lives
- * apart from the header row.
- */
+/** Share widget actions, settings, float, and overflow between panel headers and hoisted center chrome. */
 export const WidgetHeaderActionsGroup = ({
   actions,
   HeaderMenu,
@@ -419,8 +386,6 @@ export const WidgetHeader = ({
   runtime: WidgetRuntimeApi;
 }) => {
   const { t } = useTranslation();
-  // Manifests may provide a component label (e.g. Workflow's editable
-  // `Workflow / [name]`); plain strings render as the standard title.
   const label = resolveWidgetInstanceLabel(instance, manifest, t);
 
   return (

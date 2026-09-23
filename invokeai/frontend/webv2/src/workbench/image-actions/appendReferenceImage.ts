@@ -17,11 +17,6 @@ export type AppendReferenceImageResult =
   | { status: 'appended'; referenceImages: GenerateWidgetValues['referenceImages'] }
   | { status: 'full' | 'unsupported' };
 
-/**
- * Builds the generate widget's next `referenceImages` array with `image`
- * appended as a new reference image for the current model. Pure: the caller
- * patches the widget values on 'appended'.
- */
 export const appendReferenceImage = ({
   generateValues,
   image,

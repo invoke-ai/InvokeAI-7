@@ -63,14 +63,7 @@ const getCompatibleComponentSource = (
 const getCompatibleVae = (settings: GenerateSettings, model: MainModelConfig) =>
   settings.vae && isVaeCompatibleWithGenerateModel(model, settings.vae) ? settings.vae : null;
 
-/**
- * A component selection is only sent when it suits the model that is about to run.
- *
- * Component settings survive a main-model switch, and an optional slot is not validated at all
- * (`validateSlots` returns early for one), so a selection made for another architecture would
- * otherwise be forwarded as an override and rejected by the loader node — turning a bundled
- * pipeline that needs no components into a failed enqueue.
- */
+/** Filter stale optional selections that required-slot validation skips. */
 const getCompatibleComponent = (
   component: ComponentModelConfig | null,
   filter: GenerateComponentFilter
@@ -427,8 +420,7 @@ const buildSDGraph = (
   addEdge(graph, negCondCollect, 'collection', denoise, 'negative_conditioning');
   addEdge(graph, seed, 'value', noise, 'seed');
 
-  // Seamless slots in between the model loader and the denoise/decode nodes,
-  // patching both the UNet and the (possibly overridden) VAE.
+  // Seamless wrapping covers both the selected UNet and overridden VAE.
   if (seamless) {
     addEdge(graph, modelLoader, 'unet', seamless, 'unet');
     addEdge(graph, vaeLoader ?? modelLoader, 'vae', seamless, 'vae');
@@ -437,8 +429,7 @@ const buildSDGraph = (
   addEdge(graph, unetSource, 'unet', denoise, 'unet');
   addEdge(graph, noise, 'noise', denoise, 'noise');
   addIPAdapterReferenceImages(graph, settings, model, denoise);
-  // Created here rather than with the other nodes because the decode's VAE source is
-  // only settled once the seamless / VAE-override nodes above are known.
+  // Create decode only after resolving the final VAE source.
   const output = addDecodeOutput({
     denoise,
     graph,
@@ -478,13 +469,7 @@ const addPromptAndSeedNodes = (graph: BackendGraphContract) => ({
 const addImageOutputNode = (graph: BackendGraphContract, type: string, outputIsIntermediate: boolean) =>
   addNode(graph, { id: 'canvas_output', is_intermediate: outputIsIntermediate, type, use_cache: false });
 
-/**
- * The decode that turns the denoised latents into the output image: either the base's
- * ordinary VAE decode, or PiD's 4x super-resolution decode when PiD is on.
- *
- * Both branches wire `latents` (and the VAE where the node needs it) and return the
- * terminal `canvas_output` node, so callers attach metadata to the result either way.
- */
+/** Both decode branches return canvas_output for metadata attachment. */
 const addDecodeOutput = ({
   graph,
   settings,
@@ -542,14 +527,9 @@ const addDecodeOutput = ({
   return output;
 };
 
-/**
- * The width/height to denoise at. Identical to the requested size unless PiD is in
- * native mode, where the requested size is the 4x decode target and generation runs at
- * a quarter of it.
- */
+/** Native PiD denoises at one quarter of the requested target dimensions. */
 const getDenoiseSize = (settings: GenerateSettings, model: MainModelConfig): { width: number; height: number } =>
-  // Deliberately the model's OWN grid (the default `off` mode), not the PiD-scaled grid
-  // the dimension fields present: requested / 4 must land on the model's grid.
+  // Use the model-native grid for divided dimensions, not the UI's PiD-scaled grid.
   getPidDenoiseSize(settings, model.base, getGenerationDimensions(model).grid);
 
 const buildSD3Graph = (
@@ -861,9 +841,7 @@ const buildErnieImageGraph = (
   outputIsIntermediate: boolean,
   projectSettings: GenerationProjectSettings
 ): BackendGraphContract => {
-  // A diffusers pipeline directory carries every submodel, so the loader reads them out of it. A
-  // single-file transformer carries only itself: its Ministral encoder and FLUX.2 VAE are selected
-  // in the component section and sent here, the same shape Krea-2 uses.
+  // Bundles supply submodels; single-file models need explicit encoder/VAE selections.
   const isDiffusers = model.format === 'diffusers';
   const vaeModel = getCompatibleVae(settings, model);
   const mistralEncoderModel = getCompatibleComponent(settings.mistralEncoderModel, isErnieImageMistralEncoder);
@@ -882,8 +860,7 @@ const buildErnieImageGraph = (
     model,
     text_encoder_model: mistralEncoderModel ?? undefined,
     type: 'ernie_image_model_loader',
-    // The enhancer is a separate node with its own prompt rewriting and cannot be idle-offloaded;
-    // Generate does not surface it, so the loader is told not to hold it resident.
+    // Unload the unused enhancer because it cannot idle-offload.
     use_prompt_enhancer: false,
     vae_model: vaeModel ?? undefined,
   });
@@ -1211,9 +1188,7 @@ const buildKrea2Graph = (
   outputIsIntermediate: boolean,
   projectSettings: GenerationProjectSettings
 ): BackendGraphContract => {
-  // Krea-2 has no component-source concept: a non-diffusers transformer (single-file checkpoint
-  // or GGUF) bundles neither VAE nor encoder, so both must be selected. A diffusers model
-  // carries them, and the loader extracts them when these are omitted.
+  // Standalone Krea needs a separate VAE/encoder without a component source.
   const isDiffusers = model.format === 'diffusers';
   const vaeModel = getCompatibleVae(settings, model);
   const qwen3VlEncoderModel = getCompatibleComponent(settings.qwen3VLEncoderModel, isKrea2Qwen3VlEncoder);
@@ -1298,8 +1273,7 @@ const buildIdeogram4Graph = (
   outputIsIntermediate: boolean,
   projectSettings: GenerationProjectSettings
 ): BackendGraphContract => {
-  // A single-file Ideogram 4 main is one of two transformer branches and carries neither encoder
-  // nor VAE, so all three are selected as components. A diffusers pipeline bundles them.
+  // Standalone Ideogram needs its other branch, encoder, and VAE; bundles supply them.
   const isDiffusers = model.format === 'diffusers';
   const unconditionalModel = settings.ideogram4UnconditionalModel;
   const qwen3VlEncoderModel = getCompatibleComponent(settings.qwen3VLEncoderModel, isIdeogram4Qwen3VlEncoder);
@@ -1322,8 +1296,6 @@ const buildIdeogram4Graph = (
     unconditional_model: isDiffusers ? undefined : (unconditionalModel ?? undefined),
     vae_model: vaeModel ?? undefined,
   });
-  // The caption builder turns the prompt (plus optional colour terms) into Ideogram's own
-  // caption format before encoding.
   const captionBuilder = addNode(graph, {
     color_palette: settings.ideogram4ColorPalette,
     id: 'caption_builder',
@@ -1333,8 +1305,7 @@ const buildIdeogram4Graph = (
   const denoise = addNode(graph, {
     height: settings.height,
     id: 'denoise_latents',
-    // Steps, guidance and mu are preset-derived unless explicitly overridden — sending null
-    // would override the preset with nothing, so unset values are omitted entirely.
+    // Omit unset overrides; null would replace preset defaults.
     ...(settings.ideogram4Steps === null ? {} : { steps: settings.ideogram4Steps }),
     ...(settings.ideogram4GuidanceScale === null ? {} : { guidance_scale: settings.ideogram4GuidanceScale }),
     ...(settings.ideogram4Mu === null ? {} : { mu: settings.ideogram4Mu }),
@@ -1346,8 +1317,7 @@ const buildIdeogram4Graph = (
 
   addEdge(graph, modelLoader, 'transformer', denoise, 'transformer');
   if (!isDiffusers) {
-    // Only a single-file main emits a second branch; connecting it for a bundled pipeline is an
-    // error on the node, because that pipeline's Transformer submodel already holds both.
+    // Wire the second branch only for standalone models; bundles already contain both.
     addEdge(graph, modelLoader, 'unconditional_transformer', denoise, 'unconditional_transformer');
   }
   addEdge(graph, modelLoader, 'qwen3_encoder', posCond, 'qwen3_encoder');
@@ -1363,8 +1333,7 @@ const buildIdeogram4Graph = (
     ideogram4_mu: settings.ideogram4Mu ?? undefined,
     ideogram4_sampler_preset: settings.ideogram4SamplerPreset,
     ideogram4_steps: settings.ideogram4Steps ?? undefined,
-    // Two files made this image, so recording only the main model would not identify what ran —
-    // the same reason `minimax_h3_transformer_model` exists.
+    // Record both transformer files in provenance.
     ideogram4_unconditional_model: isDiffusers ? undefined : (unconditionalModel ?? undefined),
     qwen3_vl_encoder: qwen3VlEncoderModel ?? undefined,
     vae: vaeModel ?? undefined,
@@ -1379,8 +1348,7 @@ const buildWanGraph = (
   outputIsIntermediate: boolean,
   projectSettings: GenerationProjectSettings
 ): BackendGraphContract => {
-  // A GGUF Wan main carries only the transformer, so the VAE and UMT5-XXL encoder come from
-  // standalone models or a Diffusers component source.
+  // GGUF Wan sources encoder/VAE from standalone selections or a bundle.
   const sourceModel = getDiffusersSource(settings, model);
   const vaeModel = getCompatibleVae(settings, model);
   const wanT5EncoderModel = settings.wanT5EncoderModel;

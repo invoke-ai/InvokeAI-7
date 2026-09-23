@@ -48,8 +48,6 @@ describe('getGalleryColumnCountForCell', () => {
 
 describe('getGalleryColumnCount', () => {
   it('gives the same answer at the same width regardless of placement', () => {
-    // The whole point of measuring rather than branching on layout: a 600px
-    // gallery is a 600px gallery whether it sits in a panel or the center.
     const stacked = getGalleryColumnCount({ imageDensityPercent: 50, widthPx: 600 });
     const wide = getGalleryColumnCount({ imageDensityPercent: 50, widthPx: 600 });
 

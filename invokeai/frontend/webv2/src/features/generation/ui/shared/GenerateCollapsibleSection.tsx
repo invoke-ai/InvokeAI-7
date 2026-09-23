@@ -15,30 +15,7 @@ type Props = {
 
 const COLLAPSIBLE_INDICATOR_OPEN_STYLES = { transform: 'rotate(90deg)' };
 
-/**
- * Closed: a quiet hairline row in the list. Open: a card — background, radius,
- * breathing room — with no separators of its own.
- *
- * Three invariants make it feel right:
- *
- * - Everything keys off the DOM's `data-state`, not React state: sections
- *   without a `sectionId` (Upscale passes only `defaultOpen`) run uncontrolled,
- *   so their openness never reaches this component as a prop — the browser
- *   always has it.
- * - The geometry is constant. The hosting Stack keeps a fixed `gap="1"`
- *   between rows in every state, so opening a section never adds a margin or a
- *   border — nothing below shifts by even a pixel.
- * - The separators are pseudo-element overlays, not borders on the box, and
- *   exactly ONE line is painted per boundary, only BETWEEN rows: a section's
- *   `::before` (a 1px border-top centered in the gap) shows only when the
- *   element above it is another section — so nothing renders above the first
- *   row (even mid-stack, after non-section siblings) or below the last, and
- *   two overlapping halves never stack the translucent border color into a
- *   heavier line. Around an open card the touching lines fade out — the
- *   card's own via `data-state`, the one below it via `A + B`, since no
- *   section can see its neighbor's state on its own. Only opacity and
- *   background ever animate.
- */
+/** Style uncontrolled sections from DOM state; preserve geometry and draw one overlay separator per boundary. */
 const SECTION_OPEN_STYLES = { bg: 'bg.muted', rounded: 'sm' };
 const SECTION_STYLES = {
   '&::before': {
@@ -52,8 +29,7 @@ const SECTION_STYLES = {
     transition: 'opacity var(--wb-motion-duration-slow) ease',
   },
   '.generate-section + &::before': { opacity: 1 },
-  // Order matters against the rule above: at equal specificity, an open
-  // section's own state must win over its predecessor's presence.
+  // With equal specificity, open-state rules must follow preceding-section rules.
   '&[data-state="open"]::before': { opacity: 0 },
   '.generate-section[data-state="open"] + &::before': { opacity: 0 },
 } as const;

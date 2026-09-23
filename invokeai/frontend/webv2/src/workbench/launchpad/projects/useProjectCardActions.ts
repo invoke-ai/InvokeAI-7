@@ -6,11 +6,7 @@ import { useTranslation } from 'react-i18next';
 
 import { dropProjectPin } from './projectPins';
 
-/**
- * The library actions a single project offers, shared by the grid card and the
- * list row so the two cannot drift. Every one runs against the server without
- * mounting the editor.
- */
+/** Share server-backed library actions between grid and list without mounting the editor. */
 export interface ProjectCardActions {
   rename: (name: string) => Promise<void>;
   /** Reports its own progress and result, so there is nothing to await here. */
@@ -42,9 +38,7 @@ export const useProjectCardActions = (summary: ProjectSummary): ProjectCardActio
     [summary.id, t]
   );
 
-  // Progress, partial success and error translation all come from the shared reporter — the same
-  // one import and export use. Duplication runs the same restore engine over the same board, so a
-  // hand-rolled toast here only meant it reported that work differently from its twins.
+  // Use the import/export reporter because duplication shares their restore engine and progress/error semantics.
   const duplicate = useCallback(() => {
     startDuplicate(summary.id);
   }, [startDuplicate, summary.id]);
@@ -68,9 +62,7 @@ export const useProjectCardActions = (summary: ProjectSummary): ProjectCardActio
     }
   }, [summary.id, t]);
 
-  // Memoized because `ProjectActionsMenu` derives callbacks from this object, and the browser
-  // renders one of these per row in a virtualized list: a fresh literal each render invalidates
-  // every one of them on every render.
+  // Stabilize the actions object so virtualized row renders do not invalidate derived menu callbacks.
   return useMemo(
     () => ({ delete: deleteProject, duplicate, export: exportProject, rename }),
     [deleteProject, duplicate, exportProject, rename]

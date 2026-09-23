@@ -224,9 +224,7 @@ const LayerRowComponent = ({
     },
     [commands, finishRename, node.name, row.id]
   );
-  // Focus that dropped returns to the row. Focus that left for another element stays there, and is
-  // set explicitly: committing unmounts the input while the browser is still moving focus, and that
-  // move is dropped along with the input.
+  // Restore dropped focus to the row, but explicitly preserve a destination chosen during input unmount.
   const handleNameBlur = useCallback(
     (event: FocusEvent<HTMLInputElement>) => {
       const next = event.relatedTarget;
@@ -311,8 +309,7 @@ const LayerRowComponent = ({
       onKeyDown={handleKeyDown}
     >
       {node.colorLabel ? (
-        // A fixed gutter column regardless of nesting depth, like a desktop
-        // editor's label swatch; display-only, so it takes no pointer events.
+        // Use a fixed, noninteractive swatch gutter at every nesting depth.
         <Box
           bg={colorLabelHex(node.colorLabel)}
           bottom="1.5"
@@ -513,11 +510,6 @@ const groupLeafPreviews = (node: CanvasNodeContract, limit = 3): CanvasLayerCont
   return leaves;
 };
 
-/**
- * A group's preview: its first leaves' live thumbnails stacked as a small pile,
- * top layer in front, so a closed folder still shows what it holds; an empty
- * group keeps the folder glyph.
- */
 const GroupPreview = ({
   engine,
   expanded,

@@ -15,12 +15,7 @@ const CONNECTION_LABEL_KEY: Record<Exclude<BackendConnectionStatus, 'connected'>
   disconnected: 'launchpad.connection.disconnected',
 };
 
-/**
- * Subtle backend-connection indicator; hidden while the socket is healthy.
- *
- * The status changes on its own, with no interaction to attribute it to, so
- * the region is announced politely rather than only being visible.
- */
+/** Hide healthy connection status; announce spontaneous status changes politely. */
 const ConnectionChip = () => {
   const { t } = useTranslation();
   const status = useConnectionStatusSelector((snapshot) => snapshot.status);

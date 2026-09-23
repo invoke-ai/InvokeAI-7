@@ -36,11 +36,8 @@ import { useTranslation } from 'react-i18next';
 const selectInvocationRouteInput = createInvocationRouteInputSelector();
 
 /**
- * Route resolution reads two stores imperatively: the capability table (Generate validation fails
- * closed without it) and the invocation templates (workflow readiness). The selector that resolves
- * the route is only re-run when its snapshot changes, so the snapshot has to change with either --
- * a templates load that lands after the table would otherwise leave "Node definitions are still
- * loading." on Invoke until an unrelated edit.
+ * Include capability and template snapshots in route selection so either load independently clears its readiness
+ * gate.
  */
 const subscribeRouteSources = (listener: () => void): (() => void) => {
   const unsubscribeCapabilities = subscribeArchitectureCapabilities(listener);
@@ -120,11 +117,8 @@ export const useInvocationState = (): InvocationState => {
     void ensureModelsLoaded();
   });
 
-  // `getGenerationValidationReasons` fails closed while the capability table is absent, and workflow
-  // readiness while the node templates are, so either load -- including one that only succeeds on
-  // retry -- has to reach Invoke on its own. The route is resolved inside the stores' selector, like
-  // `useModelGridSize`: both are module state, so to React Compiler a bare call is a pure function of
-  // these arguments and stays memoised until an unrelated edit changes one of them.
+  // Resolve inside subscribed selectors: bare imperative reads can remain compiler-memoized after capabilities or
+  // templates arrive.
   const resolvedRoute = useExternalStoreSelector(
     subscribeRouteSources,
     getRouteSourcesSnapshot,
@@ -149,9 +143,8 @@ export const useInvocationState = (): InvocationState => {
       ? sanitizeDynamicPromptsConfig(readDynamicPromptsConfig(routeInput.generateValues))
       : null
   );
-  // A prompt that will not expand cannot be submitted — the alternative is putting
-  // the literal `{a|b}` in front of the model — so this blocks rather than just
-  // annotating. `submitResolvedInvocation` enforces the same rule for the hotkey.
+  // Block unexpandable prompts rather than submitting literal dynamic syntax; hotkey submission enforces the same
+  // rule.
   const expansionReason = promptExpansion.isError
     ? 'The prompt could not be expanded.'
     : (promptExpansion.error ?? null);

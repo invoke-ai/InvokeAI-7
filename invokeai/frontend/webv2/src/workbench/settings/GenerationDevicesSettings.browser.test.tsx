@@ -89,8 +89,7 @@ describe('GenerationDevicesSettings', () => {
   it('explains that parallel generation needs more than one accelerator on a single-device box', async () => {
     await render({ options: [{ device: 'cuda:0', name: 'RTX 5090' }] });
 
-    // This machine's real configuration: one GPU, `auto`. No switches should appear,
-    // because there is nothing to choose between.
+    // One GPU in auto mode has no device choice to expose.
     expect(host?.textContent).toContain('RTX 5090');
     expect(host?.textContent).toContain('needs more than one accelerator');
     expect(host?.querySelectorAll('input[type="checkbox"]')).toHaveLength(0);
@@ -150,9 +149,7 @@ describe('GenerationDevicesSettings', () => {
   it('refuses to deselect the last GPU rather than letting the server 422', async () => {
     await render({ options: TWO_GPUS, setting: ['cuda:1'] });
 
-    // Index 0 is the auto switch; the per-device switches follow in device order, so
-    // index 2 is cuda:1 — the only selected device. Turning it off would write an
-    // empty list, which the backend rejects and which would fail the next startup.
+    // Disabling the last selected device would persist an empty list rejected by the backend and startup.
     await act(() => userEvent.click(switchControls()[2]!));
 
     expect(mocks.updateGenerationDevices).not.toHaveBeenCalled();

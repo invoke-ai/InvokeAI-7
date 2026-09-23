@@ -6,12 +6,6 @@ import { useTranslation } from 'react-i18next';
 
 const SEARCH_ICON = <Icon as={SearchIcon} boxSize="3" color="fg.subtle" />;
 
-/**
- * Shared header for an installable-source results panel (HuggingFace files,
- * folder-scan results): a summary line with an optional extra control and a
- * dismiss, over a filter box and an Install All action. Presentational only —
- * each consumer owns its own filter state, Install All predicate, and rows.
- */
 export const ResultsListHeader = ({
   extra,
   installAllDisabled,

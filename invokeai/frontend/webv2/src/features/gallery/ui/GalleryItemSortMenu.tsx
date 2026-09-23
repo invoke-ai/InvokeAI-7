@@ -12,10 +12,6 @@ import { useGalleryWidget } from './GalleryWidgetContext';
 
 const SORT_POSITIONING = { placement: 'bottom-end' } as const;
 
-/**
- * Grid ordering, promoted out of the settings popover: which end of the board
- * you are looking at is a decision made constantly, not a preference set once.
- */
 export const GalleryItemSortMenu = () => {
   const { t } = useTranslation();
   const { actions, gallery } = useGalleryWidget();

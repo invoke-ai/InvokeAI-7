@@ -78,10 +78,7 @@ describe('floatWidget', () => {
     state = workbenchReducer(state, { instanceId: lastCenterInstanceId, type: 'floatWidget' });
     const center = getActiveProject(state).widgetRegions.center;
 
-    // The surface may go empty — the fallback view carries it — and the
-    // window remembers the center as its dock-back target. The active pointer
-    // holds the floated instance so docking restores it as the active view,
-    // and the center takes no collapsed state.
+    // An empty center retains the floated active instance as its dock-back target and uses its fallback view.
     expect(center.instanceIds).toEqual([]);
     expect(center.activeInstanceId).toBe(lastCenterInstanceId);
     expect(center.isCollapsed).toBe(false);
@@ -91,10 +88,8 @@ describe('floatWidget', () => {
   });
 
   it('docks back into the region the float was asked from, not the first member region', () => {
-    // The Edit preset places the preview in the center AND the right rail, and
-    // `right` precedes `center` in the region map — without the origin hint,
-    // floating it from the center chrome would detach the rail's membership
-    // and dock it back there.
+    // Preview belongs to center and right; right precedes center, so this catches loss of the explicit float
+    // origin.
     let state = workbenchReducer(createInitialWorkbenchState(), { presetId: 'edit', type: 'applyPreset' });
     state = workbenchReducer(state, { instanceId: 'preview', region: 'center', type: 'floatWidget' });
     const project = getActiveProject(state);
@@ -115,9 +110,7 @@ describe('floatWidget', () => {
     const project = getActiveProject(state);
     const floating = project.floatingWidgets?.preview;
 
-    // The hint is what makes dock-back deterministic; without it some member
-    // region still hosts the float — which one is region map order, not a
-    // contract.
+    // Without an origin hint, the chosen member region is unspecified map order.
     expect(floating).toBeDefined();
     expect(['center', 'right']).toContain(floating!.returnRegion);
   });
@@ -182,9 +175,6 @@ describe('dockFloatingWidget', () => {
   });
 
   it('restores the tab to the position it floated from', () => {
-    // Docking appended, so float-then-dock — a gesture that reads as undoing
-    // the float — permanently reordered the rail and left the project drifted
-    // from its preset.
     const initial = createInitialWorkbenchState();
     const before = [...getActiveProject(initial).widgetRegions.right.instanceIds];
 
@@ -307,9 +297,7 @@ describe('interaction with region placement', () => {
   });
 
   it('selectRegionWidget docks a floating instance instead of double-rendering it', () => {
-    // The preview is still a member of the right rail while it floats in a
-    // window docked back to the center; selecting its rail slot would
-    // otherwise make the rail show it alongside the window.
+    // Selecting Preview's remaining rail slot must dock it rather than show it alongside the floating copy.
     let state = workbenchReducer(createInitialWorkbenchState(), { presetId: 'edit', type: 'applyPreset' });
     state = workbenchReducer(state, { instanceId: 'preview', region: 'center', type: 'floatWidget' });
     state = workbenchReducer(state, { region: 'right', type: 'selectRegionWidget', widgetId: 'preview' });
@@ -395,8 +383,6 @@ describe('normalization of persisted floating windows', () => {
       } as unknown as Project['floatingWidgets'],
     });
 
-    // Dropping the entry must leave the instance docked where it already was,
-    // rather than floating by a malformed description or vanishing entirely.
     expect(normalized.floatingWidgets).toBeUndefined();
     for (const instanceId of ['queue', 'preview', 'notifications']) {
       expect(getRegionsHolding(normalized, instanceId)).not.toEqual([]);
@@ -417,12 +403,8 @@ describe('normalization of persisted floating windows', () => {
   });
 
   it('lets a sole center view keep floating across a reload', () => {
-    // Floating the last center view empties the work surface into its fallback
-    // view, and the window's dock control is one click from restoring it. The
-    // persisted shape is an EMPTY center whose active pointer names the floated
-    // instance — normalization must honour it, not read it as missing center
-    // data and refill the default arrangement (which would inject views the
-    // project never placed).
+    // An explicitly empty center with a floated active pointer must survive normalization without default views
+    // being added.
     let state = workbenchReducer(createInitialWorkbenchState(), { presetId: 'video', type: 'applyPreset' });
     state = workbenchReducer(state, { instanceId: 'preview', region: 'center', type: 'floatWidget' });
     const project = getActiveProject(state);
@@ -475,9 +457,7 @@ describe('interaction with presets and undo', () => {
   });
 
   it('a preset saved with the sole center view floating restores the emptied surface, not a phantom view', () => {
-    // Normalizing before the snapshot must not refill the emptied center with
-    // the default arrangement — the saved preset would otherwise carry center
-    // views the project never placed.
+    // Snapshot normalization must preserve an intentionally empty center.
     let state = workbenchReducer(createInitialWorkbenchState(), { presetId: 'video', type: 'applyPreset' });
     state = workbenchReducer(state, { instanceId: 'preview', region: 'center', type: 'floatWidget' });
     state = workbenchReducer(state, { presetId: 'video', type: 'saveLayoutPreset' });
@@ -491,8 +471,6 @@ describe('interaction with presets and undo', () => {
   });
 
   it('carries a saved preset’s floating window through account rehydration', () => {
-    // Account presets are rebuilt by `cloneLayoutPresetSnapshot` on every load;
-    // a field it forgets is a field the preset loses on the next reload.
     let state = workbenchReducer(createInitialWorkbenchState(), { instanceId: 'gallery', type: 'floatWidget' });
     state = workbenchReducer(state, { presetId: 'compose', type: 'saveLayoutPreset' });
 
@@ -560,8 +538,6 @@ describe('interaction with presets and undo', () => {
     expect(project.floatingWidgets ?? {}).toEqual({});
     expect(project.widgetRegions.right.instanceIds).toContain('gallery');
 
-    // Mirror case: float, take a snapshot, dock, undo -> floating state returns
-    // WITH the matching regions; the widget is exactly one of docked/floating.
     state = workbenchReducer(state, { instanceId: 'gallery', type: 'floatWidget' });
     state = workbenchReducer(state, { presetId: 'compose', type: 'applyPreset' });
     state = workbenchReducer(state, { type: 'undoProjectChange' });

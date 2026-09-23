@@ -193,13 +193,7 @@ const isVaePrecision = (value: unknown): value is VaePrecision => value === 'fp1
 /** Backend defaults from `Ideogram4DenoiseInvocation` / `Krea2*Invocation`. */
 export const IDEOGRAM4_SAMPLER_PRESETS: Ideogram4SamplerPreset[] = ['V4_QUALITY_48', 'V4_DEFAULT_20', 'V4_TURBO_12'];
 export const DEFAULT_IDEOGRAM4_SAMPLER_PRESET: Ideogram4SamplerPreset = 'V4_QUALITY_48';
-/**
- * `Ideogram4DenoiseInvocation.guidance_scale` is `Optional[float]` with `ge=1, le=20` -- the
- * constraints sit on the numeric branch of its `anyOf`, which is why a naive schema read misses
- * them. Not served through the capability table: the shared guidance slider never reaches this
- * field (`NO_GUIDANCE_SLIDER` in `tests/backend/architectures/test_guidance_range.py` records why),
- * so it is a local bound on a local, preset-overriding control.
- */
+/** Ideogram guidance_scale bounds live on the numeric anyOf branch, outside the shared capability-table slider. */
 export const IDEOGRAM4_GUIDANCE_MIN = 1;
 export const IDEOGRAM4_GUIDANCE_MAX = 20;
 /** `steps` is `ge=2`: the node keeps a polish step and a main step, so 1 is not a schedule. */
@@ -221,8 +215,6 @@ const getOptionalNumber = (value: unknown): number | null =>
 const getStringArray = (value: unknown): string[] =>
   Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string') : [];
 
-// Re-exported so existing `core/settings` callers keep one import site; the rebalance
-// vector, its presets, and its geometry all live in `conditioningRebalance.ts`.
 export {
   DEFAULT_KREA2_REBALANCE_MULTIPLIER,
   DEFAULT_KREA2_REBALANCE_WEIGHTS,
@@ -364,14 +356,7 @@ export const cloneReferenceImages = (
     config: cloneReferenceImageConfig(referenceImage.config),
   }));
 
-/**
- * Moves one reference image a single step through the stack. Array order IS
- * conditioning order — the graph builders chain `reference_images` in it — so
- * this is the whole of what reordering means. Returns the same array identity
- * when the move is a no-op (unknown id, or already at the end it is moving
- * toward), so an updater built on it leaves the settings untouched and the
- * committed patch comes out empty.
- */
+/** Array order is conditioning order; no-op reorders return the same array. */
 export const moveReferenceImage = (
   referenceImages: readonly GenerateReferenceImage[],
   id: string,
@@ -619,15 +604,7 @@ export const isLoraCompatibleWithModel = (
   return true;
 };
 
-/**
- * Wan 2.2 main-model variants (`t2v_a14b` / `i2v_a14b` / `ti2v_5b`) and LoRA variants
- * (`a14b` / `5b`) name the same families with different strings, so plain variant equality
- * would reject every Wan LoRA. The families are also not interchangeable — A14B LoRAs have
- * `inner_dim=5120` and 5B `inner_dim=3072`, and applying one to the wrong main crashes the
- * layer patcher on a tensor-shape mismatch — so the mapping must be explicit rather than
- * permissive. An unknown variant on either side stays allowed: the backend probe is the
- * authority, and blocking here would hide a LoRA the backend would have accepted.
- */
+/** Map main/LoRA families explicitly; unknown variants remain permissive for backend validation. */
 const WAN_LORA_VARIANT_MAIN_VARIANTS: Record<string, readonly string[]> = {
   '5b': ['ti2v_5b'],
   a14b: ['t2v_a14b', 'i2v_a14b'],
@@ -646,28 +623,8 @@ export const isWanLoraTargetingMain = (
   return compatibleMainVariants ? compatibleMainVariants.includes(mainVariant) : true;
 };
 
-/**
- * Validate stored widget values and fill in fields that older persisted
- * projects predate. The core fields must be present and well-typed; newer
- * fields fall back to their defaults so old projects keep their prompts and
- * dimensions instead of being reset wholesale.
- */
-/**
- * The fields of `GenerateSettings` that describe how the panel is arranged
- * rather than what will be generated.
- *
- * They live in the same object because they are saved with the project, and
- * separating the two is a change to the persisted shape rather than a
- * rearrangement — worth doing, but not here. What can be stated once is which
- * is which, and this is it: `satisfies` ties the set to the interface, so a key
- * that stops existing, or is spelled wrong, fails to compile.
- *
- * Everything else is generation intent. Changing one of these is not: dragging
- * a prompt box taller or looking at the merged template must not be mistaken
- * for the kind of edit that reroutes the workbench. Applying a template *is*
- * intent, which is why `promptTemplate` is absent and `promptTemplateViewMode`
- * is present.
- */
+/** Require core fields but default newer fields to preserve older project content. */
+/** Exclude arrangement keys from generation-intent routing, including template view but not template application. */
 export const GENERATE_UI_STATE_KEYS = {
   aspectRatioIsLocked: true,
   batchCount: true,
@@ -762,10 +719,7 @@ export const normalizeGenerateSettings = (values: unknown): GenerateSettings | n
       MAX_POSITIVE_PROMPT_HEIGHT_PX,
       DEFAULT_POSITIVE_PROMPT_HEIGHT_PX
     ),
-    // Reuse the stored object when it is already canonical. Callers diff settings
-    // with `Object.is`, so re-sanitizing into a fresh object every pass would make
-    // every commit look like a template change and loop the sync in
-    // `GenerateWidgetView`.
+    // Preserve canonical object identity to avoid false Object.is changes and reconciliation loops.
     promptTemplate,
     promptTemplateViewMode: promptTemplate !== null && values.promptTemplateViewMode === true,
     referenceImages: normalizeReferenceImages(values.referenceImages),
@@ -837,12 +791,7 @@ export const normalizeGenerateWidgetValues = (values: unknown): GenerateWidgetVa
   return { ...settings, model: values.model };
 };
 
-/**
- * Canonical means normalize is the identity: every key it would write already
- * holds that value. Defined that way rather than as a key list so a field
- * normalize learns to invent (a seed mode from the old random toggle, PiD
- * defaults) can never pass the guard unhealed and be reused as-is.
- */
+/** Canonical values normalize to the same identity so newly defaulted fields cannot bypass migration. */
 export const isGenerateSettings = (values: unknown): values is GenerateSettings => {
   const normalized = normalizeGenerateSettings(values);
 

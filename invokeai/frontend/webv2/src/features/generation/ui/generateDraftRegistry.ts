@@ -1,8 +1,4 @@
-/**
- * @deprecated Import the source-agnostic Platform registry from
- * `@platform/react/draftRegistry`. This wrapper only preserves Generation's
- * established public names while callers migrate.
- */
+/** @deprecated Import the source-agnostic registry from @platform/react/draftRegistry. */
 export {
   flushWorkbenchDrafts as flushGenerateDrafts,
   useRegisterDraftFlusher as useRegisterGenerateDraftFlusher,

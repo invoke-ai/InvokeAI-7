@@ -62,8 +62,7 @@ describe('generationDevicesStore', () => {
   });
 
   it('PATCHes the runtime config and adopts the value the server echoes back', async () => {
-    // Shape verified against a live server: the config is nested under `config`,
-    // not returned at the top level.
+    // Runtime config is nested under config, not returned at top level.
     mocks.apiFetchJson.mockResolvedValue({
       config: { generation_devices: ['cuda:0', 'cuda:1'] },
       set_fields: ['generation_devices'],

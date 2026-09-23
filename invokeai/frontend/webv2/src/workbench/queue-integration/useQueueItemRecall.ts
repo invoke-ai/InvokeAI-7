@@ -22,12 +22,8 @@ import { useLocalRecallSnapshot } from './useLocalRecallSnapshot';
 const selectGenerateRecallValues = createGenerateFormValuesSelector();
 
 /**
- * Recall for a queue item by origin, shared by every surface that offers it
- * (the Recent details panel, staged canvas results). Items this client
- * submitted recall from the exact submission snapshot; foreign items still
- * offer prompts + the executed seed from `meta`. Recalls write to the ACTIVE
- * project — "recall" means "load this into the panel I am looking at" — and
- * reveal the panel they wrote to.
+ * Recall local submission snapshots or foreign session prompts/seed into the active project, then reveal the
+ * destination panel.
  */
 export const useQueueItemRecall = (
   origin: string | null | undefined,
@@ -68,9 +64,7 @@ export const useQueueItemRecall = (
       const plan = planQueueRecall(kind, { current, isVideoItem, meta, snapshot: localGenerateValues, videoSnapshot });
 
       if (!plan) {
-        // The Generate copy names a missing Generate model, which is not why a video recall
-        // would come back empty -- nor why a fresh project cannot be initialised without the
-        // capability table.
+        // Use a generic unavailable reason: Video and missing capabilities are not missing Generate models.
         const reason = isVideoItem
           ? 'widgets.queue.recallUnavailableForItem'
           : !current && !hasArchitectureCapabilities()

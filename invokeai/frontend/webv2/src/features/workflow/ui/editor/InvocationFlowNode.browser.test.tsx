@@ -305,9 +305,8 @@ describe('InvocationFlowNode edge stacking', () => {
   };
 
   it('keeps a selected node clickable where its own edge crosses it, while the edge stays above other nodes', async () => {
-    // The target sits behind and above the source, so the edge leaves the source's right handle and
-    // sweeps back across the source's own body and over an unrelated node on the way. Everything stays
-    // inside the test viewport.
+    // Route the edge back across its source and another node to test overlapping interaction paths within the
+    // viewport.
     const target: WorkflowInvocationNode = { ...documentNode, id: 'target-node', position: { x: 0, y: 0 } };
     const bystander: WorkflowInvocationNode = { ...documentNode, id: 'bystander-node', position: { x: 20, y: 120 } };
     const graph: ProjectGraphState = {

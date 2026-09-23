@@ -28,14 +28,7 @@ const REJECTION_KEY: Record<WildcardImportRejection, string> = {
   valueTooLong: 'widgets.generate.dynamicPrompts.importRejectedValueTooLong',
 };
 
-/**
- * What an import is about to do, one clashing name at a time.
- *
- * Import is the one action here that can overwrite a hand-typed list, so nothing
- * is decided on the user's behalf: every clash defaults to being left alone, and
- * anything the backend would refuse is listed with its reason rather than
- * dropped behind a count that says everything worked.
- */
+/** Default conflicts to skip and show explicit rejection reasons. */
 export const WildcardImportDialog = ({
   entries,
   onCancel,
@@ -47,10 +40,7 @@ export const WildcardImportDialog = ({
 }) => {
   const { t } = useTranslation();
   const [resolutions, setResolutions] = useState<Record<string, WildcardImportResolution>>({});
-  // The set-all row is a control in its own right, so it has to hold what it was
-  // last set to. Rendered without a value it read as nothing selected however
-  // often it was used, which invited a second click — and that reapplied the
-  // choice over every per-row override made in between.
+  // Control set-all state so it cannot accidentally overwrite later per-row choices.
   const [allResolution, setAllResolution] = useState<WildcardImportResolution | null>(null);
 
   const conflicts = useMemo(
@@ -82,8 +72,7 @@ export const WildcardImportDialog = ({
 
   const handleConfirm = useCallback(() => onConfirm(resolutions), [onConfirm, resolutions]);
 
-  // `ConfirmDialog` takes its body as a node. This one is rebuilt on every
-  // resolution change regardless, so memoizing it would save nothing.
+  // The body changes on every resolution edit.
   // oxlint-disable-next-line react-perf/jsx-no-jsx-as-prop
   const body = (
     <Stack gap="3">
@@ -121,9 +110,7 @@ export const WildcardImportDialog = ({
           <Text fontSize="xs" fontWeight="600">
             {t('widgets.generate.dynamicPrompts.importCannotImport')}
           </Text>
-          {/* Bounded like the conflicts above it. Pointed at a folder where most
-              files are unusable, this list grew past the viewport and pushed the
-              dialog's own buttons out of reach. */}
+          {/* Bound rejected-file lists so dialog actions remain reachable. */}
           <Scrollable maxH="8rem" label={t('widgets.generate.dynamicPrompts.importCannotImport')}>
             <Stack gap="1" pr="1">
               {rejected.map((entry, index) => (

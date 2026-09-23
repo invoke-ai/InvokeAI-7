@@ -2,18 +2,7 @@ import { afterEach, expect, it } from 'vitest';
 
 import { auditAccessibility } from './auditAccessibility.testing';
 
-/**
- * The reason the helper exists, reproduced in miniature.
- *
- * A panel whose colours pass contrast comfortably at rest fails the audit while it is fading
- * in, because the audit composites its text over whatever is behind it. This is what took down
- * `MissingFontsDialog` whenever the suite grew a file: nothing about the palette was wrong, the
- * audit simply ran a few frames early.
- *
- * The fade here is slow enough that the un-settled audit lands inside it with a margin of
- * three orders of magnitude over the assertion that follows, so the "before" case is not itself
- * a race.
- */
+/** Use a deliberately slow fade to reproduce a failing mid-animation contrast audit and a passing settled audit. */
 
 const FADE_MS = 800;
 

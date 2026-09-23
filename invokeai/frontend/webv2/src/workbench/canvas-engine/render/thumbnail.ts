@@ -13,10 +13,8 @@ export interface ThumbnailSize {
 export type LayerThumbnailFallbackStage = 'thumbnail' | 'full' | 'failed';
 
 /**
- * Scales a `srcW`x`srcH` surface to fit inside a `maxSize`x`maxSize` box,
- * preserving aspect ratio and never upscaling (scale is clamped to ≤ 1). Both
- * returned dimensions are at least 1px. Returns a zero size for a degenerate
- * (non-positive) source.
+ * Aspect-preserving fit without upscaling; positive sources return at least 1px dimensions, degenerate sources
+ * return zero size.
  */
 export const fitThumbnailSize = (srcW: number, srcH: number, maxSize: number): ThumbnailSize => {
   if (srcW <= 0 || srcH <= 0 || maxSize <= 0) {
@@ -29,12 +27,7 @@ export const fitThumbnailSize = (srcW: number, srcH: number, maxSize: number): T
   };
 };
 
-/**
- * Resolves the persisted image that can stand in for a layer while its engine
- * cache is unavailable. Image and paint sources are handled uniformly through
- * `renderableSourceOf`, including the synthetic paint source exposed by masks.
- * Empty paint/mask and parametric sources have no persisted image fallback.
- */
+/** Persisted image fallback for image/paint and synthetic mask sources. Empty or parametric sources have none. */
 export const resolveLayerThumbnailImageRef = (layer: CanvasLayerContract): CanvasImageRef | null => {
   try {
     const source = renderableSourceOf(layer);

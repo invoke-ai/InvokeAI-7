@@ -1,35 +1,10 @@
 /**
- * The text tool: click to CREATE editable-forever text, or click an existing
- * text layer to re-edit it.
+ * Text clicks edit the topmost eligible hit layer or open creation at the point. Measured cache bounds fall back
+ * to estimates, with inverse-transform hit testing.
  *
- * Interaction contract (CANVAS_PLAN Phase 6.2):
- * - **Click on empty area** → open a CREATE-mode text-editing session at that
- *   document point (style seeded from the text options bar). Nothing is added to
- *   the document until the session commits (a single `addCanvasLayer`).
- * - **Click on an existing text layer** (top-most, enabled, unlocked) → open an
- *   EDIT-mode session on it. Hit-testing inverts the layer transform and checks
- *   the point against the layer's rendered text-block rect (cache size, or the
- *   pure estimate before a cache exists). Locked/hidden text layers are skipped.
- * - **Click while a session is open** → the pointer pipeline commits the open
- *   session engine-side (`maybeCommitModalSession` → `commitOpenTextSession`,
- *   reading the live portal content) and swallows the press BEFORE it reaches
- *   this tool, so `onPointerDown` below is never invoked for that press. A
- *   subsequent click then places/edits. The `textEditSession` guard here is a
- *   defensive backstop for a harness that routes the press through anyway.
- * - **Commit** is engine-side on a canvas pointerdown (above); the portal's blur
- *   (focus lost to non-canvas UI) and `mod+enter` also commit. The live typed
- *   text is read from the portal only at commit time (no per-keystroke traffic).
- * - **Escape** is handled by the focused contenteditable (cancels the session);
- *   a defocused-but-open session is cancelled by the engine's Escape chain
- *   (`handleEscape`: text → transform → deselect), not routed to this tool.
- * - A **real** tool switch cancels the session (`onDeactivate`); a **temporary**
- *   modifier-hold switch (space→view / alt→colorPicker) preserves it, mirroring
- *   the transform tool.
- *
- * Text layers are not hit-testable by the move/transform tools (like shapes and
- * gradients), so this tool owns its own text hit-test.
- *
- * Zero React, zero import-time side effects.
+ * An open session consumes the next canvas press after committing live portal content; blur and Mod+Enter also
+ * commit. Escape cancels through the portal or engine ladder. Temporary switches preserve sessions; real switches
+ * cancel. Creation adds no layer until its single commit.
  */
 
 import type {
@@ -58,11 +33,7 @@ type TextLayer = Extract<CanvasLayerContract, { type: 'raster' }> & { source: Te
 const isTextLayer = (layer: CanvasLayerContract): layer is TextLayer =>
   layer.type === 'raster' && layer.source.type === 'text';
 
-/**
- * The rendered text-block size for hit-testing: the live cache surface size when
- * one exists (the precise, measured extent), else the pure estimate (before the
- * layer has been rasterized once).
- */
+/** Hit-test measured cache bounds when available, otherwise estimate before first rasterization. */
 const textLayerSize = (layer: TextLayer, ctx: ToolContext): { width: number; height: number } => {
   const cache = ctx.layers.get(layer.id);
   if (cache) {
@@ -97,19 +68,15 @@ export const createTextTool = (): Tool => ({
   id: 'text',
   onDeactivate: (ctx, opts) => {
     if (opts?.temporary) {
-      // A modifier-hold switch (space/alt) preserves the open session for
-      // `onActivate` to resume when the hold ends — like the transform tool.
+      // Preserve text sessions across modifier holds for later reactivation.
       return;
     }
-    // A real tool switch cancels the session (in practice the contenteditable's
-    // blur has already committed by now; this is the safety teardown).
+    // Real switches cancel remaining sessions after any portal-blur commit.
     ctx.cancelTextEdit?.();
   },
   onKeyCommand: (ctx, command) => {
-    // Defensive backstop: the pipeline does not route 'cancel' to tools (the
-    // engine's `handleEscape` chain owns text/transform/deselect), so this only
-    // fires if a harness routes it directly. Cancel drops a defocused session;
-    // apply is a no-op here (only the portal holds the live content to commit).
+    // Direct harness cancellation is a backstop; production Escape uses the engine ladder. Apply needs portal
+    // content and does nothing here.
     if (command === 'cancel') {
       ctx.cancelTextEdit?.();
     }
@@ -118,9 +85,7 @@ export const createTextTool = (): Tool => ({
     if ((input.buttons & PRIMARY_BUTTON) === 0) {
       return;
     }
-    // Backstop: when a session is open the pipeline commits+swallows the press
-    // before it reaches this tool, so this branch is normally unreached. Guard
-    // anyway so a harness that routes the press through never opens a 2nd session.
+    // Defensively reject a second session if a harness bypasses the pipeline's commit-and-consume hook.
     if (ctx.stores.textEditSession.get()) {
       return;
     }

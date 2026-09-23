@@ -4,11 +4,7 @@ import type { AxisRanges } from './imageMapViewport';
 
 import { attachWheelZoom } from './attachWheelZoom';
 
-/**
- * The gesture bookkeeping needs real pointer and touch events, so this runs in
- * the browser suite; the range arithmetic it drives is unit-tested against
- * `imageMapViewport` directly.
- */
+/** Browser events verify gesture bookkeeping; unit tests cover viewport arithmetic. */
 
 let detach: (() => void) | null = null;
 let host: HTMLElement | null = null;

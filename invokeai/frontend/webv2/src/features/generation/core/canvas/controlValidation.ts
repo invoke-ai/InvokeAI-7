@@ -16,13 +16,7 @@ export type ControlValidationReason =
   | 'z_image_control_limit'
   | 'flux_fill_control_lora';
 
-/**
- * Which control adapters an architecture accepts, as the backend declares it.
- *
- * Only the base-to-kinds mapping comes from there. The limit rules further down -- one control
- * LoRA, one Z-Image control, and FLUX Fill rejecting control LoRAs entirely -- have no column in
- * the capability table and stay here.
- */
+/** The backend owns kind support; count and Fill constraints are frontend policy. */
 export const isControlKindSupportedForBase = (base: string, kind: ControlAdapterKind): boolean =>
   getArchitectureFeatures(base)?.control_kinds.includes(kind) ?? false;
 
@@ -52,8 +46,7 @@ export const getControlValidationReason = (params: {
   if (!adapterModel) {
     return 'missing_model';
   }
-  // Without the table every kind reads as unsupported. Report that the answer is not in yet rather
-  // than calling a valid adapter unsupported.
+  // Unavailable capability data is distinct from unsupported adapters.
   if (!hasArchitectureCapabilities()) {
     return 'capabilities_unavailable';
   }

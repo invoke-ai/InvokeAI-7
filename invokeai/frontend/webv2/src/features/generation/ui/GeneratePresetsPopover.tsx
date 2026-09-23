@@ -40,12 +40,7 @@ const SEARCH_VISIBLE_MIN_PRESETS = 6;
 
 type PresetDialogState = { mode: 'save' } | { mode: 'rename'; preset: GeneratePresetRecord };
 
-/**
- * "These settings are still this preset" must ignore what applying a preset
- * does not write (`getGenerateFormCommitPatch` drops `batchCount`) and what is
- * presentation or volatile: prompt-box heights, the template view mode, and
- * the seed unless it is held fixed — random draws it, stepping moves it.
- */
+/** Ignore presentation and non-applied keys, including seed unless its mode is fixed. */
 const getPresetComparisonKey = (settings: GenerateSettings): string => {
   const comparable: Record<string, unknown> = { ...settings };
 
@@ -98,8 +93,7 @@ const PresetRow = ({
           <Text flex="1" fontSize="xs" fontWeight={isActive ? '600' : undefined} minW="0" textAlign="start" truncate>
             {preset.label}
           </Text>
-          {/* The applied marker: a check, not a filled row — the popover
-              surface stays quiet and the accent stays an accent. */}
+
           {isActive ? <Icon as={CheckIcon} boxSize="3.5" color="accent.fg" flexShrink={0} /> : null}
         </button>
       </Row>
@@ -128,11 +122,7 @@ const PresetRow = ({
   );
 };
 
-/**
- * The preset library, treated like the wildcards panel: a searchable managed
- * list rather than a bare menu. Applying reconciles the snapshot against the
- * current model catalog through the widget's own resolve + patch path.
- */
+/** Catalog changes use the same resolve/patch path as model selection. */
 export const GeneratePresetsPopover = () => {
   const { i18n, t } = useTranslation();
   const ui = useGenerationUi();
@@ -140,8 +130,7 @@ export const GeneratePresetsPopover = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [dialog, setDialog] = useState<PresetDialogState | null>(null);
   const [pendingDelete, setPendingDelete] = useState<GeneratePresetRecord | null>(null);
-  // The Tooltip and the Popover share the trigger element, and each machine
-  // wants to own its id; sharing one keeps the popover anchored.
+  // Tooltip and Popover must share the trigger ID to preserve anchoring.
   const triggerId = useId();
   const triggerIds = useMemo(() => ({ trigger: triggerId }), [triggerId]);
 
@@ -158,8 +147,7 @@ export const GeneratePresetsPopover = () => {
     return term ? presets.filter((preset) => preset.label.toLowerCase().includes(term)) : presets;
   }, [presets, searchTerm]);
 
-  // Normalization builds its object in one code path, so serialized equality
-  // of the comparison keys is a faithful match test.
+  // Serialized equality requires canonical key order.
   const presetKeys = useMemo(
     () =>
       presets.map((preset) => {
@@ -208,9 +196,6 @@ export const GeneratePresetsPopover = () => {
         return;
       }
 
-      // Reconcile against the current catalog (models installed or removed
-      // since the preset was saved), then commit through the same resolve +
-      // patch path the widget's own model selection takes.
       const result = getGenerateModelSelectionResult({ currentValues: normalized, model, models });
       const resolved = resolveGenerateWidgetValues({ models, storedValues: { ...result.settings, model } });
 
@@ -278,8 +263,6 @@ export const GeneratePresetsPopover = () => {
       >
         <Tooltip content={triggerLabel} ids={triggerIds}>
           <Popover.Trigger asChild>
-            {/* The applied preset's name rides beside the icon while the
-                current settings still match it, like the dynamic-prompts count. */}
             <IconButton
               aria-label={triggerLabel}
               color="fg.muted"

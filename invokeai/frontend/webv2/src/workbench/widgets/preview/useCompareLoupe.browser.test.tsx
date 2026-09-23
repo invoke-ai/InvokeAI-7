@@ -127,8 +127,6 @@ describe('useCompareLoupe', () => {
       touch('pointerdown', 1, 50, { isPrimary: true });
       touch('pointerdown', 2, 150);
     });
-    // The fingers double their 100px spread around the pane's centre, and the
-    // pane that was not touched follows — one transform drives both eyes.
     await interact(() => {
       touch('pointermove', 1, 0);
       touch('pointermove', 2, 200);
@@ -177,8 +175,7 @@ describe('useCompareLoupe', () => {
     expect(images[0]?.style.transform).toBe('translate(-200px, -150px) scale(3)');
 
     await interact(() => touch('pointerup', 2, 250));
-    // The remaining finger pans both panes from where it is, then lifts over
-    // another part of the page — which the pane itself never sees.
+    // Track the remaining finger through pan and release outside both panes.
     await interact(() => touch('pointermove', 1, -30));
     expect(images[0]?.style.transform).toBe('translate(-180px, -150px) scale(3)');
 

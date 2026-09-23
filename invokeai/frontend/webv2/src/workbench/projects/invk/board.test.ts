@@ -3,11 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { buildInvkBoardSnapshot, parseInvkBoardSnapshot } from './board';
 import { InvkFormatError } from './format';
 
-/**
- * `board.json` is the only part of an archive that tells the reader what the project *had*, as
- * opposed to what it draws with. A reader that half-trusted it would restore the wrong thing
- * quietly, so everything here is a structural refusal rather than a warning.
- */
+/** Malformed board enumeration must fail before restore creates resources. */
 
 const item = (overrides: Partial<Parameters<typeof buildInvkBoardSnapshot>[0][number]> = {}) => ({
   category: 'general' as const,

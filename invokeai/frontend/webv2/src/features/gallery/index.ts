@@ -252,10 +252,6 @@ export const galleryDestinations = {
   list: listGalleryBoards,
 } as const;
 
-/**
- * Whether a board id can actually receive item attachments. Virtual destinations
- * (date buckets, `generated`/`assets`) and `none` cannot: the organization
- * transports no-op for them rather than calling the backend.
- */
+/** Virtual boards and none cannot receive attachments; organization transports no-op for these destinations. */
 export const isGalleryBoardAttachable = (boardId: string): boolean =>
   boardId !== 'none' && !isInvalidGalleryBoardDestination(boardId);

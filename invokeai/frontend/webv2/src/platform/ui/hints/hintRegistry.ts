@@ -5,11 +5,7 @@ type HintPlacement = NonNullable<NonNullable<HoverCard.RootProps['positioning']>
 interface HintDefinition {
   /** Support article opened by the card's "Learn more" link. */
   href?: string;
-  /**
-   * Overrides {@link DEFAULT_HINT_PLACEMENT}. Nothing needs it today — the
-   * popper flips on its own when a panel is docked against the far edge — but
-   * a control whose card would cover its own value can pin itself here.
-   */
+  /** Override DEFAULT_HINT_PLACEMENT when the card would cover its own control. */
   placement?: HintPlacement;
 }
 
@@ -19,11 +15,7 @@ export const DEFAULT_HINT_PLACEMENT: HintPlacement = 'right';
 const SUPPORT_ADVANCED_SETTINGS = 'https://support.invoke.ai/support/solutions/articles/151000178161-advanced-settings';
 const SUPPORT_CONCEPTS = 'https://support.invoke.ai/support/solutions/articles/151000159072';
 
-/**
- * Every hint the workbench can attach to a control. Prose lives in the `hints.*`
- * i18n namespace — this table carries only what a translator should not own.
- * `hintRegistry.test.ts` proves the two stay in step in both directions.
- */
+/** Keep prose in hints.* and non-translatable metadata here; tests enforce registry/catalog parity. */
 export const FEATURE_HINTS = {
   aspectRatio: {},
   cfgRescale: { href: SUPPORT_ADVANCED_SETTINGS },

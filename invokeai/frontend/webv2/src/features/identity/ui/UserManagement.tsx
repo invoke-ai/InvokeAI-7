@@ -14,12 +14,7 @@ const ROW_HOVER_STYLES = { bg: 'bg.muted' };
 const SWITCH_CHECKED_STYLES = { bg: 'accent.solid' };
 const DELETE_BUTTON_HOVER_STYLES = { color: 'fg.error' };
 
-/**
- * Admin-only center view: the workspace user directory with create, edit,
- * activate/deactivate, and delete. The widget is already hidden for
- * non-admins via `requiresAdmin`; the inline guard covers stale persisted
- * layouts that still point at it.
- */
+/** Guard admin access inline as well as in the widget manifest to cover stale persisted layouts. */
 export const UserManagement = () => {
   const { t } = useTranslation();
 

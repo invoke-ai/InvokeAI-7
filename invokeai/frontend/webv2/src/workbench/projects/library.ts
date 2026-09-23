@@ -34,17 +34,7 @@ import { assertProjectFlushed } from './projectFlush';
 import { pruneSessionProject } from './session';
 import { getOpenProject } from './syncStore';
 
-/**
- * The project library: every project saved on the server for the current
- * user, as lightweight summaries (no documents). The Home screen, the Open
- * Project dialog, and the editor's save pass all read and patch this one
- * store, so "what projects exist" has a single answer everywhere.
- *
- * The library is intentionally separate from the workbench session: open tabs
- * hold hydrated documents in workbench state, while the library only knows
- * metadata. Deleting through the library is the only way a project leaves the
- * server — closing a tab never does.
- */
+/** User-scoped library summaries are separate from hydrated tabs; closing a tab must not delete its server record. */
 
 export interface ProjectSummary {
   id: string;
@@ -53,12 +43,7 @@ export interface ProjectSummary {
   minimumCanvasSchemaVersion: number;
   createdAt: string;
   updatedAt: string;
-  /**
-   * Thumbnail for the library grid, resolved from the per-user cover index
-   * (`covers.ts`) rather than from the project document, which listings do not
-   * carry. Absent for a project that has produced no images, and for one last
-   * saved by a build that did not record covers.
-   */
+  /** The cover index is independent of document-free listings; absent entries yield no cover. */
   coverUrl?: string;
 }
 
@@ -96,12 +81,7 @@ const toSummary = (dto: ProjectSummaryDTO): ProjectSummary =>
     updatedAt: normalizeServerTimestamp(dto.updated_at),
   });
 
-/**
- * The cover index loads and updates independently of the listing, so summaries
- * are re-derived whenever it changes. Without this a cover recorded after the
- * library rendered — the first generation in a new project — would not appear
- * until the next refresh.
- */
+/** Recompute summaries when the independent cover index changes. */
 subscribeProjectCovers(() => {
   const { status, summaries } = store.getSnapshot();
 
@@ -148,9 +128,7 @@ export const refreshProjectLibrary = (): Promise<void> =>
     const owner = captureAccountScope();
 
     return refreshFlight.run(`project-library:${owner.epoch}`, () =>
-      // Covers resolve alongside the listing rather than after it: they come
-      // from a different store, and seeding without them would show a grid of
-      // glyphs that fills in a moment later.
+      // Fetch covers and listings concurrently to avoid a temporary glyph-only grid.
       Promise.all([listProjects(owner.signal), loadProjectCovers()])
         .then(([dtos]) => {
           seedProjectLibrary(dtos, owner);
@@ -168,11 +146,7 @@ export const refreshProjectLibrary = (): Promise<void> =>
     );
   })();
 
-/**
- * Reflect a save the editor just pushed, so the library stays current without
- * a refetch. `updatedAt` is stamped locally; the next refresh replaces it
- * with the server's value.
- */
+/** Refresh replaces optimistic local updatedAt with server time. */
 export const upsertProjectSummary = (
   entry: { id: string; minimumCanvasSchemaVersion?: number; name: string; revision: number | null },
   owner: AccountScope
@@ -246,8 +220,7 @@ export const deleteLibraryProject = async (projectId: string): Promise<void> => 
     forgetProjectCover(projectId, owner);
     store.patchSnapshot({ summaries: store.getSnapshot().summaries.filter((summary) => summary.id !== projectId) });
 
-    // The saved session outlives the editor, so a deleted project has to leave it here or the next
-    // boot tries to open something the server no longer has.
+    // Remove deleted projects from durable session state so missing records do not reopen.
     await pruneSessionProject(projectId, owner.signal);
     await refreshOpenProjects();
   } finally {
@@ -290,12 +263,7 @@ export const renameLibraryProject = async (projectId: string, name: string): Pro
   upsertProjectSummary({ id: updated.project_id, name: updated.name, revision: updated.revision }, owner);
 };
 
-/**
- * The server record for a project about to be copied or exported, flushed first when the editor
- * holds it, and fatal if that flush does not land. The GET returns the last *acknowledged*
- * document, so without this an unacknowledged push is indistinguishable from a successful one and
- * the copy silently omits the last ten minutes of work under a success toast.
- */
+/** Export/copy requires an acknowledged flush before reading server bytes. */
 export const readAcknowledgedProject = async (projectId: string, owner: AccountScope): Promise<ProjectRecordDTO> => {
   const openProject = getOpenProject(projectId);
 
@@ -330,9 +298,8 @@ export interface DuplicatedProject extends ProjectTransferIssues {
 }
 
 /**
- * Copy a project, its board and everything on it, under a fresh id. Enumerating the board is fatal:
- * a board that came back silently empty would look like a successful copy of a project that had
- * produced nothing. The copying shares import's restore engine behind the lazy `invk/` boundary.
+ * Duplicate with a fresh identity and whole-board copy. Enumeration failure is fatal; restoration stays lazy and
+ * shared.
  */
 export const duplicateLibraryProject = async (
   projectId: string,

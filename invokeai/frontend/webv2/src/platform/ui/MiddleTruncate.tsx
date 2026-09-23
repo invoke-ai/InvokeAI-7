@@ -5,13 +5,7 @@ const GRAPHEME_SEGMENTER = new Intl.Segmenter(undefined, { granularity: 'graphem
 
 const DEFAULT_TAIL_GRAPHEMES = 8;
 
-/**
- * Splits text so the last `tailGraphemes` graphemes can be pinned while the
- * rest ellipsizes. Splitting on graphemes rather than code units keeps
- * surrogate pairs and emoji sequences intact at the boundary. Text at or
- * under the tail length goes entirely into the head, which degrades to plain
- * end truncation instead of an unshrinkable tail wider than its container.
- */
+/** Split by grapheme to preserve emoji; short strings stay entirely in the head to avoid an unshrinkable tail. */
 export const splitTextForMiddleTruncation = (text: string, tailGraphemes: number): { head: string; tail: string } => {
   if (tailGraphemes <= 0) {
     return { head: text, tail: '' };
@@ -44,18 +38,8 @@ export interface MiddleTruncateProps extends Omit<TextProps, 'children'> {
 }
 
 /**
- * Single-line text that truncates in the middle, macOS-style, so both the
- * start and the end stay readable — for names and identifiers whose
- * distinguishing part is often the suffix (file extensions, numbered copies,
- * ids). Prose and static labels should keep ordinary end truncation.
- *
- * Pure CSS: the head is a shrinkable flex item with its own ellipsis and the
- * tail never shrinks, so the split tracks container resizes without any
- * measurement. When the text fits, head and tail render seamlessly. The spans
- * use `white-space: pre` because each flex item is its own block: `nowrap`
- * would strip a space that lands at the split point, visually fusing the two
- * halves. The full text stays in the DOM, so selection, copy, and screen
- * readers all see the real string.
+ * For identifiers whose suffix matters. Keep white-space: pre so flex boundaries retain spaces; preserve full DOM
+ * text for copy and accessibility.
  */
 export const MiddleTruncate = ({ tailGraphemes = DEFAULT_TAIL_GRAPHEMES, text, ...textProps }: MiddleTruncateProps) => {
   const { head, tail } = useMemo(() => splitTextForMiddleTruncation(text, tailGraphemes), [tailGraphemes, text]);

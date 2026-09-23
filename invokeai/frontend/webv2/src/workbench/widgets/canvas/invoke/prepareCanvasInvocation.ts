@@ -1,33 +1,7 @@
 /**
- * Wires the canvas-generation pipeline into the Invoke button.
- *
- * `prepareCanvasInvocation` is the thin command-layer entry: it resolves the
- * active project's engine and delegates to the React-free
- * {@link runCanvasInvocation} orchestrator. The orchestrator runs the whole
- * flush → compose → compile → enqueue flow with every side-effecting dependency
- * injected, so it is fully node-testable with fakes.
- *
- * ## Flow (per the plan)
- * 1. Resolve the engine (no engine → notice, abort) and normalize/sync the
- *    generate values exactly as the generate path does.
- * 2. `flushPendingUploads()` — the paint-bitmap persistence barrier — so the
- *    composite reads the latest painted pixels. The composite operation
- *    captures its document snapshot internally, AFTER this barrier, so it
- *    plans from the post-flush document (fresh bitmap refs, fresh bbox).
- * 3. `composeForGeneration` — Canvas's one deep composite call — produces
- *    every uploaded image (base / masks / controls / regionals) plus the
- *    resolved mode. This module supplies the policy: `detectCanvasMode` as the
- *    mode strategy, control validation as a throwing predicate (an invalid
- *    enabled nonempty control layer blocks the invoke), and regional-guidance
- *    rejection as a silent-skip predicate.
- * 4. Compile the base-appropriate graph and dispatch it to canvas staging.
- * 5. Publish the operation-local dedupe cache only after dispatch returns.
- * 6. Any failure (validation throw, upload error, unsupported mode) records a
- *    notice — the app never gets stuck.
- *
- * A module-scoped in-flight guard drops an invoke while a prior prepare for the
- * same project is still running. The active Ctrl+Enter/topbar path also holds a
- * shallower user-facing guard from the instant the command begins.
+ * Resolve the active engine, flush paint uploads, compose the fresh snapshot, compile, and enqueue. Invalid
+ * controls block; rejected regions skip. Publish dedupe only after dispatch succeeds and report failures as
+ * notices. A per-project in-flight guard prevents overlapping preparation.
  */
 
 import type { CanvasScalingSettings, GenerateModelConfig } from '@features/generation/contracts';
@@ -96,10 +70,7 @@ export interface RunCanvasInvocationDeps {
    * snapshot's destination, so a Canvas source can target the Gallery.
    */
   destination: ResultDestination;
-  /**
-   * Canvas's composite-generation operation: snapshot → plan → capture →
-   * composite → upload, releasing pixel resources on both success and failure.
-   */
+  /** Capture and upload generation composites, releasing pixel resources on success or failure. */
   composeForGeneration: (options: ComposeForGenerationOptions) => Promise<ComposeForGenerationResult>;
   /** Expanded positive prompts, resolved by the caller before submitting. */
   positivePrompts?: string[];
@@ -139,13 +110,8 @@ const recordNotice = (
 };
 
 /**
- * Control-layer policy + metadata side-channel for the composite operation.
- * `shouldComposite` validates each enabled content-bearing control layer in
- * z-order and resolves its adapter model from the loaded models: an invalid
- * layer throws a shared reason code and blocks the invocation (content-less
- * control layers are already excluded by the operation's plan and remain
- * harmless). `toGraphInputs` joins the composited image names back with the
- * recorded adapter/model metadata.
+ * Validate enabled content-bearing controls in z-order and resolve adapters; invalid controls throw and block
+ * invocation. Join uploaded names with captured model metadata for graph inputs.
  */
 const createControlLayerCollector = (
   model: GenerateModelConfig,
@@ -269,12 +235,8 @@ export const resolveRegionalReferenceImages = (
 };
 
 /**
- * Regional-guidance policy + metadata side-channel for the composite operation.
- * `shouldComposite` resolves each region's reference images and rejects regions
- * that cannot contribute for the base (no regional support, or nothing the
- * base's support matrix honours) with a SILENT skip, mirroring legacy.
- * `toGraphInputs` joins the composited mask image names back with the recorded
- * prompt/reference metadata.
+ * Resolve regional references and silently skip unsupported/noncontributing regions. Join uploaded masks with
+ * captured prompt/reference metadata for graph inputs.
  */
 const createRegionalGuidanceCollector = (
   model: GenerateModelConfig
@@ -324,8 +286,7 @@ export const runCanvasInvocation = async (deps: RunCanvasInvocationDeps): Promis
   const { commands, inFlight, projectId } = deps;
   const inFlightKey = deps.inFlightKey ?? projectId;
 
-  // Concurrency guard: ignore a re-invoke while a prior prepare for this project
-  // is still settling (the hotkey can be mashed). Cleared in `finally`.
+  // Ignore overlapping preparation for the same project; finally clears the guard.
   if (inFlight.has(inFlightKey)) {
     return;
   }
@@ -338,18 +299,12 @@ export const runCanvasInvocation = async (deps: RunCanvasInvocationDeps): Promis
       return;
     }
 
-    // Resolve model + settings exactly as the generate path does (sync to loaded
-    // models, then resolve the seed) so canvas and generate stay in lockstep.
+    // Sync loaded models and resolve seeds identically to the Generate path.
     const synced = deps.models ? syncGenerateWidgetValuesWithModels(values, deps.models) : values;
     const settings = { ...synced, seed: resolveGenerateSeed(synced) };
     const model: GenerateModelConfig = settings.model;
 
-    // Persist any pending paint bitmaps BEFORE compositing from their pixels.
-    // The composite operation captures its document snapshot internally — after
-    // this barrier — so it plans from the post-flush document: the flush
-    // dispatches `updateCanvasLayerSource` for each just-persisted paint layer,
-    // and a pre-flush snapshot would still reference `paint:empty`/stale bitmap
-    // names (silent dedupe cache misses) and a possibly-moved bbox.
+    // Flush persisted paint before capture so planning sees current bitmap references and bbox.
     await deps.flushPendingUploads();
 
     const controls = createControlLayerCollector(model, deps.models);
@@ -470,10 +425,8 @@ export interface PrepareCanvasInvocationArgs {
 }
 
 /**
- * Resolves the active project's engine and runs the canvas-invoke orchestrator.
- * The returned promise settles after the graph is dispatched or a failure is
- * reported, allowing the active command to keep its preparing acknowledgement
- * live for the complete pre-queue window. Other callers may still fire-and-track.
+ * Settle after dispatch or reported failure so the active command keeps its preparing acknowledgement through the
+ * entire pre-queue window.
  */
 export const prepareCanvasInvocation = async (args: PrepareCanvasInvocationArgs): Promise<void> => {
   const owner = args.owner ?? captureAccountScope();

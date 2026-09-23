@@ -7,12 +7,7 @@ export interface CanvasContextMenuTarget {
 interface ResolveCanvasContextMenuOptions {
   clientX: number;
   clientY: number;
-  /**
-   * The document's selected layer — the menu's target. The canvas deliberately
-   * does NOT hit-test the pixel under the pointer: the layers panel is the sole
-   * authority on which layer is active, so right-clicking a layer's pixels must
-   * not silently re-target the menu (or the selection) to it.
-   */
+  /** Target the selected layer without hit-testing right-click pixels; the layers panel owns selection. */
   selectedLayerId?: string | null;
   isInlineEditor: boolean;
   isInteractionLocked: boolean;

@@ -3,11 +3,7 @@ import { getDocumentNode } from '@workbench/canvas-engine/api';
 import { useActiveProjectSelector } from '@workbench/WorkbenchContext';
 import { useTranslation } from 'react-i18next';
 
-/**
- * Leaf tools and editors cannot act on a group: name the state instead of
- * silently refusing. Renders nothing unless a group really is selected, so
- * ungated callers stay honest for leaves and for no selection at all.
- */
+/** Explain group selection when leaf editors cannot act; render nothing for leaves or no selection. */
 export const GroupSelectedNotice = ({ hint }: { hint?: string }) => {
   const { t } = useTranslation();
   const isGroupSelected = useActiveProjectSelector((project) => {

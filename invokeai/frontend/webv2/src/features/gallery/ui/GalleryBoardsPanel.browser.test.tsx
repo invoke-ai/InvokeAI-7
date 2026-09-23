@@ -175,11 +175,7 @@ describe('GalleryBoardsPanel', () => {
     expect(text).toContain('GORL');
   });
 
-  /**
-   * The badge follows board ownership, not the open project: the server tells every board whose
-   * project it belongs to, and one that belongs to a project the user is not in is protected the
-   * same way. Only the *hoisting* is about the active project.
-   */
+  /** Badges and protection follow every board's owner; only hoisting depends on the active project. */
   it('marks every project-owned board with a Project badge', async () => {
     const ownedBoards = boards.map((board) => (board.id === 'cats' ? { ...board, projectId: 'p1' } : board));
 
@@ -288,8 +284,7 @@ describe('GalleryBoardsPanel', () => {
       await click(trigger!);
     };
 
-    // Each row stays a checkbox rather than closing the menu, so the three
-    // groups and the sort can be set in one visit.
+    // Checkbox actions keep the menu open for multiple visibility and sort changes.
     await openMenu();
 
     const row = (value: string) => document.querySelector<HTMLElement>(`[data-scope="menu"] [data-value="${value}"]`);
@@ -300,8 +295,6 @@ describe('GalleryBoardsPanel', () => {
     await click(row('archived-boards')!);
     expect(actions.updateSettings).toHaveBeenCalledWith({ showArchivedBoards: false });
 
-    // The fixture leaves other-project boards on the hidden-by-default setting,
-    // so the toggle turns them on.
     await click(row('other-project-boards')!);
     expect(actions.updateSettings).toHaveBeenCalledWith({ showOtherProjectBoards: true });
 

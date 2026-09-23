@@ -1,9 +1,6 @@
 /**
- * Frecency record of executed palette entries, persisted per browser (not per
- * project — muscle memory should not reset when switching projects). Reads
- * return ids ranked by use count decayed by recency; stored ids can go stale
- * (commands renamed, widgets closed), so readers filter them against the live
- * entry list at render time.
+ * Persist decayed-use rankings per browser across projects; filter stale ids against current entries when
+ * rendering.
  */
 
 import type { PaletteEntry } from './entries';

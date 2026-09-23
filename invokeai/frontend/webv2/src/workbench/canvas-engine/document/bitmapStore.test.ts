@@ -14,10 +14,8 @@ import { createBitmapStore, DEFAULT_FAILURE_BACKOFF_MS } from './bitmapStore';
 const LAYER = 'layer-1';
 
 /**
- * A manual, fully-controlled timer stub for the ambient-failure tests: jobs
- * queue up (recording their requested delay) and only run when explicitly
- * fired via `fireNext`, so a test can assert the exact reschedule delay at
- * each step without depending on fake-timer advancement matching it.
+ * Timers record delays and run only through `fireNext`, allowing exact ambient retry assertions without fake-clock
+ * advancement.
  */
 interface ManualTimers extends BitmapStoreTimers {
   /** Every delay ever passed to `setTimeout`, in call order. */
@@ -229,8 +227,6 @@ describe('createBitmapStore', () => {
   it('dispatches a same-hash re-flush when the offset changed (pure-translation persistence)', async () => {
     const h = createHarness({ offset: { x: 0, y: 0 } });
 
-    // First flush: paint pixels at the origin → uploads img-0, document now
-    // points at { imageName: 'img-0', offset: { x: 0, y: 0 } }.
     h.store.markLayerDirty(LAYER);
     await vi.advanceTimersByTimeAsync(1500);
     await h.store.flushPendingUploads();
@@ -268,8 +264,6 @@ describe('createBitmapStore', () => {
       source: { bitmap: { imageName: 'img-0' }, offset: { x: 40, y: 25 }, type: 'paint' },
       type: 'updateCanvasLayerSource',
     });
-    // The encoded blob covers only the content-sized surface (10×10 stub), so a
-    // reload rasterizes those pixels at the persisted offset.
     expect(h.encodeSurface).toHaveBeenCalledWith(expect.objectContaining({ height: 10, width: 10 }));
     h.store.dispose();
   });
@@ -297,8 +291,7 @@ describe('createBitmapStore', () => {
     await vi.advanceTimersByTimeAsync(1500);
     await store.flushPendingUploads();
 
-    // The engine-provided seam receives the ref + offset; the default paint-source
-    // dispatch is NOT used (the engine picks updateCanvasLayerConfig for masks).
+    // The engine receives ref and offset and chooses mask actions; default paint dispatch must remain unused.
     expect(dispatchBitmap).toHaveBeenCalledTimes(1);
     expect(dispatchBitmap).toHaveBeenCalledWith('mask1', expect.objectContaining({ imageName: 'mask-img' }), {
       x: 7,
@@ -487,8 +480,6 @@ describe('createBitmapStore', () => {
     await h.store.flushPendingUploads();
     expect(h.uploadImage).toHaveBeenCalledTimes(2);
 
-    // Undo restores state A's pixels in the cache; the engine re-marks the layer
-    // dirty. The re-flush re-hashes to img-0's content and reuses it — NO upload.
     h.setEncoded('pixels-A');
     h.store.markLayerDirty(LAYER);
     await vi.advanceTimersByTimeAsync(1500);
@@ -585,8 +576,7 @@ describe('createBitmapStore', () => {
       settled = true;
     });
 
-    // Encode/hash have run and the upload is in flight, but it hasn't resolved.
-    // Drain the encode→hash microtask chain (several awaits) without resolving.
+    // Drain encode/hash awaits while leaving the upload unresolved.
     for (let i = 0; i < 5; i += 1) {
       await Promise.resolve();
     }
@@ -752,14 +742,10 @@ describe('createBitmapStore', () => {
     expect(uploadImage).toHaveBeenCalledTimes(1);
     expect(settled).toBe(false);
 
-    // A fresh stroke lands mid-flight: new pixels re-dirty the layer while the
-    // stale upload is still pending.
     h.setEncoded('pixels-B');
     h.store.markLayerDirty(LAYER);
 
-    // The stale upload resolves. The barrier must NOT settle yet: the layer
-    // was re-dirtied by a newer stroke during the await, so it owes a follow-up
-    // flush of the newer pixels before the "latest painted pixels" guarantee holds.
+    // The barrier must flush the newer stroke before settling, despite completion of the stale upload.
     deferreds[0].resolve({ height: 10, imageName: 'img-old', width: 10 });
     await drainUntil(() => uploadImage.mock.calls.length >= 2);
     expect(uploadImage).toHaveBeenCalledTimes(2);
@@ -787,9 +773,7 @@ describe('createBitmapStore', () => {
       debounceMs: 1500,
       dispatch,
       encodeSurface: () => Promise.resolve(new Blob(['pixels'], { type: 'image/png' })),
-      // A fixed 1500ms ambient retry delay, unrelated to this test's subject
-      // (the barrier's own anti-spin): the growing-backoff schedule is covered
-      // by the dedicated 'ambient failure handling' tests below.
+      // Fix ambient retries at 1500ms to isolate barrier anti-spin; dedicated tests cover backoff.
       failureBackoffMs: [1500],
       getLayerSource: () => PAINT_SOURCE,
       getLayerSurface: () => ({ offset: { x: 0, y: 0 }, surface }),
@@ -804,16 +788,11 @@ describe('createBitmapStore', () => {
     store.markLayerDirty(LAYER);
     await expect(store.flushPendingUploads()).rejects.toThrow('Canvas pixel persistence failed');
 
-    // The internal retry cap (maxUploadAttempts) bounds a single flush's own
-    // attempts. The barrier must not loop back and re-attempt a layer whose
-    // flush already FAILED this call, so the total stays at that cap instead
-    // of growing with extra barrier iterations (no spin).
+    // A barrier must not retry a flush already failed in this call beyond `maxUploadAttempts`.
     expect(uploadImage).toHaveBeenCalledTimes(2);
     expect(dispatch).not.toHaveBeenCalled();
     expect(onError).toHaveBeenCalledTimes(1);
 
-    // The layer is still dirty (deferred, not dropped): a later ambient retry
-    // (at the fixed backoff configured above) fires it again.
     await vi.advanceTimersByTimeAsync(1500);
     expect(uploadImage.mock.calls.length).toBeGreaterThan(2);
 
@@ -859,14 +838,11 @@ describe('createBitmapStore', () => {
     const applied = h.dispatch.mock.calls[0][0] as Extract<CanvasProjectMutation, { type: 'updateCanvasLayerSource' }>;
     expect(h.store.isSelfEcho(LAYER, applied.source)).toBe(true);
 
-    // A wholesale document replacement drops the outgoing document's self-echo
-    // bookkeeping (a reused layer id must not inherit it).
+    // Wholesale replacement must discard self-echo state before layer ids are reused.
     h.store.reset();
     expect(h.store.isSelfEcho(LAYER, applied.source)).toBe(false);
 
-    // Re-persisting identical pixels now dispatches again: the content-hash
-    // dedupe reuses the already-uploaded image (no new upload), but the stale
-    // self-echo no longer suppresses the dispatch, so the contract converges.
+    // Hash dedupe reuses the upload, but cleared self-echo state permits the dispatch needed to converge.
     h.store.markLayerDirty(LAYER);
     await vi.advanceTimersByTimeAsync(1500);
     await h.store.flushPendingUploads();
@@ -1128,10 +1104,8 @@ describe('createBitmapStore', () => {
       const h = createHarness();
 
       h.store.markLayerDirty(LAYER);
-      // The layer converted back to a parametric source (e.g. rasterize → undo)
-      // before the debounce window elapsed — the cache surface still resolves
-      // (a source swap doesn't clear it), so only this guard prevents a stale
-      // paint dispatch.
+      // Source swaps preserve cache surfaces; the guard must stop delayed paint persistence from overwriting a
+      // restored parametric source.
       h.setSource({
         fill: '#ff0000',
         height: 40,
@@ -1185,8 +1159,6 @@ describe('createBitmapStore', () => {
       h.store.markLayerDirty(LAYER);
       const barrier = h.store.flushPendingUploads();
 
-      // Encode/hash/upload have started (passing the entry-time guard while the
-      // source was still `paint`); the upload is now in flight.
       await drainUntil(() => uploadImage.mock.calls.length >= 1);
       expect(uploadImage).toHaveBeenCalledTimes(1);
 
@@ -1318,10 +1290,8 @@ describe('createBitmapStore', () => {
       expect(uploadImage).toHaveBeenCalledTimes(3);
       expect(onError).toHaveBeenCalledTimes(2);
 
-      // flushPendingUploads() runs before every Generate/export and on
-      // blur/pagehide/visibilitychange; it still attempts a circuit-open layer
-      // (the breaker only gates the AMBIENT reschedule), so a persistently
-      // failing layer must not re-report on every one of those barrier retries.
+      // Explicit persistence barriers bypass the ambient breaker, but repeated failure must not repeatedly report
+      // the same streak.
       await expect(h.store.flushPendingUploads()).rejects.toThrow('Canvas pixel persistence failed');
       await expect(h.store.flushPendingUploads()).rejects.toThrow('Canvas pixel persistence failed');
 
@@ -1392,9 +1362,7 @@ describe('createBitmapStore', () => {
       await expect(store.flushPendingUploads()).rejects.toThrow('Canvas pixel persistence failed');
       expect(onError).not.toHaveBeenCalled();
 
-      // A real upload failure lands mid-streak (position 3 of a 5-max streak):
-      // under the old `failures === 1 || failures === max` check this matched
-      // neither condition and would have gone unreported.
+      // A real failure midway through a decline streak must still be reported.
       content = 'pixels-B';
       uploadShouldFail = true;
       await expect(store.flushPendingUploads()).rejects.toThrow('Canvas pixel persistence failed');
@@ -1456,9 +1424,7 @@ describe('createBitmapStore', () => {
 
       expect(timers.pendingCount()).toBe(0);
 
-      // A fresh stroke closes the circuit: it schedules again at the base
-      // debounce (not a backoff delay), and the now-succeeding upload clears
-      // everything.
+      // A fresh stroke resets to base debounce; successful upload clears the failure streak.
       shouldFail = false;
       h.store.markLayerDirty(LAYER);
       expect(timers.scheduledDelays.at(-1)).toBe(1500);
@@ -1494,8 +1460,6 @@ describe('createBitmapStore', () => {
       timers.fireNext(); // succeeds → clears the failure count.
       await drainUntil(() => h.dispatch.mock.calls.length === 1);
 
-      // A later failure, on fresh pixels, is a new streak (consecutiveFailures:
-      // 1), not a continuation of the earlier one.
       shouldFail = true;
       h.setEncoded('pixels-B');
       h.store.markLayerDirty(LAYER);
@@ -1768,8 +1732,7 @@ describe('truthful extent: trimming and clearing', () => {
     await expect(h.store.flushPendingUploads()).rejects.toThrow('Canvas pixel persistence failed');
 
     expect(h.trimLayerPixels).toHaveBeenCalledTimes(2);
-    // Both attempts advance the shared breaker; only the streak's first failure
-    // is reported (the second is a silent continuation, not a fresh problem).
+    // Both failures advance the shared breaker; report only the streak's first failure.
     expect(onError).toHaveBeenCalledTimes(1);
     expect(onError).toHaveBeenNthCalledWith(1, error, LAYER, { consecutiveFailures: 1, willRetry: true });
     expect(h.encodeSurface).not.toHaveBeenCalled();

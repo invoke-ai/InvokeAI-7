@@ -46,11 +46,8 @@ const subtreeEnds = (rows: readonly LayerTreeRow[]): Int32Array => {
 };
 
 /**
- * Projects a drag onto the sortable-tree target it describes: the dragged block leaves the list,
- * the pointer's vertical position picks the gap, and its horizontal offset picks the depth
- * between the shallowest and deepest parent that gap allows. Returns `null` when nothing valid
- * is under the pointer, when the pointer is over the block itself, or when the move would exceed
- * the depth limit. Locks and other document refusals stay with the model. Linear in the rows.
+ * Project vertical gaps and horizontal depth after removing the dragged block. Reject self/invalid/depth-exceeding
+ * targets; model validation owns locks and other refusals. Linear in row count.
  */
 export const projectLayerDrop = (input: LayerDropInput): LayerDropTarget | null => {
   const { rows } = input;
@@ -95,8 +92,7 @@ export const projectLayerDrop = (input: LayerDropInput): LayerDropTarget | null 
     return null;
   }
   if (input.edge === 'inside') {
-    // Straight into the hovered group, at its top — the one comfortable way
-    // into an empty group. The depth limit still applies to the whole block.
+    // Drop into the hovered group's top, respecting the entire block's depth limit.
     const over = remaining[overIndex]!;
     if (over.vm.kind !== 'group') {
       return null;

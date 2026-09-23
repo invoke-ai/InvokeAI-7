@@ -47,21 +47,9 @@ const isIdentity = (transform: LayerTransform): boolean =>
   transform.rotation === 0;
 
 /**
- * Owns the floating-selection lifecycle: cutting selected pixels off a layer,
- * holding them in flight, and either baking them back as ONE undo entry or
- * putting them back untouched.
- *
- * **The lift is deliberately not a history entry.** Only `commit` pushes, with
- * `before` = the pre-lift pixels and `after` = the post-bake pixels over the
- * union of the hole and the landing region. So one undo restores the layer
- * exactly, no matter how many drags happened in between — and a cancelled float
- * leaves the history untouched rather than adding a pair of entries that undo
- * each other.
- *
- * The cache is mutated on lift (the hole) but deliberately NOT marked dirty:
- * persisting a holed bitmap mid-drag would upload a state the user never asked
- * for, and a slow network could land it after the commit. Only `commit` marks
- * dirty.
+ * Lifts pixels without history or dirtying, preventing persistence of the temporary hole. Commit records pre-lift
+ * and post-bake pixels across the hole/landing union as one undo entry and marks dirty. Cancellation restores
+ * pixels without history.
  */
 export class FloatingSelectionController {
   private float: FloatingSelection | null = null;
@@ -83,11 +71,7 @@ export class FloatingSelectionController {
     return getDocumentLayer(document, float.layerId) ?? null;
   }
 
-  /**
-   * Cuts the selection's pixels out of `layerId` into a new float. Returns false
-   * when there is nothing to lift (no selection, an ineligible layer, or no
-   * overlap between the two).
-   */
+  /** Lifts selected pixels; returns false for absent selection, ineligible layers or no overlap. */
   lift(layerId: string): boolean {
     if (this.disposed || this.float || !this.deps.canEdit()) {
       return false;
@@ -136,9 +120,7 @@ export class FloatingSelectionController {
 
     this.float = {
       before: { data: before, rect: region },
-      // Baked now, not per frame: floating a control map must show the same
-      // darkness-dropped-out pixels the layer itself shows, never its raw
-      // opaque background.
+      // Bake darkness dropout once so the float matches the rendered control map.
       display: renderLayerDisplayEffect(this.deps.backend, layer, lifted.pixels.surface),
       layerId,
       mask: { rect: mask.rect, surface: mask.surface },
@@ -162,10 +144,8 @@ export class FloatingSelectionController {
   }
 
   /**
-   * Bakes the float back into its layer as one undoable entry, and carries the
-   * selection outline along with it. A float whose transform never moved is
-   * still put back (it was cut out), but without a history entry — nothing
-   * changed.
+   * Bakes pixels and moves the selection in one undo entry. An unmoved float restores its cut pixels without
+   * adding history.
    */
   commit(): void {
     const float = this.float;
@@ -258,10 +238,6 @@ export class FloatingSelectionController {
     }
   }
 
-  /**
-   * Re-places the document-space selection mask by the float's motion, so the
-   * marching ants end up around the pixels' new home rather than their old one.
-   */
   private moveSelectionWithFloat(
     layer: CanvasLayerContract,
     floatMatrix: ReturnType<typeof bakeMatrix>,
@@ -302,8 +278,7 @@ export class FloatingSelectionController {
     if (this.disposed) {
       return;
     }
-    // A live float holds pixels that exist nowhere else; put them back rather
-    // than dropping them on the floor.
+    // Restore the float's uniquely held pixels before disposal.
     this.cancel();
     this.disposed = true;
   }

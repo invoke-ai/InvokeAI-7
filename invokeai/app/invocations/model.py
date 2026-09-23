@@ -210,6 +210,42 @@ class MiniMaxH3TransformerField(BaseModel):
     )
 
 
+class LTX2TextEncoderField(BaseModel):
+    """Field for the LTX-2 prompt conditioner: the Gemma-4 tower and the text connectors.
+
+    The connectors are a separate model, not a submodel of the encoder: they consume the stacked
+    per-layer hidden states and produce the two per-modality streams the transformer reads.
+    """
+
+    tokenizer: ModelIdentifierField = Field(description="Info to load tokenizer submodel")
+    text_encoder: ModelIdentifierField = Field(description="Info to load text_encoder submodel")
+    connectors: ModelIdentifierField = Field(description="Info to load the text connectors submodel")
+
+
+class LTX2TransformerField(BaseModel):
+    """Transformer field for LTX-2 models."""
+
+    transformer: ModelIdentifierField = Field(description="Info to load Transformer submodel")
+    loras: List[LoRAField] = Field(default_factory=list, description="LoRAs to apply on model loading")
+    variant: Optional[str] = Field(
+        default=None,
+        description="The loaded transformer's variant ('ltx2_dev' / 'ltx2_distilled'), stamped by the model "
+        "loader so the denoise node can pick the schedule the checkpoint was trained for.",
+    )
+
+
+class LTX2VocoderField(BaseModel):
+    """Vocoder field for LTX-2: mel spectrogram to 48 kHz stereo waveform."""
+
+    vocoder: ModelIdentifierField = Field(description="Info to load vocoder submodel")
+
+
+class LTX2LatentUpsamplerField(BaseModel):
+    """Latent upsampler field for LTX-2: the x2 spatial upscaler the refine pass runs on top of."""
+
+    latent_upsampler: ModelIdentifierField = Field(description="Info to load the latent upsampler submodel")
+
+
 class VAEField(BaseModel):
     vae: ModelIdentifierField = Field(description="Info to load vae submodel")
     seamless_axes: List[str] = Field(default_factory=list, description='Axes("x" and "y") to which apply seamless')

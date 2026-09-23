@@ -19,11 +19,7 @@ export interface LayerSelectionCommands {
   groupSelected: () => void;
 }
 
-/**
- * The footer's selection verbs: duplicate, group, delete. Enablement comes
- * from the same model authority that runs the command, so nothing here can
- * refuse later; everything acts on the panel's current selection.
- */
+/** Use model-authoritative eligibility for duplicate/group/delete on the current selection. */
 export const useLayerSelectionCommands = (
   engine: SelectionEngine | null,
   projectId: string,

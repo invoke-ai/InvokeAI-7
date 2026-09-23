@@ -32,13 +32,7 @@ export const getLayoutPresetCommandTitleOverrides = (
 
 const widgetRegions: WidgetRegion[] = ['left', 'right', 'bottom', 'center'];
 
-/**
- * The preset as saved *for this account*: a custom preset, or a built-in with
- * the account's saved edits layered over it. Everything that answers "what does
- * this preset look like" — applying it, reverting to it, and the drift
- * comparison behind the strip's dot — reads through here, or `Save changes`
- * would appear to do nothing.
- */
+/** Apply, revert, and drift checks all resolve account overrides here so Save changes has consistent meaning. */
 export const resolveSavedLayoutPreset = (account: AccountState, presetId: LayoutPresetId): LayoutPreset => {
   const resolvedPresetId = resolveLayoutPresetId(presetId);
   const customPreset = isBuiltInLayoutPresetId(resolvedPresetId)
@@ -137,13 +131,7 @@ const areWidgetInstanceSnapshotsEqual = (
   );
 };
 
-/**
- * Window geometry counts as drift for the same reason panel `sizePx` does: it
- * is part of what `Save changes` would store, so the strip's dot has to offer
- * to store it. `stackOrder` is excluded — it is a monotonically rising counter
- * bumped by every click on a window, so comparing it would leave the dot lit
- * for good the first time someone focuses one.
- */
+/** Geometry counts as saved-layout drift; focus-driven stack ordering does not. */
 const areFloatingWidgetsEqual = (
   left: LayoutPresetSnapshot['floatingWidgets'],
   right: LayoutPresetSnapshot['floatingWidgets']

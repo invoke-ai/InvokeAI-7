@@ -211,8 +211,7 @@ describe('compileVideoGraph — Wan 2.2', () => {
       generation_mode: 'wan_extend_video',
       source_video: { video_name: 'clip.mp4' },
     });
-    // Metadata rides both the final concat and the intermediate clip, and the
-    // run-time conditioning frame is recorded via an edge (template behavior).
+    // Record metadata on both clips and wire runtime conditioning-frame identity through an edge.
     expect(hasEdge(backendGraph, 'core_metadata', 'metadata', 'video_output', 'metadata')).toBe(true);
     expect(hasEdge(backendGraph, 'core_metadata', 'metadata', 'extension_clip', 'metadata')).toBe(true);
     expect(hasEdge(backendGraph, 'source_last_frame', 'image', 'core_metadata', 'first_frame_image')).toBe(true);
@@ -244,8 +243,7 @@ describe('compileVideoGraph — Wan 2.2', () => {
 
   it('compiles ceiling-touching trim STARTS as negative indices too — a keep-the-tail trim survives estimate overshoot', () => {
     const model = wanModel('i2v_a14b');
-    // numFrames 81: startFrame 77 has tail offset 3 (→ -4), endFrame 79 has
-    // tail offset 1 (→ -2). Both inside the tail window, order preserved.
+    // Near-tail bounds convert together to negative offsets while preserving order.
     const tailTrim = compileVideoGraph(
       settingsFor(model, { sourceVideo: { ...SOURCE_VIDEO, endFrame: 79, startFrame: 77 } }),
       model
@@ -253,9 +251,7 @@ describe('compileVideoGraph — Wan 2.2', () => {
 
     expect(nodeOfType(tailTrim, 'extract_video_range')).toMatchObject({ end_frame: -2, start_frame: -4 });
 
-    // Tail offset 4 is the first index OUTSIDE the window: it stays a
-    // positive literal (converting it would drift mid-clip picks when the
-    // estimate overshoots), even when the end still converts.
+    // Bounds outside tail slop remain absolute to avoid drifting mid-clip picks.
     const boundary = compileVideoGraph(
       settingsFor(model, { sourceVideo: { ...SOURCE_VIDEO, endFrame: 78, startFrame: 76 } }),
       model
@@ -362,9 +358,7 @@ describe('compileVideoGraph — MiniMax H3', () => {
     const { backendGraph } = compileVideoGraph(settings, model);
     const denoise = nodeOfType(backendGraph, 'minimax_h3_denoise');
 
-    // The H3 canvas policy: 16:9 caps at 1344×768; frame counts are string literals.
-    // The H3 denoise node counts sigma grid points, so the graph passes
-    // panel steps (model evaluations) + 1.
+    // H3 canvas follows preset policy; node steps include one terminal sigma point beyond model evaluations.
     expect(denoise).toMatchObject({ height: 768, num_frames: '124', steps: settings.steps + 1, width: 1344 });
 
     const output = nodeOfType(backendGraph, 'minimax_h3_latents_to_video');
@@ -419,8 +413,7 @@ describe('compileVideoGraph — MiniMax H3', () => {
     const settings = settingsFor(model, { sourceVideo: { ...SOURCE_VIDEO, endFrame: 80 } });
     const { backendGraph } = compileVideoGraph(settings, model);
 
-    // H3 renders at a fixed 24 fps; the source is retimed up front so the
-    // concat (which inherits the first clip's rate) joins at one speed.
+    // Retime source to H3's fixed 24 fps before concatenation inherits its rate.
     expect(nodeOfType(backendGraph, 'extract_video_range')).toMatchObject({ fps: 24 });
     expect(hasEdge(backendGraph, 'source_last_frame', 'image', 'pos_cond', 'first_image')).toBe(true);
     expect(hasEdge(backendGraph, 'source_last_frame', 'image', 'frame_conditioning', 'first_image')).toBe(true);
@@ -497,9 +490,7 @@ describe('compileVideoGraph — MiniMax H3 Ref2VA', () => {
     expect(video.id).toBe('reference_1');
     expect(video.conditioning).toBe('video_audio');
     expect(video.start_frame).toBe(2);
-    // The end bound sits in the estimate's tail window, so it compiles as a negative
-    // index the backend resolves against the clip's REAL frame count (the panel's count
-    // is an estimate that can overshoot on VFR uploads) - same rule as the extend path.
+    // Resolve tail-window bounds against actual backend frame counts to tolerate VFR estimate overshoot.
     expect(video.end_frame).toBe(-1);
     expect(image.id).toBe('reference_2');
     expect(image.detail).toBe('match');
@@ -639,19 +630,14 @@ describe('compileVideoGraph — MiniMax H3 Ref2VA', () => {
         'minimax_h3_video_reference'
       ).start_frame;
 
-    // Both bounds convert together, flagged or not. Mixing an absolute start
-    // with a tail-relative end splits the window across two index spaces: the
-    // backend then extracts `length + (real - estimate)` frames, or -- on a
-    // window short enough for the error to swallow -- resolves the end BEFORE
-    // the start and fails the generation.
+    // Convert both reference bounds together; mixed absolute/relative indices distort length or reverse short
+    // windows.
     expect(startOf(linked({ endFrame: 400, startFrame: 260 }, false))).toBe(-142);
     // The inversion that mixing produced: [398,399] of an estimated 402 emitted
     // `398 / -3`, which against a real 400 is start 398, end 397.
     expect(startOf(linked({ endFrame: 399, startFrame: 398 }, false))).toBe(-4);
-    // A start at or inside the estimate's slop stays ABSOLUTE: the relative
-    // form resolves to `startFrame + (real - estimate)`, and the backend
-    // rejects a negative index rather than clamping, so an estimate that
-    // overshoots by more than `startFrame` would fail the whole generation.
+    // Keep near-start bounds absolute because estimate overshoot could make a relative start negative and fail
+    // extraction.
     expect(startOf(linked({ endFrame: 400, startFrame: 0 }))).toBe(0);
     expect(startOf(linked({ endFrame: 400, startFrame: 1 }))).toBe(1);
     expect(startOf(linked({ endFrame: 400, startFrame: 3 }))).toBe(3);
@@ -696,8 +682,6 @@ describe('compileVideoGraph — MiniMax H3 Ref2VA', () => {
     };
     const { backendGraph } = compileVideoGraph(settings, model);
 
-    // The new clip is intermediate; the crossfade concat is the output, fed
-    // [trimmed source, new clip]; the source is retimed to H3's fixed 24 fps.
     expect(nodeOfType(backendGraph, 'minimax_h3_latents_to_video')).toMatchObject({
       id: 'extension_clip',
       is_intermediate: true,
@@ -714,10 +698,7 @@ describe('compileVideoGraph — MiniMax H3 Ref2VA', () => {
     // The linked reference is an ordinary first reference; the flag never reaches metadata.
     const videoReferences = nodesOfType(backendGraph, 'minimax_h3_video_reference');
 
-    // Both bounds ride the SAME negative anchor, so the extracted window keeps
-    // its exact length whatever the clip's real frame count turns out to be.
-    // A positive start would have made it `tail + (real - estimate)` frames,
-    // and the overrun is discarded at the seam.
+    // Use one tail-relative anchor for both bounds to preserve window length despite frame-count estimation error.
     expect(videoReferences[0]).toMatchObject({ end_frame: -2, id: 'reference_1', start_frame: -142 });
     expect((videoReferences[0].end_frame as number) - (videoReferences[0].start_frame as number)).toBe(140);
     const metadata = nodeOfType(backendGraph, 'core_metadata');
@@ -735,5 +716,636 @@ describe('compileVideoGraph — MiniMax H3 Ref2VA', () => {
       start_frame: 260,
       video_name: 'long.mp4',
     });
+  });
+});
+
+const ltx2Model = (variant: string, format = 'checkpoint', key = `ltx2-${variant}-${format}`): MainModelConfig => ({
+  base: 'ltx-2',
+  format,
+  key,
+  name: `LTX-2 ${variant}`,
+  type: 'main',
+  variant,
+});
+
+const LTX2_COMPONENTS: MainModelConfig = {
+  base: 'ltx-2',
+  format: 'diffusers',
+  key: 'ltx2-components',
+  name: 'LTX-2.5 Components',
+  type: 'main',
+  variant: 'ltx2_dev',
+};
+const LTX2_ENCODER = { base: 'ltx-2', key: 'gemma4', name: 'LTX-2.5 Text Encoder', type: 'gemma4_encoder' as const };
+
+const LTX2_SOURCE_CLIP = {
+  endFrame: 94,
+  fps: 24,
+  height: 704,
+  numFrames: 96,
+  startFrame: 0,
+  video_name: 'source.mp4',
+  width: 1248,
+};
+
+/** A four-second 24 fps clip: 96 frames, which snaps DOWN to 89 on the VAE's 8n + 1 grid. */
+const LTX2_CLIP = { fps: 24, height: 704, numFrames: 96, video_name: 'clip.mp4', width: 1248 };
+
+const ltx2SettingsFor = (model: MainModelConfig, overrides: Partial<VideoSettings> = {}): VideoSettings =>
+  settingsFor(model, {
+    componentSourceModel: model.format === 'diffusers' ? null : LTX2_COMPONENTS,
+    ltx2TextEncoderModel: LTX2_ENCODER,
+    ...overrides,
+  });
+
+describe('compileVideoGraph — LTX-2', () => {
+  it('assembles the generation from the transformer, the component folder and the Gemma-4 encoder', () => {
+    const model = ltx2Model('ltx2_dev');
+    const { backendGraph } = compileVideoGraph(ltx2SettingsFor(model), model);
+    const loader = nodeOfType(backendGraph, 'ltx2_model_loader');
+
+    expect(loader.model).toEqual(model);
+    expect(loader.component_source).toEqual(LTX2_COMPONENTS);
+    expect(loader.text_encoder_model).toEqual(LTX2_ENCODER);
+  });
+
+  it('decodes through the video VAE, the audio VAE and the vocoder', () => {
+    const model = ltx2Model('ltx2_dev');
+    const { backendGraph } = compileVideoGraph(ltx2SettingsFor(model), model);
+    const output = nodeOfType(backendGraph, 'ltx2_latents_to_video');
+
+    // The soundtrack is generated with the picture, so its whole decode chain has to be wired or
+    // the clip comes out silent.
+    expect(hasEdge(backendGraph, 'denoise_latents', 'video_latents', output.id, 'video_latents')).toBe(true);
+    expect(hasEdge(backendGraph, 'denoise_latents', 'audio_latents', output.id, 'audio_latents')).toBe(true);
+    expect(hasEdge(backendGraph, 'model_loader', 'vae', output.id, 'vae')).toBe(true);
+    expect(hasEdge(backendGraph, 'model_loader', 'audio_vae', output.id, 'audio_vae')).toBe(true);
+    expect(hasEdge(backendGraph, 'model_loader', 'vocoder', output.id, 'vocoder')).toBe(true);
+  });
+
+  it('generates at half the canvas and refines the upscaled latent', () => {
+    const model = ltx2Model('ltx2_dev');
+    const { backendGraph } = compileVideoGraph(
+      ltx2SettingsFor(model, { aspectRatioId: '16:9', targetResolution: '1024p' }),
+      model
+    );
+    const base = backendGraph.nodes.denoise_latents;
+    const refine = backendGraph.nodes.refine_latents;
+
+    // The x2 upscaler doubles a latent grid exactly, so the base canvas is the final one halved --
+    // not a separate resolution that happens to be smaller.
+    expect({ height: base?.height, width: base?.width }).toEqual({ height: 512, width: 896 });
+    expect({ height: refine?.height, width: refine?.width }).toEqual({ height: 1024, width: 1792 });
+    expect(hasEdge(backendGraph, 'denoise_latents', 'video_latents', 'latent_upsample', 'video_latents')).toBe(true);
+    expect(hasEdge(backendGraph, 'latent_upsample', 'latents', 'refine_latents', 'latents')).toBe(true);
+    expect(hasEdge(backendGraph, 'model_loader', 'latent_upsampler', 'latent_upsample', 'latent_upsampler')).toBe(true);
+    // Audio has no spatial extent, so it skips the upscaler -- but it still goes through the refine
+    // denoise, which re-noises both modalities to one level.
+    expect(hasEdge(backendGraph, 'denoise_latents', 'audio_latents', 'refine_latents', 'audio_latents')).toBe(true);
+    expect(hasEdge(backendGraph, 'latent_upsample', 'latents', 'video_output', 'video_latents')).toBe(false);
+    expect(hasEdge(backendGraph, 'refine_latents', 'video_latents', 'video_output', 'video_latents')).toBe(true);
+    expect(hasEdge(backendGraph, 'refine_latents', 'audio_latents', 'video_output', 'audio_latents')).toBe(true);
+  });
+
+  it('coerces a preset the model does not offer instead of compiling a graph of NaNs', () => {
+    // A record persisted under another family keeps its own preset, and only a model *selection*
+    // re-coerces it. An unknown preset has no short edge, so every dimension would come back NaN --
+    // and NaN compares unequal to itself, so a stage count recovered by comparing canvases would
+    // have said "two". The graph must be the one the panel promised: a single pass at the default.
+    const model = ltx2Model('ltx2_dev');
+    const { backendGraph } = compileVideoGraph(ltx2SettingsFor(model, { targetResolution: '720p' as never }), model);
+    const denoise = nodeOfType(backendGraph, 'ltx2_denoise');
+
+    expect(Object.values(backendGraph.nodes).some((node) => node.type === 'ltx2_latent_upsample')).toBe(false);
+    expect(denoise.width).toBe(1248);
+    expect(denoise.height).toBe(704);
+    for (const node of Object.values(backendGraph.nodes)) {
+      for (const [field, value] of Object.entries(node)) {
+        expect(Number.isNaN(value), `${String(node.type)}.${field} is NaN`).toBe(false);
+      }
+    }
+  });
+
+  it('never lets the refine pass outlast a base pass the user shortened', () => {
+    // Cutting Steps for a quick probe must not leave the expensive half of the run longer than the
+    // half that was just cut.
+    const model = ltx2Model('ltx2_dev');
+    const { backendGraph } = compileVideoGraph(ltx2SettingsFor(model, { steps: 4, targetResolution: '1024p' }), model);
+
+    expect(backendGraph.nodes.denoise_latents?.steps).toBe(4);
+    expect(backendGraph.nodes.refine_latents?.steps).toBe(4);
+  });
+
+  it('gives the refine pass its own step budget where the variant sets one', () => {
+    // Dev pays four forwards a step; inheriting the base pass's 30 would be over an hour of refine
+    // at this canvas. The distilled schedule is fixed, so it has no budget of its own to apply.
+    const dev = ltx2Model('ltx2_dev');
+    const devGraph = compileVideoGraph(ltx2SettingsFor(dev, { targetResolution: '1024p' }), dev).backendGraph;
+
+    expect(devGraph.nodes.denoise_latents?.steps).toBe(30);
+    expect(devGraph.nodes.refine_latents?.steps).toBe(8);
+
+    const distilled = ltx2Model('ltx2_distilled');
+    const distilledGraph = compileVideoGraph(
+      ltx2SettingsFor(distilled, { targetResolution: '1024p' }),
+      distilled
+    ).backendGraph;
+
+    expect(distilledGraph.nodes.refine_latents?.steps).toBe(distilledGraph.nodes.denoise_latents?.steps);
+  });
+
+  it("anchors a first frame on the base pass, at the base pass's canvas", () => {
+    const model = ltx2Model('ltx2_dev');
+    const { backendGraph } = compileVideoGraph(
+      ltx2SettingsFor(model, {
+        aspectRatioId: '16:9',
+        firstFrameImage: { height: 1080, image_name: 'frame.png', width: 1920 },
+        targetResolution: '1024p',
+      }),
+      model
+    );
+    const conditioning = backendGraph.nodes.image_conditioning;
+
+    // Each pass is anchored at its own canvas. The refine pass re-noises every token, frame 0
+    // included, so the base pass's anchor does not survive into it -- and that encode is half the
+    // size, so it cannot be reused. Without a second encode, two-stage image-to-video would
+    // regenerate the first frame from the prompt alone.
+    expect({ height: conditioning?.height, width: conditioning?.width }).toEqual({ height: 512, width: 896 });
+    expect(
+      hasEdge(backendGraph, 'image_conditioning', 'video_conditioning', 'denoise_latents', 'video_conditioning')
+    ).toBe(true);
+
+    const refineConditioning = backendGraph.nodes.refine_image_conditioning;
+
+    expect({ height: refineConditioning?.height, width: refineConditioning?.width }).toEqual({
+      height: 1024,
+      width: 1792,
+    });
+    expect(
+      hasEdge(backendGraph, 'refine_image_conditioning', 'video_conditioning', 'refine_latents', 'video_conditioning')
+    ).toBe(true);
+  });
+
+  it('adds no second image encode when there is no first frame to anchor', () => {
+    const model = ltx2Model('ltx2_dev');
+    const { backendGraph } = compileVideoGraph(ltx2SettingsFor(model, { targetResolution: '1024p' }), model);
+
+    expect(backendGraph.nodes.refine_image_conditioning).toBeUndefined();
+    expect(Object.values(backendGraph.nodes).some((node) => node.type === 'ltx2_image_conditioning')).toBe(false);
+  });
+
+  it('records the pair of canvases a two-stage run used', () => {
+    const model = ltx2Model('ltx2_dev');
+    const twoStage = compileVideoGraph(
+      ltx2SettingsFor(model, { aspectRatioId: '16:9', targetResolution: '1024p' }),
+      model
+    ).backendGraph;
+    const single = compileVideoGraph(
+      ltx2SettingsFor(model, { aspectRatioId: '16:9', targetResolution: '704p' }),
+      model
+    ).backendGraph;
+
+    expect(twoStage.nodes.core_metadata).toMatchObject({
+      height: 1024,
+      ltx2_base_height: 512,
+      ltx2_base_width: 896,
+      ltx2_two_stage: true,
+      width: 1792,
+    });
+    // A single-stage run says nothing about stages rather than saying "one".
+    expect(single.nodes.core_metadata).not.toHaveProperty('ltx2_two_stage');
+  });
+
+  it("conditions on a clip's soundtrack and takes the length from the encoder, not the panel", () => {
+    const model = ltx2Model('ltx2_dev');
+    const { backendGraph } = compileVideoGraph(
+      ltx2SettingsFor(model, { conditioningClip: { clip: LTX2_CLIP, fpsKnown: true, role: 'audio' }, numFrames: 121 }),
+      model
+    );
+    const conditioning = nodeOfType(backendGraph, 'ltx2_audio_conditioning');
+    const output = nodeOfType(backendGraph, 'ltx2_latents_to_video');
+
+    expect(conditioning.video).toEqual({ video_name: LTX2_CLIP.video_name });
+    expect(hasEdge(backendGraph, 'model_loader', 'audio_vae', conditioning.id, 'audio_vae')).toBe(true);
+    expect(hasEdge(backendGraph, 'model_loader', 'vocoder', conditioning.id, 'vocoder')).toBe(true);
+    expect(hasEdge(backendGraph, conditioning.id, 'audio_conditioning', 'denoise_latents', 'audio_conditioning')).toBe(
+      true
+    );
+    // The soundtrack's own length is authoritative: the panel's 121 gives way to the clip's 89,
+    // and the encoder's own count is wired in over even that.
+    expect(hasEdge(backendGraph, conditioning.id, 'num_frames', 'denoise_latents', 'num_frames')).toBe(true);
+    expect(backendGraph.nodes.denoise_latents).toMatchObject({ num_frames: 89 });
+    // The user's recording is muxed back in rather than a vocoder's copy of its own latents.
+    expect(hasEdge(backendGraph, conditioning.id, 'audio_conditioning', output.id, 'source_audio')).toBe(true);
+  });
+
+  it("conditions on a clip's picture at the canvas its own ratio resolves to", () => {
+    const model = ltx2Model('ltx2_dev');
+    const { backendGraph } = compileVideoGraph(
+      // A 4:3 clip against a 16:9 preset: the clip wins, so the conditioning encode and the
+      // denoise have to agree on the canvas or `_load_image_latents`' geometry check fires.
+      ltx2SettingsFor(model, {
+        aspectRatioId: '16:9',
+        conditioningClip: { clip: { ...LTX2_CLIP, height: 480, width: 640 }, fpsKnown: true, role: 'video' },
+      }),
+      model
+    );
+    const conditioning = nodeOfType(backendGraph, 'ltx2_video_conditioning');
+    const denoise = nodeOfType(backendGraph, 'ltx2_denoise');
+
+    // Both sides come from the same expression, so equality alone would still hold if the canvas
+    // stopped following the clip -- they would simply both be 16:9. Pin the ratio itself.
+    expect(Number(denoise.width) / Number(denoise.height)).toBeCloseTo(4 / 3, 1);
+    expect(conditioning.width).toBe(denoise.width);
+    expect(conditioning.height).toBe(denoise.height);
+    expect(hasEdge(backendGraph, 'model_loader', 'vae', conditioning.id, 'vae')).toBe(true);
+    expect(
+      hasEdge(backendGraph, conditioning.id, 'video_conditioning', 'denoise_latents', 'full_video_conditioning')
+    ).toBe(true);
+    expect(hasEdge(backendGraph, conditioning.id, 'num_frames', 'denoise_latents', 'num_frames')).toBe(true);
+    // The picture is the given one, so the run adopts the clip's rate, not the panel's.
+    expect(denoise.fps).toBe(LTX2_CLIP.fps);
+    // Its own soundtrack is the thing being generated, so nothing is muxed back in.
+    const decode = nodeOfType(backendGraph, 'ltx2_latents_to_video');
+
+    expect(decode.source_audio).toBeUndefined();
+    // But the picture was the given half, so the user's own frames are written out rather than the
+    // held latents being decoded into a cover-cropped copy of footage they already have.
+    expect(hasEdge(backendGraph, conditioning.id, 'video_conditioning', decode.id, 'source_video')).toBe(true);
+  });
+
+  it('records the conditioning clip and the frames that ran, for recall', () => {
+    const model = ltx2Model('ltx2_dev');
+    const { backendGraph } = compileVideoGraph(
+      ltx2SettingsFor(model, { conditioningClip: { clip: LTX2_CLIP, fpsKnown: true, role: 'audio' }, numFrames: 121 }),
+      model
+    );
+
+    expect(backendGraph.nodes.core_metadata).toMatchObject({
+      generation_mode: 'ltx2_a2v',
+      ltx2_conditioning_role: 'audio',
+      ltx2_conditioning_video: { video_name: LTX2_CLIP.video_name },
+      num_frames: 89,
+    });
+  });
+
+  it('holds a last frame as a keyframe, so it can coexist with a first one', () => {
+    const model = ltx2Model('ltx2_dev');
+    const { backendGraph } = compileVideoGraph(
+      ltx2SettingsFor(model, { firstFrameImage: FIRST_FRAME, lastFrameImage: LAST_FRAME }),
+      model
+    );
+    const first = backendGraph.nodes.image_conditioning;
+    const last = backendGraph.nodes.last_frame_conditioning;
+
+    // Index 0 overwrites the grid's opening tokens; -1 is appended to the sequence instead, which
+    // is the only reason both can be held at once.
+    expect(first).toMatchObject({ frame_index: 0 });
+    expect(last).toMatchObject({ frame_index: -1 });
+    expect(
+      hasEdge(backendGraph, 'image_conditioning', 'video_conditioning', 'denoise_latents', 'video_conditioning')
+    ).toBe(true);
+    expect(
+      hasEdge(backendGraph, 'last_frame_conditioning', 'video_conditioning', 'denoise_latents', 'keyframe_conditioning')
+    ).toBe(true);
+    expect(backendGraph.nodes.core_metadata).toMatchObject({ generation_mode: 'ltx2_flf2v' });
+  });
+
+  it('holds a last frame alone for last-frame-only generation', () => {
+    const model = ltx2Model('ltx2_dev');
+    const { backendGraph } = compileVideoGraph(ltx2SettingsFor(model, { lastFrameImage: LAST_FRAME }), model);
+
+    expect(backendGraph.nodes.image_conditioning).toBeUndefined();
+    expect(backendGraph.nodes.last_frame_conditioning).toMatchObject({ frame_index: -1 });
+    expect(backendGraph.nodes.core_metadata).toMatchObject({ generation_mode: 'ltx2_lf2v' });
+  });
+
+  it('re-encodes every held frame at the refine canvas', () => {
+    const model = ltx2Model('ltx2_dev');
+    const { backendGraph } = compileVideoGraph(
+      ltx2SettingsFor(model, {
+        aspectRatioId: '16:9',
+        firstFrameImage: FIRST_FRAME,
+        lastFrameImage: LAST_FRAME,
+        targetResolution: '1024p',
+      }),
+      model
+    );
+
+    // The refine pass re-noises every token, and appended keyframes never go through the upsampler
+    // at all -- so both frames have to be encoded again, at this pass's own (doubled) canvas.
+    expect(backendGraph.nodes.refine_image_conditioning).toMatchObject({ frame_index: 0, height: 1024, width: 1792 });
+    expect(backendGraph.nodes.refine_last_frame_conditioning).toMatchObject({ frame_index: -1, height: 1024 });
+    expect(backendGraph.nodes.image_conditioning).toMatchObject({ height: 512, width: 896 });
+    expect(
+      hasEdge(
+        backendGraph,
+        'refine_last_frame_conditioning',
+        'video_conditioning',
+        'refine_latents',
+        'keyframe_conditioning'
+      )
+    ).toBe(true);
+  });
+
+  it('patches the distilled LoRA onto the transformer both passes read', () => {
+    const model = ltx2Model('ltx2_dev');
+    const distilled = { base: 'ltx-2', key: 'ltx2-distilled', name: 'LTX-2.5 Distilled LoRA', type: 'lora' as const };
+    const { backendGraph } = compileVideoGraph(
+      ltx2SettingsFor(model, {
+        acceleratorEnabled: true,
+        acceleratorLoraKeys: [distilled.key],
+        aspectRatioId: '16:9',
+        loras: [{ isEnabled: true, model: distilled, weight: 1 }],
+        targetResolution: '1024p',
+      }),
+      model
+    );
+    const loraLoader = nodeOfType(backendGraph, 'ltx2_lora_collection_loader');
+
+    expect(hasEdge(backendGraph, 'model_loader', 'transformer', loraLoader.id, 'transformer')).toBe(true);
+    // Both passes share one transformer, so both must read the patched one -- a refine pass wired
+    // straight to the loader would sample the second half of the run unpatched.
+    expect(hasEdge(backendGraph, loraLoader.id, 'transformer', 'denoise_latents', 'transformer')).toBe(true);
+    expect(hasEdge(backendGraph, loraLoader.id, 'transformer', 'refine_latents', 'transformer')).toBe(true);
+    expect(hasEdge(backendGraph, 'model_loader', 'transformer', 'denoise_latents', 'transformer')).toBe(false);
+    expect(hasEdge(backendGraph, 'model_loader', 'transformer', 'refine_latents', 'transformer')).toBe(false);
+  });
+
+  it('names the distilled schedule, which the checkpoint variant cannot', () => {
+    // `auto` resolves the schedule off the transformer's VARIANT, which names the checkpoint and
+    // not the patch. On a Dev checkpoint that is the guided ~30-step schedule, so an accelerated
+    // run would take 8 steps of the wrong schedule and look like a broken model.
+    const model = ltx2Model('ltx2_dev');
+    const distilled = { base: 'ltx-2', key: 'ltx2-distilled', name: 'LTX-2.5 Distilled LoRA', type: 'lora' as const };
+    const accelerated = compileVideoGraph(
+      ltx2SettingsFor(model, {
+        acceleratorEnabled: true,
+        acceleratorLoraKeys: [distilled.key],
+        aspectRatioId: '16:9',
+        loras: [{ isEnabled: true, model: distilled, weight: 1 }],
+        targetResolution: '1024p',
+      }),
+      model
+    ).backendGraph;
+
+    expect(accelerated.nodes.denoise_latents).toMatchObject({ schedule: 'distilled' });
+    expect(accelerated.nodes.refine_latents).toMatchObject({ schedule: 'distilled' });
+
+    // Off, the checkpoint stays the authority.
+    const plain = compileVideoGraph(ltx2SettingsFor(model), model).backendGraph;
+
+    expect(plain.nodes.denoise_latents).toMatchObject({ schedule: 'auto' });
+    expect(nodeOfType(plain, 'ltx2_model_loader')).toBeDefined();
+    expect(Object.values(plain.nodes).some((node) => node.type === 'ltx2_lora_collection_loader')).toBe(false);
+  });
+
+  it('continues a clip from its own tail and consumes the overlap in the join', () => {
+    const model = ltx2Model('ltx2_dev');
+    const { backendGraph } = compileVideoGraph(ltx2SettingsFor(model, { sourceVideo: LTX2_SOURCE_CLIP }), model);
+    const extend = nodeOfType(backendGraph, 'ltx2_extend_conditioning');
+    const concat = nodeOfType(backendGraph, 'video_concat');
+
+    expect(hasEdge(backendGraph, extend.id, 'video_conditioning', 'denoise_latents', 'video_conditioning')).toBe(true);
+    // The generated clip opens with the source's own tail, so the crossfade has to consume exactly
+    // those frames -- and only the node that read the clip knows how many it got.
+    expect(hasEdge(backendGraph, extend.id, 'context_frames', concat.id, 'transition_frames')).toBe(true);
+    expect(concat).toMatchObject({ transition: 'crossfade' });
+    // Both halves play at one speed, and the rate is read off the trimmed source at run time
+    // rather than from the gallery's record of it -- a video row's fps is nullable.
+    const extract = nodeOfType(backendGraph, 'extract_video_range');
+
+    // The denoise and the decode take the clip's true float rate.
+    expect(hasEdge(backendGraph, extract.id, 'fps', 'denoise_latents', 'fps')).toBe(true);
+    expect(hasEdge(backendGraph, extract.id, 'fps', backendGraph.nodes.extension_clip!.id, 'fps')).toBe(true);
+    // The join's fps is left unset on purpose: video_concat takes the first input's rate, which is
+    // this same clip. Wiring it is float -> Optional[int], which the queue refuses at enqueue.
+    expect(hasEdge(backendGraph, extract.id, 'fps', concat.id, 'fps')).toBe(false);
+    expect(concat).not.toHaveProperty('fps');
+    expect(extract).not.toHaveProperty('fps');
+
+    // And the anchor is the TRIMMED clip, not the gallery file: the join's source half ends at the
+    // user's trim, so anchoring past it would dissolve two unrelated moments together.
+    expect(hasEdge(backendGraph, extract.id, 'video', extend.id, 'video')).toBe(true);
+    // The join is the result; the generated half is kept as an intermediate beside it.
+    expect(backendGraph.nodes.extension_clip).toMatchObject({ is_intermediate: true });
+    expect(concat.is_intermediate).toBe(false);
+    expect(backendGraph.nodes.core_metadata).toMatchObject({ generation_mode: 'ltx2_extend_video' });
+  });
+
+  it('holds the source\u2019s closing sound over the span the join crossfades', () => {
+    // The join fades the held frames out of both halves. The picture survives it because both clips
+    // render the same instant; the soundtrack only does if it is held over the same span. Left
+    // generated, the blend fades invented audio in against the source\u2019s real audio and the new
+    // soundtrack starts one overlap early -- an audible seam at the junction.
+    const model = ltx2Model('ltx2_dev');
+    const { backendGraph } = compileVideoGraph(ltx2SettingsFor(model, { sourceVideo: LTX2_SOURCE_CLIP }), model);
+    const extend = nodeOfType(backendGraph, 'ltx2_extend_conditioning');
+
+    expect(hasEdge(backendGraph, 'model_loader', 'audio_vae', extend.id, 'audio_vae')).toBe(true);
+    expect(hasEdge(backendGraph, 'model_loader', 'vocoder', extend.id, 'vocoder')).toBe(true);
+    // The rate the held frames are counted at has to be the clip\u2019s own, or the held sound spans a
+    // different stretch of time than the held picture.
+    expect(hasEdge(backendGraph, nodeOfType(backendGraph, 'extract_video_range').id, 'fps', extend.id, 'fps')).toBe(
+      true
+    );
+    expect(hasEdge(backendGraph, extend.id, 'audio_conditioning', 'denoise_latents', 'audio_prefix_conditioning')).toBe(
+      true
+    );
+    // Held, not muxed. The decode's source_audio channel replaces the generated soundtrack wholesale
+    // with the source file's own -- right for audio-to-video, silently wrong here, where everything
+    // past the overlap is meant to be new sound.
+    expect(
+      hasEdge(backendGraph, extend.id, 'audio_conditioning', backendGraph.nodes.extension_clip!.id, 'source_audio')
+    ).toBe(false);
+  });
+
+  it('holds the closing sound through a two-stage continuation, encoding it once', () => {
+    // Stage two re-noises every audio row, so a prefix wired only into stage one is gone by the
+    // join and the seam is back with nothing else looking different. But the canvas never reaches
+    // the audio path, so a second anchor would re-read the clip, load the audio VAE and vocoder,
+    // and produce identical latents -- stage two is fed from stage one's encode instead.
+    const model = ltx2Model('ltx2_dev');
+    const { backendGraph } = compileVideoGraph(
+      ltx2SettingsFor(model, { aspectRatioId: '16:9', sourceVideo: LTX2_SOURCE_CLIP, targetResolution: '1024p' }),
+      model
+    );
+
+    expect(
+      hasEdge(backendGraph, 'extend_conditioning', 'audio_conditioning', 'refine_latents', 'audio_prefix_conditioning')
+    ).toBe(true);
+    // The refine anchor holds picture only: no audio models, so it never opens the soundtrack.
+    expect(hasEdge(backendGraph, 'model_loader', 'audio_vae', 'refine_extend_conditioning', 'audio_vae')).toBe(false);
+    expect(hasEdge(backendGraph, 'model_loader', 'vocoder', 'refine_extend_conditioning', 'vocoder')).toBe(false);
+  });
+
+  it('re-anchors a two-stage continuation at the refine canvas', () => {
+    const model = ltx2Model('ltx2_dev');
+    const { backendGraph } = compileVideoGraph(
+      ltx2SettingsFor(model, { aspectRatioId: '16:9', sourceVideo: LTX2_SOURCE_CLIP, targetResolution: '1024p' }),
+      model
+    );
+
+    // Without this the refine pass continues from nothing and the join cuts between two unrelated
+    // shots -- the same failure two-stage image-to-video had before it re-encoded its first frame.
+    expect(backendGraph.nodes.refine_extend_conditioning).toMatchObject({ height: 1024, width: 1792 });
+    expect(backendGraph.nodes.extend_conditioning).toMatchObject({ height: 512, width: 896 });
+    expect(
+      hasEdge(backendGraph, 'refine_extend_conditioning', 'video_conditioning', 'refine_latents', 'video_conditioning')
+    ).toBe(true);
+  });
+
+  it('lands a continuation on a destination frame', () => {
+    // The only path where both new mechanisms meet: a multi-frame leading anchor from the source's
+    // tail, and an appended keyframe at the end. The panel offers it deliberately -- the Last Frame
+    // field has its own copy for the extend case.
+    const model = ltx2Model('ltx2_dev');
+    const { backendGraph } = compileVideoGraph(
+      ltx2SettingsFor(model, { lastFrameImage: LAST_FRAME, sourceVideo: LTX2_SOURCE_CLIP }),
+      model
+    );
+    const extend = nodeOfType(backendGraph, 'ltx2_extend_conditioning');
+
+    expect(hasEdge(backendGraph, extend.id, 'video_conditioning', 'denoise_latents', 'video_conditioning')).toBe(true);
+    expect(backendGraph.nodes.last_frame_conditioning).toMatchObject({ frame_index: -1 });
+    expect(
+      hasEdge(backendGraph, 'last_frame_conditioning', 'video_conditioning', 'denoise_latents', 'keyframe_conditioning')
+    ).toBe(true);
+    // Still an extension: the join and its crossfade are unchanged by the destination frame.
+    expect(
+      hasEdge(
+        backendGraph,
+        extend.id,
+        'context_frames',
+        nodeOfType(backendGraph, 'video_concat').id,
+        'transition_frames'
+      )
+    ).toBe(true);
+  });
+
+  it('encodes the negative prompt whenever either classifier-free scale will consume it', () => {
+    const model = ltx2Model('ltx2_dev');
+    const isWired = (settings: Partial<VideoSettings>) => {
+      const graph = compileVideoGraph(ltx2SettingsFor(model, settings), model).backendGraph;
+
+      return {
+        denoise: nodeOfType(graph, 'ltx2_denoise'),
+        encodes: nodeOfType(graph, 'ltx2_text_encoder').encode_negative,
+        wired: hasEdge(graph, 'pos_cond', 'negative_conditioning', 'denoise_latents', 'negative_conditioning'),
+      };
+    };
+
+    const guided = isWired({ cfgScale: 3, audioCfgScale: 7 });
+
+    expect([guided.encodes, guided.wired]).toEqual([true, true]);
+
+    // One unconditional pass serves both streams, so audio guidance alone still consumes the
+    // negative prompt — and the node refuses an audio scale above 1 with nothing wired.
+    const audioOnly = isWired({ cfgScale: 1, audioCfgScale: 7 });
+
+    expect([audioOnly.encodes, audioOnly.wired]).toEqual([true, true]);
+
+    // Both at 1: no unconditional pass, so a 12B encode of the negative prompt would be wasted.
+    const unguided = isWired({ cfgScale: 1, audioCfgScale: 1 });
+
+    expect([unguided.encodes, unguided.wired]).toEqual([false, false]);
+  });
+
+  it('holds both classifier-free scales at 1 when the negative prompt is switched off', () => {
+    // Otherwise the panel's own switch queues a graph the denoise node refuses — after the 12B
+    // prompt encode and the 22B transformer load.
+    const model = ltx2Model('ltx2_dev');
+    const settings = ltx2SettingsFor(model, { negativePromptEnabled: false, cfgScale: 3, audioCfgScale: 7 });
+    const { backendGraph } = compileVideoGraph(settings, model);
+    const denoise = nodeOfType(backendGraph, 'ltx2_denoise');
+
+    expect(nodeOfType(backendGraph, 'ltx2_text_encoder').encode_negative).toBe(false);
+    expect(denoise.cfg_scale).toBe(1);
+    expect(denoise.audio_cfg_scale).toBe(1);
+    // The other two passes steer against the positive conditioning, so they keep running.
+    expect(denoise.stg_scale).toBe(1);
+    expect(denoise.modality_scale).toBe(3);
+
+    // Metadata records the run, not the panel: recalling this video must not restore a CFG of 3
+    // that the generation never used.
+    const metadata = nodeOfType(backendGraph, 'core_metadata');
+
+    expect(metadata.cfg_scale).toBe(1);
+    expect(metadata.ltx2_audio_cfg_scale).toBe(1);
+  });
+
+  it('writes the guidance the dev schedule runs and lets the backend resolve the schedule itself', () => {
+    const model = ltx2Model('ltx2_dev');
+    const settings = ltx2SettingsFor(model);
+    const { backendGraph } = compileVideoGraph(settings, model);
+    const denoise = nodeOfType(backendGraph, 'ltx2_denoise');
+
+    expect(denoise.cfg_scale).toBe(3);
+    expect(denoise.audio_cfg_scale).toBe(7);
+    expect(denoise.stg_scale).toBe(1);
+    expect(denoise.modality_scale).toBe(3);
+    expect(denoise.steps).toBe(30);
+    // The loader stamps the schedule from the checkpoint, which outranks the panel's own reading of
+    // a variant it may not recognise.
+    expect(denoise.schedule).toBe('auto');
+  });
+
+  it('collapses the guidance to its inert values on the distilled schedule', () => {
+    const model = ltx2Model('ltx2_distilled');
+    const { backendGraph } = compileVideoGraph(ltx2SettingsFor(model), model);
+    const denoise = nodeOfType(backendGraph, 'ltx2_denoise');
+
+    // The node ignores the scales on a distilled checkpoint; the graph should say what runs.
+    expect(denoise.cfg_scale).toBe(1);
+    expect(denoise.audio_cfg_scale).toBe(1);
+    expect(denoise.stg_scale).toBe(0);
+    expect(denoise.modality_scale).toBe(1);
+    expect(denoise.steps).toBe(8);
+    expect(nodesOfType(backendGraph, 'ltx2_text_encoder')[0]?.encode_negative).toBe(false);
+  });
+
+  it('conditions on a first frame through the image-conditioning node at the denoise canvas', () => {
+    const model = ltx2Model('ltx2_dev');
+    const settings = ltx2SettingsFor(model, { firstFrameImage: FIRST_FRAME });
+    const { backendGraph } = compileVideoGraph(settings, model);
+    const conditioning = nodeOfType(backendGraph, 'ltx2_image_conditioning');
+    const denoise = nodeOfType(backendGraph, 'ltx2_denoise');
+
+    expect(conditioning.image).toEqual({ image_name: FIRST_FRAME.image_name });
+    // A canvas mismatch is what the denoise node refuses, so the same dimensions must reach both.
+    expect(conditioning.width).toBe(denoise.width);
+    expect(conditioning.height).toBe(denoise.height);
+    expect(hasEdge(backendGraph, 'model_loader', 'vae', conditioning.id, 'vae')).toBe(true);
+    expect(hasEdge(backendGraph, conditioning.id, 'video_conditioning', denoise.id, 'video_conditioning')).toBe(true);
+    expect(nodeOfType(backendGraph, 'core_metadata').generation_mode).toBe('ltx2_i2v');
+  });
+
+  it('records what recall needs and nothing it can derive', () => {
+    const model = ltx2Model('ltx2_dev');
+    const { backendGraph } = compileVideoGraph(ltx2SettingsFor(model), model);
+    const metadata = nodeOfType(backendGraph, 'core_metadata');
+
+    expect(metadata.generation_mode).toBe('ltx2_t2v');
+    expect(metadata.ltx2_component_source).toEqual(LTX2_COMPONENTS);
+    expect(metadata.ltx2_text_encoder_model).toEqual(LTX2_ENCODER);
+    expect(metadata.ltx2_audio_cfg_scale).toBe(7);
+    expect(metadata.ltx2_stg_scale).toBe(1);
+    expect(metadata.ltx2_modality_scale).toBe(3);
+    expect(metadata.fps).toBe(24);
+  });
+
+  it('needs no component folder when the model is a full install', () => {
+    const model = ltx2Model('ltx2_dev', 'diffusers');
+    const { backendGraph } = compileVideoGraph(ltx2SettingsFor(model), model);
+
+    expect(nodeOfType(backendGraph, 'ltx2_model_loader').component_source).toBeUndefined();
+  });
+
+  it('refuses to compile without the Gemma-4 encoder no LTX-2 model carries', () => {
+    const model = ltx2Model('ltx2_dev');
+
+    expect(() => compileVideoGraph(ltx2SettingsFor(model, { ltx2TextEncoderModel: null }), model)).toThrow(
+      /Gemma-4 text encoder/
+    );
   });
 });
