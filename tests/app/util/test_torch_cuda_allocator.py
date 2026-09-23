@@ -1,5 +1,6 @@
 import os
 import sys
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -70,6 +71,39 @@ class TestRocmWindowsAllocatorDefault:
 
         assert "PYTORCH_CUDA_ALLOC_CONF" not in os.environ
         logger.warning.assert_called_once()
+
+
+class TestRocmBuildDetection:
+    """A locally built Windows ROCm wheel is versioned like `2.8.0a0+gitfc14c65`, so the distribution version alone
+    would leave it on the default allocator while `wddm` (which reads `torch.version.hip`) still caps its budget."""
+
+    @pytest.mark.parametrize(
+        ("hip_line", "expected"),
+        [("hip: Optional[str] = '7.14.60850'", True), ("hip: Optional[str] = None", False)],
+        ids=["rocm-build", "cuda-build"],
+    )
+    def test_a_build_without_rocm_in_its_version_is_read_from_torchs_version_file(
+        self, monkeypatch, tmp_path, hip_line, expected
+    ):
+        package = tmp_path / "torch"
+        package.mkdir()
+        (package / "version.py").write_text(f"__version__ = '2.8.0a0+gitfc14c65'\n{hip_line}\n", encoding="utf-8")
+        monkeypatch.setattr(torch_cuda_allocator, "_installed_torch_version", lambda: "2.8.0a0+gitfc14c65")
+        monkeypatch.setattr(
+            torch_cuda_allocator.importlib.util,
+            "find_spec",
+            lambda name: SimpleNamespace(submodule_search_locations=[str(package)]),
+        )
+
+        assert torch_cuda_allocator._installed_torch_is_rocm() is expected
+
+    def test_an_unreadable_installation_is_not_rocm(self, monkeypatch):
+        monkeypatch.setattr(torch_cuda_allocator, "_installed_torch_version", lambda: "2.8.0a0+gitfc14c65")
+        monkeypatch.setattr(
+            torch_cuda_allocator.importlib.util, "find_spec", MagicMock(side_effect=ValueError("no spec"))
+        )
+
+        assert torch_cuda_allocator._installed_torch_is_rocm() is False
 
 
 # These tests are a bit fiddly, because the depend on the import behaviour of torch. They use subprocesses to isolate

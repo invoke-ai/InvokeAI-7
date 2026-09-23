@@ -201,7 +201,9 @@ def _scores(shape_pair: tuple[torch.Size, torch.Size]) -> int:
 class TestChunking:
     """Math-kernel attention over the budget runs in chunks; every chunk stays within it, together they are exact."""
 
-    def test_heads_are_split_first_and_the_result_is_bitwise_unchunked(self, monkeypatch):
+    def test_heads_are_split_first_and_the_result_matches_the_unchunked_call(self, monkeypatch):
+        """Bitwise here because the CPU kernel's arithmetic does not depend on the batch it runs over; on a ROCm
+        card the batched GEMM re-tiles with the group count and lands within a bf16 ulp instead."""
         per_head = 64 * 48 * BYTES
         shapes = _install_chunking(monkeypatch, budget=2 * per_head)
         torch.manual_seed(0)

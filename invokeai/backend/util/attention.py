@@ -132,8 +132,8 @@ _ROCM_SDPA_GUARD_SENTINEL = "_invokeai_rocm_sdpa_guard"
 # (`_chunked_sdpa`). Where no fused kernel exists -- ROCm on Windows has none, measured on an RX 9060 XT with torch
 # 2.12+rocm7.14 -- an unchunked call costs heads x seq^2 x ~12-17 bytes: 8 GiB for Z-Image at 1024px, 12.9 GiB for
 # Krea-2, 40 GiB for Z-Image at 1536px, against a 16 GB card. Measured per call at 1 GiB, against unchunked: Z-Image
-# shape +8 % time, bitwise identical output; FLUX VAE mid-block (one 512-wide head, 1024px) +12 %, within one bf16
-# ulp. Read at call time, so tests can lower it.
+# shape +8 % time, FLUX VAE mid-block (one 512-wide head, 1024px) +12 %; both within one bf16 ulp of the unchunked
+# result. Read at call time, so tests can lower it.
 SDPA_MATH_CHUNK_BYTES = 1 << 30
 
 
@@ -228,12 +228,14 @@ def _chunked_sdpa(
 ) -> torch.Tensor:
     """Run a 4-D `(batch, heads, seq, dim)` attention as calls whose score matrices stay within `SDPA_MATH_CHUNK_BYTES`.
 
-    Softmax normalizes each query row over all keys, so splitting heads or query rows is exact. Head groups come
-    first: every call keeps its full `query x key` shape, so the result is bitwise the unchunked one. Query rows are
-    split only when a single head (or GQA group) alone exceeds the budget -- the one-head VAE mid-block -- or when K/V
-    are broadcast across heads rather than grouped; there the GEMM tiling changes by up to one bf16 ulp. A mask is
-    sliced along the axis being split wherever it is not broadcast there. The output is allocated from the first
-    chunk's result, which carries the dtype autocast chose.
+    Softmax normalizes each query row over all keys, so splitting heads or query rows is exact in exact arithmetic,
+    and both orders agree to within one bf16 ulp in practice. Head groups come first: every call keeps its full
+    `query x key` shape, which is bitwise the unchunked result wherever the kernel's arithmetic does not depend on
+    the batch it runs over (it does on CPU; a rocBLAS batched GEMM re-tiles when 30 head-batches become groups of 2,
+    measured at 0.0005 on a bf16 Z-Image shape). Query rows are split only when a single head (or GQA group) alone
+    exceeds the budget -- the one-head VAE mid-block -- or when K/V are broadcast across heads rather than grouped. A
+    mask is sliced along the axis being split wherever it is not broadcast there. The output is allocated from the
+    first chunk's result, which carries the dtype autocast chose.
     """
     budget = SDPA_MATH_CHUNK_BYTES
     batch, heads, query_len, _ = query.shape
@@ -521,7 +523,10 @@ def sdpa_score_matrix_bytes(
     the model is loaded and outside any `attention_backend()` scope.
 
     Where the ROCm guard computes math attention in chunks (`rocm_sdpa_chunks_math`), one chunk is
-    what is alive at a time, so the term is capped at ``SDPA_MATH_CHUNK_BYTES``.
+    what is alive at a time, so the term is capped at ``SDPA_MATH_CHUNK_BYTES``. That cap assumes the
+    call is one the guard will chunk: a plain 4-D, non-causal, dropout-free call with K/V of the
+    query's batch, which is what every caller here prices. A causal or dropout call, or one with
+    broadcast K/V, runs whole and would need the full figure.
     """
     if seq_len <= 0 or num_heads <= 0:
         return 0

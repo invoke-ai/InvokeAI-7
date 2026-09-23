@@ -1,7 +1,10 @@
 import importlib.metadata
+import importlib.util
 import logging
 import os
+import re
 import sys
+from pathlib import Path
 
 # Every variable torch reads its caching-allocator configuration from. `ModelCache._expandable_segments_enabled` keeps
 # its own copy of this list: the model cache imports torch, and this module must not.
@@ -16,6 +19,33 @@ def _installed_torch_version() -> str | None:
         return importlib.metadata.version("torch")
     except importlib.metadata.PackageNotFoundError:
         return None
+
+
+def _installed_torch_is_rocm() -> bool:
+    """Whether the installed torch is a ROCm build, without importing torch.
+
+    AMD's published wheels carry `+rocm` in the distribution version, but a wheel built locally is versioned like
+    `2.8.0a0+gitfc14c65`. Both record a `hip` version in torch's own `version.py`, which is read as a file -- the same
+    value `torch.version.hip` returns, which is what `invokeai.backend.util.wddm` gates on. Keeping the two answers
+    together matters: a build that gets the video-memory budget but not this allocator default fragments its way into
+    system memory with nothing in the log to say why.
+    """
+    version = _installed_torch_version()
+    if version is not None and "+rocm" in version:
+        return True
+    try:
+        spec = importlib.util.find_spec("torch")  # locates the package; does not execute it
+        locations = list(spec.submodule_search_locations or []) if spec is not None else []
+        for location in locations:
+            source = Path(location, "version.py")
+            if source.is_file():
+                return (
+                    re.search(r"^hip\s*(?::[^=]+)?=\s*['\"]", source.read_text(encoding="utf-8"), re.MULTILINE)
+                    is not None
+                )
+    except Exception:
+        return False
+    return False
 
 
 def apply_rocm_windows_allocator_default(logger: logging.Logger) -> None:
@@ -33,8 +63,7 @@ def apply_rocm_windows_allocator_default(logger: logging.Logger) -> None:
     """
     if sys.platform != "win32" or any(os.environ.get(var) for var in _ALLOCATOR_CONF_ENV_VARS):
         return
-    torch_version = _installed_torch_version()
-    if torch_version is None or "+rocm" not in torch_version:
+    if not _installed_torch_is_rocm():
         return
     if "torch" in sys.modules:
         # Setting the variable now would change nothing but the model cache's reading of it.

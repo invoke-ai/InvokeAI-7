@@ -220,21 +220,27 @@ def _resolve_adapter(lib: ctypes.CDLL, index: int) -> Optional[_Adapter]:
         return None
 
     matches: list[_AdapterInfo] = []
-    for info in infos[: enum.NumAdapters]:
-        address = _AdapterAddress()
-        query = _QueryAdapterInfo(
-            info.hAdapter,
-            _KMTQAITYPE_ADAPTERADDRESS,
-            ctypes.cast(ctypes.byref(address), ctypes.c_void_p),
-            ctypes.sizeof(address),
-        )
-        if (
-            lib.D3DKMTQueryAdapterInfo(ctypes.byref(query)) == 0
-            and (address.BusNumber, address.DeviceNumber) == location
-        ):
-            matches.append(info)
-        else:
+    try:
+        for info in infos[: enum.NumAdapters]:
+            address = _AdapterAddress()
+            query = _QueryAdapterInfo(
+                info.hAdapter,
+                _KMTQAITYPE_ADAPTERADDRESS,
+                ctypes.cast(ctypes.byref(address), ctypes.c_void_p),
+                ctypes.sizeof(address),
+            )
+            if (
+                lib.D3DKMTQueryAdapterInfo(ctypes.byref(query)) == 0
+                and (address.BusNumber, address.DeviceNumber) == location
+            ):
+                matches.append(info)
+            else:
+                _close(lib, info.hAdapter)
+    except Exception:
+        # Every handle opened by the enumeration belongs to this process until it is closed.
+        for info in matches:
             _close(lib, info.hAdapter)
+        raise
 
     if len(matches) != 1:
         for info in matches:
@@ -266,23 +272,25 @@ def _adapter_for(device: torch.device) -> Optional[tuple[ctypes.CDLL, _Adapter]]
 def video_memory_budget(device: torch.device) -> Optional[int]:
     """This process's WDDM budget on the device's adapter, in bytes: what Windows keeps resident before paging.
 
-    ``None`` off Windows ROCm, and whenever the driver cannot answer or answers something implausible.
+    ``None`` off Windows ROCm, and whenever the driver cannot answer or answers something implausible. It is called
+    per generation and per decode, so every failure answers "unknown" here rather than reaching those callers.
     """
     if not _supported(device):
         return None
-    resolved = _adapter_for(device)
-    if resolved is None:
-        return None
-    lib, adapter = resolved
-    info = _QueryVideoMemoryInfo(None, adapter.handle, _MEMORY_SEGMENT_GROUP_LOCAL)
     try:
+        resolved = _adapter_for(device)
+        if resolved is None:
+            return None
+        lib, adapter = resolved
+        info = _QueryVideoMemoryInfo(None, adapter.handle, _MEMORY_SEGMENT_GROUP_LOCAL)
         if lib.D3DKMTQueryVideoMemoryInfo(ctypes.byref(info)) != 0:
             return None
+        if not 0 < info.Budget <= adapter.total_bytes:
+            return None
+        return int(info.Budget)
     except Exception:
+        InvokeAILogger.get_logger(__name__).debug(f"WDDM budget lookup for {device} failed", exc_info=True)
         return None
-    if not 0 < info.Budget <= adapter.total_bytes:
-        return None
-    return int(info.Budget)
 
 
 def _open_shared_usage_query(pdh: ctypes.CDLL) -> Optional[tuple[ctypes.c_void_p, ctypes.c_void_p]]:
@@ -332,12 +340,12 @@ def paged_bytes(device: torch.device) -> Optional[int]:
     luid = resolved[1].luid
     instance = f"pid_{os.getpid()}_luid_0x{(luid >> 32) & 0xFFFFFFFF:08x}_0x{luid & 0xFFFFFFFF:08x}_phys_0"
     with _pdh_lock:
-        if not _pdh_attempted:
-            _pdh_attempted = True
-            _pdh_query = _open_shared_usage_query(pdh)
-        if _pdh_query is None:
-            return None
         try:
+            if not _pdh_attempted:
+                _pdh_attempted = True
+                _pdh_query = _open_shared_usage_query(pdh)
+            if _pdh_query is None:
+                return None
             return _shared_usage_by_instance(pdh, *_pdh_query).get(instance)
         except Exception:
             return None

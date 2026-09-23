@@ -334,8 +334,8 @@ class TorchDevice:
         return device
 
     @classmethod
-    def empty_cache(cls) -> None:
-        """Clear the GPU device cache — unless another generation device is mid-session.
+    def empty_cache(cls) -> bool:
+        """Clear the GPU device cache — unless another generation device is mid-session. Says whether it ran.
 
         ``torch.cuda.empty_cache()`` is process-global: it takes EVERY device's
         caching-allocator mutex and cudaFree/hipFrees their cached blocks, and a free on a
@@ -367,7 +367,7 @@ class TorchDevice:
             InvokeAILogger.get_logger(cls.__name__).debug(
                 "Deferring empty_cache: another generation device is mid-session."
             )
-            return
+            return False
         # Clear before running: a skip that races in after this point re-sets the flag, so a
         # request is never lost, only (harmlessly) repeated.
         cls._empty_cache_deferred.clear()
@@ -377,6 +377,7 @@ class TorchDevice:
             torch.cuda.empty_cache()
         if _xpu_is_available():
             torch.xpu.empty_cache()
+        return True
 
     @classmethod
     def flush_deferred_empty_cache(cls) -> None:

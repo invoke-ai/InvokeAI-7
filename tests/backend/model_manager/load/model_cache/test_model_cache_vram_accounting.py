@@ -214,9 +214,13 @@ def test_the_windows_video_memory_budget_caps_the_measured_free_vram(monkeypatch
     assert cache._get_vram_available(None) == 6 * GB
 
 
-def test_offloading_under_expandable_segments_stops_once_enough_is_free(monkeypatch: pytest.MonkeyPatch):
+@pytest.mark.parametrize("peer_busy", [False, True], ids=["alone", "peer-device-busy"])
+def test_offloading_under_expandable_segments_stops_once_enough_is_free(monkeypatch: pytest.MonkeyPatch, peer_busy):
     """Under expandable segments the driver sees an offloaded model's pages only after empty_cache(), and no
-    allocator credit stands in for them. Re-measuring without it saw no progress and unloaded every unlocked model."""
+    allocator credit stands in for them. Re-measuring without it saw no progress and unloaded every unlocked model.
+
+    `empty_cache` is peer-aware: while another generation device is mid-session it defers instead of releasing, so
+    the measurement cannot see the offload at all and the freed bytes are credited to it directly."""
     cache = ModelCache(
         execution_device_working_mem_gb=1.0,
         enable_partial_loading=True,
@@ -234,9 +238,12 @@ def test_offloading_under_expandable_segments_stops_once_enough_is_free(monkeypa
         device["unmappable"] += 4 * GB
         return 4 * GB
 
-    def empty_cache():
+    def empty_cache() -> bool:
+        if peer_busy:  # deferred: nothing is released, and the driver keeps reporting the old figure
+            return False
         device["free"] += device["unmappable"]
         device["unmappable"] = 0
+        return True
 
     monkeypatch.setenv("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
     monkeypatch.setattr(torch.cuda, "mem_get_info", lambda d: (device["free"], 16 * GB))

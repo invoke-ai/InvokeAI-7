@@ -2342,9 +2342,11 @@ class ModelCache:
 
         Best-effort: 0 when the backend does not expose allocator stats, and 0 under
         expandable-segments mode — there, freed blocks inside a segment are NOT counted as
-        inactive splits, empty_cache() reclaims nothing, and a large allocation cannot use the
-        holes, so the whole (reserved - allocated) figure is untrustworthy (a measured hard OOM
-        on an allocation the credited budget claimed would fit).
+        inactive splits and a large allocation cannot use the holes, so the whole
+        (reserved - allocated) figure is untrustworthy (a measured hard OOM on an allocation the
+        credited budget claimed would fit). empty_cache() does unmap the freed pages, which is why
+        `_offload_unlocked_models` runs one after each offload in that mode; what it cannot do is
+        make the credit trustworthy before it runs.
         """
         if _expandable_segments_enabled():
             return 0
@@ -2554,13 +2556,16 @@ class ModelCache:
         vram_bytes_freed = 0
         # Under expandable segments the measurement credits no allocator-held blocks, so an offload
         # only shows up once empty_cache() unmaps its pages; without it every unlocked model would
-        # be unloaded by the full shortfall.
+        # be unloaded by the full shortfall. When a peer device is mid-session that release is
+        # deferred, and the bytes just freed are credited to the measurement instead -- they sit in
+        # this process's allocator, which reuses them for the load this is making room for.
         empty_cache_per_offload = _expandable_segments_enabled()
+        vram_bytes_freed_uncounted = 0
         # TODO(ryand): Give more thought to the offloading policy used here.
         cache_entries_increasing_size = sorted(self._cached_models.values(), key=lambda x: x.cached_model.total_bytes())
         for cache_entry in cache_entries_increasing_size:
             # We do not fully trust the count of bytes freed, so we check again on each iteration.
-            vram_available = vram_available_fn()
+            vram_available = vram_available_fn() + vram_bytes_freed_uncounted
             vram_bytes_to_free = vram_bytes_required - vram_available
             if vram_bytes_to_free <= 0:
                 break
@@ -2574,7 +2579,10 @@ class ModelCache:
                     f"Unloaded {cache_entry.key} from VRAM to free {(cache_entry_bytes_freed / MB):.0f} MB."
                 )
                 if empty_cache_per_offload:
-                    TorchDevice.empty_cache()
+                    if TorchDevice.empty_cache():
+                        vram_bytes_freed_uncounted = 0
+                    else:
+                        vram_bytes_freed_uncounted += cache_entry_bytes_freed
             vram_bytes_freed += cache_entry_bytes_freed
 
         # Only pay for empty_cache() when something was actually offloaded. Paced VRAM moves run
