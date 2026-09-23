@@ -456,7 +456,7 @@ class TestVaeConstantsFollowTheConvBackend:
             at_1024 = estimate(1024)
             at_1536 = estimate(1536)
 
-        miopen = _FLUX2_VAE_SCALING_CONSTANTS["miopen"]["decode"]
+        miopen = _FLUX_VAE_SCALING_CONSTANTS["miopen"]["decode"]
         assert at_1024 == 1024 * 1024 * 2 * miopen, "at 1024px the MIOpen linear term is the larger"
         assert at_1024 >= 6.703 * GB, "and it still covers the measured W7900 peak it was fitted to"
         assert at_1536 == 36864 * 36864 * SDPA_MATH_BYTES_PER_SCORE_ELEMENT, "at 1536px the score matrix is"
