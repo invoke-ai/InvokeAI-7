@@ -207,6 +207,27 @@ describe('issue #9151: graphToWorkflow + zod validation roundtrip', () => {
 
     expect(migrated.edges[0]?.type).toBe('loop_linkage');
   });
+  // The graph carries the edge type (`Literal["default", "loop_linkage"]`), and
+  // this is the path used to load a workflow from an image that embedded only a
+  // graph. Downgrading the linkage to a data edge produces a workflow that looks
+  // intact but no longer loops, and that the backend rejects on the next run.
+  it('preserves a loop_linkage edge taken from the graph', () => {
+    const workflow = graphToWorkflow(
+      {
+        ...userFirstGraph,
+        edges: [
+          {
+            destination: { field: 'loop_linkage', node_id: 'lora_selector:lXZkTpWiQQ' },
+            source: { field: 'loop_linkage', node_id: 'core_metadata:sbmUlPbCpY' },
+            type: 'loop_linkage',
+          },
+        ],
+      } as NonNullableGraph,
+      false
+    );
+
+    expect(workflow.edges[0]?.type).toBe('loop_linkage');
+  });
 });
 
 const imageCollectionTemplate = {

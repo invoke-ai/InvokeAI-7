@@ -122,7 +122,7 @@ export const graphToWorkflow = (graph: NonNullableGraph, autoLayout = true): Wor
   forEach(graph.edges, (edge) => {
     workflow.edges.push({
       id: uuidv4(), // we don't have edge IDs in the graph
-      type: 'default',
+      type: edge.type === 'loop_linkage' ? 'loop_linkage' : 'default',
       source: edge.source.node_id,
       sourceHandle: edge.source.field,
       target: edge.destination.node_id,

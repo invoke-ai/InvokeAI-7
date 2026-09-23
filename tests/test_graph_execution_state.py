@@ -3826,8 +3826,10 @@ def test_invocation_event_service_uses_compact_control_node_representation():
         origin="workflows",
         destination=None,
         user_id="system",
+        parent_item_id=None,
+        root_item_id=None,
         session_id="session",
-        session=Mock(prepared_source_mapping={iterator.id: "source"}),
+        session=Mock(prepared_source_mapping={iterator.id: "source"}, workflow_call_stack=[]),
     )
     events = TestEventService()
 

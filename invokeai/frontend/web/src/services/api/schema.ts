@@ -20611,6 +20611,24 @@ export type components = {
              */
             invocation_source_id: string;
             /**
+             * Parent Item Id
+             * @description The parent queue item id when this item is a called-workflow child
+             * @default null
+             */
+            parent_item_id: number | null;
+            /**
+             * Root Item Id
+             * @description The root queue item id for this called-workflow chain, if any
+             * @default null
+             */
+            root_item_id: number | null;
+            /**
+             * Workflow Call Parent Source Id
+             * @description The visible parent Call Saved Workflow source node for a called-workflow child event
+             * @default null
+             */
+            workflow_call_parent_source_id: string | null;
+            /**
              * Result
              * @description The result of the invocation
              */
@@ -20674,6 +20692,24 @@ export type components = {
              * @description The ID of the prepared invocation's source node
              */
             invocation_source_id: string;
+            /**
+             * Parent Item Id
+             * @description The parent queue item id when this item is a called-workflow child
+             * @default null
+             */
+            parent_item_id: number | null;
+            /**
+             * Root Item Id
+             * @description The root queue item id for this called-workflow chain, if any
+             * @default null
+             */
+            root_item_id: number | null;
+            /**
+             * Workflow Call Parent Source Id
+             * @description The visible parent Call Saved Workflow source node for a called-workflow child event
+             * @default null
+             */
+            workflow_call_parent_source_id: string | null;
             /**
              * Error Type
              * @description The error type
@@ -21093,6 +21129,24 @@ export type components = {
              */
             invocation_source_id: string;
             /**
+             * Parent Item Id
+             * @description The parent queue item id when this item is a called-workflow child
+             * @default null
+             */
+            parent_item_id: number | null;
+            /**
+             * Root Item Id
+             * @description The root queue item id for this called-workflow chain, if any
+             * @default null
+             */
+            root_item_id: number | null;
+            /**
+             * Workflow Call Parent Source Id
+             * @description The visible parent Call Saved Workflow source node for a called-workflow child event
+             * @default null
+             */
+            workflow_call_parent_source_id: string | null;
+            /**
              * Message
              * @description A message to display
              */
@@ -21179,6 +21233,24 @@ export type components = {
              * @description The ID of the prepared invocation's source node
              */
             invocation_source_id: string;
+            /**
+             * Parent Item Id
+             * @description The parent queue item id when this item is a called-workflow child
+             * @default null
+             */
+            parent_item_id: number | null;
+            /**
+             * Root Item Id
+             * @description The root queue item id for this called-workflow chain, if any
+             * @default null
+             */
+            root_item_id: number | null;
+            /**
+             * Workflow Call Parent Source Id
+             * @description The visible parent Call Saved Workflow source node for a called-workflow child event
+             * @default null
+             */
+            workflow_call_parent_source_id: string | null;
         };
         /**
          * InvokeAIAppConfig
@@ -36681,6 +36753,21 @@ export type components = {
              * @description The ID of the prepared invocation's source node
              */
             invocation_source_id: string;
+            /**
+             * Parent Item Id
+             * @description The parent queue item id when this item is a called-workflow child
+             */
+            parent_item_id?: number | null;
+            /**
+             * Root Item Id
+             * @description The root queue item id for this called-workflow chain, if any
+             */
+            root_item_id?: number | null;
+            /**
+             * Workflow Call Parent Source Id
+             * @description The visible parent Call Saved Workflow source node for a called-workflow child event
+             */
+            workflow_call_parent_source_id?: string | null;
             /**
              * Revision
              * @description Monotonic per queue item and session; see InvocationProgressEvent

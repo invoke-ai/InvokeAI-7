@@ -126,7 +126,7 @@ export const buildNodesGraph = (state: RootState, templates: Templates): Require
 
   // skip out the "dummy" edges between collapsed nodes
   const flattenedEdges = edges
-    .filter((edge) => edge.type === 'default')
+    .filter((edge) => edge.type === 'default' || edge.type === 'loop_linkage')
     .flatMap((edge) => {
       const targetNode = nodes.find((node) => node.id === edge.target);
       if (!targetNode || !isInvocationNode(targetNode) || !isExecutableNode(targetNode)) {
@@ -185,6 +185,7 @@ export const buildNodesGraph = (state: RootState, templates: Templates): Require
 
     // Format the edges and add to the edges array
     edgesAccumulator.push({
+      ...(edge.type === 'loop_linkage' ? { type: 'loop_linkage' as const } : {}),
       source: {
         node_id: source,
         field: sourceHandle,

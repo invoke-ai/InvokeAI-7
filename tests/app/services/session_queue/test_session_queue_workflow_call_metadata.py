@@ -1,14 +1,23 @@
 """Tests for workflow-call relationship metadata on session_queue items."""
 
 import uuid
+from pathlib import Path
 from threading import Barrier, Event, Thread
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
+from PIL import Image
 
 from invokeai.app.invocations.call_saved_workflow import CallSavedWorkflowInvocation
-from invokeai.app.services.events.events_common import QueueItemsRetriedEvent, QueueItemStatusChangedEvent
+from invokeai.app.services.events.events_common import (
+    InvocationStartedEvent,
+    QueueItemsRetriedEvent,
+    QueueItemStatusChangedEvent,
+)
+from invokeai.app.services.image_files.image_files_disk import DiskImageFileStorage
 from invokeai.app.services.invoker import Invoker
+from invokeai.app.services.names.names_default import SimpleNameService
 from invokeai.app.services.session_processor.session_processor_default import DefaultSessionRunner
 from invokeai.app.services.session_queue.session_queue_common import (
     NodeFieldValue,
@@ -17,6 +26,9 @@ from invokeai.app.services.session_queue.session_queue_common import (
 )
 from invokeai.app.services.session_queue.session_queue_sqlite import SqliteSessionQueue
 from invokeai.app.services.shared.graph import Graph, GraphExecutionState
+from invokeai.app.services.shared.invocation_context import ImagesInterface, InvocationContextData
+from invokeai.app.services.urls.urls_default import LocalUrlService
+from invokeai.app.services.workflow_records.workflow_records_common import WorkflowMeta, WorkflowWithoutID
 from tests.test_nodes import TestEventService
 
 
@@ -48,6 +60,7 @@ def _insert_queue_item(
     parent_session_id: str | None = None,
     root_item_id: int | None = None,
     workflow_call_depth: int | None = None,
+    workflow: WorkflowWithoutID | None = None,
 ) -> int:
     with session_queue._db.transaction() as cursor:
         cursor.execute(
@@ -80,7 +93,7 @@ def _insert_queue_item(
                 batch_id or str(uuid.uuid4()),
                 None,
                 0,
-                None,
+                workflow.model_dump_json() if workflow else None,
                 None,
                 destination,
                 None,
@@ -94,6 +107,23 @@ def _insert_queue_item(
             ),
         )
         return cursor.lastrowid
+
+
+def _workflow_without_id() -> WorkflowWithoutID:
+    return WorkflowWithoutID(
+        name="Parent workflow",
+        author="Tester",
+        description="",
+        version="1.0.0",
+        contact="",
+        tags="",
+        notes="",
+        exposedFields=[],
+        meta=WorkflowMeta(version="1.0.0", category="user"),
+        nodes=[],
+        edges=[],
+        form=None,
+    )
 
 
 def _build_waiting_workflow_call_parent(
@@ -265,7 +295,9 @@ def test_status_transition_reuses_loaded_queue_item(
     assert updated.status_sequence == 1
 
 
-def test_enqueue_workflow_call_child_persists_pending_child_queue_item(session_queue: SqliteSessionQueue) -> None:
+def test_enqueue_workflow_call_child_inherits_workflow_for_image_metadata(
+    session_queue: SqliteSessionQueue, mock_invoker: Invoker, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     parent_graph = Graph()
     parent_graph.add_node(CallSavedWorkflowInvocation(id="call-node", workflow_id="workflow-a"))
     parent_session = GraphExecutionState(graph=parent_graph)
@@ -303,7 +335,7 @@ def test_enqueue_workflow_call_child_persists_pending_child_queue_item(session_q
                 str(uuid.uuid4()),
                 None,
                 0,
-                None,
+                _workflow_without_id().model_dump_json(),
                 None,
                 None,
                 None,
@@ -323,6 +355,46 @@ def test_enqueue_workflow_call_child_persists_pending_child_queue_item(session_q
     assert child_queue_item.root_item_id == parent_item_id
     assert child_queue_item.workflow_call_depth == 1
     assert child_queue_item.session_id == child_session.id
+    assert child_queue_item.workflow is None
+
+    image_files = DiskImageFileStorage(tmp_path / "images")
+    mock_invoker.services.session_queue = session_queue
+    mock_invoker.services.image_files = image_files
+    mock_invoker.services.names = SimpleNameService()
+    mock_invoker.services.urls = LocalUrlService()
+    image_files.start(mock_invoker)
+    mock_invoker.services.images.start(mock_invoker)
+
+    workflow_json = _workflow_without_id().model_dump_json()
+    workflow_lookup_count = 0
+    original_workflow_lookup = session_queue.get_queue_item_workflow_json
+
+    def count_workflow_lookups(item_id: int) -> str | None:
+        nonlocal workflow_lookup_count
+        workflow_lookup_count += 1
+        return original_workflow_lookup(item_id)
+
+    monkeypatch.setattr(session_queue, "get_queue_item_workflow_json", count_workflow_lookups)
+
+    image_names = []
+    for index in range(3):
+        images = ImagesInterface(
+            mock_invoker.services,
+            InvocationContextData(
+                queue_item=child_queue_item,
+                invocation=MagicMock(is_intermediate=False, id=f"image-node-{index}"),
+                source_invocation_id=f"image-node-{index}",
+            ),
+            MagicMock(),
+        )
+        dto = images.save(Image.new("RGB", (4, 4)))
+        image_names.append(dto.image_name)
+
+    assert workflow_lookup_count == 1
+    for image_name in image_names:
+        with Image.open(image_files.get_path(image_name)) as saved:
+            assert saved.info["invokeai_workflow"] == workflow_json
+        assert mock_invoker.services.images.get_workflow(image_name) == workflow_json
 
 
 def test_enqueue_workflow_call_child_rejects_canceled_stale_parent(
@@ -477,6 +549,55 @@ def test_enqueue_workflow_call_child_rejects_full_pending_queue(session_queue: S
         session_queue.enqueue_workflow_call_child(parent_queue_item, child_session)
 
     assert session_queue.get_queue_status("default").pending == 1
+
+
+def test_enqueue_workflow_call_child_preserves_workflow_through_nested_calls(
+    session_queue: SqliteSessionQueue,
+) -> None:
+    workflow = _workflow_without_id()
+
+    root_graph = Graph()
+    root_graph.add_node(CallSavedWorkflowInvocation(id="root-call", workflow_id="workflow-a"))
+    root_session = GraphExecutionState(graph=root_graph)
+    root_invocation = root_session.next()
+    assert isinstance(root_invocation, CallSavedWorkflowInvocation)
+    root_frame = root_session.build_workflow_call_frame(root_invocation.id, root_invocation.workflow_id)
+
+    child_graph = Graph()
+    child_graph.add_node(CallSavedWorkflowInvocation(id="nested-call", workflow_id="workflow-b"))
+    child_session = root_session.create_child_workflow_execution_state(child_graph, root_frame)
+    root_session.begin_waiting_on_workflow_call(root_frame)
+    root_session.attach_waiting_workflow_call_child_session(child_session)
+    root_item_id = _insert_queue_item(session_queue, session=root_session, status="in_progress", workflow=workflow)
+
+    root_queue_item = session_queue.get_queue_item(root_item_id)
+    child_queue_item = session_queue.enqueue_workflow_call_child(root_queue_item, child_session)
+    nested_invocation = child_session.next()
+    assert isinstance(nested_invocation, CallSavedWorkflowInvocation)
+    nested_frame = child_session.build_workflow_call_frame(nested_invocation.id, nested_invocation.workflow_id)
+    grandchild_graph = Graph()
+    grandchild_graph.add_node(CallSavedWorkflowInvocation(id="leaf-call", workflow_id="workflow-c"))
+    grandchild_session = child_session.create_child_workflow_execution_state(grandchild_graph, nested_frame)
+    child_session.begin_waiting_on_workflow_call(nested_frame)
+    child_session.attach_waiting_workflow_call_child_session(grandchild_session)
+    child_queue_item.session = child_session
+
+    child_event = InvocationStartedEvent.build(child_queue_item, nested_invocation)
+    assert child_event.root_item_id == root_item_id
+    assert child_event.parent_item_id == root_item_id
+    assert child_event.workflow_call_parent_source_id == "root-call"
+
+    grandchild_queue_item = session_queue.enqueue_workflow_call_child(child_queue_item, grandchild_session)
+    grandchild_invocation = grandchild_queue_item.session.next()
+    assert grandchild_invocation is not None
+    grandchild_event = InvocationStartedEvent.build(grandchild_queue_item, grandchild_invocation)
+    assert grandchild_event.root_item_id == root_item_id
+    assert grandchild_event.parent_item_id == child_queue_item.item_id
+    assert grandchild_event.workflow_call_parent_source_id == "root-call"
+
+    assert child_queue_item.workflow is None
+    assert grandchild_queue_item.workflow is None
+    assert session_queue.get_queue_item_workflow_json(root_item_id) == workflow.model_dump_json()
 
 
 def test_enqueue_workflow_call_child_persists_batch_field_values(session_queue: SqliteSessionQueue) -> None:

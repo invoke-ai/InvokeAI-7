@@ -1498,6 +1498,7 @@
     "forReturnOwnership": "Each ForReturn must belong to exactly one For",
     "executionCompleted": "Completed",
     "executionFailed": "Failed",
+    "childWorkflowError": "Child workflow error: {{error}}",
     "latestOutput": "Latest output",
     "latestOutputImage": "Latest output of this node",
     "forLoopBodyBoundary": "For loop body",

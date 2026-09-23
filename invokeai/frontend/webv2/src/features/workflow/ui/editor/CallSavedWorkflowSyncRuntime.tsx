@@ -162,6 +162,13 @@ export const CallSavedWorkflowSyncRuntime = () => {
   const authorizeWorkflowRetry = (workflowId: string) => {
     retryableDetailWorkflowQueries.current.set(workflowId, ++nextRetryToken.current);
   };
+  const revokeNodeRetries = (workflowId?: string) => {
+    for (const [nodeId, authorization] of retryableDetailWorkflowIds.current) {
+      if (workflowId === undefined || authorization.workflowId === workflowId) {
+        retryableDetailWorkflowIds.current.delete(nodeId);
+      }
+    }
+  };
   const reconcile = () => {
     const templatesSnapshot = getInvocationTemplatesSnapshot();
 
@@ -171,6 +178,7 @@ export const CallSavedWorkflowSyncRuntime = () => {
 
     const document = projectPort.getSnapshot().projectGraph;
     const currentNodeIds = new Set(document.nodes.map((node) => node.id));
+    const scheduledDetailFetches = new Set<string>();
 
     pruneStaleCallSavedWorkflowNodeState(retryableDetailWorkflowIds.current, currentNodeIds);
     pruneStaleCallSavedWorkflowNodeState(previousDetailStatuses.current, currentNodeIds);
@@ -249,6 +257,11 @@ export const CallSavedWorkflowSyncRuntime = () => {
           retryErrors: retryWasAuthorized,
         })
       ) {
+        if (scheduledDetailFetches.has(workflowId)) {
+          continue;
+        }
+        scheduledDetailFetches.add(workflowId);
+
         const hasExistingDetail = query?.state.data !== undefined && query.state.data !== null;
 
         if (!hasExistingDetail) {
@@ -375,6 +388,7 @@ export const CallSavedWorkflowSyncRuntime = () => {
     });
     const unsubscribeLibrary = onWorkflowLibraryCacheInvalidated((workflowId) => {
       if (workflowId) {
+        revokeNodeRetries(workflowId);
         authorizeWorkflowRetry(workflowId);
         void queryClient.invalidateQueries({
           exact: true,
@@ -382,6 +396,7 @@ export const CallSavedWorkflowSyncRuntime = () => {
           refetchType: 'none',
         });
       } else {
+        revokeNodeRetries();
         for (const query of queryClient.getQueryCache().findAll({ queryKey: ['workflow', 'call-saved', 'detail'] })) {
           if (isSavedWorkflowDetailQueryKey(query.queryKey)) {
             authorizeWorkflowRetry(query.queryKey[3]);

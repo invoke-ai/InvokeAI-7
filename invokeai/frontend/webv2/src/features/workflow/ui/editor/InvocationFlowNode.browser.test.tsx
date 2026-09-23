@@ -12,7 +12,7 @@ import { ReactFlow } from '@xyflow/react';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { page } from 'vitest/browser';
+import { page, userEvent } from 'vitest/browser';
 
 import { toFlowEdges, toFlowNodes } from './flowAdapters';
 import { InvocationFlowNode } from './InvocationFlowNode';
@@ -23,8 +23,14 @@ import '@xyflow/react/dist/style.css';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
-    t: (key: string) =>
-      ({ 'nodes.latestOutput': 'Latest output', 'nodes.latestOutputImage': 'Latest output of this node' })[key] ?? key,
+    t: (key: string, options?: { error?: string }) =>
+      ({
+        'nodes.childWorkflowError': `Child workflow error: ${options?.error ?? ''}`,
+        'nodes.executionFailed': 'Failed',
+        'nodes.executionCompleted': 'Completed',
+        'nodes.latestOutput': 'Latest output',
+        'nodes.latestOutputImage': 'Latest output of this node',
+      })[key] ?? key,
   }),
 }));
 
@@ -100,6 +106,23 @@ const templates = { preview: template };
 const flowNodes = toFlowNodes(projectGraph, [], templates);
 const nodeTypes = { invocation: InvocationFlowNode };
 
+const callNodeId = 'call-node';
+const callNode: WorkflowInvocationNode = {
+  ...documentNode,
+  data: { ...documentNode.data, type: 'call_saved_workflow' },
+  id: callNodeId,
+};
+const callTemplate: InvocationTemplate = {
+  ...template,
+  inputs: {},
+  outputType: 'workflow_return_output',
+  outputs: {},
+  title: 'Call Saved Workflow',
+  type: 'call_saved_workflow',
+};
+const callProjectGraph: ProjectGraphState = { ...createProjectGraph('call-test'), nodes: [callNode] };
+const callFlowNodes = toFlowNodes(callProjectGraph, [], { call_saved_workflow: callTemplate });
+
 const outputImage = (width: number, height: number): string => {
   const canvas = document.createElement('canvas');
   canvas.width = width;
@@ -120,13 +143,13 @@ const completed = (outputImageUrl: string): WorkflowNodeExecutionState => ({
 });
 
 /** A node-execution port the test can advance between renders. */
-const createExecutionPort = () => {
+const createExecutionPort = (nodeId = NODE_ID) => {
   const listeners = new Set<() => void>();
   let state: WorkflowNodeExecutionState | null = null;
 
   return {
     port: {
-      get: (nodeId: string) => (nodeId === NODE_ID ? state : null),
+      get: (requestedNodeId: string) => (requestedNodeId === nodeId ? state : null),
       subscribe: (_nodeId: string, listener: () => void) => {
         listeners.add(listener);
         return () => listeners.delete(listener);
@@ -267,6 +290,58 @@ describe('InvocationFlowNode output preview', () => {
 
     await vi.waitFor(() => expect(image()).toBeNull());
     expect(node().offsetHeight).toBe(layoutHeight);
+  });
+});
+
+describe('InvocationFlowNode failure outcome', () => {
+  let host: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    host = document.createElement('div');
+    host.style.cssText = 'width: 480px; height: 520px;';
+    document.body.append(host);
+    root = createRoot(host);
+  });
+
+  afterEach(async () => {
+    await act(() => root.unmount());
+    host.remove();
+  });
+
+  it('shows translated child-workflow attribution in the failure tooltip', async () => {
+    const execution = createExecutionPort(callNodeId);
+    execution.set({
+      error: 'Child node failed',
+      latestOutput: null,
+      outputImageUrl: null,
+      progress: null,
+      progressMessage: null,
+      status: 'failed',
+    });
+
+    await act(() =>
+      root.render(
+        <ChakraProvider value={system}>
+          <WorkflowUiProvider adapter={createAdapter(execution.port)}>
+            <ReactFlow defaultViewport={{ x: 0, y: 0, zoom: 1 }} nodes={callFlowNodes} nodeTypes={nodeTypes} />
+          </WorkflowUiProvider>
+        </ChakraProvider>
+      )
+    );
+
+    const failureIcon = await vi.waitFor(() => {
+      const icon = host.querySelector<HTMLElement>('[aria-label="Failed"]');
+      expect(icon).not.toBeNull();
+      return icon!;
+    });
+
+    await act(() => userEvent.hover(failureIcon));
+    await vi.waitFor(() =>
+      expect(document.querySelector('[data-part="content"]')?.textContent).toContain(
+        'Child workflow error: Child node failed'
+      )
+    );
   });
 });
 

@@ -2,15 +2,15 @@
   "build": {
     "launchpad": {
       "baseline": {
-        "brotliBytes": 895804,
+        "brotliBytes": 896132,
         "cssRawBytes": 2159,
         "fontRawBytes": 219480,
-        "gzipBytes": 894617,
+        "gzipBytes": 894900,
         "imageRawBytes": 156376,
-        "initialRawBytes": 2128478,
+        "initialRawBytes": 2129357,
         "largestAssetRawBytes": 778953,
         "otherAssetRawBytes": 0,
-        "ownedRawBytes": 89515,
+        "ownedRawBytes": 90376,
         "requestCount": 37,
         "scriptRequestCount": 21,
         "sourceOwners": [
@@ -182,6 +182,7 @@
           "source:src/platform/browser/randomUuid.ts",
           "source:src/platform/browser/sha256.ts",
           "source:src/platform/core/concurrency.ts",
+          "source:src/platform/core/outputImages.ts",
           "source:src/platform/core/seed.ts",
           "source:src/platform/i18n/client.ts",
           "source:src/platform/i18n/languages.ts",
@@ -324,12 +325,12 @@
     },
     "editor": {
       "baseline": {
-        "brotliBytes": 1233253,
+        "brotliBytes": 1235108,
         "cssRawBytes": 2159,
         "fontRawBytes": 219480,
-        "gzipBytes": 1227029,
+        "gzipBytes": 1228719,
         "imageRawBytes": 156376,
-        "initialRawBytes": 3164374,
+        "initialRawBytes": 3169745,
         "largestAssetRawBytes": 778953,
         "otherAssetRawBytes": 0,
         "ownedRawBytes": 141887,
@@ -688,6 +689,7 @@
           "source:src/platform/browser/webLocks.ts",
           "source:src/platform/core/concurrency.ts",
           "source:src/platform/core/json.ts",
+          "source:src/platform/core/outputImages.ts",
           "source:src/platform/core/seed.ts",
           "source:src/platform/i18n/client.ts",
           "source:src/platform/i18n/languages.ts",
@@ -1044,7 +1046,7 @@
       "source": "src/app/WorkbenchApp.tsx"
     }
   },
-  "capturedAt": "2026-09-22",
+  "capturedAt": "2026-09-23",
   "developmentInvalidation": {
     "platformUiBarrel": {
       "specifier": "@platform/ui",

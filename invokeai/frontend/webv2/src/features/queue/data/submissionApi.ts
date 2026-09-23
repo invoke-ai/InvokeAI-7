@@ -14,6 +14,7 @@ import {
   sanitizeBatchCount,
 } from '@features/queue/core/promptBatch';
 import { mapWithConcurrency } from '@platform/core/concurrency';
+import { addOutputImageNames } from '@platform/core/outputImages';
 import { assertAccountScopeCurrent, captureAccountScope } from '@platform/state/accountLifecycle';
 import { normalizeServerTimestamp } from '@platform/time/serverTimestamp';
 import { absolutizeApiUrl, ApiError, apiFetch, apiFetchJson } from '@platform/transport/http';
@@ -144,7 +145,6 @@ export const enqueueUtility = async (request: {
 };
 
 const getResultImageNames = (queueItem: QueueServerItemDTO, options?: QueueResultImageOptions): string[] => {
-  const imageNames = new Set<string>();
   const results = queueItem.session?.results ?? {};
   const preparedSourceMapping = queueItem.session?.prepared_source_mapping ?? {};
   const resultValues = options?.resultNodeIds
@@ -153,28 +153,10 @@ const getResultImageNames = (queueItem: QueueServerItemDTO, options?: QueueResul
         .map(([, result]) => result)
     : Object.values(results);
 
+  const imageNames = new Set<string>();
   for (const result of resultValues) {
-    if (!result || typeof result !== 'object') {
-      continue;
-    }
-
-    const imageName = (result as { image?: { image_name?: unknown } }).image?.image_name;
-    if (typeof imageName === 'string') {
-      imageNames.add(imageName);
-    }
-
-    const collection = (result as { collection?: unknown }).collection;
-    if (Array.isArray(collection)) {
-      for (const item of collection) {
-        const collectionImageName =
-          item && typeof item === 'object' ? (item as { image_name?: unknown }).image_name : undefined;
-        if (typeof collectionImageName === 'string') {
-          imageNames.add(collectionImageName);
-        }
-      }
-    }
+    addOutputImageNames(result, imageNames);
   }
-
   return [...imageNames];
 };
 

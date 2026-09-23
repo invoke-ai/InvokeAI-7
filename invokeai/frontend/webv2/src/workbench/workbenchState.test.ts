@@ -3459,7 +3459,9 @@ describe('workbenchReducer Phase 5 generation flow', () => {
       // wrong reason.
       expect(submission).toMatchObject({ kind: 'workflow' });
       expect(submission).not.toHaveProperty('workflow');
-      expect(nextState.notifications[0]).toMatchObject({
+      expect(
+        nextState.notifications.find((notification) => notification.title === 'Workflow metadata omitted')
+      ).toMatchObject({
         kind: 'info',
         message: 'Workflow metadata was omitted because the workflow contains multiple workflow_return nodes.',
         messageKey: 'workflowLibrary.workflowMetadataOmittedBody',
@@ -3467,6 +3469,11 @@ describe('workbenchReducer Phase 5 generation flow', () => {
         titleKey: 'workflowLibrary.workflowMetadataOmitted',
       });
 
+      // The omitted-metadata notice is additional information about the run, not
+      // a replacement for it: the run was queued, so the queued notification has
+      // to be recorded too. `category: 'enqueue'` is also what lets the toast
+      // policy honour the user's "notify when queued" preference.
+      expect(nextState.notifications.filter((notification) => notification.category === 'enqueue')).toHaveLength(1);
       const repeatedState = submitWorkflow(nextState);
 
       expect(

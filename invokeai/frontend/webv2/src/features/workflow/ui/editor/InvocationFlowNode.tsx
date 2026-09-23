@@ -106,6 +106,18 @@ const hasMissingRequiredInputs = (
 const getExecutionOutcome = (execution: NodeExecutionState | null): WorkflowNodeOutcome | null =>
   execution?.status === 'completed' || execution?.status === 'failed' ? execution.status : null;
 
+export const getNodeExecutionError = (
+  node: WorkflowInvocationNode,
+  error: string | null | undefined,
+  translate: (key: string, options: { error: string }) => string
+): string | null | undefined => {
+  if (!error || node.data.type !== 'call_saved_workflow') {
+    return error;
+  }
+
+  return translate('nodes.childWorkflowError', { error });
+};
+
 const NodeShell = ({
   hasMissingRequiredInput,
   children,
@@ -131,7 +143,13 @@ const NodeShell = ({
 };
 
 /** The header's completed/failed mark, named for screen readers and tooltipped with the failure. */
-const NodeOutcomeIcon = ({ execution }: { execution: NodeExecutionState | null }) => {
+const NodeOutcomeIcon = ({
+  execution,
+  node,
+}: {
+  execution: NodeExecutionState | null;
+  node: WorkflowInvocationNode;
+}) => {
   const { t } = useTranslation();
   const outcome = getExecutionOutcome(execution);
 
@@ -141,7 +159,7 @@ const NodeOutcomeIcon = ({ execution }: { execution: NodeExecutionState | null }
 
   return (
     <WorkflowNodeOutcomeIcon
-      error={execution?.error}
+      error={getNodeExecutionError(node, execution?.error, t)}
       label={outcome === 'completed' ? t('nodes.executionCompleted') : t('nodes.executionFailed')}
       outcome={outcome}
     />
@@ -764,7 +782,7 @@ const CompactInvocationNode = ({ data, selected }: NodeProps<InvocationFlowNodeT
       <Flex {...getWorkflowNodeHeaderProps()}>
         <MiddleTruncate fontSize="sm" fontWeight="700" minW="0" text={title} />
         <Box flex="1" />
-        <NodeOutcomeIcon execution={execution} />
+        <NodeOutcomeIcon execution={execution} node={node} />
       </Flex>
       {templateView ? (
         <CompactNodeBody inputCount={inputTemplates.length} outputCount={outputTemplates.length} />
@@ -846,7 +864,7 @@ const ExpandedInvocationNode = ({ data, selected }: NodeProps<InvocationFlowNode
           <>
             <NodeTitle node={node} title={node.data.label || template.title} />
             <Box flex="1" />
-            <NodeOutcomeIcon execution={execution} />
+            <NodeOutcomeIcon execution={execution} node={node} />
             <NodeInfoIcon node={node} template={template} />
           </>
         )}

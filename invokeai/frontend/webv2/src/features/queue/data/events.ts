@@ -80,6 +80,10 @@ export interface InvocationEventBase extends QueueItemEventBase {
   session_id: string;
   /** The id of the executing invocation's source node — the editor's node id. */
   invocation_source_id: string;
+  parent_item_id?: number | null;
+  root_item_id?: number | null;
+  /** The visible parent Call Saved Workflow node for child execution events. */
+  workflow_call_parent_source_id?: string | null;
 }
 
 export interface InvocationStartedEvent extends InvocationEventBase {}

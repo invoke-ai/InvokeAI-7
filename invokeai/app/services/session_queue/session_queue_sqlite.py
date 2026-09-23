@@ -1583,6 +1583,19 @@ class SqliteSessionQueue(SessionQueueBase):
     def get_queue_item_for_api(self, item_id: int) -> SessionQueueItem:
         return self._get_queue_item_for_api(item_id)
 
+    def get_queue_item_workflow_json(self, item_id: int) -> str | None:
+        with self._db.transaction() as cursor:
+            cursor.execute(
+                """--sql
+                SELECT workflow
+                FROM session_queue
+                WHERE item_id = ?
+                """,
+                (item_id,),
+            )
+            result = cast(Union[sqlite3.Row, None], cursor.fetchone())
+        return cast(str | None, result["workflow"]) if result is not None else None
+
     def save_queue_item_session(self, item_id: int, session: GraphExecutionState) -> None:
         with self._db.transaction() as cursor:
             # Use exclude_none so we don't end up with a bunch of nulls in the graph - this can cause validation errors

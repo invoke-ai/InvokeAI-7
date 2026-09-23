@@ -112,6 +112,23 @@ class InvocationEventBase(QueueItemEventBase):
     session_id: str = Field(description="The ID of the session (aka graph execution state)")
     invocation: AnyInvocation = Field(description="The ID of the invocation")
     invocation_source_id: str = Field(description="The ID of the prepared invocation's source node")
+    parent_item_id: int | None = Field(
+        default=None, description="The parent queue item id when this item is a called-workflow child"
+    )
+    root_item_id: int | None = Field(
+        default=None, description="The root queue item id for this called-workflow chain, if any"
+    )
+    workflow_call_parent_source_id: str | None = Field(
+        default=None,
+        description="The visible parent Call Saved Workflow source node for a called-workflow child event",
+    )
+
+
+def _get_workflow_call_parent_source_id(queue_item: SessionQueueItem) -> str | None:
+    """Return the root visible call node for a nested workflow-call event."""
+    if queue_item.session.workflow_call_stack:
+        return queue_item.session.workflow_call_stack[0].source_call_node_id
+    return None
 
 
 @payload_schema.register
@@ -129,9 +146,12 @@ class InvocationStartedEvent(InvocationEventBase):
             origin=queue_item.origin,
             destination=queue_item.destination,
             user_id=queue_item.user_id,
+            parent_item_id=queue_item.parent_item_id,
+            root_item_id=queue_item.root_item_id,
             session_id=queue_item.session_id,
             invocation=invocation,
             invocation_source_id=queue_item.session.prepared_source_mapping[invocation.id],
+            workflow_call_parent_source_id=_get_workflow_call_parent_source_id(queue_item),
         )
 
 
@@ -195,9 +215,12 @@ class InvocationProgressEvent(InvocationEventBase):
             origin=queue_item.origin,
             destination=queue_item.destination,
             user_id=queue_item.user_id,
+            parent_item_id=queue_item.parent_item_id,
+            root_item_id=queue_item.root_item_id,
             session_id=queue_item.session_id,
             invocation=invocation,
             invocation_source_id=queue_item.session.prepared_source_mapping[invocation.id],
+            workflow_call_parent_source_id=_get_workflow_call_parent_source_id(queue_item),
             percentage=percentage,
             image=image,
             message=message,
@@ -225,9 +248,12 @@ class InvocationCompleteEvent(InvocationEventBase):
             origin=queue_item.origin,
             destination=queue_item.destination,
             user_id=queue_item.user_id,
+            parent_item_id=queue_item.parent_item_id,
+            root_item_id=queue_item.root_item_id,
             session_id=queue_item.session_id,
             invocation=invocation,
             invocation_source_id=queue_item.session.prepared_source_mapping[invocation.id],
+            workflow_call_parent_source_id=_get_workflow_call_parent_source_id(queue_item),
             result=result,
         )
 
@@ -258,9 +284,12 @@ class InvocationErrorEvent(InvocationEventBase):
             origin=queue_item.origin,
             destination=queue_item.destination,
             user_id=queue_item.user_id,
+            parent_item_id=queue_item.parent_item_id,
+            root_item_id=queue_item.root_item_id,
             session_id=queue_item.session_id,
             invocation=invocation,
             invocation_source_id=queue_item.session.prepared_source_mapping[invocation.id],
+            workflow_call_parent_source_id=_get_workflow_call_parent_source_id(queue_item),
             error_type=error_type,
             error_message=error_message,
             error_traceback=error_traceback,

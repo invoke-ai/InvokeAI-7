@@ -15,6 +15,16 @@ beforeEach(() => {
 });
 
 describe('node execution lifecycle', () => {
+  it('clears a previous thumbnail when the current result has no image', () => {
+    nodeExecutionStore.completed({ invocation_source_id: 'node-1', result: { image: { image_name: 'old.png' } } });
+    nodeExecutionStore.completed({ invocation_source_id: 'node-1', result: { type: 'integer_output', value: 1 } });
+
+    expect(nodeExecutionStore.get('node-1')).toMatchObject({
+      latestOutput: { type: 'integer_output', value: 1 },
+      outputImageUrl: null,
+      status: 'completed',
+    });
+  });
   it('preserves the latest image across progress and failure transitions', () => {
     nodeExecutionStore.completed({
       invocation_source_id: 'node-1',
@@ -42,6 +52,20 @@ describe('node execution lifecycle', () => {
     expect(nodeExecutionStore.get('node-1')?.latestOutput).toEqual({ type: 'integer_output', value: 2 });
   });
 
+  it('shows an image returned through workflow return values', () => {
+    nodeExecutionStore.completed({
+      invocation_source_id: 'call-node',
+      result: {
+        type: 'workflow_return_output',
+        values: { Image: { image_name: 'returned image.png' } },
+      },
+    });
+
+    expect(nodeExecutionStore.get('call-node')?.outputImageUrl).toBe(
+      'https://api.test/api/v1/images/i/returned%20image.png/thumbnail'
+    );
+  });
+
   it('settles the named running nodes to the run outcome without disturbing terminal or other nodes', () => {
     nodeExecutionStore.started({ invocation_source_id: 'running' });
     nodeExecutionStore.started({ invocation_source_id: 'other-run' });
@@ -56,5 +80,16 @@ describe('node execution lifecycle', () => {
     nodeExecutionStore.settleRunning(['other-run'], 'canceled');
 
     expect(nodeExecutionStore.get('other-run')).toBeNull();
+  });
+
+  it('preserves a failed outcome and error when queue status precedes invocation error', () => {
+    nodeExecutionStore.started({ invocation_source_id: 'node-1' });
+
+    nodeExecutionStore.settleRunning(['node-1'], 'failed', 'Workflow failed');
+
+    expect(nodeExecutionStore.get('node-1')).toMatchObject({
+      error: 'Workflow failed',
+      status: 'failed',
+    });
   });
 });

@@ -44,7 +44,9 @@ const coordinatorLogger = createLogger({ area: 'coordinator', namespace: 'queue'
 const TERMINAL_EVENT_BUFFER_LIMIT = 256;
 const NODE_EVENT_BUFFER_ITEM_LIMIT = 64;
 const NODE_EVENT_BUFFER_EVENTS_PER_ITEM = 512;
+const PROGRESS_EVENT_BUFFER_ITEM_LIMIT = 64;
 const BACKEND_READ_CONCURRENCY = 16;
+const FRAME_GATES_PER_WAIT_LIMIT = 64;
 
 /**
  * App injects Models' model-load activity sink so Queue can report socket-derived activity without importing its
@@ -61,7 +63,7 @@ export interface QueueNodeExecutionPort {
   completed(event: InvocationCompleteEvent): void;
   failed(event: InvocationErrorEvent): void;
   progress(nodeId: string, percentage: number | null, message: string): void;
-  settleRunning(nodeIds: Iterable<string>, outcome: 'completed' | 'failed' | 'canceled'): void;
+  settleRunning(nodeIds: Iterable<string>, outcome: 'completed' | 'failed' | 'canceled', error?: string): void;
   started(event: InvocationStartedEvent): void;
 }
 
@@ -178,6 +180,7 @@ interface RunProgressState {
 }
 
 interface WaitState {
+  frameGates: Map<number, { revision: number | null; sessionId: string }>;
   localQueueItemId: string;
   settle: (outcome: TerminalOutcome) => void;
 }
@@ -225,6 +228,13 @@ export const createQueueCoordinator = (
   const runs = new Map<string, RunState>();
   const runProgress = new Map<string, RunProgressState>();
   const waits = new Map<number, WaitState>();
+  const clearFrameGate = (itemId: number): void => {
+    for (const wait of waits.values()) {
+      if (wait.frameGates.delete(itemId)) {
+        return;
+      }
+    }
+  };
   /**
    * Terminal events that arrived for items nobody tracks yet. Closes the race
    * where a very fast generation finishes between `enqueue_batch` resolving
@@ -237,17 +247,34 @@ export const createQueueCoordinator = (
    * is still resolving.
    */
   const pendingNodeEvents = new Map<number, NodeEvent[]>();
+  /** Latest preview for items whose enqueue response has not registered them yet. */
+  const pendingProgressEvents = new Map<number, InvocationProgressEvent>();
   /** Nodes each backend item has driven; settled with the item's terminal outcome. */
   const nodeIdsByBackendItem = new Map<number, Set<string>>();
-  /** The backend item whose node events the execution store currently reflects, and the receipt sequence it took over at. */
-  let nodeExecutionItemId: number | null = null;
-  let nodeExecutionItemSequence = 0;
+  /** The root backend item whose node events the execution store currently reflects. */
+  let nodeExecutionRootItemId: number | null = null;
+  let nodeExecutionRootItemSequence = 0;
   let nodeEventSequence = 0;
-  /** Enqueue requests awaiting a response; node events are only buffered while one is in flight. */
+  /** Enqueue requests awaiting a response; early node events and previews are buffered while one is in flight. */
   let inFlightSubmissions = 0;
   const latestStatusSequences = new Map<number, number>();
-  /** Track accepted session/revision per backend item to reject snapshot frames overtaken by the live stream. */
-  const latestFrameGates = new Map<number, { revision: number | null; sessionId: string }>();
+  const getTrackedBackendItemId = (event: { item_id: number; root_item_id?: number | null }): number =>
+    event.root_item_id ?? event.item_id;
+
+  const getNodeSourceId = (event: { invocation_source_id: string; workflow_call_parent_source_id?: string | null }) =>
+    event.workflow_call_parent_source_id ?? event.invocation_source_id;
+
+  const routeNodeEvent = <T extends NodeEvent['event']>(
+    event: T,
+    backendItemId: number,
+    invocationSourceId: string
+  ): T => {
+    if (backendItemId === event.item_id && invocationSourceId === event.invocation_source_id) {
+      return event;
+    }
+
+    return { ...event, invocation_source_id: invocationSourceId, item_id: backendItemId } as T;
+  };
 
   const detachers: Array<() => void> = [];
   let isAttached = false;
@@ -330,27 +357,31 @@ export const createQueueCoordinator = (
     return { itemIndex: itemIndex === -1 ? 1 : itemIndex + 1, queueItemId: localQueueItemId };
   };
 
-  const settleNodes = (backendItemId: number, outcome: TerminalOutcome['status']): void => {
+  const settleNodes = (backendItemId: number, outcome: TerminalOutcome): void => {
     const nodeIds = nodeIdsByBackendItem.get(backendItemId);
 
     nodeIdsByBackendItem.delete(backendItemId);
 
     // A late settle for an item the store no longer reflects must not touch the current run's nodes.
-    if (nodeIds && isActive() && nodeExecutionItemId === backendItemId) {
-      nodeExecution.settleRunning(nodeIds, outcome);
+    if (nodeIds && isActive() && nodeExecutionRootItemId === backendItemId) {
+      if (outcome.status === 'failed') {
+        nodeExecution.settleRunning(nodeIds, outcome.status, outcome.error);
+      } else {
+        nodeExecution.settleRunning(nodeIds, outcome.status);
+      }
     }
   };
 
   /** Backend order may vary; reject only replayed events predating the current item's takeover. */
   const isStaleNodeEvent = (nodeEvent: NodeEvent): boolean =>
-    nodeExecutionItemId !== null &&
-    nodeEvent.event.item_id !== nodeExecutionItemId &&
-    nodeEvent.sequence < nodeExecutionItemSequence;
+    nodeExecutionRootItemId !== null &&
+    getTrackedBackendItemId(nodeEvent.event) !== nodeExecutionRootItemId &&
+    nodeEvent.sequence < nodeExecutionRootItemSequence;
 
   const trackNodeForItem = (backendItemId: number, nodeId: string, sequence: number): void => {
-    if (nodeExecutionItemId !== backendItemId) {
-      nodeExecutionItemId = backendItemId;
-      nodeExecutionItemSequence = sequence;
+    if (nodeExecutionRootItemId !== backendItemId) {
+      nodeExecutionRootItemId = backendItemId;
+      nodeExecutionRootItemSequence = sequence;
       nodeExecution.clearAll();
     }
 
@@ -368,21 +399,36 @@ export const createQueueCoordinator = (
       return;
     }
 
-    trackNodeForItem(nodeEvent.event.item_id, nodeEvent.event.invocation_source_id, nodeEvent.sequence);
+    const backendItemId = getTrackedBackendItemId(nodeEvent.event);
+    const invocationSourceId = getNodeSourceId(nodeEvent.event);
+
+    trackNodeForItem(backendItemId, invocationSourceId, nodeEvent.sequence);
 
     switch (nodeEvent.kind) {
       case 'started': {
-        const wait = waits.get(nodeEvent.event.item_id);
+        const routedEvent = routeNodeEvent(nodeEvent.event, backendItemId, invocationSourceId);
+        const wait = waits.get(backendItemId);
         if (wait) {
-          activeProgressTarget.set(getProgressImageTarget(wait.localQueueItemId, nodeEvent.event.item_id));
+          activeProgressTarget.set(getProgressImageTarget(wait.localQueueItemId, backendItemId));
         }
-        nodeExecution.started(nodeEvent.event);
+        nodeExecution.started(routedEvent);
         return;
       }
       case 'completed':
-        nodeExecution.completed(nodeEvent.event);
+        // A called workflow's child lifecycle is represented by the visible
+        // Call Saved Workflow node. Only the root invocation may settle that
+        // node or replace its latest output.
+        waits.get(backendItemId)?.frameGates.delete(nodeEvent.event.item_id);
+        if (backendItemId !== nodeEvent.event.item_id) {
+          return;
+        }
+        nodeExecution.completed(routeNodeEvent(nodeEvent.event, backendItemId, invocationSourceId));
         return;
       case 'failed':
+        waits.get(backendItemId)?.frameGates.delete(nodeEvent.event.item_id);
+        if (backendItemId !== nodeEvent.event.item_id) {
+          return;
+        }
         coordinatorLogger.debug({
           context: {
             errorMessage: nodeEvent.event.error_message,
@@ -394,13 +440,13 @@ export const createQueueCoordinator = (
           message: `Invocation failed: ${nodeEvent.event.error_type}`,
           name: 'queue.invocation-error',
         });
-        nodeExecution.failed(nodeEvent.event);
+        nodeExecution.failed(routeNodeEvent(nodeEvent.event, backendItemId, invocationSourceId));
         return;
     }
   };
 
   const bufferNodeEvent = (nodeEvent: NodeEvent): void => {
-    const itemId = nodeEvent.event.item_id;
+    const itemId = getTrackedBackendItemId(nodeEvent.event);
     const events = pendingNodeEvents.get(itemId) ?? [];
 
     if (events.length >= NODE_EVENT_BUFFER_EVENTS_PER_ITEM) {
@@ -418,6 +464,23 @@ export const createQueueCoordinator = (
       }
 
       pendingNodeEvents.delete(oldestId);
+    }
+  };
+
+  const bufferProgressEvent = (event: InvocationProgressEvent): void => {
+    const backendItemId = getTrackedBackendItemId(event);
+
+    pendingProgressEvents.delete(backendItemId);
+    pendingProgressEvents.set(backendItemId, event);
+
+    while (pendingProgressEvents.size > PROGRESS_EVENT_BUFFER_ITEM_LIMIT) {
+      const oldestId = pendingProgressEvents.keys().next().value;
+
+      if (oldestId === undefined) {
+        break;
+      }
+
+      pendingProgressEvents.delete(oldestId);
     }
   };
 
@@ -443,7 +506,7 @@ export const createQueueCoordinator = (
     }
   };
 
-  /** Runs an enqueue call while buffering node events that may land before its response registers the items. */
+  /** Runs an enqueue call while buffering events that may land before its response registers the items. */
   const withSubmissionInFlight = async <T>(submit: () => Promise<T>): Promise<T> => {
     inFlightSubmissions += 1;
 
@@ -454,6 +517,7 @@ export const createQueueCoordinator = (
 
       if (inFlightSubmissions === 0) {
         pendingNodeEvents.clear();
+        pendingProgressEvents.clear();
       }
     }
   };
@@ -466,9 +530,9 @@ export const createQueueCoordinator = (
       return;
     }
 
+    wait.frameGates.clear();
     waits.delete(backendItemId);
-    latestFrameGates.delete(backendItemId);
-    settleNodes(backendItemId, outcome.status);
+    settleNodes(backendItemId, outcome);
     const progressTarget = getProgressImageTarget(wait.localQueueItemId, backendItemId);
     const releaseProgressSlot = (): void => {
       if (isActive()) {
@@ -535,7 +599,8 @@ export const createQueueCoordinator = (
     }
   };
 
-  const isTrackedEvent = (event: { item_id: number }): boolean => waits.has(event.item_id);
+  const isTrackedEvent = (event: { item_id: number; root_item_id?: number | null }): boolean =>
+    waits.has(getTrackedBackendItemId(event));
 
   const trackBackendItem = (localQueueItemId: string, backendItemId: number): Promise<TerminalOutcome> => {
     const bufferedOutcome = recentTerminalOutcomes.get(backendItemId);
@@ -543,14 +608,16 @@ export const createQueueCoordinator = (
     if (bufferedOutcome) {
       replayNodeEvents(backendItemId);
       recentTerminalOutcomes.delete(backendItemId);
-      settleNodes(backendItemId, bufferedOutcome.status);
+      pendingProgressEvents.delete(backendItemId);
+      settleNodes(backendItemId, bufferedOutcome);
 
       return Promise.resolve(bufferedOutcome);
     }
 
     return new Promise<TerminalOutcome>((settle) => {
-      waits.set(backendItemId, { localQueueItemId, settle });
+      waits.set(backendItemId, { frameGates: new Map(), localQueueItemId, settle });
       replayNodeEvents(backendItemId);
+      replayProgressEvent(backendItemId);
     });
   };
 
@@ -673,10 +740,16 @@ export const createQueueCoordinator = (
         if (wait) {
           activeProgressTarget.clear(getProgressImageTarget(wait.localQueueItemId, event.item_id));
         }
-        latestFrameGates.delete(event.item_id);
+        wait?.frameGates.clear();
       }
 
       return;
+    }
+
+    // Root settlement clears its own wait's gates. Only child item statuses
+    // need the cross-wait lookup to remove their per-child preview gate.
+    if (!waits.has(event.item_id)) {
+      clearFrameGate(event.item_id);
     }
 
     if (!isTrackedEvent(event)) {
@@ -709,8 +782,13 @@ export const createQueueCoordinator = (
    * starts over.
    */
   const isStaleFrame = (event: InvocationProgressEvent): boolean => {
+    const wait = waits.get(getTrackedBackendItemId(event));
+    if (!wait) {
+      return false;
+    }
+
     const revision = event.revision ?? null;
-    const gate = latestFrameGates.get(event.item_id);
+    const gate = wait.frameGates.get(event.item_id);
 
     if (
       gate &&
@@ -722,7 +800,15 @@ export const createQueueCoordinator = (
       return true;
     }
 
-    latestFrameGates.set(event.item_id, { revision, sessionId: event.session_id });
+    wait.frameGates.delete(event.item_id);
+    wait.frameGates.set(event.item_id, { revision, sessionId: event.session_id });
+    while (wait.frameGates.size > FRAME_GATES_PER_WAIT_LIMIT) {
+      const oldestItemId = wait.frameGates.keys().next().value;
+      if (oldestItemId === undefined) {
+        break;
+      }
+      wait.frameGates.delete(oldestItemId);
+    }
 
     return false;
   };
@@ -732,9 +818,13 @@ export const createQueueCoordinator = (
       return;
     }
 
-    const wait = waits.get(event.item_id);
+    const backendItemId = getTrackedBackendItemId(event);
+    const wait = waits.get(backendItemId);
 
     if (!wait) {
+      if (inFlightSubmissions > 0) {
+        bufferProgressEvent(event);
+      }
       return;
     }
 
@@ -742,10 +832,11 @@ export const createQueueCoordinator = (
       return;
     }
 
-    trackNodeForItem(event.item_id, event.invocation_source_id, ++nodeEventSequence);
-    nodeExecution.progress(event.invocation_source_id, event.percentage, event.message);
+    const invocationSourceId = getNodeSourceId(event);
+    trackNodeForItem(backendItemId, invocationSourceId, ++nodeEventSequence);
+    nodeExecution.progress(invocationSourceId, event.percentage, event.message);
 
-    const target = getProgressImageTarget(wait.localQueueItemId, event.item_id);
+    const target = getProgressImageTarget(wait.localQueueItemId, backendItemId);
     activeProgressTarget.set(target);
 
     if (event.image?.dataURL) {
@@ -755,12 +846,22 @@ export const createQueueCoordinator = (
     const state = runProgress.get(wait.localQueueItemId);
 
     if (state) {
-      state.activeBackendItemId = event.item_id;
+      state.activeBackendItemId = backendItemId;
       state.message = event.message;
       state.percentage = event.percentage;
       publishRunProgress(wait.localQueueItemId);
     } else {
       progress.set(wait.localQueueItemId, { message: event.message, percentage: event.percentage });
+    }
+  };
+
+  const replayProgressEvent = (backendItemId: number): void => {
+    const event = pendingProgressEvents.get(backendItemId);
+
+    pendingProgressEvents.delete(backendItemId);
+
+    if (event) {
+      handleProgress(event);
     }
   };
 
@@ -775,9 +876,10 @@ export const createQueueCoordinator = (
 
     progress.clearAll?.();
     nodeExecution.clearAll();
-    nodeExecutionItemId = null;
-    nodeExecutionItemSequence = 0;
+    nodeExecutionRootItemId = null;
+    nodeExecutionRootItemSequence = 0;
     pendingNodeEvents.clear();
+    // Keep previews received before enqueue adoption; the HTTP response may still be in flight.
     nodeIdsByBackendItem.clear();
     modelLoads.reset();
 
@@ -878,8 +980,8 @@ export const createQueueCoordinator = (
     runs.clear();
     runProgress.clear();
     recentTerminalOutcomes.clear();
+    pendingProgressEvents.clear();
     latestStatusSequences.clear();
-    latestFrameGates.clear();
   };
 
   const reconcile = async (items: ReconcileInput[]): Promise<Map<string, ReconcileOutcome>> => {
@@ -1102,8 +1204,8 @@ export const createQueueCoordinator = (
       const wait = waits.get(backendItemId);
       if (wait?.localQueueItemId === localQueueItemId) {
         waits.delete(backendItemId);
-        latestFrameGates.delete(backendItemId);
-        settleNodes(backendItemId, 'canceled');
+        wait.frameGates.clear();
+        settleNodes(backendItemId, { status: 'canceled' });
         wait.settle({ status: 'canceled' });
       }
     }

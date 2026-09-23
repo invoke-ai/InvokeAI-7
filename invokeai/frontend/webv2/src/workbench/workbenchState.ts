@@ -557,7 +557,7 @@ const addNotification = (state: WorkbenchState, notification: WorkbenchNotificat
   return { ...state, notifications: [notification, ...state.notifications].slice(0, NOTIFICATION_LIMIT) };
 };
 
-/** Adds the "Invocation queued" notice iff the reduction actually grew that project's queue. */
+/** Adds queue feedback iff the reduction actually grew that project's queue. */
 const withEnqueueNotification = (
   state: WorkbenchState,
   nextState: WorkbenchState,
@@ -572,26 +572,27 @@ const withEnqueueNotification = (
 
   const queueItem = after.queue.items[0];
 
-  if (
+  const metadataOmitted =
     queueItem?.snapshot.sourceId === 'workflow' &&
     queueItem.snapshot.backendSubmission.kind === 'workflow' &&
-    !queueItem.snapshot.backendSubmission.workflow
-  ) {
-    return addNotification(
-      nextState,
-      createNotification({
-        kind: 'info',
-        message: 'Workflow metadata was omitted because the workflow contains multiple workflow_return nodes.',
-        messageKey: 'workflowLibrary.workflowMetadataOmittedBody',
-        projectId: after.id,
-        title: 'Workflow metadata omitted',
-        titleKey: 'workflowLibrary.workflowMetadataOmitted',
-      })
-    );
-  }
+    !queueItem.snapshot.backendSubmission.workflow;
+
+  const withMetadataNotice = metadataOmitted
+    ? addNotification(
+        nextState,
+        createNotification({
+          kind: 'info',
+          message: 'Workflow metadata was omitted because the workflow contains multiple workflow_return nodes.',
+          messageKey: 'workflowLibrary.workflowMetadataOmittedBody',
+          projectId: after.id,
+          title: 'Workflow metadata omitted',
+          titleKey: 'workflowLibrary.workflowMetadataOmitted',
+        })
+      )
+    : nextState;
 
   return addNotification(
-    nextState,
+    withMetadataNotice,
     createNotification({
       category: 'enqueue',
       kind: 'success',

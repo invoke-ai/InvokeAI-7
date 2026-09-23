@@ -63,8 +63,7 @@ import { useTranslation } from 'react-i18next';
 import { PiPlugsConnectedBold, PiTrashBold } from 'react-icons/pi';
 
 import CustomConnectionLine from './connectionLines/CustomConnectionLine';
-import InvocationCollapsedEdge from './edges/InvocationCollapsedEdge';
-import InvocationDefaultEdge from './edges/InvocationDefaultEdge';
+import { edgeTypes } from './edgeTypes';
 import ConnectorNode from './nodes/Connector/ConnectorNode';
 import CurrentImageNode from './nodes/CurrentImage/CurrentImageNode';
 import InvocationNodeWrapper from './nodes/Invocation/InvocationNodeWrapper';
@@ -72,11 +71,6 @@ import NotesNode from './nodes/Notes/NotesNode';
 import type { WorkflowContextMenuState } from './workflowContextMenu';
 import { getWorkflowContextMenuState } from './workflowContextMenu';
 import { isWorkflowHotkeyEnabled, shouldIgnoreWorkflowCopyHotkey } from './workflowHotkeys';
-
-const edgeTypes = {
-  collapsed: InvocationCollapsedEdge,
-  default: InvocationDefaultEdge,
-} as const;
 
 const nodeTypes = {
   invocation: InvocationNodeWrapper,

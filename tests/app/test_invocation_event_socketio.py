@@ -8,6 +8,7 @@ admin room - but in a single emit so that an admin who owns the queue item (whic
 the "system" user in single-user mode) receives exactly one copy.
 """
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -24,6 +25,8 @@ from invokeai.app.services.events.events_common import (
     ModelInstallStartedEvent,
 )
 from invokeai.app.services.model_install.model_install_common import URLModelSource
+from invokeai.app.services.session_processor.session_processor_common import ProgressImage
+from tests.test_nodes import TextToImageTestInvocation
 
 
 @pytest.fixture
@@ -40,6 +43,39 @@ _COMMON_FIELDS = {
     "invocation": {"type": "add", "id": "node-1", "a": 1, "b": 2},
     "invocation_source_id": "node-1",
 }
+
+
+def test_invocation_event_builders_preserve_nested_workflow_ancestry() -> None:
+    invocation = TextToImageTestInvocation(id="child-node")
+    queue_item = SimpleNamespace(
+        batch_id="batch-child",
+        destination=None,
+        device=None,
+        item_id=9,
+        origin="workflow",
+        parent_item_id=7,
+        queue_id="default",
+        root_item_id=3,
+        session=SimpleNamespace(
+            prepared_source_mapping={"child-node": "child-source"},
+            workflow_call_stack=[SimpleNamespace(source_call_node_id="call-node")],
+        ),
+        session_id="child-session",
+        user_id="owner-1",
+    )
+
+    events = [
+        InvocationStartedEvent.build(queue_item, invocation),
+        InvocationProgressEvent.build(
+            queue_item, invocation, "working", image=ProgressImage(dataURL="data", width=1, height=1)
+        ),
+        InvocationCompleteEvent.build(queue_item, invocation, {"type": "integer_output", "value": 1}),
+        InvocationErrorEvent.build(queue_item, invocation, "ValueError", "failed", "traceback"),
+    ]
+    for event in events:
+        assert event.parent_item_id == 7
+        assert event.root_item_id == 3
+        assert event.workflow_call_parent_source_id == "call-node"
 
 
 @pytest.mark.anyio

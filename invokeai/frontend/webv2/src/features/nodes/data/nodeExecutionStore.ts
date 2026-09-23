@@ -4,6 +4,7 @@ import type {
   NodeInvocationStartedEvent,
 } from '@features/nodes/core/executionContracts';
 
+import { getFirstOutputImageName } from '@platform/core/outputImages';
 import { registerAccountOwnedResource } from '@platform/state/accountLifecycle';
 import { createKeyedTransientStore } from '@platform/state/externalStore';
 
@@ -33,13 +34,6 @@ export interface NodeExecutionState {
 
 const stateByNodeId = createKeyedTransientStore<string, NodeExecutionState>();
 
-/** Pull the produced image out of an invocation output, whatever the node type. */
-const getResultImageName = (result: unknown): string | null => {
-  const image = (result as { image?: { image_name?: unknown } }).image;
-
-  return typeof image?.image_name === 'string' ? image.image_name : null;
-};
-
 export const nodeExecutionStore = {
   clearAll(): void {
     stateByNodeId.clear();
@@ -51,14 +45,13 @@ export const nodeExecutionStore = {
     return stateByNodeId.subscribeKey(nodeId, listener);
   },
   completed(event: NodeInvocationCompleteEvent): void {
-    const imageName = getResultImageName(event.result);
-    const previous = stateByNodeId.get(event.invocation_source_id);
+    const imageName = getFirstOutputImageName(event.result);
 
     stateByNodeId.set(event.invocation_source_id, {
       error: null,
       outputImageUrl: imageName
         ? browserNodesDataPort.buildUrl(`/api/v1/images/i/${encodeURIComponent(imageName)}/thumbnail`)
-        : (previous?.outputImageUrl ?? null),
+        : null,
       latestOutput: event.result,
       progress: null,
       progressMessage: null,
@@ -89,8 +82,11 @@ export const nodeExecutionStore = {
       status: 'running',
     });
   },
-  /** Terminal queue items end any remaining running node state, including missed failure/cancel events. */
-  settleRunning(nodeIds: Iterable<string>, outcome: NodeExecutionOutcome): void {
+  /**
+   * The queue item running these nodes reached a terminal state: a node still marked running
+   * finished with it, or never will (its failure/cancel event was lost or never sent).
+   */
+  settleRunning(nodeIds: Iterable<string>, outcome: NodeExecutionOutcome, error?: string): void {
     for (const nodeId of nodeIds) {
       const state = stateByNodeId.get(nodeId);
 
@@ -100,6 +96,14 @@ export const nodeExecutionStore = {
 
       if (outcome === 'completed') {
         stateByNodeId.set(nodeId, { ...state, progress: null, progressMessage: null, status: 'completed' });
+      } else if (outcome === 'failed') {
+        stateByNodeId.set(nodeId, {
+          ...state,
+          error: error ?? state.error,
+          progress: null,
+          progressMessage: null,
+          status: 'failed',
+        });
       } else {
         stateByNodeId.delete(nodeId);
       }
@@ -125,7 +129,7 @@ export interface NodeExecutionSink {
   failed(event: NodeInvocationErrorEvent): void;
   get(nodeId: string): NodeExecutionState | null;
   progress(nodeId: string, percentage: number | null, message: string): void;
-  settleRunning(nodeIds: Iterable<string>, outcome: NodeExecutionOutcome): void;
+  settleRunning(nodeIds: Iterable<string>, outcome: NodeExecutionOutcome, error?: string): void;
   started(event: NodeInvocationStartedEvent): void;
   subscribe(nodeId: string, listener: () => void): () => void;
 }

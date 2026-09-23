@@ -307,6 +307,8 @@ class SessionQueueItem(BaseModel):
 
     _snapshot_readable: bool = PrivateAttr(default=True)
     _session_json: str | None = PrivateAttr(default=None)
+    _workflow_json_snapshot: str | None = PrivateAttr(default=None)
+    _workflow_json_loaded: bool = PrivateAttr(default=False)
 
     item_id: int = Field(description="The identifier of the session queue item")
     status: QUEUE_ITEM_STATUS = Field(default="pending", description="The status of this queue item")

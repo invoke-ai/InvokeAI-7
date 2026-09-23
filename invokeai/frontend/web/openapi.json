@@ -49934,6 +49934,45 @@
             "title": "Invocation Source Id",
             "type": "string"
           },
+          "parent_item_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The parent queue item id when this item is a called-workflow child",
+            "title": "Parent Item Id"
+          },
+          "root_item_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The root queue item id for this called-workflow chain, if any",
+            "title": "Root Item Id"
+          },
+          "workflow_call_parent_source_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The visible parent Call Saved Workflow source node for a called-workflow child event",
+            "title": "Workflow Call Parent Source Id"
+          },
           "result": {
             "description": "The result of the invocation",
             "oneOf": [
@@ -50366,6 +50405,9 @@
           "session_id",
           "invocation",
           "invocation_source_id",
+          "parent_item_id",
+          "root_item_id",
+          "workflow_call_parent_source_id",
           "result"
         ],
         "title": "InvocationCompleteEvent",
@@ -51468,6 +51510,45 @@
             "title": "Invocation Source Id",
             "type": "string"
           },
+          "parent_item_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The parent queue item id when this item is a called-workflow child",
+            "title": "Parent Item Id"
+          },
+          "root_item_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The root queue item id for this called-workflow chain, if any",
+            "title": "Root Item Id"
+          },
+          "workflow_call_parent_source_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The visible parent Call Saved Workflow source node for a called-workflow child event",
+            "title": "Workflow Call Parent Source Id"
+          },
           "error_type": {
             "description": "The error type",
             "title": "Error Type",
@@ -51495,6 +51576,9 @@
           "session_id",
           "invocation",
           "invocation_source_id",
+          "parent_item_id",
+          "root_item_id",
+          "workflow_call_parent_source_id",
           "error_type",
           "error_message",
           "error_traceback"
@@ -53974,6 +54058,45 @@
             "title": "Invocation Source Id",
             "type": "string"
           },
+          "parent_item_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The parent queue item id when this item is a called-workflow child",
+            "title": "Parent Item Id"
+          },
+          "root_item_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The root queue item id for this called-workflow chain, if any",
+            "title": "Root Item Id"
+          },
+          "workflow_call_parent_source_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The visible parent Call Saved Workflow source node for a called-workflow child event",
+            "title": "Workflow Call Parent Source Id"
+          },
           "message": {
             "description": "A message to display",
             "title": "Message",
@@ -54044,6 +54167,9 @@
           "session_id",
           "invocation",
           "invocation_source_id",
+          "parent_item_id",
+          "root_item_id",
+          "workflow_call_parent_source_id",
           "message",
           "percentage",
           "image",
@@ -55149,6 +55275,45 @@
             "description": "The ID of the prepared invocation's source node",
             "title": "Invocation Source Id",
             "type": "string"
+          },
+          "parent_item_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The parent queue item id when this item is a called-workflow child",
+            "title": "Parent Item Id"
+          },
+          "root_item_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The root queue item id for this called-workflow chain, if any",
+            "title": "Root Item Id"
+          },
+          "workflow_call_parent_source_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The visible parent Call Saved Workflow source node for a called-workflow child event",
+            "title": "Workflow Call Parent Source Id"
           }
         },
         "required": [
@@ -55161,7 +55326,10 @@
           "user_id",
           "session_id",
           "invocation",
-          "invocation_source_id"
+          "invocation_source_id",
+          "parent_item_id",
+          "root_item_id",
+          "workflow_call_parent_source_id"
         ],
         "title": "InvocationStartedEvent",
         "type": "object"
@@ -85729,6 +85897,42 @@
             "type": "string",
             "title": "Invocation Source Id",
             "description": "The ID of the prepared invocation's source node"
+          },
+          "parent_item_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Item Id",
+            "description": "The parent queue item id when this item is a called-workflow child"
+          },
+          "root_item_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Root Item Id",
+            "description": "The root queue item id for this called-workflow chain, if any"
+          },
+          "workflow_call_parent_source_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workflow Call Parent Source Id",
+            "description": "The visible parent Call Saved Workflow source node for a called-workflow child event"
           },
           "revision": {
             "anyOf": [

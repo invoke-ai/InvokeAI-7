@@ -134,11 +134,11 @@ const _pasteSelection = (withEdgesToCopiedNodes?: boolean) => {
         );
         return;
       }
-    } else if (e.type === 'default') {
+    } else if (e.type === 'default' || e.type === 'loop_linkage') {
       const { type, source, sourceHandle, target, targetHandle } = e;
 
-      // Our "default" type edges always have handles, but the reactflow types don't seem to inherit this typing, so we
-      // need a type guard here. But these _should_ always be present.
+      // Our handle-bearing edges do not inherit this typing from React Flow, so
+      // we need a type guard here. These edges should always have handles.
       if (!sourceHandle || !targetHandle) {
         log.warn(
           { edge: { type, source, sourceHandle, target, targetHandle } },
@@ -165,7 +165,7 @@ const _pasteSelection = (withEdgesToCopiedNodes?: boolean) => {
         return;
       }
     } else {
-      // All our edges should be either "collapsed" or "default" type, so if we get here, something is wrong
+      // All our edges should be "collapsed", "default", or "loop_linkage".
       const { type } = e;
       log.warn({ edge: { type } }, `Invalid edge type, cannot paste`);
       return;

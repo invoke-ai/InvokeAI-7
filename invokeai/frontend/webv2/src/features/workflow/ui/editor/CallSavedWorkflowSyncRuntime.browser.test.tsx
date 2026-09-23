@@ -86,6 +86,29 @@ const settle = async (ms: number) => {
   });
 };
 
+/** Waits until the request count stops changing, so an early window cannot read as a pass. */
+const settleUntilRequestsStop = async (getCount: () => number, sample = 25, maxSamples = 80) => {
+  let previous = -1;
+  let unchangedSamples = 0;
+
+  for (let index = 0; index < maxSamples; index += 1) {
+    const current = getCount();
+
+    if (current === previous) {
+      unchangedSamples += 1;
+    } else {
+      unchangedSamples = 0;
+    }
+
+    if (unchangedSamples >= 3) {
+      return;
+    }
+
+    previous = current;
+    await settle(sample);
+  }
+};
+
 /**
  * Shared failing child-workflow IDs must settle every node to error without ping-ponging retries or remaining
  * loading forever.
@@ -412,5 +435,60 @@ describe('CallSavedWorkflowSyncRuntime with an unreachable child workflow', () =
 
     expect(attempts.filter((id) => id === MISSING_WORKFLOW_ID)).toHaveLength(2);
     expect(readStatuses(readGraph())).toEqual(['ready']);
+  });
+  /**
+   * One invalidation refreshes one shared cache entry, so it costs one request
+   * however many nodes name that workflow. Selecting the workflow through the
+   * picker arms a per-node retry. A cache invalidation supersedes those stale
+   * node authorizations with one shared retry, so one invalidation costs one
+   * request even when several nodes name the workflow.
+   */
+  it('refetches an invalidated workflow once for nodes that selected it through the picker', async () => {
+    const SHARED_WORKFLOW_ID = 'shared-workflow';
+    let isAvailable = true;
+
+    getLibraryWorkflowRecordMock.mockImplementation(
+      () =>
+        new Promise((resolve, reject) => {
+          setTimeout(() => {
+            if (isAvailable) {
+              resolve({ name: 'Child', workflow: { edges: [], nodes: [] }, workflow_id: SHARED_WORKFLOW_ID });
+              return;
+            }
+
+            reject(new Error('not found'));
+          }, 10);
+        })
+    );
+
+    const { readGraph, updateGraph } = await mountWith([
+      buildCallNode('call-1', ''),
+      buildCallNode('call-2', ''),
+      buildCallNode('call-3', ''),
+    ]);
+
+    await settle(60);
+
+    for (const nodeId of ['call-1', 'call-2', 'call-3']) {
+      updateGraph(
+        projectGraphReducer(readGraph(), {
+          fieldName: 'workflow_id',
+          nodeId,
+          type: 'setFieldValue',
+          value: SHARED_WORKFLOW_ID,
+        })
+      );
+      await settle(60);
+    }
+
+    const callsBeforeInvalidation = getLibraryWorkflowRecordMock.mock.calls.length;
+
+    isAvailable = false;
+    invalidateWorkflowLibraryCache(SHARED_WORKFLOW_ID);
+    // Poll to quiescence rather than trusting a fixed window: the failure here
+    // is extra requests, so a window that expired early would read as a pass.
+    await settleUntilRequestsStop(() => getLibraryWorkflowRecordMock.mock.calls.length);
+
+    expect(getLibraryWorkflowRecordMock.mock.calls.length - callsBeforeInvalidation).toBe(1);
   });
 });

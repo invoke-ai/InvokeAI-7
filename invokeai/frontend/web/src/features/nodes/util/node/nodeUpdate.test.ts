@@ -1,6 +1,6 @@
 import type { InvocationTemplate } from 'features/nodes/types/invocation';
 import { buildInvocationNode } from 'features/nodes/util/node/buildInvocationNode';
-import { updateNode } from 'features/nodes/util/node/nodeUpdate';
+import { getConnectedInputNames, updateNode } from 'features/nodes/util/node/nodeUpdate';
 import { describe, expect, it } from 'vitest';
 
 const imageCollectionOutput = {
@@ -231,6 +231,13 @@ const currentMiniMaxH3DenoiseTemplate = {
 } satisfies InvocationTemplate;
 
 describe('updateNode', () => {
+  it('treats loop linkage edges as connected inputs during migration', () => {
+    expect(
+      getConnectedInputNames('for-return', [
+        { target: 'for-return', targetHandle: 'loop_linkage', type: 'loop_linkage' },
+      ])
+    ).toEqual(new Set(['loop_linkage']));
+  });
   it('adds the seeded default when updating a stored text_llm node', () => {
     const node = buildInvocationNode({ x: 0, y: 0 }, oldTextLLMTemplate);
     node.data.inputs.prompt!.value = 'a cat';

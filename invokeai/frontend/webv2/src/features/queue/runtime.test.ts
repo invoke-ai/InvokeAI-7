@@ -166,6 +166,7 @@ describe('queue runtime', () => {
         batchCount: 3,
         graph: { edges: [], id: 'backend-graph', nodes: { noise: { id: 'noise', seed: 7, type: 'noise' } } },
         kind: 'workflow',
+        workflow: { edges: [], name: 'Call-only workflow', nodes: [], version: '1.0.0' },
         ...(seeds === undefined ? {} : { seeds: seeds as never }),
       };
       queueItem.snapshot.sourceId = 'workflow';
@@ -176,7 +177,11 @@ describe('queue runtime', () => {
 
     expect(createQueueItemBackendSubmission({ id: 'project-1' }, asWorkflow([seed]))).toMatchObject({
       kind: 'workflow',
-      request: { batchCount: 3, seeds: [seed] },
+      request: {
+        batchCount: 3,
+        seeds: [seed],
+        workflow: { name: 'Call-only workflow' },
+      },
     });
     expect(createQueueItemBackendSubmission({ id: 'project-1' }, asWorkflow(undefined))).toMatchObject({
       kind: 'workflow',

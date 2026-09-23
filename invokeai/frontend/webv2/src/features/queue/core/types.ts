@@ -275,6 +275,9 @@ export interface QueueProgressPreviewPayload {
   item_id: number;
   session_id: string;
   invocation_source_id: string;
+  parent_item_id?: number | null;
+  root_item_id?: number | null;
+  workflow_call_parent_source_id?: string | null;
   revision: number | null;
   message: string;
   percentage: number | null;
