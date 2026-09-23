@@ -73,6 +73,7 @@ def test_the_pretile_gate_uses_the_memory_the_device_will_keep_resident(monkeypa
 
     assert should_pretile_vae_decode(torch.device("cuda", 0), estimate) is True
 
+
 def test_the_gate_counts_memory_this_process_can_still_release(monkeypatch):
     """Windows halves the budget once the process passes about 12 of 16 GiB, i.e. below what it already holds. The
     cache evicts models for the reservation, so the ceiling is the budget plus this process's own allocations --

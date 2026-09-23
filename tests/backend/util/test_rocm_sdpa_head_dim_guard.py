@@ -486,9 +486,13 @@ class TestClassicVaeEstimators:
 
     @pytest.fixture(autouse=True)
     def _rocm_cuda(self, monkeypatch):
+        """The guard's ROCm switch and the convolution backend are separate questions, and this class is about the
+        first: the assertions below carry the cuDNN linear term, so pin `torch.version.hip` (which selects MIOpen's
+        larger constants) away from it while the attention side stays on ROCm."""
         import invokeai.backend.util.vae_working_memory as vwm
 
         monkeypatch.setattr(attention, "_IS_ROCM", True)
+        monkeypatch.setattr(torch.version, "hip", None)
         monkeypatch.setattr(vwm.TorchDevice, "choose_torch_device", classmethod(lambda cls: torch.device("cuda", 0)))
 
     @staticmethod

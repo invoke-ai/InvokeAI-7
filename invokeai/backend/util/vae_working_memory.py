@@ -795,8 +795,10 @@ def estimate_vae_working_memory_qwen_image(
     #    W7900's, which is the card that needs them; what the spread means is that the reservation carries
     #    cross-card conservatism, so it must not double as the up-front tiling decision -- see
     #    `qwen_image_untiled_decode_peak_bytes`, which prices that decision from the measured curve instead.
-    device = device if device is not None else TorchDevice.choose_torch_device()
-    is_rocm = device.type == "cuda" and torch.version.hip is not None
+    # A named device answers for that device -- a `cpu_only` VAE is not on MIOpen even on a ROCm build. Without one
+    # the answer stays the build-wide one these constants were always selected by, so callers that pass no device
+    # (and tests that pin none) keep the figure they had.
+    is_rocm = torch.version.hip is not None and (device is None or device.type == "cuda")
     if operation == "decode":
         scaling_constant = 5500 if is_rocm else 2900
     else:  # encode
