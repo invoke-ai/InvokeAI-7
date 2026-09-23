@@ -161,9 +161,9 @@ device_working_mem_gb: 4
 
 ### Tiled VAE decoding
 
-Turning latents into the final image (the VAE decode) needs working memory that grows with the image's pixel count. When an untiled decode would claim most of the GPU's memory, Invoke decodes in tiles instead, for the FLUX.1, Z-Image, Qwen-Image, Krea-2, Anima and Wan decodes. A tiled decode is not pixel-identical to an untiled one, so this only kicks in for images too large for the card: for Z-Image on a 16GB GPU, for example, from about 1850x1850 on Nvidia and from about 1500x1500 on AMD, whose convolution library needs more memory. Anima tiles a little earlier, because its untiled decode pushes the Anima model itself out of VRAM on 8GB cards.
+Turning latents into the final image (the VAE decode) needs working memory that grows with the image's pixel count. When an untiled decode would claim most of the memory the GPU keeps resident, Invoke decodes in tiles instead, for the FLUX.1, Z-Image, Qwen-Image, Krea-2, Anima and Wan decodes. A tiled decode is not pixel-identical to an untiled one, so this only kicks in for images too large for the card: for Z-Image on a 16GB GPU, for example, from about 1850x1850 on Nvidia and from about 1500x1500 on AMD, whose convolution library needs more memory. On a ROCm build under Windows the comparison uses the video-memory budget Windows grants Invoke, which is lower than the card's total and lower again while another program uses the GPU. Anima tiles a little earlier, because its untiled decode pushes the Anima model itself out of VRAM on 8GB cards.
 
-To always decode untiled unless you ask for tiling, turn it off. A decode too large for the card then runs out of memory: the FLUX.1, Z-Image and Anima decodes retry in tiles, the others fail, and on Windows the driver may move the decode into system memory and run it very slowly instead.
+To always decode untiled unless you ask for tiling, turn it off. A decode too large for the card then runs out of memory: the FLUX.1 and Z-Image decodes retry in tiles, the others fail, and on Windows the driver may move the decode into system memory and run it very slowly instead. Anima is not affected by this setting: there, tiling a large decode is what keeps the Anima model in VRAM, and turning it off would only make those decodes slower.
 
 ```yaml
 auto_tiled_decode: false

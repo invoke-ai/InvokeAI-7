@@ -331,8 +331,10 @@ class TestAnimaLatentsToImageOomFallback:
 
 class TestAnimaPretiling:
     @pytest.mark.parametrize("auto", [True, False], ids=["auto-tiled-decode-on", "auto-tiled-decode-off"])
-    def test_a_decode_too_large_for_its_gpu_is_tiled_up_front_unless_switched_off(self, auto):
-        """Anima asks with its own, lower fraction (measured on 8GB cards) about the VAE's own device."""
+    def test_a_decode_too_large_for_its_gpu_is_tiled_up_front_either_way(self, auto):
+        """Anima asks with its own, lower fraction (measured on 8GB cards) about the VAE's own device, and does so
+        whatever `auto_tiled_decode` says: tiling here is what makes a decode that size fast (~1s against 7s+ with
+        the transformer evicted), not a way around an out-of-memory error."""
         decoded = torch.zeros(1, 3, 1, 64, 64)
         vae, vae_info, context = _build_decode_mocks(latents=torch.zeros(1, 16, 32, 32), decoded=decoded)
         context.config.get.return_value.auto_tiled_decode = auto
@@ -346,12 +348,8 @@ class TestAnimaPretiling:
         ):
             _build_l2i_invocation().invoke(context)
 
-        if auto:
-            pretile.assert_called_once_with(vae_info.compute_device, full, ANIMA_PRETILE_VRAM_FRACTION)
-            vae.enable_tiling.assert_called_once()
-        else:
-            pretile.assert_not_called()
-            vae.enable_tiling.assert_not_called()
+        pretile.assert_called_once_with(vae_info.compute_device, full, ANIMA_PRETILE_VRAM_FRACTION)
+        vae.enable_tiling.assert_called_once()
 
 
 class TestAnimaImageToLatentsEncode:

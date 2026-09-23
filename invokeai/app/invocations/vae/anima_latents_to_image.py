@@ -106,7 +106,10 @@ class AnimaLatentsToImageInvocation(BaseInvocation, WithMetadata, WithBoard):
             vae=vae_info.model,
             tile_size=None,
         )
-        use_tiling = context.config.get().auto_tiled_decode and should_pretile_vae_decode(
+        # Not gated on `auto_tiled_decode`: this rule predates that setting and is a speed optimization, not a way
+        # around an out-of-memory error. Turning the setting off here would hand an 8GB card the 7s decode above
+        # instead of restoring anything.
+        use_tiling = should_pretile_vae_decode(
             vae_info.compute_device, full_decode_working_memory, ANIMA_PRETILE_VRAM_FRACTION
         )
         estimated_working_memory = estimate_vae_working_memory_anima(

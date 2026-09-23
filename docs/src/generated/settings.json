@@ -728,7 +728,7 @@
     {
       "category": "GENERATION",
       "default": true,
-      "description": "Decode large images in tiles when an untiled decode's estimated working memory would take most of the GPU's memory (FLUX.1, Z-Image, Qwen-Image, Krea-2, Anima and Wan decodes). Turn off to decode untiled unless tiling is requested; the FLUX.1, Z-Image and Anima decodes then still retry tiled after running out of memory.",
+      "description": "Decode large images in tiles when an untiled decode's estimated working memory would take most of the GPU's memory (FLUX.1, Z-Image, Qwen-Image, Krea-2 and Wan decodes). Turn off to decode untiled unless tiling is requested; the FLUX.1 and Z-Image decodes then still retry tiled after running out of memory. Anima keeps tiling a decode too large for its GPU either way, because tiling is what makes that case fast there.",
       "env_var": "INVOKEAI_AUTO_TILED_DECODE",
       "literal_values": [],
       "name": "auto_tiled_decode",
