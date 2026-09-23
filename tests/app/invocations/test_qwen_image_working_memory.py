@@ -28,15 +28,27 @@ class TestQwenImageWorkingMemoryEstimate:
     # (operation, latent_h, latent_w) -> the estimator scales pixel area (latent * 8 for decode,
     # raw for encode) by element_size and the constant.
     @pytest.mark.parametrize(
-        "operation, is_rocm, expected_constant",
+        "operation, is_rocm, chunked, expected_constant",
         [
-            ("decode", True, 5500),
-            ("decode", False, 2900),
-            ("encode", True, 6300),
-            ("encode", False, 1600),
+            ("decode", True, True, 3000),
+            ("decode", True, False, 5500),
+            ("decode", False, False, 2900),
+            ("encode", True, True, 1700),
+            ("encode", True, False, 6300),
+            ("encode", False, False, 1600),
+        ],
+        ids=[
+            "rocm-decode-chunked",
+            "rocm-decode-whole",
+            "cuda-decode",
+            "rocm-encode-chunked",
+            "rocm-encode-whole",
+            "cuda-encode",
         ],
     )
-    def test_constant_selected_per_backend(self, operation, is_rocm, expected_constant):
+    def test_constant_selected_per_backend(self, operation, is_rocm, chunked, expected_constant):
+        """The ROCm figures split by whether math attention is chunked: the larger pair was measured while a single
+        call built its whole score matrix, which is the super-linear term the guard removes."""
         mock_vae = MagicMock(spec=AutoencoderKLQwenImage)
         mock_vae.parameters.return_value = iter([torch.zeros(1, dtype=torch.float16)])  # element_size == 2
 
@@ -49,9 +61,12 @@ class TestQwenImageWorkingMemoryEstimate:
             h = w = 512
 
         hip_value = "7.1.0" if is_rocm else None
-        with patch("torch.version.hip", hip_value):
+        with (
+            patch("torch.version.hip", hip_value),
+            patch("invokeai.backend.util.vae_working_memory.rocm_sdpa_chunks_math", return_value=chunked),
+        ):
             result = estimate_vae_working_memory_qwen_image(
-                operation=operation, image_tensor=image_tensor, vae=mock_vae
+                operation=operation, image_tensor=image_tensor, vae=mock_vae, device=torch.device("cuda")
             )
 
         assert result == h * w * 2 * expected_constant
@@ -481,8 +496,11 @@ class TestPretilingDoesNotFireOnReservationHeadroom:
         total_bytes = total_gib * 2**30
         latents = torch.zeros(1, 16, 1, px // 8, px // 8)
 
-        # The constants are measured per backend, so pin it rather than inheriting the host's build.
+        # The constants are measured per backend, so pin it rather than inheriting the host's build. A running app
+        # always has the ROCm attention guard installed (`apply_monkeypatches`), and the ROCm constants differ by
+        # whether it is: measured 2650-2772 with math attention chunked against 5500 with the whole score matrix.
         monkeypatch.setattr(torch.version, "hip", "7.2.0")
+        monkeypatch.setattr("invokeai.backend.util.vae_working_memory.rocm_sdpa_chunks_math", lambda device: True)
         monkeypatch.setattr("torch.cuda.get_device_properties", lambda device: MagicMock(total_memory=total_bytes))
 
         # The measured table is fp16, and the estimator runs once here and once inside the node,

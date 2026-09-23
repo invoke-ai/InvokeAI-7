@@ -75,18 +75,21 @@ class QwenImageLatentsToImageInvocation(BaseInvocation, WithMetadata, WithBoard)
             image_tensor=latents,
             vae=vae_info.model,
             tile_size=effective_tile_size,
+            device=vae_info.compute_device,
         )
         if (
             not tiled
             and config.auto_tiled_decode
             and should_pretile_vae_decode(vae_info.compute_device, estimated_working_memory)
         ):
+            tiled = True
             effective_tile_size = resolve_qwen_image_vae_tile_size(self.tile_size)
             estimated_working_memory = estimate_vae_working_memory_qwen_image(
                 operation="decode",
                 image_tensor=latents,
                 vae=vae_info.model,
                 tile_size=effective_tile_size,
+                device=vae_info.compute_device,
             )
         with vae_info.model_on_device(working_mem_bytes=estimated_working_memory) as (_, vae):
             context.util.signal_progress("Running VAE")
