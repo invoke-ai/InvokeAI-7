@@ -24,6 +24,7 @@ from invokeai.backend.util.qwen_image_vae import (
 )
 from invokeai.backend.util.vae_working_memory import (
     estimate_vae_working_memory_qwen_image,
+    qwen_image_untiled_decode_peak_bytes,
     should_pretile_vae_decode,
 )
 
@@ -77,10 +78,15 @@ class QwenImageLatentsToImageInvocation(BaseInvocation, WithMetadata, WithBoard)
             tile_size=effective_tile_size,
             device=vae_info.compute_device,
         )
+        # The tiling decision is priced from the measured peak, not from the reservation above: that one carries the
+        # headroom and cross-card conservatism a reservation needs, and tiling is not pixel-identical.
         if (
             not tiled
             and config.auto_tiled_decode
-            and should_pretile_vae_decode(vae_info.compute_device, estimated_working_memory)
+            and should_pretile_vae_decode(
+                vae_info.compute_device,
+                qwen_image_untiled_decode_peak_bytes(latents, vae_info.model, vae_info.compute_device),
+            )
         ):
             tiled = True
             effective_tile_size = resolve_qwen_image_vae_tile_size(self.tile_size)

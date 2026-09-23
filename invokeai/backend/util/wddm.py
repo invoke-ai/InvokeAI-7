@@ -220,8 +220,10 @@ def _resolve_adapter(lib: ctypes.CDLL, index: int) -> Optional[_Adapter]:
         return None
 
     matches: list[_AdapterInfo] = []
+    pending = list(infos[: enum.NumAdapters])
     try:
-        for info in infos[: enum.NumAdapters]:
+        while pending:
+            info = pending.pop()
             address = _AdapterAddress()
             query = _QueryAdapterInfo(
                 info.hAdapter,
@@ -237,8 +239,9 @@ def _resolve_adapter(lib: ctypes.CDLL, index: int) -> Optional[_Adapter]:
             else:
                 _close(lib, info.hAdapter)
     except Exception:
-        # Every handle opened by the enumeration belongs to this process until it is closed.
-        for info in matches:
+        # Every handle the enumeration opened belongs to this process until it is closed -- the ones matched so far
+        # and the ones this loop never reached.
+        for info in matches + pending:
             _close(lib, info.hAdapter)
         raise
 

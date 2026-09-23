@@ -10,7 +10,7 @@ from diffusers.models.autoencoders.autoencoder_tiny import AutoencoderTiny
 from invokeai.app.invocations.constants import LATENT_SCALE_FACTOR
 from invokeai.backend.flux.modules.autoencoder import AutoEncoder, resolve_tile_size
 from invokeai.backend.util import wddm
-from invokeai.backend.util.attention import rocm_sdpa_chunks_math, sdpa_score_matrix_bytes
+from invokeai.backend.util.attention import sdpa_score_matrix_bytes
 from invokeai.backend.util.devices import TorchDevice
 from invokeai.backend.util.logging import InvokeAILogger
 
@@ -31,15 +31,20 @@ def should_pretile_vae_decode(
     decode just runs very slowly. ``device`` is where the VAE runs: a ``cpu_only`` VAE (and MPS, sharing system
     memory) is never tiled on these grounds.
 
-    The comparison is against the Windows video-memory budget where there is one, not the card's nameplate total:
-    that budget is the point past which Windows pages this process out, and another GPU process lowers it within
-    about a second. A decode measured against the total alone would look like it fits and then crawl.
+    Where Windows grants a video-memory budget, that budget bounds the card's nameplate total: it is the point past
+    which Windows pages this process out, and another GPU process lowers it within about a second. What the decode
+    may claim is the budget plus whatever this process already holds, because the cache evicts models to make room
+    for the reservation -- measured on an RX 9060 XT, Windows keeps the budget at 15.09 GiB until the process passes
+    about 12 GiB and then halves it to 7.62, so comparing against the bare budget mid-session tiles a decode that
+    fits (a 7.0 GiB decode against a 6.9 GiB line, with output that is not pixel-identical).
     """
     if device.type == "cuda":
         total_bytes = torch.cuda.get_device_properties(device).total_memory
         budget_bytes = wddm.video_memory_budget(device)
         if budget_bytes is not None:
-            total_bytes = min(total_bytes, budget_bytes)
+            # On a ROCm build under Windows torch's free figure is the total minus this process's own allocations.
+            free_bytes, _total = torch.cuda.mem_get_info(device)
+            total_bytes = min(total_bytes, budget_bytes + (total_bytes - free_bytes))
     elif device.type == "xpu":
         total_bytes = torch.xpu.get_device_properties(device).total_memory
     else:
@@ -121,7 +126,7 @@ def estimate_vae_working_memory_sd15_sdxl(
         # max, not sum: the mid-block attention and the full-resolution convolutions peak in
         # different phases of the forward (see the FLUX.2 estimator for the measurements).
         score_dtype = torch.float32 if fp32 else next(vae.parameters()).dtype
-        working_memory = max(working_memory, _vae_mid_block_score_matrix_bytes(h, w, score_dtype))
+        working_memory = max(working_memory, _vae_mid_block_score_matrix_bytes(h, w, score_dtype, device=device))
 
     if fp32:
         # If we are running in FP32, then we should account for the likely increase in model size (~250MB).
@@ -151,7 +156,9 @@ def estimate_vae_working_memory_cogview4(
 
     # max, not sum: the mid-block attention and the full-resolution convolutions peak in different
     # phases of the forward (see the FLUX.2 estimator for the measurements).
-    return int(max(working_memory, _vae_mid_block_score_matrix_bytes(h, w, next(vae.parameters()).dtype)))
+    return int(
+        max(working_memory, _vae_mid_block_score_matrix_bytes(h, w, next(vae.parameters()).dtype, device=device))
+    )
 
 
 # What a tiled decode does *not* bound: the assembled image, several times over, per output pixel.
@@ -549,6 +556,60 @@ def estimate_vae_working_memory_wan(
     return int(per_frame + clip_bytes)
 
 
+# What a full-frame Qwen-Image VAE decode was actually measured to peak at, per output pixel-byte, against the output
+# area it was measured at. The largest of the measured ROCm cards at each point (the per-point table in
+# `estimate_vae_working_memory_qwen_image`, W7900 column; the RX 9060 XT measures 2650-2772 throughout), and the CUDA
+# maximum for everything else.
+#
+# This exists because the shipped constants are one flat figure fitted to the worst point of a curve that is not
+# flat, across cards that differ by up to 1.9x. That is the right figure to *reserve* -- a reservation that is too
+# small is an out-of-memory error or, on Windows, a decode paged into system memory. It is the wrong figure to decide
+# tiling with: a tiled decode is not pixel-identical, so a 1536^2 decode whose real peak is 14.4 GiB must not be
+# tiled on a 24 GiB card because a flat 5500 prices it at 24.2 GiB.
+_QWEN_VAE_MEASURED_DECODE_PEAKS: tuple[tuple[int, int], ...] = (
+    (512 * 512, 5132),
+    (768 * 768, 4596),
+    (1024 * 1024, 4570),
+    (1536 * 1536, 3273),
+    (1792 * 1792, 3735),
+    (2048 * 2048, 4813),
+)
+_QWEN_VAE_MEASURED_DECODE_PEAK_CUDA = 2690
+
+
+def qwen_image_untiled_decode_peak_bytes(
+    image_tensor: torch.Tensor, vae: AutoencoderKLQwenImage, device: torch.device
+) -> int:
+    """What an untiled decode of this latent is expected to peak at, for the up-front tiling decision only.
+
+    Reservations keep using `estimate_vae_working_memory_qwen_image`, which is deliberately conservative. Between two
+    measured points this takes the larger of the two, and beyond the largest measured area the largest of all: the
+    curve is not monotonic, and a decode that big is tiled on any card either way.
+    """
+    h = LATENT_SCALE_FACTOR * image_tensor.shape[-2]
+    w = LATENT_SCALE_FACTOR * image_tensor.shape[-1]
+    element_size = next(vae.parameters()).element_size()
+    is_rocm = device.type == "cuda" and torch.version.hip is not None
+    if not is_rocm:
+        return h * w * element_size * _QWEN_VAE_MEASURED_DECODE_PEAK_CUDA
+
+    area = h * w
+    measured = dict(_QWEN_VAE_MEASURED_DECODE_PEAKS)
+    if area in measured:
+        constant = measured[area]
+    elif area > _QWEN_VAE_MEASURED_DECODE_PEAKS[-1][0]:
+        constant = max(measured.values())
+    else:
+        previous = _QWEN_VAE_MEASURED_DECODE_PEAKS[0][1]
+        constant = previous
+        for measured_area, peak in _QWEN_VAE_MEASURED_DECODE_PEAKS:
+            if measured_area > area:
+                constant = max(previous, peak)
+                break
+            previous = peak
+    return h * w * element_size * constant
+
+
 def estimate_vae_working_memory_qwen_image(
     operation: Literal["encode", "decode"],
     image_tensor: torch.Tensor,
@@ -608,20 +669,18 @@ def estimate_vae_working_memory_qwen_image(
     #    materialised seq^2 score matrix), i.e. XPU gets an efficient kernel and is in the same
     #    O(area) regime as CUDA. If a future driver regresses to math attention, this branch --
     #    not the constants -- is what needs to change.
-    # On ROCm the figures above were measured while a math-kernel attention call built its whole score matrix. Where
-    # the guard bounds that call (`rocm_sdpa_chunks_math`), the super-linear term is gone and the curve is flat and
-    # linear again -- measured 2026-09-23 on an RX 9060 XT (gfx1200, torch 2.12+rocm7.14, fp16, the same script):
-    # decode 2650-2772 across 512^2 to 2048^2, encode 1541-1552, i.e. what CUDA measures (2660 decode). Shipping the
-    # unbounded figures there costs two things at once: eviction of models the decode does not need out of the way,
-    # and -- since the same figure decides it -- tiling a decode that fits, which is not pixel-identical.
+    #  - A second ROCm card measures far below the shipped pair: on an RX 9060 XT (gfx1200, torch 2.12+rocm7.14,
+    #    fp16, 2026-09-23, the same script with the attention guard installed) the implied constant is flat at
+    #    2650-2772 for decode and 1541-1552 for encode, all the way to 2048^2. The shipped figures stay at the
+    #    W7900's, which is the card that needs them; what the spread means is that the reservation carries
+    #    cross-card conservatism, so it must not double as the up-front tiling decision -- see
+    #    `qwen_image_untiled_decode_peak_bytes`, which prices that decision from the measured curve instead.
     device = device if device is not None else TorchDevice.choose_torch_device()
     is_rocm = device.type == "cuda" and torch.version.hip is not None
-    if is_rocm and rocm_sdpa_chunks_math(device.type):
-        scaling_constant = 3000 if operation == "decode" else 1700
-    elif is_rocm:
-        scaling_constant = 5500 if operation == "decode" else 6300
-    else:
-        scaling_constant = 2900 if operation == "decode" else 1600
+    if operation == "decode":
+        scaling_constant = 5500 if is_rocm else 2900
+    else:  # encode
+        scaling_constant = 6300 if is_rocm else 1600
 
     if tile_size is not None and tile_size > 0:
         # Bounded by one tile (plus overlap) rather than the full frame.
@@ -667,4 +726,6 @@ def estimate_vae_working_memory_sd3(
 
     # max, not sum: the mid-block attention and the full-resolution convolutions peak in different
     # phases of the forward (see the FLUX.2 estimator for the measurements).
-    return int(max(working_memory, _vae_mid_block_score_matrix_bytes(h, w, next(vae.parameters()).dtype)))
+    return int(
+        max(working_memory, _vae_mid_block_score_matrix_bytes(h, w, next(vae.parameters()).dtype, device=device))
+    )

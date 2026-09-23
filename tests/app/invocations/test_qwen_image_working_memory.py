@@ -14,7 +14,10 @@ from invokeai.backend.util.qwen_image_vae import (
     QWEN_IMAGE_VAE_DEFAULT_TILE_SIZE,
     patch_qwen_image_vae_tiling,
 )
-from invokeai.backend.util.vae_working_memory import estimate_vae_working_memory_qwen_image
+from invokeai.backend.util.vae_working_memory import (
+    estimate_vae_working_memory_qwen_image,
+    qwen_image_untiled_decode_peak_bytes,
+)
 
 
 class TestQwenImageWorkingMemoryEstimate:
@@ -28,27 +31,15 @@ class TestQwenImageWorkingMemoryEstimate:
     # (operation, latent_h, latent_w) -> the estimator scales pixel area (latent * 8 for decode,
     # raw for encode) by element_size and the constant.
     @pytest.mark.parametrize(
-        "operation, is_rocm, chunked, expected_constant",
+        "operation, is_rocm, expected_constant",
         [
-            ("decode", True, True, 3000),
-            ("decode", True, False, 5500),
-            ("decode", False, False, 2900),
-            ("encode", True, True, 1700),
-            ("encode", True, False, 6300),
-            ("encode", False, False, 1600),
-        ],
-        ids=[
-            "rocm-decode-chunked",
-            "rocm-decode-whole",
-            "cuda-decode",
-            "rocm-encode-chunked",
-            "rocm-encode-whole",
-            "cuda-encode",
+            ("decode", True, 5500),
+            ("decode", False, 2900),
+            ("encode", True, 6300),
+            ("encode", False, 1600),
         ],
     )
-    def test_constant_selected_per_backend(self, operation, is_rocm, chunked, expected_constant):
-        """The ROCm figures split by whether math attention is chunked: the larger pair was measured while a single
-        call built its whole score matrix, which is the super-linear term the guard removes."""
+    def test_constant_selected_per_backend(self, operation, is_rocm, expected_constant):
         mock_vae = MagicMock(spec=AutoencoderKLQwenImage)
         mock_vae.parameters.return_value = iter([torch.zeros(1, dtype=torch.float16)])  # element_size == 2
 
@@ -61,10 +52,7 @@ class TestQwenImageWorkingMemoryEstimate:
             h = w = 512
 
         hip_value = "7.1.0" if is_rocm else None
-        with (
-            patch("torch.version.hip", hip_value),
-            patch("invokeai.backend.util.vae_working_memory.rocm_sdpa_chunks_math", return_value=chunked),
-        ):
+        with patch("torch.version.hip", hip_value):
             result = estimate_vae_working_memory_qwen_image(
                 operation=operation, image_tensor=image_tensor, vae=mock_vae, device=torch.device("cuda")
             )
@@ -449,6 +437,7 @@ class TestQwenImageWorkingMemory:
 
         with (
             patch(f"{module}.estimate_vae_working_memory_qwen_image", side_effect=[20 * 2**30, 2 * 2**30]) as estimate,
+            patch(f"{module}.qwen_image_untiled_decode_peak_bytes", return_value=14 * 2**30) as peak,
             patch(f"{module}.should_pretile_vae_decode", return_value=True) as pretile,
             patch(f"{module}.SeamlessExt.static_patch_model", return_value=nullcontext()),
         ):
@@ -462,11 +451,14 @@ class TestQwenImageWorkingMemory:
                 invocation.invoke(mock_context)
 
         if auto:
-            pretile.assert_called_once_with(mock_vae_info.compute_device, 20 * 2**30)
+            # The decision is priced from the measured peak, not from the reservation, which is deliberately padded.
+            peak.assert_called_once()
+            pretile.assert_called_once_with(mock_vae_info.compute_device, 14 * 2**30)
             assert estimate.call_args.kwargs["tile_size"] == QWEN_IMAGE_VAE_DEFAULT_TILE_SIZE
             mock_vae_info.model_on_device.assert_called_once_with(working_mem_bytes=2 * 2**30)
             mock_vae.enable_tiling.assert_called_once()
         else:
+            peak.assert_not_called()
             pretile.assert_not_called()
             assert estimate.call_count == 1
             mock_vae.enable_tiling.assert_not_called()
@@ -477,6 +469,46 @@ class TestQwenImageWorkingMemory:
 # constant is a flat 5500 -- "max observed + ~8% headroom" -- which is the right figure to *reserve*,
 # but the real curve is not flat, so it over-predicts the peak by up to 68%.
 MEASURED_ROCM_DECODE_CONSTANT = {512: 5132, 768: 4596, 1024: 4570, 1536: 3273, 1792: 3735, 2048: 4813}
+
+
+class TestMeasuredDecodePeak:
+    """`qwen_image_untiled_decode_peak_bytes` prices the tiling decision from the measured curve, so a decode whose
+    real peak fits is not tiled by a reservation's headroom."""
+
+    def _peak(self, px: int, device: str = "cuda", hip: str | None = "7.2.0") -> int:
+        mock_vae = MagicMock(spec=AutoencoderKLQwenImage)
+        mock_vae.parameters.side_effect = lambda: iter([torch.zeros(1, dtype=torch.float16)])
+        with patch("torch.version.hip", hip):
+            return qwen_image_untiled_decode_peak_bytes(
+                torch.zeros(1, 16, 1, px // 8, px // 8), mock_vae, torch.device(device)
+            )
+
+    @pytest.mark.parametrize("px, constant", [(512, 5132), (1024, 4570), (1536, 3273), (2048, 4813)])
+    def test_a_measured_point_is_its_measured_peak(self, px, constant):
+        assert self._peak(px) == px * px * 2 * constant
+
+    def test_between_two_points_takes_the_larger(self):
+        # 1280^2 sits between the 1024^2 (4570) and 1536^2 (3273) measurements.
+        assert self._peak(1280) == 1280 * 1280 * 2 * 4570
+
+    def test_past_the_measured_range_takes_the_largest(self):
+        assert self._peak(3072) == 3072 * 3072 * 2 * 5132
+
+    def test_a_cuda_card_is_priced_from_the_cuda_measurements(self):
+        assert self._peak(1536, hip=None) == 1536 * 1536 * 2 * 2690
+
+    def test_the_peak_stays_under_the_reservation(self):
+        """The reservation must remain the conservative figure of the two, or it would stop being an upper bound."""
+        mock_vae = MagicMock(spec=AutoencoderKLQwenImage)
+        mock_vae.parameters.side_effect = lambda: iter([torch.zeros(1, dtype=torch.float16)])
+        latents = torch.zeros(1, 16, 1, 192, 192)
+        with patch("torch.version.hip", "7.2.0"):
+            reserved = estimate_vae_working_memory_qwen_image(
+                operation="decode", image_tensor=latents, vae=mock_vae, device=torch.device("cuda")
+            )
+            peak = qwen_image_untiled_decode_peak_bytes(latents, mock_vae, torch.device("cuda"))
+
+        assert peak < reserved
 
 
 class TestPretilingDoesNotFireOnReservationHeadroom:
@@ -496,11 +528,8 @@ class TestPretilingDoesNotFireOnReservationHeadroom:
         total_bytes = total_gib * 2**30
         latents = torch.zeros(1, 16, 1, px // 8, px // 8)
 
-        # The constants are measured per backend, so pin it rather than inheriting the host's build. A running app
-        # always has the ROCm attention guard installed (`apply_monkeypatches`), and the ROCm constants differ by
-        # whether it is: measured 2650-2772 with math attention chunked against 5500 with the whole score matrix.
+        # The constants are measured per backend, so pin it rather than inheriting the host's build.
         monkeypatch.setattr(torch.version, "hip", "7.2.0")
-        monkeypatch.setattr("invokeai.backend.util.vae_working_memory.rocm_sdpa_chunks_math", lambda device: True)
         monkeypatch.setattr("torch.cuda.get_device_properties", lambda device: MagicMock(total_memory=total_bytes))
 
         # The measured table is fp16, and the estimator runs once here and once inside the node,

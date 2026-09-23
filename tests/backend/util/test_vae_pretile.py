@@ -72,3 +72,18 @@ def test_the_pretile_gate_uses_the_memory_the_device_will_keep_resident(monkeypa
     assert estimate > budget_bytes, "test shape must exceed what Windows would keep resident"
 
     assert should_pretile_vae_decode(torch.device("cuda", 0), estimate) is True
+
+def test_the_gate_counts_memory_this_process_can_still_release(monkeypatch):
+    """Windows halves the budget once the process passes about 12 of 16 GiB, i.e. below what it already holds. The
+    cache evicts models for the reservation, so the ceiling is the budget plus this process's own allocations --
+    measured: comparing against the bare budget tiled a 7.0 GiB Z-Image decode against a 6.9 GiB line mid-session,
+    changing output that had been pixel-identical."""
+    total_bytes = 16 * 2**30
+    estimate = 7 * 2**30
+
+    monkeypatch.setattr("torch.cuda.get_device_properties", lambda device: MagicMock(total_memory=total_bytes))
+    # Mid-session: 12 GiB of models resident, and Windows has trimmed the budget to 7.6 GiB in response.
+    monkeypatch.setattr("torch.cuda.mem_get_info", lambda device: (4 * 2**30, total_bytes))
+    monkeypatch.setattr("invokeai.backend.util.wddm.video_memory_budget", lambda device: int(7.6 * 2**30))
+
+    assert should_pretile_vae_decode(torch.device("cuda", 0), estimate) is False
