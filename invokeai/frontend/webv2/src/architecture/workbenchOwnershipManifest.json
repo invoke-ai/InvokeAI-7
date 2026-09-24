@@ -108,6 +108,7 @@
     "graphWidgets.ts": "workbench",
     "iconResolver.tsx": "workbench",
     "invocation.ts": "workbench",
+    "invocationBoard.ts": "workbench",
     "invocationContracts.ts": "workbench",
     "invocationSubmit.ts": "workbench",
     "layerPanelState.ts": "workbench",

@@ -59,7 +59,6 @@ import {
   getGallerySettings,
   parseGallerySemanticReference,
   toGallerySemanticTextReference,
-  getGalleryDestinationBoardId,
   getSelectedGalleryItemFromValues,
   legacyGeneratedImageToGalleryItem,
   normalizeGalleryImage,
@@ -168,6 +167,7 @@ import {
   isResultDestinationAvailable,
   resolveInvocationRoute,
 } from './invocation';
+import { resolveInvocationGalleryBoardId } from './invocationBoard';
 import { getOrderedLayoutPresets, normalizeLayoutPresetOrder, reorderLayoutPresetIds } from './layoutPresetCollection';
 import { getInvocationAfterLayoutPreset } from './layoutPresetRouting';
 import {
@@ -222,6 +222,7 @@ type WorkbenchReducerAction =
   | { type: 'recoverShellLayout' }
   | { type: 'setInvocationSource'; sourceId: InvocationSourceId }
   | { type: 'setInvocationDestination'; destination: ResultDestination }
+  | { type: 'setInvocationGalleryBoard'; boardId: string }
   | { type: 'toggleRoutingLock' }
   | { type: 'toggleSourceLock' }
   | { type: 'toggleDestinationLock' }
@@ -2753,8 +2754,12 @@ const reconcileDeletedGalleryBoard = (
       ...(projectBoardWasDeleted ? { projectBoardId: null } : {}),
     };
   });
-  let didChangeQueue = false;
+  let didChangeProjects = false;
   const projects = withBoardReferencesCleared.projects.map((project) => {
+    const invocation =
+      project.invocation.galleryBoardId === boardId
+        ? { ...project.invocation, galleryBoardId: 'auto' }
+        : project.invocation;
     let didChangeItems = false;
     const items = project.queue.items.map((item) => {
       if ((item.status !== 'pending' && item.status !== 'running') || item.snapshot.galleryBoardId !== boardId) {
@@ -2765,15 +2770,15 @@ const reconcileDeletedGalleryBoard = (
       return { ...item, snapshot: { ...item.snapshot, galleryBoardId: 'none' } };
     });
 
-    if (!didChangeItems) {
+    if (!didChangeItems && invocation === project.invocation) {
       return project;
     }
 
-    didChangeQueue = true;
-    return { ...project, queue: { ...project.queue, items } };
+    didChangeProjects = true;
+    return { ...project, invocation, ...(didChangeItems ? { queue: { ...project.queue, items } } : {}) };
   });
 
-  return didChangeQueue ? { ...withBoardReferencesCleared, projects } : withBoardReferencesCleared;
+  return didChangeProjects ? { ...withBoardReferencesCleared, projects } : withBoardReferencesCleared;
 };
 
 /** A deliberate selection pauses live-follow; only generations submitted after that selection may take the preview. */
@@ -3097,7 +3102,7 @@ const enqueueCompiledSnapshot = (
             seedStep: seedPlan?.step ?? 0,
           }
         : { error: `${route.sourceId} queue item is missing source submission metadata.`, kind: 'invalid' };
-  const galleryBoardId = getGalleryDestinationBoardId(widgetStates.gallery?.values ?? {});
+  const galleryBoardId = resolveInvocationGalleryBoardId(route.galleryBoardId, widgetStates.gallery?.values ?? {});
   const generatePresentationSettings = normalizeGenerateSettings(widgetStates.generate?.values);
   const videoPresentationDimensions =
     route.sourceId === 'video' && videoSettings?.model ? getVideoDimensions(videoSettings.model, videoSettings) : null;
@@ -3569,6 +3574,11 @@ export const __workbenchReducerInternal = (
     }
     case 'setInvocationDestination': {
       return updateActiveInvocation(state, (invocation) => ({ ...invocation, destination: action.destination }));
+    }
+    case 'setInvocationGalleryBoard': {
+      return updateActiveInvocation(state, (invocation) =>
+        invocation.galleryBoardId === action.boardId ? invocation : { ...invocation, galleryBoardId: action.boardId }
+      );
     }
     case 'toggleRoutingLock': {
       return updateActiveInvocation(state, (invocation) => {

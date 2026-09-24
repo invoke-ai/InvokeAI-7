@@ -11,6 +11,7 @@ export type {
   GeneratedImageContract,
 } from './core/types';
 export { getGalleryBoardLabel, type GalleryBoardTranslate } from './core/boardLabels';
+export { getGalleryBoardGroups } from './ui/galleryBoardGroups';
 export { normalizeGalleryImage } from './core/image';
 export {
   assertNeverGalleryItem,
