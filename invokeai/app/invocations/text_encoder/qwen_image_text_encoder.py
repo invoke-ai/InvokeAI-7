@@ -22,6 +22,10 @@ from invokeai.app.services.shared.invocation_context import InvocationContext
 from invokeai.backend.model_manager.load.model_cache.model_cache import MB, MODEL_LOAD_LOCK
 from invokeai.backend.model_manager.load.model_util import calc_model_size_by_fs
 from invokeai.backend.quantization.dequantizing_linear import peak_dequant_transient_bytes
+from invokeai.backend.qwen2_5_vl.qwen2_5_vl_assets import (
+    load_bundled_qwen2_5_vl_preprocessor_config_dict,
+    tokenizer_can_encode,
+)
 from invokeai.backend.stable_diffusion.diffusion.conditioning_data import (
     ConditioningFieldData,
     QwenImageConditioningInfo,
@@ -180,18 +184,31 @@ class QwenImageTextEncoderInvocation(BaseInvocation):
         conditioning_name = context.conditioning.save(conditioning_data)
         return QwenImageConditioningOutput.build(conditioning_name)
 
-    def _encode(
-        self, context: InvocationContext, images: list[PILImage.Image]
-    ) -> tuple[torch.Tensor, torch.Tensor | None]:
-        """Encode text prompt and reference images using Qwen2.5-VL.
+    @staticmethod
+    def _build_processor(tokenizer: Any, model_root: Path) -> Any:
+        """Wrap an already-loaded tokenizer in the Qwen2.5-VL processor for this install.
 
-        Matches the diffusers QwenImagePipeline._get_qwen_prompt_embeds logic:
-        1. Format prompt with the edit-specific system template
-        2. Run through Qwen2.5-VL to get hidden states
-        3. Extract valid (non-padding) tokens and drop the system prefix
-        4. Return padded embeddings + attention mask
+        The tokenizer is passed in rather than built here: every encoder loader already serves it as
+        a submodel, so the model cache owns exactly one copy. Re-deriving it from `model_root` cost
+        a ~7MB vocabulary parse on every generation and produced a second copy the cache knew
+        nothing about.
+
+        What is left to decide is the image preprocessor, and that genuinely depends on the layout:
+        a folder install may carry its own, a single-file checkpoint carries nothing.
         """
-        from transformers import AutoTokenizer, Qwen2_5_VLProcessor
+        from transformers import Qwen2_5_VLProcessor
+
+        # Every tokenizer source converges here -- the standalone encoder loaders and the diffusers
+        # main-model loader alike -- which is why the check belongs at this point rather than in any
+        # one of them. A `tokenizer/` that lost its vocabulary does not make `from_pretrained` raise:
+        # it yields a one-token vocabulary that encodes every prompt to an empty sequence, so the
+        # image comes out of no prompt conditioning at all with nothing in the log.
+        if not tokenizer_can_encode(tokenizer):
+            raise RuntimeError(
+                f"The Qwen2.5-VL tokenizer loaded for this encoder ({model_root}) cannot encode "
+                "anything, which means its vocabulary files are missing. Reinstall the model: "
+                "generating with it would silently produce images from no prompt conditioning at all."
+            )
 
         try:
             from transformers import Qwen2_5_VLImageProcessor as _ImageProcessorCls
@@ -207,47 +224,53 @@ class QwenImageTextEncoderInvocation(BaseInvocation):
                 Qwen2VLVideoProcessor as _VideoProcessorCls,
             )
 
-        # Format the prompt with one vision placeholder per reference image
-        text = _build_prompt(self.prompt, len(images))
-
-        # Build the processor
-        tokenizer_config = context.models.get_config(self.qwen_vl_encoder.tokenizer)
-        model_root = context.models.get_absolute_path(tokenizer_config)
-
-        # Single-file checkpoints (e.g. ComfyUI fp8_scaled): model_root is the
-        # safetensors file itself, so there's no tokenizer/processor folder
-        # alongside it. Fall back to the canonical Qwen2.5-VL repo on HF (small
-        # ~10 MB download for tokenizer+processor configs, cached for offline use).
-        if model_root.is_file():
-            HF_REPO = "Qwen/Qwen2.5-VL-7B-Instruct"
-            try:
-                tokenizer = AutoTokenizer.from_pretrained(HF_REPO, local_files_only=True)
-            except OSError:
-                tokenizer = AutoTokenizer.from_pretrained(HF_REPO)
-            try:
-                image_processor = _ImageProcessorCls.from_pretrained(HF_REPO, local_files_only=True)
-            except OSError:
-                try:
-                    image_processor = _ImageProcessorCls.from_pretrained(HF_REPO)
-                except Exception:
-                    image_processor = _ImageProcessorCls()
-        else:
+        image_processor = None
+        if not model_root.is_file():
+            # A folder install may ship its own; a single-file checkpoint has no folder to search.
             tokenizer_dir = model_root / "tokenizer"
-            tokenizer = AutoTokenizer.from_pretrained(str(tokenizer_dir), local_files_only=True)
-
-            image_processor = None
             for search_dir in [model_root / "processor", tokenizer_dir, model_root, model_root / "image_processor"]:
                 if (search_dir / "preprocessor_config.json").exists():
                     image_processor = _ImageProcessorCls.from_pretrained(str(search_dir), local_files_only=True)
                     break
-            if image_processor is None:
-                image_processor = _ImageProcessorCls()
+        if image_processor is None:
+            # The vendored config, never a bare constructor: transformers' class defaults cap a
+            # reference image at 1,003,520 pixels against the release's 12,845,056, so a bare one
+            # silently downscales by ~3.6x per side. `from_dict` also rewrites that class-level
+            # default in place, so a bare constructor would return whichever budget the previously
+            # loaded encoder happened to leave behind.
+            image_processor = _ImageProcessorCls.from_dict(load_bundled_qwen2_5_vl_preprocessor_config_dict())
 
-        processor = Qwen2_5_VLProcessor(
+        return Qwen2_5_VLProcessor(
             tokenizer=tokenizer,
             image_processor=image_processor,
             video_processor=_VideoProcessorCls(),
         )
+
+    def _encode(
+        self, context: InvocationContext, images: list[PILImage.Image]
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        """Encode text prompt and reference images using Qwen2.5-VL.
+
+        Matches the diffusers QwenImagePipeline._get_qwen_prompt_embeds logic:
+        1. Format prompt with the edit-specific system template
+        2. Run through Qwen2.5-VL to get hidden states
+        3. Extract valid (non-padding) tokens and drop the system prefix
+        4. Return padded embeddings + attention mask
+        """
+        # Format the prompt with one vision placeholder per reference image
+        text = _build_prompt(self.prompt, len(images))
+
+        tokenizer_config = context.models.get_config(self.qwen_vl_encoder.tokenizer)
+        # Through the model cache: both encoder loaders serve this tokenizer as a submodel, so
+        # taking it from there keeps one copy per process instead of parsing a 7MB vocabulary on
+        # every generation into a second copy the cache knew nothing about.
+        #
+        # `.model` rather than `model_on_device()`: a tokenizer has no device residency to lock or
+        # move, and it has to outlive this statement anyway -- the processor holds it until the
+        # encode below. Holding the reference is what keeps it alive; eviction only drops the cache
+        # record.
+        tokenizer = context.models.load(self.qwen_vl_encoder.tokenizer).model
+        processor = self._build_processor(tokenizer, context.models.get_absolute_path(tokenizer_config))
 
         context.util.signal_progress("Running Qwen2.5-VL text/vision encoder")
 

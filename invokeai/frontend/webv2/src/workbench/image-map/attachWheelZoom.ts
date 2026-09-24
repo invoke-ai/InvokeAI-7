@@ -24,6 +24,44 @@ const touchDistance = (touches: TouchList): number => {
 };
 
 export const attachWheelZoom = (element: HTMLElement, host: ZoomHost): (() => void) => {
+  // A wheel emits far faster than a frame, and each applied zoom is a plotly
+  // relayout over the whole scene. Applying one per event queued relayouts
+  // behind the cursor on a large map; coalescing into the next frame caps it
+  // at one, and costs nothing on a map small enough not to care.
+  //
+  // Factors multiply, so a frame's worth of events composes into a single
+  // equivalent zoom. The anchor is the newest pointer position: events inside
+  // one frame are milliseconds apart, so it has barely moved.
+  let queuedFactor = 1;
+  let queuedClientX = 0;
+  let queuedClientY = 0;
+  let frame: number | null = null;
+
+  const applyQueuedZoom = () => {
+    frame = null;
+    const factor = queuedFactor;
+
+    queuedFactor = 1;
+
+    if (factor !== 1) {
+      zoomAtClientPoint(queuedClientX, queuedClientY, factor);
+    }
+  };
+
+  const queueZoom = (clientX: number, clientY: number, factor: number) => {
+    if (factor === 1) {
+      // A horizontal-only wheel scales nothing; scheduling a frame for it
+      // would cost a callback per event to apply no change.
+      return;
+    }
+
+    queuedFactor *= factor;
+    queuedClientX = clientX;
+    queuedClientY = clientY;
+
+    frame ??= requestAnimationFrame(applyQueuedZoom);
+  };
+
   const zoomAtClientPoint = (clientX: number, clientY: number, factor: number) => {
     const ranges = host.readRanges();
 
@@ -46,7 +84,7 @@ export const attachWheelZoom = (element: HTMLElement, host: ZoomHost): (() => vo
   const handleWheel = (event: WheelEvent) => {
     // Also stops ctrl+wheel browser page zoom over the map.
     event.preventDefault();
-    zoomAtClientPoint(event.clientX, event.clientY, zoomFactorFromWheel(event.deltaY, event.deltaMode, event.ctrlKey));
+    queueZoom(event.clientX, event.clientY, zoomFactorFromWheel(event.deltaY, event.deltaMode, event.ctrlKey));
   };
 
   let pinchDistance: number | null = null;
@@ -81,7 +119,7 @@ export const attachWheelZoom = (element: HTMLElement, host: ZoomHost): (() => vo
     if (distance > 0) {
       const centerX = (event.touches[0].clientX + event.touches[1].clientX) / 2;
       const centerY = (event.touches[0].clientY + event.touches[1].clientY) / 2;
-      zoomAtClientPoint(centerX, centerY, pinchDistance / distance);
+      queueZoom(centerX, centerY, pinchDistance / distance);
       pinchDistance = distance;
       host.onPinch?.();
     }
@@ -109,6 +147,11 @@ export const attachWheelZoom = (element: HTMLElement, host: ZoomHost): (() => vo
   element.addEventListener('touchcancel', handleTouchEnd, { capture: true, passive: true });
 
   return () => {
+    if (frame !== null) {
+      cancelAnimationFrame(frame);
+      frame = null;
+    }
+
     element.removeEventListener('wheel', handleWheel);
     element.removeEventListener('touchstart', handleTouchStart, { capture: true });
     element.removeEventListener('touchmove', handleTouchMove, { capture: true });

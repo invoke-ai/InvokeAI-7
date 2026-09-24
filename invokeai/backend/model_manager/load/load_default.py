@@ -621,11 +621,23 @@ class ModelLoader(ModelLoaderBase):
             if any(re.search(pattern, module_name) for pattern in skip_patterns):
                 # A pattern skip means "this module computes in `compute_dtype`", so a weight that
                 # arrived already float8 contradicts it: nothing casts it back and no pre-hook is
-                # installed here, leaving the forward to run on raw fp8 codes. That is reachable
+                # installed here. What that costs depends on the layer class, because only some of
+                # them get an fp8-capable wrapper from `apply_custom_layers_to_model`:
+                #
+                #  - `Linear` and `Conv2d` need nothing. `CustomLinear` dequantizes an unscaled fp8
+                #    weight and `CustomConv2d` casts it; both round-trips are value-exact.
+                #  - `Conv1d`'s wrapper only moves the weight to the device, and `Conv3d` plus the
+                #    three `ConvTranspose` classes have no wrapper at all. Their forward raises
+                #    "Input type ... and weight type ... should be the same", mid-generation.
+                #  - `CustomEmbedding` never touches the dtype, so the lookup hands a float8 tensor
+                #    to the next op, which has no kernel for it.
+                #
+                # So six of the eight classes in `_FP8_SUPPORTED_PYTORCH_LAYERS` do need the weights
+                # put back, and the default patterns name exactly where they live: `patch_embed.proj`
+                # is a `Conv3d` in video and VL towers, `pos_embed` an `Embedding`. Reachable
                 # whenever a loader keeps checkpoint fp8 weights and then asks for fp8 storage on
-                # the remainder (the Qwen3-VL encoder does exactly this), and it depends on a
-                # coincidence — that the loader's own skip list and this one never name the same
-                # Linear. Upcast instead of relying on that.
+                # the remainder (the Qwen3-VL encoder does exactly this), so restore here rather
+                # than rely on the loader's own skip list never naming the same module as this one.
                 ModelLoader._restore_compute_dtype(module, compute_dtype)
                 continue
             if skip is not None and skip(module_name, module):
@@ -653,6 +665,11 @@ class ModelLoader(ModelLoaderBase):
         bitsandbytes) is left to its own kernels. A scaled-fp8 layer (fp8 weight plus `weight_scale`)
         is not raw codes either: `CustomLinear` dequantizes it with its scale, while a plain upcast
         here would drop the scale.
+
+        The widened params cost more than `predict_cast_state_dict_size(keep_fp8=True)` reserved for
+        them, since a caller that keeps checkpoint fp8 does not know this pass will give some of it
+        back. It is bounded by the pattern-skipped modules, and it buys a forward that runs at all
+        for the layer classes with no fp8-capable wrapper — see the call site for which those are.
         """
         if getattr(module, "weight_scale", None) is not None:
             return

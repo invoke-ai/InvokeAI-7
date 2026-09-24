@@ -47,10 +47,10 @@ encoder if you have them. If none are installed, you'll be prompted to pick them
 before you can generate. Selecting a Diffusers Krea-2 model clears those standalone selections and uses
 the bundled components.
 
-:::note[Qwen3-VL encoder download]
-Single-file Qwen3-VL encoders bundle only the weights. The tokenizer/config are fetched once from
-HuggingFace (`Qwen/Qwen3-VL-4B-Instruct`) on first use, then cached for offline use. A single-file fp8
-encoder is kept resident in fp8 (roughly half the VRAM of the bf16 encoder).
+:::note[Qwen3-VL encoder]
+Single-file Qwen3-VL encoders bundle only the weights. Their tokenizer and architecture config ship
+with InvokeAI, so these encoders load without network access. A single-file fp8 encoder is kept
+resident in fp8 (roughly half the VRAM of the bf16 encoder).
 :::
 
 ## Conditioning enhancers

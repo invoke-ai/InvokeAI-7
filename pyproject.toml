@@ -310,8 +310,12 @@ version = { attr = "invokeai.version.__version__" }
 
 [tool.setuptools.package-data]
 "invokeai.app.assets" = ["**/*.png"]
-"invokeai.backend.anima" = ["tokenizer/*.json"]
 "invokeai.backend.qwen3" = ["tokenizer/*.json", "tokenizer/*.json.gz"]
+"invokeai.backend.qwen3_vl" = ["tokenizer/*.json", "tokenizer/*.json.gz", "config/*.json"]
+"invokeai.backend.qwen2_5_vl" = ["*.json", "tokenizer/*.json", "tokenizer/*.json.gz"]
+# Read at load time by the MiniMax H3 single-file encoder loader. Without this the file is
+# absent from a wheel install and that loader raises FileNotFoundError.
+"invokeai.backend.minimax_h3" = ["*.json"]
 "invokeai.backend.t5" = ["tokenizer/*.json"]
 "invokeai.app.services.image_index" = ["*.txt"]
 "invokeai.app.services.workflow_records.default_workflows" = ["*.json"]

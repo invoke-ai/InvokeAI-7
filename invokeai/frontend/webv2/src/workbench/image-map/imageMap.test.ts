@@ -32,7 +32,7 @@ import {
 } from './imageMapStore';
 import {
   ALL_POINTS_TRACE,
-  buildAllPointsTrace,
+  buildAllPointsTraces,
   buildCurrentImageTrace,
   buildMapLayout,
   CURRENT_IMAGE_TRACE,
@@ -592,27 +592,124 @@ describe('cluster palette', () => {
   });
 });
 
+/** Cluster and kind vary on different cycles, so neither can stand in for the other. */
+const manyPoints = (): ImageMapPoint[] =>
+  Array.from({ length: 500 }, (_, index) => {
+    const kind = index % 11 === 0 ? ('video' as const) : ('image' as const);
+    const name = `${index}.${kind === 'video' ? 'mp4' : 'png'}`;
+
+    return {
+      cluster: index % 7 === 0 ? -1 : index % 37,
+      item: { kind, name },
+      key: `${kind}:${name}` as ImageMapPoint['key'],
+      x: index,
+      y: -index,
+    };
+  });
+
 describe('trace builders', () => {
   const points: ImageMapPoint[] = [
     { cluster: 0, item: { kind: 'image', name: 'a.png' }, key: 'image:a.png', x: 1, y: 2 },
     { cluster: -1, item: { kind: 'video', name: 'clip.mp4' }, key: 'video:clip.mp4', x: 3, y: 4 },
   ];
 
-  it('builds the all-points scattergl trace with item keys as customdata', () => {
-    const trace = buildAllPointsTrace(points);
+  it('splits the base points into one scattergl trace per appearance', () => {
+    const traces = buildAllPointsTraces(points);
 
-    expect(trace.type).toBe('scattergl');
-    expect(trace.name).toBe(ALL_POINTS_TRACE);
-    expect(trace.x).toEqual([1, 3]);
-    expect(trace.y).toEqual([2, 4]);
+    // Every marker property is scalar. Per-point arrays are what plotly
+    // reprocesses on each relayout, and a zoom is a relayout per frame.
+    for (const trace of traces) {
+      expect(trace.type).toBe('scattergl');
+      expect(trace.name).toBe(ALL_POINTS_TRACE);
+      expect(typeof trace.marker.color).toBe('string');
+      expect(typeof trace.marker.opacity).toBe('number');
+      expect(typeof trace.marker.symbol).toBe('string');
+    }
+
+    const clustered = traces.find((trace) => trace.marker.color === getClusterColor(0));
+    const noise = traces.find((trace) => trace.marker.color === getClusterColor(-1));
+
+    expect(clustered?.x).toEqual([1]);
+    expect(clustered?.y).toEqual([2]);
     // Keys, not bare names: a click has to know which namespace to resolve in.
-    expect(trace.customdata).toEqual(['image:a.png', 'video:clip.mp4']);
-    // Marker shape exposes video kind independently of cluster color and size.
-    expect(trace.marker.symbol).toEqual(['circle', 'diamond']);
-    expect((trace.marker.color as string[])[0]).toBe(getClusterColor(0));
+    expect(clustered?.customdata).toEqual(['image:a.png']);
+    // Kind gets the one channel colour and size do not already carry, so a
+    // clip is findable on the map without hovering every point.
+    expect(clustered?.marker.symbol).toBe('circle');
+    expect(noise?.marker.symbol).toBe('diamond');
+    expect(noise?.customdata).toEqual(['video:clip.mp4']);
     // Noise points are dimmed relative to clustered points.
-    const opacities = trace.marker.opacity as number[];
-    expect(opacities[1]).toBeLessThan(opacities[0]);
+    expect(noise?.marker.opacity as number).toBeLessThan(clustered?.marker.opacity as number);
+    // And dimmed points are drawn first, so they sit under the clustered ones.
+    expect(traces.indexOf(noise!)).toBeLessThan(traces.indexOf(clustered!));
+  });
+
+  it('gives every point the appearance it would have had, and keeps it exactly once', () => {
+    // The split is the only thing standing between a point and the map. A
+    // bucketing slip drops or duplicates part of the gallery; a subtler one
+    // keys on the wrong field and every clustered point comes out the same
+    // colour, or a video comes out a circle. Cluster and kind vary
+    // independently here so that keying on either alone fails.
+    const many = manyPoints();
+    const byKey = new Map(many.map((point) => [point.key, point]));
+    const traces = buildAllPointsTraces(many);
+    const seen: string[] = [];
+
+    for (const trace of traces) {
+      for (const [index, key] of trace.customdata.entries()) {
+        const point = byKey.get(key as ImageMapPoint['key']);
+
+        expect(point).toBeDefined();
+        seen.push(key);
+        // Index alignment: plotly reads x, y and customdata positionally, so
+        // a shuffle inside one trace plots a point at another's coordinates
+        // and resolves a click to the wrong image.
+        expect(trace.x[index]).toBe(point?.x);
+        expect(trace.y[index]).toBe(point?.y);
+        // And the scalar appearance has to be the one this point earned.
+        expect(trace.marker.color).toBe(getClusterColor(point!.cluster));
+        expect(trace.marker.opacity).toBe(point!.cluster < 0 ? 0.25 : 0.85);
+        expect(trace.marker.symbol).toBe(point!.item.kind === 'video' ? 'diamond' : 'circle');
+      }
+    }
+
+    expect(seen).toHaveLength(many.length);
+    expect(new Set(seen).size).toBe(many.length);
+    // Bounded by the palette, not by the gallery: 15 colours + noise, each
+    // able to carry images and videos.
+    expect(traces.length).toBeLessThanOrEqual((CLUSTER_PALETTE.length + 1) * 2);
+  });
+
+  it('draws a point whose cluster is not an integer rather than losing it', () => {
+    // The bucket slot is an array index. A fractional label would collide
+    // with another cluster's slot and steal its colour; a non-finite one
+    // would write a string property the emit loop never visits, and those
+    // points would vanish from the map with nothing to show for it. The
+    // endpoint declares `int` and the client does not validate, so only this
+    // stands between a contract slip and missing images.
+    const odd: ImageMapPoint[] = [2.5, Number.NaN, Infinity, -0.5].map((cluster, index) => ({
+      cluster,
+      item: { kind: 'image', name: `${index}.png` },
+      key: `image:${index}.png`,
+      x: index,
+      y: index,
+    }));
+
+    const traces = buildAllPointsTraces(odd);
+
+    expect(traces.flatMap((trace) => trace.customdata)).toHaveLength(odd.length);
+    // Treated as unclustered: nothing sensible names their cluster.
+    for (const trace of traces) {
+      expect(trace.marker.color).toBe(getClusterColor(-1));
+      expect(trace.marker.opacity).toBe(0.25);
+    }
+  });
+
+  it('yields no base traces for an empty map', () => {
+    // The view never mounts the plot for an empty point set, and plotly
+    // handles the trace count changing in either direction, so there is
+    // nothing to stand in for.
+    expect(buildAllPointsTraces([])).toEqual([]);
   });
 
   it('builds an empty gold current-image trace that stays last in z-order', () => {

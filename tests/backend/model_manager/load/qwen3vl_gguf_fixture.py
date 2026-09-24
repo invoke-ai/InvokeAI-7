@@ -136,7 +136,7 @@ def load_tiny_gguf_encoder(monkeypatch, tmp_path: Path, *, num_hidden_layers: in
     loader._logger = MagicMock()
     loader._ram_cache = MagicMock() if ram_cache is None else ram_cache
 
-    monkeypatch.setattr(Qwen3VLEncoderGGUFLoader, "_load_hf_config", lambda _self, _config: te_config)
+    monkeypatch.setattr(Qwen3VLEncoderGGUFLoader, "_load_te_config", lambda _self, _config: te_config)
     monkeypatch.setattr(
         "invokeai.backend.model_manager.load.model_loaders.krea2.TorchDevice.choose_torch_device",
         lambda: torch.device("cpu"),

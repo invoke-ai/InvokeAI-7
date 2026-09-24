@@ -48,6 +48,10 @@ from invokeai.backend.quantization.gguf.ggml_tensor import GGMLTensor
 from invokeai.backend.quantization.gguf.loaders import gguf_sd_loader
 from invokeai.backend.quantization.int8_convrot import reject_int8_layers_a_plain_fold_cannot_decode
 from invokeai.backend.quantization.nvfp4 import install_nvfp4_layers, pop_nvfp4_layers, predict_nvfp4_install_size
+from invokeai.backend.qwen2_5_vl.qwen2_5_vl_assets import (
+    load_bundled_qwen2_5_vl_config_dict,
+    load_bundled_qwen2_5_vl_tokenizer,
+)
 from invokeai.backend.util.devices import TorchDevice
 from invokeai.backend.util.state_dict_loading import load_state_dict_ignoring_extras, log_unexpected_keys
 
@@ -402,12 +406,10 @@ class QwenVLEncoderLoader(ModelLoader):
 class QwenVLEncoderCheckpointLoader(ModelLoader):
     """Loads a single-file Qwen2.5-VL encoder checkpoint (e.g. ComfyUI fp8_scaled).
 
-    The checkpoint bundles the language model and the visual tower into one
-    safetensors file. Tokenizer + processor are pulled from HuggingFace
-    (`Qwen/Qwen2.5-VL-7B-Instruct`) on first use, with offline cache fallback.
+    The checkpoint bundles the language model and the visual tower into one safetensors file, so
+    it carries neither the architecture config nor the tokenizer. Both are vendored in
+    `invokeai.backend.qwen2_5_vl`, so this encoder loads with no network access.
     """
-
-    DEFAULT_HF_REPO = "Qwen/Qwen2.5-VL-7B-Instruct"
 
     def _load_model(
         self,
@@ -419,7 +421,7 @@ class QwenVLEncoderCheckpointLoader(ModelLoader):
 
         match submodel_type:
             case SubModelType.Tokenizer:
-                return self._load_tokenizer_with_offline_fallback()
+                return load_bundled_qwen2_5_vl_tokenizer()
             case SubModelType.TextEncoder:
                 return self._load_text_encoder_from_singlefile(config)
 
@@ -428,33 +430,9 @@ class QwenVLEncoderCheckpointLoader(ModelLoader):
             f"Received: {submodel_type.value if submodel_type else 'None'}"
         )
 
-    def _load_tokenizer_with_offline_fallback(self) -> AnyModel:
-        from transformers import AutoTokenizer
-
-        from invokeai.backend.util.logging import InvokeAILogger
-
-        logger = InvokeAILogger.get_logger(self.__class__.__name__)
-
-        try:
-            return AutoTokenizer.from_pretrained(self.DEFAULT_HF_REPO, local_files_only=True)
-        except OSError:
-            logger.info(
-                f"Tokenizer for single-file Qwen VL encoder not found in HuggingFace cache; "
-                f"downloading from {self.DEFAULT_HF_REPO} (one-time, requires network access)."
-            )
-            try:
-                return AutoTokenizer.from_pretrained(self.DEFAULT_HF_REPO)
-            except OSError as e:
-                raise RuntimeError(
-                    f"Failed to load Qwen VL tokenizer. Single-file Qwen VL encoder checkpoints do not "
-                    f"include the tokenizer; it must be downloaded from HuggingFace ({self.DEFAULT_HF_REPO}) "
-                    f"on first use. Either restore network access, or install the encoder in the "
-                    f"diffusers folder layout (text_encoder/ + tokenizer/) instead. Original error: {e}"
-                ) from e
-
     def _load_text_encoder_from_singlefile(self, config: QwenVLEncoder_Checkpoint_Config) -> AnyModel:
         from safetensors.torch import load_file
-        from transformers import AutoConfig, Qwen2_5_VLForConditionalGeneration
+        from transformers import Qwen2_5_VLConfig, Qwen2_5_VLForConditionalGeneration
 
         from invokeai.backend.util.logging import InvokeAILogger
 
@@ -479,25 +457,10 @@ class QwenVLEncoderCheckpointLoader(ModelLoader):
         # it will never use.
         reject_int8_layers_a_plain_fold_cannot_decode(sd, "Qwen2.5-VL encoder checkpoint")
 
-        # Fetch the architecture config from HuggingFace (small, ~5KB).
-        # Offline fallback: tries cache first, downloads only if missing.
-        try:
-            qwen_config = AutoConfig.from_pretrained(self.DEFAULT_HF_REPO, local_files_only=True)
-        except OSError:
-            logger.info(
-                f"Architecture config for single-file Qwen VL encoder not found in HuggingFace cache; "
-                f"downloading from {self.DEFAULT_HF_REPO} (one-time, ~5KB, requires network access)."
-            )
-            try:
-                qwen_config = AutoConfig.from_pretrained(self.DEFAULT_HF_REPO)
-            except OSError as e:
-                raise RuntimeError(
-                    f"Failed to load Qwen VL architecture config. Single-file Qwen VL encoder checkpoints "
-                    f"do not include the model config; it must be downloaded from HuggingFace "
-                    f"({self.DEFAULT_HF_REPO}) on first use. Either restore network access, or install the "
-                    f"encoder in the diffusers folder layout (text_encoder/config.json + tokenizer/) "
-                    f"instead. Original error: {e}"
-                ) from e
+        # The architecture config is vendored rather than fetched: these constants decide the
+        # module tree that the weights below are folded into, and a re-upload changing one of them
+        # would silently change conditioning against unchanged weights.
+        qwen_config = Qwen2_5_VLConfig.from_dict(load_bundled_qwen2_5_vl_config_dict())
         qwen_config.torch_dtype = model_dtype
 
         # Built before the reservation, which depends on its modules: they decide which nvfp4 layers stay packed.

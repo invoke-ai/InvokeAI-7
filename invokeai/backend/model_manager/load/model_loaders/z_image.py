@@ -1661,10 +1661,11 @@ class Qwen3EncoderGGUFLoader(ModelLoader):
 
 @ModelLoaderRegistry.register(base=BaseModelType.Any, type=ModelType.Qwen3Encoder, format=ModelFormat.SDNQQuantized)
 class Qwen3EncoderSDNQLoader(ModelLoader):
-    """Class to load SDNQ-quantized Qwen3 Encoder models for Z-Image."""
+    """Class to load SDNQ-quantized Qwen3 Encoder models for Z-Image.
 
-    # Default HuggingFace model to load tokenizer from when using SDNQ Qwen3 encoder
-    DEFAULT_TOKENIZER_SOURCE = "Qwen/Qwen3-4B"
+    SDNQ exports carry packed weights only, so the tokenizer comes from the copy vendored in
+    `invokeai.backend.qwen3` -- the same one the single-file and GGUF Qwen3 encoders already use.
+    """
 
     def _load_model(
         self,
@@ -1680,17 +1681,10 @@ class Qwen3EncoderSDNQLoader(ModelLoader):
             case SubModelType.TextEncoder:
                 return self._load_from_sdnq(config)
             case SubModelType.Tokenizer:
-                return self._load_tokenizer_with_offline_fallback()
+                return load_bundled_qwen3_tokenizer()
 
         submodel_str = submodel_type.value if submodel_type else "None"
         raise ValueError(f"Only TextEncoder and Tokenizer submodels are supported. Received: {submodel_str}")
-
-    def _load_tokenizer_with_offline_fallback(self) -> AnyModel:
-        """Load tokenizer with local_files_only fallback for offline support."""
-        try:
-            return AutoTokenizer.from_pretrained(self.DEFAULT_TOKENIZER_SOURCE, local_files_only=True)
-        except OSError:
-            return AutoTokenizer.from_pretrained(self.DEFAULT_TOKENIZER_SOURCE)
 
     def _load_from_sdnq(
         self,

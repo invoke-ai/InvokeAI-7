@@ -9,7 +9,9 @@ import { localeAssetsPlugin } from './locale-assets-plugin.mjs';
 
 const createFixture = async (context) => {
   const projectRoot = await mkdtemp(resolve(tmpdir(), 'invokeai-locale-build-'));
-  context.after(() => rm(projectRoot, { recursive: true, force: true }));
+  // Retried: Vite can still be flushing its `.vite` cache into the fixture as it is removed, and an `after` hook that
+  // throws stops every hook registered after it from running.
+  context.after(() => rm(projectRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
   await mkdir(resolve(projectRoot, 'public/locales'), { recursive: true });
   await writeFile(
     resolve(projectRoot, 'index.html'),
@@ -80,15 +82,20 @@ test('font namespace loads separately in production and development, preserving 
     plugins: [localeAssetsPlugin({ projectRoot })],
     server: { port: 0, host: '127.0.0.1' },
   });
-  context.after(() => server.close());
-  await server.listen();
-  const origin = server.resolvedUrls.local[0];
-  for (const filename of ['en.json', 'en.fonts.json', 'fr.fonts.json']) {
-    const response = await fetch(new URL(`locales/${filename}`, origin));
-    assert.equal(response.status, 200);
-    assert.deepEqual(
-      await response.json(),
-      JSON.parse(await readFile(resolve(projectRoot, `dist/locales/${filename}`), 'utf8'))
-    );
+  // Closed here rather than in an `after` hook: hooks run in registration order, so the fixture's removal would run
+  // first, race the server's cache writes, and — if it threw — leave the server open and the test process hanging.
+  try {
+    await server.listen();
+    const origin = server.resolvedUrls.local[0];
+    for (const filename of ['en.json', 'en.fonts.json', 'fr.fonts.json']) {
+      const response = await fetch(new URL(`locales/${filename}`, origin));
+      assert.equal(response.status, 200);
+      assert.deepEqual(
+        await response.json(),
+        JSON.parse(await readFile(resolve(projectRoot, `dist/locales/${filename}`), 'utf8'))
+      );
+    }
+  } finally {
+    await server.close();
   }
 });

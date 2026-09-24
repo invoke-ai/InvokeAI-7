@@ -9,6 +9,7 @@ from unittest.mock import call, create_autospec
 
 import pytest
 import torch
+import transformers.configuration_utils
 
 import invokeai.backend.model_manager.load.model_loaders.krea2 as krea2_loaders
 from invokeai.backend.model_manager.configs.qwen3_vl_encoder import Qwen3VLEncoder_GGUF_Config
@@ -25,7 +26,6 @@ from tests.backend.model_manager.load.qwen3vl_gguf_fixture import (
     HIDDEN_SIZE,
     QUANT_TOLERANCE,
     load_tiny_gguf_encoder,
-    tiny_qwen3vl_config,
 )
 
 
@@ -141,40 +141,35 @@ def test_the_embedding_materialization_is_reserved(monkeypatch, tmp_path) -> Non
     assert ram_cache.make_room.call_args_list == [call(expected)]
 
 
-def test_a_missing_huggingface_config_says_why_a_local_file_needs_one(monkeypatch, tmp_path) -> None:
-    """A single-file encoder carries no config, so the loader fetches one — and on a cold, offline
-    machine transformers raises about a repo the user never chose to install. The wrapper has to
-    name the encoder's own requirement, and must not swallow the offline-cache attempt that makes
-    the fetch unnecessary in the first place.
+def test_the_architecture_config_comes_from_the_bundle_and_never_the_network(monkeypatch, tmp_path) -> None:
+    """A single-file encoder carries no config, so the loader supplies one from the vendored copy.
+
+    Asserted through `AutoConfig.from_pretrained`, which used to serve this call: reaching the hub
+    here is what an offline or proxied install cannot do, and what a re-upload could change under
+    otherwise identical weights.
     """
-    te_config = tiny_qwen3vl_config()
     loader = object.__new__(Qwen3VLEncoderGGUFLoader)
     config = Qwen3VLEncoder_GGUF_Config.model_construct(
         path=str(tmp_path / "unused.gguf"), variant=Qwen3VLVariantType.Qwen3VL_4B, name="tiny"
     )
 
-    calls: list[bool] = []
+    def refuse(*args, **kwargs):
+        raise AssertionError("the loader reached HuggingFace for a config it bundles")
 
-    def from_pretrained(repo: str, local_files_only: bool = False):
-        calls.append(local_files_only)
-        if local_files_only:
-            raise OSError("nothing cached")
-        raise OSError("offline")
+    # Patched where a config actually resolves a repo file, not at AutoConfig: the loader builds
+    # the config with Qwen3VLConfig.from_dict now, so trapping AutoConfig alone would stay green if
+    # someone reintroduced Qwen3VLConfig.from_pretrained (verified by mutating the loader to do
+    # exactly that). `cached_file` is the single door every from_pretrained goes through, cache hit
+    # included, so this catches a reintroduced fetch even on a machine that has the repo cached.
+    monkeypatch.setattr(transformers.configuration_utils, "cached_file", refuse)
+    monkeypatch.setattr(krea2_loaders.AutoConfig, "from_pretrained", refuse)
 
-    monkeypatch.setattr(krea2_loaders.AutoConfig, "from_pretrained", from_pretrained)
+    text_config = loader._load_te_config(config).text_config
 
-    with pytest.raises(RuntimeError, match="Qwen/Qwen3-VL-4B-Instruct"):
-        loader._load_hf_config(config)
+    # The constants that decide the module tree the weights are folded into. rope_theta in
+    # particular: 1e6 instead of Qwen3-VL's 5e6 costs relative L2 0.1008 against identical weights.
+    # Read through both spellings because transformers 5.x folds the scalar into rope_parameters.
+    rope_theta = getattr(text_config, "rope_theta", None) or text_config.rope_parameters["rope_theta"]
 
-    # The offline attempt comes first; only the network one is wrapped.
-    assert calls == [True, False]
-
-    calls.clear()
-    monkeypatch.setattr(
-        krea2_loaders.AutoConfig,
-        "from_pretrained",
-        lambda repo, local_files_only=False: calls.append(local_files_only) or te_config,
-    )
-
-    assert loader._load_hf_config(config) is te_config
-    assert calls == [True]
+    assert rope_theta == 5000000
+    assert text_config.hidden_size == 2560

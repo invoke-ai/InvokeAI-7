@@ -159,7 +159,7 @@ qwen_vl_encoder_fp8 = StarterModel(
     base=BaseModelType.Any,
     source="https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors",
     description="ComfyUI's single-file FP8-scaled Qwen2.5-VL 7B encoder. Bundles the language model and "
-    "visual tower; tokenizer/processor are fetched from HuggingFace on first use. (~7GB)",
+    "visual tower; its tokenizer and config ship with InvokeAI. (~7GB)",
     type=ModelType.QwenVLEncoder,
     format=ModelFormat.Checkpoint,
 )
@@ -169,7 +169,7 @@ qwen_vl_encoder_nvfp4 = StarterModel(
     base=BaseModelType.Any,
     source="https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/text_encoders/qwen_2.5_vl_7b_nvfp4.safetensors",
     description="ComfyUI's single-file nvfp4/fp8-mixed Qwen2.5-VL 7B encoder. Bundles the language model and visual "
-    "tower; tokenizer/processor are fetched from HuggingFace on first use. Its nvfp4 layers stay packed, about 6.7GB "
+    "tower; its tokenizer and config ship with InvokeAI. Its nvfp4 layers stay packed, about 6.7GB "
     "once loaded. ~5.7GB download",
     type=ModelType.QwenVLEncoder,
     format=ModelFormat.Checkpoint,

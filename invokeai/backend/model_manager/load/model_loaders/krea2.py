@@ -2,8 +2,6 @@
 """Class for Krea-2 model loading in InvokeAI."""
 
 from abc import abstractmethod
-from collections.abc import Iterator
-from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Generic, Optional, TypeVar
 
@@ -33,7 +31,6 @@ from invokeai.backend.model_manager.taxonomy import (
     BaseModelType,
     ModelFormat,
     ModelType,
-    Qwen3VLVariantType,
     SubModelType,
 )
 from invokeai.backend.model_manager.util.llamacpp_keys import convert_llamacpp_decoder_keys
@@ -74,6 +71,10 @@ from invokeai.backend.quantization.nvfp4 import (
     install_nvfp4_layers,
     pop_nvfp4_layers,
     predict_nvfp4_install_size,
+)
+from invokeai.backend.qwen3_vl.qwen3_vl_assets import (
+    load_bundled_qwen3_vl_config_dict,
+    load_bundled_qwen3_vl_tokenizer,
 )
 from invokeai.backend.util.devices import TorchDevice
 from invokeai.backend.util.state_dict_loading import load_state_dict_ignoring_extras, reject_incomplete_load
@@ -774,22 +775,6 @@ def _reject_incomplete_load(model: Any, *, what: str) -> None:
     reject_incomplete_load(model, what=what)
 
 
-def _tokenizer_can_encode(tokenizer: Any) -> bool:
-    """Whether a tokenizer loaded from the HuggingFace cache is actually usable.
-
-    Not paranoia: when the cache holds the repo's `config.json` but none of its tokenizer files --
-    which is exactly the state `_load_text_encoder` leaves behind on a first run, because it fetches
-    the config first -- `AutoTokenizer.from_pretrained(..., local_files_only=True)` does not raise.
-    It returns a `Qwen2Tokenizer` with a one-token vocabulary and no chat template, which encodes
-    every prompt to an empty sequence. The generation then runs on no conditioning at all, and
-    nothing in the log says so. Probing the round trip is what tells the two apart.
-    """
-    try:
-        return bool(tokenizer("probe", add_special_tokens=False)["input_ids"])
-    except Exception:
-        return False
-
-
 _Qwen3VLSingleFileConfig = TypeVar(
     "_Qwen3VLSingleFileConfig", Qwen3VLEncoder_Checkpoint_Config, Qwen3VLEncoder_GGUF_Config
 )
@@ -798,20 +783,15 @@ _Qwen3VLSingleFileConfig = TypeVar(
 class _Qwen3VLEncoderSingleFileLoader(ModelLoader, Generic[_Qwen3VLSingleFileConfig]):
     """Shared plumbing for the two single-file Qwen3-VL encoder loaders (safetensors and GGUF).
 
-    Neither container ships a config or tokenizer, so both take them from HuggingFace with
-    offline-cache fallback, from the repo the config's recorded variant names -- the file itself says
-    nothing about which Qwen3-VL it is beyond its shapes. Only the weight decoding differs, which is
-    what the subclasses supply.
+    Neither container ships a config or tokenizer, so both take them from the assets vendored in
+    `invokeai.backend.qwen3_vl` -- the file itself says nothing about which Qwen3-VL it is beyond
+    its shapes, so the config's recorded variant selects the config. Only the weight decoding
+    differs, which is what the subclasses supply.
     """
 
     # Not a ClassVar: it is parameterized per subclass, which is what lets `_load_text_encoder`
     # narrow its argument to that subclass's config without violating the base's signature.
     CONFIG_CLASS: type[_Qwen3VLSingleFileConfig]
-
-    HF_REPO_BY_VARIANT = {
-        Qwen3VLVariantType.Qwen3VL_4B: "Qwen/Qwen3-VL-4B-Instruct",
-        Qwen3VLVariantType.Qwen3VL_8B: "Qwen/Qwen3-VL-8B-Instruct",
-    }
 
     def _load_model(
         self,
@@ -823,7 +803,7 @@ class _Qwen3VLEncoderSingleFileLoader(ModelLoader, Generic[_Qwen3VLSingleFileCon
 
         match submodel_type:
             case SubModelType.Tokenizer:
-                return self._load_tokenizer(config)
+                return load_bundled_qwen3_vl_tokenizer()
             case SubModelType.TextEncoder:
                 return self._load_text_encoder(config)
 
@@ -836,48 +816,18 @@ class _Qwen3VLEncoderSingleFileLoader(ModelLoader, Generic[_Qwen3VLSingleFileCon
     def _load_text_encoder(self, config: _Qwen3VLSingleFileConfig) -> AnyModel:
         """Decode this container's weights into the Qwen3-VL module tree."""
 
-    def _hf_repo(self, config: _Qwen3VLSingleFileConfig) -> str:
-        return self.HF_REPO_BY_VARIANT[config.variant]
+    def _load_te_config(self, config: _Qwen3VLSingleFileConfig) -> Any:
+        """Build the architecture config for this variant from the vendored copy.
 
-    def _load_tokenizer(self, config: _Qwen3VLSingleFileConfig) -> AnyModel:
-        repo = self._hf_repo(config)
-        # A partial offline cache (e.g. config present but vocab/merges missing) raises something other
-        # than OSError (e.g. TypeError) deep in the slow-tokenizer path, so catch broadly and re-fetch.
-        try:
-            tokenizer = AutoTokenizer.from_pretrained(repo, local_files_only=True, extra_special_tokens={})
-        except Exception:
-            tokenizer = None
-        if tokenizer is not None and _tokenizer_can_encode(tokenizer):
-            return tokenizer
-        with self._explaining_hf_failure(repo, "tokenizer"):
-            return AutoTokenizer.from_pretrained(repo, extra_special_tokens={})
-
-    def _load_hf_config(self, config: _Qwen3VLSingleFileConfig) -> Any:
-        repo = self._hf_repo(config)
-        try:
-            te_config = AutoConfig.from_pretrained(repo, local_files_only=True)
-        except Exception:
-            with self._explaining_hf_failure(repo, "config"):
-                te_config = AutoConfig.from_pretrained(repo)
-        return _normalize_qwen3vl_rope_config(te_config)
-
-    @contextmanager
-    def _explaining_hf_failure(self, repo: str, what: str) -> Iterator[None]:
-        """Say why a local single-file encoder is reaching for a HuggingFace repo it never installed.
-
-        Raw, the failure is a transformers ``OSError`` naming a repo the user did not choose, with
-        nothing connecting it to the encoder they did. Identification needs no network, so this is
-        also the first point at which an offline user learns the requirement exists.
+        Normalization stays here rather than being frozen into the vendored file: whether
+        `rope_parameters` has to be mirrored onto `rope_scaling` is a property of the installed
+        transformers, not of the release. It is a no-op on transformers 5.5.4, which already
+        populates both; `TestNormalizeQwen3vlRopeConfig` covers the versions where it is not.
         """
-        try:
-            yield
-        except Exception as e:
-            raise RuntimeError(
-                f"Could not load the Qwen3-VL {what} from '{repo}'. A single-file Qwen3-VL encoder ships "
-                f"weights only, so its {what} is taken from that repository and cached on first use. "
-                "Connect once to populate the cache, or install the encoder in its directory form, which "
-                f"carries its own {what}."
-            ) from e
+        from transformers import Qwen3VLConfig
+
+        config_dict = load_bundled_qwen3_vl_config_dict(config.variant)
+        return _normalize_qwen3vl_rope_config(Qwen3VLConfig.from_dict(config_dict))
 
 
 @ModelLoaderRegistry.register(base=BaseModelType.Any, type=ModelType.Qwen3VLEncoder, format=ModelFormat.Checkpoint)
@@ -964,7 +914,7 @@ class Qwen3VLEncoderCheckpointLoader(_Qwen3VLEncoderSingleFileLoader[Qwen3VLEnco
                 dequantize_fp8_scaled(sd, fp8_layers, model_dtype)
                 fp8_layers = {}
 
-        te_config = self._load_hf_config(config)
+        te_config = self._load_te_config(config)
         with accelerate.init_empty_weights():
             model = Qwen3VLModel._from_config(te_config)
         # Its weights were dropped from the state dict above, so the module has to go too -- left in
@@ -1017,9 +967,10 @@ class Qwen3VLEncoderCheckpointLoader(_Qwen3VLEncoderSingleFileLoader[Qwen3VLEnco
             fp8_layers = split_fp8_scaled_layers(sd, fp8_layers, model_dtype, model=model)
             # No `skip_patterns` here on purpose: this model declares none, and the storage pass below
             # applies `_FP8_DEFAULT_SKIP_PATTERNS` itself. Those two lists used to have to not intersect
-            # on a 2-D Linear -- such a weight would arrive fp8 from the state dict, be skipped by the
-            # cast pass, and forward on raw fp8 codes. `_apply_fp8_to_nn_module` now restores the compute
-            # dtype on the modules it skips, so the two lists are independent again.
+            # on a layer class with no fp8-capable wrapper -- a `pos_embed` or a `patch_embed.proj`
+            # would arrive fp8 from the state dict, be skipped by the cast pass, and then raise on the
+            # first forward. `_apply_fp8_to_nn_module` now restores the compute dtype on the modules it
+            # skips, so the two lists are independent again.
             cast_state_dict(sd, model_dtype, keep_fp8=keep_fp8, model=model)
 
         load_state_dict_ignoring_extras(
@@ -1046,7 +997,7 @@ class Qwen3VLEncoderCheckpointLoader(_Qwen3VLEncoderSingleFileLoader[Qwen3VLEnco
             # `set_fp8_compute_dtype`, without which `get_model_compute_dtype` falls back to scanning
             # for a non-fp8 float parameter -- which happens to work only because the embedding is
             # excluded here and stays bf16. And it installs the backstop that restores the compute
-            # dtype on Linears its skip list and the default one both name, which is the documented
+            # dtype on the modules its skip list and the default one both name, which is the documented
             # guard against those two lists ever overlapping. Two exclusions:
             #
             #  - anything carrying a `weight_scale`: those keep their scale and go through
@@ -1119,7 +1070,7 @@ class Qwen3VLEncoderGGUFLoader(_Qwen3VLEncoderSingleFileLoader[Qwen3VLEncoder_GG
         # Before the file is read, not after. This is the one step that can need the network, and
         # `gguf_sd_loader` copies every tensor into RAM -- so resolving the config first turns a
         # cold-offline failure from "read 2.5 GB, then raise" into an immediate one.
-        te_config = self._load_hf_config(config)
+        te_config = self._load_te_config(config)
 
         sd = gguf_sd_loader(Path(config.path), compute_dtype=model_dtype)
         # Unconditional: identification requires the llama.cpp `token_embd.weight`, so this file is

@@ -17,7 +17,7 @@ import { attachWheelZoom } from '@workbench/image-map/attachWheelZoom';
 import { collectClusterSelection } from '@workbench/image-map/clusterSelection';
 import { imageMapStore } from '@workbench/image-map/imageMapStore';
 import {
-  buildAllPointsTrace,
+  buildAllPointsTraces,
   buildClusterAnnotations,
   buildCurrentImageTrace,
   buildHighlightedPointsTrace,
@@ -223,10 +223,16 @@ const ImageMapPlot = ({
       return;
     }
 
-    // Overlay traces (highlight, marker) start empty; the overlay effects
-    // below restyle them, so a selection change never rebuilds the scene.
+    // The base points come back as several traces, one per appearance; the
+    // overlays are found by name, so their position among them does not
+    // matter. That lookup is load-bearing now in a way it was not when the
+    // base was a single trace at a fixed index: it is safe because
+    // `Plotly.react` swaps `gd.data` synchronously, so the overlay effects
+    // that run straight after this one already see the new indices. Overlay traces (highlight, marker) start empty; the overlay
+    // effects below restyle them, so a selection change never rebuilds the
+    // scene.
     const traces = [
-      buildAllPointsTrace(points),
+      ...buildAllPointsTraces(points),
       buildHighlightedPointsTrace(points, new Set()),
       buildCurrentImageTrace(),
     ];

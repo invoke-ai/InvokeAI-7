@@ -94,22 +94,29 @@ const settleUntil = async (isSettled: () => boolean, description: string, timeou
   }
 };
 
-/** Quick icon items select through zag, which needs the item highlighted by a hover before the click. */
-const pickQuickItem = async (label: string): Promise<void> => {
-  const target = document.querySelector<HTMLElement>(`[aria-label="${label}"]`);
-  expect(target).not.toBeNull();
-  // zag only treats a move as a real hover when the pointer position changes,
-  // so approach the item's center from one pixel away instead of a static point.
-  const rect = target!.getBoundingClientRect();
+/**
+ * Hovers an item the way zag recognises. zag only treats a move as a real hover when the pointer position changes,
+ * so approach the item's center from one pixel away instead of dispatching a static point, which reads as no move
+ * at all whenever zag's last recorded position is already there.
+ */
+const hoverItem = async (target: HTMLElement): Promise<void> => {
+  const rect = target.getBoundingClientRect();
   const clientX = rect.left + rect.width / 2;
   const clientY = rect.top + rect.height / 2;
   await interact(() => {
     for (const x of [clientX - 1, clientX]) {
-      target!.dispatchEvent(
+      target.dispatchEvent(
         new PointerEvent('pointermove', { bubbles: true, clientX: x, clientY, pointerType: 'mouse' })
       );
     }
   });
+};
+
+/** Quick icon items select through zag, which needs the item highlighted by a hover before the click. */
+const pickQuickItem = async (label: string): Promise<void> => {
+  const target = document.querySelector<HTMLElement>(`[aria-label="${label}"]`);
+  expect(target).not.toBeNull();
+  await hoverItem(target!);
   // Wait for Zag's asynchronous highlight before clicking; unhighlighted items ignore clicks.
   await settleUntil(() => target!.hasAttribute('data-highlighted'), `"${label}" to be highlighted`);
   await interact(() => target!.click());
@@ -303,16 +310,16 @@ describe('ImageContextMenu new canvas from image', () => {
     const images = Array.from({ length: count }, (_, index) => image(`image-${index}.png`));
     await renderMenu(actions, images);
 
-    // A nested menu opens from a mouse hover on its trigger item, after zag's open delay.
-    const trigger = getMenuItem('widgets.canvas.import.newFromImage');
-    await interact(() =>
-      trigger.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerType: 'mouse' }))
-    );
-    await act(
+    // A nested menu opens from a real hover on its trigger item, after zag's open delay, so the open is waited for
+    // rather than slept through.
+    await hoverItem(getMenuItem('widgets.canvas.import.newFromImage'));
+    await settleUntil(
       () =>
-        new Promise<void>((resolve) => {
-          globalThis.setTimeout(resolve, 300);
-        })
+        Array.from(document.querySelectorAll('[role="menuitem"]')).some(
+          (candidate) => candidate.textContent?.trim() === 'widgets.canvas.import.newCanvasFromImage'
+        ),
+      'the new-from-image submenu to open',
+      5000
     );
     await interact(() => getMenuItem('widgets.canvas.import.newCanvasFromImage').click());
 

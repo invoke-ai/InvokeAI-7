@@ -151,7 +151,7 @@ def _checkpoint_loader(monkeypatch, te_config) -> Qwen3VLEncoderCheckpointLoader
     loader._ram_cache = SimpleNamespace(make_room=MagicMock())
     loader._torch_device = torch.device("cpu")
     loader._logger = MagicMock()
-    loader._load_hf_config = lambda _config: te_config
+    loader._load_te_config = lambda _config: te_config
     loader._apply_fp8_to_nn_module = lambda *a, **k: None
     monkeypatch.setattr(
         "invokeai.backend.model_manager.load.model_loaders.krea2.TorchDevice.choose_torch_device",

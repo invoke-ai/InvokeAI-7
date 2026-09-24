@@ -185,8 +185,8 @@ class Qwen3VLEncoder_Checkpoint_Config(Checkpoint_Config_Base, Config_Base):
 
     Distinguished from the text-only ``Qwen3Encoder`` checkpoint (Z-Image) by the presence of the
     Qwen3-VL visual tower. Neither the config nor the tokenizer is bundled in a single-file
-    checkpoint; both are pulled from HuggingFace by the loader, from the repo the recorded variant
-    names.
+    checkpoint; the loader supplies both from the copies vendored in ``invokeai.backend.qwen3_vl``,
+    selecting the config by the recorded variant.
     """
 
     base: Literal[BaseModelType.Any] = Field(default=BaseModelType.Any)

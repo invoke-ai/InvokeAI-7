@@ -13,6 +13,7 @@ Covers:
   so FLUX RMSNorm.scale and friends aren't crushed to FP8.
 """
 
+import copy
 from logging import getLogger
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -853,11 +854,13 @@ class TestSkippedModulesNeverKeepCheckpointFp8:
     """A pattern-skipped module must not be left holding float8 weights.
 
     The cast pass installs the upcast pre-hook only on modules it casts. A module it *skips* keeps
-    whatever dtype it arrived with — fine when that is the compute dtype, silently fatal when the
-    loader kept the checkpoint's fp8 weights: no hook, no cast back, and the forward runs on raw fp8
-    codes. Reachable wherever a loader combines `keep_fp8` with fp8 storage on the remainder (the
-    Qwen3-VL encoder), and otherwise dependent on the loader's skip list and
-    `_FP8_DEFAULT_SKIP_PATTERNS` never naming the same Linear.
+    whatever dtype it arrived with — fine when that is the compute dtype, broken when the loader
+    kept the checkpoint's fp8 weights: no hook and no cast back. Whether that shows up depends on
+    the layer class, since `apply_custom_layers_to_model` only gives some of them an fp8-capable
+    wrapper; `test_every_supported_layer_class_forwards_after_a_pattern_skip` pins which. Reachable
+    wherever a loader combines `keep_fp8` with fp8 storage on the remainder (the Qwen3-VL encoder),
+    and otherwise dependent on the loader's skip list and `_FP8_DEFAULT_SKIP_PATTERNS` never naming
+    the same module.
     """
 
     def _model(self) -> torch.nn.Module:
@@ -896,6 +899,15 @@ class TestSkippedModulesNeverKeepCheckpointFp8:
 
         assert model.proj_out.weight.dtype is torch.float8_e4m3fn
         assert torch.equal(model.proj_out.weight.float(), codes.float())
+
+        # The dtype alone does not settle it: what matters is that the forward still applies the
+        # scale. A cast that dropped it would leave the projection at 1/scale of the right answer.
+        model.proj_out.bias = torch.nn.Parameter(torch.zeros(32, dtype=torch.bfloat16), requires_grad=False)
+        apply_custom_layers_to_model(model)
+        inp = torch.randn(4, 16, dtype=torch.bfloat16)
+        dequantized = codes.to(torch.bfloat16) * 2.0
+
+        assert torch.equal(model.proj_out(inp), torch.nn.functional.linear(inp, dequantized))
 
     def test_an_extra_skip_pattern_gets_the_same_treatment(self) -> None:
         model = self._model()
@@ -939,3 +951,68 @@ class TestSkippedModulesNeverKeepCheckpointFp8:
         )
 
         assert model.attn.weight.dtype is torch.float8_e4m3fn
+
+    @pytest.mark.parametrize(
+        ("make_module", "make_input"),
+        [
+            pytest.param(
+                lambda: torch.nn.Linear(16, 32), lambda: torch.randn(4, 16, dtype=torch.bfloat16), id="Linear"
+            ),
+            pytest.param(
+                lambda: torch.nn.Conv1d(4, 8, 3), lambda: torch.randn(1, 4, 16, dtype=torch.bfloat16), id="Conv1d"
+            ),
+            pytest.param(
+                lambda: torch.nn.Conv2d(4, 8, 3), lambda: torch.randn(1, 4, 8, 8, dtype=torch.bfloat16), id="Conv2d"
+            ),
+            pytest.param(
+                lambda: torch.nn.Conv3d(4, 8, 3), lambda: torch.randn(1, 4, 6, 6, 6, dtype=torch.bfloat16), id="Conv3d"
+            ),
+            pytest.param(
+                lambda: torch.nn.ConvTranspose1d(4, 8, 3),
+                lambda: torch.randn(1, 4, 16, dtype=torch.bfloat16),
+                id="ConvTranspose1d",
+            ),
+            pytest.param(
+                lambda: torch.nn.ConvTranspose2d(4, 8, 3),
+                lambda: torch.randn(1, 4, 8, 8, dtype=torch.bfloat16),
+                id="ConvTranspose2d",
+            ),
+            pytest.param(
+                lambda: torch.nn.ConvTranspose3d(4, 8, 3),
+                lambda: torch.randn(1, 4, 6, 6, 6, dtype=torch.bfloat16),
+                id="ConvTranspose3d",
+            ),
+            pytest.param(lambda: torch.nn.Embedding(16, 32), lambda: torch.tensor([1, 2, 3]), id="Embedding"),
+        ],
+    )
+    def test_every_supported_layer_class_forwards_after_a_pattern_skip(self, make_module, make_input) -> None:
+        """One case per class in `_FP8_SUPPORTED_PYTORCH_LAYERS`, run the way the cache leaves them.
+
+        This is what makes the restore load-bearing rather than belt-and-braces. Only `Linear` and
+        `Conv2d` get a wrapper from `apply_custom_layers_to_model` that can consume an fp8 weight;
+        `Conv1d`'s only moves the weight to the device, `Conv3d` and the three `ConvTranspose`
+        classes get none, and `CustomEmbedding` hands the next op a float8 tensor. Drop the restore
+        and six of these eight fail — five by raising mid-forward.
+        """
+        torch.manual_seed(0)
+        module = make_module().to(torch.bfloat16)
+        # Round-trip first, so the reference is what the fp8 codes actually represent rather than
+        # the full-precision weight they were quantized from.
+        module.weight = torch.nn.Parameter(
+            module.weight.data.to(torch.float8_e4m3fn).to(torch.bfloat16), requires_grad=False
+        )
+        reference = copy.deepcopy(module)
+        module.weight = torch.nn.Parameter(module.weight.data.to(torch.float8_e4m3fn), requires_grad=False)
+
+        model = torch.nn.Module()
+        # `^proj_out$` is in `_FP8_DEFAULT_SKIP_PATTERNS`, so this module is never cast or hooked.
+        model.add_module("proj_out", module)
+
+        ModelLoader._apply_fp8_to_nn_module(model, storage_dtype=torch.float8_e4m3fn, compute_dtype=torch.bfloat16)
+        apply_custom_layers_to_model(model)
+
+        inp = make_input()
+        out = model.proj_out(inp)
+
+        assert out.dtype is torch.bfloat16
+        assert torch.equal(out, reference(inp))
