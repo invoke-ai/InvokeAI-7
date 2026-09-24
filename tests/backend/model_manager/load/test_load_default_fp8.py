@@ -611,9 +611,23 @@ def _clear_fp8_probe_cache():
     _FP8_PROBE_FAILURE_REPORTED.clear()
 
 
-def test_device_supports_fp8_storage_cuda_is_unconditional():
-    """CUDA is answered without probing, so the result holds on machines with no GPU."""
-    assert _device_supports_fp8_storage(torch.device("cuda")) is True
+def test_device_supports_fp8_storage_probes_cuda_too():
+    """ROCm reports `device.type == "cuda"` and its float8 coverage varies by architecture.
+
+    Answering the whole CUDA branch True without asking let such a build pass the gate, have its
+    weights cast on the CPU -- which always works -- and moved to VRAM, and then raise
+    "not implemented for 'Float8_e4m3fn'" on the first forward, after the VRAM was committed.
+    """
+    ok, log = _probe_with_recorder(torch.device("cuda", 1))
+    assert ok is True
+    assert log == [torch.float8_e4m3fn, torch.device("cuda", 1), torch.bfloat16, torch.float16]
+
+
+def test_device_supports_fp8_storage_rejects_a_cuda_build_without_an_e4m3fn_upcast():
+    """Older gfx has no `e4m3fn` conversion at all, and gfx90a prefers `e4m3fnuz`. The fallback has
+    to be chosen here, not discovered mid-generation."""
+    ok, _ = _probe_with_recorder(torch.device("cuda"), fail_on=torch.bfloat16)
+    assert ok is False
 
 
 def test_device_supports_fp8_storage_rejects_cpu():

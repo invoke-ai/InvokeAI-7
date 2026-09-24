@@ -83,8 +83,13 @@ def _device_supports_fp8_storage(device: torch.device, logger: Optional[Logger] 
     """Whether FP8 layerwise casting (float8 weight storage + upcast) is usable on this device.
 
     The feature needs only float8 *storage* and casting to the compute dtype -- not native FP8
-    matmul -- so it holds on CUDA and, for current torch builds, on Intel XPU. XPU float8 support is
-    build/driver dependent ("emerging" on Xe2), so probe it rather than assume.
+    matmul -- so it is within reach of CUDA and, for current torch builds, of Intel XPU. Neither is
+    assumed: float8 support is build- and driver-dependent on both ("emerging" on Xe2), and ROCm
+    reports ``device.type == "cuda"`` while its float8 coverage varies by architecture -- gfx90a
+    prefers ``e4m3fnuz``, and older gfx has no ``e4m3fn`` conversion at all. Exempting the CUDA
+    branch let such a build pass the gate, have its weights cast on the CPU (which always works) and
+    moved to VRAM, and then raise "not implemented for 'Float8_e4m3fn'" on the first forward --
+    after the VRAM was committed, rather than here where the fallback lives.
 
     The probe allocates on the *given* device rather than an index-less ``"xpu"``, which would
     resolve through the thread's current XPU device -- not necessarily the device the caller is
@@ -100,9 +105,7 @@ def _device_supports_fp8_storage(device: torch.device, logger: Optional[Logger] 
     may be transiently out of memory, and a cached failure would silently disable FP8 for the
     lifetime of the process with no remedy short of a restart.
     """
-    if device.type == "cuda":
-        return True
-    if device.type != "xpu":
+    if device.type not in ("cuda", "xpu"):
         return False
 
     device = TorchDevice.normalize(device)
