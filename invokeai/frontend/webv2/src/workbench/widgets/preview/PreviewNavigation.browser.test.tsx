@@ -4,10 +4,11 @@ import type { QueueItem } from '@features/queue/contracts';
 import type { WidgetViewProps } from '@workbench/widgetContracts';
 
 import { ChakraProvider } from '@chakra-ui/react';
-import { DndContext } from '@dnd-kit/core';
+import { DndContext, useSensor, useSensors, type DndContextProps } from '@dnd-kit/core';
 import { requestGalleryItemReveal } from '@features/gallery/contracts';
 import { QueryClient, QueryClientProvider, type InfiniteData } from '@tanstack/react-query';
 import { system } from '@theme/system';
+import { HoldToDragSensor, PrimaryMouseSensor } from '@workbench/shell/holdToDragSensor';
 import i18next from 'i18next';
 import { act, useCallback } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -336,18 +337,28 @@ const FollowProbe = () => {
   return <span ref={ref} />;
 };
 
+// The shell's sensors, so touch on the preview arbitrates between swipe and drag as it does in the app.
+const ShellDndContext = ({ children }: Pick<DndContextProps, 'children'>) => {
+  const sensors = useSensors(
+    useSensor(PrimaryMouseSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(HoldToDragSensor)
+  );
+
+  return <DndContext sensors={sensors}>{children}</DndContext>;
+};
+
 const renderTree = async (client: QueryClient) => {
   await act(async () => {
     root?.render(
       <I18nextProvider i18n={i18n}>
         <ChakraProvider value={system}>
           <QueryClientProvider client={client}>
-            <DndContext>
+            <ShellDndContext>
               <LivePreviewFollowProvider>
                 <FollowProbe />
                 <PreviewWidgetView instance={instance} manifest={manifest} region="center" runtime={runtime} />
               </LivePreviewFollowProvider>
-            </DndContext>
+            </ShellDndContext>
           </QueryClientProvider>
         </ChakraProvider>
       </I18nextProvider>
@@ -457,6 +468,47 @@ const getBoundary = (): HTMLElement => {
   }
 
   return boundary;
+};
+
+/** A one-finger flick across the preview image: 90px in three quick moves. */
+const flickPreview = async (direction: -1 | 1) => {
+  const image = host!.querySelector<HTMLImageElement>('img[alt]:not([alt=""])')!;
+  const rect = image.getBoundingClientRect();
+  const y = rect.top + rect.height / 2;
+  let x = rect.left + rect.width / 2;
+  // Stamped 16ms apart on a virtual clock: release velocity comes from event timestamps, not the runner's speed.
+  let at = performance.now();
+  const touch = (type: string, target: EventTarget) => {
+    const event = new PointerEvent(type, {
+      bubbles: true,
+      button: type === 'pointermove' ? -1 : 0,
+      clientX: x,
+      clientY: y,
+      isPrimary: true,
+      pointerId: 1,
+      pointerType: 'touch',
+    });
+
+    Object.defineProperty(event, 'timeStamp', { value: (at += 16) });
+    target.dispatchEvent(event);
+  };
+  const step = async (type: string, target: EventTarget) => {
+    await act(async () => {
+      touch(type, target);
+      await new Promise<void>((resolve) => {
+        globalThis.setTimeout(resolve, 16);
+      });
+    });
+  };
+
+  await step('pointerdown', image);
+
+  for (let move = 0; move < 3; move += 1) {
+    x -= direction * 30;
+    await step('pointermove', image.ownerDocument);
+  }
+
+  await step('pointerup', image.ownerDocument);
 };
 
 const pressArrow = async (key: 'ArrowLeft' | 'ArrowRight') => {
@@ -1887,5 +1939,25 @@ describe('preview keyboard navigation boundary', () => {
     } finally {
       Object.defineProperty(globalThis, 'Image', { configurable: true, value: NativeImage, writable: true });
     }
+  });
+
+  it('flicks the preview image onto the neighbor the arrow keys would select', async () => {
+    await render();
+    await expect.poll(() => selectedThumb()).toBe('newest');
+    await flickPreview(1);
+
+    await vi.waitFor(() => {
+      expect(mocks.commands.gallery.selectItem).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ name: 'oldest' }),
+        undefined,
+        expect.any(Number),
+        true
+      );
+    });
+    // The swipe and the step agree: the panel that slid in shows that same item at full size.
+    expect(
+      [...host!.querySelectorAll('[data-swipe-neighbor="next"] img')].map((image) => image.getAttribute('src'))
+    ).toContain('/images/oldest/full');
+    expect(host?.querySelector('[data-swipe-neighbor="previous"] img')).toBeNull();
   });
 });

@@ -2,9 +2,10 @@ import { MouseSensor, type Activator, type SensorOptions, type SensorProps } fro
 
 /**
  * For touch on pannable surfaces, hold first, then require movement: early movement yields to scrolling and
- * motionless holds remain taps. Pen and touch-action:none surfaces activate by distance. Once armed, a non-passive
- * touchmove listener prevents native pan from stealing the gesture. Every exit, including pointercancel, calls
- * onEnd/onCancel to clear dnd-kit's activation guard.
+ * motionless holds remain taps. Pen and touch-action:none surfaces activate by distance, unless the surface marks
+ * itself with `data-drag-hold-on-touch` because it owns one-finger gestures of its own (the preview swipe); early
+ * movement then yields to that gesture. Once armed, a non-passive touchmove listener prevents native pan from
+ * stealing the gesture. Every exit, including pointercancel, calls onEnd/onCancel to clear dnd-kit's activation guard.
  */
 
 export const TOUCH_DRAG_HOLD_DELAY_MS = 400;
@@ -43,6 +44,10 @@ const canSurfacePan = (target: EventTarget | null): boolean => {
 
   return true;
 };
+
+/** Whether a touch surface claims one-finger movement for its own gesture, so a drag needs the hold. */
+const requestsTouchHold = (target: EventTarget | null): boolean =>
+  target instanceof Element && target.closest('[data-drag-hold-on-touch="true"]') !== null;
 
 const stopClickPropagation = (event: Event) => {
   event.stopPropagation();
@@ -134,7 +139,7 @@ export class HoldToDragSensor {
     window.addEventListener('contextmenu', this.handleContextMenu, { signal });
     window.addEventListener('dragstart', this.handleNativeDragStart, { signal });
 
-    if (event.pointerType === 'pen' || !canSurfacePan(event.target)) {
+    if (event.pointerType === 'pen' || (!canSurfacePan(event.target) && !requestsTouchHold(event.target))) {
       this.gate = 'immediate';
       return;
     }

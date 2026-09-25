@@ -15,6 +15,8 @@ export const previewGridCss = {
 } as const;
 
 export const getFittedFrameCss = (width: number, height: number): SystemStyleObject => ({
+  // The cue gallery thumbnails give when a touch hold arms their drag; only a draggable frame is ever armed.
+  '&[data-drag-armed=true]': { filter: 'saturate(0)' },
   aspectRatio: `${width} / ${height}`,
   height: 'auto',
   maxHeight: '100%',

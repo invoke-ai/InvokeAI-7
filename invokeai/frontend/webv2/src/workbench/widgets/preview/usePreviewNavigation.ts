@@ -112,12 +112,38 @@ export const mergePreviewBoardItems = (
 const toItemEntries = (items: readonly GalleryItem[]): GalleryNavigationEntry[] =>
   items.map((item) => ({ item, kind: 'item' }));
 
+/**
+ * A step's destination: a saved item, a running session, a page not loaded yet (`more`), or nothing (null).
+ */
+export type PreviewNeighbor =
+  | { kind: 'item'; item: GalleryItem }
+  | { kind: 'more' }
+  | { kind: 'session'; id: string }
+  | null;
+
+export interface PreviewNeighbors {
+  next: PreviewNeighbor;
+  previous: PreviewNeighbor;
+}
+
+const NO_NEIGHBORS: PreviewNeighbors = { next: null, previous: null };
+
+const toNeighbor = (entry: GalleryNavigationEntry | null): PreviewNeighbor =>
+  entry === null
+    ? null
+    : entry.kind === 'item'
+      ? { item: entry.item, kind: 'item' }
+      : { id: entry.id, kind: 'session' };
+
 export interface PreviewNavigationState {
   /** Every saved item the arrows can reach, in order: the starred strip, then the listing. */
   boardItems: GalleryItem[];
   handleNavigationKeyDown: (event: KeyboardEvent<HTMLDivElement>) => void;
   isLoadingBoard: boolean;
-  navigate: (offset: -1 | 1) => void;
+  /** Resolves true once a step was dispatched; false when there was nowhere to go or the step went stale. */
+  navigate: (offset: -1 | 1) => Promise<boolean>;
+  /** What each step would land on, so a swipe can show it before committing. */
+  neighbors: PreviewNeighbors;
   /** The selection's index in `boardItems`; -1 while following live or off the list. */
   navigationCursor: number;
   /** Identity of the backing query — the action context's filter identity. */
@@ -410,49 +436,55 @@ export const usePreviewNavigation = ({
       ? -1
       : boardItems.findIndex((item) => toGalleryItemKey(item) === selectedItemKey);
 
-  // Share navigation between keyboard and footer; comparison does not step saved images.
+  // Preview is the only surface that walks a paginated listing across its pages, so at a loaded edge the next page
+  // wins over the strip seam; the strip is reached from the listing's first page.
+  const isAtLoadedBackendBoundary = useCallback(
+    (offset: -1 | 1): boolean =>
+      followedSessionId === null &&
+      selectedItemKey !== null &&
+      (offset === 1
+        ? backendBoardItems.at(-1) !== undefined &&
+          toGalleryItemKey(backendBoardItems.at(-1)!) === selectedItemKey &&
+          hasNextBoardItemsPage
+        : backendBoardItems[0] !== undefined &&
+          toGalleryItemKey(backendBoardItems[0]) === selectedItemKey &&
+          hasPreviousBoardItemsPage),
+    [backendBoardItems, followedSessionId, hasNextBoardItemsPage, hasPreviousBoardItemsPage, selectedItemKey]
+  );
+
+  // Share navigation between keyboard, footer, and swipe; comparison does not step saved images.
   const navigate = useCallback(
-    (offset: -1 | 1) => {
+    (offset: -1 | 1): Promise<boolean> => {
       if (isComparing) {
-        return;
+        return Promise.resolve(false);
       }
 
       const direction = offset === 1 ? 'right' : 'left';
-      const stepTo = (entry: GalleryNavigationEntry | null, data: typeof boardItemsData) => {
+      const stepTo = (entry: GalleryNavigationEntry | null, data: typeof boardItemsData): boolean => {
         if (entry?.kind === 'session') {
           followSession(entry.id);
         } else if (entry) {
           stampSelection(entry.item, data);
         }
-      };
-      // Preview is the only surface that walks a paginated listing across
-      // its pages, so at a loaded edge the next page wins over the strip
-      // seam; the strip is reached from the listing's first page.
-      const isAtLoadedBackendBoundary =
-        followedSessionId === null &&
-        selectedItemKey !== null &&
-        (offset === 1
-          ? backendBoardItems.at(-1) !== undefined &&
-            toGalleryItemKey(backendBoardItems.at(-1)!) === selectedItemKey &&
-            hasNextBoardItemsPage
-          : backendBoardItems[0] !== undefined &&
-            toGalleryItemKey(backendBoardItems[0]) === selectedItemKey &&
-            hasPreviousBoardItemsPage);
 
-      if (!isAtLoadedBackendBoundary) {
-        stepTo(getGalleryNavigationStep(navigationSections, cursorKey, direction), boardItemsData);
-        return;
+        return entry !== null;
+      };
+
+      if (!isAtLoadedBackendBoundary(offset)) {
+        return Promise.resolve(
+          stepTo(getGalleryNavigationStep(navigationSections, cursorKey, direction), boardItemsData)
+        );
       }
 
       if (offset === 1 ? isFetchingNextBoardItemsPage : isFetchingPreviousBoardItemsPage) {
-        return;
+        return Promise.resolve(false);
       }
 
       const fetchBoundaryPage = offset === 1 ? fetchNextBoardItemsPage : fetchPreviousBoardItemsPage;
 
-      void fetchBoundaryPage().then((result) => {
+      return fetchBoundaryPage().then((result) => {
         if (result.isError || navigationContextKeyRef.current !== navigationContextKey) {
-          return;
+          return false;
         }
 
         // Against the data just fetched: the item is not in the pages this
@@ -464,26 +496,22 @@ export const usePreviewNavigation = ({
           toItemEntries(mergeListingItems(flattenPreviewItems(result.data))),
         ];
 
-        stepTo(getGalleryNavigationStep(nextSections, cursorKey, direction), result.data);
+        return stepTo(getGalleryNavigationStep(nextSections, cursorKey, direction), result.data);
       });
     },
     [
-      backendBoardItems,
       boardItemsData,
       cursorKey,
       fetchNextBoardItemsPage,
       fetchPreviousBoardItemsPage,
-      followedSessionId,
       followSession,
-      hasNextBoardItemsPage,
-      hasPreviousBoardItemsPage,
+      isAtLoadedBackendBoundary,
       isComparing,
       isFetchingNextBoardItemsPage,
       isFetchingPreviousBoardItemsPage,
       mergeListingItems,
       navigationContextKey,
       navigationSections,
-      selectedItemKey,
       sessionEntries,
       stampSelection,
       stripEntries,
@@ -508,16 +536,32 @@ export const usePreviewNavigation = ({
       // arrow press a second time.
       event.preventDefault();
       event.stopPropagation();
-      navigate(event.key === 'ArrowLeft' ? -1 : 1);
+      void navigate(event.key === 'ArrowLeft' ? -1 : 1);
     },
     [isComparing, navigate]
   );
 
-  // Prefetch adjacent media to avoid decode flashes during navigation.
-  const previousNeighbor = navigationCursor === -1 ? undefined : boardItems[navigationCursor - 1];
-  const nextNeighbor = navigationCursor === -1 ? undefined : boardItems[navigationCursor + 1];
-  const previousNeighborUrl = previousNeighbor?.kind === 'image' ? previousNeighbor.fullUrl : null;
-  const nextNeighborUrl = nextNeighbor?.kind === 'image' ? nextNeighbor.fullUrl : null;
+  // The same resolution navigate() makes, so a swipe reveals what committing it will select.
+  const neighbors = useMemo((): PreviewNeighbors => {
+    if (isComparing) {
+      return NO_NEIGHBORS;
+    }
+
+    const resolve = (offset: -1 | 1): PreviewNeighbor =>
+      isAtLoadedBackendBoundary(offset)
+        ? { kind: 'more' }
+        : toNeighbor(getGalleryNavigationStep(navigationSections, cursorKey, offset === 1 ? 'right' : 'left'));
+
+    return { next: resolve(1), previous: resolve(-1) };
+  }, [cursorKey, isAtLoadedBackendBoundary, isComparing, navigationSections]);
+
+  // Prefetch the images a step would land on to avoid decode flashes during navigation.
+  const previousNeighborUrl =
+    neighbors.previous?.kind === 'item' && neighbors.previous.item.kind === 'image'
+      ? neighbors.previous.item.fullUrl
+      : null;
+  const nextNeighborUrl =
+    neighbors.next?.kind === 'item' && neighbors.next.item.kind === 'image' ? neighbors.next.item.fullUrl : null;
 
   useEffect(() => {
     [previousNeighborUrl, nextNeighborUrl].forEach((url) => {
@@ -532,6 +576,7 @@ export const usePreviewNavigation = ({
     handleNavigationKeyDown,
     isLoadingBoard,
     navigate,
+    neighbors,
     navigationCursor,
     navigationQueryKey,
     getSelectionPage,

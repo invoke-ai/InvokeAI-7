@@ -62,6 +62,7 @@ import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState, type
 import { useTranslation } from 'react-i18next';
 
 import type { PreviewLoupeControls } from './usePreviewLoupe';
+import type { PreviewSwipeNavigation } from './usePreviewSwipe';
 
 import { useLivePreviewFollow } from './livePreviewFollow';
 import { PreviewCompare } from './PreviewCompare';
@@ -223,8 +224,10 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
     getSelectionPage,
     handleNavigationKeyDown,
     isLoadingBoard,
+    navigate,
     navigationCursor,
     navigationQueryKey,
+    neighbors,
     selectPreviewItem,
   } = usePreviewNavigation({
     followedSessionId: activeGalleryPlaceholder?.id ?? null,
@@ -241,6 +244,11 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
     selectedItemKey,
     semanticQuery: gallerySemanticQuery,
   });
+
+  const swipeNavigation = useMemo<PreviewSwipeNavigation>(
+    () => ({ neighbors, onNavigate: navigate }),
+    [navigate, neighbors]
+  );
 
   const [contextMenuTarget, setContextMenuTarget] = useState<ImageContextMenuTarget | null>(null);
   const getItemActionContext = useCallback(
@@ -607,6 +615,7 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
                 item={selectedItem}
                 loupeControlsRef={loupeControlsRef}
                 shouldAntialiasProgressImage={antialiasProgressImages}
+                swipe={swipeNavigation}
                 onContextMenu={openItemContextMenu}
               />
             ) : (
@@ -615,6 +624,7 @@ export const PreviewWidgetView = ({ region, runtime }: WidgetViewProps) => {
                 filmstrip={filmstrip}
                 isItemCurrent={isItemCurrent}
                 item={selectedItem}
+                swipe={swipeNavigation}
                 videoControllerRef={videoControllerRef}
                 onContextMenu={openItemContextMenu}
                 onCopyAvailabilityChange={handleVideoCopyAvailabilityChange}
@@ -676,6 +686,7 @@ const SelectedImagePreview = ({
       frameWidth={previewImage?.width ?? item.width}
       holdSource={holdSource}
       item={item}
+      placeholderSrc={item.thumbnailUrl}
       shouldAntialiasHoldImage={shouldAntialiasProgressImage}
       source={source}
       onSourceLoaded={handleSourceLoaded}
@@ -722,6 +733,7 @@ interface SelectedMediaPreviewProps {
   loupeControlsRef?: Ref<PreviewLoupeControls>;
   onCopyAvailabilityChange?: (itemKey: GalleryItemKey, isAvailable: boolean) => void;
   onContextMenu: (x: number, y: number) => void;
+  swipe?: PreviewSwipeNavigation;
   videoControllerRef?: Ref<PreviewVideoFrameController>;
 }
 
@@ -750,8 +762,10 @@ const SelectedMediaPreview = ({
   loupeControlsRef,
   onCopyAvailabilityChange,
   onSourceLoaded,
+  placeholderSrc,
   shouldAntialiasHoldImage,
   source,
+  swipe,
   onContextMenu,
   videoControllerRef,
 }: SelectedMediaPreviewProps & {
@@ -760,6 +774,7 @@ const SelectedMediaPreview = ({
   frameWidth: number;
   holdSource?: StreamingImageSource | null;
   onSourceLoaded?: (src: string) => void;
+  placeholderSrc?: string;
   shouldAntialiasHoldImage?: boolean;
   source: Parameters<typeof PreviewFrame>[0]['source'];
 }) => (
@@ -779,8 +794,10 @@ const SelectedMediaPreview = ({
         onVideoCopyAvailabilityChange={onCopyAvailabilityChange}
         onZoomChange={setZoomReadout}
         padding={getMediaStagePadding(density)}
+        placeholderSrc={placeholderSrc}
         shouldAntialiasLiveImage={shouldAntialiasHoldImage ?? true}
         source={source}
+        swipe={swipe}
         variant="framed"
         videoControllerRef={videoControllerRef}
         onContextMenu={onContextMenu}
